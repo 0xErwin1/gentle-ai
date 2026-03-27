@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
@@ -904,6 +905,262 @@ func makeDetectionWithAgents(present ...string) system.DetectionResult {
 		})
 	}
 	return system.DetectionResult{Configs: configs}
+}
+
+// ─── T_BACKUP_SCROLL: Backup scroll and new key navigation tests ──────────────
+
+// makeBackupList creates a list of dummy backup manifests for testing.
+func makeBackupList(count int) []backup.Manifest {
+	manifests := make([]backup.Manifest, count)
+	for i := range manifests {
+		manifests[i] = backup.Manifest{
+			ID:      fmt.Sprintf("backup-%02d", i),
+			RootDir: fmt.Sprintf("/tmp/backups/backup-%02d", i),
+			Source:  backup.BackupSourceInstall,
+		}
+	}
+	return manifests
+}
+
+// TestBackupScroll_CursorDown verifies that scrolling down adjusts BackupScroll.
+func TestBackupScroll_CursorDown(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenBackups
+	m.Backups = makeBackupList(15)
+	m.Cursor = 0
+	m.BackupScroll = 0
+
+	// Navigate down 10 times to go past BackupMaxVisible (10).
+	for i := 0; i < 10; i++ {
+		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+		m = updated.(Model)
+	}
+
+	// After 10 downs, cursor is at 10. BackupScroll should have moved to keep cursor visible.
+	if m.Cursor != 10 {
+		t.Fatalf("cursor = %d, want 10", m.Cursor)
+	}
+	if m.BackupScroll < 1 {
+		t.Errorf("BackupScroll = %d, want >= 1 (cursor at 10 needs scroll adjustment)", m.BackupScroll)
+	}
+}
+
+// TestBackupScroll_CursorUp verifies that scrolling up adjusts BackupScroll.
+func TestBackupScroll_CursorUp(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenBackups
+	m.Backups = makeBackupList(15)
+	m.Cursor = 12
+	m.BackupScroll = 5
+
+	// Navigate up — cursor should go down, scroll should follow.
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	m = updated.(Model)
+
+	if m.Cursor != 11 {
+		t.Fatalf("cursor = %d, want 11", m.Cursor)
+	}
+
+	// Navigate up until cursor goes below BackupScroll.
+	m.Cursor = 5
+	m.BackupScroll = 5
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	m = updated.(Model)
+
+	if m.Cursor != 4 {
+		t.Fatalf("cursor = %d, want 4", m.Cursor)
+	}
+	// BackupScroll should have decreased to keep cursor visible.
+	if m.BackupScroll > m.Cursor {
+		t.Errorf("BackupScroll = %d should be <= cursor %d after scrolling up", m.BackupScroll, m.Cursor)
+	}
+}
+
+// TestBackup_DeleteKeyNavigation verifies that pressing 'd' on a backup
+// navigates to ScreenDeleteConfirm and sets SelectedBackup.
+func TestBackup_DeleteKeyNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenBackups
+	m.Backups = makeBackupList(3)
+	m.Cursor = 1
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	state := updated.(Model)
+
+	if state.Screen != ScreenDeleteConfirm {
+		t.Fatalf("screen = %v, want ScreenDeleteConfirm", state.Screen)
+	}
+	if state.SelectedBackup.ID != "backup-01" {
+		t.Fatalf("SelectedBackup.ID = %q, want %q", state.SelectedBackup.ID, "backup-01")
+	}
+}
+
+// TestBackup_DeleteKeyOnBackItemIgnored verifies that pressing 'd' when cursor
+// is on the "Back" item does nothing (no navigation to delete screen).
+func TestBackup_DeleteKeyOnBackItemIgnored(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenBackups
+	m.Backups = makeBackupList(3)
+	m.Cursor = 3 // cursor on "Back" item (index = len(backups))
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	state := updated.(Model)
+
+	if state.Screen != ScreenBackups {
+		t.Fatalf("screen = %v, want ScreenBackups (d on Back item should do nothing)", state.Screen)
+	}
+}
+
+// TestBackup_RenameKeyNavigation verifies that pressing 'r' on a backup
+// navigates to ScreenRenameBackup and populates the rename text buffer.
+func TestBackup_RenameKeyNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenBackups
+	backups := makeBackupList(3)
+	backups[0].Description = "my description"
+	m.Backups = backups
+	m.Cursor = 0
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
+	state := updated.(Model)
+
+	if state.Screen != ScreenRenameBackup {
+		t.Fatalf("screen = %v, want ScreenRenameBackup", state.Screen)
+	}
+	if state.BackupRenameText != "my description" {
+		t.Fatalf("BackupRenameText = %q, want %q", state.BackupRenameText, "my description")
+	}
+	if state.BackupRenamePos != len([]rune("my description")) {
+		t.Fatalf("BackupRenamePos = %d, want %d", state.BackupRenamePos, len("my description"))
+	}
+}
+
+// TestRenameInput_TypeAndSubmit verifies that typing characters and pressing
+// Enter in the rename screen calls RenameBackupFn and returns to ScreenBackups.
+func TestRenameInput_TypeAndSubmit(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenRenameBackup
+	m.SelectedBackup = backup.Manifest{
+		ID:      "backup-00",
+		RootDir: "/tmp/backup-00",
+	}
+	m.BackupRenameText = "old"
+	m.BackupRenamePos = 3
+
+	renameCalled := false
+	var renameArg string
+	m.RenameBackupFn = func(manifest backup.Manifest, newDesc string) error {
+		renameCalled = true
+		renameArg = newDesc
+		return nil
+	}
+	refreshCalled := false
+	m.ListBackupsFn = func() []backup.Manifest {
+		refreshCalled = true
+		return makeBackupList(1)
+	}
+
+	// Type " text" then press Enter.
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(" text")})
+	updated, _ = updated.(Model).Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if !renameCalled {
+		t.Fatalf("RenameBackupFn was not called")
+	}
+	if renameArg != "old text" {
+		t.Fatalf("RenameBackupFn called with %q, want %q", renameArg, "old text")
+	}
+	if !refreshCalled {
+		t.Fatalf("ListBackupsFn was not called after rename")
+	}
+	if state.Screen != ScreenBackups {
+		t.Fatalf("screen = %v, want ScreenBackups after rename", state.Screen)
+	}
+}
+
+// TestRenameInput_Escape verifies that pressing Esc in the rename screen
+// cancels without calling RenameBackupFn and returns to ScreenBackups.
+func TestRenameInput_Escape(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenRenameBackup
+	m.SelectedBackup = backup.Manifest{ID: "backup-00"}
+	m.BackupRenameText = "something"
+	m.BackupRenamePos = 9
+
+	renameCalled := false
+	m.RenameBackupFn = func(manifest backup.Manifest, newDesc string) error {
+		renameCalled = true
+		return nil
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	if renameCalled {
+		t.Fatalf("RenameBackupFn should NOT be called on Esc")
+	}
+	if state.Screen != ScreenBackups {
+		t.Fatalf("screen = %v, want ScreenBackups after Esc", state.Screen)
+	}
+}
+
+// TestDeleteConfirm_DeleteOption verifies that pressing Enter on "Delete"
+// calls DeleteBackupFn and navigates to ScreenDeleteResult.
+func TestDeleteConfirm_DeleteOption(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenDeleteConfirm
+	m.SelectedBackup = backup.Manifest{
+		ID:      "backup-00",
+		RootDir: "/tmp/backup-00",
+	}
+	m.Cursor = 0 // "Delete"
+
+	deleteCalled := false
+	m.DeleteBackupFn = func(manifest backup.Manifest) error {
+		deleteCalled = true
+		return nil
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if !deleteCalled {
+		t.Fatalf("DeleteBackupFn was not called")
+	}
+	if state.Screen != ScreenDeleteResult {
+		t.Fatalf("screen = %v, want ScreenDeleteResult", state.Screen)
+	}
+	if state.DeleteErr != nil {
+		t.Fatalf("unexpected DeleteErr: %v", state.DeleteErr)
+	}
+}
+
+// TestDeleteResult_EnterRefreshesAndReturnsToBackups verifies that pressing Enter
+// on ScreenDeleteResult refreshes the backup list and returns to ScreenBackups.
+func TestDeleteResult_EnterRefreshesAndReturnsToBackups(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenDeleteResult
+	m.DeleteErr = nil
+
+	refreshCalled := false
+	m.ListBackupsFn = func() []backup.Manifest {
+		refreshCalled = true
+		return makeBackupList(2)
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if !refreshCalled {
+		t.Fatalf("ListBackupsFn was not called after delete result")
+	}
+	if state.Screen != ScreenBackups {
+		t.Fatalf("screen = %v, want ScreenBackups", state.Screen)
+	}
+	if state.DeleteErr != nil {
+		t.Fatalf("DeleteErr should be reset to nil: %v", state.DeleteErr)
+	}
 }
 
 // TestPreselectedAgents_CodexIsIncludedWhenPresent is a regression guard:

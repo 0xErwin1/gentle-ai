@@ -94,6 +94,12 @@ type ExecuteFunc func(
 // RestoreFunc restores a backup from a manifest.
 type RestoreFunc func(manifest backup.Manifest) error
 
+// DeleteBackupFunc deletes the entire backup directory.
+type DeleteBackupFunc func(manifest backup.Manifest) error
+
+// RenameBackupFunc updates the backup's Description field in its manifest file.
+type RenameBackupFunc func(manifest backup.Manifest, newDescription string) error
+
 // ListBackupsFn returns the current list of available backups.
 // When nil, the backup list is not refreshed after restore.
 type ListBackupsFn func() []backup.Manifest
@@ -118,6 +124,9 @@ const (
 	ScreenBackups
 	ScreenRestoreConfirm
 	ScreenRestoreResult
+	ScreenDeleteConfirm
+	ScreenDeleteResult
+	ScreenRenameBackup
 	ScreenUpgrade
 	ScreenSync
 	ScreenUpgradeSync
@@ -153,12 +162,31 @@ type Model struct {
 	// Nil on success, non-nil on failure. Displayed on ScreenRestoreResult.
 	RestoreErr error
 
+	// DeleteErr holds the error from the most recent delete attempt.
+	// Nil on success, non-nil on failure. Displayed on ScreenDeleteResult.
+	DeleteErr error
+
+	// BackupScroll is the scroll offset for the backup list.
+	BackupScroll int
+
+	// BackupRenameText is the text input buffer for rename operations.
+	BackupRenameText string
+
+	// BackupRenamePos is the cursor position within BackupRenameText.
+	BackupRenamePos int
+
 	// ExecuteFn is called to run the real pipeline. When nil, the installing
 	// screen falls back to manual step-through (useful for tests/development).
 	ExecuteFn ExecuteFunc
 
 	// RestoreFn is called to restore a backup. When nil, restore is a no-op.
 	RestoreFn RestoreFunc
+
+	// DeleteBackupFn is called to delete a backup directory.
+	DeleteBackupFn DeleteBackupFunc
+
+	// RenameBackupFn is called to rename (update description of) a backup.
+	RenameBackupFn RenameBackupFunc
 
 	// ListBackupsFn refreshes the backup list (e.g. after a restore).
 	// When nil, the backup list is not refreshed automatically.
@@ -296,6 +324,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyMsg:
+		if m.Screen == ScreenRenameBackup {
+			return m.handleRenameInput(msg)
+		}
 		return m.handleKeyPress(msg)
 	}
 
@@ -425,11 +456,17 @@ func (m Model) View() string {
 			AvailableUpdates:    extractAvailableUpdates(m.UpdateResults),
 		})
 	case ScreenBackups:
-		return screens.RenderBackups(m.Backups, m.Cursor)
+		return screens.RenderBackups(m.Backups, m.Cursor, m.BackupScroll)
 	case ScreenRestoreConfirm:
 		return screens.RenderRestoreConfirm(m.SelectedBackup, m.Cursor)
 	case ScreenRestoreResult:
 		return screens.RenderRestoreResult(m.SelectedBackup, m.RestoreErr)
+	case ScreenDeleteConfirm:
+		return screens.RenderDeleteConfirm(m.SelectedBackup, m.Cursor)
+	case ScreenDeleteResult:
+		return screens.RenderDeleteResult(m.SelectedBackup, m.DeleteErr)
+	case ScreenRenameBackup:
+		return screens.RenderRenameBackup(m.SelectedBackup, m.BackupRenameText, m.BackupRenamePos)
 	default:
 		return ""
 	}
@@ -484,10 +521,22 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.Cursor > 0 {
 			m.Cursor--
 		}
+		// Adjust scroll for the backup list.
+		if m.Screen == ScreenBackups {
+			if m.Cursor < m.BackupScroll {
+				m.BackupScroll = m.Cursor
+			}
+		}
 		return m, nil
 	case "down", "j":
 		if m.Cursor+1 < m.optionCount() {
 			m.Cursor++
+		}
+		// Adjust scroll for the backup list.
+		if m.Screen == ScreenBackups {
+			if m.Cursor >= m.BackupScroll+screens.BackupMaxVisible {
+				m.BackupScroll = m.Cursor - screens.BackupMaxVisible + 1
+			}
 		}
 		return m, nil
 	case "esc":
@@ -508,6 +557,22 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.toggleCurrentSkill()
 		}
 		return m, nil
+	case "r":
+		// Rename: only when on ScreenBackups and cursor is on a backup item (not "Back").
+		if m.Screen == ScreenBackups && m.Cursor < len(m.Backups) {
+			m.SelectedBackup = m.Backups[m.Cursor]
+			m.BackupRenameText = m.SelectedBackup.Description
+			m.BackupRenamePos = len([]rune(m.SelectedBackup.Description))
+			m.setScreen(ScreenRenameBackup)
+			return m, nil
+		}
+	case "d":
+		// Delete: only when on ScreenBackups and cursor is on a backup item (not "Back").
+		if m.Screen == ScreenBackups && m.Cursor < len(m.Backups) {
+			m.SelectedBackup = m.Backups[m.Cursor]
+			m.setScreen(ScreenDeleteConfirm)
+			return m, nil
+		}
 	case "enter":
 		return m.confirmSelection()
 	}
@@ -828,6 +893,24 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.Backups = m.ListBackupsFn()
 		}
 		m.setScreen(ScreenBackups)
+	case ScreenDeleteConfirm:
+		// Cursor 0 = "Delete", Cursor 1 = "Cancel".
+		if m.Cursor == 0 {
+			if m.DeleteBackupFn != nil {
+				m.DeleteErr = m.DeleteBackupFn(m.SelectedBackup)
+			}
+			m.setScreen(ScreenDeleteResult)
+		} else {
+			m.setScreen(ScreenBackups)
+		}
+	case ScreenDeleteResult:
+		// Enter on the result screen returns to backup selection.
+		// Refresh the backup list to reflect any changes from the delete.
+		if m.ListBackupsFn != nil {
+			m.Backups = m.ListBackupsFn()
+		}
+		m.DeleteErr = nil
+		m.setScreen(ScreenBackups)
 	}
 
 	return m, nil
@@ -1050,6 +1133,56 @@ func (m *Model) setScreen(next Screen) {
 	m.PreviousScreen = m.Screen
 	m.Screen = next
 	m.Cursor = 0
+	if next == ScreenBackups {
+		m.BackupScroll = 0
+	}
+}
+
+// handleRenameInput processes key events when the rename backup screen is active.
+// It manages text input for the new backup description.
+func (m Model) handleRenameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		// Execute rename and return to backups.
+		if m.RenameBackupFn != nil {
+			_ = m.RenameBackupFn(m.SelectedBackup, m.BackupRenameText)
+		}
+		if m.ListBackupsFn != nil {
+			m.Backups = m.ListBackupsFn()
+		}
+		m.setScreen(ScreenBackups)
+		return m, nil
+	case tea.KeyEsc:
+		m.setScreen(ScreenBackups)
+		return m, nil
+	case tea.KeyBackspace:
+		if m.BackupRenamePos > 0 {
+			runes := []rune(m.BackupRenameText)
+			m.BackupRenameText = string(append(runes[:m.BackupRenamePos-1], runes[m.BackupRenamePos:]...))
+			m.BackupRenamePos--
+		}
+		return m, nil
+	case tea.KeyLeft:
+		if m.BackupRenamePos > 0 {
+			m.BackupRenamePos--
+		}
+		return m, nil
+	case tea.KeyRight:
+		if m.BackupRenamePos < len([]rune(m.BackupRenameText)) {
+			m.BackupRenamePos++
+		}
+		return m, nil
+	case tea.KeyRunes:
+		runes := []rune(m.BackupRenameText)
+		newRunes := make([]rune, 0, len(runes)+len(msg.Runes))
+		newRunes = append(newRunes, runes[:m.BackupRenamePos]...)
+		newRunes = append(newRunes, msg.Runes...)
+		newRunes = append(newRunes, runes[m.BackupRenamePos:]...)
+		m.BackupRenameText = string(newRunes)
+		m.BackupRenamePos += len(msg.Runes)
+		return m, nil
+	}
+	return m, nil
 }
 
 func (m Model) optionCount() int {
@@ -1106,6 +1239,12 @@ func (m Model) optionCount() int {
 		return 2 // "Restore" + "Cancel"
 	case ScreenRestoreResult:
 		return 1 // "Done" / continue
+	case ScreenDeleteConfirm:
+		return 2 // "Delete" + "Cancel"
+	case ScreenDeleteResult:
+		return 1 // "Done" / continue
+	case ScreenRenameBackup:
+		return 0 // text input mode — no cursor navigation
 	default:
 		return 0
 	}
