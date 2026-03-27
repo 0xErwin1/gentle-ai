@@ -3,6 +3,8 @@ package upgrade
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os/exec"
 	"testing"
 
@@ -232,6 +234,12 @@ func TestEffectiveMethod(t *testing.T) {
 			want:    update.InstallBrew,
 		},
 		{
+			name:    "brew profile overrides script",
+			tool:    update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
+			profile: system.PlatformProfile{PackageManager: "brew"},
+			want:    update.InstallBrew,
+		},
+		{
 			name:    "apt profile respects declared method (go-install)",
 			tool:    update.ToolInfo{Name: "engram", InstallMethod: update.InstallGoInstall},
 			profile: system.PlatformProfile{PackageManager: "apt"},
@@ -242,6 +250,12 @@ func TestEffectiveMethod(t *testing.T) {
 			tool:    update.ToolInfo{Name: "gga", InstallMethod: update.InstallBinary},
 			profile: system.PlatformProfile{PackageManager: "apt"},
 			want:    update.InstallBinary,
+		},
+		{
+			name:    "apt profile respects declared method (script)",
+			tool:    update.ToolInfo{Name: "gga", InstallMethod: update.InstallScript},
+			profile: system.PlatformProfile{PackageManager: "apt"},
+			want:    update.InstallScript,
 		},
 	}
 
@@ -403,5 +417,184 @@ func TestRunStrategy_ExecErrorWrapped(t *testing.T) {
 	var exitErr *exec.ExitError
 	if !errors.As(err, &exitErr) {
 		t.Logf("note: error is not directly an ExitError (may be wrapped): %v", err)
+	}
+}
+
+// --- TestRunStrategy_ScriptUpgradeSuccess ---
+
+func TestRunStrategy_ScriptUpgradeSuccess(t *testing.T) {
+	origExecCommand := execCommand
+	origHTTPClient := scriptHTTPClient
+	origInstallScriptURL := installScriptURLFn
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		scriptHTTPClient = origHTTPClient
+		installScriptURLFn = origInstallScriptURL
+	})
+
+	// Serve a fake install.sh that succeeds.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("#!/bin/bash\necho 'install ok'\n"))
+	}))
+	defer server.Close()
+
+	scriptHTTPClient = server.Client()
+
+	// Override installScriptURL to point to our test server.
+	installScriptURLFn = func(owner, repo string) string {
+		return server.URL + "/install.sh"
+	}
+
+	var gotScriptContent string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		// Capture the script content passed via bash -c.
+		if name == "bash" && len(args) >= 2 && args[0] == "-c" {
+			gotScriptContent = args[1]
+		}
+		return exec.Command("echo", "ok")
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gga",
+			Owner:         "Gentleman-Programming",
+			Repo:          "gentleman-guardian-angel",
+			InstallMethod: update.InstallScript,
+		},
+		LatestVersion: "2.8.0",
+	}
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
+
+	err := scriptUpgrade(context.Background(), r, profile)
+	if err != nil {
+		t.Fatalf("scriptUpgrade: unexpected error: %v", err)
+	}
+
+	// Verify that bash was called with the install.sh content.
+	if !containsAny(gotScriptContent, "install ok", "#!/bin/bash") {
+		t.Errorf("bash -c did not receive install.sh content; got: %q", gotScriptContent)
+	}
+}
+
+// --- TestRunStrategy_ScriptUpgradeDownloadFailure ---
+
+func TestRunStrategy_ScriptUpgradeDownloadFailure(t *testing.T) {
+	origHTTPClient := scriptHTTPClient
+	origInstallScriptURL := installScriptURLFn
+	t.Cleanup(func() {
+		scriptHTTPClient = origHTTPClient
+		installScriptURLFn = origInstallScriptURL
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+	scriptHTTPClient = server.Client()
+	installScriptURLFn = func(owner, repo string) string {
+		return server.URL + "/install.sh"
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gga",
+			Owner:         "Gentleman-Programming",
+			Repo:          "gentleman-guardian-angel",
+			InstallMethod: update.InstallScript,
+		},
+		LatestVersion: "2.8.0",
+	}
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
+
+	err := scriptUpgrade(context.Background(), r, profile)
+	if err == nil {
+		t.Errorf("expected error when install.sh download fails, got nil")
+	}
+}
+
+// --- TestRunStrategy_ScriptUpgradeWindowsManualFallback ---
+
+func TestRunStrategy_ScriptUpgradeWindowsManualFallback(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	execCalled := false
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalled = true
+		return exec.Command("echo", "should not run")
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gga",
+			Owner:         "Gentleman-Programming",
+			Repo:          "gentleman-guardian-angel",
+			InstallMethod: update.InstallScript,
+		},
+		LatestVersion: "2.8.0",
+	}
+	profile := system.PlatformProfile{OS: "windows", PackageManager: "winget"}
+
+	err := scriptUpgrade(context.Background(), r, profile)
+	if err == nil {
+		t.Errorf("expected manual fallback error for Windows script upgrade, got nil")
+	}
+
+	if execCalled {
+		t.Errorf("exec should NOT be called for Windows script manual fallback")
+	}
+}
+
+// --- TestInstallScriptURL ---
+
+func TestInstallScriptURL(t *testing.T) {
+	url := installScriptURL("Gentleman-Programming", "gentleman-guardian-angel")
+	if url != "https://raw.githubusercontent.com/Gentleman-Programming/gentleman-guardian-angel/main/install.sh" {
+		t.Errorf("installScriptURL = %q, want correct raw GitHub URL", url)
+	}
+}
+
+// --- TestRunStrategy_ScriptUpgradeExecFailure ---
+
+func TestRunStrategy_ScriptUpgradeExecFailure(t *testing.T) {
+	origExecCommand := execCommand
+	origHTTPClient := scriptHTTPClient
+	origInstallScriptURL := installScriptURLFn
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		scriptHTTPClient = origHTTPClient
+		installScriptURLFn = origInstallScriptURL
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("#!/bin/bash\nexit 1\n"))
+	}))
+	defer server.Close()
+	scriptHTTPClient = server.Client()
+	installScriptURLFn = func(owner, repo string) string {
+		return server.URL + "/install.sh"
+	}
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("false")
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gga",
+			Owner:         "Gentleman-Programming",
+			Repo:          "gentleman-guardian-angel",
+			InstallMethod: update.InstallScript,
+		},
+		LatestVersion: "2.8.0",
+	}
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
+
+	err := scriptUpgrade(context.Background(), r, profile)
+	if err == nil {
+		t.Errorf("expected error when install.sh execution fails, got nil")
 	}
 }

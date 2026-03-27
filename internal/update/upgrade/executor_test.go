@@ -47,7 +47,7 @@ func TestExecute_NoopWhenNothingIsExecutable(t *testing.T) {
 		makeResult("gentle-ai", update.UpToDate, "1.0.0", "1.0.0", update.InstallBinary),
 		makeResult("engram", update.NotInstalled, "", "0.4.0", update.InstallGoInstall),
 		// gga: CheckFailed — should also be omitted from results.
-		makeResult("gga", update.CheckFailed, "", "", update.InstallBinary),
+		makeResult("gga", update.CheckFailed, "", "", update.InstallScript),
 	}
 
 	report := Execute(context.Background(), results, brewProfile(), t.TempDir(), false)
