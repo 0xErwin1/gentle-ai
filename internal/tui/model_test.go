@@ -12,6 +12,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
 )
 
 func TestNavigationWelcomeToDetection(t *testing.T) {
@@ -505,6 +506,382 @@ func TestSDDModeMultiShowsModelPickerWhenCacheExists(t *testing.T) {
 
 func screensAgentOptions() []model.AgentID {
 	return screens.AgentOptions()
+}
+
+// ─── OperationRunning guard: Enter blocked ──────────────────────────────────
+
+// TestOperationRunningGuardBlocksEnterOnUpgrade verifies that pressing Enter on
+// ScreenUpgrade while OperationRunning is true does nothing (no screen change,
+// no command returned).
+func TestOperationRunningGuardBlocksEnterOnUpgrade(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpgrade
+	m.OperationRunning = true
+	m.UpdateCheckDone = true
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUpgrade {
+		t.Fatalf("screen changed while OperationRunning=true: got %v, want ScreenUpgrade", state.Screen)
+	}
+	if cmd != nil {
+		t.Fatalf("expected nil cmd while OperationRunning=true on ScreenUpgrade")
+	}
+}
+
+// TestOperationRunningGuardBlocksEnterOnSync verifies that pressing Enter on
+// ScreenSync while OperationRunning is true does nothing.
+func TestOperationRunningGuardBlocksEnterOnSync(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenSync
+	m.OperationRunning = true
+	m.UpdateCheckDone = true
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenSync {
+		t.Fatalf("screen changed while OperationRunning=true: got %v, want ScreenSync", state.Screen)
+	}
+	if cmd != nil {
+		t.Fatalf("expected nil cmd while OperationRunning=true on ScreenSync")
+	}
+}
+
+// TestOperationRunningGuardBlocksEnterOnUpgradeSync verifies that pressing Enter
+// on ScreenUpgradeSync while OperationRunning is true does nothing.
+func TestOperationRunningGuardBlocksEnterOnUpgradeSync(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpgradeSync
+	m.OperationRunning = true
+	m.UpdateCheckDone = true
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUpgradeSync {
+		t.Fatalf("screen changed while OperationRunning=true: got %v, want ScreenUpgradeSync", state.Screen)
+	}
+	if cmd != nil {
+		t.Fatalf("expected nil cmd while OperationRunning=true on ScreenUpgradeSync")
+	}
+}
+
+// ─── OperationRunning guard: Esc blocked ────────────────────────────────────
+
+// TestEscBlockedDuringUpgrade verifies that Esc is blocked when OperationRunning
+// is true on ScreenUpgrade.
+func TestEscBlockedDuringUpgrade(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpgrade
+	m.OperationRunning = true
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUpgrade {
+		t.Fatalf("screen changed on Esc while OperationRunning=true: got %v, want ScreenUpgrade", state.Screen)
+	}
+}
+
+// TestEscBlockedDuringSync verifies that Esc is blocked when OperationRunning
+// is true on ScreenSync.
+func TestEscBlockedDuringSync(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenSync
+	m.OperationRunning = true
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	if state.Screen != ScreenSync {
+		t.Fatalf("screen changed on Esc while OperationRunning=true: got %v, want ScreenSync", state.Screen)
+	}
+}
+
+// TestEscBlockedDuringUpgradeSync verifies that Esc is blocked when OperationRunning
+// is true on ScreenUpgradeSync.
+func TestEscBlockedDuringUpgradeSync(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpgradeSync
+	m.OperationRunning = true
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUpgradeSync {
+		t.Fatalf("screen changed on Esc while OperationRunning=true: got %v, want ScreenUpgradeSync", state.Screen)
+	}
+}
+
+// ─── UpgradeDoneMsg error model ─────────────────────────────────────────────
+
+// TestUpgradeDoneMsg_SetsUpgradeErr verifies that sending UpgradeDoneMsg with
+// a non-nil error sets UpgradeErr, clears OperationRunning, and leaves
+// UpgradeReport nil.
+func TestUpgradeDoneMsg_SetsUpgradeErr(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpgrade
+	m.OperationRunning = true
+
+	updated, _ := m.Update(UpgradeDoneMsg{Err: fmt.Errorf("test error")})
+	state := updated.(Model)
+
+	if state.UpgradeErr == nil {
+		t.Fatalf("expected UpgradeErr to be set, got nil")
+	}
+	if state.OperationRunning {
+		t.Fatalf("expected OperationRunning=false after UpgradeDoneMsg with error")
+	}
+	if state.UpgradeReport != nil {
+		t.Fatalf("expected UpgradeReport=nil when upgrade fails, got %+v", state.UpgradeReport)
+	}
+}
+
+// ─── UpgradePhaseCompletedMsg (two-phase upgrade+sync) ─────────────────────
+
+// TestUpgradePhaseCompletedMsg_SetsReport verifies that a successful upgrade
+// phase sets UpgradeReport and keeps OperationRunning true (sync still pending).
+func TestUpgradePhaseCompletedMsg_SetsReport(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpgradeSync
+	m.OperationRunning = true
+
+	report := upgrade.UpgradeReport{
+		Results: []upgrade.ToolUpgradeResult{
+			{ToolName: "engram", Status: upgrade.UpgradeSucceeded},
+		},
+	}
+	updated, _ := m.Update(UpgradePhaseCompletedMsg{Report: report})
+	state := updated.(Model)
+
+	if state.UpgradeReport == nil {
+		t.Fatal("expected UpgradeReport to be set after successful UpgradePhaseCompletedMsg")
+	}
+	if !state.OperationRunning {
+		t.Fatal("expected OperationRunning to remain true (sync phase still pending)")
+	}
+	if state.UpgradeErr != nil {
+		t.Fatalf("expected UpgradeErr=nil on success, got %v", state.UpgradeErr)
+	}
+}
+
+// TestUpgradePhaseCompletedMsg_SetsErrAndKeepsRunning verifies that a failed
+// upgrade phase sets UpgradeErr, keeps OperationRunning true (sync still runs).
+func TestUpgradePhaseCompletedMsg_SetsErrAndKeepsRunning(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpgradeSync
+	m.OperationRunning = true
+
+	updated, _ := m.Update(UpgradePhaseCompletedMsg{Err: fmt.Errorf("upgrade failed")})
+	state := updated.(Model)
+
+	if state.UpgradeErr == nil {
+		t.Fatal("expected UpgradeErr to be set after failed UpgradePhaseCompletedMsg")
+	}
+	if !state.OperationRunning {
+		t.Fatal("expected OperationRunning to remain true (sync phase still pending)")
+	}
+	if state.UpgradeReport != nil {
+		t.Fatal("expected UpgradeReport=nil when upgrade phase fails")
+	}
+}
+
+// ─── T16: Welcome screen 7-item menu navigation ────────────────────────────
+
+// TestWelcomeMenu_InstallNavigation verifies cursor 0 (Install) goes to ScreenDetection.
+func TestWelcomeMenu_InstallNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.Cursor = 0
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenDetection {
+		t.Fatalf("cursor=0 (Install): screen = %v, want %v", state.Screen, ScreenDetection)
+	}
+}
+
+// TestWelcomeMenu_UpgradeNavigation verifies cursor 1 (Upgrade tools) goes to ScreenUpgrade.
+func TestWelcomeMenu_UpgradeNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.UpdateCheckDone = true // Skip update-check-pending spinner.
+	m.Cursor = 1
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUpgrade {
+		t.Fatalf("cursor=1 (Upgrade): screen = %v, want %v", state.Screen, ScreenUpgrade)
+	}
+}
+
+// TestWelcomeMenu_SyncNavigation verifies cursor 2 (Sync configs) goes to ScreenSync.
+func TestWelcomeMenu_SyncNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.Cursor = 2
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenSync {
+		t.Fatalf("cursor=2 (Sync): screen = %v, want %v", state.Screen, ScreenSync)
+	}
+}
+
+// TestWelcomeMenu_UpgradeSyncNavigation verifies cursor 3 (Upgrade+Sync) goes to ScreenUpgradeSync.
+func TestWelcomeMenu_UpgradeSyncNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.UpdateCheckDone = true
+	m.Cursor = 3
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenUpgradeSync {
+		t.Fatalf("cursor=3 (Upgrade+Sync): screen = %v, want %v", state.Screen, ScreenUpgradeSync)
+	}
+}
+
+// TestWelcomeMenu_ConfigureModelsNavigation verifies cursor 4 goes to ScreenModelConfig.
+func TestWelcomeMenu_ConfigureModelsNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.Cursor = 4
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenModelConfig {
+		t.Fatalf("cursor=4 (Configure Models): screen = %v, want %v", state.Screen, ScreenModelConfig)
+	}
+}
+
+// TestWelcomeMenu_BackupsNavigation verifies cursor 5 (Manage backups) goes to ScreenBackups.
+func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.Cursor = 5
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenBackups {
+		t.Fatalf("cursor=5 (Backups): screen = %v, want %v", state.Screen, ScreenBackups)
+	}
+}
+
+// TestWelcomeMenu_OptionCount verifies the welcome menu has exactly 7 items.
+func TestWelcomeMenu_OptionCount(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone)
+	if len(opts) != 7 {
+		t.Fatalf("WelcomeOptions() len = %d, want 7; got %v", len(opts), opts)
+	}
+}
+
+// ─── T19: Model config navigation ─────────────────────────────────────────
+
+// TestModelConfig_ClaudePickerNavigation verifies that selecting cursor 0 from
+// ScreenModelConfig transitions to ScreenClaudeModelPicker with ModelConfigMode set.
+func TestModelConfig_ClaudePickerNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelConfig
+	m.Cursor = 0
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenClaudeModelPicker {
+		t.Fatalf("ModelConfig cursor=0 (Claude): screen = %v, want %v", state.Screen, ScreenClaudeModelPicker)
+	}
+	if !state.ModelConfigMode {
+		t.Fatalf("ModelConfigMode should be true after entering Claude picker from ModelConfig")
+	}
+}
+
+// TestModelConfig_OpenCodePickerNavigation verifies that selecting cursor 1
+// from ScreenModelConfig transitions to ScreenModelPicker with ModelConfigMode set.
+func TestModelConfig_OpenCodePickerNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelConfig
+	m.Cursor = 1
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenModelPicker {
+		t.Fatalf("ModelConfig cursor=1 (OpenCode): screen = %v, want %v", state.Screen, ScreenModelPicker)
+	}
+	if !state.ModelConfigMode {
+		t.Fatalf("ModelConfigMode should be true after entering OpenCode picker from ModelConfig")
+	}
+}
+
+// TestModelConfig_BackNavigation verifies that selecting cursor 2 (Back) from
+// ScreenModelConfig returns to ScreenWelcome.
+func TestModelConfig_BackNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelConfig
+	m.Cursor = 2
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenWelcome {
+		t.Fatalf("ModelConfig cursor=2 (Back): screen = %v, want %v", state.Screen, ScreenWelcome)
+	}
+}
+
+// TestModelConfig_EscReturnsToWelcome verifies that pressing Esc from
+// ScreenModelConfig navigates back to ScreenWelcome.
+func TestModelConfig_EscReturnsToWelcome(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelConfig
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	if state.Screen != ScreenWelcome {
+		t.Fatalf("ModelConfig esc: screen = %v, want %v", state.Screen, ScreenWelcome)
+	}
+}
+
+// TestModelConfig_ClaudePickerBackReturnsToModelConfig verifies that pressing
+// Esc from ScreenClaudeModelPicker when in ModelConfigMode returns to
+// ScreenModelConfig (not the install flow).
+func TestModelConfig_ClaudePickerBackReturnsToModelConfig(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenClaudeModelPicker
+	m.ModelConfigMode = true
+	m.ClaudeModelPicker = screens.NewClaudeModelPickerState()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	if state.Screen != ScreenModelConfig {
+		t.Fatalf("ClaudeModelPicker esc (ModelConfigMode): screen = %v, want %v", state.Screen, ScreenModelConfig)
+	}
+}
+
+// TestModelConfig_OpenCodePickerBackReturnsToModelConfig verifies that pressing
+// Esc from ScreenModelPicker when in ModelConfigMode returns to ScreenModelConfig.
+func TestModelConfig_OpenCodePickerBackReturnsToModelConfig(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelPicker
+	m.ModelConfigMode = true
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	if state.Screen != ScreenModelConfig {
+		t.Fatalf("ModelPicker esc (ModelConfigMode): screen = %v, want %v", state.Screen, ScreenModelConfig)
+	}
 }
 
 // ─── Detection-default consumer regression tests ───────────────────────────
