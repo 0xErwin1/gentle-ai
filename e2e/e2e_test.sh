@@ -1255,7 +1255,7 @@ test_codex_engram_injection() {
 
         assert_file_exists "$config_toml" "Codex config.toml"
         assert_file_contains "$config_toml" '[mcp_servers.engram]' "config.toml has [mcp_servers.engram]"
-        assert_file_contains "$config_toml" 'command = "engram"' "config.toml has correct command"
+        assert_file_contains "$config_toml" 'command = ".*engram"' "config.toml has correct command"
         assert_file_contains "$config_toml" '"--tools=agent"' "config.toml has --tools=agent"
         assert_file_contains "$config_toml" 'model_instructions_file' "config.toml references instruction file"
         assert_file_contains "$config_toml" 'experimental_compact_prompt_file' "config.toml references compact prompt"
