@@ -1183,6 +1183,289 @@ func TestPreselectedAgents_CodexIsIncludedWhenPresent(t *testing.T) {
 	}
 }
 
+// ─── T20: Model config → sync persistence (PendingSyncOverrides) ───────────
+
+// TestModelConfig_ClaudePickerTriggersSyncScreen verifies the full path from
+// ScreenModelConfig → ClaudeModelPicker (ModelConfigMode) → selecting a preset
+// → ScreenSync with PendingSyncOverrides populated.
+func TestModelConfig_ClaudePickerTriggersSyncScreen(t *testing.T) {
+	// Step 1: from ScreenModelConfig, cursor=0 → goes to ClaudeModelPicker with ModelConfigMode=true.
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelConfig
+	m.Cursor = 0
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenClaudeModelPicker {
+		t.Fatalf("step1: screen = %v, want ScreenClaudeModelPicker", state.Screen)
+	}
+	if !state.ModelConfigMode {
+		t.Fatalf("step1: ModelConfigMode should be true after entering Claude picker from ModelConfig")
+	}
+
+	// Step 2: from ClaudeModelPicker (ModelConfigMode=true), cursor=0 (balanced preset), enter
+	// → should navigate to ScreenSync (NOT ScreenModelConfig) with PendingSyncOverrides set.
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+
+	if state.Screen != ScreenSync {
+		t.Fatalf("step2: screen = %v, want ScreenSync (ModelConfigMode should redirect to sync)", state.Screen)
+	}
+	if state.ModelConfigMode {
+		t.Fatalf("step2: ModelConfigMode should be cleared after routing to ScreenSync")
+	}
+	if state.PendingSyncOverrides == nil {
+		t.Fatalf("step2: PendingSyncOverrides should be non-nil after Claude model selection")
+	}
+	if len(state.PendingSyncOverrides.ClaudeModelAssignments) == 0 {
+		t.Fatalf("step2: PendingSyncOverrides.ClaudeModelAssignments should be non-empty, got: %v",
+			state.PendingSyncOverrides.ClaudeModelAssignments)
+	}
+	// Balanced preset: orchestrator → opus, sdd-archive → haiku.
+	if got := state.PendingSyncOverrides.ClaudeModelAssignments["orchestrator"]; got != model.ClaudeModelOpus {
+		t.Errorf("step2: ClaudeModelAssignments[orchestrator] = %q, want %q", got, model.ClaudeModelOpus)
+	}
+}
+
+// TestModelConfig_OpenCodePickerContinueTriggersSyncScreen verifies that pressing
+// "Continue" from ScreenModelPicker while in ModelConfigMode navigates to ScreenSync
+// and populates PendingSyncOverrides with ModelAssignments and SDDMode=multi.
+func TestModelConfig_OpenCodePickerContinueTriggersSyncScreen(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelPicker
+	m.ModelConfigMode = true
+
+	// Populate AvailableIDs so ModelPicker shows rows (not just "Back").
+	m.ModelPicker = screens.ModelPickerState{
+		AvailableIDs: []string{"anthropic"},
+	}
+
+	// Set some model assignments so we can verify they're captured.
+	m.Selection.ModelAssignments = map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+	}
+
+	// cursor == len(ModelPickerRows()) is the "Continue" option.
+	continueIdx := len(screens.ModelPickerRows())
+	m.Cursor = continueIdx
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenSync {
+		t.Fatalf("screen = %v, want ScreenSync (ModelConfigMode Continue should redirect to sync)", state.Screen)
+	}
+	if state.ModelConfigMode {
+		t.Fatalf("ModelConfigMode should be cleared after routing to ScreenSync")
+	}
+	if state.PendingSyncOverrides == nil {
+		t.Fatalf("PendingSyncOverrides should be non-nil after OpenCode model selection")
+	}
+	if got := state.PendingSyncOverrides.SDDMode; got != model.SDDModeMulti {
+		t.Errorf("PendingSyncOverrides.SDDMode = %q, want %q", got, model.SDDModeMulti)
+	}
+	if len(state.PendingSyncOverrides.ModelAssignments) == 0 {
+		t.Fatalf("PendingSyncOverrides.ModelAssignments should be non-empty, got: %v",
+			state.PendingSyncOverrides.ModelAssignments)
+	}
+	if got := state.PendingSyncOverrides.ModelAssignments["sdd-apply"]; got.ProviderID != "anthropic" {
+		t.Errorf("ModelAssignments[sdd-apply].ProviderID = %q, want %q", got.ProviderID, "anthropic")
+	}
+}
+
+// TestModelConfig_SyncPassesOverridesToSyncFn verifies that when ScreenSync is
+// entered with PendingSyncOverrides set, pressing enter launches the sync and the
+// SyncFn receives the pending overrides (not nil).
+func TestModelConfig_SyncPassesOverridesToSyncFn(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenSync
+
+	testOverrides := &model.SyncOverrides{
+		ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
+			"orchestrator": model.ClaudeModelOpus,
+			"default":      model.ClaudeModelSonnet,
+		},
+	}
+	m.PendingSyncOverrides = testOverrides
+
+	var capturedOverrides *model.SyncOverrides
+	m.SyncFn = func(overrides *model.SyncOverrides) (int, error) {
+		capturedOverrides = overrides
+		return 3, nil
+	}
+
+	// Press enter on ScreenSync to start the sync.
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if !state.OperationRunning {
+		t.Fatalf("OperationRunning should be true after triggering sync")
+	}
+	if state.OperationMode != "sync" {
+		t.Fatalf("OperationMode = %q, want %q", state.OperationMode, "sync")
+	}
+
+	// Execute the returned command batch to find and run the sync cmd.
+	// tea.Batch returns a tea.BatchMsg ([]tea.Cmd) — iterate to find the sync cmd.
+	if cmd == nil {
+		t.Fatalf("expected a non-nil cmd after triggering sync from ScreenSync")
+	}
+
+	syncMsg := findSyncDoneMsgInBatch(t, cmd)
+	if syncMsg == nil {
+		t.Fatalf("expected SyncDoneMsg from batch cmd, got nil")
+	}
+	if syncMsg.Err != nil {
+		t.Fatalf("unexpected sync error: %v", syncMsg.Err)
+	}
+	if syncMsg.FilesChanged != 3 {
+		t.Fatalf("FilesChanged = %d, want 3", syncMsg.FilesChanged)
+	}
+
+	if capturedOverrides == nil {
+		t.Fatalf("SyncFn was not called with overrides — capturedOverrides is nil")
+	}
+	if got := capturedOverrides.ClaudeModelAssignments["orchestrator"]; got != model.ClaudeModelOpus {
+		t.Errorf("captured ClaudeModelAssignments[orchestrator] = %q, want %q", got, model.ClaudeModelOpus)
+	}
+
+	// Feed SyncDoneMsg back through Update to verify end-to-end state cleanup.
+	updated2, _ := state.Update(*syncMsg)
+	final := updated2.(Model)
+	if final.PendingSyncOverrides != nil {
+		t.Errorf("PendingSyncOverrides should be nil after SyncDoneMsg, got %+v", final.PendingSyncOverrides)
+	}
+	if !final.HasSyncRun {
+		t.Errorf("HasSyncRun should be true after SyncDoneMsg")
+	}
+	if final.OperationRunning {
+		t.Errorf("OperationRunning should be false after SyncDoneMsg")
+	}
+}
+
+// findSyncDoneMsgInBatch executes all commands in a tea.Cmd (including BatchMsg)
+// and returns the first SyncDoneMsg found, or nil if none is produced.
+func findSyncDoneMsgInBatch(t *testing.T, cmd tea.Cmd) *SyncDoneMsg {
+	t.Helper()
+	if cmd == nil {
+		return nil
+	}
+
+	msg := cmd()
+
+	// Direct SyncDoneMsg (non-batch case).
+	if syncMsg, ok := msg.(SyncDoneMsg); ok {
+		return &syncMsg
+	}
+
+	// tea.Batch returns tea.BatchMsg which is []tea.Cmd.
+	// Execute each inner cmd and look for a SyncDoneMsg.
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, innerCmd := range batch {
+			if innerCmd == nil {
+				continue
+			}
+			innerMsg := innerCmd()
+			if syncMsg, ok := innerMsg.(SyncDoneMsg); ok {
+				return &syncMsg
+			}
+		}
+	}
+
+	return nil
+}
+
+// TestSyncDoneMsg_ClearsPendingOverrides verifies that receiving SyncDoneMsg
+// clears PendingSyncOverrides regardless of the sync outcome.
+func TestSyncDoneMsg_ClearsPendingOverrides(t *testing.T) {
+	tests := []struct {
+		name     string
+		syncDone SyncDoneMsg
+	}{
+		{
+			name:     "success clears overrides",
+			syncDone: SyncDoneMsg{FilesChanged: 5, Err: nil},
+		},
+		{
+			name:     "error also clears overrides",
+			syncDone: SyncDoneMsg{FilesChanged: 0, Err: fmt.Errorf("sync failed")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = ScreenSync
+			m.OperationRunning = true
+			m.PendingSyncOverrides = &model.SyncOverrides{
+				ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
+					"orchestrator": model.ClaudeModelOpus,
+				},
+			}
+
+			updated, _ := m.Update(tt.syncDone)
+			state := updated.(Model)
+
+			if state.PendingSyncOverrides != nil {
+				t.Errorf("PendingSyncOverrides should be nil after SyncDoneMsg, got: %+v",
+					state.PendingSyncOverrides)
+			}
+			if state.OperationRunning {
+				t.Errorf("OperationRunning should be false after SyncDoneMsg")
+			}
+		})
+	}
+}
+
+// TestModelConfig_EscFromPickersReturnsToModelConfig verifies that pressing Esc
+// from either model picker in ModelConfigMode returns to ScreenModelConfig (the
+// cancel path is not redirected to ScreenSync).
+func TestModelConfig_EscFromPickersReturnsToModelConfig(t *testing.T) {
+	tests := []struct {
+		name   string
+		screen Screen
+		setup  func(m *Model)
+	}{
+		{
+			name:   "Esc from ClaudeModelPicker in ModelConfigMode → ScreenModelConfig",
+			screen: ScreenClaudeModelPicker,
+			setup: func(m *Model) {
+				m.ModelConfigMode = true
+				m.ClaudeModelPicker = screens.NewClaudeModelPickerState()
+			},
+		},
+		{
+			name:   "Esc from ModelPicker in ModelConfigMode → ScreenModelConfig",
+			screen: ScreenModelPicker,
+			setup: func(m *Model) {
+				m.ModelConfigMode = true
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = tt.screen
+			tt.setup(&m)
+
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+			state := updated.(Model)
+
+			if state.Screen != ScreenModelConfig {
+				t.Fatalf("esc from %v (ModelConfigMode): screen = %v, want ScreenModelConfig",
+					tt.screen, state.Screen)
+			}
+			// Verify PendingSyncOverrides is NOT set by the cancel path.
+			if state.PendingSyncOverrides != nil {
+				t.Errorf("PendingSyncOverrides should remain nil after esc cancel, got: %+v",
+					state.PendingSyncOverrides)
+			}
+		})
+	}
+}
+
 // TestPreselectedAgents_AllSixAgentsMappedCorrectly verifies every canonical
 // agent string maps to its model.AgentID constant in preselectedAgents.
 // This prevents silent drops when new agents are added to ScanConfigs without

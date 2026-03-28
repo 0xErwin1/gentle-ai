@@ -79,8 +79,9 @@ type UpgradePhaseCompletedMsg struct {
 type UpgradeFunc func(ctx context.Context, results []update.UpdateResult) upgrade.UpgradeReport
 
 // SyncFunc is the signature of the function injected to perform config sync.
-// Returns the number of files changed and any error.
-type SyncFunc func() (int, error)
+// When overrides is non-nil, the sync merges those model assignments into the
+// selection before executing. Returns the number of files changed and any error.
+type SyncFunc func(overrides *model.SyncOverrides) (int, error)
 
 // ExecuteFunc builds and runs the installation pipeline. It receives a ProgressFunc
 // callback to emit step-level progress events, and returns the ExecutionResult.
@@ -224,6 +225,12 @@ type Model struct {
 	// continuing the install flow.
 	ModelConfigMode bool
 
+	// PendingSyncOverrides holds model assignments selected via the
+	// "Configure Models" shortcut. When non-nil, the next sync run merges
+	// these into the sync selection so the choices are persisted to disk.
+	// Cleared after the sync completes (SyncDoneMsg handler).
+	PendingSyncOverrides *model.SyncOverrides
+
 	// OperationRunning is true while an upgrade/sync/upgrade-sync goroutine is
 	// executing. Prevents concurrent operation launches.
 	OperationRunning bool
@@ -314,6 +321,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SyncFilesChanged = msg.FilesChanged
 		m.SyncErr = msg.Err
 		m.HasSyncRun = true
+		m.PendingSyncOverrides = nil
 		return m, nil
 	case UpgradePhaseCompletedMsg:
 		// Upgrade phase done; sync phase is about to start (OperationRunning stays true).
@@ -489,10 +497,14 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if handled {
 			if updated != nil {
 				m.Selection.ClaudeModelAssignments = updated
-				// In ModelConfigMode, return to ScreenModelConfig instead of continuing install flow.
+				// In ModelConfigMode, persist model assignments via sync.
 				if m.ModelConfigMode {
 					m.ModelConfigMode = false
-					m.setScreen(ScreenModelConfig)
+					m.PendingSyncOverrides = &model.SyncOverrides{
+						ClaudeModelAssignments: updated,
+					}
+					m = m.withResetSyncState()
+					m.setScreen(ScreenSync)
 				} else if m.shouldShowSDDModeScreen() {
 					m.setScreen(ScreenSDDMode)
 				} else if m.Selection.Preset == model.PresetCustom {
@@ -650,7 +662,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		// Start sync.
 		m.OperationRunning = true
 		m.OperationMode = "sync"
-		return m, tea.Batch(tickCmd(), m.startSync())
+		return m, tea.Batch(tickCmd(), m.startSync(m.PendingSyncOverrides))
 	case ScreenUpgradeSync:
 		// Guard: don't re-launch while running.
 		if m.OperationRunning {
@@ -817,10 +829,15 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 		// After the rows: Continue (cursor == len(rows)), Back (cursor == len(rows)+1).
 		if m.Cursor == len(rows) {
-			// In ModelConfigMode, return to ScreenModelConfig instead of continuing install flow.
+			// In ModelConfigMode, persist model assignments via sync.
 			if m.ModelConfigMode {
 				m.ModelConfigMode = false
-				m.setScreen(ScreenModelConfig)
+				m.PendingSyncOverrides = &model.SyncOverrides{
+					ModelAssignments: m.Selection.ModelAssignments,
+					SDDMode:          model.SDDModeMulti,
+				}
+				m = m.withResetSyncState()
+				m.setScreen(ScreenSync)
 				return m, nil
 			}
 			if m.Selection.Preset == model.PresetCustom {
@@ -1074,8 +1091,22 @@ func (m Model) startInstalling() (tea.Model, tea.Cmd) {
 	})
 }
 
+// withResetSyncState clears sync-result state so ScreenSync shows the confirmation
+// screen (State 3) instead of stale results from a previous run.
+// Unlike withResetOperationState, this preserves PendingSyncOverrides.
+func (m Model) withResetSyncState() Model {
+	m.SyncFilesChanged = 0
+	m.SyncErr = nil
+	m.HasSyncRun = false
+	m.OperationRunning = false
+	m.OperationMode = ""
+	m.Cursor = 0
+	return m
+}
+
 // withResetOperationState clears all operation-related state and resets the cursor,
 // returning a new Model with these fields cleared (value-receiver pattern for MVU).
+// This includes clearing PendingSyncOverrides, unlike withResetSyncState.
 func (m Model) withResetOperationState() Model {
 	m.UpgradeReport = nil
 	m.UpgradeErr = nil
@@ -1084,6 +1115,7 @@ func (m Model) withResetOperationState() Model {
 	m.HasSyncRun = false
 	m.OperationRunning = false
 	m.OperationMode = ""
+	m.PendingSyncOverrides = nil
 	m.Cursor = 0
 	return m
 }
@@ -1103,13 +1135,14 @@ func (m Model) startUpgrade() tea.Cmd {
 }
 
 // startSync launches the sync goroutine and returns a tea.Cmd.
-func (m Model) startSync() tea.Cmd {
+// When overrides is non-nil, model assignments are merged into the sync selection.
+func (m Model) startSync(overrides *model.SyncOverrides) tea.Cmd {
 	syncFn := m.SyncFn
 	return func() tea.Msg {
 		if syncFn == nil {
 			return SyncDoneMsg{Err: fmt.Errorf("sync function not configured")}
 		}
-		filesChanged, err := syncFn()
+		filesChanged, err := syncFn(overrides)
 		return SyncDoneMsg{FilesChanged: filesChanged, Err: err}
 	}
 }
@@ -1140,7 +1173,10 @@ func (m Model) startUpgradeSync() tea.Cmd {
 		if syncFn == nil {
 			return SyncDoneMsg{Err: fmt.Errorf("sync function not configured")}
 		}
-		filesChanged, err := syncFn()
+		// Overrides are intentionally nil: upgrade-sync is triggered from
+		// Welcome menu, not ModelConfig. PendingSyncOverrides is cleared
+		// by withResetOperationState before entering this flow.
+		filesChanged, err := syncFn(nil)
 		return SyncDoneMsg{FilesChanged: filesChanged, Err: err}
 	}
 
@@ -1298,6 +1334,12 @@ func (m Model) goBack() Model {
 		}
 		m.setScreen(ScreenDependencyTree)
 		return m
+	}
+
+	// Leaving ScreenSync via Esc: clear stale overrides so they don't leak
+	// into a future sync triggered from a different flow (e.g. Welcome menu).
+	if m.Screen == ScreenSync && m.PendingSyncOverrides != nil {
+		m.PendingSyncOverrides = nil
 	}
 
 	previous, ok := PreviousScreen(m.Screen)

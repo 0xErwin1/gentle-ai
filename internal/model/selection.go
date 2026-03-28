@@ -30,3 +30,15 @@ func (s Selection) HasComponent(component ComponentID) bool {
 
 	return false
 }
+
+// SyncOverrides holds optional overrides applied to the sync selection.
+// Used when the TUI "Configure Models" flow needs to persist model assignments
+// without re-running the full install pipeline.
+//
+// Nil fields mean "no override" — the sync uses defaults from BuildSyncSelection.
+// A non-nil but empty map means "reset to defaults" (explicit clear).
+type SyncOverrides struct {
+	ModelAssignments       map[string]ModelAssignment  // nil = no override; empty map = reset to defaults
+	ClaudeModelAssignments map[string]ClaudeModelAlias // nil = no override; empty map = reset to defaults
+	SDDMode                SDDModeID                   // "" = no override; when non-empty, overrides the sync's default SDD mode
+}
