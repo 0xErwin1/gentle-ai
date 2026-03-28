@@ -1686,6 +1686,30 @@ func TestModelPickerEnterBackNavigatesToStrictTDD(t *testing.T) {
 	}
 }
 
+// TestModelPickerContinueMultiGoesToStrictTDD verifies that pressing Continue
+// on ModelPicker (non-custom preset, multi mode) navigates to ScreenStrictTDD
+// before going to DependencyTree. Previously it went directly to DependencyTree.
+func TestModelPickerContinueMultiGoesToStrictTDD(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelPicker
+	m.Selection.Preset = model.PresetFullGentleman // non-custom
+	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+	m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+	m.Selection.SDDMode = model.SDDModeMulti
+	m.ModelConfigMode = false
+	m.ModelPicker.AvailableIDs = []string{"openai"}
+	// cursor = len(rows) → the "Continue" option (not Back which is len(rows)+1).
+	rows := screens.ModelPickerRows()
+	m.Cursor = len(rows)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenStrictTDD {
+		t.Fatalf("screen = %v, want ScreenStrictTDD after ModelPicker Continue (multi, non-custom)", state.Screen)
+	}
+}
+
 // TestStrictTDDBackNavigatesToModelPickerWhenMultiWithCache verifies that
 // pressing Escape on ScreenStrictTDD when SDDModeMulti is active and the
 // OpenCode model cache exists returns to ScreenModelPicker.

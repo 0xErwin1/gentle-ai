@@ -872,9 +872,13 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					m.setScreen(ScreenReview)
 				}
 			} else {
-				// Continue -> proceed to dependency tree.
-				m.buildDependencyPlan()
-				m.setScreen(ScreenDependencyTree)
+				// Continue -> check StrictTDD before dependency tree.
+				if m.shouldShowStrictTDDScreen() {
+					m.setScreen(ScreenStrictTDD)
+				} else {
+					m.buildDependencyPlan()
+					m.setScreen(ScreenDependencyTree)
+				}
 			}
 			return m, nil
 		}
