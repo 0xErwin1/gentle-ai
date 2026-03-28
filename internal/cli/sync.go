@@ -29,6 +29,7 @@ type SyncFlags struct {
 	Agents             []string
 	Skills             []string
 	SDDMode            string
+	StrictTDD          bool
 	IncludePermissions bool
 	IncludeTheme       bool
 	DryRun             bool
@@ -62,6 +63,7 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	registerListFlag(fs, "skill", &opts.Skills)
 	registerListFlag(fs, "skills", &opts.Skills)
 	fs.StringVar(&opts.SDDMode, "sdd-mode", "", "SDD orchestrator mode: single or multi (default: single)")
+	fs.BoolVar(&opts.StrictTDD, "strict-tdd", false, "enable strict TDD mode for SDD agents (RED → GREEN → REFACTOR)")
 	fs.BoolVar(&opts.IncludePermissions, "include-permissions", false, "include permissions component in sync")
 	fs.BoolVar(&opts.IncludeTheme, "include-theme", false, "include theme component in sync")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
@@ -112,6 +114,7 @@ func BuildSyncSelection(flags SyncFlags, agentIDs []model.AgentID) model.Selecti
 		Agents:     agentIDs,
 		Components: components,
 		SDDMode:    sddMode,
+		StrictTDD:  flags.StrictTDD,
 		Skills:     skillIDs,
 		// Preset is set to full-gentleman so selectedSkillIDs() returns the
 		// correct default skill set when no explicit skills are provided.
@@ -298,6 +301,7 @@ func (s componentSyncStep) Run() error {
 				OpenCodeModelAssignments: s.selection.ModelAssignments,
 				ClaudeModelAssignments:   s.selection.ClaudeModelAssignments,
 				WorkspaceDir:             s.workspaceDir,
+				StrictTDD:                s.selection.StrictTDD,
 			}
 			res, err := sdd.Inject(s.homeDir, adapter, s.selection.SDDMode, opts)
 			if err != nil {

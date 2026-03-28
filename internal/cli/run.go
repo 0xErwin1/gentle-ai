@@ -496,6 +496,7 @@ func (s componentApplyStep) Run() error {
 				OpenCodeModelAssignments: s.selection.ModelAssignments,
 				ClaudeModelAssignments:   s.selection.ClaudeModelAssignments,
 				WorkspaceDir:             s.workspaceDir,
+				StrictTDD:                s.selection.StrictTDD,
 			}
 			if _, err := sdd.Inject(s.homeDir, adapter, s.selection.SDDMode, opts); err != nil {
 				return fmt.Errorf("inject sdd for %q: %w", adapter.Agent(), err)

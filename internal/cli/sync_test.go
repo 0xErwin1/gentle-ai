@@ -1342,3 +1342,53 @@ func TestRunSyncRollsBackOnFailure(t *testing.T) {
 		t.Errorf("settings file was truncated to empty after sync/rollback")
 	}
 }
+
+// ─── Task 5: --strict-tdd flag ───────────────────────────────────────────────
+
+// TestParseSyncFlagsStrictTDD verifies that --strict-tdd flag is parsed correctly.
+func TestParseSyncFlagsStrictTDD(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{
+			name: "absent defaults to false",
+			args: []string{},
+			want: false,
+		},
+		{
+			name: "explicit true",
+			args: []string{"--strict-tdd"},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flags, err := ParseSyncFlags(tt.args)
+			if err != nil {
+				t.Fatalf("ParseSyncFlags() error = %v", err)
+			}
+			if flags.StrictTDD != tt.want {
+				t.Errorf("StrictTDD = %v, want %v", flags.StrictTDD, tt.want)
+			}
+		})
+	}
+}
+
+// TestBuildSyncSelectionStrictTDD verifies that StrictTDD flag is passed
+// through to the Selection when building sync selection.
+func TestBuildSyncSelectionStrictTDD(t *testing.T) {
+	flags := SyncFlags{StrictTDD: true}
+	sel := BuildSyncSelection(flags, nil)
+	if !sel.StrictTDD {
+		t.Errorf("Selection.StrictTDD = false, want true (should be propagated from flags)")
+	}
+
+	flagsDisabled := SyncFlags{StrictTDD: false}
+	selDisabled := BuildSyncSelection(flagsDisabled, nil)
+	if selDisabled.StrictTDD {
+		t.Errorf("Selection.StrictTDD = true, want false")
+	}
+}

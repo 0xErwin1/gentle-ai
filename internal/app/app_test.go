@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
 // TestListBackupsNewestFirst verifies that ListBackups returns manifests sorted
@@ -239,3 +240,49 @@ func TestListBackupsFallsBackGracefullyForOldManifests(t *testing.T) {
 		t.Errorf("DisplayLabel() returned empty string, want non-empty fallback label")
 	}
 }
+
+// ─── BUG 3: SyncOverrides.StrictTDD never read in tuiSync ───────────────────
+
+// TestTuiSyncAppliesStrictTDDOverride verifies that applyOverrides correctly
+// merges SyncOverrides.StrictTDD into the selection.
+// Previously, the field was declared on SyncOverrides but never applied.
+func TestTuiSyncAppliesStrictTDDOverride(t *testing.T) {
+	sel := boolPtr(true)
+	overrides := &model.SyncOverrides{StrictTDD: sel}
+
+	selection := model.Selection{StrictTDD: false}
+	applyOverrides(&selection, overrides)
+
+	if !selection.StrictTDD {
+		t.Fatalf("Selection.StrictTDD = false after applyOverrides with StrictTDD=true override; field is not being applied")
+	}
+}
+
+// TestTuiSyncAppliesStrictTDDOverrideFalse verifies the override correctly sets
+// StrictTDD to false when the pointer points to false.
+func TestTuiSyncAppliesStrictTDDOverrideFalse(t *testing.T) {
+	sel := boolPtr(false)
+	overrides := &model.SyncOverrides{StrictTDD: sel}
+
+	selection := model.Selection{StrictTDD: true}
+	applyOverrides(&selection, overrides)
+
+	if selection.StrictTDD {
+		t.Fatalf("Selection.StrictTDD = true after applyOverrides with StrictTDD=false override")
+	}
+}
+
+// TestTuiSyncStrictTDDNilOverrideNoChange verifies that when StrictTDD override
+// is nil, the selection's existing value is preserved.
+func TestTuiSyncStrictTDDNilOverrideNoChange(t *testing.T) {
+	overrides := &model.SyncOverrides{StrictTDD: nil}
+
+	selection := model.Selection{StrictTDD: true}
+	applyOverrides(&selection, overrides)
+
+	if !selection.StrictTDD {
+		t.Fatalf("Selection.StrictTDD changed unexpectedly; nil override should not modify the field")
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }

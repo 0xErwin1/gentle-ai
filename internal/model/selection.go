@@ -7,6 +7,7 @@ type Selection struct {
 	Persona                PersonaID
 	Preset                 PresetID
 	SDDMode                SDDModeID
+	StrictTDD              bool
 	ModelAssignments       map[string]ModelAssignment  // key = sub-agent name (e.g., "sdd-init")
 	ClaudeModelAssignments map[string]ClaudeModelAlias // key = phase name; value = opus|sonnet|haiku
 }
@@ -41,4 +42,5 @@ type SyncOverrides struct {
 	ModelAssignments       map[string]ModelAssignment  // nil = no override; empty map = reset to defaults
 	ClaudeModelAssignments map[string]ClaudeModelAlias // nil = no override; empty map = reset to defaults
 	SDDMode                SDDModeID                   // "" = no override; when non-empty, overrides the sync's default SDD mode
+	StrictTDD              *bool                       // nil = no override; non-nil = override strict TDD mode
 }

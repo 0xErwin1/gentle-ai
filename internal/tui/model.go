@@ -116,6 +116,7 @@ const (
 	ScreenPreset
 	ScreenClaudeModelPicker
 	ScreenSDDMode
+	ScreenStrictTDD
 	ScreenDependencyTree
 	ScreenSkillPicker
 	ScreenReview
@@ -443,6 +444,8 @@ func (m Model) View() string {
 		return screens.RenderClaudeModelPicker(m.ClaudeModelPicker, m.Cursor)
 	case ScreenSDDMode:
 		return screens.RenderSDDMode(m.Selection.SDDMode, m.Cursor)
+	case ScreenStrictTDD:
+		return screens.RenderStrictTDD(m.Selection.StrictTDD, m.Cursor)
 	case ScreenModelPicker:
 		return screens.RenderModelPicker(m.Selection.ModelAssignments, m.ModelPicker, m.Cursor)
 	case ScreenDependencyTree:
@@ -770,6 +773,12 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 			// Clear assignments for both single mode and multi-no-cache paths.
 			m.Selection.ModelAssignments = nil
+			// Show StrictTDD screen when OpenCode + SDD are selected.
+			// This is the next step before the dependency tree.
+			if m.shouldShowSDDModeScreen() {
+				m.setScreen(ScreenStrictTDD)
+				return m, nil
+			}
 			if m.Selection.Preset == model.PresetCustom {
 				// Custom preset: dependency plan was already built before SDD mode.
 				// Check skill picker before going to review.
@@ -859,11 +868,47 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		// Back -> return to SDD mode screen (or ModelConfig in shortcut mode).
+		// Back -> return to StrictTDD screen if applicable (or ModelConfig in shortcut mode).
 		if m.ModelConfigMode {
 			m.ModelConfigMode = false
 			m.setScreen(ScreenModelConfig)
 			return m, nil
+		}
+		if m.shouldShowStrictTDDScreen() {
+			m.setScreen(ScreenStrictTDD)
+		} else {
+			m.setScreen(ScreenSDDMode)
+		}
+	case ScreenStrictTDD:
+		options := screens.StrictTDDOptions()
+		if m.Cursor < len(options) {
+			// Enable is index 0, Disable is index 1.
+			m.Selection.StrictTDD = (m.Cursor == screens.StrictTDDOptionEnable)
+			if m.Selection.Preset == model.PresetCustom {
+				// Custom preset: dependency plan was already built before SDD mode.
+				// Check skill picker before going to review.
+				if m.shouldShowSkillPickerScreen() {
+					if len(m.SkillPicker) == 0 {
+						m.initSkillPicker()
+					}
+					m.setScreen(ScreenSkillPicker)
+				} else {
+					m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
+					m.setScreen(ScreenReview)
+				}
+			} else {
+				m.buildDependencyPlan()
+				m.setScreen(ScreenDependencyTree)
+			}
+			return m, nil
+		}
+		// Back — return to ModelPicker if it was shown (multi + cache), else SDDMode.
+		if m.Selection.SDDMode == model.SDDModeMulti {
+			cachePath := opencode.DefaultCachePath()
+			if _, err := osStatModelCache(cachePath); err == nil {
+				m.setScreen(ScreenModelPicker)
+				return m, nil
+			}
 		}
 		m.setScreen(ScreenSDDMode)
 	case ScreenDependencyTree:
@@ -905,7 +950,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// NOTE: Back logic also in goBack() — keep in sync.
-		if m.shouldShowSDDModeScreen() {
+		if m.shouldShowStrictTDDScreen() {
+			// StrictTDD screen is between ModelPicker/SDDMode and DependencyTree.
+			m.setScreen(ScreenStrictTDD)
+		} else if m.shouldShowSDDModeScreen() {
 			if m.Selection.SDDMode == model.SDDModeMulti {
 				cachePath := opencode.DefaultCachePath()
 				if _, err := osStatModelCache(cachePath); err == nil {
@@ -1263,22 +1311,28 @@ func (m Model) goBack() Model {
 	// NOTE: DependencyTree back logic also in confirmSelection() — keep in sync.
 	if m.Screen == ScreenDependencyTree && m.Selection.Preset != model.PresetCustom {
 		if m.shouldShowSDDModeScreen() {
-			if m.Selection.SDDMode == model.SDDModeMulti {
-				cachePath := opencode.DefaultCachePath()
-				if _, err := osStatModelCache(cachePath); err == nil {
-					m.setScreen(ScreenModelPicker)
-				} else {
-					m.setScreen(ScreenSDDMode)
-				}
-			} else {
-				m.setScreen(ScreenSDDMode)
-			}
+			// StrictTDD screen is between ModelPicker/SDDMode and DependencyTree.
+			m.setScreen(ScreenStrictTDD)
 			return m
 		}
 		if m.shouldShowClaudeModelPickerScreen() {
 			m.setScreen(ScreenClaudeModelPicker)
 			return m
 		}
+	}
+
+	// Going back from ScreenStrictTDD returns to ModelPicker (if multi + cache)
+	// or SDDMode.
+	if m.Screen == ScreenStrictTDD {
+		if m.Selection.SDDMode == model.SDDModeMulti {
+			cachePath := opencode.DefaultCachePath()
+			if _, err := osStatModelCache(cachePath); err == nil {
+				m.setScreen(ScreenModelPicker)
+				return m
+			}
+		}
+		m.setScreen(ScreenSDDMode)
+		return m
 	}
 
 	// In custom preset, going back from SDDMode should return to ClaudeModelPicker
@@ -1437,6 +1491,8 @@ func (m Model) optionCount() int {
 		return screens.ClaudeModelPickerOptionCount(m.ClaudeModelPicker)
 	case ScreenSDDMode:
 		return len(screens.SDDModeOptions()) + 1
+	case ScreenStrictTDD:
+		return len(screens.StrictTDDOptions()) + 1 // Enable + Disable + Back
 	case ScreenModelPicker:
 		if len(m.ModelPicker.AvailableIDs) == 0 {
 			return 1 // only "Back to SDD mode"
@@ -1636,6 +1692,15 @@ func extractAvailableUpdates(results []update.UpdateResult) []screens.UpdateInfo
 }
 
 func (m Model) shouldShowSDDModeScreen() bool {
+	return m.Selection.HasAgent(model.AgentOpenCode) &&
+		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
+}
+
+// shouldShowStrictTDDScreen reports whether the Strict TDD Mode screen should
+// be shown in the navigation flow. For now this has the same prerequisite as
+// shouldShowSDDModeScreen (OpenCode agent + SDD component selected), but has
+// its own name so callers are semantically clear about their intent.
+func (m Model) shouldShowStrictTDDScreen() bool {
 	return m.Selection.HasAgent(model.AgentOpenCode) &&
 		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
 }
