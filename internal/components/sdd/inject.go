@@ -443,18 +443,40 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	}
 
 	// 4. Post-injection verification — catch silent failures.
-	// Validate against the in-memory merged bytes rather than re-reading from
-	// disk to avoid false negatives on Windows/WSL2 where a freshly-renamed
-	// file may not be immediately readable via os.ReadFile.
-	if adapter.Agent() == model.AgentOpenCode && len(mergedSettingsBytes) > 0 {
+	// Primary: validate against the in-memory merged bytes to avoid false
+	// negatives on Windows/WSL2 where a freshly-renamed file may not be
+	// immediately visible via os.ReadFile.
+	// Fallback: if the in-memory check fails, re-read from disk — the
+	// opposite failure mode can also occur (in-memory buffer stale but
+	// disk has the correct content).
+	if adapter.Agent() == model.AgentOpenCode {
+		settingsPath := adapter.SettingsPath(homeDir)
 		settingsText := string(mergedSettingsBytes)
+
+		// Fallback: if in-memory bytes are empty but the merge succeeded
+		// (file was written), read from disk.
+		if len(mergedSettingsBytes) == 0 {
+			if diskBytes, readErr := os.ReadFile(settingsPath); readErr == nil {
+				settingsText = string(diskBytes)
+			}
+		}
+
 		if !strings.Contains(settingsText, `"sdd-orchestrator"`) {
-			settingsPath := adapter.SettingsPath(homeDir)
-			return InjectionResult{}, fmt.Errorf("post-check: %q missing sdd-orchestrator agent definition — OpenCode /sdd-* commands will fail", settingsPath)
+			// In-memory check failed — try reading from disk as last resort.
+			if diskBytes, readErr := os.ReadFile(settingsPath); readErr == nil {
+				settingsText = string(diskBytes)
+			}
+			if !strings.Contains(settingsText, `"sdd-orchestrator"`) {
+				return InjectionResult{}, fmt.Errorf("post-check: %q missing sdd-orchestrator agent definition — OpenCode /sdd-* commands will fail", settingsPath)
+			}
 		}
 		if sddMode == model.SDDModeMulti && !strings.Contains(settingsText, `"sdd-apply"`) {
-			settingsPath := adapter.SettingsPath(homeDir)
-			return InjectionResult{}, fmt.Errorf("post-check: %q missing sdd-apply sub-agent — multi-mode overlay was not injected correctly", settingsPath)
+			if diskBytes, readErr := os.ReadFile(settingsPath); readErr == nil {
+				settingsText = string(diskBytes)
+			}
+			if !strings.Contains(settingsText, `"sdd-apply"`) {
+				return InjectionResult{}, fmt.Errorf("post-check: %q missing sdd-apply sub-agent — multi-mode overlay was not injected correctly", settingsPath)
+			}
 		}
 	}
 
