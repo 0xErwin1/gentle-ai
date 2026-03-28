@@ -1386,7 +1386,8 @@ export const BackgroundAgents: Plugin = async (ctx) => {
 
     // Inject delegation rules into system prompt
     "experimental.chat.system.transform": async (_input: SystemTransformInput, output) => {
-      output.system.push(DELEGATION_RULES)
+      const combined = [...output.system, DELEGATION_RULES].join("\n\n---\n\n")
+      output.system = [combined]
     },
 
     // Compaction hook - inject delegation context for context recovery
