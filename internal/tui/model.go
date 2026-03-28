@@ -882,17 +882,17 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		// Back -> return to StrictTDD screen if applicable (or ModelConfig in shortcut mode).
+		// Back -> return to SDDMode (or ModelConfig in shortcut mode).
+		// ModelPicker sits BETWEEN SDDMode and StrictTDD in the forward flow:
+		//   SDDMode → ModelPicker → StrictTDD → DependencyTree
+		// So Back from ModelPicker must go to SDDMode, NOT StrictTDD
+		// (going to StrictTDD would create a loop: ModelPicker ↔ StrictTDD).
 		if m.ModelConfigMode {
 			m.ModelConfigMode = false
 			m.setScreen(ScreenModelConfig)
 			return m, nil
 		}
-		if m.shouldShowStrictTDDScreen() {
-			m.setScreen(ScreenStrictTDD)
-		} else {
-			m.setScreen(ScreenSDDMode)
-		}
+		m.setScreen(ScreenSDDMode)
 	case ScreenStrictTDD:
 		options := screens.StrictTDDOptions()
 		if m.Cursor < len(options) {

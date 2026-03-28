@@ -1659,30 +1659,29 @@ func TestDependencyTreeEnterBackNavigatesToStrictTDD(t *testing.T) {
 	}
 }
 
-// TestModelPickerEnterBackNavigatesToStrictTDD verifies that pressing Enter on
-// the "Back" option of ScreenModelPicker navigates to ScreenStrictTDD when
-// shouldShowSDDModeScreen() is true and we are not in ModelConfigMode.
-// Previously, Enter-Back went directly to ScreenSDDMode, skipping StrictTDD.
-func TestModelPickerEnterBackNavigatesToStrictTDD(t *testing.T) {
+// TestModelPickerEnterBackNavigatesToSDDMode verifies that pressing Enter on
+// the "Back" option of ScreenModelPicker navigates to ScreenSDDMode (NOT
+// StrictTDD). ModelPicker sits between SDDMode and StrictTDD in the forward
+// flow: SDDMode → ModelPicker → StrictTDD. Back must go to SDDMode to avoid
+// a loop between ModelPicker ↔ StrictTDD.
+func TestModelPickerEnterBackNavigatesToSDDMode(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenModelPicker
 	m.Selection.Preset = model.PresetFullGentleman // non-custom
 	m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
 	m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
-	m.Selection.SDDMode = model.SDDModeSingle
+	m.Selection.SDDMode = model.SDDModeMulti
 	m.ModelConfigMode = false
-	// Populate AvailableIDs so the screen doesn't trigger the empty-list special case
-	// (which is a separate path for "no providers detected").
 	m.ModelPicker.AvailableIDs = []string{"openai"}
-	// cursor = len(rows)+1 == len(ModelPickerRows())+1 → the "Back" option.
+	// cursor = len(rows)+1 → the "Back" option.
 	rows := screens.ModelPickerRows()
 	m.Cursor = len(rows) + 1
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenStrictTDD {
-		t.Fatalf("screen = %v, want ScreenStrictTDD after Enter on ModelPicker Back (shouldShowSDDModeScreen=true)", state.Screen)
+	if state.Screen != ScreenSDDMode {
+		t.Fatalf("screen = %v, want ScreenSDDMode after Enter on ModelPicker Back (avoid StrictTDD loop)", state.Screen)
 	}
 }
 
