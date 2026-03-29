@@ -21,7 +21,7 @@ Core principle: **does this inflate my context without need?** If yes → delega
 | Bash for state (git, gh) | ✅ | — |
 | Bash for execution (test, build, install) | — | ✅ |
 
-Use task for all delegated work. Codex does not expose async delegate tooling.
+delegate (async) is the default for delegated work. Use task (sync) only when you need the result before your next action.
 
 Anti-patterns — these ALWAYS inflate context without need:
 - Reading 4+ files to "understand" the codebase inline → delegate an exploration

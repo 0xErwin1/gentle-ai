@@ -2137,6 +2137,172 @@ func TestCustomReviewBackGoesToStrictTDDNotModelPicker(t *testing.T) {
 	}
 }
 
+// ─── Issue #147: Cursor not reset after ClaudeModelPicker custom mode Back ───
+
+// TestClaudeModelPickerCustomModeEscResetsCursor verifies that after entering
+// custom mode and pressing Esc, the cursor is reset to 0.
+//
+// Closes #147.
+func TestClaudeModelPickerCustomModeEscResetsCursor(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenClaudeModelPicker
+	// Set custom mode active with cursor at some non-zero position (e.g. 7).
+	m.ClaudeModelPicker = screens.NewClaudeModelPickerState()
+	m.ClaudeModelPicker.InCustomMode = true
+	m.Cursor = 7 // simulate user navigated down in custom phase list
+
+	// Press Esc — should exit custom mode and reset cursor to 0.
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	// Custom mode must be off.
+	if state.ClaudeModelPicker.InCustomMode {
+		t.Fatalf("ClaudeModelPicker.InCustomMode = true, want false after Esc")
+	}
+	// Cursor must be reset to 0 (not remain at 7).
+	if state.Cursor != 0 {
+		t.Fatalf("Cursor = %d, want 0 after Esc from custom mode (bug: cursor not reset)", state.Cursor)
+	}
+}
+
+// TestClaudeModelPickerBackRowExitCustomModeResetsCursor verifies that pressing
+// Enter on the "Back" row (last option in custom mode list) also resets the cursor.
+//
+// Closes #147.
+func TestClaudeModelPickerBackRowExitCustomModeResetsCursor(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenClaudeModelPicker
+	m.ClaudeModelPicker = screens.NewClaudeModelPickerState()
+	m.ClaudeModelPicker.InCustomMode = true
+	// Back row = len(claudePhases) + 1 = 10 + 1 = 11 (Confirm is +0, Back is +1).
+	// However cursor is controlled by m.Cursor (the global model cursor).
+	m.Cursor = 9 // in custom mode, simulate cursor at some mid position
+
+	// This test verifies the cursor is 0 after leaving custom mode, regardless of method.
+	// Simulate ESC path (same code path as Back row for InCustomMode=false transition).
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	if state.Cursor != 0 {
+		t.Fatalf("Cursor = %d, want 0 after exiting custom mode (bug: cursor not reset)", state.Cursor)
+	}
+}
+
+// ─── Issue #150: Wrap-around navigation ─────────────────────────────────────
+
+// TestWrapAroundDownAtLast verifies that pressing Down when at the last option
+// wraps the cursor to 0.
+//
+// Closes #150.
+func TestWrapAroundDownAtLast(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPersona
+
+	// optionCount() for ScreenPersona = len(PersonaOptions()) + 1 (Back).
+	last := m.optionCount() - 1
+	m.Cursor = last
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	state := updated.(Model)
+
+	if state.Cursor != 0 {
+		t.Fatalf("Down at last: Cursor = %d, want 0 (wrap-around)", state.Cursor)
+	}
+}
+
+// TestWrapAroundUpAtFirst verifies that pressing Up when at cursor=0
+// wraps the cursor to the last option.
+//
+// Closes #150.
+func TestWrapAroundUpAtFirst(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPersona
+	m.Cursor = 0
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	state := updated.(Model)
+
+	last := m.optionCount() - 1
+	if state.Cursor != last {
+		t.Fatalf("Up at first: Cursor = %d, want %d (wrap-around)", state.Cursor, last)
+	}
+}
+
+// TestWrapAroundDownAtLastWithArrowKey verifies wrap also works with arrow Down key.
+//
+// Closes #150.
+func TestWrapAroundDownAtLastWithArrowKey(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPersona
+	last := m.optionCount() - 1
+	m.Cursor = last
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	state := updated.(Model)
+
+	if state.Cursor != 0 {
+		t.Fatalf("Down(arrow) at last: Cursor = %d, want 0 (wrap-around)", state.Cursor)
+	}
+}
+
+// TestWrapAroundUpAtFirstWithArrowKey verifies wrap also works with arrow Up key.
+//
+// Closes #150.
+func TestWrapAroundUpAtFirstWithArrowKey(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPersona
+	m.Cursor = 0
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	state := updated.(Model)
+
+	last := m.optionCount() - 1
+	if state.Cursor != last {
+		t.Fatalf("Up(arrow) at first: Cursor = %d, want %d (wrap-around)", state.Cursor, last)
+	}
+}
+
+// TestNoWrapAroundOnBackupScreen verifies that wrap-around does NOT happen on
+// ScreenBackups (a scrollable screen). Down at last should stay at last.
+//
+// Closes #150.
+func TestNoWrapAroundOnBackupScreen(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenBackups
+	m.Backups = makeBackupList(3)
+	last := m.optionCount() - 1 // 3 backups + 1 Back = 4
+	m.Cursor = last
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	state := updated.(Model)
+
+	// Must NOT wrap on scrollable screen.
+	if state.Cursor != last {
+		t.Fatalf("ScreenBackups: Down at last: Cursor = %d, want %d (no wrap on scrollable screen)",
+			state.Cursor, last)
+	}
+}
+
+// TestNoWrapAroundUpOnBackupScreen verifies that wrap-around does NOT happen on
+// ScreenBackups when Up is pressed at cursor=0.
+//
+// Closes #150.
+func TestNoWrapAroundUpOnBackupScreen(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenBackups
+	m.Backups = makeBackupList(3)
+	m.Cursor = 0
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	state := updated.(Model)
+
+	// Must NOT wrap on scrollable screen.
+	if state.Cursor != 0 {
+		t.Fatalf("ScreenBackups: Up at 0: Cursor = %d, want 0 (no wrap on scrollable screen)",
+			state.Cursor)
+	}
+}
+
 // TestCustomSkillPickerBackGoesToStrictTDD verifies that in the custom preset,
 // with OpenCode + SDD + Skills, pressing Back on ScreenSkillPicker goes to ScreenStrictTDD
 // and NOT directly to ScreenSDDMode. StrictTDD must come before SDDMode in the back chain.

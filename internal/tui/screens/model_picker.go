@@ -44,6 +44,13 @@ type ModelPickerState struct {
 	ProviderScroll int
 	ModelCursor    int
 	ModelScroll    int
+
+	// AllPhasesModel tracks the assignment last set via the "Set all phases" row.
+	// It is only updated when the user selects row idx 1 ("Set all phases"), NOT
+	// when individual sub-agent phases are selected. This prevents the "Set all phases"
+	// label from changing when the user picks a model for a single phase.
+	// Issue #146.
+	AllPhasesModel model.ModelAssignment
 }
 
 // NewModelPickerState initializes the picker state from the models cache.
@@ -198,12 +205,16 @@ func handleModelNav(
 			// "sdd-orchestrator" row — assign only to the orchestrator key
 			assignments[SDDOrchestratorPhase] = assignment
 		case state.SelectedPhaseIdx == 1:
-			// "Set all phases" — sets only the 9 sub-agents, NOT the orchestrator
+			// "Set all phases" — sets only the 9 sub-agents, NOT the orchestrator.
+			// Also update AllPhasesModel so the label stays in sync with the last
+			// "Set all" action (Issue #146: individual phase selections must NOT touch this).
 			for _, phase := range phases {
 				assignments[phase] = assignment
 			}
+			state.AllPhasesModel = assignment
 		default:
-			// Sub-agent rows start at idx 2; phases[idx-2] is the correct phase
+			// Sub-agent rows start at idx 2; phases[idx-2] is the correct phase.
+			// Individual selection intentionally does NOT update AllPhasesModel (Issue #146).
 			phaseIdx := state.SelectedPhaseIdx - 2
 			if phaseIdx < len(phases) {
 				assignments[phases[phaseIdx]] = assignment
@@ -286,10 +297,11 @@ func renderPhaseList(
 				label = fmt.Sprintf("%-20s (default)", row+" (coordinator)")
 			}
 		case idx == 1:
-			// "Set all phases" row — show the assignment of the first sub-agent as representative
-			assignment, ok := assignments[phases[0]]
-			if ok && assignment.ProviderID != "" {
-				provName, modelName := resolveNames(assignment, state)
+			// "Set all phases" row — show AllPhasesModel (only updated when this row is used).
+			// Using AllPhasesModel instead of phases[0] prevents the label from changing
+			// when the user picks a model for an individual sub-agent phase (Issue #146).
+			if state.AllPhasesModel.ProviderID != "" {
+				provName, modelName := resolveNames(state.AllPhasesModel, state)
 				label = fmt.Sprintf("%-20s (%s / %s)", row, provName, modelName)
 			} else {
 				label = fmt.Sprintf("%-20s (not set)", row)

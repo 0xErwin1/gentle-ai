@@ -1,11 +1,13 @@
 package upgrade
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
@@ -852,6 +854,48 @@ func TestConfigPathsForBackup_GGAExtrasAreIncluded(t *testing.T) {
 	}
 	if _, ok := pathSet[ggaLibFile]; !ok {
 		t.Errorf("configPathsForBackup() missing GGA lib file %q — GGA extras must remain in backup; got paths: %v", ggaLibFile, paths)
+	}
+}
+
+// --- TestExecute_SkippedUpgradeDoesNotRenderFailureMarker ---
+
+// TestExecute_SkippedUpgradeDoesNotRenderFailureMarker verifies that when a tool
+// upgrade is intentionally skipped (e.g. Windows manual fallback), the progress
+// output shown to the user does NOT contain the ✗ failure marker.
+//
+// RED: This test must fail before the fix because the executor calls Finish(false)
+// for any non-success result, which renders ✗ for skipped/manual outcomes.
+func TestExecute_SkippedUpgradeDoesNotRenderFailureMarker(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("echo", "should not run")
+	}
+
+	// Windows profile → binary self-update returns manual fallback → UpgradeSkipped.
+	windowsProfile := system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true}
+
+	results := []update.UpdateResult{
+		makeResult("gentle-ai", update.UpdateAvailable, "1.0.0", "1.5.0", update.InstallBinary),
+	}
+	results[0].UpdateHint = "See https://github.com/Gentleman-Programming/gentle-ai/releases"
+
+	// Capture the progress output written to the progress writer.
+	var progressBuf bytes.Buffer
+
+	Execute(context.Background(), results, windowsProfile, t.TempDir(), false, &progressBuf)
+
+	got := progressBuf.String()
+
+	// The spinner output for a skipped/manual tool must NOT show ✗.
+	if strings.Contains(got, "✗") {
+		t.Errorf("Execute() progress output for skipped upgrade contains '✗' (failure marker):\n%s\nWant skip marker '--' or '⊘' instead", got)
+	}
+
+	// The spinner output for a skipped/manual tool should show a skip marker.
+	if !strings.Contains(got, "--") && !strings.Contains(got, "⊘") {
+		t.Errorf("Execute() progress output for skipped upgrade = %q, want skip marker '--' or '⊘'", got)
 	}
 }
 

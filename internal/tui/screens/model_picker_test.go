@@ -193,3 +193,112 @@ func TestSDDOrchestratorPhaseConstant(t *testing.T) {
 		t.Fatalf("SDDOrchestratorPhase = %q, want %q", SDDOrchestratorPhase, "sdd-orchestrator")
 	}
 }
+
+// ─── Issue #146: "Set all phases" label must not change when individual phase selected ─
+
+// TestSetAllPhasesLabelSeparateFromIndividualPhases verifies that the ModelPickerState
+// has a dedicated AllPhasesModel field that only gets updated when "Set all phases"
+// is selected (row idx 1), NOT when an individual sub-agent phase (idx >= 2) is selected.
+//
+// The "Set all phases" row label should show AllPhasesModel, not phases[0].
+//
+// Closes #146.
+func TestSetAllPhasesLabelSeparateFromIndividualPhases(t *testing.T) {
+	const providerID = "test-provider"
+	testModels := []opencode.Model{
+		{ID: "model-alpha", Name: "Alpha"},
+		{ID: "model-beta", Name: "Beta"},
+	}
+
+	// Step 1: "Set all phases" — AllPhasesModel should be set to alpha.
+	setAllState := &ModelPickerState{
+		Mode:             ModeModelSelect,
+		SelectedPhaseIdx: 1, // "Set all phases" row
+		SelectedProvider: providerID,
+		SDDModels:        map[string][]opencode.Model{providerID: testModels},
+		ModelCursor:      0, // alpha
+	}
+	assignments := make(map[string]model.ModelAssignment)
+	_, assignments = handleModelNav("enter", setAllState, assignments)
+
+	// AllPhasesModel must record the "Set all" assignment.
+	if setAllState.AllPhasesModel.ModelID != "model-alpha" {
+		t.Fatalf("after Set all: AllPhasesModel.ModelID = %q, want model-alpha", setAllState.AllPhasesModel.ModelID)
+	}
+
+	// Step 2: Select an individual sub-agent phase (idx 2 = phases[0]).
+	// This is the tricky case: selecting the FIRST sub-agent should NOT change AllPhasesModel.
+	individualState := &ModelPickerState{
+		Mode:             ModeModelSelect,
+		SelectedPhaseIdx: 2, // sub-agent row idx 2 → phases[0]
+		SelectedProvider: providerID,
+		SDDModels:        map[string][]opencode.Model{providerID: testModels},
+		ModelCursor:      1, // beta — different from what "Set all" used
+	}
+	_, assignments = handleModelNav("enter", individualState, assignments)
+
+	// AllPhasesModel must NOT be changed by individual phase selection.
+	if individualState.AllPhasesModel.ModelID != "" {
+		t.Errorf("individual selection changed AllPhasesModel to %q, want empty — bug: 'Set all phases' label would be wrong",
+			individualState.AllPhasesModel.ModelID)
+	}
+}
+
+// TestSetAllPhasesSetsAllPhasesModelField verifies that selecting "Set all phases"
+// sets AllPhasesModel on the state to the chosen model assignment.
+//
+// Closes #146.
+func TestSetAllPhasesSetsAllPhasesModelField(t *testing.T) {
+	const providerID = "test-provider"
+	testModels := []opencode.Model{
+		{ID: "model-alpha", Name: "Alpha"},
+	}
+
+	state := &ModelPickerState{
+		Mode:             ModeModelSelect,
+		SelectedPhaseIdx: 1, // "Set all phases"
+		SelectedProvider: providerID,
+		SDDModels:        map[string][]opencode.Model{providerID: testModels},
+		ModelCursor:      0,
+	}
+	assignments := make(map[string]model.ModelAssignment)
+	_, _ = handleModelNav("enter", state, assignments)
+
+	if state.AllPhasesModel.ProviderID != providerID {
+		t.Errorf("AllPhasesModel.ProviderID = %q, want %q", state.AllPhasesModel.ProviderID, providerID)
+	}
+	if state.AllPhasesModel.ModelID != "model-alpha" {
+		t.Errorf("AllPhasesModel.ModelID = %q, want model-alpha", state.AllPhasesModel.ModelID)
+	}
+}
+
+// TestIndividualPhaseSelectionDoesNotSetAllPhasesModel verifies that selecting
+// a model for any individual sub-agent phase does NOT update AllPhasesModel.
+//
+// Closes #146.
+func TestIndividualPhaseSelectionDoesNotSetAllPhasesModel(t *testing.T) {
+	const providerID = "test-provider"
+	testModels := []opencode.Model{
+		{ID: "model-alpha", Name: "Alpha"},
+	}
+	phases := opencode.SDDPhases()
+
+	for i, phase := range phases {
+		t.Run(phase, func(t *testing.T) {
+			state := &ModelPickerState{
+				Mode:             ModeModelSelect,
+				SelectedPhaseIdx: i + 2, // sub-agent rows start at idx 2
+				SelectedProvider: providerID,
+				SDDModels:        map[string][]opencode.Model{providerID: testModels},
+				ModelCursor:      0,
+			}
+			assignments := make(map[string]model.ModelAssignment)
+			_, _ = handleModelNav("enter", state, assignments)
+
+			if state.AllPhasesModel.ProviderID != "" || state.AllPhasesModel.ModelID != "" {
+				t.Errorf("individual selection of phase %q set AllPhasesModel to %+v, want zero value",
+					phase, state.AllPhasesModel)
+			}
+		})
+	}
+}

@@ -496,8 +496,13 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.Screen == ScreenClaudeModelPicker {
+		wasInCustomMode := m.ClaudeModelPicker.InCustomMode
 		handled, updated := screens.HandleClaudeModelPickerNav(keyStr, &m.ClaudeModelPicker, m.Cursor)
 		if handled {
+			// Issue #147: reset cursor when exiting custom mode (Esc or Back row).
+			if wasInCustomMode && !m.ClaudeModelPicker.InCustomMode {
+				m.Cursor = 0
+			}
 			if updated != nil {
 				m.Selection.ClaudeModelAssignments = updated
 				// In ModelConfigMode, persist model assignments via sync.
@@ -539,8 +544,14 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c", "q":
 		return m, tea.Quit
 	case "up", "k":
-		if m.Cursor > 0 {
-			m.Cursor--
+		count := m.optionCount()
+		if count > 0 {
+			if m.Cursor > 0 {
+				m.Cursor--
+			} else if !m.isScrollableScreen() {
+				// Issue #150: wrap-around — Up at 0 goes to last option.
+				m.Cursor = count - 1
+			}
 		}
 		// Adjust scroll for the backup list.
 		if m.Screen == ScreenBackups {
@@ -550,8 +561,12 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "down", "j":
-		if m.Cursor+1 < m.optionCount() {
+		count := m.optionCount()
+		if m.Cursor+1 < count {
 			m.Cursor++
+		} else if count > 0 && !m.isScrollableScreen() {
+			// Issue #150: wrap-around — Down at last goes to 0.
+			m.Cursor = 0
 		}
 		// Adjust scroll for the backup list.
 		if m.Screen == ScreenBackups {
@@ -1793,4 +1808,11 @@ func hasSelectedComponent(components []model.ComponentID, target model.Component
 		}
 	}
 	return false
+}
+
+// isScrollableScreen returns true for screens that use scroll-based navigation
+// instead of a fixed option list. Wrap-around navigation (Issue #150) must be
+// disabled for these screens to avoid confusing the scroll offset logic.
+func (m Model) isScrollableScreen() bool {
+	return m.Screen == ScreenBackups
 }
