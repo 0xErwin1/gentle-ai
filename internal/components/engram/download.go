@@ -85,6 +85,9 @@ func fetchLatestEngramVersion() (string, error) {
 		return "", fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
+	if token := githubToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 
 	resp, err := engramHTTPClient.Do(req)
 	if err != nil {
@@ -109,6 +112,15 @@ func fetchLatestEngramVersion() (string, error) {
 	}
 
 	return version, nil
+}
+
+// githubToken returns a GitHub API token from the environment, if available.
+// Checks GITHUB_TOKEN first, then GH_TOKEN (used by the gh CLI).
+func githubToken() string {
+	if t := os.Getenv("GITHUB_TOKEN"); t != "" {
+		return t
+	}
+	return os.Getenv("GH_TOKEN")
 }
 
 // engramAPIBaseURL returns the GitHub API base URL for fetching release info.
