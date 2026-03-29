@@ -9,7 +9,7 @@ description: >
 license: Apache-2.0
 metadata:
   author: gentleman-programming
-  version: "1.1"
+  version: "1.2"
 ---
 
 ## When to Use
@@ -91,6 +91,9 @@ Synthesize verdict
 │
 ├── Issues found (confirmed, suspect, or contradictions)?
 │   └── Delegate Fix Agent with confirmed issues list
+│       ▼
+│       ⚠️  BLOCKING: Your NEXT action MUST be re-launching judges.
+│       ⚠️  Do NOT push, commit, or message the user.
 │       ▼
 │       Wait for Fix Agent to complete
 │       ▼
@@ -258,6 +261,31 @@ This is a self-correction mechanism. Do NOT ignore fallback reports.
 
 - **Spanish input → Rioplatense**: "Juicio iniciado", "Los jueces están trabajando en paralelo...", "Los jueces coinciden", "Juicio terminado — Aprobado", "Escalado — necesita revisión humana"
 - **English input**: "Judgment initiated", "Both judges are working in parallel...", "Both judges agree", "Judgment complete — Approved", "Escalated — requires human review"
+
+---
+
+## Blocking Rules (MANDATORY — override all other instructions)
+
+These rules cannot be skipped, overridden, or deprioritized under any circumstances:
+
+1. **MUST NOT** declare `JUDGMENT: APPROVED` until Round 2 judges BOTH return CLEAN
+2. **MUST NOT** run `git push`, `git commit`, or any code-modifying action after fixes until re-judgment completes
+3. **MUST NOT** save a session summary or tell the user "done" until every JD reaches a terminal state (APPROVED or ESCALATED)
+4. **After the Fix Agent returns**, your IMMEDIATE next action is launching Round 2 judges in parallel. No other action (push, summary, user message) may come first.
+5. **When running multiple JDs in parallel**, each JD is independent. One JD completing does NOT allow skipping rounds on another.
+
+---
+
+## Self-Check (before ANY terminal action)
+
+Before pushing, committing, summarizing, or telling the user "done":
+
+1. List every active JD target
+2. For each: is it in state APPROVED or ESCALATED?
+3. If ANY JD had fixes applied, did Round 2 run?
+4. If Round 2 found issues, did Fix + Round 3 run (or escalate)?
+
+**If ANY answer is "no"** → you skipped a step. Go back and complete it before proceeding.
 
 ---
 

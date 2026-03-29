@@ -155,3 +155,85 @@ func TestReadCurrentModelAssignmentsMalformedModelField(t *testing.T) {
 		t.Errorf("sdd-apply = %+v, want {anthropic, claude-sonnet-4-20250514}", a)
 	}
 }
+
+// TestReadCurrentModelAssignmentsSlashSeparator verifies that custom provider
+// models using slash format ("provider/model-id") are parsed correctly.
+// Issue #152: OpenCode uses "zai-coding-plan/glm-5-turbo" for custom providers.
+func TestReadCurrentModelAssignmentsSlashSeparator(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "opencode.json")
+
+	content := `{
+  "agent": {
+    "sdd-orchestrator": { "model": "zai-coding-plan/glm-5-turbo" }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	got, err := ReadCurrentModelAssignments(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadCurrentModelAssignments() error = %v", err)
+	}
+
+	a, ok := got["sdd-orchestrator"]
+	if !ok {
+		t.Fatal("sdd-orchestrator missing from result — slash-separated format not parsed")
+	}
+	if a.ProviderID != "zai-coding-plan" {
+		t.Errorf("ProviderID = %q, want %q", a.ProviderID, "zai-coding-plan")
+	}
+	if a.ModelID != "glm-5-turbo" {
+		t.Errorf("ModelID = %q, want %q", a.ModelID, "glm-5-turbo")
+	}
+}
+
+// TestReadCurrentModelAssignmentsMixedSeparators verifies that a file containing
+// agents with both colon and slash separators is parsed correctly (issue #152).
+func TestReadCurrentModelAssignmentsMixedSeparators(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "opencode.json")
+
+	content := `{
+  "agent": {
+    "sdd-orchestrator": { "model": "anthropic:claude-sonnet-4-20250514" },
+    "sdd-apply":        { "model": "zai-coding-plan/glm-5-turbo" },
+    "sdd-verify":       { "model": "openai:gpt-4o" },
+    "sdd-explore":      { "model": "custom-provider/some-model-v2" }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	got, err := ReadCurrentModelAssignments(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadCurrentModelAssignments() error = %v", err)
+	}
+
+	tests := []struct {
+		phase      string
+		providerID string
+		modelID    string
+	}{
+		{"sdd-orchestrator", "anthropic", "claude-sonnet-4-20250514"},
+		{"sdd-apply", "zai-coding-plan", "glm-5-turbo"},
+		{"sdd-verify", "openai", "gpt-4o"},
+		{"sdd-explore", "custom-provider", "some-model-v2"},
+	}
+
+	for _, tt := range tests {
+		a, ok := got[tt.phase]
+		if !ok {
+			t.Errorf("phase %q missing from result", tt.phase)
+			continue
+		}
+		if a.ProviderID != tt.providerID {
+			t.Errorf("phase %q: ProviderID = %q, want %q", tt.phase, a.ProviderID, tt.providerID)
+		}
+		if a.ModelID != tt.modelID {
+			t.Errorf("phase %q: ModelID = %q, want %q", tt.phase, a.ModelID, tt.modelID)
+		}
+	}
+}

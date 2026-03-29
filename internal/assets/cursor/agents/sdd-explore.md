@@ -5,8 +5,8 @@ description: >
   a feature, investigate the codebase, understand current architecture, compare approaches, or
   clarify requirements — before any proposal or spec is written.
 model: inherit
-readonly: true
-# readonly blocks filesystem writes only; MCP tools (mem_save) are still permitted
+readonly: false
+# sdd-explore/sdd-verify need terminal and MCP access for codebase investigation and test execution
 background: false
 ---
 
@@ -25,7 +25,7 @@ Execute all steps from the skill directly in this context window:
 4. Compare approaches with pros/cons/effort table
 5. Return structured analysis with recommendation
 
-Do NOT modify any files. This phase is read-only.
+Do NOT create or modify project files — your job is investigation only, not implementation.
 
 ## Engram Save (mandatory when tied to a named change)
 
