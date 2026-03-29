@@ -112,6 +112,25 @@ Meta-commands (type directly — orchestrator handles them, will not appear in a
 
 Native Windsurf Workflow: `/sdd-new` is also available as a native Windsurf workflow installed by gentle-ai. It can be triggered from the Windsurf workflow panel.
 
+### Execution Mode
+
+When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, ASK which execution mode they prefer:
+
+- **Automatic** (`auto`): Run all phases sequentially without pausing. Show the final result only. Use this when the user wants speed and trusts the process.
+- **Interactive** (`interactive`): After each phase completes, show the result summary and ASK: "Want to adjust anything or continue?" before proceeding to the next phase. Use this when the user wants to review and steer each step.
+
+If the user doesn't specify, default to **Interactive** (safer, gives the user control).
+
+Cache the mode choice for the session — don't ask again unless the user explicitly requests a mode change.
+
+In **Interactive** mode, between phases:
+1. Show a concise summary of what the phase produced
+2. List what the next phase will do
+3. Ask: "¿Seguimos? / Continue?" — accept YES/continue, NO/stop, or specific feedback to adjust
+4. If the user gives feedback, incorporate it before running the next phase
+
+For this agent (solo inline execution): **Interactive** is already the natural behavior — you pause between phases via Windsurf's Approval Gates. **Automatic** means skip the "Approve to proceed?" gates and run all phases sequentially without stopping.
+
 ### Dependency Graph
 ```
 proposal -> specs --> tasks -> apply -> verify -> archive
