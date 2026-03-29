@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -53,6 +55,52 @@ func TestRunInstallLinuxEngramUsesDownloadNotGoInstall(t *testing.T) {
 		if strings.Contains(cmd, "go install") && strings.Contains(cmd, "engram") {
 			t.Fatalf("Linux engram install should NOT use go install, got command: %s", cmd)
 		}
+	}
+}
+
+// TestRunInstallEngramDownloadAddsBinDirToPath verifies that after downloading
+// the engram binary, its directory is prepended to PATH so that subsequent
+// commands (engram setup, resolveEngramCommand) can find it.
+func TestRunInstallEngramDownloadAddsBinDirToPath(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	restorePath := os.Getenv("PATH")
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+		os.Setenv("PATH", restorePath)
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = missingBinaryLookPath
+	recorder := &commandRecorder{}
+	runCommand = recorder.record
+
+	fakeBinDir := filepath.Join(home, "engram-bin")
+	os.MkdirAll(fakeBinDir, 0o755)
+	fakeBinaryPath := filepath.Join(fakeBinDir, "engram")
+
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return fakeBinaryPath, nil
+	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
+
+	detection := linuxDetectionResult(system.LinuxDistroUbuntu, "apt")
+	_, err := RunInstall(
+		[]string{"--agent", "opencode", "--component", "engram"},
+		detection,
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	currentPath := os.Getenv("PATH")
+	if !strings.Contains(currentPath, fakeBinDir) {
+		t.Fatalf("PATH should contain engram bin dir %q after download, got PATH=%q", fakeBinDir, currentPath)
 	}
 }
 

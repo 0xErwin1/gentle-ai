@@ -444,8 +444,18 @@ func (s componentApplyStep) Run() error {
 			} else {
 				// Linux / Windows: download the pre-built binary from GitHub Releases.
 				// No Go required — engram ships pre-built binaries.
-				if _, err := engramDownloadFn(s.profile); err != nil {
+				binaryPath, err := engramDownloadFn(s.profile)
+				if err != nil {
 					return fmt.Errorf("download engram binary: %w", err)
+				}
+				// Add the install directory to PATH so subsequent commands
+				// (engram setup, engram.Inject → resolveEngramCommand) can find it.
+				binDir := filepath.Dir(binaryPath)
+				currentPath := os.Getenv("PATH")
+				if currentPath == "" {
+					os.Setenv("PATH", binDir)
+				} else {
+					os.Setenv("PATH", binDir+string(os.PathListSeparator)+currentPath)
 				}
 			}
 		}

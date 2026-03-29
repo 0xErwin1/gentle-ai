@@ -45,7 +45,7 @@ func DownloadLatestBinary(profile system.PlatformProfile) (string, error) {
 
 	// 2. Determine binary name and archive URL.
 	goos := profile.OS
-	goarch := runtime.GOARCH
+	goarch := normalizeArch(runtime.GOARCH)
 	assetURL := engramAssetURL(engramGitHubBaseURL, version, goos, goarch)
 
 	// 3. Determine install directory.
@@ -121,6 +121,21 @@ func githubToken() string {
 		return t
 	}
 	return os.Getenv("GH_TOKEN")
+}
+
+// normalizeArch maps Go's runtime.GOARCH to the architecture names used in
+// engram release assets. Engram only publishes amd64 and arm64 binaries.
+// If the current process runs as 386 (32-bit Go on a 64-bit system), we
+// map to amd64 since engram doesn't publish 386 builds.
+func normalizeArch(goarch string) string {
+	switch goarch {
+	case "386":
+		return "amd64"
+	case "arm":
+		return "arm64"
+	default:
+		return goarch
+	}
 }
 
 // engramAPIBaseURL returns the GitHub API base URL for fetching release info.
