@@ -90,12 +90,27 @@ func configPathsForBackup(homeDir string) []string {
 
 // enumerateFilesInDir returns the paths of all regular files (recursively) in dir.
 // Returns an error if dir cannot be read (e.g. it doesn't exist).
+//
+// Symlinks and Windows junctions (reparse points) are skipped — they are not
+// included in the returned paths and their targets are not traversed. This
+// prevents backup failures when agent config directories contain junctioned skill
+// directories (e.g. ~/.claude/skills → some other directory).
+//
+// On Unix, symlinks to directories appear with d.Type()&os.ModeSymlink != 0.
+// On Windows, junctions appear similarly. Both are excluded by this check.
 func enumerateFilesInDir(dir string) ([]string, error) {
 	var files []string
 
 	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			// Skip unreadable entries within the dir — don't abort the walk.
+			return nil
+		}
+		// Skip symlinks and Windows junction/reparse points.
+		// Symlinks to directories would be included as non-directory entries by
+		// WalkDir but os.Stat resolves them to directories, causing "is a directory"
+		// errors when snapshotPath attempts to copy them as files.
+		if d.Type()&os.ModeSymlink != 0 {
 			return nil
 		}
 		if !d.IsDir() {
@@ -186,7 +201,16 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 		msg := fmt.Sprintf("Upgrading %s via %s (%s → %s)", r.Tool.Name, method, r.InstalledVersion, r.LatestVersion)
 		sp := NewSpinner(pw, msg)
 		toolResult := executeOne(ctx, r, profile, dryRun)
-		sp.Finish(toolResult.Status == UpgradeSucceeded)
+		switch toolResult.Status {
+		case UpgradeSucceeded:
+			sp.Finish(true)
+		case UpgradeSkipped:
+			// Intentional skip (manual fallback, dry-run, dev-build) — NOT a failure.
+			// Render with skip marker (--) instead of failure marker (✗).
+			sp.FinishSkipped()
+		default:
+			sp.Finish(false)
+		}
 		toolResults = append(toolResults, toolResult)
 	}
 

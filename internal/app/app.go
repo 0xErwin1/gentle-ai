@@ -254,15 +254,41 @@ func tuiUpgrade(profile system.PlatformProfile, homeDir string) tui.UpgradeFunc 
 // It mirrors the RunSync CLI path: discovers installed agents from persisted
 // state (or filesystem fallback), builds the default sync selection, and
 // delegates to RunSyncWithSelection.
+//
+// When overrides is non-nil, model assignments are merged into the selection
+// so that the "Configure Models" TUI flow persists its choices to disk.
 func tuiSync(homeDir string) tui.SyncFunc {
-	return func() (int, error) {
+	return func(overrides *model.SyncOverrides) (int, error) {
 		agentIDs := cli.DiscoverAgents(homeDir)
 		selection := cli.BuildSyncSelection(cli.SyncFlags{}, agentIDs)
+
+		applyOverrides(&selection, overrides)
+
 		result, err := cli.RunSyncWithSelection(homeDir, selection)
 		if err != nil {
 			return 0, err
 		}
 		return result.FilesChanged, nil
+	}
+}
+
+// applyOverrides merges non-nil fields from overrides into selection.
+// A nil overrides pointer is a no-op.
+func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) {
+	if overrides == nil {
+		return
+	}
+	if overrides.ModelAssignments != nil {
+		selection.ModelAssignments = overrides.ModelAssignments
+	}
+	if overrides.ClaudeModelAssignments != nil {
+		selection.ClaudeModelAssignments = overrides.ClaudeModelAssignments
+	}
+	if overrides.SDDMode != "" {
+		selection.SDDMode = overrides.SDDMode
+	}
+	if overrides.StrictTDD != nil {
+		selection.StrictTDD = *overrides.StrictTDD
 	}
 }
 

@@ -12,17 +12,14 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
-	"github.com/gentleman-programming/gentle-ai/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
 
 // missingBinaryLookPath simulates all installable binaries (engram, gga) as
-// missing while keeping Go available (needed for Linux engram go-install path).
+// missing. Go availability is no longer required for engram installation
+// (pre-built binaries are downloaded directly from GitHub Releases).
 func missingBinaryLookPath(name string) (string, error) {
-	if name == "go" {
-		return "/usr/local/bin/go", nil
-	}
 	return "", exec.ErrNotFound
 }
 
@@ -149,29 +146,6 @@ func (r *commandRecorder) get() []string {
 	return cp
 }
 
-// setupValidGoEnvInInstallcmd overrides the installcmd package-level vars to simulate a valid
-// Go 1.24+ environment. It registers restores via t.Cleanup.
-//
-// Without this, integration tests that invoke resolveEngramInstall() on Linux/Windows
-// profiles will call the real `go version` binary — which fails the Go >= 1.24 preflight in
-// CI environments that ship an older Go (e.g. Docker images pinned to Go 1.22).
-//
-// Note: installcmd.cmdLookPath and cli.cmdLookPath are INDEPENDENT package-level vars.
-// This helper only overrides the installcmd ones; cli.cmdLookPath must be overridden separately.
-func setupValidGoEnvInInstallcmd(t *testing.T) {
-	t.Helper()
-	t.Cleanup(installcmd.OverrideGoVersion(func() ([]byte, error) {
-		return []byte("go version go1.24.0 linux/amd64"), nil
-	}))
-	t.Cleanup(installcmd.OverrideLookPath(func(name string) (string, error) {
-		if name == "go" {
-			return "/usr/local/bin/go", nil
-		}
-		return "", exec.ErrNotFound
-	}))
-	t.Cleanup(installcmd.OverrideGetenv(func(string) string { return "" }))
-}
-
 func TestRunInstallLinuxUbuntuResolvesAptCommands(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
@@ -244,7 +218,7 @@ func TestRunInstallLinuxArchResolvesPacmanCommands(t *testing.T) {
 	}
 }
 
-func TestRunInstallLinuxUbuntuWithEngramResolvesGoInstallCommand(t *testing.T) {
+func TestRunInstallLinuxUbuntuWithEngramUsesDirectDownload(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -259,8 +233,13 @@ func TestRunInstallLinuxUbuntuWithEngramResolvesGoInstallCommand(t *testing.T) {
 	cmdLookPath = missingBinaryLookPath
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
-	// Isolate installcmd Go preflight from the real go binary on the test runner.
-	setupValidGoEnvInInstallcmd(t)
+
+	// Override engramDownloadFn to avoid real HTTP calls.
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return "/tmp/fake-engram", nil
+	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
 
 	detection := linuxDetectionResult(system.LinuxDistroUbuntu, "apt")
 	result, err := RunInstall(
@@ -275,21 +254,15 @@ func TestRunInstallLinuxUbuntuWithEngramResolvesGoInstallCommand(t *testing.T) {
 		t.Fatalf("verification ready = false, report = %#v", result.Verify)
 	}
 
-	// Verify that at least one command used go install (the engram install command).
-	commands := recorder.get()
-	foundGoInstall := false
-	for _, cmd := range commands {
-		if strings.Contains(cmd, "env CGO_ENABLED=0 go install github.com/Gentleman-Programming/engram/cmd/engram@latest") {
-			foundGoInstall = true
-			break
+	// Must NOT use go install for engram on Linux.
+	for _, cmd := range recorder.get() {
+		if strings.Contains(cmd, "go install") && strings.Contains(cmd, "engram") {
+			t.Fatalf("Linux engram install should NOT use go install, got command: %s", cmd)
 		}
-	}
-	if !foundGoInstall {
-		t.Fatalf("expected go install command for engram, got commands: %v", commands)
 	}
 }
 
-func TestRunInstallLinuxArchWithEngramResolvesGoInstallCommand(t *testing.T) {
+func TestRunInstallLinuxArchWithEngramUsesDirectDownload(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -304,8 +277,12 @@ func TestRunInstallLinuxArchWithEngramResolvesGoInstallCommand(t *testing.T) {
 	cmdLookPath = missingBinaryLookPath
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
-	// Isolate installcmd Go preflight from the real go binary on the test runner.
-	setupValidGoEnvInInstallcmd(t)
+
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return "/tmp/fake-engram", nil
+	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
 
 	detection := linuxDetectionResult(system.LinuxDistroArch, "pacman")
 	result, err := RunInstall(
@@ -320,16 +297,11 @@ func TestRunInstallLinuxArchWithEngramResolvesGoInstallCommand(t *testing.T) {
 		t.Fatalf("verification ready = false, report = %#v", result.Verify)
 	}
 
-	commands := recorder.get()
-	foundGoInstall := false
-	for _, cmd := range commands {
-		if strings.Contains(cmd, "env CGO_ENABLED=0 go install github.com/Gentleman-Programming/engram/cmd/engram@latest") {
-			foundGoInstall = true
-			break
+	// Must NOT use go install for engram on Arch Linux.
+	for _, cmd := range recorder.get() {
+		if strings.Contains(cmd, "go install") && strings.Contains(cmd, "engram") {
+			t.Fatalf("Arch Linux engram install should NOT use go install, got command: %s", cmd)
 		}
-	}
-	if !foundGoInstall {
-		t.Fatalf("expected go install command for engram, got commands: %v", commands)
 	}
 }
 
@@ -354,18 +326,16 @@ func TestRunInstallLinuxRollsBackOnComponentFailure(t *testing.T) {
 		cmdLookPath = restoreLookPath
 	})
 	cmdLookPath = missingBinaryLookPath
-	// Isolate installcmd Go preflight from the real go binary on the test runner.
-	setupValidGoEnvInInstallcmd(t)
 
 	osUserHomeDir = func() (string, error) { return home, nil }
-	runCommand = func(name string, args ...string) error {
-		// Fail the engram install command to trigger rollback.
-		// Command is now: env CGO_ENABLED=0 go install .../engram@latest
-		if name == "env" && strings.Contains(strings.Join(args, " "), "engram") {
-			return os.ErrPermission
-		}
-		return nil
+	runCommand = func(name string, args ...string) error { return nil }
+
+	// Fail the engram download to trigger rollback.
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return "", os.ErrPermission
 	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
 
 	detection := linuxDetectionResult(system.LinuxDistroUbuntu, "apt")
 	_, err := RunInstall(
@@ -1004,7 +974,9 @@ func TestRunInstallGGALinuxIncludesTempCleanupBeforeClone(t *testing.T) {
 	}
 }
 
-func TestRunInstallEngramAutoInstallsGoWhenMissing(t *testing.T) {
+// TestRunInstallEngramLinuxUsesDirectDownloadNoGoRequired verifies that on Linux,
+// engram is now installed via pre-built binary download — Go is NOT required.
+func TestRunInstallEngramLinuxUsesDirectDownloadNoGoRequired(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -1016,17 +988,19 @@ func TestRunInstallEngramAutoInstallsGoWhenMissing(t *testing.T) {
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
-	// Simulate: engram missing, Go missing (in the cli package LookPath).
-	// Note: installcmd.cmdLookPath is a separate var — we mock it below to satisfy
-	// the Go >= 1.24 preflight that runs inside resolveEngramInstall.
+	// Simulate: engram missing, Go also NOT available — should still succeed.
 	cmdLookPath = func(string) (string, error) {
 		return "", exec.ErrNotFound
 	}
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
-	// Isolate installcmd Go preflight from the real go binary on the test runner.
-	// installcmd.cmdLookPath (for "go") and cli.cmdLookPath are independent variables.
-	setupValidGoEnvInInstallcmd(t)
+
+	// Override download to succeed without hitting GitHub.
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return "/tmp/fake-engram", nil
+	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
 
 	detection := linuxDetectionResult(system.LinuxDistroUbuntu, "apt")
 	result, err := RunInstall(
@@ -1041,34 +1015,20 @@ func TestRunInstallEngramAutoInstallsGoWhenMissing(t *testing.T) {
 		t.Fatalf("verification ready = false")
 	}
 
-	commands := recorder.get()
-	foundGoInstall := false
-	foundEngramInstall := false
-	goInstallIdx := -1
-	engramInstallIdx := -1
-	for i, cmd := range commands {
+	// Neither "go install" nor "apt-get install golang" should appear.
+	for _, cmd := range recorder.get() {
 		if strings.Contains(cmd, "apt-get install -y golang") {
-			foundGoInstall = true
-			goInstallIdx = i
+			t.Fatalf("Go should NOT be auto-installed (no longer needed for engram), got command: %s", cmd)
 		}
 		if strings.Contains(cmd, "go install") && strings.Contains(cmd, "engram") {
-			foundEngramInstall = true
-			engramInstallIdx = i
+			t.Fatalf("engram should NOT be installed via go install, got command: %s", cmd)
 		}
-	}
-
-	if !foundGoInstall {
-		t.Fatalf("expected Go auto-install command, got commands: %v", commands)
-	}
-	if !foundEngramInstall {
-		t.Fatalf("expected engram install command, got commands: %v", commands)
-	}
-	if goInstallIdx >= engramInstallIdx {
-		t.Fatalf("Go install (idx=%d) should run before engram install (idx=%d)", goInstallIdx, engramInstallIdx)
 	}
 }
 
-func TestRunInstallEngramSkipsGoInstallWhenGoPresent(t *testing.T) {
+// TestRunInstallEngramLinuxNeverInstallsGo verifies that even if Go is present,
+// we never install Go as a prerequisite for engram (direct download path).
+func TestRunInstallEngramLinuxNeverInstallsGo(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -1080,12 +1040,15 @@ func TestRunInstallEngramSkipsGoInstallWhenGoPresent(t *testing.T) {
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
-	// Simulate: engram missing, Go available.
 	cmdLookPath = missingBinaryLookPath
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
-	// Isolate installcmd Go preflight from the real go binary on the test runner.
-	setupValidGoEnvInInstallcmd(t)
+
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return "/tmp/fake-engram", nil
+	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
 
 	detection := linuxDetectionResult(system.LinuxDistroUbuntu, "apt")
 	result, err := RunInstall(
@@ -1100,10 +1063,10 @@ func TestRunInstallEngramSkipsGoInstallWhenGoPresent(t *testing.T) {
 		t.Fatalf("verification ready = false")
 	}
 
-	// Go install should NOT be in the recorded commands.
+	// No Go installation commands should appear.
 	for _, cmd := range recorder.get() {
-		if strings.Contains(cmd, "apt-get install -y golang") {
-			t.Fatalf("Go should not be installed when already on PATH, got command: %s", cmd)
+		if strings.Contains(cmd, "apt-get install -y golang") || strings.Contains(cmd, "apt-get install -y go") {
+			t.Fatalf("Go should never be installed as engram dependency, got command: %s", cmd)
 		}
 	}
 }
@@ -1120,7 +1083,7 @@ func TestRunInstallEngramBrewSkipsGoCheck(t *testing.T) {
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
-	// Simulate: engram missing, Go missing — but brew platform, so no Go needed.
+	// Simulate: engram missing — brew platform, no Go or download needed.
 	cmdLookPath = func(string) (string, error) {
 		return "", exec.ErrNotFound
 	}
@@ -1145,6 +1108,9 @@ func TestRunInstallEngramBrewSkipsGoCheck(t *testing.T) {
 	for _, cmd := range commands {
 		if strings.Contains(cmd, "golang") || strings.Contains(cmd, "apt-get") {
 			t.Fatalf("brew platform should not install Go, got command: %s", cmd)
+		}
+		if strings.Contains(cmd, "go install") {
+			t.Fatalf("brew platform should not use go install, got command: %s", cmd)
 		}
 	}
 

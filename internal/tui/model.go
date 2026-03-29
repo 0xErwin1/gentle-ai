@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
@@ -23,6 +24,13 @@ import (
 // osStatModelCache is a package-level variable so tests can override it to
 // simulate a missing or present OpenCode model cache file.
 var osStatModelCache = os.Stat
+
+// readCurrentAssignmentsFn is a package-level variable so tests can override
+// how current model assignments are read from opencode.json. It wraps
+// sdd.ReadCurrentModelAssignments and is only called during ModelConfigMode.
+var readCurrentAssignmentsFn = func(settingsPath string) (map[string]model.ModelAssignment, error) {
+	return sdd.ReadCurrentModelAssignments(settingsPath)
+}
 
 // TickMsg drives the spinner animation on the installing screen.
 type TickMsg time.Time
@@ -79,8 +87,9 @@ type UpgradePhaseCompletedMsg struct {
 type UpgradeFunc func(ctx context.Context, results []update.UpdateResult) upgrade.UpgradeReport
 
 // SyncFunc is the signature of the function injected to perform config sync.
-// Returns the number of files changed and any error.
-type SyncFunc func() (int, error)
+// When overrides is non-nil, the sync merges those model assignments into the
+// selection before executing. Returns the number of files changed and any error.
+type SyncFunc func(overrides *model.SyncOverrides) (int, error)
 
 // ExecuteFunc builds and runs the installation pipeline. It receives a ProgressFunc
 // callback to emit step-level progress events, and returns the ExecutionResult.
@@ -115,6 +124,7 @@ const (
 	ScreenPreset
 	ScreenClaudeModelPicker
 	ScreenSDDMode
+	ScreenStrictTDD
 	ScreenDependencyTree
 	ScreenSkillPicker
 	ScreenReview
@@ -224,6 +234,12 @@ type Model struct {
 	// continuing the install flow.
 	ModelConfigMode bool
 
+	// PendingSyncOverrides holds model assignments selected via the
+	// "Configure Models" shortcut. When non-nil, the next sync run merges
+	// these into the sync selection so the choices are persisted to disk.
+	// Cleared after the sync completes (SyncDoneMsg handler).
+	PendingSyncOverrides *model.SyncOverrides
+
 	// OperationRunning is true while an upgrade/sync/upgrade-sync goroutine is
 	// executing. Prevents concurrent operation launches.
 	OperationRunning bool
@@ -314,6 +330,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SyncFilesChanged = msg.FilesChanged
 		m.SyncErr = msg.Err
 		m.HasSyncRun = true
+		m.PendingSyncOverrides = nil
 		return m, nil
 	case UpgradePhaseCompletedMsg:
 		// Upgrade phase done; sync phase is about to start (OperationRunning stays true).
@@ -435,6 +452,8 @@ func (m Model) View() string {
 		return screens.RenderClaudeModelPicker(m.ClaudeModelPicker, m.Cursor)
 	case ScreenSDDMode:
 		return screens.RenderSDDMode(m.Selection.SDDMode, m.Cursor)
+	case ScreenStrictTDD:
+		return screens.RenderStrictTDD(m.Selection.StrictTDD, m.Cursor)
 	case ScreenModelPicker:
 		return screens.RenderModelPicker(m.Selection.ModelAssignments, m.ModelPicker, m.Cursor)
 	case ScreenDependencyTree:
@@ -485,20 +504,31 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.Screen == ScreenClaudeModelPicker {
+		wasInCustomMode := m.ClaudeModelPicker.InCustomMode
 		handled, updated := screens.HandleClaudeModelPickerNav(keyStr, &m.ClaudeModelPicker, m.Cursor)
 		if handled {
+			// Issue #147: reset cursor when exiting custom mode (Esc or Back row).
+			if wasInCustomMode && !m.ClaudeModelPicker.InCustomMode {
+				m.Cursor = 0
+			}
 			if updated != nil {
 				m.Selection.ClaudeModelAssignments = updated
-				// In ModelConfigMode, return to ScreenModelConfig instead of continuing install flow.
+				// In ModelConfigMode, persist model assignments via sync.
 				if m.ModelConfigMode {
 					m.ModelConfigMode = false
-					m.setScreen(ScreenModelConfig)
+					m.PendingSyncOverrides = &model.SyncOverrides{
+						ClaudeModelAssignments: updated,
+					}
+					m = m.withResetSyncState()
+					m.setScreen(ScreenSync)
 				} else if m.shouldShowSDDModeScreen() {
 					m.setScreen(ScreenSDDMode)
 				} else if m.Selection.Preset == model.PresetCustom {
 					// Custom preset: dependency plan was already built before model picker.
-					// Check skill picker before going to review.
-					if m.shouldShowSkillPickerScreen() {
+					// Check StrictTDD, then skill picker before going to review.
+					if m.shouldShowStrictTDDScreen() {
+						m.setScreen(ScreenStrictTDD)
+					} else if m.shouldShowSkillPickerScreen() {
 						if len(m.SkillPicker) == 0 {
 							m.initSkillPicker()
 						}
@@ -507,6 +537,8 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 						m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
 						m.setScreen(ScreenReview)
 					}
+				} else if m.shouldShowStrictTDDScreen() {
+					m.setScreen(ScreenStrictTDD)
 				} else {
 					m.buildDependencyPlan()
 					m.setScreen(ScreenDependencyTree)
@@ -520,8 +552,14 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c", "q":
 		return m, tea.Quit
 	case "up", "k":
-		if m.Cursor > 0 {
-			m.Cursor--
+		count := m.optionCount()
+		if count > 0 {
+			if m.Cursor > 0 {
+				m.Cursor--
+			} else if !m.isScrollableScreen() {
+				// Issue #150: wrap-around — Up at 0 goes to last option.
+				m.Cursor = count - 1
+			}
 		}
 		// Adjust scroll for the backup list.
 		if m.Screen == ScreenBackups {
@@ -531,8 +569,12 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "down", "j":
-		if m.Cursor+1 < m.optionCount() {
+		count := m.optionCount()
+		if m.Cursor+1 < count {
 			m.Cursor++
+		} else if count > 0 && !m.isScrollableScreen() {
+			// Issue #150: wrap-around — Down at last goes to 0.
+			m.Cursor = 0
 		}
 		// Adjust scroll for the backup list.
 		if m.Screen == ScreenBackups {
@@ -650,7 +692,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		// Start sync.
 		m.OperationRunning = true
 		m.OperationMode = "sync"
-		return m, tea.Batch(tickCmd(), m.startSync())
+		return m, tea.Batch(tickCmd(), m.startSync(m.PendingSyncOverrides))
 	case ScreenUpgradeSync:
 		// Guard: don't re-launch while running.
 		if m.OperationRunning {
@@ -679,6 +721,15 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.ModelPicker = screens.NewModelPickerState(cachePath)
 			} else {
 				m.ModelPicker = screens.ModelPickerState{}
+			}
+			// Pre-populate with existing assignments from opencode.json.
+			// Only when there are no in-session assignments yet — the nil guard
+			// ensures we don't overwrite changes the user already made this session.
+			if m.Selection.ModelAssignments == nil {
+				settingsPath := opencode.DefaultSettingsPath()
+				if current, err := readCurrentAssignmentsFn(settingsPath); err == nil && len(current) > 0 {
+					m.Selection.ModelAssignments = current
+				}
 			}
 			m.setScreen(ScreenModelPicker)
 		default: // Back
@@ -723,6 +774,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.setScreen(ScreenSDDMode)
 				return m, nil
 			}
+			if m.shouldShowStrictTDDScreen() {
+				m.setScreen(ScreenStrictTDD)
+				return m, nil
+			}
 			m.buildDependencyPlan()
 			m.setScreen(ScreenDependencyTree)
 			return m, nil
@@ -758,6 +813,12 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 			// Clear assignments for both single mode and multi-no-cache paths.
 			m.Selection.ModelAssignments = nil
+			// Show StrictTDD screen when OpenCode + SDD are selected.
+			// This is the next step before the dependency tree.
+			if m.shouldShowSDDModeScreen() {
+				m.setScreen(ScreenStrictTDD)
+				return m, nil
+			}
 			if m.Selection.Preset == model.PresetCustom {
 				// Custom preset: dependency plan was already built before SDD mode.
 				// Check skill picker before going to review.
@@ -817,12 +878,58 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 		// After the rows: Continue (cursor == len(rows)), Back (cursor == len(rows)+1).
 		if m.Cursor == len(rows) {
-			// In ModelConfigMode, return to ScreenModelConfig instead of continuing install flow.
+			// In ModelConfigMode, persist model assignments via sync.
 			if m.ModelConfigMode {
 				m.ModelConfigMode = false
-				m.setScreen(ScreenModelConfig)
+				m.PendingSyncOverrides = &model.SyncOverrides{
+					ModelAssignments: m.Selection.ModelAssignments,
+					SDDMode:          model.SDDModeMulti,
+				}
+				m = m.withResetSyncState()
+				m.setScreen(ScreenSync)
 				return m, nil
 			}
+			if m.Selection.Preset == model.PresetCustom {
+				// Custom preset: dependency plan was already built before SDD mode.
+				// Check StrictTDD, then skill picker before going to review.
+				if m.shouldShowStrictTDDScreen() {
+					m.setScreen(ScreenStrictTDD)
+				} else if m.shouldShowSkillPickerScreen() {
+					if len(m.SkillPicker) == 0 {
+						m.initSkillPicker()
+					}
+					m.setScreen(ScreenSkillPicker)
+				} else {
+					m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
+					m.setScreen(ScreenReview)
+				}
+			} else {
+				// Continue -> check StrictTDD before dependency tree.
+				if m.shouldShowStrictTDDScreen() {
+					m.setScreen(ScreenStrictTDD)
+				} else {
+					m.buildDependencyPlan()
+					m.setScreen(ScreenDependencyTree)
+				}
+			}
+			return m, nil
+		}
+		// Back -> return to SDDMode (or ModelConfig in shortcut mode).
+		// ModelPicker sits BETWEEN SDDMode and StrictTDD in the forward flow:
+		//   SDDMode → ModelPicker → StrictTDD → DependencyTree
+		// So Back from ModelPicker must go to SDDMode, NOT StrictTDD
+		// (going to StrictTDD would create a loop: ModelPicker ↔ StrictTDD).
+		if m.ModelConfigMode {
+			m.ModelConfigMode = false
+			m.setScreen(ScreenModelConfig)
+			return m, nil
+		}
+		m.setScreen(ScreenSDDMode)
+	case ScreenStrictTDD:
+		options := screens.StrictTDDOptions()
+		if m.Cursor < len(options) {
+			// Enable is index 0, Disable is index 1.
+			m.Selection.StrictTDD = (m.Cursor == screens.StrictTDDOptionEnable)
 			if m.Selection.Preset == model.PresetCustom {
 				// Custom preset: dependency plan was already built before SDD mode.
 				// Check skill picker before going to review.
@@ -836,19 +943,30 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					m.setScreen(ScreenReview)
 				}
 			} else {
-				// Continue -> proceed to dependency tree.
 				m.buildDependencyPlan()
 				m.setScreen(ScreenDependencyTree)
 			}
 			return m, nil
 		}
-		// Back -> return to SDD mode screen (or ModelConfig in shortcut mode).
-		if m.ModelConfigMode {
-			m.ModelConfigMode = false
-			m.setScreen(ScreenModelConfig)
-			return m, nil
+		// Back — depends on which flow brought us here.
+		if m.shouldShowSDDModeScreen() {
+			// OpenCode path: ModelPicker (if multi + cache) or SDDMode.
+			if m.Selection.SDDMode == model.SDDModeMulti {
+				cachePath := opencode.DefaultCachePath()
+				if _, err := osStatModelCache(cachePath); err == nil {
+					m.setScreen(ScreenModelPicker)
+					return m, nil
+				}
+			}
+			m.setScreen(ScreenSDDMode)
+		} else if m.shouldShowClaudeModelPickerScreen() {
+			m.setScreen(ScreenClaudeModelPicker)
+		} else if m.Selection.Preset == model.PresetCustom {
+			// Custom preset: DependencyTree is the component selector that precedes StrictTDD.
+			m.setScreen(ScreenDependencyTree)
+		} else {
+			m.setScreen(ScreenPreset)
 		}
-		m.setScreen(ScreenSDDMode)
 	case ScreenDependencyTree:
 		if m.Selection.Preset == model.PresetCustom {
 			allComps := screens.AllComponents()
@@ -865,6 +983,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				}
 				if m.shouldShowSDDModeScreen() {
 					m.setScreen(ScreenSDDMode)
+					return m, nil
+				}
+				if m.shouldShowStrictTDDScreen() {
+					m.setScreen(ScreenStrictTDD)
 					return m, nil
 				}
 				// Show skill picker if Skills component is selected.
@@ -888,7 +1010,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// NOTE: Back logic also in goBack() — keep in sync.
-		if m.shouldShowSDDModeScreen() {
+		if m.shouldShowStrictTDDScreen() {
+			// StrictTDD screen is between ModelPicker/SDDMode and DependencyTree.
+			m.setScreen(ScreenStrictTDD)
+		} else if m.shouldShowSDDModeScreen() {
 			if m.Selection.SDDMode == model.SDDModeMulti {
 				cachePath := opencode.DefaultCachePath()
 				if _, err := osStatModelCache(cachePath); err == nil {
@@ -918,7 +1043,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		default:
 			// "Back" — in custom preset, return to the screen that preceded SkillPicker.
 			if m.Selection.Preset == model.PresetCustom {
-				if m.shouldShowSDDModeScreen() {
+				if m.shouldShowStrictTDDScreen() {
+					m.setScreen(ScreenStrictTDD)
+				} else if m.shouldShowSDDModeScreen() {
 					if m.Selection.SDDMode == model.SDDModeMulti {
 						cachePath := opencode.DefaultCachePath()
 						if _, err := osStatModelCache(cachePath); err == nil {
@@ -949,6 +1076,8 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					m.initSkillPicker()
 				}
 				m.setScreen(ScreenSkillPicker)
+			} else if m.shouldShowStrictTDDScreen() {
+				m.setScreen(ScreenStrictTDD)
 			} else if m.shouldShowSDDModeScreen() {
 				if m.Selection.SDDMode == model.SDDModeMulti {
 					cachePath := opencode.DefaultCachePath()
@@ -1074,8 +1203,22 @@ func (m Model) startInstalling() (tea.Model, tea.Cmd) {
 	})
 }
 
+// withResetSyncState clears sync-result state so ScreenSync shows the confirmation
+// screen (State 3) instead of stale results from a previous run.
+// Unlike withResetOperationState, this preserves PendingSyncOverrides.
+func (m Model) withResetSyncState() Model {
+	m.SyncFilesChanged = 0
+	m.SyncErr = nil
+	m.HasSyncRun = false
+	m.OperationRunning = false
+	m.OperationMode = ""
+	m.Cursor = 0
+	return m
+}
+
 // withResetOperationState clears all operation-related state and resets the cursor,
 // returning a new Model with these fields cleared (value-receiver pattern for MVU).
+// This includes clearing PendingSyncOverrides, unlike withResetSyncState.
 func (m Model) withResetOperationState() Model {
 	m.UpgradeReport = nil
 	m.UpgradeErr = nil
@@ -1084,6 +1227,7 @@ func (m Model) withResetOperationState() Model {
 	m.HasSyncRun = false
 	m.OperationRunning = false
 	m.OperationMode = ""
+	m.PendingSyncOverrides = nil
 	m.Cursor = 0
 	return m
 }
@@ -1103,13 +1247,14 @@ func (m Model) startUpgrade() tea.Cmd {
 }
 
 // startSync launches the sync goroutine and returns a tea.Cmd.
-func (m Model) startSync() tea.Cmd {
+// When overrides is non-nil, model assignments are merged into the sync selection.
+func (m Model) startSync(overrides *model.SyncOverrides) tea.Cmd {
 	syncFn := m.SyncFn
 	return func() tea.Msg {
 		if syncFn == nil {
 			return SyncDoneMsg{Err: fmt.Errorf("sync function not configured")}
 		}
-		filesChanged, err := syncFn()
+		filesChanged, err := syncFn(overrides)
 		return SyncDoneMsg{FilesChanged: filesChanged, Err: err}
 	}
 }
@@ -1140,7 +1285,10 @@ func (m Model) startUpgradeSync() tea.Cmd {
 		if syncFn == nil {
 			return SyncDoneMsg{Err: fmt.Errorf("sync function not configured")}
 		}
-		filesChanged, err := syncFn()
+		// Overrides are intentionally nil: upgrade-sync is triggered from
+		// Welcome menu, not ModelConfig. PendingSyncOverrides is cleared
+		// by withResetOperationState before entering this flow.
+		filesChanged, err := syncFn(nil)
 		return SyncDoneMsg{FilesChanged: filesChanged, Err: err}
 	}
 
@@ -1195,10 +1343,12 @@ func (m Model) goBack() Model {
 	}
 
 	// From SkillPicker, go back to the preceding screen.
-	// In custom preset: SDDMode/ModelPicker/ClaudeModelPicker precede SkillPicker.
+	// In custom preset: StrictTDD precedes SkillPicker; SDDMode/ModelPicker/ClaudeModelPicker precede StrictTDD.
 	if m.Screen == ScreenSkillPicker {
 		if m.Selection.Preset == model.PresetCustom {
-			if m.shouldShowSDDModeScreen() {
+			if m.shouldShowStrictTDDScreen() {
+				m.setScreen(ScreenStrictTDD)
+			} else if m.shouldShowSDDModeScreen() {
 				if m.Selection.SDDMode == model.SDDModeMulti {
 					cachePath := opencode.DefaultCachePath()
 					if _, err := osStatModelCache(cachePath); err == nil {
@@ -1220,29 +1370,53 @@ func (m Model) goBack() Model {
 		return m
 	}
 
-	// If going back from DependencyTree and the SDDMode/ClaudeModelPicker
+	// If going back from DependencyTree and the SDDMode/ClaudeModelPicker/StrictTDD
 	// screens were shown BEFORE it (non-custom presets only), navigate to them.
 	// In custom mode these screens appear AFTER the dependency tree, so
 	// going back should return to the preset screen (handled by linearRoutes).
 	// NOTE: DependencyTree back logic also in confirmSelection() — keep in sync.
 	if m.Screen == ScreenDependencyTree && m.Selection.Preset != model.PresetCustom {
-		if m.shouldShowSDDModeScreen() {
-			if m.Selection.SDDMode == model.SDDModeMulti {
-				cachePath := opencode.DefaultCachePath()
-				if _, err := osStatModelCache(cachePath); err == nil {
-					m.setScreen(ScreenModelPicker)
-				} else {
-					m.setScreen(ScreenSDDMode)
-				}
-			} else {
-				m.setScreen(ScreenSDDMode)
-			}
+		if m.shouldShowStrictTDDScreen() {
+			// StrictTDD screen is between (SDDMode/ClaudeModelPicker/Preset) and DependencyTree.
+			m.setScreen(ScreenStrictTDD)
 			return m
 		}
 		if m.shouldShowClaudeModelPickerScreen() {
 			m.setScreen(ScreenClaudeModelPicker)
 			return m
 		}
+	}
+
+	// Going back from ScreenStrictTDD depends on which flow brought us here:
+	//   - OpenCode flow: ModelPicker (multi + cache) → SDDMode
+	//   - ClaudeCode flow: ClaudeModelPicker
+	//   - Custom preset (other agents): DependencyTree (the component selector)
+	//   - Non-custom other agents: Preset
+	if m.Screen == ScreenStrictTDD {
+		if m.shouldShowSDDModeScreen() {
+			// OpenCode path: ModelPicker (if multi + cache) or SDDMode.
+			if m.Selection.SDDMode == model.SDDModeMulti {
+				cachePath := opencode.DefaultCachePath()
+				if _, err := osStatModelCache(cachePath); err == nil {
+					m.setScreen(ScreenModelPicker)
+					return m
+				}
+			}
+			m.setScreen(ScreenSDDMode)
+			return m
+		}
+		if m.shouldShowClaudeModelPickerScreen() {
+			m.setScreen(ScreenClaudeModelPicker)
+			return m
+		}
+		// Custom preset: DependencyTree is the component selector that precedes StrictTDD.
+		if m.Selection.Preset == model.PresetCustom {
+			m.setScreen(ScreenDependencyTree)
+			return m
+		}
+		// All other non-custom agents: go back to Preset selection.
+		m.setScreen(ScreenPreset)
+		return m
 	}
 
 	// In custom preset, going back from SDDMode should return to ClaudeModelPicker
@@ -1271,12 +1445,17 @@ func (m Model) goBack() Model {
 	}
 
 	// In custom preset, going back from Review walks through intermediate screens.
+	// Order (reverse of forward): SkillPicker → StrictTDD → SDDMode/ModelPicker → ClaudeModelPicker → DependencyTree.
 	if m.Screen == ScreenReview && m.Selection.Preset == model.PresetCustom {
 		if m.shouldShowSkillPickerScreen() {
 			if len(m.SkillPicker) == 0 {
 				m.initSkillPicker()
 			}
 			m.setScreen(ScreenSkillPicker)
+			return m
+		}
+		if m.shouldShowStrictTDDScreen() {
+			m.setScreen(ScreenStrictTDD)
 			return m
 		}
 		if m.shouldShowSDDModeScreen() {
@@ -1298,6 +1477,12 @@ func (m Model) goBack() Model {
 		}
 		m.setScreen(ScreenDependencyTree)
 		return m
+	}
+
+	// Leaving ScreenSync via Esc: clear stale overrides so they don't leak
+	// into a future sync triggered from a different flow (e.g. Welcome menu).
+	if m.Screen == ScreenSync && m.PendingSyncOverrides != nil {
+		m.PendingSyncOverrides = nil
 	}
 
 	previous, ok := PreviousScreen(m.Screen)
@@ -1395,6 +1580,8 @@ func (m Model) optionCount() int {
 		return screens.ClaudeModelPickerOptionCount(m.ClaudeModelPicker)
 	case ScreenSDDMode:
 		return len(screens.SDDModeOptions()) + 1
+	case ScreenStrictTDD:
+		return len(screens.StrictTDDOptions()) + 1 // Enable + Disable + Back
 	case ScreenModelPicker:
 		if len(m.ModelPicker.AvailableIDs) == 0 {
 			return 1 // only "Back to SDD mode"
@@ -1598,6 +1785,13 @@ func (m Model) shouldShowSDDModeScreen() bool {
 		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
 }
 
+// shouldShowStrictTDDScreen reports whether the Strict TDD Mode screen should
+// be shown in the navigation flow. It requires only that the SDD component is
+// selected — the screen is agent-agnostic.
+func (m Model) shouldShowStrictTDDScreen() bool {
+	return hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
+}
+
 func (m Model) shouldShowClaudeModelPickerScreen() bool {
 	return m.Selection.HasAgent(model.AgentClaudeCode) &&
 		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
@@ -1631,4 +1825,11 @@ func hasSelectedComponent(components []model.ComponentID, target model.Component
 		}
 	}
 	return false
+}
+
+// isScrollableScreen returns true for screens that use scroll-based navigation
+// instead of a fixed option list. Wrap-around navigation (Issue #150) must be
+// disabled for these screens to avoid confusing the scroll offset logic.
+func (m Model) isScrollableScreen() bool {
+	return m.Screen == ScreenBackups
 }

@@ -3,12 +3,20 @@ package upgrade
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
 )
 
 // execCommand is a package-level var declared in executor.go (same package).
+
+// scriptHTTPClient is the HTTP client used for downloading install.sh.
+// Package-level var for testability.
+var scriptHTTPClient = &http.Client{Timeout: 2 * time.Minute}
 
 // runStrategy executes the upgrade for a single tool using the appropriate strategy
 // for the given platform profile.
@@ -18,6 +26,8 @@ import (
 //   - go-install method + apt/pacman/other → goInstallUpgrade
 //   - binary method + linux/darwin → binaryUpgrade
 //   - binary method + windows → manualFallback (Phase 1: self-replace deferred)
+//   - script method + linux/darwin → scriptUpgrade (curl | bash install.sh)
+//   - script method + windows → manualFallback
 //   - unknown method → manualFallback with explicit message
 func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) error {
 	method := effectiveMethod(r.Tool, profile)
@@ -29,6 +39,8 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 		return goInstallUpgrade(ctx, r.Tool, r.LatestVersion)
 	case update.InstallBinary:
 		return binaryUpgrade(ctx, r, profile)
+	case update.InstallScript:
+		return scriptUpgrade(ctx, r, profile)
 	default:
 		return &ManualFallbackError{
 			Hint: fmt.Sprintf("upgrade %q: unsupported install method %q — please update manually. See: https://github.com/Gentleman-Programming/%s",
@@ -98,4 +110,69 @@ func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.Pl
 // Implemented in download.go.
 func downloadAndReplace(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) error {
 	return Download(ctx, r, profile)
+}
+
+// installScriptURLFn builds the raw GitHub URL for the project's install.sh.
+// Package-level var for testability.
+var installScriptURLFn = func(owner, repo string) string {
+	return fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/main/install.sh",
+		owner, repo)
+}
+
+// installScriptURL builds the raw GitHub URL for the project's install.sh.
+func installScriptURL(owner, repo string) string {
+	return installScriptURLFn(owner, repo)
+}
+
+// scriptUpgrade downloads and executes the project's install.sh via curl | bash.
+// This is used for tools that distribute via shell scripts (e.g., GGA) rather than
+// pre-built release binary assets.
+//
+// The script is downloaded to a temp file, then executed with bash and stdin set to nil
+// so it runs non-interactively (no prompts). This assumes the install.sh handles the
+// non-interactive case gracefully (e.g., auto-reinstalls when already installed).
+func scriptUpgrade(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) error {
+	if profile.OS == "windows" {
+		hint := r.UpdateHint
+		if hint == "" {
+			hint = fmt.Sprintf("Download manually from https://github.com/%s/%s/releases", r.Tool.Owner, r.Tool.Repo)
+		}
+		return &ManualFallbackError{
+			Hint: fmt.Sprintf("upgrade %q on Windows requires manual update: %s", r.Tool.Name, hint),
+		}
+	}
+
+	url := installScriptURL(r.Tool.Owner, r.Tool.Repo)
+
+	// Download install.sh content.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("download install.sh: build request: %w", err)
+	}
+
+	resp, err := scriptHTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("download install.sh: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download install.sh: HTTP %d from %s", resp.StatusCode, url)
+	}
+
+	scriptBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("download install.sh: read body: %w", err)
+	}
+
+	// Execute install.sh with bash. Stdin is nil to ensure non-interactive mode.
+	cmd := execCommand("bash", "-c", string(scriptBody))
+	cmd.Stdin = nil
+	if out, err := cmd.CombinedOutput(); err != nil {
+		// Provide a helpful hint if the script fails.
+		output := strings.TrimSpace(string(out))
+		return fmt.Errorf("install.sh failed for %q: %w\nOutput: %s", r.Tool.Name, err, output)
+	}
+
+	return nil
 }

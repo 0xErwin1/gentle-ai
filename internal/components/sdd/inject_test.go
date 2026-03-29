@@ -1642,6 +1642,160 @@ func TestStripBareOrchestratorSection_DoesNotStripIfMarkersPresent(t *testing.T)
 	_ = result
 }
 
+// ---------------------------------------------------------------------------
+// Task 6: StrictTDD marker injected into system prompt files
+// ---------------------------------------------------------------------------
+
+// TestInjectStrictTDDEnabledInjectsMarkerIntoClaude verifies that when
+// InjectOptions.StrictTDD = true, the injected content in CLAUDE.md contains
+// the <!-- gentle-ai:strict-tdd-mode --> marker with its content.
+func TestInjectStrictTDDEnabledInjectsMarkerIntoClaude(t *testing.T) {
+	home := t.TempDir()
+
+	opts := InjectOptions{StrictTDD: true}
+	result, err := Inject(home, claudeAdapter(), "", opts)
+	if err != nil {
+		t.Fatalf("Inject(claude, StrictTDD=true) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() changed = false")
+	}
+
+	content, err := os.ReadFile(filepath.Join(home, ".claude", "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(CLAUDE.md) error = %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "<!-- gentle-ai:strict-tdd-mode -->") {
+		t.Fatal("CLAUDE.md missing <!-- gentle-ai:strict-tdd-mode --> open marker")
+	}
+	if !strings.Contains(text, "<!-- /gentle-ai:strict-tdd-mode -->") {
+		t.Fatal("CLAUDE.md missing <!-- /gentle-ai:strict-tdd-mode --> close marker")
+	}
+	if !strings.Contains(text, "Strict TDD Mode: enabled") {
+		t.Fatal("CLAUDE.md missing 'Strict TDD Mode: enabled' content")
+	}
+}
+
+// TestInjectStrictTDDDisabledDoesNotInjectMarker verifies that when
+// InjectOptions.StrictTDD = false (default), the strict-tdd marker is NOT injected.
+func TestInjectStrictTDDDisabledDoesNotInjectMarker(t *testing.T) {
+	home := t.TempDir()
+
+	// Default (no opts) — strict TDD disabled.
+	_, err := Inject(home, claudeAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject(claude, default) error = %v", err)
+	}
+
+	content, err := os.ReadFile(filepath.Join(home, ".claude", "CLAUDE.md"))
+	if err != nil {
+		t.Fatalf("ReadFile(CLAUDE.md) error = %v", err)
+	}
+
+	text := string(content)
+	if strings.Contains(text, "<!-- gentle-ai:strict-tdd-mode -->") {
+		t.Fatal("CLAUDE.md should NOT contain strict-tdd-mode marker when StrictTDD=false")
+	}
+}
+
+// TestInjectStrictTDDIsIdempotent verifies that injecting with StrictTDD=true
+// twice does not duplicate the marker.
+func TestInjectStrictTDDIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+
+	opts := InjectOptions{StrictTDD: true}
+
+	first, err := Inject(home, claudeAdapter(), "", opts)
+	if err != nil {
+		t.Fatalf("Inject() first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("first Inject() changed = false")
+	}
+
+	second, err := Inject(home, claudeAdapter(), "", opts)
+	if err != nil {
+		t.Fatalf("Inject() second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("second Inject() changed = true — strict-tdd marker was duplicated")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 1: All files from each skill directory are copied (not just SKILL.md)
+// ---------------------------------------------------------------------------
+
+// TestInjectCopiesAllFilesFromSkillDirectory verifies that Inject() copies
+// ALL .md files from each skill directory, not just SKILL.md.
+// Specifically, sdd-apply/strict-tdd.md and sdd-verify/strict-tdd-verify.md
+// must be written to disk alongside their SKILL.md files.
+func TestInjectCopiesAllFilesFromSkillDirectory(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, opencodeAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() changed = false")
+	}
+
+	skillsDir := filepath.Join(home, ".config", "opencode", "skills")
+
+	tests := []struct {
+		skill string
+		file  string
+	}{
+		{"sdd-apply", "SKILL.md"},
+		{"sdd-apply", "strict-tdd.md"},
+		{"sdd-verify", "SKILL.md"},
+		{"sdd-verify", "strict-tdd-verify.md"},
+	}
+
+	for _, tt := range tests {
+		path := filepath.Join(skillsDir, tt.skill, tt.file)
+		info, statErr := os.Stat(path)
+		if statErr != nil {
+			t.Errorf("skill file %q/%q not found on disk: %v", tt.skill, tt.file, statErr)
+			continue
+		}
+		if info.Size() == 0 {
+			t.Errorf("skill file %q/%q is empty", tt.skill, tt.file)
+		}
+	}
+}
+
+// TestInjectCopiesAllFilesReportedInResult verifies that all skill files
+// (including extra files beyond SKILL.md) are included in result.Files.
+func TestInjectCopiesAllFilesReportedInResult(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, opencodeAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	skillsDir := filepath.Join(home, ".config", "opencode", "skills")
+	wantPaths := []string{
+		filepath.Join(skillsDir, "sdd-apply", "strict-tdd.md"),
+		filepath.Join(skillsDir, "sdd-verify", "strict-tdd-verify.md"),
+	}
+
+	resultSet := make(map[string]bool, len(result.Files))
+	for _, f := range result.Files {
+		resultSet[f] = true
+	}
+
+	for _, want := range wantPaths {
+		if !resultSet[want] {
+			t.Errorf("expected %q in result.Files, but it was not found", want)
+		}
+	}
+}
+
 // TestInjectClaudeDeduplicatesBareOrchestratorAtBeginning verifies that a bare
 // orchestrator section at the very START of CLAUDE.md is handled correctly.
 func TestInjectClaudeDeduplicatesBareOrchestratorAtBeginning(t *testing.T) {
@@ -2676,14 +2830,15 @@ func TestInjectCursorWritesSubAgentFiles(t *testing.T) {
 		}
 	}
 
-	// Verify readonly flags
+	// Verify readonly flags: sdd-explore and sdd-verify must use readonly: false
+	// so they can use terminal commands and MCP tools (issue #156).
 	for _, phase := range []string{"sdd-explore", "sdd-verify"} {
 		content, err := os.ReadFile(filepath.Join(agentsDir, phase+".md"))
 		if err != nil {
 			t.Fatalf("ReadFile(%s) error = %v", phase, err)
 		}
-		if !strings.Contains(string(content), "readonly: true") {
-			t.Fatalf("agent %s should have readonly: true", phase)
+		if !strings.Contains(string(content), "readonly: false") {
+			t.Fatalf("agent %s should have readonly: false (terminal/MCP access required)", phase)
 		}
 	}
 

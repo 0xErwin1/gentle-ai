@@ -28,6 +28,11 @@ type InjectOptions struct {
 	// When non-empty and the adapter implements workflowInjector, native
 	// workflow files are copied to <workspaceDir>/.windsurf/workflows/.
 	WorkspaceDir string
+
+	// StrictTDD enables Strict TDD mode. When true, a
+	// <!-- gentle-ai:strict-tdd-mode --> marker section is injected into
+	// the agent's system prompt so agents know Strict TDD is active.
+	StrictTDD bool
 }
 
 // workflowInjector is an optional adapter capability: if an adapter
@@ -208,6 +213,34 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 		}
 	}
 
+	// 1b. If StrictTDD is enabled, inject the strict-tdd-mode marker section
+	// into the system prompt file so agents know Strict TDD is active.
+	if opts.StrictTDD && adapter.Agent() != model.AgentOpenCode {
+		promptPath := adapter.SystemPromptFile(homeDir)
+		strictTDDContent := "Strict TDD Mode: enabled"
+		existing, readErr := readFileOrEmpty(promptPath)
+		if readErr != nil {
+			return InjectionResult{}, readErr
+		}
+		updated := filemerge.InjectMarkdownSection(existing, "strict-tdd-mode", strictTDDContent)
+		writeResult, writeErr := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+		if writeErr != nil {
+			return InjectionResult{}, writeErr
+		}
+		changed = changed || writeResult.Changed
+		// Only append path once (it may already be in files from step 1).
+		alreadyInFiles := false
+		for _, f := range files {
+			if f == promptPath {
+				alreadyInFiles = true
+				break
+			}
+		}
+		if !alreadyInFiles {
+			files = append(files, promptPath)
+		}
+	}
+
 	// 2. Write slash commands (if the agent supports them).
 	if adapter.SupportsSlashCommands() {
 		commandsDir := adapter.CommandsDir(homeDir)
@@ -345,23 +378,37 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			}
 
 			for _, skill := range sddSkills {
-				assetPath := "skills/" + skill + "/SKILL.md"
-				content, readErr := assets.Read(assetPath)
-				if readErr != nil {
-					return InjectionResult{}, fmt.Errorf("required SDD skill %q: embedded asset not found: %w", skill, readErr)
+				embedDir := "skills/" + skill
+				entries, readDirErr := fs.ReadDir(assets.FS, embedDir)
+				if readDirErr != nil {
+					return InjectionResult{}, fmt.Errorf("required SDD skill %q: embedded directory not found: %w", skill, readDirErr)
 				}
-				if len(content) == 0 {
-					return InjectionResult{}, fmt.Errorf("required SDD skill %q: embedded asset is empty", skill)
-				}
-
-				path := filepath.Join(skillDir, skill, "SKILL.md")
-				writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
-				if err != nil {
-					return InjectionResult{}, err
+				if len(entries) == 0 {
+					return InjectionResult{}, fmt.Errorf("required SDD skill %q: embedded directory is empty", skill)
 				}
 
-				changed = changed || writeResult.Changed
-				files = append(files, path)
+				for _, entry := range entries {
+					if entry.IsDir() {
+						continue
+					}
+					assetPath := embedDir + "/" + entry.Name()
+					content, readErr := assets.Read(assetPath)
+					if readErr != nil {
+						return InjectionResult{}, fmt.Errorf("required SDD skill %q file %q: embedded asset not found: %w", skill, entry.Name(), readErr)
+					}
+					if len(content) == 0 {
+						return InjectionResult{}, fmt.Errorf("required SDD skill %q file %q: embedded asset is empty", skill, entry.Name())
+					}
+
+					path := filepath.Join(skillDir, skill, entry.Name())
+					writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
+					if err != nil {
+						return InjectionResult{}, err
+					}
+
+					changed = changed || writeResult.Changed
+					files = append(files, path)
+				}
 			}
 		}
 	}

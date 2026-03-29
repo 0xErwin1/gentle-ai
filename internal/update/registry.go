@@ -36,7 +36,9 @@ var Tools = []ToolInfo{
 		Repo:          "gentleman-guardian-angel",
 		DetectCmd:     []string{"gga", "--version"},
 		VersionPrefix: "v",
-		// gga: brew on macOS, binary release download on Linux/Windows.
-		InstallMethod: InstallBinary,
+		// gga: brew on macOS, install.sh script on Linux/Windows.
+		// GGA does not publish pre-built release binary assets — only source archives.
+		// Using InstallScript runs curl | bash via the project's install.sh.
+		InstallMethod: InstallScript,
 	},
 }
