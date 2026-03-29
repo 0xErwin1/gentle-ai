@@ -1539,9 +1539,10 @@ test_cursor_sdd_subagents() {
         assert_file_exists "$agents_dir/sdd-verify.md" "sdd-verify.md agent file"
         assert_file_exists "$agents_dir/sdd-archive.md" "sdd-archive.md agent file"
 
-        # readonly flags: explore and verify must be readonly: true
-        assert_file_contains "$agents_dir/sdd-explore.md" "readonly: true" "sdd-explore is readonly"
-        assert_file_contains "$agents_dir/sdd-verify.md" "readonly: true" "sdd-verify is readonly"
+        # readonly flags: explore and verify are readonly: false (issue #156 — readonly: true
+        # blocks MCP tools and terminal in Cursor, not just file writes)
+        assert_file_contains "$agents_dir/sdd-explore.md" "readonly: false" "sdd-explore is not readonly"
+        assert_file_contains "$agents_dir/sdd-verify.md" "readonly: false" "sdd-verify is not readonly"
 
         # apply must NOT be readonly (it writes code)
         assert_file_not_contains "$agents_dir/sdd-apply.md" "readonly: true" "sdd-apply is NOT readonly"
