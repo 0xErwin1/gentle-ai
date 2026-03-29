@@ -47,6 +47,10 @@ var (
 	cmdLookPath         = exec.LookPath
 	streamCommandOutput = true
 
+	// ggaAvailableCheck is an optional override for ggaAvailable behavior.
+	// When set, it is called instead of the default filesystem check.
+	ggaAvailableCheck func(system.PlatformProfile) bool
+
 	// engramDownloadFn is the function used to download the engram binary on non-brew platforms.
 	// Package-level var for testability — tests can replace this to avoid real HTTP calls.
 	engramDownloadFn = engram.DownloadLatestBinary
@@ -528,8 +532,20 @@ func (s componentApplyStep) Run() error {
 			if err != nil {
 				return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
 			}
-			if err := runCommandSequence(commands); err != nil {
-				return err
+			installErr := runCommandSequence(commands)
+			if installErr != nil {
+				if ggaAvailable(s.profile) {
+					// The GGA install script uses `set -e` and `read -p` for
+					// the "already installed" confirmation. Without a TTY
+					// (common in automated/re-run scenarios), `read` fails
+					// with exit code 1 and `set -e` kills the script before
+					// it can exit 0. If GGA is actually available after the
+					// script ran, the install succeeded functionally — treat
+					// as success but warn the user.
+					fmt.Fprintf(os.Stderr, "WARNING: gga install command reported an error but gga is available — continuing. Error was: %v\n", installErr)
+				} else {
+					return installErr
+				}
 			}
 		}
 		if err := gga.EnsureRuntimeAssets(s.homeDir); err != nil {
@@ -629,6 +645,10 @@ func ResolveInstallProfile(detection system.DetectionResult) system.PlatformProf
 // We check the filesystem directly to avoid spawning a subprocess and to work
 // regardless of whether the install directory has been added to PATH.
 func ggaAvailable(profile system.PlatformProfile) bool {
+	// Allow test override.
+	if ggaAvailableCheck != nil {
+		return ggaAvailableCheck(profile)
+	}
 	if _, err := cmdLookPath("gga"); err == nil {
 		return true
 	}
