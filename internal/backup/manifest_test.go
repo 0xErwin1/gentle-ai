@@ -385,6 +385,36 @@ func TestSnapshotterPopulatesFileCount(t *testing.T) {
 	}
 }
 
+// TestSnapshotterSkipsDirectories verifies that snapshot does not fail when a
+// path in the list is a directory (e.g., a skills folder). The directory is
+// recorded in the manifest as not-existed (skipped), not as an error.
+func TestSnapshotterSkipsDirectories(t *testing.T) {
+	home := t.TempDir()
+
+	file1 := filepath.Join(home, "config.json")
+	if err := os.WriteFile(file1, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Create a directory that will be in the paths list.
+	skillDir := filepath.Join(home, "skills", "my-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	snapshotDir := filepath.Join(home, "snap")
+	snap := NewSnapshotter()
+	manifest, err := snap.Create(snapshotDir, []string{file1, skillDir})
+	if err != nil {
+		t.Fatalf("Create() error = %v, want nil (directories should be skipped)", err)
+	}
+
+	// Only the file should count, not the directory.
+	if manifest.FileCount != 1 {
+		t.Errorf("FileCount = %d, want 1 (directory should not count)", manifest.FileCount)
+	}
+}
+
 // TestDeleteBackup_Success verifies that DeleteBackup removes the backup directory.
 func TestDeleteBackup_Success(t *testing.T) {
 	dir := t.TempDir()

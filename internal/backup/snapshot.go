@@ -62,7 +62,11 @@ func (s Snapshotter) snapshotPath(snapshotDir string, sourcePath string) (Manife
 	}
 
 	if info.IsDir() {
-		return ManifestEntry{}, fmt.Errorf("backup source path %q is a directory", cleanSource)
+		// Skip directories — the backup system expects individual file paths.
+		// Callers that need to back up directories should enumerate files first.
+		// Returning a non-existed entry so the manifest records the path was seen
+		// but not backed up (same pattern as non-existent files).
+		return entry, nil
 	}
 
 	// Strip volume name (e.g. "C:") on Windows so the remaining path
