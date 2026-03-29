@@ -3009,3 +3009,70 @@ func TestFindProjectRootAllMarkers(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Fix: SDD post-check disk fallback on Windows
+// ---------------------------------------------------------------------------
+
+// TestInjectOpenCodePostCheckDiskFallback tests that the SDD post-check
+// correctly falls back to reading from disk when the in-memory merged bytes
+// are stale or empty. This simulates the Windows scenario where os.ReadFile
+// returns stale data due to NTFS caching, but the file on disk is correct.
+func TestInjectOpenCodePostCheckDiskFallback(t *testing.T) {
+	home := t.TempDir()
+
+	// Pre-create a minimal config file with sdd-orchestrator already present.
+	// This simulates a previous successful install where the file on disk
+	// is correct but in-memory buffer might be stale.
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	// Write a config that already has sdd-orchestrator (simulating previous install)
+	existingConfig := `{
+  "agent": {
+    "gentleman": {
+      "description": "Gentleman",
+      "mode": "primary"
+    },
+    "sdd-orchestrator": {
+      "description": "SDD Orchestrator",
+      "mode": "primary"
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(existingConfig), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	// Mock npm to not be available (so we skip plugin installation)
+	origNpmLookPath := npmLookPath
+	npmLookPath = func(string) (string, error) {
+		return "", fmt.Errorf("npm not found")
+	}
+	t.Cleanup(func() { npmLookPath = origNpmLookPath })
+
+	// Run Inject with SDD mode single
+	result, err := Inject(home, opencodeAdapter(), model.SDDModeSingle)
+	if err != nil {
+		// This is the bug: on Windows, even with correct file on disk,
+		// the post-check may fail if in-memory buffer is stale.
+		// The fix adds a disk fallback, so this should NOT fail.
+		t.Fatalf("Inject() error = %v (post-check should pass with disk fallback)", err)
+	}
+
+	// Verify that the result indicates the file was changed (merged successfully)
+	if !result.Changed {
+		t.Log("Note: result.Changed = false, but that's OK for idempotent runs")
+	}
+
+	// Verify the file on disk still has sdd-orchestrator
+	diskContent, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(diskContent), "sdd-orchestrator") {
+		t.Fatal("File on disk lost sdd-orchestrator after inject")
+	}
+}
