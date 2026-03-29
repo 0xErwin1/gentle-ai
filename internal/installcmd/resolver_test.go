@@ -398,25 +398,6 @@ func TestResolveAgentInstall(t *testing.T) {
 func TestResolveComponentInstall(t *testing.T) {
 	r := NewResolver()
 
-	// Simulate a valid Go 1.24+ environment for all engram resolution tests.
-	// Specific error scenarios are covered in TestValidateGoForModuleInstall.
-	origGoVersion := cmdGoVersion
-	origGetenv := osGetenv
-	origLookPath := cmdLookPath
-	cmdGoVersion = func() ([]byte, error) { return []byte("go version go1.24.0 linux/amd64"), nil }
-	osGetenv = func(key string) string { return "" }
-	cmdLookPath = func(file string) (string, error) {
-		if file == "go" {
-			return "/usr/bin/go", nil
-		}
-		return origLookPath(file)
-	}
-	t.Cleanup(func() {
-		cmdGoVersion = origGoVersion
-		osGetenv = origGetenv
-		cmdLookPath = origLookPath
-	})
-
 	tests := []struct {
 		name      string
 		profile   system.PlatformProfile
@@ -430,23 +411,25 @@ func TestResolveComponentInstall(t *testing.T) {
 			component: model.ComponentEngram,
 			want:      CommandSequence{{"brew", "tap", "Gentleman-Programming/homebrew-tap"}, {"brew", "install", "engram"}},
 		},
+		// Linux and Windows engram now use DownloadLatestBinary() — resolver returns error.
+		// These cases are handled by run.go's componentApplyStep directly.
 		{
-			name:      "engram on ubuntu uses go install with correct module path",
+			name:      "engram on ubuntu returns error (uses DownloadLatestBinary instead)",
 			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
 			component: model.ComponentEngram,
-			want:      CommandSequence{{"env", "CGO_ENABLED=0", "go", "install", "github.com/Gentleman-Programming/engram/cmd/engram@latest"}},
+			wantErr:   true,
 		},
 		{
-			name:      "engram on arch uses go install with correct module path",
+			name:      "engram on arch returns error (uses DownloadLatestBinary instead)",
 			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
 			component: model.ComponentEngram,
-			want:      CommandSequence{{"env", "CGO_ENABLED=0", "go", "install", "github.com/Gentleman-Programming/engram/cmd/engram@latest"}},
+			wantErr:   true,
 		},
 		{
-			name:      "engram on fedora uses go install with correct module path",
+			name:      "engram on fedora returns error (uses DownloadLatestBinary instead)",
 			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
 			component: model.ComponentEngram,
-			want:      CommandSequence{{"env", "CGO_ENABLED=0", "go", "install", "github.com/Gentleman-Programming/engram/cmd/engram@latest"}},
+			wantErr:   true,
 		},
 		{
 			name:      "gga on darwin uses brew tap and reinstall",
@@ -485,10 +468,10 @@ func TestResolveComponentInstall(t *testing.T) {
 			},
 		},
 		{
-			name:      "engram on windows uses go install",
+			name:      "engram on windows returns error (uses DownloadLatestBinary instead)",
 			profile:   system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			component: model.ComponentEngram,
-			want:      CommandSequence{{"go", "install", "github.com/Gentleman-Programming/engram/cmd/engram@latest"}},
+			wantErr:   true,
 		},
 		{
 			name:      "gga on windows cleans temp dir and uses git bash",

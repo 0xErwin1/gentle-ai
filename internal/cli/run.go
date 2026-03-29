@@ -46,6 +46,10 @@ var (
 	cmdLookPath         = exec.LookPath
 	streamCommandOutput = true
 
+	// engramDownloadFn is the function used to download the engram binary on non-brew platforms.
+	// Package-level var for testability — tests can replace this to avoid real HTTP calls.
+	engramDownloadFn = engram.DownloadLatestBinary
+
 	// AppVersion is the gentle-ai version that will be written into backup manifests.
 	// It is set by app.go before any CLI operation so that every backup created during
 	// an install or sync records which version of gentle-ai made it.
@@ -151,9 +155,9 @@ func withPostInstallNotes(report verify.Report, resolved planner.ResolvedPlan) v
 }
 
 // withGoInstallPathNote appends a PATH guidance note when engram was installed
-// via `go install` (non-brew platforms) and the Go binary directory is not in
-// the user's PATH. This helps users on Linux/Windows who may not have
-// ~/go/bin (or $GOPATH/bin / $GOBIN) in their PATH.
+// on a non-brew platform (Linux/Windows). Since engram is now installed via
+// direct binary download to /usr/local/bin or ~/.local/bin, this note helps
+// users who may need to add the install directory to their PATH.
 func withGoInstallPathNote(report verify.Report, resolved planner.ResolvedPlan) verify.Report {
 	if !hasComponent(resolved.OrderedComponents, model.ComponentEngram) {
 		return report
@@ -428,29 +432,21 @@ func (s componentApplyStep) Run() error {
 	case model.ComponentEngram:
 		if _, err := cmdLookPath("engram"); err != nil {
 			// Engram not on PATH — install it.
-			// On non-brew platforms (Linux, Windows), Go is required for `go install`.
-			if s.profile.PackageManager != "brew" {
-				if _, err := cmdLookPath("go"); err != nil {
-					goCommands := system.InstallCommandsForDep("go", s.profile)
-					if goCommands == nil {
-						return fmt.Errorf("go is required to install engram but cannot be auto-installed on this platform")
-					}
-					if err := runCommandSequence(goCommands); err != nil {
-						return fmt.Errorf("install go (required for engram): %w", err)
-					}
-					if s.profile.OS == "windows" {
-						if err := ensureGoAvailableAfterInstall(s.profile); err != nil {
-							return err
-						}
-					}
+			if s.profile.PackageManager == "brew" {
+				// macOS (or Linux with Homebrew): use brew tap + brew install.
+				commands, err := engram.InstallCommand(s.profile)
+				if err != nil {
+					return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
 				}
-			}
-			commands, err := engram.InstallCommand(s.profile)
-			if err != nil {
-				return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
-			}
-			if err := runCommandSequence(commands); err != nil {
-				return err
+				if err := runCommandSequence(commands); err != nil {
+					return err
+				}
+			} else {
+				// Linux / Windows: download the pre-built binary from GitHub Releases.
+				// No Go required — engram ships pre-built binaries.
+				if _, err := engramDownloadFn(s.profile); err != nil {
+					return fmt.Errorf("download engram binary: %w", err)
+				}
 			}
 		}
 		setupMode := engram.ParseSetupMode(os.Getenv(engram.SetupModeEnvVar))
