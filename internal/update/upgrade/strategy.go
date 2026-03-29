@@ -5,12 +5,19 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
 )
+
+// engramDownloadFn is the function used to download the engram binary.
+// Package-level var for testability — swapped in tests to avoid real network calls.
+var engramDownloadFn = engram.DownloadLatestBinary
 
 // execCommand is a package-level var declared in executor.go (same package).
 
@@ -87,10 +94,20 @@ func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion s
 }
 
 // binaryUpgrade handles binary-release upgrades via GitHub Releases asset download.
-// On Windows, self-replace of a running binary is not safe — we return a ManualFallbackError.
+//
+// engram has its own cross-platform binary downloader (DownloadLatestBinary) that
+// works on all platforms including Windows. For all other tools on Windows,
+// self-replace of a running binary is deferred (Phase 1) — a ManualFallbackError
+// is returned so the executor surfaces it as UpgradeSkipped with an actionable hint.
 func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) error {
+	// engram: always use its dedicated binary downloader regardless of platform
+	// (except brew, which is handled by effectiveMethod before we get here).
+	if r.Tool.Name == "engram" {
+		return engramBinaryUpgrade(profile)
+	}
+
 	if profile.OS == "windows" {
-		// Phase 1: Windows binary self-replace is deferred.
+		// Phase 1: Windows binary self-replace is deferred for non-engram tools.
 		// Return a ManualFallbackError so the executor surfaces this as UpgradeSkipped
 		// with an actionable hint — NOT as UpgradeFailed.
 		hint := r.UpdateHint
@@ -104,6 +121,24 @@ func binaryUpgrade(ctx context.Context, r update.UpdateResult, profile system.Pl
 
 	// For Linux/macOS binary installs: delegate to the download package.
 	return downloadAndReplace(ctx, r, profile)
+}
+
+// engramBinaryUpgrade downloads the latest engram binary using its dedicated
+// cross-platform downloader and adds the install directory to PATH.
+func engramBinaryUpgrade(profile system.PlatformProfile) error {
+	binaryPath, err := engramDownloadFn(profile)
+	if err != nil {
+		return fmt.Errorf("download engram binary: %w", err)
+	}
+	// Add install dir to PATH for the current process so the new binary is found.
+	binDir := filepath.Dir(binaryPath)
+	currentPath := os.Getenv("PATH")
+	if currentPath == "" {
+		os.Setenv("PATH", binDir)
+	} else {
+		os.Setenv("PATH", binDir+string(os.PathListSeparator)+currentPath)
+	}
+	return nil
 }
 
 // downloadAndReplace downloads the release asset and atomically replaces the binary.

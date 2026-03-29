@@ -556,6 +556,104 @@ func TestInstallScriptURL(t *testing.T) {
 	}
 }
 
+// --- TestEngramUpgradeUsesDownloadNotGoInstall ---
+
+// TestEngramUpgradeUsesDownloadNotGoInstall verifies that on Windows (non-brew),
+// engram upgrade calls the binary download function, NOT go install.
+// This is the regression test for issue #160.
+func TestEngramUpgradeUsesDownloadNotGoInstall(t *testing.T) {
+	origExecCommand := execCommand
+	origEngramDownloadFn := engramDownloadFn
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		engramDownloadFn = origEngramDownloadFn
+	})
+
+	execCalled := false
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalled = true
+		return exec.Command("echo", "should not be called")
+	}
+
+	downloadCalled := false
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		downloadCalled = true
+		return "/fake/path/engram.exe", nil
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "engram",
+			Owner:         "Gentleman-Programming",
+			Repo:          "engram",
+			InstallMethod: update.InstallBinary, // should be InstallBinary after fix
+		},
+		LatestVersion: "0.5.0",
+	}
+	profile := system.PlatformProfile{OS: "windows", PackageManager: "winget"}
+
+	err := runStrategy(context.Background(), r, profile)
+	if err != nil {
+		t.Fatalf("runStrategy engram windows: unexpected error: %v", err)
+	}
+
+	// Must call binary download, NOT go install.
+	if !downloadCalled {
+		t.Errorf("expected engramDownloadFn to be called, but it was not")
+	}
+	if execCalled {
+		t.Errorf("exec (go install) should NOT be called for engram on Windows — use binary download")
+	}
+}
+
+// --- TestEngramUpgradeLinuxUsesDownload ---
+
+// TestEngramUpgradeLinuxUsesDownload verifies that on Linux (non-brew),
+// engram upgrade uses the binary download function, not go install.
+func TestEngramUpgradeLinuxUsesDownload(t *testing.T) {
+	origExecCommand := execCommand
+	origEngramDownloadFn := engramDownloadFn
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		engramDownloadFn = origEngramDownloadFn
+	})
+
+	execCalled := false
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalled = true
+		return exec.Command("echo", "should not be called")
+	}
+
+	downloadCalled := false
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		downloadCalled = true
+		return "/home/user/.local/bin/engram", nil
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "engram",
+			Owner:         "Gentleman-Programming",
+			Repo:          "engram",
+			InstallMethod: update.InstallBinary, // should be InstallBinary after fix
+		},
+		LatestVersion: "0.5.0",
+	}
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
+
+	err := runStrategy(context.Background(), r, profile)
+	if err != nil {
+		t.Fatalf("runStrategy engram linux: unexpected error: %v", err)
+	}
+
+	if !downloadCalled {
+		t.Errorf("expected engramDownloadFn to be called for engram on Linux, but it was not")
+	}
+	if execCalled {
+		t.Errorf("exec (go install) should NOT be called for engram on Linux — use binary download")
+	}
+}
+
 // --- TestRunStrategy_ScriptUpgradeExecFailure ---
 
 func TestRunStrategy_ScriptUpgradeExecFailure(t *testing.T) {

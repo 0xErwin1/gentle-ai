@@ -26,9 +26,8 @@ var Tools = []ToolInfo{
 		Repo:          "engram",
 		DetectCmd:     []string{"engram", "version"},
 		VersionPrefix: "v",
-		// engram: brew on macOS/Linux-brew, go-install elsewhere.
-		InstallMethod: InstallGoInstall,
-		GoImportPath:  "github.com/Gentleman-Programming/engram/cmd/engram",
+		// engram: brew on macOS/Linux-brew, binary download elsewhere.
+		InstallMethod: InstallBinary,
 	},
 	{
 		Name:          "gga",

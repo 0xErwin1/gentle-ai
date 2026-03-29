@@ -36,7 +36,7 @@ func engramHint(profile system.PlatformProfile) string {
 	case "brew":
 		return "brew upgrade engram"
 	default:
-		return "go install github.com/Gentleman-Programming/engram/cmd/engram@latest"
+		return "gentle-ai upgrade (downloads pre-built binary)"
 	}
 }
 
