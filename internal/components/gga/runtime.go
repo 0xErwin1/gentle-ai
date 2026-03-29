@@ -24,8 +24,10 @@ func RuntimePRModePath(homeDir string) string {
 }
 
 // RuntimePS1Path returns the expected gga.ps1 path.
+// On Windows, the shim goes to ~/bin/ (same dir as the bash gga script,
+// already in PATH) so PowerShell finds it as a native command.
 func RuntimePS1Path(homeDir string) string {
-	return filepath.Join(RuntimeBinDir(homeDir), "gga.ps1")
+	return filepath.Join(homeDir, "bin", "gga.ps1")
 }
 
 // EnsureRuntimeAssets ensures critical gga runtime files are current.

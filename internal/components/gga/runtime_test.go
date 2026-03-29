@@ -117,8 +117,8 @@ func TestEnsureRuntimeAssetsIsNoOpWhenContentMatches(t *testing.T) {
 
 func TestRuntimeBinDir(t *testing.T) {
 	tests := []struct {
-		homeDir        string
-		wantSuffix     string
+		homeDir    string
+		wantSuffix string
 	}{
 		{"/home/user", filepath.Join(".local", "share", "gga", "bin")},
 		{"/root", filepath.Join(".local", "share", "gga", "bin")},
@@ -136,8 +136,8 @@ func TestRuntimePS1Path(t *testing.T) {
 		homeDir    string
 		wantSuffix string
 	}{
-		{"/home/user", filepath.Join(".local", "share", "gga", "bin", "gga.ps1")},
-		{"/root", filepath.Join(".local", "share", "gga", "bin", "gga.ps1")},
+		{"/home/user", filepath.Join("bin", "gga.ps1")},
+		{"/root", filepath.Join("bin", "gga.ps1")},
 	}
 	for _, tc := range tests {
 		got := RuntimePS1Path(tc.homeDir)
@@ -174,7 +174,7 @@ func TestEnsurePowerShellShimCreatesFileWhenMissing(t *testing.T) {
 func TestEnsurePowerShellShimOverwritesStaleShim(t *testing.T) {
 	home := t.TempDir()
 	path := RuntimePS1Path(home)
-	if err := os.MkdirAll(RuntimeBinDir(home), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 
