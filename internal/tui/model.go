@@ -324,7 +324,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			report := msg.Report
 			m.UpgradeReport = &report
 		}
-		return m, nil
+		m.UpdateResults = nil
+		m.UpdateCheckDone = false
+		return m, m.Init()
 	case SyncDoneMsg:
 		m.OperationRunning = false
 		m.SyncFilesChanged = msg.FilesChanged
@@ -339,7 +341,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			report := msg.Report
 			m.UpgradeReport = &report
 		}
-		return m, nil
+		m.UpdateResults = nil
+		m.UpdateCheckDone = false
+		return m, m.Init()
 	case tea.KeyMsg:
 		if m.Screen == ScreenRenameBackup {
 			return m.handleRenameInput(msg)

@@ -13,6 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/internal/update"
 	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
 )
 
@@ -688,6 +689,64 @@ func TestUpgradePhaseCompletedMsg_SetsErrAndKeepsRunning(t *testing.T) {
 	}
 	if state.UpgradeReport != nil {
 		t.Fatal("expected UpgradeReport=nil when upgrade phase fails")
+	}
+}
+
+// ─── UpgradeDoneMsg clears update state ─────────────────────────────────────
+
+// TestUpgradeDoneClearsUpdateResults verifies that after upgrade completes,
+// UpdateResults is cleared and UpdateCheckDone is reset so the welcome banner
+// no longer shows "Updates available".
+func TestUpgradeDoneClearsUpdateResults(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpgrade
+	m.OperationRunning = true
+	m.UpdateResults = []update.UpdateResult{
+		{Tool: update.ToolInfo{Name: "engram"}, InstalledVersion: "1.0.0", LatestVersion: "1.1.0", Status: update.UpdateAvailable},
+	}
+	m.UpdateCheckDone = true
+
+	report := upgrade.UpgradeReport{
+		Results: []upgrade.ToolUpgradeResult{
+			{ToolName: "engram", Status: upgrade.UpgradeSucceeded},
+		},
+	}
+	updated, _ := m.Update(UpgradeDoneMsg{Report: report})
+	state := updated.(Model)
+
+	if state.UpdateResults != nil {
+		t.Fatalf("expected UpdateResults=nil after UpgradeDoneMsg, got %v", state.UpdateResults)
+	}
+	if state.UpdateCheckDone {
+		t.Fatalf("expected UpdateCheckDone=false after UpgradeDoneMsg, got true")
+	}
+}
+
+// TestUpgradePhaseCompletedClearsUpdateResults verifies that after the upgrade
+// phase completes (in Upgrade+Sync flow), UpdateResults is cleared and
+// UpdateCheckDone is reset.
+func TestUpgradePhaseCompletedClearsUpdateResults(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpgradeSync
+	m.OperationRunning = true
+	m.UpdateResults = []update.UpdateResult{
+		{Tool: update.ToolInfo{Name: "engram"}, InstalledVersion: "1.0.0", LatestVersion: "1.1.0", Status: update.UpdateAvailable},
+	}
+	m.UpdateCheckDone = true
+
+	report := upgrade.UpgradeReport{
+		Results: []upgrade.ToolUpgradeResult{
+			{ToolName: "engram", Status: upgrade.UpgradeSucceeded},
+		},
+	}
+	updated, _ := m.Update(UpgradePhaseCompletedMsg{Report: report})
+	state := updated.(Model)
+
+	if state.UpdateResults != nil {
+		t.Fatalf("expected UpdateResults=nil after UpgradePhaseCompletedMsg, got %v", state.UpdateResults)
+	}
+	if state.UpdateCheckDone {
+		t.Fatalf("expected UpdateCheckDone=false after UpgradePhaseCompletedMsg, got true")
 	}
 }
 
