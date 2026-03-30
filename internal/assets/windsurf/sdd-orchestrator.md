@@ -57,6 +57,21 @@ Meta-commands (type directly — orchestrator handles them, will not appear in a
 
 `/sdd-new`, `/sdd-continue`, and `/sdd-ff` are meta-commands handled by YOU. Do NOT invoke them as skills. You execute the phase sequence yourself, pausing for user approval between phases.
 
+### SDD Init Guard (MANDATORY)
+
+Before executing ANY SDD command (`/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-explore`, `/sdd-apply`, `/sdd-verify`, `/sdd-archive`), check if `sdd-init` has been run for this project:
+
+1. Search Engram: `mem_search(query: "sdd-init/{project}", project: "{project}")`
+2. If found → init was done, proceed normally
+3. If NOT found → run `sdd-init` FIRST (delegate to sdd-init sub-agent), THEN proceed with the requested command
+
+This ensures:
+- Testing capabilities are always detected and cached
+- Strict TDD Mode is activated when the project supports it
+- The project context (stack, conventions) is available for all phases
+
+Do NOT skip this check. Do NOT ask the user — just run init silently if needed.
+
 Native Windsurf Workflow: `/sdd-new` is also available as a native Windsurf workflow installed by gentle-ai. It can be triggered from the Windsurf workflow panel.
 
 ### Execution Mode

@@ -90,33 +90,32 @@ Detect testing capabilities:
     └── Each: {command} or NOT AVAILABLE
 ```
 
-### Step 3: Ask STRICT TDD MODE
+### Step 3: Resolve STRICT TDD MODE
 
-**This step is interactive — present the choice to the user (via orchestrator).**
-
-Only offer Strict TDD Mode if a test runner was detected in Step 2.
+Determine whether Strict TDD Mode should be enabled. The resolution follows a priority chain — first match wins:
 
 ```
-IF test runner detected:
-├── Present choice to user:
-│   ┌─────────────────────────────────────────────────────────┐
-│   │  STRICT TDD MODE                                        │
-│   │                                                         │
-│   │  Enables mandatory TDD cycle (RED → GREEN → REFACTOR)   │
-│   │  for all implementation tasks during sdd-apply.         │
-│   │                                                         │
-│   │  ⚠️  Takes longer and uses more tokens                  │
-│   │  ✅  Better code quality, safety net, fewer bugs        │
-│   │                                                         │
-│   │  Enable Strict TDD Mode?  [YES] / [NO]                 │
-│   └─────────────────────────────────────────────────────────┘
-├── If user says YES → strict_tdd: true
-└── If user says NO  → strict_tdd: false
+1. Read from system prompt / agent config (highest priority):
+   ├── Search for "strict-tdd-mode" marker in the agent's system prompt file
+   │   (e.g., CLAUDE.md, GEMINI.md, .cursorrules, etc.)
+   ├── If found and says "enabled" → strict_tdd: true
+   ├── If found and says "disabled" → strict_tdd: false
+   └── This is the preference set by the user in the gentle-ai TUI
 
-IF no test runner detected:
-├── strict_tdd: false (cannot enable without test runner)
-└── Include NOTE in summary: "Strict TDD Mode unavailable — no test runner detected"
+2. If no marker found, check openspec config:
+   ├── Read openspec/config.yaml → strict_tdd field
+   └── If found → use that value
+
+3. If nothing found AND test runner was detected in Step 2:
+   ├── Default: strict_tdd: true (enable if the project CAN do TDD)
+   └── This ensures TDD is active even without gentle-ai TUI setup
+
+4. If no test runner detected:
+   ├── strict_tdd: false (cannot enable without test runner)
+   └── Include NOTE in summary: "Strict TDD Mode unavailable — no test runner detected"
 ```
+
+**Do NOT ask the user interactively.** The preference is resolved from existing config. If the user wants to change it, they run `gentle-ai sync` with the TUI or set `strict_tdd` in `openspec/config.yaml`.
 
 ### Step 4: Initialize Persistence Backend
 

@@ -75,6 +75,21 @@ Meta-commands (type directly — orchestrator handles them, won't appear in auto
 
 `/sdd-new`, `/sdd-continue`, and `/sdd-ff` are meta-commands handled by YOU. Do NOT invoke them as skills. You orchestrate the subagent sequence yourself.
 
+### SDD Init Guard (MANDATORY)
+
+Before executing ANY SDD command (`/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-explore`, `/sdd-apply`, `/sdd-verify`, `/sdd-archive`), check if `sdd-init` has been run for this project:
+
+1. Search Engram: `mem_search(query: "sdd-init/{project}", project: "{project}")`
+2. If found → init was done, proceed normally
+3. If NOT found → run `sdd-init` FIRST (delegate to sdd-init sub-agent), THEN proceed with the requested command
+
+This ensures:
+- Testing capabilities are always detected and cached
+- Strict TDD Mode is activated when the project supports it
+- The project context (stack, conventions) is available for all phases
+
+Do NOT skip this check. Do NOT ask the user — just run init silently if needed.
+
 ### Execution Mode
 
 When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, ASK which execution mode they prefer:
