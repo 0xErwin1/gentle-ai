@@ -16,11 +16,26 @@ Open your AI agent and start working. That's it.
 
 ---
 
-## Engram (Memory) -- Don't Touch It
+## Engram (Memory) -- Automatic, But You CAN Use It
 
-Engram is persistent memory for your AI agent. It saves decisions, discoveries, bug fixes, and context across sessions -- automatically. The agent manages all of it.
+Engram is persistent memory for your AI agent. It saves decisions, discoveries, bug fixes, and context across sessions -- automatically. The agent manages all of it via MCP tools (`mem_save`, `mem_search`, etc.).
 
-You never need to configure it, inspect it, or interact with it directly. If engram is working correctly, you won't even notice it's there. That's the point.
+**Day-to-day: you don't need to do anything.** The agent handles memory automatically.
+
+**But engram has useful tools when you need them:**
+
+| Command | When to use |
+|---------|-------------|
+| `engram tui` | Browse your memories visually -- search, filter, drill into observations |
+| `engram sync` | Export project memories to `.engram/` for git tracking. Run after significant work sessions |
+| `engram sync --import` | Import memories on another machine after cloning a repo with `.engram/` |
+| `engram projects list` | See all projects with observation counts |
+| `engram projects consolidate` | Fix project name drift (e.g., "my-app" vs "My-App" vs "my-app-frontend") |
+| `engram search <query>` | Quick memory search from the terminal |
+
+Since v1.11.0, engram auto-detects the project name from git remote at startup, normalizes to lowercase, and warns if it finds similar existing project names. This prevents the name drift issue where the same project ends up with multiple name variants.
+
+For full documentation: [github.com/Gentleman-Programming/engram](https://github.com/Gentleman-Programming/engram)
 
 ---
 
@@ -121,7 +136,7 @@ The less you think about gentle-ai after installing, the better it's working.
 | Run the installer, pick your agents and preset | Manually edit the generated config files |
 | Just start coding with your AI agent | Memorize SDD phases or commands |
 | Let the agent suggest SDD when a task is big enough | Force SDD on every small task |
-| Trust that engram is saving context for you | Dig into engram's storage or try to manage it |
+| Trust that engram is saving context for you | Dig into engram's storage unless you need `engram sync` or `engram tui` |
 | Run `/skill-registry` after installing or changing skills | Forget to update the registry after adding new skills |
 | Say "use sdd" if you know you want structured planning | Worry about which SDD phase comes next |
 | Re-run the installer to update or change your setup | Manually patch skill files or persona instructions |
