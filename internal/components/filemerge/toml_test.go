@@ -107,6 +107,19 @@ key = "val"
 	}
 }
 
+func TestUpsertCodexEngramBlockWindowsPath(t *testing.T) {
+	// Windows paths contain backslashes which must be escaped in TOML double-quoted strings.
+	// \U would be interpreted as a Unicode escape sequence → parse error.
+	windowsCmd := `C:\Users\PERC\AppData\Local\engram\bin\engram.exe`
+	result := UpsertCodexEngramBlock("", windowsCmd)
+
+	// TOML double-quoted string must have double backslashes.
+	want := `command = "C:\\Users\\PERC\\AppData\\Local\\engram\\bin\\engram.exe"`
+	if !strings.Contains(result, want) {
+		t.Fatalf("result missing properly escaped Windows path;\nwant substring: %s\ngot:\n%s", want, result)
+	}
+}
+
 // ─── UpsertTopLevelTOMLString ─────────────────────────────────────────────────
 
 func TestUpsertTopLevelTOMLString_NewKey(t *testing.T) {

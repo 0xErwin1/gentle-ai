@@ -547,6 +547,166 @@ func TestRunStrategy_ScriptUpgradeWindowsManualFallback(t *testing.T) {
 	}
 }
 
+// --- TestGGAScriptUpgradeUsesGitClone ---
+
+// TestGGAScriptUpgradeUsesGitClone verifies that ggaScriptUpgrade:
+// 1. First calls `git clone <repo-url> /tmp/gentleman-guardian-angel`
+// 2. Then calls `bash /tmp/gentleman-guardian-angel/install.sh`
+// — not `bash -c <script-content>` like the generic scriptUpgrade.
+func TestGGAScriptUpgradeUsesGitClone(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	type call struct {
+		name string
+		args []string
+	}
+	var calls []call
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, call{name: name, args: args})
+		return exec.Command("echo", "ok")
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gga",
+			Owner:         "Gentleman-Programming",
+			Repo:          "gentleman-guardian-angel",
+			InstallMethod: update.InstallScript,
+		},
+		LatestVersion: "2.8.0",
+	}
+
+	err := ggaScriptUpgrade(context.Background(), r)
+	if err != nil {
+		t.Fatalf("ggaScriptUpgrade: unexpected error: %v", err)
+	}
+
+	// Must have at least 2 exec calls.
+	if len(calls) < 2 {
+		t.Fatalf("expected at least 2 exec calls (git clone + bash install.sh), got %d: %v", len(calls), calls)
+	}
+
+	// First call must be `git clone`.
+	if calls[0].name != "git" {
+		t.Errorf("first exec call name = %q, want %q", calls[0].name, "git")
+	}
+	if len(calls[0].args) == 0 || calls[0].args[0] != "clone" {
+		t.Errorf("first exec args[0] = %q, want %q", calls[0].args[0], "clone")
+	}
+	// The clone URL must reference the correct repo.
+	cloneArgs := calls[0].args
+	foundRepoURL := false
+	for _, a := range cloneArgs {
+		if containsAny(a, "gentleman-guardian-angel") {
+			foundRepoURL = true
+			break
+		}
+	}
+	if !foundRepoURL {
+		t.Errorf("git clone args %v should include the repo URL (gentleman-guardian-angel)", cloneArgs)
+	}
+
+	// Second call must be `bash <path-to-install.sh>` (not bash -c <content>).
+	if calls[1].name != "bash" {
+		t.Errorf("second exec call name = %q, want %q", calls[1].name, "bash")
+	}
+	if len(calls[1].args) == 0 {
+		t.Fatalf("second exec call has no args")
+	}
+	installScriptArg := calls[1].args[0]
+	if !containsAny(installScriptArg, "install.sh") {
+		t.Errorf("bash arg = %q, want path containing install.sh", installScriptArg)
+	}
+	// Must NOT be bash -c (inline script content) — must be a file path.
+	if installScriptArg == "-c" {
+		t.Errorf("bash was called with -c (inline script), expected a file path to install.sh")
+	}
+}
+
+// --- TestGGAScriptUpgradeWindowsManualFallback ---
+
+// TestGGAScriptUpgradeWindowsManualFallback verifies that on Windows,
+// ggaScriptUpgrade returns a ManualFallbackError without calling exec.
+func TestGGAScriptUpgradeWindowsManualFallback(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	execCalled := false
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalled = true
+		return exec.Command("echo", "should not run")
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gga",
+			Owner:         "Gentleman-Programming",
+			Repo:          "gentleman-guardian-angel",
+			InstallMethod: update.InstallScript,
+		},
+		LatestVersion: "2.8.0",
+	}
+
+	err := ggaScriptUpgradeForOS(context.Background(), r, "windows")
+	if err == nil {
+		t.Errorf("expected ManualFallbackError for Windows, got nil")
+	}
+	var mfe *ManualFallbackError
+	if !errors.As(err, &mfe) {
+		t.Errorf("expected *ManualFallbackError, got %T: %v", err, err)
+	}
+	if execCalled {
+		t.Errorf("exec should NOT be called on Windows for ggaScriptUpgrade")
+	}
+}
+
+// --- TestRunStrategy_GGAUsesGitClone ---
+
+// TestRunStrategy_GGAUsesGitClone verifies that when runStrategy is called with
+// a GGA tool (InstallScript), it routes to ggaScriptUpgrade (git clone approach)
+// rather than the generic scriptUpgrade (bash -c <content>).
+func TestRunStrategy_GGAUsesGitClone(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	type call struct {
+		name string
+		args []string
+	}
+	var calls []call
+
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		calls = append(calls, call{name: name, args: args})
+		return exec.Command("echo", "ok")
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gga",
+			Owner:         "Gentleman-Programming",
+			Repo:          "gentleman-guardian-angel",
+			InstallMethod: update.InstallScript,
+		},
+		LatestVersion: "2.8.0",
+	}
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
+
+	err := runStrategy(context.Background(), r, profile)
+	if err != nil {
+		t.Fatalf("runStrategy GGA: unexpected error: %v", err)
+	}
+
+	// Must have used git clone (not bash -c).
+	if len(calls) < 2 {
+		t.Fatalf("expected at least 2 calls (git clone + bash), got %d: %v", len(calls), calls)
+	}
+	if calls[0].name != "git" || (len(calls[0].args) > 0 && calls[0].args[0] != "clone") {
+		t.Errorf("expected first call to be `git clone`, got: %q %v", calls[0].name, calls[0].args)
+	}
+}
+
 // --- TestInstallScriptURL ---
 
 func TestInstallScriptURL(t *testing.T) {
