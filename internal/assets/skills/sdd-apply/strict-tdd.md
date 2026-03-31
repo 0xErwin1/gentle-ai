@@ -50,16 +50,25 @@ FOR EACH TASK:
 │   │   └── ❌ Failed → fix the implementation, NOT the test
 │   └── GATE: Do NOT proceed until GREEN is confirmed by execution
 │
-├── 4. TRIANGULATE (when behavior has multiple cases)
-│   ├── Check: does the spec define multiple scenarios for this behavior?
-│   ├── If YES (multiple inputs/outputs/edge cases):
-│   │   ├── Add a second test case with DIFFERENT inputs/expected outputs
-│   │   ├── EXECUTE tests → if Fake It breaks (hardcoded no longer works):
-│   │   │   └── Generalize to real logic (this is the whole point)
-│   │   ├── Repeat until ALL spec scenarios for this task are covered
-│   │   └── Each triangulation pass: write test → run → fix implementation
-│   ├── If NO (single-case behavior, e.g., config setup, simple mapping):
-│   │   └── Skip triangulation, proceed to REFACTOR
+├── 4. TRIANGULATE (MANDATORY for most tasks)
+│   ├── DEFAULT: triangulation is REQUIRED. You need a compelling reason to skip it.
+│   ├── Add a second test case with DIFFERENT inputs/expected outputs
+│   ├── EXECUTE tests → if Fake It breaks (hardcoded no longer works):
+│   │   └── Generalize to real logic (this is the whole point)
+│   ├── Repeat until ALL spec scenarios for this task are covered
+│   ├── Each triangulation pass: write test → run → fix implementation
+│   ├── MINIMUM: at least 2 test cases per behavior (happy path + one edge case)
+│   │   ├── One test with data that produces a NON-EMPTY/NON-TRIVIAL result
+│   │   └── One test with data that exercises a DIFFERENT code path
+│   ├── WATCH OUT for GREEN that passes trivially:
+│   │   ├── If your test passes because the component/element isn't rendered → NOT a real GREEN
+│   │   ├── If your test passes because a loop iterates 0 times → NOT a real GREEN
+│   │   ├── If your test passes because the setup doesn't trigger the code path → NOT a real GREEN
+│   │   └── A real GREEN means: production code RAN and produced the expected output
+│   ├── Skip triangulation ONLY when ALL of these are true:
+│   │   ├── The task is purely structural (config file, constant definition, type export)
+│   │   ├── There is literally ONE possible output (no branching, no logic)
+│   │   └── You explicitly note "Triangulation skipped: {reason}" in the evidence table
 │   └── GATE: All spec scenarios for this task must have tests before REFACTOR
 │
 ├── 5. REFACTOR — Improve without changing behavior
@@ -193,11 +202,81 @@ When Strict TDD Mode is active, your return summary MUST include this section:
 - **TRIANGULATE**: Additional test cases added to force real logic. "➖ Single" if spec has only one scenario.
 - **REFACTOR**: Code improved with tests still passing. "➖ None needed" if code was already clean.
 
+## Assertion Quality Rules (MANDATORY)
+
+**Every assertion must verify REAL behavior.** A test that passes without exercising production logic is worse than no test — it gives false confidence.
+
+### Banned Assertion Patterns (NEVER write these)
+
+```
+# TRIVIAL ASSERTIONS — test proves nothing
+expect(true).toBe(true)              # ❌ Tautology
+expect(false).toBe(false)            # ❌ Tautology
+expect(1).toBe(1)                    # ❌ Tautology — no production code involved
+assert True                          # ❌ Always passes
+assert 1 == 1                        # ❌ Always passes
+
+# EMPTY COLLECTION ASSERTIONS without setup context
+expect(result).toEqual([])           # ❌ ONLY valid if you set up conditions for empty
+expect(result).toHaveLength(0)       # ❌ Same — why is it empty? Did production code run?
+assert len(result) == 0              # ❌ Same — prove the emptiness comes from real logic
+assert result == []                  # ❌ Same
+
+# TYPE-ONLY ASSERTIONS — proves existence, not behavior
+expect(result).toBeDefined()         # ❌ Alone is useless — WHAT is the value?
+expect(result).not.toBeNull()        # ❌ Alone is useless — assert the actual value
+expect(typeof result).toBe('object') # ❌ Alone is useless — what does the object contain?
+assert result is not None            # ❌ Alone — assert what result actually IS
+
+# GHOST LOOP — assertion inside a loop that iterates 0 times
+const items = screen.queryAllByTestId("item");  // returns []
+for (const item of items) {
+  expect(item).toHaveTextContent("value");       # ❌ NEVER EXECUTES — loop body is dead code
+}
+# FIX: assert the collection is non-empty FIRST, or set up data so it IS non-empty:
+expect(items).toHaveLength(3);                   # ✅ Proves items exist
+for (const item of items) { ... }                # ✅ Now the loop actually runs
+
+# INCOMPLETE TDD CYCLE — GREEN without TRIANGULATE
+# If your GREEN test passes because the setup doesn't exercise the code path,
+# you are NOT done. You MUST triangulate with a setup that DOES exercise it.
+# Example: testing "search doesn't update until Enter" but the component
+# that receives the search is never rendered → the test proves nothing.
+# FIX: add a test where the component IS rendered and verify the behavior.
+```
+
+### What Makes a REAL Assertion
+
+Every test assertion must satisfy ALL of these:
+1. **Calls production code** — the test invokes a function, method, or component from the implementation
+2. **Asserts a specific output** — compares against a concrete expected value derived from the spec
+3. **Would FAIL if the production code were wrong** — if you change the implementation logic, THIS test breaks
+
+```
+# ✅ REAL assertions — production code determines the result
+expect(calculateDiscount(100, 10)).toBe(10)       # Real input → real output
+expect(screen.getByText('Welcome, John')).toBeInTheDocument()  # Rendered from data
+assert result[0].status == "FAIL"                  # Specific finding from check execution
+assert response.status_code == 403                 # Real HTTP response from the endpoint
+expect(result).toHaveLength(3)                     # AND you set up exactly 3 items
+```
+
+### Empty Collection Rule
+
+`expect(result).toEqual([])` or `assert len(result) == 0` is ONLY valid when:
+1. You set up a specific precondition that SHOULD produce an empty result (e.g., no matching records)
+2. The production code actually ran and filtered/processed data to arrive at empty
+3. A companion test with different setup produces a NON-EMPTY result (triangulation)
+
+If you cannot explain WHY the result is empty based on setup → the assertion is trivial.
+
 ## Rules (Strict TDD specific)
 
 - NEVER write production code before writing its test — this is the ONE rule that cannot be broken
 - NEVER skip the GREEN execution gate — you MUST run tests and confirm they pass
 - NEVER skip triangulation when the spec defines multiple scenarios — hardcoded Fake It must be forced out
+- NEVER write trivial assertions (see Banned Assertion Patterns above) — they are WORSE than no test
+- ALWAYS verify that every assertion CALLS production code and asserts a SPECIFIC expected value
 - ALWAYS run the Safety Net before modifying existing files — protect what already works
 - ALWAYS report the TDD Cycle Evidence table — the verify phase will check it
 - If a test runner execution fails for infrastructure reasons (not test failures), report as "Blocked" and continue to next task
