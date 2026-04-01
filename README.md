@@ -94,6 +94,13 @@ scoop bucket add gentleman https://github.com/Gentleman-Programming/scoop-bucket
 scoop install gentle-ai
 ```
 
+**Migrating from PowerShell installer to Scoop?** Remove the old binary first:
+
+```powershell
+Remove-Item "$env:LOCALAPPDATA\gentle-ai" -Recurse -Force
+# Then install via Scoop as shown above
+```
+
 ### Windows (PowerShell — alternative)
 
 ```powershell
