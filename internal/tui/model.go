@@ -176,6 +176,10 @@ type Model struct {
 	// Nil on success, non-nil on failure. Displayed on ScreenDeleteResult.
 	DeleteErr error
 
+	// PinErr holds the error from the most recent pin/unpin attempt.
+	// Nil on success, non-nil on failure. Shown inline on ScreenBackups.
+	PinErr error
+
 	// BackupScroll is the scroll offset for the backup list.
 	BackupScroll int
 
@@ -197,6 +201,10 @@ type Model struct {
 
 	// RenameBackupFn is called to rename (update description of) a backup.
 	RenameBackupFn RenameBackupFunc
+
+	// TogglePinFn toggles the Pinned field of a backup manifest.
+	// When nil, pin/unpin is a no-op.
+	TogglePinFn func(manifest backup.Manifest) error
 
 	// ListBackupsFn refreshes the backup list (e.g. after a restore).
 	// When nil, the backup list is not refreshed automatically.
@@ -479,7 +487,7 @@ func (m Model) View() string {
 			AvailableUpdates:    extractAvailableUpdates(m.UpdateResults),
 		})
 	case ScreenBackups:
-		return screens.RenderBackups(m.Backups, m.Cursor, m.BackupScroll)
+		return screens.RenderBackups(m.Backups, m.Cursor, m.BackupScroll, m.PinErr)
 	case ScreenRestoreConfirm:
 		return screens.RenderRestoreConfirm(m.SelectedBackup, m.Cursor)
 	case ScreenRestoreResult:
@@ -619,6 +627,23 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.Screen == ScreenBackups && m.Cursor < len(m.Backups) {
 			m.SelectedBackup = m.Backups[m.Cursor]
 			m.setScreen(ScreenDeleteConfirm)
+			return m, nil
+		}
+	case "p":
+		// Pin/unpin: only when on ScreenBackups and cursor is on a backup item (not "Back").
+		if m.Screen == ScreenBackups && m.Cursor < len(m.Backups) {
+			// Clear any stale error from a previous attempt before trying again.
+			m.PinErr = nil
+			if m.TogglePinFn != nil {
+				if err := m.TogglePinFn(m.Backups[m.Cursor]); err != nil {
+					// Pin failed — surface the error inline; leave list unchanged.
+					m.PinErr = err
+					return m, nil
+				}
+			}
+			if m.ListBackupsFn != nil {
+				m.Backups = m.ListBackupsFn()
+			}
 			return m, nil
 		}
 	case "enter":
@@ -1504,6 +1529,7 @@ func (m *Model) setScreen(next Screen) {
 	m.Cursor = 0
 	if next == ScreenBackups {
 		m.BackupScroll = 0
+		m.PinErr = nil
 	}
 }
 

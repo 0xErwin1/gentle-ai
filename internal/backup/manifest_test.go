@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -84,7 +85,7 @@ func TestManifestDisplayLabel(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.manifest.DisplayLabel()
-			if !containsStr(got, tt.contains) {
+			if !strings.Contains(got, tt.contains) {
 				t.Errorf("DisplayLabel() = %q, want string containing %q", got, tt.contains)
 			}
 		})
@@ -153,7 +154,7 @@ func TestOldManifestRemainsReadable(t *testing.T) {
 
 	// Fallback label must work without panicking.
 	label := manifest.DisplayLabel()
-	if !containsStr(label, "unknown source") {
+	if !strings.Contains(label, "unknown source") {
 		t.Errorf("DisplayLabel() = %q, want string containing 'unknown source'", label)
 	}
 }
@@ -176,10 +177,10 @@ func TestNewManifestOmitsEmptySourceFromJSON(t *testing.T) {
 	}
 
 	jsonStr := string(data)
-	if containsStr(jsonStr, `"source"`) {
+	if strings.Contains(jsonStr, `"source"`) {
 		t.Errorf("JSON contains 'source' field but should omit it when empty: %s", jsonStr)
 	}
-	if containsStr(jsonStr, `"description"`) {
+	if strings.Contains(jsonStr, `"description"`) {
 		t.Errorf("JSON contains 'description' field but should omit it when empty: %s", jsonStr)
 	}
 }
@@ -220,7 +221,7 @@ func TestManifestFileCountField(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MarshalIndent() error = %v", err)
 		}
-		if containsStr(string(data), `"file_count"`) {
+		if strings.Contains(string(data), `"file_count"`) {
 			t.Errorf("JSON contains 'file_count' but should omit it when zero: %s", string(data))
 		}
 	})
@@ -283,7 +284,7 @@ func TestManifestCreatedByVersionField(t *testing.T) {
 		if err != nil {
 			t.Fatalf("MarshalIndent() error = %v", err)
 		}
-		if containsStr(string(data), `"created_by_version"`) {
+		if strings.Contains(string(data), `"created_by_version"`) {
 			t.Errorf("JSON contains 'created_by_version' but should omit it when empty: %s", string(data))
 		}
 	})
@@ -345,10 +346,10 @@ func TestManifestDisplayLabelIncludesFileCount(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.manifest.DisplayLabel()
-			if tt.wantCount != "" && !containsStr(got, tt.wantCount) {
+			if tt.wantCount != "" && !strings.Contains(got, tt.wantCount) {
 				t.Errorf("DisplayLabel() = %q, want string containing %q", got, tt.wantCount)
 			}
-			if tt.wantAbsent != "" && containsStr(got, tt.wantAbsent) {
+			if tt.wantAbsent != "" && strings.Contains(got, tt.wantAbsent) {
 				t.Errorf("DisplayLabel() = %q, must NOT contain %q when FileCount=0", got, tt.wantAbsent)
 			}
 		})
@@ -515,14 +516,284 @@ func TestRenameBackup_UpdatesManifestFile(t *testing.T) {
 	}
 }
 
-func containsStr(s, sub string) bool {
-	if len(sub) == 0 {
-		return true
+// TestDisplayLabelPin verifies that DisplayLabel prepends "[pinned]" when
+// Manifest.Pinned is true, and produces no pin indicator when Pinned is false.
+func TestDisplayLabelPin(t *testing.T) {
+	ts := time.Date(2026, 3, 22, 15, 4, 5, 0, time.UTC)
+
+	tests := []struct {
+		name       string
+		manifest   Manifest
+		wantPrefix string // must be present in label
+		wantAbsent string // must NOT be present
+	}{
+		{
+			name: "pinned shows [pinned] prefix",
+			manifest: Manifest{
+				ID:        "pinned-backup",
+				CreatedAt: ts,
+				Source:    BackupSourceInstall,
+				FileCount: 5,
+				Pinned:    true,
+			},
+			wantPrefix: "[pinned]",
+		},
+		{
+			name: "unpinned shows no pin indicator",
+			manifest: Manifest{
+				ID:        "unpinned-backup",
+				CreatedAt: ts,
+				Source:    BackupSourceInstall,
+				FileCount: 5,
+				Pinned:    false,
+			},
+			wantAbsent: "[pinned]",
+		},
+		{
+			name: "pinned with zero FileCount still shows [pinned]",
+			manifest: Manifest{
+				ID:        "pinned-no-count",
+				CreatedAt: ts,
+				Source:    BackupSourceSync,
+				FileCount: 0,
+				Pinned:    true,
+			},
+			wantPrefix: "[pinned]",
+			wantAbsent: "files",
+		},
+		{
+			name: "pinned label still includes source",
+			manifest: Manifest{
+				ID:        "pinned-with-source",
+				CreatedAt: ts,
+				Source:    BackupSourceUpgrade,
+				Pinned:    true,
+			},
+			wantPrefix: "[pinned]",
+		},
 	}
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.manifest.DisplayLabel()
+			if tt.wantPrefix != "" && !strings.Contains(got, tt.wantPrefix) {
+				t.Errorf("DisplayLabel() = %q, want string containing %q", got, tt.wantPrefix)
+			}
+			if tt.wantAbsent != "" && strings.Contains(got, tt.wantAbsent) {
+				t.Errorf("DisplayLabel() = %q, must NOT contain %q", got, tt.wantAbsent)
+			}
+		})
+	}
+}
+
+// TestTogglePin_PinsUnpinnedBackup verifies that TogglePin sets Pinned=true
+// when the manifest currently has Pinned=false.
+func TestTogglePin_PinsUnpinnedBackup(t *testing.T) {
+	dir := t.TempDir()
+	backupDir := filepath.Join(dir, "backup-toggle-01")
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	m := Manifest{
+		ID:      "backup-toggle-01",
+		RootDir: backupDir,
+		Pinned:  false,
+		Entries: []ManifestEntry{},
+	}
+	if err := WriteManifest(filepath.Join(backupDir, ManifestFilename), m); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	if err := TogglePin(m); err != nil {
+		t.Fatalf("TogglePin() error = %v", err)
+	}
+
+	// Re-read manifest from disk and verify Pinned is now true.
+	updated, err := ReadManifest(filepath.Join(backupDir, ManifestFilename))
+	if err != nil {
+		t.Fatalf("ReadManifest() error = %v", err)
+	}
+	if !updated.Pinned {
+		t.Errorf("Pinned = %v, want true after TogglePin on unpinned backup", updated.Pinned)
+	}
+}
+
+// TestTogglePin_UnpinsPinnedBackup verifies that TogglePin sets Pinned=false
+// when the manifest currently has Pinned=true.
+func TestTogglePin_UnpinsPinnedBackup(t *testing.T) {
+	dir := t.TempDir()
+	backupDir := filepath.Join(dir, "backup-toggle-02")
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	m := Manifest{
+		ID:      "backup-toggle-02",
+		RootDir: backupDir,
+		Pinned:  true,
+		Entries: []ManifestEntry{},
+	}
+	if err := WriteManifest(filepath.Join(backupDir, ManifestFilename), m); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	if err := TogglePin(m); err != nil {
+		t.Fatalf("TogglePin() error = %v", err)
+	}
+
+	updated, err := ReadManifest(filepath.Join(backupDir, ManifestFilename))
+	if err != nil {
+		t.Fatalf("ReadManifest() error = %v", err)
+	}
+	if updated.Pinned {
+		t.Errorf("Pinned = %v, want false after TogglePin on pinned backup", updated.Pinned)
+	}
+}
+
+// TestTogglePin_PersistsToManifest verifies that TogglePin persists the Pinned
+// change to manifest.json on disk (toggle twice → back to original value).
+func TestTogglePin_PersistsToManifest(t *testing.T) {
+	dir := t.TempDir()
+	backupDir := filepath.Join(dir, "backup-toggle-03")
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	m := Manifest{
+		ID:      "backup-toggle-03",
+		RootDir: backupDir,
+		Pinned:  false,
+		Entries: []ManifestEntry{},
+	}
+	manifestPath := filepath.Join(backupDir, ManifestFilename)
+	if err := WriteManifest(manifestPath, m); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	// First toggle: false → true.
+	if err := TogglePin(m); err != nil {
+		t.Fatalf("first TogglePin() error = %v", err)
+	}
+	after1, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("ReadManifest after 1st toggle: %v", err)
+	}
+	if !after1.Pinned {
+		t.Errorf("after 1st toggle: Pinned = %v, want true", after1.Pinned)
+	}
+
+	// Second toggle: true → false (using the updated manifest).
+	if err := TogglePin(after1); err != nil {
+		t.Fatalf("second TogglePin() error = %v", err)
+	}
+	after2, err := ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("ReadManifest after 2nd toggle: %v", err)
+	}
+	if after2.Pinned {
+		t.Errorf("after 2nd toggle: Pinned = %v, want false", after2.Pinned)
+	}
+}
+
+// TestTogglePin_ErrorOnEmptyRootDir verifies that TogglePin returns an error
+// when the manifest has an empty RootDir (cannot determine where to write).
+func TestTogglePin_ErrorOnEmptyRootDir(t *testing.T) {
+	m := Manifest{
+		ID:     "no-root",
+		Pinned: false,
+		// RootDir intentionally empty
+	}
+
+	err := TogglePin(m)
+	if err == nil {
+		t.Fatal("TogglePin() should return error when RootDir is empty")
+	}
+}
+
+// TestManifestNewFields verifies the three new Manifest fields (Pinned,
+// Compressed, Checksum) introduced for the retention-policy feature:
+//   - Old manifests (without these fields) parse with zero values (backward compat)
+//   - Fields with non-zero values round-trip via JSON
+//   - omitempty: zero-value fields are absent from serialized JSON
+func TestManifestNewFields(t *testing.T) {
+	t.Run("old JSON without new fields parses with zero values", func(t *testing.T) {
+		oldJSON := `{
+  "id": "old-no-new-fields",
+  "created_at": "2026-03-22T15:04:05Z",
+  "root_dir": "/home/user/.gentle-ai/backups/old",
+  "entries": []
+}`
+		dir := t.TempDir()
+		path := filepath.Join(dir, "manifest.json")
+		if err := os.WriteFile(path, []byte(oldJSON), 0o644); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
 		}
-	}
-	return false
+		m, err := ReadManifest(path)
+		if err != nil {
+			t.Fatalf("ReadManifest() error = %v", err)
+		}
+		if m.Pinned {
+			t.Errorf("Pinned = %v, want false for old manifest", m.Pinned)
+		}
+		if m.Compressed {
+			t.Errorf("Compressed = %v, want false for old manifest", m.Compressed)
+		}
+		if m.Checksum != "" {
+			t.Errorf("Checksum = %q, want empty string for old manifest", m.Checksum)
+		}
+	})
+
+	t.Run("non-zero new fields round-trip via JSON", func(t *testing.T) {
+		original := Manifest{
+			ID:         "test-new-fields",
+			CreatedAt:  time.Date(2026, 3, 22, 15, 4, 5, 0, time.UTC),
+			RootDir:    "/tmp/test",
+			Pinned:     true,
+			Compressed: true,
+			Checksum:   "abc123def456",
+			Entries:    []ManifestEntry{},
+		}
+		data, err := json.MarshalIndent(original, "", "  ")
+		if err != nil {
+			t.Fatalf("MarshalIndent() error = %v", err)
+		}
+		var decoded Manifest
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatalf("Unmarshal() error = %v", err)
+		}
+		if !decoded.Pinned {
+			t.Errorf("Pinned = %v, want true", decoded.Pinned)
+		}
+		if !decoded.Compressed {
+			t.Errorf("Compressed = %v, want true", decoded.Compressed)
+		}
+		if decoded.Checksum != "abc123def456" {
+			t.Errorf("Checksum = %q, want %q", decoded.Checksum, "abc123def456")
+		}
+	})
+
+	t.Run("zero-value new fields are omitted from JSON (omitempty)", func(t *testing.T) {
+		m := Manifest{
+			ID:        "test-omitempty",
+			CreatedAt: time.Now().UTC(),
+			RootDir:   "/tmp",
+			Entries:   []ManifestEntry{},
+			// Pinned, Compressed, Checksum intentionally zero
+		}
+		data, err := json.MarshalIndent(m, "", "  ")
+		if err != nil {
+			t.Fatalf("MarshalIndent() error = %v", err)
+		}
+		jsonStr := string(data)
+		if strings.Contains(jsonStr, `"pinned"`) {
+			t.Errorf("JSON contains 'pinned' but should omit it when false: %s", jsonStr)
+		}
+		if strings.Contains(jsonStr, `"compressed"`) {
+			t.Errorf("JSON contains 'compressed' but should omit it when false: %s", jsonStr)
+		}
+		if strings.Contains(jsonStr, `"checksum"`) {
+			t.Errorf("JSON contains 'checksum' but should omit it when empty: %s", jsonStr)
+		}
+	})
 }

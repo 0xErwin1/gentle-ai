@@ -2501,3 +2501,172 @@ func TestCustomSkillPickerBackGoesToStrictTDD(t *testing.T) {
 		t.Fatalf("screen = %v, want ScreenStrictTDD (not SDDMode) after Back on SkillPicker (custom preset + OpenCode + SDD + Skills)", state.Screen)
 	}
 }
+
+// ─── T_BACKUP_PIN: Pin key tests ───────────────────────────────────────────
+
+// TestPinKeyTogglesPinnedBackup verifies that pressing "p" on a backup item
+// calls TogglePinFn with the correct manifest.
+func TestPinKeyTogglesPinnedBackup(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenBackups
+	m.Backups = makeBackupList(3)
+	m.Cursor = 1
+
+	var pinnedManifest backup.Manifest
+	m.TogglePinFn = func(manifest backup.Manifest) error {
+		pinnedManifest = manifest
+		return nil
+	}
+	m.ListBackupsFn = func() []backup.Manifest {
+		return makeBackupList(3)
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	state := updated.(Model)
+
+	if pinnedManifest.ID != "backup-01" {
+		t.Fatalf("TogglePinFn called with ID %q, want %q", pinnedManifest.ID, "backup-01")
+	}
+	// Must stay on ScreenBackups (no confirmation screen for pin).
+	if state.Screen != ScreenBackups {
+		t.Fatalf("screen = %v, want ScreenBackups after pin toggle", state.Screen)
+	}
+}
+
+// TestPinKeyOnBackOption verifies that pressing "p" when the cursor is on the
+// "Back" option does nothing (no TogglePinFn call, screen unchanged).
+func TestPinKeyOnBackOption(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenBackups
+	m.Backups = makeBackupList(3)
+	m.Cursor = 3 // cursor on "Back" item (index == len(backups))
+
+	toggleCalled := false
+	m.TogglePinFn = func(manifest backup.Manifest) error {
+		toggleCalled = true
+		return nil
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	state := updated.(Model)
+
+	if toggleCalled {
+		t.Fatalf("TogglePinFn should NOT be called when cursor is on Back item")
+	}
+	if state.Screen != ScreenBackups {
+		t.Fatalf("screen = %v, want ScreenBackups (unchanged)", state.Screen)
+	}
+}
+
+// TestPinKeyNilFnIsNoop verifies that pressing "p" when TogglePinFn is nil
+// does not panic and leaves the screen unchanged.
+func TestPinKeyNilFnIsNoop(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenBackups
+	m.Backups = makeBackupList(2)
+	m.Cursor = 0
+	// TogglePinFn intentionally left nil.
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	state := updated.(Model)
+
+	if state.Screen != ScreenBackups {
+		t.Fatalf("screen = %v, want ScreenBackups (nil TogglePinFn should be a no-op)", state.Screen)
+	}
+}
+
+// TestPinKeyRefreshesBackupList verifies that after a successful pin toggle,
+// the backup list is refreshed via ListBackupsFn.
+func TestPinKeyRefreshesBackupList(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenBackups
+	m.Backups = makeBackupList(3)
+	m.Cursor = 0
+
+	m.TogglePinFn = func(manifest backup.Manifest) error {
+		return nil
+	}
+
+	refreshCalled := false
+	refreshedList := makeBackupList(3)
+	refreshedList[0].Pinned = true
+	m.ListBackupsFn = func() []backup.Manifest {
+		refreshCalled = true
+		return refreshedList
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	state := updated.(Model)
+
+	if !refreshCalled {
+		t.Fatalf("ListBackupsFn was not called after pin toggle")
+	}
+	if !state.Backups[0].Pinned {
+		t.Fatalf("Backups[0].Pinned = false after refresh, want true")
+	}
+}
+
+// TestPinKeyError_ListNotRefreshed verifies that when TogglePinFn returns an
+// error, ListBackupsFn is NOT called — the list stays unchanged and PinErr is set.
+func TestPinKeyError_ListNotRefreshed(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenBackups
+	originalList := makeBackupList(3)
+	m.Backups = originalList
+	m.Cursor = 0
+
+	pinErr := fmt.Errorf("write failed: permission denied")
+	m.TogglePinFn = func(manifest backup.Manifest) error {
+		return pinErr
+	}
+
+	listRefreshCalled := false
+	m.ListBackupsFn = func() []backup.Manifest {
+		listRefreshCalled = true
+		return makeBackupList(3)
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	state := updated.(Model)
+
+	if listRefreshCalled {
+		t.Fatalf("ListBackupsFn should NOT be called when TogglePinFn returns an error")
+	}
+	if len(state.Backups) != len(originalList) {
+		t.Fatalf("Backups list changed after pin error; got %d items, want %d", len(state.Backups), len(originalList))
+	}
+	if state.PinErr == nil {
+		t.Fatalf("PinErr should be set after TogglePinFn error, got nil")
+	}
+}
+
+// TestPinErrClearedOnScreenReentry verifies that PinErr is cleared when the user
+// navigates away from ScreenBackups and then returns to it.
+func TestPinErrClearedOnScreenReentry(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenBackups
+	m.Backups = makeBackupList(3)
+	m.Cursor = 0
+	// Seed a stale PinErr from a previous attempt.
+	m.PinErr = fmt.Errorf("write failed: permission denied")
+
+	// Navigate away: Esc from ScreenBackups returns to ScreenWelcome.
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	afterEsc := updated.(Model)
+	if afterEsc.Screen != ScreenWelcome {
+		t.Fatalf("Esc from ScreenBackups: screen = %v, want ScreenWelcome", afterEsc.Screen)
+	}
+
+	// Navigate back to ScreenBackups (cursor 5 on Welcome → enter).
+	afterEsc.Cursor = 5
+	updated2, _ := afterEsc.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	afterReturn := updated2.(Model)
+	if afterReturn.Screen != ScreenBackups {
+		t.Fatalf("Enter cursor=5 from ScreenWelcome: screen = %v, want ScreenBackups", afterReturn.Screen)
+	}
+
+	// PinErr must be cleared on re-entry.
+	if afterReturn.PinErr != nil {
+		t.Fatalf("PinErr should be nil after returning to ScreenBackups, got: %v", afterReturn.PinErr)
+	}
+}

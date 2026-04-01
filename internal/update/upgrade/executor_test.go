@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
@@ -907,4 +909,149 @@ func containsSubstring(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// --- Dedup + Prune wiring tests (BKUP-T29) ---
+
+// TestExecute_SkipsDuplicateUpgradeBackup verifies that when two consecutive
+// Execute calls see identical config files, the second does not create a new
+// backup directory (dedup skips the snapshot).
+func TestExecute_SkipsDuplicateUpgradeBackup(t *testing.T) {
+	origExecCommand := execCommand
+	origSnapshotCreator := snapshotCreator
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		snapshotCreator = origSnapshotCreator
+	})
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("echo", "ok")
+	}
+	// Use real snapshotCreator for dedup check to work.
+	snapshotCreator = func(snapshotDir string, paths []string) (backup.Manifest, error) {
+		return backup.NewSnapshotter().Create(snapshotDir, paths)
+	}
+
+	homeDir := t.TempDir()
+	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+
+	// Create a config file so snapshot has real content.
+	configFile := filepath.Join(homeDir, ".claude", "CLAUDE.md")
+	if err := os.MkdirAll(filepath.Dir(configFile), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(configFile, []byte("# Config"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	results := []update.UpdateResult{
+		makeResult("engram", update.UpdateAvailable, "0.3.0", "0.4.0", update.InstallGoInstall),
+	}
+	results[0].Tool.GoImportPath = "github.com/Gentleman-Programming/engram/cmd/engram"
+
+	// First execute — should create a backup.
+	report1 := Execute(context.Background(), results, linuxProfile(), homeDir, false)
+	if report1.BackupID == "" {
+		t.Fatalf("first Execute: BackupID must be non-empty (backup created)")
+	}
+
+	entriesAfterFirst, err := os.ReadDir(backupRoot)
+	if err != nil {
+		t.Fatalf("ReadDir after first Execute: %v", err)
+	}
+	countAfterFirst := len(entriesAfterFirst)
+
+	// Second execute with identical config — duplicate, no new backup.
+	report2 := Execute(context.Background(), results, linuxProfile(), homeDir, false)
+
+	entriesAfterSecond, err := os.ReadDir(backupRoot)
+	if err != nil {
+		t.Fatalf("ReadDir after second Execute: %v", err)
+	}
+	countAfterSecond := len(entriesAfterSecond)
+
+	// The second execute must not have added a new backup directory.
+	if countAfterSecond != countAfterFirst {
+		t.Errorf("second Execute created a new backup despite identical config: before=%d, after=%d", countAfterFirst, countAfterSecond)
+	}
+	_ = report2
+}
+
+// TestExecute_PrunesOldBackupsAfterUpgrade verifies that after a successful
+// upgrade backup, old unpinned backups beyond DefaultRetentionCount are pruned
+// (BKUP-T29).
+func TestExecute_PrunesOldBackupsAfterUpgrade(t *testing.T) {
+	origExecCommand := execCommand
+	origSnapshotCreator := snapshotCreator
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		snapshotCreator = origSnapshotCreator
+	})
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("echo", "ok")
+	}
+	snapshotCreator = func(snapshotDir string, paths []string) (backup.Manifest, error) {
+		return backup.NewSnapshotter().Create(snapshotDir, paths)
+	}
+
+	homeDir := t.TempDir()
+	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	if err := os.MkdirAll(backupRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll backupRoot: %v", err)
+	}
+
+	// Pre-populate backupRoot with DefaultRetentionCount existing backups
+	// by writing manifest files directly (no real snapshot needed for Prune).
+	for i := 0; i < backup.DefaultRetentionCount; i++ {
+		dirName := filepath.Join(backupRoot, fmt.Sprintf("old-backup-%03d", i))
+		if err := os.MkdirAll(dirName, 0o755); err != nil {
+			t.Fatalf("MkdirAll old backup %d: %v", i, err)
+		}
+		// Write a minimal manifest so listManifests can parse it.
+		m := backup.Manifest{
+			ID:        fmt.Sprintf("old-backup-%03d", i),
+			CreatedAt: time.Now().Add(-time.Duration(backup.DefaultRetentionCount-i) * time.Minute),
+			RootDir:   dirName,
+		}
+		manifestPath := filepath.Join(dirName, backup.ManifestFilename)
+		if err := backup.WriteManifest(manifestPath, m); err != nil {
+			t.Fatalf("WriteManifest old backup %d: %v", i, err)
+		}
+	}
+
+	// Verify we have exactly DefaultRetentionCount backups pre-existing.
+	before, _ := os.ReadDir(backupRoot)
+	if len(before) != backup.DefaultRetentionCount {
+		t.Fatalf("expected %d pre-existing backups, got %d", backup.DefaultRetentionCount, len(before))
+	}
+
+	// Create a config file to back up (must differ from any existing for non-dedup path).
+	configFile := filepath.Join(homeDir, ".claude", "CLAUDE.md")
+	if err := os.MkdirAll(filepath.Dir(configFile), 0o755); err != nil {
+		t.Fatalf("MkdirAll config: %v", err)
+	}
+	if err := os.WriteFile(configFile, []byte("# New Config"), 0o644); err != nil {
+		t.Fatalf("WriteFile config: %v", err)
+	}
+
+	results := []update.UpdateResult{
+		makeResult("engram", update.UpdateAvailable, "0.3.0", "0.4.0", update.InstallGoInstall),
+	}
+	results[0].Tool.GoImportPath = "github.com/Gentleman-Programming/engram/cmd/engram"
+
+	// Execute — this creates one new backup, then prune should trim to DefaultRetentionCount.
+	report := Execute(context.Background(), results, linuxProfile(), homeDir, false)
+	if report.BackupID == "" {
+		t.Fatalf("Execute: BackupID must be set (backup created)")
+	}
+
+	after, err := os.ReadDir(backupRoot)
+	if err != nil {
+		t.Fatalf("ReadDir backupRoot after Execute: %v", err)
+	}
+
+	// After creating 1 new backup, total was DefaultRetentionCount+1, so prune
+	// must have deleted 1 oldest, leaving exactly DefaultRetentionCount.
+	if len(after) != backup.DefaultRetentionCount {
+		t.Errorf("after Execute+prune: expected %d backups, got %d", backup.DefaultRetentionCount, len(after))
+	}
 }

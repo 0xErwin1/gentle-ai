@@ -89,6 +89,9 @@ func RunArgs(args []string, stdout io.Writer) error {
 		m.RenameBackupFn = func(manifest backup.Manifest, newDesc string) error {
 			return backup.RenameBackup(manifest, newDesc)
 		}
+		m.TogglePinFn = func(manifest backup.Manifest) error {
+			return backup.TogglePin(manifest)
+		}
 		m.ListBackupsFn = ListBackups
 		m.Backups = ListBackups()
 		m.UpgradeFn = tuiUpgrade(profile, homeDir)

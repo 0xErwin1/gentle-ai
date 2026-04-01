@@ -207,6 +207,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			snapshotDir: filepath.Join(r.backupRoot, time.Now().UTC().Format("20060102150405.000000000")),
 			targets:     targets,
 			state:       r.state,
+			backupRoot:  r.backupRoot,
 			source:      backup.BackupSourceSync,
 			description: "pre-sync snapshot",
 			appVersion:  AppVersion,

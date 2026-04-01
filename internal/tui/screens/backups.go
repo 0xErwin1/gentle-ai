@@ -14,7 +14,8 @@ const BackupMaxVisible = 10
 
 // RenderBackups renders the backup selection screen with scroll support.
 // It uses manifest.DisplayLabel() to show source + timestamp for each backup.
-func RenderBackups(backups []backup.Manifest, cursor int, scrollOffset int) string {
+// pinErr, when non-nil, is shown as an inline error message below the list.
+func RenderBackups(backups []backup.Manifest, cursor int, scrollOffset int, pinErr error) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Backup Management"))
@@ -66,7 +67,12 @@ func RenderBackups(backups []backup.Manifest, cursor int, scrollOffset int) stri
 	b.WriteString("\n")
 	b.WriteString(renderOptions([]string{"Back"}, cursor-len(backups)))
 	b.WriteString("\n")
-	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: restore • r: rename • d: delete • esc: back"))
+	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: restore • r: rename • d: delete • p: pin/unpin • esc: back"))
+
+	if pinErr != nil {
+		b.WriteString("\n")
+		b.WriteString(styles.ErrorStyle.Render("pin error: " + pinErr.Error()))
+	}
 
 	return b.String()
 }

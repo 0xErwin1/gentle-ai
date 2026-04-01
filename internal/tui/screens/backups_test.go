@@ -20,7 +20,7 @@ func TestRenderBackupsShowsDisplayLabel(t *testing.T) {
 		},
 	}
 
-	output := RenderBackups(manifests, 0, 0)
+	output := RenderBackups(manifests, 0, 0, nil)
 
 	// Must include the source label from DisplayLabel.
 	if !strings.Contains(output, "install") {
@@ -39,7 +39,7 @@ func TestRenderBackupsShowsFallbackLabelForOldManifest(t *testing.T) {
 		},
 	}
 
-	output := RenderBackups(manifests, 0, 0)
+	output := RenderBackups(manifests, 0, 0, nil)
 
 	if !strings.Contains(output, "unknown source") {
 		t.Errorf("RenderBackups should show 'unknown source' for old manifests; got:\n%s", output)
@@ -146,7 +146,7 @@ func TestRenderBackups_WithScroll(t *testing.T) {
 
 	t.Run("no scroll indicators when all items visible", func(t *testing.T) {
 		// Only 5 items — all fit, no scroll needed.
-		output := RenderBackups(manifests[:5], 0, 0)
+		output := RenderBackups(manifests[:5], 0, 0, nil)
 		if strings.Contains(output, "↑ more") {
 			t.Errorf("should not show ↑ more indicator when scrollOffset=0")
 		}
@@ -156,7 +156,7 @@ func TestRenderBackups_WithScroll(t *testing.T) {
 	})
 
 	t.Run("shows down indicator when more items below", func(t *testing.T) {
-		output := RenderBackups(manifests, 0, 0)
+		output := RenderBackups(manifests, 0, 0, nil)
 		if !strings.Contains(output, "↓ more") {
 			t.Errorf("should show ↓ more indicator when list exceeds BackupMaxVisible; got:\n%s", output)
 		}
@@ -166,7 +166,7 @@ func TestRenderBackups_WithScroll(t *testing.T) {
 	})
 
 	t.Run("shows up indicator when scrolled down", func(t *testing.T) {
-		output := RenderBackups(manifests, 5, 5)
+		output := RenderBackups(manifests, 5, 5, nil)
 		if !strings.Contains(output, "↑ more") {
 			t.Errorf("should show ↑ more indicator when scrolled down; got:\n%s", output)
 		}
@@ -174,7 +174,7 @@ func TestRenderBackups_WithScroll(t *testing.T) {
 
 	t.Run("shows both indicators when in middle of long list", func(t *testing.T) {
 		// 15 items, scrolled to offset 3, cursor at 3 — 10 items visible (3..12), more above and below.
-		output := RenderBackups(manifests, 3, 3)
+		output := RenderBackups(manifests, 3, 3, nil)
 		if !strings.Contains(output, "↑ more") {
 			t.Errorf("should show ↑ more indicator; got:\n%s", output)
 		}
@@ -246,6 +246,82 @@ func TestRenderDeleteResult_Error(t *testing.T) {
 	if !strings.Contains(output, errText) {
 		t.Errorf("RenderDeleteResult should include error text %q; got:\n%s", errText, output)
 	}
+}
+
+// TestRenderBackups_PinIndicator verifies that a pinned backup shows [pinned]
+// in the backup list and that the help text includes "p: pin/unpin".
+func TestRenderBackups_PinIndicator(t *testing.T) {
+	t.Run("pinned backup shows [pinned] indicator", func(t *testing.T) {
+		manifests := []backup.Manifest{
+			{
+				ID:        "backup-pinned",
+				CreatedAt: time.Date(2026, 3, 22, 15, 4, 5, 0, time.UTC),
+				Source:    backup.BackupSourceInstall,
+				Pinned:    true,
+			},
+			{
+				ID:        "backup-unpinned",
+				CreatedAt: time.Date(2026, 3, 21, 10, 0, 0, 0, time.UTC),
+				Source:    backup.BackupSourceSync,
+				Pinned:    false,
+			},
+		}
+
+		output := RenderBackups(manifests, 0, 0, nil)
+
+		if !strings.Contains(output, "[pinned]") {
+			t.Errorf("RenderBackups should show [pinned] for pinned backup; got:\n%s", output)
+		}
+	})
+
+	t.Run("unpinned backup has no [pinned] indicator", func(t *testing.T) {
+		manifests := []backup.Manifest{
+			{
+				ID:        "backup-only",
+				CreatedAt: time.Date(2026, 3, 22, 15, 4, 5, 0, time.UTC),
+				Source:    backup.BackupSourceInstall,
+				Pinned:    false,
+			},
+		}
+
+		output := RenderBackups(manifests, 0, 0, nil)
+
+		if strings.Contains(output, "[pinned]") {
+			t.Errorf("RenderBackups should NOT show [pinned] for unpinned backup; got:\n%s", output)
+		}
+	})
+
+	t.Run("help text includes p key binding", func(t *testing.T) {
+		manifests := []backup.Manifest{
+			{
+				ID:        "backup-any",
+				CreatedAt: time.Now().UTC(),
+				Source:    backup.BackupSourceInstall,
+			},
+		}
+
+		output := RenderBackups(manifests, 0, 0, nil)
+
+		if !strings.Contains(output, "p:") {
+			t.Errorf("RenderBackups help text should include 'p:' key binding; got:\n%s", output)
+		}
+	})
+
+	t.Run("pinErr shown inline when non-nil", func(t *testing.T) {
+		manifests := []backup.Manifest{
+			{
+				ID:        "backup-pin-err",
+				CreatedAt: time.Now().UTC(),
+				Source:    backup.BackupSourceInstall,
+			},
+		}
+		pinErrMsg := "write failed: permission denied"
+		output := RenderBackups(manifests, 0, 0, fmt.Errorf("%s", pinErrMsg))
+
+		if !strings.Contains(output, pinErrMsg) {
+			t.Errorf("RenderBackups should show pinErr text %q when non-nil; got:\n%s", pinErrMsg, output)
+		}
+	})
 }
 
 // TestRenderRenameBackup verifies the rename screen shows backup info and text input.

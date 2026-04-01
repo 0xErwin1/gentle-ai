@@ -117,6 +117,14 @@ Download the binary for your platform from [GitHub Releases](https://github.com/
 
 ---
 
+## Backups
+
+Every install, sync, and upgrade automatically snapshots your config files. Backups are **compressed** (tar.gz), **deduplicated** (identical configs are not re-backed up), and **auto-pruned** (keeps the 5 most recent). Pin important backups via the TUI (`p` key) to protect them from pruning.
+
+See [Backup & Rollback Guide](docs/rollback.md) for details.
+
+---
+
 ## Documentation
 
 | Topic | Description |
@@ -125,6 +133,7 @@ Download the binary for your platform from [GitHub Releases](https://github.com/
 | [Agents](docs/agents.md) | Supported agents, feature matrix, config paths, and per-agent notes |
 | [Components, Skills & Presets](docs/components.md) | All components, GGA behavior, skill catalog, and preset definitions |
 | [Usage](docs/usage.md) | Persona modes, interactive TUI, CLI flags, and dependency management |
+| [Backup & Rollback](docs/rollback.md) | Backup retention, compression, dedup, pinning, and restore |
 | [Platforms](docs/platforms.md) | Supported platforms, Windows notes, security verification, config paths |
 | [Architecture & Development](docs/architecture.md) | Codebase layout, testing, and relationship to Gentleman.Dots |
 
