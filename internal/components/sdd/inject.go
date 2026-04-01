@@ -1018,6 +1018,9 @@ func injectMarkdownSections(homeDir string, adapter agents.Adapter, assignments 
 		return InjectionResult{}, err
 	}
 
+	// Strip legacy Agent Teams Lite block (from standalone ATL installer).
+	existing = filemerge.StripLegacyATLBlock(existing)
+
 	// If bare (un-marked) orchestrator content exists but the HTML markers are
 	// not present, strip the bare block first. This migrates legacy files to the
 	// canonical marker-based state without duplicating the section.

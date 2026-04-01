@@ -602,6 +602,60 @@ func TestInjectFileAppendRemovesLegacyBlockWhenMarkedSectionAlreadyExists(t *tes
 	}
 }
 
+func TestInjectMarkdownSections_stripsLegacyATLBlockWithMarkedSection(t *testing.T) {
+	home := t.TempDir()
+
+	claudeAdpt := claudeAdapter()
+	promptPath := claudeAdpt.SystemPromptFile(home)
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	const legacyATLBlock = `<!-- BEGIN:agent-teams-lite -->
+## Agent Teams Orchestrator
+
+You are a COORDINATOR, not an executor.
+
+### Delegation Rules (ALWAYS ACTIVE)
+
+| Rule | Instruction |
+|------|------------|
+| No inline work | Reading/writing code → delegate to sub-agent |
+<!-- END:agent-teams-lite -->`
+
+	sddSection := "<!-- gentle-ai:sdd-orchestrator -->\nYou are a COORDINATOR.\n<!-- /gentle-ai:sdd-orchestrator -->\n"
+	existing := legacyATLBlock + "\n\n" + sddSection
+
+	if err := os.WriteFile(promptPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, injectErr := Inject(home, claudeAdpt, "")
+	if injectErr != nil {
+		t.Fatalf("Inject() error = %v", injectErr)
+	}
+
+	content, readErr := os.ReadFile(promptPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile() error = %v", readErr)
+	}
+
+	text := string(content)
+
+	if strings.Contains(text, "<!-- BEGIN:agent-teams-lite -->") {
+		t.Fatal("ATL open marker should have been stripped during inject")
+	}
+	if strings.Contains(text, "<!-- END:agent-teams-lite -->") {
+		t.Fatal("ATL close marker should have been stripped during inject")
+	}
+	if !strings.Contains(text, "<!-- gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("sdd-orchestrator section must be present after ATL strip")
+	}
+	if !strings.Contains(text, "<!-- /gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("sdd-orchestrator close marker must be present after ATL strip")
+	}
+}
+
 func TestInjectOpenCodeMultiMode(t *testing.T) {
 	home := t.TempDir()
 
