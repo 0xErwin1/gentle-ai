@@ -270,6 +270,85 @@ expect(result).toHaveLength(3)                     # AND you set up exactly 3 it
 
 If you cannot explain WHY the result is empty based on setup → the assertion is trivial.
 
+### Smoke Test Rule
+
+A test that only renders a component without asserting any output is NOT a valid test:
+
+```
+# ❌ SMOKE TEST ONLY — proves nothing about behavior
+render(<MyComponent data={mockData} />);
+expect(screen.getByTestId("wrapper")).toBeInTheDocument();  # Just proves it rendered
+
+# ✅ BEHAVIORAL TEST — proves what the component DOES with the data
+render(<MyComponent data={mockData} />);
+expect(screen.getByText("Expected Title")).toBeInTheDocument();  # Verifies output from data
+expect(screen.getByRole("button")).toHaveTextContent("Submit");  # Verifies real content
+```
+
+"Renders without crash" is a smoke test. It is NOT a unit test, NOT an integration test, and it does NOT count toward TDD coverage. If you need a smoke test, it must be accompanied by real behavioral assertions.
+
+### Mock Hygiene Rules
+
+**If you need more mocks than assertions, you are testing at the WRONG level.**
+
+```
+Mock/assertion ratio guide:
+├── ≤ 3 mocks for a test file → ✅ Healthy — focused test
+├── 4–6 mocks → ⚠️ Consider extracting logic to a pure function
+├── 7+ mocks → ❌ STOP — you are testing at the wrong layer
+│   ├── Extract the logic under test to a PURE FUNCTION and test it without mocks
+│   ├── OR move the test to integration/E2E layer where real dependencies exist
+│   └── NEVER write 10+ mocks to verify a one-line transformation
+```
+
+**Extract-Before-Mock Rule**: If the behavior you want to test is a data transformation, mapping, filtering, or conditional logic (e.g., `MUTED → FAIL` status conversion), EXTRACT it to a pure function FIRST, then test the pure function directly. No mocks needed.
+
+```
+# ❌ BAD: 15 mocks to test a one-line status conversion
+vi.mock("next/navigation", ...);
+vi.mock("next/link", ...);
+vi.mock("@/components/shadcn", ...);
+// ... 12 more mocks ...
+render(<StatusCell row={mutedRow} />);
+expect(screen.getByText("FAIL")).toBeInTheDocument();
+
+# ✅ GOOD: extract and test the logic directly
+// In production code:
+export function resolveDisplayStatus(status: string, isMuted: boolean): string {
+  return status === "MUTED" ? "FAIL" : status;
+}
+
+// In test — ZERO mocks needed:
+expect(resolveDisplayStatus("MUTED", true)).toBe("FAIL");
+expect(resolveDisplayStatus("PASS", false)).toBe("PASS");
+```
+
+### Implementation Detail Coupling Rule
+
+Tests must assert **behavior visible to the user**, not internal implementation details:
+
+```
+# ❌ COUPLED TO IMPLEMENTATION — breaks on any style refactor
+expect(element.className).toContain("text-xs");
+expect(element.className).toContain("-mt-2.5");
+expect(element.className).toContain("border-border-error-primary");
+expect(element.style.color).toBe("red");
+
+# ❌ COUPLED TO INTERNALS — breaks when implementation changes
+expect(mockService.mock.calls.length).toBe(3);  # Why 3? Brittle.
+expect(component.state.isLoading).toBe(true);    # Internal state, not behavior.
+
+# ✅ BEHAVIORAL — survives refactors, tests what users see
+expect(screen.getByText("Error: Payment failed")).toBeInTheDocument();
+expect(screen.getByRole("alert")).toHaveTextContent("Risk:");
+expect(screen.getByRole("button")).toBeDisabled();
+```
+
+**CSS class assertions are NEVER valid test assertions.** If you need to verify visual styling:
+1. Test the **semantic outcome** (e.g., element has `role="alert"`, text is visible, button is disabled)
+2. OR use a visual regression tool / E2E screenshot comparison
+3. NEVER assert specific Tailwind/CSS class names — they are implementation details
+
 ## Rules (Strict TDD specific)
 
 - NEVER write production code before writing its test — this is the ONE rule that cannot be broken

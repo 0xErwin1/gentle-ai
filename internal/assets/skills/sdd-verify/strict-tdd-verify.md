@@ -203,17 +203,30 @@ FOR EACH test file related to the change:
 │   ├── Ghost loops: assertions inside for/forEach over queryAll/filter results
 │   │   └── Check if the collection could be empty — if so, the assertions NEVER RUN
 │   │       Flag: CRITICAL — a loop over an empty array is a test that ALWAYS passes
-│   └── Incomplete TDD cycle: test passes because preconditions prevent code from running
-│       └── e.g., testing behavior of a component that is never rendered due to state
-│           Flag: CRITICAL — test must set up conditions where the code path IS exercised
+│   ├── Incomplete TDD cycle: test passes because preconditions prevent code from running
+│   │   └── e.g., testing behavior of a component that is never rendered due to state
+│   │       Flag: CRITICAL — test must set up conditions where the code path IS exercised
+│   ├── Smoke-test-only: render() + toBeInTheDocument() without behavioral assertions
+│   │   └── "Renders without crash" is NOT a valid test — it must assert WHAT was rendered
+│   │       Flag: WARNING — smoke tests do not count toward TDD coverage
+│   ├── Implementation detail coupling: assertions on CSS classes, internal state, mock call counts
+│   │   └── expect(el.className).toContain("text-xs") or expect(mock.calls.length).toBe(3)
+│   │       Flag: WARNING — tests must assert behavior, not implementation
+│   └── Mock/assertion ratio: count vi.mock() calls vs expect() calls per test file
+│       └── If mocks > 2× assertions → Flag: WARNING — "Mock-heavy test ({N} mocks, {N} assertions)"
+│           Recommend: extract logic to pure function or move to higher test layer
 │
 ├── For each violation found:
 │   ├── Record: file, line number, the assertion, why it's trivial
 │   └── Classify:
 │       ├── CRITICAL: tautology (expect(true).toBe(true)) — test proves NOTHING
 │       ├── CRITICAL: assertion without production code call — test exercises nothing
+│       ├── CRITICAL: ghost loop — assertions inside loop over possibly-empty collection
 │       ├── WARNING: empty collection without companion non-empty test
-│       └── WARNING: type-only assertion without value assertion
+│       ├── WARNING: type-only assertion without value assertion
+│       ├── WARNING: smoke-test-only — render + toBeInTheDocument without behavioral check
+│       ├── WARNING: CSS class / implementation detail assertion
+│       └── WARNING: mock-heavy test (mocks > 2× assertions) — wrong test layer
 │
 ├── Check triangulation quality:
 │   ├── Count distinct test cases per behavior
