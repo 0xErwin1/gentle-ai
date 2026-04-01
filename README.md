@@ -130,6 +130,16 @@ Download the binary for your platform from [GitHub Releases](https://github.com/
 
 ---
 
+## Contributors
+
+This project exists because of the community. See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full list.
+
+<a href="https://github.com/Gentleman-Programming/gentle-ai/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=Gentleman-Programming/gentle-ai" />
+</a>
+
+---
+
 <div align="center">
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
 </div>
