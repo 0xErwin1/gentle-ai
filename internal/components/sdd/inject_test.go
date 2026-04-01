@@ -688,9 +688,9 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 		t.Fatalf("agent key has unexpected type: %T", agentRaw)
 	}
 
-	// Multi overlay must contain orchestrator + 9 sub-agents = 10 agents.
-	if len(agentMap) != 10 {
-		t.Fatalf("agent count = %d, want 10", len(agentMap))
+	// Multi overlay must contain orchestrator + 10 sub-agents = 11 agents.
+	if len(agentMap) != 11 {
+		t.Fatalf("agent count = %d, want 11", len(agentMap))
 	}
 
 	// Verify orchestrator is present.
@@ -853,12 +853,12 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 		t.Fatalf("agent key has unexpected type: %T", agentRaw)
 	}
 
-	// Empty mode defaults to single — orchestrator + 9 sub-agents = 10 agents.
+	// Empty mode defaults to single — orchestrator + 10 sub-agents = 11 agents.
 	if _, ok := agentMap["sdd-orchestrator"]; !ok {
 		t.Fatal("missing sdd-orchestrator agent")
 	}
-	if len(agentMap) != 10 {
-		t.Fatalf("agent count = %d, want 10", len(agentMap))
+	if len(agentMap) != 11 {
+		t.Fatalf("agent count = %d, want 11", len(agentMap))
 	}
 
 	// Verify orchestrator mode is "primary".
