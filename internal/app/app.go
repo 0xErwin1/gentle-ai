@@ -42,6 +42,18 @@ func RunArgs(args []string, stdout io.Writer) error {
 	cli.AppVersion = Version
 	upgrade.AppVersion = Version
 
+	// Info commands: no system detection, no self-update, no platform validation.
+	if len(args) > 0 {
+		switch args[0] {
+		case "version", "--version", "-v":
+			_, _ = fmt.Fprintf(stdout, "gentle-ai %s\n", Version)
+			return nil
+		case "help", "--help", "-h":
+			printHelp(stdout, Version)
+			return nil
+		}
+	}
+
 	if err := system.EnsureCurrentOSSupported(); err != nil {
 		return err
 	}
@@ -87,9 +99,6 @@ func RunArgs(args []string, stdout io.Writer) error {
 	}
 
 	switch args[0] {
-	case "version", "--version", "-v":
-		_, _ = fmt.Fprintf(stdout, "gentle-ai %s\n", Version)
-		return nil
 	case "update":
 		profile := cli.ResolveInstallProfile(result)
 		return runUpdate(context.Background(), Version, profile, stdout)
@@ -119,7 +128,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 	case "restore":
 		return cli.RunRestore(args[1:], stdout)
 	default:
-		return fmt.Errorf("unknown command %q", args[0])
+		return fmt.Errorf("unknown command %q — run 'gentle-ai help' for available commands", args[0])
 	}
 }
 
