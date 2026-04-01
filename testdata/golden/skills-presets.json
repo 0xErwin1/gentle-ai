@@ -11,6 +11,7 @@
       "sdd-apply",
       "sdd-verify",
       "sdd-archive",
+      "sdd-onboard",
       "judgment-day",
       "go-testing",
       "skill-creator",
@@ -30,6 +31,7 @@
       "sdd-apply",
       "sdd-verify",
       "sdd-archive",
+      "sdd-onboard",
       "judgment-day",
       "go-testing",
       "skill-creator",
@@ -49,6 +51,7 @@
       "sdd-apply",
       "sdd-verify",
       "sdd-archive",
+      "sdd-onboard",
       "judgment-day"
     ]
   }

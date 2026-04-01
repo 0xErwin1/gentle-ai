@@ -154,9 +154,9 @@ func TestEmbeddedAssetCount(t *testing.T) {
 		}
 	}
 
-	// We expect 16 skill directories (9 SDD + judgment-day + 5 foundation + _shared).
-	if skillDirs != 16 {
-		t.Fatalf("expected 16 skill directories, got %d", skillDirs)
+	// We expect 17 skill directories (10 SDD + judgment-day + 5 foundation + _shared).
+	if skillDirs != 17 {
+		t.Fatalf("expected 17 skill directories, got %d", skillDirs)
 	}
 
 	// Verify each skill directory has a SKILL.md.
