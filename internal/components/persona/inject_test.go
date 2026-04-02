@@ -9,12 +9,14 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
+func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 
 func TestInjectClaudeGentlemanWritesSectionWithRealContent(t *testing.T) {
@@ -44,6 +46,32 @@ func TestInjectClaudeGentlemanWritesSectionWithRealContent(t *testing.T) {
 	// Real content check — the embedded persona has these patterns.
 	if !strings.Contains(text, "Senior Architect") {
 		t.Fatal("CLAUDE.md missing real persona content (expected 'Senior Architect')")
+	}
+}
+
+func TestInjectKimiGentlemanIncludesProjectInstructionsAndLoadedSkills(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, kimiAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(kimi) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(kimi) changed = false")
+	}
+
+	path := filepath.Join(home, ".kimi", "KIMI.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "${KIMI_AGENTS_MD}") {
+		t.Fatal("KIMI.md missing ${KIMI_AGENTS_MD} for project AGENTS.md parity")
+	}
+	if !strings.Contains(text, "${KIMI_SKILLS}") {
+		t.Fatal("KIMI.md missing ${KIMI_SKILLS} for loaded-skills parity")
 	}
 }
 

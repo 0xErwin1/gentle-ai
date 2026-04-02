@@ -465,9 +465,10 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 		}
 
 		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			if entry.IsDir() {
 				continue
 			}
+			// Copy all files (not just .md) to support Kimi's YAML-based agents
 			content := assets.MustRead(embeddedDir + "/" + entry.Name())
 			outPath := filepath.Join(agentsDir, entry.Name())
 			writeResult, err := filemerge.WriteFileAtomic(outPath, []byte(content), 0o644)
@@ -480,11 +481,15 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			}
 		}
 
-		// Post-check: verify critical agent files exist
-		for _, phase := range []string{"sdd-apply", "sdd-verify"} {
-			checkPath := filepath.Join(agentsDir, phase+".md")
-			if info, err := os.Stat(checkPath); err != nil || info.Size() < 50 {
-				return InjectionResult{}, fmt.Errorf("post-check: cursor agent %q not written correctly", phase)
+		// Post-check: verify every embedded sub-agent file was written.
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			checkPath := filepath.Join(agentsDir, entry.Name())
+			info, err := os.Stat(checkPath)
+			if err != nil || info.Size() == 0 {
+				return InjectionResult{}, fmt.Errorf("post-check: agent file %q not written correctly", entry.Name())
 			}
 		}
 	}
@@ -795,6 +800,8 @@ func sddOrchestratorAsset(agent model.AgentID) string {
 		return "windsurf/sdd-orchestrator.md"
 	case model.AgentCursor:
 		return "cursor/sdd-orchestrator.md"
+	case model.AgentKimi:
+		return "kimi/sdd-orchestrator.md"
 	default:
 		return "generic/sdd-orchestrator.md"
 	}

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
@@ -813,6 +814,7 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 					)
 				}
 			}
+			paths = append(paths, sddSubAgentPaths(homeDir, adapter)...)
 		case model.ComponentSkills:
 			for _, skillID := range selectedSkillIDs(selection) {
 				path := skills.SkillPathForAgent(homeDir, adapter, skillID)
@@ -863,6 +865,34 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 				paths = append(paths, p)
 			}
 		}
+	}
+
+	return paths
+}
+
+type sddSubAgentAdapter interface {
+	SupportsSubAgents() bool
+	SubAgentsDir(homeDir string) string
+	EmbeddedSubAgentsDir() string
+}
+
+func sddSubAgentPaths(homeDir string, adapter agents.Adapter) []string {
+	sai, ok := adapter.(sddSubAgentAdapter)
+	if !ok || !sai.SupportsSubAgents() {
+		return nil
+	}
+
+	entries, err := assets.FS.ReadDir(sai.EmbeddedSubAgentsDir())
+	if err != nil {
+		return nil
+	}
+
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		paths = append(paths, filepath.Join(sai.SubAgentsDir(homeDir), entry.Name()))
 	}
 
 	return paths

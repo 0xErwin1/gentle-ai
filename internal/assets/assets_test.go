@@ -48,6 +48,29 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"cursor/agents/sdd-verify.md",
 		"cursor/agents/sdd-archive.md",
 
+		// Kimi agent files
+		"kimi/persona-gentleman.md",
+		"kimi/sdd-orchestrator.md",
+		"kimi/agents/gentleman.yaml",
+		"kimi/agents/sdd-init.yaml",
+		"kimi/agents/sdd-explore.yaml",
+		"kimi/agents/sdd-propose.yaml",
+		"kimi/agents/sdd-spec.yaml",
+		"kimi/agents/sdd-design.yaml",
+		"kimi/agents/sdd-tasks.yaml",
+		"kimi/agents/sdd-apply.yaml",
+		"kimi/agents/sdd-verify.yaml",
+		"kimi/agents/sdd-archive.yaml",
+		"kimi/agents/sdd-init.md",
+		"kimi/agents/sdd-explore.md",
+		"kimi/agents/sdd-propose.md",
+		"kimi/agents/sdd-spec.md",
+		"kimi/agents/sdd-design.md",
+		"kimi/agents/sdd-tasks.md",
+		"kimi/agents/sdd-apply.md",
+		"kimi/agents/sdd-verify.md",
+		"kimi/agents/sdd-archive.md",
+
 		// SDD skills
 		"skills/sdd-init/SKILL.md",
 		"skills/sdd-apply/SKILL.md",
@@ -247,6 +270,7 @@ func TestSDDOrchestratorAssetsScopedToDedicatedAgent(t *testing.T) {
 		"gemini/sdd-orchestrator.md",
 		"codex/sdd-orchestrator.md",
 		"cursor/sdd-orchestrator.md",
+		"kimi/sdd-orchestrator.md",
 	} {
 		t.Run(assetPath, func(t *testing.T) {
 			content := MustRead(assetPath)

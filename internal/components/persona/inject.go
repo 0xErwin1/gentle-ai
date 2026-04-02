@@ -217,10 +217,29 @@ func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (In
 }
 
 func personaContent(agent model.AgentID, persona model.PersonaID) string {
+	wrapKimi := func(content string) string {
+		if agent != model.AgentKimi || strings.TrimSpace(content) == "" {
+			return content
+		}
+		return strings.TrimRight(content, "\n") + `
+
+## Project Instructions
+
+Use the merged AGENTS.md instructions from the current project/worktree whenever they are present:
+
+${KIMI_AGENTS_MD}
+
+## Loaded Skills
+
+Respect the currently loaded Kimi skills and flow skills:
+
+${KIMI_SKILLS}
+`
+	}
 	switch persona {
 	case model.PersonaNeutral:
 		// Neutral persona: same teacher, same philosophy, no regional language.
-		return assets.MustRead("generic/persona-neutral.md")
+		return wrapKimi(assets.MustRead("generic/persona-neutral.md"))
 	case model.PersonaCustom:
 		return ""
 	default:
@@ -230,6 +249,8 @@ func personaContent(agent model.AgentID, persona model.PersonaID) string {
 			return assets.MustRead("claude/persona-gentleman.md")
 		case model.AgentOpenCode:
 			return assets.MustRead("opencode/persona-gentleman.md")
+		case model.AgentKimi:
+			return wrapKimi(assets.MustRead("kimi/persona-gentleman.md"))
 		default:
 			// Generic persona includes Gentleman personality + skills table + SDD orchestrator.
 			// Used by Gemini CLI, Cursor, VS Code Copilot, and any future agents.

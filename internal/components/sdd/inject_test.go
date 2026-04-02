@@ -11,6 +11,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	windsurfagent "github.com/gentleman-programming/gentle-ai/internal/agents/windsurf"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
@@ -19,6 +20,7 @@ import (
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
+func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 func windsurfAdapter() agents.Adapter { return windsurfagent.NewAdapter() }
 
@@ -383,6 +385,68 @@ func TestInjectGeminiWritesSDDOrchestratorAndSkills(t *testing.T) {
 	skillPath := filepath.Join(home, ".gemini", "skills", "sdd-init", "SKILL.md")
 	if _, err := os.Stat(skillPath); err != nil {
 		t.Fatalf("expected SDD skill file %q: %v", skillPath, err)
+	}
+}
+
+func TestInjectKimiWritesNativeAgentFilesAndGlobalSkills(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, kimiAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject(kimi) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(kimi) changed = false")
+	}
+
+	systemPromptPath := filepath.Join(home, ".kimi", "KIMI.md")
+	systemPrompt, err := os.ReadFile(systemPromptPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", systemPromptPath, err)
+	}
+
+	systemText := string(systemPrompt)
+	if !strings.Contains(systemText, "/skill:sdd-init") {
+		t.Fatal("KIMI.md missing native /skill guidance")
+	}
+	if !strings.Contains(systemText, "multiagent:Task") {
+		t.Fatal("KIMI.md should reference Kimi's documented Task tool for custom subagent delegation")
+	}
+
+	rootAgentPath := filepath.Join(home, ".kimi", "agents", "gentleman.yaml")
+	rootAgent, err := os.ReadFile(rootAgentPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", rootAgentPath, err)
+	}
+
+	rootText := string(rootAgent)
+	if !strings.Contains(rootText, "name: gentleman") {
+		t.Fatal("gentleman.yaml should define a named root custom agent")
+	}
+	if strings.Contains(rootText, "kimi_cli.tools.agent:Agent") {
+		t.Fatal("gentleman.yaml should inherit Kimi's default tool set instead of hardcoding the old Agent tool path")
+	}
+	if !strings.Contains(rootText, "../KIMI.md") {
+		t.Fatal("gentleman.yaml should load the installed KIMI.md system prompt")
+	}
+
+	for _, want := range []string{
+		filepath.Join(home, ".kimi", "agents", "sdd-init.yaml"),
+		filepath.Join(home, ".kimi", "agents", "sdd-init.md"),
+		filepath.Join(home, ".kimi", "agents", "sdd-explore.yaml"),
+		filepath.Join(home, ".kimi", "agents", "sdd-propose.yaml"),
+		filepath.Join(home, ".kimi", "agents", "sdd-spec.yaml"),
+		filepath.Join(home, ".kimi", "agents", "sdd-design.yaml"),
+		filepath.Join(home, ".kimi", "agents", "sdd-tasks.yaml"),
+		filepath.Join(home, ".kimi", "agents", "sdd-apply.yaml"),
+		filepath.Join(home, ".kimi", "agents", "sdd-verify.yaml"),
+		filepath.Join(home, ".kimi", "agents", "sdd-archive.yaml"),
+		filepath.Join(home, ".config", "agents", "skills", "sdd-init", "SKILL.md"),
+		filepath.Join(home, ".config", "agents", "skills", "_shared", "sdd-phase-common.md"),
+	} {
+		if _, err := os.Stat(want); err != nil {
+			t.Fatalf("expected Kimi SDD artifact %q: %v", want, err)
+		}
 	}
 }
 

@@ -16,6 +16,7 @@
 | Codex | `codex` | Yes | Yes | Solo-agent | No | No | `~/.codex` |
 | Windsurf | `windsurf` | Yes (native) | Yes | Solo-agent | No | No | `~/.codeium/windsurf` |
 | Antigravity | `antigravity` | Yes (native) | Yes | Solo-agent + Mission Control | No | No | `~/.gemini/antigravity` |
+| Kimi | `kimi` | Yes | Yes | Full (native custom agents) | No | Yes | `~/.kimi` |
 
 All agents receive the **full SDD orchestrator** injected into their system prompt, plus skill files written to their skills directory. The agent handles SDD automatically when the task is large enough, or when the user explicitly asks for it — no manual setup required.
 
@@ -25,7 +26,7 @@ All agents receive the **full SDD orchestrator** injected into their system prom
 
 | Model | How It Works | Agents |
 |-------|-------------|--------|
-| **Full (sub-agents)** | Each SDD phase runs in an isolated context window via native sub-agent delegation. The orchestrator coordinates; sub-agents execute. | Claude Code, OpenCode, Gemini CLI, Cursor, VS Code Copilot |
+| **Full (sub-agents)** | Each SDD phase runs in an isolated context window via native sub-agent delegation. The orchestrator coordinates; sub-agents execute. | Claude Code, OpenCode, Gemini CLI, Cursor, VS Code Copilot, Kimi |
 | **Solo-agent** | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram provides cross-phase persistence. | Codex, Windsurf, Antigravity |
 
 ### Cursor Native Subagents
@@ -53,11 +54,11 @@ Antigravity is an agent-first platform with built-in sub-agents (Browser, Termin
 
 ## SDD Mode Support
 
-| Feature | Claude Code | OpenCode | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity |
-|---------|:-----------:|:--------:|:----------:|:------:|:---------------:|:-----:|:--------:|:-----------:|
-| SDD orchestrator | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Single-mode SDD | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Multi-mode SDD | — | Yes | — | — | — | — | — | — |
+| Feature | Claude Code | OpenCode | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity | Kimi |
+|---------|:-----------:|:--------:|:----------:|:------:|:---------------:|:-----:|:--------:|:-----------:|:----:|
+| SDD orchestrator | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Single-mode SDD | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Multi-mode SDD | — | Yes | — | — | — | — | — | — | — |
 
 **Multi-mode** (assigning different AI models to each SDD phase) is an **OpenCode-only** feature because it requires OpenCode's provider system to route phases to specific models. All other agents run in **single-mode** — the orchestrator manages everything using whatever model the agent is already running.
 
