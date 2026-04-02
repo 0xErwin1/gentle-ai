@@ -66,7 +66,8 @@ Skills (appear in autocomplete):
 - `/sdd-explore <topic>` → investigate an idea; reads codebase, compares approaches; no files created
 - `/sdd-apply [change]` → implement tasks in batches; checks off items as it goes
 - `/sdd-verify [change]` → validate implementation against specs; reports CRITICAL / WARNING / SUGGESTION
-- `/sdd-archive [change]` → close a change and persist final state in the active artifact store
+- `/sdd-archive [change]` → close a change and persist final state in the active artifact store 
+- `/sdd-onboard` → guided end-to-end walkthrough of SDD using your real codebase
 
 Meta-commands (type directly — orchestrator handles them, won't appear in autocomplete):
 - `/sdd-new <change>` → start a new change by invoking `sdd-explore` then `sdd-propose` subagents
@@ -108,6 +109,18 @@ In **Interactive** mode, between phases:
 4. If the user gives feedback, incorporate it before running the next phase
 
 For this agent (inline subagents): phases already run with user visibility between invocations. **Interactive** is the default behavior — show results between subagent calls and ask before proceeding. **Automatic** means invoke subagents sequentially without pausing to ask between phases.
+
+### Artifact Store Mode
+
+When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, ALSO ASK which artifact store they want for this change:
+
+- **`engram`**: Fast, no files created. Artifacts live in engram only. Best for solo work and quick iteration. Note: re-running a phase overwrites the previous version (no history).
+- **`openspec`**: File-based. Creates `openspec/` directory with full artifact trail. Committable, shareable with team, full git history.
+- **`hybrid`**: Both — files for team sharing + engram for cross-session recovery. Higher token cost.
+
+If the user doesn't specify, detect: if engram is available → default to `engram`. Otherwise → `none`.
+
+Cache the artifact store choice for the session. Pass it as `artifact_store.mode` to every sub-agent launch.
 
 ### Dependency Graph
 ```

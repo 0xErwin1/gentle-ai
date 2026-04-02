@@ -286,3 +286,49 @@ func TestTuiSyncStrictTDDNilOverrideNoChange(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+// TestVersionBeforeSystemGuards verifies that `gentle-ai version` returns the
+// version string without going through system detection or platform guards.
+func TestVersionBeforeSystemGuards(t *testing.T) {
+	var buf bytes.Buffer
+	err := RunArgs([]string{"version"}, &buf)
+	if err != nil {
+		t.Fatalf("version should not fail: %v", err)
+	}
+	if !strings.Contains(buf.String(), "gentle-ai") {
+		t.Error("version output should contain 'gentle-ai'")
+	}
+}
+
+// TestHelpCommand verifies that help, --help, and -h all print USAGE and COMMANDS
+// without triggering system detection or platform guards.
+func TestHelpCommand(t *testing.T) {
+	for _, arg := range []string{"help", "--help", "-h"} {
+		t.Run(arg, func(t *testing.T) {
+			var buf bytes.Buffer
+			err := RunArgs([]string{arg}, &buf)
+			if err != nil {
+				t.Fatalf("help should not fail: %v", err)
+			}
+			if !strings.Contains(buf.String(), "USAGE") {
+				t.Errorf("help output for %q should contain USAGE", arg)
+			}
+			if !strings.Contains(buf.String(), "COMMANDS") {
+				t.Errorf("help output for %q should contain COMMANDS", arg)
+			}
+		})
+	}
+}
+
+// TestUnknownCommandSuggestsHelp verifies that an unrecognised command returns
+// an error whose message suggests running 'gentle-ai help'.
+func TestUnknownCommandSuggestsHelp(t *testing.T) {
+	var buf bytes.Buffer
+	err := RunArgs([]string{"notacommand"}, &buf)
+	if err == nil {
+		t.Fatal("unknown command should return error")
+	}
+	if !strings.Contains(err.Error(), "gentle-ai help") {
+		t.Error("unknown command error should suggest 'gentle-ai help'")
+	}
+}

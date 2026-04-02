@@ -58,6 +58,9 @@ func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (In
 		// install placed the persona as raw text above the <!-- gentle-ai: --> markers.
 		healed := filemerge.StripLegacyPersonaBlock(existing)
 
+		// Also strip legacy Agent Teams Lite block (standalone ATL installer leftover).
+		healed = filemerge.StripLegacyATLBlock(healed)
+
 		updated := filemerge.InjectMarkdownSection(healed, "persona", content)
 
 		writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)

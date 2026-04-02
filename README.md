@@ -50,13 +50,14 @@ This is NOT an AI agent installer. Most agents are easy to install. This is an *
 curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash
 ```
 
-### Windows (PowerShell)
+### Windows
 
 ```powershell
-irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
+scoop bucket add gentleman https://github.com/Gentleman-Programming/scoop-bucket
+scoop install gentle-ai
 ```
 
-This downloads the latest release for your platform and launches the interactive TUI. No Go toolchain required.
+Or via PowerShell script: `irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex`
 
 ### After install: project-level setup
 
@@ -86,7 +87,21 @@ brew install gentle-ai
 go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest
 ```
 
-### Windows (PowerShell)
+### Scoop (Windows)
+
+```powershell
+scoop bucket add gentleman https://github.com/Gentleman-Programming/scoop-bucket
+scoop install gentle-ai
+```
+
+**Migrating from PowerShell installer to Scoop?** Remove the old binary first:
+
+```powershell
+Remove-Item "$env:LOCALAPPDATA\gentle-ai" -Recurse -Force
+# Then install via Scoop as shown above
+```
+
+### Windows (PowerShell — alternative)
 
 ```powershell
 # Option 1: PowerShell installer (downloads binary from GitHub Releases)
@@ -102,6 +117,14 @@ Download the binary for your platform from [GitHub Releases](https://github.com/
 
 ---
 
+## Backups
+
+Every install, sync, and upgrade automatically snapshots your config files. Backups are **compressed** (tar.gz), **deduplicated** (identical configs are not re-backed up), and **auto-pruned** (keeps the 5 most recent). Pin important backups via the TUI (`p` key) to protect them from pruning.
+
+See [Backup & Rollback Guide](docs/rollback.md) for details.
+
+---
+
 ## Documentation
 
 | Topic | Description |
@@ -110,8 +133,19 @@ Download the binary for your platform from [GitHub Releases](https://github.com/
 | [Agents](docs/agents.md) | Supported agents, feature matrix, config paths, and per-agent notes |
 | [Components, Skills & Presets](docs/components.md) | All components, GGA behavior, skill catalog, and preset definitions |
 | [Usage](docs/usage.md) | Persona modes, interactive TUI, CLI flags, and dependency management |
+| [Backup & Rollback](docs/rollback.md) | Backup retention, compression, dedup, pinning, and restore |
 | [Platforms](docs/platforms.md) | Supported platforms, Windows notes, security verification, config paths |
 | [Architecture & Development](docs/architecture.md) | Codebase layout, testing, and relationship to Gentleman.Dots |
+
+---
+
+## Contributors
+
+This project exists because of the community. See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full list.
+
+<a href="https://github.com/Gentleman-Programming/gentle-ai/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=Gentleman-Programming/gentle-ai" />
+</a>
 
 ---
 

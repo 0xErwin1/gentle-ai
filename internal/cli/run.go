@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -273,6 +274,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			snapshotDir: filepath.Join(r.backupRoot, time.Now().UTC().Format("20060102150405.000000000")),
 			targets:     targets,
 			state:       r.state,
+			backupRoot:  r.backupRoot,
 			source:      backup.BackupSourceInstall,
 			description: "pre-install snapshot",
 			appVersion:  AppVersion,
@@ -308,6 +310,11 @@ type prepareBackupStep struct {
 	targets     []string
 	state       *runtimeState
 
+	// backupRoot is the parent directory of all backup snapshots.
+	// When set, deduplication (IsDuplicate) and retention pruning (Prune) are
+	// enabled. When empty, both are skipped (backward-compatible default).
+	backupRoot string
+
 	// source and description are optional metadata written into the manifest.
 	// When set, they help users identify what created the backup.
 	source      backup.BackupSource
@@ -323,6 +330,21 @@ func (s prepareBackupStep) ID() string {
 }
 
 func (s prepareBackupStep) Run() error {
+	// Deduplication: skip snapshot creation when content is identical to the
+	// most recent backup. Only active when backupRoot is set.
+	if s.backupRoot != "" {
+		checksum, err := backup.ComputeChecksum(s.targets)
+		if err == nil && checksum != "" {
+			if dup, dupErr := backup.IsDuplicate(s.backupRoot, checksum); dupErr != nil {
+				log.Printf("backup: check duplicate: %v", dupErr)
+			} else if dup {
+				// Content is identical to the most recent backup — skip creation.
+				// state.manifest is left at its zero value; rollback is a no-op.
+				return nil
+			}
+		}
+	}
+
 	manifest, err := s.snapshotter.Create(s.snapshotDir, s.targets)
 	if err != nil {
 		return fmt.Errorf("create backup snapshot: %w", err)
@@ -338,11 +360,20 @@ func (s prepareBackupStep) Run() error {
 		if err := backup.WriteManifest(manifestPath, manifest); err != nil {
 			// Non-fatal: metadata annotation failed but the snapshot is intact.
 			// The backup is still usable — restore will work. We just lose the label.
-			_ = err
+			log.Printf("backup: annotate manifest: %v", err)
 		}
 	}
 
 	s.state.manifest = manifest
+
+	// Retention pruning: remove oldest unpinned backups beyond the limit.
+	// Non-fatal: a prune failure must not prevent the install/sync from succeeding.
+	if s.backupRoot != "" {
+		if _, pruneErr := backup.Prune(s.backupRoot, backup.DefaultRetentionCount); pruneErr != nil {
+			log.Printf("backup: prune: %v", pruneErr)
+		}
+	}
+
 	return nil
 }
 

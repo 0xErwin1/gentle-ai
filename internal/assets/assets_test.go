@@ -132,8 +132,8 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(opencode/commands) error = %v", err)
 	}
-	if len(commandEntries) != 8 {
-		t.Fatalf("opencode commands count = %d, want 8", len(commandEntries))
+	if len(commandEntries) != 9 {
+		t.Fatalf("opencode commands count = %d, want 9", len(commandEntries))
 	}
 
 	pluginEntries, err := FS.ReadDir("opencode/plugins")
@@ -177,9 +177,9 @@ func TestEmbeddedAssetCount(t *testing.T) {
 		}
 	}
 
-	// We expect 16 skill directories (9 SDD + judgment-day + 5 foundation + _shared).
-	if skillDirs != 16 {
-		t.Fatalf("expected 16 skill directories, got %d", skillDirs)
+	// We expect 17 skill directories (10 SDD + judgment-day + 5 foundation + _shared).
+	if skillDirs != 17 {
+		t.Fatalf("expected 17 skill directories, got %d", skillDirs)
 	}
 
 	// Verify each skill directory has a SKILL.md.

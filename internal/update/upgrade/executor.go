@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -163,20 +164,46 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 	backupWarning := ""
 	if !dryRun && len(executable) > 0 {
 		sp := NewSpinner(pw, "Creating pre-upgrade backup")
-		snapshotDir := filepath.Join(homeDir, ".gentle-ai", "backups",
+		backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+		snapshotDir := filepath.Join(backupRoot,
 			fmt.Sprintf("upgrade-%s", time.Now().UTC().Format("20060102T150405Z")))
-		manifest, err := snapshotCreator(snapshotDir, configPathsForBackup(homeDir))
-		if err != nil {
-			sp.Finish(false)
-			backupWarning = fmt.Sprintf("pre-upgrade backup failed — upgrade will run without a backup: %s", err)
-		} else {
-			manifest.Source = backup.BackupSourceUpgrade
-			manifest.Description = "pre-upgrade snapshot"
-			manifest.CreatedByVersion = AppVersion
-			manifestPath := filepath.Join(snapshotDir, backup.ManifestFilename)
-			_ = backup.WriteManifest(manifestPath, manifest)
-			backupID = manifest.ID
-			sp.Finish(true)
+
+		// Deduplication: skip snapshot when content is identical to most recent backup.
+		paths := configPathsForBackup(homeDir)
+		skipBackup := false
+		if checksum, csErr := backup.ComputeChecksum(paths); csErr == nil && checksum != "" {
+			if dup, dupErr := backup.IsDuplicate(backupRoot, checksum); dupErr != nil {
+				log.Printf("backup: check duplicate: %v", dupErr)
+			} else if dup {
+				skipBackup = true
+				sp.Finish(true)
+			}
+		} else if csErr != nil {
+			log.Printf("backup: compute checksum: %v", csErr)
+		}
+
+		if !skipBackup {
+			manifest, err := snapshotCreator(snapshotDir, paths)
+			if err != nil {
+				sp.Finish(false)
+				backupWarning = fmt.Sprintf("pre-upgrade backup failed — upgrade will run without a backup: %s", err)
+			} else {
+				manifest.Source = backup.BackupSourceUpgrade
+				manifest.Description = "pre-upgrade snapshot"
+				manifest.CreatedByVersion = AppVersion
+				manifestPath := filepath.Join(snapshotDir, backup.ManifestFilename)
+				if err := backup.WriteManifest(manifestPath, manifest); err != nil {
+					log.Printf("backup: annotate manifest: %v", err)
+				}
+				backupID = manifest.ID
+				sp.Finish(true)
+
+				// Retention pruning: remove oldest unpinned backups beyond the limit.
+				// Non-fatal: prune failure must not prevent the upgrade from running.
+				if _, pruneErr := backup.Prune(backupRoot, backup.DefaultRetentionCount); pruneErr != nil {
+					log.Printf("backup: prune: %v", pruneErr)
+				}
+			}
 		}
 	}
 

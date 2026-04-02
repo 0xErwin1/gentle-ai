@@ -1,6 +1,7 @@
 package filemerge
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -68,7 +69,7 @@ func TestInjectMarkdownSection_MalformedMarkersTreatedAsNotFound(t *testing.T) {
 
 	// Result should contain the new properly-formed section.
 	wantOpen := "<!-- gentle-ai:sdd -->\nNew SDD content.\n<!-- /gentle-ai:sdd -->\n"
-	if !containsStr(result, wantOpen) {
+	if !strings.Contains(result, wantOpen) {
 		t.Fatalf("malformed markers: result should contain proper section:\ngot: %q", result)
 	}
 }
@@ -80,7 +81,7 @@ func TestInjectMarkdownSection_CloseBeforeOpenTreatedAsNotFound(t *testing.T) {
 
 	// Should append the section, not replace.
 	wantSuffix := "<!-- gentle-ai:sdd -->\nNew content.\n<!-- /gentle-ai:sdd -->\n"
-	if !hasSuffix(result, wantSuffix) {
+	if !strings.HasSuffix(result, wantSuffix) {
 		t.Fatalf("close-before-open: expected appended section:\ngot: %q\nwant suffix: %q", result, wantSuffix)
 	}
 }
@@ -177,11 +178,11 @@ func TestStripLegacyPersonaBlock_LegacyBlockBeforeMarkersStripped(t *testing.T) 
 	result := StripLegacyPersonaBlock(input)
 
 	// The legacy block should be gone.
-	if containsStr(result, "## Rules") {
+	if strings.Contains(result, "## Rules") {
 		t.Fatal("stripped result should not contain legacy '## Rules' header")
 	}
 	// The marked section must survive.
-	if !containsStr(result, "<!-- gentle-ai:persona -->") {
+	if !strings.Contains(result, "<!-- gentle-ai:persona -->") {
 		t.Fatal("stripped result missing gentle-ai marker section")
 	}
 }
@@ -191,13 +192,13 @@ func TestStripLegacyPersonaBlock_MarkerSectionContentPreserved(t *testing.T) {
 	input := legacyPersonaBlock + "\n" + gentleAiMarkerSection + "\n# User Notes\n\nSome user text.\n"
 	result := StripLegacyPersonaBlock(input)
 
-	if !containsStr(result, "<!-- gentle-ai:persona -->") {
+	if !strings.Contains(result, "<!-- gentle-ai:persona -->") {
 		t.Fatal("marker open not preserved")
 	}
-	if !containsStr(result, "<!-- /gentle-ai:persona -->") {
+	if !strings.Contains(result, "<!-- /gentle-ai:persona -->") {
 		t.Fatal("marker close not preserved")
 	}
-	if !containsStr(result, "# User Notes") {
+	if !strings.Contains(result, "# User Notes") {
 		t.Fatal("user content after markers not preserved")
 	}
 }
@@ -266,10 +267,10 @@ func TestStripLegacyPersonaBlock_AllFingerprintsPreMarker_Strips(t *testing.T) {
 	if result == input {
 		t.Fatal("all-fingerprints-pre-marker: expected stripping to occur, but got unchanged result")
 	}
-	if containsStr(result, "## Rules") {
+	if strings.Contains(result, "## Rules") {
 		t.Fatal("all-fingerprints-pre-marker: legacy '## Rules' should have been stripped")
 	}
-	if !containsStr(result, "<!-- gentle-ai:persona -->") {
+	if !strings.Contains(result, "<!-- gentle-ai:persona -->") {
 		t.Fatal("all-fingerprints-pre-marker: marker section must be preserved")
 	}
 }
@@ -290,25 +291,274 @@ func TestStripLegacyPersonaBlock_UserContentBeforeAndAfterMarkersPreserved(t *te
 	input := legacyPersonaBlock + "\n" + gentleAiMarkerSection + "\n# Custom section\n\nUser stuff.\n"
 	result := StripLegacyPersonaBlock(input)
 
-	if !containsStr(result, "# Custom section") {
+	if !strings.Contains(result, "# Custom section") {
 		t.Fatal("content after gentle-ai markers must be preserved")
 	}
 }
 
-func containsStr(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		(len(s) > 0 && len(substr) > 0 && findSubstring(s, substr)))
-}
+// --- StripLegacyATLBlock tests ---
 
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+const legacyATLBlock = `<!-- BEGIN:agent-teams-lite -->
+## Agent Teams Orchestrator
+
+You are a COORDINATOR, not an executor.
+
+### Delegation Rules (ALWAYS ACTIVE)
+
+| Rule | Instruction |
+|------|------------|
+| No inline work | Reading/writing code → delegate to sub-agent |
+<!-- END:agent-teams-lite -->`
+
+func TestStripLegacyATLBlock_OnlyATLBlock_ReturnsEmpty(t *testing.T) {
+	result := StripLegacyATLBlock(legacyATLBlock)
+	if result != "" {
+		t.Fatalf("only ATL block: expected empty string, got %q", result)
 	}
-	return false
 }
 
-func hasSuffix(s, suffix string) bool {
-	return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix
+func TestStripLegacyATLBlock_ATLBlockThenMarkers_StripsATLKeepsMarkers(t *testing.T) {
+	sddSection := "<!-- gentle-ai:sdd-orchestrator -->\nSome orchestrator content.\n<!-- /gentle-ai:sdd-orchestrator -->\n"
+	input := legacyATLBlock + "\n\n" + sddSection
+
+	result := StripLegacyATLBlock(input)
+
+	if strings.Contains(result, "<!-- BEGIN:agent-teams-lite -->") {
+		t.Fatal("ATL open marker should have been stripped")
+	}
+	if strings.Contains(result, "<!-- END:agent-teams-lite -->") {
+		t.Fatal("ATL close marker should have been stripped")
+	}
+	if !strings.Contains(result, "<!-- gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("sdd-orchestrator marker section must be preserved")
+	}
+	if !strings.Contains(result, "<!-- /gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("sdd-orchestrator close marker must be preserved")
+	}
+}
+
+func TestStripLegacyATLBlock_ContentBeforeATL_StripsOnlyATL(t *testing.T) {
+	before := "# My Config\n\nSome user content.\n"
+	sddSection := "<!-- gentle-ai:sdd-orchestrator -->\nOrchestrator stuff.\n<!-- /gentle-ai:sdd-orchestrator -->\n"
+	input := before + "\n" + legacyATLBlock + "\n\n" + sddSection
+
+	result := StripLegacyATLBlock(input)
+
+	if strings.Contains(result, "<!-- BEGIN:agent-teams-lite -->") {
+		t.Fatal("ATL open marker should have been stripped")
+	}
+	if !strings.Contains(result, "# My Config") {
+		t.Fatal("user content before ATL block must be preserved")
+	}
+	if !strings.Contains(result, "<!-- gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("sdd-orchestrator section must be preserved")
+	}
+}
+
+func TestStripLegacyATLBlock_NoATLBlock_ReturnsUnchanged(t *testing.T) {
+	input := "# My Config\n\nSome content without ATL block.\n"
+	result := StripLegacyATLBlock(input)
+	if result != input {
+		t.Fatalf("no ATL block: expected unchanged result:\ngot:  %q\nwant: %q", result, input)
+	}
+}
+
+func TestStripLegacyATLBlock_OnlyOpenMarkerNoClose_StripsOrphanMarker(t *testing.T) {
+	input := "<!-- BEGIN:agent-teams-lite -->\nSome content without close marker.\n"
+	result := StripLegacyATLBlock(input)
+	if strings.Contains(result, "<!-- BEGIN:agent-teams-lite -->") {
+		t.Fatal("orphan BEGIN marker should be stripped by post-loop cleanup")
+	}
+	if !strings.Contains(result, "Some content without close marker.") {
+		t.Fatal("content around orphan BEGIN marker should be preserved")
+	}
+}
+
+func TestStripLegacyATLBlock_ATLBlockAndSDDOrchestrator_StripsOnlyATL(t *testing.T) {
+	sddSection := "<!-- gentle-ai:sdd-orchestrator -->\nYou are a COORDINATOR.\n<!-- /gentle-ai:sdd-orchestrator -->\n"
+	input := legacyATLBlock + "\n\n" + sddSection
+
+	result := StripLegacyATLBlock(input)
+
+	if strings.Contains(result, "<!-- BEGIN:agent-teams-lite -->") {
+		t.Fatal("ATL block should have been stripped")
+	}
+	if !strings.Contains(result, "<!-- gentle-ai:sdd-orchestrator -->") {
+		t.Fatal("sdd-orchestrator section must be preserved after ATL strip")
+	}
+	if !strings.Contains(result, "You are a COORDINATOR.") {
+		t.Fatal("sdd-orchestrator content must be preserved")
+	}
+}
+
+func TestStripLegacyATLBlock_EmptyFile_ReturnsEmpty(t *testing.T) {
+	result := StripLegacyATLBlock("")
+	if result != "" {
+		t.Fatalf("empty file: expected empty result, got %q", result)
+	}
+}
+
+func TestStripLegacyATLBlock_Idempotent(t *testing.T) {
+	// Calling twice should produce the same result as calling once.
+	sddSection := "<!-- gentle-ai:sdd-orchestrator -->\nOrchestrator.\n<!-- /gentle-ai:sdd-orchestrator -->\n"
+	input := legacyATLBlock + "\n\n" + sddSection
+
+	once := StripLegacyATLBlock(input)
+	twice := StripLegacyATLBlock(once)
+
+	if once != twice {
+		t.Fatalf("idempotent: second call changed result:\nfirst:  %q\nsecond: %q", once, twice)
+	}
+}
+
+func TestStripLegacyATLBlock_EmptyBetweenMarkers(t *testing.T) {
+	// An ATL block with nothing between the markers should strip to empty.
+	input := "<!-- BEGIN:agent-teams-lite -->\n<!-- END:agent-teams-lite -->"
+	result := StripLegacyATLBlock(input)
+	if result != "" {
+		t.Fatalf("empty between markers: expected empty string, got %q", result)
+	}
+}
+
+func TestStripLegacyATLBlock_DuplicateBlocks(t *testing.T) {
+	// A file with two ATL blocks (e.g. pasted twice) — both must be stripped.
+	block := "<!-- BEGIN:agent-teams-lite -->\nsome content\n<!-- END:agent-teams-lite -->"
+	input := block + "\n\n" + block
+	result := StripLegacyATLBlock(input)
+	if strings.Contains(result, "<!-- BEGIN:agent-teams-lite -->") {
+		t.Fatal("duplicate blocks: first ATL open marker should have been stripped")
+	}
+	if strings.Contains(result, "<!-- END:agent-teams-lite -->") {
+		t.Fatal("duplicate blocks: ATL close marker should have been stripped")
+	}
+	if result != "" {
+		t.Fatalf("duplicate blocks: expected empty string after stripping both, got %q", result)
+	}
+}
+
+func TestStripLegacyATLBlock_EndBeforeBeginWithValidPairAfter(t *testing.T) {
+	// A stray END marker appears before a valid BEGIN...END pair.
+	// The valid block must still be stripped.
+	strayEnd := "<!-- END:agent-teams-lite -->\n"
+	validBlock := "<!-- BEGIN:agent-teams-lite -->\nreal content\n<!-- END:agent-teams-lite -->"
+	after := "\n\nsome other content"
+	input := strayEnd + validBlock + after
+
+	result := StripLegacyATLBlock(input)
+
+	if strings.Contains(result, "<!-- BEGIN:agent-teams-lite -->") {
+		t.Fatal("end-before-begin: valid ATL open marker should have been stripped")
+	}
+	if strings.Contains(result, "real content") {
+		t.Fatal("end-before-begin: valid ATL block content should have been stripped")
+	}
+	if !strings.Contains(result, "some other content") {
+		t.Fatal("end-before-begin: content after valid ATL block must be preserved")
+	}
+	if strings.Contains(result, "<!-- END:agent-teams-lite -->") {
+		t.Fatal("end-before-begin: orphan END marker should have been removed from output")
+	}
+}
+
+func TestStripLegacyATLBlock_CRLFLineEndings(t *testing.T) {
+	// CRLF line endings should be trimmed cleanly without stray \r characters.
+	input := "before\r\n\r\n<!-- BEGIN:agent-teams-lite -->\r\ncontent\r\n<!-- END:agent-teams-lite -->\r\n\r\nafter\r\n"
+	result := StripLegacyATLBlock(input)
+
+	if strings.Contains(result, "<!-- BEGIN:agent-teams-lite -->") {
+		t.Fatal("ATL block should be stripped")
+	}
+	if !strings.Contains(result, "before") {
+		t.Fatal("content before block must be preserved")
+	}
+	if !strings.Contains(result, "after") {
+		t.Fatal("content after block must be preserved")
+	}
+	// No stray \r should remain at the join point
+	if strings.Contains(result, "\r\n\r\n\n") || strings.Contains(result, "\n\r\n\r") {
+		t.Fatalf("CRLF: stray carriage returns at join point:\n%q", result)
+	}
+}
+
+func TestStripLegacyPersonaBlock_CRLFLineEndings(t *testing.T) {
+	// CRLF line endings in legacy block + markers should be handled cleanly.
+	legacy := "## Rules\r\n\r\n- Some rule.\r\n\r\n## Personality\r\n\r\nSenior Architect, veteran.\r\n\r\n"
+	marker := "<!-- gentle-ai:persona -->\r\nUpdated persona.\r\n<!-- /gentle-ai:persona -->\r\n"
+	input := legacy + marker
+
+	result := StripLegacyPersonaBlock(input)
+
+	if strings.Contains(result, "## Rules") {
+		t.Fatal("legacy block should be stripped")
+	}
+	if !strings.Contains(result, "<!-- gentle-ai:persona -->") {
+		t.Fatal("marker section must be preserved")
+	}
+	// The marker section should not have leading \r artifacts
+	if strings.HasPrefix(result, "\r") {
+		t.Fatal("result should not start with stray \\r")
+	}
+}
+
+func TestStripLegacyATLBlock_InlineMarkerNotStripped(t *testing.T) {
+	// ATL markers appearing inline (not at the start of a line) should NOT be stripped.
+	input := "See <!-- BEGIN:agent-teams-lite --> for reference.\nAnd <!-- END:agent-teams-lite --> too.\n"
+	result := StripLegacyATLBlock(input)
+	if result != input {
+		t.Fatalf("inline markers should not be stripped:\ngot:  %q\nwant: %q", result, input)
+	}
+}
+
+func TestStripLegacyATLBlock_OrphanMarkersCRLF(t *testing.T) {
+	// Orphan END marker with CRLF line endings — must be stripped without leaving stray \r.
+	input := "before\r\n<!-- END:agent-teams-lite -->\r\nafter"
+	result := StripLegacyATLBlock(input)
+
+	if strings.Contains(result, "<!-- END:agent-teams-lite -->") {
+		t.Fatal("orphan END marker should be stripped")
+	}
+	if !strings.Contains(result, "before") {
+		t.Fatal("content before orphan must be preserved")
+	}
+	if !strings.Contains(result, "after") {
+		t.Fatal("content after orphan must be preserved")
+	}
+	// No stray \r between "before" and "after" — the marker line should be cleanly removed
+	if strings.Contains(result, "\r\n\r\r") || strings.Contains(result, "\r\r") {
+		t.Fatalf("orphan CRLF: stray \\r in output:\n%q", result)
+	}
+}
+
+func TestStripLegacyATLBlock_OrphanBeginCRLF(t *testing.T) {
+	// Orphan BEGIN marker with CRLF — must be stripped without stray \r.
+	input := "before\r\n<!-- BEGIN:agent-teams-lite -->\r\nsome content\r\n"
+	result := StripLegacyATLBlock(input)
+
+	if strings.Contains(result, "<!-- BEGIN:agent-teams-lite -->") {
+		t.Fatal("orphan BEGIN marker should be stripped")
+	}
+	if !strings.Contains(result, "before") {
+		t.Fatal("content before orphan must be preserved")
+	}
+	if !strings.Contains(result, "some content") {
+		t.Fatal("content after orphan BEGIN must be preserved")
+	}
+}
+
+func TestStripLegacyATLBlock_MultiBlocksWithContentBetween(t *testing.T) {
+	// Two ATL blocks with user content between them — both blocks stripped,
+	// user content preserved.
+	block := "<!-- BEGIN:agent-teams-lite -->\nATL stuff\n<!-- END:agent-teams-lite -->"
+	input := block + "\n\nuser content here\n\n" + block
+	result := StripLegacyATLBlock(input)
+
+	if strings.Contains(result, "<!-- BEGIN:agent-teams-lite -->") {
+		t.Fatal("both ATL blocks should be stripped")
+	}
+	if strings.Contains(result, "ATL stuff") {
+		t.Fatal("ATL content should be stripped")
+	}
+	if !strings.Contains(result, "user content here") {
+		t.Fatal("user content between blocks must be preserved")
+	}
 }
