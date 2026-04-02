@@ -399,18 +399,19 @@ func TestInjectKimiWritesNativeAgentFilesAndGlobalSkills(t *testing.T) {
 		t.Fatal("Inject(kimi) changed = false")
 	}
 
-	systemPromptPath := filepath.Join(home, ".kimi", "KIMI.md")
-	systemPrompt, err := os.ReadFile(systemPromptPath)
+	// SDD orchestrator is written as a standalone Jinja include module.
+	sddModulePath := filepath.Join(home, ".kimi", "sdd-orchestrator.md")
+	sddModule, err := os.ReadFile(sddModulePath)
 	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", systemPromptPath, err)
+		t.Fatalf("ReadFile(%q) error = %v", sddModulePath, err)
 	}
 
-	systemText := string(systemPrompt)
-	if !strings.Contains(systemText, "/skill:sdd-init") {
-		t.Fatal("KIMI.md missing native /skill guidance")
+	sddText := string(sddModule)
+	if !strings.Contains(sddText, "/skill:sdd-init") {
+		t.Fatal("sdd-orchestrator.md missing native /skill guidance")
 	}
-	if !strings.Contains(systemText, "multiagent:Task") {
-		t.Fatal("KIMI.md should reference Kimi's documented Task tool for custom subagent delegation")
+	if !strings.Contains(sddText, "multiagent:Task") {
+		t.Fatal("sdd-orchestrator.md should reference Kimi's documented Task tool for custom subagent delegation")
 	}
 
 	rootAgentPath := filepath.Join(home, ".kimi", "agents", "gentleman.yaml")

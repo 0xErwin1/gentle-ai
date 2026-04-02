@@ -50,7 +50,9 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 
 		// Kimi agent files
 		"kimi/persona-gentleman.md",
+		"kimi/output-style-gentleman.md",
 		"kimi/sdd-orchestrator.md",
+		"kimi/KIMI.md",
 		"kimi/agents/gentleman.yaml",
 		"kimi/agents/sdd-init.yaml",
 		"kimi/agents/sdd-explore.yaml",

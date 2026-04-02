@@ -140,7 +140,7 @@ func (a *Adapter) CommandsDir(string) string {
 // --- Config strategies ---
 
 func (a *Adapter) SystemPromptStrategy() model.SystemPromptStrategy {
-	return model.StrategyFileReplace
+	return model.StrategyJinjaModules
 }
 
 func (a *Adapter) MCPStrategy() model.MCPStrategy {

@@ -61,8 +61,8 @@ func TestAdapter_ConfigPaths(t *testing.T) {
 func TestAdapter_Strategies(t *testing.T) {
 	a := NewAdapter()
 
-	if got := a.SystemPromptStrategy(); got != model.StrategyFileReplace {
-		t.Errorf("SystemPromptStrategy() = %v, want StrategyFileReplace", got)
+	if got := a.SystemPromptStrategy(); got != model.StrategyJinjaModules {
+		t.Errorf("SystemPromptStrategy() = %v, want StrategyJinjaModules", got)
 	}
 
 	if got := a.MCPStrategy(); got != model.StrategyMCPConfigFile {

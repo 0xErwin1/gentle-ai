@@ -174,6 +174,46 @@ func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (In
 		}
 		changed = changed || writeResult.Changed
 		files = append(files, promptPath)
+
+	case model.StrategyJinjaModules:
+		// Write separate Jinja include modules for Kimi (and any future agents that
+		// use this strategy). Each module corresponds to one {% include "…" %} in
+		// the static KIMI.md template that this case also writes.
+		configDir := adapter.GlobalConfigDir(homeDir)
+
+		// Module 1: persona (raw content — no variables; those live in the template).
+		personaPath := filepath.Join(configDir, "persona.md")
+		wr1, err := filemerge.WriteFileAtomic(personaPath, []byte(content), 0o644)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		changed = changed || wr1.Changed
+		files = append(files, personaPath)
+
+		// Module 2: output-style (Gentleman only; empty file for neutral keeps the
+		// include harmless via "ignore missing" in the template).
+		outputStyleContent := ""
+		if persona == model.PersonaGentleman {
+			outputStyleContent = assets.MustRead("kimi/output-style-gentleman.md")
+		}
+		outputStylePath := filepath.Join(configDir, "output-style.md")
+		wr2, err := filemerge.WriteFileAtomic(outputStylePath, []byte(outputStyleContent), 0o644)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		changed = changed || wr2.Changed
+		files = append(files, outputStylePath)
+
+		// Write the static Jinja template (KIMI.md). This is always the same
+		// embedded asset — WriteFileAtomic makes it idempotent.
+		templateContent := assets.MustRead("kimi/KIMI.md")
+		templatePath := adapter.SystemPromptFile(homeDir)
+		wr3, err := filemerge.WriteFileAtomic(templatePath, []byte(templateContent), 0o644)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		changed = changed || wr3.Changed
+		files = append(files, templatePath)
 	}
 
 	// 2. OpenCode agent definitions — Tab-switchable agents in opencode.json.
@@ -220,29 +260,9 @@ func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (In
 }
 
 func personaContent(agent model.AgentID, persona model.PersonaID) string {
-	wrapKimi := func(content string) string {
-		if agent != model.AgentKimi || strings.TrimSpace(content) == "" {
-			return content
-		}
-		return strings.TrimRight(content, "\n") + `
-
-## Project Instructions
-
-Use the merged AGENTS.md instructions from the current project/worktree whenever they are present:
-
-${KIMI_AGENTS_MD}
-
-## Loaded Skills
-
-Respect the currently loaded Kimi skills and flow skills:
-
-${KIMI_SKILLS}
-`
-	}
 	switch persona {
 	case model.PersonaNeutral:
-		// Neutral persona: same teacher, same philosophy, no regional language.
-		return wrapKimi(assets.MustRead("generic/persona-neutral.md"))
+		return assets.MustRead("generic/persona-neutral.md")
 	case model.PersonaCustom:
 		return ""
 	default:
@@ -253,7 +273,7 @@ ${KIMI_SKILLS}
 		case model.AgentOpenCode:
 			return assets.MustRead("opencode/persona-gentleman.md")
 		case model.AgentKimi:
-			return wrapKimi(assets.MustRead("kimi/persona-gentleman.md"))
+			return assets.MustRead("kimi/persona-gentleman.md")
 		default:
 			// Generic persona includes Gentleman personality + skills table + SDD orchestrator.
 			// Used by Gemini CLI, Cursor, VS Code Copilot, and any future agents.

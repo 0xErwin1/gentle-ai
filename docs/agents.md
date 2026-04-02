@@ -6,17 +6,17 @@
 
 ## Agent Matrix
 
-| Agent | ID | Skills | MCP | Delegation | Output Styles | Slash Commands | Config Path |
-|-------|-----|--------|-----|------------|---------------|----------------|-------------|
-| Claude Code | `claude-code` | Yes | Yes | Full (Task tool) | Yes | No | `~/.claude` |
-| OpenCode | `opencode` | Yes | Yes | Full (multi-mode overlay) | No | Yes | `~/.config/opencode` |
-| Gemini CLI | `gemini-cli` | Yes | Yes | Full (experimental) | No | No | `~/.gemini` |
-| Cursor | `cursor` | Yes | Yes | Full (native subagents) | No | No | `~/.cursor` |
-| VS Code Copilot | `vscode-copilot` | Yes | Yes | Full (runSubagent) | No | No | `~/.copilot` + VS Code User profile |
-| Codex | `codex` | Yes | Yes | Solo-agent | No | No | `~/.codex` |
-| Windsurf | `windsurf` | Yes (native) | Yes | Solo-agent | No | No | `~/.codeium/windsurf` |
-| Antigravity | `antigravity` | Yes (native) | Yes | Solo-agent + Mission Control | No | No | `~/.gemini/antigravity` |
-| Kimi | `kimi` | Yes | Yes | Full (native custom agents) | No | Yes | `~/.kimi` |
+| Agent           | ID               | Skills       | MCP | Delegation                   | Output Styles | Slash Commands | Config Path                         |
+| --------------- | ---------------- | ------------ | --- | ---------------------------- | ------------- | -------------- | ----------------------------------- |
+| Claude Code     | `claude-code`    | Yes          | Yes | Full (Task tool)             | Yes           | No             | `~/.claude`                         |
+| OpenCode        | `opencode`       | Yes          | Yes | Full (multi-mode overlay)    | No            | Yes            | `~/.config/opencode`                |
+| Gemini CLI      | `gemini-cli`     | Yes          | Yes | Full (experimental)          | No            | No             | `~/.gemini`                         |
+| Cursor          | `cursor`         | Yes          | Yes | Full (native subagents)      | No            | No             | `~/.cursor`                         |
+| VS Code Copilot | `vscode-copilot` | Yes          | Yes | Full (runSubagent)           | No            | No             | `~/.copilot` + VS Code User profile |
+| Codex           | `codex`          | Yes          | Yes | Solo-agent                   | No            | No             | `~/.codex`                          |
+| Windsurf        | `windsurf`       | Yes (native) | Yes | Solo-agent                   | No            | No             | `~/.codeium/windsurf`               |
+| Antigravity     | `antigravity`    | Yes (native) | Yes | Solo-agent + Mission Control | No            | No             | `~/.gemini/antigravity`             |
+| Kimi            | `kimi`           | Yes          | Yes | Full (native custom agents)  | No            | Yes            | `~/.kimi`                           |
 
 All agents receive the **full SDD orchestrator** injected into their system prompt, plus skill files written to their skills directory. The agent handles SDD automatically when the task is large enough, or when the user explicitly asks for it — no manual setup required.
 
@@ -24,10 +24,10 @@ All agents receive the **full SDD orchestrator** injected into their system prom
 
 ## Delegation Models
 
-| Model | How It Works | Agents |
-|-------|-------------|--------|
+| Model                 | How It Works                                                                                                                         | Agents                                                           |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
 | **Full (sub-agents)** | Each SDD phase runs in an isolated context window via native sub-agent delegation. The orchestrator coordinates; sub-agents execute. | Claude Code, OpenCode, Gemini CLI, Cursor, VS Code Copilot, Kimi |
-| **Solo-agent** | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram provides cross-phase persistence. | Codex, Windsurf, Antigravity |
+| **Solo-agent**        | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram provides cross-phase persistence.       | Codex, Windsurf, Antigravity                                     |
 
 ### Cursor Native Subagents
 
@@ -54,11 +54,11 @@ Antigravity is an agent-first platform with built-in sub-agents (Browser, Termin
 
 ## SDD Mode Support
 
-| Feature | Claude Code | OpenCode | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity | Kimi |
-|---------|:-----------:|:--------:|:----------:|:------:|:---------------:|:-----:|:--------:|:-----------:|:----:|
-| SDD orchestrator | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Single-mode SDD | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-| Multi-mode SDD | — | Yes | — | — | — | — | — | — | — |
+| Feature          | Claude Code | OpenCode | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity | Kimi |
+| ---------------- | :---------: | :------: | :--------: | :----: | :-------------: | :---: | :------: | :---------: | :--: |
+| SDD orchestrator |     Yes     |   Yes    |    Yes     |  Yes   |       Yes       |  Yes  |   Yes    |     Yes     | Yes  |
+| Single-mode SDD  |     Yes     |   Yes    |    Yes     |  Yes   |       Yes       |  Yes  |   Yes    |     Yes     | Yes  |
+| Multi-mode SDD   |      —      |   Yes    |     —      |   —    |        —        |   —   |    —     |      —      |  —   |
 
 **Multi-mode** (assigning different AI models to each SDD phase) is an **OpenCode-only** feature because it requires OpenCode's provider system to route phases to specific models. All other agents run in **single-mode** — the orchestrator manages everything using whatever model the agent is already running.
 
@@ -67,48 +67,63 @@ Antigravity is an agent-first platform with built-in sub-agents (Browser, Termin
 ## Agent Notes
 
 ### Claude Code
+
 - Sub-agents via the native Task tool with isolated context windows
 - MCP servers configured as plugins in `~/.claude/mcp/`
 - Output styles in `~/.claude/output-styles/`
 - System prompt via markdown sections in `~/.claude/CLAUDE.md`
 
 ### OpenCode
+
 - Full multi-agent overlay with 12 named agents in `opencode.json`
 - Slash commands for SDD phases (`/sdd-new`, `/sdd-explore`, etc.)
 - Background-agents plugin for parallel execution
 - Multi-mode prerequisite: connect your AI providers first, then run `opencode models --refresh`
 
 ### Gemini CLI
+
 - Sub-agents are experimental: require `experimental.enableAgents: true` in `settings.json`
 - Custom sub-agents defined as markdown files in `~/.gemini/agents/`
 
 ### Cursor
+
 - Native subagents via `~/.cursor/agents/sdd-{phase}.md` (9 files installed by gentle-ai)
 - Skills at `~/.cursor/skills/`
 - System prompt in `~/.cursor/rules/gentle-ai.mdc`
 - MCP config in `~/.cursor/mcp.json`
 
 ### VS Code Copilot
+
 - Uses the `runSubagent` tool with support for parallel execution
 - Skills at `~/.copilot/skills/`
 - System prompt at `Code/User/prompts/gentle-ai.instructions.md`
 - MCP config at `Code/User/mcp.json`
 
 ### Codex
+
 - CLI-native agent with TOML config at `~/.codex/config.toml`
 - Skills at `~/.codex/skills/`
 - System prompt at `~/.codex/agents.md`
 - Engram instruction files at `~/.codex/engram-instructions.md`
 
 ### Windsurf
+
 - Skills at `~/.codeium/windsurf/skills/` (native Windsurf feature)
 - MCP config at `~/.codeium/windsurf/mcp_config.json`
 - Global rules at `~/.codeium/windsurf/memories/global_rules.md`
 - Workflows at `.windsurf/workflows/` (workspace-scoped)
 
 ### Antigravity
+
 - Skills at `~/.gemini/antigravity/skills/` (native Antigravity feature)
 - MCP config at `~/.gemini/antigravity/mcp_config.json`
 - System prompt appended to `~/.gemini/GEMINI.md` (shared with Gemini CLI — collision check warns if both are installed)
 - Mission Control handles built-in sub-agent delegation (Browser, Terminal) automatically
 - Settings managed via the IDE's Agent settings UI, not via `settings.json`
+
+### Kimi
+
+- Root custom agent at `~/.kimi/agents/gentleman.yaml` with `system_prompt_path: ../KIMI.md`
+- `KIMI.md` is a thin Jinja template that includes modular prompt files:
+  `persona.md`, `output-style.md`, `engram-protocol.md`, `sdd-orchestrator.md`
+- Built-in Kimi variables are preserved in `KIMI.md`: `${KIMI_AGENTS_MD}` and `${KIMI_SKILLS}`

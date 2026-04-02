@@ -210,12 +210,26 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			}
 			changed = changed || result.Changed
 			files = append(files, result.Files...)
+
+		case model.StrategyJinjaModules:
+			// Write the SDD orchestrator as a standalone Jinja include module.
+			// The static KIMI.md template references it via {% include "sdd-orchestrator.md" %}.
+			configDir := adapter.GlobalConfigDir(homeDir)
+			content := assets.MustRead(sddOrchestratorAsset(adapter.Agent()))
+			modulePath := filepath.Join(configDir, "sdd-orchestrator.md")
+			writeResult, err := filemerge.WriteFileAtomic(modulePath, []byte(content), 0o644)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			changed = changed || writeResult.Changed
+			files = append(files, modulePath)
 		}
 	}
 
 	// 1b. If StrictTDD is enabled, inject the strict-tdd-mode marker section
 	// into the system prompt file so agents know Strict TDD is active.
-	if opts.StrictTDD && adapter.Agent() != model.AgentOpenCode {
+	if opts.StrictTDD && adapter.Agent() != model.AgentOpenCode &&
+		adapter.SystemPromptStrategy() != model.StrategyJinjaModules {
 		promptPath := adapter.SystemPromptFile(homeDir)
 		strictTDDContent := "Strict TDD Mode: enabled"
 		existing, readErr := readFileOrEmpty(promptPath)

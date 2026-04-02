@@ -240,6 +240,19 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 			changed = changed || mdWrite.Changed
 			files = append(files, promptPath)
 
+		case model.StrategyJinjaModules:
+			// Write the Engram protocol as a standalone Jinja include module.
+			// The static KIMI.md template references it via {% include "engram-protocol.md" %}.
+			configDir := adapter.GlobalConfigDir(homeDir)
+			protocolContent := assets.MustRead("claude/engram-protocol.md")
+			modulePath := filepath.Join(configDir, "engram-protocol.md")
+			mdWrite, err := filemerge.WriteFileAtomic(modulePath, []byte(protocolContent), 0o644)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			changed = changed || mdWrite.Changed
+			files = append(files, modulePath)
+
 		default:
 			promptPath := adapter.SystemPromptFile(homeDir)
 			protocolContent := assets.MustRead("claude/engram-protocol.md")
