@@ -28,7 +28,7 @@ func RenderABPrompt(ta textarea.Model) string {
 	if ta.Value() == "" {
 		b.WriteString(styles.SubtextStyle.Render("(type a description to continue)"))
 	} else {
-		b.WriteString(styles.SuccessStyle.Render("enter: continue"))
+		b.WriteString(styles.SuccessStyle.Render("tab: continue (enter adds a new line)"))
 	}
 	b.WriteString("\n\n")
 

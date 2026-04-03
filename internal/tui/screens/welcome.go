@@ -10,14 +10,21 @@ import (
 
 // WelcomeOptions returns the welcome menu options.
 // When showProfiles is true, an "OpenCode SDD Profiles" option is inserted
-// at index 5 (between "Configure models" and "Manage backups").
+// between "Configure models" and "Manage backups".
 // profileCount is used to show a badge with the current profile count.
-func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int) []string {
+// When hasEngines is false, "Create your own Agent" is shown as disabled
+// (labelled "(no agents)") to signal that no supported AI engine is installed.
+func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool) []string {
 	upgradeLabel := "Upgrade tools"
 	if updateCheckDone && update.HasUpdates(updateResults) {
 		upgradeLabel = "Upgrade tools ★"
 	} else if updateCheckDone && !update.HasUpdates(updateResults) {
 		upgradeLabel = "Upgrade tools (up to date)"
+	}
+
+	agentLabel := "Create your own Agent"
+	if !hasEngines {
+		agentLabel = "Create your own Agent (no agents)"
 	}
 
 	opts := []string{
@@ -26,7 +33,7 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 		"Sync configs",
 		"Upgrade + Sync",
 		"Configure models",
-		"Create your own Agent",
+		agentLabel,
 	}
 
 	if showProfiles {
@@ -43,7 +50,7 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 	return opts
 }
 
-func RenderWelcome(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int) string {
+func RenderWelcome(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool) string {
 	var b strings.Builder
 
 	b.WriteString(styles.RenderLogo())
@@ -59,7 +66,7 @@ func RenderWelcome(cursor int, version string, updateBanner string, updateResult
 	b.WriteString("\n")
 	b.WriteString(styles.HeadingStyle.Render("Menu"))
 	b.WriteString("\n\n")
-	b.WriteString(renderOptions(WelcomeOptions(updateResults, updateCheckDone, showProfiles, profileCount), cursor))
+	b.WriteString(renderOptions(WelcomeOptions(updateResults, updateCheckDone, showProfiles, profileCount, hasEngines), cursor))
 	b.WriteString("\n")
 	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • q: quit"))
 

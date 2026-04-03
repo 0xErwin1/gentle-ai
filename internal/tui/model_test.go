@@ -843,12 +843,12 @@ func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	// Without OpenCode detected: 8 options (includes "Create your own Agent").
-	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0)
+	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true)
 	if len(opts) != 8 {
 		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 8; got %v", len(opts), opts)
 	}
 	// With OpenCode detected: 9 options (adds "OpenCode SDD Profiles").
-	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 0)
+	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 0, true)
 	if len(optsWithProfiles) != 9 {
 		t.Fatalf("WelcomeOptions(showProfiles=true) len = %d, want 9; got %v", len(optsWithProfiles), optsWithProfiles)
 	}

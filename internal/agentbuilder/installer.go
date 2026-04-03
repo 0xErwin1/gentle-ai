@@ -30,8 +30,9 @@ func Install(agent *GeneratedAgent, adapters []AdapterInfo, _ string) ([]Install
 		skillFile := filepath.Join(skillDir, "SKILL.md")
 
 		if err := os.MkdirAll(skillDir, 0755); err != nil {
-			// Rollback previously written files.
+			// Rollback previously written files and mark all results as failed.
 			rollback(written)
+			markAllFailed(results)
 			results = append(results, InstallResult{
 				AgentID: adapter.AgentID,
 				Path:    skillFile,
@@ -42,8 +43,9 @@ func Install(agent *GeneratedAgent, adapters []AdapterInfo, _ string) ([]Install
 		}
 
 		if err := os.WriteFile(skillFile, []byte(agent.Content), 0644); err != nil {
-			// Rollback previously written files.
+			// Rollback previously written files and mark all results as failed.
 			rollback(written)
+			markAllFailed(results)
 			results = append(results, InstallResult{
 				AgentID: adapter.AgentID,
 				Path:    skillFile,
@@ -68,5 +70,13 @@ func Install(agent *GeneratedAgent, adapters []AdapterInfo, _ string) ([]Install
 func rollback(paths []string) {
 	for _, p := range paths {
 		_ = os.Remove(p)
+	}
+}
+
+// markAllFailed sets Success=false on every result in the slice.
+// Called after a rollback so previously-succeeded results reflect the true outcome.
+func markAllFailed(results []InstallResult) {
+	for i := range results {
+		results[i].Success = false
 	}
 }

@@ -4,26 +4,19 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+
+	"github.com/gentleman-programming/gentle-ai/internal/catalog"
 )
 
-// knownBuiltinSkills is the set of built-in skill names shipped with Gentleman AI.
-// A custom agent name must not collide with these.
-var knownBuiltinSkills = map[string]struct{}{
-	"sdd-init":       {},
-	"sdd-apply":      {},
-	"sdd-verify":     {},
-	"sdd-explore":    {},
-	"sdd-propose":    {},
-	"sdd-spec":       {},
-	"sdd-design":     {},
-	"sdd-tasks":      {},
-	"sdd-archive":    {},
-	"sdd-onboard":    {},
-	"go-testing":     {},
-	"skill-creator":  {},
-	"judgment-day":   {},
-	"branch-pr":      {},
-	"issue-creation": {},
+// builtinSkills returns the current set of built-in skill names derived from
+// the catalog so that conflict detection stays in sync as skills are added.
+func builtinSkills() map[string]struct{} {
+	skills := catalog.MVPSkills()
+	m := make(map[string]struct{}, len(skills))
+	for _, s := range skills {
+		m[s.Name] = struct{}{}
+	}
+	return m
 }
 
 // LoadRegistry reads the registry JSON from path.
@@ -83,6 +76,6 @@ func (r *Registry) RemoveByName(name string) bool {
 
 // HasConflictWithBuiltin reports whether name collides with a known built-in skill.
 func HasConflictWithBuiltin(name string) bool {
-	_, ok := knownBuiltinSkills[name]
+	_, ok := builtinSkills()[name]
 	return ok
 }

@@ -113,8 +113,10 @@ type AgentBuilderState struct {
 	SDDMode          agentbuilder.SDDIntegrationMode
 	SDDTargetPhase   string
 	Generating       bool
+	GenerationCancel context.CancelFunc
 	Generated        *agentbuilder.GeneratedAgent
 	GenerationErr    error
+	ConflictWarning  string
 	Installing       bool
 	InstallResults   []agentbuilder.InstallResult
 	InstallErr       error
@@ -385,6 +387,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case AgentBuilderGeneratedMsg:
+		// If generation was cancelled (Esc while generating), ignore the result.
+		if !m.AgentBuilder.Generating {
+			return m, nil
+		}
 		m.AgentBuilder.Generating = false
 		if msg.Err != nil {
 			m.AgentBuilder.GenerationErr = msg.Err
@@ -392,6 +398,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.AgentBuilder.Generated = msg.Agent
 			m.AgentBuilder.GenerationErr = nil
+			// Check for builtin conflict and set warning before showing preview.
+			if msg.Agent != nil && agentbuilder.HasConflictWithBuiltin(msg.Agent.Name) {
+				m.AgentBuilder.ConflictWarning = fmt.Sprintf(
+					"Warning: '%s' conflicts with a built-in skill. It will be installed as '%s-custom'.",
+					msg.Agent.Name, msg.Agent.Name,
+				)
+			} else {
+				m.AgentBuilder.ConflictWarning = ""
+			}
 			m.setScreen(ScreenAgentBuilderPreview)
 		}
 		return m, nil
@@ -569,7 +584,7 @@ func (m Model) View() string {
 		if m.UpdateCheckDone && update.HasUpdates(m.UpdateResults) {
 			banner = "Updates available: " + update.UpdateSummaryLine(m.UpdateResults)
 		}
-		return screens.RenderWelcome(m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList))
+		return screens.RenderWelcome(m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines())
 	case ScreenUpgrade:
 		return screens.RenderUpgrade(m.UpdateResults, m.UpgradeReport, m.UpgradeErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame)
 	case ScreenSync:
@@ -653,7 +668,7 @@ func (m Model) View() string {
 		return screens.RenderABGenerating(engineName, m.SpinnerFrame, m.AgentBuilder.GenerationErr)
 	case ScreenAgentBuilderPreview:
 		targets := m.agentBuilderInstallTargets()
-		return screens.RenderABPreview(m.AgentBuilder.Generated, targets, m.AgentBuilder.PreviewScroll, m.Height, m.Cursor, m.AgentBuilder.InstallErr)
+		return screens.RenderABPreview(m.AgentBuilder.Generated, targets, m.AgentBuilder.PreviewScroll, m.Height, m.Cursor, m.AgentBuilder.InstallErr, m.AgentBuilder.ConflictWarning)
 	case ScreenAgentBuilderInstalling:
 		engineName := string(m.AgentBuilder.SelectedEngine)
 		return screens.RenderABInstalling(engineName, m.SpinnerFrame, m.AgentBuilder.InstallErr)
@@ -913,7 +928,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case 4:
 			m.setScreen(ScreenModelConfig)
 		case 5:
-			// "Create your own Agent" — initialize engine list and navigate.
+			// "Create your own Agent" — blocked when no engines are available.
+			if !m.hasAgentBuilderEngines() {
+				return m, nil
+			}
 			m.AgentBuilder = AgentBuilderState{}
 			m.AgentBuilder.AvailableEngines = m.detectAgentBuilderEngines()
 			ta := textarea.New()
@@ -1550,7 +1568,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 	case ScreenAgentBuilderPreview:
 		switch m.Cursor {
 		case 0:
-			// Install.
+			// Install — guard against nil generated agent.
+			if m.AgentBuilder.Generated == nil {
+				return m, nil
+			}
 			return m.startInstallation()
 		case 1:
 			// Regenerate — go back to generating.
@@ -1750,8 +1771,8 @@ func (m Model) goBack() Model {
 		return m
 	}
 
-	// Block going back while agent generation or installation is in progress.
-	if m.AgentBuilder.Generating || m.AgentBuilder.Installing {
+	// Block going back while agent installation is in progress.
+	if m.AgentBuilder.Installing {
 		return m
 	}
 
@@ -1770,7 +1791,15 @@ func (m Model) goBack() Model {
 			m.setScreen(ScreenAgentBuilderPrompt)
 			return m
 		}
-		// Generation still running: block.
+		if m.AgentBuilder.Generating {
+			// Cancel in-progress generation and navigate back to prompt.
+			if m.AgentBuilder.GenerationCancel != nil {
+				m.AgentBuilder.GenerationCancel()
+			}
+			m.AgentBuilder.Generating = false
+			m.setScreen(ScreenAgentBuilderPrompt)
+			return m
+		}
 		return m
 	}
 
@@ -2010,7 +2039,7 @@ func (m Model) handleRenameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) optionCount() int {
 	switch m.Screen {
 	case ScreenWelcome:
-		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList)))
+		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines()))
 	case ScreenUpgrade:
 		if m.UpgradeReport != nil || m.UpgradeErr != nil {
 			return 1 // "return" option in results/error state
@@ -2525,45 +2554,27 @@ func (m Model) agentBuilderInstallTargets() []string {
 
 // buildAgentBuilderAdapters returns the AdapterInfo list for all detected agents.
 func (m Model) buildAgentBuilderAdapters() []agentbuilder.AdapterInfo {
-	type agentSkillsDir struct {
-		id  model.AgentID
-		dir string
-	}
-	// Map from AgentID to well-known skills directory path.
-	wellKnown := []agentSkillsDir{
-		{model.AgentClaudeCode, homeDir() + "/.claude/skills"},
-		{model.AgentOpenCode, homeDir() + "/.config/opencode/skills"},
-		{model.AgentGeminiCLI, homeDir() + "/.gemini/skills"},
-		{model.AgentCodex, homeDir() + "/.codex/skills"},
-	}
-
 	var adapters []agentbuilder.AdapterInfo
 	for _, cfg := range m.Detection.Configs {
 		if !cfg.Exists {
 			continue
 		}
 		agentID := model.AgentID(strings.TrimSpace(cfg.Agent))
-		for _, wk := range wellKnown {
-			if wk.id == agentID {
-				adapters = append(adapters, agentbuilder.AdapterInfo{
-					AgentID:   agentID,
-					SkillsDir: wk.dir,
-				})
-				break
-			}
+		if skillsDir, ok := agentBuilderSkillsDir(agentID); ok {
+			adapters = append(adapters, agentbuilder.AdapterInfo{
+				AgentID:   agentID,
+				SkillsDir: skillsDir,
+			})
 		}
 	}
 	// Fallback: if no agents detected via config, use all engines that are available.
 	if len(adapters) == 0 {
 		for _, id := range m.AgentBuilder.AvailableEngines {
-			for _, wk := range wellKnown {
-				if wk.id == id {
-					adapters = append(adapters, agentbuilder.AdapterInfo{
-						AgentID:   id,
-						SkillsDir: wk.dir,
-					})
-					break
-				}
+			if skillsDir, ok := agentBuilderSkillsDir(id); ok {
+				adapters = append(adapters, agentbuilder.AdapterInfo{
+					AgentID:   id,
+					SkillsDir: skillsDir,
+				})
 			}
 		}
 	}
@@ -2579,6 +2590,33 @@ func homeDir() string {
 		return h
 	}
 	return "/tmp"
+}
+
+// buildInstalledAgentIDs returns the list of AgentIDs from the adapter list.
+func buildInstalledAgentIDs(adapters []agentbuilder.AdapterInfo) []model.AgentID {
+	ids := make([]model.AgentID, 0, len(adapters))
+	for _, a := range adapters {
+		ids = append(ids, a.AgentID)
+	}
+	return ids
+}
+
+// agentBuilderSkillsDir returns the skills directory for the given agent and a
+// flag indicating whether the path was found among the well-known agents.
+func agentBuilderSkillsDir(agentID model.AgentID) (string, bool) {
+	home := homeDir()
+	switch agentID {
+	case model.AgentClaudeCode:
+		return filepath.Join(home, ".claude", "skills"), true
+	case model.AgentOpenCode:
+		return filepath.Join(home, ".config", "opencode", "skills"), true
+	case model.AgentGeminiCLI:
+		return filepath.Join(home, ".gemini", "skills"), true
+	case model.AgentCodex:
+		return filepath.Join(home, ".codex", "skills"), true
+	default:
+		return "", false
+	}
 }
 
 // startGeneration launches the AI generation goroutine and transitions to the
@@ -2598,14 +2636,25 @@ func (m Model) startGeneration() (tea.Model, tea.Cmd) {
 			Mode:        m.AgentBuilder.SDDMode,
 			TargetPhase: m.AgentBuilder.SDDTargetPhase,
 		}
+		// For SDDNewPhase, set a placeholder PhaseName before prompt composition.
+		// The actual PhaseName is updated after generation from agent.Name.
+		if m.AgentBuilder.SDDMode == agentbuilder.SDDNewPhase {
+			sddConfig.PhaseName = "to-be-determined-from-title"
+		}
 		// PhaseName will be set after generation from the agent's Name field.
 		// SDDTargetPhase is the "insert after" position, not the new phase name.
 	}
 
 	// Capture for goroutine.
 	capturedSDD := sddConfig
+	adapters := m.buildAgentBuilderAdapters()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	m.AgentBuilder.GenerationCancel = cancel
 
 	return m, tea.Batch(tickCmd(), func() tea.Msg {
+		defer cancel()
+
 		engine := agentbuilder.NewEngine(engineID)
 		if engine == nil {
 			return AgentBuilderGeneratedMsg{
@@ -2613,10 +2662,8 @@ func (m Model) startGeneration() (tea.Model, tea.Cmd) {
 			}
 		}
 
-		prompt := agentbuilder.ComposePrompt(userInput, capturedSDD, nil)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
+		installedAgents := buildInstalledAgentIDs(adapters)
+		prompt := agentbuilder.ComposePrompt(userInput, capturedSDD, installedAgents)
 
 		raw, err := engine.Generate(ctx, prompt)
 		if err != nil {
@@ -2699,11 +2746,48 @@ func (m Model) startInstallation() (tea.Model, tea.Cmd) {
 				SDDIntegration:   installAgent.SDDConfig,
 				InstalledAgents:  installedIDs,
 			}
-			reg.Add(entry)
+			// Update existing entry if present; otherwise append.
+			if existing := reg.FindByName(installAgent.Name); existing != nil {
+				existing.Title = entry.Title
+				existing.Description = entry.Description
+				existing.CreatedAt = entry.CreatedAt
+				existing.GenerationEngine = entry.GenerationEngine
+				existing.SDDIntegration = entry.SDDIntegration
+				existing.InstalledAgents = entry.InstalledAgents
+			} else {
+				reg.Add(entry)
+			}
 			// Best-effort save — ignore save errors.
 			_ = agentbuilder.SaveRegistry(registryPath, reg)
 		}
 
+		// Wire SDD injection: append custom-agent reference blocks to system prompts.
+		// Best-effort — don't fail the whole install if SDD injection fails.
+		if installAgent.SDDConfig != nil && installAgent.SDDConfig.Mode != agentbuilder.SDDStandalone {
+			for _, adapter := range adapters {
+				if systemPromptPath, ok := agentBuilderSystemPromptPath(adapter.AgentID); ok {
+					_ = agentbuilder.InjectSDDReference(installAgent, systemPromptPath)
+				}
+			}
+		}
+
 		return AgentBuilderInstallDoneMsg{Results: results, Err: nil}
 	})
+}
+
+// agentBuilderSystemPromptPath returns the system prompt file path for the given agent.
+func agentBuilderSystemPromptPath(agentID model.AgentID) (string, bool) {
+	home := homeDir()
+	switch agentID {
+	case model.AgentClaudeCode:
+		return filepath.Join(home, ".claude", "CLAUDE.md"), true
+	case model.AgentOpenCode:
+		return filepath.Join(home, ".config", "opencode", "AGENTS.md"), true
+	case model.AgentGeminiCLI:
+		return filepath.Join(home, ".gemini", "GEMINI.md"), true
+	case model.AgentCodex:
+		return filepath.Join(home, ".codex", "AGENTS.md"), true
+	default:
+		return "", false
+	}
 }

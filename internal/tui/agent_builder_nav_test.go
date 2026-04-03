@@ -272,19 +272,27 @@ func TestAgentBuilder_EscFromComplete_ReturnsToWelcome(t *testing.T) {
 	}
 }
 
-// ─── T-28.15: Esc blocked while Generating is true ───────────────────────────
+// ─── T-28.15: Esc while Generating cancels and returns to Prompt ─────────────
 
-func TestAgentBuilder_EscBlockedWhileGenerating(t *testing.T) {
+func TestAgentBuilder_EscCancelsGeneration(t *testing.T) {
+	cancelled := false
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenAgentBuilderGenerating
 	m.AgentBuilder.Generating = true
 	m.AgentBuilder.GenerationErr = nil // no error — actively generating
+	m.AgentBuilder.GenerationCancel = func() { cancelled = true }
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	state := updated.(Model)
 
-	if state.Screen != ScreenAgentBuilderGenerating {
-		t.Fatalf("screen = %v, want ScreenAgentBuilderGenerating (esc blocked while generating)", state.Screen)
+	if state.Screen != ScreenAgentBuilderPrompt {
+		t.Fatalf("screen = %v, want ScreenAgentBuilderPrompt (esc cancels generation)", state.Screen)
+	}
+	if state.AgentBuilder.Generating {
+		t.Fatal("Generating should be false after cancel")
+	}
+	if !cancelled {
+		t.Fatal("GenerationCancel should have been called")
 	}
 }
 

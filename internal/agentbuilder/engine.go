@@ -1,6 +1,7 @@
 package agentbuilder
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os/exec"
@@ -47,9 +48,11 @@ func (e *ClaudeEngine) Available() bool {
 
 func (e *ClaudeEngine) Generate(ctx context.Context, prompt string) (string, error) {
 	cmd := exec.CommandContext(ctx, "claude", "--print", "-p", prompt)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("claude generate: %w", err)
+		return "", fmt.Errorf("claude generate: %w\nstderr: %s", err, stderr.String())
 	}
 	return string(out), nil
 }
@@ -66,9 +69,11 @@ func (e *OpenCodeEngine) Available() bool {
 
 func (e *OpenCodeEngine) Generate(ctx context.Context, prompt string) (string, error) {
 	cmd := exec.CommandContext(ctx, "opencode", "run", prompt)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("opencode generate: %w", err)
+		return "", fmt.Errorf("opencode generate: %w\nstderr: %s", err, stderr.String())
 	}
 	return string(out), nil
 }
@@ -85,9 +90,11 @@ func (e *GeminiEngine) Available() bool {
 
 func (e *GeminiEngine) Generate(ctx context.Context, prompt string) (string, error) {
 	cmd := exec.CommandContext(ctx, "gemini", "-p", prompt)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("gemini generate: %w", err)
+		return "", fmt.Errorf("gemini generate: %w\nstderr: %s", err, stderr.String())
 	}
 	return string(out), nil
 }
@@ -104,9 +111,11 @@ func (e *CodexEngine) Available() bool {
 
 func (e *CodexEngine) Generate(ctx context.Context, prompt string) (string, error) {
 	cmd := exec.CommandContext(ctx, "codex", "exec", prompt)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("codex generate: %w", err)
+		return "", fmt.Errorf("codex generate: %w\nstderr: %s", err, stderr.String())
 	}
 	return string(out), nil
 }

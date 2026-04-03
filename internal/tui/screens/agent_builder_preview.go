@@ -14,7 +14,7 @@ func ABPreviewActions() []string {
 }
 
 // RenderABPreview renders the generated-agent preview screen with a scrollable content pane.
-func RenderABPreview(agent *agentbuilder.GeneratedAgent, targets []string, scroll int, height int, cursor int, installErr error) string {
+func RenderABPreview(agent *agentbuilder.GeneratedAgent, targets []string, scroll int, height int, cursor int, installErr error, conflictWarning string) string {
 	var b strings.Builder
 
 	if agent == nil {
@@ -24,6 +24,11 @@ func RenderABPreview(agent *agentbuilder.GeneratedAgent, targets []string, scrol
 
 	if installErr != nil {
 		b.WriteString(styles.ErrorStyle.Render("✗ Installation failed: " + installErr.Error()))
+		b.WriteString("\n\n")
+	}
+
+	if conflictWarning != "" {
+		b.WriteString(styles.WarningStyle.Render("⚠ " + conflictWarning))
 		b.WriteString("\n\n")
 	}
 
