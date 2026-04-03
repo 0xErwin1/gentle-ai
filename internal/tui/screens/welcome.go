@@ -26,6 +26,7 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 		"Sync configs",
 		"Upgrade + Sync",
 		"Configure models",
+		"Create your own Agent",
 	}
 
 	if showProfiles {

@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/gentleman-programming/gentle-ai/internal/agentbuilder"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
@@ -90,6 +93,34 @@ type UpgradePhaseCompletedMsg struct {
 	Err    error
 }
 
+// AgentBuilderGeneratedMsg is sent when the AI generation goroutine completes.
+type AgentBuilderGeneratedMsg struct {
+	Agent *agentbuilder.GeneratedAgent
+	Err   error
+}
+
+// AgentBuilderInstallDoneMsg is sent when the agent installation goroutine completes.
+type AgentBuilderInstallDoneMsg struct {
+	Results []agentbuilder.InstallResult
+	Err     error
+}
+
+// AgentBuilderState holds all transient state for the agent-builder TUI flow.
+type AgentBuilderState struct {
+	AvailableEngines []model.AgentID
+	SelectedEngine   model.AgentID
+	Textarea         textarea.Model
+	SDDMode          agentbuilder.SDDIntegrationMode
+	SDDTargetPhase   string
+	Generating       bool
+	Generated        *agentbuilder.GeneratedAgent
+	GenerationErr    error
+	Installing       bool
+	InstallResults   []agentbuilder.InstallResult
+	InstallErr       error
+	PreviewScroll    int
+}
+
 // UpgradeFunc is the signature of the function injected to perform tool upgrades.
 type UpgradeFunc func(ctx context.Context, results []update.UpdateResult) upgrade.UpgradeReport
 
@@ -151,6 +182,14 @@ const (
 	ScreenProfiles
 	ScreenProfileCreate
 	ScreenProfileDelete
+	ScreenAgentBuilderEngine
+	ScreenAgentBuilderPrompt
+	ScreenAgentBuilderSDD
+	ScreenAgentBuilderSDDPhase
+	ScreenAgentBuilderGenerating
+	ScreenAgentBuilderPreview
+	ScreenAgentBuilderInstalling
+	ScreenAgentBuilderComplete
 )
 
 type Model struct {
@@ -284,6 +323,9 @@ type Model struct {
 	ProfileNameErr       string          // validation error message
 	ProfileNameCollision bool            // true when name collides with existing profile (awaiting second enter to overwrite)
 	ProfileDeleteErr     error           // error from the last RemoveProfileAgents call, displayed on ScreenProfiles
+
+	// AgentBuilder holds the transient state for the agent-builder TUI flow.
+	AgentBuilder AgentBuilderState
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
@@ -335,6 +377,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			(m.Screen == ScreenUpgradeSync && !m.UpdateCheckDone) {
 			m.SpinnerFrame = (m.SpinnerFrame + 1) % 10
 			return m, tickCmd()
+		}
+		// Keep spinner running for agent builder generating/installing screens.
+		if m.AgentBuilder.Generating || m.AgentBuilder.Installing {
+			m.SpinnerFrame = (m.SpinnerFrame + 1) % 10
+			return m, tickCmd()
+		}
+		return m, nil
+	case AgentBuilderGeneratedMsg:
+		m.AgentBuilder.Generating = false
+		if msg.Err != nil {
+			m.AgentBuilder.GenerationErr = msg.Err
+			// Stay on generating screen to show error.
+		} else {
+			m.AgentBuilder.Generated = msg.Agent
+			m.AgentBuilder.GenerationErr = nil
+			m.setScreen(ScreenAgentBuilderPreview)
+		}
+		return m, nil
+	case AgentBuilderInstallDoneMsg:
+		m.AgentBuilder.Installing = false
+		if msg.Err != nil {
+			m.AgentBuilder.InstallErr = msg.Err
+			m.setScreen(ScreenAgentBuilderPreview)
+		} else {
+			m.AgentBuilder.InstallResults = msg.Results
+			m.AgentBuilder.InstallErr = nil
+			m.setScreen(ScreenAgentBuilderComplete)
 		}
 		return m, nil
 	case StepProgressMsg:
@@ -394,6 +463,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.Screen == ScreenProfileCreate && m.ProfileCreateStep == 0 && !m.ProfileEditMode {
 			return m.handleProfileNameInput(msg)
+		}
+		// Delegate to textarea when on the agent builder prompt screen,
+		// unless the user pressed Esc (to go back) or Tab (to continue).
+		if m.Screen == ScreenAgentBuilderPrompt {
+			if msg.String() == "esc" {
+				return m.handleKeyPress(msg)
+			}
+			if msg.String() == "tab" || msg.String() == "ctrl+enter" {
+				// "Continue" — proceed to SDD selection if textarea is not empty.
+				if m.AgentBuilder.Textarea.Value() != "" {
+					m.setScreen(ScreenAgentBuilderSDD)
+				}
+				return m, nil
+			}
+			// All other keys go to the textarea.
+			var taCmd tea.Cmd
+			m.AgentBuilder.Textarea, taCmd = m.AgentBuilder.Textarea.Update(msg)
+			return m, taCmd
 		}
 		return m.handleKeyPress(msg)
 	}
@@ -553,6 +640,25 @@ func (m Model) View() string {
 		return screens.RenderDeleteResult(m.SelectedBackup, m.DeleteErr)
 	case ScreenRenameBackup:
 		return screens.RenderRenameBackup(m.SelectedBackup, m.BackupRenameText, m.BackupRenamePos)
+	case ScreenAgentBuilderEngine:
+		return screens.RenderABEngine(m.AgentBuilder.AvailableEngines, m.Cursor)
+	case ScreenAgentBuilderPrompt:
+		return screens.RenderABPrompt(m.AgentBuilder.Textarea)
+	case ScreenAgentBuilderSDD:
+		return screens.RenderABSDD(string(m.AgentBuilder.SDDMode), m.Cursor)
+	case ScreenAgentBuilderSDDPhase:
+		return screens.RenderABSDDPhase(screens.ABSDDPhases(), m.Cursor, m.AgentBuilder.SDDMode == agentbuilder.SDDNewPhase)
+	case ScreenAgentBuilderGenerating:
+		engineName := string(m.AgentBuilder.SelectedEngine)
+		return screens.RenderABGenerating(engineName, m.SpinnerFrame, m.AgentBuilder.GenerationErr)
+	case ScreenAgentBuilderPreview:
+		targets := m.agentBuilderInstallTargets()
+		return screens.RenderABPreview(m.AgentBuilder.Generated, targets, m.AgentBuilder.PreviewScroll, m.Height, m.Cursor, m.AgentBuilder.InstallErr)
+	case ScreenAgentBuilderInstalling:
+		engineName := string(m.AgentBuilder.SelectedEngine)
+		return screens.RenderABInstalling(engineName, m.SpinnerFrame, m.AgentBuilder.InstallErr)
+	case ScreenAgentBuilderComplete:
+		return screens.RenderABComplete(m.AgentBuilder.Generated, m.AgentBuilder.InstallResults)
 	default:
 		return ""
 	}
@@ -628,7 +734,14 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch keyStr {
 	case "ctrl+c", "q":
 		return m, tea.Quit
-	case "up", "k":
+	case "up":
+		// On the preview screen, up arrow scrolls content up.
+		if m.Screen == ScreenAgentBuilderPreview {
+			if m.AgentBuilder.PreviewScroll > 0 {
+				m.AgentBuilder.PreviewScroll--
+			}
+			return m, nil
+		}
 		count := m.optionCount()
 		if count > 0 {
 			if m.Cursor > 0 {
@@ -645,7 +758,44 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-	case "down", "j":
+	case "down":
+		// On the preview screen, down arrow scrolls content down.
+		if m.Screen == ScreenAgentBuilderPreview {
+			m.AgentBuilder.PreviewScroll++
+			return m, nil
+		}
+		count := m.optionCount()
+		if m.Cursor+1 < count {
+			m.Cursor++
+		} else if count > 0 && !m.isScrollableScreen() {
+			// Issue #150: wrap-around — Down at last goes to 0.
+			m.Cursor = 0
+		}
+		// Adjust scroll for the backup list.
+		if m.Screen == ScreenBackups {
+			if m.Cursor >= m.BackupScroll+screens.BackupMaxVisible {
+				m.BackupScroll = m.Cursor - screens.BackupMaxVisible + 1
+			}
+		}
+		return m, nil
+	case "k":
+		count := m.optionCount()
+		if count > 0 {
+			if m.Cursor > 0 {
+				m.Cursor--
+			} else if !m.isScrollableScreen() {
+				// Issue #150: wrap-around — Up at 0 goes to last option.
+				m.Cursor = count - 1
+			}
+		}
+		// Adjust scroll for the backup list.
+		if m.Screen == ScreenBackups {
+			if m.Cursor < m.BackupScroll {
+				m.BackupScroll = m.Cursor
+			}
+		}
+		return m, nil
+	case "j":
 		count := m.optionCount()
 		if m.Cursor+1 < count {
 			m.Cursor++
@@ -763,14 +913,25 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case 4:
 			m.setScreen(ScreenModelConfig)
 		case 5:
+			// "Create your own Agent" — initialize engine list and navigate.
+			m.AgentBuilder = AgentBuilderState{}
+			m.AgentBuilder.AvailableEngines = m.detectAgentBuilderEngines()
+			ta := textarea.New()
+			ta.Placeholder = "Describe what you want your agent to do..."
+			ta.Focus()
+			ta.SetWidth(60)
+			ta.SetHeight(5)
+			m.AgentBuilder.Textarea = ta
+			m.setScreen(ScreenAgentBuilderEngine)
+		case 6:
 			if m.hasDetectedOpenCode() {
 				// "OpenCode SDD Profiles" (only shown when OpenCode is detected)
 				m.setScreen(ScreenProfiles)
 			} else {
-				// "Manage backups" (when OpenCode not detected, index 5 = Manage backups)
+				// "Manage backups"
 				m.setScreen(ScreenBackups)
 			}
-		case 6:
+		case 7:
 			if m.hasDetectedOpenCode() {
 				// "Manage backups"
 				m.setScreen(ScreenBackups)
@@ -778,7 +939,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				// "Quit"
 				return m, tea.Quit
 			}
-		case 7:
+		case 8:
 			// "Quit" (only reachable when showProfiles is true, so OpenCode is detected)
 			return m, tea.Quit
 		}
@@ -1338,6 +1499,72 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 		m.DeleteErr = nil
 		m.setScreen(ScreenBackups)
+	case ScreenAgentBuilderEngine:
+		engines := m.AgentBuilder.AvailableEngines
+		if m.Cursor < len(engines) {
+			m.AgentBuilder.SelectedEngine = engines[m.Cursor]
+			m.setScreen(ScreenAgentBuilderPrompt)
+		} else {
+			// "Back" option.
+			m.setScreen(ScreenWelcome)
+		}
+	case ScreenAgentBuilderPrompt:
+		// "Continue" only if textarea is not empty.
+		if m.AgentBuilder.Textarea.Value() != "" {
+			m.setScreen(ScreenAgentBuilderSDD)
+		}
+	case ScreenAgentBuilderSDD:
+		opts := screens.ABSDDOptions()
+		switch m.Cursor {
+		case 0:
+			m.AgentBuilder.SDDMode = agentbuilder.SDDStandalone
+			return m.startGeneration()
+		case 1:
+			m.AgentBuilder.SDDMode = agentbuilder.SDDNewPhase
+			m.setScreen(ScreenAgentBuilderSDDPhase)
+		case 2:
+			m.AgentBuilder.SDDMode = agentbuilder.SDDPhaseSupport
+			m.setScreen(ScreenAgentBuilderSDDPhase)
+		case len(opts) - 1:
+			m.setScreen(ScreenAgentBuilderPrompt)
+		}
+	case ScreenAgentBuilderSDDPhase:
+		phases := screens.ABSDDPhases()
+		if m.Cursor < len(phases) {
+			m.AgentBuilder.SDDTargetPhase = phases[m.Cursor]
+			return m.startGeneration()
+		}
+		// "Back" option.
+		m.setScreen(ScreenAgentBuilderSDD)
+	case ScreenAgentBuilderGenerating:
+		// Only interactive when an error is shown (retry/back).
+		if m.AgentBuilder.GenerationErr != nil {
+			if m.Cursor == 0 {
+				// Retry.
+				return m.startGeneration()
+			}
+			// Back.
+			m.AgentBuilder.GenerationErr = nil
+			m.setScreen(ScreenAgentBuilderPrompt)
+		}
+	case ScreenAgentBuilderPreview:
+		switch m.Cursor {
+		case 0:
+			// Install.
+			return m.startInstallation()
+		case 1:
+			// Regenerate — go back to generating.
+			return m.startGeneration()
+		default:
+			// Back.
+			m.setScreen(ScreenAgentBuilderPrompt)
+		}
+	case ScreenAgentBuilderInstalling:
+		if !m.AgentBuilder.Installing {
+			m.setScreen(ScreenAgentBuilderComplete)
+		}
+	case ScreenAgentBuilderComplete:
+		m.setScreen(ScreenWelcome)
 	}
 
 	return m, nil
@@ -1520,6 +1747,30 @@ func buildProgressLabels(resolved planner.ResolvedPlan) []string {
 func (m Model) goBack() Model {
 	// Block navigation while an operation (upgrade/sync) is running.
 	if m.OperationRunning {
+		return m
+	}
+
+	// Block going back while agent generation or installation is in progress.
+	if m.AgentBuilder.Generating || m.AgentBuilder.Installing {
+		return m
+	}
+
+	// Agent builder back navigation.
+	switch m.Screen {
+	case ScreenAgentBuilderComplete:
+		m.setScreen(ScreenWelcome)
+		return m
+	case ScreenAgentBuilderInstalling:
+		// Can't go back while installing — guard above handles this.
+		return m
+	case ScreenAgentBuilderGenerating:
+		if m.AgentBuilder.GenerationErr != nil {
+			// Error state: allow going back.
+			m.AgentBuilder.GenerationErr = nil
+			m.setScreen(ScreenAgentBuilderPrompt)
+			return m
+		}
+		// Generation still running: block.
 		return m
 	}
 
@@ -1824,6 +2075,25 @@ func (m Model) optionCount() int {
 		return screens.ProfileCreateOptionCount(m.ProfileCreateStep, m.ModelPicker)
 	case ScreenProfileDelete:
 		return screens.ProfileDeleteOptionCount()
+	case ScreenAgentBuilderEngine:
+		return len(m.AgentBuilder.AvailableEngines) + 1 // engines + Back
+	case ScreenAgentBuilderPrompt:
+		return 0 // textarea mode — cursor navigation via textarea
+	case ScreenAgentBuilderSDD:
+		return len(screens.ABSDDOptions()) // 3 modes + Back
+	case ScreenAgentBuilderSDDPhase:
+		return len(screens.ABSDDPhases()) + 1 // phases + Back
+	case ScreenAgentBuilderGenerating:
+		if m.AgentBuilder.GenerationErr != nil {
+			return 2 // Retry + Back
+		}
+		return 0 // generating — no cursor navigation
+	case ScreenAgentBuilderPreview:
+		return len(screens.ABPreviewActions()) // Install + Regenerate + Back
+	case ScreenAgentBuilderInstalling:
+		return 0 // no cursor navigation while installing
+	case ScreenAgentBuilderComplete:
+		return 1 // Done
 	default:
 		return 0
 	}
@@ -2211,4 +2481,229 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
+}
+
+// detectAgentBuilderEngines scans for supported AI agent binaries on PATH and
+// returns the list of available AgentIDs.
+func (m Model) detectAgentBuilderEngines() []model.AgentID {
+	candidateIDs := []model.AgentID{
+		model.AgentClaudeCode,
+		model.AgentOpenCode,
+		model.AgentGeminiCLI,
+		model.AgentCodex,
+	}
+	var available []model.AgentID
+	for _, id := range candidateIDs {
+		engine := agentbuilder.NewEngine(id)
+		if engine != nil && engine.Available() {
+			available = append(available, id)
+		}
+	}
+	return available
+}
+
+// hasAgentBuilderEngines reports whether any supported AI agent binary is installed.
+func (m Model) hasAgentBuilderEngines() bool {
+	return len(m.detectAgentBuilderEngines()) > 0
+}
+
+// agentBuilderInstallTargets returns the list of install target paths for the preview screen.
+// Each path is the full destination: {SkillsDir}/{agent.Name}/SKILL.md
+func (m Model) agentBuilderInstallTargets() []string {
+	adapters := m.buildAgentBuilderAdapters()
+	agent := m.AgentBuilder.Generated
+	targets := make([]string, 0, len(adapters))
+	for _, a := range adapters {
+		if agent != nil {
+			targets = append(targets, filepath.Join(a.SkillsDir, agent.Name, "SKILL.md"))
+		} else {
+			targets = append(targets, a.SkillsDir)
+		}
+	}
+	return targets
+}
+
+// buildAgentBuilderAdapters returns the AdapterInfo list for all detected agents.
+func (m Model) buildAgentBuilderAdapters() []agentbuilder.AdapterInfo {
+	type agentSkillsDir struct {
+		id  model.AgentID
+		dir string
+	}
+	// Map from AgentID to well-known skills directory path.
+	wellKnown := []agentSkillsDir{
+		{model.AgentClaudeCode, homeDir() + "/.claude/skills"},
+		{model.AgentOpenCode, homeDir() + "/.config/opencode/skills"},
+		{model.AgentGeminiCLI, homeDir() + "/.gemini/skills"},
+		{model.AgentCodex, homeDir() + "/.codex/skills"},
+	}
+
+	var adapters []agentbuilder.AdapterInfo
+	for _, cfg := range m.Detection.Configs {
+		if !cfg.Exists {
+			continue
+		}
+		agentID := model.AgentID(strings.TrimSpace(cfg.Agent))
+		for _, wk := range wellKnown {
+			if wk.id == agentID {
+				adapters = append(adapters, agentbuilder.AdapterInfo{
+					AgentID:   agentID,
+					SkillsDir: wk.dir,
+				})
+				break
+			}
+		}
+	}
+	// Fallback: if no agents detected via config, use all engines that are available.
+	if len(adapters) == 0 {
+		for _, id := range m.AgentBuilder.AvailableEngines {
+			for _, wk := range wellKnown {
+				if wk.id == id {
+					adapters = append(adapters, agentbuilder.AdapterInfo{
+						AgentID:   id,
+						SkillsDir: wk.dir,
+					})
+					break
+				}
+			}
+		}
+	}
+	return adapters
+}
+
+// homeDir returns the current user's home directory path.
+func homeDir() string {
+	if h, err := os.UserHomeDir(); err == nil && h != "" {
+		return h
+	}
+	if h := os.Getenv("HOME"); h != "" {
+		return h
+	}
+	return "/tmp"
+}
+
+// startGeneration launches the AI generation goroutine and transitions to the
+// generating screen.
+func (m Model) startGeneration() (tea.Model, tea.Cmd) {
+	m.AgentBuilder.Generating = true
+	m.AgentBuilder.GenerationErr = nil
+	m.AgentBuilder.Generated = nil
+	m.setScreen(ScreenAgentBuilderGenerating)
+
+	engineID := m.AgentBuilder.SelectedEngine
+	userInput := m.AgentBuilder.Textarea.Value()
+
+	var sddConfig *agentbuilder.SDDIntegration
+	if m.AgentBuilder.SDDMode != agentbuilder.SDDStandalone {
+		sddConfig = &agentbuilder.SDDIntegration{
+			Mode:        m.AgentBuilder.SDDMode,
+			TargetPhase: m.AgentBuilder.SDDTargetPhase,
+		}
+		// PhaseName will be set after generation from the agent's Name field.
+		// SDDTargetPhase is the "insert after" position, not the new phase name.
+	}
+
+	// Capture for goroutine.
+	capturedSDD := sddConfig
+
+	return m, tea.Batch(tickCmd(), func() tea.Msg {
+		engine := agentbuilder.NewEngine(engineID)
+		if engine == nil {
+			return AgentBuilderGeneratedMsg{
+				Err: fmt.Errorf("no engine available for %s", engineID),
+			}
+		}
+
+		prompt := agentbuilder.ComposePrompt(userInput, capturedSDD, nil)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		raw, err := engine.Generate(ctx, prompt)
+		if err != nil {
+			return AgentBuilderGeneratedMsg{Err: err}
+		}
+
+		agent, err := agentbuilder.Parse(raw)
+		if err != nil {
+			return AgentBuilderGeneratedMsg{Err: err}
+		}
+
+		if capturedSDD != nil {
+			// For SDDNewPhase, derive the new phase name from the agent's Name,
+			// not from SDDTargetPhase (which is the "insert after" position).
+			if capturedSDD.Mode == agentbuilder.SDDNewPhase {
+				capturedSDD.PhaseName = agent.Name
+			}
+			agent.SDDConfig = capturedSDD
+		}
+
+		return AgentBuilderGeneratedMsg{Agent: agent}
+	})
+}
+
+// startInstallation launches the agent installation goroutine.
+func (m Model) startInstallation() (tea.Model, tea.Cmd) {
+	m.AgentBuilder.Installing = true
+	m.AgentBuilder.InstallErr = nil
+	m.setScreen(ScreenAgentBuilderInstalling)
+
+	agent := m.AgentBuilder.Generated
+	adapters := m.buildAgentBuilderAdapters()
+	engineID := m.AgentBuilder.SelectedEngine
+
+	return m, tea.Batch(tickCmd(), func() (msg tea.Msg) {
+		// Recover from panics so the spinner never runs forever.
+		defer func() {
+			if r := recover(); r != nil {
+				msg = AgentBuilderInstallDoneMsg{
+					Err: fmt.Errorf("install panicked: %v", r),
+				}
+			}
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		_ = ctx // timeout enforced; Install itself is synchronous
+
+		// Resolve agent name, applying conflict suffix if needed.
+		installAgent := agent
+		if agentbuilder.HasConflictWithBuiltin(agent.Name) {
+			// Shallow copy so we don't mutate the generated agent in state.
+			copy := *agent
+			copy.Name = agent.Name + "-custom"
+			installAgent = &copy
+		}
+
+		results, err := agentbuilder.Install(installAgent, adapters, "")
+		if err != nil {
+			return AgentBuilderInstallDoneMsg{Results: results, Err: err}
+		}
+
+		// Persist entry to registry.
+		registryPath := filepath.Join(homeDir(), ".config", "gentle-ai", "custom-agents.json")
+		_ = os.MkdirAll(filepath.Dir(registryPath), 0755)
+		if reg, loadErr := agentbuilder.LoadRegistry(registryPath); loadErr == nil {
+			// Collect IDs of agents that were successfully installed.
+			var installedIDs []model.AgentID
+			for _, r := range results {
+				if r.Success {
+					installedIDs = append(installedIDs, r.AgentID)
+				}
+			}
+			entry := agentbuilder.RegistryEntry{
+				Name:             installAgent.Name,
+				Title:            installAgent.Title,
+				Description:      installAgent.Description,
+				CreatedAt:        time.Now(),
+				GenerationEngine: engineID,
+				SDDIntegration:   installAgent.SDDConfig,
+				InstalledAgents:  installedIDs,
+			}
+			reg.Add(entry)
+			// Best-effort save — ignore save errors.
+			_ = agentbuilder.SaveRegistry(registryPath, reg)
+		}
+
+		return AgentBuilderInstallDoneMsg{Results: results, Err: nil}
+	})
 }
