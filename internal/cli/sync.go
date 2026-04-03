@@ -34,6 +34,14 @@ type SyncFlags struct {
 	IncludePermissions bool
 	IncludeTheme       bool
 	DryRun             bool
+	// Profiles holds named SDD profiles parsed from --profile flags.
+	// Each entry is populated by parseProfileFlag and augmented by
+	// parseProfilePhaseFlag.
+	Profiles []model.Profile
+	// rawProfiles and rawProfilePhases hold the raw string values from
+	// --profile and --profile-phase flags before parsing into model.Profile.
+	rawProfiles      []string
+	rawProfilePhases []string
 }
 
 // SyncResult holds the outcome of a sync execution.
@@ -68,6 +76,8 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	fs.BoolVar(&opts.IncludePermissions, "include-permissions", false, "include permissions component in sync")
 	fs.BoolVar(&opts.IncludeTheme, "include-theme", false, "include theme component in sync")
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
+	registerListFlag(fs, "profile", &opts.rawProfiles)
+	registerListFlag(fs, "profile-phase", &opts.rawProfilePhases)
 
 	if err := fs.Parse(args); err != nil {
 		return SyncFlags{}, err
@@ -77,7 +87,156 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 		return SyncFlags{}, fmt.Errorf("unexpected sync argument %q", fs.Arg(0))
 	}
 
+	// Parse --profile flags into model.Profile values.
+	if len(opts.rawProfiles) > 0 || len(opts.rawProfilePhases) > 0 {
+		profiles, err := parseProfileFlags(opts.rawProfiles, opts.rawProfilePhases)
+		if err != nil {
+			return SyncFlags{}, err
+		}
+		opts.Profiles = profiles
+	}
+
 	return opts, nil
+}
+
+// parseProfileFlags converts the raw --profile and --profile-phase string values
+// into a slice of model.Profile. Returns an error if any value is malformed.
+//
+// --profile format:  name:provider/model
+// --profile-phase format: name:phase:provider/model
+func parseProfileFlags(rawProfiles, rawProfilePhases []string) ([]model.Profile, error) {
+	// Build a map of profile name → profile so we can merge phase assignments.
+	profileMap := make(map[string]*model.Profile)
+	profileOrder := make([]string, 0, len(rawProfiles))
+
+	for _, raw := range rawProfiles {
+		p, err := parseProfileFlag(raw)
+		if err != nil {
+			return nil, err
+		}
+		profileMap[p.Name] = &p
+		profileOrder = append(profileOrder, p.Name)
+	}
+
+	for _, raw := range rawProfilePhases {
+		name, phase, assignment, err := parseProfilePhaseFlag(raw)
+		if err != nil {
+			return nil, err
+		}
+		entry, exists := profileMap[name]
+		if !exists {
+			// Profile referenced in --profile-phase but not declared in --profile.
+			// Create a minimal entry so phase assignments are not lost.
+			newProfile := model.Profile{Name: name, PhaseAssignments: make(map[string]model.ModelAssignment)}
+			profileMap[name] = &newProfile
+			profileOrder = append(profileOrder, name)
+			entry = profileMap[name]
+		}
+		if entry.PhaseAssignments == nil {
+			entry.PhaseAssignments = make(map[string]model.ModelAssignment)
+		}
+		entry.PhaseAssignments[phase] = assignment
+	}
+
+	profiles := make([]model.Profile, 0, len(profileOrder))
+	seen := make(map[string]bool)
+	for _, name := range profileOrder {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		profiles = append(profiles, *profileMap[name])
+	}
+	return profiles, nil
+}
+
+// parseProfileFlag parses a single --profile value of the form "name:provider/model".
+// Returns an error for empty name, reserved names, or missing separator.
+func parseProfileFlag(raw string) (model.Profile, error) {
+	colonIdx := strings.Index(raw, ":")
+	if colonIdx <= 0 {
+		return model.Profile{}, fmt.Errorf("--profile %q: invalid format, expected name:provider/model", raw)
+	}
+	name := raw[:colonIdx]
+	modelSpec := raw[colonIdx+1:]
+
+	if err := sdd.ValidateProfileName(name); err != nil {
+		return model.Profile{}, fmt.Errorf("--profile %q: %w", raw, err)
+	}
+
+	assignment, err := parseModelSpec(modelSpec)
+	if err != nil {
+		return model.Profile{}, fmt.Errorf("--profile %q: %w", raw, err)
+	}
+
+	return model.Profile{
+		Name:              name,
+		OrchestratorModel: assignment,
+		PhaseAssignments:  make(map[string]model.ModelAssignment),
+	}, nil
+}
+
+// parseProfilePhaseFlag parses a single --profile-phase value of the form
+// "name:phase:provider/model".
+func parseProfilePhaseFlag(raw string) (name, phase string, assignment model.ModelAssignment, err error) {
+	parts := strings.SplitN(raw, ":", 3)
+	if len(parts) != 3 {
+		return "", "", model.ModelAssignment{}, fmt.Errorf("--profile-phase %q: invalid format, expected name:phase:provider/model", raw)
+	}
+	name = parts[0]
+	phase = parts[1]
+	modelSpec := parts[2]
+
+	if name == "" {
+		return "", "", model.ModelAssignment{}, fmt.Errorf("--profile-phase %q: profile name must not be empty", raw)
+	}
+	if err = sdd.ValidateProfileName(name); err != nil {
+		return "", "", model.ModelAssignment{}, fmt.Errorf("--profile-phase %q: %w", raw, err)
+	}
+	if phase == "" {
+		return "", "", model.ModelAssignment{}, fmt.Errorf("--profile-phase %q: phase must not be empty", raw)
+	}
+	// Validate that the phase is a known SDD phase name.
+	knownPhases := sdd.ProfilePhaseOrder()
+	validPhase := false
+	for _, p := range knownPhases {
+		if p == phase {
+			validPhase = true
+			break
+		}
+	}
+	if !validPhase {
+		return "", "", model.ModelAssignment{}, fmt.Errorf("--profile-phase %q: unknown phase %q; valid phases are: %v", raw, phase, knownPhases)
+	}
+
+	assignment, err = parseModelSpec(modelSpec)
+	if err != nil {
+		return "", "", model.ModelAssignment{}, fmt.Errorf("--profile-phase %q: %w", raw, err)
+	}
+	return name, phase, assignment, nil
+}
+
+// parseModelSpec parses a "provider/model" or "provider:model" string into a
+// ModelAssignment. Returns an error if the spec is empty or has no separator.
+func parseModelSpec(spec string) (model.ModelAssignment, error) {
+	// Try slash separator first (common CLI format: anthropic/claude-haiku-3-5),
+	// then colon (opencode internal format: anthropic:claude-haiku-3-5).
+	sep := -1
+	for i, c := range spec {
+		if c == '/' || c == ':' {
+			sep = i
+			break
+		}
+	}
+	if sep <= 0 {
+		return model.ModelAssignment{}, fmt.Errorf("invalid model spec %q: expected provider/model or provider:model", spec)
+	}
+	providerID := spec[:sep]
+	modelID := spec[sep+1:]
+	if providerID == "" || modelID == "" {
+		return model.ModelAssignment{}, fmt.Errorf("invalid model spec %q: provider and model must both be non-empty", spec)
+	}
+	return model.ModelAssignment{ProviderID: providerID, ModelID: modelID}, nil
 }
 
 // BuildSyncSelection builds a model.Selection for the sync command.
@@ -117,6 +276,7 @@ func BuildSyncSelection(flags SyncFlags, agentIDs []model.AgentID) model.Selecti
 		SDDMode:    sddMode,
 		StrictTDD:  flags.StrictTDD,
 		Skills:     skillIDs,
+		Profiles:   flags.Profiles,
 		// Preset is set to full-gentleman so selectedSkillIDs() returns the
 		// correct default skill set when no explicit skills are provided.
 		Preset: model.PresetFullGentleman,
@@ -298,14 +458,45 @@ func (s componentSyncStep) Run() error {
 		return nil
 
 	case model.ComponentSDD:
+		// Resolve profiles for injection:
+		// - When profiles are explicitly provided (TUI/CLI), use them directly.
+		// - On a regular sync (no explicit profiles), detect existing named profiles
+		//   from disk so their orchestrator prompts are refreshed from updated embedded
+		//   assets while model assignments are preserved.
+		profiles := s.selection.Profiles
+		if len(profiles) == 0 {
+			settingsPath := ""
+			for _, adapter := range adapters {
+				if adapter.Agent() == model.AgentOpenCode {
+					settingsPath = adapter.SettingsPath(s.homeDir)
+					break
+				}
+			}
+			if settingsPath != "" {
+				detected, detectErr := sdd.DetectProfiles(settingsPath)
+				if detectErr == nil {
+					profiles = detected
+				}
+				// If detect fails (e.g. file missing), silently skip — no profiles to refresh.
+			}
+		}
+
+		// If profiles exist (explicit or detected), SDDModeMulti is required:
+		// shared prompt files must be written and {file:...} refs must resolve.
+		sddMode := s.selection.SDDMode
+		if len(profiles) > 0 && sddMode == "" {
+			sddMode = model.SDDModeMulti
+		}
+
 		for _, adapter := range adapters {
 			opts := sdd.InjectOptions{
 				OpenCodeModelAssignments: s.selection.ModelAssignments,
 				ClaudeModelAssignments:   s.selection.ClaudeModelAssignments,
 				WorkspaceDir:             s.workspaceDir,
 				StrictTDD:                s.selection.StrictTDD,
+				Profiles:                 profiles,
 			}
-			res, err := sdd.Inject(s.homeDir, adapter, s.selection.SDDMode, opts)
+			res, err := sdd.Inject(s.homeDir, adapter, sddMode, opts)
 			if err != nil {
 				return fmt.Errorf("sync sdd for %q: %w", adapter.Agent(), err)
 			}

@@ -32,6 +32,13 @@ var readCurrentAssignmentsFn = func(settingsPath string) (map[string]model.Model
 	return sdd.ReadCurrentModelAssignments(settingsPath)
 }
 
+// readProfilesFn is a package-level variable so tests can override how profiles
+// are detected from opencode.json. It wraps sdd.DetectProfiles and is called
+// on ScreenProfiles entry and after SyncDoneMsg to refresh the profile list.
+var readProfilesFn = func(settingsPath string) ([]model.Profile, error) {
+	return sdd.DetectProfiles(settingsPath)
+}
+
 // TickMsg drives the spinner animation on the installing screen.
 type TickMsg time.Time
 
@@ -141,6 +148,9 @@ const (
 	ScreenSync
 	ScreenUpgradeSync
 	ScreenModelConfig
+	ScreenProfiles
+	ScreenProfileCreate
+	ScreenProfileDelete
 )
 
 type Model struct {
@@ -262,6 +272,18 @@ type Model struct {
 
 	// UpgradeErr holds the error from the last upgrade run (nil on success).
 	UpgradeErr error
+
+	// Profile management state
+	ProfileList          []model.Profile // profiles detected from opencode.json
+	ProfileCreateStep    int             // 0=name, 1=assign-models, 2=confirm
+	ProfileDraft         model.Profile   // profile being created/edited
+	ProfileEditMode      bool            // true when editing, false when creating
+	ProfileDeleteTarget  string          // name of profile to delete
+	ProfileNameInput     string          // text input buffer for name step
+	ProfileNamePos       int             // cursor position in name input
+	ProfileNameErr       string          // validation error message
+	ProfileNameCollision bool            // true when name collides with existing profile (awaiting second enter to overwrite)
+	ProfileDeleteErr     error           // error from the last RemoveProfileAgents call, displayed on ScreenProfiles
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
@@ -341,6 +363,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SyncErr = msg.Err
 		m.HasSyncRun = true
 		m.PendingSyncOverrides = nil
+		// Refresh profile list after sync (profile create/delete/edit flows use sync).
+		// On failure, keep the existing list — this is a non-critical background refresh.
+		// Do NOT set m.Err: ScreenSync never renders it and it would leak to other screens.
+		if profiles, err := readProfilesFn(opencode.DefaultSettingsPath()); err == nil {
+			m.ProfileList = profiles
+			// Clamp cursor to avoid out-of-bounds access when list shrinks after a delete.
+			if m.Cursor >= len(m.ProfileList) {
+				if len(m.ProfileList) > 0 {
+					m.Cursor = len(m.ProfileList) - 1
+				} else {
+					m.Cursor = 0
+				}
+			}
+		} // else keep existing list
 		return m, nil
 	case UpgradePhaseCompletedMsg:
 		// Upgrade phase done; sync phase is about to start (OperationRunning stays true).
@@ -355,6 +391,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.Screen == ScreenRenameBackup {
 			return m.handleRenameInput(msg)
+		}
+		if m.Screen == ScreenProfileCreate && m.ProfileCreateStep == 0 && !m.ProfileEditMode {
+			return m.handleProfileNameInput(msg)
 		}
 		return m.handleKeyPress(msg)
 	}
@@ -443,13 +482,29 @@ func (m Model) View() string {
 		if m.UpdateCheckDone && update.HasUpdates(m.UpdateResults) {
 			banner = "Updates available: " + update.UpdateSummaryLine(m.UpdateResults)
 		}
-		return screens.RenderWelcome(m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone)
+		return screens.RenderWelcome(m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList))
 	case ScreenUpgrade:
 		return screens.RenderUpgrade(m.UpdateResults, m.UpgradeReport, m.UpgradeErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame)
 	case ScreenSync:
 		return screens.RenderSync(m.SyncFilesChanged, m.SyncErr, m.OperationRunning, m.HasSyncRun, m.SpinnerFrame)
 	case ScreenModelConfig:
 		return screens.RenderModelConfig(m.Cursor)
+	case ScreenProfiles:
+		return screens.RenderProfiles(m.ProfileList, m.Cursor, m.ProfileDeleteErr)
+	case ScreenProfileCreate:
+		return screens.RenderProfileCreate(
+			m.ProfileCreateStep,
+			m.ProfileDraft,
+			m.ProfileNameInput,
+			m.ProfileNamePos,
+			m.ProfileNameErr,
+			m.ProfileEditMode,
+			m.Selection.ModelAssignments,
+			m.ModelPicker,
+			m.Cursor,
+		)
+	case ScreenProfileDelete:
+		return screens.RenderProfileDelete(m.ProfileDeleteTarget, m.Cursor)
 	case ScreenUpgradeSync:
 		return screens.RenderUpgradeSync(m.UpdateResults, m.UpgradeReport, m.SyncFilesChanged, m.UpgradeErr, m.SyncErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame)
 	case ScreenDetection:
@@ -508,6 +563,16 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// When the model picker is in a sub-mode, delegate navigation there first.
 	if m.Screen == ScreenModelPicker && m.ModelPicker.Mode != screens.ModePhaseList {
+		handled, updated := screens.HandleModelPickerNav(keyStr, &m.ModelPicker, m.Selection.ModelAssignments)
+		if handled {
+			m.Selection.ModelAssignments = updated
+			return m, nil
+		}
+	}
+
+	// Profile create step 1 reuses the ModelPicker sub-modes (provider/model drill-down).
+	if (m.Screen == ScreenProfileCreate && m.ProfileCreateStep == 1) &&
+		m.ModelPicker.Mode != screens.ModePhaseList {
 		handled, updated := screens.HandleModelPickerNav(keyStr, &m.ModelPicker, m.Selection.ModelAssignments)
 		if handled {
 			m.Selection.ModelAssignments = updated
@@ -622,11 +687,30 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenRenameBackup)
 			return m, nil
 		}
+	case "n":
+		// "n" on ScreenProfiles: shortcut for "Create new profile".
+		if m.Screen == ScreenProfiles {
+			m.ProfileEditMode = false
+			m.ProfileDraft = model.Profile{}
+			m.ProfileCreateStep = 0
+			m.ProfileNameInput = ""
+			m.ProfileNamePos = 0
+			m.ProfileNameErr = ""
+			m.Selection.ModelAssignments = nil
+			m.setScreen(ScreenProfileCreate)
+			return m, nil
+		}
 	case "d":
 		// Delete: only when on ScreenBackups and cursor is on a backup item (not "Back").
 		if m.Screen == ScreenBackups && m.Cursor < len(m.Backups) {
 			m.SelectedBackup = m.Backups[m.Cursor]
 			m.setScreen(ScreenDeleteConfirm)
+			return m, nil
+		}
+		// Delete on ScreenProfiles: only non-default profiles (those in ProfileList).
+		if m.Screen == ScreenProfiles && m.Cursor < len(m.ProfileList) {
+			m.ProfileDeleteTarget = m.ProfileList[m.Cursor].Name
+			m.setScreen(ScreenProfileDelete)
 			return m, nil
 		}
 	case "p":
@@ -679,8 +763,23 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case 4:
 			m.setScreen(ScreenModelConfig)
 		case 5:
-			m.setScreen(ScreenBackups)
+			if m.hasDetectedOpenCode() {
+				// "OpenCode SDD Profiles" (only shown when OpenCode is detected)
+				m.setScreen(ScreenProfiles)
+			} else {
+				// "Manage backups" (when OpenCode not detected, index 5 = Manage backups)
+				m.setScreen(ScreenBackups)
+			}
 		case 6:
+			if m.hasDetectedOpenCode() {
+				// "Manage backups"
+				m.setScreen(ScreenBackups)
+			} else {
+				// "Quit"
+				return m, tea.Quit
+			}
+		case 7:
+			// "Quit" (only reachable when showProfiles is true, so OpenCode is detected)
 			return m, tea.Quit
 		}
 	case ScreenUpgrade:
@@ -737,6 +836,66 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		m.OperationRunning = true
 		m.OperationMode = "upgrade-sync"
 		return m, tea.Batch(tickCmd(), m.startUpgradeSync())
+	case ScreenProfiles:
+		// Profiles are: 0..len(ProfileList)-1, then Create, then Back.
+		profileCount := len(m.ProfileList)
+		switch {
+		case m.Cursor < profileCount:
+			// Edit an existing profile.
+			profile := m.ProfileList[m.Cursor]
+			m.ProfileEditMode = true
+			m.ProfileDraft = profile
+			m.ProfileCreateStep = 0
+			m.ProfileNameInput = profile.Name
+			m.ProfileNamePos = len([]rune(profile.Name))
+			m.ProfileNameErr = ""
+			// Build ModelAssignments from the profile's phase assignments + orchestrator.
+			// The ModelPicker shows sdd-orchestrator as the first row, so we need
+			// to include it in the map for it to display the current model.
+			assignments := make(map[string]model.ModelAssignment)
+			for k, v := range profile.PhaseAssignments {
+				assignments[k] = v
+			}
+			if profile.OrchestratorModel.ProviderID != "" {
+				assignments[screens.SDDOrchestratorPhase] = profile.OrchestratorModel
+			}
+			m.Selection.ModelAssignments = assignments
+			m.setScreen(ScreenProfileCreate)
+		case m.Cursor == profileCount:
+			// "Create new profile"
+			m.ProfileEditMode = false
+			m.ProfileDraft = model.Profile{}
+			m.ProfileCreateStep = 0
+			m.ProfileNameInput = ""
+			m.ProfileNamePos = 0
+			m.ProfileNameErr = ""
+			m.Selection.ModelAssignments = nil
+			m.setScreen(ScreenProfileCreate)
+		default:
+			// "Back"
+			m.setScreen(ScreenWelcome)
+		}
+		return m, nil
+	case ScreenProfileCreate:
+		return m.confirmProfileCreate()
+	case ScreenProfileDelete:
+		switch m.Cursor {
+		case 0: // "Delete & Sync"
+			if err := sdd.RemoveProfileAgents(opencode.DefaultSettingsPath(), m.ProfileDeleteTarget); err != nil {
+				// Store the error so it can be displayed on ScreenProfiles.
+				m.ProfileDeleteErr = err
+				m.setScreen(ScreenProfiles)
+			} else {
+				m.ProfileDeleteErr = nil
+				m.PendingSyncOverrides = nil
+				m = m.withResetSyncState()
+				m.setScreen(ScreenSync)
+				return m, tea.Batch(tickCmd(), m.startSync(nil))
+			}
+		default: // "Cancel"
+			m.setScreen(ScreenProfiles)
+		}
+		return m, nil
 	case ScreenModelConfig:
 		switch m.Cursor {
 		case 0: // Configure Claude models
@@ -1531,6 +1690,23 @@ func (m *Model) setScreen(next Screen) {
 		m.BackupScroll = 0
 		m.PinErr = nil
 	}
+	if next == ScreenProfiles {
+		// Clear stale delete error so it is not shown after Cancel/Esc from ScreenProfileDelete.
+		m.ProfileDeleteErr = nil
+		// Refresh profile list on entry. Surface errors via m.Err so callers can react.
+		profiles, err := readProfilesFn(opencode.DefaultSettingsPath())
+		if err != nil {
+			m.Err = err
+			m.ProfileList = nil
+		} else {
+			m.ProfileList = profiles
+		}
+		// Clamp cursor so it never points past the end of a refreshed list.
+		// m.Cursor was just reset to 0 above, so this only triggers if ProfileList is empty.
+		if m.Cursor >= len(m.ProfileList) {
+			m.Cursor = 0
+		}
+	}
 }
 
 // handleRenameInput processes key events when the rename backup screen is active.
@@ -1583,7 +1759,7 @@ func (m Model) handleRenameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) optionCount() int {
 	switch m.Screen {
 	case ScreenWelcome:
-		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone))
+		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList)))
 	case ScreenUpgrade:
 		if m.UpgradeReport != nil || m.UpgradeErr != nil {
 			return 1 // "return" option in results/error state
@@ -1642,6 +1818,12 @@ func (m Model) optionCount() int {
 		return 1 // "Done" / continue
 	case ScreenRenameBackup:
 		return 0 // text input mode — no cursor navigation
+	case ScreenProfiles:
+		return screens.ProfileListOptionCount(m.ProfileList)
+	case ScreenProfileCreate:
+		return screens.ProfileCreateOptionCount(m.ProfileCreateStep, m.ModelPicker)
+	case ScreenProfileDelete:
+		return screens.ProfileDeleteOptionCount()
 	default:
 		return 0
 	}
@@ -1810,6 +1992,16 @@ func extractAvailableUpdates(results []update.UpdateResult) []screens.UpdateInfo
 	return updates
 }
 
+// hasDetectedOpenCode returns true if OpenCode config directory was detected.
+func (m Model) hasDetectedOpenCode() bool {
+	for _, cfg := range m.Detection.Configs {
+		if cfg.Agent == string(model.AgentOpenCode) && cfg.Exists {
+			return true
+		}
+	}
+	return false
+}
+
 func (m Model) shouldShowSDDModeScreen() bool {
 	return m.Selection.HasAgent(model.AgentOpenCode) &&
 		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
@@ -1862,4 +2054,161 @@ func hasSelectedComponent(components []model.ComponentID, target model.Component
 // disabled for these screens to avoid confusing the scroll offset logic.
 func (m Model) isScrollableScreen() bool {
 	return m.Screen == ScreenBackups
+}
+
+// handleProfileNameInput processes key events when the profile create screen
+// is at step 0 (name input). In edit mode, step 0 is skipped to step 1 — this
+// handler is only called when NOT in edit mode.
+func (m Model) handleProfileNameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		// Validate and advance to step 1.
+		name := strings.ToLower(m.ProfileNameInput)
+		if err := sdd.ValidateProfileName(name); err != nil {
+			m.ProfileNameErr = err.Error()
+			m.ProfileNameCollision = false
+			return m, nil
+		}
+
+		// Check for collision with an existing profile.
+		if !m.ProfileNameCollision {
+			for _, p := range m.ProfileList {
+				if p.Name == name {
+					m.ProfileNameErr = fmt.Sprintf("Profile '%s' already exists. Press enter to overwrite.", name)
+					m.ProfileNameCollision = true
+					return m, nil
+				}
+			}
+		}
+
+		// Clear collision flag and proceed.
+		m.ProfileNameErr = ""
+		m.ProfileNameCollision = false
+		m.ProfileDraft.Name = name
+		m.ProfileCreateStep = 1
+		// Initialize model picker for orchestrator step.
+		cachePath := opencode.DefaultCachePath()
+		if _, err := osStatModelCache(cachePath); err == nil {
+			m.ModelPicker = screens.NewModelPickerState(cachePath)
+		} else {
+			m.ModelPicker = screens.ModelPickerState{}
+		}
+		m.Cursor = 0
+		return m, nil
+	case tea.KeyEsc:
+		m.ProfileNameCollision = false
+		m.setScreen(ScreenProfiles)
+		return m, nil
+	case tea.KeyBackspace:
+		if m.ProfileNamePos > 0 {
+			runes := []rune(m.ProfileNameInput)
+			m.ProfileNameInput = string(append(runes[:m.ProfileNamePos-1], runes[m.ProfileNamePos:]...))
+			m.ProfileNamePos--
+			// Typing clears the collision warning so the user can modify the name.
+			m.ProfileNameCollision = false
+			m.ProfileNameErr = ""
+		}
+		return m, nil
+	case tea.KeyLeft:
+		if m.ProfileNamePos > 0 {
+			m.ProfileNamePos--
+		}
+		return m, nil
+	case tea.KeyRight:
+		if m.ProfileNamePos < len([]rune(m.ProfileNameInput)) {
+			m.ProfileNamePos++
+		}
+		return m, nil
+	case tea.KeyRunes:
+		runes := []rune(m.ProfileNameInput)
+		newRunes := make([]rune, 0, len(runes)+len(msg.Runes))
+		newRunes = append(newRunes, runes[:m.ProfileNamePos]...)
+		newRunes = append(newRunes, msg.Runes...)
+		newRunes = append(newRunes, runes[m.ProfileNamePos:]...)
+		m.ProfileNameInput = string(newRunes)
+		m.ProfileNamePos += len(msg.Runes)
+		// Typing clears the collision warning so the user can modify the name.
+		m.ProfileNameCollision = false
+		m.ProfileNameErr = ""
+		return m, nil
+	}
+	return m, nil
+}
+
+// confirmProfileCreate handles enter key presses on ScreenProfileCreate.
+// Step 0 (name input) is handled by handleProfileNameInput for create mode.
+// Steps: 0=name, 1=assign models (orchestrator + sub-agents), 2=confirm.
+func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
+	switch m.ProfileCreateStep {
+	case 0:
+		// Edit mode: step 0 shows read-only name, enter advances to step 1.
+		if m.ProfileEditMode {
+			m.ProfileCreateStep = 1
+			cachePath := opencode.DefaultCachePath()
+			if _, err := osStatModelCache(cachePath); err == nil {
+				m.ModelPicker = screens.NewModelPickerState(cachePath)
+			} else {
+				m.ModelPicker = screens.ModelPickerState{}
+			}
+			m.Cursor = 0
+		}
+		return m, nil
+	case 1:
+		// Model assignment picker: orchestrator + all sub-agent phases in one screen.
+		// Reuse the same enter-on-row logic as ScreenModelPicker.
+		rows := screens.ModelPickerRows()
+		if m.Cursor < len(rows) {
+			// Enter sub-selection: pick provider then model.
+			m.ModelPicker.SelectedPhaseIdx = m.Cursor
+			m.ModelPicker.Mode = screens.ModeProviderSelect
+			m.ModelPicker.ProviderCursor = 0
+			m.ModelPicker.ProviderScroll = 0
+			return m, nil
+		}
+		if m.Cursor == len(rows) {
+			// "Continue": extract orchestrator + phase assignments, advance to confirm.
+			if m.Selection.ModelAssignments != nil {
+				// Extract orchestrator model.
+				if orch, ok := m.Selection.ModelAssignments[screens.SDDOrchestratorPhase]; ok {
+					m.ProfileDraft.OrchestratorModel = orch
+				}
+				// Copy all phase assignments (excluding orchestrator).
+				if m.ProfileDraft.PhaseAssignments == nil {
+					m.ProfileDraft.PhaseAssignments = make(map[string]model.ModelAssignment)
+				}
+				for k, v := range m.Selection.ModelAssignments {
+					if k != screens.SDDOrchestratorPhase {
+						m.ProfileDraft.PhaseAssignments[k] = v
+					}
+				}
+			}
+			m.ProfileCreateStep = 2
+			m.Cursor = 0
+		}
+		if m.Cursor == len(rows)+1 {
+			// "Back": return to step 0 (name) or profiles list.
+			if m.ProfileEditMode {
+				m.setScreen(ScreenProfiles)
+			} else {
+				m.ProfileCreateStep = 0
+				m.Cursor = 0
+			}
+		}
+		return m, nil
+	default:
+		// Step 2: confirm.
+		switch m.Cursor {
+		case 0: // "Create & Sync" / "Save & Sync"
+			draft := m.ProfileDraft
+			m.PendingSyncOverrides = &model.SyncOverrides{
+				Profiles: []model.Profile{draft},
+			}
+			m = m.withResetSyncState()
+			m.setScreen(ScreenSync)
+			return m, tea.Batch(tickCmd(), m.startSync(m.PendingSyncOverrides))
+		default: // "Cancel"
+			m.setScreen(ScreenProfiles)
+		}
+		return m, nil
+	}
 }
