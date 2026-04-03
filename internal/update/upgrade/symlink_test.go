@@ -9,12 +9,12 @@ import (
 
 // TestEnumerateFilesInDir_SkipsSymlinks verifies that enumerateFilesInDir does not
 // traverse into symlinks pointing to directories (simulates Windows junctions /
-// reparse points). Symlinks should be silently skipped.
+// reparse points). Directory symlinks are skipped entirely.
 //
-// RED: This test must fail before the fix because filepath.WalkDir follows symlinks
-// on Unix (d.Type() does not include ModeSymlink for directories encountered via
-// a symlink — but the walk DOES enter them). We detect this by checking that
-// files inside the symlink target are NOT returned.
+// Note: filepath.WalkDir does NOT follow symlinks — it reports them as entries
+// with d.Type()&ModeSymlink set. Without the symlink check, a symlink-to-dir
+// would pass the !d.IsDir() check and be added to the file list, causing
+// "is a directory" errors when snapshotPath attempts to copy it as a file.
 //
 // On Windows, os.Symlink requires elevated privileges or developer mode enabled.
 // We skip on Windows since the fix uses a platform-safe check.
@@ -49,7 +49,7 @@ func TestEnumerateFilesInDir_SkipsSymlinks(t *testing.T) {
 	}
 
 	// enumerateFilesInDir must not return the symlink itself or files from inside the symlink target.
-	files, err := enumerateFilesInDir(home)
+	files, err := enumerateFilesInDir(home, nil)
 	if err != nil {
 		t.Fatalf("enumerateFilesInDir() with symlink returned error: %v — must not fail on symlinks", err)
 	}
@@ -75,6 +75,103 @@ func TestEnumerateFilesInDir_SkipsSymlinks(t *testing.T) {
 
 	if !realFileFound {
 		t.Errorf("enumerateFilesInDir did not return the real file %q; got: %v", realFile, files)
+	}
+}
+
+// TestEnumerateFilesInDir_SymlinkToFileIsIncluded verifies that symlinks pointing
+// to regular files ARE included in the backup. This supports dotfile managers
+// (stow, chezmoi, bare git) where config files like CLAUDE.md are symlinks to
+// files in a dotfiles repository.
+func TestEnumerateFilesInDir_SymlinkToFileIsIncluded(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Symlink requires elevated privileges on Windows")
+	}
+
+	home := t.TempDir()
+
+	// Create a real file outside the config dir (simulates dotfiles repo).
+	dotfilesDir := filepath.Join(home, "dotfiles")
+	if err := os.MkdirAll(dotfilesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll dotfiles: %v", err)
+	}
+	realConfig := filepath.Join(dotfilesDir, "CLAUDE.md")
+	if err := os.WriteFile(realConfig, []byte("# My Claude rules"), 0o644); err != nil {
+		t.Fatalf("WriteFile real config: %v", err)
+	}
+
+	// Create the config dir with a symlink-to-file.
+	configDir := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll config dir: %v", err)
+	}
+	symlinkFile := filepath.Join(configDir, "CLAUDE.md")
+	if err := os.Symlink(realConfig, symlinkFile); err != nil {
+		t.Fatalf("os.Symlink file: %v", err)
+	}
+
+	// Also create a regular file next to the symlink.
+	regularFile := filepath.Join(configDir, "settings.json")
+	if err := os.WriteFile(regularFile, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("WriteFile regular: %v", err)
+	}
+
+	files, err := enumerateFilesInDir(configDir, nil)
+	if err != nil {
+		t.Fatalf("enumerateFilesInDir error: %v", err)
+	}
+
+	pathSet := make(map[string]struct{}, len(files))
+	for _, f := range files {
+		pathSet[f] = struct{}{}
+	}
+
+	// Symlink-to-file MUST be included (dotfile manager support).
+	if _, ok := pathSet[symlinkFile]; !ok {
+		t.Errorf("symlink-to-file %q must be included in backup — dotfile manager support; got: %v", symlinkFile, files)
+	}
+
+	// Regular file must also be included.
+	if _, ok := pathSet[regularFile]; !ok {
+		t.Errorf("regular file %q must be included; got: %v", regularFile, files)
+	}
+}
+
+// TestEnumerateFilesInDir_BrokenSymlinkIsSkipped verifies that broken symlinks
+// (pointing to a nonexistent target) are silently skipped without error.
+func TestEnumerateFilesInDir_BrokenSymlinkIsSkipped(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("os.Symlink requires elevated privileges on Windows")
+	}
+
+	home := t.TempDir()
+
+	// Create a broken symlink.
+	brokenLink := filepath.Join(home, "broken-link")
+	if err := os.Symlink("/nonexistent/target/file.md", brokenLink); err != nil {
+		t.Fatalf("os.Symlink: %v", err)
+	}
+
+	// Create a real file too.
+	realFile := filepath.Join(home, "real.txt")
+	if err := os.WriteFile(realFile, []byte("data"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	files, err := enumerateFilesInDir(home, nil)
+	if err != nil {
+		t.Fatalf("enumerateFilesInDir error: %v", err)
+	}
+
+	pathSet := make(map[string]struct{}, len(files))
+	for _, f := range files {
+		pathSet[f] = struct{}{}
+	}
+
+	if _, ok := pathSet[brokenLink]; ok {
+		t.Errorf("broken symlink %q must NOT be included in results", brokenLink)
+	}
+	if _, ok := pathSet[realFile]; !ok {
+		t.Errorf("real file %q must be included; got: %v", realFile, files)
 	}
 }
 
@@ -116,7 +213,7 @@ func TestEnumerateFilesInDir_SymlinkInSubdirDoesNotBreakBackup(t *testing.T) {
 	}
 
 	// enumerateFilesInDir on .claude must not error.
-	files, err := enumerateFilesInDir(claudeDir)
+	files, err := enumerateFilesInDir(claudeDir, nil)
 	if err != nil {
 		t.Fatalf("enumerateFilesInDir(%q) returned error with symlink inside: %v", claudeDir, err)
 	}
