@@ -838,12 +838,19 @@ func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
 	}
 }
 
-// TestWelcomeMenu_OptionCount verifies the welcome menu has exactly 7 items.
+// TestWelcomeMenu_OptionCount verifies the welcome menu has 7 items without OpenCode
+// and 8 items when OpenCode is detected (adds "OpenCode SDD Profiles" option).
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone)
+	// Without OpenCode detected: 7 options.
+	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0)
 	if len(opts) != 7 {
-		t.Fatalf("WelcomeOptions() len = %d, want 7; got %v", len(opts), opts)
+		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 7; got %v", len(opts), opts)
+	}
+	// With OpenCode detected: 8 options (adds "OpenCode SDD Profiles").
+	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 0)
+	if len(optsWithProfiles) != 8 {
+		t.Fatalf("WelcomeOptions(showProfiles=true) len = %d, want 8; got %v", len(optsWithProfiles), optsWithProfiles)
 	}
 }
 
@@ -1474,6 +1481,95 @@ func TestSyncDoneMsg_ClearsPendingOverrides(t *testing.T) {
 			}
 			if state.OperationRunning {
 				t.Errorf("OperationRunning should be false after SyncDoneMsg")
+			}
+		})
+	}
+}
+
+// TestSyncDoneMsg_CursorClampedAfterProfileListRefresh verifies that when
+// SyncDoneMsg causes the ProfileList to shrink, the cursor is clamped so it
+// never points past the end of the new list.
+func TestSyncDoneMsg_CursorClampedAfterProfileListRefresh(t *testing.T) {
+	// Override readProfilesFn to return a shorter list.
+	orig := readProfilesFn
+	readProfilesFn = func(_ string) ([]model.Profile, error) {
+		return []model.Profile{
+			{Name: "cheap"},
+			{Name: "premium"},
+		}, nil
+	}
+	t.Cleanup(func() { readProfilesFn = orig })
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenProfiles
+	m.OperationRunning = true
+	// Cursor was at 5 (pointing at a profile that no longer exists after sync).
+	m.Cursor = 5
+
+	updated, _ := m.Update(SyncDoneMsg{FilesChanged: 1, Err: nil})
+	state := updated.(Model)
+
+	// After refresh, ProfileList has 2 items; cursor must be clamped to 1 (len-1).
+	if state.Cursor >= len(state.ProfileList) {
+		t.Fatalf("Cursor = %d is out of bounds (ProfileList len = %d); expected cursor to be clamped",
+			state.Cursor, len(state.ProfileList))
+	}
+	if state.Cursor != len(state.ProfileList)-1 {
+		t.Errorf("Cursor = %d, want %d (clamped to last profile index)",
+			state.Cursor, len(state.ProfileList)-1)
+	}
+}
+
+// TestSyncDoneMsg_ClearsPendingOverrides_WithReadProfilesStub is an extended
+// version of TestSyncDoneMsg_ClearsPendingOverrides that also injects a
+// readProfilesFn stub so the test does not depend on the filesystem.
+func TestSyncDoneMsg_ClearsPendingOverrides_WithReadProfilesStub(t *testing.T) {
+	stubProfiles := []model.Profile{{Name: "cheap"}, {Name: "premium"}}
+
+	orig := readProfilesFn
+	readProfilesFn = func(_ string) ([]model.Profile, error) {
+		return stubProfiles, nil
+	}
+	t.Cleanup(func() { readProfilesFn = orig })
+
+	tests := []struct {
+		name     string
+		syncDone SyncDoneMsg
+	}{
+		{
+			name:     "success clears overrides",
+			syncDone: SyncDoneMsg{FilesChanged: 5, Err: nil},
+		},
+		{
+			name:     "error also clears overrides",
+			syncDone: SyncDoneMsg{FilesChanged: 0, Err: fmt.Errorf("sync failed")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = ScreenSync
+			m.OperationRunning = true
+			m.PendingSyncOverrides = &model.SyncOverrides{
+				ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
+					"orchestrator": model.ClaudeModelOpus,
+				},
+			}
+
+			updated, _ := m.Update(tt.syncDone)
+			state := updated.(Model)
+
+			if state.PendingSyncOverrides != nil {
+				t.Errorf("PendingSyncOverrides should be nil after SyncDoneMsg, got: %+v",
+					state.PendingSyncOverrides)
+			}
+			if state.OperationRunning {
+				t.Errorf("OperationRunning should be false after SyncDoneMsg")
+			}
+			// Verify profiles were refreshed from stub.
+			if len(state.ProfileList) != len(stubProfiles) {
+				t.Errorf("ProfileList len = %d, want %d (from stub)", len(state.ProfileList), len(stubProfiles))
 			}
 		})
 	}

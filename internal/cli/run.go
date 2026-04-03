@@ -822,6 +822,17 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 					paths = append(paths, p)
 				}
 				paths = append(paths, filepath.Join(homeDir, ".config", "opencode", "plugins", "background-agents.ts"))
+				// Shared prompt files in ~/.config/opencode/prompts/sdd/ — back these up
+				// so a sync does not silently overwrite user-customized prompt content.
+				// These files are only written for multi-mode (SDDModeMulti), so we only
+				// include them in the path list when that mode is active. This prevents
+				// false-negative verification failures in single/empty mode syncs.
+				if selection.SDDMode == model.SDDModeMulti {
+					promptDir := sdd.SharedPromptDir(homeDir)
+					for _, phase := range sdd.SharedPromptPhases() {
+						paths = append(paths, filepath.Join(promptDir, phase+".md"))
+					}
+				}
 			}
 			if adapter.SupportsSkills() {
 				skillDir := adapter.SkillsDir(homeDir)

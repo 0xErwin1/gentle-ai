@@ -152,7 +152,11 @@ func TestGoldenSDD_OpenCode_Multi(t *testing.T) {
 			t.Fatalf("multi-mode settings missing orchestrator tool %s", toolName)
 		}
 	}
-	assertGolden(t, "sdd-opencode-multi-settings.golden", settingsJSON)
+	// Normalize the absolute home path in the settings JSON so the golden
+	// file remains stable across test runs (temp dirs change each run).
+	// Sub-agent prompts now use {file:/abs/path/...} references.
+	normalizedSettings := []byte(strings.ReplaceAll(string(settingsJSON), home, "{{HOME}}"))
+	assertGolden(t, "sdd-opencode-multi-settings.golden", normalizedSettings)
 
 	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
 	pluginContent := readTestFile(t, pluginPath)

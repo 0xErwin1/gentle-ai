@@ -302,6 +302,15 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	if overrides.StrictTDD != nil {
 		selection.StrictTDD = *overrides.StrictTDD
 	}
+	if len(overrides.Profiles) > 0 {
+		selection.Profiles = overrides.Profiles
+		// Profiles are an OpenCode multi-mode feature — if profiles are being
+		// created/synced, SDDModeMulti is required so that WriteSharedPromptFiles
+		// runs and the {file:...} prompt references resolve correctly.
+		if selection.SDDMode == "" {
+			selection.SDDMode = model.SDDModeMulti
+		}
+	}
 }
 
 // ListBackups returns all backup manifests from the backup directory.
