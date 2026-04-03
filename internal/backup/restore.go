@@ -9,9 +9,9 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 )
 
-// userHomeDirFn is the function used to resolve the user's home directory.
+// UserHomeDirFn is the function used to resolve the user's home directory.
 // Package-level var for testability — swapped in tests to use a temp directory.
-var userHomeDirFn = os.UserHomeDir
+var UserHomeDirFn = os.UserHomeDir
 
 // isPathUnderHome reports whether path is an absolute path that resides under
 // the current user's home directory. This is used to prevent arbitrary file
@@ -23,7 +23,7 @@ var userHomeDirFn = os.UserHomeDir
 // is used — symlinks cannot be resolved for non-existent paths, so this
 // limitation is accepted and documented here.
 func isPathUnderHome(path string) bool {
-	home, err := userHomeDirFn()
+	home, err := UserHomeDirFn()
 	if err != nil {
 		return false
 	}

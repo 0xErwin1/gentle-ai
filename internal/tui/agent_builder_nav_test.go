@@ -33,6 +33,11 @@ func TestAgentBuilder_WelcomeCreateAgentEnter_NavigatesToEngine(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
 	m.Cursor = 5 // "Create your own Agent" is cursor 5
+	// Seed at least one engine so hasAgentBuilderEngines() returns true;
+	// without this, case 5 returns early (no-op) and the screen never changes.
+	m.AgentBuilder = AgentBuilderState{
+		AvailableEngines: []model.AgentID{model.AgentClaudeCode},
+	}
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)

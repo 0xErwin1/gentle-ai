@@ -10,13 +10,13 @@ import (
 func TestRestoreRestoresExistingAndRemovesCreated(t *testing.T) {
 	home := t.TempDir()
 	// Override fns so validation accepts paths under t.TempDir().
-	origUserHomeDirFn := userHomeDirFn
+	origUserHomeDirFn := UserHomeDirFn
 	origBackupRootFn := BackupRootFn
 	t.Cleanup(func() {
-		userHomeDirFn = origUserHomeDirFn
+		UserHomeDirFn = origUserHomeDirFn
 		BackupRootFn = origBackupRootFn
 	})
-	userHomeDirFn = func() (string, error) { return home, nil }
+	UserHomeDirFn = func() (string, error) { return home, nil }
 	BackupRootFn = func() (string, error) { return home, nil }
 
 	originalPath := filepath.Join(home, "config", "settings.json")
@@ -68,13 +68,13 @@ func TestRestoreRestoresExistingAndRemovesCreated(t *testing.T) {
 func TestRestoreFailsWhenSnapshotMissing(t *testing.T) {
 	tmpDir := t.TempDir()
 	// Override fns so validation accepts paths under t.TempDir().
-	origUserHomeDirFn := userHomeDirFn
+	origUserHomeDirFn := UserHomeDirFn
 	origBackupRootFn := BackupRootFn
 	t.Cleanup(func() {
-		userHomeDirFn = origUserHomeDirFn
+		UserHomeDirFn = origUserHomeDirFn
 		BackupRootFn = origBackupRootFn
 	})
-	userHomeDirFn = func() (string, error) { return tmpDir, nil }
+	UserHomeDirFn = func() (string, error) { return tmpDir, nil }
 	BackupRootFn = func() (string, error) { return tmpDir, nil }
 
 	service := RestoreService{}
@@ -95,9 +95,9 @@ func TestRestoreFailsWhenSnapshotMissing(t *testing.T) {
 func TestRestoreCompressedBackup(t *testing.T) {
 	home := t.TempDir()
 	// Override fns so validation accepts paths under t.TempDir().
-	origUserHomeDirFn := userHomeDirFn
-	t.Cleanup(func() { userHomeDirFn = origUserHomeDirFn })
-	userHomeDirFn = func() (string, error) { return home, nil }
+	origUserHomeDirFn := UserHomeDirFn
+	t.Cleanup(func() { UserHomeDirFn = origUserHomeDirFn })
+	UserHomeDirFn = func() (string, error) { return home, nil }
 
 	backupDir := filepath.Join(home, "backup")
 
@@ -145,13 +145,13 @@ func TestRestoreCompressedBackup(t *testing.T) {
 func TestRestoreUncompressedBackup(t *testing.T) {
 	home := t.TempDir()
 	// Override fns so validation accepts paths under t.TempDir().
-	origUserHomeDirFn := userHomeDirFn
+	origUserHomeDirFn := UserHomeDirFn
 	origBackupRootFn := BackupRootFn
 	t.Cleanup(func() {
-		userHomeDirFn = origUserHomeDirFn
+		UserHomeDirFn = origUserHomeDirFn
 		BackupRootFn = origBackupRootFn
 	})
-	userHomeDirFn = func() (string, error) { return home, nil }
+	UserHomeDirFn = func() (string, error) { return home, nil }
 	BackupRootFn = func() (string, error) { return home, nil }
 
 	originalPath := filepath.Join(home, "config", "app.json")
@@ -196,10 +196,10 @@ func TestRestoreUncompressedBackup(t *testing.T) {
 // with more than one file, ensuring the loop resolves all relative paths correctly.
 func TestRestoreCompressedMultipleFiles(t *testing.T) {
 	home := t.TempDir()
-	// Override userHomeDirFn so validation accepts paths under t.TempDir().
-	origUserHomeDirFn := userHomeDirFn
-	t.Cleanup(func() { userHomeDirFn = origUserHomeDirFn })
-	userHomeDirFn = func() (string, error) { return home, nil }
+	// Override UserHomeDirFn so validation accepts paths under t.TempDir().
+	origUserHomeDirFn := UserHomeDirFn
+	t.Cleanup(func() { UserHomeDirFn = origUserHomeDirFn })
+	UserHomeDirFn = func() (string, error) { return home, nil }
 
 	backupDir := filepath.Join(home, "backup")
 
@@ -285,10 +285,10 @@ func TestRestoreCompressed_MissingArchive(t *testing.T) {
 // in a compressed backup cause the file at OriginalPath to be deleted (BKUP-T32).
 func TestRestoreCompressedRemovesCreatedFiles(t *testing.T) {
 	home := t.TempDir()
-	// Override userHomeDirFn so validation accepts paths under t.TempDir().
-	origUserHomeDirFn := userHomeDirFn
-	t.Cleanup(func() { userHomeDirFn = origUserHomeDirFn })
-	userHomeDirFn = func() (string, error) { return home, nil }
+	// Override UserHomeDirFn so validation accepts paths under t.TempDir().
+	origUserHomeDirFn := UserHomeDirFn
+	t.Cleanup(func() { UserHomeDirFn = origUserHomeDirFn })
+	UserHomeDirFn = func() (string, error) { return home, nil }
 
 	backupDir := filepath.Join(home, "backup")
 
