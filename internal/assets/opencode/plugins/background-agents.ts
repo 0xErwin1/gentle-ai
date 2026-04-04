@@ -25,7 +25,8 @@ import { stat } from "node:fs/promises"
 import { type Plugin, type ToolContext, tool } from "@opencode-ai/plugin"
 import type { createOpencodeClient } from "@opencode-ai/sdk"
 import type { Event, Message, Part, TextPart } from "@opencode-ai/sdk"
-import { adjectives, animals, colors, uniqueNamesGenerator } from "unique-names-generator"
+import ung from "unique-names-generator"
+const { adjectives, animals, colors, uniqueNamesGenerator } = ung
 
 // ==========================================
 // INLINED: kdco-primitives/types
