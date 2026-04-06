@@ -26,6 +26,12 @@ var engramDownloadFn = engram.DownloadLatestBinary
 // Package-level var for testability.
 var scriptHTTPClient = &http.Client{Timeout: 2 * time.Minute}
 
+// maxScriptSize is the maximum number of bytes read from a downloaded install.sh.
+// This prevents unbounded memory use if the server returns an unexpectedly large body.
+// Note: HTTPS provides transport security but NOT content integrity — a compromised
+// server or CDN could still serve a malicious script within this size limit.
+const maxScriptSize = 1 * 1024 * 1024 // 1 MB
+
 // runStrategy executes the upgrade for a single tool using the appropriate strategy
 // for the given platform profile.
 //
@@ -204,9 +210,12 @@ func scriptUpgrade(ctx context.Context, r update.UpdateResult, profile system.Pl
 		return fmt.Errorf("download install.sh: HTTP %d from %s", resp.StatusCode, url)
 	}
 
-	scriptBody, err := io.ReadAll(resp.Body)
+	scriptBody, err := io.ReadAll(io.LimitReader(resp.Body, maxScriptSize+1))
 	if err != nil {
 		return fmt.Errorf("download install.sh: read body: %w", err)
+	}
+	if int64(len(scriptBody)) > maxScriptSize {
+		return fmt.Errorf("download install.sh: response body exceeds %d bytes limit", maxScriptSize)
 	}
 
 	// Execute install.sh with bash. Stdin is nil to ensure non-interactive mode.
@@ -221,9 +230,11 @@ func scriptUpgrade(ctx context.Context, r update.UpdateResult, profile system.Pl
 	return nil
 }
 
-// ggaTmpDir is the directory used for GGA git clone during upgrades.
-// Package-level var for testability.
-var ggaTmpDir = "/tmp/gentleman-guardian-angel"
+// ggaMkdirTemp is the function used to create a temporary directory for GGA git clone.
+// Package-level var for testability — swapped in tests to control the temp dir path.
+var ggaMkdirTemp = func() (string, error) {
+	return os.MkdirTemp("", "gentle-ai-gga-*")
+}
 
 // ggaScriptUpgrade upgrades GGA by cloning its repository and running install.sh
 // from within the cloned repo — the same approach used by the initial install resolver.
@@ -256,10 +267,12 @@ func ggaScriptUpgradeForOS(ctx context.Context, r update.UpdateResult, osName st
 		}
 	}
 
-	tmpDir := ggaTmpDir
-
-	// Clean up any previous clone to ensure a fresh state.
-	os.RemoveAll(tmpDir)
+	// Use an unpredictable temp directory to avoid TOCTOU races on the fixed path.
+	tmpDir, err := ggaMkdirTemp()
+	if err != nil {
+		return fmt.Errorf("create temp dir for gga clone: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
 
 	// Clone the full repository — install.sh needs the entire repo context.
 	repoURL := fmt.Sprintf("https://github.com/%s/%s.git", r.Tool.Owner, r.Tool.Repo)
@@ -277,7 +290,5 @@ func ggaScriptUpgradeForOS(ctx context.Context, r update.UpdateResult, osName st
 		return fmt.Errorf("install.sh failed for %q: %w\nOutput: %s", r.Tool.Name, err, strings.TrimSpace(string(out)))
 	}
 
-	// Clean up the temporary clone.
-	os.RemoveAll(tmpDir)
 	return nil
 }

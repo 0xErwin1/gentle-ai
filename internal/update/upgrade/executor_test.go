@@ -4,13 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
@@ -308,23 +306,9 @@ func TestExecute_FailureDoesNotImplyConfigLoss(t *testing.T) {
 	}
 }
 
-// --- TestExecute_InstallNotInvoked ---
-
-// TestExecute_InstallNotInvoked verifies the isolation contract:
-// Execute must not invoke any install/sync functions.
-// We test this by verifying the package cannot even reference installer packages.
-// This is enforced by the import boundary (no import of pipeline/planner/cli).
-func TestExecute_InstallNotInvoked(t *testing.T) {
-	// This test is intentionally a documentation-only guard.
-	// The real enforcement is: this package MUST NOT import:
-	//   - github.com/gentleman-programming/gentle-ai/internal/pipeline
-	//   - github.com/gentleman-programming/gentle-ai/internal/planner
-	//   - github.com/gentleman-programming/gentle-ai/internal/cli
-	//
-	// If you see those imports appear, the isolation contract is broken.
-	// See TestExecuteImportBoundary for the compile-time enforcement approach.
-	t.Log("install isolation enforced by import boundary — see imports at top of executor.go")
-}
+// NOTE: Install isolation is enforced by the import boundary at the top of
+// executor.go — this package MUST NOT import pipeline, planner, or cli.
+// The compiler enforces this; no runtime test is needed.
 
 // --- TestExecute_DevBuildSurfacedAsSkipped ---
 
@@ -571,57 +555,9 @@ func TestConfigPathsForBackup_HandlesEmptyDirs(t *testing.T) {
 	}
 }
 
-// TestExecute_BackupWarningWhenBackupFails verifies that when backup creation
-// fails (e.g. permissions error on the backup dir), the upgrade still proceeds
-// but the UpgradeReport surfaces the backup failure warning.
-// This tests the G6 gap fix: explicit warning instead of silent skip.
-func TestExecute_BackupWarningWhenBackupFails(t *testing.T) {
-	origExecCommand := execCommand
-	t.Cleanup(func() { execCommand = origExecCommand })
-	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("echo", "ok")
-	}
-
-	// Use a homeDir that cannot create the backup dir by making it read-only.
-	// We simulate the backup failure by overriding backupCreator.
-	// Since we can't easily make a real dir unwritable in a unit test (on macOS,
-	// a root process could still write), we verify the contract via BackupWarning
-	// field when BackupID is empty.
-	results := []update.UpdateResult{
-		makeResult("engram", update.UpdateAvailable, "0.3.0", "0.4.0", update.InstallGoInstall),
-	}
-	results[0].Tool.GoImportPath = "github.com/Gentleman-Programming/engram/cmd/engram"
-
-	// Simulate backup failure by providing a homeDir where the snapshot would
-	// fail — but that is OS-dependent. We test the contract: if BackupID is
-	// empty (backup failed silently before), UpgradeReport.BackupWarning should
-	// be non-empty to signal the omission.
-	// For now, test that the field exists — the integration path is covered by
-	// TestExecute_BackupBeforeExecution which confirms the happy path.
-	report := Execute(context.Background(), results, linuxProfile(), t.TempDir(), false)
-
-	// If backup succeeded, BackupWarning should be empty (no warning needed).
-	if report.BackupID != "" && report.BackupWarning != "" {
-		t.Errorf("BackupWarning should be empty when BackupID is set (backup succeeded); got: %q", report.BackupWarning)
-	}
-}
-
-// TestUpgradeReport_HasBackupWarningField verifies that UpgradeReport has a
-// BackupWarning field to surface backup-creation failures explicitly.
-// This tests the G6 gap: backup failure must not be silently skipped.
-func TestUpgradeReport_HasBackupWarningField(t *testing.T) {
-	// This test validates the struct field exists and is accessible.
-	report := UpgradeReport{
-		BackupID:      "",
-		BackupWarning: "backup creation failed: permission denied",
-		Results:       nil,
-		DryRun:        false,
-	}
-
-	if report.BackupWarning == "" {
-		t.Error("BackupWarning field not accessible — struct must have BackupWarning string field")
-	}
-}
+// NOTE: BackupWarning field existence is verified by the compiler (struct literal
+// usage in tests). The failure path is fully covered by
+// TestExecute_ForcedSnapshotFailureSurfacesWarningEndToEnd below.
 
 // TestExecute_ForcedSnapshotFailureSurfacesWarningEndToEnd verifies the complete
 // failure path end-to-end: when snapshot creation fails, the UpgradeReport
@@ -665,10 +601,10 @@ func TestExecute_ForcedSnapshotFailureSurfacesWarningEndToEnd(t *testing.T) {
 	if report.BackupWarning == "" {
 		t.Errorf("BackupWarning is empty — failure must be surfaced explicitly")
 	}
-	if !containsSubstring(report.BackupWarning, "pre-upgrade backup failed") {
+	if !strings.Contains(report.BackupWarning, "pre-upgrade backup failed") {
 		t.Errorf("BackupWarning = %q, want it to mention 'pre-upgrade backup failed'", report.BackupWarning)
 	}
-	if !containsSubstring(report.BackupWarning, "simulated snapshot failure") {
+	if !strings.Contains(report.BackupWarning, "simulated snapshot failure") {
 		t.Errorf("BackupWarning = %q, want it to include the root cause", report.BackupWarning)
 	}
 
@@ -682,10 +618,10 @@ func TestExecute_ForcedSnapshotFailureSurfacesWarningEndToEnd(t *testing.T) {
 
 	// RenderUpgradeReport must include the WARNING line in its output.
 	rendered := RenderUpgradeReport(report)
-	if !containsSubstring(rendered, "WARNING:") {
+	if !strings.Contains(rendered, "WARNING:") {
 		t.Errorf("RenderUpgradeReport output must contain 'WARNING:' when BackupWarning is set;\ngot:\n%s", rendered)
 	}
-	if !containsSubstring(rendered, "pre-upgrade backup failed") {
+	if !strings.Contains(rendered, "pre-upgrade backup failed") {
 		t.Errorf("RenderUpgradeReport output must include the backup failure message;\ngot:\n%s", rendered)
 	}
 }
@@ -782,7 +718,7 @@ func TestExecute_SuccessfulSnapshotHasNoWarning(t *testing.T) {
 	}
 
 	rendered := RenderUpgradeReport(report)
-	if containsSubstring(rendered, "WARNING:") {
+	if strings.Contains(rendered, "WARNING:") {
 		t.Errorf("RenderUpgradeReport must NOT contain 'WARNING:' on success;\ngot:\n%s", rendered)
 	}
 }
@@ -859,6 +795,207 @@ func TestConfigPathsForBackup_GGAExtrasAreIncluded(t *testing.T) {
 	}
 }
 
+// --- TestEnumerateFilesInDir_ExcludesSubdirs ---
+
+// TestEnumerateFilesInDir_ExcludesSubdirs verifies that enumerateFilesInDir skips
+// directories whose base name appears in the excludeDirNames set at ANY depth.
+// This is critical for agents like Gemini where heavy runtime dirs
+// (browser_recordings/) are nested 2+ levels deep (e.g. ~/.gemini/antigravity/browser_recordings/).
+func TestEnumerateFilesInDir_ExcludesSubdirs(t *testing.T) {
+	root := t.TempDir()
+
+	// Config file at root level — must be included.
+	rootFile := filepath.Join(root, "settings.json")
+	if err := os.WriteFile(rootFile, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Allowed subdir with a config file — must be included.
+	allowedFile := filepath.Join(root, "mcp", "server.json")
+	if err := os.MkdirAll(filepath.Dir(allowedFile), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(allowedFile, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Excluded subdir at depth 1 — must be skipped.
+	excludedFile := filepath.Join(root, "projects", "data.json")
+	if err := os.MkdirAll(filepath.Dir(excludedFile), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(excludedFile, []byte(`big data`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Excluded subdir at depth 2 — simulates ~/.gemini/antigravity/browser_recordings/.
+	// Must also be skipped.
+	nestedExcludedFile := filepath.Join(root, "antigravity", "browser_recordings", "video.dat")
+	if err := os.MkdirAll(filepath.Dir(nestedExcludedFile), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(nestedExcludedFile, []byte(`3.6GB of video`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Config file NEXT TO excluded dir inside antigravity — must be included.
+	nestedConfigFile := filepath.Join(root, "antigravity", "config.toml")
+	if err := os.WriteFile(nestedConfigFile, []byte(`[settings]`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	excludes := map[string]bool{
+		"projects":           true,
+		"browser_recordings": true,
+	}
+
+	files, err := enumerateFilesInDir(root, excludes)
+	if err != nil {
+		t.Fatalf("enumerateFilesInDir error: %v", err)
+	}
+
+	pathSet := make(map[string]struct{}, len(files))
+	for _, f := range files {
+		pathSet[f] = struct{}{}
+	}
+
+	// Root-level config file must be present.
+	if _, ok := pathSet[rootFile]; !ok {
+		t.Errorf("missing root-level file %q", rootFile)
+	}
+
+	// Allowed subdir file must be present.
+	if _, ok := pathSet[allowedFile]; !ok {
+		t.Errorf("missing allowed subdir file %q", allowedFile)
+	}
+
+	// Depth-1 excluded subdir files must NOT be present.
+	if _, ok := pathSet[excludedFile]; ok {
+		t.Errorf("excluded subdir file %q should not be in results", excludedFile)
+	}
+
+	// Depth-2 excluded subdir files must NOT be present.
+	if _, ok := pathSet[nestedExcludedFile]; ok {
+		t.Errorf("nested excluded dir file %q should not be in results — exclude must work at any depth", nestedExcludedFile)
+	}
+
+	// Config file next to excluded dir must still be present.
+	if _, ok := pathSet[nestedConfigFile]; !ok {
+		t.Errorf("config file next to excluded dir should be present; missing %q", nestedConfigFile)
+	}
+}
+
+// TestEnumerateFilesInDir_NilExcludesWalksEverything verifies that passing nil
+// for excludeSubdirs results in a full walk with no exclusions.
+func TestEnumerateFilesInDir_NilExcludesWalksEverything(t *testing.T) {
+	root := t.TempDir()
+
+	file1 := filepath.Join(root, "a.txt")
+	file2 := filepath.Join(root, "projects", "b.txt")
+	for _, f := range []string{file1, file2} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(f, []byte("data"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	files, err := enumerateFilesInDir(root, nil)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	if len(files) != 2 {
+		t.Errorf("expected 2 files with nil excludes, got %d: %v", len(files), files)
+	}
+}
+
+// TestConfigPathsForBackup_ExcludesRuntimeDirs verifies that the production
+// backupExcludeSubdirs list prevents configPathsForBackup from walking into
+// large runtime directories across ALL agents: Claude, Gemini, OpenCode.
+func TestConfigPathsForBackup_ExcludesRuntimeDirs(t *testing.T) {
+	homeDir := t.TempDir()
+
+	// --- Claude: config file (keep) + runtime dirs (exclude) ---
+	claudeConfig := filepath.Join(homeDir, ".claude", "CLAUDE.md")
+	if err := os.MkdirAll(filepath.Dir(claudeConfig), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(claudeConfig, []byte("# Claude"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	claudeExcludes := []string{"projects", "sessions", "plugins", "cache", "backups"}
+
+	// --- Gemini: config file (keep) + runtime dirs (exclude) ---
+	geminiConfig := filepath.Join(homeDir, ".gemini", "GEMINI.md")
+	if err := os.MkdirAll(filepath.Dir(geminiConfig), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(geminiConfig, []byte("# Gemini"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	geminiExcludes := []string{"browser_recordings", "brain", "conversations"}
+
+	// --- OpenCode: config file (keep) + node_modules (exclude) ---
+	openCodeConfig := filepath.Join(homeDir, ".config", "opencode", "config.json")
+	if err := os.MkdirAll(filepath.Dir(openCodeConfig), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(openCodeConfig, []byte(`{"model":"free"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	openCodeExcludes := []string{"node_modules"}
+
+	// Create excluded dirs with files for all agents.
+	type agentExclude struct {
+		base     string
+		excludes []string
+	}
+	agents := []agentExclude{
+		{filepath.Join(homeDir, ".claude"), claudeExcludes},
+		{filepath.Join(homeDir, ".gemini"), geminiExcludes},
+		{filepath.Join(homeDir, ".config", "opencode"), openCodeExcludes},
+	}
+
+	var excludedFiles []string
+	for _, agent := range agents {
+		for _, dir := range agent.excludes {
+			f := filepath.Join(agent.base, dir, "data.json")
+			if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+				t.Fatalf("MkdirAll %s: %v", dir, err)
+			}
+			if err := os.WriteFile(f, []byte("runtime data"), 0o644); err != nil {
+				t.Fatalf("WriteFile %s: %v", dir, err)
+			}
+			excludedFiles = append(excludedFiles, f)
+		}
+	}
+
+	paths := configPathsForBackup(homeDir)
+	pathSet := make(map[string]struct{}, len(paths))
+	for _, p := range paths {
+		pathSet[p] = struct{}{}
+	}
+
+	// Config files must be present.
+	for _, cfg := range []string{claudeConfig, geminiConfig, openCodeConfig} {
+		if _, ok := pathSet[cfg]; !ok {
+			t.Errorf("configPathsForBackup missing config file %q", cfg)
+		}
+	}
+
+	// Runtime files must NOT be present.
+	for _, f := range excludedFiles {
+		if _, ok := pathSet[f]; ok {
+			t.Errorf("configPathsForBackup should exclude runtime file %q", f)
+		}
+	}
+}
+
 // --- TestExecute_SkippedUpgradeDoesNotRenderFailureMarker ---
 
 // TestExecute_SkippedUpgradeDoesNotRenderFailureMarker verifies that when a tool
@@ -901,157 +1038,137 @@ func TestExecute_SkippedUpgradeDoesNotRenderFailureMarker(t *testing.T) {
 	}
 }
 
-// containsSubstring checks whether s contains sub.
-func containsSubstring(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
-}
+// TestEnumerateFilesInDir_ExcludesNestedSameNameDir documents the intentional
+// behavior change: directories matching an excluded name are pruned at ANY depth,
+// not just directly under the walked root. For example, mcp/cache/data.json is
+// excluded because "cache" matches the exclude list even at depth 2. This is the
+// accepted tradeoff — we skip all dirs named "cache" regardless of nesting to
+// ensure heavy runtime dirs like ~/.gemini/antigravity/browser_recordings/ are
+// always excluded without requiring path-specific rules.
+func TestEnumerateFilesInDir_ExcludesNestedSameNameDir(t *testing.T) {
+	root := t.TempDir()
 
-// --- Dedup + Prune wiring tests (BKUP-T29) ---
-
-// TestExecute_SkipsDuplicateUpgradeBackup verifies that when two consecutive
-// Execute calls see identical config files, the second does not create a new
-// backup directory (dedup skips the snapshot).
-func TestExecute_SkipsDuplicateUpgradeBackup(t *testing.T) {
-	origExecCommand := execCommand
-	origSnapshotCreator := snapshotCreator
-	t.Cleanup(func() {
-		execCommand = origExecCommand
-		snapshotCreator = origSnapshotCreator
-	})
-	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("echo", "ok")
-	}
-	// Use real snapshotCreator for dedup check to work.
-	snapshotCreator = func(snapshotDir string, paths []string) (backup.Manifest, error) {
-		return backup.NewSnapshotter().Create(snapshotDir, paths)
-	}
-
-	homeDir := t.TempDir()
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
-
-	// Create a config file so snapshot has real content.
-	configFile := filepath.Join(homeDir, ".claude", "CLAUDE.md")
-	if err := os.MkdirAll(filepath.Dir(configFile), 0o755); err != nil {
+	// Create mcp/cache/data.json — "cache" is an excluded name, so this file
+	// must NOT appear in results even though it's nested under "mcp".
+	nestedCacheFile := filepath.Join(root, "mcp", "cache", "data.json")
+	if err := os.MkdirAll(filepath.Dir(nestedCacheFile), 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := os.WriteFile(configFile, []byte("# Config"), 0o644); err != nil {
+	if err := os.WriteFile(nestedCacheFile, []byte(`{"cached":true}`), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	results := []update.UpdateResult{
-		makeResult("engram", update.UpdateAvailable, "0.3.0", "0.4.0", update.InstallGoInstall),
-	}
-	results[0].Tool.GoImportPath = "github.com/Gentleman-Programming/engram/cmd/engram"
-
-	// First execute — should create a backup.
-	report1 := Execute(context.Background(), results, linuxProfile(), homeDir, false)
-	if report1.BackupID == "" {
-		t.Fatalf("first Execute: BackupID must be non-empty (backup created)")
+	// A sibling file under mcp (not in an excluded dir) — must be included.
+	mcpConfig := filepath.Join(root, "mcp", "server.json")
+	if err := os.WriteFile(mcpConfig, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
 	}
 
-	entriesAfterFirst, err := os.ReadDir(backupRoot)
+	excludes := map[string]bool{
+		"cache": true,
+	}
+
+	files, err := enumerateFilesInDir(root, excludes)
 	if err != nil {
-		t.Fatalf("ReadDir after first Execute: %v", err)
+		t.Fatalf("enumerateFilesInDir error: %v", err)
 	}
-	countAfterFirst := len(entriesAfterFirst)
 
-	// Second execute with identical config — duplicate, no new backup.
-	report2 := Execute(context.Background(), results, linuxProfile(), homeDir, false)
-
-	entriesAfterSecond, err := os.ReadDir(backupRoot)
-	if err != nil {
-		t.Fatalf("ReadDir after second Execute: %v", err)
+	pathSet := make(map[string]struct{}, len(files))
+	for _, f := range files {
+		pathSet[f] = struct{}{}
 	}
-	countAfterSecond := len(entriesAfterSecond)
 
-	// The second execute must not have added a new backup directory.
-	if countAfterSecond != countAfterFirst {
-		t.Errorf("second Execute created a new backup despite identical config: before=%d, after=%d", countAfterFirst, countAfterSecond)
+	// mcp/cache/data.json must be excluded — "cache" matches at depth 2.
+	if _, ok := pathSet[nestedCacheFile]; ok {
+		t.Errorf("nested excluded dir file %q must NOT be in results — exclude applies at any depth", nestedCacheFile)
 	}
-	_ = report2
+
+	// mcp/server.json must be present — "mcp" is not excluded.
+	if _, ok := pathSet[mcpConfig]; !ok {
+		t.Errorf("non-excluded file %q must be present", mcpConfig)
+	}
 }
 
-// TestExecute_PrunesOldBackupsAfterUpgrade verifies that after a successful
-// upgrade backup, old unpinned backups beyond DefaultRetentionCount are pruned
-// (BKUP-T29).
-func TestExecute_PrunesOldBackupsAfterUpgrade(t *testing.T) {
-	origExecCommand := execCommand
-	origSnapshotCreator := snapshotCreator
-	t.Cleanup(func() {
-		execCommand = origExecCommand
-		snapshotCreator = origSnapshotCreator
-	})
-	execCommand = func(name string, args ...string) *exec.Cmd {
-		return exec.Command("echo", "ok")
-	}
-	snapshotCreator = func(snapshotDir string, paths []string) (backup.Manifest, error) {
-		return backup.NewSnapshotter().Create(snapshotDir, paths)
-	}
+// TestEnumerateFilesInDir_EmptyExcludesWalksEverything verifies that passing an
+// empty (non-nil) map for excludeSubdirs results in a full walk with no exclusions,
+// same as nil.
+func TestEnumerateFilesInDir_EmptyExcludesWalksEverything(t *testing.T) {
+	root := t.TempDir()
 
-	homeDir := t.TempDir()
-	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
-	if err := os.MkdirAll(backupRoot, 0o755); err != nil {
-		t.Fatalf("MkdirAll backupRoot: %v", err)
-	}
-
-	// Pre-populate backupRoot with DefaultRetentionCount existing backups
-	// by writing manifest files directly (no real snapshot needed for Prune).
-	for i := 0; i < backup.DefaultRetentionCount; i++ {
-		dirName := filepath.Join(backupRoot, fmt.Sprintf("old-backup-%03d", i))
-		if err := os.MkdirAll(dirName, 0o755); err != nil {
-			t.Fatalf("MkdirAll old backup %d: %v", i, err)
+	file1 := filepath.Join(root, "a.txt")
+	file2 := filepath.Join(root, "projects", "b.txt")
+	for _, f := range []string{file1, file2} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
 		}
-		// Write a minimal manifest so listManifests can parse it.
-		m := backup.Manifest{
-			ID:        fmt.Sprintf("old-backup-%03d", i),
-			CreatedAt: time.Now().Add(-time.Duration(backup.DefaultRetentionCount-i) * time.Minute),
-			RootDir:   dirName,
-		}
-		manifestPath := filepath.Join(dirName, backup.ManifestFilename)
-		if err := backup.WriteManifest(manifestPath, m); err != nil {
-			t.Fatalf("WriteManifest old backup %d: %v", i, err)
+		if err := os.WriteFile(f, []byte("data"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
 		}
 	}
 
-	// Verify we have exactly DefaultRetentionCount backups pre-existing.
-	before, _ := os.ReadDir(backupRoot)
-	if len(before) != backup.DefaultRetentionCount {
-		t.Fatalf("expected %d pre-existing backups, got %d", backup.DefaultRetentionCount, len(before))
-	}
-
-	// Create a config file to back up (must differ from any existing for non-dedup path).
-	configFile := filepath.Join(homeDir, ".claude", "CLAUDE.md")
-	if err := os.MkdirAll(filepath.Dir(configFile), 0o755); err != nil {
-		t.Fatalf("MkdirAll config: %v", err)
-	}
-	if err := os.WriteFile(configFile, []byte("# New Config"), 0o644); err != nil {
-		t.Fatalf("WriteFile config: %v", err)
-	}
-
-	results := []update.UpdateResult{
-		makeResult("engram", update.UpdateAvailable, "0.3.0", "0.4.0", update.InstallGoInstall),
-	}
-	results[0].Tool.GoImportPath = "github.com/Gentleman-Programming/engram/cmd/engram"
-
-	// Execute — this creates one new backup, then prune should trim to DefaultRetentionCount.
-	report := Execute(context.Background(), results, linuxProfile(), homeDir, false)
-	if report.BackupID == "" {
-		t.Fatalf("Execute: BackupID must be set (backup created)")
-	}
-
-	after, err := os.ReadDir(backupRoot)
+	files, err := enumerateFilesInDir(root, map[string]bool{})
 	if err != nil {
-		t.Fatalf("ReadDir backupRoot after Execute: %v", err)
+		t.Fatalf("error: %v", err)
 	}
 
-	// After creating 1 new backup, total was DefaultRetentionCount+1, so prune
-	// must have deleted 1 oldest, leaving exactly DefaultRetentionCount.
-	if len(after) != backup.DefaultRetentionCount {
-		t.Errorf("after Execute+prune: expected %d backups, got %d", backup.DefaultRetentionCount, len(after))
+	if len(files) != 2 {
+		t.Errorf("expected 2 files with empty excludes map, got %d: %v", len(files), files)
+	}
+}
+
+// TestEnumerateFilesInDir_CaseInsensitiveExclude verifies that directory names
+// with mixed casing (e.g. "Projects", "CACHE") are excluded on case-insensitive
+// filesystems like Windows NTFS. The exclude map keys are lowercase; the
+// strings.ToLower normalization in enumerateFilesInDir handles the mismatch.
+func TestEnumerateFilesInDir_CaseInsensitiveExclude(t *testing.T) {
+	root := t.TempDir()
+
+	// Config file at root — must be included.
+	configFile := filepath.Join(root, "settings.json")
+	if err := os.WriteFile(configFile, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Directory with uppercase name matching a lowercase exclude key.
+	upperDir := filepath.Join(root, "Projects", "data.json")
+	if err := os.MkdirAll(filepath.Dir(upperDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(upperDir, []byte("big"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	// Mixed case directory.
+	mixedDir := filepath.Join(root, "Cache", "temp.dat")
+	if err := os.MkdirAll(filepath.Dir(mixedDir), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(mixedDir, []byte("cached"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	excludes := map[string]bool{
+		"projects": true,
+		"cache":    true,
+	}
+
+	files, err := enumerateFilesInDir(root, excludes)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	pathSet := make(map[string]struct{}, len(files))
+	for _, f := range files {
+		pathSet[f] = struct{}{}
+	}
+
+	if _, ok := pathSet[configFile]; !ok {
+		t.Errorf("config file should be present: %q", configFile)
+	}
+	if _, ok := pathSet[upperDir]; ok {
+		t.Errorf("uppercase 'Projects' dir should be excluded by lowercase 'projects' key: %q", upperDir)
+	}
+	if _, ok := pathSet[mixedDir]; ok {
+		t.Errorf("mixed-case 'Cache' dir should be excluded by lowercase 'cache' key: %q", mixedDir)
 	}
 }

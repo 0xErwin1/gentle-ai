@@ -156,6 +156,11 @@ func TestPrepareBackupStep_PrunesOldBackups(t *testing.T) {
 		t.Fatalf("MkdirAll backupRoot: %v", err)
 	}
 
+	// Override BackupRootFn so DeleteBackup validation accepts test temp dirs.
+	origBackupRootFn := backup.BackupRootFn
+	t.Cleanup(func() { backup.BackupRootFn = origBackupRootFn })
+	backup.BackupRootFn = func() (string, error) { return backupRoot, nil }
+
 	// Pre-populate backupRoot with DefaultRetentionCount backups using distinct
 	// content to avoid dedup short-circuit.
 	for i := 0; i < backup.DefaultRetentionCount; i++ {

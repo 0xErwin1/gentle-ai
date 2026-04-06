@@ -824,26 +824,33 @@ func TestWelcomeMenu_ConfigureModelsNavigation(t *testing.T) {
 	}
 }
 
-// TestWelcomeMenu_BackupsNavigation verifies cursor 5 (Manage backups) goes to ScreenBackups.
+// TestWelcomeMenu_BackupsNavigation verifies cursor 6 (Manage backups) goes to ScreenBackups.
 func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
-	m.Cursor = 5
+	m.Cursor = 6
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenBackups {
-		t.Fatalf("cursor=5 (Backups): screen = %v, want %v", state.Screen, ScreenBackups)
+		t.Fatalf("cursor=6 (Backups): screen = %v, want %v", state.Screen, ScreenBackups)
 	}
 }
 
-// TestWelcomeMenu_OptionCount verifies the welcome menu has exactly 7 items.
+// TestWelcomeMenu_OptionCount verifies the welcome menu has 8 items without OpenCode
+// and 9 items when OpenCode is detected (adds "OpenCode SDD Profiles" option).
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone)
-	if len(opts) != 7 {
-		t.Fatalf("WelcomeOptions() len = %d, want 7; got %v", len(opts), opts)
+	// Without OpenCode detected: 8 options (includes "Create your own Agent").
+	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true)
+	if len(opts) != 8 {
+		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 8; got %v", len(opts), opts)
+	}
+	// With OpenCode detected: 9 options (adds "OpenCode SDD Profiles").
+	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 0, true)
+	if len(optsWithProfiles) != 9 {
+		t.Fatalf("WelcomeOptions(showProfiles=true) len = %d, want 9; got %v", len(optsWithProfiles), optsWithProfiles)
 	}
 }
 
@@ -1474,6 +1481,95 @@ func TestSyncDoneMsg_ClearsPendingOverrides(t *testing.T) {
 			}
 			if state.OperationRunning {
 				t.Errorf("OperationRunning should be false after SyncDoneMsg")
+			}
+		})
+	}
+}
+
+// TestSyncDoneMsg_CursorClampedAfterProfileListRefresh verifies that when
+// SyncDoneMsg causes the ProfileList to shrink, the cursor is clamped so it
+// never points past the end of the new list.
+func TestSyncDoneMsg_CursorClampedAfterProfileListRefresh(t *testing.T) {
+	// Override readProfilesFn to return a shorter list.
+	orig := readProfilesFn
+	readProfilesFn = func(_ string) ([]model.Profile, error) {
+		return []model.Profile{
+			{Name: "cheap"},
+			{Name: "premium"},
+		}, nil
+	}
+	t.Cleanup(func() { readProfilesFn = orig })
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenProfiles
+	m.OperationRunning = true
+	// Cursor was at 5 (pointing at a profile that no longer exists after sync).
+	m.Cursor = 5
+
+	updated, _ := m.Update(SyncDoneMsg{FilesChanged: 1, Err: nil})
+	state := updated.(Model)
+
+	// After refresh, ProfileList has 2 items; cursor must be clamped to 1 (len-1).
+	if state.Cursor >= len(state.ProfileList) {
+		t.Fatalf("Cursor = %d is out of bounds (ProfileList len = %d); expected cursor to be clamped",
+			state.Cursor, len(state.ProfileList))
+	}
+	if state.Cursor != len(state.ProfileList)-1 {
+		t.Errorf("Cursor = %d, want %d (clamped to last profile index)",
+			state.Cursor, len(state.ProfileList)-1)
+	}
+}
+
+// TestSyncDoneMsg_ClearsPendingOverrides_WithReadProfilesStub is an extended
+// version of TestSyncDoneMsg_ClearsPendingOverrides that also injects a
+// readProfilesFn stub so the test does not depend on the filesystem.
+func TestSyncDoneMsg_ClearsPendingOverrides_WithReadProfilesStub(t *testing.T) {
+	stubProfiles := []model.Profile{{Name: "cheap"}, {Name: "premium"}}
+
+	orig := readProfilesFn
+	readProfilesFn = func(_ string) ([]model.Profile, error) {
+		return stubProfiles, nil
+	}
+	t.Cleanup(func() { readProfilesFn = orig })
+
+	tests := []struct {
+		name     string
+		syncDone SyncDoneMsg
+	}{
+		{
+			name:     "success clears overrides",
+			syncDone: SyncDoneMsg{FilesChanged: 5, Err: nil},
+		},
+		{
+			name:     "error also clears overrides",
+			syncDone: SyncDoneMsg{FilesChanged: 0, Err: fmt.Errorf("sync failed")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = ScreenSync
+			m.OperationRunning = true
+			m.PendingSyncOverrides = &model.SyncOverrides{
+				ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
+					"orchestrator": model.ClaudeModelOpus,
+				},
+			}
+
+			updated, _ := m.Update(tt.syncDone)
+			state := updated.(Model)
+
+			if state.PendingSyncOverrides != nil {
+				t.Errorf("PendingSyncOverrides should be nil after SyncDoneMsg, got: %+v",
+					state.PendingSyncOverrides)
+			}
+			if state.OperationRunning {
+				t.Errorf("OperationRunning should be false after SyncDoneMsg")
+			}
+			// Verify profiles were refreshed from stub.
+			if len(state.ProfileList) != len(stubProfiles) {
+				t.Errorf("ProfileList len = %d, want %d (from stub)", len(state.ProfileList), len(stubProfiles))
 			}
 		})
 	}
@@ -2657,12 +2753,12 @@ func TestPinErrClearedOnScreenReentry(t *testing.T) {
 		t.Fatalf("Esc from ScreenBackups: screen = %v, want ScreenWelcome", afterEsc.Screen)
 	}
 
-	// Navigate back to ScreenBackups (cursor 5 on Welcome → enter).
-	afterEsc.Cursor = 5
+	// Navigate back to ScreenBackups (cursor 6 on Welcome → enter).
+	afterEsc.Cursor = 6
 	updated2, _ := afterEsc.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	afterReturn := updated2.(Model)
 	if afterReturn.Screen != ScreenBackups {
-		t.Fatalf("Enter cursor=5 from ScreenWelcome: screen = %v, want ScreenBackups", afterReturn.Screen)
+		t.Fatalf("Enter cursor=6 from ScreenWelcome: screen = %v, want ScreenBackups", afterReturn.Screen)
 	}
 
 	// PinErr must be cleared on re-entry.

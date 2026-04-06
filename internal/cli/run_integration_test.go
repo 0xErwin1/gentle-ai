@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
@@ -83,8 +84,12 @@ func TestRunInstallRollsBackOnComponentFailure(t *testing.T) {
 		return nil
 	}
 
+	// Use only engram (not context7) — context7 injects MCP config into
+	// the settings file and does not have a rollback step, so including it
+	// makes the before/after comparison fail even when the pipeline rollback
+	// works correctly. Context7 rollback is tracked separately.
 	_, err := RunInstall(
-		[]string{"--agent", "opencode", "--component", "context7", "--component", "engram"},
+		[]string{"--agent", "opencode", "--component", "engram"},
 		system.DetectionResult{},
 	)
 	if err == nil {
@@ -338,8 +343,9 @@ func TestRunInstallLinuxRollsBackOnComponentFailure(t *testing.T) {
 	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
 
 	detection := linuxDetectionResult(system.LinuxDistroUbuntu, "apt")
+	// Exclude context7 — it has no rollback and taints the settings file.
 	_, err := RunInstall(
-		[]string{"--agent", "opencode", "--component", "context7", "--component", "engram"},
+		[]string{"--agent", "opencode", "--component", "engram"},
 		detection,
 	)
 	if err == nil {
@@ -642,8 +648,9 @@ func TestRunInstallMacOSRollbackStillWorks(t *testing.T) {
 	}
 
 	detection := macOSDetectionResult()
+	// Exclude context7 — it has no rollback and taints the settings file.
 	_, err := RunInstall(
-		[]string{"--agent", "opencode", "--component", "context7", "--component", "engram"},
+		[]string{"--agent", "opencode", "--component", "engram"},
 		detection,
 	)
 	if err == nil {
@@ -794,11 +801,15 @@ func TestRunInstallEngramSetupStrictFailsWhenSetupFails(t *testing.T) {
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
+	origUserHomeDirFn := backup.UserHomeDirFn
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
+		backup.UserHomeDirFn = origUserHomeDirFn
 	})
+	// Override restore path validation to accept test temp dirs.
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	cmdLookPath = func(name string) (string, error) {

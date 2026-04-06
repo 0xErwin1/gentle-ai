@@ -868,6 +868,8 @@ func TestInjectOpenCodeSubagentPromptsStayExecutorScoped(t *testing.T) {
 		t.Fatal("opencode.json missing agent map")
 	}
 
+	promptDir := SharedPromptDir(home)
+
 	for _, phase := range []string{"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive"} {
 		raw, ok := agentMap[phase]
 		if !ok {
@@ -877,10 +879,25 @@ func TestInjectOpenCodeSubagentPromptsStayExecutorScoped(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s has unexpected type: %T", phase, raw)
 		}
+
+		// After the shared-prompt-files refactor, the prompt field is a {file:...}
+		// reference. The executor-scoped content lives in the prompt file on disk.
 		prompt, _ := agentDef["prompt"].(string)
+		expectedRef := "{file:" + filepath.Join(promptDir, phase+".md") + "}"
+		if prompt != expectedRef {
+			t.Fatalf("%s prompt = %q, want {file:...} reference %q", phase, prompt, expectedRef)
+		}
+
+		// Also verify the prompt file itself contains the executor-scoped markers.
+		promptFilePath := filepath.Join(promptDir, phase+".md")
+		promptFileData, readErr := os.ReadFile(promptFilePath)
+		if readErr != nil {
+			t.Fatalf("%s prompt file %q not readable: %v", phase, promptFilePath, readErr)
+		}
+		promptFileContent := string(promptFileData)
 		for _, want := range []string{"not the orchestrator", "Do NOT delegate", "Do NOT call task/delegate", "Do NOT launch sub-agents"} {
-			if !strings.Contains(prompt, want) {
-				t.Fatalf("%s prompt missing %q", phase, want)
+			if !strings.Contains(promptFileContent, want) {
+				t.Fatalf("%s prompt file missing %q", phase, want)
 			}
 		}
 	}
@@ -3348,5 +3365,86 @@ func TestInjectOpenCodePostCheckDiskFallback(t *testing.T) {
 	}
 	if !strings.Contains(string(diskContent), "sdd-orchestrator") {
 		t.Fatal("File on disk lost sdd-orchestrator after inject")
+	}
+}
+
+// TestInjectOpenCodeWithProfile_PostCheckVerifiesOrchestrator verifies that
+// when a named profile is injected, the post-check confirms sdd-orchestrator-{name}
+// is present in the merged opencode.json.
+func TestInjectOpenCodeWithProfile_PostCheckVerifiesOrchestrator(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	cheapProfile := model.Profile{
+		Name:              "cheap",
+		OrchestratorModel: model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-haiku-3-5"},
+	}
+
+	result, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{
+		Profiles: []model.Profile{cheapProfile},
+	})
+	if err != nil {
+		t.Fatalf("Inject() with profile error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() with profile changed = false")
+	}
+
+	// Verify sdd-orchestrator-cheap is present in the merged settings.
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	if !strings.Contains(string(content), `"sdd-orchestrator-cheap"`) {
+		t.Fatal("opencode.json missing sdd-orchestrator-cheap after profile injection")
+	}
+}
+
+// TestInjectOpenCodeWithProfile_DefaultProfileSkipped verifies that the default
+// profile (Name="" or Name="default") is skipped in the profile injection loop.
+func TestInjectOpenCodeWithProfile_DefaultProfileSkipped(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	_, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{
+		Profiles: []model.Profile{
+			{Name: "", OrchestratorModel: model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-haiku-3-5"}},
+			{Name: "default", OrchestratorModel: model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-haiku-3-5"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Inject() with default profiles error = %v (should not fail)", err)
+	}
+}
+
+// TestInjectOpenCodeWithTwoProfiles_BothOrchestratorsPresent verifies that
+// two named profiles both get their orchestrators injected and verified.
+func TestInjectOpenCodeWithTwoProfiles_BothOrchestratorsPresent(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	_, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{
+		Profiles: []model.Profile{
+			{Name: "cheap", OrchestratorModel: model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-haiku-3-5"}},
+			{Name: "premium", OrchestratorModel: model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-opus-4-5"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Inject() with two profiles error = %v", err)
+	}
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, `"sdd-orchestrator-cheap"`) {
+		t.Error("opencode.json missing sdd-orchestrator-cheap")
+	}
+	if !strings.Contains(text, `"sdd-orchestrator-premium"`) {
+		t.Error("opencode.json missing sdd-orchestrator-premium")
 	}
 }

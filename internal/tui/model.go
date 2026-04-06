@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/gentleman-programming/gentle-ai/internal/agentbuilder"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
@@ -30,6 +33,13 @@ var osStatModelCache = os.Stat
 // sdd.ReadCurrentModelAssignments and is only called during ModelConfigMode.
 var readCurrentAssignmentsFn = func(settingsPath string) (map[string]model.ModelAssignment, error) {
 	return sdd.ReadCurrentModelAssignments(settingsPath)
+}
+
+// readProfilesFn is a package-level variable so tests can override how profiles
+// are detected from opencode.json. It wraps sdd.DetectProfiles and is called
+// on ScreenProfiles entry and after SyncDoneMsg to refresh the profile list.
+var readProfilesFn = func(settingsPath string) ([]model.Profile, error) {
+	return sdd.DetectProfiles(settingsPath)
 }
 
 // TickMsg drives the spinner animation on the installing screen.
@@ -81,6 +91,36 @@ type SyncDoneMsg struct {
 type UpgradePhaseCompletedMsg struct {
 	Report upgrade.UpgradeReport
 	Err    error
+}
+
+// AgentBuilderGeneratedMsg is sent when the AI generation goroutine completes.
+type AgentBuilderGeneratedMsg struct {
+	Agent *agentbuilder.GeneratedAgent
+	Err   error
+}
+
+// AgentBuilderInstallDoneMsg is sent when the agent installation goroutine completes.
+type AgentBuilderInstallDoneMsg struct {
+	Results []agentbuilder.InstallResult
+	Err     error
+}
+
+// AgentBuilderState holds all transient state for the agent-builder TUI flow.
+type AgentBuilderState struct {
+	AvailableEngines []model.AgentID
+	SelectedEngine   model.AgentID
+	Textarea         textarea.Model
+	SDDMode          agentbuilder.SDDIntegrationMode
+	SDDTargetPhase   string
+	Generating       bool
+	GenerationCancel context.CancelFunc
+	Generated        *agentbuilder.GeneratedAgent
+	GenerationErr    error
+	ConflictWarning  string
+	Installing       bool
+	InstallResults   []agentbuilder.InstallResult
+	InstallErr       error
+	PreviewScroll    int
 }
 
 // UpgradeFunc is the signature of the function injected to perform tool upgrades.
@@ -141,6 +181,17 @@ const (
 	ScreenSync
 	ScreenUpgradeSync
 	ScreenModelConfig
+	ScreenProfiles
+	ScreenProfileCreate
+	ScreenProfileDelete
+	ScreenAgentBuilderEngine
+	ScreenAgentBuilderPrompt
+	ScreenAgentBuilderSDD
+	ScreenAgentBuilderSDDPhase
+	ScreenAgentBuilderGenerating
+	ScreenAgentBuilderPreview
+	ScreenAgentBuilderInstalling
+	ScreenAgentBuilderComplete
 )
 
 type Model struct {
@@ -262,6 +313,21 @@ type Model struct {
 
 	// UpgradeErr holds the error from the last upgrade run (nil on success).
 	UpgradeErr error
+
+	// Profile management state
+	ProfileList          []model.Profile // profiles detected from opencode.json
+	ProfileCreateStep    int             // 0=name, 1=assign-models, 2=confirm
+	ProfileDraft         model.Profile   // profile being created/edited
+	ProfileEditMode      bool            // true when editing, false when creating
+	ProfileDeleteTarget  string          // name of profile to delete
+	ProfileNameInput     string          // text input buffer for name step
+	ProfileNamePos       int             // cursor position in name input
+	ProfileNameErr       string          // validation error message
+	ProfileNameCollision bool            // true when name collides with existing profile (awaiting second enter to overwrite)
+	ProfileDeleteErr     error           // error from the last RemoveProfileAgents call, displayed on ScreenProfiles
+
+	// AgentBuilder holds the transient state for the agent-builder TUI flow.
+	AgentBuilder AgentBuilderState
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
@@ -314,6 +380,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.SpinnerFrame = (m.SpinnerFrame + 1) % 10
 			return m, tickCmd()
 		}
+		// Keep spinner running for agent builder generating/installing screens.
+		if m.AgentBuilder.Generating || m.AgentBuilder.Installing {
+			m.SpinnerFrame = (m.SpinnerFrame + 1) % 10
+			return m, tickCmd()
+		}
+		return m, nil
+	case AgentBuilderGeneratedMsg:
+		// If generation was cancelled (Esc while generating), ignore the result.
+		if !m.AgentBuilder.Generating {
+			return m, nil
+		}
+		m.AgentBuilder.Generating = false
+		if msg.Err != nil {
+			m.AgentBuilder.GenerationErr = msg.Err
+			// Stay on generating screen to show error.
+		} else {
+			m.AgentBuilder.Generated = msg.Agent
+			m.AgentBuilder.GenerationErr = nil
+			// Check for builtin conflict and set warning before showing preview.
+			if msg.Agent != nil && agentbuilder.HasConflictWithBuiltin(msg.Agent.Name) {
+				m.AgentBuilder.ConflictWarning = fmt.Sprintf(
+					"Warning: '%s' conflicts with a built-in skill. It will be installed as '%s-custom'.",
+					msg.Agent.Name, msg.Agent.Name,
+				)
+			} else {
+				m.AgentBuilder.ConflictWarning = ""
+			}
+			m.setScreen(ScreenAgentBuilderPreview)
+		}
+		return m, nil
+	case AgentBuilderInstallDoneMsg:
+		m.AgentBuilder.Installing = false
+		if msg.Err != nil {
+			m.AgentBuilder.InstallErr = msg.Err
+			m.setScreen(ScreenAgentBuilderPreview)
+		} else {
+			m.AgentBuilder.InstallResults = msg.Results
+			m.AgentBuilder.InstallErr = nil
+			m.setScreen(ScreenAgentBuilderComplete)
+		}
 		return m, nil
 	case StepProgressMsg:
 		return m.handleStepProgress(msg)
@@ -341,6 +447,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.SyncErr = msg.Err
 		m.HasSyncRun = true
 		m.PendingSyncOverrides = nil
+		// Refresh profile list after sync (profile create/delete/edit flows use sync).
+		// On failure, keep the existing list — this is a non-critical background refresh.
+		// Do NOT set m.Err: ScreenSync never renders it and it would leak to other screens.
+		if profiles, err := readProfilesFn(opencode.DefaultSettingsPath()); err == nil {
+			m.ProfileList = profiles
+			// Clamp cursor to avoid out-of-bounds access when list shrinks after a delete.
+			if m.Cursor >= len(m.ProfileList) {
+				if len(m.ProfileList) > 0 {
+					m.Cursor = len(m.ProfileList) - 1
+				} else {
+					m.Cursor = 0
+				}
+			}
+		} // else keep existing list
 		return m, nil
 	case UpgradePhaseCompletedMsg:
 		// Upgrade phase done; sync phase is about to start (OperationRunning stays true).
@@ -355,6 +475,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.Screen == ScreenRenameBackup {
 			return m.handleRenameInput(msg)
+		}
+		if m.Screen == ScreenProfileCreate && m.ProfileCreateStep == 0 && !m.ProfileEditMode {
+			return m.handleProfileNameInput(msg)
+		}
+		// Delegate to textarea when on the agent builder prompt screen,
+		// unless the user pressed Esc (to go back) or Tab (to continue).
+		if m.Screen == ScreenAgentBuilderPrompt {
+			if msg.String() == "esc" {
+				return m.handleKeyPress(msg)
+			}
+			if msg.String() == "tab" || msg.String() == "ctrl+enter" {
+				// "Continue" — proceed to SDD selection if textarea is not empty.
+				if m.AgentBuilder.Textarea.Value() != "" {
+					m.setScreen(ScreenAgentBuilderSDD)
+				}
+				return m, nil
+			}
+			// All other keys go to the textarea.
+			var taCmd tea.Cmd
+			m.AgentBuilder.Textarea, taCmd = m.AgentBuilder.Textarea.Update(msg)
+			return m, taCmd
 		}
 		return m.handleKeyPress(msg)
 	}
@@ -443,13 +584,29 @@ func (m Model) View() string {
 		if m.UpdateCheckDone && update.HasUpdates(m.UpdateResults) {
 			banner = "Updates available: " + update.UpdateSummaryLine(m.UpdateResults)
 		}
-		return screens.RenderWelcome(m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone)
+		return screens.RenderWelcome(m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines())
 	case ScreenUpgrade:
 		return screens.RenderUpgrade(m.UpdateResults, m.UpgradeReport, m.UpgradeErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame)
 	case ScreenSync:
 		return screens.RenderSync(m.SyncFilesChanged, m.SyncErr, m.OperationRunning, m.HasSyncRun, m.SpinnerFrame)
 	case ScreenModelConfig:
 		return screens.RenderModelConfig(m.Cursor)
+	case ScreenProfiles:
+		return screens.RenderProfiles(m.ProfileList, m.Cursor, m.ProfileDeleteErr)
+	case ScreenProfileCreate:
+		return screens.RenderProfileCreate(
+			m.ProfileCreateStep,
+			m.ProfileDraft,
+			m.ProfileNameInput,
+			m.ProfileNamePos,
+			m.ProfileNameErr,
+			m.ProfileEditMode,
+			m.Selection.ModelAssignments,
+			m.ModelPicker,
+			m.Cursor,
+		)
+	case ScreenProfileDelete:
+		return screens.RenderProfileDelete(m.ProfileDeleteTarget, m.Cursor)
 	case ScreenUpgradeSync:
 		return screens.RenderUpgradeSync(m.UpdateResults, m.UpgradeReport, m.SyncFilesChanged, m.UpgradeErr, m.SyncErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame)
 	case ScreenDetection:
@@ -498,6 +655,25 @@ func (m Model) View() string {
 		return screens.RenderDeleteResult(m.SelectedBackup, m.DeleteErr)
 	case ScreenRenameBackup:
 		return screens.RenderRenameBackup(m.SelectedBackup, m.BackupRenameText, m.BackupRenamePos)
+	case ScreenAgentBuilderEngine:
+		return screens.RenderABEngine(m.AgentBuilder.AvailableEngines, m.Cursor)
+	case ScreenAgentBuilderPrompt:
+		return screens.RenderABPrompt(m.AgentBuilder.Textarea)
+	case ScreenAgentBuilderSDD:
+		return screens.RenderABSDD(string(m.AgentBuilder.SDDMode), m.Cursor)
+	case ScreenAgentBuilderSDDPhase:
+		return screens.RenderABSDDPhase(screens.ABSDDPhases(), m.Cursor, m.AgentBuilder.SDDMode == agentbuilder.SDDNewPhase)
+	case ScreenAgentBuilderGenerating:
+		engineName := string(m.AgentBuilder.SelectedEngine)
+		return screens.RenderABGenerating(engineName, m.SpinnerFrame, m.AgentBuilder.GenerationErr)
+	case ScreenAgentBuilderPreview:
+		targets := m.agentBuilderInstallTargets()
+		return screens.RenderABPreview(m.AgentBuilder.Generated, targets, m.AgentBuilder.PreviewScroll, m.Height, m.Cursor, m.AgentBuilder.InstallErr, m.AgentBuilder.ConflictWarning)
+	case ScreenAgentBuilderInstalling:
+		engineName := string(m.AgentBuilder.SelectedEngine)
+		return screens.RenderABInstalling(engineName, m.SpinnerFrame, m.AgentBuilder.InstallErr)
+	case ScreenAgentBuilderComplete:
+		return screens.RenderABComplete(m.AgentBuilder.Generated, m.AgentBuilder.InstallResults)
 	default:
 		return ""
 	}
@@ -508,6 +684,16 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// When the model picker is in a sub-mode, delegate navigation there first.
 	if m.Screen == ScreenModelPicker && m.ModelPicker.Mode != screens.ModePhaseList {
+		handled, updated := screens.HandleModelPickerNav(keyStr, &m.ModelPicker, m.Selection.ModelAssignments)
+		if handled {
+			m.Selection.ModelAssignments = updated
+			return m, nil
+		}
+	}
+
+	// Profile create step 1 reuses the ModelPicker sub-modes (provider/model drill-down).
+	if (m.Screen == ScreenProfileCreate && m.ProfileCreateStep == 1) &&
+		m.ModelPicker.Mode != screens.ModePhaseList {
 		handled, updated := screens.HandleModelPickerNav(keyStr, &m.ModelPicker, m.Selection.ModelAssignments)
 		if handled {
 			m.Selection.ModelAssignments = updated
@@ -563,7 +749,14 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch keyStr {
 	case "ctrl+c", "q":
 		return m, tea.Quit
-	case "up", "k":
+	case "up":
+		// On the preview screen, up arrow scrolls content up.
+		if m.Screen == ScreenAgentBuilderPreview {
+			if m.AgentBuilder.PreviewScroll > 0 {
+				m.AgentBuilder.PreviewScroll--
+			}
+			return m, nil
+		}
 		count := m.optionCount()
 		if count > 0 {
 			if m.Cursor > 0 {
@@ -580,7 +773,44 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-	case "down", "j":
+	case "down":
+		// On the preview screen, down arrow scrolls content down.
+		if m.Screen == ScreenAgentBuilderPreview {
+			m.AgentBuilder.PreviewScroll++
+			return m, nil
+		}
+		count := m.optionCount()
+		if m.Cursor+1 < count {
+			m.Cursor++
+		} else if count > 0 && !m.isScrollableScreen() {
+			// Issue #150: wrap-around — Down at last goes to 0.
+			m.Cursor = 0
+		}
+		// Adjust scroll for the backup list.
+		if m.Screen == ScreenBackups {
+			if m.Cursor >= m.BackupScroll+screens.BackupMaxVisible {
+				m.BackupScroll = m.Cursor - screens.BackupMaxVisible + 1
+			}
+		}
+		return m, nil
+	case "k":
+		count := m.optionCount()
+		if count > 0 {
+			if m.Cursor > 0 {
+				m.Cursor--
+			} else if !m.isScrollableScreen() {
+				// Issue #150: wrap-around — Up at 0 goes to last option.
+				m.Cursor = count - 1
+			}
+		}
+		// Adjust scroll for the backup list.
+		if m.Screen == ScreenBackups {
+			if m.Cursor < m.BackupScroll {
+				m.BackupScroll = m.Cursor
+			}
+		}
+		return m, nil
+	case "j":
 		count := m.optionCount()
 		if m.Cursor+1 < count {
 			m.Cursor++
@@ -622,11 +852,30 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenRenameBackup)
 			return m, nil
 		}
+	case "n":
+		// "n" on ScreenProfiles: shortcut for "Create new profile".
+		if m.Screen == ScreenProfiles {
+			m.ProfileEditMode = false
+			m.ProfileDraft = model.Profile{}
+			m.ProfileCreateStep = 0
+			m.ProfileNameInput = ""
+			m.ProfileNamePos = 0
+			m.ProfileNameErr = ""
+			m.Selection.ModelAssignments = nil
+			m.setScreen(ScreenProfileCreate)
+			return m, nil
+		}
 	case "d":
 		// Delete: only when on ScreenBackups and cursor is on a backup item (not "Back").
 		if m.Screen == ScreenBackups && m.Cursor < len(m.Backups) {
 			m.SelectedBackup = m.Backups[m.Cursor]
 			m.setScreen(ScreenDeleteConfirm)
+			return m, nil
+		}
+		// Delete on ScreenProfiles: only non-default profiles (those in ProfileList).
+		if m.Screen == ScreenProfiles && m.Cursor < len(m.ProfileList) {
+			m.ProfileDeleteTarget = m.ProfileList[m.Cursor].Name
+			m.setScreen(ScreenProfileDelete)
 			return m, nil
 		}
 	case "p":
@@ -679,8 +928,37 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case 4:
 			m.setScreen(ScreenModelConfig)
 		case 5:
-			m.setScreen(ScreenBackups)
+			// "Create your own Agent" — blocked when no engines are available.
+			if !m.hasAgentBuilderEngines() {
+				return m, nil
+			}
+			m.AgentBuilder = AgentBuilderState{}
+			m.AgentBuilder.AvailableEngines = m.detectAgentBuilderEngines()
+			ta := textarea.New()
+			ta.Placeholder = "Describe what you want your agent to do..."
+			ta.Focus()
+			ta.SetWidth(60)
+			ta.SetHeight(5)
+			m.AgentBuilder.Textarea = ta
+			m.setScreen(ScreenAgentBuilderEngine)
 		case 6:
+			if m.hasDetectedOpenCode() {
+				// "OpenCode SDD Profiles" (only shown when OpenCode is detected)
+				m.setScreen(ScreenProfiles)
+			} else {
+				// "Manage backups"
+				m.setScreen(ScreenBackups)
+			}
+		case 7:
+			if m.hasDetectedOpenCode() {
+				// "Manage backups"
+				m.setScreen(ScreenBackups)
+			} else {
+				// "Quit"
+				return m, tea.Quit
+			}
+		case 8:
+			// "Quit" (only reachable when showProfiles is true, so OpenCode is detected)
 			return m, tea.Quit
 		}
 	case ScreenUpgrade:
@@ -737,6 +1015,66 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		m.OperationRunning = true
 		m.OperationMode = "upgrade-sync"
 		return m, tea.Batch(tickCmd(), m.startUpgradeSync())
+	case ScreenProfiles:
+		// Profiles are: 0..len(ProfileList)-1, then Create, then Back.
+		profileCount := len(m.ProfileList)
+		switch {
+		case m.Cursor < profileCount:
+			// Edit an existing profile.
+			profile := m.ProfileList[m.Cursor]
+			m.ProfileEditMode = true
+			m.ProfileDraft = profile
+			m.ProfileCreateStep = 0
+			m.ProfileNameInput = profile.Name
+			m.ProfileNamePos = len([]rune(profile.Name))
+			m.ProfileNameErr = ""
+			// Build ModelAssignments from the profile's phase assignments + orchestrator.
+			// The ModelPicker shows sdd-orchestrator as the first row, so we need
+			// to include it in the map for it to display the current model.
+			assignments := make(map[string]model.ModelAssignment)
+			for k, v := range profile.PhaseAssignments {
+				assignments[k] = v
+			}
+			if profile.OrchestratorModel.ProviderID != "" {
+				assignments[screens.SDDOrchestratorPhase] = profile.OrchestratorModel
+			}
+			m.Selection.ModelAssignments = assignments
+			m.setScreen(ScreenProfileCreate)
+		case m.Cursor == profileCount:
+			// "Create new profile"
+			m.ProfileEditMode = false
+			m.ProfileDraft = model.Profile{}
+			m.ProfileCreateStep = 0
+			m.ProfileNameInput = ""
+			m.ProfileNamePos = 0
+			m.ProfileNameErr = ""
+			m.Selection.ModelAssignments = nil
+			m.setScreen(ScreenProfileCreate)
+		default:
+			// "Back"
+			m.setScreen(ScreenWelcome)
+		}
+		return m, nil
+	case ScreenProfileCreate:
+		return m.confirmProfileCreate()
+	case ScreenProfileDelete:
+		switch m.Cursor {
+		case 0: // "Delete & Sync"
+			if err := sdd.RemoveProfileAgents(opencode.DefaultSettingsPath(), m.ProfileDeleteTarget); err != nil {
+				// Store the error so it can be displayed on ScreenProfiles.
+				m.ProfileDeleteErr = err
+				m.setScreen(ScreenProfiles)
+			} else {
+				m.ProfileDeleteErr = nil
+				m.PendingSyncOverrides = nil
+				m = m.withResetSyncState()
+				m.setScreen(ScreenSync)
+				return m, tea.Batch(tickCmd(), m.startSync(nil))
+			}
+		default: // "Cancel"
+			m.setScreen(ScreenProfiles)
+		}
+		return m, nil
 	case ScreenModelConfig:
 		switch m.Cursor {
 		case 0: // Configure Claude models
@@ -814,6 +1152,13 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		m.setScreen(ScreenPersona)
 	case ScreenClaudeModelPicker:
 		if !m.ClaudeModelPicker.InCustomMode && m.Cursor == screens.ClaudeModelPickerOptionCount(m.ClaudeModelPicker)-1 {
+			// "Back" option: in ModelConfigMode return to the config menu,
+			// otherwise navigate to the previous install-flow screen.
+			if m.ModelConfigMode {
+				m.ModelConfigMode = false
+				m.setScreen(ScreenModelConfig)
+				return m, nil
+			}
 			if m.Selection.Preset == model.PresetCustom {
 				m.setScreen(ScreenDependencyTree)
 			} else {
@@ -1179,6 +1524,75 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		}
 		m.DeleteErr = nil
 		m.setScreen(ScreenBackups)
+	case ScreenAgentBuilderEngine:
+		engines := m.AgentBuilder.AvailableEngines
+		if m.Cursor < len(engines) {
+			m.AgentBuilder.SelectedEngine = engines[m.Cursor]
+			m.setScreen(ScreenAgentBuilderPrompt)
+		} else {
+			// "Back" option.
+			m.setScreen(ScreenWelcome)
+		}
+	case ScreenAgentBuilderPrompt:
+		// "Continue" only if textarea is not empty.
+		if m.AgentBuilder.Textarea.Value() != "" {
+			m.setScreen(ScreenAgentBuilderSDD)
+		}
+	case ScreenAgentBuilderSDD:
+		opts := screens.ABSDDOptions()
+		switch m.Cursor {
+		case 0:
+			m.AgentBuilder.SDDMode = agentbuilder.SDDStandalone
+			return m.startGeneration()
+		case 1:
+			m.AgentBuilder.SDDMode = agentbuilder.SDDNewPhase
+			m.setScreen(ScreenAgentBuilderSDDPhase)
+		case 2:
+			m.AgentBuilder.SDDMode = agentbuilder.SDDPhaseSupport
+			m.setScreen(ScreenAgentBuilderSDDPhase)
+		case len(opts) - 1:
+			m.setScreen(ScreenAgentBuilderPrompt)
+		}
+	case ScreenAgentBuilderSDDPhase:
+		phases := screens.ABSDDPhases()
+		if m.Cursor < len(phases) {
+			m.AgentBuilder.SDDTargetPhase = phases[m.Cursor]
+			return m.startGeneration()
+		}
+		// "Back" option.
+		m.setScreen(ScreenAgentBuilderSDD)
+	case ScreenAgentBuilderGenerating:
+		// Only interactive when an error is shown (retry/back).
+		if m.AgentBuilder.GenerationErr != nil {
+			if m.Cursor == 0 {
+				// Retry.
+				return m.startGeneration()
+			}
+			// Back.
+			m.AgentBuilder.GenerationErr = nil
+			m.setScreen(ScreenAgentBuilderPrompt)
+		}
+	case ScreenAgentBuilderPreview:
+		switch m.Cursor {
+		case 0:
+			// Install — guard against nil generated agent.
+			if m.AgentBuilder.Generated == nil {
+				return m, nil
+			}
+			return m.startInstallation()
+		case 1:
+			// Regenerate — go back to generating.
+			return m.startGeneration()
+		default:
+			// Back.
+			m.setScreen(ScreenAgentBuilderPrompt)
+		}
+	case ScreenAgentBuilderInstalling:
+		if !m.AgentBuilder.Installing {
+			m.setScreen(ScreenAgentBuilderComplete)
+		}
+	case ScreenAgentBuilderComplete:
+		m.setScreen(ScreenWelcome)
 	}
 
 	return m, nil
@@ -1364,6 +1778,38 @@ func (m Model) goBack() Model {
 		return m
 	}
 
+	// Block going back while agent installation is in progress.
+	if m.AgentBuilder.Installing {
+		return m
+	}
+
+	// Agent builder back navigation.
+	switch m.Screen {
+	case ScreenAgentBuilderComplete:
+		m.setScreen(ScreenWelcome)
+		return m
+	case ScreenAgentBuilderInstalling:
+		// Can't go back while installing — guard above handles this.
+		return m
+	case ScreenAgentBuilderGenerating:
+		if m.AgentBuilder.GenerationErr != nil {
+			// Error state: allow going back.
+			m.AgentBuilder.GenerationErr = nil
+			m.setScreen(ScreenAgentBuilderPrompt)
+			return m
+		}
+		if m.AgentBuilder.Generating {
+			// Cancel in-progress generation and navigate back to prompt.
+			if m.AgentBuilder.GenerationCancel != nil {
+				m.AgentBuilder.GenerationCancel()
+			}
+			m.AgentBuilder.Generating = false
+			m.setScreen(ScreenAgentBuilderPrompt)
+			return m
+		}
+		return m
+	}
+
 	// ModelConfigMode: pickers reached via Model Config shortcut return to ScreenModelConfig.
 	if m.ModelConfigMode && (m.Screen == ScreenClaudeModelPicker || m.Screen == ScreenModelPicker) {
 		m.ModelConfigMode = false
@@ -1531,6 +1977,23 @@ func (m *Model) setScreen(next Screen) {
 		m.BackupScroll = 0
 		m.PinErr = nil
 	}
+	if next == ScreenProfiles {
+		// Clear stale delete error so it is not shown after Cancel/Esc from ScreenProfileDelete.
+		m.ProfileDeleteErr = nil
+		// Refresh profile list on entry. Surface errors via m.Err so callers can react.
+		profiles, err := readProfilesFn(opencode.DefaultSettingsPath())
+		if err != nil {
+			m.Err = err
+			m.ProfileList = nil
+		} else {
+			m.ProfileList = profiles
+		}
+		// Clamp cursor so it never points past the end of a refreshed list.
+		// m.Cursor was just reset to 0 above, so this only triggers if ProfileList is empty.
+		if m.Cursor >= len(m.ProfileList) {
+			m.Cursor = 0
+		}
+	}
 }
 
 // handleRenameInput processes key events when the rename backup screen is active.
@@ -1583,7 +2046,7 @@ func (m Model) handleRenameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) optionCount() int {
 	switch m.Screen {
 	case ScreenWelcome:
-		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone))
+		return len(screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines()))
 	case ScreenUpgrade:
 		if m.UpgradeReport != nil || m.UpgradeErr != nil {
 			return 1 // "return" option in results/error state
@@ -1642,6 +2105,31 @@ func (m Model) optionCount() int {
 		return 1 // "Done" / continue
 	case ScreenRenameBackup:
 		return 0 // text input mode — no cursor navigation
+	case ScreenProfiles:
+		return screens.ProfileListOptionCount(m.ProfileList)
+	case ScreenProfileCreate:
+		return screens.ProfileCreateOptionCount(m.ProfileCreateStep, m.ModelPicker)
+	case ScreenProfileDelete:
+		return screens.ProfileDeleteOptionCount()
+	case ScreenAgentBuilderEngine:
+		return len(m.AgentBuilder.AvailableEngines) + 1 // engines + Back
+	case ScreenAgentBuilderPrompt:
+		return 0 // textarea mode — cursor navigation via textarea
+	case ScreenAgentBuilderSDD:
+		return len(screens.ABSDDOptions()) // 3 modes + Back
+	case ScreenAgentBuilderSDDPhase:
+		return len(screens.ABSDDPhases()) + 1 // phases + Back
+	case ScreenAgentBuilderGenerating:
+		if m.AgentBuilder.GenerationErr != nil {
+			return 2 // Retry + Back
+		}
+		return 0 // generating — no cursor navigation
+	case ScreenAgentBuilderPreview:
+		return len(screens.ABPreviewActions()) // Install + Regenerate + Back
+	case ScreenAgentBuilderInstalling:
+		return 0 // no cursor navigation while installing
+	case ScreenAgentBuilderComplete:
+		return 1 // Done
 	default:
 		return 0
 	}
@@ -1810,6 +2298,16 @@ func extractAvailableUpdates(results []update.UpdateResult) []screens.UpdateInfo
 	return updates
 }
 
+// hasDetectedOpenCode returns true if OpenCode config directory was detected.
+func (m Model) hasDetectedOpenCode() bool {
+	for _, cfg := range m.Detection.Configs {
+		if cfg.Agent == string(model.AgentOpenCode) && cfg.Exists {
+			return true
+		}
+	}
+	return false
+}
+
 func (m Model) shouldShowSDDModeScreen() bool {
 	return m.Selection.HasAgent(model.AgentOpenCode) &&
 		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
@@ -1862,4 +2360,441 @@ func hasSelectedComponent(components []model.ComponentID, target model.Component
 // disabled for these screens to avoid confusing the scroll offset logic.
 func (m Model) isScrollableScreen() bool {
 	return m.Screen == ScreenBackups
+}
+
+// handleProfileNameInput processes key events when the profile create screen
+// is at step 0 (name input). In edit mode, step 0 is skipped to step 1 — this
+// handler is only called when NOT in edit mode.
+func (m Model) handleProfileNameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEnter:
+		// Validate and advance to step 1.
+		name := strings.ToLower(m.ProfileNameInput)
+		if err := sdd.ValidateProfileName(name); err != nil {
+			m.ProfileNameErr = err.Error()
+			m.ProfileNameCollision = false
+			return m, nil
+		}
+
+		// Check for collision with an existing profile.
+		if !m.ProfileNameCollision {
+			for _, p := range m.ProfileList {
+				if p.Name == name {
+					m.ProfileNameErr = fmt.Sprintf("Profile '%s' already exists. Press enter to overwrite.", name)
+					m.ProfileNameCollision = true
+					return m, nil
+				}
+			}
+		}
+
+		// Clear collision flag and proceed.
+		m.ProfileNameErr = ""
+		m.ProfileNameCollision = false
+		m.ProfileDraft.Name = name
+		m.ProfileCreateStep = 1
+		// Initialize model picker for orchestrator step.
+		cachePath := opencode.DefaultCachePath()
+		if _, err := osStatModelCache(cachePath); err == nil {
+			m.ModelPicker = screens.NewModelPickerState(cachePath)
+		} else {
+			m.ModelPicker = screens.ModelPickerState{}
+		}
+		m.Cursor = 0
+		return m, nil
+	case tea.KeyEsc:
+		m.ProfileNameCollision = false
+		m.setScreen(ScreenProfiles)
+		return m, nil
+	case tea.KeyBackspace:
+		if m.ProfileNamePos > 0 {
+			runes := []rune(m.ProfileNameInput)
+			m.ProfileNameInput = string(append(runes[:m.ProfileNamePos-1], runes[m.ProfileNamePos:]...))
+			m.ProfileNamePos--
+			// Typing clears the collision warning so the user can modify the name.
+			m.ProfileNameCollision = false
+			m.ProfileNameErr = ""
+		}
+		return m, nil
+	case tea.KeyLeft:
+		if m.ProfileNamePos > 0 {
+			m.ProfileNamePos--
+		}
+		return m, nil
+	case tea.KeyRight:
+		if m.ProfileNamePos < len([]rune(m.ProfileNameInput)) {
+			m.ProfileNamePos++
+		}
+		return m, nil
+	case tea.KeyRunes:
+		runes := []rune(m.ProfileNameInput)
+		newRunes := make([]rune, 0, len(runes)+len(msg.Runes))
+		newRunes = append(newRunes, runes[:m.ProfileNamePos]...)
+		newRunes = append(newRunes, msg.Runes...)
+		newRunes = append(newRunes, runes[m.ProfileNamePos:]...)
+		m.ProfileNameInput = string(newRunes)
+		m.ProfileNamePos += len(msg.Runes)
+		// Typing clears the collision warning so the user can modify the name.
+		m.ProfileNameCollision = false
+		m.ProfileNameErr = ""
+		return m, nil
+	}
+	return m, nil
+}
+
+// confirmProfileCreate handles enter key presses on ScreenProfileCreate.
+// Step 0 (name input) is handled by handleProfileNameInput for create mode.
+// Steps: 0=name, 1=assign models (orchestrator + sub-agents), 2=confirm.
+func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
+	switch m.ProfileCreateStep {
+	case 0:
+		// Edit mode: step 0 shows read-only name, enter advances to step 1.
+		if m.ProfileEditMode {
+			m.ProfileCreateStep = 1
+			cachePath := opencode.DefaultCachePath()
+			if _, err := osStatModelCache(cachePath); err == nil {
+				m.ModelPicker = screens.NewModelPickerState(cachePath)
+			} else {
+				m.ModelPicker = screens.ModelPickerState{}
+			}
+			m.Cursor = 0
+		}
+		return m, nil
+	case 1:
+		// Model assignment picker: orchestrator + all sub-agent phases in one screen.
+		// Reuse the same enter-on-row logic as ScreenModelPicker.
+		rows := screens.ModelPickerRows()
+		if m.Cursor < len(rows) {
+			// Enter sub-selection: pick provider then model.
+			m.ModelPicker.SelectedPhaseIdx = m.Cursor
+			m.ModelPicker.Mode = screens.ModeProviderSelect
+			m.ModelPicker.ProviderCursor = 0
+			m.ModelPicker.ProviderScroll = 0
+			return m, nil
+		}
+		if m.Cursor == len(rows) {
+			// "Continue": extract orchestrator + phase assignments, advance to confirm.
+			if m.Selection.ModelAssignments != nil {
+				// Extract orchestrator model.
+				if orch, ok := m.Selection.ModelAssignments[screens.SDDOrchestratorPhase]; ok {
+					m.ProfileDraft.OrchestratorModel = orch
+				}
+				// Copy all phase assignments (excluding orchestrator).
+				if m.ProfileDraft.PhaseAssignments == nil {
+					m.ProfileDraft.PhaseAssignments = make(map[string]model.ModelAssignment)
+				}
+				for k, v := range m.Selection.ModelAssignments {
+					if k != screens.SDDOrchestratorPhase {
+						m.ProfileDraft.PhaseAssignments[k] = v
+					}
+				}
+			}
+			m.ProfileCreateStep = 2
+			m.Cursor = 0
+		}
+		if m.Cursor == len(rows)+1 {
+			// "Back": return to step 0 (name) or profiles list.
+			if m.ProfileEditMode {
+				m.setScreen(ScreenProfiles)
+			} else {
+				m.ProfileCreateStep = 0
+				m.Cursor = 0
+			}
+		}
+		return m, nil
+	default:
+		// Step 2: confirm.
+		switch m.Cursor {
+		case 0: // "Create & Sync" / "Save & Sync"
+			draft := m.ProfileDraft
+			m.PendingSyncOverrides = &model.SyncOverrides{
+				Profiles: []model.Profile{draft},
+			}
+			m = m.withResetSyncState()
+			m.setScreen(ScreenSync)
+			return m, tea.Batch(tickCmd(), m.startSync(m.PendingSyncOverrides))
+		default: // "Cancel"
+			m.setScreen(ScreenProfiles)
+		}
+		return m, nil
+	}
+}
+
+// detectAgentBuilderEngines scans for supported AI agent binaries on PATH and
+// returns the list of available AgentIDs.
+func (m Model) detectAgentBuilderEngines() []model.AgentID {
+	candidateIDs := []model.AgentID{
+		model.AgentClaudeCode,
+		model.AgentOpenCode,
+		model.AgentGeminiCLI,
+		model.AgentCodex,
+	}
+	var available []model.AgentID
+	for _, id := range candidateIDs {
+		engine := agentbuilder.NewEngine(id)
+		if engine != nil && engine.Available() {
+			available = append(available, id)
+		}
+	}
+	return available
+}
+
+// hasAgentBuilderEngines reports whether any supported AI agent binary is installed.
+func (m Model) hasAgentBuilderEngines() bool {
+	return len(m.detectAgentBuilderEngines()) > 0
+}
+
+// agentBuilderInstallTargets returns the list of install target paths for the preview screen.
+// Each path is the full destination: {SkillsDir}/{agent.Name}/SKILL.md
+func (m Model) agentBuilderInstallTargets() []string {
+	adapters := m.buildAgentBuilderAdapters()
+	agent := m.AgentBuilder.Generated
+	targets := make([]string, 0, len(adapters))
+	for _, a := range adapters {
+		if agent != nil {
+			targets = append(targets, filepath.Join(a.SkillsDir, agent.Name, "SKILL.md"))
+		} else {
+			targets = append(targets, a.SkillsDir)
+		}
+	}
+	return targets
+}
+
+// buildAgentBuilderAdapters returns the AdapterInfo list for all detected agents.
+func (m Model) buildAgentBuilderAdapters() []agentbuilder.AdapterInfo {
+	var adapters []agentbuilder.AdapterInfo
+	for _, cfg := range m.Detection.Configs {
+		if !cfg.Exists {
+			continue
+		}
+		agentID := model.AgentID(strings.TrimSpace(cfg.Agent))
+		if skillsDir, ok := agentBuilderSkillsDir(agentID); ok {
+			adapters = append(adapters, agentbuilder.AdapterInfo{
+				AgentID:   agentID,
+				SkillsDir: skillsDir,
+			})
+		}
+	}
+	// Fallback: if no agents detected via config, use all engines that are available.
+	if len(adapters) == 0 {
+		for _, id := range m.AgentBuilder.AvailableEngines {
+			if skillsDir, ok := agentBuilderSkillsDir(id); ok {
+				adapters = append(adapters, agentbuilder.AdapterInfo{
+					AgentID:   id,
+					SkillsDir: skillsDir,
+				})
+			}
+		}
+	}
+	return adapters
+}
+
+// homeDir returns the current user's home directory path.
+func homeDir() string {
+	if h, err := os.UserHomeDir(); err == nil && h != "" {
+		return h
+	}
+	if h := os.Getenv("HOME"); h != "" {
+		return h
+	}
+	return "/tmp"
+}
+
+// buildInstalledAgentIDs returns the list of AgentIDs from the adapter list.
+func buildInstalledAgentIDs(adapters []agentbuilder.AdapterInfo) []model.AgentID {
+	ids := make([]model.AgentID, 0, len(adapters))
+	for _, a := range adapters {
+		ids = append(ids, a.AgentID)
+	}
+	return ids
+}
+
+// agentBuilderSkillsDir returns the skills directory for the given agent and a
+// flag indicating whether the path was found among the well-known agents.
+func agentBuilderSkillsDir(agentID model.AgentID) (string, bool) {
+	home := homeDir()
+	switch agentID {
+	case model.AgentClaudeCode:
+		return filepath.Join(home, ".claude", "skills"), true
+	case model.AgentOpenCode:
+		return filepath.Join(home, ".config", "opencode", "skills"), true
+	case model.AgentGeminiCLI:
+		return filepath.Join(home, ".gemini", "skills"), true
+	case model.AgentCodex:
+		return filepath.Join(home, ".codex", "skills"), true
+	default:
+		return "", false
+	}
+}
+
+// startGeneration launches the AI generation goroutine and transitions to the
+// generating screen.
+func (m Model) startGeneration() (tea.Model, tea.Cmd) {
+	m.AgentBuilder.Generating = true
+	m.AgentBuilder.GenerationErr = nil
+	m.AgentBuilder.Generated = nil
+	m.setScreen(ScreenAgentBuilderGenerating)
+
+	engineID := m.AgentBuilder.SelectedEngine
+	userInput := m.AgentBuilder.Textarea.Value()
+
+	var sddConfig *agentbuilder.SDDIntegration
+	if m.AgentBuilder.SDDMode != agentbuilder.SDDStandalone {
+		sddConfig = &agentbuilder.SDDIntegration{
+			Mode:        m.AgentBuilder.SDDMode,
+			TargetPhase: m.AgentBuilder.SDDTargetPhase,
+		}
+		// For SDDNewPhase, set a placeholder PhaseName before prompt composition.
+		// The actual PhaseName is updated after generation from agent.Name.
+		if m.AgentBuilder.SDDMode == agentbuilder.SDDNewPhase {
+			sddConfig.PhaseName = "to-be-determined-from-title"
+		}
+		// PhaseName will be set after generation from the agent's Name field.
+		// SDDTargetPhase is the "insert after" position, not the new phase name.
+	}
+
+	// Capture for goroutine.
+	capturedSDD := sddConfig
+	adapters := m.buildAgentBuilderAdapters()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	m.AgentBuilder.GenerationCancel = cancel
+
+	return m, tea.Batch(tickCmd(), func() tea.Msg {
+		defer cancel()
+
+		engine := agentbuilder.NewEngine(engineID)
+		if engine == nil {
+			return AgentBuilderGeneratedMsg{
+				Err: fmt.Errorf("no engine available for %s", engineID),
+			}
+		}
+
+		installedAgents := buildInstalledAgentIDs(adapters)
+		prompt := agentbuilder.ComposePrompt(userInput, capturedSDD, installedAgents)
+
+		raw, err := engine.Generate(ctx, prompt)
+		if err != nil {
+			return AgentBuilderGeneratedMsg{Err: err}
+		}
+
+		agent, err := agentbuilder.Parse(raw)
+		if err != nil {
+			return AgentBuilderGeneratedMsg{Err: err}
+		}
+
+		if capturedSDD != nil {
+			// For SDDNewPhase, derive the new phase name from the agent's Name,
+			// not from SDDTargetPhase (which is the "insert after" position).
+			if capturedSDD.Mode == agentbuilder.SDDNewPhase {
+				capturedSDD.PhaseName = agent.Name
+			}
+			agent.SDDConfig = capturedSDD
+		}
+
+		return AgentBuilderGeneratedMsg{Agent: agent}
+	})
+}
+
+// startInstallation launches the agent installation goroutine.
+func (m Model) startInstallation() (tea.Model, tea.Cmd) {
+	m.AgentBuilder.Installing = true
+	m.AgentBuilder.InstallErr = nil
+	m.setScreen(ScreenAgentBuilderInstalling)
+
+	agent := m.AgentBuilder.Generated
+	adapters := m.buildAgentBuilderAdapters()
+	engineID := m.AgentBuilder.SelectedEngine
+
+	return m, tea.Batch(tickCmd(), func() (msg tea.Msg) {
+		// Recover from panics so the spinner never runs forever.
+		defer func() {
+			if r := recover(); r != nil {
+				msg = AgentBuilderInstallDoneMsg{
+					Err: fmt.Errorf("install panicked: %v", r),
+				}
+			}
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		_ = ctx // timeout enforced; Install itself is synchronous
+
+		// Resolve agent name, applying conflict suffix if needed.
+		installAgent := agent
+		if agentbuilder.HasConflictWithBuiltin(agent.Name) {
+			// Shallow copy so we don't mutate the generated agent in state.
+			copy := *agent
+			copy.Name = agent.Name + "-custom"
+			installAgent = &copy
+		}
+
+		results, err := agentbuilder.Install(installAgent, adapters, "")
+		if err != nil {
+			return AgentBuilderInstallDoneMsg{Results: results, Err: err}
+		}
+
+		// Persist entry to registry.
+		registryPath := filepath.Join(homeDir(), ".config", "gentle-ai", "custom-agents.json")
+		_ = os.MkdirAll(filepath.Dir(registryPath), 0755)
+		if reg, loadErr := agentbuilder.LoadRegistry(registryPath); loadErr == nil {
+			// Collect IDs of agents that were successfully installed.
+			var installedIDs []model.AgentID
+			for _, r := range results {
+				if r.Success {
+					installedIDs = append(installedIDs, r.AgentID)
+				}
+			}
+			entry := agentbuilder.RegistryEntry{
+				Name:             installAgent.Name,
+				Title:            installAgent.Title,
+				Description:      installAgent.Description,
+				CreatedAt:        time.Now(),
+				GenerationEngine: engineID,
+				SDDIntegration:   installAgent.SDDConfig,
+				InstalledAgents:  installedIDs,
+			}
+			// Update existing entry if present; otherwise append.
+			if existing := reg.FindByName(installAgent.Name); existing != nil {
+				existing.Title = entry.Title
+				existing.Description = entry.Description
+				existing.CreatedAt = entry.CreatedAt
+				existing.GenerationEngine = entry.GenerationEngine
+				existing.SDDIntegration = entry.SDDIntegration
+				existing.InstalledAgents = entry.InstalledAgents
+			} else {
+				reg.Add(entry)
+			}
+			// Best-effort save — ignore save errors.
+			_ = agentbuilder.SaveRegistry(registryPath, reg)
+		}
+
+		// Wire SDD injection: append custom-agent reference blocks to system prompts.
+		// Best-effort — don't fail the whole install if SDD injection fails.
+		if installAgent.SDDConfig != nil && installAgent.SDDConfig.Mode != agentbuilder.SDDStandalone {
+			for _, adapter := range adapters {
+				if systemPromptPath, ok := agentBuilderSystemPromptPath(adapter.AgentID); ok {
+					_ = agentbuilder.InjectSDDReference(installAgent, systemPromptPath)
+				}
+			}
+		}
+
+		return AgentBuilderInstallDoneMsg{Results: results, Err: nil}
+	})
+}
+
+// agentBuilderSystemPromptPath returns the system prompt file path for the given agent.
+func agentBuilderSystemPromptPath(agentID model.AgentID) (string, bool) {
+	home := homeDir()
+	switch agentID {
+	case model.AgentClaudeCode:
+		return filepath.Join(home, ".claude", "CLAUDE.md"), true
+	case model.AgentOpenCode:
+		return filepath.Join(home, ".config", "opencode", "AGENTS.md"), true
+	case model.AgentGeminiCLI:
+		return filepath.Join(home, ".gemini", "GEMINI.md"), true
+	case model.AgentCodex:
+		return filepath.Join(home, ".codex", "AGENTS.md"), true
+	default:
+		return "", false
+	}
 }

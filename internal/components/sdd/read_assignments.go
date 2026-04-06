@@ -23,6 +23,13 @@ func buildSDDPhaseSet() map[string]bool {
 	return set
 }
 
+// ReadCurrentProfiles reads the named SDD profiles from opencode.json at
+// settingsPath. It is a thin wrapper around DetectProfiles provided so that
+// sync code can import a single symbol from this file.
+func ReadCurrentProfiles(settingsPath string) ([]model.Profile, error) {
+	return DetectProfiles(settingsPath)
+}
+
 // ReadCurrentModelAssignments reads the agent definitions from opencode.json
 // at settingsPath and extracts the "model" field for each SDD phase agent.
 //

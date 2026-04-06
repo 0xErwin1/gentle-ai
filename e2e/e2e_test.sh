@@ -564,20 +564,22 @@ test_cc_skills_full() {
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # Full preset = 15 skills (10 SDD + judgment-day + 4 foundation)
-        assert_file_count "$skills_dir" "SKILL.md" 15 "Full preset: 15 skill files"
+        # Full preset = 16 skills (10 SDD + judgment-day + 5 foundation)
+        assert_file_count "$skills_dir" "SKILL.md" 16 "Full preset: 16 skill files"
 
         # Verify foundation skills exist
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md"
         assert_file_exists "$skills_dir/skill-creator/SKILL.md" "skill-creator SKILL.md"
         assert_file_exists "$skills_dir/branch-pr/SKILL.md" "branch-pr SKILL.md"
         assert_file_exists "$skills_dir/issue-creation/SKILL.md" "issue-creation SKILL.md"
+        assert_file_exists "$skills_dir/skill-registry/SKILL.md" "skill-registry SKILL.md"
 
         # Real content check
         assert_file_size_min "$skills_dir/go-testing/SKILL.md" 200 "go-testing skill has real content"
         assert_file_size_min "$skills_dir/skill-creator/SKILL.md" 200 "skill-creator skill has real content"
         assert_file_size_min "$skills_dir/branch-pr/SKILL.md" 200 "branch-pr skill has real content"
         assert_file_size_min "$skills_dir/issue-creation/SKILL.md" 200 "issue-creation skill has real content"
+        assert_file_size_min "$skills_dir/skill-registry/SKILL.md" 200 "skill-registry skill has real content"
     else
         log_fail "skills (full) install command failed"
     fi
@@ -591,8 +593,8 @@ test_cc_skills_ecosystem() {
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # ecosystem-only = 10 SDD + judgment-day + 4 foundation = 15
-        assert_file_count "$skills_dir" "SKILL.md" 15 "Ecosystem preset: 15 skill files"
+        # ecosystem-only = 10 SDD + judgment-day + 5 foundation = 16
+        assert_file_count "$skills_dir" "SKILL.md" 16 "Ecosystem preset: 16 skill files"
 
         # SDD skills present
         assert_file_exists "$skills_dir/sdd-init/SKILL.md" "SDD skills present"
@@ -823,7 +825,7 @@ test_oc_skills_full() {
     if $BINARY install --agent opencode --component skills --preset full-gentleman --persona neutral 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
         assert_dir_exists "$skill_dir" "OpenCode skill directory"
-        assert_file_count "$skill_dir" "SKILL.md" 15 "Full preset: 15 skill files"
+        assert_file_count "$skill_dir" "SKILL.md" 16 "Full preset: 16 skill files"
         assert_file_exists "$skill_dir/go-testing/SKILL.md" "go-testing skill"
         assert_file_exists "$skill_dir/skill-creator/SKILL.md" "skill-creator skill"
         assert_file_exists "$skill_dir/branch-pr/SKILL.md" "branch-pr skill"
