@@ -245,13 +245,35 @@ Since there are no sub-agents, YOU read and write all artifacts directly. Each p
 | `sdd-spec` | proposal (required) | `spec` |
 | `sdd-design` | proposal (required) | `design` |
 | `sdd-tasks` | spec + design (required) | `tasks` |
-| `sdd-apply` | tasks + spec + design | `apply-progress` |
-| `sdd-verify` | spec + tasks | `verify-report` |
+| `sdd-apply` | tasks + spec + design + **apply-progress (if exists)** | `apply-progress` |
+| `sdd-verify` | spec + tasks + **apply-progress** | `verify-report` |
 | `sdd-archive` | all artifacts | `archive-report` |
 
 For phases with required dependencies, retrieve artifacts from Engram using topic keys before starting the phase. Pass artifact references (topic keys), NOT full content. Retrieve full content only when actively working on that phase — do not inline entire specs or designs into conversation context. Do NOT rely on conversation history alone — conversation context is lossy across sessions.
 
 For Large changes using Plan Mode: after writing specs and design artifacts to Engram, also save them as Plan Mode files so they can be @mentioned in future sessions.
+
+#### Strict TDD Forwarding (MANDATORY)
+
+When executing `sdd-apply` or `sdd-verify` phases, the orchestrator MUST:
+
+1. Search for testing capabilities: `mem_search(query: "sdd-init/{project}", project: "{project}")`
+2. If the result contains `strict_tdd: true`:
+   - Add to the phase context: `"STRICT TDD MODE IS ACTIVE. Test runner: {test_command}. You MUST follow strict-tdd.md. Do NOT fall back to Standard Mode."`
+   - This is NON-NEGOTIABLE. Do not rely on self-discovering this independently.
+3. If the search fails or `strict_tdd` is not found, do NOT add the TDD instruction (use Standard Mode).
+
+The orchestrator resolves TDD status ONCE per session (at first apply/verify launch) and caches it.
+
+#### Apply-Progress Continuity (MANDATORY)
+
+When executing `sdd-apply` for a continuation batch (not the first batch):
+
+1. Search for existing apply-progress: `mem_search(query: "sdd/{change-name}/apply-progress", project: "{project}")`
+2. If found, read it first via `mem_search` + `mem_get_observation`, merge your new progress with the existing progress, and save the combined result. Do NOT overwrite — MERGE.
+3. If not found (first batch), no special handling needed.
+
+This prevents progress loss across batches. Read-merge-write is mandatory for continuation batches.
 
 ### Non-SDD Tasks
 
