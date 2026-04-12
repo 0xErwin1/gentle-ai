@@ -5,5 +5,3 @@ agent:
   system_prompt_path: ./sdd-archive.md
   exclude_tools:
     - "kimi_cli.tools.multiagent:Task"
-    - "kimi_cli.tools.file:WriteFile"
-    - "kimi_cli.tools.file:StrReplaceFile"
