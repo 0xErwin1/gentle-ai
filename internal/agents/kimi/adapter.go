@@ -127,11 +127,15 @@ func (a *Adapter) SystemPromptFile(homeDir string) string {
 
 // SkillsDir returns the shared skills directory path.
 //
-// NOTE: Kimi does not have a native skills directory concept (unlike Cursor
-// which has ~/.cursor/skills). We use ~/.config/agents/skills as a shared
-// convention that can be referenced by Kimi prompts and potentially other
-// CLI tools. This path is referenced in agent prompts (e.g., sdd-init.md
-// points to ~/.config/agents/skills/sdd-init/SKILL.md).
+// Kimi Code CLI supports native Agent Skills. It recognizes both:
+//   - native brand-specific skills: ~/.kimi/skills
+//   - generic shared skills: ~/.config/agents/skills and ~/.agents/skills
+//
+// We intentionally use ~/.config/agents/skills here as a cross-agent shared
+// convention. Kimi will discover this directory natively as part of its
+// generic skills group (the docs mark this path as "recommended").
+//
+// See: https://moonshotai.github.io/kimi-cli/en/customization/skills.html
 func (a *Adapter) SkillsDir(homeDir string) string {
 	return filepath.Join(homeDir, ".config", "agents", "skills")
 }
