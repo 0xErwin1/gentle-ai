@@ -16,7 +16,7 @@
 | Codex           | `codex`          | Yes          | Yes | Solo-agent                   | No            | No             | `~/.codex`                          |
 | Windsurf        | `windsurf`       | Yes (native) | Yes | Solo-agent                   | No            | No             | `~/.codeium/windsurf`               |
 | Antigravity     | `antigravity`    | Yes (native) | Yes | Solo-agent + Mission Control | No            | No             | `~/.gemini/antigravity`             |
-| Kimi            | `kimi`           | Yes          | Yes | Full (native custom agents)  | No            | Yes            | `~/.kimi`                           |
+| Kimi            | `kimi`           | Yes          | Yes | Full (native custom agents)  | No            | No             | `~/.kimi`                           |
 
 All agents receive the **full SDD orchestrator** injected into their system prompt, plus skill files written to their skills directory. The agent handles SDD automatically when the task is large enough, or when the user explicitly asks for it — no manual setup required.
 
