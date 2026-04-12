@@ -536,7 +536,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			}
 			checkPath := filepath.Join(agentsDir, entry.Name())
 			info, err := os.Stat(checkPath)
-			if err != nil || info.Size() == 0 {
+			if err != nil || info.Size() < 10 {
 				return InjectionResult{}, fmt.Errorf("post-check: agent file %q not written correctly", entry.Name())
 			}
 		}
