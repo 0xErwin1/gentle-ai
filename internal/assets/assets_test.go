@@ -63,6 +63,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"kimi/agents/sdd-apply.yaml",
 		"kimi/agents/sdd-verify.yaml",
 		"kimi/agents/sdd-archive.yaml",
+		"kimi/agents/sdd-onboard.yaml",
 		"kimi/agents/sdd-init.md",
 		"kimi/agents/sdd-explore.md",
 		"kimi/agents/sdd-propose.md",
@@ -72,6 +73,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"kimi/agents/sdd-apply.md",
 		"kimi/agents/sdd-verify.md",
 		"kimi/agents/sdd-archive.md",
+		"kimi/agents/sdd-onboard.md",
 
 		// SDD skills
 		"skills/sdd-init/SKILL.md",
