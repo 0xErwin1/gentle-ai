@@ -2,10 +2,8 @@ package cli
 
 import (
 	"reflect"
-	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
