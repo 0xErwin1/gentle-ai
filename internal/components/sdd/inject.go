@@ -573,18 +573,6 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				files = append(files, outPath)
 			}
 		}
-
-		// Post-check: verify every embedded sub-agent file was written.
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			checkPath := filepath.Join(agentsDir, entry.Name())
-			info, err := os.Stat(checkPath)
-			if err != nil || info.Size() < 10 {
-				return InjectionResult{}, fmt.Errorf("post-check: agent file %q not written correctly", entry.Name())
-			}
-		}
 	}
 
 	// 4. Post-injection verification — catch silent failures.
