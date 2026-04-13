@@ -200,6 +200,50 @@ func TestRunArgsRestoreUnknownIDReturnsError(t *testing.T) {
 	}
 }
 
+func TestRunArgsUninstallDryRunIsDispatched(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".gentle-ai", "backups"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	origHome := os.Getenv("HOME")
+	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+	os.Setenv("HOME", home)
+
+	var buf bytes.Buffer
+	err := RunArgs([]string{"uninstall", "--dry-run", "--force"}, &buf)
+	if err != nil {
+		t.Fatalf("RunArgs(uninstall --dry-run --force) error = %v", err)
+	}
+	if !strings.Contains(buf.String(), "Uninstall (dry-run)") {
+		t.Fatalf("unexpected uninstall output:\n%s", buf.String())
+	}
+}
+
+func TestRunArgsUninstallBypassesPlatformValidation(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".gentle-ai", "backups"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	origHome := os.Getenv("HOME")
+	t.Cleanup(func() { os.Setenv("HOME", origHome) })
+	os.Setenv("HOME", home)
+
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error {
+		return fmt.Errorf("unsupported platform")
+	}
+
+	var buf bytes.Buffer
+	err := RunArgs([]string{"uninstall", "--dry-run", "--force"}, &buf)
+	if err != nil {
+		t.Fatalf("RunArgs(uninstall --dry-run --force) error = %v", err)
+	}
+	if !strings.Contains(buf.String(), "Uninstall (dry-run)") {
+		t.Fatalf("unexpected uninstall output:\n%s", buf.String())
+	}
+}
+
 // TestListBackupsFallsBackGracefullyForOldManifests verifies that old manifests
 // without Source/Description are still returned (not skipped) and can be displayed
 // via DisplayLabel without panicking.
