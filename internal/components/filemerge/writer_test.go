@@ -6,8 +6,24 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+// isSymlinkPrivilegeError reports whether err is the Windows
+// ERROR_PRIVILEGE_NOT_HELD (1314) error returned by os.Symlink when the
+// process lacks SeCreateSymbolicLinkPrivilege. errors.Is does not map this
+// errno to os.ErrPermission, so we unwrap and check the raw value.
+func isSymlinkPrivilegeError(err error) bool {
+	var le *os.LinkError
+	if errors.As(err, &le) {
+		var errno syscall.Errno
+		if errors.As(le.Err, &errno) {
+			return errno == 1314 // ERROR_PRIVILEGE_NOT_HELD
+		}
+	}
+	return false
+}
 
 func TestWriteFileAtomicReadOnlyDirRelaxesOwnerWritePermission(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -77,6 +93,12 @@ func TestWriteFileAtomicRejectsExistingSymlink(t *testing.T) {
 	}
 	path := filepath.Join(dir, "linked.txt")
 	if err := os.Symlink(target, path); err != nil {
+		// On Windows without Developer Mode or admin rights, symlink creation
+		// requires SeCreateSymbolicLinkPrivilege (ERROR_PRIVILEGE_NOT_HELD = 1314).
+		// Skip gracefully — the test infrastructure lacks the privilege, not the code.
+		if isSymlinkPrivilegeError(err) {
+			t.Skipf("skipping: SeCreateSymbolicLinkPrivilege not held on this Windows build: %v", err)
+		}
 		t.Fatalf("Symlink() error = %v", err)
 	}
 
@@ -111,6 +133,12 @@ func TestWriteFileAtomicRejectsSymlinkParentDirectory(t *testing.T) {
 	}
 	linkDir := filepath.Join(base, "linked")
 	if err := os.Symlink(realDir, linkDir); err != nil {
+		// On Windows without Developer Mode or admin rights, symlink creation
+		// requires SeCreateSymbolicLinkPrivilege (ERROR_PRIVILEGE_NOT_HELD = 1314).
+		// Skip gracefully — the test infrastructure lacks the privilege, not the code.
+		if isSymlinkPrivilegeError(err) {
+			t.Skipf("skipping: SeCreateSymbolicLinkPrivilege not held on this Windows build: %v", err)
+		}
 		t.Fatalf("Symlink(linkDir) error = %v", err)
 	}
 
