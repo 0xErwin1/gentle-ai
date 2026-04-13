@@ -27,9 +27,11 @@ import (
 var Version = "dev"
 
 var (
-	updateCheckAll      = update.CheckAll
-	updateCheckFiltered = update.CheckFiltered
-	upgradeExecute      = upgrade.Execute
+	updateCheckAll           = update.CheckAll
+	updateCheckFiltered      = update.CheckFiltered
+	upgradeExecute           = upgrade.Execute
+	ensureCurrentOSSupported = system.EnsureCurrentOSSupported
+	detectSystem             = system.Detect
 )
 
 func Run() error {
@@ -51,14 +53,16 @@ func RunArgs(args []string, stdout io.Writer) error {
 		case "help", "--help", "-h":
 			printHelp(stdout, Version)
 			return nil
+		case "uninstall":
+			return cli.RunUninstall(args[1:], stdout)
 		}
 	}
 
-	if err := system.EnsureCurrentOSSupported(); err != nil {
+	if err := ensureCurrentOSSupported(); err != nil {
 		return err
 	}
 
-	result, err := system.Detect(context.Background())
+	result, err := detectSystem(context.Background())
 	if err != nil {
 		return fmt.Errorf("detect system: %w", err)
 	}
