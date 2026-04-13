@@ -874,6 +874,24 @@ func TestModelConfig_ClaudePickerNavigation(t *testing.T) {
 	}
 }
 
+// TestModelConfig_KiroPickerNavigation verifies that selecting cursor 2
+// from ScreenModelConfig transitions to ScreenKiroModelPicker with ModelConfigMode set.
+func TestModelConfig_KiroPickerNavigation(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelConfig
+	m.Cursor = 2
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenKiroModelPicker {
+		t.Fatalf("ModelConfig cursor=2 (Kiro): screen = %v, want %v", state.Screen, ScreenKiroModelPicker)
+	}
+	if !state.ModelConfigMode {
+		t.Fatalf("ModelConfigMode should be true after entering Kiro picker from ModelConfig")
+	}
+}
+
 // TestModelConfig_OpenCodePickerNavigation verifies that selecting cursor 1
 // from ScreenModelConfig transitions to ScreenModelPicker with ModelConfigMode set.
 func TestModelConfig_OpenCodePickerNavigation(t *testing.T) {
@@ -892,18 +910,18 @@ func TestModelConfig_OpenCodePickerNavigation(t *testing.T) {
 	}
 }
 
-// TestModelConfig_BackNavigation verifies that selecting cursor 2 (Back) from
+// TestModelConfig_BackNavigation verifies that selecting cursor 3 (Back) from
 // ScreenModelConfig returns to ScreenWelcome.
 func TestModelConfig_BackNavigation(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenModelConfig
-	m.Cursor = 2
+	m.Cursor = 3
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenWelcome {
-		t.Fatalf("ModelConfig cursor=2 (Back): screen = %v, want %v", state.Screen, ScreenWelcome)
+		t.Fatalf("ModelConfig cursor=3 (Back): screen = %v, want %v", state.Screen, ScreenWelcome)
 	}
 }
 
@@ -935,6 +953,66 @@ func TestModelConfig_ClaudePickerBackReturnsToModelConfig(t *testing.T) {
 
 	if state.Screen != ScreenModelConfig {
 		t.Fatalf("ClaudeModelPicker esc (ModelConfigMode): screen = %v, want %v", state.Screen, ScreenModelConfig)
+	}
+}
+
+// TestModelConfig_KiroPickerBackReturnsToModelConfig verifies that pressing
+// Esc from ScreenKiroModelPicker when in ModelConfigMode returns to ScreenModelConfig.
+func TestModelConfig_KiroPickerBackReturnsToModelConfig(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenKiroModelPicker
+	m.ModelConfigMode = true
+	m.KiroModelPicker = screens.NewKiroModelPickerState()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	if state.Screen != ScreenModelConfig {
+		t.Fatalf("KiroModelPicker esc (ModelConfigMode): screen = %v, want %v", state.Screen, ScreenModelConfig)
+	}
+}
+
+// TestKiroPickerEscNonCustomWithClaudeGoesToClaudePicker verifies that Esc from
+// ScreenKiroModelPicker in a non-custom preset returns to ScreenClaudeModelPicker
+// when Claude is in the flow — keeping Esc consistent with Enter on "← Back".
+func TestKiroPickerEscNonCustomWithClaudeGoesToClaudePicker(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenKiroModelPicker
+	m.ModelConfigMode = false
+	m.Selection.Preset = model.PresetFullGentleman // non-custom
+	// Simulate both Kiro and Claude being selected.
+	m.Selection.Agents = []model.AgentID{model.AgentKiroIDE, model.AgentClaudeCode}
+	m.Selection.Components = componentsForPreset(model.PresetFullGentleman)
+	m.KiroModelPicker = screens.NewKiroModelPickerState()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	if state.Screen != ScreenClaudeModelPicker {
+		t.Fatalf("KiroModelPicker esc (non-custom, Claude in flow): screen = %v, want %v",
+			state.Screen, ScreenClaudeModelPicker)
+	}
+}
+
+// TestKiroPickerEscNonCustomWithoutClaudeGoesToPreset verifies that Esc from
+// ScreenKiroModelPicker in a non-custom preset returns to ScreenPreset when
+// Claude is NOT in the flow.
+func TestKiroPickerEscNonCustomWithoutClaudeGoesToPreset(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenKiroModelPicker
+	m.ModelConfigMode = false
+	m.Selection.Preset = model.PresetFullGentleman
+	// Only Kiro — no Claude.
+	m.Selection.Agents = []model.AgentID{model.AgentKiroIDE}
+	m.Selection.Components = componentsForPreset(model.PresetFullGentleman)
+	m.KiroModelPicker = screens.NewKiroModelPickerState()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	if state.Screen != ScreenPreset {
+		t.Fatalf("KiroModelPicker esc (non-custom, no Claude): screen = %v, want %v",
+			state.Screen, ScreenPreset)
 	}
 }
 

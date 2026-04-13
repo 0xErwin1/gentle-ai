@@ -163,6 +163,7 @@ const (
 	ScreenPersona
 	ScreenPreset
 	ScreenClaudeModelPicker
+	ScreenKiroModelPicker
 	ScreenSDDMode
 	ScreenStrictTDD
 	ScreenDependencyTree
@@ -212,6 +213,7 @@ type Model struct {
 	Backups           []backup.Manifest
 	ModelPicker       screens.ModelPickerState
 	ClaudeModelPicker screens.ClaudeModelPickerState
+	KiroModelPicker   screens.KiroModelPickerState
 	SkillPicker       []model.SkillID
 	Err               error
 
@@ -619,6 +621,8 @@ func (m Model) View() string {
 		return screens.RenderPreset(m.Selection.Preset, m.Cursor)
 	case ScreenClaudeModelPicker:
 		return screens.RenderClaudeModelPicker(m.ClaudeModelPicker, m.Cursor)
+	case ScreenKiroModelPicker:
+		return screens.RenderKiroModelPicker(m.KiroModelPicker, m.Cursor)
 	case ScreenSDDMode:
 		return screens.RenderSDDMode(m.Selection.SDDMode, m.Cursor)
 	case ScreenStrictTDD:
@@ -719,11 +723,55 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 					m = m.withResetSyncState()
 					m.setScreen(ScreenSync)
+				} else if m.shouldShowKiroModelPickerScreen() {
+					m.KiroModelPicker = screens.NewKiroModelPickerState()
+					m.setScreen(ScreenKiroModelPicker)
 				} else if m.shouldShowSDDModeScreen() {
 					m.setScreen(ScreenSDDMode)
 				} else if m.Selection.Preset == model.PresetCustom {
 					// Custom preset: dependency plan was already built before model picker.
 					// Check StrictTDD, then skill picker before going to review.
+					if m.shouldShowStrictTDDScreen() {
+						m.setScreen(ScreenStrictTDD)
+					} else if m.shouldShowSkillPickerScreen() {
+						if len(m.SkillPicker) == 0 {
+							m.initSkillPicker()
+						}
+						m.setScreen(ScreenSkillPicker)
+					} else {
+						m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
+						m.setScreen(ScreenReview)
+					}
+				} else if m.shouldShowStrictTDDScreen() {
+					m.setScreen(ScreenStrictTDD)
+				} else {
+					m.buildDependencyPlan()
+					m.setScreen(ScreenDependencyTree)
+				}
+			}
+			return m, nil
+		}
+	}
+
+	if m.Screen == ScreenKiroModelPicker {
+		wasInCustomMode := m.KiroModelPicker.InCustomMode
+		handled, updated := screens.HandleKiroModelPickerNav(keyStr, &m.KiroModelPicker, m.Cursor)
+		if handled {
+			if wasInCustomMode && !m.KiroModelPicker.InCustomMode {
+				m.Cursor = 0
+			}
+			if updated != nil {
+				m.Selection.KiroModelAssignments = updated
+				if m.ModelConfigMode {
+					m.ModelConfigMode = false
+					m.PendingSyncOverrides = &model.SyncOverrides{
+						KiroModelAssignments: updated,
+					}
+					m = m.withResetSyncState()
+					m.setScreen(ScreenSync)
+				} else if m.shouldShowSDDModeScreen() {
+					m.setScreen(ScreenSDDMode)
+				} else if m.Selection.Preset == model.PresetCustom {
 					if m.shouldShowStrictTDDScreen() {
 						m.setScreen(ScreenStrictTDD)
 					} else if m.shouldShowSkillPickerScreen() {
@@ -1099,6 +1147,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				}
 			}
 			m.setScreen(ScreenModelPicker)
+		case 2: // Configure Kiro models
+			m.ModelConfigMode = true
+			m.KiroModelPicker = screens.NewKiroModelPickerState()
+			m.setScreen(ScreenKiroModelPicker)
 		default: // Back
 			m.setScreen(ScreenWelcome)
 		}
@@ -1137,6 +1189,11 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.setScreen(ScreenClaudeModelPicker)
 				return m, nil
 			}
+			if m.shouldShowKiroModelPickerScreen() {
+				m.KiroModelPicker = screens.NewKiroModelPickerState()
+				m.setScreen(ScreenKiroModelPicker)
+				return m, nil
+			}
 			if m.shouldShowSDDModeScreen() {
 				m.setScreen(ScreenSDDMode)
 				return m, nil
@@ -1160,6 +1217,22 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.Selection.Preset == model.PresetCustom {
+				m.setScreen(ScreenDependencyTree)
+			} else {
+				m.setScreen(ScreenPreset)
+			}
+			return m, nil
+		}
+	case ScreenKiroModelPicker:
+		if !m.KiroModelPicker.InCustomMode && m.Cursor == screens.KiroModelPickerOptionCount(m.KiroModelPicker)-1 {
+			if m.ModelConfigMode {
+				m.ModelConfigMode = false
+				m.setScreen(ScreenModelConfig)
+				return m, nil
+			}
+			if m.shouldShowClaudeModelPickerScreen() {
+				m.setScreen(ScreenClaudeModelPicker)
+			} else if m.Selection.Preset == model.PresetCustom {
 				m.setScreen(ScreenDependencyTree)
 			} else {
 				m.setScreen(ScreenPreset)
@@ -1811,7 +1884,7 @@ func (m Model) goBack() Model {
 	}
 
 	// ModelConfigMode: pickers reached via Model Config shortcut return to ScreenModelConfig.
-	if m.ModelConfigMode && (m.Screen == ScreenClaudeModelPicker || m.Screen == ScreenModelPicker) {
+	if m.ModelConfigMode && (m.Screen == ScreenClaudeModelPicker || m.Screen == ScreenKiroModelPicker || m.Screen == ScreenModelPicker) {
 		m.ModelConfigMode = false
 		m.setScreen(ScreenModelConfig)
 		return m
@@ -1834,6 +1907,8 @@ func (m Model) goBack() Model {
 				} else {
 					m.setScreen(ScreenSDDMode)
 				}
+			} else if m.shouldShowKiroModelPickerScreen() {
+				m.setScreen(ScreenKiroModelPicker)
 			} else if m.shouldShowClaudeModelPickerScreen() {
 				m.setScreen(ScreenClaudeModelPicker)
 			} else {
@@ -1880,6 +1955,10 @@ func (m Model) goBack() Model {
 			m.setScreen(ScreenSDDMode)
 			return m
 		}
+		if m.shouldShowKiroModelPickerScreen() {
+			m.setScreen(ScreenKiroModelPicker)
+			return m
+		}
 		if m.shouldShowClaudeModelPickerScreen() {
 			m.setScreen(ScreenClaudeModelPicker)
 			return m
@@ -1900,11 +1979,17 @@ func (m Model) goBack() Model {
 	// NOTE: SDDMode back logic is also in confirmSelection — keep in sync.
 	if m.Screen == ScreenSDDMode {
 		if m.Selection.Preset == model.PresetCustom {
-			if m.shouldShowClaudeModelPickerScreen() {
+			if m.shouldShowKiroModelPickerScreen() {
+				m.setScreen(ScreenKiroModelPicker)
+			} else if m.shouldShowClaudeModelPickerScreen() {
 				m.setScreen(ScreenClaudeModelPicker)
 			} else {
 				m.setScreen(ScreenDependencyTree)
 			}
+			return m
+		}
+		if m.shouldShowKiroModelPickerScreen() {
+			m.setScreen(ScreenKiroModelPicker)
 			return m
 		}
 		if m.shouldShowClaudeModelPickerScreen() {
@@ -1916,6 +2001,26 @@ func (m Model) goBack() Model {
 	// In custom preset, going back from ClaudeModelPicker should return to DependencyTree.
 	if m.Screen == ScreenClaudeModelPicker && m.Selection.Preset == model.PresetCustom {
 		m.setScreen(ScreenDependencyTree)
+		return m
+	}
+
+	if m.Screen == ScreenKiroModelPicker {
+		if m.Selection.Preset == model.PresetCustom {
+			// Custom preset: Kiro → Claude (if present) → DependencyTree.
+			if m.shouldShowClaudeModelPickerScreen() {
+				m.setScreen(ScreenClaudeModelPicker)
+			} else {
+				m.setScreen(ScreenDependencyTree)
+			}
+		} else {
+			// Non-custom preset: Kiro → Claude (if present) → Preset.
+			// This keeps Esc consistent with Enter on "← Back".
+			if m.shouldShowClaudeModelPickerScreen() {
+				m.setScreen(ScreenClaudeModelPicker)
+			} else {
+				m.setScreen(ScreenPreset)
+			}
+		}
 		return m
 	}
 
@@ -2071,6 +2176,8 @@ func (m Model) optionCount() int {
 		return len(screens.PresetOptions()) + 1
 	case ScreenClaudeModelPicker:
 		return screens.ClaudeModelPickerOptionCount(m.ClaudeModelPicker)
+	case ScreenKiroModelPicker:
+		return screens.KiroModelPickerOptionCount(m.KiroModelPicker)
 	case ScreenSDDMode:
 		return len(screens.SDDModeOptions()) + 1
 	case ScreenStrictTDD:
@@ -2324,6 +2431,11 @@ func (m Model) shouldShowStrictTDDScreen() bool {
 
 func (m Model) shouldShowClaudeModelPickerScreen() bool {
 	return m.Selection.HasAgent(model.AgentClaudeCode) &&
+		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
+}
+
+func (m Model) shouldShowKiroModelPickerScreen() bool {
+	return m.Selection.HasAgent(model.AgentKiroIDE) &&
 		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
 }
 
