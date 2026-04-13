@@ -31,3 +31,6 @@ agent:
     sdd-archive:
       path: ./sdd-archive.yaml
       description: "Archives verified changes and closes the SDD cycle"
+    sdd-onboard:
+      path: ./sdd-onboard.yaml
+      description: "Guided SDD walkthrough using the real codebase"
