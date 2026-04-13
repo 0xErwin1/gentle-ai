@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/gentleman-programming/gentle-ai/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
@@ -223,7 +225,7 @@ func (a *Adapter) PostInstallMessage(homeDir string) string {
 	return fmt.Sprintf(`Kimi Code configured!
 
 Usage:
-  kimi --agent-file %s
+  kimi --agent-file "%s"
 
 Native SDD entrypoints:
   /skill:sdd-init
@@ -237,7 +239,7 @@ Native SDD entrypoints:
   /skill:sdd-archive
 
 Skills root:
-  %s`, gentlemanYaml, skillsRoot)
+  "%s"`, gentlemanYaml, skillsRoot)
 }
 
 
@@ -271,31 +273,29 @@ func binaryName() string {
 // BootstrapTemplate ensures the base KIMI.md template exists in the agent's config directory.
 // It is used by the installation pipeline to guarantee that modular components 
 // (SDD, Engram) can be included even if the Persona component is not installed.
-func BootstrapTemplate(homeDir string) error {
-	kimiDir := ConfigPath(homeDir)
-	if err := os.MkdirAll(kimiDir, 0755); err != nil {
+func (a *Adapter) BootstrapTemplate(homeDir string) error {
+	kimiDir := a.GlobalConfigDir(homeDir)
+	if err := os.MkdirAll(kimiDir, 0o755); err != nil {
 		return fmt.Errorf("create kimi config dir: %w", err)
 	}
 
-	skeletonPath := filepath.Join(kimiDir, "KIMI.md")
+	skeletonPath := a.SystemPromptFile(homeDir)
 	
 	// We always write the skeleton to ensure any missing includes are restored.
 	// Since KIMI.md is the 'router' for modular Jinja components, it should 
 	// remain managed by the framework.
-	content := `# Kimi Code System Prompt
-{% include "persona.md" %}
-{% include "sdd-orchestrator.md" %}
-{% include "engram-protocol.md" %}
-`
-	if err := os.WriteFile(skeletonPath, []byte(content), 0644); err != nil {
+	content := assets.MustRead("kimi/KIMI.md")
+	if _, err := filemerge.WriteFileAtomic(skeletonPath, []byte(content), 0o644); err != nil {
 		return fmt.Errorf("write KIMI.md skeleton: %w", err)
 	}
 
-	// Kimi considers config.toml a required file. We create an empty one if 
+	// Kimi considers config.toml a required file. We create an empty one if
 	// it's missing to satisfy verification during a minimalist install.
-	configPath := filepath.Join(kimiDir, "config.toml")
+	configPath := a.SettingsPath(homeDir)
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		return os.WriteFile(configPath, []byte("# Kimi Code Config\n"), 0644)
+		if _, err := filemerge.WriteFileAtomic(configPath, []byte("# Kimi Code Config\n"), 0o644); err != nil {
+			return err
+		}
 	}
 
 	return nil

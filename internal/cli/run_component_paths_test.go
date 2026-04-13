@@ -137,7 +137,7 @@ func TestComponentPathsEngramCodexIncludesConfigTOML(t *testing.T) {
 
 	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentEngram)
 
-	want := home + "/.codex/config.toml"
+	want := filepath.Join(home, ".codex", "config.toml")
 	if !containsPath(paths, want) {
 		t.Fatalf("componentPaths(engram,codex) missing %q\npaths=%v", want, paths)
 	}

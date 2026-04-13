@@ -1776,7 +1776,7 @@ func TestRunInstallKimiBootstrapsHub(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read bootstrapped hub: %v", err)
 	}
-	if !strings.Contains(string(content), "{% include \"persona.md\" %}") {
+	if !strings.Contains(string(content), "{% include \"persona.md\" ignore missing %}") {
 		t.Errorf("bootstrapped hub missing modular include: %s", string(content))
 	}
 }

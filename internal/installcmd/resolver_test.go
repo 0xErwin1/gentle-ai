@@ -381,6 +381,12 @@ func TestResolveAgentInstall(t *testing.T) {
 			agent:   model.AgentKimi,
 			want:    CommandSequence{{"uv", "tool", "install", "--python", "3.13", "kimi-cli"}},
 		},
+		{
+			name:    "kimi on unsupported profile returns error",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt", Supported: false},
+			agent:   model.AgentKimi,
+			wantErr: true,
+		},
 
 		{
 			name:    "unsupported agent returns error",

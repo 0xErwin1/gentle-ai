@@ -46,7 +46,7 @@ func (profileResolver) ResolveAgentInstall(profile system.PlatformProfile, agent
 	case model.AgentKilocode:
 		return resolveKilocodeInstall(profile), nil
 	case model.AgentKimi:
-		return resolveKimiInstall(profile), nil
+		return resolveKimiInstall(profile)
 	default:
 		return nil, fmt.Errorf("install command is not supported for agent %q", agent)
 	}
@@ -75,19 +75,15 @@ func resolveKilocodeInstall(profile system.PlatformProfile) CommandSequence {
 // resolveKimiInstall returns the official Kimi install command sequence.
 // To avoid the security risks of pipe-to-shell patterns (curl | bash),
 // we execute the underlying command that the scripts alias: `uv tool install`.
-func resolveKimiInstall(profile system.PlatformProfile) CommandSequence {
+func resolveKimiInstall(profile system.PlatformProfile) (CommandSequence, error) {
 	// Kimi CLI is a python-based tool. We use Astral's `uv` as our deterministic 
 	// prerequisite manager to ensure secure and isolated installs.
-	// 
-	// Even though the command is identical across platforms, we use the profile 
-	// here to validate that we are on a platform where our `uv` approach is 
-	// officially supported and tested by Gentleman.
 	if !profile.Supported {
-		return nil
+		return nil, fmt.Errorf("Kimi is not supported on this platform (%s/%s)", profile.OS, profile.LinuxDistro)
 	}
 
 	// We explicitly request python 3.13 as strictly defined by Kimi upstream.
-	return CommandSequence{{"uv", "tool", "install", "--python", "3.13", "kimi-cli"}}
+	return CommandSequence{{"uv", "tool", "install", "--python", "3.13", "kimi-cli"}}, nil
 }
 
 

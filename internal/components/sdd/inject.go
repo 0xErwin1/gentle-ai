@@ -109,6 +109,13 @@ var strongProjectMarkers = []string{
 // trees and ensures we stop well before reaching the filesystem root.
 const maxAncestorDepth = 20
 
+// bootstrapper is an optional adapter capability: if an adapter implements
+// this interface, any injector that writes Jinja modules will first ensure
+// the base template (entry point) exists.
+type bootstrapper interface {
+	BootstrapTemplate(homeDir string) error
+}
+
 // findProjectRoot walks upward from dir, looking for the best project root.
 //
 // Priority order:
@@ -226,6 +233,13 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			files = append(files, result.Files...)
 
 		case model.StrategyJinjaModules:
+			// Ensure the base template exists for Jinja-based agents.
+			if bs, ok := adapter.(bootstrapper); ok {
+				if err := bs.BootstrapTemplate(homeDir); err != nil {
+					return InjectionResult{}, fmt.Errorf("bootstrap template: %w", err)
+				}
+			}
+
 			// Write the SDD orchestrator as a standalone Jinja include module.
 			// The static KIMI.md template references it via {% include "sdd-orchestrator.md" %}.
 			configDir := adapter.GlobalConfigDir(homeDir)

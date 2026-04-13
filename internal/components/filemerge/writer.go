@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 const maxAtomicFileSize = 16 << 20
@@ -79,7 +80,9 @@ func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult
 		return WriteResult{}, fmt.Errorf("open parent directory for %q: %w", path, err)
 	}
 	defer dirFD.Close()
-	if err := dirFD.Sync(); err != nil {
+	if err := dirFD.Sync(); err != nil && runtime.GOOS != "windows" {
+		// Parent directory sync is best-effort on Windows (temp dirs, AV, and some FS
+		// combinations return ERROR_ACCESS_DENIED). The temp file was fsync'd before rename.
 		return WriteResult{}, fmt.Errorf("sync parent directory for %q: %w", path, err)
 	}
 

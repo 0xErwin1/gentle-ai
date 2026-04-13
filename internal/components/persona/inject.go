@@ -17,6 +17,13 @@ type InjectionResult struct {
 	Files   []string
 }
 
+// bootstrapper is an optional adapter capability: if an adapter implements
+// this interface, any injector that writes Jinja modules will first ensure
+// the base template (entry point) exists.
+type bootstrapper interface {
+	BootstrapTemplate(homeDir string) error
+}
+
 // outputStyleOverlayJSON is the settings.json overlay to enable the Gentleman output style.
 var outputStyleOverlayJSON = []byte("{\n  \"outputStyle\": \"Gentleman\"\n}\n")
 
@@ -234,9 +241,18 @@ func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (In
 		files = append(files, promptPath)
 
 	case model.StrategyJinjaModules:
+		// Ensure the base template exists for Jinja-based agents.
+		if bs, ok := adapter.(bootstrapper); ok {
+			if err := bs.BootstrapTemplate(homeDir); err != nil {
+				return InjectionResult{}, fmt.Errorf("bootstrap template: %w", err)
+			}
+			files = append(files, adapter.SystemPromptFile(homeDir))
+			files = append(files, adapter.SettingsPath(homeDir))
+		}
+
 		// Write separate Jinja include modules for Kimi (and any future agents that
 		// use this strategy). Each module corresponds to one {% include "…" %} in
-		// the static KIMI.md template that this case also writes.
+		// the static KIMI.md template that the bootstrapper above ensures exists.
 		configDir := adapter.GlobalConfigDir(homeDir)
 
 		// Module 1: persona (raw content — no variables; those live in the template).
@@ -261,17 +277,6 @@ func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (In
 		}
 		changed = changed || wr2.Changed
 		files = append(files, outputStylePath)
-
-		// Write the static Jinja template (KIMI.md). This is always the same
-		// embedded asset — WriteFileAtomic makes it idempotent.
-		templateContent := assets.MustRead("kimi/KIMI.md")
-		templatePath := adapter.SystemPromptFile(homeDir)
-		wr3, err := filemerge.WriteFileAtomic(templatePath, []byte(templateContent), 0o644)
-		if err != nil {
-			return InjectionResult{}, err
-		}
-		changed = changed || wr3.Changed
-		files = append(files, templatePath)
 	}
 
 	// 2. OpenCode/Kilocode agent definitions — Tab-switchable agents in settings.

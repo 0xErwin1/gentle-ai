@@ -446,6 +446,9 @@ func (s agentInstallStep) Run() error {
 	if err != nil {
 		return fmt.Errorf("resolve install command for %q: %w", s.agent, err)
 	}
+	if len(commands) == 0 {
+		return fmt.Errorf("install command for %q resolved to an empty sequence (unsupported platform or resolver misconfiguration)", s.agent)
+	}
 
 	return runCommandSequence(commands)
 }
@@ -461,7 +464,7 @@ func (s kimiSystemPromptHubStep) ID() string {
 
 
 func (s kimiSystemPromptHubStep) Run() error {
-	return kimi.BootstrapTemplate(s.homeDir)
+	return kimi.NewAdapter().BootstrapTemplate(s.homeDir)
 }
 
 
@@ -842,7 +845,9 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 				paths = append(paths, adapter.SystemPromptFile(homeDir))
 			}
 		case model.ComponentSDD:
-			if adapter.SupportsSystemPrompt() {
+			// Jinja modular hubs (e.g. Kimi KIMI.md) are appended once below so SDD+Persona
+			// do not duplicate the same system prompt path.
+			if adapter.SupportsSystemPrompt() && adapter.SystemPromptStrategy() != model.StrategyJinjaModules {
 				paths = append(paths, adapter.SystemPromptFile(homeDir))
 			}
 			if adapter.SupportsSlashCommands() {
@@ -916,7 +921,7 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 			if selection.Persona == model.PersonaCustom {
 				break
 			}
-			if adapter.SupportsSystemPrompt() {
+			if adapter.SupportsSystemPrompt() && adapter.SystemPromptStrategy() != model.StrategyJinjaModules {
 				paths = append(paths, adapter.SystemPromptFile(homeDir))
 			}
 			if selection.Persona == model.PersonaGentleman {
@@ -987,20 +992,33 @@ func runPostApplyVerification(homeDir string, selection model.Selection, resolve
 	checks := make([]verify.Check, 0)
 	adapters := resolveAdapters(resolved.Agents)
 
+	seenPath := make(map[string]struct{})
+	var uniqueFilePaths []string
 	for _, component := range resolved.OrderedComponents {
 		for _, path := range componentPaths(homeDir, selection, adapters, component) {
-			currentPath := path
-			checks = append(checks, verify.Check{
-				ID:          "verify:file:" + currentPath,
-				Description: "required file exists",
-				Run: func(context.Context) error {
-					if _, err := os.Stat(currentPath); err != nil {
-						return err
-					}
-					return nil
-				},
-			})
+			if path == "" {
+				continue
+			}
+			if _, dup := seenPath[path]; dup {
+				continue
+			}
+			seenPath[path] = struct{}{}
+			uniqueFilePaths = append(uniqueFilePaths, path)
 		}
+	}
+
+	for _, currentPath := range uniqueFilePaths {
+		path := currentPath
+		checks = append(checks, verify.Check{
+			ID:          "verify:file:" + path,
+			Description: "required file exists",
+			Run: func(context.Context) error {
+				if _, err := os.Stat(path); err != nil {
+					return err
+				}
+				return nil
+			},
+		})
 	}
 
 	if hasComponent(resolved.OrderedComponents, model.ComponentEngram) {
