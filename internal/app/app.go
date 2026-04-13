@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/cli"
+	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
@@ -27,9 +28,11 @@ import (
 var Version = "dev"
 
 var (
-	updateCheckAll      = update.CheckAll
-	updateCheckFiltered = update.CheckFiltered
-	upgradeExecute      = upgrade.Execute
+	updateCheckAll           = update.CheckAll
+	updateCheckFiltered      = update.CheckFiltered
+	upgradeExecute           = upgrade.Execute
+	ensureCurrentOSSupported = system.EnsureCurrentOSSupported
+	detectSystem             = system.Detect
 )
 
 func Run() error {
@@ -51,14 +54,17 @@ func RunArgs(args []string, stdout io.Writer) error {
 		case "help", "--help", "-h":
 			printHelp(stdout, Version)
 			return nil
+		case "uninstall":
+			_, err := cli.RunUninstall(args[1:], stdout)
+			return err
 		}
 	}
 
-	if err := system.EnsureCurrentOSSupported(); err != nil {
+	if err := ensureCurrentOSSupported(); err != nil {
 		return err
 	}
 
-	result, err := system.Detect(context.Background())
+	result, err := detectSystem(context.Background())
 	if err != nil {
 		return fmt.Errorf("detect system: %w", err)
 	}
@@ -96,6 +102,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 		m.Backups = ListBackups()
 		m.UpgradeFn = tuiUpgrade(profile, homeDir)
 		m.SyncFn = tuiSync(homeDir)
+		m.UninstallFn = tuiUninstall(homeDir)
+		m.UninstallWithProfilesFn = tuiUninstallWithProfiles(homeDir)
 		p := tea.NewProgram(m, tea.WithAltScreen())
 		_, err = p.Run()
 		return err
@@ -127,6 +135,20 @@ func RunArgs(args []string, stdout io.Writer) error {
 		}
 
 		_, _ = fmt.Fprintln(stdout, cli.RenderSyncReport(syncResult))
+		return nil
+	case "uninstall":
+		uninstallResult, err := cli.RunUninstall(args[1:], stdout)
+		if err != nil {
+			// If a backup was created before the failure, surface it so
+			// the user can restore safely.
+			if uninstallResult.Manifest.ID != "" {
+				_, _ = fmt.Fprintln(stdout, cli.RenderUninstallReport(uninstallResult))
+			}
+			return err
+		}
+		if uninstallResult.Manifest.ID != "" {
+			_, _ = fmt.Fprintln(stdout, cli.RenderUninstallReport(uninstallResult))
+		}
 		return nil
 	case "restore":
 		return cli.RunRestore(args[1:], stdout)
@@ -298,6 +320,28 @@ func tuiSync(homeDir string) tui.SyncFunc {
 	}
 }
 
+// tuiUninstall returns a tui.UninstallFunc that mirrors the CLI uninstall path
+// for selected agents/components, but without interactive flag parsing.
+func tuiUninstall(homeDir string) tui.UninstallFunc {
+	return func(agentIDs []model.AgentID, componentIDs []model.ComponentID) (componentuninstall.Result, error) {
+		workspaceDir, err := os.Getwd()
+		if err != nil {
+			return componentuninstall.Result{}, fmt.Errorf("resolve workspace directory: %w", err)
+		}
+		return cli.RunUninstallWithSelection(homeDir, workspaceDir, agentIDs, componentIDs)
+	}
+}
+
+func tuiUninstallWithProfiles(homeDir string) tui.UninstallWithProfilesFunc {
+	return func(agentIDs []model.AgentID, componentIDs []model.ComponentID, profileNames []string, engramScope model.EngramUninstallScope) (componentuninstall.Result, error) {
+		workspaceDir, err := os.Getwd()
+		if err != nil {
+			return componentuninstall.Result{}, fmt.Errorf("resolve workspace directory: %w", err)
+		}
+		return cli.RunUninstallWithSelectionAndProfiles(homeDir, workspaceDir, agentIDs, componentIDs, profileNames, engramScope)
+	}
+}
+
 // applyOverrides merges non-nil fields from overrides into selection.
 // A nil overrides pointer is a no-op.
 func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) {
@@ -309,6 +353,9 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	}
 	if overrides.ClaudeModelAssignments != nil {
 		selection.ClaudeModelAssignments = overrides.ClaudeModelAssignments
+	}
+	if overrides.KiroModelAssignments != nil {
+		selection.KiroModelAssignments = overrides.KiroModelAssignments
 	}
 	if overrides.SDDMode != "" {
 		selection.SDDMode = overrides.SDDMode
@@ -343,6 +390,13 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 		}
 		selection.ClaudeModelAssignments = m
 	}
+	if len(selection.KiroModelAssignments) == 0 && len(s.KiroModelAssignments) > 0 {
+		m := make(map[string]model.ClaudeModelAlias, len(s.KiroModelAssignments))
+		for k, v := range s.KiroModelAssignments {
+			m[k] = model.ClaudeModelAlias(v)
+		}
+		selection.KiroModelAssignments = m
+	}
 	if len(selection.ModelAssignments) == 0 && len(s.ModelAssignments) > 0 {
 		m := make(map[string]model.ModelAssignment, len(s.ModelAssignments))
 		for k, v := range s.ModelAssignments {
@@ -356,7 +410,7 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 // state.json using a read-merge-write pattern so that other fields
 // (InstalledAgents) are not lost.
 func persistAssignments(homeDir string, selection model.Selection) {
-	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ModelAssignments) == 0 {
+	if len(selection.ClaudeModelAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 {
 		return
 	}
 	current, err := state.Read(homeDir)
@@ -366,6 +420,9 @@ func persistAssignments(homeDir string, selection model.Selection) {
 	}
 	if len(selection.ClaudeModelAssignments) > 0 {
 		current.ClaudeModelAssignments = claudeAliasesToStrings(selection.ClaudeModelAssignments)
+	}
+	if len(selection.KiroModelAssignments) > 0 {
+		current.KiroModelAssignments = claudeAliasesToStrings(selection.KiroModelAssignments)
 	}
 	if len(selection.ModelAssignments) > 0 {
 		current.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)

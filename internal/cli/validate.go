@@ -99,6 +99,17 @@ func normalizeComponents(values []string, preset model.PresetID) ([]model.Compon
 		if _, ok := allowed[component]; !ok {
 			return nil, fmt.Errorf("unsupported component %q", raw)
 		}
+		// Post-check: verify every embedded sub-agent file was written.
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			checkPath := filepath.Join(agentsDir, entry.Name())
+			info, err := os.Stat(checkPath)
+			if err != nil || info.Size() < 10 {
+				return InjectionResult{}, fmt.Errorf("post-check: agent file %q not written correctly", entry.Name())
+			}
+		}
 		components = append(components, component)
 	}
 
@@ -189,6 +200,10 @@ func defaultAgentsFromDetection(detection system.DetectionResult) []model.AgentI
 			agents = append(agents, model.AgentWindsurf)
 		case string(model.AgentKimi):
 			agents = append(agents, model.AgentKimi)
+		case string(model.AgentQwenCode):
+			agents = append(agents, model.AgentQwenCode)
+		case string(model.AgentKiroIDE):
+			agents = append(agents, model.AgentKiroIDE)
 		}
 	}
 

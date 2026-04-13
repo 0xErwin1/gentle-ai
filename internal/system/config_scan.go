@@ -15,10 +15,14 @@ type ConfigState struct {
 	IsDirectory bool
 }
 
-// knownAgentConfigDirs enumerates every agent's GlobalConfigDir as a
-// (agentID, path) pair for the given homeDir. This is a compatibility shim
+// knownAgentConfigDirs enumerates the per-agent config roots used by ScanConfigs
+// for presence scanning as (agentID, path) pairs. This is a compatibility shim
 // that mirrors the adapter registry's full set without importing the agents
 // package (which would create an import cycle: system ← agents ← system).
+//
+// Most entries mirror Adapter.GlobalConfigDir(). Kiro is an intentional
+// exception: we scan `~/.kiro` (managed artifacts root) instead of
+// `%APPDATA%/kiro/User` (settings root) due to Kiro's split-root layout.
 //
 // When a new agent is added to the registry, its entry must also be added here
 // until the import cycle is resolved and ScanConfigs can delegate directly to
@@ -35,6 +39,8 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 		{Agent: "antigravity", Path: filepath.Join(homeDir, ".gemini", "antigravity")},
 		{Agent: "windsurf", Path: filepath.Join(homeDir, ".codeium", "windsurf")},
 		{Agent: "kimi", Path: filepath.Join(homeDir, ".kimi")},
+		{Agent: "qwen-code", Path: filepath.Join(homeDir, ".qwen")},
+		{Agent: "kiro-ide", Path: filepath.Join(homeDir, ".kiro")},
 	}
 }
 
@@ -46,9 +52,6 @@ func vscodeCopilotGlobalConfigDir(homeDir string) string {
 }
 
 // ScanConfigs returns the presence state of every known managed agent's global
-// config directory. All agents are always represented in the result; Exists and
-// IsDirectory reflect the actual filesystem state at call time.
-//
 // This is a compatibility shim: it preserves the ConfigState contract for TUI
 // and validation callers while the canonical discovery (agents.DiscoverInstalled)
 // is used by sync and upgrade flows. Full delegation is deferred until the
