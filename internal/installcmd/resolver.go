@@ -73,12 +73,12 @@ func resolveKilocodeInstall(profile system.PlatformProfile) CommandSequence {
 }
 
 // resolveKimiInstall returns the official Kimi install command sequence.
-// Docs recommend the platform install script (or uv directly once uv is present).
+// To avoid the security risks of pipe-to-shell patterns (curl | bash),
+// we execute the underlying command that the scripts alias: `uv tool install`.
 func resolveKimiInstall(profile system.PlatformProfile) CommandSequence {
-	if profile.OS == "windows" {
-		return CommandSequence{{"powershell", "-NoProfile", "-Command", "Invoke-RestMethod https://code.kimi.com/install.ps1 | Invoke-Expression"}}
-	}
-	return CommandSequence{{"sh", "-c", "curl -LsSf https://code.kimi.com/install.sh | bash"}}
+	// Require uv (astral) to securely install the python cli tool.
+	// We explicitly request python 3.13 as strictly defined by Kimi upstream.
+	return CommandSequence{{"uv", "tool", "install", "--python", "3.13", "kimi-cli"}}
 }
 
 func (profileResolver) ResolveComponentInstall(profile system.PlatformProfile, component model.ComponentID) (CommandSequence, error) {

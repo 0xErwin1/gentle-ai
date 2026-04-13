@@ -134,6 +134,7 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
 
 ### Kimi
 
+- Installation requires the `uv` Python package manager (`uv tool install kimi-cli`).
 - Root custom agent at `~/.kimi/agents/gentleman.yaml` with `system_prompt_path: ../KIMI.md`
 - `KIMI.md` is a thin Jinja template that includes modular prompt files:
   `persona.md`, `output-style.md`, `engram-protocol.md`, `sdd-orchestrator.md`

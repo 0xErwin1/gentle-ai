@@ -370,16 +370,16 @@ func TestResolveAgentInstall(t *testing.T) {
 			want:    CommandSequence{{"npm", "install", "-g", "opencode-ai"}},
 		},
 		{
-			name:    "kimi on windows uses official installer script",
+			name:    "kimi on windows uses uv to strictly enforce secure package installation",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			agent:   model.AgentKimi,
-			want:    CommandSequence{{"powershell", "-NoProfile", "-Command", "Invoke-RestMethod https://code.kimi.com/install.ps1 | Invoke-Expression"}},
+			want:    CommandSequence{{"uv", "tool", "install", "--python", "3.13", "kimi-cli"}},
 		},
 		{
-			name:    "kimi on unix uses official install script",
+			name:    "kimi on unix uses uv to strictly enforce secure package installation",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
 			agent:   model.AgentKimi,
-			want:    CommandSequence{{"sh", "-c", "curl -LsSf https://code.kimi.com/install.sh | bash"}},
+			want:    CommandSequence{{"uv", "tool", "install", "--python", "3.13", "kimi-cli"}},
 		},
 		{
 			name:    "unsupported agent returns error",

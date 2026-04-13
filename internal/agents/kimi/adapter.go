@@ -1,11 +1,9 @@
 // Package kimi provides Kimi Code CLI agent integration.
 //
-// Security Note: 
-// The official Kimi installation utilizes a pipe-to-shell pattern (`curl | bash` 
-// or `Invoke-RestMethod | Invoke-Expression`). While this is the recommended path
-// from the upstream maintainers (code.kimi.com), it introduces a potential supply 
-// chain vector. Future enhancements should evaluate checksum validation or a 
-// `--verify` flag to harden this process.
+// Integration Note:
+// This adapter natively relies on Astral's `uv` package manager 
+// (`uv tool install kimi-cli`) to securely download and run Kimi CLI, 
+// avoiding upstream's pipe-to-shell bootstrap scripts.
 package kimi
 
 import (
