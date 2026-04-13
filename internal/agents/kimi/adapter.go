@@ -81,7 +81,11 @@ func (a *Adapter) findKimi() (string, error) {
 		return path, nil
 	}
 
-	home, _ := a.userHomeDir()
+	home, err := a.userHomeDir()
+	if err != nil || home == "" {
+		return "", fmt.Errorf("kimi not found in PATH and home directory is unavailable")
+	}
+
 	fallbacks := []string{
 		filepath.Join(home, ".local", "bin", binaryName()),
 		filepath.Join(home, "bin", binaryName()),

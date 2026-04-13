@@ -198,11 +198,7 @@ func TestAdapter_Detect_FallbackPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create fake kimi.exe in a fallback location
-	fakeKimiDir := filepath.Join(tmpDir, "fake", "Python311", "Scripts")
-	os.MkdirAll(fakeKimiDir, 0755)
-	fakeKimi := filepath.Join(fakeKimiDir, "kimi.exe")
-	os.WriteFile(fakeKimi, []byte("fake"), 0755)
+
 
 	a := &Adapter{
 		lookPath: func(string) (string, error) {

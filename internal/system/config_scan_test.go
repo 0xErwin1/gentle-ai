@@ -79,6 +79,8 @@ func TestScanConfigs_AgentFieldMatchesModelAgentID(t *testing.T) {
 		"antigravity":    false,
 		"windsurf":       false,
 		"kimi":           false,
+		"qwen-code":      false,
+		"kiro-ide":       false,
 	}
 
 	for _, c := range configs {
