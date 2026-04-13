@@ -190,10 +190,10 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	changed := false
 
 	// 1. Inject SDD orchestrator into the global system prompt for agents that
-	// rely on prompt files. OpenCode is handled differently: its orchestrator
-	// instructions must be scoped to the sdd-orchestrator agent only, otherwise
-	// the SDD phase sub-agents inherit coordinator-only delegation rules.
-	if adapter.Agent() != model.AgentOpenCode {
+	// rely on prompt files. OpenCode and Kilocode are handled differently: their
+	// orchestrator instructions must be scoped to the sdd-orchestrator agent only,
+	// otherwise the SDD phase sub-agents inherit coordinator-only delegation rules.
+	if adapter.Agent() != model.AgentOpenCode && adapter.Agent() != model.AgentKilocode {
 		switch adapter.SystemPromptStrategy() {
 		case model.StrategyMarkdownSections:
 			result, err := injectMarkdownSections(homeDir, adapter, opts.ClaudeModelAssignments)
@@ -233,30 +233,43 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 
 	// 1b. If StrictTDD is enabled, inject the strict-tdd-mode marker section
 	// into the system prompt file so agents know Strict TDD is active.
-	if opts.StrictTDD && adapter.Agent() != model.AgentOpenCode &&
-		adapter.SystemPromptStrategy() != model.StrategyJinjaModules {
-		promptPath := adapter.SystemPromptFile(homeDir)
-		strictTDDContent := "Strict TDD Mode: enabled"
-		existing, readErr := readFileOrEmpty(promptPath)
-		if readErr != nil {
-			return InjectionResult{}, readErr
-		}
-		updated := filemerge.InjectMarkdownSection(existing, "strict-tdd-mode", strictTDDContent)
-		writeResult, writeErr := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
-		if writeErr != nil {
-			return InjectionResult{}, writeErr
-		}
-		changed = changed || writeResult.Changed
-		// Only append path once (it may already be in files from step 1).
-		alreadyInFiles := false
-		for _, f := range files {
-			if f == promptPath {
-				alreadyInFiles = true
-				break
+	if opts.StrictTDD && adapter.Agent() != model.AgentOpenCode && adapter.Agent() != model.AgentKilocode {
+		if adapter.SystemPromptStrategy() == model.StrategyJinjaModules {
+			// Write the strict-tdd-mode marker as a standalone Jinja include module.
+			// The static KIMI.md template references it via {% include "strict-tdd-mode.md" %}.
+			configDir := adapter.GlobalConfigDir(homeDir)
+			content := "Strict TDD Mode: enabled"
+			modulePath := filepath.Join(configDir, "strict-tdd-mode.md")
+			writeResult, err := filemerge.WriteFileAtomic(modulePath, []byte(content), 0o644)
+			if err != nil {
+				return InjectionResult{}, err
 			}
-		}
-		if !alreadyInFiles {
-			files = append(files, promptPath)
+			changed = changed || writeResult.Changed
+			files = append(files, modulePath)
+		} else {
+			promptPath := adapter.SystemPromptFile(homeDir)
+			strictTDDContent := "Strict TDD Mode: enabled"
+			existing, readErr := readFileOrEmpty(promptPath)
+			if readErr != nil {
+				return InjectionResult{}, readErr
+			}
+			updated := filemerge.InjectMarkdownSection(existing, "strict-tdd-mode", strictTDDContent)
+			writeResult, writeErr := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+			if writeErr != nil {
+				return InjectionResult{}, writeErr
+			}
+			changed = changed || writeResult.Changed
+			// Only append path once (it may already be in files from step 1).
+			alreadyInFiles := false
+			for _, f := range files {
+				if f == promptPath {
+					alreadyInFiles = true
+					break
+				}
+			}
+			if !alreadyInFiles {
+				files = append(files, promptPath)
+			}
 		}
 	}
 
@@ -297,7 +310,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// os.ReadFile call due to VFS/NTFS metadata caching, which caused the spurious
 	// "post-check: .../opencode.json missing sdd-apply sub-agent" error.
 	var mergedSettingsBytes []byte
-	if adapter.Agent() == model.AgentOpenCode {
+	if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
 		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
 			overlayContent, err := assets.Read(overlayAssetPath(sddMode))
@@ -358,7 +371,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			mergedSettingsBytes = agentResult.merged
 
 			// Install OpenCode plugins (all SDD modes).
-			pluginResult, err := installOpenCodePlugins(homeDir)
+			pluginResult, err := installOpenCodePlugins(homeDir, adapter)
 			if err != nil {
 				return InjectionResult{}, err
 			}
@@ -673,11 +686,11 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir string) ([]byte, erro
 }
 
 // installOpenCodePlugins copies the background-agents plugin and installs its
-// npm/bun dependency into ~/.config/opencode/. Returns an error with an
-// actionable message if the package manager is present but the install fails.
-// If no package manager is available, the install is skipped (soft failure).
-func installOpenCodePlugins(homeDir string) (InjectionResult, error) {
-	opencodeDir := filepath.Join(homeDir, ".config", "opencode")
+// npm/bun dependency into the agent's global config directory. Returns an error
+// with an actionable message if the package manager is present but the install
+// fails. If no package manager is available, the install is skipped (soft failure).
+func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	opencodeDir := adapter.GlobalConfigDir(homeDir)
 	pluginsDir := filepath.Join(opencodeDir, "plugins")
 
 	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {

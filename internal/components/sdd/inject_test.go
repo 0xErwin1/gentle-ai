@@ -2639,6 +2639,7 @@ func TestInjectCodexIsIdempotent(t *testing.T) {
 // the in-memory merged bytes returned by mergeJSONFile instead.
 func TestInjectOpenCodeMultiModeWithPreExistingMinimalConfig(t *testing.T) {
 	home := t.TempDir()
+	mockNoPackageManager(t)
 
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
@@ -2694,6 +2695,7 @@ func TestInjectOpenCodeMultiModeWithPreExistingMinimalConfig(t *testing.T) {
 // and passes the post-check without any disk re-read race.
 func TestInjectOpenCodeMultiModeWithPreExistingFullConfig(t *testing.T) {
 	home := t.TempDir()
+	mockNoPackageManager(t)
 
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
@@ -2981,7 +2983,8 @@ func TestInjectCursorWritesSubAgentFiles(t *testing.T) {
 	// Verify result.Files includes agent paths
 	hasAgentFile := false
 	for _, f := range result.Files {
-		if strings.Contains(f, ".cursor/agents/") {
+		// Normalize for Windows paths
+		if strings.Contains(strings.ReplaceAll(f, `\`, `/`), ".cursor/agents/") {
 			hasAgentFile = true
 			break
 		}
@@ -3134,6 +3137,12 @@ func TestFindProjectRootPackageJsonFallback(t *testing.T) {
 		t.Fatalf("write package.json: %v", err)
 	}
 
+	// Isolation: add a strong marker at the test sandbox root to stop findProjectRoot
+	// from walking up into the real home directory on Windows.
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.git): %v", err)
+	}
+
 	subDir := filepath.Join(root, "src", "components")
 	if err := os.MkdirAll(subDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll(subDir): %v", err)
@@ -3234,6 +3243,12 @@ func TestFindProjectRootMultiplePackageJsonPicksHighest(t *testing.T) {
 	// root/package.json  ← highest ancestor, should win
 	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"name":"root"}`), 0o644); err != nil {
 		t.Fatalf("write root package.json: %v", err)
+	}
+
+	// Isolation: add a strong marker at the test sandbox root to stop findProjectRoot
+	// from walking up into the real home directory on Windows.
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(.git): %v", err)
 	}
 
 	// root/packages/app/package.json  ← closer to start, should NOT win
