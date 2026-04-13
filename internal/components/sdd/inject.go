@@ -190,10 +190,10 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	changed := false
 
 	// 1. Inject SDD orchestrator into the global system prompt for agents that
-	// rely on prompt files. OpenCode is handled differently: its orchestrator
-	// instructions must be scoped to the sdd-orchestrator agent only, otherwise
-	// the SDD phase sub-agents inherit coordinator-only delegation rules.
-	if adapter.Agent() != model.AgentOpenCode {
+	// rely on prompt files. OpenCode and Kilocode are handled differently: their
+	// orchestrator instructions must be scoped to the sdd-orchestrator agent only,
+	// otherwise the SDD phase sub-agents inherit coordinator-only delegation rules.
+	if adapter.Agent() != model.AgentOpenCode && adapter.Agent() != model.AgentKilocode {
 		switch adapter.SystemPromptStrategy() {
 		case model.StrategyMarkdownSections:
 			result, err := injectMarkdownSections(homeDir, adapter, opts.ClaudeModelAssignments)
@@ -220,7 +220,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 
 	// 1b. If StrictTDD is enabled, inject the strict-tdd-mode marker section
 	// into the system prompt file so agents know Strict TDD is active.
-	if opts.StrictTDD && adapter.Agent() != model.AgentOpenCode {
+	if opts.StrictTDD && adapter.Agent() != model.AgentOpenCode && adapter.Agent() != model.AgentKilocode {
 		promptPath := adapter.SystemPromptFile(homeDir)
 		strictTDDContent := "Strict TDD Mode: enabled"
 		existing, readErr := readFileOrEmpty(promptPath)
@@ -283,7 +283,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// os.ReadFile call due to VFS/NTFS metadata caching, which caused the spurious
 	// "post-check: .../opencode.json missing sdd-apply sub-agent" error.
 	var mergedSettingsBytes []byte
-	if adapter.Agent() == model.AgentOpenCode {
+	if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
 		settingsPath := adapter.SettingsPath(homeDir)
 		if settingsPath != "" {
 			overlayContent, err := assets.Read(overlayAssetPath(sddMode))
@@ -344,7 +344,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			mergedSettingsBytes = agentResult.merged
 
 			// Install OpenCode plugins (all SDD modes).
-			pluginResult, err := installOpenCodePlugins(homeDir)
+			pluginResult, err := installOpenCodePlugins(homeDir, adapter)
 			if err != nil {
 				return InjectionResult{}, err
 			}
@@ -654,11 +654,11 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir string) ([]byte, erro
 }
 
 // installOpenCodePlugins copies the background-agents plugin and installs its
-// npm/bun dependency into ~/.config/opencode/. Returns an error with an
-// actionable message if the package manager is present but the install fails.
-// If no package manager is available, the install is skipped (soft failure).
-func installOpenCodePlugins(homeDir string) (InjectionResult, error) {
-	opencodeDir := filepath.Join(homeDir, ".config", "opencode")
+// npm/bun dependency into the agent's global config directory. Returns an error
+// with an actionable message if the package manager is present but the install
+// fails. If no package manager is available, the install is skipped (soft failure).
+func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
+	opencodeDir := adapter.GlobalConfigDir(homeDir)
 	pluginsDir := filepath.Join(opencodeDir, "plugins")
 
 	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
