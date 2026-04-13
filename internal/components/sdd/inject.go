@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
@@ -759,11 +760,21 @@ func installOpenCodePlugins(homeDir string, adapter agents.Adapter) (InjectionRe
 	}
 
 	// Post-install validation: if a package manager ran and claimed success,
-	// confirm the package actually landed on disk.
+	// confirm the package actually landed on disk. On Windows/WSL2, we use a
+	// small retry loop to account for NTFS/metadata caching delays.
 	if pkgMissing && pkgMgrRan {
-		if _, statErr := os.Stat(nmPath); os.IsNotExist(statErr) {
+		found := false
+		for i := 0; i < 6; i++ { // Retry for up to 3 seconds
+			if _, statErr := os.Stat(nmPath); statErr == nil {
+				found = true
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+
+		if !found {
 			// Package manager reported success but the package still isn't there.
-			// This is unusual (e.g. bun wrote to a different location). Surface it.
+			// This covers both command failure and extreme caching delay.
 			return InjectionResult{}, fmt.Errorf(
 				"post-install check: %q was not found after install in %q — "+
 					"the background-agents plugin will fail to load.\n"+

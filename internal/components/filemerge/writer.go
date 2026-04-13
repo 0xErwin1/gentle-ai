@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 const maxAtomicFileSize = 16 << 20
@@ -79,8 +80,13 @@ func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult
 		return WriteResult{}, fmt.Errorf("open parent directory for %q: %w", path, err)
 	}
 	defer dirFD.Close()
-	if err := dirFD.Sync(); err != nil {
-		return WriteResult{}, fmt.Errorf("sync parent directory for %q: %w", path, err)
+
+	// On Windows, syncing a directory handle is not supported and returns
+	// "Access is denied". We skip it to maintain cross-platform compatibility.
+	if runtime.GOOS != "windows" {
+		if err := dirFD.Sync(); err != nil {
+			return WriteResult{}, fmt.Errorf("sync parent directory for %q: %w", path, err)
+		}
 	}
 
 	cleanup = false
