@@ -40,6 +40,22 @@ const (
 	ComponentTheme      ComponentID = "theme"
 )
 
+type UninstallMode string
+
+const (
+	UninstallModePartial      UninstallMode = "partial"
+	UninstallModeFull         UninstallMode = "full"
+	UninstallModeFullRemove   UninstallMode = "full-remove"
+	UninstallModeCleanInstall UninstallMode = "clean-install"
+)
+
+type EngramUninstallScope string
+
+const (
+	EngramUninstallScopeGlobal  EngramUninstallScope = "global"
+	EngramUninstallScopeProject EngramUninstallScope = "project"
+)
+
 type SkillID string
 
 const (
