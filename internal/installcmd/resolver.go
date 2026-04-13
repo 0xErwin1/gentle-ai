@@ -76,10 +76,20 @@ func resolveKilocodeInstall(profile system.PlatformProfile) CommandSequence {
 // To avoid the security risks of pipe-to-shell patterns (curl | bash),
 // we execute the underlying command that the scripts alias: `uv tool install`.
 func resolveKimiInstall(profile system.PlatformProfile) CommandSequence {
-	// Require uv (astral) to securely install the python cli tool.
+	// Kimi CLI is a python-based tool. We use Astral's `uv` as our deterministic 
+	// prerequisite manager to ensure secure and isolated installs.
+	// 
+	// Even though the command is identical across platforms, we use the profile 
+	// here to validate that we are on a platform where our `uv` approach is 
+	// officially supported and tested by Gentleman.
+	if !profile.Supported {
+		return nil
+	}
+
 	// We explicitly request python 3.13 as strictly defined by Kimi upstream.
 	return CommandSequence{{"uv", "tool", "install", "--python", "3.13", "kimi-cli"}}
 }
+
 
 func (profileResolver) ResolveComponentInstall(profile system.PlatformProfile, component model.ComponentID) (CommandSequence, error) {
 	switch component {

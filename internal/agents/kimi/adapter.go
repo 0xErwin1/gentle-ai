@@ -217,10 +217,13 @@ func (a *Adapter) EmbeddedSubAgentsDir() string {
 }
 
 func (a *Adapter) PostInstallMessage(homeDir string) string {
+	gentlemanYaml := filepath.Join(homeDir, ".kimi", "agents", "gentleman.yaml")
+	skillsRoot := filepath.Join(homeDir, ".config", "agents", "skills")
+
 	return fmt.Sprintf(`Kimi Code configured!
 
 Usage:
-  kimi --agent-file %s/.kimi/agents/gentleman.yaml
+  kimi --agent-file %s
 
 Native SDD entrypoints:
   /skill:sdd-init
@@ -234,8 +237,9 @@ Native SDD entrypoints:
   /skill:sdd-archive
 
 Skills root:
-  %s/.config/agents/skills`, homeDir, homeDir)
+  %s`, gentlemanYaml, skillsRoot)
 }
+
 
 // --- Helpers ---
 
@@ -263,3 +267,38 @@ func binaryName() string {
 	}
 	return "kimi"
 }
+
+// BootstrapTemplate ensures the base KIMI.md template exists in the agent's config directory.
+// It is used by the installation pipeline to guarantee that modular components 
+// (SDD, Engram) can be included even if the Persona component is not installed.
+func BootstrapTemplate(homeDir string) error {
+	kimiDir := ConfigPath(homeDir)
+	if err := os.MkdirAll(kimiDir, 0755); err != nil {
+		return fmt.Errorf("create kimi config dir: %w", err)
+	}
+
+	skeletonPath := filepath.Join(kimiDir, "KIMI.md")
+	
+	// We always write the skeleton to ensure any missing includes are restored.
+	// Since KIMI.md is the 'router' for modular Jinja components, it should 
+	// remain managed by the framework.
+	content := `# Kimi Code System Prompt
+{% include "persona.md" %}
+{% include "sdd-orchestrator.md" %}
+{% include "engram-protocol.md" %}
+`
+	if err := os.WriteFile(skeletonPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("write KIMI.md skeleton: %w", err)
+	}
+
+	// Kimi considers config.toml a required file. We create an empty one if 
+	// it's missing to satisfy verification during a minimalist install.
+	configPath := filepath.Join(kimiDir, "config.toml")
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		return os.WriteFile(configPath, []byte("# Kimi Code Config\n"), 0644)
+	}
+
+	return nil
+}
+
+

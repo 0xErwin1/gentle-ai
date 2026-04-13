@@ -573,6 +573,21 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				files = append(files, outPath)
 			}
 		}
+
+		// Post-check: verify critical agent files exist (either .md or .yaml)
+		for _, phase := range []string{"sdd-apply", "sdd-verify"} {
+			found := false
+			for _, ext := range []string{".md", ".yaml"} {
+				checkPath := filepath.Join(agentsDir, phase+ext)
+				if info, err := os.Stat(checkPath); err == nil && info.Size() >= 10 {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return InjectionResult{}, fmt.Errorf("post-check: sub-agent %q not written correctly (missing or truncated)", phase)
+			}
+		}
 	}
 
 	// 4. Post-injection verification — catch silent failures.

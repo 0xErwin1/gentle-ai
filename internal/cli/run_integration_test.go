@@ -1742,3 +1742,42 @@ func TestOpenCodePersonaBeforeSDDPreservesAllSections(t *testing.T) {
 		t.Error("opencode.json missing sdd-orchestrator agent entry (SDD not injected)")
 	}
 }
+func TestRunInstallKimiBootstrapsHub(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = missingBinaryLookPath
+
+	// Install Kimi with minimalist component (e.g., permissions only, NO persona).
+	_, err := RunInstall(
+		[]string{"--agent", "kimi", "--component", "permissions"},
+		system.DetectionResult{},
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	// Verify that KIMI.md was created in the agent's config dir.
+	hubPath := filepath.Join(home, ".kimi", "KIMI.md")
+	if _, err := os.Stat(hubPath); err != nil {
+		t.Fatalf("expected Kimi prompt hub file %q to be bootstrapped: %v", hubPath, err)
+	}
+
+	// Verify content includes sub-modules (basic check).
+	content, err := os.ReadFile(hubPath)
+	if err != nil {
+		t.Fatalf("failed to read bootstrapped hub: %v", err)
+	}
+	if !strings.Contains(string(content), "{% include \"persona.md\" %}") {
+		t.Errorf("bootstrapped hub missing modular include: %s", string(content))
+	}
+}
+

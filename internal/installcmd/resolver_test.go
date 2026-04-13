@@ -371,16 +371,17 @@ func TestResolveAgentInstall(t *testing.T) {
 		},
 		{
 			name:    "kimi on windows uses uv to strictly enforce secure package installation",
-			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget"},
+			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true},
 			agent:   model.AgentKimi,
 			want:    CommandSequence{{"uv", "tool", "install", "--python", "3.13", "kimi-cli"}},
 		},
 		{
 			name:    "kimi on unix uses uv to strictly enforce secure package installation",
-			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt", Supported: true},
 			agent:   model.AgentKimi,
 			want:    CommandSequence{{"uv", "tool", "install", "--python", "3.13", "kimi-cli"}},
 		},
+
 		{
 			name:    "unsupported agent returns error",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},

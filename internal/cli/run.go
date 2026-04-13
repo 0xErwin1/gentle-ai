@@ -26,6 +26,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/verify"
 )
@@ -288,7 +289,17 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	apply := make([]pipeline.Step, 0, len(r.resolved.Agents)+len(r.resolved.OrderedComponents)+1)
 	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state})
 
+	// Before installing components, ensure modular agents have their system prompt hub.
+	// This ensures that SDD or Engram can inject their modules even if Persona is skipped.
 	for _, agent := range r.resolved.Agents {
+		if agent == model.AgentKimi {
+			apply = append(apply, kimiSystemPromptHubStep{id: "agent:kimi-prompt-hub", homeDir: r.homeDir})
+		}
+	}
+
+
+	for _, agent := range r.resolved.Agents {
+
 		apply = append(apply, agentInstallStep{id: "agent:" + string(agent), agent: agent, homeDir: r.homeDir, profile: r.profile})
 	}
 
@@ -438,6 +449,22 @@ func (s agentInstallStep) Run() error {
 
 	return runCommandSequence(commands)
 }
+
+type kimiSystemPromptHubStep struct {
+	id      string
+	homeDir string
+}
+
+func (s kimiSystemPromptHubStep) ID() string {
+	return s.id
+}
+
+
+func (s kimiSystemPromptHubStep) Run() error {
+	return kimi.BootstrapTemplate(s.homeDir)
+}
+
+
 
 type componentApplyStep struct {
 	id           string
@@ -914,8 +941,19 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 		}
 	}
 
+	// Always ensure the main system prompt file is included for verification if the agent
+	// supports modular system prompts (like Kimi), even if no specific component 
+	// (like Persona) was selected. This prevents false negatives when the skeleton 
+	// is bootstrapped but not explicitly owned by any other component path list.
+	for _, adapter := range adapters {
+		if adapter.SystemPromptStrategy() == model.StrategyJinjaModules {
+			paths = append(paths, adapter.SystemPromptFile(homeDir))
+		}
+	}
+
 	return paths
 }
+
 
 type sddSubAgentAdapter interface {
 	SupportsSubAgents() bool
