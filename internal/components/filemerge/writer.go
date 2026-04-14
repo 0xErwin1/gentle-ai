@@ -2,6 +2,7 @@ package filemerge
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -9,6 +10,18 @@ import (
 	"path/filepath"
 	"runtime"
 )
+
+// runtimeGOOS and syncDirFn are package-level vars so tests can override them
+// without spawning a real Windows process.
+var runtimeGOOS = func() string { return runtime.GOOS }
+var syncDirFn = func(dir string) error {
+	fd, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open parent directory %q: %w", dir, err)
+	}
+	defer fd.Close()
+	return fd.Sync()
+}
 
 const maxAtomicFileSize = 16 << 20
 
@@ -75,15 +88,13 @@ func WriteFileAtomic(path string, content []byte, perm fs.FileMode) (WriteResult
 		return WriteResult{}, fmt.Errorf("replace %q atomically: %w", path, err)
 	}
 
-	dirFD, err := os.Open(dir)
-	if err != nil {
-		return WriteResult{}, fmt.Errorf("open parent directory for %q: %w", path, err)
-	}
-	defer dirFD.Close()
-	if err := dirFD.Sync(); err != nil && runtime.GOOS != "windows" {
-		// Parent directory sync is best-effort on Windows (temp dirs, AV, and some FS
-		// combinations return ERROR_ACCESS_DENIED). The temp file was fsync'd before rename.
-		return WriteResult{}, fmt.Errorf("sync parent directory for %q: %w", path, err)
+	// Sync the parent directory to flush the new directory entry to disk.
+	// On Windows, NTFS returns ErrPermission when syncing a directory fd — tolerate
+	// that specific error only. Any other error (e.g. disk full) is still fatal.
+	if err := syncDirFn(dir); err != nil {
+		if !(runtimeGOOS() == "windows" && errors.Is(err, os.ErrPermission)) {
+			return WriteResult{}, fmt.Errorf("sync parent directory for %q: %w", path, err)
+		}
 	}
 
 	cleanup = false
