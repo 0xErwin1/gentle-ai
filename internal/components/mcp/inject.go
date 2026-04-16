@@ -3,6 +3,7 @@ package mcp
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
@@ -79,6 +80,9 @@ func injectMCPConfigFile(homeDir string, adapter agents.Adapter) (InjectionResul
 	}
 	if adapter.Agent() == model.AgentAntigravity {
 		overlay = AntigravityContext7OverlayJSON()
+		if err := initAntigravitySettings(homeDir, adapter); err != nil {
+			return InjectionResult{}, err
+		}
 	}
 
 	// For mcp.json pattern, merge the server config as a named entry.
@@ -88,6 +92,24 @@ func injectMCPConfigFile(homeDir string, adapter agents.Adapter) (InjectionResul
 	}
 
 	return InjectionResult{Changed: settingsWrite.Changed, Files: []string{path}}, nil
+}
+
+// initAntigravitySettings creates settings.json for Antigravity if absent.
+// It copies ~/.gemini/settings.json when available, otherwise writes {}.
+func initAntigravitySettings(homeDir string, adapter agents.Adapter) error {
+	settingsPath := adapter.SettingsPath(homeDir)
+	if settingsPath == "" {
+		return nil
+	}
+	if _, err := os.Stat(settingsPath); err == nil {
+		return nil
+	}
+	content, err := os.ReadFile(filepath.Join(homeDir, ".gemini", "settings.json"))
+	if err != nil {
+		content = []byte("{}")
+	}
+	_, err = filemerge.WriteFileAtomic(settingsPath, content, 0o644)
+	return err
 }
 
 func mergeJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {

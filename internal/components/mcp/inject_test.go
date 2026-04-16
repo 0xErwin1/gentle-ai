@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/antigravity"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
@@ -151,6 +152,67 @@ func TestInjectCodexTOMLStrategyIsSkipped(t *testing.T) {
 	configTOML := filepath.Join(home, ".codex", "config.toml")
 	if _, err := os.Stat(configTOML); err == nil {
 		t.Fatal("config.toml should NOT be written by the context7 injector")
+	}
+}
+
+func TestInjectAntigravityWritesMCPConfigAndInitSettingsJSON(t *testing.T) {
+	home := t.TempDir()
+	adapter := antigravity.NewAdapter()
+
+	result, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject(antigravity) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(antigravity) changed = false; want true")
+	}
+
+	mcpPath := adapter.MCPConfigPath(home, "context7")
+	content, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf("ReadFile(mcp_config.json) error = %v", err)
+	}
+	if !strings.Contains(string(content), `"context7"`) {
+		t.Fatalf("mcp_config.json missing context7 entry; got:\n%s", content)
+	}
+
+	settingsPath := adapter.SettingsPath(home)
+	if _, err := os.Stat(settingsPath); err != nil {
+		t.Fatalf("settings.json not created: %v", err)
+	}
+
+	// second call must be idempotent
+	second, err := Inject(home, adapter)
+	if err != nil {
+		t.Fatalf("Inject(antigravity) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("Inject(antigravity) second changed = true; want false")
+	}
+}
+
+func TestInjectAntigravitySettingsCopiedFromGemini(t *testing.T) {
+	home := t.TempDir()
+	geminiSettings := filepath.Join(home, ".gemini", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(geminiSettings), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	src := []byte(`{"theme":"dark"}`)
+	if err := os.WriteFile(geminiSettings, src, 0o644); err != nil {
+		t.Fatalf("WriteFile(gemini settings) error = %v", err)
+	}
+
+	adapter := antigravity.NewAdapter()
+	if _, err := Inject(home, adapter); err != nil {
+		t.Fatalf("Inject(antigravity) error = %v", err)
+	}
+
+	got, err := os.ReadFile(adapter.SettingsPath(home))
+	if err != nil {
+		t.Fatalf("ReadFile(settings.json) error = %v", err)
+	}
+	if string(got) != string(src) {
+		t.Fatalf("settings.json = %q; want %q", got, src)
 	}
 }
 

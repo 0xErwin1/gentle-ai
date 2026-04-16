@@ -49,7 +49,8 @@ func SetupAgentSlug(agent model.AgentID) (string, bool) {
 		// Codex slug registered for future MCP support; ShouldAttemptSetup gates on SupportsMCP().
 		return "codex", true
 	case model.AgentAntigravity:
-		return "antigravity", true
+		// Antigravity is Gemini CLI-based; the engram binary has no "antigravity" slug.
+		return "gemini-cli", true
 	case model.AgentWindsurf:
 		return "windsurf", true
 	case model.AgentCursor, model.AgentVSCodeCopilot:
