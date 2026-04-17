@@ -30,6 +30,7 @@ type SyncFlags struct {
 	Agents             []string
 	Skills             []string
 	SDDMode            string
+	SDDProfileStrategy string
 	StrictTDD          bool
 	IncludePermissions bool
 	IncludeTheme       bool
@@ -72,6 +73,7 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	registerListFlag(fs, "skill", &opts.Skills)
 	registerListFlag(fs, "skills", &opts.Skills)
 	fs.StringVar(&opts.SDDMode, "sdd-mode", "", "SDD orchestrator mode: single or multi (default: single)")
+	fs.StringVar(&opts.SDDProfileStrategy, "sdd-profile-strategy", "", "OpenCode SDD profile sync strategy: generated-multi or external-single-active (default: auto-detect)")
 	fs.BoolVar(&opts.StrictTDD, "strict-tdd", false, "enable strict TDD mode for SDD agents (RED → GREEN → REFACTOR)")
 	fs.BoolVar(&opts.IncludePermissions, "include-permissions", false, "include permissions component in sync")
 	fs.BoolVar(&opts.IncludeTheme, "include-theme", false, "include theme component in sync")
@@ -87,6 +89,12 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 		return SyncFlags{}, fmt.Errorf("unexpected sync argument %q", fs.Arg(0))
 	}
 
+	strategy, err := parseProfileSyncStrategy(opts.SDDProfileStrategy)
+	if err != nil {
+		return SyncFlags{}, err
+	}
+	opts.SDDProfileStrategy = string(strategy)
+
 	// Parse --profile flags into model.Profile values.
 	if len(opts.rawProfiles) > 0 || len(opts.rawProfilePhases) > 0 {
 		profiles, err := parseProfileFlags(opts.rawProfiles, opts.rawProfilePhases)
@@ -97,6 +105,20 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	}
 
 	return opts, nil
+}
+
+func parseProfileSyncStrategy(raw string) (model.SDDProfileStrategyID, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", nil
+	}
+
+	switch model.SDDProfileStrategyID(value) {
+	case model.SDDProfileStrategyGeneratedMulti, model.SDDProfileStrategyExternalSingleActive:
+		return model.SDDProfileStrategyID(value), nil
+	default:
+		return "", fmt.Errorf("unsupported sdd-profile-strategy %q (valid: generated-multi, external-single-active)", raw)
+	}
 }
 
 // parseProfileFlags converts the raw --profile and --profile-phase string values
@@ -271,12 +293,13 @@ func BuildSyncSelection(flags SyncFlags, agentIDs []model.AgentID) model.Selecti
 	}
 
 	return model.Selection{
-		Agents:     agentIDs,
-		Components: components,
-		SDDMode:    sddMode,
-		StrictTDD:  flags.StrictTDD,
-		Skills:     skillIDs,
-		Profiles:   flags.Profiles,
+		Agents:             agentIDs,
+		Components:         components,
+		SDDMode:            sddMode,
+		SDDProfileStrategy: model.SDDProfileStrategyID(flags.SDDProfileStrategy),
+		StrictTDD:          flags.StrictTDD,
+		Skills:             skillIDs,
+		Profiles:           flags.Profiles,
 		// Preset is set to full-gentleman so selectedSkillIDs() returns the
 		// correct default skill set when no explicit skills are provided.
 		Preset: model.PresetFullGentleman,
@@ -458,13 +481,15 @@ func (s componentSyncStep) Run() error {
 		return nil
 
 	case model.ComponentSDD:
+		profileStrategy := sdd.ResolveProfileStrategy(s.homeDir, s.selection.SDDProfileStrategy)
+
 		// Resolve profiles for injection:
 		// - When profiles are explicitly provided (TUI/CLI), use them directly.
 		// - On a regular sync (no explicit profiles), detect existing named profiles
 		//   from disk so their orchestrator prompts are refreshed from updated embedded
 		//   assets while model assignments are preserved.
 		profiles := s.selection.Profiles
-		if len(profiles) == 0 {
+		if len(profiles) == 0 && profileStrategy != model.SDDProfileStrategyExternalSingleActive {
 			settingsPath := ""
 			for _, adapter := range adapters {
 				if adapter.Agent() == model.AgentOpenCode {
@@ -484,18 +509,21 @@ func (s componentSyncStep) Run() error {
 		// If profiles exist (explicit or detected), SDDModeMulti is required:
 		// shared prompt files must be written and {file:...} refs must resolve.
 		sddMode := s.selection.SDDMode
-		if len(profiles) > 0 && sddMode == "" {
+		if profileStrategy == model.SDDProfileStrategyExternalSingleActive {
+			sddMode = model.SDDModeMulti
+		} else if len(profiles) > 0 && sddMode == "" {
 			sddMode = model.SDDModeMulti
 		}
 
 		for _, adapter := range adapters {
 			opts := sdd.InjectOptions{
-				OpenCodeModelAssignments: s.selection.ModelAssignments,
-				ClaudeModelAssignments:   s.selection.ClaudeModelAssignments,
-				KiroModelAssignments:     s.selection.KiroModelAssignments,
-				WorkspaceDir:             s.workspaceDir,
-				StrictTDD:                s.selection.StrictTDD,
-				Profiles:                 profiles,
+				OpenCodeModelAssignments:           s.selection.ModelAssignments,
+				ClaudeModelAssignments:             s.selection.ClaudeModelAssignments,
+				KiroModelAssignments:               s.selection.KiroModelAssignments,
+				WorkspaceDir:                       s.workspaceDir,
+				StrictTDD:                          s.selection.StrictTDD,
+				PreserveOpenCodeOrchestratorPrompt: profileStrategy == model.SDDProfileStrategyExternalSingleActive,
+				Profiles:                           profiles,
 			}
 			res, err := sdd.Inject(s.homeDir, adapter, sddMode, opts)
 			if err != nil {

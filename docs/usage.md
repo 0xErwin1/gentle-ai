@@ -150,6 +150,7 @@ gentle-ai -v
 | `--component` | Sync a specific component only: `sdd`, `engram`, `context7`, `skills`, `gga`, `permissions`, `theme` |
 | `--profile` | Create or update an SDD profile: `name:provider/model` (sets the default model for all phases) |
 | `--profile-phase` | Override a specific phase in a profile: `name:phase:provider/model` |
+| `--sdd-profile-strategy` | OpenCode profile sync strategy: `generated-multi` or `external-single-active` |
 | `--include-permissions` | Include permissions sync (opt-in) |
 | `--include-theme` | Include theme sync (opt-in) |
 
@@ -166,6 +167,9 @@ gentle-ai sync --profile-phase cheap:sdd-design:anthropic/claude-sonnet-4-202505
 gentle-ai sync \
   --profile cheap:openrouter/qwen/qwen3-30b-a3b:free \
   --profile premium:anthropic/claude-sonnet-4-20250514
+
+# Use compatibility mode with an external OpenCode profile manager
+gentle-ai sync --agent opencode --sdd-profile-strategy external-single-active
 ```
 
 See [OpenCode SDD Profiles](opencode-profiles.md) for the full guide.

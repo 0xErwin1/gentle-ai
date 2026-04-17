@@ -63,6 +63,45 @@ func ProfilePhaseOrder() []string {
 	return append([]string(nil), profilePhaseOrder...)
 }
 
+// ResolveProfileStrategy resolves the sync profile strategy with this order:
+//  1. explicit (non-empty)
+//  2. auto-detect external-single-active when ~/.config/opencode/profiles/*.json exists
+//  3. fallback to generated-multi
+func ResolveProfileStrategy(homeDir string, explicit model.SDDProfileStrategyID) model.SDDProfileStrategyID {
+	if explicit != "" {
+		return explicit
+	}
+	if HasExternalProfileFiles(homeDir) {
+		return model.SDDProfileStrategyExternalSingleActive
+	}
+	return model.SDDProfileStrategyGeneratedMulti
+}
+
+// HasExternalProfileFiles returns true when the external OpenCode profiles
+// directory exists and contains at least one *.json profile file.
+func HasExternalProfileFiles(homeDir string) bool {
+	if strings.TrimSpace(homeDir) == "" {
+		return false
+	}
+
+	profilesDir := filepath.Join(homeDir, ".config", "opencode", "profiles")
+	entries, err := os.ReadDir(profilesDir)
+	if err != nil {
+		return false
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if strings.HasSuffix(strings.ToLower(entry.Name()), ".json") {
+			return true
+		}
+	}
+
+	return false
+}
+
 // ProfileAgentKeys returns the 11 agent keys for the given profile name.
 // When name is empty, it returns the default (unsuffixed) keys.
 // When name is non-empty, each key is suffixed with "-{name}".

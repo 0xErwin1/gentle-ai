@@ -68,6 +68,8 @@ If you want multi-mode in OpenCode:
 
 You can create multiple profiles (e.g., "cheap" for experimentation, "premium" for production) and switch between them freely.
 
+If you prefer a **runtime profile manager** that keeps profiles outside `opencode.json`, gentle-ai now supports that too. During sync, OpenCode can auto-detect external profile files under `~/.config/opencode/profiles/*.json` and switch to a safer compatibility path that preserves the active `sdd-orchestrator` prompt instead of overwriting it.
+
 **Full step-by-step guide**: [OpenCode SDD Profiles](opencode-profiles.md)
 
 ---
