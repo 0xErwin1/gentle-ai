@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
+	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
@@ -21,6 +23,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/internal/components/theme"
+	"github.com/gentleman-programming/gentle-ai/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
@@ -270,7 +273,7 @@ func newInstallRuntime(homeDir string, selection model.Selection, resolved plann
 func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	targets := backupTargets(r.homeDir, r.selection, r.resolved)
 	prepare := []pipeline.Step{
-		checkDependenciesStep{id: "prepare:check-dependencies", profile: r.profile},
+		checkDependenciesStep{id: "prepare:check-dependencies", profile: r.profile, homeDir: r.homeDir, selection: r.selection},
 		prepareBackupStep{
 			id:          "prepare:backup-snapshot",
 			snapshotter: backup.NewSnapshotter(),
@@ -287,7 +290,16 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	apply := make([]pipeline.Step, 0, len(r.resolved.Agents)+len(r.resolved.OrderedComponents)+1)
 	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state})
 
+	// Before installing components, ensure modular agents have their system prompt hub.
+	// This ensures that SDD or Engram can inject their modules even if Persona is skipped.
 	for _, agent := range r.resolved.Agents {
+		if agent == model.AgentKimi {
+			apply = append(apply, kimiSystemPromptHubStep{id: "agent:kimi-prompt-hub", homeDir: r.homeDir})
+		}
+	}
+
+	for _, agent := range r.resolved.Agents {
+
 		apply = append(apply, agentInstallStep{id: "agent:" + string(agent), agent: agent, homeDir: r.homeDir, profile: r.profile})
 	}
 
@@ -430,12 +442,32 @@ func (s agentInstallStep) Run() error {
 		return nil
 	}
 
+	if err := installcmd.ValidateAgentInstallPreflight(s.profile, s.agent); err != nil {
+		return fmt.Errorf("preflight for agent %q: %w", s.agent, err)
+	}
+
 	commands, err := adapter.InstallCommand(s.profile)
 	if err != nil {
 		return fmt.Errorf("resolve install command for %q: %w", s.agent, err)
 	}
+	if len(commands) == 0 {
+		return fmt.Errorf("install command for %q resolved to an empty sequence (unsupported platform or resolver misconfiguration)", s.agent)
+	}
 
 	return runCommandSequence(commands)
+}
+
+type kimiSystemPromptHubStep struct {
+	id      string
+	homeDir string
+}
+
+func (s kimiSystemPromptHubStep) ID() string {
+	return s.id
+}
+
+func (s kimiSystemPromptHubStep) Run() error {
+	return kimi.NewAdapter().BootstrapTemplate(s.homeDir)
 }
 
 type componentApplyStep struct {
@@ -823,7 +855,9 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 				paths = append(paths, adapter.SystemPromptFile(homeDir))
 			}
 		case model.ComponentSDD:
-			if adapter.SupportsSystemPrompt() {
+			// Jinja modular hubs (e.g. Kimi KIMI.md) are appended once below so SDD+Persona
+			// do not duplicate the same system prompt path.
+			if adapter.SupportsSystemPrompt() && adapter.SystemPromptStrategy() != model.StrategyJinjaModules {
 				paths = append(paths, adapter.SystemPromptFile(homeDir))
 			}
 			if adapter.SupportsSlashCommands() {
@@ -869,6 +903,7 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 					)
 				}
 			}
+			paths = append(paths, sddSubAgentPaths(homeDir, adapter)...)
 		case model.ComponentSkills:
 			for _, skillID := range selectedSkillIDs(selection) {
 				path := skills.SkillPathForAgent(homeDir, adapter, skillID)
@@ -896,7 +931,7 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 			if selection.Persona == model.PersonaCustom {
 				break
 			}
-			if adapter.SupportsSystemPrompt() {
+			if adapter.SupportsSystemPrompt() && adapter.SystemPromptStrategy() != model.StrategyJinjaModules {
 				paths = append(paths, adapter.SystemPromptFile(homeDir))
 			}
 			if selection.Persona == model.PersonaGentleman {
@@ -921,6 +956,44 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 		}
 	}
 
+	// Always ensure the main system prompt file is included for verification if the agent
+	// supports modular system prompts (like Kimi), even if no specific component
+	// (like Persona) was selected. This prevents false negatives when the skeleton
+	// is bootstrapped but not explicitly owned by any other component path list.
+	for _, adapter := range adapters {
+		if adapter.SystemPromptStrategy() == model.StrategyJinjaModules {
+			paths = append(paths, adapter.SystemPromptFile(homeDir))
+		}
+	}
+
+	return paths
+}
+
+type sddSubAgentAdapter interface {
+	SupportsSubAgents() bool
+	SubAgentsDir(homeDir string) string
+	EmbeddedSubAgentsDir() string
+}
+
+func sddSubAgentPaths(homeDir string, adapter agents.Adapter) []string {
+	sai, ok := adapter.(sddSubAgentAdapter)
+	if !ok || !sai.SupportsSubAgents() {
+		return nil
+	}
+
+	entries, err := assets.FS.ReadDir(sai.EmbeddedSubAgentsDir())
+	if err != nil {
+		return nil
+	}
+
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		paths = append(paths, filepath.Join(sai.SubAgentsDir(homeDir), entry.Name()))
+	}
+
 	return paths
 }
 
@@ -928,20 +1001,33 @@ func runPostApplyVerification(homeDir string, selection model.Selection, resolve
 	checks := make([]verify.Check, 0)
 	adapters := resolveAdapters(resolved.Agents)
 
+	seenPath := make(map[string]struct{})
+	var uniqueFilePaths []string
 	for _, component := range resolved.OrderedComponents {
 		for _, path := range componentPaths(homeDir, selection, adapters, component) {
-			currentPath := path
-			checks = append(checks, verify.Check{
-				ID:          "verify:file:" + currentPath,
-				Description: "required file exists",
-				Run: func(context.Context) error {
-					if _, err := os.Stat(currentPath); err != nil {
-						return err
-					}
-					return nil
-				},
-			})
+			if path == "" {
+				continue
+			}
+			if _, dup := seenPath[path]; dup {
+				continue
+			}
+			seenPath[path] = struct{}{}
+			uniqueFilePaths = append(uniqueFilePaths, path)
 		}
+	}
+
+	for _, currentPath := range uniqueFilePaths {
+		path := currentPath
+		checks = append(checks, verify.Check{
+			ID:          "verify:file:" + path,
+			Description: "required file exists",
+			Run: func(context.Context) error {
+				if _, err := os.Stat(path); err != nil {
+					return err
+				}
+				return nil
+			},
+		})
 	}
 
 	if hasComponent(resolved.OrderedComponents, model.ComponentEngram) {
@@ -1041,8 +1127,10 @@ func engramPathGuidance(shellPath string) string {
 // checkDependenciesStep verifies that required system dependencies are present.
 // It logs warnings for missing optional deps but only fails if required deps are missing.
 type checkDependenciesStep struct {
-	id      string
-	profile system.PlatformProfile
+	id        string
+	profile   system.PlatformProfile
+	homeDir   string
+	selection model.Selection
 }
 
 func (s checkDependenciesStep) ID() string {
@@ -1056,6 +1144,30 @@ func (s checkDependenciesStep) Run() error {
 	// surfaced on the TUI complete screen and by the actual install steps
 	// failing with real error messages.
 	_ = system.DetectDependencies(context.Background(), s.profile)
+	for _, agent := range s.selection.Agents {
+		adapter, err := agents.NewAdapter(agent)
+		if err != nil {
+			return fmt.Errorf("create adapter for %q: %w", agent, err)
+		}
+
+		if !adapter.SupportsAutoInstall() {
+			continue
+		}
+
+		if s.homeDir != "" {
+			installed, _, _, _, err := adapter.Detect(context.Background(), s.homeDir)
+			if err != nil {
+				return fmt.Errorf("detect agent %q: %w", agent, err)
+			}
+			if installed {
+				continue
+			}
+		}
+
+		if err := installcmd.ValidateAgentInstallPreflight(s.profile, agent); err != nil {
+			return fmt.Errorf("preflight for agent %q: %w", agent, err)
+		}
+	}
 	return nil
 }
 

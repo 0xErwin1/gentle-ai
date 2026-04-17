@@ -20,6 +20,13 @@ type InjectionResult struct {
 	Files   []string
 }
 
+// bootstrapper is an optional adapter capability: if an adapter implements
+// this interface, any injector that writes Jinja modules will first ensure
+// the base template (entry point) exists.
+type bootstrapper interface {
+	BootstrapTemplate(homeDir string) error
+}
+
 // EngramLookPath is the function used to resolve the engram binary path.
 // It is a package-level variable so it can be replaced in tests — both from
 // within the engram package and from external test packages (e.g. golden_test.go).
@@ -255,6 +262,26 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 			}
 			changed = changed || mdWrite.Changed
 			files = append(files, promptPath)
+
+		case model.StrategyJinjaModules:
+			// Ensure the base template exists for Jinja-based agents.
+			if bs, ok := adapter.(bootstrapper); ok {
+				if err := bs.BootstrapTemplate(homeDir); err != nil {
+					return InjectionResult{}, fmt.Errorf("bootstrap template: %w", err)
+				}
+			}
+
+			// Write the Engram protocol as a standalone Jinja include module.
+			// The static KIMI.md template references it via {% include "engram-protocol.md" %}.
+			configDir := adapter.GlobalConfigDir(homeDir)
+			protocolContent := assets.MustRead("claude/engram-protocol.md")
+			modulePath := filepath.Join(configDir, "engram-protocol.md")
+			mdWrite, err := filemerge.WriteFileAtomic(modulePath, []byte(protocolContent), 0o644)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			changed = changed || mdWrite.Changed
+			files = append(files, modulePath)
 
 		default:
 			promptPath := adapter.SystemPromptFile(homeDir)

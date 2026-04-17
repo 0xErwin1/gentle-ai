@@ -115,6 +115,13 @@ var strongProjectMarkers = []string{
 // trees and ensures we stop well before reaching the filesystem root.
 const maxAncestorDepth = 20
 
+// bootstrapper is an optional adapter capability: if an adapter implements
+// this interface, any injector that writes Jinja modules will first ensure
+// the base template (entry point) exists.
+type bootstrapper interface {
+	BootstrapTemplate(homeDir string) error
+}
+
 // findProjectRoot walks upward from dir, looking for the best project root.
 //
 // Priority order:
@@ -230,34 +237,68 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			}
 			changed = changed || result.Changed
 			files = append(files, result.Files...)
+
+		case model.StrategyJinjaModules:
+			// Ensure the base template exists for Jinja-based agents.
+			if bs, ok := adapter.(bootstrapper); ok {
+				if err := bs.BootstrapTemplate(homeDir); err != nil {
+					return InjectionResult{}, fmt.Errorf("bootstrap template: %w", err)
+				}
+			}
+
+			// Write the SDD orchestrator as a standalone Jinja include module.
+			// The static KIMI.md template references it via {% include "sdd-orchestrator.md" %}.
+			configDir := adapter.GlobalConfigDir(homeDir)
+			content := assets.MustRead(sddOrchestratorAsset(adapter.Agent()))
+			modulePath := filepath.Join(configDir, "sdd-orchestrator.md")
+			writeResult, err := filemerge.WriteFileAtomic(modulePath, []byte(content), 0o644)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			changed = changed || writeResult.Changed
+			files = append(files, modulePath)
 		}
 	}
 
 	// 1b. If StrictTDD is enabled, inject the strict-tdd-mode marker section
 	// into the system prompt file so agents know Strict TDD is active.
 	if opts.StrictTDD && adapter.Agent() != model.AgentOpenCode && adapter.Agent() != model.AgentKilocode {
-		promptPath := adapter.SystemPromptFile(homeDir)
-		strictTDDContent := "Strict TDD Mode: enabled"
-		existing, readErr := readFileOrEmpty(promptPath)
-		if readErr != nil {
-			return InjectionResult{}, readErr
-		}
-		updated := filemerge.InjectMarkdownSection(existing, "strict-tdd-mode", strictTDDContent)
-		writeResult, writeErr := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
-		if writeErr != nil {
-			return InjectionResult{}, writeErr
-		}
-		changed = changed || writeResult.Changed
-		// Only append path once (it may already be in files from step 1).
-		alreadyInFiles := false
-		for _, f := range files {
-			if f == promptPath {
-				alreadyInFiles = true
-				break
+		if adapter.SystemPromptStrategy() == model.StrategyJinjaModules {
+			// Write the strict-tdd-mode marker as a standalone Jinja include module.
+			// The static KIMI.md template references it via {% include "strict-tdd-mode.md" %}.
+			configDir := adapter.GlobalConfigDir(homeDir)
+			content := "Strict TDD Mode: enabled"
+			modulePath := filepath.Join(configDir, "strict-tdd-mode.md")
+			writeResult, err := filemerge.WriteFileAtomic(modulePath, []byte(content), 0o644)
+			if err != nil {
+				return InjectionResult{}, err
 			}
-		}
-		if !alreadyInFiles {
-			files = append(files, promptPath)
+			changed = changed || writeResult.Changed
+			files = append(files, modulePath)
+		} else {
+			promptPath := adapter.SystemPromptFile(homeDir)
+			strictTDDContent := "Strict TDD Mode: enabled"
+			existing, readErr := readFileOrEmpty(promptPath)
+			if readErr != nil {
+				return InjectionResult{}, readErr
+			}
+			updated := filemerge.InjectMarkdownSection(existing, "strict-tdd-mode", strictTDDContent)
+			writeResult, writeErr := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+			if writeErr != nil {
+				return InjectionResult{}, writeErr
+			}
+			changed = changed || writeResult.Changed
+			// Only append path once (it may already be in files from step 1).
+			alreadyInFiles := false
+			for _, f := range files {
+				if f == promptPath {
+					alreadyInFiles = true
+					break
+				}
+			}
+			if !alreadyInFiles {
+				files = append(files, promptPath)
+			}
 		}
 	}
 
@@ -515,10 +556,11 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 		}
 
 		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			if entry.IsDir() {
 				continue
 			}
-			contentStr := string(assets.MustRead(embeddedDir + "/" + entry.Name()))
+			// Copy all files (not just .md) to support Kimi's YAML-based agents
+			contentStr := assets.MustRead(embeddedDir + "/" + entry.Name())
 
 			// Resolve {{KIRO_MODEL}} placeholder for adapters that support it (e.g. Kiro).
 			// Non-Kiro adapters (Cursor, etc.) don't implement kiroModelResolver and are unaffected.
@@ -541,7 +583,6 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				}
 				contentStr = strings.ReplaceAll(contentStr, "{{KIRO_MODEL}}", kmr.KiroModelID(alias))
 			}
-
 			outPath := filepath.Join(agentsDir, entry.Name())
 			writeResult, err := filemerge.WriteFileAtomic(outPath, []byte(contentStr), 0o644)
 			if err != nil {
@@ -553,11 +594,18 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			}
 		}
 
-		// Post-check: verify critical agent files exist
+		// Post-check: verify critical agent files exist (either .md or .yaml)
 		for _, phase := range []string{"sdd-apply", "sdd-verify"} {
-			checkPath := filepath.Join(agentsDir, phase+".md")
-			if info, err := os.Stat(checkPath); err != nil || info.Size() < 50 {
-				return InjectionResult{}, fmt.Errorf("post-check: sub-agent %q not written correctly", phase)
+			found := false
+			for _, ext := range []string{".md", ".yaml"} {
+				checkPath := filepath.Join(agentsDir, phase+ext)
+				if info, err := os.Stat(checkPath); err == nil && info.Size() >= 10 {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return InjectionResult{}, fmt.Errorf("post-check: sub-agent %q not written correctly (missing or truncated)", phase)
 			}
 		}
 	}
@@ -958,6 +1006,8 @@ func sddOrchestratorAsset(agent model.AgentID) string {
 		return "windsurf/sdd-orchestrator.md"
 	case model.AgentCursor:
 		return "cursor/sdd-orchestrator.md"
+	case model.AgentKimi:
+		return "kimi/sdd-orchestrator.md"
 	case model.AgentQwenCode:
 		return "qwen/sdd-orchestrator.md"
 	case model.AgentKiroIDE:

@@ -38,6 +38,7 @@ func knownAgentConfigDirs(homeDir string) []ConfigState {
 		{Agent: "codex", Path: filepath.Join(homeDir, ".codex")},
 		{Agent: "antigravity", Path: filepath.Join(homeDir, ".gemini", "antigravity")},
 		{Agent: "windsurf", Path: filepath.Join(homeDir, ".codeium", "windsurf")},
+		{Agent: "kimi", Path: filepath.Join(homeDir, ".kimi")},
 		{Agent: "qwen-code", Path: filepath.Join(homeDir, ".qwen")},
 		{Agent: "kiro-ide", Path: filepath.Join(homeDir, ".kiro")},
 	}
@@ -51,9 +52,6 @@ func vscodeCopilotGlobalConfigDir(homeDir string) string {
 }
 
 // ScanConfigs returns the presence state of every known managed agent's global
-// config directory. All agents are always represented in the result; Exists and
-// IsDirectory reflect the actual filesystem state at call time.
-//
 // This is a compatibility shim: it preserves the ConfigState contract for TUI
 // and validation callers while the canonical discovery (agents.DiscoverInstalled)
 // is used by sync and upgrade flows. Full delegation is deferred until the

@@ -9,12 +9,14 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
+func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 
 func TestInjectClaudeGentlemanWritesSectionWithRealContent(t *testing.T) {
@@ -44,6 +46,52 @@ func TestInjectClaudeGentlemanWritesSectionWithRealContent(t *testing.T) {
 	// Real content check — the embedded persona has these patterns.
 	if !strings.Contains(text, "Senior Architect") {
 		t.Fatal("CLAUDE.md missing real persona content (expected 'Senior Architect')")
+	}
+}
+
+func TestInjectKimiGentlemanIncludesProjectInstructionsAndLoadedSkills(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, kimiAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject(kimi) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(kimi) changed = false")
+	}
+
+	// KIMI.md should be the static Jinja template (includes + variable placeholders).
+	templatePath := filepath.Join(home, ".kimi", "KIMI.md")
+	content, err := os.ReadFile(templatePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", templatePath, err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, `{% include "output-style.md"`) {
+		t.Fatal("KIMI.md template missing {% include \"output-style.md\" %}")
+	}
+	if !strings.Contains(text, "${KIMI_AGENTS_MD}") {
+		t.Fatal("KIMI.md missing ${KIMI_AGENTS_MD} for project AGENTS.md parity")
+	}
+	if !strings.Contains(text, "${KIMI_SKILLS}") {
+		t.Fatal("KIMI.md missing ${KIMI_SKILLS} for loaded-skills parity")
+	}
+
+	// output-style.md module should contain the Gentleman style content.
+	outputStylePath := filepath.Join(home, ".kimi", "output-style.md")
+	styleContent, err := os.ReadFile(outputStylePath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", outputStylePath, err)
+	}
+	if !strings.Contains(string(styleContent), "Gentleman Output Style") {
+		t.Fatal("output-style.md missing Gentleman Output Style content")
+	}
+
+	// persona.md module should exist and contain persona content.
+	personaPath := filepath.Join(home, ".kimi", "persona.md")
+	if _, err := os.Stat(personaPath); err != nil {
+		t.Fatalf("persona.md not written: %v", err)
 	}
 }
 

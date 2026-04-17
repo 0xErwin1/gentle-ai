@@ -11,8 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
@@ -1840,5 +1842,147 @@ func TestOpenCodePersonaBeforeSDDPreservesAllSections(t *testing.T) {
 	}
 	if !strings.Contains(string(jsonContent), "sdd-orchestrator") {
 		t.Error("opencode.json missing sdd-orchestrator agent entry (SDD not injected)")
+	}
+}
+func TestRunInstallKimiBootstrapsHub(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+	osUserHomeDir = func() (string, error) { return home, nil }
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = missingBinaryLookPath
+	restoreInstallcmdLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		if name == "uv" {
+			return "/usr/bin/uv", nil
+		}
+		return "", exec.ErrNotFound
+	})
+	t.Cleanup(restoreInstallcmdLookPath)
+
+	// Install Kimi with minimalist component (e.g., permissions only, NO persona).
+	_, err := RunInstall(
+		[]string{"--agent", "kimi", "--component", "permissions"},
+		system.DetectionResult{},
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	// Verify that KIMI.md was created in the agent's config dir.
+	hubPath := filepath.Join(home, ".kimi", "KIMI.md")
+	if _, err := os.Stat(hubPath); err != nil {
+		t.Fatalf("expected Kimi prompt hub file %q to be bootstrapped: %v", hubPath, err)
+	}
+
+	// Verify content includes sub-modules (basic check).
+	content, err := os.ReadFile(hubPath)
+	if err != nil {
+		t.Fatalf("failed to read bootstrapped hub: %v", err)
+	}
+	if !strings.Contains(string(content), "{% include \"persona.md\" ignore missing %}") {
+		t.Errorf("bootstrapped hub missing modular include: %s", string(content))
+	}
+}
+
+func TestRunInstallKimiMissingUVFailsBeforeExecutingInstallCommands(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = missingBinaryLookPath
+
+	recorder := &commandRecorder{}
+	runCommand = recorder.record
+
+	restoreInstallcmdLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		if name == "uv" {
+			return "", exec.ErrNotFound
+		}
+		return "/usr/bin/" + name, nil
+	})
+	t.Cleanup(restoreInstallcmdLookPath)
+
+	_, err := RunInstall(
+		[]string{"--agent", "kimi", "--component", "permissions"},
+		macOSDetectionResult(),
+	)
+	if err == nil {
+		t.Fatal("RunInstall() expected error when Kimi uv preflight fails")
+	}
+
+	if !strings.Contains(err.Error(), "preflight for agent \"kimi\"") || !strings.Contains(err.Error(), "uv") {
+		t.Fatalf("RunInstall() error = %q, expected Kimi uv preflight error", err.Error())
+	}
+
+	if got := recorder.get(); len(got) != 0 {
+		t.Fatalf("expected no install commands to execute before Kimi preflight failure, got: %v", got)
+	}
+}
+
+func TestRunInstallKimiAlreadyInstalledDoesNotRequireUV(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = missingBinaryLookPath
+	recorder := &commandRecorder{}
+	runCommand = recorder.record
+
+	originalKimiLookPath := kimi.LookPathOverride
+	kimi.LookPathOverride = func(name string) (string, error) {
+		if name == "kimi" {
+			return "/usr/local/bin/kimi", nil
+		}
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { kimi.LookPathOverride = originalKimiLookPath })
+
+	restoreInstallcmdLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		if name == "uv" {
+			return "", exec.ErrNotFound
+		}
+		return "/usr/bin/" + name, nil
+	})
+	t.Cleanup(restoreInstallcmdLookPath)
+
+	result, err := RunInstall(
+		[]string{"--agent", "kimi", "--component", "permissions"},
+		macOSDetectionResult(),
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	}
+
+	hubPath := filepath.Join(home, ".kimi", "KIMI.md")
+	if _, err := os.Stat(hubPath); err != nil {
+		t.Fatalf("expected Kimi prompt hub file %q to be bootstrapped: %v", hubPath, err)
+	}
+
+	if got := recorder.get(); len(got) != 0 {
+		t.Fatalf("expected no install commands when Kimi is already installed, got: %v", got)
 	}
 }

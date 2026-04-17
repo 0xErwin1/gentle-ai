@@ -12,6 +12,7 @@ const (
 	AgentCodex         AgentID = "codex"
 	AgentAntigravity   AgentID = "antigravity"
 	AgentWindsurf      AgentID = "windsurf"
+	AgentKimi          AgentID = "kimi"
 	AgentQwenCode      AgentID = "qwen-code"
 	AgentKiroIDE       AgentID = "kiro-ide"
 )
@@ -96,6 +97,13 @@ const (
 	StrategyFileReplace
 	// StrategyAppendToFile appends content to an existing system prompt file.
 	StrategyAppendToFile
+	// StrategyInstructionsFile writes a dedicated instructions file (e.g. .instructions.md).
+	StrategyInstructionsFile
+	// StrategyJinjaModules writes separate module files that are included into a
+	// thin Jinja2 template (e.g. Kimi's KIMI.md).
+	StrategyJinjaModules
+	// StrategySteeringFile writes a Kiro steering file with inclusion: always frontmatter.
+	StrategySteeringFile
 )
 
 // MCPStrategy defines how MCP server configs are written for an agent.
