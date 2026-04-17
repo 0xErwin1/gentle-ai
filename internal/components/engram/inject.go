@@ -185,6 +185,17 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 		changed = changed || mcpWrite.Changed
 		files = append(files, mcpPath)
 
+		if adapter.Agent() == model.AgentAntigravity {
+			settingsWrite, err := ensureAntigravitySettings(homeDir, adapter)
+			if err != nil {
+				return InjectionResult{}, err
+			}
+			changed = changed || settingsWrite.Changed
+			if settingsWrite.Path != "" {
+				files = append(files, settingsWrite.Path)
+			}
+		}
+
 	case model.StrategyTOMLFile:
 		// Codex: upsert [mcp_servers.engram] block and instruction-file keys
 		// in ~/.codex/config.toml, then write instruction files.
@@ -261,6 +272,40 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	}
 
 	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
+type settingsBootstrapResult struct {
+	Changed bool
+	Path    string
+}
+
+func ensureAntigravitySettings(homeDir string, adapter agents.Adapter) (settingsBootstrapResult, error) {
+	settingsPath := adapter.SettingsPath(homeDir)
+	if settingsPath == "" {
+		return settingsBootstrapResult{}, nil
+	}
+
+	if _, err := os.Stat(settingsPath); err == nil {
+		return settingsBootstrapResult{Path: settingsPath}, nil
+	} else if !os.IsNotExist(err) {
+		return settingsBootstrapResult{}, fmt.Errorf("stat antigravity settings %q: %w", settingsPath, err)
+	}
+
+	sourcePath := filepath.Join(homeDir, ".gemini", "settings.json")
+	content, err := os.ReadFile(sourcePath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return settingsBootstrapResult{}, fmt.Errorf("read gemini settings %q: %w", sourcePath, err)
+		}
+		content = []byte("{}")
+	}
+
+	writeResult, err := filemerge.WriteFileAtomic(settingsPath, content, 0o644)
+	if err != nil {
+		return settingsBootstrapResult{}, err
+	}
+
+	return settingsBootstrapResult{Changed: writeResult.Changed, Path: settingsPath}, nil
 }
 
 // writeCodexInstructionFiles writes the Engram memory protocol and compact prompt

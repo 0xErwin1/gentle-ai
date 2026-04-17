@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/antigravity"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/gemini"
@@ -20,6 +21,9 @@ func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 func codexAdapter() agents.Adapter    { return codex.NewAdapter() }
 func geminiAdapter() agents.Adapter   { return gemini.NewAdapter() }
+func antigravityAdapter() agents.Adapter {
+	return antigravity.NewAdapter()
+}
 
 // assertArgsHaveToolsAgent is a shared helper that validates a JSON file
 // contains the MCP "engram" entry with --tools=agent in args.
@@ -410,6 +414,67 @@ func TestInjectGeminiToolsFlagPresent(t *testing.T) {
 	// RED: Gemini overlay must use --tools=agent
 	if !strings.Contains(text, `"--tools=agent"`) {
 		t.Fatal("settings.json missing --tools=agent in args")
+	}
+}
+
+func TestInjectAntigravityCopiesGeminiSettingsAfterEngramSetup(t *testing.T) {
+	home := t.TempDir()
+	sourcePath := filepath.Join(home, ".gemini", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(sourcePath), err)
+	}
+	want := []byte("{\"theme\":\"dark\"}\n")
+	if err := os.WriteFile(sourcePath, want, 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", sourcePath, err)
+	}
+
+	result, err := Inject(home, antigravityAdapter())
+	if err != nil {
+		t.Fatalf("Inject(antigravity) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject(antigravity) changed = false")
+	}
+
+	settingsPath := filepath.Join(home, ".gemini", "antigravity", "settings.json")
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("antigravity settings = %q, want %q", got, want)
+	}
+
+	mcpPath := filepath.Join(home, ".gemini", "antigravity", "mcp_config.json")
+	assertArgsHaveToolsAgent(t, mcpPath)
+}
+
+func TestInjectAntigravityInitializesEmptySettingsWhenGeminiMissing(t *testing.T) {
+	home := t.TempDir()
+
+	first, err := Inject(home, antigravityAdapter())
+	if err != nil {
+		t.Fatalf("Inject(antigravity) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject(antigravity) first changed = false")
+	}
+
+	settingsPath := filepath.Join(home, ".gemini", "antigravity", "settings.json")
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
+	}
+	if strings.TrimSpace(string(got)) != "{}" {
+		t.Fatalf("antigravity settings = %q, want empty JSON object", got)
+	}
+
+	second, err := Inject(home, antigravityAdapter())
+	if err != nil {
+		t.Fatalf("Inject(antigravity) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject(antigravity) second changed = true; want false")
 	}
 }
 

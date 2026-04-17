@@ -876,6 +876,106 @@ func TestRunInstallEngramDefaultModeAttemptsClaudeSetup(t *testing.T) {
 	}
 }
 
+func TestRunInstallAntigravityCopiesGeminiSettingsAfterEngramSetup(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(name string) (string, error) {
+		return "/usr/local/bin/" + name, nil
+	}
+	runCommand = func(name string, args ...string) error {
+		if name == "engram" && len(args) == 2 && args[0] == "setup" && args[1] == "gemini-cli" {
+			settingsPath := filepath.Join(home, ".gemini", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(settingsPath, []byte("{\"theme\":\"dark\"}\n"), 0o644)
+		}
+		return nil
+	}
+
+	result, err := RunInstall(
+		[]string{"--agent", "antigravity", "--component", "engram", "--component", "context7", "--component", "permissions"},
+		macOSDetectionResult(),
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false")
+	}
+
+	settingsPath := filepath.Join(home, ".gemini", "antigravity", "settings.json")
+	got, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
+	}
+	if string(got) != "{\"theme\":\"dark\"}\n" {
+		t.Fatalf("antigravity settings = %q, want copied Gemini settings", got)
+	}
+}
+
+func TestRunInstallDeduplicatesSharedEngramSetupSlugs(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(name string) (string, error) {
+		return "/usr/local/bin/" + name, nil
+	}
+
+	recorder := &commandRecorder{}
+	runCommand = func(name string, args ...string) error {
+		if err := recorder.record(name, args...); err != nil {
+			return err
+		}
+		if name == "engram" && len(args) == 2 && args[0] == "setup" && args[1] == "gemini-cli" {
+			settingsPath := filepath.Join(home, ".gemini", "settings.json")
+			if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(settingsPath, []byte("{\"theme\":\"dark\"}\n"), 0o644)
+		}
+		return nil
+	}
+
+	result, err := RunInstall(
+		[]string{"--agent", "gemini-cli", "--agent", "antigravity", "--component", "engram", "--component", "context7", "--component", "permissions"},
+		macOSDetectionResult(),
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false")
+	}
+
+	var setupCount int
+	for _, cmd := range recorder.get() {
+		if strings.Contains(cmd, "engram setup gemini-cli") {
+			setupCount++
+		}
+	}
+	if setupCount != 1 {
+		t.Fatalf("engram setup gemini-cli count = %d, want 1", setupCount)
+	}
+}
+
 func TestRunInstallGGASkipsInstallWhenAlreadyOnPath(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
