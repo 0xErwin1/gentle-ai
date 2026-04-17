@@ -179,6 +179,10 @@ engram tui                    # Visual memory browser
 
 This project exists because of the community. See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full list.
 
+### Community Integrations
+
+- [sdd-engram-plugin](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin) — external OpenCode SDD profile manager with runtime profile activation.
+
 <a href="https://github.com/Gentleman-Programming/gentle-ai/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=Gentleman-Programming/gentle-ai" />
 </a>

@@ -11,6 +11,49 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
+func TestResolveProfileStrategy_ExplicitWins(t *testing.T) {
+	home := t.TempDir()
+
+	profilesDir := filepath.Join(home, ".config", "opencode", "profiles")
+	if err := os.MkdirAll(profilesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(profiles): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profilesDir, "active.json"), []byte(`{"name":"external"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(active.json): %v", err)
+	}
+
+	got := ResolveProfileStrategy(home, model.SDDProfileStrategyGeneratedMulti)
+	if got != model.SDDProfileStrategyGeneratedMulti {
+		t.Fatalf("ResolveProfileStrategy(explicit) = %q, want %q", got, model.SDDProfileStrategyGeneratedMulti)
+	}
+}
+
+func TestResolveProfileStrategy_AutoDetectsExternalProfiles(t *testing.T) {
+	home := t.TempDir()
+
+	profilesDir := filepath.Join(home, ".config", "opencode", "profiles")
+	if err := os.MkdirAll(profilesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(profiles): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profilesDir, "cheap.json"), []byte(`{"name":"cheap"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(cheap.json): %v", err)
+	}
+
+	got := ResolveProfileStrategy(home, "")
+	if got != model.SDDProfileStrategyExternalSingleActive {
+		t.Fatalf("ResolveProfileStrategy(auto) = %q, want %q", got, model.SDDProfileStrategyExternalSingleActive)
+	}
+}
+
+func TestResolveProfileStrategy_DefaultsGeneratedMultiWithoutExternalProfiles(t *testing.T) {
+	home := t.TempDir()
+
+	got := ResolveProfileStrategy(home, "")
+	if got != model.SDDProfileStrategyGeneratedMulti {
+		t.Fatalf("ResolveProfileStrategy(no external profiles) = %q, want %q", got, model.SDDProfileStrategyGeneratedMulti)
+	}
+}
+
 // ─── ValidateProfileName ───────────────────────────────────────────────────
 
 func TestValidateProfileName_Valid(t *testing.T) {
