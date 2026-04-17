@@ -97,6 +97,51 @@ func TestParseSyncFlagsSDDMode(t *testing.T) {
 	}
 }
 
+func TestParseSyncFlagsSDDProfileStrategy(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "absent defaults to empty(auto)",
+			args: []string{},
+			want: "",
+		},
+		{
+			name: "generated-multi",
+			args: []string{"--sdd-profile-strategy", "generated-multi"},
+			want: "generated-multi",
+		},
+		{
+			name: "external-single-active",
+			args: []string{"--sdd-profile-strategy", "external-single-active"},
+			want: "external-single-active",
+		},
+		{
+			name:    "invalid returns error",
+			args:    []string{"--sdd-profile-strategy", "invalid"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			flags, err := ParseSyncFlags(tt.args)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ParseSyncFlags() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if flags.SDDProfileStrategy != tt.want {
+				t.Errorf("SDDProfileStrategy = %q, want %q", flags.SDDProfileStrategy, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseSyncFlagsIncludePermissionsAndTheme(t *testing.T) {
 	flags, err := ParseSyncFlags([]string{"--include-permissions", "--include-theme"})
 	if err != nil {
@@ -1219,6 +1264,82 @@ func TestRunSyncDetectsExistingProfilesOnRegularSync(t *testing.T) {
 	_ = result2 // result2 may or may not be no-op depending on whether profile overlay is idempotent
 }
 
+func TestRunSyncExternalSingleActiveSkipsDetectAndPreservesOrchestratorPrompt(t *testing.T) {
+	home := t.TempDir()
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+	runCommand = func(string, ...string) error { return nil }
+	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
+
+	// Pre-create package directory to avoid npm/bun install attempts in tests.
+	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode", "node_modules", "unique-names-generator"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(node_modules): %v", err)
+	}
+
+	// External profile marker to mirror real integrations.
+	profilesDir := filepath.Join(home, ".config", "opencode", "profiles")
+	if err := os.MkdirAll(profilesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(profiles): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(profilesDir, "active.json"), []byte(`{"name":"cheap"}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(active profile): %v", err)
+	}
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".config", "opencode", "AGENTS.md"), []byte("# Existing custom AGENTS\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(AGENTS.md): %v", err)
+	}
+
+	const customPrompt = "EXTERNAL-RUNTIME-ORCHESTRATOR-PROMPT"
+	seed := `{
+  "agent": {
+    "sdd-orchestrator": {"mode": "primary", "prompt": "` + customPrompt + `"},
+    "sdd-orchestrator-cheap": {"mode": "primary", "model": "anthropic:claude-haiku-3-5"},
+    "sdd-init-cheap": {"mode": "subagent", "model": "anthropic:claude-haiku-3-5"}
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(settings): %v", err)
+	}
+
+	sel := model.Selection{
+		Agents:             []model.AgentID{model.AgentOpenCode},
+		Components:         []model.ComponentID{model.ComponentSDD},
+		SDDMode:            model.SDDModeSingle,
+		SDDProfileStrategy: model.SDDProfileStrategyExternalSingleActive,
+	}
+
+	if _, err := RunSyncWithSelection(home, sel); err != nil {
+		t.Fatalf("RunSyncWithSelection() error = %v", err)
+	}
+
+	settingsData, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(settings) error = %v", err)
+	}
+	settingsText := string(settingsData)
+
+	if !strings.Contains(settingsText, customPrompt) {
+		t.Fatalf("expected sdd-orchestrator prompt to be preserved in external-single-active mode")
+	}
+	if strings.Contains(settingsText, "\"sdd-onboard-cheap\"") {
+		t.Fatalf("external-single-active should not auto-detect/regenerate suffixed profiles")
+	}
+
+	// external-single-active forces multi-mode assets so shared prompts exist.
+	promptPath := filepath.Join(home, ".config", "opencode", "prompts", "sdd", "sdd-apply.md")
+	if _, err := os.Stat(promptPath); err != nil {
+		t.Fatalf("expected shared prompt file %q to exist (forced multi mode): %v", promptPath, err)
+	}
+}
+
 // containsAny returns true if s contains any of the given substrings (case-insensitive).
 func containsAny(s string, subs ...string) bool {
 	lower := strings.ToLower(s)
@@ -1769,6 +1890,14 @@ func TestBuildSyncSelectionProfilesForwarded(t *testing.T) {
 	}
 	if sel.Profiles[0].Name != "cheap" {
 		t.Errorf("Selection.Profiles[0].Name = %q, want %q", sel.Profiles[0].Name, "cheap")
+	}
+}
+
+func TestBuildSyncSelectionSDDProfileStrategyForwarded(t *testing.T) {
+	flags := SyncFlags{SDDProfileStrategy: string(model.SDDProfileStrategyExternalSingleActive)}
+	sel := BuildSyncSelection(flags, []model.AgentID{model.AgentOpenCode})
+	if sel.SDDProfileStrategy != model.SDDProfileStrategyExternalSingleActive {
+		t.Fatalf("Selection.SDDProfileStrategy = %q, want %q", sel.SDDProfileStrategy, model.SDDProfileStrategyExternalSingleActive)
 	}
 }
 

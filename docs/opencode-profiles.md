@@ -6,7 +6,12 @@
 
 You configured your SDD models once, and now every task -- cheap or expensive, experimental or battle-tested -- runs through the same orchestrator. Profiles fix that: **create named model configurations and switch between them with Tab inside OpenCode.**
 
-Each profile generates its own `sdd-orchestrator` (plus all 10 sub-agents) in `opencode.json`. One profile for heavy architectural work with Opus, another for quick fixes with Haiku, a third to test Gemini -- all coexisting, switchable in a keystroke.
+Gentle AI supports **two ways** of working with OpenCode profiles:
+
+1. **Generated multi-profile mode** -- the classic Gentle AI flow. Each named profile generates its own `sdd-orchestrator-{name}` plus 10 suffixed sub-agents in `opencode.json`, and you switch between them with **Tab**.
+2. **External single-active mode** -- for community tools that keep profile files outside `opencode.json` and activate one runtime profile at a time.
+
+That means you can stay with the built-in multi-profile overlay, or plug Gentle AI into an external profile manager without the two systems fighting each other.
 
 ---
 
@@ -48,9 +53,47 @@ gentle-ai sync \
 
 This creates a "cheap" profile where everything runs on Haiku except `sdd-apply`, which uses Sonnet.
 
+## External Profile Managers
+
+If you're using a community tool that stores profiles under `~/.config/opencode/profiles/*.json` and activates them at runtime, Gentle AI can now sync OpenCode in a compatibility mode.
+
+### Auto-detection
+
+On `gentle-ai sync`, if OpenCode profile files exist under:
+
+```text
+~/.config/opencode/profiles/*.json
+```
+
+Gentle AI automatically switches to **`external-single-active`** strategy for OpenCode sync.
+
+### Manual override
+
+You can also force the strategy explicitly:
+
+```bash
+gentle-ai sync --agent opencode --sdd-profile-strategy external-single-active
+```
+
+Or force the classic generated overlay behavior:
+
+```bash
+gentle-ai sync --agent opencode --sdd-profile-strategy generated-multi
+```
+
+### What compatibility mode does
+
+In `external-single-active` mode, Gentle AI:
+
+- keeps writing the base OpenCode SDD assets and shared prompt files
+- **does not** auto-regenerate suffixed named profiles from `opencode.json`
+- **preserves the current `sdd-orchestrator` prompt** during sync so external tools can keep their runtime policy / fallback blocks intact
+
+This is the important bit: Gentle AI still maintains the SDD foundation, but it stops acting like `opencode.json` is the source of truth for every profile.
+
 ## Using Profiles in OpenCode
 
-After creating profiles, each one appears as a selectable orchestrator in OpenCode:
+After creating profiles in generated multi-profile mode, each one appears as a selectable orchestrator in OpenCode:
 
 | What you see in Tab | What it runs |
 |---|---|
@@ -59,6 +102,8 @@ After creating profiles, each one appears as a selectable orchestrator in OpenCo
 | `sdd-orchestrator-premium` | "premium" profile -- Opus everywhere |
 
 Press **Tab** to cycle between orchestrators. All SDD slash commands (`/sdd-new`, `/sdd-ff`, `/sdd-explore`, etc.) run against whichever orchestrator is currently selected. The orchestrator delegates to its own suffixed sub-agents (e.g., `sdd-apply-cheap`), so profiles never interfere with each other.
+
+If you're using an external single-active manager instead, you typically keep working with the base `sdd-orchestrator` while the external tool swaps its active model assignments at runtime.
 
 ## Managing Profiles
 
@@ -87,11 +132,14 @@ The `default` profile (the unsuffixed `sdd-orchestrator`) can be edited but not 
 <details>
 <summary><strong>How It Works</strong></summary>
 
-Each profile generates 11 agent entries in `opencode.json`: one orchestrator (`sdd-orchestrator-{name}`, mode `primary`) and 10 sub-agents (`sdd-{phase}-{name}`, mode `subagent`, hidden). The orchestrator's permissions are scoped so it can only delegate to its own suffixed sub-agents.
+In generated multi-profile mode, each profile generates 11 agent entries in `opencode.json`: one orchestrator (`sdd-orchestrator-{name}`, mode `primary`) and 10 sub-agents (`sdd-{phase}-{name}`, mode `subagent`, hidden). The orchestrator's permissions are scoped so it can only delegate to its own suffixed sub-agents.
 
 Sub-agent prompts are shared across all profiles as files under `~/.config/opencode/prompts/sdd/` (e.g., `sdd-apply.md`). Each agent entry references the shared file via `{file:~/.config/opencode/prompts/sdd/sdd-apply.md}` -- only the `model` field differs between profiles. Orchestrator prompts are inlined per-profile because they contain profile-specific model assignment tables and sub-agent references.
 
-During sync or update, the installer detects existing profiles by scanning for `sdd-orchestrator-*` keys, updates shared prompt files, regenerates orchestrator prompts, and preserves your model assignments.
+During sync or update, Gentle AI now uses one of two strategies:
+
+- **`generated-multi`** -- scan `opencode.json` for `sdd-orchestrator-*`, update shared prompts, regenerate profile orchestrators, preserve model assignments
+- **`external-single-active`** -- detect external profile files, keep the shared SDD assets current, and preserve the existing base orchestrator prompt instead of overwriting external runtime extensions
 
 </details>
 

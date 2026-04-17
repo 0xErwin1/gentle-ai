@@ -17,7 +17,7 @@
 | Windsurf        | `windsurf`       | Yes (native) | Yes | Solo-agent                   | No            | No             | `~/.codeium/windsurf`               |
 | Antigravity     | `antigravity`    | Yes (native) | Yes | Solo-agent + Mission Control | No            | No             | `~/.gemini/antigravity`             |
 | Kimi            | `kimi`           | Yes          | Yes | Full (native custom agents)  | No            | No             | `~/.kimi`                           |
-| Qwen Code       | `qwen-code`      | Yes          | Yes | Solo-agent                   | No            | No             | `~/.qwen`                           |
+| Qwen Code       | `qwen-code`      | Yes          | Yes | Full (native sub-agents)     | No            | Yes            | `~/.qwen`                           |
 | Kiro IDE        | `kiro-ide`       | Yes          | Yes | Full (native subagents)      | No            | No             | `~/.kiro`                           |
 
 All agents receive the **full SDD orchestrator** injected into their system prompt, plus skill files written to their skills directory. The agent handles SDD automatically when the task is large enough, or when the user explicitly asks for it — no manual setup required.
@@ -28,7 +28,7 @@ All agents receive the **full SDD orchestrator** injected into their system prom
 
 | Model                 | How It Works                                                                                                                         | Agents                                                           |
 | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
-| **Full (sub-agents)** | Each SDD phase runs in an isolated context window via native sub-agent delegation. The orchestrator coordinates; sub-agents execute. | Claude Code, OpenCode, Gemini CLI, Cursor, VS Code Copilot, Kimi |
+| **Full (sub-agents)** | Each SDD phase runs in an isolated context window via native sub-agent delegation. The orchestrator coordinates; sub-agents execute. | Claude Code, OpenCode, Gemini CLI, Cursor, VS Code Copilot, Kimi, Kiro IDE, Qwen Code |
 | **Solo-agent**        | All SDD phases run inline in the same conversation. The orchestrator IS the executor. Engram provides cross-phase persistence.       | Codex, Windsurf, Antigravity                                     |
 
 ### Cursor Native Subagents
@@ -64,11 +64,11 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
 
 ## SDD Mode Support
 
-| Feature          | Claude Code | OpenCode | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity | Kimi | Kiro IDE |
-| ---------------- | :---------: | :------: | :--------: | :----: | :-------------: | :---: | :------: | :---------: | :--: | :------: |
-| SDD orchestrator |     Yes     |   Yes    |    Yes     |  Yes   |       Yes       |  Yes  |   Yes    |     Yes     | Yes  |   Yes    |
-| Single-mode SDD  |     Yes     |   Yes    |    Yes     |  Yes   |       Yes       |  Yes  |   Yes    |     Yes     | Yes  |   Yes    |
-| Multi-mode SDD   |      —      |   Yes    |     —      |   —    |        —        |   —   |    —     |      —      |  —   |   Yes*   |
+| Feature | Claude Code | OpenCode | Gemini CLI | Cursor | VS Code Copilot | Codex | Windsurf | Antigravity | Kiro IDE | Qwen Code |
+|---------|:-----------:|:--------:|:----------:|:------:|:---------------:|:-----:|:--------:|:-----------:|:--------:|:---------:|
+| SDD orchestrator | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Single-mode SDD | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| Multi-mode SDD | — | Yes | — | — | — | — | — | — | Yes* | — |
 
 **Multi-mode** (assigning different AI models to each SDD phase) is natively supported by **OpenCode** (via its provider system) and **Kiro IDE** (via native subagent `model:` frontmatter — each phase agent runs with its own model ID). All other agents run in **single-mode** — the orchestrator manages everything using whatever model the agent is already running.
 
@@ -150,3 +150,15 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
 - Native Kiro specs workflow: `.kiro/specs/<feature>/requirements.md`, `design.md`, `tasks.md` — with approval gates before apply and archive phases
 - Manual install only — download from [kiro.dev/downloads](https://kiro.dev/downloads)
 - See [docs/kiro.md](kiro.md) for full path reference and SDD behavior details
+
+### Qwen Code
+- **Detection**: gentle-ai detects Qwen Code from its config root (`~/.qwen`) and checks for `qwen` binary on `PATH`
+- **Config root**: `~/.qwen/` (cross-platform)
+- **System prompt**: `~/.qwen/QWEN.md` (managed via `StrategyFileReplace`)
+- **Skills**: `~/.qwen/skills/`
+- **MCP config**: `~/.qwen/settings.json` (managed via `StrategyMergeIntoSettings` with `mcpServers` key)
+- **Slash commands**: `~/.qwen/commands/*.md` — supports custom namespaced slash commands (e.g., `commands/sdd/init.md` → `/sdd:init`)
+- **Permissions**: `auto_edit` mode — auto-approves file edits, manual approval for shell commands
+- **Install**: via npm — `npm install -g @qwen-code/qwen-code@latest`
+- **Engram slug**: `"qwen-code"` for `engram setup` integration
+- **SDD orchestrator**: `internal/assets/qwen/sdd-orchestrator.md` with Qwen-specific path references

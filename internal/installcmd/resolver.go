@@ -76,7 +76,7 @@ func resolveKilocodeInstall(profile system.PlatformProfile) CommandSequence {
 // To avoid the security risks of pipe-to-shell patterns (curl | bash),
 // we execute the underlying command that the scripts alias: `uv tool install`.
 func resolveKimiInstall(profile system.PlatformProfile) (CommandSequence, error) {
-	// Kimi CLI is a python-based tool. We use Astral's `uv` as our deterministic 
+	// Kimi CLI is a python-based tool. We use Astral's `uv` as our deterministic
 	// prerequisite manager to ensure secure and isolated installs.
 	if !profile.Supported {
 		return nil, fmt.Errorf("Kimi is not supported on this platform (%s/%s)", profile.OS, profile.LinuxDistro)
@@ -86,6 +86,50 @@ func resolveKimiInstall(profile system.PlatformProfile) (CommandSequence, error)
 	return CommandSequence{{"uv", "tool", "install", "--python", "3.13", "kimi-cli"}}, nil
 }
 
+// ValidateAgentInstallPreflight validates agent-specific prerequisites that must
+// exist before running installation commands.
+func ValidateAgentInstallPreflight(profile system.PlatformProfile, agent model.AgentID) error {
+	switch agent {
+	case model.AgentKimi:
+		return validateKimiInstallPreflight(profile)
+	default:
+		return nil
+	}
+}
+
+func validateKimiInstallPreflight(profile system.PlatformProfile) error {
+	if !profile.Supported {
+		return fmt.Errorf("Kimi is not supported on this platform (%s/%s)", profile.OS, profile.LinuxDistro)
+	}
+
+	if _, err := cmdLookPath("uv"); err != nil {
+		return fmt.Errorf(
+			"Kimi requires Astral uv, but `uv` was not found in PATH.\n"+
+				"Install uv and retry:\n"+
+				"  %s",
+			uvInstallHint(profile),
+		)
+	}
+
+	return nil
+}
+
+func uvInstallHint(profile system.PlatformProfile) string {
+	switch profile.PackageManager {
+	case "brew":
+		return "brew install uv"
+	case "apt":
+		return "sudo apt-get install -y uv (or see https://docs.astral.sh/uv/getting-started/installation/)"
+	case "pacman":
+		return "sudo pacman -S --noconfirm uv"
+	case "dnf":
+		return "sudo dnf install -y uv"
+	case "winget":
+		return "winget install --id astral-sh.uv -e --accept-source-agreements --accept-package-agreements"
+	default:
+		return "https://docs.astral.sh/uv/getting-started/installation/"
+	}
+}
 
 func (profileResolver) ResolveComponentInstall(profile system.PlatformProfile, component model.ComponentID) (CommandSequence, error) {
 	switch component {

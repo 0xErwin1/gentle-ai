@@ -39,6 +39,12 @@ type InjectOptions struct {
 	// OpenCode settings file. The default profile (Name="" or Name="default")
 	// is skipped — it is handled by the existing flow.
 	Profiles []model.Profile
+
+	// PreserveOpenCodeOrchestratorPrompt keeps the existing
+	// opencode.json agent.sdd-orchestrator.prompt value during sync.
+	// Used by external-single-active profile strategy integrations where
+	// external tools extend orchestrator policy/prompt at runtime.
+	PreserveOpenCodeOrchestratorPrompt bool
 }
 
 // workflowInjector is an optional adapter capability: if an adapter
@@ -356,7 +362,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				changed = changed || promptsChanged
 			}
 
-			overlayBytes, err = inlineOpenCodeSDDPrompts(overlayBytes, homeDir)
+			overlayBytes, err = inlineOpenCodeSDDPrompts(overlayBytes, homeDir, settingsPath, opts.PreserveOpenCodeOrchestratorPrompt)
 			if err != nil {
 				return InjectionResult{}, fmt.Errorf("inline OpenCode SDD prompts: %w", err)
 			}
@@ -680,7 +686,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	return InjectionResult{Changed: changed, Files: files}, nil
 }
 
-func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir string) ([]byte, error) {
+func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string, preserveExistingOrchestratorPrompt bool) ([]byte, error) {
 	var overlay map[string]any
 	if err := json.Unmarshal(overlayBytes, &overlay); err != nil {
 		return nil, fmt.Errorf("unmarshal OpenCode SDD overlay: %w", err)
@@ -695,7 +701,8 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir string) ([]byte, erro
 		return overlayBytes, nil
 	}
 
-	// Inline the orchestrator prompt (always inlined, not a file reference).
+	// Inline the orchestrator prompt (always inlined, not a file reference),
+	// unless an external strategy requested preserving the existing prompt.
 	orchestratorRaw, ok := agentsMap["sdd-orchestrator"]
 	if !ok {
 		return overlayBytes, nil
@@ -704,7 +711,19 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir string) ([]byte, erro
 	if !ok {
 		return overlayBytes, nil
 	}
-	orchestratorMap["prompt"] = assets.MustRead("generic/sdd-orchestrator.md")
+	if preserveExistingOrchestratorPrompt {
+		existingPrompt, err := readOpenCodeAgentPrompt(settingsPath, "sdd-orchestrator")
+		if err != nil {
+			return nil, err
+		}
+		if existingPrompt != "" {
+			orchestratorMap["prompt"] = existingPrompt
+		} else {
+			orchestratorMap["prompt"] = assets.MustRead("generic/sdd-orchestrator.md")
+		}
+	} else {
+		orchestratorMap["prompt"] = assets.MustRead("generic/sdd-orchestrator.md")
+	}
 
 	// Replace sub-agent prompt placeholders with {file:<absolutePath>} references.
 	// The placeholder format is __PROMPT_FILE_{phase}__ where {phase} is the agent name.
@@ -732,6 +751,44 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir string) ([]byte, erro
 	}
 
 	return append(result, '\n'), nil
+}
+
+func readOpenCodeAgentPrompt(settingsPath, agentKey string) (string, error) {
+	if strings.TrimSpace(settingsPath) == "" || strings.TrimSpace(agentKey) == "" {
+		return "", nil
+	}
+
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read OpenCode settings %q: %w", settingsPath, err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		return "", nil
+	}
+
+	agentsRaw, ok := root["agent"]
+	if !ok {
+		return "", nil
+	}
+	agentsMap, ok := agentsRaw.(map[string]any)
+	if !ok {
+		return "", nil
+	}
+	agentRaw, ok := agentsMap[agentKey]
+	if !ok {
+		return "", nil
+	}
+	agentMap, ok := agentRaw.(map[string]any)
+	if !ok {
+		return "", nil
+	}
+	prompt, _ := agentMap["prompt"].(string)
+	return prompt, nil
 }
 
 // installOpenCodePlugins copies the background-agents plugin and installs its

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
@@ -22,11 +23,11 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/internal/components/theme"
+	"github.com/gentleman-programming/gentle-ai/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
-	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/verify"
 )
@@ -272,7 +273,7 @@ func newInstallRuntime(homeDir string, selection model.Selection, resolved plann
 func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	targets := backupTargets(r.homeDir, r.selection, r.resolved)
 	prepare := []pipeline.Step{
-		checkDependenciesStep{id: "prepare:check-dependencies", profile: r.profile},
+		checkDependenciesStep{id: "prepare:check-dependencies", profile: r.profile, homeDir: r.homeDir, selection: r.selection},
 		prepareBackupStep{
 			id:          "prepare:backup-snapshot",
 			snapshotter: backup.NewSnapshotter(),
@@ -296,7 +297,6 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			apply = append(apply, kimiSystemPromptHubStep{id: "agent:kimi-prompt-hub", homeDir: r.homeDir})
 		}
 	}
-
 
 	for _, agent := range r.resolved.Agents {
 
@@ -442,6 +442,10 @@ func (s agentInstallStep) Run() error {
 		return nil
 	}
 
+	if err := installcmd.ValidateAgentInstallPreflight(s.profile, s.agent); err != nil {
+		return fmt.Errorf("preflight for agent %q: %w", s.agent, err)
+	}
+
 	commands, err := adapter.InstallCommand(s.profile)
 	if err != nil {
 		return fmt.Errorf("resolve install command for %q: %w", s.agent, err)
@@ -462,12 +466,9 @@ func (s kimiSystemPromptHubStep) ID() string {
 	return s.id
 }
 
-
 func (s kimiSystemPromptHubStep) Run() error {
 	return kimi.NewAdapter().BootstrapTemplate(s.homeDir)
 }
-
-
 
 type componentApplyStep struct {
 	id           string
@@ -531,13 +532,17 @@ func (s componentApplyStep) Run() error {
 		}
 		setupMode := engram.ParseSetupMode(os.Getenv(engram.SetupModeEnvVar))
 		setupStrict := engram.ParseSetupStrict(os.Getenv(engram.SetupStrictEnvVar))
+		attemptedSlugs := make(map[string]struct{}, len(adapters))
 		for _, adapter := range adapters {
 			if engram.ShouldAttemptSetup(setupMode, adapter.Agent()) {
 				slug, _ := engram.SetupAgentSlug(adapter.Agent())
-				if err := runCommand("engram", "setup", slug); err != nil {
-					if setupStrict {
-						return fmt.Errorf("engram setup for %q: %w", adapter.Agent(), err)
+				if _, seen := attemptedSlugs[slug]; !seen {
+					if err := runCommand("engram", "setup", slug); err != nil {
+						if setupStrict {
+							return fmt.Errorf("engram setup for %q: %w", adapter.Agent(), err)
+						}
 					}
+					attemptedSlugs[slug] = struct{}{}
 				}
 			}
 			if _, err := engram.Inject(s.homeDir, adapter); err != nil {
@@ -836,6 +841,11 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 				if p := adapter.MCPConfigPath(homeDir, "engram"); p != "" {
 					paths = append(paths, p)
 				}
+				if adapter.Agent() == model.AgentAntigravity {
+					if p := adapter.SettingsPath(homeDir); p != "" {
+						paths = append(paths, p)
+					}
+				}
 			case model.StrategyTOMLFile:
 				if p := adapter.MCPConfigPath(homeDir, "engram"); p != "" {
 					paths = append(paths, p)
@@ -947,8 +957,8 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 	}
 
 	// Always ensure the main system prompt file is included for verification if the agent
-	// supports modular system prompts (like Kimi), even if no specific component 
-	// (like Persona) was selected. This prevents false negatives when the skeleton 
+	// supports modular system prompts (like Kimi), even if no specific component
+	// (like Persona) was selected. This prevents false negatives when the skeleton
 	// is bootstrapped but not explicitly owned by any other component path list.
 	for _, adapter := range adapters {
 		if adapter.SystemPromptStrategy() == model.StrategyJinjaModules {
@@ -958,7 +968,6 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 
 	return paths
 }
-
 
 type sddSubAgentAdapter interface {
 	SupportsSubAgents() bool
@@ -1118,8 +1127,10 @@ func engramPathGuidance(shellPath string) string {
 // checkDependenciesStep verifies that required system dependencies are present.
 // It logs warnings for missing optional deps but only fails if required deps are missing.
 type checkDependenciesStep struct {
-	id      string
-	profile system.PlatformProfile
+	id        string
+	profile   system.PlatformProfile
+	homeDir   string
+	selection model.Selection
 }
 
 func (s checkDependenciesStep) ID() string {
@@ -1133,6 +1144,30 @@ func (s checkDependenciesStep) Run() error {
 	// surfaced on the TUI complete screen and by the actual install steps
 	// failing with real error messages.
 	_ = system.DetectDependencies(context.Background(), s.profile)
+	for _, agent := range s.selection.Agents {
+		adapter, err := agents.NewAdapter(agent)
+		if err != nil {
+			return fmt.Errorf("create adapter for %q: %w", agent, err)
+		}
+
+		if !adapter.SupportsAutoInstall() {
+			continue
+		}
+
+		if s.homeDir != "" {
+			installed, _, _, _, err := adapter.Detect(context.Background(), s.homeDir)
+			if err != nil {
+				return fmt.Errorf("detect agent %q: %w", agent, err)
+			}
+			if installed {
+				continue
+			}
+		}
+
+		if err := installcmd.ValidateAgentInstallPreflight(s.profile, agent); err != nil {
+			return fmt.Errorf("preflight for agent %q: %w", agent, err)
+		}
+	}
 	return nil
 }
 
