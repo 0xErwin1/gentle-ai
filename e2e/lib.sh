@@ -75,6 +75,9 @@ cleanup_test_env() {
     rm -rf "$HOME/.gentle-ai" 2>/dev/null || true
     rm -rf "$HOME/.codeium" 2>/dev/null || true
     rm -rf "$HOME/.cursor" 2>/dev/null || true
+    rm -rf "$HOME/.qwen" 2>/dev/null || true
+    rm -rf "$HOME/.kiro" 2>/dev/null || true
+    rm -rf "$HOME/.kimi" 2>/dev/null || true
     mkdir -p "$HOME/.config"
 }
 

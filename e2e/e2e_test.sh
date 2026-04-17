@@ -874,14 +874,24 @@ test_qwen_engram_idempotency() {
     log_test "Qwen: engram injection is idempotent"
     cleanup_test_env
 
-    # First run
-    $BINARY install --agent qwen --component engram --persona neutral > /dev/null 2>&1
     local settings="$HOME/.qwen/settings.json"
+
+    # First run — `|| true` keeps `set -e` from aborting the suite if install
+    # errors out (e.g. transient npm failure); we assert on the resulting file.
+    $BINARY install --agent qwen-code --component engram --persona neutral > /dev/null 2>&1 || true
+    if [ ! -f "$settings" ]; then
+        log_fail "Qwen settings.json missing after first install"
+        return
+    fi
     local checksum1
     checksum1=$(md5sum "$settings" | cut -d' ' -f1)
 
     # Second run
-    $BINARY install --agent qwen --component engram --persona neutral > /dev/null 2>&1
+    $BINARY install --agent qwen-code --component engram --persona neutral > /dev/null 2>&1 || true
+    if [ ! -f "$settings" ]; then
+        log_fail "Qwen settings.json missing after second install"
+        return
+    fi
     local checksum2
     checksum2=$(md5sum "$settings" | cut -d' ' -f1)
 
