@@ -175,13 +175,19 @@ engram tui                    # Visual memory browser
 
 ---
 
-## Contributors
+## Community Highlights
 
-This project exists because of the community. See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full list.
+This project gets better when the community builds on top of it.
 
 ### Community Integrations
 
-- [sdd-engram-plugin](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin) — external OpenCode SDD profile manager with runtime profile activation.
+- [sdd-engram-plugin](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin) — manage OpenCode SDD profiles and browse Engram memories directly from OpenCode, with runtime profile activation and no restart required.
+
+Using a tool like this? Gentle AI now supports a safer OpenCode sync compatibility path for external single-active profile managers.
+
+## Contributors
+
+This project exists because of the community. See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the full list.
 
 <a href="https://github.com/Gentleman-Programming/gentle-ai/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=Gentleman-Programming/gentle-ai" />
