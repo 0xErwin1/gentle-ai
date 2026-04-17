@@ -500,13 +500,17 @@ func (s componentApplyStep) Run() error {
 		}
 		setupMode := engram.ParseSetupMode(os.Getenv(engram.SetupModeEnvVar))
 		setupStrict := engram.ParseSetupStrict(os.Getenv(engram.SetupStrictEnvVar))
+		attemptedSlugs := make(map[string]struct{}, len(adapters))
 		for _, adapter := range adapters {
 			if engram.ShouldAttemptSetup(setupMode, adapter.Agent()) {
 				slug, _ := engram.SetupAgentSlug(adapter.Agent())
-				if err := runCommand("engram", "setup", slug); err != nil {
-					if setupStrict {
-						return fmt.Errorf("engram setup for %q: %w", adapter.Agent(), err)
+				if _, seen := attemptedSlugs[slug]; !seen {
+					if err := runCommand("engram", "setup", slug); err != nil {
+						if setupStrict {
+							return fmt.Errorf("engram setup for %q: %w", adapter.Agent(), err)
+						}
 					}
+					attemptedSlugs[slug] = struct{}{}
 				}
 			}
 			if _, err := engram.Inject(s.homeDir, adapter); err != nil {
@@ -804,6 +808,11 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 			case model.StrategyMCPConfigFile:
 				if p := adapter.MCPConfigPath(homeDir, "engram"); p != "" {
 					paths = append(paths, p)
+				}
+				if adapter.Agent() == model.AgentAntigravity {
+					if p := adapter.SettingsPath(homeDir); p != "" {
+						paths = append(paths, p)
+					}
 				}
 			case model.StrategyTOMLFile:
 				if p := adapter.MCPConfigPath(homeDir, "engram"); p != "" {
