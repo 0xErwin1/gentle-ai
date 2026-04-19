@@ -3736,3 +3736,51 @@ func TestInjectOpenCodeWithTwoProfiles_BothOrchestratorsPresent(t *testing.T) {
 		t.Error("opencode.json missing sdd-orchestrator-premium")
 	}
 }
+
+// TestInjectClaudeSubAgentsResolveModels verifies that when SDD is injected
+// for the Claude adapter, the embedded sub-agent files are copied to
+// ~/.claude/agents/ and the {{CLAUDE_MODEL}} placeholder is substituted per
+// phase using opts.ClaudeModelAssignments.
+func TestInjectClaudeSubAgentsResolveModels(t *testing.T) {
+	home := t.TempDir()
+
+	assignments := map[string]model.ClaudeModelAlias{
+		"sdd-design":  model.ClaudeModelOpus,
+		"sdd-archive": model.ClaudeModelHaiku,
+		"default":     model.ClaudeModelSonnet,
+	}
+
+	result, err := Inject(home, claudeAdapter(), "", InjectOptions{ClaudeModelAssignments: assignments})
+	if err != nil {
+		t.Fatalf("Inject(claude, custom assignments) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(claude, custom assignments) changed = false")
+	}
+
+	tests := []struct {
+		phase string
+		want  string
+	}{
+		{phase: "sdd-design", want: "model: opus"},
+		{phase: "sdd-archive", want: "model: haiku"},
+		{phase: "sdd-spec", want: "model: sonnet"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.phase, func(t *testing.T) {
+			path := filepath.Join(home, ".claude", "agents", tt.phase+".md")
+			content, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatalf("ReadFile(%s) error = %v", tt.phase, readErr)
+			}
+			text := string(content)
+			if strings.Contains(text, "{{CLAUDE_MODEL}}") {
+				t.Fatalf("agent %s still contains unresolved {{CLAUDE_MODEL}} placeholder", tt.phase)
+			}
+			if !strings.Contains(text, tt.want) {
+				t.Fatalf("agent %s missing %q\n--- file ---\n%s", tt.phase, tt.want, text)
+			}
+		})
+	}
+}

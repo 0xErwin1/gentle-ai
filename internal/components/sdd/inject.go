@@ -87,6 +87,16 @@ type kiroModelResolver interface {
 	KiroModelID(alias model.ClaudeModelAlias) string
 }
 
+// claudeModelResolver is an optional adapter capability. When implemented,
+// the subagent copy loop stamps the resolved ClaudeModelAlias into the agent
+// frontmatter sentinel {{CLAUDE_MODEL}}. Claude Code accepts "opus", "sonnet",
+// and "haiku" directly as model values, so the resolver is effectively an
+// identity function on the alias string — but the interface keeps the opt-in
+// shape consistent with kiroModelResolver.
+type claudeModelResolver interface {
+	ClaudeModelID(alias model.ClaudeModelAlias) string
+}
+
 // monorepoRootMarkers identify files/dirs that ONLY exist at the true root
 // of a multi-package workspace. If any of these is found while walking up,
 // we stop immediately — this is the authoritative project root.
@@ -582,6 +592,21 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 					}
 				}
 				contentStr = strings.ReplaceAll(contentStr, "{{KIRO_MODEL}}", kmr.KiroModelID(alias))
+			}
+
+			// Resolve {{CLAUDE_MODEL}} placeholder for adapters that support it (e.g. Claude Code).
+			// Non-Claude adapters don't implement claudeModelResolver and are unaffected.
+			if cmr, ok := adapter.(claudeModelResolver); ok {
+				phase := strings.TrimSuffix(entry.Name(), ".md")
+				alias := model.ClaudeModelSonnet // safe default
+				if opts.ClaudeModelAssignments != nil {
+					if a, hasAlias := opts.ClaudeModelAssignments[phase]; hasAlias {
+						alias = a
+					} else if d, hasDefault := opts.ClaudeModelAssignments["default"]; hasDefault {
+						alias = d
+					}
+				}
+				contentStr = strings.ReplaceAll(contentStr, "{{CLAUDE_MODEL}}", cmr.ClaudeModelID(alias))
 			}
 			outPath := filepath.Join(agentsDir, entry.Name())
 			writeResult, err := filemerge.WriteFileAtomic(outPath, []byte(contentStr), 0o644)
