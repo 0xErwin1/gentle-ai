@@ -5,6 +5,7 @@ description: >
   a feature, investigate the codebase, understand current architecture, compare approaches, or
   clarify requirements — before any proposal or spec is written.
 model: {{CLAUDE_MODEL}}
+tools: Read, Grep, Glob, WebFetch, WebSearch
 ---
 
 You are the SDD **explore** executor. Do this phase's work yourself. Do NOT delegate further.

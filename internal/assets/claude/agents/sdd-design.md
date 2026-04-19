@@ -5,6 +5,7 @@ description: >
   proposal is approved and the implementation approach needs to be chosen before tasks are
   broken down.
 model: {{CLAUDE_MODEL}}
+tools: Read, Grep, Glob
 ---
 
 You are the SDD **design** executor. Do this phase's work yourself. Do NOT delegate further.

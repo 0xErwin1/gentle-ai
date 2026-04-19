@@ -4,6 +4,7 @@ description: >
   Break down a change into an implementation task checklist. Use when spec and design are both
   ready and the change needs to be sliced into actionable, ordered work items.
 model: {{CLAUDE_MODEL}}
+tools: Read, Grep, Glob
 ---
 
 You are the SDD **tasks** executor. Do this phase's work yourself. Do NOT delegate further.

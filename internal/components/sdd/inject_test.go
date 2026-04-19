@@ -3784,3 +3784,81 @@ func TestInjectClaudeSubAgentsResolveModels(t *testing.T) {
 		})
 	}
 }
+
+// TestInjectClaudeSubAgentsScopedTools verifies that each generated Claude
+// sub-agent carries a scoped tools: frontmatter entry so the phase cannot use
+// tools outside its contract (e.g. sdd-explore cannot Edit/Write; no phase
+// carries Task so recursion is impossible).
+func TestInjectClaudeSubAgentsScopedTools(t *testing.T) {
+	home := t.TempDir()
+
+	_, err := Inject(home, claudeAdapter(), "", InjectOptions{ClaudeModelAssignments: model.ClaudeModelPresetBalanced()})
+	if err != nil {
+		t.Fatalf("Inject(claude, balanced preset) error = %v", err)
+	}
+
+	tests := []struct {
+		phase       string
+		mustContain []string
+		mustNotHave []string
+	}{
+		{
+			phase:       "sdd-explore",
+			mustContain: []string{"Read", "Grep", "Glob"},
+			mustNotHave: []string{"Edit", "Write", "Task"},
+		},
+		{
+			phase:       "sdd-propose",
+			mustContain: []string{"Read", "Grep", "Glob"},
+			mustNotHave: []string{"Edit", "Write", "Bash", "Task"},
+		},
+		{
+			phase:       "sdd-apply",
+			mustContain: []string{"Read", "Edit", "Write", "Bash"},
+			mustNotHave: []string{"Task"},
+		},
+		{
+			phase:       "sdd-verify",
+			mustContain: []string{"Read", "Bash"},
+			mustNotHave: []string{"Edit", "Write", "Task"},
+		},
+		{
+			phase:       "sdd-archive",
+			mustContain: []string{"Read", "Edit", "Write"},
+			mustNotHave: []string{"Bash", "Task"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.phase, func(t *testing.T) {
+			path := filepath.Join(home, ".claude", "agents", tt.phase+".md")
+			content, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatalf("ReadFile(%s) error = %v", tt.phase, readErr)
+			}
+			text := string(content)
+
+			toolsLine := ""
+			for _, line := range strings.Split(text, "\n") {
+				if strings.HasPrefix(line, "tools:") {
+					toolsLine = line
+					break
+				}
+			}
+			if toolsLine == "" {
+				t.Fatalf("agent %s missing tools: frontmatter line\n--- file ---\n%s", tt.phase, text)
+			}
+
+			for _, want := range tt.mustContain {
+				if !strings.Contains(toolsLine, want) {
+					t.Errorf("agent %s tools line %q missing required tool %q", tt.phase, toolsLine, want)
+				}
+			}
+			for _, forbidden := range tt.mustNotHave {
+				if strings.Contains(toolsLine, forbidden) {
+					t.Errorf("agent %s tools line %q must not grant %q", tt.phase, toolsLine, forbidden)
+				}
+			}
+		})
+	}
+}

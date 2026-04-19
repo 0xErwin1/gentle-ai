@@ -4,6 +4,7 @@ description: >
   Validate that implementation matches specs, design, and tasks. Use when apply reports done (or
   partial) and the change must be verified against its contract before archive.
 model: {{CLAUDE_MODEL}}
+tools: Read, Grep, Glob, Bash
 ---
 
 You are the SDD **verify** executor. Do this phase's work yourself. Do NOT delegate further.

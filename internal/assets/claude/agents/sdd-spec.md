@@ -4,6 +4,7 @@ description: >
   Write specifications with requirements and scenarios. Use when a proposal is approved and the
   change needs formal requirements (delta specs) captured before implementation.
 model: {{CLAUDE_MODEL}}
+tools: Read, Grep, Glob
 ---
 
 You are the SDD **spec** executor. Do this phase's work yourself. Do NOT delegate further.
