@@ -1020,6 +1020,16 @@ func TestConfigPathsForBackup_ExcludesRuntimeDirs(t *testing.T) {
 		}
 	}
 
+	// Gemini Antigravity temp dir is nested under antigravity/ and must also be excluded.
+	geminiAntigravityTmpFile := filepath.Join(homeDir, ".gemini", "antigravity", "tmp", "artifact.json")
+	if err := os.MkdirAll(filepath.Dir(geminiAntigravityTmpFile), 0o755); err != nil {
+		t.Fatalf("MkdirAll gemini antigravity tmp: %v", err)
+	}
+	if err := os.WriteFile(geminiAntigravityTmpFile, []byte("temp runtime data"), 0o644); err != nil {
+		t.Fatalf("WriteFile gemini antigravity tmp: %v", err)
+	}
+	excludedFiles = append(excludedFiles, geminiAntigravityTmpFile)
+
 	paths := configPathsForBackup(homeDir)
 	pathSet := make(map[string]struct{}, len(paths))
 	for _, p := range paths {
