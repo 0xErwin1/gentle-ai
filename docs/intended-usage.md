@@ -51,7 +51,7 @@ Here's how it actually works:
 
 The agent handles all the phases internally. You just review and approve at key decision points.
 
-If you want the project-level OpenSpec config that SDD phases can read for conventions, strict TDD, and testing metadata, see [OpenSpec Config for SDD](openspec-config.md).
+If you want the project-level OpenSpec config convention SDD phases use for conventions, strict TDD, and testing metadata, see [OpenSpec Config for SDD](openspec-config.md).
 
 ---
 
