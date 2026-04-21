@@ -27,6 +27,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 
 		// OpenCode agent files
 		"opencode/persona-gentleman.md",
+		"opencode/sdd-orchestrator.md",
 		"opencode/sdd-overlay-single.json",
 		"opencode/sdd-overlay-multi.json",
 		"opencode/commands/sdd-apply.md",
@@ -136,7 +137,7 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 		seen[entry.Name()] = true
 	}
 
-	for _, name := range []string{"commands", "plugins", "persona-gentleman.md", "sdd-overlay-single.json", "sdd-overlay-multi.json"} {
+	for _, name := range []string{"commands", "plugins", "persona-gentleman.md", "sdd-orchestrator.md", "sdd-overlay-single.json", "sdd-overlay-multi.json"} {
 		if !seen[name] {
 			t.Fatalf("opencode embedded assets missing %q", name)
 		}
@@ -185,6 +186,71 @@ func TestClaudeEmbeddedAssetLayout(t *testing.T) {
 	}
 	if len(commandEntries) != 9 {
 		t.Fatalf("claude commands count = %d, want 9", len(commandEntries))
+	}
+}
+
+func TestGentlemanLanguageInstructionsDoNotBiasEnglishSessions(t *testing.T) {
+	personaPaths := []string{
+		"claude/persona-gentleman.md",
+		"generic/persona-gentleman.md",
+		"kiro/persona-gentleman.md",
+		"kimi/persona-gentleman.md",
+		"opencode/persona-gentleman.md",
+	}
+
+	for _, path := range personaPaths {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+
+			for _, banned := range []string{
+				`Say "déjame verificar"`,
+				`Spanish input → Rioplatense Spanish (voseo):`,
+				`English input → same warm energy:`,
+			} {
+				if strings.Contains(content, banned) {
+					t.Fatalf("%s still contains language-biasing phrase %q", path, banned)
+				}
+			}
+
+			for _, required := range []string{
+				"Match the user's current language.",
+				"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
+				"In English conversations, keep the full reply in natural English with the same warm energy.",
+			} {
+				if !strings.Contains(content, required) {
+					t.Fatalf("%s missing language guardrail %q", path, required)
+				}
+			}
+		})
+	}
+
+	for _, path := range []string{
+		"claude/output-style-gentleman.md",
+		"kimi/output-style-gentleman.md",
+	} {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+
+			for _, banned := range []string{
+				"### Spanish Input → Rioplatense Spanish (voseo)",
+				`Use naturally: "Bien"`,
+				`Use naturally: "Here's the thing"`,
+			} {
+				if strings.Contains(content, banned) {
+					t.Fatalf("%s still contains drift-prone style example %q", path, banned)
+				}
+			}
+
+			for _, required := range []string{
+				"Always match the user's current language.",
+				"Do not drift into another language because of persona wording, examples, or stylistic momentum.",
+				"If the conversation is in English, keep the full response in English unless the user explicitly asks for another language or you are translating/quoting.",
+			} {
+				if !strings.Contains(content, required) {
+					t.Fatalf("%s missing output-style guardrail %q", path, required)
+				}
+			}
+		})
 	}
 }
 
@@ -322,6 +388,7 @@ func TestSDDOrchestratorAssetsScopedToDedicatedAgent(t *testing.T) {
 	for _, assetPath := range []string{
 		"generic/sdd-orchestrator.md",
 		"claude/sdd-orchestrator.md",
+		"opencode/sdd-orchestrator.md",
 		"gemini/sdd-orchestrator.md",
 		"codex/sdd-orchestrator.md",
 		"cursor/sdd-orchestrator.md",
@@ -329,7 +396,7 @@ func TestSDDOrchestratorAssetsScopedToDedicatedAgent(t *testing.T) {
 	} {
 		t.Run(assetPath, func(t *testing.T) {
 			content := MustRead(assetPath)
-			if !strings.Contains(content, "dedicated `sdd-orchestrator` agent or rule only") {
+			if !strings.Contains(content, "dedicated `sdd-orchestrator`") {
 				t.Fatalf("%q missing dedicated-agent scoping note", assetPath)
 			}
 			if !strings.Contains(content, "Do NOT apply it to executor phase agents") {

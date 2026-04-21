@@ -249,7 +249,7 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string) ([]byte, erro
 	// Orchestrator entry
 	orchEntry := map[string]any{
 		"mode":        "primary",
-		"description": "Agent Teams Orchestrator (" + profile.Name + " profile) - coordinates sub-agents, never does work inline",
+		"description": "SDD Orchestrator (" + profile.Name + " profile) - coordinates sub-agents, never does work inline",
 		"prompt":      orchestratorPrompt,
 		"permission": map[string]any{
 			"task": map[string]any{
@@ -320,12 +320,12 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string) ([]byte, erro
 
 // buildProfileOrchestratorPrompt constructs the orchestrator prompt for a named
 // profile. It:
-//  1. Reads the base generic/sdd-orchestrator.md asset
+//  1. Reads the base OpenCode-specific orchestrator asset
 //  2. Injects a model assignments table reflecting the profile's models
 //  3. Replaces bare sub-agent references (e.g. sdd-init) with suffixed ones
 //     (e.g. sdd-init-{name}) in the prompt text
 func buildProfileOrchestratorPrompt(profile model.Profile) (string, error) {
-	base := assets.MustRead("generic/sdd-orchestrator.md")
+	base := assets.MustRead(sddOrchestratorAsset(model.AgentOpenCode))
 
 	// Inject model assignments table.
 	const openMarker = "<!-- gentle-ai:sdd-model-assignments -->"
@@ -398,7 +398,7 @@ func replacePhaseRef(content, from, to string) string {
 func renderProfileModelAssignmentsSection(profile model.Profile) string {
 	var b strings.Builder
 	b.WriteString("## Model Assignments\n\n")
-	b.WriteString("Read this table at session start (or before first delegation), cache it for the session, and pass the mapped alias in every Agent tool call via the `model` parameter. If a phase is missing, use the `default` row. If you lack access to the assigned model, substitute the next tier down and continue.\n\n")
+	b.WriteString("Read this table at session start (or before first delegation) and cache it for the session. Treat each row as the authoritative configured model for that agent. If a phase is missing, use the default OpenCode runtime model and continue.\n\n")
 	b.WriteString("| Phase | Model | Reason |\n")
 	b.WriteString("|-------|-------|--------|\n")
 

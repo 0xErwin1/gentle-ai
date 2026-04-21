@@ -19,6 +19,22 @@ func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 
+func assertGentlemanLanguageGuardrails(t *testing.T, text string, required []string, banned []string) {
+	t.Helper()
+
+	for _, needle := range required {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("missing language guardrail %q", needle)
+		}
+	}
+
+	for _, needle := range banned {
+		if strings.Contains(text, needle) {
+			t.Fatalf("contains drift-prone language instruction %q", needle)
+		}
+	}
+}
+
 func TestInjectClaudeGentlemanWritesSectionWithRealContent(t *testing.T) {
 	home := t.TempDir()
 
@@ -47,6 +63,19 @@ func TestInjectClaudeGentlemanWritesSectionWithRealContent(t *testing.T) {
 	if !strings.Contains(text, "Senior Architect") {
 		t.Fatal("CLAUDE.md missing real persona content (expected 'Senior Architect')")
 	}
+
+	assertGentlemanLanguageGuardrails(t, text,
+		[]string{
+			"Match the user's current language.",
+			"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
+			"In English conversations, keep the full reply in natural English with the same warm energy.",
+		},
+		[]string{
+			`Say "déjame verificar"`,
+			"Spanish input → Rioplatense Spanish",
+			"English input → same warm energy",
+		},
+	)
 }
 
 func TestInjectKimiGentlemanIncludesProjectInstructionsAndLoadedSkills(t *testing.T) {
@@ -87,12 +116,37 @@ func TestInjectKimiGentlemanIncludesProjectInstructionsAndLoadedSkills(t *testin
 	if !strings.Contains(string(styleContent), "Gentleman Output Style") {
 		t.Fatal("output-style.md missing Gentleman Output Style content")
 	}
+	assertGentlemanLanguageGuardrails(t, string(styleContent),
+		[]string{
+			"Always match the user's current language.",
+			"Do not drift into another language because of persona wording, examples, or stylistic momentum.",
+			"If the conversation is in English, keep the full response in English unless the user explicitly asks for another language or you are translating/quoting.",
+		},
+		[]string{
+			"### Spanish Input → Rioplatense Spanish (voseo)",
+			`Use naturally: "Bien"`,
+			`Use naturally: "Here's the thing"`,
+		},
+	)
 
 	// persona.md module should exist and contain persona content.
 	personaPath := filepath.Join(home, ".kimi", "persona.md")
-	if _, err := os.Stat(personaPath); err != nil {
+	personaContent, err := os.ReadFile(personaPath)
+	if err != nil {
 		t.Fatalf("persona.md not written: %v", err)
 	}
+	assertGentlemanLanguageGuardrails(t, string(personaContent),
+		[]string{
+			"Match the user's current language.",
+			"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
+			"In English conversations, keep the full reply in natural English with the same warm energy.",
+		},
+		[]string{
+			`Say "déjame verificar"`,
+			"Spanish input → Rioplatense Spanish",
+			"English input → same warm energy",
+		},
+	)
 }
 
 func TestInjectClaudeGentlemanWritesOutputStyleFile(t *testing.T) {
@@ -825,6 +879,18 @@ func TestInjectGeminiGentlemanWritesSystemPromptWithRealContent(t *testing.T) {
 	if !strings.Contains(text, "Senior Architect") {
 		t.Fatal("Gemini persona missing 'Senior Architect'")
 	}
+	assertGentlemanLanguageGuardrails(t, text,
+		[]string{
+			"Match the user's current language.",
+			"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
+			"In English conversations, keep the full reply in natural English with the same warm energy.",
+		},
+		[]string{
+			`Say "déjame verificar"`,
+			"Spanish input → Rioplatense Spanish",
+			"English input → same warm energy",
+		},
+	)
 }
 
 func TestInjectVSCodeGentlemanWritesInstructionsFile(t *testing.T) {

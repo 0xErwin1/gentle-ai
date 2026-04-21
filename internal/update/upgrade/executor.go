@@ -89,6 +89,7 @@ var backupExcludeSubdirs = map[string]bool{
 	"conversations":               true, // Gemini conversation history
 	"context_state":               true, // Gemini context state
 	"html_artifacts":              true, // generated HTML artifacts
+	"tmp":                         true, // Antigravity temporary runtime artifacts
 }
 
 // configPathsForBackup returns the agent config file paths that the backup
