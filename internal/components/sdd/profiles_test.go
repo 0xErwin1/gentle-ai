@@ -519,6 +519,26 @@ func TestGenerateProfileOverlay_OrchestratorPromptSuffixed(t *testing.T) {
 	if !strings.Contains(prompt, "sdd-init-cheap") && !strings.Contains(prompt, "-cheap") {
 		t.Errorf("orchestrator prompt doesn't contain suffixed sub-agent references; snippet: %q", prompt[:min(200, len(prompt))])
 	}
+
+	for _, unwanted := range []string{
+		"Agent Teams Lite",
+		"| orchestrator | opus |",
+		"| sdd-explore | sonnet |",
+		"| sdd-archive | haiku |",
+	} {
+		if strings.Contains(prompt, unwanted) {
+			t.Fatalf("profile orchestrator prompt contains legacy content %q", unwanted)
+		}
+	}
+
+	for _, wanted := range []string{
+		"Gentle AI",
+		"| orchestrator | anthropic/claude-haiku-3-5 |",
+	} {
+		if !strings.Contains(prompt, wanted) {
+			t.Fatalf("profile orchestrator prompt missing %q", wanted)
+		}
+	}
 }
 
 // ─── RemoveProfileAgents ─────────────────────────────────────────────────

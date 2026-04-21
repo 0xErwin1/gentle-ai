@@ -258,6 +258,46 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestInjectOpenCodeUsesOpenCodeSpecificOrchestratorPrompt(t *testing.T) {
+	for _, mode := range []model.SDDModeID{model.SDDModeSingle, model.SDDModeMulti} {
+		t.Run(string(mode), func(t *testing.T) {
+			home := t.TempDir()
+			mockNoPackageManager(t)
+
+			if _, err := Inject(home, opencodeAdapter(), mode); err != nil {
+				t.Fatalf("Inject(%s) error = %v", mode, err)
+			}
+
+			settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+			content, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatalf("ReadFile(opencode.json) error = %v", err)
+			}
+
+			text := string(content)
+			for _, unwanted := range []string{
+				"Agent Teams Lite",
+				"| orchestrator | opus |",
+				"| sdd-explore | sonnet |",
+				"| sdd-archive | haiku |",
+			} {
+				if strings.Contains(text, unwanted) {
+					t.Fatalf("opencode.json contains legacy OpenCode orchestrator prompt content %q", unwanted)
+				}
+			}
+
+			for _, wanted := range []string{
+				"Gentle AI",
+				"Read the configured models from `opencode.json`",
+			} {
+				if !strings.Contains(text, wanted) {
+					t.Fatalf("opencode.json missing OpenCode orchestrator prompt content %q", wanted)
+				}
+			}
+		})
+	}
+}
+
 func TestInjectOpenCodePreservesExistingOrchestratorPromptWhenRequested(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
@@ -2620,7 +2660,7 @@ func TestSDDOrchestratorAssetSelection(t *testing.T) {
 		{agent: model.AgentCursor, want: "cursor/sdd-orchestrator.md"},
 		{agent: model.AgentQwenCode, want: "qwen/sdd-orchestrator.md"},
 		{agent: model.AgentClaudeCode, want: "generic/sdd-orchestrator.md"},
-		{agent: model.AgentOpenCode, want: "generic/sdd-orchestrator.md"},
+		{agent: model.AgentOpenCode, want: "opencode/sdd-orchestrator.md"},
 		{agent: model.AgentVSCodeCopilot, want: "generic/sdd-orchestrator.md"},
 	}
 

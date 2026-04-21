@@ -18,6 +18,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 
 		// OpenCode agent files
 		"opencode/persona-gentleman.md",
+		"opencode/sdd-orchestrator.md",
 		"opencode/sdd-overlay-single.json",
 		"opencode/sdd-overlay-multi.json",
 		"opencode/commands/sdd-apply.md",
@@ -126,7 +127,7 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 		seen[entry.Name()] = true
 	}
 
-	for _, name := range []string{"commands", "plugins", "persona-gentleman.md", "sdd-overlay-single.json", "sdd-overlay-multi.json"} {
+	for _, name := range []string{"commands", "plugins", "persona-gentleman.md", "sdd-orchestrator.md", "sdd-overlay-single.json", "sdd-overlay-multi.json"} {
 		if !seen[name] {
 			t.Fatalf("opencode embedded assets missing %q", name)
 		}
@@ -286,6 +287,7 @@ func TestSDDOrchestratorAssetsScopedToDedicatedAgent(t *testing.T) {
 	for _, assetPath := range []string{
 		"generic/sdd-orchestrator.md",
 		"claude/sdd-orchestrator.md",
+		"opencode/sdd-orchestrator.md",
 		"gemini/sdd-orchestrator.md",
 		"codex/sdd-orchestrator.md",
 		"cursor/sdd-orchestrator.md",
@@ -293,7 +295,7 @@ func TestSDDOrchestratorAssetsScopedToDedicatedAgent(t *testing.T) {
 	} {
 		t.Run(assetPath, func(t *testing.T) {
 			content := MustRead(assetPath)
-			if !strings.Contains(content, "dedicated `sdd-orchestrator` agent or rule only") {
+			if !strings.Contains(content, "dedicated `sdd-orchestrator`") {
 				t.Fatalf("%q missing dedicated-agent scoping note", assetPath)
 			}
 			if !strings.Contains(content, "Do NOT apply it to executor phase agents") {

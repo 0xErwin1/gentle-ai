@@ -719,10 +719,10 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 		if existingPrompt != "" {
 			orchestratorMap["prompt"] = existingPrompt
 		} else {
-			orchestratorMap["prompt"] = assets.MustRead("generic/sdd-orchestrator.md")
+			orchestratorMap["prompt"] = assets.MustRead(sddOrchestratorAsset(model.AgentOpenCode))
 		}
 	} else {
-		orchestratorMap["prompt"] = assets.MustRead("generic/sdd-orchestrator.md")
+		orchestratorMap["prompt"] = assets.MustRead(sddOrchestratorAsset(model.AgentOpenCode))
 	}
 
 	// Replace sub-agent prompt placeholders with {file:<absolutePath>} references.
@@ -1012,6 +1012,8 @@ func sddOrchestratorAsset(agent model.AgentID) string {
 		return "qwen/sdd-orchestrator.md"
 	case model.AgentKiroIDE:
 		return "kiro/sdd-orchestrator.md"
+	case model.AgentOpenCode:
+		return "opencode/sdd-orchestrator.md"
 	default:
 		return "generic/sdd-orchestrator.md"
 	}
