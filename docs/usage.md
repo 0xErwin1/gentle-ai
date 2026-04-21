@@ -10,7 +10,9 @@
 |---------|-----|-------------|
 | Gentleman | `gentleman` | Teaching-oriented mentor persona — pushes back on bad practices, explains the why |
 | Neutral | `neutral` | Same teacher, same philosophy, no regional language — warm and professional |
-| Custom | `custom` | Bring your own persona instructions |
+| Custom | `custom` | Keep your existing persona/config unmanaged — gentle-ai does not inject a persona |
+
+`custom` is a compatibility/ownership choice, not a persona editor. Use it when you already have your own persona instructions and want gentle-ai to leave them alone.
 
 ---
 
@@ -138,8 +140,8 @@ gentle-ai -v
 | `--agent`, `--agents` | Agents to configure (comma-separated) |
 | `--component`, `--components` | Components to install (comma-separated) |
 | `--skill`, `--skills` | Skills to install (comma-separated) |
-| `--persona` | Persona mode: `gentleman`, `neutral`, `custom` |
-| `--preset` | Preset: `full-gentleman`, `ecosystem-only`, `minimal`, `custom` |
+| `--persona` | Persona mode: `gentleman`, `neutral`, `custom` (`custom` keeps your existing persona unmanaged) |
+| `--preset` | Preset: `full-gentleman`, `ecosystem-only`, `minimal`, `custom` (`custom` means manual component/skill selection) |
 | `--dry-run` | Preview the install plan without applying changes |
 
 ## CLI Flags (sync)
