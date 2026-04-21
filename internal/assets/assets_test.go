@@ -152,6 +152,71 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	}
 }
 
+func TestGentlemanLanguageInstructionsDoNotBiasEnglishSessions(t *testing.T) {
+	personaPaths := []string{
+		"claude/persona-gentleman.md",
+		"generic/persona-gentleman.md",
+		"kiro/persona-gentleman.md",
+		"kimi/persona-gentleman.md",
+		"opencode/persona-gentleman.md",
+	}
+
+	for _, path := range personaPaths {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+
+			for _, banned := range []string{
+				`Say "déjame verificar"`,
+				`Spanish input → Rioplatense Spanish (voseo):`,
+				`English input → same warm energy:`,
+			} {
+				if strings.Contains(content, banned) {
+					t.Fatalf("%s still contains language-biasing phrase %q", path, banned)
+				}
+			}
+
+			for _, required := range []string{
+				"Match the user's current language.",
+				"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
+				"In English conversations, keep the full reply in natural English with the same warm energy.",
+			} {
+				if !strings.Contains(content, required) {
+					t.Fatalf("%s missing language guardrail %q", path, required)
+				}
+			}
+		})
+	}
+
+	for _, path := range []string{
+		"claude/output-style-gentleman.md",
+		"kimi/output-style-gentleman.md",
+	} {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+
+			for _, banned := range []string{
+				"### Spanish Input → Rioplatense Spanish (voseo)",
+				`Use naturally: "Bien"`,
+				`Use naturally: "Here's the thing"`,
+			} {
+				if strings.Contains(content, banned) {
+					t.Fatalf("%s still contains drift-prone style example %q", path, banned)
+				}
+			}
+
+			for _, required := range []string{
+				"Always match the user's current language.",
+				"Do not drift into another language because of persona wording, examples, or stylistic momentum.",
+				"If the conversation is in English, keep the full response in English unless the user explicitly asks for another language or you are translating/quoting.",
+			} {
+				if !strings.Contains(content, required) {
+					t.Fatalf("%s missing output-style guardrail %q", path, required)
+				}
+			}
+		})
+	}
+}
+
 // TestMustReadPanicsOnMissingFile verifies that MustRead panics for a
 // nonexistent file, confirming the safety mechanism works.
 func TestMustReadPanicsOnMissingFile(t *testing.T) {
