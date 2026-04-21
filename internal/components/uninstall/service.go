@@ -520,9 +520,10 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 		}
 		if adapter.SupportsSlashCommands() {
 			commandsDir := adapter.CommandsDir(homeDir)
-			entries, err := fs.ReadDir(assets.FS, "opencode/commands")
+			commandsAssetDir := assets.SDDCommandsAssetDir(adapter.Agent())
+			entries, err := fs.ReadDir(assets.FS, commandsAssetDir)
 			if err != nil {
-				return nil, nil, fmt.Errorf("read embedded opencode commands: %w", err)
+				return nil, nil, fmt.Errorf("read embedded %s: %w", commandsAssetDir, err)
 			}
 			for _, entry := range entries {
 				if entry.IsDir() {
