@@ -369,6 +369,52 @@ func TestRunInstallLinuxRollsBackOnComponentFailure(t *testing.T) {
 	}
 }
 
+func TestRunInstallFedoraQwenEngramSkipsUnsupportedSetupAndWritesSettings(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = missingBinaryLookPath
+	recorder := &commandRecorder{}
+	runCommand = recorder.record
+
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return filepath.Join(home, "bin", "engram"), nil
+	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
+
+	detection := linuxDetectionResult(system.LinuxDistroFedora, "dnf")
+	result, err := RunInstall(
+		[]string{"--agent", "qwen-code", "--component", "engram"},
+		detection,
+	)
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	}
+
+	settingsPath := filepath.Join(home, ".qwen", "settings.json")
+	if _, err := os.Stat(settingsPath); err != nil {
+		t.Fatalf("expected qwen settings at %q: %v", settingsPath, err)
+	}
+
+	for _, cmd := range recorder.get() {
+		if strings.Contains(cmd, "engram setup qwen-code") {
+			t.Fatalf("unexpected unsupported setup command: %s", cmd)
+		}
+	}
+}
+
 func TestRunInstallLinuxAgentInstallResolvesGoInstallCommand(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
