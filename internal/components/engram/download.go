@@ -77,41 +77,62 @@ func DownloadLatestBinary(profile system.PlatformProfile) (string, error) {
 // fetchLatestEngramVersion queries the GitHub Releases API for the latest engram
 // release and returns the version string (without leading "v").
 func fetchLatestEngramVersion() (string, error) {
+	token := githubToken()
+	version, status, err := fetchLatestEngramVersionRequest(token)
+	if err == nil {
+		return version, nil
+	}
+
+	// GitHub Actions injects a repository-scoped GITHUB_TOKEN into CI. When that
+	// token is forwarded into our Linux E2E containers, the public engram releases
+	// endpoint can respond 401/403 for a different repository. Retry anonymously
+	// before failing because the release metadata is public.
+	if token != "" && (status == http.StatusUnauthorized || status == http.StatusForbidden) {
+		version, _, retryErr := fetchLatestEngramVersionRequest("")
+		if retryErr == nil {
+			return version, nil
+		}
+	}
+
+	return "", err
+}
+
+func fetchLatestEngramVersionRequest(token string) (string, int, error) {
 	apiURL := fmt.Sprintf("%s/repos/%s/%s/releases/latest",
 		engramAPIBaseURL(), engramOwner, engramRepo)
 
 	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("build request: %w", err)
+		return "", 0, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	if token := githubToken(); token != "" {
+	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := engramHTTPClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("call GitHub API: %w", err)
+		return "", 0, fmt.Errorf("call GitHub API: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GitHub API returned HTTP %d", resp.StatusCode)
+		return "", resp.StatusCode, fmt.Errorf("GitHub API returned HTTP %d", resp.StatusCode)
 	}
 
 	var release struct {
 		TagName string `json:"tag_name"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return "", fmt.Errorf("decode release JSON: %w", err)
+		return "", resp.StatusCode, fmt.Errorf("decode release JSON: %w", err)
 	}
 
 	version := strings.TrimPrefix(release.TagName, "v")
 	if version == "" {
-		return "", fmt.Errorf("empty tag_name in GitHub release response")
+		return "", resp.StatusCode, fmt.Errorf("empty tag_name in GitHub release response")
 	}
 
-	return version, nil
+	return version, resp.StatusCode, nil
 }
 
 // githubToken returns a GitHub API token from the environment, if available.

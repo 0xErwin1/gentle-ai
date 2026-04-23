@@ -117,6 +117,49 @@ func TestInjectClaudeIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestInjectClaudeWritesCommandFiles(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, claudeAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject() first changed = false")
+	}
+
+	expectedCommands := []string{
+		"sdd-apply.md", "sdd-archive.md", "sdd-continue.md", "sdd-explore.md",
+		"sdd-ff.md", "sdd-init.md", "sdd-new.md", "sdd-onboard.md", "sdd-verify.md",
+	}
+	for _, name := range expectedCommands {
+		path := filepath.Join(home, ".claude", "commands", name)
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected command file %q not found: %v", name, err)
+		}
+	}
+
+	commandPath := filepath.Join(home, ".claude", "commands", "sdd-init.md")
+	content, err := os.ReadFile(commandPath)
+	if err != nil {
+		t.Fatalf("ReadFile(sdd-init.md) error = %v", err)
+	}
+
+	text := string(content)
+	if !strings.Contains(text, "description:") {
+		t.Fatal("sdd-init.md missing frontmatter description")
+	}
+	if strings.Contains(text, "agent: sdd-orchestrator") {
+		t.Fatal("sdd-init.md contains OpenCode-specific agent frontmatter")
+	}
+	if !strings.Contains(text, "If the native `sdd-init` sub-agent is available") {
+		t.Fatal("sdd-init.md missing Claude delegation guidance")
+	}
+	if !strings.Contains(text, "~/.claude/skills/sdd-init/SKILL.md") {
+		t.Fatal("sdd-init.md missing Claude skill path")
+	}
+}
+
 func TestInjectClaudeCustomModelAssignments(t *testing.T) {
 	home := t.TempDir()
 
@@ -255,6 +298,46 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 	if second.Changed {
 		t.Fatalf("Inject() second changed = true")
+	}
+}
+
+func TestInjectOpenCodeUsesOpenCodeSpecificOrchestratorPrompt(t *testing.T) {
+	for _, mode := range []model.SDDModeID{model.SDDModeSingle, model.SDDModeMulti} {
+		t.Run(string(mode), func(t *testing.T) {
+			home := t.TempDir()
+			mockNoPackageManager(t)
+
+			if _, err := Inject(home, opencodeAdapter(), mode); err != nil {
+				t.Fatalf("Inject(%s) error = %v", mode, err)
+			}
+
+			settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+			content, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatalf("ReadFile(opencode.json) error = %v", err)
+			}
+
+			text := string(content)
+			for _, unwanted := range []string{
+				"Agent Teams Lite",
+				"| orchestrator | opus |",
+				"| sdd-explore | sonnet |",
+				"| sdd-archive | haiku |",
+			} {
+				if strings.Contains(text, unwanted) {
+					t.Fatalf("opencode.json contains legacy OpenCode orchestrator prompt content %q", unwanted)
+				}
+			}
+
+			for _, wanted := range []string{
+				"Gentle AI",
+				"Read the configured models from `opencode.json`",
+			} {
+				if !strings.Contains(text, wanted) {
+					t.Fatalf("opencode.json missing OpenCode orchestrator prompt content %q", wanted)
+				}
+			}
+		})
 	}
 }
 
@@ -2620,7 +2703,7 @@ func TestSDDOrchestratorAssetSelection(t *testing.T) {
 		{agent: model.AgentCursor, want: "cursor/sdd-orchestrator.md"},
 		{agent: model.AgentQwenCode, want: "qwen/sdd-orchestrator.md"},
 		{agent: model.AgentClaudeCode, want: "generic/sdd-orchestrator.md"},
-		{agent: model.AgentOpenCode, want: "generic/sdd-orchestrator.md"},
+		{agent: model.AgentOpenCode, want: "opencode/sdd-orchestrator.md"},
 		{agent: model.AgentVSCodeCopilot, want: "generic/sdd-orchestrator.md"},
 	}
 

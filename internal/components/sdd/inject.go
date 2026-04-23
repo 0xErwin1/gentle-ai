@@ -301,9 +301,10 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if adapter.SupportsSlashCommands() {
 		commandsDir := adapter.CommandsDir(homeDir)
 		if commandsDir != "" {
-			commandEntries, err := fs.ReadDir(assets.FS, "opencode/commands")
+			commandsAssetDir := assets.SDDCommandsAssetDir(adapter.Agent())
+			commandEntries, err := fs.ReadDir(assets.FS, commandsAssetDir)
 			if err != nil {
-				return InjectionResult{}, fmt.Errorf("read embedded opencode/commands: %w", err)
+				return InjectionResult{}, fmt.Errorf("read embedded %s: %w", commandsAssetDir, err)
 			}
 
 			for _, entry := range commandEntries {
@@ -311,7 +312,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 					continue
 				}
 
-				content := assets.MustRead("opencode/commands/" + entry.Name())
+				content := assets.MustRead(commandsAssetDir + "/" + entry.Name())
 				path := filepath.Join(commandsDir, entry.Name())
 				writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
 				if err != nil {
@@ -721,10 +722,10 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 		if existingPrompt != "" {
 			orchestratorMap["prompt"] = existingPrompt
 		} else {
-			orchestratorMap["prompt"] = assets.MustRead("generic/sdd-orchestrator.md")
+			orchestratorMap["prompt"] = assets.MustRead(sddOrchestratorAsset(model.AgentOpenCode))
 		}
 	} else {
-		orchestratorMap["prompt"] = assets.MustRead("generic/sdd-orchestrator.md")
+		orchestratorMap["prompt"] = assets.MustRead(sddOrchestratorAsset(model.AgentOpenCode))
 	}
 
 	// Replace sub-agent prompt placeholders with {file:<absolutePath>} references.
@@ -1014,6 +1015,8 @@ func sddOrchestratorAsset(agent model.AgentID) string {
 		return "qwen/sdd-orchestrator.md"
 	case model.AgentKiroIDE:
 		return "kiro/sdd-orchestrator.md"
+	case model.AgentOpenCode:
+		return "opencode/sdd-orchestrator.md"
 	default:
 		return "generic/sdd-orchestrator.md"
 	}

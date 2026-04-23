@@ -238,6 +238,59 @@ func TestComponentOperationsSDD_RemovesOnlySelectedProfilesFromSettings(t *testi
 	}
 }
 
+func TestComponentOperationsSDD_ClaudeRemovesManagedCommandFiles(t *testing.T) {
+	homeDir := t.TempDir()
+	workspaceDir := t.TempDir()
+
+	svc, err := NewService(homeDir, workspaceDir, "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	adapter, ok := svc.registry.Get(model.AgentClaudeCode)
+	if !ok {
+		t.Fatal("claude adapter not found in registry")
+	}
+
+	commandsDir := adapter.CommandsDir(homeDir)
+	if err := os.MkdirAll(commandsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(commands dir) error = %v", err)
+	}
+
+	managed := []string{"sdd-init.md", "sdd-explore.md", "sdd-onboard.md"}
+	for _, name := range managed {
+		if err := os.WriteFile(filepath.Join(commandsDir, name), []byte(name), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", name, err)
+		}
+	}
+	customPath := filepath.Join(commandsDir, "my-custom-command.md")
+	if err := os.WriteFile(customPath, []byte("keep"), 0o644); err != nil {
+		t.Fatalf("WriteFile(custom command) error = %v", err)
+	}
+
+	ops, _, err := svc.componentOperations(adapter, model.ComponentSDD)
+	if err != nil {
+		t.Fatalf("componentOperations() error = %v", err)
+	}
+
+	for _, op := range ops {
+		if op.typeID == opRemoveFile {
+			if _, _, err := op.apply(op.path); err != nil {
+				t.Fatalf("remove file op.apply(%q) error = %v", op.path, err)
+			}
+		}
+	}
+
+	for _, name := range managed {
+		if _, err := os.Stat(filepath.Join(commandsDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("managed command %q should be removed, stat err = %v", name, err)
+		}
+	}
+	if _, err := os.Stat(customPath); err != nil {
+		t.Fatalf("custom command should be preserved, stat err = %v", err)
+	}
+}
+
 func TestComponentOperationsEngram_ProjectScopeRemovesWorkspaceDataOnly(t *testing.T) {
 	homeDir := t.TempDir()
 	workspaceDir := t.TempDir()

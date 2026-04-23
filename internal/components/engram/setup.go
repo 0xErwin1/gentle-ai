@@ -56,12 +56,14 @@ func SetupAgentSlug(agent model.AgentID) (string, bool) {
 		return "gemini-cli", true
 	case model.AgentWindsurf:
 		return "windsurf", true
-	case model.AgentQwenCode:
-		return "qwen-code", true
 	case model.AgentCursor, model.AgentVSCodeCopilot:
 		// Cursor and VS Code Copilot do not use `engram setup` — their MCP
 		// config is injected directly by the engram component. Returning false
 		// here is intentional, not an omission.
+		return "", false
+	case model.AgentQwenCode:
+		// Qwen uses direct settings.json injection only. The engram binary does
+		// not currently expose a native `qwen-code` setup target.
 		return "", false
 	default:
 		return "", false
