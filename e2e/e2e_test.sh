@@ -449,7 +449,7 @@ test_cc_engram_injection() {
 }
 
 test_cc_sdd_injection() {
-    log_test "Claude Code: SDD injection (CLAUDE.md)"
+    log_test "Claude Code: SDD injection (CLAUDE.md + native sub-agents)"
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component sdd --persona neutral 2>&1; then
@@ -457,6 +457,19 @@ test_cc_sdd_injection() {
         assert_file_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:sdd-orchestrator" "CLAUDE.md has SDD section marker"
         assert_file_contains "$HOME/.claude/CLAUDE.md" "sub-agent\|dependency\|orchestrator" "CLAUDE.md has real SDD content"
         assert_file_size_min "$HOME/.claude/CLAUDE.md" 500 "CLAUDE.md SDD section is substantial"
+
+        for phase in sdd-explore sdd-propose sdd-spec sdd-design sdd-tasks sdd-apply sdd-verify sdd-archive; do
+            assert_file_exists "$HOME/.claude/agents/${phase}.md" "Claude native sub-agent exists: ${phase}"
+            assert_file_size_min "$HOME/.claude/agents/${phase}.md" 200 "Claude native sub-agent is substantial: ${phase}"
+        done
+
+        assert_file_contains "$HOME/.claude/agents/sdd-design.md" "model: opus" "Claude design sub-agent uses balanced Opus assignment"
+        assert_file_contains "$HOME/.claude/agents/sdd-spec.md" "model: sonnet" "Claude spec sub-agent uses balanced Sonnet assignment"
+        assert_file_contains "$HOME/.claude/agents/sdd-archive.md" "model: haiku" "Claude archive sub-agent uses balanced Haiku assignment"
+
+        assert_file_contains "$HOME/.claude/agents/sdd-explore.md" "tools: Read, Grep, Glob" "Claude explore sub-agent keeps read-only tool scope"
+        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "tools: Read, Edit, MultiEdit, Write, Bash, Grep, Glob" "Claude apply sub-agent keeps write-capable tool scope"
+        assert_file_contains "$HOME/.claude/agents/sdd-verify.md" "tools: Read, Bash, Grep, Glob" "Claude verify sub-agent keeps verification tool scope"
     else
         log_fail "SDD install command failed"
     fi

@@ -3785,6 +3785,79 @@ func TestInjectClaudeSubAgentsResolveModels(t *testing.T) {
 	}
 }
 
+func TestInjectClaudeSubAgentsUseBalancedDefaultsWhenAssignmentsUnset(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, claudeAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject(claude, default assignments) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(claude, default assignments) changed = false")
+	}
+
+	tests := []struct {
+		phase string
+		want  string
+	}{
+		{phase: "sdd-design", want: "model: opus"},
+		{phase: "sdd-spec", want: "model: sonnet"},
+		{phase: "sdd-archive", want: "model: haiku"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.phase, func(t *testing.T) {
+			path := filepath.Join(home, ".claude", "agents", tt.phase+".md")
+			content, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatalf("ReadFile(%s) error = %v", tt.phase, readErr)
+			}
+			if !strings.Contains(string(content), tt.want) {
+				t.Fatalf("agent %s missing balanced default %q\n--- file ---\n%s", tt.phase, tt.want, string(content))
+			}
+		})
+	}
+}
+
+func TestInjectClaudeSubAgentsIgnoreInvalidAliases(t *testing.T) {
+	home := t.TempDir()
+
+	assignments := map[string]model.ClaudeModelAlias{
+		"sdd-design":  model.ClaudeModelAlias("claude-opus-4-1"),
+		"sdd-archive": model.ClaudeModelAlias("bad-value"),
+		"default":     model.ClaudeModelHaiku,
+	}
+
+	_, err := Inject(home, claudeAdapter(), "", InjectOptions{ClaudeModelAssignments: assignments})
+	if err != nil {
+		t.Fatalf("Inject(claude, invalid aliases) error = %v", err)
+	}
+
+	checks := []struct {
+		phase string
+		want  string
+	}{
+		{phase: "sdd-design", want: "model: opus"},
+		{phase: "sdd-archive", want: "model: haiku"},
+		{phase: "sdd-spec", want: "model: sonnet"},
+	}
+
+	for _, tt := range checks {
+		path := filepath.Join(home, ".claude", "agents", tt.phase+".md")
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("ReadFile(%s) error = %v", tt.phase, readErr)
+		}
+		text := string(content)
+		if !strings.Contains(text, tt.want) {
+			t.Fatalf("agent %s missing sanitized model %q\n--- file ---\n%s", tt.phase, tt.want, text)
+		}
+		if strings.Contains(text, "bad-value") || strings.Contains(text, "claude-opus-4-1") {
+			t.Fatalf("agent %s contains invalid alias in frontmatter\n--- file ---\n%s", tt.phase, text)
+		}
+	}
+}
+
 // TestInjectClaudeSubAgentsScopedTools verifies that each generated Claude
 // sub-agent carries a scoped tools: frontmatter entry so the phase cannot use
 // tools outside its contract (e.g. sdd-explore cannot Edit/Write; no phase
@@ -3805,10 +3878,25 @@ func TestInjectClaudeSubAgentsScopedTools(t *testing.T) {
 		{
 			phase:       "sdd-explore",
 			mustContain: []string{"Read", "Grep", "Glob"},
-			mustNotHave: []string{"Edit", "Write", "Task"},
+			mustNotHave: []string{"Edit", "Write", "Bash", "Task"},
 		},
 		{
 			phase:       "sdd-propose",
+			mustContain: []string{"Read", "Grep", "Glob"},
+			mustNotHave: []string{"Edit", "Write", "Bash", "Task"},
+		},
+		{
+			phase:       "sdd-spec",
+			mustContain: []string{"Read", "Grep", "Glob"},
+			mustNotHave: []string{"Edit", "Write", "Bash", "Task"},
+		},
+		{
+			phase:       "sdd-design",
+			mustContain: []string{"Read", "Grep", "Glob"},
+			mustNotHave: []string{"Edit", "Write", "Bash", "Task"},
+		},
+		{
+			phase:       "sdd-tasks",
 			mustContain: []string{"Read", "Grep", "Glob"},
 			mustNotHave: []string{"Edit", "Write", "Bash", "Task"},
 		},
