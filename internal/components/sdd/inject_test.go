@@ -3877,42 +3877,42 @@ func TestInjectClaudeSubAgentsScopedTools(t *testing.T) {
 	}{
 		{
 			phase:       "sdd-explore",
-			mustContain: []string{"Read", "Grep", "Glob"},
+			mustContain: []string{"Read", "Grep", "Glob", "WebFetch", "WebSearch", "mcp__plugin_engram_engram__mem_save"},
 			mustNotHave: []string{"Edit", "Write", "Bash", "Task"},
 		},
 		{
 			phase:       "sdd-propose",
-			mustContain: []string{"Read", "Grep", "Glob"},
-			mustNotHave: []string{"Edit", "Write", "Bash", "Task"},
+			mustContain: []string{"Read", "Edit", "Write", "Grep", "Glob", "mcp__plugin_engram_engram__mem_search", "mcp__plugin_engram_engram__mem_get_observation", "mcp__plugin_engram_engram__mem_save"},
+			mustNotHave: []string{"Bash", "Task"},
 		},
 		{
 			phase:       "sdd-spec",
-			mustContain: []string{"Read", "Grep", "Glob"},
-			mustNotHave: []string{"Edit", "Write", "Bash", "Task"},
+			mustContain: []string{"Read", "Edit", "Write", "Grep", "Glob", "mcp__plugin_engram_engram__mem_search", "mcp__plugin_engram_engram__mem_get_observation", "mcp__plugin_engram_engram__mem_save"},
+			mustNotHave: []string{"Bash", "Task"},
 		},
 		{
 			phase:       "sdd-design",
-			mustContain: []string{"Read", "Grep", "Glob"},
-			mustNotHave: []string{"Edit", "Write", "Bash", "Task"},
+			mustContain: []string{"Read", "Edit", "Write", "Grep", "Glob", "mcp__plugin_engram_engram__mem_search", "mcp__plugin_engram_engram__mem_get_observation", "mcp__plugin_engram_engram__mem_save"},
+			mustNotHave: []string{"Bash", "Task"},
 		},
 		{
 			phase:       "sdd-tasks",
-			mustContain: []string{"Read", "Grep", "Glob"},
-			mustNotHave: []string{"Edit", "Write", "Bash", "Task"},
+			mustContain: []string{"Read", "Edit", "Write", "Grep", "Glob", "mcp__plugin_engram_engram__mem_search", "mcp__plugin_engram_engram__mem_get_observation", "mcp__plugin_engram_engram__mem_save"},
+			mustNotHave: []string{"Bash", "Task"},
 		},
 		{
 			phase:       "sdd-apply",
-			mustContain: []string{"Read", "Edit", "Write", "Bash"},
+			mustContain: []string{"Read", "Edit", "Write", "Bash", "mcp__plugin_engram_engram__mem_search", "mcp__plugin_engram_engram__mem_get_observation", "mcp__plugin_engram_engram__mem_save", "mcp__plugin_engram_engram__mem_update"},
 			mustNotHave: []string{"Task"},
 		},
 		{
 			phase:       "sdd-verify",
-			mustContain: []string{"Read", "Bash"},
+			mustContain: []string{"Read", "Bash", "mcp__plugin_engram_engram__mem_search", "mcp__plugin_engram_engram__mem_get_observation", "mcp__plugin_engram_engram__mem_save"},
 			mustNotHave: []string{"Edit", "Write", "Task"},
 		},
 		{
 			phase:       "sdd-archive",
-			mustContain: []string{"Read", "Edit", "Write"},
+			mustContain: []string{"Read", "Edit", "Write", "mcp__plugin_engram_engram__mem_search", "mcp__plugin_engram_engram__mem_get_observation", "mcp__plugin_engram_engram__mem_save"},
 			mustNotHave: []string{"Bash", "Task"},
 		},
 	}

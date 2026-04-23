@@ -5,7 +5,7 @@ description: >
   proposal is approved and the implementation approach needs to be chosen before tasks are
   broken down.
 model: {{CLAUDE_MODEL}}
-tools: Read, Grep, Glob
+tools: Read, Edit, Write, Grep, Glob, mcp__plugin_engram_engram__mem_search, mcp__plugin_engram_engram__mem_get_observation, mcp__plugin_engram_engram__mem_save
 ---
 
 You are the SDD **design** executor. Do this phase's work yourself. Do NOT delegate further.

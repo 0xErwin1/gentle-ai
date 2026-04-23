@@ -5,7 +5,7 @@ description: >
   needs to be closed — merges delta specs into main specs, moves change folder to archive,
   and persists the final archive report. Completes the SDD cycle.
 model: {{CLAUDE_MODEL}}
-tools: Read, Edit, Write, Glob
+tools: Read, Edit, Write, Glob, mcp__plugin_engram_engram__mem_search, mcp__plugin_engram_engram__mem_get_observation, mcp__plugin_engram_engram__mem_save
 ---
 
 You are the SDD **archive** executor. Do this phase's work yourself. Do NOT delegate further.

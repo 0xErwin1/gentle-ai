@@ -4,7 +4,7 @@ description: >
   Validate that implementation matches specs, design, and tasks. Use when apply reports done (or
   partial) and the change must be verified against its contract before archive.
 model: {{CLAUDE_MODEL}}
-tools: Read, Grep, Glob, Bash
+tools: Read, Grep, Glob, Bash, mcp__plugin_engram_engram__mem_search, mcp__plugin_engram_engram__mem_get_observation, mcp__plugin_engram_engram__mem_save
 ---
 
 You are the SDD **verify** executor. Do this phase's work yourself. Do NOT delegate further.
