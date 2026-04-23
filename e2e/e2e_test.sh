@@ -467,9 +467,9 @@ test_cc_sdd_injection() {
         assert_file_contains "$HOME/.claude/agents/sdd-spec.md" "model: sonnet" "Claude spec sub-agent uses balanced Sonnet assignment"
         assert_file_contains "$HOME/.claude/agents/sdd-archive.md" "model: haiku" "Claude archive sub-agent uses balanced Haiku assignment"
 
-        assert_file_contains "$HOME/.claude/agents/sdd-explore.md" "tools: Read, Grep, Glob" "Claude explore sub-agent keeps read-only tool scope"
-        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "tools: Read, Edit, MultiEdit, Write, Bash, Grep, Glob" "Claude apply sub-agent keeps write-capable tool scope"
-        assert_file_contains "$HOME/.claude/agents/sdd-verify.md" "tools: Read, Bash, Grep, Glob" "Claude verify sub-agent keeps verification tool scope"
+        assert_file_contains "$HOME/.claude/agents/sdd-explore.md" "tools: Read, Grep, Glob, WebFetch, WebSearch, mcp__plugin_engram_engram__mem_save" "Claude explore sub-agent keeps read-only + Engram tool scope"
+        assert_file_contains "$HOME/.claude/agents/sdd-apply.md" "tools: Read, Edit, Write, Glob, Grep, Bash, mcp__plugin_engram_engram__mem_search, mcp__plugin_engram_engram__mem_get_observation, mcp__plugin_engram_engram__mem_save, mcp__plugin_engram_engram__mem_update" "Claude apply sub-agent keeps write-capable + Engram tool scope"
+        assert_file_contains "$HOME/.claude/agents/sdd-verify.md" "tools: Read, Grep, Glob, Bash, mcp__plugin_engram_engram__mem_search, mcp__plugin_engram_engram__mem_get_observation, mcp__plugin_engram_engram__mem_save" "Claude verify sub-agent keeps verification + Engram tool scope"
     else
         log_fail "SDD install command failed"
     fi
