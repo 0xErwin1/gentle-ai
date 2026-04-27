@@ -13,6 +13,8 @@ func updateHint(tool ToolInfo, profile system.PlatformProfile) string {
 		return engramHint(profile)
 	case "gga":
 		return ggaHint(profile)
+	case "opencode-subagent-statusline", "opencode-sdd-engram-manage":
+		return "Restart/reload OpenCode; plugins are registered in ~/.config/opencode/tui.json"
 	default:
 		return ""
 	}

@@ -257,6 +257,12 @@ func TestEffectiveMethod(t *testing.T) {
 			profile: system.PlatformProfile{PackageManager: "apt"},
 			want:    update.InstallScript,
 		},
+		{
+			name:    "brew profile does not override OpenCode plugin method",
+			tool:    update.ToolInfo{Name: "opencode-subagent-statusline", InstallMethod: update.InstallOpenCodePlugin, NpmPackage: "opencode-subagent-statusline"},
+			profile: system.PlatformProfile{PackageManager: "brew"},
+			want:    update.InstallOpenCodePlugin,
+		},
 	}
 
 	for _, tc := range tests {
@@ -266,6 +272,24 @@ func TestEffectiveMethod(t *testing.T) {
 				t.Errorf("effectiveMethod = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRunStrategyOpenCodePluginManualFallback(t *testing.T) {
+	err := runStrategy(context.Background(), update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "opencode-subagent-statusline",
+			InstallMethod: update.InstallOpenCodePlugin,
+			NpmPackage:    "opencode-subagent-statusline",
+		},
+		UpdateHint: "restart OpenCode",
+	}, system.PlatformProfile{PackageManager: "brew"})
+
+	if err == nil {
+		t.Fatal("expected manual fallback error, got nil")
+	}
+	if !containsAny(err.Error(), "OpenCode", "restart", "reload") {
+		t.Fatalf("manual fallback should mention OpenCode restart/reload, got: %v", err)
 	}
 }
 

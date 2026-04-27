@@ -152,6 +152,13 @@ const (
 	SDDProfileStrategyExternalSingleActive SDDProfileStrategyID = "external-single-active"
 )
 
+type OpenCodeCommunityPluginID string
+
+const (
+	OpenCodePluginSubAgentStatusline OpenCodeCommunityPluginID = "sub-agent-statusline"
+	OpenCodePluginSDDEngramManage    OpenCodeCommunityPluginID = "sdd-engram-plugin"
+)
+
 // Profile represents a named SDD orchestrator configuration with model assignments.
 // The default profile (Name="" or Name="default") maps to the base sdd-orchestrator.
 // Named profiles generate sdd-orchestrator-{Name} + suffixed sub-agents.

@@ -34,6 +34,7 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 		"Upgrade + Sync",
 		"Configure models",
 		agentLabel,
+		"OpenCode Community Plugins",
 	}
 
 	if showProfiles {

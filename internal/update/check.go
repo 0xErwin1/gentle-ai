@@ -90,6 +90,10 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 
 	// Determine status based on local version.
 	if localVersion == "" {
+		if strings.TrimSpace(tool.NpmPackage) != "" {
+			result.Status = NotInstalled
+			return result
+		}
 		if tool.DetectCmd == nil {
 			// gentle-ai with no build version (shouldn't happen, but handle gracefully).
 			result.Status = VersionUnknown

@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agentbuilder"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/catalog"
+	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -32,6 +35,7 @@ var osStatPathFn = os.Stat
 var osGetwdFn = os.Getwd
 var osExecutableFn = os.Executable
 var osRemoveFn = os.Remove
+var execCommandFn = exec.Command
 
 // readCurrentAssignmentsFn is a package-level variable so tests can override
 // how current model assignments are read from opencode.json. It wraps
@@ -118,6 +122,11 @@ type AgentBuilderInstallDoneMsg struct {
 	Err     error
 }
 
+type OpenCodePluginRegistrationDoneMsg struct {
+	Results []opencodeplugin.Result
+	Err     error
+}
+
 // AgentBuilderState holds all transient state for the agent-builder TUI flow.
 type AgentBuilderState struct {
 	AvailableEngines []model.AgentID
@@ -186,6 +195,8 @@ const (
 	ScreenKiroModelPicker
 	ScreenSDDMode
 	ScreenStrictTDD
+	ScreenOpenCodePlugins
+	ScreenOpenCodePluginResult
 	ScreenDependencyTree
 	ScreenSkillPicker
 	ScreenReview
@@ -390,6 +401,14 @@ type Model struct {
 
 	// AgentBuilder holds the transient state for the agent-builder TUI flow.
 	AgentBuilder AgentBuilderState
+
+	// OpenCodePluginsStandalone is true when ScreenOpenCodePlugins was opened
+	// from the main menu shortcut instead of the full installation flow.
+	OpenCodePluginsStandalone bool
+
+	// OpenCodePluginRegistrationResults and Err hold the dedicated shortcut result.
+	OpenCodePluginRegistrationResults []opencodeplugin.Result
+	OpenCodePluginRegistrationErr     error
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
@@ -485,6 +504,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.AgentBuilder.InstallErr = nil
 			m.setScreen(ScreenAgentBuilderComplete)
 		}
+		return m, nil
+	case OpenCodePluginRegistrationDoneMsg:
+		m.OperationRunning = false
+		m.OpenCodePluginRegistrationResults = msg.Results
+		m.OpenCodePluginRegistrationErr = msg.Err
+		m.setScreen(ScreenOpenCodePluginResult)
 		return m, nil
 	case StepProgressMsg:
 		return m.handleStepProgress(msg)
@@ -710,6 +735,10 @@ func (m Model) View() string {
 		return screens.RenderSDDMode(m.Selection.SDDMode, m.Cursor)
 	case ScreenStrictTDD:
 		return screens.RenderStrictTDD(m.Selection.StrictTDD, m.Cursor)
+	case ScreenOpenCodePlugins:
+		return screens.RenderOpenCodePlugins(m.Selection.OpenCodePlugins, m.Cursor)
+	case ScreenOpenCodePluginResult:
+		return screens.RenderOpenCodePluginResult(m.OpenCodePluginRegistrationResults, m.OpenCodePluginRegistrationErr)
 	case ScreenModelPicker:
 		return screens.RenderModelPicker(m.Selection.ModelAssignments, m.ModelPicker, m.Cursor)
 	case ScreenDependencyTree:
@@ -982,6 +1011,8 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		case ScreenSkillPicker:
 			m.toggleCurrentSkill()
+		case ScreenOpenCodePlugins:
+			m.toggleCurrentOpenCodePlugin()
 		}
 		return m, nil
 	case "r":
@@ -1084,6 +1115,16 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenAgentBuilderEngine)
 		default:
 			next := 6
+			if m.Cursor == next {
+				m.OpenCodePluginsStandalone = true
+				m.OpenCodePluginRegistrationResults = nil
+				m.OpenCodePluginRegistrationErr = nil
+				m.Selection.OpenCodePlugins = nil
+				m.setScreen(ScreenOpenCodePlugins)
+				return m, nil
+			}
+			next++
+
 			if m.hasDetectedOpenCode() {
 				if m.Cursor == next {
 					m.setScreen(ScreenProfiles)
@@ -1415,6 +1456,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.setScreen(ScreenStrictTDD)
 				return m, nil
 			}
+			if m.shouldShowOpenCodePluginsScreen() {
+				m.setScreen(ScreenOpenCodePlugins)
+				return m, nil
+			}
 			m.buildDependencyPlan()
 			m.setScreen(ScreenDependencyTree)
 			return m, nil
@@ -1590,7 +1635,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		if m.Cursor < len(options) {
 			// Enable is index 0, Disable is index 1.
 			m.Selection.StrictTDD = (m.Cursor == screens.StrictTDDOptionEnable)
-			if m.Selection.Preset == model.PresetCustom {
+			if m.shouldShowOpenCodePluginsScreen() {
+				m.setScreen(ScreenOpenCodePlugins)
+			} else if m.Selection.Preset == model.PresetCustom {
 				// Custom preset: dependency plan was already built before SDD mode.
 				// Check skill picker before going to review.
 				if m.shouldShowSkillPickerScreen() {
@@ -1627,6 +1674,15 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		} else {
 			m.setScreen(ScreenPreset)
 		}
+	case ScreenOpenCodePlugins:
+		return m.confirmOpenCodePlugins()
+	case ScreenOpenCodePluginResult:
+		m.OpenCodePluginsStandalone = false
+		m.Selection.OpenCodePlugins = nil
+		m.OpenCodePluginRegistrationResults = nil
+		m.OpenCodePluginRegistrationErr = nil
+		m.setScreen(ScreenWelcome)
+		return m, nil
 	case ScreenDependencyTree:
 		if m.Selection.Preset == model.PresetCustom {
 			allComps := screens.AllComponents()
@@ -1647,6 +1703,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				}
 				if m.shouldShowStrictTDDScreen() {
 					m.setScreen(ScreenStrictTDD)
+					return m, nil
+				}
+				if m.shouldShowOpenCodePluginsScreen() {
+					m.setScreen(ScreenOpenCodePlugins)
 					return m, nil
 				}
 				// Show skill picker if Skills component is selected.
@@ -2006,6 +2066,23 @@ func (m Model) startSync(overrides *model.SyncOverrides) tea.Cmd {
 		return SyncDoneMsg{FilesChanged: filesChanged, Err: err}
 	}
 }
+
+func (m Model) startOpenCodePluginRegistration() tea.Cmd {
+	plugins := append([]model.OpenCodeCommunityPluginID(nil), m.Selection.OpenCodePlugins...)
+	home := homeDir()
+	return func() tea.Msg {
+		results := make([]opencodeplugin.Result, 0, len(plugins))
+		for _, plugin := range plugins {
+			result, err := opencodeplugin.Install(home, plugin)
+			if err != nil {
+				return OpenCodePluginRegistrationDoneMsg{Results: results, Err: err}
+			}
+			results = append(results, result)
+		}
+		return OpenCodePluginRegistrationDoneMsg{Results: results}
+	}
+}
+
 func (m Model) startUninstall() tea.Cmd {
 	uninstallFn := m.UninstallFn
 	uninstallWithProfilesFn := m.UninstallWithProfilesFn
@@ -2180,6 +2257,15 @@ func (m Model) goBack() Model {
 		return m
 	}
 
+	if m.Screen == ScreenOpenCodePluginResult {
+		m.OpenCodePluginsStandalone = false
+		m.Selection.OpenCodePlugins = nil
+		m.OpenCodePluginRegistrationResults = nil
+		m.OpenCodePluginRegistrationErr = nil
+		m.setScreen(ScreenWelcome)
+		return m
+	}
+
 	// Agent builder back navigation.
 	switch m.Screen {
 	case ScreenAgentBuilderComplete:
@@ -2276,6 +2362,10 @@ func (m Model) goBack() Model {
 	// going back should return to the preset screen (handled by linearRoutes).
 	// NOTE: DependencyTree back logic also in confirmSelection() — keep in sync.
 	if m.Screen == ScreenDependencyTree && m.Selection.Preset != model.PresetCustom {
+		if m.shouldShowOpenCodePluginsScreen() {
+			m.setScreen(ScreenOpenCodePlugins)
+			return m
+		}
 		if m.shouldShowStrictTDDScreen() {
 			// StrictTDD screen is between (SDDMode/ClaudeModelPicker/Preset) and DependencyTree.
 			m.setScreen(ScreenStrictTDD)
@@ -2321,6 +2411,10 @@ func (m Model) goBack() Model {
 		// All other non-custom agents: go back to Preset selection.
 		m.setScreen(ScreenPreset)
 		return m
+	}
+
+	if m.Screen == ScreenOpenCodePlugins {
+		return m.goBackFromOpenCodePlugins()
 	}
 
 	// In custom preset, going back from SDDMode should return to ClaudeModelPicker
@@ -2554,6 +2648,10 @@ func (m Model) optionCount() int {
 		return len(screens.SDDModeOptions()) + 1
 	case ScreenStrictTDD:
 		return len(screens.StrictTDDOptions()) + 1 // Enable + Disable + Back
+	case ScreenOpenCodePlugins:
+		return screens.OpenCodePluginsOptionCount()
+	case ScreenOpenCodePluginResult:
+		return 1
 	case ScreenModelPicker:
 		if len(m.ModelPicker.AvailableIDs) == 0 {
 			return 1 // only "Back to SDD mode"
@@ -2762,6 +2860,120 @@ func (m *Model) toggleCurrentSkill() {
 	m.SkillPicker = append(m.SkillPicker, skillID)
 }
 
+func (m *Model) toggleCurrentOpenCodePlugin() {
+	defs := opencodepluginDefinitions()
+	if m.Cursor%2 != 0 || m.Cursor/2 >= len(defs) {
+		return
+	}
+	id := defs[m.Cursor/2]
+	for idx, selected := range m.Selection.OpenCodePlugins {
+		if selected == id {
+			m.Selection.OpenCodePlugins = append(m.Selection.OpenCodePlugins[:idx], m.Selection.OpenCodePlugins[idx+1:]...)
+			return
+		}
+	}
+	m.Selection.OpenCodePlugins = append(m.Selection.OpenCodePlugins, id)
+}
+
+func (m Model) confirmOpenCodePlugins() (tea.Model, tea.Cmd) {
+	defs := opencodepluginDefinitions()
+	pluginRows := len(defs) * 2
+	switch {
+	case m.Cursor < pluginRows && m.Cursor%2 == 0:
+		m.toggleCurrentOpenCodePlugin()
+		return m, nil
+	case m.Cursor < pluginRows && m.Cursor%2 == 1:
+		idx := m.Cursor / 2
+		url := opencodepluginRepoURLs()[idx]
+		return m, openBrowserCmd(url)
+	case m.Cursor == pluginRows:
+		if m.OpenCodePluginsStandalone {
+			m.OpenCodePluginRegistrationResults = nil
+			m.OpenCodePluginRegistrationErr = nil
+			m.OperationRunning = len(m.Selection.OpenCodePlugins) > 0
+			m.setScreen(ScreenOpenCodePluginResult)
+			if len(m.Selection.OpenCodePlugins) == 0 {
+				return m, nil
+			}
+			return m, m.startOpenCodePluginRegistration()
+		}
+		return m.continueAfterOpenCodePlugins(), nil
+	default:
+		return m.goBackFromOpenCodePlugins(), nil
+	}
+}
+
+func (m Model) continueAfterOpenCodePlugins() Model {
+	if m.OpenCodePluginsStandalone {
+		m.OpenCodePluginRegistrationResults = nil
+		m.OpenCodePluginRegistrationErr = nil
+		m.setScreen(ScreenOpenCodePluginResult)
+		return m
+	}
+
+	if m.Selection.Preset == model.PresetCustom {
+		if m.shouldShowSkillPickerScreen() {
+			if len(m.SkillPicker) == 0 {
+				m.initSkillPicker()
+			}
+			m.setScreen(ScreenSkillPicker)
+		} else {
+			m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
+			m.setScreen(ScreenReview)
+		}
+		return m
+	}
+	m.buildDependencyPlan()
+	m.setScreen(ScreenDependencyTree)
+	return m
+}
+
+func (m Model) goBackFromOpenCodePlugins() Model {
+	if m.OpenCodePluginsStandalone {
+		m.OpenCodePluginsStandalone = false
+		m.Selection.OpenCodePlugins = nil
+		m.OpenCodePluginRegistrationResults = nil
+		m.OpenCodePluginRegistrationErr = nil
+		m.setScreen(ScreenWelcome)
+		return m
+	}
+
+	if m.shouldShowStrictTDDScreen() {
+		m.setScreen(ScreenStrictTDD)
+		return m
+	}
+	if m.shouldShowSDDModeScreen() {
+		m.setScreen(ScreenSDDMode)
+		return m
+	}
+	m.setScreen(ScreenPreset)
+	return m
+}
+
+func opencodepluginDefinitions() []model.OpenCodeCommunityPluginID {
+	return []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline, model.OpenCodePluginSDDEngramManage}
+}
+
+func opencodepluginRepoURLs() []string {
+	return []string{"https://github.com/Joaquinvesapa/sub-agent-statusline", "https://github.com/j0k3r-dev-rgl/sdd-engram-plugin"}
+}
+
+func openBrowserCmd(url string) tea.Cmd {
+	return func() tea.Msg {
+		var cmd *exec.Cmd
+		switch runtime.GOOS {
+		case "darwin":
+			cmd = execCommandFn("open", url)
+		case "windows":
+			cmd = execCommandFn("rundll32", "url.dll,FileProtocolHandler", url)
+		default:
+			cmd = execCommandFn("xdg-open", url)
+		}
+		_ = cmd.Start()
+		return nil
+	}
+}
+
 // initSkillPicker pre-selects ALL available skills (custom mode default).
 func (m *Model) initSkillPicker() {
 	all := screens.AllSkillsOrdered()
@@ -2774,6 +2986,10 @@ func (m *Model) initSkillPicker() {
 func (m Model) shouldShowSkillPickerScreen() bool {
 	return m.Selection.Preset == model.PresetCustom &&
 		hasSelectedComponent(m.Selection.Components, model.ComponentSkills)
+}
+
+func (m Model) shouldShowOpenCodePluginsScreen() bool {
+	return m.Selection.HasAgent(model.AgentOpenCode)
 }
 
 func (m *Model) buildDependencyPlan() {

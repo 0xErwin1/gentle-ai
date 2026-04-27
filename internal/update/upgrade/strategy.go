@@ -43,6 +43,7 @@ const maxScriptSize = 1 * 1024 * 1024 // 1 MB
 //   - script method + linux/darwin + gga → ggaScriptUpgrade (git clone approach)
 //   - script method + linux/darwin + other → scriptUpgrade (curl | bash install.sh)
 //   - script method + windows → manualFallback
+//   - OpenCode plugin method → manualFallback; OpenCode resolves TUI plugin packages on restart/reload
 //   - unknown method → manualFallback with explicit message
 func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) error {
 	method := effectiveMethod(r.Tool, profile)
@@ -64,12 +65,24 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 			return ggaScriptUpgrade(ctx, r)
 		}
 		return scriptUpgrade(ctx, r, profile)
+	case update.InstallOpenCodePlugin:
+		return &ManualFallbackError{Hint: openCodePluginManualHint(r)}
 	default:
 		return &ManualFallbackError{
 			Hint: fmt.Sprintf("upgrade %q: unsupported install method %q — please update manually. See: https://github.com/Gentleman-Programming/%s",
 				r.Tool.Name, method, r.Tool.Repo),
 		}
 	}
+}
+
+func openCodePluginManualHint(r update.UpdateResult) string {
+	if strings.TrimSpace(r.UpdateHint) != "" {
+		return r.UpdateHint
+	}
+	if strings.TrimSpace(r.Tool.NpmPackage) != "" {
+		return fmt.Sprintf("OpenCode manages %s from tui.json. Restart or reload OpenCode so it refreshes the plugin package.", r.Tool.NpmPackage)
+	}
+	return "OpenCode manages TUI plugin packages from tui.json. Restart or reload OpenCode so it refreshes plugins."
 }
 
 // brewUpgrade runs `brew update` (non-fatal) then `brew upgrade <toolName>`.

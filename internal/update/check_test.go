@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/system"
@@ -115,6 +117,25 @@ func TestDetectInstalledVersion(t *testing.T) {
 				t.Fatalf("detectInstalledVersion() = %q, want %q", got, tc.wantVersion)
 			}
 		})
+	}
+}
+
+func TestDetectInstalledVersionFromOpenCodeNodeModulePackageJSON(t *testing.T) {
+	home := t.TempDir()
+	pkgDir := filepath.Join(home, ".config", "opencode", "node_modules", "opencode-sdd-engram-manage")
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"1.1.7"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	origHome := userHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = origHome })
+
+	tool := ToolInfo{Name: "sdd-engram-plugin", NpmPackage: "opencode-sdd-engram-manage"}
+	if got := detectInstalledVersion(context.Background(), tool, "dev"); got != "1.1.7" {
+		t.Fatalf("detectInstalledVersion() = %q, want 1.1.7", got)
 	}
 }
 
@@ -301,10 +322,14 @@ func TestCheckAll(t *testing.T) {
 		switch {
 		case contains(path, "gentle-ai"):
 			release = githubRelease{TagName: "v1.5.0", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.5.0"}
-		case contains(path, "engram"):
-			release = githubRelease{TagName: "v0.4.0", HTMLURL: "https://github.com/Gentleman-Programming/engram/releases/tag/v0.4.0"}
 		case contains(path, "gentleman-guardian-angel"):
 			release = githubRelease{TagName: "v2.0.0", HTMLURL: "https://github.com/Gentleman-Programming/gentleman-guardian-angel/releases/tag/v2.0.0"}
+		case contains(path, "sub-agent-statusline"):
+			release = githubRelease{TagName: "v0.4.0", HTMLURL: "https://github.com/Joaquinvesapa/sub-agent-statusline/releases/tag/v0.4.0"}
+		case contains(path, "sdd-engram-plugin"):
+			release = githubRelease{TagName: "v1.1.7", HTMLURL: "https://github.com/j0k3r-dev-rgl/sdd-engram-plugin/releases/tag/v1.1.7"}
+		case contains(path, "engram"):
+			release = githubRelease{TagName: "v0.4.0", HTMLURL: "https://github.com/Gentleman-Programming/engram/releases/tag/v0.4.0"}
 		}
 		json.NewEncoder(w).Encode(release)
 	}))
@@ -313,10 +338,12 @@ func TestCheckAll(t *testing.T) {
 	origClient := httpClient
 	origLookPath := lookPath
 	origExecCommand := execCommand
+	origUserHomeDir := userHomeDir
 	t.Cleanup(func() {
 		httpClient = origClient
 		lookPath = origLookPath
 		execCommand = origExecCommand
+		userHomeDir = origUserHomeDir
 	})
 
 	httpClient = server.Client()
@@ -339,12 +366,14 @@ func TestCheckAll(t *testing.T) {
 		}
 		return exec.Command("false")
 	}
+	pluginHome := t.TempDir()
+	userHomeDir = func() (string, error) { return pluginHome, nil }
 
 	profile := system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true}
 	results := CheckAll(context.Background(), "1.5.0", profile)
 
-	if len(results) != 3 {
-		t.Fatalf("len(results) = %d, want 3", len(results))
+	if len(results) != 5 {
+		t.Fatalf("len(results) = %d, want 5", len(results))
 	}
 
 	// gentle-ai: 1.5.0 local == 1.5.0 remote → UpToDate
@@ -355,6 +384,8 @@ func TestCheckAll(t *testing.T) {
 
 	// gga: not installed
 	assertResult(t, results[2], "gga", NotInstalled, "", "2.0.0")
+	assertResult(t, results[3], "opencode-subagent-statusline", NotInstalled, "", "0.4.0")
+	assertResult(t, results[4], "opencode-sdd-engram-manage", NotInstalled, "", "1.1.7")
 }
 
 func TestCheckAll_NetworkError(t *testing.T) {
@@ -647,17 +678,19 @@ func TestParseVersionFromOutput(t *testing.T) {
 
 // TestRegistryContents verifies the registry has all expected tools.
 func TestRegistryContents(t *testing.T) {
-	if len(Tools) != 3 {
-		t.Fatalf("len(Tools) = %d, want 3", len(Tools))
+	if len(Tools) != 5 {
+		t.Fatalf("len(Tools) = %d, want 5", len(Tools))
 	}
 
 	expected := map[string]struct {
 		owner string
 		repo  string
 	}{
-		"gentle-ai": {owner: "Gentleman-Programming", repo: "gentle-ai"},
-		"engram":    {owner: "Gentleman-Programming", repo: "engram"},
-		"gga":       {owner: "Gentleman-Programming", repo: "gentleman-guardian-angel"},
+		"gentle-ai":                    {owner: "Gentleman-Programming", repo: "gentle-ai"},
+		"engram":                       {owner: "Gentleman-Programming", repo: "engram"},
+		"gga":                          {owner: "Gentleman-Programming", repo: "gentleman-guardian-angel"},
+		"opencode-subagent-statusline": {owner: "Joaquinvesapa", repo: "sub-agent-statusline"},
+		"opencode-sdd-engram-manage":   {owner: "j0k3r-dev-rgl", repo: "sdd-engram-plugin"},
 	}
 
 	for _, tool := range Tools {
@@ -684,6 +717,9 @@ func TestRegistryContents(t *testing.T) {
 	}
 	if Tools[2].DetectCmd == nil {
 		t.Fatalf("gga DetectCmd should not be nil")
+	}
+	if Tools[3].NpmPackage == "" || Tools[4].NpmPackage == "" {
+		t.Fatalf("OpenCode plugin tools should declare NpmPackage")
 	}
 }
 

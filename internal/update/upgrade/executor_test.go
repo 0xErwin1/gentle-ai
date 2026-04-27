@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -927,6 +928,64 @@ func TestEnumerateFilesInDir_ExcludesSubdirs(t *testing.T) {
 	// Config file next to excluded dir must still be present.
 	if _, ok := pathSet[nestedConfigFile]; !ok {
 		t.Errorf("config file next to excluded dir should be present; missing %q", nestedConfigFile)
+	}
+}
+
+func TestEnumerateFilesInDir_DefaultExclusionDiagnosticsAreSilent(t *testing.T) {
+	root := t.TempDir()
+	excludedFile := filepath.Join(root, "projects", "data.json")
+	if err := os.MkdirAll(filepath.Dir(excludedFile), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(excludedFile, []byte("runtime"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	var legacyLog bytes.Buffer
+	origLogWriter := log.Writer()
+	log.SetOutput(&legacyLog)
+	t.Cleanup(func() { log.SetOutput(origLogWriter) })
+
+	files, err := enumerateFilesInDir(root, map[string]bool{"projects": true})
+	if err != nil {
+		t.Fatalf("enumerateFilesInDir error: %v", err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("files = %v, want no files from excluded directory", files)
+	}
+	if got := legacyLog.String(); got != "" {
+		t.Fatalf("default backup enumeration wrote to global log output %q; TUI paths must remain silent", got)
+	}
+}
+
+func TestEnumerateFilesInDir_WritesExclusionDiagnosticsToInjectedWriter(t *testing.T) {
+	root := t.TempDir()
+	configFile := filepath.Join(root, "settings.json")
+	excludedFile := filepath.Join(root, "projects", "data.json")
+	for _, f := range []string{configFile, excludedFile} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(f, []byte("data"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	var diagnostics bytes.Buffer
+	files, err := enumerateFilesInDir(root, map[string]bool{"projects": true}, &diagnostics)
+	if err != nil {
+		t.Fatalf("enumerateFilesInDir error: %v", err)
+	}
+	if len(files) != 1 || files[0] != configFile {
+		t.Fatalf("files = %v, want only %q", files, configFile)
+	}
+
+	got := diagnostics.String()
+	if !strings.Contains(got, "backup: excluding directory ") || !strings.Contains(got, "projects") {
+		t.Fatalf("diagnostics = %q, want controlled exclusion diagnostic", got)
+	}
+	if !strings.HasPrefix(got, "backup:") {
+		t.Fatalf("diagnostics = %q, want backup message without log package timestamp prefix", got)
 	}
 }
 

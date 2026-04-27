@@ -182,9 +182,10 @@ This project gets better when the community builds on top of it.
 
 ### Community Integrations
 
-- [sdd-engram-plugin](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin) — manage OpenCode SDD profiles and browse Engram memories directly from OpenCode, with runtime profile activation and no restart required.
+- [sub-agent-statusline](https://github.com/Joaquinvesapa/sub-agent-statusline) — optional OpenCode TUI plugin that shows sub-agent activity, status, elapsed time, and token/context usage when OpenCode exposes it.
+- [sdd-engram-plugin](https://github.com/j0k3r-dev-rgl/sdd-engram-plugin) — optional OpenCode TUI plugin to manage SDD profiles and browse Engram memories directly from OpenCode, with runtime profile activation and no restart required.
 
-Using a tool like this? Gentle AI now supports a safer OpenCode sync compatibility path for external single-active profile managers.
+When you select OpenCode in the installer, Gentle AI asks whether to register each community plugin and offers a browser shortcut to review the repository first. Gentle AI only ensures `~/.config/opencode/tui.json` exists and adds the plugin package names to its `plugin` array; OpenCode installs/loads those packages the next time it starts. Once OpenCode has materialized a plugin under `~/.config/opencode/node_modules/`, `gentle-ai update` can compare its local `package.json` version with the plugin's GitHub releases.
 
 ## Contributors
 

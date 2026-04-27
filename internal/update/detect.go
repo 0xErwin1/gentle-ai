@@ -2,7 +2,10 @@ package update
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -12,6 +15,7 @@ import (
 var (
 	execCommand = exec.Command
 	lookPath    = exec.LookPath
+	userHomeDir = os.UserHomeDir
 )
 
 // versionRegexp extracts a semver-like version from command output.
@@ -26,6 +30,10 @@ var devVersionRegexp = regexp.MustCompile(`(?i)(?:^|\s)dev(?:$|\s)`)
 // For tools with nil DetectCmd (gentle-ai), returns currentBuildVersion.
 // For other tools, checks LookPath then runs the detect command.
 func detectInstalledVersion(ctx context.Context, tool ToolInfo, currentBuildVersion string) string {
+	if strings.TrimSpace(tool.NpmPackage) != "" {
+		return detectNpmPackageVersion(tool.NpmPackage)
+	}
+
 	if tool.DetectCmd == nil {
 		return currentBuildVersion
 	}
@@ -66,6 +74,24 @@ func detectInstalledVersion(ctx context.Context, tool ToolInfo, currentBuildVers
 	}
 
 	return parseVersionFromOutput(strings.TrimSpace(string(out)))
+}
+
+func detectNpmPackageVersion(pkg string) string {
+	home, err := userHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "node_modules", pkg, "package.json"))
+	if err != nil {
+		return ""
+	}
+	var manifest struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return ""
+	}
+	return parseVersionFromOutput(manifest.Version)
 }
 
 // parseVersionFromOutput extracts the first semver-like pattern from raw output.

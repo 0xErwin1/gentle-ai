@@ -18,6 +18,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/internal/components/mcp"
+	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
 	"github.com/gentleman-programming/gentle-ai/internal/components/permissions"
 	"github.com/gentleman-programming/gentle-ai/internal/components/persona"
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
@@ -303,6 +304,12 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 		apply = append(apply, agentInstallStep{id: "agent:" + string(agent), agent: agent, homeDir: r.homeDir, profile: r.profile})
 	}
 
+	if containsAgent(r.resolved.Agents, model.AgentOpenCode) {
+		for _, plugin := range r.selection.OpenCodePlugins {
+			apply = append(apply, openCodePluginInstallStep{id: "opencode-plugin:" + string(plugin), plugin: plugin, homeDir: r.homeDir})
+		}
+	}
+
 	for _, component := range r.resolved.OrderedComponents {
 		apply = append(apply, componentApplyStep{
 			id:           "component:" + string(component),
@@ -418,6 +425,19 @@ type agentInstallStep struct {
 	agent   model.AgentID
 	homeDir string
 	profile system.PlatformProfile
+}
+
+type openCodePluginInstallStep struct {
+	id      string
+	plugin  model.OpenCodeCommunityPluginID
+	homeDir string
+}
+
+func (s openCodePluginInstallStep) ID() string { return s.id }
+
+func (s openCodePluginInstallStep) Run() error {
+	_, err := opencodeplugin.Install(s.homeDir, s.plugin)
+	return err
 }
 
 func (s agentInstallStep) ID() string {
@@ -1034,6 +1054,15 @@ func runPostApplyVerification(homeDir string, selection model.Selection, resolve
 func hasComponent(components []model.ComponentID, target model.ComponentID) bool {
 	for _, c := range components {
 		if c == target {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAgent(agents []model.AgentID, target model.AgentID) bool {
+	for _, agent := range agents {
+		if agent == target {
 			return true
 		}
 	}

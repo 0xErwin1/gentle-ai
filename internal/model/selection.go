@@ -13,6 +13,7 @@ type Selection struct {
 	ClaudeModelAssignments map[string]ClaudeModelAlias // key = phase name; value = opus|sonnet|haiku
 	KiroModelAssignments   map[string]ClaudeModelAlias // key = phase name; value = opus|sonnet|haiku (Kiro-only)
 	Profiles               []Profile                   // named SDD profiles to generate/update during sync
+	OpenCodePlugins        []OpenCodeCommunityPluginID // optional community OpenCode TUI plugins
 }
 
 func (s Selection) HasAgent(agent AgentID) bool {

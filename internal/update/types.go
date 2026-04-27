@@ -26,6 +26,9 @@ const (
 	// Used for tools that distribute via shell scripts rather than pre-built binaries
 	// (e.g., GGA which has no release binary assets).
 	InstallScript InstallMethod = "script"
+	// InstallOpenCodePlugin is a manual upgrade method: Gentle AI registers the
+	// package in tui.json, and OpenCode owns package resolution on restart/reload.
+	InstallOpenCodePlugin InstallMethod = "opencode-plugin"
 )
 
 // ToolInfo describes a managed tool that can be checked for updates.
@@ -37,6 +40,7 @@ type ToolInfo struct {
 	VersionPrefix string        // prefix to strip from version output (e.g., "v")
 	InstallMethod InstallMethod // how this tool is installed (used by upgrade executor)
 	GoImportPath  string        // for go-install tools (e.g. "github.com/.../cmd/engram")
+	NpmPackage    string        // for OpenCode community plugins installed in ~/.config/opencode/node_modules
 }
 
 // UpdateResult holds the result of checking a single tool for updates.

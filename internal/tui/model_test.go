@@ -827,8 +827,7 @@ func TestWelcomeMenu_ConfigureModelsNavigation(t *testing.T) {
 	}
 }
 
-// TestWelcomeMenu_BackupsNavigation verifies cursor 6 (Manage backups) goes to ScreenBackups.
-func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
+func TestWelcomeMenu_OpenCodeCommunityPluginsNavigation(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
 	m.Cursor = 6
@@ -836,12 +835,16 @@ func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenBackups {
-		t.Fatalf("cursor=6 (Backups): screen = %v, want %v", state.Screen, ScreenBackups)
+	if state.Screen != ScreenOpenCodePlugins {
+		t.Fatalf("cursor=6 (OpenCode Community Plugins): screen = %v, want %v", state.Screen, ScreenOpenCodePlugins)
+	}
+	if !state.OpenCodePluginsStandalone {
+		t.Fatalf("expected standalone OpenCode plugin mode")
 	}
 }
 
-func TestWelcomeMenu_UninstallNavigation_WithoutProfiles(t *testing.T) {
+// TestWelcomeMenu_BackupsNavigation verifies cursor 7 (Manage backups) goes to ScreenBackups.
+func TestWelcomeMenu_BackupsNavigation(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenWelcome
 	m.Cursor = 7
@@ -849,8 +852,21 @@ func TestWelcomeMenu_UninstallNavigation_WithoutProfiles(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
+	if state.Screen != ScreenBackups {
+		t.Fatalf("cursor=7 (Backups): screen = %v, want %v", state.Screen, ScreenBackups)
+	}
+}
+
+func TestWelcomeMenu_UninstallNavigation_WithoutProfiles(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.Cursor = 8
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
 	if state.Screen != ScreenUninstallMode {
-		t.Fatalf("cursor=7 (Managed uninstall): screen = %v, want %v", state.Screen, ScreenUninstallMode)
+		t.Fatalf("cursor=8 (Managed uninstall): screen = %v, want %v", state.Screen, ScreenUninstallMode)
 	}
 }
 
@@ -859,13 +875,13 @@ func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
 		Configs: []system.ConfigState{{Agent: string(model.AgentOpenCode), Exists: true}},
 	}, "dev")
 	m.Screen = ScreenWelcome
-	m.Cursor = 8
+	m.Cursor = 9
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
 	if state.Screen != ScreenUninstallMode {
-		t.Fatalf("cursor=8 (Managed uninstall with profiles): screen = %v, want %v", state.Screen, ScreenUninstallMode)
+		t.Fatalf("cursor=9 (Managed uninstall with profiles): screen = %v, want %v", state.Screen, ScreenUninstallMode)
 	}
 }
 
@@ -873,15 +889,85 @@ func TestWelcomeMenu_UninstallNavigation_WithProfiles(t *testing.T) {
 // and 10 items when OpenCode is detected (adds "OpenCode SDD Profiles" option).
 func TestWelcomeMenu_OptionCount(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
-	// Without OpenCode detected: 9 options (includes "Managed uninstall").
+	// Without OpenCode detected: 10 options (includes dedicated OpenCode community plugins and managed uninstall).
 	opts := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, false, 0, true)
-	if len(opts) != 9 {
-		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 9; got %v", len(opts), opts)
+	if len(opts) != 10 {
+		t.Fatalf("WelcomeOptions(showProfiles=false) len = %d, want 10; got %v", len(opts), opts)
 	}
-	// With OpenCode detected: 10 options (adds "OpenCode SDD Profiles").
+	// With OpenCode detected: 11 options (adds "OpenCode SDD Profiles").
 	optsWithProfiles := screens.WelcomeOptions(m.UpdateResults, m.UpdateCheckDone, true, 0, true)
-	if len(optsWithProfiles) != 10 {
-		t.Fatalf("WelcomeOptions(showProfiles=true) len = %d, want 10; got %v", len(optsWithProfiles), optsWithProfiles)
+	if len(optsWithProfiles) != 11 {
+		t.Fatalf("WelcomeOptions(showProfiles=true) len = %d, want 11; got %v", len(optsWithProfiles), optsWithProfiles)
+	}
+}
+
+func TestStandaloneOpenCodePluginsContinueRegistersSelectedPlugins(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenOpenCodePlugins
+	m.OpenCodePluginsStandalone = true
+	m.Selection.OpenCodePlugins = []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline}
+	m.Cursor = len(opencodepluginDefinitions()) * 2
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+	if state.Screen != ScreenOpenCodePluginResult {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenOpenCodePluginResult)
+	}
+	if cmd == nil {
+		t.Fatal("expected registration command")
+	}
+
+	msg := cmd()
+	done, ok := msg.(OpenCodePluginRegistrationDoneMsg)
+	if !ok {
+		t.Fatalf("message = %T, want OpenCodePluginRegistrationDoneMsg", msg)
+	}
+	if done.Err != nil {
+		t.Fatalf("registration error = %v", done.Err)
+	}
+	if len(done.Results) != 1 || !done.Results[0].Changed {
+		t.Fatalf("results = %#v, want one changed registration", done.Results)
+	}
+
+	updated, _ = state.Update(done)
+	state = updated.(Model)
+	if state.OpenCodePluginRegistrationErr != nil {
+		t.Fatalf("state registration err = %v", state.OpenCodePluginRegistrationErr)
+	}
+	if len(state.OpenCodePluginRegistrationResults) != 1 {
+		t.Fatalf("state results = %#v, want one result", state.OpenCodePluginRegistrationResults)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "tui.json"))
+	if err != nil {
+		t.Fatalf("read tui.json: %v", err)
+	}
+	if !strings.Contains(string(data), "opencode-subagent-statusline") {
+		t.Fatalf("tui.json missing plugin registration: %s", data)
+	}
+}
+
+func TestStandaloneOpenCodePluginsResultEnterReturnsToWelcome(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenOpenCodePluginResult
+	m.OpenCodePluginsStandalone = true
+	m.Selection.OpenCodePlugins = []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenWelcome {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenWelcome)
+	}
+	if state.OpenCodePluginsStandalone {
+		t.Fatalf("standalone mode should reset after result acknowledgement")
+	}
+	if len(state.Selection.OpenCodePlugins) != 0 {
+		t.Fatalf("selection should reset after standalone flow, got %v", state.Selection.OpenCodePlugins)
 	}
 }
 
@@ -3337,12 +3423,12 @@ func TestPinErrClearedOnScreenReentry(t *testing.T) {
 		t.Fatalf("Esc from ScreenBackups: screen = %v, want ScreenWelcome", afterEsc.Screen)
 	}
 
-	// Navigate back to ScreenBackups (cursor 6 on Welcome → enter).
-	afterEsc.Cursor = 6
+	// Navigate back to ScreenBackups (cursor 7 on Welcome → enter).
+	afterEsc.Cursor = 7
 	updated2, _ := afterEsc.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	afterReturn := updated2.(Model)
 	if afterReturn.Screen != ScreenBackups {
-		t.Fatalf("Enter cursor=6 from ScreenWelcome: screen = %v, want ScreenBackups", afterReturn.Screen)
+		t.Fatalf("Enter cursor=7 from ScreenWelcome: screen = %v, want ScreenBackups", afterReturn.Screen)
 	}
 
 	// PinErr must be cleared on re-entry.
