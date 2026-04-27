@@ -296,10 +296,22 @@ func TestResolveGitHubToken_EnvVarWins(t *testing.T) {
 	}
 }
 
+// TestResolveGitHubToken_GHTokenFallback verifies GH_TOKEN is used when
+// GITHUB_TOKEN is unset, matching the gh CLI environment convention.
+func TestResolveGitHubToken_GHTokenFallback(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", " gh-token ")
+
+	if got := resolveGitHubToken(); got != "gh-token" {
+		t.Fatalf("resolveGitHubToken() = %q, want %q", got, "gh-token")
+	}
+}
+
 // TestResolveGitHubToken_EmptyWhenNoEnvAndNoGh verifies empty string returned when
 // GITHUB_TOKEN is unset and gh is not in PATH.
 func TestResolveGitHubToken_EmptyWhenNoEnvAndNoGh(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
 	origLookPath := ghLookPath
 	t.Cleanup(func() { ghLookPath = origLookPath })
 	ghLookPath = func(string) (string, error) { return "", fmt.Errorf("not found") }
