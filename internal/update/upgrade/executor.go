@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -299,6 +300,16 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 				sp.Finish(true)
 			}
 			backupID = manifest.ID
+		}
+
+		// Retention pruning: remove oldest unpinned backups beyond the limit.
+		// This runs whether or not the snapshot itself succeeded — when the
+		// snapshot fails due to disk pressure caused by prior accumulated
+		// backups, pruning is the recovery path. Non-fatal: a prune failure
+		// must not prevent the upgrade from completing.
+		backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+		if _, pruneErr := backup.Prune(backupRoot, backup.DefaultRetentionCount); pruneErr != nil {
+			log.Printf("backup: prune: %v", pruneErr)
 		}
 	}
 
