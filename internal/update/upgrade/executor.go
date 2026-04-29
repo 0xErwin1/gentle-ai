@@ -44,13 +44,20 @@ var snapshotCreator = func(snapshotDir string, paths []string) (backup.Manifest,
 // Default "dev" matches the ldflags default in app.Version.
 var AppVersion = "dev"
 
-// ExecuteOptions controls optional upgrade executor output streams.
+// ExecuteOptions controls optional upgrade executor behavior.
+//
 // Progress is for user-visible spinner/status output. BackupDiagnostics is for
 // verbose backup walk diagnostics; nil keeps backup enumeration silent, which
 // prevents background TUI jobs from writing over the Bubble Tea screen.
+//
+// SkipBackup, when true, skips both creating a pre-upgrade backup snapshot
+// AND retention pruning of the backup directory. Use this when the user
+// explicitly opts out of backup behavior for a single run (CLI: --no-backup).
+// The default (false) preserves the original safe-by-default behavior.
 type ExecuteOptions struct {
 	Progress          io.Writer
 	BackupDiagnostics io.Writer
+	SkipBackup        bool
 }
 
 // backupExcludeSubdirs lists subdirectory base names that should be skipped
@@ -277,9 +284,11 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 	}
 
 	// Create backup snapshot BEFORE any execution (only when there are executables).
+	// When SkipBackup is set the entire backup subsystem is bypassed for this run:
+	// no snapshot, no retention pruning, the backups directory is left untouched.
 	backupID := ""
 	backupWarning := ""
-	if !dryRun && len(executable) > 0 {
+	if !dryRun && len(executable) > 0 && !options.SkipBackup {
 		sp := NewSpinner(pw, "Creating pre-upgrade backup")
 		snapshotDir := filepath.Join(homeDir, ".gentle-ai", "backups",
 			fmt.Sprintf("upgrade-%s", time.Now().UTC().Format("20060102T150405Z")))
