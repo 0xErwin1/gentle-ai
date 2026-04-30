@@ -337,6 +337,15 @@ func TestRunStrategyOpenCodePluginUpgradesMaterializedPackage(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"0.1.0"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	cacheRoot := filepath.Join(home, ".cache", "opencode", "packages")
+	targetCache := filepath.Join(cacheRoot, pkg+"@latest")
+	otherPluginCache := filepath.Join(cacheRoot, "opencode-sdd-engram-manage@latest")
+	versionedCache := filepath.Join(cacheRoot, pkg+"@0.5.2")
+	for _, dir := range []string{targetCache, otherPluginCache, versionedCache} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	cwdFile := filepath.Join(t.TempDir(), "cwd.txt")
 
 	openCodeHomeDir = func() (string, error) { return home, nil }
@@ -376,9 +385,17 @@ func TestRunStrategyOpenCodePluginUpgradesMaterializedPackage(t *testing.T) {
 	if gotName != "bun" {
 		t.Fatalf("exec name = %q, want bun", gotName)
 	}
-	wantArgs := []string{"add", pkg + "@latest"}
+	wantArgs := []string{"add", pkg + "@latest", "@opencode-ai/plugin@latest"}
 	if strings.Join(gotArgs, " ") != strings.Join(wantArgs, " ") {
 		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
+	}
+	if _, err := os.Stat(targetCache); !os.IsNotExist(err) {
+		t.Fatalf("target OpenCode cache %s should be removed after upgrade, stat err: %v", targetCache, err)
+	}
+	for _, dir := range []string{otherPluginCache, versionedCache} {
+		if _, err := os.Stat(dir); err != nil {
+			t.Fatalf("non-target cache %s should remain, stat err: %v", dir, err)
+		}
 	}
 	cwd, err := os.ReadFile(cwdFile)
 	if err != nil {
@@ -394,6 +411,61 @@ func TestRunStrategyOpenCodePluginUpgradesMaterializedPackage(t *testing.T) {
 	}
 	if gotCwd != wantCwd {
 		t.Fatalf("command cwd = %q, want %q", gotCwd, wantCwd)
+	}
+}
+
+func TestRunStrategyOpenCodePluginRegisteredPendingRunsPackageManager(t *testing.T) {
+	origHomeDir := openCodeHomeDir
+	origLookPath := lookPathCommand
+	origExecCommand := execCommand
+	t.Cleanup(func() {
+		openCodeHomeDir = origHomeDir
+		lookPathCommand = origLookPath
+		execCommand = origExecCommand
+	})
+
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	pkg := "opencode-sdd-engram-manage"
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-sdd-engram-manage"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	openCodeHomeDir = func() (string, error) { return home, nil }
+	lookPathCommand = func(file string) (string, error) {
+		if file == "npm" {
+			return "/usr/bin/npm", nil
+		}
+		return "", errors.New("not found")
+	}
+	var gotName string
+	var gotArgs []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		return exec.Command("true")
+	}
+
+	err := runStrategy(context.Background(), update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          pkg,
+			InstallMethod: update.InstallOpenCodePlugin,
+			NpmPackage:    pkg,
+		},
+		Status: update.RegisteredNotMaterialized,
+	}, system.PlatformProfile{})
+	if err != nil {
+		t.Fatalf("registered OpenCode plugin should be npm-managed during upgrade, got: %v", err)
+	}
+	if gotName != "npm" {
+		t.Fatalf("exec name = %q, want npm", gotName)
+	}
+	wantArgs := []string{"install", "--save", "--no-audit", "--no-fund", pkg + "@latest", "@opencode-ai/plugin@latest"}
+	if strings.Join(gotArgs, " ") != strings.Join(wantArgs, " ") {
+		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
 	}
 }
 

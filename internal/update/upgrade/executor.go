@@ -235,6 +235,7 @@ func writeBackupDiagnostic(w io.Writer, format string, args ...any) {
 //   - Status UpdateAvailable → attempt upgrade; report Succeeded/Failed/Skipped(manual)
 //   - Status DevBuild → report as UpgradeSkipped with ManualHint (dev/source build)
 //   - Status VersionUnknown → report as UpgradeSkipped with ManualHint (manual attention required)
+//   - Status RegisteredNotMaterialized → attempt OpenCode npm dependency installation/update
 //   - Status UpToDate, NotInstalled, CheckFailed → omitted from report
 //   - dryRun=true → no exec; eligible tools reported as UpgradeSkipped
 //
@@ -252,15 +253,16 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, profile system.PlatformProfile, homeDir string, dryRun bool, options ExecuteOptions) UpgradeReport {
 	// progress writer for real-time status output (optional, defaults to no-op).
 	pw := firstWriter(options.Progress)
-	// Separate tools into executable (UpdateAvailable), dev-build (DevBuild), and
-	// version-unknown tools. Non-actionable but user-visible states are included in
-	// the report as UpgradeSkipped so the upgrade flow never fails silently.
+	// Separate tools into executable (UpdateAvailable and OpenCode registered-pending),
+	// dev-build (DevBuild), and version-unknown tools. Non-actionable but user-visible
+	// states are included in the report as UpgradeSkipped so the upgrade flow never
+	// fails silently.
 	var executable []update.UpdateResult
 	var devBuilds []update.UpdateResult
 	var versionUnknowns []update.UpdateResult
 	for _, r := range results {
 		switch r.Status {
-		case update.UpdateAvailable:
+		case update.UpdateAvailable, update.RegisteredNotMaterialized:
 			executable = append(executable, r)
 		case update.DevBuild:
 			devBuilds = append(devBuilds, r)

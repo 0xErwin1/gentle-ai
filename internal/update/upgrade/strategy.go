@@ -99,11 +99,11 @@ func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) error {
 		return &ManualFallbackError{Hint: fmt.Sprintf("%s OpenCode config directory was not found at %s; %s is not installed/materialized yet.", openCodePluginManualHint(r), opencodeDir, pkg)}
 	}
 
-	materialized, err := openCodePluginRegisteredOrMaterialized(opencodeDir, pkg)
+	materialized, registered, err := openCodePluginRegisteredOrMaterialized(opencodeDir, pkg)
 	if err != nil {
 		return fmt.Errorf("inspect OpenCode plugin %s: %w", pkg, err)
 	}
-	if !materialized {
+	if !materialized && !registered && r.Status != update.RegisteredNotMaterialized {
 		return &ManualFallbackError{Hint: fmt.Sprintf("%s %s is not registered in tui.json and is not present in node_modules; start/reload OpenCode first so it materializes the plugin.", openCodePluginManualHint(r), pkg)}
 	}
 
@@ -118,13 +118,13 @@ func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) error {
 	default:
 	}
 
-	target := pkg + "@latest"
+	targets := []string{pkg + "@latest", "@opencode-ai/plugin@latest"}
 	var cmd *exec.Cmd
 	switch pm {
 	case "bun":
-		cmd = execCommand("bun", "add", target)
+		cmd = execCommand("bun", append([]string{"add"}, targets...)...)
 	case "npm":
-		cmd = execCommand("npm", "install", "--save", "--no-audit", "--no-fund", target)
+		cmd = execCommand("npm", append([]string{"install", "--save", "--no-audit", "--no-fund"}, targets...)...)
 	default:
 		return &ManualFallbackError{Hint: fmt.Sprintf("unsupported OpenCode package manager %q for %s", pm, pkg)}
 	}
@@ -134,37 +134,69 @@ func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) error {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s upgrade %s in %s: %w (output: %s)", pm, pkg, opencodeDir, err, string(out))
 	}
+	if err := clearOpenCodePluginPackageCache(homeDir, pkg); err != nil {
+		return fmt.Errorf("clear OpenCode package cache for %s: %w", pkg, err)
+	}
 	return nil
 }
 
-func openCodePluginRegisteredOrMaterialized(opencodeDir, pkg string) (bool, error) {
+func openCodePluginRegisteredOrMaterialized(opencodeDir, pkg string) (bool, bool, error) {
 	if info, err := os.Stat(filepath.Join(opencodeDir, "node_modules", pkg)); err == nil && info.IsDir() {
-		return true, nil
+		return true, false, nil
+	}
+	if _, ok := openCodePackageJSONDependencyVersion(opencodeDir, pkg); ok {
+		return false, true, nil
 	}
 
 	data, err := os.ReadFile(filepath.Join(opencodeDir, "tui.json"))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return false, nil
+			return false, false, nil
 		}
-		return false, err
+		return false, false, err
 	}
 	if strings.TrimSpace(string(data)) == "" {
-		return false, nil
+		return false, false, nil
 	}
 
 	var root struct {
 		Plugin []string `json:"plugin"`
 	}
 	if err := json.Unmarshal(data, &root); err != nil {
-		return false, fmt.Errorf("parse tui.json: %w", err)
+		return false, false, fmt.Errorf("parse tui.json: %w", err)
 	}
 	for _, plugin := range root.Plugin {
-		if plugin == pkg {
-			return true, nil
+		if strings.TrimSpace(plugin) == pkg {
+			return false, true, nil
 		}
 	}
-	return false, nil
+	return false, false, nil
+}
+
+func openCodePackageJSONDependencyVersion(opencodeDir, pkg string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(opencodeDir, "package.json"))
+	if err != nil || strings.TrimSpace(string(data)) == "" {
+		return "", false
+	}
+
+	var manifest struct {
+		Dependencies    map[string]string `json:"dependencies"`
+		DevDependencies map[string]string `json:"devDependencies"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return "", false
+	}
+	if version, ok := manifest.Dependencies[pkg]; ok {
+		return version, true
+	}
+	if version, ok := manifest.DevDependencies[pkg]; ok {
+		return version, true
+	}
+	return "", false
+}
+
+func clearOpenCodePluginPackageCache(homeDir, pkg string) error {
+	return os.RemoveAll(filepath.Join(homeDir, ".cache", "opencode", "packages", pkg+"@latest"))
 }
 
 func selectOpenCodePackageManager(opencodeDir string) (string, error) {
@@ -246,6 +278,10 @@ func openCodePluginManualHint(r update.UpdateResult) string {
 		return fmt.Sprintf("OpenCode manages %s from tui.json. Restart or reload OpenCode so it refreshes the plugin package.", r.Tool.NpmPackage)
 	}
 	return "OpenCode manages TUI plugin packages from tui.json. Restart or reload OpenCode so it refreshes plugins."
+}
+
+func openCodePluginRegisteredPendingHint(pkg string) string {
+	return fmt.Sprintf("OpenCode plugin %s is registered in ~/.config/opencode/tui.json but is not materialized in node_modules yet. Restart or reload OpenCode to materialize it; if it remains pending, check OpenCode logs for package or peer dependency errors before retrying upgrade.", pkg)
 }
 
 // brewUpgrade runs `brew update` (non-fatal) then `brew upgrade <toolName>`.

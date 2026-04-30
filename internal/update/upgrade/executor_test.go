@@ -132,6 +132,62 @@ func TestExecute_VersionUnknownIsSurfacedAsSkipped(t *testing.T) {
 	}
 }
 
+func TestExecute_RegisteredNotMaterializedIsExecutable(t *testing.T) {
+	origExecCommand := execCommand
+	origHomeDir := openCodeHomeDir
+	origLookPath := lookPathCommand
+	origSnapshotCreator := snapshotCreator
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		openCodeHomeDir = origHomeDir
+		lookPathCommand = origLookPath
+		snapshotCreator = origSnapshotCreator
+	})
+
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-sdd-engram-manage"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	openCodeHomeDir = func() (string, error) { return home, nil }
+	lookPathCommand = func(file string) (string, error) {
+		if file == "npm" {
+			return "/usr/bin/npm", nil
+		}
+		return "", errors.New("not found")
+	}
+	snapshotCreator = func(snapshotDir string, paths []string) (backup.Manifest, error) {
+		return backup.Manifest{ID: "backup-test"}, nil
+	}
+	execCalled := false
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		execCalled = true
+		return exec.Command("true")
+	}
+
+	result := makeResult("opencode-sdd-engram-manage", update.RegisteredNotMaterialized, "", "1.2.0", update.InstallOpenCodePlugin)
+	result.Tool.NpmPackage = "opencode-sdd-engram-manage"
+	result.UpdateHint = "Restart or reload OpenCode; check OpenCode logs for package or peer dependency errors."
+
+	report := Execute(context.Background(), []update.UpdateResult{result}, linuxProfile(), home, false)
+
+	if !execCalled {
+		t.Fatal("registered-pending OpenCode plugins should execute npm dependency upgrade")
+	}
+	if len(report.Results) != 1 {
+		t.Fatalf("len(Results) = %d, want 1", len(report.Results))
+	}
+	if report.Results[0].Status != UpgradeSucceeded {
+		t.Fatalf("status = %q, want %q", report.Results[0].Status, UpgradeSucceeded)
+	}
+	if report.BackupID == "" {
+		t.Fatal("BackupID should be populated before executing registered-pending plugin upgrade")
+	}
+}
+
 // --- TestRenderUpgradeReport_DryRunManualHintNotCountedAsPending ---
 
 func TestRenderUpgradeReport_DryRunManualHintNotCountedAsPending(t *testing.T) {
