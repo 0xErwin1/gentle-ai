@@ -47,6 +47,12 @@ PRs that are not linked to an approved issue will be **automatically rejected** 
 | `type:chore` | Build, CI, tooling changes |
 | `type:breaking` | Breaking change |
 
+### Size Labels (applied to PRs)
+
+| Label | Description |
+|-------|-------------|
+| `size:exception` | Maintainer-approved exception for PRs above the 400 changed-line review budget |
+
 ### Status Labels (applied to Issues)
 
 | Label | Description |
@@ -230,9 +236,16 @@ Branch names **must** match this pattern:
 
 ## Pull Request Rules
 
+### PR Size Budget
+
+Keep PRs at or below **400 changed lines** (`additions + deletions`). This is a deliberate cognitive-load limit: a PR should be reviewable in roughly **60 minutes** without pushing reviewers into fatigue.
+
+If your change cannot fit that budget, split it into **chained or stacked PRs** so each review remains focused. Large generated/vendor/migration diffs may use the `size:exception` label, but only when a maintainer agrees the large diff is unavoidable.
+
 ### Before Opening a PR
 
 - [ ] There is a linked approved issue (`Closes #<N>`)
+- [ ] The PR is at or below 400 changed lines, or a maintainer approved `size:exception`
 - [ ] All unit tests pass (`go test ./...`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
 - [ ] Commits follow Conventional Commits format
@@ -253,6 +266,7 @@ All PRs go through automated checks:
 
 | Check | What It Verifies |
 |-------|-----------------|
+| **Check PR Cognitive Load** | PR stays within 400 changed lines (`additions + deletions`) unless labelled `size:exception` |
 | **Check Issue Reference** | PR body contains `Closes/Fixes/Resolves #N` |
 | **Check Issue Has status:approved** | The linked issue has been approved by a maintainer |
 | **Check PR Has type:* Label** | Exactly one `type:*` label is applied |
