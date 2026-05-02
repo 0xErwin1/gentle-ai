@@ -2,6 +2,8 @@
 
 When working on this project, load the relevant skill(s) BEFORE writing any code.
 
+Naming convention: `gentle-ai-*` skills are repo-specific workflow skills. Unprefixed skills are portable writing or work-unit skills and intentionally keep their canonical names.
+
 ## How to Use
 
 1. Check the trigger column to find skills that match your current task

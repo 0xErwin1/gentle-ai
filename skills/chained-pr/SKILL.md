@@ -28,6 +28,7 @@ Do not use this skill for small fixes or single-purpose changes that fit comfort
 | Rule | Requirement |
 |------|-------------|
 | Review budget | **MUST split** when a PR exceeds **400 changed lines** (`additions + deletions`), unless it has maintainer-approved `size:exception` |
+| Review time | Design each PR for an approximately **≤60-minute** human review |
 | Review health | Optimize for sustainable maintainer attention, not just CI compliance |
 | Start and finish | Every chained PR MUST state where it starts, where it ends, what came before, and what comes next |
 | Autonomy | Every chained PR MUST be understandable and verifiable on its own |
@@ -97,10 +98,18 @@ main
 ### Steps
 
 1. Create the feature branch from `main`.
-2. Open a main/tracker PR from the feature branch to `main` early and mark it as not ready to merge.
+2. Open a main/tracker PR from the feature branch to `main` early and mark it as draft/no-merge.
 3. Create each implementation branch from the feature branch.
 4. Target each chained PR back to the feature branch.
 5. Merge the final feature branch to `main` only after all chained PRs are merged and tested together.
+
+### Tracker PR Expectations
+
+The tracker PR is a **chain map**, not the review surface. Keep it draft/no-merge until the child PRs are reviewed and integrated.
+
+- Reviewers should review the child PRs, where each slice stays within the 400-line budget.
+- The tracker PR may exceed 400 changed lines because it aggregates the full feature branch by design.
+- If the tracker PR exceeds the budget, request/obtain maintainer-applied `size:exception` and document why the aggregate diff is unavoidable.
 
 ## Stacked PRs to Main
 
@@ -119,7 +128,9 @@ main <- PR 1: foundation
 3. After PR 1 merges, rebase PR 2 on `main` and retarget it to `main`.
 4. Repeat until the stack is merged.
 
-## PR Description Template
+## Chain Context Section
+
+Insert this extra section into the existing `.github/PULL_REQUEST_TEMPLATE.md` body. Do **not** replace the repository PR template; the linked issue, PR type, summary, changes, test plan, automated checks, and contributor checklist sections are still required.
 
 ```markdown
 ## Chain Context
@@ -151,7 +162,7 @@ main <- PR 1: foundation
 
 - Review this PR in isolation.
 - Do not review dependent PR changes here.
-- If this exceeds 400 changed lines, split it or explain why maintainer-approved `size:exception` is justified.
+- If this exceeds 400 changed lines, request/obtain maintainer-applied `size:exception` and document the rationale.
 
 ## Test Plan
 
