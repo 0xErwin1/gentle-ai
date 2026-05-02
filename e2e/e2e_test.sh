@@ -27,6 +27,13 @@ if [ -z "$BINARY" ]; then
 fi
 log_info "Using binary: $BINARY"
 
+# Side-effect E2E exercises install/injection behavior. Keep it deterministic by
+# satisfying the installer's "engram already exists on PATH" branch unless a
+# maintainer explicitly opts into the live GitHub release download path.
+if [ "${RUN_FULL_E2E:-0}" = "1" ] || [ "${RUN_BACKUP_TESTS:-0}" = "1" ]; then
+    setup_fake_engram_binary
+fi
+
 # ===========================================================================
 # TIER 1 — Basic binary & dry-run tests (always run)
 # ===========================================================================
