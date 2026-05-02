@@ -68,7 +68,7 @@ When `sdd-tasks` produces a Review Workload Forecast:
 
 - Low risk: keep work-unit commits inside one PR.
 - Medium risk: commit by work unit and monitor changed lines before PR creation.
-- High risk: ask before `sdd-apply`, then implement each work unit as a chained or stacked PR slice.
+- High risk: follow SDD `delivery_strategy` — ask on `ask-on-risk`, auto-slice on `auto-chain`, require `size:exception` on over-budget `single-pr`, or record accepted `size:exception` on `exception-ok`.
 
 Each SDD work unit should map cleanly to a commit or PR with:
 

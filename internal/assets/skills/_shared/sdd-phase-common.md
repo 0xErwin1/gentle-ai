@@ -93,9 +93,11 @@ Example:
 SDD must protect reviewer cognitive load, not only generate tasks.
 
 - The default PR review budget is **400 changed lines** (`additions + deletions`).
+- The orchestrator MUST cache a delivery strategy at session start: `ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`.
+- The orchestrator MUST pass `delivery_strategy` to `sdd-tasks` and the resolved decision to `sdd-apply`.
 - `sdd-tasks` MUST forecast whether the planned work may exceed that budget.
 - If the forecast is high, `sdd-tasks` MUST recommend chained or stacked PRs using deliverable work units.
-- `sdd-apply` MUST NOT start oversized work unless the orchestrator/user has chosen chained/stacked PRs or explicitly accepted `size:exception`.
+- `sdd-apply` MUST NOT start oversized work unless the delivery strategy resolves to chained/stacked PR slices or explicitly accepted `size:exception`.
 - Each chained PR slice must have a clear start, clear finish, autonomous scope, verification, and reasonable rollback.
 
 This guard exists to reduce reviewer burnout and keep implementation delivery safe. Do not treat it as optional process noise.

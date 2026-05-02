@@ -34,7 +34,7 @@ Do not use this skill for small fixes or single-purpose changes that fit comfort
 | Scope | One deliverable work unit per PR; do not mix unrelated refactors, features, tests, or docs |
 | Dependencies | State what each PR depends on and what follows next |
 | Exceptions | Use `size:exception` only when a maintainer agrees the large diff is unavoidable |
-| SDD handoff | If SDD forecasts a >400-line workload, ask before apply and split by work-unit commits |
+| SDD handoff | If SDD forecasts a >400-line workload, honor `delivery_strategy`: ask, auto-chain, or require/record `size:exception` |
 
 The goal is not bureaucracy. The goal is preventing reviewer burnout so maintainers can review with care instead of skimming exhausted. Big PRs create fatigue, hide defects, and slow merge velocity.
 
@@ -77,7 +77,7 @@ Every PR in a chain needs explicit boundaries:
 When SDD planning produces tasks that may exceed 400 changed lines:
 
 1. Treat the `Review Workload Forecast` as a hard planning signal.
-2. Ask the user whether to use chained/stacked PRs before `sdd-apply` writes code.
+2. Follow the cached `delivery_strategy` before `sdd-apply` writes code.
 3. Convert suggested work units into PR slices.
 4. Keep each slice autonomous: tests/docs included, CI green, clear rollback.
 5. Do not let one `sdd-apply` batch silently grow into a burnout-sized PR.

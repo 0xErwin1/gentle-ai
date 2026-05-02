@@ -102,6 +102,17 @@ If the user doesn't specify, detect: if engram is available → default to `engr
 
 Cache the artifact store choice for the session. Pass it as `artifact_store.mode` to every sub-agent launch.
 
+### Delivery Strategy
+
+When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first time in a session, ALSO ASK which delivery/review strategy they want:
+
+- **`ask-on-risk`** (default): Ask later if `sdd-tasks` forecasts high risk or >400 changed lines.
+- **`auto-chain`**: If forecast is high, continue with chained/stacked PR slices without asking again.
+- **`single-pr`**: Prefer one PR; if forecast exceeds 400 lines, require `size:exception` before apply.
+- **`exception-ok`**: Allow a large PR because the maintainer explicitly accepts `size:exception`.
+
+Cache the delivery strategy for the session. Pass it as `delivery_strategy` to `sdd-tasks` and `sdd-apply` prompts.
+
 ### Dependency Graph
 ```
 proposal -> specs --> tasks -> apply -> verify -> archive
@@ -112,6 +123,19 @@ proposal -> specs --> tasks -> apply -> verify -> archive
 
 ### Result Contract
 Each phase returns: `status`, `executive_summary`, `artifacts`, `next_recommended`, `risks`, `skill_resolution`.
+
+### Review Workload Guard (MANDATORY)
+
+After `sdd-tasks` completes and before launching `sdd-apply`, inspect `Review Workload Forecast`.
+
+If it says `Chained PRs recommended: Yes`, `400-line budget risk: High`, estimated changed lines exceed 400, or `Decision needed before apply: Yes`, apply cached `delivery_strategy`:
+
+- **`ask-on-risk`**: STOP and ask chained/stacked PRs vs maintainer-approved `size:exception`.
+- **`auto-chain`**: Do not ask. Tell `sdd-apply` to implement only the next autonomous chained/stacked PR slice using work-unit commits.
+- **`single-pr`**: STOP and require/record `size:exception` before apply.
+- **`exception-ok`**: Continue, but tell `sdd-apply` this run uses `size:exception`.
+
+Automatic mode does not override this guard. Always pass the resolved delivery strategy to `sdd-apply`.
 
 <!-- gentle-ai:sdd-model-assignments -->
 ## Model Assignments
