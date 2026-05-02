@@ -16,6 +16,7 @@ metadata:
 Use this skill when:
 
 - A planned PR is likely to exceed **400 changed lines** (`additions + deletions`).
+- An SDD tasks artifact forecasts `400-line budget risk: High` or `Chained PRs recommended: Yes`.
 - A reviewer asks to split a PR for cognitive load, review fatigue, or burnout prevention.
 - You need chained PRs, stacked PRs, or a feature branch with multiple reviewable slices.
 - A change should be reviewed in roughly **60 minutes or less** per PR.
@@ -33,6 +34,7 @@ Do not use this skill for small fixes or single-purpose changes that fit comfort
 | Scope | One deliverable work unit per PR; do not mix unrelated refactors, features, tests, or docs |
 | Dependencies | State what each PR depends on and what follows next |
 | Exceptions | Use `size:exception` only when a maintainer agrees the large diff is unavoidable |
+| SDD handoff | If SDD forecasts a >400-line workload, ask before apply and split by work-unit commits |
 
 The goal is not bureaucracy. The goal is preventing reviewer burnout so maintainers can review with care instead of skimming exhausted. Big PRs create fatigue, hide defects, and slow merge velocity.
 
@@ -69,6 +71,16 @@ Every PR in a chain needs explicit boundaries:
 | Before | Prior PRs reviewers can assume already exist |
 | After | Follow-up PRs reviewers should ignore for now |
 | Out of scope | Related work intentionally excluded from this review |
+
+## SDD Integration
+
+When SDD planning produces tasks that may exceed 400 changed lines:
+
+1. Treat the `Review Workload Forecast` as a hard planning signal.
+2. Ask the user whether to use chained/stacked PRs before `sdd-apply` writes code.
+3. Convert suggested work units into PR slices.
+4. Keep each slice autonomous: tests/docs included, CI green, clear rollback.
+5. Do not let one `sdd-apply` batch silently grow into a burnout-sized PR.
 
 ## Feature Branch Chain
 

@@ -42,6 +42,23 @@ Before writing ANY code:
 3. Read existing code in affected files — understand current patterns
 4. Check the project's coding conventions from `config.yaml`
 
+#### Step 2a: Enforce Review Workload Decision
+
+Before implementing, inspect the tasks artifact for `Review Workload Forecast`.
+
+If the forecast says any of the following:
+
+- `400-line budget risk: High`
+- `Chained PRs recommended: Yes`
+- `Decision needed before apply: Yes`
+
+Then you MUST confirm the orchestrator/user already chose one of these paths:
+
+1. **Chained/stacked PR mode**: implement only the assigned work-unit slice, keep scope autonomous, and report the intended PR boundary.
+2. **Single PR with exception**: continue only if the prompt explicitly says the maintainer accepts `size:exception`.
+
+If neither decision is present, STOP before writing code and return `blocked` with: `Workload decision required before apply: estimated work may exceed 400 changed lines. Ask whether to use chained PRs with work-unit commits or proceed with size:exception.`
+
 #### Step 2b: Read Previous Apply-Progress (if exists)
 
 Before starting work, check for existing apply-progress:
@@ -165,6 +182,12 @@ If none, say "None."}
 - [ ] {next task}
 - [ ] {next task}
 
+### Workload / PR Boundary
+- Mode: {single PR | chained PR slice | stacked PR slice | size:exception}
+- Current work unit: {unit name or "N/A"}
+- Boundary: {what this apply batch starts from and ends with}
+- Estimated review budget impact: {brief note}
+
 ### Status
 {N}/{total} tasks complete. {Ready for next batch / Ready for verify / Blocked by X}
 ```
@@ -177,6 +200,8 @@ If none, say "None."}
 - In `openspec` mode, mark tasks complete in `tasks.md` AS you go, not at the end
 - If you discover the design is wrong or incomplete, NOTE IT in your return summary — don't silently deviate
 - If a task is blocked by something unexpected, STOP and report back
+- If workload forecast requires a decision and none was provided, STOP before writing code
+- When applying a chained/stacked PR slice, keep the batch autonomous: one deliverable scope, verification included, and clear rollback boundary
 - NEVER implement tasks that weren't assigned to you
 - Skill loading is handled in Step 1 — follow any loaded skills strictly when writing code
 - Apply any `rules.apply` from `openspec/config.yaml`

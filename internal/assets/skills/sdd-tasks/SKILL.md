@@ -59,6 +59,24 @@ openspec/changes/{change-name}/
 ```markdown
 # Tasks: {Change Title}
 
+## Review Workload Forecast
+
+| Field | Value |
+|-------|-------|
+| Estimated changed lines | <rough estimate or range> |
+| 400-line budget risk | Low / Medium / High |
+| Chained PRs recommended | Yes / No |
+| Suggested split | <single PR or PR 1 → PR 2 → PR 3> |
+
+**Decision needed before apply**: <Yes if estimate is likely above 400 changed lines; otherwise No>
+
+### Suggested Work Units
+
+| Unit | Goal | Likely PR | Notes |
+|------|------|-----------|-------|
+| 1 | <standalone deliverable> | PR 1 | <tests/docs included> |
+| 2 | <standalone deliverable> | PR 2 | <depends on PR 1 or independent> |
+
 ## Phase 1: {Phase Name} (e.g., Infrastructure / Foundation)
 
 - [ ] 1.1 {Concrete action — what file, what change}
@@ -94,6 +112,21 @@ Each task MUST be:
 | **Actionable** | "Add `ValidateToken()` method to `AuthService`" | "Handle tokens" |
 | **Verifiable** | "Test: `POST /login` returns 401 without token" | "Make sure it works" |
 | **Small** | One file or one logical unit of work | "Implement the feature" |
+
+### Review Workload Forecast Rules
+
+Before finalizing tasks, estimate whether implementation is likely to exceed the **400 changed-line review budget** (`additions + deletions`). This is a planning guard, not an exact diff count.
+
+Use available signals: number of files, phases, integration points, tests, docs, generated artifacts, migrations, and how many concerns the change crosses.
+
+If the estimate is **High** or likely above 400 lines:
+
+1. Mark `Chained PRs recommended` as `Yes`.
+2. Split tasks into **work units** that can become chained or stacked PRs.
+3. Each suggested PR must have a clear start, clear finish, verification, and autonomous scope.
+4. Add `Decision needed before apply: Yes` so the orchestrator asks whether to continue as one PR or switch to chained PRs.
+
+Do not bury this in prose. Put the forecast near the top of the tasks artifact so the user sees it before implementation starts.
 
 ### Phase Organization Guidelines
 
@@ -148,8 +181,15 @@ Return to the orchestrator:
 ### Implementation Order
 {Brief description of the recommended order and why}
 
+### Review Workload Forecast
+- Estimated changed lines: {estimate or range}
+- 400-line budget risk: {Low | Medium | High}
+- Chained PRs recommended: {Yes | No}
+- Decision needed before apply: {Yes | No}
+- Suggested work-unit PR split: {brief list or "Not needed"}
+
 ### Next Step
-Ready for implementation (sdd-apply).
+{Ready for implementation (sdd-apply) OR ask the user whether to use chained PRs before sdd-apply.}
 ```
 
 ## Rules
@@ -163,4 +203,5 @@ Ready for implementation (sdd-apply).
 - Apply any `rules.tasks` from `openspec/config.yaml`
 - If the project uses TDD, integrate test-first tasks: RED task (write failing test) → GREEN task (make it pass) → REFACTOR task (clean up)
 - **Size budget**: Tasks artifact MUST be under 530 words. Each task: 1-2 lines max. Use checklist format, not paragraphs.
+- **Review workload guard**: ALWAYS include the Review Workload Forecast. If likely above 400 changed lines, recommend chained PRs and require a user decision before apply.
 - Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.
