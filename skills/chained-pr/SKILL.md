@@ -35,6 +35,8 @@ Do not use this skill for small fixes or single-purpose changes that fit comfort
 | Dependencies | State what each PR depends on and what follows next |
 | Exceptions | Use `size:exception` only when a maintainer agrees the large diff is unavoidable |
 | SDD handoff | If SDD forecasts a >400-line workload, honor `delivery_strategy`: ask, auto-chain, or require/record `size:exception` |
+| Visual map | Every chained PR MUST include a dependency diagram that marks the current PR |
+| Tracker PR | Every chain SHOULD have a draft tracker PR that lists every child PR and current status |
 
 The goal is not bureaucracy. The goal is preventing reviewer burnout so maintainers can review with care instead of skimming exhausted. Big PRs create fatigue, hide defects, and slow merge velocity.
 
@@ -71,6 +73,42 @@ Every PR in a chain needs explicit boundaries:
 | Before | Prior PRs reviewers can assume already exist |
 | After | Follow-up PRs reviewers should ignore for now |
 | Out of scope | Related work intentionally excluded from this review |
+
+## Tracker PR Requirement
+
+For any chain with more than two PRs, create a draft tracker PR before review starts. The tracker PR is not the review surface. It is the map.
+
+It must include:
+
+- every child PR in merge/review order,
+- current status for each PR,
+- one dependency diagram,
+- explicit instruction not to review the aggregate diff,
+- `size:exception` if the aggregate diff exceeds 400 changed lines,
+- `no-merge` while the chain is incomplete.
+
+## Diagram Requirement
+
+Every child PR must show where it sits in the chain. Mark the current PR with `📍`.
+
+```text
+main
+ └── #101 Foundation
+      └── #102 Work-unit commits
+           └── 📍 #103 This PR
+                └── #104 Docs
+                     └── #105 Tracker
+```
+
+Pair the diagram with a status table:
+
+| PR | Scope | Status |
+|----|-------|--------|
+| #101 | Foundation | ✅ Passing |
+| #102 | Work-unit commits | 🟡 Open |
+| #103 | This PR | 📍 Review here |
+| #104 | Docs | ⚪ Pending |
+| #105 | Tracker | 🟡 Draft |
 
 ## SDD Integration
 
@@ -127,6 +165,7 @@ main <- PR 1: foundation
 | Field | Value |
 |-------|-------|
 | Chain | <feature or stack name> |
+| Tracker PR | <#NNN or "Not needed"> |
 | Position | <N of total> |
 | Base | `<target branch>` |
 | Depends on | <PR/issue/link or "None"> |
@@ -134,6 +173,23 @@ main <- PR 1: foundation
 | Review budget | <changed lines> / 400 |
 | Starts at | <branch, PR, or state this builds on> |
 | Ends with | <standalone result delivered by this PR> |
+
+### Chain Overview
+
+```text
+main
+ └── #NNN Previous PR
+      └── 📍 #NNN This PR
+           └── #NNN Next PR
+                └── #NNN Tracker
+```
+
+### Chain Status
+
+| PR | Scope | Status |
+|----|-------|--------|
+| #NNN | <scope> | <status> |
+| #NNN | <scope> | 📍 This PR |
 
 ## Scope
 
