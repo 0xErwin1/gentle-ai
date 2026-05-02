@@ -27,10 +27,10 @@ type bootstrapper interface {
 // outputStyleOverlayJSON is the settings.json overlay to enable the Gentleman output style.
 var outputStyleOverlayJSON = []byte("{\n  \"outputStyle\": \"Gentleman\"\n}\n")
 
-// openCodeAgentOverlayJSON defines Tab-switchable agents for OpenCode.
-// "gentleman" is the primary agent, "sdd-orchestrator" is available via Tab.
-// Both reference AGENTS.md via {file:./AGENTS.md} for their system prompt.
-var openCodeAgentOverlayJSON = []byte("{\n  \"agent\": {\n    \"gentleman\": {\n      \"mode\": \"primary\",\n      \"description\": \"Senior Architect mentor - helpful first, challenging when it matters\",\n      \"prompt\": \"{file:./AGENTS.md}\",\n      \"tools\": {\n        \"write\": true,\n        \"edit\": true\n      }\n    },\n    \"sdd-orchestrator\": {\n      \"mode\": \"all\",\n      \"description\": \"Gentleman personality + SDD delegate-only orchestrator\",\n      \"prompt\": \"{file:./AGENTS.md}\",\n      \"tools\": {\n        \"read\": true,\n        \"write\": true,\n        \"edit\": true,\n        \"bash\": true\n      }\n    }\n  }\n}\n")
+// openCodeAgentOverlayJSON defines the Tab-switchable persona agent for OpenCode.
+// SDD is installed separately by the SDD component as "gentle-orchestrator";
+// persona injection must not create legacy SDD conductor keys.
+var openCodeAgentOverlayJSON = []byte("{\n  \"agent\": {\n    \"gentleman\": {\n      \"mode\": \"primary\",\n      \"description\": \"Senior Architect mentor - helpful first, challenging when it matters\",\n      \"prompt\": \"{file:./AGENTS.md}\",\n      \"tools\": {\n        \"write\": true,\n        \"edit\": true\n      }\n    }\n  }\n}\n")
 
 func Inject(homeDir string, adapter agents.Adapter, persona model.PersonaID) (InjectionResult, error) {
 	if !adapter.SupportsSystemPrompt() {
