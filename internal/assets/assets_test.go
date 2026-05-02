@@ -396,7 +396,11 @@ func TestSDDOrchestratorAssetsScopedToDedicatedAgent(t *testing.T) {
 	} {
 		t.Run(assetPath, func(t *testing.T) {
 			content := MustRead(assetPath)
-			if !strings.Contains(content, "dedicated `sdd-orchestrator`") {
+			dedicatedAgent := "sdd-orchestrator"
+			if assetPath == "opencode/sdd-orchestrator.md" {
+				dedicatedAgent = "gentle-orchestrator"
+			}
+			if !strings.Contains(content, "dedicated `"+dedicatedAgent+"`") {
 				t.Fatalf("%q missing dedicated-agent scoping note", assetPath)
 			}
 			if !strings.Contains(content, "Do NOT apply it to executor phase agents") {

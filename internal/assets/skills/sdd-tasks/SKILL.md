@@ -18,6 +18,7 @@ You are a sub-agent responsible for creating the TASK BREAKDOWN. You take the pr
 From the orchestrator:
 - Change name
 - Artifact store mode (`engram | openspec | hybrid | none`)
+- Delivery strategy (`ask-on-risk | auto-chain | single-pr | exception-ok`)
 
 ## Execution and Persistence Contract
 
@@ -67,8 +68,9 @@ openspec/changes/{change-name}/
 | 400-line budget risk | Low / Medium / High |
 | Chained PRs recommended | Yes / No |
 | Suggested split | <single PR or PR 1 → PR 2 → PR 3> |
+| Delivery strategy | <ask-on-risk / auto-chain / single-pr / exception-ok> |
 
-**Decision needed before apply**: <Yes if estimate is likely above 400 changed lines; otherwise No>
+**Decision needed before apply**: <Yes if strategy requires a later decision/exception; otherwise No>
 
 ### Suggested Work Units
 
@@ -124,7 +126,11 @@ If the estimate is **High** or likely above 400 lines:
 1. Mark `Chained PRs recommended` as `Yes`.
 2. Split tasks into **work units** that can become chained or stacked PRs.
 3. Each suggested PR must have a clear start, clear finish, verification, and autonomous scope.
-4. Add `Decision needed before apply: Yes` so the orchestrator asks whether to continue as one PR or switch to chained PRs.
+4. Set `Decision needed before apply` from delivery strategy:
+   - `ask-on-risk`: `Yes` — orchestrator asks before apply.
+   - `auto-chain`: `No` — orchestrator proceeds with the first chained/stacked slice.
+   - `single-pr`: `Yes` — orchestrator must require `size:exception` before apply.
+   - `exception-ok`: `No` — maintainer has accepted `size:exception`.
 
 Do not bury this in prose. Put the forecast near the top of the tasks artifact so the user sees it before implementation starts.
 
@@ -185,6 +191,7 @@ Return to the orchestrator:
 - Estimated changed lines: {estimate or range}
 - 400-line budget risk: {Low | Medium | High}
 - Chained PRs recommended: {Yes | No}
+- Delivery strategy: {ask-on-risk | auto-chain | single-pr | exception-ok}
 - Decision needed before apply: {Yes | No}
 - Suggested work-unit PR split: {brief list or "Not needed"}
 
@@ -203,5 +210,5 @@ Return to the orchestrator:
 - Apply any `rules.tasks` from `openspec/config.yaml`
 - If the project uses TDD, integrate test-first tasks: RED task (write failing test) → GREEN task (make it pass) → REFACTOR task (clean up)
 - **Size budget**: Tasks artifact MUST be under 530 words. Each task: 1-2 lines max. Use checklist format, not paragraphs.
-- **Review workload guard**: ALWAYS include the Review Workload Forecast. If likely above 400 changed lines, recommend chained PRs and require a user decision before apply.
+- **Review workload guard**: ALWAYS include the Review Workload Forecast. If likely above 400 changed lines, recommend chained PRs and honor the received delivery strategy for whether a decision/exception is needed before apply.
 - Return envelope per **Section D** from `skills/_shared/sdd-phase-common.md`.

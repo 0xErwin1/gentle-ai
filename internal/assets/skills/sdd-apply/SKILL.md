@@ -19,6 +19,7 @@ From the orchestrator:
 - Change name
 - The specific task(s) to implement (e.g., "Phase 1, tasks 1.1-1.3")
 - Artifact store mode (`engram | openspec | hybrid | none`)
+- Delivery strategy and resolved workload decision (`ask-on-risk | auto-chain | single-pr | exception-ok`, plus PR slice or `size:exception` when applicable)
 
 ## Execution and Persistence Contract
 
@@ -52,10 +53,11 @@ If the forecast says any of the following:
 - `Chained PRs recommended: Yes`
 - `Decision needed before apply: Yes`
 
-Then you MUST confirm the orchestrator/user already chose one of these paths:
+Then you MUST confirm the orchestrator/user provided a resolved delivery path:
 
-1. **Chained/stacked PR mode**: implement only the assigned work-unit slice, keep scope autonomous, and report the intended PR boundary.
-2. **Single PR with exception**: continue only if the prompt explicitly says the maintainer accepts `size:exception`.
+1. **`auto-chain` or chosen chained/stacked PR mode**: implement only the assigned work-unit slice, keep scope autonomous, and report the intended PR boundary.
+2. **`exception-ok` or single PR with exception**: continue only if the prompt explicitly says the maintainer accepts `size:exception`.
+3. **`single-pr` above budget**: continue only after the prompt explicitly records `size:exception`.
 
 If neither decision is present, STOP before writing code and return `blocked` with: `Workload decision required before apply: estimated work may exceed 400 changed lines. Ask whether to use chained PRs with work-unit commits or proceed with size:exception.`
 
@@ -202,6 +204,7 @@ If none, say "None."}
 - If a task is blocked by something unexpected, STOP and report back
 - If workload forecast requires a decision and none was provided, STOP before writing code
 - When applying a chained/stacked PR slice, keep the batch autonomous: one deliverable scope, verification included, and clear rollback boundary
+- When applying `size:exception`, state it explicitly in apply-progress and the return summary
 - NEVER implement tasks that weren't assigned to you
 - Skill loading is handled in Step 1 — follow any loaded skills strictly when writing code
 - Apply any `rules.apply` from `openspec/config.yaml`
