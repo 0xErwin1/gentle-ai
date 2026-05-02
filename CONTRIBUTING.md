@@ -13,6 +13,7 @@ Before you dive in, please read this guide fully. We have a structured workflow 
 - [Development Setup](#development-setup)
 - [Testing](#testing)
 - [Commit Convention](#commit-convention)
+- [Delivery Strategy for SDD Changes](#delivery-strategy-for-sdd-changes)
 - [Pull Request Rules](#pull-request-rules)
 - [Code of Conduct](#code-of-conduct)
 
@@ -234,6 +235,26 @@ Branch names **must** match this pattern:
 ---
 
 ## Pull Request Rules
+
+### Delivery Strategy for SDD Changes
+
+Before `sdd-apply` starts, the SDD conductor checks the **Review Workload Forecast** from `sdd-tasks`. This protects reviewers from one giant, exhausting PR when the work should be split.
+
+| Strategy | Use when | What happens before apply |
+|---|---|---|
+| `ask-on-risk` | Default. You want the conductor to pause only when the forecast is risky. | If the forecast is high or above 400 changed lines, it asks whether to split or proceed with `size:exception`. |
+| `auto-chain` | You already know the change should be reviewed in slices. | The apply phase implements the next chained/stacked PR slice using work-unit commits. |
+| `single-pr` | The change is small or must land atomically. | If the forecast exceeds 400 changed lines, apply stops until a maintainer approves `size:exception`. |
+| `exception-ok` | A maintainer already accepted a large PR. | Apply continues and records that the PR has maintainer-approved `size:exception`. |
+
+**Decision checklist:**
+
+- [ ] Can one reviewer understand this in about 60 minutes?
+- [ ] Is the PR at or below 400 changed lines?
+- [ ] Does each work-unit commit include its code, tests, and docs together?
+- [ ] If the answer is “no” to any item, choose `auto-chain` or get explicit `size:exception` approval.
+
+**Mental model:** work-unit commits are the bricks; chained PRs are the wall sections. Don’t make reviewers inspect the whole building in one sitting.
 
 ### PR Size Budget
 
