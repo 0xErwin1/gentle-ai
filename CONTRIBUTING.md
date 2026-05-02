@@ -242,10 +242,23 @@ Keep PRs at or below **400 changed lines** (`additions + deletions`). This is a 
 
 If your change cannot fit that budget, split it into **chained or stacked PRs** so each review remains focused. Large generated/vendor/migration diffs may use the `size:exception` label, but only when a maintainer agrees the large diff is unavoidable.
 
+### Work-Unit Commits
+
+Structure commits by deliverable unit, not by file type. A good commit includes the code, tests, and docs needed to understand and verify one behavior or workflow.
+
+- Prefer `feat(auth): validate tokens at login` over separate `models`, `services`, and `tests` commits.
+- Keep rollback reasonable: reverting one commit should not remove unrelated work.
+- When a PR grows near 400 changed lines, promote work-unit commits into chained or stacked PRs.
+
+### Review Comments
+
+Review feedback should be warm, direct, and useful quickly. Start with the actionable point, explain why when needed, and avoid recapping the PR before giving feedback.
+
 ### Before Opening a PR
 
 - [ ] There is a linked approved issue (`Closes #<N>`)
 - [ ] The PR is at or below 400 changed lines, or a maintainer approved `size:exception`
+- [ ] Commits are organized by deliverable work unit
 - [ ] All unit tests pass (`go test ./...`)
 - [ ] E2E tests pass (`cd e2e && ./docker-test.sh`)
 - [ ] Commits follow Conventional Commits format
