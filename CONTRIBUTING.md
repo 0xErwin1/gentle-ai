@@ -41,11 +41,10 @@ PRs that are not linked to an approved issue will be **automatically rejected** 
 |-------|-------------|
 | `type:bug` | Bug fix |
 | `type:feature` | New feature or enhancement |
-| `type:refactor` | Code refactoring, no functional changes |
 | `type:docs` | Documentation only |
-| `type:test` | Test coverage additions |
+| `type:refactor` | Code refactoring, no functional changes |
 | `type:chore` | Build, CI, tooling changes |
-| `type:breaking` | Breaking change |
+| `type:breaking-change` | Breaking change |
 
 ### Size Labels (applied to PRs)
 
