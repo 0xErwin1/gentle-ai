@@ -70,7 +70,9 @@ openspec/changes/{change-name}/
 | Suggested split | <single PR or PR 1 → PR 2 → PR 3> |
 | Delivery strategy | <ask-on-risk / auto-chain / single-pr / exception-ok> |
 
-**Decision needed before apply**: <Yes if strategy requires a later decision/exception; otherwise No>
+Decision needed before apply: <Yes|No>
+Chained PRs recommended: <Yes|No>
+400-line budget risk: <Low|Medium|High>
 
 ### Suggested Work Units
 
@@ -133,6 +135,16 @@ If the estimate is **High** or likely above 400 lines:
    - `exception-ok`: `No` — maintainer has accepted `size:exception`.
 
 Do not bury this in prose. Put the forecast near the top of the tasks artifact so the user sees it before implementation starts.
+
+The forecast MUST include these exact plain-text lines so downstream guards can match them literally:
+
+```text
+Decision needed before apply: Yes|No
+Chained PRs recommended: Yes|No
+400-line budget risk: Low|Medium|High
+```
+
+You may keep the table for readability, but the plain-text lines are the guard contract.
 
 ### Phase Organization Guidelines
 
