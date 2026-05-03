@@ -740,7 +740,7 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 			}
 		}
 		if existingPrompt != "" {
-			orchestratorMap["prompt"] = existingPrompt
+			orchestratorMap["prompt"] = migratePreservedOpenCodeOrchestratorPrompt(existingPrompt)
 		} else {
 			orchestratorMap["prompt"] = assets.MustRead(sddOrchestratorAsset(model.AgentOpenCode))
 		}
@@ -774,6 +774,20 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 	}
 
 	return append(result, '\n'), nil
+}
+
+func migratePreservedOpenCodeOrchestratorPrompt(prompt string) string {
+	if prompt == "" {
+		return prompt
+	}
+
+	replacer := strings.NewReplacer(
+		"Bind this to the dedicated `sdd-orchestrator` agent only.",
+		"Bind this to the dedicated `gentle-orchestrator` agent only.",
+		"agent.sdd-orchestrator.model",
+		"agent.gentle-orchestrator.model",
+	)
+	return replacer.Replace(prompt)
 }
 
 func readOpenCodeAgentPrompt(settingsPath, agentKey string) (string, error) {
