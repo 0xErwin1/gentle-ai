@@ -245,7 +245,6 @@ func Execute(ctx context.Context, results []update.UpdateResult, profile system.
 	options := ExecuteOptions{}
 	if len(progress) > 0 && progress[0] != nil {
 		options.Progress = progress[0]
-		options.BackupDiagnostics = progress[0]
 	}
 	return ExecuteWithOptions(ctx, results, profile, homeDir, dryRun, options)
 }
