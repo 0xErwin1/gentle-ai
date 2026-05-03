@@ -1002,8 +1002,10 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 // base OpenCode SDD conductor agents. The base SDD coordinator is now the
 // gentle-orchestrator primary agent; named profile agents such as
 // sdd-orchestrator-cheap intentionally remain untouched because they are
-// generated profile-specific coordinators. A real persona named "gentleman" is
-// preserved unless its definition clearly looks like the bad SDD conductor key.
+// generated profile-specific coordinators. The old OpenCode "gentleman" agent
+// key is revoked and is removed during sync; if it clearly contains the old SDD
+// conductor prompt and no gentle-orchestrator exists yet, its prompt is migrated
+// before the revoked key is deleted.
 func migrateLegacyOpenCodeSDDOrchestrator(baseJSON []byte) ([]byte, error) {
 	if len(strings.TrimSpace(string(baseJSON))) == 0 {
 		return baseJSON, nil
@@ -1024,22 +1026,21 @@ func migrateLegacyOpenCodeSDDOrchestrator(baseJSON []byte) ([]byte, error) {
 	}
 
 	legacy, hasLegacy := agentsMap["sdd-orchestrator"]
-	misnamedGentleman, hasMisnamedGentleman := agentsMap["gentleman"]
-	if hasMisnamedGentleman && !looksLikeOpenCodeSDDConductor(misnamedGentleman) {
-		hasMisnamedGentleman = false
-	}
-	if !hasLegacy && !hasMisnamedGentleman {
+	revokedGentleman, hasRevokedGentleman := agentsMap["gentleman"]
+	gentlemanLooksLikeConductor := hasRevokedGentleman && looksLikeOpenCodeSDDConductor(revokedGentleman)
+	if !hasLegacy && !hasRevokedGentleman {
 		return baseJSON, nil
 	}
-	if !hasLegacy {
-		legacy = misnamedGentleman
+	if !hasLegacy && gentlemanLooksLikeConductor {
+		legacy = revokedGentleman
+		hasLegacy = true
 	}
 
-	if _, hasGentleOrchestrator := agentsMap["gentle-orchestrator"]; !hasGentleOrchestrator {
+	if _, hasGentleOrchestrator := agentsMap["gentle-orchestrator"]; !hasGentleOrchestrator && hasLegacy {
 		agentsMap["gentle-orchestrator"] = legacy
 	}
 	delete(agentsMap, "sdd-orchestrator")
-	if hasMisnamedGentleman {
+	if hasRevokedGentleman {
 		delete(agentsMap, "gentleman")
 	}
 
