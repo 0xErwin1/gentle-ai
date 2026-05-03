@@ -41,6 +41,7 @@ After completing work, call `mem_save` with:
 - topic_key: `"sdd/{change-name}/archive-report"`
 - type: `"architecture"`
 - project: `{project-name from context}`
+- capture_prompt: `false`
 
 ## Result Contract
 

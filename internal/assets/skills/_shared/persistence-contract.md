@@ -110,6 +110,7 @@ After completing your work, you MUST call:
     topic_key: "sdd/{change-name}/{artifact-type}",
     type: "architecture",
     project: "{project}",
+    capture_prompt: false,
     content: "{your full artifact markdown}"
   )
 If you return without calling mem_save, the next phase CANNOT find your artifact and the pipeline BREAKS.
@@ -126,10 +127,13 @@ After completing your work, you MUST call:
     topic_key: "sdd/{change-name}/{artifact-type}",
     type: "architecture",
     project: "{project}",
+    capture_prompt: false,
     content: "{your full artifact markdown}"
   )
 If you return without calling mem_save, the next phase CANNOT find your artifact and the pipeline BREAKS.
 ```
+
+For SDD artifacts, `capture_prompt: false` is explicit and mandatory. Engram v1.15.3 defaults `capture_prompt` to true for normal human/proactive saves, but automated pipeline artifacts must not capture the user's prompt. Do not infer this from `type` because SDD artifacts and real human architecture decisions both use `architecture`.
 
 ## Skill Registry
 

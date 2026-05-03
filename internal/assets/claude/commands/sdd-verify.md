@@ -24,7 +24,7 @@ STEP B — RETRIEVE FULL CONTENT (mandatory):
   mem_get_observation(id: design_id) → full design
   mem_get_observation(id: tasks_id) → full tasks
 Save report:
-  mem_save(title: "sdd/{change-name}/verify-report", topic_key: "sdd/{change-name}/verify-report", type: "architecture", project: "{project}", content: "{verification report}")
+  mem_save(title: "sdd/{change-name}/verify-report", topic_key: "sdd/{change-name}/verify-report", type: "architecture", project: "{project}", capture_prompt: false, content: "{verification report}")
 
 Then:
 1. Check completeness — are all tasks done?

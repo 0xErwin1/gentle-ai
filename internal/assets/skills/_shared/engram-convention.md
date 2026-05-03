@@ -12,6 +12,7 @@ topic_key: sdd/{change-name}/{artifact-type}
 type:      architecture
 project:   {detected or current project name}
 scope:     project
+capture_prompt: false
 ```
 
 ### Artifact Types
@@ -38,6 +39,7 @@ mem_save(
   topic_key: "sdd/{change-name}/state",
   type: "architecture",
   project: "{project}",
+  capture_prompt: false,
   content: "change: {change-name}\nphase: {last-phase}\nartifact_store: engram\nartifacts:\n  proposal: true\n  specs: true\n  design: false\n  tasks: false\ntasks_progress:\n  completed: []\n  pending: []\nlast_updated: {ISO date}"
 )
 ```
@@ -80,6 +82,7 @@ mem_save(
   topic_key: "sdd/{change-name}/{artifact-type}",
   type: "architecture",
   project: "{project}",
+  capture_prompt: false,
   content: "{full markdown content}"
 )
 ```
@@ -91,9 +94,12 @@ mem_save(
   topic_key: "sdd/add-dark-mode/proposal",
   type: "architecture",
   project: "my-app",
+  capture_prompt: false,
   content: "## Proposal\n\nAdd dark mode toggle..."
 )
 ```
+
+`capture_prompt: false` is REQUIRED for SDD artifacts. Engram v1.15.3 captures user prompts by default for human/proactive saves, but SDD artifacts are automated pipeline outputs. Do not infer this from `type` because both SDD artifacts and human architecture decisions use `architecture`.
 
 Update existing artifact (when you have the observation ID):
 ```

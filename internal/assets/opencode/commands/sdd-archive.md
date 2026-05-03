@@ -30,7 +30,7 @@ STEP B — RETRIEVE FULL CONTENT (mandatory):
   mem_get_observation(id: verify_id) → full verification report
 Record all observation IDs in the archive report for traceability.
 Save:
-  mem_save(title: "sdd/{change-name}/archive-report", topic_key: "sdd/{change-name}/archive-report", type: "architecture", project: "{project}", content: "{archive report with observation IDs}")
+  mem_save(title: "sdd/{change-name}/archive-report", topic_key: "sdd/{change-name}/archive-report", type: "architecture", project: "{project}", capture_prompt: false, content: "{archive report with observation IDs}")
 
 Then:
 1. Sync delta specs into main specs (source of truth)

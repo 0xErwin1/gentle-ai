@@ -32,6 +32,7 @@ After completing work, call `mem_save` with:
 - topic_key: `"sdd/{change-name}/explore"`
 - type: `"architecture"`
 - project: `{project-name from context}`
+- capture_prompt: `false`
 
 ## Result Contract
 

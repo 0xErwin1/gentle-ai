@@ -18,7 +18,7 @@ ENGRAM PERSISTENCE (artifact store mode: engram):
 Read project context (optional):
   mem_search(query: "sdd-init/{project}", project: "{project}") → if found, mem_get_observation(id) for full content
 Save exploration:
-  mem_save(title: "sdd/$ARGUMENTS/explore", topic_key: "sdd/$ARGUMENTS/explore", type: "architecture", project: "{project}", content: "{exploration}")
+  mem_save(title: "sdd/$ARGUMENTS/explore", topic_key: "sdd/$ARGUMENTS/explore", type: "architecture", project: "{project}", capture_prompt: false, content: "{exploration}")
 
 This is an exploration only — do NOT create any files or modify code. Just research and return your analysis.
 
