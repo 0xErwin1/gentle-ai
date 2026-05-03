@@ -243,6 +243,45 @@ func TestExecute_BackupBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestExecuteProgressDoesNotIncludeBackupExclusionDiagnostics(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		return exec.Command("echo", "ok")
+	}
+
+	home := t.TempDir()
+	configFile := filepath.Join(home, ".claude", "CLAUDE.md")
+	excludedFile := filepath.Join(home, ".claude", "projects", "session.json")
+	for _, f := range []string{configFile, excludedFile} {
+		if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(f, []byte("data"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+
+	results := []update.UpdateResult{
+		makeResult("engram", update.UpdateAvailable, "0.3.0", "0.4.0", update.InstallGoInstall),
+	}
+	results[0].Tool.GoImportPath = "github.com/Gentleman-Programming/engram/cmd/engram"
+
+	var progress bytes.Buffer
+	report := Execute(context.Background(), results, linuxProfile(), home, false, &progress)
+	if report.BackupID == "" {
+		t.Fatal("BackupID should be populated before upgrade execution")
+	}
+
+	got := progress.String()
+	if strings.Contains(got, "backup: excluding directory") {
+		t.Fatalf("progress output leaked backup exclusion diagnostics:\n%s", got)
+	}
+	if !strings.Contains(got, "Creating pre-upgrade backup") {
+		t.Fatalf("progress output should still show user-visible backup progress, got:\n%s", got)
+	}
+}
+
 // --- TestExecute_DryRunNeverExecs ---
 
 // TestExecute_DryRunNeverExecs verifies that when dryRun=true, no exec is called
