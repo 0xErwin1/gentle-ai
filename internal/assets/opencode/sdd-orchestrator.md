@@ -105,6 +105,15 @@ When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first ti
 
 Cache the delivery strategy for the session. Pass it as `delivery_strategy` to `sdd-tasks` and `sdd-apply` prompts.
 
+### Chain Strategy
+
+When `delivery_strategy` results in chained PRs (either by user choice via `ask-on-risk` or automatically via `auto-chain`), ask the user which chain strategy to use:
+
+- **`stacked-to-main`**: Each PR merges to main in order. Fast iteration, fix on the go. Best for speed-first teams and independent slices.
+- **`feature-branch-chain`**: All PRs merge into a shared branch with a tracker PR. Only the tracker merges to main. Best for rollback control and coordinated releases.
+
+Cache the chain strategy for the session. Pass it as `chain_strategy` to `sdd-tasks` and `sdd-apply` prompts alongside `delivery_strategy`. Do not ask again unless the user changes scope.
+
 ### Dependency Graph
 ```
 proposal -> specs --> tasks -> apply -> verify -> archive
@@ -122,14 +131,14 @@ After `sdd-tasks` completes and before launching `sdd-apply`, inspect the task r
 
 If it says `Chained PRs recommended: Yes`, `400-line budget risk: High`, estimated changed lines exceed 400, or `Decision needed before apply: Yes`, apply the cached `delivery_strategy`:
 
-- **`ask-on-risk`**: STOP and ask whether to split into chained/stacked PRs using work-unit commits or proceed with maintainer-approved `size:exception`.
-- **`auto-chain`**: Do not ask. Pass to `sdd-apply`: implement only the next autonomous chained/stacked PR slice using work-unit commits, with clear start, finish, verification, and rollback boundary.
+- **`ask-on-risk`**: STOP and ask whether to split into chained/stacked PRs or proceed with `size:exception`. If the user chooses chained PRs and `chain_strategy` is not yet cached, also ask which chain strategy to use (stacked-to-main or feature-branch-chain).
+- **`auto-chain`**: Do not ask about splitting. If `chain_strategy` is not yet cached, ask which chain strategy to use. Then pass to `sdd-apply`: implement only the next autonomous slice using work-unit commits, with clear start, finish, verification, and rollback boundary.
 - **`single-pr`**: STOP and require/record maintainer-approved `size:exception` before `sdd-apply`.
 - **`exception-ok`**: Continue, but pass to `sdd-apply` that this run uses maintainer-approved `size:exception`.
 
 Do this even in Automatic mode. Automatic mode does not override reviewer burnout protection.
 
-When launching `sdd-apply`, always include the resolved delivery strategy and any chosen PR boundary/exception in the prompt.
+When launching `sdd-apply`, always include the resolved `delivery_strategy`, `chain_strategy`, and any chosen PR boundary/exception in the prompt.
 
 <!-- gentle-ai:sdd-model-assignments -->
 ## Model Assignments

@@ -55,11 +55,15 @@ If the forecast says any of the following:
 
 Then you MUST confirm the orchestrator/user provided a resolved delivery path:
 
-1. **`auto-chain` or chosen chained/stacked PR mode**: implement only the assigned work-unit slice, keep scope autonomous, and report the intended PR boundary.
+1. **`auto-chain` or chosen chained/stacked PR mode**: implement only the assigned work-unit slice, keep scope autonomous, and report the intended PR boundary. Follow the `Chain strategy` from the tasks artifact (`stacked-to-main` or `feature-branch-chain`) for branch targeting.
 2. **`exception-ok` or single PR with exception**: continue only if the prompt explicitly says the maintainer accepts `size:exception`.
 3. **`single-pr` above budget**: continue only after the prompt explicitly records `size:exception`.
 
-If neither decision is present, STOP before writing code and return `blocked` with: `Workload decision required before apply: estimated work may exceed 400 changed lines. Ask whether to use chained PRs with work-unit commits or proceed with size:exception.`
+Also check for `Chain strategy` in the tasks artifact. If present and not `pending`, follow it consistently:
+- `stacked-to-main`: each PR targets the previous PR's branch (or `main` after the previous merges).
+- `feature-branch-chain`: each PR targets the tracker/feature branch — never `main` directly.
+
+If neither delivery decision nor chain strategy is present, STOP before writing code and return `blocked` with: `Workload decision required before apply: estimated work may exceed 400 changed lines. Ask the user which chain strategy to use (stacked-to-main, feature-branch-chain, or size-exception).`
 
 #### Step 2b: Read Previous Apply-Progress (if exists)
 
