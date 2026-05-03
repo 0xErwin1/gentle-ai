@@ -46,11 +46,13 @@ mem_save(
   topic_key: "sdd/{change-name}/{artifact-type}",
   type: "architecture",
   project: "{project}",
+  capture_prompt: false,
   content: "{your full artifact markdown}"
 )
 ```
 
 `topic_key` enables upserts — saving again updates, not duplicates.
+`capture_prompt: false` is mandatory for SDD artifacts because they are automated pipeline outputs, not human/proactive memory saves. Set it when the Engram tool schema supports it; if an older schema rejects or does not expose the field, omit it rather than failing.
 
 ### OpenSpec mode
 
