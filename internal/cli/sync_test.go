@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -1297,10 +1298,11 @@ func TestRunSyncExternalSingleActiveSkipsDetectAndPreservesOrchestratorPrompt(t 
 		t.Fatalf("WriteFile(AGENTS.md): %v", err)
 	}
 
-	const customPrompt = "EXTERNAL-RUNTIME-ORCHESTRATOR-PROMPT"
+	const customPrompt = "EXTERNAL-RUNTIME-ORCHESTRATOR-PROMPT\nBind this to the dedicated `sdd-orchestrator` agent only.\n- Treat `agent.sdd-orchestrator.model` as authoritative when it is set."
 	seed := `{
   "agent": {
-    "sdd-orchestrator": {"mode": "primary", "prompt": "` + customPrompt + `"},
+    "sdd-orchestrator": {"mode": "primary", "prompt": ` + strconv.Quote(customPrompt) + `},
+    "gentleman": {"mode": "primary", "description": "revoked OpenCode persona", "prompt": "REVOKED_GENTLEMAN_PROMPT_SHOULD_NOT_SURVIVE"},
     "sdd-orchestrator-cheap": {"mode": "primary", "model": "anthropic:claude-haiku-3-5"},
     "sdd-init-cheap": {"mode": "subagent", "model": "anthropic:claude-haiku-3-5"}
   }
@@ -1326,11 +1328,29 @@ func TestRunSyncExternalSingleActiveSkipsDetectAndPreservesOrchestratorPrompt(t 
 	}
 	settingsText := string(settingsData)
 
-	if !strings.Contains(settingsText, customPrompt) {
-		t.Fatalf("expected sdd-orchestrator prompt to be preserved in external-single-active mode")
+	if !strings.Contains(settingsText, "EXTERNAL-RUNTIME-ORCHESTRATOR-PROMPT") {
+		t.Fatalf("expected external runtime orchestrator prompt marker to be preserved in external-single-active mode")
+	}
+	if strings.Contains(settingsText, "Bind this to the dedicated `sdd-orchestrator` agent only.") {
+		t.Fatalf("external-single-active sync preserved stale sdd-orchestrator binding text")
+	}
+	if strings.Contains(settingsText, "agent.sdd-orchestrator.model") {
+		t.Fatalf("external-single-active sync preserved stale sdd-orchestrator model assignment key")
+	}
+	if !strings.Contains(settingsText, "Bind this to the dedicated `gentle-orchestrator` agent only.") {
+		t.Fatalf("external-single-active sync did not migrate binding text to gentle-orchestrator")
+	}
+	if !strings.Contains(settingsText, "agent.gentle-orchestrator.model") {
+		t.Fatalf("external-single-active sync did not migrate model assignment key to gentle-orchestrator")
 	}
 	if strings.Contains(settingsText, "\"sdd-onboard-cheap\"") {
 		t.Fatalf("external-single-active should not auto-detect/regenerate suffixed profiles")
+	}
+	if strings.Contains(settingsText, "\"gentleman\"") {
+		t.Fatalf("external-single-active sync should delete revoked gentleman agent")
+	}
+	if strings.Contains(settingsText, "REVOKED_GENTLEMAN_PROMPT_SHOULD_NOT_SURVIVE") {
+		t.Fatalf("external-single-active sync preserved revoked gentleman prompt")
 	}
 
 	// external-single-active forces multi-mode assets so shared prompts exist.

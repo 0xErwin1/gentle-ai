@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -382,6 +383,58 @@ func TestInjectOpenCodePreservesExistingOrchestratorPromptWhenRequested(t *testi
 	}
 }
 
+func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+
+	const stalePrompt = "# Gentle AI — SDD Orchestrator Instructions\n\nBind this to the dedicated `sdd-orchestrator` agent only.\n\n- Treat `agent.sdd-orchestrator.model` as authoritative when it is set.\n"
+	seed := `{
+  "agent": {
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "prompt": ` + strconv.Quote(stalePrompt) + `
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{
+		PreserveOpenCodeOrchestratorPrompt: true,
+	})
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settingsBytes, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	text := string(settingsBytes)
+	for _, unwanted := range []string{
+		"Bind this to the dedicated `sdd-orchestrator` agent only.",
+		"agent.sdd-orchestrator.model",
+	} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("opencode.json still contains stale preserved prompt reference %q", unwanted)
+		}
+	}
+	for _, wanted := range []string{
+		"Bind this to the dedicated `gentle-orchestrator` agent only.",
+		"agent.gentle-orchestrator.model",
+	} {
+		if !strings.Contains(text, wanted) {
+			t.Fatalf("opencode.json missing migrated preserved prompt reference %q", wanted)
+		}
+	}
+}
+
 func TestInjectOpenCodeMigratesLegacyBaseOrchestratorToGentleOrchestrator(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
@@ -492,6 +545,63 @@ func TestInjectOpenCodeMigratesMisnamedGentlemanSDDOrchestrator(t *testing.T) {
 	}
 	if prompt, _ := gentleOrchestratorAgent["prompt"].(string); prompt != priorPrompt {
 		t.Fatalf("gentle-orchestrator prompt = %q, want migrated misnamed prompt", prompt)
+	}
+}
+
+func TestInjectOpenCodeDeletesRevokedGentlemanAgent(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+
+	seed := `{
+  "agent": {
+    "gentleman": {
+      "mode": "primary",
+      "description": "Senior Architect mentor - revoked OpenCode persona",
+      "prompt": "REVOKED_GENTLEMAN_PROMPT_SHOULD_NOT_SURVIVE"
+    },
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "prompt": "CURRENT_GENTLE_ORCHESTRATOR_PROMPT"
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{
+		PreserveOpenCodeOrchestratorPrompt: true,
+	})
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settingsBytes, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(settingsBytes, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+	agentMap, ok := root["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("opencode.json missing agent map")
+	}
+	if _, exists := agentMap["gentleman"]; exists {
+		t.Fatal("revoked gentleman agent should be removed")
+	}
+	gentleOrchestratorAgent, ok := agentMap["gentle-orchestrator"].(map[string]any)
+	if !ok {
+		t.Fatal("gentle-orchestrator agent not found or wrong type")
+	}
+	if prompt, _ := gentleOrchestratorAgent["prompt"].(string); prompt != "CURRENT_GENTLE_ORCHESTRATOR_PROMPT" {
+		t.Fatalf("gentle-orchestrator prompt = %q, want preserved current prompt", prompt)
 	}
 }
 
