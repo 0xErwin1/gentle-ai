@@ -17,7 +17,7 @@ Format for mem_save:
 - **type**: bugfix | decision | architecture | discovery | pattern | config | preference
 - **scope**: project (default) | personal
 - **topic_key** (optional, recommended for evolving decisions): stable key like architecture/auth-model
-- **capture_prompt**: optional; default true. Do not set it for normal human/proactive saves. Set false only for automated artifacts such as SDD proposal/spec/design/tasks/apply/verify/archive/init reports or skill-registry output.
+- **capture_prompt**: optional; default true. Do not set it for normal human/proactive saves. Set false only for automated artifacts such as SDD proposal/spec/design/tasks/apply/verify/archive/init reports, testing-capabilities caches, onboarding/state artifacts, or skill-registry output.
 - **content**:
   - **What**: One sentence — what was done
   - **Why**: What motivated it (user request, bug, performance, etc.)
