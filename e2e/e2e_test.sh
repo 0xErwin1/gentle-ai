@@ -595,15 +595,15 @@ test_cc_skills_minimal() {
 }
 
 test_cc_skills_full() {
-    log_test "Claude Code: skills injection (full-gentleman = 11 foundation skills)"
+    log_test "Claude Code: skills injection (full-gentleman = 9 foundation skills)"
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component skills --preset full-gentleman --persona neutral 2>&1; then
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # Full preset = 17 files: 10 SDD + judgment-day + 5 foundation + _shared/SKILL.md
-        assert_file_count "$skills_dir" "SKILL.md" 17 "Full preset: 17 skill files"
+        # Full preset = 21 files: 10 SDD + judgment-day + 9 foundation + _shared/SKILL.md
+        assert_file_count "$skills_dir" "SKILL.md" 21 "Full preset: 21 skill files"
 
         # Verify foundation skills exist
         assert_file_exists "$skills_dir/go-testing/SKILL.md" "go-testing SKILL.md"
@@ -624,15 +624,15 @@ test_cc_skills_full() {
 }
 
 test_cc_skills_ecosystem() {
-    log_test "Claude Code: skills injection (ecosystem-only = 11 foundation skills)"
+    log_test "Claude Code: skills injection (ecosystem-only = 9 foundation skills)"
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component skills --preset ecosystem-only --persona neutral 2>&1; then
         local skills_dir="$HOME/.claude/skills"
         assert_dir_exists "$skills_dir" "Claude skills directory"
 
-        # ecosystem-only = 17 files: 10 SDD + judgment-day + 5 foundation + _shared/SKILL.md
-        assert_file_count "$skills_dir" "SKILL.md" 17 "Ecosystem preset: 17 skill files"
+        # ecosystem-only = 21 files: 10 SDD + judgment-day + 9 foundation + _shared/SKILL.md
+        assert_file_count "$skills_dir" "SKILL.md" 21 "Ecosystem preset: 21 skill files"
 
         # SDD skills present
         assert_file_exists "$skills_dir/sdd-init/SKILL.md" "SDD skills present"
@@ -857,13 +857,13 @@ test_oc_skills_minimal() {
 }
 
 test_oc_skills_full() {
-    log_test "OpenCode: skills injection (full-gentleman = 11 foundation skills)"
+    log_test "OpenCode: skills injection (full-gentleman = 9 foundation skills)"
     cleanup_test_env
 
     if $BINARY install --agent opencode --component skills --preset full-gentleman --persona neutral 2>&1; then
         local skill_dir="$HOME/.config/opencode/skills"
         assert_dir_exists "$skill_dir" "OpenCode skill directory"
-        assert_file_count "$skill_dir" "SKILL.md" 17 "Full preset: 17 skill files"
+        assert_file_count "$skill_dir" "SKILL.md" 21 "Full preset: 21 skill files"
         assert_file_exists "$skill_dir/go-testing/SKILL.md" "go-testing skill"
         assert_file_exists "$skill_dir/skill-creator/SKILL.md" "skill-creator skill"
         assert_file_exists "$skill_dir/branch-pr/SKILL.md" "branch-pr skill"
