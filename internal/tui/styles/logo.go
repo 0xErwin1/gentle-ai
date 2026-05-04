@@ -6,7 +6,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// logoLines contains the braille ASCII art for the Gentleman AI kiss logo.
+// logoLines contains the braille ASCII art for the Gentle-AI kiss logo.
 var logoLines = []string{
 	"⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣠⣀⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
 	"⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⣾⣿⡽⠟⠛⠻⣶⣄⠀⢀⣐⣒⣒⣶⣴⣾⡿⢷⣶⣽⡢⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀",
@@ -28,7 +28,7 @@ var logoLines = []string{
 }
 
 // gradientColors defines the top-to-bottom gradient for the logo.
-// Distributed across rows: Mauve → Lavender → Blue → Teal → Green.
+// Distributed across rows: neon rose → lavender → blue → teal → green.
 var gradientColors = []lipgloss.Color{
 	ColorMauve,    // band 1
 	ColorLavender, // band 2
