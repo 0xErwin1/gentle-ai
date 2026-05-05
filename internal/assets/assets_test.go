@@ -294,6 +294,7 @@ func TestPersonasContainContextualSkillLoadingDirective(t *testing.T) {
 				"## Contextual Skill Loading (MANDATORY)",
 				"<available_skills>",
 				"Self-check BEFORE every response",
+				"blocking requirement",
 			} {
 				if !strings.Contains(content, required) {
 					t.Errorf("%s missing required directive substring %q", tc.path, required)
