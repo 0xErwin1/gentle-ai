@@ -1,5 +1,5 @@
 ---
-name: gentle-ai-chained-pr
+name: chained-pr
 description: >
   Split large changes into chained or stacked pull requests that protect reviewer
   focus and stay within Gentle AI's 400-line cognitive review budget. Trigger:
