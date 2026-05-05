@@ -8,7 +8,13 @@ ARG DEBIAN_FRONTEND=noninteractive
 # ---------------------------------------------------------------------------
 # System dependencies (includes npm/node for claude-code tests)
 # ---------------------------------------------------------------------------
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Repoint apt to Canonical's Azure-hosted mirror. GitHub Actions ubuntu-latest
+# runners live in Azure, so this is LAN-speed and avoids stalls on the default
+# regional mirror lottery (commit 5f6af97 had to extend the CI timeout for that).
+RUN sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; \
+            s|http://security.ubuntu.com|http://azure.archive.ubuntu.com|g' \
+            /etc/apt/sources.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
         sudo \
