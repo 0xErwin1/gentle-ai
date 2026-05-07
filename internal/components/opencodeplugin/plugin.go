@@ -93,7 +93,6 @@ const Logo = (props: { theme: TuiThemeCurrent }) => {
       {lines().map((line) => (
         <text fg={props.theme.accent}>{line}</text>
       ))}
-      <text fg={props.theme.primary}>Gentleman Programming</text>
     </box>
   )
 }
