@@ -1,6 +1,6 @@
 ---
 name: skill-creator
-description: "Creates new AI agent skills following the Agent Skills spec. Trigger: When user asks to create a new skill, add agent instructions, or document patterns for AI."
+description: "Create AI agent skills with valid frontmatter. Trigger: new skills, agent instructions, or documenting AI usage patterns."
 license: Apache-2.0
 metadata:
   author: gentleman-programming
@@ -41,9 +41,7 @@ skills/{skill-name}/
 ```markdown
 ---
 name: {skill-name}
-description: >
-  {One-line description of what this skill does}.
-  Trigger: {When the AI should load this skill}.
+description: "{What this skill does}. Trigger: {essential trigger words users or agents will say}."
 license: Apache-2.0
 metadata:
   author: gentleman-programming
@@ -106,10 +104,36 @@ Link to external guides?    → references/ (with local path)
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | Yes | Skill identifier (lowercase, hyphens) |
-| `description` | Yes | What + Trigger in one block |
+| `description` | Yes | Single-line, quoted YAML-safe string with what + `Trigger:` |
 | `license` | Yes | Always `Apache-2.0` |
 | `metadata.author` | Yes | `gentleman-programming` |
 | `metadata.version` | Yes | Semantic version as string |
+
+### Description Rules
+
+The `description` field is the skill-loading budget. Treat it as mandatory metadata, not prose.
+
+- MUST be one physical line in frontmatter; never use `>` or `|` block scalars.
+- MUST be YAML-safe: wrap the whole value in quotes and avoid unescaped matching quotes inside it.
+- MUST include `Trigger:` and preserve the essential trigger words users or agents will actually say.
+- SHOULD be <=160 chars; this is preferred for Claude Code skill-list budget.
+- MUST be <=250 chars if a rare skill genuinely needs extra trigger coverage.
+- MUST NOT add `Keywords`; put concise trigger keywords in `description` instead.
+
+Good:
+
+```yaml
+description: "Create Jira tasks in the team format. Trigger: Jira task, ticket, issue, or task creation."
+```
+
+Bad:
+
+```yaml
+description: >
+  Create Jira tasks in the team format.
+  Trigger: Jira task, ticket, issue, or task creation.
+Keywords: jira, task
+```
 
 ---
 
@@ -120,9 +144,11 @@ Link to external guides?    → references/ (with local path)
 - Use tables for decision trees
 - Keep code examples minimal and focused
 - Include Commands section with copy-paste commands
+- Keep frontmatter descriptions concise with essential trigger keywords
 
 ### DON'T
 - Add Keywords section (agent searches frontmatter, not body)
+- Use multiline, unquoted, or block-scalar frontmatter descriptions
 - Duplicate content from existing docs (reference instead)
 - Include lengthy explanations (link to docs)
 - Add troubleshooting sections (keep focused)
@@ -145,7 +171,9 @@ After creating the skill, add it to `AGENTS.md`:
 - [ ] Skill doesn't already exist (check `skills/`)
 - [ ] Pattern is reusable (not one-off)
 - [ ] Name follows conventions
-- [ ] Frontmatter is complete (description includes trigger keywords)
+- [ ] Frontmatter is complete (description is quoted, one-line, YAML-safe, includes `Trigger:`)
+- [ ] Description is ideally <=160 chars and never >250 chars
+- [ ] Description preserves essential trigger words; no `Keywords` section added
 - [ ] Critical patterns are clear
 - [ ] Code examples are minimal
 - [ ] Commands section exists

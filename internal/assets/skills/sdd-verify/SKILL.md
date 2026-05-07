@@ -1,6 +1,6 @@
 ---
 name: sdd-verify
-description: "Validate that implementation matches specs, design, and tasks. Trigger: When the orchestrator launches you to verify a completed (or partially completed) change."
+description: "Verify implementation against SDD specs, design, and tasks. Trigger: orchestrator launches verification for a change."
 license: MIT
 metadata:
   author: gentleman-programming

@@ -2989,7 +2989,19 @@ func (m Model) shouldShowSkillPickerScreen() bool {
 }
 
 func (m Model) shouldShowOpenCodePluginsScreen() bool {
-	return m.Selection.HasAgent(model.AgentOpenCode)
+	if !m.Selection.HasAgent(model.AgentOpenCode) {
+		return false
+	}
+
+	// Custom preset starts with an empty component selection. At the preset stage
+	// the next screen must be the custom component selector; optional OpenCode
+	// plugins are offered only after the custom flow has a concrete component
+	// selection and reaches the plugin stage.
+	if m.Selection.Preset == model.PresetCustom && m.Screen == ScreenPreset {
+		return false
+	}
+
+	return true
 }
 
 func (m *Model) buildDependencyPlan() {

@@ -1,6 +1,6 @@
 ---
 name: sdd-propose
-description: "Create a change proposal with intent, scope, and approach. Trigger: When the orchestrator launches you to create or update a proposal for a change."
+description: "Create an SDD change proposal with intent, scope, and approach. Trigger: orchestrator launches proposal work for a change."
 license: MIT
 metadata:
   author: gentleman-programming
