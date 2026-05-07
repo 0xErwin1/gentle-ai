@@ -2338,6 +2338,46 @@ func TestInjectCopiesAllFilesFromSkillDirectory(t *testing.T) {
 	}
 }
 
+func TestInjectCopiesNestedSDDSkillReferences(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, opencodeAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() changed = false")
+	}
+
+	skillsDir := filepath.Join(home, ".config", "opencode", "skills")
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "sdd-init details", path: filepath.Join(skillsDir, "sdd-init", "references", "init-details.md")},
+		{name: "sdd-verify report", path: filepath.Join(skillsDir, "sdd-verify", "references", "report-format.md")},
+		{name: "judgment-day prompts", path: filepath.Join(skillsDir, "judgment-day", "references", "prompts-and-formats.md")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertNonEmptyFile(t, tt.path)
+		})
+	}
+}
+
+func assertNonEmptyFile(t *testing.T, path string) {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected file %q: %v", path, err)
+	}
+	if info.Size() == 0 {
+		t.Fatalf("expected file %q to be non-empty", path)
+	}
+}
+
 // TestInjectCopiesAllFilesReportedInResult verifies that all skill files
 // (including extra files beyond SKILL.md) are included in result.Files.
 func TestInjectCopiesAllFilesReportedInResult(t *testing.T) {
