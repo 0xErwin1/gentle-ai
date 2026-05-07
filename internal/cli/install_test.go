@@ -54,11 +54,28 @@ func TestNormalizeInstallFlagsDefaults(t *testing.T) {
 			model.ComponentPersona,
 			model.ComponentPermission,
 			model.ComponentGGA,
+			model.ComponentClaudeTheme,
+			model.ComponentOpenCodeGentleLogo,
 		},
 	}
 
 	if !reflect.DeepEqual(input.Selection, want) {
 		t.Fatalf("selection = %#v, want %#v", input.Selection, want)
+	}
+}
+
+func TestNormalizeInstallFlagsCustomAcceptsOptionalGentlemanInstallables(t *testing.T) {
+	input, err := NormalizeInstallFlags(InstallFlags{
+		Preset:     string(model.PresetCustom),
+		Components: []string{string(model.ComponentClaudeTheme), string(model.ComponentOpenCodeGentleLogo)},
+	}, system.DetectionResult{})
+	if err != nil {
+		t.Fatalf("NormalizeInstallFlags() error = %v", err)
+	}
+
+	want := []model.ComponentID{model.ComponentClaudeTheme, model.ComponentOpenCodeGentleLogo}
+	if !reflect.DeepEqual(input.Selection.Components, want) {
+		t.Fatalf("components = %#v, want %#v", input.Selection.Components, want)
 	}
 }
 
