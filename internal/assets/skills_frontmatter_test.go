@@ -28,11 +28,13 @@ func TestSkillFrontmatterIsLintClean(t *testing.T) {
 	skillPaths := embeddedSkillPaths(t)
 
 	allowedKeys := map[string]bool{
-		"name":        true,
-		"description": true,
-		"license":     true,
-		"metadata":    true,
-		"version":     true,
+		"name":                     true,
+		"description":              true,
+		"license":                  true,
+		"metadata":                 true,
+		"version":                  true,
+		"user-invocable":           true,
+		"disable-model-invocation": true,
 	}
 
 	for _, path := range skillPaths {
@@ -74,7 +76,7 @@ func TestSkillFrontmatterIsLintClean(t *testing.T) {
 			// Rule 5: only allowed top-level keys.
 			for _, key := range fm.topLevelKeys {
 				if !allowedKeys[key] {
-					t.Errorf("non-standard top-level frontmatter key %q (allowed: name, description, license, metadata, version)", key)
+					t.Errorf("non-standard top-level frontmatter key %q (allowed: name, description, license, metadata, version, user-invocable, disable-model-invocation)", key)
 				}
 			}
 		})

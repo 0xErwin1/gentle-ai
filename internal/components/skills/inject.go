@@ -2,6 +2,7 @@ package skills
 
 import (
 	"fmt"
+	"io/fs"
 	"log"
 	"path/filepath"
 	"strings"
@@ -57,25 +58,51 @@ func Inject(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID) (I
 			continue
 		}
 
-		assetPath := "skills/" + string(id) + "/SKILL.md"
-		content, readErr := assets.Read(assetPath)
+		embedDir := "skills/" + string(id)
+		entries, readErr := fs.ReadDir(assets.FS, embedDir)
 		if readErr != nil {
 			log.Printf("skills: skipping %q — embedded asset not found: %v", id, readErr)
 			skipped = append(skipped, id)
 			continue
 		}
-		if len(content) == 0 {
-			return InjectionResult{}, fmt.Errorf("skill %q: embedded asset exists but is empty — build may be corrupt", id)
+		if len(entries) == 0 {
+			return InjectionResult{}, fmt.Errorf("skill %q: embedded directory exists but is empty — build may be corrupt", id)
 		}
 
-		path := filepath.Join(skillDir, string(id), "SKILL.md")
-		writeResult, writeErr := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
-		if writeErr != nil {
-			return InjectionResult{}, fmt.Errorf("skill %q: write failed: %w", id, writeErr)
-		}
+		destDir := filepath.Join(skillDir, string(id))
+		walkErr := fs.WalkDir(assets.FS, embedDir, func(assetPath string, d fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if d.IsDir() {
+				return nil
+			}
 
-		changed = changed || writeResult.Changed
-		paths = append(paths, path)
+			content, readErr := assets.Read(assetPath)
+			if readErr != nil {
+				return fmt.Errorf("read %q: %w", assetPath, readErr)
+			}
+			if len(content) == 0 {
+				return fmt.Errorf("embedded asset %q is empty", assetPath)
+			}
+
+			relPath, relErr := filepath.Rel(filepath.FromSlash(embedDir), filepath.FromSlash(assetPath))
+			if relErr != nil {
+				return fmt.Errorf("resolve relative path for %q: %w", assetPath, relErr)
+			}
+			path := filepath.Join(destDir, relPath)
+			writeResult, writeErr := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
+			if writeErr != nil {
+				return fmt.Errorf("write %q: %w", path, writeErr)
+			}
+
+			changed = changed || writeResult.Changed
+			paths = append(paths, path)
+			return nil
+		})
+		if walkErr != nil {
+			return InjectionResult{}, fmt.Errorf("skill %q: copy embedded directory: %w", id, walkErr)
+		}
 	}
 
 	return InjectionResult{Changed: changed, Files: paths, Skipped: skipped}, nil

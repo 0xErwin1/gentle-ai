@@ -474,27 +474,38 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 					return InjectionResult{}, fmt.Errorf("required SDD skill %q: embedded directory is empty", skill)
 				}
 
-				for _, entry := range entries {
+				walkErr := fs.WalkDir(assets.FS, embedDir, func(assetPath string, entry fs.DirEntry, walkErr error) error {
+					if walkErr != nil {
+						return walkErr
+					}
 					if entry.IsDir() {
-						continue
-					}
-					assetPath := embedDir + "/" + entry.Name()
-					content, readErr := assets.Read(assetPath)
-					if readErr != nil {
-						return InjectionResult{}, fmt.Errorf("required SDD skill %q file %q: embedded asset not found: %w", skill, entry.Name(), readErr)
-					}
-					if len(content) == 0 {
-						return InjectionResult{}, fmt.Errorf("required SDD skill %q file %q: embedded asset is empty", skill, entry.Name())
+						return nil
 					}
 
-					path := filepath.Join(skillDir, skill, entry.Name())
+					content, readErr := assets.Read(assetPath)
+					if readErr != nil {
+						return fmt.Errorf("embedded asset %q not found: %w", assetPath, readErr)
+					}
+					if len(content) == 0 {
+						return fmt.Errorf("embedded asset %q is empty", assetPath)
+					}
+
+					relPath, relErr := filepath.Rel(filepath.FromSlash(embedDir), filepath.FromSlash(assetPath))
+					if relErr != nil {
+						return fmt.Errorf("resolve relative path for %q: %w", assetPath, relErr)
+					}
+					path := filepath.Join(skillDir, skill, relPath)
 					writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
 					if err != nil {
-						return InjectionResult{}, err
+						return fmt.Errorf("write %q: %w", path, err)
 					}
 
 					changed = changed || writeResult.Changed
 					files = append(files, path)
+					return nil
+				})
+				if walkErr != nil {
+					return InjectionResult{}, fmt.Errorf("required SDD skill %q: copy embedded directory: %w", skill, walkErr)
 				}
 			}
 		}
