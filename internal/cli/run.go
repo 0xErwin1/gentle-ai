@@ -666,6 +666,18 @@ func (s componentApplyStep) Run() error {
 			}
 		}
 		return nil
+	case model.ComponentClaudeTheme:
+		for _, adapter := range adapters {
+			if _, err := theme.InjectClaudeTheme(s.homeDir, adapter); err != nil {
+				return fmt.Errorf("inject Claude theme for %q: %w", adapter.Agent(), err)
+			}
+		}
+		return nil
+	case model.ComponentOpenCodeGentleLogo:
+		if _, err := opencodeplugin.Install(s.homeDir, model.OpenCodePluginGentleLogo); err != nil {
+			return fmt.Errorf("install OpenCode Gentle Logo plugin: %w", err)
+		}
+		return nil
 	default:
 		return fmt.Errorf("component %q is not supported in install runtime", s.component)
 	}
@@ -974,6 +986,15 @@ func componentPaths(homeDir string, selection model.Selection, adapters []agents
 			if p := adapter.SettingsPath(homeDir); p != "" {
 				paths = append(paths, p)
 			}
+		case model.ComponentClaudeTheme:
+			if adapter.Agent() == model.AgentClaudeCode {
+				paths = append(paths, filepath.Join(homeDir, ".claude", "themes", "gentleman.json"))
+			}
+		case model.ComponentOpenCodeGentleLogo:
+			paths = append(paths,
+				filepath.Join(homeDir, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
+				filepath.Join(homeDir, ".config", "opencode", "tui.json"),
+			)
 		}
 	}
 

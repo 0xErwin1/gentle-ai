@@ -3162,6 +3162,8 @@ func componentsForPreset(preset model.PresetID) []model.ComponentID {
 			model.ComponentPersona,
 			model.ComponentPermission,
 			model.ComponentGGA,
+			model.ComponentClaudeTheme,
+			model.ComponentOpenCodeGentleLogo,
 		}
 	}
 }
