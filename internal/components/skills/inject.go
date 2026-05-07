@@ -83,7 +83,7 @@ func Inject(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID) (I
 				return fmt.Errorf("read %q: %w", assetPath, readErr)
 			}
 			if len(content) == 0 {
-				return fmt.Errorf("embedded asset is empty")
+				return fmt.Errorf("embedded asset %q is empty", assetPath)
 			}
 
 			relPath, relErr := filepath.Rel(filepath.FromSlash(embedDir), filepath.FromSlash(assetPath))

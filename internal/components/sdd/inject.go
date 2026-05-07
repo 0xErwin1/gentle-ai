@@ -484,10 +484,10 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 
 					content, readErr := assets.Read(assetPath)
 					if readErr != nil {
-						return fmt.Errorf("embedded asset not found: %w", readErr)
+						return fmt.Errorf("embedded asset %q not found: %w", assetPath, readErr)
 					}
 					if len(content) == 0 {
-						return fmt.Errorf("embedded asset is empty")
+						return fmt.Errorf("embedded asset %q is empty", assetPath)
 					}
 
 					relPath, relErr := filepath.Rel(filepath.FromSlash(embedDir), filepath.FromSlash(assetPath))
@@ -497,7 +497,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 					path := filepath.Join(skillDir, skill, relPath)
 					writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
 					if err != nil {
-						return err
+						return fmt.Errorf("write %q: %w", path, err)
 					}
 
 					changed = changed || writeResult.Changed
