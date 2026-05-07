@@ -1,6 +1,8 @@
 ---
 name: sdd-onboard
 description: "Walk users through the SDD workflow on the real codebase. Trigger: orchestrator launches onboarding for the full SDD cycle."
+disable-model-invocation: true
+user-invocable: false
 license: MIT
 metadata:
   author: gentleman-programming
