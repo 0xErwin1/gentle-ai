@@ -111,6 +111,19 @@ func engramOverlayJSON(agentID model.AgentID, cmd string) []byte {
 				},
 			},
 		}
+	} else if agentID == model.AgentOpenClaw {
+		cfg = map[string]any{
+			"mcp": map[string]any{
+				"servers": map[string]any{
+					"engram": map[string]any{
+						"__replace__": map[string]any{
+							"command": cmd,
+							"args":    []string{"mcp", "--tools=agent"},
+						},
+					},
+				},
+			},
+		}
 	} else {
 		cfg = map[string]any{
 			"mcpServers": map[string]any{
@@ -145,6 +158,9 @@ func vsCodeEngramOverlayJSON(cmd string) []byte {
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	if !adapter.SupportsMCP() {
 		return InjectionResult{}, nil
+	}
+	if err := validateOpenClawWorkspacePath(homeDir, adapter); err != nil {
+		return InjectionResult{}, err
 	}
 
 	files := make([]string, 0, 2)
@@ -309,6 +325,13 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	return InjectionResult{Changed: changed, Files: files}, nil
 }
 
+func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) error {
+	if adapter.Agent() == model.AgentOpenClaw && strings.TrimSpace(workspaceDir) == "" {
+		return fmt.Errorf("openclaw workspace path is required for workspace-first injection")
+	}
+	return nil
+}
+
 type settingsBootstrapResult struct {
 	Changed bool
 	Path    string
@@ -462,6 +485,16 @@ func existingMergedEngramCommand(raw []byte, agentID model.AgentID) (string, boo
 			return "", false
 		}
 		server = mcp["engram"]
+	case model.AgentOpenClaw:
+		mcp, ok := root["mcp"].(map[string]any)
+		if !ok {
+			return "", false
+		}
+		servers, ok := mcp["servers"].(map[string]any)
+		if !ok {
+			return "", false
+		}
+		server = servers["engram"]
 	case model.AgentVSCodeCopilot:
 		servers, ok := root["servers"].(map[string]any)
 		if !ok {
@@ -507,7 +540,7 @@ func executableFromCommandValue(command any) (string, bool) {
 
 func isStandardAgent(id model.AgentID) bool {
 	switch id {
-	case model.AgentOpenCode, model.AgentQwenCode, model.AgentCodex, model.AgentGeminiCLI, model.AgentAntigravity, model.AgentClaudeCode:
+	case model.AgentOpenCode, model.AgentQwenCode, model.AgentCodex, model.AgentGeminiCLI, model.AgentAntigravity, model.AgentClaudeCode, model.AgentOpenClaw:
 		return true
 	default:
 		return false
