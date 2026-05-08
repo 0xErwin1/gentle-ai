@@ -5,9 +5,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
 
 func TestAdapterIdentityAndStrategies(t *testing.T) {
@@ -38,16 +40,31 @@ func TestAdapterIdentityAndStrategies(t *testing.T) {
 		t.Fatalf("SupportsMCP() = false, want true")
 	}
 
-	if !a.SupportsOutputStyles() {
-		t.Fatalf("SupportsOutputStyles() = false, want true for SOUL.md persona injection")
+	if a.SupportsOutputStyles() {
+		t.Fatalf("SupportsOutputStyles() = true, want false because OpenClaw uses SOUL.md instead of output-style files")
 	}
 
 	if got := a.SystemPromptFile(homeDir); got != filepath.Join(homeDir, "AGENTS.md") {
 		t.Fatalf("SystemPromptFile() = %q, want workspace AGENTS.md", got)
 	}
 
-	if got := a.OutputStyleDir(homeDir); got != homeDir {
-		t.Fatalf("OutputStyleDir() = %q, want workspace root for SOUL.md", got)
+	if got := a.OutputStyleDir(homeDir); got != "" {
+		t.Fatalf("OutputStyleDir() = %q, want empty because OpenClaw persona injection targets SOUL.md", got)
+	}
+}
+
+func TestInstallCommandRequiresManualInstall(t *testing.T) {
+	a := NewAdapter()
+
+	commands, err := a.InstallCommand(system.PlatformProfile{})
+	if err == nil {
+		t.Fatalf("InstallCommand() error = nil, want manual install error")
+	}
+	if commands != nil {
+		t.Fatalf("InstallCommand() commands = %v, want nil", commands)
+	}
+	if got := err.Error(); !strings.Contains(got, "must be installed manually") {
+		t.Fatalf("InstallCommand() error = %q, want actionable manual install message", got)
 	}
 }
 

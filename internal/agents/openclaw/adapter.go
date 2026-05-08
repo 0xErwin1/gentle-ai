@@ -110,11 +110,11 @@ func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
 // --- Optional capabilities ---
 
 func (a *Adapter) SupportsOutputStyles() bool {
-	return true
+	return false
 }
 
-func (a *Adapter) OutputStyleDir(homeDir string) string {
-	return homeDir
+func (a *Adapter) OutputStyleDir(_ string) string {
+	return ""
 }
 
 func (a *Adapter) SupportsSlashCommands() bool {
@@ -167,5 +167,5 @@ type AgentNotInstallableError struct {
 }
 
 func (e AgentNotInstallableError) Error() string {
-	return fmt.Sprintf("agent %q does not support auto-install", e.Agent)
+	return fmt.Sprintf("agent %q must be installed manually before Gentle AI can configure it", e.Agent)
 }
