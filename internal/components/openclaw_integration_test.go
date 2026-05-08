@@ -38,8 +38,12 @@ func TestOpenClawSelectedAdapterRoutesToExpectedInjectors(t *testing.T) {
 	}
 	servers := objectAt(t, objectAt(t, root, "mcp"), "servers")
 	engramServer := objectAt(t, servers, "engram")
-	if got := engramServer["command"]; got != "engram" {
-		t.Fatalf("OpenClaw Engram command = %v, want engram", got)
+	command, ok := engramServer["command"].(string)
+	if !ok {
+		t.Fatalf("OpenClaw Engram command = %#v, want string", engramServer["command"])
+	}
+	if got := filepath.Base(command); got != "engram" {
+		t.Fatalf("OpenClaw Engram command = %q, want executable named engram", command)
 	}
 
 	agentsText := readText(t, filepath.Join(workspace, "AGENTS.md"))
