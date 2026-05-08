@@ -15,13 +15,14 @@ import (
 )
 
 func TestOpenClawSelectedAdapterRoutesToExpectedInjectors(t *testing.T) {
+	home := t.TempDir()
 	workspace := t.TempDir()
 	adapter, err := agents.NewAdapter(model.AgentOpenClaw)
 	if err != nil {
 		t.Fatalf("NewAdapter(openclaw) error = %v", err)
 	}
 
-	if _, err := engram.Inject(workspace, adapter); err != nil {
+	if _, err := engram.InjectWithPromptDir(home, workspace, adapter); err != nil {
 		t.Fatalf("engram.Inject(openclaw) error = %v", err)
 	}
 	if _, err := sdd.Inject(workspace, adapter, model.SDDModeSingle, sdd.InjectOptions{StrictTDD: true, WorkspaceDir: workspace}); err != nil {
@@ -31,7 +32,7 @@ func TestOpenClawSelectedAdapterRoutesToExpectedInjectors(t *testing.T) {
 		t.Fatalf("persona.Inject(openclaw) error = %v", err)
 	}
 
-	config := readText(t, filepath.Join(workspace, ".openclaw", "openclaw.json"))
+	config := readText(t, filepath.Join(home, ".openclaw", "openclaw.json"))
 	var root map[string]any
 	if err := json.Unmarshal([]byte(config), &root); err != nil {
 		t.Fatalf("Unmarshal openclaw.json error = %v; content:\n%s", err, config)
@@ -63,24 +64,28 @@ func TestOpenClawSelectedAdapterRoutesToExpectedInjectors(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(workspace, "TOOLS.md")); !os.IsNotExist(err) {
 		t.Fatalf("OpenClaw injector chain must not create TOOLS.md for protocols; stat err=%v", err)
 	}
+	if _, err := os.Stat(filepath.Join(workspace, ".openclaw", "openclaw.json")); !os.IsNotExist(err) {
+		t.Fatalf("OpenClaw injector chain must not create workspace OpenClaw MCP config; stat err=%v", err)
+	}
 }
 
 func TestOpenClawInjectorChainRerunIsIdempotent(t *testing.T) {
+	home := t.TempDir()
 	workspace := t.TempDir()
 	adapter, err := agents.NewAdapter(model.AgentOpenClaw)
 	if err != nil {
 		t.Fatalf("NewAdapter(openclaw) error = %v", err)
 	}
 
-	runOpenClawInjectorChain(t, workspace, adapter)
+	runOpenClawInjectorChain(t, home, workspace, adapter)
 	beforeAgents := readText(t, filepath.Join(workspace, "AGENTS.md"))
 	beforeSoul := readText(t, filepath.Join(workspace, "SOUL.md"))
-	beforeConfig := readText(t, filepath.Join(workspace, ".openclaw", "openclaw.json"))
+	beforeConfig := readText(t, filepath.Join(home, ".openclaw", "openclaw.json"))
 
-	runOpenClawInjectorChain(t, workspace, adapter)
+	runOpenClawInjectorChain(t, home, workspace, adapter)
 	afterAgents := readText(t, filepath.Join(workspace, "AGENTS.md"))
 	afterSoul := readText(t, filepath.Join(workspace, "SOUL.md"))
-	afterConfig := readText(t, filepath.Join(workspace, ".openclaw", "openclaw.json"))
+	afterConfig := readText(t, filepath.Join(home, ".openclaw", "openclaw.json"))
 
 	if beforeAgents != afterAgents {
 		t.Fatalf("OpenClaw AGENTS.md changed on rerun\nbefore:\n%s\nafter:\n%s", beforeAgents, afterAgents)
@@ -93,9 +98,9 @@ func TestOpenClawInjectorChainRerunIsIdempotent(t *testing.T) {
 	}
 }
 
-func runOpenClawInjectorChain(t *testing.T, workspace string, adapter agents.Adapter) {
+func runOpenClawInjectorChain(t *testing.T, home, workspace string, adapter agents.Adapter) {
 	t.Helper()
-	if _, err := engram.Inject(workspace, adapter); err != nil {
+	if _, err := engram.InjectWithPromptDir(home, workspace, adapter); err != nil {
 		t.Fatalf("engram.Inject(openclaw) error = %v", err)
 	}
 	if _, err := sdd.Inject(workspace, adapter, model.SDDModeSingle, sdd.InjectOptions{StrictTDD: true, WorkspaceDir: workspace}); err != nil {

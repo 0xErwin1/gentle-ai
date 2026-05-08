@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -260,6 +261,7 @@ func newInstallRuntime(homeDir string, selection model.Selection, resolved plann
 	}
 
 	workspaceDir, _ := os.Getwd()
+	workspaceDir = resolveOpenClawWorkspaceDir(homeDir, workspaceDir, resolved.Agents)
 
 	return &installRuntime{
 		homeDir:      homeDir,
@@ -566,8 +568,14 @@ func (s componentApplyStep) Run() error {
 					attemptedSlugs[slug] = struct{}{}
 				}
 			}
-			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
-			if _, err := engram.Inject(targetDir, adapter); err != nil {
+			var err error
+			if adapter.Agent() == model.AgentOpenClaw {
+				_, err = engram.InjectWithPromptDir(s.homeDir, s.workspaceDir, adapter)
+			} else {
+				targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
+				_, err = engram.Inject(targetDir, adapter)
+			}
+			if err != nil {
 				return fmt.Errorf("inject engram for %q: %w", adapter.Agent(), err)
 			}
 		}
@@ -924,7 +932,7 @@ func componentPathsWithWorkspace(homeDir, workspaceDir string, selection model.S
 				}
 			}
 			if adapter.SupportsSkills() {
-				skillDir := adapter.SkillsDir(homeDir)
+				skillDir := adapter.SkillsDir(targetDir)
 				if skillDir != "" {
 					paths = append(paths,
 						filepath.Join(skillDir, "_shared", "persistence-contract.md"),
@@ -947,6 +955,9 @@ func componentPathsWithWorkspace(homeDir, workspaceDir string, selection model.S
 			paths = append(paths, sddSubAgentPaths(homeDir, adapter)...)
 		case model.ComponentSkills:
 			for _, skillID := range selectedSkillIDs(selection) {
+				if skills.IsSDDSkill(skillID) {
+					continue
+				}
 				path := skills.SkillPathForAgent(homeDir, adapter, skillID)
 				if path != "" {
 					paths = append(paths, path)
@@ -1028,6 +1039,44 @@ func componentInjectionDir(homeDir, workspaceDir string, adapter agents.Adapter)
 		return workspaceDir
 	}
 	return homeDir
+}
+
+type openClawWorkspaceConfig struct {
+	Agents struct {
+		Defaults struct {
+			Workspace string `json:"workspace"`
+		} `json:"defaults"`
+	} `json:"agents"`
+}
+
+func resolveOpenClawWorkspaceDir(homeDir, fallback string, agentIDs []model.AgentID) string {
+	if !containsAgent(agentIDs, model.AgentOpenClaw) {
+		return fallback
+	}
+
+	configPath := filepath.Join(homeDir, ".openclaw", "openclaw.json")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		return fallback
+	}
+
+	var config openClawWorkspaceConfig
+	if err := json.Unmarshal(content, &config); err != nil {
+		return fallback
+	}
+
+	workspace := strings.TrimSpace(config.Agents.Defaults.Workspace)
+	if workspace == "" {
+		return fallback
+	}
+	if filepath.IsAbs(workspace) {
+		return filepath.Clean(workspace)
+	}
+	abs, err := filepath.Abs(workspace)
+	if err != nil {
+		return filepath.Clean(workspace)
+	}
+	return abs
 }
 
 func componentPathDir(homeDir, workspaceDir string, adapter agents.Adapter, component model.ComponentID) string {

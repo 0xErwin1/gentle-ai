@@ -386,6 +386,7 @@ func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, er
 	}
 
 	workspaceDir, _ := os.Getwd()
+	workspaceDir = resolveOpenClawWorkspaceDir(homeDir, workspaceDir, selection.Agents)
 
 	return &syncRuntime{
 		homeDir:      homeDir,
@@ -540,8 +541,14 @@ func (s componentSyncStep) Run() error {
 		// Sync: inject MCP config + system prompt protocol only.
 		// NO binary install. NO engram setup.
 		for _, adapter := range adapters {
-			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
-			res, err := engram.Inject(targetDir, adapter)
+			var res engram.InjectionResult
+			var err error
+			if adapter.Agent() == model.AgentOpenClaw {
+				res, err = engram.InjectWithPromptDir(s.homeDir, s.workspaceDir, adapter)
+			} else {
+				targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
+				res, err = engram.Inject(targetDir, adapter)
+			}
 			if err != nil {
 				return fmt.Errorf("sync engram for %q: %w", adapter.Agent(), err)
 			}
