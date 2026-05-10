@@ -92,6 +92,8 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
 - Full multi-agent overlay with 11 named agents in `opencode.json` (`gentle-orchestrator` plus 10 SDD phase agents)
 - Slash commands for SDD phases (`/sdd-new`, `/sdd-explore`, etc.)
 - Background-agents plugin for parallel execution
+- The TUI model picker includes providers and models discovered from the local `opencode.json`, including custom providers
+- Custom models from `opencode.json` must set `tool_call: true` explicitly to appear as selectable SDD-capable options in the model picker
 - Multi-mode prerequisite: connect your AI providers first, then run `opencode models --refresh`
 
 ### Kilo Code

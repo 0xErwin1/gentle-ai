@@ -1387,7 +1387,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.ModelConfigMode = true
 			cachePath := opencode.DefaultCachePath()
 			if _, err := osStatModelCache(cachePath); err == nil {
-				m.ModelPicker = screens.NewModelPickerState(cachePath)
+				m.ModelPicker = screens.NewModelPickerState(cachePath, opencode.DefaultSettingsPath())
 			} else {
 				m.ModelPicker = screens.ModelPickerState{}
 			}
@@ -1506,7 +1506,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				if _, err := osStatModelCache(cachePath); err == nil {
 					// Cache exists — OpenCode has been run at least once.
 					// Show the model picker so the user can assign models.
-					m.ModelPicker = screens.NewModelPickerState(cachePath)
+					m.ModelPicker = screens.NewModelPickerState(cachePath, opencode.DefaultSettingsPath())
 					m.Selection.ModelAssignments = nil
 					m.setScreen(ScreenModelPicker)
 					return m, nil
@@ -3265,7 +3265,7 @@ func (m Model) handleProfileNameInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Initialize model picker for orchestrator step.
 		cachePath := opencode.DefaultCachePath()
 		if _, err := osStatModelCache(cachePath); err == nil {
-			m.ModelPicker = screens.NewModelPickerState(cachePath)
+			m.ModelPicker = screens.NewModelPickerState(cachePath, opencode.DefaultSettingsPath())
 		} else {
 			m.ModelPicker = screens.ModelPickerState{}
 		}
@@ -3322,7 +3322,7 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 			m.ProfileCreateStep = 1
 			cachePath := opencode.DefaultCachePath()
 			if _, err := osStatModelCache(cachePath); err == nil {
-				m.ModelPicker = screens.NewModelPickerState(cachePath)
+				m.ModelPicker = screens.NewModelPickerState(cachePath, opencode.DefaultSettingsPath())
 			} else {
 				m.ModelPicker = screens.ModelPickerState{}
 			}
