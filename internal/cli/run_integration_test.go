@@ -26,6 +26,17 @@ func missingBinaryLookPath(name string) (string, error) {
 	return "", exec.ErrNotFound
 }
 
+func assertFileContains(t *testing.T, path string, want string) {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	if !strings.Contains(string(body), want) {
+		t.Fatalf("file %q missing %q; got:\n%s", path, want, string(body))
+	}
+}
+
 func TestRunInstallAppliesFilesystemChanges(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
@@ -53,6 +64,52 @@ func TestRunInstallAppliesFilesystemChanges(t *testing.T) {
 	configPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	if _, err := os.Stat(configPath); err != nil {
 		t.Fatalf("expected config file %q: %v", configPath, err)
+	}
+}
+
+func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) {
+	home := t.TempDir()
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(name string) (string, error) {
+		return filepath.Join(home, "bin", name), nil
+	}
+
+	var commands []string
+	runCommand = func(name string, args ...string) error {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		return nil
+	}
+
+	result, err := RunInstall([]string{
+		"--agent", "pi",
+		"--agent", "opencode",
+		"--component", "engram",
+	}, system.DetectionResult{})
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+	if !result.Verify.Ready {
+		t.Fatalf("verification ready = false, report = %#v", result.Verify)
+	}
+
+	assertFileContains(t, filepath.Join(home, ".pi", "settings.json"), "npm:pi-mcp-adapter")
+	assertFileContains(t, filepath.Join(home, ".pi", "npm", "package.json"), "pi-mcp-adapter")
+	assertFileContains(t, filepath.Join(home, ".pi", "mcp.json"), "directTools")
+	assertFileContains(t, filepath.Join(home, ".config", "opencode", "opencode.json"), "engram")
+
+	for _, command := range commands {
+		if strings.Contains(command, "pi install npm:pi-mcp-adapter") {
+			t.Fatalf("pi-mcp-adapter must be provisioned through Pi config, not installed as a Pi package command; commands=%v", commands)
+		}
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/gemini"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/qwen"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
 )
@@ -28,6 +29,8 @@ func openclawAdapter() agents.Adapter { return openclaw.NewAdapter() }
 func antigravityAdapter() agents.Adapter {
 	return antigravity.NewAdapter()
 }
+
+func piAdapter() agents.Adapter { return pi.NewAdapter() }
 
 // assertArgsHaveToolsAgent is a shared helper that validates a JSON file
 // contains the MCP "engram" entry with --tools=agent in args.
@@ -209,6 +212,93 @@ func TestInjectOpenCodeIsIdempotent(t *testing.T) {
 	}
 
 	second, err := Inject(home, opencodeAdapter())
+	if err != nil {
+		t.Fatalf("Inject() second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject() second changed = true")
+	}
+}
+
+func TestInjectPiProvisioningCreatesMissingMCPAdapterFiles(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, piAdapter())
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject() changed = false")
+	}
+
+	settings := readJSONFile(t, filepath.Join(home, ".pi", "settings.json"))
+	assertNestedString(t, settings, "2.5.4", "packages", "npm:pi-mcp-adapter")
+
+	npmPackage := readJSONFile(t, filepath.Join(home, ".pi", "npm", "package.json"))
+	assertNestedString(t, npmPackage, "^2.5.4", "dependencies", "pi-mcp-adapter")
+
+	mcp := readJSONFile(t, filepath.Join(home, ".pi", "mcp.json"))
+	assertNestedString(t, mcp, "engram", "activeMCP")
+	assertNestedString(t, mcp, "engram", "mcpServers", "engram", "command")
+	assertNestedStrings(t, mcp, []string{"mcp", "--tools=agent"}, "mcpServers", "engram", "args")
+	assertNestedBool(t, mcp, true, "mcpServers", "engram", "directTools")
+}
+
+func TestInjectPiProvisioningPreservesUnrelatedContent(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".pi", "settings.json"), `{"theme":"kanagawa","packages":{"npm:other":"1.0.0"}}`)
+	writeFile(t, filepath.Join(home, ".pi", "npm", "package.json"), `{"name":"pi-user","dependencies":{"left-pad":"^1.0.0"},"devDependencies":{"vitest":"^1.0.0"}}`)
+	writeFile(t, filepath.Join(home, ".pi", "mcp.json"), `{"activeMCP":"other","mcpServers":{"other":{"command":"other-mcp"}},"metadata":{"owner":"user"}}`)
+
+	_, err := Inject(home, piAdapter())
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settings := readJSONFile(t, filepath.Join(home, ".pi", "settings.json"))
+	assertNestedString(t, settings, "kanagawa", "theme")
+	assertNestedString(t, settings, "1.0.0", "packages", "npm:other")
+	assertNestedString(t, settings, "2.5.4", "packages", "npm:pi-mcp-adapter")
+
+	npmPackage := readJSONFile(t, filepath.Join(home, ".pi", "npm", "package.json"))
+	assertNestedString(t, npmPackage, "pi-user", "name")
+	assertNestedString(t, npmPackage, "^1.0.0", "dependencies", "left-pad")
+	assertNestedString(t, npmPackage, "^2.5.4", "dependencies", "pi-mcp-adapter")
+	assertNestedString(t, npmPackage, "^1.0.0", "devDependencies", "vitest")
+
+	mcp := readJSONFile(t, filepath.Join(home, ".pi", "mcp.json"))
+	assertNestedString(t, mcp, "engram", "activeMCP")
+	assertNestedString(t, mcp, "other-mcp", "mcpServers", "other", "command")
+	assertNestedString(t, mcp, "user", "metadata", "owner")
+	assertNestedString(t, mcp, "engram", "mcpServers", "engram", "command")
+}
+
+func TestInjectPiProvisioningCanonicalizesExistingEntriesAndIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".pi", "settings.json"), `{"packages":{"npm:pi-mcp-adapter":"2.0.0"}}`)
+	writeFile(t, filepath.Join(home, ".pi", "npm", "package.json"), `{"dependencies":{"pi-mcp-adapter":"^2.0.0"}}`)
+	writeFile(t, filepath.Join(home, ".pi", "mcp.json"), `{"activeMCP":"legacy","mcpServers":{"engram":{"command":"old-engram","args":["mcp"],"directTools":false,"env":{"STALE":"1"}}}}`)
+
+	first, err := Inject(home, piAdapter())
+	if err != nil {
+		t.Fatalf("Inject() first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatalf("Inject() first changed = false")
+	}
+
+	settings := readJSONFile(t, filepath.Join(home, ".pi", "settings.json"))
+	assertNestedString(t, settings, "2.5.4", "packages", "npm:pi-mcp-adapter")
+	npmPackage := readJSONFile(t, filepath.Join(home, ".pi", "npm", "package.json"))
+	assertNestedString(t, npmPackage, "^2.5.4", "dependencies", "pi-mcp-adapter")
+	mcp := readJSONFile(t, filepath.Join(home, ".pi", "mcp.json"))
+	assertNestedString(t, mcp, "engram", "activeMCP")
+	assertNestedString(t, mcp, "engram", "mcpServers", "engram", "command")
+	assertNestedStrings(t, mcp, []string{"mcp", "--tools=agent"}, "mcpServers", "engram", "args")
+	assertNestedBool(t, mcp, true, "mcpServers", "engram", "directTools")
+	assertNestedMissing(t, mcp, "mcpServers", "engram", "env")
+
+	second, err := Inject(home, piAdapter())
 	if err != nil {
 		t.Fatalf("Inject() second error = %v", err)
 	}
@@ -848,6 +938,94 @@ func mockEngramLookPath(t *testing.T, result string, errMsg string) {
 		return result, nil
 	}
 	t.Cleanup(func() { EngramLookPath = orig })
+}
+
+func writeFile(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", path, err)
+	}
+}
+
+func readJSONFile(t *testing.T, path string) map[string]any {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v; content:\n%s", path, err, raw)
+	}
+	return parsed
+}
+
+func nestedValue(t *testing.T, root map[string]any, path ...string) (any, bool) {
+	t.Helper()
+	var current any = root
+	for _, key := range path {
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = object[key]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
+}
+
+func assertNestedString(t *testing.T, root map[string]any, want string, path ...string) {
+	t.Helper()
+	got, ok := nestedValue(t, root, path...)
+	if !ok {
+		t.Fatalf("missing JSON path %v in %#v", path, root)
+	}
+	if got != want {
+		t.Fatalf("JSON path %v = %#v, want %q", path, got, want)
+	}
+}
+
+func assertNestedStrings(t *testing.T, root map[string]any, want []string, path ...string) {
+	t.Helper()
+	got, ok := nestedValue(t, root, path...)
+	if !ok {
+		t.Fatalf("missing JSON path %v in %#v", path, root)
+	}
+	items, ok := got.([]any)
+	if !ok {
+		t.Fatalf("JSON path %v = %#v, want string array", path, got)
+	}
+	if len(items) != len(want) {
+		t.Fatalf("JSON path %v length = %d, want %d (%#v)", path, len(items), len(want), got)
+	}
+	for i, wantItem := range want {
+		if items[i] != wantItem {
+			t.Fatalf("JSON path %v[%d] = %#v, want %q", path, i, items[i], wantItem)
+		}
+	}
+}
+
+func assertNestedBool(t *testing.T, root map[string]any, want bool, path ...string) {
+	t.Helper()
+	got, ok := nestedValue(t, root, path...)
+	if !ok {
+		t.Fatalf("missing JSON path %v in %#v", path, root)
+	}
+	if got != want {
+		t.Fatalf("JSON path %v = %#v, want %v", path, got, want)
+	}
+}
+
+func assertNestedMissing(t *testing.T, root map[string]any, path ...string) {
+	t.Helper()
+	if got, ok := nestedValue(t, root, path...); ok {
+		t.Fatalf("JSON path %v present = %#v, want missing", path, got)
+	}
 }
 
 // TestEngramInjectUsesAbsolutePathWhenAvailable verifies that when engram is

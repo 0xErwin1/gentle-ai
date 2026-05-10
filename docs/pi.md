@@ -40,6 +40,15 @@ pi install npm:pi-intercom
 | `pi-intercom` | Lets child agents ask the parent Pi session for decisions while chains run. |
 
 The real Engram component is provisioned separately by Gentle AI so `gentle-engram` has an Engram runtime to talk to.
+During that Engram provisioning step, Gentle AI also declares `pi-mcp-adapter` `2.5.4` in Pi config, adds the npm dependency, and activates the `engram` MCP server with `directTools` enabled. Existing unrelated Pi settings, npm dependencies, and MCP servers are preserved.
+
+Files updated by Engram provisioning:
+
+```text
+.pi/settings.json          # packages.npm:pi-mcp-adapter = 2.5.4
+.pi/npm/package.json       # dependencies.pi-mcp-adapter = ^2.5.4
+.pi/mcp.json               # activeMCP = engram; engram runs `engram mcp --tools=agent`
+```
 
 ## Pi Commands
 
@@ -131,7 +140,7 @@ Use `/gentle-ai:install-sdd --force` only when you want to replace local SDD ass
 | SDD agents are missing in Pi | Start Pi in the project so `gentle-pi` can run `session_start`, or run `/gentle-ai:install-sdd`. |
 | Persona did not change immediately | Run `/reload` or start a new Pi session. |
 | Model override should be removed | Open `/gentleman:models` and choose `Inherit active/default model`. |
-| Memory tools are missing | Confirm `gentle-engram` is installed, then check `/gentle-ai:status`. |
+| Memory tools or `/mcp` are missing | Re-run `gentle-ai install --agent pi` to refresh `.pi/settings.json`, `.pi/npm/package.json`, and `.pi/mcp.json`, then check `/gentle-ai:status`. |
 | `gentle-engram` is installed but Engram is unavailable | Re-run `gentle-ai install --agent pi` so the real Engram component is provisioned. |
 
 ## Next Steps

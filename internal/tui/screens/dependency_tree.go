@@ -36,7 +36,7 @@ func renderPresetPlan(plan planner.ResolvedPlan, selection model.Selection, curs
 	b.WriteString("\n\n")
 
 	if len(plan.OrderedComponents) == 0 {
-		if !isPiOnlyInstallPlan(plan, selection) {
+		if !hasPiAgentInInstallPlan(plan, selection) {
 			b.WriteString(styles.WarningStyle.Render("No components selected yet."))
 			b.WriteString("\n")
 		}
@@ -67,7 +67,7 @@ func renderPresetPlan(plan planner.ResolvedPlan, selection model.Selection, curs
 		b.WriteString("\n")
 	}
 
-	if isPiOnlyInstallPlan(plan, selection) {
+	if hasPiAgentInInstallPlan(plan, selection) {
 		b.WriteString(renderPiInstallPlan())
 		b.WriteString("\n")
 	}
@@ -79,13 +79,18 @@ func renderPresetPlan(plan planner.ResolvedPlan, selection model.Selection, curs
 	return b.String()
 }
 
-func isPiOnlyInstallPlan(plan planner.ResolvedPlan, selection model.Selection) bool {
+func hasPiAgentInInstallPlan(plan planner.ResolvedPlan, selection model.Selection) bool {
 	agents := selection.Agents
 	if len(agents) == 0 {
 		agents = plan.Agents
 	}
 
-	return len(agents) == 1 && agents[0] == model.AgentPi
+	for _, agent := range agents {
+		if agent == model.AgentPi {
+			return true
+		}
+	}
+	return false
 }
 
 func piInstallCommands() []string {

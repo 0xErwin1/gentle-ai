@@ -52,7 +52,7 @@ func TestRenderDependencyTreeGenericEmptyPlanKeepsExistingCopy(t *testing.T) {
 	}
 }
 
-func TestRenderDependencyTreeMixedPiEmptyPlanKeepsGenericCopy(t *testing.T) {
+func TestRenderDependencyTreeMixedPiEmptyPlanShowsPiInstallCopy(t *testing.T) {
 	selection := model.Selection{
 		Agents: []model.AgentID{model.AgentPi, model.AgentOpenCode},
 		Preset: model.PresetFullGentleman,
@@ -61,10 +61,18 @@ func TestRenderDependencyTreeMixedPiEmptyPlanKeepsGenericCopy(t *testing.T) {
 
 	out := RenderDependencyTree(plan, selection, 0)
 
-	if !strings.Contains(out, "No components selected yet.") {
-		t.Fatalf("RenderDependencyTree() missing generic empty copy for mixed Pi plan; output:\n%s", out)
+	if strings.Contains(out, "No components selected yet.") {
+		t.Fatalf("RenderDependencyTree() showed generic empty copy for mixed Pi plan; output:\n%s", out)
 	}
-	if strings.Contains(out, "Pi agent support will be installed.") {
-		t.Fatalf("RenderDependencyTree() showed exact Pi-only copy for mixed Pi plan; output:\n%s", out)
+	for _, want := range []string{
+		"Pi agent support will be installed.",
+		"pi install npm:gentle-pi",
+		"pi install npm:gentle-engram",
+		"pi install npm:pi-subagents",
+		"pi install npm:pi-intercom",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("RenderDependencyTree() missing %q for mixed Pi plan; output:\n%s", want, out)
+		}
 	}
 }

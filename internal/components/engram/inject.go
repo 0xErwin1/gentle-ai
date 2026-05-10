@@ -27,6 +27,10 @@ type bootstrapper interface {
 	BootstrapTemplate(homeDir string) error
 }
 
+type piEngramProvisioner interface {
+	ProvisionEngramMCP(homeDir string) (changed bool, files []string, err error)
+}
+
 // EngramLookPath is the function used to resolve the engram binary path.
 // It is a package-level variable so it can be replaced in tests — both from
 // within the engram package and from external test packages (e.g. golden_test.go).
@@ -168,6 +172,14 @@ func InjectWithPromptDir(configHomeDir, promptDir string, adapter agents.Adapter
 }
 
 func inject(configHomeDir, promptDir string, adapter agents.Adapter) (InjectionResult, error) {
+	if provisioner, ok := adapter.(piEngramProvisioner); ok {
+		changed, files, err := provisioner.ProvisionEngramMCP(configHomeDir)
+		if err != nil {
+			return InjectionResult{}, err
+		}
+		return InjectionResult{Changed: changed, Files: files}, nil
+	}
+
 	if !adapter.SupportsMCP() {
 		return InjectionResult{}, nil
 	}
