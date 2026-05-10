@@ -196,6 +196,8 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
   - `pi install npm:pi-subagents`
   - `pi install npm:pi-intercom`
 - **`gentle-pi` package**: adds the Gentleman harness for Pi: SDD/OpenSpec workflow, strict TDD guidance, safety defaults, `/gentle-ai:*` commands, skill assets, prompts, SDD agents, and SDD chains. On `session_start`, it copies project assets into `.pi/agents/`, `.pi/chains/`, and `.pi/gentle-ai/support/` without overwriting local files unless the Pi recovery command uses `--force`.
+- **Persona command**: `gentle-pi` owns Pi persona switching through `/gentleman:persona` (`/gentle-ai:persona` remains a compatibility alias). It switches between `gentleman` and `neutral`, saves `.pi/gentle-ai/persona.json`, and may require `/reload` or a new Pi session for the active prompt to refresh.
+- **Model assignment command**: `gentle-pi` owns Pi model selection through `/gentleman:models` (`/gentle-ai:models` remains a compatibility alias). It opens a Pi-native modal for project, user, and built-in agents, prioritizes SDD agents, saves `.pi/gentle-ai/models.json`, and applies overrides into `.pi/agents/*.md` or `.pi/settings.json`.
 - **`gentle-engram` package**: adds persistent Engram memory for Pi. It captures sessions, exposes Engram MCP tools through `pi-mcp-adapter`, and degrades safely when the local `engram` binary is missing.
 - **`pi-subagents` package**: discovers and runs SDD agents from `.pi/agents/`.
 - **`pi-intercom` package**: lets Pi child agents ask the parent session for decisions while a chain is running.

@@ -42,7 +42,7 @@ Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is a
 | **Kiro IDE** | Full (native subagents) | Native `~/.kiro/agents/` + steering orchestration |
 | **Qwen Code** | Full (native sub-agents) | Slash commands, `~/.qwen/commands/`, `auto_edit` mode |
 | **OpenClaw** | Solo-agent | Workspace-first `AGENTS.md` / `SOUL.md` with global MCP config |
-| **Pi** | Full (package-managed subagents) | Installs `gentle-pi`, `gentle-engram`, `pi-subagents`, and `pi-intercom` |
+| **Pi** | Full (package-managed subagents) | `gentle-pi` harness with persona/model commands + Engram memory |
 
 > **Note**: This project supersedes [Agent Teams Lite](https://github.com/Gentleman-Programming/agent-teams-lite) (now archived). Everything ATL provided is included here with better installation, automatic updates, and persistent memory.
 
