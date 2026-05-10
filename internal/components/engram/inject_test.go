@@ -232,7 +232,7 @@ func TestInjectPiProvisioningCreatesMissingMCPAdapterFiles(t *testing.T) {
 	}
 
 	settings := readJSONFile(t, filepath.Join(home, ".pi", "settings.json"))
-	assertNestedString(t, settings, "2.5.4", "packages", "npm:pi-mcp-adapter")
+	assertNestedStrings(t, settings, []string{"npm:pi-mcp-adapter@2.5.4"}, "packages")
 
 	npmPackage := readJSONFile(t, filepath.Join(home, ".pi", "npm", "package.json"))
 	assertNestedString(t, npmPackage, "^2.5.4", "dependencies", "pi-mcp-adapter")
@@ -246,7 +246,7 @@ func TestInjectPiProvisioningCreatesMissingMCPAdapterFiles(t *testing.T) {
 
 func TestInjectPiProvisioningPreservesUnrelatedContent(t *testing.T) {
 	home := t.TempDir()
-	writeFile(t, filepath.Join(home, ".pi", "settings.json"), `{"theme":"kanagawa","packages":{"npm:other":"1.0.0"}}`)
+	writeFile(t, filepath.Join(home, ".pi", "settings.json"), `{"theme":"kanagawa","packages":["npm:other@1.0.0"]}`)
 	writeFile(t, filepath.Join(home, ".pi", "npm", "package.json"), `{"name":"pi-user","dependencies":{"left-pad":"^1.0.0"},"devDependencies":{"vitest":"^1.0.0"}}`)
 	writeFile(t, filepath.Join(home, ".pi", "mcp.json"), `{"activeMCP":"other","mcpServers":{"other":{"command":"other-mcp"}},"metadata":{"owner":"user"}}`)
 
@@ -257,8 +257,7 @@ func TestInjectPiProvisioningPreservesUnrelatedContent(t *testing.T) {
 
 	settings := readJSONFile(t, filepath.Join(home, ".pi", "settings.json"))
 	assertNestedString(t, settings, "kanagawa", "theme")
-	assertNestedString(t, settings, "1.0.0", "packages", "npm:other")
-	assertNestedString(t, settings, "2.5.4", "packages", "npm:pi-mcp-adapter")
+	assertNestedStringsUnordered(t, settings, []string{"npm:other@1.0.0", "npm:pi-mcp-adapter@2.5.4"}, "packages")
 
 	npmPackage := readJSONFile(t, filepath.Join(home, ".pi", "npm", "package.json"))
 	assertNestedString(t, npmPackage, "pi-user", "name")
@@ -275,7 +274,7 @@ func TestInjectPiProvisioningPreservesUnrelatedContent(t *testing.T) {
 
 func TestInjectPiProvisioningCanonicalizesExistingEntriesAndIsIdempotent(t *testing.T) {
 	home := t.TempDir()
-	writeFile(t, filepath.Join(home, ".pi", "settings.json"), `{"packages":{"npm:pi-mcp-adapter":"2.0.0"}}`)
+	writeFile(t, filepath.Join(home, ".pi", "settings.json"), `{"packages":["npm:pi-mcp-adapter@2.0.0"]}`)
 	writeFile(t, filepath.Join(home, ".pi", "npm", "package.json"), `{"dependencies":{"pi-mcp-adapter":"^2.0.0"}}`)
 	writeFile(t, filepath.Join(home, ".pi", "mcp.json"), `{"activeMCP":"legacy","mcpServers":{"engram":{"command":"old-engram","args":["mcp"],"directTools":false,"env":{"STALE":"1"}}}}`)
 
@@ -288,7 +287,7 @@ func TestInjectPiProvisioningCanonicalizesExistingEntriesAndIsIdempotent(t *test
 	}
 
 	settings := readJSONFile(t, filepath.Join(home, ".pi", "settings.json"))
-	assertNestedString(t, settings, "2.5.4", "packages", "npm:pi-mcp-adapter")
+	assertNestedStrings(t, settings, []string{"npm:pi-mcp-adapter@2.5.4"}, "packages")
 	npmPackage := readJSONFile(t, filepath.Join(home, ".pi", "npm", "package.json"))
 	assertNestedString(t, npmPackage, "^2.5.4", "dependencies", "pi-mcp-adapter")
 	mcp := readJSONFile(t, filepath.Join(home, ".pi", "mcp.json"))
@@ -305,6 +304,20 @@ func TestInjectPiProvisioningCanonicalizesExistingEntriesAndIsIdempotent(t *test
 	if second.Changed {
 		t.Fatalf("Inject() second changed = true")
 	}
+}
+
+func TestInjectPiProvisioningMigratesLegacyObjectPackages(t *testing.T) {
+	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".pi", "settings.json"), `{"theme":"kanagawa","packages":{"npm:other":"1.0.0","npm:pi-mcp-adapter":"2.0.0"}}`)
+
+	_, err := Inject(home, piAdapter())
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settings := readJSONFile(t, filepath.Join(home, ".pi", "settings.json"))
+	assertNestedString(t, settings, "kanagawa", "theme")
+	assertNestedStringsUnordered(t, settings, []string{"npm:other@1.0.0", "npm:pi-mcp-adapter@2.5.4"}, "packages")
 }
 
 // TestInjectOpenCodeMigratesFromOldFormat verifies that when a user's
@@ -1006,6 +1019,37 @@ func assertNestedStrings(t *testing.T, root map[string]any, want []string, path 
 	for i, wantItem := range want {
 		if items[i] != wantItem {
 			t.Fatalf("JSON path %v[%d] = %#v, want %q", path, i, items[i], wantItem)
+		}
+	}
+}
+
+func assertNestedStringsUnordered(t *testing.T, root map[string]any, want []string, path ...string) {
+	t.Helper()
+	got, ok := nestedValue(t, root, path...)
+	if !ok {
+		t.Fatalf("missing JSON path %v in %#v", path, root)
+	}
+	items, ok := got.([]any)
+	if !ok {
+		t.Fatalf("JSON path %v = %#v, want string array", path, got)
+	}
+	if len(items) != len(want) {
+		t.Fatalf("JSON path %v length = %d, want %d (%#v)", path, len(items), len(want), got)
+	}
+	remaining := make(map[string]int, len(want))
+	for _, item := range want {
+		remaining[item]++
+	}
+	for _, item := range items {
+		itemString, ok := item.(string)
+		if !ok {
+			t.Fatalf("JSON path %v contains non-string item %#v", path, item)
+		}
+		remaining[itemString]--
+	}
+	for item, count := range remaining {
+		if count != 0 {
+			t.Fatalf("JSON path %v missing/extra %q count delta %d; got %#v", path, item, count, got)
 		}
 	}
 }

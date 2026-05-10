@@ -40,12 +40,12 @@ pi install npm:pi-intercom
 | `pi-intercom` | Lets child agents ask the parent Pi session for decisions while chains run. |
 
 The real Engram component is provisioned separately by Gentle AI so `gentle-engram` has an Engram runtime to talk to.
-During that Engram provisioning step, Gentle AI also declares `pi-mcp-adapter` `2.5.4` in Pi config, adds the npm dependency, and activates the `engram` MCP server with `directTools` enabled. Existing unrelated Pi settings, npm dependencies, and MCP servers are preserved.
+During that Engram provisioning step, Gentle AI also declares `npm:pi-mcp-adapter@2.5.4` in Pi config, adds the npm dependency, and activates the `engram` MCP server with `directTools` enabled. Existing unrelated Pi settings, package entries, npm dependencies, and MCP servers are preserved.
 
 Files updated by Engram provisioning:
 
 ```text
-.pi/settings.json          # packages.npm:pi-mcp-adapter = 2.5.4
+.pi/settings.json          # packages includes npm:pi-mcp-adapter@2.5.4
 .pi/npm/package.json       # dependencies.pi-mcp-adapter = ^2.5.4
 .pi/mcp.json               # activeMCP = engram; engram runs `engram mcp --tools=agent`
 ```

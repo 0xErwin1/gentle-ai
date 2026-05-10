@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -16,6 +17,7 @@ import (
 
 const (
 	piMCPAdapterPackage      = "npm:pi-mcp-adapter"
+	piMCPAdapterPackageSpec  = "npm:pi-mcp-adapter@2.5.4"
 	piMCPAdapterDependency   = "pi-mcp-adapter"
 	piMCPAdapterVersion      = "2.5.4"
 	piMCPAdapterVersionRange = "^2.5.4"
@@ -132,11 +134,7 @@ func (a *Adapter) ProvisionEngramMCP(homeDir string) (bool, []string, error) {
 		a.MCPConfigPath(homeDir, piEngramMCPActiveServer),
 	}
 	overlays := [][]byte{
-		mustJSON(map[string]any{
-			"packages": map[string]any{
-				piMCPAdapterPackage: piMCPAdapterVersion,
-			},
-		}),
+		nil,
 		mustJSON(map[string]any{
 			"dependencies": map[string]any{
 				piMCPAdapterDependency: piMCPAdapterVersionRange,
@@ -158,7 +156,13 @@ func (a *Adapter) ProvisionEngramMCP(homeDir string) (bool, []string, error) {
 
 	changed := false
 	for i, path := range paths {
-		write, err := mergePiJSONFile(path, overlays[i])
+		var write filemerge.WriteResult
+		var err error
+		if i == 0 {
+			write, err = mergePiSettingsFile(path)
+		} else {
+			write, err = mergePiJSONFile(path, overlays[i])
+		}
 		if err != nil {
 			return false, nil, err
 		}
@@ -166,6 +170,93 @@ func (a *Adapter) ProvisionEngramMCP(homeDir string) (bool, []string, error) {
 	}
 
 	return changed, paths, nil
+}
+
+func mergePiSettingsFile(path string) (filemerge.WriteResult, error) {
+	settings, err := readPiJSONObject(path)
+	if err != nil {
+		return filemerge.WriteResult{}, err
+	}
+
+	settings["packages"] = appendPiPackage(settings["packages"], piMCPAdapterPackageSpec)
+
+	encoded, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return filemerge.WriteResult{}, fmt.Errorf("marshal pi settings %q: %w", path, err)
+	}
+	return filemerge.WriteFileAtomic(path, append(encoded, '\n'), 0o644)
+}
+
+func readPiJSONObject(path string) (map[string]any, error) {
+	base, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("read pi json file %q: %w", path, err)
+		}
+		return map[string]any{}, nil
+	}
+
+	var object map[string]any
+	if err := json.Unmarshal(base, &object); err != nil {
+		return nil, fmt.Errorf("unmarshal pi json file %q: %w", path, err)
+	}
+	if object == nil {
+		object = map[string]any{}
+	}
+	return object, nil
+}
+
+func appendPiPackage(existing any, desired string) []any {
+	packages := piPackagesAsSlice(existing)
+	filtered := make([]any, 0, len(packages)+1)
+	for _, pkg := range packages {
+		if piPackageIdentity(pkg) == piMCPAdapterPackage {
+			continue
+		}
+		filtered = append(filtered, pkg)
+	}
+	return append(filtered, desired)
+}
+
+func piPackagesAsSlice(existing any) []any {
+	switch value := existing.(type) {
+	case []any:
+		return value
+	case []string:
+		packages := make([]any, 0, len(value))
+		for _, item := range value {
+			packages = append(packages, item)
+		}
+		return packages
+	case map[string]any:
+		packages := make([]any, 0, len(value))
+		for source, version := range value {
+			versionString, _ := version.(string)
+			if versionString != "" && strings.HasPrefix(source, "npm:") && !strings.Contains(strings.TrimPrefix(source, "npm:"), "@") {
+				packages = append(packages, source+"@"+versionString)
+				continue
+			}
+			packages = append(packages, source)
+		}
+		return packages
+	default:
+		return nil
+	}
+}
+
+func piPackageIdentity(pkg any) string {
+	source, ok := pkg.(string)
+	if !ok {
+		object, isObject := pkg.(map[string]any)
+		if !isObject {
+			return ""
+		}
+		source, _ = object["source"].(string)
+	}
+	if strings.HasPrefix(source, piMCPAdapterPackage+"@") || source == piMCPAdapterPackage {
+		return piMCPAdapterPackage
+	}
+	return source
 }
 
 func mergePiJSONFile(path string, overlay []byte) (filemerge.WriteResult, error) {
