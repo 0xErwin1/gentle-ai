@@ -36,14 +36,7 @@ func renderPresetPlan(plan planner.ResolvedPlan, selection model.Selection, curs
 	b.WriteString("\n\n")
 
 	if len(plan.OrderedComponents) == 0 {
-		if isPiOnlyInstallPlan(plan, selection) {
-			b.WriteString(styles.SuccessStyle.Render("Pi agent support will be installed."))
-			b.WriteString("\n")
-			for _, command := range piInstallCommands() {
-				b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("  • %s", command)))
-				b.WriteString("\n")
-			}
-		} else {
+		if !isPiOnlyInstallPlan(plan, selection) {
 			b.WriteString(styles.WarningStyle.Render("No components selected yet."))
 			b.WriteString("\n")
 		}
@@ -74,6 +67,11 @@ func renderPresetPlan(plan planner.ResolvedPlan, selection model.Selection, curs
 		b.WriteString("\n")
 	}
 
+	if isPiOnlyInstallPlan(plan, selection) {
+		b.WriteString(renderPiInstallPlan())
+		b.WriteString("\n")
+	}
+
 	b.WriteString(renderOptions(DependencyTreeOptions(), cursor))
 	b.WriteString("\n")
 	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • esc: back"))
@@ -97,6 +95,21 @@ func piInstallCommands() []string {
 		"pi install npm:pi-subagents",
 		"pi install npm:pi-intercom",
 	}
+}
+
+func renderPiInstallPlan() string {
+	var b strings.Builder
+	b.WriteString(styles.SuccessStyle.Render("Pi agent support will be installed."))
+	b.WriteString("\n")
+	b.WriteString(styles.SubtextStyle.Render("  • Engram component will be installed/provisioned."))
+	b.WriteString("\n")
+	b.WriteString(styles.SubtextStyle.Render("  • Pi package stack will be installed:"))
+	b.WriteString("\n")
+	for _, command := range piInstallCommands() {
+		b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("    - %s", command)))
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 func renderCustomPicker(selection model.Selection, cursor int) string {

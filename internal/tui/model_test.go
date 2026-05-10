@@ -73,7 +73,7 @@ func TestAgentSelectionToggleAndContinue(t *testing.T) {
 	}
 }
 
-func TestPiOnlyAgentContinueSkipsPersonaPresetAndStrictTDD(t *testing.T) {
+func TestPiOnlyAgentContinueSkipsPromptsAndIncludesEngram(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenAgents
 	m.Selection.Agents = []model.AgentID{model.AgentPi}
@@ -86,18 +86,19 @@ func TestPiOnlyAgentContinueSkipsPersonaPresetAndStrictTDD(t *testing.T) {
 	if state.Screen != ScreenDependencyTree {
 		t.Fatalf("screen = %v, want %v", state.Screen, ScreenDependencyTree)
 	}
-	if len(state.Selection.Components) != 0 {
-		t.Fatalf("components = %v, want empty Pi-only selection", state.Selection.Components)
+	wantComponents := []model.ComponentID{model.ComponentEngram}
+	if !reflect.DeepEqual(state.Selection.Components, wantComponents) {
+		t.Fatalf("components = %v, want %v", state.Selection.Components, wantComponents)
 	}
 	if !reflect.DeepEqual(state.DependencyPlan.Agents, []model.AgentID{model.AgentPi}) {
 		t.Fatalf("dependency agents = %v, want [pi]", state.DependencyPlan.Agents)
 	}
-	if len(state.DependencyPlan.OrderedComponents) != 0 {
-		t.Fatalf("dependency components = %v, want none", state.DependencyPlan.OrderedComponents)
+	if !reflect.DeepEqual(state.DependencyPlan.OrderedComponents, wantComponents) {
+		t.Fatalf("dependency components = %v, want %v", state.DependencyPlan.OrderedComponents, wantComponents)
 	}
 }
 
-func TestNewModelPiOnlyDetectionDefaultsToNoGentlemanComponents(t *testing.T) {
+func TestNewModelPiOnlyDetectionDefaultsToEngramOnly(t *testing.T) {
 	detection := system.DetectionResult{Configs: []system.ConfigState{{
 		Agent:       string(model.AgentPi),
 		Path:        "/tmp/fake/pi",
@@ -111,8 +112,9 @@ func TestNewModelPiOnlyDetectionDefaultsToNoGentlemanComponents(t *testing.T) {
 	if !reflect.DeepEqual(m.Selection.Agents, wantAgents) {
 		t.Fatalf("agents = %v, want %v", m.Selection.Agents, wantAgents)
 	}
-	if len(m.Selection.Components) != 0 {
-		t.Fatalf("components = %v, want empty Pi-only selection", m.Selection.Components)
+	wantComponents := []model.ComponentID{model.ComponentEngram}
+	if !reflect.DeepEqual(m.Selection.Components, wantComponents) {
+		t.Fatalf("components = %v, want %v", m.Selection.Components, wantComponents)
 	}
 }
 

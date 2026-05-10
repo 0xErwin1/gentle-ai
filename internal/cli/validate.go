@@ -40,7 +40,7 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 		return InstallInput{}, err
 	}
 	if len(flags.Components) == 0 && strings.TrimSpace(flags.Preset) == "" && isPiOnlyAgents(selection.Agents) {
-		components = nil
+		components = piOnlyComponents()
 	}
 
 	selection.Components = components
@@ -229,6 +229,10 @@ func asAgentIDs(values []string) []model.AgentID {
 
 func isPiOnlyAgents(agents []model.AgentID) bool {
 	return len(agents) == 1 && agents[0] == model.AgentPi
+}
+
+func piOnlyComponents() []model.ComponentID {
+	return []model.ComponentID{model.ComponentEngram}
 }
 
 func unique[T comparable](items []T) []T {

@@ -415,7 +415,7 @@ func NewModel(detection system.DetectionResult, version string) Model {
 	agents := preselectedAgents(detection)
 	components := componentsForPreset(model.PresetFullGentleman)
 	if isPiOnlyAgents(agents) {
-		components = nil
+		components = piOnlyComponents()
 	}
 
 	selection := model.Selection{
@@ -1428,7 +1428,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.toggleCurrentAgent()
 		case m.Cursor == agentCount && len(m.Selection.Agents) > 0:
 			if isPiOnlyAgents(m.Selection.Agents) {
-				m.Selection.Components = nil
+				m.Selection.Components = piOnlyComponents()
 				m.buildDependencyPlan()
 				m.setScreen(ScreenDependencyTree)
 				return m, nil
@@ -3073,6 +3073,10 @@ func preselectedAgents(detection system.DetectionResult) []model.AgentID {
 
 func isPiOnlyAgents(agents []model.AgentID) bool {
 	return len(agents) == 1 && agents[0] == model.AgentPi
+}
+
+func piOnlyComponents() []model.ComponentID {
+	return []model.ComponentID{model.ComponentEngram}
 }
 
 func defaultUninstallComponents() []model.ComponentID {

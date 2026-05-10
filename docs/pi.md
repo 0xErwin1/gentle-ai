@@ -19,7 +19,7 @@ gentle-ai install --agent pi
 pi
 ```
 
-Gentle AI detects the `pi` binary first. If Pi is the only selected agent, the installer skips persona, ecosystem component selection, and Strict TDD prompts because `gentle-pi` owns those choices inside Pi.
+Gentle AI detects the `pi` binary first. If Pi is the only selected agent, the installer still provisions the real Engram component, but skips persona, ecosystem component selection, and Strict TDD prompts because `gentle-pi` owns those choices inside Pi.
 
 ## Installed Packages
 
@@ -35,9 +35,11 @@ pi install npm:pi-intercom
 | Package | What it adds |
 |---------|--------------|
 | [`gentle-pi`](https://www.npmjs.com/package/gentle-pi) | Gentleman persona, SDD/OpenSpec workflow, strict TDD support, safety policy, skills, prompts, SDD agents, and SDD chains. |
-| [`gentle-engram`](https://pi.dev/packages/gentle-engram) | Engram session memory and MCP tools for Pi, with safe degradation when `engram` is missing. |
+| [`gentle-engram`](https://pi.dev/packages/gentle-engram) | Pi integration for Engram session memory and MCP tools. It is not the Engram binary itself. |
 | `pi-subagents` | Runs SDD agents discovered from `.pi/agents/`. |
 | `pi-intercom` | Lets child agents ask the parent Pi session for decisions while chains run. |
+
+The real Engram component is provisioned separately by Gentle AI so `gentle-engram` has an Engram runtime to talk to.
 
 ## Pi Commands
 
@@ -130,6 +132,7 @@ Use `/gentle-ai:install-sdd --force` only when you want to replace local SDD ass
 | Persona did not change immediately | Run `/reload` or start a new Pi session. |
 | Model override should be removed | Open `/gentleman:models` and choose `Inherit active/default model`. |
 | Memory tools are missing | Confirm `gentle-engram` is installed, then check `/gentle-ai:status`. |
+| `gentle-engram` is installed but Engram is unavailable | Re-run `gentle-ai install --agent pi` so the real Engram component is provisioned. |
 
 ## Next Steps
 

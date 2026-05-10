@@ -79,7 +79,7 @@ func TestNormalizeInstallFlagsCustomAcceptsOptionalGentlemanInstallables(t *test
 	}
 }
 
-func TestNormalizeInstallFlagsPiOnlyDefaultsToNoGentlemanComponents(t *testing.T) {
+func TestNormalizeInstallFlagsPiOnlyDefaultsToEngramOnly(t *testing.T) {
 	input, err := NormalizeInstallFlags(InstallFlags{
 		Agents: []string{string(model.AgentPi)},
 	}, system.DetectionResult{})
@@ -91,8 +91,9 @@ func TestNormalizeInstallFlagsPiOnlyDefaultsToNoGentlemanComponents(t *testing.T
 	if !reflect.DeepEqual(input.Selection.Agents, wantAgents) {
 		t.Fatalf("agents = %#v, want %#v", input.Selection.Agents, wantAgents)
 	}
-	if len(input.Selection.Components) != 0 {
-		t.Fatalf("components = %#v, want empty Pi-only selection", input.Selection.Components)
+	wantComponents := []model.ComponentID{model.ComponentEngram}
+	if !reflect.DeepEqual(input.Selection.Components, wantComponents) {
+		t.Fatalf("components = %#v, want %#v", input.Selection.Components, wantComponents)
 	}
 }
 

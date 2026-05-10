@@ -8,19 +8,25 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/planner"
 )
 
-func TestRenderDependencyTreePiOnlyEmptyPlanShowsPiInstallCopy(t *testing.T) {
+func TestRenderDependencyTreePiOnlyEngramPlanShowsComponentAndPiInstallCopy(t *testing.T) {
 	selection := model.Selection{
-		Agents: []model.AgentID{model.AgentPi},
-		Preset: model.PresetFullGentleman,
+		Agents:     []model.AgentID{model.AgentPi},
+		Preset:     model.PresetFullGentleman,
+		Components: []model.ComponentID{model.ComponentEngram},
 	}
-	plan := planner.ResolvedPlan{Agents: []model.AgentID{model.AgentPi}}
+	plan := planner.ResolvedPlan{
+		Agents:            []model.AgentID{model.AgentPi},
+		OrderedComponents: []model.ComponentID{model.ComponentEngram},
+	}
 
 	out := RenderDependencyTree(plan, selection, 0)
 
 	if strings.Contains(out, "No components selected yet.") {
-		t.Fatalf("RenderDependencyTree() showed generic empty copy for Pi-only plan; output:\n%s", out)
+		t.Fatalf("RenderDependencyTree() showed generic empty copy for Pi-only Engram plan; output:\n%s", out)
 	}
 	for _, want := range []string{
+		"Components to install",
+		"engram",
 		"Pi agent support will be installed.",
 		"pi install npm:gentle-pi",
 		"pi install npm:gentle-engram",
