@@ -42,6 +42,7 @@ Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is a
 | **Kiro IDE** | Full (native subagents) | Native `~/.kiro/agents/` + steering orchestration |
 | **Qwen Code** | Full (native sub-agents) | Slash commands, `~/.qwen/commands/`, `auto_edit` mode |
 | **OpenClaw** | Solo-agent | Workspace-first `AGENTS.md` / `SOUL.md` with global MCP config |
+| **Pi** | Full (package-managed subagents) | Installs `gentle-pi`, `gentle-engram`, `pi-subagents`, and `pi-intercom` |
 
 > **Note**: This project supersedes [Agent Teams Lite](https://github.com/Gentleman-Programming/agent-teams-lite) (now archived). Everything ATL provided is included here with better installation, automatic updates, and persistent memory.
 
@@ -61,8 +62,6 @@ curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/mai
 scoop bucket add gentleman https://github.com/Gentleman-Programming/scoop-bucket
 scoop install gentle-ai
 ```
-
-Or via PowerShell script: `irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex`
 
 ### After install: project-level setup
 
@@ -92,7 +91,7 @@ scoop install gentle-ai
 ```
 
 <details>
-<summary><strong>Other install methods</strong> (Go install, PowerShell script, binary download)</summary>
+<summary><strong>Other install methods</strong> (Go install)</summary>
 
 #### Go install (any platform with Go 1.24+)
 
@@ -100,22 +99,14 @@ scoop install gentle-ai
 go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest
 ```
 
-#### Windows (PowerShell script)
+#### Windows
+
+Use Scoop on Windows. It is the supported install path for keeping Gentle AI updated cleanly:
 
 ```powershell
-irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
+scoop bucket add gentleman https://github.com/Gentleman-Programming/scoop-bucket
+scoop install gentle-ai
 ```
-
-**Migrating from PowerShell installer to Scoop?** Remove the old binary first:
-
-```powershell
-Remove-Item "$env:LOCALAPPDATA\gentle-ai" -Recurse -Force
-# Then install via Scoop as shown above
-```
-
-#### From releases
-
-Download the binary for your platform from [GitHub Releases](https://github.com/Gentleman-Programming/gentle-ai/releases).
 
 </details>
 
