@@ -168,6 +168,7 @@ engram tui                    # Visual memory browser
 | [Engram Commands](docs/engram.md) | CLI commands, MCP tools, project management, team sharing |
 | [Codebase Guide](docs/CODEBASE-GUIDE.md) | Maintainer map for repository ownership, architecture boundaries, and review guardrails |
 | [Agents](docs/agents.md) | Supported agents, feature matrix, config paths, and per-agent notes |
+| [Pi Agent](docs/pi.md) | Pi package stack, commands, persona, model assignment, and troubleshooting |
 | [Components, Skills & Presets](docs/components.md) | All components, GGA behavior, skill catalog, and preset definitions |
 | [Usage](docs/usage.md) | Persona modes, interactive TUI, CLI flags, and dependency management |
 | [Backup & Rollback](docs/rollback.md) | Backup retention, compression, dedup, pinning, and restore |
@@ -202,6 +203,7 @@ This project exists because of the community. See [CONTRIBUTORS.md](CONTRIBUTORS
 
 - **Just installed?** Read [Intended Usage](docs/intended-usage.md) -- the one page that explains the mental model.
 - **Using OpenCode?** Set up [SDD Profiles](docs/opencode-profiles.md) to assign different models per phase.
+- **Using Pi?** Read [Pi Agent](docs/pi.md) for Pi commands, persona, model assignments, and package behavior.
 - **Want to share memory across machines?** Learn `engram sync` in the [Engram reference](docs/engram.md).
 - **Ready to contribute?** Check [CONTRIBUTING.md](CONTRIBUTING.md) and the [open issues](https://github.com/Gentleman-Programming/gentle-ai/issues?q=is%3Aissue+is%3Aopen+label%3A%22status%3Aapproved%22).
 

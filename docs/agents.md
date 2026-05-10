@@ -189,6 +189,8 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes 10 phase
 
 ### Pi
 
+For the full Pi command and package reference, see [Pi Agent](pi.md).
+
 - **Detection**: gentle-ai detects Pi from the `pi` binary on `PATH` and its config root at `~/.pi`.
 - **Install**: Pi must already be installed. gentle-ai then installs the full Pi support stack with:
   - `pi install npm:gentle-pi`
