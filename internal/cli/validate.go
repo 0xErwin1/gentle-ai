@@ -39,6 +39,9 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 	if err != nil {
 		return InstallInput{}, err
 	}
+	if len(flags.Components) == 0 && strings.TrimSpace(flags.Preset) == "" && isPiOnlyAgents(selection.Agents) {
+		components = nil
+	}
 
 	selection.Components = components
 
@@ -197,6 +200,8 @@ func defaultAgentsFromDetection(detection system.DetectionResult) []model.AgentI
 			agents = append(agents, model.AgentKiroIDE)
 		case string(model.AgentOpenClaw):
 			agents = append(agents, model.AgentOpenClaw)
+		case string(model.AgentPi):
+			agents = append(agents, model.AgentPi)
 		}
 	}
 
@@ -220,6 +225,10 @@ func asAgentIDs(values []string) []model.AgentID {
 	}
 
 	return agents
+}
+
+func isPiOnlyAgents(agents []model.AgentID) bool {
+	return len(agents) == 1 && agents[0] == model.AgentPi
 }
 
 func unique[T comparable](items []T) []T {

@@ -8,30 +8,30 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
-func TestFactoryResolvesOpenClawAdapter(t *testing.T) {
-	adapter, err := NewAdapter(model.AgentOpenClaw)
+func TestFactoryResolvesPiAdapter(t *testing.T) {
+	adapter, err := NewAdapter(model.AgentPi)
 	if err != nil {
-		t.Fatalf("NewAdapter(%q) returned error: %v", model.AgentOpenClaw, err)
+		t.Fatalf("NewAdapter(%q) returned error: %v", model.AgentPi, err)
 	}
 
-	if got := adapter.Agent(); got != model.AgentOpenClaw {
-		t.Fatalf("adapter.Agent() = %q, want %q", got, model.AgentOpenClaw)
+	if got := adapter.Agent(); got != model.AgentPi {
+		t.Fatalf("adapter.Agent() = %q, want %q", got, model.AgentPi)
 	}
 }
 
-func TestDefaultRegistryIncludesOpenClaw(t *testing.T) {
+func TestDefaultRegistryIncludesPi(t *testing.T) {
 	registry, err := NewDefaultRegistry()
 	if err != nil {
 		t.Fatalf("NewDefaultRegistry() returned error: %v", err)
 	}
 
-	adapter, ok := registry.Get(model.AgentOpenClaw)
+	adapter, ok := registry.Get(model.AgentPi)
 	if !ok {
-		t.Fatalf("registry missing %s adapter", model.AgentOpenClaw)
+		t.Fatalf("registry missing %s adapter", model.AgentPi)
 	}
 
-	if got := adapter.Agent(); got != model.AgentOpenClaw {
-		t.Fatalf("registry adapter.Agent() = %q, want %q", got, model.AgentOpenClaw)
+	if got := adapter.Agent(); got != model.AgentPi {
+		t.Fatalf("registry adapter.Agent() = %q, want %q", got, model.AgentPi)
 	}
 }
 
@@ -52,6 +52,7 @@ func TestDefaultRegistrySupportedAgentsMatchesFactoryAgents(t *testing.T) {
 		model.AgentKiroIDE,
 		model.AgentOpenClaw,
 		model.AgentOpenCode,
+		model.AgentPi,
 		model.AgentQwenCode,
 		model.AgentVSCodeCopilot,
 		model.AgentWindsurf,

@@ -73,6 +73,63 @@ func TestAgentSelectionToggleAndContinue(t *testing.T) {
 	}
 }
 
+func TestPiOnlyAgentContinueSkipsPersonaPresetAndStrictTDD(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenAgents
+	m.Selection.Agents = []model.AgentID{model.AgentPi}
+	m.Selection.Components = componentsForPreset(model.PresetFullGentleman)
+	m.Cursor = len(screensAgentOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenDependencyTree {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenDependencyTree)
+	}
+	if len(state.Selection.Components) != 0 {
+		t.Fatalf("components = %v, want empty Pi-only selection", state.Selection.Components)
+	}
+	if !reflect.DeepEqual(state.DependencyPlan.Agents, []model.AgentID{model.AgentPi}) {
+		t.Fatalf("dependency agents = %v, want [pi]", state.DependencyPlan.Agents)
+	}
+	if len(state.DependencyPlan.OrderedComponents) != 0 {
+		t.Fatalf("dependency components = %v, want none", state.DependencyPlan.OrderedComponents)
+	}
+}
+
+func TestNewModelPiOnlyDetectionDefaultsToNoGentlemanComponents(t *testing.T) {
+	detection := system.DetectionResult{Configs: []system.ConfigState{{
+		Agent:       string(model.AgentPi),
+		Path:        "/tmp/fake/pi",
+		Exists:      true,
+		IsDirectory: true,
+	}}}
+
+	m := NewModel(detection, "dev")
+
+	wantAgents := []model.AgentID{model.AgentPi}
+	if !reflect.DeepEqual(m.Selection.Agents, wantAgents) {
+		t.Fatalf("agents = %v, want %v", m.Selection.Agents, wantAgents)
+	}
+	if len(m.Selection.Components) != 0 {
+		t.Fatalf("components = %v, want empty Pi-only selection", m.Selection.Components)
+	}
+}
+
+func TestPiCombinedWithOtherAgentKeepsGenericFlow(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenAgents
+	m.Selection.Agents = []model.AgentID{model.AgentPi, model.AgentOpenCode}
+	m.Cursor = len(screensAgentOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenPersona {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenPersona)
+	}
+}
+
 func TestReviewToInstallingInitializesProgress(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenReview

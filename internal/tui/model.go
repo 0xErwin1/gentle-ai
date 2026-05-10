@@ -412,11 +412,17 @@ type Model struct {
 }
 
 func NewModel(detection system.DetectionResult, version string) Model {
+	agents := preselectedAgents(detection)
+	components := componentsForPreset(model.PresetFullGentleman)
+	if isPiOnlyAgents(agents) {
+		components = nil
+	}
+
 	selection := model.Selection{
-		Agents:     preselectedAgents(detection),
+		Agents:     agents,
 		Persona:    model.PersonaGentleman,
 		Preset:     model.PresetFullGentleman,
-		Components: componentsForPreset(model.PresetFullGentleman),
+		Components: components,
 	}
 
 	return Model{
@@ -424,7 +430,7 @@ func NewModel(detection system.DetectionResult, version string) Model {
 		Version:              version,
 		Selection:            selection,
 		Detection:            detection,
-		UninstallAgents:      preselectedAgents(detection),
+		UninstallAgents:      agents,
 		UninstallComponents:  defaultUninstallComponents(),
 		UninstallEngramScope: model.EngramUninstallScopeGlobal,
 		Progress: NewProgressState([]string{
@@ -1421,6 +1427,12 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		case m.Cursor < agentCount:
 			m.toggleCurrentAgent()
 		case m.Cursor == agentCount && len(m.Selection.Agents) > 0:
+			if isPiOnlyAgents(m.Selection.Agents) {
+				m.Selection.Components = nil
+				m.buildDependencyPlan()
+				m.setScreen(ScreenDependencyTree)
+				return m, nil
+			}
 			m.setScreen(ScreenPersona)
 		case m.Cursor == agentCount+1:
 			m.setScreen(ScreenDetection)
@@ -3041,6 +3053,8 @@ func preselectedAgents(detection system.DetectionResult) []model.AgentID {
 			selected = append(selected, model.AgentWindsurf)
 		case string(model.AgentQwenCode):
 			selected = append(selected, model.AgentQwenCode)
+		case string(model.AgentPi):
+			selected = append(selected, model.AgentPi)
 		}
 	}
 
@@ -3055,6 +3069,10 @@ func preselectedAgents(detection system.DetectionResult) []model.AgentID {
 	}
 
 	return selected
+}
+
+func isPiOnlyAgents(agents []model.AgentID) bool {
+	return len(agents) == 1 && agents[0] == model.AgentPi
 }
 
 func defaultUninstallComponents() []model.ComponentID {

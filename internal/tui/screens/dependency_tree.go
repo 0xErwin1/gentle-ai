@@ -26,17 +26,27 @@ func RenderDependencyTree(plan planner.ResolvedPlan, selection model.Selection, 
 		return renderCustomPicker(selection, cursor)
 	}
 
-	return renderPresetPlan(plan, cursor)
+	return renderPresetPlan(plan, selection, cursor)
 }
 
-func renderPresetPlan(plan planner.ResolvedPlan, cursor int) string {
+func renderPresetPlan(plan planner.ResolvedPlan, selection model.Selection, cursor int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.TitleStyle.Render("Install Plan"))
 	b.WriteString("\n\n")
 
 	if len(plan.OrderedComponents) == 0 {
-		b.WriteString(styles.WarningStyle.Render("No components selected yet."))
+		if isPiOnlyInstallPlan(plan, selection) {
+			b.WriteString(styles.SuccessStyle.Render("Pi agent support will be installed."))
+			b.WriteString("\n")
+			for _, command := range piInstallCommands() {
+				b.WriteString(styles.SubtextStyle.Render(fmt.Sprintf("  • %s", command)))
+				b.WriteString("\n")
+			}
+		} else {
+			b.WriteString(styles.WarningStyle.Render("No components selected yet."))
+			b.WriteString("\n")
+		}
 		b.WriteString("\n\n")
 	} else {
 		b.WriteString(styles.HeadingStyle.Render("Components to install"))
@@ -69,6 +79,24 @@ func renderPresetPlan(plan planner.ResolvedPlan, cursor int) string {
 	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • esc: back"))
 
 	return b.String()
+}
+
+func isPiOnlyInstallPlan(plan planner.ResolvedPlan, selection model.Selection) bool {
+	agents := selection.Agents
+	if len(agents) == 0 {
+		agents = plan.Agents
+	}
+
+	return len(agents) == 1 && agents[0] == model.AgentPi
+}
+
+func piInstallCommands() []string {
+	return []string{
+		"pi install npm:gentle-pi",
+		"pi install npm:gentle-engram",
+		"pi install npm:pi-subagents",
+		"pi install npm:pi-intercom",
+	}
 }
 
 func renderCustomPicker(selection model.Selection, cursor int) string {

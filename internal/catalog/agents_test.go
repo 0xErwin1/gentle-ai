@@ -6,34 +6,34 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
-func TestAllAgentsIncludesOpenClaw(t *testing.T) {
+func TestAllAgentsIncludesPi(t *testing.T) {
 	agents := AllAgents()
 
 	for _, agent := range agents {
-		if agent.ID != model.AgentOpenClaw {
+		if agent.ID != model.AgentPi {
 			continue
 		}
 
-		if agent.Name != "OpenClaw" {
-			t.Fatalf("OpenClaw Name = %q, want OpenClaw", agent.Name)
+		if agent.Name != "Pi" {
+			t.Fatalf("Pi Name = %q, want Pi", agent.Name)
 		}
 
 		if agent.Tier != model.TierFull {
-			t.Fatalf("OpenClaw Tier = %q, want %q", agent.Tier, model.TierFull)
+			t.Fatalf("Pi Tier = %q, want %q", agent.Tier, model.TierFull)
 		}
 
-		if agent.ConfigPath != "~/.openclaw" {
-			t.Fatalf("OpenClaw ConfigPath = %q, want ~/.openclaw", agent.ConfigPath)
+		if agent.ConfigPath != "~/.pi" {
+			t.Fatalf("Pi ConfigPath = %q, want ~/.pi", agent.ConfigPath)
 		}
 
 		return
 	}
 
-	t.Fatalf("AllAgents() missing %s", model.AgentOpenClaw)
+	t.Fatalf("AllAgents() missing %s", model.AgentPi)
 }
 
-func TestIsSupportedAgentAcceptsOpenClaw(t *testing.T) {
-	if !IsSupportedAgent(model.AgentOpenClaw) {
-		t.Fatalf("IsSupportedAgent(%q) = false, want true", model.AgentOpenClaw)
+func TestIsSupportedAgentAcceptsPi(t *testing.T) {
+	if !IsSupportedAgent(model.AgentPi) {
+		t.Fatalf("IsSupportedAgent(%q) = false, want true", model.AgentPi)
 	}
 }
