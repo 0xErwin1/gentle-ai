@@ -30,6 +30,11 @@ pi install npm:gentle-pi
 pi install npm:gentle-engram
 pi install npm:pi-subagents
 pi install npm:pi-intercom
+pi install npm:@juicesharp/rpiv-ask-user-question
+pi install npm:pi-web-access
+pi install npm:pi-lens
+pi install npm:@juicesharp/rpiv-todo
+pi install npm:pi-btw
 ```
 
 | Package | What it adds |
@@ -38,6 +43,11 @@ pi install npm:pi-intercom
 | [`gentle-engram`](https://pi.dev/packages/gentle-engram) | Pi integration for Engram session memory and MCP tools. It is not the Engram binary itself. |
 | `pi-subagents` | Runs SDD agents discovered from `.pi/agents/`. |
 | `pi-intercom` | Lets child agents ask the parent Pi session for decisions while chains run. |
+| `@juicesharp/rpiv-ask-user-question` | Lets Pi child agents ask the active user session for clarification when they need human input. |
+| `pi-web-access` | Adds web access tools for Pi. |
+| `pi-lens` | Adds Pi visual/context inspection support. |
+| `@juicesharp/rpiv-todo` | Adds todo/task tracking support for Pi sessions. |
+| `pi-btw` | Adds BTW companion workflow support for Pi. |
 
 The real Engram component is provisioned separately by Gentle AI so `gentle-engram` has an Engram runtime to talk to.
 During that Engram provisioning step, Gentle AI also declares `npm:pi-mcp-adapter@2.5.4` in Pi config, adds the npm dependency, and activates the `engram` MCP server with `directTools` enabled. Existing unrelated Pi settings, package entries, npm dependencies, and MCP servers are preserved.

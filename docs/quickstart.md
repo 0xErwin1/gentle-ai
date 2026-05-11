@@ -60,7 +60,7 @@ When checks pass, installer reports:
 
 `You're ready. Run 'claude' or 'opencode' and start building.`
 
-For a Pi-only install, the plan shows the Pi package stack instead of Gentle AI components. It installs `gentle-pi`, `gentle-engram`, `pi-subagents`, and `pi-intercom` through `pi install npm:*` commands.
+For a Pi-only install, the plan shows the Pi package stack instead of Gentle AI components. It installs `gentle-pi`, `gentle-engram`, `pi-subagents`, `pi-intercom`, `@juicesharp/rpiv-ask-user-question`, `pi-web-access`, `pi-lens`, `@juicesharp/rpiv-todo`, and `pi-btw` through `pi install npm:*` commands.
 
 ## Unsupported platforms
 

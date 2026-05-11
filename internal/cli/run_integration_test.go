@@ -37,6 +37,15 @@ func assertFileContains(t *testing.T, path string, want string) {
 	}
 }
 
+func stringSliceContains(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRunInstallAppliesFilesystemChanges(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
@@ -109,6 +118,58 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 	for _, command := range commands {
 		if strings.Contains(command, "pi install npm:pi-mcp-adapter") {
 			t.Fatalf("pi-mcp-adapter must be provisioned through Pi config, not installed as a Pi package command; commands=%v", commands)
+		}
+	}
+}
+
+func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
+	binDir := t.TempDir()
+	fakePi := filepath.Join(binDir, "pi")
+	if err := os.WriteFile(fakePi, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("WriteFile(fake pi) error = %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	restorePreflightLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
+		if name == "pi" {
+			return fakePi, nil
+		}
+		return "", exec.ErrNotFound
+	})
+	t.Cleanup(restorePreflightLookPath)
+
+	restoreCommand := runCommand
+	t.Cleanup(func() { runCommand = restoreCommand })
+
+	var commands []string
+	runCommand = func(name string, args ...string) error {
+		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
+		return nil
+	}
+
+	step := agentInstallStep{
+		id:      "agent:pi",
+		agent:   model.AgentPi,
+		homeDir: t.TempDir(),
+	}
+
+	if err := step.Run(); err != nil {
+		t.Fatalf("agentInstallStep.Run() error = %v", err)
+	}
+
+	for _, want := range []string{
+		"pi install npm:gentle-pi",
+		"pi install npm:gentle-engram",
+		"pi install npm:pi-subagents",
+		"pi install npm:pi-intercom",
+		"pi install npm:@juicesharp/rpiv-ask-user-question",
+		"pi install npm:pi-web-access",
+		"pi install npm:pi-lens",
+		"pi install npm:@juicesharp/rpiv-todo",
+		"pi install npm:pi-btw",
+	} {
+		if !stringSliceContains(commands, want) {
+			t.Fatalf("commands missing %q; got %v", want, commands)
 		}
 	}
 }

@@ -461,7 +461,7 @@ func (s agentInstallStep) Run() error {
 	if err != nil {
 		return fmt.Errorf("detect agent %q: %w", s.agent, err)
 	}
-	if installed {
+	if installed && s.agent != model.AgentPi {
 		return nil
 	}
 
