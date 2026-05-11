@@ -48,6 +48,7 @@ func TestAdapterPaths(t *testing.T) {
 	a := NewAdapter()
 	homeDir := t.TempDir()
 	piDir := filepath.Join(homeDir, ".pi")
+	piAgentDir := filepath.Join(piDir, "agent")
 
 	tests := []struct {
 		name string
@@ -58,9 +59,9 @@ func TestAdapterPaths(t *testing.T) {
 		{"SystemPromptDir", a.SystemPromptDir(homeDir), ""},
 		{"SystemPromptFile", a.SystemPromptFile(homeDir), ""},
 		{"SkillsDir", a.SkillsDir(homeDir), ""},
-		{"SettingsPath", a.SettingsPath(homeDir), filepath.Join(piDir, "settings.json")},
+		{"SettingsPath", a.SettingsPath(homeDir), filepath.Join(piAgentDir, "settings.json")},
 		{"CommandsDir", a.CommandsDir(homeDir), ""},
-		{"MCPConfigPath", a.MCPConfigPath(homeDir, "context7"), filepath.Join(piDir, "mcp.json")},
+		{"MCPConfigPath", a.MCPConfigPath(homeDir, "context7"), filepath.Join(piAgentDir, "mcp.json")},
 		{"OutputStyleDir", a.OutputStyleDir(homeDir), ""},
 		{"SubAgentsDir", a.SubAgentsDir(homeDir), ""},
 		{"EmbeddedSubAgentsDir", a.EmbeddedSubAgentsDir(), ""},
@@ -147,6 +148,8 @@ func TestAdapterInstallCommandSequenceIsExact(t *testing.T) {
 	want := [][]string{
 		{"pi", "install", "npm:gentle-pi"},
 		{"pi", "install", "npm:gentle-engram"},
+		{"pi", "install", "npm:pi-mcp-adapter"},
+		{"npm", "exec", "--yes", "--package", "gentle-engram", "--", "pi-engram", "init"},
 		{"pi", "install", "npm:pi-subagents"},
 		{"pi", "install", "npm:pi-intercom"},
 		{"pi", "install", "npm:@juicesharp/rpiv-ask-user-question"},

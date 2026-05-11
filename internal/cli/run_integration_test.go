@@ -110,14 +110,14 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 		t.Fatalf("verification ready = false, report = %#v", result.Verify)
 	}
 
-	assertFileContains(t, filepath.Join(home, ".pi", "settings.json"), "npm:pi-mcp-adapter")
+	assertFileContains(t, filepath.Join(home, ".pi", "agent", "settings.json"), "npm:pi-mcp-adapter")
 	assertFileContains(t, filepath.Join(home, ".pi", "npm", "package.json"), "pi-mcp-adapter")
-	assertFileContains(t, filepath.Join(home, ".pi", "mcp.json"), "directTools")
+	assertFileContains(t, filepath.Join(home, ".pi", "agent", "mcp.json"), "directTools")
 	assertFileContains(t, filepath.Join(home, ".config", "opencode", "opencode.json"), "engram")
 
-	for _, command := range commands {
-		if strings.Contains(command, "pi install npm:pi-mcp-adapter") {
-			t.Fatalf("pi-mcp-adapter must be provisioned through Pi config, not installed as a Pi package command; commands=%v", commands)
+	for _, want := range []string{"pi install npm:pi-mcp-adapter", "npm exec --yes --package gentle-engram -- pi-engram init"} {
+		if !stringSliceContains(commands, want) {
+			t.Fatalf("commands missing %q; got %v", want, commands)
 		}
 	}
 }
@@ -160,6 +160,8 @@ func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 	for _, want := range []string{
 		"pi install npm:gentle-pi",
 		"pi install npm:gentle-engram",
+		"pi install npm:pi-mcp-adapter",
+		"npm exec --yes --package gentle-engram -- pi-engram init",
 		"pi install npm:pi-subagents",
 		"pi install npm:pi-intercom",
 		"pi install npm:@juicesharp/rpiv-ask-user-question",

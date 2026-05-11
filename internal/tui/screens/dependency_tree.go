@@ -97,6 +97,8 @@ func piInstallCommands() []string {
 	return []string{
 		"pi install npm:gentle-pi",
 		"pi install npm:gentle-engram",
+		"pi install npm:pi-mcp-adapter",
+		"npm exec --yes --package gentle-engram -- pi-engram init",
 		"pi install npm:pi-subagents",
 		"pi install npm:pi-intercom",
 		"pi install npm:@juicesharp/rpiv-ask-user-question",

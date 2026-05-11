@@ -17,10 +17,10 @@ import (
 
 const (
 	piMCPAdapterPackage      = "npm:pi-mcp-adapter"
-	piMCPAdapterPackageSpec  = "npm:pi-mcp-adapter@2.5.4"
+	piMCPAdapterPackageSpec  = "npm:pi-mcp-adapter"
 	piMCPAdapterDependency   = "pi-mcp-adapter"
-	piMCPAdapterVersion      = "2.5.4"
-	piMCPAdapterVersionRange = "^2.5.4"
+	piMCPAdapterVersion      = "2.6.0"
+	piMCPAdapterVersionRange = "^2.6.0"
 	piEngramMCPActiveServer  = "engram"
 	piEngramMCPConfigFile    = "mcp.json"
 	piSettingsFile           = "settings.json"
@@ -73,6 +73,8 @@ func (a *Adapter) InstallCommand(system.PlatformProfile) ([][]string, error) {
 	return [][]string{
 		{"pi", "install", "npm:gentle-pi"},
 		{"pi", "install", "npm:gentle-engram"},
+		{"pi", "install", "npm:pi-mcp-adapter"},
+		{"npm", "exec", "--yes", "--package", "gentle-engram", "--", "pi-engram", "init"},
 		{"pi", "install", "npm:pi-subagents"},
 		{"pi", "install", "npm:pi-intercom"},
 		{"pi", "install", "npm:@juicesharp/rpiv-ask-user-question"},
@@ -92,7 +94,7 @@ func (a *Adapter) SystemPromptFile(string) string { return "" }
 func (a *Adapter) SkillsDir(string) string { return "" }
 
 func (a *Adapter) SettingsPath(homeDir string) string {
-	return filepath.Join(ConfigPath(homeDir), piSettingsFile)
+	return filepath.Join(AgentConfigPath(homeDir), piSettingsFile)
 }
 
 func (a *Adapter) SystemPromptStrategy() model.SystemPromptStrategy {
@@ -102,7 +104,7 @@ func (a *Adapter) SystemPromptStrategy() model.SystemPromptStrategy {
 func (a *Adapter) MCPStrategy() model.MCPStrategy { return model.StrategyMCPConfigFile }
 
 func (a *Adapter) MCPConfigPath(homeDir string, _ string) string {
-	return filepath.Join(ConfigPath(homeDir), piEngramMCPConfigFile)
+	return filepath.Join(AgentConfigPath(homeDir), piEngramMCPConfigFile)
 }
 
 func (a *Adapter) SupportsOutputStyles() bool { return false }
@@ -127,6 +129,9 @@ func (a *Adapter) SupportsMCP() bool { return true }
 
 // ConfigPath returns Pi's global config directory path.
 func ConfigPath(homeDir string) string { return filepath.Join(homeDir, ".pi") }
+
+// AgentConfigPath returns Pi's current agent-owned config directory path.
+func AgentConfigPath(homeDir string) string { return filepath.Join(ConfigPath(homeDir), "agent") }
 
 // ProvisionEngramMCP declares and wires pi-mcp-adapter so Pi exposes the
 // Engram MCP server through /mcp. It is invoked by ComponentEngram; keeping it

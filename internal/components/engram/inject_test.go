@@ -231,13 +231,13 @@ func TestInjectPiProvisioningCreatesMissingMCPAdapterFiles(t *testing.T) {
 		t.Fatalf("Inject() changed = false")
 	}
 
-	settings := readJSONFile(t, filepath.Join(home, ".pi", "settings.json"))
-	assertNestedStrings(t, settings, []string{"npm:pi-mcp-adapter@2.5.4"}, "packages")
+	settings := readJSONFile(t, filepath.Join(home, ".pi", "agent", "settings.json"))
+	assertNestedStrings(t, settings, []string{"npm:pi-mcp-adapter"}, "packages")
 
 	npmPackage := readJSONFile(t, filepath.Join(home, ".pi", "npm", "package.json"))
-	assertNestedString(t, npmPackage, "^2.5.4", "dependencies", "pi-mcp-adapter")
+	assertNestedString(t, npmPackage, "^2.6.0", "dependencies", "pi-mcp-adapter")
 
-	mcp := readJSONFile(t, filepath.Join(home, ".pi", "mcp.json"))
+	mcp := readJSONFile(t, filepath.Join(home, ".pi", "agent", "mcp.json"))
 	assertNestedString(t, mcp, "engram", "activeMCP")
 	assertNestedString(t, mcp, "engram", "mcpServers", "engram", "command")
 	assertNestedStrings(t, mcp, []string{"mcp", "--tools=agent"}, "mcpServers", "engram", "args")
@@ -246,26 +246,26 @@ func TestInjectPiProvisioningCreatesMissingMCPAdapterFiles(t *testing.T) {
 
 func TestInjectPiProvisioningPreservesUnrelatedContent(t *testing.T) {
 	home := t.TempDir()
-	writeFile(t, filepath.Join(home, ".pi", "settings.json"), `{"theme":"kanagawa","packages":["npm:other@1.0.0"]}`)
+	writeFile(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{"theme":"kanagawa","packages":["npm:other@1.0.0"]}`)
 	writeFile(t, filepath.Join(home, ".pi", "npm", "package.json"), `{"name":"pi-user","dependencies":{"left-pad":"^1.0.0"},"devDependencies":{"vitest":"^1.0.0"}}`)
-	writeFile(t, filepath.Join(home, ".pi", "mcp.json"), `{"activeMCP":"other","mcpServers":{"other":{"command":"other-mcp"}},"metadata":{"owner":"user"}}`)
+	writeFile(t, filepath.Join(home, ".pi", "agent", "mcp.json"), `{"activeMCP":"other","mcpServers":{"other":{"command":"other-mcp"}},"metadata":{"owner":"user"}}`)
 
 	_, err := Inject(home, piAdapter())
 	if err != nil {
 		t.Fatalf("Inject() error = %v", err)
 	}
 
-	settings := readJSONFile(t, filepath.Join(home, ".pi", "settings.json"))
+	settings := readJSONFile(t, filepath.Join(home, ".pi", "agent", "settings.json"))
 	assertNestedString(t, settings, "kanagawa", "theme")
-	assertNestedStringsUnordered(t, settings, []string{"npm:other@1.0.0", "npm:pi-mcp-adapter@2.5.4"}, "packages")
+	assertNestedStringsUnordered(t, settings, []string{"npm:other@1.0.0", "npm:pi-mcp-adapter"}, "packages")
 
 	npmPackage := readJSONFile(t, filepath.Join(home, ".pi", "npm", "package.json"))
 	assertNestedString(t, npmPackage, "pi-user", "name")
 	assertNestedString(t, npmPackage, "^1.0.0", "dependencies", "left-pad")
-	assertNestedString(t, npmPackage, "^2.5.4", "dependencies", "pi-mcp-adapter")
+	assertNestedString(t, npmPackage, "^2.6.0", "dependencies", "pi-mcp-adapter")
 	assertNestedString(t, npmPackage, "^1.0.0", "devDependencies", "vitest")
 
-	mcp := readJSONFile(t, filepath.Join(home, ".pi", "mcp.json"))
+	mcp := readJSONFile(t, filepath.Join(home, ".pi", "agent", "mcp.json"))
 	assertNestedString(t, mcp, "engram", "activeMCP")
 	assertNestedString(t, mcp, "other-mcp", "mcpServers", "other", "command")
 	assertNestedString(t, mcp, "user", "metadata", "owner")
@@ -274,9 +274,9 @@ func TestInjectPiProvisioningPreservesUnrelatedContent(t *testing.T) {
 
 func TestInjectPiProvisioningCanonicalizesExistingEntriesAndIsIdempotent(t *testing.T) {
 	home := t.TempDir()
-	writeFile(t, filepath.Join(home, ".pi", "settings.json"), `{"packages":["npm:pi-mcp-adapter@2.0.0"]}`)
+	writeFile(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{"packages":["npm:pi-mcp-adapter@2.0.0"]}`)
 	writeFile(t, filepath.Join(home, ".pi", "npm", "package.json"), `{"dependencies":{"pi-mcp-adapter":"^2.0.0"}}`)
-	writeFile(t, filepath.Join(home, ".pi", "mcp.json"), `{"activeMCP":"legacy","mcpServers":{"engram":{"command":"old-engram","args":["mcp"],"directTools":false,"env":{"STALE":"1"}}}}`)
+	writeFile(t, filepath.Join(home, ".pi", "agent", "mcp.json"), `{"activeMCP":"legacy","mcpServers":{"engram":{"command":"old-engram","args":["mcp"],"directTools":false,"env":{"STALE":"1"}}}}`)
 
 	first, err := Inject(home, piAdapter())
 	if err != nil {
@@ -286,11 +286,11 @@ func TestInjectPiProvisioningCanonicalizesExistingEntriesAndIsIdempotent(t *test
 		t.Fatalf("Inject() first changed = false")
 	}
 
-	settings := readJSONFile(t, filepath.Join(home, ".pi", "settings.json"))
-	assertNestedStrings(t, settings, []string{"npm:pi-mcp-adapter@2.5.4"}, "packages")
+	settings := readJSONFile(t, filepath.Join(home, ".pi", "agent", "settings.json"))
+	assertNestedStrings(t, settings, []string{"npm:pi-mcp-adapter"}, "packages")
 	npmPackage := readJSONFile(t, filepath.Join(home, ".pi", "npm", "package.json"))
-	assertNestedString(t, npmPackage, "^2.5.4", "dependencies", "pi-mcp-adapter")
-	mcp := readJSONFile(t, filepath.Join(home, ".pi", "mcp.json"))
+	assertNestedString(t, npmPackage, "^2.6.0", "dependencies", "pi-mcp-adapter")
+	mcp := readJSONFile(t, filepath.Join(home, ".pi", "agent", "mcp.json"))
 	assertNestedString(t, mcp, "engram", "activeMCP")
 	assertNestedString(t, mcp, "engram", "mcpServers", "engram", "command")
 	assertNestedStrings(t, mcp, []string{"mcp", "--tools=agent"}, "mcpServers", "engram", "args")
@@ -308,16 +308,16 @@ func TestInjectPiProvisioningCanonicalizesExistingEntriesAndIsIdempotent(t *test
 
 func TestInjectPiProvisioningMigratesLegacyObjectPackages(t *testing.T) {
 	home := t.TempDir()
-	writeFile(t, filepath.Join(home, ".pi", "settings.json"), `{"theme":"kanagawa","packages":{"npm:other":"1.0.0","npm:pi-mcp-adapter":"2.0.0"}}`)
+	writeFile(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{"theme":"kanagawa","packages":{"npm:other":"1.0.0","npm:pi-mcp-adapter":"2.0.0"}}`)
 
 	_, err := Inject(home, piAdapter())
 	if err != nil {
 		t.Fatalf("Inject() error = %v", err)
 	}
 
-	settings := readJSONFile(t, filepath.Join(home, ".pi", "settings.json"))
+	settings := readJSONFile(t, filepath.Join(home, ".pi", "agent", "settings.json"))
 	assertNestedString(t, settings, "kanagawa", "theme")
-	assertNestedStringsUnordered(t, settings, []string{"npm:other@1.0.0", "npm:pi-mcp-adapter@2.5.4"}, "packages")
+	assertNestedStringsUnordered(t, settings, []string{"npm:other@1.0.0", "npm:pi-mcp-adapter"}, "packages")
 }
 
 // TestInjectOpenCodeMigratesFromOldFormat verifies that when a user's
@@ -1314,6 +1314,8 @@ func TestQwenEngramIdempotency(t *testing.T) {
 }
 
 func TestInjectOpenClawMergesEngramIntoMCPServersPreservingStdioAndRemoteFields(t *testing.T) {
+	mockEngramLookPath(t, "engram", "")
+
 	home := t.TempDir()
 	adapter := openclawAdapter()
 	configPath := adapter.SettingsPath(home)
