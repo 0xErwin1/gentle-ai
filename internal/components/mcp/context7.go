@@ -1,8 +1,8 @@
 package mcp
 
-var defaultContext7ServerJSON = []byte("{\n  \"command\": \"npx\",\n  \"args\": [\n    \"-y\",\n    \"@upstash/context7-mcp\"\n  ]\n}\n")
+var defaultContext7ServerJSON = []byte("{\n  \"command\": \"npx\",\n  \"args\": [\n    \"-y\",\n    \"--package=@upstash/context7-mcp@2.2.5\",\n    \"--\",\n    \"context7-mcp\"\n  ]\n}\n")
 
-var defaultContext7OverlayJSON = []byte("{\n  \"mcpServers\": {\n    \"context7\": {\n      \"command\": \"npx\",\n      \"args\": [\n        \"-y\",\n        \"@upstash/context7-mcp\"\n      ]\n    }\n  }\n}\n")
+var defaultContext7OverlayJSON = []byte("{\n  \"mcpServers\": {\n    \"context7\": {\n      \"command\": \"npx\",\n      \"args\": [\n        \"-y\",\n        \"--package=@upstash/context7-mcp@2.2.5\",\n        \"--\",\n        \"context7-mcp\"\n      ]\n    }\n  }\n}\n")
 
 // openCodeContext7OverlayJSON is the opencode.json overlay using the new MCP format.
 // Context7 is a remote MCP server — no npx needed.
@@ -11,7 +11,7 @@ var openCodeContext7OverlayJSON = []byte("{\n  \"mcp\": {\n    \"context7\": {\n
 // openClawContext7OverlayJSON is the OpenClaw openclaw.json overlay.
 // OpenClaw rejects top-level mcpServers and expects MCP entries under
 // mcp.servers.
-var openClawContext7OverlayJSON = []byte("{\n  \"mcp\": {\n    \"servers\": {\n      \"context7\": {\n        \"command\": \"npx\",\n        \"args\": [\n          \"-y\",\n          \"@upstash/context7-mcp\"\n        ]\n      }\n    }\n  }\n}\n")
+var openClawContext7OverlayJSON = []byte("{\n  \"mcp\": {\n    \"servers\": {\n      \"context7\": {\n        \"command\": \"npx\",\n        \"args\": [\n          \"-y\",\n          \"--package=@upstash/context7-mcp@2.2.5\",\n          \"--\",\n          \"context7-mcp\"\n        ]\n      }\n    }\n  }\n}\n")
 
 // vsCodeContext7OverlayJSON is the VS Code mcp.json overlay using the "servers" key.
 var vsCodeContext7OverlayJSON = []byte("{\n  \"servers\": {\n    \"context7\": {\n      \"type\": \"http\",\n      \"url\": \"https://mcp.context7.com/mcp\"\n    }\n  }\n}\n")

@@ -65,11 +65,12 @@ func (a *Adapter) SupportsAutoInstall() bool {
 }
 
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
-	// Codex CLI installs via npm on all platforms.
+	// Codex CLI installs via npm on all platforms. Version is pinned and
+	// postinstall scripts are blocked to mitigate supply-chain risk.
 	if profile.OS == "linux" && !profile.NpmWritable {
-		return [][]string{{"sudo", "npm", "install", "-g", "@openai/codex"}}, nil
+		return [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@openai/codex@0.130.0"}}, nil
 	}
-	return [][]string{{"npm", "install", "-g", "@openai/codex"}}, nil
+	return [][]string{{"npm", "install", "-g", "--ignore-scripts", "@openai/codex@0.130.0"}}, nil
 }
 
 // --- Config paths ---

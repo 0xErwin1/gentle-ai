@@ -65,11 +65,12 @@ func (a *Adapter) SupportsAutoInstall() bool {
 }
 
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
-	// Gemini CLI installs via npm on all platforms.
+	// Gemini CLI installs via npm on all platforms. Version is pinned and
+	// postinstall scripts are blocked to mitigate supply-chain risk.
 	if profile.OS == "linux" && !profile.NpmWritable {
-		return [][]string{{"sudo", "npm", "install", "-g", "@google/gemini-cli"}}, nil
+		return [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@google/gemini-cli@0.41.2"}}, nil
 	}
-	return [][]string{{"npm", "install", "-g", "@google/gemini-cli"}}, nil
+	return [][]string{{"npm", "install", "-g", "--ignore-scripts", "@google/gemini-cli@0.41.2"}}, nil
 }
 
 // --- Config paths ---

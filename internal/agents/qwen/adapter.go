@@ -69,11 +69,12 @@ func (a *Adapter) SupportsAutoInstall() bool {
 }
 
 func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
-	// Qwen Code installs via npm on all platforms.
+	// Qwen Code installs via npm on all platforms. Version is pinned and
+	// postinstall scripts are blocked to mitigate supply-chain risk.
 	if profile.OS == "linux" && !profile.NpmWritable {
-		return [][]string{{"sudo", "npm", "install", "-g", "@qwen-code/qwen-code@latest"}}, nil
+		return [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@qwen-code/qwen-code@0.15.10"}}, nil
 	}
-	return [][]string{{"npm", "install", "-g", "@qwen-code/qwen-code@latest"}}, nil
+	return [][]string{{"npm", "install", "-g", "--ignore-scripts", "@qwen-code/qwen-code@0.15.10"}}, nil
 }
 
 // --- Config paths ---

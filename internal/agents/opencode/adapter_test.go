@@ -104,22 +104,22 @@ func TestInstallCommand(t *testing.T) {
 		{
 			name:    "ubuntu resolves npm install",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "opencode-ai"}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@1.14.48"}},
 		},
 		{
 			name:    "arch resolves npm install",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "opencode-ai"}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@1.14.48"}},
 		},
 		{
 			name:    "fedora resolves npm install",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "opencode-ai"}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@1.14.48"}},
 		},
 		{
 			name:    "fedora with writable npm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf", NpmWritable: true},
-			want:    [][]string{{"npm", "install", "-g", "opencode-ai"}},
+			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@1.14.48"}},
 		},
 		{
 			name:    "unsupported package manager returns error",

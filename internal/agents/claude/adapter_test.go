@@ -118,17 +118,17 @@ func TestInstallCommand(t *testing.T) {
 		{
 			name:    "darwin profile uses npm without sudo",
 			profile: system.PlatformProfile{OS: "darwin", PackageManager: "brew"},
-			want:    [][]string{{"npm", "install", "-g", "@anthropic-ai/claude-code"}},
+			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@2.1.140"}},
 		},
 		{
 			name:    "ubuntu profile uses sudo npm",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "@anthropic-ai/claude-code"}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@2.1.140"}},
 		},
 		{
 			name:    "arch profile uses sudo npm",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "@anthropic-ai/claude-code"}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "@anthropic-ai/claude-code@2.1.140"}},
 		},
 	}
 
