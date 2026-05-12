@@ -4424,7 +4424,7 @@ func TestEnsureClaudeSkillRegistryHookAppendsIdempotently(t *testing.T) {
         ]
       }
     ],
-    "SessionStart": [
+    "UserPromptSubmit": [
       {
         "matcher": "startup",
         "hooks": [
@@ -4498,7 +4498,7 @@ func TestEnsureClaudeSkillRegistryHookRejectsUnexpectedHookSchema(t *testing.T) 
 	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	original := []byte(`{"hooks":{"SessionStart":{"bad":true}}}`)
+	original := []byte(`{"hooks":{"UserPromptSubmit":{"bad":true}}}`)
 	if err := os.WriteFile(settingsPath, original, 0o644); err != nil {
 		t.Fatal(err)
 	}

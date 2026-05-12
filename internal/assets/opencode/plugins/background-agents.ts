@@ -1392,9 +1392,14 @@ export const BackgroundAgents: Plugin = async (ctx) => {
   const manager = new DelegationManager(client as OpencodeClient, baseDir, log)
 
   await manager.debugLog("BackgroundAgents initialized with delegation system")
-  await refreshSkillRegistry(directory, (level, message) => {
-    manager.debugLog(`[${level}] ${message}`).catch(() => {})
-  })
+  let skillRegistryRefreshStarted = false
+  const refreshSkillRegistryOnce = async () => {
+    if (skillRegistryRefreshStarted) return
+    skillRegistryRefreshStarted = true
+    await refreshSkillRegistry(directory, (level, message) => {
+      manager.debugLog(`[${level}] ${message}`).catch(() => {})
+    })
+  }
 
   return {
     tool: {
@@ -1409,6 +1414,7 @@ export const BackgroundAgents: Plugin = async (ctx) => {
 
     // Inject delegation rules into system prompt
     "experimental.chat.system.transform": async (_input: SystemTransformInput, output) => {
+      await refreshSkillRegistryOnce()
       const combined = [...output.system, DELEGATION_RULES].join("\n\n---\n\n")
       output.system = [combined]
     },

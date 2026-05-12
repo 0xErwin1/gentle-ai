@@ -834,47 +834,49 @@ func removeClaudeSkillRegistryHook(raw []byte) ([]byte, bool, error) {
 	if !ok {
 		return raw, false, nil
 	}
-	sessionStart, ok := hooksMap["SessionStart"].([]any)
-	if !ok {
-		return raw, false, nil
-	}
 	changed := false
-	keptEntries := make([]any, 0, len(sessionStart))
-	for _, entry := range sessionStart {
-		entryMap, ok := entry.(map[string]any)
+	for _, hookKey := range []string{"UserPromptSubmit", "SessionStart"} {
+		entries, ok := hooksMap[hookKey].([]any)
 		if !ok {
-			keptEntries = append(keptEntries, entry)
 			continue
 		}
-		hooks, ok := entryMap["hooks"].([]any)
-		if !ok {
-			keptEntries = append(keptEntries, entry)
-			continue
-		}
-		keptHooks := make([]any, 0, len(hooks))
-		for _, hook := range hooks {
-			hookMap, ok := hook.(map[string]any)
-			cmd, _ := hookMap["command"].(string)
-			if ok && strings.Contains(cmd, "gentle-ai skill-registry refresh") {
+		keptEntries := make([]any, 0, len(entries))
+		for _, entry := range entries {
+			entryMap, ok := entry.(map[string]any)
+			if !ok {
+				keptEntries = append(keptEntries, entry)
+				continue
+			}
+			hooks, ok := entryMap["hooks"].([]any)
+			if !ok {
+				keptEntries = append(keptEntries, entry)
+				continue
+			}
+			keptHooks := make([]any, 0, len(hooks))
+			for _, hook := range hooks {
+				hookMap, ok := hook.(map[string]any)
+				cmd, _ := hookMap["command"].(string)
+				if ok && strings.Contains(cmd, "gentle-ai skill-registry refresh") {
+					changed = true
+					continue
+				}
+				keptHooks = append(keptHooks, hook)
+			}
+			if len(keptHooks) == 0 {
 				changed = true
 				continue
 			}
-			keptHooks = append(keptHooks, hook)
+			entryMap["hooks"] = keptHooks
+			keptEntries = append(keptEntries, entryMap)
 		}
-		if len(keptHooks) == 0 {
-			changed = true
-			continue
+		if len(keptEntries) == 0 {
+			delete(hooksMap, hookKey)
+		} else {
+			hooksMap[hookKey] = keptEntries
 		}
-		entryMap["hooks"] = keptHooks
-		keptEntries = append(keptEntries, entryMap)
 	}
 	if !changed {
 		return raw, false, nil
-	}
-	if len(keptEntries) == 0 {
-		delete(hooksMap, "SessionStart")
-	} else {
-		hooksMap["SessionStart"] = keptEntries
 	}
 	if len(hooksMap) == 0 {
 		delete(root, "hooks")

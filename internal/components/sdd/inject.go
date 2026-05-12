@@ -935,12 +935,12 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 	if hooksMap == nil {
 		hooksMap = map[string]any{}
 	}
-	sessionRaw, hasSessionStart := hooksMap["SessionStart"]
-	sessionStart, _ := sessionRaw.([]any)
-	if hasSessionStart && sessionStart == nil {
-		return false, fmt.Errorf("Claude settings %q has unsupported hooks.SessionStart shape: want array", settingsPath)
+	promptRaw, hasUserPromptSubmit := hooksMap["UserPromptSubmit"]
+	userPromptSubmit, _ := promptRaw.([]any)
+	if hasUserPromptSubmit && userPromptSubmit == nil {
+		return false, fmt.Errorf("Claude settings %q has unsupported hooks.UserPromptSubmit shape: want array", settingsPath)
 	}
-	sessionStart = append(sessionStart, map[string]any{
+	userPromptSubmit = append(userPromptSubmit, map[string]any{
 		"matcher": "",
 		"hooks": []any{
 			map[string]any{
@@ -949,7 +949,7 @@ func ensureClaudeSkillRegistryHook(settingsPath string) (bool, error) {
 			},
 		},
 	})
-	hooksMap["SessionStart"] = sessionStart
+	hooksMap["UserPromptSubmit"] = userPromptSubmit
 	root["hooks"] = hooksMap
 
 	out, err := json.MarshalIndent(root, "", "  ")
@@ -969,11 +969,20 @@ func claudeHookExists(root map[string]any, command string) bool {
 	if !ok {
 		return false
 	}
-	sessionStart, ok := hooksMap["SessionStart"].([]any)
-	if !ok {
-		return false
+	for _, key := range []string{"UserPromptSubmit", "SessionStart"} {
+		hookEntries, ok := hooksMap[key].([]any)
+		if !ok {
+			continue
+		}
+		if claudeHookListContains(hookEntries, command) {
+			return true
+		}
 	}
-	for _, item := range sessionStart {
+	return false
+}
+
+func claudeHookListContains(hookEntries []any, command string) bool {
+	for _, item := range hookEntries {
 		itemMap, ok := item.(map[string]any)
 		if !ok {
 			continue
