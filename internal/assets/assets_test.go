@@ -472,7 +472,11 @@ func TestSDDOrchestratorAssetsScopedToDedicatedAgent(t *testing.T) {
 			if assetPath == "opencode/sdd-orchestrator.md" {
 				dedicatedAgent = "gentle-orchestrator"
 			}
-			if !strings.Contains(content, "dedicated `"+dedicatedAgent+"`") {
+			if assetPath == "claude/sdd-orchestrator.md" {
+				if !strings.Contains(content, "Claude Code orchestrator rule") {
+					t.Fatalf("%q missing Claude rule scoping note", assetPath)
+				}
+			} else if !strings.Contains(content, "dedicated `"+dedicatedAgent+"`") {
 				t.Fatalf("%q missing dedicated-agent scoping note", assetPath)
 			}
 			if !strings.Contains(content, "Do NOT apply it to executor phase agents") {

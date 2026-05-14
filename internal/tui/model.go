@@ -837,6 +837,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if m.ModelConfigMode {
 					m.ModelConfigMode = false
 					m.PendingSyncOverrides = &model.SyncOverrides{
+						TargetAgents:           []model.AgentID{model.AgentClaudeCode},
 						ClaudeModelAssignments: updated,
 					}
 					m = m.withResetSyncState()
@@ -883,6 +884,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if m.ModelConfigMode {
 					m.ModelConfigMode = false
 					m.PendingSyncOverrides = &model.SyncOverrides{
+						TargetAgents:         []model.AgentID{model.AgentKiroIDE},
 						KiroModelAssignments: updated,
 					}
 					m = m.withResetSyncState()
@@ -1599,6 +1601,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			if m.ModelConfigMode {
 				m.ModelConfigMode = false
 				m.PendingSyncOverrides = &model.SyncOverrides{
+					TargetAgents:     []model.AgentID{model.AgentOpenCode},
 					ModelAssignments: m.Selection.ModelAssignments,
 					SDDMode:          model.SDDModeMulti,
 				}
@@ -3399,7 +3402,8 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 		case 0: // "Create & Sync" / "Save & Sync"
 			draft := m.ProfileDraft
 			m.PendingSyncOverrides = &model.SyncOverrides{
-				Profiles: []model.Profile{draft},
+				TargetAgents: []model.AgentID{model.AgentOpenCode},
+				Profiles:     []model.Profile{draft},
 			}
 			m = m.withResetSyncState()
 			m.setScreen(ScreenSync)
