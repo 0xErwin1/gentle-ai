@@ -160,11 +160,53 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(opencode/plugins) error = %v", err)
 	}
-	if len(pluginEntries) != 1 {
-		t.Fatalf("opencode plugins count = %d, want 1", len(pluginEntries))
+	if len(pluginEntries) != 2 {
+		t.Fatalf("opencode plugins count = %d, want 2", len(pluginEntries))
 	}
-	if pluginEntries[0].Name() != "background-agents.ts" {
-		t.Fatalf("plugin entry = %q, want background-agents.ts", pluginEntries[0].Name())
+	wantPlugins := map[string]bool{"background-agents.ts": true, "model-variants.ts": true}
+	for _, entry := range pluginEntries {
+		if !wantPlugins[entry.Name()] {
+			t.Fatalf("unexpected plugin entry = %q", entry.Name())
+		}
+	}
+}
+
+// TestModelVariantsPluginContract verifies the embedded model-variants.ts
+// plugin keeps the contract enforced by PR #440 review: atomic write via
+// tmp+rename, always-write semantics (no early return on empty variants),
+// and visible error logging instead of silent failure.
+func TestModelVariantsPluginContract(t *testing.T) {
+	source, err := Read("opencode/plugins/model-variants.ts")
+	if err != nil {
+		t.Fatalf("Read(model-variants.ts) error = %v", err)
+	}
+	src := string(source)
+
+	// Atomic write: must import rename and write to a .tmp file before renaming.
+	if !strings.Contains(src, "rename") {
+		t.Errorf("model-variants.ts must use rename() for atomic write")
+	}
+	if !strings.Contains(src, ".tmp") {
+		t.Errorf("model-variants.ts must write to a .tmp file before rename()")
+	}
+
+	// Always-write semantics: the cache must be written unconditionally so an
+	// empty variants object overwrites a stale cache from a previous run.
+	// Reject any guard on `Object.keys(variants).length` that could short-circuit
+	// the write path.
+	if strings.Contains(src, "Object.keys(variants).length") {
+		t.Errorf("model-variants.ts must not gate the write on variants length (allows stale cache to survive)")
+	}
+	if !strings.Contains(src, "JSON.stringify(variants") {
+		t.Errorf("model-variants.ts must serialize the variants object — even when empty — to overwrite stale cache")
+	}
+
+	// Errors must be logged, not swallowed silently.
+	if strings.Contains(src, "} catch {") {
+		t.Errorf("model-variants.ts must not have a parameterless `catch {}` block (silences ENOSPC/EACCES)")
+	}
+	if !strings.Contains(src, "console.error") {
+		t.Errorf("model-variants.ts must log errors via console.error so users see failures")
 	}
 }
 

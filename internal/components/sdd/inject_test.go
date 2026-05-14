@@ -2901,6 +2901,146 @@ func TestInjectModelAssignmentsFunction(t *testing.T) {
 	}
 }
 
+// TestInjectModelAssignments_ReasoningEffortInjected verifies that when an
+// assignment has a non-empty Effort, the "variant" key is written into
+// the agent map alongside "model".
+func TestInjectModelAssignments_VariantInjected(t *testing.T) {
+	overlayJSON := []byte(`{
+  "agent": {
+    "sdd-apply": {"mode": "subagent", "prompt": "test"}
+  }
+}`)
+
+	assignments := map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-opus-4", Effort: "medium"},
+	}
+
+	result, err := injectModelAssignments(overlayJSON, assignments, "", nil)
+	if err != nil {
+		t.Fatalf("injectModelAssignments() error = %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("Unmarshal result error = %v", err)
+	}
+
+	agents := parsed["agent"].(map[string]any)
+	applyAgent := agents["sdd-apply"].(map[string]any)
+	if re, _ := applyAgent["variant"].(string); re != "medium" {
+		t.Errorf("variant = %q, want %q", re, "medium")
+	}
+}
+
+// TestInjectModelAssignments_EmptyEffortSetsEmptyVariant verifies that when
+// Effort is empty, the "variant" key is set to "" so the deep merge overwrites
+// any pre-existing variant in the user's config.
+func TestInjectModelAssignments_EmptyEffortSetsEmptyVariant(t *testing.T) {
+	overlayJSON := []byte(`{
+  "agent": {
+    "sdd-apply": {"mode": "subagent", "prompt": "test"}
+  }
+}`)
+
+	assignments := map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "anthropic", ModelID: "claude-sonnet-4", Effort: ""},
+	}
+
+	result, err := injectModelAssignments(overlayJSON, assignments, "", nil)
+	if err != nil {
+		t.Fatalf("injectModelAssignments() error = %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("Unmarshal result error = %v", err)
+	}
+
+	agents := parsed["agent"].(map[string]any)
+	applyAgent := agents["sdd-apply"].(map[string]any)
+	v, hasKey := applyAgent["variant"].(string)
+	if !hasKey {
+		t.Fatal("variant key must be present (as empty string) to overwrite base during merge")
+	}
+	if v != "" {
+		t.Errorf("variant = %q, want empty string", v)
+	}
+}
+
+// TestInjectModelAssignments_StaleVariantOverwritten verifies that when switching
+// from a reasoning model to a non-reasoning model (Effort=""), a pre-existing
+// "variant" key in the overlay is overwritten with "".
+func TestInjectModelAssignments_StaleVariantOverwritten(t *testing.T) {
+	overlayJSON := []byte(`{
+  "agent": {
+    "sdd-apply": {"mode": "subagent", "prompt": "test", "variant": "high"}
+  }
+}`)
+
+	assignments := map[string]model.ModelAssignment{
+		"sdd-apply": {ProviderID: "openai", ModelID: "gpt-4o", Effort: ""},
+	}
+
+	result, err := injectModelAssignments(overlayJSON, assignments, "", nil)
+	if err != nil {
+		t.Fatalf("injectModelAssignments() error = %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("Unmarshal result error = %v", err)
+	}
+
+	agents := parsed["agent"].(map[string]any)
+	applyAgent := agents["sdd-apply"].(map[string]any)
+	v, _ := applyAgent["variant"].(string)
+	if v != "" {
+		t.Errorf("variant = %q, want empty string (should overwrite stale 'high')", v)
+	}
+}
+
+// TestInjectModelAssignments_RootModelFallbackClearsVariant verifies that
+// case 3 (rootModelID fallback — no TUI assignment, agent absent from user
+// config, root model set) writes variant:"" alongside the model. Mirrors the
+// case 1 contract so case 3 cannot leak a stale variant from the overlay
+// through to the user's settings file. See PR #440 review.
+func TestInjectModelAssignments_RootModelFallbackClearsVariant(t *testing.T) {
+	// The overlay carries a stale variant for sdd-apply but the user has no
+	// matching agent key, so case 2 cannot fire — case 3 must take over and
+	// clear the variant.
+	overlayJSON := []byte(`{
+  "agent": {
+    "sdd-apply": {"mode": "subagent", "prompt": "test", "variant": "high"}
+  }
+}`)
+
+	// No TUI assignment for sdd-apply, no existing agent key in user config,
+	// rootModelID is set → case 3 fires.
+	result, err := injectModelAssignments(overlayJSON, nil, "anthropic/claude-sonnet-4", map[string]bool{})
+	if err != nil {
+		t.Fatalf("injectModelAssignments() error = %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(result, &parsed); err != nil {
+		t.Fatalf("Unmarshal result error = %v", err)
+	}
+
+	agents := parsed["agent"].(map[string]any)
+	applyAgent := agents["sdd-apply"].(map[string]any)
+
+	if m, _ := applyAgent["model"].(string); m != "anthropic/claude-sonnet-4" {
+		t.Errorf("model = %q, want rootModelID", m)
+	}
+	v, hasKey := applyAgent["variant"].(string)
+	if !hasKey {
+		t.Fatal("variant key must be present (set to \"\") in case 3 — symmetric with case 1")
+	}
+	if v != "" {
+		t.Errorf("variant = %q, want empty string (case 3 must clear stale variant)", v)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Windsurf workflow injection tests
 // ---------------------------------------------------------------------------
