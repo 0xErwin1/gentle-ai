@@ -85,7 +85,7 @@ Before executing ANY SDD command (`/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-
 
 1. Search Engram: `mem_search(query: "sdd-init/{project}", project: "{project}")`
 2. If found → init was done, proceed normally
-3. If NOT found → run `sdd-init` FIRST (delegate to sdd-init sub-agent), THEN proceed with the requested command
+3. If NOT found → run the `sdd-init` phase inline FIRST, THEN proceed with the requested command
 
 This ensures:
 - Testing capabilities are always detected and cached
@@ -125,11 +125,20 @@ When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalen
 
 If the user doesn't specify, detect: if engram is available → default to `engram`. Otherwise → `none`.
 
-Cache the artifact store choice for the session. Pass it as `artifact_store.mode` to every sub-agent launch.
+Cache the artifact store choice for the session. Add it to every inline phase context.
 
 ### Delivery Strategy
 
 On the first `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalent natural-language request) in a session, ask once for and cache delivery strategy: `ask-on-risk` (default), `auto-chain`, `single-pr`, or `exception-ok`. Pass it as `delivery_strategy` to `sdd-tasks` and `sdd-apply` prompts.
+
+### Chain Strategy
+
+When `delivery_strategy` results in chained PRs (either by user choice via `ask-on-risk` or automatically via `auto-chain`), ask the user which chain strategy to use:
+
+- **`stacked-to-main`**: Each PR merges to main in order. Fast iteration, fix on the go. Best for speed-first teams and independent slices.
+- **`feature-branch-chain`**: The feature/tracker branch accumulates final integration; PR #1 targets the tracker branch, later child PRs target the immediate previous PR branch so review diffs stay focused. Only the tracker merges to main. Best for rollback control and coordinated releases.
+
+Cache the chain strategy for the session. Add it as `chain_strategy` to `sdd-tasks` and `sdd-apply` inline phase context alongside `delivery_strategy`. Do not ask again unless the user changes scope.
 
 ### Dependency Graph
 ```
@@ -148,12 +157,14 @@ After `sdd-tasks` completes and before launching `sdd-apply`, inspect `Review Wo
 
 If it says `Chained PRs recommended: Yes`, `400-line budget risk: High`, estimated changed lines exceed 400, or `Decision needed before apply: Yes`, apply cached `delivery_strategy`:
 
-- **`ask-on-risk`**: STOP and ask chained/stacked PRs vs maintainer-approved `size:exception`.
-- **`auto-chain`**: Do not ask. Tell `sdd-apply` to implement only the next autonomous chained/stacked PR slice using work-unit commits.
+- **`ask-on-risk`**: STOP and ask chained/stacked PRs vs maintainer-approved `size:exception`. If the user chooses chained PRs and `chain_strategy` is not yet cached, also ask which chain strategy to use (`stacked-to-main` or `feature-branch-chain`).
+- **`auto-chain`**: Do not ask about splitting. If `chain_strategy` is not yet cached, ask which chain strategy to use. Then run `sdd-apply` inline for only the next autonomous chained/stacked PR slice using work-unit commits, clear start/finish boundaries, verification, and rollback.
 - **`single-pr`**: STOP and require/record `size:exception` before apply.
 - **`exception-ok`**: Continue, but tell `sdd-apply` this run uses `size:exception`.
 
-Automatic mode does not override this guard. Always pass the resolved delivery strategy to `sdd-apply`.
+Automatic mode does not override this guard. Always include the resolved `delivery_strategy` and `chain_strategy` in `sdd-apply` inline phase context.
+
+When executing the inline `sdd-apply` phase, always include the resolved `delivery_strategy`, `chain_strategy`, and any chosen PR boundary/exception in the phase context.
 
 <!-- gentle-ai:sdd-model-assignments -->
 ## Model Assignments

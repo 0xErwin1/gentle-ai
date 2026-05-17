@@ -265,6 +265,79 @@ func TestClaudeSDDOrchestratorChainStrategy(t *testing.T) {
 	}
 }
 
+func TestNonClaudeSDDOrchestratorChainStrategyParity(t *testing.T) {
+	tests := []struct {
+		path             string
+		propagationScope string
+	}{
+		{path: "codex/sdd-orchestrator.md", propagationScope: "prompt"},
+		{path: "gemini/sdd-orchestrator.md", propagationScope: "prompt"},
+		{path: "qwen/sdd-orchestrator.md", propagationScope: "prompt"},
+		{path: "generic/sdd-orchestrator.md", propagationScope: "prompt"},
+		{path: "kimi/sdd-orchestrator.md", propagationScope: "Kimi custom-agent prompt"},
+		{path: "kiro/sdd-orchestrator.md", propagationScope: "Kiro phase context"},
+		{path: "windsurf/sdd-orchestrator.md", propagationScope: "inline phase context"},
+		{path: "antigravity/sdd-orchestrator.md", propagationScope: "inline phase context"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			content := MustRead(tc.path)
+
+			for _, required := range []string{
+				"### Chain Strategy",
+				"`stacked-to-main`",
+				"`feature-branch-chain`",
+				"delivery_strategy",
+				"chain_strategy",
+				"sdd-tasks",
+				"sdd-apply",
+				tc.propagationScope,
+			} {
+				if !strings.Contains(content, required) {
+					t.Fatalf("%s missing required chain strategy wording %q", tc.path, required)
+				}
+			}
+		})
+	}
+}
+
+func TestPlatformNativeSDDOrchestratorsAvoidOpenCodePersistenceClaims(t *testing.T) {
+	tests := []struct {
+		path     string
+		required []string
+	}{
+		{path: "kimi/sdd-orchestrator.md", required: []string{"/skill:sdd-*", "multiagent:Task", "custom-agent prompt"}},
+		{path: "kiro/sdd-orchestrator.md", required: []string{"Kiro phase context", "native Kiro subagent context", "approval"}},
+		{path: "windsurf/sdd-orchestrator.md", required: []string{"solo-agent", "inline phase context", "There are no sub-agents"}},
+		{path: "antigravity/sdd-orchestrator.md", required: []string{"inline phase context", "Phase Execution Protocol", "directly"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			content := MustRead(tc.path)
+
+			for _, required := range tc.required {
+				if !strings.Contains(content, required) {
+					t.Fatalf("%s missing platform-native wording %q", tc.path, required)
+				}
+			}
+
+			for _, forbidden := range []string{
+				"OpenCode's background-agent plugin",
+				"OpenCode plugin-backed persistence",
+				"plugin-backed persisted background delegation",
+				"background task storage",
+				"delegate to `sdd-init` sub-agent",
+			} {
+				if strings.Contains(content, forbidden) {
+					t.Fatalf("%s must not imply inaccurate OpenCode/subagent semantics via %q", tc.path, forbidden)
+				}
+			}
+		})
+	}
+}
+
 func TestGentlemanLanguageInstructionsDoNotBiasEnglishSessions(t *testing.T) {
 	personaPaths := []string{
 		"claude/persona-gentleman.md",

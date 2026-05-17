@@ -1,55 +1,6 @@
-# SDD Orchestrator Assets Specification
+# Delta for sdd-orchestrator-assets
 
-## Purpose
-
-Defines required behavior for agent-specific SDD orchestrator guidance assets so Claude and OpenCode guidance remain semantically aligned where intended, while preserving platform-accurate delegation wording.
-
----
-
-## Requirements
-
-### Requirement: Chain Strategy Guidance Parity
-
-For Claude-targeted SDD orchestrator assets, the system MUST include explicit chain strategy guidance equivalent to OpenCode for reviewer-safe delivery planning.
-
-The guidance MUST enumerate exactly these selectable strategies:
-- `stacked-to-main`
-- `feature-branch-chain`
-
-#### Scenario: Claude guidance lists both required strategies
-
-- GIVEN Claude orchestrator guidance is generated from embedded assets
-- WHEN the chain strategy section is rendered
-- THEN it includes `stacked-to-main`
-- AND it includes `feature-branch-chain`
-
-#### Scenario: Strategy naming remains canonical
-
-- GIVEN a static validation checks chain strategy labels in Claude guidance
-- WHEN the check runs
-- THEN no alias or renamed value replaces the canonical strategy names
-
----
-
-### Requirement: Chain Strategy Propagation to Downstream Phases
-
-Claude orchestrator guidance MUST require passing `chain_strategy` together with `delivery_strategy` into `sdd-tasks` and `sdd-apply` whenever delivery planning is relevant.
-
-#### Scenario: Guidance forwards both strategy fields to sdd-tasks
-
-- GIVEN the orchestrator invokes `sdd-tasks` for a change requiring delivery planning
-- WHEN invocation guidance is rendered
-- THEN `delivery_strategy` is forwarded
-- AND `chain_strategy` is forwarded
-
-#### Scenario: Guidance forwards both strategy fields to sdd-apply
-
-- GIVEN the orchestrator invokes `sdd-apply` after planning
-- WHEN invocation guidance is rendered
-- THEN `delivery_strategy` is forwarded
-- AND `chain_strategy` is forwarded
-
----
+## ADDED Requirements
 
 ### Requirement: Non-Claude Chain Strategy Guidance Parity
 
@@ -72,8 +23,6 @@ The guidance MUST enumerate exactly these selectable strategies:
 - WHEN the check runs
 - THEN no alias or renamed value replaces the canonical strategy names
 
----
-
 ### Requirement: Non-Claude Strategy Propagation to Downstream Phases
 
 For non-Claude SDD orchestrator assets that invoke downstream delivery phases, the system MUST require passing `chain_strategy` together with `delivery_strategy` into `sdd-tasks` and `sdd-apply` whenever delivery planning is relevant.
@@ -91,8 +40,6 @@ For non-Claude SDD orchestrator assets that invoke downstream delivery phases, t
 - WHEN invocation guidance is rendered
 - THEN `delivery_strategy` is forwarded
 - AND `chain_strategy` is forwarded
-
----
 
 ### Requirement: Platform-Native Solo Inline Semantics Preservation
 
@@ -112,31 +59,15 @@ For non-Claude solo-inline and platform-native orchestrator assets, the system M
 - THEN wording stays platform-accurate
 - AND wording does not introduce inaccurate subagent or OpenCode persistence guarantees
 
----
-
-### Requirement: Claude-Native Delegation Semantics
-
-Claude-targeted guidance MUST describe delegation behavior accurately for Claude Code and MUST NOT imply OpenCode plugin-backed persisted background delegation.
-
-#### Scenario: Guidance avoids persisted-plugin delegation claims
-
-- GIVEN Claude orchestrator guidance content is reviewed for async/delegation wording
-- WHEN delegation behavior is described
-- THEN wording does not claim OpenCode plugin persistence or background task storage
-
-#### Scenario: Guidance states Claude-accurate delegation behavior
-
-- GIVEN a reader follows the Claude guidance
-- WHEN they interpret delegation expectations
-- THEN wording reflects Claude Code semantics without OpenCode-specific guarantees
-
----
+## MODIFIED Requirements
 
 ### Requirement: Claude Golden and Static Validation Coverage
 
 The system MUST keep Claude golden outputs and static text assertions synchronized with the current Claude orchestrator guidance asset.
 
 The system MUST also keep direct static assertions and impacted golden fixtures synchronized for non-Claude orchestrator assets affected by this capability.
+
+(Previously: Coverage required synchronization only for Claude golden outputs and Claude static assertions.)
 
 #### Scenario: Claude SDD golden reflects updated chain strategy and forwarding guidance
 

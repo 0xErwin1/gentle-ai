@@ -853,6 +853,88 @@ func TestInjectKimiWritesNativeAgentFilesAndGlobalSkills(t *testing.T) {
 	}
 }
 
+func TestInjectKimiKiroWindsurfAntigravityPreserveNativeChainStrategyWording(t *testing.T) {
+	tests := []struct {
+		name       string
+		agentID    model.AgentID
+		promptPath func(home string, adapter agents.Adapter) string
+		required   []string
+		forbidden  []string
+	}{
+		{
+			name:    "kimi",
+			agentID: model.AgentKimi,
+			promptPath: func(home string, _ agents.Adapter) string {
+				return filepath.Join(home, ".kimi", "sdd-orchestrator.md")
+			},
+			required: []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "/skill:sdd-*", "multiagent:Task", "custom-agent prompt"},
+			forbidden: []string{"OpenCode's background-agent plugin", "plugin-backed persisted background delegation"},
+		},
+		{
+			name:    "kiro",
+			agentID: model.AgentKiroIDE,
+			promptPath: func(home string, adapter agents.Adapter) string {
+				return adapter.SystemPromptFile(home)
+			},
+			required: []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "Kiro phase context", "native Kiro subagent context"},
+			forbidden: []string{"OpenCode's background-agent plugin", "plugin-backed persisted background delegation"},
+		},
+		{
+			name:    "windsurf",
+			agentID: model.AgentWindsurf,
+			promptPath: func(home string, adapter agents.Adapter) string {
+				return adapter.SystemPromptFile(home)
+			},
+			required: []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "inline phase context", "There are no sub-agents"},
+			forbidden: []string{"OpenCode's background-agent plugin", "plugin-backed persisted background delegation", "custom sub-agent prompts"},
+		},
+		{
+			name:    "antigravity",
+			agentID: model.AgentAntigravity,
+			promptPath: func(home string, adapter agents.Adapter) string {
+				return adapter.SystemPromptFile(home)
+			},
+			required: []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "inline phase context", "Phase Execution Protocol"},
+			forbidden: []string{"OpenCode's background-agent plugin", "plugin-backed persisted background delegation", "custom sub-agent prompts"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			adapter, err := agents.NewAdapter(tt.agentID)
+			if err != nil {
+				t.Fatalf("NewAdapter(%s) error = %v", tt.agentID, err)
+			}
+
+			result, injectErr := Inject(home, adapter, "")
+			if injectErr != nil {
+				t.Fatalf("Inject(%s) error = %v", tt.agentID, injectErr)
+			}
+			if !result.Changed {
+				t.Fatalf("Inject(%s) changed = false", tt.agentID)
+			}
+
+			content, readErr := os.ReadFile(tt.promptPath(home, adapter))
+			if readErr != nil {
+				t.Fatalf("ReadFile(%s prompt) error = %v", tt.name, readErr)
+			}
+			text := string(content)
+
+			for _, required := range tt.required {
+				if !strings.Contains(text, required) {
+					t.Fatalf("%s generated prompt missing %q", tt.name, required)
+				}
+			}
+			for _, forbidden := range tt.forbidden {
+				if strings.Contains(text, forbidden) {
+					t.Fatalf("%s generated prompt contains forbidden wording %q", tt.name, forbidden)
+				}
+			}
+		})
+	}
+}
+
 func TestInjectQwenCodeWritesSDDOrchestratorAndSkills(t *testing.T) {
 	home := t.TempDir()
 
