@@ -41,4 +41,4 @@ Return a structured result with these fields:
 - `artifacts`: topic_keys or file paths written (e.g. `sdd/{change-name}/spec`)
 - `next_recommended`: `sdd-tasks` (after design is also ready)
 - `risks`: ambiguities in the proposal that forced spec-level assumptions
-- `skill_resolution`: `injected` if compact rules were provided in invocation message, otherwise `none`
+- `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`

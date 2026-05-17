@@ -45,4 +45,4 @@ Return a structured result with these fields:
 - `artifacts`: topic_keys or file paths written
 - `next_recommended`: `none`
 - `risks`: any artifacts that could not be merged or archived cleanly
-- `skill_resolution`: `injected` if compact rules were provided in invocation message, otherwise `none`
+- `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`

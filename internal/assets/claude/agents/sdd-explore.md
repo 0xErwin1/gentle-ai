@@ -42,4 +42,4 @@ Return a structured result with these fields:
 - `artifacts`: topic_keys or file paths written (e.g. `sdd/{change-name}/explore`)
 - `next_recommended`: `sdd-propose` (if tied to a change) or `none` (if standalone)
 - `risks`: risks or blockers discovered during exploration
-- `skill_resolution`: `injected` if compact rules were provided in invocation message, otherwise `none`
+- `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`

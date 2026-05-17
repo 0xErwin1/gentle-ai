@@ -62,7 +62,7 @@ gga install
 | Skill Creator | `skill-creator` | Create new AI agent skills following the Agent Skills spec |
 | Branch & PR | `branch-pr` | PR creation workflow with conventional commits, branch naming, and issue-first enforcement |
 | Issue Creation | `issue-creation` | Issue filing workflow with bug report and feature request templates |
-| Skill Registry | `skill-registry` | Build a compact project standards registry from installed skills |
+| Skill Registry | `skill-registry` | Build an index of installed skills with triggers, scopes, and exact `SKILL.md` paths |
 | Chained PR | `chained-pr` | Plan and create reviewable stacked/chained pull requests |
 | Cognitive Doc Design | `cognitive-doc-design` | Write docs that reduce review and onboarding cognitive load |
 | Comment Writer | `comment-writer` | Draft warm, direct collaboration comments and review replies |

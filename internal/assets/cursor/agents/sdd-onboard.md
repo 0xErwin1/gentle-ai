@@ -40,4 +40,4 @@ Return a structured result with these fields:
 - `artifacts`: list of paths or topic_keys written
 - `next_recommended`: `sdd-new` (to start a real change independently)
 - `risks`: any warnings about the onboarding session
-- `skill_resolution`: `injected` if compact rules were provided in invocation message, otherwise `none`
+- `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`

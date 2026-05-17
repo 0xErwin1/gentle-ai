@@ -41,4 +41,4 @@ Return a structured result with these fields:
 - `artifacts`: topic_keys or file paths written (e.g. `sdd/{change-name}/verify-report`)
 - `next_recommended`: `sdd-archive` (if clean) or `sdd-apply` (if CRITICAL issues found)
 - `risks`: unresolved CRITICAL issues that block archive
-- `skill_resolution`: `injected` if compact rules were provided in invocation message, otherwise `none`
+- `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`

@@ -21,6 +21,7 @@ var sddSkills = []model.SkillID{
 var foundationSkills = []model.SkillID{
 	model.SkillGoTesting,
 	model.SkillCreator,
+	model.SkillImprover,
 	model.SkillBranchPR,
 	model.SkillIssueCreation,
 	model.SkillSkillRegistry,

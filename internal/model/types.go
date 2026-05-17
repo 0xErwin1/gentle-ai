@@ -76,6 +76,7 @@ const (
 	SkillSDDOnboard      SkillID = "sdd-onboard"
 	SkillGoTesting       SkillID = "go-testing"
 	SkillCreator         SkillID = "skill-creator"
+	SkillImprover        SkillID = "skill-improver"
 	SkillJudgmentDay     SkillID = "judgment-day"
 	SkillBranchPR        SkillID = "branch-pr"
 	SkillIssueCreation   SkillID = "issue-creation"

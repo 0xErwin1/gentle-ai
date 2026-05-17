@@ -40,4 +40,4 @@ Return a structured result with these fields:
 - `artifacts`: list of paths or topic_keys written (e.g. `.atl/skill-registry.md`, `sdd-init/{project}`)
 - `next_recommended`: `sdd-explore` or `sdd-new`
 - `risks`: any warnings about the detected stack or persistence backend
-- `skill_resolution`: `injected` if compact rules were provided in invocation message, otherwise `none`
+- `skill_resolution`: `paths-injected` if exact skill paths were provided and loaded, otherwise `none`

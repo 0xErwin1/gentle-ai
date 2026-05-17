@@ -83,7 +83,7 @@ When the orchestrator delegates work to a sub-agent (say, `sdd-explore` to inves
 
 What makes them "super sub-agents":
 
-1. **The orchestrator keeps them focused.** The parent/orchestrator resolves the skill registry once, injects the relevant compact rules into each sub-agent prompt, and gives the child one concrete role. Sub-agents do not rediscover project skills or spawn more sub-agents during normal runtime.
+1. **The orchestrator keeps them focused.** The parent/orchestrator resolves the skill registry once, passes the relevant `SKILL.md` paths into each sub-agent prompt, and gives the child one concrete role. Sub-agents read exact skill files instead of receiving generated summaries.
 
 2. **They adapt to your project.** A `sdd-apply` sub-agent working on a React project receives React patterns. The same sub-agent working on a Go project receives Go testing conventions. The rules depend on the registry and task context, not a hardcoded list.
 

@@ -15,7 +15,7 @@ name: react
 description: React patterns
 ---
 
-## Compact Rules
+## Hard Rules
 
 - Prefer composition.
 - Keep state local.
@@ -35,10 +35,13 @@ description: React patterns
 	if err != nil {
 		t.Fatalf("read registry: %v", err)
 	}
-	for _, want := range []string{"### react", "- Trigger: React patterns", "  - Prefer composition."} {
+	for _, want := range []string{"## Skills", "| `react` | React patterns | project |", filepath.Join(cwd, "skills", "react", "SKILL.md")} {
 		if !strings.Contains(string(registry), want) {
 			t.Fatalf("registry missing %q:\n%s", want, registry)
 		}
+	}
+	if strings.Contains(string(registry), "Prefer composition") {
+		t.Fatalf("registry should index skill paths, not copy skill rules:\n%s", registry)
 	}
 	if _, err := os.Stat(filepath.Join(cwd, CacheRelPath)); err != nil {
 		t.Fatalf("cache missing: %v", err)
@@ -61,7 +64,7 @@ name: dup
 description: user copy
 ---
 
-## Compact Rules
+## Hard Rules
 
 - User rule.
 `)
@@ -70,7 +73,7 @@ name: dup
 description: project copy
 ---
 
-## Compact Rules
+## Hard Rules
 
 - Project rule.
 `)
@@ -90,7 +93,9 @@ description: project copy
 		t.Fatalf("forced result = %#v", forced)
 	}
 	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
-	if !strings.Contains(registry, "Project rule") || strings.Contains(registry, "User rule") {
+	projectPath := filepath.Join(cwd, "skills", "dup", "SKILL.md")
+	userPath := filepath.Join(home, ".claude", "skills", "dup", "SKILL.md")
+	if !strings.Contains(registry, projectPath) || strings.Contains(registry, userPath) || strings.Contains(registry, "Project rule") || strings.Contains(registry, "User rule") {
 		t.Fatalf("project skill should win over user duplicate:\n%s", registry)
 	}
 }
@@ -103,7 +108,7 @@ name: dup
 description: global OpenCode copy
 ---
 
-## Compact Rules
+## Hard Rules
 
 - Global OpenCode rule.
 `)
@@ -112,7 +117,7 @@ name: dup
 description: project OpenCode copy
 ---
 
-## Compact Rules
+## Hard Rules
 
 - Project OpenCode rule.
 `)
@@ -125,12 +130,12 @@ description: project OpenCode copy
 		t.Fatalf("SkillCount = %d, want 1", result.SkillCount)
 	}
 	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
-	for _, want := range []string{"- .opencode/skills", "Project OpenCode rule"} {
+	for _, want := range []string{"- .opencode/skills", filepath.Join(cwd, ".opencode", "skills", "dup", "SKILL.md")} {
 		if !strings.Contains(registry, want) {
 			t.Fatalf("registry missing %q:\n%s", want, registry)
 		}
 	}
-	if strings.Contains(registry, "Global OpenCode rule") {
+	if strings.Contains(registry, filepath.Join(home, ".config", "opencode", "skills", "dup", "SKILL.md")) || strings.Contains(registry, "Global OpenCode rule") || strings.Contains(registry, "Project OpenCode rule") {
 		t.Fatalf("project .opencode skill should win over global duplicate:\n%s", registry)
 	}
 }
@@ -143,7 +148,7 @@ name: dup
 description: Claude copy
 ---
 
-## Compact Rules
+## Hard Rules
 
 - Claude rule.
 `)
@@ -152,7 +157,7 @@ name: dup
 description: OpenCode copy
 ---
 
-## Compact Rules
+## Hard Rules
 
 - OpenCode rule.
 `)
@@ -165,7 +170,9 @@ description: OpenCode copy
 		t.Fatalf("SkillCount = %d, want 1", result.SkillCount)
 	}
 	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
-	if !strings.Contains(registry, "OpenCode rule") || strings.Contains(registry, "Claude rule") {
+	openCodePath := filepath.Join(home, ".config", "opencode", "skills", "dup", "SKILL.md")
+	claudePath := filepath.Join(home, ".claude", "skills", "dup", "SKILL.md")
+	if !strings.Contains(registry, openCodePath) || strings.Contains(registry, claudePath) || strings.Contains(registry, "OpenCode rule") || strings.Contains(registry, "Claude rule") {
 		t.Fatalf("user duplicate should respect UserSkillDirs source order:\n%s", registry)
 	}
 }
@@ -224,12 +231,12 @@ func TestProjectSkillDirsIncludesWorkspaceSkillLocations(t *testing.T) {
 	}
 }
 
-func TestRegenerateExtractsHardRulesWhenCompactRulesAreAbsent(t *testing.T) {
+func TestRegenerateIndexesSkillWithoutCopyingRules(t *testing.T) {
 	cwd := t.TempDir()
 	home := t.TempDir()
 	writeSkill(t, filepath.Join(cwd, "skills", "go-testing", "SKILL.md"), `---
 name: go-testing
-description: Go testing patterns
+description: "Trigger: Go tests. Apply focused Go testing patterns."
 ---
 
 ## Activation Contract
@@ -241,7 +248,7 @@ Use this for Go tests.
 - Run focused tests before broad tests.
 - Keep table tests readable.
 
-## Execution Steps
+	## Execution Steps
 
 - This should not be copied.
 `)
@@ -254,39 +261,32 @@ Use this for Go tests.
 		t.Fatalf("SkillCount = %d, want 1", result.SkillCount)
 	}
 	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
-	for _, want := range []string{"Run focused tests before broad tests.", "Keep table tests readable."} {
+	for _, want := range []string{"| `go-testing` | Trigger: Go tests. Apply focused Go testing patterns. | project |", filepath.Join(cwd, "skills", "go-testing", "SKILL.md"), "## Loading protocol"} {
 		if !strings.Contains(registry, want) {
 			t.Fatalf("registry missing %q:\n%s", want, registry)
 		}
 	}
-	for _, dontWant := range []string{fallbackCompactRules, "This should not be copied."} {
+	for _, dontWant := range []string{"Run focused tests before broad tests.", "Keep table tests readable.", "This should not be copied."} {
 		if strings.Contains(registry, dontWant) {
-			t.Fatalf("registry should not contain %q:\n%s", dontWant, registry)
+			t.Fatalf("registry should not copy skill body content %q:\n%s", dontWant, registry)
 		}
 	}
 }
 
-func TestRegenerateExtractsLegacyRuleSectionsWhenCompactRulesAreAbsent(t *testing.T) {
+func TestRegenerateIndexesFullMultilineDescription(t *testing.T) {
 	cwd := t.TempDir()
 	home := t.TempDir()
-	writeSkill(t, filepath.Join(cwd, "skills", "comment-writer", "SKILL.md"), `---
-name: comment-writer
-description: Comment writing
+	writeSkill(t, filepath.Join(cwd, "skills", "ai-sdk-5", "SKILL.md"), `---
+name: ai-sdk-5
+description: >
+  Trigger: AI chat features, Vercel AI SDK 5, streaming UI.
+  Use AI SDK 5 patterns and avoid v4 APIs.
+license: Apache-2.0
 ---
 
-## Voice Rules
+## Hard Rules
 
-- Be warm and direct.
-- Keep it short.
-
-## Critical Rules
-
-1. Link an approved issue.
-2. Keep PRs within the review budget.
-
-## Critical Patterns
-
-- Start with the actionable point.
+- Do not copy this rule into the registry.
 `)
 
 	result, err := Regenerate(cwd, home, false)
@@ -297,82 +297,13 @@ description: Comment writing
 		t.Fatalf("SkillCount = %d, want 1", result.SkillCount)
 	}
 	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
-	for _, want := range []string{"Be warm and direct.", "Keep it short.", "Link an approved issue.", "Keep PRs within the review budget.", "Start with the actionable point."} {
+	for _, want := range []string{"Trigger: AI chat features, Vercel AI SDK 5, streaming UI. Use AI SDK 5 patterns and avoid v4 APIs.", filepath.Join(cwd, "skills", "ai-sdk-5", "SKILL.md")} {
 		if !strings.Contains(registry, want) {
 			t.Fatalf("registry missing %q:\n%s", want, registry)
 		}
 	}
-	if strings.Contains(registry, fallbackCompactRules) {
-		t.Fatalf("registry should not use fallback for legacy rule sections:\n%s", registry)
-	}
-}
-
-func TestRegeneratePrefersCompactRulesOverFallbackSections(t *testing.T) {
-	cwd := t.TempDir()
-	home := t.TempDir()
-	writeSkill(t, filepath.Join(cwd, "skills", "explicit", "SKILL.md"), `---
-name: explicit
----
-
-## Compact Rules
-
-- Explicit compact rule.
-
-## Hard Rules
-
-- Hard rule should not be copied.
-`)
-
-	result, err := Regenerate(cwd, home, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.SkillCount != 1 {
-		t.Fatalf("SkillCount = %d, want 1", result.SkillCount)
-	}
-	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
-	if !strings.Contains(registry, "Explicit compact rule.") || strings.Contains(registry, "Hard rule should not be copied.") {
-		t.Fatalf("Compact Rules should be preferred over fallback sections:\n%s", registry)
-	}
-}
-
-func TestRegenerateCapsExtractedFallbackRules(t *testing.T) {
-	cwd := t.TempDir()
-	home := t.TempDir()
-	writeSkill(t, filepath.Join(cwd, "skills", "many", "SKILL.md"), `---
-name: many
----
-
-## Hard Rules
-
-- Rule 01.
-- Rule 02.
-- Rule 03.
-- Rule 04.
-- Rule 05.
-- Rule 06.
-- Rule 07.
-- Rule 08.
-- Rule 09.
-- Rule 10.
-- Rule 11.
-- Rule 12.
-- Rule 13.
-- Rule 14.
-- Rule 15.
-- Rule 16.
-`)
-
-	result, err := Regenerate(cwd, home, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.SkillCount != 1 {
-		t.Fatalf("SkillCount = %d, want 1", result.SkillCount)
-	}
-	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
-	if !strings.Contains(registry, "Rule 15.") || strings.Contains(registry, "Rule 16.") {
-		t.Fatalf("fallback extracted rules should be capped at 15:\n%s", registry)
+	if strings.Contains(registry, "| `ai-sdk-5` | > |") || strings.Contains(registry, "Do not copy this rule") {
+		t.Fatalf("registry should use full description and not body rules:\n%s", registry)
 	}
 }
 
@@ -415,7 +346,7 @@ name: go-testing
 		t.Fatalf("SkillCount = %d, want 1", result.SkillCount)
 	}
 	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
-	if !strings.Contains(registry, "go-testing") || strings.Contains(registry, "### sdd-apply") || strings.Contains(registry, "### skill-registry") {
+	if !strings.Contains(registry, "go-testing") || strings.Contains(registry, "`sdd-apply`") || strings.Contains(registry, "`skill-registry`") {
 		t.Fatalf("unexpected registry content:\n%s", registry)
 	}
 }

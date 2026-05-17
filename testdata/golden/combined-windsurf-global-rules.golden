@@ -324,21 +324,21 @@ Since Cascade is a solo-agent, skill resolution runs inline before each phase. D
 
 1. `mem_search(query: "skill-registry", project: "{project}")` → `mem_get_observation(id)` for full registry content
 2. Fallback: read `.atl/skill-registry.md` if engram not available
-3. Cache the **Compact Rules** section and the **User Skills** trigger table
+3. Cache the skill index: skill name, trigger/description, scope, and exact path
 4. If no registry exists, warn user and proceed without project-specific standards
 
 Before each phase execution:
 1. Match relevant skills by **code context** (file extensions/paths you will touch) AND **task context** (what actions you will perform — review, PR creation, testing, etc.)
-2. Load matching compact rule blocks into your working context as `## Project Standards (auto-resolved)`
-3. Apply these rules during the phase — they inform how you write code, structure artifacts, and validate output
+2. Load matching exact `SKILL.md` paths from the registry
+3. Read those skill files before phase work — they inform how you write code, structure artifacts, and validate output
 
-**Key rule**: compact rules are TEXT injected into context, not file paths to read. This is compaction-safe because you re-read the registry if the cache is lost.
+**Key rule**: use paths, not generated summaries. Read the full `SKILL.md` files so author intent is preserved. This is compaction-safe because you re-read the registry if the cache is lost.
 
 ### Skill Resolution Feedback
 
 After completing each phase, check the `skill_resolution` field in your own result:
-- `injected` → all good, skills were applied correctly
-- `fallback-registry`, `fallback-path`, or `none` → skill cache was lost (likely compaction). Re-read the registry immediately and re-apply compact rules for all subsequent phases.
+- `paths-injected` → all good, exact skill paths were loaded
+- `fallback-registry`, `fallback-path`, or `none` → skill cache was lost (likely compaction). Re-read the registry immediately and load skill paths for all subsequent phases.
 
 This is a self-correction mechanism. Do NOT ignore fallback reports — they indicate you dropped context between phases.
 

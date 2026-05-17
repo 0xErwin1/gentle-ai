@@ -142,20 +142,20 @@ Automatic mode does not override this guard. Always pass the resolved delivery s
 
 ### Sub-Agent Launch Pattern
 
-ALL Kimi sub-agent launches that involve reading, writing, or reviewing code MUST include pre-resolved **compact rules** from the skill registry. Follow the **Skill Resolver Protocol** in `~/.config/agents/skills/_shared/skill-resolver.md`.
+ALL Kimi sub-agent launches that involve reading, writing, or reviewing code MUST include pre-resolved **skill paths** from the skill registry. Follow the **Skill Resolver Protocol** in `~/.config/agents/skills/_shared/skill-resolver.md`.
 
-The orchestrator resolves skills from the registry ONCE (at session start or first delegation), caches the compact rules, and injects matching rules into each sub-agent prompt.
+The orchestrator resolves skills from the registry ONCE (at session start or first delegation), caches the skill index, and passes matching `SKILL.md` paths into each sub-agent prompt.
 
 For each sub-agent launch:
 1. Match relevant skills by **code context** and **task context**
-2. Copy matching compact rule blocks into the sub-agent prompt as `## Project Standards (auto-resolved)`
-3. Inject BEFORE the sub-agent's phase-specific instructions
+2. Copy matching `SKILL.md` paths into the sub-agent prompt as `## Skills to load before work`
+3. Instruct the sub-agent to read those exact files BEFORE phase-specific work
 
 ### Skill Resolution Feedback
 
 After every delegation that returns a result, check the `skill_resolution` field:
-- `injected` → all good
-- `fallback-registry`, `fallback-path`, or `none` → skill cache was lost. Re-read the registry immediately and inject compact rules in all subsequent delegations.
+- `paths-injected` → all good, exact skill paths were passed and loaded
+- `fallback-registry`, `fallback-path`, or `none` → skill cache was lost. Re-read the registry immediately and pass skill paths in all subsequent delegations.
 
 ### Sub-Agent Context Protocol
 

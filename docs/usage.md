@@ -85,6 +85,8 @@ The command writes `.atl/skill-registry.md` and `.atl/.skill-registry.cache.json
 
 Claude Code and OpenCode installs wire this command into startup/plugin hooks. Pi gets the equivalent behavior from `gentle-pi`; keep that extension's scan roots in sync when changing these discovery rules.
 
+See [Skill Registry](skill-registry.md) for the full index-first flow and diagrams.
+
 ### sync
 
 Refresh managed assets to the current version. Use after `brew upgrade gentle-ai` or when you want your local configs aligned with the latest release. Does NOT reinstall binaries (engram, GGA) — only updates prompt content, skills, MCP configs, and SDD orchestrators.

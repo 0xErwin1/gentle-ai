@@ -14,6 +14,8 @@ Every `SKILL.md` MUST use this order unless a section is truly irrelevant:
 6. **Output Contract** — required final format or artifacts.
 7. **References** — local files only; supporting detail lives outside the skill.
 
+`## Compact Rules` is not required. The skill registry indexes skill names, triggers, scopes, and paths; agents load the full `SKILL.md` as the source of truth.
+
 ## Frontmatter Rules
 
 - `description` MUST be one physical line, YAML-safe, and quoted.
@@ -51,6 +53,13 @@ Every `SKILL.md` MUST use this order unless a section is truly irrelevant:
 - Use `assets/` for templates, schemas, fixtures, or generated examples.
 - Use `references/` for local docs that explain concepts or edge cases.
 - Keep references stable and relative to the skill directory when possible.
+
+## Registry Behavior
+
+- `gentle-ai skill-registry refresh` indexes skills; it does not summarize or rewrite them.
+- The registry records `name`, `description` trigger text, scope, and exact `SKILL.md` path.
+- Delegators pass matching paths to subagents, and subagents read the full skill before work.
+- Use `skill-improver` to audit and refactor existing skills against this guide.
 
 ## Quality Gates
 

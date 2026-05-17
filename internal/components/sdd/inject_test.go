@@ -1007,8 +1007,8 @@ func TestInjectFileAppendMigratesLegacyHeading(t *testing.T) {
 	if strings.Count(text, "## Agent Teams Orchestrator") != 1 {
 		t.Fatal("agent teams heading duplicated after migration")
 	}
-	if !strings.Contains(text, "## Project Standards (auto-resolved)") {
-		t.Fatal("SDD orchestrator was not refreshed to current compact-rules format")
+	if !strings.Contains(text, "## Skills to load before work") {
+		t.Fatal("SDD orchestrator was not refreshed to current skill-path loading format")
 	}
 }
 
@@ -1062,8 +1062,8 @@ func TestInjectFileAppendMigratesFullLegacyOrchestratorBlock(t *testing.T) {
 	if !strings.Contains(text, "`skill_resolution`") {
 		t.Fatal("result contract was not refreshed to current format")
 	}
-	if !strings.Contains(text, "## Project Standards (auto-resolved)") {
-		t.Fatal("current compact-rules launch pattern missing after migration")
+	if !strings.Contains(text, "## Skills to load before work") {
+		t.Fatal("current skill-path launch pattern missing after migration")
 	}
 	if strings.Count(text, "<!-- gentle-ai:engram-protocol -->") != 1 {
 		t.Fatal("engram protocol marker should be preserved exactly once")

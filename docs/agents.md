@@ -40,7 +40,7 @@ Cursor uses its built-in `.cursor/agents/` system. `gentle-ai` writes 10 agent f
 
 - `sdd-explore` and `sdd-verify` run with `readonly: false` so they can inspect the codebase and execute verification commands
 - Each subagent gets its own context window (fresh context, no pollution)
-- The orchestrator resolves compact rules from the skill registry and passes them in the invocation message
+- The orchestrator resolves skill paths from the skill registry and passes exact `SKILL.md` files in the invocation message
 
 ### Windsurf Cascade
 

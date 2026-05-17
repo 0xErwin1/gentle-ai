@@ -16,32 +16,24 @@ import (
 )
 
 const (
-	RegistryRelPath      = ".atl/skill-registry.md"
-	CacheRelPath         = ".atl/.skill-registry.cache.json"
-	RegistrySchema       = 3
-	sectionMarker        = "## Selected skills and compact rules"
-	atlIgnoreEntry       = ".atl/"
-	fallbackCompactRules = "No compact rules declared; delegators should load the full skill file before direct work, or pass an explicit fallback path only when Project Standards cannot be injected."
+	RegistryRelPath = ".atl/skill-registry.md"
+	CacheRelPath    = ".atl/.skill-registry.cache.json"
+	RegistrySchema  = 4
+	sectionMarker   = "## Skills"
+	atlIgnoreEntry  = ".atl/"
 )
 
 var (
-	excludeNames          = map[string]bool{"_shared": true, "skill-registry": true}
-	excludePrefixes       = []string{"sdd-"}
-	compactHeading        = regexp.MustCompile(`(?i)^##\s+Compact Rules\s*$`)
-	h2Heading             = regexp.MustCompile(`^##\s+(.+?)\s*$`)
-	nextH2                = regexp.MustCompile(`^##\s+`)
-	bulletLine            = regexp.MustCompile(`^-\s+(.+)$`)
-	orderedListLine       = regexp.MustCompile(`^\d+[.)]\s+(.+)$`)
-	fallbackRuleHeadings  = []string{"Hard Rules", "Critical Rules", "Critical Patterns", "Voice Rules", "Decision Gates"}
-	maxExtractedRuleCount = 15
-	frontmatterLine       = regexp.MustCompile(`^(\w+):\s*(.*)$`)
+	excludeNames    = map[string]bool{"_shared": true, "skill-registry": true}
+	excludePrefixes = []string{"sdd-"}
+	frontmatterLine = regexp.MustCompile(`^(\w+):\s*(.*)$`)
 )
 
 type SkillEntry struct {
 	Name        string
 	Path        string
 	Description string
-	Rules       []string
+	Scope       string
 }
 
 type Result struct {
@@ -219,11 +211,8 @@ func LoadSkill(file string) (SkillEntry, bool) {
 	if isExcluded(name) {
 		return SkillEntry{}, false
 	}
-	rules := extractCompactRules(body)
-	if len(rules) == 0 {
-		rules = []string{fallbackCompactRules}
-	}
-	return SkillEntry{Name: name, Path: file, Description: desc, Rules: rules}, true
+	_ = body
+	return SkillEntry{Name: name, Path: file, Description: desc}, true
 }
 
 func RenderRegistry(cwd string, sources []string, entries []SkillEntry) string {
@@ -237,21 +226,23 @@ func RenderRegistry(cwd string, sources []string, entries []SkillEntry) string {
 		lines = append(lines, "- "+src)
 	}
 	lines = append(lines, "", "## Contract", "")
-	lines = append(lines, "**Delegator use only.** Any agent that launches subagents reads this registry to resolve compact rules, then injects matching rule text into subagent prompts under `## Project Standards (auto-resolved)`.", "")
-	lines = append(lines, "Subagents still read their assigned executor/phase skill. During normal runtime, they do **not** independently discover or load additional project/user `SKILL.md` files or this registry; project/user rules arrive pre-digested. Explicit fallback loading is degraded self-healing and must be reported in `skill_resolution` as `fallback-registry` or `fallback-path`.", "")
+	lines = append(lines, "**Delegator use only.** This registry is an index, not a summary. Any agent that launches subagents reads it to select relevant skills, then passes exact `SKILL.md` paths for the subagent to read before work.", "")
+	lines = append(lines, "`SKILL.md` remains the source of truth. Do not inject generated summaries or compact rules by default; pass paths so subagents load the full runtime contract and preserve author intent.", "")
 	lines = append(lines, sectionMarker, "")
+	lines = append(lines, "| Skill | Trigger / description | Scope | Path |")
+	lines = append(lines, "| --- | --- | --- | --- |")
 	for _, entry := range entries {
-		lines = append(lines, "### "+entry.Name)
-		lines = append(lines, "- Path: "+entry.Path)
-		if strings.TrimSpace(entry.Description) != "" {
-			lines = append(lines, "- Trigger: "+entry.Description)
+		scope := entry.Scope
+		if scope == "" {
+			scope = scopeForPath(cwd, entry.Path)
 		}
-		lines = append(lines, "- Rules:")
-		for _, rule := range entry.Rules {
-			lines = append(lines, "  - "+rule)
-		}
-		lines = append(lines, "")
+		lines = append(lines, fmt.Sprintf("| `%s` | %s | %s | `%s` |", markdownCell(entry.Name), markdownCell(entry.Description), markdownCell(scope), markdownCell(entry.Path)))
 	}
+	lines = append(lines, "", "## Loading protocol", "")
+	lines = append(lines, "1. Match task context and target files against the `Trigger / description` column.")
+	lines = append(lines, "2. Pass only the matching `Path` values to the subagent under `## Skills to load before work`.")
+	lines = append(lines, "3. Instruct the subagent to read those exact `SKILL.md` files before reading, writing, reviewing, testing, or creating artifacts.")
+	lines = append(lines, "4. If no matching skill exists, proceed without project skill injection and report `skill_resolution: none`.")
 	return strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n"
 }
 
@@ -299,13 +290,33 @@ func parseFrontmatter(source string) (name, description, body string) {
 	end += 4
 	fm := source[4:end]
 	body = strings.TrimPrefix(source[end+4:], "\n")
-	for _, line := range strings.Split(fm, "\n") {
+	lines := strings.Split(fm, "\n")
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
 		m := frontmatterLine.FindStringSubmatch(line)
 		if len(m) != 3 {
 			continue
 		}
 		value := strings.TrimSpace(m[2])
-		value = strings.Trim(value, `"'`)
+		if value == ">" || value == "|-" || value == "|" || value == ">-" {
+			var block []string
+			for i+1 < len(lines) {
+				next := lines[i+1]
+				if strings.TrimSpace(next) == "" {
+					block = append(block, "")
+					i++
+					continue
+				}
+				if !strings.HasPrefix(next, " ") && !strings.HasPrefix(next, "\t") {
+					break
+				}
+				block = append(block, strings.TrimSpace(next))
+				i++
+			}
+			value = strings.Join(block, " ")
+		} else {
+			value = strings.Trim(value, `"'`)
+		}
 		switch m[1] {
 		case "name":
 			name = value
@@ -314,99 +325,6 @@ func parseFrontmatter(source string) (name, description, body string) {
 		}
 	}
 	return name, description, body
-}
-
-func extractCompactRules(body string) []string {
-	if rules := extractRulesFromHeadings(body, []string{"Compact Rules"}); len(rules) > 0 {
-		return rules
-	}
-	return extractRulesFromHeadings(body, fallbackRuleHeadings)
-}
-
-func extractRulesFromHeadings(body string, headings []string) []string {
-	wanted := map[string]bool{}
-	for _, heading := range headings {
-		wanted[normalizeHeading(heading)] = true
-	}
-
-	inSection := false
-	var rules []string
-	for _, raw := range strings.Split(body, "\n") {
-		line := strings.TrimRight(raw, " \t")
-		if m := h2Heading.FindStringSubmatch(line); len(m) == 2 {
-			inSection = wanted[normalizeHeading(m[1])]
-			continue
-		}
-		if !inSection {
-			continue
-		}
-		if nextH2.MatchString(line) {
-			inSection = false
-			continue
-		}
-		if rule, ok := extractRuleLine(line); ok {
-			rules = append(rules, rule)
-			if len(rules) >= maxExtractedRuleCount {
-				return rules
-			}
-		}
-	}
-	return rules
-}
-
-func extractRuleLine(line string) (string, bool) {
-	trimmed := strings.TrimSpace(line)
-	if trimmed == "" {
-		return "", false
-	}
-	if m := bulletLine.FindStringSubmatch(trimmed); len(m) == 2 {
-		return strings.TrimSpace(m[1]), true
-	}
-	if m := orderedListLine.FindStringSubmatch(trimmed); len(m) == 2 {
-		return strings.TrimSpace(m[1]), true
-	}
-	if strings.HasPrefix(trimmed, "|") && strings.HasSuffix(trimmed, "|") {
-		return extractRuleTableRow(trimmed)
-	}
-	return "", false
-}
-
-func extractRuleTableRow(line string) (string, bool) {
-	inner := strings.Trim(line, "|")
-	cells := strings.Split(inner, "|")
-	if len(cells) < 2 {
-		return "", false
-	}
-	for i := range cells {
-		cells[i] = strings.TrimSpace(cells[i])
-	}
-	if isTableSeparator(cells) || isTableHeader(cells) || cells[0] == "" || cells[1] == "" {
-		return "", false
-	}
-	return cells[0] + ": " + cells[1], true
-}
-
-func isTableSeparator(cells []string) bool {
-	for _, cell := range cells {
-		trimmed := strings.Trim(cell, " -:")
-		if trimmed != "" {
-			return false
-		}
-	}
-	return true
-}
-
-func isTableHeader(cells []string) bool {
-	if len(cells) < 2 {
-		return false
-	}
-	first := normalizeHeading(cells[0])
-	second := normalizeHeading(cells[1])
-	return (first == "rule" && second == "requirement") || (first == "target" && second == "test pattern")
-}
-
-func normalizeHeading(heading string) string {
-	return strings.ToLower(strings.TrimSpace(heading))
 }
 
 func dedupeBySkillName(entries []SkillEntry, cwd string) []SkillEntry {
@@ -428,6 +346,24 @@ func dedupeBySkillName(entries []SkillEntry, cwd string) []SkillEntry {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
+}
+
+func scopeForPath(cwd, path string) string {
+	projectPrefix := filepath.Clean(cwd) + string(os.PathSeparator)
+	if strings.HasPrefix(filepath.Clean(path), projectPrefix) {
+		return "project"
+	}
+	return "user"
+}
+
+func markdownCell(value string) string {
+	value = strings.ReplaceAll(value, "\n", " ")
+	value = strings.ReplaceAll(value, "|", "\\|")
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "—"
+	}
+	return trimmed
 }
 
 func readCachedFingerprint(path string) string {

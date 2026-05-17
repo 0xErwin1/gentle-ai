@@ -183,6 +183,7 @@ engram tui                    # Visual memory browser
 | [Engram Commands](docs/engram.md)                  | CLI commands, MCP tools, project management, team sharing                               |
 | [Codebase Guide](docs/CODEBASE-GUIDE.md)           | Maintainer map for repository ownership, architecture boundaries, and review guardrails |
 | [Agents](docs/agents.md)                           | Supported agents, feature matrix, config paths, and per-agent notes                     |
+| [Skill Registry](docs/skill-registry.md)           | Index-first skill discovery flow, delegation contract, and usage diagrams              |
 | [Pi Agent](docs/pi.md)                             | Pi package stack, commands, persona, model assignment, and troubleshooting              |
 | [Components, Skills & Presets](docs/components.md) | All components, GGA behavior, skill catalog, and preset definitions                     |
 | [Usage](docs/usage.md)                             | Persona modes, interactive TUI, CLI flags, and dependency management                    |

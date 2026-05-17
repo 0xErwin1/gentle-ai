@@ -109,6 +109,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/go-testing/SKILL.md",
 		"skills/go-testing/references/examples.md",
 		"skills/skill-creator/SKILL.md",
+		"skills/skill-improver/SKILL.md",
 		"skills/chained-pr/references/chaining-details.md",
 	}
 
@@ -420,9 +421,9 @@ func TestEmbeddedAssetCount(t *testing.T) {
 		}
 	}
 
-	// We expect 21 skill directories (10 SDD + judgment-day + 5 foundation + 4 sustainable-review + _shared).
-	if skillDirs != 21 {
-		t.Fatalf("expected 21 skill directories, got %d", skillDirs)
+	// We expect 22 skill directories (10 SDD + judgment-day + 6 foundation + 4 sustainable-review + _shared).
+	if skillDirs != 22 {
+		t.Fatalf("expected 22 skill directories, got %d", skillDirs)
 	}
 
 	// Verify each skill directory has a SKILL.md.
