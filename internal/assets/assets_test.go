@@ -237,6 +237,34 @@ func TestClaudeEmbeddedAssetLayout(t *testing.T) {
 	}
 }
 
+func TestClaudeSDDOrchestratorChainStrategy(t *testing.T) {
+	content := MustRead("claude/sdd-orchestrator.md")
+
+	for _, required := range []string{
+		"### Chain Strategy",
+		"`stacked-to-main`",
+		"`feature-branch-chain`",
+		"Pass it as `chain_strategy` to `sdd-tasks` and `sdd-apply` prompts alongside `delivery_strategy`.",
+		"When launching `sdd-apply`, always include the resolved `delivery_strategy`, `chain_strategy`, and any chosen PR boundary/exception in the prompt.",
+		"Claude Code's native Agent/Task mechanism",
+		"results are not persisted by OpenCode's background-agent plugin",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("claude/sdd-orchestrator.md missing required SDD chain/delegation wording %q", required)
+		}
+	}
+
+	for _, forbidden := range []string{
+		"plugin-backed persisted background delegation",
+		"background task storage",
+		"OpenCode plugin-backed persistence guarantees",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("claude/sdd-orchestrator.md must not imply OpenCode persisted delegation semantics via %q", forbidden)
+		}
+	}
+}
+
 func TestGentlemanLanguageInstructionsDoNotBiasEnglishSessions(t *testing.T) {
 	personaPaths := []string{
 		"claude/persona-gentleman.md",
@@ -524,8 +552,8 @@ func TestOpenCodeSDDOverlaySubagentsAreExplicitExecutors(t *testing.T) {
 
 // TestCommandsDoNotUseEchoNPwd guards against the nested-subshell pattern
 // `echo -n "$(pwd)"` (and the basename variant) that causes Claude Code v2.1.113+
-// to reject slash commands with "Unhandled node type: string". Use plain `!`pwd``
-// or `!`basename "$(pwd)"`` instead — both are accepted by old and new parsers.
+// to reject slash commands with "Unhandled node type: string". Use the plain pwd
+// or basename command forms instead — both are accepted by old and new parsers.
 func TestCommandsDoNotUseEchoNPwd(t *testing.T) {
 	forbidden := `echo -n "$(pwd)"`
 
