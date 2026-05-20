@@ -37,14 +37,15 @@ const (
 
 // ToolInfo describes a managed tool that can be checked for updates.
 type ToolInfo struct {
-	Name          string        // human-readable name (e.g., "gentle-ai")
-	Owner         string        // GitHub repository owner
-	Repo          string        // GitHub repository name
-	DetectCmd     []string      // command to detect installed version; nil = use build var
-	VersionPrefix string        // prefix to strip from version output (e.g., "v")
-	InstallMethod InstallMethod // how this tool is installed (used by upgrade executor)
-	GoImportPath  string        // for go-install tools (e.g. "github.com/.../cmd/engram")
-	NpmPackage    string        // for OpenCode community plugins installed in ~/.config/opencode/node_modules
+	Name              string        // human-readable name (e.g., "gentle-ai")
+	Owner             string        // GitHub repository owner
+	Repo              string        // GitHub repository name
+	DetectCmd         []string      // command to detect installed version; nil = use build var
+	VersionPrefix     string        // prefix to strip from version output (e.g., "v")
+	ReleaseTagPattern string        // optional regexp for selecting the correct GitHub release channel
+	InstallMethod     InstallMethod // how this tool is installed (used by upgrade executor)
+	GoImportPath      string        // for go-install tools (e.g. "github.com/.../cmd/engram")
+	NpmPackage        string        // for OpenCode community plugins installed in ~/.config/opencode/node_modules
 }
 
 // UpdateResult holds the result of checking a single tool for updates.

@@ -21,11 +21,12 @@ var Tools = []ToolInfo{
 		InstallMethod: InstallBinary,
 	},
 	{
-		Name:          "engram",
-		Owner:         "Gentleman-Programming",
-		Repo:          "engram",
-		DetectCmd:     []string{"engram", "version"},
-		VersionPrefix: "v",
+		Name:              "engram",
+		Owner:             "Gentleman-Programming",
+		Repo:              "engram",
+		DetectCmd:         []string{"engram", "version"},
+		VersionPrefix:     "v",
+		ReleaseTagPattern: `^v[0-9]+\.[0-9]+\.[0-9]+$`,
 		// engram: brew on macOS/Linux-brew, binary download elsewhere.
 		InstallMethod: InstallBinary,
 	},

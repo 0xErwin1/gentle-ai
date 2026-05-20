@@ -299,6 +299,76 @@ func TestFetchLatestRelease(t *testing.T) {
 	}
 }
 
+func TestFetchLatestReleaseMatchingPatternSkipsPiChannel(t *testing.T) {
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/Gentleman-Programming/engram/releases" {
+			t.Fatalf("unexpected path: %s", r.URL.String())
+		}
+		if r.URL.Query().Get("per_page") != "100" {
+			t.Fatalf("per_page = %q, want 100", r.URL.Query().Get("per_page"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Query().Get("page") {
+		case "":
+			w.Header().Set("Link", fmt.Sprintf(`<%s/repos/Gentleman-Programming/engram/releases?per_page=100&page=2>; rel="next"`, serverURL))
+			json.NewEncoder(w).Encode([]githubRelease{
+				{TagName: "pi-v0.1.7", HTMLURL: "https://github.com/Gentleman-Programming/engram/releases/tag/pi-v0.1.7"},
+			})
+		case "2":
+			json.NewEncoder(w).Encode([]githubRelease{
+				{TagName: "v1.15.13", HTMLURL: "https://github.com/Gentleman-Programming/engram/releases/tag/v1.15.13"},
+			})
+		default:
+			t.Fatalf("unexpected page: %s", r.URL.Query().Get("page"))
+		}
+	}))
+	serverURL = server.URL
+	defer server.Close()
+
+	origClient := httpClient
+	t.Cleanup(func() { httpClient = origClient })
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	release, err := fetchLatestReleaseMatchingPattern(context.Background(), "Gentleman-Programming", "engram", `^v[0-9]+\.[0-9]+\.[0-9]+$`)
+	if err != nil {
+		t.Fatalf("fetchLatestReleaseMatchingPattern() error = %v", err)
+	}
+	if release.TagName != "v1.15.13" {
+		t.Fatalf("TagName = %q, want v1.15.13", release.TagName)
+	}
+}
+
+func TestFetchLatestReleaseMatchingPatternRejectsPaginationLoop(t *testing.T) {
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Link", fmt.Sprintf(`<%s/repos/Gentleman-Programming/engram/releases?per_page=100>; rel="next"`, serverURL))
+		json.NewEncoder(w).Encode([]githubRelease{{TagName: "pi-v0.1.7"}})
+	}))
+	serverURL = server.URL
+	defer server.Close()
+
+	origClient := httpClient
+	t.Cleanup(func() { httpClient = origClient })
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	_, err := fetchLatestReleaseMatchingPattern(context.Background(), "Gentleman-Programming", "engram", `^v[0-9]+\.[0-9]+\.[0-9]+$`)
+	if err == nil || !strings.Contains(err.Error(), "pagination loop detected") {
+		t.Fatalf("expected pagination loop error, got %v", err)
+	}
+}
+
+func TestNextGitHubPageFindsRelAfterOtherParameters(t *testing.T) {
+	got := nextGitHubPage(`<https://api.github.com/repos/o/r/releases?per_page=100&page=2>; type="application/json"; rel="next"`)
+	want := "https://api.github.com/repos/o/r/releases?per_page=100&page=2"
+	if got != want {
+		t.Fatalf("nextGitHubPage() = %q, want %q", got, want)
+	}
+}
+
 // TestFetchLatestRelease_Timeout verifies timeout handling.
 func TestFetchLatestRelease_Timeout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -467,6 +537,52 @@ func TestCheckAll(t *testing.T) {
 	assertResult(t, results[2], "gga", NotInstalled, "", "2.0.0")
 	assertResult(t, results[3], "opencode-subagent-statusline", NotInstalled, "", "0.4.0")
 	assertResult(t, results[4], "opencode-sdd-engram-manage", NotInstalled, "", "1.1.7")
+}
+
+func TestCheckSingleTool_EngramUsesBinaryReleaseChannel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/Gentleman-Programming/engram/releases":
+			json.NewEncoder(w).Encode([]githubRelease{
+				{TagName: "pi-v0.1.7", HTMLURL: "https://github.com/Gentleman-Programming/engram/releases/tag/pi-v0.1.7"},
+				{TagName: "v1.15.13", HTMLURL: "https://github.com/Gentleman-Programming/engram/releases/tag/v1.15.13"},
+			})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	origClient := httpClient
+	origLookPath := lookPath
+	origExecCommand := execCommand
+	t.Cleanup(func() {
+		httpClient = origClient
+		lookPath = origLookPath
+		execCommand = origExecCommand
+	})
+
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+	lookPath = func(name string) (string, error) {
+		if name == "engram" {
+			return "/usr/local/bin/engram", nil
+		}
+		return "", fmt.Errorf("not found")
+	}
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "engram" {
+			return exec.Command("echo", "engram 1.15.13")
+		}
+		return exec.Command("false")
+	}
+
+	result := checkSingleTool(context.Background(), Tools[1], "dev", system.PlatformProfile{OS: "darwin", PackageManager: "brew", Supported: true})
+	assertResult(t, result, "engram", UpToDate, "1.15.13", "1.15.13")
+	if result.ReleaseURL != "https://github.com/Gentleman-Programming/engram/releases/tag/v1.15.13" {
+		t.Fatalf("ReleaseURL = %q, want binary channel release", result.ReleaseURL)
+	}
 }
 
 func TestCheckAll_NetworkError(t *testing.T) {
@@ -795,6 +911,9 @@ func TestRegistryContents(t *testing.T) {
 	// engram and gga must have non-nil DetectCmd.
 	if Tools[1].DetectCmd == nil {
 		t.Fatalf("engram DetectCmd should not be nil")
+	}
+	if Tools[1].ReleaseTagPattern != `^v[0-9]+\.[0-9]+\.[0-9]+$` {
+		t.Fatalf("engram ReleaseTagPattern = %q, want binary v* channel pattern", Tools[1].ReleaseTagPattern)
 	}
 	if Tools[2].DetectCmd == nil {
 		t.Fatalf("gga DetectCmd should not be nil")
