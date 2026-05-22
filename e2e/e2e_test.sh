@@ -1692,22 +1692,24 @@ test_windsurf_sdd_skills() {
 }
 
 test_antigravity_sdd_skills_path() {
-    log_test "Antigravity: SDD skills install to ~/.gemini/antigravity/skills/"
+    log_test "Antigravity: SDD skills install to ~/.gemini/antigravity-cli/skills/"
     cleanup_test_env
 
     if $BINARY install --agent antigravity --component sdd --persona neutral 2>&1; then
-        local skills_dir="$HOME/.gemini/antigravity/skills"
+        local skills_dir="$HOME/.gemini/antigravity-cli/skills"
         assert_dir_exists "$skills_dir" "Antigravity skills directory"
         assert_file_exists "$skills_dir/sdd-init/SKILL.md" "sdd-init skill"
         assert_file_exists "$skills_dir/sdd-apply/SKILL.md" "sdd-apply skill"
         assert_file_exists "$skills_dir/_shared/sdd-phase-common.md" "shared convention"
         assert_file_size_min "$skills_dir/sdd-init/SKILL.md" 100 "skill has real content"
 
-        # Path regression guard: skills must NOT go to ~/.gemini/skills/
+        # Path regression guard: skills must NOT go to legacy Gemini paths.
         if [ -d "$HOME/.gemini/skills/sdd-init" ]; then
-            log_fail "Skills went to ~/.gemini/skills/ instead of ~/.gemini/antigravity/skills/"
+            log_fail "Skills went to ~/.gemini/skills/ instead of ~/.gemini/antigravity-cli/skills/"
+        elif [ -d "$HOME/.gemini/antigravity/skills/sdd-init" ]; then
+            log_fail "Skills went to legacy ~/.gemini/antigravity/skills/ instead of ~/.gemini/antigravity-cli/skills/"
         else
-            log_pass "Skills correctly in ~/.gemini/antigravity/skills/"
+            log_pass "Skills correctly in ~/.gemini/antigravity-cli/skills/"
         fi
     else
         log_fail "Antigravity SDD install command failed"
