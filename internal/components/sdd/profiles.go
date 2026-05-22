@@ -398,7 +398,7 @@ func extractModelSection(content, capability string) string {
 		return content
 	}
 	afterOpen := start + len(openMarker)
-	return content[afterOpen:end]
+	return strings.TrimLeft(content[afterOpen:end], " \t\r\n")
 }
 
 // replacePhaseRef replaces occurrences of 'from' with 'to' in content.

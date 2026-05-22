@@ -3488,6 +3488,17 @@ func TestInjectCodexWritesSDDOrchestratorAndSkills(t *testing.T) {
 		t.Fatalf("expected SDD skill file %q: %v", skillPath, err)
 	}
 
+	// Codex requires YAML frontmatter to start at byte 0. Section extraction must
+	// not leave a leading newline before the frontmatter delimiter.
+	extractedSkillPath := filepath.Join(home, ".codex", "skills", "sdd-apply", "SKILL.md")
+	extractedSkill, err := os.ReadFile(extractedSkillPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", extractedSkillPath, err)
+	}
+	if !strings.HasPrefix(string(extractedSkill), "---\n") {
+		t.Fatalf("Codex SDD skill must start with YAML frontmatter delimiter, got prefix %q", string(extractedSkill[:min(len(extractedSkill), 16)]))
+	}
+
 	// Shared files should also be written.
 	sharedPath := filepath.Join(home, ".codex", "skills", "_shared", "engram-convention.md")
 	if _, err := os.Stat(sharedPath); err != nil {

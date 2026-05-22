@@ -143,5 +143,5 @@ func extractModelSection(content, capability string) string {
 		return content // fallback: return full content
 	}
 	afterOpen := start + len(openMarker)
-	return content[afterOpen:end]
+	return strings.TrimLeft(content[afterOpen:end], " \t\r\n")
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
@@ -309,6 +310,24 @@ func TestInjectWithCapability_WritesNonSDDSkillsRegardlessOfCapability(t *testin
 	}
 	if len(result.Skipped) != 0 {
 		t.Fatalf("InjectWithCapability() skipped len = %d, want 0", len(result.Skipped))
+	}
+}
+
+func TestInjectWithCapability_WritesExtractedSDDSkillWithFrontmatterAtStart(t *testing.T) {
+	home := t.TempDir()
+
+	_, err := InjectWithCapability(home, opencodeAdapter(), []model.SkillID{model.SkillSDDApply}, "capable")
+	if err != nil {
+		t.Fatalf("InjectWithCapability() error = %v", err)
+	}
+
+	path := filepath.Join(home, ".config", "opencode", "skills", "sdd-apply", "SKILL.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.HasPrefix(string(content), "---\n") {
+		t.Fatalf("extracted SDD skill must start with YAML frontmatter delimiter, got prefix %q", string(content[:min(len(content), 16)]))
 	}
 }
 
