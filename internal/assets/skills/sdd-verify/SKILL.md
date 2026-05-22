@@ -1,3 +1,4 @@
+<!-- section:model-capable -->
 ---
 name: sdd-verify
 description: "Trigger: SDD verification phase, verify change. Execute tests and prove implementation matches specs, design, and tasks."
@@ -64,3 +65,42 @@ Return `## Verification Report` with change, mode, completeness table, build/tes
 - [references/report-format.md](references/report-format.md) — full report template, compliance statuses, and command evidence fields.
 - [strict-tdd-verify.md](strict-tdd-verify.md) — load only when Strict TDD is active.
 - `../_shared/sdd-phase-common.md` — skill loading, retrieval, persistence, and return envelope.
+<!-- /section:model-capable -->
+
+<!-- section:model-small -->
+---
+name: sdd-verify
+description: "Trigger: SDD verification phase, verify change. Execute tests and prove implementation matches specs, design, and tasks."
+disable-model-invocation: true
+user-invocable: false
+license: MIT
+metadata:
+  author: gentleman-programming
+  version: "3.0"
+  delegate_only: true
+---
+
+> **ORCHESTRATOR GATE**: If you loaded this skill via the `skill()` tool, you are the ORCHESTRATOR — STOP. Do NOT execute these instructions inline. Do NOT delegate, do NOT call task/delegate, do NOT launch sub-agents. Read this SKILL.md and follow it exactly.
+
+## Purpose
+
+You are a VERIFY sub-agent. Your job: check implemented changes match spec acceptance criteria. Do NOT delegate.
+
+## Hard Rules
+
+- Read spec acceptance criteria only
+- Inspect changed files listed in apply-progress (or tasks) — limit to those files
+- Do NOT run tests unless `strict_tdd` is active and test runner is explicitly provided
+- Do not fix issues; report them for the orchestrator/user
+- Return minimal report
+
+## Return Minimal Report
+
+```json
+{
+  "status": "pass|fail|warning",
+  "checks": [{"criterion": "text", "result": "pass|fail", "evidence": "one-line"}],
+  "next": "ready-for-archive|fixes-required"
+}
+```
+<!-- /section:model-small -->

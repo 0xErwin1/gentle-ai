@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/antigravity"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kilocode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
@@ -17,11 +18,12 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
-func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
-func kimiAdapter() agents.Adapter     { return kimi.NewAdapter() }
-func kilocodeAdapter() agents.Adapter { return kilocode.NewAdapter() }
-func openclawAdapter() agents.Adapter { return openclaw.NewAdapter() }
-func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
+func antigravityAdapter() agents.Adapter { return antigravity.NewAdapter() }
+func claudeAdapter() agents.Adapter      { return claude.NewAdapter() }
+func kimiAdapter() agents.Adapter        { return kimi.NewAdapter() }
+func kilocodeAdapter() agents.Adapter    { return kilocode.NewAdapter() }
+func openclawAdapter() agents.Adapter    { return openclaw.NewAdapter() }
+func opencodeAdapter() agents.Adapter    { return opencode.NewAdapter() }
 
 func assertGentlemanLanguageGuardrails(t *testing.T, text string, required []string, banned []string) {
 	t.Helper()
@@ -368,6 +370,57 @@ func TestInjectOpenCodeGentlemanWritesAgentsFile(t *testing.T) {
 	}
 	if !strings.Contains(text, "<!-- gentle-ai:persona -->") {
 		t.Fatal("AGENTS.md missing persona marker")
+	}
+}
+
+func TestInjectAntigravityGentlemanWritesMarkedPersonaSection(t *testing.T) {
+	home := t.TempDir()
+	promptPath := filepath.Join(home, ".gemini", "GEMINI.md")
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(promptPath, []byte("# User Gemini rules\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	result, err := Inject(home, antigravityAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("Inject() changed = false")
+	}
+
+	content, err := os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+	for _, want := range []string{
+		"# User Gemini rules",
+		"<!-- gentle-ai:persona -->",
+		"Senior Architect",
+		"<!-- /gentle-ai:persona -->",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("GEMINI.md missing %q; got:\n%s", want, text)
+		}
+	}
+
+	second, err := Inject(home, antigravityAdapter(), model.PersonaGentleman)
+	if err != nil {
+		t.Fatalf("Inject() second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatalf("Inject() second changed = true; want false")
+	}
+
+	content, err = os.ReadFile(promptPath)
+	if err != nil {
+		t.Fatalf("ReadFile() after second inject error = %v", err)
+	}
+	if got := strings.Count(string(content), "<!-- gentle-ai:persona -->"); got != 1 {
+		t.Fatalf("persona marker count = %d, want 1", got)
 	}
 }
 

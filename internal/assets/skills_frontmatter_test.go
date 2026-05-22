@@ -136,6 +136,21 @@ func skillDirBasename(path string) string {
 func extractSkillFrontmatter(content string) (skillFrontmatter, error) {
 	var fm skillFrontmatter
 
+	// Strip optional leading model-capability HTML comments if present.
+	for {
+		trimmed := strings.TrimSpace(content)
+		if strings.HasPrefix(trimmed, "<!-- section:model-") {
+			idx := strings.Index(content, "-->")
+			if idx == -1 {
+				break
+			}
+			content = content[idx+3:]
+			content = strings.TrimLeft(content, "\r\n")
+		} else {
+			break
+		}
+	}
+
 	if !strings.HasPrefix(content, "---\n") && !strings.HasPrefix(content, "---\r\n") {
 		return fm, errFrontmatter("file does not start with `---`")
 	}

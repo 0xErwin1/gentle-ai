@@ -965,8 +965,8 @@ func TestInjectKimiKiroWindsurfAntigravityPreserveNativeChainStrategyWording(t *
 			promptPath: func(home string, adapter agents.Adapter) string {
 				return adapter.SystemPromptFile(home)
 			},
-			required:  []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "inline phase context", "Phase Execution Protocol"},
-			forbidden: []string{"OpenCode's background-agent plugin", "plugin-backed persisted background delegation", "custom sub-agent prompts"},
+			required:  []string{"### Chain Strategy", "`stacked-to-main`", "`feature-branch-chain`", "delivery_strategy", "chain_strategy", "dynamic subagent context", "define_subagent", "invoke_subagent"},
+			forbidden: []string{"OpenCode's background-agent plugin", "plugin-backed persisted background delegation", "inline phase context"},
 		},
 	}
 
@@ -1479,22 +1479,28 @@ func TestInjectOpenCodeSubagentPromptsStayExecutorScoped(t *testing.T) {
 		// After the shared-prompt-files refactor, the prompt field is a {file:...}
 		// reference. The executor-scoped content lives in the prompt file on disk.
 		prompt, _ := agentDef["prompt"].(string)
-		expectedRef := "{file:" + filepath.Join(promptDir, phase+".md") + "}"
+		expectedRef := "{file:" + filepath.ToSlash(filepath.Join(promptDir, phase+".md")) + "}"
 		if prompt != expectedRef {
 			t.Fatalf("%s prompt = %q, want {file:...} reference %q", phase, prompt, expectedRef)
 		}
 
-		// Also verify the prompt file itself contains the executor-scoped markers.
+		// Also verify the prompt file contains the executor-scoped content
+		// (skill content that makes clear this is the executor, not orchestrator).
 		promptFilePath := filepath.Join(promptDir, phase+".md")
 		promptFileData, readErr := os.ReadFile(promptFilePath)
 		if readErr != nil {
 			t.Fatalf("%s prompt file %q not readable: %v", phase, promptFilePath, readErr)
 		}
 		promptFileContent := string(promptFileData)
-		for _, want := range []string{"not the orchestrator", "Do NOT delegate", "Do NOT call task/delegate", "Do NOT launch sub-agents"} {
-			if !strings.Contains(promptFileContent, want) {
-				t.Fatalf("%s prompt file missing %q", phase, want)
-			}
+		// Each prompt file must have substantial content (skill file, not old one-liner).
+		if len(promptFileContent) < 200 {
+			t.Fatalf("%s prompt file content too short (%d bytes)", phase, len(promptFileContent))
+		}
+		// Check for executor-scoped markers present in skill files.
+		hasGate := strings.Contains(promptFileContent, "ORCHESTRATOR GATE") || strings.Contains(promptFileContent, "ORCHESTRATOR NOTE")
+		hasDoNotDelegate := strings.Contains(strings.ToLower(promptFileContent), "do not delegate")
+		if !hasGate && !hasDoNotDelegate {
+			t.Fatalf("%s prompt file missing expected skill content", phase)
 		}
 	}
 }

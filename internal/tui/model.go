@@ -2791,7 +2791,7 @@ func (m Model) optionCount() int {
 }
 
 func isHomebrewManagedBinary(execPath string) bool {
-	path := filepath.Clean(execPath)
+	path := filepath.ToSlash(filepath.Clean(execPath))
 	if strings.Contains(path, "/Cellar/") {
 		return true
 	}

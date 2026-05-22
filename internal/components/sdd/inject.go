@@ -12,6 +12,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
@@ -45,6 +46,12 @@ type InjectOptions struct {
 	// Used by external-single-active profile strategy integrations where
 	// external tools extend orchestrator policy/prompt at runtime.
 	PreserveOpenCodeOrchestratorPrompt bool
+
+	// Capability is the model capability ("capable" or "small") used to
+	// extract the appropriate section from SDD skill files. If empty,
+	// skills.InjectWithCapability will be called with empty capability
+	// (no section extraction, full content written).
+	Capability string
 }
 
 // workflowInjector is an optional adapter capability: if an adapter
@@ -354,7 +361,21 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			overlayBytes := []byte(overlayContent)
 			// For multi-mode, write shared prompt files before inlining references.
 			if sddMode == model.SDDModeMulti {
-				promptsChanged, promptsErr := WriteSharedPromptFiles(homeDir)
+				// Build phase → capability map from model assignments.
+				phaseCapabilities := make(map[string]string)
+				for phase, assignment := range opts.OpenCodeModelAssignments {
+					phaseCapabilities[phase] = model.ModelCapability(assignment.ModelID)
+				}
+				// Also include phase assignments from named profiles so their
+				// prompt files are written with the correct section.
+				for _, profile := range opts.Profiles {
+					for phase, assignment := range profile.PhaseAssignments {
+						if assignment.ModelID != "" {
+							phaseCapabilities[phase] = model.ModelCapability(assignment.ModelID)
+						}
+					}
+				}
+				promptsChanged, promptsErr := WriteSharedPromptFiles(homeDir, phaseCapabilities)
 				if promptsErr != nil {
 					return InjectionResult{}, fmt.Errorf("write shared SDD prompt files: %w", promptsErr)
 				}
@@ -440,7 +461,15 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				"sdd-phase-common.md",
 				"skill-resolver.md",
 			}
+			sddSkillIDs := []model.SkillID{
+				"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
+				"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive",
+				"sdd-onboard", "judgment-day",
+			}
 
+			// Write shared skill files (not SDD-specific, but needed by SDD).
+			// These are written directly, not via skills.Inject, since they are
+			// not part of the skills component's injection scope.
 			for _, fileName := range sharedFiles {
 				assetPath := "skills/_shared/" + fileName
 				content, readErr := assets.Read(assetPath)
@@ -461,56 +490,19 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				files = append(files, path)
 			}
 
-			sddSkills := []string{
-				"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
-				"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive",
-				"sdd-onboard", "judgment-day",
+			// Write SDD skill files using skills.InjectWithCapability, which
+			// extracts the appropriate model section from each skill file based on capability.
+			// Default to "capable" when no specific capability is set.
+			capability := opts.Capability
+			if capability == "" {
+				capability = "capable"
 			}
-
-			for _, skill := range sddSkills {
-				embedDir := "skills/" + skill
-				entries, readDirErr := fs.ReadDir(assets.FS, embedDir)
-				if readDirErr != nil {
-					return InjectionResult{}, fmt.Errorf("required SDD skill %q: embedded directory not found: %w", skill, readDirErr)
-				}
-				if len(entries) == 0 {
-					return InjectionResult{}, fmt.Errorf("required SDD skill %q: embedded directory is empty", skill)
-				}
-
-				walkErr := fs.WalkDir(assets.FS, embedDir, func(assetPath string, entry fs.DirEntry, walkErr error) error {
-					if walkErr != nil {
-						return walkErr
-					}
-					if entry.IsDir() {
-						return nil
-					}
-
-					content, readErr := assets.Read(assetPath)
-					if readErr != nil {
-						return fmt.Errorf("embedded asset %q not found: %w", assetPath, readErr)
-					}
-					if len(content) == 0 {
-						return fmt.Errorf("embedded asset %q is empty", assetPath)
-					}
-
-					relPath, relErr := filepath.Rel(filepath.FromSlash(embedDir), filepath.FromSlash(assetPath))
-					if relErr != nil {
-						return fmt.Errorf("resolve relative path for %q: %w", assetPath, relErr)
-					}
-					path := filepath.Join(skillDir, skill, relPath)
-					writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
-					if err != nil {
-						return fmt.Errorf("write %q: %w", path, err)
-					}
-
-					changed = changed || writeResult.Changed
-					files = append(files, path)
-					return nil
-				})
-				if walkErr != nil {
-					return InjectionResult{}, fmt.Errorf("required SDD skill %q: copy embedded directory: %w", skill, walkErr)
-				}
+			sddResult, sddErr := skills.InjectWithCapability(homeDir, adapter, sddSkillIDs, capability)
+			if sddErr != nil {
+				return InjectionResult{}, fmt.Errorf("inject SDD skills: %w", sddErr)
 			}
+			changed = changed || sddResult.Changed
+			files = append(files, sddResult.Files...)
 		}
 	}
 
@@ -795,7 +787,7 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 			}
 			placeholder := "__PROMPT_FILE_" + phase + "__"
 			if prompt, _ := agentMap["prompt"].(string); prompt == placeholder {
-				agentMap["prompt"] = "{file:" + filepath.Join(promptDir, phase+".md") + "}"
+				agentMap["prompt"] = "{file:" + filepath.ToSlash(filepath.Join(promptDir, phase+".md")) + "}"
 			}
 		}
 	}

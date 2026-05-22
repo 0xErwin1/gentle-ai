@@ -90,6 +90,10 @@ func swapSelfUpdateDeps(t *testing.T, checkResult []update.UpdateResult, upgrade
 		return nil
 	}
 
+	goOS = func() string {
+		return "darwin"
+	}
+
 	return stubs
 }
 

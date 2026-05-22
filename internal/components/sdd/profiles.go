@@ -304,11 +304,12 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string) ([]byte, erro
 
 	for _, phase := range profilePhaseOrder {
 		key := phase + suffix
+		prompt := "{file:" + filepath.ToSlash(filepath.Join(promptDir, phase+".md")) + "}"
 		entry := map[string]any{
 			"mode":        "subagent",
 			"hidden":      true,
 			"description": phaseDescriptions[phase],
-			"prompt":      "{file:" + filepath.Join(promptDir, phase+".md") + "}",
+			"prompt":      prompt,
 			"tools": map[string]any{
 				"read":  true,
 				"write": true,
@@ -343,11 +344,19 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string) ([]byte, erro
 // buildProfileOrchestratorPrompt constructs the orchestrator prompt for a named
 // profile. It:
 //  1. Reads the base OpenCode-specific orchestrator asset
-//  2. Injects a model assignments table reflecting the profile's models
-//  3. Replaces bare sub-agent references (e.g. sdd-init) with suffixed ones
+//  2. Extracts the section matching the orchestrator's model capability (capable or small)
+//  3. Injects a model assignments table reflecting the profile's models
+//  4. Replaces bare sub-agent references (e.g. sdd-init) with suffixed ones
 //     (e.g. sdd-init-{name}) in the prompt text
 func buildProfileOrchestratorPrompt(profile model.Profile) (string, error) {
 	base := assets.MustRead(sddOrchestratorAsset(model.AgentOpenCode))
+
+	// Extract section based on model capability (derived from model name).
+	capability := "capable"
+	if profile.OrchestratorModel.ModelID != "" {
+		capability = model.ModelCapability(profile.OrchestratorModel.ModelID)
+	}
+	base = extractModelSection(base, capability)
 
 	// Inject model assignments table.
 	const openMarker = "<!-- gentle-ai:sdd-model-assignments -->"
@@ -374,6 +383,22 @@ func buildProfileOrchestratorPrompt(profile model.Profile) (string, error) {
 	base = replacePhaseRef(base, "sdd-orchestrator", "sdd-orchestrator"+suffix)
 
 	return base, nil
+}
+
+// extractModelSection extracts the section matching the given capability
+// ("capable" or "small") from content containing <!-- section:model-capable -->
+// and <!-- section:model-small --> markers. If no matching section is found,
+// the full content is returned.
+func extractModelSection(content, capability string) string {
+	openMarker := "<!-- section:model-" + capability + " -->"
+	closeMarker := "<!-- /section:model-" + capability + " -->"
+	start := strings.Index(content, openMarker)
+	end := strings.Index(content, closeMarker)
+	if start == -1 || end == -1 || end <= start {
+		return content
+	}
+	afterOpen := start + len(openMarker)
+	return content[afterOpen:end]
 }
 
 // replacePhaseRef replaces occurrences of 'from' with 'to' in content.

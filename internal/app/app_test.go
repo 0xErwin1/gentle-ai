@@ -50,9 +50,7 @@ func TestListBackupsNewestFirst(t *testing.T) {
 	}
 
 	// Temporarily override home dir resolution for ListBackups.
-	origHomeDir := os.Getenv("HOME")
-	t.Cleanup(func() { os.Setenv("HOME", origHomeDir) })
-	os.Setenv("HOME", home)
+	setupMockHome(t, home)
 
 	manifests := ListBackups()
 
@@ -92,9 +90,7 @@ func TestListBackupsWithSourceMetadata(t *testing.T) {
 		t.Fatalf("WriteManifest: %v", err)
 	}
 
-	origHome := os.Getenv("HOME")
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
-	os.Setenv("HOME", home)
+	setupMockHome(t, home)
 
 	manifests := ListBackups()
 
@@ -116,9 +112,7 @@ func TestListBackupsWithSourceMetadata(t *testing.T) {
 // (either a backup list or a "no backups" message — never "unknown command").
 func TestRunArgsRestoreListIsDispatched(t *testing.T) {
 	home := t.TempDir()
-	origHome := os.Getenv("HOME")
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
-	os.Setenv("HOME", home)
+	setupMockHome(t, home)
 
 	var buf bytes.Buffer
 	err := RunArgs([]string{"restore", "--list"}, &buf)
@@ -171,9 +165,7 @@ func TestRunArgsRestoreByIDWithYes(t *testing.T) {
 		t.Fatalf("WriteManifest: %v", err)
 	}
 
-	origHome := os.Getenv("HOME")
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
-	os.Setenv("HOME", home)
+	setupMockHome(t, home)
 
 	var buf bytes.Buffer
 	err := RunArgs([]string{"restore", "test-backup-001", "--yes"}, &buf)
@@ -191,9 +183,7 @@ func TestRunArgsRestoreByIDWithYes(t *testing.T) {
 // is surfaced as an error from RunArgs.
 func TestRunArgsRestoreUnknownIDReturnsError(t *testing.T) {
 	home := t.TempDir()
-	origHome := os.Getenv("HOME")
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
-	os.Setenv("HOME", home)
+	setupMockHome(t, home)
 
 	var buf bytes.Buffer
 	err := RunArgs([]string{"restore", "no-such-backup", "--yes"}, &buf)
@@ -252,9 +242,7 @@ func TestListBackupsFallsBackGracefullyForOldManifests(t *testing.T) {
 		t.Fatalf("WriteManifest: %v", err)
 	}
 
-	origHome := os.Getenv("HOME")
-	t.Cleanup(func() { os.Setenv("HOME", origHome) })
-	os.Setenv("HOME", home)
+	setupMockHome(t, home)
 
 	manifests := ListBackups()
 
@@ -798,4 +786,16 @@ func TestIsExplicitUpdateFlow(t *testing.T) {
 			}
 		})
 	}
+}
+
+func setupMockHome(t *testing.T, home string) {
+	t.Helper()
+	origHome := os.Getenv("HOME")
+	origUserProfile := os.Getenv("USERPROFILE")
+	t.Cleanup(func() {
+		os.Setenv("HOME", origHome)
+		os.Setenv("USERPROFILE", origUserProfile)
+	})
+	os.Setenv("HOME", home)
+	os.Setenv("USERPROFILE", home)
 }

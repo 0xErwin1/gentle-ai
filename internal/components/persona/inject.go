@@ -244,26 +244,17 @@ func injectInternal(homeDir string, adapter agents.Adapter, persona model.Person
 	case model.StrategyAppendToFile:
 		promptPath := adapter.SystemPromptFile(homeDir)
 
-		// Read existing content if file exists
 		existing, err := readFileOrEmpty(promptPath)
 		if err != nil {
 			return InjectionResult{}, err
 		}
 
-		// Idempotency: skip if persona content is already present in the file.
-		if strings.Contains(existing, strings.TrimSpace(content)) {
-			return InjectionResult{Files: []string{promptPath}}, nil
-		}
-
-		// Do a real append: preserve existing content + add new content
-		updated := existing
-		if len(updated) > 0 && !strings.HasSuffix(updated, "\n") {
-			updated += "\n"
-		}
-		if len(updated) > 0 {
-			updated += "\n"
-		}
-		updated += content
+		// Append-style agents still need marker-bound persona sections so sync can
+		// replace managed content without duplicating it or disturbing user-authored
+		// rules in the shared prompt file.
+		healed := filemerge.StripLegacyPersonaBlock(existing)
+		healed = filemerge.StripLegacyATLBlock(healed)
+		updated := filemerge.InjectMarkdownSection(healed, "persona", content)
 
 		writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
 		if err != nil {

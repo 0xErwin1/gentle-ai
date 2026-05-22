@@ -26,7 +26,7 @@ func TestDetect(t *testing.T) {
 			stat:            statResult{isDir: true},
 			wantInstalled:   true,
 			wantBinaryPath:  "",
-			wantConfigPath:  filepath.Join("/tmp/home", ".gemini", "antigravity"),
+			wantConfigPath:  filepath.Join("/tmp/home", ".gemini", "antigravity-cli"),
 			wantConfigFound: true,
 		},
 		{
@@ -34,7 +34,7 @@ func TestDetect(t *testing.T) {
 			stat:            statResult{err: os.ErrNotExist},
 			wantInstalled:   false,
 			wantBinaryPath:  "",
-			wantConfigPath:  filepath.Join("/tmp/home", ".gemini", "antigravity"),
+			wantConfigPath:  filepath.Join("/tmp/home", ".gemini", "antigravity-cli"),
 			wantConfigFound: false,
 		},
 		{
@@ -85,7 +85,7 @@ func TestInstallCommand(t *testing.T) {
 
 	_, err := a.InstallCommand(system.PlatformProfile{OS: "darwin"})
 	if err == nil {
-		t.Fatal("InstallCommand() expected error for desktop IDE, got nil")
+		t.Fatal("InstallCommand() expected error for CLI agent, got nil")
 	}
 
 	var notInstallable AgentNotInstallableError
@@ -102,7 +102,7 @@ func TestSupportsAutoInstall(t *testing.T) {
 	a := NewAdapter()
 
 	if a.SupportsAutoInstall() {
-		t.Fatal("SupportsAutoInstall() = true, want false for desktop IDE")
+		t.Fatal("SupportsAutoInstall() = true, want false for Antigravity")
 	}
 }
 
@@ -110,24 +110,24 @@ func TestConfigPathsCrossPlatform(t *testing.T) {
 	a := NewAdapter()
 	home := "/tmp/home"
 
-	if got := a.GlobalConfigDir(home); got != filepath.Join(home, ".gemini", "antigravity") {
-		t.Fatalf("GlobalConfigDir() = %q, want %q", got, filepath.Join(home, ".gemini", "antigravity"))
+	if got := a.GlobalConfigDir(home); got != filepath.Join(home, ".gemini", "antigravity-cli") {
+		t.Fatalf("GlobalConfigDir() = %q, want %q", got, filepath.Join(home, ".gemini", "antigravity-cli"))
 	}
 
-	if got := a.SkillsDir(home); got != filepath.Join(home, ".gemini", "antigravity", "skills") {
-		t.Fatalf("SkillsDir() = %q, want %q", got, filepath.Join(home, ".gemini", "antigravity", "skills"))
+	if got := a.SkillsDir(home); got != filepath.Join(home, ".gemini", "antigravity-cli", "skills") {
+		t.Fatalf("SkillsDir() = %q, want %q", got, filepath.Join(home, ".gemini", "antigravity-cli", "skills"))
 	}
 
-	if got := a.MCPConfigPath(home, "ctx7"); got != filepath.Join(home, ".gemini", "antigravity", "mcp_config.json") {
-		t.Fatalf("MCPConfigPath() = %q, want %q", got, filepath.Join(home, ".gemini", "antigravity", "mcp_config.json"))
+	if got := a.MCPConfigPath(home, "ctx7"); got != filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json") {
+		t.Fatalf("MCPConfigPath() = %q, want %q", got, filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json"))
 	}
 
 	if got := a.SystemPromptFile(home); got != filepath.Join(home, ".gemini", "GEMINI.md") {
 		t.Fatalf("SystemPromptFile() = %q, want %q", got, filepath.Join(home, ".gemini", "GEMINI.md"))
 	}
 
-	if got := a.SettingsPath(home); got != filepath.Join(home, ".gemini", "antigravity", "settings.json") {
-		t.Fatalf("SettingsPath() = %q, want %q", got, filepath.Join(home, ".gemini", "antigravity", "settings.json"))
+	if got := a.SettingsPath(home); got != filepath.Join(home, ".gemini", "antigravity-cli", "settings.json") {
+		t.Fatalf("SettingsPath() = %q, want %q", got, filepath.Join(home, ".gemini", "antigravity-cli", "settings.json"))
 	}
 
 	if got := a.SystemPromptDir(home); got != filepath.Join(home, ".gemini") {
@@ -158,12 +158,24 @@ func TestCapabilities(t *testing.T) {
 		t.Fatal("SupportsSlashCommands() = true, want false")
 	}
 
+	if a.SupportsSubAgents() {
+		t.Fatal("SupportsSubAgents() = true, want false")
+	}
+
 	if got := a.OutputStyleDir("/tmp/home"); got != "" {
 		t.Fatalf("OutputStyleDir() = %q, want empty string", got)
 	}
 
 	if got := a.CommandsDir("/tmp/home"); got != "" {
 		t.Fatalf("CommandsDir() = %q, want empty string", got)
+	}
+
+	if got := a.SubAgentsDir("/tmp/home"); got != "" {
+		t.Fatalf("SubAgentsDir() = %q, want empty string", got)
+	}
+
+	if got := a.EmbeddedSubAgentsDir(); got != "" {
+		t.Fatalf("EmbeddedSubAgentsDir() = %q, want empty string", got)
 	}
 }
 

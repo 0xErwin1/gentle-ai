@@ -1058,7 +1058,7 @@ func TestRunInstallEngramDefaultModeAttemptsClaudeSetup(t *testing.T) {
 	}
 }
 
-func TestRunInstallAntigravityCopiesGeminiSettingsAfterEngramSetup(t *testing.T) {
+func TestRunInstallAntigravityInitializesCLISettingsAfterEngramSetup(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -1095,13 +1095,13 @@ func TestRunInstallAntigravityCopiesGeminiSettingsAfterEngramSetup(t *testing.T)
 		t.Fatalf("verification ready = false")
 	}
 
-	settingsPath := filepath.Join(home, ".gemini", "antigravity", "settings.json")
+	settingsPath := filepath.Join(home, ".gemini", "antigravity-cli", "settings.json")
 	got, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
 	}
-	if string(got) != "{\"theme\":\"dark\"}\n" {
-		t.Fatalf("antigravity settings = %q, want copied Gemini settings", got)
+	if string(got) != "{}\n" {
+		t.Fatalf("antigravity settings = %q, want initialized empty settings", got)
 	}
 }
 
@@ -1826,7 +1826,8 @@ func TestRunInstallCustomPresetExplicitSkillsFlagPopulatesSelection(t *testing.T
 			skillCount++
 		}
 	}
-	// 11 SDD skills (from sdd dep, includes sdd-onboard) + 2 explicit skills (go-testing, branch-pr) + 1 _shared/SKILL.md = 14
+	// 11 SDD skills (includes sdd-onboard, judgment-day) + 2 explicit skills
+	// (go-testing, branch-pr) + 1 _shared/SKILL.md = 14.
 	if skillCount != 14 {
 		t.Fatalf("expected 14 skill files (11 SDD + 2 explicit + 1 _shared), got %d", skillCount)
 	}
@@ -1885,7 +1886,8 @@ func TestRunInstallCustomPresetSkillsNoFlagInstallsNothing(t *testing.T) {
 			}
 		}
 	}
-	// Expect exactly 12 SKILL.md files: 10 SDD phases + judgment-day (from SDD dependency) + 1 _shared/SKILL.md.
+	// Expect exactly 12 SKILL.md files: 10 SDD phases + judgment-day
+	// (from SDD dependency) + 1 _shared/SKILL.md.
 	// The skills component itself adds 0 (no --skills flag, SkillsForPreset(custom) = nil).
 	if skillCount != 12 {
 		t.Fatalf("expected 12 SDD skill files installed by the sdd dependency, got %d", skillCount)

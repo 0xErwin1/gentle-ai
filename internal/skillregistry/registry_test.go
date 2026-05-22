@@ -130,7 +130,7 @@ description: project OpenCode copy
 		t.Fatalf("SkillCount = %d, want 1", result.SkillCount)
 	}
 	registry := readFile(t, filepath.Join(cwd, RegistryRelPath))
-	for _, want := range []string{"- .opencode/skills", filepath.Join(cwd, ".opencode", "skills", "dup", "SKILL.md")} {
+	for _, want := range []string{filepath.FromSlash("- .opencode/skills"), filepath.Join(cwd, ".opencode", "skills", "dup", "SKILL.md")} {
 		if !strings.Contains(registry, want) {
 			t.Fatalf("registry missing %q:\n%s", want, registry)
 		}

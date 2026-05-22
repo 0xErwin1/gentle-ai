@@ -35,6 +35,10 @@ var (
 	selfUpdateFn             = selfUpdate
 	ensureCurrentOSSupported = system.EnsureCurrentOSSupported
 	detectSystem             = system.Detect
+	runTUI                   = func(m tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
+		p := tea.NewProgram(m, opts...)
+		return p.Run()
+	}
 )
 
 func Run() error {
@@ -121,8 +125,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 		m.SyncFn = tuiSync(homeDir)
 		m.UninstallFn = tuiUninstall(homeDir)
 		m.UninstallWithProfilesFn = tuiUninstallWithProfiles(homeDir)
-		p := tea.NewProgram(m, tea.WithAltScreen())
-		_, err = p.Run()
+		_, err = runTUI(m, tea.WithAltScreen())
 		return err
 	}
 

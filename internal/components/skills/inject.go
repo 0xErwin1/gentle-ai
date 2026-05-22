@@ -26,19 +26,9 @@ type InjectionResult struct {
 	Skipped []model.SkillID
 }
 
-// Inject writes the embedded SKILL.md files for each requested skill
-// to the correct directory for the given agent adapter.
-//
-// The skills directory is determined by adapter.SkillsDir(), removing
-// the need for any agent-specific switch statements.
-//
-// SDD skills (those whose IDs begin with "sdd-") are intentionally skipped
-// here because the SDD component installs them as part of its own injection.
-// This prevents a write conflict when both components are selected together.
-//
-// Individual skill failures (e.g., missing embedded asset) are logged
-// and skipped rather than aborting the entire operation.
-func Inject(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID) (InjectionResult, error) {
+// InjectWithCapability writes skill files like Inject, but for SDD skills
+// it extracts only the section matching the given capability.
+func InjectWithCapability(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID, capability string) (InjectionResult, error) {
 	if !adapter.SupportsSkills() {
 		return InjectionResult{Skipped: skillIDs}, nil
 	}
@@ -53,8 +43,9 @@ func Inject(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID) (I
 	changed := false
 
 	for _, id := range skillIDs {
-		// SDD skills are written by the SDD component — skip to avoid conflicts.
-		if IsSDDSkill(id) {
+		// SDD skills are written by the SDD component — skip to avoid conflicts
+		// unless a capability was specified (model-section extraction requested).
+		if IsSDDSkill(id) && capability == "" {
 			continue
 		}
 
@@ -91,6 +82,12 @@ func Inject(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID) (I
 				return fmt.Errorf("resolve relative path for %q: %w", assetPath, relErr)
 			}
 			path := filepath.Join(destDir, relPath)
+
+			// Extract model section if capability is set (non-empty).
+			if capability != "" {
+				content = extractModelSection(content, capability)
+			}
+
 			writeResult, writeErr := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
 			if writeErr != nil {
 				return fmt.Errorf("write %q: %w", path, writeErr)
@@ -108,6 +105,22 @@ func Inject(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID) (I
 	return InjectionResult{Changed: changed, Files: paths, Skipped: skipped}, nil
 }
 
+// Inject writes the embedded SKILL.md files for each requested skill
+// to the correct directory for the given agent adapter.
+//
+// The skills directory is determined by adapter.SkillsDir(), removing
+// the need for any agent-specific switch statements.
+//
+// SDD skills (those whose IDs begin with "sdd-") are intentionally skipped
+// here because the SDD component installs them as part of its own injection.
+// This prevents a write conflict when both components are selected together.
+//
+// Individual skill failures (e.g., missing embedded asset) are logged
+// and skipped rather than aborting the entire operation.
+func Inject(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID) (InjectionResult, error) {
+	return InjectWithCapability(homeDir, adapter, skillIDs, "")
+}
+
 // SkillPathForAgent returns the filesystem path where a skill file would be written.
 func SkillPathForAgent(homeDir string, adapter agents.Adapter, id model.SkillID) string {
 	skillDir := adapter.SkillsDir(homeDir)
@@ -115,4 +128,20 @@ func SkillPathForAgent(homeDir string, adapter agents.Adapter, id model.SkillID)
 		return ""
 	}
 	return filepath.Join(skillDir, string(id), "SKILL.md")
+}
+
+// extractModelSection extracts the section matching the given capability
+// ("capable" or "small") from content containing <!-- section:model-capable -->
+// and <!-- section:model-small --> markers. If no matching section is found,
+// the full content is returned.
+func extractModelSection(content, capability string) string {
+	openMarker := "<!-- section:model-" + capability + " -->"
+	closeMarker := "<!-- /section:model-" + capability + " -->"
+	start := strings.Index(content, openMarker)
+	end := strings.Index(content, closeMarker)
+	if start == -1 || end == -1 || end <= start {
+		return content // fallback: return full content
+	}
+	afterOpen := start + len(openMarker)
+	return content[afterOpen:end]
 }

@@ -486,6 +486,7 @@ func TestInjectCursorWithMalformedMCPJsonRecovery(t *testing.T) {
 func TestInjectVSCodeMergesEngramToMCPConfigFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("APPDATA", filepath.Join(home, "AppData", "Roaming"))
 	adapter := vscode.NewAdapter()
 
 	result, err := Inject(home, adapter)
@@ -550,16 +551,8 @@ func TestInjectGeminiToolsFlagPresent(t *testing.T) {
 	}
 }
 
-func TestInjectAntigravityCopiesGeminiSettingsAfterEngramSetup(t *testing.T) {
+func TestInjectAntigravityWritesMCPToCLIConfig(t *testing.T) {
 	home := t.TempDir()
-	sourcePath := filepath.Join(home, ".gemini", "settings.json")
-	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
-		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(sourcePath), err)
-	}
-	want := []byte("{\"theme\":\"dark\"}\n")
-	if err := os.WriteFile(sourcePath, want, 0o644); err != nil {
-		t.Fatalf("WriteFile(%q) error = %v", sourcePath, err)
-	}
 
 	result, err := Inject(home, antigravityAdapter())
 	if err != nil {
@@ -569,17 +562,60 @@ func TestInjectAntigravityCopiesGeminiSettingsAfterEngramSetup(t *testing.T) {
 		t.Fatalf("Inject(antigravity) changed = false")
 	}
 
-	settingsPath := filepath.Join(home, ".gemini", "antigravity", "settings.json")
-	got, err := os.ReadFile(settingsPath)
+	cliMCPPath := filepath.Join(home, ".gemini", "antigravity-cli", "mcp_config.json")
+	content, err := os.ReadFile(cliMCPPath)
 	if err != nil {
-		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
+		t.Fatalf("ReadFile(%q) error = %v", cliMCPPath, err)
 	}
-	if string(got) != string(want) {
-		t.Fatalf("antigravity settings = %q, want %q", got, want)
+	text := string(content)
+	if !strings.Contains(text, `"args": [`) || !strings.Contains(text, `"mcp"`) {
+		t.Fatalf("Antigravity MCP config must launch Engram MCP; got:\n%s", text)
+	}
+	if strings.Contains(text, `--tools=`) {
+		t.Fatalf("Antigravity should use Engram's default MCP invocation without tool-profile flags; got:\n%s", text)
 	}
 
-	mcpPath := filepath.Join(home, ".gemini", "antigravity", "mcp_config.json")
-	assertArgsHaveToolsAgent(t, mcpPath)
+	pluginPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "plugin.json")
+	if _, err := os.Stat(pluginPath); err != nil {
+		t.Fatalf("Antigravity Engram plugin manifest missing: %v", err)
+	}
+
+	pluginMCPPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "mcp_config.json")
+	pluginMCPContent, err := os.ReadFile(pluginMCPPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", pluginMCPPath, err)
+	}
+	pluginMCPText := string(pluginMCPContent)
+	if !strings.Contains(pluginMCPText, `"mcp"`) || strings.Contains(pluginMCPText, `--tools=`) {
+		t.Fatalf("Antigravity Engram plugin MCP config should expose default Engram MCP tools; got:\n%s", pluginMCPText)
+	}
+
+	hooksPath := filepath.Join(home, ".gemini", "antigravity-cli", "plugins", "gentle-ai-engram", "hooks.json")
+	hooksContent, err := os.ReadFile(hooksPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", hooksPath, err)
+	}
+	hooksText := string(hooksContent)
+	for _, want := range []string{
+		"PreInvocation",
+		"injectSteps",
+		"mem_save",
+		"mem_search",
+		"mem_context",
+		"mem_session_summary",
+		"mem_get_observation",
+		"mem_current_project",
+		"mem_judge",
+	} {
+		if !strings.Contains(hooksText, want) {
+			t.Fatalf("Antigravity Engram hook missing %q; got:\n%s", want, hooksText)
+		}
+	}
+
+	desktopMCPPath := filepath.Join(home, ".gemini", "antigravity", "mcp_config.json")
+	if _, err := os.Stat(desktopMCPPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy desktop MCP path %q should not be written for antigravity; stat err = %v", desktopMCPPath, err)
+	}
 }
 
 func TestInjectAntigravityInitializesEmptySettingsWhenGeminiMissing(t *testing.T) {
@@ -593,7 +629,7 @@ func TestInjectAntigravityInitializesEmptySettingsWhenGeminiMissing(t *testing.T
 		t.Fatalf("Inject(antigravity) first changed = false")
 	}
 
-	settingsPath := filepath.Join(home, ".gemini", "antigravity", "settings.json")
+	settingsPath := filepath.Join(home, ".gemini", "antigravity-cli", "settings.json")
 	got, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("ReadFile(%q) error = %v", settingsPath, err)
@@ -706,7 +742,9 @@ func TestInjectCodexInjectsTOMLKeys(t *testing.T) {
 	if !strings.Contains(text, `model_instructions_file`) {
 		t.Fatalf("config.toml missing model_instructions_file key; got:\n%s", text)
 	}
-	if !strings.Contains(text, instructionsPath) {
+	normText := strings.ReplaceAll(strings.ReplaceAll(text, "\\\\", "/"), "\\", "/")
+	normInstrPath := filepath.ToSlash(instructionsPath)
+	if !strings.Contains(normText, normInstrPath) {
 		t.Fatalf("config.toml model_instructions_file does not reference %q; got:\n%s", instructionsPath, text)
 	}
 
@@ -714,7 +752,8 @@ func TestInjectCodexInjectsTOMLKeys(t *testing.T) {
 	if !strings.Contains(text, `experimental_compact_prompt_file`) {
 		t.Fatalf("config.toml missing experimental_compact_prompt_file key; got:\n%s", text)
 	}
-	if !strings.Contains(text, compactPath) {
+	normCompactPath := filepath.ToSlash(compactPath)
+	if !strings.Contains(normText, normCompactPath) {
 		t.Fatalf("config.toml experimental_compact_prompt_file does not reference %q; got:\n%s", compactPath, text)
 	}
 }

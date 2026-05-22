@@ -400,7 +400,8 @@ func TestGenerateProfileOverlay_Structure(t *testing.T) {
 		t.Errorf("sdd-orchestrator-cheap prompt does not contain orchestrator content; got: %q", prompt[:min(100, len(prompt))])
 	}
 
-	// Sub-agent checks — each phase should be hidden subagent with file ref
+	// Sub-agent checks — cheap profiles use slim prompts for apply/verify and
+	// shared prompt file refs for the remaining phases.
 	for _, phase := range subAgentPhaseOrder {
 		key := phase + "-cheap"
 		agentRaw, ok := agentMap[key]
@@ -556,7 +557,7 @@ func TestGenerateProfileOverlay_SubAgentFileRefs(t *testing.T) {
 		key := phase + "-cheap"
 		agent := agentMap[key].(map[string]any)
 		prompt, _ := agent["prompt"].(string)
-		expectedRef := "{file:" + filepath.Join(promptDir, phase+".md") + "}"
+		expectedRef := "{file:" + filepath.ToSlash(filepath.Join(promptDir, phase+".md")) + "}"
 		if prompt != expectedRef {
 			t.Errorf("sub-agent %q prompt = %q, want %q", key, prompt, expectedRef)
 		}
