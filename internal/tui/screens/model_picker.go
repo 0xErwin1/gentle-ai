@@ -2,8 +2,11 @@ package screens
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
@@ -46,6 +49,7 @@ type ModelPickerState struct {
 	ProviderScroll int
 	ModelCursor    int
 	ModelScroll    int
+	ModelSearch    string
 
 	// AllPhasesModel tracks the assignment last set via the "Set all phases" row.
 	// It is only updated when the user selects row idx 1 ("Set all phases"), NOT
@@ -193,6 +197,7 @@ func handleProviderNav(key string, state *ModelPickerState) bool {
 		state.Mode = ModeModelSelect
 		state.ModelCursor = 0
 		state.ModelScroll = 0
+		state.ModelSearch = ""
 		return true
 	case "esc":
 		state.Mode = ModePhaseList
@@ -208,10 +213,7 @@ func handleModelNav(
 	state *ModelPickerState,
 	assignments map[string]model.ModelAssignment,
 ) (bool, map[string]model.ModelAssignment) {
-	models := state.SDDModels[state.SelectedProvider]
-	if len(models) == 0 {
-		return false, assignments
-	}
+	models := FilteredModelEntries(*state)
 
 	switch key {
 	case "up", "k":
@@ -231,6 +233,9 @@ func handleModelNav(
 		}
 		return true, assignments
 	case "enter":
+		if len(models) == 0 {
+			return true, assignments
+		}
 		selected := models[state.ModelCursor]
 		assignment := model.ModelAssignment{
 			ProviderID: state.SelectedProvider,
@@ -260,16 +265,129 @@ func handleModelNav(
 		state.Mode = ModePhaseList
 		state.ModelCursor = 0
 		state.ModelScroll = 0
+		state.ModelSearch = ""
 		state.ProviderCursor = 0
 		state.ProviderScroll = 0
+		return true, assignments
+	case "backspace":
+		if state.ModelSearch != "" {
+			runes := []rune(state.ModelSearch)
+			state.ModelSearch = string(runes[:len(runes)-1])
+			state.ModelCursor = 0
+			state.ModelScroll = 0
+		}
+		return true, assignments
+	case "ctrl+u":
+		state.ModelSearch = ""
+		state.ModelCursor = 0
+		state.ModelScroll = 0
 		return true, assignments
 	case "esc":
 		state.Mode = ModeProviderSelect
 		state.ModelCursor = 0
 		state.ModelScroll = 0
+		state.ModelSearch = ""
 		return true, assignments
+	default:
+		if isModelSearchInput(key) {
+			state.ModelSearch += key
+			state.ModelCursor = 0
+			state.ModelScroll = 0
+			return true, assignments
+		}
 	}
 	return false, assignments
+}
+
+func isModelSearchInput(key string) bool {
+	runes := []rune(key)
+	if len(runes) != 1 {
+		return false
+	}
+	return unicode.IsPrint(runes[0]) && runes[0] != 'j' && runes[0] != 'k'
+}
+
+var modelVersionPattern = regexp.MustCompile(`\d+(?:[._-]\d+)*`)
+
+func FilteredModelEntries(state ModelPickerState) []opencode.Model {
+	models := sortedModelsNewestFirst(state.SDDModels[state.SelectedProvider])
+	query := strings.ToLower(strings.TrimSpace(state.ModelSearch))
+	if query == "" {
+		return models
+	}
+
+	filtered := make([]opencode.Model, 0, len(models))
+	for _, m := range models {
+		haystack := strings.ToLower(strings.Join([]string{m.ID, m.Name, m.Family}, " "))
+		if strings.Contains(haystack, query) {
+			filtered = append(filtered, m)
+		}
+	}
+	return filtered
+}
+
+func sortedModelsNewestFirst(models []opencode.Model) []opencode.Model {
+	sorted := append([]opencode.Model(nil), models...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		left := modelVersionKey(sorted[i])
+		right := modelVersionKey(sorted[j])
+		if cmp := compareVersionKeys(left, right); cmp != 0 {
+			return cmp > 0
+		}
+		return false
+	})
+	return sorted
+}
+
+func modelVersionKey(m opencode.Model) []int {
+	text := strings.ToLower(strings.Join([]string{m.ID, m.Name, m.Family}, " "))
+	matches := modelVersionPattern.FindAllString(text, -1)
+	var bestFallback []int
+	for _, match := range matches {
+		parts := strings.FieldsFunc(match, func(r rune) bool { return r == '.' || r == '_' || r == '-' })
+		key := make([]int, 0, len(parts))
+		for _, part := range parts {
+			value, err := strconv.Atoi(part)
+			if err != nil {
+				continue
+			}
+			key = append(key, value)
+		}
+		if compareVersionKeys(key, bestFallback) > 0 {
+			bestFallback = key
+		}
+		// Prefer the first semantic-looking version in the model name/id. Real model
+		// IDs often append release dates after it (for example gemini-2.5-...-03-25
+		// or claude-3-5-...-20241022); later numeric groups must not outrank the
+		// actual model generation.
+		if len(key) > 0 && key[0] < 1000 {
+			return key
+		}
+	}
+	return bestFallback
+}
+
+func compareVersionKeys(left, right []int) int {
+	maxLen := len(left)
+	if len(right) > maxLen {
+		maxLen = len(right)
+	}
+	for i := 0; i < maxLen; i++ {
+		var l, r int
+		if i < len(left) {
+			l = left[i]
+		}
+		if i < len(right) {
+			r = right[i]
+		}
+		if l > r {
+			return 1
+		}
+		if l < r {
+			return -1
+		}
+	}
+	return 0
 }
 
 func applyAssignmentPreservingMatchingEffort(state ModelPickerState, assignments map[string]model.ModelAssignment, assignment model.ModelAssignment, preserveEffort bool) map[string]model.ModelAssignment {
@@ -594,11 +712,27 @@ func renderModelSelect(state ModelPickerState) string {
 	b.WriteString(styles.TitleStyle.Render(fmt.Sprintf("Select model (%s):", provName)))
 	b.WriteString("\n\n")
 
-	models := state.SDDModels[state.SelectedProvider]
+	models := FilteredModelEntries(state)
+	if state.ModelCursor >= len(models) && len(models) > 0 {
+		state.ModelCursor = len(models) - 1
+	}
+	if state.ModelScroll > state.ModelCursor {
+		state.ModelScroll = state.ModelCursor
+	}
+
+	b.WriteString(styles.SubtextStyle.Render("Search: " + modelSearchDisplay(state.ModelSearch)))
+	b.WriteString("\n\n")
 
 	end := state.ModelScroll + maxVisibleItems
 	if end > len(models) {
 		end = len(models)
+	}
+
+	if len(models) == 0 {
+		b.WriteString(styles.WarningStyle.Render("  No models match your search."))
+		b.WriteString("\n\n")
+		b.WriteString(styles.HelpStyle.Render("type: search • backspace: delete • ctrl+u: clear • esc: back"))
+		return b.String()
 	}
 
 	if state.ModelScroll > 0 {
@@ -627,9 +761,16 @@ func renderModelSelect(state ModelPickerState) string {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • esc: back"))
+	b.WriteString(styles.HelpStyle.Render("j/k: navigate • type: search • backspace: delete • ctrl+u: clear • enter: select • esc: back"))
 
 	return b.String()
+}
+
+func modelSearchDisplay(query string) string {
+	if query == "" {
+		return "_"
+	}
+	return query + "_"
 }
 
 // resolveNames returns the display name for a provider and model from an assignment.

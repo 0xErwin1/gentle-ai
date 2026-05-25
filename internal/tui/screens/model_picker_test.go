@@ -202,6 +202,118 @@ func TestRenderModelPickerShowsConfigWarning(t *testing.T) {
 	}
 }
 
+func TestFilteredModelEntriesSortsNewestFirst(t *testing.T) {
+	state := ModelPickerState{
+		SelectedProvider: "anthropic",
+		SDDModels: map[string][]opencode.Model{
+			"anthropic": {
+				{ID: "claude-3-5-sonnet", Name: "Claude 3.5 Sonnet"},
+				{ID: "claude-opus-4-6", Name: "Claude Opus 4.6"},
+				{ID: "claude-sonnet-4-5", Name: "Claude Sonnet 4.5"},
+			},
+		},
+	}
+
+	models := FilteredModelEntries(state)
+	got := []string{models[0].ID, models[1].ID, models[2].ID}
+	want := []string{"claude-opus-4-6", "claude-sonnet-4-5", "claude-3-5-sonnet"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("sorted models = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestFilteredModelEntriesPrefersSemanticVersionOverDate(t *testing.T) {
+	state := ModelPickerState{
+		SelectedProvider: "anthropic",
+		SDDModels: map[string][]opencode.Model{
+			"anthropic": {
+				{ID: "claude-3-5-sonnet-20241022", Name: "Claude 3.5 Sonnet 20241022"},
+				{ID: "claude-sonnet-4-5", Name: "Claude Sonnet 4.5"},
+			},
+		},
+	}
+
+	models := FilteredModelEntries(state)
+	if models[0].ID != "claude-sonnet-4-5" {
+		t.Fatalf("first model = %q, want claude-sonnet-4-5", models[0].ID)
+	}
+}
+
+func TestFilteredModelEntriesIgnoresShortDateSuffixes(t *testing.T) {
+	state := ModelPickerState{
+		SelectedProvider: "google",
+		SDDModels: map[string][]opencode.Model{
+			"google": {
+				{ID: "gemini-2.5-pro-exp-03-25", Name: "Gemini 2.5 Pro Experimental 03-25"},
+				{ID: "gemini-3-pro", Name: "Gemini 3 Pro"},
+			},
+		},
+	}
+
+	models := FilteredModelEntries(state)
+	if models[0].ID != "gemini-3-pro" {
+		t.Fatalf("first model = %q, want gemini-3-pro", models[0].ID)
+	}
+}
+
+func TestFilteredModelEntriesFiltersBySearch(t *testing.T) {
+	state := ModelPickerState{
+		SelectedProvider: "openai",
+		ModelSearch:      "mini",
+		SDDModels: map[string][]opencode.Model{
+			"openai": {
+				{ID: "gpt-5", Name: "GPT-5"},
+				{ID: "gpt-5-mini", Name: "GPT-5 Mini"},
+			},
+		},
+	}
+
+	models := FilteredModelEntries(state)
+	if len(models) != 1 || models[0].ID != "gpt-5-mini" {
+		t.Fatalf("filtered models = %#v, want only gpt-5-mini", models)
+	}
+}
+
+func TestHandleModelNavTypingUpdatesSearchAndBackspaceClears(t *testing.T) {
+	state := &ModelPickerState{
+		Mode:             ModeModelSelect,
+		SelectedProvider: "openai",
+		SDDModels: map[string][]opencode.Model{
+			"openai": {{ID: "gpt-5-mini", Name: "GPT-5 Mini"}},
+		},
+	}
+
+	handled, _ := handleModelNav("m", state, nil)
+	if !handled || state.ModelSearch != "m" {
+		t.Fatalf("typing search handled=%v query=%q, want handled=true query=m", handled, state.ModelSearch)
+	}
+
+	handled, _ = handleModelNav("backspace", state, nil)
+	if !handled || state.ModelSearch != "" {
+		t.Fatalf("backspace handled=%v query=%q, want handled=true empty query", handled, state.ModelSearch)
+	}
+}
+
+func TestRenderModelSelectShowsSearchInput(t *testing.T) {
+	state := ModelPickerState{
+		SelectedProvider: "openai",
+		ModelSearch:      "mini",
+		Providers: map[string]opencode.Provider{
+			"openai": {Name: "OpenAI"},
+		},
+		SDDModels: map[string][]opencode.Model{
+			"openai": {{ID: "gpt-5-mini", Name: "GPT-5 Mini"}},
+		},
+	}
+
+	out := renderModelSelect(state)
+	if !strings.Contains(out, "Search: mini_") {
+		t.Fatalf("renderModelSelect() missing search input; got:\n%s", out)
+	}
+}
+
 func TestRenderModelPickerShowsSetAllPhasesEffort(t *testing.T) {
 	state := ModelPickerState{
 		AvailableIDs: []string{"anthropic"},

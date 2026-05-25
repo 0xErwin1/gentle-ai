@@ -139,8 +139,16 @@ func TestAdapterDetectMissingPiBinary(t *testing.T) {
 	}
 }
 
-func TestAdapterInstallCommandSequenceIsExact(t *testing.T) {
-	a := NewAdapter()
+func TestAdapterInstallCommandSequenceUsesNpmWhenPnpmIsUnavailable(t *testing.T) {
+	a := &Adapter{
+		lookPath: func(file string) (string, error) {
+			if file == "pnpm" {
+				return "", os.ErrNotExist
+			}
+			return "/usr/local/bin/" + file, nil
+		},
+		statPath: defaultStat,
+	}
 	commands, err := a.InstallCommand(system.PlatformProfile{})
 	if err != nil {
 		t.Fatalf("InstallCommand() error = %v", err)
@@ -161,5 +169,26 @@ func TestAdapterInstallCommandSequenceIsExact(t *testing.T) {
 	}
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("InstallCommand() = %#v, want %#v", commands, want)
+	}
+}
+
+func TestAdapterInstallCommandSequenceUsesPnpmForEngramInitWhenAvailable(t *testing.T) {
+	a := &Adapter{
+		lookPath: func(file string) (string, error) {
+			if file == "pnpm" {
+				return "/usr/local/bin/pnpm", nil
+			}
+			return "", os.ErrNotExist
+		},
+		statPath: defaultStat,
+	}
+	commands, err := a.InstallCommand(system.PlatformProfile{})
+	if err != nil {
+		t.Fatalf("InstallCommand() error = %v", err)
+	}
+
+	want := []string{"pnpm", "dlx", "--package", "gentle-engram@" + versions.GentleEngram, "pi-engram", "init"}
+	if !reflect.DeepEqual(commands[3], want) {
+		t.Fatalf("InstallCommand()[3] = %#v, want %#v", commands[3], want)
 	}
 }

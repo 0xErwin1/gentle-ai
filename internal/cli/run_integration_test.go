@@ -47,6 +47,13 @@ func stringSliceContains(items []string, want string) bool {
 	return false
 }
 
+func engramInitCommandForTest() string {
+	if _, err := exec.LookPath("pnpm"); err == nil {
+		return fmt.Sprintf("pnpm dlx --package gentle-engram@%s pi-engram init", versions.GentleEngram)
+	}
+	return fmt.Sprintf("npm exec --yes --package gentle-engram@%s -- pi-engram init", versions.GentleEngram)
+}
+
 func TestRunInstallAppliesFilesystemChanges(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
@@ -101,7 +108,9 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 	runCommand = func(name string, args ...string) error {
 		commands = append(commands, strings.Join(append([]string{name}, args...), " "))
 		// Simulate pi-engram init writing mcp.json with the new schema.
-		if name == "npm" && len(args) >= 7 && args[5] == "pi-engram" && args[6] == "init" {
+		isNpmEngramInit := name == "npm" && len(args) >= 7 && args[5] == "pi-engram" && args[6] == "init"
+		isPnpmEngramInit := name == "pnpm" && len(args) >= 5 && args[3] == "pi-engram" && args[4] == "init"
+		if isNpmEngramInit || isPnpmEngramInit {
 			mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
 			if err := os.MkdirAll(filepath.Dir(mcpPath), 0o755); err != nil {
 				return err
@@ -129,10 +138,12 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 	assertFileContains(t, filepath.Join(home, ".pi", "npm", "package.json"), "pi-mcp-adapter")
 	assertFileContains(t, filepath.Join(home, ".config", "opencode", "opencode.json"), "engram")
 
-	for _, want := range []string{"pi install npm:pi-mcp-adapter", fmt.Sprintf("npm exec --yes --package gentle-engram@%s -- pi-engram init", versions.GentleEngram)} {
-		if !stringSliceContains(commands, want) {
-			t.Fatalf("commands missing %q; got %v", want, commands)
-		}
+	if !stringSliceContains(commands, "pi install npm:pi-mcp-adapter") {
+		t.Fatalf("commands missing %q; got %v", "pi install npm:pi-mcp-adapter", commands)
+	}
+	if !stringSliceContains(commands, fmt.Sprintf("npm exec --yes --package gentle-engram@%s -- pi-engram init", versions.GentleEngram)) &&
+		!stringSliceContains(commands, fmt.Sprintf("pnpm dlx --package gentle-engram@%s pi-engram init", versions.GentleEngram)) {
+		t.Fatalf("commands missing Engram init command; got %v", commands)
 	}
 }
 
@@ -175,7 +186,7 @@ func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 		"pi install npm:gentle-pi",
 		"pi install npm:gentle-engram",
 		"pi install npm:pi-mcp-adapter",
-		fmt.Sprintf("npm exec --yes --package gentle-engram@%s -- pi-engram init", versions.GentleEngram),
+		engramInitCommandForTest(),
 		"pi install npm:pi-subagents",
 		"pi install npm:pi-intercom",
 		"pi install npm:@juicesharp/rpiv-ask-user-question",
