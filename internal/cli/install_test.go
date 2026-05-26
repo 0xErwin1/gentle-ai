@@ -66,11 +66,11 @@ func TestNormalizeInstallFlagsDefaults(t *testing.T) {
 			model.ComponentSDD,
 			model.ComponentSkills,
 			model.ComponentContext7,
-			model.ComponentPersona,
 			model.ComponentPermission,
 			model.ComponentGGA,
 			model.ComponentClaudeTheme,
 			model.ComponentOpenCodeGentleLogo,
+			model.ComponentPersona,
 		},
 	}
 
@@ -136,7 +136,9 @@ func TestNormalizeInstallFlagsPiOnlyRespectsExplicitPreset(t *testing.T) {
 		t.Fatalf("NormalizeInstallFlags() error = %v", err)
 	}
 
-	want := []model.ComponentID{model.ComponentEngram}
+	// Pi + explicit minimal preset with default gentleman persona now includes ComponentPersona.
+	// Persona is persona-screen-driven; preset only controls the ecosystem stack.
+	want := []model.ComponentID{model.ComponentEngram, model.ComponentPersona}
 	if !reflect.DeepEqual(input.Selection.Components, want) {
 		t.Fatalf("components = %#v, want %#v", input.Selection.Components, want)
 	}

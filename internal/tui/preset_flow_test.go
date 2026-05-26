@@ -223,7 +223,7 @@ func TestInstallNavigationRoundTrips(t *testing.T) {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenAgents
 				m.Selection.Agents = []model.AgentID{model.AgentPi}
-				m.Selection.Components = componentsForPreset(model.PresetFullGentleman)
+				m.Selection.Components = componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman)
 				m.Cursor = len(screens.AgentOptions())
 				return m
 			},
@@ -404,7 +404,7 @@ func TestPiOnlyDependencyTreeBackRowReturnsToAgentSelection(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenAgents
 	m.Selection.Agents = []model.AgentID{model.AgentPi}
-	m.Selection.Components = componentsForPreset(model.PresetFullGentleman)
+	m.Selection.Components = componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman)
 	m.Cursor = len(screens.AgentOptions())
 
 	state := applyFlowAction(t, m, flowAction{key: tea.KeyMsg{Type: tea.KeyEnter}})

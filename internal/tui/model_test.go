@@ -239,7 +239,7 @@ func TestPiOnlyAgentContinueSkipsPromptsAndIncludesEngram(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenAgents
 	m.Selection.Agents = []model.AgentID{model.AgentPi}
-	m.Selection.Components = componentsForPreset(model.PresetFullGentleman)
+	m.Selection.Components = componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman)
 	m.Cursor = len(screensAgentOptions())
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -331,7 +331,8 @@ func TestPiCombinedWithOtherAgentsTUIInstallKeepsAllAgentsInPlan(t *testing.T) {
 	if !reflect.DeepEqual(state.DependencyPlan.Agents, wantAgents) {
 		t.Fatalf("dependency agents = %v, want %v", state.DependencyPlan.Agents, wantAgents)
 	}
-	wantComponents := []model.ComponentID{model.ComponentEngram}
+	// Minimal preset + Gentleman persona now includes ComponentPersona (persona is the source of truth).
+	wantComponents := []model.ComponentID{model.ComponentPersona, model.ComponentEngram}
 	if !reflect.DeepEqual(state.DependencyPlan.OrderedComponents, wantComponents) {
 		t.Fatalf("dependency components = %v, want %v", state.DependencyPlan.OrderedComponents, wantComponents)
 	}
@@ -1880,7 +1881,7 @@ func TestKiroPickerEscNonCustomWithClaudeGoesToClaudePicker(t *testing.T) {
 	m.Selection.Preset = model.PresetFullGentleman // non-custom
 	// Simulate both Kiro and Claude being selected.
 	m.Selection.Agents = []model.AgentID{model.AgentKiroIDE, model.AgentClaudeCode}
-	m.Selection.Components = componentsForPreset(model.PresetFullGentleman)
+	m.Selection.Components = componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman)
 	m.KiroModelPicker = screens.NewKiroModelPickerState()
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -1902,7 +1903,7 @@ func TestKiroPickerEscNonCustomWithoutClaudeGoesToPreset(t *testing.T) {
 	m.Selection.Preset = model.PresetFullGentleman
 	// Only Kiro — no Claude.
 	m.Selection.Agents = []model.AgentID{model.AgentKiroIDE}
-	m.Selection.Components = componentsForPreset(model.PresetFullGentleman)
+	m.Selection.Components = componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman)
 	m.KiroModelPicker = screens.NewKiroModelPickerState()
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -3804,5 +3805,154 @@ func TestPinErrClearedOnScreenReentry(t *testing.T) {
 	// PinErr must be cleared on re-entry.
 	if afterReturn.PinErr != nil {
 		t.Fatalf("PinErr should be nil after returning to ScreenBackups, got: %v", afterReturn.PinErr)
+	}
+}
+
+// TestComponentsForPreset_PersonaMatrix verifies that componentsForPreset includes
+// ComponentPersona when persona != PersonaCustom and excludes it for PersonaCustom.
+func TestComponentsForPreset_PersonaMatrix(t *testing.T) {
+	tests := []struct {
+		name          string
+		preset        model.PresetID
+		persona       model.PersonaID
+		wantPersona   bool
+		wantNil       bool
+	}{
+		{
+			name:        "full-gentleman + gentleman includes persona",
+			preset:      model.PresetFullGentleman,
+			persona:     model.PersonaGentleman,
+			wantPersona: true,
+		},
+		{
+			name:        "full-gentleman + custom does not include persona",
+			preset:      model.PresetFullGentleman,
+			persona:     model.PersonaCustom,
+			wantPersona: false,
+		},
+		{
+			name:        "minimal + gentleman includes persona",
+			preset:      model.PresetMinimal,
+			persona:     model.PersonaGentleman,
+			wantPersona: true,
+		},
+		{
+			name:        "minimal + custom does not include persona",
+			preset:      model.PresetMinimal,
+			persona:     model.PersonaCustom,
+			wantPersona: false,
+		},
+		{
+			name:        "ecosystem-only + neutral includes persona",
+			preset:      model.PresetEcosystemOnly,
+			persona:     model.PersonaNeutral,
+			wantPersona: true,
+		},
+		{
+			name:        "ecosystem-only + custom does not include persona",
+			preset:      model.PresetEcosystemOnly,
+			persona:     model.PersonaCustom,
+			wantPersona: false,
+		},
+		{
+			name:    "custom preset returns nil regardless of persona (gentleman)",
+			preset:  model.PresetCustom,
+			persona: model.PersonaGentleman,
+			wantNil: true,
+		},
+		{
+			name:    "custom preset returns nil regardless of persona (custom)",
+			preset:  model.PresetCustom,
+			persona: model.PersonaCustom,
+			wantNil: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := componentsForPreset(tt.preset, tt.persona)
+
+			if tt.wantNil {
+				if got != nil {
+					t.Fatalf("componentsForPreset(%v, %v) = %v, want nil", tt.preset, tt.persona, got)
+				}
+				return
+			}
+
+			hasPersona := false
+			for _, c := range got {
+				if c == model.ComponentPersona {
+					hasPersona = true
+					break
+				}
+			}
+
+			if tt.wantPersona && !hasPersona {
+				t.Fatalf("componentsForPreset(%v, %v) missing ComponentPersona; got: %v", tt.preset, tt.persona, got)
+			}
+			if !tt.wantPersona && hasPersona {
+				t.Fatalf("componentsForPreset(%v, %v) should not include ComponentPersona; got: %v", tt.preset, tt.persona, got)
+			}
+		})
+	}
+}
+
+// TestPersonaScreenRecomputesComponentsWhenPresetAlreadySet verifies that changing
+// the persona on the Persona screen recomputes the component list when a non-custom
+// preset has already been selected.
+func TestPersonaScreenRecomputesComponentsWhenPresetAlreadySet(t *testing.T) {
+	// Start with a model that has already picked full-gentleman preset and
+	// gentleman persona (the default), then go back to Persona screen and pick custom.
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPersona
+	m.Selection.Preset = model.PresetFullGentleman
+	m.Selection.Persona = model.PersonaGentleman
+	m.Selection.Components = componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman)
+
+	// Confirm that persona currently includes ComponentPersona.
+	hasPersonaBefore := false
+	for _, c := range m.Selection.Components {
+		if c == model.ComponentPersona {
+			hasPersonaBefore = true
+			break
+		}
+	}
+	if !hasPersonaBefore {
+		t.Fatal("setup: expected ComponentPersona in initial components")
+	}
+
+	// Move cursor to PersonaCustom (index 2) and confirm.
+	m.Cursor = 2 // PersonaOptions() = [Gentleman, Neutral, Custom]
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Selection.Persona != model.PersonaCustom {
+		t.Fatalf("Persona = %v, want %v", state.Selection.Persona, model.PersonaCustom)
+	}
+
+	// ComponentPersona must be removed after recompute.
+	for _, c := range state.Selection.Components {
+		if c == model.ComponentPersona {
+			t.Fatalf("ComponentPersona must not be in components after switching to PersonaCustom; got: %v", state.Selection.Components)
+		}
+	}
+}
+
+// TestPersonaScreenDoesNotRecomputeForCustomPreset verifies that changing persona
+// does NOT recompute (and wipe) the nil component list when preset is custom.
+func TestPersonaScreenDoesNotRecomputeForCustomPreset(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPersona
+	m.Selection.Preset = model.PresetCustom
+	m.Selection.Persona = model.PersonaGentleman
+	m.Selection.Components = nil
+
+	m.Cursor = 0 // PersonaGentleman
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	// Components must remain nil for custom preset.
+	if state.Selection.Components != nil {
+		t.Fatalf("components should stay nil for custom preset; got: %v", state.Selection.Components)
 	}
 }

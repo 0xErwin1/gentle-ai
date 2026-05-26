@@ -187,23 +187,41 @@ test_dry_run_preset_custom() {
 # --- Category 1e: Preset component order validation ---
 
 test_preset_minimal_components() {
-    log_test "Preset minimal produces only engram component"
+    log_test "Preset minimal with persona=custom produces only engram component"
 
-    output=$($BINARY install --preset minimal --agent claude-code --dry-run 2>&1) || true
+    # Use persona=custom to test the preset alone, since persona is now
+    # driven by Selection.Persona (decoupled from preset).
+    output=$($BINARY install --preset minimal --persona custom --agent claude-code --dry-run 2>&1) || true
 
     # The component list should contain engram
     assert_output_contains "$output" "engram" "Minimal preset includes engram"
     # Should NOT contain sdd, skills, persona, etc.
     assert_output_not_contains "$output" "Components order:.*sdd" "Minimal preset excludes sdd"
-    assert_output_not_contains "$output" "Components order:.*persona" "Minimal preset excludes persona"
+    assert_output_not_contains "$output" "Components order:.*persona" "Minimal + persona=custom excludes persona"
+}
+
+test_preset_minimal_with_default_persona_includes_persona() {
+    log_test "Preset minimal with default persona (gentleman) includes persona"
+
+    # Persona is now decoupled from preset — default Gentleman persona is
+    # installed regardless of which preset the user picks.
+    output=$($BINARY install --preset minimal --agent claude-code --dry-run 2>&1) || true
+
+    local components_line
+    components_line=$(echo "$output" | grep "Components order:")
+
+    assert_output_contains "$components_line" "engram" "Minimal includes engram"
+    assert_output_contains "$components_line" "persona" "Minimal + default Gentleman persona includes persona"
 }
 
 test_preset_ecosystem_components() {
-    log_test "Preset ecosystem-only produces 5 components"
+    log_test "Preset ecosystem-only with persona=custom produces 5 components"
 
-    output=$($BINARY install --preset ecosystem-only --agent claude-code --dry-run 2>&1) || true
+    # Use persona=custom to test the preset alone, since persona is now
+    # driven by Selection.Persona (decoupled from preset).
+    output=$($BINARY install --preset ecosystem-only --persona custom --agent claude-code --dry-run 2>&1) || true
 
-    # ecosystem-only = engram, sdd, skills, context7, gga
+    # ecosystem-only (without persona) = engram, sdd, skills, context7, gga
     local components_line
     components_line=$(echo "$output" | grep "Components order:")
 
@@ -212,8 +230,23 @@ test_preset_ecosystem_components() {
     assert_output_contains "$components_line" "skills" "Ecosystem includes skills"
     assert_output_contains "$components_line" "context7" "Ecosystem includes context7"
     assert_output_contains "$components_line" "gga" "Ecosystem includes gga"
-    assert_output_not_contains "$components_line" "persona" "Ecosystem excludes persona"
+    assert_output_not_contains "$components_line" "persona" "Ecosystem + persona=custom excludes persona"
     assert_output_not_contains "$components_line" "permissions" "Ecosystem excludes permissions"
+}
+
+test_preset_full_with_custom_persona_excludes_persona() {
+    log_test "Preset full-gentleman with persona=custom excludes persona"
+
+    # Persona is decoupled — picking persona=custom skips persona install
+    # even when the preset is full-gentleman.
+    output=$($BINARY install --preset full-gentleman --persona custom --agent claude-code --dry-run 2>&1) || true
+
+    local components_line
+    components_line=$(echo "$output" | grep "Components order:")
+
+    assert_output_contains "$components_line" "engram" "Full + persona=custom keeps engram"
+    assert_output_contains "$components_line" "permissions" "Full + persona=custom keeps permissions"
+    assert_output_not_contains "$components_line" "persona" "Full + persona=custom excludes persona"
 }
 
 test_preset_full_components() {
@@ -2142,8 +2175,10 @@ test_dry_run_preset_custom
 
 # Category 1e: Preset component order validation
 test_preset_minimal_components
+test_preset_minimal_with_default_persona_includes_persona
 test_preset_ecosystem_components
 test_preset_full_components
+test_preset_full_with_custom_persona_excludes_persona
 test_dry_run_full_preset_persona_before_sdd
 test_preset_no_legacy_theme_in_any_preset
 test_preset_custom_no_components

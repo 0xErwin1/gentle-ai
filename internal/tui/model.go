@@ -465,7 +465,7 @@ type Model struct {
 
 func NewModel(detection system.DetectionResult, version string) Model {
 	agents := preselectedAgents(detection)
-	components := componentsForPreset(model.PresetFullGentleman)
+	components := componentsForPreset(model.PresetFullGentleman, model.PersonaGentleman)
 	if isPiOnlyAgents(agents) {
 		components = piOnlyComponents()
 	}
@@ -1500,6 +1500,10 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		options := screens.PersonaOptions()
 		if m.Cursor < len(options) {
 			m.Selection.Persona = options[m.Cursor]
+			// Recompute components if a non-custom preset was already chosen
+			if m.Selection.Preset != "" && m.Selection.Preset != model.PresetCustom {
+				m.Selection.Components = componentsForPreset(m.Selection.Preset, m.Selection.Persona)
+			}
 			m.setScreen(ScreenPreset)
 			return m, nil
 		}
@@ -1508,7 +1512,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		options := screens.PresetOptions()
 		if m.Cursor < len(options) {
 			m.Selection.Preset = options[m.Cursor]
-			m.Selection.Components = componentsForPreset(options[m.Cursor])
+			m.Selection.Components = componentsForPreset(options[m.Cursor], m.Selection.Persona)
 			if m.shouldShowClaudeModelPickerScreen() {
 				m.ClaudeModelPicker = screens.NewClaudeModelPickerState()
 				m.setScreen(ScreenClaudeModelPicker)
@@ -3242,27 +3246,31 @@ func (m Model) shouldShowKiroModelPickerScreen() bool {
 		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
 }
 
-func componentsForPreset(preset model.PresetID) []model.ComponentID {
+func componentsForPreset(preset model.PresetID, persona model.PersonaID) []model.ComponentID {
+	var components []model.ComponentID
 	switch preset {
 	case model.PresetMinimal:
-		return []model.ComponentID{model.ComponentEngram}
+		components = []model.ComponentID{model.ComponentEngram}
 	case model.PresetEcosystemOnly:
-		return []model.ComponentID{model.ComponentEngram, model.ComponentSDD, model.ComponentSkills, model.ComponentContext7, model.ComponentGGA}
+		components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD, model.ComponentSkills, model.ComponentContext7, model.ComponentGGA}
 	case model.PresetCustom:
 		return nil
-	default:
-		return []model.ComponentID{
+	default: // full-gentleman
+		components = []model.ComponentID{
 			model.ComponentEngram,
 			model.ComponentSDD,
 			model.ComponentSkills,
 			model.ComponentContext7,
-			model.ComponentPersona,
 			model.ComponentPermission,
 			model.ComponentGGA,
 			model.ComponentClaudeTheme,
 			model.ComponentOpenCodeGentleLogo,
 		}
 	}
+	if persona != model.PersonaCustom {
+		components = append(components, model.ComponentPersona)
+	}
+	return components
 }
 
 func hasSelectedComponent(components []model.ComponentID, target model.ComponentID) bool {
