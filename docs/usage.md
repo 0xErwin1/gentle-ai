@@ -38,7 +38,7 @@ Before any managed file is modified, `gentle-ai` creates a backup snapshot so th
 
 ### install
 
-First-time setup — detects your tools, configures agents, injects all components:
+First-time setup — detects your tools, configures agents, injects all components. When installing a single agent with `--agent X`, gentle-ai **merges** the new agent into the existing `installed_agents` list in `state.json` and **preserves** any existing `model_assignments` — it does not overwrite the full state.
 
 ```bash
 # Full ecosystem for multiple agents
@@ -148,7 +148,7 @@ If no `--component` flag is provided for a partial uninstall, `gentle-ai` remove
 
 ### update / upgrade
 
-Check for and install new versions of `gentle-ai` itself:
+Check for and install new versions of `gentle-ai` itself. The pre-upgrade backup snapshot covers only the agents recorded in `state.InstalledAgents` (`~/.gentle-ai/state.json`) — not every agent config directory that exists on your machine.
 
 ```bash
 # Check if a newer version is available
@@ -161,6 +161,27 @@ gentle-ai upgrade
 After upgrading, run `gentle-ai sync` to refresh all managed assets to the new version's content.
 
 If GitHub rate-limits update checks, export `GITHUB_TOKEN` or `GH_TOKEN` before running `gentle-ai update`/`upgrade`.
+
+Set `GENTLE_AI_CONFIRM_UPDATE=1` to have `gentle-ai` prompt for confirmation (`y/N`) before applying a self-update. Default behavior (no env var) applies the update without an interactive prompt.
+
+### doctor
+
+Read-only ecosystem health diagnostics — no changes made to your configuration:
+
+```bash
+gentle-ai doctor
+```
+
+Checks performed:
+
+| Check | What it verifies |
+|-------|-----------------|
+| Tool binaries | Required tools present on `PATH`; shadow detection (wrong binary resolves first) |
+| `state.json` validity | Parses `~/.gentle-ai/state.json` and reports any schema/corruption issues |
+| Engram MCP reachability | Confirms the Engram MCP server responds |
+| Disk space | Warns when available space is critically low |
+
+Each check reports **pass**, **warn**, or **fail** with an optional remedy hint. Run `doctor` first when troubleshooting an unexpected install or sync result.
 
 ### version
 
@@ -181,6 +202,7 @@ gentle-ai -v
 | `--skill`, `--skills`         | Skills to install (comma-separated)                                                                               |
 | `--persona`                   | Persona mode: `gentleman`, `neutral`, `custom` (`custom` keeps your existing persona unmanaged)                   |
 | `--preset`                    | Preset: `full-gentleman`, `ecosystem-only`, `minimal`, `custom` (`custom` means manual component/skill selection) |
+| `--scope`                     | Install scope: `global` (default, writes to `~`) or `workspace` (writes to `./`, project root). Also settable via `GENTLE_AI_INSTALL_SCOPE` env var for CI/non-interactive use. |
 | `--dry-run`                   | Preview the install plan without applying changes                                                                 |
 
 ## CLI Flags (sync)

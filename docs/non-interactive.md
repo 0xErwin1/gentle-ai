@@ -15,7 +15,14 @@ go run ./cmd/gentle-ai install [flags]
 - `--skill`, `--skills`: comma-separated and repeatable.
 - `--persona`: explicit persona id.
 - `--preset`: explicit preset id.
+- `--scope`: `global` (default) or `workspace` (writes to project root `./`).
 - `--dry-run`: render plan without executing.
+
+## Environment variables
+
+| Variable | Values | Description |
+|----------|--------|-------------|
+| `GENTLE_AI_INSTALL_SCOPE` | `global` \| `workspace` | Sets the install scope without a flag. Useful in CI. Equivalent to `--scope`. Default: `global`. |
 
 ## Platform behavior
 

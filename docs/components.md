@@ -13,7 +13,7 @@
 | Skills | `skills` | Curated coding skill library |
 | Context7 | `context7` | MCP server for live framework/library documentation |
 | Persona | `persona` | Managed Gentleman/neutral persona injection, or unmanaged custom persona mode |
-| Permissions | `permissions` | Security-first defaults and guardrails |
+| Permissions | `permissions` | Security-first defaults and guardrails. Applied to Claude Code and OpenCode (the two adapters with permissions overlay support). Default sensitive-paths deny list: `~/.ssh/*`, `~/.ssh/**/*`, `**/*.pem`, `**/*.key`, `**/.env*`, `~/.credentials/*`, `~/.aws/credentials`, `~/.config/gh/hosts.yml`, `~/Library/Keychains/*`, `**/secrets/*`, `**/*.p12`, `**/*.pfx` |
 | GGA | `gga` | Gentleman Guardian Angel — AI provider switcher |
 | Theme | `theme` | Gentleman Kanagawa theme overlay |
 
@@ -68,7 +68,7 @@ gga install
 | Comment Writer | `comment-writer` | Draft warm, direct collaboration comments and review replies |
 | Work Unit Commits | `work-unit-commits` | Split implementation into reviewable work units |
 
-These foundation skills are installed by default with both `full-gentleman` and `ecosystem-only` presets.
+These foundation skills are installed by default with both the `full-gentleman` (Dev Stack + Polish) and `ecosystem-only` (Dev Stack) presets.
 
 ### Coding Skills (separate repository)
 
@@ -80,7 +80,9 @@ For framework-specific skills (React 19, Angular, TypeScript, Tailwind 4, Zod 4,
 
 | Preset | ID | What's Included |
 |--------|-----|-----------------|
-| Full Gentleman | `full-gentleman` | All components (Engram + SDD + Skills + Context7 + GGA + Persona + Permissions + Theme) + all skills + gentleman persona |
-| Ecosystem Only | `ecosystem-only` | Core components (Engram + SDD + Skills + Context7 + GGA) + all skills + gentleman persona |
-| Minimal | `minimal` | Engram + SDD skills only |
+| Dev Stack + Polish | `full-gentleman` | All components (Engram + SDD + Skills + Context7 + GGA + Permissions + Theme) + all skills |
+| Dev Stack | `ecosystem-only` | Core components (Engram + SDD + Skills + Context7 + GGA) + all skills |
+| Memory Only | `minimal` | Engram + SDD skills only |
 | Custom | `custom` | You choose components and skills manually while keeping any existing persona/settings unmanaged |
+
+Persona is selected separately on the Persona screen and applied independently of the preset.

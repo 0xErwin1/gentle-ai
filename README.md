@@ -25,7 +25,7 @@ Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is a
 
 **After**: Your agent now has memory, skills, workflow, MCP tools, and a persona that actually teaches you.
 
-### 13 Supported Agents
+### 14 Supported Agents
 
 | Agent               |         Delegation Model         | Key Feature                                                     |
 | ------------------- | :------------------------------: | --------------------------------------------------------------- |
@@ -42,6 +42,7 @@ Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is a
 | **Kiro IDE**        |     Full (native subagents)      | Native `~/.kiro/agents/` + steering orchestration               |
 | **Qwen Code**       |     Full (native sub-agents)     | Slash commands, `~/.qwen/commands/`, `auto_edit` mode           |
 | **OpenClaw**        |            Solo-agent            | Workspace-first `AGENTS.md` / `SOUL.md` with global MCP config  |
+| **Trae**            |            Solo-agent            | Desktop app by ByteDance; `~/.trae/skills/` + OS-specific rules |
 | **Pi**              | Full (package-managed subagents) | `gentle-pi` harness with persona/model commands + Engram memory |
 
 > **Note**: This project supersedes [Agent Teams Lite](https://github.com/Gentleman-Programming/agent-teams-lite) (now archived). Everything ATL provided is included here with better installation, automatic updates, and persistent memory.
@@ -88,6 +89,8 @@ Once your agents are configured, open your AI agent in a project and run these t
 | `gentle-ai skill-registry refresh` | Scans installed skills and project conventions, builds the registry         | After installing/removing skills, or first time in a new project               |
 
 These are **not required** for basic usage. The SDD orchestrator runs `/sdd-init` automatically if it detects no context. Startup hooks normally keep the skill registry fresh for agents that support hooks, including Pi through `gentle-pi`. If you start Pi with `pi -ns`, startup skill loading/hooks are skipped, so run the registry refresh manually when you need updated project rules.
+
+Run `gentle-ai doctor` at any time for a read-only health check of your ecosystem (tool binaries, `state.json`, Engram reachability, disk space).
 
 ---
 
