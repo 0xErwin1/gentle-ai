@@ -9,12 +9,12 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 )
 
-// sddPhaseSet is the set of valid base SDD agent names that may appear in
-// opencode.json. It includes the sub-agent phases plus the gentle-orchestrator coordinator.
-var sddPhaseSet = buildSDDPhaseSet()
+// configurableAgentSet is the set of valid agent names that may appear in
+// opencode.json. It includes SDD phases, JD agents, and the gentle-orchestrator coordinator.
+var configurableAgentSet = buildConfigurableAgentSet()
 
-func buildSDDPhaseSet() map[string]bool {
-	phases := opencode.SDDPhases()
+func buildConfigurableAgentSet() map[string]bool {
+	phases := opencode.ConfigurableAgentPhases() // SDD + JD phases
 	set := make(map[string]bool, len(phases)+1)
 	for _, p := range phases {
 		set[p] = true
@@ -33,12 +33,11 @@ func ReadCurrentProfiles(settingsPath string) ([]model.Profile, error) {
 }
 
 // ReadCurrentModelAssignments reads the agent definitions from opencode.json
-// at settingsPath and extracts the "model" field for each SDD phase agent.
+// at settingsPath and extracts the "model" field for each configurable agent.
 //
-// Only agents whose names match an SDD phase (from opencode.SDDPhases()) or
-// "gentle-orchestrator" are included. Legacy "sdd-orchestrator" entries are read as
-// "gentle-orchestrator" until the next sync migrates the config. Agents without a "model" field, or with a
-// malformed model value (not in "provider:model-id" format), are silently
+// Only agents whose names match a configurable agent phase (SDD phases, JD agents
+// via opencode.ConfigurableAgentPhases()) or "gentle-orchestrator" are included.
+// Agents without a "model" field, or with a malformed model value, are silently
 // skipped.
 //
 // Returns an empty map (no error) when the file does not exist, contains no
@@ -69,7 +68,7 @@ func ReadCurrentModelAssignments(settingsPath string) (map[string]model.ModelAss
 
 	result := make(map[string]model.ModelAssignment)
 	for name, defRaw := range agentMap {
-		if !sddPhaseSet[name] {
+		if !configurableAgentSet[name] {
 			continue
 		}
 		defMap, ok := defRaw.(map[string]any)

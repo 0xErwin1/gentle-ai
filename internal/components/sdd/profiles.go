@@ -12,6 +12,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 )
 
 // profileNameRegex matches valid profile name slugs: lowercase alphanumeric + hyphens,
@@ -19,10 +20,18 @@ import (
 var profileNameRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 
 // reservedProfileNames are names that may not be used as profile names.
-var reservedProfileNames = map[string]bool{
-	"default":          true,
-	"sdd-orchestrator": true,
-}
+// JD agent names are derived from opencode.JDPhases() to avoid drift
+// when agents are renamed or added.
+var reservedProfileNames = func() map[string]bool {
+	names := map[string]bool{
+		"default":          true,
+		"sdd-orchestrator": true,
+	}
+	for _, name := range opencode.JDPhases() {
+		names[name] = true
+	}
+	return names
+}()
 
 // ValidateProfileName returns an error if the profile name is not a valid
 // slug (lowercase alphanumeric + hyphens, no underscores, no spaces, non-empty,
@@ -254,6 +263,11 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string) ([]byte, erro
 	}
 	for _, phase := range profilePhaseOrder {
 		taskPerms[phase+suffix] = "allow"
+	}
+	// Add JD agent permissions (global, not profile-scoped).
+	// JD agents are workflow-level and shared across profiles.
+	for _, jd := range opencode.JDPhases() {
+		taskPerms[jd] = "allow"
 	}
 
 	orchEntry := map[string]any{

@@ -15,6 +15,7 @@ const (
 	ClaudePresetBalanced    ClaudeModelPreset = "balanced"
 	ClaudePresetPerformance ClaudeModelPreset = "performance"
 	ClaudePresetEconomy     ClaudeModelPreset = "economy"
+	ClaudePresetDiversity   ClaudeModelPreset = "diversity"
 	ClaudePresetCustom      ClaudeModelPreset = "custom"
 )
 
@@ -23,7 +24,8 @@ var claudePresetDescriptions = map[ClaudeModelPreset]string{
 	ClaudePresetBalanced:    "Smart defaults: opus for architecture, sonnet for most phases, haiku for archiving",
 	ClaudePresetPerformance: "Maximum quality: opus for architecture, planning & verification phases",
 	ClaudePresetEconomy:     "Cost-optimised: sonnet for all phases, haiku for archiving",
-	ClaudePresetCustom:      "Pick the model alias for each SDD phase individually",
+	ClaudePresetDiversity:   "Diversity: Opus for Judge A, Haiku for Judge B, Sonnet for fixes",
+	ClaudePresetCustom:      "Pick the model alias for each SDD phase, JD agent, and general delegation entry individually",
 }
 
 // claudePresetOrder is the display order for presets.
@@ -31,6 +33,7 @@ var claudePresetOrder = []ClaudeModelPreset{
 	ClaudePresetBalanced,
 	ClaudePresetPerformance,
 	ClaudePresetEconomy,
+	ClaudePresetDiversity,
 	ClaudePresetCustom,
 }
 
@@ -44,20 +47,27 @@ var claudePhases = []string{
 	"sdd-apply",
 	"sdd-verify",
 	"sdd-archive",
+	"jd-judge-a",
+	"jd-judge-b",
+	"jd-fix-agent",
 	"default",
 }
 
-// claudePhaseLabels are the human-readable labels for each SDD phase.
+// claudePhaseLabels are the human-readable labels for each configurable
+// agent phase (SDD phases, JD agents, and the general delegation row).
 var claudePhaseLabels = map[string]string{
-	"sdd-explore": "Explore",
-	"sdd-propose": "Propose",
-	"sdd-spec":    "Spec",
-	"sdd-design":  "Design",
-	"sdd-tasks":   "Tasks",
-	"sdd-apply":   "Apply",
-	"sdd-verify":  "Verify",
-	"sdd-archive": "Archive",
-	"default":     "General delegation",
+	"sdd-explore":  "Explore",
+	"sdd-propose":  "Propose",
+	"sdd-spec":     "Spec",
+	"sdd-design":   "Design",
+	"sdd-tasks":    "Tasks",
+	"sdd-apply":    "Apply",
+	"sdd-verify":   "Verify",
+	"sdd-archive":  "Archive",
+	"jd-judge-a":   "JD Judge A",
+	"jd-judge-b":   "JD Judge B",
+	"jd-fix-agent": "JD Fix Agent",
+	"default":      "General delegation",
 }
 
 // claudeAliasOrder defines the cycling order when pressing Enter on a phase row.
@@ -141,6 +151,7 @@ var presetConstructors = map[ClaudeModelPreset]func() map[string]model.ClaudeMod
 	ClaudePresetBalanced:    model.ClaudeModelPresetBalanced,
 	ClaudePresetPerformance: model.ClaudeModelPresetPerformance,
 	ClaudePresetEconomy:     model.ClaudeModelPresetEconomy,
+	ClaudePresetDiversity:   model.ClaudeModelPresetDiversity,
 }
 
 // HandleClaudeModelPickerNav processes a key press on the Claude model picker screen.
