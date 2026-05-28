@@ -184,5 +184,6 @@
         "write": true
       }
     }
-  }
+  },
+  "share": "disabled"
 }

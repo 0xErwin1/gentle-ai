@@ -412,6 +412,11 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				}
 			}
 
+			overlayBytes, err = defaultOpenCodeShareDisabled(settingsPath, overlayBytes)
+			if err != nil {
+				return InjectionResult{}, fmt.Errorf("default OpenCode share mode: %w", err)
+			}
+
 			agentResult, err := mergeJSONFile(settingsPath, overlayBytes)
 			if err != nil {
 				return InjectionResult{}, err
@@ -1237,6 +1242,49 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 	}
 
 	return mergeJSONResult{writeResult: writeResult, merged: merged}, nil
+}
+
+// defaultOpenCodeShareDisabled adds a defensive OpenCode default for SDD
+// installs: disable session sharing unless the user already chose a share mode.
+//
+// SDD multi-agent mode creates child sessions for native sub-agents. In
+// OpenCode 1.15.x, session creation can route through SessionShare.create when
+// sharing is enabled/automatic, and that path has been observed to fail with a
+// SQLite FOREIGN KEY constraint error for child sessions. Keeping the default
+// local avoids breaking sub-agent startup while preserving explicit user config
+// such as "share": "manual" or "share": "auto".
+func defaultOpenCodeShareDisabled(settingsPath string, overlay []byte) ([]byte, error) {
+	if openCodeSettingsHasShare(settingsPath) {
+		return overlay, nil
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(overlay, &root); err != nil {
+		return nil, fmt.Errorf("unmarshal overlay json: %w", err)
+	}
+	if _, exists := root["share"]; !exists {
+		root["share"] = "disabled"
+	}
+
+	encoded, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal overlay json: %w", err)
+	}
+	return append(encoded, '\n'), nil
+}
+
+func openCodeSettingsHasShare(settingsPath string) bool {
+	content, err := os.ReadFile(settingsPath)
+	if err != nil || len(strings.TrimSpace(string(content))) == 0 {
+		return false
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		return false
+	}
+	_, exists := root["share"]
+	return exists
 }
 
 // migrateLegacyOpenCodeSDDOrchestrator removes legacy or accidentally renamed

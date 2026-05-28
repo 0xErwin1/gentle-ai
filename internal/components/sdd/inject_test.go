@@ -1440,6 +1440,60 @@ func TestInjectOpenCodeMultiModeIdempotent(t *testing.T) {
 	}
 }
 
+func TestInjectOpenCodeDefaultsShareDisabledForSDDSubagents(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	if _, err := Inject(home, opencodeAdapter(), "multi"); err != nil {
+		t.Fatalf("Inject(multi) error = %v", err)
+	}
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+	if got, _ := root["share"].(string); got != "disabled" {
+		t.Fatalf("share = %q, want %q", got, "disabled")
+	}
+}
+
+func TestInjectOpenCodePreservesExplicitShareMode(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+	seed := `{"$schema":"https://opencode.ai/config.json","share":"manual"}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	if _, err := Inject(home, opencodeAdapter(), "multi"); err != nil {
+		t.Fatalf("Inject(multi) error = %v", err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+	if got, _ := root["share"].(string); got != "manual" {
+		t.Fatalf("share = %q, want %q", got, "manual")
+	}
+}
+
 func TestInjectOpenCodeSubagentPromptsStayExecutorScoped(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
