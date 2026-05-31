@@ -6,15 +6,15 @@ import (
 	"strings"
 )
 
-// InstallScope controls where agent config files (CLAUDE.md, skills/, agents/, etc.) are written.
-// ScopeGlobal writes to the user's home agent config dir (e.g. ~/.claude/).
-// ScopeWorkspace writes to the current workspace's agent config dir (e.g. <cwd>/.claude/).
+// InstallScope controls where agent-scoped config files (system prompts, skills/, agents/, etc.) are written.
+// ScopeGlobal writes to the user's global config root for each selected agent.
+// ScopeWorkspace writes to the current workspace config root for each selected agent.
 type InstallScope string
 
 const (
 	// ScopeGlobal writes to the global agent config dir (default, backward-compatible).
 	ScopeGlobal InstallScope = "global"
-	// ScopeWorkspace writes to the current workspace's agent config dir.
+	// ScopeWorkspace writes to the current workspace config root for each selected agent.
 	ScopeWorkspace InstallScope = "workspace"
 
 	// scopeEnvVar is the environment variable that controls install scope.

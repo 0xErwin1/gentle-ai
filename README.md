@@ -25,7 +25,7 @@ Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is a
 
 **After**: Your agent now has memory, skills, workflow, MCP tools, and a persona that actually teaches you.
 
-### 14 Supported Agents
+### 15 Supported Agents
 
 | Agent               |         Delegation Model         | Key Feature                                                     |
 | ------------------- | :------------------------------: | --------------------------------------------------------------- |
@@ -127,6 +127,14 @@ scoop install gentle-ai
 ```
 
 </details>
+
+By default, `gentle-ai install` writes agent-scoped files to each selected agent's global config directory. To keep the Gentleman stack isolated to one project, run:
+
+```bash
+gentle-ai install --scope=workspace
+```
+
+Workspace scope is not Claude-only; it applies to selected agents for agent-scoped files such as system prompts, skills, SDD agents, and persona files. Global-only integrations remain global by design.
 
 ---
 

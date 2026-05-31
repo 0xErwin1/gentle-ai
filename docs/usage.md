@@ -107,16 +107,13 @@ gentle-ai sync
 # Sync specific agents only
 gentle-ai sync --agent claude-code --agent opencode
 
-# Sync a specific component
-gentle-ai sync --component sdd
-gentle-ai sync --component skills
-gentle-ai sync --component engram
-
 # Refresh OpenClaw workspace instructions and MCP config
 gentle-ai sync --agent openclaw
 ```
 
-Sync is safe and idempotent — running it twice produces no changes the second time.
+Sync is safe and idempotent — running it twice produces no changes the second time. When files change, the summary reports the changed file count and lists the changed file paths.
+
+`sync` refreshes the managed component set for the selected agents. It does not support `--component`; use `--include-permissions` or `--include-theme` for the opt-in components that are excluded from the default sync scope.
 
 For OpenClaw, sync reads the active workspace from `~/.openclaw/openclaw.json` (`agents.defaults.workspace`). It writes `AGENTS.md` / `SOUL.md` into that workspace, while MCP servers stay in the global OpenClaw config under `mcp.servers`.
 
@@ -164,6 +161,12 @@ If GitHub rate-limits update checks, export `GITHUB_TOKEN` or `GH_TOKEN` before 
 
 Set `GENTLE_AI_CONFIRM_UPDATE=1` to have `gentle-ai` prompt for confirmation (`y/N`) before applying a self-update. Default behavior (no env var) applies the update without an interactive prompt.
 
+Set `GENTLE_AI_NO_SELF_UPDATE=1` to skip the automatic self-update check entirely. `GENTLE_AI_SELF_UPDATE_DONE` is an internal loop guard used after re-exec and should not be set manually.
+
+### model assignment
+
+The TUI **Configure Models** screen can assign different models to SDD phases, `sdd-onboard`, and Judgment Day agents (`jd-judge-a`, `jd-judge-b`, `jd-fix-agent`) when the selected agent supports those slots. This lets you keep review or apply phases on stronger models while routing cheaper phases to faster models.
+
 ### doctor
 
 Read-only ecosystem health diagnostics — no changes made to your configuration:
@@ -202,7 +205,8 @@ gentle-ai -v
 | `--skill`, `--skills`         | Skills to install (comma-separated)                                                                               |
 | `--persona`                   | Persona mode: `gentleman`, `neutral`, `custom` (`custom` keeps your existing persona unmanaged)                   |
 | `--preset`                    | Preset: `full-gentleman`, `ecosystem-only`, `minimal`, `custom` (`custom` means manual component/skill selection) |
-| `--scope`                     | Install scope: `global` (default, writes to `~`) or `workspace` (writes to `./`, project root). Also settable via `GENTLE_AI_INSTALL_SCOPE` env var for CI/non-interactive use. |
+| `--sdd-mode`                  | SDD orchestrator mode: `single` or `multi`                                                                        |
+| `--scope`                     | Install scope for agent-scoped files: `global` (default, writes to each selected agent's global config directory) or `workspace` (writes to the current project root). Also settable via `GENTLE_AI_INSTALL_SCOPE` env var for CI/non-interactive use. |
 | `--dry-run`                   | Preview the install plan without applying changes                                                                 |
 
 ## CLI Flags (sync)
@@ -210,12 +214,15 @@ gentle-ai -v
 | Flag                     | Description                                                                                          |
 | ------------------------ | ---------------------------------------------------------------------------------------------------- |
 | `--agent`, `--agents`    | Agents to sync (defaults to all installed agents)                                                    |
-| `--component`            | Sync a specific component only: `sdd`, `engram`, `context7`, `skills`, `gga`, `permissions`, `theme` |
+| `--skill`, `--skills`    | Skills to sync (comma-separated; defaults to selected preset skills)                                  |
+| `--sdd-mode`             | SDD orchestrator mode: `single` or `multi`                                                           |
+| `--strict-tdd`           | Enable Strict TDD Mode for SDD agents                                                                |
 | `--profile`              | Create or update an SDD profile: `name:provider/model` (sets the default model for all phases)       |
 | `--profile-phase`        | Override a specific phase in a profile: `name:phase:provider/model`                                  |
 | `--sdd-profile-strategy` | OpenCode profile sync strategy: `generated-multi` or `external-single-active`                        |
 | `--include-permissions`  | Include permissions sync (opt-in)                                                                    |
 | `--include-theme`        | Include theme sync (opt-in)                                                                          |
+| `--dry-run`              | Preview the sync plan without applying changes                                                       |
 
 **Profile examples:**
 

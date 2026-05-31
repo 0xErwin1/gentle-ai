@@ -25,6 +25,8 @@ Release artifacts are produced by CI, but Windows users should install through S
 - **curl** is pre-installed on Windows 10+ and does not require separate installation.
 - **PowerShell** is the default shell when `$SHELL` is not set.
 - **GGA on Windows** works from both Git Bash and PowerShell. gentle-ai installs a `gga.ps1` shim that automatically delegates to Git Bash, so no manual shell switching is required.
+- **PowerShell installer output** is forced to UTF-8 to avoid garbled icons, and the installer persists the install directory to the user `PATH` while updating the current session for verification.
+- **Fresh install detection** falls back to known Engram/GGA install locations when the running process has a stale `PATH`.
 
 ---
 

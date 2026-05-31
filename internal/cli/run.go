@@ -119,8 +119,8 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 
 	if input.Scope == ScopeGlobal {
 		fmt.Fprintf(os.Stderr,
-			"WARNING: installing with --scope=global (default). Agent config files (CLAUDE.md, skills/, agents/, etc.)\n"+
-				"will be written to ~/.claude/ and will affect ALL Claude Code workspaces on this machine.\n"+
+			"WARNING: installing with --scope=global (default). Agent config files (system prompts, skills/, agents/, etc.)\n"+
+				"will be written to each selected agent's global config directory and will affect ALL workspaces for those agents on this machine.\n"+
 				"To install only into the current workspace, rerun with --scope=workspace.\n\n")
 	}
 
@@ -1076,8 +1076,8 @@ func componentInjectionDir(homeDir, workspaceDir string, adapter agents.Adapter)
 }
 
 // componentInjectionDirScoped returns the directory to inject component files for the given adapter,
-// taking the install scope into account. When scope is ScopeWorkspace, Claude Code
-// writes to workspaceDir (e.g. <cwd>/.claude/) instead of homeDir (~/.claude/).
+// taking the install scope into account. When scope is ScopeWorkspace, agent-scoped
+// components write to workspaceDir instead of the selected agent's global config root.
 // OpenClaw always uses workspaceDir when set, independent of scope.
 func componentInjectionDirScoped(homeDir, workspaceDir string, scope InstallScope, adapter agents.Adapter) string {
 	if adapter.Agent() == model.AgentOpenClaw && strings.TrimSpace(workspaceDir) != "" {

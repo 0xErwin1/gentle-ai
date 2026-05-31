@@ -9,7 +9,7 @@
 | Component | ID | Description |
 |-----------|-----|-------------|
 | Engram | `engram` | Persistent cross-session memory via MCP — auto-detection of project name, full-text search, git sync, project consolidation. See [engram repo](https://github.com/Gentleman-Programming/engram) |
-| SDD | `sdd` | Spec-Driven Development workflow (9 phases) — the agent handles SDD organically when the task warrants it, or when you ask; you don't need to learn the commands |
+| SDD | `sdd` | Spec-Driven Development workflow (10 phases, including `sdd-onboard`) — the agent handles SDD organically when the task warrants it, or when you ask; you don't need to learn the commands |
 | Skills | `skills` | Curated coding skill library |
 | Context7 | `context7` | MCP server for live framework/library documentation |
 | Persona | `persona` | Managed Gentleman/neutral persona injection, or unmanaged custom persona mode |
@@ -19,7 +19,7 @@
 
 ## GGA Behavior
 
-`gentle-ai --component gga` installs/provisions the `gga` binary globally on your machine.
+`gentle-ai install --component gga` installs/provisions the `gga` binary globally on your machine.
 
 It does **not** run project-level hook setup automatically (`gga init` / `gga install`) because that should be an explicit decision per repository.
 
