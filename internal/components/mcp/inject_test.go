@@ -16,6 +16,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
+	"github.com/gentleman-programming/gentle-ai/internal/versions"
 )
 
 func cursorAdapter(t *testing.T) agents.Adapter {
@@ -493,28 +494,114 @@ func TestInjectCursorWithMalformedMCPJsonRecovery(t *testing.T) {
 	}
 }
 
-// TestInjectCodexTOMLStrategyIsSkipped verifies that Context7 injection for
-// Codex (StrategyTOMLFile) is a no-op — Codex does not get Context7 via MCP
-// config since there is no JSON-based config path; it receives Context7 via
-// its system prompt (agents.md) instead.
-func TestInjectCodexTOMLStrategyIsSkipped(t *testing.T) {
+// TestInjectCodexContext7TOML verifies that Context7 injection for Codex
+// (StrategyTOMLFile) creates config.toml with [mcp_servers.context7] block.
+func TestInjectCodexContext7TOML(t *testing.T) {
 	home := t.TempDir()
 
 	result, err := Inject(home, codex.NewAdapter())
 	if err != nil {
-		t.Fatalf("Inject(codex) error = %v; want nil (TOML strategy must not error)", err)
+		t.Fatalf("Inject(codex) error = %v", err)
 	}
-	if result.Changed {
-		t.Fatal("Inject(codex) changed = true; want false (TOML strategy should be a no-op for context7)")
+	if !result.Changed {
+		t.Fatal("Inject(codex) first call changed = false; want true")
 	}
-	if len(result.Files) != 0 {
-		t.Fatalf("Inject(codex) files = %v; want empty", result.Files)
+	if len(result.Files) == 0 {
+		t.Fatal("Inject(codex) files is empty; want config.toml path")
 	}
 
-	// config.toml must NOT be created by the context7 injector.
 	configTOML := filepath.Join(home, ".codex", "config.toml")
-	if _, err := os.Stat(configTOML); err == nil {
-		t.Fatal("config.toml should NOT be written by the context7 injector")
+	if result.Files[0] != configTOML {
+		t.Fatalf("Inject(codex) files[0] = %q; want %q", result.Files[0], configTOML)
+	}
+
+	content, err := os.ReadFile(configTOML)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "[mcp_servers.context7]") {
+		t.Fatalf("config.toml missing [mcp_servers.context7]; got:\n%s", text)
+	}
+	if !strings.Contains(text, `command = "npx"`) {
+		t.Fatalf("config.toml missing command = npx; got:\n%s", text)
+	}
+	if !strings.Contains(text, versions.Context7MCP) {
+		t.Fatalf("config.toml missing pinned Context7 version %q; got:\n%s", versions.Context7MCP, text)
+	}
+}
+
+// TestInjectCodexContext7Idempotent verifies that a second Inject call with
+// the same pinned version is a no-op (Changed == false, single block).
+func TestInjectCodexContext7Idempotent(t *testing.T) {
+	home := t.TempDir()
+
+	first, err := Inject(home, codex.NewAdapter())
+	if err != nil {
+		t.Fatalf("Inject(codex) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("Inject(codex) first changed = false; want true")
+	}
+
+	second, err := Inject(home, codex.NewAdapter())
+	if err != nil {
+		t.Fatalf("Inject(codex) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("Inject(codex) second changed = true; want false (idempotent)")
+	}
+
+	configTOML := filepath.Join(home, ".codex", "config.toml")
+	content, err := os.ReadFile(configTOML)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	count := strings.Count(string(content), "[mcp_servers.context7]")
+	if count != 1 {
+		t.Fatalf("config.toml has %d [mcp_servers.context7] blocks; want exactly 1", count)
+	}
+}
+
+// TestInjectCodexContext7CoexistsWithEngram verifies that injecting context7
+// into a config.toml that already has [mcp_servers.engram] preserves both
+// blocks and does not duplicate either.
+func TestInjectCodexContext7CoexistsWithEngram(t *testing.T) {
+	home := t.TempDir()
+
+	// Pre-seed config.toml with an engram block.
+	configTOML := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configTOML), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	existing := `[mcp_servers.engram]
+command = "engram"
+args = ["mcp", "--tools=agent"]
+`
+	if err := os.WriteFile(configTOML, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.toml) error = %v", err)
+	}
+
+	_, err := Inject(home, codex.NewAdapter())
+	if err != nil {
+		t.Fatalf("Inject(codex) error = %v", err)
+	}
+
+	content, err := os.ReadFile(configTOML)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	text := string(content)
+
+	engramCount := strings.Count(text, "[mcp_servers.engram]")
+	if engramCount != 1 {
+		t.Fatalf("expected 1 [mcp_servers.engram], got %d; result:\n%s", engramCount, text)
+	}
+
+	context7Count := strings.Count(text, "[mcp_servers.context7]")
+	if context7Count != 1 {
+		t.Fatalf("expected 1 [mcp_servers.context7], got %d; result:\n%s", context7Count, text)
 	}
 }
 
