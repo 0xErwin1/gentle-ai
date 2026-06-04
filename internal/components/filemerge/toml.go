@@ -54,6 +54,60 @@ func UpsertCodexEngramBlock(content, engramCmd string) string {
 	return base + "\n\n" + codexEngramBlock + "\n"
 }
 
+// UpsertCodexMCPServerBlock removes any existing [mcp_servers.<serverID>] block
+// from the given TOML content and appends a fresh block with the provided
+// command and args. This is a generalized helper for any stdio MCP server that
+// Codex hosts via its config.toml. Backslashes in command and args are escaped
+// for TOML double-quoted strings (Windows paths).
+//
+// This is a string-based helper (no TOML parser dependency) following the same
+// pattern as UpsertCodexEngramBlock.
+func UpsertCodexMCPServerBlock(content, serverID, command string, args []string) string {
+	header := "[mcp_servers." + serverID + "]"
+
+	escapedCmd := strings.ReplaceAll(command, `\`, `\\`)
+
+	// Build TOML args array: args = ["-y", "--package=...", "--", "context7-mcp"]
+	var quotedArgs []string
+	for _, arg := range args {
+		escaped := strings.ReplaceAll(arg, `\`, `\\`)
+		quotedArgs = append(quotedArgs, `"`+escaped+`"`)
+	}
+	argsLine := "args = [" + strings.Join(quotedArgs, ", ") + "]"
+
+	block := header + "\ncommand = \"" + escapedCmd + "\"\n" + argsLine
+
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	lines := strings.Split(content, "\n")
+
+	var kept []string
+	for i := 0; i < len(lines); {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed == header {
+			// Skip the old block header and all its key-value lines.
+			i++
+			for i < len(lines) {
+				next := strings.TrimSpace(lines[i])
+				if strings.HasPrefix(next, "[") && strings.HasSuffix(next, "]") {
+					break
+				}
+				i++
+			}
+			continue
+		}
+
+		kept = append(kept, lines[i])
+		i++
+	}
+
+	base := strings.TrimSpace(strings.Join(kept, "\n"))
+	if base == "" {
+		return block + "\n"
+	}
+
+	return base + "\n\n" + block + "\n"
+}
+
 // UpsertTopLevelTOMLString inserts or replaces a top-level key = "value" pair
 // in TOML content. The key is placed before the first [section] header so it
 // remains a top-level (non-table) setting. Existing occurrences of the key are

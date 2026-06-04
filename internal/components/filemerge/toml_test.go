@@ -182,7 +182,7 @@ func TestUpsertCodexMCPServerBlock_Empty(t *testing.T) {
 	if !strings.Contains(result, `command = "npx"`) {
 		t.Fatalf("result missing command = \"npx\"; got:\n%s", result)
 	}
-	if !strings.Contains(result, `"@upstash/context7-mcp@2.2.5"`) {
+	if !strings.Contains(result, `"--package=@upstash/context7-mcp@2.2.5"`) {
 		t.Fatalf("result missing pinned version arg; got:\n%s", result)
 	}
 	if !strings.HasSuffix(result, "\n") {
