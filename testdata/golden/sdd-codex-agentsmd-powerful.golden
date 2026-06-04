@@ -183,8 +183,8 @@ These profile files apply to whole CLI sessions: `codex --profile <name> "<promp
 
 | Profile (CLI) | `reasoning_effort` (spawn_agent) | SDD phases |
 |---------------|----------------------------------|------------|
-| `sdd-strong` | `high` | propose, design, verify, judge |
+| `sdd-strong` | `xhigh` | propose, design, verify, judge |
 | `sdd-mid` | `high` | spec, tasks, apply |
-| `sdd-cheap` | `low` | explore, archive, onboard |
+| `sdd-cheap` | `medium` | explore, archive, onboard |
 
 <!-- /gentle-ai:sdd-orchestrator -->
