@@ -149,10 +149,10 @@ type SyncDoneMsg struct {
 
 // UninstallDoneMsg is sent when the uninstall operation completes.
 type UninstallDoneMsg struct {
-	Result      componentuninstall.Result
-	Err         error
-	SyncFiles   []string // only set for CleanInstall mode
-	SyncErr     error    // only set for CleanInstall mode
+	Result    componentuninstall.Result
+	Err       error
+	SyncFiles []string // only set for CleanInstall mode
+	SyncErr   error    // only set for CleanInstall mode
 }
 
 // UpgradePhaseCompletedMsg is sent by startUpgradeSync when the upgrade phase
@@ -481,10 +481,13 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 	}
 
 	selection := model.Selection{
-		Agents:     agents,
-		Persona:    model.PersonaGentleman,
-		Preset:     model.PresetFullGentleman,
-		Components: components,
+		Agents:                 agents,
+		Persona:                model.PersonaGentleman,
+		Preset:                 model.PresetFullGentleman,
+		Components:             components,
+		ClaudeModelAssignments: installStateClaudeAssignments(s.ClaudeModelAssignments),
+		KiroModelAssignments:   installStateKiroAssignments(s.KiroModelAssignments),
+		ModelAssignments:       installStateModelAssignments(s.ModelAssignments),
 	}
 
 	return Model{
@@ -501,6 +504,43 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 			"Inject ecosystem components",
 		}),
 	}
+}
+
+func installStateClaudeAssignments(assignments map[string]string) map[string]model.ClaudeModelAlias {
+	if len(assignments) == 0 {
+		return nil
+	}
+	out := make(map[string]model.ClaudeModelAlias, len(assignments))
+	for phase, alias := range assignments {
+		out[phase] = model.ClaudeModelAlias(alias)
+	}
+	return out
+}
+
+func installStateKiroAssignments(assignments map[string]string) map[string]model.KiroModelAlias {
+	if len(assignments) == 0 {
+		return nil
+	}
+	out := make(map[string]model.KiroModelAlias, len(assignments))
+	for phase, alias := range assignments {
+		out[phase] = model.KiroModelAlias(alias)
+	}
+	return out
+}
+
+func installStateModelAssignments(assignments map[string]state.ModelAssignmentState) map[string]model.ModelAssignment {
+	if len(assignments) == 0 {
+		return nil
+	}
+	out := make(map[string]model.ModelAssignment, len(assignments))
+	for phase, assignment := range assignments {
+		out[phase] = model.ModelAssignment{
+			ProviderID: assignment.ProviderID,
+			ModelID:    assignment.ModelID,
+			Effort:     assignment.Effort,
+		}
+	}
+	return out
 }
 
 func (m Model) Init() tea.Cmd {
@@ -905,7 +945,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m = m.withResetSyncState()
 					m.setScreen(ScreenSync)
 				} else if m.shouldShowKiroModelPickerScreen() {
-					m.KiroModelPicker = screens.NewKiroModelPickerState()
+					m.KiroModelPicker = screens.NewKiroModelPickerStateFromAssignments(m.Selection.KiroModelAssignments)
 					m.setScreen(ScreenKiroModelPicker)
 				} else if m.shouldShowSDDModeScreen() {
 					m.setScreen(ScreenSDDMode)
@@ -1498,7 +1538,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenModelPicker)
 		case 2: // Configure Kiro models
 			m.ModelConfigMode = true
-			m.KiroModelPicker = screens.NewKiroModelPickerState()
+			m.KiroModelPicker = screens.NewKiroModelPickerStateFromAssignments(m.Selection.KiroModelAssignments)
 			m.setScreen(ScreenKiroModelPicker)
 		default: // Back
 			m.setScreen(ScreenWelcome)
@@ -1549,7 +1589,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.shouldShowKiroModelPickerScreen() {
-				m.KiroModelPicker = screens.NewKiroModelPickerState()
+				m.KiroModelPicker = screens.NewKiroModelPickerStateFromAssignments(m.Selection.KiroModelAssignments)
 				m.setScreen(ScreenKiroModelPicker)
 				return m, nil
 			}

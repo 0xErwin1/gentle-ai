@@ -1795,6 +1795,51 @@ func TestModelConfig_KiroPickerNavigation(t *testing.T) {
 	}
 }
 
+func TestNewModelHydratesKiroAssignmentsFromInstallState(t *testing.T) {
+	installState := state.InstallState{
+		KiroModelAssignments: map[string]string{
+			"sdd-design":  string(model.KiroModelGLM),
+			"sdd-archive": string(model.KiroModelQwen),
+			"default":     string(model.KiroModelAuto),
+		},
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev", installState)
+
+	if got := m.Selection.KiroModelAssignments["sdd-design"]; got != model.KiroModelGLM {
+		t.Fatalf("Selection.KiroModelAssignments[sdd-design] = %q, want %q", got, model.KiroModelGLM)
+	}
+	if got := m.Selection.KiroModelAssignments["sdd-archive"]; got != model.KiroModelQwen {
+		t.Fatalf("Selection.KiroModelAssignments[sdd-archive] = %q, want %q", got, model.KiroModelQwen)
+	}
+	if got := m.Selection.KiroModelAssignments["default"]; got != model.KiroModelAuto {
+		t.Fatalf("Selection.KiroModelAssignments[default] = %q, want %q", got, model.KiroModelAuto)
+	}
+}
+
+func TestModelConfigKiroPickerPreloadsPersistedAssignments(t *testing.T) {
+	installState := state.InstallState{
+		KiroModelAssignments: map[string]string{
+			"sdd-design":  string(model.KiroModelGLM),
+			"sdd-archive": string(model.KiroModelQwen),
+			"default":     string(model.KiroModelAuto),
+		},
+	}
+	m := NewModel(system.DetectionResult{}, "dev", installState)
+	m.Screen = ScreenModelConfig
+	m.Cursor = 2
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.KiroModelPicker.Preset != screens.KiroPresetCustom {
+		t.Fatalf("KiroModelPicker.Preset = %q, want custom for non-preset persisted assignments", state.KiroModelPicker.Preset)
+	}
+	if got := state.KiroModelPicker.CustomAssignments["sdd-design"]; got != model.KiroModelGLM {
+		t.Fatalf("KiroModelPicker.CustomAssignments[sdd-design] = %q, want %q", got, model.KiroModelGLM)
+	}
+}
+
 // TestModelConfig_OpenCodePickerNavigation verifies that selecting cursor 1
 // from ScreenModelConfig transitions to ScreenModelPicker with ModelConfigMode set.
 func TestModelConfig_OpenCodePickerNavigation(t *testing.T) {
@@ -2279,6 +2324,44 @@ func TestModelConfig_ClaudePickerTriggersSyncScreen(t *testing.T) {
 	// is carried through for injection but is not user-editable in the picker UI.
 	if got := state.PendingSyncOverrides.ClaudeModelAssignments["orchestrator"]; got != model.ClaudeModelOpus {
 		t.Errorf("step2: orchestrator = %q, want %q", got, model.ClaudeModelOpus)
+	}
+}
+
+func TestModelConfig_KiroPickerTriggersSyncScreen(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelConfig
+	m.Cursor = 2
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenKiroModelPicker {
+		t.Fatalf("step1: screen = %v, want ScreenKiroModelPicker", state.Screen)
+	}
+	if !state.ModelConfigMode {
+		t.Fatalf("step1: ModelConfigMode should be true after entering Kiro picker from ModelConfig")
+	}
+
+	updated, _ = state.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state = updated.(Model)
+
+	if state.Screen != ScreenSync {
+		t.Fatalf("step2: screen = %v, want ScreenSync", state.Screen)
+	}
+	if state.ModelConfigMode {
+		t.Fatalf("step2: ModelConfigMode should be cleared after routing to ScreenSync")
+	}
+	if state.PendingSyncOverrides == nil {
+		t.Fatalf("step2: PendingSyncOverrides should be non-nil after Kiro model selection")
+	}
+	if got := state.PendingSyncOverrides.TargetAgents; len(got) != 1 || got[0] != model.AgentKiroIDE {
+		t.Fatalf("step2: TargetAgents = %v, want [%s]", got, model.AgentKiroIDE)
+	}
+	if got := state.PendingSyncOverrides.KiroModelAssignments["default"]; got != model.KiroModelAuto {
+		t.Errorf("step2: default = %q, want %q", got, model.KiroModelAuto)
+	}
+	if got := state.PendingSyncOverrides.KiroModelAssignments["sdd-design"]; got != model.KiroModelOpus {
+		t.Errorf("step2: sdd-design = %q, want %q", got, model.KiroModelOpus)
 	}
 }
 

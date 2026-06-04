@@ -363,6 +363,7 @@ func tuiExecute(
 		_ = state.Write(homeDir, state.InstallState{
 			InstalledAgents:        agentIDs,
 			ClaudeModelAssignments: claudeAliasesToStrings(selection.ClaudeModelAssignments),
+			KiroModelAssignments:   kiroAliasesToStrings(selection.KiroModelAssignments),
 			ModelAssignments:       modelAssignmentsToState(selection.ModelAssignments),
 			Persona:                string(selection.Persona),
 		})
@@ -510,9 +511,9 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 		selection.ClaudeModelAssignments = m
 	}
 	if len(selection.KiroModelAssignments) == 0 && len(s.KiroModelAssignments) > 0 {
-		m := make(map[string]model.ClaudeModelAlias, len(s.KiroModelAssignments))
+		m := make(map[string]model.KiroModelAlias, len(s.KiroModelAssignments))
 		for k, v := range s.KiroModelAssignments {
-			m[k] = model.ClaudeModelAlias(v)
+			m[k] = model.KiroModelAlias(v)
 		}
 		selection.KiroModelAssignments = m
 	}
@@ -541,7 +542,7 @@ func persistAssignments(homeDir string, selection model.Selection) {
 		current.ClaudeModelAssignments = claudeAliasesToStrings(selection.ClaudeModelAssignments)
 	}
 	if len(selection.KiroModelAssignments) > 0 {
-		current.KiroModelAssignments = claudeAliasesToStrings(selection.KiroModelAssignments)
+		current.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
 	}
 	if len(selection.ModelAssignments) > 0 {
 		current.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
@@ -562,6 +563,17 @@ func claudeAliasesToStrings(m map[string]model.ClaudeModelAlias) map[string]stri
 		if k == "orchestrator" {
 			continue
 		}
+		out[k] = string(v)
+	}
+	return out
+}
+
+func kiroAliasesToStrings(m map[string]model.KiroModelAlias) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
 		out[k] = string(v)
 	}
 	return out

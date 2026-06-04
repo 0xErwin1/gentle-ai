@@ -2021,6 +2021,10 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 			"orchestrator": "opus",
 			"sdd-apply":    "sonnet",
 		},
+		KiroModelAssignments: map[string]string{
+			"sdd-design": "glm",
+			"default":    "auto",
+		},
 		ModelAssignments: map[string]state.ModelAssignmentState{
 			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
 		},
@@ -2043,6 +2047,12 @@ func TestRunSyncLoadsPersistedModelAssignments(t *testing.T) {
 	}
 	if got := result.Selection.ClaudeModelAssignments["sdd-apply"]; got != "sonnet" {
 		t.Errorf("ClaudeModelAssignments[sdd-apply] = %q, want %q", got, "sonnet")
+	}
+	if got := result.Selection.KiroModelAssignments["sdd-design"]; got != model.KiroModelGLM {
+		t.Errorf("KiroModelAssignments[sdd-design] = %q, want %q", got, model.KiroModelGLM)
+	}
+	if got := result.Selection.KiroModelAssignments["default"]; got != model.KiroModelAuto {
+		t.Errorf("KiroModelAssignments[default] = %q, want %q", got, model.KiroModelAuto)
 	}
 
 	// OpenCode assignments must be loaded.

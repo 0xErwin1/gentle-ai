@@ -4227,7 +4227,7 @@ func TestInjectKiroFallsBackToClaudeModelAssignmentsWhenKiroMapUnset(t *testing.
 		phase string
 		want  string
 	}{
-		{phase: "sdd-design", want: "model: claude-opus-4.6"},
+		{phase: "sdd-design", want: "model: claude-opus-4.8"},
 		{phase: "sdd-archive", want: "model: claude-haiku-4.5"},
 		// Unspecified phase should use default sonnet.
 		{phase: "sdd-spec", want: "model: claude-sonnet-4.6"},
@@ -4279,7 +4279,7 @@ func TestInjectKiroBalancedPresetAssignmentsEndToEnd(t *testing.T) {
 		if !ok {
 			alias = balance["default"]
 		}
-		wantModelLine := "model: " + model.KiroModelID(alias)
+		wantModelLine := "model: " + model.KiroModelID(model.KiroModelAlias(alias))
 
 		path := filepath.Join(home, ".kiro", "agents", phase+".md")
 		content, readErr := os.ReadFile(path)
@@ -4308,8 +4308,8 @@ func TestInjectKiroModelAssignmentsTakePrecedenceOverClaude(t *testing.T) {
 	// Conflicting values: Kiro says opus for sdd-design, Claude says haiku.
 	// Kiro-specific assignments MUST take precedence.
 	opts := InjectOptions{
-		KiroModelAssignments: map[string]model.ClaudeModelAlias{
-			"sdd-design": model.ClaudeModelOpus,
+		KiroModelAssignments: map[string]model.KiroModelAlias{
+			"sdd-design": model.KiroModelOpus,
 		},
 		ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
 			"sdd-design": model.ClaudeModelHaiku,
@@ -4327,8 +4327,8 @@ func TestInjectKiroModelAssignmentsTakePrecedenceOverClaude(t *testing.T) {
 		t.Fatalf("ReadFile(sdd-design) error = %v", readErr)
 	}
 
-	wantKiro := "model: " + model.KiroModelID(model.ClaudeModelOpus)
-	wantClaude := "model: " + model.KiroModelID(model.ClaudeModelHaiku)
+	wantKiro := "model: " + model.KiroModelID(model.KiroModelOpus)
+	wantClaude := "model: " + model.KiroModelID(model.KiroModelHaiku)
 
 	if !strings.Contains(string(content), wantKiro) {
 		t.Fatalf("expected KiroModelAssignments to take precedence: want %q not found in file", wantKiro)

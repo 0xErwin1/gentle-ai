@@ -166,6 +166,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	newState := state.InstallState{
 		InstalledAgents:        agentIDs,
 		ClaudeModelAssignments: claudeAliasesToStrings(input.Selection.ClaudeModelAssignments),
+		KiroModelAssignments:   kiroAliasesToStrings(input.Selection.KiroModelAssignments),
 		ModelAssignments:       modelAssignmentsToState(input.Selection.ModelAssignments),
 		Persona:                string(input.Selection.Persona),
 	}
@@ -1368,6 +1369,19 @@ func claudeAliasesToStrings(m map[string]model.ClaudeModelAlias) map[string]stri
 		if k == "orchestrator" {
 			continue
 		}
+		out[k] = string(v)
+	}
+	return out
+}
+
+// kiroAliasesToStrings converts a typed KiroModelAlias map to plain strings
+// for JSON serialisation in state.json.
+func kiroAliasesToStrings(m map[string]model.KiroModelAlias) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
 		out[k] = string(v)
 	}
 	return out
