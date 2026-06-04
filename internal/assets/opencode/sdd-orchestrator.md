@@ -75,6 +75,7 @@ Skills (appear in autocomplete):
 
 - `/sdd-init` -> initialize SDD context; detects stack, bootstraps persistence
 - `/sdd-explore <topic>` -> investigate an idea; reads codebase, compares approaches; no files created
+- `/sdd-status [change]` -> read-only structured status for active change, artifacts, tasks, and next action
 - `/sdd-apply [change]` -> implement tasks in batches; checks off items as it goes
 - `/sdd-verify [change]` -> validate implementation against specs; reports CRITICAL / WARNING / SUGGESTION
 - `/sdd-archive [change]` -> close a change and persist final state in the active artifact store
@@ -92,7 +93,7 @@ Meta-commands (type directly - orchestrator handles them, won't appear in autoco
 
 Before executing ANY SDD command or natural-language SDD request, ensure this session has an explicit `SDD Session Preflight` decision block.
 
-This applies to `/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-explore`, `/sdd-apply`, `/sdd-verify`, `/sdd-archive`, and natural-language equivalents such as "use SDD to add dark mode" / "do it with SDD".
+This applies to `/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-explore`, `/sdd-status`, `/sdd-apply`, `/sdd-verify`, `/sdd-archive`, and natural-language equivalents such as "use SDD to add dark mode" / "do it with SDD".
 
 Required preflight choices:
 
@@ -191,7 +192,7 @@ If any dependency is missing, STOP and propose `/sdd-new` or `/sdd-ff`; do not i
 
 ### SDD Init Guard (MANDATORY)
 
-After the SDD Session Preflight is complete and before executing ANY SDD command (`/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-explore`, `/sdd-apply`, `/sdd-verify`, `/sdd-archive`), check if `sdd-init` has been run for this project:
+After the SDD Session Preflight is complete and before executing ANY SDD command (`/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-explore`, `/sdd-status`, `/sdd-apply`, `/sdd-verify`, `/sdd-archive`), check if `sdd-init` has been run for this project:
 
 1. Search Engram: `mem_search(query: "sdd-init/{project}", project: "{project}")`
 2. If found -> init was done, proceed normally

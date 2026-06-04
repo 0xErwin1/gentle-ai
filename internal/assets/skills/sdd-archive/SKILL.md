@@ -38,6 +38,8 @@ You are a sub-agent responsible for ARCHIVING. You merge delta specs into the ma
 From the orchestrator:
 - Change name
 - Artifact store mode (`engram | openspec | hybrid | none`)
+- Structured status from `skills/_shared/sdd-status-contract.md`, including artifact paths, task progress, dependency states, and actionContext
+- Any explicit intentional archive override text from the user/orchestrator
 
 ## Execution and Persistence Contract
 
@@ -61,9 +63,23 @@ If any implementation task remains unchecked (`- [ ]`):
 
 1. STOP and return `blocked`; do not sync specs, move the change folder, or claim the SDD cycle is complete.
 2. Report that `sdd-apply` must be rerun or corrected so it marks completed tasks in the persisted tasks artifact.
-3. Only perform a mechanical checkbox repair in `sdd-archive` if the orchestrator explicitly instructs you to reconcile stale checkboxes and `apply-progress`/`verify-report` prove every unchecked task is complete. If you do this exceptional repair, mention it in the archive report.
+3. Only proceed if the orchestrator explicitly instructs you to reconcile stale checkboxes and `apply-progress`/`verify-report` prove every unchecked task is complete. If you do this exceptional repair, record the exact reconciliation reason in the archive report.
 
 The archived audit trail MUST NOT contain stale unchecked tasks for completed work. Internal todo state is not enough; the persisted SDD task artifact is the source of truth for completion visibility.
+
+### Strict-vs-OpenSpec Archive Policy
+
+OpenSpec permits archiving with incomplete artifacts or tasks after a user confirmation. gentle-ai is stricter by default:
+
+- Incomplete implementation tasks block archive unless they are stale checkboxes and apply-progress/verify-report prove completion.
+- CRITICAL issues in `verify-report` always block archive. Do not accept an override for CRITICAL verification issues.
+- `sdd-archive` does not own normal task completion. `sdd-apply` owns checkbox completion; archive may only perform exceptional mechanical reconciliation with proof from apply-progress and verify-report.
+- Missing proposal/spec/design artifacts should be reported. Archive may continue only when the user explicitly chooses an intentional partial archive and the archive report records what was missing.
+
+### Action Context Guard
+
+- If structured status reports `actionContext.mode: workspace-planning`, STOP. Do not move workspace changes into repo-local archives or edit linked repos.
+- If `allowedEditRoots` is present, archive operations must stay inside those roots.
 
 ## What to Do
 
@@ -88,13 +104,16 @@ Read the existing main spec and apply the delta:
 FOR EACH SECTION in delta spec:
 ├── ADDED Requirements → Append to main spec's Requirements section
 ├── MODIFIED Requirements → Replace the matching requirement in main spec
-└── REMOVED Requirements → Delete the matching requirement from main spec
+├── REMOVED Requirements → Delete the matching requirement from main spec after recording Reason/Migration
+└── RENAMED Requirements → Rename the matching requirement while preserving scenarios unless the delta also modifies them
 ```
 
 **Merge carefully:**
 - Match requirements by name (e.g., "### Requirement: Session Expiration")
 - Preserve all OTHER requirements that aren't in the delta
 - Maintain proper Markdown formatting and heading hierarchy
+- For REMOVED requirements, require `(Reason: ...)` and `(Migration: ...)` notes in the delta before deleting from main specs
+- For RENAMED requirements, require the old and new requirement names to be explicit
 
 #### If Main Spec Does NOT Exist
 
@@ -176,6 +195,7 @@ Ready for the next change.
 ## Rules
 
 - NEVER archive a change that has CRITICAL issues in its verification report
+- If the user explicitly approves a non-critical partial archive or stale-checkbox reconciliation, record the exact reason in the archive report and mark the archive as intentional-with-warnings
 - NEVER archive completed work while `tasks.md` / the tasks observation still shows stale unchecked implementation tasks
 - ALWAYS sync delta specs BEFORE moving to archive
 - When merging into existing specs, PRESERVE requirements not mentioned in the delta

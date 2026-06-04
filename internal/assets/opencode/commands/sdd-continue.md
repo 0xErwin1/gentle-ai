@@ -10,11 +10,13 @@ SDD Session Preflight must already be complete for this session. It must include
 
 WORKFLOW:
 
-1. Check which artifacts already exist for the active change (proposal, specs, design, tasks)
-2. Determine the next phase needed based on the dependency graph:
+1. Resolve the active change using the status contract. If `$ARGUMENTS` is missing and more than one active change exists, ask the user to choose and STOP. Do not guess.
+2. Produce structured status before acting: schemaName, planningHome/changeRoot, artifactPaths/contextFiles, task progress, dependency states, next recommended action, and actionContext warnings.
+3. Check which artifacts already exist for the active change (proposal, specs, design, tasks)
+4. Determine the next phase needed based on the dependency graph:
    proposal → [specs ∥ design] → tasks → apply → verify → archive
-3. Launch the appropriate sub-agent(s) for the next phase
-4. Present the result and ask the user to proceed
+5. Launch the appropriate sub-agent(s) for the next phase only if the structured status says the dependency is ready.
+6. Present the result and ask the user to proceed
 
 CONTEXT:
 
@@ -31,3 +33,7 @@ To check which artifacts exist in engram/hybrid, search: mem_search(query: "sdd/
 Sub-agents handle persistence automatically using the selected artifact store.
 
 Read the orchestrator instructions to coordinate this workflow. Do NOT execute phase work inline — delegate to sub-agents.
+
+STATUS CONTRACT:
+
+Read `skills/_shared/sdd-status-contract.md` and follow it. Carry `actionContext` and allowed edit roots into any sub-agent launch. If status reports `workspace-planning` with no allowed edit roots, do not launch apply/verify/archive work that would infer repo-local ownership.

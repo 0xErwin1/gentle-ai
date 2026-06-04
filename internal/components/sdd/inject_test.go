@@ -208,7 +208,7 @@ func TestInjectClaudeWritesCommandFiles(t *testing.T) {
 
 	expectedCommands := []string{
 		"sdd-apply.md", "sdd-archive.md", "sdd-continue.md", "sdd-explore.md",
-		"sdd-ff.md", "sdd-init.md", "sdd-new.md", "sdd-onboard.md", "sdd-verify.md",
+		"sdd-ff.md", "sdd-init.md", "sdd-new.md", "sdd-onboard.md", "sdd-status.md", "sdd-verify.md",
 	}
 	for _, name := range expectedCommands {
 		path := filepath.Join(home, ".claude", "commands", name)
@@ -2595,14 +2595,14 @@ func TestInjectOpenCodeMultiModeExistingAgentWithNoModelIsNotTouched(t *testing.
 }
 
 // ---------------------------------------------------------------------------
-// Fix 1: sdd-phase-common.md — all 4 shared files written to disk
+// Fix 1: shared SDD support files written to disk
 // ---------------------------------------------------------------------------
 
-// TestInjectWritesAllFourSharedFilesToDisk verifies that all four _shared
-// convention files (including the recently-added sdd-phase-common.md) are
+// TestInjectWritesAllSharedFilesToDisk verifies that all _shared
+// convention files (including SDD phase/status contracts) are
 // actually written to the agent's skills/_shared/ directory during Inject().
 // This is a disk-level test; assets_test.go only checks the embedded FS.
-func TestInjectWritesAllFourSharedFilesToDisk(t *testing.T) {
+func TestInjectWritesAllSharedFilesToDisk(t *testing.T) {
 	home := t.TempDir()
 
 	result, err := Inject(home, opencodeAdapter(), "")
@@ -2619,6 +2619,7 @@ func TestInjectWritesAllFourSharedFilesToDisk(t *testing.T) {
 		"engram-convention.md",
 		"openspec-convention.md",
 		"sdd-phase-common.md",
+		"sdd-status-contract.md",
 		"skill-resolver.md",
 	}
 
@@ -2648,7 +2649,7 @@ func TestInjectWritesAllFourSharedFilesToDisk(t *testing.T) {
 }
 
 // TestInjectSharedDirCreatedWithAllFiles verifies that Inject() creates the
-// _shared directory when it does not exist and writes all four files into it.
+// _shared directory when it does not exist and writes all shared files into it.
 func TestInjectSharedDirCreatedWithAllFiles(t *testing.T) {
 	home := t.TempDir()
 
@@ -2672,7 +2673,7 @@ func TestInjectSharedDirCreatedWithAllFiles(t *testing.T) {
 		names[e.Name()] = true
 	}
 
-	for _, want := range []string{"persistence-contract.md", "engram-convention.md", "openspec-convention.md", "sdd-phase-common.md", "skill-resolver.md"} {
+	for _, want := range []string{"persistence-contract.md", "engram-convention.md", "openspec-convention.md", "sdd-phase-common.md", "sdd-status-contract.md", "skill-resolver.md"} {
 		if !names[want] {
 			t.Errorf("_shared directory missing %q after Inject()", want)
 		}

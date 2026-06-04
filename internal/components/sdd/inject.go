@@ -465,6 +465,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				"engram-convention.md",
 				"openspec-convention.md",
 				"sdd-phase-common.md",
+				"sdd-status-contract.md",
 				"skill-resolver.md",
 			}
 			sddSkillIDs := []model.SkillID{

@@ -23,6 +23,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"claude/commands/sdd-init.md",
 		"claude/commands/sdd-new.md",
 		"claude/commands/sdd-onboard.md",
+		"claude/commands/sdd-status.md",
 		"claude/commands/sdd-verify.md",
 		"claude/agents/sdd-init.md",
 		"claude/agents/sdd-onboard.md",
@@ -40,6 +41,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"opencode/commands/sdd-init.md",
 		"opencode/commands/sdd-new.md",
 		"opencode/commands/sdd-onboard.md",
+		"opencode/commands/sdd-status.md",
 		"opencode/commands/sdd-verify.md",
 		"opencode/plugins/background-agents.ts",
 
@@ -109,6 +111,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/_shared/engram-convention.md",
 		"skills/_shared/openspec-convention.md",
 		"skills/_shared/sdd-phase-common.md",
+		"skills/_shared/sdd-status-contract.md",
 
 		// Foundation skills
 		"skills/go-testing/SKILL.md",
@@ -158,8 +161,8 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(opencode/commands) error = %v", err)
 	}
-	if len(commandEntries) != 9 {
-		t.Fatalf("opencode commands count = %d, want 9", len(commandEntries))
+	if len(commandEntries) != 10 {
+		t.Fatalf("opencode commands count = %d, want 10", len(commandEntries))
 	}
 
 	pluginEntries, err := FS.ReadDir("opencode/plugins")
@@ -279,8 +282,8 @@ func TestClaudeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(claude/commands) error = %v", err)
 	}
-	if len(commandEntries) != 9 {
-		t.Fatalf("claude commands count = %d, want 9", len(commandEntries))
+	if len(commandEntries) != 10 {
+		t.Fatalf("claude commands count = %d, want 10", len(commandEntries))
 	}
 
 	agentEntries, err := FS.ReadDir("claude/agents")
@@ -720,7 +723,7 @@ func TestEmbeddedAssetCount(t *testing.T) {
 			continue
 		}
 		if entry.Name() == "_shared" {
-			for _, sharedFile := range []string{"persistence-contract.md", "engram-convention.md", "openspec-convention.md", "sdd-phase-common.md", "skill-resolver.md"} {
+			for _, sharedFile := range []string{"persistence-contract.md", "engram-convention.md", "openspec-convention.md", "sdd-phase-common.md", "sdd-status-contract.md", "skill-resolver.md"} {
 				sharedPath := "skills/_shared/" + sharedFile
 				if _, err := Read(sharedPath); err != nil {
 					t.Fatalf("shared directory missing %q: %v", sharedFile, err)

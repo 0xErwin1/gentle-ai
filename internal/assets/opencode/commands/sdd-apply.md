@@ -15,8 +15,10 @@ HARD GATES:
 
 1. SDD Session Preflight must already be complete for this session. It must include execution mode, artifact store, chained PR strategy, and review budget. If missing, ask the exact orchestrator preflight prompt and STOP. Do not run apply in the same turn.
 2. `sdd-init` must already exist or be run after preflight, per the orchestrator init guard.
-3. The active change must have spec, design, and tasks artifacts in the selected artifact store.
-4. Review workload guard must have passed. If task forecast exceeds the session review budget or needs a chained-PR decision, ASK and STOP unless the preflight strategy already resolves it.
+3. Resolve the active change using the status contract. If `$ARGUMENTS` is missing or ambiguous, ask the user to choose and STOP. Do not guess.
+4. Produce structured status before acting and use it to confirm the active change has spec, design, and tasks artifacts in the selected artifact store.
+5. Review workload guard must have passed. If task forecast exceeds the session review budget or needs a chained-PR decision, ASK and STOP unless the preflight strategy already resolves it.
+6. actionContext must allow implementation edits. If status reports `workspace-planning` with no allowed edit roots, STOP before launching apply.
 
 DEPENDENCY CHECK:
 
@@ -27,6 +29,7 @@ TASK:
 If all gates pass, launch the hidden `sdd-apply` sub-agent with:
 
 - The resolved artifact store from session preflight; do not hardcode Engram.
+- The structured status: schemaName, planningHome/changeRoot, artifactPaths/contextFiles, task progress, applyState, dependency states, and actionContext.
 - References to the spec, design, tasks, and any apply-progress artifacts.
 - The resolved delivery/chained PR strategy and review budget.
 - Strict TDD instructions if `sdd-init` detected strict TDD.

@@ -281,6 +281,7 @@ func managedSkillBackupPaths(homeDir string, adapter agents.Adapter, diagnostics
 		"_shared/engram-convention.md",
 		"_shared/openspec-convention.md",
 		"_shared/sdd-phase-common.md",
+		"_shared/sdd-status-contract.md",
 		"_shared/skill-resolver.md",
 	} {
 		paths = append(paths, filepath.Join(skillDir, relPath))
