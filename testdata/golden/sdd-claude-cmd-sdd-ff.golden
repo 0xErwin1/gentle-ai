@@ -6,14 +6,17 @@ Follow the SDD orchestrator workflow inline using the instructions already insta
 The Claude Code session model is controlled by Claude Code; Gentle AI only configures models for Agent tool calls to phase sub-agents.
 
 WORKFLOW:
-Run these sub-agents in sequence:
+Honor the cached execution mode from SDD Session Preflight.
+
+Planning phases:
 
 1. `sdd-propose` — create the proposal
 2. `sdd-spec` — write specifications
 3. `sdd-design` — create technical design
 4. `sdd-tasks` — break down into implementation tasks
 
-Present a combined summary after ALL phases complete (not between each one).
+- In `interactive` mode: run only the next planning phase, present its summary and artifact path(s), ask whether to adjust or continue, then STOP. Do not launch the following phase until the user confirms.
+- In `auto` mode: run all planning phases back-to-back and present a combined summary after all phases complete.
 
 CONTEXT:
 

@@ -81,6 +81,81 @@ func TestSupportedAgentSDDLanguageMatrix(t *testing.T) {
 	}
 }
 
+func TestSDDOrchestratorAssetsEnforceInteractiveProposalGates(t *testing.T) {
+	assetPaths := allSDDOrchestratorAssetPaths(t)
+	if len(assetPaths) < 11 {
+		t.Fatalf("SDD orchestrator asset count = %d, want at least 11", len(assetPaths))
+	}
+
+	for _, path := range assetPaths {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			for _, required := range []string{
+				"Interactive approval is phase-scoped",
+				"approve only the immediate next phase",
+				"Before the `sdd-propose` phase in interactive mode",
+				"proposal question round",
+				"business problem",
+				"business rules",
+				"implications and impact",
+				"edge cases",
+				"Do not ask about test commands, PR shape, changed-line budget",
+			} {
+				if !strings.Contains(content, required) {
+					t.Fatalf("%s missing interactive proposal gate wording %q", path, required)
+				}
+			}
+		})
+	}
+}
+
+func TestSDDProposeAssetsRequireProposalQuestionRound(t *testing.T) {
+	assetPaths := allSDDProposeAssetPaths(t)
+	if len(assetPaths) < 4 {
+		t.Fatalf("SDD propose asset count = %d, want at least 4", len(assetPaths))
+	}
+
+	for _, path := range assetPaths {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			for _, required := range []string{
+				"Offer the user a proposal question round",
+				"second question round",
+				"business problem",
+				"target users and situations",
+				"business rules",
+				"implications and impact",
+				"edge cases",
+				"decision gaps",
+				"Do not ask about test commands, PR shape, changed-line budget, or other harness decisions unless the user explicitly asks to discuss delivery",
+			} {
+				if !strings.Contains(content, required) {
+					t.Fatalf("%s missing proposal question-round wording %q", path, required)
+				}
+			}
+		})
+	}
+}
+
+func TestSharedSDDProposeSkillRequiresProposalQuestionRound(t *testing.T) {
+	content := MustRead("skills/sdd-propose/SKILL.md")
+	for _, required := range []string{
+		"Offer the user a proposal question round",
+		"second question round",
+		"business problem",
+		"target users and situations",
+		"business rules",
+		"implications and impact",
+		"edge cases",
+		"decision gaps",
+		"Do not ask about test commands, PR shape, changed-line budget, or other harness decisions unless the user explicitly asks to discuss delivery",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("skills/sdd-propose/SKILL.md missing proposal question-round wording %q", required)
+		}
+	}
+}
+
 func TestCommentWriterLanguageContractSources(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -146,6 +221,27 @@ func allSDDOrchestratorAssetPaths(t *testing.T) []string {
 			return nil
 		}
 		if strings.HasSuffix(path, "/sdd-orchestrator.md") {
+			paths = append(paths, path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WalkDir embedded assets: %v", err)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func allSDDProposeAssetPaths(t *testing.T) []string {
+	t.Helper()
+	var paths []string
+	if err := fs.WalkDir(FS, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(path, "/agents/sdd-propose.md") {
 			paths = append(paths, path)
 		}
 		return nil

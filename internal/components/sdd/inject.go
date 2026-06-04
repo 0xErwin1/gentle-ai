@@ -898,6 +898,8 @@ Hard gate rules:
 - If the session has no preflight block, ask the localized user-facing preflight prompt above and STOP. Do not run init, delegate phases, edit files, or apply tasks in the same turn.
 - For a new feature request that says to use SDD, start at preflight -> init guard -> explore/proposal. Never launch ` + "`sdd-apply`" + ` just because the user asked to implement a feature.
 - In ` + "`interactive`" + ` mode, pause after each delegated phase returns, summarize the phase, ask before launching the next phase, and STOP. Match the user's language and active persona for direct conversation only; for Spanish neutral fallback ask: "¿Quiere ajustar algo o continuamos?". Do not run /sdd-ff phases back-to-back unless execution mode is ` + "`auto`" + `.
+- Interactive approval is phase-scoped. Words like "continue", "dale", or "go on" approve only the immediate next phase, not the rest of the SDD pipeline. Do not treat a generated artifact as approved until the user has had a chance to review or explicitly delegate that review.
+- Before the ` + "`sdd-propose`" + ` phase in interactive mode, offer the user a proposal question round instead of silently deciding whether the proposal is clear enough. Ask 3–5 concrete product questions to improve the PRD/proposal by uncovering business rules, implications, impact, edge cases, product tradeoffs, and decision gaps; then summarize assumptions and ask whether the user wants corrections or a second question round. Do not ask about test commands, PR shape, changed-line budget, or other harness mechanics at proposal time unless the user explicitly asks to discuss delivery.
 <!-- /gentle-ai:sdd-session-preflight-migration -->
 `
 
@@ -908,6 +910,9 @@ Hard gate rules:
 		strings.Contains(prompt, "Do NOT mix languages inside one preflight prompt") &&
 		strings.Contains(prompt, "Spanish localized shape below as the neutral fallback") &&
 		strings.Contains(prompt, "pause after each delegated phase returns") &&
+		strings.Contains(prompt, "approve only the immediate next phase") &&
+		strings.Contains(prompt, "proposal question round") &&
+		strings.Contains(prompt, "business rules, implications, impact, edge cases") &&
 		strings.Contains(prompt, "Before continuing with SDD") &&
 		!strings.Contains(prompt, "question` tool") &&
 		!containsOpenCodeOrchestratorLanguageLeak(prompt) {

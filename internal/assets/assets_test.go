@@ -320,6 +320,10 @@ func TestOpenCodeSDDOrchestratorRequiresSessionPreflight(t *testing.T) {
 		"Never launch `sdd-apply` just because the user asked to implement a feature",
 		"In **Interactive** mode, between phases",
 		"Ask before launching the next phase",
+		"Interactive approval is phase-scoped",
+		"approve only the immediate next phase",
+		"Before the `sdd-propose` phase in interactive mode",
+		"proposal question round",
 	} {
 		if !strings.Contains(content, required) {
 			t.Fatalf("opencode/sdd-orchestrator.md missing required preflight wording %q", required)
@@ -346,26 +350,33 @@ func TestOpenCodeSDDOrchestratorSpanishPreflightIsLocalized(t *testing.T) {
 	}
 }
 
-func TestOpenCodeSDDFFHonorsInteractiveMode(t *testing.T) {
-	content := MustRead("opencode/commands/sdd-ff.md")
-
-	for _, forbidden := range []string{
-		"Present a combined summary after ALL phases complete (not between each one).",
+func TestSDDFFCommandsHonorInteractiveMode(t *testing.T) {
+	for _, path := range []string{
+		"opencode/commands/sdd-ff.md",
+		"claude/commands/sdd-ff.md",
 	} {
-		if strings.Contains(content, forbidden) {
-			t.Fatalf("opencode/commands/sdd-ff.md must not contain unqualified back-to-back planning instruction %q", forbidden)
-		}
-	}
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
 
-	for _, required := range []string{
-		"Honor the cached execution mode from SDD Session Preflight",
-		"In `interactive` mode: run only the next planning phase",
-		"Do not launch the following phase until the user confirms",
-		"In `auto` mode: run all planning phases back-to-back",
-	} {
-		if !strings.Contains(content, required) {
-			t.Fatalf("opencode/commands/sdd-ff.md missing interactive/auto guard wording %q", required)
-		}
+			for _, forbidden := range []string{
+				"Present a combined summary after ALL phases complete (not between each one).",
+			} {
+				if strings.Contains(content, forbidden) {
+					t.Fatalf("%s must not contain unqualified back-to-back planning instruction %q", path, forbidden)
+				}
+			}
+
+			for _, required := range []string{
+				"Honor the cached execution mode from SDD Session Preflight",
+				"In `interactive` mode: run only the next planning phase",
+				"Do not launch the following phase until the user confirms",
+				"In `auto` mode: run all planning phases back-to-back",
+			} {
+				if !strings.Contains(content, required) {
+					t.Fatalf("%s missing interactive/auto guard wording %q", path, required)
+				}
+			}
+		})
 	}
 }
 

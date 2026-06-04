@@ -522,6 +522,9 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"If the current language is Spanish, use the Spanish localized shape below as the neutral fallback",
 		"adapt only user-facing prose to that persona",
 		"pause after each delegated phase returns",
+		"approve only the immediate next phase",
+		"proposal question round",
+		"business rules, implications, impact, edge cases",
 		"Never launch `sdd-apply` just because the user asked to implement a feature",
 	} {
 		if !strings.Contains(text, wanted) {
@@ -575,6 +578,9 @@ func TestInjectOpenCodeMigratesPartialPreflightPrompt(t *testing.T) {
 		"If the current language is Spanish, use the Spanish localized shape below as the neutral fallback",
 		"adapt only user-facing prose to that persona",
 		"pause after each delegated phase returns",
+		"approve only the immediate next phase",
+		"proposal question round",
+		"business rules, implications, impact, edge cases",
 		"Never launch `sdd-apply` just because the user asked to implement a feature",
 	} {
 		if !strings.Contains(text, wanted) {
@@ -652,6 +658,9 @@ Hard gate rules:
 		"Antes de continuar con SDD, elija una opción por grupo.",
 		"Responda con",
 		"for Spanish neutral fallback ask",
+		"approve only the immediate next phase",
+		"proposal question round",
+		"business rules, implications, impact, edge cases",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing refreshed preserved prompt content %q", wanted)
