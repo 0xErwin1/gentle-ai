@@ -17,7 +17,7 @@ CONTEXT:
 
 TASK:
 
-1. Read `skills/_shared/sdd-status-contract.md` and follow it.
+1. Read the installed shared status contract from this agent's skills directory and follow it. Use `~/.config/opencode/skills/_shared/sdd-status-contract.md` for OpenCode, `~/.config/kilo/skills/_shared/sdd-status-contract.md` for Kilo Code, `~/.qwen/skills/_shared/sdd-status-contract.md` for Qwen, or the equivalent configured skills directory for the current adapter. Do not use a workspace-relative `skills/_shared/...` path.
 2. Resolve the active change:
    - If `$ARGUMENTS` is provided, validate that exact change in the selected artifact store.
    - If omitted and exactly one active change exists, select it and say how it was selected.

@@ -7,11 +7,13 @@ The Claude Code session model is controlled by Claude Code; Gentle AI only confi
 
 WORKFLOW:
 
-1. Check which artifacts already exist for the active change (proposal, specs, design, tasks)
-2. Determine the next phase needed based on the dependency graph:
+1. Read `~/.claude/skills/_shared/sdd-status-contract.md` and produce structured status before acting.
+2. Resolve the active change. If `$ARGUMENTS` is missing and more than one active change exists, ask the user to choose and STOP. Do not guess.
+3. Check which artifacts already exist for the active change (proposal, specs, design, tasks)
+4. Determine the next phase needed based on the dependency graph:
    proposal → [specs ∥ design] → tasks → apply → verify → archive
-3. Launch the appropriate sub-agent(s) for the next phase
-4. Present the result and ask the user to proceed
+5. Launch the appropriate sub-agent(s) for the next phase only if structured status says the dependency is ready. Carry `actionContext` and allowed edit roots into any sub-agent launch.
+6. Present the result and ask the user to proceed
 
 CONTEXT:
 
@@ -27,3 +29,7 @@ To check which artifacts exist, search: mem_search(query: "sdd/$ARGUMENTS/", pro
 Sub-agents handle persistence automatically with topic_key "sdd/$ARGUMENTS/{type}".
 
 Read the orchestrator instructions to coordinate this workflow. Do NOT execute phase work inline when a native sub-agent is available.
+
+STATUS CONTRACT:
+
+Read `~/.claude/skills/_shared/sdd-status-contract.md` and follow it. If status reports `workspace-planning` with no allowed edit roots, do not launch apply/verify/archive work that would infer repo-local ownership.

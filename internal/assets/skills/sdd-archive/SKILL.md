@@ -146,10 +146,10 @@ Use today's date in ISO format (e.g., `2026-02-16`).
 - [ ] Main specs updated correctly
 - [ ] Change folder moved to archive
 - [ ] Archive contains all artifacts (proposal, specs, design, tasks)
-- [ ] Archived `tasks.md` has no unchecked implementation tasks, unless the orchestrator explicitly approved archive-time reconciliation or intentional incomplete-task archiving
+- [ ] Archived `tasks.md` has no unchecked implementation tasks, unless the orchestrator explicitly approved archive-time stale-checkbox reconciliation backed by apply-progress/verify-report proof
 - [ ] Active changes directory no longer has this change
 
-**IF mode is `engram`:** Confirm all artifact observation IDs are recorded in the archive report and the tasks observation has no unchecked implementation tasks unless the orchestrator explicitly approved archive-time reconciliation or intentional incomplete-task archiving.
+**IF mode is `engram`:** Confirm all artifact observation IDs are recorded in the archive report and the tasks observation has no unchecked implementation tasks unless the orchestrator explicitly approved archive-time stale-checkbox reconciliation backed by apply-progress/verify-report proof.
 
 **IF mode is `none`:** Skip verification — no persisted artifacts.
 

@@ -74,7 +74,7 @@ nextRecommended: <command-or-action>
 
 - `apply` is `ready` only when specs, design, and tasks are available and task progress is not all done.
 - `verify` is `ready` when tasks exist and either apply-progress exists or the tasks artifact shows all intended implementation work complete. Incomplete tasks remain blockers for full verification.
-- `archive` is `ready` only when verify-report exists, has no CRITICAL issues, and tasks are complete, unless the user explicitly requests and records an intentional override.
+- `archive` is `ready` only when verify-report exists, has no CRITICAL issues, and tasks are complete. CRITICAL verification issues have no override. Explicit recorded exceptions are limited to non-critical partial archives or stale-checkbox reconciliation when apply-progress/verify-report prove completion.
 
 ## Action Context Guard
 

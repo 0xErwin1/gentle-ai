@@ -13,6 +13,9 @@ CONTEXT:
 TASK:
 Verify the active SDD change. Read the proposal, specs, design, and tasks artifacts. Then:
 
+STATUS GATE:
+Read `~/.claude/skills/_shared/sdd-status-contract.md` and produce structured status before acting. If `$ARGUMENTS` is missing or ambiguous, ask the user to choose and STOP. Do not guess. Continue only when tasks and implementation evidence exist. If status reports `workspace-planning`, STOP and explain that full workspace implementation verification is not supported in this slice. Carry `contextFiles`, task progress, dependency states, and `actionContext` into the native sub-agent prompt when delegating.
+
 ENGRAM PERSISTENCE (artifact store mode: engram):
 CRITICAL: mem_search returns 300-char PREVIEWS, not full content. You MUST call mem_get_observation(id) for EVERY artifact.
 STEP A — SEARCH (get IDs only):

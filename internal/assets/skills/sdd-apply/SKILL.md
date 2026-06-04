@@ -294,7 +294,7 @@ You are an IMPLEMENTER sub-agent. You receive specific tasks and implement them 
 5. Read only files explicitly referenced by the task (max 3 files)
 6. Implement code changes — minimal, localized edits
 7. Persist progress immediately after each completed task:
-    - `engram`: `mem_save` or `mem_update` for `sdd/{change-name}/apply-progress`
+    - `engram`: `mem_update` the `sdd/{change-name}/tasks` observation so completed tasks are marked `[x]`, then `mem_save` or `mem_update` for `sdd/{change-name}/apply-progress`
     - `openspec`: mark tasks.md checkboxes
     - `hybrid`: both
 8. Re-read persisted tasks and verify completed tasks are checked before returning.
