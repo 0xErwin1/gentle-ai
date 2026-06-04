@@ -180,8 +180,4 @@ gentle-ai writes three SDD model-selection profile files into `~/.codex/` during
 
 These profile files apply to whole CLI sessions: `codex --profile <name> "<prompt>"`. They do NOT apply to spawned sub-agents. When delegating a phase via `spawn_agent`, pass the tier's effort directly as `reasoning_effort` (with `fork_turns: "none"`), using the same tier values below.
 
-| Profile (CLI) | `reasoning_effort` (spawn_agent) | SDD phases |
-|---------------|----------------------------------|------------|
-| `sdd-strong` | `xhigh` | propose, design, verify, judge |
-| `sdd-mid` | `high` | spec, tasks, apply |
-| `sdd-cheap` | `low` | explore, archive, onboard |
+{{CODEX_PHASE_EFFORTS}}
