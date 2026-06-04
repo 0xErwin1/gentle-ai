@@ -1689,6 +1689,22 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+	case ScreenCodexModelPicker:
+		if m.Cursor == screens.CodexModelPickerOptionCount()-1 {
+			if m.ModelConfigMode {
+				m.ModelConfigMode = false
+				m.setScreen(ScreenModelConfig)
+				return m, nil
+			}
+			if m.shouldShowKiroModelPickerScreen() {
+				m.setScreen(ScreenKiroModelPicker)
+			} else if m.shouldShowClaudeModelPickerScreen() {
+				m.setScreen(ScreenClaudeModelPicker)
+			} else {
+				m.setScreen(ScreenPreset)
+			}
+			return m, nil
+		}
 	case ScreenSDDMode:
 		options := screens.SDDModeOptions()
 		if m.Cursor < len(options) {
@@ -2528,7 +2544,7 @@ func (m Model) goBack() Model {
 	}
 
 	// ModelConfigMode: pickers reached via Model Config shortcut return to ScreenModelConfig.
-	if m.ModelConfigMode && (m.Screen == ScreenClaudeModelPicker || m.Screen == ScreenKiroModelPicker || m.Screen == ScreenModelPicker) {
+	if m.ModelConfigMode && (m.Screen == ScreenClaudeModelPicker || m.Screen == ScreenKiroModelPicker || m.Screen == ScreenCodexModelPicker || m.Screen == ScreenModelPicker) {
 		m.ModelConfigMode = false
 		m.setScreen(ScreenModelConfig)
 		return m
@@ -2607,6 +2623,10 @@ func (m Model) goBack() Model {
 			m.setScreen(ScreenSDDMode)
 			return m
 		}
+		if m.shouldShowCodexModelPickerScreen() {
+			m.setScreen(ScreenCodexModelPicker)
+			return m
+		}
 		if m.shouldShowKiroModelPickerScreen() {
 			m.setScreen(ScreenKiroModelPicker)
 			return m
@@ -2676,6 +2696,18 @@ func (m Model) goBack() Model {
 			} else {
 				m.setScreen(ScreenPreset)
 			}
+		}
+		return m
+	}
+
+	if m.Screen == ScreenCodexModelPicker {
+		// Codex picker back: Kiro (if present) → Claude (if present) → Preset.
+		if m.shouldShowKiroModelPickerScreen() {
+			m.setScreen(ScreenKiroModelPicker)
+		} else if m.shouldShowClaudeModelPickerScreen() {
+			m.setScreen(ScreenClaudeModelPicker)
+		} else {
+			m.setScreen(ScreenPreset)
 		}
 		return m
 	}
