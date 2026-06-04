@@ -18,6 +18,10 @@ COMMANDS
   sync         Sync agent configs and skills to current version
   skill-registry refresh
                Refresh .atl/skill-registry.md with cache-hit fast path
+  sdd-status [change]
+               Print native SDD phase status for orchestrators
+  sdd-continue [change]
+               Print native SDD dispatcher routing output
   update       Check for available updates
   upgrade      Apply updates to managed tools
   restore      Restore a config backup

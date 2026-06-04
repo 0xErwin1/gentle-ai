@@ -218,6 +218,52 @@ func TestRunArgsUninstallBypassesPlatformValidation(t *testing.T) {
 	// If we got here, uninstall bypassed the platform validation.
 }
 
+func TestRunArgsSDDStatusIsDispatchedBeforePlatformValidation(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error {
+		return fmt.Errorf("unsupported platform")
+	}
+
+	root := t.TempDir()
+	writeAppSDDStatusFile(t, filepath.Join(root, "openspec", "changes", "add-auth", "proposal.md"), "# Proposal\n")
+	writeAppSDDStatusFile(t, filepath.Join(root, "openspec", "changes", "add-auth", "specs", "auth", "spec.md"), "# Spec\n")
+	writeAppSDDStatusFile(t, filepath.Join(root, "openspec", "changes", "add-auth", "design.md"), "# Design\n")
+	writeAppSDDStatusFile(t, filepath.Join(root, "openspec", "changes", "add-auth", "tasks.md"), "- [ ] 1.1 Work\n")
+
+	var buf bytes.Buffer
+	err := RunArgs([]string{"sdd-status", "add-auth", "--cwd", root}, &buf)
+	if err != nil {
+		t.Fatalf("RunArgs(sdd-status) error = %v", err)
+	}
+	if !strings.Contains(buf.String(), "## SDD Status: add-auth") {
+		t.Fatalf("sdd-status output missing markdown status:\n%s", buf.String())
+	}
+}
+
+func TestRunArgsSDDContinueIsDispatchedBeforePlatformValidation(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error {
+		return fmt.Errorf("unsupported platform")
+	}
+
+	root := t.TempDir()
+	writeAppSDDStatusFile(t, filepath.Join(root, "openspec", "changes", "add-auth", "proposal.md"), "# Proposal\n")
+	writeAppSDDStatusFile(t, filepath.Join(root, "openspec", "changes", "add-auth", "specs", "auth", "spec.md"), "# Spec\n")
+	writeAppSDDStatusFile(t, filepath.Join(root, "openspec", "changes", "add-auth", "design.md"), "# Design\n")
+	writeAppSDDStatusFile(t, filepath.Join(root, "openspec", "changes", "add-auth", "tasks.md"), "- [ ] 1.1 Work\n")
+
+	var buf bytes.Buffer
+	err := RunArgs([]string{"sdd-continue", "add-auth", "--cwd", root}, &buf)
+	if err != nil {
+		t.Fatalf("RunArgs(sdd-continue) error = %v", err)
+	}
+	if !strings.Contains(buf.String(), "## Native SDD Dispatcher: add-auth") {
+		t.Fatalf("sdd-continue output missing dispatcher markdown:\n%s", buf.String())
+	}
+}
+
 // TestListBackupsFallsBackGracefullyForOldManifests verifies that old manifests
 // without Source/Description are still returned (not skipped) and can be displayed
 // via DisplayLabel without panicking.
@@ -843,4 +889,14 @@ func setupMockHome(t *testing.T, home string) {
 	})
 	os.Setenv("HOME", home)
 	os.Setenv("USERPROFILE", home)
+}
+
+func writeAppSDDStatusFile(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%s): %v", path, err)
+	}
 }

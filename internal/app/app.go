@@ -65,6 +65,10 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return err
 		case "skill-registry":
 			return runSkillRegistry(args[1:], stdout)
+		case "sdd-status":
+			return cli.RunSDDStatus(args[1:], stdout)
+		case "sdd-continue":
+			return cli.RunSDDContinue(args[1:], stdout)
 		}
 	}
 
