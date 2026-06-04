@@ -951,6 +951,9 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 				} else if m.shouldShowKiroModelPickerScreen() {
 					m.KiroModelPicker = screens.NewKiroModelPickerStateFromAssignments(m.Selection.KiroModelAssignments)
 					m.setScreen(ScreenKiroModelPicker)
+				} else if m.shouldShowCodexModelPickerScreen() {
+					m.CodexModelPicker = screens.NewCodexModelPickerStateFromAssignments(m.Selection.CodexModelAssignments)
+					m.setScreen(ScreenCodexModelPicker)
 				} else if m.shouldShowSDDModeScreen() {
 					m.setScreen(ScreenSDDMode)
 				} else if m.Selection.Preset == model.PresetCustom {
@@ -995,6 +998,9 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 					m = m.withResetSyncState()
 					m.setScreen(ScreenSync)
+				} else if m.shouldShowCodexModelPickerScreen() {
+					m.CodexModelPicker = screens.NewCodexModelPickerStateFromAssignments(m.Selection.CodexModelAssignments)
+					m.setScreen(ScreenCodexModelPicker)
 				} else if m.shouldShowSDDModeScreen() {
 					m.setScreen(ScreenSDDMode)
 				} else if m.Selection.Preset == model.PresetCustom {
