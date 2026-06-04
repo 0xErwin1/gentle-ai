@@ -9,6 +9,7 @@ type Selection struct {
 	SDDMode                SDDModeID
 	SDDProfileStrategy     SDDProfileStrategyID
 	StrictTDD              bool
+	CodexMultiAgent        bool                        // opt-in: write features.multi_agent = true in ~/.codex/config.toml (default false; experimental)
 	ModelAssignments       map[string]ModelAssignment  // key = sub-agent name (e.g., "sdd-init")
 	ClaudeModelAssignments map[string]ClaudeModelAlias // key = phase name; value = opus|sonnet|haiku
 	KiroModelAssignments   map[string]KiroModelAlias   // key = phase name; value = Kiro-native model alias

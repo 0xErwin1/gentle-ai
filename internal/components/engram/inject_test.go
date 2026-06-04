@@ -1019,6 +1019,128 @@ func TestInjectCodexProfilesIdempotent(t *testing.T) {
 	}
 }
 
+// ─── Codex multi-agent config injection tests ────────────────────────────────
+
+// TestInjectCodexMultiAgentDefaultOff asserts that after a plain Inject call
+// (no explicit opt-in), config.toml contains [features] with multi_agent = false.
+func TestInjectCodexMultiAgentDefaultOff(t *testing.T) {
+	home := t.TempDir()
+
+	if _, err := Inject(home, codexAdapter()); err != nil {
+		t.Fatalf("Inject(codex) error = %v", err)
+	}
+
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "[features]") {
+		t.Fatalf("config.toml missing [features] section; got:\n%s", text)
+	}
+	if !strings.Contains(text, "multi_agent = false") {
+		t.Fatalf("config.toml missing multi_agent = false; got:\n%s", text)
+	}
+	if strings.Contains(text, "multi_agent = true") {
+		t.Fatalf("config.toml must NOT have multi_agent = true by default; got:\n%s", text)
+	}
+}
+
+// TestInjectCodexMultiAgentOptIn asserts that InjectWithOptions with
+// CodexMultiAgent=true writes multi_agent = true in [features].
+func TestInjectCodexMultiAgentOptIn(t *testing.T) {
+	home := t.TempDir()
+
+	opts := InjectOptions{CodexMultiAgent: true}
+	if _, err := InjectWithOptions(home, codexAdapter(), opts); err != nil {
+		t.Fatalf("InjectWithOptions(codex, multiAgent=true) error = %v", err)
+	}
+
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "multi_agent = true") {
+		t.Fatalf("config.toml missing multi_agent = true after opt-in; got:\n%s", text)
+	}
+}
+
+// TestInjectCodexMultiAgentDefaults asserts that the [agents] section is always
+// written with max_threads = 4 and max_depth = 2 regardless of the opt-in flag.
+func TestInjectCodexMultiAgentDefaults(t *testing.T) {
+	home := t.TempDir()
+
+	if _, err := Inject(home, codexAdapter()); err != nil {
+		t.Fatalf("Inject(codex) error = %v", err)
+	}
+
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	text := string(content)
+	if !strings.Contains(text, "[agents]") {
+		t.Fatalf("config.toml missing [agents] section; got:\n%s", text)
+	}
+	if !strings.Contains(text, "max_threads = 4") {
+		t.Fatalf("config.toml missing max_threads = 4; got:\n%s", text)
+	}
+	if !strings.Contains(text, "max_depth = 2") {
+		t.Fatalf("config.toml missing max_depth = 2; got:\n%s", text)
+	}
+}
+
+// TestInjectCodexMultiAgentIdempotent asserts that running Inject twice
+// produces exactly one [features] section and one [agents] section with no
+// duplicate keys, and that the engram and context7 blocks are not disturbed.
+func TestInjectCodexMultiAgentIdempotent(t *testing.T) {
+	home := t.TempDir()
+
+	if _, err := Inject(home, codexAdapter()); err != nil {
+		t.Fatalf("first Inject(codex) error = %v", err)
+	}
+	second, err := Inject(home, codexAdapter())
+	if err != nil {
+		t.Fatalf("second Inject(codex) error = %v", err)
+	}
+	if second.Changed {
+		// Read content for diagnostics.
+		content, _ := os.ReadFile(filepath.Join(home, ".codex", "config.toml"))
+		t.Fatalf("second Inject(codex) changed = true, want false (multi-agent keys are idempotent); config.toml:\n%s", string(content))
+	}
+
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	text := string(content)
+
+	if count := strings.Count(text, "[features]"); count != 1 {
+		t.Fatalf("expected 1 [features] section, got %d; config.toml:\n%s", count, text)
+	}
+	if count := strings.Count(text, "[agents]"); count != 1 {
+		t.Fatalf("expected 1 [agents] section, got %d; config.toml:\n%s", count, text)
+	}
+	if count := strings.Count(text, "multi_agent"); count != 1 {
+		t.Fatalf("expected 1 multi_agent key, got %d; config.toml:\n%s", count, text)
+	}
+	if count := strings.Count(text, "max_threads"); count != 1 {
+		t.Fatalf("expected 1 max_threads key, got %d; config.toml:\n%s", count, text)
+	}
+	if count := strings.Count(text, "max_depth"); count != 1 {
+		t.Fatalf("expected 1 max_depth key, got %d; config.toml:\n%s", count, text)
+	}
+	// Engram MCP block must still be present.
+	if !strings.Contains(text, "[mcp_servers.engram]") {
+		t.Fatalf("config.toml missing [mcp_servers.engram] after idempotency run; got:\n%s", text)
+	}
+}
+
 // ─── Absolute path resolution tests ──────────────────────────────────────────
 
 // mockEngramLookPath sets EngramLookPath to a mock and restores it after the test.

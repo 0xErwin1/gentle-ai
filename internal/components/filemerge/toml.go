@@ -108,6 +108,96 @@ func UpsertCodexMCPServerBlock(content, serverID, command string, args []string)
 	return base + "\n\n" + block + "\n"
 }
 
+// UpsertTOMLTableKey upserts `key = rawValue` inside the named [section] table.
+// rawValue is the already-formatted TOML right-hand side: the caller supplies a
+// bare boolean/integer (false, 4) or a pre-quoted string ("value") — the helper
+// writes it verbatim, staying type-agnostic and parser-free.
+//
+// Behaviour:
+//   - If [section] exists: any existing line whose trimmed prefix is `key ` or
+//     `key=` is removed, then `key = rawValue` is inserted as the first line
+//     after the [section] header.
+//   - If [section] does not exist: `\n[section]\nkey = rawValue` is appended at
+//     EOF.
+//
+// All other sections and top-level keys are preserved verbatim. The result is
+// idempotent: calling with the same arguments twice yields the same output.
+// Only the simple single-line-per-key subset is handled (no inline tables or
+// arrays-of-tables — the Codex config does not require those).
+func UpsertTOMLTableKey(content, section, key, rawValue string) string {
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	lines := strings.Split(content, "\n")
+	header := "[" + section + "]"
+	newLine := key + " = " + rawValue
+
+	// Find the section header and collect the indices of the key lines within it.
+	sectionLine := -1  // line index of the [section] header
+	var keyLines []int // indices of lines matching key= or key = inside the section
+
+	inSection := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == header {
+			sectionLine = i
+			inSection = true
+			continue
+		}
+		if inSection {
+			// A new [header] ends the current section.
+			if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+				inSection = false
+				continue
+			}
+			// Detect an existing occurrence of the key within this section.
+			if strings.HasPrefix(trimmed, key+" ") || strings.HasPrefix(trimmed, key+"=") {
+				keyLines = append(keyLines, i)
+			}
+		}
+	}
+
+	if sectionLine == -1 {
+		// Section absent — append it at EOF.
+		base := strings.TrimSpace(strings.Join(lines, "\n"))
+		if base == "" {
+			return header + "\n" + newLine + "\n"
+		}
+		return base + "\n\n" + header + "\n" + newLine + "\n"
+	}
+
+	if len(keyLines) > 0 {
+		// Key already exists in the section.
+		// Replace the first occurrence in place; drop any duplicates.
+		firstKey := keyLines[0]
+		dupSet := make(map[int]bool, len(keyLines)-1)
+		for _, idx := range keyLines[1:] {
+			dupSet[idx] = true
+		}
+
+		var out []string
+		for i, line := range lines {
+			if dupSet[i] {
+				continue // drop duplicates
+			}
+			if i == firstKey {
+				out = append(out, newLine) // replace in place
+				continue
+			}
+			out = append(out, line)
+		}
+		return strings.TrimSpace(strings.Join(out, "\n")) + "\n"
+	}
+
+	// Section present but key absent — insert as the first line after the header.
+	var out []string
+	for i, line := range lines {
+		out = append(out, line)
+		if i == sectionLine {
+			out = append(out, newLine)
+		}
+	}
+	return strings.TrimSpace(strings.Join(out, "\n")) + "\n"
+}
+
 // UpsertTopLevelTOMLString inserts or replaces a top-level key = "value" pair
 // in TOML content. The key is placed before the first [section] header so it
 // remains a top-level (non-table) setting. Existing occurrences of the key are

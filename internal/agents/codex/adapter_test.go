@@ -178,6 +178,32 @@ func TestAdapterSystemPromptFile_UsesUppercaseAGENTSmd(t *testing.T) {
 	}
 }
 
+// TestAdapterSubAgentsStayFalse is a REGRESSION GUARD.
+//
+// Codex multi-agent delegation is config+asset driven (features.multi_agent in
+// ~/.codex/config.toml + sdd-orchestrator.md capability gate). It does NOT use
+// the file-based sub-agents directory mechanism that SupportsSubAgents() gates.
+//
+// Flipping SupportsSubAgents() to true with an empty EmbeddedSubAgentsDir()
+// would cause sdd/inject.go and uninstall/service.go to call
+// assets.FS.ReadDir("") — which returns the embedded root and would copy the
+// entire asset tree into ~/.codex/agents/. This is catastrophic. Therefore
+// SupportsSubAgents() MUST remain false indefinitely for the Codex adapter.
+// Do NOT remove or relax this test without a full audit of those call sites.
+func TestAdapterSubAgentsStayFalse(t *testing.T) {
+	a := NewAdapter()
+
+	if got := a.SupportsSubAgents(); got {
+		t.Fatal("SupportsSubAgents() = true — MUST stay false for Codex: Codex multi-agent is config+asset driven, not file-directory driven. Flipping this flag would copy the embedded asset root into ~/.codex/agents/.")
+	}
+	if got := a.SubAgentsDir("/home/user"); got != "" {
+		t.Fatalf("SubAgentsDir() = %q, want \"\" — must stay empty for Codex", got)
+	}
+	if got := a.EmbeddedSubAgentsDir(); got != "" {
+		t.Fatalf("EmbeddedSubAgentsDir() = %q, want \"\" — must stay empty for Codex", got)
+	}
+}
+
 func TestCapabilities(t *testing.T) {
 	a := NewAdapter()
 
