@@ -1582,7 +1582,11 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.ModelConfigMode = true
 			m.KiroModelPicker = screens.NewKiroModelPickerStateFromAssignments(m.Selection.KiroModelAssignments)
 			m.setScreen(ScreenKiroModelPicker)
-		default: // Back
+		case 3: // Configure Codex models
+			m.ModelConfigMode = true
+			m.CodexModelPicker = screens.NewCodexModelPickerStateFromAssignments(m.Selection.CodexModelAssignments)
+			m.setScreen(ScreenCodexModelPicker)
+		case 4: // Back
 			m.setScreen(ScreenWelcome)
 		}
 		return m, nil
