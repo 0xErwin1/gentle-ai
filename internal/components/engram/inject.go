@@ -166,8 +166,25 @@ func vsCodeEngramOverlayJSON(cmd string) []byte {
 	return append(b, '\n')
 }
 
+// InjectOptions carries optional configuration for an Inject call.
+// Zero value is always safe — all fields have documented defaults.
+type InjectOptions struct {
+	// CodexMultiAgent controls whether features.multi_agent is written as true
+	// in ~/.codex/config.toml. Default (false) writes multi_agent = false, which
+	// is the safe no-op value for the experimental Codex multi-agent tool set.
+	// Set to true only when the user explicitly opts in via a CLI flag or TUI choice.
+	CodexMultiAgent bool
+}
+
 func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
-	return inject(homeDir, homeDir, adapter)
+	return injectWithOptions(homeDir, homeDir, adapter, InjectOptions{})
+}
+
+// InjectWithOptions is like Inject but accepts additional options such as the
+// Codex multi-agent opt-in flag. Use this when the caller has a model.Selection
+// and needs to forward user-chosen configuration into the injection pass.
+func InjectWithOptions(homeDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
+	return injectWithOptions(homeDir, homeDir, adapter, opts)
 }
 
 // InjectWithPromptDir writes Engram's MCP configuration using configHomeDir and
@@ -175,7 +192,7 @@ func Inject(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 // as OpenClaw where MCP is loaded from the global config but instructions are
 // read from an active workspace.
 func InjectWithPromptDir(configHomeDir, promptDir string, adapter agents.Adapter) (InjectionResult, error) {
-	return inject(configHomeDir, promptDir, adapter)
+	return injectWithOptions(configHomeDir, promptDir, adapter, InjectOptions{})
 }
 
 const antigravityEngramPluginJSON = `{
@@ -255,7 +272,7 @@ func installAntigravityEngramPlugin(homeDir, engramCommand string) (bool, []stri
 	return changed, files, nil
 }
 
-func inject(configHomeDir, promptDir string, adapter agents.Adapter) (InjectionResult, error) {
+func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, opts InjectOptions) (InjectionResult, error) {
 	if provisioner, ok := adapter.(piEngramProvisioner); ok {
 		changed, files, err := provisioner.ProvisionEngramMCP(configHomeDir)
 		if err != nil {
@@ -357,17 +374,55 @@ func inject(configHomeDir, promptDir string, adapter agents.Adapter) (InjectionR
 			return InjectionResult{}, instrErr
 		}
 
-		// Read existing config and apply all mutations in one pass.
+		// Read existing config and apply all mutations in a single pass.
+		//
+		// Mutation order (matters for idempotency):
+		//   1. UpsertTOMLTableKey for [features] and [agents] — these are
+		//      applied FIRST so that the section headers are present before
+		//      UpsertTopLevelTOMLString and UpsertCodexEngramBlock run. When
+		//      the sections already exist, their keys are replaced in place.
+		//   2. UpsertTopLevelTOMLString for instruction-file keys — places
+		//      top-level keys before the first [section] header (i.e., before
+		//      [features]). Running model→experimental in this order is
+		//      self-correcting on re-runs (the pair of calls always produces
+		//      the same final ordering).
+		//   3. UpsertCodexEngramBlock — strips the [mcp_servers.engram] block
+		//      and re-appends it at EOF on every call. Running last ensures
+		//      engram always ends up at the bottom of the file. On re-runs,
+		//      UpsertCodexEngramBlock stops at [features] (the next section
+		//      header after engram on disk), so [features] and [agents] are
+		//      preserved above engram — the stable layout is:
+		//        model_instructions_file / experimental_compact_prompt_file
+		//        [features] / [agents]
+		//        [mcp_servers.engram]
 		existing, err := readFileOrEmpty(configPath)
 		if err != nil {
 			return InjectionResult{}, err
 		}
-		engramCmd := stableEngramCommandForMergedConfig(configPath, adapter.Agent())
-		withMCP := filemerge.UpsertCodexEngramBlock(existing, engramCmd)
-		withInstr := filemerge.UpsertTopLevelTOMLString(withMCP, "model_instructions_file", instructionsPath)
+
+		// Step 1 — multi-agent SDD enablement keys ([features] and [agents]).
+		// features.multi_agent defaults to false (experimental, opt-in only).
+		// Set Selection.CodexMultiAgent=true / InjectOptions{CodexMultiAgent:true}
+		// to write multi_agent=true. agents.max_threads and agents.max_depth are
+		// always written with conservative defaults so they are ready when the
+		// user enables multi_agent.
+		multiAgentValue := "false"
+		if opts.CodexMultiAgent {
+			multiAgentValue = "true"
+		}
+		withFeatures := filemerge.UpsertTOMLTableKey(existing, "features", "multi_agent", multiAgentValue)
+		withMaxThreads := filemerge.UpsertTOMLTableKey(withFeatures, "agents", "max_threads", "4")
+		withMaxDepth := filemerge.UpsertTOMLTableKey(withMaxThreads, "agents", "max_depth", "2")
+
+		// Step 2 — top-level instruction-file keys (before the first section header).
+		withInstr := filemerge.UpsertTopLevelTOMLString(withMaxDepth, "model_instructions_file", instructionsPath)
 		withCompact := filemerge.UpsertTopLevelTOMLString(withInstr, "experimental_compact_prompt_file", compactPath)
 
-		tomlWrite, err := filemerge.WriteFileAtomic(configPath, []byte(withCompact), 0o644)
+		// Step 3 — [mcp_servers.engram] block (always last; strip+re-append at EOF).
+		engramCmd := stableEngramCommandForMergedConfig(configPath, adapter.Agent())
+		withMCP := filemerge.UpsertCodexEngramBlock(withCompact, engramCmd)
+
+		tomlWrite, err := filemerge.WriteFileAtomic(configPath, []byte(withMCP), 0o644)
 		if err != nil {
 			return InjectionResult{}, err
 		}
