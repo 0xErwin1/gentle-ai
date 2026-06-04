@@ -43,6 +43,17 @@ func readProfileFileOrEmpty(path string) (string, error) {
 	return string(data), nil
 }
 
+// SddProfilePaths returns the absolute paths of all gentle-ai SDD profile
+// files that WriteCodexProfiles would write into codexHomeDir. Useful for
+// uninstall path tracking without re-running the write.
+func SddProfilePaths(codexHomeDir string) []string {
+	paths := make([]string, 0, len(gentleAIProfiles))
+	for _, p := range gentleAIProfiles {
+		paths = append(paths, filepath.Join(codexHomeDir, p.filename))
+	}
+	return paths
+}
+
 // WriteCodexProfiles writes the three gentle-ai SDD profile files into the
 // given Codex home directory (~/.codex). Each profile file contains a
 // model_reasoning_effort key set to the appropriate SDD tier.
