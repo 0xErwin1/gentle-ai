@@ -832,7 +832,7 @@ func RunSync(args []string) (SyncResult, error) {
 	// Load persisted model assignments and persona from state when not provided
 	// via flags. Without this, every CLI sync falls back to defaults and would
 	// silently overwrite the user's model choices and persona selection.
-	if len(selection.ClaudeModelAssignments) == 0 || len(selection.ModelAssignments) == 0 || selection.Persona == "" {
+	if len(selection.ClaudeModelAssignments) == 0 || len(selection.KiroModelAssignments) == 0 || len(selection.ModelAssignments) == 0 || selection.Persona == "" {
 		s, readErr := state.Read(homeDir)
 		if readErr == nil {
 			if len(selection.ClaudeModelAssignments) == 0 && len(s.ClaudeModelAssignments) > 0 {
@@ -846,6 +846,13 @@ func RunSync(args []string) (SyncResult, error) {
 					m[k] = model.ClaudeModelAlias(v)
 				}
 				selection.ClaudeModelAssignments = m
+			}
+			if len(selection.KiroModelAssignments) == 0 && len(s.KiroModelAssignments) > 0 {
+				m := make(map[string]model.KiroModelAlias, len(s.KiroModelAssignments))
+				for k, v := range s.KiroModelAssignments {
+					m[k] = model.KiroModelAlias(v)
+				}
+				selection.KiroModelAssignments = m
 			}
 			if len(selection.ModelAssignments) == 0 && len(s.ModelAssignments) > 0 {
 				m := make(map[string]model.ModelAssignment, len(s.ModelAssignments))

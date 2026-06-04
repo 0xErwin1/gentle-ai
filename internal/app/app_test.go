@@ -394,17 +394,17 @@ func TestTuiSyncClaudeModelConfigWritesSelectedAssignments(t *testing.T) {
 // replacement semantics as ClaudeModelAssignments — not a key-level merge).
 func TestApplyOverrides_KiroModelAssignments(t *testing.T) {
 	selection := model.Selection{
-		KiroModelAssignments: map[string]model.ClaudeModelAlias{"sdd-apply": model.ClaudeModelSonnet},
+		KiroModelAssignments: map[string]model.KiroModelAlias{"sdd-apply": model.KiroModelSonnet},
 	}
 	overrides := &model.SyncOverrides{
-		KiroModelAssignments: map[string]model.ClaudeModelAlias{"sdd-design": model.ClaudeModelOpus},
+		KiroModelAssignments: map[string]model.KiroModelAlias{"sdd-design": model.KiroModelOpus},
 	}
 
 	applyOverrides(&selection, overrides)
 
 	// The whole map is replaced — prior entries (sdd-apply) are gone.
-	if got := selection.KiroModelAssignments["sdd-design"]; got != model.ClaudeModelOpus {
-		t.Fatalf("KiroModelAssignments[sdd-design] = %q, want %q", got, model.ClaudeModelOpus)
+	if got := selection.KiroModelAssignments["sdd-design"]; got != model.KiroModelOpus {
+		t.Fatalf("KiroModelAssignments[sdd-design] = %q, want %q", got, model.KiroModelOpus)
 	}
 	if _, exists := selection.KiroModelAssignments["sdd-apply"]; exists {
 		t.Fatal("KiroModelAssignments[sdd-apply] should not exist after full-map replacement")
@@ -447,11 +447,11 @@ func TestLoadPersistedAssignmentsPopulatesEmptySelection(t *testing.T) {
 	if got := selection.ClaudeModelAssignments["sdd-apply"]; got != "sonnet" {
 		t.Errorf("ClaudeModelAssignments[sdd-apply] = %q, want %q", got, "sonnet")
 	}
-	if got := selection.KiroModelAssignments["sdd-design"]; got != model.ClaudeModelOpus {
-		t.Errorf("KiroModelAssignments[sdd-design] = %q, want %q", got, model.ClaudeModelOpus)
+	if got := selection.KiroModelAssignments["sdd-design"]; got != model.KiroModelOpus {
+		t.Errorf("KiroModelAssignments[sdd-design] = %q, want %q", got, model.KiroModelOpus)
 	}
-	if got := selection.KiroModelAssignments["sdd-archive"]; got != model.ClaudeModelHaiku {
-		t.Errorf("KiroModelAssignments[sdd-archive] = %q, want %q", got, model.ClaudeModelHaiku)
+	if got := selection.KiroModelAssignments["sdd-archive"]; got != model.KiroModelHaiku {
+		t.Errorf("KiroModelAssignments[sdd-archive] = %q, want %q", got, model.KiroModelHaiku)
 	}
 	ma := selection.ModelAssignments["sdd-init"]
 	if ma.ProviderID != "anthropic" || ma.ModelID != "claude-sonnet-4" {
@@ -540,10 +540,10 @@ func TestPersistAndLoadKiroModelAssignments(t *testing.T) {
 	home := t.TempDir()
 
 	selection := model.Selection{
-		KiroModelAssignments: map[string]model.ClaudeModelAlias{
-			"sdd-design":  model.ClaudeModelOpus,
-			"sdd-archive": model.ClaudeModelHaiku,
-			"default":     model.ClaudeModelSonnet,
+		KiroModelAssignments: map[string]model.KiroModelAlias{
+			"sdd-design":  model.KiroModelGLM,
+			"sdd-archive": model.KiroModelQwen,
+			"default":     model.KiroModelAuto,
 		},
 	}
 	persistAssignments(home, selection)
@@ -551,14 +551,14 @@ func TestPersistAndLoadKiroModelAssignments(t *testing.T) {
 	loaded := model.Selection{}
 	loadPersistedAssignments(home, &loaded)
 
-	if got := loaded.KiroModelAssignments["sdd-design"]; got != model.ClaudeModelOpus {
-		t.Errorf("round-trip KiroModelAssignments[sdd-design] = %q, want %q", got, model.ClaudeModelOpus)
+	if got := loaded.KiroModelAssignments["sdd-design"]; got != model.KiroModelGLM {
+		t.Errorf("round-trip KiroModelAssignments[sdd-design] = %q, want %q", got, model.KiroModelGLM)
 	}
-	if got := loaded.KiroModelAssignments["sdd-archive"]; got != model.ClaudeModelHaiku {
-		t.Errorf("round-trip KiroModelAssignments[sdd-archive] = %q, want %q", got, model.ClaudeModelHaiku)
+	if got := loaded.KiroModelAssignments["sdd-archive"]; got != model.KiroModelQwen {
+		t.Errorf("round-trip KiroModelAssignments[sdd-archive] = %q, want %q", got, model.KiroModelQwen)
 	}
-	if got := loaded.KiroModelAssignments["default"]; got != model.ClaudeModelSonnet {
-		t.Errorf("round-trip KiroModelAssignments[default] = %q, want %q", got, model.ClaudeModelSonnet)
+	if got := loaded.KiroModelAssignments["default"]; got != model.KiroModelAuto {
+		t.Errorf("round-trip KiroModelAssignments[default] = %q, want %q", got, model.KiroModelAuto)
 	}
 }
 

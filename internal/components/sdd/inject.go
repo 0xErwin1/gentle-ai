@@ -25,7 +25,7 @@ type InjectionResult struct {
 type InjectOptions struct {
 	OpenCodeModelAssignments map[string]model.ModelAssignment
 	ClaudeModelAssignments   map[string]model.ClaudeModelAlias
-	KiroModelAssignments     map[string]model.ClaudeModelAlias
+	KiroModelAssignments     map[string]model.KiroModelAlias
 
 	// WorkspaceDir is the root of the current workspace (e.g. os.Getwd()).
 	// When non-empty and the adapter implements workflowInjector, native
@@ -73,11 +73,11 @@ type workflowInjector interface {
 }
 
 // kiroModelResolver is an optional adapter capability. When implemented,
-// the subagent copy loop resolves ClaudeModelAlias values to native model IDs
+// the subagent copy loop resolves KiroModelAlias values to native model IDs
 // and stamps them into the agent frontmatter sentinel {{KIRO_MODEL}}.
 // Adapters that do not implement this interface are unaffected.
 type kiroModelResolver interface {
-	KiroModelID(alias model.ClaudeModelAlias) string
+	KiroModelID(alias model.KiroModelAlias) string
 }
 
 // claudeModelResolver is an optional adapter capability. When implemented,
@@ -574,7 +574,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			// Non-Kiro adapters (Cursor, etc.) don't implement kiroModelResolver and are unaffected.
 			if kmr, ok := adapter.(kiroModelResolver); ok {
 				phase := strings.TrimSuffix(entry.Name(), ".md")
-				alias := model.ClaudeModelSonnet // safe default
+				alias := model.KiroModelAuto // safe default
 				if opts.KiroModelAssignments != nil {
 					if a, hasAlias := opts.KiroModelAssignments[phase]; hasAlias {
 						alias = a
@@ -584,9 +584,9 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				} else if opts.ClaudeModelAssignments != nil {
 					// Backward-compatible fallback when Kiro-specific assignments are not provided.
 					if a, hasAlias := opts.ClaudeModelAssignments[phase]; hasAlias {
-						alias = a
+						alias = model.KiroModelAlias(a)
 					} else if d, hasDefault := opts.ClaudeModelAssignments["default"]; hasDefault {
-						alias = d
+						alias = model.KiroModelAlias(d)
 					}
 				}
 				contentStr = strings.ReplaceAll(contentStr, "{{KIRO_MODEL}}", kmr.KiroModelID(alias))
