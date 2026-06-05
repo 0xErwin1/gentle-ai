@@ -316,7 +316,8 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 		`"*" = "allow"`,
 		`[permissions.gentle-dev.filesystem.":workspace_roots"]`,
 		`"**/.env" = "deny"`,
-		`"**/.env.*" = "deny"`,
+		`"**/.env.local" = "deny"`,
+		`"**/.env.*.local" = "deny"`,
 		`"**/*.pem" = "deny"`,
 		`"**/*.key" = "deny"`,
 		`"**/secrets/*" = "deny"`,
@@ -324,6 +325,36 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 	for _, want := range wantSubstrings {
 		if !strings.Contains(text, want) {
 			t.Fatalf("config.toml missing %q; got:\n%s", want, text)
+		}
+	}
+}
+
+func TestInjectCodexPermissionsAllowsEnvExamples(t *testing.T) {
+	home := t.TempDir()
+
+	if _, err := Inject(home, codexAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config.toml: %v", err)
+	}
+	text := string(content)
+
+	for _, forbidden := range []string{
+		`"**/.env.*" = "deny"`,
+		`"*.env.*" = "deny"`,
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("config.toml contains over-broad env deny rule %q; got:\n%s", forbidden, text)
+		}
+	}
+
+	for _, allowedExample := range []string{".env.example", ".env.template"} {
+		if strings.Contains(text, allowedExample) {
+			t.Fatalf("config.toml should not mention versioned env template %q; got:\n%s", allowedExample, text)
 		}
 	}
 }

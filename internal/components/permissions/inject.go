@@ -172,7 +172,8 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 	workspaceRootsSection := `permissions.gentle-dev.filesystem.":workspace_roots"`
 	for _, pattern := range []string{
 		`"**/.env"`,
-		`"**/.env.*"`,
+		`"**/.env.local"`,
+		`"**/.env.*.local"`,
 		`"**/*.pem"`,
 		`"**/*.key"`,
 		`"**/secrets/*"`,
