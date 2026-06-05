@@ -1767,25 +1767,27 @@ test_windsurf_persona_and_sdd_content() {
     fi
 }
 
-# --- Category 12: Codex context7 by-design skip ---
+# --- Category 12: Codex context7 TOML injection ---
 
-test_codex_context7_not_in_toml() {
-    log_test "Codex: context7 component does NOT write config.toml (TOML strategy is no-op by design)"
+test_codex_context7_in_toml() {
+    log_test "Codex: context7 component writes [mcp_servers.context7] into config.toml (TOML strategy)"
     cleanup_test_env
 
-    # Install engram first (creates config.toml) then try context7
-    $BINARY install --agent codex --component engram --persona neutral 2>&1 || true
+    $BINARY install --agent codex --component context7 --persona neutral 2>&1 || true
 
     local config_toml="$HOME/.codex/config.toml"
-    if [ -f "$config_toml" ]; then
-        # Engram created config.toml — now try context7 on top
-        $BINARY install --agent codex --component context7 --persona neutral 2>&1 || true
-        assert_file_not_contains "$config_toml" "context7" "Codex config.toml does NOT get context7 entry"
+    assert_file_exists "$config_toml" "Codex config.toml created by context7"
+    assert_file_contains "$config_toml" "[mcp_servers.context7]" "Codex config.toml has [mcp_servers.context7] block"
+    assert_file_contains "$config_toml" "context7-mcp" "Codex context7 block references context7-mcp package"
+
+    # Idempotent: re-running must not duplicate the block.
+    $BINARY install --agent codex --component context7 --persona neutral 2>&1 || true
+    local count
+    count=$(grep -c "\[mcp_servers.context7\]" "$config_toml" 2>/dev/null || echo 0)
+    if [ "$count" -eq 1 ]; then
+        log_pass "Codex context7 block is idempotent (exactly 1 entry)"
     else
-        # config.toml wasn't created by engram, so no context7 either
-        $BINARY install --agent codex --component context7 --persona neutral 2>&1 || true
-        assert_file_not_exists "$config_toml" "No config.toml created by context7 alone"
-        log_pass "Codex context7 is intentionally skipped (TOML strategy is no-op)"
+        log_fail "Codex context7 block duplicated ($count entries)"
     fi
 }
 
@@ -2302,7 +2304,7 @@ if [ "${RUN_FULL_E2E:-0}" = "1" ]; then
     test_antigravity_sdd_skills_path
 
     # Category 12: Codex context7 by-design skip
-    test_codex_context7_not_in_toml
+    test_codex_context7_in_toml
 
     # Category 13: Qwen integration
     test_qwen_engram_injection
