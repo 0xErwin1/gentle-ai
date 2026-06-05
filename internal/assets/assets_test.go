@@ -769,6 +769,51 @@ func TestSDDPhaseCommonEnforcesExecutorBoundary(t *testing.T) {
 	}
 }
 
+func TestSDDStatusContractMatchesNativeShape(t *testing.T) {
+	content := MustRead("skills/_shared/sdd-status-contract.md")
+
+	for _, want := range []string{
+		"schemaName: gentle-ai.sdd-status",
+		"schemaVersion: 1",
+		"changeName: <change-name-or-null>",
+		"artifactStore: openspec",
+		"mode: repo-local",
+		"path: <absolute path to openspec>",
+		"changeRoot: <absolute path to openspec/changes/<change> or null>",
+		"completed: 0",
+		"pending: 0",
+		"allComplete: false",
+		"proposal: blocked | ready | all_done",
+		"specs: blocked | ready | all_done",
+		"design: blocked | ready | all_done",
+		"tasks: blocked | ready | all_done",
+		"relationships:",
+		"dependsOn: []",
+		"sameDomainActiveChanges: []",
+		"phaseInstructions:",
+		"blockedReasons: []",
+		"Manual fallback status MUST stay shape-compatible with native `gentle-ai.sdd-status` JSON",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("sdd-status-contract missing native-shape field %q", want)
+		}
+	}
+
+	for _, forbidden := range []string{
+		"schemaName: spec-driven",
+		"root: <project-or-openspec-root>",
+		"changesDir: <openspec/changes or engram topic prefix>",
+		"complete: 0",
+		"remaining: 0",
+		"unchecked: []",
+		"warnings: []",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("sdd-status-contract contains legacy field %q", forbidden)
+		}
+	}
+}
+
 func TestOpenCodeSDDOverlaySubagentsAreExplicitExecutors(t *testing.T) {
 	for _, assetPath := range []string{"opencode/sdd-overlay-single.json", "opencode/sdd-overlay-multi.json"} {
 		t.Run(assetPath, func(t *testing.T) {

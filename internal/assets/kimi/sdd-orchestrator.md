@@ -91,6 +91,10 @@ Meta-commands (handled by YOU, not by Kimi command files):
 
 Do NOT invent custom `/sdd-*` command files. On Kimi, user-facing entrypoints are `/skill:sdd-*`; `/sdd-new`, `/sdd-continue`, `/sdd-status`, and `/sdd-ff` are orchestrator behaviors you interpret yourself.
 
+### Native SDD Dispatcher Guard
+
+Before routing, continuing, applying, verifying, or archiving an SDD change, use the native dispatcher when `gentle-ai` is available: `gentle-ai sdd-continue [change] --cwd <repo>` or `gentle-ai sdd-status [change] --cwd <repo> --json --instructions`. Treat native status JSON as authoritative over prompt inference. Route only by `nextRecommended` and dependency states; never infer from free text. If `blockedReasons` is non-empty, do not proceed to apply, archive, or terminal work. If `nextRecommended` is `verify`, verification/remediation may run only to refresh evidence; if `nextRecommended` is `resolve-blockers`, report `blockedReasons` and stop. If the binary is unavailable, fall back to the existing prompt contract and manual status schema.
+
 ### SDD Init Guard (MANDATORY)
 
 Before executing ANY SDD command (`/sdd-new`, `/sdd-ff`, `/sdd-continue`, `/sdd-status`, `/skill:sdd-init`, `/skill:sdd-explore`, `/skill:sdd-propose`, `/skill:sdd-spec`, `/skill:sdd-design`, `/skill:sdd-tasks`, `/skill:sdd-apply`, `/skill:sdd-verify`, `/skill:sdd-archive`, `/skill:sdd-onboard`), check if `sdd-init` has been run for this project:
