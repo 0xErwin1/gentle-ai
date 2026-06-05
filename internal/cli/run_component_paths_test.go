@@ -203,6 +203,20 @@ func TestComponentPathsEngramCodexIncludesConfigTOML(t *testing.T) {
 	}
 }
 
+// TestComponentPathsPermissionsCodexIncludesConfigTOML verifies that
+// ComponentPermission + Codex reports ~/.codex/config.toml as a backup target.
+func TestComponentPathsPermissionsCodexIncludesConfigTOML(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentCodex})
+
+	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentPermission)
+
+	want := filepath.Join(home, ".codex", "config.toml")
+	if !containsPath(paths, want) {
+		t.Fatalf("componentPaths(permissions,codex) missing %q\npaths=%v", want, paths)
+	}
+}
+
 // TestComponentPathsEngramOpenClawUsesCanonicalSettingsPath asserts that the
 // engram component path for OpenClaw always resolves to the canonical
 // ~/.openclaw/openclaw.json and never to a workspace-scoped copy.

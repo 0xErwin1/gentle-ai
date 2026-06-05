@@ -108,6 +108,46 @@ func UpsertCodexMCPServerBlock(content, serverID, command string, args []string)
 	return base + "\n\n" + block + "\n"
 }
 
+// UpsertCodexRemoteMCPServerBlock removes any existing [mcp_servers.<serverID>]
+// block from the given TOML content and appends a fresh remote MCP block using
+// Codex's `url = "..."`
+// shape. This migrates legacy local stdio blocks by dropping stale command/args
+// lines while preserving unrelated config.
+func UpsertCodexRemoteMCPServerBlock(content, serverID, url string) string {
+	header := "[mcp_servers." + serverID + "]"
+	escapedURL := strings.ReplaceAll(url, `\`, `\\`)
+	block := header + "\nurl = \"" + escapedURL + "\""
+
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	lines := strings.Split(content, "\n")
+
+	var kept []string
+	for i := 0; i < len(lines); {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed == header {
+			i++
+			for i < len(lines) {
+				next := strings.TrimSpace(lines[i])
+				if strings.HasPrefix(next, "[") && strings.HasSuffix(next, "]") {
+					break
+				}
+				i++
+			}
+			continue
+		}
+
+		kept = append(kept, lines[i])
+		i++
+	}
+
+	base := strings.TrimSpace(strings.Join(kept, "\n"))
+	if base == "" {
+		return block + "\n"
+	}
+
+	return base + "\n\n" + block + "\n"
+}
+
 // UpsertTOMLTableKey upserts `key = rawValue` inside the named [section] table.
 // rawValue is the already-formatted TOML right-hand side: the caller supplies a
 // bare boolean/integer (false, 4) or a pre-quoted string ("value") — the helper

@@ -276,6 +276,43 @@ func TestUpsertCodexMCPServerBlock_EscapesBackslashes(t *testing.T) {
 	}
 }
 
+func TestUpsertCodexRemoteMCPServerBlock_ReplacesLegacyLocalBlock(t *testing.T) {
+	input := `[mcp_servers.context7]
+command = "npx"
+args = ["-y", "--package=@upstash/context7-mcp@2.2.5", "--", "context7-mcp"]
+
+[mcp_servers.engram]
+command = "engram"
+args = ["mcp", "--tools=agent"]
+`
+	result := UpsertCodexRemoteMCPServerBlock(input, "context7", "https://mcp.context7.com/mcp")
+
+	if count := strings.Count(result, "[mcp_servers.context7]"); count != 1 {
+		t.Fatalf("expected 1 [mcp_servers.context7], got %d; result:\n%s", count, result)
+	}
+	if !strings.Contains(result, `url = "https://mcp.context7.com/mcp"`) {
+		t.Fatalf("result missing remote Context7 URL; got:\n%s", result)
+	}
+	if strings.Contains(result, `command = "npx"`) || strings.Contains(result, "context7-mcp") {
+		t.Fatalf("legacy local Context7 config survived migration; got:\n%s", result)
+	}
+	if !strings.Contains(result, "[mcp_servers.engram]") {
+		t.Fatalf("result missing [mcp_servers.engram]; got:\n%s", result)
+	}
+}
+
+func TestUpsertCodexRemoteMCPServerBlock_Idempotent(t *testing.T) {
+	input := `[other]
+key = "value"
+`
+	first := UpsertCodexRemoteMCPServerBlock(input, "context7", "https://mcp.context7.com/mcp")
+	second := UpsertCodexRemoteMCPServerBlock(first, "context7", "https://mcp.context7.com/mcp")
+
+	if first != second {
+		t.Fatalf("UpsertCodexRemoteMCPServerBlock is not idempotent:\nfirst:\n%s\nsecond:\n%s", first, second)
+	}
+}
+
 // ─── UpsertTOMLTableKey ───────────────────────────────────────────────────────
 
 func TestUpsertTOMLTableKey_CreatesSection(t *testing.T) {

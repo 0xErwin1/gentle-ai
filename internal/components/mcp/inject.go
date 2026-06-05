@@ -41,8 +41,8 @@ func context7Args() []string {
 }
 
 // injectTOMLFile upserts the [mcp_servers.context7] block into a TOML-based
-// agent config file (e.g. ~/.codex/config.toml) using a string-based, idempotent
-// helper. The file is created if it does not yet exist.
+// agent config file (e.g. ~/.codex/config.toml) using Context7's remote MCP
+// endpoint. The file is created if it does not yet exist.
 func injectTOMLFile(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	configPath := adapter.MCPConfigPath(homeDir, "context7")
 
@@ -52,7 +52,7 @@ func injectTOMLFile(homeDir string, adapter agents.Adapter) (InjectionResult, er
 	}
 
 	existing := string(existingBytes)
-	updated := filemerge.UpsertCodexMCPServerBlock(existing, "context7", "npx", context7Args())
+	updated := filemerge.UpsertCodexRemoteMCPServerBlock(existing, "context7", "https://mcp.context7.com/mcp")
 
 	writeResult, err := filemerge.WriteFileAtomic(configPath, []byte(updated), 0o644)
 	if err != nil {

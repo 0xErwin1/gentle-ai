@@ -16,7 +16,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/vscode"
-	"github.com/gentleman-programming/gentle-ai/internal/versions"
 )
 
 func cursorAdapter(t *testing.T) agents.Adapter {
@@ -524,11 +523,11 @@ func TestInjectCodexContext7TOML(t *testing.T) {
 	if !strings.Contains(text, "[mcp_servers.context7]") {
 		t.Fatalf("config.toml missing [mcp_servers.context7]; got:\n%s", text)
 	}
-	if !strings.Contains(text, `command = "npx"`) {
-		t.Fatalf("config.toml missing command = npx; got:\n%s", text)
+	if !strings.Contains(text, `url = "https://mcp.context7.com/mcp"`) {
+		t.Fatalf("config.toml missing Context7 remote URL; got:\n%s", text)
 	}
-	if !strings.Contains(text, versions.Context7MCP) {
-		t.Fatalf("config.toml missing pinned Context7 version %q; got:\n%s", versions.Context7MCP, text)
+	if strings.Contains(text, `command = "npx"`) || strings.Contains(text, "context7-mcp") {
+		t.Fatalf("config.toml should use remote Context7 MCP, not local npx; got:\n%s", text)
 	}
 }
 
@@ -602,6 +601,52 @@ args = ["mcp", "--tools=agent"]
 	context7Count := strings.Count(text, "[mcp_servers.context7]")
 	if context7Count != 1 {
 		t.Fatalf("expected 1 [mcp_servers.context7], got %d; result:\n%s", context7Count, text)
+	}
+}
+
+func TestInjectCodexContext7ReplacesLegacyLocalBlock(t *testing.T) {
+	home := t.TempDir()
+	configTOML := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configTOML), 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	existing := `[mcp_servers.context7]
+command = "npx"
+args = ["-y", "--package=@upstash/context7-mcp@2.2.5", "--", "context7-mcp"]
+
+[mcp_servers.engram]
+command = "engram"
+args = ["mcp", "--tools=agent"]
+`
+	if err := os.WriteFile(configTOML, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.toml) error = %v", err)
+	}
+
+	result, err := Inject(home, codex.NewAdapter())
+	if err != nil {
+		t.Fatalf("Inject(codex) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(codex) changed = false; expected legacy local block migration")
+	}
+
+	content, err := os.ReadFile(configTOML)
+	if err != nil {
+		t.Fatalf("ReadFile(config.toml) error = %v", err)
+	}
+	text := string(content)
+
+	if count := strings.Count(text, "[mcp_servers.context7]"); count != 1 {
+		t.Fatalf("expected 1 [mcp_servers.context7], got %d; result:\n%s", count, text)
+	}
+	if !strings.Contains(text, `url = "https://mcp.context7.com/mcp"`) {
+		t.Fatalf("config.toml missing remote Context7 URL after migration; got:\n%s", text)
+	}
+	if strings.Contains(text, `command = "npx"`) || strings.Contains(text, "context7-mcp") {
+		t.Fatalf("legacy local Context7 config survived migration; got:\n%s", text)
+	}
+	if !strings.Contains(text, "[mcp_servers.engram]") {
+		t.Fatalf("engram block was not preserved; got:\n%s", text)
 	}
 }
 

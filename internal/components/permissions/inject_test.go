@@ -283,18 +283,109 @@ func TestInjectAntigravitySkipsPermissions(t *testing.T) {
 	}
 }
 
-func TestInjectCodexSkipsPermissions(t *testing.T) {
+func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 	home := t.TempDir()
 
 	result, err := Inject(home, codexAdapter())
 	if err != nil {
 		t.Fatalf("Inject() error = %v", err)
 	}
-	if result.Changed {
-		t.Fatal("Inject() for Codex should not change anything (no known settings.json path)")
+	if !result.Changed {
+		t.Fatal("Inject() for Codex changed = false")
 	}
-	if len(result.Files) != 0 {
-		t.Fatalf("Inject() for Codex should return no files, got %v", result.Files)
+
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	if len(result.Files) != 1 || result.Files[0] != configPath {
+		t.Fatalf("Inject() files = %v, want [%q]", result.Files, configPath)
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config.toml: %v", err)
+	}
+	text := string(content)
+
+	wantSubstrings := []string{
+		`approval_policy = "on-request"`,
+		`default_permissions = "gentle-dev"`,
+		`[permissions.gentle-dev]`,
+		`extends = ":workspace"`,
+		`[permissions.gentle-dev.network]`,
+		`enabled = true`,
+		`[permissions.gentle-dev.network.domains]`,
+		`"*" = "allow"`,
+		`[permissions.gentle-dev.filesystem.":workspace_roots"]`,
+		`"**/.env" = "deny"`,
+		`"**/.env.*" = "deny"`,
+		`"**/*.pem" = "deny"`,
+		`"**/*.key" = "deny"`,
+		`"**/secrets/*" = "deny"`,
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(text, want) {
+			t.Fatalf("config.toml missing %q; got:\n%s", want, text)
+		}
+	}
+}
+
+func TestInjectCodexPermissionsProfileIsIdempotent(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	initial := `model = "gpt-5.5"
+
+[mcp_servers.engram]
+command = "engram"
+args = ["mcp", "--tools=agent"]
+`
+	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	first, err := Inject(home, codexAdapter())
+	if err != nil {
+		t.Fatalf("Inject() first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("Inject() first changed = false")
+	}
+
+	firstContent, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile() first error = %v", err)
+	}
+
+	second, err := Inject(home, codexAdapter())
+	if err != nil {
+		t.Fatalf("Inject() second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("Inject() second changed = true")
+	}
+
+	secondContent, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile() second error = %v", err)
+	}
+	if string(firstContent) != string(secondContent) {
+		t.Fatalf("Codex permissions injection is not idempotent:\nfirst:\n%s\nsecond:\n%s", firstContent, secondContent)
+	}
+
+	text := string(secondContent)
+	if !strings.Contains(text, `model = "gpt-5.5"`) || !strings.Contains(text, `[mcp_servers.engram]`) {
+		t.Fatalf("Codex permissions injection did not preserve existing config; got:\n%s", text)
+	}
+	for _, section := range []string{
+		"[permissions.gentle-dev]",
+		"[permissions.gentle-dev.network]",
+		"[permissions.gentle-dev.network.domains]",
+		`[permissions.gentle-dev.filesystem.":workspace_roots"]`,
+	} {
+		if count := strings.Count(text, section); count != 1 {
+			t.Fatalf("section %q count = %d, want 1; got:\n%s", section, count, text)
+		}
 	}
 }
 

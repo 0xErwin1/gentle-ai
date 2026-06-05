@@ -1045,7 +1045,9 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 				}
 			}
 		case model.ComponentPermission:
-			if p := adapter.SettingsPath(homeDir); p != "" {
+			if adapter.Agent() == model.AgentCodex {
+				paths = append(paths, adapter.MCPConfigPath(homeDir, ""))
+			} else if p := adapter.SettingsPath(homeDir); p != "" {
 				paths = append(paths, p)
 			}
 		case model.ComponentGGA:
