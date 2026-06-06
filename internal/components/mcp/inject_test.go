@@ -899,3 +899,67 @@ func TestInjectHermesStrategyMergeIntoYAMLDispatches(t *testing.T) {
 		t.Fatal("Inject(hermes) Changed = false, want true on first run")
 	}
 }
+
+// TestInjectHermesPreservesExistingTopLevelKeys verifies that a full Inject
+// round-trip on a config.yaml that already contains an unrelated top-level key
+// (e.g. "model: claude") preserves that key after context7 injection.
+// This covers the review-flagged coverage gap: existing non-managed content
+// must survive the MCP upsert.
+func TestInjectHermesPreservesExistingTopLevelKeys(t *testing.T) {
+	home := t.TempDir()
+	hermesDir := filepath.Join(home, ".hermes")
+	if err := os.MkdirAll(hermesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+
+	// Pre-existing config.yaml with an unrelated top-level key.
+	initial := "model: claude\n"
+	configPath := filepath.Join(hermesDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	result, err := Inject(home, hermesAdapter())
+	if err != nil {
+		t.Fatalf("Inject(hermes) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(hermes) changed = false, want true on first run")
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.yaml) error = %v", err)
+	}
+	text := string(content)
+
+	// The pre-existing key must be preserved verbatim.
+	if !strings.Contains(text, "model: claude") {
+		t.Fatalf("config.yaml lost pre-existing top-level key 'model: claude':\n%s", text)
+	}
+	// The injected context7 entry must also be present.
+	if !strings.Contains(text, "mcp_servers:") {
+		t.Fatal("config.yaml missing mcp_servers: after injection")
+	}
+	if !strings.Contains(text, "context7:") {
+		t.Fatal("config.yaml missing context7: after injection")
+	}
+
+	// Second Inject must be idempotent and still preserve the original key.
+	second, err := Inject(home, hermesAdapter())
+	if err != nil {
+		t.Fatalf("Inject(hermes) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("Inject(hermes) second changed = true (not idempotent)")
+	}
+
+	content2, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.yaml) second error = %v", err)
+	}
+	text2 := string(content2)
+	if !strings.Contains(text2, "model: claude") {
+		t.Fatalf("config.yaml lost pre-existing key on second Inject:\n%s", text2)
+	}
+}
