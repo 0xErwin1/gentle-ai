@@ -117,6 +117,8 @@ Sync is safe and idempotent — running it twice produces no changes the second 
 
 For OpenClaw, sync reads the active workspace from `~/.openclaw/openclaw.json` (`agents.defaults.workspace`). It writes `AGENTS.md` / `SOUL.md` into that workspace, while MCP servers stay in the global OpenClaw config under `mcp.servers`.
 
+For Hermes, gentle-ai is detect-only: it cannot install Hermes. Install Hermes manually first. When Hermes is detected (`hermes` binary on `PATH` and `~/.hermes` present), `gentle-ai install --agent hermes` injects context7 and Engram MCP blocks into `~/.hermes/config.yaml`, writes the SDD orchestrator and persona into `~/.hermes/SOUL.md`, and copies skills to `~/.hermes/skills/`.
+
 ### uninstall
 
 Remove only the `gentle-ai` managed configuration from one or more agents. This does not uninstall external packages or binaries — it removes managed prompt sections, MCP entries, skills/config fragments, and other managed files, then updates `state.json` accordingly.
