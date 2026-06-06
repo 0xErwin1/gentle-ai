@@ -24,16 +24,6 @@
     .\install.ps1 -Method binary -Insecure
 #>
 
-[CmdletBinding()]
-param(
-    [ValidateSet("auto", "go", "binary")]
-    [string]$Method = "auto",
-
-    [string]$InstallDir = "",
-
-    [switch]$Insecure
-)
-
 $ErrorActionPreference = "Stop"
 
 # Ensure UTF-8 output so Unicode characters render correctly on all terminals.
@@ -374,6 +364,16 @@ function Show-NextSteps {
 # ============================================================================
 
 function Main {
+    [CmdletBinding()]
+    param(
+        [ValidateSet("auto", "go", "binary")]
+        [string]$Method = "auto",
+
+        [string]$InstallDir = "",
+
+        [switch]$Insecure
+    )
+
     Show-Banner
 
     $arch = Get-Platform
@@ -390,4 +390,4 @@ function Main {
     Show-NextSteps
 }
 
-Main
+Main @args
