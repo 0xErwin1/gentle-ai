@@ -33,10 +33,13 @@ func UpsertYAMLMCPServerBlock(content, serverID, command string, args []string, 
 	// Build the server sub-block (4-space indent for keys, 6-space for list items).
 	block := buildServerBlock(serverID, command, args, env)
 
-	// Locate the top-level mcp_servers: line (zero leading indent, exact match).
+	// Locate the top-level mcp_servers: line (zero leading indent, key prefix match).
+	// We match any zero-indent line whose trimmed form starts with "mcp_servers:" to
+	// handle both the block form ("mcp_servers:") and inline forms ("mcp_servers: {}").
 	mcpLineIdx := -1
 	for i, line := range lines {
-		if strings.TrimSpace(line) == "mcp_servers:" && !hasLeadingSpaces(line) {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "mcp_servers:") && !hasLeadingSpaces(line) {
 			mcpLineIdx = i
 			break
 		}
@@ -51,15 +54,20 @@ func UpsertYAMLMCPServerBlock(content, serverID, command string, args []string, 
 		return base + "\n\nmcp_servers:\n" + block
 	}
 
+	// Normalize an inline mcp_servers: value (e.g. "mcp_servers: {}" or
+	// "mcp_servers: somevalue") to a bare block-form "mcp_servers:" so the
+	// rest of the algorithm can treat it uniformly. This prevents duplicate
+	// top-level keys when the user (or a tool) wrote an inline mapping.
+	if strings.TrimSpace(lines[mcpLineIdx]) != "mcp_servers:" {
+		lines[mcpLineIdx] = "mcp_servers:"
+	}
+
 	// mcp_servers: is present — find the region of its child lines.
 	// The child region spans from mcpLineIdx+1 to the next zero-indent non-blank
 	// non-comment line (exclusive), or EOF.
 	regionEnd := len(lines)
 	for i := mcpLineIdx + 1; i < len(lines); i++ {
 		line := lines[i]
-		if line == "" || strings.TrimSpace(line) == "" {
-			continue
-		}
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" {
 			continue
@@ -236,7 +244,7 @@ func ReadYAMLMCPServerCommand(content string, serverID string) (string, bool) {
 	mcpLineIdx := -1
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "#" || strings.HasPrefix(trimmed, "# ") || trimmed == "" {
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue // skip blank and comment lines
 		}
 		if trimmed == "mcp_servers:" && !hasLeadingSpaces(line) {
@@ -299,7 +307,24 @@ func ReadYAMLMCPServerCommand(content string, serverID string) (string, bool) {
 			rest := strings.TrimPrefix(trimmed, "command:")
 			rest = strings.TrimSpace(rest)
 			if rest != "" {
-				// Scalar form: command: engram
+				// Scalar form: command: <value>
+				// Normalize order: strip inline comment (only for unquoted values),
+				// then TrimSpace, then strip surrounding matching quotes.
+				isDoubleQuoted := len(rest) >= 2 && rest[0] == '"' && rest[len(rest)-1] == '"'
+				isSingleQuoted := len(rest) >= 2 && rest[0] == '\'' && rest[len(rest)-1] == '\''
+				if !isDoubleQuoted && !isSingleQuoted {
+					// Strip trailing inline comment: split on first " #" (space-hash).
+					if idx := strings.Index(rest, " #"); idx != -1 {
+						rest = rest[:idx]
+					}
+					rest = strings.TrimSpace(rest)
+				}
+				// Strip surrounding matching quotes.
+				if isDoubleQuoted {
+					rest = rest[1 : len(rest)-1]
+				} else if isSingleQuoted {
+					rest = rest[1 : len(rest)-1]
+				}
 				return rest, true
 			}
 			// List form: command: followed by list items on the next lines.

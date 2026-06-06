@@ -402,6 +402,50 @@ mcp_servers:
 			wantCmd:  "/opt/homebrew/Cellar/engram/1.2.3/bin/engram",
 			wantOK:   true,
 		},
+		// FIX 1: double-quoted command value must be stripped of quotes
+		{
+			name: "double_quoted_command_stripped",
+			content: `mcp_servers:
+  engram:
+    command: "engram"
+`,
+			serverID: "engram",
+			wantCmd:  "engram",
+			wantOK:   true,
+		},
+		// FIX 1: single-quoted command value must be stripped of quotes
+		{
+			name: "single_quoted_command_stripped",
+			content: `mcp_servers:
+  engram:
+    command: 'engram'
+`,
+			serverID: "engram",
+			wantCmd:  "engram",
+			wantOK:   true,
+		},
+		// FIX 2: inline trailing comment must be stripped
+		{
+			name: "inline_trailing_comment_stripped",
+			content: `mcp_servers:
+  engram:
+    command: engram  # installed via brew
+`,
+			serverID: "engram",
+			wantCmd:  "engram",
+			wantOK:   true,
+		},
+		// FIX 1+2 combined: quoted value with hash inside must NOT be truncated
+		{
+			name: "quoted_value_with_hash_not_truncated",
+			content: `mcp_servers:
+  engram:
+    command: "engram#x"
+`,
+			serverID: "engram",
+			wantCmd:  "engram#x",
+			wantOK:   true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -416,5 +460,79 @@ mcp_servers:
 				t.Errorf("ok: got %v, want %v", gotOK, tt.wantOK)
 			}
 		})
+	}
+}
+
+// TestReadYAMLMCPServerCommandNitA covers NIT FIX A: a comment with no space after # must
+// be skipped when scanning for mcp_servers: (asymmetry fix at the top-level scanner).
+func TestReadYAMLMCPServerCommandNitA(t *testing.T) {
+	t.Parallel()
+
+	content := "#nospacecomment\nmcp_servers:\n  engram:\n    command: engram\n"
+	got, ok := ReadYAMLMCPServerCommand(content, "engram")
+	if !ok {
+		t.Fatalf("expected ok=true, got false; result %q", got)
+	}
+	if got != "engram" {
+		t.Errorf("command: got %q, want %q", got, "engram")
+	}
+}
+
+// TestUpsertYAMLMCPServerBlockInlineMCPServers covers FIX 3: when mcp_servers: has an
+// inline value (e.g. "mcp_servers: {}"), the function must NOT produce a duplicate
+// top-level mcp_servers: key. Output must contain exactly one mcp_servers: key,
+// valid nested engram block, and preserve other top-level keys.
+func TestUpsertYAMLMCPServerBlockInlineMCPServers(t *testing.T) {
+	t.Parallel()
+
+	input := "mcp_servers: {}\nmodel: gpt-4o\n"
+	got := UpsertYAMLMCPServerBlock(input, "engram", "engram", []string{"mcp", "--tools=agent"}, nil)
+
+	// Must contain exactly one top-level mcp_servers: key.
+	count := strings.Count(got, "\nmcp_servers:")
+	// Account for the case where mcp_servers: is at the very beginning of the string.
+	if strings.HasPrefix(got, "mcp_servers:") {
+		count++
+	}
+	if count != 1 {
+		t.Errorf("expected exactly 1 top-level mcp_servers: key, got %d in:\n%s", count, got)
+	}
+
+	// Must contain valid nested engram block.
+	if !strings.Contains(got, "  engram:\n") {
+		t.Errorf("missing nested engram block in:\n%s", got)
+	}
+	if !strings.Contains(got, "    command: engram\n") {
+		t.Errorf("missing command: engram in:\n%s", got)
+	}
+
+	// model: gpt-4o must be preserved.
+	if !strings.Contains(got, "model: gpt-4o") {
+		t.Errorf("model: gpt-4o not preserved in:\n%s", got)
+	}
+}
+
+// TestBuildServerBlockEnvOrdering covers COVERAGE: two+ env keys appear in
+// lexicographic order, pinning the existing sort.Strings guarantee.
+func TestBuildServerBlockEnvOrdering(t *testing.T) {
+	t.Parallel()
+
+	env := map[string]string{
+		"ZEBRA_KEY": "z",
+		"ALPHA_KEY": "a",
+		"MIDDLE":    "m",
+	}
+	got := UpsertYAMLMCPServerBlock("", "engram", "engram", nil, env)
+
+	alphaIdx := strings.Index(got, "ALPHA_KEY")
+	middleIdx := strings.Index(got, "MIDDLE")
+	zebraIdx := strings.Index(got, "ZEBRA_KEY")
+
+	if alphaIdx == -1 || middleIdx == -1 || zebraIdx == -1 {
+		t.Fatalf("one or more env keys missing in:\n%s", got)
+	}
+	if !(alphaIdx < middleIdx && middleIdx < zebraIdx) {
+		t.Errorf("env keys not in lexicographic order: ALPHA_KEY@%d MIDDLE@%d ZEBRA_KEY@%d\n%s",
+			alphaIdx, middleIdx, zebraIdx, got)
 	}
 }
