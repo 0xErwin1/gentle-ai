@@ -11,6 +11,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/antigravity"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/claude"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/hermes"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kilocode"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/openclaw"
@@ -29,6 +30,7 @@ func cursorAdapter(t *testing.T) agents.Adapter {
 
 func antigravityAdapter() agents.Adapter { return antigravity.NewAdapter() }
 func claudeAdapter() agents.Adapter      { return claude.NewAdapter() }
+func hermesAdapter() agents.Adapter      { return hermes.NewAdapter() }
 func kilocodeAdapter() agents.Adapter    { return kilocode.NewAdapter() }
 func kimiAdapter() agents.Adapter        { return kimi.NewAdapter() }
 func openclawAdapter() agents.Adapter    { return openclaw.NewAdapter() }
@@ -812,4 +814,88 @@ func TestInjectKimiReplacesLegacyContext7LocalConfig(t *testing.T) {
 	}
 
 	assertKimiContext7Schema(t, configPath)
+}
+
+// TestInjectHermesContext7IntoYAML verifies that Inject(hermes) writes context7
+// under mcp_servers: in ~/.hermes/config.yaml (StrategyMergeIntoYAML).
+func TestInjectHermesContext7IntoYAML(t *testing.T) {
+	home := t.TempDir()
+
+	result, err := Inject(home, hermesAdapter())
+	if err != nil {
+		t.Fatalf("Inject(hermes) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(hermes) changed = false")
+	}
+
+	configPath := filepath.Join(home, ".hermes", "config.yaml")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.yaml) error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "mcp_servers:") {
+		t.Fatal("config.yaml missing mcp_servers: key")
+	}
+	if !strings.Contains(text, "context7:") {
+		t.Fatal("config.yaml missing context7: entry under mcp_servers:")
+	}
+	if !strings.Contains(text, "context7-mcp") {
+		t.Fatal("config.yaml missing context7-mcp in args")
+	}
+	if result.Files[0] != configPath {
+		t.Fatalf("result.Files[0] = %q, want %q", result.Files[0], configPath)
+	}
+}
+
+// TestInjectHermesContext7Idempotent verifies calling Inject twice yields exactly
+// one context7: entry (idempotent upsert), and Changed=false on the second call.
+func TestInjectHermesContext7Idempotent(t *testing.T) {
+	home := t.TempDir()
+
+	first, err := Inject(home, hermesAdapter())
+	if err != nil {
+		t.Fatalf("Inject(hermes) first error = %v", err)
+	}
+	if !first.Changed {
+		t.Fatal("Inject(hermes) first changed = false")
+	}
+
+	second, err := Inject(home, hermesAdapter())
+	if err != nil {
+		t.Fatalf("Inject(hermes) second error = %v", err)
+	}
+	if second.Changed {
+		t.Fatal("Inject(hermes) second changed = true (not idempotent)")
+	}
+
+	configPath := filepath.Join(home, ".hermes", "config.yaml")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config.yaml) error = %v", err)
+	}
+	text := string(content)
+
+	// Exactly one context7: entry should be present.
+	count := strings.Count(text, "  context7:")
+	if count != 1 {
+		t.Fatalf("config.yaml has %d context7: entries, want 1:\n%s", count, text)
+	}
+}
+
+// TestInjectHermesStrategyMergeIntoYAMLDispatches verifies that StrategyMergeIntoYAML
+// no longer hits the hard-error default case in the strategy switch.
+func TestInjectHermesStrategyMergeIntoYAMLDispatches(t *testing.T) {
+	home := t.TempDir()
+
+	// Confirm no error is returned (the old code returned an error for strategy 4).
+	result, err := Inject(home, hermesAdapter())
+	if err != nil {
+		t.Fatalf("Inject(hermes) with StrategyMergeIntoYAML returned error = %v (expected nil)", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(hermes) Changed = false, want true on first run")
+	}
 }
