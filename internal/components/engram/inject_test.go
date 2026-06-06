@@ -1890,6 +1890,10 @@ func TestEngramYAMLCommandRecoveryVersionedCellar(t *testing.T) {
 	if strings.Contains(text, "/Cellar/engram/") {
 		t.Fatalf("config.yaml retained versioned Cellar path after stabilization; got:\n%s", text)
 	}
+	// And it must be stabilized to the bare "engram" command.
+	if !strings.Contains(text, "command: engram") {
+		t.Fatalf("config.yaml did not stabilize to bare \"engram\" command; got:\n%s", text)
+	}
 }
 
 // TestEngramYAMLCommandRecoveryAbsent verifies that when no prior engram entry

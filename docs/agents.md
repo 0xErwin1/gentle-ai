@@ -250,7 +250,7 @@ For the full Pi command and package reference, see [Pi Agent](pi.md).
 
 ### Hermes
 
-- **Detection**: gentle-ai detects Hermes from the `hermes` binary on `PATH` and its config root at `~/.hermes`. Both must be present for detection to succeed.
+- **Detection**: gentle-ai reports the `hermes` binary on `PATH` and the config root at `~/.hermes` independently; the config directory drives install detection (the binary can be absent and Hermes is still detected as configured).
 - **Install**: detect-only — gentle-ai cannot install Hermes. Install Hermes manually first, then run `gentle-ai install --agent hermes`.
 - **Config path**: `~/.hermes/` (config.yaml, SOUL.md, skills/)
 - **MCP config**: Engram and Context7 are injected as YAML blocks under `mcp_servers:` in `~/.hermes/config.yaml` (`StrategyMergeIntoYAML`). Pre-existing top-level keys (e.g. `model:`) are preserved verbatim.
