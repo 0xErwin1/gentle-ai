@@ -1966,3 +1966,30 @@ func TestInjectHermesNeutralWritesSOULMD(t *testing.T) {
 		t.Fatal("SOUL.md contains the generic <available_skills> instruction — generic neutral used instead of Hermes-specific")
 	}
 }
+
+// TestHermesPersonaAssetsContainIdentitySection verifies that both Hermes persona
+// assets include an explicit ## Identity section that names "Gentle AI" and "Hermes".
+// This ensures that when a user asks "who are you?" the agent does not fall back to a
+// generic assistant identity — it answers as Gentle AI running on Hermes Agent.
+func TestHermesPersonaAssetsContainIdentitySection(t *testing.T) {
+	paths := []string{
+		"hermes/persona-gentleman.md",
+		"hermes/persona-neutral.md",
+	}
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			content := assets.MustRead(path)
+
+			if !strings.Contains(content, "## Identity") {
+				t.Fatalf("%s missing ## Identity section", path)
+			}
+			if !strings.Contains(content, "Gentle AI") {
+				t.Fatalf("%s ## Identity section must mention \"Gentle AI\"", path)
+			}
+			if !strings.Contains(content, "Hermes") {
+				t.Fatalf("%s ## Identity section must mention \"Hermes\"", path)
+			}
+		})
+	}
+}
