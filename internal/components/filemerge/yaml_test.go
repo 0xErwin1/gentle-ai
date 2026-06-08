@@ -452,6 +452,30 @@ mcp_servers:
 			wantCmd:  "engram#x",
 			wantOK:   true,
 		},
+		// BUG FIX: double-quoted scalar WITH trailing inline comment must strip both
+		// quotes AND comment — currently returns `"engram"` (quotes intact).
+		{
+			name: "double_quoted_with_trailing_comment",
+			content: `mcp_servers:
+  engram:
+    command: "engram" # installed via brew
+`,
+			serverID: "engram",
+			wantCmd:  "engram",
+			wantOK:   true,
+		},
+		// BUG FIX: single-quoted scalar WITH trailing inline comment must strip both
+		// quotes AND comment — currently returns `'engram'` (quotes intact).
+		{
+			name: "single_quoted_with_trailing_comment",
+			content: `mcp_servers:
+  engram:
+    command: 'engram' # note
+`,
+			serverID: "engram",
+			wantCmd:  "engram",
+			wantOK:   true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -632,6 +656,102 @@ func TestReadYAMLMCPServerCommandListFormInlineComment(t *testing.T) {
 	}
 	if got != "engram" {
 		t.Errorf("command: got %q, want %q (inline comment must be stripped)", got, "engram")
+	}
+}
+
+// TestNormalizeYAMLScalarQuotedWithComment covers the BUG: when a YAML scalar
+// is both quoted AND has a trailing inline comment, normalizeYAMLScalar must
+// strip the quotes AND discard the comment — not leave the quotes intact.
+// These cases correspond to list-form items like `- "engram"  # note`.
+func TestNormalizeYAMLScalarQuotedWithComment(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		// BUG: double-quoted value with trailing comment — currently returns `"engram"`
+		{
+			name:  "double_quoted_with_comment",
+			input: `"engram"  # note`,
+			want:  "engram",
+		},
+		// BUG: single-quoted value with trailing comment — currently returns `'engram'`
+		{
+			name:  "single_quoted_with_comment",
+			input: `'engram' # x`,
+			want:  "engram",
+		},
+		// REGRESSION: double-quoted, no comment — must still strip quotes
+		{
+			name:  "double_quoted_no_comment",
+			input: `"engram"`,
+			want:  "engram",
+		},
+		// REGRESSION: hash INSIDE quotes (no space-hash comment) — must preserve hash
+		{
+			name:  "hash_inside_double_quotes",
+			input: `"engram#x"`,
+			want:  "engram#x",
+		},
+		// REGRESSION: bare unquoted value with trailing comment — must strip comment
+		{
+			name:  "bare_with_comment",
+			input: `engram # note`,
+			want:  "engram",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := normalizeYAMLScalar(tt.input)
+			if got != tt.want {
+				t.Errorf("normalizeYAMLScalar(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestReadYAMLMCPServerCommandListFormQuotedWithComment covers the BUG in list-form:
+// a list item that is both quoted AND has a trailing inline comment must return
+// the bare value (no quotes, no comment).
+func TestReadYAMLMCPServerCommandListFormQuotedWithComment(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		// BUG: double-quoted list item with comment
+		{
+			name:    "double_quoted_list_item_with_comment",
+			content: "mcp_servers:\n  engram:\n    command:\n      - \"engram\"  # note\n      - mcp\n",
+			want:    "engram",
+		},
+		// BUG: single-quoted list item with comment
+		{
+			name:    "single_quoted_list_item_with_comment",
+			content: "mcp_servers:\n  engram:\n    command:\n      - 'engram' # x\n      - mcp\n",
+			want:    "engram",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := ReadYAMLMCPServerCommand(tt.content, "engram")
+			if !ok {
+				t.Fatalf("expected ok=true; got false, cmd=%q", got)
+			}
+			if got != tt.want {
+				t.Errorf("command: got %q, want %q (quotes+comment must be stripped)", got, tt.want)
+			}
+		})
 	}
 }
 

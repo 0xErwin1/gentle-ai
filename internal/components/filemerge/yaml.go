@@ -237,11 +237,19 @@ func stripInlineComment(s string) string {
 
 // normalizeYAMLScalar strips surrounding matching quotes and inline trailing comments
 // from a YAML scalar value.
+//
+// Order matters: if the value starts with a quote character, locate the matching
+// closing quote and return the content between the quotes, discarding everything
+// after (including any trailing inline comment). A '#' inside the quotes is NOT
+// treated as a comment. Only unquoted values use inline-comment stripping.
 func normalizeYAMLScalar(s string) string {
 	s = strings.TrimSpace(s)
-	if len(s) >= 2 {
-		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
-			return s[1 : len(s)-1]
+	if len(s) >= 2 && (s[0] == '"' || s[0] == '\'') {
+		quote := s[0]
+		// Find the matching closing quote (first occurrence after position 0).
+		if close := strings.IndexByte(s[1:], quote); close != -1 {
+			// close is relative to s[1:], so absolute index is close+1.
+			return s[1 : close+1]
 		}
 	}
 	return stripInlineComment(s)
@@ -370,22 +378,21 @@ func ReadYAMLMCPServerCommand(content string, serverID string) (string, bool) {
 			rest = strings.TrimSpace(rest)
 			if rest != "" {
 				// Scalar form: command: <value>
-				// Normalize order: strip inline comment (only for unquoted values),
-				// then TrimSpace, then strip surrounding matching quotes.
-				isDoubleQuoted := len(rest) >= 2 && rest[0] == '"' && rest[len(rest)-1] == '"'
-				isSingleQuoted := len(rest) >= 2 && rest[0] == '\'' && rest[len(rest)-1] == '\''
-				if !isDoubleQuoted && !isSingleQuoted {
-					// Strip trailing inline comment: split on first " #" (space-hash).
+				// Order matters: if the value starts with a quote, find the matching
+				// closing quote and extract the content between them, discarding any
+				// trailing inline comment (or anything else) after the closing quote.
+				// Only unquoted values use space-hash comment stripping.
+				if len(rest) >= 2 && (rest[0] == '"' || rest[0] == '\'') {
+					quote := rest[0]
+					if close := strings.IndexByte(rest[1:], quote); close != -1 {
+						rest = rest[1 : close+1]
+					}
+				} else {
+					// Unquoted: strip trailing inline comment (split on first " #").
 					if idx := strings.Index(rest, " #"); idx != -1 {
 						rest = rest[:idx]
 					}
 					rest = strings.TrimSpace(rest)
-				}
-				// Strip surrounding matching quotes.
-				if isDoubleQuoted {
-					rest = rest[1 : len(rest)-1]
-				} else if isSingleQuoted {
-					rest = rest[1 : len(rest)-1]
 				}
 				return rest, true
 			}
