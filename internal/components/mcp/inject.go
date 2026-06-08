@@ -71,8 +71,14 @@ func injectTOMLFile(homeDir string, adapter agents.Adapter) (InjectionResult, er
 func injectYAMLFile(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	configPath := adapter.MCPConfigPath(homeDir, "context7")
 
-	existingBytes, err := osReadFile(configPath)
-	if err != nil {
+	raw, err := os.ReadFile(configPath)
+	var existingBytes []byte
+	switch {
+	case err == nil:
+		existingBytes = raw
+	case os.IsNotExist(err):
+		existingBytes = nil
+	default:
 		return InjectionResult{}, fmt.Errorf("read YAML config %q: %w", configPath, err)
 	}
 
