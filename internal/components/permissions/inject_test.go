@@ -320,8 +320,7 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 		`[permissions.gentle-dev.workspace_roots]`,
 		fmt.Sprintf("%q = true", home),
 		`[permissions.gentle-dev.filesystem.":workspace_roots"]`,
-		`"**/.git" = "write"`,
-		`"**/.git/**" = "write"`,
+		`".git/**" = "write"`,
 		`"**/.env" = "deny"`,
 		`"**/.env.local" = "deny"`,
 		`"**/.env.*.local" = "deny"`,
@@ -332,6 +331,12 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 	for _, want := range wantSubstrings {
 		if !strings.Contains(text, want) {
 			t.Fatalf("config.toml missing %q; got:\n%s", want, text)
+		}
+	}
+
+	for _, invalidGitRule := range []string{`"**/.git" = "write"`, `"**/.git/**" = "write"`, `".git" = "write"`} {
+		if strings.Contains(text, invalidGitRule) {
+			t.Fatalf("config.toml contains invalid or redundant Codex permissions git rule %q; got:\n%s", invalidGitRule, text)
 		}
 	}
 }
@@ -425,6 +430,60 @@ args = ["mcp", "--tools=agent"]
 	} {
 		if count := strings.Count(text, section); count != 1 {
 			t.Fatalf("section %q count = %d, want 1; got:\n%s", section, count, text)
+		}
+	}
+}
+
+func TestInjectCodexPermissionsRemovesInvalidGitWriteRules(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	initial := `[permissions.gentle-dev.filesystem.":workspace_roots"]
+"**/.git" = "write"
+"**/.git/**" = "write"
+"**/.env" = "deny"
+"**/.env.local" = "deny"
+"**/.env.*.local" = "deny"
+"**/*.pem" = "deny"
+"**/*.key" = "deny"
+"**/secrets/*" = "deny"
+`
+	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := Inject(home, codexAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, `".git/**" = "write"`) {
+		t.Fatalf("config.toml missing valid git write rule; got:\n%s", text)
+	}
+	for _, invalidGitRule := range []string{`"**/.git" = "write"`, `"**/.git/**" = "write"`} {
+		if strings.Contains(text, invalidGitRule) {
+			t.Fatalf("config.toml still contains invalid git write rule %q; got:\n%s", invalidGitRule, text)
+		}
+	}
+
+	for _, denyRule := range []string{
+		`"**/.env" = "deny"`,
+		`"**/.env.local" = "deny"`,
+		`"**/.env.*.local" = "deny"`,
+		`"**/*.pem" = "deny"`,
+		`"**/*.key" = "deny"`,
+		`"**/secrets/*" = "deny"`,
+	} {
+		if strings.Count(text, denyRule) != 1 {
+			t.Fatalf("config.toml should preserve deny rule %q exactly once; got:\n%s", denyRule, text)
 		}
 	}
 }
