@@ -1886,14 +1886,14 @@ func TestPersonaContentNonHermesNeutralUnchanged(t *testing.T) {
 		t.Fatal("generic/persona-neutral.md asset is empty")
 	}
 
-	agents := []model.AgentID{
+	agentIDs := []model.AgentID{
 		model.AgentClaudeCode,
 		model.AgentOpenCode,
 		model.AgentGeminiCLI,
 		model.AgentCursor,
 		model.AgentCodex,
 	}
-	for _, agent := range agents {
+	for _, agent := range agentIDs {
 		t.Run(string(agent), func(t *testing.T) {
 			got := personaContent(agent, model.PersonaNeutral)
 			if got != genericNeutral {

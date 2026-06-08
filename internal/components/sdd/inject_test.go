@@ -126,8 +126,9 @@ func TestInjectHermesWritesSDDOrchestratorToSOULMD(t *testing.T) {
 	}
 }
 
-// TestInjectHermesSDDIdempotent verifies StrategyMergeIntoYAML (from MCPStrategy)
-// does not cause a panic or error, and repeated Inject calls converge to Changed=false.
+// TestInjectHermesSDDIdempotent verifies that Inject for the Hermes adapter writes
+// the SDD orchestrator markdown into ~/.hermes/SOUL.md via markdown-section injection,
+// and that a second Inject call converges to Changed=false (idempotent).
 func TestInjectHermesSDDIdempotent(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
