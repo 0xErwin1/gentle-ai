@@ -17,10 +17,13 @@ func TestUpsertYAMLMCPServerBlock(t *testing.T) {
 		return UpsertYAMLMCPServerBlock(content, "engram", "engram", []string{"mcp", "--tools=agent"}, nil)
 	}
 
+	// fn receives the subtest *testing.T so that closures that perform inline
+	// assertions (e.g. idempotency checks) report failures on the correct subtest
+	// rather than on the parent t (which would be a data-race in t.Parallel() tests).
 	tests := []struct {
 		name   string
 		input  string
-		fn     func(string) string
+		fn     func(*testing.T, string) string
 		checks []string // substrings that must be present
 		absent []string // substrings that must be absent
 		suffix string   // if non-empty, result must end with this
@@ -30,7 +33,7 @@ func TestUpsertYAMLMCPServerBlock(t *testing.T) {
 			// #1: empty/absent content → engram block created from scratch
 			name:  "empty_content_creates_mcp_servers",
 			input: "",
-			fn:    engram,
+			fn:    func(_ *testing.T, s string) string { return engram(s) },
 			checks: []string{
 				"mcp_servers:\n",
 				"  engram:\n",
@@ -48,7 +51,7 @@ func TestUpsertYAMLMCPServerBlock(t *testing.T) {
 model: gpt-4o
 temperature: 0.7
 `,
-			fn: engram,
+			fn: func(_ *testing.T, s string) string { return engram(s) },
 			checks: []string{
 				"# user config\n",
 				"model: gpt-4o\n",
@@ -68,7 +71,7 @@ temperature: 0.7
     args:
       - --flag
 `,
-			fn: engram,
+			fn: func(_ *testing.T, s string) string { return engram(s) },
 			checks: []string{
 				"  myserver:\n",
 				"    command: myserver\n",
@@ -79,7 +82,9 @@ temperature: 0.7
 			},
 		},
 		{
-			// #4: idempotency — output of #3 fed back in → byte-identical result
+			// #4: idempotency — output of #3 fed back in → byte-identical result.
+			// The closure receives the subtest t so failures are attributed correctly
+			// even when the subtest runs in parallel.
 			name: "idempotent_rerun",
 			input: `mcp_servers:
   myserver:
@@ -87,11 +92,11 @@ temperature: 0.7
     args:
       - --flag
 `,
-			fn: func(content string) string {
+			fn: func(st *testing.T, content string) string {
 				first := engram(content)
 				second := engram(first)
 				if first != second {
-					t.Errorf("idempotency violated:\nfirst:\n%s\nsecond:\n%s", first, second)
+					st.Errorf("idempotency violated:\nfirst:\n%s\nsecond:\n%s", first, second)
 				}
 				return second
 			},
@@ -115,7 +120,7 @@ temperature: 0.7
     args:
       - mcp
 `,
-			fn: engram,
+			fn: func(_ *testing.T, s string) string { return engram(s) },
 			checks: []string{
 				"  myserver:\n",
 				"  engram:\n",
@@ -139,7 +144,7 @@ mcp_servers:
 
 # trailing comment
 `,
-			fn: engram,
+			fn: func(_ *testing.T, s string) string { return engram(s) },
 			checks: []string{
 				"# top-level comment\n",
 				"# comment before mcp\n",
@@ -150,10 +155,11 @@ mcp_servers:
 			},
 		},
 		{
-			// #7: two managed servers coexist (engram then context7) → both present, both at 2-space indent, idempotent
+			// #7: two managed servers coexist (engram then context7) → both present, both at 2-space indent, idempotent.
+			// The closure receives the subtest t so the idempotency assertion is attributed correctly.
 			name:  "two_managed_servers_coexist",
 			input: "",
-			fn: func(content string) string {
+			fn: func(st *testing.T, content string) string {
 				withEngram := engram(content)
 				withBoth := UpsertYAMLMCPServerBlock(withEngram, "context7", "npx",
 					[]string{"-y", "--package=@upstash/context7-mcp@2.2.5", "--", "context7-mcp"}, nil)
@@ -161,7 +167,7 @@ mcp_servers:
 				withBothAgain := UpsertYAMLMCPServerBlock(withBoth, "context7", "npx",
 					[]string{"-y", "--package=@upstash/context7-mcp@2.2.5", "--", "context7-mcp"}, nil)
 				if withBoth != withBothAgain {
-					t.Errorf("two-server idempotency violated:\nfirst:\n%s\nsecond:\n%s", withBoth, withBothAgain)
+					st.Errorf("two-server idempotency violated:\nfirst:\n%s\nsecond:\n%s", withBoth, withBothAgain)
 				}
 				return withBoth
 			},
@@ -176,7 +182,7 @@ mcp_servers:
 			// #8: CRLF input → normalized to \n, single trailing \n
 			name:  "crlf_normalized",
 			input: "model: gpt-4o\r\n",
-			fn:    engram,
+			fn:    func(_ *testing.T, s string) string { return engram(s) },
 			checks: []string{
 				"model: gpt-4o\n",
 				"mcp_servers:\n",
@@ -188,7 +194,7 @@ mcp_servers:
 			// #9: env map rendered → env: sub-block with 2-space-deeper KV pairs
 			name:  "env_block_rendered",
 			input: "",
-			fn: func(content string) string {
+			fn: func(_ *testing.T, content string) string {
 				return UpsertYAMLMCPServerBlock(content, "engram", "engram",
 					[]string{"mcp", "--tools=agent"},
 					map[string]string{"ENGRAM_HOME": "/data/engram"})
@@ -204,7 +210,7 @@ mcp_servers:
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := tt.fn(tt.input)
+			got := tt.fn(t, tt.input)
 			for _, want := range tt.checks {
 				if !strings.Contains(got, want) {
 					t.Errorf("missing expected content %q in:\n%s", want, got)
@@ -509,6 +515,123 @@ func TestUpsertYAMLMCPServerBlockInlineMCPServers(t *testing.T) {
 	// model: gpt-4o must be preserved.
 	if !strings.Contains(got, "model: gpt-4o") {
 		t.Errorf("model: gpt-4o not preserved in:\n%s", got)
+	}
+}
+
+// TestUpsertYAMLMCPServerBlockInlineCommentedKey covers Group A item 1:
+// when the existing server key has a trailing inline comment (e.g. "  engram: # managed"),
+// UpsertYAMLMCPServerBlock must recognise and replace it — not append a duplicate block.
+func TestUpsertYAMLMCPServerBlockInlineCommentedKey(t *testing.T) {
+	t.Parallel()
+
+	input := "mcp_servers:\n  engram: # managed\n    command: old-engram\n    args:\n      - mcp\n"
+	got := UpsertYAMLMCPServerBlock(input, "engram", "engram", []string{"mcp", "--tools=agent"}, nil)
+
+	count := strings.Count(got, "  engram:")
+	if count != 1 {
+		t.Errorf("expected exactly 1 engram: key, got %d in:\n%s", count, got)
+	}
+	if !strings.Contains(got, "    command: engram\n") {
+		t.Errorf("missing updated command: engram in:\n%s", got)
+	}
+	if strings.Contains(got, "old-engram") {
+		t.Errorf("old command must be removed; got:\n%s", got)
+	}
+}
+
+// TestUpsertYAMLMCPServerBlockPreserveMCPServersInlineComment covers Group A item 2:
+// when normalizing an inline mcp_servers: value (e.g. "mcp_servers: {}  # note"),
+// the trailing inline comment must be preserved in the output.
+func TestUpsertYAMLMCPServerBlockPreserveMCPServersInlineComment(t *testing.T) {
+	t.Parallel()
+
+	input := "mcp_servers: {}  # note\n"
+	got := UpsertYAMLMCPServerBlock(input, "engram", "engram", []string{"mcp", "--tools=agent"}, nil)
+
+	if !strings.Contains(got, "# note") {
+		t.Errorf("inline comment on mcp_servers: must be preserved; got:\n%s", got)
+	}
+	if !strings.Contains(got, "  engram:\n") {
+		t.Errorf("missing engram block; got:\n%s", got)
+	}
+}
+
+// TestUpsertYAMLMCPServerBlockCommentBetweenSiblings covers Group A item 3:
+// comment lines between sibling servers must survive after an upsert.
+func TestUpsertYAMLMCPServerBlockCommentBetweenSiblings(t *testing.T) {
+	t.Parallel()
+
+	input := "mcp_servers:\n  engram:\n    command: old-engram\n  # sibling comment\n  myserver:\n    command: myserver\n"
+	got := UpsertYAMLMCPServerBlock(input, "engram", "engram", []string{"mcp", "--tools=agent"}, nil)
+
+	if !strings.Contains(got, "  # sibling comment\n") {
+		t.Errorf("comment between siblings must be preserved; got:\n%s", got)
+	}
+	if !strings.Contains(got, "  myserver:\n") {
+		t.Errorf("sibling server must be preserved; got:\n%s", got)
+	}
+	if !strings.Contains(got, "    command: engram\n") {
+		t.Errorf("updated engram block must be present; got:\n%s", got)
+	}
+}
+
+// TestReadYAMLMCPServerCommandInlineCommentedMCPServersKey covers Group A item 4 (first):
+// mcp_servers: with a trailing comment (e.g. "mcp_servers: # note") must be detected.
+func TestReadYAMLMCPServerCommandInlineCommentedMCPServersKey(t *testing.T) {
+	t.Parallel()
+
+	content := "mcp_servers: # note\n  engram:\n    command: engram\n"
+	got, ok := ReadYAMLMCPServerCommand(content, "engram")
+	if !ok {
+		t.Fatalf("expected ok=true with commented mcp_servers: key; got false, cmd=%q", got)
+	}
+	if got != "engram" {
+		t.Errorf("command: got %q, want %q", got, "engram")
+	}
+}
+
+// TestReadYAMLMCPServerCommandInlineCommentedServerKey covers Group A item 4 (second):
+// a server key with a trailing inline comment (e.g. "  engram: # note") must be detected.
+func TestReadYAMLMCPServerCommandInlineCommentedServerKey(t *testing.T) {
+	t.Parallel()
+
+	content := "mcp_servers:\n  engram: # note\n    command: engram\n"
+	got, ok := ReadYAMLMCPServerCommand(content, "engram")
+	if !ok {
+		t.Fatalf("expected ok=true with inline-commented server key; got false, cmd=%q", got)
+	}
+	if got != "engram" {
+		t.Errorf("command: got %q, want %q", got, "engram")
+	}
+}
+
+// TestReadYAMLMCPServerCommandListFormQuotedItem covers Group A item 5 (first):
+// list-form command where the first item is double-quoted must strip the quotes.
+func TestReadYAMLMCPServerCommandListFormQuotedItem(t *testing.T) {
+	t.Parallel()
+
+	content := "mcp_servers:\n  engram:\n    command:\n      - \"engram\"\n      - mcp\n"
+	got, ok := ReadYAMLMCPServerCommand(content, "engram")
+	if !ok {
+		t.Fatalf("expected ok=true; got false, cmd=%q", got)
+	}
+	if got != "engram" {
+		t.Errorf("command: got %q, want %q (quotes must be stripped)", got, "engram")
+	}
+}
+
+// TestReadYAMLMCPServerCommandListFormInlineComment covers Group A item 5 (second):
+// list-form command where the first item has a trailing inline comment must strip the comment.
+func TestReadYAMLMCPServerCommandListFormInlineComment(t *testing.T) {
+	t.Parallel()
+
+	content := "mcp_servers:\n  engram:\n    command:\n      - engram  # note\n      - mcp\n"
+	got, ok := ReadYAMLMCPServerCommand(content, "engram")
+	if !ok {
+		t.Fatalf("expected ok=true; got false, cmd=%q", got)
+	}
+	if got != "engram" {
+		t.Errorf("command: got %q, want %q (inline comment must be stripped)", got, "engram")
 	}
 }
 
