@@ -51,7 +51,7 @@ on each other are noted as parallelizable.
 
 ## Phase 3: Adapter (net-new)
 
-- [ ] T-06 `internal/agents/hermes/adapter_test.go` — Write table-driven unit tests (net-new):
+- [x] T-06 `internal/agents/hermes/adapter_test.go` — Write table-driven unit tests (net-new):
   - `TestDetect`: binary found → `(true, resolvedPath, configFound, configPath, nil)`;
     binary not found → `(false, "", …, nil)`; stat returns permission error → error propagated;
     config dir exists → `configFound=true`; config dir absent → `configFound=false`
@@ -64,7 +64,7 @@ on each other are noted as parallelizable.
     `SupportsSkills()=true`, `SupportsSystemPrompt()=true`, `SupportsMCP()=true`,
     `SystemPromptStrategy()=StrategyMarkdownSections`, `MCPStrategy()=StrategyMergeIntoYAML`)
 
-- [ ] T-07 `internal/agents/hermes/adapter.go` — Implement `Adapter` struct with injectable
+- [x] T-07 `internal/agents/hermes/adapter.go` — Implement `Adapter` struct with injectable
   `lookPath`/`statPath`, `NewAdapter()` constructor, `AgentNotInstallableError`, package-level
   `LookPathOverride = exec.LookPath`, `defaultStat`, and `ConfigPath(homeDir)` helper.
   Implement all interface methods per the Adapter Method Table in design.md.
@@ -79,22 +79,22 @@ on each other are noted as parallelizable.
 Tasks T-08 through T-13 are independent of each other and can be applied in parallel
 (each touches a different file), but all depend on T-01/T-02 (types) and T-07 (adapter).
 
-- [ ] T-08 `internal/agents/factory.go` — Import `hermes` package; add `case model.AgentHermes`
+- [x] T-08 `internal/agents/factory.go` — Import `hermes` package; add `case model.AgentHermes`
   to `NewAdapter()`; add `model.AgentHermes` to `defaultAgentIDs` slice (modify)
 
-- [ ] T-09 `internal/catalog/agents.go` — Add entry `{ID: model.AgentHermes, Name: "Hermes",
+- [x] T-09 `internal/catalog/agents.go` — Add entry `{ID: model.AgentHermes, Name: "Hermes",
   Tier: model.TierFull, ConfigPath: "~/.hermes"}` (modify)
 
-- [ ] T-10 `internal/system/config_scan.go` — Add `{Agent: "hermes", Path: filepath.Join(homeDir, ".hermes")}`
+- [x] T-10 `internal/system/config_scan.go` — Add `{Agent: "hermes", Path: filepath.Join(homeDir, ".hermes")}`
   to `knownAgentConfigDirs()` (modify)
 
-- [ ] T-11 `internal/cli/validate.go` — Add `case string(model.AgentHermes)` that appends
+- [x] T-11 `internal/cli/validate.go` — Add `case string(model.AgentHermes)` that appends
   `model.AgentHermes` to the agents list (modify)
 
-- [ ] T-12 `internal/tui/model.go` — Add `case string(model.AgentHermes)` in `loadSelection()`
+- [x] T-12 `internal/tui/model.go` — Add `case string(model.AgentHermes)` in `loadSelection()`
   switch that appends `model.AgentHermes` to selected agents (modify)
 
-- [ ] T-13 `internal/components/engram/setup.go` — Add `case model.AgentHermes: return "", false`
+- [x] T-13 `internal/components/engram/setup.go` — Add `case model.AgentHermes: return "", false`
   to `SetupAgentSlug()` with comment explaining MCP is injected via YAML directly (modify)
 
 ---
@@ -103,25 +103,25 @@ Tasks T-08 through T-13 are independent of each other and can be applied in para
 
 Tasks T-14 through T-16 are independent of each other (separate files).
 
-- [ ] T-14 `internal/assets/hermes/sdd-orchestrator.md` — Create SDD orchestrator asset for
+- [x] T-14 `internal/assets/hermes/sdd-orchestrator.md` — Create SDD orchestrator asset for
   Hermes: copy of the existing generic/claude orchestrator prompt with ALL skill path references
   rewritten to `~/.hermes/skills/`; remove `<available_skills>` system-prompt block assumption;
   include strict-TDD markers awareness; reference `~/.hermes/skills/` for skill registry
   (net-new asset file)
 
-- [ ] T-15 `internal/assets/hermes/persona-gentleman.md` — Create Hermes gentleman persona asset:
+- [x] T-15 `internal/assets/hermes/persona-gentleman.md` — Create Hermes gentleman persona asset:
   copy of `generic/persona-gentleman.md` with the `## Contextual Skill Loading (MANDATORY)` block
   rewritten to reference `~/.hermes/skills/` by category; remove `<available_skills>` injection
   mechanism; add a short subsection documenting the complementary relationship between engram
   (cross-agent, cross-session memory protocol) and Hermes's native memory and skill-learning loop
   (net-new asset file)
 
-- [ ] T-16 `internal/assets/hermes/persona-neutral.md` — Create Hermes neutral persona asset:
+- [x] T-16 `internal/assets/hermes/persona-neutral.md` — Create Hermes neutral persona asset:
   copy of `generic/persona-neutral.md` with the `## Contextual Skill Loading (MANDATORY)` block
   rewritten for `~/.hermes/skills/` by category; remove `<available_skills>` injection mechanism;
   add the same engram-vs-native-memory complementary note as in T-15 (net-new asset file)
 
-- [ ] T-17 `internal/assets/assets.go` — Add `//go:embed all:hermes` directive to include all
+- [x] T-17 `internal/assets/assets.go` — Add `//go:embed all:hermes` directive to include all
   files under `internal/assets/hermes/` in the binary (modify)
 
 *T-14, T-15, T-16 can be written in parallel. T-17 must come after T-14–T-16 exist on disk.*

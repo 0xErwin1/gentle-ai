@@ -661,10 +661,10 @@ func existingMergedEngramCommand(raw []byte, agentID model.AgentID) (string, boo
 		return "", false
 	}
 
-	// YAML recovery early branch: placed before MergeJSONObjects (which would
-	// fail on YAML input). ReadYAMLMCPServerCommand scans the YAML content for
-	// the named server's command — no external dependency, read-only. The
-	// branch generalizes to any future YAML-backed agent. (Decision 9)
+	// YAML recovery early branch for Hermes: placed before MergeJSONObjects
+	// (which would fail on YAML input). ReadYAMLMCPServerCommand scans the
+	// ~/.hermes/config.yaml content for the named server's command — no
+	// external YAML dependency, read-only. (Decision 9)
 	if agentID == model.AgentHermes {
 		return filemerge.ReadYAMLMCPServerCommand(string(raw), "engram")
 	}
