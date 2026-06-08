@@ -231,7 +231,6 @@ For the full Pi command and package reference, see [Pi Agent](pi.md).
   - `pi install npm:pi-intercom`
   - `pi install npm:@juicesharp/rpiv-ask-user-question`
   - `pi install npm:pi-web-access`
-  - `pi install npm:pi-lens`
   - `pi install npm:@juicesharp/rpiv-todo`
   - `pi install npm:pi-btw`
 - **`gentle-pi` package**: adds the Gentleman harness for Pi: SDD/OpenSpec workflow, strict TDD guidance, safety defaults, `/gentle-ai:*` commands, skill assets, prompts, SDD agents, and SDD chains. On normal `session_start`, it copies project assets into `.pi/agents/`, `.pi/chains/`, and `.pi/gentle-ai/support/` without overwriting local files unless the Pi recovery command uses `--force`. Starting Pi with `pi -ns` skips startup skill loading/hooks, so that automatic refresh does not run in that mode.
@@ -243,5 +242,5 @@ For the full Pi command and package reference, see [Pi Agent](pi.md).
 - **`pi-subagents` package**: discovers and runs SDD agents from `.pi/agents/`.
 - **`pi-intercom` package**: lets Pi child agents ask the parent session for decisions while a chain is running.
 - **`@juicesharp/rpiv-ask-user-question` package**: lets Pi child agents ask the active user session for clarification when they need human input.
-- **Pi companion packages**: `pi-web-access`, `pi-lens`, `@juicesharp/rpiv-todo`, and `pi-btw` add web access, context inspection, todo tracking, and companion workflow support.
+- **Pi companion packages**: `pi-web-access`, `@juicesharp/rpiv-todo`, and `pi-btw` add web access, todo tracking, and companion workflow support.
 - **Pi-only flow**: when Pi is the only selected agent, gentle-ai skips persona, ecosystem component selection, and Strict TDD prompts because those behaviors are provided by `gentle-pi`.
