@@ -58,8 +58,18 @@ func UpsertYAMLMCPServerBlock(content, serverID, command string, args []string, 
 	// "mcp_servers: somevalue") to a bare block-form "mcp_servers:" so the
 	// rest of the algorithm can treat it uniformly. This prevents duplicate
 	// top-level keys when the user (or a tool) wrote an inline mapping.
+	// Preserve any trailing inline comment (e.g. "mcp_servers: {}  # note" → "mcp_servers:  # note").
 	if strings.TrimSpace(lines[mcpLineIdx]) != "mcp_servers:" {
-		lines[mcpLineIdx] = "mcp_servers:"
+		raw := lines[mcpLineIdx]
+		// Strip the "mcp_servers:" prefix plus any inline value, keeping a trailing comment.
+		rest := strings.TrimPrefix(raw, "mcp_servers:")
+		if idx := strings.Index(rest, "#"); idx != -1 {
+			// There is a comment — rebuild as "mcp_servers: <comment part>"
+			comment := strings.TrimSpace(rest[idx:])
+			lines[mcpLineIdx] = "mcp_servers:  # " + strings.TrimPrefix(comment, "# ")
+		} else {
+			lines[mcpLineIdx] = "mcp_servers:"
+		}
 	}
 
 	// mcp_servers: is present — find the region of its child lines.
@@ -94,11 +104,15 @@ func UpsertYAMLMCPServerBlock(content, serverID, command string, args []string, 
 		line := region[i]
 		trimmed := strings.TrimSpace(line)
 
-		// Match the server key at exactly 2-space indent.
-		if strings.TrimRight(line, " \t") == serverKey || line == serverKey {
-			// Skip this server's sub-block: all lines indented more than 2 spaces
-			// (i.e., indent > 2), until the next sibling server key (2-space indent
-			// non-blank, non-comment) or end of region.
+		// Match the server key at exactly 2-space indent. The key may have a trailing
+		// inline comment (e.g. "  engram: # managed"), so we check whether the
+		// non-comment portion of the line matches "  <serverID>:".
+		if isServerKeyLine(line, serverKey) {
+			// Skip this server's sub-block: all lines that belong to the removed server
+			// (indent > 2 spaces), until we reach a sibling boundary.
+			// A sibling boundary is:
+			//   - a non-blank line at exactly 2-space indent (server key or comment)
+			//   - a zero-indent non-blank non-comment line (end of mcp_servers region)
 			i++
 			for i < len(region) {
 				nextLine := region[i]
@@ -108,12 +122,12 @@ func UpsertYAMLMCPServerBlock(content, serverID, command string, args []string, 
 					i++
 					continue
 				}
-				// A sibling server key has exactly 2 leading spaces and is not a comment.
-				if len(nextLine) >= 2 && nextLine[:2] == "  " && !strings.HasPrefix(strings.TrimSpace(nextLine), "#") {
-					// Check it's exactly at 2-space indent (not deeper).
+				// A line at exactly 2-space indent (server key OR comment) signals the
+				// end of the removed server's sub-block; stop and let the outer loop keep it.
+				if len(nextLine) >= 2 && nextLine[:2] == "  " {
 					restAfterTwo := nextLine[2:]
 					if len(restAfterTwo) > 0 && restAfterTwo[0] != ' ' {
-						break // sibling found
+						break // sibling server key or sibling comment — preserve it
 					}
 				}
 				// Also break on zero-indent non-blank lines (end of mcp_servers region).
@@ -193,6 +207,46 @@ func hasLeadingSpaces(line string) bool {
 	return len(line) > 0 && (line[0] == ' ' || line[0] == '\t')
 }
 
+// isServerKeyLine reports whether line matches the given serverKey prefix, allowing
+// for an optional trailing inline comment (e.g. "  engram: # managed").
+// serverKey has the form "  <serverID>:".
+func isServerKeyLine(line, serverKey string) bool {
+	// Exact or trailing-whitespace match.
+	if strings.TrimRight(line, " \t") == serverKey || line == serverKey {
+		return true
+	}
+	// Match key followed by whitespace and an inline comment.
+	if strings.HasPrefix(line, serverKey) {
+		rest := line[len(serverKey):]
+		rest = strings.TrimLeft(rest, " \t")
+		if strings.HasPrefix(rest, "#") {
+			return true
+		}
+	}
+	return false
+}
+
+// stripInlineComment removes a trailing inline comment from an unquoted YAML scalar.
+// It splits on the first occurrence of " #" (space followed by hash) and trims the result.
+func stripInlineComment(s string) string {
+	if idx := strings.Index(s, " #"); idx != -1 {
+		s = s[:idx]
+	}
+	return strings.TrimSpace(s)
+}
+
+// normalizeYAMLScalar strips surrounding matching quotes and inline trailing comments
+// from a YAML scalar value.
+func normalizeYAMLScalar(s string) string {
+	s = strings.TrimSpace(s)
+	if len(s) >= 2 {
+		if (s[0] == '"' && s[len(s)-1] == '"') || (s[0] == '\'' && s[len(s)-1] == '\'') {
+			return s[1 : len(s)-1]
+		}
+	}
+	return stripInlineComment(s)
+}
+
 // UpsertHermesEngramBlock is a thin convenience wrapper that upserts the canonical
 // engram MCP server block (command=engramCmd, args=["mcp","--tools=agent"], no env).
 // Falls back to "engram" when engramCmd is empty. Mirrors UpsertCodexEngramBlock.
@@ -247,9 +301,15 @@ func ReadYAMLMCPServerCommand(content string, serverID string) (string, bool) {
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue // skip blank and comment lines
 		}
-		if trimmed == "mcp_servers:" && !hasLeadingSpaces(line) {
-			mcpLineIdx = i
-			break
+		// Accept "mcp_servers:" with an optional trailing inline comment
+		// (e.g. "mcp_servers: # note"). The value portion (after the colon) must
+		// either be empty or start with "#" after trimming spaces.
+		if strings.HasPrefix(trimmed, "mcp_servers:") && !hasLeadingSpaces(line) {
+			rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "mcp_servers:"))
+			if rest == "" || strings.HasPrefix(rest, "#") {
+				mcpLineIdx = i
+				break
+			}
 		}
 	}
 	if mcpLineIdx == -1 {
@@ -279,7 +339,9 @@ func ReadYAMLMCPServerCommand(content string, serverID string) (string, bool) {
 		if strings.HasPrefix(trimmed, "#") || trimmed == "" {
 			continue
 		}
-		if line == serverKey {
+		// Accept a server key with an optional trailing inline comment
+		// (e.g. "  engram: # note").
+		if isServerKeyLine(line, serverKey) {
 			serverLineIdx = i
 			break
 		}
@@ -334,9 +396,12 @@ func ReadYAMLMCPServerCommand(content string, serverID string) (string, bool) {
 				if nextTrimmed == "" || strings.HasPrefix(nextTrimmed, "#") {
 					continue
 				}
-				// A list item starts with "- ".
+				// A list item starts with "- ". Normalize the value: strip surrounding
+				// quotes and trailing inline comments (e.g. `- "engram"` → "engram",
+				// `- engram  # note` → "engram").
 				if strings.HasPrefix(nextTrimmed, "- ") {
-					return strings.TrimPrefix(nextTrimmed, "- "), true
+					item := strings.TrimPrefix(nextTrimmed, "- ")
+					return normalizeYAMLScalar(item), true
 				}
 				// Anything else (non-list, non-comment, non-blank) means command: was empty
 				// and no list items follow — treat as absent.
