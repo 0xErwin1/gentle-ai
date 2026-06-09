@@ -335,6 +335,15 @@ func TestModelVariantsPluginContract(t *testing.T) {
 	if !strings.Contains(src, "console.error") {
 		t.Errorf("model-variants.ts must log errors via console.error so users see failures")
 	}
+
+	// Per-invocation tmp path: OpenCode loads the plugin twice within the
+	// same process when started with `--port`. Both loads share the same
+	// PID, so a fixed `.tmp` name races with itself and the second rename()
+	// fails with ENOENT. The tmp name must include a per-invocation random
+	// suffix (randomBytes) to be unique across both loads.
+	if !strings.Contains(src, "randomBytes") {
+		t.Errorf("model-variants.ts tmp path must use randomBytes to be unique across plugin double-loads within the same process")
+	}
 }
 
 func TestSkillRegistryPluginContract(t *testing.T) {

@@ -10,6 +10,7 @@
 
 import type { Plugin } from "@opencode-ai/plugin"
 import { writeFile, mkdir, rename } from "fs/promises"
+import { randomBytes } from "crypto"
 import { homedir } from "os"
 import path from "path"
 
@@ -38,8 +39,14 @@ export const ModelVariantsPlugin: Plugin = async (input) => {
       // so concurrent readers (e.g. `gentle-ai sync`) never see a partial JSON.
       // Always write — even when empty — to avoid leaving a stale cache from
       // a previous run alive after providers stop reporting variants.
+      //
+      // The tmp path includes a per-invocation random suffix because OpenCode
+      // loads the plugin twice within the same process when started with
+      // `--port` (or `opencode web`). Both loads share the same PID and the
+      // same homedir, so a fixed `.tmp` name races with itself and the second
+      // rename() fails with ENOENT. See issue #766.
       const finalPath = path.join(cacheDir, "model-variants.json")
-      const tmpPath = finalPath + ".tmp"
+      const tmpPath = `${finalPath}.${randomBytes(3).toString("hex")}.tmp`
       await writeFile(tmpPath, JSON.stringify(variants, null, 2))
       await rename(tmpPath, finalPath)
     } catch (err) {
