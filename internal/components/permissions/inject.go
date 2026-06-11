@@ -14,6 +14,19 @@ type InjectionResult struct {
 	Files   []string
 }
 
+// TargetPath returns the file path that permission injection creates or updates
+// for the adapter, or an empty string when the agent has no supported
+// permission injection target.
+func TargetPath(homeDir string, adapter agents.Adapter) string {
+	if adapter.Agent() == model.AgentCodex {
+		return adapter.MCPConfigPath(homeDir, "")
+	}
+	if agentOverlay(adapter.Agent()) == nil {
+		return ""
+	}
+	return adapter.SettingsPath(homeDir)
+}
+
 // claudeCodeOverlayJSON sets Claude Code to bypassPermissions mode (auto-accept all).
 // Valid modes: "acceptEdits", "bypassPermissions", "default", "dontAsk", "plan".
 var claudeCodeOverlayJSON = []byte(`{
@@ -196,6 +209,8 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 	merged = filemerge.RemoveTOMLTableKeys(merged, workspaceRootsSection, []string{
 		`"**/.git"`,
 		`"**/.git/**"`,
+		`"**/.env.*"`,
+		`"*.env.*"`,
 	})
 	merged = filemerge.UpsertTOMLTableKey(merged, workspaceRootsSection, `"."`, `"write"`)
 	merged = filemerge.UpsertTOMLTableKey(merged, workspaceRootsSection, `".git/**"`, `"write"`)

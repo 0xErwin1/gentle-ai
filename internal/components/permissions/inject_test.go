@@ -534,6 +534,46 @@ func TestInjectCodexPermissionsRemovesInvalidGitWriteRules(t *testing.T) {
 	}
 }
 
+func TestInjectCodexPermissionsRemovesObsoleteBroadEnvDenyRules(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	initial := `[permissions.gentle-dev.filesystem.":workspace_roots"]
+"**/.env.*" = "deny"
+"*.env.*" = "deny"
+"**/.env" = "deny"
+"**/.env.local" = "deny"
+"**/.env.*.local" = "deny"
+`
+	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	if _, err := Inject(home, codexAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	text := string(content)
+
+	for _, obsolete := range []string{`"**/.env.*" = "deny"`, `"*.env.*" = "deny"`} {
+		if strings.Contains(text, obsolete) {
+			t.Fatalf("config.toml still contains obsolete broad env deny rule %q; got:\n%s", obsolete, text)
+		}
+	}
+	for _, current := range []string{`"**/.env" = "deny"`, `"**/.env.local" = "deny"`, `"**/.env.*.local" = "deny"`} {
+		if strings.Count(text, current) != 1 {
+			t.Fatalf("config.toml should preserve current env deny rule %q exactly once; got:\n%s", current, text)
+		}
+	}
+}
+
 // TestInjectClaudeCodeSensitivePathsDenied verifies that the default sensitive-path
 // deny list is present in the Claude Code permissions block.
 func TestInjectClaudeCodeSensitivePathsDenied(t *testing.T) {

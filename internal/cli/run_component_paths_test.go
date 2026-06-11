@@ -286,6 +286,52 @@ func TestComponentPathsPermissionsCodexIncludesConfigTOML(t *testing.T) {
 	}
 }
 
+func TestComponentPathsPermissionsSkipsAgentsWithoutInjectionTarget(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{
+		model.AgentCursor,
+		model.AgentAntigravity,
+		model.AgentHermes,
+	})
+
+	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentPermission)
+
+	for _, adapter := range adapters {
+		unwanted := adapter.SettingsPath(home)
+		if unwanted == "" {
+			continue
+		}
+		if containsPath(paths, unwanted) {
+			t.Fatalf("componentPaths(permissions) must not include unsupported injection path %q\npaths=%v", unwanted, paths)
+		}
+	}
+}
+
+func TestComponentPathsPermissionsIncludesAgentsWithInjectionTarget(t *testing.T) {
+	home := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{
+		model.AgentClaudeCode,
+		model.AgentOpenCode,
+		model.AgentKilocode,
+		model.AgentGeminiCLI,
+		model.AgentQwenCode,
+		model.AgentVSCodeCopilot,
+		model.AgentCodex,
+	})
+
+	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentPermission)
+
+	for _, adapter := range adapters {
+		want := adapter.SettingsPath(home)
+		if adapter.Agent() == model.AgentCodex {
+			want = filepath.Join(home, ".codex", "config.toml")
+		}
+		if !containsPath(paths, want) {
+			t.Fatalf("componentPaths(permissions) missing supported injection path %q\npaths=%v", want, paths)
+		}
+	}
+}
+
 // TestComponentPathsEngramOpenClawUsesCanonicalSettingsPath asserts that the
 // engram component path for OpenClaw always resolves to the canonical
 // ~/.openclaw/openclaw.json and never to a workspace-scoped copy.
