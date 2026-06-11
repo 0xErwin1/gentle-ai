@@ -3425,6 +3425,89 @@ func TestInjectOpenCodeSingleWritesStartupPlugins(t *testing.T) {
 	}
 }
 
+func TestInjectOpenCodeRemovesLegacyBackgroundAgentsPlugin(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	pluginsDir := filepath.Join(home, ".config", "opencode", "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugins) error = %v", err)
+	}
+	legacyPluginPath := filepath.Join(pluginsDir, "background-agents.ts")
+	if err := os.WriteFile(legacyPluginPath, []byte("legacy background agent plugin"), 0o644); err != nil {
+		t.Fatalf("WriteFile(background-agents.ts) error = %v", err)
+	}
+
+	result, err := Inject(home, opencodeAdapter(), "multi")
+	if err != nil {
+		t.Fatalf("Inject(multi) error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject(multi) changed = false, want true after removing legacy plugin")
+	}
+	if _, err := os.Stat(legacyPluginPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy background-agents plugin should be removed; stat err = %v", err)
+	}
+
+	foundLegacyRemoval := false
+	for _, file := range result.Files {
+		if file == legacyPluginPath {
+			foundLegacyRemoval = true
+			break
+		}
+	}
+	if !foundLegacyRemoval {
+		t.Fatalf("removed legacy plugin path %q not reported in result.Files: %v", legacyPluginPath, result.Files)
+	}
+
+	for _, plugin := range []string{"model-variants.ts", "skill-registry.ts"} {
+		pluginPath := filepath.Join(pluginsDir, plugin)
+		if _, err := os.Stat(pluginPath); err != nil {
+			t.Fatalf("%s plugin should still exist after legacy cleanup: %v", plugin, err)
+		}
+	}
+}
+
+func TestInjectKilocodeKeepsLegacyBackgroundAgentsPlugin(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	pluginsDir := filepath.Join(home, ".config", "kilo", "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugins) error = %v", err)
+	}
+	legacyPluginPath := filepath.Join(pluginsDir, "background-agents.ts")
+	legacyContent := []byte("legacy kilo background agent plugin")
+	if err := os.WriteFile(legacyPluginPath, legacyContent, 0o644); err != nil {
+		t.Fatalf("WriteFile(background-agents.ts) error = %v", err)
+	}
+
+	result, err := Inject(home, kilocodeAdapter(), "multi")
+	if err != nil {
+		t.Fatalf("Inject(multi) error = %v", err)
+	}
+
+	got, err := os.ReadFile(legacyPluginPath)
+	if err != nil {
+		t.Fatalf("legacy Kilo background-agents plugin should remain: %v", err)
+	}
+	if !bytes.Equal(got, legacyContent) {
+		t.Fatalf("legacy Kilo background-agents plugin content changed: got %q, want %q", got, legacyContent)
+	}
+	for _, file := range result.Files {
+		if file == legacyPluginPath {
+			t.Fatalf("legacy Kilo plugin path %q should not be reported as managed cleanup: %v", legacyPluginPath, result.Files)
+		}
+	}
+
+	for _, plugin := range []string{"model-variants.ts", "skill-registry.ts"} {
+		pluginPath := filepath.Join(pluginsDir, plugin)
+		if _, err := os.Stat(pluginPath); err != nil {
+			t.Fatalf("%s plugin should still be installed for Kilo: %v", plugin, err)
+		}
+	}
+}
+
 func TestInjectOpenCodePluginNoPkgManagerAvailable(t *testing.T) {
 	home := t.TempDir()
 

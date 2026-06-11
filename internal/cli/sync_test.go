@@ -589,6 +589,15 @@ func TestComponentSyncStepRunsGGAInjectWithoutBinaryInstall(t *testing.T) {
 
 func TestRunSyncAppliesManagedFilesystemChanges(t *testing.T) {
 	home := t.TempDir()
+	pluginsDir := filepath.Join(home, ".config", "opencode", "plugins")
+	if err := os.MkdirAll(pluginsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(plugins) error = %v", err)
+	}
+	legacyPluginPath := filepath.Join(pluginsDir, "background-agents.ts")
+	if err := os.WriteFile(legacyPluginPath, []byte("legacy background agents plugin"), 0o644); err != nil {
+		t.Fatalf("WriteFile(background-agents.ts) error = %v", err)
+	}
+
 	restoreHome := osUserHomeDir
 	restoreBackupHome := backup.UserHomeDirFn
 	restoreCommand := runCommand
@@ -618,6 +627,15 @@ func TestRunSyncAppliesManagedFilesystemChanges(t *testing.T) {
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	if _, err := os.Stat(settingsPath); err != nil {
 		t.Errorf("expected SDD inject to create %q: %v", settingsPath, err)
+	}
+	if _, err := os.Stat(legacyPluginPath); !os.IsNotExist(err) {
+		t.Errorf("expected sync to remove legacy OpenCode plugin %q; stat err = %v", legacyPluginPath, err)
+	}
+	for _, plugin := range []string{"model-variants.ts", "skill-registry.ts"} {
+		pluginPath := filepath.Join(pluginsDir, plugin)
+		if _, err := os.Stat(pluginPath); err != nil {
+			t.Errorf("expected sync to keep OpenCode support plugin %q: %v", pluginPath, err)
+		}
 	}
 }
 
@@ -1477,10 +1495,18 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 	managedPaths := componentPaths(home, sel, resolveAdapters(sel.Agents), model.ComponentSDD)
 	for _, want := range []string{
 		filepath.Join(home, ".config", "opencode", "opencode.json"),
+		filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts"),
 		filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts"),
+		filepath.Join(home, ".config", "opencode", "plugins", "skill-registry.ts"),
 	} {
 		if !containsPath(managedPaths, want) {
 			t.Fatalf("managed SDD paths missing %q\npaths=%v", want, managedPaths)
+		}
+		if filepath.Base(want) == "background-agents.ts" {
+			if _, err := os.Stat(want); !os.IsNotExist(err) {
+				t.Errorf("legacy SDD sync target %q should be removed or absent; stat err = %v", want, err)
+			}
+			continue
 		}
 		if _, err := os.Stat(want); err != nil {
 			t.Errorf("expected SDD sync to create %q: %v", want, err)

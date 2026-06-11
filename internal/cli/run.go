@@ -1004,23 +1004,21 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 			}
 			if adapter.SupportsSlashCommands() {
 				for _, command := range sdd.OpenCodeCommands() {
-					paths = append(paths, filepath.Join(adapter.CommandsDir(homeDir), command.Name+".md"))
+					paths = append(paths, filepath.Join(adapter.CommandsDir(targetDir), command.Name+".md"))
 				}
 			}
 			if adapter.Agent() == model.AgentOpenCode {
-				if p := adapter.SettingsPath(homeDir); p != "" {
+				if p := adapter.SettingsPath(targetDir); p != "" {
 					paths = append(paths, p)
 				}
-				paths = append(paths,
-					filepath.Join(homeDir, ".config", "opencode", "plugins", "model-variants.ts"),
-				)
-				// Shared prompt files in ~/.config/opencode/prompts/sdd/ — back these up
+				paths = append(paths, openCodeSDDPluginPaths(targetDir)...)
+				// Shared prompt files in the selected OpenCode config scope — back these up
 				// so a sync does not silently overwrite user-customized prompt content.
 				// These files are only written for multi-mode (SDDModeMulti), so we only
 				// include them in the path list when that mode is active. This prevents
 				// false-negative verification failures in single/empty mode syncs.
 				if selection.SDDMode == model.SDDModeMulti {
-					promptDir := sdd.SharedPromptDir(homeDir)
+					promptDir := sdd.SharedPromptDir(targetDir)
 					for _, phase := range sdd.SharedPromptPhases() {
 						paths = append(paths, filepath.Join(promptDir, phase+".md"))
 					}
@@ -1048,7 +1046,7 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 					)
 				}
 			}
-			paths = append(paths, sddSubAgentPaths(homeDir, adapter)...)
+			paths = append(paths, sddSubAgentPaths(targetDir, adapter)...)
 		case model.ComponentSkills:
 			for _, skillID := range selectedSkillIDs(selection) {
 				if skills.IsSDDSkill(skillID) {
@@ -1220,6 +1218,14 @@ func sddSubAgentPaths(homeDir string, adapter agents.Adapter) []string {
 	return paths
 }
 
+func openCodeSDDPluginPaths(targetDir string) []string {
+	return []string{
+		filepath.Join(targetDir, ".config", "opencode", "plugins", "background-agents.ts"),
+		filepath.Join(targetDir, ".config", "opencode", "plugins", "model-variants.ts"),
+		filepath.Join(targetDir, ".config", "opencode", "plugins", "skill-registry.ts"),
+	}
+}
+
 func runPostApplyVerification(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan) verify.Report {
 	checks := make([]verify.Check, 0)
 	adapters := resolveAdapters(resolved.Agents)
@@ -1241,6 +1247,22 @@ func runPostApplyVerification(homeDir, workspaceDir string, scope InstallScope, 
 
 	for _, currentPath := range uniqueFilePaths {
 		path := currentPath
+		if isLegacyOpenCodeBackgroundAgentsPlugin(path) {
+			checks = append(checks, verify.Check{
+				ID:          "verify:file:" + path,
+				Description: "legacy OpenCode background agents plugin removed",
+				Run: func(context.Context) error {
+					if _, err := os.Stat(path); err != nil {
+						if os.IsNotExist(err) {
+							return nil
+						}
+						return err
+					}
+					return fmt.Errorf("legacy OpenCode plugin still exists")
+				},
+			})
+			continue
+		}
 		checks = append(checks, verify.Check{
 			ID:          "verify:file:" + path,
 			Description: "required file exists",
@@ -1259,6 +1281,17 @@ func runPostApplyVerification(homeDir, workspaceDir string, scope InstallScope, 
 	checks = append(checks, antigravityCollisionCheck(resolved.Agents)...)
 
 	return verify.BuildReport(verify.RunChecks(context.Background(), checks))
+}
+
+func isLegacyOpenCodeBackgroundAgentsPlugin(path string) bool {
+	path = filepath.Clean(path)
+	pluginsDir := filepath.Dir(path)
+	opencodeDir := filepath.Dir(pluginsDir)
+	configDir := filepath.Dir(opencodeDir)
+	return filepath.Base(path) == "background-agents.ts" &&
+		filepath.Base(pluginsDir) == "plugins" &&
+		filepath.Base(opencodeDir) == "opencode" &&
+		filepath.Base(configDir) == ".config"
 }
 
 func hasComponent(components []model.ComponentID, target model.ComponentID) bool {
