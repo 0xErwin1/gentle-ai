@@ -469,6 +469,42 @@ func TestGenerateProfileOverlay_PermissionScoped(t *testing.T) {
 	assertExactTaskPermissions(t, taskMap, expected)
 }
 
+func TestGenerateProfileOverlay_ToolsUseReplaceSentinel(t *testing.T) {
+	home := t.TempDir()
+
+	overlay, err := GenerateProfileOverlay(makeHaikuProfile(), home)
+	if err != nil {
+		t.Fatalf("GenerateProfileOverlay() error = %v", err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(overlay, &root); err != nil {
+		t.Fatalf("overlay is not valid JSON: %v", err)
+	}
+
+	agentMap := root["agent"].(map[string]any)
+	orch := agentMap["sdd-orchestrator-cheap"].(map[string]any)
+	toolsWrapper, ok := orch["tools"].(map[string]any)
+	if !ok {
+		t.Fatal("sdd-orchestrator-cheap tools is not an object")
+	}
+	tools, hasSentinel := toolsWrapper["__replace__"].(map[string]any)
+	if !hasSentinel {
+		t.Fatal("tools block must use __replace__ sentinel to discard legacy delegate tools on sync")
+	}
+
+	for _, required := range []string{"read", "write", "edit", "bash", "task"} {
+		if enabled, _ := tools[required].(bool); !enabled {
+			t.Fatalf("required tool %q missing or disabled: %#v", required, tools)
+		}
+	}
+	for _, legacyTool := range []string{"delegate", "delegation_read", "delegation_list"} {
+		if _, exists := tools[legacyTool]; exists {
+			t.Fatalf("legacy OpenCode tool %q must not be present: %#v", legacyTool, tools)
+		}
+	}
+}
+
 func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -504,6 +540,39 @@ func TestDefaultOverlayTaskPermissions_ExplicitAllowlist(t *testing.T) {
 				}
 			}
 			assertExactTaskPermissions(t, taskMap, expected)
+		})
+	}
+}
+
+func TestDefaultOverlayToolsUseReplaceSentinel(t *testing.T) {
+	for _, assetPath := range []string{
+		"opencode/sdd-overlay-single.json",
+		"opencode/sdd-overlay-multi.json",
+	} {
+		t.Run(assetPath, func(t *testing.T) {
+			var root map[string]any
+			if err := json.Unmarshal([]byte(assets.MustRead(assetPath)), &root); err != nil {
+				t.Fatalf("unmarshal %s: %v", assetPath, err)
+			}
+
+			agentMap := root["agent"].(map[string]any)
+			orch := agentMap["gentle-orchestrator"].(map[string]any)
+			toolsWrapper := orch["tools"].(map[string]any)
+			tools, hasSentinel := toolsWrapper["__replace__"].(map[string]any)
+			if !hasSentinel {
+				t.Fatal("tools block must use __replace__ sentinel to discard legacy delegate tools on sync")
+			}
+
+			for _, required := range []string{"read", "write", "edit", "bash", "task"} {
+				if enabled, _ := tools[required].(bool); !enabled {
+					t.Fatalf("required tool %q missing or disabled: %#v", required, tools)
+				}
+			}
+			for _, legacyTool := range []string{"delegate", "delegation_read", "delegation_list"} {
+				if _, exists := tools[legacyTool]; exists {
+					t.Fatalf("legacy OpenCode tool %q must not be present: %#v", legacyTool, tools)
+				}
+			}
 		})
 	}
 }

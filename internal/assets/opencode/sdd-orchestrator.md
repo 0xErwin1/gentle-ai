@@ -29,7 +29,7 @@ Core principle: **does this inflate my context without need?** If yes -> delegat
 | Bash for state (git, gh)                                   | Yes    | No                           |
 | Bash for execution (test, install, external tooling)       | No     | Yes                          |
 
-`delegate` (async) is the default for delegated work. Use `task` (sync) only when you need the result before your next action.
+Use OpenCode's native `task` tool for delegated work. When `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` is present in the OpenCode process environment, prefer `background: true` for independent exploration/review tasks and use foreground task calls only when you need the result before your next action.
 
 Anti-patterns that always inflate context without need:
 
@@ -44,7 +44,7 @@ Delegation is not optional once complexity appears. If a task crosses a trigger 
 
 These gates are **non-skippable hard gates**, not recommendations. They are TOTALMENTE obligatorio: do not skip them, do not weaken them, and do not replace delegation-required gates with inline execution. Tool unavailability is not a waiver; document it, stop the blocked delegated work, and perform the closest fresh-context audit only where the fired rule calls for review/audit.
 
-Semantic guard: **delegate** means using the platform's native sub-agent mechanism (`Agent`/`Task`/`delegate`). Running local scripts, Python, or Bash inline is execution, not delegation.
+Semantic guard: **delegate** means using OpenCode's native `task` tool to invoke a configured sub-agent. Running local scripts, Python, or Bash inline is execution, not delegation.
 
 These are parent-orchestrator stop rules. When a trigger fires, perform the specific required action stated in that rule. Rules that say **delegate** require native sub-agent delegation. Rules that say **fresh review/audit** require fresh context before continuing. Do not pass these rules to child agents as permission to spawn more agents; children receive concrete role work and must not orchestrate.
 

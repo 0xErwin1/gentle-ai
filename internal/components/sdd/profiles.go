@@ -280,13 +280,13 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string) ([]byte, erro
 			},
 		},
 		"tools": map[string]any{
-			"read":            true,
-			"write":           true,
-			"edit":            true,
-			"bash":            true,
-			"delegate":        true,
-			"delegation_read": true,
-			"delegation_list": true,
+			"__replace__": map[string]any{
+				"read":  true,
+				"write": true,
+				"edit":  true,
+				"bash":  true,
+				"task":  true,
+			},
 		},
 	}
 	if profile.OrchestratorModel.ProviderID != "" && profile.OrchestratorModel.ModelID != "" {

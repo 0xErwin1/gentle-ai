@@ -25,13 +25,13 @@
         }
       },
       "tools": {
-        "read": true,
-        "write": true,
-        "edit": true,
-        "bash": true,
-        "delegate": true,
-        "delegation_read": true,
-        "delegation_list": true
+        "__replace__": {
+          "read": true,
+          "write": true,
+          "edit": true,
+          "bash": true,
+          "task": true
+        }
       }
     },
     "sdd-init": {
@@ -158,22 +158,33 @@
       "mode": "subagent",
       "hidden": true,
       "description": "Adversarial code reviewer — blind judge A for judgment-day protocol",
-      "prompt": "You are a judgment-day adversarial reviewer. Execute the review instructions provided in the delegate prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems.",
-      "tools": { "read": true, "bash": true }
+      "prompt": "You are a judgment-day adversarial reviewer. Execute the review instructions provided in the task prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems.",
+      "tools": {
+        "read": true,
+        "bash": true
+      }
     },
     "jd-judge-b": {
       "mode": "subagent",
       "hidden": true,
       "description": "Adversarial code reviewer — blind judge B for judgment-day protocol",
-      "prompt": "You are a judgment-day adversarial reviewer. Execute the review instructions provided in the delegate prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems.",
-      "tools": { "read": true, "bash": true }
+      "prompt": "You are a judgment-day adversarial reviewer. Execute the review instructions provided in the task prompt exactly. Do NOT delegate further. Do NOT modify any code — your job is ONLY to find problems.",
+      "tools": {
+        "read": true,
+        "bash": true
+      }
     },
     "jd-fix-agent": {
       "mode": "subagent",
       "hidden": true,
       "description": "Surgical fix agent for judgment-day protocol",
-      "prompt": "You are a judgment-day surgical fix agent. Execute the fix instructions provided in the delegate prompt exactly. Do NOT delegate further. Fix ONLY the confirmed issues listed — do NOT refactor beyond what is strictly needed.",
-      "tools": { "read": true, "write": true, "edit": true, "bash": true }
+      "prompt": "You are a judgment-day surgical fix agent. Execute the fix instructions provided in the task prompt exactly. Do NOT delegate further. Fix ONLY the confirmed issues listed — do NOT refactor beyond what is strictly needed.",
+      "tools": {
+        "read": true,
+        "write": true,
+        "edit": true,
+        "bash": true
+      }
     }
   }
 }

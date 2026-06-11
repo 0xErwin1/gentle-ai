@@ -1962,7 +1962,8 @@ test_oc_sdd_multi_mode_injection() {
 
     if $BINARY install --agent opencode --component sdd --persona neutral --sdd-mode multi 2>&1; then
         local settings="$HOME/.config/opencode/opencode.json"
-        local plugin="$HOME/.config/opencode/plugins/background-agents.ts"
+        local legacy_plugin="$HOME/.config/opencode/plugins/background-agents.ts"
+        local model_variants_plugin="$HOME/.config/opencode/plugins/model-variants.ts"
         assert_file_exists "$settings" "opencode.json exists"
         assert_valid_json "$settings" "opencode.json is valid JSON"
         assert_file_contains "$settings" '"gentle-orchestrator"' "Has gentle-orchestrator agent"
@@ -1977,12 +1978,10 @@ test_oc_sdd_multi_mode_injection() {
         assert_file_contains "$settings" '"sdd-tasks"' "Has sdd-tasks sub-agent"
         assert_file_contains "$settings" '"sdd-archive"' "Has sdd-archive sub-agent"
         assert_file_contains "$settings" '"subagent"' "Sub-agents have mode subagent"
-        assert_file_contains "$settings" '"delegate"' "Has delegate tool"
-        assert_file_contains "$settings" '"delegation_read"' "Has delegation_read tool"
-        assert_file_contains "$settings" '"delegation_list"' "Has delegation_list tool"
-        assert_file_exists "$plugin" "background-agents plugin exists"
-        assert_file_contains "$plugin" 'background-agents' "Plugin has expected content marker"
-        assert_file_size_min "$plugin" 1000 "Plugin file has substantial content"
+        assert_file_contains "$settings" '"task"' "Has native task tool"
+        assert_file_not_exists "$legacy_plugin" "legacy background-agents plugin not installed by default"
+        assert_file_exists "$model_variants_plugin" "model-variants plugin exists"
+        assert_file_contains "$model_variants_plugin" 'model-variants' "Model variants plugin has expected content marker"
     else
         log_fail "OpenCode SDD multi-mode install command failed"
     fi
@@ -2000,8 +1999,8 @@ test_oc_sdd_single_mode_no_models() {
         assert_file_not_contains "$settings" '"sdd-orchestrator"' "Single mode: does not have legacy base sdd-orchestrator agent"
         assert_file_contains "$settings" '"sdd-apply"' "Single mode: has sdd-apply sub-agent"
         assert_file_not_contains "$settings" '"model"' "Single mode: no model overrides"
-        assert_file_exists "$HOME/.config/opencode/plugins/background-agents.ts" "Single mode: background-agents plugin present"
-        assert_file_contains "$HOME/.config/opencode/plugins/background-agents.ts" 'background-agents' "Single mode: plugin has expected content marker"
+        assert_file_not_exists "$HOME/.config/opencode/plugins/background-agents.ts" "Single mode: legacy background-agents plugin not installed"
+        assert_file_exists "$HOME/.config/opencode/plugins/model-variants.ts" "Single mode: model-variants plugin present"
     else
         log_fail "OpenCode SDD single-mode install command failed"
     fi
@@ -2018,8 +2017,8 @@ test_oc_sdd_default_mode_same_as_single() {
         assert_file_not_contains "$settings" '"sdd-orchestrator"' "Default mode: does not have legacy base sdd-orchestrator"
         assert_file_contains "$settings" '"sdd-apply"' "Default mode: has sdd-apply sub-agent"
         assert_file_not_contains "$settings" '"model"' "Default mode: no model overrides"
-        assert_file_exists "$HOME/.config/opencode/plugins/background-agents.ts" "Default mode: background-agents plugin present"
-        assert_file_contains "$HOME/.config/opencode/plugins/background-agents.ts" 'background-agents' "Default mode: plugin has expected content marker"
+        assert_file_not_exists "$HOME/.config/opencode/plugins/background-agents.ts" "Default mode: legacy background-agents plugin not installed"
+        assert_file_exists "$HOME/.config/opencode/plugins/model-variants.ts" "Default mode: model-variants plugin present"
     else
         log_fail "OpenCode SDD default mode install command failed"
     fi

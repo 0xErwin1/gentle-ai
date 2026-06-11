@@ -1522,7 +1522,6 @@ func TestRunInstallDryRunMatchesActualInstallOpenCodeSDDMulti(t *testing.T) {
 		expectedPaths = append(expectedPaths, componentPaths(home, dryResult.Selection, adapters, component)...)
 	}
 	pluginPaths := []string{
-		filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts"),
 		filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts"),
 	}
 	for _, pluginPath := range pluginPaths {

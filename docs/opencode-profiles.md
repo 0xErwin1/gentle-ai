@@ -15,6 +15,20 @@ That means you can stay with the built-in multi-profile overlay, or plug Gentle 
 
 ---
 
+
+## Native background subagents
+
+OpenCode SDD uses native OpenCode subagents through the `task` permission. Gentle AI no longer installs the legacy `background-agents.ts` plugin by default.
+
+To opt into OpenCode's experimental background subagent execution, start OpenCode with:
+
+```sh
+export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true
+opencode
+```
+
+Gentle AI does not currently write process environment variables into `opencode.json`; keep the flag in your shell, terminal profile, or launcher until OpenCode provides a stable config-level switch.
+
 ## Quick Start (TUI)
 
 1. Launch the installer: `gentle-ai` (or `go run ./cmd/gentle-ai`).

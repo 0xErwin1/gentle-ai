@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -24,18 +23,6 @@ import (
 	// agents/cursor, agents/gemini, agents/vscode used via agents.NewAdapter()
 )
 
-// skipIfNoPkgManager skips the test when neither bun nor npm is available,
-// or when the package manager cannot actually install packages (e.g. no network,
-// sandboxed environment). OpenCode plugin tests require a working package manager.
-func skipIfNoPkgManager(t *testing.T) {
-	t.Helper()
-	_, bunErr := exec.LookPath("bun")
-	_, npmErr := exec.LookPath("npm")
-	if bunErr != nil && npmErr != nil {
-		t.Skip("bun y npm no están disponibles — saltando tests del plugin OpenCode")
-	}
-}
-
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func hermesAdapter() agents.Adapter   { return hermes.NewAdapter() }
 func kilocodeAdapter() agents.Adapter { return kilocode.NewAdapter() }
@@ -46,11 +33,6 @@ func windsurfAdapter() agents.Adapter { return windsurfagent.NewAdapter() }
 
 func mockNoPackageManager(t *testing.T) {
 	t.Helper()
-	orig := npmLookPath
-	npmLookPath = func(string) (string, error) {
-		return "", fmt.Errorf("not found")
-	}
-	t.Cleanup(func() { npmLookPath = orig })
 }
 
 func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
@@ -1655,7 +1637,7 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 	if !ok {
 		t.Fatalf("gentle-orchestrator tools has unexpected type: %T", orchestratorAgent["tools"])
 	}
-	for _, toolName := range []string{"delegate", "delegation_read", "delegation_list"} {
+	for _, toolName := range []string{"task"} {
 		value, ok := toolsRaw[toolName].(bool)
 		if !ok || !value {
 			t.Fatalf("gentle-orchestrator missing multi-mode tool %q", toolName)
@@ -1679,23 +1661,27 @@ func TestInjectOpenCodeMultiMode(t *testing.T) {
 		t.Fatalf("sdd-apply mode = %q, want %q", mode, "subagent")
 	}
 
-	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
-	pluginContent, err := os.ReadFile(pluginPath)
-	if err != nil {
-		t.Fatalf("ReadFile(background-agents.ts) error = %v", err)
+	legacyPluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
+	if _, err := os.Stat(legacyPluginPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy background-agents plugin should not be installed by default; stat err = %v", err)
 	}
-	if string(pluginContent) != assets.MustRead("opencode/plugins/background-agents.ts") {
-		t.Fatal("background-agents.ts content does not match embedded asset")
+	modelVariantsPath := filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts")
+	modelVariantsContent, err := os.ReadFile(modelVariantsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(model-variants.ts) error = %v", err)
+	}
+	if string(modelVariantsContent) != assets.MustRead("opencode/plugins/model-variants.ts") {
+		t.Fatal("model-variants.ts content does not match embedded asset")
 	}
 	foundPlugin := false
 	for _, path := range result.Files {
-		if path == pluginPath {
+		if path == modelVariantsPath {
 			foundPlugin = true
 			break
 		}
 	}
 	if !foundPlugin {
-		t.Fatalf("plugin path %q missing from result.Files", pluginPath)
+		t.Fatalf("plugin path %q missing from result.Files", modelVariantsPath)
 	}
 }
 
@@ -1719,13 +1705,125 @@ func TestInjectOpenCodeMultiModeIdempotent(t *testing.T) {
 		t.Fatal("Inject(multi) second changed = true — multi overlay was duplicated")
 	}
 
-	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
-	content, err := os.ReadFile(pluginPath)
-	if err != nil {
-		t.Fatalf("ReadFile(background-agents.ts) error = %v", err)
+	legacyPluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
+	if _, err := os.Stat(legacyPluginPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy background-agents plugin should not be installed by default; stat err = %v", err)
 	}
-	if string(content) != assets.MustRead("opencode/plugins/background-agents.ts") {
-		t.Fatal("background-agents.ts changed after second multi inject")
+	modelVariantsPath := filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts")
+	content, err := os.ReadFile(modelVariantsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(model-variants.ts) error = %v", err)
+	}
+	if string(content) != assets.MustRead("opencode/plugins/model-variants.ts") {
+		t.Fatal("model-variants.ts changed after second multi inject")
+	}
+}
+
+func TestInjectOpenCodeMultiModeRemovesLegacyDelegateTools(t *testing.T) {
+	mockNoPackageManager(t)
+	home := t.TempDir()
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	existing := `{
+  "agent": {
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "tools": {
+        "read": true,
+        "bash": true,
+        "delegate": true,
+        "delegation_read": true,
+        "delegation_list": true
+      }
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	if _, err := Inject(home, opencodeAdapter(), "multi"); err != nil {
+		t.Fatalf("Inject(multi) error = %v", err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+	agentMap := root["agent"].(map[string]any)
+	orchestrator := agentMap["gentle-orchestrator"].(map[string]any)
+	tools := orchestrator["tools"].(map[string]any)
+
+	for _, legacyTool := range []string{"delegate", "delegation_read", "delegation_list"} {
+		if _, exists := tools[legacyTool]; exists {
+			t.Fatalf("legacy OpenCode tool %q survived sync: %#v", legacyTool, tools)
+		}
+	}
+	if task, _ := tools["task"].(bool); !task {
+		t.Fatalf("native task tool missing after sync: %#v", tools)
+	}
+}
+
+func TestInjectOpenCodeSingleModeRemovesLegacyDelegateTools(t *testing.T) {
+	mockNoPackageManager(t)
+	home := t.TempDir()
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+
+	existing := `{
+  "agent": {
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "tools": {
+        "read": true,
+        "bash": true,
+        "delegate": true,
+        "delegation_read": true,
+        "delegation_list": true
+      }
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	if _, err := Inject(home, opencodeAdapter(), "single"); err != nil {
+		t.Fatalf("Inject(single) error = %v", err)
+	}
+
+	content, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(content, &root); err != nil {
+		t.Fatalf("Unmarshal(opencode.json) error = %v", err)
+	}
+	agentMap := root["agent"].(map[string]any)
+	orchestrator := agentMap["gentle-orchestrator"].(map[string]any)
+	tools := orchestrator["tools"].(map[string]any)
+
+	for _, legacyTool := range []string{"delegate", "delegation_read", "delegation_list"} {
+		if _, exists := tools[legacyTool]; exists {
+			t.Fatalf("legacy OpenCode tool %q survived sync: %#v", legacyTool, tools)
+		}
+	}
+	if task, _ := tools["task"].(bool); !task {
+		t.Fatalf("native task tool missing after sync: %#v", tools)
 	}
 }
 
@@ -3258,189 +3356,96 @@ func TestInjectClaudeDoesNotStripMarkedSection(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Background-agents plugin tests (Step 4)
+// OpenCode plugin tests
 // ---------------------------------------------------------------------------
 
-func TestInjectOpenCodeMultiWritesPlugin(t *testing.T) {
-	skipIfNoPkgManager(t)
+func TestInjectOpenCodeMultiWritesModelVariantsPluginOnly(t *testing.T) {
 	home := t.TempDir()
+	mockNoPackageManager(t)
 
 	result, err := Inject(home, opencodeAdapter(), "multi")
 	if err != nil {
-		if strings.Contains(err.Error(), "unique-names-generator") || strings.Contains(err.Error(), "post-install check") {
-			t.Skipf("skipping: plugin install unavailable in this environment: %v", err)
-		}
 		t.Fatalf("Inject(multi) error = %v", err)
 	}
 	if !result.Changed {
 		t.Fatal("Inject(multi) changed = false")
 	}
 
-	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
-
-	// Assert: plugin file exists
-	content, err := os.ReadFile(pluginPath)
+	modelVariantsPath := filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts")
+	content, err := os.ReadFile(modelVariantsPath)
 	if err != nil {
-		t.Fatalf("ReadFile(background-agents.ts) error = %v", err)
+		t.Fatalf("ReadFile(model-variants.ts) error = %v", err)
 	}
 
-	// Assert: file content matches embedded asset
-	expected := assets.MustRead("opencode/plugins/background-agents.ts")
+	expected := assets.MustRead("opencode/plugins/model-variants.ts")
 	if string(content) != expected {
 		t.Fatalf("plugin content mismatch: got %d bytes, want %d bytes", len(content), len(expected))
 	}
 
-	// Assert: file is in InjectionResult.Files
 	found := false
 	for _, f := range result.Files {
-		if f == pluginPath {
+		if f == modelVariantsPath {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("plugin path %q not reported in result.Files: %v", pluginPath, result.Files)
+		t.Fatalf("plugin path %q not reported in result.Files: %v", modelVariantsPath, result.Files)
+	}
+
+	legacyPluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
+	if _, err := os.Stat(legacyPluginPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy background-agents plugin should not be installed by default; stat err = %v", err)
 	}
 }
 
-func TestInjectOpenCodeSingleWritesPlugin(t *testing.T) {
+func TestInjectOpenCodeSingleWritesModelVariantsPluginOnly(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
 	_, err := Inject(home, opencodeAdapter(), "single")
 	if err != nil {
-		if strings.Contains(err.Error(), "unique-names-generator") || strings.Contains(err.Error(), "post-install check") {
-			t.Skipf("skipping: plugin install unavailable in this environment: %v", err)
-		}
 		t.Fatalf("Inject(single) error = %v", err)
 	}
 
-	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
-	if _, err := os.Stat(pluginPath); err != nil {
-		t.Fatalf("plugin file should exist in single mode: %v", err)
+	modelVariantsPath := filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts")
+	if _, err := os.Stat(modelVariantsPath); err != nil {
+		t.Fatalf("model-variants plugin should exist in single mode: %v", err)
+	}
+	legacyPluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
+	if _, err := os.Stat(legacyPluginPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy background-agents plugin should not exist in single mode; stat err = %v", err)
 	}
 }
 
 func TestInjectOpenCodePluginNoPkgManagerAvailable(t *testing.T) {
-	// Mock: no package manager (neither bun nor npm) is available.
-	orig := npmLookPath
-	npmLookPath = func(string) (string, error) {
-		return "", fmt.Errorf("not found")
-	}
-	defer func() { npmLookPath = orig }()
-
 	home := t.TempDir()
 
-	// Assert: inject succeeds even when no package manager is available (soft skip).
 	result, err := Inject(home, opencodeAdapter(), "multi")
 	if err != nil {
 		t.Fatalf("Inject(multi) with no package manager error = %v", err)
 	}
 
-	// Assert: plugin file was still written regardless.
-	pluginPath := filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts")
-	if _, err := os.Stat(pluginPath); err != nil {
-		t.Fatalf("plugin file should exist even when no package manager available: %v", err)
+	modelVariantsPath := filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts")
+	if _, err := os.Stat(modelVariantsPath); err != nil {
+		t.Fatalf("model-variants plugin should exist without package manager: %v", err)
 	}
 
 	_ = result
-}
-
-func TestInjectOpenCodePluginNpmFailureReturnsActionableError(t *testing.T) {
-	// Mock: package manager IS available but the install fails.
-	orig := npmLookPath
-	origRun := npmRun
-	npmLookPath = func(bin string) (string, error) {
-		if bin == "bun" {
-			return "", fmt.Errorf("not found")
-		}
-		if bin == "npm" {
-			return "/usr/bin/npm", nil
-		}
-		return "", fmt.Errorf("not found")
-	}
-	npmRun = func(dir string, args ...string) ([]byte, error) {
-		return []byte("ERR! some npm error"), fmt.Errorf("exit status 1")
-	}
-	defer func() {
-		npmLookPath = orig
-		npmRun = origRun
-	}()
-
-	home := t.TempDir()
-
-	_, err := Inject(home, opencodeAdapter(), "multi")
-	if err == nil {
-		t.Fatal("Inject(multi) should fail when npm install fails")
-	}
-	if !strings.Contains(err.Error(), "npm install") {
-		t.Fatalf("error should mention 'npm install', got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "unique-names-generator") {
-		t.Fatalf("error should mention the package name, got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "Fix:") {
-		t.Fatalf("error should contain actionable fix instructions, got: %v", err)
-	}
-}
-
-func TestInjectOpenCodePluginBunPreferredOverNpm(t *testing.T) {
-	// Mock: both bun and npm available; only bun should be called.
-	orig := npmLookPath
-	origRun := npmRun
-
-	var calledWith string
-	npmLookPath = func(bin string) (string, error) {
-		// Both available — bun should win.
-		if bin == "bun" || bin == "npm" {
-			return "/usr/local/bin/" + bin, nil
-		}
-		return "", fmt.Errorf("not found")
-	}
-	npmRun = func(dir string, args ...string) ([]byte, error) {
-		if len(args) > 0 {
-			calledWith = args[0]
-		}
-		// Simulate successful install by creating the node_modules directory.
-		nmPath := filepath.Join(dir, "node_modules", "unique-names-generator")
-		if err := os.MkdirAll(nmPath, 0o755); err != nil {
-			return nil, err
-		}
-		return []byte(""), nil
-	}
-	defer func() {
-		npmLookPath = orig
-		npmRun = origRun
-	}()
-
-	home := t.TempDir()
-	_, err := Inject(home, opencodeAdapter(), "multi")
-	if err != nil {
-		t.Fatalf("Inject(multi) error = %v", err)
-	}
-
-	if !strings.Contains(calledWith, "bun") {
-		t.Fatalf("expected bun to be preferred over npm, but called: %q", calledWith)
-	}
 }
 
 func TestInjectOpenCodePluginIdempotent(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
-	// First run
 	first, err := Inject(home, opencodeAdapter(), "multi")
 	if err != nil {
-		if strings.Contains(err.Error(), "unique-names-generator") || strings.Contains(err.Error(), "post-install check") {
-			t.Skipf("skipping: plugin install unavailable in this environment: %v", err)
-		}
 		t.Fatalf("Inject(multi) first error = %v", err)
 	}
 	if !first.Changed {
 		t.Fatal("Inject(multi) first changed = false")
 	}
 
-	// Second run: Changed should be false (plugin unchanged)
 	second, err := Inject(home, opencodeAdapter(), "multi")
 	if err != nil {
 		t.Fatalf("Inject(multi) second error = %v", err)
@@ -4824,13 +4829,6 @@ func TestInjectOpenCodePostCheckDiskFallback(t *testing.T) {
 	if err := os.WriteFile(settingsPath, []byte(existingConfig), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-
-	// Mock npm to not be available (so we skip plugin installation)
-	origNpmLookPath := npmLookPath
-	npmLookPath = func(string) (string, error) {
-		return "", fmt.Errorf("npm not found")
-	}
-	t.Cleanup(func() { npmLookPath = origNpmLookPath })
 
 	// Run Inject with SDD mode single
 	result, err := Inject(home, opencodeAdapter(), model.SDDModeSingle)

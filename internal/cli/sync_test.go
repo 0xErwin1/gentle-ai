@@ -1332,11 +1332,6 @@ func TestRunSyncExternalSingleActiveSkipsDetectAndPreservesOrchestratorPrompt(t 
 	runCommand = func(string, ...string) error { return nil }
 	cmdLookPath = func(name string) (string, error) { return "/usr/local/bin/" + name, nil }
 
-	// Pre-create package directory to avoid npm/bun install attempts in tests.
-	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode", "node_modules", "unique-names-generator"), 0o755); err != nil {
-		t.Fatalf("MkdirAll(node_modules): %v", err)
-	}
-
 	// External profile marker to mirror real integrations.
 	profilesDir := filepath.Join(home, ".config", "opencode", "profiles")
 	if err := os.MkdirAll(profilesDir, 0o755); err != nil {
@@ -1482,7 +1477,6 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 	managedPaths := componentPaths(home, sel, resolveAdapters(sel.Agents), model.ComponentSDD)
 	for _, want := range []string{
 		filepath.Join(home, ".config", "opencode", "opencode.json"),
-		filepath.Join(home, ".config", "opencode", "plugins", "background-agents.ts"),
 		filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts"),
 	} {
 		if !containsPath(managedPaths, want) {

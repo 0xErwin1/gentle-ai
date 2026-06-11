@@ -156,7 +156,6 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"opencode/commands/sdd-onboard.md",
 		"opencode/commands/sdd-status.md",
 		"opencode/commands/sdd-verify.md",
-		"opencode/plugins/background-agents.ts",
 
 		// Gemini agent files
 		"gemini/sdd-orchestrator.md",
@@ -288,10 +287,10 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(opencode/plugins) error = %v", err)
 	}
-	if len(pluginEntries) != 2 {
-		t.Fatalf("opencode plugins count = %d, want 2", len(pluginEntries))
+	if len(pluginEntries) != 1 {
+		t.Fatalf("opencode plugins count = %d, want 1", len(pluginEntries))
 	}
-	wantPlugins := map[string]bool{"background-agents.ts": true, "model-variants.ts": true}
+	wantPlugins := map[string]bool{"model-variants.ts": true}
 	for _, entry := range pluginEntries {
 		if !wantPlugins[entry.Name()] {
 			t.Fatalf("unexpected plugin entry = %q", entry.Name())
@@ -335,48 +334,6 @@ func TestModelVariantsPluginContract(t *testing.T) {
 	}
 	if !strings.Contains(src, "console.error") {
 		t.Errorf("model-variants.ts must log errors via console.error so users see failures")
-	}
-}
-
-// TestBackgroundAgentsVariantForwarding verifies that background-agents.ts reads
-// the "variant" field from the agent config and forwards it as a top-level
-// sibling of "model" in the session.prompt body (issue #606).
-//
-// Contract rules:
-//  1. resolveAgentModel must read variant from the agent config entry.
-//  2. The session.prompt call must spread variant at the body's top level,
-//     NOT nest it inside the model object.
-//  3. The model object must only contain providerID and modelID.
-func TestBackgroundAgentsVariantForwarding(t *testing.T) {
-	source, err := Read("opencode/plugins/background-agents.ts")
-	if err != nil {
-		t.Fatalf("Read(background-agents.ts) error = %v", err)
-	}
-	src := string(source)
-
-	// resolveAgentModel must read variant from the agent config object.
-	if !strings.Contains(src, `variant?: string`) {
-		t.Errorf("background-agents.ts resolveAgentModel must declare variant in the agent config type")
-	}
-	if !strings.Contains(src, `variant`) {
-		t.Errorf("background-agents.ts must reference variant")
-	}
-
-	// The return type of resolveAgentModel must carry variant.
-	if !strings.Contains(src, "AgentModelResolution") {
-		t.Errorf("background-agents.ts must use a named resolution type (AgentModelResolution) that includes variant")
-	}
-
-	// variant must be forwarded at the TOP LEVEL of the session.prompt body,
-	// not nested inside the model object.
-	if !strings.Contains(src, `variant: agentModel.variant`) {
-		t.Errorf("background-agents.ts must spread variant as a top-level body field (variant: agentModel.variant)")
-	}
-
-	// The model object in session.prompt must only contain providerID and modelID —
-	// variant must NOT be nested inside it.
-	if strings.Contains(src, `model: agentModel`) {
-		t.Errorf("background-agents.ts must not spread agentModel directly into model — variant must remain top-level, not nested in model")
 	}
 }
 
@@ -971,7 +928,7 @@ func TestOpenCodeSDDOverlaySubagentsAreExplicitExecutors(t *testing.T) {
 					}
 				} else {
 					// Single overlay has inline executor-scoped prompts.
-					for _, want := range []string{"not the orchestrator", "Do NOT delegate", "Do NOT call task/delegate", "Do NOT launch sub-agents"} {
+					for _, want := range []string{"not the orchestrator", "Do NOT delegate", "Do NOT call task", "Do NOT launch sub-agents"} {
 						if !strings.Contains(prompt, want) {
 							t.Fatalf("%q phase %s prompt missing %q", assetPath, phase, want)
 						}

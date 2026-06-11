@@ -960,7 +960,6 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 					paths = append(paths, p)
 				}
 				paths = append(paths,
-					filepath.Join(homeDir, ".config", "opencode", "plugins", "background-agents.ts"),
 					filepath.Join(homeDir, ".config", "opencode", "plugins", "model-variants.ts"),
 				)
 				// Shared prompt files in ~/.config/opencode/prompts/sdd/ — back these up

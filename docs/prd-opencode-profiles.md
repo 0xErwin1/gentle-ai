@@ -322,9 +322,7 @@ Para un perfil llamado "cheap" con Haiku:
         "write": true,
         "edit": true,
         "bash": true,
-        "delegate": true,
-        "delegation_read": true,
-        "delegation_list": true
+        "task": true
       }
     },
     "sdd-init-cheap": {

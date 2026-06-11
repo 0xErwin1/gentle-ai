@@ -114,7 +114,7 @@ sdd-orchestrator-{name}:
   prompt: {inlined orchestrator prompt with profile-specific model table}
   permission.task.*: "deny"
   permission.task.sdd-*-{name}: "allow"
-  tools: read, write, edit, bash, delegate, delegation_read, delegation_list
+  tools: read, write, edit, bash, task
 
 sdd-{phase}-{name}:
   mode: "subagent"
