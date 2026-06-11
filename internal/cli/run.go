@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -164,23 +165,67 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	// merge into the existing state so that previously installed agents and
 	// model assignments are preserved. A full install (no --agent flag) keeps
 	// overwrite semantics so the TUI selection is the source of truth.
+	claudePhaseState := claudePhaseAssignmentsToState(input.Selection.ClaudePhaseAssignments)
 	newState := state.InstallState{
-		InstalledAgents:        agentIDs,
-		ClaudeModelAssignments: claudeAliasesToStrings(input.Selection.ClaudeModelAssignments),
-		KiroModelAssignments:   kiroAliasesToStrings(input.Selection.KiroModelAssignments),
-		ModelAssignments:       modelAssignmentsToState(input.Selection.ModelAssignments),
-		Persona:                string(input.Selection.Persona),
+		InstalledAgents:             agentIDs,
+		ClaudeModelAssignments:      claudeLegacyAssignmentsForState(input.Selection.ClaudeModelAssignments, claudePhaseState),
+		ClaudePhaseAssignments:      claudePhaseState,
+		KiroModelAssignments:        kiroAliasesToStrings(input.Selection.KiroModelAssignments),
+		CodexModelAssignments:       codexEffortsToStrings(input.Selection.CodexModelAssignments),
+		CodexCarrilModelAssignments: input.Selection.CodexCarrilModelAssignments,
+		CodexPhaseModelAssignments:  input.Selection.CodexPhaseModelAssignments,
+		ModelAssignments:            modelAssignmentsToState(input.Selection.ModelAssignments),
+		Persona:                     string(input.Selection.Persona),
 	}
 	if len(flags.Agents) > 0 {
-		existing, readErr := state.Read(homeDir)
-		if readErr == nil {
-			newState = state.MergeAgents(existing, agentIDs)
+		merged, ok := mergeExplicitAgentInstallState(homeDir, newState, agentIDs)
+		if !ok {
+			return result, nil
 		}
+		newState = merged
 	}
 	// Non-fatal: a state write failure must not break an otherwise successful install.
 	_ = state.Write(homeDir, newState)
 
 	return result, nil
+}
+
+func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState, agentIDs []string) (state.InstallState, bool) {
+	existing, readErr := state.Read(homeDir)
+	if readErr != nil {
+		if errors.Is(readErr, os.ErrNotExist) {
+			return newState, true
+		}
+		return newState, false
+	}
+
+	merged := state.MergeAgents(existing, agentIDs)
+	if newState.ModelAssignments != nil {
+		merged.ModelAssignments = newState.ModelAssignments
+	}
+	if newState.ClaudeModelAssignments != nil {
+		merged.ClaudeModelAssignments = newState.ClaudeModelAssignments
+	}
+	if newState.ClaudePhaseAssignments != nil {
+		merged.ClaudePhaseAssignments = newState.ClaudePhaseAssignments
+		merged.ClaudeModelAssignments = nil
+	}
+	if newState.KiroModelAssignments != nil {
+		merged.KiroModelAssignments = newState.KiroModelAssignments
+	}
+	if newState.CodexModelAssignments != nil {
+		merged.CodexModelAssignments = newState.CodexModelAssignments
+	}
+	if newState.CodexCarrilModelAssignments != nil {
+		merged.CodexCarrilModelAssignments = newState.CodexCarrilModelAssignments
+	}
+	if newState.CodexPhaseModelAssignments != nil {
+		merged.CodexPhaseModelAssignments = newState.CodexPhaseModelAssignments
+	}
+	if merged.Persona == "" && newState.Persona != "" {
+		merged.Persona = newState.Persona
+	}
+	return merged, true
 }
 
 func withPostInstallNotes(report verify.Report, resolved planner.ResolvedPlan) verify.Report {
@@ -637,6 +682,7 @@ func (s componentApplyStep) Run() error {
 			opts := sdd.InjectOptions{
 				OpenCodeModelAssignments:    s.selection.ModelAssignments,
 				ClaudeModelAssignments:      s.selection.ClaudeModelAssignments,
+				ClaudePhaseAssignments:      s.selection.ClaudePhaseAssignments,
 				KiroModelAssignments:        s.selection.KiroModelAssignments,
 				CodexModelAssignments:       s.selection.CodexModelAssignments,
 				CodexCarrilModelAssignments: s.selection.CodexCarrilModelAssignments,
@@ -1388,9 +1434,46 @@ func claudeAliasesToStrings(m map[string]model.ClaudeModelAlias) map[string]stri
 	return out
 }
 
+func claudeLegacyAssignmentsForState(
+	legacy map[string]model.ClaudeModelAlias,
+	phase map[string]state.ClaudePhaseAssignmentState,
+) map[string]string {
+	if len(phase) > 0 {
+		return nil
+	}
+	return claudeAliasesToStrings(legacy)
+}
+
+func claudePhaseAssignmentsToState(m map[string]model.ClaudePhaseAssignment) map[string]state.ClaudePhaseAssignmentState {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]state.ClaudePhaseAssignmentState, len(m))
+	for k, v := range m {
+		if k == "orchestrator" || !v.Valid() {
+			continue
+		}
+		out[k] = state.ClaudePhaseAssignmentState{Model: string(v.Model), Effort: string(v.Effort)}
+	}
+	return out
+}
+
 // kiroAliasesToStrings converts a typed KiroModelAlias map to plain strings
 // for JSON serialisation in state.json.
 func kiroAliasesToStrings(m map[string]model.KiroModelAlias) map[string]string {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = string(v)
+	}
+	return out
+}
+
+// codexEffortsToStrings converts a typed CodexEffort map to plain strings
+// for JSON serialisation in state.json.
+func codexEffortsToStrings(m map[string]model.CodexEffort) map[string]string {
 	if len(m) == 0 {
 		return nil
 	}

@@ -288,6 +288,31 @@ func TestModelAssignmentsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestClaudePhaseAssignmentsRoundTrip(t *testing.T) {
+	home := t.TempDir()
+
+	want := InstallState{
+		InstalledAgents: []string{"claude-code"},
+		ClaudePhaseAssignments: map[string]ClaudePhaseAssignmentState{
+			"sdd-apply":   {Model: "sonnet", Effort: "max"},
+			"sdd-archive": {Model: "haiku"},
+		},
+	}
+
+	if err := Write(home, want); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	got, err := Read(home)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+
+	if !reflect.DeepEqual(got.ClaudePhaseAssignments, want.ClaudePhaseAssignments) {
+		t.Errorf("ClaudePhaseAssignments = %v, want %v", got.ClaudePhaseAssignments, want.ClaudePhaseAssignments)
+	}
+}
+
 // TestModelAssignmentStateEffortRoundTrip verifies that Effort field survives
 // a JSON serialization round-trip.
 func TestModelAssignmentStateEffortRoundTrip(t *testing.T) {

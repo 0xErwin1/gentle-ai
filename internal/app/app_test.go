@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -349,6 +351,28 @@ func TestTuiSyncStrictTDDNilOverrideNoChange(t *testing.T) {
 	}
 }
 
+func TestTuiSyncAppliesSDDProfileStrategyOverride(t *testing.T) {
+	overrides := &model.SyncOverrides{SDDProfileStrategy: model.SDDProfileStrategyExternalSingleActive}
+
+	selection := model.Selection{SDDProfileStrategy: model.SDDProfileStrategyGeneratedMulti}
+	applyOverrides(&selection, overrides)
+
+	if selection.SDDProfileStrategy != model.SDDProfileStrategyExternalSingleActive {
+		t.Fatalf("Selection.SDDProfileStrategy = %q, want %q", selection.SDDProfileStrategy, model.SDDProfileStrategyExternalSingleActive)
+	}
+}
+
+func TestTuiSyncSDDProfileStrategyEmptyOverrideNoChange(t *testing.T) {
+	overrides := &model.SyncOverrides{}
+
+	selection := model.Selection{SDDProfileStrategy: model.SDDProfileStrategyExternalSingleActive}
+	applyOverrides(&selection, overrides)
+
+	if selection.SDDProfileStrategy != model.SDDProfileStrategyExternalSingleActive {
+		t.Fatalf("Selection.SDDProfileStrategy changed unexpectedly to %q", selection.SDDProfileStrategy)
+	}
+}
+
 func boolPtr(b bool) *bool { return &b }
 
 func TestTuiSyncTargetAgentsOverridePersistedInstallState(t *testing.T) {
@@ -426,8 +450,8 @@ func TestTuiSyncClaudeModelConfigWritesSelectedAssignments(t *testing.T) {
 		t.Fatalf("CLAUDE.md should not expose orchestrator as a configurable model row; got:\n%s", body)
 	}
 	for _, want := range []string{
-		"| sdd-apply | haiku | Implementation |",
-		"| default | haiku | Non-SDD general delegation |",
+		"| sdd-apply | haiku | default | Implementation |",
+		"| default | haiku | default | Non-SDD general delegation |",
 		"Gentle AI does not configure the main orchestrator model",
 	} {
 		if !strings.Contains(string(body), want) {
@@ -436,9 +460,150 @@ func TestTuiSyncClaudeModelConfigWritesSelectedAssignments(t *testing.T) {
 	}
 }
 
+func TestTuiSyncClaudePhaseAssignmentsPersistAndGenerateEffort(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{InstalledAgents: []string{string(model.AgentPi)}}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	phaseAssignments := model.ClaudePhaseAssignmentsFromLegacy(map[string]model.ClaudeModelAlias{
+		"sdd-explore": model.ClaudeModelSonnet,
+		"sdd-propose": model.ClaudeModelSonnet,
+		"sdd-spec":    model.ClaudeModelSonnet,
+		"sdd-design":  model.ClaudeModelSonnet,
+		"sdd-tasks":   model.ClaudeModelSonnet,
+		"sdd-apply":   model.ClaudeModelSonnet,
+		"sdd-verify":  model.ClaudeModelSonnet,
+		"sdd-archive": model.ClaudeModelSonnet,
+		"default":     model.ClaudeModelSonnet,
+	})
+	phaseAssignments["sdd-apply"] = model.ClaudePhaseAssignment{
+		Model:  model.ClaudeModelSonnet,
+		Effort: model.ClaudeEffortMax,
+	}
+
+	changed, err := tuiSync(home)(&model.SyncOverrides{
+		TargetAgents:           []model.AgentID{model.AgentClaudeCode},
+		ClaudePhaseAssignments: phaseAssignments,
+	})
+	if err != nil {
+		t.Fatalf("tuiSync Claude phase config error: %v", err)
+	}
+	if len(changed) == 0 {
+		t.Fatal("tuiSync Claude phase config changed 0 files, want Claude assets written")
+	}
+
+	persisted, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	applyState, ok := persisted.ClaudePhaseAssignments["sdd-apply"]
+	if !ok {
+		t.Fatalf("persisted state missing claude_phase_assignments.sdd-apply: %#v", persisted.ClaudePhaseAssignments)
+	}
+	if applyState.Model != string(model.ClaudeModelSonnet) || applyState.Effort != string(model.ClaudeEffortMax) {
+		t.Fatalf("persisted sdd-apply = %#v, want sonnet/max", applyState)
+	}
+	if persisted.ClaudeModelAssignments != nil {
+		t.Fatalf("legacy claude_model_assignments should be cleared when phase assignments are persisted; got %#v", persisted.ClaudeModelAssignments)
+	}
+
+	applyAgent := filepath.Join(home, ".claude", "agents", "sdd-apply.md")
+	body, err := os.ReadFile(applyAgent)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", applyAgent, err)
+	}
+	for _, want := range []string{"model: sonnet", "effort: max"} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("sdd-apply agent missing %q; got:\n%s", want, body)
+		}
+	}
+
+	archiveAgent := filepath.Join(home, ".claude", "agents", "sdd-archive.md")
+	body, err = os.ReadFile(archiveAgent)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", archiveAgent, err)
+	}
+	if strings.Contains(string(body), "effort:") {
+		t.Fatalf("default-effort sdd-archive agent should omit effort frontmatter; got:\n%s", body)
+	}
+
+	beforeState := persisted.ClaudePhaseAssignments
+	beforeApply, err := os.ReadFile(applyAgent)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", applyAgent, err)
+	}
+	beforeArchive, err := os.ReadFile(archiveAgent)
+	if err != nil {
+		t.Fatalf("ReadFile(%s): %v", archiveAgent, err)
+	}
+	beforeAgentFiles := filesUnder(t, filepath.Join(home, ".claude", "agents"))
+
+	changed, err = tuiSync(home)(&model.SyncOverrides{
+		TargetAgents:           []model.AgentID{model.AgentClaudeCode},
+		ClaudePhaseAssignments: phaseAssignments,
+	})
+	if err != nil {
+		t.Fatalf("second tuiSync Claude phase config error: %v", err)
+	}
+	if len(changed) == 0 {
+		t.Log("second tuiSync reported no file changes")
+	}
+	afterAgentFiles := filesUnder(t, filepath.Join(home, ".claude", "agents"))
+	if !reflect.DeepEqual(afterAgentFiles, beforeAgentFiles) {
+		t.Fatalf("Claude agent file set changed after second sync: got %#v want %#v", afterAgentFiles, beforeAgentFiles)
+	}
+
+	persisted, err = state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read after second sync: %v", err)
+	}
+	if !reflect.DeepEqual(persisted.ClaudePhaseAssignments, beforeState) {
+		t.Fatalf("ClaudePhaseAssignments changed after second sync: got %#v want %#v", persisted.ClaudePhaseAssignments, beforeState)
+	}
+	afterApply, err := os.ReadFile(applyAgent)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) after second sync: %v", applyAgent, err)
+	}
+	if !bytes.Equal(afterApply, beforeApply) {
+		t.Fatalf("sdd-apply agent changed after idempotent sync")
+	}
+	afterArchive, err := os.ReadFile(archiveAgent)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) after second sync: %v", archiveAgent, err)
+	}
+	if !bytes.Equal(afterArchive, beforeArchive) {
+		t.Fatalf("sdd-archive agent changed after idempotent sync")
+	}
+}
+
 // TestApplyOverrides_KiroModelAssignments verifies that a non-nil KiroModelAssignments
 // override replaces the entire KiroModelAssignments map in the selection (same
 // replacement semantics as ClaudeModelAssignments — not a key-level merge).
+func filesUnder(t *testing.T, root string) []string {
+	t.Helper()
+
+	var files []string
+	if err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		files = append(files, rel)
+		return nil
+	}); err != nil {
+		t.Fatalf("walk %s: %v", root, err)
+	}
+	sort.Strings(files)
+	return files
+}
+
 func TestApplyOverrides_KiroModelAssignments(t *testing.T) {
 	selection := model.Selection{
 		KiroModelAssignments: map[string]model.KiroModelAlias{"sdd-apply": model.KiroModelSonnet},
@@ -578,6 +743,138 @@ func TestPersistAssignmentsPreservesInstalledAgents(t *testing.T) {
 	}
 	if got.ClaudeModelAssignments["sdd-apply"] != "sonnet" {
 		t.Errorf("ClaudeModelAssignments[sdd-apply] = %q, want %q", got.ClaudeModelAssignments["sdd-apply"], "sonnet")
+	}
+}
+
+func TestPersistAssignmentsClearsNonPhaseAssignmentMaps(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{"opencode", "codex", "kiro", "claude-code"},
+		ClaudeModelAssignments: map[string]string{
+			"sdd-apply": "sonnet",
+		},
+		KiroModelAssignments: map[string]string{
+			"sdd-design": "auto",
+		},
+		CodexModelAssignments: map[string]string{
+			"sdd-apply": "high",
+		},
+		CodexCarrilModelAssignments: map[string]string{
+			"sdd-strong": "gpt-5.4",
+		},
+		ModelAssignments: map[string]state.ModelAssignmentState{
+			"sdd-init": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+		},
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	persistAssignments(home, model.Selection{
+		ClaudeModelAssignments:      map[string]model.ClaudeModelAlias{},
+		KiroModelAssignments:        map[string]model.KiroModelAlias{},
+		CodexModelAssignments:       map[string]model.CodexEffort{},
+		CodexCarrilModelAssignments: map[string]string{},
+		ModelAssignments:            map[string]model.ModelAssignment{},
+	})
+
+	got, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	if got.ClaudeModelAssignments != nil {
+		t.Fatalf("ClaudeModelAssignments = %#v, want nil", got.ClaudeModelAssignments)
+	}
+	if got.KiroModelAssignments != nil {
+		t.Fatalf("KiroModelAssignments = %#v, want nil", got.KiroModelAssignments)
+	}
+	if got.CodexModelAssignments != nil {
+		t.Fatalf("CodexModelAssignments = %#v, want nil", got.CodexModelAssignments)
+	}
+	if got.CodexCarrilModelAssignments != nil {
+		t.Fatalf("CodexCarrilModelAssignments = %#v, want nil", got.CodexCarrilModelAssignments)
+	}
+	if got.ModelAssignments != nil {
+		t.Fatalf("ModelAssignments = %#v, want nil", got.ModelAssignments)
+	}
+	if len(got.InstalledAgents) != 4 {
+		t.Fatalf("InstalledAgents = %#v, want preserved agents", got.InstalledAgents)
+	}
+}
+
+func TestApplyOverridesClaudePhaseAssignmentsClearsLegacyAssignments(t *testing.T) {
+	selection := model.Selection{
+		ClaudeModelAssignments: map[string]model.ClaudeModelAlias{
+			"sdd-apply": model.ClaudeModelOpus,
+		},
+	}
+	overrides := &model.SyncOverrides{
+		ClaudePhaseAssignments: map[string]model.ClaudePhaseAssignment{},
+	}
+
+	applyOverrides(&selection, overrides)
+
+	if selection.ClaudeModelAssignments != nil {
+		t.Fatalf("ClaudeModelAssignments = %#v, want nil when phase assignments are provided", selection.ClaudeModelAssignments)
+	}
+	if selection.ClaudePhaseAssignments == nil {
+		t.Fatal("ClaudePhaseAssignments = nil, want explicit override map")
+	}
+}
+
+func TestPersistAssignmentsSkipsCorruptState(t *testing.T) {
+	home := t.TempDir()
+	statePath := state.Path(home)
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	original := []byte("{not valid json\n")
+	if err := os.WriteFile(statePath, original, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	persistAssignments(home, model.Selection{
+		CodexPhaseModelAssignments: map[string]string{},
+	})
+
+	got, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("state.json was overwritten after corrupt-state read error:\n%s", got)
+	}
+}
+
+func TestPersistAssignmentsClearsClaudePhaseAssignments(t *testing.T) {
+	home := t.TempDir()
+	if err := state.Write(home, state.InstallState{
+		InstalledAgents: []string{string(model.AgentClaudeCode)},
+		ClaudeModelAssignments: map[string]string{
+			"sdd-apply": "haiku",
+		},
+		ClaudePhaseAssignments: map[string]state.ClaudePhaseAssignmentState{
+			"sdd-apply": {Model: "sonnet", Effort: "max"},
+		},
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	persistAssignments(home, model.Selection{
+		ClaudePhaseAssignments: map[string]model.ClaudePhaseAssignment{},
+	})
+
+	got, err := state.Read(home)
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	if got.ClaudePhaseAssignments != nil {
+		t.Fatalf("ClaudePhaseAssignments = %#v, want nil after explicit clear", got.ClaudePhaseAssignments)
+	}
+	if got.ClaudeModelAssignments != nil {
+		t.Fatalf("ClaudeModelAssignments = %#v, want nil after explicit phase clear", got.ClaudeModelAssignments)
+	}
+	if len(got.InstalledAgents) != 1 || got.InstalledAgents[0] != string(model.AgentClaudeCode) {
+		t.Fatalf("InstalledAgents = %#v, want preserved claude-code", got.InstalledAgents)
 	}
 }
 

@@ -507,6 +507,7 @@ func NewModel(detection system.DetectionResult, version string, installState ...
 		Preset:                 model.PresetFullGentleman,
 		Components:             components,
 		ClaudeModelAssignments: installStateClaudeAssignments(s.ClaudeModelAssignments),
+		ClaudePhaseAssignments: installStateClaudePhaseAssignments(s.ClaudePhaseAssignments),
 		KiroModelAssignments:   installStateKiroAssignments(s.KiroModelAssignments),
 		ModelAssignments:       installStateModelAssignments(s.ModelAssignments),
 	}
@@ -534,6 +535,40 @@ func installStateClaudeAssignments(assignments map[string]string) map[string]mod
 	out := make(map[string]model.ClaudeModelAlias, len(assignments))
 	for phase, alias := range assignments {
 		out[phase] = model.ClaudeModelAlias(alias)
+	}
+	return out
+}
+
+func installStateClaudePhaseAssignments(assignments map[string]state.ClaudePhaseAssignmentState) map[string]model.ClaudePhaseAssignment {
+	if len(assignments) == 0 {
+		return nil
+	}
+	out := make(map[string]model.ClaudePhaseAssignment, len(assignments))
+	for phase, assignment := range assignments {
+		a := model.ClaudePhaseAssignment{Model: model.ClaudeModelAlias(assignment.Model), Effort: model.ClaudeEffort(assignment.Effort)}
+		if a.Valid() {
+			out[phase] = a
+		}
+	}
+	return out
+}
+
+func claudePickerAssignments(legacy map[string]model.ClaudeModelAlias, phase map[string]model.ClaudePhaseAssignment) map[string]model.ClaudePhaseAssignment {
+	if len(phase) > 0 {
+		return phase
+	}
+	return model.ClaudePhaseAssignmentsFromLegacy(legacy)
+}
+
+func claudePhaseAssignmentsToLegacy(assignments map[string]model.ClaudePhaseAssignment) map[string]model.ClaudeModelAlias {
+	if len(assignments) == 0 {
+		return nil
+	}
+	out := make(map[string]model.ClaudeModelAlias, len(assignments))
+	for phase, assignment := range assignments {
+		if assignment.Model.Valid() {
+			out[phase] = assignment.Model
+		}
 	}
 	return out
 }
@@ -956,20 +991,24 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.Screen == ScreenClaudeModelPicker {
 		wasInCustomMode := m.ClaudeModelPicker.InCustomMode
+		previousMode := m.ClaudeModelPicker.Mode
 		handled, updated := screens.HandleClaudeModelPickerNav(keyStr, &m.ClaudeModelPicker, m.Cursor)
 		if handled {
-			// Issue #147: reset cursor when exiting custom mode (Esc or Back row).
-			if wasInCustomMode && !m.ClaudeModelPicker.InCustomMode {
+			// Issue #147: reset cursor when exiting custom mode (Esc or Back row),
+			// and when entering/leaving nested model/effort selection screens.
+			if (wasInCustomMode && !m.ClaudeModelPicker.InCustomMode) || previousMode != m.ClaudeModelPicker.Mode {
 				m.Cursor = 0
 			}
 			if updated != nil {
-				m.Selection.ClaudeModelAssignments = updated
+				m.Selection.ClaudePhaseAssignments = updated
+				m.Selection.ClaudeModelAssignments = claudePhaseAssignmentsToLegacy(updated)
 				// In ModelConfigMode, persist model assignments via sync.
 				if m.ModelConfigMode {
 					m.ModelConfigMode = false
 					m.PendingSyncOverrides = &model.SyncOverrides{
 						TargetAgents:           []model.AgentID{model.AgentClaudeCode},
-						ClaudeModelAssignments: updated,
+						ClaudeModelAssignments: claudePhaseAssignmentsToLegacy(updated),
+						ClaudePhaseAssignments: updated,
 					}
 					m = m.withResetSyncState()
 					m.setScreen(ScreenSync)
@@ -1633,7 +1672,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		switch m.Cursor {
 		case 0: // Configure Claude models
 			m.ModelConfigMode = true
-			m.ClaudeModelPicker = screens.NewClaudeModelPickerStateFromAssignments(m.Selection.ClaudeModelAssignments)
+			m.ClaudeModelPicker = screens.NewClaudeModelPickerStateFromPhaseAssignments(claudePickerAssignments(m.Selection.ClaudeModelAssignments, m.Selection.ClaudePhaseAssignments))
 			m.setScreen(ScreenClaudeModelPicker)
 		case 1: // Configure OpenCode models
 			m.ModelConfigMode = true
@@ -1710,7 +1749,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.Selection.Preset = options[m.Cursor]
 			m.Selection.Components = componentsForPreset(options[m.Cursor], m.Selection.Persona)
 			if m.shouldShowClaudeModelPickerScreen() {
-				m.ClaudeModelPicker = screens.NewClaudeModelPickerStateFromAssignments(m.Selection.ClaudeModelAssignments)
+				m.ClaudeModelPicker = screens.NewClaudeModelPickerStateFromPhaseAssignments(claudePickerAssignments(m.Selection.ClaudeModelAssignments, m.Selection.ClaudePhaseAssignments))
 				m.setScreen(ScreenClaudeModelPicker)
 				return m, nil
 			}
@@ -1999,7 +2038,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.buildDependencyPlan()
 				// Show model picker screens if needed (components are now set).
 				if m.shouldShowClaudeModelPickerScreen() {
-					m.ClaudeModelPicker = screens.NewClaudeModelPickerStateFromAssignments(m.Selection.ClaudeModelAssignments)
+					m.ClaudeModelPicker = screens.NewClaudeModelPickerStateFromPhaseAssignments(claudePickerAssignments(m.Selection.ClaudeModelAssignments, m.Selection.ClaudePhaseAssignments))
 					m.setScreen(ScreenClaudeModelPicker)
 					return m, nil
 				}

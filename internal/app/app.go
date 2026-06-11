@@ -392,9 +392,11 @@ func tuiExecute(
 			agentIDs = append(agentIDs, string(a))
 		}
 		// Non-fatal: a state write failure must not break an otherwise successful install.
+		claudePhaseState := claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
 		_ = state.Write(homeDir, state.InstallState{
 			InstalledAgents:             agentIDs,
-			ClaudeModelAssignments:      claudeAliasesToStrings(selection.ClaudeModelAssignments),
+			ClaudeModelAssignments:      claudeLegacyAssignmentsForState(selection.ClaudeModelAssignments, claudePhaseState),
+			ClaudePhaseAssignments:      claudePhaseState,
 			KiroModelAssignments:        kiroAliasesToStrings(selection.KiroModelAssignments),
 			CodexModelAssignments:       codexEffortsToStrings(selection.CodexModelAssignments),
 			CodexCarrilModelAssignments: selection.CodexCarrilModelAssignments,
@@ -504,6 +506,10 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	if overrides.ClaudeModelAssignments != nil {
 		selection.ClaudeModelAssignments = overrides.ClaudeModelAssignments
 	}
+	if overrides.ClaudePhaseAssignments != nil {
+		selection.ClaudePhaseAssignments = overrides.ClaudePhaseAssignments
+		selection.ClaudeModelAssignments = nil
+	}
 	if overrides.KiroModelAssignments != nil {
 		selection.KiroModelAssignments = overrides.KiroModelAssignments
 	}
@@ -518,6 +524,9 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	}
 	if overrides.SDDMode != "" {
 		selection.SDDMode = overrides.SDDMode
+	}
+	if overrides.SDDProfileStrategy != "" {
+		selection.SDDProfileStrategy = overrides.SDDProfileStrategy
 	}
 	if overrides.StrictTDD != nil {
 		selection.StrictTDD = *overrides.StrictTDD
@@ -542,7 +551,20 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 	if err != nil {
 		return
 	}
-	if len(selection.ClaudeModelAssignments) == 0 && len(s.ClaudeModelAssignments) > 0 {
+	if len(selection.ClaudePhaseAssignments) == 0 && len(s.ClaudePhaseAssignments) > 0 {
+		m := make(map[string]model.ClaudePhaseAssignment, len(s.ClaudePhaseAssignments))
+		for k, v := range s.ClaudePhaseAssignments {
+			if k == "orchestrator" {
+				continue
+			}
+			a := model.ClaudePhaseAssignment{Model: model.ClaudeModelAlias(v.Model), Effort: model.ClaudeEffort(v.Effort)}
+			if a.Valid() {
+				m[k] = a
+			}
+		}
+		selection.ClaudePhaseAssignments = m
+	}
+	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(s.ClaudeModelAssignments) > 0 {
 		m := make(map[string]model.ClaudeModelAlias, len(s.ClaudeModelAssignments))
 		for k, v := range s.ClaudeModelAssignments {
 			// Claude Code controls the main session/orchestrator model itself.
@@ -600,28 +622,60 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 //   - non-nil, len > 0: new per-phase assignments — write them.
 //   - non-nil, len == 0: explicit clear signal (preset selected) — delete the key.
 func persistAssignments(homeDir string, selection model.Selection) {
-	// A non-nil but empty CodexPhaseModelAssignments is an explicit clear signal
-	// and must not be skipped by the early-exit guard.
-	hasPhaseAssignmentSignal := selection.CodexPhaseModelAssignments != nil
-	if len(selection.ClaudeModelAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 && len(selection.CodexModelAssignments) == 0 && len(selection.CodexCarrilModelAssignments) == 0 && len(selection.CodexPhaseModelAssignments) == 0 && !hasPhaseAssignmentSignal {
+	hasAssignmentSignal := selection.ClaudeModelAssignments != nil ||
+		selection.ClaudePhaseAssignments != nil ||
+		selection.KiroModelAssignments != nil ||
+		selection.ModelAssignments != nil ||
+		selection.CodexModelAssignments != nil ||
+		selection.CodexCarrilModelAssignments != nil ||
+		selection.CodexPhaseModelAssignments != nil
+	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 && len(selection.CodexModelAssignments) == 0 && len(selection.CodexCarrilModelAssignments) == 0 && len(selection.CodexPhaseModelAssignments) == 0 && !hasAssignmentSignal {
 		return
 	}
 	current, err := state.Read(homeDir)
 	if err != nil {
-		// State file may not exist yet (e.g. pre-state users).
+		// State file may not exist yet (e.g. pre-state users). Other read
+		// failures, such as invalid JSON, must not overwrite existing state.
+		if !errors.Is(err, os.ErrNotExist) {
+			return
+		}
 		current = state.InstallState{}
 	}
-	if len(selection.ClaudeModelAssignments) > 0 {
-		current.ClaudeModelAssignments = claudeAliasesToStrings(selection.ClaudeModelAssignments)
+	if selection.ClaudeModelAssignments != nil {
+		if len(selection.ClaudeModelAssignments) > 0 {
+			current.ClaudeModelAssignments = claudeAliasesToStrings(selection.ClaudeModelAssignments)
+		} else {
+			current.ClaudeModelAssignments = nil
+		}
 	}
-	if len(selection.KiroModelAssignments) > 0 {
-		current.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
+	if selection.ClaudePhaseAssignments != nil {
+		if len(selection.ClaudePhaseAssignments) > 0 {
+			current.ClaudePhaseAssignments = claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
+		} else {
+			current.ClaudePhaseAssignments = nil
+		}
+		current.ClaudeModelAssignments = nil
 	}
-	if len(selection.CodexModelAssignments) > 0 {
-		current.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
+	if selection.KiroModelAssignments != nil {
+		if len(selection.KiroModelAssignments) > 0 {
+			current.KiroModelAssignments = kiroAliasesToStrings(selection.KiroModelAssignments)
+		} else {
+			current.KiroModelAssignments = nil
+		}
 	}
-	if len(selection.CodexCarrilModelAssignments) > 0 {
-		current.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
+	if selection.CodexModelAssignments != nil {
+		if len(selection.CodexModelAssignments) > 0 {
+			current.CodexModelAssignments = codexEffortsToStrings(selection.CodexModelAssignments)
+		} else {
+			current.CodexModelAssignments = nil
+		}
+	}
+	if selection.CodexCarrilModelAssignments != nil {
+		if len(selection.CodexCarrilModelAssignments) > 0 {
+			current.CodexCarrilModelAssignments = selection.CodexCarrilModelAssignments
+		} else {
+			current.CodexCarrilModelAssignments = nil
+		}
 	}
 	// non-nil, len > 0 → write; non-nil, len == 0 → clear (explicit preset signal); nil → leave untouched.
 	if selection.CodexPhaseModelAssignments != nil {
@@ -631,8 +685,12 @@ func persistAssignments(homeDir string, selection model.Selection) {
 			current.CodexPhaseModelAssignments = nil
 		}
 	}
-	if len(selection.ModelAssignments) > 0 {
-		current.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
+	if selection.ModelAssignments != nil {
+		if len(selection.ModelAssignments) > 0 {
+			current.ModelAssignments = modelAssignmentsToState(selection.ModelAssignments)
+		} else {
+			current.ModelAssignments = nil
+		}
 	}
 	_ = state.Write(homeDir, current)
 }
@@ -651,6 +709,30 @@ func claudeAliasesToStrings(m map[string]model.ClaudeModelAlias) map[string]stri
 			continue
 		}
 		out[k] = string(v)
+	}
+	return out
+}
+
+func claudeLegacyAssignmentsForState(
+	legacy map[string]model.ClaudeModelAlias,
+	phase map[string]state.ClaudePhaseAssignmentState,
+) map[string]string {
+	if len(phase) > 0 {
+		return nil
+	}
+	return claudeAliasesToStrings(legacy)
+}
+
+func claudePhaseAssignmentsToState(m map[string]model.ClaudePhaseAssignment) map[string]state.ClaudePhaseAssignmentState {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make(map[string]state.ClaudePhaseAssignmentState, len(m))
+	for k, v := range m {
+		if k == "orchestrator" || !v.Valid() {
+			continue
+		}
+		out[k] = state.ClaudePhaseAssignmentState{Model: string(v.Model), Effort: string(v.Effort)}
 	}
 	return out
 }
