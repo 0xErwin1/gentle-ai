@@ -2,7 +2,6 @@ package permissions
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -335,23 +334,36 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 		`approval_policy = "on-request"`,
 		`default_permissions = "gentle-dev"`,
 		`[permissions.gentle-dev]`,
-		`extends = ":workspace"`,
 		`[permissions.gentle-dev.network]`,
 		`enabled = true`,
 		`[permissions.gentle-dev.network.domains]`,
 		`"*" = "allow"`,
-		`[permissions.gentle-dev.filesystem.":root"]`,
-		`"." = "write"`,
+		`[permissions.gentle-dev.filesystem]`,
+		`":minimal" = "read"`,
+		`"~/.config/git" = "read"`,
+		`"~/.gitconfig" = "read"`,
+		`"~/.local/state/nix/profiles/home-manager/home-path" = "read"`,
+		`"~/.nix-profile" = "read"`,
+		`"/nix/store" = "read"`,
+		`":tmpdir" = "write"`,
+		`":slash_tmp" = "write"`,
 		`[permissions.gentle-dev.workspace_roots]`,
-		fmt.Sprintf("%q = true", home),
+		`"~" = true`,
 		`[permissions.gentle-dev.filesystem.":workspace_roots"]`,
+		`"." = "write"`,
 		`".git/**" = "write"`,
 		`"**/.env" = "deny"`,
 		`"**/.env.local" = "deny"`,
 		`"**/.env.*.local" = "deny"`,
+		`"**/.aws/credentials" = "deny"`,
+		`"**/.config/gh/hosts.yml" = "deny"`,
+		`"**/.credentials/**" = "deny"`,
+		`"**/.ssh/**" = "deny"`,
+		`"**/Library/Keychains/**" = "deny"`,
+		`"**/credentials.json" = "deny"`,
 		`"**/*.pem" = "deny"`,
 		`"**/*.key" = "deny"`,
-		`"**/secrets/*" = "deny"`,
+		`"**/secrets/**" = "deny"`,
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(text, want) {
@@ -363,6 +375,9 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 		if strings.Contains(text, invalidGitRule) {
 			t.Fatalf("config.toml contains invalid or redundant Codex permissions git rule %q; got:\n%s", invalidGitRule, text)
 		}
+	}
+	if strings.Contains(text, `extends = ":workspace"`) {
+		t.Fatalf("config.toml should not inherit :workspace because it keeps Codex .git protections; got:\n%s", text)
 	}
 }
 
@@ -447,9 +462,9 @@ args = ["mcp", "--tools=agent"]
 	}
 	for _, section := range []string{
 		"[permissions.gentle-dev]",
+		"[permissions.gentle-dev.filesystem]",
 		"[permissions.gentle-dev.network]",
 		"[permissions.gentle-dev.network.domains]",
-		`[permissions.gentle-dev.filesystem.":root"]`,
 		"[permissions.gentle-dev.workspace_roots]",
 		`[permissions.gentle-dev.filesystem.":workspace_roots"]`,
 	} {
@@ -503,9 +518,15 @@ func TestInjectCodexPermissionsRemovesInvalidGitWriteRules(t *testing.T) {
 		`"**/.env" = "deny"`,
 		`"**/.env.local" = "deny"`,
 		`"**/.env.*.local" = "deny"`,
+		`"**/.aws/credentials" = "deny"`,
+		`"**/.config/gh/hosts.yml" = "deny"`,
+		`"**/.credentials/**" = "deny"`,
+		`"**/.ssh/**" = "deny"`,
+		`"**/Library/Keychains/**" = "deny"`,
+		`"**/credentials.json" = "deny"`,
 		`"**/*.pem" = "deny"`,
 		`"**/*.key" = "deny"`,
-		`"**/secrets/*" = "deny"`,
+		`"**/secrets/**" = "deny"`,
 	} {
 		if strings.Count(text, denyRule) != 1 {
 			t.Fatalf("config.toml should preserve deny rule %q exactly once; got:\n%s", denyRule, text)

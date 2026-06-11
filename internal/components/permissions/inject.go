@@ -167,28 +167,52 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 
 	merged := filemerge.UpsertTopLevelTOMLString(string(baseTOML), "approval_policy", "on-request")
 	merged = filemerge.UpsertTopLevelTOMLString(merged, "default_permissions", "gentle-dev")
-	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev", "description", `"Comfortable local development profile with workspace writes, network access, and secret-file protections."`)
-	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev", "extends", `":workspace"`)
+	merged = filemerge.RemoveTOMLTableKeys(merged, "permissions.gentle-dev", []string{"extends"})
+	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev", "description", `"Comfortable local development profile with workspace writes, network access, Git metadata writes, Nix/Home Manager support, and secret-file protections."`)
 	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.network", "enabled", "true")
 	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.network.domains", `"*"`, `"allow"`)
 
-	merged = filemerge.UpsertTOMLTableKey(merged, `permissions.gentle-dev.filesystem.":root"`, `"."`, `"write"`)
-	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.workspace_roots", fmt.Sprintf("%q", homeDir), "true")
+	merged = filemerge.RemoveTOMLTableKeys(merged, `permissions.gentle-dev.filesystem.":root"`, []string{`"."`})
+	for _, path := range []string{
+		`":minimal"`,
+		`"~/.config/git"`,
+		`"~/.gitconfig"`,
+		`"~/.local/state/nix/profiles/home-manager/home-path"`,
+		`"~/.nix-profile"`,
+		`"/nix/store"`,
+	} {
+		merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.filesystem", path, `"read"`)
+	}
+	for _, path := range []string{
+		`":tmpdir"`,
+		`":slash_tmp"`,
+	} {
+		merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.filesystem", path, `"write"`)
+	}
+
+	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.workspace_roots", `"~"`, "true")
 
 	workspaceRootsSection := `permissions.gentle-dev.filesystem.":workspace_roots"`
 	merged = filemerge.RemoveTOMLTableKeys(merged, workspaceRootsSection, []string{
 		`"**/.git"`,
 		`"**/.git/**"`,
 	})
+	merged = filemerge.UpsertTOMLTableKey(merged, workspaceRootsSection, `"."`, `"write"`)
 	merged = filemerge.UpsertTOMLTableKey(merged, workspaceRootsSection, `".git/**"`, `"write"`)
 
 	for _, pattern := range []string{
 		`"**/.env"`,
 		`"**/.env.local"`,
 		`"**/.env.*.local"`,
+		`"**/.aws/credentials"`,
+		`"**/.config/gh/hosts.yml"`,
+		`"**/.credentials/**"`,
+		`"**/.ssh/**"`,
+		`"**/Library/Keychains/**"`,
+		`"**/credentials.json"`,
 		`"**/*.pem"`,
 		`"**/*.key"`,
-		`"**/secrets/*"`,
+		`"**/secrets/**"`,
 	} {
 		merged = filemerge.UpsertTOMLTableKey(merged, workspaceRootsSection, pattern, `"deny"`)
 	}
