@@ -9,13 +9,28 @@
  */
 
 import type { Plugin } from "@opencode-ai/plugin"
-import { writeFile, mkdir, rename } from "fs/promises"
+import { writeFile, mkdir, rename, rm } from "fs/promises"
 import { randomBytes } from "crypto"
 import { homedir } from "os"
 import path from "path"
 
+function isIgnorableFileRace(err: unknown) {
+  return typeof err === "object" && err !== null && "code" in err && (err as { code?: string }).code === "ENOENT"
+}
+
+async function removeOwnTempFile(tmpPath: string) {
+  try {
+    await rm(tmpPath, { force: true })
+  } catch (err) {
+    if (!isIgnorableFileRace(err)) {
+      console.error("[model-variants] temp cleanup failed:", err)
+    }
+  }
+}
+
 export const ModelVariantsPlugin: Plugin = async (input) => {
   async function refreshVariantsCache() {
+    let tmpPath: string | undefined
     try {
       const result = await input.client.provider.list()
       const data = (result as any).data ?? result
@@ -41,16 +56,23 @@ export const ModelVariantsPlugin: Plugin = async (input) => {
       // a previous run alive after providers stop reporting variants.
       //
       // The tmp path includes a per-invocation random suffix because OpenCode
-      // loads the plugin twice within the same process when started with
-      // `--port` (or `opencode web`). Both loads share the same PID and the
-      // same homedir, so a fixed `.tmp` name races with itself and the second
-      // rename() fails with ENOENT. See issue #766.
+      // can load this plugin more than once in the same process when started
+      // with `--port` (or `opencode web`). Those invocations share the same
+      // PID and homedir, so a fixed `.tmp` path lets concurrent writes race
+      // over the same file. A unique tmp path keeps each invocation isolated;
+      // the finally block below removes this invocation's tmp file if the
+      // write path fails before rename consumes it. See issue #766.
       const finalPath = path.join(cacheDir, "model-variants.json")
-      const tmpPath = `${finalPath}.${randomBytes(3).toString("hex")}.tmp`
+      tmpPath = path.join(cacheDir, `model-variants.json.${randomBytes(3).toString("hex")}.tmp`)
       await writeFile(tmpPath, JSON.stringify(variants, null, 2))
       await rename(tmpPath, finalPath)
+      tmpPath = undefined
     } catch (err) {
       console.error("[model-variants] cache refresh failed:", err)
+    } finally {
+      if (tmpPath) {
+        await removeOwnTempFile(tmpPath)
+      }
     }
   }
 
