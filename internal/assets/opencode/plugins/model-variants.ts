@@ -14,6 +14,8 @@ import { randomBytes } from "crypto"
 import { homedir } from "os"
 import path from "path"
 
+const MODEL_VARIANTS_CACHE_FILE = "model-variants.json"
+
 function isIgnorableFileRace(err: unknown) {
   return typeof err === "object" && err !== null && "code" in err && (err as { code?: string }).code === "ENOENT"
 }
@@ -62,8 +64,8 @@ export const ModelVariantsPlugin: Plugin = async (input) => {
       // over the same file. A unique tmp path keeps each invocation isolated;
       // the finally block below removes this invocation's tmp file if the
       // write path fails before rename consumes it. See issue #766.
-      const finalPath = path.join(cacheDir, "model-variants.json")
-      tmpPath = path.join(cacheDir, `model-variants.json.${randomBytes(3).toString("hex")}.tmp`)
+      const finalPath = path.join(cacheDir, MODEL_VARIANTS_CACHE_FILE)
+      tmpPath = path.join(cacheDir, `${MODEL_VARIANTS_CACHE_FILE}.${randomBytes(3).toString("hex")}.tmp`)
       await writeFile(tmpPath, JSON.stringify(variants, null, 2))
       await rename(tmpPath, finalPath)
       tmpPath = undefined

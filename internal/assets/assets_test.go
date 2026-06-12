@@ -344,7 +344,15 @@ func TestModelVariantsPluginContract(t *testing.T) {
 	// suffix (randomBytes) to be unique across both loads, and it must be
 	// constructed from cacheDir plus the cache basename so this invocation can
 	// track and clean only its own temp file if the write path fails.
-	tmpPathPattern := regexp.MustCompile("tmpPath\\s*=\\s*path\\.join\\(\\s*cacheDir\\s*,\\s*`model-variants\\.json\\.\\$\\{\\s*randomBytes\\([^)]*\\)\\s*\\.\\s*toString\\(\\s*[\"']hex[\"']\\s*\\)\\s*\\}\\.tmp`\\s*\\)")
+	for _, want := range []string{
+		`const MODEL_VARIANTS_CACHE_FILE = "model-variants.json"`,
+		"const finalPath = path.join(cacheDir, MODEL_VARIANTS_CACHE_FILE)",
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("model-variants.ts missing constant-based cache path contract %q", want)
+		}
+	}
+	tmpPathPattern := regexp.MustCompile("tmpPath\\s*=\\s*path\\.join\\(\\s*cacheDir\\s*,\\s*`\\$\\{\\s*MODEL_VARIANTS_CACHE_FILE\\s*\\}\\.\\$\\{\\s*randomBytes\\([^)]*\\)\\s*\\.\\s*toString\\(\\s*[\"']hex[\"']\\s*\\)\\s*\\}\\.tmp`\\s*\\)")
 	if !tmpPathPattern.MatchString(src) {
 		t.Errorf("model-variants.ts tmp path must use path.join(cacheDir, randomized basename) to be unique across plugin double-loads within the same process")
 	}
