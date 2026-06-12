@@ -52,18 +52,9 @@ export const ModelVariantsPlugin: Plugin = async (input) => {
       const cacheDir = path.join(homedir(), ".gentle-ai", "cache")
       await mkdir(cacheDir, { recursive: true })
 
-      // Atomic write: write to .tmp then rename. rename() is atomic on POSIX,
-      // so concurrent readers (e.g. `gentle-ai sync`) never see a partial JSON.
-      // Always write — even when empty — to avoid leaving a stale cache from
-      // a previous run alive after providers stop reporting variants.
-      //
-      // The tmp path includes a per-invocation random suffix because OpenCode
-      // can load this plugin more than once in the same process when started
-      // with `--port` (or `opencode web`). Those invocations share the same
-      // PID and homedir, so a fixed `.tmp` path lets concurrent writes race
-      // over the same file. A unique tmp path keeps each invocation isolated;
-      // the finally block below removes this invocation's tmp file if the
-      // write path fails before rename consumes it. See issue #766.
+      // Always write through a per-invocation tmp file before renaming, so
+      // readers never see partial JSON and concurrent plugin loads do not
+      // race over the same tmp path. See issue #766.
       const finalPath = path.join(cacheDir, MODEL_VARIANTS_CACHE_FILE)
       tmpPath = path.join(cacheDir, `${MODEL_VARIANTS_CACHE_FILE}.${randomBytes(3).toString("hex")}.tmp`)
       await writeFile(tmpPath, JSON.stringify(variants, null, 2))
