@@ -1,4 +1,4 @@
-// Package versions centralizes pinned npm package versions so Renovate can
+// Package versions centralizes pinned external package versions so Renovate can
 // auto-PR bumps. The marker comments are machine-readable directives consumed
 // by the customManager defined in renovate.json — keep them in the exact form
 // `// renovate: datasource=<ds> depName=<name>` immediately above each const.
@@ -26,4 +26,7 @@ const GeminiCLI = "0.41.2"
 const Context7MCP = "2.2.5"
 
 // renovate: datasource=npm depName=gentle-engram
-const GentleEngram = "0.1.4"
+const GentleEngram = "0.1.8"
+
+// renovate: datasource=github-releases depName=Gentleman-Programming/engram
+const EngramCore = "1.16.3"

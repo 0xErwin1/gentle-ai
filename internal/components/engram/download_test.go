@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/internal/versions"
 )
 
 // --- test helpers ---
@@ -257,7 +258,7 @@ func TestDownloadLatestBinaryLinux(t *testing.T) {
 		t.Skip("this test verifies Linux path behaviour, not applicable on Windows")
 	}
 
-	server := makeServerWithFakeTarGz(t, "1.3.0")
+	server := makeServerWithFakeTarGz(t, versions.EngramCore)
 	defer server.Close()
 
 	// Override the HTTP client and the base URL for GitHub API.
@@ -303,7 +304,7 @@ func TestDownloadLatestBinaryLinux(t *testing.T) {
 // --- TestDownloadLatestBinaryWindows ---
 
 func TestDownloadLatestBinaryWindows(t *testing.T) {
-	server := makeServerWithFakeZip(t, "1.3.0")
+	server := makeServerWithFakeZip(t, versions.EngramCore)
 	defer server.Close()
 
 	origClient := engramHTTPClient
@@ -348,7 +349,7 @@ func TestDownloadLatestBinaryWindows(t *testing.T) {
 
 // --- TestDownloadLatestBinaryAPIError ---
 
-func TestDownloadLatestBinaryAPIError(t *testing.T) {
+func TestDownloadLatestBinaryDownloadError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -366,12 +367,12 @@ func TestDownloadLatestBinaryAPIError(t *testing.T) {
 	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
 	_, err := DownloadLatestBinary(profile)
 	if err == nil {
-		t.Fatal("expected error when GitHub API returns 500, got nil")
+		t.Fatal("expected error when pinned release download returns 500, got nil")
 	}
 }
 
-func TestDownloadLatestBinarySkipsLatestReleaseWithoutBinaryAssets(t *testing.T) {
-	const binaryVersion = "1.15.13"
+func TestDownloadLatestBinaryUsesPinnedEngramCoreRelease(t *testing.T) {
+	binaryVersion := versions.EngramCore
 
 	tarContent := buildFakeTarGz(t, "engram")
 	// Build checksums.txt covering all linux arches so the test is arch-agnostic.
@@ -382,32 +383,9 @@ func TestDownloadLatestBinarySkipsLatestReleaseWithoutBinaryAssets(t *testing.T)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.Contains(r.URL.Path, "releases/latest"):
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{
-				"tag_name": "pi-v0.1.7",
-				"assets":   []any{},
-			})
-		case strings.Contains(r.URL.Path, "releases") && r.URL.RawQuery == "per_page=20":
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode([]map[string]any{
-				{
-					"tag_name":   "pi-v0.1.7",
-					"draft":      false,
-					"prerelease": false,
-					"assets":     []any{},
-				},
-				{
-					"tag_name":   "v" + binaryVersion,
-					"draft":      false,
-					"prerelease": false,
-					"assets": []map[string]string{
-						{"name": "checksums.txt"},
-						{"name": "engram_" + binaryVersion + "_linux_amd64.tar.gz"},
-					},
-				},
-			})
-		case strings.HasSuffix(r.URL.Path, "checksums.txt"):
+		case strings.Contains(r.URL.Path, "/releases/latest") || strings.Contains(r.URL.RawQuery, "per_page=20"):
+			t.Fatalf("DownloadLatestBinary() should not query latest releases when using pinned core Engram version: %s?%s", r.URL.Path, r.URL.RawQuery)
+		case strings.HasSuffix(r.URL.Path, "/releases/download/v"+binaryVersion+"/checksums.txt"):
 			w.Header().Set("Content-Type", "text/plain")
 			fmt.Fprint(w, checksums)
 		case strings.Contains(r.URL.Path, "/releases/download/v"+binaryVersion+"/engram_"+binaryVersion+"_linux_"):
@@ -445,9 +423,9 @@ func TestDownloadLatestBinarySkipsLatestReleaseWithoutBinaryAssets(t *testing.T)
 	}
 }
 
-func TestDownloadLatestBinaryReleaseListFallsBackToAnonymousWhenTokenGets403(t *testing.T) {
+func TestDownloadLatestBinaryUsesPinnedReleaseWhenTokenIsSet(t *testing.T) {
 	const fakeToken = "ci-token"
-	const binaryVersion = "1.15.13"
+	binaryVersion := versions.EngramCore
 
 	tarContent := buildFakeTarGz(t, "engram")
 	checksums := ""
@@ -457,29 +435,8 @@ func TestDownloadLatestBinaryReleaseListFallsBackToAnonymousWhenTokenGets403(t *
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.Contains(r.URL.Path, "releases/latest"):
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{
-				"tag_name": "pi-v0.1.7",
-				"assets":   []any{},
-			})
-		case strings.Contains(r.URL.Path, "releases") && r.URL.RawQuery == "per_page=20":
-			if r.Header.Get("Authorization") == "Bearer "+fakeToken {
-				w.WriteHeader(http.StatusForbidden)
-				return
-			}
-
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode([]map[string]any{
-				{
-					"tag_name":   "v" + binaryVersion,
-					"draft":      false,
-					"prerelease": false,
-					"assets": []map[string]string{
-						{"name": "engram_" + binaryVersion + "_linux_amd64.tar.gz"},
-					},
-				},
-			})
+		case strings.Contains(r.URL.Path, "/releases/latest") || strings.Contains(r.URL.RawQuery, "per_page=20"):
+			t.Fatalf("DownloadLatestBinary() should not query latest releases when using pinned core Engram version: %s?%s", r.URL.Path, r.URL.RawQuery)
 		case strings.HasSuffix(r.URL.Path, "checksums.txt"):
 			w.Header().Set("Content-Type", "text/plain")
 			fmt.Fprint(w, checksums)
@@ -522,7 +479,7 @@ func TestDownloadLatestBinaryReleaseListFallsBackToAnonymousWhenTokenGets403(t *
 }
 
 func TestDownloadLatestBinaryWindowsStopsEngramBeforeReplace(t *testing.T) {
-	const version = "1.4.0"
+	version := versions.EngramCore
 	server := makeServerWithFakeZip(t, version)
 	defer server.Close()
 
@@ -565,7 +522,7 @@ func TestDownloadLatestBinaryWindowsStopsEngramBeforeReplace(t *testing.T) {
 }
 
 func TestDownloadLatestBinaryWindowsStopFailureAbortsBeforeReplace(t *testing.T) {
-	const version = "1.4.1"
+	version := versions.EngramCore
 	server := makeServerWithFakeZip(t, version)
 	defer server.Close()
 
@@ -598,9 +555,9 @@ func TestDownloadLatestBinaryWindowsStopFailureAbortsBeforeReplace(t *testing.T)
 	}
 }
 
-func TestDownloadLatestBinaryFallsBackToAnonymousWhenTokenGets403(t *testing.T) {
+func TestDownloadLatestBinaryUsesPinnedReleaseWithoutLatestAPIFallback(t *testing.T) {
 	const fakeToken = "ci-token"
-	const version = "1.3.0"
+	version := versions.EngramCore
 
 	tarContent := buildFakeTarGz(t, "engram")
 	checksums := ""
@@ -612,13 +569,8 @@ func TestDownloadLatestBinaryFallsBackToAnonymousWhenTokenGets403(t *testing.T) 
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case strings.Contains(r.URL.Path, "releases/latest"):
-			if r.Header.Get("Authorization") == "Bearer "+fakeToken {
-				w.WriteHeader(http.StatusForbidden)
-				return
-			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]string{"tag_name": "v" + version})
+		case strings.Contains(r.URL.Path, "/releases/latest") || strings.Contains(r.URL.RawQuery, "per_page=20"):
+			t.Fatalf("DownloadLatestBinary() should not query latest releases when using pinned core Engram version: %s?%s", r.URL.Path, r.URL.RawQuery)
 		case strings.HasSuffix(r.URL.Path, "checksums.txt"):
 			w.Header().Set("Content-Type", "text/plain")
 			fmt.Fprint(w, checksums)
@@ -671,7 +623,7 @@ func TestDownloadLatestBinaryFallsBackToAnonymousWhenTokenGets403(t *testing.T) 
 //   - digest mismatch: checksums.txt lists wrong digest → fail closed
 //   - malformed checksums.txt: content has no parseable entries → fail closed
 func TestEngramChecksumVerification(t *testing.T) {
-	const version = "1.0.0"
+	version := versions.EngramCore
 
 	// tarContent is a real .tar.gz archive used across sub-tests.
 	tarContent := buildFakeTarGz(t, "engram")

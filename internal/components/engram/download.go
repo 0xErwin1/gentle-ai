@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/system"
+	"github.com/gentleman-programming/gentle-ai/internal/versions"
 )
 
 const (
@@ -36,7 +37,7 @@ var (
 	engramStopProcessesFn = stopEngramProcesses
 )
 
-// DownloadLatestBinary fetches the latest engram release from GitHub and
+// DownloadLatestBinary fetches the pinned engram release from GitHub and
 // installs it to the appropriate directory for the given platform.
 // It returns the full path to the installed binary.
 //
@@ -48,11 +49,9 @@ var (
 func DownloadLatestBinary(profile system.PlatformProfile) (string, error) {
 	ctx := context.Background()
 
-	// 1. Fetch the latest version tag from GitHub API.
-	version, err := fetchLatestEngramVersion()
-	if err != nil {
-		return "", fmt.Errorf("fetch latest engram version: %w", err)
-	}
+	// 1. Use the pinned core Engram version. Beta/nightly installs are handled
+	// separately and still install Engram from @main.
+	version := versions.EngramCore
 
 	// 2. Determine binary name and archive URL.
 	goos := profile.OS
