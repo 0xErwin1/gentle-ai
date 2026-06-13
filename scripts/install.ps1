@@ -7,6 +7,7 @@
 .DESCRIPTION
     Downloads and installs the gentle-ai binary for Windows.
     Supports installation via Go or pre-built binary from GitHub Releases.
+    Accepted channels: stable (default), beta, nightly.
 
 .EXAMPLE
     # Run directly:
@@ -19,6 +20,9 @@
     # Force a specific method:
     .\install.ps1 -Method binary
     .\install.ps1 -Method go
+
+    # Install the beta channel from main:
+    .\install.ps1 -Channel beta
 
     # Skip checksum verification (not recommended):
     .\install.ps1 -Method binary -Insecure
@@ -110,7 +114,15 @@ function Test-Prerequisites {
 # ============================================================================
 
 function Get-InstallMethod {
-    param([string]$Forced)
+    param([string]$Forced, [string]$Channel)
+
+    if ($Channel -eq "beta") {
+        if ($Forced -ne "auto" -and $Forced -ne "go") {
+            Stop-WithError "-Channel beta installs Gentle AI from main and only supports -Method go"
+        }
+        Write-Info "Using beta channel — will install $BINARY_NAME from main via go install"
+        return "go"
+    }
 
     if ($Forced -ne "auto") {
         Write-Info "Using forced method: $Forced"
@@ -131,9 +143,12 @@ function Get-InstallMethod {
 # ============================================================================
 
 function Install-ViaGo {
+    param([string]$Channel = "stable")
+
     Write-Step "Installing via go install"
 
-    $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/cmd/$BINARY_NAME@latest"
+    $version = if ($Channel -eq "beta") { "main" } else { "latest" }
+    $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/cmd/$BINARY_NAME@$version"
     Write-Info "Running: go install $goPackage"
 
     & go install $goPackage
@@ -346,11 +361,17 @@ function Test-Installation {
 # ============================================================================
 
 function Show-NextSteps {
+    param([string]$Channel = "stable")
+
     Write-Host ""
     Write-Host "Installation complete!" -ForegroundColor Green
     Write-Host ""
     Write-Host "Next steps:" -ForegroundColor White
-    Write-Host "  1. Run '$BINARY_NAME' to start the TUI installer" -ForegroundColor Cyan
+    if ($Channel -eq "beta") {
+        Write-Host ('  1. Run ''$env:GENTLE_AI_CHANNEL = "beta"; {0} install'' to keep using the beta channel' -f $BINARY_NAME) -ForegroundColor Cyan
+    } else {
+        Write-Host "  1. Run '$BINARY_NAME' to start the TUI installer" -ForegroundColor Cyan
+    }
     Write-Host "  2. Select your AI agent(s) and tools to configure" -ForegroundColor Cyan
     Write-Host "  3. Follow the interactive prompts" -ForegroundColor Cyan
     Write-Host ""
@@ -369,6 +390,9 @@ function Main {
         [ValidateSet("auto", "go", "binary")]
         [string]$Method = "auto",
 
+        [ValidateSet("stable", "beta", "nightly")]
+        [string]$Channel = $(if ($env:GENTLE_AI_CHANNEL) { $env:GENTLE_AI_CHANNEL } else { "stable" }),
+
         [string]$InstallDir = "",
 
         [switch]$Insecure
@@ -379,15 +403,17 @@ function Main {
     $arch = Get-Platform
     Test-Prerequisites
 
-    $installMethod = Get-InstallMethod -Forced $Method
+    if ($Channel -eq "nightly") { $Channel = "beta" }
+
+    $installMethod = Get-InstallMethod -Forced $Method -Channel $Channel
 
     switch ($installMethod) {
-        "go"     { Install-ViaGo }
+        "go"     { Install-ViaGo -Channel $Channel }
         "binary" { Install-ViaBinary -Arch $arch }
     }
 
     Test-Installation
-    Show-NextSteps
+    Show-NextSteps -Channel $Channel
 }
 
 Main @args

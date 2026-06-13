@@ -54,6 +54,7 @@ var (
 	runCommand          = executeCommand
 	cmdLookPath         = exec.LookPath
 	streamCommandOutput = true
+	goEnv               = defaultGoEnv
 
 	// ggaAvailableCheck is an optional override for ggaAvailable behavior.
 	// When set, it is called instead of the default filesystem check.
@@ -126,7 +127,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 				"To install only into the current workspace, rerun with --scope=workspace.\n\n")
 	}
 
-	runtime, err := newInstallRuntime(homeDir, input.Scope, input.Selection, resolved, profile)
+	runtime, err := newInstallRuntime(homeDir, input.Scope, input.Channel, input.Selection, resolved, profile)
 	if err != nil {
 		return result, err
 	}
@@ -274,6 +275,73 @@ func goInstallBinDir() string {
 	return filepath.Join("~", "go", "bin")
 }
 
+func defaultGoEnv(keys ...string) (map[string]string, error) {
+	args := append([]string{"env"}, keys...)
+	out, err := exec.Command("go", args...).Output()
+	if err != nil {
+		return nil, err
+	}
+
+	lines := strings.Split(strings.TrimRight(string(out), "\r\n"), "\n")
+	values := make(map[string]string, len(keys))
+	for i, key := range keys {
+		if i < len(lines) {
+			values[key] = strings.TrimSpace(lines[i])
+		}
+	}
+	return values, nil
+}
+
+func goInstallBinDirFromGoEnv() (string, error) {
+	values, err := goEnv("GOBIN", "GOPATH")
+	if err != nil {
+		return "", err
+	}
+	if gobin := strings.TrimSpace(values["GOBIN"]); gobin != "" {
+		return gobin, nil
+	}
+	if gopath := strings.TrimSpace(values["GOPATH"]); gopath != "" {
+		return filepath.Join(gopath, "bin"), nil
+	}
+	return "", fmt.Errorf("go env returned empty GOBIN and GOPATH")
+}
+
+func installBetaEngramFromMain() (string, error) {
+	const pkg = "github.com/Gentleman-Programming/engram/cmd/engram@main"
+	if err := runCommand("go", "install", pkg); err != nil {
+		return "", err
+	}
+
+	binDir, err := goInstallBinDirFromGoEnv()
+	if err != nil {
+		return "", fmt.Errorf("resolve go install bin dir: %w", err)
+	}
+
+	binaryName := "engram"
+	if runtime.GOOS == "windows" {
+		binaryName += ".exe"
+	}
+	binaryPath := filepath.Join(binDir, binaryName)
+	if err := prependToPath(binDir); err != nil {
+		return "", err
+	}
+	return binaryPath, nil
+}
+
+func prependToPath(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	if isInPATH(dir) {
+		return nil
+	}
+	path := os.Getenv("PATH")
+	if path == "" {
+		return osSetenv("PATH", dir)
+	}
+	return osSetenv("PATH", dir+string(os.PathListSeparator)+path)
+}
+
 // isInPATH reports whether dir is present in the current PATH.
 func isInPATH(dir string) bool {
 	for _, entry := range filepath.SplitList(os.Getenv("PATH")) {
@@ -313,6 +381,7 @@ type installRuntime struct {
 	selection    model.Selection
 	resolved     planner.ResolvedPlan
 	profile      system.PlatformProfile
+	channel      InstallChannel
 	backupRoot   string
 	state        *runtimeState
 }
@@ -321,7 +390,7 @@ type runtimeState struct {
 	manifest backup.Manifest
 }
 
-func newInstallRuntime(homeDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile) (*installRuntime, error) {
+func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChannel, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile) (*installRuntime, error) {
 	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
 	if err := os.MkdirAll(backupRoot, 0o755); err != nil {
 		return nil, fmt.Errorf("create backup root directory %q: %w", backupRoot, err)
@@ -337,6 +406,7 @@ func newInstallRuntime(homeDir string, scope InstallScope, selection model.Selec
 		selection:    selection,
 		resolved:     resolved,
 		profile:      profile,
+		channel:      channel,
 		backupRoot:   backupRoot,
 		state:        &runtimeState{},
 	}, nil
@@ -391,6 +461,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			agents:       r.resolved.Agents,
 			selection:    r.selection,
 			profile:      r.profile,
+			channel:      r.channel,
 		})
 	}
 
@@ -571,6 +642,7 @@ type componentApplyStep struct {
 	agents       []model.AgentID
 	selection    model.Selection
 	profile      system.PlatformProfile
+	channel      InstallChannel
 }
 
 func (s componentApplyStep) ID() string {
@@ -595,7 +667,14 @@ func (s componentApplyStep) Run() error {
 
 	switch s.component {
 	case model.ComponentEngram:
-		if _, err := cmdLookPath("engram"); err != nil {
+		engramCommand := "engram"
+		if s.channel.IsBeta() {
+			binaryPath, err := installBetaEngramFromMain()
+			if err != nil {
+				return fmt.Errorf("install beta engram from main: %w", err)
+			}
+			engramCommand = binaryPath
+		} else if _, err := cmdLookPath("engram"); err != nil {
 			// Engram not on PATH — install it.
 			if s.profile.PackageManager == "brew" {
 				// macOS (or Linux with Homebrew): use brew tap + brew install.
@@ -630,7 +709,7 @@ func (s componentApplyStep) Run() error {
 			if engram.ShouldAttemptSetup(setupMode, adapter.Agent()) {
 				slug, _ := engram.SetupAgentSlug(adapter.Agent())
 				if _, seen := attemptedSlugs[slug]; !seen {
-					if err := runCommand("engram", "setup", slug); err != nil {
+					if err := runCommand(engramCommand, "setup", slug); err != nil {
 						if setupStrict {
 							return fmt.Errorf("engram setup for %q: %w", adapter.Agent(), err)
 						}
@@ -819,7 +898,12 @@ func BuildRealStagePlan(homeDir string, scope InstallScope, selection model.Sele
 		return pipeline.StagePlan{}, fmt.Errorf("create backup root directory %q: %w", backupRoot, err)
 	}
 
-	runtime, err := newInstallRuntime(homeDir, scope, selection, resolved, profile)
+	channel, err := ResolveInstallChannel("")
+	if err != nil {
+		return pipeline.StagePlan{}, err
+	}
+
+	runtime, err := newInstallRuntime(homeDir, scope, channel, selection, resolved, profile)
 	if err != nil {
 		return pipeline.StagePlan{}, err
 	}

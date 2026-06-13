@@ -221,6 +221,27 @@ func TestRunArgsUninstallBypassesPlatformValidation(t *testing.T) {
 	// If we got here, uninstall bypassed the platform validation.
 }
 
+func TestRunArgsInstallHelpPrintsInstallSpecificHelp(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error {
+		return fmt.Errorf("platform validation should not run for install help")
+	}
+
+	var buf bytes.Buffer
+	err := RunArgs([]string{"install", "--help"}, &buf)
+	if err != nil {
+		t.Fatalf("RunArgs(install --help) error = %v", err)
+	}
+
+	out := buf.String()
+	for _, want := range []string{"--channel", "beta", "nightly", "GENTLE_AI_CHANNEL"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("install help missing %q; output:\n%s", want, out)
+		}
+	}
+}
+
 func TestRunArgsSDDStatusIsDispatchedBeforePlatformValidation(t *testing.T) {
 	origEnsure := ensureCurrentOSSupported
 	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })

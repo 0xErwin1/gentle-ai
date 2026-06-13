@@ -94,6 +94,7 @@ Usage: install.sh [OPTIONS]
 
 Options:
   --method METHOD   Force install method: brew, go, binary (default: auto-detect)
+  --channel CHANNEL Gentle AI channel: stable (default), beta, or nightly (env: GENTLE_AI_CHANNEL)
   --dir DIR         Custom install directory for binary method
   --insecure        Skip checksum verification (not recommended)
   -h, --help        Show this help
@@ -106,6 +107,7 @@ Install methods (auto-detected in priority order):
 Examples:
   curl -sL https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPO}/main/scripts/install.sh | bash
   ./install.sh --method binary
+  ./install.sh --channel beta
   ./install.sh --method binary --dir \$HOME/.local/bin
   ./install.sh --method binary --insecure   # skip checksum (not recommended)
 
@@ -184,6 +186,15 @@ check_prerequisites() {
 # ============================================================================
 
 detect_install_method() {
+    if [ "${CHANNEL}" = "beta" ]; then
+        if [ -n "${FORCE_METHOD:-}" ] && [ "${FORCE_METHOD}" != "go" ]; then
+            fatal "--channel beta installs Gentle AI from main and only supports --method go"
+        fi
+        INSTALL_METHOD="go"
+        info "Using beta channel — will install ${BINARY_NAME} from main via go install"
+        return
+    fi
+
     if [ -n "${FORCE_METHOD:-}" ]; then
         case "$FORCE_METHOD" in
             brew|go|binary) INSTALL_METHOD="$FORCE_METHOD" ;;
@@ -258,7 +269,11 @@ install_brew() {
 install_go() {
     step "Installing via go install"
 
-    local go_package="github.com/${GITHUB_OWNER,,}/${GITHUB_REPO}/cmd/${BINARY_NAME}@latest"
+    local version="latest"
+    if [ "${CHANNEL}" = "beta" ]; then
+        version="main"
+    fi
+    local go_package="github.com/${GITHUB_OWNER,,}/${GITHUB_REPO}/cmd/${BINARY_NAME}@${version}"
 
     info "Running: go install ${go_package}"
     if ! go install "$go_package"; then
@@ -493,7 +508,11 @@ print_next_steps() {
     echo -e "${GREEN}${BOLD}Installation complete!${NC}"
     echo ""
     echo -e "${BOLD}Next steps:${NC}"
-    echo -e "  ${CYAN}1.${NC} Run ${BOLD}${BINARY_NAME}${NC} to start the TUI installer"
+    if [ "${CHANNEL}" = "beta" ]; then
+        echo -e "  ${CYAN}1.${NC} Run ${BOLD}GENTLE_AI_CHANNEL=beta ${BINARY_NAME} install${NC} to keep using the beta channel"
+    else
+        echo -e "  ${CYAN}1.${NC} Run ${BOLD}${BINARY_NAME}${NC} to start the TUI installer"
+    fi
     echo -e "  ${CYAN}2.${NC} Select your AI agent(s) and tools to configure"
     echo -e "  ${CYAN}3.${NC} Follow the interactive prompts"
     echo ""
@@ -513,12 +532,17 @@ main() {
     FORCE_METHOD=""
     INSTALL_DIR=""
     INSECURE="false"
+    CHANNEL="${GENTLE_AI_CHANNEL:-stable}"
 
     while [ $# -gt 0 ]; do
         case "$1" in
             --method)
                 [ $# -lt 2 ] && fatal "--method requires an argument"
                 FORCE_METHOD="$2"; shift 2
+                ;;
+            --channel)
+                [ $# -lt 2 ] && fatal "--channel requires an argument"
+                CHANNEL="$2"; shift 2
                 ;;
             --dir)
                 [ $# -lt 2 ] && fatal "--dir requires an argument"
@@ -537,6 +561,14 @@ main() {
                 ;;
         esac
     done
+
+    case "${CHANNEL}" in
+        stable|beta|nightly) ;;
+        *) fatal "Unknown channel: ${CHANNEL}. Use: stable, beta, or nightly" ;;
+    esac
+    if [ "${CHANNEL}" = "nightly" ]; then
+        CHANNEL="beta"
+    fi
 
     print_banner
 

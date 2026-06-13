@@ -3,6 +3,7 @@ package cli
 import (
 	"flag"
 	"fmt"
+	"io"
 	"strings"
 )
 
@@ -14,7 +15,28 @@ type InstallFlags struct {
 	Preset     string
 	SDDMode    string
 	Scope      string
+	Channel    string
 	DryRun     bool
+}
+
+const installChannelHelp = "Gentle AI channel: stable (default), beta, or nightly (alias for beta) — env: GENTLE_AI_CHANNEL"
+
+func PrintInstallHelp(w io.Writer) {
+	fmt.Fprint(w, `USAGE
+  gentle-ai install [flags]
+
+FLAGS
+  --agent, --agents <list>           Agents to install
+  --component, --components <list>   Components to install
+  --skill, --skills <list>           Skills to install
+  --persona <name>                   Persona to apply
+  --preset <name>                    Preset to apply
+  --sdd-mode single|multi            SDD orchestrator mode
+  --scope global|workspace           Install scope (env: GENTLE_AI_INSTALL_SCOPE)
+  --channel stable|beta|nightly      Release channel; nightly is an alias for beta (env: GENTLE_AI_CHANNEL)
+  --dry-run                          Preview plan without executing
+  --help, -h                         Show this help
+`)
 }
 
 func ParseInstallFlags(args []string) (InstallFlags, error) {
@@ -32,6 +54,7 @@ func ParseInstallFlags(args []string) (InstallFlags, error) {
 	fs.StringVar(&opts.Preset, "preset", "", "preset to apply")
 	fs.StringVar(&opts.SDDMode, "sdd-mode", "", "SDD orchestrator mode: single or multi (default: single)")
 	fs.StringVar(&opts.Scope, "scope", "", "install scope: global (default) or workspace — env: GENTLE_AI_INSTALL_SCOPE")
+	fs.StringVar(&opts.Channel, "channel", "", installChannelHelp)
 	fs.BoolVar(&opts.DryRun, "dry-run", false, "preview plan without executing")
 
 	if err := fs.Parse(args); err != nil {

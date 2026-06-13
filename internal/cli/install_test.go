@@ -2,6 +2,7 @@ package cli
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -17,6 +18,7 @@ func TestParseInstallFlagsSupportsCSVAndRepeated(t *testing.T) {
 		"--skill", "sdd-apply",
 		"--persona", "neutral",
 		"--preset", "minimal",
+		"--channel", "beta",
 		"--dry-run",
 	})
 	if err != nil {
@@ -33,6 +35,15 @@ func TestParseInstallFlagsSupportsCSVAndRepeated(t *testing.T) {
 
 	if !flags.DryRun {
 		t.Fatalf("DryRun = false, want true")
+	}
+	if flags.Channel != "beta" {
+		t.Fatalf("Channel = %q, want beta", flags.Channel)
+	}
+}
+
+func TestInstallChannelHelpMentionsNightly(t *testing.T) {
+	if !strings.Contains(installChannelHelp, "nightly") {
+		t.Fatalf("installChannelHelp = %q, want nightly mentioned", installChannelHelp)
 	}
 }
 
@@ -76,6 +87,19 @@ func TestNormalizeInstallFlagsDefaults(t *testing.T) {
 
 	if !reflect.DeepEqual(input.Selection, want) {
 		t.Fatalf("selection = %#v, want %#v", input.Selection, want)
+	}
+	if input.Channel != ChannelStable {
+		t.Fatalf("Channel = %q, want %q", input.Channel, ChannelStable)
+	}
+}
+
+func TestNormalizeInstallFlagsChannelBeta(t *testing.T) {
+	input, err := NormalizeInstallFlags(InstallFlags{Channel: "beta"}, system.DetectionResult{})
+	if err != nil {
+		t.Fatalf("NormalizeInstallFlags() error = %v", err)
+	}
+	if input.Channel != ChannelBeta {
+		t.Fatalf("Channel = %q, want %q", input.Channel, ChannelBeta)
 	}
 }
 

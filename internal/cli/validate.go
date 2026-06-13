@@ -12,6 +12,7 @@ import (
 type InstallInput struct {
 	Selection model.Selection
 	Scope     InstallScope
+	Channel   InstallChannel
 	DryRun    bool
 }
 
@@ -63,7 +64,12 @@ func NormalizeInstallFlags(flags InstallFlags, detection system.DetectionResult)
 		return InstallInput{}, err
 	}
 
-	return InstallInput{Selection: selection, Scope: scope, DryRun: flags.DryRun}, nil
+	channel, err := ResolveInstallChannel(flags.Channel)
+	if err != nil {
+		return InstallInput{}, err
+	}
+
+	return InstallInput{Selection: selection, Scope: scope, Channel: channel, DryRun: flags.DryRun}, nil
 }
 
 func normalizePersona(value string) (model.PersonaID, error) {

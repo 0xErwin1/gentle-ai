@@ -70,6 +70,11 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunSDDStatus(args[1:], stdout)
 		case "sdd-continue":
 			return cli.RunSDDContinue(args[1:], stdout)
+		case "install":
+			if hasHelpFlag(args[1:]) {
+				cli.PrintInstallHelp(stdout)
+				return nil
+			}
 		}
 	}
 
@@ -195,6 +200,16 @@ func RunArgs(args []string, stdout io.Writer) error {
 	default:
 		return fmt.Errorf("unknown command %q — run 'gentle-ai help' for available commands", args[0])
 	}
+}
+
+func hasHelpFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "--help" || arg == "-h" {
+			return true
+		}
+	}
+
+	return false
 }
 
 func gentleAIUpgradeVersionFromTUI(finalModel tea.Model) (string, bool) {
