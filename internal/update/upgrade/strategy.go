@@ -303,12 +303,12 @@ func brewUpgrade(ctx context.Context, toolName string) error {
 	tapCmd.Stdin = nil
 	_ = tapCmd.Run()
 
-	// Trust only the Gentleman Programming formula being upgraded. Homebrew 6 can
+	// Trust only the Gentleman Programming artifact being upgraded. Homebrew 6 can
 	// require explicit trust for non-official taps; this is intentionally scoped to
-	// our formula, not the whole tap or third-party taps. Older Homebrew versions
+	// our formula/cask, not the whole tap or third-party taps. Older Homebrew versions
 	// may not support `brew trust`, so this is non-fatal and the upgrade output
 	// below remains the source of truth.
-	trustCmd := execCommand("brew", "trust", "--formula", gentlemanProgrammingFormulaRef(toolName))
+	trustCmd := execCommand("brew", "trust", homebrewTrustFlag(toolName), gentlemanProgrammingTapRef(toolName))
 	trustCmd.Stdin = nil
 	_ = trustCmd.Run()
 
@@ -326,8 +326,15 @@ func brewUpgrade(ctx context.Context, toolName string) error {
 	return nil
 }
 
-func gentlemanProgrammingFormulaRef(toolName string) string {
+func gentlemanProgrammingTapRef(toolName string) string {
 	return "gentleman-programming/tap/" + strings.TrimSpace(toolName)
+}
+
+func homebrewTrustFlag(toolName string) string {
+	if strings.TrimSpace(toolName) == "engram" {
+		return "--cask"
+	}
+	return "--formula"
 }
 
 func formatBrewUpgradeError(toolName string, err error, output string) error {
@@ -340,10 +347,19 @@ func formatBrewUpgradeError(toolName string, err error, output string) error {
 
 func homebrewFailureAdvice(toolName string, output string) string {
 	lower := strings.ToLower(output)
-	formula := gentlemanProgrammingFormulaRef(toolName)
+	ref := gentlemanProgrammingTapRef(toolName)
 
 	if strings.Contains(lower, "untrusted tap") || strings.Contains(lower, "tap trust is required") || strings.Contains(lower, "homebrew_require_tap_trust") {
-		return fmt.Sprintf("Homebrew requires explicit trust for external taps. Trust only this Gentle AI formula, then retry:\n  brew trust --formula %s\n  brew upgrade %s", formula, toolName)
+		flag := homebrewTrustFlag(toolName)
+		artifact := strings.TrimPrefix(flag, "--")
+		if strings.Contains(lower, "--cask") || strings.Contains(lower, "load cask") {
+			flag = "--cask"
+			artifact = "cask"
+		} else if strings.Contains(lower, "--formula") || strings.Contains(lower, "load formula") {
+			flag = "--formula"
+			artifact = "formula"
+		}
+		return fmt.Sprintf("Homebrew requires explicit trust for external taps. Trust only this Gentle AI %s, then retry:\n  brew trust %s %s\n  brew upgrade %s", artifact, flag, ref, toolName)
 	}
 
 	if strings.Contains(lower, "bubblewrap is installed but cannot create a rootless sandbox") ||

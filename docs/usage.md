@@ -161,6 +161,18 @@ After upgrading, run `gentle-ai sync` to refresh all managed assets to the new v
 
 If GitHub rate-limits update checks, export `GITHUB_TOKEN` or `GH_TOKEN` before running `gentle-ai update`/`upgrade`.
 
+If Homebrew refuses an upgrade from an untrusted tap, trust only the artifact Homebrew names and retry the upgrade:
+
+```bash
+# Formula tools, for example gentle-ai
+brew trust --formula gentleman-programming/tap/gentle-ai
+brew upgrade gentle-ai
+
+# Cask tools, for example engram
+brew trust --cask gentleman-programming/tap/engram
+brew upgrade engram
+```
+
 Set `GENTLE_AI_CONFIRM_UPDATE=1` to have `gentle-ai` prompt for confirmation (`y/N`) before applying a self-update. Default behavior (no env var) applies the update without an interactive prompt.
 
 Set `GENTLE_AI_NO_SELF_UPDATE=1` to skip the automatic self-update check entirely. `GENTLE_AI_SELF_UPDATE_DONE` is an internal loop guard used after re-exec and should not be set manually.

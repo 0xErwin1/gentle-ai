@@ -734,7 +734,7 @@ func TestBrewUpgrade_UpdateFailureIsNonFatal(t *testing.T) {
 // --- TestBrewUpgrade_TapsBeforeUpdateAndUpgrade ---
 
 // TestBrewUpgrade_TapsAndTrustsBeforeUpdateAndUpgrade verifies that brewUpgrade calls
-// `brew tap Gentleman-Programming/homebrew-tap` and scoped formula trust BEFORE
+// `brew tap Gentleman-Programming/homebrew-tap` and scoped artifact trust BEFORE
 // `brew update` and `brew upgrade <toolName>`. This makes the upgrade idempotent
 // when a user has lost the tap and works with Homebrew tap trust enforcement.
 func TestBrewUpgrade_TapsAndTrustsBeforeUpdateAndUpgrade(t *testing.T) {
@@ -770,14 +770,35 @@ func TestBrewUpgrade_TapsAndTrustsBeforeUpdateAndUpgrade(t *testing.T) {
 	if calls[1].subcommand != "trust" {
 		t.Errorf("second brew call = %q, want %q", calls[1].subcommand, "trust")
 	}
-	if len(calls[1].args) != 2 || calls[1].args[0] != "--formula" || calls[1].args[1] != "gentleman-programming/tap/engram" {
-		t.Errorf("second brew call args = %v, want [--formula gentleman-programming/tap/engram]", calls[1].args)
+	if len(calls[1].args) != 2 || calls[1].args[0] != "--cask" || calls[1].args[1] != "gentleman-programming/tap/engram" {
+		t.Errorf("second brew call args = %v, want [--cask gentleman-programming/tap/engram]", calls[1].args)
 	}
 	if calls[2].subcommand != "update" {
 		t.Errorf("third brew call = %q, want %q", calls[2].subcommand, "update")
 	}
 	if calls[3].subcommand != "upgrade" {
 		t.Errorf("fourth brew call = %q, want %q", calls[3].subcommand, "upgrade")
+	}
+}
+
+func TestBrewUpgrade_FormulaToolUsesFormulaTrust(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	var trustArgs []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		if name == "brew" && len(args) > 0 && args[0] == "trust" {
+			trustArgs = append([]string(nil), args[1:]...)
+		}
+		return mockCmd("echo", "ok")
+	}
+
+	if err := brewUpgrade(context.Background(), "gentle-ai"); err != nil {
+		t.Fatalf("brewUpgrade: unexpected error: %v", err)
+	}
+
+	if len(trustArgs) != 2 || trustArgs[0] != "--formula" || trustArgs[1] != "gentleman-programming/tap/gentle-ai" {
+		t.Fatalf("brew trust args = %v, want [--formula gentleman-programming/tap/gentle-ai]", trustArgs)
 	}
 }
 
@@ -792,6 +813,23 @@ Run brew trust --formula gentleman-programming/tap/gentle-ai to trust it.`
 		if !strings.Contains(advice, want) {
 			t.Fatalf("tap trust advice missing %q:\n%s", want, advice)
 		}
+	}
+}
+
+func TestHomebrewFailureAdviceCaskTapTrust(t *testing.T) {
+	output := `Error: Refusing to load cask gentleman-programming/tap/engram from untrusted tap.
+Run brew trust --cask gentleman-programming/tap/engram to trust it.`
+	advice := homebrewFailureAdvice("engram", output)
+	for _, want := range []string{
+		"brew trust --cask gentleman-programming/tap/engram",
+		"brew upgrade engram",
+	} {
+		if !strings.Contains(advice, want) {
+			t.Fatalf("cask tap trust advice missing %q:\n%s", want, advice)
+		}
+	}
+	if strings.Contains(advice, "--formula") {
+		t.Fatalf("cask tap trust advice must not suggest --formula:\n%s", advice)
 	}
 }
 
