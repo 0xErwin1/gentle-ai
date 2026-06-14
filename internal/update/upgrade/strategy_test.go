@@ -90,6 +90,85 @@ func TestRunStrategy_GoInstallUpgrade(t *testing.T) {
 	}
 }
 
+func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	var gotName string
+	var gotArgs []string
+	var gotCmd *exec.Cmd
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		gotName = name
+		gotArgs = args
+		gotCmd = mockCmd("true")
+		return gotCmd
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gentle-ai",
+			Owner:         "Gentleman-Programming",
+			Repo:          "gentle-ai",
+			InstallMethod: update.InstallBinary,
+		},
+		LatestVersion: "main@972997650b51",
+		Status:        update.UpdateAvailable,
+	}
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt", Supported: true}
+
+	_, err := runStrategy(context.Background(), r, profile)
+	if err != nil {
+		t.Fatalf("runStrategy beta gentle-ai: unexpected error: %v", err)
+	}
+
+	if gotName != "go" {
+		t.Fatalf("exec name = %q, want %q", gotName, "go")
+	}
+	wantArgs := []string{"install", "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@main"}
+	if len(gotArgs) != len(wantArgs) || gotArgs[0] != wantArgs[0] || gotArgs[1] != wantArgs[1] {
+		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
+	}
+	for _, want := range []string{
+		"GONOSUMDB=github.com/gentleman-programming/gentle-ai",
+		"GOPRIVATE=github.com/gentleman-programming/gentle-ai",
+		"GONOPROXY=github.com/gentleman-programming/gentle-ai",
+	} {
+		if !envContains(gotCmd.Env, want) {
+			t.Fatalf("go install env missing %q in %v", want, gotCmd.Env)
+		}
+	}
+}
+
+func envContains(env []string, want string) bool {
+	for _, entry := range env {
+		if entry == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestGoProxyBypassEnvPreservesExistingPatterns(t *testing.T) {
+	module := "github.com/gentleman-programming/gentle-ai"
+	env := goProxyBypassEnv([]string{
+		"PATH=/usr/bin",
+		"GONOSUMDB=example.com/private",
+		"GOPRIVATE=github.com/acme/*",
+		"GONOPROXY=github.com/gentleman-programming/gentle-ai",
+	}, module)
+
+	for _, want := range []string{
+		"PATH=/usr/bin",
+		"GONOSUMDB=github.com/gentleman-programming/gentle-ai,example.com/private",
+		"GOPRIVATE=github.com/gentleman-programming/gentle-ai,github.com/acme/*",
+		"GONOPROXY=github.com/gentleman-programming/gentle-ai",
+	} {
+		if !envContains(env, want) {
+			t.Fatalf("env missing %q in %v", want, env)
+		}
+	}
+}
+
 // --- TestRunStrategy_GoInstallMissingImportPath ---
 
 func TestRunStrategy_GoInstallMissingImportPath(t *testing.T) {

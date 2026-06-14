@@ -151,6 +151,12 @@ function Install-ViaGo {
     $goPackage = "github.com/$($GITHUB_OWNER.ToLower())/$GITHUB_REPO/cmd/$BINARY_NAME@$version"
     Write-Info "Running: go install $goPackage"
 
+    if ($Channel -eq "beta") {
+        Add-GoEnvPattern -Name "GONOSUMDB" -Pattern "github.com/gentleman-programming/gentle-ai"
+        Add-GoEnvPattern -Name "GOPRIVATE" -Pattern "github.com/gentleman-programming/gentle-ai"
+        Add-GoEnvPattern -Name "GONOPROXY" -Pattern "github.com/gentleman-programming/gentle-ai"
+    }
+
     & go install $goPackage
     if ($LASTEXITCODE -ne 0) {
         Stop-WithError "Failed to install via go install. Make sure Go is properly configured."
@@ -168,6 +174,24 @@ function Install-ViaGo {
     }
 
     Write-Success "Installed $BINARY_NAME via go install"
+}
+
+function Add-GoEnvPattern {
+    param(
+        [string]$Name,
+        [string]$Pattern
+    )
+
+    $current = [Environment]::GetEnvironmentVariable($Name, "Process")
+    if (-not $current) {
+        Set-Item -Path "Env:$Name" -Value $Pattern
+        return
+    }
+
+    $patterns = $current.Split(",", [System.StringSplitOptions]::RemoveEmptyEntries).Trim()
+    if ($patterns -contains $Pattern) { return }
+
+    Set-Item -Path "Env:$Name" -Value ("{0},{1}" -f $Pattern, $current)
 }
 
 # ============================================================================

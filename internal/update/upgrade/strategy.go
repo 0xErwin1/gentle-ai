@@ -65,6 +65,10 @@ const maxScriptSize = 1 * 1024 * 1024 // 1 MB
 //   - OpenCode plugin method → update materialized package in ~/.config/opencode when possible
 //   - unknown method → manualFallback with explicit message
 func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) (bool, error) {
+	if isBetaGentleAIUpgrade(r) && profile.OS != "windows" {
+		return false, goInstallMainUpgrade(r.Tool)
+	}
+
 	method := effectiveMethod(r.Tool, profile)
 
 	switch method {
@@ -396,6 +400,77 @@ func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion s
 		return fmt.Errorf("go install %s: %w (output: %s)", target, err, string(out))
 	}
 	return nil
+}
+
+func isBetaGentleAIUpgrade(r update.UpdateResult) bool {
+	return r.Tool.Name == "gentle-ai" &&
+		strings.EqualFold(r.Tool.Owner, "Gentleman-Programming") &&
+		r.Tool.Repo == "gentle-ai" &&
+		strings.HasPrefix(strings.TrimSpace(r.LatestVersion), "main@")
+}
+
+func goInstallMainUpgrade(tool update.ToolInfo) error {
+	module := strings.ToLower(fmt.Sprintf("github.com/%s/%s", strings.TrimSpace(tool.Owner), strings.TrimSpace(tool.Repo)))
+	if module == "github.com//" {
+		module = "github.com/gentleman-programming/gentle-ai"
+	}
+	target := module + "/cmd/gentle-ai@main"
+	cmd := execCommand("go", "install", target)
+	cmd.Stdin = nil
+	cmd.Env = goProxyBypassEnv(cmd.Env, module)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("go install %s: %w (output: %s)", target, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func goProxyBypassEnv(base []string, module string) []string {
+	if base == nil {
+		base = os.Environ()
+	}
+	env := append([]string{}, base...)
+	for _, key := range []string{"GONOSUMDB", "GOPRIVATE", "GONOPROXY"} {
+		env = setEnvValue(env, key, prependGoPattern(getEnvValue(env, key), module))
+	}
+	return env
+}
+
+func getEnvValue(env []string, key string) string {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			return strings.TrimPrefix(env[i], prefix)
+		}
+	}
+	return ""
+}
+
+func setEnvValue(env []string, key, value string) []string {
+	prefix := key + "="
+	for i := len(env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(env[i], prefix) {
+			env[i] = prefix + value
+			return env
+		}
+	}
+	return append(env, prefix+value)
+}
+
+func prependGoPattern(existing, pattern string) string {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return existing
+	}
+	parts := strings.Split(existing, ",")
+	for _, part := range parts {
+		if strings.TrimSpace(part) == pattern {
+			return existing
+		}
+	}
+	if strings.TrimSpace(existing) == "" {
+		return pattern
+	}
+	return pattern + "," + existing
 }
 
 // binaryUpgrade handles binary-release upgrades via GitHub Releases asset download.

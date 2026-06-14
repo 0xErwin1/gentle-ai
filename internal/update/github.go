@@ -30,6 +30,11 @@ type githubRelease struct {
 	Prerelease bool   `json:"prerelease"`
 }
 
+type githubCommit struct {
+	SHA     string `json:"sha"`
+	HTMLURL string `json:"html_url"`
+}
+
 // resolveGitHubToken returns a GitHub token for API auth, trying in order:
 // 1. GITHUB_TOKEN env var
 // 2. GH_TOKEN env var (gh CLI convention)
@@ -76,6 +81,26 @@ func fetchLatestRelease(ctx context.Context, owner, repo string) (githubRelease,
 	}
 
 	return release, nil
+}
+
+func fetchMainCommit(ctx context.Context, owner, repo string) (githubCommit, error) {
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/main", owner, repo)
+
+	resp, err := doGitHubRequest(ctx, url)
+	if err != nil {
+		return githubCommit{}, err
+	}
+	defer resp.Body.Close()
+
+	if err := checkGitHubResponse(resp, owner, repo); err != nil {
+		return githubCommit{}, err
+	}
+
+	var commit githubCommit
+	if err := json.NewDecoder(resp.Body).Decode(&commit); err != nil {
+		return githubCommit{}, fmt.Errorf("decode github commit: %w", err)
+	}
+	return commit, nil
 }
 
 // fetchLatestReleaseMatchingPattern fetches releases and returns the newest non-draft,

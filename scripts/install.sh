@@ -276,7 +276,16 @@ install_go() {
     local go_package="github.com/${GITHUB_OWNER,,}/${GITHUB_REPO}/cmd/${BINARY_NAME}@${version}"
 
     info "Running: go install ${go_package}"
-    if ! go install "$go_package"; then
+    if [ "${CHANNEL}" = "beta" ]; then
+        prepend_go_env_pattern GONOSUMDB github.com/gentleman-programming/gentle-ai
+        prepend_go_env_pattern GOPRIVATE github.com/gentleman-programming/gentle-ai
+        prepend_go_env_pattern GONOPROXY github.com/gentleman-programming/gentle-ai
+        export GONOSUMDB GOPRIVATE GONOPROXY
+
+        if ! go install "$go_package"; then
+            fatal "Failed to install via go install. Make sure Go is properly configured."
+        fi
+    elif ! go install "$go_package"; then
         fatal "Failed to install via go install. Make sure Go is properly configured."
     fi
 
@@ -293,6 +302,22 @@ install_go() {
     fi
 
     success "Installed ${BINARY_NAME} via go install"
+}
+
+prepend_go_env_pattern() {
+    local name="$1"
+    local pattern="$2"
+    local current="${!name:-}"
+
+    if [ -z "$current" ]; then
+        printf -v "$name" '%s' "$pattern"
+        return
+    fi
+
+    case ",$current," in
+        *",$pattern,"*) return ;;
+        *) printf -v "$name" '%s,%s' "$pattern" "$current" ;;
+    esac
 }
 
 # ============================================================================

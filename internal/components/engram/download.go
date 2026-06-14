@@ -43,6 +43,7 @@ var (
 	// engramGoInstallCmdFn executes `go install <pkg>`. Package-level var for testability.
 	engramGoInstallCmdFn = func(pkg string) error {
 		cmd := exec.Command("go", "install", pkg)
+		cmd.Env = goPrivateModuleEnv(os.Environ(), "github.com/Gentleman-Programming/engram")
 		cmd.Stdin = nil
 		out, err := cmd.CombinedOutput()
 		if err != nil {
@@ -71,6 +72,43 @@ var (
 		return values, nil
 	}
 )
+
+func goPrivateModuleEnv(base []string, modulePath string) []string {
+	values := map[string]string{
+		"GONOSUMDB": modulePath,
+		"GOPRIVATE": modulePath,
+		"GONOPROXY": modulePath,
+	}
+	merged := make([]string, 0, len(base)+3)
+	for _, entry := range base {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok {
+			if required, managed := values[key]; managed {
+				values[key] = appendGoEnvPattern(required, strings.TrimPrefix(entry, key+"="))
+				continue
+			}
+		}
+		merged = append(merged, entry)
+	}
+	return append(merged,
+		"GONOSUMDB="+values["GONOSUMDB"],
+		"GOPRIVATE="+values["GOPRIVATE"],
+		"GONOPROXY="+values["GONOPROXY"],
+	)
+}
+
+func appendGoEnvPattern(required, existing string) string {
+	existing = strings.TrimSpace(existing)
+	if existing == "" {
+		return required
+	}
+	for _, part := range strings.Split(existing, ",") {
+		if strings.TrimSpace(part) == required {
+			return existing
+		}
+	}
+	return existing + "," + required
+}
 
 // engramCoreTagPattern matches only plain semver tags (vX.Y.Z) that identify
 // core engram binary releases. The Gentleman-Programming/engram repository also

@@ -93,6 +93,7 @@ func welcomeContentWidth(width int) int {
 }
 
 func wrapWelcomeBanner(text string, width int) string {
+	text = formatWelcomeAdvisoryList(text)
 	if width <= 0 {
 		return text
 	}
@@ -102,6 +103,78 @@ func wrapWelcomeBanner(text string, width int) string {
 		wrapped = append(wrapped, wrapPlainLine(line, width)...)
 	}
 	return strings.Join(wrapped, "\n")
+}
+
+func formatWelcomeAdvisoryList(text string) string {
+	const advisoryPrefix = "Advisory: "
+	const plusMarker = ". Plus: "
+	if !strings.HasPrefix(text, advisoryPrefix) || !strings.Contains(text, plusMarker) {
+		return text
+	}
+
+	body := strings.TrimPrefix(text, advisoryPrefix)
+	head, rest, ok := strings.Cut(body, plusMarker)
+	if !ok {
+		return text
+	}
+
+	header, firstFeature, ok := strings.Cut(head, ": ")
+	if !ok || strings.TrimSpace(firstFeature) == "" {
+		return text
+	}
+
+	featuresPart, suffix := splitAdvisorySuffix(rest)
+	features := []string{strings.TrimSpace(firstFeature) + "."}
+	features = append(features, splitAdvisoryFeatures(featuresPart)...)
+
+	var b strings.Builder
+	b.WriteString(advisoryPrefix)
+	b.WriteString(strings.TrimSpace(header))
+	b.WriteString(":")
+	for _, feature := range features {
+		feature = strings.TrimSpace(strings.TrimSuffix(feature, "."))
+		feature = strings.TrimPrefix(feature, "and ")
+		feature = strings.TrimSpace(feature)
+		if feature == "" {
+			continue
+		}
+		b.WriteString("\n• ")
+		b.WriteString(feature)
+		b.WriteString(".")
+	}
+	if suffix != "" {
+		b.WriteString("\n")
+		b.WriteString(suffix)
+	}
+	return b.String()
+}
+
+func splitAdvisorySuffix(text string) (string, string) {
+	markers := []string{" Thanks ", " See "}
+	cutAt := -1
+	for _, marker := range markers {
+		if idx := strings.Index(text, marker); idx >= 0 && (cutAt == -1 || idx < cutAt) {
+			cutAt = idx
+		}
+	}
+	if cutAt == -1 {
+		return text, ""
+	}
+	return strings.TrimSpace(text[:cutAt]), strings.TrimSpace(text[cutAt:])
+}
+
+func splitAdvisoryFeatures(text string) []string {
+	text = strings.ReplaceAll(text, ", and ", ", ")
+	parts := strings.Split(text, ",")
+	features := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		part = strings.TrimPrefix(part, "and ")
+		if part != "" {
+			features = append(features, part)
+		}
+	}
+	return features
 }
 
 func wrapPlainLine(line string, width int) []string {

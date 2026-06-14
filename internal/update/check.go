@@ -2,12 +2,16 @@ package update
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
+
+var updateChannelEnv = os.Getenv
 
 // CheckAll runs update checks for all registered tools concurrently.
 // currentVersion is the build-time version of gentle-ai (from app.Version).
@@ -60,6 +64,7 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 	var localVersion string
 	var pluginRegistered bool
 	var release githubRelease
+	var mainCommit githubCommit
 	var fetchErr error
 
 	wg.Add(2)
@@ -75,6 +80,10 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 
 	go func() {
 		defer wg.Done()
+		if usesBetaMainHeadCheck(tool) {
+			mainCommit, fetchErr = fetchMainCommit(ctx, tool.Owner, tool.Repo)
+			return
+		}
 		release, fetchErr = fetchLatestReleaseForTool(ctx, tool)
 	}()
 
@@ -88,6 +97,10 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 		result.Err = fetchErr
 		result.Status = CheckFailed
 		return result
+	}
+
+	if usesBetaMainHeadCheck(tool) {
+		return applyBetaMainHeadStatus(result, localVersion, mainCommit)
 	}
 
 	result.LatestVersion = normalizeVersion(release.TagName)
@@ -134,6 +147,89 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 	// Compare versions.
 	result.Status = compareVersions(normalizedLocal, result.LatestVersion)
 	return result
+}
+
+func usesBetaMainHeadCheck(tool ToolInfo) bool {
+	return tool.Name == "gentle-ai" && strings.EqualFold(tool.Owner, "Gentleman-Programming") && tool.Repo == "gentle-ai" && isBetaUpdateChannel()
+}
+
+func isBetaUpdateChannel() bool {
+	switch strings.ToLower(strings.TrimSpace(updateChannelEnv("GENTLE_AI_CHANNEL"))) {
+	case "beta", "nightly":
+		return true
+	default:
+		return false
+	}
+}
+
+func applyBetaMainHeadStatus(result UpdateResult, localVersion string, commit githubCommit) UpdateResult {
+	remoteSHA := strings.TrimSpace(commit.SHA)
+	shortRemote := shortCommit(remoteSHA)
+	if shortRemote == "" {
+		result.Status = VersionUnknown
+		return result
+	}
+
+	result.LatestVersion = "main@" + shortRemote
+	result.ReleaseURL = strings.TrimSpace(commit.HTMLURL)
+
+	if strings.TrimSpace(localVersion) == "" {
+		result.Status = VersionUnknown
+		return result
+	}
+	if strings.TrimSpace(localVersion) == "dev" {
+		result.Status = DevBuild
+		return result
+	}
+
+	localSHA := localBuildCommit(localVersion)
+	if localSHA == "" {
+		result.Status = VersionUnknown
+		return result
+	}
+
+	if sameCommitPrefix(localSHA, remoteSHA) {
+		result.Status = UpToDate
+		return result
+	}
+
+	result.Status = UpdateAvailable
+	result.ReleaseURL = fmt.Sprintf("https://github.com/%s/%s/compare/%s...%s", result.Tool.Owner, result.Tool.Repo, shortCommit(localSHA), shortRemote)
+	return result
+}
+
+func localBuildCommit(version string) string {
+	parts := strings.Split(strings.TrimSpace(version), "-")
+	if len(parts) == 0 {
+		return ""
+	}
+	candidate := parts[len(parts)-1]
+	if len(candidate) < 7 {
+		return ""
+	}
+	for _, r := range candidate {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')) {
+			return ""
+		}
+	}
+	return strings.ToLower(candidate)
+}
+
+func sameCommitPrefix(local, remote string) bool {
+	local = strings.ToLower(strings.TrimSpace(local))
+	remote = strings.ToLower(strings.TrimSpace(remote))
+	if len(local) < 7 || len(remote) < 7 {
+		return false
+	}
+	return strings.HasPrefix(remote, local) || strings.HasPrefix(local, remote)
+}
+
+func shortCommit(sha string) string {
+	sha = strings.ToLower(strings.TrimSpace(sha))
+	if len(sha) < 12 {
+		return sha
+	}
+	return sha[:12]
 }
 
 func fetchLatestReleaseForTool(ctx context.Context, tool ToolInfo) (githubRelease, error) {

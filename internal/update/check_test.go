@@ -135,8 +135,8 @@ func TestDetectInstalledVersionFallbackPaths(t *testing.T) {
 	}
 
 	tool := ToolInfo{
-		Name:          "mytool",
-		DetectCmd:     []string{binaryName, "--version"},
+		Name:      "mytool",
+		DetectCmd: []string{binaryName, "--version"},
 		FallbackPaths: func(homeDir, localAppData string) []string {
 			return []string{filepath.Join(tmpDir, binaryName)}
 		},
@@ -310,6 +310,71 @@ func TestCheckSingleToolOpenCodePluginRegisteredNotMaterialized(t *testing.T) {
 	}
 	if !strings.Contains(result.UpdateHint, "peer dependency") {
 		t.Fatalf("UpdateHint should mention checking logs for dependency errors, got %q", result.UpdateHint)
+	}
+}
+
+func TestCheckSingleToolGentleAIBetaComparesMainHead(t *testing.T) {
+	t.Setenv("GENTLE_AI_CHANNEL", "beta")
+
+	origClient := httpClient
+	t.Cleanup(func() { httpClient = origClient })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/Gentleman-Programming/gentle-ai/releases/latest":
+			json.NewEncoder(w).Encode(githubRelease{TagName: "v1.40.3", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.40.3"})
+		case "/repos/Gentleman-Programming/gentle-ai/commits/main":
+			json.NewEncoder(w).Encode(githubCommit{SHA: "972997650b51abcdef0123456789abcdef012345", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/commit/972997650b51abcdef0123456789abcdef012345"})
+		default:
+			t.Fatalf("unexpected GitHub path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614151827-6eff4a1ba110", system.PlatformProfile{})
+
+	if result.Status != UpdateAvailable {
+		t.Fatalf("status = %q, want %q", result.Status, UpdateAvailable)
+	}
+	if result.LatestVersion != "main@972997650b51" {
+		t.Fatalf("LatestVersion = %q, want main@972997650b51", result.LatestVersion)
+	}
+	if !strings.Contains(result.ReleaseURL, "/compare/6eff4a1ba110...972997650b51") {
+		t.Fatalf("ReleaseURL = %q, want compare URL with local and remote commits", result.ReleaseURL)
+	}
+}
+
+func TestCheckSingleToolGentleAIBetaAcceptsLocalCommitPrefix(t *testing.T) {
+	t.Setenv("GENTLE_AI_CHANNEL", "beta")
+
+	origClient := httpClient
+	t.Cleanup(func() { httpClient = origClient })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/Gentleman-Programming/gentle-ai/releases/latest":
+			json.NewEncoder(w).Encode(githubRelease{TagName: "v1.40.3", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.40.3"})
+		case "/repos/Gentleman-Programming/gentle-ai/commits/main":
+			json.NewEncoder(w).Encode(githubCommit{SHA: "6eff4a1ba110abcdef0123456789abcdef012345", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/commit/6eff4a1ba110abcdef0123456789abcdef012345"})
+		default:
+			t.Fatalf("unexpected GitHub path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614151827-6eff4a1ba110", system.PlatformProfile{})
+
+	if result.Status != UpToDate {
+		t.Fatalf("status = %q, want %q", result.Status, UpToDate)
+	}
+	if result.LatestVersion != "main@6eff4a1ba110" {
+		t.Fatalf("LatestVersion = %q, want main@6eff4a1ba110", result.LatestVersion)
 	}
 }
 

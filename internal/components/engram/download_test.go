@@ -1211,3 +1211,41 @@ func TestEngramGoInstallFromMain_UsesGoEnvForBinDir(t *testing.T) {
 		t.Errorf("binary dir = %q, want %q (from go env GOBIN)", gotDir, wantDir)
 	}
 }
+
+func TestEngramGoInstallFromMain_BypassesPublicGoProxy(t *testing.T) {
+	binDir := t.TempDir()
+	goPath := filepath.Join(binDir, "go")
+	recordPath := filepath.Join(t.TempDir(), "go-env.txt")
+	fakeGo := filepath.Join(binDir, "go")
+	script := "#!/usr/bin/env bash\n" +
+		"printf 'GONOSUMDB=%s\\nGOPRIVATE=%s\\nGONOPROXY=%s\\n' \"${GONOSUMDB:-}\" \"${GOPRIVATE:-}\" \"${GONOPROXY:-}\" > \"$GO_ENV_RECORD\"\n"
+	if err := os.WriteFile(fakeGo, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GO_ENV_RECORD", recordPath)
+
+	origGoEnvFn := engramGoEnvFn
+	t.Cleanup(func() { engramGoEnvFn = origGoEnvFn })
+	engramGoEnvFn = func(keys ...string) (map[string]string, error) {
+		return map[string]string{"GOBIN": goPath, "GOPATH": filepath.Join(t.TempDir(), "gopath")}, nil
+	}
+
+	if _, err := engramGoInstallFromMain("github.com/Gentleman-Programming/engram/cmd/engram@main"); err != nil {
+		t.Fatalf("engramGoInstallFromMain() error = %v", err)
+	}
+
+	recorded, err := os.ReadFile(recordPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", recordPath, err)
+	}
+	for _, want := range []string{
+		"GONOSUMDB=github.com/Gentleman-Programming/engram",
+		"GOPRIVATE=github.com/Gentleman-Programming/engram",
+		"GONOPROXY=github.com/Gentleman-Programming/engram",
+	} {
+		if !strings.Contains(string(recorded), want) {
+			t.Fatalf("go install env missing %q\nrecorded:\n%s", want, recorded)
+		}
+	}
+}
