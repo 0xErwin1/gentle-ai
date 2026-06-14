@@ -1533,6 +1533,91 @@ func TestInstallerUpgrade_NonWindows(t *testing.T) {
 	}
 }
 
+// --- TestEngramBinaryUpgrade_ChannelRouting (Slice 3) ---
+
+// TestEngramBinaryUpgrade_StableChannelCallsDownloadFn verifies that when
+// GENTLE_AI_CHANNEL is unset or "stable", engramBinaryUpgrade delegates to
+// engramDownloadFn (the release-download path) and NOT go install @main.
+func TestEngramBinaryUpgrade_StableChannelCallsDownloadFn(t *testing.T) {
+	tests := []struct {
+		name   string
+		envVal string
+	}{
+		{name: "channel unset", envVal: ""},
+		{name: "channel explicit stable", envVal: "stable"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("GENTLE_AI_CHANNEL", tt.envVal)
+
+			origDownloadFn := engramDownloadFn
+			origExecCommand := execCommand
+			t.Cleanup(func() {
+				engramDownloadFn = origDownloadFn
+				execCommand = origExecCommand
+			})
+
+			downloadCalled := false
+			engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+				downloadCalled = true
+				return "/tmp/engram", nil
+			}
+
+			// go install must NOT be called for stable channel.
+			execCommand = func(name string, args ...string) *exec.Cmd {
+				t.Errorf("execCommand called unexpectedly for stable channel: %s %v", name, args)
+				return mockCmd("echo", "unexpected")
+			}
+
+			profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
+			err := engramBinaryUpgrade(profile)
+			if err != nil {
+				t.Fatalf("engramBinaryUpgrade stable: unexpected error: %v", err)
+			}
+			if !downloadCalled {
+				t.Error("expected engramDownloadFn to be called for stable channel, but it was not")
+			}
+		})
+	}
+}
+
+// TestEngramBinaryUpgrade_BetaChannelUsesGoInstallMain verifies that when
+// GENTLE_AI_CHANNEL=beta, engramBinaryUpgrade delegates to
+// engramBetaInstallFn (the consolidated beta path, backed by
+// engram.DownloadLatestBinary(profile, true) in production). The stable
+// engramDownloadFn must NOT be called.
+func TestEngramBinaryUpgrade_BetaChannelUsesGoInstallMain(t *testing.T) {
+	t.Setenv("GENTLE_AI_CHANNEL", "beta")
+
+	origDownloadFn := engramDownloadFn
+	origBetaFn := engramBetaInstallFn
+	t.Cleanup(func() {
+		engramDownloadFn = origDownloadFn
+		engramBetaInstallFn = origBetaFn
+	})
+
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		t.Error("engramDownloadFn (stable path) must NOT be called for beta channel")
+		return "", nil
+	}
+
+	var betaCalled bool
+	engramBetaInstallFn = func(profile system.PlatformProfile) (string, error) {
+		betaCalled = true
+		return "/tmp/engram-beta", nil
+	}
+
+	profile := system.PlatformProfile{OS: "linux", PackageManager: "apt"}
+	err := engramBinaryUpgrade(profile)
+	if err != nil {
+		t.Fatalf("engramBinaryUpgrade beta: unexpected error: %v", err)
+	}
+	if !betaCalled {
+		t.Fatal("expected engramBetaInstallFn (beta path) to be called, but it was not")
+	}
+}
+
 type roundTripFunc func(req *http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
