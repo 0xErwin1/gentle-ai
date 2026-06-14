@@ -4963,3 +4963,677 @@ func TestAdvisoryMsg_SanitizesOnStore(t *testing.T) {
 		t.Errorf("AdvisoryMessage = %q — expected printable phrase %q to survive sanitization", state.AdvisoryMessage, "update now")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Slice 6 — TUI Pre-Welcome Update Prompt Screen
+// ---------------------------------------------------------------------------
+
+// makeUpdateResult returns a minimal UpdateResult with the given status and release URL.
+func makeUpdateResult(status update.UpdateStatus, releaseURL string) update.UpdateResult {
+	return update.UpdateResult{
+		Tool:             update.ToolInfo{Name: "gentle-ai"},
+		Status:           status,
+		InstalledVersion: "1.0.0",
+		LatestVersion:    "2.0.0",
+		ReleaseURL:       releaseURL,
+	}
+}
+
+// TestUpdatePromptScreen_ShownWhenUpdateAvailable verifies that receiving
+// UpdateCheckResultMsg with HasUpdates=true transitions to ScreenUpdatePrompt.
+func TestUpdatePromptScreen_ShownWhenUpdateAvailable(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+
+	result := makeUpdateResult(update.UpdateAvailable, "https://github.com/releases/v2.0.0")
+	updated, _ := m.Update(UpdateCheckResultMsg{Results: []update.UpdateResult{result}})
+	got := updated.(Model)
+
+	if got.Screen != ScreenUpdatePrompt {
+		t.Fatalf("Screen = %v, want ScreenUpdatePrompt when update is available", got.Screen)
+	}
+	if !got.UpdateCheckDone {
+		t.Fatal("UpdateCheckDone should be true after UpdateCheckResultMsg")
+	}
+}
+
+// TestUpdatePromptScreen_SkippedWhenNoUpdate verifies that when no update is
+// available, UpdateCheckResultMsg does NOT transition to ScreenUpdatePrompt.
+func TestUpdatePromptScreen_SkippedWhenNoUpdate(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+
+	result := makeUpdateResult(update.UpToDate, "")
+	updated, _ := m.Update(UpdateCheckResultMsg{Results: []update.UpdateResult{result}})
+	got := updated.(Model)
+
+	if got.Screen == ScreenUpdatePrompt {
+		t.Fatal("Screen should NOT be ScreenUpdatePrompt when no update is available")
+	}
+	// Should stay on Welcome (the initial screen).
+	if got.Screen != ScreenWelcome {
+		t.Fatalf("Screen = %v, want ScreenWelcome when no update", got.Screen)
+	}
+}
+
+// TestUpdatePromptScreen_SkippedWhenCheckFailed verifies that an empty results
+// slice (check failed / offline) does NOT trigger ScreenUpdatePrompt.
+func TestUpdatePromptScreen_SkippedWhenCheckFailed(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+
+	updated, _ := m.Update(UpdateCheckResultMsg{Results: nil})
+	got := updated.(Model)
+
+	if got.Screen == ScreenUpdatePrompt {
+		t.Fatal("Screen should NOT be ScreenUpdatePrompt when update check returned nil results")
+	}
+	if got.Screen != ScreenWelcome {
+		t.Fatalf("Screen = %v, want ScreenWelcome when check failed", got.Screen)
+	}
+}
+
+// TestUpdatePromptScreen_KeyU_RunsUpgradeThenQuits verifies that pressing "u"
+// on ScreenUpdatePrompt invokes UpgradeFn and on success (ExitRequested=true)
+// eventually produces a tea.QuitMsg via the UpgradeDoneMsg two-step flow.
+func TestUpdatePromptScreen_KeyU_RunsUpgradeThenQuits(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpdatePrompt
+	m.UpdateResults = []update.UpdateResult{makeUpdateResult(update.UpdateAvailable, "https://example.com/releases")}
+	m.UpdateCheckDone = true
+
+	upgraded := false
+	m.UpgradeFn = func(_ context.Context, results []update.UpdateResult) upgrade.UpgradeReport {
+		upgraded = true
+		return upgrade.UpgradeReport{ExitRequested: true}
+	}
+
+	m2Raw, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	if cmd == nil {
+		t.Fatal("cmd should not be nil after pressing 'u' on ScreenUpdatePrompt")
+	}
+	m2 := m2Raw.(Model)
+
+	// Step 1: execute the goroutine cmd → should produce UpgradeDoneMsg.
+	// The cmd may be a BatchMsg (tickCmd + upgrade goroutine); search all items
+	// in the batch to find the UpgradeDoneMsg rather than stopping at the first
+	// non-nil result (which could be a TickMsg from the spinner).
+	var msg tea.Msg
+	raw := cmd()
+	if batch, ok := raw.(tea.BatchMsg); ok {
+		for _, fn := range batch {
+			if inner := fn(); inner != nil {
+				if _, isDone := inner.(UpgradeDoneMsg); isDone {
+					msg = inner
+					break
+				}
+			}
+		}
+		if msg == nil {
+			msg = raw // fallback: use the batch result itself
+		}
+	} else {
+		msg = raw
+	}
+
+	if !upgraded {
+		t.Error("UpgradeFn should have been called when pressing 'u'")
+	}
+
+	// Step 2: feed UpgradeDoneMsg into the model returned by the keypress
+	// Update (m2), not the pre-keypress model, to avoid masking false positives.
+	doneMsg, ok := msg.(UpgradeDoneMsg)
+	if !ok {
+		t.Fatalf("expected UpgradeDoneMsg from upgrade goroutine, got %T", msg)
+	}
+	_, quitCmd := m2.Update(doneMsg)
+	if quitCmd == nil {
+		t.Fatal("cmd must not be nil after UpgradeDoneMsg with ExitRequested=true")
+	}
+	gotQuit := false
+	if _, ok := quitCmd().(tea.QuitMsg); ok {
+		gotQuit = true
+	}
+	if !gotQuit {
+		t.Error("expected QuitMsg after UpgradeDoneMsg with ExitRequested=true")
+	}
+}
+
+// TestUpdatePromptScreen_KeyC_TransitionsToWelcome verifies that pressing "c"
+// on ScreenUpdatePrompt transitions to ScreenWelcome.
+func TestUpdatePromptScreen_KeyC_TransitionsToWelcome(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpdatePrompt
+	m.UpdateResults = []update.UpdateResult{makeUpdateResult(update.UpdateAvailable, "")}
+	m.UpdateCheckDone = true
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	got := updated.(Model)
+
+	if got.Screen != ScreenWelcome {
+		t.Fatalf("Screen = %v, want ScreenWelcome after pressing 'c'", got.Screen)
+	}
+}
+
+// TestUpdatePromptScreen_KeyEnter_TransitionsToWelcome verifies that pressing
+// Enter on ScreenUpdatePrompt with cursor on "Keep current version" (cursor=2,
+// the default when entering via setScreen) transitions to ScreenWelcome.
+func TestUpdatePromptScreen_KeyEnter_TransitionsToWelcome(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.setScreen(ScreenUpdatePrompt) // cursor is set to 2 (Keep current) by setScreen
+	m.UpdateResults = []update.UpdateResult{makeUpdateResult(update.UpdateAvailable, "")}
+	m.UpdateCheckDone = true
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(Model)
+
+	if got.Screen != ScreenWelcome {
+		t.Fatalf("Screen = %v, want ScreenWelcome after Enter with default cursor (Keep current) on ScreenUpdatePrompt", got.Screen)
+	}
+}
+
+// TestUpdatePromptScreen_KeyV_CallsOpenBrowser verifies that pressing "v" on
+// ScreenUpdatePrompt calls the open-browser function with the release URL and
+// the screen remains on ScreenUpdatePrompt.
+func TestUpdatePromptScreen_KeyV_CallsOpenBrowser(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpdatePrompt
+	releaseURL := "https://github.com/releases/v2.0.0"
+	m.UpdateResults = []update.UpdateResult{makeUpdateResult(update.UpdateAvailable, releaseURL)}
+	m.UpdateCheckDone = true
+
+	var openedURL string
+	origFn := tuiOpenBrowserFn
+	tuiOpenBrowserFn = func(url string) error {
+		openedURL = url
+		return nil
+	}
+	defer func() { tuiOpenBrowserFn = origFn }()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
+	got := updated.(Model)
+
+	if got.Screen != ScreenUpdatePrompt {
+		t.Fatalf("Screen = %v, want ScreenUpdatePrompt to remain after 'v'", got.Screen)
+	}
+	if openedURL != releaseURL {
+		t.Fatalf("openedURL = %q, want %q", openedURL, releaseURL)
+	}
+}
+
+// TestUpdatePromptScreen_KeyV_FallsBackWhenBrowserFails verifies that when the
+// open-browser function returns an error, the screen stays on ScreenUpdatePrompt
+// (the URL is printed as fallback — tested by ensuring no panic and correct screen).
+func TestUpdatePromptScreen_KeyV_FallsBackWhenBrowserFails(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpdatePrompt
+	m.UpdateResults = []update.UpdateResult{makeUpdateResult(update.UpdateAvailable, "https://example.com")}
+	m.UpdateCheckDone = true
+
+	origFn := tuiOpenBrowserFn
+	tuiOpenBrowserFn = func(_ string) error {
+		return fmt.Errorf("browser not found")
+	}
+	defer func() { tuiOpenBrowserFn = origFn }()
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("v")})
+	got := updated.(Model)
+
+	// Screen must remain on ScreenUpdatePrompt even when browser fails.
+	if got.Screen != ScreenUpdatePrompt {
+		t.Fatalf("Screen = %v, want ScreenUpdatePrompt after browser failure", got.Screen)
+	}
+}
+
+// TestUpdatePromptScreen_OptionCount verifies that optionCount() returns 3
+// for ScreenUpdatePrompt (Update / View changes / Keep current).
+func TestUpdatePromptScreen_OptionCount(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpdatePrompt
+
+	if got := m.optionCount(); got != 3 {
+		t.Fatalf("optionCount() = %d, want 3 for ScreenUpdatePrompt", got)
+	}
+}
+
+// TestUpdatePromptScreen_View_NonEmpty verifies that View() returns a non-empty
+// string when the screen is ScreenUpdatePrompt (smoke test for the render function).
+func TestUpdatePromptScreen_View_NonEmpty(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpdatePrompt
+	m.UpdateResults = []update.UpdateResult{makeUpdateResult(update.UpdateAvailable, "https://example.com")}
+	m.UpdateCheckDone = true
+
+	rendered := m.View()
+	if strings.TrimSpace(rendered) == "" {
+		t.Fatal("View() should return non-empty string for ScreenUpdatePrompt")
+	}
+}
+
+// TestUpdatePromptScreen_ConfirmSelection_EnterEquivalent verifies that
+// confirmSelection() on ScreenUpdatePrompt (cursor 2 = Keep current) navigates
+// to Welcome, mirroring the "Enter" behavior exercised via handleKeyPress.
+func TestUpdatePromptScreen_ConfirmSelection_EnterEquivalent(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpdatePrompt
+	m.UpdateResults = []update.UpdateResult{makeUpdateResult(update.UpdateAvailable, "")}
+	m.UpdateCheckDone = true
+	m.Cursor = 2 // "Keep current version"
+
+	updated, _ := m.confirmSelection()
+	got := updated.(Model)
+
+	if got.Screen != ScreenWelcome {
+		t.Fatalf("Screen = %v, want ScreenWelcome after confirmSelection cursor=2 on ScreenUpdatePrompt", got.Screen)
+	}
+}
+
+// ─── Enter confirms highlighted cursor option ─────────────────────────────────
+
+// TestUpdatePromptScreen_EnterWithCursorOnUpdate_RunsUpgrade verifies that when
+// the cursor is on "Update now" (0) and Enter is pressed, the upgrade is started
+// (not silently ignored or treated as keep-current).
+func TestUpdatePromptScreen_EnterWithCursorOnUpdate_RunsUpgrade(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpdatePrompt
+	m.UpdateResults = []update.UpdateResult{makeUpdateResult(update.UpdateAvailable, "https://example.com/releases")}
+	m.UpdateCheckDone = true
+	m.Cursor = 0 // Update now
+
+	upgraded := false
+	m.UpgradeFn = func(_ context.Context, results []update.UpdateResult) upgrade.UpgradeReport {
+		upgraded = true
+		return upgrade.UpgradeReport{ExitRequested: true}
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("cmd should not be nil when Enter is pressed with cursor on Update now")
+	}
+
+	// Execute the command to trigger the upgrade goroutine.
+	msg := cmd()
+	// Accept BatchMsg: unwrap one level.
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, fn := range batch {
+			fn()
+		}
+	}
+
+	if !upgraded {
+		t.Error("UpgradeFn should have been called when Enter is pressed with cursor on Update now (cursor=0)")
+	}
+}
+
+// TestUpdatePromptScreen_EnterWithDefaultCursor_GoesToWelcome verifies that the
+// default cursor position on ScreenUpdatePrompt is "Keep current" (2), so an
+// accidental Enter press does NOT trigger an upgrade.
+func TestUpdatePromptScreen_EnterWithDefaultCursor_GoesToWelcome(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	// Simulate entering ScreenUpdatePrompt via setScreen (which sets cursor=2).
+	m.setScreen(ScreenUpdatePrompt)
+	m.UpdateResults = []update.UpdateResult{makeUpdateResult(update.UpdateAvailable, "")}
+	m.UpdateCheckDone = true
+
+	// Cursor should be at 2 (Keep current) after setScreen.
+	if m.Cursor != 2 {
+		t.Fatalf("Cursor = %d after setScreen(ScreenUpdatePrompt), want 2 (Keep current)", m.Cursor)
+	}
+
+	upgraded := false
+	m.UpgradeFn = func(_ context.Context, _ []update.UpdateResult) upgrade.UpgradeReport {
+		upgraded = true
+		return upgrade.UpgradeReport{}
+	}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(Model)
+
+	if upgraded {
+		t.Error("UpgradeFn must NOT be called when Enter is pressed on the default cursor (Keep current)")
+	}
+	if got.Screen != ScreenWelcome {
+		t.Fatalf("Screen = %v, want ScreenWelcome after Enter with default cursor (Keep current)", got.Screen)
+	}
+}
+
+// TestUpdatePromptScreen_ShortcutU_WorksRegardlessOfCursor verifies that the
+// "u" shortcut triggers an upgrade even when the cursor is on a different option.
+func TestUpdatePromptScreen_ShortcutU_WorksRegardlessOfCursor(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpdatePrompt
+	m.UpdateResults = []update.UpdateResult{makeUpdateResult(update.UpdateAvailable, "https://example.com/releases")}
+	m.UpdateCheckDone = true
+	m.Cursor = 2 // Keep current
+
+	upgraded := false
+	m.UpgradeFn = func(_ context.Context, _ []update.UpdateResult) upgrade.UpgradeReport {
+		upgraded = true
+		return upgrade.UpgradeReport{ExitRequested: true}
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	if cmd == nil {
+		t.Fatal("cmd should not be nil after pressing 'u'")
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, fn := range batch {
+			fn()
+		}
+	}
+
+	if !upgraded {
+		t.Error("UpgradeFn should have been called via 'u' shortcut regardless of cursor position")
+	}
+}
+
+// TestUpdatePromptScreen_ShortcutC_WorksRegardlessOfCursor verifies that the
+// "c" shortcut transitions to Welcome even when the cursor is on Update now.
+func TestUpdatePromptScreen_ShortcutC_WorksRegardlessOfCursor(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpdatePrompt
+	m.UpdateResults = []update.UpdateResult{makeUpdateResult(update.UpdateAvailable, "")}
+	m.UpdateCheckDone = true
+	m.Cursor = 0 // Update now
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("c")})
+	got := updated.(Model)
+
+	if got.Screen != ScreenWelcome {
+		t.Fatalf("Screen = %v, want ScreenWelcome after pressing 'c' regardless of cursor", got.Screen)
+	}
+}
+
+// ─── Upgrade error surfacing ──────────────────────────────────────────────────
+
+// TestUpdatePromptScreen_UpgradeError_IsSurfaced verifies that when UpgradeFn
+// is nil (infrastructure failure), the "u" key produces UpgradeDoneMsg with a
+// non-nil Err rather than a silent QuitMsg — the error is routed through the
+// existing UpgradeDoneMsg handler so it can be surfaced to the user.
+func TestUpdatePromptScreen_UpgradeError_IsSurfaced(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpdatePrompt
+	m.UpdateResults = []update.UpdateResult{makeUpdateResult(update.UpdateAvailable, "https://example.com/releases")}
+	m.UpdateCheckDone = true
+	m.Cursor = 0
+	m.UpgradeFn = nil // nil fn → startUpgrade returns UpgradeDoneMsg{Err: ...}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	if cmd == nil {
+		t.Fatal("cmd must not be nil after pressing 'u'")
+	}
+
+	// Execute the command: expect UpgradeDoneMsg (not a silent QuitMsg).
+	// The cmd may be a BatchMsg (tickCmd + upgrade goroutine); search all items
+	// to find the UpgradeDoneMsg rather than stopping at the first non-nil result.
+	var msg tea.Msg
+	raw := cmd()
+	if batch, ok := raw.(tea.BatchMsg); ok {
+		for _, fn := range batch {
+			if inner := fn(); inner != nil {
+				if _, isDone := inner.(UpgradeDoneMsg); isDone {
+					msg = inner
+					break
+				}
+			}
+		}
+		if msg == nil {
+			msg = raw
+		}
+	} else {
+		msg = raw
+	}
+
+	doneMsg, ok := msg.(UpgradeDoneMsg)
+	if !ok {
+		t.Fatalf("pressing 'u' must produce UpgradeDoneMsg (not %T) so errors are surfaced", msg)
+	}
+	if doneMsg.Err == nil {
+		t.Fatal("UpgradeDoneMsg.Err must be non-nil when UpgradeFn is nil")
+	}
+
+	// Feed the UpgradeDoneMsg into the model — the error must be stored.
+	updated, _ := m.Update(doneMsg)
+	got := updated.(Model)
+
+	if got.UpgradeErr == nil {
+		t.Fatal("UpgradeErr must be set after UpgradeDoneMsg with non-nil Err")
+	}
+}
+
+// TestUpdatePromptScreen_UpgradeSuccess_EmitsQuit verifies that when UpgradeFn
+// succeeds with ExitRequested=true, a QuitMsg is eventually produced.
+func TestUpdatePromptScreen_UpgradeSuccess_EmitsQuit(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpdatePrompt
+	m.UpdateResults = []update.UpdateResult{makeUpdateResult(update.UpdateAvailable, "https://example.com/releases")}
+	m.UpdateCheckDone = true
+	m.Cursor = 0
+
+	m.UpgradeFn = func(_ context.Context, _ []update.UpdateResult) upgrade.UpgradeReport {
+		return upgrade.UpgradeReport{ExitRequested: true}
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	if cmd == nil {
+		t.Fatal("cmd must not be nil after pressing 'u'")
+	}
+
+	// Execute the command to get UpgradeDoneMsg.
+	// The cmd may be a BatchMsg (tickCmd + upgrade goroutine); search all items
+	// to find the UpgradeDoneMsg rather than stopping at the first non-nil result.
+	var msg tea.Msg
+	raw := cmd()
+	if batch, ok := raw.(tea.BatchMsg); ok {
+		for _, fn := range batch {
+			if inner := fn(); inner != nil {
+				if _, isDone := inner.(UpgradeDoneMsg); isDone {
+					msg = inner
+					break
+				}
+			}
+		}
+		if msg == nil {
+			msg = raw
+		}
+	} else {
+		msg = raw
+	}
+
+	doneMsg, ok := msg.(UpgradeDoneMsg)
+	if !ok {
+		t.Fatalf("expected UpgradeDoneMsg from upgrade goroutine, got %T", msg)
+	}
+
+	// Feed the UpgradeDoneMsg into the model — should trigger tea.Quit.
+	_, quitCmd := m.Update(doneMsg)
+	if quitCmd == nil {
+		t.Fatal("cmd must not be nil after UpgradeDoneMsg with ExitRequested=true")
+	}
+	gotQuit := false
+	quitMsg := quitCmd()
+	if _, ok := quitMsg.(tea.QuitMsg); ok {
+		gotQuit = true
+	}
+	if !gotQuit {
+		t.Error("expected QuitMsg after UpgradeDoneMsg with ExitRequested=true")
+	}
+}
+
+// ─── UpdateCheckResultMsg guard: only switch from Welcome ────────────────────
+
+// TestUpdateCheckResult_DoesNotInterruptNonWelcomeScreen verifies that when an
+// update result arrives while the user is already on a screen other than Welcome,
+// the TUI does NOT jump back to ScreenUpdatePrompt.
+func TestUpdateCheckResult_DoesNotInterruptNonWelcomeScreen(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	// User has already navigated away from Welcome.
+	m.Screen = ScreenDetection
+	m.UpdateCheckDone = false
+
+	result := makeUpdateResult(update.UpdateAvailable, "https://example.com/releases")
+	updated, _ := m.Update(UpdateCheckResultMsg{Results: []update.UpdateResult{result}})
+	got := updated.(Model)
+
+	if got.Screen == ScreenUpdatePrompt {
+		t.Fatal("Screen must NOT jump to ScreenUpdatePrompt when update arrives while user is not on ScreenWelcome")
+	}
+	if got.Screen != ScreenDetection {
+		t.Fatalf("Screen = %v, want ScreenDetection (should not change when not on Welcome)", got.Screen)
+	}
+	if !got.UpdateCheckDone {
+		t.Fatal("UpdateCheckDone should still be set to true")
+	}
+}
+
+// ─── UpgradeFn nil guard ─────────────────────────────────────────────────────
+
+// TestUpdatePromptScreen_KeyU_NilUpgradeFn_NoPanic verifies the contract when
+// UpgradeFn is nil: pressing "u" must NOT panic, must NOT silently quit, and
+// must produce an UpgradeDoneMsg carrying a non-nil error (so the error is
+// surfaced via the normal upgrade-done path rather than lost).
+func TestUpdatePromptScreen_KeyU_NilUpgradeFn_NoPanic(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpdatePrompt
+	m.UpdateResults = []update.UpdateResult{makeUpdateResult(update.UpdateAvailable, "")}
+	m.UpdateCheckDone = true
+	m.UpgradeFn = nil
+
+	// Must not panic.
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panic when UpgradeFn is nil: %v", r)
+		}
+	}()
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	if cmd == nil {
+		t.Fatal("cmd must not be nil when UpgradeFn is nil: the contract requires an UpgradeDoneMsg to surface the error")
+	}
+
+	// The cmd may be a BatchMsg (tickCmd + upgrade goroutine); search all items
+	// in the batch to find the UpgradeDoneMsg rather than stopping at the first
+	// non-nil result (which could be a TickMsg from the spinner).
+	var msg tea.Msg
+	raw := cmd()
+	if batch, ok := raw.(tea.BatchMsg); ok {
+		for _, fn := range batch {
+			if inner := fn(); inner != nil {
+				if _, isDone := inner.(UpgradeDoneMsg); isDone {
+					msg = inner
+					break
+				}
+			}
+		}
+		if msg == nil {
+			msg = raw // fallback: use the batch result itself
+		}
+	} else {
+		msg = raw
+	}
+
+	// The ONLY acceptable outcome is UpgradeDoneMsg with a non-nil error.
+	// A silent quit or an untyped result means the error was swallowed.
+	doneMsgResult, ok := msg.(UpgradeDoneMsg)
+	if !ok {
+		t.Fatalf("expected UpgradeDoneMsg when UpgradeFn is nil, got %T — error must not be swallowed", msg)
+	}
+	if doneMsgResult.Err == nil {
+		t.Error("UpgradeDoneMsg.Err must be non-nil when UpgradeFn is nil")
+	}
+}
+
+// TestUpdatePromptScreen_UpdateNow_NoDuplicateUpgrade verifies that triggering
+// the "Update now" action twice (or while an upgrade is already in progress)
+// starts the upgrade only ONCE. The operation-in-progress guard on
+// ScreenUpdatePrompt must mirror the guard on ScreenUpgrade.
+func TestUpdatePromptScreen_UpdateNow_NoDuplicateUpgrade(t *testing.T) {
+	callCount := 0
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpdatePrompt
+	m.UpdateResults = []update.UpdateResult{makeUpdateResult(update.UpdateAvailable, "")}
+	m.UpdateCheckDone = true
+	m.UpgradeFn = func(_ context.Context, _ []update.UpdateResult) upgrade.UpgradeReport {
+		callCount++
+		return upgrade.UpgradeReport{}
+	}
+
+	// First trigger via "u" key — should start the upgrade and set OperationRunning.
+	m1Raw, cmd1 := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	if cmd1 == nil {
+		t.Fatal("cmd should not be nil after first 'u' press")
+	}
+	m1 := m1Raw.(Model)
+
+	if !m1.OperationRunning {
+		t.Error("OperationRunning must be true after triggering update-now on ScreenUpdatePrompt")
+	}
+
+	// Second trigger while OperationRunning=true — must be a no-op (no new cmd, no second goroutine).
+	m2Raw, cmd2 := m1.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("u")})
+	m2 := m2Raw.(Model)
+
+	if cmd2 != nil {
+		// Execute to check whether it would invoke UpgradeFn a second time.
+		msg := cmd2()
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, fn := range batch {
+				fn()
+			}
+		}
+	}
+	_ = m2
+
+	// Execute the first cmd so UpgradeFn runs (exactly once across all batch items).
+	raw1 := cmd1()
+	if batch, ok := raw1.(tea.BatchMsg); ok {
+		for _, fn := range batch {
+			fn()
+		}
+	}
+
+	if callCount != 1 {
+		t.Errorf("UpgradeFn call count = %d, want exactly 1 (duplicate upgrade guard failed)", callCount)
+	}
+
+	// Also verify via Enter key (cursor=0) on the original model — same guard must apply.
+	m3 := NewModel(system.DetectionResult{}, "dev")
+	m3.setScreen(ScreenUpdatePrompt)
+	m3.Cursor = 0 // "Update now"
+	m3.UpdateResults = []update.UpdateResult{makeUpdateResult(update.UpdateAvailable, "")}
+	m3.UpdateCheckDone = true
+	enterCallCount := 0
+	m3.UpgradeFn = func(_ context.Context, _ []update.UpdateResult) upgrade.UpgradeReport {
+		enterCallCount++
+		return upgrade.UpgradeReport{}
+	}
+
+	m3aRaw, cmd3a := m3.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m3a := m3aRaw.(Model)
+	if !m3a.OperationRunning {
+		t.Error("OperationRunning must be true after Enter on cursor=0 (Update now) on ScreenUpdatePrompt")
+	}
+	if cmd3a == nil {
+		t.Fatal("first Enter on Update now should return a command")
+	}
+	if batch, ok := cmd3a().(tea.BatchMsg); ok {
+		for _, fn := range batch {
+			if fn != nil {
+				fn()
+			}
+		}
+	}
+
+	// Second Enter while in progress — must be no-op.
+	_, cmd3b := m3a.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd3b != nil {
+		msg := cmd3b()
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, fn := range batch {
+				fn()
+			}
+		}
+	}
+
+	if enterCallCount != 1 {
+		t.Errorf("UpgradeFn call count via Enter = %d, want exactly 1 (Enter must start exactly one upgrade)", enterCallCount)
+	}
+}
