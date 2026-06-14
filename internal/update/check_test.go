@@ -347,6 +347,139 @@ func TestCheckSingleToolGentleAIBetaComparesMainHead(t *testing.T) {
 	}
 }
 
+func TestCheckSingleToolGentleAIPseudoVersionComparesMainHeadWithoutChannel(t *testing.T) {
+	unsetUpdateChannelEnv(t)
+
+	origClient := httpClient
+	t.Cleanup(func() { httpClient = origClient })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/Gentleman-Programming/gentle-ai/releases/latest":
+			json.NewEncoder(w).Encode(githubRelease{TagName: "v1.40.3", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.40.3"})
+		case "/repos/Gentleman-Programming/gentle-ai/commits/main":
+			json.NewEncoder(w).Encode(githubCommit{SHA: "b6872c69e3e4abcdef0123456789abcdef012345", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/commit/b6872c69e3e4abcdef0123456789abcdef012345"})
+		default:
+			t.Fatalf("unexpected GitHub path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3-0.20260614211459-6eff4a1ba110", system.PlatformProfile{})
+
+	if result.Status != UpdateAvailable {
+		t.Fatalf("status = %q, want %q", result.Status, UpdateAvailable)
+	}
+	if result.LatestVersion != "main@b6872c69e3e4" {
+		t.Fatalf("LatestVersion = %q, want main@b6872c69e3e4", result.LatestVersion)
+	}
+	if !strings.Contains(result.ReleaseURL, "/compare/6eff4a1ba110...b6872c69e3e4") {
+		t.Fatalf("ReleaseURL = %q, want compare URL with local and remote commits", result.ReleaseURL)
+	}
+}
+
+func TestUsesBetaMainHeadCheck(t *testing.T) {
+	tests := []struct {
+		name           string
+		channel        string
+		channelSet     bool
+		tool           ToolInfo
+		currentVersion string
+		want           bool
+	}{
+		{
+			name:           "explicit beta channel uses main head for stable version",
+			channel:        "beta",
+			channelSet:     true,
+			tool:           Tools[0],
+			currentVersion: "1.40.3",
+			want:           true,
+		},
+		{
+			name:           "pseudo-version uses main head without channel",
+			tool:           Tools[0],
+			currentVersion: "1.40.3-0.20260614211459-b6872c69e3e4",
+			want:           true,
+		},
+		{
+			name:           "stable semver without channel uses latest release",
+			tool:           Tools[0],
+			currentVersion: "1.40.3",
+			want:           false,
+		},
+		{
+			name:           "invalid version without channel uses latest release",
+			tool:           Tools[0],
+			currentVersion: "1.40.3-local",
+			want:           false,
+		},
+		{
+			name:           "timestamp and sha shaped invalid version uses latest release",
+			tool:           Tools[0],
+			currentVersion: "not-a-go-version-20260614211459-deadbee",
+			want:           false,
+		},
+		{
+			name:           "other tool pseudo-version still uses latest release",
+			tool:           ToolInfo{Name: "engram", Owner: "Gentleman-Programming", Repo: "engram"},
+			currentVersion: "1.40.3-0.20260614211459-b6872c69e3e4",
+			want:           false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.channelSet {
+				t.Setenv("GENTLE_AI_CHANNEL", tt.channel)
+			} else {
+				unsetUpdateChannelEnv(t)
+			}
+
+			got := usesBetaMainHeadCheck(tt.tool, tt.currentVersion)
+			if got != tt.want {
+				t.Fatalf("usesBetaMainHeadCheck() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCheckSingleToolGentleAIStableVersionWithoutChannelComparesLatestRelease(t *testing.T) {
+	unsetUpdateChannelEnv(t)
+
+	origClient := httpClient
+	t.Cleanup(func() { httpClient = origClient })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/Gentleman-Programming/gentle-ai/releases/latest":
+			json.NewEncoder(w).Encode(githubRelease{TagName: "v1.40.4", HTMLURL: "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.40.4"})
+		case "/repos/Gentleman-Programming/gentle-ai/commits/main":
+			t.Fatalf("stable channel must not request main HEAD")
+		default:
+			t.Fatalf("unexpected GitHub path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	httpClient = server.Client()
+	httpClient.Transport = &testTransport{server: server}
+
+	result := checkSingleTool(context.Background(), Tools[0], "1.40.3", system.PlatformProfile{})
+
+	if result.Status != UpdateAvailable {
+		t.Fatalf("status = %q, want %q", result.Status, UpdateAvailable)
+	}
+	if result.LatestVersion != "1.40.4" {
+		t.Fatalf("LatestVersion = %q, want 1.40.4", result.LatestVersion)
+	}
+	if result.ReleaseURL != "https://github.com/Gentleman-Programming/gentle-ai/releases/tag/v1.40.4" {
+		t.Fatalf("ReleaseURL = %q, want latest release URL", result.ReleaseURL)
+	}
+}
+
 func TestCheckSingleToolGentleAIBetaAcceptsLocalCommitPrefix(t *testing.T) {
 	t.Setenv("GENTLE_AI_CHANNEL", "beta")
 
@@ -1639,6 +1772,26 @@ func TestDetectInstalledVersionPs1FallbackInvokesViaPowershell(t *testing.T) {
 }
 
 // --- helpers ---
+
+func unsetUpdateChannelEnv(t *testing.T) {
+	t.Helper()
+
+	oldValue, hadValue := os.LookupEnv("GENTLE_AI_CHANNEL")
+	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
+		t.Fatalf("unset GENTLE_AI_CHANNEL: %v", err)
+	}
+	t.Cleanup(func() {
+		if hadValue {
+			if err := os.Setenv("GENTLE_AI_CHANNEL", oldValue); err != nil {
+				t.Fatalf("restore GENTLE_AI_CHANNEL: %v", err)
+			}
+			return
+		}
+		if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
+			t.Fatalf("restore unset GENTLE_AI_CHANNEL: %v", err)
+		}
+	})
+}
 
 // testTransport redirects all requests to the test server.
 type testTransport struct {

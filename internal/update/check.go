@@ -80,7 +80,7 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 
 	go func() {
 		defer wg.Done()
-		if usesBetaMainHeadCheck(tool) {
+		if usesBetaMainHeadCheck(tool, currentBuildVersion) {
 			mainCommit, fetchErr = fetchMainCommit(ctx, tool.Owner, tool.Repo)
 			return
 		}
@@ -99,7 +99,7 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 		return result
 	}
 
-	if usesBetaMainHeadCheck(tool) {
+	if usesBetaMainHeadCheck(tool, currentBuildVersion) {
 		return applyBetaMainHeadStatus(result, localVersion, mainCommit)
 	}
 
@@ -149,8 +149,12 @@ func checkSingleTool(ctx context.Context, tool ToolInfo, currentBuildVersion str
 	return result
 }
 
-func usesBetaMainHeadCheck(tool ToolInfo) bool {
-	return tool.Name == "gentle-ai" && strings.EqualFold(tool.Owner, "Gentleman-Programming") && tool.Repo == "gentle-ai" && isBetaUpdateChannel()
+func usesBetaMainHeadCheck(tool ToolInfo, currentVersion string) bool {
+	return isGentleAIRepo(tool) && (isBetaUpdateChannel() || isGoPseudoVersionWithCommit(currentVersion))
+}
+
+func isGentleAIRepo(tool ToolInfo) bool {
+	return tool.Name == "gentle-ai" && strings.EqualFold(tool.Owner, "Gentleman-Programming") && tool.Repo == "gentle-ai"
 }
 
 func isBetaUpdateChannel() bool {
@@ -213,6 +217,36 @@ func localBuildCommit(version string) string {
 		}
 	}
 	return strings.ToLower(candidate)
+}
+
+func isGoPseudoVersionWithCommit(version string) bool {
+	version = strings.TrimSpace(version)
+	if localBuildCommit(version) == "" {
+		return false
+	}
+
+	parts := strings.Split(version, "-")
+	if len(parts) < 3 {
+		return false
+	}
+	if !versionRegexp.MatchString(parts[0]) {
+		return false
+	}
+
+	timestampPart := parts[len(parts)-2]
+	if idx := strings.LastIndex(timestampPart, "."); idx >= 0 {
+		timestampPart = timestampPart[idx+1:]
+	}
+	if len(timestampPart) != 14 {
+		return false
+	}
+	for _, r := range timestampPart {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+
+	return true
 }
 
 func sameCommitPrefix(local, remote string) bool {
