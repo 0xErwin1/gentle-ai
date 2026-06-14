@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/styles"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
+	"github.com/rivo/uniseg"
 )
 
 // WelcomeOptions returns the welcome menu options.
@@ -53,6 +55,10 @@ func WelcomeOptions(updateResults []update.UpdateResult, updateCheckDone bool, s
 }
 
 func RenderWelcome(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool) string {
+	return RenderWelcomeWithWidth(cursor, version, updateBanner, updateResults, updateCheckDone, showProfiles, profileCount, hasEngines, 0)
+}
+
+func RenderWelcomeWithWidth(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, width int) string {
 	var b strings.Builder
 
 	b.WriteString(styles.RenderLogo())
@@ -61,7 +67,7 @@ func RenderWelcome(cursor int, version string, updateBanner string, updateResult
 	b.WriteString("\n")
 
 	if updateBanner != "" {
-		b.WriteString(styles.WarningStyle.Render(updateBanner))
+		b.WriteString(styles.WarningStyle.Render(wrapWelcomeBanner(updateBanner, welcomeContentWidth(width))))
 		b.WriteString("\n")
 	}
 
@@ -72,5 +78,93 @@ func RenderWelcome(cursor int, version string, updateBanner string, updateResult
 	b.WriteString("\n")
 	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • q: quit"))
 
+	if width > 0 {
+		return styles.FrameStyle.Width(width - 4).Render(b.String())
+	}
 	return styles.FrameStyle.Render(b.String())
+}
+
+func welcomeContentWidth(width int) int {
+	const frameHorizontalSize = 10 // double borders plus left/right padding from FrameStyle.
+	if width <= frameHorizontalSize {
+		return 0
+	}
+	return width - frameHorizontalSize
+}
+
+func wrapWelcomeBanner(text string, width int) string {
+	if width <= 0 {
+		return text
+	}
+	lines := strings.Split(text, "\n")
+	wrapped := make([]string, 0, len(lines))
+	for _, line := range lines {
+		wrapped = append(wrapped, wrapPlainLine(line, width)...)
+	}
+	return strings.Join(wrapped, "\n")
+}
+
+func wrapPlainLine(line string, width int) []string {
+	if lipgloss.Width(line) <= width {
+		return []string{line}
+	}
+
+	words := strings.Fields(line)
+	if len(words) == 0 {
+		return []string{""}
+	}
+
+	var lines []string
+	var current strings.Builder
+	for _, word := range words {
+		wordWidth := lipgloss.Width(word)
+		currentWidth := lipgloss.Width(current.String())
+		if wordWidth > width {
+			if currentWidth > 0 {
+				lines = append(lines, current.String())
+				current.Reset()
+			}
+			lines = append(lines, hardWrapWord(word, width)...)
+			continue
+		}
+		if currentWidth == 0 {
+			current.WriteString(word)
+			continue
+		}
+		if currentWidth+1+wordWidth > width {
+			lines = append(lines, current.String())
+			current.Reset()
+			current.WriteString(word)
+			continue
+		}
+		current.WriteString(" ")
+		current.WriteString(word)
+	}
+	if current.Len() > 0 {
+		lines = append(lines, current.String())
+	}
+	return lines
+}
+
+func hardWrapWord(word string, width int) []string {
+	lines := make([]string, 0)
+	var current strings.Builder
+	currentWidth := 0
+
+	graphemes := uniseg.NewGraphemes(word)
+	for graphemes.Next() {
+		cluster := graphemes.Str()
+		clusterWidth := lipgloss.Width(cluster)
+		if currentWidth > 0 && currentWidth+clusterWidth > width {
+			lines = append(lines, current.String())
+			current.Reset()
+			currentWidth = 0
+		}
+		current.WriteString(cluster)
+		currentWidth += clusterWidth
+	}
+	if current.Len() > 0 {
+		lines = append(lines, current.String())
+	}
+	return lines
 }

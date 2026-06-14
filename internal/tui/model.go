@@ -964,7 +964,7 @@ func (m Model) View() string {
 			}
 			banner += "Advisory: " + m.AdvisoryMessage
 		}
-		return screens.RenderWelcome(m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines())
+		return screens.RenderWelcomeWithWidth(m.Cursor, m.Version, banner, m.UpdateResults, m.UpdateCheckDone, m.hasDetectedOpenCode(), len(m.ProfileList), m.hasAgentBuilderEngines(), m.Width)
 	case ScreenUpgrade:
 		return screens.RenderUpgrade(m.UpdateResults, m.UpgradeReport, m.UpgradeErr, m.OperationRunning, m.UpdateCheckDone, m.Cursor, m.SpinnerFrame)
 	case ScreenSync:
@@ -2418,6 +2418,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 			m.OperationRunning = true
 			m.OperationMode = "upgrade"
+			m.setScreen(ScreenUpgrade)
 			return m, tea.Batch(tickCmd(), m.startUpgrade())
 		case 1: // View changes
 			return m.openUpdateReleaseURL()
@@ -2564,6 +2565,7 @@ func (m Model) handleUpdatePromptKey(keyStr string) (tea.Model, tea.Cmd) {
 		}
 		m.OperationRunning = true
 		m.OperationMode = "upgrade"
+		m.setScreen(ScreenUpgrade)
 		return m, tea.Batch(tickCmd(), m.startUpgrade())
 	case "v":
 		return m.openUpdateReleaseURL()

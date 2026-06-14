@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	componentuninstall "github.com/gentleman-programming/gentle-ai/internal/components/uninstall"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -4834,6 +4835,29 @@ func TestWelcomeView_NewlineSeparatorBetweenUpdateAndAdvisory(t *testing.T) {
 	}
 }
 
+func TestWelcomeView_LongAdvisoryStaysWithinWindowWidth(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenWelcome
+	m.Width = 50
+	m.AdvisoryMessage = "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀 advisory must stay within the visible frame width"
+
+	view := m.View()
+
+	foundAdvisory := false
+	for i, line := range strings.Split(view, "\n") {
+		if !strings.Contains(line, "Advisory:") && !strings.Contains(line, "visible frame") {
+			continue
+		}
+		foundAdvisory = true
+		if width := lipgloss.Width(line); width > m.Width {
+			t.Fatalf("advisory line %d width = %d, want <= %d\nline: %q\nview:\n%s", i, width, m.Width, line, view)
+		}
+	}
+	if !foundAdvisory {
+		t.Fatalf("advisory text was not rendered\nview:\n%s", view)
+	}
+}
+
 // ─── Advisory message sanitization tests ─────────────────────────────────────
 
 // TestSanitizeAdvisoryMessage_StripControlChars verifies that ASCII control
@@ -5259,6 +5283,34 @@ func TestUpdatePromptScreen_EnterWithCursorOnUpdate_RunsUpgrade(t *testing.T) {
 
 	if !upgraded {
 		t.Error("UpgradeFn should have been called when Enter is pressed with cursor on Update now (cursor=0)")
+	}
+}
+
+func TestUpdatePromptScreen_UpdateNowTransitionsToVisibleUpgradeProgress(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenUpdatePrompt
+	m.UpdateResults = []update.UpdateResult{makeUpdateResult(update.UpdateAvailable, "https://example.com/releases")}
+	m.UpdateCheckDone = true
+	m.Cursor = 0
+	m.UpgradeFn = func(_ context.Context, _ []update.UpdateResult) upgrade.UpgradeReport {
+		return upgrade.UpgradeReport{}
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	got := updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("cmd should not be nil when Update now is confirmed")
+	}
+	if got.Screen != ScreenUpgrade {
+		t.Fatalf("Screen = %v, want ScreenUpgrade for visible upgrade progress", got.Screen)
+	}
+	if !got.OperationRunning {
+		t.Fatal("OperationRunning must be true after confirming Update now")
+	}
+	view := got.View()
+	if !strings.Contains(view, "Upgrading") && !strings.Contains(view, "Running") {
+		t.Fatalf("upgrade progress view should show an in-progress state\nview:\n%s", view)
 	}
 }
 
