@@ -80,6 +80,24 @@ scoop bucket add gentleman https://github.com/Gentleman-Programming/scoop-bucket
 scoop install gentle-ai
 ```
 
+### Try the beta channel (test `main` before a release)
+
+The beta channel builds Gentle AI straight from `main`, so you need **Go 1.24+** installed first. Use it to try unreleased changes and report issues early.
+
+**macOS / Linux**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta
+```
+
+**Windows (PowerShell)**
+
+```powershell
+$env:GENTLE_AI_CHANNEL="beta"; irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
+```
+
+To keep upgrading on beta later, run `GENTLE_AI_CHANNEL=beta gentle-ai upgrade`. To return to stable, reinstall via Homebrew or Scoop.
+
 ### After install: project-level setup
 
 Once your agents are configured, open your AI agent in a project and run these two commands to register the project context:
