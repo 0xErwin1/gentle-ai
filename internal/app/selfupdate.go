@@ -3,24 +3,20 @@ package app
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
-	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/mattn/go-isatty"
 
+	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/update"
 	"github.com/gentleman-programming/gentle-ai/internal/update/upgrade"
 )
-
-// lookPathFn is a package-level var for testability.
-var lookPathFn = exec.LookPath
 
 // selfUpdateNowFn returns the current time; injected for test determinism.
 var selfUpdateNowFn = func() time.Time { return time.Now() }
@@ -59,14 +55,6 @@ func defaultPromptForUpdate(stdout io.Writer, stdin io.Reader, currentVersion, l
 
 // selfUpdateTimeout is the maximum time allowed for the update check + upgrade.
 const selfUpdateTimeout = 7 * time.Second
-
-// reExec is swappable for testing — prevents actual syscall.Exec in tests.
-var reExec = func(argv0 string, argv []string, envv []string) error {
-	return syscall.Exec(argv0, argv, envv)
-}
-
-// goOS returns the current operating system name. Package-level var for testing.
-var goOS = func() string { return runtime.GOOS }
 
 // selfUpdate checks for and applies a gentle-ai update before normal dispatch.
 // Returns nil on success or skip; errors are non-fatal (caller logs and continues).
@@ -158,6 +146,26 @@ func selfUpdate(ctx context.Context, version string, profile system.PlatformProf
 		return nil
 	}
 
+	// Deferred sync: set PendingSync=true in state before exiting so the new
+	// binary runs sync automatically on its next launch. This replaces the
+	// previous "restart and sync manually" skip path. Failure to write state is
+	// non-fatal — the user can re-run sync explicitly.
+	//
+	// No-clobber guard: only fall back to a fresh InstallState{} when the file
+	// is genuinely missing (ErrNotExist). Any other read error (e.g. corrupt
+	// JSON, permission denied) means an existing file is present — do not
+	// overwrite it and risk dropping unrelated persisted fields.
+	if homeDir != "" {
+		s, readErr := state.Read(homeDir)
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			// File exists but is unreadable/corrupt — skip this round to avoid
+			// clobbering installed_agents, model assignments, etc.
+		} else {
+			s.PendingSync = true
+			_ = state.Write(homeDir, s)
+		}
+	}
+
 	return restartAfterGentleAIUpgrade(target.LatestVersion, stdout)
 }
 
@@ -172,33 +180,11 @@ func gentleAIUpgradeSucceeded(report upgrade.UpgradeReport) (string, bool) {
 
 func restartAfterGentleAIUpgrade(latestVersion string, stdout io.Writer) error {
 	latestVersion = strings.TrimPrefix(latestVersion, "v")
-	// Re-exec on Unix; print message on Windows.
-	if goOS() == "windows" {
-		_, _ = fmt.Fprintf(stdout, "Updated to v%s — please restart.\n", latestVersion)
-		return nil
-	}
-
-	// Unix: re-exec with the updated binary.
-	//
-	// Use exec.LookPath("gentle-ai") rather than os.Executable() because
-	// on Homebrew, os.Executable() resolves to the versioned Cellar path
-	// (e.g. /opt/homebrew/Cellar/gentle-ai/1.8.5/bin/gentle-ai) which
-	// still points to the OLD binary after upgrade. The PATH symlink
-	// (/opt/homebrew/bin/gentle-ai) is updated by Homebrew to the new
-	// version, so LookPath gives us the correct binary.
-	executable, err := lookPathFn("gentle-ai")
-	if err != nil {
-		// Fallback to os.Executable() if LookPath fails.
-		executable, err = os.Executable()
-		if err != nil {
-			return nil // non-fatal
-		}
-	}
-
-	// Set loop guard env var before re-exec.
-	os.Setenv(envSelfUpdateDone, "1")
-
-	_, _ = fmt.Fprintf(stdout, "Updated to v%s, restarting...\n", latestVersion)
-
-	return reExec(executable, os.Args, os.Environ())
+	// Converged behavior (task 4.6): always print the restart message on every OS
+	// and return. The new binary runs automatically on next launch, picking up
+	// PendingSync=true and completing the deferred sync. This sidesteps the
+	// Windows binary-lock issue and gives a consistent single path across all OSes.
+	// Tradeoff: Unix loses seamless re-exec restart; mitigated by clear copy below.
+	_, _ = fmt.Fprintf(stdout, "Updated to v%s — restart gentle-ai to continue.\n", latestVersion)
+	return nil
 }
