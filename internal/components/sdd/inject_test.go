@@ -421,6 +421,17 @@ func TestInjectOpenCodeWritesCommandFiles(t *testing.T) {
 		t.Fatal("sdd-init.md missing frontmatter description — not real content")
 	}
 
+	for _, name := range []string{"skill-creator.md", "skill-registry.md"} {
+		path := filepath.Join(home, ".config", "opencode", "commands", name)
+		commandContent, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatalf("ReadFile(%s) error = %v", name, readErr)
+		}
+		if !strings.Contains(string(commandContent), "description") {
+			t.Fatalf("%s missing frontmatter description", name)
+		}
+	}
+
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	settingsContent, err := os.ReadFile(settingsPath)
 	if err != nil {

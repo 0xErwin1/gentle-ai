@@ -75,9 +75,13 @@ func TestAllSkillIDsIncludesEveryKnownSkill(t *testing.T) {
 
 	required := []model.SkillID{
 		model.SkillSDDInit,
-		model.SkillGoTesting,
 		model.SkillCreator,
+		model.SkillSkillRegistry,
+		model.SkillCognitiveDoc,
+		model.SkillCommentWriter,
 		model.SkillJudgmentDay,
+		model.SkillImprover,
+		model.SkillGoTesting,
 	}
 
 	skillSet := make(map[model.SkillID]struct{}, len(all))
@@ -89,5 +93,32 @@ func TestAllSkillIDsIncludesEveryKnownSkill(t *testing.T) {
 		if _, ok := skillSet[req]; !ok {
 			t.Fatalf("AllSkillIDs() missing %q", req)
 		}
+	}
+}
+
+func TestRequestedBundledSkillsAreInPresetSkillSets(t *testing.T) {
+	required := []model.SkillID{
+		model.SkillCreator,
+		model.SkillSkillRegistry,
+		model.SkillCognitiveDoc,
+		model.SkillCommentWriter,
+		model.SkillJudgmentDay,
+		model.SkillSDDInit,
+		model.SkillImprover,
+	}
+
+	for _, preset := range []model.PresetID{model.PresetEcosystemOnly, model.PresetFullGentleman} {
+		t.Run(string(preset), func(t *testing.T) {
+			skillSet := make(map[model.SkillID]struct{})
+			for _, skill := range SkillsForPreset(preset) {
+				skillSet[skill] = struct{}{}
+			}
+
+			for _, req := range required {
+				if _, ok := skillSet[req]; !ok {
+					t.Fatalf("SkillsForPreset(%q) missing requested bundled skill %q", preset, req)
+				}
+			}
+		})
 	}
 }

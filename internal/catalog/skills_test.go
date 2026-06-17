@@ -35,3 +35,33 @@ func TestMVPSkillsNoDuplicates(t *testing.T) {
 		seen[s.ID] = true
 	}
 }
+
+func TestMVPSkillsIncludeRequestedBundledSkillsWithCanonicalNames(t *testing.T) {
+	required := map[model.SkillID]string{
+		model.SkillCreator:       "skill-creator",
+		model.SkillSkillRegistry: "skill-registry",
+		model.SkillCognitiveDoc:  "cognitive-doc-design",
+		model.SkillCommentWriter: "comment-writer",
+		model.SkillJudgmentDay:   "judgment-day",
+		model.SkillSDDInit:       "sdd-init",
+		model.SkillImprover:      "skill-improver",
+	}
+
+	found := make(map[model.SkillID]string)
+	for _, skill := range MVPSkills() {
+		found[skill.ID] = skill.Name
+		if skill.Name == "judgement-day" {
+			t.Fatalf("catalog uses non-canonical spelling %q; want judgment-day", skill.Name)
+		}
+	}
+
+	for id, wantName := range required {
+		name, ok := found[id]
+		if !ok {
+			t.Fatalf("MVPSkills() missing requested bundled skill %q", id)
+		}
+		if name != wantName {
+			t.Fatalf("MVPSkills() name for %q = %q, want %q", id, name, wantName)
+		}
+	}
+}

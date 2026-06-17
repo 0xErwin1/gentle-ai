@@ -258,7 +258,9 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"skills/go-testing/SKILL.md",
 		"skills/go-testing/references/examples.md",
 		"skills/skill-creator/SKILL.md",
+		"skills/skill-creator/references/skill-style-guide.md",
 		"skills/skill-improver/SKILL.md",
+		"skills/skill-improver/references/skill-style-guide.md",
 		"skills/chained-pr/references/chaining-details.md",
 	}
 
@@ -302,8 +304,15 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(opencode/commands) error = %v", err)
 	}
-	if len(commandEntries) != 10 {
-		t.Fatalf("opencode commands count = %d, want 10", len(commandEntries))
+	if len(commandEntries) != 12 {
+		t.Fatalf("opencode commands count = %d, want 12", len(commandEntries))
+	}
+	wantCommands := map[string]bool{"skill-creator.md": true, "skill-registry.md": true}
+	for _, entry := range commandEntries {
+		delete(wantCommands, entry.Name())
+	}
+	for name := range wantCommands {
+		t.Fatalf("opencode embedded commands missing %q", name)
 	}
 
 	pluginEntries, err := FS.ReadDir("opencode/plugins")

@@ -61,14 +61,15 @@ func TestInjectWritesSkillFilesForOpenCode(t *testing.T) {
 		t.Fatalf("Inject() first changed = false")
 	}
 
-	if len(result.Files) != 1 {
-		t.Fatalf("Inject() files len = %d", len(result.Files))
+	if len(result.Files) != 2 {
+		t.Fatalf("Inject() files len = %d, want SKILL.md plus local reference", len(result.Files))
 	}
 
 	path := filepath.Join(home, ".config", "opencode", "skills", "skill-creator", "SKILL.md")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("expected skill file %q: %v", path, err)
 	}
+	assertNonEmptyFile(t, filepath.Join(home, ".config", "opencode", "skills", "skill-creator", "references", "skill-style-guide.md"))
 
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -156,9 +157,9 @@ func TestInjectSkipsSddSkills(t *testing.T) {
 		t.Fatalf("Inject() error = %v", err)
 	}
 
-	// Only the non-SDD skill (skill-creator) should be written.
-	if len(result.Files) != 1 {
-		t.Fatalf("Inject() files len = %d, want 1 (only skill-creator)", len(result.Files))
+	// Only the non-SDD skill (skill-creator) should be written, including its local references.
+	if len(result.Files) != 2 {
+		t.Fatalf("Inject() files len = %d, want 2 (skill-creator plus local reference)", len(result.Files))
 	}
 
 	// SDD skill files must not be created by the skills component.
@@ -181,8 +182,8 @@ func TestInjectSkipsUnknownSkillGracefully(t *testing.T) {
 		t.Fatalf("Inject() error = %v", err)
 	}
 
-	if len(result.Files) != 1 {
-		t.Fatalf("Inject() files len = %d, want 1", len(result.Files))
+	if len(result.Files) != 2 {
+		t.Fatalf("Inject() files len = %d, want 2", len(result.Files))
 	}
 
 	if len(result.Skipped) != 1 {
@@ -258,8 +259,8 @@ func TestInjectVSCodeWritesSkillFiles(t *testing.T) {
 	if !result.Changed {
 		t.Fatalf("Inject(vscode) changed = false")
 	}
-	if len(result.Files) != 1 {
-		t.Fatalf("Inject(vscode) files len = %d, want 1", len(result.Files))
+	if len(result.Files) != 2 {
+		t.Fatalf("Inject(vscode) files len = %d, want 2", len(result.Files))
 	}
 
 	path := filepath.Join(home, ".copilot", "skills", "skill-creator", "SKILL.md")
@@ -285,6 +286,78 @@ func TestInjectUsesRealEmbeddedContent(t *testing.T) {
 	// Real embedded content should be substantial (not a one-line stub).
 	if len(content) < 100 {
 		t.Fatalf("skill file content looks like a stub (len=%d)", len(content))
+	}
+}
+
+func TestInjectRequiredBundledSkillsForEverySkillsCapableDefaultAdapter(t *testing.T) {
+	registry, err := agents.NewDefaultRegistry()
+	if err != nil {
+		t.Fatalf("NewDefaultRegistry() error = %v", err)
+	}
+
+	required := requiredBundledSkillIDs()
+
+	for _, agentID := range registry.SupportedAgents() {
+		adapter, ok := registry.Get(agentID)
+		if !ok {
+			t.Fatalf("registry missing adapter %q", agentID)
+		}
+		if !adapter.SupportsSkills() {
+			continue
+		}
+
+		t.Run(string(agentID), func(t *testing.T) {
+			home := t.TempDir()
+			result, injectErr := InjectWithCapability(home, adapter, required, "capable")
+			if injectErr != nil {
+				t.Fatalf("InjectWithCapability() error = %v", injectErr)
+			}
+			if !result.Changed {
+				t.Fatalf("InjectWithCapability() changed = false")
+			}
+			if len(result.Skipped) != 0 {
+				t.Fatalf("InjectWithCapability() skipped = %v, want none", result.Skipped)
+			}
+
+			skillsDir := adapter.SkillsDir(home)
+			if skillsDir == "" {
+				t.Fatalf("adapter %q supports skills but returned empty SkillsDir", agentID)
+			}
+
+			for _, id := range required {
+				path := filepath.Join(skillsDir, string(id), "SKILL.md")
+				assertNonEmptyFile(t, path)
+			}
+		})
+	}
+}
+
+func TestInjectSkillCreatorAndImproverInstallLocalStyleGuideReference(t *testing.T) {
+	home := t.TempDir()
+
+	_, err := Inject(home, opencodeAdapter(), []model.SkillID{model.SkillCreator, model.SkillImprover})
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	skillsDir := filepath.Join(home, ".config", "opencode", "skills")
+	for _, id := range []model.SkillID{model.SkillCreator, model.SkillImprover} {
+		t.Run(string(id), func(t *testing.T) {
+			guidePath := filepath.Join(skillsDir, string(id), "references", "skill-style-guide.md")
+			assertNonEmptyFile(t, guidePath)
+
+			skillContent, readErr := os.ReadFile(filepath.Join(skillsDir, string(id), "SKILL.md"))
+			if readErr != nil {
+				t.Fatalf("ReadFile(SKILL.md) error = %v", readErr)
+			}
+			text := string(skillContent)
+			if !strings.Contains(text, "docs/skill-style-guide.md") {
+				t.Fatalf("%s SKILL.md must preserve repo normative guide reference", id)
+			}
+			if !strings.Contains(text, "references/skill-style-guide.md") {
+				t.Fatalf("%s SKILL.md must reference installed local style guide", id)
+			}
+		})
 	}
 }
 
@@ -337,8 +410,8 @@ func TestInjectWithCapability_WritesNonSDDSkillsRegardlessOfCapability(t *testin
 	if err != nil {
 		t.Fatalf("InjectWithCapability() error = %v", err)
 	}
-	if len(result.Files) != 1 {
-		t.Fatalf("InjectWithCapability() files len = %d, want 1", len(result.Files))
+	if len(result.Files) != 2 {
+		t.Fatalf("InjectWithCapability() files len = %d, want 2", len(result.Files))
 	}
 	if len(result.Skipped) != 0 {
 		t.Fatalf("InjectWithCapability() skipped len = %d, want 0", len(result.Skipped))
@@ -370,4 +443,16 @@ func containsFile(files []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func requiredBundledSkillIDs() []model.SkillID {
+	return []model.SkillID{
+		model.SkillCreator,
+		model.SkillSkillRegistry,
+		model.SkillCognitiveDoc,
+		model.SkillCommentWriter,
+		model.SkillJudgmentDay,
+		model.SkillSDDInit,
+		model.SkillImprover,
+	}
 }
