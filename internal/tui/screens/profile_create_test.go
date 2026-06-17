@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/tui/screens"
 )
 
@@ -82,6 +83,62 @@ func TestRenderProfileCreate_Step2_ShowsCreateAndSync(t *testing.T) {
 	}
 }
 
+func TestRenderProfileCreate_Step1_ShowsJDRows(t *testing.T) {
+	draft := model.Profile{Name: "cheap"}
+	picker := screens.ModelPickerState{ForProfile: true, AvailableIDs: []string{"anthropic"}}
+	output := screens.RenderProfileCreate(1, draft, "", 0, "", false, nil, picker, 0)
+
+	for _, want := range []string{"--- Judgment Day ---", "jd-judge-a", "jd-judge-b", "jd-fix-agent"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("profile model step missing %q; got:\n%s", want, output)
+		}
+	}
+}
+
+func TestRenderProfileCreate_Step1_PrepopulatesJDAssignment(t *testing.T) {
+	draft := model.Profile{Name: "cheap"}
+	picker := screens.ModelPickerState{
+		ForProfile:   true,
+		AvailableIDs: []string{"openai"},
+		Providers: map[string]opencode.Provider{
+			"openai": {
+				Name: "OpenAI",
+				Models: map[string]opencode.Model{
+					"gpt-5": {Name: "GPT-5"},
+				},
+			},
+		},
+	}
+	assignments := map[string]model.ModelAssignment{
+		"jd-judge-a": {ProviderID: "openai", ModelID: "gpt-5"},
+	}
+
+	output := screens.RenderProfileCreate(1, draft, "", 0, "", true, assignments, picker, 0)
+
+	if !strings.Contains(output, "jd-judge-a") || !strings.Contains(output, "OpenAI / GPT-5") {
+		t.Fatalf("profile edit model step should prepopulate JD assignment; got:\n%s", output)
+	}
+}
+
+func TestRenderProfileCreate_Step2_LabelsCombinedModelAssignments(t *testing.T) {
+	draft := model.Profile{
+		Name: "cheap",
+		PhaseAssignments: map[string]model.ModelAssignment{
+			"sdd-apply":  {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+			"jd-judge-a": {ProviderID: "openai", ModelID: "gpt-5"},
+		},
+	}
+	picker := screens.ModelPickerState{}
+	output := screens.RenderProfileCreate(2, draft, "", 0, "", false, nil, picker, 0)
+
+	if !strings.Contains(output, "Model assignments") {
+		t.Fatalf("confirm step should label combined SDD/JD assignments as model assignments; got:\n%s", output)
+	}
+	if strings.Contains(output, "Phase assignments") {
+		t.Fatalf("confirm step should not use SDD-only 'Phase assignments' copy; got:\n%s", output)
+	}
+}
+
 // ─── Edit mode ────────────────────────────────────────────────────────────────
 
 func TestRenderProfileCreate_EditMode_ShowsEditHeader(t *testing.T) {
@@ -124,5 +181,24 @@ func TestProfileCreateOptionCount_Step2(t *testing.T) {
 	// Step 2: "Create & Sync" + "Cancel" = 2
 	if count != 2 {
 		t.Errorf("expected option count 2 for step 2 (confirm), got %d", count)
+	}
+}
+
+func TestProfileCreateOptionCount_Step1IncludesJDRows(t *testing.T) {
+	picker := screens.ModelPickerState{AvailableIDs: []string{"anthropic"}}
+	count := screens.ProfileCreateOptionCount(1, picker)
+
+	want := 2 + len(opencode.SDDPhases()) + 1 + len(opencode.JDPhases()) + 2
+	if count != want {
+		t.Errorf("expected option count %d for step 1 with JD rows, got %d", want, count)
+	}
+}
+
+func TestProfileCreateOptionCount_Step1EmptyProvidersIncludesContinueAndBack(t *testing.T) {
+	picker := screens.ModelPickerState{}
+	count := screens.ProfileCreateOptionCount(1, picker)
+
+	if count != 2 {
+		t.Errorf("expected option count 2 for empty-provider profile step (Continue with defaults + Back), got %d", count)
 	}
 }
