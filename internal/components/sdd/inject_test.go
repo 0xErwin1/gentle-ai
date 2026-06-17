@@ -6538,3 +6538,73 @@ func TestInjectTriggerRules_AllAdapters(t *testing.T) {
 		})
 	}
 }
+
+func TestMigrateLegacyOpenCodeCommandPrompt(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantField map[string]string // command name -> expected template value ("" means key should be absent)
+		wantNoKey []string          // command names that must NOT contain a "prompt" key
+	}{
+		{
+			name:      "renames prompt to template when template absent",
+			input:     `{"command":{"skill-creator":{"description":"Create a skill","prompt":"Load skill-creator"}}}`,
+			wantField: map[string]string{"skill-creator": "Load skill-creator"},
+			wantNoKey: []string{"skill-creator"},
+		},
+		{
+			name:      "keeps existing template and drops prompt",
+			input:     `{"command":{"x":{"template":"keep me","prompt":"discard me"}}}`,
+			wantField: map[string]string{"x": "keep me"},
+			wantNoKey: []string{"x"},
+		},
+		{
+			name:      "leaves template-only entries untouched",
+			input:     `{"command":{"x":{"template":"body"}}}`,
+			wantField: map[string]string{"x": "body"},
+			wantNoKey: []string{"x"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := migrateLegacyOpenCodeCommandPrompt([]byte(tt.input))
+			if err != nil {
+				t.Fatalf("migrateLegacyOpenCodeCommandPrompt() error = %v", err)
+			}
+			root := map[string]any{}
+			if err := json.Unmarshal(out, &root); err != nil {
+				t.Fatalf("result is not valid JSON: %v", err)
+			}
+			commands, _ := root["command"].(map[string]any)
+			for name, wantTemplate := range tt.wantField {
+				entry, ok := commands[name].(map[string]any)
+				if !ok {
+					t.Fatalf("command %q missing or wrong shape", name)
+				}
+				if got, _ := entry["template"].(string); got != wantTemplate {
+					t.Fatalf("command %q template = %q, want %q", name, got, wantTemplate)
+				}
+			}
+			for _, name := range tt.wantNoKey {
+				entry, _ := commands[name].(map[string]any)
+				if _, hasPrompt := entry["prompt"]; hasPrompt {
+					t.Fatalf("command %q still has forbidden 'prompt' key", name)
+				}
+			}
+		})
+	}
+}
+
+func TestMigrateLegacyOpenCodeCommandPromptNoOp(t *testing.T) {
+	// No command key, empty input, and non-JSON must pass through unchanged.
+	for _, in := range []string{``, `   `, `{"agent":{}}`, `not json`} {
+		out, err := migrateLegacyOpenCodeCommandPrompt([]byte(in))
+		if err != nil {
+			t.Fatalf("unexpected error for %q: %v", in, err)
+		}
+		if string(out) != in {
+			t.Fatalf("input %q mutated to %q, want unchanged", in, string(out))
+		}
+	}
+}

@@ -1438,6 +1438,10 @@ func mergeJSONFile(path string, overlay []byte) (mergeJSONResult, error) {
 	if err != nil {
 		return mergeJSONResult{}, fmt.Errorf("migrate opencode sdd orchestrator agent: %w", err)
 	}
+	baseJSON, err = migrateLegacyOpenCodeCommandPrompt(baseJSON)
+	if err != nil {
+		return mergeJSONResult{}, fmt.Errorf("migrate opencode command prompt field: %w", err)
+	}
 
 	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)
 	if err != nil {
@@ -1637,6 +1641,62 @@ func migrateLegacyOpenCodeAgentsKey(baseJSON []byte) ([]byte, error) {
 
 	root["agent"] = current
 	delete(root, "agents")
+
+	encoded, err := json.MarshalIndent(root, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+
+	return append(encoded, '\n'), nil
+}
+
+// migrateLegacyOpenCodeCommandPrompt normalizes inline OpenCode command entries
+// that still use the deprecated "prompt" field to the current "template" field.
+//
+// OpenCode renamed the command body field from "prompt" to "template" and made
+// the command schema strict (additionalProperties: false). A stale "prompt" key
+// left over from an older install therefore fails schema validation and aborts
+// OpenCode startup ("Missing key" / ConfigInvalidError). For each command entry
+// we move "prompt" into "template" when "template" is absent, then drop "prompt".
+// Entries that already define "template" keep it and simply shed the stale key.
+func migrateLegacyOpenCodeCommandPrompt(baseJSON []byte) ([]byte, error) {
+	if len(strings.TrimSpace(string(baseJSON))) == 0 {
+		return baseJSON, nil
+	}
+
+	root := map[string]any{}
+	if err := json.Unmarshal(baseJSON, &root); err != nil {
+		// Preserve prior behavior for non-JSON/non-parseable inputs.
+		return baseJSON, nil
+	}
+
+	commandsRaw, ok := root["command"].(map[string]any)
+	if !ok {
+		return baseJSON, nil
+	}
+
+	changed := false
+	for _, entryRaw := range commandsRaw {
+		entry, ok := entryRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		promptRaw, hasPrompt := entry["prompt"]
+		if !hasPrompt {
+			continue
+		}
+		if _, hasTemplate := entry["template"]; !hasTemplate {
+			if prompt, ok := promptRaw.(string); ok {
+				entry["template"] = prompt
+			}
+		}
+		delete(entry, "prompt")
+		changed = true
+	}
+
+	if !changed {
+		return baseJSON, nil
+	}
 
 	encoded, err := json.MarshalIndent(root, "", "  ")
 	if err != nil {
