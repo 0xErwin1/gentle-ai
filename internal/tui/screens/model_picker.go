@@ -771,7 +771,11 @@ func renderPhaseList(
 	actionIdx := cursor - len(rows)
 	b.WriteString(renderOptions([]string{"Continue", "← Back"}, actionIdx))
 	b.WriteString("\n")
-	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: change model / confirm • esc: back"))
+	help := "j/k: navigate • enter: change model / confirm • esc: back"
+	if state.ForProfile {
+		help = "j/k: navigate • enter: change model / confirm • backspace: clear • esc: back"
+	}
+	b.WriteString(styles.HelpStyle.Render(help))
 
 	return b.String()
 }

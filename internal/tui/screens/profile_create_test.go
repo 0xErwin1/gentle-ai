@@ -61,15 +61,20 @@ func TestRenderProfileCreate_Step2_ShowsOrchestratorModel(t *testing.T) {
 			ProviderID: "anthropic",
 			ModelID:    "claude-haiku-4",
 		},
+		PhaseAssignments: map[string]model.ModelAssignment{
+			"jd-judge-a": {ProviderID: "openai", ModelID: "gpt-5"},
+		},
 	}
 	picker := screens.ModelPickerState{}
 	output := screens.RenderProfileCreate(2, draft, "", 0, "", false, nil, picker, 0)
 
-	if !strings.Contains(output, "anthropic") {
-		t.Errorf("expected orchestrator provider 'anthropic' in confirm screen, got:\n%s", output)
+	for _, want := range []string{"anthropic", "claude-haiku-4", "Model assignments"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("expected %q in confirm screen, got:\n%s", want, output)
+		}
 	}
-	if !strings.Contains(output, "claude-haiku-4") {
-		t.Errorf("expected orchestrator model 'claude-haiku-4' in confirm screen, got:\n%s", output)
+	if strings.Contains(output, "Phase assignments") {
+		t.Errorf("confirm step should not use SDD-only 'Phase assignments' copy; got:\n%s", output)
 	}
 }
 
@@ -83,19 +88,7 @@ func TestRenderProfileCreate_Step2_ShowsCreateAndSync(t *testing.T) {
 	}
 }
 
-func TestRenderProfileCreate_Step1_ShowsJDRows(t *testing.T) {
-	draft := model.Profile{Name: "cheap"}
-	picker := screens.ModelPickerState{ForProfile: true, AvailableIDs: []string{"anthropic"}}
-	output := screens.RenderProfileCreate(1, draft, "", 0, "", false, nil, picker, 0)
-
-	for _, want := range []string{"--- Judgment Day ---", "jd-judge-a", "jd-judge-b", "jd-fix-agent"} {
-		if !strings.Contains(output, want) {
-			t.Fatalf("profile model step missing %q; got:\n%s", want, output)
-		}
-	}
-}
-
-func TestRenderProfileCreate_Step1_PrepopulatesJDAssignment(t *testing.T) {
+func TestRenderProfileCreate_Step1_ShowsJDRowsAssignmentAndClearHelp(t *testing.T) {
 	draft := model.Profile{Name: "cheap"}
 	picker := screens.ModelPickerState{
 		ForProfile:   true,
@@ -115,27 +108,10 @@ func TestRenderProfileCreate_Step1_PrepopulatesJDAssignment(t *testing.T) {
 
 	output := screens.RenderProfileCreate(1, draft, "", 0, "", true, assignments, picker, 0)
 
-	if !strings.Contains(output, "jd-judge-a") || !strings.Contains(output, "OpenAI / GPT-5") {
-		t.Fatalf("profile edit model step should prepopulate JD assignment; got:\n%s", output)
-	}
-}
-
-func TestRenderProfileCreate_Step2_LabelsCombinedModelAssignments(t *testing.T) {
-	draft := model.Profile{
-		Name: "cheap",
-		PhaseAssignments: map[string]model.ModelAssignment{
-			"sdd-apply":  {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
-			"jd-judge-a": {ProviderID: "openai", ModelID: "gpt-5"},
-		},
-	}
-	picker := screens.ModelPickerState{}
-	output := screens.RenderProfileCreate(2, draft, "", 0, "", false, nil, picker, 0)
-
-	if !strings.Contains(output, "Model assignments") {
-		t.Fatalf("confirm step should label combined SDD/JD assignments as model assignments; got:\n%s", output)
-	}
-	if strings.Contains(output, "Phase assignments") {
-		t.Fatalf("confirm step should not use SDD-only 'Phase assignments' copy; got:\n%s", output)
+	for _, want := range []string{"--- Judgment Day ---", "jd-judge-a", "jd-judge-b", "jd-fix-agent", "OpenAI / GPT-5", "backspace: clear"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("profile model step missing %q; got:\n%s", want, output)
+		}
 	}
 }
 

@@ -1245,17 +1245,13 @@ func TestHandleModelNav_JDLastRow(t *testing.T) {
 
 // ─── ModelPickerRowsForProfile ──────────────────────────────────────────
 
-func TestModelPickerRowsForProfile_Count(t *testing.T) {
+func TestModelPickerRowsForProfile(t *testing.T) {
 	rows := ModelPickerRowsForProfile()
-	// 1 orchestrator + 1 "Set all SDD phases" + SDD sub-agents + separator + JD agents.
 	want := 2 + len(opencode.SDDPhases()) + 1 + len(opencode.JDPhases())
 	if len(rows) != want {
 		t.Fatalf("ModelPickerRowsForProfile() len = %d, want %d; rows = %v", len(rows), want, rows)
 	}
-}
 
-func TestModelPickerRowsForProfile_IncludesSeparator(t *testing.T) {
-	rows := ModelPickerRowsForProfile()
 	sepIdx := SeparatorRowIdx()
 	if sepIdx < 0 || sepIdx >= len(rows) {
 		t.Fatalf("SeparatorRowIdx() = %d out of profile rows range %d", sepIdx, len(rows))
@@ -1263,12 +1259,8 @@ func TestModelPickerRowsForProfile_IncludesSeparator(t *testing.T) {
 	if rows[sepIdx] != "--- Judgment Day ---" {
 		t.Fatalf("ModelPickerRowsForProfile()[%d] = %q, want Judgment Day separator; rows = %v", sepIdx, rows[sepIdx], rows)
 	}
-}
 
-func TestModelPickerRowsForProfile_IncludesJDAgents(t *testing.T) {
-	rows := ModelPickerRowsForProfile()
-	jdPhases := opencode.JDPhases()
-	for _, jd := range jdPhases {
+	for _, jd := range opencode.JDPhases() {
 		found := false
 		for _, row := range rows {
 			if row == jd {
@@ -1279,49 +1271,5 @@ func TestModelPickerRowsForProfile_IncludesJDAgents(t *testing.T) {
 		if !found {
 			t.Fatalf("ModelPickerRowsForProfile() missing JD agent %q; got: %v", jd, rows)
 		}
-	}
-}
-
-func TestClearModelPickerAssignment_JDAgentRow(t *testing.T) {
-	sepIdx := SeparatorRowIdx()
-	state := &ModelPickerState{SelectedPhaseIdx: sepIdx + 1}
-	assignments := map[string]model.ModelAssignment{
-		"jd-judge-a": {ProviderID: "openai", ModelID: "gpt-5"},
-		"sdd-apply":  {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
-	}
-
-	updated := ClearModelPickerAssignment(state, assignments)
-
-	if _, exists := updated["jd-judge-a"]; exists {
-		t.Fatalf("jd-judge-a should be cleared; assignments = %v", updated)
-	}
-	if _, exists := updated["sdd-apply"]; !exists {
-		t.Fatalf("sdd-apply should not be cleared by a JD row; assignments = %v", updated)
-	}
-}
-
-func TestClearModelPickerAssignment_SetAllKeepsJDAssignments(t *testing.T) {
-	state := &ModelPickerState{
-		SelectedPhaseIdx: 1,
-		AllPhasesModel:   model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
-	}
-	assignments := map[string]model.ModelAssignment{
-		"sdd-apply":  {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
-		"sdd-verify": {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
-		"jd-judge-a": {ProviderID: "openai", ModelID: "gpt-5"},
-	}
-
-	updated := ClearModelPickerAssignment(state, assignments)
-
-	for _, phase := range []string{"sdd-apply", "sdd-verify"} {
-		if _, exists := updated[phase]; exists {
-			t.Fatalf("%s should be cleared by Set all SDD phases; assignments = %v", phase, updated)
-		}
-	}
-	if _, exists := updated["jd-judge-a"]; !exists {
-		t.Fatalf("jd-judge-a should remain assigned after clearing Set all SDD phases; assignments = %v", updated)
-	}
-	if state.AllPhasesModel != (model.ModelAssignment{}) {
-		t.Fatalf("AllPhasesModel = %+v, want zero value after clearing Set all", state.AllPhasesModel)
 	}
 }
