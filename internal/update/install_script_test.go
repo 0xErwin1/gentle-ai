@@ -21,6 +21,21 @@ func TestWindowsInstallScriptHasNoUTF8BOM(t *testing.T) {
 	}
 }
 
+func TestWindowsInstallScriptIsASCIIOnly(t *testing.T) {
+	path := filepath.Join("..", "..", "scripts", "install.ps1")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+
+	for i, b := range content {
+		if b >= 0x80 {
+			line := 1 + bytes.Count(content[:i], []byte("\n"))
+			t.Fatalf("scripts/install.ps1 contains non-ASCII byte 0x%X at byte offset %d, line %d; Windows PowerShell 5.1 can misdecode UTF-8 without BOM when running powershell -File", b, i, line)
+		}
+	}
+}
+
 // TestWindowsInstallScriptHasNoUnsafeStringSubexpression guards against the
 // PowerShell 5.1 parser failure reported in issue #849. Patterns like
 // "($fileSize bytes)" inside a double-quoted string are read by Windows
