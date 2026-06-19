@@ -1997,6 +1997,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			// Enable is index 0, Disable is index 1.
 			m.Selection.StrictTDD = (m.Cursor == screens.StrictTDDOptionEnable)
 			if m.shouldShowOpenCodePluginsScreen() {
+				// Early-return guard: OpenCodePlugins is outside the picker slice.
 				m.setScreen(ScreenOpenCodePlugins)
 			} else if m.Selection.Preset == model.PresetCustom {
 				// Custom preset: dependency plan was already built before SDD mode.
@@ -2010,9 +2011,11 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
 					m.setScreen(ScreenReview)
 				}
-			} else {
+			} else if next, ok := m.pickerNextScreen(); ok {
+				// Non-custom: advance to the next screen in the picker slice
+				// (always DependencyTree for StrictTDD, the last non-custom anchor).
 				m.buildDependencyPlan()
-				m.setScreen(ScreenDependencyTree)
+				m.applyPickerEntry(next)
 			}
 			return m, nil
 		}

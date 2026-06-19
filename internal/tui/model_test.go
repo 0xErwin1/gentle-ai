@@ -6521,3 +6521,79 @@ func TestPickerBackRowRegression(t *testing.T) {
 		})
 	}
 }
+
+// TestStrictTDDForward verifies the StrictTDD Continue path for all flow variants.
+// Per design step 8: OpenCodePlugins guard fires first; custom goes to SkillPicker
+// or Review; non-custom advances via pickerNextScreen (→ DependencyTree).
+func TestStrictTDDForward(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T) Model
+		wantScreen Screen
+	}{
+		{
+			name: "non-custom StrictTDD Enable goes to DependencyTree",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenStrictTDD
+				m.Selection.Preset = model.PresetFullGentleman
+				m.Selection.Agents = []model.AgentID{model.AgentCursor}
+				m.Selection.Components = []model.ComponentID{model.ComponentSDD}
+				m.Cursor = screens.StrictTDDOptionEnable
+				return m
+			},
+			wantScreen: ScreenDependencyTree,
+		},
+		{
+			name: "custom no OpenCode no Skills StrictTDD Enable goes to Review",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenStrictTDD
+				m.Selection.Preset = model.PresetCustom
+				m.Selection.Agents = []model.AgentID{model.AgentCursor}
+				m.Selection.Components = []model.ComponentID{model.ComponentSDD} // no Skills
+				m.Cursor = screens.StrictTDDOptionEnable
+				return m
+			},
+			wantScreen: ScreenReview,
+		},
+		{
+			name: "custom no OpenCode has Skills StrictTDD Enable goes to SkillPicker",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenStrictTDD
+				m.Selection.Preset = model.PresetCustom
+				m.Selection.Agents = []model.AgentID{model.AgentCursor}
+				m.Selection.Components = []model.ComponentID{model.ComponentSDD, model.ComponentSkills}
+				m.Cursor = screens.StrictTDDOptionEnable
+				return m
+			},
+			wantScreen: ScreenSkillPicker,
+		},
+		{
+			name: "custom has OpenCode StrictTDD Enable goes to OpenCodePlugins (guard fires first)",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenStrictTDD
+				m.Selection.Preset = model.PresetCustom
+				m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+				m.Selection.Components = []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+				m.Selection.SDDMode = model.SDDModeSingle
+				m.Cursor = screens.StrictTDDOptionEnable
+				return m
+			},
+			wantScreen: ScreenOpenCodePlugins,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := tt.setup(t)
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			got := updated.(Model)
+			if got.Screen != tt.wantScreen {
+				t.Fatalf("screen = %v, want %v", got.Screen, tt.wantScreen)
+			}
+		})
+	}
+}
