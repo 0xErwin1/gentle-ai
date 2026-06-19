@@ -1126,33 +1126,11 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 					m = m.withResetSyncState()
 					m.setScreen(ScreenSync)
-				} else if m.shouldShowKiroModelPickerScreen() {
-					m.KiroModelPicker = screens.NewKiroModelPickerStateFromAssignments(m.Selection.KiroModelAssignments)
-					m.setScreen(ScreenKiroModelPicker)
-				} else if m.shouldShowCodexModelPickerScreen() {
-					m.CodexModelPicker = screens.NewCodexModelPickerStateFromAssignments(m.Selection.CodexModelAssignments)
-					m.setScreen(ScreenCodexModelPicker)
-				} else if m.shouldShowSDDModeScreen() {
-					m.setScreen(ScreenSDDMode)
-				} else if m.Selection.Preset == model.PresetCustom {
-					// Custom preset: dependency plan was already built before model picker.
-					// Check StrictTDD, then skill picker before going to review.
-					if m.shouldShowStrictTDDScreen() {
-						m.setScreen(ScreenStrictTDD)
-					} else if m.shouldShowSkillPickerScreen() {
-						if len(m.SkillPicker) == 0 {
-							m.initSkillPicker()
-						}
-						m.setScreen(ScreenSkillPicker)
-					} else {
-						m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-						m.setScreen(ScreenReview)
+				} else if next, ok := m.pickerNextScreen(); ok {
+					if next == ScreenDependencyTree {
+						m.buildDependencyPlan()
 					}
-				} else if m.shouldShowStrictTDDScreen() {
-					m.setScreen(ScreenStrictTDD)
-				} else {
-					m.buildDependencyPlan()
-					m.setScreen(ScreenDependencyTree)
+					m.applyPickerEntry(next)
 				}
 			}
 			return m, nil
@@ -1176,28 +1154,11 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 					m = m.withResetSyncState()
 					m.setScreen(ScreenSync)
-				} else if m.shouldShowCodexModelPickerScreen() {
-					m.CodexModelPicker = screens.NewCodexModelPickerStateFromAssignments(m.Selection.CodexModelAssignments)
-					m.setScreen(ScreenCodexModelPicker)
-				} else if m.shouldShowSDDModeScreen() {
-					m.setScreen(ScreenSDDMode)
-				} else if m.Selection.Preset == model.PresetCustom {
-					if m.shouldShowStrictTDDScreen() {
-						m.setScreen(ScreenStrictTDD)
-					} else if m.shouldShowSkillPickerScreen() {
-						if len(m.SkillPicker) == 0 {
-							m.initSkillPicker()
-						}
-						m.setScreen(ScreenSkillPicker)
-					} else {
-						m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-						m.setScreen(ScreenReview)
+				} else if next, ok := m.pickerNextScreen(); ok {
+					if next == ScreenDependencyTree {
+						m.buildDependencyPlan()
 					}
-				} else if m.shouldShowStrictTDDScreen() {
-					m.setScreen(ScreenStrictTDD)
-				} else {
-					m.buildDependencyPlan()
-					m.setScreen(ScreenDependencyTree)
+					m.applyPickerEntry(next)
 				}
 			}
 			return m, nil
@@ -1253,25 +1214,11 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 					}
 					m = m.withResetSyncState()
 					m.setScreen(ScreenSync)
-				} else if m.shouldShowSDDModeScreen() {
-					m.setScreen(ScreenSDDMode)
-				} else if m.Selection.Preset == model.PresetCustom {
-					if m.shouldShowStrictTDDScreen() {
-						m.setScreen(ScreenStrictTDD)
-					} else if m.shouldShowSkillPickerScreen() {
-						if len(m.SkillPicker) == 0 {
-							m.initSkillPicker()
-						}
-						m.setScreen(ScreenSkillPicker)
-					} else {
-						m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-						m.setScreen(ScreenReview)
+				} else if next, ok := m.pickerNextScreen(); ok {
+					if next == ScreenDependencyTree {
+						m.buildDependencyPlan()
 					}
-				} else if m.shouldShowStrictTDDScreen() {
-					m.setScreen(ScreenStrictTDD)
-				} else {
-					m.buildDependencyPlan()
-					m.setScreen(ScreenDependencyTree)
+					m.applyPickerEntry(next)
 				}
 			}
 			return m, nil
@@ -1954,64 +1901,29 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		if m.Cursor < len(options) {
 			m.Selection.SDDMode = options[m.Cursor]
 			if m.Selection.SDDMode == model.SDDModeMulti {
-				cachePath := opencode.DefaultCachePath()
-				m.ModelPicker = screens.NewModelPickerState(cachePath, opencode.DefaultSettingsPath())
+				// SDDModeMulti: initialize ModelPicker explicitly and transition to it.
+				// pickerFlowSlice includes ScreenModelPicker only when SDDMode==Multi AND
+				// cache is present; we always show ModelPicker here (even cache-absent)
+				// because the user may have custom providers in opencode.json.
+				m.ModelPicker = screens.NewModelPickerState(opencode.DefaultCachePath(), opencode.DefaultSettingsPath())
 				m.Selection.ModelAssignments = nil
 				m.setScreen(ScreenModelPicker)
 				return m, nil
 			}
 			// Clear assignments for single mode.
 			m.Selection.ModelAssignments = nil
-			// Show StrictTDD screen when OpenCode + SDD are selected.
-			// This is the next step before the dependency tree.
-			if m.shouldShowSDDModeScreen() {
-				m.setScreen(ScreenStrictTDD)
-				return m, nil
-			}
-			if m.Selection.Preset == model.PresetCustom {
-				// Custom preset: dependency plan was already built before SDD mode.
-				// Check skill picker before going to review.
-				if m.shouldShowSkillPickerScreen() {
-					if len(m.SkillPicker) == 0 {
-						m.initSkillPicker()
-					}
-					m.setScreen(ScreenSkillPicker)
-				} else {
-					m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-					m.setScreen(ScreenReview)
+			// Use pickerNextScreen to advance through the remaining slice.
+			if next, ok := m.pickerNextScreen(); ok {
+				if next == ScreenDependencyTree {
+					m.buildDependencyPlan()
 				}
-			} else {
-				m.buildDependencyPlan()
-				m.setScreen(ScreenDependencyTree)
+				m.applyPickerEntry(next)
 			}
 			return m, nil
 		}
-		// Back — walk the model pickers in reverse forward order
-		// (Codex → Kiro → Claude), then DependencyTree (custom) or Preset.
-		// Forward order is Claude → Kiro → Codex → SDDMode, so the screen
-		// preceding SDDMode is the last picker that was shown.
-		// NOTE: SDDMode back logic is also in goBack() — keep in sync.
-		if m.Selection.Preset == model.PresetCustom {
-			if m.shouldShowCodexModelPickerScreen() {
-				m.setScreen(ScreenCodexModelPicker)
-			} else if m.shouldShowKiroModelPickerScreen() {
-				m.setScreen(ScreenKiroModelPicker)
-			} else if m.shouldShowClaudeModelPickerScreen() {
-				m.setScreen(ScreenClaudeModelPicker)
-			} else {
-				m.setScreen(ScreenDependencyTree)
-			}
-		} else {
-			// NOTE: Back logic also in goBack() — keep in sync.
-			if m.shouldShowCodexModelPickerScreen() {
-				m.setScreen(ScreenCodexModelPicker)
-			} else if m.shouldShowKiroModelPickerScreen() {
-				m.setScreen(ScreenKiroModelPicker)
-			} else if m.shouldShowClaudeModelPickerScreen() {
-				m.setScreen(ScreenClaudeModelPicker)
-			} else {
-				m.setScreen(ScreenPreset)
-			}
+		// Back — use pickerPreviousScreen for unified reverse navigation.
+		if prev, ok := m.pickerPreviousScreen(); ok {
+			m.applyPickerEntry(prev)
 		}
 	case ScreenModelPicker:
 		// When no providers are detected the screen offers Continue with defaults
@@ -2023,10 +1935,13 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			// Continue with OpenCode defaults when no providers are available yet.
-			if m.Selection.Preset == model.PresetCustom {
-				if m.shouldShowStrictTDDScreen() {
-					m.setScreen(ScreenStrictTDD)
-				} else if m.shouldShowSkillPickerScreen() {
+			// ScreenModelPicker may not be in the picker slice when the cache is absent
+			// (pickerFlowSlice gates ModelPicker on SDDMode==Multi AND cache present).
+			// Fall back to explicit predicate checks to find the correct next screen.
+			if m.shouldShowStrictTDDScreen() {
+				m.setScreen(ScreenStrictTDD)
+			} else if m.Selection.Preset == model.PresetCustom {
+				if m.shouldShowSkillPickerScreen() {
 					if len(m.SkillPicker) == 0 {
 						m.initSkillPicker()
 					}
@@ -2035,8 +1950,6 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 					m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
 					m.setScreen(ScreenReview)
 				}
-			} else if m.shouldShowStrictTDDScreen() {
-				m.setScreen(ScreenStrictTDD)
 			} else {
 				m.buildDependencyPlan()
 				m.setScreen(ScreenDependencyTree)
@@ -2070,42 +1983,24 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.setScreen(ScreenSync)
 				return m, nil
 			}
-			if m.Selection.Preset == model.PresetCustom {
-				// Custom preset: dependency plan was already built before SDD mode.
-				// Check StrictTDD, then skill picker before going to review.
-				if m.shouldShowStrictTDDScreen() {
-					m.setScreen(ScreenStrictTDD)
-				} else if m.shouldShowSkillPickerScreen() {
-					if len(m.SkillPicker) == 0 {
-						m.initSkillPicker()
-					}
-					m.setScreen(ScreenSkillPicker)
-				} else {
-					m.Review = planner.BuildReviewPayload(m.Selection, m.DependencyPlan)
-					m.setScreen(ScreenReview)
-				}
-			} else {
-				// Continue -> check StrictTDD before dependency tree.
-				if m.shouldShowStrictTDDScreen() {
-					m.setScreen(ScreenStrictTDD)
-				} else {
+			// Continue → advance to next screen in the picker slice.
+			if next, ok := m.pickerNextScreen(); ok {
+				if next == ScreenDependencyTree {
 					m.buildDependencyPlan()
-					m.setScreen(ScreenDependencyTree)
 				}
+				m.applyPickerEntry(next)
 			}
 			return m, nil
 		}
-		// Back -> return to SDDMode (or ModelConfig in shortcut mode).
-		// ModelPicker sits BETWEEN SDDMode and StrictTDD in the forward flow:
-		//   SDDMode → ModelPicker → StrictTDD → DependencyTree
-		// So Back from ModelPicker must go to SDDMode, NOT StrictTDD
-		// (going to StrictTDD would create a loop: ModelPicker ↔ StrictTDD).
+		// Back → ModelConfigMode early-return, then pickerPreviousScreen (SDDMode).
 		if m.ModelConfigMode {
 			m.ModelConfigMode = false
 			m.setScreen(ScreenModelConfig)
 			return m, nil
 		}
-		m.setScreen(ScreenSDDMode)
+		if prev, ok := m.pickerPreviousScreen(); ok {
+			m.applyPickerEntry(prev)
+		}
 	case ScreenStrictTDD:
 		options := screens.StrictTDDOptions()
 		if m.Cursor < len(options) {
