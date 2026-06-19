@@ -6177,3 +6177,187 @@ func TestPickerPreviousScreen(t *testing.T) {
 		})
 	}
 }
+
+// ─── Unit 3: applyPickerEntry ─────────────────────────────────────────────
+
+func TestApplyPickerEntry(t *testing.T) {
+	sddComponents := []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T) Model
+		target     Screen
+		assertFn   func(t *testing.T, got Model)
+	}{
+		{
+			name: "ClaudeModelPicker initializes ClaudeModelPicker state",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Selection.Agents = []model.AgentID{model.AgentClaudeCode}
+				m.Selection.Components = sddComponents
+				return m
+			},
+			target: ScreenClaudeModelPicker,
+			assertFn: func(t *testing.T, got Model) {
+				t.Helper()
+				if got.Screen != ScreenClaudeModelPicker {
+					t.Fatalf("Screen = %v, want ScreenClaudeModelPicker", got.Screen)
+				}
+				// NewClaudeModelPickerStateFromPhaseAssignments sets a non-empty Preset.
+				if got.ClaudeModelPicker.Preset == "" {
+					t.Fatalf("ClaudeModelPicker.Preset is empty — state not initialized")
+				}
+			},
+		},
+		{
+			name: "KiroModelPicker initializes KiroModelPicker state",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Selection.Agents = []model.AgentID{model.AgentKiroIDE}
+				m.Selection.Components = sddComponents
+				return m
+			},
+			target: ScreenKiroModelPicker,
+			assertFn: func(t *testing.T, got Model) {
+				t.Helper()
+				if got.Screen != ScreenKiroModelPicker {
+					t.Fatalf("Screen = %v, want ScreenKiroModelPicker", got.Screen)
+				}
+				// NewKiroModelPickerStateFromAssignments produces a non-empty Preset.
+				if got.KiroModelPicker.Preset == "" {
+					t.Fatalf("KiroModelPicker.Preset is empty — state not initialized")
+				}
+			},
+		},
+		{
+			name: "CodexModelPicker initializes CodexModelPicker state",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Selection.Agents = []model.AgentID{model.AgentCodex}
+				m.Selection.Components = sddComponents
+				return m
+			},
+			target: ScreenCodexModelPicker,
+			assertFn: func(t *testing.T, got Model) {
+				t.Helper()
+				if got.Screen != ScreenCodexModelPicker {
+					t.Fatalf("Screen = %v, want ScreenCodexModelPicker", got.Screen)
+				}
+				if got.CodexModelPicker.Preset == "" {
+					t.Fatalf("CodexModelPicker.Preset is empty — state not initialized")
+				}
+			},
+		},
+		{
+			name: "ModelPicker initializes ModelPicker state",
+			setup: func(t *testing.T) Model {
+				withModelCacheOverride(t)
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+				m.Selection.Components = sddComponents
+				return m
+			},
+			target: ScreenModelPicker,
+			assertFn: func(t *testing.T, got Model) {
+				t.Helper()
+				if got.Screen != ScreenModelPicker {
+					t.Fatalf("Screen = %v, want ScreenModelPicker", got.Screen)
+				}
+				// ModelPickerState is always initialized by NewModelPickerState;
+				// SDDModels map is non-nil even for an empty cache.
+				if got.ModelPicker.SDDModels == nil {
+					t.Fatalf("ModelPicker.SDDModels = nil, want initialized map")
+				}
+			},
+		},
+		{
+			name: "SDDMode sets screen only",
+			setup: func(t *testing.T) Model {
+				return NewModel(system.DetectionResult{}, "dev")
+			},
+			target: ScreenSDDMode,
+			assertFn: func(t *testing.T, got Model) {
+				t.Helper()
+				if got.Screen != ScreenSDDMode {
+					t.Fatalf("Screen = %v, want ScreenSDDMode", got.Screen)
+				}
+			},
+		},
+		{
+			name: "StrictTDD sets screen only",
+			setup: func(t *testing.T) Model {
+				return NewModel(system.DetectionResult{}, "dev")
+			},
+			target: ScreenStrictTDD,
+			assertFn: func(t *testing.T, got Model) {
+				t.Helper()
+				if got.Screen != ScreenStrictTDD {
+					t.Fatalf("Screen = %v, want ScreenStrictTDD", got.Screen)
+				}
+			},
+		},
+		{
+			name: "DependencyTree sets screen only",
+			setup: func(t *testing.T) Model {
+				return NewModel(system.DetectionResult{}, "dev")
+			},
+			target: ScreenDependencyTree,
+			assertFn: func(t *testing.T, got Model) {
+				t.Helper()
+				if got.Screen != ScreenDependencyTree {
+					t.Fatalf("Screen = %v, want ScreenDependencyTree", got.Screen)
+				}
+			},
+		},
+		{
+			name: "custom Kiro-only: applyPickerEntry to KiroModelPicker initializes state",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Selection.Preset = model.PresetCustom
+				m.Selection.Agents = []model.AgentID{model.AgentKiroIDE}
+				m.Selection.Components = sddComponents
+				m.Screen = ScreenDependencyTree
+				return m
+			},
+			target: ScreenKiroModelPicker,
+			assertFn: func(t *testing.T, got Model) {
+				t.Helper()
+				if got.Screen != ScreenKiroModelPicker {
+					t.Fatalf("Screen = %v, want ScreenKiroModelPicker", got.Screen)
+				}
+				if got.KiroModelPicker.Preset == "" {
+					t.Fatalf("KiroModelPicker.Preset is empty — state not initialized for Kiro-first entry")
+				}
+			},
+		},
+		{
+			name: "custom Codex-only: applyPickerEntry to CodexModelPicker initializes state",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Selection.Preset = model.PresetCustom
+				m.Selection.Agents = []model.AgentID{model.AgentCodex}
+				m.Selection.Components = sddComponents
+				m.Screen = ScreenDependencyTree
+				return m
+			},
+			target: ScreenCodexModelPicker,
+			assertFn: func(t *testing.T, got Model) {
+				t.Helper()
+				if got.Screen != ScreenCodexModelPicker {
+					t.Fatalf("Screen = %v, want ScreenCodexModelPicker", got.Screen)
+				}
+				if got.CodexModelPicker.Preset == "" {
+					t.Fatalf("CodexModelPicker.Preset is empty — state not initialized for Codex-first entry")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := tt.setup(t)
+			m.applyPickerEntry(tt.target)
+			tt.assertFn(t, m)
+		})
+	}
+}

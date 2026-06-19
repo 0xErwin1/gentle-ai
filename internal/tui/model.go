@@ -3916,6 +3916,27 @@ func (m Model) pickerPreviousScreen() (Screen, bool) {
 	return 0, false
 }
 
+// applyPickerEntry initializes the target picker's state and transitions to it.
+// This is the single place that sets up picker-specific state (model selections,
+// presets) before calling setScreen. It handles every target a caller may
+// navigate to, including Kiro-first and Codex-first custom paths where Claude is
+// absent and navigation comes directly from ScreenDependencyTree.
+func (m *Model) applyPickerEntry(next Screen) {
+	switch next {
+	case ScreenClaudeModelPicker:
+		m.ClaudeModelPicker = screens.NewClaudeModelPickerStateFromPhaseAssignments(
+			claudePickerAssignments(m.Selection.ClaudeModelAssignments, m.Selection.ClaudePhaseAssignments),
+		)
+	case ScreenKiroModelPicker:
+		m.KiroModelPicker = screens.NewKiroModelPickerStateFromAssignments(m.Selection.KiroModelAssignments)
+	case ScreenCodexModelPicker:
+		m.CodexModelPicker = screens.NewCodexModelPickerStateFromAssignments(m.Selection.CodexModelAssignments)
+	case ScreenModelPicker:
+		m.ModelPicker = screens.NewModelPickerState(opencode.DefaultCachePath(), opencode.DefaultSettingsPath())
+	}
+	m.setScreen(next)
+}
+
 func componentsForPreset(preset model.PresetID, persona model.PersonaID) []model.ComponentID {
 	var components []model.ComponentID
 	switch preset {
