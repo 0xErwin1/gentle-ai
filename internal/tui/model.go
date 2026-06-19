@@ -1986,18 +1986,28 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		// Back — in custom preset, return to ClaudeModelPicker if applicable,
-		// otherwise DependencyTree (component selector).
+		// Back — walk the model pickers in reverse forward order
+		// (Codex → Kiro → Claude), then DependencyTree (custom) or Preset.
+		// Forward order is Claude → Kiro → Codex → SDDMode, so the screen
+		// preceding SDDMode is the last picker that was shown.
 		// NOTE: SDDMode back logic is also in goBack() — keep in sync.
 		if m.Selection.Preset == model.PresetCustom {
-			if m.shouldShowClaudeModelPickerScreen() {
+			if m.shouldShowCodexModelPickerScreen() {
+				m.setScreen(ScreenCodexModelPicker)
+			} else if m.shouldShowKiroModelPickerScreen() {
+				m.setScreen(ScreenKiroModelPicker)
+			} else if m.shouldShowClaudeModelPickerScreen() {
 				m.setScreen(ScreenClaudeModelPicker)
 			} else {
 				m.setScreen(ScreenDependencyTree)
 			}
 		} else {
 			// NOTE: Back logic also in goBack() — keep in sync.
-			if m.shouldShowClaudeModelPickerScreen() {
+			if m.shouldShowCodexModelPickerScreen() {
+				m.setScreen(ScreenCodexModelPicker)
+			} else if m.shouldShowKiroModelPickerScreen() {
+				m.setScreen(ScreenKiroModelPicker)
+			} else if m.shouldShowClaudeModelPickerScreen() {
 				m.setScreen(ScreenClaudeModelPicker)
 			} else {
 				m.setScreen(ScreenPreset)
@@ -3042,14 +3052,23 @@ func (m Model) goBack() Model {
 	// For non-custom, check if ClaudeModelPicker was shown first.
 	// NOTE: SDDMode back logic is also in confirmSelection — keep in sync.
 	if m.Screen == ScreenSDDMode {
+		// Walk the model pickers in reverse forward order
+		// (Codex → Kiro → Claude). Forward is Claude → Kiro → Codex → SDDMode,
+		// so the screen preceding SDDMode is the last picker that was shown.
 		if m.Selection.Preset == model.PresetCustom {
-			if m.shouldShowKiroModelPickerScreen() {
+			if m.shouldShowCodexModelPickerScreen() {
+				m.setScreen(ScreenCodexModelPicker)
+			} else if m.shouldShowKiroModelPickerScreen() {
 				m.setScreen(ScreenKiroModelPicker)
 			} else if m.shouldShowClaudeModelPickerScreen() {
 				m.setScreen(ScreenClaudeModelPicker)
 			} else {
 				m.setScreen(ScreenDependencyTree)
 			}
+			return m
+		}
+		if m.shouldShowCodexModelPickerScreen() {
+			m.setScreen(ScreenCodexModelPicker)
 			return m
 		}
 		if m.shouldShowKiroModelPickerScreen() {

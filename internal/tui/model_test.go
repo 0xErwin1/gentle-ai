@@ -1939,6 +1939,74 @@ func TestModelConfig_KiroPickerBackReturnsToModelConfig(t *testing.T) {
 	}
 }
 
+// TestCodexPickerBackRowEnterNavigates verifies that pressing Enter on the
+// Codex picker "← Back" row actually navigates (regression: the back row used
+// to be swallowed because HandleCodexModelPickerNav returned (true, nil) and
+// model.go only navigates when assignments are non-nil). With Claude in the
+// flow, Back must return to the Claude picker.
+func TestCodexPickerBackRowEnterNavigates(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenCodexModelPicker
+	m.ModelConfigMode = false
+	m.Selection.Preset = model.PresetFullGentleman // non-custom
+	m.Selection.Agents = []model.AgentID{model.AgentCodex, model.AgentClaudeCode}
+	m.Selection.Components = []model.ComponentID{model.ComponentSDD}
+	m.CodexModelPicker = screens.NewCodexModelPickerState()
+	// Cursor on the "← Back" row.
+	m.Cursor = screens.CodexModelPickerOptionCount(m.CodexModelPicker) - 1
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenClaudeModelPicker {
+		t.Fatalf("CodexModelPicker enter on Back (Claude in flow): screen = %v, want %v",
+			state.Screen, ScreenClaudeModelPicker)
+	}
+}
+
+// TestSDDModeBackReturnsToCodexPicker verifies that going back from the OpenCode
+// SDDMode screen returns to the Codex picker when Codex is in the flow
+// (regression: SDDMode back skipped Codex and jumped straight to Claude).
+// Forward order is Claude → Kiro → Codex → SDDMode, so back must hit Codex first.
+func TestSDDModeBackReturnsToCodexPicker(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenSDDMode
+	m.ModelConfigMode = false
+	m.Selection.Preset = model.PresetFullGentleman // non-custom
+	// OpenCode triggers SDDMode; Codex + Claude in flow, no Kiro.
+	m.Selection.Agents = []model.AgentID{model.AgentOpenCode, model.AgentCodex, model.AgentClaudeCode}
+	m.Selection.Components = []model.ComponentID{model.ComponentSDD}
+	// Cursor on the SDDMode "← Back" row (after the mode options).
+	m.Cursor = len(screens.SDDModeOptions())
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenCodexModelPicker {
+		t.Fatalf("SDDMode back (Codex in flow): screen = %v, want %v",
+			state.Screen, ScreenCodexModelPicker)
+	}
+}
+
+// TestSDDModeEscReturnsToCodexPicker verifies the Esc path (goBack) is consistent
+// with the Enter-on-Back path: it must also return to Codex when in the flow.
+func TestSDDModeEscReturnsToCodexPicker(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenSDDMode
+	m.ModelConfigMode = false
+	m.Selection.Preset = model.PresetFullGentleman
+	m.Selection.Agents = []model.AgentID{model.AgentOpenCode, model.AgentCodex, model.AgentClaudeCode}
+	m.Selection.Components = []model.ComponentID{model.ComponentSDD}
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	state := updated.(Model)
+
+	if state.Screen != ScreenCodexModelPicker {
+		t.Fatalf("SDDMode esc (Codex in flow): screen = %v, want %v",
+			state.Screen, ScreenCodexModelPicker)
+	}
+}
+
 // TestKiroPickerEscNonCustomWithClaudeGoesToClaudePicker verifies that Esc from
 // ScreenKiroModelPicker in a non-custom preset returns to ScreenClaudeModelPicker
 // when Claude is in the flow — keeping Esc consistent with Enter on "← Back".
