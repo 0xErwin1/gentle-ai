@@ -6432,13 +6432,13 @@ func TestPickerBackRowRegression(t *testing.T) {
 			wantScreen: ScreenDependencyTree,
 		},
 		{
-			// Case 4: StrictTDD Back Codex+no Claude+no Kiro → CodexModelPicker
-			// BUG: confirmSelection only checked Claude/SDDMode — skipped Codex — RED must fail.
-			name: "strictTDD back codex+opencode+no claude/kiro returns to CodexModelPicker (bug fix)",
+			// Case 4: StrictTDD Back Codex+no Claude+no Kiro (no OpenCode) → CodexModelPicker
+			// BUG: confirmSelection only checked Claude/SDDMode — skipped Codex when no OpenCode — RED must fail.
+			name: "strictTDD back codex+no opencode+no claude/kiro returns to CodexModelPicker (bug fix)",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenStrictTDD
-				m.Selection.Agents = []model.AgentID{model.AgentCodex, model.AgentOpenCode}
+				m.Selection.Agents = []model.AgentID{model.AgentCodex}
 				m.Selection.Components = sddComponents
 				m.Selection.Preset = model.PresetFullGentleman
 				m.CodexModelPicker = screens.NewCodexModelPickerState()
@@ -6448,13 +6448,13 @@ func TestPickerBackRowRegression(t *testing.T) {
 			wantScreen: ScreenCodexModelPicker,
 		},
 		{
-			// Case 5: StrictTDD Back Kiro+no Claude+no Codex → KiroModelPicker
+			// Case 5: StrictTDD Back Kiro+no Claude+no Codex (no OpenCode) → KiroModelPicker
 			// BUG: same latent bug as case 4 — RED must fail.
-			name: "strictTDD back kiro+opencode+no claude/codex returns to KiroModelPicker (bug fix)",
+			name: "strictTDD back kiro+no opencode+no claude/codex returns to KiroModelPicker (bug fix)",
 			setup: func(t *testing.T) Model {
 				m := NewModel(system.DetectionResult{}, "dev")
 				m.Screen = ScreenStrictTDD
-				m.Selection.Agents = []model.AgentID{model.AgentKiroIDE, model.AgentOpenCode}
+				m.Selection.Agents = []model.AgentID{model.AgentKiroIDE}
 				m.Selection.Components = sddComponents
 				m.Selection.Preset = model.PresetFullGentleman
 				m.KiroModelPicker = screens.NewKiroModelPickerState()
