@@ -3846,6 +3846,76 @@ func (m Model) shouldShowCodexModelPickerScreen() bool {
 		hasSelectedComponent(m.Selection.Components, model.ComponentSDD)
 }
 
+// pickerFlowSlice returns the ordered conditional picker chain for the current
+// Selection, filtered by shouldShow* predicates. ScreenPreset is always the
+// first anchor. In non-custom mode ScreenDependencyTree is always the last
+// anchor. In custom mode ScreenDependencyTree is the second element (component
+// selector precedes pickers). The slice is rebuilt per call (≤8 elements —
+// trivial cost, no stale-state risk).
+//
+// Invariant: no predicate that reads m.Screen may be used here.
+// shouldShowOpenCodePluginsScreen is screen-sensitive and must NOT be included;
+// it remains an early-return guard at every call site.
+func (m Model) pickerFlowSlice() []Screen {
+	custom := m.Selection.Preset == model.PresetCustom
+	s := []Screen{ScreenPreset}
+	if custom {
+		// Custom preset: component selector (DependencyTree) precedes pickers.
+		s = append(s, ScreenDependencyTree)
+	}
+	if m.shouldShowClaudeModelPickerScreen() {
+		s = append(s, ScreenClaudeModelPicker)
+	}
+	if m.shouldShowKiroModelPickerScreen() {
+		s = append(s, ScreenKiroModelPicker)
+	}
+	if m.shouldShowCodexModelPickerScreen() {
+		s = append(s, ScreenCodexModelPicker)
+	}
+	if m.shouldShowSDDModeScreen() {
+		s = append(s, ScreenSDDMode)
+		if m.Selection.SDDMode == model.SDDModeMulti {
+			if _, err := osStatModelCache(opencode.DefaultCachePath()); err == nil {
+				s = append(s, ScreenModelPicker)
+			}
+		}
+	}
+	if m.shouldShowStrictTDDScreen() {
+		s = append(s, ScreenStrictTDD)
+	}
+	if !custom {
+		// Non-custom: DependencyTree is the last anchor.
+		s = append(s, ScreenDependencyTree)
+	}
+	return s
+}
+
+// pickerNextScreen returns the screen that follows m.Screen in the picker flow
+// slice. ok=false when m.Screen is not a chain member or is at the last
+// position (DependencyTree in non-custom, StrictTDD or last picker in custom).
+func (m Model) pickerNextScreen() (Screen, bool) {
+	slice := m.pickerFlowSlice()
+	for i, s := range slice {
+		if s == m.Screen && i < len(slice)-1 {
+			return slice[i+1], true
+		}
+	}
+	return 0, false
+}
+
+// pickerPreviousScreen returns the screen that precedes m.Screen in the picker
+// flow slice. ok=false when m.Screen is not a chain member or is at position 0
+// (ScreenPreset).
+func (m Model) pickerPreviousScreen() (Screen, bool) {
+	slice := m.pickerFlowSlice()
+	for i, s := range slice {
+		if s == m.Screen && i > 0 {
+			return slice[i-1], true
+		}
+	}
+	return 0, false
+}
+
 func componentsForPreset(preset model.PresetID, persona model.PersonaID) []model.ComponentID {
 	var components []model.ComponentID
 	switch preset {

@@ -5757,3 +5757,176 @@ func TestUpdatePromptScreen_UpdateNow_NoDuplicateUpgrade(t *testing.T) {
 		t.Errorf("UpgradeFn call count via Enter = %d, want exactly 1 (Enter must start exactly one upgrade)", enterCallCount)
 	}
 }
+
+// ─── Unit 1: pickerFlowSlice ────────────────────────────────────────────────
+
+// withModelCache returns a cleanup function that installs a fake osStatModelCache
+// override pointing to a freshly written temporary cache file. It restores the
+// original after the test.
+func withModelCacheOverride(t *testing.T) {
+	t.Helper()
+	cacheFile := filepath.Join(t.TempDir(), "models.json")
+	if err := os.WriteFile(cacheFile, []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(models cache) error = %v", err)
+	}
+	orig := osStatModelCache
+	osStatModelCache = func(name string) (os.FileInfo, error) { return os.Stat(cacheFile) }
+	t.Cleanup(func() { osStatModelCache = orig })
+}
+
+func TestPickerFlowSlice(t *testing.T) {
+	allPickerAgents := []model.AgentID{
+		model.AgentClaudeCode,
+		model.AgentKiroIDE,
+		model.AgentCodex,
+		model.AgentOpenCode,
+	}
+	sddComponents := []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T) Model
+		wantSlice  []Screen
+	}{
+		{
+			name: "non-custom all agents SDDMode Multi cache present includes ModelPicker",
+			setup: func(t *testing.T) Model {
+				withModelCacheOverride(t)
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Selection.Preset = model.PresetFullGentleman
+				m.Selection.Agents = allPickerAgents
+				m.Selection.Components = sddComponents
+				m.Selection.SDDMode = model.SDDModeMulti
+				return m
+			},
+			wantSlice: []Screen{
+				ScreenPreset,
+				ScreenClaudeModelPicker,
+				ScreenKiroModelPicker,
+				ScreenCodexModelPicker,
+				ScreenSDDMode,
+				ScreenModelPicker,
+				ScreenStrictTDD,
+				ScreenDependencyTree,
+			},
+		},
+		{
+			name: "non-custom all agents SDDMode Single excludes ModelPicker",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Selection.Preset = model.PresetFullGentleman
+				m.Selection.Agents = allPickerAgents
+				m.Selection.Components = sddComponents
+				m.Selection.SDDMode = model.SDDModeSingle
+				return m
+			},
+			wantSlice: []Screen{
+				ScreenPreset,
+				ScreenClaudeModelPicker,
+				ScreenKiroModelPicker,
+				ScreenCodexModelPicker,
+				ScreenSDDMode,
+				ScreenStrictTDD,
+				ScreenDependencyTree,
+			},
+		},
+		{
+			name: "non-custom all agents SDDMode Multi cache absent excludes ModelPicker",
+			setup: func(t *testing.T) Model {
+				t.Setenv("HOME", t.TempDir()) // guarantees cache path resolves to missing file
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Selection.Preset = model.PresetFullGentleman
+				m.Selection.Agents = allPickerAgents
+				m.Selection.Components = sddComponents
+				m.Selection.SDDMode = model.SDDModeMulti
+				return m
+			},
+			wantSlice: []Screen{
+				ScreenPreset,
+				ScreenClaudeModelPicker,
+				ScreenKiroModelPicker,
+				ScreenCodexModelPicker,
+				ScreenSDDMode,
+				ScreenStrictTDD,
+				ScreenDependencyTree,
+			},
+		},
+		{
+			name: "non-custom Claude only includes Claude and StrictTDD anchors",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Selection.Preset = model.PresetFullGentleman
+				m.Selection.Agents = []model.AgentID{model.AgentClaudeCode}
+				m.Selection.Components = sddComponents
+				return m
+			},
+			wantSlice: []Screen{
+				ScreenPreset,
+				ScreenClaudeModelPicker,
+				ScreenStrictTDD,
+				ScreenDependencyTree,
+			},
+		},
+		{
+			name: "non-custom no picker agents yields only anchors",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Selection.Preset = model.PresetMinimal
+				m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+				// No SDD component: all shouldShow* return false.
+				m.Selection.Components = []model.ComponentID{model.ComponentEngram}
+				return m
+			},
+			wantSlice: []Screen{ScreenPreset, ScreenDependencyTree},
+		},
+		{
+			name: "custom Claude+Kiro+OpenCode SDDMode Multi cache present DependencyTree at index 1",
+			setup: func(t *testing.T) Model {
+				withModelCacheOverride(t)
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Selection.Preset = model.PresetCustom
+				m.Selection.Agents = []model.AgentID{model.AgentClaudeCode, model.AgentKiroIDE, model.AgentOpenCode}
+				m.Selection.Components = sddComponents
+				m.Selection.SDDMode = model.SDDModeMulti
+				return m
+			},
+			// Custom: DependencyTree appears at index 1 (before pickers).
+			// SDDMode + ModelPicker appear because OpenCode is selected and SDDMode==Multi with cache present.
+			wantSlice: []Screen{
+				ScreenPreset,
+				ScreenDependencyTree,
+				ScreenClaudeModelPicker,
+				ScreenKiroModelPicker,
+				ScreenSDDMode,
+				ScreenModelPicker,
+				ScreenStrictTDD,
+			},
+		},
+		{
+			name: "custom no picker agents DependencyTree at index 1 no tail anchor",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Selection.Preset = model.PresetCustom
+				m.Selection.Agents = []model.AgentID{model.AgentCursor}
+				m.Selection.Components = []model.ComponentID{model.ComponentEngram}
+				return m
+			},
+			wantSlice: []Screen{ScreenPreset, ScreenDependencyTree},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := tt.setup(t)
+			got := m.pickerFlowSlice()
+			if len(got) != len(tt.wantSlice) {
+				t.Fatalf("pickerFlowSlice() len = %d, want %d\ngot:  %v\nwant: %v", len(got), len(tt.wantSlice), got, tt.wantSlice)
+			}
+			for i, want := range tt.wantSlice {
+				if got[i] != want {
+					t.Fatalf("pickerFlowSlice()[%d] = %v, want %v\ngot:  %v\nwant: %v", i, got[i], want, got, tt.wantSlice)
+				}
+			}
+		})
+	}
+}
