@@ -2072,22 +2072,18 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			m.setScreen(ScreenReview)
 			return m, nil
 		}
-		// Non-custom Back: iPiOnlyAgents early-return, then picker slice reverse.
-		// When the only slice predecessor is ScreenPreset (no picker screens in
-		// the flow), check the OpenCodePlugins guard before falling through to
-		// Preset — matching the goBack (Esc) behavior for OpenCode-present flows.
+		// Non-custom Back: mirrors goBack (Esc) — isPiOnlyAgents early check,
+		// then OpenCodePlugins guard (outside the slice), then pickerPreviousScreen.
+		// INV-2: Enter-on-Back and Esc must produce identical results.
 		if isPiOnlyAgents(m.Selection.Agents) {
 			m.setScreen(ScreenAgents)
-		} else if prev, ok := m.pickerPreviousScreen(); ok && prev != ScreenPreset {
-			// A real picker screen (StrictTDD, SDDMode, ModelPicker, Claude, Kiro,
-			// Codex) precedes DependencyTree; step back to it.
-			m.applyPickerEntry(prev)
 		} else if m.shouldShowOpenCodePluginsScreen() {
-			// No picker screens in the flow (predecessor would be Preset or absent).
-			// Route through OpenCodePlugins first — consistent with Esc behavior.
+			// OpenCodePlugins sits between the picker chain and DependencyTree in
+			// the actual flow but is NOT in pickerFlowSlice. Check it first so
+			// Enter-on-Back matches Esc behavior (INV-2).
 			m.setScreen(ScreenOpenCodePlugins)
 		} else if prev, ok := m.pickerPreviousScreen(); ok {
-			// No OpenCode guard; fall back to Preset (or whatever directly precedes).
+			// No OpenCode; step back through the picker slice.
 			m.applyPickerEntry(prev)
 		}
 	case ScreenSkillPicker:
@@ -2841,27 +2837,23 @@ func (m Model) goBack() Model {
 		return m
 	}
 
-	// If going back from DependencyTree and the SDDMode/ClaudeModelPicker/StrictTDD
-	// screens were shown BEFORE it (non-custom presets only), navigate to them.
-	// In custom mode these screens appear AFTER the dependency tree, so
-	// going back should return to the preset screen (handled by linearRoutes).
-	// NOTE: DependencyTree back logic also in confirmSelection() — keep in sync.
+	// Non-custom DependencyTree Esc: isPiOnlyAgents early check, then
+	// OpenCodePlugins guard (outside the slice), then pickerPreviousScreen.
+	// INV-2: Esc and Enter-on-Back must produce identical results.
 	if m.Screen == ScreenDependencyTree && m.Selection.Preset != model.PresetCustom {
 		if isPiOnlyAgents(m.Selection.Agents) {
 			m.setScreen(ScreenAgents)
 			return m
 		}
 		if m.shouldShowOpenCodePluginsScreen() {
+			// OpenCodePlugins sits between the picker chain and DependencyTree but
+			// is NOT in pickerFlowSlice; check it first so Esc matches Enter-on-Back.
 			m.setScreen(ScreenOpenCodePlugins)
 			return m
 		}
-		if m.shouldShowStrictTDDScreen() {
-			// StrictTDD screen is between (SDDMode/ClaudeModelPicker/Preset) and DependencyTree.
-			m.setScreen(ScreenStrictTDD)
-			return m
-		}
-		if m.shouldShowClaudeModelPickerScreen() {
-			m.setScreen(ScreenClaudeModelPicker)
+		if prev, ok := m.pickerPreviousScreen(); ok {
+			// No OpenCode; step back through the picker slice.
+			m.applyPickerEntry(prev)
 			return m
 		}
 	}

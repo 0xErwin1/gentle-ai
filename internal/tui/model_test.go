@@ -3117,11 +3117,13 @@ func TestStrictTDDBackNavigatesToSDDMode(t *testing.T) {
 
 // ─── Bug fixes: Enter-Back navigation must be consistent with ESC ────────────
 
-// TestDependencyTreeEnterBackNavigatesToStrictTDD verifies that pressing Enter
+// TestDependencyTreeEnterBackNavigatesToOpenCodePlugins verifies that pressing Enter
 // on the "Back" option (cursor == 1) of a non-custom DependencyTree screen goes
-// to ScreenStrictTDD when shouldShowSDDModeScreen() is true (OpenCode + SDD).
-// Previously, Enter-Back went directly to ScreenSDDMode, skipping StrictTDD.
-func TestDependencyTreeEnterBackNavigatesToStrictTDD(t *testing.T) {
+// to ScreenOpenCodePlugins when OpenCode is selected (shouldShowOpenCodePluginsScreen=true).
+// This ensures Enter-on-Back is consistent with Esc (INV-2: both paths must produce
+// identical results). Previously Enter-Back incorrectly went to ScreenStrictTDD,
+// skipping the OpenCodePlugins screen that Esc would visit.
+func TestDependencyTreeEnterBackNavigatesToOpenCodePlugins(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenDependencyTree
 	m.Selection.Preset = model.PresetFullGentleman // non-custom
@@ -3134,8 +3136,8 @@ func TestDependencyTreeEnterBackNavigatesToStrictTDD(t *testing.T) {
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	state := updated.(Model)
 
-	if state.Screen != ScreenStrictTDD {
-		t.Fatalf("screen = %v, want ScreenStrictTDD after Enter on DependencyTree Back (shouldShowSDDModeScreen=true)", state.Screen)
+	if state.Screen != ScreenOpenCodePlugins {
+		t.Fatalf("screen = %v, want ScreenOpenCodePlugins after Enter on DependencyTree Back (OpenCode+SDD, INV-2 consistency with Esc)", state.Screen)
 	}
 }
 
