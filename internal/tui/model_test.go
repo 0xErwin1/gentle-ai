@@ -6361,3 +6361,163 @@ func TestApplyPickerEntry(t *testing.T) {
 		})
 	}
 }
+
+// ─── Unit 4: TestPickerBackRowRegression ─────────────────────────────────────
+//
+// These tests are the RED gate for Unit 5 (forward call-site rewrites) and
+// Unit 6 (back call-site rewrites). They cover the 4 pre-existing
+// inconsistencies between goBack (Esc) and confirmSelection (Enter on Back row).
+// Cases 3, 4, 5, 6 MUST FAIL before Units 5/6 are implemented.
+// Cases 1, 2 may already pass; they are included as regression guards.
+
+func TestPickerBackRowRegression(t *testing.T) {
+	sddComponents := []model.ComponentID{model.ComponentEngram, model.ComponentSDD}
+
+	// codexBackRow returns the cursor index for the "← Back" row in ScreenCodexModelPicker.
+	codexBackRow := screens.CodexModelPickerOptionCount(screens.NewCodexModelPickerState()) - 1
+	// strictTDDBackRow returns the cursor index for the "Back" row in ScreenStrictTDD.
+	strictTDDBackRow := len(screens.StrictTDDOptions())
+	// depTreeBackRow is the Back row in ScreenDependencyTree (non-custom only).
+	depTreeBackRow := 1
+
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T) Model
+		wantScreen Screen
+	}{
+		{
+			// Case 1: Codex Back non-custom Codex-only → Preset (should already pass)
+			name: "codex back non-custom codex-only returns to Preset",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenCodexModelPicker
+				m.Selection.Agents = []model.AgentID{model.AgentCodex}
+				m.Selection.Components = sddComponents
+				m.Selection.Preset = model.PresetFullGentleman
+				m.CodexModelPicker = screens.NewCodexModelPickerState()
+				m.Cursor = codexBackRow
+				return m
+			},
+			wantScreen: ScreenPreset,
+		},
+		{
+			// Case 2: Codex Back non-custom Kiro+Codex → KiroModelPicker (should already pass)
+			name: "codex back non-custom kiro+codex returns to KiroModelPicker",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenCodexModelPicker
+				m.Selection.Agents = []model.AgentID{model.AgentKiroIDE, model.AgentCodex}
+				m.Selection.Components = sddComponents
+				m.Selection.Preset = model.PresetFullGentleman
+				m.CodexModelPicker = screens.NewCodexModelPickerState()
+				m.Cursor = codexBackRow
+				return m
+			},
+			wantScreen: ScreenKiroModelPicker,
+		},
+		{
+			// Case 3: Codex Back custom Codex-only → DependencyTree
+			// BUG: currently goes to ScreenPreset (same as non-custom path) — RED must fail.
+			name: "codex back custom codex-only returns to DependencyTree (bug fix)",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenCodexModelPicker
+				m.Selection.Agents = []model.AgentID{model.AgentCodex}
+				m.Selection.Components = sddComponents
+				m.Selection.Preset = model.PresetCustom
+				m.CodexModelPicker = screens.NewCodexModelPickerState()
+				m.Cursor = codexBackRow
+				return m
+			},
+			wantScreen: ScreenDependencyTree,
+		},
+		{
+			// Case 4: StrictTDD Back Codex+no Claude+no Kiro → CodexModelPicker
+			// BUG: confirmSelection only checked Claude/SDDMode — skipped Codex — RED must fail.
+			name: "strictTDD back codex+opencode+no claude/kiro returns to CodexModelPicker (bug fix)",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenStrictTDD
+				m.Selection.Agents = []model.AgentID{model.AgentCodex, model.AgentOpenCode}
+				m.Selection.Components = sddComponents
+				m.Selection.Preset = model.PresetFullGentleman
+				m.CodexModelPicker = screens.NewCodexModelPickerState()
+				m.Cursor = strictTDDBackRow
+				return m
+			},
+			wantScreen: ScreenCodexModelPicker,
+		},
+		{
+			// Case 5: StrictTDD Back Kiro+no Claude+no Codex → KiroModelPicker
+			// BUG: same latent bug as case 4 — RED must fail.
+			name: "strictTDD back kiro+opencode+no claude/codex returns to KiroModelPicker (bug fix)",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenStrictTDD
+				m.Selection.Agents = []model.AgentID{model.AgentKiroIDE, model.AgentOpenCode}
+				m.Selection.Components = sddComponents
+				m.Selection.Preset = model.PresetFullGentleman
+				m.KiroModelPicker = screens.NewKiroModelPickerState()
+				m.Cursor = strictTDDBackRow
+				return m
+			},
+			wantScreen: ScreenKiroModelPicker,
+		},
+		{
+			// Case 6: DependencyTree Back non-custom OpenCode no StrictTDD/SDDMode → OpenCodePlugins
+			// BUG: confirmSelection lacks shouldShowOpenCodePluginsScreen check — RED must fail.
+			name: "depTree back non-custom opencode+no sdd returns to OpenCodePlugins (bug fix)",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenDependencyTree
+				m.Selection.Agents = []model.AgentID{model.AgentOpenCode}
+				// Minimal preset: no SDD component, so shouldShowStrictTDDScreen=false,
+				// shouldShowSDDModeScreen=false. OpenCode is present → OpenCodePlugins guard fires.
+				m.Selection.Components = []model.ComponentID{model.ComponentEngram}
+				m.Selection.Preset = model.PresetMinimal
+				m.Cursor = depTreeBackRow
+				return m
+			},
+			wantScreen: ScreenOpenCodePlugins,
+		},
+		{
+			// Case 7: applyPickerEntry custom Kiro-only DependencyTree Continue → KiroModelPicker with state
+			name: "custom kiro-only depTree continue lands on KiroModelPicker with initialized state",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenDependencyTree
+				m.Selection.Preset = model.PresetCustom
+				m.Selection.Agents = []model.AgentID{model.AgentKiroIDE}
+				m.Selection.Components = sddComponents
+				m.Cursor = len(screens.AllComponents()) // "Continue" row
+				return m
+			},
+			wantScreen: ScreenKiroModelPicker,
+		},
+		{
+			// Case 8: applyPickerEntry custom Codex-only DependencyTree Continue → CodexModelPicker with state
+			name: "custom codex-only depTree continue lands on CodexModelPicker with initialized state",
+			setup: func(t *testing.T) Model {
+				m := NewModel(system.DetectionResult{}, "dev")
+				m.Screen = ScreenDependencyTree
+				m.Selection.Preset = model.PresetCustom
+				m.Selection.Agents = []model.AgentID{model.AgentCodex}
+				m.Selection.Components = sddComponents
+				m.Cursor = len(screens.AllComponents()) // "Continue" row
+				return m
+			},
+			wantScreen: ScreenCodexModelPicker,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := tt.setup(t)
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			got := updated.(Model)
+			if got.Screen != tt.wantScreen {
+				t.Fatalf("screen = %v, want %v", got.Screen, tt.wantScreen)
+			}
+		})
+	}
+}
