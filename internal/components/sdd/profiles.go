@@ -238,10 +238,14 @@ func extractModelFromAgent(agentMap map[string]any) model.ModelAssignment {
 		return model.ModelAssignment{}
 	}
 
-	// Try colon separator first (standard: "anthropic:claude-sonnet-4"), then slash.
-	idx := strings.Index(modelStr, ":")
-	if idx <= 0 {
-		idx = strings.Index(modelStr, "/")
+	// Find the first separator (either "/" or ":") to split provider from model.
+	// This handles specs like "openrouter/qwen/qwen3.6-plus:free" correctly.
+	idx := -1
+	for i := 0; i < len(modelStr); i++ {
+		if modelStr[i] == '/' || modelStr[i] == ':' {
+			idx = i
+			break
+		}
 	}
 	if idx <= 0 {
 		return model.ModelAssignment{}

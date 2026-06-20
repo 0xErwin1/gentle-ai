@@ -1027,6 +1027,23 @@ func TestExtractModelFromAgent_NoVariantDefaultsEmpty(t *testing.T) {
 	}
 }
 
+// TestExtractModelFromAgent_OpenRouterFreeModel verifies that extractModelFromAgent
+// correctly parses OpenRouter free-model specs like "openrouter/qwen/qwen3.6-plus:free".
+// The first separator is "/" (not ":"), so the provider should be "openrouter" and
+// the model should be "qwen/qwen3.6-plus:free".
+func TestExtractModelFromAgent_OpenRouterFreeModel(t *testing.T) {
+	agentMap := map[string]any{
+		"model": "openrouter/qwen/qwen3.6-plus:free",
+	}
+	got := extractModelFromAgent(agentMap)
+	if got.ProviderID != "openrouter" {
+		t.Errorf("extractModelFromAgent ProviderID = %q, want %q", got.ProviderID, "openrouter")
+	}
+	if got.ModelID != "qwen/qwen3.6-plus:free" {
+		t.Errorf("extractModelFromAgent ModelID = %q, want %q", got.ModelID, "qwen/qwen3.6-plus:free")
+	}
+}
+
 // TestGenerateProfileOverlay_VariantInjected verifies that a profile
 // phase assignment with Effort="medium" results in "variant":"medium"
 // in the generated overlay JSON.
