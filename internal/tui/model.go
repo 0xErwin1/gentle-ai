@@ -1835,29 +1835,21 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		if m.Cursor < len(options) {
 			m.Selection.Preset = options[m.Cursor]
 			m.Selection.Components = componentsForPreset(options[m.Cursor], m.Selection.Persona)
-			if m.shouldShowClaudeModelPickerScreen() {
-				m.ClaudeModelPicker = screens.NewClaudeModelPickerStateFromPhaseAssignments(claudePickerAssignments(m.Selection.ClaudeModelAssignments, m.Selection.ClaudePhaseAssignments))
-				m.setScreen(ScreenClaudeModelPicker)
+			// Enter the conditional picker chain through the single source of
+			// truth. pickerNextScreen(ScreenPreset) returns the first chain member
+			// for the current selection (Claude → Kiro → Codex → SDDMode →
+			// ModelPicker → StrictTDD); applyPickerEntry initializes its state.
+			// DependencyTree is the slice's terminal anchor, not a "picker": when
+			// it is the only next member, no SDD/picker screen applies, so fall
+			// through to the OpenCodePlugins guard below.
+			if next, ok := m.pickerNextScreen(); ok && next != ScreenDependencyTree {
+				m.applyPickerEntry(next)
 				return m, nil
 			}
-			if m.shouldShowKiroModelPickerScreen() {
-				m.KiroModelPicker = screens.NewKiroModelPickerStateFromAssignments(m.Selection.KiroModelAssignments)
-				m.setScreen(ScreenKiroModelPicker)
-				return m, nil
-			}
-			if m.shouldShowCodexModelPickerScreen() {
-				m.CodexModelPicker = screens.NewCodexModelPickerStateFromAssignments(m.Selection.CodexModelAssignments)
-				m.setScreen(ScreenCodexModelPicker)
-				return m, nil
-			}
-			if m.shouldShowSDDModeScreen() {
-				m.setScreen(ScreenSDDMode)
-				return m, nil
-			}
-			if m.shouldShowStrictTDDScreen() {
-				m.setScreen(ScreenStrictTDD)
-				return m, nil
-			}
+			// No picker/SDDMode/StrictTDD applies. OpenCodePlugins is NOT in the
+			// slice (its predicate reads m.Screen); OpenCode without SDD still
+			// offers the plugins screen before the dependency tree. The guard must
+			// stay AFTER pickerNextScreen so OpenCode+SDD reaches SDDMode first.
 			if m.shouldShowOpenCodePluginsScreen() {
 				m.setScreen(ScreenOpenCodePlugins)
 				return m, nil

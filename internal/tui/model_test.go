@@ -2127,6 +2127,57 @@ func TestSDDModeEscReturnsToCodexPicker(t *testing.T) {
 	}
 }
 
+// TestPresetConfirmEntersFirstPickerInFlow verifies that confirming a preset on
+// ScreenPreset enters the FIRST picker of the conditional chain and initializes
+// its state — covering the Kiro-first and Codex-first entry paths (no Claude),
+// which the previous round-trip cases only exercised with Claude first. This is
+// the safety net for collapsing the ScreenPreset confirm ladder onto
+// pickerNextScreen + applyPickerEntry.
+func TestPresetConfirmEntersFirstPickerInFlow(t *testing.T) {
+	tests := []struct {
+		name       string
+		agents     []model.AgentID
+		wantScreen Screen
+		checkInit  func(t *testing.T, state Model)
+	}{
+		{
+			name:       "Codex first (no Claude/Kiro) enters Codex picker initialized",
+			agents:     []model.AgentID{model.AgentCodex},
+			wantScreen: ScreenCodexModelPicker,
+			checkInit: func(t *testing.T, state Model) {
+				if state.CodexModelPicker.Preset != screens.CodexPresetRecommended {
+					t.Fatalf("Codex picker state not initialized: preset = %q, want %q",
+						state.CodexModelPicker.Preset, screens.CodexPresetRecommended)
+				}
+			},
+		},
+		{
+			name:       "Kiro first (no Claude) enters Kiro picker",
+			agents:     []model.AgentID{model.AgentKiroIDE},
+			wantScreen: ScreenKiroModelPicker,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewModel(system.DetectionResult{}, "dev")
+			m.Screen = ScreenPreset
+			m.Selection.Agents = tt.agents
+			m.Cursor = presetCursor(t, model.PresetFullGentleman)
+
+			updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			state := updated.(Model)
+
+			if state.Screen != tt.wantScreen {
+				t.Fatalf("Preset confirm: screen = %v, want %v", state.Screen, tt.wantScreen)
+			}
+			if tt.checkInit != nil {
+				tt.checkInit(t, state)
+			}
+		})
+	}
+}
+
 // TestKiroPickerEscNonCustomWithClaudeGoesToClaudePicker verifies that Esc from
 // ScreenKiroModelPicker in a non-custom preset returns to ScreenClaudeModelPicker
 // when Claude is in the flow — keeping Esc consistent with Enter on "← Back".
