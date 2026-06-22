@@ -1280,4 +1280,10 @@ func TestEngramStopScriptIsDefensive(t *testing.T) {
 	if strings.Contains(script, "Stop-Process -Force -ErrorAction Stop") {
 		t.Errorf("stop script must not use -ErrorAction Stop on Stop-Process (reintroduces issue #815/#850)\nscript:\n%s", script)
 	}
+
+	// The clean/no-process path must report success explicitly, regardless of any
+	// PowerShell status left behind by defensive no-op commands.
+	if !strings.HasSuffix(strings.TrimSpace(script), "exit 0") {
+		t.Errorf("stop script must explicitly exit 0 on the clean/no-process path\nscript:\n%s", script)
+	}
 }

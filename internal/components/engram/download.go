@@ -605,6 +605,7 @@ if ($procs) {
         Write-Output "WARNING: $($remaining.Count) engram process(es) could not be stopped (access denied or still running). The upgrade may fail if the file is still locked."
     }
 }
+exit 0
 `
 }
 
