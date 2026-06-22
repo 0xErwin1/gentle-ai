@@ -217,7 +217,7 @@ early return, then call `pickerPreviousScreen` — same target as goBack.
 inconsistencies and MUST be written before implementation:
 
 | Test case | What to assert |
-|-----------|---------------|
+|-----------|----------------|
 | Codex Back row, non-custom, Codex-only | Enter on Back row of `ScreenCodexModelPicker` → `ScreenPreset` (not `ScreenDependencyTree`). Verifies finding #1 / bug #2 fix. |
 | Codex Back row, non-custom, Kiro+Codex | Enter on Back row → `ScreenKiroModelPicker`. |
 | Codex Back row, custom, Codex-only | Enter on Back row of `ScreenCodexModelPicker` → `ScreenDependencyTree` (currently bug: goes to `ScreenPreset`). RED must fail before fix. |
