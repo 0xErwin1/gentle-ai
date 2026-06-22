@@ -381,6 +381,36 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 	}
 }
 
+func TestInjectCodexPermissionsSkipsNixStoreOnWindows(t *testing.T) {
+	home := t.TempDir()
+	origGOOS := codexPermissionsGOOS
+	codexPermissionsGOOS = "windows"
+	t.Cleanup(func() { codexPermissionsGOOS = origGOOS })
+
+	if _, err := Inject(home, codexAdapter()); err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	content, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config.toml: %v", err)
+	}
+	text := string(content)
+
+	if strings.Contains(text, `"/nix/store"`) {
+		t.Fatalf("Windows Codex config should not include /nix/store; got:\n%s", text)
+	}
+	for _, want := range []string{
+		`"~/.local/state/nix/profiles/home-manager/home-path" = "read"`,
+		`"~/.nix-profile" = "read"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("Windows Codex config missing non-fatal Nix home path %q; got:\n%s", want, text)
+		}
+	}
+}
+
 func TestInjectCodexPermissionsAllowsEnvExamples(t *testing.T) {
 	home := t.TempDir()
 

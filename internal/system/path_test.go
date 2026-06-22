@@ -36,9 +36,9 @@ func TestAddToUserPathAlreadyPresent(t *testing.T) {
 	}
 }
 
-// TestAddToUserPathAddsToProcessEnv verifies that on any platform the target
-// directory is added to the current process PATH (os.Setenv part).
-func TestAddToUserPathAddsToProcessEnv(t *testing.T) {
+// TestAddToProcessPathAddsToProcessEnv verifies the process-local PATH update
+// without mutating the persistent user PATH on Windows.
+func TestAddToProcessPathAddsToProcessEnv(t *testing.T) {
 	targetDir := filepath.Join(t.TempDir(), "new-bin-dir")
 	original := os.Getenv("PATH")
 	t.Cleanup(func() { os.Setenv("PATH", original) })
@@ -46,9 +46,9 @@ func TestAddToUserPathAddsToProcessEnv(t *testing.T) {
 	// Ensure target is NOT currently in PATH.
 	os.Setenv("PATH", strings.ReplaceAll(original, targetDir, ""))
 
-	err := AddToUserPath(targetDir)
+	err := addToProcessPath(targetDir)
 	if err != nil {
-		t.Fatalf("AddToUserPath returned unexpected error: %v", err)
+		t.Fatalf("addToProcessPath returned unexpected error: %v", err)
 	}
 
 	// The directory must now be in the process PATH.
@@ -82,5 +82,30 @@ func TestAddToUserPathNoOpOnNonWindows(t *testing.T) {
 	err := AddToUserPath(targetDir)
 	if err != nil {
 		t.Fatalf("AddToUserPath should be a no-op on non-Windows but returned error: %v", err)
+	}
+}
+
+func TestPrioritizeProcessPathMovesExistingEntryToFront(t *testing.T) {
+	firstDir := filepath.Join(t.TempDir(), "first")
+	targetDir := filepath.Join(t.TempDir(), "target")
+	lastDir := filepath.Join(t.TempDir(), "last")
+	original := os.Getenv("PATH")
+	t.Cleanup(func() { os.Setenv("PATH", original) })
+
+	os.Setenv("PATH", strings.Join([]string{firstDir, targetDir, lastDir}, string(os.PathListSeparator)))
+
+	if err := prioritizeProcessPath(targetDir); err != nil {
+		t.Fatalf("prioritizeProcessPath() error = %v", err)
+	}
+
+	entries := filepath.SplitList(os.Getenv("PATH"))
+	if len(entries) != 3 {
+		t.Fatalf("PATH entries = %v, want three preserved entries", entries)
+	}
+	if entries[0] != targetDir {
+		t.Fatalf("PATH first entry = %q, want %q", entries[0], targetDir)
+	}
+	if entries[1] != firstDir || entries[2] != lastDir {
+		t.Fatalf("PATH should preserve non-target order after target move, got %v", entries)
 	}
 }
