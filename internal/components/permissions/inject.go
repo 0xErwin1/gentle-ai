@@ -3,11 +3,14 @@ package permissions
 import (
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
+
+var codexPermissionsGOOS = runtime.GOOS
 
 type InjectionResult struct {
 	Changed bool
@@ -186,14 +189,17 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.network.domains", `"*"`, `"allow"`)
 
 	merged = filemerge.RemoveTOMLTableKeys(merged, `permissions.gentle-dev.filesystem.":root"`, []string{`"."`})
-	for _, path := range []string{
+	readPaths := []string{
 		`":minimal"`,
 		`"~/.config/git"`,
 		`"~/.gitconfig"`,
 		`"~/.local/state/nix/profiles/home-manager/home-path"`,
 		`"~/.nix-profile"`,
-		`"/nix/store"`,
-	} {
+	}
+	if codexPermissionsGOOS != "windows" {
+		readPaths = append(readPaths, `"/nix/store"`)
+	}
+	for _, path := range readPaths {
 		merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.filesystem", path, `"read"`)
 	}
 	for _, path := range []string{

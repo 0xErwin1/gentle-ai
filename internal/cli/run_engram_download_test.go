@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
 
@@ -110,20 +111,29 @@ func TestRunInstallWindowsEngramUsesDownloadNotGoInstall(t *testing.T) {
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
 	restoreLookPath := cmdLookPath
+	restoreAddUserPath := addUserPath
 	t.Cleanup(func() {
 		osUserHomeDir = restoreHome
 		runCommand = restoreCommand
 		cmdLookPath = restoreLookPath
+		addUserPath = restoreAddUserPath
 	})
 
 	osUserHomeDir = func() (string, error) { return home, nil }
 	cmdLookPath = missingBinaryLookPath
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
+	fakeBinDir := filepath.Join(home, "engram-bin")
+	fakeBinaryPath := filepath.Join(fakeBinDir, "engram.exe")
+	var addedPath string
+	addUserPath = func(dir string) error {
+		addedPath = dir
+		return nil
+	}
 
 	origDownloadFn := engramDownloadFn
 	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
-		return `C:\fake\engram.exe`, nil
+		return fakeBinaryPath, nil
 	}
 	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
 
@@ -151,12 +161,290 @@ func TestRunInstallWindowsEngramUsesDownloadNotGoInstall(t *testing.T) {
 	if !result.Verify.Ready {
 		t.Fatalf("verification ready = false, report = %#v", result.Verify)
 	}
+	if addedPath != fakeBinDir {
+		t.Fatalf("Windows engram install should request adding downloaded binary dir to PATH, got %q", addedPath)
+	}
 
 	// Must NOT have called "go install" for engram.
 	for _, cmd := range recorder.get() {
 		if strings.Contains(cmd, "go install") && strings.Contains(cmd, "engram") {
 			t.Fatalf("Windows engram install should NOT use go install, got command: %s", cmd)
 		}
+	}
+}
+
+func TestRunInstallWindowsRefreshesEngramWhenDuplicatePathEntriesShadowManagedBinary(t *testing.T) {
+	home := t.TempDir()
+	staleDir := filepath.Join(home, "stale")
+	managedDir := filepath.Join(home, "managed")
+	if err := os.MkdirAll(staleDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(staleDir) error = %v", err)
+	}
+	if err := os.MkdirAll(managedDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(managedDir) error = %v", err)
+	}
+	staleBinary := filepath.Join(staleDir, "engram.exe")
+	managedBinary := filepath.Join(managedDir, "engram.exe")
+	if err := os.WriteFile(staleBinary, []byte("stale"), 0o755); err != nil {
+		t.Fatalf("WriteFile(staleBinary) error = %v", err)
+	}
+	if err := os.WriteFile(managedBinary, []byte("managed"), 0o755); err != nil {
+		t.Fatalf("WriteFile(managedBinary) error = %v", err)
+	}
+
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	restorePathEntries := pathEnvEntries
+	restoreEnsureUserPathFirst := ensureUserPathFirst
+	restoreUserPathEntries := userPathEntries
+	restorePath := os.Getenv("PATH")
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+		pathEnvEntries = restorePathEntries
+		ensureUserPathFirst = restoreEnsureUserPathFirst
+		userPathEntries = restoreUserPathEntries
+		os.Setenv("PATH", restorePath)
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(name string) (string, error) {
+		if name == "engram" {
+			return staleBinary, nil
+		}
+		return missingBinaryLookPath(name)
+	}
+	pathEnvEntries = func(profile system.PlatformProfile) []string {
+		return []string{staleDir, managedDir}
+	}
+	userPathEntries = func(goos string) ([]string, error) {
+		return []string{staleDir, managedDir}, nil
+	}
+	recorder := &commandRecorder{}
+	runCommand = recorder.record
+	var repairedPath string
+	ensureUserPathFirst = func(dir string) error {
+		repairedPath = dir
+		return os.Setenv("PATH", dir+";"+staleDir)
+	}
+
+	downloadCalled := false
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		downloadCalled = true
+		return managedBinary, nil
+	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
+
+	step := componentApplyStep{
+		component: model.ComponentEngram,
+		homeDir:   home,
+		agents:    []model.AgentID{model.AgentOpenCode},
+		profile: system.PlatformProfile{
+			OS:             "windows",
+			PackageManager: "winget",
+			Supported:      true,
+		},
+	}
+
+	err := step.Run()
+	if err != nil {
+		t.Fatalf("RunInstall() error = %v", err)
+	}
+	if !downloadCalled {
+		t.Fatal("engramDownloadFn was not called for shadowed duplicate Windows PATH entries")
+	}
+	if repairedPath != managedDir {
+		t.Fatalf("persistent user PATH repair should prioritize managed dir %q, got %q", managedDir, repairedPath)
+	}
+	if gotPath := os.Getenv("PATH"); !strings.HasPrefix(gotPath, managedDir+";") {
+		t.Fatalf("PATH should prioritize managed engram for current install, got %q", gotPath)
+	}
+	commands := recorder.get()
+	foundSetupWithManagedBinary := false
+	for _, cmd := range commands {
+		if strings.HasPrefix(cmd, managedBinary+" setup ") {
+			foundSetupWithManagedBinary = true
+		}
+		if strings.HasPrefix(cmd, "engram setup ") || strings.HasPrefix(cmd, staleBinary+" setup ") {
+			t.Fatalf("engram setup should use refreshed managed binary %q, got commands: %v", managedBinary, commands)
+		}
+	}
+	if !foundSetupWithManagedBinary {
+		t.Fatalf("expected engram setup to use refreshed managed binary %q, got commands: %v", managedBinary, commands)
+	}
+}
+
+func TestRunInstallWindowsFailsWhenShadowedEngramPathCannotBePersistentlyRepaired(t *testing.T) {
+	home := t.TempDir()
+	staleDir := filepath.Join(home, "stale")
+	managedDir := filepath.Join(home, "managed")
+	if err := os.MkdirAll(staleDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(staleDir) error = %v", err)
+	}
+	if err := os.MkdirAll(managedDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(managedDir) error = %v", err)
+	}
+	staleBinary := filepath.Join(staleDir, "engram.exe")
+	managedBinary := filepath.Join(managedDir, "engram.exe")
+	if err := os.WriteFile(staleBinary, []byte("stale"), 0o755); err != nil {
+		t.Fatalf("WriteFile(staleBinary) error = %v", err)
+	}
+	if err := os.WriteFile(managedBinary, []byte("managed"), 0o755); err != nil {
+		t.Fatalf("WriteFile(managedBinary) error = %v", err)
+	}
+
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	restorePathEntries := pathEnvEntries
+	restoreEnsureUserPathFirst := ensureUserPathFirst
+	restoreUserPathEntries := userPathEntries
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+		pathEnvEntries = restorePathEntries
+		ensureUserPathFirst = restoreEnsureUserPathFirst
+		userPathEntries = restoreUserPathEntries
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(name string) (string, error) {
+		if name == "engram" {
+			return staleBinary, nil
+		}
+		return missingBinaryLookPath(name)
+	}
+	pathEnvEntries = func(profile system.PlatformProfile) []string {
+		return []string{staleDir, managedDir}
+	}
+	userPathEntries = func(goos string) ([]string, error) {
+		return []string{staleDir, managedDir}, nil
+	}
+	recorder := &commandRecorder{}
+	runCommand = recorder.record
+	ensureUserPathFirst = func(dir string) error {
+		return os.ErrPermission
+	}
+
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return managedBinary, nil
+	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
+
+	step := componentApplyStep{
+		component: model.ComponentEngram,
+		homeDir:   home,
+		agents:    []model.AgentID{model.AgentOpenCode},
+		profile: system.PlatformProfile{
+			OS:             "windows",
+			PackageManager: "winget",
+			Supported:      true,
+		},
+	}
+
+	err := step.Run()
+	if err == nil {
+		t.Fatal("componentApplyStep.Run() should fail when shadowed Engram PATH cannot be persistently repaired")
+	}
+	errText := err.Error()
+	for _, want := range []string{"repair Windows Engram PATH shadowing", "Move", managedDir, staleDir, "rerun install"} {
+		if !strings.Contains(errText, want) {
+			t.Fatalf("error %q missing actionable text %q", errText, want)
+		}
+	}
+	if commands := recorder.get(); len(commands) != 0 {
+		t.Fatalf("engram setup should not run after persistent PATH repair fails, got commands: %v", commands)
+	}
+}
+
+func TestRunInstallWindowsFailsWhenShadowedEngramPathIsNotInUserPath(t *testing.T) {
+	home := t.TempDir()
+	staleMachineDir := filepath.Join(home, "machine-stale")
+	managedDir := filepath.Join(home, "managed")
+	if err := os.MkdirAll(staleMachineDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(staleMachineDir) error = %v", err)
+	}
+	if err := os.MkdirAll(managedDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(managedDir) error = %v", err)
+	}
+	staleBinary := filepath.Join(staleMachineDir, "engram.exe")
+	managedBinary := filepath.Join(managedDir, "engram.exe")
+	if err := os.WriteFile(staleBinary, []byte("stale"), 0o755); err != nil {
+		t.Fatalf("WriteFile(staleBinary) error = %v", err)
+	}
+	if err := os.WriteFile(managedBinary, []byte("managed"), 0o755); err != nil {
+		t.Fatalf("WriteFile(managedBinary) error = %v", err)
+	}
+
+	restoreHome := osUserHomeDir
+	restoreCommand := runCommand
+	restoreLookPath := cmdLookPath
+	restorePathEntries := pathEnvEntries
+	restoreEnsureUserPathFirst := ensureUserPathFirst
+	restoreUserPathEntries := userPathEntries
+	t.Cleanup(func() {
+		osUserHomeDir = restoreHome
+		runCommand = restoreCommand
+		cmdLookPath = restoreLookPath
+		pathEnvEntries = restorePathEntries
+		ensureUserPathFirst = restoreEnsureUserPathFirst
+		userPathEntries = restoreUserPathEntries
+	})
+
+	osUserHomeDir = func() (string, error) { return home, nil }
+	cmdLookPath = func(name string) (string, error) {
+		if name == "engram" {
+			return staleBinary, nil
+		}
+		return missingBinaryLookPath(name)
+	}
+	pathEnvEntries = func(profile system.PlatformProfile) []string {
+		return []string{staleMachineDir, managedDir}
+	}
+	userPathEntries = func(goos string) ([]string, error) {
+		return []string{managedDir}, nil
+	}
+	recorder := &commandRecorder{}
+	runCommand = recorder.record
+	ensureUserPathFirst = func(dir string) error {
+		t.Fatal("ensureUserPathFirst should not run when stale entry is outside user PATH")
+		return nil
+	}
+
+	origDownloadFn := engramDownloadFn
+	engramDownloadFn = func(profile system.PlatformProfile) (string, error) {
+		return managedBinary, nil
+	}
+	t.Cleanup(func() { engramDownloadFn = origDownloadFn })
+
+	step := componentApplyStep{
+		component: model.ComponentEngram,
+		homeDir:   home,
+		agents:    []model.AgentID{model.AgentOpenCode},
+		profile: system.PlatformProfile{
+			OS:             "windows",
+			PackageManager: "winget",
+			Supported:      true,
+		},
+	}
+
+	err := step.Run()
+	if err == nil {
+		t.Fatal("componentApplyStep.Run() should fail when the stale Engram path is not in user PATH")
+	}
+	errText := err.Error()
+	for _, want := range []string{"cannot safely repair PATH order", "not in the user PATH", "Machine/System PATH", managedDir, staleMachineDir, "rerun install"} {
+		if !strings.Contains(errText, want) {
+			t.Fatalf("error %q missing actionable text %q", errText, want)
+		}
+	}
+	if commands := recorder.get(); len(commands) != 0 {
+		t.Fatalf("engram setup should not run after unsafe PATH repair detection, got commands: %v", commands)
 	}
 }
 
