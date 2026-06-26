@@ -197,7 +197,7 @@ func TestPiAgentInstallRunsPackageCommandsWhenPiAlreadyInstalled(t *testing.T) {
 		"pi install npm:gentle-engram",
 		"pi install npm:pi-mcp-adapter",
 		engramInitCommandForTest(),
-		"pi install npm:@tintinweb/pi-subagents",
+		"sh -c : \"${HOME:?HOME is required}\" && tmp=$(mktemp -d) && trap 'rm -rf \"$tmp\"' EXIT && git clone --depth 1 https://github.com/Gentleman-Programming/gentle-pi.git \"$tmp/gentle-pi\" && rm -rf \"$HOME/.pi/agent/vendor/pi-subagents-fixed\" && mkdir -p \"$(dirname \"$HOME/.pi/agent/vendor/pi-subagents-fixed\")\" && cp -R \"$tmp/gentle-pi/vendor/pi-subagents-fixed\" \"$HOME/.pi/agent/vendor/pi-subagents-fixed\" && npm install --omit=dev --prefix \"$HOME/.pi/agent/vendor/pi-subagents-fixed\" && pi install \"$HOME/.pi/agent/vendor/pi-subagents-fixed\"",
 		"pi install npm:pi-intercom",
 		"pi install npm:@juicesharp/rpiv-ask-user-question",
 		"pi install npm:pi-web-access",

@@ -25,7 +25,27 @@ const (
 	piSettingsFile           = "settings.json"
 	piNPMDirectory           = "npm"
 	piNPMPackageFile         = "package.json"
+	piSubagentsFixedRepo     = "https://github.com/Gentleman-Programming/gentle-pi.git"
+	piSubagentsFixedPath     = "$HOME/.pi/agent/vendor/pi-subagents-fixed"
 )
+
+func piSubagentsFixedInstallCommand(profile system.PlatformProfile) []string {
+	if profile.OS == "windows" {
+		packagePath := `$env:USERPROFILE\.pi\agent\vendor\pi-subagents-fixed`
+		return []string{
+			"powershell",
+			"-NoProfile",
+			"-Command",
+			"$ErrorActionPreference = 'Stop'; $packageDir = \"" + packagePath + "\"; $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString()); New-Item -ItemType Directory -Path $tmp | Out-Null; try { git clone --depth 1 " + piSubagentsFixedRepo + " (Join-Path $tmp 'gentle-pi'); if (Test-Path $packageDir) { Remove-Item -Recurse -Force $packageDir }; New-Item -ItemType Directory -Force -Path (Split-Path $packageDir) | Out-Null; Copy-Item -Recurse (Join-Path $tmp 'gentle-pi\\vendor\\pi-subagents-fixed') $packageDir; npm install --omit=dev --prefix $packageDir; pi install $packageDir } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }",
+		}
+	}
+
+	return []string{
+		"sh",
+		"-c",
+		": \"${HOME:?HOME is required}\" && tmp=$(mktemp -d) && trap 'rm -rf \"$tmp\"' EXIT && git clone --depth 1 " + piSubagentsFixedRepo + " \"$tmp/gentle-pi\" && rm -rf \"" + piSubagentsFixedPath + "\" && mkdir -p \"$(dirname \"" + piSubagentsFixedPath + "\")\" && cp -R \"$tmp/gentle-pi/vendor/pi-subagents-fixed\" \"" + piSubagentsFixedPath + "\" && npm install --omit=dev --prefix \"" + piSubagentsFixedPath + "\" && pi install \"" + piSubagentsFixedPath + "\"",
+	}
+}
 
 type statResult struct {
 	isDir bool
@@ -68,13 +88,13 @@ func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, strin
 
 func (a *Adapter) SupportsAutoInstall() bool { return true }
 
-func (a *Adapter) InstallCommand(system.PlatformProfile) ([][]string, error) {
+func (a *Adapter) InstallCommand(profile system.PlatformProfile) ([][]string, error) {
 	return [][]string{
 		{"pi", "install", "npm:gentle-pi"},
 		{"pi", "install", "npm:gentle-engram"},
 		{"pi", "install", "npm:pi-mcp-adapter"},
 		a.engramInitCommand(),
-		{"pi", "install", "npm:@tintinweb/pi-subagents"},
+		piSubagentsFixedInstallCommand(profile),
 		{"pi", "install", "npm:pi-intercom"},
 		{"pi", "install", "npm:@juicesharp/rpiv-ask-user-question"},
 		{"pi", "install", "npm:pi-web-access"},

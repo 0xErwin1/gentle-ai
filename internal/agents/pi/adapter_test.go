@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -158,7 +159,7 @@ func TestAdapterInstallCommandSequenceUsesNpmWhenPnpmIsUnavailable(t *testing.T)
 		{"pi", "install", "npm:gentle-engram"},
 		{"pi", "install", "npm:pi-mcp-adapter"},
 		{"npm", "exec", "--yes", "--package", "gentle-engram@latest", "--", "pi-engram", "init"},
-		{"pi", "install", "npm:@tintinweb/pi-subagents"},
+		piSubagentsFixedInstallCommand(system.PlatformProfile{}),
 		{"pi", "install", "npm:pi-intercom"},
 		{"pi", "install", "npm:@juicesharp/rpiv-ask-user-question"},
 		{"pi", "install", "npm:pi-web-access"},
@@ -167,6 +168,38 @@ func TestAdapterInstallCommandSequenceUsesNpmWhenPnpmIsUnavailable(t *testing.T)
 	}
 	if !reflect.DeepEqual(commands, want) {
 		t.Fatalf("InstallCommand() = %#v, want %#v", commands, want)
+	}
+}
+
+func TestAdapterInstallCommandSequenceUsesWindowsPowerShellForSubagents(t *testing.T) {
+	a := &Adapter{
+		lookPath: func(file string) (string, error) {
+			if file == "pnpm" {
+				return "", os.ErrNotExist
+			}
+			return "/usr/local/bin/" + file, nil
+		},
+		statPath: defaultStat,
+	}
+	commands, err := a.InstallCommand(system.PlatformProfile{OS: "windows"})
+	if err != nil {
+		t.Fatalf("InstallCommand() error = %v", err)
+	}
+
+	got := commands[4]
+	if len(got) != 4 || got[0] != "powershell" || got[1] != "-NoProfile" || got[2] != "-Command" {
+		t.Fatalf("InstallCommand()[4] = %#v, want PowerShell command", got)
+	}
+	for _, want := range []string{
+		"$env:USERPROFILE\\.pi\\agent\\vendor\\pi-subagents-fixed",
+		"git clone --depth 1 https://github.com/Gentleman-Programming/gentle-pi.git",
+		"gentle-pi\\vendor\\pi-subagents-fixed",
+		"npm install --omit=dev --prefix $packageDir",
+		"pi install $packageDir",
+	} {
+		if !strings.Contains(got[3], want) {
+			t.Fatalf("Windows subagents command missing %q; got %#v", want, got)
+		}
 	}
 }
 
