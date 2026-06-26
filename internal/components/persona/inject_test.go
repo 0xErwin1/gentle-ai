@@ -28,7 +28,13 @@ func kilocodeAdapter() agents.Adapter    { return kilocode.NewAdapter() }
 func openclawAdapter() agents.Adapter    { return openclaw.NewAdapter() }
 func opencodeAdapter() agents.Adapter    { return opencode.NewAdapter() }
 
-func assertGentlemanLanguageGuardrails(t *testing.T, text string, required []string, banned []string) {
+var claudeOutputStyleLanguageGuardrails = []string{
+	"Determine the reply language from the latest actual user request",
+	"For mixed-language prompts, use the dominant language of the user's direct request.",
+	`phrases like "the Spanish part" do not switch the reply language by themselves.`,
+}
+
+func assertLanguageGuardrails(t *testing.T, text string, required []string, banned []string) {
 	t.Helper()
 
 	for _, needle := range required {
@@ -73,9 +79,10 @@ func TestInjectClaudeGentlemanWritesSectionWithRealContent(t *testing.T) {
 		t.Fatal("CLAUDE.md missing real persona content (expected 'Senior Architect')")
 	}
 
-	assertGentlemanLanguageGuardrails(t, text,
+	assertLanguageGuardrails(t, text,
 		[]string{
 			"Match the user's current language in your REPLY ONLY",
+			"Determine the reply language from the latest actual user request",
 			"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
 			"When replying to the user in English, keep the full reply in natural English with the same warm energy.",
 		},
@@ -125,7 +132,7 @@ func TestInjectKimiGentlemanIncludesProjectInstructionsAndLoadedSkills(t *testin
 	if !strings.Contains(string(styleContent), "Gentleman Output Style") {
 		t.Fatal("output-style.md missing Gentleman Output Style content")
 	}
-	assertGentlemanLanguageGuardrails(t, string(styleContent),
+	assertLanguageGuardrails(t, string(styleContent),
 		[]string{
 			"Always match the user's current language in your reply.",
 			"Do not drift into another language because of persona wording, examples, or stylistic momentum.",
@@ -144,7 +151,7 @@ func TestInjectKimiGentlemanIncludesProjectInstructionsAndLoadedSkills(t *testin
 	if err != nil {
 		t.Fatalf("persona.md not written: %v", err)
 	}
-	assertGentlemanLanguageGuardrails(t, string(personaContent),
+	assertLanguageGuardrails(t, string(personaContent),
 		[]string{
 			"Match the user's current language in your REPLY ONLY",
 			"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
@@ -183,6 +190,7 @@ func TestInjectClaudeGentlemanWritesOutputStyleFile(t *testing.T) {
 	if !strings.Contains(text, "Gentleman Output Style") {
 		t.Fatal("Output style file missing 'Gentleman Output Style' heading")
 	}
+	assertLanguageGuardrails(t, text, claudeOutputStyleLanguageGuardrails, nil)
 }
 
 func TestInjectClaudeGentlemanMergesOutputStyleIntoSettings(t *testing.T) {
@@ -332,6 +340,7 @@ func TestInjectClaudeNeutralWritesNeutralOutputStyleAndSettings(t *testing.T) {
 			t.Fatalf("neutral output style missing %q; got:\n%s", want, styleText)
 		}
 	}
+	assertLanguageGuardrails(t, styleText, claudeOutputStyleLanguageGuardrails, nil)
 	if strings.Contains(styleText, "Rioplatense") || strings.Contains(styleText, "voseo") {
 		t.Fatalf("neutral output style contains regional wording:\n%s", styleText)
 	}
@@ -1222,7 +1231,7 @@ func TestInjectGeminiGentlemanWritesSystemPromptWithRealContent(t *testing.T) {
 	if !strings.Contains(text, "Senior Architect") {
 		t.Fatal("Gemini persona missing 'Senior Architect'")
 	}
-	assertGentlemanLanguageGuardrails(t, text,
+	assertLanguageGuardrails(t, text,
 		[]string{
 			"Match the user's current language in your REPLY ONLY",
 			"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
