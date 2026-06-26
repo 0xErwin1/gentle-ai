@@ -32,6 +32,9 @@ var claudeOutputStyleLanguageGuardrails = []string{
 	"Determine the reply language from the latest actual user request",
 	"For mixed-language prompts, use the dominant language of the user's direct request.",
 	`phrases like "the Spanish part" do not switch the reply language by themselves.`,
+	"If the selected reply language is English, every part of the direct reply must be English: greetings, interjections, acknowledgements, transition phrases, and the first sentence.",
+	"Do not use Hola, dale, listo, Spanish punctuation, or other Spanish fragments.",
+	"Prompts starting with or dominated by hi, hello, hey, or similar English greetings are English prompts unless the user explicitly asks for another language.",
 }
 
 func assertLanguageGuardrails(t *testing.T, text string, required []string, banned []string) {
@@ -85,6 +88,8 @@ func TestInjectClaudeGentlemanWritesSectionWithRealContent(t *testing.T) {
 			"Determine the reply language from the latest actual user request",
 			"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
 			"When replying to the user in English, keep the full reply in natural English with the same warm energy.",
+			"If the selected reply language is English, every part of the direct reply must be English: greetings, interjections, acknowledgements, transition phrases, and the first sentence.",
+			"Prompts starting with or dominated by hi, hello, hey, or similar English greetings are English prompts unless the user explicitly asks for another language.",
 		},
 		[]string{
 			`Say "déjame verificar"`,

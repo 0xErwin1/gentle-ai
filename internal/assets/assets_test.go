@@ -944,6 +944,9 @@ func TestClaudeManagedOutputStylesAnchorReplyLanguageToLatestUserRequest(t *test
 		"For mixed-language prompts, use the dominant language of the user's direct request.",
 		"Quoted text, filenames, project names, isolated borrowed words",
 		`phrases like "the Spanish part" do not switch the reply language by themselves.`,
+		"If the selected reply language is English, every part of the direct reply must be English: greetings, interjections, acknowledgements, transition phrases, and the first sentence.",
+		"Do not use Hola, dale, listo, Spanish punctuation, or other Spanish fragments.",
+		"Prompts starting with or dominated by hi, hello, hey, or similar English greetings are English prompts unless the user explicitly asks for another language.",
 	}
 
 	for _, tc := range tests {
@@ -962,6 +965,21 @@ func TestClaudeManagedOutputStylesAnchorReplyLanguageToLatestUserRequest(t *test
 				}
 			}
 		})
+	}
+}
+
+func TestClaudeGentlemanPersonaPreventsEnglishGreetingCodeSwitching(t *testing.T) {
+	content := MustRead("claude/persona-gentleman.md")
+
+	for _, required := range []string{
+		"If the selected reply language is English, every part of the direct reply must be English: greetings, interjections, acknowledgements, transition phrases, and the first sentence.",
+		"Do not use Hola, dale, listo, Spanish punctuation, or other Spanish fragments.",
+		"Prompts starting with or dominated by hi, hello, hey, or similar English greetings are English prompts unless the user explicitly asks for another language.",
+		"Do not switch languages unless the user does, asks you to, or you are quoting/translating content.",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("claude/persona-gentleman.md missing code-switching guardrail %q", required)
+		}
 	}
 }
 
