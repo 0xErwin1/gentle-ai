@@ -2,6 +2,7 @@ package screens
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -125,6 +126,57 @@ func TestRenderUpgrade_ErrorState(t *testing.T) {
 	if !strings.Contains(strings.ToLower(out), "return") {
 		t.Errorf("RenderUpgrade(upgradeErr) should contain 'return' hint; got:\n%s", out)
 	}
+}
+
+// TestRenderUpgrade_LongManualHintSplitsAcrossLines verifies that a long ManualHint
+// containing ": " is split so the command appears on its own line and is not clipped
+// by BubbleTea at the terminal width.
+func TestRenderUpgrade_LongManualHintSplitsAcrossLines(t *testing.T) {
+	longHint := `upgrade "gentle-ai" on Windows requires manual update: irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex`
+	report := &upgrade.UpgradeReport{
+		Results: []upgrade.ToolUpgradeResult{
+			{
+				ToolName:   "gentle-ai",
+				OldVersion: "v1.0.0",
+				NewVersion: "v1.1.0",
+				Status:     upgrade.UpgradeSkipped,
+				ManualHint: longHint,
+			},
+		},
+	}
+
+	out := stripANSI(RenderUpgradeWithWidth(nil, report, nil, false, true, 0, 0, 80))
+	lines := strings.Split(out, "\n")
+
+	preambleIndex := -1
+	for i, line := range lines {
+		if strings.Contains(line, "requires manual update:") {
+			preambleIndex = i
+			break
+		}
+	}
+	if preambleIndex == -1 {
+		t.Fatalf("hint preamble should appear in output; got:\n%s", out)
+	}
+	if preambleIndex+1 >= len(lines) || !strings.Contains(lines[preambleIndex+1], "irm") {
+		t.Fatalf("hint command should start on the line after the preamble; got:\n%s", out)
+	}
+	if !strings.Contains(out, "install.ps1") || !strings.Contains(out, "| iex") {
+		t.Fatalf("full manual command should remain visible; got:\n%s", out)
+	}
+	for _, line := range lines[preambleIndex+1:] {
+		if strings.TrimSpace(line) == "" {
+			break
+		}
+		if len(line) > 80 {
+			t.Fatalf("manual hint line exceeds terminal width: len=%d line=%q\noutput:\n%s", len(line), line, out)
+		}
+	}
+}
+
+func stripANSI(s string) string {
+	ansiPattern := regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
+	return ansiPattern.ReplaceAllString(s, "")
 }
 
 // TestRenderUpgrade_TitleAlwaysPresent verifies that the "Upgrade Tools" title
