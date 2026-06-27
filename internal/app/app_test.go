@@ -472,7 +472,7 @@ func TestTuiSyncClaudeModelConfigWritesSelectedAssignments(t *testing.T) {
 	}
 	for _, want := range []string{
 		"| sdd-apply | haiku | default | Implementation |",
-		"| default | haiku | default | Non-SDD general delegation |",
+		"| default | haiku | default | SDD/JD phase fallback |",
 		"Gentle AI does not configure the main orchestrator model",
 	} {
 		if !strings.Contains(string(body), want) {

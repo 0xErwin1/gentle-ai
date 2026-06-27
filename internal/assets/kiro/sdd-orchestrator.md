@@ -296,7 +296,6 @@ Read this table at session start. Kiro IDE is powered by Claude — use the tabl
 
 | Phase | Default Model | Reason |
 |-------|---------------|--------|
-| orchestrator | opus | Coordinates, makes decisions |
 | sdd-explore | sonnet | Reads code, structural - not architectural |
 | sdd-propose | opus | Architectural decisions |
 | sdd-spec | sonnet | Structured writing |
@@ -305,7 +304,7 @@ Read this table at session start. Kiro IDE is powered by Claude — use the tabl
 | sdd-apply | sonnet | Implementation |
 | sdd-verify | sonnet | Validation against spec |
 | sdd-archive | haiku | Copy and close |
-| default | sonnet | Non-SDD general delegation |
+| default | sonnet | SDD/JD phase fallback |
 
 <!-- /gentle-ai:sdd-model-assignments -->
 

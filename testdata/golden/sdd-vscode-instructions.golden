@@ -242,11 +242,10 @@ When delegating to sub-agents, pass `## Skills to load before work` followed by 
 <!-- gentle-ai:sdd-model-assignments -->
 ## Model Assignments
 
-Read this table at session start (or before first delegation), cache it for the session, and pass the mapped alias in every Agent tool call via the `model` parameter. If a phase is missing, use the `default` row. If you lack access to the assigned model, substitute `sonnet` and continue.
+Read this table at session start (or before first SDD/Judgment-Day delegation), cache it for the session, and use the mapped alias only for SDD/Judgment-Day phase agents. If an SDD/Judgment-Day phase is missing, use the `default` fallback row. If you lack access to the assigned model, substitute `sonnet` and continue.
 
 | Phase | Default Model | Reason |
 |-------|---------------|--------|
-| orchestrator | opus | Coordinates, makes decisions |
 | sdd-explore | sonnet | Reads code, structural - not architectural |
 | sdd-propose | opus | Architectural decisions |
 | sdd-spec | sonnet | Structured writing |
@@ -255,7 +254,7 @@ Read this table at session start (or before first delegation), cache it for the 
 | sdd-apply | sonnet | Implementation |
 | sdd-verify | sonnet | Validation against spec |
 | sdd-archive | haiku | Copy and close |
-| default | sonnet | Non-SDD general delegation |
+| default | sonnet | SDD/JD phase fallback |
 
 <!-- /gentle-ai:sdd-model-assignments -->
 
@@ -274,7 +273,7 @@ This prevents duplicate sub-agent launches that cause "File X has been modified 
 
 ALL sub-agent launch prompts that involve reading, writing, or reviewing code MUST include pre-resolved **skill paths** from the skill registry. Follow the **Skill Resolver Protocol** (see `_shared/skill-resolver.md` in the skills directory).
 
-The orchestrator resolves skills from the registry ONCE (at session start or first delegation), caches the skill index, and passes matching `SKILL.md` paths into each sub-agent's prompt. Also reads the Model Assignments table once per session, caches `phase → alias`, includes that alias in every Agent tool call via `model`.
+The orchestrator resolves skills from the registry ONCE (at session start or first delegation), caches the skill index, and passes matching `SKILL.md` paths into each sub-agent's prompt. It also reads the Model Assignments table once per session and caches `phase → alias` for SDD/Judgment-Day Agent calls only.
 
 Orchestrator skill resolution (do once per session):
 1. `mem_search(query: "skill-registry", project: "{project}")` → `mem_get_observation(id)` for full registry content

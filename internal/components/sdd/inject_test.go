@@ -346,7 +346,7 @@ func TestInjectClaudeCustomModelAssignments(t *testing.T) {
 	for _, want := range []string{
 		"| sdd-design | sonnet | default | Architecture decisions |",
 		"| sdd-propose | fable | default | Architectural decisions |",
-		"| default | haiku | default | Non-SDD general delegation |",
+		"| default | haiku | default | SDD/JD phase fallback |",
 		"Gentle AI does not configure the main orchestrator model",
 	} {
 		if !strings.Contains(text, want) {
@@ -361,12 +361,21 @@ func TestInjectClaudeCustomModelAssignments(t *testing.T) {
 		t.Fatal("CLAUDE.md missing model assignment close marker")
 	}
 	for _, want := range []string{
-		"Every Agent tool call MUST include `model`",
-		"for general/non-SDD delegation use `default`",
-		"If `model` is absent, do not send the Agent call",
+		"Agent tool calls for SDD/Judgment-Day phase agents MUST include `model`",
+		"Generic/non-SDD delegation MUST NOT use this table",
+		"omit `model` unless the user explicitly requested an override",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("CLAUDE.md missing mandatory model gate text %q", want)
+			t.Fatalf("CLAUDE.md missing scoped model gate text %q", want)
+		}
+	}
+	for _, forbidden := range []string{
+		"Every Agent tool call MUST include `model`",
+		"for general/non-SDD delegation use `default`",
+		"Non-SDD general delegation",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("CLAUDE.md contains legacy generic delegation model routing text %q", forbidden)
 		}
 	}
 }

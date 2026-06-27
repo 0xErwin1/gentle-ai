@@ -219,11 +219,11 @@ When launching `sdd-apply`, always include the resolved `delivery_strategy`, `ch
 
 ## Model Assignments
 
-Read this table at session start (or before first delegation), cache it for the session, and pass the mapped alias in every Agent tool call via the `model` parameter. If a phase is missing, use the `default` row. If you lack access to the assigned model, substitute `sonnet` and continue.
+Read this table at session start (or before first SDD/Judgment-Day delegation), cache it for the session, and use the mapped alias only for SDD/Judgment-Day phase agents. If an SDD/Judgment-Day phase is missing, use the `default` fallback row. If you lack access to the assigned model, substitute `sonnet` and continue.
 
-The Claude Code session model is controlled by Claude Code itself; Gentle AI does not configure the main orchestrator model. This table applies only to Agent tool calls for SDD phase sub-agents and general delegation.
+The Claude Code session model is controlled by Claude Code itself; Gentle AI does not configure the main orchestrator model. This table applies only to Agent tool calls for SDD/Judgment-Day phase sub-agents, not generic delegation.
 
-**Mandatory model gate:** Every Agent tool call MUST include `model`. Calling Agent without `model` is invalid. Before each Agent call, resolve the target phase to an alias from this table; for general/non-SDD delegation use `default`. If you are about to call Agent and have not chosen a `model`, STOP and choose the mapped alias first.
+**Mandatory phase model gate:** Agent tool calls for SDD/Judgment-Day phase agents MUST include `model`. Generic/non-SDD delegation MUST NOT use this table; omit `model` unless the user explicitly requested an override. Before each SDD/Judgment-Day Agent call, resolve the target phase to an alias from this table.
 
 | Phase       | Default Model | Reason                                     |
 | ----------- | ------------- | ------------------------------------------ |
@@ -235,7 +235,7 @@ The Claude Code session model is controlled by Claude Code itself; Gentle AI doe
 | sdd-apply   | sonnet        | Implementation                             |
 | sdd-verify  | sonnet        | Validation against spec                    |
 | sdd-archive | haiku         | Copy and close                             |
-| default     | sonnet        | Non-SDD general delegation                 |
+| default     | sonnet        | SDD/JD phase fallback                      |
 
 <!-- /gentle-ai:sdd-model-assignments -->
 
@@ -254,14 +254,14 @@ This prevents duplicate sub-agent launches that cause "File X has been modified 
 
 ALL sub-agent launch prompts that involve reading, writing, or reviewing code MUST include pre-resolved **skill paths** from the skill registry. Follow the **Skill Resolver Protocol** (`~/.claude/skills/_shared/skill-resolver.md`).
 
-**Pre-flight before every Agent call (mandatory):**
+**Pre-flight before every SDD/Judgment-Day Agent call (mandatory):**
 
-1. Identify the phase key (`sdd-apply`, `sdd-verify`, etc.) or use `default` for general delegation.
+1. Identify the SDD/Judgment-Day phase key (`sdd-apply`, `sdd-verify`, `jd-judge-a`, etc.) or use `default` only as a phase fallback.
 2. Look up the alias in the Model Assignments table.
-3. Include `model: "<alias>"` in the Agent tool call.
-4. If `model` is absent, do not send the Agent call.
+3. Include `model: "<alias>"` in the SDD/Judgment-Day Agent tool call.
+4. For generic/non-SDD delegation, do not use this table and omit `model` unless the user explicitly requested an override.
 
-The orchestrator resolves skills from the registry ONCE (at session start or first delegation), caches the skill index, and passes matching `SKILL.md` paths into each sub-agent's prompt. Also reads the Model Assignments table once per session, caches `phase → alias`, includes that alias in every Agent tool call via `model`.
+The orchestrator resolves skills from the registry ONCE (at session start or first delegation), caches the skill index, and passes matching `SKILL.md` paths into each sub-agent's prompt. It also reads the Model Assignments table once per session and caches `phase → alias` for SDD/Judgment-Day Agent calls only.
 
 Orchestrator skill resolution (do once per session):
 
