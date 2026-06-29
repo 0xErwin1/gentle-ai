@@ -79,6 +79,11 @@ type RunnerFunc func(name string, args ...string) error
 
 func (fn RunnerFunc) Run(name string, args ...string) error { return fn(name, args...) }
 
+var (
+	codeGraphPackageLookPath = exec.LookPath
+	codeGraphPnpmGlobalBin   = defaultPnpmGlobalBin
+)
+
 var definitions = []Definition{
 	{
 		ID:          model.CommunityToolCodeGraph,
@@ -139,7 +144,10 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 		return result, nil
 	}
 
-	commands := CodeGraphCommands()
+	commands, err := CodeGraphCommandsForDetector(DetectorFunc(codeGraphPackageLookPath))
+	if err != nil {
+		return result, err
+	}
 	for _, command := range commands {
 		if len(command) == 0 {
 			continue
@@ -358,8 +366,56 @@ func defaultHomeDir() string {
 }
 
 func CodeGraphCommands() [][]string {
+	return codeGraphCommands("npm")
+}
+
+func CodeGraphCommandsForDetector(detector Detector) ([][]string, error) {
+	packageManager, err := detectCodeGraphPackageManager(detector)
+	if err != nil {
+		return nil, err
+	}
+	return codeGraphCommands(packageManager), nil
+}
+
+func defaultPnpmGlobalBin() (string, error) {
+	output, err := exec.Command("pnpm", "bin", "-g").CombinedOutput()
+	if err != nil {
+		message := strings.TrimSpace(string(output))
+		if message == "" {
+			message = err.Error()
+		}
+		return "", fmt.Errorf("pnpm global binary directory is not usable: %s", message)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+func detectCodeGraphPackageManager(detector Detector) (string, error) {
+	if detector == nil {
+		detector = DetectorFunc(exec.LookPath)
+	}
+	if _, err := detector.LookPath("npm"); err == nil {
+		return "npm", nil
+	}
+	if _, err := detector.LookPath("pnpm"); err == nil {
+		globalBin, binErr := codeGraphPnpmGlobalBin()
+		if binErr != nil {
+			return "", fmt.Errorf("CodeGraph installation found pnpm, but pnpm global installs are not ready. Run `pnpm setup`, restart your shell, then rerun Gentle AI: %w", binErr)
+		}
+		if globalBin == "" {
+			return "", fmt.Errorf("CodeGraph installation found pnpm, but `pnpm bin -g` returned an empty global binary directory. Run `pnpm setup`, restart your shell, then rerun Gentle AI")
+		}
+		return "pnpm", nil
+	}
+	return "", fmt.Errorf("CodeGraph installation requires either `npm` or `pnpm` in PATH")
+}
+
+func codeGraphCommands(packageManager string) [][]string {
+	installCommand := []string{"npm", "install", "-g", "@colbymchenry/codegraph@latest"}
+	if packageManager == "pnpm" {
+		installCommand = []string{"pnpm", "add", "-g", "@colbymchenry/codegraph@latest"}
+	}
 	return [][]string{
-		{"npm", "install", "-g", "@colbymchenry/codegraph@latest"},
+		installCommand,
 		{"codegraph", "install", "--yes"},
 	}
 }
