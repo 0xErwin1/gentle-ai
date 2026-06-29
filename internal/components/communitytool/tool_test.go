@@ -217,6 +217,44 @@ func TestCodeGraphGuidanceInjectsForRepresentativeAgents(t *testing.T) {
 	}
 }
 
+func TestCodeGraphGuidanceInjectRemovesLegacySkipBlock(t *testing.T) {
+	home := t.TempDir()
+	agentsPath := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	mustWrite(t, filepath.Join(home, ".config", "opencode", "opencode.json"), `{}`)
+	mustWrite(t, agentsPath, strings.Join([]string{
+		"custom notes",
+		"<!-- CODEGRAPH_START -->",
+		"## CodeGraph",
+		"If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is the user's decision.",
+		"<!-- CODEGRAPH_END -->",
+		"more notes",
+	}, "\n"))
+
+	result, err := InjectCodeGraphGuidanceIfSelected(home, []model.CommunityToolID{model.CommunityToolCodeGraph})
+	if err != nil {
+		t.Fatalf("InjectCodeGraphGuidanceIfSelected() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatalf("result.Changed = false, want true")
+	}
+
+	body, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", agentsPath, err)
+	}
+	text := string(body)
+	for _, stale := range []string{"<!-- CODEGRAPH_START -->", "<!-- CODEGRAPH_END -->", "skip CodeGraph entirely"} {
+		if strings.Contains(text, stale) {
+			t.Fatalf("legacy CodeGraph guidance %q was not removed:\n%s", stale, text)
+		}
+	}
+	for _, want := range []string{"custom notes", "more notes", "<!-- gentle-ai:codegraph-guidance -->", "codegraph init <project-root>"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("updated guidance missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestUnselectedCodeGraphDoesNotInjectGuidance(t *testing.T) {
 	home := t.TempDir()
 	mustWrite(t, filepath.Join(home, ".config", "opencode", "opencode.json"), `{}`)

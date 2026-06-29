@@ -632,6 +632,102 @@ func TestCodeGraphGuidanceSyncStepRefreshesOldMarkerWhenConfigured(t *testing.T)
 	}
 }
 
+func TestCodeGraphGuidanceSyncStepRemovesLegacySkipBlockWhenConfigured(t *testing.T) {
+	home := t.TempDir()
+	agentsPath := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	mustWriteFile(t, filepath.Join(home, ".config", "opencode", "opencode.json"), []byte(`{}`))
+	mustWriteFile(t, agentsPath, []byte(strings.Join([]string{
+		"custom notes",
+		"<!-- CODEGRAPH_START -->",
+		"## CodeGraph",
+		"If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is the user's decision.",
+		"<!-- CODEGRAPH_END -->",
+	}, "\n")))
+
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() { cmdLookPath = restoreLookPath })
+	cmdLookPath = func(name string) (string, error) {
+		if name != "codegraph" {
+			return "", os.ErrNotExist
+		}
+		return "/bin/codegraph", nil
+	}
+
+	var changed []string
+	step := codeGraphGuidanceSyncStep{
+		id:           "sync:community-tool:codegraph-guidance",
+		homeDir:      home,
+		changedFiles: &changed,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("codeGraphGuidanceSyncStep.Run() error = %v", err)
+	}
+
+	body, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", agentsPath, err)
+	}
+	text := string(body)
+	for _, stale := range []string{"<!-- CODEGRAPH_START -->", "<!-- CODEGRAPH_END -->", "skip CodeGraph entirely"} {
+		if strings.Contains(text, stale) {
+			t.Fatalf("legacy CodeGraph guidance %q was not removed during sync:\n%s", stale, text)
+		}
+	}
+	if !strings.Contains(text, "immediately run `codegraph init <project-root>`") || !strings.Contains(text, "custom notes") {
+		t.Fatalf("latest guidance/user content missing after sync cleanup:\n%s", text)
+	}
+	if !reflect.DeepEqual(changed, []string{agentsPath}) {
+		t.Fatalf("changed files = %#v, want %#v", changed, []string{agentsPath})
+	}
+}
+
+func TestCodeGraphGuidanceSyncStepCleansLegacyBlockWithoutCodeGraphCLI(t *testing.T) {
+	home := t.TempDir()
+	agentsPath := filepath.Join(home, ".config", "opencode", "AGENTS.md")
+	mustWriteFile(t, filepath.Join(home, ".config", "opencode", "opencode.json"), []byte(`{}`))
+	mustWriteFile(t, agentsPath, []byte(strings.Join([]string{
+		"custom notes",
+		"<!-- CODEGRAPH_START -->",
+		"old CodeGraph instructions",
+		"<!-- CODEGRAPH_END -->",
+	}, "\n")))
+
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() { cmdLookPath = restoreLookPath })
+	cmdLookPath = func(string) (string, error) { return "", os.ErrNotExist }
+
+	if !shouldRefreshCodeGraphGuidance(home) {
+		t.Fatal("sync should plan legacy CodeGraph cleanup even when the CodeGraph CLI is unavailable")
+	}
+
+	var changed []string
+	step := codeGraphGuidanceSyncStep{
+		id:           "sync:community-tool:codegraph-guidance",
+		homeDir:      home,
+		changedFiles: &changed,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("codeGraphGuidanceSyncStep.Run() error = %v", err)
+	}
+
+	body, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", agentsPath, err)
+	}
+	text := string(body)
+	for _, stale := range []string{"<!-- CODEGRAPH_START -->", "<!-- CODEGRAPH_END -->", "old CodeGraph instructions", "<!-- gentle-ai:codegraph-guidance -->"} {
+		if strings.Contains(text, stale) {
+			t.Fatalf("unexpected CodeGraph content %q after legacy-only cleanup:\n%s", stale, text)
+		}
+	}
+	if !strings.Contains(text, "custom notes") {
+		t.Fatalf("user content missing after legacy-only cleanup:\n%s", text)
+	}
+	if !reflect.DeepEqual(changed, []string{agentsPath}) {
+		t.Fatalf("changed files = %#v, want %#v", changed, []string{agentsPath})
+	}
+}
+
 func TestCodeGraphGuidanceSyncStepDoesNotInjectWhenNotConfigured(t *testing.T) {
 	home := t.TempDir()
 	agentsPath := filepath.Join(home, ".config", "opencode", "AGENTS.md")

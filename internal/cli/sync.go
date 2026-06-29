@@ -450,7 +450,8 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 }
 
 func shouldRefreshCodeGraphGuidance(homeDir string) bool {
-	return communitytool.HasConfiguredCodeGraph(homeDir, communitytool.DetectorFunc(cmdLookPath))
+	return communitytool.HasConfiguredCodeGraph(homeDir, communitytool.DetectorFunc(cmdLookPath)) ||
+		communitytool.HasLegacyCodeGraphGuidance(homeDir)
 }
 
 // syncBackupTargets returns the file paths that need to be backed up
@@ -586,9 +587,15 @@ func (s codeGraphGuidanceSyncStep) ID() string {
 }
 
 func (s codeGraphGuidanceSyncStep) Run() error {
-	res, _, err := communitytool.RefreshCodeGraphGuidanceIfConfigured(s.homeDir, communitytool.DetectorFunc(cmdLookPath))
+	res, configured, err := communitytool.RefreshCodeGraphGuidanceIfConfigured(s.homeDir, communitytool.DetectorFunc(cmdLookPath))
 	if err != nil {
 		return fmt.Errorf("sync CodeGraph guidance: %w", err)
+	}
+	if !configured {
+		res, err = communitytool.CleanLegacyCodeGraphGuidance(s.homeDir)
+		if err != nil {
+			return fmt.Errorf("sync legacy CodeGraph guidance cleanup: %w", err)
+		}
 	}
 	if s.changedFiles != nil && res.Changed {
 		*s.changedFiles = append(*s.changedFiles, res.Files...)

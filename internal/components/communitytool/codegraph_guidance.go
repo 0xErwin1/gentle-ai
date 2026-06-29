@@ -12,7 +12,11 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
-const codeGraphGuidanceSectionID = "codegraph-guidance"
+const (
+	codeGraphGuidanceSectionID   = "codegraph-guidance"
+	legacyCodeGraphGuidanceStart = "<!-- CODEGRAPH_START -->"
+	legacyCodeGraphGuidanceEnd   = "<!-- CODEGRAPH_END -->"
+)
 
 // GuidanceInjectionResult describes the managed agent-instruction updates made
 // when the CodeGraph community tool is enabled.
@@ -80,6 +84,43 @@ func HasConfiguredCodeGraph(homeDir string, detector Detector) bool {
 	return false
 }
 
+func HasLegacyCodeGraphGuidance(homeDir string) bool {
+	for _, path := range CodeGraphGuidancePaths(homeDir) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if containsLegacyCodeGraphGuidance(string(data)) {
+			return true
+		}
+	}
+	return false
+}
+
+func CleanLegacyCodeGraphGuidance(homeDir string) (GuidanceInjectionResult, error) {
+	result := GuidanceInjectionResult{}
+	for _, path := range CodeGraphGuidancePaths(homeDir) {
+		existing, err := readTextFileOrEmpty(path)
+		if err != nil {
+			return result, err
+		}
+		cleaned := stripLegacyCodeGraphGuidance(existing)
+		if cleaned == existing {
+			continue
+		}
+
+		writeResult, err := filemerge.WriteFileAtomic(path, []byte(cleaned), 0o644)
+		if err != nil {
+			return result, err
+		}
+		result.Changed = result.Changed || writeResult.Changed
+		if writeResult.Changed {
+			result.Files = append(result.Files, path)
+		}
+	}
+	return result, nil
+}
+
 // InjectCodeGraphGuidance writes the shared CodeGraph lifecycle guidance to all
 // detected supported agents. Detection is intentionally based on existing agent
 // config directories so standalone Community Tools setup does not create agent
@@ -145,7 +186,8 @@ func injectCodeGraphGuidanceForAgent(homeDir string, adapter agents.Adapter) (st
 	if err != nil {
 		return "", false, err
 	}
-	updated := filemerge.InjectMarkdownSection(existing, codeGraphGuidanceSectionID, CodeGraphGuidanceMarkdown())
+	cleaned := stripLegacyCodeGraphGuidance(existing)
+	updated := filemerge.InjectMarkdownSection(cleaned, codeGraphGuidanceSectionID, CodeGraphGuidanceMarkdown())
 
 	writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
 	if err != nil {
@@ -163,6 +205,46 @@ func readTextFileOrEmpty(path string) (string, error) {
 		return "", nil
 	}
 	return "", fmt.Errorf("read %q: %w", path, err)
+}
+
+func containsLegacyCodeGraphGuidance(content string) bool {
+	return strings.Contains(content, legacyCodeGraphGuidanceStart) || strings.Contains(content, legacyCodeGraphGuidanceEnd)
+}
+
+func stripLegacyCodeGraphGuidance(content string) string {
+	for {
+		startIdx := strings.Index(content, legacyCodeGraphGuidanceStart)
+		if startIdx < 0 {
+			break
+		}
+
+		searchFrom := startIdx + len(legacyCodeGraphGuidanceStart)
+		relEndIdx := strings.Index(content[searchFrom:], legacyCodeGraphGuidanceEnd)
+		if relEndIdx < 0 {
+			content = content[:startIdx] + content[searchFrom:]
+			continue
+		}
+
+		endIdx := searchFrom + relEndIdx
+		before := strings.TrimRight(content[:startIdx], "\r\n")
+		after := strings.TrimLeft(content[endIdx+len(legacyCodeGraphGuidanceEnd):], "\r\n")
+
+		switch {
+		case before == "":
+			content = after
+		case after == "":
+			content = before
+		default:
+			content = before + "\n\n" + after
+		}
+	}
+
+	content = strings.ReplaceAll(content, legacyCodeGraphGuidanceStart, "")
+	content = strings.ReplaceAll(content, legacyCodeGraphGuidanceEnd, "")
+	for strings.Contains(content, "\n\n\n") {
+		content = strings.ReplaceAll(content, "\n\n\n", "\n\n")
+	}
+	return content
 }
 
 func hasCodeGraphGuidance(path string) bool {
