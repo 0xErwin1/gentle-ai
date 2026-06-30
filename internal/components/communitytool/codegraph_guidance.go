@@ -65,12 +65,17 @@ func InjectCodeGraphGuidanceIfSelected(homeDir string, selected []model.Communit
 // has CodeGraph wiring or a managed guidance marker. This prevents normal sync
 // from introducing CodeGraph prompts for users who never installed/enabled it.
 func RefreshCodeGraphGuidanceIfConfigured(homeDir string, detector Detector) (GuidanceInjectionResult, bool, error) {
-	if !HasConfiguredCodeGraph(homeDir, detector) {
+	if !HasConfiguredCodeGraph(homeDir, detector) && !hasAvailableLegacyCodeGraphGuidance(homeDir, detector) {
 		return GuidanceInjectionResult{}, false, nil
 	}
 
 	result, err := InjectCodeGraphGuidance(homeDir)
 	return result, true, err
+}
+
+func hasAvailableLegacyCodeGraphGuidance(homeDir string, detector Detector) bool {
+	status := DetectStatus(model.CommunityToolCodeGraph, homeDir, detector)
+	return status.CLI == AvailabilityAvailable && HasLegacyCodeGraphGuidance(homeDir)
 }
 
 func HasConfiguredCodeGraph(homeDir string, detector Detector) bool {
@@ -83,7 +88,7 @@ func HasConfiguredCodeGraph(homeDir string, detector Detector) bool {
 			return true
 		}
 	}
-	return false
+	return hasDetectedCodeGraphToolWiring(homeDir)
 }
 
 func HasLegacyCodeGraphGuidance(homeDir string) bool {

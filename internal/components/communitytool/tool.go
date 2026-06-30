@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -129,13 +128,16 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	result := Result{Tool: id}
 	before := DetectStatus(id, homeDir, detector)
 	result.StatusBefore = &before
-	if before.CodeGraphReconcileSatisfied() {
+	if before.CodeGraphReconcileSatisfied() || (before.CLI == AvailabilityAvailable && hasDetectedCodeGraphToolWiring(homeDir)) {
 		guidanceResult, err := InjectCodeGraphGuidanceIfSelected(homeDir, []model.CommunityToolID{id})
 		if err != nil {
 			return result, err
 		}
 		after := DetectStatus(id, homeDir, detector)
 		result.StatusAfter = &after
+		if err := validateCodeGraphInstallStatus(after); err != nil {
+			return result, err
+		}
 		if guidanceResult.Changed {
 			result.ManualActions = append(result.ManualActions, "CodeGraph is already available and MCP-configured. Agent guidance was updated so enabled agents lazily initialize project indexes when needed.")
 		} else {
@@ -310,20 +312,47 @@ func isCodeGraphSupportedAgent(id model.AgentID) bool {
 }
 
 func hasCodeGraphWiring(homeDir string, adapter agents.Adapter) (bool, string, string) {
+	guidancePath := codeGraphGuidancePath(homeDir, adapter)
 	if adapter.Agent() == model.AgentPi {
-		path := codeGraphGuidancePath(homeDir, adapter)
-		if hasCodeGraphGuidance(path) {
-			return true, path, "found CodeGraph guidance marker"
+		if hasCodeGraphGuidance(guidancePath) {
+			return true, guidancePath, "found CodeGraph guidance marker"
 		}
-		return false, path, "detected Pi runtime but no CodeGraph guidance marker was found in APPEND_SYSTEM.md"
+		return false, guidancePath, "detected Pi runtime but no CodeGraph guidance marker was found in APPEND_SYSTEM.md"
 	}
 
+	if hasCodeGraphGuidance(guidancePath) {
+		return true, guidancePath, "found CodeGraph guidance marker"
+	}
+	if adapter.SupportsSystemPrompt() {
+		return false, guidancePath, "detected agent but no CodeGraph guidance marker was found in the system prompt file"
+	}
+	if path, ok := hasCodeGraphToolWiring(homeDir, adapter); ok {
+		return true, path, "found CodeGraph tool wiring marker"
+	}
+	return false, adapter.GlobalConfigDir(homeDir), "detected agent but no CodeGraph MCP or instruction marker was found"
+}
+
+func hasDetectedCodeGraphToolWiring(homeDir string) bool {
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		return false
+	}
+	for _, installedAgent := range agents.DiscoverInstalled(reg, homeDir) {
+		adapter, ok := reg.Get(installedAgent.ID)
+		if !ok || !isCodeGraphSupportedAgent(installedAgent.ID) {
+			continue
+		}
+		if _, ok := hasCodeGraphToolWiring(homeDir, adapter); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCodeGraphToolWiring(homeDir string, adapter agents.Adapter) (string, bool) {
 	paths := []string{
-		codeGraphGuidancePath(homeDir, adapter),
 		adapter.MCPConfigPath(homeDir, "codegraph"),
 		adapter.SettingsPath(homeDir),
-		adapter.SystemPromptFile(homeDir),
-		filepath.Join(adapter.GlobalConfigDir(homeDir), "AGENTS.md"),
 	}
 	seen := map[string]struct{}{}
 	for _, path := range paths {
@@ -338,15 +367,12 @@ func hasCodeGraphWiring(homeDir string, adapter agents.Adapter) (bool, string, s
 		if err != nil {
 			continue
 		}
-		if hasCodeGraphGuidance(path) {
-			return true, path, "found CodeGraph guidance marker"
-		}
 		content := strings.ToLower(string(data))
 		if strings.Contains(content, "codegraph") {
-			return true, path, "found CodeGraph marker"
+			return path, true
 		}
 	}
-	return false, adapter.GlobalConfigDir(homeDir), "detected agent but no CodeGraph MCP or instruction marker was found"
+	return "", false
 }
 
 func agentDisplayName(id model.AgentID) string {

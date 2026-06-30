@@ -177,6 +177,7 @@ func TestCodeGraphGuidanceInjectsForRepresentativeAgents(t *testing.T) {
 	home := t.TempDir()
 	mustWrite(t, filepath.Join(home, ".config", "opencode", "opencode.json"), `{}`)
 	mustWrite(t, filepath.Join(home, ".claude", "settings.json"), `{}`)
+	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), `[mcp_servers.codegraph]`)
 	mustWrite(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{}`)
 
 	installed := false
@@ -199,6 +200,7 @@ func TestCodeGraphGuidanceInjectsForRepresentativeAgents(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join(home, ".config", "opencode", "AGENTS.md"),
 		filepath.Join(home, ".claude", "CLAUDE.md"),
+		filepath.Join(home, ".codex", "AGENTS.md"),
 		filepath.Join(home, ".pi", "agent", "APPEND_SYSTEM.md"),
 	} {
 		content, err := os.ReadFile(path)
@@ -548,6 +550,12 @@ func TestInstallRunsCommandsAndReturnsLazyProjectIndexManualAction(t *testing.T)
 func TestDetectStatusReportsCLIAndPerAgentWiring(t *testing.T) {
 	home := t.TempDir()
 	mustWrite(t, filepath.Join(home, ".claude", "mcp", "codegraph.json"), `{"command":"codegraph"}`)
+	mustWrite(t, filepath.Join(home, ".claude", "CLAUDE.md"), strings.Join([]string{
+		"existing Claude guidance",
+		"<!-- gentle-ai:codegraph-guidance -->",
+		"CodeGraph guidance with `codegraph init <project-root>`",
+		"<!-- /gentle-ai:codegraph-guidance -->",
+	}, "\n"))
 	mustWrite(t, filepath.Join(home, ".config", "opencode", "opencode.json"), `{}`)
 
 	status := DetectStatus(model.CommunityToolCodeGraph, home, DetectorFunc(func(name string) (string, error) {
@@ -567,6 +575,30 @@ func TestDetectStatusReportsCLIAndPerAgentWiring(t *testing.T) {
 	opencode := findAgentStatus(t, status, model.AgentOpenCode)
 	if !opencode.Detected || opencode.Configured || opencode.Status != AgentStatusMissing {
 		t.Fatalf("opencode status = %#v, want detected missing", opencode)
+	}
+}
+
+func TestDetectStatusReportsCodexMissingWhenConfigHasCodeGraphButGuidanceIsMissing(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, ".codex", "config.toml"), strings.Join([]string{
+		`[mcp_servers.codegraph]`,
+		`command = "codegraph"`,
+	}, "\n"))
+
+	status := DetectStatus(model.CommunityToolCodeGraph, home, DetectorFunc(func(name string) (string, error) {
+		if name != "codegraph" {
+			t.Fatalf("LookPath(%q), want codegraph", name)
+		}
+		return "/bin/codegraph", nil
+	}))
+
+	codex := findAgentStatus(t, status, model.AgentCodex)
+	if !codex.Detected || codex.Configured || codex.Status != AgentStatusMissing {
+		t.Fatalf("codex status = %#v, want detected missing until AGENTS.md has CodeGraph guidance", codex)
+	}
+	wantPath := filepath.Join(home, ".codex", "AGENTS.md")
+	if codex.Path != wantPath {
+		t.Fatalf("codex path = %q, want guidance path %q", codex.Path, wantPath)
 	}
 }
 

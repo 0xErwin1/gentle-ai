@@ -681,6 +681,53 @@ func TestCodeGraphGuidanceSyncStepRemovesLegacySkipBlockWhenConfigured(t *testin
 	}
 }
 
+func TestCodeGraphGuidanceSyncStepRepairsCodexConfigOnlyGuidance(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".codex", "config.toml")
+	agentsPath := filepath.Join(home, ".codex", "AGENTS.md")
+	mustWriteFile(t, configPath, []byte(strings.Join([]string{
+		`[mcp_servers.codegraph]`,
+		`command = "codegraph"`,
+	}, "\n")))
+
+	restoreLookPath := cmdLookPath
+	t.Cleanup(func() { cmdLookPath = restoreLookPath })
+	cmdLookPath = func(name string) (string, error) {
+		if name != "codegraph" {
+			return "", os.ErrNotExist
+		}
+		return "/bin/codegraph", nil
+	}
+
+	if !shouldRefreshCodeGraphGuidance(home) {
+		t.Fatal("sync should plan CodeGraph guidance repair when Codex has CodeGraph MCP config but no managed guidance")
+	}
+
+	var changed []string
+	step := codeGraphGuidanceSyncStep{
+		id:           "sync:community-tool:codegraph-guidance",
+		homeDir:      home,
+		changedFiles: &changed,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("codeGraphGuidanceSyncStep.Run() error = %v", err)
+	}
+
+	body, err := os.ReadFile(agentsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", agentsPath, err)
+	}
+	text := string(body)
+	for _, want := range []string{"<!-- gentle-ai:codegraph-guidance -->", "immediately run `codegraph init <project-root>`"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("Codex AGENTS.md missing managed CodeGraph guidance %q:\n%s", want, text)
+		}
+	}
+	if !reflect.DeepEqual(changed, []string{agentsPath}) {
+		t.Fatalf("changed files = %#v, want %#v", changed, []string{agentsPath})
+	}
+}
+
 func TestCodeGraphGuidanceSyncStepCleansLegacyBlockWithoutCodeGraphCLI(t *testing.T) {
 	home := t.TempDir()
 	agentsPath := filepath.Join(home, ".config", "opencode", "AGENTS.md")
