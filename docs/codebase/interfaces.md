@@ -25,7 +25,7 @@ argv
   -> verify.Report
 ```
 
-Use CLI packages for non-interactive behavior such as `install`, `sync`, `uninstall`, `restore`, `update`, and `upgrade`. Keep CLI docs focused on user workflows; do not replicate every internal struct.
+Use CLI packages for non-interactive behavior such as `install`, `sync`, `uninstall`, `restore`, `update`, and `upgrade`. `internal/app/` also routes utility commands such as `doctor`, `version`, `help`, `skill-registry refresh|list`, `sdd-status`, and `sdd-continue`. Keep CLI docs focused on user workflows; do not replicate every internal struct.
 
 ## MCP flow
 
@@ -47,7 +47,7 @@ The TUI is a Bubbletea state machine:
 | `Screen` constants | Define the visible flow. |
 | `router.go` | Defines simple previous/next navigation. |
 | `screens/` | Renders individual screens. |
-| async messages | Report pipeline, sync, upgrade, uninstall, and plugin registration results. |
+| async messages | Report pipeline, sync, upgrade, update-check, uninstall, community tool, and plugin registration results. |
 
 ## Local HTTP API boundary
 

@@ -16,8 +16,10 @@ This appendix maps main docs and source files to responsibilities. Use it to mak
 | `docs/agents.md` | Supported agents, delegation model, and per-agent notes. |
 | `docs/components.md` | Components, skills, and presets. |
 | `docs/opencode-profiles.md` | OpenCode SDD profile behavior. |
-| `docs/rollback.md` | Backup and restore behavior. |
+| `docs/rollback.md` | Backup, restore, and managed uninstall recovery behavior. |
 | `docs/platforms.md` | Platform support and path notes. |
+| `docs/skill-registry.md` | Skill registry refresh/list behavior and generated index expectations. |
+| `docs/intended-usage.md` | Product scope and intended workflow boundaries. |
 
 ## Source references
 
@@ -37,10 +39,14 @@ This appendix maps main docs and source files to responsibilities. Use it to mak
 | `internal/pipeline/` | Staged execution and rollback. |
 | `internal/components/engram/` | Engram install, setup, MCP injection, and verification wiring. |
 | `internal/components/sdd/` | SDD prompt/profile generation and injection. |
-| `internal/components/opencodeplugin/` | Optional OpenCode plugin registration. |
+| `internal/components/communitytool/` | Community tool installation orchestration plus managed guidance/config/MCP reconciliation, including CodeGraph. |
+| `internal/components/opencodeplugin/` | Optional OpenCode TUI plugin registration, including external package names and the managed Gentle Logo local plugin. |
+| `internal/components/uninstall/` | Managed component cleanup services for uninstall flows. |
+| `internal/skillregistry/` | Skill registry scanning, cache behavior, and markdown generation. |
 | `internal/agents/` | Per-agent adapter strategies and paths. |
 | `internal/state/state.go` | Persisted install state in `~/.gentle-ai/state.json`. |
-| `internal/update/` | Update checks and upgrade execution. |
+| `internal/update/` | Update checks and upgrade routing. |
+| `internal/update/upgrade/` | Upgrade execution and report rendering. |
 | `internal/verify/` | Post-apply readiness reporting. |
 | `e2e/` | Docker E2E harness. |
 | `testdata/` | Golden fixtures for generated outputs. |

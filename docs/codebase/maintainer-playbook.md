@@ -15,6 +15,8 @@ Use this page before reviewing or making a change. It turns the codebase map int
 | Backup/rollback | Can users recover from every managed mutation? |
 | TUI | Does the interactive path match CLI behavior where it should? |
 | Updates | Are binary upgrade and post-upgrade sync guidance clear? |
+| Skill registry | Does `.atl/skill-registry.md` reflect the skills users and subagents need? |
+| Community tools | Is optional tool guidance separate from plugin registration and external runtime ownership? |
 
 ## Navigate as a maintainer
 
@@ -55,6 +57,27 @@ Use this page before reviewing or making a change. It turns the codebase map int
 - [ ] Mirror interactive choices in TUI only when intended.
 - [ ] Update [Usage](../usage.md).
 - [ ] Add screen or app dispatch tests.
+
+### Skill registry behavior
+
+- [ ] Keep scan/cache behavior in `internal/skillregistry/`.
+- [ ] Route command changes through `internal/app/` skill-registry dispatch.
+- [ ] Update [Skill Registry](../skill-registry.md) when user-visible flags or output change.
+- [ ] Regenerate `.atl/skill-registry.md` only when the indexed skills intentionally change.
+
+### Community tool or OpenCode plugin behavior
+
+- [ ] Use `internal/components/communitytool/` for external tool install orchestration plus managed guidance/config/MCP reconciliation.
+- [ ] Use `internal/components/opencodeplugin/` for OpenCode TUI plugin registration: external plugins add package names, while Gentle Logo writes/registers the managed local plugin file.
+- [ ] Keep external runtime ownership explicit in docs.
+- [ ] Test idempotent sync/registration behavior.
+
+### Upgrade or deferred sync behavior
+
+- [ ] Keep version/update checks in `internal/update/` and external tool execution in `internal/update/upgrade/`.
+- [ ] Confirm TUI upgrade and upgrade+sync screens still match CLI behavior.
+- [ ] Document post-upgrade sync guidance without implying unmanaged local files are modified.
+- [ ] Test skipped, failed, and partial upgrade paths.
 
 ### Docs-only change
 

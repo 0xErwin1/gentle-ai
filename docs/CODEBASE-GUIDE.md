@@ -13,7 +13,7 @@ This guide helps maintainers find the right code path before changing Gentle-AI.
 
 ## 90-second mental model
 
-Gentle-AI is a Go CLI/TUI that configures AI coding agents. It installs and syncs managed assets such as SDD prompts, skills, MCP entries, permissions, personas, GGA support, and Engram wiring.
+Gentle-AI is a Go CLI/TUI that configures AI coding agents. It installs and syncs managed assets such as SDD prompts, skills, MCP entries, permissions, personas, GGA support, Engram wiring, skill registries, and community tool/plugin helpers.
 
 ```text
 User
@@ -59,11 +59,18 @@ Golden rule: **agent-specific paths belong in adapters; reusable behavior belong
 
 ## Existing references
 
-- [Architecture & Development](architecture.md) — short codebase layout and test commands.
-- [Usage](usage.md) — user-facing CLI/TUI behavior.
-- [Engram Commands](engram.md) — Engram user commands and MCP tool overview.
-- [OpenCode SDD Profiles](opencode-profiles.md) — profile sync details.
-- [Agents](agents.md) — supported agent matrix and config paths.
+| Page | Job |
+|---|---|
+| [Architecture & Development](architecture.md) | Short codebase layout and test commands. |
+| [Usage](usage.md) | User-facing CLI/TUI behavior. |
+| [Components](components.md) | Component, preset, and managed asset overview. |
+| [Engram Commands](engram.md) | Engram user commands and MCP tool overview. |
+| [OpenCode SDD Profiles](opencode-profiles.md) | Profile sync details. |
+| [Skill Registry](skill-registry.md) | Skill indexing and refresh behavior. |
+| [Agents](agents.md) | Supported agent matrix and config paths. |
+| [Rollback](rollback.md) | Backup, restore, and uninstall safety model. |
+| [Platforms](platforms.md) | Platform support and path notes. |
+| [Intended Usage](intended-usage.md) | Product scope and expected workflow boundaries. |
 
 ## Next step
 

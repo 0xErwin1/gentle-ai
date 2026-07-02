@@ -21,12 +21,17 @@ internal/
   assets/                  Embedded skill files + persona templates
   components/              Per-component install/inject logic
     engram/  sdd/  skills/  mcp/  persona/  theme/  permissions/  gga/
+    communitytool/         Community tool install/guidance/config orchestration
+    opencodeplugin/        OpenCode TUI plugin registration/local plugin helpers
+    uninstall/             Managed uninstall cleanup service
     filemerge/             Marker-based file merging (inject without clobbering)
+  skillregistry/           .atl skill registry refresh/list support
   agents/                  Agent adapters (config strategy per agent)
     claude/  opencode/  gemini/  cursor/  vscode/  codex/  windsurf/  antigravity/
   opencode/                OpenCode model/config parsing utilities
   state/                   Installation state tracking
   update/                  Self-update + upgrade logic
+    upgrade/               Tool upgrade execution and reporting
   verify/                  Post-apply health checks + reporting
   tui/                     Bubbletea TUI (Rose Pine theme)
     styles/  screens/
@@ -53,14 +58,13 @@ gentle-ai install --dry-run --agent claude-code --preset minimal
 gentle-ai.exe install --dry-run --agent claude-code --preset minimal
 ```
 
-Test coverage:
+Test coverage is broad and changes frequently. Keep this section qualitative unless counts are generated automatically:
 
-- **26 test packages** across the codebase
-- **260+ test functions** covering all agent adapters, components, and system detection
-- **78 E2E test functions** running in Docker containers (Ubuntu + Arch)
-- **17 golden files** for snapshot testing component output
-- Full pipeline tested: detection, planning, execution, backup, restore, verification
-- All 8 agent adapters have unit tests with cross-platform path validation
+- Unit tests cover agent adapters, components, system detection, app dispatch, update/upgrade behavior, and TUI flows.
+- Docker E2E tests exercise Ubuntu and Arch paths when `RUN_FULL_E2E=1` is enabled.
+- Golden fixtures snapshot generated component output under `testdata/`.
+- Full pipeline paths are tested: detection, planning, execution, backup, restore, and verification.
+- Agent adapter tests include cross-platform path validation.
 
 ---
 
