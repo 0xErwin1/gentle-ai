@@ -28,6 +28,18 @@ func codexAdapter() agents.Adapter       { return codex.NewAdapter() }
 func antigravityAdapter() agents.Adapter { return antigravity.NewAdapter() }
 func hermesAdapter() agents.Adapter      { return hermes.NewAdapter() }
 
+func tomlSection(text, header string) string {
+	start := strings.Index(text, header)
+	if start == -1 {
+		return ""
+	}
+	section := text[start+len(header):]
+	if next := strings.Index(section, "\n["); next != -1 {
+		section = section[:next]
+	}
+	return section
+}
+
 // TestInjectHermesSkipsPermissions verifies that Hermes returns nil (no file written)
 // because Hermes permission format is undocumented — §14 of spec.
 func TestInjectHermesSkipsPermissions(t *testing.T) {
@@ -371,6 +383,12 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 			t.Fatalf("config.toml missing %q; got:\n%s", want, text)
 		}
 	}
+	if !strings.Contains(tomlSection(text, "[permissions.gentle-dev.filesystem]"), `glob_scan_max_depth = 6`) {
+		t.Fatalf("config.toml should set glob_scan_max_depth in the filesystem profile; got:\n%s", text)
+	}
+	if strings.Contains(tomlSection(text, "[permissions.gentle-dev]"), `glob_scan_max_depth = 6`) {
+		t.Fatalf("config.toml should not set glob_scan_max_depth in the permissions profile; got:\n%s", text)
+	}
 
 	for _, invalidGitRule := range []string{`"**/.git" = "write"`, `"**/.git/**" = "write"`, `".git" = "write"`} {
 		if strings.Contains(text, invalidGitRule) {
@@ -450,6 +468,9 @@ func TestInjectCodexPermissionsProfileIsIdempotent(t *testing.T) {
 	}
 	initial := `model = "gpt-5.5"
 
+[permissions.gentle-dev]
+glob_scan_max_depth = 6
+
 [mcp_servers.engram]
 command = "engram"
 args = ["mcp", "--tools=agent"]
@@ -505,6 +526,12 @@ args = ["mcp", "--tools=agent"]
 	}
 	if count := strings.Count(text, `glob_scan_max_depth = 6`); count != 1 {
 		t.Fatalf("glob_scan_max_depth count = %d, want 1; got:\n%s", count, text)
+	}
+	if !strings.Contains(tomlSection(text, "[permissions.gentle-dev.filesystem]"), `glob_scan_max_depth = 6`) {
+		t.Fatalf("config.toml should keep glob_scan_max_depth in the filesystem profile; got:\n%s", text)
+	}
+	if strings.Contains(tomlSection(text, "[permissions.gentle-dev]"), `glob_scan_max_depth = 6`) {
+		t.Fatalf("config.toml should not keep glob_scan_max_depth in the permissions profile; got:\n%s", text)
 	}
 }
 
