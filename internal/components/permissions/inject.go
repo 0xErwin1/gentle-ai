@@ -185,6 +185,7 @@ func injectCodexPermissions(homeDir string, adapter agents.Adapter) (InjectionRe
 	merged = filemerge.UpsertTopLevelTOMLString(merged, "default_permissions", "gentle-dev")
 	merged = filemerge.RemoveTOMLTableKeys(merged, "permissions.gentle-dev", []string{"extends"})
 	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev", "description", `"Comfortable local development profile with workspace writes, network access, Git metadata writes, Nix/Home Manager support, and secret-file protections."`)
+	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev", "glob_scan_max_depth", "6")
 	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.network", "enabled", "true")
 	merged = filemerge.UpsertTOMLTableKey(merged, "permissions.gentle-dev.network.domains", `"*"`, `"allow"`)
 

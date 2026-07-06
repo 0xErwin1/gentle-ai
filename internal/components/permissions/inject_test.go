@@ -334,6 +334,7 @@ func TestInjectCodexWritesGentleDevPermissionsProfile(t *testing.T) {
 		`approval_policy = "on-request"`,
 		`default_permissions = "gentle-dev"`,
 		`[permissions.gentle-dev]`,
+		`glob_scan_max_depth = 6`,
 		`[permissions.gentle-dev.network]`,
 		`enabled = true`,
 		`[permissions.gentle-dev.network.domains]`,
@@ -501,6 +502,9 @@ args = ["mcp", "--tools=agent"]
 		if count := strings.Count(text, section); count != 1 {
 			t.Fatalf("section %q count = %d, want 1; got:\n%s", section, count, text)
 		}
+	}
+	if count := strings.Count(text, `glob_scan_max_depth = 6`); count != 1 {
+		t.Fatalf("glob_scan_max_depth count = %d, want 1; got:\n%s", count, text)
 	}
 }
 
