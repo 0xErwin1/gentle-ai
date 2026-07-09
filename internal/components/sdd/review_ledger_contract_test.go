@@ -12,30 +12,30 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
-// requiredLedgerClauses are the normative sentence fragments that MUST appear
-// verbatim in every review-*, jd-*, orchestrator "Review Execution Contract",
-// and judgment-day skill asset. They encode the exhaustive first-pass loop,
-// the persisted findings-ledger schema, the artifact-store persistence
-// branches, and the scoped re-review contract defined in
-// openspec/changes/review-ledger-contract/{spec,design}.md.
-//
-// Every clause is chosen so it does NOT already exist in any unmodified asset
-// (verified against the pre-change repo state) — this keeps the first run of
-// TestRequiredLedgerClauses a true RED before any asset is edited.
-var requiredLedgerClauses = []string{
-	// Exhaustive first-pass loop-until-dry (spec: "First pass loops until dry", "Loop is bounded").
-	"Loop until dry: sweep the diff repeatedly until N consecutive sweeps yield zero new findings",
-	"Default N = 2 consecutive dry sweeps",
-	"R2 Readability MAY use N = 1",
-	"Hard ceiling: 4 sweeps regardless of N",
+// judgeFacingLedgerClauses are the normative sentence fragments that govern
+// the reviewing role itself (4R lenses and JD judges): the 4R v2 sweep
+// budget, the precision gate, the persisted findings-ledger schema, and the
+// artifact-store persistence branches. They belong both in every adopting
+// asset AND inside the Judge Prompt fenced template.
+var judgeFacingLedgerClauses = []string{
+	// 4R v2 sweep budget: exactly 1 exhaustive sweep for standard reviews,
+	// at most 2 for full-4R (hot path / >400 changed lines). Replaces the
+	// v1 loop-until-dry mechanism entirely.
+	"Standard review: run exactly 1 exhaustive sweep of the diff per lens, then stop",
+	"run at most 2 sweeps per lens",
+	"There is no loop-until-dry mechanism; the sweep budget is the entire first pass",
+	// 4R v2 precision gate: precision over recall for every lens.
+	"Report a finding only if it is a real, user-impacting defect you would defend with concrete evidence",
+	"When in doubt, stay silent: a missed nitpick costs nothing; a false positive costs a full fix cycle",
+	"Style and preference findings are banned unless they obscure a defect",
 	// Ledger schema fields (design ADR 2). Full enum strings, not truncated
 	// prefixes: a prefix match would still pass if a replicated asset dropped
-	// a trailing enum value (JD-004).
+	// a trailing enum value (JD-004). v2 adds `refuted` to the status enum.
 	"`id` | `{LENS}-{NNN}`",
 	"`lens` | risk \\| readability \\| reliability \\| resilience \\| judgment-day |",
 	"`location` | `path/to/file.ext:line` or `:start-end`",
 	"`severity` | BLOCKER \\| CRITICAL \\| WARNING \\| SUGGESTION |",
-	"`status` | open \\| fixed \\| verified \\| wont-fix \\| info |",
+	"`status` | open \\| fixed \\| verified \\| refuted \\| wont-fix \\| info |",
 	"`evidence` | why it matters |",
 	"persist an empty ledger record rather than skip persistence",
 	// Persistence branches on the artifact store (design ADR 4).
@@ -50,11 +50,62 @@ var requiredLedgerClauses = []string{
 	// Compaction caveat for the `none` store (JD-005), folded into the
 	// hand-copied `none` bullet instead of living only in a non-copied note.
 	"complete the review → fix → re-review loop within the session because it is not persisted across compaction",
-	// Scoped re-review contract (spec: "Scoped re-review contract").
+}
+
+// gatingLedgerClauses are the 4R v2 precision-gating clauses that govern what
+// happens AFTER findings are emitted: adversarial verification of
+// BLOCKER/CRITICAL candidates by refuter(s), the severity floor for the fix
+// loop, and the convergence budget. They apply to the orchestration side of a
+// review, not the judge's own prompt, so they are excluded from the Judge
+// Prompt fence but required in every adopting asset.
+var gatingLedgerClauses = []string{
+	// Adversarial verification: only BLOCKER/CRITICAL candidates are verified.
+	"Only BLOCKER/CRITICAL candidates are verified; WARNING/SUGGESTION findings are never verified because they never drive fixes",
+	"if refuted, record the finding with status `refuted` — it never enters the fix loop",
+	"a panel of 3 refuters with distinct lenses (correctness, exploitability/impact, reproducibility)",
+	"killed only if at least 2 of 3 refuters refute it — ties favor keeping the finding",
+	// Refutation protocol: WHO refutes, WHEN, and with WHAT delegation shape
+	// (R2-001/R3-002). The refuter role itself lives in review-refuter.md.
+	"The orchestrator invokes refutation after merging lens ledgers and before any fix work; only BLOCKER/CRITICAL candidates are refuted",
+	"Standard review: delegate one `review-refuter` agent with the `general` lens",
+	"Full-4R review: delegate three `review-refuter` agents in parallel, one per distinct lens (correctness, exploitability/impact, reproducibility)",
+	"recorded `refuted` only when the single refuter refutes it (standard) or when at least 2 of 3 refuters refute it (panel)",
+	// Severity floor for the fix loop.
+	"Only BLOCKER/CRITICAL findings that survive adversarial verification enter the fix → re-review loop",
+	"reported once with status `info`, are never re-reviewed, and never block",
+	// Convergence budget: bounded fix rounds, with the round and the fix actor
+	// defined (R2-002).
+	"Maximum 2 fix rounds per review",
+	"One fix round = the orchestrator (directly or via a single writer sub-agent) applies fixes for all open verified BLOCKER/CRITICAL findings, then a scoped re-review verifies the fix diff against the ledger; in judgment-day the fix actor is `jd-fix-agent`",
+	"still open after round 2 is reported to the user as open — the loop never extends",
+}
+
+// scopedReReviewLedgerClauses govern the re-review round that follows the fix
+// agent. They are excluded from the Judge Prompt fence (JD-013) but required
+// in every adopting asset.
+var scopedReReviewLedgerClauses = []string{
+	"receives ONLY the persisted ledger and the fix diff as input — never the original full diff",
 	"MUST verify each ledger finding's resolution and MUST review only fix-touched lines",
 	"MUST NOT re-read the full original diff",
 	"MUST be logged with status `info` as a first-pass quality signal",
 	"MUST NOT by itself trigger another full round",
+}
+
+// requiredLedgerClauses is the full clause set that MUST appear verbatim in
+// every review-*, jd-judge-*, orchestrator "Review Execution Contract", and
+// judgment-day skill asset.
+var requiredLedgerClauses = concatClauses(
+	judgeFacingLedgerClauses,
+	gatingLedgerClauses,
+	scopedReReviewLedgerClauses,
+)
+
+func concatClauses(groups ...[]string) []string {
+	var out []string
+	for _, g := range groups {
+		out = append(out, g...)
+	}
+	return out
 }
 
 // requiredSubagentReviewModeClause is the execution-mode sentence every
@@ -64,7 +115,7 @@ const requiredSubagentReviewModeClause = "This is a subagent-mode review lens: e
 // requiredOrchestratorMergeModeClause is the execution-mode sentence the four
 // subagent-family orchestrators (Claude, Cursor, Kimi, Kiro) must carry: even
 // though the lenses run as subagents, the orchestrator still owns merge/persist.
-const requiredOrchestratorMergeModeClause = "Subagent mode (Claude, Cursor, Kimi, Kiro): each review-*/jd-* subagent runs its own exhaustive pass and returns its own ledger rows; merge those subagent ledger rows into the persisted ledger and persist per the branch above."
+const requiredOrchestratorMergeModeClause = "Subagent mode (Claude, Cursor, Kimi, Kiro): each review-*/jd-* subagent runs its own sweep-budgeted pass and returns its own ledger rows; merge those subagent ledger rows into the persisted ledger and persist per the branch above."
 
 // requiredOrchestratorInlineModeClause is the execution-mode sentence every
 // inline-mode orchestrator (no dedicated review-*/jd-* subagents) must carry.
@@ -78,11 +129,11 @@ const requiredJDSubagentModeClause = "Judgment-day judges run as delegated agent
 // requiredFixAgentClauses are the fix-specific clauses jd-fix-agent.md files
 // must carry instead of the judge-oriented requiredLedgerClauses/
 // requiredJDSubagentModeClause. The fix agent applies confirmed fixes; it
-// does not run the exhaustive first pass and does not emit a findings
+// does not run the first-pass review sweep and does not emit a findings
 // ledger, so pasting the judge contract verbatim contradicts its own
 // "fix ONLY confirmed issues" rules (JD-001).
 var requiredFixAgentClauses = []string{
-	"does NOT run the exhaustive first-pass sweep and does NOT emit a findings ledger",
+	"does NOT run the first-pass review sweep and does NOT emit a findings ledger",
 	"Read the ledger entries the orchestrator confirmed and passed in the delegate prompt",
 	"set that entry's `status` to `fixed`",
 	"Never add new ledger rows: if fixing surfaces a new problem, report it back to the orchestrator instead of fixing it or logging it yourself",
@@ -90,12 +141,13 @@ var requiredFixAgentClauses = []string{
 }
 
 // requiredJudgePromptClauses is the subset of requiredLedgerClauses that
-// belongs INSIDE the Judge Prompt fenced template itself: the exhaustive
-// first-pass loop, the findings-ledger schema, and the ledger-persistence
-// branches. The scoped re-review contract clauses (the trailing 4 entries of
-// requiredLedgerClauses) govern the re-judge round that follows the fix
-// agent, not the judge's own prompt, so they are excluded here (JD-013).
-var requiredJudgePromptClauses = requiredLedgerClauses[:len(requiredLedgerClauses)-4]
+// belongs INSIDE the Judge Prompt fenced template itself: the sweep budget,
+// the precision gate, the findings-ledger schema, and the ledger-persistence
+// branches. The gating clauses (adversarial verification, severity floor,
+// convergence budget) and the scoped re-review contract clauses govern the
+// orchestration rounds around the judge, not the judge's own prompt, so they
+// are excluded here (JD-013).
+var requiredJudgePromptClauses = judgeFacingLedgerClauses
 
 // assertContainsClauses fails the test for every clause missing from the
 // embedded asset at path.
@@ -163,12 +215,44 @@ var reviewLedgerFixAgentAssets = []string{
 	"kiro/agents/jd-fix-agent.md",
 }
 
+// reviewLedgerRefuterAssets enumerates the review-refuter.md files for the 4
+// adapter families that ship dedicated review-* agent assets. Like
+// jd-fix-agent.md, the refuter carries its own role-specific clause set
+// (requiredRefuterClauses) instead of the judge-oriented
+// requiredLedgerClauses — it verifies exactly one finding and never reviews
+// a diff or emits a findings ledger (R2-001/R3-002).
+var reviewLedgerRefuterAssets = []string{
+	"claude/agents/review-refuter.md",
+	"cursor/agents/review-refuter.md",
+	"kimi/agents/review-refuter.md",
+	"kiro/agents/review-refuter.md",
+}
+
+// requiredRefuterClauses are the refuter-specific clauses every
+// review-refuter.md asset must carry: the single-finding input contract, the
+// four refutation lenses, the concrete-counter-evidence bar, the
+// ties-favor-the-finding default, the read-only rule, and the verdict output
+// contract (R2-001/R3-002).
+var requiredRefuterClauses = []string{
+	"`general` (standard single-refuter mode)",
+	"`correctness`: is the claimed defect actually wrong behavior?",
+	"`exploitability-impact`: can a real user or attacker ever hit it, and does it matter?",
+	"`reproducibility`: can the failure scenario be concretely reproduced from the cited code?",
+	"A refutation requires concrete counter-evidence",
+	"\"Seems unlikely\" does not refute",
+	"Default to `stands` when evidence is inconclusive: ties favor the finding",
+	"Never edit files",
+	"Do not report new findings",
+	"`verdict: refuted` or `verdict: stands`",
+}
+
 // judgeOnlyMarkers are judge-role clauses that must NOT appear in fix-agent
-// assets. If the judge contract block (exhaustive first pass, findings
+// assets. If the judge contract block (sweep budget, precision gate, findings
 // ledger emission, judge execution mode) is ever pasted back into a
 // fix-agent file alongside the fix clauses, these markers catch it (JD-011).
 var judgeOnlyMarkers = []string{
-	"**Exhaustive first pass.**",
+	"**Sweep budget.**",
+	"**Precision gate.**",
 	"Emit a findings ledger with this schema for every entry",
 	requiredJDSubagentModeClause,
 }
@@ -285,6 +369,16 @@ func TestRequiredLedgerClauses(t *testing.T) {
 		}
 	})
 
+	t.Run("refuter_assets", func(t *testing.T) {
+		for _, p := range reviewLedgerRefuterAssets {
+			t.Run(strings.SplitN(p, "/", 2)[0], func(t *testing.T) {
+				content := assets.MustRead(p)
+				assertTextContainsClauses(t, p, content, requiredRefuterClauses)
+				assertNotContainsMarkers(t, p, content, judgeOnlyMarkers)
+			})
+		}
+	})
+
 	t.Run("orchestrator_assets", func(t *testing.T) {
 		for family, path := range reviewLedgerOrchestratorAssets {
 			t.Run(family, func(t *testing.T) {
@@ -396,7 +490,7 @@ func TestReviewLedgerContractSchema(t *testing.T) {
 	for _, want := range []string{
 		"`{LENS}-{NNN}`",
 		"BLOCKER \\| CRITICAL \\| WARNING \\| SUGGESTION",
-		"open \\| fixed \\| verified \\| wont-fix \\| info",
+		"open \\| fixed \\| verified \\| refuted \\| wont-fix \\| info",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("%s missing schema fixture %q", path, want)

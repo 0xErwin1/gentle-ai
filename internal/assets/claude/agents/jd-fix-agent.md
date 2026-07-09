@@ -23,7 +23,7 @@ provided in the delegate prompt exactly.
 
 ## Review ledger contract (fix agent role)
 
-This agent does NOT run the exhaustive first-pass sweep and does NOT emit a findings ledger — that is the judge role's job, not this agent's.
+This agent does NOT run the first-pass review sweep and does NOT emit a findings ledger — that is the judge role's job, not this agent's.
 
 **Read the persisted ledger.** Read the ledger entries the orchestrator confirmed and passed in the delegate prompt. Apply only those confirmed fixes.
 
