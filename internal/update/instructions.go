@@ -23,6 +23,13 @@ func updateHint(tool ToolInfo, profile system.PlatformProfile) string {
 	}
 }
 
+func updateHintForOwnership(tool ToolInfo, profile system.PlatformProfile, ownership HomebrewOwnership) string {
+	if profile.PackageManager == "brew" && ownership != HomebrewNone {
+		return fmt.Sprintf("brew upgrade --%s %s", ownership, tool.Name)
+	}
+	return updateHint(tool, profile)
+}
+
 func openCodeRegisteredNotMaterializedHint(tool ToolInfo) string {
 	pkg := strings.TrimSpace(tool.NpmPackage)
 	if pkg == "" {
