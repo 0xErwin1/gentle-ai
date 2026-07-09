@@ -402,6 +402,9 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 		if configPath == "" {
 			break
 		}
+		if err := codex.ValidateGPT56Runtime(); err != nil {
+			return InjectionResult{}, err
+		}
 
 		// Determine instruction file paths before mutating the config.
 		instructionsPath, compactPath, instrErr := writeCodexInstructionFiles(configHomeDir)

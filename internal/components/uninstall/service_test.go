@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -764,6 +765,8 @@ func TestComponentOperationsEngram_GlobalScopeKeepsWorkspaceProjectData(t *testi
 // ~/.codex/engram-compact-prompt.md) MUST stay byte-identical so the
 // uninstaller keeps covering them with no orphaned files left behind.
 func TestComponentOperationsEngram_CodexRemovesConsolidatedProtocolAssetsWithNoOrphans(t *testing.T) {
+	restore := codex.SetRuntimeVersionCommandForTest("codex-cli 0.144.0", nil)
+	t.Cleanup(restore)
 	homeDir := t.TempDir()
 	workspaceDir := t.TempDir()
 

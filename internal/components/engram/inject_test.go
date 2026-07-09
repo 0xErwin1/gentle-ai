@@ -25,6 +25,11 @@ import (
 func claudeAdapter() agents.Adapter   { return claude.NewAdapter() }
 func opencodeAdapter() agents.Adapter { return opencode.NewAdapter() }
 func codexAdapter() agents.Adapter    { return codex.NewAdapter() }
+
+func validCodexRuntime(t *testing.T) {
+	t.Helper()
+	t.Cleanup(codex.SetRuntimeVersionCommandForTest("codex-cli 0.144.0", nil))
+}
 func geminiAdapter() agents.Adapter   { return gemini.NewAdapter() }
 func hermesAdapter() agents.Adapter   { return hermes.NewAdapter() }
 func qwenAdapter() agents.Adapter     { return qwen.NewAdapter() }
@@ -658,6 +663,7 @@ func TestInjectAntigravityInitializesEmptySettingsWhenGeminiMissing(t *testing.T
 // ─── Codex tests ──────────────────────────────────────────────────────────────
 
 func TestInjectCodexWritesTOMLMCP(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	result, err := Inject(home, codexAdapter())
@@ -705,6 +711,7 @@ func TestInjectCodexWritesTOMLMCP(t *testing.T) {
 }
 
 func TestInjectCodexWritesInstructionFiles(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	_, err := Inject(home, codexAdapter())
@@ -735,6 +742,7 @@ func TestInjectCodexWritesInstructionFiles(t *testing.T) {
 }
 
 func TestInjectCodexInjectsTOMLKeys(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	_, err := Inject(home, codexAdapter())
@@ -938,6 +946,7 @@ func TestInjectClaudeMigratesCellarCommandToStablePath(t *testing.T) {
 }
 
 func TestInjectCodexIsIdempotent(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	first, err := Inject(home, codexAdapter())
@@ -973,6 +982,7 @@ func TestInjectCodexIsIdempotent(t *testing.T) {
 // TestInjectCodexWritesProfiles asserts that Inject for the Codex adapter
 // writes the three gentle-ai SDD profile files into ~/.codex/.
 func TestInjectCodexWritesProfiles(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	_, err := Inject(home, codexAdapter())
@@ -1005,6 +1015,7 @@ func TestInjectCodexWritesProfiles(t *testing.T) {
 // TestInjectCodexProfilesIdempotent asserts that running Inject twice leaves
 // the profile files unchanged on the second run and does not duplicate keys.
 func TestInjectCodexProfilesIdempotent(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	if _, err := Inject(home, codexAdapter()); err != nil {
@@ -1090,6 +1101,7 @@ func TestProfileFallbackAgreesWithRenderFallback(t *testing.T) {
 // config.toml contains [features] with multi_agent = true. Codex SDD enables
 // multi-agent delegation by default so the per-phase reasoning_effort table applies.
 func TestInjectCodexMultiAgentDefaultOn(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	if _, err := Inject(home, codexAdapter()); err != nil {
@@ -1116,6 +1128,7 @@ func TestInjectCodexMultiAgentDefaultOn(t *testing.T) {
 // TestInjectCodexMultiAgentOptIn asserts that InjectWithOptions with
 // CodexMultiAgent=true writes multi_agent = true in [features].
 func TestInjectCodexMultiAgentOptIn(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	opts := InjectOptions{CodexMultiAgent: true}
@@ -1137,6 +1150,7 @@ func TestInjectCodexMultiAgentOptIn(t *testing.T) {
 // TestInjectCodexMultiAgentDefaults asserts that the [agents] section is always
 // written with max_threads = 4 and max_depth = 2 regardless of the opt-in flag.
 func TestInjectCodexMultiAgentDefaults(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	if _, err := Inject(home, codexAdapter()); err != nil {
@@ -1164,6 +1178,7 @@ func TestInjectCodexMultiAgentDefaults(t *testing.T) {
 // produces exactly one [features] section and one [agents] section with no
 // duplicate keys, and that the engram and context7 blocks are not disturbed.
 func TestInjectCodexMultiAgentIdempotent(t *testing.T) {
+	validCodexRuntime(t)
 	home := t.TempDir()
 
 	if _, err := Inject(home, codexAdapter()); err != nil {

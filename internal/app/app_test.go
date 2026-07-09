@@ -14,6 +14,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
@@ -1738,6 +1739,7 @@ func TestRunArgs_PendingSync_RunsSyncAndClearsFlag(t *testing.T) {
 }
 
 func TestRunArgsPendingSyncRepairsCodexPermissions(t *testing.T) {
+	t.Cleanup(codex.SetRuntimeVersionCommandForTest("codex-cli 0.144.0", nil))
 	home := t.TempDir()
 	setupMockHome(t, home)
 

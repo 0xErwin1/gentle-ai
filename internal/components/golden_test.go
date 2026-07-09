@@ -714,6 +714,8 @@ func TestGoldenEngram_Kiro(t *testing.T) {
 // CAPTURE section.
 func TestGoldenEngram_Codex(t *testing.T) {
 	home := t.TempDir()
+	restore := codexagent.SetRuntimeVersionCommandForTest("codex-cli 0.144.0", nil)
+	t.Cleanup(restore)
 
 	engram.SetLookPathForTest(t, "/opt/homebrew/bin/engram", "")
 

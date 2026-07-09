@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
@@ -469,6 +470,54 @@ func TestComponentSyncStepSkipsEngramBinaryInstall(t *testing.T) {
 		if strings.Contains(cmd, "engram setup") {
 			t.Errorf("componentSyncStep must not run engram setup, got command: %s", cmd)
 		}
+	}
+}
+
+func TestComponentSyncStepCodexRuntimeGate(t *testing.T) {
+	tests := []struct {
+		name    string
+		version string
+		wantErr bool
+	}{
+		{name: "old runtime leaves profiles untouched", version: "codex-cli 0.143.9", wantErr: true},
+		{name: "exact runtime writes profiles", version: "codex-cli 0.144.0"},
+		{name: "new runtime writes profiles", version: "codex-cli 0.145.1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			restore := codex.SetRuntimeVersionCommandForTest(tt.version, nil)
+			t.Cleanup(restore)
+			home := t.TempDir()
+			codexDir := filepath.Join(home, ".codex")
+			if err := os.MkdirAll(codexDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			profiles := []string{"sdd-strong.config.toml", "sdd-mid.config.toml", "sdd-cheap.config.toml"}
+			for _, name := range profiles {
+				if err := os.WriteFile(filepath.Join(codexDir, name), []byte("user-content\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			step := componentSyncStep{component: model.ComponentEngram, homeDir: home, agents: []model.AgentID{model.AgentCodex}}
+			err := step.Run()
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("componentSyncStep.Run() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			for _, name := range profiles {
+				content, readErr := os.ReadFile(filepath.Join(codexDir, name))
+				if readErr != nil {
+					t.Fatal(readErr)
+				}
+				if tt.wantErr && string(content) != "user-content\n" {
+					t.Errorf("old runtime modified %s: %q", name, content)
+				}
+				if !tt.wantErr && !strings.Contains(string(content), "gpt-5.6-") {
+					t.Errorf("valid runtime did not write GPT-5.6 profile %s: %q", name, content)
+				}
+			}
+		})
 	}
 }
 

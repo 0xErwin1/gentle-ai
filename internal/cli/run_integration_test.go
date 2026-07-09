@@ -11,11 +11,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/agents/opencode"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/installcmd"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 	"github.com/gentleman-programming/gentle-ai/internal/versions"
 )
@@ -144,6 +146,83 @@ func TestRunInstallEngramForPiAndOpenCodeProvisionsBothMCPTargets(t *testing.T) 
 	if !stringSliceContains(commands, "npm exec --yes --package gentle-engram@latest -- pi-engram init") &&
 		!stringSliceContains(commands, "pnpm dlx gentle-engram@latest pi-engram init") {
 		t.Fatalf("commands missing Engram init command; got %v", commands)
+	}
+}
+
+func TestRunInstallInstallsMissingCodexBeforeRuntimeValidationAndProfileWrite(t *testing.T) {
+	home := t.TempDir()
+	installed := false
+	codexInstallCalls := 0
+	validationCalls := 0
+
+	restoreCodexLookPath := codex.LookPathOverride
+	codex.LookPathOverride = func(string) (string, error) {
+		if installed {
+			return "codex", nil
+		}
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { codex.LookPathOverride = restoreCodexLookPath })
+
+	restoreVersionProbe := codex.SetRuntimeVersionProbeForTest(func() ([]byte, error) {
+		validationCalls++
+		if !installed {
+			return nil, exec.ErrNotFound
+		}
+		return []byte("codex-cli 0.144.0"), nil
+	})
+	t.Cleanup(restoreVersionProbe)
+
+	restorePreflightLookPath := installcmd.OverrideLookPath(func(string) (string, error) { return "npm", nil })
+	t.Cleanup(restorePreflightLookPath)
+
+	restoreLookPath := cmdLookPath
+	cmdLookPath = func(name string) (string, error) {
+		if name == "engram" {
+			return filepath.Join(home, "bin", "engram"), nil
+		}
+		return "", exec.ErrNotFound
+	}
+	t.Cleanup(func() { cmdLookPath = restoreLookPath })
+
+	restoreDownload := engramDownloadFn
+	engramDownloadFn = func(system.PlatformProfile) (string, error) {
+		t.Fatal("engramDownloadFn must not use the network in this test")
+		return "", nil
+	}
+	t.Cleanup(func() { engramDownloadFn = restoreDownload })
+
+	restoreCommand := runCommand
+	runCommand = func(name string, args ...string) error {
+		if name+" "+strings.Join(args, " ") != "npm install -g --ignore-scripts @openai/codex@0.144.0" {
+			return fmt.Errorf("unexpected install command: %s %s", name, strings.Join(args, " "))
+		}
+		codexInstallCalls++
+		installed = true
+		return nil
+	}
+	t.Cleanup(func() { runCommand = restoreCommand })
+
+	runtime := installRuntime{
+		homeDir: home,
+		resolved: planner.ResolvedPlan{
+			Agents: []model.AgentID{model.AgentCodex}, OrderedComponents: []model.ComponentID{model.ComponentEngram},
+		},
+		profile: system.PlatformProfile{OS: "linux", NpmWritable: true},
+	}
+	for _, step := range runtime.stagePlan().Apply {
+		if err := step.Run(); err != nil {
+			t.Fatalf("install apply step %q error = %v", step.ID(), err)
+		}
+	}
+	if codexInstallCalls != 1 {
+		t.Fatalf("Codex install calls = %d, want exactly 1", codexInstallCalls)
+	}
+	if validationCalls != 1 {
+		t.Fatalf("Codex runtime validation calls = %d, want 1 after install", validationCalls)
+	}
+	for _, name := range []string{"sdd-strong.config.toml", "sdd-mid.config.toml", "sdd-cheap.config.toml"} {
+		assertFileContains(t, filepath.Join(home, ".codex", name), "gpt-5.6-")
 	}
 }
 
