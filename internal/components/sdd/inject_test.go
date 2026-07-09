@@ -6248,7 +6248,7 @@ func TestInjectCodexWithCarrilModels(t *testing.T) {
 }
 
 // TestInjectCodexNilCarrilModels verifies that nil CodexCarrilModelAssignments
-// causes the render to use canonical defaults (gpt-5.5 / gpt-5.4-mini).
+// causes the render to use canonical GPT-5.6 defaults.
 func TestInjectCodexNilCarrilModels(t *testing.T) {
 	home := t.TempDir()
 	adapter := codexInjectAdapter()
@@ -6270,8 +6270,10 @@ func TestInjectCodexNilCarrilModels(t *testing.T) {
 	if !strings.Contains(text, "Model") {
 		t.Error("AGENTS.md missing Model column — nil carrilModels should fall back to defaults")
 	}
-	if !strings.Contains(text, "gpt-5.4-mini") {
-		t.Error("AGENTS.md missing gpt-5.4-mini — nil carrilModels should show sdd-cheap default")
+	for _, want := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("AGENTS.md missing %s — nil carrilModels should show GPT-5.6 defaults", want)
+		}
 	}
 }
 

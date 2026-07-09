@@ -139,7 +139,7 @@ For each phase:
 
 Example — launching `sdd-design` with its assigned model and effort:
 ```
-spawn_agent(task_name="sdd-design", message=<design prompt>, model="gpt-5.5", reasoning_effort="xhigh", fork_turns="none")
+spawn_agent(task_name="sdd-design", message=<design prompt>, model="gpt-5.6-sol", reasoning_effort="xhigh", fork_turns="none")
 wait_agent(task_name="sdd-design")
 close_agent(task_name="sdd-design")
 ```

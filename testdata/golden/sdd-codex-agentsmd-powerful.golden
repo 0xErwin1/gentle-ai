@@ -140,7 +140,7 @@ For each phase:
 
 Example — launching `sdd-design` with its assigned model and effort:
 ```
-spawn_agent(task_name="sdd-design", message=<design prompt>, model="gpt-5.5", reasoning_effort="xhigh", fork_turns="none")
+spawn_agent(task_name="sdd-design", message=<design prompt>, model="gpt-5.6-sol", reasoning_effort="xhigh", fork_turns="none")
 wait_agent(task_name="sdd-design")
 close_agent(task_name="sdd-design")
 ```
@@ -355,9 +355,9 @@ These profile files apply to whole CLI sessions: `codex --profile <name> "<promp
 
 | Profile (CLI) | Model | `reasoning_effort` (spawn_agent) | SDD phases |
 |---------------|-------|----------------------------------|------------|
-| `sdd-strong` | `gpt-5.5` | `xhigh` | propose, design, verify, judge |
-| `sdd-mid` | `gpt-5.5` | `high` | apply, fix-agent |
-| `sdd-cheap` | `gpt-5.4-mini` | `low` | explore, spec, tasks, archive, onboard |
+| `sdd-strong` | `gpt-5.6-sol` | `xhigh` | propose, design, verify, judge |
+| `sdd-mid` | `gpt-5.6-sol` | `high` | apply, fix-agent |
+| `sdd-cheap` | `gpt-5.6-luna` | `low` | explore, spec, tasks, archive, onboard |
 
 <!-- /gentle-ai:sdd-orchestrator -->
 

@@ -8,6 +8,9 @@ import (
 // codexAvailableModels is the curated list of Codex model IDs available for
 // per-phase custom assignments. Order is intentional: newest/most-capable first.
 var codexAvailableModels = []string{
+	"gpt-5.6-sol",
+	"gpt-5.6-terra",
+	"gpt-5.6-luna",
 	"gpt-5.5",
 	"gpt-5.4",
 	"gpt-5.4-mini",
@@ -62,79 +65,75 @@ func (e CodexEffort) Valid() bool {
 	}
 }
 
-// CodexModelPresetRecommended returns the Recommended (ChatGPT Pro $100/mo) preset.
-// Carril-aligned effort: Razonamiento=high, Código=medium, Liviano=low.
-// Every phase within a carril carries the same effort so that maxEffort over the
-// carril's phases yields exactly the carril's intended tier.
+type CodexCarrilDefault struct {
+	Model  string
+	Effort CodexEffort
+}
+
+var codexPresetMatrix = map[string]map[string]CodexCarrilDefault{
+	"low-cost": {
+		"sdd-strong": {Model: "gpt-5.6-terra", Effort: CodexEffortMedium},
+		"sdd-mid":    {Model: "gpt-5.6-terra", Effort: CodexEffortMedium},
+		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortLow},
+	},
+	"recommended": {
+		"sdd-strong": {Model: "gpt-5.6-sol", Effort: CodexEffortHigh},
+		"sdd-mid":    {Model: "gpt-5.6-terra", Effort: CodexEffortMedium},
+		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortLow},
+	},
+	"powerful": {
+		"sdd-strong": {Model: "gpt-5.6-sol", Effort: CodexEffortXHigh},
+		"sdd-mid":    {Model: "gpt-5.6-sol", Effort: CodexEffortHigh},
+		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortLow},
+	},
+}
+
+func CodexPresetCarrilDefaults(preset string) map[string]CodexCarrilDefault {
+	defaults, ok := codexPresetMatrix[preset]
+	if !ok {
+		defaults = codexPresetMatrix["recommended"]
+	}
+	out := make(map[string]CodexCarrilDefault, len(defaults))
+	for carril, value := range defaults {
+		out[carril] = value
+	}
+	return out
+}
+
+func CodexCarrilModelsForPreset(preset string) map[string]string {
+	defaults := CodexPresetCarrilDefaults(preset)
+	out := make(map[string]string, len(defaults))
+	for carril, value := range defaults {
+		out[carril] = value.Model
+	}
+	return out
+}
+
+func codexPresetEfforts(preset string) map[string]CodexEffort {
+	defaults := CodexPresetCarrilDefaults(preset)
+	out := make(map[string]CodexEffort, 13)
+	for _, tier := range codexTierGroups {
+		effort := defaults[tier.Profile].Effort
+		for _, phase := range tier.Phases {
+			out[phase] = effort
+		}
+	}
+	return out
+}
+
+// CodexModelPresetRecommended returns the Recommended preset.
 func CodexModelPresetRecommended() map[string]CodexEffort {
-	return map[string]CodexEffort{
-		// Razonamiento (sdd-strong): high
-		"sdd-propose": CodexEffortHigh,
-		"sdd-design":  CodexEffortHigh,
-		"sdd-verify":  CodexEffortHigh,
-		"jd-judge-a":  CodexEffortHigh,
-		"jd-judge-b":  CodexEffortHigh,
-		"default":     CodexEffortHigh,
-		// Código (sdd-mid): medium
-		"sdd-apply":    CodexEffortMedium,
-		"jd-fix-agent": CodexEffortMedium,
-		// Liviano (sdd-cheap): low
-		"sdd-explore": CodexEffortLow,
-		"sdd-spec":    CodexEffortLow,
-		"sdd-tasks":   CodexEffortLow,
-		"sdd-archive": CodexEffortLow,
-		"sdd-onboard": CodexEffortLow,
-	}
+	return codexPresetEfforts("recommended")
 }
 
-// CodexModelPresetPowerful returns the Powerful (ChatGPT Pro $200/mo) preset.
-// Carril-aligned effort: Razonamiento=xhigh, Código=high, Liviano=low.
-// Every phase within a carril carries the same effort so that maxEffort over the
-// carril's phases yields exactly the carril's intended tier.
+// CodexModelPresetPowerful returns the Powerful preset.
 func CodexModelPresetPowerful() map[string]CodexEffort {
-	return map[string]CodexEffort{
-		// Razonamiento (sdd-strong): xhigh
-		"sdd-propose": CodexEffortXHigh,
-		"sdd-design":  CodexEffortXHigh,
-		"sdd-verify":  CodexEffortXHigh,
-		"jd-judge-a":  CodexEffortXHigh,
-		"jd-judge-b":  CodexEffortXHigh,
-		"default":     CodexEffortXHigh,
-		// Código (sdd-mid): high
-		"sdd-apply":    CodexEffortHigh,
-		"jd-fix-agent": CodexEffortHigh,
-		// Liviano (sdd-cheap): low
-		"sdd-explore": CodexEffortLow,
-		"sdd-spec":    CodexEffortLow,
-		"sdd-tasks":   CodexEffortLow,
-		"sdd-archive": CodexEffortLow,
-		"sdd-onboard": CodexEffortLow,
-	}
+	return codexPresetEfforts("powerful")
 }
 
-// CodexModelPresetLowCost returns the Low-cost (ChatGPT Plus $20/mo) preset.
-// Carril-aligned effort: Razonamiento=medium, Código=medium, Liviano=low.
-// Every phase within a carril carries the same effort so that maxEffort over the
-// carril's phases yields exactly the carril's intended tier.
+// CodexModelPresetLowCost returns the Low-cost preset.
 func CodexModelPresetLowCost() map[string]CodexEffort {
-	return map[string]CodexEffort{
-		// Razonamiento (sdd-strong): medium
-		"sdd-propose": CodexEffortMedium,
-		"sdd-design":  CodexEffortMedium,
-		"sdd-verify":  CodexEffortMedium,
-		"jd-judge-a":  CodexEffortMedium,
-		"jd-judge-b":  CodexEffortMedium,
-		"default":     CodexEffortMedium,
-		// Código (sdd-mid): medium
-		"sdd-apply":    CodexEffortMedium,
-		"jd-fix-agent": CodexEffortMedium,
-		// Liviano (sdd-cheap): low
-		"sdd-explore": CodexEffortLow,
-		"sdd-spec":    CodexEffortLow,
-		"sdd-tasks":   CodexEffortLow,
-		"sdd-archive": CodexEffortLow,
-		"sdd-onboard": CodexEffortLow,
-	}
+	return codexPresetEfforts("low-cost")
 }
 
 // CodexTierGroup defines one CLI profile tier: the profile filename (without
@@ -171,20 +170,20 @@ type CodexTierGroup struct {
 var codexTierGroups = []CodexTierGroup{
 	{
 		Profile:       "sdd-strong",
-		Model:         "gpt-5.5",
-		DefaultEffort: CodexEffortHigh,
+		Model:         codexPresetMatrix["recommended"]["sdd-strong"].Model,
+		DefaultEffort: codexPresetMatrix["recommended"]["sdd-strong"].Effort,
 		Phases:        []string{"sdd-propose", "sdd-design", "sdd-verify", "jd-judge-a", "jd-judge-b", "default"},
 	},
 	{
 		Profile:       "sdd-mid",
-		Model:         "gpt-5.5",
-		DefaultEffort: CodexEffortMedium,
+		Model:         codexPresetMatrix["recommended"]["sdd-mid"].Model,
+		DefaultEffort: codexPresetMatrix["recommended"]["sdd-mid"].Effort,
 		Phases:        []string{"sdd-apply", "jd-fix-agent"},
 	},
 	{
 		Profile:       "sdd-cheap",
-		Model:         "gpt-5.4-mini",
-		DefaultEffort: CodexEffortLow,
+		Model:         codexPresetMatrix["recommended"]["sdd-cheap"].Model,
+		DefaultEffort: codexPresetMatrix["recommended"]["sdd-cheap"].Effort,
 		Phases:        []string{"sdd-explore", "sdd-spec", "sdd-tasks", "sdd-archive", "sdd-onboard"},
 	},
 }
@@ -292,7 +291,7 @@ func phaseToCarrilModel(phase string, carrilModels map[string]string) string {
 			}
 		}
 	}
-	return "gpt-5.5" // ultimate fallback
+	return "gpt-5.6-sol" // ultimate fallback
 }
 
 // RenderCodexPhaseEffortsByPhase renders a per-phase Markdown table for the

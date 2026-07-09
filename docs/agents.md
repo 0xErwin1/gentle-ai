@@ -144,12 +144,14 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
 - MCP servers (Engram and Context7) are upserted as `[mcp_servers.<name>]` blocks in `~/.codex/config.toml`
 - SDD model-selection profiles written as separate files at `~/.codex/<name>.config.toml` (Codex >= 0.134.0 separate-file mechanism). Selected at runtime via `codex --profile <name>`:
 
-  | Profile | `model_reasoning_effort` | SDD phases |
-  |---------|--------------------------|------------|
-  | `sdd-strong` | `xhigh` | propose, design, verify, judge |
-  | `sdd-mid` | `high` | spec, tasks, apply |
-  | `sdd-cheap` | `low` | explore, archive, onboard |
+  | Profile | Default model | `model_reasoning_effort` | SDD phases |
+  |---------|---------------|--------------------------|------------|
+  | `sdd-strong` | `gpt-5.6-sol` | `high` (`xhigh` in Powerful preset) | propose, design, verify, judge |
+  | `sdd-mid` | `gpt-5.6-terra` | `medium` (`high` in Powerful preset) | apply, fix-agent |
+  | `sdd-cheap` | `gpt-5.6-luna` | `low` | explore, spec, tasks, archive, onboard |
 
+- Explicit saved Codex model assignments are preserved on sync, including older pinned IDs such as `gpt-5.5` or `gpt-5.4-mini`; GPT-5.6 IDs are used only for missing/default assignments.
+- GPT-5.6 `max` reasoning effort and `ultra` mode are intentionally not enabled by this default update. `max` requires confirmed Codex support; `ultra` changes orchestration semantics and needs separate design.
 - Multi-agent SDD delegation is available as an **experimental opt-in** (default off). gentle-ai writes `features.multi_agent = false` and `agents.max_threads = 4` / `agents.max_depth = 2` into `~/.codex/config.toml`. To enable, set `multi_agent = true` in the `[features]` section. When enabled, the `sdd-orchestrator` asset uses Codex's native `spawn_agent` / `wait_agent` / `close_agent` tools to delegate SDD phases; otherwise it falls back to solo-agent inline execution.
 - **Delegation**: Solo-agent (multi-agent opt-in, experimental)
 

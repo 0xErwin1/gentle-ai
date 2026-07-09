@@ -304,7 +304,8 @@ func TestGoldenSDD_Codex(t *testing.T) {
 	home := t.TempDir()
 
 	result, err := sdd.Inject(home, codexAdapter(), "", sdd.InjectOptions{
-		CodexModelAssignments: model.CodexModelPresetRecommended(),
+		CodexModelAssignments:       model.CodexModelPresetRecommended(),
+		CodexCarrilModelAssignments: model.CodexCarrilModelsForPreset("recommended"),
 	})
 	if err != nil {
 		t.Fatalf("sdd.Inject(codex) error = %v", err)
@@ -340,7 +341,8 @@ func TestGoldenSDD_Codex_LowCost(t *testing.T) {
 	home := t.TempDir()
 
 	result, err := sdd.Inject(home, codexAdapter(), "", sdd.InjectOptions{
-		CodexModelAssignments: model.CodexModelPresetLowCost(),
+		CodexModelAssignments:       model.CodexModelPresetLowCost(),
+		CodexCarrilModelAssignments: model.CodexCarrilModelsForPreset("low-cost"),
 	})
 	if err != nil {
 		t.Fatalf("sdd.Inject(codex, LowCost) error = %v", err)
@@ -357,7 +359,8 @@ func TestGoldenSDD_Codex_Powerful(t *testing.T) {
 	home := t.TempDir()
 
 	result, err := sdd.Inject(home, codexAdapter(), "", sdd.InjectOptions{
-		CodexModelAssignments: model.CodexModelPresetPowerful(),
+		CodexModelAssignments:       model.CodexModelPresetPowerful(),
+		CodexCarrilModelAssignments: model.CodexCarrilModelsForPreset("powerful"),
 	})
 	if err != nil {
 		t.Fatalf("sdd.Inject(codex, Powerful) error = %v", err)

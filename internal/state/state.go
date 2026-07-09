@@ -54,13 +54,13 @@ type InstallState struct {
 
 	// CodexCarrilModelAssignments maps the three carril profile names
 	// (sdd-strong|sdd-mid|sdd-cheap) to OpenAI subscription model IDs
-	// (e.g. "gpt-5.5", "gpt-5.4-mini"). Persisted so that `gentle-ai sync`
+	// (e.g. "gpt-5.6-sol", "gpt-5.6-luna"). Persisted so that `gentle-ai sync`
 	// regenerates profile files with the user's chosen model per tier.
 	// Absent/empty = resolve to DefaultCarrilModels at runtime (backward-compat).
 	CodexCarrilModelAssignments map[string]string `json:"codexCarrilModelAssignments,omitempty"`
 
 	// CodexPhaseModelAssignments maps each of the 13 SDD phase names to the
-	// model id the user assigned in the Custom per-phase picker (e.g. "gpt-5.5").
+	// model id the user assigned in the Custom per-phase picker (e.g. "gpt-5.6-sol").
 	// When non-nil, overrides the carril-level model selection for that phase.
 	// Absent/nil = not using custom per-phase assignments (preset/carril behavior
 	// unchanged for backward-compatibility).
