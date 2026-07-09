@@ -1,4 +1,6 @@
-# Organic Agent Trigger Rules Specification
+# Agent Trigger Rules Specification
+
+The domain slug `organic-agent-trigger-rules` is historical (the v1 rules were framed as "organic recommendations"); the directory and Domain field keep it for continuity.
 
 **Domain**: `organic-agent-trigger-rules`  
 **Type**: NEW Capability  
@@ -9,11 +11,13 @@
 
 Define a declarative trigger-rules system that gentle-ai INSTALLS (not executes) into every supported agent. The system defines a closed set of lifecycle events, a binding schema with structured `when` conditions, a token-aware built-in default rule set, and mechanism for rendering rules as plain instructional text and injecting them idempotently into all supported agent assets through the existing installer/injection path.
 
+The rendered text is a deterministic triage router (4R v2), not an advisory suggestion list. The orchestrator triages every diff into exactly one tier before acting: (1) trivial diff (ONLY documentation, comments, formatting, or typo fixes in strings — zero executable code and zero configuration changes; any diff touching executable code or configuration is at least standard tier) → no review lens; (2) standard diff → exactly ONE lens selected by the risk table; (3) hot path (auth/update/security/payments paths) or >400 changed lines → the full 4R fan-out, on pre-pr only. gentle-ai itself still never fires, executes, or blocks anything: the router is instruction text the orchestrator applies as a decision procedure.
+
 ---
 
 ## Requirements
 
-### Requirement: Closed Event Set (from Delta A)
+### Requirement: Closed Event Set
 
 The system MUST define exactly the following six events and no others. Any `on` value outside this set MUST be treated as invalid.
 
@@ -53,14 +57,14 @@ Each event MUST be defined as a named constant (or equivalent) in the Go model l
 
 ---
 
-### Requirement: Binding Fields — Required and Optional (from Delta B)
+### Requirement: Binding Fields — Required and Optional
 
 Each binding MUST have the following fields:
 
 | Field | Required | Valid Values | Description |
 |-------|----------|--------------|-------------|
 | `on` | YES | Any value in the supported events catalog | The lifecycle event that triggers this binding. |
-| `run` | YES | One or more agent identifiers from the supported agent set | The agent(s) to recommend running. Must be non-empty. |
+| `run` | YES | One or more agent identifiers from the supported agent set | The agent(s) to route to. Must be non-empty. |
 | `when` | YES | Any value in the `when` vocabulary | The condition that must be satisfied for the binding to be active. |
 | `mode` | NO (default: `advisory`) | `advisory` or `strong` | Behavioral mode governing directive language in the rendered output. |
 | `reason` | NO | Free-form string | Internal documentation field that records WHY the binding exists (its token-budget justification). |
@@ -156,7 +160,7 @@ The full trigger-rules configuration MUST be represented as an ordered list of b
 
 ---
 
-### Requirement: Closed `when` Vocabulary (from Delta C)
+### Requirement: Closed `when` Vocabulary
 
 The system MUST support exactly the following `when` condition forms and no others in this change. The vocabulary is structured, closed, and rendered to plain instructional text.
 
@@ -258,27 +262,25 @@ Each supported `when` form MUST have a deterministic, human-readable rendering t
 
 ---
 
-### Requirement: Two Valid Modes (from Delta D)
+### Requirement: Two Valid Modes
 
 The system MUST support exactly two mode values: `advisory` and `strong`. Any other value MUST be treated as invalid.
 
 ### Requirement: `advisory` Mode Semantics
 
-A binding with `mode: advisory` MUST render as a suggestion. The directive language MUST be non-urgent and clearly optional.
+A binding with `mode: advisory` MUST render as the everyday triage routing: a trivial diff runs no lens; any other diff runs exactly ONE lens selected by the risk table, with the bound agent stated as the default row. For a single-review-lens binding the rendering MUST also prohibit the full 4R fan-out at that event.
 
 Representative rendered language for `advisory`:
-- "It is recommended to run ..."
-- "Consider running ..."
-- "You may want to run ..."
+- "trivial diff → no lens; otherwise run exactly ONE lens selected by the risk table (default `review-readability`); never the full 4R fan-out here"
 
-The rendered text MUST NOT contain directive language that implies urgency, obligation, or failure if skipped.
+The rendered text MUST NOT use advisory suggestion phrasing ("consider running", "you may want to", "it is recommended") — the routing is a decision procedure, not advice.
 
-#### Scenario: `advisory` binding renders with suggestion language
+#### Scenario: `advisory` binding renders the trivial-diff exemption routing
 
 - GIVEN a binding `{ on: "pre-commit", when: { Always: true }, run: ["review-readability"], mode: "advisory" }`
 - WHEN the renderer produces the instructional text
-- THEN the rendered output uses non-urgent suggestion language
-- AND the rendered output does not contain words like "must", "required", "strongly", "critical"
+- THEN the rendered output routes a trivial diff to no lens and any other diff to exactly ONE lens selected by the risk table
+- AND the rendered output does not contain suggestion phrases like "consider running" or "strongly recommend"
 
 #### Scenario: Omitted `mode` defaults to `advisory` rendering
 
@@ -288,21 +290,33 @@ The rendered text MUST NOT contain directive language that implies urgency, obli
 
 ### Requirement: `strong` Mode Semantics
 
-A binding with `mode: strong` MUST render as a firm, directive recommendation. The language MUST communicate that the orchestrator SHOULD treat this as a high-priority action. The binding MUST NOT create a hard gate or block forward progress.
+A binding with `mode: strong` MUST render as a direct run directive the orchestrator applies whenever the binding's condition matches. The trivial-diff exemption follows the binding's nature, not its mode: a `strong` binding that triages a diff (the full 4R fan-out under a non-`Always` condition, e.g. pre-pr) MUST render the trivial-diff exemption AND the standard-diff fallback (when the condition does not match, run exactly ONE lens selected by the risk table); a `strong` binding for a phase-triggered, non-diff-triage agent (e.g. `judgment-day` at `post-sdd-phase`) renders without the trivial-diff exemption. The binding MUST NOT create a hard gate or block forward progress.
 
 Representative rendered language for `strong`:
-- "Strongly recommend running ..."
-- "It is strongly advised to run ..."
-- "At this moment, running ... is a high-priority recommendation."
+- "run `judgment-day`"
+- "trivial diff → no lens; otherwise run `review-risk`, `review-resilience`, `review-readability`, and `review-reliability` in parallel; otherwise (standard diff) run exactly ONE lens selected by the risk table"
 
-The rendered text MUST NOT contain language implying the action is mandatory or will block the workflow.
+The rendered text MUST NOT contain language implying the workflow is blocked or paused pending the review.
 
-#### Scenario: `strong` binding renders with firm recommendation language
+#### Scenario: `strong` binding renders a direct run directive
 
 - GIVEN a binding `{ on: "pre-pr", when: { MinDiffLines: 400 }, run: ["review-risk", "review-resilience"], mode: "strong" }`
 - WHEN the renderer produces the instructional text
-- THEN the rendered output contains firm directive language (e.g., "strongly recommend")
+- THEN the rendered output directs the orchestrator to run the bound agents when the condition matches
 - AND the rendered output does not imply blocking or mandatory confirmation
+
+#### Scenario: `strong` conditional full-4R binding carries the trivial-diff exemption
+
+- GIVEN a binding `{ on: "pre-pr", when: { PathGlobs: ["**/auth/**"], MinDiffLines: 400, Combine: "or" }, run: [all four 4R lenses], mode: "strong" }`
+- WHEN the renderer produces the instructional text
+- THEN the rendered output routes a trivial diff to no lens before the fan-out directive
+- AND the rendered output states the standard-diff fallback (exactly ONE lens selected by the risk table)
+
+#### Scenario: `strong` phase-triggered binding renders without the trivial-diff exemption
+
+- GIVEN a binding `{ on: "post-sdd-phase", when: { Phases: ["design", "apply"] }, run: ["judgment-day"], mode: "strong" }`
+- WHEN the renderer produces the instructional text
+- THEN the rendered output is a direct run directive with no trivial-diff exemption (the agent is phase-triggered, not diff triage)
 
 #### Scenario: `strong` is the highest enforcement level — no blocking
 
@@ -320,17 +334,17 @@ A test MUST assert that `advisory` and `strong` renderings of identical bindings
 - GIVEN two bindings identical except for `mode: "advisory"` vs `mode: "strong"`
 - WHEN both are rendered
 - THEN the rendered outputs are not equal
-- AND the `strong` output contains a stronger recommendation signal (e.g., "strongly") absent from the `advisory` output
+- AND the `advisory` output carries the trivial-diff exemption routing that the `strong` output omits
 
 ---
 
-### Requirement: Default Rule Set Exists and Is Non-Empty (from Delta E)
+### Requirement: Default Rule Set Exists and Is Non-Empty
 
 A built-in default rule set MUST exist in `internal/catalog/` and MUST contain bindings for the following events:
-- `pre-commit` (Tier-1, advisory, single-agent)
-- `pre-push` (Tier-1, advisory, single-agent)
-- `pre-pr` (Tier-2, strong, 4R fan-out on hot paths or large diffs)
-- `post-sdd-phase` (Tier-3, strong, judgment-day on design/apply phases)
+- `pre-commit` (everyday routing: trivial → no lens, otherwise exactly ONE lens; advisory, single default lens)
+- `pre-push` (everyday routing: trivial → no lens, otherwise exactly ONE lens; advisory, single default lens)
+- `pre-pr` (strong, full 4R fan-out on hot paths or large diffs; standard diffs fall back to exactly ONE lens)
+- `post-sdd-phase` (strong, judgment-day on design/apply phases)
 
 `on-ci` and `on-schedule` MUST each have zero default bindings (with rationale documented in code).
 
@@ -341,12 +355,14 @@ A built-in default rule set MUST exist in `internal/catalog/` and MUST contain b
 - THEN the returned list is non-empty
 - AND at least one binding exists for `pre-commit`, `pre-push`, `pre-pr`, and `post-sdd-phase`
 
-### Requirement: Tier-1 — Cheap Advisory Lens on Everyday Events
+### Requirement: Everyday Events — Trivial Diffs Skip Review, Standard Diffs Get Exactly ONE Lens
 
 | Binding | `on` | `when` | `run` | `mode` |
 |---------|------|--------|-------|--------|
-| Default pre-commit readability | `pre-commit` | `{ Always: true }` | `["review-readability"]` | `advisory` |
-| Default pre-push readability | `pre-push` | `{ Always: true }` | `["review-readability"]` | `advisory` |
+| Default pre-commit routing | `pre-commit` | `{ Always: true }` | `["review-readability"]` | `advisory` |
+| Default pre-push routing | `pre-push` | `{ Always: true }` | `["review-readability"]` | `advisory` |
+
+The bound lens is the default row of the risk table for that event; the rendered routing sends trivial diffs to no lens and every other diff to exactly ONE lens. The full 4R fan-out is prohibited at these events.
 
 #### Scenario: Default pre-commit binding is advisory and single-agent
 
@@ -363,13 +379,13 @@ A built-in default rule set MUST exist in `internal/catalog/` and MUST contain b
 - WHEN it is searched for bindings with `on: "pre-push"`
 - THEN no binding with `on: "pre-push"` runs all four 4R agents simultaneously
 
-### Requirement: Tier-2 — Full 4R Fan-Out on Hot Paths or Large Diffs
+### Requirement: Hot Paths or Large Diffs — Full 4R Fan-Out (pre-pr only)
 
 | Binding | `on` | `when` | `run` | `mode` |
 |---------|------|--------|-------|--------|
 | Pre-PR hot-path 4R | `pre-pr` | `{ PathGlobs: ["**/auth/**", "**/update/**"], MinDiffLines: 400, Combine: "or" }` | `["review-risk", "review-readability", "review-reliability", "review-resilience"]` | `strong` |
 
-The hot-path glob set MUST include at minimum: `**/auth/**`, `**/update/**`. The diff-line threshold MUST be `400` and MUST be implemented as a named constant.
+The hot-path glob set MUST include at minimum: `**/auth/**`, `**/update/**`. The diff-line threshold MUST be `400` and MUST be implemented as a named constant. The rendered binding MUST state the trivial-diff exemption (a trivial pre-pr diff runs no lens) and the standard-diff fallback: a non-trivial pre-pr diff that matches neither the hot-path globs nor the line threshold runs exactly ONE lens selected by the risk table.
 
 #### Scenario: Default pre-pr binding triggers the full 4R under the compound condition
 
@@ -393,9 +409,9 @@ The hot-path glob set MUST include at minimum: `**/auth/**`, `**/update/**`. The
 - AND a hypothetical diff of 50 lines touching only `internal/tui/colors.go`
 - WHEN the orchestrator evaluates the condition
 - THEN the condition evaluates to false
-- AND the 4R fan-out is NOT recommended
+- AND the 4R fan-out is NOT triggered
 
-### Requirement: Tier-3 — Judgment-Day at High-Stakes Moments Only
+### Requirement: Judgment-Day at High-Stakes Moments Only
 
 | Binding | `on` | `when` | `run` | `mode` |
 |---------|------|--------|-------|--------|
@@ -429,7 +445,7 @@ The built-in defaults MUST pass all schema validations. A test MUST assert this 
 
 ---
 
-### Requirement: Token-Budget Requirement (from Delta G)
+### Requirement: Token-Budget Requirement
 
 `when` is a first-class cost controller. The default rule set MUST be demonstrably tuned so that a normal development day stays within a small, predictable token cost.
 
@@ -452,27 +468,27 @@ The built-in defaults MUST pass all schema validations. A test MUST assert this 
 - AND a profile of: 5 pre-commit events, 2 pre-push events, each with diffs under 100 lines touching no hot-path globs
 - AND 1 pre-pr event with a diff of 200 lines touching no hot-path globs
 - WHEN each binding's `when` condition is evaluated analytically
-- THEN only `review-readability` (advisory) bindings activate
-- AND no `review-risk`, `review-reliability`, `review-resilience`, or `judgment-day` agents are triggered
+- THEN each event routes to at most exactly ONE lens (trivial diffs route to none)
+- AND the full 4R fan-out and `judgment-day` are never triggered
 
-#### Scenario: Hot-path PR triggers Tier-2 (4R fan-out)
+#### Scenario: Hot-path PR triggers the full 4R fan-out
 
 - GIVEN the default rule set
 - AND a pre-pr event with a diff touching `**/auth/**`
 - WHEN each binding's `when` condition is evaluated
-- THEN the Tier-2 pre-pr binding activates
-- AND all four 4R agents are recommended
+- THEN the hot-path pre-pr binding activates
+- AND all four 4R agents are run in parallel
 
 #### Scenario: Token-Budget Rationale Is Documented in Code
 
 - GIVEN the Go source file defining the built-in default rule set
 - WHEN a reviewer reads the file
-- THEN a comment exists that references the three-tier budget model
-- AND the comment explains why Tier-1 uses `{ Always: true }` with a single agent and why Tier-2 requires a compound condition
+- THEN a comment exists that references the tiered triage/budget model (trivial → none, standard → one lens, hot path → full 4R, SDD → judgment-day)
+- AND the comment explains why everyday single-lens bindings use `{ Always: true }` and why the full-4R binding requires a compound condition
 
 ---
 
-### Requirement: Rendering (from Delta F)
+### Requirement: Rendering
 
 The renderer turns the rule set into per-agent plain instructional text. The rendered block MUST be:
 - Self-contained: a reader with no knowledge of the schema understands what to do
@@ -494,11 +510,13 @@ The renderer turns the rule set into per-agent plain instructional text. The ren
 - THEN it contains no `<!-- gentle-ai:` or `<!-- /gentle-ai:` markers
 - (Markers are added by the injector, not the renderer.)
 
-#### Scenario: Rendered block contains organic-not-a-gate note
+#### Scenario: Rendered block frames itself as a deterministic triage router
 
 - GIVEN rendered output from `RenderTriggerRules`
 - WHEN the output is inspected
-- THEN it contains language indicating these rules are organic recommendations, not hard gates
+- THEN it contains language indicating the block is a deterministic triage router the orchestrator applies as a decision procedure, not advice
+- AND it states the three triage tiers explicitly, including the trivial-diff → no-lens tier
+- AND it contains no v1 advisory phrasing ("organic recommendations", "consider running", "strongly recommend")
 
 #### Scenario: Rendered output does not exceed line budget
 
@@ -508,7 +526,7 @@ The renderer turns the rule set into per-agent plain instructional text. The ren
 
 ---
 
-### Requirement: Injection (from Delta F)
+### Requirement: Injection
 
 Rules are injected through the existing installer path. The injector writes the rendered block into the installed assets for every supported agent through the existing `filemerge.InjectMarkdownSection` mechanism under the section ID `gentle-ai:trigger-rules`.
 
@@ -577,7 +595,7 @@ The rendered block injected into each agent asset MUST be plain, human-readable 
 - WHEN a human reads the rendered block
 - THEN every binding is described in a complete sentence or short paragraph in English
 - AND no YAML, TOML, or JSON syntax is present
-- AND the reader understands what event, condition, agents, and recommendation strength apply without consulting any other document
+- AND the reader understands what event, condition, agents, and routing mode apply without consulting any other document
 
 ### Requirement: Per-Agent Phrasing May Vary; Semantics Must Not
 
@@ -603,7 +621,7 @@ The primary injection point for the trigger-rules section MUST be the per-agent 
 
 ---
 
-### Requirement: No Execution of Agents (from Delta H)
+### Requirement: No Execution of Agents
 
 gentle-ai MUST NOT execute, spawn, or invoke any agent at any lifecycle moment. The binary's role is strictly to install and inject.
 
@@ -687,7 +705,7 @@ This change MUST NOT introduce a YAML, TOML, or other structured-data parse libr
 | Executing agents | gentle-ai stays an installer/injector. It renders rules; the AI tool's orchestrator runs them. |
 | Generating git hooks | Events are semantic moments honored by the orchestrator, not OS-level hooks. |
 | Event bus / runtime dispatch | No runtime layer is added; no daemon, no listener, no scheduler. |
-| Deterministic / hard gates | Organic-only by decision. No blocking. `mode: strong` is the strongest level — a strong recommendation, not a gate. |
+| Hard gates / workflow blocking | The router is deterministic instruction text, not an enforcement mechanism. gentle-ai never blocks; the orchestrator routes reviews without pausing the user's workflow. |
 | A `when` expression engine that gentle-ai evaluates | gentle-ai does not evaluate `when`; it renders the condition as instruction text for the orchestrator to interpret. |
 | User-override / per-project rule customization | Explicitly deferred. Defaults ship only in this change. |
 
@@ -761,7 +779,7 @@ type TriggerRuleSet struct {
 - [x] A declarative trigger-rules schema (events, bindings with `when` + `mode`, execution policy) is defined and documented.
 - [x] A closed supported-events catalog exists (pre-commit, pre-push, pre-pr, post-sdd-phase, on-ci, on-schedule).
 - [x] A token-aware built-in default rule set ships covering the 4R, judgment-day, and sdd phases.
-- [x] Default bindings demonstrably scale by blast radius: cheap advisory lens on everyday events; full 4R only on hot paths / large diffs; judgment-day only at high-stakes moments.
+- [x] Default bindings demonstrably scale by blast radius: trivial diffs skip review and standard diffs get exactly ONE lens on everyday events; full 4R only on hot paths / large diffs; judgment-day only at high-stakes moments.
 - [x] Rules are rendered and injected into the installed assets for ALL supported agents (claude, opencode, cursor, codex, gemini, vscode, windsurf, antigravity), idempotently.
 - [x] gentle-ai adds NO execution, NO git hooks, NO event bus, NO deterministic gate — verified by the absence of any runtime dispatch code.
 - [x] `go build ./...`, `go vet ./...`, and `go test ./...` pass clean.
