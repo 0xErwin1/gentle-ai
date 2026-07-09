@@ -56,7 +56,7 @@ Gentle-AI keeps the parent/orchestrator thread thin. Once a task stops being sma
 | -------------------------------------------------------------------------- | --------------------------------------------------------- |
 | Reading 4+ files to understand a flow                                      | Delegate exploration or run an exploration phase.         |
 | Touching 2+ non-trivial files                                              | Use one writer or require fresh review before completion. |
-| Commit, push, or PR after code changes                                     | Run fresh review unless the diff is trivial docs/text.    |
+| Commit, push, or PR after code changes                                     | Run fresh review unless the diff is trivial (tier 1).     |
 | Wrong cwd, worktree/git accident, merge recovery, confusing test/env issue | Stop and run a fresh audit before continuing.             |
 | Long monolithic session with accumulating complexity                       | Pause and delegate, re-plan, or justify why not.          |
 | Adversarial review of diffs, conflicts, PR readiness, or incidents         | Use fresh context when the agent platform supports it.    |

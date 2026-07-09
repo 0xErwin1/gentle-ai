@@ -148,6 +148,7 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"claude/agents/review-readability.md",
 		"claude/agents/review-reliability.md",
 		"claude/agents/review-resilience.md",
+		"claude/agents/review-refuter.md",
 
 		// OpenCode agent files
 		"opencode/persona-gentleman.md",
@@ -189,12 +190,14 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"cursor/agents/review-readability.md",
 		"cursor/agents/review-reliability.md",
 		"cursor/agents/review-resilience.md",
+		"cursor/agents/review-refuter.md",
 
 		// Kiro agent files
 		"kiro/agents/review-risk.md",
 		"kiro/agents/review-readability.md",
 		"kiro/agents/review-reliability.md",
 		"kiro/agents/review-resilience.md",
+		"kiro/agents/review-refuter.md",
 
 		// Kimi agent files
 		"kimi/persona-gentleman.md",
@@ -227,10 +230,12 @@ func TestAllEmbeddedAssetsAreReadable(t *testing.T) {
 		"kimi/agents/review-readability.yaml",
 		"kimi/agents/review-reliability.yaml",
 		"kimi/agents/review-resilience.yaml",
+		"kimi/agents/review-refuter.yaml",
 		"kimi/agents/review-risk.md",
 		"kimi/agents/review-readability.md",
 		"kimi/agents/review-reliability.md",
 		"kimi/agents/review-resilience.md",
+		"kimi/agents/review-refuter.md",
 
 		// SDD skills
 		"skills/sdd-init/SKILL.md",
@@ -482,8 +487,8 @@ func TestClaudeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(claude/agents) error = %v", err)
 	}
-	if len(agentEntries) != 17 {
-		t.Fatalf("claude agents count = %d, want 17", len(agentEntries))
+	if len(agentEntries) != 18 {
+		t.Fatalf("claude agents count = %d, want 18", len(agentEntries))
 	}
 }
 
@@ -1472,7 +1477,9 @@ func TestSDDOrchestratorsRouteFreshReviewsToConcreteReviewLenses(t *testing.T) {
 		"review-resilience",
 		"review-readability",
 		"review-reliability",
-		"If multiple rows match, run the narrow set that covers the risk",
+		"run exactly ONE lens",
+		"run no lens",
+		"run the full 4R set",
 	}
 	for _, path := range paths {
 		t.Run(path, func(t *testing.T) {

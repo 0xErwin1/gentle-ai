@@ -9,14 +9,24 @@ import (
 // defaultLargeChangedLineThreshold is the minimum number of changed lines in a
 // diff that triggers the full 4R review fan-out on pre-pr events.
 //
-// Token-budget rationale (three-tier model):
-//   - Tier 1 (everyday): pre-commit and pre-push each run ONE cheap advisory lens
-//     (~1x cost). This keeps the everyday development loop lightweight.
-//   - Tier 2 (hot paths / large diffs): pre-pr on auth/update/security paths OR diffs
-//     above this threshold fan out to all four 4R lenses (~4x cost). This gates the
-//     expensive review behind meaningful signal.
-//   - Tier 3 (high-stakes SDD): post-sdd-phase on design/apply runs judgment-day
-//     (~4 + 3*findings cost). Reserved for high-stakes SDD phases only.
+// Token-budget rationale (4R v2 deterministic triage):
+//   - Trivial tier: ONLY documentation, comments, formatting, or typo fixes in
+//     strings — zero executable code and zero configuration changes — run no
+//     review lens at all (0x cost). Any diff touching executable code or
+//     configuration is at least standard tier. The trivial exemption is
+//     rendered wording; it needs no schema field because the orchestrator
+//     triages the diff.
+//   - Standard tier: every non-trivial diff runs exactly ONE lens selected by
+//     the risk table (~1x cost). This covers everyday pre-commit/pre-push and
+//     off-hot-path pre-pr diffs. `When.Always` on a single-lens binding
+//     expresses this tier.
+//   - Full-4R tier (hot paths / large diffs): pre-pr on auth/update/security/
+//     payments paths OR diffs above this threshold fan out to all four 4R
+//     lenses (~4x cost). This gates the expensive review behind meaningful
+//     signal. The compound `PathGlobs + MinDiffLines (Combine: "or")`
+//     condition expresses this tier.
+//   - High-stakes SDD: post-sdd-phase on design/apply runs judgment-day
+//     (two blind judges; no refuter fan-out). Reserved for high-stakes SDD phases only.
 const defaultLargeChangedLineThreshold = 400
 
 // on-ci and on-schedule have no built-in default because the appropriate
@@ -37,16 +47,16 @@ var defaultRuleSet = model.TriggerRuleSet{
 			When: model.TriggerWhen{Always: true},
 			Run:  []string{"review-readability"},
 			Mode: model.ModeAdvisory,
-			Reason: "everyday event → ONE cheap advisory lens (~1x); " +
-				"full 4R fan-out reserved for pre-pr",
+			Reason: "everyday event → trivial diffs skip review, standard diffs get exactly " +
+				"ONE lens (~1x); full 4R fan-out reserved for pre-pr",
 		},
 		{
 			On:   model.EventPrePush,
 			When: model.TriggerWhen{Always: true},
 			Run:  []string{"review-readability"},
 			Mode: model.ModeAdvisory,
-			Reason: "everyday event → ONE cheap advisory lens (~1x); " +
-				"4R fan-out reserved for pre-pr on hot paths / large diffs",
+			Reason: "everyday event → trivial diffs skip review, standard diffs get exactly " +
+				"ONE lens (~1x); 4R fan-out reserved for pre-pr on hot paths / large diffs",
 		},
 		{
 			On: model.EventPrePR,
@@ -58,7 +68,7 @@ var defaultRuleSet = model.TriggerRuleSet{
 			Run:  []string{"review-risk", "review-resilience", "review-readability", "review-reliability"},
 			Mode: model.ModeStrong,
 			Reason: "full 4R fan-out (~4x) only on hot paths (auth/update/security/payments) " +
-				"or diffs exceeding 400 changed lines",
+				"or diffs exceeding 400 changed lines; standard pre-pr diffs get exactly ONE lens",
 		},
 		{
 			On: model.EventPostSDDPhase,
@@ -67,7 +77,7 @@ var defaultRuleSet = model.TriggerRuleSet{
 			},
 			Run:  []string{"judgment-day"},
 			Mode: model.ModeStrong,
-			Reason: "adversarial verification (~4 + 3*findings cost) only at " +
+			Reason: "adversarial verification (two blind judges; no refuter fan-out) only at " +
 				"high-stakes SDD phases (design and apply)",
 		},
 	},
@@ -81,15 +91,18 @@ func SupportedTriggerEvents() []model.TriggerEvent {
 	return events
 }
 
-// knownAgentList is the closed set of recognized agent identifiers.
-// It covers the 4R review lenses, adversarial verification, and all SDD phases.
+// knownAgentList is the closed set of agent identifiers that may appear in a
+// trigger binding's `run` list — strictly the trigger-bindable agents: the 4R
+// review lenses, judgment-day, and all SDD phase identifiers. `review-refuter`
+// is deliberately absent: refuters are invoked by the orchestrator inside a
+// review's adversarial-verification step, never bound to a lifecycle event.
 var knownAgentList = []string{
 	// 4R review lenses
 	"review-risk",
 	"review-readability",
 	"review-reliability",
 	"review-resilience",
-	// Adversarial verification
+	// Adversarial verification at SDD phase boundaries (trigger-bindable)
 	"judgment-day",
 	// SDD phase identifiers
 	"sdd-explore",
@@ -111,9 +124,10 @@ func KnownAgents() []string {
 }
 
 // DefaultTriggerRuleSet returns a defensive copy of the built-in default
-// trigger rule set. The default bindings are tuned so everyday events cost
-// little (single advisory lens) and expensive lenses fire only when warranted
-// (hot paths / large diffs / high-stakes SDD phases).
+// trigger rule set. The default bindings encode the 4R v2 deterministic
+// triage: trivial diffs run no lens, standard diffs run exactly ONE lens
+// selected by the risk table, and the full 4R fan-out fires only when
+// warranted (hot paths / large diffs on pre-pr / high-stakes SDD phases).
 //
 // on-ci and on-schedule have no built-in default because the appropriate
 // agent/cadence is installation-specific; users opt in via override.
@@ -244,13 +258,14 @@ func ValidateTriggerRuleSet(set model.TriggerRuleSet) error {
 
 		// Token-budget prohibition (spec G): the full 4R fan-out on an everyday event
 		// (pre-commit or pre-push) with When.Always=true is actively prohibited.
-		// This keeps the everyday development loop lightweight (~1x cost).
+		// Everyday events stay in the trivial/standard tiers (at most ONE lens,
+		// ~1x cost); the full 4R fan-out belongs to pre-pr hot paths / large diffs.
 		if (b.On == model.EventPreCommit || b.On == model.EventPrePush) && w.Always {
 			if has4RFanOut(b.Run) {
 				return fmt.Errorf(
 					"binding[%d]: full 4R fan-out (review-risk, review-readability, review-reliability, review-resilience) "+
-						"on %q with When.Always=true is prohibited — everyday events must use a single advisory lens, "+
-						"not the full 4R fan-out (spec G token-budget rule)",
+						"on %q with When.Always=true is prohibited — everyday events run at most a single lens, "+
+						"never the full 4R fan-out (spec G token-budget rule)",
 					i, b.On,
 				)
 			}
@@ -263,10 +278,10 @@ func ValidateTriggerRuleSet(set model.TriggerRuleSet) error {
 // has4RFanOut reports whether run contains all four 4R review agents.
 func has4RFanOut(run []string) bool {
 	const (
-		agentRisk         = "review-risk"
-		agentReadability  = "review-readability"
-		agentReliability  = "review-reliability"
-		agentResilience   = "review-resilience"
+		agentRisk        = "review-risk"
+		agentReadability = "review-readability"
+		agentReliability = "review-reliability"
+		agentResilience  = "review-resilience"
 	)
 	found := 0
 	for _, r := range run {

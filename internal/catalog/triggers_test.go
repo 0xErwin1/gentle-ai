@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -210,6 +211,26 @@ func TestDefaultTriggerRuleSet_TokenShape(t *testing.T) {
 		for i, b := range rs.Bindings {
 			if b.Reason == "" {
 				t.Errorf("binding[%d] (on=%q) has empty Reason", i, b.On)
+			}
+		}
+	})
+
+	// (g2) 4R v2: reasons speak the deterministic-triage language, not the
+	// v1 advisory language. Everyday events route to exactly ONE lens.
+	t.Run("reasons-use-v2-triage-language", func(t *testing.T) {
+		for i, b := range rs.Bindings {
+			if strings.Contains(strings.ToLower(b.Reason), "advisory") {
+				t.Errorf("binding[%d] (on=%q) Reason still uses v1 advisory language: %q", i, b.On, b.Reason)
+			}
+		}
+		for _, event := range []model.TriggerEvent{model.EventPreCommit, model.EventPrePush} {
+			for _, b := range bindingsFor(event) {
+				if !strings.Contains(b.Reason, "ONE lens") {
+					t.Errorf("%q binding Reason must state the exactly-ONE-lens routing; got %q", event, b.Reason)
+				}
+				if !strings.Contains(strings.ToLower(b.Reason), "trivial") {
+					t.Errorf("%q binding Reason must mention the trivial-diff tier; got %q", event, b.Reason)
+				}
 			}
 		}
 	})
