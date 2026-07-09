@@ -641,6 +641,12 @@ func TestInjectOpenCodePreservesExistingOrchestratorPromptWhenRequested(t *testi
 		"use fresh context with the selected concrete review lens(es)",
 		"#### Review Lens Selection",
 		"`reviewer` is an intent, not a concrete installed agent",
+		"triage the diff deterministically",
+		"**Trivial diff**",
+		"zero executable code and zero configuration changes",
+		"unless the diff is trivial (tier 1)",
+		"run exactly ONE lens",
+		"Full 4R is reserved for tier 3",
 		"`review-readability`",
 		"`review-reliability`",
 		"`review-resilience`",
@@ -654,6 +660,10 @@ func TestInjectOpenCodePreservesExistingOrchestratorPromptWhenRequested(t *testi
 		"run a fresh-context review unless the diff is trivial docs/text",
 		"run a fresh audit before continuing",
 		"use fresh context for adversarial review of diffs",
+		"select concrete lenses by risk profile",
+		"Large PR, hot path, or >400 changed lines",
+		"small mechanical changes",
+		"trivial docs/text",
 	} {
 		if strings.Contains(text, stale) {
 			t.Fatalf("opencode.json retained stale generic review routing %q", stale)
@@ -701,6 +711,8 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"run a fresh-context review unless the diff is trivial docs/text",
 		"run a fresh audit before continuing",
 		"use fresh context for adversarial review of diffs",
+		"trivial docs/text",
+		"small mechanical changes",
 	} {
 		if strings.Contains(text, unwanted) {
 			t.Fatalf("opencode.json still contains stale preserved prompt reference %q", unwanted)
@@ -746,6 +758,12 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"run the concrete audit/review lens(es) selected by Review Lens Selection",
 		"use fresh context with the selected concrete review lens(es)",
 		"#### Review Lens Selection",
+		"triage the diff deterministically",
+		"**Trivial diff**",
+		"zero executable code and zero configuration changes",
+		"unless the diff is trivial (tier 1)",
+		"run exactly ONE lens",
+		"Full 4R is reserved for tier 3",
 		"`review-readability`",
 		"`review-reliability`",
 		"`review-resilience`",
@@ -754,6 +772,96 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing migrated preserved prompt reference %q", wanted)
 		}
+	}
+}
+
+// A preserved prompt that already carries the v1 delegation-hard-gates
+// migration block (with the v1 advisory lens-selection table) must be
+// upgraded in place to the v2 deterministic triage router.
+func TestInjectOpenCodeUpgradesV1DelegationLensTable(t *testing.T) {
+	home := t.TempDir()
+	mockNoPackageManager(t)
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(settings dir) error = %v", err)
+	}
+
+	const v1Block = "CUSTOM_PROMPT_HEAD\n\n" +
+		"<!-- gentle-ai:delegation-hard-gates-migration -->\n" +
+		"### Mandatory Delegation Triggers (Non-Skippable)\n\n" +
+		"These gates are non-skippable hard gates, not recommendations. They are TOTALMENTE obligatorio: do not skip them.\n\n" +
+		"Semantic guard: delegate means using OpenCode's native Task tool. Running local scripts is execution, not delegation.\n\n" +
+		"1. **4-file rule**: delegate.\n" +
+		"2. **Multi-file write rule**: a fresh review is required after delegated implementation, not a substitute for delegation.\n" +
+		"3. **PR rule**: run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial docs/text.\n" +
+		"4. **Incident rule**: stop and run the concrete audit/review lens(es) selected by Review Lens Selection before continuing.\n" +
+		"5. **Long-session rule**: pause and delegate.\n" +
+		"6. **Fresh review rule**: use fresh context with the selected concrete review lens(es) for adversarial review.\n\n" +
+		"#### Review Lens Selection\n\n" +
+		"`reviewer` is an intent, not a concrete installed agent. When a fresh review/audit is required, select concrete lenses by risk profile:\n\n" +
+		"| Risk signal | Review lens |\n" +
+		"| --- | --- |\n" +
+		"| Clear naming, structure, maintainability, or small refactors | `review-readability` |\n" +
+		"| Behavior, state, tests, determinism, or regressions | `review-reliability` |\n" +
+		"| Shell/process integration, partial failures, recovery, or degraded dependencies | `review-resilience` |\n" +
+		"| Security, permissions, data exposure/loss, architecture, or dependencies | `review-risk` |\n" +
+		"| Large PR, hot path, or >400 changed lines | full 4R: `review-risk`, `review-resilience`, `review-readability`, `review-reliability` |\n\n" +
+		"If multiple rows match, run the narrow set that covers the risk.\n" +
+		"<!-- /gentle-ai:delegation-hard-gates-migration -->\n"
+	seed := `{
+  "agent": {
+    "gentle-orchestrator": {
+      "mode": "primary",
+      "prompt": ` + strconv.Quote(v1Block) + `
+    }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
+
+	_, err := Inject(home, opencodeAdapter(), model.SDDModeMulti, InjectOptions{
+		PreserveOpenCodeOrchestratorPrompt: true,
+	})
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+
+	settingsBytes, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile(opencode.json) error = %v", err)
+	}
+	text := string(settingsBytes)
+
+	if !strings.Contains(text, "CUSTOM_PROMPT_HEAD") {
+		t.Fatal("opencode.json lost the user's custom prompt content outside the migration block")
+	}
+	for _, wanted := range []string{
+		"triage the diff deterministically",
+		"**Trivial diff**",
+		"zero executable code and zero configuration changes",
+		"unless the diff is trivial (tier 1)",
+		"run exactly ONE lens",
+		"Full 4R is reserved for tier 3",
+	} {
+		if !strings.Contains(text, wanted) {
+			t.Fatalf("opencode.json missing v2 triage fragment %q after migration", wanted)
+		}
+	}
+	for _, stale := range []string{
+		"select concrete lenses by risk profile",
+		"Large PR, hot path, or >400 changed lines",
+		"run the narrow set that covers the risk",
+		"small mechanical changes",
+		"trivial docs/text",
+	} {
+		if strings.Contains(text, stale) {
+			t.Fatalf("opencode.json retained stale v1 lens-selection text %q", stale)
+		}
+	}
+	if strings.Count(text, "#### Review Lens Selection") != 1 {
+		t.Fatalf("opencode.json must contain exactly one Review Lens Selection section; got %d", strings.Count(text, "#### Review Lens Selection"))
 	}
 }
 

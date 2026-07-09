@@ -1018,7 +1018,9 @@ func removeLegacyOpenCodePlainChatPreflightLines(prompt string) string {
 func ensurePreservedOpenCodeDelegationHardGates(prompt string) string {
 	prompt = strings.NewReplacer(
 		"run a fresh-context review unless the diff is trivial docs/text",
+		"run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1)",
 		"run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial docs/text",
+		"run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1)",
 		"stop and run a fresh audit before continuing",
 		"stop and run the concrete audit/review lens(es) selected by Review Lens Selection before continuing",
 		"use fresh context for adversarial review of diffs, conflicts, PR readiness, and incidents",
@@ -1038,14 +1040,18 @@ Do not pass these rules to child agents as permission to spawn more agents; chil
 
 1. **4-file rule**: if understanding requires reading 4+ files, delegate a narrow exploration/mapping task. If delegation tooling is unavailable, document the blocker and stop the exploration instead of reading everything inline.
 2. **Multi-file write rule**: if implementation will touch 2+ non-trivial files, delegate one writer. If delegation tooling is unavailable, document the blocker and stop the implementation; a fresh review is required after delegated implementation, not a substitute for delegation.
-3. **PR rule**: before commit, push, or PR after code changes, run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial docs/text.
+3. **PR rule**: before commit, push, or PR after code changes, run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1).
 4. **Incident rule**: after wrong ` + "`cwd`" + `, accidental repo/worktree mutation, merge recovery, confusing test command, or environment workaround, stop and run the concrete audit/review lens(es) selected by Review Lens Selection before continuing.
 5. **Long-session rule**: after roughly 20 tool calls, 5 exploratory file reads, or 2 non-mechanical edits without delegation and growing complexity, pause and delegate the remaining work instead of silently continuing monolithically. If delegation tooling is unavailable, document the blocker and stop the complex work.
 6. **Fresh review rule**: use fresh context with the selected concrete review lens(es) for adversarial review of diffs, conflicts, PR readiness, and incidents; use continuity/forked context only for implementation work that needs inherited state.
 
 #### Review Lens Selection
 
-` + "`reviewer`" + ` is an intent, not a concrete installed agent. When a fresh review/audit is required, select concrete lenses by risk profile:
+` + "`reviewer`" + ` is an intent, not a concrete installed agent. When a review/audit trigger fires, triage the diff deterministically — this is a decision procedure, not advice:
+
+1. **Trivial diff** (ONLY documentation, comments, formatting, or typo fixes in strings — zero executable code and zero configuration changes): run no lens. Any diff touching executable code or configuration is at least standard tier.
+2. **Standard diff**: run exactly ONE lens — the row in the table below that matches the dominant risk. If multiple rows match, pick the single highest-impact row; do not add lenses.
+3. **Hot path** (the diff touches auth/update/security/payments paths) **or >400 changed lines**: run the full 4R set — ` + "`review-risk`" + `, ` + "`review-resilience`" + `, ` + "`review-readability`" + `, ` + "`review-reliability`" + `.
 
 | Risk signal | Review lens |
 | --- | --- |
@@ -1053,9 +1059,8 @@ Do not pass these rules to child agents as permission to spawn more agents; chil
 | Behavior, state, tests, determinism, or regressions | ` + "`review-reliability`" + ` |
 | Shell/process integration, partial failures, recovery, or degraded dependencies | ` + "`review-resilience`" + ` |
 | Security, permissions, data exposure/loss, architecture, or dependencies | ` + "`review-risk`" + ` |
-| Large PR, hot path, or >400 changed lines | full 4R: ` + "`review-risk`" + `, ` + "`review-resilience`" + `, ` + "`review-readability`" + `, ` + "`review-reliability`" + ` |
 
-If multiple rows match, run the narrow set that covers the risk. Example: shell integration that mutates live state should use ` + "`review-reliability`" + ` plus ` + "`review-resilience`" + `, not ` + "`review-readability`" + ` by default.
+Full 4R is reserved for tier 3; a standard diff never fans out to multiple lenses.
 <!-- /gentle-ai:delegation-hard-gates-migration -->
 `
 
@@ -1076,6 +1081,15 @@ If multiple rows match, run the narrow set that covers the risk. Example: shell 
 		strings.Contains(prompt, "use fresh context with the selected concrete review lens(es)") &&
 		strings.Contains(prompt, "#### Review Lens Selection") &&
 		strings.Contains(prompt, "`reviewer` is an intent, not a concrete installed agent") &&
+		// 4R v2 deterministic-triage markers: their absence means the prompt
+		// carries the v1 advisory lens table (or a pre-objective-boundary v2
+		// block) and must be re-migrated.
+		strings.Contains(prompt, "triage the diff deterministically") &&
+		strings.Contains(prompt, "**Trivial diff**") &&
+		strings.Contains(prompt, "zero executable code and zero configuration changes") &&
+		strings.Contains(prompt, "unless the diff is trivial (tier 1)") &&
+		strings.Contains(prompt, "run exactly ONE lens") &&
+		strings.Contains(prompt, "Full 4R is reserved for tier 3") &&
 		strings.Contains(prompt, "`review-readability`") &&
 		strings.Contains(prompt, "`review-reliability`") &&
 		strings.Contains(prompt, "`review-resilience`") &&
