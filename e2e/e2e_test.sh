@@ -305,9 +305,10 @@ test_dry_run_full_preset_persona_before_sdd() {
 }
 
 test_preset_no_legacy_theme_in_any_preset() {
-    log_test "Only Dev Stack + Polish includes the OpenCode theme component"
+    log_test "Presets exclude the unsafe generic theme component"
 
-    for preset in minimal ecosystem-only; do
+    local full_order_str=""
+    for preset in minimal ecosystem-only full-gentleman; do
         output=$($BINARY install --preset "$preset" --agent claude-code --dry-run 2>&1) || true
         local components_line
         components_line=$(echo "$output" | grep "Components order:")
@@ -315,23 +316,22 @@ test_preset_no_legacy_theme_in_any_preset() {
         order_str=${components_line#*Components order:}
         order_str=${order_str# }
         if echo "$order_str" | tr ',' '\n' | grep -qx "theme"; then
-            log_fail "Preset '$preset' unexpectedly includes OpenCode theme component"
+            log_fail "Preset '$preset' unexpectedly includes unsafe generic theme component"
         else
-            log_pass "Preset '$preset' does NOT include OpenCode theme component"
+            log_pass "Preset '$preset' excludes unsafe generic theme component"
+        fi
+        if [ "$preset" = "full-gentleman" ]; then
+            full_order_str=$order_str
         fi
     done
 
-    output=$($BINARY install --preset full-gentleman --agent claude-code --dry-run 2>&1) || true
-    local components_line
-    components_line=$(echo "$output" | grep "Components order:")
-    local order_str
-    order_str=${components_line#*Components order:}
-    order_str=${order_str# }
-    if echo "$order_str" | tr ',' '\n' | grep -qx "theme"; then
-        log_pass "Preset 'full-gentleman' includes OpenCode theme component"
-    else
-        log_fail "Preset 'full-gentleman' must include OpenCode theme component"
-    fi
+    for component in claude-theme opencode-gentle-logo; do
+        if echo "$full_order_str" | tr ',' '\n' | grep -qx "$component"; then
+            log_pass "Preset 'full-gentleman' includes safe visual component '$component'"
+        else
+            log_fail "Preset 'full-gentleman' must include safe visual component '$component'"
+        fi
+    done
 }
 
 test_preset_custom_no_components() {
