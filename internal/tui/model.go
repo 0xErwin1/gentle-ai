@@ -1222,9 +1222,9 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			if assignments != nil {
 				m.Selection.CodexModelAssignments = assignments
-				// Derive carril model assignments from the selected preset (all
-				// current presets use canonical subscription models).
-				presetCarrilModels := model.DefaultCarrilModels()
+				// Derive carril model assignments from the selected preset so each
+				// preset writes the same model matrix the UI displayed.
+				presetCarrilModels := model.CodexCarrilModelsForPreset(string(m.CodexModelPicker.Preset))
 				m.Selection.CodexCarrilModelAssignments = presetCarrilModels
 
 				// When the user confirmed Custom per-phase assignments, also

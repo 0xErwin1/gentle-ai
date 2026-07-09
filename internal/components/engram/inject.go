@@ -176,7 +176,7 @@ type InjectOptions struct {
 
 	// CodexCarrilModelAssignments holds the resolved carril→model-id map used
 	// when writing SDD profile .config.toml files. nil/empty = use canonical
-	// defaults (sdd-strong/sdd-mid=gpt-5.5, sdd-cheap=gpt-5.4-mini).
+	// defaults (sdd-strong=gpt-5.6-sol, sdd-mid=gpt-5.6-terra, sdd-cheap=gpt-5.6-luna).
 	CodexCarrilModelAssignments map[string]string
 
 	// CodexModelAssignments holds the resolved phase→effort map used to derive

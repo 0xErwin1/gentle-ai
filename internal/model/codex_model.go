@@ -5,22 +5,27 @@ import (
 	"strings"
 )
 
-// codexAvailableModels is the curated list of Codex model IDs available for
-// per-phase custom assignments. Order is intentional: newest/most-capable first.
-var codexAvailableModels = []string{
+// codexModelCatalog is Gentle AI's curated selectable Codex model catalog for
+// per-phase custom assignments. It is a UI/configuration catalog, not a runtime
+// availability probe; the Codex CLI remains the source of truth at execution
+// time. Order is intentional: newest/most-capable first.
+var codexModelCatalog = []string{
+	"gpt-5.6-sol",
+	"gpt-5.6-terra",
+	"gpt-5.6-luna",
 	"gpt-5.5",
 	"gpt-5.4",
 	"gpt-5.4-mini",
-	"gpt-5.2-codex",
 	"gpt-5.3-codex",
+	"gpt-5.2-codex",
 }
 
-// CodexAvailableModels returns the curated list of Codex model IDs that can be
-// assigned per-phase in the Custom picker. The slice is a copy — mutations do
-// not affect the canonical list.
+// CodexAvailableModels returns Gentle AI's curated selectable Codex model
+// catalog for per-phase Custom picker assignments. The slice is a copy —
+// mutations do not affect the canonical catalog.
 func CodexAvailableModels() []string {
-	out := make([]string, len(codexAvailableModels))
-	copy(out, codexAvailableModels)
+	out := make([]string, len(codexModelCatalog))
+	copy(out, codexModelCatalog)
 	return out
 }
 
@@ -62,79 +67,88 @@ func (e CodexEffort) Valid() bool {
 	}
 }
 
-// CodexModelPresetRecommended returns the Recommended (ChatGPT Pro $100/mo) preset.
-// Carril-aligned effort: Razonamiento=high, Código=medium, Liviano=low.
-// Every phase within a carril carries the same effort so that maxEffort over the
-// carril's phases yields exactly the carril's intended tier.
+type CodexCarrilDefault struct {
+	Model  string
+	Effort CodexEffort
+}
+
+type CodexPresetKey string
+
+const (
+	CodexPresetLowCost     CodexPresetKey = "low-cost"
+	CodexPresetRecommended CodexPresetKey = "recommended"
+	CodexPresetPowerful    CodexPresetKey = "powerful"
+)
+
+var codexPresetMatrix = map[CodexPresetKey]map[string]CodexCarrilDefault{
+	CodexPresetLowCost: {
+		"sdd-strong": {Model: "gpt-5.6-terra", Effort: CodexEffortMedium},
+		"sdd-mid":    {Model: "gpt-5.6-terra", Effort: CodexEffortMedium},
+		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortLow},
+	},
+	CodexPresetRecommended: {
+		"sdd-strong": {Model: "gpt-5.6-sol", Effort: CodexEffortHigh},
+		"sdd-mid":    {Model: "gpt-5.6-terra", Effort: CodexEffortMedium},
+		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortLow},
+	},
+	CodexPresetPowerful: {
+		"sdd-strong": {Model: "gpt-5.6-sol", Effort: CodexEffortXHigh},
+		"sdd-mid":    {Model: "gpt-5.6-sol", Effort: CodexEffortHigh},
+		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortLow},
+	},
+}
+
+// CodexPresetCarrilDefaults returns a defensive copy of the selected preset's
+// carril defaults. The string boundary preserves compatibility with persisted
+// state; unknown keys intentionally fall back to Recommended.
+func CodexPresetCarrilDefaults(preset string) map[string]CodexCarrilDefault {
+	defaults, ok := codexPresetMatrix[CodexPresetKey(preset)]
+	if !ok {
+		defaults = codexPresetMatrix[CodexPresetRecommended]
+	}
+	out := make(map[string]CodexCarrilDefault, len(defaults))
+	for carril, value := range defaults {
+		out[carril] = value
+	}
+	return out
+}
+
+// CodexCarrilModelsForPreset returns the model portion of a preset's carril
+// defaults. Unknown persisted keys inherit the Recommended fallback policy.
+func CodexCarrilModelsForPreset(preset string) map[string]string {
+	defaults := CodexPresetCarrilDefaults(preset)
+	out := make(map[string]string, len(defaults))
+	for carril, value := range defaults {
+		out[carril] = value.Model
+	}
+	return out
+}
+
+func codexPresetEfforts(preset string) map[string]CodexEffort {
+	defaults := CodexPresetCarrilDefaults(preset)
+	out := make(map[string]CodexEffort, 13)
+	for _, tier := range codexTierGroups {
+		effort := defaults[tier.Profile].Effort
+		for _, phase := range tier.Phases {
+			out[phase] = effort
+		}
+	}
+	return out
+}
+
+// CodexModelPresetRecommended returns the Recommended preset.
 func CodexModelPresetRecommended() map[string]CodexEffort {
-	return map[string]CodexEffort{
-		// Razonamiento (sdd-strong): high
-		"sdd-propose": CodexEffortHigh,
-		"sdd-design":  CodexEffortHigh,
-		"sdd-verify":  CodexEffortHigh,
-		"jd-judge-a":  CodexEffortHigh,
-		"jd-judge-b":  CodexEffortHigh,
-		"default":     CodexEffortHigh,
-		// Código (sdd-mid): medium
-		"sdd-apply":    CodexEffortMedium,
-		"jd-fix-agent": CodexEffortMedium,
-		// Liviano (sdd-cheap): low
-		"sdd-explore": CodexEffortLow,
-		"sdd-spec":    CodexEffortLow,
-		"sdd-tasks":   CodexEffortLow,
-		"sdd-archive": CodexEffortLow,
-		"sdd-onboard": CodexEffortLow,
-	}
+	return codexPresetEfforts(string(CodexPresetRecommended))
 }
 
-// CodexModelPresetPowerful returns the Powerful (ChatGPT Pro $200/mo) preset.
-// Carril-aligned effort: Razonamiento=xhigh, Código=high, Liviano=low.
-// Every phase within a carril carries the same effort so that maxEffort over the
-// carril's phases yields exactly the carril's intended tier.
+// CodexModelPresetPowerful returns the Powerful preset.
 func CodexModelPresetPowerful() map[string]CodexEffort {
-	return map[string]CodexEffort{
-		// Razonamiento (sdd-strong): xhigh
-		"sdd-propose": CodexEffortXHigh,
-		"sdd-design":  CodexEffortXHigh,
-		"sdd-verify":  CodexEffortXHigh,
-		"jd-judge-a":  CodexEffortXHigh,
-		"jd-judge-b":  CodexEffortXHigh,
-		"default":     CodexEffortXHigh,
-		// Código (sdd-mid): high
-		"sdd-apply":    CodexEffortHigh,
-		"jd-fix-agent": CodexEffortHigh,
-		// Liviano (sdd-cheap): low
-		"sdd-explore": CodexEffortLow,
-		"sdd-spec":    CodexEffortLow,
-		"sdd-tasks":   CodexEffortLow,
-		"sdd-archive": CodexEffortLow,
-		"sdd-onboard": CodexEffortLow,
-	}
+	return codexPresetEfforts(string(CodexPresetPowerful))
 }
 
-// CodexModelPresetLowCost returns the Low-cost (ChatGPT Plus $20/mo) preset.
-// Carril-aligned effort: Razonamiento=medium, Código=medium, Liviano=low.
-// Every phase within a carril carries the same effort so that maxEffort over the
-// carril's phases yields exactly the carril's intended tier.
+// CodexModelPresetLowCost returns the Low-cost preset.
 func CodexModelPresetLowCost() map[string]CodexEffort {
-	return map[string]CodexEffort{
-		// Razonamiento (sdd-strong): medium
-		"sdd-propose": CodexEffortMedium,
-		"sdd-design":  CodexEffortMedium,
-		"sdd-verify":  CodexEffortMedium,
-		"jd-judge-a":  CodexEffortMedium,
-		"jd-judge-b":  CodexEffortMedium,
-		"default":     CodexEffortMedium,
-		// Código (sdd-mid): medium
-		"sdd-apply":    CodexEffortMedium,
-		"jd-fix-agent": CodexEffortMedium,
-		// Liviano (sdd-cheap): low
-		"sdd-explore": CodexEffortLow,
-		"sdd-spec":    CodexEffortLow,
-		"sdd-tasks":   CodexEffortLow,
-		"sdd-archive": CodexEffortLow,
-		"sdd-onboard": CodexEffortLow,
-	}
+	return codexPresetEfforts(string(CodexPresetLowCost))
 }
 
 // CodexTierGroup defines one CLI profile tier: the profile filename (without
@@ -171,20 +185,20 @@ type CodexTierGroup struct {
 var codexTierGroups = []CodexTierGroup{
 	{
 		Profile:       "sdd-strong",
-		Model:         "gpt-5.5",
-		DefaultEffort: CodexEffortHigh,
+		Model:         codexPresetMatrix[CodexPresetRecommended]["sdd-strong"].Model,
+		DefaultEffort: codexPresetMatrix[CodexPresetRecommended]["sdd-strong"].Effort,
 		Phases:        []string{"sdd-propose", "sdd-design", "sdd-verify", "jd-judge-a", "jd-judge-b", "default"},
 	},
 	{
 		Profile:       "sdd-mid",
-		Model:         "gpt-5.5",
-		DefaultEffort: CodexEffortMedium,
+		Model:         codexPresetMatrix[CodexPresetRecommended]["sdd-mid"].Model,
+		DefaultEffort: codexPresetMatrix[CodexPresetRecommended]["sdd-mid"].Effort,
 		Phases:        []string{"sdd-apply", "jd-fix-agent"},
 	},
 	{
 		Profile:       "sdd-cheap",
-		Model:         "gpt-5.4-mini",
-		DefaultEffort: CodexEffortLow,
+		Model:         codexPresetMatrix[CodexPresetRecommended]["sdd-cheap"].Model,
+		DefaultEffort: codexPresetMatrix[CodexPresetRecommended]["sdd-cheap"].Effort,
 		Phases:        []string{"sdd-explore", "sdd-spec", "sdd-tasks", "sdd-archive", "sdd-onboard"},
 	},
 }
@@ -292,7 +306,7 @@ func phaseToCarrilModel(phase string, carrilModels map[string]string) string {
 			}
 		}
 	}
-	return "gpt-5.5" // ultimate fallback
+	return codexPresetMatrix[CodexPresetRecommended]["sdd-strong"].Model // ultimate fallback
 }
 
 // RenderCodexPhaseEffortsByPhase renders a per-phase Markdown table for the
@@ -300,16 +314,20 @@ func phaseToCarrilModel(phase string, carrilModels map[string]string) string {
 // active. Each row shows: phase | model | reasoning_effort.
 //
 // phaseModels maps phase names to custom model IDs. Phases not present in
-// phaseModels fall back to the carril default model. efforts maps phase names to
-// CodexEffort values (typically from a preset + user overrides). When efforts is
-// nil, CodexModelPresetRecommended is used.
+// phaseModels fall back to carrilModels, preserving the selected or explicitly
+// saved carril assignments. efforts maps phase names to CodexEffort values
+// (typically from a preset + user overrides). When efforts is nil,
+// CodexModelPresetRecommended is used. When carrilModels is nil, the canonical
+// Recommended carril models are used.
 //
 // The output is deterministic: phases are always rendered in codexPhaseOrder.
-func RenderCodexPhaseEffortsByPhase(phaseModels map[string]string, efforts map[string]CodexEffort) string {
+func RenderCodexPhaseEffortsByPhase(phaseModels map[string]string, efforts map[string]CodexEffort, carrilModels map[string]string) string {
 	if len(efforts) == 0 {
 		efforts = CodexModelPresetRecommended()
 	}
-	carrilModels := DefaultCarrilModels()
+	if len(carrilModels) == 0 {
+		carrilModels = DefaultCarrilModels()
+	}
 
 	var sb strings.Builder
 	sb.WriteString("| Phase | Model | `reasoning_effort` |\n")

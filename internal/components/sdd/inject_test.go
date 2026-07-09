@@ -6069,11 +6069,18 @@ func TestInject_CodexPerPhaseModelAssignments_InjectsPerPhaseTable(t *testing.T)
 	home := t.TempDir()
 	adapter := codexInjectAdapter()
 
-	// Custom per-phase: sdd-propose gets gpt-5.4.
+	// Custom per-phase: sdd-propose gets gpt-5.4, while unassigned phases
+	// preserve the selected/saved carril models instead of reverting to the
+	// Recommended preset.
 	opts := InjectOptions{
 		CodexModelAssignments: model.CodexModelPresetRecommended(),
 		CodexPhaseModelAssignments: map[string]string{
 			"sdd-propose": "gpt-5.4",
+		},
+		CodexCarrilModelAssignments: map[string]string{
+			"sdd-strong": "gpt-5.4-mini",
+			"sdd-mid":    "gpt-5.5",
+			"sdd-cheap":  "gpt-5.3-codex",
 		},
 	}
 
@@ -6104,7 +6111,20 @@ func TestInject_CodexPerPhaseModelAssignments_InjectsPerPhaseTable(t *testing.T)
 	if !strings.Contains(text, wantRow) {
 		t.Errorf("AGENTS.md missing expected sdd-propose row %q:\n%s", wantRow, text)
 	}
-	// No unresolved placeholders.
+	// An unassigned strong phase must preserve the supplied carril model.
+	wantFallbackRow := "| `sdd-design` | `gpt-5.4-mini` | `high` |"
+	if !strings.Contains(text, wantFallbackRow) {
+		t.Errorf("AGENTS.md missing preserved carril fallback row %q:\n%s", wantFallbackRow, text)
+	}
+	// The delegation example must refer readers back to the generated table,
+	// not hardcode values that are wrong for some presets.
+	if strings.Contains(text, `model="gpt-5.6-sol", reasoning_effort="xhigh"`) {
+		t.Errorf("AGENTS.md contains a hardcoded delegation example that can contradict the generated table:\n%s", text)
+	}
+	if !strings.Contains(text, `model="<assigned-model>"`) || !strings.Contains(text, `reasoning_effort="<assigned-effort>"`) {
+		t.Errorf("AGENTS.md delegation example must use assigned-value placeholders:\n%s", text)
+	}
+	// No unresolved template placeholders.
 	if strings.Contains(text, "{{") {
 		t.Errorf("AGENTS.md contains unresolved placeholder '{{' after Inject:\n%s", text)
 	}
@@ -6248,7 +6268,7 @@ func TestInjectCodexWithCarrilModels(t *testing.T) {
 }
 
 // TestInjectCodexNilCarrilModels verifies that nil CodexCarrilModelAssignments
-// causes the render to use canonical defaults (gpt-5.5 / gpt-5.4-mini).
+// causes the render to use canonical GPT-5.6 defaults.
 func TestInjectCodexNilCarrilModels(t *testing.T) {
 	home := t.TempDir()
 	adapter := codexInjectAdapter()
@@ -6270,8 +6290,10 @@ func TestInjectCodexNilCarrilModels(t *testing.T) {
 	if !strings.Contains(text, "Model") {
 		t.Error("AGENTS.md missing Model column — nil carrilModels should fall back to defaults")
 	}
-	if !strings.Contains(text, "gpt-5.4-mini") {
-		t.Error("AGENTS.md missing gpt-5.4-mini — nil carrilModels should show sdd-cheap default")
+	for _, want := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("AGENTS.md missing %s — nil carrilModels should show GPT-5.6 defaults", want)
+		}
 	}
 }
 

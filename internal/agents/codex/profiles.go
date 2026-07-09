@@ -15,7 +15,7 @@ import (
 // about the user's selection) and WriteCodexProfiles (which knows about TOML).
 type ProfileAssignment struct {
 	Profile         string // e.g. "sdd-strong"
-	Model           string // e.g. "gpt-5.5"
+	Model           string // e.g. "gpt-5.6-sol"
 	ReasoningEffort string // e.g. "high"
 }
 
@@ -70,9 +70,9 @@ func SddProfilePaths(codexHomeDir string) []string {
 //
 // When assignments is nil or empty, canonical Recommended defaults are used
 // (derived from model.CodexTierGroups()):
-//   - sdd-strong: model=gpt-5.5, model_reasoning_effort=high
-//   - sdd-mid:    model=gpt-5.5, model_reasoning_effort=medium
-//   - sdd-cheap:  model=gpt-5.4-mini, model_reasoning_effort=low
+//   - sdd-strong: model=gpt-5.6-sol, model_reasoning_effort=high
+//   - sdd-mid:    model=gpt-5.6-terra, model_reasoning_effort=medium
+//   - sdd-cheap:  model=gpt-5.6-luna, model_reasoning_effort=low
 //
 // Profile files are written idempotently using UpsertTopLevelTOMLString +
 // WriteFileAtomic — re-running this function when files already contain the

@@ -17,15 +17,15 @@ type CodexModelPreset string
 const (
 	// CodexPresetLowCost targets ChatGPT Plus ($20/mo) — minimal effort to
 	// stay within the plan's tight usage limits.
-	CodexPresetLowCost CodexModelPreset = "low-cost"
+	CodexPresetLowCost CodexModelPreset = CodexModelPreset(model.CodexPresetLowCost)
 
 	// CodexPresetRecommended targets ChatGPT Pro ($100/mo) — balanced effort
 	// for most SDD work. This is the default preset.
-	CodexPresetRecommended CodexModelPreset = "recommended"
+	CodexPresetRecommended CodexModelPreset = CodexModelPreset(model.CodexPresetRecommended)
 
 	// CodexPresetPowerful targets ChatGPT Pro ($200/mo) — xhigh effort for
 	// architecture-heavy and review-heavy phases.
-	CodexPresetPowerful CodexModelPreset = "powerful"
+	CodexPresetPowerful CodexModelPreset = CodexModelPreset(model.CodexPresetPowerful)
 )
 
 var codexPresetOrder = []CodexModelPreset{
@@ -35,9 +35,9 @@ var codexPresetOrder = []CodexModelPreset{
 }
 
 var codexPresetDescriptions = map[CodexModelPreset]string{
-	CodexPresetLowCost:     "Minimal effort — preserves tight ChatGPT Plus ($20/mo) usage limits",
-	CodexPresetRecommended: "Balanced effort — high on key phases, low on lightweight work (Pro $100/mo)",
-	CodexPresetPowerful:    "Maximum effort — xhigh on architecture, design, and verification (Pro $200/mo)",
+	CodexPresetLowCost:     "Lowest-cost GPT-5.6 mix — Terra for work, Luna for lightweight phases",
+	CodexPresetRecommended: "Balanced GPT-5.6 mix — Sol for reasoning, Terra for code, Luna for light work",
+	CodexPresetPowerful:    "Maximum GPT-5.6 mix — Sol for strong and code phases, Luna for light work",
 }
 
 var codexPresetConstructors = map[CodexModelPreset]func() map[string]model.CodexEffort{
@@ -546,18 +546,32 @@ func codexModelSearchDisplay(query string) string {
 // Labels are self-describing: they include the model id and effort tier per
 // carril so the user can see what will be written to profile files.
 //
-// Format: "<Plan> — Razonamiento gpt-5.5/<effort> · Código gpt-5.5/<effort> · Liviano gpt-5.4-mini/low"
+// Format: "<Plan> — Razonamiento <model>/<effort> · Código <model>/<effort> · Liviano <model>/<effort>"
 func CodexPresetLabel(preset CodexModelPreset) string {
+	defaults := model.CodexPresetCarrilDefaults(string(preset))
+	strong := defaults["sdd-strong"]
+	mid := defaults["sdd-mid"]
+	cheap := defaults["sdd-cheap"]
+
+	plan := string(preset)
 	switch preset {
 	case CodexPresetLowCost:
-		return "Plus $20 — Razonamiento gpt-5.5/medium · Código gpt-5.5/medium · Liviano gpt-5.4-mini/low"
+		plan = "Low-cost"
 	case CodexPresetRecommended:
-		return "Pro $100 — Razonamiento gpt-5.5/high · Código gpt-5.5/medium · Liviano gpt-5.4-mini/low"
+		plan = "Recommended"
 	case CodexPresetPowerful:
-		return "Pro $200 — Razonamiento gpt-5.5/xhigh · Código gpt-5.5/high · Liviano gpt-5.4-mini/low"
-	default:
-		return string(preset)
+		plan = "Powerful"
 	}
+
+	return fmt.Sprintf("%s — Razonamiento %s/%s · Código %s/%s · Liviano %s/%s",
+		plan,
+		strong.Model,
+		strong.Effort,
+		mid.Model,
+		mid.Effort,
+		cheap.Model,
+		cheap.Effort,
+	)
 }
 
 // CodexPresetDescription returns a one-line description for a preset.
