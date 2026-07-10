@@ -289,3 +289,74 @@ Changed paths are repository-relative. Intended untracked paths: `internal/compo
 | Focused GREEN | `go test -count=1 ./internal/agents/pi ./internal/components/communitytool ./internal/components/uninstall ./internal/cli -run 'Test(CodeGraphPathsResolveConfiguredAgentDirectory|PiCodeGraph(UninstallRollsBackWhenManifestRemovalFails|UninstallFailsClosedOnChildReadFailure|ReconcileJoinsJournalRestoreFailure|RejectsUnmatchedManagedMarkerWithoutChangingUserContent|FailsClosedForBrokenProjectMCPOverride)|BackupTargetsSnapshotPiManifestOverlayDuringDeselection|ExecutePlanPiUninstall)' -v` | Exit 0; 10 focused runtime and contract tests passed. |
 | Runtime harness | `Service.executePlan` with `t.TempDir()` Pi homes | Exit 0; actual uninstall hook preserves user content and now receives transactional Pi cleanup semantics. |
 | Rollback boundary | Pi adapter effective-MCP discovery, reconciler journal/renderer, install snapshot enumeration, and their tests | Reverting these paths removes only round-1 resilience handling; no unrelated agent integration is affected. |
+
+## Focused Remediation — Pre-Push Critical Round 1 (R4-008..R4-011)
+
+| Finding | RED | GREEN |
+| --- | --- | --- |
+| R4-008 | Project-local effective MCP configuration was coupled to `filepath.Dir(mcpPath)` in the runtime probe; the project override contract failed. | `TestCodeGraphPathsKeepsAgentDirectoryWhenProjectMCPOverrides` passes: project `.mcp.json` is effective while `$PI_CODING_AGENT_DIR` remains the adapter directory; reconciliation uses that actual agent directory for override probing. |
+| R4-009 | Pipeline rollback had no rollback implementation on the late Pi reconciliation step, leaving manifest-owned dynamic overlays outside the original static snapshot. | `TestPiCodeGraphReconcileStepRollbackRemovesDynamicPackageOverlay` passes: manifest-owned package overlay is removed by a later pipeline rollback. |
+| R4-010 | Completion payloads discarded Pi CodeGraph `ManualActions`, so deselection drift was invisible. | CLI and TUI render tests pass and display the explicit manual-action heading and drift detail. |
+| R4-011 | Adapter operability was inferred from a file plus direct CodeGraph stdio handshake. | The injected Pi runtime seam runs `pi --mcp-config <effective-path> --print /mcp status` with `PI_CODING_AGENT_DIR`; unavailable/unloadable runtime fails closed before schema validation. |
+
+### Strict TDD Cycle Evidence — R4-008..R4-011
+
+| Task | Test file | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| R4-008 | `internal/agents/pi/adapter_test.go` | Unit | Focused Pi/community-tool/CLI/TUI packages passed before changes | New project-override assertion failed: effective path fell back to agent `mcp.json`. | `TestCodeGraphPathsKeepsAgentDirectoryWhenProjectMCPOverrides` exit 0. | Custom agent directory + project `.mcp.json` effective path. | Kept path selection and runtime directory independent. |
+| R4-009 | `internal/cli/run_community_tool_test.go` | Integration fixture | Focused packages passed before changes | No `Rollback()` behavior existed for Pi reconcile. | `TestPiCodeGraphReconcileStepRollbackRemovesDynamicPackageOverlay` exit 0. | Existing deselection snapshot and transaction tests remain green. | Minimal manifest-scoped rollback only. |
+| R4-010 | `internal/cli/run_community_tool_test.go`, `internal/tui/model_test.go`, `internal/tui/screens/complete_test.go` | CLI/TUI rendering | Focused packages passed before changes | Completion payload had no manual-action field (screen RED compile failure). | CLI and TUI focused rendering tests exit 0. | CLI formatter, completion screen, and model propagation each assert drift text. | Shared completion renderer helper avoids duplicated output. |
+| R4-011 | `internal/components/communitytool/pi_codegraph_test.go` | Runtime seam | Focused packages passed before changes | Runtime seam identifier was absent (RED compile failure). | `TestPiCodeGraphProbeUsesAgentRuntimeForProjectMCPOverride` exit 0. | Adapter unavailable/init failure remains fail-closed in existing probe tests. | Process seam remains injectable and deterministic. |
+
+## Work Unit Evidence — Pre-Push Critical Round 1
+
+| Evidence | Command / boundary | Exact result |
+| --- | --- | --- |
+| Focused GREEN | `go test -count=1 ./internal/agents/pi ./internal/components/communitytool ./internal/cli ./internal/tui/screens ./internal/tui ./internal/app` | Exit 0; all six focused packages passed, including project override, runtime seam, rollback, CLI, TUI model, and completion renderer coverage. |
+| Uncached full suite | `go test -count=1 ./...` | Exit 0; full repository suite passed uncached. |
+| Static/format/diff | `go vet ./... && test -z "$(gofmt -l $(git diff --name-only -- '*.go'))" && git diff --check` | Exit 0; vet, formatter check, and whitespace diff check passed. |
+| Runtime harness | Injected `piCodeGraphAdapterRuntimeProbe` with temporary Pi home, custom `$PI_CODING_AGENT_DIR`, and project `.mcp.json` | Exit 0; production probe receives the actual adapter directory and effective project MCP path; production fails closed if the adapter extension or Pi runtime cannot load. |
+| Rollback boundary | `piCodeGraphReconcileStep.Rollback` + manifest-owned files | Independent revert removes only dynamic Pi CodeGraph overlay cleanup, preserving unrelated agent install rollback behavior. |
+
+### Scoped Re-review Request
+
+FIX-DIFF scope: `internal/agents/pi/adapter_test.go`, `internal/components/communitytool/pi_codegraph.go`, `internal/components/communitytool/pi_codegraph_test.go`, `internal/cli/run.go`, `internal/cli/run_community_tool_test.go`, `internal/app/app.go`, `internal/pipeline/result.go`, `internal/tui/model.go`, `internal/tui/model_test.go`, `internal/tui/screens/complete.go`, `internal/tui/screens/complete_test.go`, and the two review ledgers. Re-review only R4-008, R4-009, R4-010, and R4-011; no other findings were changed.
+
+## Focused Remediation — Pre-Push Critical Round 2 (R4-011)
+
+| Finding | RED | GREEN |
+| --- | --- | --- |
+| R4-011 | The previous runtime seam treated Pi process exit `0` as initialized. On observed Pi `0.80.6`, `--mcp-config <missing> --print "/mcp status"` exited `0` with no output, and JSON mode with a local config emitted only a session event. | `TestPiCodeGraphAdapterRuntimeFailsClosedWithoutPositiveCapabilityEvidence` first failed to compile because the runner seam did not expose combined output; it now passes, rejecting exit-0 config failure, adapter-load failure, unknown `/mcp`, and session-only output while accepting `codegraph: connected`. |
+
+### Strict TDD Cycle Evidence — R4-011 Round 2
+
+| Task | Test file | Layer | RED | GREEN | TRIANGULATE | REFACTOR |
+| --- | --- | --- | --- | --- | --- | --- |
+| R4-011 | `internal/components/communitytool/pi_codegraph_test.go` | Production subprocess seam | `go test -count=1 ./internal/components/communitytool -run TestPiCodeGraphAdapterRuntimeFailsClosedWithoutPositiveCapabilityEvidence -v` — exit 1, undefined injectable runner and `slices` before the output-capturing seam existed. | Same command — exit 0; four exit-0 failure outputs reject and explicit `codegraph: connected` accepts. | `TestPiCodeGraphProbeUsesAgentRuntimeForProjectMCPOverride` verifies the runner receives the effective MCP config and configured `PI_CODING_AGENT_DIR`; existing direct CodeGraph `tools/list` validation remains unchanged. | Small runner interface and output validator; direct MCP handshake was intentionally retained. |
+
+## Work Unit Evidence — R4-011 Round 2
+
+| Evidence | Command / boundary | Exact result |
+| --- | --- | --- |
+| Focused GREEN | `go test -count=1 ./internal/components/communitytool -run 'TestPiCodeGraph(AdapterRuntimeFailsClosedWithoutPositiveCapabilityEvidence|ProbeUsesAgentRuntimeForProjectMCPOverride)' -v` | Exit 0; 2 top-level tests and 5 table scenarios passed. |
+| Live-safe runtime observation | `pi --version`; `PI_OFFLINE=1 pi --mcp-config "$HOME/.pi/agent/mcp.json" --mode json --no-session --offline --print "/mcp status"`; `pi --mcp-config <nonexistent> --print "/mcp status"` | Pi `0.80.6`; JSON mode emitted only a `{"type":"session",...}` record and the missing config exited 0 with no output. Neither is accepted as capability evidence. |
+| Runtime harness | Injected `piCodeGraphAdapterRuntimeRunner` | Deterministically captures the production command, args, `PI_CODING_AGENT_DIR`, and combined output; verifies exit-0 failure text is rejected and genuine named server evidence accepted. |
+| Rollback boundary | `internal/components/communitytool/pi_codegraph.go`, `internal/components/communitytool/pi_codegraph_test.go`, and this evidence | Revert restores only the Pi runtime output-health guard; direct CodeGraph MCP tools/list validation is not removed. |
+
+FIX-DIFF scope (R4-011 Round 2 only): `internal/components/communitytool/pi_codegraph.go`, `internal/components/communitytool/pi_codegraph_test.go`, `openspec/changes/pi-optional-codegraph-integration/design.md`, `openspec/changes/pi-optional-codegraph-integration/apply-progress.md`, `openspec/changes/pi-optional-codegraph-integration/review-ledger.md`, and `openspec/changes/pi-optional-codegraph-integration/reviews/post-apply/review-ledger.md`.
+
+## Focused Correction — R4-011 Exact Adapter Status Parsing (2026-07-10)
+
+| Task | Test file | Layer | Safety Net | RED | GREEN | TRIANGULATE | REFACTOR |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| R4-011 | `internal/components/communitytool/pi_codegraph_test.go` | Production subprocess seam | `go test -count=1 ./internal/components/communitytool -run 'TestPiCodeGraph(AdapterRuntimeFailsClosedWithoutPositiveCapabilityEvidence|ProbeUsesAgentRuntimeForProjectMCPOverride)' -v` — exit 0 before adversarial cases | Added negated, malformed, unrelated, and duplicate CodeGraph status cases; `go test -count=1 ./internal/components/communitytool -run TestPiCodeGraphAdapterRuntimeFailsClosedWithoutPositiveCapabilityEvidence -v` — exit 1 because substring matching accepted `not ready`, `not running`, `unloaded`, `inactive`, `broken`, malformed, and ambiguous states | Same command — exit 0; all 14 table scenarios pass | Explicit `connected` and `ready` states pass; all specified negative states, unrelated output, and duplicate CodeGraph records fail closed | Replaced positive substring matching with one exact parsed `codegraph: <state>` record and an allowlist of exact healthy states; no lifecycle or MCP handshake changes |
+
+### Work Unit Evidence — R4-011 Exact Adapter Status Parsing
+
+| Evidence | Command / boundary | Exact result |
+| --- | --- | --- |
+| Focused GREEN | `go test -count=1 ./internal/components/communitytool -run TestPiCodeGraphAdapterRuntimeFailsClosedWithoutPositiveCapabilityEvidence -v` | Exit 0; 14 table scenarios passed. |
+| Runtime harness | Injected `piCodeGraphAdapterRuntimeRunner` exercising `probePiCodeGraphAdapterRuntime` | Exit 0; production command arguments and `PI_CODING_AGENT_DIR` remain verified while output is deterministically classified. |
+| Uncached full suite | `go test -count=1 ./...` | Exit 0 after the exact-parser correction. |
+| Static analysis | `go vet ./...` | Exit 0 after the exact-parser correction. |
+| Rollback boundary | `internal/components/communitytool/pi_codegraph.go`, `internal/components/communitytool/pi_codegraph_test.go`, and R4-011 ledger/progress evidence | Revert affects only the Pi runtime output-health parser and its adversarial proof. |

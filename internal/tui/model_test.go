@@ -1917,6 +1917,15 @@ func TestUninstallConfirm_CancelCleanInstallReturnsToModeSelection(t *testing.T)
 	}
 }
 
+func TestCompleteViewShowsPipelineManualActions(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenComplete
+	m.Execution.ManualActions = []string{"Pi CodeGraph child drifted; preserved: /tmp/worker.md"}
+	if out := m.View(); !strings.Contains(out, "Manual actions required") || !strings.Contains(out, "child drifted") {
+		t.Fatalf("completion output missing Pi manual action: %q", out)
+	}
+}
+
 func TestUninstallConfirm_CleanInstallRunsSyncAfterUninstall(t *testing.T) {
 	m := NewModel(system.DetectionResult{}, "dev")
 	m.Screen = ScreenUninstallConfirm

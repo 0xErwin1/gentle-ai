@@ -11,6 +11,7 @@ Observed read-only on 2026-07-10; these contracts become fixtures.
 | Pi subagent README/source | Effective definitions are resolved from `$PI_CODING_AGENT_DIR/{agents,subagents}/*.md` then `.pi/{agents,subagents}/*.md`; later/project definitions override normalized names. Frontmatter `tools` is passed to `createAgentSession`; lean sessions retain allowlisted extension tools. |
 | `codegraph --version`; `install/serve/init --help` | CodeGraph `1.2.0`; MCP command is `codegraph serve --mcp`; `init [path]` indexes by default. `codegraph install --print-config pi` returns `Unknown target "pi"` (known targets exclude Pi). |
 | Installed CodeGraph MCP schema | Default `tools/list` exposes only read-only `codegraph_explore`, requiring `query`; optional fields are `maxFiles` and `projectPath`. |
+| Pi adapter runtime status probe | Pi `0.80.6` accepts `pi --mcp-config <path> --mode json --no-session --offline --print "/mcp status"`, but has no dedicated machine-readable MCP status API: a valid local config emitted only a JSON `{"type":"session",...}` event, and a nonexistent config exited `0` with no output. Therefore exit `0`, a session event, or empty output is not adapter health evidence. The probe rejects adapter/config errors and unknown `/mcp`, and accepts only output that names `codegraph` with a positive state (`connected`, `ready`, `running`, `loaded`, `active`, or `ok`). |
 
 ## Technical Approach
 

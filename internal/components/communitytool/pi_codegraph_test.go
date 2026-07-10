@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -518,6 +519,140 @@ func TestPiCodeGraphFailsClosedForBrokenProjectMCPOverride(t *testing.T) {
 
 	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, WorkspaceDir: workspace, Selected: true, EffectiveMCPProbe: piProbeForTest}); err == nil || !strings.Contains(err.Error(), "MCP transport is not configured") {
 		t.Fatalf("ReconcilePiCodeGraph() error = %v, want broken effective project override", err)
+	}
+}
+
+func TestPiCodeGraphProbeUsesAgentRuntimeForProjectMCPOverride(t *testing.T) {
+	home := t.TempDir()
+	agentDir := filepath.Join(home, "custom-agent")
+	mcpPath := filepath.Join(home, "project", ".mcp.json")
+	writePiFile(t, filepath.Join(agentDir, "npm", "node_modules", "pi-mcp-adapter", "index.ts"), "export default {}\n")
+	writePiFile(t, mcpPath, `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`)
+
+	previous := piCodeGraphAdapterRuntimeRunner
+	defer func() { piCodeGraphAdapterRuntimeRunner = previous }()
+	called := false
+	piCodeGraphAdapterRuntimeRunner = func(name string, args, env []string) ([]byte, error) {
+		called = name == "pi" && slices.Equal(args, []string{"--mcp-config", mcpPath, "--mode", "json", "--no-session", "--offline", "--print", "/mcp status"}) && slices.Contains(env, "PI_CODING_AGENT_DIR="+agentDir)
+		return []byte("MCP Servers:\n  codegraph: connected\n"), nil
+	}
+
+	if _, err := probePiCodeGraphMCPWithAgentDir(mcpPath, agentDir); err != nil || !called {
+		t.Fatalf("probe error=%v called=%v, want project config through Pi agent runtime", err, called)
+	}
+}
+
+func TestPiCodeGraphAdapterRuntimeFailsClosedWithoutPositiveCapabilityEvidence(t *testing.T) {
+	agentDir := t.TempDir()
+	mcpPath := filepath.Join(agentDir, "mcp.json")
+
+	tests := []struct {
+		name    string
+		output  string
+		wantErr bool
+	}{
+		{
+			name:    "exit zero with failed MCP config",
+			output:  "Failed to load MCP config: invalid JSON\n",
+			wantErr: true,
+		},
+		{
+			name:    "exit zero with adapter load error",
+			output:  "Failed to load extension pi-mcp-adapter: module not found\n",
+			wantErr: true,
+		},
+		{
+			name:    "exit zero with unknown MCP command",
+			output:  "Unknown command: /mcp\n",
+			wantErr: true,
+		},
+		{
+			name:    "exit zero without capability evidence",
+			output:  `{"type":"session","version":3}` + "\n",
+			wantErr: true,
+		},
+		{
+			name:    "rejects negated ready status",
+			output:  "MCP Servers:\n  codegraph: not ready\n",
+			wantErr: true,
+		},
+		{
+			name:    "rejects negated running status",
+			output:  "MCP Servers:\n  codegraph: not running\n",
+			wantErr: true,
+		},
+		{
+			name:    "rejects unloaded status",
+			output:  "MCP Servers:\n  codegraph: unloaded\n",
+			wantErr: true,
+		},
+		{
+			name:    "rejects inactive status",
+			output:  "MCP Servers:\n  codegraph: inactive\n",
+			wantErr: true,
+		},
+		{
+			name:    "rejects broken status containing ok",
+			output:  "MCP Servers:\n  codegraph: broken\n",
+			wantErr: true,
+		},
+		{
+			name:    "rejects malformed status",
+			output:  "MCP Servers:\n  codegraph connected\n",
+			wantErr: true,
+		},
+		{
+			name:    "rejects unrelated healthy status",
+			output:  "MCP Servers:\n  filesystem: ready\n",
+			wantErr: true,
+		},
+		{
+			name:    "rejects ambiguous codegraph statuses",
+			output:  "MCP Servers:\n  codegraph: connected\n  codegraph: not ready\n",
+			wantErr: true,
+		},
+		{
+			name:   "status reports connected codegraph server",
+			output: "MCP Servers:\n  codegraph: connected\n",
+		},
+		{
+			name:   "status reports ready codegraph server",
+			output: "MCP Servers:\n  codegraph: ready\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			previous := piCodeGraphAdapterRuntimeRunner
+			piCodeGraphAdapterRuntimeRunner = func(name string, args, env []string) ([]byte, error) {
+				if name != "pi" {
+					t.Fatalf("runtime = %q, want pi", name)
+				}
+				wantArgs := []string{"--mcp-config", mcpPath, "--mode", "json", "--no-session", "--offline", "--print", "/mcp status"}
+				if !slices.Equal(args, wantArgs) {
+					t.Fatalf("args = %q, want %q", args, wantArgs)
+				}
+				if !slices.Contains(env, "PI_CODING_AGENT_DIR="+agentDir) {
+					t.Fatalf("env = %q, want Pi agent directory", env)
+				}
+				return []byte(tt.output), nil
+			}
+			t.Cleanup(func() { piCodeGraphAdapterRuntimeRunner = previous })
+
+			result, err := probePiCodeGraphAdapterRuntime(agentDir, mcpPath)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("probe result = %#v, want rejected output", result)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("probe error = %v", err)
+			}
+			if !result.AdapterAvailable || !result.Initialized {
+				t.Fatalf("probe result = %#v, want initialized adapter", result)
+			}
+		})
 	}
 }
 

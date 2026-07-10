@@ -108,6 +108,30 @@ func TestBackupTargetsSnapshotPiManifestOverlayDuringDeselection(t *testing.T) {
 	}
 }
 
+func TestPiCodeGraphReconcileStepRollbackRemovesDynamicPackageOverlay(t *testing.T) {
+	home := t.TempDir()
+	overlay := filepath.Join(home, ".pi", "agent", "subagents", "package.md")
+	manifest := filepath.Join(home, ".gentle-ai", "pi-codegraph.json")
+	writePiInstallFixture(t, home)
+	mustWriteFile(t, overlay, []byte("owned overlay\n"))
+	mustWriteFile(t, manifest, []byte(`{"children":{"`+overlay+`":{"after":"owned overlay\n","afterHash":"c7455d95571450daf45e091de82bf35230a8016c09c60b15b2b84cfde219669f","overlay":true}}}`))
+
+	step := piCodeGraphReconcileStep{homeDir: home}
+	if err := step.Rollback(); err != nil {
+		t.Fatalf("Rollback() error = %v", err)
+	}
+	if _, err := os.Stat(overlay); !os.IsNotExist(err) {
+		t.Fatalf("dynamic package overlay remains after later pipeline rollback: %v", err)
+	}
+}
+
+func TestRenderInstallManualActionsIncludesPiCodeGraphDrift(t *testing.T) {
+	out := RenderInstallManualActions(InstallResult{PiCodeGraph: &communitytool.PiCodeGraphResult{ManualActions: []string{"Pi CodeGraph child drifted; preserved: /tmp/worker.md"}}})
+	if !strings.Contains(out, "Manual actions required") || !strings.Contains(out, "child drifted") {
+		t.Fatalf("CLI manual action missing: %q", out)
+	}
+}
+
 func TestCodeGraphGuidanceMarkdownForSDDOnlyWhenSelectedOrConfigured(t *testing.T) {
 	tests := []struct {
 		name      string

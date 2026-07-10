@@ -560,6 +560,14 @@ func (s piCodeGraphReconcileStep) Run() error {
 	return err
 }
 
+// Rollback removes only the manifest-owned Pi CodeGraph artifacts created by
+// this late pipeline step. This covers overlays discovered after package
+// installation, which cannot be part of the pre-install static snapshot.
+func (s piCodeGraphReconcileStep) Rollback() error {
+	_, err := communitytool.UninstallPiCodeGraph(s.homeDir)
+	return err
+}
+
 type prepareBackupStep struct {
 	id          string
 	snapshotter backup.Snapshotter
@@ -1203,6 +1211,30 @@ func BuildRealStagePlan(homeDir string, scope InstallScope, selection model.Sele
 	}
 
 	return runtime.stagePlan(), nil
+}
+
+// ExecuteTUIInstall runs the same install runtime as the CLI and carries
+// non-fatal Pi CodeGraph manual actions into the TUI completion result.
+func ExecuteTUIInstall(homeDir string, selection model.Selection, resolved planner.ResolvedPlan, profile system.PlatformProfile, onProgress pipeline.ProgressFunc) pipeline.ExecutionResult {
+	runtime, err := newInstallRuntime(homeDir, ScopeGlobal, ChannelStable, selection, resolved, profile)
+	if err != nil {
+		return pipeline.ExecutionResult{Err: err}
+	}
+	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy(), pipeline.WithFailurePolicy(pipeline.ContinueOnError), pipeline.WithProgressFunc(onProgress))
+	result := orchestrator.Execute(runtime.stagePlan())
+	if runtime.state.piCodeGraph != nil {
+		result.ManualActions = append(result.ManualActions, runtime.state.piCodeGraph.ManualActions...)
+	}
+	return result
+}
+
+// RenderInstallManualActions renders non-fatal completion actions after the
+// normal verification report so CLI users receive the same drift guidance.
+func RenderInstallManualActions(result InstallResult) string {
+	if result.PiCodeGraph == nil || len(result.PiCodeGraph.ManualActions) == 0 {
+		return ""
+	}
+	return "\nManual actions required:\n- " + strings.Join(result.PiCodeGraph.ManualActions, "\n- ") + "\n"
 }
 
 // ResolveInstallProfile returns the platform profile from detection, defaulting to darwin/brew.

@@ -96,6 +96,28 @@ func TestCodeGraphPathsResolveConfiguredAgentDirectory(t *testing.T) {
 	}
 }
 
+func TestCodeGraphPathsKeepsAgentDirectoryWhenProjectMCPOverrides(t *testing.T) {
+	home := t.TempDir()
+	configured := filepath.Join(home, "custom-pi")
+	workspace := filepath.Join(home, "project")
+	t.Setenv("PI_CODING_AGENT_DIR", configured)
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspace, ".mcp.json"), []byte(`{"mcpServers":{"codegraph":{}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	paths := CodeGraphPaths(home)
+	effective, err := EffectiveCodeGraphMCPPath(home, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if paths.AgentDir != configured || effective != filepath.Join(workspace, ".mcp.json") {
+		t.Fatalf("agent=%q effective=%q, want configured agent and project config", paths.AgentDir, effective)
+	}
+}
+
 func TestDiscoverCodeGraphChildrenUsesProjectOverrideAndPreservesPackageSource(t *testing.T) {
 	home := t.TempDir()
 	workspace := filepath.Join(home, "project")
