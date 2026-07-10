@@ -9,6 +9,8 @@
         "task": {
           "__replace__": {
             "*": "deny",
+            "general": "allow",
+            "explore": "allow",
             "sdd-init": "allow",
             "sdd-explore": "allow",
             "sdd-propose": "allow",
