@@ -50,10 +50,10 @@ These are parent-orchestrator stop rules. When a trigger fires, perform the spec
 
 1. **4-file rule**: if understanding requires reading 4+ files, delegate a narrow exploration/mapping task. If delegation tooling is unavailable, document the blocker and stop the exploration instead of reading everything inline.
 2. **Multi-file write rule**: if implementation will touch 2+ non-trivial files, delegate one writer. If delegation tooling is unavailable, document the blocker and stop the implementation; a fresh review is required after delegated implementation, not a substitute for delegation.
-3. **PR rule**: before commit, push, or PR after code changes, run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1).
-4. **Incident rule**: after wrong `cwd`, accidental repo/worktree mutation, merge recovery, confusing test command, or environment workaround, stop and run the concrete audit/review lens(es) selected by Review Lens Selection before continuing.
+3. **Lifecycle receipt rule**: before commit, push, PR, or release, validate the same content-bound receipt with native `review-validate`; follow missing/scope-changed/invalidated/escalated action and never launch a lens, Judgment Day, or new budget at the gate.
+4. **Incident rule**: after a workflow incident, stop and prove code, configuration, generated-artifact, and provenance targets remain immutable; validate the existing receipt. Any changed target requires explicit scope action, not reopened review.
 5. **Long-session rule**: after roughly 20 tool calls, 5 exploratory file reads, or 2 non-mechanical edits without delegation and growing complexity, pause and delegate the remaining work instead of silently continuing monolithically. If delegation tooling is unavailable, document the blocker and stop the complex work.
-6. **Fresh review rule**: use fresh context with the selected concrete review lens(es) for adversarial review of diffs, conflicts, PR readiness, and incidents; use continuity/forked context only for implementation work that needs inherited state.
+6. **Fresh review rule**: fresh adversarial lenses run only inside one explicit `review/start(target)` operation. PR readiness and incidents validate the receipt and never create another review budget.
 
 #### Review Lens Selection
 
@@ -112,7 +112,7 @@ If the first pass finds nothing, persist an empty ledger record rather than skip
 
 - Use exploration sub-agents to compress broad repo reading into a short handoff.
 - Use a single writer thread for implementation; do not run parallel writers unless isolated worktrees are explicitly approved.
-- Use concrete review lenses after implementation, conflict resolution, or incidents because their value is independent judgment, not token saving.
+- Start concrete review lenses only inside one explicit post-implementation `review/start(target)`; conflict and incident handling validate the existing receipt and immutable boundaries instead of reopening review.
 - Avoid delegation for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
 
 ## SDD Workflow (Spec-Driven Development)
@@ -265,7 +265,7 @@ In **Automatic** mode the orchestrator is the gatekeeper between phases. The gat
 
 **Hybrid validation mechanism (cost-aware):**
 - **Inline for low-risk phases** (`sdd-explore`, `sdd-spec`, `sdd-tasks`, `sdd-archive`): the orchestrator runs the checks itself by reading the artifact back. No extra sub-agent.
-- **Fresh-context reviewer for high-risk phases** (`sdd-design`, `sdd-apply`): delegate a fresh-context reviewer sub-agent for independent judgment, because errors in these phases compound downstream. Use the `sdd-verify` model alias for the delegated gate review.
+- **Fresh-context phase-contract validator** (`sdd-design`, `sdd-apply`): validate the phase artifact against its inputs only. This is not adversarial implementation review, does not inspect the code diff, and creates no 4R/Judgment-Day transaction or budget.
 - **Escalation on smell:** if an inline check on a low-risk phase finds any smell (status mismatch, unresolved path, suspected drift, missing artifact), escalate that phase to a fresh-context delegated review before deciding.
 
 **On gate PASS:** continue automatically to the next phase. Auto stays auto on the happy path.

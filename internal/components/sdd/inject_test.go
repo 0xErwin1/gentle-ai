@@ -636,15 +636,15 @@ func TestInjectOpenCodePreservesExistingOrchestratorPromptWhenRequested(t *testi
 		"Semantic guard",
 		"execution, not delegation",
 		"not a substitute for delegation",
-		"run the concrete review lens(es) selected by Review Lens Selection",
-		"run the concrete audit/review lens(es) selected by Review Lens Selection",
-		"use fresh context with the selected concrete review lens(es)",
+		"Lifecycle receipt rule",
+		"validate the same content-bound receipt",
+		"generated-artifact, and provenance targets remain immutable",
+		"fresh adversarial lenses run only inside one explicit",
 		"#### Review Lens Selection",
 		"`reviewer` is an intent, not a concrete installed agent",
 		"triage the diff deterministically",
 		"**Trivial diff**",
 		"zero executable code and zero configuration changes",
-		"unless the diff is trivial (tier 1)",
 		"run exactly ONE lens",
 		"Full 4R is reserved for tier 3",
 		"`review-readability`",
@@ -747,7 +747,7 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"TOTALMENTE obligatorio",
 		"4-file rule",
 		"Multi-file write rule",
-		"PR rule",
+		"Lifecycle receipt rule",
 		"Incident rule",
 		"Long-session rule",
 		"Fresh review rule",
@@ -755,13 +755,12 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"execution, not delegation",
 		"not a substitute for delegation",
 		"run the concrete review lens(es) selected by Review Lens Selection",
-		"run the concrete audit/review lens(es) selected by Review Lens Selection",
-		"use fresh context with the selected concrete review lens(es)",
+		"generated-artifact, and provenance targets remain immutable",
+		"fresh adversarial lenses run only inside one explicit",
 		"#### Review Lens Selection",
 		"triage the diff deterministically",
 		"**Trivial diff**",
 		"zero executable code and zero configuration changes",
-		"unless the diff is trivial (tier 1)",
 		"run exactly ONE lens",
 		"Full 4R is reserved for tier 3",
 		"`review-readability`",
@@ -841,7 +840,8 @@ func TestInjectOpenCodeUpgradesV1DelegationLensTable(t *testing.T) {
 		"triage the diff deterministically",
 		"**Trivial diff**",
 		"zero executable code and zero configuration changes",
-		"unless the diff is trivial (tier 1)",
+		"Lifecycle receipt rule",
+		"validate the same content-bound receipt",
 		"run exactly ONE lens",
 		"Full 4R is reserved for tier 3",
 	} {
@@ -6318,7 +6318,7 @@ func TestInject_CodexPerPhaseModelAssignments_InjectsPerPhaseTable(t *testing.T)
 		t.Errorf("AGENTS.md missing expected sdd-propose row %q:\n%s", wantRow, text)
 	}
 	// An unassigned strong phase must preserve the supplied carril model.
-	wantFallbackRow := "| `sdd-design` | `gpt-5.4-mini` | `high` |"
+	wantFallbackRow := "| `sdd-design` | `gpt-5.4-mini` | `medium` |"
 	if !strings.Contains(text, wantFallbackRow) {
 		t.Errorf("AGENTS.md missing preserved carril fallback row %q:\n%s", wantFallbackRow, text)
 	}

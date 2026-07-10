@@ -1,174 +1,94 @@
-# Review Ledger Contract (shared across the 4R review lenses and judgment-day)
+# Bounded Review Execution and Ledger Contract
 
-Canonical source of truth for the 4R v2 precision-gated review: the sweep
-budget, the precision gate, the persisted findings ledger, adversarial
-verification of high-severity candidates, the severity floor and convergence
-budget for the fix loop, the artifact-store persistence branches, and the
-scoped re-review/re-judge contract. Every review-* subagent asset, every jd-*
-subagent asset, every orchestrator's inline-lens "Review Execution Contract"
-section, and the judgment-day skill docs hand-copy the clauses below verbatim
-so a single table-driven test (`internal/components/sdd/review_ledger_contract_test.go`)
-can assert they stay in sync across all 13 adapter variants and both
-execution modes.
+This is the canonical reusable contract for orchestrators, 4R lens reviewers, refuters, scoped validators, and Judgment Day. Generated adapter prompts expand this file; role-specific prompts add only their lens or tool boundary.
 
-Why this exists: the v1 contract optimized for maximum recall — an exhaustive
-loop-until-dry first pass in which every severity entered the fix loop. In
-practice that traded precision for recall: low-confidence and style-level
-findings triggered full fix cycles, and repeat sweeps re-sampled the same
-noise. 4R v2 replaces that with a fixed sweep budget, a precision gate on
-every finding, adversarial verification before a finding becomes actionable,
-a severity floor on the fix loop, and a hard convergence budget. The
-persisted ledger and the re-review scoped to the ledger plus the fix diff are
-retained from v1.
+## Operation Boundary
 
-## Canonical block (hand-copy verbatim into every adopting asset)
+Review is explicit `review/start(target)`. The operation receives one complete immutable snapshot, is detached, read-only, and terminal after one result. A reviewer never edits code, launches a correction, starts another reviewer, or owns lifecycle routing. Return one result and terminate.
 
-**Sweep budget.** Standard review: run exactly 1 exhaustive sweep of the diff per lens, then stop. Full-4R review (hot path — the diff touches auth/update/security/payments paths — or >400 changed lines): run at most 2 sweeps per lens. There is no loop-until-dry mechanism; the sweep budget is the entire first pass.
+The parent orchestrator selects zero, one, or four initial lenses from deterministic risk classification. Each selected lens runs exactly one exhaustive sweep. Full 4R means four initial lens sweeps, not extra sweeps or three refuter tasks.
 
-**Precision gate.** Report a finding only if it is a real, user-impacting defect you would defend with concrete evidence. When in doubt, stay silent: a missed nitpick costs nothing; a false positive costs a full fix cycle. Style and preference findings are banned unless they obscure a defect.
+## Frozen Findings Ledger
 
-**Findings ledger.** Emit a findings ledger with this schema for every entry:
+Findings freeze after the initial selected-lens review. Each lens emits neutral structured claims and proof references rather than persuasive narrative:
 
 | Field | Values |
-|-------|--------|
-| `id` | `{LENS}-{NNN}` (e.g. `R1-001`) |
-| `lens` | risk \| readability \| reliability \| resilience \| judgment-day |
-| `location` | `path/to/file.ext:line` or `:start-end` |
-| `severity` | BLOCKER \| CRITICAL \| WARNING \| SUGGESTION |
-| `status` | open \| fixed \| verified \| refuted \| wont-fix \| info |
-| `evidence` | why it matters |
+|---|---|
+| `id` | `{LENS}-{NNN}` |
+| `lens` | `risk | readability | reliability | resilience | judgment-day | scoped-fix-validator` |
+| `location` | `path/to/file.ext:line` or range |
+| `severity` | `BLOCKER | CRITICAL | WARNING | SUGGESTION` |
+| `claim` | Neutral statement of observable incorrect behavior |
+| `evidence_class` | `deterministic | inferential | insufficient` |
+| `proof_refs` | Concrete command, output hash, or `file:line` references |
+| `status` | `open | corroborated | refuted | inconclusive | fixed | verified | info` |
 
-If the first pass finds nothing, persist an empty ledger record rather than skip persistence.
+Persist an explicit empty ledger when no findings exist. WARNING/SUGGESTION rows are `info`; they never drive correction or block approval.
 
-**Adversarial verification.** Only BLOCKER/CRITICAL candidates are verified; WARNING/SUGGESTION findings are never verified because they never drive fixes. Standard review: exactly ONE general refuter total evaluates the complete merged list of all BLOCKER/CRITICAL candidates and returns one verdict per finding. Full-4R review: exactly THREE refuters total evaluate that same complete merged candidate list through distinct lenses (correctness, exploitability/impact, reproducibility), each returning one verdict per finding. Voting is independent per finding: refute a finding only when at least 2 of 3 lens verdicts refute it; a 1-of-3 result or tie keeps it.
+## Evidence Routing
 
-**Refutation protocol.** The orchestrator invokes refutation once after merging lens ledgers and before any fix work; only BLOCKER/CRITICAL candidates are included. The task ceiling is review-level and structural: 1 refuter task for a standard review or 3 total for full-4R, whether the list has 2 candidates or 20; NEVER spawn one refuter task per candidate. Where dedicated `review-refuter` agents exist, standard review delegates exactly one task with the `general` lens, while full-4R delegates exactly three tasks, one per lens, in parallel. Every task receives the complete merged candidate list. In standard review, a finding is `refuted` only when the general verdict refutes it; in full-4R, apply the independent 2-of-3 vote per finding. Any malformed or missing per-finding verdict defaults to `stands` for that finding. Judgment Day is the exception: its two-judge convergence satisfies adversarial verification and it spawns no `review-refuter` tasks.
+- Deterministic severe findings become `corroborated` with proof and never invoke a refuter.
+- Inferential severe findings from every selected lens are merged into exactly ONE detached refuter operation for the transaction. The refuter receives the immutable target plus all neutral claims/proof references and returns one `corroborated | refuted | inconclusive` result per finding.
+- Insufficient findings become `inconclusive` and are never auto-fixed.
+- Missing, malformed, or incomplete refuter output is `inconclusive`, never implied corroboration.
+- Judgment Day's two-judge agreement is its corroboration mechanism; it never launches `review-refuter`. Native state records two distinct blind execution hashes, two distinct result hashes, a confirmation/agreement hash, and exactly two judge executions before findings can freeze.
 
-**Severity floor.** Only BLOCKER/CRITICAL findings that survive adversarial verification enter the fix → re-review loop. WARNING/SUGGESTION findings are reported once with status `info`, are never re-reviewed, and never block. Judgment-day may record real/theoretical as a separate `assessment`, but canonical severity remains `WARNING` and canonical status remains `info`; a WARNING is never `open`.
+The refuter is read-only, cannot add findings or change scope, returns one complete result, and terminates. One candidate or twenty candidates consume the same single refuter-batch budget.
 
-**Convergence budget.** Maximum 2 fix rounds per review. One fix round = the orchestrator (directly or via a single writer sub-agent) applies fixes for all open verified BLOCKER/CRITICAL findings, then a scoped re-review verifies the fix diff against the ledger; in judgment-day the fix actor is `jd-fix-agent`. Anything still open after round 2 is reported to the user as open — the loop never extends.
+## Correction and Scoped Validation
 
-**Ledger persistence honors the artifact store.**
-- `openspec`: write `openspec/changes/{change-name}/review-ledger.md`.
-- `engram`: upsert topic `sdd/{change-name}/review-ledger` (ad-hoc judgment-day without a change: `review/{target-slug}/ledger`, where `target-slug` = `pr-{number}` when reviewing a PR, else the current branch name kebab-cased, else a kebab-case slug of the user-stated review target).
-- `none`: keep the ledger inline in the response; do not write files or Engram artifacts — the ledger lives only in this conversation; complete the review → fix → re-review loop within the session because it is not persisted across compaction.
+Only the parent orchestrator may launch a correction actor or scoped validator, and only within native transaction counters.
 
-**Scoped re-review.** A re-review pass receives ONLY the persisted ledger and the fix diff as input — never the original full diff. It MUST verify each ledger finding's resolution and MUST review only fix-touched lines; it MUST NOT re-read the full original diff. A finding on an untouched line MUST be logged with status `info` as a first-pass quality signal and MUST NOT by itself trigger another full round.
+Ordinary review permits at most one correction transaction composed of atomic work units. Each work unit records focused-test evidence, runtime evidence or justified `N/A`, and an independent rollback boundary. Work-unit count never creates another correction budget.
 
-## Notes on the schema (not part of the hand-copied block)
+If correction occurred, ordinary review runs exactly one scoped fix-delta validator. It is detached and read-only, receives only the frozen ledger plus immutable fix delta, verifies fix-touched lines, may append fix-caused defects with proof, and can return only `approve` or `escalate`. It never reopens the original diff, launches another correction, or iterates.
 
-**Sweep budget rationale.** One exhaustive sweep with a precision gate finds
-the defects worth fixing; repeat sweeps mostly re-sample noise. Full-4R
-reviews get a second sweep because hot paths and large diffs justify the
-extra recall. The budget also caps review cost deterministically — there is
-no dry-sweep counting.
+Judgment Day replaces ordinary 4R for an explicitly selected target. It alone may run at most two fix rounds and two scoped re-judgments; it does not inherit or extend an ordinary budget.
 
-**Precision over recall.** A false positive costs a refuter run plus a
-potential fix cycle plus a re-review; a missed nitpick costs nothing. Every
-lens therefore reports only defects it would defend with concrete evidence.
+## Independent Final Verification
 
-**Status lifecycle.** `open` (first-pass candidate) → adversarial
-verification: a BLOCKER/CRITICAL candidate that survives refutation stays
-`open` and becomes actionable; a refuted candidate becomes `refuted` and is
-terminal — it never enters the fix loop. Actionable findings then move `open`
-→ `fixed` (fix agent changed code) → `verified` (re-review confirmed
-resolved). `wont-fix` = accepted/deferred with reason. `info` = a
-WARNING/SUGGESTION finding (reported once, never verified, never re-reviewed,
-never blocking) or a new finding on an untouched line (first-pass quality
-signal, NOT a re-round trigger). Judgment-day may preserve real/theoretical as
-a separate `assessment`, but every warning keeps canonical `severity=WARNING`
-and `status=info`; warnings are never `open`.
+Final verification is independent requirements/runtime verification. It checks actual requirements/scenarios, task completion, current test/build evidence, frozen-ledger resolution, snapshot identity, and counter coherence. A contradiction or newly failing deterministic check escalates; it cannot start another 4R, refuter, correction, or scoped-validation loop.
 
-**Refuter lenses.** In the full-4R panel, `correctness` asks "is the claimed
-defect actually wrong behavior?", `exploitability/impact` asks "can a real
-user or attacker ever hit it, and does it matter?", and `reproducibility`
-asks "can the failure scenario be concretely reproduced from the cited
-code?". In standard single-refuter mode the lens is `general` — the refuter
-attacks the finding from any angle. A refuter must present concrete
-counter-evidence; "seems unlikely" does not refute.
+Only `approved | escalated` are terminal transaction states. `scope-changed | invalidated` are lifecycle validation outcomes requiring explicit action.
 
-**Refuter role and delegation.** The refuter role is the `review-refuter`
-agent asset (`internal/assets/{claude,cursor,kimi,kiro}/agents/review-refuter.md`
-plus the OpenCode/Kilocode overlay definition). It is structurally read-only,
-receives the complete merged candidate list (`id`, `location`, `severity`,
-`summary`, `evidence` per entry) plus one refutation lens, and returns one
-`refuted` or `stands` verdict with evidence per finding. Inconclusive,
-malformed, or missing per-finding results default to `stands`. Delegation
-shape:
+## Persistence and Lifecycle Gates
 
-```
-Standard review (exactly one batched refuter total, general lens):
-  delegate(agent="review-refuter", prompt="Candidates: [{id, location, severity, summary, evidence}, ...]. Refutation lens: general. Return one `refuted` or `stands` verdict plus evidence for every candidate.")
+OpenSpec mode persists exact machine-readable artifacts:
 
-Full-4R review (exactly three batched refuters total, one per lens, in parallel where dedicated agents exist):
-  delegate(agent="review-refuter", prompt="Candidates: [{…}, ...]. Refutation lens: correctness. Return one verdict per candidate. …")
-  delegate(agent="review-refuter", prompt="Candidates: [{…}, ...]. Refutation lens: exploitability-impact. Return one verdict per candidate. …")
-  delegate(agent="review-refuter", prompt="Candidates: [{…}, ...]. Refutation lens: reproducibility. Return one verdict per candidate. …")
-```
+- `openspec/changes/{change-name}/reviews/transaction.json`
+- `openspec/changes/{change-name}/reviews/policy.md`
+- `openspec/changes/{change-name}/reviews/ledger.json`
+- `openspec/changes/{change-name}/reviews/receipt.json`
+- `openspec/changes/{change-name}/reviews/chain-bundle.json`
+- `openspec/changes/{change-name}/reviews/gate-context.json`
 
-Never create one task per candidate. Adapters without dedicated refuter
-subagents do not use generic delegation for this step; they run the equivalent
-one general pass or three sequential lens passes inline over the complete list.
+The sole authoritative append-only CAS state is `<git-common-dir>/gentle-ai/review-transactions/v1/{lineage-id}/`, derived from the canonical validated repository root and a canonical lowercase kebab-case lineage ID. Every Git subprocess uses explicit `git -C <canonical-repo>` and strips inherited repository/worktree/common-dir/index/object/alternate/namespace/shallow/graft/replacement/discovery overrides while preserving ordinary credentials and safe configuration. Linked worktrees retain shared common-dir behavior.
 
-**Judgment-day reconciliation.** In judgment-day, adversarial verification is
-satisfied by the two-judge convergence itself: a BLOCKER/CRITICAL confirmed by
-both blind judges has survived adversarial verification; judgment-day does NOT
-additionally spawn `review-refuter` agents.
+`transaction.json`, chain bundles, and every OpenSpec or Engram artifact are explicitly non-authoritative mirrors. Dispatchers and lifecycle gates load exact HEAD and validate every content-addressed predecessor to one legal `review/start` genesis plus semantic state invariants. Frozen severe findings cannot disappear or lose classification/outcome; pending refuter IDs require one consumed complete batch; corroborated IDs equal correction IDs; corrected candidates require scoped validation; ready/final/approved states have coherent mode counters and no pending severe work. WARNING/SUGGESTION rows remain non-blocking `info`. Missing, cyclic, reordered, regressive, hash-mismatched, semantically incomplete, or standalone terminal chains fail closed.
 
-**Judgment-day.** The re-judge pass (following jd-fix-agent) follows this
-same scoped re-review contract: it verifies ledger findings and reviews only
-fix-touched lines, within the same convergence budget.
+Writers use a non-blocking cross-platform OS lock with token/PID/host/timestamp observability and crash release. Exact retries repair a linked event or return an already-committed exact HEAD without changing budget; stale predecessors or different content remain rejected. Use `review-resume` after machine-output failure rather than rerunning review work.
 
-## Execution modes
+Engram mode upserts the equivalent exact topics:
 
-The contract above is stated once; only ledger ownership differs by mode:
+- `sdd/{change-name}/review/transaction`
+- `sdd/{change-name}/review/policy`
+- `sdd/{change-name}/review/ledger`
+- `sdd/{change-name}/review/receipt`
+- `sdd/{change-name}/review/chain-bundle`
+- `sdd/{change-name}/review/gate-context`
 
-- **Dedicated-agent mode** (Claude, Cursor, Kimi, Kiro, OpenCode/Kilocode):
-  each review-* agent runs its lens within the sweep budget and returns its own
-  ledger rows; the orchestrator merges those rows, then uses exactly 1 batched
-  refuter task for standard review or exactly 3 for full-4R.
-- **Inline mode** (Codex, Gemini, Qwen, Windsurf, Antigravity, Hermes,
-  generic, and any adapter without dedicated review/refuter subagents): the
-  orchestrator runs review lenses sequentially and performs the equivalent
-  one general or three sequential lens refutation passes itself.
+Ad-hoc review uses `review/{target-slug}/{transaction|policy|ledger|receipt|chain-bundle|gate-context}`. If no artifact store exists, keep all artifacts inline for the current session and never claim durable receipt reuse.
 
-## Interfaces / Contracts
+Post-implementation/post-apply starts ordinary review only when no valid receipt exists. Pre-commit, pre-push, pre-PR, and SDD archive call the native receipt validator for the same content-bound receipt; they never create a budget or silently launch Judgment Day. Gate context binds expected HEAD, genesis, ordered chain identity, and bundle digest. The validator derives the authoritative store root, validates the complete semantic chain, derives the current repository target, and hashes policy, ledger, fix delta, verify evidence, and release artifacts from persisted inputs; caller-authored store paths, transactions, trees, or hash assertions are never authoritative. Missing, `scope-changed`, `invalidated`, and `escalated` results emit machine-readable denial and return non-success.
 
-Canonical ledger row, rendered identically in every asset:
+For clean-clone/workstation recovery, persist the full ordered content-addressed chain bundle. Explicit `review-bundle-import` MUST validate bundle digest, every event hash/predecessor/semantic transition, lineage/generation/mode, initial/final snapshot identities, terminal fix-diff semantics, and expected gate chain identity before CAS installation into the repository-derived destination. Recovery is delivered-content equivalence, not snapshot-structure equivalence: the current derived candidate and delivered path digest MUST match `final_candidate_tree` and the receipt/lineage path scope; the authoritative intended-untracked proof MUST reproduce from that candidate; and policy, ledger, evidence, fix delta, receipt, and chain bindings MUST match exactly. The terminal fix-diff kind, base, ledger IDs, and identity remain preserved for audit, but the recovery snapshot need not share its kind, base, or identity. `review-validate` never auto-imports. Tampered content, wrong path scope/artifacts, truncated or tampered chains, different lineages, arbitrary alternate stores, or unbound bundles remain untrusted and fail closed.
 
-```
-| id     | lens        | location            | severity | status  | evidence            |
-|--------|-------------|---------------------|----------|---------|---------------------|
-| R1-001 | risk        | internal/x.go:42    | CRITICAL | open    | secret hardcoded    |
-| R1-002 | risk        | internal/z.go:10    | BLOCKER  | refuted | refuter: input validated upstream |
-| JD-004 | judgment-day| internal/y.go:88    | WARNING  | info    | theoretical path    |
-```
+Release from protected `main` has a narrow fast path and does not require a reusable review receipt when all of these are proven: the tag target is the current immutable `origin/main` SHA, required CI for that exact SHA is successful, the remote has not advanced before tag push, and no new vulnerability, policy, provenance, signing, generated-artifact, or release evidence requires escalation. Local branch position and worktree dirtiness are irrelevant because they are not publication inputs. Tag the verified remote SHA explicitly; never infer it from local `HEAD`. Any failed or unprovable condition falls back to native receipt validation and fails closed on missing, changed, invalidated, or escalated state. Major releases and releases following an operational or security incident always require explicit extraordinary review even when the fast-path checks pass.
 
-## Adopting assets
+Outside that protected-`main` fast path, release validation additionally requires an immutable release tree plus content hashes for configuration, generated artifacts, provenance/signing, publication boundary, and evidence freshness. Publication boundary state must be sealed and evidence freshness state must be current; a generic base-relationship context cannot authorize publication.
 
-Hand-copy the sections above (Sweep budget, Precision gate, Findings ledger
-schema, Adversarial verification, Refutation protocol, Severity floor,
-Convergence budget, Ledger persistence, Scoped re-review) into:
+New CI, vulnerability, base, policy, provenance, or release evidence may invalidate or escalate without reopening unchanged code review. Operational incident separation remains valid only while code, configuration, generated-artifact, and provenance targets are immutable.
 
-- `internal/assets/{claude,cursor,kimi,kiro}/agents/review-{risk,readability,reliability,resilience}.md`
-- `internal/assets/{claude,kiro}/agents/jd-{judge-a,judge-b}.md`
-- Every `internal/assets/*/sdd-orchestrator.md` (Review Execution Contract section)
-- `internal/assets/skills/judgment-day/SKILL.md` and `references/prompts-and-formats.md`
+## User-Owned Runtime Selection
 
-Exception: `internal/assets/{claude,kiro}/agents/jd-fix-agent.md` is NOT a
-hand-copy target for this judge-oriented block. It carries the distinct
-fix-agent clause set enforced by `requiredFixAgentClauses` in the test below —
-the fix role applies confirmed fixes and does not run the first-pass review
-sweep or emit a findings ledger. `references/prompts-and-formats.md` carries
-both: judge clauses in the Judge Prompt template, fix clauses in the Fix
-Agent Prompt template.
-
-Exception: `internal/assets/{claude,cursor,kimi,kiro}/agents/review-refuter.md`
-is likewise NOT a hand-copy target. The refuter verifies a complete candidate
-list and never reviews a diff or emits a findings ledger, so it carries its
-own role clause set enforced by `requiredRefuterClauses` in the test below.
-
-Each surface also states its own execution-mode sentence per the "Execution
-modes" section above. `internal/components/sdd/review_ledger_contract_test.go`
-enforces this parity with a table-driven `requiredLedgerClauses` consistency
-check.
+Model, provider, profile, and effort selection remain optional user choices. This review contract never enforces or silently changes those settings.

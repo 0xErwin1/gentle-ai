@@ -23,6 +23,34 @@ func TestRenderTriggerRules_Deterministic(t *testing.T) {
 	}
 }
 
+func TestRenderTriggerRules_UsesBoundedReceiptLifecycle(t *testing.T) {
+	rendered := RenderTriggerRules(catalog.DefaultTriggerRuleSet())
+	for _, want := range []string{
+		"Post-apply starts `review/start(target)` only when no valid receipt exists",
+		"Pre-commit, pre-push, and pre-PR validate the same content-bound receipt",
+		"Release from protected `main` may bypass receipt validation only when",
+		"tag targets the current immutable `origin/main` SHA",
+		"Major and post-incident releases require explicit extraordinary review",
+		"missing → start explicitly after implementation/post-apply",
+		"scope-changed → create a new lineage",
+		"invalidated → require explicit maintainer action",
+		"escalated → stop",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("rendered trigger rules missing %q\n%s", want, rendered)
+		}
+	}
+	for _, forbidden := range []string{
+		"run the full 4R fan-out",
+		"run exactly ONE lens selected by the risk table",
+		"run `judgment-day`",
+	} {
+		if strings.Contains(rendered, forbidden) {
+			t.Errorf("rendered lifecycle rules retain automatic review clause %q\n%s", forbidden, rendered)
+		}
+	}
+}
+
 // 3.2 — RenderTriggerRules output is marker-free.
 func TestRenderTriggerRules_MarkerFree(t *testing.T) {
 	rs := catalog.DefaultTriggerRuleSet()
@@ -54,51 +82,29 @@ func TestRenderTriggerRules_DeterministicRouterNote(t *testing.T) {
 	}
 }
 
-// 3.3b — RenderTriggerRules output states the three-tier triage explicitly,
-// including the trivial-diff → no-lens tier.
+// 3.3b — Risk classification exists only inside explicit review/start; lifecycle gates validate receipts.
 func TestRenderTriggerRules_TriageTiers(t *testing.T) {
 	rs := catalog.DefaultTriggerRuleSet()
 	out := RenderTriggerRules(rs)
 	for _, want := range []string{
-		"**Trivial diff**",
-		"run no review lens",
-		"**Standard diff**",
-		"run exactly ONE lens",
-		"never at pre-commit or pre-push",
-		// Objective trivial-tier boundary (R2-003): zero executable code and
-		// zero configuration changes, no "small mechanical changes" escape hatch.
-		"zero executable code and zero configuration changes",
-		"at least standard tier",
+		"Inside explicit `review/start(target)` only",
+		"**Low**",
+		"**Medium**",
+		"exactly ONE dominant-risk lens",
+		"**High**",
+		"four initial 4R lens sweeps",
+		"Generated goldens are excluded from the authored threshold but remain in snapshot identity",
+		"Pre-commit, pre-push, and pre-PR validate the same content-bound receipt",
+		"Release from protected `main` may bypass receipt validation only when",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("RenderTriggerRules() output missing triage tier fragment %q; got:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "small mechanical changes") {
-		t.Errorf("RenderTriggerRules() output still carries the subjective 'small mechanical changes' trivial boundary; got:\n%s", out)
-	}
-	// The pre-pr binding must state one exhaustive tier decision with a
-	// single-lens fallback for standard diffs.
-	if !strings.Contains(out, "else run exactly ONE lens selected by the risk table") {
-		t.Errorf("RenderTriggerRules() pre-pr binding missing standard-diff single-lens fallback; got:\n%s", out)
-	}
-	// The conditional full-4R binding (pre-pr) is still diff triage, so it must
-	// carry the trivial exemption too (R3-001).
-	if !strings.Contains(out, "trivial diff → no lens; else if the diff touches") {
-		t.Errorf("RenderTriggerRules() pre-pr binding missing trivial-diff exemption; got:\n%s", out)
-	}
-	if strings.Contains(out, "; otherwise run `review-risk`") || strings.Contains(out, "; otherwise (standard diff)") {
-		t.Errorf("RenderTriggerRules() pre-pr binding contains ambiguous consecutive otherwise branches; got:\n%s", out)
-	}
-	if !strings.Contains(out, "parallel with dedicated agents; sequential inline") {
-		t.Errorf("RenderTriggerRules() pre-pr binding missing capability-aware execution order; got:\n%s", out)
-	}
-	// The everyday bindings must state the trivial-diff exemption and the 4R prohibition.
-	if !strings.Contains(out, "trivial diff → no lens") {
-		t.Errorf("RenderTriggerRules() everyday bindings missing trivial-diff exemption; got:\n%s", out)
-	}
-	if !strings.Contains(out, "never the full 4R fan-out here") {
-		t.Errorf("RenderTriggerRules() everyday bindings missing 4R prohibition; got:\n%s", out)
+	for _, forbidden := range []string{"At **pre-commit**", "At **pre-push**", "At **pre-pr**"} {
+		if strings.Contains(out, forbidden+", run `review-") {
+			t.Errorf("lifecycle gate launches reviewer via %q", forbidden)
+		}
 	}
 }
 

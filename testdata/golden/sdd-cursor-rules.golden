@@ -66,10 +66,10 @@ These are parent-orchestrator stop rules. Once any trigger fires, the orchestrat
 
 1. **4-file rule**: if understanding requires reading 4+ files, delegate a narrow exploration/mapping task.
 2. **Multi-file write rule**: if implementation will touch 2+ non-trivial files, delegate one writer and run the selected concrete review lens(es) before completion.
-3. **PR rule**: before commit, push, or PR after code changes, run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1).
-4. **Incident rule**: after wrong `cwd`, accidental repo/worktree mutation, merge recovery, confusing test command, or environment workaround, stop and run the concrete audit/review lens(es) selected by Review Lens Selection before continuing.
+3. **Lifecycle receipt rule**: before commit, push, PR, or release, validate the same content-bound receipt with native `review-validate`; follow missing/scope-changed/invalidated/escalated action and never launch a lens, Judgment Day, or new budget at the gate.
+4. **Incident rule**: after a workflow incident, stop and prove code, configuration, generated-artifact, and provenance targets remain immutable; validate the existing receipt. Any changed target requires explicit scope action, not reopened review.
 5. **Long-session rule**: after roughly 20 tool calls, 5 exploratory file reads, or 2 non-mechanical edits without delegation and growing complexity, pause and delegate instead of silently continuing monolithically.
-6. **Fresh review rule**: use fresh context with the selected concrete review lens(es) for adversarial review of diffs, conflicts, PR readiness, and incidents; use continuity/forked context only for implementation work that needs inherited state.
+6. **Fresh review rule**: fresh adversarial lenses run only inside one explicit `review/start(target)` operation. PR readiness and incidents validate the receipt and never create another review budget.
 
 #### Review Lens Selection
 
@@ -90,45 +90,106 @@ Full 4R is reserved for tier 3; a standard diff never fans out to multiple lense
 
 #### Review Execution Contract
 
-**Sweep budget.** Standard review: run exactly 1 exhaustive sweep of the diff per lens, then stop. Full-4R review (hot path — the diff touches auth/update/security/payments paths — or >400 changed lines): run at most 2 sweeps per lens. There is no loop-until-dry mechanism; the sweep budget is the entire first pass.
+# Bounded Review Execution and Ledger Contract
 
-**Precision gate.** Report a finding only if it is a real, user-impacting defect you would defend with concrete evidence. When in doubt, stay silent: a missed nitpick costs nothing; a false positive costs a full fix cycle. Style and preference findings are banned unless they obscure a defect.
+This is the canonical reusable contract for orchestrators, 4R lens reviewers, refuters, scoped validators, and Judgment Day. Generated adapter prompts expand this file; role-specific prompts add only their lens or tool boundary.
 
-**Findings ledger.** Emit a findings ledger with this schema for every entry:
+## Operation Boundary
+
+Review is explicit `review/start(target)`. The operation receives one complete immutable snapshot, is detached, read-only, and terminal after one result. A reviewer never edits code, launches a correction, starts another reviewer, or owns lifecycle routing. Return one result and terminate.
+
+The parent orchestrator selects zero, one, or four initial lenses from deterministic risk classification. Each selected lens runs exactly one exhaustive sweep. Full 4R means four initial lens sweeps, not extra sweeps or three refuter tasks.
+
+## Frozen Findings Ledger
+
+Findings freeze after the initial selected-lens review. Each lens emits neutral structured claims and proof references rather than persuasive narrative:
 
 | Field | Values |
-|-------|--------|
-| `id` | `{LENS}-{NNN}` (e.g. `R1-001`) |
-| `lens` | risk \| readability \| reliability \| resilience \| judgment-day |
-| `location` | `path/to/file.ext:line` or `:start-end` |
-| `severity` | BLOCKER \| CRITICAL \| WARNING \| SUGGESTION |
-| `status` | open \| fixed \| verified \| refuted \| wont-fix \| info |
-| `evidence` | why it matters |
+|---|---|
+| `id` | `{LENS}-{NNN}` |
+| `lens` | `risk | readability | reliability | resilience | judgment-day | scoped-fix-validator` |
+| `location` | `path/to/file.ext:line` or range |
+| `severity` | `BLOCKER | CRITICAL | WARNING | SUGGESTION` |
+| `claim` | Neutral statement of observable incorrect behavior |
+| `evidence_class` | `deterministic | inferential | insufficient` |
+| `proof_refs` | Concrete command, output hash, or `file:line` references |
+| `status` | `open | corroborated | refuted | inconclusive | fixed | verified | info` |
 
-If the first pass finds nothing, persist an empty ledger record rather than skip persistence.
+Persist an explicit empty ledger when no findings exist. WARNING/SUGGESTION rows are `info`; they never drive correction or block approval.
 
-**Adversarial verification.** Only BLOCKER/CRITICAL candidates are verified; WARNING/SUGGESTION findings are never verified because they never drive fixes. Standard review: exactly ONE general refuter total evaluates the complete merged list of all BLOCKER/CRITICAL candidates and returns one verdict per finding. Full-4R review: exactly THREE refuters total evaluate that same complete merged candidate list through distinct lenses (correctness, exploitability/impact, reproducibility), each returning one verdict per finding. Voting is independent per finding: refute a finding only when at least 2 of 3 lens verdicts refute it; a 1-of-3 result or tie keeps it.
+## Evidence Routing
 
-**Refutation protocol.** The orchestrator invokes refutation once after merging lens ledgers and before any fix work; only BLOCKER/CRITICAL candidates are included. The task ceiling is review-level and structural: 1 refuter task for a standard review or 3 total for full-4R, whether the list has 2 candidates or 20; NEVER spawn one refuter task per candidate. Where dedicated `review-refuter` agents exist, standard review delegates exactly one task with the `general` lens, while full-4R delegates exactly three tasks, one per lens, in parallel. Every task receives the complete merged candidate list. In standard review, a finding is `refuted` only when the general verdict refutes it; in full-4R, apply the independent 2-of-3 vote per finding. Any malformed or missing per-finding verdict defaults to `stands` for that finding. Judgment Day is the exception: its two-judge convergence satisfies adversarial verification and it spawns no `review-refuter` tasks.
+- Deterministic severe findings become `corroborated` with proof and never invoke a refuter.
+- Inferential severe findings from every selected lens are merged into exactly ONE detached refuter operation for the transaction. The refuter receives the immutable target plus all neutral claims/proof references and returns one `corroborated | refuted | inconclusive` result per finding.
+- Insufficient findings become `inconclusive` and are never auto-fixed.
+- Missing, malformed, or incomplete refuter output is `inconclusive`, never implied corroboration.
+- Judgment Day's two-judge agreement is its corroboration mechanism; it never launches `review-refuter`. Native state records two distinct blind execution hashes, two distinct result hashes, a confirmation/agreement hash, and exactly two judge executions before findings can freeze.
 
-**Severity floor.** Only BLOCKER/CRITICAL findings that survive adversarial verification enter the fix → re-review loop. WARNING/SUGGESTION findings are reported once with status `info`, are never re-reviewed, and never block. Judgment-day may record real/theoretical as a separate `assessment`, but canonical severity remains `WARNING` and canonical status remains `info`; a WARNING is never `open`.
+The refuter is read-only, cannot add findings or change scope, returns one complete result, and terminates. One candidate or twenty candidates consume the same single refuter-batch budget.
 
-**Convergence budget.** Maximum 2 fix rounds per review. One fix round = the orchestrator (directly or via a single writer sub-agent) applies fixes for all open verified BLOCKER/CRITICAL findings, then a scoped re-review verifies the fix diff against the ledger; in judgment-day the fix actor is `jd-fix-agent`. Anything still open after round 2 is reported to the user as open — the loop never extends.
+## Correction and Scoped Validation
 
-**Ledger persistence honors the artifact store.**
-- `openspec`: write `openspec/changes/{change-name}/review-ledger.md`.
-- `engram`: upsert topic `sdd/{change-name}/review-ledger` (ad-hoc judgment-day without a change: `review/{target-slug}/ledger`, where `target-slug` = `pr-{number}` when reviewing a PR, else the current branch name kebab-cased, else a kebab-case slug of the user-stated review target).
-- `none`: keep the ledger inline in the response; do not write files or Engram artifacts — the ledger lives only in this conversation; complete the review → fix → re-review loop within the session because it is not persisted across compaction.
+Only the parent orchestrator may launch a correction actor or scoped validator, and only within native transaction counters.
 
-**Scoped re-review.** A re-review pass receives ONLY the persisted ledger and the fix diff as input — never the original full diff. It MUST verify each ledger finding's resolution and MUST review only fix-touched lines; it MUST NOT re-read the full original diff. A finding on an untouched line MUST be logged with status `info` as a first-pass quality signal and MUST NOT by itself trigger another full round.
+Ordinary review permits at most one correction transaction composed of atomic work units. Each work unit records focused-test evidence, runtime evidence or justified `N/A`, and an independent rollback boundary. Work-unit count never creates another correction budget.
 
-**Execution mode.** Dedicated-agent mode (Claude, Cursor, Kimi, Kiro, OpenCode/Kilocode): each review-* agent runs its own sweep-budgeted pass and returns its own ledger rows; merge those rows into the persisted ledger. Refutation uses the fixed review-level fan-out above: exactly 1 batched task for standard review or exactly 3 batched tasks for full-4R; only the 3 full-4R tasks may run in parallel.
+If correction occurred, ordinary review runs exactly one scoped fix-delta validator. It is detached and read-only, receives only the frozen ledger plus immutable fix delta, verifies fix-touched lines, may append fix-caused defects with proof, and can return only `approve` or `escalate`. It never reopens the original diff, launches another correction, or iterates.
+
+Judgment Day replaces ordinary 4R for an explicitly selected target. It alone may run at most two fix rounds and two scoped re-judgments; it does not inherit or extend an ordinary budget.
+
+## Independent Final Verification
+
+Final verification is independent requirements/runtime verification. It checks actual requirements/scenarios, task completion, current test/build evidence, frozen-ledger resolution, snapshot identity, and counter coherence. A contradiction or newly failing deterministic check escalates; it cannot start another 4R, refuter, correction, or scoped-validation loop.
+
+Only `approved | escalated` are terminal transaction states. `scope-changed | invalidated` are lifecycle validation outcomes requiring explicit action.
+
+## Persistence and Lifecycle Gates
+
+OpenSpec mode persists exact machine-readable artifacts:
+
+- `openspec/changes/{change-name}/reviews/transaction.json`
+- `openspec/changes/{change-name}/reviews/policy.md`
+- `openspec/changes/{change-name}/reviews/ledger.json`
+- `openspec/changes/{change-name}/reviews/receipt.json`
+- `openspec/changes/{change-name}/reviews/chain-bundle.json`
+- `openspec/changes/{change-name}/reviews/gate-context.json`
+
+The sole authoritative append-only CAS state is `<git-common-dir>/gentle-ai/review-transactions/v1/{lineage-id}/`, derived from the canonical validated repository root and a canonical lowercase kebab-case lineage ID. Every Git subprocess uses explicit `git -C <canonical-repo>` and strips inherited repository/worktree/common-dir/index/object/alternate/namespace/shallow/graft/replacement/discovery overrides while preserving ordinary credentials and safe configuration. Linked worktrees retain shared common-dir behavior.
+
+`transaction.json`, chain bundles, and every OpenSpec or Engram artifact are explicitly non-authoritative mirrors. Dispatchers and lifecycle gates load exact HEAD and validate every content-addressed predecessor to one legal `review/start` genesis plus semantic state invariants. Frozen severe findings cannot disappear or lose classification/outcome; pending refuter IDs require one consumed complete batch; corroborated IDs equal correction IDs; corrected candidates require scoped validation; ready/final/approved states have coherent mode counters and no pending severe work. WARNING/SUGGESTION rows remain non-blocking `info`. Missing, cyclic, reordered, regressive, hash-mismatched, semantically incomplete, or standalone terminal chains fail closed.
+
+Writers use a non-blocking cross-platform OS lock with token/PID/host/timestamp observability and crash release. Exact retries repair a linked event or return an already-committed exact HEAD without changing budget; stale predecessors or different content remain rejected. Use `review-resume` after machine-output failure rather than rerunning review work.
+
+Engram mode upserts the equivalent exact topics:
+
+- `sdd/{change-name}/review/transaction`
+- `sdd/{change-name}/review/policy`
+- `sdd/{change-name}/review/ledger`
+- `sdd/{change-name}/review/receipt`
+- `sdd/{change-name}/review/chain-bundle`
+- `sdd/{change-name}/review/gate-context`
+
+Ad-hoc review uses `review/{target-slug}/{transaction|policy|ledger|receipt|chain-bundle|gate-context}`. If no artifact store exists, keep all artifacts inline for the current session and never claim durable receipt reuse.
+
+Post-implementation/post-apply starts ordinary review only when no valid receipt exists. Pre-commit, pre-push, pre-PR, and SDD archive call the native receipt validator for the same content-bound receipt; they never create a budget or silently launch Judgment Day. Gate context binds expected HEAD, genesis, ordered chain identity, and bundle digest. The validator derives the authoritative store root, validates the complete semantic chain, derives the current repository target, and hashes policy, ledger, fix delta, verify evidence, and release artifacts from persisted inputs; caller-authored store paths, transactions, trees, or hash assertions are never authoritative. Missing, `scope-changed`, `invalidated`, and `escalated` results emit machine-readable denial and return non-success.
+
+For clean-clone/workstation recovery, persist the full ordered content-addressed chain bundle. Explicit `review-bundle-import` MUST validate bundle digest, every event hash/predecessor/semantic transition, lineage/generation/mode, initial/final snapshot identities, terminal fix-diff semantics, and expected gate chain identity before CAS installation into the repository-derived destination. Recovery is delivered-content equivalence, not snapshot-structure equivalence: the current derived candidate and delivered path digest MUST match `final_candidate_tree` and the receipt/lineage path scope; the authoritative intended-untracked proof MUST reproduce from that candidate; and policy, ledger, evidence, fix delta, receipt, and chain bindings MUST match exactly. The terminal fix-diff kind, base, ledger IDs, and identity remain preserved for audit, but the recovery snapshot need not share its kind, base, or identity. `review-validate` never auto-imports. Tampered content, wrong path scope/artifacts, truncated or tampered chains, different lineages, arbitrary alternate stores, or unbound bundles remain untrusted and fail closed.
+
+Release from protected `main` has a narrow fast path and does not require a reusable review receipt when all of these are proven: the tag target is the current immutable `origin/main` SHA, required CI for that exact SHA is successful, the remote has not advanced before tag push, and no new vulnerability, policy, provenance, signing, generated-artifact, or release evidence requires escalation. Local branch position and worktree dirtiness are irrelevant because they are not publication inputs. Tag the verified remote SHA explicitly; never infer it from local `HEAD`. Any failed or unprovable condition falls back to native receipt validation and fails closed on missing, changed, invalidated, or escalated state. Major releases and releases following an operational or security incident always require explicit extraordinary review even when the fast-path checks pass.
+
+Outside that protected-`main` fast path, release validation additionally requires an immutable release tree plus content hashes for configuration, generated artifacts, provenance/signing, publication boundary, and evidence freshness. Publication boundary state must be sealed and evidence freshness state must be current; a generic base-relationship context cannot authorize publication.
+
+New CI, vulnerability, base, policy, provenance, or release evidence may invalidate or escalate without reopening unchanged code review. Operational incident separation remains valid only while code, configuration, generated-artifact, and provenance targets are immutable.
+
+## User-Owned Runtime Selection
+
+Model, provider, profile, and effort selection remain optional user choices. This review contract never enforces or silently changes those settings.
 
 #### Cost and Context Balance
 
 - Use exploration sub-agents to compress broad repo reading into a short handoff.
 - Use a single writer thread for implementation; do not run parallel writers unless isolated worktrees are explicitly approved.
-- Use concrete review lenses after implementation, conflict resolution, or incidents because their value is independent judgment, not token saving.
+- Start concrete review lenses only inside one explicit post-implementation `review/start(target)`; conflict and incident handling validate the existing receipt and immutable boundaries instead of reopening review.
 - Avoid delegation for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
 
 
@@ -216,7 +277,7 @@ In **Automatic** mode the orchestrator is the gatekeeper between phases. The gat
 
 **Hybrid validation mechanism (cost-aware):**
 - **Inline for low-risk phases** (`sdd-explore`, `sdd-spec`, `sdd-tasks`, `sdd-archive`): the orchestrator runs the checks itself by reading the artifact back. No extra subagent.
-- **Fresh-context reviewer for high-risk phases** (`sdd-design`, `sdd-apply`): invoke a fresh-context reviewer subagent for independent judgment, because errors in these phases compound downstream. Use the `sdd-verify` model alias for the delegated gate review.
+- **Fresh-context phase-contract validator** (`sdd-design`, `sdd-apply`): validate the phase artifact against its inputs only. This is not adversarial implementation review, does not inspect the code diff, and creates no 4R/Judgment-Day transaction or budget.
 - **Escalation on smell:** if an inline check on a low-risk phase finds any smell (status mismatch, unresolved path, suspected drift, missing artifact), escalate that phase to a fresh-context delegated review before deciding.
 
 **On gate PASS:** continue automatically to the next phase. Auto stays auto on the happy path.
@@ -416,16 +477,17 @@ Convention files under `~/.cursor/skills/_shared/` (global) or `.agent/skills/_s
 <!-- gentle-ai:trigger-rules -->
 ## Agent Trigger Rules
 
-Deterministic triage router. gentle-ai renders this text; the AI orchestrator applies it as a decision procedure, not advice. Triage every diff into exactly one tier before acting:
+Deterministic bounded-review lifecycle router; apply it as a decision procedure, not advice. Post-apply starts `review/start(target)` only when no valid receipt exists. Pre-commit, pre-push, and pre-PR validate the same content-bound receipt and never create a new review budget or silently start Judgment Day. Release from protected `main` may bypass receipt validation only when the tag targets the current immutable `origin/main` SHA, required CI for that exact SHA is successful, the remote head is rechecked before tag push, and no fresh risk evidence exists; otherwise fail closed through native receipt validation. Major and post-incident releases require explicit extraordinary review.
 
-1. **Trivial diff** (ONLY documentation, comments, formatting, or typo fixes in strings — zero executable code and zero configuration changes): run no review lens. Any diff touching executable code or configuration is at least standard tier.
-2. **Standard diff**: run exactly ONE lens — the risk-table row matching the dominant risk; do not add lenses.
-3. **Hot path or large diff**: run the full 4R fan-out; never at pre-commit or pre-push.
+Receipt action table: missing → start explicitly after implementation/post-apply; scope-changed → create a new lineage; invalidated → require explicit maintainer action; escalated → stop. New CI, vulnerability, base, policy, provenance, or release evidence may invalidate/escalate without reopening unchanged code review.
 
-Risk table (standard tier — pick ONE row): Clear naming, structure, maintainability, or small refactors → `review-readability`; Behavior, state, tests, determinism, or regressions → `review-reliability`; Shell/process integration, partial failures, recovery, or degraded dependencies → `review-resilience`; Security, permissions, data exposure/loss, architecture, or dependencies → `review-risk`.
+Inside explicit `review/start(target)` only, select initial lenses by deterministic risk: **Low** (only documentation, comments, formatting, or typo-only string edits; zero executable-code and configuration changes) → no lens; **Medium** (every remaining change) → exactly ONE dominant-risk lens; **High** (security/auth/update/payments, data loss or exposure, permission changes, shell/process integration, or more than 400 authored changed lines) → four initial 4R lens sweeps. Generated goldens are excluded from the authored threshold but remain in snapshot identity. Model, provider, profile, and reasoning effort are never classifier inputs.
 
-- At **pre-commit**, always: trivial diff → no lens; otherwise run exactly ONE lens selected by the risk table (default `review-readability`); never the full 4R fan-out here. (everyday event → trivial diffs skip review, standard diffs get exactly ONE lens (~1x); full 4R fan-out reserved for pre-pr)
-- At **pre-push**, always: trivial diff → no lens; otherwise run exactly ONE lens selected by the risk table (default `review-readability`); never the full 4R fan-out here. (everyday event → trivial diffs skip review, standard diffs get exactly ONE lens (~1x); 4R fan-out reserved for pre-pr on hot paths / large diffs)
-- At **pre-pr**: trivial diff → no lens; else if the diff touches `**/auth/**`, `**/update/**`, `**/security/**`, `**/payments/**` OR the diff exceeds 400 changed lines, run `review-risk`, `review-resilience`, `review-readability`, and `review-reliability` using the adapter's execution mode (parallel with dedicated agents; sequential inline); else run exactly ONE lens selected by the risk table. (full 4R fan-out (~4x) only on hot paths (auth/update/security/payments) or diffs exceeding 400 changed lines; standard pre-pr diffs get exactly ONE lens)
-- At **post-sdd-phase**, after the design or apply phase completes: run `judgment-day`. (adversarial verification (two blind judges; no refuter fan-out) only at high-stakes SDD phases (design and apply))
+Risk table: Clear naming, structure, maintainability, or small refactors → `review-readability`; Behavior, state, tests, determinism, or regressions → `review-reliability`; Shell/process integration, partial failures, recovery, or degraded dependencies → `review-resilience`; Security, permissions, data exposure/loss, architecture, or dependencies → `review-risk`.
+
+- At **pre-commit**, always: validate the existing content-bound receipt with native `review-validate`; never start a reviewer or reset its budget. (validate the staged/intended content against the existing receipt; never create a review budget)
+- At **pre-push**, always: validate the existing content-bound receipt with native `review-validate`; never start a reviewer or reset its budget. (validate pushed commits against the same content-bound receipt)
+- At **pre-pr**, always: validate the existing content-bound receipt with native `review-validate`; never start a reviewer or reset its budget. (validate candidate tree, paths, policy, evidence, base relationship, and receipt without reopening review)
+- At **release**, always: validate the existing content-bound receipt with native `review-validate`; never start a reviewer or reset its budget. (validate immutable release tree, provenance, evidence, and publication boundary)
+- At **post-sdd-phase**, after the apply phase completes: if no valid receipt exists, explicitly run `review/start(target)`; otherwise reuse the receipt. (explicitly start ordinary bounded implementation review after apply only when no valid receipt exists)
 <!-- /gentle-ai:trigger-rules -->

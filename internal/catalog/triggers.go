@@ -6,27 +6,9 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
-// defaultLargeChangedLineThreshold is the minimum number of changed lines in a
-// diff that triggers the full 4R review fan-out on pre-pr events.
-//
-// Token-budget rationale (4R v2 deterministic triage):
-//   - Trivial tier: ONLY documentation, comments, formatting, or typo fixes in
-//     strings — zero executable code and zero configuration changes — run no
-//     review lens at all (0x cost). Any diff touching executable code or
-//     configuration is at least standard tier. The trivial exemption is
-//     rendered wording; it needs no schema field because the orchestrator
-//     triages the diff.
-//   - Standard tier: every non-trivial diff runs exactly ONE lens selected by
-//     the risk table (~1x cost). This covers everyday pre-commit/pre-push and
-//     off-hot-path pre-pr diffs. `When.Always` on a single-lens binding
-//     expresses this tier.
-//   - Full-4R tier (hot paths / large diffs): pre-pr on auth/update/security/
-//     payments paths OR diffs above this threshold fan out to all four 4R
-//     lenses (~4x cost). This gates the expensive review behind meaningful
-//     signal. The compound `PathGlobs + MinDiffLines (Combine: "or")`
-//     condition expresses this tier.
-//   - High-stakes SDD: post-sdd-phase on design/apply runs judgment-day
-//     (two blind judges; no refuter fan-out). Reserved for high-stakes SDD phases only.
+// defaultLargeChangedLineThreshold remains the authored-code threshold used by
+// the explicit review/start risk classifier. Generated goldens do not count
+// toward this threshold, but they remain part of the immutable target tree.
 const defaultLargeChangedLineThreshold = 400
 
 // on-ci and on-schedule have no built-in default because the appropriate
@@ -37,48 +19,48 @@ var defaultRuleSet = model.TriggerRuleSet{
 		model.EventPreCommit,
 		model.EventPrePush,
 		model.EventPrePR,
+		model.EventRelease,
 		model.EventPostSDDPhase,
 		model.EventOnCI,
 		model.EventOnSchedule,
 	},
 	Bindings: []model.TriggerBinding{
 		{
-			On:   model.EventPreCommit,
-			When: model.TriggerWhen{Always: true},
-			Run:  []string{"review-readability"},
-			Mode: model.ModeAdvisory,
-			Reason: "everyday event → trivial diffs skip review, standard diffs get exactly " +
-				"ONE lens (~1x); full 4R fan-out reserved for pre-pr",
+			On:     model.EventPreCommit,
+			When:   model.TriggerWhen{Always: true},
+			Run:    []string{"review-receipt-validator"},
+			Mode:   model.ModeStrong,
+			Reason: "validate the staged/intended content against the existing receipt; never create a review budget",
 		},
 		{
-			On:   model.EventPrePush,
-			When: model.TriggerWhen{Always: true},
-			Run:  []string{"review-readability"},
-			Mode: model.ModeAdvisory,
-			Reason: "everyday event → trivial diffs skip review, standard diffs get exactly " +
-				"ONE lens (~1x); 4R fan-out reserved for pre-pr on hot paths / large diffs",
+			On:     model.EventPrePush,
+			When:   model.TriggerWhen{Always: true},
+			Run:    []string{"review-receipt-validator"},
+			Mode:   model.ModeStrong,
+			Reason: "validate pushed commits against the same content-bound receipt",
 		},
 		{
-			On: model.EventPrePR,
-			When: model.TriggerWhen{
-				PathGlobs:    []string{"**/auth/**", "**/update/**", "**/security/**", "**/payments/**"},
-				MinDiffLines: defaultLargeChangedLineThreshold,
-				Combine:      "or",
-			},
-			Run:  []string{"review-risk", "review-resilience", "review-readability", "review-reliability"},
-			Mode: model.ModeStrong,
-			Reason: "full 4R fan-out (~4x) only on hot paths (auth/update/security/payments) " +
-				"or diffs exceeding 400 changed lines; standard pre-pr diffs get exactly ONE lens",
+			On:     model.EventPrePR,
+			When:   model.TriggerWhen{Always: true},
+			Run:    []string{"review-receipt-validator"},
+			Mode:   model.ModeStrong,
+			Reason: "validate candidate tree, paths, policy, evidence, base relationship, and receipt without reopening review",
+		},
+		{
+			On:     model.EventRelease,
+			When:   model.TriggerWhen{Always: true},
+			Run:    []string{"review-receipt-validator"},
+			Mode:   model.ModeStrong,
+			Reason: "validate immutable release tree, provenance, evidence, and publication boundary",
 		},
 		{
 			On: model.EventPostSDDPhase,
 			When: model.TriggerWhen{
-				Phases: []string{"design", "apply"},
+				Phases: []string{"apply"},
 			},
-			Run:  []string{"judgment-day"},
-			Mode: model.ModeStrong,
-			Reason: "adversarial verification (two blind judges; no refuter fan-out) only at " +
-				"high-stakes SDD phases (design and apply)",
+			Run:    []string{"review-start"},
+			Mode:   model.ModeStrong,
+			Reason: "explicitly start ordinary bounded implementation review after apply only when no valid receipt exists",
 		},
 	},
 }
@@ -97,6 +79,9 @@ func SupportedTriggerEvents() []model.TriggerEvent {
 // is deliberately absent: refuters are invoked by the orchestrator inside a
 // review's adversarial-verification step, never bound to a lifecycle event.
 var knownAgentList = []string{
+	// Native bounded-review lifecycle operations.
+	"review-start",
+	"review-receipt-validator",
 	// 4R review lenses
 	"review-risk",
 	"review-readability",
@@ -124,10 +109,9 @@ func KnownAgents() []string {
 }
 
 // DefaultTriggerRuleSet returns a defensive copy of the built-in default
-// trigger rule set. The default bindings encode the 4R v2 deterministic
-// triage: trivial diffs run no lens, standard diffs run exactly ONE lens
-// selected by the risk table, and the full 4R fan-out fires only when
-// warranted (hot paths / large diffs on pre-pr / high-stakes SDD phases).
+// trigger rule set. Post-apply starts an explicit bounded review only when no
+// valid receipt exists. Commit, push, PR, and release events validate that same
+// receipt and never create another review budget or launch Judgment Day.
 //
 // on-ci and on-schedule have no built-in default because the appropriate
 // agent/cadence is installation-specific; users opt in via override.

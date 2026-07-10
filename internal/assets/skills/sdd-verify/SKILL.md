@@ -38,6 +38,7 @@ The orchestrator should provide structured status from `skills/_shared/sdd-statu
 ## Hard Rules
 
 - Read all available status `contextFiles` before judging implementation. Full spec-driven verification reads proposal, specs, design, and tasks; partial artifact sets degrade as described below.
+- Run full verification only after all tasks are complete. If any task is pending, return `blocked` without running the full suite.
 - Execute relevant tests; static analysis alone is never verification.
 - A spec scenario is compliant only when a covering test passed at runtime.
 - Compare specs first, design second, task completion third.
@@ -45,6 +46,11 @@ The orchestrator should provide structured status from `skills/_shared/sdd-statu
 - Persist `verify-report` according to mode: Engram, openspec file, hybrid both, or inline-only for `none`.
 - If Strict TDD is active, load `strict-tdd-verify.md` from this skill directory; if inactive, never load it.
 - Return the Section D envelope from `../_shared/sdd-phase-common.md`.
+- Count the actual requirements and scenarios from the retrieved specs; never invent envelope totals.
+- Record current test/build commands, exit codes, and `test_output_hash` / `build_output_hash` values in the strict envelope.
+- Model/provider/profile/effort selection remains user-owned and is never changed by verification.
+- This is the one independent requirements/runtime final verification. A contradiction or new failing check returns FAIL/escalation; it never starts 4R, Judgment Day, a refuter, another correction, or scoped validation.
+- Consume exact review artifacts from structured status (`reviews/transaction.json`, `ledger.json`, `receipt.json`, `gate-context.json`, or equivalent `sdd/{change-name}/review/*` Engram topics). Do not substitute prompt-only state when native artifacts exist.
 
 ## Decision Gates
 
@@ -67,7 +73,7 @@ The orchestrator should provide structured status from `skills/_shared/sdd-statu
 1. Load relevant skills via shared SDD Section A.
 2. Retrieve artifacts via shared Section B for the active persistence mode, or read the concrete `contextFiles` from structured status.
 3. Resolve testing/TDD mode from cached capabilities, config, or project files.
-4. Count completed and incomplete tasks. Any unchecked implementation task is CRITICAL and blocks archive readiness.
+4. Count completed and incomplete tasks. Any unchecked task blocks full verification; focused checks remain an apply work-unit responsibility.
 5. If specs exist, map each spec requirement/scenario to implementation evidence and tests.
 6. If design exists, check design decisions against changed code. If design is missing, skip design coherence and record why.
 7. Run test, build/type-check, and coverage commands when available. For full spec verification, preserve gentle-ai's stricter runtime evidence: source inspection alone does not prove spec scenario compliance.
@@ -123,10 +129,14 @@ You are a VERIFY sub-agent. Your job: check implemented changes match spec accep
 ## Hard Rules
 
 - Read spec acceptance criteria only
+- Count actual requirements and scenarios from the spec instead of copying example totals.
 - Inspect changed files listed in apply-progress (or tasks) — limit to those files
 - Use structured status when provided; stop on workspace-planning action context
-- Do NOT run tests unless `strict_tdd` is active and test runner is explicitly provided
+- Run the provided test and build/type-check commands even when `strict_tdd` is inactive; verification requires current evidence.
+- Include command, exit code, `test_output_hash`, and `build_output_hash` fields in the strict result envelope.
+- Preserve user-owned model/provider/profile/effort selection; do not prescribe or override it.
 - Do not fix issues; report them for the orchestrator/user
+- A contradiction or failing check escalates; never start another review/fix loop.
 - Return minimal report
 
 ## Return Minimal Report

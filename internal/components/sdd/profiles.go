@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
@@ -534,7 +533,7 @@ func jdProfileAgentEntry(jd string) map[string]any {
 //  4. Replaces bare sub-agent references (e.g. sdd-init) with suffixed ones
 //     (e.g. sdd-init-{name}) in the prompt text
 func buildProfileOrchestratorPrompt(profile model.Profile) (string, error) {
-	base := assets.MustRead(sddOrchestratorAsset(model.AgentOpenCode))
+	base := renderSDDOrchestratorAsset(model.AgentOpenCode)
 
 	// Extract section based on model capability (derived from model name).
 	capability := "capable"

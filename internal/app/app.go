@@ -86,6 +86,18 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunSDDStatus(args[1:], stdout)
 		case "sdd-continue":
 			return cli.RunSDDContinue(args[1:], stdout)
+		case "review-start":
+			return cli.RunReviewStart(args[1:], stdout)
+		case "review-resume":
+			return cli.RunReviewResume(args[1:], stdout)
+		case "review-step":
+			return cli.RunReviewStep(args[1:], stdout)
+		case "review-bundle-export":
+			return cli.RunReviewBundleExport(args[1:], stdout)
+		case "review-bundle-import":
+			return cli.RunReviewBundleImport(args[1:], stdout)
+		case "review-validate":
+			return cli.RunReviewValidate(args[1:], stdout)
 		case "install":
 			if hasHelpFlag(args[1:]) {
 				cli.PrintInstallHelp(stdout)
@@ -517,6 +529,7 @@ func tuiExecute(
 			ClaudePhaseAssignments:      claudePhaseState,
 			KiroModelAssignments:        kiroAliasesToStrings(selection.KiroModelAssignments),
 			CodexModelAssignments:       codexEffortsToStrings(selection.CodexModelAssignments),
+			CodexOrchestratorAssignment: codexOrchestratorToState(selection.CodexOrchestratorAssignment),
 			CodexCarrilModelAssignments: selection.CodexCarrilModelAssignments,
 			CodexPhaseModelAssignments:  selection.CodexPhaseModelAssignments,
 			ModelAssignments:            modelAssignmentsToState(selection.ModelAssignments),
@@ -648,6 +661,13 @@ func applyOverrides(selection *model.Selection, overrides *model.SyncOverrides) 
 	if overrides.KiroModelAssignments != nil {
 		selection.KiroModelAssignments = overrides.KiroModelAssignments
 	}
+	if overrides.ClearCodexOrchestratorAssignment {
+		selection.CodexOrchestratorAssignment = nil
+		selection.ClearCodexOrchestratorAssignment = true
+	} else if overrides.CodexOrchestratorAssignment != nil {
+		selection.CodexOrchestratorAssignment = overrides.CodexOrchestratorAssignment
+		selection.ClearCodexOrchestratorAssignment = false
+	}
 	if overrides.CodexModelAssignments != nil {
 		selection.CodexModelAssignments = overrides.CodexModelAssignments
 	}
@@ -739,6 +759,9 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 		}
 		selection.CodexPhaseModelAssignments = m
 	}
+	if !selection.ClearCodexOrchestratorAssignment && selection.CodexOrchestratorAssignment == nil && s.CodexOrchestratorAssignment != nil {
+		selection.CodexOrchestratorAssignment = codexOrchestratorFromState(s.CodexOrchestratorAssignment)
+	}
 	if len(selection.ModelAssignments) == 0 && len(s.ModelAssignments) > 0 {
 		m := make(map[string]model.ModelAssignment, len(s.ModelAssignments))
 		for k, v := range s.ModelAssignments {
@@ -762,6 +785,8 @@ func persistAssignments(homeDir string, selection model.Selection) {
 		selection.KiroModelAssignments != nil ||
 		selection.ModelAssignments != nil ||
 		selection.CodexModelAssignments != nil ||
+		selection.CodexOrchestratorAssignment != nil ||
+		selection.ClearCodexOrchestratorAssignment ||
 		selection.CodexCarrilModelAssignments != nil ||
 		selection.CodexPhaseModelAssignments != nil
 	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 && len(selection.CodexModelAssignments) == 0 && len(selection.CodexCarrilModelAssignments) == 0 && len(selection.CodexPhaseModelAssignments) == 0 && !hasAssignmentSignal {
@@ -797,6 +822,11 @@ func persistAssignments(homeDir string, selection model.Selection) {
 		} else {
 			current.KiroModelAssignments = nil
 		}
+	}
+	if selection.ClearCodexOrchestratorAssignment {
+		current.CodexOrchestratorAssignment = nil
+	} else if selection.CodexOrchestratorAssignment != nil {
+		current.CodexOrchestratorAssignment = codexOrchestratorToState(selection.CodexOrchestratorAssignment)
 	}
 	if selection.CodexModelAssignments != nil {
 		if len(selection.CodexModelAssignments) > 0 {
@@ -956,4 +986,18 @@ func isExplicitUpdateFlow(args []string) bool {
 		return false
 	}
 	return args[0] == "update" || args[0] == "upgrade"
+}
+
+func codexOrchestratorToState(a *model.CodexOrchestratorAssignment) *state.CodexOrchestratorAssignmentState {
+	if a == nil {
+		return nil
+	}
+	return &state.CodexOrchestratorAssignmentState{Model: a.Model, Effort: string(a.Effort)}
+}
+
+func codexOrchestratorFromState(a *state.CodexOrchestratorAssignmentState) *model.CodexOrchestratorAssignment {
+	if a == nil {
+		return nil
+	}
+	return &model.CodexOrchestratorAssignment{Model: a.Model, Effort: model.CodexEffort(a.Effort)}
 }

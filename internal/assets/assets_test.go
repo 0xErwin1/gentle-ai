@@ -13,13 +13,13 @@ func TestOrchestratorsRequireNonSkippableGeneralDelegationTriggers(t *testing.T)
 		"opencode/sdd-orchestrator.md",
 		"codex/sdd-orchestrator.md",
 	}
-	required := []string{
+	requiredControls := []string{
 		"Mandatory Delegation Triggers",
 		"non-skippable hard gates",
 		"TOTALMENTE obligatorio",
 		"4-file rule",
 		"Multi-file write rule",
-		"PR rule",
+		"Lifecycle receipt rule",
 		"Incident rule",
 		"Long-session rule",
 		"Fresh review rule",
@@ -29,10 +29,49 @@ func TestOrchestratorsRequireNonSkippableGeneralDelegationTriggers(t *testing.T)
 	}
 	for _, path := range paths {
 		content := MustRead(path)
-		for _, want := range required {
+		for _, want := range requiredControls {
 			if !strings.Contains(content, want) {
 				t.Fatalf("%s missing non-skippable delegation guard %q", path, want)
 			}
+		}
+
+		triggerSection := firstMarkdownSection(content,
+			"### Mandatory Delegation Triggers",
+			"#### Mandatory Delegation Triggers",
+		)
+		if triggerSection == "" {
+			t.Fatalf("%s missing Mandatory Delegation Triggers section", path)
+		}
+
+		lifecycleLine := markdownLineContaining(triggerSection, "**Lifecycle receipt rule**")
+		if !lineContainsAll(
+			"before commit, push, PR, or release",
+			"content-bound receipt",
+			"`review-validate`",
+			"never launch a lens",
+			"Judgment Day",
+			"new budget at the gate",
+		)(lifecycleLine) {
+			t.Fatalf("%s lifecycle gate must validate the existing receipt without launching a lens, Judgment Day, or a new budget: %q", path, lifecycleLine)
+		}
+
+		incidentLine := markdownLineContaining(triggerSection, "**Incident rule**")
+		if !lineContainsAll(
+			"remain immutable",
+			"validate the existing receipt",
+			"explicit scope action",
+			"not reopened review",
+		)(incidentLine) {
+			t.Fatalf("%s incident gate must prove immutable targets and validate the existing receipt: %q", path, incidentLine)
+		}
+
+		freshReviewLine := markdownLineContaining(triggerSection, "**Fresh review rule**")
+		if !lineContainsAll(
+			"fresh adversarial lenses",
+			"only inside one explicit",
+			"`review/start(target)`",
+		)(freshReviewLine) {
+			t.Fatalf("%s fresh review rule must bind adversarial review to one explicit review/start target: %q", path, freshReviewLine)
 		}
 	}
 }
@@ -1400,8 +1439,8 @@ func TestClaudeCommandsDetectWorkspaceAgentSide(t *testing.T) {
 }
 
 // TestOrchestratorsRequireAutomaticGatekeeper asserts that every orchestrator
-// template carries the Automatic Mode Gatekeeper anchor phrases, so the
-// per-phase validation contract cannot silently drift out of any one template.
+// template validates every phase boundary and keeps design/apply validation
+// artifact-bound rather than silently opening an adversarial code review.
 func TestOrchestratorsRequireAutomaticGatekeeper(t *testing.T) {
 	paths := []string{
 		"antigravity/sdd-orchestrator.md",
@@ -1421,7 +1460,7 @@ func TestOrchestratorsRequireAutomaticGatekeeper(t *testing.T) {
 		"Automatic Mode Gatekeeper",
 		"The gatekeeper runs after every phase",
 		"Inline for low-risk phases",
-		"Fresh-context reviewer for high-risk phases",
+		"Fresh-context phase-contract validator",
 		"re-run the same phase exactly once",
 		"STOP the automatic chain",
 	}
@@ -1435,15 +1474,31 @@ func TestOrchestratorsRequireAutomaticGatekeeper(t *testing.T) {
 				t.Fatalf("%s missing Automatic Mode Gatekeeper anchor %q", path, anchor)
 			}
 		}
+
+		validatorLine := markdownLineContaining(content, "Fresh-context phase-contract validator")
+		if !lineContainsAll(
+			"sdd-design",
+			"sdd-apply",
+			"phase artifact against its inputs",
+			"not adversarial implementation review",
+			"code diff",
+			"creates no 4R/Judgment-Day",
+			"budget",
+		)(validatorLine) {
+			t.Fatalf("%s fresh-context phase-contract validator must validate design/apply artifacts against inputs without code-diff review or a 4R/Judgment-Day budget: %q", path, validatorLine)
+		}
+		if !lineContainsAny("does not inspect the code diff", "inspects no code diff")(validatorLine) {
+			t.Fatalf("%s fresh-context phase-contract validator must prohibit code-diff inspection: %q", path, validatorLine)
+		}
 	}
 }
 
 func TestSDDOrchestratorsRouteFreshReviewsToConcreteReviewLenses(t *testing.T) {
-	t.Run("rejects section-only weak routing fixture", func(t *testing.T) {
+	t.Run("rejects lifecycle gates that reopen review", func(t *testing.T) {
 		weakContent := `### Mandatory Delegation Triggers (Non-Skippable)
-3. **PR rule**: before commit, push, or PR after code changes, run verification unless the diff is trivial docs/text.
-4. **Incident rule**: after wrong cwd or merge recovery, stop and run a fresh audit before continuing.
-6. **Fresh review rule**: use fresh context for adversarial review of diffs, conflicts, PR readiness, and incidents.
+3. **Lifecycle receipt rule**: before commit, push, PR, or release, launch a fresh review through Review Lens Selection.
+4. **Incident rule**: after wrong cwd or merge recovery, run Review Lens Selection before continuing.
+6. **Fresh review rule**: use fresh context for adversarial review of diffs.
 
 #### Review Lens Selection
 - review-risk
@@ -1452,8 +1507,8 @@ func TestSDDOrchestratorsRouteFreshReviewsToConcreteReviewLenses(t *testing.T) {
 - review-reliability
 - If multiple rows match, run the narrow set that covers the risk.
 `
-		if problems := concreteReviewLensRoutingProblems(weakContent); len(problems) == 0 {
-			t.Fatal("section-only fixture should fail because trigger rules do not route to concrete review lenses")
+		if problems := boundedReviewRoutingProblems(weakContent); len(problems) == 0 {
+			t.Fatal("fixture should fail because lifecycle and incident gates reopen review and fresh review lacks an explicit review/start target")
 		}
 	})
 
@@ -1471,15 +1526,12 @@ func TestSDDOrchestratorsRouteFreshReviewsToConcreteReviewLenses(t *testing.T) {
 		"qwen/sdd-orchestrator.md",
 		"windsurf/sdd-orchestrator.md",
 	}
-	required := []string{
+	requiredLenses := []string{
 		"Review Lens Selection",
 		"review-risk",
 		"review-resilience",
 		"review-readability",
 		"review-reliability",
-		"run exactly ONE lens",
-		"run no lens",
-		"run the full 4R set",
 	}
 	for _, path := range paths {
 		t.Run(path, func(t *testing.T) {
@@ -1488,19 +1540,54 @@ func TestSDDOrchestratorsRouteFreshReviewsToConcreteReviewLenses(t *testing.T) {
 			if section == "" {
 				t.Fatalf("%s missing Review Lens Selection section", path)
 			}
-			for _, want := range required {
+			for _, want := range requiredLenses {
 				if !strings.Contains(section, want) {
 					t.Fatalf("%s Review Lens Selection section missing %q", path, want)
 				}
 			}
-			if problems := concreteReviewLensRoutingProblems(content); len(problems) > 0 {
-				t.Fatalf("%s fresh-review guidance does not route to concrete review lenses: %s", path, strings.Join(problems, "; "))
+
+			tierChecks := []struct {
+				label    string
+				matcher  func(string) bool
+				contract string
+			}{
+				{
+					label:    "**Trivial diff**",
+					matcher:  lineContainsAll("run no lens"),
+					contract: "must route to zero lenses",
+				},
+				{
+					label:    "**Standard diff**",
+					matcher:  lineContainsAll("run exactly ONE lens"),
+					contract: "must route to exactly one concrete lens",
+				},
+				{
+					label: "**Hot path**",
+					matcher: lineContainsAll(
+						"run the full 4R set",
+						"`review-risk`",
+						"`review-resilience`",
+						"`review-readability`",
+						"`review-reliability`",
+					),
+					contract: "must route to all four concrete lenses",
+				},
+			}
+			for _, check := range tierChecks {
+				line := markdownLineContaining(section, check.label)
+				if !check.matcher(line) {
+					t.Fatalf("%s Review Lens Selection %s: %q", path, check.contract, line)
+				}
+			}
+
+			if problems := boundedReviewRoutingProblems(content); len(problems) > 0 {
+				t.Fatalf("%s bounded review guidance violates receipt or explicit review-start routing: %s", path, strings.Join(problems, "; "))
 			}
 		})
 	}
 }
 
-func concreteReviewLensRoutingProblems(content string) []string {
+func boundedReviewRoutingProblems(content string) []string {
 	triggerSection := firstMarkdownSection(content,
 		"### Mandatory Delegation Triggers",
 		"#### Mandatory Phase-Boundary Triggers",
@@ -1515,19 +1602,26 @@ func concreteReviewLensRoutingProblems(content string) []string {
 		contract string
 	}{
 		{
-			label:    "PR rule",
-			matcher:  lineContainsAll("concrete", "Review Lens Selection"),
-			contract: "must select concrete lens(es) through Review Lens Selection",
+			label: "Lifecycle receipt rule",
+			matcher: lineContainsAll(
+				"before commit, push, PR, or release",
+				"content-bound receipt",
+				"`review-validate`",
+				"never launch a lens",
+				"Judgment Day",
+				"new budget at the gate",
+			),
+			contract: "must validate the content-bound receipt without launching a lens, Judgment Day, or a new budget",
 		},
 		{
 			label:    "Incident rule",
-			matcher:  lineContainsAll("concrete", "Review Lens Selection"),
-			contract: "must route fresh incident audit/review through Review Lens Selection",
+			matcher:  lineContainsAll("remain immutable", "validate the existing receipt", "explicit scope action", "not reopened review"),
+			contract: "must prove target immutability and validate the existing receipt without reopening review",
 		},
 		{
 			label:    "Fresh review rule",
-			matcher:  lineContainsAny("selected concrete review lens", "fresh concrete review lens", "fresh-context review lens"),
-			contract: "must require a selected fresh concrete review lens",
+			matcher:  lineContainsAll("fresh adversarial lenses", "only inside one explicit", "`review/start(target)`"),
+			contract: "must start fresh adversarial lenses only through an explicit review/start target",
 		},
 	}
 
@@ -1541,6 +1635,9 @@ func concreteReviewLensRoutingProblems(content string) []string {
 		if !check.matcher(line) {
 			problems = append(problems, check.label+": "+check.contract)
 		}
+	}
+	if starts := strings.Count(triggerSection, "`review/start(target)`"); starts != 1 {
+		problems = append(problems, "Fresh review rule: expected exactly one explicit review/start target in trigger rules")
 	}
 	return problems
 }

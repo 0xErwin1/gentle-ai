@@ -1,0 +1,682 @@
+package reviewtransaction
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+func TestStoreIsAppendOnlyAtomicAndRejectsStaleWriters(t *testing.T) {
+	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	tx := newTestTransaction(t, ModeOrdinary4R)
+	if err := tx.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.Append("", Record{Operation: "review/start", Transaction: *tx})
+	if err != nil {
+		t.Fatalf("Append(first) error = %v", err)
+	}
+	if _, err := store.Append("", Record{Operation: "stale", Transaction: *tx}); !errors.Is(err, ErrConcurrentUpdate) {
+		t.Fatalf("Append(stale) error = %v, want ErrConcurrentUpdate", err)
+	}
+	loaded, revision, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if revision != first || loaded.Operation != "review/start" {
+		t.Fatalf("Load() = revision %q record %#v", revision, loaded)
+	}
+	entries, err := os.ReadDir(filepath.Join(store.Dir, "events"))
+	if err != nil {
+		t.Fatalf("ReadDir(events) error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("event count = %d, want 1 append-only record", len(entries))
+	}
+}
+
+func TestStoreAppendRepairsInterruptedEventAndIsIdempotentAtHead(t *testing.T) {
+	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	tx := newTestTransaction(t, ModeOrdinary4R)
+	_ = tx.StartReview()
+	first, err := store.Append("", Record{Operation: "review/start", Transaction: *tx})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = tx.FreezeFindings([]Finding{}, hash("1"))
+	record := Record{Operation: "review/freeze-findings", Transaction: *tx}
+	linked := record
+	linked.Schema = RecordSchema
+	linked.PreviousRevision = first
+	payload, err := json.MarshalIndent(linked, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = append(payload, '\n')
+	sum := sha256.Sum256(payload)
+	wantRevision := "sha256:" + hex.EncodeToString(sum[:])
+	eventPath := filepath.Join(store.Dir, "events", strings.TrimPrefix(wantRevision, "sha256:")+".json")
+	if err := os.WriteFile(eventPath, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.Append(first, record)
+	if err != nil {
+		t.Fatalf("Append(repair linked event) error = %v", err)
+	}
+	if got != wantRevision {
+		t.Fatalf("Append(repair) revision = %q, want %q", got, wantRevision)
+	}
+	got, err = store.Append(first, record)
+	if err != nil || got != wantRevision {
+		t.Fatalf("Append(identical committed retry) = %q, %v; want %q, nil", got, err, wantRevision)
+	}
+	if _, err := store.Append(first, Record{Operation: "different-content", Transaction: *tx}); !errors.Is(err, ErrConcurrentUpdate) {
+		t.Fatalf("Append(different retry) error = %v, want ErrConcurrentUpdate", err)
+	}
+	if _, err := store.Append(hash("f"), record); !errors.Is(err, ErrConcurrentUpdate) {
+		t.Fatalf("Append(stale predecessor) error = %v, want ErrConcurrentUpdate", err)
+	}
+	if head, err := readRevision(filepath.Join(store.Dir, "HEAD")); err != nil || head != wantRevision {
+		t.Fatalf("HEAD = %q, %v; want %q", head, err, wantRevision)
+	}
+}
+
+func TestStoreLockReportsLiveOwnerAndCannotBeStolen(t *testing.T) {
+	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	lock, err := acquireStoreLock(filepath.Join(store.Dir, "LOCK"))
+	if err != nil {
+		t.Fatalf("acquireStoreLock(first) error = %v", err)
+	}
+	defer lock.release()
+
+	tx := newTestTransaction(t, ModeOrdinary4R)
+	_ = tx.StartReview()
+	_, err = store.Append("", Record{Operation: "review/start", Transaction: *tx})
+	if !errors.Is(err, ErrConcurrentUpdate) || !strings.Contains(err.Error(), "pid=") || !strings.Contains(err.Error(), "host=") {
+		t.Fatalf("Append(while live owner holds lock) error = %v, want actionable owner contention", err)
+	}
+}
+
+func TestStoreLockRecoversCrashAndCorruptOwnerRecords(t *testing.T) {
+	for _, content := range []string{
+		"not-json\n",
+		`{"schema":"gentle-ai.review-store-lock/v1","owner_id":"crashed","pid":999999,"host":"gone","acquired_at":"2000-01-01T00:00:00Z"}` + "\n",
+	} {
+		t.Run(content[:min(len(content), 8)], func(t *testing.T) {
+			store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+			if err := os.MkdirAll(store.Dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(store.Dir, "LOCK"), []byte(content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			tx := newTestTransaction(t, ModeOrdinary4R)
+			_ = tx.StartReview()
+			if _, err := store.Append("", Record{Operation: "review/start", Transaction: *tx}); err != nil {
+				t.Fatalf("Append() did not recover an unlocked stale owner record: %v", err)
+			}
+		})
+	}
+}
+
+func TestConcurrentStoreLockRecoverersCannotBothWin(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "review-store", "LOCK")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("corrupt stale owner\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		lock *storeLock
+		err  error
+	}
+	start := make(chan struct{})
+	release := make(chan struct{})
+	results := make(chan result, 2)
+	var workers sync.WaitGroup
+	for range 2 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			lock, err := acquireStoreLock(path)
+			results <- result{lock: lock, err: err}
+			if err == nil {
+				<-release
+				_ = lock.release()
+			}
+		}()
+	}
+	close(start)
+	first := <-results
+	second := <-results
+	winners := 0
+	for _, candidate := range []result{first, second} {
+		if candidate.err == nil {
+			winners++
+		} else if !errors.Is(candidate.err, ErrConcurrentUpdate) {
+			t.Fatalf("contender error = %v, want ErrConcurrentUpdate", candidate.err)
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("simultaneous stale-lock recoverers = %d winners, want exactly 1", winners)
+	}
+	close(release)
+	done := make(chan struct{})
+	go func() { workers.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("store lock recovery waited without a bound")
+	}
+}
+
+func TestStoreRejectsRegressiveOrUnrelatedSuccessorAtCurrentRevision(t *testing.T) {
+	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	tx := newTestTransaction(t, ModeOrdinary4R)
+	if err := tx.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.Append("", Record{Operation: "review/start", Transaction: *tx})
+	if err != nil {
+		t.Fatalf("Append(start) error = %v", err)
+	}
+	if err := tx.FreezeFindings([]Finding{{ID: "R1-001", Severity: "CRITICAL"}}, hash("1")); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Append(first, Record{Operation: "review/freeze-findings", Transaction: *tx})
+	if err != nil {
+		t.Fatalf("Append(freeze) error = %v", err)
+	}
+
+	regressive := newTestTransaction(t, ModeOrdinary4R)
+	_ = regressive.StartReview()
+	if _, err := store.Append(second, Record{Operation: "retry/reset", Transaction: *regressive}); !errors.Is(err, ErrInvalidSuccessor) {
+		t.Fatalf("Append(regressive) error = %v, want ErrInvalidSuccessor", err)
+	}
+
+	unrelated := *tx
+	unrelated.LineageID = "different-lineage"
+	if _, err := store.Append(second, Record{Operation: "retry/replace", Transaction: unrelated}); !errors.Is(err, ErrInvalidSuccessor) {
+		t.Fatalf("Append(unrelated) error = %v, want ErrInvalidSuccessor", err)
+	}
+
+	loaded, revision, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revision != second || loaded.Transaction.State != StateFindingsFrozen || loaded.Transaction.Counters.FullReviews != 1 {
+		t.Fatalf("authoritative state changed after rejected replacements: revision=%q transaction=%#v", revision, loaded.Transaction)
+	}
+}
+
+func TestStoreRejectsCounterAndOutcomeRegression(t *testing.T) {
+	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	tx := newTestTransaction(t, ModeOrdinary4R)
+	_ = tx.StartReview()
+	first, err := store.Append("", Record{Operation: "review/start", Transaction: *tx})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = tx.FreezeFindings([]Finding{{ID: "R1-001", Severity: "CRITICAL"}}, hash("1"))
+	second, err := store.Append(first, Record{Operation: "review/freeze-findings", Transaction: *tx})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = tx.ClassifyEvidence([]FindingEvidence{{FindingID: "R1-001", Class: EvidenceDeterministic, Proof: "failing focused test"}})
+	third, err := store.Append(second, Record{Operation: "review/classify", Transaction: *tx})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	regressive := *tx
+	regressive.State = StateFindingsFrozen
+	regressive.Outcomes = map[string]EvidenceOutcome{}
+	regressive.FixFindingIDs = []string{}
+	if _, err := store.Append(third, Record{Operation: "retry/regress", Transaction: regressive}); !errors.Is(err, ErrInvalidSuccessor) {
+		t.Fatalf("Append(regressive outcome) error = %v, want ErrInvalidSuccessor", err)
+	}
+}
+
+func TestValidateSuccessorEnforcesReleaseBindingTimingAndImmutability(t *testing.T) {
+	ready := newTestTransaction(t, ModeOrdinary4R)
+	if err := ready.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	if err := ready.FreezeFindings([]Finding{}, hash("1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ready.ClassifyEvidence([]FindingEvidence{}); err != nil {
+		t.Fatal(err)
+	}
+	release := testReleaseEvidence(ready.FinalCandidateTree)
+	bound := *ready
+	if err := bound.BindReleaseEvidence(release); err != nil {
+		t.Fatalf("BindReleaseEvidence() error = %v", err)
+	}
+	mutatedRelease := release
+	mutatedRelease.ConfigurationHash = hash("7")
+	if err := bound.BindReleaseEvidence(mutatedRelease); err == nil {
+		t.Fatal("BindReleaseEvidence() replaced an existing release binding")
+	}
+
+	verifyingWithoutRelease := *ready
+	if err := verifyingWithoutRelease.BeginFinalVerification(); err != nil {
+		t.Fatal(err)
+	}
+	approvedWithoutRelease := verifyingWithoutRelease
+	if err := approvedWithoutRelease.CompleteFinalVerification(hash("8"), true); err != nil {
+		t.Fatal(err)
+	}
+	verifyingWithRelease := bound
+	if err := verifyingWithRelease.BeginFinalVerification(); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		previous  Transaction
+		next      Transaction
+		operation string
+		wantError bool
+	}{
+		{
+			name:     "legal ready-state binding",
+			previous: *ready, next: bound,
+			operation: "review/bind-release-evidence",
+		},
+		{
+			name:     "binding under a different operation",
+			previous: *ready, next: bound,
+			operation: "review/begin-final-verification", wantError: true,
+		},
+		{
+			name:     "late injection while final verification begins",
+			previous: *ready, next: func() Transaction {
+				forged := verifyingWithoutRelease
+				forged.Release = cloneReleaseEvidence(&release)
+				return forged
+			}(),
+			operation: "review/begin-final-verification", wantError: true,
+		},
+		{
+			name:     "final approval injection",
+			previous: verifyingWithoutRelease, next: func() Transaction {
+				forged := approvedWithoutRelease
+				forged.Release = cloneReleaseEvidence(&release)
+				return forged
+			}(),
+			operation: "review/complete-final-verification", wantError: true,
+		},
+		{
+			name:     "bound release mutation",
+			previous: bound, next: func() Transaction {
+				forged := verifyingWithRelease
+				forged.Release = cloneReleaseEvidence(&mutatedRelease)
+				return forged
+			}(),
+			operation: "review/begin-final-verification", wantError: true,
+		},
+		{
+			name:     "bound release removal",
+			previous: bound, next: func() Transaction {
+				forged := verifyingWithRelease
+				forged.Release = nil
+				return forged
+			}(),
+			operation: "review/begin-final-verification", wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateSuccessor(tt.previous, tt.next, tt.operation)
+			if tt.wantError && !errors.Is(err, ErrInvalidSuccessor) {
+				t.Fatalf("validateSuccessor() error = %v, want ErrInvalidSuccessor", err)
+			}
+			if !tt.wantError && err != nil {
+				t.Fatalf("validateSuccessor() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateSuccessorAllowsReleaseBindAfterJSONNormalizesEmptyCollections(t *testing.T) {
+	previous := newTestTransaction(t, ModeOrdinary4R)
+	if err := previous.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	if err := previous.FreezeFindings([]Finding{}, hash("1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := previous.ClassifyEvidence([]FindingEvidence{}); err != nil {
+		t.Fatal(err)
+	}
+	previous.Snapshot.LedgerIDs = nil
+	next := *previous
+	next.Snapshot.LedgerIDs = []string{}
+	if err := next.BindReleaseEvidence(testReleaseEvidence(next.FinalCandidateTree)); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateSuccessor(*previous, next, "review/bind-release-evidence"); err != nil {
+		t.Fatalf("validateSuccessor() rejected semantically identical JSON-normalized release bind: %v", err)
+	}
+}
+
+func TestStoreLoadRejectsIncompleteAndIllegalPredecessorChains(t *testing.T) {
+	approved := approvedStoreTransaction(t, "chain-lineage")
+	reviewing := newTestTransaction(t, ModeOrdinary4R)
+	reviewing.LineageID = approved.LineageID
+	if err := reviewing.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	frozen := *reviewing
+	if err := frozen.FreezeFindings([]Finding{}, hash("1")); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name  string
+		seed  func(t *testing.T, store Store)
+		write Record
+	}{
+		{
+			name:  "standalone terminal event",
+			write: Record{Operation: "review/complete-final-verification", Transaction: approved},
+		},
+		{
+			name:  "missing predecessor",
+			write: Record{Operation: "review/complete-final-verification", PreviousRevision: hash("a"), Transaction: approved},
+		},
+		{
+			name: "cyclic predecessor alias",
+			seed: func(t *testing.T, store Store) {
+				record := Record{Schema: RecordSchema, Operation: "review/complete-final-verification", PreviousRevision: hash("c"), Transaction: approved}
+				writeStoreEventAtRevision(t, store, hash("c"), record)
+			},
+			write: Record{Operation: "review/complete-final-verification", PreviousRevision: hash("c"), Transaction: approved},
+		},
+		{
+			name: "regressive successor",
+			seed: func(t *testing.T, store Store) {
+				genesis := writeStoreEvent(t, store, Record{Operation: "review/start", Transaction: *reviewing})
+				writeStoreEvent(t, store, Record{Operation: "review/freeze-findings", PreviousRevision: genesis, Transaction: frozen})
+			},
+			write: Record{Operation: "retry/reset", Transaction: *reviewing},
+		},
+		{
+			name: "terminal inserted without legal predecessor",
+			seed: func(t *testing.T, store Store) {
+				writeStoreEvent(t, store, Record{Operation: "review/start", Transaction: *reviewing})
+			},
+			write: Record{Operation: "review/complete-final-verification", Transaction: approved},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+			if tt.seed != nil {
+				tt.seed(t, store)
+			}
+			if tt.name == "regressive successor" || tt.name == "terminal inserted without legal predecessor" {
+				previous, err := readRevision(filepath.Join(store.Dir, "HEAD"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				tt.write.PreviousRevision = previous
+			}
+			writeStoreEvent(t, store, tt.write)
+			if _, _, err := store.Load(); err == nil {
+				t.Fatal("Load() accepted an incomplete or illegal predecessor chain")
+			}
+		})
+	}
+}
+
+func TestStoreLoadRejectsHashValidSemanticFindingBypasses(t *testing.T) {
+	tests := []struct {
+		name  string
+		build func(t *testing.T) (Store, Record)
+	}{
+		{
+			name: "findings frozen jumps to ready without classification or outcome",
+			build: func(t *testing.T) (Store, Record) {
+				store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+				tx := newTestTransaction(t, ModeOrdinary4R)
+				_ = tx.StartReview()
+				genesis := writeStoreEvent(t, store, Record{Operation: "review/start", Transaction: *tx})
+				_ = tx.FreezeFindings([]Finding{
+					{ID: "R1-001", Severity: "CRITICAL"},
+					{ID: "R1-I01", Severity: "WARNING"},
+				}, hash("1"))
+				frozen := writeStoreEvent(t, store, Record{Operation: "review/freeze-findings", PreviousRevision: genesis, Transaction: *tx})
+				forged := *tx
+				forged.State = StateReadyFinalVerification
+				return store, Record{Operation: "forged/skip-classification", PreviousRevision: frozen, Transaction: forged}
+			},
+		},
+		{
+			name: "evidence classified clears pending refuter without consuming batch",
+			build: func(t *testing.T) (Store, Record) {
+				store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+				tx := newTestTransaction(t, ModeOrdinary4R)
+				_ = tx.StartReview()
+				genesis := writeStoreEvent(t, store, Record{Operation: "review/start", Transaction: *tx})
+				_ = tx.FreezeFindings([]Finding{{ID: "R1-001", Severity: "CRITICAL"}}, hash("1"))
+				frozen := writeStoreEvent(t, store, Record{Operation: "review/freeze-findings", PreviousRevision: genesis, Transaction: *tx})
+				_, _ = tx.ClassifyEvidence([]FindingEvidence{{FindingID: "R1-001", Class: EvidenceInferential, Proof: "concurrency trace"}})
+				classified := writeStoreEvent(t, store, Record{Operation: "review/classify", PreviousRevision: frozen, Transaction: *tx})
+				forged := *tx
+				forged.State = StateReadyFinalVerification
+				forged.PendingRefuterIDs = []string{}
+				return store, Record{Operation: "forged/skip-refuter", PreviousRevision: classified, Transaction: forged}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, forged := tt.build(t)
+			writeStoreEvent(t, store, forged)
+			if _, _, err := store.Load(); err == nil {
+				t.Fatal("Load() accepted a hash-valid chain that bypassed severe finding resolution")
+			}
+		})
+	}
+}
+
+func TestAuthoritativeStoreUsesRepositoryCommonDirectoryAndCanonicalLineage(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	store, err := AuthoritativeStore(context.Background(), repo, "trusted-lineage-1")
+	if err != nil {
+		t.Fatalf("AuthoritativeStore() error = %v", err)
+	}
+	commonDir := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+	want := filepath.Join(commonDir, "gentle-ai", "review-transactions", "v1", "trusted-lineage-1")
+	if store.Dir != want {
+		t.Fatalf("authoritative store = %q, want %q", store.Dir, want)
+	}
+
+	for _, lineage := range []string{"../escape", "lineage/escape", "Lineage", "lineage--alias", "lineage_1", ".", "lineage."} {
+		t.Run(lineage, func(t *testing.T) {
+			if _, err := AuthoritativeStore(context.Background(), repo, lineage); err == nil {
+				t.Fatalf("AuthoritativeStore() accepted non-canonical lineage %q", lineage)
+			}
+		})
+	}
+}
+
+func TestRepositoryIdentityIgnoresHostileGitSelectionEnvironment(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	hostile := initSnapshotRepo(t)
+	hostileGitDir := filepath.Join(hostile, ".git")
+	for name, value := range map[string]string{
+		"GIT_DIR":                          hostileGitDir,
+		"GIT_WORK_TREE":                    hostile,
+		"GIT_COMMON_DIR":                   hostileGitDir,
+		"GIT_INDEX_FILE":                   filepath.Join(hostileGitDir, "index"),
+		"GIT_OBJECT_DIRECTORY":             filepath.Join(hostileGitDir, "objects"),
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES": filepath.Join(hostileGitDir, "objects"),
+		"GIT_SHALLOW_FILE":                 filepath.Join(hostileGitDir, "shallow"),
+		"GIT_GRAFT_FILE":                   filepath.Join(hostileGitDir, "info", "grafts"),
+		"GIT_REPLACE_REF_BASE":             "refs/replace-hostile/",
+	} {
+		t.Setenv(name, value)
+	}
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatalf("Build() under hostile Git environment error = %v", err)
+	}
+	wantTree := strings.TrimSpace(gitSnapshotWithoutLocalEnv(t, repo, "rev-parse", "HEAD^{tree}"))
+	if snapshot.BaseTree != wantTree || snapshot.CandidateTree != wantTree {
+		t.Fatalf("snapshot trees = %q/%q, want repository tree %q", snapshot.BaseTree, snapshot.CandidateTree, wantTree)
+	}
+
+	store, err := AuthoritativeStore(context.Background(), repo, "hostile-env-lineage")
+	if err != nil {
+		t.Fatalf("AuthoritativeStore() under hostile Git environment error = %v", err)
+	}
+	wantCommonDir := strings.TrimSpace(gitSnapshotWithoutLocalEnv(t, repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+	wantStore := filepath.Join(wantCommonDir, "gentle-ai", "review-transactions", "v1", "hostile-env-lineage")
+	if store.Dir != wantStore {
+		t.Fatalf("authoritative store = %q, want %q", store.Dir, wantStore)
+	}
+}
+
+func TestAuthoritativeStorePreservesLinkedWorktreeCommonDirectory(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	worktree := filepath.Join(t.TempDir(), "linked-worktree")
+	gitSnapshot(t, repo, "worktree", "add", "--detach", worktree, "HEAD")
+
+	store, err := AuthoritativeStore(context.Background(), worktree, "worktree-lineage")
+	if err != nil {
+		t.Fatalf("AuthoritativeStore(linked worktree) error = %v", err)
+	}
+	wantCommonDir := strings.TrimSpace(gitSnapshotWithoutLocalEnv(t, repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+	want := filepath.Join(wantCommonDir, "gentle-ai", "review-transactions", "v1", "worktree-lineage")
+	if store.Dir != want {
+		t.Fatalf("linked-worktree store = %q, want common store %q", store.Dir, want)
+	}
+}
+
+func gitSnapshotWithoutLocalEnv(t *testing.T, repo string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	command.Env = []string{"HOME=" + os.Getenv("HOME"), "PATH=" + os.Getenv("PATH"), "LC_ALL=C"}
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("sanitized git %v: %v: %s", args, err, output)
+	}
+	return string(output)
+}
+
+func TestStoreLoadChainBindsGenesisHeadAndOrderedIdentity(t *testing.T) {
+	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	tx := newTestTransaction(t, ModeOrdinary4R)
+	if err := tx.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	genesis, err := store.Append("", Record{Operation: "review/start", Transaction: *tx})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.FreezeFindings([]Finding{}, hash("1")); err != nil {
+		t.Fatal(err)
+	}
+	head, err := store.Append(genesis, Record{Operation: "review/freeze-findings", Transaction: *tx})
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := store.LoadChain()
+	if err != nil {
+		t.Fatalf("LoadChain() error = %v", err)
+	}
+	if chain.GenesisRevision != genesis || chain.HeadRevision != head || len(chain.Records) != 2 || len(chain.Revisions) != 2 || !validSHA256(chain.Identity) {
+		t.Fatalf("LoadChain() = %#v", chain)
+	}
+}
+
+func approvedStoreTransaction(t *testing.T, lineage string) Transaction {
+	t.Helper()
+	tx := newTestTransaction(t, ModeOrdinary4R)
+	tx.LineageID = lineage
+	if err := tx.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.FreezeFindings([]Finding{}, hash("1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ClassifyEvidence([]FindingEvidence{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.BeginFinalVerification(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.CompleteFinalVerification(hash("2"), true); err != nil {
+		t.Fatal(err)
+	}
+	return *tx
+}
+
+func testReleaseEvidence(releaseTree string) ReleaseEvidence {
+	return ReleaseEvidence{
+		ReleaseTree: releaseTree, ConfigurationHash: hash("2"),
+		GeneratedArtifactHash: hash("3"), ProvenanceHash: hash("4"),
+		PublicationBoundaryHash: hash("5"), PublicationState: PublicationStateSealed,
+		EvidenceFreshnessHash: hash("6"), EvidenceFreshnessState: EvidenceFreshnessCurrent,
+	}
+}
+
+func writeStoreEvent(t *testing.T, store Store, record Record) string {
+	t.Helper()
+	record.Schema = RecordSchema
+	payload, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = append(payload, '\n')
+	sum := sha256.Sum256(payload)
+	revision := "sha256:" + hex.EncodeToString(sum[:])
+	writeStoreEventPayload(t, store, revision, payload)
+	return revision
+}
+
+func writeStoreEventAtRevision(t *testing.T, store Store, revision string, record Record) {
+	t.Helper()
+	payload, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeStoreEventPayload(t, store, revision, append(payload, '\n'))
+}
+
+func writeStoreEventPayload(t *testing.T, store Store, revision string, payload []byte) {
+	t.Helper()
+	events := filepath.Join(store.Dir, "events")
+	if err := os.MkdirAll(events, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(events, strings.TrimPrefix(revision, "sha256:")+".json")
+	if err := os.WriteFile(path, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.Dir, "HEAD"), []byte(revision+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}

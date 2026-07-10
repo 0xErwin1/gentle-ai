@@ -1,7 +1,7 @@
 ---
 name: review-readability
 description: R2 Readability reviewer — naming, complexity, intention, maintainability, review size, and context clarity.
-tools: ["read", "shell"]
+tools: ["read"]
 model: {{KIRO_MODEL}}
 includeMcpJson: true
 ---
