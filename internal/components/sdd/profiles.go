@@ -285,7 +285,9 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuid
 
 	// Orchestrator entry
 	taskPerms := map[string]any{
-		"*": "deny",
+		"*":       "deny",
+		"general": "allow",
+		"explore": "allow",
 	}
 	for _, phase := range profilePhaseOrder {
 		taskPerms[phase+suffix] = "allow"

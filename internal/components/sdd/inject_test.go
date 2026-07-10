@@ -2412,6 +2412,11 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 			t.Fatalf("gentle-orchestrator permission.task[%s] = %v, want allow", subAgent, taskAllowlist[subAgent])
 		}
 	}
+	for _, builtIn := range []string{"general", "explore"} {
+		if got := taskAllowlist[builtIn]; got != "allow" {
+			t.Fatalf("gentle-orchestrator permission.task[%s] = %v, want allow", builtIn, got)
+		}
+	}
 	refuterTools := agentMap["review-refuter"].(map[string]any)["tools"].(map[string]any)
 	assertOpenCodeRefuterToolsReadOnly(t, "rendered single-mode OpenCode config", refuterTools)
 }

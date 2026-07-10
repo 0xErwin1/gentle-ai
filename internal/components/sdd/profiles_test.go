@@ -976,7 +976,9 @@ func keysOf(m map[string]any) []string {
 
 func expectedTaskPermissions(suffix string) map[string]any {
 	permissions := map[string]any{
-		"*": "deny",
+		"*":       "deny",
+		"general": "allow",
+		"explore": "allow",
 	}
 	for _, phase := range profilePhaseOrder {
 		permissions[phase+suffix] = "allow"
