@@ -135,6 +135,44 @@ func TestSnapshotBuilderSupportsBaseDiffAndExactCommitRange(t *testing.T) {
 	}
 }
 
+func TestSnapshotBuilderExactRevisionIgnoresReplacementObjects(t *testing.T) {
+	if testing.Short() {
+		t.Skip("uses real git commands")
+	}
+	repo := initSnapshotRepo(t)
+	firstCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "tracked.txt", "original\n")
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "original")
+	originalCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	target := Target{Kind: TargetExactRevision, Revision: originalCommit}
+	baseline, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	if err != nil {
+		t.Fatalf("Build(baseline) error = %v", err)
+	}
+
+	gitSnapshot(t, repo, "checkout", "--detach", firstCommit)
+	writeSnapshotFile(t, repo, "tracked.txt", "replacement\n")
+	gitSnapshot(t, repo, "add", "--", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "replacement")
+	replacementCommit := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	gitSnapshot(t, repo, "replace", originalCommit, replacementCommit)
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if snapshot.Identity != baseline.Identity {
+		t.Fatalf("Identity = %q, want replacement-independent identity %q", snapshot.Identity, baseline.Identity)
+	}
+	if snapshot.BaseTree != strings.TrimSpace(gitSnapshot(t, repo, "--no-replace-objects", "rev-parse", firstCommit+"^{tree}")) {
+		t.Fatalf("BaseTree = %q, want the original parent tree", snapshot.BaseTree)
+	}
+	if snapshot.CandidateTree != strings.TrimSpace(gitSnapshot(t, repo, "--no-replace-objects", "rev-parse", originalCommit+"^{tree}")) {
+		t.Fatalf("CandidateTree = %q, want the original commit tree", snapshot.CandidateTree)
+	}
+}
+
 func initSnapshotRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()

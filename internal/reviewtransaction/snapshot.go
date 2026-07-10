@@ -390,7 +390,7 @@ func writeLengthPrefixed(writer byteWriter, value []byte) {
 }
 
 func runGit(ctx context.Context, repo string, extraEnv []string, stdin []byte, args ...string) ([]byte, error) {
-	command := exec.CommandContext(ctx, "git", append([]string{"-C", repo}, args...)...)
+	command := exec.CommandContext(ctx, "git", append([]string{"--no-replace-objects", "-C", repo}, args...)...)
 	command.Env = sanitizedGitEnvironment(os.Environ(), extraEnv)
 	if stdin != nil {
 		command.Stdin = bytes.NewReader(stdin)
