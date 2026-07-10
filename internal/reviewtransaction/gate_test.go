@@ -149,6 +149,75 @@ func TestNativeGateRejectsHistoricalTargetAfterHeadAdvances(t *testing.T) {
 	}
 }
 
+func TestNativePrePushGateAcceptsCommittedCurrentChangesReceipt(t *testing.T) {
+	repo, receipt, request := approvedCurrentChangesGateFixture(t, "pre-push-current-changes")
+	if got := EvaluateNativeGate(context.Background(), repo, receipt, request); got.Result != GateAllow {
+		t.Fatalf("EvaluateNativeGate(pre-commit current changes) = %#v", got)
+	}
+
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "deliver reviewed current changes")
+	request.Gate = GatePrePush
+	if got := EvaluateNativeGate(context.Background(), repo, receipt, request); got.Result != GateAllow {
+		t.Fatalf("EvaluateNativeGate(pre-push committed current changes) = %#v", got)
+	}
+}
+
+func TestNativePrePushGateRejectsAdvancedEmptyCurrentChangesReceipt(t *testing.T) {
+	repo, receipt, request := approvedEmptyCurrentChangesGateFixture(t, "pre-push-empty-current-changes")
+	gitSnapshot(t, repo, "commit", "--allow-empty", "-m", "first empty delivery")
+	gitSnapshot(t, repo, "commit", "--allow-empty", "-m", "advance empty delivery")
+	request.Gate = GatePrePush
+
+	if got := EvaluateNativeGate(context.Background(), repo, receipt, request); got.Result == GateAllow {
+		t.Fatalf("EvaluateNativeGate(advanced empty current changes) = %#v, want rejection", got)
+	}
+}
+
+func TestNativePrePushGateRejectsChangedOrAdvancedHead(t *testing.T) {
+	tests := []struct {
+		name    string
+		lineage string
+		advance func(t *testing.T, repo string)
+		want    GateResult
+	}{
+		{
+			name:    "changed head",
+			lineage: "pre-push-changed",
+			advance: func(t *testing.T, repo string) {
+				t.Helper()
+				writeSnapshotFile(t, repo, "tracked.txt", "altered delivery\n")
+				gitSnapshot(t, repo, "add", "tracked.txt")
+				gitSnapshot(t, repo, "commit", "-m", "alter reviewed delivery")
+			},
+			want: GateScopeChanged,
+		},
+		{
+			name:    "advanced head",
+			lineage: "pre-push-advanced",
+			advance: func(t *testing.T, repo string) {
+				t.Helper()
+				gitSnapshot(t, repo, "commit", "--allow-empty", "-m", "advance reviewed delivery")
+			},
+			want: GateInvalidated,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, receipt, request := approvedCurrentChangesGateFixture(t, tt.lineage)
+			gitSnapshot(t, repo, "add", "tracked.txt")
+			gitSnapshot(t, repo, "commit", "-m", "deliver reviewed current changes")
+			tt.advance(t, repo)
+			request.Gate = GatePrePush
+
+			if got := EvaluateNativeGate(context.Background(), repo, receipt, request); got.Result != tt.want {
+				t.Fatalf("EvaluateNativeGate(%s) = %#v, want %q", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNativeGateUsesRetainedArtifactContentAndRejectsMismatch(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	tx, receipt, request := nativeGateFixture(t, repo, "content-gate")
@@ -273,6 +342,35 @@ func nativeGateFixture(t *testing.T, repo, lineage string) (Transaction, Receipt
 		LedgerArtifact:   ledgerPath,
 		EvidenceArtifact: evidencePath,
 	}
+}
+
+func approvedCurrentChangesGateFixture(t *testing.T, lineage string) (string, Receipt, GateRequest) {
+	t.Helper()
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+	transaction, receipt, request := nativeGateFixture(t, repo, lineage)
+	store, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendApprovedStoreChain(t, store, transaction)
+	bindGateRequestToStore(t, &request, store)
+	request.Gate = GatePreCommit
+	return repo, receipt, request
+}
+
+func approvedEmptyCurrentChangesGateFixture(t *testing.T, lineage string) (string, Receipt, GateRequest) {
+	t.Helper()
+	repo := initSnapshotRepo(t)
+	transaction, receipt, request := nativeGateFixture(t, repo, lineage)
+	store, err := AuthoritativeStore(context.Background(), repo, transaction.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendApprovedStoreChain(t, store, transaction)
+	bindGateRequestToStore(t, &request, store)
+	request.Gate = GatePreCommit
+	return repo, receipt, request
 }
 
 func appendApprovedStoreChain(t *testing.T, store Store, approved Transaction) string {

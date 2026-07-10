@@ -125,6 +125,9 @@ func EvaluateNativeGate(ctx context.Context, repo string, receipt Receipt, reque
 	if err != nil {
 		return invalid("current repository target cannot be derived: " + err.Error())
 	}
+	if request.Gate == GatePrePush && record.Transaction.Snapshot.Kind == TargetCurrentChanges && snapshot.BaseTree == snapshot.CandidateTree {
+		return invalid("pre-push current-changes receipt requires a delivered tree change")
+	}
 	policyHash, err := hashArtifactSource(request.PolicyArtifact, request.PolicyContent)
 	if err != nil {
 		return invalid("policy artifact cannot be hashed: " + err.Error())
@@ -173,12 +176,18 @@ func EvaluateNativeGate(ctx context.Context, repo string, receipt Receipt, reque
 // describe review evidence, but it must never authorize a newer HEAD.
 func lifecycleTargetForGate(ctx context.Context, repo string, request GateRequest) (Target, error) {
 	switch request.Gate {
-	case GatePostApply, GatePreCommit, GatePrePush:
+	case GatePostApply, GatePreCommit:
 		intended := request.Target.IntendedUntracked
 		if intended == nil {
 			intended = []string{}
 		}
 		return Target{Kind: TargetCurrentChanges, IntendedUntracked: intended}, nil
+	case GatePrePush:
+		head, err := runGit(ctx, repo, nil, nil, "rev-parse", "HEAD")
+		if err != nil {
+			return Target{}, err
+		}
+		return Target{Kind: TargetExactRevision, Revision: strings.TrimSpace(string(head))}, nil
 	case GatePrePR:
 		if request.Target.Kind != TargetBaseDiff || strings.TrimSpace(request.Target.BaseRef) == "" {
 			return Target{}, errors.New("pre-PR validation requires an explicit base-diff target")
