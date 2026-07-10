@@ -27,7 +27,10 @@ func TestRenderTriggerRules_UsesBoundedReceiptLifecycle(t *testing.T) {
 	rendered := RenderTriggerRules(catalog.DefaultTriggerRuleSet())
 	for _, want := range []string{
 		"Post-apply starts `review/start(target)` only when no valid receipt exists",
-		"Pre-commit, pre-push, pre-PR, and release validate the same content-bound receipt",
+		"Pre-commit, pre-push, and pre-PR validate the same content-bound receipt",
+		"Release from protected `main` may bypass receipt validation only when",
+		"tag targets the current immutable `origin/main` SHA",
+		"Major and post-incident releases require explicit extraordinary review",
 		"missing → start explicitly after implementation/post-apply",
 		"scope-changed → create a new lineage",
 		"invalidated → require explicit maintainer action",
@@ -91,7 +94,8 @@ func TestRenderTriggerRules_TriageTiers(t *testing.T) {
 		"**High**",
 		"four initial 4R lens sweeps",
 		"Generated goldens are excluded from the authored threshold but remain in snapshot identity",
-		"Pre-commit, pre-push, pre-PR, and release validate the same content-bound receipt",
+		"Pre-commit, pre-push, and pre-PR validate the same content-bound receipt",
+		"Release from protected `main` may bypass receipt validation only when",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("RenderTriggerRules() output missing triage tier fragment %q; got:\n%s", want, out)
