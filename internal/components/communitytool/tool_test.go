@@ -22,6 +22,24 @@ func TestMain(m *testing.M) {
 	codeGraphPnpmGlobalBin = func() (string, error) {
 		return "/bin", nil
 	}
+	piCodeGraphEffectiveMCPProbe = func(string) (PiCodeGraphMCPProbeResult, error) {
+		return PiCodeGraphMCPProbeResult{
+			AdapterAvailable: true,
+			Initialized:      true,
+			Tools: []PiCodeGraphMCPTool{{
+				Name: "codegraph_explore",
+				InputSchema: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"query":       map[string]any{"type": "string"},
+						"maxFiles":    map[string]any{"type": "number"},
+						"projectPath": map[string]any{"type": "string"},
+					},
+					"required": []any{"query"},
+				},
+			}},
+		}, nil
+	}
 	os.Exit(m.Run())
 }
 
@@ -150,6 +168,102 @@ func TestInstallUsesPnpmWhenNpmIsUnavailable(t *testing.T) {
 	}
 }
 
+func TestInstallWithHomeReportsPiChildClassifications(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{}`)
+	mustWrite(t, filepath.Join(home, ".pi", "agent", "subagents", "worker.md"), "---\ntools: bash\n---\nwork\n")
+	installed := false
+	result, err := InstallWithHome(model.CommunityToolCodeGraph, "", home, RunnerFunc(func(string, ...string) error {
+		installed = true
+		return nil
+	}), DetectorFunc(func(string) (string, error) {
+		if installed {
+			return "/bin/codegraph", nil
+		}
+		return "", errors.New("not found")
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PiCodeGraph == nil || len(result.PiCodeGraph.Children) != 1 || result.PiCodeGraph.Children[0].Classification != PiChildCompatible {
+		t.Fatalf("PiCodeGraph classifications = %#v", result.PiCodeGraph)
+	}
+}
+
+func TestInstallWithHomeReportsWorkspaceChildAndOwnershipTarget(t *testing.T) {
+	home := t.TempDir()
+	workspace := filepath.Join(home, "workspace")
+	target := filepath.Join(workspace, ".pi", "subagents", "worker.md")
+	mustWrite(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{}`)
+	mustWrite(t, target, "---\ntools: bash\n---\nworkspace work\n")
+
+	installed := false
+	result, err := InstallWithHome(model.CommunityToolCodeGraph, workspace, home, RunnerFunc(func(string, ...string) error {
+		installed = true
+		return nil
+	}), DetectorFunc(func(string) (string, error) {
+		if installed {
+			return "/bin/codegraph", nil
+		}
+		return "", errors.New("not found")
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PiCodeGraph == nil || len(result.PiCodeGraph.Children) != 1 || result.PiCodeGraph.Children[0].Target != target {
+		t.Fatalf("workspace Pi result = %#v, want target %q", result.PiCodeGraph, target)
+	}
+	manifest, err := os.ReadFile(filepath.Join(home, ".gentle-ai", "pi-codegraph.json"))
+	if err != nil || !strings.Contains(string(manifest), target) {
+		t.Fatalf("ownership manifest = %q, err=%v, want workspace target", manifest, err)
+	}
+}
+
+func TestInstallWithHomeReportsEffectiveMCPAdapterSchema(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{}`)
+	mustWrite(t, filepath.Join(home, ".pi", "agent", "subagents", "worker.md"), "---\ntools: bash\n---\nwork\n")
+	installed := false
+	result, err := InstallWithHome(model.CommunityToolCodeGraph, "", home, RunnerFunc(func(string, ...string) error {
+		installed = true
+		return nil
+	}), DetectorFunc(func(string) (string, error) {
+		if installed {
+			return "/bin/codegraph", nil
+		}
+		return "", errors.New("not found")
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PiCodeGraph == nil || !result.PiCodeGraph.MCP.Adapter || !result.PiCodeGraph.MCP.ReadOnlyExplore {
+		t.Fatalf("effective MCP verification = %#v, want adapter and read-only explore schema", result.PiCodeGraph)
+	}
+}
+
+func TestInstallWithHomeFailsClosedForEmptyPiSettingsWithoutMCPProcess(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{}`)
+	mustWrite(t, filepath.Join(home, ".pi", "agent", "subagents", "worker.md"), "---\ntools: bash\n---\nwork\n")
+	previous := piCodeGraphEffectiveMCPProbe
+	piCodeGraphEffectiveMCPProbe = probePiCodeGraphMCP
+	t.Cleanup(func() { piCodeGraphEffectiveMCPProbe = previous })
+
+	installed := false
+	_, err := InstallWithHome(model.CommunityToolCodeGraph, "", home, RunnerFunc(func(string, ...string) error {
+		installed = true
+		return nil
+	}), DetectorFunc(func(string) (string, error) {
+		if installed {
+			return "/bin/codegraph", nil
+		}
+		return "", errors.New("not found")
+	}))
+	if err == nil || !strings.Contains(err.Error(), "capability probe") {
+		t.Fatalf("InstallWithHome() error = %v, want failed effective MCP capability probe", err)
+	}
+}
+
 func TestCodeGraphGuidanceContainsLazyInitAndUsageRules(t *testing.T) {
 	guidance := CodeGraphGuidanceMarkdown()
 	for _, want := range []string{
@@ -204,7 +318,6 @@ func TestCodeGraphGuidanceInjectsForRepresentativeAgents(t *testing.T) {
 		filepath.Join(home, ".config", "opencode", "AGENTS.md"),
 		filepath.Join(home, ".claude", "CLAUDE.md"),
 		filepath.Join(home, ".codex", "AGENTS.md"),
-		filepath.Join(home, ".pi", "agent", "APPEND_SYSTEM.md"),
 	} {
 		content, err := os.ReadFile(path)
 		if err != nil {
@@ -625,12 +738,12 @@ func TestDetectStatusReportsPiRuntimeMissingWhenAppendSystemHasNoMarker(t *testi
 	if !pi.Detected || pi.Configured || pi.Status != AgentStatusMissing {
 		t.Fatalf("Pi status = %#v, want detected missing", pi)
 	}
-	if pi.Path != filepath.Join(home, ".pi", "agent", "APPEND_SYSTEM.md") {
-		t.Fatalf("Pi path = %q, want APPEND_SYSTEM.md path", pi.Path)
+	if pi.Path != filepath.Join(home, ".gentle-ai", "pi-codegraph.json") {
+		t.Fatalf("Pi path = %q, want ownership manifest path", pi.Path)
 	}
 }
 
-func TestDetectStatusReportsPiRuntimeConfiguredWithAppendSystemMarker(t *testing.T) {
+func TestDetectStatusRejectsPiParentMarkerAsCapabilityEvidence(t *testing.T) {
 	home := t.TempDir()
 	mustWrite(t, filepath.Join(home, ".pi", "agent", "APPEND_SYSTEM.md"), strings.Join([]string{
 		"existing Pi guidance",
@@ -643,12 +756,26 @@ func TestDetectStatusReportsPiRuntimeConfiguredWithAppendSystemMarker(t *testing
 		return "/bin/codegraph", nil
 	}))
 	pi := findAgentStatus(t, status, model.AgentPi)
-	if !pi.Detected || !pi.Configured || pi.Status != AgentStatusConfigured {
-		t.Fatalf("Pi status = %#v, want detected configured", pi)
+	if !pi.Detected || pi.Configured || pi.Status != AgentStatusMissing {
+		t.Fatalf("Pi status = %#v, want marker-only Pi missing", pi)
 	}
 }
 
-func TestInjectCodeGraphGuidanceCreatesPiAppendSystemAndPreservesContent(t *testing.T) {
+func TestDetectStatusReportsPiChildClassifications(t *testing.T) {
+	home := t.TempDir()
+	mustWrite(t, filepath.Join(home, ".pi", "agent", "settings.json"), `{}`)
+	mustWrite(t, filepath.Join(home, ".pi", "agent", "subagents", "worker.md"), "---\ntools: bash\n---\nwork\n")
+	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true}); err != nil {
+		t.Fatal(err)
+	}
+	status := DetectStatus(model.CommunityToolCodeGraph, home, DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	pi := findAgentStatus(t, status, model.AgentPi)
+	if len(pi.Children) != 1 || pi.Children[0].Classification != PiChildCompatible {
+		t.Fatalf("Pi classifications = %#v", pi.Children)
+	}
+}
+
+func TestInjectCodeGraphGuidanceDoesNotUsePiParentMarker(t *testing.T) {
 	home := t.TempDir()
 	appendSystemPath := filepath.Join(home, ".pi", "agent", "APPEND_SYSTEM.md")
 	mustWrite(t, appendSystemPath, "existing Pi instructions\n")
@@ -657,8 +784,8 @@ func TestInjectCodeGraphGuidanceCreatesPiAppendSystemAndPreservesContent(t *test
 	if err != nil {
 		t.Fatalf("InjectCodeGraphGuidance() error = %v", err)
 	}
-	if !result.Changed {
-		t.Fatalf("InjectCodeGraphGuidance() Changed = false, want true")
+	if result.Changed {
+		t.Fatalf("InjectCodeGraphGuidance() Changed = true, want Pi parent no-op")
 	}
 
 	content, err := os.ReadFile(appendSystemPath)
@@ -666,10 +793,8 @@ func TestInjectCodeGraphGuidanceCreatesPiAppendSystemAndPreservesContent(t *test
 		t.Fatalf("ReadFile(%q) error = %v", appendSystemPath, err)
 	}
 	text := string(content)
-	for _, want := range []string{"existing Pi instructions", "<!-- gentle-ai:codegraph-guidance -->", "codegraph init <project-root>"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("APPEND_SYSTEM.md missing %q:\n%s", want, text)
-		}
+	if text != "existing Pi instructions\n" {
+		t.Fatalf("APPEND_SYSTEM.md changed:\n%s", text)
 	}
 	for _, path := range result.Files {
 		if path != appendSystemPath {
