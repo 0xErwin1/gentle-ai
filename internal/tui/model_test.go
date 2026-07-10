@@ -4966,7 +4966,7 @@ func TestCodexPresetSelection_PopulatesPendingSyncOverrides(t *testing.T) {
 			cursor: 2,
 			want: map[string]string{
 				"sdd-strong": "gpt-5.6-sol",
-				"sdd-mid":    "gpt-5.6-sol",
+				"sdd-mid":    "gpt-5.6-terra",
 				"sdd-cheap":  "gpt-5.6-luna",
 			},
 		},

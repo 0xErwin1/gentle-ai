@@ -93,7 +93,7 @@ var codexPresetMatrix = map[CodexPresetKey]map[string]CodexCarrilDefault{
 	},
 	CodexPresetPowerful: {
 		"sdd-strong": {Model: "gpt-5.6-sol", Effort: CodexEffortXHigh},
-		"sdd-mid":    {Model: "gpt-5.6-sol", Effort: CodexEffortHigh},
+		"sdd-mid":    {Model: "gpt-5.6-terra", Effort: CodexEffortHigh},
 		"sdd-cheap":  {Model: "gpt-5.6-luna", Effort: CodexEffortLow},
 	},
 }

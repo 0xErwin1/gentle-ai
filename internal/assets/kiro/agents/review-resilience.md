@@ -1,7 +1,7 @@
 ---
 name: review-resilience
 description: R4 Resilience reviewer — fallbacks, retry/backoff, graceful degradation, observability, load, rollback, and SLO risks.
-tools: ["read", "shell"]
+tools: ["read"]
 model: {{KIRO_MODEL}}
 includeMcpJson: true
 ---

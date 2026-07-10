@@ -1,7 +1,7 @@
 ---
 name: review-reliability
 description: R3 Reliability reviewer — behavior-first tests, coverage value, edge cases, determinism, contracts, and regressions.
-tools: ["read", "shell"]
+tools: ["read"]
 model: {{KIRO_MODEL}}
 includeMcpJson: true
 ---

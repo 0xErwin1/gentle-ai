@@ -149,7 +149,7 @@ Kiro uses native custom agents in `~/.kiro/agents/`. `gentle-ai` writes phase ag
   | Profile | Low-cost | Recommended | Powerful | SDD phases |
   |---------|----------|-------------|----------|------------|
   | `sdd-strong` | `gpt-5.6-terra` / `medium` | `gpt-5.6-sol` / `high` | `gpt-5.6-sol` / `xhigh` | propose, design, verify, judge |
-  | `sdd-mid` | `gpt-5.6-terra` / `medium` | `gpt-5.6-terra` / `medium` | `gpt-5.6-sol` / `high` | apply, fix-agent |
+  | `sdd-mid` | `gpt-5.6-terra` / `medium` | `gpt-5.6-terra` / `medium` | `gpt-5.6-terra` / `high` | apply, fix-agent |
   | `sdd-cheap` | `gpt-5.6-luna` / `low` | `gpt-5.6-luna` / `low` | `gpt-5.6-luna` / `low` | explore, spec, tasks, archive, onboard |
 
 - Explicit saved Codex model assignments are preserved on sync, including older pinned IDs such as `gpt-5.5` or `gpt-5.4-mini`; GPT-5.6 IDs are used only for missing/default assignments.

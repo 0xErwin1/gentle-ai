@@ -213,8 +213,8 @@ func TestResolveArtifactStatesAndTaskProgress(t *testing.T) {
 	if status.TaskProgress != (TaskProgress{Total: 3, Completed: 2, Pending: 1, AllComplete: false}) {
 		t.Fatalf("TaskProgress = %#v", status.TaskProgress)
 	}
-	if status.Dependencies.Verify != DependencyReady {
-		t.Fatalf("Verify dependency = %q, want %q", status.Dependencies.Verify, DependencyReady)
+	if status.Dependencies.Verify != DependencyBlocked {
+		t.Fatalf("Verify dependency = %q, want %q until all tasks complete", status.Dependencies.Verify, DependencyBlocked)
 	}
 }
 
@@ -254,25 +254,25 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			wantNext:    "apply",
 		},
 		{
-			name: "apply all done makes verify ready",
+			name: "apply all done requires explicit review before verify",
 			seed: func(t *testing.T, root string) {
 				seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
-			wantVerify:  DependencyReady,
+			wantVerify:  DependencyBlocked,
 			wantArchive: DependencyBlocked,
-			wantNext:    "verify",
+			wantNext:    "review",
 		},
 		{
-			name: "apply progress makes verify ready before all tasks complete",
+			name: "apply progress does not make final verify ready before all tasks complete",
 			seed: func(t *testing.T, root string) {
 				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n- [ ] 1.2 Remaining\n")
 				write(t, filepath.Join(changeRoot, "apply-progress.md"), "# Apply\n")
 			},
 			wantApply:   ApplyReady,
 			wantApplyD:  DependencyReady,
-			wantVerify:  DependencyReady,
+			wantVerify:  DependencyBlocked,
 			wantArchive: DependencyBlocked,
 			wantNext:    "apply",
 		},
@@ -293,7 +293,8 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			name: "archive ready only when verify report exists and tasks are complete",
 			seed: func(t *testing.T, root string) {
 				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
-				write(t, filepath.Join(changeRoot, "verify-report.md"), "# Verify\nPASS\n")
+				write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("1"), "pass"))
+				writeApprovedReviewArtifacts(t, changeRoot)
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
@@ -305,7 +306,7 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			name: "archive ready for canonical passing verify report",
 			seed: func(t *testing.T, root string) {
 				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
-				write(t, filepath.Join(changeRoot, "verify-report.md"), strings.Join([]string{
+				write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("1"), "pass")+"\n"+strings.Join([]string{
 					"## Verification Report",
 					"### Build & Tests Execution",
 					"**Tests**: ✅ 12 passed / ❌ 0 failed / ⚠️ 0 skipped",
@@ -317,6 +318,7 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 					"Verdict: PASS",
 					"",
 				}, "\n"))
+				writeApprovedReviewArtifacts(t, changeRoot)
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
@@ -328,7 +330,7 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			name: "archive ready for canonical pass with warnings verdict",
 			seed: func(t *testing.T, root string) {
 				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
-				write(t, filepath.Join(changeRoot, "verify-report.md"), strings.Join([]string{
+				write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("1"), "pass_with_warnings")+"\n"+strings.Join([]string{
 					"## Verification Report",
 					"**Tests**: ✅ 12 passed / ❌ 0 failed / ⚠️ 1 skipped",
 					"**CRITICAL**: None",
@@ -337,6 +339,7 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 					"PASS WITH WARNINGS",
 					"",
 				}, "\n"))
+				writeApprovedReviewArtifacts(t, changeRoot)
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
@@ -352,10 +355,10 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
-			wantVerify:  DependencyReady,
+			wantVerify:  DependencyBlocked,
 			wantArchive: DependencyBlocked,
-			wantNext:    "verify",
-			wantBlocked: "verify-report.md is not clearly passing.",
+			wantNext:    "resolve-review",
+			wantBlocked: "bounded review transaction is missing",
 		},
 		{
 			name: "archive blocked when verify report has nonzero failed count",
@@ -365,10 +368,10 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
-			wantVerify:  DependencyReady,
+			wantVerify:  DependencyBlocked,
 			wantArchive: DependencyBlocked,
-			wantNext:    "verify",
-			wantBlocked: "verify-report.md is not clearly passing.",
+			wantNext:    "resolve-review",
+			wantBlocked: "bounded review transaction is missing",
 		},
 		{
 			name: "archive blocked when canonical matrix has untested result despite pass verdict",
@@ -387,10 +390,10 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
-			wantVerify:  DependencyReady,
+			wantVerify:  DependencyBlocked,
 			wantArchive: DependencyBlocked,
-			wantNext:    "verify",
-			wantBlocked: "verify-report.md is not clearly passing.",
+			wantNext:    "resolve-review",
+			wantBlocked: "bounded review transaction is missing",
 		},
 		{
 			name: "archive blocked when canonical matrix has failing result despite pass verdict",
@@ -409,10 +412,10 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
-			wantVerify:  DependencyReady,
+			wantVerify:  DependencyBlocked,
 			wantArchive: DependencyBlocked,
-			wantNext:    "verify",
-			wantBlocked: "verify-report.md is not clearly passing.",
+			wantNext:    "resolve-review",
+			wantBlocked: "bounded review transaction is missing",
 		},
 		{
 			name: "archive blocked when verify report has blockers present",
@@ -422,10 +425,10 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
-			wantVerify:  DependencyReady,
+			wantVerify:  DependencyBlocked,
 			wantArchive: DependencyBlocked,
-			wantNext:    "verify",
-			wantBlocked: "verify-report.md is not clearly passing.",
+			wantNext:    "resolve-review",
+			wantBlocked: "bounded review transaction is missing",
 		},
 		{
 			name: "archive blocked when verify report has todo pending and blockers",
@@ -435,10 +438,10 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
-			wantVerify:  DependencyReady,
+			wantVerify:  DependencyBlocked,
 			wantArchive: DependencyBlocked,
-			wantNext:    "verify",
-			wantBlocked: "verify-report.md is not clearly passing.",
+			wantNext:    "resolve-review",
+			wantBlocked: "bounded review transaction is missing",
 		},
 		{
 			name: "archive blocked when verify report says status not passed",
@@ -448,10 +451,10 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
-			wantVerify:  DependencyReady,
+			wantVerify:  DependencyBlocked,
 			wantArchive: DependencyBlocked,
-			wantNext:    "verify",
-			wantBlocked: "verify-report.md is not clearly passing.",
+			wantNext:    "resolve-review",
+			wantBlocked: "bounded review transaction is missing",
 		},
 		{
 			name: "archive blocked when verify report says pass no",
@@ -461,10 +464,10 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
-			wantVerify:  DependencyReady,
+			wantVerify:  DependencyBlocked,
 			wantArchive: DependencyBlocked,
-			wantNext:    "verify",
-			wantBlocked: "verify-report.md is not clearly passing.",
+			wantNext:    "resolve-review",
+			wantBlocked: "bounded review transaction is missing",
 		},
 		{
 			name: "archive blocked when verify report has success and failure",
@@ -474,16 +477,17 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
-			wantVerify:  DependencyReady,
+			wantVerify:  DependencyBlocked,
 			wantArchive: DependencyBlocked,
-			wantNext:    "verify",
-			wantBlocked: "verify-report.md is not clearly passing.",
+			wantNext:    "resolve-review",
+			wantBlocked: "bounded review transaction is missing",
 		},
 		{
 			name: "archive ready when verify report has status pass",
 			seed: func(t *testing.T, root string) {
 				changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
-				write(t, filepath.Join(changeRoot, "verify-report.md"), "# Verify\nStatus: PASS\n")
+				write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("1"), "pass")+"\n# Verify\nStatus: PASS\n")
+				writeApprovedReviewArtifacts(t, changeRoot)
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
@@ -813,7 +817,7 @@ func seedReadyChange(t *testing.T, root string, name string, tasks string) strin
 	t.Helper()
 	changeRoot := filepath.Join(root, "openspec", "changes", name)
 	write(t, filepath.Join(changeRoot, "proposal.md"), "# Proposal\n")
-	write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "# Auth Spec\n")
+	write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "### Requirement: Auth\n#### Scenario: Expected behavior\n")
 	write(t, filepath.Join(changeRoot, "design.md"), "# Design\n")
 	write(t, filepath.Join(changeRoot, "tasks.md"), tasks)
 	return changeRoot

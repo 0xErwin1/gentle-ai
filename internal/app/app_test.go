@@ -322,6 +322,31 @@ func TestRunArgsSDDContinueIsDispatchedBeforePlatformValidation(t *testing.T) {
 	}
 }
 
+func TestRunArgsDispatchesNativeReviewOperationsBeforePlatformValidation(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error { return fmt.Errorf("unsupported platform") }
+
+	for _, test := range []struct {
+		command string
+		want    string
+	}{
+		{command: "review-start", want: "review-start requires --cwd, --lineage, and --policy-file"},
+		{command: "review-resume", want: "review-resume requires --cwd and --lineage"},
+		{command: "review-bundle-export", want: "review-bundle-export requires --cwd, --lineage, and --out"},
+		{command: "review-bundle-import", want: "review-bundle-import requires --cwd, --bundle, --receipt, and --request"},
+		{command: "review-validate", want: "review-validate requires --cwd, --receipt, and --request"},
+	} {
+		t.Run(test.command, func(t *testing.T) {
+			var output bytes.Buffer
+			err := RunArgs([]string{test.command}, &output)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("RunArgs(%s) error = %v, want %q", test.command, err, test.want)
+			}
+		})
+	}
+}
+
 // TestListBackupsFallsBackGracefullyForOldManifests verifies that old manifests
 // without Source/Description are still returned (not skipped) and can be displayed
 // via DisplayLabel without panicking.

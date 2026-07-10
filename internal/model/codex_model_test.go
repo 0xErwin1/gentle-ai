@@ -282,7 +282,7 @@ func TestPresetRecommended_ModelEffortPerCarril(t *testing.T) {
 }
 
 func TestPresetPowerful_ModelEffortPerCarril(t *testing.T) {
-	// Powerful: Razonamiento=gpt-5.6-sol/xhigh, Código=gpt-5.6-sol/high, Liviano=gpt-5.6-luna/low
+	// Powerful: Razonamiento=gpt-5.6-sol/xhigh, Código=gpt-5.6-terra/high, Liviano=gpt-5.6-luna/low
 	m := model.CodexModelPresetPowerful()
 	if m["sdd-propose"] != model.CodexEffortXHigh {
 		t.Errorf("Powerful preset sdd-propose = %q, want xhigh", m["sdd-propose"])
@@ -295,8 +295,8 @@ func TestPresetPowerful_ModelEffortPerCarril(t *testing.T) {
 	if carrilModels["sdd-strong"] != "gpt-5.6-sol" {
 		t.Errorf("Powerful preset sdd-strong model = %q, want gpt-5.6-sol", carrilModels["sdd-strong"])
 	}
-	if carrilModels["sdd-mid"] != "gpt-5.6-sol" {
-		t.Errorf("Powerful preset sdd-mid model = %q, want gpt-5.6-sol", carrilModels["sdd-mid"])
+	if carrilModels["sdd-mid"] != "gpt-5.6-terra" {
+		t.Errorf("Powerful preset sdd-mid model = %q, want gpt-5.6-terra", carrilModels["sdd-mid"])
 	}
 	if carrilModels["sdd-cheap"] != "gpt-5.6-luna" {
 		t.Errorf("Powerful preset sdd-cheap model = %q, want gpt-5.6-luna", carrilModels["sdd-cheap"])

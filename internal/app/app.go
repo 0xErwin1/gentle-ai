@@ -86,6 +86,16 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunSDDStatus(args[1:], stdout)
 		case "sdd-continue":
 			return cli.RunSDDContinue(args[1:], stdout)
+		case "review-start":
+			return cli.RunReviewStart(args[1:], stdout)
+		case "review-resume":
+			return cli.RunReviewResume(args[1:], stdout)
+		case "review-bundle-export":
+			return cli.RunReviewBundleExport(args[1:], stdout)
+		case "review-bundle-import":
+			return cli.RunReviewBundleImport(args[1:], stdout)
+		case "review-validate":
+			return cli.RunReviewValidate(args[1:], stdout)
 		case "install":
 			if hasHelpFlag(args[1:]) {
 				cli.PrintInstallHelp(stdout)

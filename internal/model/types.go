@@ -199,6 +199,7 @@ const (
 	EventPreCommit    TriggerEvent = "pre-commit"
 	EventPrePush      TriggerEvent = "pre-push"
 	EventPrePR        TriggerEvent = "pre-pr"
+	EventRelease      TriggerEvent = "release"
 	EventPostSDDPhase TriggerEvent = "post-sdd-phase"
 	EventOnCI         TriggerEvent = "on-ci"
 	EventOnSchedule   TriggerEvent = "on-schedule"

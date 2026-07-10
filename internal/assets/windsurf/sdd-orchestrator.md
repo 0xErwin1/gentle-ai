@@ -47,10 +47,10 @@ These are orchestrator stop rules for solo-agent platforms. Once any trigger fir
 
 1. **4-file rule**: if understanding requires reading 4+ files, run an exploration/mapping phase before implementation.
 2. **Multi-file write rule**: if implementation will touch 2+ non-trivial files, require an explicit apply phase and verify phase boundary.
-3. **PR rule**: before commit, push, or PR after code changes, run verification/review with the concrete lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1).
-4. **Incident rule**: after wrong `cwd`, accidental repo/worktree mutation, merge recovery, confusing test command, or environment workaround, stop and perform a fresh audit/verification pass with the concrete lens(es) selected by Review Lens Selection before continuing.
+3. **Lifecycle receipt rule**: before commit, push, PR, or release, validate the same content-bound receipt with native `review-validate`; follow missing/scope-changed/invalidated/escalated action and never launch a lens, Judgment Day, or new budget at the gate.
+4. **Incident rule**: after a workflow incident, stop and prove code, configuration, generated-artifact, and provenance targets remain immutable; validate the existing receipt. Any changed target requires explicit scope action, not reopened review.
 5. **Long-session rule**: after roughly 20 tool calls, 5 exploratory file reads, or 2 non-mechanical edits without a phase boundary and growing complexity, pause and re-plan instead of silently continuing monolithically.
-6. **Fresh review rule**: when the platform has no custom review sub-agent, simulate the selected concrete review lens(es) by re-reading the diff/spec from scratch during verification and challenging prior assumptions.
+6. **Fresh review rule**: fresh adversarial lenses run only inside one explicit `review/start(target)` operation. Final verification checks requirements/runtime independently and never reopens the code review.
 
 #### Review Lens Selection
 
@@ -109,7 +109,7 @@ If the first pass finds nothing, persist an empty ledger record rather than skip
 
 - Keep exploration, apply, and verify concerns separated even when all phases run in one conversation.
 - Preserve one writer thread; do not interleave broad exploration with edits unless it is the explicit apply phase.
-- Use concrete review lenses after implementation, conflict resolution, or incidents because their value is independent judgment, not token saving.
+- Start concrete review lenses only inside one explicit post-implementation `review/start(target)`; conflict and incident handling validate the existing receipt and immutable boundaries instead of reopening review.
 - Avoid extra phase ceremony for truly local one-file fixes, quick state checks, and already-understood mechanical edits.
 
 
@@ -199,7 +199,7 @@ In **Automatic** mode the orchestrator is the gatekeeper between phases. The gat
 
 **Hybrid validation mechanism (cost-aware):**
 - **Inline for low-risk phases** (`sdd-explore`, `sdd-spec`, `sdd-tasks`, `sdd-archive`): the orchestrator runs the checks itself by reading the artifact back. No extra phase run.
-- **Fresh-context reviewer for high-risk phases** (`sdd-design`, `sdd-apply`): run a fresh inline phase pass for independent judgment, because errors in these phases compound downstream. Use the `sdd-verify` model alias for the gate review.
+- **Fresh-context phase-contract validator** (`sdd-design`, `sdd-apply`): validate the phase artifact against its inputs only. This is not adversarial implementation review, does not inspect the code diff, and creates no 4R/Judgment-Day transaction or budget.
 - **Escalation on smell:** if an inline check on a low-risk phase finds any smell (status mismatch, unresolved path, suspected drift, missing artifact), escalate that phase to a fresh-context review before deciding.
 
 **On gate PASS:** continue automatically to the next phase. Auto stays auto on the happy path.

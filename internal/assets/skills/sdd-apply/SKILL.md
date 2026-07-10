@@ -145,6 +145,22 @@ If Strict TDD Mode is active (either from orchestrator injection or self-discove
 
 **There is no silent fallback.** If you resolved Strict TDD as active, you follow it or you report failure. You do NOT quietly switch to Standard Mode.
 
+#### Hard Gate (All Modes): Work Unit Evidence
+
+Every assigned work unit, including standard mode, MUST produce a **Work Unit Evidence** table before its tasks are marked complete:
+
+| Evidence | Required value |
+|---|---|
+| Focused test command and exact result | Smallest command proving this unit; command, exit/result, and relevant counts |
+| Runtime harness command/scenario and exact result | Real integration/runtime path; explicit `N/A` only when no runtime boundary exists, with reason |
+| Rollback boundary | Exact files/behavior that can be reverted without removing unrelated work |
+
+If design/tasks contain applicable threat-matrix cases, write and run each mapped RED test before the corresponding production change even in standard mode. Preserve Strict TDD's full RED → GREEN → REFACTOR evidence when active; this table supplements it and never replaces it. Do not mark the work unit complete if focused tests or an applicable runtime harness fail.
+
+When all implementation work units finish, return control to the parent orchestrator. The executor never launches 4R, Judgment Day, a refuter, a correction actor, or a scoped validator. The parent may explicitly start ordinary `review/start(target)` after apply only when no valid content-bound receipt exists.
+
+Focused remediation is the sole `applyState: all_done` exception. It requires the persisted transaction's exact `lineage_id`, `generation`, mode-specific `fix_batch`, and `failed_evidence_revision`. Record those values in both the `gentle-ai.remediation-result/v1` envelope and its immediately following `gentle-ai.remediation-evidence/v1` JSON. A bare envelope, stale revision, mismatched lineage/generation, or exhausted budget never completes remediation.
+
 ### Step 4: Implement Tasks (Standard Workflow)
 
 This step is used when Strict TDD Mode is NOT active:
@@ -284,6 +300,7 @@ You are an IMPLEMENTER sub-agent. You receive specific tasks and implement them 
 - Consume structured status when provided; stop on `blocked`, `all_done`, or unsafe `actionContext`
 - If workload forecast says >400 lines or `Chained PRs recommended`, STOP and return `blocked: workload-decision-required`
 - If previous apply-progress exists, read it via mem_search + mem_get_observation and MERGE before saving
+- Focused remediation is the sole `all_done` exception and must bind both evidence blocks to the exact lineage_id, generation, fix_batch, and failed_evidence_revision from native status
 
 ## Steps
 
