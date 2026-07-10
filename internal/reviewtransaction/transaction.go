@@ -1,0 +1,1150 @@
+package reviewtransaction
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"sort"
+	"strings"
+)
+
+const TransactionSchema = "gentle-ai.review-transaction/v1"
+
+type Mode string
+
+const (
+	ModeOrdinary4R  Mode = "ordinary_4r"
+	ModeJudgmentDay Mode = "judgment_day"
+)
+
+type State string
+
+const (
+	StateUnreviewed             State = "unreviewed"
+	StateReviewing              State = "reviewing"
+	StateJudgesConfirmed        State = "judges_confirmed"
+	StateFindingsFrozen         State = "findings_frozen"
+	StateEvidenceClassified     State = "evidence_classified"
+	StateFixRequired            State = "fix_required"
+	StateFixing                 State = "fixing"
+	StateFixValidating          State = "fix_validating"
+	StateReadyFinalVerification State = "ready_final_verification"
+	StateFinalVerifying         State = "final_verifying"
+	StateApproved               State = "approved"
+	StateEscalated              State = "escalated"
+)
+
+type EvidenceClass string
+
+const (
+	EvidenceDeterministic EvidenceClass = "deterministic"
+	EvidenceInferential   EvidenceClass = "inferential"
+	EvidenceInsufficient  EvidenceClass = "insufficient"
+)
+
+type EvidenceOutcome string
+
+const (
+	OutcomeCorroborated EvidenceOutcome = "corroborated"
+	OutcomeRefuted      EvidenceOutcome = "refuted"
+	OutcomeInconclusive EvidenceOutcome = "inconclusive"
+	OutcomeInfo         EvidenceOutcome = "info"
+)
+
+type Counters struct {
+	FullReviews          int `json:"full_reviews"`
+	RefuterBatches       int `json:"refuter_batches"`
+	FixBatches           int `json:"fix_batches"`
+	ScopedFixValidations int `json:"scoped_fix_validations"`
+	FinalVerifications   int `json:"final_verifications"`
+	FixRounds            int `json:"fix_rounds"`
+	ScopedRejudgments    int `json:"scoped_rejudgments"`
+	JudgeExecutions      int `json:"judge_executions"`
+}
+
+type Start struct {
+	LineageID  string
+	Mode       Mode
+	Generation int
+	Snapshot   Snapshot
+	PolicyHash string
+}
+
+type Finding struct {
+	ID        string   `json:"id"`
+	Lens      string   `json:"lens,omitempty"`
+	Location  string   `json:"location,omitempty"`
+	Severity  string   `json:"severity,omitempty"`
+	Claim     string   `json:"claim,omitempty"`
+	ProofRefs []string `json:"proof_refs,omitempty"`
+}
+
+type ScopedValidationResult struct {
+	LedgerIDs         []string  `json:"ledger_ids"`
+	Approved          bool      `json:"approved"`
+	FixCausedFindings []Finding `json:"fix_caused_findings"`
+}
+
+type FindingEvidence struct {
+	FindingID string        `json:"finding_id"`
+	Class     EvidenceClass `json:"class"`
+	Proof     string        `json:"proof"`
+}
+
+type RefuterClaim struct {
+	FindingID        string `json:"finding_id"`
+	SnapshotIdentity string `json:"snapshot_identity"`
+	Proof            string `json:"proof"`
+}
+
+type JudgeProof struct {
+	JudgeID       string `json:"judge_id"`
+	ExecutionHash string `json:"execution_hash"`
+	ResultHash    string `json:"result_hash"`
+	Blind         bool   `json:"blind"`
+	Confirmed     bool   `json:"confirmed"`
+}
+
+type EvidenceRoute struct {
+	RefuterClaims     []RefuterClaim `json:"refuter_claims"`
+	AutoFixFindingIDs []string       `json:"auto_fix_finding_ids"`
+}
+
+type EvidenceResult struct {
+	FindingID string          `json:"finding_id"`
+	Outcome   EvidenceOutcome `json:"outcome"`
+	Proof     string          `json:"proof"`
+}
+
+type Transaction struct {
+	Schema                 string                     `json:"schema"`
+	LineageID              string                     `json:"lineage_id"`
+	Mode                   Mode                       `json:"mode"`
+	Generation             int                        `json:"generation"`
+	State                  State                      `json:"state"`
+	Snapshot               Snapshot                   `json:"snapshot"`
+	BaseTree               string                     `json:"base_tree"`
+	PathsDigest            string                     `json:"paths_digest"`
+	InitialReviewTree      string                     `json:"initial_review_tree"`
+	FinalCandidateTree     string                     `json:"final_candidate_tree"`
+	FixDeltaHash           string                     `json:"fix_delta_hash"`
+	PolicyHash             string                     `json:"policy_hash"`
+	LedgerHash             string                     `json:"ledger_hash"`
+	LedgerFindingsHash     string                     `json:"ledger_findings_hash"`
+	EvidenceHash           string                     `json:"evidence_hash"`
+	JudgeProofHash         string                     `json:"judge_proof_hash,omitempty"`
+	JudgeAgreementHash     string                     `json:"judge_agreement_hash,omitempty"`
+	JudgeProofs            []JudgeProof               `json:"judge_proofs"`
+	Release                *ReleaseEvidence           `json:"release,omitempty"`
+	FailedEvidenceRevision string                     `json:"failed_evidence_revision,omitempty"`
+	Counters               Counters                   `json:"counters"`
+	Findings               []Finding                  `json:"findings"`
+	Classifications        map[string]FindingEvidence `json:"classifications"`
+	Outcomes               map[string]EvidenceOutcome `json:"outcomes"`
+	FixFindingIDs          []string                   `json:"fix_finding_ids"`
+	PendingRefuterIDs      []string                   `json:"pending_refuter_ids"`
+	FixCausedFindings      []Finding                  `json:"fix_caused_findings"`
+}
+
+func NewTransaction(start Start) (*Transaction, error) {
+	if err := validateLineageID(start.LineageID); err != nil {
+		return nil, err
+	}
+	if start.Mode != ModeOrdinary4R && start.Mode != ModeJudgmentDay {
+		return nil, fmt.Errorf("unsupported review mode %q", start.Mode)
+	}
+	if start.Generation < 1 {
+		return nil, errors.New("generation must be positive")
+	}
+	if err := validateSnapshot(start.Snapshot); err != nil {
+		return nil, err
+	}
+	if !validSHA256(start.PolicyHash) {
+		return nil, errors.New("policy_hash must be a lowercase SHA-256 identity")
+	}
+	return &Transaction{
+		Schema: TransactionSchema, LineageID: start.LineageID, Mode: start.Mode,
+		Generation: start.Generation, State: StateUnreviewed, Snapshot: start.Snapshot,
+		BaseTree: start.Snapshot.BaseTree, PathsDigest: start.Snapshot.PathsDigest,
+		InitialReviewTree: start.Snapshot.CandidateTree, FinalCandidateTree: start.Snapshot.CandidateTree,
+		FixDeltaHash: EmptyFixDeltaHash, PolicyHash: start.PolicyHash,
+		Findings: []Finding{}, Classifications: map[string]FindingEvidence{},
+		Outcomes: map[string]EvidenceOutcome{}, FixFindingIDs: []string{}, PendingRefuterIDs: []string{},
+		FixCausedFindings: []Finding{}, JudgeProofs: []JudgeProof{},
+	}, nil
+}
+
+func NewLineage(previousLineageID string, start Start) (*Transaction, error) {
+	if validateLineageID(previousLineageID) != nil || start.LineageID == previousLineageID {
+		return nil, errors.New("scope change requires an explicit different lineage_id")
+	}
+	return NewTransaction(start)
+}
+
+func (transaction *Transaction) StartReview() error {
+	if transaction.State != StateUnreviewed {
+		return transaction.invalidTransition("start review")
+	}
+	if transaction.Mode == ModeOrdinary4R {
+		if transaction.Counters.FullReviews >= 1 {
+			return transaction.escalateBudget("full review")
+		}
+		transaction.Counters.FullReviews++
+	}
+	transaction.State = StateReviewing
+	return nil
+}
+
+func (transaction *Transaction) RecordJudgeProofs(proofs []JudgeProof, agreementHash string) error {
+	if transaction.Mode != ModeJudgmentDay || transaction.State != StateReviewing {
+		return transaction.invalidTransition("record Judgment Day judge proofs")
+	}
+	validated, proofHash, err := validateJudgeProofs(proofs, agreementHash)
+	if err != nil {
+		return err
+	}
+	transaction.JudgeProofs = validated
+	transaction.JudgeProofHash = proofHash
+	transaction.JudgeAgreementHash = agreementHash
+	transaction.Counters.JudgeExecutions = len(validated)
+	transaction.State = StateJudgesConfirmed
+	return nil
+}
+
+func (transaction *Transaction) FreezeFindings(findings []Finding, ledgerHash string) error {
+	expectedState := StateReviewing
+	if transaction.Mode == ModeJudgmentDay {
+		expectedState = StateJudgesConfirmed
+	}
+	if transaction.State != expectedState {
+		return transaction.invalidTransition("freeze findings")
+	}
+	if !validSHA256(ledgerHash) {
+		return errors.New("ledger_hash must be a lowercase SHA-256 identity")
+	}
+	seen := map[string]struct{}{}
+	validated := make([]Finding, len(findings))
+	infoOutcomes := make(map[string]EvidenceOutcome)
+	for index, finding := range findings {
+		finding.ID = strings.TrimSpace(finding.ID)
+		if finding.ID == "" {
+			return errors.New("finding id is required")
+		}
+		if _, duplicate := seen[finding.ID]; duplicate {
+			return fmt.Errorf("duplicate finding id %q", finding.ID)
+		}
+		seen[finding.ID] = struct{}{}
+		if !isSupportedSeverity(finding.Severity) {
+			return fmt.Errorf("finding %q has unsupported severity %q", finding.ID, finding.Severity)
+		}
+		validated[index] = finding
+		if !isSevereSeverity(finding.Severity) {
+			infoOutcomes[finding.ID] = OutcomeInfo
+		}
+	}
+	transaction.Findings = validated
+	for id, outcome := range infoOutcomes {
+		transaction.Outcomes[id] = outcome
+	}
+	transaction.LedgerHash = ledgerHash
+	transaction.LedgerFindingsHash = findingsHash(validated)
+	transaction.State = StateFindingsFrozen
+	return nil
+}
+
+func (transaction *Transaction) ClassifyEvidence(evidence []FindingEvidence) (EvidenceRoute, error) {
+	if transaction.State != StateFindingsFrozen {
+		return EvidenceRoute{}, transaction.invalidTransition("classify evidence")
+	}
+	severe := make(map[string]Finding, len(transaction.Findings))
+	for _, finding := range transaction.Findings {
+		if isSevereSeverity(finding.Severity) {
+			severe[finding.ID] = finding
+		}
+	}
+	byID := make(map[string]FindingEvidence, len(evidence))
+	for _, item := range evidence {
+		item.FindingID = strings.TrimSpace(item.FindingID)
+		if _, ok := severe[item.FindingID]; !ok {
+			return EvidenceRoute{}, fmt.Errorf("finding %q is not a frozen severe finding", item.FindingID)
+		}
+		if _, duplicate := byID[item.FindingID]; duplicate {
+			return EvidenceRoute{}, fmt.Errorf("duplicate evidence for finding %q", item.FindingID)
+		}
+		byID[item.FindingID] = item
+	}
+	if len(byID) != len(severe) {
+		return EvidenceRoute{}, errors.New("evidence classification must cover every frozen BLOCKER/CRITICAL finding exactly once")
+	}
+
+	route := EvidenceRoute{RefuterClaims: []RefuterClaim{}, AutoFixFindingIDs: []string{}}
+	escalate := false
+	classifications := cloneClassifications(transaction.Classifications)
+	outcomes := cloneOutcomes(transaction.Outcomes)
+	fixFindingIDs := append([]string{}, transaction.FixFindingIDs...)
+	pendingRefuterIDs := append([]string{}, transaction.PendingRefuterIDs...)
+	for _, finding := range transaction.Findings {
+		if !isSevereSeverity(finding.Severity) {
+			continue
+		}
+		item, ok := byID[finding.ID]
+		if !ok || !isConcreteEvidence(item.Proof) {
+			return EvidenceRoute{}, fmt.Errorf("finding %q requires concrete evidence", finding.ID)
+		}
+		classifications[finding.ID] = item
+		switch item.Class {
+		case EvidenceDeterministic:
+			outcomes[finding.ID] = OutcomeCorroborated
+			fixFindingIDs = addUniqueSorted(fixFindingIDs, finding.ID)
+			route.AutoFixFindingIDs = append(route.AutoFixFindingIDs, finding.ID)
+		case EvidenceInferential:
+			if transaction.Mode == ModeJudgmentDay {
+				outcomes[finding.ID] = OutcomeCorroborated
+				fixFindingIDs = addUniqueSorted(fixFindingIDs, finding.ID)
+				route.AutoFixFindingIDs = append(route.AutoFixFindingIDs, finding.ID)
+				continue
+			}
+			pendingRefuterIDs = append(pendingRefuterIDs, finding.ID)
+			route.RefuterClaims = append(route.RefuterClaims, RefuterClaim{
+				FindingID: finding.ID, SnapshotIdentity: transaction.Snapshot.Identity, Proof: item.Proof,
+			})
+		case EvidenceInsufficient:
+			outcomes[finding.ID] = OutcomeInconclusive
+			escalate = true
+		default:
+			return EvidenceRoute{}, fmt.Errorf("unsupported evidence class %q", item.Class)
+		}
+	}
+	sort.Strings(pendingRefuterIDs)
+	sort.Strings(route.AutoFixFindingIDs)
+	transaction.Classifications = classifications
+	transaction.Outcomes = outcomes
+	transaction.FixFindingIDs = fixFindingIDs
+	transaction.PendingRefuterIDs = pendingRefuterIDs
+	transaction.State = StateEvidenceClassified
+	if escalate {
+		for _, findingID := range transaction.PendingRefuterIDs {
+			transaction.Outcomes[findingID] = OutcomeInconclusive
+		}
+		transaction.PendingRefuterIDs = []string{}
+		transaction.State = StateEscalated
+	} else if len(transaction.PendingRefuterIDs) == 0 {
+		transaction.advanceAfterEvidence()
+	}
+	return route, nil
+}
+
+func (transaction *Transaction) ApplyRefuterOutcomes(results []EvidenceResult) error {
+	if transaction.Mode != ModeOrdinary4R || transaction.State != StateEvidenceClassified || len(transaction.PendingRefuterIDs) == 0 {
+		return transaction.invalidTransition("apply refuter outcomes")
+	}
+	if transaction.Counters.RefuterBatches >= 1 {
+		return transaction.escalateBudget("refuter batch")
+	}
+	byID := make(map[string]EvidenceResult, len(results))
+	for _, result := range results {
+		if _, duplicate := byID[result.FindingID]; duplicate {
+			return transaction.failRefuterBatch(fmt.Errorf("duplicate refuter result for %q", result.FindingID))
+		}
+		byID[result.FindingID] = result
+	}
+	if len(byID) != len(transaction.PendingRefuterIDs) {
+		return transaction.failRefuterBatch(errors.New("one complete refuter batch must return every inferential finding"))
+	}
+	outcomes := cloneOutcomes(transaction.Outcomes)
+	fixFindingIDs := append([]string{}, transaction.FixFindingIDs...)
+	escalate := false
+	for _, findingID := range transaction.PendingRefuterIDs {
+		result, ok := byID[findingID]
+		if !ok || !isConcreteEvidence(result.Proof) {
+			return transaction.failRefuterBatch(fmt.Errorf("refuter result %q requires concrete proof", findingID))
+		}
+		switch result.Outcome {
+		case OutcomeCorroborated:
+			fixFindingIDs = addUniqueSorted(fixFindingIDs, findingID)
+		case OutcomeRefuted:
+		case OutcomeInconclusive:
+			escalate = true
+		default:
+			return transaction.failRefuterBatch(fmt.Errorf("unsupported refuter outcome %q", result.Outcome))
+		}
+		outcomes[findingID] = result.Outcome
+	}
+	transaction.Outcomes = outcomes
+	transaction.FixFindingIDs = fixFindingIDs
+	transaction.Counters.RefuterBatches++
+	transaction.PendingRefuterIDs = []string{}
+	if escalate {
+		transaction.State = StateEscalated
+	} else {
+		transaction.advanceAfterEvidence()
+	}
+	return nil
+}
+
+func (transaction *Transaction) failRefuterBatch(cause error) error {
+	for _, findingID := range transaction.PendingRefuterIDs {
+		transaction.Outcomes[findingID] = OutcomeInconclusive
+	}
+	transaction.Counters.RefuterBatches++
+	transaction.PendingRefuterIDs = []string{}
+	transaction.State = StateEscalated
+	return cause
+}
+
+func (transaction *Transaction) BeginFix(failedEvidenceRevision string) error {
+	if transaction.State != StateFixRequired {
+		return transaction.invalidTransition("begin fix")
+	}
+	if !validSHA256(failedEvidenceRevision) {
+		return errors.New("failed evidence revision must be a lowercase SHA-256 identity")
+	}
+	switch transaction.Mode {
+	case ModeOrdinary4R:
+		if transaction.Counters.FixBatches >= 1 {
+			return transaction.escalateBudget("fix batch")
+		}
+		transaction.Counters.FixBatches++
+	case ModeJudgmentDay:
+		if transaction.Counters.FixRounds >= 2 {
+			return transaction.escalateBudget("judgment-day fix round")
+		}
+		transaction.Counters.FixRounds++
+	}
+	transaction.FailedEvidenceRevision = failedEvidenceRevision
+	transaction.State = StateFixing
+	return nil
+}
+
+func (transaction *Transaction) CompleteFix(snapshot Snapshot, fixDeltaHash string, ledgerIDs []string) error {
+	if transaction.State != StateFixing {
+		return transaction.invalidTransition("complete fix")
+	}
+	if err := validateSnapshot(snapshot); err != nil {
+		return err
+	}
+	if snapshot.Kind != TargetFixDiff || snapshot.BaseTree != transaction.FinalCandidateTree {
+		return errors.New("fix snapshot must be a fix-diff based on the previous final candidate tree")
+	}
+	ids, err := canonicalStrings(ledgerIDs, "ledger id")
+	if err != nil {
+		return err
+	}
+	if !equalStrings(ids, transaction.FixFindingIDs) || !equalStrings(ids, snapshot.LedgerIDs) {
+		return errors.New("fix diff must be bound exactly to corroborated frozen ledger IDs")
+	}
+	transaction.Snapshot = snapshot
+	transaction.FinalCandidateTree = snapshot.CandidateTree
+	transaction.FixDeltaHash = FixDeltaHashForSnapshot(snapshot)
+	transaction.State = StateFixValidating
+	return nil
+}
+
+// FixDeltaHashForSnapshot is derived solely from the authoritative fix
+// snapshot boundary. Narrative patches and caller-provided artifact hashes are
+// not evidence of the correction that changed the candidate tree.
+func FixDeltaHashForSnapshot(snapshot Snapshot) string {
+	hash := sha256.New()
+	hash.Write([]byte("gentle-ai.fix-delta/v1\x00"))
+	for _, value := range []string{snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof} {
+		writeLengthPrefixed(hash, []byte(value))
+	}
+	for _, value := range snapshot.LedgerIDs {
+		writeLengthPrefixed(hash, []byte(value))
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
+
+func (transaction *Transaction) ValidateFixDelta(ledgerIDs []string, approved bool) error {
+	return transaction.ValidateFixDeltaResult(ScopedValidationResult{
+		LedgerIDs: ledgerIDs, Approved: approved, FixCausedFindings: []Finding{},
+	})
+}
+
+func (transaction *Transaction) ValidateFixDeltaResult(result ScopedValidationResult) error {
+	if transaction.State != StateFixValidating {
+		return transaction.invalidTransition("validate fix delta")
+	}
+	ids, err := canonicalStrings(result.LedgerIDs, "ledger id")
+	if err != nil {
+		return err
+	}
+	if !equalStrings(ids, transaction.FixFindingIDs) {
+		return errors.New("scoped validation must use the frozen fix ledger IDs")
+	}
+	if result.FixCausedFindings == nil {
+		return errors.New("scoped validation must provide an explicit fix_caused_findings array")
+	}
+	seen := make(map[string]struct{}, len(transaction.Findings)+len(result.FixCausedFindings))
+	for _, finding := range transaction.Findings {
+		seen[finding.ID] = struct{}{}
+	}
+	validated := make([]Finding, len(result.FixCausedFindings))
+	severeFixCaused := 0
+	for index, finding := range result.FixCausedFindings {
+		if err := validateStructuredFinding(finding); err != nil {
+			return fmt.Errorf("fix-caused finding[%d]: %w", index, err)
+		}
+		if _, exists := seen[finding.ID]; exists {
+			return fmt.Errorf("duplicate fix-caused finding id %q", finding.ID)
+		}
+		seen[finding.ID] = struct{}{}
+		validated[index] = finding
+		if isSevereSeverity(finding.Severity) {
+			severeFixCaused++
+		}
+	}
+	if result.Approved && severeFixCaused > 0 {
+		return errors.New("scoped validation cannot approve while recording severe fix-caused defects")
+	}
+	if !result.Approved && len(validated) > 0 && severeFixCaused == 0 {
+		result.Approved = true
+	}
+	transaction.FixCausedFindings = append(transaction.FixCausedFindings, validated...)
+	if transaction.Mode == ModeJudgmentDay && severeFixCaused > 0 {
+		for _, finding := range validated {
+			if isSevereSeverity(finding.Severity) {
+				transaction.FixFindingIDs = addUniqueSorted(transaction.FixFindingIDs, finding.ID)
+			}
+		}
+	}
+	switch transaction.Mode {
+	case ModeOrdinary4R:
+		if transaction.Counters.ScopedFixValidations >= 1 {
+			return transaction.escalateBudget("scoped fix validation")
+		}
+		transaction.Counters.ScopedFixValidations++
+		if result.Approved {
+			transaction.State = StateReadyFinalVerification
+		} else {
+			transaction.State = StateEscalated
+		}
+	case ModeJudgmentDay:
+		if transaction.Counters.ScopedRejudgments >= 2 {
+			return transaction.escalateBudget("scoped re-judgment")
+		}
+		transaction.Counters.ScopedRejudgments++
+		if result.Approved {
+			transaction.State = StateReadyFinalVerification
+		} else if transaction.Counters.FixRounds >= 2 {
+			transaction.State = StateEscalated
+		} else {
+			transaction.State = StateFixRequired
+		}
+	}
+	return nil
+}
+
+func (transaction *Transaction) BeginFinalVerification() error {
+	if transaction.State != StateReadyFinalVerification {
+		return transaction.invalidTransition("begin final verification")
+	}
+	if transaction.Counters.FinalVerifications >= 1 {
+		return transaction.escalateBudget("final verification")
+	}
+	transaction.Counters.FinalVerifications++
+	transaction.State = StateFinalVerifying
+	return nil
+}
+
+func (transaction *Transaction) BindReleaseEvidence(release ReleaseEvidence) error {
+	if transaction.State != StateReadyFinalVerification {
+		return transaction.invalidTransition("bind release evidence")
+	}
+	if transaction.Release != nil {
+		if *transaction.Release == release {
+			return nil
+		}
+		return errors.New("release evidence is already bound and immutable")
+	}
+	if err := validateReleaseEvidence(release); err != nil {
+		return err
+	}
+	if release.ReleaseTree != transaction.FinalCandidateTree {
+		return errors.New("release tree must exactly match the final reviewed candidate tree")
+	}
+	copy := release
+	transaction.Release = &copy
+	return nil
+}
+
+func (transaction *Transaction) CompleteFinalVerification(evidenceHash string, approved bool) error {
+	if transaction.State != StateFinalVerifying {
+		return transaction.invalidTransition("complete final verification")
+	}
+	if !validSHA256(evidenceHash) {
+		return errors.New("evidence_hash must be a lowercase SHA-256 identity")
+	}
+	transaction.EvidenceHash = evidenceHash
+	if approved {
+		transaction.State = StateApproved
+	} else {
+		transaction.State = StateEscalated
+	}
+	return nil
+}
+
+func ParseTransaction(payload []byte) (Transaction, error) {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var transaction Transaction
+	if err := decoder.Decode(&transaction); err != nil {
+		return Transaction{}, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return Transaction{}, errors.New("multiple JSON values in review transaction")
+	}
+	if err := transaction.validate(); err != nil {
+		return Transaction{}, err
+	}
+	return transaction, nil
+}
+
+func (transaction *Transaction) validate() error {
+	// v1 events written before semantic ledger binding used only ledger_hash.
+	// Their immutable findings deterministically supply the missing binding on
+	// read; the native gate still compares it to the retained ledger content.
+	if transaction.LedgerHash != "" && transaction.LedgerFindingsHash == "" && len(transaction.Findings) > 0 || transaction.LedgerHash != "" && transaction.LedgerFindingsHash == "" && transaction.Findings != nil {
+		transaction.LedgerFindingsHash = findingsHash(transaction.Findings)
+	}
+	if transaction.Schema != TransactionSchema {
+		return errors.New("unsupported review transaction schema")
+	}
+	if err := validateLineageID(transaction.LineageID); err != nil {
+		return err
+	}
+	if transaction.Generation < 1 {
+		return errors.New("transaction requires a positive generation")
+	}
+	if transaction.Mode != ModeOrdinary4R && transaction.Mode != ModeJudgmentDay {
+		return errors.New("invalid transaction mode")
+	}
+	if err := validateSnapshot(transaction.Snapshot); err != nil {
+		return err
+	}
+	if !validGitTree(transaction.BaseTree) || !validGitTree(transaction.InitialReviewTree) || !validGitTree(transaction.FinalCandidateTree) {
+		return errors.New("transaction tree identities must be full lowercase Git object IDs")
+	}
+	for _, identity := range []string{transaction.PathsDigest, transaction.FixDeltaHash, transaction.PolicyHash} {
+		if !validSHA256(identity) {
+			return errors.New("transaction core hashes must be lowercase SHA-256 identities")
+		}
+	}
+	if transaction.LedgerHash != "" && !validSHA256(transaction.LedgerHash) {
+		return errors.New("transaction ledger_hash is invalid")
+	}
+	if transaction.LedgerFindingsHash != "" && !validSHA256(transaction.LedgerFindingsHash) {
+		return errors.New("transaction ledger_findings_hash is invalid")
+	}
+	if transaction.EvidenceHash != "" && !validSHA256(transaction.EvidenceHash) {
+		return errors.New("transaction evidence_hash is invalid")
+	}
+	if transaction.FailedEvidenceRevision != "" && !validSHA256(transaction.FailedEvidenceRevision) {
+		return errors.New("transaction failed_evidence_revision is invalid")
+	}
+	if transaction.Release != nil {
+		if err := validateReleaseEvidence(*transaction.Release); err != nil {
+			return err
+		}
+		if transaction.Release.ReleaseTree != transaction.FinalCandidateTree {
+			return errors.New("transaction release tree must match final candidate tree")
+		}
+	}
+	if transaction.Findings == nil || transaction.Classifications == nil || transaction.Outcomes == nil || transaction.FixFindingIDs == nil || transaction.PendingRefuterIDs == nil || transaction.FixCausedFindings == nil || transaction.JudgeProofs == nil {
+		return errors.New("transaction collections must be explicit arrays or objects")
+	}
+	for index, finding := range transaction.FixCausedFindings {
+		if err := validateStructuredFinding(finding); err != nil {
+			return fmt.Errorf("fix-caused finding[%d]: %w", index, err)
+		}
+	}
+	if err := transaction.validateFindingRouting(); err != nil {
+		return err
+	}
+	switch transaction.State {
+	case StateUnreviewed, StateReviewing, StateJudgesConfirmed, StateFindingsFrozen, StateEvidenceClassified,
+		StateFixRequired, StateFixing, StateFixValidating, StateReadyFinalVerification,
+		StateFinalVerifying, StateApproved, StateEscalated:
+	default:
+		return fmt.Errorf("invalid transaction state %q", transaction.State)
+	}
+	if err := validateCounters(transaction.Mode, transaction.Counters); err != nil {
+		return err
+	}
+	if err := transaction.validateJudgeState(); err != nil {
+		return err
+	}
+	if transaction.State == StateFixing || transaction.State == StateFixValidating {
+		if !validSHA256(transaction.FailedEvidenceRevision) {
+			return errors.New("active fix state requires an exact failed evidence revision")
+		}
+		if transaction.Mode == ModeOrdinary4R && transaction.Counters.FixBatches != 1 {
+			return errors.New("ordinary active fix state requires its single fix batch")
+		}
+		if transaction.Mode == ModeJudgmentDay && (transaction.Counters.FixRounds < 1 || transaction.Counters.FixRounds > 2) {
+			return errors.New("judgment-day active fix state requires a bounded fix round")
+		}
+	}
+	if transaction.State == StateApproved && (!validSHA256(transaction.LedgerHash) || !validSHA256(transaction.EvidenceHash)) {
+		return errors.New("approved transaction requires ledger and evidence hashes")
+	}
+	return nil
+}
+
+func (transaction *Transaction) advanceAfterEvidence() {
+	if len(transaction.FixFindingIDs) > 0 {
+		transaction.State = StateFixRequired
+	} else {
+		transaction.State = StateReadyFinalVerification
+	}
+}
+
+func (transaction *Transaction) addFixFinding(id string) {
+	for _, existing := range transaction.FixFindingIDs {
+		if existing == id {
+			return
+		}
+	}
+	transaction.FixFindingIDs = append(transaction.FixFindingIDs, id)
+	sort.Strings(transaction.FixFindingIDs)
+}
+
+func (transaction *Transaction) invalidTransition(operation string) error {
+	return fmt.Errorf("cannot %s from transaction state %q", operation, transaction.State)
+}
+
+func (transaction *Transaction) escalateBudget(name string) error {
+	transaction.State = StateEscalated
+	return fmt.Errorf("%s budget exhausted", name)
+}
+
+func validateSnapshot(snapshot Snapshot) error {
+	if snapshot.Kind == "" || !validGitTree(snapshot.BaseTree) || !validGitTree(snapshot.CandidateTree) {
+		return errors.New("snapshot requires kind, base_tree, and candidate_tree")
+	}
+	for _, value := range []string{snapshot.PathsDigest, snapshot.IntendedUntrackedProof, snapshot.Identity} {
+		if !validSHA256(value) {
+			return errors.New("snapshot digests must be lowercase SHA-256 identities")
+		}
+	}
+	if snapshot.IntendedUntracked == nil || snapshot.Paths == nil {
+		return errors.New("snapshot path lists must be explicit arrays")
+	}
+	return nil
+}
+
+func validateCounters(mode Mode, counters Counters) error {
+	values := []int{counters.FullReviews, counters.RefuterBatches, counters.FixBatches, counters.ScopedFixValidations, counters.FinalVerifications, counters.FixRounds, counters.ScopedRejudgments, counters.JudgeExecutions}
+	for _, value := range values {
+		if value < 0 {
+			return errors.New("review counters cannot be negative")
+		}
+	}
+	switch mode {
+	case ModeOrdinary4R:
+		if counters.FullReviews > 1 || counters.RefuterBatches > 1 || counters.FixBatches > 1 || counters.ScopedFixValidations > 1 || counters.FinalVerifications > 1 || counters.FixRounds != 0 || counters.ScopedRejudgments != 0 || counters.JudgeExecutions != 0 {
+			return errors.New("ordinary_4r budget exceeded")
+		}
+	case ModeJudgmentDay:
+		if counters.FixRounds > 2 || counters.ScopedRejudgments > 2 || counters.RefuterBatches != 0 || counters.FixBatches != 0 || counters.ScopedFixValidations != 0 || counters.FinalVerifications > 1 || (counters.JudgeExecutions != 0 && counters.JudgeExecutions != 2) {
+			return errors.New("judgment_day budget exceeded")
+		}
+	}
+	return nil
+}
+
+func validateJudgeProofs(proofs []JudgeProof, agreementHash string) ([]JudgeProof, string, error) {
+	if len(proofs) != 2 || !validSHA256(agreementHash) {
+		return nil, "", errors.New("Judgment Day requires exactly two blind confirmed judge results and an agreement hash")
+	}
+	validated := append([]JudgeProof(nil), proofs...)
+	sort.Slice(validated, func(i, j int) bool { return validated[i].JudgeID < validated[j].JudgeID })
+	seenJudges := map[string]struct{}{}
+	seenExecutions := map[string]struct{}{}
+	seenResults := map[string]struct{}{}
+	hasher := sha256.New()
+	hasher.Write([]byte("gentle-ai.judgment-day-proof/v1\x00"))
+	for _, proof := range validated {
+		proof.JudgeID = strings.TrimSpace(proof.JudgeID)
+		if proof.JudgeID == "" || !validSHA256(proof.ExecutionHash) || !validSHA256(proof.ResultHash) || !proof.Blind || !proof.Confirmed {
+			return nil, "", errors.New("each Judgment Day judge proof must be distinct, blind, confirmed, and content-hashed")
+		}
+		if _, exists := seenJudges[proof.JudgeID]; exists {
+			return nil, "", errors.New("Judgment Day judge identities must be distinct")
+		}
+		if _, exists := seenExecutions[proof.ExecutionHash]; exists {
+			return nil, "", errors.New("Judgment Day judge execution proofs must be distinct")
+		}
+		if _, exists := seenResults[proof.ResultHash]; exists {
+			return nil, "", errors.New("Judgment Day judge result proofs must be distinct")
+		}
+		seenJudges[proof.JudgeID] = struct{}{}
+		seenExecutions[proof.ExecutionHash] = struct{}{}
+		seenResults[proof.ResultHash] = struct{}{}
+		for _, value := range []string{proof.JudgeID, proof.ExecutionHash, proof.ResultHash} {
+			writeLengthPrefixed(hasher, []byte(value))
+		}
+	}
+	writeLengthPrefixed(hasher, []byte(agreementHash))
+	return validated, "sha256:" + hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func (transaction *Transaction) validateJudgeState() error {
+	if transaction.Mode == ModeOrdinary4R {
+		if len(transaction.JudgeProofs) != 0 || transaction.JudgeProofHash != "" || transaction.JudgeAgreementHash != "" || transaction.Counters.JudgeExecutions != 0 || transaction.State == StateJudgesConfirmed {
+			return errors.New("ordinary review cannot contain Judgment Day judge proof")
+		}
+		return nil
+	}
+	if transaction.State == StateUnreviewed || transaction.State == StateReviewing {
+		if len(transaction.JudgeProofs) != 0 || transaction.Counters.JudgeExecutions != 0 || transaction.JudgeProofHash != "" || transaction.JudgeAgreementHash != "" {
+			return errors.New("unconfirmed Judgment Day state cannot contain partial judge proof")
+		}
+		return nil
+	}
+	proofs, proofHash, err := validateJudgeProofs(transaction.JudgeProofs, transaction.JudgeAgreementHash)
+	if err != nil || proofHash != transaction.JudgeProofHash || len(proofs) != transaction.Counters.JudgeExecutions {
+		return errors.New("Judgment Day state requires exactly two immutable distinct judge proofs")
+	}
+	return nil
+}
+
+func (transaction *Transaction) validateFindingRouting() error {
+	findings := make(map[string]Finding, len(transaction.Findings))
+	severe := make(map[string]Finding, len(transaction.Findings))
+	for _, finding := range transaction.Findings {
+		if strings.TrimSpace(finding.ID) == "" || !isSupportedSeverity(finding.Severity) {
+			return errors.New("transaction findings require IDs and supported severities")
+		}
+		if _, duplicate := findings[finding.ID]; duplicate {
+			return fmt.Errorf("duplicate transaction finding %q", finding.ID)
+		}
+		findings[finding.ID] = finding
+		if isSevereSeverity(finding.Severity) {
+			severe[finding.ID] = finding
+		}
+		outcome, hasOutcome := transaction.Outcomes[finding.ID]
+		if !isSevereSeverity(finding.Severity) {
+			if !hasOutcome || outcome != OutcomeInfo {
+				return fmt.Errorf("informational finding %q must remain info", finding.ID)
+			}
+		} else if hasOutcome {
+			switch outcome {
+			case OutcomeCorroborated, OutcomeRefuted, OutcomeInconclusive:
+			default:
+				return fmt.Errorf("severe finding %q has invalid outcome %q", finding.ID, outcome)
+			}
+		}
+	}
+	for id, classification := range transaction.Classifications {
+		finding, ok := findings[id]
+		if !ok || !isSevereSeverity(finding.Severity) || classification.FindingID != id || !isConcreteEvidence(classification.Proof) {
+			return fmt.Errorf("evidence classification %q is not bound to a frozen severe finding", id)
+		}
+		switch classification.Class {
+		case EvidenceDeterministic, EvidenceInferential, EvidenceInsufficient:
+		default:
+			return fmt.Errorf("evidence classification %q has invalid class %q", id, classification.Class)
+		}
+	}
+	for id := range transaction.Outcomes {
+		if _, ok := findings[id]; !ok {
+			return fmt.Errorf("outcome %q is not bound to a frozen finding", id)
+		}
+	}
+	fixCaused := make(map[string]Finding, len(transaction.FixCausedFindings))
+	for _, finding := range transaction.FixCausedFindings {
+		fixCaused[finding.ID] = finding
+	}
+	for _, id := range append(append([]string{}, transaction.FixFindingIDs...), transaction.PendingRefuterIDs...) {
+		finding, ok := findings[id]
+		if !ok {
+			finding, ok = fixCaused[id]
+		}
+		if !ok || !isSevereSeverity(finding.Severity) {
+			return fmt.Errorf("routed finding %q is not BLOCKER or CRITICAL", id)
+		}
+	}
+	fixIDs, err := canonicalStrings(transaction.FixFindingIDs, "fix finding id")
+	if err != nil || !equalStrings(fixIDs, transaction.FixFindingIDs) {
+		return errors.New("fix finding IDs must be unique and canonical")
+	}
+	pendingIDs, err := canonicalStrings(transaction.PendingRefuterIDs, "pending refuter id")
+	if err != nil || !equalStrings(pendingIDs, transaction.PendingRefuterIDs) {
+		return errors.New("pending refuter IDs must be unique and canonical")
+	}
+	if hasStringIntersection(fixIDs, pendingIDs) {
+		return errors.New("a severe finding cannot be both correction-bound and pending refutation")
+	}
+	if transaction.State != StateUnreviewed && transaction.State != StateReviewing && transaction.State != StateJudgesConfirmed && (!validSHA256(transaction.LedgerHash) || !validSHA256(transaction.LedgerFindingsHash) || transaction.LedgerFindingsHash != findingsHash(transaction.Findings)) {
+		return errors.New("frozen review state requires a content-bound ledger hash")
+	}
+	return transaction.validateFindingState(findings, severe)
+}
+
+func findingsHash(findings []Finding) string {
+	payload, _ := json.Marshal(findings)
+	sum := sha256.Sum256(append([]byte("gentle-ai.review-ledger-findings/v1\x00"), payload...))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func (transaction *Transaction) validateFindingState(findings, severe map[string]Finding) error {
+	beforeFreeze := transaction.State == StateUnreviewed || transaction.State == StateReviewing || transaction.State == StateJudgesConfirmed
+	if beforeFreeze {
+		if len(findings) != 0 || len(transaction.Classifications) != 0 || len(transaction.Outcomes) != 0 || len(transaction.FixFindingIDs) != 0 || len(transaction.PendingRefuterIDs) != 0 {
+			return errors.New("pre-freeze transaction cannot contain findings or evidence routing")
+		}
+		return nil
+	}
+	if transaction.State == StateFindingsFrozen {
+		if len(transaction.Classifications) != 0 || len(transaction.FixFindingIDs) != 0 || len(transaction.PendingRefuterIDs) != 0 {
+			return errors.New("findings_frozen state cannot contain classified or routed severe findings")
+		}
+		for id := range severe {
+			if _, exists := transaction.Outcomes[id]; exists {
+				return fmt.Errorf("frozen severe finding %q cannot have an outcome before classification", id)
+			}
+		}
+		return nil
+	}
+	if transaction.State == StateEscalated && transaction.LedgerHash == "" {
+		if len(findings) != 0 || len(transaction.Classifications) != 0 || len(transaction.Outcomes) != 0 || len(transaction.FixFindingIDs) != 0 || len(transaction.PendingRefuterIDs) != 0 {
+			return errors.New("pre-freeze escalation cannot contain findings or evidence routing")
+		}
+		return nil
+	}
+
+	fixSet := stringSet(transaction.FixFindingIDs)
+	pendingSet := stringSet(transaction.PendingRefuterIDs)
+	corroborated := make(map[string]struct{})
+	hasInsufficient := false
+	hasResolvedInferential := false
+	for id := range severe {
+		classification, classified := transaction.Classifications[id]
+		if !classified {
+			return fmt.Errorf("severe finding %q must retain one evidence classification", id)
+		}
+		outcome, hasOutcome := transaction.Outcomes[id]
+		_, fix := fixSet[id]
+		_, pending := pendingSet[id]
+		switch classification.Class {
+		case EvidenceDeterministic:
+			if !hasOutcome || outcome != OutcomeCorroborated || !fix || pending {
+				return fmt.Errorf("deterministic severe finding %q must remain corroborated and correction-bound", id)
+			}
+			corroborated[id] = struct{}{}
+		case EvidenceInferential:
+			if transaction.Mode == ModeJudgmentDay {
+				if !hasOutcome || outcome != OutcomeCorroborated || !fix || pending {
+					return fmt.Errorf("Judgment Day inferential finding %q must remain corroborated and correction-bound", id)
+				}
+				corroborated[id] = struct{}{}
+				continue
+			}
+			if pending {
+				if transaction.State != StateEvidenceClassified || hasOutcome || transaction.Counters.RefuterBatches != 0 {
+					return fmt.Errorf("inferential finding %q is pending outside the single unconsumed refuter state", id)
+				}
+				continue
+			}
+			if !hasOutcome || (outcome != OutcomeCorroborated && outcome != OutcomeRefuted && outcome != OutcomeInconclusive) {
+				return fmt.Errorf("resolved inferential finding %q requires a refuter outcome", id)
+			}
+			hasResolvedInferential = true
+			if outcome == OutcomeCorroborated {
+				if !fix {
+					return fmt.Errorf("corroborated inferential finding %q must remain correction-bound", id)
+				}
+				corroborated[id] = struct{}{}
+			} else if fix {
+				return fmt.Errorf("non-corroborated inferential finding %q cannot enter correction", id)
+			}
+		case EvidenceInsufficient:
+			hasInsufficient = true
+			if !hasOutcome || outcome != OutcomeInconclusive || fix || pending || transaction.State != StateEscalated {
+				return fmt.Errorf("insufficient severe finding %q must terminally escalate as inconclusive", id)
+			}
+		}
+	}
+	if len(transaction.Classifications) != len(severe) {
+		return errors.New("evidence classification must cover every frozen severe finding exactly once")
+	}
+	for _, finding := range transaction.FixCausedFindings {
+		if isSevereSeverity(finding.Severity) {
+			corroborated[finding.ID] = struct{}{}
+		}
+	}
+	if len(fixSet) != len(corroborated) {
+		return errors.New("correction IDs must equal all and only corroborated severe findings")
+	}
+	if transaction.State == StateEvidenceClassified && len(pendingSet) == 0 {
+		return errors.New("evidence_classified state requires pending inferential findings")
+	}
+	if transaction.State != StateEvidenceClassified && len(pendingSet) != 0 {
+		return errors.New("pending refuter findings cannot survive outside evidence_classified")
+	}
+	if transaction.State != StateEscalated {
+		for id, outcome := range transaction.Outcomes {
+			if _, severeFinding := severe[id]; severeFinding && outcome == OutcomeInconclusive {
+				return fmt.Errorf("inconclusive severe finding %q requires terminal escalation", id)
+			}
+		}
+	}
+	if transaction.Mode == ModeOrdinary4R && hasResolvedInferential && !hasInsufficient && transaction.Counters.RefuterBatches != 1 {
+		return errors.New("resolved ordinary inferential findings require exactly one consumed refuter batch")
+	}
+	return transaction.validateResolutionCounters(len(corroborated) > 0)
+}
+
+func (transaction *Transaction) validateResolutionCounters(hasCorrections bool) error {
+	switch transaction.State {
+	case StateFixRequired:
+		if transaction.Mode == ModeOrdinary4R && (transaction.Counters.FixBatches != 0 || transaction.Counters.ScopedFixValidations != 0) {
+			return errors.New("ordinary fix_required state cannot pre-consume correction or validation")
+		}
+	case StateFixing, StateFixValidating:
+		if !hasCorrections {
+			return errors.New("active correction state requires corroborated severe findings")
+		}
+	case StateReadyFinalVerification, StateFinalVerifying, StateApproved:
+		if len(transaction.PendingRefuterIDs) != 0 {
+			return errors.New("final verification states cannot contain pending refuter IDs")
+		}
+		switch transaction.Mode {
+		case ModeOrdinary4R:
+			want := 0
+			if hasCorrections {
+				want = 1
+			}
+			if transaction.Counters.FixBatches != want || transaction.Counters.ScopedFixValidations != want {
+				return errors.New("ordinary final verification readiness requires coherent correction and scoped-validation counters")
+			}
+		case ModeJudgmentDay:
+			if hasCorrections {
+				if transaction.Counters.FixRounds < 1 || transaction.Counters.FixRounds != transaction.Counters.ScopedRejudgments {
+					return errors.New("Judgment Day final verification readiness requires coherent fix and scoped re-judgment counters")
+				}
+			} else if transaction.Counters.FixRounds != 0 || transaction.Counters.ScopedRejudgments != 0 {
+				return errors.New("uncorrected Judgment Day readiness cannot consume fix counters")
+			}
+		}
+		if hasCorrections {
+			wrongBase := transaction.Mode == ModeOrdinary4R && transaction.Snapshot.BaseTree != transaction.InitialReviewTree
+			if !validSHA256(transaction.FailedEvidenceRevision) || transaction.Snapshot.Kind != TargetFixDiff || wrongBase || transaction.Snapshot.CandidateTree != transaction.FinalCandidateTree || !equalStrings(transaction.Snapshot.LedgerIDs, transaction.FixFindingIDs) || transaction.FixDeltaHash != FixDeltaHashForSnapshot(transaction.Snapshot) {
+				return errors.New("corrected final verification readiness requires a complete ledger-bound fix snapshot")
+			}
+		}
+		if transaction.State == StateReadyFinalVerification && transaction.Counters.FinalVerifications != 0 {
+			return errors.New("ready_final_verification cannot pre-consume final verification")
+		}
+		if (transaction.State == StateFinalVerifying || transaction.State == StateApproved) && transaction.Counters.FinalVerifications != 1 {
+			return errors.New("final_verifying and approved require exactly one final verification")
+		}
+	}
+	return nil
+}
+
+func stringSet(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		set[value] = struct{}{}
+	}
+	return set
+}
+
+func hasStringIntersection(left, right []string) bool {
+	set := stringSet(left)
+	for _, value := range right {
+		if _, exists := set[value]; exists {
+			return true
+		}
+	}
+	return false
+}
+
+func isSupportedSeverity(severity string) bool {
+	switch severity {
+	case "BLOCKER", "CRITICAL", "WARNING", "SUGGESTION":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSevereSeverity(severity string) bool {
+	return severity == "BLOCKER" || severity == "CRITICAL"
+}
+
+func cloneClassifications(source map[string]FindingEvidence) map[string]FindingEvidence {
+	cloned := make(map[string]FindingEvidence, len(source))
+	for id, value := range source {
+		cloned[id] = value
+	}
+	return cloned
+}
+
+func cloneOutcomes(source map[string]EvidenceOutcome) map[string]EvidenceOutcome {
+	cloned := make(map[string]EvidenceOutcome, len(source))
+	for id, value := range source {
+		cloned[id] = value
+	}
+	return cloned
+}
+
+func addUniqueSorted(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	values = append(values, value)
+	sort.Strings(values)
+	return values
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func isConcreteEvidence(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || strings.ContainsAny(trimmed, "{}<>") {
+		return false
+	}
+	switch strings.ToLower(trimmed) {
+	case "n/a", "na", "none", "todo", "tbd", "pass", "passed", "success", "placeholder":
+		return false
+	}
+	return true
+}
+
+func validateStructuredFinding(finding Finding) error {
+	if strings.TrimSpace(finding.ID) == "" || strings.TrimSpace(finding.Lens) == "" || strings.TrimSpace(finding.Location) == "" || strings.TrimSpace(finding.Severity) == "" || strings.TrimSpace(finding.Claim) == "" {
+		return errors.New("id, lens, location, severity, and neutral claim are required")
+	}
+	if len(finding.ProofRefs) == 0 {
+		return errors.New("at least one proof reference is required")
+	}
+	if !isSupportedSeverity(finding.Severity) {
+		return errors.New("severity must be BLOCKER, CRITICAL, WARNING, or SUGGESTION")
+	}
+	for _, proof := range finding.ProofRefs {
+		if !isConcreteEvidence(proof) {
+			return errors.New("proof references must be concrete")
+		}
+	}
+	return nil
+}

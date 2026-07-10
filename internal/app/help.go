@@ -22,6 +22,17 @@ COMMANDS
                Print native SDD phase status for orchestrators
   sdd-continue [change]
                Print native SDD dispatcher routing output
+	  review-start --cwd <repo> --lineage <id> --policy-file <path>
+	               Build a target and append to the repository-derived review store
+	  review-resume --cwd <repo> --lineage <id>
+	  review-step --cwd <repo> --lineage <id> --operation <operation> --input <json>
+	               Re-emit authoritative state after output or mirror failure
+	  review-bundle-export --cwd <repo> --lineage <id> --out <path>
+	               Export the validated full chain as a portable content-addressed bundle
+	  review-bundle-import --cwd <repo> --bundle <path> --receipt <path> --request <path>
+	               Validate and install a portable chain into this repository's store
+  review-validate --cwd <repo> --receipt <path> --request <path>
+               Derive current facts and validate a content-bound lifecycle receipt
   update       Check for available updates
   upgrade      Apply updates to managed tools
   restore      Restore a config backup

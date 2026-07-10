@@ -1,0 +1,435 @@
+package reviewtransaction
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+)
+
+type TargetKind string
+
+const (
+	TargetCurrentChanges TargetKind = "current-changes"
+	TargetBaseDiff       TargetKind = "base-diff"
+	TargetExactRevision  TargetKind = "commit-range"
+	TargetFixDiff        TargetKind = "fix-diff"
+)
+
+type Target struct {
+	Kind              TargetKind `json:"kind"`
+	BaseRef           string     `json:"base_ref,omitempty"`
+	Revision          string     `json:"revision,omitempty"`
+	IntendedUntracked []string   `json:"intended_untracked"`
+	LedgerIDs         []string   `json:"ledger_ids,omitempty"`
+}
+
+type Snapshot struct {
+	Kind                   TargetKind `json:"kind"`
+	BaseTree               string     `json:"base_tree"`
+	CandidateTree          string     `json:"candidate_tree"`
+	PathsDigest            string     `json:"paths_digest"`
+	IntendedUntracked      []string   `json:"intended_untracked"`
+	IntendedUntrackedProof string     `json:"intended_untracked_proof"`
+	LedgerIDs              []string   `json:"ledger_ids,omitempty"`
+	Paths                  []string   `json:"paths"`
+	Identity               string     `json:"identity"`
+}
+
+type SnapshotBuilder struct {
+	Repo string
+}
+
+var exactObjectPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?$`)
+
+func (builder SnapshotBuilder) Build(ctx context.Context, target Target) (Snapshot, error) {
+	repo, err := builder.repositoryRoot(ctx)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	builder.Repo = repo
+
+	var baseTree, candidateTree, untrackedProof string
+	intended := []string{}
+	ledgerIDs, err := canonicalStrings(target.LedgerIDs, "ledger id")
+	if err != nil {
+		return Snapshot{}, err
+	}
+
+	switch target.Kind {
+	case TargetCurrentChanges:
+		if target.IntendedUntracked == nil {
+			return Snapshot{}, errors.New("current-changes requires an explicit intended_untracked list")
+		}
+		intended, err = canonicalPaths(target.IntendedUntracked)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		baseTree, candidateTree, untrackedProof, err = builder.buildCurrentChanges(ctx, intended)
+	case TargetBaseDiff:
+		if strings.TrimSpace(target.BaseRef) == "" {
+			return Snapshot{}, errors.New("base-diff requires base_ref")
+		}
+		baseTree, err = builder.resolveTree(ctx, target.BaseRef)
+		if err == nil {
+			candidateTree, err = builder.resolveTree(ctx, "HEAD")
+		}
+		untrackedProof = hashCanonical("gentle-ai.intended-untracked/v1")
+	case TargetExactRevision:
+		baseTree, candidateTree, err = builder.resolveExactRevision(ctx, target.Revision)
+		untrackedProof = hashCanonical("gentle-ai.intended-untracked/v1")
+	case TargetFixDiff:
+		if strings.TrimSpace(target.BaseRef) == "" || len(ledgerIDs) == 0 {
+			return Snapshot{}, errors.New("fix-diff requires base_ref and ledger_ids")
+		}
+		if target.IntendedUntracked == nil {
+			return Snapshot{}, errors.New("fix-diff requires an explicit intended_untracked list")
+		}
+		intended, err = canonicalPaths(target.IntendedUntracked)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		_, candidateTree, untrackedProof, err = builder.buildCurrentChanges(ctx, intended)
+		if err == nil {
+			baseTree, err = builder.resolveTree(ctx, target.BaseRef)
+		}
+	default:
+		return Snapshot{}, fmt.Errorf("unsupported target kind %q", target.Kind)
+	}
+	if err != nil {
+		return Snapshot{}, err
+	}
+
+	paths, err := builder.changedPaths(ctx, baseTree, candidateTree)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	pathsDigest := digestPaths(paths)
+	identity := snapshotIdentity(target.Kind, baseTree, candidateTree, pathsDigest, untrackedProof, intended, ledgerIDs)
+	return Snapshot{
+		Kind: target.Kind, BaseTree: baseTree, CandidateTree: candidateTree,
+		PathsDigest: pathsDigest, IntendedUntracked: intended,
+		IntendedUntrackedProof: untrackedProof, LedgerIDs: ledgerIDs,
+		Paths: paths, Identity: identity,
+	}, nil
+}
+
+func (builder SnapshotBuilder) repositoryRoot(ctx context.Context) (string, error) {
+	if strings.TrimSpace(builder.Repo) == "" {
+		return "", errors.New("snapshot repository path is required")
+	}
+	abs, err := canonicalRepositoryPath(builder.Repo)
+	if err != nil {
+		return "", err
+	}
+	output, err := runGit(ctx, abs, nil, nil, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	root, err := canonicalRepositoryPath(strings.TrimSpace(string(output)))
+	if err != nil {
+		return "", err
+	}
+	if filepath.Clean(root) != filepath.Clean(abs) {
+		return "", fmt.Errorf("snapshot repo %s is not the repository root %s", abs, root)
+	}
+	return root, nil
+}
+
+func canonicalRepositoryPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(resolved), nil
+}
+
+func (builder SnapshotBuilder) buildCurrentChanges(ctx context.Context, intended []string) (string, string, string, error) {
+	baseTree, err := builder.resolveTree(ctx, "HEAD")
+	if err != nil {
+		return "", "", "", err
+	}
+	indexPathOutput, err := runGit(ctx, builder.Repo, nil, nil, "rev-parse", "--git-path", "index")
+	if err != nil {
+		return "", "", "", fmt.Errorf("locate real index: %w", err)
+	}
+	indexPath := strings.TrimSpace(string(indexPathOutput))
+	if !filepath.IsAbs(indexPath) {
+		indexPath = filepath.Join(builder.Repo, indexPath)
+	}
+	indexContent, err := os.ReadFile(indexPath)
+	if err != nil {
+		return "", "", "", fmt.Errorf("read real index: %w", err)
+	}
+
+	for _, logicalPath := range intended {
+		if _, err := runGit(ctx, builder.Repo, nil, nil, "ls-files", "--error-unmatch", "--", logicalPath); err == nil {
+			return "", "", "", fmt.Errorf("intended-untracked path %q is already tracked", logicalPath)
+		}
+		info, err := os.Lstat(filepath.Join(builder.Repo, filepath.FromSlash(logicalPath)))
+		if err != nil {
+			return "", "", "", fmt.Errorf("intended-untracked path %q: %w", logicalPath, err)
+		}
+		if info.IsDir() {
+			return "", "", "", fmt.Errorf("intended-untracked path %q must name a file or symlink, not a directory", logicalPath)
+		}
+	}
+
+	temp, err := os.CreateTemp("", "gentle-ai-review-index-*")
+	if err != nil {
+		return "", "", "", err
+	}
+	tempIndex := temp.Name()
+	if _, err := temp.Write(indexContent); err != nil {
+		return "", "", "", err
+	}
+	if err := temp.Close(); err != nil {
+		return "", "", "", err
+	}
+	defer os.Remove(tempIndex)
+	env := []string{"GIT_INDEX_FILE=" + tempIndex}
+	if _, err := runGit(ctx, builder.Repo, env, nil, "add", "-u", "--", "."); err != nil {
+		return "", "", "", err
+	}
+	if len(intended) > 0 {
+		args := append([]string{"add", "--"}, intended...)
+		if _, err := runGit(ctx, builder.Repo, env, nil, args...); err != nil {
+			return "", "", "", err
+		}
+	}
+	candidateOutput, err := runGit(ctx, builder.Repo, env, nil, "write-tree")
+	if err != nil {
+		return "", "", "", err
+	}
+	candidateTree := strings.TrimSpace(string(candidateOutput))
+	proof, err := builder.untrackedProof(ctx, candidateTree, intended)
+	if err != nil {
+		return "", "", "", err
+	}
+	return baseTree, candidateTree, proof, nil
+}
+
+func (builder SnapshotBuilder) resolveExactRevision(ctx context.Context, revision string) (string, string, error) {
+	revision = strings.TrimSpace(revision)
+	if revision == "" || strings.Contains(revision, "...") {
+		return "", "", errors.New("commit-range requires one exact commit or A..B range")
+	}
+	if strings.Contains(revision, "..") {
+		parts := strings.Split(revision, "..")
+		if len(parts) != 2 || !exactObjectPattern.MatchString(parts[0]) || !exactObjectPattern.MatchString(parts[1]) {
+			return "", "", errors.New("commit-range endpoints must be full hexadecimal commit IDs")
+		}
+		base, err := builder.resolveTree(ctx, parts[0])
+		if err != nil {
+			return "", "", err
+		}
+		candidate, err := builder.resolveTree(ctx, parts[1])
+		return base, candidate, err
+	}
+	if !exactObjectPattern.MatchString(revision) {
+		return "", "", errors.New("commit-range revision must be a full hexadecimal commit ID")
+	}
+	commitOutput, err := runGit(ctx, builder.Repo, nil, nil, "rev-parse", "--verify", revision+"^{commit}")
+	if err != nil {
+		return "", "", err
+	}
+	commit := strings.TrimSpace(string(commitOutput))
+	candidate, err := builder.resolveTree(ctx, commit)
+	if err != nil {
+		return "", "", err
+	}
+	parentsOutput, err := runGit(ctx, builder.Repo, nil, nil, "rev-list", "--parents", "-n", "1", commit)
+	if err != nil {
+		return "", "", err
+	}
+	parents := strings.Fields(string(parentsOutput))
+	if len(parents) > 1 {
+		base, err := builder.resolveTree(ctx, parents[1])
+		return base, candidate, err
+	}
+	emptyTreeOutput, err := runGit(ctx, builder.Repo, nil, []byte{}, "mktree")
+	if err != nil {
+		return "", "", err
+	}
+	return strings.TrimSpace(string(emptyTreeOutput)), candidate, nil
+}
+
+func (builder SnapshotBuilder) resolveTree(ctx context.Context, revision string) (string, error) {
+	output, err := runGit(ctx, builder.Repo, nil, nil, "rev-parse", "--verify", strings.TrimSpace(revision)+"^{tree}")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+func (builder SnapshotBuilder) changedPaths(ctx context.Context, baseTree, candidateTree string) ([]string, error) {
+	output, err := runGit(ctx, builder.Repo, nil, nil, "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", baseTree, candidateTree)
+	if err != nil {
+		return nil, err
+	}
+	parts := bytes.Split(output, []byte{0})
+	paths := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if len(part) == 0 {
+			continue
+		}
+		logicalPath, err := normalizeLogicalPath(string(part))
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, logicalPath)
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+func (builder SnapshotBuilder) untrackedProof(ctx context.Context, candidateTree string, intended []string) (string, error) {
+	hash := sha256.New()
+	hash.Write([]byte("gentle-ai.intended-untracked/v1\x00"))
+	for _, logicalPath := range intended {
+		output, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", candidateTree, "--", logicalPath)
+		if err != nil {
+			return "", err
+		}
+		if len(output) == 0 {
+			return "", fmt.Errorf("intended-untracked path %q is absent from candidate tree", logicalPath)
+		}
+		writeLengthPrefixed(hash, []byte(logicalPath))
+		writeLengthPrefixed(hash, output)
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func canonicalPaths(values []string) ([]string, error) {
+	normalized := make([]string, len(values))
+	for index, value := range values {
+		logicalPath, err := normalizeLogicalPath(value)
+		if err != nil {
+			return nil, err
+		}
+		normalized[index] = logicalPath
+	}
+	sort.Strings(normalized)
+	for index := 1; index < len(normalized); index++ {
+		if normalized[index] == normalized[index-1] {
+			return nil, fmt.Errorf("duplicate intended-untracked path %q", normalized[index])
+		}
+	}
+	return normalized, nil
+}
+
+func canonicalStrings(values []string, label string) ([]string, error) {
+	result := make([]string, len(values))
+	for index, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || strings.ContainsRune(value, '\x00') {
+			return nil, fmt.Errorf("%s must be non-empty", label)
+		}
+		result[index] = value
+	}
+	sort.Strings(result)
+	for index := 1; index < len(result); index++ {
+		if result[index] == result[index-1] {
+			return nil, fmt.Errorf("duplicate %s %q", label, result[index])
+		}
+	}
+	return result, nil
+}
+
+func digestPaths(paths []string) string {
+	hash := sha256.New()
+	hash.Write([]byte("gentle-ai.paths/v1\x00"))
+	for _, logicalPath := range paths {
+		writeLengthPrefixed(hash, []byte(logicalPath))
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
+
+func snapshotIdentity(kind TargetKind, baseTree, candidateTree, pathsDigest, proof string, intended, ledgerIDs []string) string {
+	hash := sha256.New()
+	hash.Write([]byte("gentle-ai.review-snapshot/v1\x00"))
+	for _, value := range []string{string(kind), baseTree, candidateTree, pathsDigest, proof} {
+		writeLengthPrefixed(hash, []byte(value))
+	}
+	for _, value := range intended {
+		writeLengthPrefixed(hash, []byte(value))
+	}
+	for _, value := range ledgerIDs {
+		writeLengthPrefixed(hash, []byte(value))
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
+
+func hashCanonical(domain string) string {
+	sum := sha256.Sum256([]byte(domain + "\x00"))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+type byteWriter interface {
+	Write([]byte) (int, error)
+}
+
+func writeLengthPrefixed(writer byteWriter, value []byte) {
+	_, _ = writer.Write([]byte(strconv.Itoa(len(value))))
+	_, _ = writer.Write([]byte{0})
+	_, _ = writer.Write(value)
+	_, _ = writer.Write([]byte{0})
+}
+
+func runGit(ctx context.Context, repo string, extraEnv []string, stdin []byte, args ...string) ([]byte, error) {
+	command := exec.CommandContext(ctx, "git", append([]string{"--no-replace-objects", "-C", repo}, args...)...)
+	command.Env = sanitizedGitEnvironment(os.Environ(), extraEnv)
+	if stdin != nil {
+		command.Stdin = bytes.NewReader(stdin)
+	}
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
+	return output, nil
+}
+
+func sanitizedGitEnvironment(environment, extra []string) []string {
+	unsafe := map[string]struct{}{
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES": {},
+		"GIT_CEILING_DIRECTORIES":          {},
+		"GIT_COMMON_DIR":                   {},
+		"GIT_DIR":                          {},
+		"GIT_DISCOVERY_ACROSS_FILESYSTEM":  {},
+		"GIT_GRAFT_FILE":                   {},
+		"GIT_IMPLICIT_WORK_TREE":           {},
+		"GIT_INDEX_FILE":                   {},
+		"GIT_INTERNAL_SUPER_PREFIX":        {},
+		"GIT_NAMESPACE":                    {},
+		"GIT_NO_REPLACE_OBJECTS":           {},
+		"GIT_OBJECT_DIRECTORY":             {},
+		"GIT_PREFIX":                       {},
+		"GIT_QUARANTINE_PATH":              {},
+		"GIT_REPLACE_REF_BASE":             {},
+		"GIT_SHALLOW_FILE":                 {},
+		"GIT_WORK_TREE":                    {},
+	}
+	result := make([]string, 0, len(environment)+len(extra)+1)
+	for _, entry := range environment {
+		name, _, _ := strings.Cut(entry, "=")
+		if _, remove := unsafe[name]; !remove && name != "LC_ALL" {
+			result = append(result, entry)
+		}
+	}
+	result = append(result, "LC_ALL=C")
+	result = append(result, extra...)
+	return result
+}

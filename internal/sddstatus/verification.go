@@ -1,0 +1,379 @@
+package sddstatus
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
+const VerifyResultSchema = "gentle-ai.verify-result/v1"
+const RemediationResultSchema = "gentle-ai.remediation-result/v1"
+
+type SpecCounts struct {
+	Requirements int
+	Scenarios    int
+}
+
+type verifyCompletion struct {
+	Completed int
+	Total     int
+}
+
+type verifyResultEvaluation struct {
+	Passing          bool
+	Reason           string
+	EvidenceRevision string
+}
+
+var sha256IdentityPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+var requirementHeadingPattern = regexp.MustCompile(`(?m)^### Requirement:\s+\S`)
+var scenarioHeadingPattern = regexp.MustCompile(`(?m)^#### Scenario:\s+\S`)
+
+func countSpecRequirementsAndScenarios(specs []string) SpecCounts {
+	var counts SpecCounts
+	for _, spec := range specs {
+		counts.Requirements += len(requirementHeadingPattern.FindAllStringIndex(spec, -1))
+		counts.Scenarios += len(scenarioHeadingPattern.FindAllStringIndex(spec, -1))
+	}
+	return counts
+}
+
+func parseVerifyResult(text string, expected SpecCounts) verifyResultEvaluation {
+	lines, end, reason := parseLeadingEnvelope(text)
+	if reason != "" {
+		return verifyResultEvaluation{Reason: reason}
+	}
+	allowed := map[string]bool{
+		"schema": true, "evidence_revision": true, "verdict": true,
+		"blockers": true, "critical_findings": true, "requirements": true, "scenarios": true,
+		"test_command": true, "test_exit_code": true, "test_output_hash": true,
+		"build_command": true, "build_exit_code": true, "build_output_hash": true,
+	}
+	fields, reason := parseScalarFields(lines[1:end], allowed, "verify result")
+	if reason != "" {
+		return verifyResultEvaluation{Reason: reason}
+	}
+	for _, required := range []string{
+		"schema", "evidence_revision", "verdict", "blockers", "critical_findings",
+		"requirements", "scenarios", "test_command", "test_exit_code", "test_output_hash",
+		"build_command", "build_exit_code", "build_output_hash",
+	} {
+		if _, ok := fields[required]; !ok {
+			return verifyResultEvaluation{Reason: fmt.Sprintf("missing %s in verify result envelope", required)}
+		}
+	}
+
+	evaluation := verifyResultEvaluation{EvidenceRevision: fields["evidence_revision"]}
+	if fields["schema"] != VerifyResultSchema {
+		evaluation.Reason = fmt.Sprintf("unsupported verify result schema %s", fields["schema"])
+		return evaluation
+	}
+	for _, field := range []string{"evidence_revision", "test_output_hash", "build_output_hash"} {
+		if !sha256IdentityPattern.MatchString(fields[field]) {
+			evaluation.Reason = fmt.Sprintf("invalid %s in verify result envelope", field)
+			return evaluation
+		}
+	}
+	if !isConcreteEvidence(fields["test_command"]) || !isConcreteEvidence(fields["build_command"]) {
+		evaluation.Reason = "test_command and build_command require concrete current execution evidence"
+		return evaluation
+	}
+
+	blockers, ok := parseNonnegativeInt(fields["blockers"])
+	if !ok {
+		evaluation.Reason = "invalid blockers in verify result envelope"
+		return evaluation
+	}
+	critical, ok := parseNonnegativeInt(fields["critical_findings"])
+	if !ok {
+		evaluation.Reason = "invalid critical_findings in verify result envelope"
+		return evaluation
+	}
+	testExit, ok := parseNonnegativeInt(fields["test_exit_code"])
+	if !ok {
+		evaluation.Reason = "invalid test_exit_code in verify result envelope"
+		return evaluation
+	}
+	buildExit, ok := parseNonnegativeInt(fields["build_exit_code"])
+	if !ok {
+		evaluation.Reason = "invalid build_exit_code in verify result envelope"
+		return evaluation
+	}
+	requirements, ok := parseVerifyCompletion(fields["requirements"])
+	if !ok {
+		evaluation.Reason = "invalid requirements in verify result envelope"
+		return evaluation
+	}
+	scenarios, ok := parseVerifyCompletion(fields["scenarios"])
+	if !ok {
+		evaluation.Reason = "invalid scenarios in verify result envelope"
+		return evaluation
+	}
+
+	verdict := fields["verdict"]
+	if verdict != "pass" && verdict != "pass_with_warnings" && verdict != "fail" {
+		evaluation.Reason = fmt.Sprintf("invalid verdict %s", verdict)
+		return evaluation
+	}
+	if testExit != 0 {
+		evaluation.Reason = "test_exit_code must be zero for archive readiness"
+		return evaluation
+	}
+	if buildExit != 0 {
+		evaluation.Reason = "build_exit_code must be zero for archive readiness"
+		return evaluation
+	}
+	if requirements.Total != expected.Requirements {
+		evaluation.Reason = fmt.Sprintf("verify result total %d does not match actual requirement count %d", requirements.Total, expected.Requirements)
+		return evaluation
+	}
+	if scenarios.Total != expected.Scenarios {
+		evaluation.Reason = fmt.Sprintf("verify result total %d does not match actual scenario count %d", scenarios.Total, expected.Scenarios)
+		return evaluation
+	}
+	if blockers != 0 {
+		evaluation.Reason = "blockers must be zero for archive readiness"
+		return evaluation
+	}
+	if critical != 0 {
+		evaluation.Reason = "critical_findings must be zero for archive readiness"
+		return evaluation
+	}
+	if requirements.Completed != requirements.Total {
+		evaluation.Reason = "requirements are incomplete"
+		return evaluation
+	}
+	if scenarios.Completed != scenarios.Total {
+		evaluation.Reason = "scenarios are incomplete"
+		return evaluation
+	}
+	if verdict == "fail" {
+		evaluation.Reason = "verdict requires remediation"
+		return evaluation
+	}
+	evaluation.Passing = true
+	return evaluation
+}
+
+func parseLeadingEnvelope(text string) ([]string, int, string) {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "```yaml" {
+		return nil, -1, "missing valid gentle-ai.verify-result/v1 envelope"
+	}
+	for index := 1; index < len(lines); index++ {
+		if strings.TrimSpace(lines[index]) == "```" {
+			return lines, index, ""
+		}
+	}
+	return nil, -1, "unterminated verify result envelope"
+}
+
+func parseScalarFields(lines []string, allowed map[string]bool, label string) (map[string]string, string) {
+	fields := make(map[string]string, len(allowed))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, ":")
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if !ok || key == "" || value == "" {
+			return nil, "malformed " + label + " field"
+		}
+		if !allowed[key] {
+			return nil, fmt.Sprintf("unknown %s field %s", label, key)
+		}
+		if _, duplicate := fields[key]; duplicate {
+			return nil, fmt.Sprintf("duplicate %s field %s", label, key)
+		}
+		fields[key] = value
+	}
+	return fields, ""
+}
+
+func parseNonnegativeInt(value string) (int, bool) {
+	if value == "" {
+		return 0, false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return 0, false
+		}
+	}
+	parsed, err := strconv.Atoi(value)
+	return parsed, err == nil
+}
+
+func parseVerifyCompletion(value string) (verifyCompletion, bool) {
+	completedRaw, totalRaw, ok := strings.Cut(value, "/")
+	if !ok || strings.Contains(totalRaw, "/") {
+		return verifyCompletion{}, false
+	}
+	completed, completedOK := parseNonnegativeInt(completedRaw)
+	total, totalOK := parseNonnegativeInt(totalRaw)
+	if !completedOK || !totalOK || completed > total {
+		return verifyCompletion{}, false
+	}
+	return verifyCompletion{Completed: completed, Total: total}, true
+}
+
+type remediationResultEvaluation struct {
+	Complete         bool
+	EvidenceRevision string
+}
+
+type remediationEvidence struct {
+	Schema                 string                       `json:"schema"`
+	FailedEvidenceRevision string                       `json:"failed_evidence_revision"`
+	LineageID              string                       `json:"lineage_id,omitempty"`
+	Generation             int                          `json:"generation,omitempty"`
+	FixBatch               int                          `json:"fix_batch,omitempty"`
+	Commands               []remediationCommandEvidence `json:"commands"`
+	RuntimeHarness         remediationRuntimeEvidence   `json:"runtime_harness"`
+	Rollback               remediationRollbackEvidence  `json:"rollback"`
+}
+
+type RemediationBinding struct {
+	LineageID  string
+	Generation int
+	FixBatch   int
+}
+
+type remediationCommandEvidence struct {
+	Command  string `json:"command"`
+	ExitCode int    `json:"exit_code"`
+	Result   string `json:"result"`
+}
+
+type remediationRuntimeEvidence struct {
+	Status   string `json:"status"`
+	Command  string `json:"command"`
+	Result   string `json:"result"`
+	NAReason string `json:"na_reason"`
+}
+
+type remediationRollbackEvidence struct {
+	Boundary string `json:"boundary"`
+	Evidence string `json:"evidence"`
+}
+
+func parseRemediationResult(text, expectedRevision string, bindings ...RemediationBinding) remediationResultEvaluation {
+	lines, end, reason := parseLeadingEnvelope(text)
+	if reason != "" {
+		return remediationResultEvaluation{}
+	}
+	allowed := map[string]bool{
+		"schema": true, "status": true, "failed_evidence_revision": true,
+		"focused_tests": true, "runtime_harness": true, "rollback_boundary": true,
+		"lineage_id": true, "generation": true, "fix_batch": true,
+	}
+	fields, reason := parseScalarFields(lines[1:end], allowed, "remediation result")
+	if reason != "" {
+		return remediationResultEvaluation{}
+	}
+	revision := fields["failed_evidence_revision"]
+	evaluation := remediationResultEvaluation{EvidenceRevision: revision}
+	if fields["schema"] != RemediationResultSchema || fields["status"] != "complete" || revision != expectedRevision {
+		return evaluation
+	}
+	if len(bindings) > 1 {
+		return evaluation
+	}
+	if len(bindings) == 1 {
+		binding := bindings[0]
+		generation, generationOK := parseNonnegativeInt(fields["generation"])
+		fixBatch, fixBatchOK := parseNonnegativeInt(fields["fix_batch"])
+		if fields["lineage_id"] != binding.LineageID || !generationOK || generation != binding.Generation || !fixBatchOK || fixBatch != binding.FixBatch {
+			return evaluation
+		}
+	}
+	if fields["focused_tests"] != "passed" || fields["rollback_boundary"] != "recorded" {
+		return evaluation
+	}
+	if fields["runtime_harness"] != "passed" && fields["runtime_harness"] != "not_applicable" {
+		return evaluation
+	}
+	evidence, ok := parseRemediationEvidence(lines[end+1:])
+	if !ok || evidence.FailedEvidenceRevision != expectedRevision || len(evidence.Commands) == 0 {
+		return evaluation
+	}
+	if len(bindings) == 1 {
+		binding := bindings[0]
+		if evidence.LineageID != binding.LineageID || evidence.Generation != binding.Generation || evidence.FixBatch != binding.FixBatch {
+			return evaluation
+		}
+	}
+	for _, command := range evidence.Commands {
+		if command.ExitCode != 0 || !isConcreteEvidence(command.Command) || !isConcreteEvidence(command.Result) {
+			return evaluation
+		}
+	}
+	if evidence.RuntimeHarness.Status != fields["runtime_harness"] {
+		return evaluation
+	}
+	switch evidence.RuntimeHarness.Status {
+	case "passed":
+		if !isConcreteEvidence(evidence.RuntimeHarness.Command) || !isConcreteEvidence(evidence.RuntimeHarness.Result) || strings.TrimSpace(evidence.RuntimeHarness.NAReason) != "" {
+			return evaluation
+		}
+	case "not_applicable":
+		if evidence.RuntimeHarness.Command != "" || evidence.RuntimeHarness.Result != "" || !isConcreteNAReason(evidence.RuntimeHarness.NAReason) {
+			return evaluation
+		}
+	default:
+		return evaluation
+	}
+	if !isConcreteEvidence(evidence.Rollback.Boundary) || !isConcreteEvidence(evidence.Rollback.Evidence) {
+		return evaluation
+	}
+	evaluation.Complete = true
+	return evaluation
+}
+
+func parseRemediationEvidence(lines []string) (remediationEvidence, bool) {
+	text := strings.TrimSpace(strings.Join(lines, "\n"))
+	if !strings.HasPrefix(text, "```json\n") {
+		return remediationEvidence{}, false
+	}
+	text = strings.TrimPrefix(text, "```json\n")
+	end := strings.Index(text, "\n```")
+	if end < 0 || strings.TrimSpace(text[end+4:]) != "" {
+		return remediationEvidence{}, false
+	}
+	decoder := json.NewDecoder(strings.NewReader(text[:end]))
+	decoder.DisallowUnknownFields()
+	var evidence remediationEvidence
+	if err := decoder.Decode(&evidence); err != nil {
+		return remediationEvidence{}, false
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return remediationEvidence{}, false
+	}
+	if evidence.Schema != "gentle-ai.remediation-evidence/v1" {
+		return remediationEvidence{}, false
+	}
+	return evidence, true
+}
+
+func isConcreteEvidence(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || strings.ContainsAny(trimmed, "{}<>") {
+		return false
+	}
+	switch strings.ToLower(trimmed) {
+	case "n/a", "na", "none", "todo", "tbd", "pass", "passed", "success", "recorded", "placeholder":
+		return false
+	}
+	return true
+}
+
+func isConcreteNAReason(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return len(trimmed) >= 20 && strings.Contains(strings.ToLower(trimmed), "because") && isConcreteEvidence(trimmed)
+}

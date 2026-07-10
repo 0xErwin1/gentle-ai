@@ -1,226 +1,253 @@
-# Review findings ledger contract
+# Bounded Review Transaction and Findings Ledger
 
 ## Purpose
 
-Define the 4R v2 precision-gated review contract shared by the 4R review lenses (review-risk, review-resilience, review-readability, review-reliability) and judgment-day, across all supported adapter variants and execution modes: a fixed sweep budget, a precision gate on every finding, a persisted findings ledger, adversarial verification of high-severity candidates, a severity floor on the fix loop, a bounded convergence budget, and a re-review scoped by construction to the ledger plus the fix diff.
+Define one explicit, content-addressed implementation-review transaction shared by ordinary 4R and explicit Judgment Day. The contract bounds reviewer/refuter/correction work, preserves independent final verification, and emits a reusable lifecycle receipt.
 
 ## Requirements
 
-### Requirement: Fixed sweep budget for the first pass
+### Requirement: Explicit immutable review operation
 
-Each 4R lens and judgment-day judge pass MUST run its first review within a fixed sweep budget instead of a loop-until-dry mechanism. A standard review MUST run exactly 1 exhaustive sweep of the diff per lens. A full-4R review (hot path — the diff touches auth/update/security/payments paths — or >400 changed lines) MUST run at most 2 sweeps per lens. The sweep budget is the entire first pass; there is no dry-sweep counting and no unbounded looping.
+The system MUST start review only through `review/start(target)`. A reviewer MUST receive one complete immutable snapshot, run detached and read-only, return one result, and terminate.
 
-#### Scenario: Standard review runs exactly one sweep
+#### Scenario: Review operation terminates
 
-- GIVEN a lens begins its first pass on a standard diff
-- WHEN the sweep completes
-- THEN the lens MUST stop and finalize its ledger rows
-- AND it MUST NOT run additional sweeps
+- GIVEN a complete target
+- WHEN one selected lens finishes its exhaustive sweep
+- THEN it returns one structured result and terminates
+- AND it cannot edit, delegate, launch a correction, or start another reviewer
 
-#### Scenario: Full-4R review is capped at two sweeps
+### Requirement: Complete current-changes snapshot
 
-- GIVEN a lens begins its first pass on a hot-path or >400-changed-line diff
-- WHEN the second sweep completes
-- THEN the lens MUST stop regardless of whether new findings surfaced
-- AND no loop-until-dry mechanism is applied
+The current-changes target MUST combine tracked staged, unstaged, and deleted state with an explicit intended-untracked path list through a temporary Git index. It MUST NOT mutate the user's real index. Every Git subprocess used for repository identity, snapshot, store, gate, archive, release, or bundle derivation MUST use canonical explicit `git -C <repo>` input and MUST remove inherited repository/worktree/common-dir/index/object/alternate/namespace/shallow/graft/replacement/discovery overrides while preserving ordinary credentials and safe Git configuration.
 
----
+#### Scenario: Intended new file is reviewed
 
-### Requirement: Precision gate on every finding
+- GIVEN an untracked path listed in the intended manifest
+- WHEN native snapshot construction runs
+- THEN the candidate tree and paths digest include that path and content
+- AND the real index bytes remain unchanged
 
-A lens MUST report a finding only if it is a real, user-impacting defect the lens would defend with concrete evidence. When in doubt, the lens MUST stay silent: a missed nitpick costs nothing; a false positive costs a full fix cycle. Style and preference findings are banned unless they obscure a defect.
+#### Scenario: Generated golden participates in identity
 
-#### Scenario: Doubtful candidate is not reported
+- GIVEN an affected generated golden
+- WHEN authored changed-line risk and target identity are computed
+- THEN the golden is excluded from the authored `>400` threshold
+- AND it remains included in the candidate tree, paths digest, and receipt validation
 
-- GIVEN a lens observes a suspicious pattern it cannot back with concrete evidence
-- WHEN it decides whether to report
-- THEN it MUST omit the finding from the ledger
+#### Scenario: Hostile Git environment cannot redirect authority
 
-#### Scenario: Style-only finding is banned
+- GIVEN valid repository A and hostile inherited selectors that point to repository B
+- WHEN snapshot and authoritative-store derivation run for repository A
+- THEN every Git subprocess uses repository A's canonical explicit input
+- AND top-level, common-dir, index, object, and store authority cannot be redirected
+- AND linked worktrees still resolve repository A's shared Git common directory
 
-- GIVEN a lens observes a pure style or preference issue that does not obscure a defect
-- WHEN it decides whether to report
-- THEN it MUST NOT report the finding
+### Requirement: Initial findings freeze
 
----
+Each selected lens MUST run exactly one initial sweep and emit neutral claims with `id`, `lens`, `location`, `severity`, `claim`, `evidence_class`, `proof_refs`, and `status`. Full 4R means four initial lens sweeps. Findings MUST freeze after merge.
 
-### Requirement: Persisted findings ledger
+#### Scenario: Full 4R selects four lenses once
 
-The first pass MUST emit a structured findings ledger. Each entry MUST identify the finding (id), originating lens, file:line location, severity (BLOCKER, CRITICAL, WARNING, or SUGGESTION), resolution status (open, fixed, verified, refuted, wont-fix, or info), and evidence.
+- GIVEN explicit review/start risk classification is high
+- WHEN the initial review runs
+- THEN risk, readability, reliability, and resilience each run once
+- AND no lens reopens the original diff after findings freeze
 
-#### Scenario: Ledger captures required fields
+### Requirement: Evidence-routed severe findings
 
-- GIVEN a lens completes its first pass
-- WHEN it emits the ledger
-- THEN each entry MUST include an id, lens, file:line location, severity, status, and evidence
+Only `BLOCKER | CRITICAL` findings enter evidence classification, refutation, correction, or escalation. `WARNING | SUGGESTION` findings remain frozen `info` and cannot consume budgets. Deterministic severe findings MUST become corroborated with proof and skip refutation. Every inferential severe finding from all selected lenses MUST enter exactly one detached transaction-wide refuter operation. Insufficient evidence or missing, malformed, or incomplete refuter output MUST consume the single refuter batch, mark every pending claim inconclusive, clear pending work, and terminally escalate without retry.
 
-#### Scenario: Zero findings still produce a ledger record
+#### Scenario: Full 4R uses one refuter batch
 
-- GIVEN a first pass finds nothing
-- WHEN the ledger is finalized
-- THEN the system MUST persist an empty ledger record rather than skip persistence
+- GIVEN four initial lenses emit multiple inferential severe claims
+- WHEN evidence routing completes
+- THEN exactly one refuter operation receives the complete merged inferential list
+- AND it returns one `corroborated | refuted | inconclusive` result per claim
 
----
+#### Scenario: Deterministic proof bypasses refuter
 
-### Requirement: Adversarial verification of high-severity candidates
+- GIVEN a failing command proves a severe defect
+- WHEN evidence is classified
+- THEN the finding becomes corroborated
+- AND no refuter receives it
 
-Only BLOCKER/CRITICAL candidates MUST be adversarially verified; WARNING/SUGGESTION findings are never verified because they never drive fixes. A standard review MUST run exactly one general refuter pass total over the complete merged candidate list and receive one verdict per finding. A full-4R review MUST run exactly three refuter passes total (correctness, exploitability/impact, reproducibility); each pass receives that same complete list and returns one verdict per finding. The task ceiling is structural and review-level — 1 standard or 3 full-4R regardless of candidate count — and the system MUST NOT spawn one refuter task per candidate. Full-4R voting is independent per finding: at least 2 of 3 `refuted` verdicts refute that finding, while a 1-of-3 result or tie keeps it. Any malformed or missing per-finding verdict defaults to `stands`. A refuter MUST present concrete counter-evidence; "seems unlikely" does not refute.
+### Requirement: One ordinary correction transaction
 
-#### Scenario: Standard review uses one batched refuter total
+Ordinary 4R MUST permit at most one correction transaction. The correction MAY contain multiple atomic work units, but every unit MUST map to frozen corroborated IDs and record focused-test evidence, runtime evidence or justified N/A, and an independent rollback boundary.
 
-- GIVEN a standard review produces multiple BLOCKER/CRITICAL candidates
-- WHEN adversarial verification runs
-- THEN exactly one general refuter pass receives the complete candidate list
-- AND it returns one verdict per finding
-- AND each successfully refuted finding is recorded with status `refuted` and never enters the fix loop
+#### Scenario: Atomic work units share one budget
 
-#### Scenario: Full-4R review uses three batched lenses with a per-finding 2-of-3 rule
+- GIVEN three independent fixes address frozen IDs
+- WHEN the parent launches their correction transaction
+- THEN the native fix counter increases once
+- AND work-unit count cannot create another correction budget
 
-- GIVEN a full-4R review produces multiple CRITICAL candidates
-- WHEN the three refuter lenses (correctness, exploitability/impact, reproducibility) evaluate them
-- THEN exactly three refuter passes total each receive the complete candidate list
-- AND each finding is killed only if at least 2 of 3 lens verdicts refute that finding
-- AND a 1-of-3 result or tie keeps that finding actionable
+### Requirement: One non-iterative ordinary scoped validator
 
-#### Scenario: Refuter task count does not scale with findings
+When ordinary correction occurred, exactly one detached read-only scoped validator MUST receive only the frozen ledger and immutable fix delta. It MAY append fix-caused defects with proof. It MUST return only `approve | escalate` and MUST NOT launch another correction or validator.
 
-- GIVEN a standard or full-4R review produces 2 or 20 BLOCKER/CRITICAL candidates
-- WHEN adversarial verification runs
-- THEN the standard review runs exactly 1 refuter task or inline pass total
-- AND the full-4R review runs exactly 3 refuter tasks or inline passes total
-- AND no task or pass is created per candidate
+#### Scenario: Fix-caused defect escalates
 
-#### Scenario: Missing or malformed verdict stands
+- GIVEN the correction introduced a defect on a fix-touched line
+- WHEN scoped validation records the defect
+- THEN the transaction becomes escalated
+- AND no second ordinary correction starts
 
-- GIVEN a batched refuter omits one candidate or returns a malformed verdict for it
-- WHEN the orchestrator merges refutation results
-- THEN that finding's verdict defaults to `stands`
-- AND other well-formed per-finding verdicts remain independently usable
+### Requirement: Explicit Judgment Day replacement
 
-#### Scenario: Low-severity findings are never verified
+Judgment Day MUST be explicitly selected and MUST replace ordinary 4R for the target. Two distinct blind read-only judge executions and results plus explicit agreement/confirmation provide corroboration without `review-refuter`. Native state and receipts MUST bind their proof hashes and exactly-two execution counter before findings freeze or approval. Judgment Day MUST permit at most two fix rounds and two scoped re-judgments.
 
-- GIVEN a first pass produces WARNING and SUGGESTION findings
-- WHEN adversarial verification runs
-- THEN those findings MUST NOT be sent to any refuter
+#### Scenario: Judgment Day cannot exceed round two
 
-#### Scenario: Refuted status is terminal
+- GIVEN a severe issue remains after the second scoped re-judgment
+- WHEN the parent evaluates native counters
+- THEN the transaction becomes escalated
+- AND no third round starts
 
-- GIVEN a finding recorded with status `refuted`
-- WHEN the fix loop and re-review run
-- THEN the finding MUST NOT be fixed, re-verified, or re-opened by those passes
+### Requirement: Independent final verification
 
----
+Exactly one independent requirements/runtime final verification MUST check actual requirement/scenario counts, task completion, current test/build evidence, ledger resolution, target identity, and counter coherence. A contradiction MUST escalate and MUST NOT start review/refuter/correction again.
 
-### Requirement: Severity floor on the fix loop
+#### Scenario: Final contradiction does not loop
 
-Only BLOCKER/CRITICAL findings that survive adversarial verification MUST enter the fix → re-review loop. WARNING/SUGGESTION findings MUST be reported once with status `info`, MUST never be re-reviewed, and MUST never block.
+- GIVEN scoped validation approved the fix delta
+- WHEN runtime verification discovers a contradiction
+- THEN final verification fails and the transaction escalates
+- AND no ordinary review or correction budget is reopened
 
-#### Scenario: Verified high-severity finding enters the fix loop
+### Requirement: Semantic chain completeness
 
-- GIVEN a BLOCKER candidate survives adversarial verification
-- WHEN the fix loop starts
-- THEN the finding is actionable and routed to the fix pass
+Every persisted successor MUST satisfy transaction state invariants in addition to an allowed state pair and monotonic counters. Frozen severe findings MUST remain immutable and retain exactly one legal classification and required outcome. Pending refuter IDs MUST clear only with one complete consumed batch. Corroborated IDs MUST equal correction IDs. Corrected final candidates MUST bind completed correction and required scoped-validation counters. `ready_final_verification`, `final_verifying`, and `approved` MUST contain no pending severe work and MUST have coherent mode-specific counters. `WARNING | SUGGESTION` rows remain non-blocking `info`.
 
-#### Scenario: Low-severity finding is informational only
+#### Scenario: Hash-valid semantic bypass fails closed
 
-- GIVEN a WARNING finding in the ledger
-- WHEN the fix loop and re-review run
-- THEN the finding keeps status `info`
-- AND it neither triggers a fix round nor blocks completion
+- GIVEN a content-hash-valid chain that jumps from `findings_frozen` without classifying a severe finding
+- OR clears a pending inferential finding without an outcome and consumed refuter batch
+- WHEN the authoritative chain or portable bundle is loaded
+- THEN semantic validation rejects the successor
+- AND the chain cannot reach final verification or approval
 
----
+### Requirement: Terminal receipt
 
-### Requirement: Convergence budget of two fix rounds
+Only `approved | escalated` are terminal transaction states. An approved receipt MUST bind `lineage_id`, mode, generation, base tree, `initial_review_tree`, `final_candidate_tree`, `paths_digest`, `fix_delta_hash`, policy hash, ledger hash, evidence hash, mode-specific counters, judge proof where applicable, and terminal state. A release-bound receipt MUST additionally bind immutable release tree, configuration hash, generated-artifact hash, provenance/signing hash, publication-boundary hash and sealed state, plus evidence-freshness hash and current state.
 
-A review MUST run at most 2 fix rounds. Anything still open after round 2 MUST be reported to the user as open — the loop never extends.
+#### Scenario: Post-fix receipt distinguishes trees
 
-#### Scenario: Open finding after round two is surfaced, not looped
+- GIVEN ordinary review corrected the initial candidate
+- WHEN the receipt is emitted
+- THEN `initial_review_tree` identifies what the lenses reviewed
+- AND `final_candidate_tree` identifies the scoped-validated candidate
+- AND `fix_delta_hash` identifies only their correction delta
 
-- GIVEN a verified BLOCKER finding remains open after the second fix round
-- WHEN the review concludes
-- THEN the finding is reported to the user with status `open`
-- AND no third fix round is started
+### Requirement: Deterministic lifecycle validation
 
----
+Pre-commit, pre-push, pre-PR, and release MUST validate the same receipt and return `allow | scope-changed | invalidated | escalated`. Native validation MUST derive the current repository target and hash persisted policy, ledger, fix delta, verify evidence, and release artifacts instead of trusting caller-authored tree/hash assertions. Fabricated or nonexistent objects and stale artifacts MUST fail closed. Only `allow` returns process success; every denial still emits parseable machine JSON and returns non-success. Gates MUST NOT start a reviewer, create another budget, or silently start Judgment Day.
 
-### Requirement: Ledger persistence honors the artifact store
+#### Scenario: Unchanged approved target is reused
 
-Ledger persistence MUST follow the session's configured artifact store: an OpenSpec change artifact when the store is `openspec`, an Engram topic when the store is `engram`, or in-context only (no file or topic write) when the store is `none`. When the store is `none`, the review → fix → re-review loop MUST complete within the session because the ledger is not persisted across compaction.
+- GIVEN the receipt and gate context match exactly
+- WHEN a lifecycle validator runs
+- THEN the result is `allow`
+- AND zero reviewers run
 
-#### Scenario: Store selects persistence target
+#### Scenario: External evidence changes
 
-- GIVEN the artifact store is `openspec`, `engram`, or `none`
-- WHEN a lens finalizes its ledger
-- THEN it MUST be persisted respectively as a change artifact, an Engram topic scoped to change and ledger, or kept in-context only
+- GIVEN unchanged reviewed code but new CI, vulnerability, base, policy, provenance, or release evidence
+- WHEN the lifecycle validator evaluates it
+- THEN the result may be `invalidated` or `escalated`
+- AND unchanged code review is not reopened
 
-#### Scenario: None store writes nothing
+### Requirement: Scope and incident boundaries
 
-- GIVEN the artifact store is `none`
-- WHEN a lens finalizes its ledger
-- THEN no file or Engram artifact MUST be written
+Unrelated content/path scope change MUST require a different lineage ID. No generation or gate may reuse an exhausted lineage budget. A separate operational incident transaction is valid only while code, configuration, generated-artifact, and provenance targets remain immutable.
 
----
+#### Scenario: Incident mutates generated artifact
 
-### Requirement: Re-review scoped by construction
+- GIVEN an operational release incident
+- WHEN recovery changes a generated artifact
+- THEN incident separation ends
+- AND the content lineage must be validated explicitly
 
-A re-review pass MUST receive ONLY the persisted ledger and the fix diff as input — never the original full diff. It MUST verify each ledger finding's resolution and MUST review only fix-touched lines. A finding on an untouched line MUST be logged with status `info` as a first-pass quality signal and MUST NOT by itself trigger another full round.
+### Requirement: Exact persistence references
 
-#### Scenario: Re-review verifies ledger findings within scope
+All artifact modes MUST use the repository-derived authoritative append-only CAS store at `<git-common-dir>/gentle-ai/review-transactions/v1/{lineage-id}/`. The lineage ID MUST be canonical lowercase kebab-case and MUST NOT permit path traversal or aliases. OpenSpec `transaction.json`, frozen `ledger.json`, `receipt.json`, `chain-bundle.json`, and `gate-context.json` artifacts and Engram `sdd/{change-name}/review/{transaction,ledger,receipt,chain-bundle,gate-context}` topics are non-authoritative mirrors. Each append MUST require the expected revision and one legal semantic successor. Each load MUST prove the complete content-addressed predecessor chain from exact HEAD to one valid `review/start` genesis, rejecting missing predecessors, cycles, hash or schema mismatches, immutable-field changes, illegal or reordered transitions, semantically incomplete finding routing, and incoherent counters. Archive readiness MUST cross-check the trusted terminal revision and complete chain against the transaction mirror, frozen ledger, verify evidence, receipt, portable bundle, gate identity, and current repository target; missing, stale, or mismatched artifacts block archive.
 
-- GIVEN a persisted ledger with open findings and a fix diff addressing them
-- WHEN the re-review pass runs
-- THEN it MUST update each finding's status to `verified` or still-`open`
-- AND it MUST NOT receive or re-read the original full diff
+#### Scenario: Archive sees pending receipt
 
-#### Scenario: Untouched-line finding is logged, not escalated
+- GIVEN tasks and verification pass but the receipt is missing or non-terminal
+- WHEN native SDD status evaluates archive
+- THEN archive remains blocked with deterministic review action
 
-- GIVEN a re-review observes an issue on an untouched line
-- WHEN the finding is recorded
-- THEN it MUST be appended to the ledger with status `info` as a first-pass quality signal
-- AND it MUST NOT by itself cause a full review round to restart
+#### Scenario: Caller supplies an approved alternate store
 
----
+- GIVEN a caller-selected temporary store contains a hash-valid approved terminal event
+- AND the repository-derived lineage store is missing, truncated, or non-terminal
+- WHEN archive or a lifecycle gate validates the receipt
+- THEN the result is machine-readable `invalidated`
+- AND the alternate store cannot influence the authoritative decision
 
-### Requirement: Judgment-day follows the same contract
+### Requirement: Crash-safe bounded writer ownership
 
-Judgment-day's judge agents (jd-judge-a, jd-judge-b) MUST apply the same sweep budget, precision gate, and persisted-ledger contract, and the re-judge pass following jd-fix-agent MUST follow the same scoped re-review contract and convergence budget as the 4R lenses. Two-judge convergence itself satisfies adversarial verification, so judgment-day MUST NOT spawn review refuters. Every judgment-day warning keeps canonical `severity=WARNING` and `status=info`; real/theoretical MAY be recorded as a separate assessment but MUST NOT alter severity or status. WARNING/SUGGESTION rows never enter fix or re-review loops.
+Authoritative writes MUST use a non-blocking cross-platform lock mechanism that is released by the operating system on process death and records actionable owner token, PID, host, and acquisition time. A live owner MUST NOT be stolen. Corrupt or stale owner bytes MUST recover after exclusive acquisition. Concurrent recoverers MUST NOT both win, and contention MUST NOT wait without a bound.
 
-#### Scenario: Judgment-day first pass is budgeted and ledgered
+#### Scenario: Writer crashes while holding the store
 
-- GIVEN jd-judge-a or jd-judge-b runs a first judgment pass
-- WHEN the pass completes
-- THEN it MUST stay within the sweep budget, apply the precision gate, and persist a findings ledger per the artifact-store contract
+- GIVEN a writer exits while its lock owner record remains
+- WHEN another writer attempts one append
+- THEN operating-system ownership has already been released
+- AND exactly one new writer acquires and overwrites the stale owner record
+- AND a simultaneously live owner still produces immediate actionable contention
 
-#### Scenario: Re-judge is scoped and bounded
+### Requirement: Idempotent append and output recovery
 
-- GIVEN jd-fix-agent has applied fixes for ledgered findings
-- WHEN the re-judge pass runs
-- THEN it MUST verify ledger findings and review only fix-touched lines
-- AND it MUST respect the two-fix-round convergence budget
+An exact append retry MUST repair an already-linked event whose HEAD update was interrupted. If HEAD already equals the exact new revision after machine-mirror or stdout failure, the identical retry MUST return that committed revision without changing counters. Different content and stale expected predecessors MUST remain rejected. Native `review-resume` MUST re-emit current authoritative state and regenerate a non-authoritative transaction mirror without running review work or resetting lineage.
 
-#### Scenario: Judgment-day warning stays informational
+#### Scenario: Output fails after authoritative commit
 
-- GIVEN either judge reports a warning assessed as real or theoretical
-- WHEN the merged ledger is written
-- THEN its canonical severity is `WARNING`
-- AND its canonical status is `info`, never `open`
-- AND it does not enter the fix or re-judge loop
+- GIVEN the exact event and HEAD committed before stdout or mirror output failed
+- WHEN the caller retries exact append or runs `review-resume`
+- THEN the same authoritative revision is returned
+- AND no review, refuter, correction, or validation budget changes
 
----
+### Requirement: Validated portable full-chain recovery
 
-### Requirement: Contract coverage across adapter variants and execution modes
+The system MUST export a content-addressed full-chain bundle containing exact ordered event payloads, genesis/head revisions, ordered chain identity, lineage/generation, initial/final snapshot identities, policy/ledger/evidence bindings, optional terminal receipt, and a domain-separated bundle digest. Import MUST be explicit and MUST derive the destination from the canonical repository. Before CAS installation it MUST validate bundle digest, every event hash, complete predecessor order, semantic transitions, terminal fix-diff semantics, terminal receipt, and gate-bound expected HEAD/genesis/chain/bundle identities. Recovery MUST use delivered-content equivalence rather than snapshot-structure equivalence: the current derived candidate tree and delivered path digest MUST equal `final_candidate_tree` and the receipt/lineage path scope; the authoritative intended-untracked proof MUST reproduce from that candidate; and policy, ledger, evidence, fix delta, lineage, generation, and mode MUST match their receipt and transaction bindings. The terminal fix-diff kind, base, ledger IDs, and identity MUST remain intact for audit, but the recovery snapshot MUST NOT be required to share its kind, base, or identity. Import MUST be idempotent only for the exact installed chain. Portable mirrors and alternate stores MUST NOT become authoritative without this validation.
 
-The sweep-budget, precision-gate, ledger, adversarial-verification, severity-floor, convergence-budget, and scoped re-review contract MUST be present across all 13 supported adapter variants and both execution modes. Dedicated-agent adapters (Claude, Kiro, Cursor, Kimi, OpenCode/Kilocode) merge review-agent ledger rows and run exactly 1 batched refuter task for standard review or 3 for full-4R; only the 3 full-4R tasks may run in parallel. Inline adapters run review lenses sequentially and MUST override generic delegation wording for refutation: they run one general pass or three sequential lens passes inside the orchestrator, each over the complete merged candidate list, without spawning refuter tasks.
+#### Scenario: Clean clone imports a trusted expected chain
 
-#### Scenario: Both execution modes carry the contract
+- GIVEN a clean clone has no local authoritative lineage store
+- AND persisted receipt, gate context, artifacts, and bundle agree with the clone's delivered candidate, path scope, and authoritative intended-untracked proof
+- AND the corrected terminal fix-diff snapshot remains structurally intact for audit
+- WHEN explicit bundle import runs
+- THEN the complete validated chain is CAS-installed only under that clone's repository-derived destination
+- AND lifecycle validation may subsequently use the imported authoritative store
 
-- GIVEN an adapter with dedicated subagents, or one without
-- WHEN its review-*/jd-* assets, or its orchestrator's inline-lens section, are inspected
-- THEN they MUST contain the sweep-budget, precision-gate, ledger, adversarial-verification, severity-floor, convergence-budget, and scoped re-review contract worded for that execution mode
-- AND inline adapters MUST state that their sequential in-orchestrator refutation clause overrides generic delegation wording
+#### Scenario: Untrusted bundle fails closed
 
-#### Scenario: No adapter variant is left uncovered
+- GIVEN content or path scope is wrong, policy/ledger/evidence/fix delta differs, the chain is tampered or truncated, the lineage differs, fix-diff semantics are illegal, or receipt/gate bindings do not match
+- WHEN import runs
+- THEN no authoritative HEAD is installed
+- AND lifecycle validation cannot silently import or trust it
 
-- GIVEN all 13 adapter variants are enumerated
-- WHEN contract coverage is evaluated
-- THEN every variant MUST include the contract in its review and judgment-day-related assets
+### Requirement: Native machine-readable entry points
+
+The CLI MUST expose `review-start` for current-changes, base-diff, exact commit/range, and ledger-bound fix-diff target creation; `review-resume` for authoritative output recovery; `review-bundle-export` and `review-bundle-import` for explicit portable recovery; and `review-validate` for lifecycle receipt validation. Base/range/revision arguments are target-specific; fix-diff ledger IDs are repeatable and comma-safe. Every command MUST emit machine-readable JSON. `review-start`, resume, export, import, and validation MUST derive authority from `--cwd` plus validated lineage; none accepts a caller-selected authoritative store. Optional `--machine-transaction-out` is explicitly non-authoritative and cannot reset consumed state.
+
+#### Scenario: Native start preserves index
+
+- GIVEN `gentle-ai review-start` receives an intended-untracked manifest
+- WHEN it writes transaction output
+- THEN the transaction is strict-parseable
+- AND the user's real Git index is byte-identical
+
+### Requirement: User-owned runtime selection
+
+No bounded-review contract, reviewer, refuter, validator, or final verifier may enforce a model, provider, profile, or effort choice.
+
+#### Scenario: Adapter renders review guidance
+
+- GIVEN any supported AgentID
+- WHEN its orchestrator guidance is rendered
+- THEN runtime selection remains an optional user choice
+- AND it is not an input to deterministic risk classification
