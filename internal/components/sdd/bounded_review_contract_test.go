@@ -17,7 +17,11 @@ var boundedReviewRequiredClauses = []string{
 	"exactly ONE detached refuter operation for the transaction",
 	"Insufficient findings become `inconclusive` and are never auto-fixed",
 	"one correction transaction composed of atomic work units",
+	"immutable genesis path set",
+	"maps exactly to frozen accepted/blocking IDs",
 	"exactly one scoped fix-delta validator",
+	"original acceptance criteria/tests and correction regression evidence",
+	"Later observations are non-blocking follow-ups",
 	"can return only `approve` or `escalate`",
 	"Final verification is independent requirements/runtime verification",
 	"Judgment Day replaces ordinary 4R",
@@ -41,6 +45,8 @@ func TestBoundedReviewContractRendersForEverySupportedAgent(t *testing.T) {
 				"3 total for full-4R",
 				"run at most 2 sweeps per lens",
 				"standard review or three lens passes sequentially",
+				"verifies fix-touched lines",
+				"may append fix-caused defects",
 			} {
 				if strings.Contains(content, forbidden) {
 					t.Errorf("rendered %s retains obsolete review clause %q", agent.ID, forbidden)

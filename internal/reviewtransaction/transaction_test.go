@@ -47,10 +47,10 @@ func TestOrdinaryTransactionIsOneBoundedNonIterativeFlow(t *testing.T) {
 	if err := tx.CompleteFix(fixSnapshot, hash("4"), []string{"R1-DET"}); err != nil {
 		t.Fatalf("CompleteFix() error = %v", err)
 	}
-	if err := tx.ValidateFixDelta([]string{"R1-DET"}, true); err != nil {
+	if err := validateOrdinaryFix(tx, []string{"R1-DET"}, true); err != nil {
 		t.Fatalf("ValidateFixDelta() error = %v", err)
 	}
-	if err := tx.ValidateFixDelta([]string{"R1-DET"}, true); err == nil {
+	if err := validateOrdinaryFix(tx, []string{"R1-DET"}, true); err == nil {
 		t.Fatal("ordinary transaction allowed a second scoped fix validation")
 	}
 	if err := tx.BeginFinalVerification(); err != nil {
@@ -73,7 +73,7 @@ func TestOrdinaryTransactionIsOneBoundedNonIterativeFlow(t *testing.T) {
 
 func TestOrdinaryScopedValidatorCanOnlyApproveOrEscalate(t *testing.T) {
 	tx := ordinaryAtFixValidation(t)
-	if err := tx.ValidateFixDelta([]string{"R1-DET"}, false); err != nil {
+	if err := validateOrdinaryFix(tx, []string{"R1-DET"}, false); err != nil {
 		t.Fatalf("ValidateFixDelta() error = %v", err)
 	}
 	if tx.State != StateEscalated {
@@ -84,11 +84,13 @@ func TestOrdinaryScopedValidatorCanOnlyApproveOrEscalate(t *testing.T) {
 	}
 }
 
-func TestOrdinaryScopedValidatorRecordsFixCausedDefectsAndEscalates(t *testing.T) {
+func TestOrdinaryScopedValidatorRejectsFixCausedDefects(t *testing.T) {
 	tx := ordinaryAtFixValidation(t)
 	result := ScopedValidationResult{
-		LedgerIDs: []string{"R1-DET"},
-		Approved:  false,
+		LedgerIDs:            []string{"R1-DET"},
+		FollowUps:            []FollowUp{},
+		OriginalCriteria:     ValidationCheck{EvidenceHash: hash("5"), FixDeltaHash: tx.FixDeltaHash, Passed: true},
+		CorrectionRegression: ValidationCheck{EvidenceHash: hash("6"), FixDeltaHash: tx.FixDeltaHash, Passed: true},
 		FixCausedFindings: []Finding{{
 			ID:        "FIX-001",
 			Lens:      "scoped-fix-validator",
@@ -99,36 +101,8 @@ func TestOrdinaryScopedValidatorRecordsFixCausedDefectsAndEscalates(t *testing.T
 		}},
 	}
 
-	if err := tx.ValidateFixDeltaResult(result); err != nil {
-		t.Fatalf("ValidateFixDeltaResult() error = %v", err)
-	}
-	if tx.State != StateEscalated {
-		t.Fatalf("State = %q, want escalated", tx.State)
-	}
-	if len(tx.FixCausedFindings) != 1 || tx.FixCausedFindings[0].ID != "FIX-001" {
-		t.Fatalf("FixCausedFindings = %#v", tx.FixCausedFindings)
-	}
-	if err := tx.BeginFix(hash("9")); err == nil {
-		t.Fatal("fix-caused defect started another ordinary correction")
-	}
-}
-
-func TestInformationalFixCausedFindingCannotEscalate(t *testing.T) {
-	tx := ordinaryAtFixValidation(t)
-	result := ScopedValidationResult{
-		LedgerIDs: []string{"R1-DET"},
-		Approved:  false,
-		FixCausedFindings: []Finding{{
-			ID: "FIX-I01", Lens: "scoped-fix-validator", Location: "internal/example.go:12",
-			Severity: "WARNING", Claim: "optional naming improvement",
-			ProofRefs: []string{"internal/example.go:12 remains functionally correct"},
-		}},
-	}
-	if err := tx.ValidateFixDeltaResult(result); err != nil {
-		t.Fatalf("ValidateFixDeltaResult() error = %v", err)
-	}
-	if tx.State != StateReadyFinalVerification {
-		t.Fatalf("State = %q, want ready_final_verification", tx.State)
+	if err := tx.ValidateFixDeltaResult(result); err == nil {
+		t.Fatal("ordinary scoped validation accepted a new fix-caused finding")
 	}
 }
 
@@ -351,13 +325,156 @@ func TestJudgmentDayHasExactlyTwoFixAndScopedRejudgmentRounds(t *testing.T) {
 	}
 }
 
+func TestCompleteFixEnforcesImmutableGenesisPathSubsetBeforeMutation(t *testing.T) {
+	tests := []struct {
+		name    string
+		paths   []string
+		wantErr bool
+	}{
+		{name: "canonical subset", paths: []string{"internal/example.go"}},
+		{name: "added path", paths: []string{"internal/example.go", "internal/added.go"}, wantErr: true},
+		{name: "renamed destination", paths: []string{"internal/renamed.go"}, wantErr: true},
+		{name: "deleted out of scope path", paths: []string{"internal/deleted.go"}, wantErr: true},
+		{name: "intended untracked path", paths: []string{"internal/untracked.go"}, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := ordinaryAtFixing(t)
+			before := *tx
+			fix := tx.Snapshot
+			fix.Kind, fix.BaseTree, fix.CandidateTree = TargetFixDiff, tx.FinalCandidateTree, tree("c")
+			fix.LedgerIDs, fix.Paths, fix.Identity = []string{"R1-DET"}, tt.paths, hash("3")
+
+			err := tx.CompleteFix(fix, hash("4"), []string{"R1-DET"})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("CompleteFix() accepted an out-of-scope correction")
+				}
+				if tx.State != before.State || tx.Counters != before.Counters || tx.FinalCandidateTree != before.FinalCandidateTree {
+					t.Fatalf("rejected correction mutated transaction: %#v", tx)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("CompleteFix() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestScopedValidationRequiresBoundEvidenceAndKeepsFollowUpsNonBlocking(t *testing.T) {
+	tx := ordinaryAtFixValidation(t)
+	result := ScopedValidationResult{
+		LedgerIDs:            []string{"R1-DET"},
+		FixCausedFindings:    []Finding{},
+		OriginalCriteria:     ValidationCheck{EvidenceHash: hash("5"), FixDeltaHash: tx.FixDeltaHash, Passed: true},
+		CorrectionRegression: ValidationCheck{EvidenceHash: hash("6"), FixDeltaHash: tx.FixDeltaHash, Passed: true},
+		FollowUps:            []FollowUp{{Observation: "new optional cleanup", ProofRefs: []string{"internal/example.go:1"}}},
+	}
+	if err := tx.ValidateFixDeltaResult(result); err != nil {
+		t.Fatalf("ValidateFixDeltaResult() error = %v", err)
+	}
+	if tx.State != StateReadyFinalVerification || len(tx.FollowUps) != 1 {
+		t.Fatalf("targeted validation state/follow-ups = %q/%#v", tx.State, tx.FollowUps)
+	}
+	if len(tx.FixCausedFindings) != 0 || !equalStrings(tx.FixFindingIDs, []string{"R1-DET"}) {
+		t.Fatalf("follow-up mutated correction ledger: findings=%#v ids=%v", tx.FixCausedFindings, tx.FixFindingIDs)
+	}
+}
+
+func TestScopedValidationRejectsIncompleteOrStaleEvidenceAndEscalatesRegression(t *testing.T) {
+	tests := []struct {
+		name   string
+		result ScopedValidationResult
+	}{
+		{name: "missing criteria evidence", result: ScopedValidationResult{LedgerIDs: []string{"R1-DET"}}},
+		{name: "stale regression evidence", result: ScopedValidationResult{LedgerIDs: []string{"R1-DET"}, OriginalCriteria: ValidationCheck{EvidenceHash: hash("5"), FixDeltaHash: hash("9"), Passed: true}, CorrectionRegression: ValidationCheck{EvidenceHash: hash("6"), FixDeltaHash: hash("9"), Passed: true}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tx := ordinaryAtFixValidation(t)
+			if err := tx.ValidateFixDeltaResult(tt.result); err == nil {
+				t.Fatal("ValidateFixDeltaResult() accepted incomplete or stale targeted evidence")
+			}
+			if tx.State != StateFixValidating || tx.Counters.ScopedFixValidations != 0 {
+				t.Fatalf("rejected validation mutated state/counters: %q/%#v", tx.State, tx.Counters)
+			}
+		})
+	}
+
+	tx := ordinaryAtFixValidation(t)
+	result := ScopedValidationResult{
+		LedgerIDs:            []string{"R1-DET"},
+		FixCausedFindings:    []Finding{},
+		FollowUps:            []FollowUp{},
+		OriginalCriteria:     ValidationCheck{EvidenceHash: hash("5"), FixDeltaHash: tx.FixDeltaHash, Passed: true},
+		CorrectionRegression: ValidationCheck{EvidenceHash: hash("6"), FixDeltaHash: tx.FixDeltaHash, Passed: false},
+	}
+	if err := tx.ValidateFixDeltaResult(result); err != nil {
+		t.Fatal(err)
+	}
+	if tx.State != StateEscalated || tx.Counters.FixBatches != 1 {
+		t.Fatalf("failed regression did not escalate one-correction transaction: %q/%#v", tx.State, tx.Counters)
+	}
+}
+
+func TestFinalVerificationContradictionEscalatesWithoutReopeningReviewBudgets(t *testing.T) {
+	tx := ordinaryAtFixValidation(t)
+	if err := validateOrdinaryFix(tx, []string{"R1-DET"}, true); err != nil {
+		t.Fatal(err)
+	}
+	before := tx.Counters
+	if err := tx.BeginFinalVerification(); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.CompleteFinalVerification(hash("f"), false); err != nil {
+		t.Fatal(err)
+	}
+	if tx.State != StateEscalated {
+		t.Fatalf("State = %q, want escalated", tx.State)
+	}
+	if tx.Counters.FullReviews != before.FullReviews || tx.Counters.RefuterBatches != before.RefuterBatches || tx.Counters.FixBatches != before.FixBatches || tx.Counters.ScopedFixValidations != before.ScopedFixValidations {
+		t.Fatalf("contradiction reopened review budgets: before=%#v after=%#v", before, tx.Counters)
+	}
+	if err := tx.BeginFix(hash("e")); err == nil {
+		t.Fatal("final-verification contradiction reopened an ordinary correction")
+	}
+}
+
+func TestMultipleFrozenFindingsShareOneFixBatch(t *testing.T) {
+	tx := newTestTransaction(t, ModeOrdinary4R)
+	if err := tx.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	findings := []Finding{{ID: "R1-001", Severity: "CRITICAL"}, {ID: "R1-002", Severity: "CRITICAL"}, {ID: "R1-003", Severity: "CRITICAL"}}
+	if err := tx.FreezeFindings(findings, hash("1")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ClassifyEvidence([]FindingEvidence{
+		{FindingID: "R1-001", Class: EvidenceDeterministic, Proof: "first work unit"},
+		{FindingID: "R1-002", Class: EvidenceDeterministic, Proof: "second work unit"},
+		{FindingID: "R1-003", Class: EvidenceDeterministic, Proof: "third work unit"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.BeginFix(hash("2")); err != nil {
+		t.Fatal(err)
+	}
+	fix := tx.Snapshot
+	fix.Kind, fix.BaseTree, fix.CandidateTree = TargetFixDiff, tx.FinalCandidateTree, tree("c")
+	fix.LedgerIDs, fix.Identity = []string{"R1-001", "R1-002", "R1-003"}, hash("3")
+	if err := tx.CompleteFix(fix, hash("4"), fix.LedgerIDs); err != nil {
+		t.Fatal(err)
+	}
+	if tx.Counters.FixBatches != 1 || !equalStrings(tx.FixFindingIDs, fix.LedgerIDs) {
+		t.Fatalf("three work units did not share one correction budget: counters=%#v ids=%v", tx.Counters, tx.FixFindingIDs)
+	}
+}
+
 func ordinaryAtFixValidation(t *testing.T) *Transaction {
 	t.Helper()
-	tx := newTestTransaction(t, ModeOrdinary4R)
-	_ = tx.StartReview()
-	_ = tx.FreezeFindings([]Finding{{ID: "R1-DET", Severity: "CRITICAL"}}, hash("1"))
-	_, _ = tx.ClassifyEvidence([]FindingEvidence{{FindingID: "R1-DET", Class: EvidenceDeterministic, Proof: "failing test"}})
-	_ = tx.BeginFix(hash("2"))
+	tx := ordinaryAtFixing(t)
 	fix := tx.Snapshot
 	fix.Kind = TargetFixDiff
 	fix.BaseTree = tx.InitialReviewTree
@@ -367,6 +484,24 @@ func ordinaryAtFixValidation(t *testing.T) *Transaction {
 	if err := tx.CompleteFix(fix, hash("4"), []string{"R1-DET"}); err != nil {
 		t.Fatalf("CompleteFix() error = %v", err)
 	}
+	return tx
+}
+
+func validateOrdinaryFix(tx *Transaction, ledgerIDs []string, approved bool) error {
+	return tx.ValidateFixDeltaResult(ScopedValidationResult{
+		LedgerIDs: ledgerIDs, Approved: approved, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
+		OriginalCriteria:     ValidationCheck{EvidenceHash: hash("5"), FixDeltaHash: tx.FixDeltaHash, Passed: approved},
+		CorrectionRegression: ValidationCheck{EvidenceHash: hash("6"), FixDeltaHash: tx.FixDeltaHash, Passed: approved},
+	})
+}
+
+func ordinaryAtFixing(t *testing.T) *Transaction {
+	t.Helper()
+	tx := newTestTransaction(t, ModeOrdinary4R)
+	_ = tx.StartReview()
+	_ = tx.FreezeFindings([]Finding{{ID: "R1-DET", Severity: "CRITICAL"}}, hash("1"))
+	_, _ = tx.ClassifyEvidence([]FindingEvidence{{FindingID: "R1-DET", Class: EvidenceDeterministic, Proof: "failing test"}})
+	_ = tx.BeginFix(hash("2"))
 	return tx
 }
 

@@ -238,6 +238,97 @@ func TestRunReviewStepAppendsLifecycleStateThroughAuthoritativeStore(t *testing.
 	}
 }
 
+func TestRunReviewStepAppendsTargetedValidationAndResumeReemitsIt(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	lineage := "targeted-validation"
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := reviewtransaction.NewTransaction(reviewtransaction.Start{
+		LineageID: lineage, Mode: reviewtransaction.ModeOrdinary4R, Generation: 1, Snapshot: snapshot, PolicyHash: cliHash("a"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := reviewtransaction.AuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := ""
+	appendState := func(operation string) {
+		t.Helper()
+		var appendErr error
+		revision, appendErr = store.Append(revision, reviewtransaction.Record{Operation: operation, Transaction: *tx})
+		if appendErr != nil {
+			t.Fatal(appendErr)
+		}
+	}
+	if err := tx.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	appendState("review/start")
+	if err := tx.FreezeFindings([]reviewtransaction.Finding{{ID: "R1-DET", Severity: "CRITICAL"}}, cliHash("b")); err != nil {
+		t.Fatal(err)
+	}
+	appendState("review/freeze-findings")
+	if _, err := tx.ClassifyEvidence([]reviewtransaction.FindingEvidence{{FindingID: "R1-DET", Class: reviewtransaction.EvidenceDeterministic, Proof: "reproduced"}}); err != nil {
+		t.Fatal(err)
+	}
+	appendState("review/classify-evidence")
+	if err := tx.BeginFix(cliHash("c")); err != nil {
+		t.Fatal(err)
+	}
+	appendState("review/begin-fix")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("fixed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fix, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetFixDiff, BaseRef: tx.FinalCandidateTree, IntendedUntracked: []string{}, LedgerIDs: []string{"R1-DET"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.CompleteFix(fix, cliHash("d"), []string{"R1-DET"}); err != nil {
+		t.Fatal(err)
+	}
+	appendState("review/complete-fix")
+
+	input := filepath.Join(t.TempDir(), "validate.json")
+	writeReviewCLIJSON(t, input, ReviewStepInput{Validation: &reviewtransaction.ScopedValidationResult{
+		LedgerIDs: []string{"R1-DET"}, FixCausedFindings: []reviewtransaction.Finding{}, FollowUps: []reviewtransaction.FollowUp{},
+		OriginalCriteria:     reviewtransaction.ValidationCheck{EvidenceHash: cliHash("e"), FixDeltaHash: tx.FixDeltaHash, Passed: true},
+		CorrectionRegression: reviewtransaction.ValidationCheck{EvidenceHash: cliHash("f"), FixDeltaHash: tx.FixDeltaHash, Passed: true},
+	}})
+	var output bytes.Buffer
+	if err := RunReviewStep([]string{"--cwd", repo, "--lineage", lineage, "--operation", "validate-fix", "--input", input}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var result ReviewResumeResult
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Operation != "review/validate-targeted-fix" || result.Transaction.State != reviewtransaction.StateReadyFinalVerification {
+		t.Fatalf("targeted validation result = %#v", result)
+	}
+
+	output.Reset()
+	if err := RunReviewResume([]string{"--cwd", repo, "--lineage", lineage}, &output); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Operation != "review/resume" || result.Transaction.State != reviewtransaction.StateReadyFinalVerification {
+		t.Fatalf("resume did not reemit authoritative targeted validation state: %#v", result)
+	}
+}
+
 type failingReviewWriter struct{}
 
 func (failingReviewWriter) Write([]byte) (int, error) {
@@ -617,10 +708,14 @@ func TestRunReviewBundleExportImportRecoversCorrectedLineageInCleanClone(t *test
 		t.Fatal(err)
 	}
 	appendState("review/complete-fix")
-	if err := tx.ValidateFixDelta([]string{"BRT1-005"}, true); err != nil {
+	if err := tx.ValidateFixDeltaResult(reviewtransaction.ScopedValidationResult{
+		LedgerIDs: []string{"BRT1-005"}, FixCausedFindings: []reviewtransaction.Finding{}, FollowUps: []reviewtransaction.FollowUp{},
+		OriginalCriteria:     reviewtransaction.ValidationCheck{EvidenceHash: cliHash("5"), FixDeltaHash: tx.FixDeltaHash, Passed: true},
+		CorrectionRegression: reviewtransaction.ValidationCheck{EvidenceHash: cliHash("6"), FixDeltaHash: tx.FixDeltaHash, Passed: true},
+	}); err != nil {
 		t.Fatal(err)
 	}
-	appendState("review/validate-fix-delta")
+	appendState("review/validate-targeted-fix")
 	if err := tx.BeginFinalVerification(); err != nil {
 		t.Fatal(err)
 	}
