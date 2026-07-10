@@ -1,6 +1,7 @@
 package communitytool
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	piagent "github.com/gentleman-programming/gentle-ai/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
@@ -42,6 +44,7 @@ type Result struct {
 	ManualActions []string
 	StatusBefore  *Status
 	StatusAfter   *Status
+	PiCodeGraph   *PiCodeGraphResult
 }
 
 type Status struct {
@@ -60,6 +63,7 @@ type AgentStatus struct {
 	Configured bool
 	Path       string
 	Reason     string
+	Children   []PiCodeGraphChild
 }
 
 type Detector interface {
@@ -133,6 +137,14 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 		if err != nil {
 			return result, err
 		}
+		piResult, err := reconcileDetectedPiCodeGraph(homeDir, workspaceDir)
+		if err != nil {
+			return result, err
+		}
+		result.PiCodeGraph = piResult
+		if piResult != nil {
+			result.ManualActions = append(result.ManualActions, piResult.ManualActions...)
+		}
 		after := DetectStatus(id, homeDir, detector)
 		result.StatusAfter = &after
 		if err := validateCodeGraphInstallStatus(after); err != nil {
@@ -162,6 +174,14 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	if _, err := InjectCodeGraphGuidanceIfSelected(homeDir, []model.CommunityToolID{id}); err != nil {
 		return result, err
 	}
+	piResult, err := reconcileDetectedPiCodeGraph(homeDir, workspaceDir)
+	if err != nil {
+		return result, err
+	}
+	result.PiCodeGraph = piResult
+	if piResult != nil {
+		result.ManualActions = append(result.ManualActions, piResult.ManualActions...)
+	}
 	after := DetectStatus(id, homeDir, detector)
 	result.StatusAfter = &after
 	if err := validateCodeGraphInstallStatus(after); err != nil {
@@ -169,6 +189,20 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	}
 	result.ManualActions = append(result.ManualActions, "CodeGraph CLI was installed and supported agents were connected. Project indexes will be created automatically when an enabled agent opens inside a project.")
 	return result, nil
+}
+
+func reconcileDetectedPiCodeGraph(homeDir, workspaceDir string) (*PiCodeGraphResult, error) {
+	paths := piagent.CodeGraphPaths(homeDir)
+	if _, err := os.Stat(paths.AgentDir); os.IsNotExist(err) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	result, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: homeDir, WorkspaceDir: workspaceDir, Selected: true})
+	if errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
+		return &PiCodeGraphResult{ManualActions: []string{"Pi CodeGraph integration is pending: Pi 0.80.6 has no supported machine-verifiable adapter health signal. CodeGraph capability was not reported as configured."}}, nil
+	}
+	return &result, err
 }
 
 func validateCodeGraphInstallStatus(status Status) error {
@@ -180,6 +214,9 @@ func validateCodeGraphInstallStatus(status Status) error {
 	}
 	missing := make([]string, 0)
 	for _, agent := range status.Agents {
+		if agent.Agent == model.AgentPi {
+			continue
+		}
 		if agent.Detected && !agent.Configured {
 			missing = append(missing, agent.Name)
 		}
@@ -266,6 +303,9 @@ func detectCodeGraphAgents(homeDir string) []AgentStatus {
 		}
 		if detected {
 			configured, markerPath, reason := hasCodeGraphWiring(homeDir, adapter)
+			if id == model.AgentPi {
+				configured, reason, state.Children = inspectPiCodeGraph(homeDir, "")
+			}
 			state.Configured = configured
 			state.Path = markerPath
 			state.Reason = reason
@@ -314,10 +354,8 @@ func isCodeGraphSupportedAgent(id model.AgentID) bool {
 func hasCodeGraphWiring(homeDir string, adapter agents.Adapter) (bool, string, string) {
 	guidancePath := codeGraphGuidancePath(homeDir, adapter)
 	if adapter.Agent() == model.AgentPi {
-		if hasCodeGraphGuidance(guidancePath) {
-			return true, guidancePath, "found CodeGraph guidance marker"
-		}
-		return false, guidancePath, "detected Pi runtime but no CodeGraph guidance marker was found in APPEND_SYSTEM.md"
+		configured, reason := PiCodeGraphConfigured(homeDir, "")
+		return configured, piCodeGraphStatusPath(homeDir), reason
 	}
 
 	if hasCodeGraphGuidance(guidancePath) {
@@ -330,6 +368,10 @@ func hasCodeGraphWiring(homeDir string, adapter agents.Adapter) (bool, string, s
 		return true, path, "found CodeGraph tool wiring marker"
 	}
 	return false, adapter.GlobalConfigDir(homeDir), "detected agent but no CodeGraph MCP or instruction marker was found"
+}
+
+func piCodeGraphStatusPath(homeDir string) string {
+	return piagent.CodeGraphPaths(homeDir).Manifest
 }
 
 func hasDetectedCodeGraphToolWiring(homeDir string) bool {

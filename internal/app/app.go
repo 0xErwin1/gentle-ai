@@ -86,6 +86,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunSDDStatus(args[1:], stdout)
 		case "sdd-continue":
 			return cli.RunSDDContinue(args[1:], stdout)
+		case "codegraph":
+			return cli.RunCodeGraph(args[1:], stdout)
 		case "review-start":
 			return cli.RunReviewStart(args[1:], stdout)
 		case "review-resume":
@@ -216,6 +218,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 			_, _ = fmt.Fprintln(stdout, cli.RenderDryRun(installResult))
 		} else {
 			_, _ = fmt.Fprint(stdout, verify.RenderReport(installResult.Verify))
+			_, _ = fmt.Fprint(stdout, cli.RenderInstallManualActions(installResult))
 		}
 
 		return nil
@@ -512,18 +515,7 @@ func tuiExecute(
 	profile := cli.ResolveInstallProfile(detection)
 	resolved.PlatformDecision = planner.PlatformDecisionFromProfile(profile)
 
-	stagePlan, err := cli.BuildRealStagePlan(homeDir, cli.ScopeGlobal, selection, resolved, profile)
-	if err != nil {
-		return pipeline.ExecutionResult{Err: fmt.Errorf("build stage plan: %w", err)}
-	}
-
-	orchestrator := pipeline.NewOrchestrator(
-		pipeline.DefaultRollbackPolicy(),
-		pipeline.WithFailurePolicy(pipeline.ContinueOnError),
-		pipeline.WithProgressFunc(onProgress),
-	)
-
-	execResult := orchestrator.Execute(stagePlan)
+	execResult := cli.ExecuteTUIInstall(homeDir, selection, resolved, profile, onProgress)
 	if execResult.Err == nil {
 		// Persist the user's agent selection and model assignments so that future
 		// `sync` runs target only the installed agents and preserve model choices.

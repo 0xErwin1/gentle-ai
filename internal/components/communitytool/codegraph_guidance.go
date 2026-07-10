@@ -40,7 +40,7 @@ func CodeGraphGuidanceMarkdown() string {
 		"1. Resolve the project root with `git rev-parse --show-toplevel || pwd`.",
 		"2. Confirm the root is a real project/workspace. Do not ask the user before initializing CodeGraph in a real project. Do not initialize CodeGraph in `$HOME`, temporary directories, or non-project folders.",
 		"3. Check for `<project-root>/.codegraph/` before any broad Read/Glob/Grep filesystem exploration.",
-		"4. If `.codegraph/` is missing and CodeGraph is enabled/available, immediately run `codegraph init <project-root>` once, then use the `codegraph_explore` MCP tool or `codegraph explore \"...\"`.",
+		"4. If `.codegraph/` is missing and CodeGraph is enabled/available, immediately run `gentle-ai codegraph init --cwd <project-root>` once, then use the `codegraph_explore` MCP tool or `codegraph explore \"...\"`.",
 		"5. Missing .codegraph/ is the trigger to initialize, not a reason to skip CodeGraph. Do not fall back just because `.codegraph/` is missing; a missing index is the trigger to lazy-initialize, not a reason to skip CodeGraph.",
 		"6. Only fall back after CodeGraph init or CodeGraph use fails. Only fall back to normal filesystem tools after CodeGraph init or CodeGraph use fails, and briefly explain the fallback.",
 		"",
@@ -142,7 +142,7 @@ func InjectCodeGraphGuidance(homeDir string) (GuidanceInjectionResult, error) {
 	result := GuidanceInjectionResult{}
 	for _, installedAgent := range installed {
 		adapter, ok := reg.Get(installedAgent.ID)
-		if !ok || !isCodeGraphSupportedAgent(installedAgent.ID) || !adapter.SupportsSystemPrompt() {
+		if !ok || !isCodeGraphSupportedAgent(installedAgent.ID) || !adapter.SupportsSystemPrompt() || installedAgent.ID == model.AgentPi {
 			continue
 		}
 
@@ -427,7 +427,7 @@ func hasCodeGraphGuidance(path string) bool {
 	}
 	content := strings.ToLower(string(data))
 	return strings.Contains(content, "gentle-ai:"+codeGraphGuidanceSectionID) ||
-		(strings.Contains(content, "codegraph") && strings.Contains(content, "codegraph init <project-root>"))
+		(strings.Contains(content, "codegraph") && strings.Contains(content, "gentle-ai codegraph init --cwd <project-root>"))
 }
 
 func codeGraphGuidancePath(homeDir string, adapter agents.Adapter) string {

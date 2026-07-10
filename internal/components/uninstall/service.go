@@ -13,6 +13,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
@@ -363,6 +364,11 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 	}
 
 	backupTargets[state.Path(s.homeDir)] = struct{}{}
+	if slices.Contains(agentIDs, model.AgentPi) {
+		for _, target := range communitytool.PiCodeGraphPaths(s.homeDir, s.workspaceDir) {
+			backupTargets[target] = struct{}{}
+		}
+	}
 
 	orderedTargets := make([]string, 0, len(backupTargets))
 	for target := range backupTargets {
@@ -396,6 +402,17 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 	result := Result{
 		Manifest:   manifest,
 		BackupPath: snapshotDir,
+	}
+	// Pi ownership hashes include the shared MCP file. Remove its managed entry
+	// before other component cleanup (notably Engram) mutates that file, otherwise
+	// an unrelated mutation is indistinguishable from user drift.
+	if slices.Contains(agentsToRemove, model.AgentPi) {
+		piResult, piErr := communitytool.UninstallPiCodeGraph(s.homeDir)
+		if piErr != nil {
+			return result, fmt.Errorf("remove Pi CodeGraph integration: %w", piErr)
+		}
+		result.ChangedFiles = append(result.ChangedFiles, piResult.Files...)
+		result.ManualActions = append(result.ManualActions, piResult.ManualActions...)
 	}
 
 	for _, op := range p.operations {
