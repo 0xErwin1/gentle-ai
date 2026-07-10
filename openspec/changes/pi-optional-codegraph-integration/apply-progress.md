@@ -1,6 +1,6 @@
 ```yaml
 schema: gentle-ai.remediation-result/v1
-status: complete
+status: partial
 failed_verify_revision: sha256:608b7c497ba2bde1a0f8beda178f82fec1e7920fc58acb0819855368c43549df
 task_count: 16
 completed_task_count: 16
@@ -43,6 +43,27 @@ next_recommended: sdd-verify
   }
 }
 ```
+
+## Authorized Corrective Scope — Frozen IDs RISK-002, RISK-004, RESILIENCE-004 (2026-07-10)
+
+| Frozen ID | RED/GREEN contract | Result |
+| --- | --- | --- |
+| RISK-002 | `TestPiCodeGraphRefreshRestoresMissingOwnedChild` | RED: restored child mode was `0600`, not recorded `0640`; GREEN: journal recreation writes the manifest-owned mode. |
+| RISK-004 | `TestPiCodeGraphPathsExcludesUnsafeManifestPaths` | RED: traversal, arbitrary absolute, and symlink-escape manifest paths entered backup enumeration; GREEN: each is excluded after canonical allowed-root validation. |
+| RESILIENCE-004 | `TestBackupTargetsSnapshotCrossAgentCodeGraphGuidance` | RED: a detected Claude guidance path was absent from `backupTargets`; GREEN: the path is included when CodeGraph is selected. |
+
+| Evidence | Command | Exact result |
+| --- | --- | --- |
+| RED | `go test -count=1 ./internal/components/communitytool -run 'TestPiCodeGraph(RefreshRestoresMissingOwnedChild|PathsExcludesUnsafeManifestPaths)' -v` | Exit 1: mode was `0600`; the initial adversarial fixture was corrected before its behavior RED run. |
+| RED | `go test -count=1 ./internal/components/communitytool -run TestPiCodeGraphPathsExcludesUnsafeManifestPaths -v` | Exit 1: all three manifest-controlled unsafe paths were returned. |
+| RED | `go test -count=1 ./internal/cli -run TestBackupTargetsSnapshotCrossAgentCodeGraphGuidance -v` | Exit 1: detected Claude `CLAUDE.md` was missing from backup targets. |
+| GREEN | `go test -count=1 ./internal/components/communitytool -run 'TestPiCodeGraph(RefreshRestoresMissingOwnedChild|PathsExcludesUnsafeManifestPaths)' -v && go test -count=1 ./internal/cli -run TestBackupTargetsSnapshotCrossAgentCodeGraphGuidance -v` | Exit 0: all three corrective contracts passed. |
+| Affected packages | `go test -count=1 ./internal/components/communitytool ./internal/cli ./internal/components/uninstall ./internal/agents/pi` | Exit 0. |
+| Race | `go test -race -count=1 ./internal/components/communitytool ./internal/cli` | Exit 0. |
+| Full verification | `go test -count=1 ./... && go vet ./...` | Exit 0. |
+| Formatting / whitespace | `gofmt -l $(git diff --name-only -- '*.go') && git diff --check` | Exit 0 with no output. |
+
+Rollback boundary: `internal/components/communitytool/pi_codegraph.go`, `internal/components/communitytool/pi_codegraph_test.go`, `internal/cli/run.go`, and `internal/cli/run_community_tool_test.go`; reverting these removes only the three authorized corrections and their focused tests.
 
 ## Focused Remediation — Ownership Adoption and Task Evidence (2026-07-10)
 
@@ -360,3 +381,53 @@ FIX-DIFF scope (R4-011 Round 2 only): `internal/components/communitytool/pi_code
 | Uncached full suite | `go test -count=1 ./...` | Exit 0 after the exact-parser correction. |
 | Static analysis | `go vet ./...` | Exit 0 after the exact-parser correction. |
 | Rollback boundary | `internal/components/communitytool/pi_codegraph.go`, `internal/components/communitytool/pi_codegraph_test.go`, and R4-011 ledger/progress evidence | Revert affects only the Pi runtime output-health parser and its adversarial proof. |
+
+## Native Correction Transaction — `pi-postmerge-full-v1`
+
+```yaml
+schema: gentle-ai.remediation-result/v1
+lineage_id: pi-postmerge-full-v1
+generation: 1
+fix_batch: 1
+failed_evidence_revision: sha256:c8ba1b65f9d1c4a6f827791b99e4bcc59eeffa42340e7fb25b56a3df5666d8dc
+status: complete
+mode: Strict TDD
+next_recommended: complete-authorized-correction
+```
+
+```json
+{
+  "schema": "gentle-ai.remediation-evidence/v1",
+  "lineage_id": "pi-postmerge-full-v1",
+  "generation": 1,
+  "fix_batch": 1,
+  "failed_evidence_revision": "sha256:c8ba1b65f9d1c4a6f827791b99e4bcc59eeffa42340e7fb25b56a3df5666d8dc",
+  "commands": [
+    {"command":"go test -count=1 ./internal/components/communitytool ./internal/agents/pi ./internal/pipeline -run 'Test(PiCodeGraph(RejectsMalformedMCPServersWithoutChangingBytes|PreservesSensitiveFileModes|UninstallRejectsManifestPathEscapeAndMissingOwnedChildIsSuccess|ConfiguredRejectsStaleGuidanceWhenBashIsRemoved)|DiscoverCodeGraphChildrenUsesNormalizedRuntimeIdentity|ExecuteRollbackAttemptsEveryStepAfterFailures)' -v","exit_code":0},
+    {"command":"go test -count=1 ./internal/components/uninstall ./internal/tui/screens -run 'Test(BuildPlanSnapshotsPiManifestAndOwnedOverlay|RenderCompleteDistinguishesPartialRollbackAndKeepsManualActions)' -v","exit_code":0},
+    {"command":"go test -count=1 ./... && go vet ./... && test -z \"$(gofmt -l $(git diff --name-only -- '*.go'))\" && git diff --check","exit_code":0}
+  ]
+}
+```
+
+### TDD Cycle Evidence — Native Correction
+
+| Work unit | Frozen IDs | RED | GREEN / rollback boundary |
+| --- | --- | --- | --- |
+| Pi file safety and status | RISK-001..004, RESILIENCE-006, RELIABILITY-003..005 | New malformed-object, mode, escape/idempotence, and stale-tools tests failed before implementation. | `pi_codegraph.go` and tests; revert removes Pi-only security and state hardening. |
+| Deterministic recovery | RESILIENCE-001..003, RELIABILITY-004 | `TestExecuteRollbackAttemptsEveryStepAfterFailures` failed because the first failure stopped restoration. | `pipeline/rollback.go`, completion screen/model, and tests; revert is isolated from normal apply execution. |
+| Uninstall ownership/order | RESILIENCE-004..005, RELIABILITY-002,006..007 | Pi snapshot and partial-rollback rendering tests failed before implementation. | `uninstall/service.go`, Pi lifecycle, TUI payload and tests; revert is limited to snapshot/order/reporting. |
+| Runtime identity | RELIABILITY-008 | Case-collision discovery test failed before implementation. | `agents/pi/adapter.go` and test; revert changes only Pi child identity normalization. |
+
+### Continuation — Frozen ID Status
+
+`RELIABILITY-002` received a RED/GREEN correction: Pi cleanup now runs before component operations that mutate shared MCP state; `TestExecutePlanCleansPiBeforeSharedMCPMutation` proves no false drift action is retained. `RESILIENCE-004` is covered by `TestBackupTargetsSnapshotCrossAgentCodeGraphGuidance`, which proves every cross-agent guidance target is present in the pre-install snapshot.
+
+`RISK-005` and `RELIABILITY-001` were held until the safe CLI boundary and fail-closed pending-state design were implemented. The frozen ledger remains unchanged; the completion evidence below resolves the two IDs without treating Pi's ambiguous status output as health.
+
+## Authorized Completion — RISK-005 and RELIABILITY-001
+
+| Frozen ID | Executable proof |
+| --- | --- |
+| `RISK-005` | `gentle-ai codegraph init --cwd <project-root>` canonicalizes the Git root, rejects filesystem root, home, temporary paths, symlink escapes, and unrecognized directories before executing `codegraph init <canonical-root>`. `TestRunCodeGraphInitValidatesCanonicalProjectAndPropagatesInitFailure` and `TestRunCodeGraphInitRejectsUnsafeOrUnrecognizedRoots` prove valid execution, every rejection class, and subprocess error propagation. Generated guidance now invokes only this boundary. |
+| `RELIABILITY-001` | Pi status output is fail-closed: session-only and plaintext `/mcp status` output cannot mark the adapter healthy. `TestPiCodeGraphAdapterRuntimeFailsClosedWithoutPositiveCapabilityEvidence` proves rejection; `TestInstallLeavesPiPendingWhenAdapterHealthIsNotMachineVerifiable` proves selection completes with pending manual guidance and Pi remains unconfigured. Direct `codegraph_explore` MCP schema tests remain separate capability evidence. |

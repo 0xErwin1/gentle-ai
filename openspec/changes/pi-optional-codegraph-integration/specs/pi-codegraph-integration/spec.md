@@ -50,13 +50,13 @@ When selected, the system MUST install required CodeGraph CLI, MCP, and Pi exten
 
 ### Requirement: Root-scoped lazy initialization
 
-Lazy-init guidance MUST require a child handling structural work to resolve the project root, reject unsafe roots, check `<project-root>/.codegraph/` before broad exploration, and run `codegraph init <project-root>` once when absent and available. It MUST use CodeGraph after success and explain a failed-init or failed-use fallback.
+Lazy-init guidance MUST require a child handling structural work to resolve the project root, reject unsafe roots, check `<project-root>/.codegraph/` before broad exploration, and run `gentle-ai codegraph init --cwd <project-root>` once when absent and available. It MUST use CodeGraph after success and explain a failed-init or failed-use fallback.
 
 #### Scenario: Index absent
 
 - GIVEN a compatible child receives structural work in a valid root without `.codegraph/`
 - WHEN it follows its guidance
-- THEN it runs `codegraph init` there before broad exploration
+- THEN it runs `gentle-ai codegraph init --cwd <project-root>` there before broad exploration
 - AND it uses CodeGraph after initialization succeeds
 
 #### Scenario: Init fails

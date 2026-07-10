@@ -86,6 +86,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunSDDStatus(args[1:], stdout)
 		case "sdd-continue":
 			return cli.RunSDDContinue(args[1:], stdout)
+		case "codegraph":
+			return cli.RunCodeGraph(args[1:], stdout)
 		case "review-start":
 			return cli.RunReviewStart(args[1:], stdout)
 		case "review-resume":

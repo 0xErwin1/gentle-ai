@@ -33,6 +33,7 @@ type CompletePayload struct {
 	GGAInstalled        bool
 	FailedSteps         []FailedStep
 	RollbackPerformed   bool
+	RollbackComplete    bool
 	MissingDeps         []MissingDep
 	AvailableUpdates    []UpdateInfo
 	ManualActions       []string
@@ -152,10 +153,15 @@ func renderCompleteFailed(data CompletePayload) string {
 	b.WriteString("\n")
 
 	if data.RollbackPerformed {
-		b.WriteString(styles.WarningStyle.Render("Rollback was performed — previous configuration restored."))
+		message := "Rollback completed — previous configuration restored."
+		if !data.RollbackComplete {
+			message = "Rollback partially completed — manual recovery may be required."
+		}
+		b.WriteString(styles.WarningStyle.Render(message))
 		b.WriteString("\n\n")
 	}
 
+	renderManualActions(&b, data.ManualActions)
 	renderMissingDeps(&b, data.MissingDeps)
 	renderAvailableUpdates(&b, data.AvailableUpdates)
 

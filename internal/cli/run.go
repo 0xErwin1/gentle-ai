@@ -1360,6 +1360,11 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 			paths[path] = struct{}{}
 		}
 	}
+	if selection.HasCommunityTool(model.CommunityToolCodeGraph) {
+		for _, path := range communitytool.CodeGraphGuidancePaths(homeDir) {
+			paths[path] = struct{}{}
+		}
+	}
 
 	targets := make([]string, 0, len(paths))
 	for path := range paths {

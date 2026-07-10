@@ -146,7 +146,7 @@ func DiscoverCodeGraphChildren(homeDir, workspaceDir string) ([]CodeGraphChild, 
 			return nil, err
 		}
 		for _, source := range candidates {
-			name := strings.TrimSuffix(filepath.Base(source), ".md")
+			name := normalizeCodeGraphChildIdentity(strings.TrimSuffix(filepath.Base(source), ".md"))
 			packageOwned := strings.Contains(filepath.ToSlash(source), "/node_modules/")
 			target := source
 			if packageOwned {
@@ -165,6 +165,13 @@ func DiscoverCodeGraphChildren(homeDir, workspaceDir string) ([]CodeGraphChild, 
 		children = append(children, byName[name])
 	}
 	return children, nil
+}
+
+// normalizeCodeGraphChildIdentity mirrors Pi's case-insensitive runtime child
+// identity so a later project definition deterministically shadows its user
+// counterpart even when the filenames differ only by case or surrounding space.
+func normalizeCodeGraphChildIdentity(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
 func piChildFiles(dir string) ([]string, error) {

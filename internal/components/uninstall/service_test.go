@@ -19,6 +19,75 @@ import (
 
 type stubSnapshotter struct{}
 
+func TestBuildPlanSnapshotsPiManifestAndOwnedOverlay(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	packageChild := filepath.Join(homeDir, ".pi", "agent", "node_modules", "gentle-pi", "subagents", "package.md")
+	if err := os.MkdirAll(filepath.Dir(packageChild), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(packageChild, []byte("---\ntools: bash\n---\npackage\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := communitytool.ReconcilePiCodeGraph(communitytool.PiCodeGraphOptions{HomeDir: homeDir, Selected: true, EffectiveMCPProbe: piCodeGraphProbeForServiceTest}); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.buildPlan([]model.AgentID{model.AgentPi}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := communitytool.PiCodeGraphPaths(homeDir, "")
+	for _, path := range paths {
+		if !slices.Contains(plan.backupTargets, path) {
+			t.Fatalf("backup targets = %v, missing Pi artifact %q", plan.backupTargets, path)
+		}
+	}
+}
+
+func TestExecutePlanCleansPiBeforeSharedMCPMutation(t *testing.T) {
+	home := t.TempDir()
+	svc, err := NewService(home, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.snapshotter = stubSnapshotter{}
+	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
+	child := filepath.Join(home, ".pi", "agent", "subagents", "worker.md")
+	if err := os.MkdirAll(filepath.Dir(child), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(child, []byte("---\ntools: bash\n---\nwork\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := communitytool.ReconcilePiCodeGraph(communitytool.PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: piCodeGraphProbeForServiceTest}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.executePlan(plan{operations: []operation{{path: mcpPath, apply: func(path string) (bool, bool, error) {
+		return true, false, os.WriteFile(path, []byte(`{"mcpServers":{"engram":{"command":"engram"}}}`), 0o600)
+	}}}}, []model.AgentID{model.AgentPi})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := string(mustReadServiceFile(t, mcpPath)); strings.Contains(body, `"codegraph"`) {
+		t.Fatalf("false drift preserved CodeGraph entry: %s", body)
+	}
+	if slices.ContainsFunc(result.ManualActions, func(action string) bool { return strings.Contains(action, "CodeGraph MCP drifted") }) {
+		t.Fatalf("manual actions = %v, want no false drift", result.ManualActions)
+	}
+}
+
+func mustReadServiceFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 func TestExecutePlanPiUninstallPreservesPreexistingMarkedUserChildAndUserMCP(t *testing.T) {
 	homeDir := t.TempDir()
 	svc, err := NewService(homeDir, t.TempDir(), "dev")

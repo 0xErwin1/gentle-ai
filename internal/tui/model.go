@@ -1082,6 +1082,7 @@ func (m Model) View() string {
 			GGAInstalled:        hasSelectedComponent(m.Selection.Components, model.ComponentGGA),
 			FailedSteps:         extractFailedSteps(m.Execution),
 			RollbackPerformed:   len(m.Execution.Rollback.Steps) > 0,
+			RollbackComplete:    m.Execution.Rollback.Success,
 			MissingDeps:         extractMissingDeps(m.Detection),
 			AvailableUpdates:    extractAvailableUpdates(m.UpdateResults),
 			ManualActions:       m.Execution.ManualActions,

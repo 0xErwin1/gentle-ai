@@ -170,6 +170,29 @@ func TestDiscoverCodeGraphChildrenReturnsUnreadableDirectoryError(t *testing.T) 
 	}
 }
 
+func TestDiscoverCodeGraphChildrenUsesNormalizedRuntimeIdentity(t *testing.T) {
+	home := t.TempDir()
+	workspace := filepath.Join(home, "project")
+	for path, body := range map[string]string{
+		filepath.Join(home, ".pi", "agent", "subagents", "Worker.md"): "---\ntools: bash\n---\nuser\n",
+		filepath.Join(workspace, ".pi", "subagents", "worker.md"):     "---\ntools: bash\n---\nproject\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	children, err := DiscoverCodeGraphChildren(home, workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(children) != 1 || children[0].Source != filepath.Join(workspace, ".pi", "subagents", "worker.md") {
+		t.Fatalf("children = %#v, want one project runtime identity", children)
+	}
+}
+
 func TestAdapterDetectUsesPiBinaryAndConfigPath(t *testing.T) {
 	homeDir := t.TempDir()
 	configDir := filepath.Join(homeDir, ".pi", "agent")

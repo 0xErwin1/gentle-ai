@@ -2,6 +2,7 @@ package communitytool
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	piagent "github.com/gentleman-programming/gentle-ai/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 )
 
@@ -257,6 +259,9 @@ func TestPiCodeGraphRefreshRestoresMissingOwnedChild(t *testing.T) {
 	t.Cleanup(func() { piCodeGraphEffectiveMCPProbe = previousProbe })
 	childPath := filepath.Join(home, ".pi", "agent", "subagents", "worker.md")
 	writePiFile(t, childPath, "---\ntools: bash\n---\nwork\n")
+	if err := os.Chmod(childPath, 0o640); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: piProbeForTest}); err != nil {
 		t.Fatal(err)
 	}
@@ -269,6 +274,56 @@ func TestPiCodeGraphRefreshRestoresMissingOwnedChild(t *testing.T) {
 	}
 	if got := string(mustReadPiFile(t, childPath)); !strings.Contains(got, piCodeGraphGuidanceMarker) || !strings.Contains(got, "mcp") {
 		t.Fatalf("refresh did not restore and verify child: %q", got)
+	}
+	info, err := os.Stat(childPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o640 {
+		t.Fatalf("restored child mode = %o, want %o", got, 0o640)
+	}
+}
+
+func TestPiCodeGraphPathsExcludesUnsafeManifestPaths(t *testing.T) {
+	home := t.TempDir()
+	paths := piagent.CodeGraphPaths(home)
+	outside := filepath.Join(t.TempDir(), "outside.json")
+	escapedDir := filepath.Join(paths.AgentDir, "escaped")
+	escaped := filepath.Join(escapedDir, "child.md")
+	if err := os.MkdirAll(paths.AgentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Dir(outside), escapedDir); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		name     string
+		mcpPath  string
+		children map[string]piCodeGraphOwnedFile
+		unsafe   string
+	}{
+		{name: "path traversal", children: map[string]piCodeGraphOwnedFile{filepath.Join(paths.AgentDir, "subagents", "..", "..", "escape.md"): {}}, unsafe: filepath.Join(paths.AgentDir, "subagents", "..", "..", "escape.md")},
+		{name: "arbitrary absolute MCP path", mcpPath: outside, children: map[string]piCodeGraphOwnedFile{}, unsafe: outside},
+		{name: "symlink escape", children: map[string]piCodeGraphOwnedFile{escaped: {}}, unsafe: escaped},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			manifest := piCodeGraphManifest{MCPPath: tt.mcpPath, Children: tt.children}
+			data, err := json.Marshal(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(paths.Manifest), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(paths.Manifest, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if got := PiCodeGraphPaths(home, ""); slices.Contains(got, tt.unsafe) {
+				t.Fatalf("PiCodeGraphPaths() = %v, contains unsafe manifest path %q", got, tt.unsafe)
+			}
+		})
 	}
 }
 
@@ -537,8 +592,8 @@ func TestPiCodeGraphProbeUsesAgentRuntimeForProjectMCPOverride(t *testing.T) {
 		return []byte("MCP Servers:\n  codegraph: connected\n"), nil
 	}
 
-	if _, err := probePiCodeGraphMCPWithAgentDir(mcpPath, agentDir); err != nil || !called {
-		t.Fatalf("probe error=%v called=%v, want project config through Pi agent runtime", err, called)
+	if _, err := probePiCodeGraphMCPWithAgentDir(mcpPath, agentDir); !errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) || !called {
+		t.Fatalf("probe error=%v called=%v, want fail-closed project config through Pi agent runtime", err, called)
 	}
 }
 
@@ -612,12 +667,14 @@ func TestPiCodeGraphAdapterRuntimeFailsClosedWithoutPositiveCapabilityEvidence(t
 			wantErr: true,
 		},
 		{
-			name:   "status reports connected codegraph server",
-			output: "MCP Servers:\n  codegraph: connected\n",
+			name:    "session-only status is not adapter health",
+			output:  "MCP Servers:\n  codegraph: connected\n",
+			wantErr: true,
 		},
 		{
-			name:   "status reports ready codegraph server",
-			output: "MCP Servers:\n  codegraph: ready\n",
+			name:    "ambiguous ready status is not adapter health",
+			output:  "MCP Servers:\n  codegraph: ready\n",
+			wantErr: true,
 		},
 	}
 
@@ -653,6 +710,102 @@ func TestPiCodeGraphAdapterRuntimeFailsClosedWithoutPositiveCapabilityEvidence(t
 				t.Fatalf("probe result = %#v, want initialized adapter", result)
 			}
 		})
+	}
+}
+
+func TestPiCodeGraphRejectsMalformedMCPServersWithoutChangingBytes(t *testing.T) {
+	home := t.TempDir()
+	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
+	before := []byte(`{"mcpServers":["user-server"]}`)
+	writePiFile(t, mcpPath, string(before))
+
+	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: piProbeForTest}); err == nil {
+		t.Fatal("ReconcilePiCodeGraph() error = nil, want malformed mcpServers rejection")
+	}
+	if got := mustReadPiFile(t, mcpPath); string(got) != string(before) {
+		t.Fatalf("MCP bytes = %q, want %q", got, before)
+	}
+}
+
+func TestPiCodeGraphPreservesSensitiveFileModes(t *testing.T) {
+	home := t.TempDir()
+	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
+	childPath := filepath.Join(home, ".pi", "agent", "subagents", "worker.md")
+	writePiFile(t, mcpPath, `{"mcpServers":{"user":{"command":"user"}}}`)
+	writePiFile(t, childPath, "---\ntools: bash\n---\nwork\n")
+	if err := os.Chmod(mcpPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(childPath, 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: piProbeForTest}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		path string
+		want os.FileMode
+	}{{mcpPath, 0o600}, {childPath, 0o640}, {filepath.Join(home, ".gentle-ai", "pi-codegraph.json"), 0o600}} {
+		info, err := os.Stat(tt.path)
+		if err != nil || info.Mode().Perm() != tt.want {
+			t.Fatalf("mode %q = %v, %v; want %v", tt.path, info.Mode(), err, tt.want)
+		}
+	}
+	if _, err := UninstallPiCodeGraph(home); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(mcpPath); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("restored MCP mode = %v, %v; want 0600", info.Mode(), err)
+	}
+}
+
+func TestPiCodeGraphUninstallRejectsManifestPathEscapeAndMissingOwnedChildIsSuccess(t *testing.T) {
+	home := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	writePiFile(t, outside, "do not modify\n")
+	manifestPath := filepath.Join(home, ".gentle-ai", "pi-codegraph.json")
+	writePiFile(t, manifestPath, `{"children":{"`+outside+`":{"after":"owned","afterHash":"deadbeef"}}}`)
+	if err := os.Chmod(manifestPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UninstallPiCodeGraph(home); err == nil {
+		t.Fatal("UninstallPiCodeGraph() error = nil, want manifest path escape rejection")
+	}
+	if got := string(mustReadPiFile(t, outside)); got != "do not modify\n" {
+		t.Fatalf("outside file = %q", got)
+	}
+	if err := os.Remove(manifestPath); err != nil {
+		t.Fatal(err)
+	}
+
+	child := filepath.Join(home, ".pi", "agent", "subagents", "missing.md")
+	writePiFile(t, child, "---\ntools: bash\n---\nwork\n")
+	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: piProbeForTest}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(child); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UninstallPiCodeGraph(home); err != nil {
+		t.Fatalf("UninstallPiCodeGraph() missing owned child error = %v", err)
+	}
+}
+
+func TestPiCodeGraphConfiguredRejectsStaleGuidanceWhenBashIsRemoved(t *testing.T) {
+	home := t.TempDir()
+	child := filepath.Join(home, ".pi", "agent", "subagents", "worker.md")
+	writePiFile(t, child, "---\ntools: bash\n---\nwork\n")
+	if _, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: home, Selected: true, EffectiveMCPProbe: piProbeForTest}); err != nil {
+		t.Fatal(err)
+	}
+	writePiFile(t, child, "---\ntools: read\n---\nwork\n\n"+piCodeGraphToolMarker+"\nstale\n"+piCodeGraphEndMarker+"\n\n"+piCodeGraphGuidanceMarker+"\nstale\n"+piCodeGraphEndMarker+"\n")
+	previous := piCodeGraphEffectiveMCPProbe
+	piCodeGraphEffectiveMCPProbe = piProbeForTest
+	t.Cleanup(func() { piCodeGraphEffectiveMCPProbe = previous })
+	configured, _ := PiCodeGraphConfigured(home, "")
+	if configured {
+		t.Fatal("PiCodeGraphConfigured() accepted stale guidance for a bash-less child")
 	}
 }
 

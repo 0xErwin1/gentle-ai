@@ -1,6 +1,7 @@
 package communitytool
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -141,6 +142,9 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 			return result, err
 		}
 		result.PiCodeGraph = piResult
+		if piResult != nil {
+			result.ManualActions = append(result.ManualActions, piResult.ManualActions...)
+		}
 		after := DetectStatus(id, homeDir, detector)
 		result.StatusAfter = &after
 		if err := validateCodeGraphInstallStatus(after); err != nil {
@@ -175,6 +179,9 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 		return result, err
 	}
 	result.PiCodeGraph = piResult
+	if piResult != nil {
+		result.ManualActions = append(result.ManualActions, piResult.ManualActions...)
+	}
 	after := DetectStatus(id, homeDir, detector)
 	result.StatusAfter = &after
 	if err := validateCodeGraphInstallStatus(after); err != nil {
@@ -192,6 +199,9 @@ func reconcileDetectedPiCodeGraph(homeDir, workspaceDir string) (*PiCodeGraphRes
 		return nil, err
 	}
 	result, err := ReconcilePiCodeGraph(PiCodeGraphOptions{HomeDir: homeDir, WorkspaceDir: workspaceDir, Selected: true})
+	if errors.Is(err, ErrPiCodeGraphAdapterHealthUnavailable) {
+		return &PiCodeGraphResult{ManualActions: []string{"Pi CodeGraph integration is pending: Pi 0.80.6 has no supported machine-verifiable adapter health signal. CodeGraph capability was not reported as configured."}}, nil
+	}
 	return &result, err
 }
 
@@ -204,6 +214,9 @@ func validateCodeGraphInstallStatus(status Status) error {
 	}
 	missing := make([]string, 0)
 	for _, agent := range status.Agents {
+		if agent.Agent == model.AgentPi {
+			continue
+		}
 		if agent.Detected && !agent.Configured {
 			missing = append(missing, agent.Name)
 		}

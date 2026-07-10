@@ -98,7 +98,7 @@ func TestBackupTargetsSnapshotPiManifestOverlayDuringDeselection(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(manifest), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(manifest, []byte(`{"children":{"`+overlay+`":{"after":"managed","afterHash":"hash","overlay":true}}}`), 0o644); err != nil {
+	if err := os.WriteFile(manifest, []byte(`{"children":{"`+overlay+`":{"after":"managed","afterHash":"hash","overlay":true}}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -108,13 +108,37 @@ func TestBackupTargetsSnapshotPiManifestOverlayDuringDeselection(t *testing.T) {
 	}
 }
 
+func TestBackupTargetsSnapshotCrossAgentCodeGraphGuidance(t *testing.T) {
+	home := t.TempDir()
+	claudeConfig := filepath.Join(home, ".claude")
+	if err := os.MkdirAll(claudeConfig, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	selection := model.Selection{CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph}}
+	targets := backupTargets(home, "", ScopeGlobal, selection, planner.ResolvedPlan{})
+	guidancePaths := communitytool.CodeGraphGuidancePaths(home)
+	if len(guidancePaths) == 0 {
+		t.Fatal("CodeGraphGuidancePaths() = empty; Claude fixture was not detected")
+	}
+	for _, path := range guidancePaths {
+		if !slices.Contains(targets, path) {
+			t.Fatalf("backup targets = %v, missing guidance path %q", targets, path)
+		}
+	}
+}
+
 func TestPiCodeGraphReconcileStepRollbackRemovesDynamicPackageOverlay(t *testing.T) {
 	home := t.TempDir()
 	overlay := filepath.Join(home, ".pi", "agent", "subagents", "package.md")
 	manifest := filepath.Join(home, ".gentle-ai", "pi-codegraph.json")
 	writePiInstallFixture(t, home)
 	mustWriteFile(t, overlay, []byte("owned overlay\n"))
-	mustWriteFile(t, manifest, []byte(`{"children":{"`+overlay+`":{"after":"owned overlay\n","afterHash":"c7455d95571450daf45e091de82bf35230a8016c09c60b15b2b84cfde219669f","overlay":true}}}`))
+	if err := os.MkdirAll(filepath.Dir(manifest), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, []byte(`{"children":{"`+overlay+`":{"after":"owned overlay\n","afterHash":"c7455d95571450daf45e091de82bf35230a8016c09c60b15b2b84cfde219669f","overlay":true}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	step := piCodeGraphReconcileStep{homeDir: home}
 	if err := step.Rollback(); err != nil {
@@ -160,7 +184,7 @@ func TestCodeGraphGuidanceMarkdownForSDDOnlyWhenSelectedOrConfigured(t *testing.
 				mustWriteFile(t, filepath.Join(home, ".claude", "CLAUDE.md"), []byte(strings.Join([]string{
 					"existing Claude guidance",
 					"<!-- gentle-ai:codegraph-guidance -->",
-					"CodeGraph guidance with `codegraph init <project-root>`",
+					"CodeGraph guidance with `gentle-ai codegraph init --cwd <project-root>`",
 					"<!-- /gentle-ai:codegraph-guidance -->",
 				}, "\n")))
 			},
@@ -212,7 +236,7 @@ func TestCodeGraphGuidanceMarkdownForSDDOnlyWhenSelectedOrConfigured(t *testing.
 				}
 				return
 			}
-			if !strings.Contains(got, "codegraph init <project-root>") {
+			if !strings.Contains(got, "gentle-ai codegraph init --cwd <project-root>") {
 				t.Fatalf("CodeGraph guidance missing search-order rule:\n%s", got)
 			}
 		})
@@ -252,7 +276,7 @@ func TestComponentApplyStepInjectsCodeGraphGuidanceWhenCodeGraphConfigured(t *te
 	mustWriteFile(t, filepath.Join(home, ".codex", "AGENTS.md"), []byte(strings.Join([]string{
 		"existing Codex guidance",
 		"<!-- gentle-ai:codegraph-guidance -->",
-		"CodeGraph guidance with `codegraph init <project-root>`",
+		"CodeGraph guidance with `gentle-ai codegraph init --cwd <project-root>`",
 		"<!-- /gentle-ai:codegraph-guidance -->",
 	}, "\n")))
 
@@ -401,7 +425,7 @@ func assertOpenCodeSharedPromptCodeGraphGuidance(t *testing.T, home string, want
 		t.Fatalf("ReadFile(%q) error = %v", promptPath, err)
 	}
 	text := string(content)
-	hasGuidance := strings.Contains(text, "<!-- gentle-ai:codegraph-guidance -->") && strings.Contains(text, "codegraph init <project-root>")
+	hasGuidance := strings.Contains(text, "<!-- gentle-ai:codegraph-guidance -->") && strings.Contains(text, "gentle-ai codegraph init --cwd <project-root>")
 	if hasGuidance != want {
 		t.Fatalf("CodeGraph guidance present = %v, want %v in %s", hasGuidance, want, promptPath)
 	}

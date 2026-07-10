@@ -33,6 +33,11 @@ var (
 
 var piCodeGraphEffectiveMCPProbe PiCodeGraphEffectiveMCPProbe = probePiCodeGraphMCP
 
+// ErrPiCodeGraphAdapterHealthUnavailable means Pi supplied no supported,
+// machine-verifiable adapter-health evidence. CodeGraph's direct MCP schema
+// verification remains separate capability evidence.
+var ErrPiCodeGraphAdapterHealthUnavailable = errors.New("Pi MCP adapter health is not machine-verifiable")
+
 // piCodeGraphAdapterRuntimeRunner is the Pi subprocess boundary. It captures
 // combined stdout/stderr so exit status alone cannot be mistaken for adapter
 // health.
@@ -113,6 +118,7 @@ type piCodeGraphOwnedFile struct {
 	AfterHash string  `json:"afterHash"`
 	Overlay   bool    `json:"overlay"`
 	Adopted   bool    `json:"adopted,omitempty"`
+	Mode      uint32  `json:"mode,omitempty"`
 }
 
 // ReconcilePiCodeGraph owns the optional Pi integration. It never writes to
@@ -129,7 +135,7 @@ func ReconcilePiCodeGraph(options PiCodeGraphOptions) (result PiCodeGraphResult,
 	if manifest.Children == nil {
 		manifest.Children = map[string]piCodeGraphOwnedFile{}
 	}
-	journal := newPiJournal()
+	journal := newPiJournal(piCodeGraphAllowedRoots(paths, options.WorkspaceDir)...)
 	defer func() {
 		if err != nil {
 			if restoreErr := journal.restore(); restoreErr != nil {
@@ -151,6 +157,9 @@ func ReconcilePiCodeGraph(options PiCodeGraphOptions) (result PiCodeGraphResult,
 	}
 	manifest.MCPPath = paths.MCPConfig
 	for _, discovered := range children {
+		if safeErr := journal.validate(discovered.Source); safeErr != nil {
+			return result, safeErr
+		}
 		body, readErr := os.ReadFile(discovered.Source)
 		child := PiCodeGraphChild{Name: discovered.Name, Source: discovered.Source, Target: discovered.Target}
 		if readErr != nil {
@@ -258,7 +267,10 @@ func reconcilePiMCP(path string, journal *piJournal, changed map[string]struct{}
 	if len(data) > 0 && json.Unmarshal(data, &root) != nil {
 		return existing, fmt.Errorf("misconfigured Pi MCP config %q", path)
 	}
-	servers, _ := root["mcpServers"].(map[string]any)
+	servers, isObject := root["mcpServers"].(map[string]any)
+	if root["mcpServers"] != nil && !isObject {
+		return existing, fmt.Errorf("misconfigured Pi MCP config %q: mcpServers must be an object", path)
+	}
 	if servers == nil {
 		servers = map[string]any{}
 		root["mcpServers"] = servers
@@ -509,7 +521,7 @@ func probePiCodeGraphAdapterRuntime(agentDir, mcpPath string) (PiCodeGraphMCPPro
 	if err := validatePiCodeGraphAdapterRuntimeOutput(output); err != nil {
 		return PiCodeGraphMCPProbeResult{}, err
 	}
-	return PiCodeGraphMCPProbeResult{AdapterAvailable: true, Initialized: true}, nil
+	return PiCodeGraphMCPProbeResult{}, ErrPiCodeGraphAdapterHealthUnavailable
 }
 
 func defaultPiCodeGraphAdapterRuntimeRunner(name string, args, env []string) ([]byte, error) {
@@ -544,27 +556,7 @@ func validatePiCodeGraphAdapterRuntimeOutput(output []byte) error {
 	if strings.Contains(status, "unknown") && strings.Contains(status, "/mcp") {
 		return fmt.Errorf("Pi MCP adapter runtime does not recognize /mcp status: %s", strings.TrimSpace(string(output)))
 	}
-	codeGraphStates := make([]string, 0, 1)
-	for _, line := range strings.Split(status, "\n") {
-		capability, state, found := strings.Cut(strings.TrimSpace(line), ":")
-		if !found || strings.TrimSpace(capability) != "codegraph" {
-			continue
-		}
-		codeGraphStates = append(codeGraphStates, strings.TrimSpace(state))
-	}
-	if len(codeGraphStates) == 1 && isHealthyPiCodeGraphAdapterState(codeGraphStates[0]) {
-		return nil
-	}
-	return fmt.Errorf("Pi MCP adapter runtime produced no positive codegraph capability evidence: %s", strings.TrimSpace(string(output)))
-}
-
-func isHealthyPiCodeGraphAdapterState(state string) bool {
-	switch state {
-	case "connected", "ready", "running", "loaded", "active", "ok":
-		return true
-	default:
-		return false
-	}
+	return ErrPiCodeGraphAdapterHealthUnavailable
 }
 
 func readPiMCPResponse(decoder *json.Decoder, id int) (map[string]any, error) {
@@ -653,6 +645,9 @@ func inspectPiCodeGraph(homeDir, workspaceDir string) (bool, string, []PiCodeGra
 		if parseable && slices.Contains(tools, "bash") {
 			classification = PiChildCompatible
 		}
+		if classification != PiChildCompatible && strings.Contains(string(body), piCodeGraphToolMarker) {
+			return false, fmt.Sprintf("Pi child %q has stale CodeGraph tools without bash support", child.Name), reports
+		}
 		reports = append(reports, PiCodeGraphChild{Name: child.Name, Source: child.Source, Target: child.Target, Tools: tools, Classification: classification})
 	}
 	if err := verifyPiCodeGraph(paths.MCPConfig, reports); err != nil {
@@ -666,11 +661,14 @@ func PiCodeGraphPaths(homeDir, workspaceDir string) []string {
 	paths := piagent.CodeGraphPaths(homeDir)
 	result := []string{paths.MCPConfig, paths.Manifest}
 	if manifest, err := readPiCodeGraphManifest(paths.Manifest); err == nil {
-		if manifest.MCPPath != "" {
+		allowedRoots := piCodeGraphAllowedRoots(paths, workspaceDir)
+		if manifest.MCPPath != "" && piCodeGraphPathWithinRoots(manifest.MCPPath, allowedRoots) {
 			result = append(result, manifest.MCPPath)
 		}
 		for path := range manifest.Children {
-			result = append(result, path)
+			if piCodeGraphPathWithinRoots(path, allowedRoots) {
+				result = append(result, path)
+			}
 		}
 	}
 	children, err := piagent.DiscoverCodeGraphChildren(homeDir, workspaceDir)
@@ -728,7 +726,7 @@ func UninstallPiCodeGraph(homeDir string) (result PiCodeGraphResult, err error) 
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return PiCodeGraphResult{}, err
 	}
-	journal := newPiJournal()
+	journal := newPiJournal(piCodeGraphAllowedRoots(paths, "")...)
 	if err = journal.capture(paths.Manifest); err != nil {
 		return result, fmt.Errorf("capture Pi CodeGraph manifest: %w", err)
 	}
@@ -752,7 +750,13 @@ func UninstallPiCodeGraph(homeDir string) (result PiCodeGraphResult, err error) 
 		result = PiCodeGraphResult{}
 	}()
 	for path, owned := range manifest.Children {
+		if safeErr := journal.validate(path); safeErr != nil {
+			return result, safeErr
+		}
 		body, readErr := piCodeGraphReadFile(path)
+		if os.IsNotExist(readErr) {
+			continue
+		}
 		if readErr != nil {
 			return result, fmt.Errorf("read Pi CodeGraph child %q: %w", path, readErr)
 		}
@@ -766,6 +770,9 @@ func UninstallPiCodeGraph(homeDir string) (result PiCodeGraphResult, err error) 
 		result.Files = append(result.Files, path)
 	}
 	if manifest.MCP != nil {
+		if safeErr := journal.validate(manifest.MCPPath); safeErr != nil {
+			return result, safeErr
+		}
 		if current, readErr := piCodeGraphReadFile(manifest.MCPPath); readErr == nil && hashPiBytes(current) == manifest.MCP.AfterHash {
 			if err := restorePiOwnedFile(manifest.MCPPath, *manifest.MCP); err != nil {
 				return result, err
@@ -792,7 +799,11 @@ func restorePiOwnedFile(path string, owned piCodeGraphOwnedFile) error {
 		}
 		return nil
 	}
-	_, err := piCodeGraphAtomicWrite(path, []byte(*owned.Before), 0o644)
+	mode := os.FileMode(owned.Mode)
+	if mode == 0 {
+		mode = 0o600
+	}
+	_, err := piCodeGraphAtomicWrite(path, []byte(*owned.Before), mode)
 	return err
 }
 
@@ -804,6 +815,9 @@ func readPiCodeGraphManifest(path string) (piCodeGraphManifest, error) {
 	if err != nil {
 		return piCodeGraphManifest{}, err
 	}
+	if info, statErr := os.Stat(path); statErr != nil || info.Mode().Perm()&0o077 != 0 {
+		return piCodeGraphManifest{}, fmt.Errorf("Pi CodeGraph manifest %q has unsafe permissions", path)
+	}
 	var manifest piCodeGraphManifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return piCodeGraphManifest{}, err
@@ -812,13 +826,19 @@ func readPiCodeGraphManifest(path string) (piCodeGraphManifest, error) {
 }
 
 func restoreMissingPiChildren(children map[string]piCodeGraphOwnedFile, journal *piJournal, changed map[string]struct{}) error {
-	for path, owned := range children {
+	paths := make([]string, 0, len(children))
+	for path := range children {
+		paths = append(paths, path)
+	}
+	slices.Sort(paths)
+	for _, path := range paths {
+		owned := children[path]
 		if _, err := os.Stat(path); err == nil {
 			continue
 		} else if !os.IsNotExist(err) {
 			return err
 		}
-		if err := journal.write(path, []byte(owned.After)); err != nil {
+		if err := journal.writeWithMode(path, []byte(owned.After), os.FileMode(owned.Mode)); err != nil {
 			return err
 		}
 		changed[path] = struct{}{}
@@ -834,24 +854,52 @@ func appendUnique(values []string, value string) []string {
 }
 func hashPiBytes(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
 
-type piJournal struct{ before map[string]*[]byte }
+type piJournalFile struct {
+	data *[]byte
+	mode os.FileMode
+}
+type piJournal struct {
+	before map[string]*piJournalFile
+	roots  []string
+}
 
-func newPiJournal() *piJournal { return &piJournal{before: map[string]*[]byte{}} }
+func newPiJournal(roots ...string) *piJournal {
+	return &piJournal{before: map[string]*piJournalFile{}, roots: roots}
+}
 func (j *piJournal) write(path string, data []byte) error {
+	return j.writeWithMode(path, data, 0)
+}
+func (j *piJournal) writeWithMode(path string, data []byte, mode os.FileMode) error {
+	if err := j.validate(path); err != nil {
+		return err
+	}
 	if _, ok := j.before[path]; !ok {
 		old, err := os.ReadFile(path)
 		if err == nil {
-			j.before[path] = &old
+			info, statErr := os.Stat(path)
+			if statErr != nil {
+				return statErr
+			}
+			j.before[path] = &piJournalFile{data: &old, mode: info.Mode().Perm()}
 		} else if os.IsNotExist(err) {
 			j.before[path] = nil
 		} else {
 			return err
 		}
 	}
-	_, err := piCodeGraphAtomicWrite(path, data, 0o644)
+	if mode == 0 {
+		mode = 0o600
+	}
+	if previous := j.before[path]; previous != nil {
+		mode = previous.mode
+	}
+	_, err := piCodeGraphAtomicWrite(path, data, mode)
 	return err
 }
 func (j *piJournal) capture(path string) error {
+	if err := j.validate(path); err != nil {
+		return err
+	}
 	if _, exists := j.before[path]; exists {
 		return nil
 	}
@@ -863,29 +911,120 @@ func (j *piJournal) capture(path string) error {
 	if err != nil {
 		return err
 	}
-	j.before[path] = &before
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		return statErr
+	}
+	j.before[path] = &piJournalFile{data: &before, mode: info.Mode().Perm()}
 	return nil
 }
 func (j *piJournal) ownedFile(path, after string, overlay, adopted bool) piCodeGraphOwnedFile {
 	before := j.before[path]
 	var snapshot *string
 	if before != nil {
-		value := string(*before)
+		value := string(*before.data)
 		snapshot = &value
 	}
-	return piCodeGraphOwnedFile{Before: snapshot, After: after, AfterHash: hashPiBytes([]byte(after)), Overlay: overlay, Adopted: adopted}
+	mode := uint32(0o600)
+	if before != nil {
+		mode = uint32(before.mode)
+	}
+	return piCodeGraphOwnedFile{Before: snapshot, After: after, AfterHash: hashPiBytes([]byte(after)), Overlay: overlay, Adopted: adopted, Mode: mode}
 }
 func (j *piJournal) restore() error {
-	for path, old := range j.before {
+	paths := make([]string, 0, len(j.before))
+	for path := range j.before {
+		paths = append(paths, path)
+	}
+	slices.Sort(paths)
+	var restoreErrors []error
+	for _, path := range paths {
+		old := j.before[path]
 		if old == nil {
 			if err := piCodeGraphRemove(path); err != nil && !os.IsNotExist(err) {
-				return err
+				restoreErrors = append(restoreErrors, fmt.Errorf("remove %q: %w", path, err))
 			}
 			continue
 		}
-		if _, err := piCodeGraphAtomicWrite(path, *old, 0o644); err != nil {
-			return err
+		if _, err := piCodeGraphAtomicWrite(path, *old.data, old.mode); err != nil {
+			restoreErrors = append(restoreErrors, fmt.Errorf("restore %q: %w", path, err))
 		}
 	}
-	return nil
+	return errors.Join(restoreErrors...)
+}
+
+func piCodeGraphAllowedRoots(paths piagent.CodeGraphPathSet, workspace string) []string {
+	roots := []string{paths.AgentDir, filepath.Dir(paths.Manifest)}
+	if workspace != "" {
+		roots = append(roots, workspace)
+	}
+	return roots
+}
+
+func piCodeGraphPathWithinRoots(path string, roots []string) bool {
+	canonicalPath, err := canonicalPiCodeGraphPath(path)
+	if err != nil {
+		return false
+	}
+	for _, root := range roots {
+		canonicalRoot, err := canonicalPiCodeGraphPath(root)
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(canonicalRoot, canonicalPath)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func canonicalPiCodeGraphPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	var suffix []string
+	for {
+		resolved, err := filepath.EvalSymlinks(abs)
+		if err == nil {
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(abs)
+		if parent == abs {
+			return "", err
+		}
+		suffix = append(suffix, filepath.Base(abs))
+		abs = parent
+	}
+}
+
+func (j *piJournal) validate(path string) error {
+	if path == "" {
+		return fmt.Errorf("empty Pi CodeGraph path")
+	}
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refuse symlink Pi CodeGraph path %q", path)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	for _, root := range j.roots {
+		rootAbs, rootErr := filepath.Abs(root)
+		if rootErr != nil {
+			continue
+		}
+		rel, relErr := filepath.Rel(rootAbs, abs)
+		if relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return nil
+		}
+	}
+	return fmt.Errorf("Pi CodeGraph path %q escapes allowed roots", path)
 }

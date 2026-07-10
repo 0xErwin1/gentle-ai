@@ -364,6 +364,11 @@ func (s *Service) buildPlan(agentIDs []model.AgentID, componentIDs []model.Compo
 	}
 
 	backupTargets[state.Path(s.homeDir)] = struct{}{}
+	if slices.Contains(agentIDs, model.AgentPi) {
+		for _, target := range communitytool.PiCodeGraphPaths(s.homeDir, s.workspaceDir) {
+			backupTargets[target] = struct{}{}
+		}
+	}
 
 	orderedTargets := make([]string, 0, len(backupTargets))
 	for target := range backupTargets {
@@ -398,6 +403,17 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		Manifest:   manifest,
 		BackupPath: snapshotDir,
 	}
+	// Pi ownership hashes include the shared MCP file. Remove its managed entry
+	// before other component cleanup (notably Engram) mutates that file, otherwise
+	// an unrelated mutation is indistinguishable from user drift.
+	if slices.Contains(agentsToRemove, model.AgentPi) {
+		piResult, piErr := communitytool.UninstallPiCodeGraph(s.homeDir)
+		if piErr != nil {
+			return result, fmt.Errorf("remove Pi CodeGraph integration: %w", piErr)
+		}
+		result.ChangedFiles = append(result.ChangedFiles, piResult.Files...)
+		result.ManualActions = append(result.ManualActions, piResult.ManualActions...)
+	}
 
 	for _, op := range p.operations {
 		changed, removed, err := op.apply(op.path)
@@ -431,14 +447,6 @@ func (s *Service) executePlan(p plan, agentsToRemove []model.AgentID) (Result, e
 		return result, err
 	}
 	result.AgentsRemovedFromState = removed
-	if slices.Contains(agentsToRemove, model.AgentPi) {
-		piResult, piErr := communitytool.UninstallPiCodeGraph(s.homeDir)
-		if piErr != nil {
-			return result, fmt.Errorf("remove Pi CodeGraph integration: %w", piErr)
-		}
-		result.ChangedFiles = append(result.ChangedFiles, piResult.Files...)
-		result.ManualActions = append(result.ManualActions, piResult.ManualActions...)
-	}
 	result.ManualActions = dedupeSortedStrings(result.ManualActions)
 	return result, nil
 }
