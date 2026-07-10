@@ -123,6 +123,29 @@ func (builder SnapshotBuilder) Build(ctx context.Context, target Target) (Snapsh
 	}, nil
 }
 
+// ValidateEvidence binds snapshot metadata to repository object evidence.
+func (builder SnapshotBuilder) ValidateEvidence(ctx context.Context, snapshot Snapshot) error {
+	repo, err := builder.repositoryRoot(ctx)
+	if err != nil {
+		return err
+	}
+	builder.Repo = repo
+	paths, err := builder.changedPaths(ctx, snapshot.BaseTree, snapshot.CandidateTree)
+	if err != nil {
+		return err
+	}
+	proof, err := builder.untrackedProof(ctx, snapshot.CandidateTree, snapshot.IntendedUntracked)
+	if err != nil {
+		return err
+	}
+	digest := digestPaths(paths)
+	identity := snapshotIdentity(snapshot.Kind, snapshot.BaseTree, snapshot.CandidateTree, digest, proof, snapshot.IntendedUntracked, snapshot.LedgerIDs)
+	if !equalStrings(paths, snapshot.Paths) || digest != snapshot.PathsDigest || proof != snapshot.IntendedUntrackedProof || identity != snapshot.Identity {
+		return errors.New("snapshot paths, digests, or identity do not match Git tree evidence")
+	}
+	return nil
+}
+
 func (builder SnapshotBuilder) repositoryRoot(ctx context.Context) (string, error) {
 	if strings.TrimSpace(builder.Repo) == "" {
 		return "", errors.New("snapshot repository path is required")
@@ -329,6 +352,29 @@ func canonicalPaths(values []string) ([]string, error) {
 		}
 	}
 	return normalized, nil
+}
+
+// pathsAreSubset verifies that a correction can only touch paths that were
+// present in the immutable genesis snapshot.
+func pathsAreSubset(paths, genesis []string) error {
+	canonicalCandidate, err := canonicalPaths(paths)
+	if err != nil || !equalStrings(canonicalCandidate, paths) {
+		return errors.New("snapshot paths must be canonical")
+	}
+	canonicalGenesis, err := canonicalPaths(genesis)
+	if err != nil || !equalStrings(canonicalGenesis, genesis) {
+		return errors.New("genesis snapshot paths must be canonical")
+	}
+	allowed := make(map[string]struct{}, len(genesis))
+	for _, path := range genesis {
+		allowed[path] = struct{}{}
+	}
+	for _, path := range paths {
+		if _, ok := allowed[path]; !ok {
+			return fmt.Errorf("correction path %q is outside immutable genesis scope", path)
+		}
+	}
+	return nil
 }
 
 func canonicalStrings(values []string, label string) ([]string, error) {

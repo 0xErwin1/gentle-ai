@@ -129,9 +129,9 @@ The refuter is read-only, cannot add findings or change scope, returns one compl
 
 Only the parent orchestrator may launch a correction actor or scoped validator, and only within native transaction counters.
 
-Ordinary review permits at most one correction transaction composed of atomic work units. Each work unit records focused-test evidence, runtime evidence or justified `N/A`, and an independent rollback boundary. Work-unit count never creates another correction budget.
+Ordinary review permits at most one correction transaction composed of atomic work units. Each work unit maps exactly to frozen accepted/blocking IDs, changes only the immutable genesis path set, and records focused-test evidence, runtime evidence or justified `N/A`, and an independent rollback boundary. Work-unit count never creates another correction budget.
 
-If correction occurred, ordinary review runs exactly one scoped fix-delta validator. It is detached and read-only, receives only the frozen ledger plus immutable fix delta, verifies fix-touched lines, may append fix-caused defects with proof, and can return only `approve` or `escalate`. It never reopens the original diff, launches another correction, or iterates.
+If correction occurred, ordinary review runs exactly one scoped fix-delta validator. It is detached and read-only, receives only the frozen ledger plus immutable fix delta, verifies original acceptance criteria/tests and correction regression evidence, and can return only `approve` or `escalate`. Later observations are non-blocking follow-ups: they do not alter findings, outcomes, scope, frozen IDs, counters, or correction. A failed original criterion escalates; it never reopens the original diff, launches another correction, or iterates.
 
 Judgment Day replaces ordinary 4R for an explicitly selected target. It alone may run at most two fix rounds and two scoped re-judgments; it does not inherit or extend an ordinary budget.
 

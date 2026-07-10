@@ -84,9 +84,23 @@ type Finding struct {
 }
 
 type ScopedValidationResult struct {
-	LedgerIDs         []string  `json:"ledger_ids"`
-	Approved          bool      `json:"approved"`
-	FixCausedFindings []Finding `json:"fix_caused_findings"`
+	LedgerIDs            []string        `json:"ledger_ids"`
+	Approved             bool            `json:"approved"`
+	FixCausedFindings    []Finding       `json:"fix_caused_findings"`
+	OriginalCriteria     ValidationCheck `json:"original_criteria"`
+	CorrectionRegression ValidationCheck `json:"correction_regression"`
+	FollowUps            []FollowUp      `json:"follow_ups"`
+}
+
+type ValidationCheck struct {
+	EvidenceHash string `json:"evidence_hash"`
+	FixDeltaHash string `json:"fix_delta_hash"`
+	Passed       bool   `json:"passed"`
+}
+
+type FollowUp struct {
+	Observation string   `json:"observation"`
+	ProofRefs   []string `json:"proof_refs"`
 }
 
 type FindingEvidence struct {
@@ -127,6 +141,7 @@ type Transaction struct {
 	Generation             int                        `json:"generation"`
 	State                  State                      `json:"state"`
 	Snapshot               Snapshot                   `json:"snapshot"`
+	GenesisPaths           []string                   `json:"genesis_paths,omitempty"`
 	BaseTree               string                     `json:"base_tree"`
 	PathsDigest            string                     `json:"paths_digest"`
 	InitialReviewTree      string                     `json:"initial_review_tree"`
@@ -148,6 +163,9 @@ type Transaction struct {
 	FixFindingIDs          []string                   `json:"fix_finding_ids"`
 	PendingRefuterIDs      []string                   `json:"pending_refuter_ids"`
 	FixCausedFindings      []Finding                  `json:"fix_caused_findings"`
+	FollowUps              []FollowUp                 `json:"follow_ups"`
+	OriginalCriteria       *ValidationCheck           `json:"original_criteria,omitempty"`
+	CorrectionRegression   *ValidationCheck           `json:"correction_regression,omitempty"`
 }
 
 func NewTransaction(start Start) (*Transaction, error) {
@@ -169,12 +187,13 @@ func NewTransaction(start Start) (*Transaction, error) {
 	return &Transaction{
 		Schema: TransactionSchema, LineageID: start.LineageID, Mode: start.Mode,
 		Generation: start.Generation, State: StateUnreviewed, Snapshot: start.Snapshot,
-		BaseTree: start.Snapshot.BaseTree, PathsDigest: start.Snapshot.PathsDigest,
+		GenesisPaths: append([]string(nil), start.Snapshot.Paths...),
+		BaseTree:     start.Snapshot.BaseTree, PathsDigest: start.Snapshot.PathsDigest,
 		InitialReviewTree: start.Snapshot.CandidateTree, FinalCandidateTree: start.Snapshot.CandidateTree,
 		FixDeltaHash: EmptyFixDeltaHash, PolicyHash: start.PolicyHash,
 		Findings: []Finding{}, Classifications: map[string]FindingEvidence{},
 		Outcomes: map[string]EvidenceOutcome{}, FixFindingIDs: []string{}, PendingRefuterIDs: []string{},
-		FixCausedFindings: []Finding{}, JudgeProofs: []JudgeProof{},
+		FixCausedFindings: []Finding{}, FollowUps: []FollowUp{}, JudgeProofs: []JudgeProof{},
 	}, nil
 }
 
@@ -437,6 +456,13 @@ func (transaction *Transaction) CompleteFix(snapshot Snapshot, fixDeltaHash stri
 	if !equalStrings(ids, transaction.FixFindingIDs) || !equalStrings(ids, snapshot.LedgerIDs) {
 		return errors.New("fix diff must be bound exactly to corroborated frozen ledger IDs")
 	}
+	genesisPaths := transaction.GenesisPaths
+	if genesisPaths == nil {
+		genesisPaths = transaction.Snapshot.Paths
+	}
+	if err := pathsAreSubset(snapshot.Paths, genesisPaths); err != nil {
+		return err
+	}
 	transaction.Snapshot = snapshot
 	transaction.FinalCandidateTree = snapshot.CandidateTree
 	transaction.FixDeltaHash = FixDeltaHashForSnapshot(snapshot)
@@ -460,8 +486,12 @@ func FixDeltaHashForSnapshot(snapshot Snapshot) string {
 }
 
 func (transaction *Transaction) ValidateFixDelta(ledgerIDs []string, approved bool) error {
+	// Legacy internal callers retain the v1 boolean transition. Public CLI
+	// validation uses ValidateFixDeltaResult and persists independent evidence.
 	return transaction.ValidateFixDeltaResult(ScopedValidationResult{
-		LedgerIDs: ledgerIDs, Approved: approved, FixCausedFindings: []Finding{},
+		LedgerIDs: ledgerIDs, Approved: approved, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
+		OriginalCriteria:     ValidationCheck{EvidenceHash: transaction.FixDeltaHash, FixDeltaHash: transaction.FixDeltaHash, Passed: approved},
+		CorrectionRegression: ValidationCheck{EvidenceHash: transaction.FixDeltaHash, FixDeltaHash: transaction.FixDeltaHash, Passed: approved},
 	})
 }
 
@@ -476,8 +506,26 @@ func (transaction *Transaction) ValidateFixDeltaResult(result ScopedValidationRe
 	if !equalStrings(ids, transaction.FixFindingIDs) {
 		return errors.New("scoped validation must use the frozen fix ledger IDs")
 	}
+	if transaction.Mode == ModeOrdinary4R {
+		legacy := result.OriginalCriteria.EvidenceHash == transaction.FixDeltaHash &&
+			result.CorrectionRegression.EvidenceHash == transaction.FixDeltaHash
+		if !legacy {
+			if err := validateTargetedValidation(result, transaction.FixDeltaHash); err != nil {
+				return err
+			}
+		}
+	}
 	if result.FixCausedFindings == nil {
 		return errors.New("scoped validation must provide an explicit fix_caused_findings array")
+	}
+	if transaction.Mode == ModeOrdinary4R && result.FollowUps == nil {
+		return errors.New("scoped validation must provide an explicit follow_ups array")
+	}
+	if transaction.Mode == ModeOrdinary4R && len(result.FixCausedFindings) != 0 {
+		return errors.New("ordinary scoped validation records later observations only as non-blocking follow-ups")
+	}
+	if err := validateFollowUps(result.FollowUps); err != nil {
+		return err
 	}
 	seen := make(map[string]struct{}, len(transaction.Findings)+len(result.FixCausedFindings))
 	for _, finding := range transaction.Findings {
@@ -498,6 +546,16 @@ func (transaction *Transaction) ValidateFixDeltaResult(result ScopedValidationRe
 			severeFixCaused++
 		}
 	}
+	if transaction.Mode == ModeOrdinary4R {
+		result.Approved = result.OriginalCriteria.Passed && result.CorrectionRegression.Passed
+		legacy := result.OriginalCriteria.EvidenceHash == transaction.FixDeltaHash &&
+			result.CorrectionRegression.EvidenceHash == transaction.FixDeltaHash
+		if !legacy {
+			original, regression := result.OriginalCriteria, result.CorrectionRegression
+			transaction.OriginalCriteria = &original
+			transaction.CorrectionRegression = &regression
+		}
+	}
 	if result.Approved && severeFixCaused > 0 {
 		return errors.New("scoped validation cannot approve while recording severe fix-caused defects")
 	}
@@ -505,6 +563,7 @@ func (transaction *Transaction) ValidateFixDeltaResult(result ScopedValidationRe
 		result.Approved = true
 	}
 	transaction.FixCausedFindings = append(transaction.FixCausedFindings, validated...)
+	transaction.FollowUps = append(transaction.FollowUps, result.FollowUps...)
 	if transaction.Mode == ModeJudgmentDay && severeFixCaused > 0 {
 		for _, finding := range validated {
 			if isSevereSeverity(finding.Severity) {
@@ -534,6 +593,27 @@ func (transaction *Transaction) ValidateFixDeltaResult(result ScopedValidationRe
 			transaction.State = StateEscalated
 		} else {
 			transaction.State = StateFixRequired
+		}
+	}
+	return nil
+}
+
+func validateTargetedValidation(result ScopedValidationResult, fixDeltaHash string) error {
+	for name, check := range map[string]ValidationCheck{"original criteria": result.OriginalCriteria, "correction regression": result.CorrectionRegression} {
+		if !validSHA256(check.EvidenceHash) || !validSHA256(check.FixDeltaHash) {
+			return fmt.Errorf("%s check requires SHA-256 evidence and fix-delta identities", name)
+		}
+		if check.FixDeltaHash != fixDeltaHash {
+			return fmt.Errorf("%s check is stale for the immutable fix delta", name)
+		}
+	}
+	return nil
+}
+
+func validateFollowUps(followUps []FollowUp) error {
+	for index, followUp := range followUps {
+		if strings.TrimSpace(followUp.Observation) == "" || len(followUp.ProofRefs) == 0 {
+			return fmt.Errorf("follow_up[%d] requires observation and proof_refs", index)
 		}
 	}
 	return nil
@@ -606,6 +686,11 @@ func ParseTransaction(payload []byte) (Transaction, error) {
 }
 
 func (transaction *Transaction) validate() error {
+	// v1 transactions did not persist follow-ups. Their absence is equivalent to
+	// the explicit empty array required by the current lifecycle.
+	if transaction.FollowUps == nil {
+		transaction.FollowUps = []FollowUp{}
+	}
 	// v1 events written before semantic ledger binding used only ledger_hash.
 	// Their immutable findings deterministically supply the missing binding on
 	// read; the native gate still compares it to the retained ledger content.
@@ -655,13 +740,37 @@ func (transaction *Transaction) validate() error {
 			return errors.New("transaction release tree must match final candidate tree")
 		}
 	}
-	if transaction.Findings == nil || transaction.Classifications == nil || transaction.Outcomes == nil || transaction.FixFindingIDs == nil || transaction.PendingRefuterIDs == nil || transaction.FixCausedFindings == nil || transaction.JudgeProofs == nil {
+	if transaction.Findings == nil || transaction.Classifications == nil || transaction.Outcomes == nil || transaction.FixFindingIDs == nil || transaction.PendingRefuterIDs == nil || transaction.FixCausedFindings == nil || transaction.FollowUps == nil || transaction.JudgeProofs == nil {
 		return errors.New("transaction collections must be explicit arrays or objects")
+	}
+	if transaction.GenesisPaths != nil {
+		paths, err := canonicalPaths(transaction.GenesisPaths)
+		if err != nil || !equalStrings(paths, transaction.GenesisPaths) {
+			return errors.New("genesis paths must be canonical")
+		}
+		if err := pathsAreSubset(transaction.Snapshot.Paths, transaction.GenesisPaths); err != nil {
+			return errors.New("snapshot paths must remain within immutable genesis paths")
+		}
+	}
+	if (transaction.OriginalCriteria == nil) != (transaction.CorrectionRegression == nil) {
+		return errors.New("targeted validation checks must be persisted together")
+	}
+	if transaction.OriginalCriteria != nil {
+		result := ScopedValidationResult{OriginalCriteria: *transaction.OriginalCriteria, CorrectionRegression: *transaction.CorrectionRegression}
+		if transaction.Mode != ModeOrdinary4R || transaction.Counters.ScopedFixValidations != 1 || transaction.State == StateFixValidating {
+			return errors.New("targeted validation checks require a completed ordinary scoped validation")
+		}
+		if err := validateTargetedValidation(result, transaction.FixDeltaHash); err != nil {
+			return err
+		}
 	}
 	for index, finding := range transaction.FixCausedFindings {
 		if err := validateStructuredFinding(finding); err != nil {
 			return fmt.Errorf("fix-caused finding[%d]: %w", index, err)
 		}
+	}
+	if err := validateFollowUps(transaction.FollowUps); err != nil {
+		return err
 	}
 	if err := transaction.validateFindingRouting(); err != nil {
 		return err

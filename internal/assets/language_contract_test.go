@@ -125,6 +125,15 @@ func TestSupportedAgentSDDLanguageMatrix(t *testing.T) {
 	}
 }
 
+func TestShippedReviewAssetsDoNotInstructFixTouchedLineDiscovery(t *testing.T) {
+	for _, path := range allReviewLifecycleAssetPaths(t) {
+		content := MustRead(path)
+		if strings.Contains(content, "MUST review only fix-touched lines") {
+			t.Fatalf("%s retains stale broad post-fix discovery instructions", path)
+		}
+	}
+}
+
 func TestSDDOrchestratorAssetsEnforceInteractiveProposalGates(t *testing.T) {
 	assetPaths := allSDDOrchestratorAssetPaths(t)
 	if len(assetPaths) < 11 {
@@ -351,6 +360,27 @@ func allSDDOrchestratorAssetPaths(t *testing.T) []string {
 		return nil
 	}); err != nil {
 		t.Fatalf("WalkDir embedded assets: %v", err)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func allReviewLifecycleAssetPaths(t *testing.T) []string {
+	t.Helper()
+	var paths []string
+	if err := fs.WalkDir(FS, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".md") {
+			return nil
+		}
+		if strings.Contains(MustRead(path), "MUST review only fix-touched lines") {
+			paths = append(paths, path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WalkDir embedded review assets: %v", err)
 	}
 	sort.Strings(paths)
 	return paths

@@ -612,6 +612,25 @@ func TestStoreLoadChainBindsGenesisHeadAndOrderedIdentity(t *testing.T) {
 	}
 }
 
+func TestValidateSuccessorRejectsTamperedOutOfScopeFixSnapshot(t *testing.T) {
+	previous := ordinaryAtFixing(t)
+	next := *previous
+	next.State = StateFixValidating
+	next.Snapshot = previous.Snapshot
+	next.Snapshot.Kind = TargetFixDiff
+	next.Snapshot.BaseTree = previous.FinalCandidateTree
+	next.Snapshot.CandidateTree = tree("c")
+	next.Snapshot.LedgerIDs = []string{"R1-DET"}
+	next.Snapshot.Paths = []string{"internal/tampered.go"}
+	next.Snapshot.Identity = hash("3")
+	next.FinalCandidateTree = next.Snapshot.CandidateTree
+	next.FixDeltaHash = FixDeltaHashForSnapshot(next.Snapshot)
+
+	if err := validateSuccessor(*previous, next, "review/complete-fix"); err == nil {
+		t.Fatal("validateSuccessor() accepted a hash-valid fix snapshot outside genesis scope")
+	}
+}
+
 func approvedStoreTransaction(t *testing.T, lineage string) Transaction {
 	t.Helper()
 	tx := newTestTransaction(t, ModeOrdinary4R)

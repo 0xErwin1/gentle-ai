@@ -132,7 +132,14 @@ func RunReviewStep(args []string, stdout io.Writer) error {
 		if input.Snapshot == nil {
 			return errors.New("complete-fix requires snapshot")
 		}
-		err = tx.CompleteFix(*input.Snapshot, input.FixDeltaHash, input.LedgerIDs)
+		derived, buildErr := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).Build(context.Background(), reviewtransaction.Target{
+			Kind: reviewtransaction.TargetFixDiff, BaseRef: tx.FinalCandidateTree,
+			IntendedUntracked: input.Snapshot.IntendedUntracked, LedgerIDs: input.LedgerIDs,
+		})
+		if buildErr != nil {
+			return fmt.Errorf("derive correction snapshot: %w", buildErr)
+		}
+		err = tx.CompleteFix(derived, input.FixDeltaHash, input.LedgerIDs)
 	case "validate-fix":
 		if input.Validation == nil {
 			return errors.New("validate-fix requires validation")
@@ -156,6 +163,9 @@ func RunReviewStep(args []string, stdout io.Writer) error {
 	operationName := "review/" + *operation
 	if *operation == "bind-release" {
 		operationName = "review/bind-release-evidence"
+	}
+	if *operation == "validate-fix" {
+		operationName = "review/validate-targeted-fix"
 	}
 	revision, err := store.Append(chain.HeadRevision, reviewtransaction.Record{Operation: operationName, Transaction: tx})
 	if err != nil {
