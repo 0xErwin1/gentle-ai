@@ -525,10 +525,11 @@ func tuiExecute(
 		for _, a := range selection.Agents {
 			agentIDs = append(agentIDs, string(a))
 		}
-		// Non-fatal: a state write failure must not break an otherwise successful install.
 		claudePhaseState := claudePhaseAssignmentsToState(selection.ClaudePhaseAssignments)
-		_ = state.Write(homeDir, state.InstallState{
+		if writeErr := state.Write(homeDir, state.InstallState{
 			InstalledAgents:             agentIDs,
+			CommunityTools:              appCommunityToolIDsToStrings(selection.CommunityTools),
+			CommunityToolsConfigured:    true,
 			ClaudeModelAssignments:      claudeLegacyAssignmentsForState(selection.ClaudeModelAssignments, claudePhaseState),
 			ClaudePhaseAssignments:      claudePhaseState,
 			KiroModelAssignments:        kiroAliasesToStrings(selection.KiroModelAssignments),
@@ -538,10 +539,23 @@ func tuiExecute(
 			CodexPhaseModelAssignments:  selection.CodexPhaseModelAssignments,
 			ModelAssignments:            modelAssignmentsToState(selection.ModelAssignments),
 			Persona:                     string(selection.Persona),
-		})
+		}); writeErr != nil {
+			execResult.Err = fmt.Errorf("persist install state: %w", writeErr)
+		}
 	}
 
 	return execResult
+}
+
+func appCommunityToolIDsToStrings(tools []model.CommunityToolID) []string {
+	if tools == nil {
+		return nil
+	}
+	result := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		result = append(result, string(tool))
+	}
+	return result
 }
 
 // tuiRestore restores a backup from its manifest.
@@ -585,7 +599,9 @@ func tuiSync(homeDir string) tui.SyncFunc {
 
 		// Persist model assignments that were actually used (from overrides
 		// or loaded from state) so the next sync preserves them too.
-		persistAssignments(homeDir, selection)
+		if err := persistAssignments(homeDir, selection); err != nil {
+			return nil, fmt.Errorf("persist model assignments: %w", err)
+		}
 
 		return result.ChangedFiles, nil
 	}
@@ -779,7 +795,7 @@ func loadPersistedAssignments(homeDir string, selection *model.Selection) {
 //   - nil: not provided (partial sync) — leave the existing state value untouched.
 //   - non-nil, len > 0: new per-phase assignments — write them.
 //   - non-nil, len == 0: explicit clear signal (preset selected) — delete the key.
-func persistAssignments(homeDir string, selection model.Selection) {
+func persistAssignments(homeDir string, selection model.Selection) error {
 	hasAssignmentSignal := selection.ClaudeModelAssignments != nil ||
 		selection.ClaudePhaseAssignments != nil ||
 		selection.KiroModelAssignments != nil ||
@@ -790,14 +806,14 @@ func persistAssignments(homeDir string, selection model.Selection) {
 		selection.CodexCarrilModelAssignments != nil ||
 		selection.CodexPhaseModelAssignments != nil
 	if len(selection.ClaudeModelAssignments) == 0 && len(selection.ClaudePhaseAssignments) == 0 && len(selection.KiroModelAssignments) == 0 && len(selection.ModelAssignments) == 0 && len(selection.CodexModelAssignments) == 0 && len(selection.CodexCarrilModelAssignments) == 0 && len(selection.CodexPhaseModelAssignments) == 0 && !hasAssignmentSignal {
-		return
+		return nil
 	}
 	current, err := state.Read(homeDir)
 	if err != nil {
 		// State file may not exist yet (e.g. pre-state users). Other read
 		// failures, such as invalid JSON, must not overwrite existing state.
 		if !errors.Is(err, os.ErrNotExist) {
-			return
+			return nil
 		}
 		current = state.InstallState{}
 	}
@@ -857,7 +873,7 @@ func persistAssignments(homeDir string, selection model.Selection) {
 			current.ModelAssignments = nil
 		}
 	}
-	_ = state.Write(homeDir, current)
+	return state.Write(homeDir, current)
 }
 
 // claudeAliasesToStrings converts a typed ClaudeModelAlias map to plain strings
