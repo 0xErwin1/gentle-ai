@@ -31,6 +31,21 @@ func TestWriteAtomicPropagatesParentDirectorySyncFailure(t *testing.T) {
 	}
 }
 
+func TestWriteAtomicToleratesUnsupportedParentDirectorySync(t *testing.T) {
+	originalGOOS := reviewRuntimeGOOS
+	originalSync := syncReviewDirectory
+	reviewRuntimeGOOS = func() string { return "linux" }
+	syncReviewDirectory = func(string) error { return os.ErrInvalid }
+	t.Cleanup(func() {
+		reviewRuntimeGOOS = originalGOOS
+		syncReviewDirectory = originalSync
+	})
+
+	if err := writeAtomic(filepath.Join(t.TempDir(), "state.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("writeAtomic() unsupported directory sync error = %v", err)
+	}
+}
+
 func TestStoreIsAppendOnlyAtomicAndRejectsStaleWriters(t *testing.T) {
 	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
 	tx := newTestTransaction(t, ModeOrdinary4R)

@@ -48,7 +48,7 @@ func TestResolveArchiveRequiresApprovedExactReviewReceipt(t *testing.T) {
 				}
 			},
 			wantGate: reviewtransaction.GateInvalidated, wantArchive: DependencyBlocked,
-			wantNext: "resolve-review", wantReason: "approved review receipt is missing",
+			wantNext: "resolve-review", wantReason: "terminal review receipt is missing",
 		},
 		{
 			name:     "exact authoritative artifacts allow archive",

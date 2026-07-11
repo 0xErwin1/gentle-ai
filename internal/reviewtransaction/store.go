@@ -838,8 +838,9 @@ func writeAtomic(path string, payload []byte, mode os.FileMode) error {
 		return err
 	}
 	if err := syncReviewDirectory(filepath.Dir(path)); err != nil {
-		// NTFS does not support syncing directory handles.
-		if !(reviewRuntimeGOOS() == "windows" && errors.Is(err, os.ErrPermission)) {
+		// NTFS and some filesystems do not support syncing directory handles.
+		unsupported := errors.Is(err, os.ErrInvalid) || reviewRuntimeGOOS() == "windows" && errors.Is(err, os.ErrPermission)
+		if !unsupported {
 			return fmt.Errorf("sync parent directory for %q: %w", path, err)
 		}
 	}

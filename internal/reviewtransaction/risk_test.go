@@ -71,6 +71,24 @@ func TestCountChangedLinesHasOneCrossAdapterRule(t *testing.T) {
 	}
 }
 
+func TestConfigurationReviewPathRecognizesDotEnvVariants(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{path: ".env", want: true},
+		{path: "config/.env.production", want: true},
+		{path: "config/env.example", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := isConfigurationReviewPath(tt.path); got != tt.want {
+				t.Fatalf("isConfigurationReviewPath(%q) = %t, want %t", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCorrectionBudgetBoundaries(t *testing.T) {
 	tests := []struct {
 		original int

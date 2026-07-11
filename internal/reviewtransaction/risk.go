@@ -153,6 +153,9 @@ func isNonExecutableReviewPath(path string) bool {
 
 func isConfigurationReviewPath(path string) bool {
 	base := strings.ToLower(filepath.Base(path))
+	if base == ".env" || strings.HasPrefix(base, ".env.") {
+		return true
+	}
 	switch base {
 	case "go.mod", "go.sum", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "dockerfile", "makefile":
 		return true
