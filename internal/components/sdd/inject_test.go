@@ -21,6 +21,7 @@ import (
 	windsurfagent "github.com/gentleman-programming/gentle-ai/internal/agents/windsurf"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	opencodemodel "github.com/gentleman-programming/gentle-ai/internal/opencode"
 	// agents/cursor, agents/gemini, agents/vscode used via agents.NewAdapter()
 )
 
@@ -2787,10 +2788,23 @@ func TestInjectOpenClawRejectsAmbiguousWorkspacePath(t *testing.T) {
 func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 	mockNoPackageManager(t)
 	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	seed := `{"$schema":"https://opencode.ai/config.json","username":"review-user","agent":{"custom":{"model":"custom/provider-model","description":"preserve me"}}}`
+	if err := os.WriteFile(settingsPath, []byte(seed), 0o644); err != nil {
+		t.Fatalf("WriteFile(opencode.json) error = %v", err)
+	}
 
 	assignments := map[string]model.ModelAssignment{
-		"sdd-init":  {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
-		"sdd-apply": {ProviderID: "openai", ModelID: "gpt-4o"},
+		"sdd-init":           {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
+		"sdd-apply":          {ProviderID: "openai", ModelID: "gpt-4o"},
+		"review-risk":        {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+		"review-readability": {ProviderID: "openai", ModelID: "gpt-5-mini"},
+		"review-reliability": {ProviderID: "openai", ModelID: "gpt-5"},
+		"review-resilience":  {ProviderID: "anthropic", ModelID: "claude-sonnet-4"},
+		"review-refuter":     {ProviderID: "openai", ModelID: "gpt-5", Effort: "high"},
 	}
 
 	result, err := Inject(home, opencodeAdapter(), "multi", InjectOptions{OpenCodeModelAssignments: assignments})
@@ -2801,7 +2815,6 @@ func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 		t.Fatal("Inject(multi, assignments) changed = false")
 	}
 
-	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	content, err := os.ReadFile(settingsPath)
 	if err != nil {
 		t.Fatalf("ReadFile(opencode.json) error = %v", err)
@@ -2815,6 +2828,13 @@ func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 	agentMap, ok := root["agent"].(map[string]any)
 	if !ok {
 		t.Fatal("opencode.json missing agent map")
+	}
+	if root["$schema"] != "https://opencode.ai/config.json" || root["username"] != "review-user" {
+		t.Fatalf("unrelated config was not preserved: %v", root)
+	}
+	custom := agentMap["custom"].(map[string]any)
+	if custom["model"] != "custom/provider-model" || custom["description"] != "preserve me" {
+		t.Fatalf("unrelated custom agent changed: %v", custom)
 	}
 
 	// Verify sdd-init has the assigned model.
@@ -2833,6 +2853,21 @@ func TestInjectOpenCodeMultiModeWithModelAssignments(t *testing.T) {
 	}
 	if m, _ := applyAgent["model"].(string); m != "openai/gpt-4o" {
 		t.Fatalf("sdd-apply model = %q, want %q", m, "openai/gpt-4o")
+	}
+	for agent, want := range map[string]string{
+		"review-risk":        "anthropic/claude-sonnet-4",
+		"review-readability": "openai/gpt-5-mini",
+		"review-reliability": "openai/gpt-5",
+		"review-resilience":  "anthropic/claude-sonnet-4",
+		"review-refuter":     "openai/gpt-5",
+	} {
+		definition := agentMap[agent].(map[string]any)
+		if got := definition["model"]; got != want {
+			t.Fatalf("%s model = %q, want %q", agent, got, want)
+		}
+	}
+	if got := agentMap["review-refuter"].(map[string]any)["variant"]; got != "high" {
+		t.Fatalf("review-refuter variant = %q, want high", got)
 	}
 
 	// Unassigned phases should NOT have a model field — the overlay no longer
@@ -4919,7 +4954,7 @@ func TestInjectWritesNativeReviewAgentFiles(t *testing.T) {
 				t.Fatalf("Inject(%s) changed = false", tt.name)
 			}
 
-			for _, agent := range reviewAgentNames {
+			for _, agent := range opencodemodel.ReviewLensPhases() {
 				assertNativeAgentFile(t, filepath.Join(tt.agentsDir(home), agent+".md"), `"findings":[]`)
 				for _, ext := range tt.extraExts {
 					want := tt.extraContains[ext]
@@ -4929,13 +4964,13 @@ func TestInjectWritesNativeReviewAgentFiles(t *testing.T) {
 					assertNativeAgentFile(t, filepath.Join(tt.agentsDir(home), agent+ext), want)
 				}
 			}
-			assertNativeAgentFile(t, filepath.Join(tt.agentsDir(home), reviewRefuterAgentName+".md"), "complete merged list of BLOCKER/CRITICAL candidates")
+			assertNativeAgentFile(t, filepath.Join(tt.agentsDir(home), opencodemodel.ReviewRefuterAgent+".md"), "complete merged list of BLOCKER/CRITICAL candidates")
 			for _, ext := range tt.extraExts {
 				want := tt.extraContains[ext]
 				if ext == ".yaml" {
-					want += reviewRefuterAgentName + ".md"
+					want += opencodemodel.ReviewRefuterAgent + ".md"
 				}
-				assertNativeAgentFile(t, filepath.Join(tt.agentsDir(home), reviewRefuterAgentName+ext), want)
+				assertNativeAgentFile(t, filepath.Join(tt.agentsDir(home), opencodemodel.ReviewRefuterAgent+ext), want)
 			}
 		})
 	}

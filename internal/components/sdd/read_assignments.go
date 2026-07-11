@@ -1,20 +1,20 @@
 package sdd
 
 import (
-	"encoding/json"
 	"os"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 )
 
 // configurableAgentSet is the set of valid agent names that may appear in
-// opencode.json. It includes SDD phases, JD agents, and the gentle-orchestrator coordinator.
+// opencode.json. It includes SDD, Judgment Day, review, and coordinator agents.
 var configurableAgentSet = buildConfigurableAgentSet()
 
 func buildConfigurableAgentSet() map[string]bool {
-	phases := opencode.ConfigurableAgentPhases() // SDD + JD phases
+	phases := opencode.ConfigurableAgentPhases()
 	set := make(map[string]bool, len(phases)+1)
 	for _, p := range phases {
 		set[p] = true
@@ -51,8 +51,8 @@ func ReadCurrentModelAssignments(settingsPath string) (map[string]model.ModelAss
 		return nil, err
 	}
 
-	var root map[string]any
-	if err := json.Unmarshal(data, &root); err != nil {
+	root, err := filemerge.UnmarshalJSONObject(data)
+	if err != nil {
 		// Unparseable JSON — return empty map, no error.
 		return map[string]model.ModelAssignment{}, nil
 	}

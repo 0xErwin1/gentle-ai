@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/internal/opencode"
 )
 
 var requiredLedgerClauses = boundedReviewRequiredClauses
@@ -142,7 +143,7 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 				assertNoReviewerLifecycleInstructions(t, path+" "+name, prompt)
 				assertOpenCodeReadOnlyTools(t, path+" "+name, agent["tools"].(map[string]any))
 			}
-			refuter := agentsMap[reviewRefuterAgentName].(map[string]any)
+			refuter := agentsMap[opencode.ReviewRefuterAgent].(map[string]any)
 			refuterPrompt := refuter["prompt"].(string)
 			if !strings.Contains(refuterPrompt, "exactly ONE transaction-wide inferential batch") || !strings.Contains(refuterPrompt, "terminate") {
 				t.Errorf("%s refuter prompt is not bounded: %s", path, refuterPrompt)

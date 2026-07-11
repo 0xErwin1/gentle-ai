@@ -1162,7 +1162,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.ModelPicker.Mode == screens.ModePhaseList && keyStr == "backspace" &&
 		len(m.ModelPicker.AvailableIDs) > 0 {
 		rows := screens.ModelPickerRowsForProfile()
-		if m.Cursor < len(rows) && m.Cursor != screens.SeparatorRowIdx() {
+		if m.Cursor < len(rows) && !screens.IsModelPickerSeparatorRow(rows[m.Cursor]) {
 			m.ModelPicker.SelectedPhaseIdx = m.Cursor
 			m.Selection.ModelAssignments = screens.ClearModelPickerAssignment(&m.ModelPicker, m.Selection.ModelAssignments)
 			return m, nil
@@ -1336,7 +1336,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		// Skip separator row in model picker — it is not selectable.
-		if m.shouldSkipModelPickerSeparator() && m.Cursor == screens.SeparatorRowIdx() && m.Cursor > 0 {
+		if m.shouldSkipModelPickerSeparator() && m.isModelPickerSeparatorCursor() && m.Cursor > 0 {
 			m.Cursor--
 		}
 		return m, nil
@@ -1360,7 +1360,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		// Skip separator row in model picker — it is not selectable.
-		if m.shouldSkipModelPickerSeparator() && m.Cursor == screens.SeparatorRowIdx() {
+		if m.shouldSkipModelPickerSeparator() && m.isModelPickerSeparatorCursor() {
 			if m.Cursor+1 < count {
 				m.Cursor++
 			}
@@ -1383,7 +1383,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		// Skip separator row in model picker — it is not selectable.
-		if m.shouldSkipModelPickerSeparator() && m.Cursor == screens.SeparatorRowIdx() && m.Cursor > 0 {
+		if m.shouldSkipModelPickerSeparator() && m.isModelPickerSeparatorCursor() && m.Cursor > 0 {
 			m.Cursor--
 		}
 		return m, nil
@@ -1402,7 +1402,7 @@ func (m Model) handleKeyPress(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		// Skip separator row in model picker — it is not selectable.
-		if m.shouldSkipModelPickerSeparator() && m.Cursor == screens.SeparatorRowIdx() {
+		if m.shouldSkipModelPickerSeparator() && m.isModelPickerSeparatorCursor() {
 			if m.Cursor+1 < count {
 				m.Cursor++
 			}
@@ -1513,6 +1513,14 @@ func (m Model) shouldSkipModelPickerSeparator() bool {
 	}
 	return (m.Screen == ScreenModelPicker && !m.ModelPicker.ForProfile) ||
 		(m.Screen == ScreenProfileCreate && m.ProfileCreateStep == 1 && m.ModelPicker.Mode == screens.ModePhaseList)
+}
+
+func (m Model) isModelPickerSeparatorCursor() bool {
+	rows := screens.ModelPickerRows()
+	if m.ModelPicker.ForProfile {
+		rows = screens.ModelPickerRowsForProfile()
+	}
+	return m.Cursor >= 0 && m.Cursor < len(rows) && screens.IsModelPickerSeparatorRow(rows[m.Cursor])
 }
 
 func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
@@ -2054,7 +2062,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		rows := screens.ModelPickerRows()
 		if m.Cursor < len(rows) {
 			// Skip separator row — it is not actionable.
-			if !m.ModelPicker.ForProfile && m.Cursor == screens.SeparatorRowIdx() {
+			if screens.IsModelPickerSeparatorRow(rows[m.Cursor]) {
 				return m, nil
 			}
 			// Enter sub-selection: pick provider then model.
@@ -4263,7 +4271,7 @@ func (m Model) confirmProfileCreate() (tea.Model, tea.Cmd) {
 		}
 		rows := screens.ModelPickerRowsForProfile()
 		if m.Cursor < len(rows) {
-			if m.Cursor == screens.SeparatorRowIdx() {
+			if screens.IsModelPickerSeparatorRow(rows[m.Cursor]) {
 				return m, nil
 			}
 			// Enter sub-selection: pick provider then model.
