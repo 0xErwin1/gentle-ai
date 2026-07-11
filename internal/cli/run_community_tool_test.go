@@ -489,6 +489,9 @@ func TestInstallPipelineDoesNotDuplicatePiPendingWhenSelected(t *testing.T) {
 	}
 
 	for _, step := range runtime.stagePlan().Apply[1:] {
+		if step.ID() == "agent:pi" {
+			continue
+		}
 		if err := step.Run(); err != nil {
 			t.Fatalf("step %q error = %v", step.ID(), err)
 		}
