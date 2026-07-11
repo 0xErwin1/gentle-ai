@@ -30,21 +30,39 @@ type GateRequest struct {
 	LedgerArtifact   string                      `json:"ledger_artifact"`
 	LedgerContent    string                      `json:"ledger_content,omitempty"`
 	FixDeltaArtifact string                      `json:"fix_delta_artifact,omitempty"`
+	FixDeltaContent  string                      `json:"fix_delta_content,omitempty"`
 	EvidenceArtifact string                      `json:"evidence_artifact"`
 	EvidenceContent  string                      `json:"evidence_content,omitempty"`
 	ExternalEvidence ExternalEvidenceDisposition `json:"external_evidence,omitempty"`
+	PrePR            *PrePRRequest               `json:"pre_pr,omitempty"`
 	Release          *ReleaseRequest             `json:"release,omitempty"`
+	preimages        *gateArtifactPreimages
+}
+
+type PrePRRequest struct {
+	CIAttestationArtifact string `json:"ci_attestation_artifact"`
 }
 
 type ReleaseRequest struct {
 	Revision                    string                 `json:"revision"`
 	ConfigurationArtifact       string                 `json:"configuration_artifact"`
+	ConfigurationContent        string                 `json:"configuration_content,omitempty"`
 	GeneratedArtifact           string                 `json:"generated_artifact"`
+	GeneratedContent            string                 `json:"generated_content,omitempty"`
 	ProvenanceArtifact          string                 `json:"provenance_artifact"`
+	ProvenanceContent           string                 `json:"provenance_content,omitempty"`
 	PublicationBoundaryArtifact string                 `json:"publication_boundary_artifact"`
+	PublicationBoundaryContent  string                 `json:"publication_boundary_content,omitempty"`
 	PublicationState            PublicationState       `json:"publication_state"`
 	EvidenceFreshnessArtifact   string                 `json:"evidence_freshness_artifact"`
+	EvidenceFreshnessContent    string                 `json:"evidence_freshness_content,omitempty"`
 	EvidenceFreshnessState      EvidenceFreshnessState `json:"evidence_freshness_state"`
+}
+
+type gateArtifactPreimages struct {
+	policy, ledger, fixDelta, evidence                    []byte
+	configuration, generated, provenance                  []byte
+	publicationBoundary, evidenceFreshness, ciAttestation []byte
 }
 
 type NativeGateEvaluation struct {
@@ -52,6 +70,9 @@ type NativeGateEvaluation struct {
 	Reason  string
 	Context GateContext
 }
+
+var finalGateAuthorizationHook = func() {}
+var artifactPreimagesReadHook = func() {}
 
 func ParseGateRequest(payload []byte) (GateRequest, error) {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
@@ -116,36 +137,36 @@ func EvaluateNativeGate(ctx context.Context, repo string, receipt Receipt, reque
 	if !reflect.DeepEqual(authoritativeReceipt, receipt) {
 		return invalid("receipt does not match the authoritative transaction revision")
 	}
-
-	lifecycleTarget, err := lifecycleTargetForGate(ctx, repo, request)
+	preimages, err := readGateArtifactPreimages(request)
 	if err != nil {
-		return invalid("current lifecycle target cannot be derived: " + err.Error())
+		return invalid("persisted gate artifacts cannot be read: " + err.Error())
 	}
-	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(ctx, lifecycleTarget)
+	artifactPreimagesReadHook()
+	snapshot, resolvedPrePR, err := buildLifecycleSnapshot(ctx, repo, request)
 	if err != nil {
 		return invalid("current repository target cannot be derived: " + err.Error())
 	}
 	if request.Gate == GatePrePush && record.Transaction.Snapshot.Kind == TargetCurrentChanges && snapshot.BaseTree == snapshot.CandidateTree {
 		return invalid("pre-push current-changes receipt requires a delivered tree change")
 	}
-	policyHash, err := hashArtifactSource(request.PolicyArtifact, request.PolicyContent)
-	if err != nil {
-		return invalid("policy artifact cannot be hashed: " + err.Error())
-	}
-	ledgerHash, ledgerFindingsHash, err := hashLedgerArtifactSource(request.LedgerArtifact, request.LedgerContent)
+	policyHash := hashArtifactPayload(preimages.policy)
+	ledgerHash, ledgerFindingsHash, err := hashLedgerPayload(preimages.ledger)
 	if err != nil {
 		return invalid("frozen ledger cannot be validated: " + err.Error())
 	}
 	if ledgerFindingsHash != record.Transaction.LedgerFindingsHash {
 		return invalid("frozen ledger findings do not match the authoritative transaction")
 	}
-	evidenceHash, err := hashArtifactSource(request.EvidenceArtifact, request.EvidenceContent)
-	if err != nil {
-		return invalid("verify evidence cannot be hashed: " + err.Error())
-	}
+	evidenceHash := hashArtifactPayload(preimages.evidence)
 	fixDeltaHash := record.Transaction.FixDeltaHash
 	if record.Transaction.Snapshot.Kind == TargetFixDiff {
 		fixDeltaHash = FixDeltaHashForSnapshot(record.Transaction.Snapshot)
+	}
+	if request.FixDeltaContent != "" {
+		fixDeltaHash, err = validateFixDeltaArtifact(preimages.fixDelta, record.Transaction)
+		if err != nil {
+			return invalid("canonical fix delta artifact cannot be validated: " + err.Error())
+		}
 	}
 
 	gateContext := GateContext{
@@ -157,8 +178,13 @@ func EvaluateNativeGate(ctx context.Context, repo string, receipt Receipt, reque
 		BaseRelationshipValid: snapshot.BaseTree == receipt.BaseTree,
 		ExternalEvidence:      request.ExternalEvidence,
 	}
+	if request.Gate == GatePrePR && snapshot.BaseTree != receipt.BaseTree {
+		if compatibility, compatibilityErr := deriveBaseAdvanceCompatibility(ctx, repo, receipt, request, snapshot, resolvedPrePR, preimages); compatibilityErr == nil {
+			gateContext.BaseAdvance = &compatibility
+		}
+	}
 	if request.Gate == GateRelease {
-		release, err := deriveReleaseEvidence(ctx, repo, request.Release)
+		release, err := deriveReleaseEvidence(ctx, repo, request.Release, preimages)
 		if err != nil {
 			return invalid("release boundary cannot be derived: " + err.Error())
 		}
@@ -168,7 +194,125 @@ func EvaluateNativeGate(ctx context.Context, repo string, receipt Receipt, reque
 		gateContext.Release = &release
 	}
 	result := validateDerivedGate(receipt, gateContext)
+	if result == GateAllow {
+		finalGateAuthorizationHook()
+		finalSnapshot, finalRefs, err := buildLifecycleSnapshot(ctx, repo, request)
+		if err != nil || !reflect.DeepEqual(finalSnapshot, snapshot) || !sameResolvedPrePRRefs(finalRefs, resolvedPrePR) {
+			return invalid("repository target changed during final authorization")
+		}
+	}
 	return NativeGateEvaluation{Result: result, Reason: nativeGateReason(result), Context: gateContext}
+}
+
+type resolvedPrePRRefs struct {
+	BaseRef    string
+	Remote     string
+	BaseCommit string
+	HeadCommit string
+}
+
+func buildLifecycleSnapshot(ctx context.Context, repo string, request GateRequest) (Snapshot, *resolvedPrePRRefs, error) {
+	target, err := lifecycleTargetForGate(ctx, repo, request)
+	if err != nil {
+		return Snapshot{}, nil, err
+	}
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(ctx, target)
+	if err != nil || request.Gate != GatePrePR {
+		return snapshot, nil, err
+	}
+	configured, err := publicationRemoteConfigured(ctx, repo)
+	if err != nil || !configured {
+		return snapshot, nil, err
+	}
+	baseRef, remote, base, err := resolveAuthoritativePublicationBase(ctx, repo)
+	if err != nil {
+		return Snapshot{}, nil, err
+	}
+	head, err := resolveCommit(ctx, repo, "HEAD")
+	if err != nil {
+		return Snapshot{}, nil, err
+	}
+	snapshot, err = (SnapshotBuilder{Repo: repo}).Build(ctx, Target{Kind: TargetExactRevision, Revision: base + ".." + head})
+	if err != nil {
+		return Snapshot{}, nil, err
+	}
+	return snapshot, &resolvedPrePRRefs{BaseRef: baseRef, Remote: remote, BaseCommit: base, HeadCommit: head}, nil
+}
+
+func publicationRemoteConfigured(ctx context.Context, repo string) (bool, error) {
+	_, configured, err := publicationRemote(ctx, repo)
+	return configured, err
+}
+
+func resolveAuthoritativePublicationBase(ctx context.Context, repo string) (string, string, string, error) {
+	remote, configured, err := publicationRemote(ctx, repo)
+	if err != nil {
+		return "", "", "", err
+	}
+	if !configured {
+		return "", "", "", errors.New("publication remote is not configured")
+	}
+	output, err := runGit(ctx, repo, nil, nil, "ls-remote", "--symref", remote, "HEAD")
+	if err != nil {
+		return "", "", "", fmt.Errorf("query publication remote %q: %w", remote, err)
+	}
+	var baseRef, commit string
+	for _, line := range strings.Split(string(output), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 3 && fields[0] == "ref:" && fields[2] == "HEAD" {
+			baseRef = fields[1]
+		}
+		if len(fields) == 2 && fields[1] == "HEAD" && validGitTree(fields[0]) {
+			commit = fields[0]
+		}
+	}
+	if !strings.HasPrefix(baseRef, "refs/heads/") || !validGitTree(commit) {
+		return "", "", "", errors.New("publication remote does not advertise a default branch HEAD")
+	}
+	local, err := resolveCommit(ctx, repo, commit)
+	if err != nil || local != commit {
+		return "", "", "", errors.New("publication base commit is not available locally; fetch before validation")
+	}
+	return baseRef, remote, commit, nil
+}
+
+func publicationRemote(ctx context.Context, repo string) (string, bool, error) {
+	branchOutput, _ := runGit(ctx, repo, nil, nil, "symbolic-ref", "--quiet", "--short", "HEAD")
+	branch := strings.TrimSpace(string(branchOutput))
+	keys := make([]string, 0, 4)
+	if branch != "" {
+		keys = append(keys, "branch."+branch+".pushRemote")
+	}
+	keys = append(keys, "remote.pushDefault")
+	if branch != "" {
+		keys = append(keys, "branch."+branch+".remote")
+	}
+	for _, key := range keys {
+		output, err := runGit(ctx, repo, nil, nil, "config", "--get", key)
+		if err == nil && strings.TrimSpace(string(output)) != "" {
+			return strings.TrimSpace(string(output)), true, nil
+		}
+	}
+	output, err := runGit(ctx, repo, nil, nil, "config", "--get", "remote.origin.url")
+	if err == nil && strings.TrimSpace(string(output)) != "" {
+		return "origin", true, nil
+	}
+	return "", false, nil
+}
+
+func sameResolvedPrePRRefs(left, right *resolvedPrePRRefs) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
+}
+
+func resolveCommit(ctx context.Context, repo, revision string) (string, error) {
+	output, err := runGit(ctx, repo, nil, nil, "rev-parse", "--verify", strings.TrimSpace(revision)+"^{commit}")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 // lifecycleTargetForGate deliberately derives the candidate from the event's
@@ -235,6 +379,9 @@ func validateGateRequest(request GateRequest) error {
 	if request.Gate != GateRelease && request.Release != nil {
 		return errors.New("release request is only valid at the release gate")
 	}
+	if request.Gate != GatePrePR && request.PrePR != nil {
+		return errors.New("pre-PR evidence is only valid at the pre-PR gate")
+	}
 	switch request.ExternalEvidence {
 	case ExternalEvidenceNone, ExternalEvidenceInvalidating, ExternalEvidenceEscalating:
 	default:
@@ -243,7 +390,7 @@ func validateGateRequest(request GateRequest) error {
 	return nil
 }
 
-func deriveReleaseEvidence(ctx context.Context, repo string, request *ReleaseRequest) (ReleaseEvidence, error) {
+func deriveReleaseEvidence(ctx context.Context, repo string, request *ReleaseRequest, preimages gateArtifactPreimages) (ReleaseEvidence, error) {
 	if request == nil {
 		return ReleaseEvidence{}, errors.New("release request is missing")
 	}
@@ -251,38 +398,11 @@ func deriveReleaseEvidence(ctx context.Context, repo string, request *ReleaseReq
 	if err != nil {
 		return ReleaseEvidence{}, err
 	}
-	hashArtifact := func(label, path string) (string, error) {
-		value, err := HashArtifact(path)
-		if err != nil {
-			return "", fmt.Errorf("%s artifact: %w", label, err)
-		}
-		return value, nil
-	}
-	configurationHash, err := hashArtifact("configuration", request.ConfigurationArtifact)
-	if err != nil {
-		return ReleaseEvidence{}, err
-	}
-	generatedHash, err := hashArtifact("generated", request.GeneratedArtifact)
-	if err != nil {
-		return ReleaseEvidence{}, err
-	}
-	provenanceHash, err := hashArtifact("provenance", request.ProvenanceArtifact)
-	if err != nil {
-		return ReleaseEvidence{}, err
-	}
-	boundaryHash, err := hashArtifact("publication boundary", request.PublicationBoundaryArtifact)
-	if err != nil {
-		return ReleaseEvidence{}, err
-	}
-	freshnessHash, err := hashArtifact("evidence freshness", request.EvidenceFreshnessArtifact)
-	if err != nil {
-		return ReleaseEvidence{}, err
-	}
 	release := ReleaseEvidence{
-		ReleaseTree: revision.CandidateTree, ConfigurationHash: configurationHash,
-		GeneratedArtifactHash: generatedHash, ProvenanceHash: provenanceHash,
-		PublicationBoundaryHash: boundaryHash, PublicationState: request.PublicationState,
-		EvidenceFreshnessHash: freshnessHash, EvidenceFreshnessState: request.EvidenceFreshnessState,
+		ReleaseTree: revision.CandidateTree, ConfigurationHash: hashArtifactPayload(preimages.configuration),
+		GeneratedArtifactHash: hashArtifactPayload(preimages.generated), ProvenanceHash: hashArtifactPayload(preimages.provenance),
+		PublicationBoundaryHash: hashArtifactPayload(preimages.publicationBoundary), PublicationState: request.PublicationState,
+		EvidenceFreshnessHash: hashArtifactPayload(preimages.evidenceFreshness), EvidenceFreshnessState: request.EvidenceFreshnessState,
 	}
 	if err := validateReleaseEvidence(release); err != nil {
 		return ReleaseEvidence{}, err
@@ -303,6 +423,11 @@ func hashArtifactSource(path, content string) (string, error) {
 	return HashArtifact(path)
 }
 
+func hashArtifactPayload(payload []byte) string {
+	sum := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 func hashLedgerArtifactSource(path, content string) (string, string, error) {
 	if strings.TrimSpace(content) == "" {
 		return hashLedgerArtifactBinding(path)
@@ -320,6 +445,116 @@ func hashLedgerArtifactBinding(path string) (string, string, error) {
 
 func hashLedgerPayload(payload []byte) (string, string, error) {
 	return validateCanonicalLedger(payload, nil, "")
+}
+
+func readGateArtifactPreimages(request GateRequest) (gateArtifactPreimages, error) {
+	if request.preimages != nil {
+		return *request.preimages, nil
+	}
+	read := func(label, path, content string, required bool) ([]byte, error) {
+		if content != "" {
+			return []byte(content), nil
+		}
+		if strings.TrimSpace(path) == "" {
+			if required {
+				return nil, fmt.Errorf("%s artifact is required", label)
+			}
+			return nil, nil
+		}
+		payload, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read %s artifact: %w", label, err)
+		}
+		return payload, nil
+	}
+	var result gateArtifactPreimages
+	var err error
+	for _, item := range []struct {
+		label, path, content string
+		required             bool
+		destination          *[]byte
+	}{
+		{"policy", request.PolicyArtifact, request.PolicyContent, true, &result.policy},
+		{"ledger", request.LedgerArtifact, request.LedgerContent, true, &result.ledger},
+		{"fix delta", request.FixDeltaArtifact, request.FixDeltaContent, false, &result.fixDelta},
+		{"verification evidence", request.EvidenceArtifact, request.EvidenceContent, true, &result.evidence},
+	} {
+		*item.destination, err = read(item.label, item.path, item.content, item.required)
+		if err != nil {
+			return gateArtifactPreimages{}, err
+		}
+	}
+	if request.PrePR != nil && request.PrePR.CIAttestationArtifact != "" {
+		result.ciAttestation, err = read("PRE-PR CI attestation", request.PrePR.CIAttestationArtifact, "", true)
+		if err != nil {
+			return gateArtifactPreimages{}, err
+		}
+	}
+	if request.Release != nil {
+		for _, item := range []struct {
+			label, path, content string
+			destination          *[]byte
+		}{
+			{"release configuration", request.Release.ConfigurationArtifact, request.Release.ConfigurationContent, &result.configuration},
+			{"generated manifest", request.Release.GeneratedArtifact, request.Release.GeneratedContent, &result.generated},
+			{"release provenance", request.Release.ProvenanceArtifact, request.Release.ProvenanceContent, &result.provenance},
+			{"publication boundary", request.Release.PublicationBoundaryArtifact, request.Release.PublicationBoundaryContent, &result.publicationBoundary},
+			{"evidence freshness", request.Release.EvidenceFreshnessArtifact, request.Release.EvidenceFreshnessContent, &result.evidenceFreshness},
+		} {
+			*item.destination, err = read(item.label, item.path, item.content, true)
+			if err != nil {
+				return gateArtifactPreimages{}, err
+			}
+		}
+	}
+	return result, nil
+}
+
+func validateFixDeltaArtifact(payload []byte, transaction Transaction) (string, error) {
+	if transaction.FixDeltaHash == EmptyFixDeltaHash {
+		if len(payload) != 0 {
+			return "", errors.New("uncorrected lineage must not name a fix delta artifact")
+		}
+		return EmptyFixDeltaHash, nil
+	}
+	if len(payload) == 0 {
+		return "", errors.New("corrected lineage requires the persisted fix delta artifact")
+	}
+	snapshot, derived, err := HashFixDeltaArtifact(payload)
+	if err != nil {
+		return "", err
+	}
+	if !reflect.DeepEqual(snapshot, transaction.Snapshot) || snapshot.Kind != TargetFixDiff {
+		return "", errors.New("fix delta artifact does not match the terminal correction snapshot")
+	}
+	if derived != transaction.FixDeltaHash {
+		return "", errors.New("fix delta artifact identity does not match the terminal transaction")
+	}
+	return derived, nil
+}
+
+func HashFixDeltaArtifact(payload []byte) (Snapshot, string, error) {
+	var snapshot Snapshot
+	if err := decodeStrictJSON(payload, &snapshot, "fix delta"); err != nil {
+		return Snapshot{}, "", err
+	}
+	if err := validateSnapshot(snapshot); err != nil || snapshot.Kind != TargetFixDiff {
+		return Snapshot{}, "", errors.New("fix delta artifact requires a valid fix-diff snapshot")
+	}
+	return snapshot, FixDeltaHashForSnapshot(snapshot), nil
+}
+
+func decodeStrictJSON(payload []byte, destination any, label string) error {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return fmt.Errorf("parse %s artifact: %w", label, err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return fmt.Errorf("%s artifact contains multiple JSON values", label)
+	}
+	return nil
 }
 
 func HashLedgerArtifact(path string) (string, error) {

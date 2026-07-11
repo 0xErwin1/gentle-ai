@@ -36,11 +36,50 @@ type ReviewStartResult struct {
 }
 
 type ReviewValidateResult struct {
-	Schema  string                       `json:"schema"`
-	Result  reviewtransaction.GateResult `json:"result"`
-	Allowed bool                         `json:"allowed"`
-	Action  string                       `json:"action"`
-	Reason  string                       `json:"reason"`
+	Schema  string                        `json:"schema"`
+	Result  reviewtransaction.GateResult  `json:"result"`
+	Allowed bool                          `json:"allowed"`
+	Action  string                        `json:"action"`
+	Reason  string                        `json:"reason"`
+	Context reviewtransaction.GateContext `json:"context"`
+}
+
+const canonicalEmptyReviewLedger = `{"schema":"gentle-ai.review-ledger/v1","findings":[]}` + "\n"
+
+func newReviewFlagSet(name string, stdout io.Writer, details string) *flag.FlagSet {
+	flags := flag.NewFlagSet(name, flag.ContinueOnError)
+	flags.SetOutput(stdout)
+	flags.Usage = func() {
+		_, _ = fmt.Fprintf(stdout, "Usage: gentle-ai %s [flags]\n\n%s\n\nFlags:\n", name, details)
+		flags.VisitAll(func(current *flag.Flag) {
+			_, _ = fmt.Fprintf(stdout, "  --%s <value>\n      %s", current.Name, current.Usage)
+			if current.DefValue != "" {
+				_, _ = fmt.Fprintf(stdout, " (default %q)", current.DefValue)
+			}
+			_, _ = fmt.Fprintln(stdout)
+		})
+		_, _ = fmt.Fprintln(stdout, "  -h, --help\n      show this help")
+	}
+	return flags
+}
+
+func parseReviewFlags(flags *flag.FlagSet, args []string) error {
+	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func reviewHelpRequested(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return false
 }
 
 type ReviewResumeResult struct {
@@ -96,15 +135,17 @@ type reviewStepStore interface {
 }
 
 func RunReviewStep(args []string, stdout io.Writer) error {
-	flags := flag.NewFlagSet("review-step", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
+	flags := newReviewFlagSet("review-step", stdout, "Append one authoritative lifecycle transition.\nValid --operation values: record-lens-result, record-judge-proofs, freeze-findings, classify-evidence, apply-refuter-outcomes, begin-fix, complete-fix, validate-fix, bind-release, begin-final-verification, complete-final-verification.\nCanonical empty-ledger bytes: "+strings.TrimSuffix(canonicalEmptyReviewLedger, "\n")+`\n`)
 	cwd := flags.String("cwd", "", "repository root")
 	lineage := flags.String("lineage", "", "review lineage identifier")
 	operation := flags.String("operation", "", "lifecycle operation")
 	inputPath := flags.String("input", "", "JSON operation input")
 	ledgerPath := flags.String("ledger", "", "canonical review ledger JSON; required by freeze-findings")
-	if err := flags.Parse(args); err != nil {
+	if err := parseReviewFlags(flags, args); err != nil {
 		return err
+	}
+	if reviewHelpRequested(args) {
+		return nil
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected review-step argument %q", flags.Arg(0))
@@ -234,8 +275,7 @@ func (values *repeatedString) Set(value string) error {
 }
 
 func RunReviewStart(args []string, stdout io.Writer) error {
-	flags := flag.NewFlagSet("review-start", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
+	flags := newReviewFlagSet("review-start", stdout, "Build an immutable target and start an authoritative review transaction.")
 	cwd := flags.String("cwd", "", "repository root")
 	kind := flags.String("kind", string(reviewtransaction.TargetCurrentChanges), "target kind")
 	baseRef := flags.String("base-ref", "", "base revision")
@@ -252,8 +292,11 @@ func RunReviewStart(args []string, stdout io.Writer) error {
 	flags.Var(&intended, "intended-untracked", "repository-relative intended untracked path; repeatable")
 	flags.Var(&ledgerIDs, "ledger-id", "frozen ledger finding ID for fix-diff; repeatable and comma-safe")
 	flags.Var(&selectedLenses, "lens", "selected ordinary bounded review lens; repeatable in canonical 4R order")
-	if err := flags.Parse(args); err != nil {
+	if err := parseReviewFlags(flags, args); err != nil {
 		return err
+	}
+	if reviewHelpRequested(args) {
+		return nil
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected review-start argument %q", flags.Arg(0))
@@ -424,13 +467,15 @@ func isConfigurationReviewPath(path string) bool {
 }
 
 func RunReviewResume(args []string, stdout io.Writer) error {
-	flags := flag.NewFlagSet("review-resume", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
+	flags := newReviewFlagSet("review-resume", stdout, "Re-emit the current authoritative review transaction without consuming budget.")
 	cwd := flags.String("cwd", "", "repository root")
 	lineage := flags.String("lineage", "", "review lineage identifier")
 	machineTransactionOut := flags.String("machine-transaction-out", "", "optional non-authoritative transaction JSON output path")
-	if err := flags.Parse(args); err != nil {
+	if err := parseReviewFlags(flags, args); err != nil {
 		return err
+	}
+	if reviewHelpRequested(args) {
+		return nil
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected review-resume argument %q", flags.Arg(0))
@@ -460,13 +505,15 @@ func RunReviewResume(args []string, stdout io.Writer) error {
 }
 
 func RunReviewBundleExport(args []string, stdout io.Writer) error {
-	flags := flag.NewFlagSet("review-bundle-export", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
+	flags := newReviewFlagSet("review-bundle-export", stdout, "Export the authoritative content-addressed review chain.")
 	cwd := flags.String("cwd", "", "repository root")
 	lineage := flags.String("lineage", "", "review lineage identifier")
 	out := flags.String("out", "", "portable review chain bundle output path")
-	if err := flags.Parse(args); err != nil {
+	if err := parseReviewFlags(flags, args); err != nil {
 		return err
+	}
+	if reviewHelpRequested(args) {
+		return nil
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected review-bundle-export argument %q", flags.Arg(0))
@@ -493,14 +540,16 @@ func RunReviewBundleExport(args []string, stdout io.Writer) error {
 }
 
 func RunReviewBundleImport(args []string, stdout io.Writer) error {
-	flags := flag.NewFlagSet("review-bundle-import", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
+	flags := newReviewFlagSet("review-bundle-import", stdout, "Validate and install a portable review chain into the repository-derived store.")
 	cwd := flags.String("cwd", "", "repository root")
 	bundlePath := flags.String("bundle", "", "portable review chain bundle")
 	receiptPath := flags.String("receipt", "", "terminal review receipt")
 	requestPath := flags.String("request", "", "gate request binding current artifacts and expected chain identity")
-	if err := flags.Parse(args); err != nil {
+	if err := parseReviewFlags(flags, args); err != nil {
 		return err
+	}
+	if reviewHelpRequested(args) {
+		return nil
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected review-bundle-import argument %q", flags.Arg(0))
@@ -577,19 +626,39 @@ func RunReviewBundleImport(args []string, stdout io.Writer) error {
 }
 
 func RunReviewValidate(args []string, stdout io.Writer) error {
-	flags := flag.NewFlagSet("review-validate", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
+	flags := newReviewFlagSet("review-validate", stdout, "Validate a receipt using either --request or native artifact-only flags. Explicit and native modes are mutually exclusive.")
 	cwd := flags.String("cwd", "", "repository root")
 	receiptPath := flags.String("receipt", "", "review receipt JSON")
 	requestPath := flags.String("request", "", "review gate request JSON containing artifact paths, not derived facts")
-	if err := flags.Parse(args); err != nil {
+	lineage := flags.String("lineage", "", "authoritative review lineage identifier (native mode)")
+	gate := flags.String("gate", "", "lifecycle gate: post-apply, pre-commit, pre-push, pre-pr, or release (native mode)")
+	bundlePath := flags.String("bundle", "", "authoritative chain bundle artifact (native mode)")
+	policyPath := flags.String("policy", "", "receipt-bound policy artifact (native mode)")
+	ledgerPath := flags.String("ledger", "", "frozen ledger artifact (native mode)")
+	fixDeltaPath := flags.String("fix-delta", "", "optional correction delta artifact (native mode)")
+	evidencePath := flags.String("evidence", "", "final verification evidence artifact (native mode)")
+	baseRef := flags.String("base-ref", "", "optional expected remote publication base for pre-pr native mode")
+	ciAttestation := flags.String("pre-pr-ci-attestation", "", "signed exact-merged-tree CI attestation for a compatible base advance")
+	requestOut := flags.String("request-out", "", "optional canonical native gate request output path")
+	releaseConfiguration := flags.String("release-configuration", "", "release configuration artifact")
+	releaseGenerated := flags.String("release-generated", "", "generated artifact manifest")
+	releaseProvenance := flags.String("release-provenance", "", "release provenance artifact")
+	releaseBoundary := flags.String("release-publication-boundary", "", "semantic sealed publication boundary artifact")
+	releaseFreshness := flags.String("release-evidence-freshness", "", "semantic current evidence freshness artifact")
+	manifest := flags.String("intended-untracked-manifest", "", "newline-delimited intended untracked paths")
+	var intended repeatedString
+	flags.Var(&intended, "intended-untracked", "repository-relative intended untracked path; repeatable")
+	if err := parseReviewFlags(flags, args); err != nil {
 		return err
+	}
+	if reviewHelpRequested(args) {
+		return nil
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected review-validate argument %q", flags.Arg(0))
 	}
-	if strings.TrimSpace(*cwd) == "" || strings.TrimSpace(*receiptPath) == "" || strings.TrimSpace(*requestPath) == "" {
-		return errors.New("review-validate requires --cwd, --receipt, and --request")
+	if strings.TrimSpace(*cwd) == "" || strings.TrimSpace(*receiptPath) == "" {
+		return errors.New("review-validate requires --cwd and --receipt")
 	}
 	receiptPayload, err := os.ReadFile(*receiptPath)
 	if err != nil {
@@ -599,18 +668,56 @@ func RunReviewValidate(args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("parse review receipt: %w", err)
 	}
-	requestPayload, err := os.ReadFile(*requestPath)
-	if err != nil {
-		return fmt.Errorf("read review gate request: %w", err)
-	}
-	request, err := reviewtransaction.ParseGateRequest(requestPayload)
-	if err != nil {
-		return fmt.Errorf("parse review gate request: %w", err)
+	nativeFlags := map[string]bool{}
+	flags.Visit(func(current *flag.Flag) {
+		switch current.Name {
+		case "cwd", "receipt", "request":
+		default:
+			nativeFlags[current.Name] = true
+		}
+	})
+	var request reviewtransaction.GateRequest
+	if strings.TrimSpace(*requestPath) != "" {
+		if len(nativeFlags) != 0 {
+			return errors.New("review-validate --request mode cannot be combined with native request flags")
+		}
+		requestPayload, err := os.ReadFile(*requestPath)
+		if err != nil {
+			return fmt.Errorf("read review gate request: %w", err)
+		}
+		request, err = reviewtransaction.ParseGateRequest(requestPayload)
+		if err != nil {
+			return fmt.Errorf("parse review gate request: %w", err)
+		}
+	} else {
+		if strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*gate) == "" || strings.TrimSpace(*bundlePath) == "" || strings.TrimSpace(*policyPath) == "" || strings.TrimSpace(*ledgerPath) == "" || strings.TrimSpace(*evidencePath) == "" {
+			return errors.New("review-validate native mode requires --lineage, --gate, --bundle, --policy, --ledger, and --evidence")
+		}
+		manifestPaths, err := readIntendedManifest(*manifest)
+		if err != nil {
+			return err
+		}
+		intended = append(intended, manifestPaths...)
+		request, err = reviewtransaction.BuildNativeGateRequest(context.Background(), *cwd, reviewtransaction.NativeGateRequestInput{
+			Gate: reviewtransaction.GateKind(*gate), LineageID: *lineage, BundleArtifact: *bundlePath,
+			PolicyArtifact: *policyPath, LedgerArtifact: *ledgerPath, FixDeltaArtifact: *fixDeltaPath, EvidenceArtifact: *evidencePath,
+			IntendedUntracked: []string(intended), BaseRef: *baseRef, PrePRCIAttestation: *ciAttestation,
+			ReleaseConfiguration: *releaseConfiguration, ReleaseGenerated: *releaseGenerated, ReleaseProvenance: *releaseProvenance,
+			ReleasePublicationBoundary: *releaseBoundary, ReleaseEvidenceFreshness: *releaseFreshness,
+		})
+		if err != nil {
+			return fmt.Errorf("build native review gate request: %w", err)
+		}
+		if strings.TrimSpace(*requestOut) != "" {
+			if err := writeCanonicalReviewJSON(*requestOut, request); err != nil {
+				return fmt.Errorf("write canonical review gate request: %w", err)
+			}
+		}
 	}
 	evaluation := reviewtransaction.EvaluateNativeGate(context.Background(), *cwd, receipt, request)
 	result := ReviewValidateResult{
 		Schema: ReviewValidateSchema, Result: evaluation.Result, Allowed: evaluation.Result == reviewtransaction.GateAllow,
-		Action: reviewGateAction(evaluation.Result), Reason: evaluation.Reason,
+		Action: reviewGateAction(evaluation.Result), Reason: evaluation.Reason, Context: evaluation.Context,
 	}
 	if err := encodeReviewJSON(stdout, result); err != nil {
 		return err
@@ -619,6 +726,15 @@ func RunReviewValidate(args []string, stdout io.Writer) error {
 		return ReviewGateDeniedError{Result: result.Result}
 	}
 	return nil
+}
+
+func writeCanonicalReviewJSON(path string, value any) error {
+	payload, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	payload = append(payload, '\n')
+	return os.WriteFile(path, payload, 0o644)
 }
 
 func validateReviewStartTargetArgs(kind reviewtransaction.TargetKind, baseRef, revision string, intended, ledgerIDs []string) error {
