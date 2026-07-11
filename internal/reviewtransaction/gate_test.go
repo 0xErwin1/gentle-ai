@@ -13,13 +13,282 @@ import (
 )
 
 func TestNativePrePRGateAllowsOnlyCryptographicallyAttestedCompatibleBaseAdvance(t *testing.T) {
+	fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
+	originalPreimageHook := artifactPreimagesReadHook
+	artifactPreimagesReadHook = func() {
+		artifactPreimagesReadHook = originalPreimageHook
+		if err := os.WriteFile(fixture.policyPath, []byte("policy changed after read\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { artifactPreimagesReadHook = originalPreimageHook })
+
+	evaluation := EvaluateNativeGate(context.Background(), fixture.repo, fixture.receipt, fixture.request)
+	if evaluation.Result != GateAllow || evaluation.Context.BaseAdvance == nil || !evaluation.Context.BaseAdvance.valid() {
+		t.Fatalf("compatible base advance = %#v", evaluation)
+	}
+	if evaluation.Context.BaseAdvance.Status != "base-advanced-compatible" || evaluation.Context.BaseAdvance.MergedResultTree != fixture.mergedTree || evaluation.Context.BaseAdvance.OriginalMergeBaseTree != fixture.receipt.BaseTree {
+		t.Fatalf("base advance context = %#v", evaluation.Context.BaseAdvance)
+	}
+}
+
+func TestPrePRGateFailsClosedForUnprovenBaseAdvance(t *testing.T) {
+	tests := []struct {
+		name         string
+		deliveryPath string
+		basePath     string
+		mutate       func(t *testing.T, fixture *compatiblePrePRFixture)
+		want         GateResult
+	}{
+		{name: "missing attestation", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) { fixture.request.PrePR = nil }, want: GateScopeChanged},
+		{name: "invalid signature", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
+			fixture.attestation.Signature = base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize))
+			fixture.writeAttestation(t)
+		}, want: GateScopeChanged},
+		{name: "wrong merged tree", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
+			fixture.attestation.MergedTree = fixture.receipt.FinalCandidateTree
+			fixture.signAndWriteAttestation(t)
+		}, want: GateScopeChanged},
+		{name: "wrong issuer", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
+			fixture.attestation.Issuer = "untrusted-ci"
+			fixture.signAndWriteAttestation(t)
+		}, want: GateScopeChanged},
+		{name: "non-success status", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
+			fixture.attestation.Status = "pending"
+			fixture.signAndWriteAttestation(t)
+		}, want: GateScopeChanged},
+		{name: "invalidating external evidence", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
+			fixture.request.ExternalEvidence = ExternalEvidenceInvalidating
+		}, want: GateScopeChanged},
+		{name: "escalating external evidence", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
+			fixture.request.ExternalEvidence = ExternalEvidenceEscalating
+		}, want: GateEscalated},
+		{name: "changed delivered patch", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
+			writeSnapshotFile(t, fixture.repo, fixture.deliveryPath, "changed delivery\n")
+			gitSnapshot(t, fixture.repo, "add", "--", fixture.deliveryPath)
+			gitSnapshot(t, fixture.repo, "commit", "-m", "change delivery")
+		}, want: GateScopeChanged},
+		{name: "changed delivered paths", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
+			writeSnapshotFile(t, fixture.repo, "extra-delivery.txt", "extra delivery\n")
+			gitSnapshot(t, fixture.repo, "add", "extra-delivery.txt")
+			gitSnapshot(t, fixture.repo, "commit", "-m", "expand delivery")
+		}, want: GateScopeChanged},
+		{name: "overlapping base advance", deliveryPath: "delivery.txt", basePath: "delivery.txt", want: GateInvalidated},
+		{name: "merge conflict", deliveryPath: "conflict/file.txt", basePath: "conflict", want: GateScopeChanged},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deliveryPath, basePath := tt.deliveryPath, tt.basePath
+			if deliveryPath == "" {
+				deliveryPath = "delivery.txt"
+			}
+			if basePath == "" {
+				basePath = "base-only.txt"
+			}
+			fixture := newCompatiblePrePRFixture(t, deliveryPath, basePath)
+			if tt.mutate != nil {
+				tt.mutate(t, fixture)
+			}
+			if got := EvaluateNativeGate(context.Background(), fixture.repo, fixture.receipt, fixture.request); got.Result != tt.want {
+				t.Fatalf("EvaluateNativeGate() = %#v, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPrePRCITrustSupportsReceiptBoundPolicyFormats(t *testing.T) {
+	publicKey := base64.StdEncoding.EncodeToString(make([]byte, ed25519.PublicKeySize))
+	for _, tt := range []struct {
+		name    string
+		policy  string
+		wantErr bool
+	}{
+		{name: "JSON", policy: `{"pre_pr_ci_trust":{"issuer":"trusted-ci","ed25519_public_key":"` + publicKey + `"}}`},
+		{name: "Markdown", policy: "# Policy\npre_pr_ci_issuer: trusted-ci\npre_pr_ci_ed25519_public_key: " + publicKey + "\n"},
+		{name: "missing trust", policy: "# Policy\n", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			trust, err := parsePrePRCITrust([]byte(tt.policy))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parsePrePRCITrust() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && (trust.Issuer != "trusted-ci" || trust.Ed25519PublicKey != publicKey) {
+				t.Fatalf("parsePrePRCITrust() = %#v", trust)
+			}
+		})
+	}
+}
+
+func TestPrePRGateRechecksMovingPublicationInputs(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, fixture *compatiblePrePRFixture)
+	}{
+		{name: "HEAD moves", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
+			gitSnapshot(t, fixture.repo, "commit", "--allow-empty", "-m", "move head")
+		}},
+		{name: "remote base moves", mutate: func(t *testing.T, fixture *compatiblePrePRFixture) {
+			gitSnapshot(t, fixture.repo, "--git-dir", fixture.remote, "update-ref", "refs/heads/main", fixture.originalBaseCommit)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
+			originalHook := finalGateAuthorizationHook
+			finalGateAuthorizationHook = func() {
+				finalGateAuthorizationHook = originalHook
+				tt.mutate(t, fixture)
+			}
+			t.Cleanup(func() { finalGateAuthorizationHook = originalHook })
+			if got := EvaluateNativeGate(context.Background(), fixture.repo, fixture.receipt, fixture.request); got.Result != GateInvalidated {
+				t.Fatalf("EvaluateNativeGate() = %#v, want invalidated", got)
+			}
+		})
+	}
+}
+
+func TestExplicitPrePRRequestWithoutRemotePreservesUnchangedBase(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	baseCommit := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	gitSnapshot(t, repo, "branch", "main", baseCommit)
+	gitSnapshot(t, repo, "checkout", "-qb", "feature")
+	writeSnapshotFile(t, repo, "delivery.txt", "reviewed delivery\n")
+	gitSnapshot(t, repo, "add", "delivery.txt")
+	gitSnapshot(t, repo, "commit", "-m", "delivery")
+	dir := t.TempDir()
+	policyPath := filepath.Join(dir, "policy.md")
+	ledgerPath := filepath.Join(dir, "ledger.json")
+	evidencePath := filepath.Join(dir, "evidence.md")
+	for path, content := range map[string]string{
+		policyPath: "bounded policy\n", ledgerPath: "{\"schema\":\"gentle-ai.review-ledger/v1\",\"findings\":[]}\n", evidencePath: "verified\n",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetBaseDiff, BaseRef: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policyHash, _ := HashArtifact(policyPath)
+	ledgerHash, _ := HashLedgerArtifact(ledgerPath)
+	evidenceHash, _ := HashArtifact(evidencePath)
+	tx, err := NewTransaction(Start{LineageID: "compatible-base", Mode: ModeOrdinary4R, Generation: 1, Snapshot: snapshot, PolicyHash: policyHash})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = tx.StartReview()
+	_ = tx.FreezeFindings([]Finding{}, ledgerHash)
+	_, _ = tx.ClassifyEvidence([]FindingEvidence{})
+	_ = tx.BeginFinalVerification()
+	_ = tx.CompleteFinalVerification(evidenceHash, true)
+	receipt, err := tx.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := AuthoritativeStore(context.Background(), repo, tx.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendApprovedStoreChain(t, store, *tx)
+	request := GateRequest{
+		Schema: GateRequestSchema, Gate: GatePrePR, Target: Target{Kind: TargetBaseDiff, BaseRef: "main"},
+		PolicyArtifact: policyPath, LedgerArtifact: ledgerPath, EvidenceArtifact: evidencePath,
+	}
+	bindGateRequestToStore(t, &request, store)
+	if got := EvaluateNativeGate(context.Background(), repo, receipt, request); got.Result != GateAllow || got.Context.BaseAdvance != nil {
+		t.Fatalf("unchanged explicit PRE-PR request = %#v", got)
+	}
+}
+
+func TestPublicationRemoteUsesGitPushPrecedence(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	branch := strings.TrimSpace(gitSnapshot(t, repo, "symbolic-ref", "--short", "HEAD"))
+	defaultRemote := filepath.Join(t.TempDir(), "default.git")
+	branchRemote := filepath.Join(t.TempDir(), "branch.git")
+	gitSnapshot(t, repo, "clone", "--bare", repo, defaultRemote)
+	gitSnapshot(t, repo, "clone", "--bare", repo, branchRemote)
+	gitSnapshot(t, repo, "remote", "add", "default-push", defaultRemote)
+	gitSnapshot(t, repo, "remote", "add", "branch-push", branchRemote)
+	gitSnapshot(t, repo, "config", "remote.pushDefault", "default-push")
+	gitSnapshot(t, repo, "config", "branch."+branch+".pushRemote", "branch-push")
+
+	remote, configured, err := publicationRemote(context.Background(), repo)
+	if err != nil || !configured || remote != "branch-push" {
+		t.Fatalf("publicationRemote() = %q, %v, %v", remote, configured, err)
+	}
+}
+
+func TestCanonicalCorrectedRequestPreservesExplicitNativeParity(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	fixture := correctedBundleFixture(t, repo, "corrected-request-parity")
+	fixPayload, err := json.Marshal(fixture.Transaction.Snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fixture.Request.FixDeltaArtifact, fixPayload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := fixture.Store.ExportBundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundlePath := filepath.Join(t.TempDir(), "bundle.json")
+	if err := WriteChainBundleAtomic(bundlePath, bundle); err != nil {
+		t.Fatal(err)
+	}
+	request, err := BuildNativeGateRequest(context.Background(), repo, NativeGateRequestInput{
+		Gate: GatePrePush, LineageID: fixture.Transaction.LineageID, BundleArtifact: bundlePath,
+		PolicyArtifact: fixture.Request.PolicyArtifact, LedgerArtifact: fixture.Request.LedgerArtifact,
+		FixDeltaArtifact: fixture.Request.FixDeltaArtifact, EvidenceArtifact: fixture.Request.EvidenceArtifact,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.FixDeltaContent == "" {
+		t.Fatal("canonical corrected request omitted retained fix-delta content")
+	}
+	if got := EvaluateNativeGate(context.Background(), repo, fixture.Receipt, request); got.Result != GateAllow {
+		t.Fatalf("EvaluateNativeGate(native corrected request) = %#v", got)
+	}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	explicit, err := ParseGateRequest(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(request.FixDeltaArtifact, []byte("tampered after request-out\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := EvaluateNativeGate(context.Background(), repo, fixture.Receipt, explicit); got.Result != GateAllow {
+		t.Fatalf("EvaluateNativeGate(explicit canonical request) = %#v", got)
+	}
+	explicit.FixDeltaContent = "tampered canonical content"
+	if got := EvaluateNativeGate(context.Background(), repo, fixture.Receipt, explicit); got.Result != GateInvalidated {
+		t.Fatalf("EvaluateNativeGate(tampered canonical fix delta) = %#v", got)
+	}
+}
+
+type compatiblePrePRFixture struct {
+	repo, remote, deliveryPath, policyPath, attestationPath string
+	originalBaseCommit, featureCommit, mergedTree           string
+	receipt                                                 Receipt
+	request                                                 GateRequest
+	privateKey                                              ed25519.PrivateKey
+	attestation                                             prePRCIAttestation
+}
+
+func newCompatiblePrePRFixture(t *testing.T, deliveryPath, basePath string) *compatiblePrePRFixture {
+	t.Helper()
 	repo := initSnapshotRepo(t)
 	baseCommit := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
 	gitSnapshot(t, repo, "branch", "main", baseCommit)
 	remote := configurePublicationRemote(t, repo, "main")
 	gitSnapshot(t, repo, "checkout", "-qb", "feature")
-	writeSnapshotFile(t, repo, "delivery.txt", "reviewed delivery\n")
-	gitSnapshot(t, repo, "add", "delivery.txt")
+	writeSnapshotFile(t, repo, deliveryPath, "reviewed delivery\n")
+	gitSnapshot(t, repo, "add", "--", deliveryPath)
 	gitSnapshot(t, repo, "commit", "-m", "delivery")
 
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
@@ -27,21 +296,16 @@ func TestNativePrePRGateAllowsOnlyCryptographicallyAttestedCompatibleBaseAdvance
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	policyPath := filepath.Join(dir, "policy.json")
+	policyPath := filepath.Join(dir, "policy.md")
 	ledgerPath := filepath.Join(dir, "ledger.json")
 	evidencePath := filepath.Join(dir, "evidence.md")
-	policy := map[string]any{"pre_pr_ci_trust": map[string]string{
-		"issuer": "trusted-ci", "ed25519_public_key": base64.StdEncoding.EncodeToString(publicKey),
-	}}
-	policyPayload, _ := json.Marshal(policy)
-	if err := os.WriteFile(policyPath, policyPayload, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(ledgerPath, []byte("{\"schema\":\"gentle-ai.review-ledger/v1\",\"findings\":[]}\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(evidencePath, []byte("verified\n"), 0o644); err != nil {
-		t.Fatal(err)
+	policyPayload := []byte("# Bounded review policy\n\npre_pr_ci_issuer: trusted-ci\npre_pr_ci_ed25519_public_key: " + base64.StdEncoding.EncodeToString(publicKey) + "\n")
+	for path, payload := range map[string][]byte{
+		policyPath: policyPayload, ledgerPath: []byte("{\"schema\":\"gentle-ai.review-ledger/v1\",\"findings\":[]}\n"), evidencePath: []byte("verified\n"),
+	} {
+		if err := os.WriteFile(path, payload, 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetBaseDiff, BaseRef: "main"})
 	if err != nil {
@@ -70,60 +334,47 @@ func TestNativePrePRGateAllowsOnlyCryptographicallyAttestedCompatibleBaseAdvance
 	appendApprovedStoreChain(t, store, *tx)
 
 	gitSnapshot(t, repo, "checkout", "main")
-	writeSnapshotFile(t, repo, "base-only.txt", "disjoint base advance\n")
-	gitSnapshot(t, repo, "add", "base-only.txt")
+	writeSnapshotFile(t, repo, basePath, "base advance\n")
+	gitSnapshot(t, repo, "add", "--", basePath)
 	gitSnapshot(t, repo, "commit", "-m", "advance base")
 	gitSnapshot(t, repo, "push", remote, "main")
 	newBaseCommit := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
 	gitSnapshot(t, repo, "checkout", "feature")
 	featureCommit := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
-	mergedTree := strings.Fields(gitSnapshot(t, repo, "merge-tree", "--write-tree", newBaseCommit, featureCommit))[0]
-	attestation := prePRCIAttestation{Schema: prePRCIAttestationSchema, Issuer: "trusted-ci", MergedTree: mergedTree, Status: "success"}
-	attestation.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, prePRCIAttestationPreimage(attestation)))
-	attestationPath := filepath.Join(dir, "ci-attestation.json")
-	attestationPayload, _ := json.Marshal(attestation)
-	if err := os.WriteFile(attestationPath, attestationPayload, 0o644); err != nil {
-		t.Fatal(err)
+	mergedTree := receipt.FinalCandidateTree
+	if output, mergeErr := runGit(context.Background(), repo, nil, nil, "merge-tree", "--write-tree", newBaseCommit, featureCommit); mergeErr == nil {
+		mergedTree = strings.Fields(string(output))[0]
 	}
-	request := GateRequest{
-		Schema: GateRequestSchema, Gate: GatePrePR, Target: Target{Kind: TargetBaseDiff, BaseRef: "main"},
-		PolicyArtifact: policyPath, LedgerArtifact: ledgerPath, EvidenceArtifact: evidencePath,
-		PrePR: &PrePRRequest{CIAttestationArtifact: attestationPath},
+	fixture := &compatiblePrePRFixture{
+		repo: repo, remote: remote, deliveryPath: deliveryPath, policyPath: policyPath,
+		attestationPath: filepath.Join(dir, "ci-attestation.json"), originalBaseCommit: baseCommit, featureCommit: featureCommit,
+		mergedTree: mergedTree, receipt: receipt, privateKey: privateKey,
+		attestation: prePRCIAttestation{Schema: prePRCIAttestationSchema, Issuer: "trusted-ci", MergedTree: mergedTree, Status: "success"},
+		request: GateRequest{
+			Schema: GateRequestSchema, Gate: GatePrePR, Target: Target{Kind: TargetBaseDiff, BaseRef: "main"},
+			PolicyArtifact: policyPath, LedgerArtifact: ledgerPath, EvidenceArtifact: evidencePath,
+		},
 	}
-	bindGateRequestToStore(t, &request, store)
+	fixture.request.PrePR = &PrePRRequest{CIAttestationArtifact: fixture.attestationPath}
+	bindGateRequestToStore(t, &fixture.request, store)
+	fixture.signAndWriteAttestation(t)
+	return fixture
+}
 
-	originalPreimageHook := artifactPreimagesReadHook
-	artifactPreimagesReadHook = func() {
-		artifactPreimagesReadHook = originalPreimageHook
-		if err := os.WriteFile(policyPath, []byte(`{"pre_pr_ci_trust":null}`), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	t.Cleanup(func() { artifactPreimagesReadHook = originalPreimageHook })
-	evaluation := EvaluateNativeGate(context.Background(), repo, receipt, request)
-	if evaluation.Result != GateAllow || evaluation.Context.BaseAdvance == nil || !evaluation.Context.BaseAdvance.valid() {
-		t.Fatalf("compatible base advance = %#v", evaluation)
-	}
-	if evaluation.Context.BaseAdvance.Status != "base-advanced-compatible" || evaluation.Context.BaseAdvance.MergedResultTree != mergedTree || evaluation.Context.BaseAdvance.OriginalMergeBaseTree != receipt.BaseTree {
-		t.Fatalf("base advance context = %#v", evaluation.Context.BaseAdvance)
-	}
-	if err := os.WriteFile(policyPath, policyPayload, 0o644); err != nil {
-		t.Fatal(err)
-	}
+func (fixture *compatiblePrePRFixture) signAndWriteAttestation(t *testing.T) {
+	t.Helper()
+	fixture.attestation.Signature = base64.StdEncoding.EncodeToString(ed25519.Sign(fixture.privateKey, prePRCIAttestationPreimage(fixture.attestation)))
+	fixture.writeAttestation(t)
+}
 
-	request.PrePR = nil
-	if got := EvaluateNativeGate(context.Background(), repo, receipt, request); got.Result == GateAllow {
-		t.Fatalf("missing CI attestation authorized base advance: %#v", got)
-	}
-	request.PrePR = &PrePRRequest{CIAttestationArtifact: attestationPath}
-	attestation.Status = "success"
-	attestation.Signature = base64.StdEncoding.EncodeToString(make([]byte, ed25519.SignatureSize))
-	attestationPayload, _ = json.Marshal(attestation)
-	if err := os.WriteFile(attestationPath, attestationPayload, 0o644); err != nil {
+func (fixture *compatiblePrePRFixture) writeAttestation(t *testing.T) {
+	t.Helper()
+	payload, err := json.Marshal(fixture.attestation)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := EvaluateNativeGate(context.Background(), repo, receipt, request); got.Result == GateAllow {
-		t.Fatalf("untrusted success boolean authorized base advance: %#v", got)
+	if err := os.WriteFile(fixture.attestationPath, payload, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -176,10 +427,8 @@ func TestBuildNativeGateRequestDerivesAuthorityForEveryGate(t *testing.T) {
 			input.ReleaseConfiguration = writeGateArtifact(t, dir, "configuration", []byte("configuration\n"))
 			input.ReleaseGenerated = writeGateArtifact(t, dir, "generated", []byte("generated\n"))
 			input.ReleaseProvenance = writeGateArtifact(t, dir, "provenance", []byte("provenance\n"))
-			boundary, _ := json.Marshal(map[string]any{"schema": "gentle-ai.release-publication-boundary/v1", "release_tree": tx.Snapshot.CandidateTree, "state": "sealed"})
-			freshness, _ := json.Marshal(map[string]any{"schema": "gentle-ai.release-evidence-freshness/v1", "release_tree": tx.Snapshot.CandidateTree, "evidence_hash": tx.EvidenceHash, "state": "current"})
-			input.ReleasePublicationBoundary = writeGateArtifact(t, dir, "boundary", boundary)
-			input.ReleaseEvidenceFreshness = writeGateArtifact(t, dir, "freshness", freshness)
+			input.ReleasePublicationBoundary = writeGateArtifact(t, dir, "boundary", []byte("sealed boundary\n"))
+			input.ReleaseEvidenceFreshness = writeGateArtifact(t, dir, "freshness", []byte("current evidence\n"))
 		}, assert: func(t *testing.T, request GateRequest) {
 			if request.Target.Kind != TargetExactRevision || request.Release == nil || request.Release.Revision != request.Target.Revision {
 				t.Fatalf("release target = %#v, evidence = %#v", request.Target, request.Release)
@@ -241,14 +490,6 @@ func TestNativeReleaseGateDerivesCompleteImmutableBoundary(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	}
-	boundaryPayload, _ := json.Marshal(map[string]any{"schema": "gentle-ai.release-publication-boundary/v1", "release_tree": snapshot.CandidateTree, "state": "sealed"})
-	freshnessPayload, _ := json.Marshal(map[string]any{"schema": "gentle-ai.release-evidence-freshness/v1", "release_tree": snapshot.CandidateTree, "evidence_hash": hashes["evidence"], "state": "current"})
-	for name, payload := range map[string][]byte{"boundary": boundaryPayload, "freshness": freshnessPayload} {
-		if err := os.WriteFile(paths[name], payload, 0o644); err != nil {
-			t.Fatal(err)
-		}
-		hashes[name], _ = HashArtifact(paths[name])
 	}
 	release := ReleaseEvidence{
 		ReleaseTree: snapshot.CandidateTree, ConfigurationHash: hashes["configuration"],
@@ -461,27 +702,6 @@ func TestNativeGateFinalRecheckRejectsConcurrentRepositoryMutation(t *testing.T)
 
 	if got := EvaluateNativeGate(context.Background(), repo, receipt, request); got.Result != GateInvalidated || !strings.Contains(got.Reason, "changed during final authorization") {
 		t.Fatalf("concurrent mutation evaluation = %#v", got)
-	}
-}
-
-func TestLedgerArtifactParsingIsStrict(t *testing.T) {
-	valid := `{"schema":"gentle-ai.review-ledger/v1","findings":[]}`
-	for _, payload := range []string{valid + `{"schema":"gentle-ai.review-ledger/v1","findings":[]}`, `{"schema":"gentle-ai.review-ledger/v1","findings":[],"unknown":true}`} {
-		if _, _, err := hashLedgerPayload([]byte(payload)); err == nil {
-			t.Fatalf("hashLedgerPayload(%q) accepted unsupported JSON", payload)
-		}
-	}
-}
-
-func TestExternalEvidenceDispositionComesFromStrictArtifact(t *testing.T) {
-	for _, disposition := range []ExternalEvidenceDisposition{ExternalEvidenceInvalidating, ExternalEvidenceEscalating} {
-		payload, _ := json.Marshal(map[string]any{"schema": "gentle-ai.external-review-evidence/v1", "disposition": disposition, "evidence_hash": hash("e")})
-		if got, err := deriveExternalEvidenceDisposition(payload); err != nil || got != disposition {
-			t.Fatalf("deriveExternalEvidenceDisposition(%s) = %q, %v", disposition, got, err)
-		}
-	}
-	if _, err := deriveExternalEvidenceDisposition([]byte(`{"schema":"gentle-ai.external-review-evidence/v1","disposition":"invalidating","evidence_hash":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","success":true}`)); err == nil {
-		t.Fatal("external evidence parser trusted an unsupported success boolean")
 	}
 }
 

@@ -164,11 +164,9 @@ func disjointPaths(left, right []string) bool {
 }
 
 func verifyPrePRCIAttestation(policy, attestationPayload []byte, mergedTree string) (string, string, error) {
-	var policyEnvelope struct {
-		PrePRCITrust *prePRCITrust `json:"pre_pr_ci_trust"`
-	}
-	if err := json.Unmarshal(policy, &policyEnvelope); err != nil || policyEnvelope.PrePRCITrust == nil {
-		return "", "", errors.New("receipt-bound policy does not declare a PRE-PR CI trust root")
+	trust, err := parsePrePRCITrust(policy)
+	if err != nil {
+		return "", "", err
 	}
 	if len(attestationPayload) == 0 {
 		return "", "", errors.New("trusted CI attestation is required")
@@ -183,7 +181,6 @@ func verifyPrePRCIAttestation(policy, attestationPayload []byte, mergedTree stri
 	if err := decoder.Decode(&extra); err != io.EOF {
 		return "", "", errors.New("CI attestation contains multiple JSON values")
 	}
-	trust := policyEnvelope.PrePRCITrust
 	if attestation.Schema != prePRCIAttestationSchema || attestation.Status != "success" || attestation.MergedTree != mergedTree || attestation.Issuer != trust.Issuer {
 		return "", "", errors.New("CI attestation is not successful for the exact merged result")
 	}
@@ -197,6 +194,32 @@ func verifyPrePRCIAttestation(policy, attestationPayload []byte, mergedTree stri
 	}
 	sum := sha256.Sum256(attestationPayload)
 	return "sha256:" + hex.EncodeToString(sum[:]), attestation.Issuer, nil
+}
+
+func parsePrePRCITrust(policy []byte) (prePRCITrust, error) {
+	var envelope struct {
+		PrePRCITrust *prePRCITrust `json:"pre_pr_ci_trust"`
+	}
+	if json.Unmarshal(policy, &envelope) == nil && envelope.PrePRCITrust != nil {
+		return *envelope.PrePRCITrust, nil
+	}
+	var trust prePRCITrust
+	for _, line := range strings.Split(string(policy), "\n") {
+		key, value, found := strings.Cut(strings.TrimSpace(line), ":")
+		if !found {
+			continue
+		}
+		switch strings.TrimSpace(key) {
+		case "pre_pr_ci_issuer":
+			trust.Issuer = strings.TrimSpace(value)
+		case "pre_pr_ci_ed25519_public_key":
+			trust.Ed25519PublicKey = strings.TrimSpace(value)
+		}
+	}
+	if trust.Issuer == "" || trust.Ed25519PublicKey == "" {
+		return prePRCITrust{}, errors.New("receipt-bound policy does not declare a PRE-PR CI trust root")
+	}
+	return trust, nil
 }
 
 func prePRCIAttestationPreimage(attestation prePRCIAttestation) []byte {

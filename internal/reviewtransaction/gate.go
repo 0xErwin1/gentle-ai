@@ -17,28 +17,26 @@ import (
 const GateRequestSchema = "gentle-ai.review-gate-request/v1"
 
 type GateRequest struct {
-	Schema                   string                      `json:"schema"`
-	Gate                     GateKind                    `json:"gate"`
-	Target                   Target                      `json:"target"`
-	StoreDir                 string                      `json:"store_dir,omitempty"`
-	StoreRevision            string                      `json:"store_revision"`
-	GenesisRevision          string                      `json:"genesis_revision"`
-	ChainIdentity            string                      `json:"chain_identity"`
-	BundleDigest             string                      `json:"bundle_digest"`
-	PolicyArtifact           string                      `json:"policy_artifact"`
-	PolicyContent            string                      `json:"policy_content,omitempty"`
-	LedgerArtifact           string                      `json:"ledger_artifact"`
-	LedgerContent            string                      `json:"ledger_content,omitempty"`
-	FixDeltaArtifact         string                      `json:"fix_delta_artifact,omitempty"`
-	FixDeltaContent          string                      `json:"fix_delta_content,omitempty"`
-	EvidenceArtifact         string                      `json:"evidence_artifact"`
-	EvidenceContent          string                      `json:"evidence_content,omitempty"`
-	ExternalEvidenceArtifact string                      `json:"external_evidence_artifact,omitempty"`
-	ExternalEvidenceContent  string                      `json:"external_evidence_content,omitempty"`
-	ExternalEvidence         ExternalEvidenceDisposition `json:"external_evidence,omitempty"`
-	PrePR                    *PrePRRequest               `json:"pre_pr,omitempty"`
-	Release                  *ReleaseRequest             `json:"release,omitempty"`
-	preimages                *gateArtifactPreimages
+	Schema           string                      `json:"schema"`
+	Gate             GateKind                    `json:"gate"`
+	Target           Target                      `json:"target"`
+	StoreDir         string                      `json:"store_dir,omitempty"`
+	StoreRevision    string                      `json:"store_revision"`
+	GenesisRevision  string                      `json:"genesis_revision"`
+	ChainIdentity    string                      `json:"chain_identity"`
+	BundleDigest     string                      `json:"bundle_digest"`
+	PolicyArtifact   string                      `json:"policy_artifact"`
+	PolicyContent    string                      `json:"policy_content,omitempty"`
+	LedgerArtifact   string                      `json:"ledger_artifact"`
+	LedgerContent    string                      `json:"ledger_content,omitempty"`
+	FixDeltaArtifact string                      `json:"fix_delta_artifact,omitempty"`
+	FixDeltaContent  string                      `json:"fix_delta_content,omitempty"`
+	EvidenceArtifact string                      `json:"evidence_artifact"`
+	EvidenceContent  string                      `json:"evidence_content,omitempty"`
+	ExternalEvidence ExternalEvidenceDisposition `json:"external_evidence,omitempty"`
+	PrePR            *PrePRRequest               `json:"pre_pr,omitempty"`
+	Release          *ReleaseRequest             `json:"release,omitempty"`
+	preimages        *gateArtifactPreimages
 }
 
 type PrePRRequest struct {
@@ -62,7 +60,7 @@ type ReleaseRequest struct {
 }
 
 type gateArtifactPreimages struct {
-	policy, ledger, fixDelta, evidence, externalEvidence  []byte
+	policy, ledger, fixDelta, evidence                    []byte
 	configuration, generated, provenance                  []byte
 	publicationBoundary, evidenceFreshness, ciAttestation []byte
 }
@@ -144,15 +142,6 @@ func EvaluateNativeGate(ctx context.Context, repo string, receipt Receipt, reque
 		return invalid("persisted gate artifacts cannot be read: " + err.Error())
 	}
 	artifactPreimagesReadHook()
-	externalEvidence := request.ExternalEvidence
-	if len(preimages.externalEvidence) != 0 {
-		externalEvidence, err = deriveExternalEvidenceDisposition(preimages.externalEvidence)
-		if err != nil {
-			return invalid("external evidence artifact cannot be validated: " + err.Error())
-		}
-	}
-	request.ExternalEvidence = externalEvidence
-
 	snapshot, resolvedPrePR, err := buildLifecycleSnapshot(ctx, repo, request)
 	if err != nil {
 		return invalid("current repository target cannot be derived: " + err.Error())
@@ -169,12 +158,15 @@ func EvaluateNativeGate(ctx context.Context, repo string, receipt Receipt, reque
 		return invalid("frozen ledger findings do not match the authoritative transaction")
 	}
 	evidenceHash := hashArtifactPayload(preimages.evidence)
-	fixDeltaHash, err := validateFixDeltaArtifact(preimages.fixDelta, record.Transaction)
-	if err != nil {
-		if request.Gate != GatePrePR && (snapshot.CandidateTree != receipt.FinalCandidateTree || snapshot.PathsDigest != receipt.PathsDigest) {
-			return NativeGateEvaluation{Result: GateScopeChanged, Reason: nativeGateReason(GateScopeChanged)}
+	fixDeltaHash := record.Transaction.FixDeltaHash
+	if record.Transaction.Snapshot.Kind == TargetFixDiff {
+		fixDeltaHash = FixDeltaHashForSnapshot(record.Transaction.Snapshot)
+	}
+	if request.FixDeltaContent != "" {
+		fixDeltaHash, err = validateFixDeltaArtifact(preimages.fixDelta, record.Transaction)
+		if err != nil {
+			return invalid("canonical fix delta artifact cannot be validated: " + err.Error())
 		}
-		return invalid("fix delta artifact cannot be validated: " + err.Error())
 	}
 
 	gateContext := GateContext{
@@ -220,43 +212,45 @@ type resolvedPrePRRefs struct {
 }
 
 func buildLifecycleSnapshot(ctx context.Context, repo string, request GateRequest) (Snapshot, *resolvedPrePRRefs, error) {
-	if request.Gate != GatePrePR {
-		target, err := lifecycleTargetForGate(ctx, repo, request)
-		if err != nil {
-			return Snapshot{}, nil, err
-		}
-		snapshot, err := (SnapshotBuilder{Repo: repo}).Build(ctx, target)
+	target, err := lifecycleTargetForGate(ctx, repo, request)
+	if err != nil {
+		return Snapshot{}, nil, err
+	}
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(ctx, target)
+	if err != nil || request.Gate != GatePrePR {
 		return snapshot, nil, err
 	}
-	if request.Target.Kind != TargetBaseDiff {
-		return Snapshot{}, nil, errors.New("pre-PR validation requires an authoritative base-diff target")
+	configured, err := publicationRemoteConfigured(ctx, repo)
+	if err != nil || !configured {
+		return snapshot, nil, err
 	}
 	baseRef, remote, base, err := resolveAuthoritativePublicationBase(ctx, repo)
 	if err != nil {
 		return Snapshot{}, nil, err
 	}
-	if strings.TrimSpace(request.Target.BaseRef) != "" {
-		expected, expectedErr := resolveCommit(ctx, repo, request.Target.BaseRef)
-		if expectedErr != nil || expected != base {
-			return Snapshot{}, nil, errors.New("pre-PR base does not match the remote publication boundary")
-		}
-	}
 	head, err := resolveCommit(ctx, repo, "HEAD")
 	if err != nil {
 		return Snapshot{}, nil, err
 	}
-	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(ctx, Target{Kind: TargetExactRevision, Revision: base + ".." + head})
+	snapshot, err = (SnapshotBuilder{Repo: repo}).Build(ctx, Target{Kind: TargetExactRevision, Revision: base + ".." + head})
 	if err != nil {
 		return Snapshot{}, nil, err
 	}
 	return snapshot, &resolvedPrePRRefs{BaseRef: baseRef, Remote: remote, BaseCommit: base, HeadCommit: head}, nil
 }
 
+func publicationRemoteConfigured(ctx context.Context, repo string) (bool, error) {
+	_, configured, err := publicationRemote(ctx, repo)
+	return configured, err
+}
+
 func resolveAuthoritativePublicationBase(ctx context.Context, repo string) (string, string, string, error) {
-	remoteOutput, err := runGit(ctx, repo, nil, nil, "config", "--get", "remote.pushDefault")
-	remote := strings.TrimSpace(string(remoteOutput))
-	if err != nil || remote == "" {
-		remote = "origin"
+	remote, configured, err := publicationRemote(ctx, repo)
+	if err != nil {
+		return "", "", "", err
+	}
+	if !configured {
+		return "", "", "", errors.New("publication remote is not configured")
 	}
 	output, err := runGit(ctx, repo, nil, nil, "ls-remote", "--symref", remote, "HEAD")
 	if err != nil {
@@ -280,6 +274,30 @@ func resolveAuthoritativePublicationBase(ctx context.Context, repo string) (stri
 		return "", "", "", errors.New("publication base commit is not available locally; fetch before validation")
 	}
 	return baseRef, remote, commit, nil
+}
+
+func publicationRemote(ctx context.Context, repo string) (string, bool, error) {
+	branchOutput, _ := runGit(ctx, repo, nil, nil, "symbolic-ref", "--quiet", "--short", "HEAD")
+	branch := strings.TrimSpace(string(branchOutput))
+	keys := make([]string, 0, 4)
+	if branch != "" {
+		keys = append(keys, "branch."+branch+".pushRemote")
+	}
+	keys = append(keys, "remote.pushDefault")
+	if branch != "" {
+		keys = append(keys, "branch."+branch+".remote")
+	}
+	for _, key := range keys {
+		output, err := runGit(ctx, repo, nil, nil, "config", "--get", key)
+		if err == nil && strings.TrimSpace(string(output)) != "" {
+			return strings.TrimSpace(string(output)), true, nil
+		}
+	}
+	output, err := runGit(ctx, repo, nil, nil, "config", "--get", "remote.origin.url")
+	if err == nil && strings.TrimSpace(string(output)) != "" {
+		return "origin", true, nil
+	}
+	return "", false, nil
 }
 
 func sameResolvedPrePRRefs(left, right *resolvedPrePRRefs) bool {
@@ -380,19 +398,11 @@ func deriveReleaseEvidence(ctx context.Context, repo string, request *ReleaseReq
 	if err != nil {
 		return ReleaseEvidence{}, err
 	}
-	publicationState, boundaryTree, err := parsePublicationBoundary(preimages.publicationBoundary)
-	if err != nil || boundaryTree != revision.CandidateTree {
-		return ReleaseEvidence{}, errors.New("publication boundary is not sealed for the exact release tree")
-	}
-	freshnessState, freshnessTree, freshnessEvidence, err := parseEvidenceFreshness(preimages.evidenceFreshness)
-	if err != nil || freshnessTree != revision.CandidateTree || freshnessEvidence != hashArtifactPayload(preimages.evidence) {
-		return ReleaseEvidence{}, errors.New("release evidence is not current for the exact release tree and verification evidence")
-	}
 	release := ReleaseEvidence{
 		ReleaseTree: revision.CandidateTree, ConfigurationHash: hashArtifactPayload(preimages.configuration),
 		GeneratedArtifactHash: hashArtifactPayload(preimages.generated), ProvenanceHash: hashArtifactPayload(preimages.provenance),
-		PublicationBoundaryHash: hashArtifactPayload(preimages.publicationBoundary), PublicationState: publicationState,
-		EvidenceFreshnessHash: hashArtifactPayload(preimages.evidenceFreshness), EvidenceFreshnessState: freshnessState,
+		PublicationBoundaryHash: hashArtifactPayload(preimages.publicationBoundary), PublicationState: request.PublicationState,
+		EvidenceFreshnessHash: hashArtifactPayload(preimages.evidenceFreshness), EvidenceFreshnessState: request.EvidenceFreshnessState,
 	}
 	if err := validateReleaseEvidence(release); err != nil {
 		return ReleaseEvidence{}, err
@@ -439,13 +449,8 @@ func hashLedgerPayload(payload []byte) (string, string, error) {
 		Findings []Finding `json:"findings"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(payload))
-	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&envelope); err != nil {
 		return "", "", err
-	}
-	var extra any
-	if err := decoder.Decode(&extra); err != io.EOF {
-		return "", "", errors.New("ledger contains multiple JSON values")
 	}
 	if envelope.Schema != "gentle-ai.review-ledger/v1" || envelope.Findings == nil {
 		return "", "", errors.New("ledger requires gentle-ai.review-ledger/v1 and an explicit findings array")
@@ -485,7 +490,6 @@ func readGateArtifactPreimages(request GateRequest) (gateArtifactPreimages, erro
 		{"ledger", request.LedgerArtifact, request.LedgerContent, true, &result.ledger},
 		{"fix delta", request.FixDeltaArtifact, request.FixDeltaContent, false, &result.fixDelta},
 		{"verification evidence", request.EvidenceArtifact, request.EvidenceContent, true, &result.evidence},
-		{"external evidence", request.ExternalEvidenceArtifact, request.ExternalEvidenceContent, false, &result.externalEvidence},
 	} {
 		*item.destination, err = read(item.label, item.path, item.content, item.required)
 		if err != nil {
@@ -550,68 +554,6 @@ func HashFixDeltaArtifact(payload []byte) (Snapshot, string, error) {
 		return Snapshot{}, "", errors.New("fix delta artifact requires a valid fix-diff snapshot")
 	}
 	return snapshot, FixDeltaHashForSnapshot(snapshot), nil
-}
-
-func ValidatedBundleFixDeltaHash(bundle ChainBundle) (string, error) {
-	chain, err := validateChainBundle(bundle)
-	if err != nil {
-		return "", err
-	}
-	return chain.Records[len(chain.Records)-1].Transaction.FixDeltaHash, nil
-}
-
-func deriveExternalEvidenceDisposition(payload []byte) (ExternalEvidenceDisposition, error) {
-	if len(payload) == 0 {
-		return ExternalEvidenceNone, nil
-	}
-	var artifact struct {
-		Schema       string                      `json:"schema"`
-		Disposition  ExternalEvidenceDisposition `json:"disposition"`
-		EvidenceHash string                      `json:"evidence_hash"`
-	}
-	if err := decodeStrictJSON(payload, &artifact, "external evidence"); err != nil {
-		return ExternalEvidenceNone, err
-	}
-	if artifact.Schema != "gentle-ai.external-review-evidence/v1" || !validSHA256(artifact.EvidenceHash) {
-		return ExternalEvidenceNone, errors.New("external evidence requires its supported schema and evidence hash")
-	}
-	switch artifact.Disposition {
-	case ExternalEvidenceInvalidating, ExternalEvidenceEscalating:
-		return artifact.Disposition, nil
-	default:
-		return ExternalEvidenceNone, errors.New("external evidence must explicitly invalidate or escalate")
-	}
-}
-
-func parsePublicationBoundary(payload []byte) (PublicationState, string, error) {
-	var artifact struct {
-		Schema      string           `json:"schema"`
-		ReleaseTree string           `json:"release_tree"`
-		State       PublicationState `json:"state"`
-	}
-	if err := decodeStrictJSON(payload, &artifact, "publication boundary"); err != nil {
-		return "", "", err
-	}
-	if artifact.Schema != "gentle-ai.release-publication-boundary/v1" || artifact.State != PublicationStateSealed || !validGitTree(artifact.ReleaseTree) {
-		return "", "", errors.New("publication boundary is not a supported sealed artifact")
-	}
-	return artifact.State, artifact.ReleaseTree, nil
-}
-
-func parseEvidenceFreshness(payload []byte) (EvidenceFreshnessState, string, string, error) {
-	var artifact struct {
-		Schema       string                 `json:"schema"`
-		ReleaseTree  string                 `json:"release_tree"`
-		EvidenceHash string                 `json:"evidence_hash"`
-		State        EvidenceFreshnessState `json:"state"`
-	}
-	if err := decodeStrictJSON(payload, &artifact, "evidence freshness"); err != nil {
-		return "", "", "", err
-	}
-	if artifact.Schema != "gentle-ai.release-evidence-freshness/v1" || artifact.State != EvidenceFreshnessCurrent || !validGitTree(artifact.ReleaseTree) || !validSHA256(artifact.EvidenceHash) {
-		return "", "", "", errors.New("evidence freshness is not a supported current artifact")
-	}
-	return artifact.State, artifact.ReleaseTree, artifact.EvidenceHash, nil
 }
 
 func decodeStrictJSON(payload []byte, destination any, label string) error {

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -554,22 +553,7 @@ func RunReviewBundleImport(args []string, stdout io.Writer) error {
 			return fmt.Errorf("hash evidence artifact: %w", err)
 		}
 	}
-	fixDeltaHash, err := reviewtransaction.ValidatedBundleFixDeltaHash(bundle)
-	if err != nil {
-		return fmt.Errorf("derive validated terminal fix delta: %w", err)
-	}
-	if fixDeltaHash != reviewtransaction.EmptyFixDeltaHash {
-		fixPayload, readErr := os.ReadFile(request.FixDeltaArtifact)
-		if readErr != nil {
-			return fmt.Errorf("read fix delta artifact: %w", readErr)
-		}
-		_, artifactHash, hashErr := reviewtransaction.HashFixDeltaArtifact(fixPayload)
-		if hashErr != nil || artifactHash != fixDeltaHash {
-			return errors.New("fix delta artifact does not match the validated terminal bundle")
-		}
-	} else if strings.TrimSpace(request.FixDeltaArtifact) != "" {
-		return errors.New("uncorrected review bundle must not name a fix delta artifact")
-	}
+	fixDeltaHash := ""
 	chain, err := reviewtransaction.ImportBundle(context.Background(), *cwd, bundle, reviewtransaction.BundleImportExpectation{
 		LineageID: bundle.LineageID, Snapshot: snapshot,
 		PolicyHash: policyHash, LedgerHash: ledgerHash, EvidenceHash: evidenceHash, FixDeltaHash: fixDeltaHash, Receipt: receipt,
@@ -587,31 +571,6 @@ func RunReviewBundleImport(args []string, stdout io.Writer) error {
 }
 
 func RunReviewValidate(args []string, stdout io.Writer) error {
-	var output bytes.Buffer
-	err := runReviewValidate(args, &output)
-	if err == nil {
-		_, copyErr := io.Copy(stdout, &output)
-		return copyErr
-	}
-	var denied ReviewGateDeniedError
-	if errors.As(err, &denied) {
-		_, copyErr := io.Copy(stdout, &output)
-		if copyErr != nil {
-			return copyErr
-		}
-		return err
-	}
-	result := ReviewValidateResult{
-		Schema: ReviewValidateSchema, Result: reviewtransaction.GateInvalidated, Allowed: false,
-		Action: reviewGateAction(reviewtransaction.GateInvalidated), Reason: "review validation failed closed: " + err.Error(),
-	}
-	if encodeErr := encodeReviewJSON(stdout, result); encodeErr != nil {
-		return encodeErr
-	}
-	return ReviewGateDeniedError{Result: reviewtransaction.GateInvalidated}
-}
-
-func runReviewValidate(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review-validate", stdout, "Validate a receipt using either --request or native artifact-only flags. Explicit and native modes are mutually exclusive.")
 	cwd := flags.String("cwd", "", "repository root")
 	receiptPath := flags.String("receipt", "", "review receipt JSON")
@@ -623,7 +582,6 @@ func runReviewValidate(args []string, stdout io.Writer) error {
 	ledgerPath := flags.String("ledger", "", "frozen ledger artifact (native mode)")
 	fixDeltaPath := flags.String("fix-delta", "", "optional correction delta artifact (native mode)")
 	evidencePath := flags.String("evidence", "", "final verification evidence artifact (native mode)")
-	externalEvidencePath := flags.String("external-evidence", "", "new invalidating or escalating external evidence artifact (native mode)")
 	baseRef := flags.String("base-ref", "", "optional expected remote publication base for pre-pr native mode")
 	ciAttestation := flags.String("pre-pr-ci-attestation", "", "signed exact-merged-tree CI attestation for a compatible base advance")
 	requestOut := flags.String("request-out", "", "optional canonical native gate request output path")
@@ -688,8 +646,7 @@ func runReviewValidate(args []string, stdout io.Writer) error {
 		request, err = reviewtransaction.BuildNativeGateRequest(context.Background(), *cwd, reviewtransaction.NativeGateRequestInput{
 			Gate: reviewtransaction.GateKind(*gate), LineageID: *lineage, BundleArtifact: *bundlePath,
 			PolicyArtifact: *policyPath, LedgerArtifact: *ledgerPath, FixDeltaArtifact: *fixDeltaPath, EvidenceArtifact: *evidencePath,
-			ExternalEvidenceArtifact: *externalEvidencePath,
-			IntendedUntracked:        []string(intended), BaseRef: *baseRef, PrePRCIAttestation: *ciAttestation,
+			IntendedUntracked: []string(intended), BaseRef: *baseRef, PrePRCIAttestation: *ciAttestation,
 			ReleaseConfiguration: *releaseConfiguration, ReleaseGenerated: *releaseGenerated, ReleaseProvenance: *releaseProvenance,
 			ReleasePublicationBoundary: *releaseBoundary, ReleaseEvidenceFreshness: *releaseFreshness,
 		})

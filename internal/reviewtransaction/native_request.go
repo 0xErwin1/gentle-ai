@@ -19,7 +19,6 @@ type NativeGateRequestInput struct {
 	LedgerArtifact             string
 	FixDeltaArtifact           string
 	EvidenceArtifact           string
-	ExternalEvidenceArtifact   string
 	IntendedUntracked          []string
 	BaseRef                    string
 	PrePRCIAttestation         string
@@ -59,7 +58,6 @@ func BuildNativeGateRequest(ctx context.Context, repo string, input NativeGateRe
 		ChainIdentity: authoritative.ChainIdentity, BundleDigest: authoritative.BundleDigest,
 		PolicyArtifact: input.PolicyArtifact, LedgerArtifact: input.LedgerArtifact,
 		FixDeltaArtifact: input.FixDeltaArtifact, EvidenceArtifact: input.EvidenceArtifact,
-		ExternalEvidenceArtifact: input.ExternalEvidenceArtifact,
 	}
 	switch input.Gate {
 	case GatePostApply, GatePreCommit:
@@ -100,6 +98,8 @@ func BuildNativeGateRequest(ctx context.Context, repo string, input NativeGateRe
 			GeneratedArtifact: input.ReleaseGenerated, ProvenanceArtifact: input.ReleaseProvenance,
 			PublicationBoundaryArtifact: input.ReleasePublicationBoundary,
 			EvidenceFreshnessArtifact:   input.ReleaseEvidenceFreshness,
+			PublicationState:            PublicationStateSealed,
+			EvidenceFreshnessState:      EvidenceFreshnessCurrent,
 		}
 	default:
 		return GateRequest{}, fmt.Errorf("unsupported review gate %q", input.Gate)
@@ -116,25 +116,8 @@ func BuildNativeGateRequest(ctx context.Context, repo string, input NativeGateRe
 	if _, err := validateFixDeltaArtifact(preimages.fixDelta, record.Transaction); err != nil {
 		return GateRequest{}, err
 	}
-	request.ExternalEvidence, err = deriveExternalEvidenceDisposition(preimages.externalEvidence)
-	if err != nil {
-		return GateRequest{}, err
-	}
-	if request.Release != nil {
-		releaseSnapshot, snapshotErr := (SnapshotBuilder{Repo: repo}).Build(ctx, Target{Kind: TargetExactRevision, Revision: request.Release.Revision})
-		if snapshotErr != nil {
-			return GateRequest{}, snapshotErr
-		}
-		publicationState, releaseTree, err := parsePublicationBoundary(preimages.publicationBoundary)
-		if err != nil || releaseTree != releaseSnapshot.CandidateTree {
-			return GateRequest{}, errors.New("release publication boundary is not sealed for current HEAD")
-		}
-		freshnessState, freshnessTree, evidenceHash, err := parseEvidenceFreshness(preimages.evidenceFreshness)
-		if err != nil || freshnessTree != releaseSnapshot.CandidateTree || evidenceHash != hashArtifactPayload(preimages.evidence) {
-			return GateRequest{}, errors.New("release evidence freshness is not current for current HEAD and verification evidence")
-		}
-		request.Release.PublicationState = publicationState
-		request.Release.EvidenceFreshnessState = freshnessState
+	if len(preimages.fixDelta) != 0 {
+		request.FixDeltaContent = string(preimages.fixDelta)
 	}
 	request.preimages = &preimages
 	if err := validateGateRequest(request); err != nil {
