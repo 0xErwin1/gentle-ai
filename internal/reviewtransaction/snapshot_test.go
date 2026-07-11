@@ -134,6 +134,27 @@ func TestSnapshotDiffStatsExcludeGeneratedGoldensOnlyFromAuthoredLines(t *testin
 	}
 }
 
+func TestGeneratedGoldenPathMatchesRepositorySegments(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "root golden", path: "testdata/golden/rendered.golden", want: true},
+		{name: "nested golden", path: "internal/testdata/golden/rendered.golden", want: true},
+		{name: "lookalike segment", path: "internal/not-testdata/golden/rendered.golden", want: false},
+		{name: "non-golden fixture", path: "internal/testdata/golden/rendered.json", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isGeneratedGoldenPath(tt.path); got != tt.want {
+				t.Fatalf("isGeneratedGoldenPath(%q) = %t, want %t", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestSnapshotBuilderRequiresExplicitIntendedUntrackedAndLedgerBinding(t *testing.T) {
 	if testing.Short() {
 		t.Skip("uses real git commands")

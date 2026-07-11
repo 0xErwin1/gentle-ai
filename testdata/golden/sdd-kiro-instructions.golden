@@ -95,7 +95,7 @@ Use only the compact facade; it appends and reads back native authority before m
 |---|---|---|---|
 | 01 | `gentle-ai review start` | target, tier, lenses, and budget bound | blocked |
 | 02 | `gentle-ai review finalize` | results, evidence, native transitions, and receipt bound | blocked |
-| 03 | `gentle-ai review validate --gate <gate>` | authority, receipt, and live Git checked | blocked |
+| 03 | `gentle-ai review validate --gate <gate> --cwd <repo>` | authority, receipt, and live Git checked | blocked |
 | 04 | `reconcile-terminal-mirrors` | existing mirrors reconciled | allowed |
 
 After ambiguous output, rerun the same facade operation; native discovery resumes committed authority without another budget. Malformed or ambiguous lineage remains invalid.
@@ -103,7 +103,7 @@ After ambiguous output, rerun the same facade operation; native discovery resume
 
 ## Delivery
 
-Repository Git common-dir CAS remains authoritative. Existing transaction, policy, ledger, receipt, bundle, and gate-context schemas, prerequisites, and compatibility behavior remain unchanged in this work unit. Reconcile mirrors only after native allow. Commit, push, PR, archive, incident, compatible-base, and release boundaries use `gentle-ai review validate --gate <gate>` to discover and validate the same receipt; they never launch reviewers or create a budget. Model/provider/profile selection remains user-owned.
+Repository Git common-dir CAS remains authoritative. Existing transaction, policy, ledger, receipt, bundle, and gate-context schemas, prerequisites, and compatibility behavior remain unchanged in this work unit. Reconcile mirrors only after native allow. Commit, push, PR, archive, incident, compatible-base, and release boundaries use `gentle-ai review validate --gate <gate> --cwd <repo>` to discover and validate the same receipt; they never launch reviewers or create a budget. Model/provider/profile selection remains user-owned.
 
 #### Cost and Context Balance
 

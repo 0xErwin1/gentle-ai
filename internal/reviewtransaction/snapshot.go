@@ -199,7 +199,8 @@ func (builder SnapshotBuilder) DiffStats(ctx context.Context, snapshot Snapshot)
 }
 
 func isGeneratedGoldenPath(logicalPath string) bool {
-	return strings.HasPrefix(logicalPath, "testdata/golden/") && strings.HasSuffix(logicalPath, ".golden")
+	normalized := "/" + strings.TrimPrefix(filepath.ToSlash(logicalPath), "./")
+	return strings.Contains(normalized, "/testdata/golden/") && strings.HasSuffix(normalized, ".golden")
 }
 
 func (builder SnapshotBuilder) repositoryRoot(ctx context.Context) (string, error) {
