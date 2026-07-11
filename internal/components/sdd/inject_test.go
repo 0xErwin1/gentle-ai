@@ -4909,7 +4909,7 @@ func TestInjectWritesNativeReviewAgentFiles(t *testing.T) {
 			}
 
 			for _, agent := range reviewAgentNames {
-				assertNativeAgentFile(t, filepath.Join(tt.agentsDir(home), agent+".md"), "No findings.")
+				assertNativeAgentFile(t, filepath.Join(tt.agentsDir(home), agent+".md"), `"findings":[]`)
 				for _, ext := range tt.extraExts {
 					want := tt.extraContains[ext]
 					if ext == ".yaml" {

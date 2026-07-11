@@ -90,6 +90,50 @@ func TestSnapshotBuilderCurrentChangesIsCompleteAndPreservesRealIndex(t *testing
 	}
 }
 
+func TestSnapshotDiffStatsExcludeGeneratedGoldensOnlyFromAuthoredLines(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	goldenPath := "testdata/golden/rendered.golden"
+	if err := os.MkdirAll(filepath.Join(repo, "testdata", "golden"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSnapshotFile(t, repo, goldenPath, strings.Repeat("generated\n", 500))
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{goldenPath},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := (SnapshotBuilder{Repo: repo}).DiffStats(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changedLines, err := CountChangedLines(stats)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedLines != 2 || !equalStrings(snapshot.Paths, []string{"testdata/golden/rendered.golden", "tracked.txt"}) {
+		t.Fatalf("authored lines/snapshot paths = %d/%v", changedLines, snapshot.Paths)
+	}
+	risk, originalChangedLines, err := (SnapshotBuilder{Repo: repo}).ClassifySnapshotRisk(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget, err := CorrectionBudget(originalChangedLines)
+	if err != nil || risk != RiskMedium || originalChangedLines != 2 || budget != 1 {
+		t.Fatalf("repository risk/original/budget = %q/%d/%d, err %v", risk, originalChangedLines, budget, err)
+	}
+	generated := false
+	for _, stat := range stats {
+		if stat.Path == goldenPath {
+			generated = stat.Generated
+		}
+	}
+	if !generated {
+		t.Fatalf("DiffStats() did not recognize generated golden: %#v", stats)
+	}
+}
+
 func TestSnapshotBuilderRequiresExplicitIntendedUntrackedAndLedgerBinding(t *testing.T) {
 	if testing.Short() {
 		t.Skip("uses real git commands")
