@@ -1059,7 +1059,7 @@ func ensurePreservedOpenCodeDelegationHardGates(prompt string) string {
 		"use fresh context for adversarial review of diffs, conflicts, PR readiness, and incidents",
 		"run fresh adversarial lenses only inside one explicit review/start(target); PR readiness and incidents validate the receipt",
 		"before commit, push, or PR after code changes, run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1)",
-		"before commit, push, PR, or release, validate the same content-bound receipt with native review validate --gate; never create a review budget at the gate",
+		"before commit, push, PR, or release, validate the same content-bound receipt with native `gentle-ai review validate --gate <gate> --cwd <repo>`; never create a review budget at the gate",
 		"after wrong `cwd`, accidental repo/worktree mutation, merge recovery, confusing test command, or environment workaround, stop and run the concrete audit/review lens(es) selected by Review Lens Selection before continuing",
 		"after a workflow incident, prove code, configuration, generated-artifact, and provenance targets remain immutable, then validate the existing receipt",
 	).Replace(prompt)

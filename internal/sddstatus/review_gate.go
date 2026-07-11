@@ -227,7 +227,7 @@ func discoverNativeReceipt(ctx context.Context, repo string) ([]byte, error) {
 		return nil, errors.New("approved review receipt is missing")
 	}
 	if len(matches) != 1 {
-		return nil, errors.New("multiple terminal native review receipts found; specify an authoritative receipt")
+		return nil, errors.New("multiple terminal native review receipts found; restore the change-local reviews/receipt.json mirror or remove stale terminal authority")
 	}
 	return matches[0], nil
 }

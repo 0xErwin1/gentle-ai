@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
@@ -20,6 +21,19 @@ const RecordSchema = "gentle-ai.review-record/v1"
 
 var ErrConcurrentUpdate = errors.New("review transaction changed concurrently")
 var ErrInvalidSuccessor = errors.New("review transaction successor is invalid")
+
+var reviewRuntimeGOOS = func() string { return runtime.GOOS }
+var syncReviewDirectory = func(path string) error {
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	if err := directory.Sync(); err != nil {
+		_ = directory.Close()
+		return err
+	}
+	return directory.Close()
+}
 
 type Record struct {
 	Schema           string      `json:"schema"`
@@ -823,10 +837,11 @@ func writeAtomic(path string, payload []byte, mode os.FileMode) error {
 	if err := os.Rename(tempPath, path); err != nil {
 		return err
 	}
-	directory, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
+	if err := syncReviewDirectory(filepath.Dir(path)); err != nil {
+		// NTFS does not support syncing directory handles.
+		if !(reviewRuntimeGOOS() == "windows" && errors.Is(err, os.ErrPermission)) {
+			return fmt.Errorf("sync parent directory for %q: %w", path, err)
+		}
 	}
-	_ = directory.Sync()
-	return directory.Close()
+	return nil
 }

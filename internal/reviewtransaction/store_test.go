@@ -15,6 +15,22 @@ import (
 	"time"
 )
 
+func TestWriteAtomicPropagatesParentDirectorySyncFailure(t *testing.T) {
+	originalGOOS := reviewRuntimeGOOS
+	originalSync := syncReviewDirectory
+	reviewRuntimeGOOS = func() string { return "linux" }
+	syncReviewDirectory = func(string) error { return errors.New("disk sync failed") }
+	t.Cleanup(func() {
+		reviewRuntimeGOOS = originalGOOS
+		syncReviewDirectory = originalSync
+	})
+
+	err := writeAtomic(filepath.Join(t.TempDir(), "state.json"), []byte("{}\n"), 0o644)
+	if err == nil || !strings.Contains(err.Error(), "sync parent directory") {
+		t.Fatalf("writeAtomic() error = %v, want parent-directory sync failure", err)
+	}
+}
+
 func TestStoreIsAppendOnlyAtomicAndRejectsStaleWriters(t *testing.T) {
 	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
 	tx := newTestTransaction(t, ModeOrdinary4R)

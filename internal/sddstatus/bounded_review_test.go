@@ -208,7 +208,7 @@ func TestNativeReceiptDiscoveryRejectsMultipleTerminalLineagesAsAmbiguous(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 0 || status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateInvalidated || !strings.Contains(status.ReviewGate.Reason, "multiple terminal native review receipts") {
+	if count != 0 || status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateInvalidated || !strings.Contains(status.ReviewGate.Reason, "restore the change-local reviews/receipt.json mirror") {
 		t.Fatalf("native evaluations=%d gate=%#v, want ambiguous discovery before evaluation", count, status.ReviewGate)
 	}
 }
