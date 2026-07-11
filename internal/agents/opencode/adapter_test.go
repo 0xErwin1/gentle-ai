@@ -13,6 +13,7 @@ import (
 )
 
 func TestDetect(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "")
 	tests := []struct {
 		name            string
 		lookPathPath    string
@@ -144,5 +145,23 @@ func TestInstallCommand(t *testing.T) {
 				t.Fatalf("InstallCommand() = %v, want %v", command, tt.want)
 			}
 		})
+	}
+}
+
+func TestConfigPathsRespectXDGConfigHome(t *testing.T) {
+	home := t.TempDir()
+	xdg := filepath.Join(t.TempDir(), "xdg")
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	a := NewAdapter()
+	wantDir := filepath.Join(xdg, "opencode")
+
+	if got := a.GlobalConfigDir(home); got != wantDir {
+		t.Fatalf("GlobalConfigDir() = %q, want %q", got, wantDir)
+	}
+	if got := a.SettingsPath(home); got != filepath.Join(wantDir, "opencode.json") {
+		t.Fatalf("SettingsPath() = %q, want XDG path", got)
+	}
+	if got := a.SystemPromptFile(home); got != filepath.Join(wantDir, "AGENTS.md") {
+		t.Fatalf("SystemPromptFile() = %q, want XDG path", got)
 	}
 }

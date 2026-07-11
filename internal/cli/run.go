@@ -206,6 +206,8 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	claudePhaseState := claudePhaseAssignmentsToState(input.Selection.ClaudePhaseAssignments)
 	newState := state.InstallState{
 		InstalledAgents:             agentIDs,
+		CommunityTools:              communityToolIDsToStrings(input.Selection.CommunityTools),
+		CommunityToolsConfigured:    true,
 		ClaudeModelAssignments:      claudeLegacyAssignmentsForState(input.Selection.ClaudeModelAssignments, claudePhaseState),
 		ClaudePhaseAssignments:      claudePhaseState,
 		KiroModelAssignments:        kiroAliasesToStrings(input.Selection.KiroModelAssignments),
@@ -1368,7 +1370,7 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		}
 	}
 	if selection.HasCommunityTool(model.CommunityToolCodeGraph) {
-		for _, path := range communitytool.CodeGraphGuidancePaths(homeDir) {
+		for _, path := range communitytool.CodeGraphManagedPaths(homeDir) {
 			paths[path] = struct{}{}
 		}
 	}
@@ -1598,15 +1600,18 @@ func shouldInjectCodeGraphGuidanceForSDD(homeDir string, selected []model.Commun
 			return true
 		}
 	}
-	detector := communitytool.DetectorFunc(cmdLookPath)
-	if communitytool.HasConfiguredCodeGraph(homeDir, detector) {
-		return true
+	return false
+}
+
+func communityToolIDsToStrings(tools []model.CommunityToolID) []string {
+	if tools == nil {
+		return nil
 	}
-	if !communitytool.HasLegacyCodeGraphGuidance(homeDir) {
-		return false
+	result := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		result = append(result, string(tool))
 	}
-	_, err := cmdLookPath("codegraph")
-	return err == nil
+	return result
 }
 
 type openClawWorkspaceConfig struct {
