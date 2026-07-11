@@ -932,7 +932,7 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 }
 
 func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
-	for _, name := range []string{"review-risk", "review-readability", "review-reliability", "review-resilience"} {
+	for _, name := range opencode.ReviewLensPhases() {
 		agent, ok := agentsMap[name].(map[string]any)
 		if !ok {
 			continue
@@ -951,7 +951,7 @@ func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 		agent["tools"] = map[string]any{"read": true, "write": false, "edit": false, "bash": false, "task": false}
 	}
 
-	if refuter, ok := agentsMap[reviewRefuterAgentName].(map[string]any); ok {
+	if refuter, ok := agentsMap[opencode.ReviewRefuterAgent].(map[string]any); ok {
 		refuter["prompt"] = "You are the detached read-only refuter for exactly ONE transaction-wide inferential batch. Receive every inferential severe neutral claim and proof reference, return one corroborated | refuted | inconclusive result per finding, add no findings, modify nothing, return one complete result, and terminate. Missing or malformed entries are inconclusive."
 		refuter["tools"] = map[string]any{"read": true, "write": false, "edit": false, "bash": false, "task": false}
 	}

@@ -59,6 +59,37 @@ func TestReadCurrentModelAssignments(t *testing.T) {
 	}
 }
 
+func TestReadCurrentModelAssignmentsIncludesReviewAgentsFromJSONC(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "opencode.json")
+	content := `{
+  // Reviewer models remain global across named profiles.
+  "agent": {
+    "review-risk": { "model": "anthropic/claude-sonnet-4" },
+    "review-readability": { "model": "openai/gpt-5" },
+    "review-reliability": { "model": "openai/gpt-5" },
+    "review-resilience": { "model": "anthropic/claude-sonnet-4" },
+    "review-refuter": { "model": "openai/gpt-5", "variant": "high" },
+  },
+}`
+	if err := os.WriteFile(settingsPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	got, err := ReadCurrentModelAssignments(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadCurrentModelAssignments() error = %v", err)
+	}
+	for _, agent := range []string{"review-risk", "review-readability", "review-reliability", "review-resilience", "review-refuter"} {
+		if got[agent].ProviderID == "" || got[agent].ModelID == "" {
+			t.Errorf("review assignment %q missing: %v", agent, got)
+		}
+	}
+	if got["review-refuter"].Effort != "high" {
+		t.Fatalf("review-refuter effort = %q, want high", got["review-refuter"].Effort)
+	}
+}
+
 func TestReadCurrentModelAssignmentsNoFile(t *testing.T) {
 	got, err := ReadCurrentModelAssignments("/nonexistent/path/opencode.json")
 	if err != nil {

@@ -277,6 +277,30 @@ func TestProfileCreateSeparatorIsIgnoredAndSkipped(t *testing.T) {
 	}
 }
 
+func TestModelPickerNavigationSkipsReviewSeparator(t *testing.T) {
+	rows := screens.ModelPickerRows()
+	separator := -1
+	for i, row := range rows {
+		if row == "--- Review agents ---" {
+			separator = i
+			break
+		}
+	}
+	if separator < 1 {
+		t.Fatalf("review separator missing from rows: %v", rows)
+	}
+
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenModelPicker
+	m.ModelPicker = screens.ModelPickerState{Mode: screens.ModePhaseList, AvailableIDs: []string{"openai"}}
+	m.Cursor = separator - 1
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	if got := updated.(Model).Cursor; got != separator+1 {
+		t.Fatalf("cursor after review separator = %d, want %d", got, separator+1)
+	}
+}
+
 func TestProfileCreateBackspaceClearsSelectedJDAssignment(t *testing.T) {
 	jdPhases := opencode.JDPhases()
 	if len(jdPhases) == 0 {
@@ -4213,6 +4237,7 @@ func TestModelConfigOpenCodePrePopulatesAssignments(t *testing.T) {
 	preExisting := map[string]model.ModelAssignment{
 		"gentle-orchestrator": {ProviderID: "anthropic", ModelID: "claude-sonnet-4-20250514"},
 		"sdd-apply":           {ProviderID: "openai", ModelID: "gpt-4o"},
+		"review-refuter":      {ProviderID: "openai", ModelID: "gpt-5"},
 	}
 
 	// Override the read function to return pre-existing assignments
@@ -4254,6 +4279,9 @@ func TestModelConfigOpenCodePrePopulatesAssignments(t *testing.T) {
 	want2 := preExisting["sdd-apply"]
 	if got2 != want2 {
 		t.Errorf("sdd-apply assignment = %+v, want %+v", got2, want2)
+	}
+	if got := state.Selection.ModelAssignments["review-refuter"]; got != preExisting["review-refuter"] {
+		t.Errorf("review-refuter assignment = %+v, want %+v", got, preExisting["review-refuter"])
 	}
 }
 
