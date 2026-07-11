@@ -848,6 +848,12 @@ func TestCodeGraphGuidanceSyncStepPreservesBrokenSymlinkChain(t *testing.T) {
 			if err := os.WriteFile(settingsPath, []byte(`{}`), 0o644); err != nil {
 				return err
 			}
+			if err := os.MkdirAll(filepath.Dir(missingTarget), 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(missingTarget, []byte(`{"created":true}`), 0o644); err != nil {
+				return err
+			}
 			return errors.New("installer failed after replacing broken chain")
 		}),
 	}
@@ -858,6 +864,9 @@ func TestCodeGraphGuidanceSyncStepPreservesBrokenSymlinkChain(t *testing.T) {
 	innerInfo, innerErr := os.Lstat(innerLinkPath)
 	if outerErr != nil || innerErr != nil || outerInfo.Mode()&os.ModeSymlink == 0 || innerInfo.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("broken chain was not preserved: outer=(%v, %v) inner=(%v, %v)", outerInfo, outerErr, innerInfo, innerErr)
+	}
+	if _, err := os.Stat(missingTarget); !os.IsNotExist(err) {
+		t.Fatalf("newly created final target survived rollback: %v", err)
 	}
 }
 

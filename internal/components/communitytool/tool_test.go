@@ -830,6 +830,7 @@ func TestReconcileOpenCodeCodeGraphPreservesJSONCUserContent(t *testing.T) {
 func TestReconcileOpenCodeCodeGraphUsesXDGConfigHome(t *testing.T) {
 	home := t.TempDir()
 	xdg := filepath.Join(home, "custom-config")
+	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", xdg)
 	settingsPath := filepath.Join(xdg, "opencode", "opencode.json")
 	mustWrite(t, settingsPath, `{}`)
@@ -843,6 +844,25 @@ func TestReconcileOpenCodeCodeGraphUsesXDGConfigHome(t *testing.T) {
 	}
 	if !result.Changed || !reflect.DeepEqual(result.Files, []string{settingsPath}) {
 		t.Fatalf("result = %#v, want XDG OpenCode settings", result)
+	}
+}
+
+func TestInstallRecordsTargetedOpenCodeReconciliation(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	mustWrite(t, settingsPath, `{}`)
+	mustWrite(t, filepath.Join(home, ".claude", "mcp", "codegraph.json"), `{"command":"codegraph","args":["serve","--mcp"]}`)
+
+	result, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(string, ...string) error {
+		mustWrite(t, settingsPath, `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"enabled":true}}}`)
+		return nil
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	if err != nil {
+		t.Fatalf("InstallWithHome() error = %v", err)
+	}
+	want := []string{"codegraph install --target opencode --location global --yes"}
+	if !reflect.DeepEqual(result.CommandsRun, want) {
+		t.Fatalf("CommandsRun = %#v, want %#v", result.CommandsRun, want)
 	}
 }
 

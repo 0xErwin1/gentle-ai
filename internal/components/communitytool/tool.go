@@ -133,6 +133,9 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	before := DetectStatus(id, homeDir, detector)
 	result.StatusBefore = &before
 	if before.CodeGraphReconcileSatisfied() || (before.CLI == AvailabilityAvailable && hasDetectedCodeGraphToolWiring(homeDir)) {
+		if NeedsOpenCodeCodeGraphReconcile(homeDir) {
+			result.CommandsRun = append(result.CommandsRun, "codegraph install --target opencode --location global --yes")
+		}
 		openCodeResult, err := ReconcileOpenCodeCodeGraph(homeDir, runner)
 		if err != nil {
 			return result, err

@@ -151,6 +151,7 @@ func TestInstallCommand(t *testing.T) {
 func TestConfigPathsRespectXDGConfigHome(t *testing.T) {
 	home := t.TempDir()
 	xdg := filepath.Join(t.TempDir(), "xdg")
+	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", xdg)
 	a := NewAdapter()
 	wantDir := filepath.Join(xdg, "opencode")

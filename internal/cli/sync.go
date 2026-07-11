@@ -906,14 +906,13 @@ func dedupPaths(paths []string) []string {
 }
 
 type syncFileSnapshot struct {
-	exists            bool
-	data              []byte
-	mode              os.FileMode
-	symlink           bool
-	linkTarget        string
-	targetPath        string
-	targetExists      bool
-	targetEntryExists bool
+	exists       bool
+	data         []byte
+	mode         os.FileMode
+	symlink      bool
+	linkTarget   string
+	targetPath   string
+	targetExists bool
 }
 
 func snapshotSyncFiles(paths []string) (map[string]syncFileSnapshot, error) {
@@ -936,41 +935,26 @@ func snapshotSyncFiles(paths []string) (map[string]syncFileSnapshot, error) {
 			if !filepath.IsAbs(targetPath) {
 				targetPath = filepath.Join(filepath.Dir(path), targetPath)
 			}
-			targetPath = filepath.Clean(targetPath)
-			_, targetLstatErr := os.Lstat(targetPath)
-			targetEntryExists := targetLstatErr == nil
-			if targetLstatErr != nil && !os.IsNotExist(targetLstatErr) {
-				return nil, fmt.Errorf("inspect managed sync symlink target %q: %w", targetPath, targetLstatErr)
-			}
-			targetInfo, statErr := os.Stat(targetPath)
-			if statErr != nil {
-				if os.IsNotExist(statErr) {
-					snapshots[path] = syncFileSnapshot{exists: true, symlink: true, linkTarget: linkTarget, targetPath: targetPath, targetEntryExists: targetEntryExists}
-					continue
-				}
-				return nil, fmt.Errorf("stat managed sync symlink target %q: %w", targetPath, statErr)
-			}
-			resolvedTargetPath, err := filepath.EvalSymlinks(targetPath)
+			targetPath, targetInfo, targetExists, err := resolveSyncSymlinkTarget(targetPath)
 			if err != nil {
-				return nil, fmt.Errorf("resolve managed sync symlink target %q: %w", targetPath, err)
+				return nil, fmt.Errorf("resolve managed sync symlink target for %q: %w", path, err)
 			}
-			targetPath, err = filepath.Abs(resolvedTargetPath)
-			if err != nil {
-				return nil, fmt.Errorf("resolve managed sync symlink target %q: %w", resolvedTargetPath, err)
+			if !targetExists {
+				snapshots[path] = syncFileSnapshot{exists: true, symlink: true, linkTarget: linkTarget, targetPath: targetPath}
+				continue
 			}
 			data, err := os.ReadFile(targetPath)
 			if err != nil {
 				return nil, fmt.Errorf("snapshot managed sync symlink target %q: %w", targetPath, err)
 			}
 			snapshots[path] = syncFileSnapshot{
-				exists:            true,
-				data:              data,
-				mode:              targetInfo.Mode().Perm(),
-				symlink:           true,
-				linkTarget:        linkTarget,
-				targetPath:        targetPath,
-				targetExists:      true,
-				targetEntryExists: true,
+				exists:       true,
+				data:         data,
+				mode:         targetInfo.Mode().Perm(),
+				symlink:      true,
+				linkTarget:   linkTarget,
+				targetPath:   targetPath,
+				targetExists: true,
 			}
 			continue
 		}
@@ -982,6 +966,38 @@ func snapshotSyncFiles(paths []string) (map[string]syncFileSnapshot, error) {
 		snapshots[path] = syncFileSnapshot{exists: true, data: data, mode: info.Mode().Perm()}
 	}
 	return snapshots, nil
+}
+
+func resolveSyncSymlinkTarget(path string) (string, os.FileInfo, bool, error) {
+	current, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", nil, false, err
+	}
+	seen := map[string]struct{}{}
+	for {
+		if _, exists := seen[current]; exists {
+			return "", nil, false, fmt.Errorf("symlink cycle at %q", current)
+		}
+		seen[current] = struct{}{}
+		info, err := os.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return current, nil, false, nil
+			}
+			return "", nil, false, err
+		}
+		if info.Mode()&os.ModeSymlink == 0 {
+			return current, info, true, nil
+		}
+		next, err := os.Readlink(current)
+		if err != nil {
+			return "", nil, false, err
+		}
+		if !filepath.IsAbs(next) {
+			next = filepath.Join(filepath.Dir(current), next)
+		}
+		current = filepath.Clean(next)
+	}
 }
 
 func restoreSyncFiles(snapshots map[string]syncFileSnapshot) error {
@@ -1003,7 +1019,7 @@ func restoreSyncFiles(snapshots map[string]syncFileSnapshot) error {
 					restoreErr = errors.Join(restoreErr, fmt.Errorf("restore sync symlink target %q: %w", snapshot.targetPath, err))
 					continue
 				}
-			} else if !snapshot.targetEntryExists {
+			} else {
 				if err := os.Remove(snapshot.targetPath); err != nil && !os.IsNotExist(err) {
 					restoreErr = errors.Join(restoreErr, fmt.Errorf("remove newly created sync symlink target %q: %w", snapshot.targetPath, err))
 					continue

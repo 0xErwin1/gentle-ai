@@ -8,7 +8,10 @@ import (
 
 func ConfigPath(homeDir string) string {
 	if xdgConfigHome := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdgConfigHome != "" {
-		return filepath.Join(xdgConfigHome, "opencode")
+		userHome, err := os.UserHomeDir()
+		if err == nil && filepath.Clean(homeDir) == filepath.Clean(userHome) {
+			return filepath.Join(xdgConfigHome, "opencode")
+		}
 	}
 	return filepath.Join(homeDir, ".config", "opencode")
 }
