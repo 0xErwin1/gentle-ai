@@ -1010,13 +1010,14 @@ func restoreSyncFiles(snapshots map[string]syncFileSnapshot) error {
 			continue
 		}
 		mode := snapshot.mode
-		if mode == 0 {
-			mode = 0o644
-		}
 		if snapshot.symlink {
 			if snapshot.targetExists {
 				if _, err := filemerge.WriteFileAtomic(snapshot.targetPath, snapshot.data, mode); err != nil {
 					restoreErr = errors.Join(restoreErr, fmt.Errorf("restore sync symlink target %q: %w", snapshot.targetPath, err))
+					continue
+				}
+				if err := os.Chmod(snapshot.targetPath, mode); err != nil {
+					restoreErr = errors.Join(restoreErr, fmt.Errorf("restore sync symlink target mode %q: %w", snapshot.targetPath, err))
 					continue
 				}
 			} else {
@@ -1036,6 +1037,10 @@ func restoreSyncFiles(snapshots map[string]syncFileSnapshot) error {
 		}
 		if _, err := filemerge.WriteFileAtomic(path, snapshot.data, mode); err != nil {
 			restoreErr = errors.Join(restoreErr, fmt.Errorf("restore sync file %q: %w", path, err))
+			continue
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			restoreErr = errors.Join(restoreErr, fmt.Errorf("restore sync file mode %q: %w", path, err))
 		}
 	}
 	return restoreErr

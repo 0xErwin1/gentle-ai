@@ -152,6 +152,7 @@ func TestConfigPathsRespectXDGConfigHome(t *testing.T) {
 	home := t.TempDir()
 	xdg := filepath.Join(t.TempDir(), "xdg")
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", xdg)
 	a := NewAdapter()
 	wantDir := filepath.Join(xdg, "opencode")
@@ -164,5 +165,16 @@ func TestConfigPathsRespectXDGConfigHome(t *testing.T) {
 	}
 	if got := a.SystemPromptFile(home); got != filepath.Join(wantDir, "AGENTS.md") {
 		t.Fatalf("SystemPromptFile() = %q, want XDG path", got)
+	}
+}
+
+func TestConfigPathIgnoresRelativeXDGConfigHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join("relative", "config"))
+	want := filepath.Join(home, ".config", "opencode")
+	if got := ConfigPath(home); got != want {
+		t.Fatalf("ConfigPath() = %q, want fallback %q", got, want)
 	}
 }

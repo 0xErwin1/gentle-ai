@@ -132,7 +132,7 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	result := Result{Tool: id}
 	before := DetectStatus(id, homeDir, detector)
 	result.StatusBefore = &before
-	if before.CodeGraphReconcileSatisfied() || (before.CLI == AvailabilityAvailable && hasDetectedCodeGraphToolWiring(homeDir)) {
+	if before.CodeGraphReconcileSatisfied() || codeGraphCanRepairWithoutFullInstall(homeDir, before) {
 		if NeedsOpenCodeCodeGraphReconcile(homeDir) {
 			result.CommandsRun = append(result.CommandsRun, "codegraph install --target opencode --location global --yes")
 		}
@@ -200,6 +200,34 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	}
 	result.ManualActions = append(result.ManualActions, "CodeGraph CLI was installed and supported agents were connected. Project indexes will be created automatically when an enabled agent opens inside a project.")
 	return result, nil
+}
+
+func codeGraphCanRepairWithoutFullInstall(homeDir string, status Status) bool {
+	if status.CLI != AvailabilityAvailable {
+		return false
+	}
+	reg, err := agents.NewDefaultRegistry()
+	if err != nil {
+		return false
+	}
+	foundMissing := false
+	for _, agent := range status.Agents {
+		if !agent.Detected || agent.Configured || agent.Agent == model.AgentPi {
+			continue
+		}
+		foundMissing = true
+		if agent.Agent == model.AgentOpenCode {
+			continue
+		}
+		adapter, ok := reg.Get(agent.Agent)
+		if !ok {
+			return false
+		}
+		if _, wired := hasCodeGraphToolWiring(homeDir, adapter); !wired {
+			return false
+		}
+	}
+	return foundMissing
 }
 
 func reconcileDetectedPiCodeGraph(homeDir, workspaceDir string) (*PiCodeGraphResult, error) {

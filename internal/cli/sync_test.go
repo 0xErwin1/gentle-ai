@@ -870,6 +870,23 @@ func TestCodeGraphGuidanceSyncStepPreservesBrokenSymlinkChain(t *testing.T) {
 	}
 }
 
+func TestRestoreSyncFilesPreservesZeroMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "managed.json")
+	mustWriteFile(t, path, []byte("changed"))
+	if err := restoreSyncFiles(map[string]syncFileSnapshot{
+		path: {exists: true, data: []byte("original"), mode: 0},
+	}); err != nil {
+		t.Fatalf("restoreSyncFiles() error = %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0 {
+		t.Fatalf("restored mode = %o, want 000", info.Mode().Perm())
+	}
+}
+
 func TestCodeGraphGuidanceSyncStepRemovesLegacySkipBlockWhenConfigured(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")

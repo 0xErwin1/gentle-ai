@@ -831,6 +831,7 @@ func TestReconcileOpenCodeCodeGraphUsesXDGConfigHome(t *testing.T) {
 	home := t.TempDir()
 	xdg := filepath.Join(home, "custom-config")
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", xdg)
 	settingsPath := filepath.Join(xdg, "opencode", "opencode.json")
 	mustWrite(t, settingsPath, `{}`)
@@ -852,9 +853,11 @@ func TestInstallRecordsTargetedOpenCodeReconciliation(t *testing.T) {
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
 	mustWrite(t, settingsPath, `{}`)
 	mustWrite(t, filepath.Join(home, ".claude", "mcp", "codegraph.json"), `{"command":"codegraph","args":["serve","--mcp"]}`)
+	mustWrite(t, filepath.Join(home, ".claude", "CLAUDE.md"), "<!-- gentle-ai:codegraph-guidance -->\nmanaged\n<!-- /gentle-ai:codegraph-guidance -->\n")
 
 	result, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(string, ...string) error {
 		mustWrite(t, settingsPath, `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"enabled":true}}}`)
+		mustWrite(t, filepath.Join(home, ".claude", "mcp", "codegraph.json"), `{"command":"codegraph","args":["serve","--mcp"]}`)
 		return nil
 	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
 	if err != nil {
@@ -863,6 +866,25 @@ func TestInstallRecordsTargetedOpenCodeReconciliation(t *testing.T) {
 	want := []string{"codegraph install --target opencode --location global --yes"}
 	if !reflect.DeepEqual(result.CommandsRun, want) {
 		t.Fatalf("CommandsRun = %#v, want %#v", result.CommandsRun, want)
+	}
+}
+
+func TestInstallRunsFullReconcileWhenAnotherAgentIsMissing(t *testing.T) {
+	home := t.TempDir()
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	mustWrite(t, settingsPath, `{}`)
+	mustWrite(t, filepath.Join(home, ".claude", "settings.json"), `{}`)
+
+	result, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(string, ...string) error {
+		mustWrite(t, settingsPath, `{"mcp":{"codegraph":{"type":"local","command":["codegraph","serve","--mcp"],"enabled":true}}}`)
+		mustWrite(t, filepath.Join(home, ".claude", "mcp", "codegraph.json"), `{"command":"codegraph","args":["serve","--mcp"]}`)
+		return nil
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	if err != nil {
+		t.Fatalf("InstallWithHome() error = %v", err)
+	}
+	if !reflect.DeepEqual(result.CommandsRun, []string{"codegraph install --yes"}) {
+		t.Fatalf("CommandsRun = %#v, want full reconciliation", result.CommandsRun)
 	}
 }
 
@@ -1048,7 +1070,7 @@ func TestInstallRefreshesOldCodeGraphGuidanceMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InstallWithHome() error = %v", err)
 	}
-	if !reflect.DeepEqual(result.CommandsRun, []string{"codegraph install --yes"}) {
+	if !reflect.DeepEqual(result.CommandsRun, []string{"codegraph install --target opencode --location global --yes"}) {
 		t.Fatalf("CommandsRun = %#v, want MCP reconciliation only", result.CommandsRun)
 	}
 
