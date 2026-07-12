@@ -859,7 +859,7 @@ func readPiCodeGraphManifest(path string) (piCodeGraphManifest, error) {
 		return piCodeGraphManifest{}, fmt.Errorf("stat Pi CodeGraph manifest %q: %w", path, err)
 	}
 	if !piCodeGraphManifestPermissionsSafe(runtime.GOOS, info.Mode()) {
-		return piCodeGraphManifest{}, fmt.Errorf("Pi CodeGraph manifest %q has unsafe permissions", path)
+		return piCodeGraphManifest{}, fmt.Errorf("Pi CodeGraph manifest %q has unsafe permissions %#o", path, info.Mode().Perm())
 	}
 	var manifest piCodeGraphManifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
