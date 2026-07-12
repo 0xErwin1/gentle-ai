@@ -12,6 +12,12 @@ import (
 const LargeChangeLines = 400
 const MaxCorrectionChangedLines = 200
 
+var semanticSourceExtensions = map[string]struct{}{
+	".c": {}, ".cc": {}, ".cpp": {}, ".cs": {}, ".go": {}, ".h": {}, ".hpp": {},
+	".java": {}, ".js": {}, ".jsx": {}, ".kt": {}, ".kts": {}, ".php": {}, ".py": {},
+	".rb": {}, ".rs": {}, ".sh": {}, ".bash": {}, ".zsh": {}, ".ts": {}, ".tsx": {},
+}
+
 type RiskLevel string
 
 const (
@@ -119,6 +125,7 @@ func (builder SnapshotBuilder) ClassifySnapshotRisk(ctx context.Context, snapsho
 	if err != nil {
 		return "", 0, err
 	}
+	signals := deriveSemanticRiskSignals(stats)
 	onlyNonExecutable := true
 	touchesConfiguration := false
 	for _, stat := range stats {
@@ -129,9 +136,71 @@ func (builder SnapshotBuilder) ClassifySnapshotRisk(ctx context.Context, snapsho
 		touchesConfiguration = touchesConfiguration || isConfigurationReviewPath(stat.Path)
 	}
 	risk, err := ClassifyRisk(RiskInput{
-		Stats: stats, OnlyNonExecutableChanges: onlyNonExecutable, TouchesConfiguration: touchesConfiguration,
+		Stats: stats, Signals: signals, OnlyNonExecutableChanges: onlyNonExecutable, TouchesConfiguration: touchesConfiguration,
 	})
 	return risk, changedLines, err
+}
+
+func deriveSemanticRiskSignals(stats []DiffStat) []RiskSignal {
+	for _, stat := range stats {
+		if !isSemanticRiskEligible(stat) {
+			continue
+		}
+		for _, segment := range strings.Split(stat.Path, "/") {
+			if hasAdjacentServiceTokenTokens(stripSemanticPathExtension(segment)) {
+				return []RiskSignal{SignalAuth}
+			}
+		}
+	}
+	return nil
+}
+
+func isSemanticRiskEligible(stat DiffStat) bool {
+	if stat.Additions+stat.Deletions == 0 || stat.Binary || stat.ModeOnly || stat.Generated || isGeneratedGoldenPath(stat.Path) {
+		return false
+	}
+	segments := strings.Split(stat.Path, "/")
+	for _, segment := range segments {
+		lower := asciiLower(segment)
+		if lower == "docs" || lower == "testdata" || lower == "fixture" || lower == "fixtures" || lower == "__fixtures__" {
+			return false
+		}
+	}
+	base := asciiLower(filepath.Base(stat.Path))
+	if strings.HasPrefix(base, "readme") {
+		return false
+	}
+	if _, ok := semanticSourceExtensions[asciiLower(filepath.Ext(stat.Path))]; ok {
+		return true
+	}
+	return isConfigurationReviewPath(stat.Path)
+}
+
+func stripSemanticPathExtension(segment string) string {
+	extension := asciiLower(filepath.Ext(segment))
+	if _, source := semanticSourceExtensions[extension]; source || isConfigurationReviewPath(segment) {
+		return strings.TrimSuffix(segment, filepath.Ext(segment))
+	}
+	return segment
+}
+
+func hasAdjacentServiceTokenTokens(segment string) bool {
+	tokens := strings.FieldsFunc(asciiLower(segment), func(r rune) bool { return r == '-' || r == '_' })
+	for index := 0; index+1 < len(tokens); index++ {
+		if tokens[index] == "service" && tokens[index+1] == "token" {
+			return true
+		}
+	}
+	return false
+}
+
+func asciiLower(value string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + ('a' - 'A')
+		}
+		return r
+	}, value)
 }
 
 func (builder SnapshotBuilder) ChangedLines(ctx context.Context, snapshot Snapshot) (int, error) {
