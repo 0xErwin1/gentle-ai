@@ -134,26 +134,40 @@ func (builder SnapshotBuilder) build(ctx context.Context, target Target, allowSt
 }
 
 func (builder SnapshotBuilder) buildHeadWithIntended(ctx context.Context, intended []string) (string, string, error) {
+	tracked := 0
+	for _, logicalPath := range intended {
+		output, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", "HEAD", "--", literalPathspec(logicalPath))
+		if err != nil {
+			return "", "", err
+		}
+		if len(output) > 0 {
+			tracked++
+		}
+	}
+	if tracked != 0 && tracked != len(intended) {
+		return "", "", errors.New("intended-untracked paths must transition into HEAD all-or-none")
+	}
+	if tracked == 0 {
+		if err := builder.rejectIgnoredIntended(ctx, intended); err != nil {
+			return "", "", err
+		}
+	}
+
 	temp, err := os.CreateTemp("", "gentle-ai-review-index-*")
 	if err != nil {
 		return "", "", err
 	}
 	tempIndex := temp.Name()
+	defer os.Remove(tempIndex)
 	if err := temp.Close(); err != nil {
 		return "", "", err
 	}
-	defer os.Remove(tempIndex)
 	env := []string{"GIT_INDEX_FILE=" + tempIndex}
 	if _, err := runGit(ctx, builder.Repo, env, nil, "read-tree", "HEAD"); err != nil {
 		return "", "", err
 	}
-	for _, logicalPath := range intended {
-		if _, err := runGit(ctx, builder.Repo, nil, nil, "ls-files", "--error-unmatch", "--", logicalPath); err == nil {
-			return "", "", fmt.Errorf("intended-untracked path %q is already tracked", logicalPath)
-		}
-	}
-	if len(intended) > 0 {
-		args := append([]string{"add", "--"}, intended...)
+	if len(intended) > 0 && tracked == 0 {
+		args := append([]string{"add", "--"}, literalPathspecs(intended)...)
 		if _, err := runGit(ctx, builder.Repo, env, nil, args...); err != nil {
 			return "", "", err
 		}
@@ -361,12 +375,22 @@ func (builder SnapshotBuilder) buildCurrentChanges(ctx context.Context, intended
 
 	stagedIntended := 0
 	for _, logicalPath := range intended {
-		if _, err := runGit(ctx, builder.Repo, nil, nil, "ls-files", "--error-unmatch", "--", logicalPath); err == nil {
+		if _, err := runGit(ctx, builder.Repo, nil, nil, "ls-files", "--error-unmatch", "--", literalPathspec(logicalPath)); err == nil {
 			if !allowStagedIntended {
 				return "", "", "", fmt.Errorf("intended-untracked path %q is already tracked", logicalPath)
 			}
 			stagedIntended++
 		}
+	}
+	if stagedIntended > 0 && stagedIntended != len(intended) {
+		return "", "", "", errors.New("intended-untracked paths must be either all untracked or all staged")
+	}
+	if stagedIntended == 0 {
+		if err := builder.rejectIgnoredIntended(ctx, intended); err != nil {
+			return "", "", "", err
+		}
+	}
+	for _, logicalPath := range intended {
 		info, err := os.Lstat(filepath.Join(builder.Repo, filepath.FromSlash(logicalPath)))
 		if err != nil {
 			return "", "", "", fmt.Errorf("intended-untracked path %q: %w", logicalPath, err)
@@ -375,28 +399,24 @@ func (builder SnapshotBuilder) buildCurrentChanges(ctx context.Context, intended
 			return "", "", "", fmt.Errorf("intended-untracked path %q must name a file or symlink, not a directory", logicalPath)
 		}
 	}
-	if stagedIntended > 0 && stagedIntended != len(intended) {
-		return "", "", "", errors.New("intended-untracked paths must be either all untracked or all staged")
-	}
-
 	temp, err := os.CreateTemp("", "gentle-ai-review-index-*")
 	if err != nil {
 		return "", "", "", err
 	}
 	tempIndex := temp.Name()
+	defer os.Remove(tempIndex)
 	if _, err := temp.Write(indexContent); err != nil {
 		return "", "", "", err
 	}
 	if err := temp.Close(); err != nil {
 		return "", "", "", err
 	}
-	defer os.Remove(tempIndex)
 	env := []string{"GIT_INDEX_FILE=" + tempIndex}
 	if _, err := runGit(ctx, builder.Repo, env, nil, "add", "-u", "--", "."); err != nil {
 		return "", "", "", err
 	}
 	if len(intended) > 0 {
-		args := append([]string{"add", "--"}, intended...)
+		args := append([]string{"add", "--"}, literalPathspecs(intended)...)
 		if _, err := runGit(ctx, builder.Repo, env, nil, args...); err != nil {
 			return "", "", "", err
 		}
@@ -492,11 +512,25 @@ func (builder SnapshotBuilder) changedPaths(ctx context.Context, baseTree, candi
 	return paths, nil
 }
 
+func (builder SnapshotBuilder) rejectIgnoredIntended(ctx context.Context, intended []string) error {
+	for _, logicalPath := range intended {
+		_, err := runGit(ctx, builder.Repo, nil, nil, "check-ignore", "--quiet", "--no-index", "--", logicalPath)
+		if err == nil {
+			return fmt.Errorf("intended-untracked path %q is ignored", logicalPath)
+		}
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			return err
+		}
+	}
+	return nil
+}
+
 func (builder SnapshotBuilder) untrackedProof(ctx context.Context, candidateTree string, intended []string) (string, error) {
 	hash := sha256.New()
 	hash.Write([]byte("gentle-ai.intended-untracked/v1\x00"))
 	for _, logicalPath := range intended {
-		output, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", candidateTree, "--", logicalPath)
+		output, err := runGit(ctx, builder.Repo, nil, nil, "ls-tree", "-z", candidateTree, "--", literalPathspec(logicalPath))
 		if err != nil {
 			return "", err
 		}
@@ -507,6 +541,18 @@ func (builder SnapshotBuilder) untrackedProof(ctx context.Context, candidateTree
 		writeLengthPrefixed(hash, output)
 	}
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func literalPathspec(logicalPath string) string {
+	return ":(literal)" + logicalPath
+}
+
+func literalPathspecs(logicalPaths []string) []string {
+	result := make([]string, len(logicalPaths))
+	for index, logicalPath := range logicalPaths {
+		result[index] = literalPathspec(logicalPath)
+	}
+	return result
 }
 
 func canonicalPaths(values []string) ([]string, error) {
