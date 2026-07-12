@@ -116,13 +116,54 @@ func injectMergeIntoSettings(homeDir string, adapter agents.Adapter) (InjectionR
 
 	overlay := DefaultContext7OverlayJSON()
 	if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
-		overlay = OpenCodeContext7OverlayJSON()
+		return injectOpenCodeMergeIntoSettings(settingsPath)
 	}
 	if adapter.Agent() == model.AgentOpenClaw {
 		return injectOpenClawMergeIntoSettings(settingsPath)
 	}
 
 	settingsWrite, err := mergeJSONFile(settingsPath, overlay)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	return InjectionResult{Changed: settingsWrite.Changed, Files: []string{settingsPath}}, nil
+}
+
+func injectOpenCodeMergeIntoSettings(settingsPath string) (InjectionResult, error) {
+	baseJSON, err := osReadFile(settingsPath)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	overlay := OpenCodeContext7OverlayJSON()
+	if settings, parseErr := filemerge.UnmarshalJSONObject(baseJSON); parseErr == nil {
+		mcp, _ := settings["mcp"].(map[string]any)
+		context7, _ := mcp["context7"].(map[string]any)
+		if headers, ok := context7["headers"].(map[string]any); ok {
+			replacement := map[string]any{
+				"type":    "remote",
+				"url":     "https://mcp.context7.com/mcp",
+				"enabled": true,
+				"headers": headers,
+			}
+			overlay, err = json.Marshal(map[string]any{
+				"mcp": map[string]any{
+					"context7": map[string]any{"__replace__": replacement},
+				},
+			})
+			if err != nil {
+				return InjectionResult{}, fmt.Errorf("marshal opencode context7 overlay: %w", err)
+			}
+		}
+	}
+
+	merged, err := filemerge.MergeJSONObjects(baseJSON, overlay)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+
+	settingsWrite, err := filemerge.WriteFileAtomic(settingsPath, merged, 0o644)
 	if err != nil {
 		return InjectionResult{}, err
 	}
