@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -268,6 +270,14 @@ type OpenCodePluginRegistrationDoneMsg struct {
 	Err     error
 }
 
+// OpenCodePluginUninstallDoneMsg is sent when the async uninstall runner
+// returns. Result holds the partial 4-layer report and Err is non-nil on
+// failure (with the partial result still populated when available).
+type OpenCodePluginUninstallDoneMsg struct {
+	Result opencodeplugin.UninstallResult
+	Err    error
+}
+
 type CommunityToolInstallationDoneMsg struct {
 	Results []communitytool.Result
 	Err     error
@@ -389,6 +399,16 @@ const (
 	// at launch. No snooze or skip state is persisted — shown on every launch with
 	// a pending update. Keys: u=update+quit, c/Enter=keep→Welcome, v=view changes.
 	ScreenUpdatePrompt
+	// ScreenOpenCodePluginUninstall is the standalone launcher for the
+	// uninstall flow. Shows a list of installed OpenCode community plugins
+	// and lets the user pick one to remove.
+	ScreenOpenCodePluginUninstall
+	// ScreenOpenCodePluginUninstallConfirm shows the layered-cleanup
+	// preview and runs the async 4-layer uninstall when Enter is pressed.
+	ScreenOpenCodePluginUninstallConfirm
+	// ScreenOpenCodePluginUninstallResult reports the success/failure
+	// summary of the uninstall and returns to Welcome on Enter.
+	ScreenOpenCodePluginUninstallResult
 )
 
 type Model struct {
@@ -578,6 +598,36 @@ type Model struct {
 	OpenCodePluginRegistrationResults []opencodeplugin.Result
 	OpenCodePluginRegistrationErr     error
 
+	// OpenCodePluginUninstallFn is the async uninstall runner. Returns a
+	// result and error from the 4-layer engine. Defaults to
+	// opencodeplugin.Uninstall if nil.
+	OpenCodePluginUninstallFn func(homeDir string, id model.OpenCodeCommunityPluginID) (opencodeplugin.UninstallResult, error)
+
+	// OpenCodePluginUninstallStandalone mirrors OpenCodePluginsStandalone
+	// for the uninstall flow — true when reached via the Welcome shortcut
+	// instead of an install-then-uninstall chain.
+	OpenCodePluginUninstallStandalone bool
+
+	// OpenCodePluginUninstallInstalled lists the plugins currently installed
+	// (filled by the standalone launcher from tui.json's plugin[] list).
+	// Used by the Select screen to know what to offer.
+	OpenCodePluginUninstallInstalled []model.OpenCodeCommunityPluginID
+
+	// OpenCodePluginUninstallSelected is the currently highlighted plugin id
+	// in the Select screen (cursor position maps to this).
+	OpenCodePluginUninstallSelected model.OpenCodeCommunityPluginID
+
+	// OpenCodePluginUninstallResult + Err hold the dedicated uninstall result.
+	OpenCodePluginUninstallResult opencodeplugin.UninstallResult
+	// OpenCodePluginUninstallErr is the error from the async uninstall runner,
+	// or nil on success. Populated alongside OpenCodePluginUninstallResult when
+	// the OpenCodePluginUninstallDoneMsg arrives.
+	OpenCodePluginUninstallErr error
+
+	// OpenCodePluginUninstallSpinnerFrame drives the spinner during the
+	// running state of the Confirm screen.
+	OpenCodePluginUninstallSpinnerFrame int
+
 	CommunityToolsStandalone   bool
 	CommunityToolStatusLoading bool
 	CommunityToolStatuses      []communitytool.Status
@@ -742,6 +792,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.SpinnerFrame = (m.SpinnerFrame + 1) % 10
 			return m, tickCmd()
 		}
+		// Keep the dedicated uninstall spinner running while the Confirm screen is
+		// in flight so the spinner frame can be advanced independently of the
+		// global SpinnerFrame. Checked first because OperationRunning is true
+		// during the uninstall and would otherwise short-circuit into the
+		// global SpinnerFrame branch.
+		if m.Screen == ScreenOpenCodePluginUninstallConfirm && m.OperationRunning {
+			m = m.spinnerTickOpenCodePluginUninstall()
+			return m, tickCmd()
+		}
 		// Keep spinner running for operation screens.
 		if m.OperationRunning || (m.Screen == ScreenUpgrade && !m.UpdateCheckDone) ||
 			(m.Screen == ScreenUpgradeSync && !m.UpdateCheckDone) {
@@ -801,6 +860,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.OpenCodePluginRegistrationResults = msg.Results
 		m.OpenCodePluginRegistrationErr = msg.Err
 		m.setScreen(ScreenOpenCodePluginResult)
+		return m, nil
+	case OpenCodePluginUninstallDoneMsg:
+		m.OperationRunning = false
+		m.OpenCodePluginUninstallResult = msg.Result
+		m.OpenCodePluginUninstallErr = msg.Err
+		m.setScreen(ScreenOpenCodePluginUninstallResult)
 		return m, nil
 	case CommunityToolInstallationDoneMsg:
 		m.OperationRunning = false
@@ -1070,6 +1135,12 @@ func (m Model) View() string {
 		return screens.RenderOpenCodePlugins(m.Selection.OpenCodePlugins, m.Cursor)
 	case ScreenOpenCodePluginResult:
 		return screens.RenderOpenCodePluginResult(m.OpenCodePluginRegistrationResults, m.OpenCodePluginRegistrationErr)
+	case ScreenOpenCodePluginUninstall:
+		return screens.RenderOpenCodePluginUninstallSelect(m.OpenCodePluginUninstallInstalled, m.Cursor)
+	case ScreenOpenCodePluginUninstallConfirm:
+		return screens.RenderOpenCodePluginUninstallConfirm(m.OpenCodePluginUninstallSelected, m.OperationRunning, m.OpenCodePluginUninstallSpinnerFrame)
+	case ScreenOpenCodePluginUninstallResult:
+		return screens.RenderOpenCodePluginUninstallResult(m.OpenCodePluginUninstallResult, m.OpenCodePluginUninstallErr)
 	case ScreenCommunityTools:
 		return screens.RenderCommunityTools(m.Selection.CommunityTools, m.Cursor, m.CommunityToolStatuses, m.CommunityToolStatusLoading, m.CommunityToolStatusErr)
 	case ScreenCommunityToolInstalling:
@@ -1571,6 +1642,28 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 				m.OpenCodePluginRegistrationErr = nil
 				m.Selection.OpenCodePlugins = nil
 				m.setScreen(ScreenOpenCodePlugins)
+				return m, nil
+			}
+			next++
+
+			// Slice 3b — standalone launcher for the 4-layer uninstall of
+			// OpenCode community plugins. Sits between the install
+			// shortcut (cursor=6) and the OpenCode Profiles entry
+			// (cursor=7 with detected OpenCode, cursor=8 without) so the
+			// menu pairs install + uninstall as mirror operations.
+			if m.Cursor == next {
+				m.OpenCodePluginUninstallStandalone = true
+				m.OpenCodePluginUninstallInstalled = openCodePluginUninstallInstalledFromTUI(homeDir())
+				m.OpenCodePluginUninstallResult = opencodeplugin.UninstallResult{}
+				m.OpenCodePluginUninstallErr = nil
+				m.OpenCodePluginUninstallSpinnerFrame = 0
+				// Empty tui.json (or no recognizable plugin entries) — skip
+				// the Select screen and surface the empty state on Result.
+				if len(m.OpenCodePluginUninstallInstalled) == 0 {
+					m.setScreen(ScreenOpenCodePluginUninstallResult)
+				} else {
+					m.setScreen(ScreenOpenCodePluginUninstall)
+				}
 				return m, nil
 			}
 			next++
@@ -2145,6 +2238,17 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 		m.OpenCodePluginRegistrationErr = nil
 		m.setScreen(ScreenWelcome)
 		return m, nil
+	case ScreenOpenCodePluginUninstall:
+		return m.confirmOpenCodePluginUninstallSelect()
+	case ScreenOpenCodePluginUninstallConfirm:
+		if m.OperationRunning {
+			return m, nil
+		}
+		return m.confirmOpenCodePluginUninstallConfirm()
+	case ScreenOpenCodePluginUninstallResult:
+		m.resetOpenCodePluginUninstallState()
+		m.setScreen(ScreenWelcome)
+		return m, nil
 	case ScreenCommunityTools:
 		return m.confirmCommunityTools()
 	case ScreenCommunityToolResult:
@@ -2642,6 +2746,76 @@ func (m Model) startOpenCodePluginRegistration() tea.Cmd {
 	}
 }
 
+// startOpenCodePluginUninstall launches the async uninstall runner and
+// returns a tea.Cmd that produces an OpenCodePluginUninstallDoneMsg when the
+// 4-layer engine finishes. When the injected OpenCodePluginUninstallFn is
+// nil it falls back to opencodeplugin.Uninstall so production callers do
+// not need to wire it themselves.
+func (m Model) startOpenCodePluginUninstall() tea.Cmd {
+	runner := m.OpenCodePluginUninstallFn
+	home := homeDir()
+	id := m.OpenCodePluginUninstallSelected
+	return func() tea.Msg {
+		if runner == nil {
+			result, err := opencodeplugin.Uninstall(home, id)
+			return OpenCodePluginUninstallDoneMsg{Result: result, Err: err}
+		}
+		result, err := runner(home, id)
+		return OpenCodePluginUninstallDoneMsg{Result: result, Err: err}
+	}
+}
+
+// confirmOpenCodePluginUninstallSelect handles Enter on the Select screen:
+// cursor on a plugin row selects it and advances to Confirm; cursor on the
+// trailing Back row returns to Welcome and resets the uninstall state.
+func (m Model) confirmOpenCodePluginUninstallSelect() (tea.Model, tea.Cmd) {
+	installed := m.OpenCodePluginUninstallInstalled
+	if m.Cursor < 0 {
+		return m, nil
+	}
+	if m.Cursor < len(installed) {
+		m.OpenCodePluginUninstallSelected = installed[m.Cursor]
+		m.setScreen(ScreenOpenCodePluginUninstallConfirm)
+		return m, nil
+	}
+	// Back row.
+	m.resetOpenCodePluginUninstallState()
+	m.setScreen(ScreenWelcome)
+	return m, nil
+}
+
+// resetOpenCodePluginUninstallState clears every uninstall-flow field so
+// re-entering the flow from Welcome starts fresh. Mirrors the install
+// flow's OpenCodePluginsStandalone reset pattern.
+func (m *Model) resetOpenCodePluginUninstallState() {
+	m.OpenCodePluginUninstallStandalone = false
+	m.OpenCodePluginUninstallInstalled = nil
+	m.OpenCodePluginUninstallSelected = ""
+	m.OpenCodePluginUninstallResult = opencodeplugin.UninstallResult{}
+	m.OpenCodePluginUninstallErr = nil
+	m.OpenCodePluginUninstallSpinnerFrame = 0
+}
+
+// confirmOpenCodePluginUninstallConfirm handles Enter on the Confirm screen:
+// kick off the async uninstall and stay on Confirm with the spinner running.
+func (m Model) confirmOpenCodePluginUninstallConfirm() (tea.Model, tea.Cmd) {
+	if m.OpenCodePluginUninstallSelected == "" {
+		return m, nil
+	}
+	m.OperationRunning = true
+	m.OpenCodePluginUninstallSpinnerFrame = 0
+	return m, tea.Batch(tickCmd(), m.startOpenCodePluginUninstall())
+}
+
+// spinnerTickOpenCodePluginUninstall advances the dedicated uninstall
+// spinner frame. Called from the TickMsg handler so the Confirm screen
+// has its own counter that survives other spinner users (community tools,
+// agent builder, etc.).
+func (m Model) spinnerTickOpenCodePluginUninstall() Model {
+	m.OpenCodePluginUninstallSpinnerFrame = (m.OpenCodePluginUninstallSpinnerFrame + 1) % 10
+	return m
+}
+
 func (m Model) startCommunityToolInstallation() tea.Cmd {
 	tools := append([]model.CommunityToolID(nil), m.Selection.CommunityTools...)
 	workspaceDir, _ := osGetwdFn()
@@ -2955,6 +3129,36 @@ func (m Model) goBack() Model {
 		m.Selection.OpenCodePlugins = nil
 		m.OpenCodePluginRegistrationResults = nil
 		m.OpenCodePluginRegistrationErr = nil
+		m.setScreen(ScreenWelcome)
+		return m
+	}
+
+	// Esc on the uninstall Select screen returns to Welcome and resets the
+	// uninstall state. Mirrors the install flow's goBackFromOpenCodePlugins
+	// reset on Esc from ScreenOpenCodePlugins.
+	if m.Screen == ScreenOpenCodePluginUninstall {
+		m.resetOpenCodePluginUninstallState()
+		m.setScreen(ScreenWelcome)
+		return m
+	}
+
+	// Esc on the uninstall Confirm screen cancels and returns to the Select
+	// screen. The OperationRunning guard above already prevents Esc from
+	// being processed while the 4-layer engine is mid-uninstall.
+	if m.Screen == ScreenOpenCodePluginUninstallConfirm {
+		m.setScreen(ScreenOpenCodePluginUninstall)
+		return m
+	}
+
+	// Esc on the uninstall Result screen returns to Welcome and clears the
+	// uninstall state. Mirrors the OpenCodePluginResult handling above.
+	if m.Screen == ScreenOpenCodePluginUninstallResult {
+		m.OpenCodePluginUninstallStandalone = false
+		m.OpenCodePluginUninstallInstalled = nil
+		m.OpenCodePluginUninstallSelected = ""
+		m.OpenCodePluginUninstallResult = opencodeplugin.UninstallResult{}
+		m.OpenCodePluginUninstallErr = nil
+		m.OpenCodePluginUninstallSpinnerFrame = 0
 		m.setScreen(ScreenWelcome)
 		return m
 	}
@@ -3321,6 +3525,12 @@ func (m Model) optionCount() int {
 	case ScreenOpenCodePlugins:
 		return screens.OpenCodePluginsOptionCount()
 	case ScreenOpenCodePluginResult:
+		return 1
+	case ScreenOpenCodePluginUninstall:
+		return screens.OpenCodePluginUninstallOptionCount(m.OpenCodePluginUninstallInstalled)
+	case ScreenOpenCodePluginUninstallConfirm:
+		return 0
+	case ScreenOpenCodePluginUninstallResult:
 		return 1
 	case ScreenCommunityTools:
 		return screens.CommunityToolsOptionCount()
@@ -3735,6 +3945,68 @@ func (m Model) goBackFromOpenCodePlugins() Model {
 
 func opencodepluginDefinitions() []model.OpenCodeCommunityPluginID {
 	return []model.OpenCodeCommunityPluginID{model.OpenCodePluginSubAgentStatusline, model.OpenCodePluginSDDEngramManage}
+}
+
+// openCodePluginUninstallInstalledFromTUI reads ~/.config/opencode/tui.json's
+// plugin[] list and maps package names back to OpenCodeCommunityPluginIDs so
+// the uninstall Select screen can offer the user a list of what is actually
+// installed. Unknown entries (e.g. third-party packages, the GentleLogo .tsx
+// absolute path) are mapped when recognized and ignored otherwise. Returns
+// an empty slice if tui.json is missing, malformed, or has no plugin[] field.
+func openCodePluginUninstallInstalledFromTUI(home string) []model.OpenCodeCommunityPluginID {
+	if home == "" {
+		return nil
+	}
+	tuiPath := filepath.Join(home, ".config", "opencode", "tui.json")
+	data, err := os.ReadFile(tuiPath)
+	if err != nil || len(bytes.TrimSpace(data)) == 0 {
+		return nil
+	}
+	root := map[string]any{}
+	if err := json.Unmarshal(data, &root); err != nil {
+		return nil
+	}
+	raw, ok := root["plugin"].([]any)
+	if !ok {
+		return nil
+	}
+	knownByPackage := map[string]model.OpenCodeCommunityPluginID{}
+	for _, def := range opencodeplugin.Definitions() {
+		knownByPackage[def.PackageName] = def.ID
+	}
+	// Match the GentleLogo plugin by either separator form because the
+	// Install path uses filepath.Join (native separator for the host).
+	gentleLogoSuffixes := []string{
+		filepath.Join("tui-plugins", "gentle-logo.tsx"),
+		"tui-plugins/gentle-logo.tsx",
+	}
+	seen := map[model.OpenCodeCommunityPluginID]bool{}
+	out := make([]model.OpenCodeCommunityPluginID, 0, len(raw))
+	for _, item := range raw {
+		entry, ok := item.(string)
+		if !ok {
+			continue
+		}
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if id, ok := knownByPackage[entry]; ok && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+			continue
+		}
+		if !seen[model.OpenCodePluginGentleLogo] {
+			for _, suffix := range gentleLogoSuffixes {
+				if strings.HasSuffix(entry, suffix) {
+					seen[model.OpenCodePluginGentleLogo] = true
+					out = append(out, model.OpenCodePluginGentleLogo)
+					break
+				}
+			}
+		}
+	}
+	return out
 }
 
 func communityToolDefinitions() []communitytool.Definition {
