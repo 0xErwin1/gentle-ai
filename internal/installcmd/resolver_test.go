@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -659,7 +660,7 @@ func TestResolveComponentInstall(t *testing.T) {
 			profile:   system.PlatformProfile{OS: "windows", PackageManager: "winget"},
 			component: model.ComponentGGA,
 			want: CommandSequence{
-				{"powershell", "-NoProfile", "-Command", fmt.Sprintf("$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath '%s') { Remove-Item -Recurse -Force -LiteralPath '%s' }", filepath.Join(os.TempDir(), "gentleman-guardian-angel"), filepath.Join(os.TempDir(), "gentleman-guardian-angel"))},
+				{"powershell", "-NoProfile", "-Command", fmt.Sprintf("$ErrorActionPreference = 'Stop'; if (Test-Path -LiteralPath '%s') { Remove-Item -Recurse -Force -LiteralPath '%s' }", powerShellSingleQuotedValue(filepath.Join(os.TempDir(), "gentleman-guardian-angel")), powerShellSingleQuotedValue(filepath.Join(os.TempDir(), "gentleman-guardian-angel")))},
 				{"git", "clone", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", filepath.Join(os.TempDir(), "gentleman-guardian-angel")},
 				{gitBashPath(), bashScriptPath(system.PlatformProfile{OS: "windows"}, filepath.Join(os.TempDir(), "gentleman-guardian-angel", "install.sh"))},
 			},
@@ -706,7 +707,7 @@ func TestGGAInstall_CleanupCommandBehavior(t *testing.T) {
 	// Resolve the installation command sequence to get the cleanup command.
 	r := NewResolver()
 	var profile system.PlatformProfile
-	if os.Getenv("OS") == "Windows_NT" {
+	if runtime.GOOS == "windows" {
 		profile = system.PlatformProfile{OS: "windows", PackageManager: "winget"}
 	} else {
 		profile = system.PlatformProfile{OS: "linux", LinuxDistro: "ubuntu", PackageManager: "apt"}
@@ -726,8 +727,8 @@ func TestGGAInstall_CleanupCommandBehavior(t *testing.T) {
 	if profile.OS == "windows" {
 		// Cleanup command: powershell -NoProfile -Command "..."
 		// Substitute the system Temp path with our local staleDir.
-		systemTemp := filepath.Join(os.TempDir(), "gentleman-guardian-angel")
-		cmdStr := strings.ReplaceAll(cleanupCmd[3], systemTemp, staleDir)
+		systemTemp := powerShellSingleQuotedValue(filepath.Join(os.TempDir(), "gentleman-guardian-angel"))
+		cmdStr := strings.ReplaceAll(cleanupCmd[3], systemTemp, powerShellSingleQuotedValue(staleDir))
 		testCmd = []string{cleanupCmd[0], cleanupCmd[1], cleanupCmd[2], cmdStr}
 	} else {
 		// Cleanup command: rm -rf /tmp/gentleman-guardian-angel
@@ -759,5 +760,11 @@ func TestGGAInstall_CleanupCommandBehavior(t *testing.T) {
 	}
 	if out, err := execCmd.CombinedOutput(); err != nil {
 		t.Fatalf("cleanup command failed on non-existent directory: %v, output: %s", err, string(out))
+	}
+}
+
+func TestPowerShellSingleQuotedValue(t *testing.T) {
+	if got, want := powerShellSingleQuotedValue(`C:\Users\O'Brien\Temp`), `C:\Users\O''Brien\Temp`; got != want {
+		t.Fatalf("powerShellSingleQuotedValue() = %q, want %q", got, want)
 	}
 }
