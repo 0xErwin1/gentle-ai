@@ -38,6 +38,19 @@ func TestParseUninstallOpenCodePluginFlagsAcceptsShortYesFlag(t *testing.T) {
 	}
 }
 
+func TestParseUninstallOpenCodePluginFlagsAssignedFalseDoesNotBypassConfirmation(t *testing.T) {
+	flags, err := ParseUninstallOpenCodePluginFlags([]string{"sub-agent-statusline", "--yes=false"})
+	if err != nil {
+		t.Fatalf("ParseUninstallOpenCodePluginFlags() error = %v", err)
+	}
+	if flags.Yes {
+		t.Fatal("Yes = true for --yes=false")
+	}
+	if _, err := ParseUninstallOpenCodePluginFlags([]string{"sub-agent-statusline", "--yes=not-a-bool"}); err == nil {
+		t.Fatal("invalid assigned boolean value was accepted")
+	}
+}
+
 func TestParseUninstallOpenCodePluginFlagsAcceptsGentleLogo(t *testing.T) {
 	flags, err := ParseUninstallOpenCodePluginFlags([]string{"gentle-logo"})
 	if err != nil {
@@ -89,6 +102,7 @@ func TestRenderUninstallOpenCodePluginReportSurfacesLayers(t *testing.T) {
 		ChangedNodeModules: true,
 		CacheEntryRemoved:  "/home/me/.cache/opencode/packages/opencode-subagent-statusline@latest",
 		NodeModulesPath:    "/home/me/.config/opencode/node_modules/opencode-subagent-statusline",
+		CleanupPending:     []string{"/home/me/.cache/opencode/packages/.gentle-ai-uninstall-pending"},
 	})
 	for _, want := range []string{
 		"Sub-agent Statusline",
@@ -97,6 +111,7 @@ func TestRenderUninstallOpenCodePluginReportSurfacesLayers(t *testing.T) {
 		"Layer 3",
 		"Layer 4",
 		"opencode-subagent-statusline",
+		"Cleanup pending",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("report missing %q; got:\n%s", want, out)

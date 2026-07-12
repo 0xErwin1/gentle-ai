@@ -20,7 +20,7 @@ func RenderOpenCodePluginUninstallSelect(installed []model.OpenCodeCommunityPlug
 	var b strings.Builder
 	b.WriteString(styles.TitleStyle.Render("Uninstall OpenCode Community Plugins"))
 	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render("Select a plugin to uninstall. The 4-layer cleanup will be journaled for rollback."))
+	b.WriteString(styles.SubtextStyle.Render("Select a plugin to uninstall. Changes are staged for rollback on errors."))
 	b.WriteString("\n\n")
 
 	row := 0
@@ -95,7 +95,7 @@ func RenderOpenCodePluginUninstallConfirm(selected model.OpenCodeCommunityPlugin
 		b.WriteString(styles.UnselectedStyle.Render("  • Layer 4 — cache: ~/.cache/opencode/packages/<pkg>@latest removed"))
 	}
 	b.WriteString("\n\n")
-	b.WriteString(styles.WarningStyle.Render("A journal snapshot is captured before any change; on failure the changes are rolled back."))
+	b.WriteString(styles.WarningStyle.Render("Changes are staged and rolled back if the operation reports an error."))
 	b.WriteString("\n\n")
 	b.WriteString(styles.SubtextStyle.Render("Press enter to confirm, esc to cancel."))
 
@@ -156,6 +156,10 @@ func RenderOpenCodePluginUninstallResult(result opencodeplugin.UninstallResult, 
 				b.WriteString(styles.SubtextStyle.Render("  • Layer 4 — cache: removed " + result.CacheEntryRemoved))
 				b.WriteString("\n")
 			}
+		}
+		for _, path := range result.CleanupPending {
+			b.WriteString(styles.WarningStyle.Render("  • Cleanup pending: remove " + path + " manually"))
+			b.WriteString("\n")
 		}
 		b.WriteString("\n")
 	}

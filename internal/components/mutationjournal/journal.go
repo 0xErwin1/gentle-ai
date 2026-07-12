@@ -5,6 +5,7 @@
 package mutationjournal
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -29,8 +30,10 @@ type OwnedFile struct {
 }
 
 type journalEntry struct {
-	data *[]byte
-	mode os.FileMode
+	data    *[]byte
+	mode    os.FileMode
+	after   *[]byte
+	changed bool
 }
 
 // Journal captures before-images and supports atomic writes with restore on
@@ -39,6 +42,8 @@ type Journal struct {
 	before map[string]*journalEntry
 	roots  []string
 }
+
+var writeFileAtomic = filemerge.WriteFileAtomic
 
 // New constructs a journal that only accepts paths within the given roots.
 // Roots must be absolute or the path-traversal guard will reject every write.
@@ -50,7 +55,7 @@ func New(roots ...string) *Journal {
 // If the file does not exist, records nil (Restore will remove anything
 // created later). Capture is idempotent for the same path.
 func (j *Journal) Capture(path string) error {
-	if err := j.validate(path); err != nil {
+	if err := j.Validate(path); err != nil {
 		return err
 	}
 	if _, exists := j.before[path]; exists {
@@ -58,7 +63,7 @@ func (j *Journal) Capture(path string) error {
 	}
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		j.before[path] = nil
+		j.before[path] = &journalEntry{}
 		return nil
 	}
 	if err != nil {
@@ -70,6 +75,13 @@ func (j *Journal) Capture(path string) error {
 	}
 	j.before[path] = &journalEntry{data: &data, mode: info.Mode().Perm()}
 	return nil
+}
+
+// Validate reports whether path resolves within one of the journal roots.
+// Existing symlink targets and symlinked ancestors are resolved before the
+// containment check so a lexical path cannot escape through an indirection.
+func (j *Journal) Validate(path string) error {
+	return j.validate(path)
 }
 
 // Write atomically writes data to path. If the file existed before the first
@@ -86,17 +98,44 @@ func (j *Journal) WriteWithMode(path string, data []byte, mode os.FileMode) (Own
 	if err := j.Capture(path); err != nil {
 		return OwnedFile{}, err
 	}
+	if err := j.verifyCurrent(path, j.before[path].data); err != nil {
+		return OwnedFile{}, err
+	}
 	effective := mode
 	if effective == 0 {
 		effective = 0o600
 	}
-	if previous := j.before[path]; previous != nil {
+	if previous := j.before[path]; previous.data != nil {
 		effective = previous.mode
 	}
-	if _, err := filemerge.WriteFileAtomic(path, data, effective); err != nil {
+	if _, err := writeFileAtomic(path, data, effective); err != nil {
 		return OwnedFile{}, fmt.Errorf("write %q: %w", path, err)
 	}
+	after := append([]byte(nil), data...)
+	j.before[path].after = &after
+	j.before[path].changed = true
 	return j.OwnedFile(path, string(data), false, false), nil
+}
+
+// Remove deletes a captured file with compare-and-swap protection. Restore
+// recreates it only if the path is still absent, preserving concurrent edits.
+func (j *Journal) Remove(path string) (bool, error) {
+	if err := j.Capture(path); err != nil {
+		return false, err
+	}
+	entry := j.before[path]
+	if entry.data == nil {
+		return false, nil
+	}
+	if err := j.verifyCurrent(path, entry.data); err != nil {
+		return false, err
+	}
+	if err := os.Remove(path); err != nil {
+		return false, fmt.Errorf("remove %q: %w", path, err)
+	}
+	entry.after = nil
+	entry.changed = true
+	return true, nil
 }
 
 // OwnedFile builds an OwnedFile record using the current journal state for
@@ -105,12 +144,12 @@ func (j *Journal) WriteWithMode(path string, data []byte, mode os.FileMode) (Own
 func (j *Journal) OwnedFile(path, after string, overlay, adopted bool) OwnedFile {
 	entry := j.before[path]
 	var snapshot *string
-	if entry != nil {
+	if entry != nil && entry.data != nil {
 		value := string(*entry.data)
 		snapshot = &value
 	}
 	mode := uint32(0o600)
-	if entry != nil {
+	if entry != nil && entry.data != nil {
 		mode = uint32(entry.mode)
 	}
 	return OwnedFile{
@@ -135,13 +174,20 @@ func (j *Journal) Restore() error {
 	var restoreErrors []error
 	for _, path := range paths {
 		entry := j.before[path]
-		if entry == nil {
+		if entry == nil || !entry.changed {
+			continue
+		}
+		if err := j.verifyCurrent(path, entry.after); err != nil {
+			restoreErrors = append(restoreErrors, err)
+			continue
+		}
+		if entry.data == nil {
 			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 				restoreErrors = append(restoreErrors, fmt.Errorf("remove %q: %w", path, err))
 			}
 			continue
 		}
-		if _, err := filemerge.WriteFileAtomic(path, *entry.data, entry.mode); err != nil {
+		if _, err := writeFileAtomic(path, *entry.data, entry.mode); err != nil {
 			restoreErrors = append(restoreErrors, fmt.Errorf("restore %q: %w", path, err))
 		}
 	}
@@ -155,12 +201,12 @@ func (j *Journal) validate(path string) error {
 	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("refuse symlink mutation journal path %q", path)
 	}
-	abs, err := filepath.Abs(path)
+	abs, err := resolvePath(path)
 	if err != nil {
 		return fmt.Errorf("resolve absolute path for %q: %w", path, err)
 	}
 	for _, root := range j.roots {
-		rootAbs, rootErr := filepath.Abs(root)
+		rootAbs, rootErr := resolvePath(root)
 		if rootErr != nil {
 			continue
 		}
@@ -170,6 +216,58 @@ func (j *Journal) validate(path string) error {
 		}
 	}
 	return fmt.Errorf("path %q is outside mutation journal roots", path)
+}
+
+func (j *Journal) verifyCurrent(path string, expected *[]byte) error {
+	if err := j.Validate(path); err != nil {
+		return err
+	}
+	current, err := os.ReadFile(path)
+	if expected == nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("verify current file %q: %w", path, err)
+		}
+		return fmt.Errorf("mutation journal conflict for %q: expected path to be absent", path)
+	}
+	if err != nil {
+		return fmt.Errorf("mutation journal conflict for %q: read current file: %w", path, err)
+	}
+	if !bytes.Equal(current, *expected) {
+		return fmt.Errorf("mutation journal conflict for %q: file changed after capture", path)
+	}
+	return nil
+}
+
+func resolvePath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	probe := abs
+	var suffix []string
+	for {
+		if _, err := os.Lstat(probe); err == nil {
+			resolved, err := filepath.EvalSymlinks(probe)
+			if err != nil {
+				return "", err
+			}
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return filepath.Clean(resolved), nil
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return filepath.Clean(abs), nil
+		}
+		suffix = append(suffix, filepath.Base(probe))
+		probe = parent
+	}
 }
 
 func hashBytes(data []byte) string {

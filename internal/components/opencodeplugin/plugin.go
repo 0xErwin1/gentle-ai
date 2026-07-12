@@ -205,14 +205,9 @@ func ensureTUIPlugin(path, pkg string) (bool, error) {
 }
 
 // removeTUIPlugin is the uninstall-side mirror of ensureTUIPlugin. It removes
-// every occurrence of pkg from tui.json's plugin[] list and rewrites the file
-// atomically. Returns (changed, afterBytes, err) where afterBytes is the
-// exact payload written to disk — callers must reuse these bytes for the
-// journal manifest instead of re-reading the file (which can race against
-// sandbox or TOCTOU flakiness). If the file is missing or pkg is not
-// present, returns (false, nil, nil) without writing. The caller is
-// responsible for snapshotting the file with mutationjournal BEFORE calling
-// this helper when it needs a rollback hook.
+// every occurrence of pkg from tui.json's plugin[] list. It returns the exact
+// replacement bytes without writing so the caller can perform a guarded write.
+// If the file is missing or pkg is not present, it returns (false, nil, nil).
 func removeTUIPlugin(path, pkg string) (bool, []byte, error) {
 	root := map[string]any{"$schema": "https://opencode.ai/tui.json"}
 	data, readErr := os.ReadFile(path)
@@ -245,11 +240,7 @@ func removeTUIPlugin(path, pkg string) (bool, []byte, error) {
 		return false, nil, err
 	}
 	out = append(out, '\n')
-	wr, err := filemerge.WriteFileAtomic(path, out, 0o644)
-	if err != nil {
-		return false, nil, err
-	}
-	return wr.Changed, out, nil
+	return true, out, nil
 }
 
 func stringSlice(value any) []string {

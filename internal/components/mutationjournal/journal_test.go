@@ -3,11 +3,15 @@ package mutationjournal
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 )
 
 func TestNewRejectsEmptyRoots(t *testing.T) {
@@ -140,9 +144,6 @@ func TestRefusesEmptyPath(t *testing.T) {
 }
 
 func TestRestoreMultipleFilesDeterministic(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("chmod read-only semantics differ on Windows")
-	}
 	base := t.TempDir()
 	j := New(base)
 	names := []string{"c.txt", "a.txt", "b.txt", "e.txt", "d.txt"}
@@ -158,10 +159,13 @@ func TestRestoreMultipleFilesDeterministic(t *testing.T) {
 			t.Fatalf("write %q: %v", name, err)
 		}
 	}
-	if err := os.Chmod(base, 0o500); err != nil {
-		t.Fatalf("chmod: %v", err)
+	originalWrite := writeFileAtomic
+	var restored []string
+	writeFileAtomic = func(path string, _ []byte, _ os.FileMode) (filemerge.WriteResult, error) {
+		restored = append(restored, filepath.Base(path))
+		return filemerge.WriteResult{}, errors.New("injected restore failure")
 	}
-	t.Cleanup(func() { _ = os.Chmod(base, 0o700) })
+	t.Cleanup(func() { writeFileAtomic = originalWrite })
 	err := j.Restore()
 	if err == nil {
 		t.Fatalf("Restore() error = nil, want non-nil")
@@ -179,12 +183,12 @@ func TestRestoreMultipleFilesDeterministic(t *testing.T) {
 		}
 		prev = idx
 	}
+	if strings.Join(restored, ",") != strings.Join(ordered, ",") {
+		t.Fatalf("restore call order = %v, want %v", restored, ordered)
+	}
 }
 
 func TestRestoreAggregatesErrorsWithJoin(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("chmod read-only semantics differ on Windows")
-	}
 	base := t.TempDir()
 	j := New(base)
 	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
@@ -199,10 +203,11 @@ func TestRestoreAggregatesErrorsWithJoin(t *testing.T) {
 			t.Fatalf("write %q: %v", name, err)
 		}
 	}
-	if err := os.Chmod(base, 0o500); err != nil {
-		t.Fatalf("chmod: %v", err)
+	originalWrite := writeFileAtomic
+	writeFileAtomic = func(path string, _ []byte, _ os.FileMode) (filemerge.WriteResult, error) {
+		return filemerge.WriteResult{}, fmt.Errorf("injected restore failure for %s", filepath.Base(path))
 	}
-	t.Cleanup(func() { _ = os.Chmod(base, 0o700) })
+	t.Cleanup(func() { writeFileAtomic = originalWrite })
 	err := j.Restore()
 	if err == nil {
 		t.Fatalf("Restore() error = nil, want non-nil")
@@ -255,7 +260,7 @@ func TestOwnedFileBeforeAfterHash(t *testing.T) {
 	}
 }
 
-func TestCaptureIdempotent(t *testing.T) {
+func TestWriteRejectsChangesAfterCapture(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "idempotent.txt")
 	if err := os.WriteFile(target, []byte("first"), 0o600); err != nil {
@@ -271,8 +276,8 @@ func TestCaptureIdempotent(t *testing.T) {
 	if err := j.Capture(target); err != nil {
 		t.Fatalf("second Capture: %v", err)
 	}
-	if _, err := j.WriteWithMode(target, []byte("third"), 0o600); err != nil {
-		t.Fatalf("WriteWithMode: %v", err)
+	if _, err := j.WriteWithMode(target, []byte("third"), 0o600); err == nil || !strings.Contains(err.Error(), "changed after capture") {
+		t.Fatalf("WriteWithMode error = %v, want capture conflict", err)
 	}
 	if err := j.Restore(); err != nil {
 		t.Fatalf("Restore: %v", err)
@@ -281,8 +286,22 @@ func TestCaptureIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if string(got) != "first" {
-		t.Fatalf("after Restore, file = %q, want %q (idempotent Capture preserved first before-image)", string(got), "first")
+	if string(got) != "second" {
+		t.Fatalf("after rejected Write, file = %q, want concurrent content %q", string(got), "second")
+	}
+}
+
+func TestRefusesSymlinkedAncestorOutsideRoot(t *testing.T) {
+	home := t.TempDir()
+	outside := t.TempDir()
+	link := filepath.Join(home, "linked")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink unsupported on this platform: %v", err)
+	}
+	j := New(home)
+	err := j.Capture(filepath.Join(link, "target.json"))
+	if err == nil || !strings.Contains(err.Error(), "outside mutation journal roots") {
+		t.Fatalf("Capture() error = %v, want resolved outside-root rejection", err)
 	}
 }
 

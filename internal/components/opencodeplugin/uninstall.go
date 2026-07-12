@@ -18,22 +18,21 @@ type UninstallResult struct {
 	ChangedTUI         bool
 	ChangedPackageJSON bool
 	ChangedNodeModules bool
-	CacheEntryRemoved  string // absolute path of removed cache entry, or "" if none
-	NodeModulesPath    string // absolute path of node_modules/<pkg> removed, or ""
-	TSXPath            string // absolute path of .tsx file removed (GentleLogo only), or ""
+	CacheEntryRemoved  string   // absolute path of removed cache entry, or "" if none
+	NodeModulesPath    string   // absolute path of node_modules/<pkg> removed, or ""
+	TSXPath            string   // absolute path of .tsx file removed (GentleLogo only), or ""
+	CleanupPending     []string // staged paths left after a post-commit cleanup failure
 	JournalManifest    []mutationjournal.OwnedFile
 }
+
+var removeAll = os.RemoveAll
 
 // Uninstall removes a community plugin across up to 4 layers: tui.json,
 // package.json, node_modules/<pkg>, and the matching cache entry under
 // ~/.cache/opencode/packages/<pkg>@latest. Built-in GentleLogo swaps the NPM
-// layers for a single .tsx removal. On failure, captured layers are restored
-// from the journal and the partial result returned reflects what was actually
-// performed.
-//
-// Layer 3 (node_modules) and the cache entry are not journalable — both are
-// directory trees — so callers that need a guaranteed revert must snapshot
-// them out of band before calling Uninstall.
+// layers for a single .tsx removal. Files use compare-and-swap journal writes;
+// directories are renamed to reversible staging paths until the operation
+// commits. A post-commit staging cleanup failure is reported in CleanupPending.
 func Uninstall(homeDir string, id model.OpenCodeCommunityPluginID) (UninstallResult, error) {
 	result := UninstallResult{PluginID: id}
 
@@ -64,9 +63,10 @@ func Uninstall(homeDir string, id model.OpenCodeCommunityPluginID) (UninstallRes
 
 	journal := mutationjournal.New(homeDir)
 	pjWritten := false
+	var staged []stagedRemoval
 
 	rollback := func(err error, stage string, partial UninstallResult) (UninstallResult, error) {
-		return rollbackUninstall(journal, id, partial, err, stage, pjWritten)
+		return rollbackUninstall(journal, staged, id, partial, err, stage, pjWritten)
 	}
 
 	// ── Layer 1: tui.json ──────────────────────────────────────────────────
@@ -78,6 +78,9 @@ func Uninstall(homeDir string, id model.OpenCodeCommunityPluginID) (UninstallRes
 		return rollback(fmt.Errorf("uninstall layer 1 (tui.json): %w", err), "layer 1", result)
 	}
 	if tuiChanged {
+		if _, err := journal.Write(tuiPath, tuiAfter); err != nil {
+			return rollback(fmt.Errorf("uninstall layer 1 (tui.json write): %w", err), "layer 1", result)
+		}
 		result.ChangedTUI = true
 		result.JournalManifest = append(result.JournalManifest, journal.OwnedFile(tuiPath, string(tuiAfter), false, false))
 	}
@@ -98,10 +101,12 @@ func Uninstall(homeDir string, id model.OpenCodeCommunityPluginID) (UninstallRes
 	// ── Layer 3: node_modules/<pkg>/ (skipped for built-in GentleLogo) ─────
 	if !isGentleLogo {
 		nodeModulesPath := filepath.Join(opencodeDir, "node_modules", def.PackageName)
-		if info, statErr := os.Stat(nodeModulesPath); statErr == nil && info.IsDir() {
-			if rmErr := os.RemoveAll(nodeModulesPath); rmErr != nil {
-				return rollback(fmt.Errorf("uninstall layer 3 (node_modules): %w", rmErr), "layer 3", result)
-			}
+		removal, err := stageDirectoryRemoval(journal, nodeModulesPath)
+		if err != nil {
+			return rollback(fmt.Errorf("uninstall layer 3 (node_modules): %w", err), "layer 3", result)
+		}
+		if removal != nil {
+			staged = append(staged, *removal)
 			result.ChangedNodeModules = true
 			result.NodeModulesPath = nodeModulesPath
 			result.JournalManifest = append(result.JournalManifest, removalRecord())
@@ -110,12 +115,14 @@ func Uninstall(homeDir string, id model.OpenCodeCommunityPluginID) (UninstallRes
 
 	// ── Layer 4: optional cache entries (skipped for built-in GentleLogo) ─
 	if !isGentleLogo {
-		removed, err := uninstallCacheEntry(homeDir, def.PackageName)
+		cachePath := filepath.Join(homeDir, ".cache", "opencode", "packages", def.PackageName+"@latest")
+		removal, err := stageDirectoryRemoval(journal, cachePath)
 		if err != nil {
 			return rollback(fmt.Errorf("uninstall layer 4 (cache): %w", err), "layer 4", result)
 		}
-		if removed != "" {
-			result.CacheEntryRemoved = removed
+		if removal != nil {
+			staged = append(staged, *removal)
+			result.CacheEntryRemoved = cachePath
 			result.JournalManifest = append(result.JournalManifest, removalRecord())
 		}
 	}
@@ -123,16 +130,22 @@ func Uninstall(homeDir string, id model.OpenCodeCommunityPluginID) (UninstallRes
 	// ── Layer TSX: built-in GentleLogo local plugin file ───────────────────
 	if isGentleLogo {
 		tsxPath := filepath.Join(homeDir, ".config", "opencode", "tui-plugins", gentleLogoPluginFile)
-		info, statErr := os.Stat(tsxPath)
+		info, statErr := os.Lstat(tsxPath)
 		if statErr == nil && !info.IsDir() {
-			if err := journal.Capture(tsxPath); err != nil {
-				return rollback(fmt.Errorf("uninstall tsx: capture %s: %w", tsxPath, err), "layer tsx", result)
+			removed, err := journal.Remove(tsxPath)
+			if err != nil {
+				return rollback(fmt.Errorf("uninstall tsx: remove %s: %w", tsxPath, err), "layer tsx", result)
 			}
-			if rmErr := os.Remove(tsxPath); rmErr != nil && !os.IsNotExist(rmErr) {
-				return rollback(fmt.Errorf("uninstall tsx: remove %s: %w", tsxPath, rmErr), "layer tsx", result)
+			if removed {
+				result.TSXPath = tsxPath
+				result.JournalManifest = append(result.JournalManifest, removalRecord())
 			}
-			result.TSXPath = tsxPath
-			result.JournalManifest = append(result.JournalManifest, removalRecord())
+		}
+	}
+
+	for _, removal := range staged {
+		if err := removeAll(removal.staged); err != nil {
+			result.CleanupPending = append(result.CleanupPending, removal.staged)
 		}
 	}
 
@@ -200,44 +213,70 @@ func uninstallPackageJSON(journal *mutationjournal.Journal, packagePath, pkg str
 	return true, written, nil
 }
 
-// uninstallCacheEntry removes the OpenCode plugin cache for pkg. Must mirror
-// internal/update/upgrade/strategy.go:clearOpenCodePluginPackageCache: the path
-// is always ~/.cache/opencode/packages/<pkg>@latest, never a prefix-match
-// across the cache root. If the path does not exist, this is a silent no-op
-// and the returned path is "".
-func uninstallCacheEntry(homeDir, pkg string) (string, error) {
-	path := filepath.Join(homeDir, ".cache", "opencode", "packages", pkg+"@latest")
-	if _, err := os.Lstat(path); err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		return "", fmt.Errorf("stat cache entry %q: %w", path, err)
-	}
-	if err := os.RemoveAll(path); err != nil {
-		return "", fmt.Errorf("remove cache entry %q: %w", path, err)
-	}
-	return path, nil
+type stagedRemoval struct {
+	original string
+	staged   string
 }
 
-// rollbackUninstall is the testable seam for Uninstall's rollback path. It
-// restores the journal and returns the partial UninstallResult, flipping
-// ChangedTUI/ChangedPackageJSON back to false because Restore rewinds those
-// files to their before-images. Other "we did remove something" flags
-// (ChangedNodeModules, CacheEntryRemoved, NodeModulesPath, TSXPath) stay
-// because directories aren't journal-restorable. The original err is wrapped
-// with the stage label on Restore failure.
-func rollbackUninstall(journal *mutationjournal.Journal, id model.OpenCodeCommunityPluginID, partial UninstallResult, err error, stage string, pjWritten bool) (UninstallResult, error) {
+func stageDirectoryRemoval(journal *mutationjournal.Journal, path string) (*stagedRemoval, error) {
+	if err := journal.Validate(path); err != nil {
+		return nil, err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("stat removal target %q: %w", path, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return nil, fmt.Errorf("refuse non-directory removal target %q", path)
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), ".gentle-ai-uninstall-*")
+	if err != nil {
+		return nil, fmt.Errorf("reserve staging path for %q: %w", path, err)
+	}
+	staged := temp.Name()
+	if err := temp.Close(); err != nil {
+		_ = os.Remove(staged)
+		return nil, fmt.Errorf("close staging placeholder for %q: %w", path, err)
+	}
+	if err := os.Remove(staged); err != nil {
+		return nil, fmt.Errorf("remove staging placeholder for %q: %w", path, err)
+	}
+	if err := os.Rename(path, staged); err != nil {
+		return nil, fmt.Errorf("stage removal target %q: %w", path, err)
+	}
+	return &stagedRemoval{original: path, staged: staged}, nil
+}
+
+// rollbackUninstall restores staged directories and journaled files. Result
+// flags are cleared only when every restoration succeeds; otherwise the
+// joined error identifies the state that requires manual recovery.
+func rollbackUninstall(journal *mutationjournal.Journal, staged []stagedRemoval, id model.OpenCodeCommunityPluginID, partial UninstallResult, err error, stage string, pjWritten bool) (UninstallResult, error) {
 	final := partial
 	final.PluginID = id
-	rerr := journal.Restore()
-	if rerr == nil {
+	var restoreErrors []error
+	for i := len(staged) - 1; i >= 0; i-- {
+		if renameErr := os.Rename(staged[i].staged, staged[i].original); renameErr != nil {
+			restoreErrors = append(restoreErrors, fmt.Errorf("restore staged directory %q: %w", staged[i].original, renameErr))
+		}
+	}
+	if journalErr := journal.Restore(); journalErr != nil {
+		restoreErrors = append(restoreErrors, journalErr)
+	}
+	if len(restoreErrors) == 0 {
 		final.ChangedTUI = false
 		if pjWritten {
 			final.ChangedPackageJSON = false
 		}
+		final.ChangedNodeModules = false
+		final.NodeModulesPath = ""
+		final.CacheEntryRemoved = ""
+		final.TSXPath = ""
 		return final, err
 	}
-	return final, errors.Join(err, fmt.Errorf("restore journal after %s: %w", stage, rerr))
+	return final, errors.Join(err, fmt.Errorf("restore after %s: %w", stage, errors.Join(restoreErrors...)))
 }
 
 // removalRecord documents a deletion in the manifest that the journal cannot

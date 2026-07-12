@@ -3,6 +3,7 @@ package opencodeplugin
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -385,6 +386,39 @@ func TestUninstallCacheOnlyTouchesExactPath(t *testing.T) {
 	}
 }
 
+func TestUninstallReportsPostCommitCleanupFailure(t *testing.T) {
+	home := t.TempDir()
+	pkgName := "opencode-subagent-statusline"
+	writeTUIConfig(t, home, []string{pkgName})
+	nodeModulesPath := filepath.Join(home, ".config", "opencode", "node_modules", pkgName)
+	if err := os.MkdirAll(nodeModulesPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeCacheEntry(t, home, pkgName)
+
+	originalRemoveAll := removeAll
+	removeAll = func(path string) error {
+		return fmt.Errorf("injected cleanup failure for %s", path)
+	}
+	t.Cleanup(func() { removeAll = originalRemoveAll })
+
+	result, err := Uninstall(home, model.OpenCodePluginSubAgentStatusline)
+	if err != nil {
+		t.Fatalf("Uninstall() error = %v, want committed success with cleanup warning", err)
+	}
+	if len(result.CleanupPending) != 2 {
+		t.Fatalf("CleanupPending = %v, want staged node_modules and cache paths", result.CleanupPending)
+	}
+	for _, path := range result.CleanupPending {
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Fatalf("pending cleanup path %q not preserved: %v", path, statErr)
+		}
+	}
+	if _, statErr := os.Stat(nodeModulesPath); !os.IsNotExist(statErr) {
+		t.Fatalf("logical uninstall path still exists: %v", statErr)
+	}
+}
+
 // ─── 7. GentleLogo ─────────────────────────────────────────────────────────
 
 func TestUninstallGentleLogoRemovesTSXAndTUI(t *testing.T) {
@@ -591,6 +625,75 @@ func TestUninstallRollbackOnFailure(t *testing.T) {
 	}
 }
 
+func TestUninstallRollbackRestoresStagedNodeModules(t *testing.T) {
+	home := t.TempDir()
+	pkgName := "opencode-subagent-statusline"
+	writeTUIConfig(t, home, []string{pkgName})
+	writePackageJSON(t, home, `{"dependencies":{"`+pkgName+`":"^1.0.0"}}`)
+	nodeModulesPath := filepath.Join(home, ".config", "opencode", "node_modules", pkgName)
+	if err := os.MkdirAll(nodeModulesPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(nodeModulesPath, "index.js")
+	if err := os.WriteFile(sentinel, []byte("module.exports = 1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cachePath := filepath.Join(home, ".cache", "opencode", "packages", pkgName+"@latest")
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Uninstall(home, model.OpenCodePluginSubAgentStatusline)
+	if err == nil || !strings.Contains(err.Error(), "layer 4") {
+		t.Fatalf("Uninstall() error = %v, want layer 4 failure", err)
+	}
+	if result.ChangedTUI || result.ChangedPackageJSON || result.ChangedNodeModules {
+		t.Fatalf("result after rollback = %+v, want all changed flags false", result)
+	}
+	if got, readErr := os.ReadFile(sentinel); readErr != nil || string(got) != "module.exports = 1" {
+		t.Fatalf("staged node_modules was not restored: content=%q err=%v", got, readErr)
+	}
+	if got := readTUIPlugins(t, home); len(got) != 1 || got[0] != pkgName {
+		t.Fatalf("tui.json after rollback = %#v, want original plugin", got)
+	}
+	if !strings.Contains(readPackageJSON(t, home), pkgName) {
+		t.Fatal("package.json dependency was not restored")
+	}
+}
+
+func TestUninstallRejectsSymlinkedOpenCodeDirectory(t *testing.T) {
+	home := t.TempDir()
+	outside := t.TempDir()
+	outsideOpenCode := filepath.Join(outside, "opencode")
+	if err := os.MkdirAll(outsideOpenCode, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	tuiPath := filepath.Join(outsideOpenCode, "tui.json")
+	original := []byte(`{"plugin":["opencode-subagent-statusline"]}`)
+	if err := os.WriteFile(tuiPath, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	configDir := filepath.Join(home, ".config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsideOpenCode, filepath.Join(configDir, "opencode")); err != nil {
+		t.Skipf("symlink unsupported on this platform: %v", err)
+	}
+
+	_, err := Uninstall(home, model.OpenCodePluginSubAgentStatusline)
+	if err == nil || !strings.Contains(err.Error(), "outside mutation journal roots") {
+		t.Fatalf("Uninstall() error = %v, want resolved outside-root rejection", err)
+	}
+	got, readErr := os.ReadFile(tuiPath)
+	if readErr != nil || string(got) != string(original) {
+		t.Fatalf("outside tui.json changed: content=%q err=%v", got, readErr)
+	}
+}
+
 // TestUninstallRollbackWrapsRestoreError verifies that when journal.Restore
 // fails (because a captured file has been clobbered with a symlink between
 // Capture and the failure), the rollback wraps the restore error so the
@@ -616,8 +719,8 @@ func TestUninstallRollbackWrapsRestoreError(t *testing.T) {
 	if err := journal.Capture(tuiPath); err != nil {
 		t.Fatalf("journal.Capture() error = %v", err)
 	}
-	if err := os.WriteFile(tuiPath, []byte(`{"$schema":"https://opencode.ai/tui.json","plugin":[]}`), 0o644); err != nil {
-		t.Fatal(err)
+	if _, err := journal.Write(tuiPath, []byte(`{"$schema":"https://opencode.ai/tui.json","plugin":[]}`)); err != nil {
+		t.Fatalf("journal.Write() error = %v", err)
 	}
 	// Drop the file and replace it with a symlink that points nowhere;
 	// readComparableFile then returns "refusing to read symlink" and
@@ -633,7 +736,7 @@ func TestUninstallRollbackWrapsRestoreError(t *testing.T) {
 
 	partial := UninstallResult{PluginID: "x", ChangedTUI: true}
 	original := errors.New("layer 2 boom")
-	res, wrapped := rollbackUninstall(journal, model.OpenCodeCommunityPluginID("x"), partial, original, "layer 2", false)
+	res, wrapped := rollbackUninstall(journal, nil, model.OpenCodeCommunityPluginID("x"), partial, original, "layer 2", false)
 
 	if !errors.Is(wrapped, original) {
 		t.Fatalf("rollback did not wrap original error: wrapped = %v", wrapped)
@@ -644,10 +747,10 @@ func TestUninstallRollbackWrapsRestoreError(t *testing.T) {
 	if !res.ChangedTUI {
 		t.Fatal("res.ChangedTUI = false after rollback with Restore failure, want true (file modification persists on disk when Restore fails)")
 	}
-	if !strings.Contains(wrapped.Error(), "restore journal after layer 2") {
+	if !strings.Contains(wrapped.Error(), "restore after layer 2") {
 		t.Fatalf("wrapped error %q does not mention the failed stage", wrapped)
 	}
-	if !strings.Contains(wrapped.Error(), "refusing to read symlink") {
+	if !strings.Contains(wrapped.Error(), "refuse symlink") {
 		t.Fatalf("wrapped error %q does not wrap the restore failure", wrapped)
 	}
 }

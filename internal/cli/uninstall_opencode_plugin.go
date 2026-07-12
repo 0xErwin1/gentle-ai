@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/components/opencodeplugin"
@@ -37,8 +38,14 @@ var validOpenCodePluginIDs = []model.OpenCodeCommunityPluginID{
 func ParseUninstallOpenCodePluginFlags(args []string) (UninstallOpenCodePluginFlags, error) {
 	var opts UninstallOpenCodePluginFlags
 
-	yesFound, rest := hoistBoolFlag(args, "--yes")
-	shortFound, rest := hoistBoolFlag(rest, "-y")
+	yesFound, rest, err := hoistBoolFlag(args, "--yes")
+	if err != nil {
+		return UninstallOpenCodePluginFlags{}, err
+	}
+	shortFound, rest, err := hoistBoolFlag(rest, "-y")
+	if err != nil {
+		return UninstallOpenCodePluginFlags{}, err
+	}
 	opts.Yes = yesFound || shortFound
 
 	fs := flag.NewFlagSet("uninstall opencode-plugin", flag.ContinueOnError)
@@ -64,10 +71,9 @@ func ParseUninstallOpenCodePluginFlags(args []string) (UninstallOpenCodePluginFl
 	return opts, nil
 }
 
-// hoistBoolFlag pulls name out of args (if present) and returns (true, args
-// without it). Both the bare --name and --name=value forms are accepted; the
-// value side is ignored because this helper only signals a boolean switch.
-func hoistBoolFlag(args []string, name string) (bool, []string) {
+// hoistBoolFlag pulls name out of args. Bare --name means true; assigned values
+// use strconv.ParseBool so --yes=false cannot bypass confirmation.
+func hoistBoolFlag(args []string, name string) (bool, []string, error) {
 	filtered := make([]string, 0, len(args))
 	found := false
 	for _, arg := range args {
@@ -76,12 +82,16 @@ func hoistBoolFlag(args []string, name string) (bool, []string) {
 			continue
 		}
 		if strings.HasPrefix(arg, name+"=") {
-			found = true
+			value, err := strconv.ParseBool(strings.TrimPrefix(arg, name+"="))
+			if err != nil {
+				return false, nil, fmt.Errorf("invalid value for %s: %w", name, err)
+			}
+			found = found || value
 			continue
 		}
 		filtered = append(filtered, arg)
 	}
-	return found, filtered
+	return found, filtered, nil
 }
 
 // RunUninstallOpenCodePlugin is the CLI entry point for the sub-command.
@@ -139,7 +149,7 @@ func promptUninstallOpenCodePluginConfirm(id model.OpenCodeCommunityPluginID, st
 	} else if id == model.OpenCodePluginGentleLogo {
 		_, _ = fmt.Fprintf(stdout, "  Plus: removes the local .tsx file ~/.config/opencode/tui-plugins/gentle-logo.tsx\n")
 	}
-	_, _ = fmt.Fprintln(stdout, "A journal snapshot will be created; on failure the changes are rolled back.")
+	_, _ = fmt.Fprintln(stdout, "Changes are staged and rolled back if the operation reports an error.")
 	_, _ = fmt.Fprint(stdout, "Type 'yes' to confirm: ")
 
 	scanner := bufio.NewScanner(stdin)
@@ -202,6 +212,9 @@ func RenderUninstallOpenCodePluginReport(result opencodeplugin.UninstallResult) 
 
 	if hasDef {
 		_, _ = fmt.Fprintf(&b, "  Repository: %s\n", def.RepoURL)
+	}
+	for _, path := range result.CleanupPending {
+		_, _ = fmt.Fprintf(&b, "  Cleanup pending: remove %s manually\n", path)
 	}
 
 	return strings.TrimRight(b.String(), "\n")
