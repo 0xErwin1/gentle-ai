@@ -15,6 +15,14 @@ import (
 	"testing"
 )
 
+func TestMain(m *testing.M) {
+	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
+		panic(err)
+	}
+
+	os.Exit(m.Run())
+}
+
 // --- TestRunStrategy_BrewUpgrade ---
 
 func TestRunStrategy_BrewUpgrade(t *testing.T) {

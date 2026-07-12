@@ -16,6 +16,14 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
 
+func TestMain(m *testing.M) {
+	if err := os.Unsetenv("GENTLE_AI_CHANNEL"); err != nil {
+		panic(err)
+	}
+
+	os.Exit(m.Run())
+}
+
 // --- TestDetectInstalledVersion ---
 
 func TestDetectInstalledVersion(t *testing.T) {
