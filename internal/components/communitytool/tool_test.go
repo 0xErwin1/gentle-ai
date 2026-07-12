@@ -276,6 +276,12 @@ func TestCodeGraphGuidanceContainsLazyInitAndUsageRules(t *testing.T) {
 	for _, want := range []string{
 		"use CodeGraph before broad filesystem searches",
 		"hard ordering rule",
+		"Create Git worktrees that may need CodeGraph under the user's home directory",
+		"<repo-parent>/<repo-name>-worktrees/<worktree-name>",
+		"Never place a CodeGraph-dependent worktree under `/tmp`, `/var/tmp`, or `/tmp/opencode`",
+		"generic temporary-work guidance does not override this rule",
+		"Every worktree needs its own `.codegraph/` index",
+		"Never copy, symlink, or reuse another checkout's index",
 		"git rev-parse --show-toplevel || pwd",
 		"Do not ask the user before initializing CodeGraph in a real project.",
 		"Do not initialize CodeGraph in `$HOME`, temporary directories, or non-project folders",
