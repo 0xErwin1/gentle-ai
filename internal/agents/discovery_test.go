@@ -21,7 +21,8 @@ func (s stubAdapter) Agent() model.AgentID      { return s.agent }
 func (s stubAdapter) Tier() model.SupportTier   { return model.TierFull }
 func (s stubAdapter) SupportsAutoInstall() bool { return false }
 func (s stubAdapter) Detect(_ context.Context, _ string) (bool, string, string, bool, error) {
-	return false, "", "", false, nil
+	info, err := os.Stat(s.configDir)
+	return false, "", s.configDir, err == nil && info.IsDir(), nil
 }
 func (s stubAdapter) InstallCommand(system.PlatformProfile) ([][]string, error) { return nil, nil }
 
