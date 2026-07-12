@@ -306,7 +306,12 @@ func TestInjectOpenCodeAndKilocodePreserveContext7Headers(t *testing.T) {
 	      "args": ["legacy"],
 	      "env": {"TOKEN": "x"},
 	      "environment": {"TOKEN": "y"},
-	      "headers": {"CONTEXT7_API_KEY": "{env:CONTEXT7_API_KEY}"},
+	      "headers": {
+	        "CONTEXT7_API_KEY": "{env:CONTEXT7_API_KEY}",
+	        "number": 42,
+	        "nested": {"secret": "value"},
+	        "list": ["secret"]
+	      },
 	      "enabled": false
 	    },
 	    "engram": {
@@ -332,6 +337,11 @@ func TestInjectOpenCodeAndKilocodePreserveContext7Headers(t *testing.T) {
 			headers, ok := context7["headers"].(map[string]any)
 			if !ok || headers["CONTEXT7_API_KEY"] != "{env:CONTEXT7_API_KEY}" {
 				t.Fatalf("mcp.context7.headers = %#v; want existing API key header", context7["headers"])
+			}
+			for _, key := range []string{"number", "nested", "list"} {
+				if _, exists := headers[key]; exists {
+					t.Fatalf("mcp.context7.headers[%q] = %#v; want invalid value discarded", key, headers[key])
+				}
 			}
 
 			content, err := os.ReadFile(configPath)

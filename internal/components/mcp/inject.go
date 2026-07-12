@@ -141,11 +141,19 @@ func injectOpenCodeMergeIntoSettings(settingsPath string) (InjectionResult, erro
 		mcp, _ := settings["mcp"].(map[string]any)
 		context7, _ := mcp["context7"].(map[string]any)
 		if headers, ok := context7["headers"].(map[string]any); ok {
+			validHeaders := make(map[string]string, len(headers))
+			for name, value := range headers {
+				if header, valid := value.(string); valid {
+					validHeaders[name] = header
+				}
+			}
 			replacement := map[string]any{
 				"type":    "remote",
 				"url":     "https://mcp.context7.com/mcp",
 				"enabled": true,
-				"headers": headers,
+			}
+			if len(validHeaders) > 0 {
+				replacement["headers"] = validHeaders
 			}
 			overlay, err = json.Marshal(map[string]any{
 				"mcp": map[string]any{
