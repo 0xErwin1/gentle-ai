@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -24,10 +25,10 @@ func TestCheckOneTool_MissingBinary(t *testing.T) {
 	if got.Status != CheckStatusFail {
 		t.Errorf("expected fail, got %s", got.Status)
 	}
-	if !strings.Contains(got.Detail, "not found in PATH") {
-		t.Errorf("unexpected detail: %s", got.Detail)
+	if !strings.Contains(got.Evidence, "not found in PATH") {
+		t.Errorf("unexpected detail: %s", got.Evidence)
 	}
-	if got.Remedy == "" {
+	if got.Remedy == nil {
 		t.Error("expected non-empty remedy")
 	}
 }
@@ -64,10 +65,10 @@ func TestCheckOneTool_ShadowedBinary(t *testing.T) {
 	if got.Status != CheckStatusWarn {
 		t.Errorf("expected warn, got %s", got.Status)
 	}
-	if !strings.Contains(got.Detail, "2 copies found") {
-		t.Errorf("unexpected detail: %s", got.Detail)
+	if !strings.Contains(got.Evidence, "2 copies found") {
+		t.Errorf("unexpected detail: %s", got.Evidence)
 	}
-	if got.Remedy == "" {
+	if got.Remedy == nil {
 		t.Error("expected non-empty remedy")
 	}
 }
@@ -91,7 +92,7 @@ func TestCheckOneTool_OK(t *testing.T) {
 	got := checkOneTool("engram", []string{dir})
 
 	if got.Status != CheckStatusPass {
-		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
+		t.Errorf("expected pass, got %s: %s", got.Status, got.Evidence)
 	}
 }
 
@@ -126,10 +127,10 @@ func TestCheckOneTool_ShadowedWindowsExt(t *testing.T) {
 	got := checkOneTool("gentle-ai", []string{dir1, dir2})
 
 	if got.Status != CheckStatusWarn {
-		t.Fatalf("expected warn for extensioned shadow, got %s: %s", got.Status, got.Detail)
+		t.Fatalf("expected warn for extensioned shadow, got %s: %s", got.Status, got.Evidence)
 	}
-	if !strings.Contains(got.Detail, "2 copies found") {
-		t.Errorf("unexpected detail: %s", got.Detail)
+	if !strings.Contains(got.Evidence, "2 copies found") {
+		t.Errorf("unexpected detail: %s", got.Evidence)
 	}
 }
 
@@ -161,10 +162,10 @@ func TestCheckOneTool_WindowsPowerShellShimFallback(t *testing.T) {
 	got := checkOneTool("gga", []string{dir})
 
 	if got.Status != CheckStatusPass {
-		t.Fatalf("expected pass, got %s: %s", got.Status, got.Detail)
+		t.Fatalf("expected pass, got %s: %s", got.Status, got.Evidence)
 	}
-	if !strings.Contains(got.Detail, "PowerShell shim") {
-		t.Fatalf("expected PowerShell shim detail, got %q", got.Detail)
+	if !strings.Contains(got.Evidence, "PowerShell shim") {
+		t.Fatalf("expected PowerShell shim detail, got %q", got.Evidence)
 	}
 }
 
@@ -198,7 +199,7 @@ func TestCheckOneTool_WindowsShimVariantsInSameDirAreNotDuplicates(t *testing.T)
 	got := checkOneTool("gga", []string{dir})
 
 	if got.Status != CheckStatusPass {
-		t.Fatalf("expected pass for same-directory shim variants, got %s: %s", got.Status, got.Detail)
+		t.Fatalf("expected pass for same-directory shim variants, got %s: %s", got.Status, got.Evidence)
 	}
 }
 
@@ -268,8 +269,8 @@ func TestCheckStateJSON_Missing(t *testing.T) {
 	if got.Status != CheckStatusWarn {
 		t.Errorf("expected warn for missing state, got %s", got.Status)
 	}
-	if !strings.Contains(got.Detail, "not found") {
-		t.Errorf("unexpected detail: %s", got.Detail)
+	if !strings.Contains(got.Evidence, "not found") {
+		t.Errorf("unexpected detail: %s", got.Evidence)
 	}
 }
 
@@ -288,8 +289,8 @@ func TestCheckStateJSON_Malformed(t *testing.T) {
 	if got.Status != CheckStatusFail {
 		t.Errorf("expected fail for malformed state, got %s", got.Status)
 	}
-	if !strings.Contains(got.Detail, "failed to parse") {
-		t.Errorf("unexpected detail: %s", got.Detail)
+	if !strings.Contains(got.Evidence, "failed to parse") {
+		t.Errorf("unexpected detail: %s", got.Evidence)
 	}
 }
 
@@ -310,8 +311,8 @@ func TestCheckStateJSON_AgentConfigDirMissing(t *testing.T) {
 	if got.Status != CheckStatusWarn {
 		t.Errorf("expected warn for missing config dir, got %s", got.Status)
 	}
-	if !strings.Contains(got.Detail, "config dirs are missing") {
-		t.Errorf("unexpected detail: %s", got.Detail)
+	if !strings.Contains(got.Evidence, "config dirs are missing") {
+		t.Errorf("unexpected detail: %s", got.Evidence)
 	}
 }
 
@@ -334,7 +335,7 @@ func TestCheckStateJSON_OK(t *testing.T) {
 	got := checkStateJSON(homeDir)
 
 	if got.Status != CheckStatusPass {
-		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
+		t.Errorf("expected pass, got %s: %s", got.Status, got.Evidence)
 	}
 }
 
@@ -352,7 +353,7 @@ func TestCheckEngramReachable_ConnectionRefused(t *testing.T) {
 	if got.Status != CheckStatusFail {
 		t.Errorf("expected fail, got %s", got.Status)
 	}
-	if got.Remedy == "" {
+	if got.Remedy == nil {
 		t.Error("expected non-empty remedy")
 	}
 }
@@ -367,7 +368,7 @@ func TestCheckEngramReachable_OK(t *testing.T) {
 	got := checkEngramReachable()
 
 	if got.Status != CheckStatusPass {
-		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
+		t.Errorf("expected pass, got %s: %s", got.Status, got.Evidence)
 	}
 }
 
@@ -397,7 +398,7 @@ func TestCheckDiskSpace_CriticallyLow(t *testing.T) {
 	if got.Status != CheckStatusFail {
 		t.Errorf("expected fail, got %s", got.Status)
 	}
-	if got.Remedy == "" {
+	if got.Remedy == nil {
 		t.Error("expected non-empty remedy")
 	}
 }
@@ -423,7 +424,7 @@ func TestCheckDiskSpace_OK(t *testing.T) {
 	got := checkDiskSpace(t.TempDir())
 
 	if got.Status != CheckStatusPass {
-		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
+		t.Errorf("expected pass, got %s: %s", got.Status, got.Evidence)
 	}
 }
 
@@ -483,15 +484,23 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
 		t.Fatalf("RunDoctor returned error: %v", err)
 	}
 
-	output := buf.String()
-	if !strings.Contains(output, "gentle-ai doctor") {
-		t.Error("expected header in output")
-	}
-	if !strings.Contains(output, "Summary:") {
-		t.Error("expected summary in output")
-	}
-	if !strings.Contains(output, "Status:") {
-		t.Error("expected status in output")
+	want := fmt.Sprintf(`gentle-ai doctor — system health check
+=======================================
+
+  [ok]  tool:gentle-ai                 gentle-ai found at /usr/local/bin/gentle-ai
+  [ok]  tool:engram                    engram found at /usr/local/bin/engram
+  [ok]  tool:gga                       gga found at /usr/local/bin/gga
+  [ok]  tool:claude                    claude found at /usr/local/bin/claude
+  [ok]  tool:opencode                  opencode found at /usr/local/bin/opencode
+  [ok]  state:json                     state file OK — 1 agent(s) installed: claude-code
+  [ok]  engram:reachable               engram health endpoint OK at http://localhost:7437/health (HTTP 200)
+  [ok]  disk:space                     1024 MB free on %s filesystem
+
+Summary: 8 passed, 0 failed, 0 warnings
+Status:  healthy
+`, filepath.Join(homeDir, ".gentle-ai"))
+	if got := buf.String(); got != want {
+		t.Fatalf("RunDoctor output mismatch\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 

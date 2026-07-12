@@ -12,31 +12,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/internal/doctor"
 	"github.com/gentleman-programming/gentle-ai/internal/state"
 	"github.com/gentleman-programming/gentle-ai/internal/storage"
 )
 
-// CheckStatus is the outcome of a doctor check: pass, warn, or fail.
-type CheckStatus string
+type CheckStatus = doctor.Status
+type CheckResult = doctor.Result
+type DoctorReport = doctor.Report
 
 const (
-	CheckStatusPass CheckStatus = "pass"
-	CheckStatusWarn CheckStatus = "warn"
-	CheckStatusFail CheckStatus = "fail"
+	CheckStatusPass = doctor.StatusPass
+	CheckStatusWarn = doctor.StatusWarn
+	CheckStatusFail = doctor.StatusFail
 )
-
-// CheckResult is the result of one doctor check.
-type CheckResult struct {
-	Name   string
-	Status CheckStatus
-	Detail string
-	Remedy string // optional fix suggestion
-}
-
-// DoctorReport aggregates all check results.
-type DoctorReport struct {
-	Checks []CheckResult
-}
 
 // coreTools are ecosystem-level binaries that gentle-ai always requires
 // regardless of which agents the user installed. Agent-specific binaries are
@@ -107,11 +96,20 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 	// reports the always-required core tools — preserving the first-time-install
 	// behaviour where the user has not yet selected any agents (#709).
 
-	report := DoctorReport{}
-	report.Checks = append(report.Checks, checkToolBinaries(pathDirsFn(), installedAgents)...)
-	report.Checks = append(report.Checks, checkStateJSON(homeDir))
-	report.Checks = append(report.Checks, checkEngramReachable())
-	report.Checks = append(report.Checks, checkDiskSpace(homeDir))
+	requiredTools := requiredDoctorTools(installedAgents)
+	checks := make([]doctor.Check, 0, len(requiredTools)+3)
+	for _, tool := range requiredTools {
+		tool := tool
+		checks = append(checks, doctor.Check{ID: doctor.ToolCheckID(tool), Run: func(context.Context) doctor.Result {
+			return checkOneTool(tool, pathDirsFn())
+		}})
+	}
+	checks = append(checks,
+		doctor.Check{ID: doctor.CheckStateJSON, Run: func(context.Context) doctor.Result { return checkStateJSON(homeDir) }},
+		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(context.Context) doctor.Result { return checkEngramReachable() }},
+		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
+	)
+	report := (doctor.Runner{Checks: checks}).Run(ctx)
 
 	renderDoctorReport(w, report)
 	return nil
@@ -133,25 +131,29 @@ func readDoctorInstalledAgents(homeDir string) ([]string, error) {
 // shadowing. The required set is coreTools plus one binary per installed
 // agent ID (resolved via agentToolBinaries), so the doctor only flags agents
 // the user actually selected (#709). Unknown agent IDs are skipped.
-func checkToolBinaries(pathDirs []string, installedAgents []string) []CheckResult {
+func requiredDoctorTools(installedAgents []string) []string {
 	required := make([]string, 0, len(coreTools)+len(installedAgents))
 	required = append(required, coreTools...)
 	seen := make(map[string]struct{}, len(required))
-	for _, t := range required {
-		seen[t] = struct{}{}
+	for _, tool := range required {
+		seen[tool] = struct{}{}
 	}
 	for _, agentID := range installedAgents {
 		bin, ok := agentToolBinaries[agentID]
 		if !ok || bin == "" {
 			continue
 		}
-		if _, dup := seen[bin]; dup {
+		if _, duplicate := seen[bin]; duplicate {
 			continue
 		}
 		seen[bin] = struct{}{}
 		required = append(required, bin)
 	}
+	return required
+}
 
+func checkToolBinaries(pathDirs []string, installedAgents []string) []CheckResult {
+	required := requiredDoctorTools(installedAgents)
 	results := make([]CheckResult, 0, len(required))
 	for _, tool := range required {
 		results = append(results, checkOneTool(tool, pathDirs))
@@ -163,20 +165,20 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 	resolved, shim, err := resolveDoctorTool(tool)
 	if err != nil {
 		return CheckResult{
-			Name:   "tool:" + tool,
-			Status: CheckStatusFail,
-			Detail: tool + " not found in PATH",
-			Remedy: "Install " + tool + " or add its directory to PATH",
+			ID:       doctor.ToolCheckID(tool),
+			Status:   CheckStatusFail,
+			Evidence: tool + " not found in PATH",
+			Remedy:   &doctor.Remedy{ID: doctor.RemedyInstallTool, Description: "Install " + tool + " or add its directory to PATH"},
 		}
 	}
 
 	copies := doctorToolCopies(tool, pathDirs)
 	if len(copies) > 1 {
 		return CheckResult{
-			Name:   "tool:" + tool,
-			Status: CheckStatusWarn,
-			Detail: fmt.Sprintf("%s resolved to %s but %d copies found in PATH: %s", tool, resolved, len(copies), strings.Join(copies, ", ")),
-			Remedy: "Remove duplicate binaries; keep only one copy of " + tool + " in PATH",
+			ID:       doctor.ToolCheckID(tool),
+			Status:   CheckStatusWarn,
+			Evidence: fmt.Sprintf("%s resolved to %s but %d copies found in PATH: %s", tool, resolved, len(copies), strings.Join(copies, ", ")),
+			Remedy:   &doctor.Remedy{ID: doctor.RemedyRemoveDuplicates, Description: "Remove duplicate binaries; keep only one copy of " + tool + " in PATH"},
 		}
 	}
 
@@ -185,9 +187,9 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 		detail += " (" + shim + ")"
 	}
 	return CheckResult{
-		Name:   "tool:" + tool,
-		Status: CheckStatusPass,
-		Detail: detail,
+		ID:       doctor.ToolCheckID(tool),
+		Status:   CheckStatusPass,
+		Evidence: detail,
 	}
 }
 
@@ -300,33 +302,33 @@ func appendUniqueExt(exts []string, ext string) []string {
 
 // checkStateJSON validates ~/.gentle-ai/state.json and agent config dirs.
 func checkStateJSON(homeDir string) CheckResult {
-	const name = "state:json"
+	const id = doctor.CheckStateJSON
 	statePath := state.Path(homeDir)
 
 	s, err := state.Read(homeDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return CheckResult{
-				Name:   name,
-				Status: CheckStatusWarn,
-				Detail: "state file not found at " + statePath + " (expected for first-time install)",
-				Remedy: "Run 'gentle-ai install' to create initial state",
+				ID:       id,
+				Status:   CheckStatusWarn,
+				Evidence: "state file not found at " + statePath + " (expected for first-time install)",
+				Remedy:   &doctor.Remedy{ID: doctor.RemedyInstall, Description: "Run 'gentle-ai install' to create initial state"},
 			}
 		}
 		return CheckResult{
-			Name:   name,
-			Status: CheckStatusFail,
-			Detail: "failed to parse " + statePath + ": " + err.Error(),
-			Remedy: "Delete or repair " + statePath + ", then re-run 'gentle-ai install'",
+			ID:       id,
+			Status:   CheckStatusFail,
+			Evidence: "failed to parse " + statePath + ": " + err.Error(),
+			Remedy:   &doctor.Remedy{ID: doctor.RemedyRepairState, Description: "Delete or repair " + statePath + ", then re-run 'gentle-ai install'"},
 		}
 	}
 
 	if len(s.InstalledAgents) == 0 {
 		return CheckResult{
-			Name:   name,
-			Status: CheckStatusWarn,
-			Detail: "state file found at " + statePath + " with no installed agents",
-			Remedy: "Run 'gentle-ai install' to configure agents",
+			ID:       id,
+			Status:   CheckStatusWarn,
+			Evidence: "state file found at " + statePath + " with no installed agents",
+			Remedy:   &doctor.Remedy{ID: doctor.RemedyInstall, Description: "Run 'gentle-ai install' to configure agents"},
 		}
 	}
 
@@ -341,17 +343,17 @@ func checkStateJSON(homeDir string) CheckResult {
 
 	if len(missing) > 0 {
 		return CheckResult{
-			Name:   name,
-			Status: CheckStatusWarn,
-			Detail: fmt.Sprintf("state lists %d agent(s) whose config dirs are missing: %s", len(missing), strings.Join(missing, ", ")),
-			Remedy: "Run 'gentle-ai sync' to restore missing config files",
+			ID:       id,
+			Status:   CheckStatusWarn,
+			Evidence: fmt.Sprintf("state lists %d agent(s) whose config dirs are missing: %s", len(missing), strings.Join(missing, ", ")),
+			Remedy:   &doctor.Remedy{ID: doctor.RemedySync, Description: "Run 'gentle-ai sync' to restore missing config files"},
 		}
 	}
 
 	return CheckResult{
-		Name:   name,
-		Status: CheckStatusPass,
-		Detail: fmt.Sprintf("state file OK — %d agent(s) installed: %s", len(s.InstalledAgents), strings.Join(s.InstalledAgents, ", ")),
+		ID:       id,
+		Status:   CheckStatusPass,
+		Evidence: fmt.Sprintf("state file OK — %d agent(s) installed: %s", len(s.InstalledAgents), strings.Join(s.InstalledAgents, ", ")),
 	}
 }
 
@@ -380,7 +382,7 @@ func agentConfigDir(homeDir, agentID string) string {
 
 // checkEngramReachable checks whether the engram HTTP health endpoint responds.
 func checkEngramReachable() CheckResult {
-	const name = "engram:reachable"
+	const id = doctor.CheckEngramReachable
 
 	baseURL := os.Getenv(engramHealthEnvVar)
 	if baseURL == "" {
@@ -391,58 +393,58 @@ func checkEngramReachable() CheckResult {
 	statusCode, err := httpGetFn(healthURL, 3*time.Second)
 	if err != nil {
 		return CheckResult{
-			Name:   name,
-			Status: CheckStatusFail,
-			Detail: "engram health endpoint unreachable at " + healthURL + ": " + err.Error(),
-			Remedy: "Start engram or check that it is configured as an MCP server",
+			ID:       id,
+			Status:   CheckStatusFail,
+			Evidence: "engram health endpoint unreachable at " + healthURL + ": " + err.Error(),
+			Remedy:   &doctor.Remedy{ID: doctor.RemedyStartEngram, Description: "Start engram or check that it is configured as an MCP server"},
 		}
 	}
 	if statusCode < 200 || statusCode >= 300 {
 		return CheckResult{
-			Name:   name,
-			Status: CheckStatusWarn,
-			Detail: fmt.Sprintf("engram health endpoint %s returned HTTP %d", healthURL, statusCode),
-			Remedy: "Check engram logs for errors",
+			ID:       id,
+			Status:   CheckStatusWarn,
+			Evidence: fmt.Sprintf("engram health endpoint %s returned HTTP %d", healthURL, statusCode),
+			Remedy:   &doctor.Remedy{ID: doctor.RemedyInspectEngram, Description: "Check engram logs for errors"},
 		}
 	}
 	return CheckResult{
-		Name:   name,
-		Status: CheckStatusPass,
-		Detail: fmt.Sprintf("engram health endpoint OK at %s (HTTP %d)", healthURL, statusCode),
+		ID:       id,
+		Status:   CheckStatusPass,
+		Evidence: fmt.Sprintf("engram health endpoint OK at %s (HTTP %d)", healthURL, statusCode),
 	}
 }
 
 // checkDiskSpace reports free space on the ~/.gentle-ai filesystem.
 func checkDiskSpace(homeDir string) CheckResult {
-	const name = "disk:space"
+	const id = doctor.CheckDiskSpace
 	dir := filepath.Join(homeDir, ".gentle-ai")
 
 	free, err := availableBytesFn(dir)
 	if err != nil {
-		return CheckResult{Name: name, Status: CheckStatusWarn, Detail: "could not determine free disk space for " + dir + ": " + err.Error()}
+		return CheckResult{ID: id, Status: CheckStatusWarn, Evidence: "could not determine free disk space for " + dir + ": " + err.Error()}
 	}
 
 	freeMB := free / (1024 * 1024)
 	switch {
 	case free < diskFailThreshold:
 		return CheckResult{
-			Name:   name,
-			Status: CheckStatusFail,
-			Detail: fmt.Sprintf("critically low disk space: %d MB free on %s filesystem", freeMB, dir),
-			Remedy: "Free up disk space before running install or sync operations",
+			ID:       id,
+			Status:   CheckStatusFail,
+			Evidence: fmt.Sprintf("critically low disk space: %d MB free on %s filesystem", freeMB, dir),
+			Remedy:   &doctor.Remedy{ID: doctor.RemedyFreeDiskSpace, Description: "Free up disk space before running install or sync operations"},
 		}
 	case free < diskWarnThreshold:
 		return CheckResult{
-			Name:   name,
-			Status: CheckStatusWarn,
-			Detail: fmt.Sprintf("low disk space: %d MB free on %s filesystem", freeMB, dir),
-			Remedy: "Consider freeing disk space",
+			ID:       id,
+			Status:   CheckStatusWarn,
+			Evidence: fmt.Sprintf("low disk space: %d MB free on %s filesystem", freeMB, dir),
+			Remedy:   &doctor.Remedy{ID: doctor.RemedyFreeDiskSpace, Description: "Consider freeing disk space"},
 		}
 	default:
 		return CheckResult{
-			Name:   name,
-			Status: CheckStatusPass,
-			Detail: fmt.Sprintf("%d MB free on %s filesystem", freeMB, dir),
+			ID:       id,
+			Status:   CheckStatusPass,
+			Evidence: fmt.Sprintf("%d MB free on %s filesystem", freeMB, dir),
 		}
 	}
 }
@@ -466,9 +468,9 @@ func renderDoctorReport(w io.Writer, report DoctorReport) {
 	fmt.Fprintln(w)
 
 	for _, c := range report.Checks {
-		fmt.Fprintf(w, "  %s  %-30s %s\n", statusIcon(c.Status), c.Name, c.Detail)
-		if c.Remedy != "" {
-			fmt.Fprintf(w, "       Remedy: %s\n", c.Remedy)
+		fmt.Fprintf(w, "  %s  %-30s %s\n", statusIcon(c.Status), c.ID, c.Evidence)
+		if c.Remedy != nil {
+			fmt.Fprintf(w, "       Remedy: %s\n", c.Remedy.Description)
 		}
 	}
 
