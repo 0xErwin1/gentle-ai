@@ -407,6 +407,38 @@ func RunReviewValidate(args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("read review receipt: %w", err)
 	}
+	if reviewtransaction.CompactReceiptSchemaOf(receiptPayload) == reviewtransaction.CompactReceiptSchema {
+		if strings.TrimSpace(*requestPath) != "" {
+			return errors.New("compact review receipts require native authority flags")
+		}
+		compactReceipt, err := reviewtransaction.ParseCompactReceipt(receiptPayload)
+		if err != nil {
+			return fmt.Errorf("parse compact review receipt: %w", err)
+		}
+		manifestPaths, err := readIntendedManifest(*manifest)
+		if err != nil {
+			return err
+		}
+		intended = append(intended, manifestPaths...)
+		evaluation := reviewtransaction.EvaluateCompactGate(context.Background(), *cwd, compactReceipt, reviewtransaction.NativeGateRequestInput{
+			Gate: reviewtransaction.GateKind(*gate), LineageID: *lineage, BundleArtifact: *bundlePath,
+			PolicyArtifact: *policyPath, LedgerArtifact: *ledgerPath, FixDeltaArtifact: *fixDeltaPath, EvidenceArtifact: *evidencePath,
+			IntendedUntracked: []string(intended), BaseRef: *baseRef, PrePRCIAttestation: *ciAttestation,
+			ReleaseConfiguration: *releaseConfiguration, ReleaseGenerated: *releaseGenerated, ReleaseProvenance: *releaseProvenance,
+			ReleasePublicationBoundary: *releaseBoundary, ReleaseEvidenceFreshness: *releaseFreshness,
+		})
+		result := ReviewValidateResult{
+			Schema: ReviewValidateSchema, Result: evaluation.Result, Allowed: evaluation.Result == reviewtransaction.GateAllow,
+			Action: reviewGateAction(evaluation.Result), Reason: evaluation.Reason, Context: evaluation.Context,
+		}
+		if err := encodeReviewJSON(stdout, result); err != nil {
+			return err
+		}
+		if !result.Allowed {
+			return ReviewGateDeniedError{Result: result.Result}
+		}
+		return nil
+	}
 	receipt, err := reviewtransaction.ParseReceipt(receiptPayload)
 	if err != nil {
 		return fmt.Errorf("parse review receipt: %w", err)

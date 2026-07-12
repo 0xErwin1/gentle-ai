@@ -79,6 +79,11 @@ func TestReviewFacadeCleanFlowReplacesOneCompactStateAndUsesOnlyReceipt(t *testi
 		}
 		assertReviewGateResult(t, output.Bytes(), reviewtransaction.GateAllow)
 	}
+	output.Reset()
+	if err := RunReviewValidate([]string{"--cwd", repo, "--receipt", store.ReceiptPath(), "--lineage", started.LineageID, "--gate", string(reviewtransaction.GatePreCommit)}, &output); err != nil {
+		t.Fatalf("review validate rejected facade receipt: %v\n%s", err, output.String())
+	}
+	assertReviewGateResult(t, output.Bytes(), reviewtransaction.GateAllow)
 
 	receiptPayload, err := os.ReadFile(store.ReceiptPath())
 	if err != nil {
