@@ -504,8 +504,17 @@ func TestPiCodeGraphPendingProbePreservesConfiguredFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReconcilePiCodeGraph() error = %v, want pending success", err)
 	}
-	if len(result.ManualActions) != 1 || !strings.Contains(result.ManualActions[0], "pending") {
+	if len(result.ManualActions) != 1 {
 		t.Fatalf("ManualActions = %#v, want one pending action", result.ManualActions)
+	}
+	action := result.ManualActions[0]
+	for _, want := range []string{"configuration was installed and preserved", "direct MCP capability was verified", "adapter activation health cannot be machine-verified", "remains pending"} {
+		if !strings.Contains(action, want) {
+			t.Fatalf("ManualActions[0] = %q, want %q", action, want)
+		}
+	}
+	if strings.Contains(strings.ToLower(action), "reinstall") {
+		t.Fatalf("ManualActions[0] = %q, should not instruct users to reinstall", action)
 	}
 	if got := string(mustReadPiFile(t, mcpPath)); !strings.Contains(got, `"codegraph"`) {
 		t.Fatalf("pending MCP config = %s, want preserved CodeGraph server", got)
