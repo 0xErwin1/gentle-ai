@@ -1,12 +1,54 @@
 package vscode
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
+
+func TestDetectRequiresVSCodeAndCopilotExtension(t *testing.T) {
+	home := t.TempDir()
+	a := NewAdapter()
+	a.lookPath = func(string) (string, error) { return filepath.Join(home, "bin", "code"), nil }
+
+	if err := os.MkdirAll(filepath.Join(home, ".copilot", "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installed, _, _, _, err := a.Detect(context.Background(), home)
+	if err != nil || installed {
+		t.Fatalf("Detect() with skills only = %v, %v; want false, nil", installed, err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(home, ".vscode", "extensions", "github.copilot-1.2.3"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installed, _, _, evidence, err := a.Detect(context.Background(), home)
+	if err != nil || !installed || !evidence {
+		t.Fatalf("Detect() with Copilot extension = %v, %v, %v; want true, true, nil", installed, evidence, err)
+	}
+}
+
+func TestDetectIgnoresStaleManagedConfiguration(t *testing.T) {
+	home := t.TempDir()
+	a := NewAdapter()
+	a.lookPath = func(string) (string, error) { return filepath.Join(home, "bin", "code"), nil }
+	for _, path := range []string{a.SystemPromptFile(home), a.MCPConfigPath(home, "codegraph")} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	installed, _, _, _, err := a.Detect(context.Background(), home)
+	if err != nil || installed {
+		t.Fatalf("Detect() with stale managed config = %v, %v; want false, nil", installed, err)
+	}
+}
 
 func TestStrategies(t *testing.T) {
 	a := NewAdapter()

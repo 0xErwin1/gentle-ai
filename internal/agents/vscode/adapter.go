@@ -2,10 +2,12 @@ package vscode
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/system"
@@ -33,14 +35,28 @@ func (a *Adapter) Tier() model.SupportTier {
 
 // --- Detection ---
 
-func (a *Adapter) Detect(_ context.Context, _ string) (bool, string, string, bool, error) {
-	// VS Code is detected by its binary on PATH.
+func (a *Adapter) Detect(_ context.Context, homeDir string) (bool, string, string, bool, error) {
 	binaryPath, err := a.lookPath("code")
 	if err != nil {
+		if !errors.Is(err, exec.ErrNotFound) {
+			return false, "", "", false, err
+		}
 		return false, "", "", false, nil
 	}
-
-	return true, binaryPath, "", true, nil
+	extensionsDir := filepath.Join(homeDir, ".vscode", "extensions")
+	entries, err := os.ReadDir(extensionsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, binaryPath, extensionsDir, false, nil
+		}
+		return false, "", extensionsDir, false, err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && (entry.Name() == "github.copilot" || strings.HasPrefix(entry.Name(), "github.copilot-")) {
+			return true, binaryPath, extensionsDir, true, nil
+		}
+	}
+	return false, binaryPath, extensionsDir, false, nil
 }
 
 // --- Installation ---
