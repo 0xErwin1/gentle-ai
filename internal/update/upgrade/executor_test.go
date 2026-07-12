@@ -1068,17 +1068,15 @@ func TestEnumerateFilesInDir_NilExcludesWalksEverything(t *testing.T) {
 	}
 }
 
-// TestConfigPathsForBackup_ExcludesRuntimeDirs verifies that upgrade backup
-// target selection ignores runtime directories across agents. Upgrade backups
-// must stay limited to Gentle AI-managed files, not conversations or caches.
-func TestConfigPathsForBackup_ExcludesPiRuntimeFiles(t *testing.T) {
+// TestConfigPathsForBackup_ExcludesPiSessionRuntimeFile verifies that upgrade
+// backups preserve managed Pi config without capturing session data.
+func TestConfigPathsForBackup_ExcludesPiSessionRuntimeFile(t *testing.T) {
 	homeDir := t.TempDir()
 
 	managedPiSettings := filepath.Join(homeDir, ".pi", "agent", "settings.json")
 	managedPiMCP := filepath.Join(homeDir, ".pi", "agent", "mcp.json")
-	runtimeSocket := filepath.Join(homeDir, ".pi", "agent", "intercom", "broker.sock")
 	runtimeSession := filepath.Join(homeDir, ".pi", "agent", "sessions", "session.jsonl")
-	for _, path := range []string{managedPiSettings, managedPiMCP, runtimeSocket, runtimeSession} {
+	for _, path := range []string{managedPiSettings, managedPiMCP, runtimeSession} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatalf("MkdirAll %s: %v", path, err)
 		}
@@ -1098,10 +1096,8 @@ func TestConfigPathsForBackup_ExcludesPiRuntimeFiles(t *testing.T) {
 			t.Errorf("configPathsForBackup missing Pi managed file %q", managed)
 		}
 	}
-	for _, runtime := range []string{runtimeSocket, runtimeSession} {
-		if _, ok := pathSet[runtime]; ok {
-			t.Errorf("configPathsForBackup included Pi runtime file %q", runtime)
-		}
+	if _, ok := pathSet[runtimeSession]; ok {
+		t.Errorf("configPathsForBackup included Pi session runtime file %q", runtimeSession)
 	}
 }
 
@@ -1449,4 +1445,3 @@ func mockCmd(name string, args ...string) *exec.Cmd {
 	}
 	return exec.Command(name, args...)
 }
-
