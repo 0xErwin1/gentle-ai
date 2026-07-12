@@ -1,8 +1,10 @@
 package reviewtransaction
 
 import (
+	"context"
 	"fmt"
 	"math"
+	"reflect"
 	"testing"
 )
 
@@ -86,6 +88,72 @@ func TestConfigurationReviewPathRecognizesDotEnvVariants(t *testing.T) {
 				t.Fatalf("isConfigurationReviewPath(%q) = %t, want %t", tt.path, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDeriveSemanticRiskSignalsRecognizesEligibleServiceTokenPaths(t *testing.T) {
+	tests := []struct {
+		name  string
+		stats []DiffStat
+		want  []RiskSignal
+	}{
+		{name: "underscore Go source", stats: []DiffStat{{Path: "internal/identity/service_token.go", Additions: 1}}, want: []RiskSignal{SignalAuth}},
+		{name: "hyphen TypeScript source", stats: []DiffStat{{Path: "internal/identity/service-token.ts", Additions: 1}}, want: []RiskSignal{SignalAuth}},
+		{name: "configuration path", stats: []DiffStat{{Path: "config/service-token.yaml", Additions: 1}}, want: []RiskSignal{SignalAuth}},
+		{name: "deletion-only source", stats: []DiffStat{{Path: "internal/identity/service-token.ts", Deletions: 1}}, want: []RiskSignal{SignalAuth}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := deriveSemanticRiskSignals(tt.stats); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("deriveSemanticRiskSignals() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeriveSemanticRiskSignalsRejectsIneligibleAndAmbiguousPaths(t *testing.T) {
+	tests := []struct {
+		name string
+		stat DiffStat
+	}{
+		{name: "joined token", stat: DiffStat{Path: "internal/identity/servicetoken.go", Additions: 1}},
+		{name: "cross segment token", stat: DiffStat{Path: "internal/service/token.go", Additions: 1}},
+		{name: "zero change", stat: DiffStat{Path: "internal/identity/service-token.ts"}},
+		{name: "binary", stat: DiffStat{Path: "internal/identity/service-token.ts", Additions: 1, Binary: true}},
+		{name: "mode only", stat: DiffStat{Path: "internal/identity/service-token.ts", Additions: 1, ModeOnly: true}},
+		{name: "generated golden", stat: DiffStat{Path: "testdata/golden/service-token.golden", Additions: 1, Generated: true}},
+		{name: "fixture", stat: DiffStat{Path: "fixtures/service-token.ts", Additions: 1}},
+		{name: "testdata", stat: DiffStat{Path: "testdata/service-token.ts", Additions: 1}},
+		{name: "requirements prose", stat: DiffStat{Path: "service-token-requirements.txt", Additions: 1}},
+		{name: "CMake prose", stat: DiffStat{Path: "service-token-CMakeLists.txt", Additions: 1}},
+		{name: "executable MDX", stat: DiffStat{Path: "service-token.mdx", Additions: 1}},
+		{name: "README shell", stat: DiffStat{Path: "README-service-token.sh", Additions: 1}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := deriveSemanticRiskSignals([]DiffStat{tt.stat}); len(got) != 0 {
+				t.Fatalf("deriveSemanticRiskSignals() = %v, want no signals", got)
+			}
+		})
+	}
+}
+
+func TestClassifySnapshotRiskDerivesAuthAfterCountingCanonicalStats(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "neutral/service-token.ts", "export const token = 'candidate'\n")
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{"neutral/service-token.ts"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	risk, lines, err := (SnapshotBuilder{Repo: repo}).ClassifySnapshotRisk(context.Background(), snapshot)
+	if err != nil || risk != RiskHigh || lines >= LargeChangeLines {
+		t.Fatalf("ClassifySnapshotRisk() = %q, %d, %v; want high below %d lines", risk, lines, err, LargeChangeLines)
+	}
+}
+
+func TestClassifySnapshotRiskRejectsMalformedStatsBeforeSemanticDerivation(t *testing.T) {
+	if _, err := CountChangedLines([]DiffStat{{Path: "neutral/../service-token.ts", Additions: 1}}); err == nil {
+		t.Fatal("CountChangedLines() accepted noncanonical path")
 	}
 }
 

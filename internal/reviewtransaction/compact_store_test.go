@@ -88,6 +88,43 @@ func TestCompactStoreFailsClosedForCorruptionAndIgnoresInvalidTempState(t *testi
 	}
 }
 
+func TestCompactStoreRejectsForgedServiceTokenRiskDowngrade(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "neutral/service-token.ts", "export const token = 'candidate'\n")
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{"neutral/service-token.ts"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines, err := (SnapshotBuilder{Repo: repo}).ChangedLines(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := NewCompactState(Start{
+		LineageID: "compact-service-token-forgery", Mode: ModeOrdinaryBounded, Generation: 1,
+		Snapshot: snapshot, PolicyHash: hash("1"), RiskLevel: RiskMedium,
+		SelectedLenses: []string{LensReliability}, OriginalChangedLines: &lines,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace("", "review/start", state); err == nil || !errors.Is(err, ErrInvalidSuccessor) {
+		t.Fatalf("forged medium service-token state error = %v, want invalid successor", err)
+	}
+	for _, lenses := range [][]string{{LensRisk}, {LensReliability, LensReadability, LensResilience, LensRisk}} {
+		if _, err := NewCompactState(Start{
+			LineageID: "compact-service-token-invalid-high", Mode: ModeOrdinaryBounded, Generation: 1,
+			Snapshot: snapshot, PolicyHash: hash("1"), RiskLevel: RiskHigh,
+			SelectedLenses: lenses, OriginalChangedLines: &lines,
+		}); err == nil {
+			t.Fatalf("invalid high-risk lenses %v were accepted", lenses)
+		}
+	}
+}
+
 func TestCompactStateRejectsChecksumValidImpossibleSemantics(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	valid := correctedCompactTestState(t, repo, "compact-semantic-invalid")

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -193,6 +194,55 @@ func TestReviewFacadeStartSupportsCommittedBaseDiff(t *testing.T) {
 	}
 	if denied.Allowed || denied.Context.LineageID != result.LineageID || denied.Context.PrePRBoundary == nil || denied.Context.PrePRBoundary.Selector != "missing-reviewed-base" || denied.Context.Denial == nil || denied.Context.Denial.Code != "unavailable" {
 		t.Fatalf("facade unavailable base denial = %#v", denied)
+	}
+}
+
+func TestReviewFacadeStartServiceTokenSelectsCanonicalHighRiskLenses(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	neutral := filepath.Join(repo, "neutral")
+	if err := os.MkdirAll(neutral, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(neutral, "service-token.ts"), []byte("export const token = 'candidate'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hostile := initReviewCLIRepo(t)
+	for name, value := range map[string]string{
+		"GIT_DIR": filepath.Join(hostile, ".git"), "GIT_WORK_TREE": hostile,
+		"GIT_COMMON_DIR": filepath.Join(hostile, ".git"), "GIT_INDEX_FILE": filepath.Join(hostile, ".git", "index"),
+		"GIT_REPLACE_REF_BASE": filepath.Join(hostile, "replace"),
+	} {
+		t.Setenv(name, value)
+	}
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(workingDirectory, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{reviewtransaction.LensRisk, reviewtransaction.LensResilience, reviewtransaction.LensReadability, reviewtransaction.LensReliability}
+	for index, cwd := range []string{repo, neutral, relative} {
+		var output bytes.Buffer
+		if err := RunReviewFacadeStart([]string{"--cwd", cwd, "--lineage", fmt.Sprintf("service-token-%d", index)}, &output); err != nil {
+			t.Fatalf("facade start from %q: %v", cwd, err)
+		}
+		var started ReviewFacadeStartResult
+		if err := json.Unmarshal(output.Bytes(), &started); err != nil {
+			t.Fatal(err)
+		}
+		store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		record, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if record.State.RiskLevel != reviewtransaction.RiskHigh || !reflect.DeepEqual(record.State.SelectedLenses, want) {
+			t.Fatalf("facade service-token state from %q = risk %q lenses %v, want high %v", cwd, record.State.RiskLevel, record.State.SelectedLenses, want)
+		}
 	}
 }
 
