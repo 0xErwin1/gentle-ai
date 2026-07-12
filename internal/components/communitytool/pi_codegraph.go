@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -26,9 +27,10 @@ const (
 )
 
 var (
-	piCodeGraphAtomicWrite = filemerge.WriteFileAtomic
-	piCodeGraphReadFile    = os.ReadFile
-	piCodeGraphRemove      = os.Remove
+	piCodeGraphAtomicWrite  = filemerge.WriteFileAtomic
+	piCodeGraphReadFile     = os.ReadFile
+	piCodeGraphRemove       = os.Remove
+	piCodeGraphManifestStat = os.Stat
 )
 
 var piCodeGraphEffectiveMCPProbe PiCodeGraphEffectiveMCPProbe = probePiCodeGraphMCP
@@ -852,7 +854,11 @@ func readPiCodeGraphManifest(path string) (piCodeGraphManifest, error) {
 	if err != nil {
 		return piCodeGraphManifest{}, err
 	}
-	if info, statErr := os.Stat(path); statErr != nil || info.Mode().Perm()&0o077 != 0 {
+	info, err := piCodeGraphManifestStat(path)
+	if err != nil {
+		return piCodeGraphManifest{}, fmt.Errorf("stat Pi CodeGraph manifest %q: %w", path, err)
+	}
+	if !piCodeGraphManifestPermissionsSafe(runtime.GOOS, info.Mode()) {
 		return piCodeGraphManifest{}, fmt.Errorf("Pi CodeGraph manifest %q has unsafe permissions", path)
 	}
 	var manifest piCodeGraphManifest
@@ -860,6 +866,10 @@ func readPiCodeGraphManifest(path string) (piCodeGraphManifest, error) {
 		return piCodeGraphManifest{}, err
 	}
 	return manifest, nil
+}
+
+func piCodeGraphManifestPermissionsSafe(goos string, mode os.FileMode) bool {
+	return goos == "windows" || mode.Perm()&0o077 == 0
 }
 
 func restoreMissingPiChildren(children map[string]piCodeGraphOwnedFile, journal *piJournal, changed map[string]struct{}) error {
