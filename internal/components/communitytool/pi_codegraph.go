@@ -348,13 +348,31 @@ func piChildTools(body string) ([]string, bool, bool) {
 		return nil, false, true
 	}
 	frontmatter := body[4 : 4+end]
-	for _, line := range strings.Split(frontmatter, "\n") {
+	lines := strings.Split(frontmatter, "\n")
+	for i, line := range lines {
 		key, value, ok := strings.Cut(line, ":")
 		if !ok || strings.TrimSpace(key) != "tools" {
 			continue
 		}
 		value = strings.TrimSpace(value)
-		if value == "" || (strings.HasPrefix(value, "[") != strings.HasSuffix(value, "]")) {
+		if value == "" {
+			var tools []string
+			for _, item := range lines[i+1:] {
+				trimmed := strings.TrimSpace(item)
+				if !strings.HasPrefix(item, " ") && !strings.HasPrefix(item, "\t") {
+					break
+				}
+				if !strings.HasPrefix(trimmed, "- ") || strings.TrimSpace(strings.TrimPrefix(trimmed, "- ")) == "" {
+					return nil, false, true
+				}
+				tools = append(tools, strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "- ")), "\"'"))
+			}
+			if len(tools) == 0 {
+				return nil, false, true
+			}
+			return tools, true, false
+		}
+		if strings.HasPrefix(value, "[") != strings.HasSuffix(value, "]") {
 			return nil, false, true
 		}
 		tools := strings.FieldsFunc(strings.Trim(value, "[]"), func(r rune) bool { return r == ',' || r == ' ' })
@@ -393,6 +411,12 @@ func replacePiChildTools(body string, tools []string) string {
 	for i, line := range lines {
 		if key, _, ok := strings.Cut(line, ":"); ok && strings.TrimSpace(key) == "tools" {
 			lines[i] = "tools: " + strings.Join(tools, ", ")
+			end := i + 1
+			for end < len(lines) && (strings.HasPrefix(lines[end], " ") || strings.HasPrefix(lines[end], "\t")) {
+				end++
+			}
+			lines = append(lines[:i+1], lines[end:]...)
+			break
 		}
 	}
 	return strings.Join(lines, "\n") + body[frontEnd:]

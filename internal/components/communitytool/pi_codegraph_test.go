@@ -182,6 +182,23 @@ func TestPiCodeGraphReconcileIsByteIdempotentAndUninstallPreservesUserMCP(t *tes
 	}
 }
 
+func TestPiChildToolsAcceptsYAMLBlockList(t *testing.T) {
+	body := "---\ntools:\n  - read\n  - grep\n  - bash\n---\nwork\n"
+
+	tools, parseable, malformed := piChildTools(body)
+	if malformed || !parseable {
+		t.Fatalf("piChildTools() = %v, %v, %v; want parseable block list", tools, parseable, malformed)
+	}
+	if got, want := strings.Join(tools, ","), "read,grep,bash"; got != want {
+		t.Fatalf("piChildTools() tools = %q, want %q", got, want)
+	}
+
+	rendered := replacePiChildTools(body, append(tools, "mcp"))
+	if strings.Contains(rendered, "  - ") || !strings.Contains(rendered, "tools: read, grep, bash, mcp") {
+		t.Fatalf("replacePiChildTools() left malformed frontmatter:\n%s", rendered)
+	}
+}
+
 func TestPiCodeGraphUninstallRestoresAdoptedAndOwnedArtifacts(t *testing.T) {
 	home := t.TempDir()
 	mcpPath := filepath.Join(home, ".pi", "agent", "mcp.json")
