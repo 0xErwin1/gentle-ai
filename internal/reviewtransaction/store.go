@@ -141,7 +141,11 @@ func validateLineageID(lineageID string) error {
 }
 
 func (store Store) Append(expectedRevision string, record Record) (string, error) {
-	if store.readOnly {
+	return store.append(expectedRevision, record, false)
+}
+
+func (store Store) append(expectedRevision string, record Record, allowInvalidate bool) (string, error) {
+	if store.readOnly && !allowInvalidate {
 		return "", ErrLegacyReadOnly
 	}
 	if strings.TrimSpace(store.Dir) == "" {
@@ -271,6 +275,33 @@ func (store Store) Append(expectedRevision string, record Record) (string, error
 		return "", err
 	}
 	return revision, nil
+}
+
+// InvalidatePristine is the sole legacy write compatibility path. It appends
+// exactly review/invalidate without remarshal or modification of prior events.
+func (store Store) InvalidatePristine(expectedRevision, reason string, snapshot Snapshot) (string, error) {
+	chain, err := store.LoadChain()
+	if err != nil {
+		return "", err
+	}
+	current := chain.Records[len(chain.Records)-1].Transaction
+	if current.State == StateInvalidated {
+		if len(chain.Revisions) == 2 && expectedRevision == chain.Revisions[0] && current.InvalidationReason == strings.TrimSpace(reason) && snapshotsEqual(current.Snapshot, snapshot) {
+			return chain.HeadRevision, nil
+		}
+		return "", ErrConcurrentUpdate
+	}
+	if chain.HeadRevision != expectedRevision || !snapshotsEqual(current.Snapshot, snapshot) {
+		return "", ErrConcurrentUpdate
+	}
+	if err := rebuildCurrentSnapshotEvidence(context.Background(), store.repo, snapshot); err != nil {
+		return "", err
+	}
+	next := current
+	if err := next.Invalidate(reason); err != nil {
+		return "", err
+	}
+	return store.append(expectedRevision, Record{Operation: "review/invalidate", Transaction: next}, true)
 }
 
 func (store Store) Load() (Record, string, error) {
@@ -407,6 +438,13 @@ func (store Store) loadRevision(revision string) (Record, string, error) {
 }
 
 func validateSuccessor(previous, next Transaction, operation string) error {
+	if operation == "review/invalidate" {
+		expected := previous
+		if err := expected.Invalidate(next.InvalidationReason); err != nil || !transactionsEqual(expected, next) {
+			return fmt.Errorf("%w: invalidation must retain a pristine reviewing authority", ErrInvalidSuccessor)
+		}
+		return nil
+	}
 	if previous.LineageID != next.LineageID || previous.Generation != next.Generation || previous.Mode != next.Mode {
 		return fmt.Errorf("%w: lineage, generation, and mode are immutable", ErrInvalidSuccessor)
 	}

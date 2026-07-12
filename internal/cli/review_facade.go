@@ -41,6 +41,13 @@ type ReviewFacadeFinalizeResult struct {
 	ReceiptPath   string                  `json:"receipt_path,omitempty"`
 }
 
+type ReviewInvalidateResult struct {
+	Operation     string                  `json:"operation"`
+	LineageID     string                  `json:"lineage_id"`
+	State         reviewtransaction.State `json:"state"`
+	StoreRevision string                  `json:"store_revision"`
+}
+
 type facadeFinding struct {
 	ID                string                              `json:"id,omitempty"`
 	Lens              string                              `json:"lens,omitempty"`
@@ -85,7 +92,7 @@ type facadeArtifacts struct {
 
 func RunReview(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <start|finalize|validate> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go.")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <start|finalize|validate|invalidate> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go.")
 		return nil
 	}
 	switch args[0] {
@@ -95,9 +102,75 @@ func RunReview(args []string, stdout io.Writer) error {
 		return RunReviewFacadeFinalize(args[1:], stdout)
 	case "validate":
 		return RunReviewFacadeValidate(args[1:], stdout)
+	case "invalidate":
+		return RunReviewInvalidate(args[1:], stdout)
 	default:
 		return fmt.Errorf("unknown review command %q", args[0])
 	}
+}
+
+func RunReviewInvalidate(args []string, stdout io.Writer) error {
+	flags := newReviewFlagSet("review invalidate", stdout, "Terminally invalidate one explicit pristine reviewing authority.")
+	cwd := flags.String("cwd", "", "repository path")
+	lineage := flags.String("lineage", "", "explicit review lineage identifier")
+	expected := flags.String("expected-revision", "", "exact current authority revision")
+	reason := flags.String("reason", "", "non-empty terminal invalidation reason")
+	if err := parseReviewFlags(flags, args); err != nil {
+		return err
+	}
+	if reviewHelpRequested(args) {
+		return nil
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected review invalidate argument %q", flags.Arg(0))
+	}
+	if strings.TrimSpace(*cwd) == "" || strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*expected) == "" || strings.TrimSpace(*reason) == "" {
+		return errors.New("review invalidate requires --cwd, --lineage, --expected-revision, and --reason")
+	}
+	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(context.Background())
+	if err != nil {
+		return fmt.Errorf("resolve review repository root: %w", err)
+	}
+	compact, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, *lineage)
+	if err != nil {
+		return err
+	}
+	record, loadErr := compact.Load()
+	if loadErr == nil {
+		legacy, legacyErr := reviewtransaction.AuthoritativeStore(context.Background(), root, *lineage)
+		if legacyErr == nil {
+			if _, legacyLoadErr := legacy.LoadChain(); legacyLoadErr == nil {
+				return errors.New("review authority is ambiguous across compact v2 and legacy v1 stores")
+			}
+		}
+		state := record.State
+		if state.State != reviewtransaction.StateInvalidated || state.InvalidationReason != strings.TrimSpace(*reason) {
+			if err := state.Invalidate(*reason); err != nil {
+				return err
+			}
+		}
+		revision, err := compact.Replace(*expected, "review/invalidate", state)
+		if err != nil {
+			return err
+		}
+		return encodeReviewJSON(stdout, ReviewInvalidateResult{Operation: "review/invalidate", LineageID: state.LineageID, State: state.State, StoreRevision: revision})
+	}
+	if !errors.Is(loadErr, os.ErrNotExist) {
+		return fmt.Errorf("load explicit compact review lineage: %w", loadErr)
+	}
+	legacy, err := reviewtransaction.AuthoritativeStore(context.Background(), root, *lineage)
+	if err != nil {
+		return err
+	}
+	chain, err := legacy.LoadChain()
+	if err != nil {
+		return fmt.Errorf("load explicit review lineage: %w", err)
+	}
+	revision, err := legacy.InvalidatePristine(*expected, *reason, chain.Records[len(chain.Records)-1].Transaction.Snapshot)
+	if err != nil {
+		return err
+	}
+	return encodeReviewJSON(stdout, ReviewInvalidateResult{Operation: "review/invalidate", LineageID: *lineage, State: reviewtransaction.StateInvalidated, StoreRevision: revision})
 }
 
 func RunReviewFacadeStart(args []string, stdout io.Writer) error {

@@ -190,6 +190,31 @@ func (builder SnapshotBuilder) ValidateEvidence(ctx context.Context, snapshot Sn
 	return nil
 }
 
+func rebuildCurrentSnapshotEvidence(ctx context.Context, repo string, snapshot Snapshot) error {
+	if strings.TrimSpace(repo) == "" {
+		return errors.New("repository evidence is required for invalidation")
+	}
+	target := Target{Kind: snapshot.Kind, IntendedUntracked: append([]string(nil), snapshot.IntendedUntracked...)}
+	if target.IntendedUntracked == nil {
+		target.IntendedUntracked = []string{}
+	}
+	switch snapshot.Kind {
+	case TargetCurrentChanges:
+	case TargetBaseDiff:
+		target.BaseRef = snapshot.BaseTree
+	default:
+		return errors.New("invalidation supports only live current-changes or base-diff snapshots")
+	}
+	live, err := (SnapshotBuilder{Repo: repo}).Build(ctx, target)
+	if err != nil {
+		return err
+	}
+	if !snapshotsEqual(live, snapshot) {
+		return fmt.Errorf("live repository snapshot no longer matches the reviewing authority: expected %s, got %s", snapshot.Identity, live.Identity)
+	}
+	return nil
+}
+
 // DiffStats returns the canonical base-to-candidate numstat for a validated
 // snapshot boundary. It rejects any mismatch with the snapshot path set.
 func (builder SnapshotBuilder) DiffStats(ctx context.Context, snapshot Snapshot) ([]DiffStat, error) {

@@ -46,6 +46,7 @@ type CompactState struct {
 	OriginalCriteria        *ValidationCheck           `json:"original_criteria,omitempty"`
 	CorrectionRegression    *ValidationCheck           `json:"correction_regression,omitempty"`
 	EvidenceHash            string                     `json:"evidence_hash,omitempty"`
+	InvalidationReason      string                     `json:"invalidation_reason,omitempty"`
 }
 
 type CompactReceipt struct {
@@ -185,6 +186,15 @@ func (state CompactState) Validate() error {
 		if len(state.Findings) != 0 || len(state.Classifications) != 0 || len(state.Outcomes) != 0 || len(state.FixFindingIDs) != 0 || state.ProposedCorrectionLines != nil || state.ActualCorrectionLines != nil || state.EvidenceHash != "" {
 			return errors.New("reviewing compact state contains post-review data")
 		}
+		if state.InvalidationReason != "" {
+			return errors.New("reviewing compact state cannot contain an invalidation reason")
+		}
+	case StateInvalidated:
+		reviewing := state
+		reviewing.State, reviewing.InvalidationReason = StateReviewing, ""
+		if strings.TrimSpace(state.InvalidationReason) == "" || !compactPristineReviewing(reviewing) {
+			return errors.New("invalidated compact state must retain only a pristine reviewing authority and reason")
+		}
 	case StateCorrectionRequired:
 		if len(state.LensResults) != len(state.SelectedLenses) || len(state.FixFindingIDs) == 0 || state.EvidenceHash != "" {
 			return errors.New("correction-required compact state is incomplete")
@@ -225,7 +235,7 @@ func validateCompactSnapshotMetadata(snapshot Snapshot) error {
 }
 
 func validateCompactFindings(state CompactState) error {
-	if state.State == StateReviewing {
+	if state.State == StateReviewing || state.State == StateInvalidated {
 		return nil
 	}
 	if len(state.LensResults) != len(state.SelectedLenses) {
@@ -492,6 +502,25 @@ func (state *CompactState) CompleteReview(input CompactReviewInput) error {
 		state.State = StateValidating
 	}
 	return state.Validate()
+}
+
+func (state *CompactState) Invalidate(reason string) error {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return errors.New("invalidation reason is required")
+	}
+	if !compactPristineReviewing(*state) {
+		return errors.New("only a pristine reviewing compact authority may be invalidated")
+	}
+	state.State, state.InvalidationReason = StateInvalidated, reason
+	return nil
+}
+
+func compactPristineReviewing(state CompactState) bool {
+	return state.State == StateReviewing && snapshotsEqual(state.CurrentSnapshot, state.InitialSnapshot) &&
+		len(state.LensResults) == 0 && len(state.Findings) == 0 && len(state.Classifications) == 0 && len(state.Outcomes) == 0 &&
+		len(state.FixFindingIDs) == 0 && len(state.FollowUps) == 0 && state.ProposedCorrectionLines == nil && state.ActualCorrectionLines == nil &&
+		state.FixDeltaHash == EmptyFixDeltaHash && state.OriginalCriteria == nil && state.CorrectionRegression == nil && state.EvidenceHash == "" && state.InvalidationReason == ""
 }
 
 func (state *CompactState) BeginCorrection(proposed int) error {

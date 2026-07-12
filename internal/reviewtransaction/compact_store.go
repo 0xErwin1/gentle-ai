@@ -190,6 +190,11 @@ func validateCompactRepositoryEvidence(ctx context.Context, repo string, current
 			return errors.New("compact correction size does not match repository evidence")
 		}
 	}
+	if operation == "review/invalidate" {
+		if err := rebuildCurrentSnapshotEvidence(ctx, repo, next.InitialSnapshot); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -202,6 +207,11 @@ func validateCompactSuccessor(previous, next CompactState, operation string) err
 		return fmt.Errorf("%w: compact review scope, tier, policy, and budget are immutable", ErrInvalidSuccessor)
 	}
 	switch operation {
+	case "review/invalidate":
+		expected := previous
+		if err := expected.Invalidate(next.InvalidationReason); err != nil || !compactStateEqual(expected, next) {
+			return fmt.Errorf("%w: invalidation must retain a pristine reviewing authority", ErrInvalidSuccessor)
+		}
 	case "review/complete-review":
 		if previous.State != StateReviewing || next.State != StateCorrectionRequired && next.State != StateValidating && next.State != StateEscalated {
 			return fmt.Errorf("%w: invalid compact review completion", ErrInvalidSuccessor)

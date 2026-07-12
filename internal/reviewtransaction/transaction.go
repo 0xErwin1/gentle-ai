@@ -46,6 +46,7 @@ const (
 	StateFinalVerifying         State = "final_verifying"
 	StateApproved               State = "approved"
 	StateEscalated              State = "escalated"
+	StateInvalidated            State = "invalidated"
 )
 
 type EvidenceClass string
@@ -187,6 +188,7 @@ type Transaction struct {
 	LedgerHash              string                     `json:"ledger_hash"`
 	LedgerFindingsHash      string                     `json:"ledger_findings_hash"`
 	EvidenceHash            string                     `json:"evidence_hash"`
+	InvalidationReason      string                     `json:"invalidation_reason,omitempty"`
 	JudgeProofHash          string                     `json:"judge_proof_hash,omitempty"`
 	JudgeAgreementHash      string                     `json:"judge_agreement_hash,omitempty"`
 	JudgeProofs             []JudgeProof               `json:"judge_proofs"`
@@ -280,6 +282,21 @@ func (transaction *Transaction) StartReview() error {
 		transaction.Counters.FullReviews++
 	}
 	transaction.State = StateReviewing
+	return nil
+}
+
+// Invalidate terminates only a pristine reviewing authority. It deliberately
+// has no inverse: callers must create a distinct lineage for another review.
+func (transaction *Transaction) Invalidate(reason string) error {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return errors.New("invalidation reason is required")
+	}
+	if !pristineReviewing(*transaction) {
+		return errors.New("only a pristine reviewing authority may be invalidated")
+	}
+	transaction.State = StateInvalidated
+	transaction.InvalidationReason = reason
 	return nil
 }
 
@@ -1049,12 +1066,23 @@ func (transaction *Transaction) validate() error {
 	switch transaction.State {
 	case StateUnreviewed, StateReviewing, StateJudgesConfirmed, StateFindingsFrozen, StateEvidenceClassified,
 		StateFixRequired, StateFixing, StateFixValidating, StateReadyFinalVerification,
-		StateFinalVerifying, StateApproved, StateEscalated:
+		StateFinalVerifying, StateApproved, StateEscalated, StateInvalidated:
 	default:
 		return fmt.Errorf("invalid transaction state %q", transaction.State)
 	}
 	if err := validateCounters(transaction.Mode, transaction.Counters); err != nil {
 		return err
+	}
+	if transaction.State == StateInvalidated {
+		reviewing := *transaction
+		reviewing.State, reviewing.InvalidationReason = StateReviewing, ""
+		if !pristineReviewing(reviewing) || strings.TrimSpace(transaction.InvalidationReason) == "" {
+			return errors.New("invalidated transaction must retain only a pristine reviewing authority and reason")
+		}
+		return nil
+	}
+	if transaction.InvalidationReason != "" {
+		return errors.New("only an invalidated transaction may contain an invalidation reason")
 	}
 	if err := transaction.validateLensState(); err != nil {
 		return err
@@ -1081,6 +1109,20 @@ func (transaction *Transaction) validate() error {
 
 func (transaction *Transaction) hasCorrectionBudget() bool {
 	return transaction.Mode == ModeOrdinaryBounded && transaction.OriginalChangedLines != nil && transaction.CorrectionBudget != nil
+}
+
+func pristineReviewing(transaction Transaction) bool {
+	if transaction.State != StateReviewing || transaction.LedgerHash != "" || transaction.LedgerFindingsHash != "" ||
+		transaction.EvidenceHash != "" || transaction.JudgeProofHash != "" || transaction.JudgeAgreementHash != "" ||
+		transaction.Release != nil || transaction.FailedEvidenceRevision != "" || transaction.FixDeltaHash != EmptyFixDeltaHash ||
+		!snapshotsEqual(transaction.Snapshot, Snapshot{Kind: transaction.Snapshot.Kind, BaseTree: transaction.BaseTree, CandidateTree: transaction.InitialReviewTree, PathsDigest: transaction.PathsDigest, IntendedUntracked: transaction.Snapshot.IntendedUntracked, IntendedUntrackedProof: transaction.Snapshot.IntendedUntrackedProof, LedgerIDs: transaction.Snapshot.LedgerIDs, Paths: transaction.Snapshot.Paths, Identity: transaction.Snapshot.Identity}) ||
+		transaction.FinalCandidateTree != transaction.InitialReviewTree || len(transaction.LensResults) != 0 || len(transaction.Findings) != 0 ||
+		len(transaction.Classifications) != 0 || len(transaction.Outcomes) != 0 || len(transaction.FixFindingIDs) != 0 || len(transaction.PendingRefuterIDs) != 0 ||
+		len(transaction.FixCausedFindings) != 0 || len(transaction.FollowUps) != 0 || len(transaction.JudgeProofs) != 0 ||
+		transaction.OriginalCriteria != nil || transaction.CorrectionRegression != nil || transaction.ProposedCorrectionLines != nil || transaction.ActualCorrectionLines != nil {
+		return false
+	}
+	return validInitialStoreRecord(Record{Operation: "review/start", Transaction: transaction})
 }
 
 func (transaction *Transaction) validateCorrectionBudget() error {
@@ -1468,7 +1510,7 @@ func (transaction *Transaction) validateFindingRouting() error {
 	if hasStringIntersection(fixIDs, pendingIDs) {
 		return errors.New("a severe finding cannot be both correction-bound and pending refutation")
 	}
-	if transaction.State != StateUnreviewed && transaction.State != StateReviewing && transaction.State != StateJudgesConfirmed && (!validSHA256(transaction.LedgerHash) || !validSHA256(transaction.LedgerFindingsHash) || transaction.LedgerFindingsHash != findingsHash(transaction.Findings)) {
+	if transaction.State != StateUnreviewed && transaction.State != StateReviewing && transaction.State != StateJudgesConfirmed && transaction.State != StateInvalidated && (!validSHA256(transaction.LedgerHash) || !validSHA256(transaction.LedgerFindingsHash) || transaction.LedgerFindingsHash != findingsHash(transaction.Findings)) {
 		return errors.New("frozen review state requires a content-bound ledger hash")
 	}
 	return transaction.validateFindingState(findings, severe)
@@ -1481,7 +1523,7 @@ func findingsHash(findings []Finding) string {
 }
 
 func (transaction *Transaction) validateFindingState(findings, severe map[string]Finding) error {
-	beforeFreeze := transaction.State == StateUnreviewed || transaction.State == StateReviewing || transaction.State == StateJudgesConfirmed
+	beforeFreeze := transaction.State == StateUnreviewed || transaction.State == StateReviewing || transaction.State == StateJudgesConfirmed || transaction.State == StateInvalidated
 	if beforeFreeze {
 		if len(findings) != 0 || len(transaction.Classifications) != 0 || len(transaction.Outcomes) != 0 || len(transaction.FixFindingIDs) != 0 || len(transaction.PendingRefuterIDs) != 0 {
 			return errors.New("pre-freeze transaction cannot contain findings or evidence routing")
