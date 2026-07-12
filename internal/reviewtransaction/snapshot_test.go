@@ -91,6 +91,7 @@ func TestSnapshotBuilderCurrentChangesIsCompleteAndPreservesRealIndex(t *testing
 }
 
 func TestPreCommitSnapshotAllowsOnlyCompleteStagedIntendedTransition(t *testing.T) {
+	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)
 	intended := []string{"first.txt", "second.txt"}
 	for _, path := range intended {
@@ -103,12 +104,16 @@ func TestPreCommitSnapshotAllowsOnlyCompleteStagedIntendedTransition(t *testing.
 		t.Fatal(err)
 	}
 
-	gitSnapshot(t, repo, "add", "--", "first.txt")
+	gitDir := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--absolute-git-dir"))
+	if err := os.WriteFile(filepath.Join(gitDir, "info", "exclude"), []byte("first.txt\nsecond.txt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitSnapshot(t, repo, "add", "-f", "--", "first.txt")
 	if _, err := builder.build(context.Background(), target, true); err == nil || !strings.Contains(err.Error(), "all untracked or all staged") {
 		t.Fatalf("partial staged transition error = %v", err)
 	}
 
-	gitSnapshot(t, repo, "add", "--", "second.txt")
+	gitSnapshot(t, repo, "add", "-f", "--", "second.txt")
 	got, err := builder.build(context.Background(), target, true)
 	if err != nil {
 		t.Fatal(err)
@@ -118,6 +123,199 @@ func TestPreCommitSnapshotAllowsOnlyCompleteStagedIntendedTransition(t *testing.
 	}
 	if _, err := builder.Build(context.Background(), target); err == nil || !strings.Contains(err.Error(), "already tracked") {
 		t.Fatalf("ordinary snapshot derivation accepted staged intended paths: %v", err)
+	}
+}
+
+func TestSnapshotUsesEffectiveGitIgnoresWithoutMutatingOperationalState(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	globalExclude := filepath.Join(t.TempDir(), "global-exclude")
+	writeSnapshotFile(t, filepath.Dir(globalExclude), filepath.Base(globalExclude), "global-*\n")
+	globalConfig := filepath.Join(t.TempDir(), "gitconfig")
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	gitSnapshot(t, repo, "config", "--global", "core.excludesFile", globalExclude)
+	gitDir := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--absolute-git-dir"))
+	if err := os.WriteFile(filepath.Join(gitDir, "info", "exclude"), []byte("info-*\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSnapshotFile(t, repo, ".gitignore", "nested/*\n!nested/keep.txt\n")
+	for _, path := range []string{"nested/tracked.txt", "info-tracked.txt", "global-tracked.txt"} {
+		writeSnapshotFile(t, repo, path, "base\n")
+	}
+	gitSnapshot(t, repo, "add", "-f", ".gitignore", "nested/tracked.txt", "info-tracked.txt", "global-tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "ignore fixtures")
+
+	for _, path := range []string{"nested/tracked.txt", "info-tracked.txt", "global-tracked.txt"} {
+		writeSnapshotFile(t, repo, path, "reviewed\n")
+	}
+	for _, path := range []string{"nested/operational.txt", "info-operational.txt", "global-operational.txt"} {
+		writeSnapshotFile(t, repo, path, "private\n")
+	}
+	writeSnapshotFile(t, repo, "nested/keep.txt", "intended\n")
+	indexPath := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--git-path", "index"))
+	beforeIndex, err := os.ReadFile(filepath.Join(repo, indexPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	builder := SnapshotBuilder{Repo: repo}
+	snapshot, err := builder.Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{"nested/keep.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"global-tracked.txt", "info-tracked.txt", "nested/keep.txt", "nested/tracked.txt"}
+	if !reflect.DeepEqual(snapshot.Paths, want) {
+		t.Fatalf("snapshot paths = %v, want %v", snapshot.Paths, want)
+	}
+	if err := builder.ValidateEvidence(context.Background(), snapshot); err != nil {
+		t.Fatalf("ValidateEvidence() error = %v", err)
+	}
+	afterIndex, err := os.ReadFile(filepath.Join(repo, indexPath))
+	if err != nil || !reflect.DeepEqual(afterIndex, beforeIndex) {
+		t.Fatalf("real index changed: err=%v", err)
+	}
+	for _, path := range []string{"nested/operational.txt", "info-operational.txt", "global-operational.txt"} {
+		if content, err := os.ReadFile(filepath.Join(repo, path)); err != nil || string(content) != "private\n" {
+			t.Fatalf("operational path %q changed: content=%q err=%v", path, content, err)
+		}
+		objectsBefore := gitSnapshot(t, repo, "count-objects", "-v")
+		_, err = builder.Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{path}})
+		if err == nil || !strings.Contains(err.Error(), "is ignored") {
+			t.Fatalf("ignored intent %q error = %v", path, err)
+		}
+		if objectsAfter := gitSnapshot(t, repo, "count-objects", "-v"); objectsAfter != objectsBefore {
+			t.Fatalf("ignored intent %q created Git objects", path)
+		}
+	}
+}
+
+func TestSnapshotHonorsLinkedWorktreeExcludes(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "worktree-tracked.txt", "base\n")
+	gitSnapshot(t, repo, "add", "worktree-tracked.txt")
+	gitSnapshot(t, repo, "commit", "-m", "worktree fixture")
+	gitSnapshot(t, repo, "config", "extensions.worktreeConfig", "true")
+	linked := filepath.Join(t.TempDir(), "linked")
+	gitSnapshot(t, repo, "worktree", "add", "-b", "linked-snapshot", linked, "HEAD")
+	excludes := filepath.Join(t.TempDir(), "linked-excludes")
+	if err := os.WriteFile(excludes, []byte("worktree-*\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitSnapshot(t, linked, "config", "--worktree", "core.excludesFile", excludes)
+	writeSnapshotFile(t, linked, "worktree-tracked.txt", "reviewed\n")
+	writeSnapshotFile(t, linked, "worktree-operational.txt", "private\n")
+	builder := SnapshotBuilder{Repo: linked}
+	snapshot, err := builder.Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+	if err != nil || !reflect.DeepEqual(snapshot.Paths, []string{"worktree-tracked.txt"}) {
+		t.Fatalf("linked snapshot = %#v, err=%v", snapshot, err)
+	}
+	_, err = builder.Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{"worktree-operational.txt"}})
+	if err == nil || !strings.Contains(err.Error(), "is ignored") {
+		t.Fatalf("worktree-specific ignored intent error = %v", err)
+	}
+	if staged := gitSnapshot(t, linked, "diff", "--cached", "--name-only"); staged != "" {
+		t.Fatalf("linked worktree index changed: %q", staged)
+	}
+}
+
+func TestSnapshotExactRevisionKeepsHistoricalTrackedIgnoredPath(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, ".gitignore", "historical.txt\n")
+	gitSnapshot(t, repo, "add", ".gitignore")
+	gitSnapshot(t, repo, "commit", "-m", "ignore historical path")
+	base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "historical.txt", "reviewed\n")
+	gitSnapshot(t, repo, "add", "-f", "historical.txt")
+	gitSnapshot(t, repo, "commit", "-m", "track ignored path")
+	candidate := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	gitSnapshot(t, repo, "checkout", "--detach", base)
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetExactRevision, Revision: base + ".." + candidate})
+	if err != nil || !reflect.DeepEqual(snapshot.Paths, []string{"historical.txt"}) {
+		t.Fatalf("historical snapshot = %#v, err=%v", snapshot, err)
+	}
+	if err := (SnapshotBuilder{Repo: repo}).ValidateEvidence(context.Background(), snapshot); err != nil {
+		t.Fatalf("ValidateEvidence() error = %v", err)
+	}
+}
+
+func TestBaseDiffPreservesIntendedAuthorityAfterTrackedTransition(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "delivery.txt", "reviewed\n")
+	target := Target{Kind: TargetBaseDiff, BaseRef: base, IntendedUntracked: []string{"delivery.txt"}}
+	builder := SnapshotBuilder{Repo: repo}
+	reviewed, err := builder.Build(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitDir := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "--absolute-git-dir"))
+	if err := os.WriteFile(filepath.Join(gitDir, "info", "exclude"), []byte("delivery.txt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitSnapshot(t, repo, "add", "-f", "delivery.txt")
+	gitSnapshot(t, repo, "commit", "-m", "deliver reviewed path")
+	committed, err := builder.Build(context.Background(), target)
+	if err != nil || !reflect.DeepEqual(committed, reviewed) {
+		t.Fatalf("tracked transition = %#v, err=%v; want %#v", committed, err, reviewed)
+	}
+	if err := builder.ValidateEvidence(context.Background(), committed); err != nil {
+		t.Fatalf("ValidateEvidence() error = %v", err)
+	}
+	writeSnapshotFile(t, repo, "delivery.txt", "drifted\n")
+	gitSnapshot(t, repo, "commit", "-am", "content drift")
+	drifted, err := builder.Build(context.Background(), target)
+	if err != nil || drifted.CandidateTree == reviewed.CandidateTree || drifted.IntendedUntrackedProof == reviewed.IntendedUntrackedProof {
+		t.Fatalf("content drift did not change authority: %#v, err=%v", drifted, err)
+	}
+	if err := os.Chmod(filepath.Join(repo, "delivery.txt"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitSnapshot(t, repo, "add", "delivery.txt")
+	gitSnapshot(t, repo, "commit", "-m", "mode drift")
+	modeDrifted, err := builder.Build(context.Background(), target)
+	if err != nil || modeDrifted.IntendedUntrackedProof == drifted.IntendedUntrackedProof {
+		t.Fatalf("mode drift did not change proof: %#v, err=%v", modeDrifted, err)
+	}
+	gitSnapshot(t, repo, "rm", "delivery.txt")
+	gitSnapshot(t, repo, "commit", "-m", "path drift")
+	if _, err := builder.Build(context.Background(), target); err == nil {
+		t.Fatal("path drift retained intended-untracked authority")
+	}
+}
+
+func TestSnapshotTempIndexesAreRemovedAfterGitAddErrors(t *testing.T) {
+	requireSnapshotGit(t)
+	for _, kind := range []TargetKind{TargetCurrentChanges, TargetBaseDiff} {
+		t.Run(string(kind), func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			tempDir := t.TempDir()
+			t.Setenv("TMPDIR", tempDir)
+			writeSnapshotFile(t, repo, ".gitattributes", "unsupported.txt filter=snapshotfail\n")
+			gitSnapshot(t, repo, "add", ".gitattributes")
+			gitSnapshot(t, repo, "commit", "-m", "failing filter fixture")
+			gitSnapshot(t, repo, "config", "filter.snapshotfail.clean", "git rev-parse --verify refs/heads/gentle-ai-filter-must-fail")
+			gitSnapshot(t, repo, "config", "filter.snapshotfail.required", "true")
+			writeSnapshotFile(t, repo, "unsupported.txt", "cannot clean\n")
+			target := Target{Kind: kind, IntendedUntracked: []string{"unsupported.txt"}}
+			if kind == TargetBaseDiff {
+				target.BaseRef = "HEAD"
+			}
+			if _, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target); err == nil {
+				t.Fatal("Build() accepted an unsupported worktree entry")
+			}
+			matches, err := filepath.Glob(filepath.Join(tempDir, "gentle-ai-review-index-*"))
+			if err != nil || len(matches) != 0 {
+				t.Fatalf("temporary indexes remain: %v, err=%v", matches, err)
+			}
+			if staged := gitSnapshot(t, repo, "diff", "--cached", "--name-only"); staged != "" {
+				t.Fatalf("real index changed: %q", staged)
+			}
+		})
 	}
 }
 
@@ -290,6 +488,13 @@ func initSnapshotRepo(t *testing.T) string {
 	gitSnapshot(t, repo, "add", "--", "tracked.txt", "deleted.txt")
 	gitSnapshot(t, repo, "commit", "-m", "base")
 	return repo
+}
+
+func requireSnapshotGit(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("uses real git commands")
+	}
 }
 
 func writeSnapshotFile(t *testing.T, repo, name, content string) {
