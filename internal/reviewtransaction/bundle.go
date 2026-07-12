@@ -178,7 +178,7 @@ func validateChainBundle(bundle ChainBundle) (ValidatedChain, error) {
 		if records[index].PreviousRevision != revisions[index-1] {
 			return ValidatedChain{}, errors.New("review chain bundle predecessor is incomplete or reordered")
 		}
-		if err := validateSuccessor(records[index-1].Transaction, records[index].Transaction, records[index].Operation); err != nil {
+		if err := validatePersistedV1Successor(records[index-1].Transaction, records[index].Transaction, records[index].Operation, index); err != nil {
 			return ValidatedChain{}, fmt.Errorf("review chain bundle successor[%d]: %w", index, err)
 		}
 	}
