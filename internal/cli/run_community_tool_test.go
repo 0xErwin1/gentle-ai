@@ -472,7 +472,7 @@ func TestInstallPipelineDoesNotDuplicatePiPendingWhenSelected(t *testing.T) {
 		installCommunityToolWithHome = previousInstall
 		reconcilePiCodeGraph = previousReconcile
 	})
-	pending := communitytool.PiCodeGraphResult{ManualActions: []string{"Pi CodeGraph integration is pending: Pi 0.80.6 has no supported machine-verifiable adapter health signal. CodeGraph capability was not reported as configured."}}
+	pending := communitytool.PiCodeGraphResult{ManualActions: []string{"Pi CodeGraph integration remains pending: CodeGraph configuration was installed and preserved, and direct MCP capability was verified. Pi adapter activation health cannot be machine-verified on the detected Pi version."}}
 	installCommunityToolWithHome = func(_ model.CommunityToolID, _ string, _ string, _ communitytool.Runner, _ communitytool.Detector) (communitytool.Result, error) {
 		return communitytool.Result{Tool: model.CommunityToolCodeGraph, PiCodeGraph: &pending}, nil
 	}
