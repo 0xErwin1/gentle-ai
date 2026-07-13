@@ -22,6 +22,41 @@ func TestSharedPromptDir(t *testing.T) {
 	}
 }
 
+func TestSharedPromptFileRef(t *testing.T) {
+	home := t.TempDir()
+	tests := []struct {
+		name         string
+		settingsPath string
+		want         string
+	}{
+		{
+			name:         "OpenCode settings",
+			settingsPath: filepath.Join(home, ".config", "opencode", "opencode.json"),
+			want:         "{file:./prompts/sdd/sdd-apply.md}",
+		},
+		{
+			name:         "Kilocode settings",
+			settingsPath: filepath.Join(home, ".config", "kilo", "opencode.json"),
+			want:         "{file:../opencode/prompts/sdd/sdd-apply.md}",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := SharedPromptFileRef(tt.settingsPath, home, "sdd-apply")
+			if err != nil {
+				t.Fatalf("SharedPromptFileRef() error = %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("SharedPromptFileRef() = %q, want %q", got, tt.want)
+			}
+			if strings.Contains(got, filepath.ToSlash(home)) {
+				t.Fatalf("SharedPromptFileRef() = %q, contains home path", got)
+			}
+		})
+	}
+}
+
 func readOpenCodeAgents(t *testing.T, settingsPath string) map[string]any {
 	t.Helper()
 	content, err := os.ReadFile(settingsPath)
@@ -391,15 +426,18 @@ func TestInjectOpenCodeMultiModeSubagentPromptsUseFilePaths(t *testing.T) {
 		t.Fatalf("ReadFile(opencode.json) error = %v", err)
 	}
 
-	promptDir := SharedPromptDir(home)
-
-	text := strings.ReplaceAll(string(content), `\\`, `/`)
+	text := string(content)
 	for _, phase := range []string{"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"} {
-		expectedRef := "{file:" + filepath.Join(promptDir, phase+".md") + "}"
-		expectedRef = strings.ReplaceAll(expectedRef, `\`, `/`)
+		expectedRef, err := SharedPromptFileRef(settingsPath, home, phase)
+		if err != nil {
+			t.Fatalf("SharedPromptFileRef() error = %v", err)
+		}
 		if !strings.Contains(text, expectedRef) {
 			t.Errorf("opencode.json sub-agent %q missing {file:...} reference %q", phase, expectedRef)
 		}
+	}
+	if strings.Contains(text, filepath.ToSlash(home)) {
+		t.Fatalf("opencode.json contains home-specific absolute path %q", filepath.ToSlash(home))
 	}
 }
 
