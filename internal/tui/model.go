@@ -2027,10 +2027,9 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			// truth. pickerNextScreen(ScreenPreset) returns the first chain member
 			// for the current selection (Claude → Kiro → Codex → SDDMode →
 			// ModelPicker → StrictTDD); applyPickerEntry initializes its state.
-			// DependencyTree is the slice's terminal anchor, not a "picker": when
-			// it is the only next member, no SDD/picker screen applies, so fall
-			// through to the OpenCodePlugins guard below.
-			if next, ok := m.pickerNextScreen(); ok && next != ScreenDependencyTree {
+			// DependencyTree is the initial component picker for Custom and the
+			// terminal anchor for every other preset.
+			if next, ok := m.pickerNextScreen(); ok && (next != ScreenDependencyTree || m.Selection.Preset == model.PresetCustom) {
 				m.applyPickerEntry(next)
 				return m, nil
 			}

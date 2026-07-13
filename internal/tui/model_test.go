@@ -2550,6 +2550,29 @@ func TestPresetConfirmEntersFirstPickerInFlow(t *testing.T) {
 	}
 }
 
+func TestPresetConfirmCustomEntersDependencyTreeComponentPicker(t *testing.T) {
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Screen = ScreenPreset
+	m.InstallFlowActive = true
+	m.Cursor = presetCursor(t, model.PresetCustom)
+
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	state := updated.(Model)
+
+	if state.Screen != ScreenDependencyTree {
+		t.Fatalf("screen = %v, want %v", state.Screen, ScreenDependencyTree)
+	}
+	if state.Cursor != 0 {
+		t.Fatalf("cursor = %d, want 0", state.Cursor)
+	}
+	if state.Selection.Preset != model.PresetCustom {
+		t.Fatalf("preset = %q, want %q", state.Selection.Preset, model.PresetCustom)
+	}
+	if len(state.Selection.Components) != 0 {
+		t.Fatalf("components = %v, want empty custom selection", state.Selection.Components)
+	}
+}
+
 // TestKiroPickerEscNonCustomWithClaudeGoesToClaudePicker verifies that Esc from
 // ScreenKiroModelPicker in a non-custom preset returns to ScreenClaudeModelPicker
 // when Claude is in the flow — keeping Esc consistent with Enter on "← Back".

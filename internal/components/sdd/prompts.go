@@ -158,6 +158,10 @@ func injectCodeGraphGuidanceIntoOpenCodeSubagentPrompts(agentMap map[string]any,
 		if mode, _ := agent["mode"].(string); mode == "primary" {
 			continue
 		}
+		tools, _ := agent["tools"].(map[string]any)
+		if bash, explicitlySet := tools["bash"].(bool); explicitlySet && !bash {
+			continue
+		}
 		prompt, ok := agent["prompt"].(string)
 		if !ok || strings.HasPrefix(prompt, "{file:") {
 			continue
