@@ -25,6 +25,21 @@ func SharedPromptDir(homeDir string) string {
 	return filepath.Join(homeDir, ".config", "opencode", "prompts", "sdd")
 }
 
+// SharedPromptFileRef returns a prompt file reference relative to the settings
+// file that will contain it.
+func SharedPromptFileRef(settingsPath, homeDir, phase string) (string, error) {
+	promptPath := filepath.Join(SharedPromptDir(homeDir), phase+".md")
+	relativePath, err := filepath.Rel(filepath.Dir(settingsPath), promptPath)
+	if err != nil {
+		return "", err
+	}
+	relativePath = filepath.ToSlash(relativePath)
+	if !strings.HasPrefix(relativePath, ".") {
+		relativePath = "./" + relativePath
+	}
+	return "{file:" + relativePath + "}", nil
+}
+
 // subAgentPhaseOrder is an alias for profilePhaseOrder (defined in profiles.go),
 // kept for backward compatibility with any code in this file that references it.
 // Both variables are in the same package and represent the same canonical list.

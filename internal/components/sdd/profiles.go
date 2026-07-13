@@ -243,7 +243,7 @@ func extractModelFromAgent(agentMap map[string]any) model.ModelAssignment {
 //     sub-agent references and model assignments table), permissions scoped to *-{name}
 //   - sdd-{phase}-{name} (10 agents): subagent mode, hidden, file reference to
 //     the shared prompt at SharedPromptDir(homeDir)/sdd-{phase}.md
-func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuidance ...string) ([]byte, error) {
+func GenerateProfileOverlay(profile model.Profile, homeDir, settingsPath string, codeGraphGuidance ...string) ([]byte, error) {
 	if profile.Name == "" || profile.Name == "default" {
 		return nil, fmt.Errorf("GenerateProfileOverlay: profile name must be non-empty and not 'default'")
 	}
@@ -325,7 +325,6 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuid
 	agentMap[orchestratorKey] = orchEntry
 
 	// Sub-agent entries
-	promptDir := SharedPromptDir(homeDir)
 	phaseDescriptions := map[string]string{
 		"sdd-init":    "Bootstrap SDD context and project configuration",
 		"sdd-explore": "Investigate codebase and think through ideas",
@@ -341,7 +340,10 @@ func GenerateProfileOverlay(profile model.Profile, homeDir string, codeGraphGuid
 
 	for _, phase := range profilePhaseOrder {
 		key := phase + suffix
-		prompt := "{file:" + filepath.ToSlash(filepath.Join(promptDir, phase+".md")) + "}"
+		prompt, err := SharedPromptFileRef(settingsPath, homeDir, phase)
+		if err != nil {
+			return nil, fmt.Errorf("build shared prompt file reference for %q: %w", phase, err)
+		}
 		entry := map[string]any{
 			"mode":        "subagent",
 			"hidden":      true,
