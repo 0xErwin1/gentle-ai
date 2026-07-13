@@ -75,6 +75,36 @@ func sddReviewSubAgentsForCodeGraphTest() []string {
 		"review-readability",
 		"review-reliability",
 		"review-resilience",
+		"review-refuter",
+	}
+}
+
+func sddShellDisabledSubAgentsForCodeGraphTest() []string {
+	agents := []string{"jd-judge-a", "jd-judge-b"}
+	return append(agents, sddReviewSubAgentsForCodeGraphTest()...)
+}
+
+func assertOpenCodeSubAgentReadOnlyTools(t *testing.T, agentsMap map[string]any, agentName string) {
+	t.Helper()
+	agent, ok := agentsMap[agentName].(map[string]any)
+	if !ok {
+		t.Fatalf("agent %q missing or not an object", agentName)
+	}
+	tools, ok := agent["tools"].(map[string]any)
+	if !ok {
+		t.Fatalf("agent %q tools have type %T, want object", agentName, agent["tools"])
+	}
+	for tool, want := range map[string]bool{
+		"read":  true,
+		"write": false,
+		"edit":  false,
+		"bash":  false,
+		"task":  false,
+	} {
+		got, ok := tools[tool].(bool)
+		if !ok || got != want {
+			t.Fatalf("agent %q tool %q = %v, want %t", agentName, tool, tools[tool], want)
+		}
 	}
 }
 
@@ -434,7 +464,7 @@ func TestInjectOpenCodeSingleModeSubagentPromptsOmitCodeGraphGuidanceByDefault(t
 	}
 }
 
-func TestInjectOpenCodeSingleModeSubagentPromptsIncludeCodeGraphGuidanceWhenEnabled(t *testing.T) {
+func TestInjectOpenCodeSingleModeSubagentPromptsRespectBashCapabilityWhenCodeGraphEnabled(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
@@ -443,7 +473,8 @@ func TestInjectOpenCodeSingleModeSubagentPromptsIncludeCodeGraphGuidanceWhenEnab
 	}
 
 	agentsMap := readOpenCodeAgents(t, filepath.Join(home, ".config", "opencode", "opencode.json"))
-	for _, agentName := range sddInstalledSubAgentsForCodeGraphTest() {
+	bashCapableAgents := append(SharedPromptPhases(), "jd-fix-agent")
+	for _, agentName := range bashCapableAgents {
 		prompt := agentPrompt(t, agentsMap, agentName)
 		if !strings.Contains(prompt, "<!-- gentle-ai:codegraph-guidance -->") || !strings.Contains(prompt, "gentle-ai codegraph init --cwd <project-root>") {
 			t.Fatalf("%s missing CodeGraph guidance when enabled", agentName)
@@ -451,6 +482,13 @@ func TestInjectOpenCodeSingleModeSubagentPromptsIncludeCodeGraphGuidanceWhenEnab
 		if count := strings.Count(prompt, "<!-- gentle-ai:codegraph-guidance -->"); count != 1 {
 			t.Fatalf("%s has %d CodeGraph guidance sections, want 1", agentName, count)
 		}
+	}
+	for _, agentName := range sddShellDisabledSubAgentsForCodeGraphTest() {
+		prompt := agentPrompt(t, agentsMap, agentName)
+		if strings.Contains(prompt, "<!-- gentle-ai:codegraph-guidance -->") || strings.Contains(prompt, "gentle-ai codegraph init --cwd <project-root>") {
+			t.Fatalf("%s contains shell-based CodeGraph guidance with bash disabled", agentName)
+		}
+		assertOpenCodeSubAgentReadOnlyTools(t, agentsMap, agentName)
 	}
 }
 
@@ -475,12 +513,16 @@ func TestInjectOpenCodeMultiModeSubagentPromptFilesIncludeCodeGraphGuidanceWhenE
 	}
 
 	agentsMap := readOpenCodeAgents(t, filepath.Join(home, ".config", "opencode", "opencode.json"))
-	inlineSubagents := append(sddJudgmentDaySubAgentsForCodeGraphTest(), sddReviewSubAgentsForCodeGraphTest()...)
-	for _, agentName := range inlineSubagents {
+	fixPrompt := agentPrompt(t, agentsMap, "jd-fix-agent")
+	if !strings.Contains(fixPrompt, "<!-- gentle-ai:codegraph-guidance -->") || !strings.Contains(fixPrompt, "gentle-ai codegraph init --cwd <project-root>") {
+		t.Fatal("jd-fix-agent missing CodeGraph guidance in multi-mode inline prompt when enabled")
+	}
+	for _, agentName := range sddShellDisabledSubAgentsForCodeGraphTest() {
 		prompt := agentPrompt(t, agentsMap, agentName)
-		if !strings.Contains(prompt, "<!-- gentle-ai:codegraph-guidance -->") || !strings.Contains(prompt, "gentle-ai codegraph init --cwd <project-root>") {
-			t.Fatalf("%s missing CodeGraph guidance in multi-mode inline prompt when enabled", agentName)
+		if strings.Contains(prompt, "<!-- gentle-ai:codegraph-guidance -->") || strings.Contains(prompt, "gentle-ai codegraph init --cwd <project-root>") {
+			t.Fatalf("%s contains shell-based CodeGraph guidance with bash disabled", agentName)
 		}
+		assertOpenCodeSubAgentReadOnlyTools(t, agentsMap, agentName)
 	}
 }
 
