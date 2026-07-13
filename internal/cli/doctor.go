@@ -96,12 +96,13 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 	// reports the always-required core tools — preserving the first-time-install
 	// behaviour where the user has not yet selected any agents (#709).
 
+	pathDirs := pathDirsFn()
 	requiredTools := requiredDoctorTools(installedAgents)
 	checks := make([]doctor.Check, 0, len(requiredTools)+3)
 	for _, tool := range requiredTools {
 		tool := tool
 		checks = append(checks, doctor.Check{ID: doctor.ToolCheckID(tool), Run: func(context.Context) doctor.Result {
-			return checkOneTool(tool, pathDirsFn())
+			return checkOneTool(tool, pathDirs)
 		}})
 	}
 	checks = append(checks,
@@ -165,20 +166,20 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 	resolved, shim, err := resolveDoctorTool(tool)
 	if err != nil {
 		return CheckResult{
-			ID:       doctor.ToolCheckID(tool),
-			Status:   CheckStatusFail,
-			Evidence: tool + " not found in PATH",
-			Remedy:   &doctor.Remedy{ID: doctor.RemedyInstallTool, Description: "Install " + tool + " or add its directory to PATH"},
+			Name:   doctor.ToolCheckID(tool),
+			Status: CheckStatusFail,
+			Detail: tool + " not found in PATH",
+			Remedy: doctor.NewRemedy(doctor.RemedyInstallTool, "Install "+tool+" or add its directory to PATH"),
 		}
 	}
 
 	copies := doctorToolCopies(tool, pathDirs)
 	if len(copies) > 1 {
 		return CheckResult{
-			ID:       doctor.ToolCheckID(tool),
-			Status:   CheckStatusWarn,
-			Evidence: fmt.Sprintf("%s resolved to %s but %d copies found in PATH: %s", tool, resolved, len(copies), strings.Join(copies, ", ")),
-			Remedy:   &doctor.Remedy{ID: doctor.RemedyRemoveDuplicates, Description: "Remove duplicate binaries; keep only one copy of " + tool + " in PATH"},
+			Name:   doctor.ToolCheckID(tool),
+			Status: CheckStatusWarn,
+			Detail: fmt.Sprintf("%s resolved to %s but %d copies found in PATH: %s", tool, resolved, len(copies), strings.Join(copies, ", ")),
+			Remedy: doctor.NewRemedy(doctor.RemedyRemoveDuplicates, "Remove duplicate binaries; keep only one copy of "+tool+" in PATH"),
 		}
 	}
 
@@ -187,9 +188,9 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 		detail += " (" + shim + ")"
 	}
 	return CheckResult{
-		ID:       doctor.ToolCheckID(tool),
-		Status:   CheckStatusPass,
-		Evidence: detail,
+		Name:   doctor.ToolCheckID(tool),
+		Status: CheckStatusPass,
+		Detail: detail,
 	}
 }
 
@@ -309,26 +310,26 @@ func checkStateJSON(homeDir string) CheckResult {
 	if err != nil {
 		if os.IsNotExist(err) {
 			return CheckResult{
-				ID:       id,
-				Status:   CheckStatusWarn,
-				Evidence: "state file not found at " + statePath + " (expected for first-time install)",
-				Remedy:   &doctor.Remedy{ID: doctor.RemedyInstall, Description: "Run 'gentle-ai install' to create initial state"},
+				Name:   id,
+				Status: CheckStatusWarn,
+				Detail: "state file not found at " + statePath + " (expected for first-time install)",
+				Remedy: doctor.NewRemedy(doctor.RemedyInstall, "Run 'gentle-ai install' to create initial state"),
 			}
 		}
 		return CheckResult{
-			ID:       id,
-			Status:   CheckStatusFail,
-			Evidence: "failed to parse " + statePath + ": " + err.Error(),
-			Remedy:   &doctor.Remedy{ID: doctor.RemedyRepairState, Description: "Delete or repair " + statePath + ", then re-run 'gentle-ai install'"},
+			Name:   id,
+			Status: CheckStatusFail,
+			Detail: "failed to parse " + statePath + ": " + err.Error(),
+			Remedy: doctor.NewRemedy(doctor.RemedyRepairState, "Delete or repair "+statePath+", then re-run 'gentle-ai install'"),
 		}
 	}
 
 	if len(s.InstalledAgents) == 0 {
 		return CheckResult{
-			ID:       id,
-			Status:   CheckStatusWarn,
-			Evidence: "state file found at " + statePath + " with no installed agents",
-			Remedy:   &doctor.Remedy{ID: doctor.RemedyInstall, Description: "Run 'gentle-ai install' to configure agents"},
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: "state file found at " + statePath + " with no installed agents",
+			Remedy: doctor.NewRemedy(doctor.RemedyInstall, "Run 'gentle-ai install' to configure agents"),
 		}
 	}
 
@@ -343,17 +344,17 @@ func checkStateJSON(homeDir string) CheckResult {
 
 	if len(missing) > 0 {
 		return CheckResult{
-			ID:       id,
-			Status:   CheckStatusWarn,
-			Evidence: fmt.Sprintf("state lists %d agent(s) whose config dirs are missing: %s", len(missing), strings.Join(missing, ", ")),
-			Remedy:   &doctor.Remedy{ID: doctor.RemedySync, Description: "Run 'gentle-ai sync' to restore missing config files"},
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: fmt.Sprintf("state lists %d agent(s) whose config dirs are missing: %s", len(missing), strings.Join(missing, ", ")),
+			Remedy: doctor.NewRemedy(doctor.RemedySync, "Run 'gentle-ai sync' to restore missing config files"),
 		}
 	}
 
 	return CheckResult{
-		ID:       id,
-		Status:   CheckStatusPass,
-		Evidence: fmt.Sprintf("state file OK — %d agent(s) installed: %s", len(s.InstalledAgents), strings.Join(s.InstalledAgents, ", ")),
+		Name:   id,
+		Status: CheckStatusPass,
+		Detail: fmt.Sprintf("state file OK — %d agent(s) installed: %s", len(s.InstalledAgents), strings.Join(s.InstalledAgents, ", ")),
 	}
 }
 
@@ -393,24 +394,24 @@ func checkEngramReachable() CheckResult {
 	statusCode, err := httpGetFn(healthURL, 3*time.Second)
 	if err != nil {
 		return CheckResult{
-			ID:       id,
-			Status:   CheckStatusFail,
-			Evidence: "engram health endpoint unreachable at " + healthURL + ": " + err.Error(),
-			Remedy:   &doctor.Remedy{ID: doctor.RemedyStartEngram, Description: "Start engram or check that it is configured as an MCP server"},
+			Name:   id,
+			Status: CheckStatusFail,
+			Detail: "engram health endpoint unreachable at " + healthURL + ": " + err.Error(),
+			Remedy: doctor.NewRemedy(doctor.RemedyStartEngram, "Start engram or check that it is configured as an MCP server"),
 		}
 	}
 	if statusCode < 200 || statusCode >= 300 {
 		return CheckResult{
-			ID:       id,
-			Status:   CheckStatusWarn,
-			Evidence: fmt.Sprintf("engram health endpoint %s returned HTTP %d", healthURL, statusCode),
-			Remedy:   &doctor.Remedy{ID: doctor.RemedyInspectEngram, Description: "Check engram logs for errors"},
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: fmt.Sprintf("engram health endpoint %s returned HTTP %d", healthURL, statusCode),
+			Remedy: doctor.NewRemedy(doctor.RemedyInspectEngram, "Check engram logs for errors"),
 		}
 	}
 	return CheckResult{
-		ID:       id,
-		Status:   CheckStatusPass,
-		Evidence: fmt.Sprintf("engram health endpoint OK at %s (HTTP %d)", healthURL, statusCode),
+		Name:   id,
+		Status: CheckStatusPass,
+		Detail: fmt.Sprintf("engram health endpoint OK at %s (HTTP %d)", healthURL, statusCode),
 	}
 }
 
@@ -421,30 +422,30 @@ func checkDiskSpace(homeDir string) CheckResult {
 
 	free, err := availableBytesFn(dir)
 	if err != nil {
-		return CheckResult{ID: id, Status: CheckStatusWarn, Evidence: "could not determine free disk space for " + dir + ": " + err.Error()}
+		return CheckResult{Name: id, Status: CheckStatusWarn, Detail: "could not determine free disk space for " + dir + ": " + err.Error()}
 	}
 
 	freeMB := free / (1024 * 1024)
 	switch {
 	case free < diskFailThreshold:
 		return CheckResult{
-			ID:       id,
-			Status:   CheckStatusFail,
-			Evidence: fmt.Sprintf("critically low disk space: %d MB free on %s filesystem", freeMB, dir),
-			Remedy:   &doctor.Remedy{ID: doctor.RemedyFreeDiskSpace, Description: "Free up disk space before running install or sync operations"},
+			Name:   id,
+			Status: CheckStatusFail,
+			Detail: fmt.Sprintf("critically low disk space: %d MB free on %s filesystem", freeMB, dir),
+			Remedy: doctor.NewRemedy(doctor.RemedyFreeDiskSpace, "Free up disk space before running install or sync operations"),
 		}
 	case free < diskWarnThreshold:
 		return CheckResult{
-			ID:       id,
-			Status:   CheckStatusWarn,
-			Evidence: fmt.Sprintf("low disk space: %d MB free on %s filesystem", freeMB, dir),
-			Remedy:   &doctor.Remedy{ID: doctor.RemedyFreeDiskSpace, Description: "Consider freeing disk space"},
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: fmt.Sprintf("low disk space: %d MB free on %s filesystem", freeMB, dir),
+			Remedy: doctor.NewRemedy(doctor.RemedyFreeDiskSpace, "Consider freeing disk space"),
 		}
 	default:
 		return CheckResult{
-			ID:       id,
-			Status:   CheckStatusPass,
-			Evidence: fmt.Sprintf("%d MB free on %s filesystem", freeMB, dir),
+			Name:   id,
+			Status: CheckStatusPass,
+			Detail: fmt.Sprintf("%d MB free on %s filesystem", freeMB, dir),
 		}
 	}
 }
@@ -468,7 +469,7 @@ func renderDoctorReport(w io.Writer, report DoctorReport) {
 	fmt.Fprintln(w)
 
 	for _, c := range report.Checks {
-		fmt.Fprintf(w, "  %s  %-30s %s\n", statusIcon(c.Status), c.ID, c.Evidence)
+		fmt.Fprintf(w, "  %s  %-30s %s\n", statusIcon(c.Status), c.Name, c.Detail)
 		if c.Remedy != nil {
 			fmt.Fprintf(w, "       Remedy: %s\n", c.Remedy.Description)
 		}

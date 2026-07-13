@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/internal/doctor"
 )
 
 // --- checkOneTool ---
@@ -25,8 +27,8 @@ func TestCheckOneTool_MissingBinary(t *testing.T) {
 	if got.Status != CheckStatusFail {
 		t.Errorf("expected fail, got %s", got.Status)
 	}
-	if !strings.Contains(got.Evidence, "not found in PATH") {
-		t.Errorf("unexpected detail: %s", got.Evidence)
+	if !strings.Contains(got.Detail, "not found in PATH") {
+		t.Errorf("unexpected detail: %s", got.Detail)
 	}
 	if got.Remedy == nil {
 		t.Error("expected non-empty remedy")
@@ -65,8 +67,8 @@ func TestCheckOneTool_ShadowedBinary(t *testing.T) {
 	if got.Status != CheckStatusWarn {
 		t.Errorf("expected warn, got %s", got.Status)
 	}
-	if !strings.Contains(got.Evidence, "2 copies found") {
-		t.Errorf("unexpected detail: %s", got.Evidence)
+	if !strings.Contains(got.Detail, "2 copies found") {
+		t.Errorf("unexpected detail: %s", got.Detail)
 	}
 	if got.Remedy == nil {
 		t.Error("expected non-empty remedy")
@@ -92,7 +94,7 @@ func TestCheckOneTool_OK(t *testing.T) {
 	got := checkOneTool("engram", []string{dir})
 
 	if got.Status != CheckStatusPass {
-		t.Errorf("expected pass, got %s: %s", got.Status, got.Evidence)
+		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
 	}
 }
 
@@ -127,10 +129,10 @@ func TestCheckOneTool_ShadowedWindowsExt(t *testing.T) {
 	got := checkOneTool("gentle-ai", []string{dir1, dir2})
 
 	if got.Status != CheckStatusWarn {
-		t.Fatalf("expected warn for extensioned shadow, got %s: %s", got.Status, got.Evidence)
+		t.Fatalf("expected warn for extensioned shadow, got %s: %s", got.Status, got.Detail)
 	}
-	if !strings.Contains(got.Evidence, "2 copies found") {
-		t.Errorf("unexpected detail: %s", got.Evidence)
+	if !strings.Contains(got.Detail, "2 copies found") {
+		t.Errorf("unexpected detail: %s", got.Detail)
 	}
 }
 
@@ -162,10 +164,10 @@ func TestCheckOneTool_WindowsPowerShellShimFallback(t *testing.T) {
 	got := checkOneTool("gga", []string{dir})
 
 	if got.Status != CheckStatusPass {
-		t.Fatalf("expected pass, got %s: %s", got.Status, got.Evidence)
+		t.Fatalf("expected pass, got %s: %s", got.Status, got.Detail)
 	}
-	if !strings.Contains(got.Evidence, "PowerShell shim") {
-		t.Fatalf("expected PowerShell shim detail, got %q", got.Evidence)
+	if !strings.Contains(got.Detail, "PowerShell shim") {
+		t.Fatalf("expected PowerShell shim detail, got %q", got.Detail)
 	}
 }
 
@@ -199,7 +201,7 @@ func TestCheckOneTool_WindowsShimVariantsInSameDirAreNotDuplicates(t *testing.T)
 	got := checkOneTool("gga", []string{dir})
 
 	if got.Status != CheckStatusPass {
-		t.Fatalf("expected pass for same-directory shim variants, got %s: %s", got.Status, got.Evidence)
+		t.Fatalf("expected pass for same-directory shim variants, got %s: %s", got.Status, got.Detail)
 	}
 }
 
@@ -269,8 +271,8 @@ func TestCheckStateJSON_Missing(t *testing.T) {
 	if got.Status != CheckStatusWarn {
 		t.Errorf("expected warn for missing state, got %s", got.Status)
 	}
-	if !strings.Contains(got.Evidence, "not found") {
-		t.Errorf("unexpected detail: %s", got.Evidence)
+	if !strings.Contains(got.Detail, "not found") {
+		t.Errorf("unexpected detail: %s", got.Detail)
 	}
 }
 
@@ -289,8 +291,8 @@ func TestCheckStateJSON_Malformed(t *testing.T) {
 	if got.Status != CheckStatusFail {
 		t.Errorf("expected fail for malformed state, got %s", got.Status)
 	}
-	if !strings.Contains(got.Evidence, "failed to parse") {
-		t.Errorf("unexpected detail: %s", got.Evidence)
+	if !strings.Contains(got.Detail, "failed to parse") {
+		t.Errorf("unexpected detail: %s", got.Detail)
 	}
 }
 
@@ -311,8 +313,8 @@ func TestCheckStateJSON_AgentConfigDirMissing(t *testing.T) {
 	if got.Status != CheckStatusWarn {
 		t.Errorf("expected warn for missing config dir, got %s", got.Status)
 	}
-	if !strings.Contains(got.Evidence, "config dirs are missing") {
-		t.Errorf("unexpected detail: %s", got.Evidence)
+	if !strings.Contains(got.Detail, "config dirs are missing") {
+		t.Errorf("unexpected detail: %s", got.Detail)
 	}
 }
 
@@ -335,7 +337,7 @@ func TestCheckStateJSON_OK(t *testing.T) {
 	got := checkStateJSON(homeDir)
 
 	if got.Status != CheckStatusPass {
-		t.Errorf("expected pass, got %s: %s", got.Status, got.Evidence)
+		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
 	}
 }
 
@@ -368,7 +370,7 @@ func TestCheckEngramReachable_OK(t *testing.T) {
 	got := checkEngramReachable()
 
 	if got.Status != CheckStatusPass {
-		t.Errorf("expected pass, got %s: %s", got.Status, got.Evidence)
+		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
 	}
 }
 
@@ -424,7 +426,7 @@ func TestCheckDiskSpace_OK(t *testing.T) {
 	got := checkDiskSpace(t.TempDir())
 
 	if got.Status != CheckStatusPass {
-		t.Errorf("expected pass, got %s: %s", got.Status, got.Evidence)
+		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
 	}
 }
 
@@ -476,7 +478,8 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
 	}
 	availableBytesFn = func(string) (int64, error) { return 1024 * 1024 * 1024, nil } // 1 GB
 	httpGetFn = func(string, time.Duration) (int, error) { return 200, nil }
-	pathDirsFn = func() []string { return []string{"/usr/local/bin"} }
+	pathSnapshots := 0
+	pathDirsFn = func() []string { pathSnapshots++; return []string{"/usr/local/bin"} }
 	osUserHomeDirDoctor = func() (string, error) { return homeDir, nil }
 
 	var buf bytes.Buffer
@@ -501,6 +504,9 @@ Status:  healthy
 `, filepath.Join(homeDir, ".gentle-ai"))
 	if got := buf.String(); got != want {
 		t.Fatalf("RunDoctor output mismatch\ngot:\n%s\nwant:\n%s", got, want)
+	}
+	if pathSnapshots != 1 {
+		t.Fatalf("PATH snapshots = %d, want 1", pathSnapshots)
 	}
 }
 
@@ -769,5 +775,14 @@ func TestRunDoctor_OnlySelectedAgentsAreRequired(t *testing.T) {
 	}
 	if !strings.Contains(output, "Status:  healthy") {
 		t.Errorf("expected healthy status for pi-only install with all binaries present; got:\n%s", output)
+	}
+}
+
+func TestRenderDoctorReportDoesNotRenderRemedyMetadata(t *testing.T) {
+	var buf bytes.Buffer
+	renderDoctorReport(&buf, DoctorReport{Checks: []CheckResult{{Name: doctor.CheckDiskSpace, Status: CheckStatusFail, Detail: "cleanup needed", Remedy: doctor.NewRemedy(doctor.RemedyFreeDiskSpace, "Free disk space")}}})
+	want := "gentle-ai doctor — system health check\n=======================================\n\n  [xx]  disk:space                     cleanup needed\n       Remedy: Free disk space\n\nSummary: 0 passed, 1 failed, 0 warnings\nStatus:  unhealthy\n"
+	if got := buf.String(); got != want {
+		t.Fatalf("rendered report mismatch\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
