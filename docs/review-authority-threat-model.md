@@ -60,3 +60,7 @@ Legacy v1 chains and bundles remain readable for compatibility, but their histor
 - Invalid temporary or imported data never replaces the current valid authority.
 - Legacy v1 transport remains available only for legacy lineages.
 - WU6 can be rolled back by removing the compact store and routing new facade writes back to the preserved v1 implementation. Existing compact records must be exported or intentionally discarded before that rollback; v1 lineages are unaffected.
+
+## Further Reading
+
+[Chapter 21 — Verifiable Trust](https://the-amazing-gentleman-programming-book.vercel.app/en/book/Chapter21_Verifiable-Trust) complements these technical boundaries with the mental model: trust what native authority and delivery gates can deterministically derive, not an agent's narration. Its examples were written around v2.1.2, so use it for the durable principle; this threat model and current CLI documentation define v2.1.4 behavior.
