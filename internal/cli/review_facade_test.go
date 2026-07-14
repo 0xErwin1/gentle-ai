@@ -749,8 +749,51 @@ func TestReviewFacadeCompactRefuterAndHostileGitSelection(t *testing.T) {
 	}
 }
 
+func TestReviewStatusReportsActiveAuthorityWithoutChangingAuthorityFiles(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate behavior\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := startFacadeReview(t, repo)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := RunReview([]string{"status", "--cwd", repo}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var report struct {
+		Schema   string `json:"schema"`
+		Complete bool   `json:"complete"`
+		Entries  []struct {
+			LineageID string `json:"lineage_id"`
+			Status    string `json:"status"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(output.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Schema != reviewtransaction.ReviewAuthorityStatusSchema || !report.Complete || len(report.Entries) != 1 ||
+		report.Entries[0].LineageID != started.LineageID || report.Entries[0].Status != "active" {
+		t.Fatalf("status report = %s", output.String())
+	}
+	after, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("review status mutated compact authority")
+	}
+}
+
 func TestReviewFacadeHelpAndFlatCompatibilityPathsRemainAvailable(t *testing.T) {
-	for _, subcommand := range []string{"start", "finalize", "validate", "recover"} {
+	for _, subcommand := range []string{"start", "finalize", "validate", "status", "recover"} {
 		var output bytes.Buffer
 		if err := RunReview([]string{subcommand, "--help"}, &output); err != nil || !strings.Contains(output.String(), "Usage: gentle-ai review "+subcommand) {
 			t.Fatalf("facade %s help: %v\n%s", subcommand, err, output.String())

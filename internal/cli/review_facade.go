@@ -111,7 +111,7 @@ type facadeArtifacts struct {
 
 func RunReview(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <start|finalize|validate|invalidate|recover|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go.")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <start|finalize|validate|status|invalidate|recover|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go.")
 		return nil
 	}
 	switch args[0] {
@@ -121,6 +121,8 @@ func RunReview(args []string, stdout io.Writer) error {
 		return RunReviewFacadeFinalize(args[1:], stdout)
 	case "validate":
 		return RunReviewFacadeValidate(args[1:], stdout)
+	case "status":
+		return RunReviewStatus(args[1:], stdout)
 	case "invalidate":
 		return RunReviewInvalidate(args[1:], stdout)
 	case "recover":
@@ -132,6 +134,25 @@ func RunReview(args []string, stdout io.Writer) error {
 	default:
 		return fmt.Errorf("unknown review command %q", args[0])
 	}
+}
+
+func RunReviewStatus(args []string, stdout io.Writer) error {
+	flags := newReviewFlagSet("review status", stdout, "Read every compact-v2 and shipped legacy-v1 authority from the shared Git common directory without mutation.")
+	cwd := flags.String("cwd", ".", "repository path")
+	if err := parseReviewFlags(flags, args); err != nil {
+		return err
+	}
+	if reviewHelpRequested(args) {
+		return nil
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected review status argument %q", flags.Arg(0))
+	}
+	report, err := reviewtransaction.InventoryAuthority(context.Background(), *cwd)
+	if err != nil {
+		return fmt.Errorf("inventory review authority: %w", err)
+	}
+	return encodeReviewJSON(stdout, report)
 }
 
 func RunReviewRecover(args []string, stdout io.Writer) error {

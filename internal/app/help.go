@@ -26,6 +26,8 @@ COMMANDS
   review finalize [--cwd <repo>] [--result <review.json> ...] [--evidence <path>]
   review validate --gate <gate> [--cwd <repo>]
                Normal review path; ordinary authority is compact state plus receipt
+  review status [--cwd <repo>]
+               Read-only inventory of compact-v2 and shipped legacy-v1 authority
 
 COMPATIBILITY COMMANDS
   review-start --cwd <repo> --lineage <id> --policy-file <path>
