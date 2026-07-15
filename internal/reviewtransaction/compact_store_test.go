@@ -74,6 +74,57 @@ func TestCompactStoreRecoverCreatesAuditableSuccessorWithoutChangingPredecessor(
 	}
 }
 
+func TestCompactStoreReloadsLegacyV2ReceiptWithoutRewritingItsIdentity(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state := correctedCompactTestState(t, repo, "legacy-v2-receipt")
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, statePayload, err := makeCompactRecord(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(store.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.StatePath(), statePayload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	receipt := CompactReceipt{
+		Schema: CompactReceiptSchema, LineageID: state.LineageID, Generation: state.Generation,
+		Projection: state.InitialSnapshot.Projection, BaseTree: state.InitialSnapshot.BaseTree,
+		InitialReviewTree: state.InitialSnapshot.CandidateTree, FinalCandidateTree: state.CurrentSnapshot.CandidateTree,
+		PathsDigest: state.InitialSnapshot.PathsDigest, FixDeltaHash: state.FixDeltaHash, PolicyHash: state.PolicyHash,
+		EvidenceHash: state.EvidenceHash, RiskLevel: state.RiskLevel, SelectedLenses: append([]string(nil), state.SelectedLenses...),
+		ResolvedFindingIDs: append([]string(nil), state.FixFindingIDs...), TerminalState: TerminalApproved,
+	}
+	if err := WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
+		t.Fatal(err)
+	}
+	beforeState, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeReceipt, err := os.ReadFile(store.ReceiptPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	regenerated, err := loaded.State.Receipt()
+	if err != nil || !reflect.DeepEqual(regenerated, receipt) {
+		t.Fatalf("regenerated legacy receipt = %#v, %v", regenerated, err)
+	}
+	afterState, _ := os.ReadFile(store.StatePath())
+	afterReceipt, _ := os.ReadFile(store.ReceiptPath())
+	if !bytes.Equal(beforeState, afterState) || !bytes.Equal(beforeReceipt, afterReceipt) {
+		t.Fatal("legacy reload rewrote persisted state or receipt bytes")
+	}
+}
+
 func TestRecoverCompactAuthorityRejectsProjectionChange(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -1434,9 +1485,16 @@ func newCompactTestStateWithIntended(t *testing.T, repo, lineage string, intende
 }
 
 func correctedCompactTestState(t *testing.T, repo, lineage string) CompactState {
+	return correctedCompactTestStateWithIntended(t, repo, lineage, []string{})
+}
+
+func correctedCompactTestStateWithIntended(t *testing.T, repo, lineage string, intended []string) CompactState {
 	t.Helper()
 	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfour\n")
-	state := newCompactTestState(t, repo, lineage)
+	for _, path := range intended {
+		writeSnapshotFile(t, repo, path, "initial intended content\n")
+	}
+	state := newCompactTestStateWithIntended(t, repo, lineage, intended)
 	finding := Finding{
 		ID: "R3-001", Lens: "reliability", Location: "tracked.txt:5", Severity: "CRITICAL",
 		Claim: "candidate returns the wrong terminal value", ProofRefs: []string{"differential test fails only on candidate"},

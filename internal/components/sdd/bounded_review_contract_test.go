@@ -105,6 +105,23 @@ func TestBoundedReviewContractDoesNotEnforceModelPolicy(t *testing.T) {
 	}
 }
 
+func TestBoundedReviewContractListsOnlySupportedLifecycleGates(t *testing.T) {
+	content := boundedReviewContract()
+	for _, gate := range []string{"post-apply", "pre-commit", "pre-push", "pre-pr", "release"} {
+		if !strings.Contains(content, gate) {
+			t.Errorf("contract missing supported gate %q", gate)
+		}
+	}
+	if strings.Contains(content, "archive, incident") {
+		t.Error("contract promises archive as a lifecycle CLI gate")
+	}
+	for _, clause := range []string{"structured status", "reviewGate.result: allow", "approved receipt"} {
+		if !strings.Contains(content, clause) {
+			t.Errorf("contract missing archive readiness check %q", clause)
+		}
+	}
+}
+
 func TestAuthorityFirstTerminalProcedureIsStructuredAndMirrorEligibilityIsClosed(t *testing.T) {
 	rows := parseAuthorityFirstRows(t, authorityFirstTerminalProcedure())
 	wantOperations := []string{

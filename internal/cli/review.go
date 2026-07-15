@@ -539,7 +539,7 @@ func reviewGateAction(result reviewtransaction.GateResult) string {
 	case reviewtransaction.GateAllow:
 		return "continue"
 	case reviewtransaction.GateScopeChanged:
-		return "create-new-lineage"
+		return "explicit-maintainer-action"
 	case reviewtransaction.GateEscalated:
 		return "stop"
 	default:
