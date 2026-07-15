@@ -73,7 +73,7 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	if len(preimages.policy) > 0 && hashArtifactPayload(preimages.policy) != record.State.PolicyHash {
 		return invalid("explicit policy does not match compact authority")
 	}
-	snapshot, resolvedPrePR, err := buildLifecycleSnapshot(ctx, repo, request)
+	snapshot, resolvedPrePR, err := buildCompactLifecycleSnapshot(ctx, repo, request)
 	if err != nil {
 		return invalid("current repository target cannot be derived: " + err.Error())
 	}
@@ -101,17 +101,17 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		BaseTree: snapshot.BaseTree, CandidateTree: snapshot.CandidateTree, PathsDigest: snapshot.PathsDigest,
 		FixDeltaHash: record.State.FixDeltaHash, PolicyHash: record.State.PolicyHash,
 		LedgerHash: EmptyFixDeltaHash, EvidenceHash: record.State.EvidenceHash,
-		BaseRelationshipValid: snapshot.BaseTree == receipt.BaseTree, BaseAdvance: compatibility,
+		BaseRelationshipValid: snapshot.BaseTree == receipt.BaseTree || request.Target.Kind == TargetFixDiff, BaseAdvance: compatibility,
 	}
 	if request.Gate == GatePrePR && resolvedPrePR != nil {
 		boundary := resolvedPrePR.Selection
 		gateContext.PrePRBoundary = &boundary
 	}
-	if (snapshot.CandidateTree != receipt.FinalCandidateTree || snapshot.PathsDigest != receipt.PathsDigest) && !compatibleAdvance {
+	if snapshot.CandidateTree != receipt.FinalCandidateTree || pathsAreSubset(snapshot.Paths, record.State.GenesisPaths) != nil && !compatibleAdvance {
 		gateContext.Denial = &GateDenial{Stage: "receipt-binding", Code: "candidate-or-paths-mismatch"}
 		return NativeGateEvaluation{Result: GateScopeChanged, Reason: nativeGateReason(GateScopeChanged), Context: gateContext}
 	}
-	if snapshot.BaseTree != receipt.BaseTree && !compatibleAdvance {
+	if snapshot.BaseTree != receipt.BaseTree && request.Target.Kind != TargetFixDiff && !compatibleAdvance {
 		gateContext.Denial = &GateDenial{Stage: "receipt-binding", Code: "base-mismatch"}
 		return NativeGateEvaluation{Result: GateInvalidated, Reason: "current repository base no longer matches compact authority", Context: gateContext}
 	}
@@ -134,7 +134,7 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	defer lock.release()
 	finalGateAuthorizationHook()
 	finalRecord, loadErr := store.Load()
-	finalSnapshot, finalRefs, snapshotErr := buildLifecycleSnapshot(ctx, repo, request)
+	finalSnapshot, finalRefs, snapshotErr := buildCompactLifecycleSnapshot(ctx, repo, request)
 	_, graphErr := CompactAuthorityLeaves(ctx, repo)
 	finalSuperseded, supersededErr := CompactLineageSuperseded(ctx, repo, receipt.LineageID)
 	if loadErr != nil || snapshotErr != nil || graphErr != nil || supersededErr != nil || finalSuperseded || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalSnapshot, snapshot) || !sameResolvedPrePRRefs(finalRefs, resolvedPrePR) {
@@ -151,6 +151,14 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	return NativeGateEvaluation{Result: GateAllow, Reason: nativeGateReason(GateAllow), Context: gateContext}
 }
 
+func buildCompactLifecycleSnapshot(ctx context.Context, repo string, request GateRequest) (Snapshot, *resolvedPrePRRefs, error) {
+	if request.Target.Kind == TargetFixDiff {
+		snapshot, err := (SnapshotBuilder{Repo: repo}).build(ctx, request.Target, request.Gate == GatePreCommit)
+		return snapshot, nil, err
+	}
+	return buildLifecycleSnapshot(ctx, repo, request)
+}
+
 func buildCompactGateRequest(ctx context.Context, repo string, state CompactState, input NativeGateRequestInput) (GateRequest, error) {
 	request := GateRequest{Schema: GateRequestSchema, Gate: input.Gate, PolicyArtifact: input.PolicyArtifact}
 	switch input.Gate {
@@ -158,6 +166,9 @@ func buildCompactGateRequest(ctx context.Context, repo string, state CompactStat
 		intended := input.IntendedUntracked
 		if intended == nil {
 			intended = append([]string(nil), state.CurrentSnapshot.IntendedUntracked...)
+		}
+		if intended == nil {
+			intended = []string{}
 		}
 		request.Target = Target{Kind: TargetCurrentChanges, Projection: state.InitialSnapshot.Projection, IntendedUntracked: intended}
 	case GatePrePush:
