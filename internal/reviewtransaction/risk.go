@@ -1,6 +1,8 @@
 package reviewtransaction
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -81,16 +83,19 @@ type RiskAssessment struct {
 	Level        RiskLevel    `json:"level"`
 	ChangedLines int          `json:"changed_lines"`
 	Reasons      []RiskReason `json:"reasons"`
+	DominantLens string       `json:"-"`
 }
 
 type RiskInput struct {
-	Stats                    []DiffStat
-	Signals                  []RiskSignal
-	OnlyNonExecutableChanges bool
-	TouchesConfiguration     bool
+	Stats                        []DiffStat
+	Signals                      []RiskSignal
+	OnlyNonExecutableChanges     bool
+	OnlyPureDocumentationChanges bool
+	TouchesConfiguration         bool
 }
 
-// ClassifyRisk evaluates high, low, then medium. The first matching tier wins.
+// ClassifyRisk evaluates semantic high risk before the size-based documentation
+// exception, then the remaining large, low, and medium tiers.
 // Model, provider, profile, and effort are intentionally not classifier inputs.
 func ClassifyRisk(input RiskInput) (RiskLevel, error) {
 	changedLines, err := CountChangedLines(input.Stats)
@@ -103,7 +108,13 @@ func ClassifyRisk(input RiskInput) (RiskLevel, error) {
 		}
 	}
 
-	if hasHighSignal(input.Signals) || touchesHotPath(input.Stats) || changedLines > LargeChangeLines {
+	if hasHighSignal(input.Signals) || touchesHotPath(input.Stats) {
+		return RiskHigh, nil
+	}
+	if changedLines > LargeChangeLines {
+		if isLargePureDocumentation(input, changedLines) {
+			return RiskMedium, nil
+		}
 		return RiskHigh, nil
 	}
 	if input.OnlyNonExecutableChanges && !input.TouchesConfiguration {
@@ -168,23 +179,44 @@ func (builder SnapshotBuilder) AssessSnapshotRisk(ctx context.Context, snapshot 
 		return RiskAssessment{}, err
 	}
 	reasons := deriveSnapshotRiskReasons(stats, changedLines)
-	signals := riskSignalsFromReasons(reasons)
 	onlyNonExecutable := true
+	onlyPureDocumentation := true
 	touchesConfiguration := false
 	for _, stat := range stats {
 		if isGeneratedGoldenPath(stat.Path) {
 			continue
 		}
 		onlyNonExecutable = onlyNonExecutable && isNonExecutableReviewPath(stat.Path)
+		onlyPureDocumentation = onlyPureDocumentation && isPureDocumentationReviewStat(stat)
 		touchesConfiguration = touchesConfiguration || isConfigurationReviewPath(stat.Path)
 	}
-	risk, err := ClassifyRisk(RiskInput{
-		Stats: stats, Signals: signals, OnlyNonExecutableChanges: onlyNonExecutable, TouchesConfiguration: touchesConfiguration,
-	})
+	if onlyPureDocumentation {
+		onlyPureDocumentation, err = builder.hasOnlyStaticMDX(ctx, snapshot, stats)
+		if err != nil {
+			return RiskAssessment{}, err
+		}
+	}
+	input := RiskInput{
+		Stats: stats, OnlyNonExecutableChanges: onlyNonExecutable,
+		OnlyPureDocumentationChanges: onlyPureDocumentation, TouchesConfiguration: touchesConfiguration,
+	}
+	if isLargePureDocumentation(input, changedLines) {
+		reasons = canonicalRiskReasons(append(reasons, RiskReason{Code: RiskReasonNonExecutableOnly}))
+	}
+	input.Signals = riskSignalsFromReasons(reasons)
+	risk, err := ClassifyRisk(input)
 	if err != nil {
 		return RiskAssessment{}, err
 	}
-	return RiskAssessment{Level: risk, ChangedLines: changedLines, Reasons: reasons}, nil
+	dominantLens := ""
+	if risk == RiskMedium && isLargePureDocumentation(input, changedLines) {
+		dominantLens = LensReadability
+	}
+	return RiskAssessment{Level: risk, ChangedLines: changedLines, Reasons: reasons, DominantLens: dominantLens}, nil
+}
+
+func isLargePureDocumentation(input RiskInput, changedLines int) bool {
+	return changedLines > LargeChangeLines && input.OnlyNonExecutableChanges && input.OnlyPureDocumentationChanges && !input.TouchesConfiguration
 }
 
 func deriveSemanticRiskSignals(stats []DiffStat) []RiskSignal {
@@ -388,6 +420,183 @@ func isNonExecutableReviewPath(path string) bool {
 	default:
 		return false
 	}
+}
+
+func isPureDocumentationReviewPath(logicalPath string) bool {
+	if !isNonExecutableReviewPath(logicalPath) || isConfigurationReviewPath(logicalPath) {
+		return false
+	}
+	if strings.EqualFold(filepath.Ext(logicalPath), ".svg") {
+		return false
+	}
+	if strings.HasPrefix(strings.ToLower(logicalPath), "internal/assets/") {
+		return false
+	}
+	base := strings.ToLower(path.Base(logicalPath))
+	switch base {
+	case "agents.md", "claude.md", "gemini.md", "kimi.md", "soul.md", "tools.md", "skill.md", "copilot-instructions.md":
+		return false
+	}
+	stem := strings.TrimSuffix(base, strings.ToLower(filepath.Ext(base)))
+	for _, token := range strings.FieldsFunc(stem, func(r rune) bool {
+		return r == '-' || r == '_' || r == '.' || r == ' '
+	}) {
+		switch token {
+		case "agent", "agents", "command", "commands", "prompt", "prompts", "rule", "rules", "runtime", "runtimes", "skill", "skills", "workflow", "workflows":
+			return false
+		}
+	}
+	for _, segment := range strings.Split(strings.ToLower(logicalPath), "/") {
+		switch segment {
+		case ".github", ".claude", ".codex", ".cursor", ".gemini", ".kiro", ".kilo", ".opencode", ".windsurf",
+			"agent", "agents", "command", "commands", "prompt", "prompts", "rule", "rules", "runtime", "runtimes", "skill", "skills", "workflow", "workflows":
+			return false
+		}
+	}
+	return true
+}
+
+func isPureDocumentationReviewStat(stat DiffStat) bool {
+	if !isPureDocumentationReviewPath(stat.Path) {
+		return false
+	}
+	for _, mode := range []string{stat.OldMode, stat.NewMode} {
+		if mode != "" && mode != "000000" && mode != "100644" {
+			return false
+		}
+	}
+	return true
+}
+
+func (builder SnapshotBuilder) hasOnlyStaticMDX(ctx context.Context, snapshot Snapshot, stats []DiffStat) (bool, error) {
+	for _, stat := range stats {
+		if !strings.EqualFold(filepath.Ext(stat.Path), ".mdx") {
+			continue
+		}
+		for _, version := range []struct {
+			tree string
+			mode string
+		}{{tree: snapshot.BaseTree, mode: stat.OldMode}, {tree: snapshot.CandidateTree, mode: stat.NewMode}} {
+			if version.mode == "" || version.mode == "000000" {
+				continue
+			}
+			content, err := runGit(ctx, builder.Repo, nil, nil, "cat-file", "blob", version.tree+":"+stat.Path)
+			if err != nil {
+				return false, fmt.Errorf("read immutable MDX %q: %w", stat.Path, err)
+			}
+			if !isStaticMDXDocument(content) {
+				return false, nil
+			}
+		}
+	}
+	return true, nil
+}
+
+func isStaticMDXDocument(content []byte) bool {
+	scanner := bufio.NewScanner(bytes.NewReader(content))
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	fence := ""
+	for scanner.Scan() {
+		trimmed := strings.TrimSpace(strings.TrimPrefix(scanner.Text(), "\uFEFF"))
+		if fence != "" {
+			if strings.HasPrefix(trimmed, fence) {
+				fence = ""
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "```") {
+			fence = "```"
+			continue
+		}
+		if strings.HasPrefix(trimmed, "~~~") {
+			fence = "~~~"
+			continue
+		}
+		prose := trimLeadingJavaScriptBlockComments(stripMarkdownCodeSpans(trimmed))
+		if startsJavaScriptKeyword(prose, "import") || startsJavaScriptKeyword(prose, "export") ||
+			strings.ContainsAny(prose, "{}") || strings.Contains(prose, "<") {
+			return false
+		}
+	}
+	return scanner.Err() == nil
+}
+
+func trimLeadingJavaScriptBlockComments(value string) string {
+	for strings.HasPrefix(value, "/*") {
+		end := strings.Index(value[2:], "*/")
+		if end < 0 {
+			break
+		}
+		value = strings.TrimSpace(value[end+4:])
+	}
+	return value
+}
+
+func startsJavaScriptKeyword(value, keyword string) bool {
+	if !strings.HasPrefix(value, keyword) {
+		return false
+	}
+	if len(value) == len(keyword) {
+		return true
+	}
+	next := value[len(keyword)]
+	return !((next >= 'a' && next <= 'z') || (next >= 'A' && next <= 'Z') ||
+		(next >= '0' && next <= '9') || next == '_' || next == '$')
+}
+
+func stripMarkdownCodeSpans(value string) string {
+	var visible strings.Builder
+	for len(value) > 0 {
+		start := strings.IndexByte(value, '`')
+		if start < 0 {
+			visible.WriteString(value)
+			break
+		}
+		if escapedBacktick(value, start) {
+			visible.WriteString(value[:start+1])
+			value = value[start+1:]
+			continue
+		}
+		visible.WriteString(value[:start])
+		run := 1
+		for start+run < len(value) && value[start+run] == '`' {
+			run++
+		}
+		marker := value[start : start+run]
+		remainder := value[start+run:]
+		end := exactBacktickRunIndex(remainder, marker)
+		if end < 0 {
+			visible.WriteString(value[start:])
+			break
+		}
+		value = remainder[end+run:]
+	}
+	return strings.TrimSpace(visible.String())
+}
+
+func exactBacktickRunIndex(value, marker string) int {
+	for offset := 0; offset < len(value); {
+		index := strings.Index(value[offset:], marker)
+		if index < 0 {
+			return -1
+		}
+		index += offset
+		before := index > 0 && value[index-1] == '`'
+		after := index+len(marker) < len(value) && value[index+len(marker)] == '`'
+		if !before && !after && !escapedBacktick(value, index) {
+			return index
+		}
+		offset = index + 1
+	}
+	return -1
+}
+
+func escapedBacktick(value string, index int) bool {
+	backslashes := 0
+	for index--; index >= 0 && value[index] == '\\'; index-- {
+		backslashes++
+	}
+	return backslashes%2 == 1
 }
 
 func isConfigurationReviewPath(path string) bool {

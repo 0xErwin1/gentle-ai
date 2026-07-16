@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -115,6 +116,85 @@ func TestNegotiatedReviewStartRiskReasonsUseOnlyImmutableSnapshotEvidence(t *tes
 			t.Fatalf("negotiated START exposed classifier input field %q", field)
 		}
 	})
+}
+
+func TestNegotiatedReviewStartRoutesLargePureDocumentationToReadability(t *testing.T) {
+	full4R := []string{
+		reviewtransaction.LensRisk, reviewtransaction.LensResilience,
+		reviewtransaction.LensReadability, reviewtransaction.LensReliability,
+	}
+	tests := []struct {
+		name       string
+		path       string
+		lines      int
+		prefix     string
+		focus      string
+		wantRisk   reviewtransaction.RiskLevel
+		wantLenses []string
+	}{
+		{name: "400 pure doc lines remain low", path: "docs/guide.md", lines: 400, wantRisk: reviewtransaction.RiskLow, wantLenses: []string{}},
+		{name: "401 pure doc lines select readability", path: "docs/guide.md", lines: 401, focus: "risk", wantRisk: reviewtransaction.RiskMedium, wantLenses: []string{reviewtransaction.LensReadability}},
+		{name: "401 static MDX lines select readability", path: "book/chapter.mdx", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: []string{reviewtransaction.LensReadability}},
+		{name: "active MDX keeps high routing", path: "book/chapter.mdx", lines: 400, prefix: "import Widget from './widget'\n", wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
+		{name: "SVG keeps high routing", path: "docs/diagram.svg", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
+		{name: "semantic doc path keeps high routing", path: "docs/security/guide.md", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
+		{name: "prompt markdown keeps normal large routing", path: "prompts/system.md", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
+		{name: "compound prompt filename keeps normal large routing", path: "docs/system-prompt.md", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
+		{name: "agent rules keep normal large routing", path: "AGENTS.md", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
+		{name: "workflow markdown keeps normal large routing", path: ".github/workflows/release.md", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
+		{name: "runtime docs keep normal large routing", path: "runtime/README.md", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
+		{name: "configuration keeps normal large routing", path: "config/settings.yaml", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
+		{name: "code keeps normal large routing", path: "internal/app.go", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
+	}
+	for index, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			writeReviewStartCandidate(t, repo, tt.path, tt.prefix+strings.Repeat("line\n", tt.lines), 0o644)
+			args := []string{
+				"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
+				"--lineage", fmt.Sprintf("large-doc-routing-%d", index),
+			}
+			if tt.focus != "" {
+				args = append(args, "--focus", tt.focus)
+			}
+			var output bytes.Buffer
+			if err := RunReview(args, &output); err != nil {
+				t.Fatal(err)
+			}
+			result := decodeNegotiatedReviewStart(t, output.Bytes())
+			wantLines := tt.lines + strings.Count(tt.prefix, "\n")
+			if result.RiskLevel != tt.wantRisk || result.ChangedLines != wantLines || !reflect.DeepEqual(result.SelectedLenses, tt.wantLenses) {
+				t.Fatalf("routing = risk %q, lines %d, lenses %v; want %q, %d, %v", result.RiskLevel, result.ChangedLines, result.SelectedLenses, tt.wantRisk, wantLines, tt.wantLenses)
+			}
+		})
+	}
+
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "docs/guide.md", strings.Repeat("line\n", 401), 0o644)
+	err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "large-doc-invalid-focus", "--focus", "unknown"}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "unsupported review focus") {
+		t.Fatalf("large pure documentation invalid focus error = %v", err)
+	}
+}
+
+func TestNegotiatedReviewStartPreservesPrePolicyLargeDocumentationAuthority(t *testing.T) {
+	full4R := []string{
+		reviewtransaction.LensRisk, reviewtransaction.LensResilience,
+		reviewtransaction.LensReadability, reviewtransaction.LensReliability,
+	}
+	legacy := ReviewFacadeStartResult{RiskLevel: reviewtransaction.RiskHigh, SelectedLenses: full4R, ChangedLines: 401}
+	assessment := reviewtransaction.RiskAssessment{
+		Level: reviewtransaction.RiskMedium, ChangedLines: 401, DominantLens: reviewtransaction.LensReadability,
+		Reasons: []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonLargeChange}, {Code: reviewtransaction.RiskReasonNonExecutableOnly}},
+	}
+	aligned, err := reviewStartAssessmentForFrozenAuthority(legacy, assessment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aligned.Level != reviewtransaction.RiskHigh || aligned.DominantLens != "" ||
+		!reflect.DeepEqual(aligned.Reasons, []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonLargeChange}}) {
+		t.Fatalf("pre-policy aligned assessment = %#v", aligned)
+	}
 }
 
 func TestNegotiatedReviewStartPreservesLegacyPayloadAndAuthorityIdentity(t *testing.T) {

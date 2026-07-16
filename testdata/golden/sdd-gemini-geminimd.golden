@@ -57,7 +57,8 @@ These are parent-orchestrator stop rules. Once any trigger fires, the orchestrat
 
 1. **Trivial diff** (ONLY documentation, comments, formatting, or typo fixes in strings — zero executable code and zero configuration changes): run no lens. Any diff touching executable code or configuration is at least standard tier.
 2. **Standard diff**: run exactly ONE lens — the row in the table below that matches the dominant risk. If multiple rows match, pick the single highest-impact row; do not add lenses.
-3. **Hot path** (the diff touches auth/update/security/payments paths) **or >400 changed lines**: run the full 4R set — `review-risk`, `review-resilience`, `review-readability`, `review-reliability`.
+3. **Hot path** (the diff touches auth/update/security/payments paths) **or >400 changed lines outside pure human documentation**: run the full 4R set — `review-risk`, `review-resilience`, `review-readability`, `review-reliability`.
+4. **Large pure human documentation** (>400 authored lines with no code, configuration, prompts, agent rules, workflows, runtime instruction docs, mixed content, or active content): run only `review-readability`.
 
 | Risk signal | Review lens |
 | --- | --- |
@@ -384,7 +385,7 @@ Deterministic bounded-review lifecycle router; apply it as a decision procedure,
 
 Receipt action table: missing → start explicitly after implementation/post-apply; scope-changed → require explicit maintainer action; invalidated → require explicit maintainer action; escalated → stop. New CI, vulnerability, base, policy, provenance, or release evidence may invalidate/escalate without reopening unchanged code review.
 
-Inside explicit `review/start(target)` only, select initial lenses by deterministic risk: **Low** (only documentation, comments, formatting, or typo-only string edits; zero executable-code and configuration changes) → no lens; **Medium** (every remaining change) → exactly ONE dominant-risk lens; **High** (security/auth/update/payments, data loss or exposure, permission changes, shell/process integration, or more than 400 authored changed lines) → four initial 4R lens sweeps. Generated goldens are excluded from the authored threshold but remain in snapshot identity. Model, provider, profile, and reasoning effort are never classifier inputs.
+Inside explicit `review/start(target)` only, select initial lenses by deterministic risk: **Low** (only documentation, comments, formatting, or typo-only string edits; zero executable-code and configuration changes) → no lens; **Medium** (every remaining change; pure human documentation above 400 authored changed lines is pinned to `review-readability`) → exactly ONE dominant-risk lens; **High** (security/auth/update/payments, data loss or exposure, permission changes, shell/process integration, or more than 400 authored changed lines in code, configuration, prompts, agent rules, workflows, runtime instruction docs, mixed content, or active content) → four initial 4R lens sweeps. Generated goldens are excluded from the authored threshold but remain in snapshot identity. Model, provider, profile, and reasoning effort are never classifier inputs.
 
 Risk table: Clear naming, structure, maintainability, or small refactors → `review-readability`; Behavior, state, tests, determinism, or regressions → `review-reliability`; Shell/process integration, partial failures, recovery, or degraded dependencies → `review-resilience`; Security, permissions, data exposure/loss, architecture, or dependencies → `review-risk`.
 

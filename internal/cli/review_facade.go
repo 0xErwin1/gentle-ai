@@ -257,7 +257,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	actor := flags.String("actor", "", "recovery actor")
 	authorization := flags.String("maintainer-authorization", "", "explicit authorization required for escalated recovery")
 	policySource := flags.String("policy", "", "optional review policy file")
-	focus := flags.String("focus", "reliability", "dominant standard-risk focus")
+	focus := flags.String("focus", "reliability", "dominant standard-risk focus; large pure documentation always uses readability")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -295,11 +295,12 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	risk, changedLines, err := (reviewtransaction.SnapshotBuilder{Repo: root}).ClassifySnapshotRisk(context.Background(), snapshot)
+	assessment, err := (reviewtransaction.SnapshotBuilder{Repo: root}).AssessSnapshotRisk(context.Background(), snapshot)
 	if err != nil {
 		return err
 	}
-	lenses, err := facadeSelectedLenses(risk, *focus)
+	risk, changedLines := assessment.Level, assessment.ChangedLines
+	lenses, err := facadeSelectedLenses(assessment, *focus)
 	if err != nil {
 		return err
 	}
@@ -428,7 +429,7 @@ func RunReviewFacadeStart(args []string, stdout io.Writer) error {
 	contract := flags.String("contract", "", "optional negotiated review integration contract")
 	lineage := flags.String("lineage", "", "optional explicit review lineage identifier")
 	policySource := flags.String("policy", "", "optional review policy file; the native bounded policy is used by default")
-	focus := flags.String("focus", "reliability", "dominant standard-risk focus: risk, resilience, readability, or reliability")
+	focus := flags.String("focus", "reliability", "dominant standard-risk focus: risk, resilience, readability, or reliability; large pure documentation always uses readability")
 	baseRef := flags.String("base-ref", "", "optional base revision for immutable base-to-HEAD review")
 	projection := flags.String("projection", string(reviewtransaction.ProjectionWorkspace), "candidate projection: workspace or staged; staged base-diff records post-commit delivery provenance")
 	committedOnly := flags.Bool("committed-only", false, "acknowledge that --base-ref excludes dirty tracked changes")
@@ -485,7 +486,7 @@ func RunReviewFacadeStart(args []string, stdout io.Writer) error {
 		return fmt.Errorf("classify facade review target: %w", err)
 	}
 	risk, changedLines := assessment.Level, assessment.ChangedLines
-	lenses, err := facadeSelectedLenses(risk, *focus)
+	lenses, err := facadeSelectedLenses(assessment, *focus)
 	if err != nil {
 		return err
 	}
@@ -863,24 +864,38 @@ func RunReviewFacadeValidate(args []string, stdout io.Writer) error {
 	return runFacadeLegacyValidateNegotiated(validateArgs, stdout, negotiated)
 }
 
-func facadeSelectedLenses(risk reviewtransaction.RiskLevel, focus string) ([]string, error) {
-	switch risk {
+func facadeSelectedLenses(assessment reviewtransaction.RiskAssessment, focus string) ([]string, error) {
+	if assessment.DominantLens != "" {
+		if assessment.Level != reviewtransaction.RiskMedium || assessment.DominantLens != reviewtransaction.LensReadability {
+			return nil, fmt.Errorf("unsupported dominant review lens %q for risk %q", assessment.DominantLens, assessment.Level)
+		}
+		if _, ok := facadeFocusLens(focus); !ok {
+			return nil, fmt.Errorf("unsupported review focus %q", focus)
+		}
+		return []string{assessment.DominantLens}, nil
+	}
+	switch assessment.Level {
 	case reviewtransaction.RiskLow:
 		return []string{}, nil
 	case reviewtransaction.RiskHigh:
 		return []string{reviewtransaction.LensRisk, reviewtransaction.LensResilience, reviewtransaction.LensReadability, reviewtransaction.LensReliability}, nil
 	case reviewtransaction.RiskMedium:
-		lens, ok := map[string]string{
-			"risk": reviewtransaction.LensRisk, "resilience": reviewtransaction.LensResilience,
-			"readability": reviewtransaction.LensReadability, "reliability": reviewtransaction.LensReliability,
-		}[strings.TrimSpace(focus)]
+		lens, ok := facadeFocusLens(focus)
 		if !ok {
 			return nil, fmt.Errorf("unsupported review focus %q", focus)
 		}
 		return []string{lens}, nil
 	default:
-		return nil, fmt.Errorf("unsupported review risk %q", risk)
+		return nil, fmt.Errorf("unsupported review risk %q", assessment.Level)
 	}
+}
+
+func facadeFocusLens(focus string) (string, bool) {
+	lens, ok := map[string]string{
+		"risk": reviewtransaction.LensRisk, "resilience": reviewtransaction.LensResilience,
+		"readability": reviewtransaction.LensReadability, "reliability": reviewtransaction.LensReliability,
+	}[strings.TrimSpace(focus)]
+	return lens, ok
 }
 
 func (result facadeReviewerResult) nativeLensResult() (reviewtransaction.LensResult, []facadeFinding) {

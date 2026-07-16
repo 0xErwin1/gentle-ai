@@ -32,6 +32,10 @@ type ReviewIntegrationStartResult struct {
 }
 
 func newReviewIntegrationStartResult(legacy ReviewFacadeStartResult, assessment reviewtransaction.RiskAssessment) (ReviewIntegrationStartResult, error) {
+	assessment, err := reviewStartAssessmentForFrozenAuthority(legacy, assessment)
+	if err != nil {
+		return ReviewIntegrationStartResult{}, err
+	}
 	if assessment.Level != legacy.RiskLevel || assessment.ChangedLines != legacy.ChangedLines {
 		return ReviewIntegrationStartResult{}, errors.New("negotiated START risk assessment does not match frozen authority")
 	}
@@ -46,6 +50,28 @@ func newReviewIntegrationStartResult(legacy ReviewFacadeStartResult, assessment 
 		return ReviewIntegrationStartResult{}, fmt.Errorf("validate negotiated START response: %w", err)
 	}
 	return result, nil
+}
+
+func reviewStartAssessmentForFrozenAuthority(legacy ReviewFacadeStartResult, assessment reviewtransaction.RiskAssessment) (reviewtransaction.RiskAssessment, error) {
+	if assessment.ChangedLines != legacy.ChangedLines {
+		return reviewtransaction.RiskAssessment{}, errors.New("negotiated START changed lines do not match frozen authority")
+	}
+	if assessment.Level == legacy.RiskLevel {
+		return assessment, nil
+	}
+	// Authorities created before the pure-documentation policy remain valid and
+	// retain their frozen high/4R route when the same immutable snapshot replays.
+	if legacy.RiskLevel == reviewtransaction.RiskHigh && assessment.Level == reviewtransaction.RiskMedium &&
+		assessment.DominantLens == reviewtransaction.LensReadability && len(assessment.Reasons) == 2 &&
+		assessment.Reasons[0].Code == reviewtransaction.RiskReasonLargeChange &&
+		assessment.Reasons[1].Code == reviewtransaction.RiskReasonNonExecutableOnly &&
+		validateReviewStartLenses(legacy.RiskLevel, legacy.SelectedLenses) == nil {
+		assessment.Level = reviewtransaction.RiskHigh
+		assessment.DominantLens = ""
+		assessment.Reasons = []reviewtransaction.RiskReason{{Code: reviewtransaction.RiskReasonLargeChange}}
+		return assessment, nil
+	}
+	return reviewtransaction.RiskAssessment{}, errors.New("negotiated START risk assessment does not match frozen authority")
 }
 
 func (result ReviewIntegrationStartResult) Validate() error {
@@ -146,10 +172,20 @@ func reviewStartRiskReasonLess(left, right reviewtransaction.RiskReason) bool {
 }
 
 func reviewStartRiskLevel(reasons []reviewtransaction.RiskReason) reviewtransaction.RiskLevel {
+	largeChange := false
+	nonExecutableOnly := false
 	for _, reason := range reasons {
-		if reason.Signal != "" || reason.Code == reviewtransaction.RiskReasonLargeChange {
+		if reason.Signal != "" {
 			return reviewtransaction.RiskHigh
 		}
+		largeChange = largeChange || reason.Code == reviewtransaction.RiskReasonLargeChange
+		nonExecutableOnly = nonExecutableOnly || reason.Code == reviewtransaction.RiskReasonNonExecutableOnly
+	}
+	if largeChange {
+		if nonExecutableOnly && len(reasons) == 2 {
+			return reviewtransaction.RiskMedium
+		}
+		return reviewtransaction.RiskHigh
 	}
 	if len(reasons) == 1 && reasons[0].Code == reviewtransaction.RiskReasonNonExecutableOnly {
 		return reviewtransaction.RiskLow

@@ -1609,6 +1609,15 @@ func TestSDDOrchestratorsRouteFreshReviewsToConcreteReviewLenses(t *testing.T) {
 					t.Fatalf("%s Review Lens Selection %s: %q", path, check.contract, line)
 				}
 			}
+			for _, want := range []string{
+				"rerun only the originating lens(es) that produced open verified BLOCKER/CRITICAL findings",
+				"never rerun clean lenses or lenses with only WARNING/SUGGESTION findings",
+				"Native ordinary review keeps its targeted validator and never reruns initial lenses",
+			} {
+				if !strings.Contains(content, want) {
+					t.Fatalf("%s missing ad-hoc severe recheck contract %q", path, want)
+				}
+			}
 
 			if problems := boundedReviewRoutingProblems(content); len(problems) > 0 {
 				t.Fatalf("%s bounded review guidance violates receipt or explicit review-start routing: %s", path, strings.Join(problems, "; "))
