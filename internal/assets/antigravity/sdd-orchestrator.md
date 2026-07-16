@@ -74,7 +74,8 @@ These are orchestrator stop rules for Antigravity. Once any trigger fires, the o
 
 1. **Trivial diff** (ONLY documentation, comments, formatting, or typo fixes in strings — zero executable code and zero configuration changes): run no lens. Any diff touching executable code or configuration is at least standard tier.
 2. **Standard diff**: run exactly ONE lens — the row in the table below that matches the dominant risk. If multiple rows match, pick the single highest-impact row; do not add lenses.
-3. **Hot path** (the diff touches auth/update/security/payments paths) **or >400 changed lines**: run the full 4R set — `review-risk`, `review-resilience`, `review-readability`, `review-reliability`.
+3. **Hot path** (the diff touches auth/update/security/payments paths) **or >400 changed lines outside pure human documentation**: run the full 4R set — `review-risk`, `review-resilience`, `review-readability`, `review-reliability`.
+4. **Large pure human documentation** (>400 authored lines with no code, configuration, prompts, agent rules, workflows, runtime instruction docs, mixed content, or active content): run only `review-readability`.
 
 | Risk signal | Review lens |
 | --- | --- |
@@ -111,6 +112,8 @@ If the first pass finds nothing, persist an empty ledger record rather than skip
 **Severity floor.** Only BLOCKER/CRITICAL findings that survive adversarial verification enter the fix → re-review loop. WARNING/SUGGESTION findings are reported once with status `info`, are never re-reviewed, and never block. Judgment-day may record real/theoretical as a separate `assessment`, but canonical severity remains `WARNING` and canonical status remains `info`; a WARNING is never `open`.
 
 **Convergence budget.** Maximum 2 fix rounds per review. One fix round = the orchestrator (directly or via a single writer sub-agent) applies fixes for all open verified BLOCKER/CRITICAL findings, then a scoped re-review verifies the fix diff against the ledger; in judgment-day the fix actor is `jd-fix-agent`. Anything still open after round 2 is reported to the user as open — the loop never extends.
+
+**Ad-hoc severe recheck.** Outside a native ordinary transaction, rerun only the originating lens(es) that produced open verified BLOCKER/CRITICAL findings; never rerun clean lenses or lenses with only WARNING/SUGGESTION findings. Native ordinary review keeps its targeted validator and never reruns initial lenses.
 
 **Ledger persistence honors the artifact store.**
 - `openspec`: write `openspec/changes/{change-name}/review-ledger.md`.

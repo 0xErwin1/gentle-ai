@@ -392,7 +392,7 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 			if record.State.InitialSnapshot.CandidateTree != request.State.InitialSnapshot.CandidateTree {
 				continue
 			}
-			if !compactStartScopeEqual(record.State, request.State) {
+			if !compactStartScopeCompatible(ctx, requestedStore.repo, record.State, request.State) {
 				return CompactStartResult{Record: record, Action: CompactStartBlocked}, nil
 			}
 		case StateCorrectionRequired:
@@ -536,13 +536,36 @@ func compactStartLiveTargetMatches(ctx context.Context, repo string, existing, r
 }
 
 func compactStartScopeEqual(existing, requested CompactState) bool {
+	return compactStartScopeIdentityEqual(existing, requested) &&
+		existing.RiskLevel == requested.RiskLevel && equalStrings(existing.SelectedLenses, requested.SelectedLenses)
+}
+
+func compactStartScopeIdentityEqual(existing, requested CompactState) bool {
 	return existing.Generation == requested.Generation &&
 		compactStartInitialSnapshotsEqual(existing, requested) &&
 		equalStrings(existing.GenesisPaths, requested.GenesisPaths) &&
-		existing.PolicyHash == requested.PolicyHash && existing.RiskLevel == requested.RiskLevel &&
-		equalStrings(existing.SelectedLenses, requested.SelectedLenses) &&
+		existing.PolicyHash == requested.PolicyHash &&
 		existing.OriginalChangedLines == requested.OriginalChangedLines &&
 		existing.CorrectionBudget == requested.CorrectionBudget && reflect.DeepEqual(existing.Recovery, requested.Recovery)
+}
+
+func compactStartScopeCompatible(ctx context.Context, repo string, existing, requested CompactState) bool {
+	if compactStartScopeEqual(existing, requested) {
+		return true
+	}
+	full4R := []string{LensRisk, LensResilience, LensReadability, LensReliability}
+	if !compactStartScopeIdentityEqual(existing, requested) || existing.RiskLevel != RiskHigh ||
+		!equalStrings(existing.SelectedLenses, full4R) || requested.RiskLevel != RiskMedium ||
+		!equalStrings(requested.SelectedLenses, []string{LensReadability}) {
+		return false
+	}
+	builder := SnapshotBuilder{Repo: repo}
+	if err := builder.ValidateEvidence(ctx, requested.InitialSnapshot); err != nil {
+		return false
+	}
+	assessment, err := builder.AssessSnapshotRisk(ctx, requested.InitialSnapshot)
+	return err == nil && assessment.Level == RiskMedium && assessment.DominantLens == LensReadability &&
+		assessment.ChangedLines == requested.OriginalChangedLines
 }
 
 func (store CompactStore) StatePath() string { return filepath.Join(store.Dir, "review-state.json") }

@@ -1105,7 +1105,8 @@ Do not pass these rules to child agents as permission to spawn more agents; chil
 
 1. **Trivial diff** (ONLY documentation, comments, formatting, or typo fixes in strings — zero executable code and zero configuration changes): run no lens. Any diff touching executable code or configuration is at least standard tier.
 2. **Standard diff**: run exactly ONE lens — the row in the table below that matches the dominant risk. If multiple rows match, pick the single highest-impact row; do not add lenses.
-3. **Hot path** (the diff touches auth/update/security/payments paths) **or >400 changed lines**: run the full 4R set — ` + "`review-risk`" + `, ` + "`review-resilience`" + `, ` + "`review-readability`" + `, ` + "`review-reliability`" + `.
+3. **Hot path** (the diff touches auth/update/security/payments paths) **or >400 changed lines outside pure human documentation**: run the full 4R set — ` + "`review-risk`" + `, ` + "`review-resilience`" + `, ` + "`review-readability`" + `, ` + "`review-reliability`" + `.
+4. **Large pure human documentation** (>400 authored lines with no code, configuration, prompts, agent rules, workflows, runtime instruction docs, mixed content, or active content): run only ` + "`review-readability`" + `.
 
 | Risk signal | Review lens |
 | --- | --- |
@@ -1115,6 +1116,8 @@ Do not pass these rules to child agents as permission to spawn more agents; chil
 | Security, permissions, data exposure/loss, architecture, or dependencies | ` + "`review-risk`" + ` |
 
 Full 4R is reserved for tier 3; a standard diff never fans out to multiple lenses.
+
+For ad-hoc 4R outside a native ordinary transaction, after a fix rerun only the originating lens(es) that produced open verified BLOCKER/CRITICAL findings. Never rerun clean lenses or lenses with only WARNING/SUGGESTION findings. Native ordinary review keeps its targeted validator and never reruns initial lenses.
 <!-- /gentle-ai:delegation-hard-gates-migration -->
 `
 

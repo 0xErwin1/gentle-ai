@@ -125,6 +125,55 @@ func TestCompactStoreReloadsLegacyV2ReceiptWithoutRewritingItsIdentity(t *testin
 	}
 }
 
+func TestCompactStartResumesPrePolicyLargeDocumentationAuthority(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "docs/guide.md", strings.Repeat("line\n", 401))
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{"docs/guide.md"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assessment, err := (SnapshotBuilder{Repo: repo}).AssessSnapshotRisk(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requested, err := NewCompactState(Start{
+		LineageID: "pre-policy-large-doc", Mode: ModeOrdinaryBounded, Generation: 1,
+		Snapshot: snapshot, PolicyHash: hash("d"), RiskLevel: assessment.Level,
+		SelectedLenses: []string{assessment.DominantLens}, OriginalChangedLines: &assessment.ChangedLines,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	existing := requested
+	existing.RiskLevel = RiskHigh
+	existing.SelectedLenses = []string{LensRisk, LensResilience, LensReadability, LensReliability}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, existing.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, payload, err := makeCompactRecord(existing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(store.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Action != CompactStartResumed || result.Record.State.RiskLevel != RiskHigh ||
+		!equalStrings(result.Record.State.SelectedLenses, existing.SelectedLenses) {
+		t.Fatalf("pre-policy resume = action %q, risk %q, lenses %v", result.Action, result.Record.State.RiskLevel, result.Record.State.SelectedLenses)
+	}
+}
+
 func TestRecoverCompactAuthorityRejectsProjectionChange(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")

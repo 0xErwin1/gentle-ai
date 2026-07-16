@@ -37,6 +37,33 @@ func TestClassifyRiskUsesDeterministicFirstMatch(t *testing.T) {
 			input: RiskInput{OnlyNonExecutableChanges: true, Stats: []DiffStat{{Path: "docs/guide.md", Additions: 400}}},
 			want:  RiskLow,
 		},
+		{
+			name: "large pure documentation is medium",
+			input: RiskInput{
+				OnlyNonExecutableChanges:     true,
+				OnlyPureDocumentationChanges: true,
+				Stats:                        []DiffStat{{Path: "docs/guide.md", Additions: 401}},
+			},
+			want: RiskMedium,
+		},
+		{
+			name: "large operational markdown remains high",
+			input: RiskInput{
+				OnlyNonExecutableChanges: true,
+				Stats:                    []DiffStat{{Path: "prompts/system.md", Additions: 401}},
+			},
+			want: RiskHigh,
+		},
+		{
+			name: "large pure documentation with a semantic signal remains high",
+			input: RiskInput{
+				OnlyNonExecutableChanges:     true,
+				OnlyPureDocumentationChanges: true,
+				Stats:                        []DiffStat{{Path: "docs/security/guide.md", Additions: 401}},
+			},
+			want: RiskHigh,
+		},
+		{name: "large code remains high", input: RiskInput{Stats: []DiffStat{{Path: "internal/app.go", Additions: 401}}}, want: RiskHigh},
 		{name: "configuration cannot be low", input: RiskInput{OnlyNonExecutableChanges: true, TouchesConfiguration: true}, want: RiskMedium},
 		{name: "remaining executable change is medium", input: RiskInput{Stats: []DiffStat{{Path: "internal/ui/view.go", Additions: 1}}}, want: RiskMedium},
 	}
@@ -49,6 +76,87 @@ func TestClassifyRiskUsesDeterministicFirstMatch(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Fatalf("ClassifyRisk() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPureDocumentationReviewPathExcludesOperationalMarkdown(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{path: "docs/guide.md", want: true},
+		{path: "README.md", want: true},
+		{path: "book/chapter.mdx", want: true},
+		{path: "docs/agents.md", want: false},
+		{path: "prompts/system.md", want: false},
+		{path: "docs/system-prompt.md", want: false},
+		{path: "docs/agent-rules.md", want: false},
+		{path: "docs/workflow.md", want: false},
+		{path: "docs/runtime.md", want: false},
+		{path: "internal/assets/claude/agents/review-risk.md", want: false},
+		{path: "AGENTS.md", want: false},
+		{path: "claude.md", want: false},
+		{path: "Gemini.md", want: false},
+		{path: "tools.md", want: false},
+		{path: ".github/workflows/release.md", want: false},
+		{path: "runtime/README.md", want: false},
+		{path: "docs/diagram.svg", want: false},
+		{path: "config/settings.yaml", want: false},
+		{path: "internal/app.go", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := isPureDocumentationReviewPath(tt.path); got != tt.want {
+				t.Fatalf("isPureDocumentationReviewPath(%q) = %t, want %t", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPureDocumentationReviewStatRequiresRegularNonExecutableFiles(t *testing.T) {
+	for _, stat := range []DiffStat{
+		{Path: "docs/guide.md", OldMode: "100644", NewMode: "120000"},
+		{Path: "docs/guide.md", OldMode: "100755", NewMode: "100755"},
+		{Path: "docs/guide.md", OldMode: "160000", NewMode: "160000"},
+	} {
+		if isPureDocumentationReviewStat(stat) {
+			t.Fatalf("isPureDocumentationReviewStat(%#v) accepted an active file mode", stat)
+		}
+	}
+	if !isPureDocumentationReviewStat(DiffStat{Path: "docs/guide.md", OldMode: "100644", NewMode: "100644"}) {
+		t.Fatal("isPureDocumentationReviewStat() rejected a regular static document")
+	}
+}
+
+func TestStaticMDXDocumentRejectsRuntimeSyntaxOutsideCodeExamples(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{name: "plain prose", content: "# Chapter\n\nStatic prose.\n", want: true},
+		{name: "fenced example", content: "```tsx\nexport const Example = <Widget />\n```\n", want: true},
+		{name: "inline code example", content: "Use `<Widget value={1} />` here.\n", want: true},
+		{name: "double-backtick inline code", content: "Use ``<Widget value={1} />`` here.\n", want: true},
+		{name: "mismatched code span", content: "Use `<Widget />`` here.\n", want: false},
+		{name: "escaped opening backtick", content: "Use \\`<Widget />` here.\n", want: false},
+		{name: "escaped closing backtick", content: "Use `<Widget />\\` here.\n", want: false},
+		{name: "ESM import", content: "import Widget from './widget'\n", want: false},
+		{name: "comment-separated ESM import", content: "import/* runtime */Widget from './widget'\n", want: false},
+		{name: "comment-prefixed ESM import", content: "/* runtime */ import Widget from './widget'\n", want: false},
+		{name: "BOM-prefixed ESM import", content: "\uFEFFimport Widget from './widget'\n", want: false},
+		{name: "multiline ESM import", content: "import\nWidget from './widget'\n", want: false},
+		{name: "ESM export", content: "export const value = 1\n", want: false},
+		{name: "JSX component", content: "Read <Widget /> next.\n", want: false},
+		{name: "expression", content: "Current value: {value}\n", want: false},
+		{name: "comment delimiter prose", content: "C comments begin with /* and end with */.\n", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isStaticMDXDocument([]byte(tt.content)); got != tt.want {
+				t.Fatalf("isStaticMDXDocument() = %t, want %t", got, tt.want)
 			}
 		})
 	}
