@@ -506,6 +506,15 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			changedFiles: &r.changedFiles,
 		})
 	}
+	if needsCompatibilitySkillsRefresh(r.selection.Components) {
+		apply = append(apply, compatibilitySkillsRefreshStep{
+			id:           "sync:compatibility-skills-refresh",
+			homeDir:      r.homeDir,
+			components:   r.selection.Components,
+			selection:    r.selection,
+			changedFiles: &r.changedFiles,
+		})
+	}
 
 	// Routing guidance is refreshed per agent and outside the component loop, for
 	// the same reason install schedules it there: a persisted selection without
@@ -588,6 +597,11 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 		pluginsDir := filepath.Join(adapter.GlobalConfigDir(homeDir), "plugins")
 		for _, name := range sdd.ManagedOpenCodePluginNames() {
 			paths[filepath.Join(pluginsDir, name)] = struct{}{}
+		}
+	}
+	if needsCompatibilitySkillsRefresh(selection.Components) {
+		for _, path := range existingCompatibilitySkillFiles(homeDir) {
+			paths[path] = struct{}{}
 		}
 	}
 	if selection.HasCommunityTool(model.CommunityToolCodeGraph) {
@@ -1337,7 +1351,7 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	// No-op path: no agents were discovered or provided.
 	// Per spec: "No managed assets to sync — system completes without modifying
 	// unrelated files and reports that no managed sync actions were needed."
-	if len(agentIDs) == 0 {
+	if len(agentIDs) == 0 && !compatibilitySkillsRefreshable(homeDir, selection) {
 		result.NoOp = true
 		return result, nil
 	}
@@ -1512,7 +1526,7 @@ func RunSync(args []string) (SyncResult, error) {
 			Selection: selection,
 			DryRun:    true,
 		}
-		if len(agentIDs) == 0 {
+		if len(agentIDs) == 0 && !compatibilitySkillsRefreshable(homeDir, selection) {
 			result.NoOp = true
 			return result, nil
 		}

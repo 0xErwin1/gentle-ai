@@ -37,7 +37,13 @@ func InjectWithCapability(homeDir string, adapter agents.Adapter, skillIDs []mod
 	if skillDir == "" {
 		return InjectionResult{Skipped: skillIDs}, nil
 	}
+	return InjectDirectoryWithCapability(skillDir, skillIDs, capability)
+}
 
+// InjectDirectoryWithCapability writes skills directly to an already-selected
+// skills directory. Operation-level compatibility refreshes use this to avoid
+// routing the shared directory through every selected agent adapter.
+func InjectDirectoryWithCapability(skillDir string, skillIDs []model.SkillID, capability string) (InjectionResult, error) {
 	paths := make([]string, 0, len(skillIDs))
 	skipped := make([]model.SkillID, 0)
 	changed := false
@@ -119,6 +125,11 @@ func InjectWithCapability(homeDir string, adapter agents.Adapter, skillIDs []mod
 // and skipped rather than aborting the entire operation.
 func Inject(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID) (InjectionResult, error) {
 	return InjectWithCapability(homeDir, adapter, skillIDs, "")
+}
+
+// InjectDirectory writes ordinary selected skills directly to skillDir.
+func InjectDirectory(skillDir string, skillIDs []model.SkillID) (InjectionResult, error) {
+	return InjectDirectoryWithCapability(skillDir, skillIDs, "")
 }
 
 // SkillPathForAgent returns the filesystem path where a skill file would be written.

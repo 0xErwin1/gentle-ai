@@ -657,7 +657,6 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			state:        r.state,
 		})
 	}
-
 	// Routing guidance is scheduled per agent and outside the component loop:
 	// an agent that cannot choose between direct, delegated, and proposed work is
 	// unusable, so guidance must never depend on the optional SDD component being
@@ -673,6 +672,14 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 		})
 	}
 
+	if needsCompatibilitySkillsRefresh(r.resolved.OrderedComponents) {
+		apply = append(apply, compatibilitySkillsRefreshStep{
+			id:         "component:compatibility-skills-refresh",
+			homeDir:    r.homeDir,
+			components: r.resolved.OrderedComponents,
+			selection:  r.selection,
+		})
+	}
 	if containsAgent(r.resolved.Agents, model.AgentPi) {
 		selected := r.selection.HasCommunityTool(model.CommunityToolCodeGraph)
 		stepID := "community-tool:pi-codegraph-reconcile"
@@ -1782,6 +1789,11 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	// rewritten without ever having been snapshotted (issue #1794).
 	for _, path := range routingGuidancePaths(homeDir, workspaceDir, scope, adapters) {
 		paths[path] = struct{}{}
+	}
+	if needsCompatibilitySkillsRefresh(resolved.OrderedComponents) {
+		for _, path := range existingCompatibilitySkillFiles(homeDir) {
+			paths[path] = struct{}{}
+		}
 	}
 	if containsAgent(resolved.Agents, model.AgentPi) {
 		for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
