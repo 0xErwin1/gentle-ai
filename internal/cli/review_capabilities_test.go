@@ -190,12 +190,12 @@ func stubReviewCapabilityIdentity(t *testing.T, executable string) func() {
 	previousVersion := AppVersion
 	previousExecutable := reviewCapabilitiesExecutablePath
 	previousBuildInfo := reviewCapabilitiesBuildInfoReader
-	AppVersion = "2.1.6-test"
+	AppVersion = "2.1.7-test"
 	reviewCapabilitiesExecutablePath = func() (string, error) { return executable, nil }
 	reviewCapabilitiesBuildInfoReader = func() (*debug.BuildInfo, bool) {
 		return &debug.BuildInfo{
 			GoVersion: "go1.25.10",
-			Main:      debug.Module{Path: "github.com/gentleman-programming/gentle-ai", Version: "v2.1.6"},
+			Main:      debug.Module{Path: "github.com/gentleman-programming/gentle-ai", Version: "v2.1.7"},
 			Settings: []debug.BuildSetting{
 				{Key: "vcs", Value: "git"},
 				{Key: "vcs.revision", Value: "0123456789abcdef0123456789abcdef01234567"},
@@ -256,13 +256,21 @@ func TestReviewCapabilitiesFeatureRequirementsAreExplicit(t *testing.T) {
 		{Name: "uniform_failure_envelope", Supported: true, Requires: []string{"repository_independent_capabilities"}},
 	}
 	wantOptional := []ReviewCapabilityFeature{
+		{Name: "bounded_process_waits", Supported: true, Requires: []string{"uniform_failure_envelope"}},
+		{Name: "exact_gate_receipt_discovery", Supported: true, Requires: []string{"five_delivery_gates"}},
+		{Name: "native_low_risk_verification", Supported: true, Requires: []string{"compact_v2_authority"}},
 		{Name: "risk_reasons", Supported: true, Requires: []string{"repository_independent_capabilities"}},
+		{Name: "scope_change_diagnostics", Supported: true, Requires: []string{"uniform_failure_envelope"}},
 	}
 	if !reflect.DeepEqual(result.Features.Mandatory, wantMandatory) || !reflect.DeepEqual(result.Features.Optional, wantOptional) {
 		t.Fatalf("feature requirements = %#v", result.Features)
 	}
 	if result.Compatibility.LegacyWindow.State != "active" || !result.Compatibility.LegacyWindow.ReadOnly || !result.Compatibility.LegacyWindow.DeprecationStarted || result.Compatibility.LegacyWindow.Removal != "not-scheduled" || result.Compatibility.LegacyWindow.MinimumCompatibilityReleases != 1 {
 		t.Fatalf("legacy compatibility window = %#v", result.Compatibility.LegacyWindow)
+	}
+	result.Features.Optional = result.Features.Optional[3:4]
+	if err := result.Validate(); err == nil {
+		t.Fatal("capabilities accepted an incomplete optional feature surface")
 	}
 }
 
@@ -277,6 +285,9 @@ func TestReviewIntegrationDocumentationMatchesRuntimeContract(t *testing.T) {
 		"six strict JSON Schemas", "eight deterministic conformance fixtures",
 		"Legacy-v1 never reports `publication_pending`", "retry and replay disabled",
 		"Historical `ordinary_4r` legacy status omits `frozen`", "START, finalize, BIND-SDD, invalidation, and direct append",
+		"`native_low_risk_verification`", "`selected_lenses: []`", "`receipt_scope_changed`",
+		"25-second aggregate budget", "15-second budget", "20-second budget", "one-second wait delay",
+		"Persistent compact `LOCK` JSON is advisory diagnostics", "`context.scope_change`", "`review.recover`",
 	} {
 		if !strings.Contains(document, required) {
 			t.Fatalf("review integration documentation is missing %q", required)
