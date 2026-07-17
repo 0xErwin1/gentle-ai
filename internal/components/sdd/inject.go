@@ -215,6 +215,35 @@ func overlayAssetPath(sddMode model.SDDModeID) string {
 	return "opencode/sdd-overlay-single.json"
 }
 
+var compatibilitySDDSkillIDs = []model.SkillID{
+	"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
+	"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive",
+	"sdd-onboard", "judgment-day",
+}
+
+// SkillDirectoryPaths returns every file that InjectSkillDirectory may write.
+func SkillDirectoryPaths(skillDir, capability string) ([]string, error) {
+	sharedFiles, err := assets.SharedSkillFileNames()
+	if err != nil {
+		return nil, fmt.Errorf("resolve SDD shared files: %w", err)
+	}
+	if len(sharedFiles) == 0 {
+		return nil, fmt.Errorf("resolve SDD shared files: embedded %s listing is empty", assets.SharedSkillDir)
+	}
+	paths := make([]string, 0, len(sharedFiles))
+	for _, fileName := range sharedFiles {
+		paths = append(paths, filepath.Join(skillDir, "_shared", fileName))
+	}
+	if capability == "" {
+		capability = "capable"
+	}
+	skillPaths, err := skills.DirectoryPaths(skillDir, compatibilitySDDSkillIDs, capability)
+	if err != nil {
+		return nil, fmt.Errorf("enumerate SDD skills: %w", err)
+	}
+	return append(paths, skillPaths...), nil
+}
+
 // InjectSkillDirectory refreshes the SDD skills and their shared references in
 // an already-selected skills directory. It is separate from adapter injection
 // so compatibility paths can be refreshed once per operation.
@@ -226,12 +255,6 @@ func InjectSkillDirectory(skillDir, capability string) (InjectionResult, error) 
 	if len(sharedFiles) == 0 {
 		return InjectionResult{}, fmt.Errorf("resolve SDD shared files: embedded %s listing is empty", assets.SharedSkillDir)
 	}
-	sddSkillIDs := []model.SkillID{
-		"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
-		"sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive",
-		"sdd-onboard", "judgment-day",
-	}
-
 	result := InjectionResult{}
 	for _, fileName := range sharedFiles {
 		assetPath := assets.SharedSkillDir + "/" + fileName
@@ -255,7 +278,7 @@ func InjectSkillDirectory(skillDir, capability string) (InjectionResult, error) 
 	if capability == "" {
 		capability = "capable"
 	}
-	sddResult, err := skills.InjectDirectoryWithCapability(skillDir, sddSkillIDs, capability)
+	sddResult, err := skills.InjectDirectoryWithCapability(skillDir, compatibilitySDDSkillIDs, capability)
 	if err != nil {
 		return InjectionResult{}, fmt.Errorf("inject SDD skills: %w", err)
 	}

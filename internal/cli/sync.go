@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -474,7 +475,7 @@ func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, er
 
 func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 	adapters := resolveAdapters(r.agentIDs)
-	targets := syncBackupTargets(r.homeDir, r.workspaceDir, r.selection, adapters)
+	targets, targetErr := syncBackupTargets(r.homeDir, r.workspaceDir, r.selection, adapters)
 	r.managedPaths = targets
 
 	prepare := []pipeline.Step{
@@ -483,6 +484,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 			snapshotter: backup.NewSnapshotter(),
 			snapshotDir: filepath.Join(r.backupRoot, time.Now().UTC().Format("20060102150405.000000000")),
 			targets:     targets,
+			targetErr:   targetErr,
 			state:       r.state,
 			backupRoot:  r.backupRoot,
 			source:      backup.BackupSourceSync,
@@ -565,7 +567,7 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 // before sync executes. Uses syncComponentPaths so that the backup/verify
 // contract matches the actual files sync touches (which differ from install
 // for ComponentPersona — see syncComponentPaths).
-func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) []string {
+func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
 	paths := map[string]struct{}{}
 	for _, component := range selection.Components {
 		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
@@ -599,8 +601,19 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 			paths[filepath.Join(pluginsDir, name)] = struct{}{}
 		}
 	}
+	adapterSkillPaths, err := adapterSkillBackupTargets(homeDir, workspaceDir, ScopeGlobal, selection, adapters)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range adapterSkillPaths {
+		paths[path] = struct{}{}
+	}
 	if needsCompatibilitySkillsRefresh(selection.Components) {
-		for _, path := range existingCompatibilitySkillFiles(homeDir) {
+		compatibilityPaths, err := compatibilitySkillFiles(homeDir, selection.Components, selection)
+		if err != nil {
+			return nil, err
+		}
+		for _, path := range compatibilityPaths {
 			paths[path] = struct{}{}
 		}
 	}
@@ -617,7 +630,8 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 	for path := range paths {
 		targets = append(targets, path)
 	}
-	return targets
+	sort.Strings(targets)
+	return targets, nil
 }
 
 // syncComponentPaths declares the file paths sync writes for a given component.

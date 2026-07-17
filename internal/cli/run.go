@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -601,7 +603,7 @@ func newInstallRuntime(homeDir string, scope InstallScope, channel InstallChanne
 }
 
 func (r *installRuntime) stagePlan() pipeline.StagePlan {
-	targets := backupTargets(r.homeDir, r.workspaceDir, r.scope, r.selection, r.resolved)
+	targets, targetErr := backupTargets(r.homeDir, r.workspaceDir, r.scope, r.selection, r.resolved)
 	prepare := []pipeline.Step{
 		checkDependenciesStep{id: "prepare:check-dependencies", profile: r.profile, homeDir: r.homeDir, selection: r.selection},
 		prepareBackupStep{
@@ -609,6 +611,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			snapshotter: backup.NewSnapshotter(),
 			snapshotDir: filepath.Join(r.backupRoot, time.Now().UTC().Format("20060102150405.000000000")),
 			targets:     targets,
+			targetErr:   targetErr,
 			state:       r.state,
 			backupRoot:  r.backupRoot,
 			source:      backup.BackupSourceInstall,
@@ -907,6 +910,7 @@ type prepareBackupStep struct {
 	snapshotter backup.Snapshotter
 	snapshotDir string
 	targets     []string
+	targetErr   error
 	state       *runtimeState
 
 	// backupRoot is the parent directory of all backup snapshots.
@@ -929,6 +933,9 @@ func (s prepareBackupStep) ID() string {
 }
 
 func (s prepareBackupStep) Run() error {
+	if s.targetErr != nil {
+		return fmt.Errorf("resolve backup targets: %w", s.targetErr)
+	}
 	// Deduplication: skip snapshot creation when content is identical to the
 	// most recent backup. Only active when backupRoot is set.
 	if s.backupRoot != "" {
@@ -1768,7 +1775,7 @@ func selectedSkillIDs(selection model.Selection) []model.SkillID {
 	return skills.SkillsForPreset(selection.Preset)
 }
 
-func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan) []string {
+func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, resolved planner.ResolvedPlan) ([]string, error) {
 	paths := map[string]struct{}{}
 	adapters := resolveAdapters(resolved.Agents)
 
@@ -1790,8 +1797,19 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	for _, path := range routingGuidancePaths(homeDir, workspaceDir, scope, adapters) {
 		paths[path] = struct{}{}
 	}
+	adapterSkillPaths, err := adapterSkillBackupTargets(homeDir, workspaceDir, scope, selection, adapters)
+	if err != nil {
+		return nil, err
+	}
+	for _, path := range adapterSkillPaths {
+		paths[path] = struct{}{}
+	}
 	if needsCompatibilitySkillsRefresh(resolved.OrderedComponents) {
-		for _, path := range existingCompatibilitySkillFiles(homeDir) {
+		compatibilityPaths, err := compatibilitySkillFiles(homeDir, resolved.OrderedComponents, selection)
+		if err != nil {
+			return nil, err
+		}
+		for _, path := range compatibilityPaths {
 			paths[path] = struct{}{}
 		}
 	}
@@ -1810,8 +1828,36 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	for path := range paths {
 		targets = append(targets, path)
 	}
+	sort.Strings(targets)
+	return targets, nil
+}
 
-	return targets
+func adapterSkillBackupTargets(homeDir, workspaceDir string, scope InstallScope, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
+	var paths []string
+	for _, adapter := range adapters {
+		if !adapter.SupportsSkills() {
+			continue
+		}
+		skillDir := adapter.SkillsDir(componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter))
+		if skillDir == "" {
+			continue
+		}
+		if slices.Contains(selection.Components, model.ComponentSkills) {
+			ordinary, err := skills.DirectoryPaths(skillDir, selectedSkillIDs(selection), "")
+			if err != nil {
+				return nil, fmt.Errorf("enumerate %s skill backup targets: %w", adapter.Agent(), err)
+			}
+			paths = append(paths, ordinary...)
+		}
+		if slices.Contains(selection.Components, model.ComponentSDD) {
+			sddPaths, err := sdd.SkillDirectoryPaths(skillDir, "")
+			if err != nil {
+				return nil, fmt.Errorf("enumerate %s SDD backup targets: %w", adapter.Agent(), err)
+			}
+			paths = append(paths, sddPaths...)
+		}
+	}
+	return paths, nil
 }
 
 // routingGuidancePaths declares the files agentRoutingGuidanceStep rewrites for

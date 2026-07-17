@@ -885,7 +885,10 @@ func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.
 	selection := model.Selection{Agents: []model.AgentID{agent}}
 	resolved := planner.ResolvedPlan{Agents: selection.Agents}
 
-	targets := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
 
 	routing, err := agentguidance.RoutingPaths(home, agent)
 	if err != nil {
@@ -927,7 +930,10 @@ func TestBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 	}
 	resolved := planner.ResolvedPlan{Agents: agentIDs, OrderedComponents: selection.Components}
 
-	targets := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	targets, err := backupTargets(home, "", ScopeGlobal, selection, resolved)
+	if err != nil {
+		t.Fatalf("backupTargets() error = %v", err)
+	}
 
 	assertNoDuplicatePaths(t, "backupTargets", targets)
 }
