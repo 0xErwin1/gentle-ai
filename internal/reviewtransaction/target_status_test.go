@@ -1,6 +1,7 @@
 package reviewtransaction
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -34,7 +35,18 @@ func TestAssessTargetStatusDerivesReceiptTruthWithoutMutation(t *testing.T) {
 		{
 			name: "approved derived receipt is published",
 			prepare: func(t *testing.T, repo, lineage string) CompactStore {
+				gitSnapshot(t, repo, "mv", "tracked.txt", "tracked.md")
+				gitSnapshot(t, repo, "commit", "-am", "low-risk base")
+				writeSnapshotFile(t, repo, "tracked.md", "next candidate\n")
 				_, store, _ := approvedCompactCurrentChangesFixture(t, repo, lineage, []string{})
+				payload, err := os.ReadFile(store.ReceiptPath())
+				if err != nil {
+					t.Fatal(err)
+				}
+				payload = bytes.Replace(payload, []byte(`"selected_lenses": []`), []byte(`"selected_lenses": null`), 1)
+				if err := os.WriteFile(store.ReceiptPath(), payload, 0o644); err != nil {
+					t.Fatal(err)
+				}
 				return store
 			},
 			wantApplicability: TargetApplicabilityCurrent,
@@ -237,6 +249,26 @@ func TestAssessTargetStatusRecognizesAuthorizedCorrection(t *testing.T) {
 	}
 }
 
+func TestCorrectionScopeExpansionGuidesStatusAndStartToRecovery(t *testing.T) {
+	repo, predecessor, _, _ := correctionScopeRecoveryFixture(t, "review-correction-expansion")
+	writeSnapshotFile(t, repo, "process_helper.go", "package processhelper\n")
+	target := Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{"process_helper.go"}}
+	status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target, LineageID: predecessor.LineageID})
+	if err != nil || status.Applicability != TargetApplicabilityCurrent || status.State != StateCorrectionRequired ||
+		status.Action != TargetStatusActionRecover || status.Replayability != ReplayabilityManualActionRequired {
+		t.Fatalf("expanded correction status = %#v, %v", status, err)
+	}
+	requested := newCompactStartStateForTarget(t, repo, "review-correction-expansion-new", target)
+	started, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
+	if err != nil || started.Action != CompactStartAction("recover") || started.Record.State.LineageID != predecessor.LineageID {
+		t.Fatalf("expanded correction start = %#v, %v", started, err)
+	}
+	requestedStore, _ := CompactAuthoritativeStore(context.Background(), repo, requested.LineageID)
+	if _, err := os.Stat(requestedStore.StatePath()); !os.IsNotExist(err) {
+		t.Fatalf("start published an unauthorized successor: %v", err)
+	}
+}
+
 func TestCompactTargetStatusUsesCurrentProofAndLiveProjection(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -308,6 +340,70 @@ func TestAssessTargetStatusIgnoresUnrelatedValidLegacyHistory(t *testing.T) {
 	}
 	if got.Applicability != TargetApplicabilityCurrent || got.AuthorityVersion != AuthorityVersionCompact || got.LineageID != compact.LineageID {
 		t.Fatalf("status = %#v", got)
+	}
+}
+
+func TestAssessTargetStatusKeepsExplicitCompactLineageCurrentWithInvalidLegacyInventory(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	head := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	legacySnapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetExactRevision, Revision: head})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyLineage := "legacy-invalid-history"
+	storeLegacyReviewingStatus(t, repo, legacyLineage, legacySnapshot)
+	legacyStore, err := AuthoritativeStore(context.Background(), repo, legacyLineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyStore.Dir, "HEAD"), []byte("not-a-revision\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	writeSnapshotFile(t, repo, "tracked.txt", "compact candidate\n")
+	compact := newCompactTestState(t, repo, "review-explicit-current")
+	storeCompactStartAuthority(t, repo, compact)
+	authorityRoot, _, err := reviewAuthorityRoot(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := authorityBytes(t, authorityRoot)
+	request := TargetStatusRequest{
+		Target:    Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}},
+		LineageID: compact.LineageID,
+	}
+	got, err := AssessTargetStatus(context.Background(), repo, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Applicability != TargetApplicabilityCurrent || got.AuthorityVersion != AuthorityVersionCompact ||
+		got.LineageID != compact.LineageID || got.Action != TargetStatusActionFinalize {
+		t.Fatalf("explicit compact status = %#v", got)
+	}
+
+	unscoped := request
+	unscoped.LineageID = ""
+	global, err := AssessTargetStatus(context.Background(), repo, unscoped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if global.Applicability != TargetApplicabilityCorrupted || global.Action != TargetStatusActionRepairAuthority {
+		t.Fatalf("unscoped invalid inventory did not fail closed: %#v", global)
+	}
+	report, err := InventoryAuthority(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidLegacyEvidence := false
+	for _, entry := range report.Entries {
+		invalidLegacyEvidence = invalidLegacyEvidence || entry.LineageID == legacyLineage && entry.Status == AuthorityStatusInvalid && len(entry.Problems) > 0
+	}
+	if report.Complete || report.Authoritative || !invalidLegacyEvidence {
+		t.Fatalf("invalid legacy inventory diagnostics = %#v", report)
+	}
+	if after := authorityBytes(t, authorityRoot); !reflect.DeepEqual(before, after) {
+		t.Fatal("target status or inventory mutated authority")
 	}
 }
 
