@@ -185,6 +185,34 @@ func TestIsDuplicate_IdenticalChecksum(t *testing.T) {
 	}
 }
 
+func TestDuplicateManifest_ReturnsExactMostRecentManifest(t *testing.T) {
+	backupDir := t.TempDir()
+	createdAt := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	makeTestBackup(t, backupDir, Manifest{
+		ID:        "backup-old",
+		CreatedAt: createdAt.Add(-time.Hour),
+		Checksum:  "abc123",
+		Entries:   []ManifestEntry{{OriginalPath: "/old"}},
+	})
+	makeTestBackup(t, backupDir, Manifest{
+		ID:        "backup-new",
+		CreatedAt: createdAt,
+		Checksum:  "abc123",
+		Entries:   []ManifestEntry{{OriginalPath: "/new"}},
+	})
+
+	manifest, duplicate, err := DuplicateManifest(backupDir, "abc123")
+	if err != nil {
+		t.Fatalf("DuplicateManifest() error = %v", err)
+	}
+	if !duplicate {
+		t.Fatal("DuplicateManifest() duplicate = false, want true")
+	}
+	if manifest.ID != "backup-new" || len(manifest.Entries) != 1 || manifest.Entries[0].OriginalPath != "/new" {
+		t.Fatalf("DuplicateManifest() = %+v, want exact most recent matching manifest", manifest)
+	}
+}
+
 // TestIsDuplicate_DifferentChecksum verifies that IsDuplicate returns false
 // when the most recent backup has a different Checksum.
 func TestIsDuplicate_DifferentChecksum(t *testing.T) {

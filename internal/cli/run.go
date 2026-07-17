@@ -932,6 +932,26 @@ func (s prepareBackupStep) ID() string {
 	return s.id
 }
 
+func manifestTargetsMatch(manifest backup.Manifest, targets []string) bool {
+	current := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		current[filepath.Clean(target)] = struct{}{}
+	}
+	historical := make(map[string]struct{}, len(manifest.Entries))
+	for _, entry := range manifest.Entries {
+		historical[entry.OriginalPath] = struct{}{}
+	}
+	if len(current) != len(historical) {
+		return false
+	}
+	for target := range current {
+		if _, ok := historical[target]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func (s prepareBackupStep) Run() error {
 	if s.targetErr != nil {
 		return fmt.Errorf("resolve backup targets: %w", s.targetErr)
@@ -941,11 +961,11 @@ func (s prepareBackupStep) Run() error {
 	if s.backupRoot != "" {
 		checksum, err := backup.ComputeChecksum(s.targets)
 		if err == nil && checksum != "" {
-			if dup, dupErr := backup.IsDuplicate(s.backupRoot, checksum); dupErr != nil {
+			if manifest, duplicate, dupErr := backup.DuplicateManifest(s.backupRoot, checksum); dupErr != nil {
 				log.Printf("backup: check duplicate: %v", dupErr)
-			} else if dup {
-				rollbackDir, err := os.MkdirTemp("", "gentle-ai-rollback-*")
-				if err != nil {
+				} else if dup {
+					rollbackDir, err := os.MkdirTemp("", "gentle-ai-rollback-*")
+					if err != nil {
 					return fmt.Errorf("create transaction snapshot directory: %w", err)
 				}
 				manifest, err := s.snapshotter.Create(rollbackDir, s.targets)
@@ -953,10 +973,10 @@ func (s prepareBackupStep) Run() error {
 					_ = os.RemoveAll(rollbackDir)
 					return fmt.Errorf("create transaction snapshot: %w", err)
 				}
-				s.state.manifest = manifest
-				s.state.rollbackSnapshotDir = rollbackDir
-				return nil
-			}
+					s.state.manifest = manifest
+					s.state.rollbackSnapshotDir = rollbackDir
+					return nil
+				}
 		}
 	}
 

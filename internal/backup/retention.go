@@ -77,6 +77,36 @@ func ComputeChecksum(paths []string) (string, error) {
 	return fmt.Sprintf("%x", composite), nil
 }
 
+// DuplicateManifest returns the most recent manifest when its checksum matches
+// newChecksum. It reports no match when the checksum is empty, no prior backup
+// exists, or the latest manifest predates checksum-based deduplication.
+// Directories without a manifest.json are silently skipped.
+func DuplicateManifest(backupDir string, newChecksum string) (Manifest, bool, error) {
+	if newChecksum == "" {
+		return Manifest{}, false, nil
+	}
+
+	manifests, err := listManifests(backupDir)
+	if err != nil {
+		return Manifest{}, false, err
+	}
+	if len(manifests) == 0 {
+		return Manifest{}, false, nil
+	}
+
+	// Find the most recent backup by CreatedAt.
+	latest := manifests[0]
+	for _, m := range manifests[1:] {
+		if m.CreatedAt.After(latest.CreatedAt) {
+			latest = m
+		}
+	}
+	if latest.Checksum == "" || latest.Checksum != newChecksum {
+		return Manifest{}, false, nil
+	}
+	return latest, true, nil
+}
+
 // IsDuplicate reports whether newChecksum matches the checksum of the most
 // recent backup found in backupDir.
 //
@@ -88,32 +118,8 @@ func ComputeChecksum(paths []string) (string, error) {
 // Directories inside backupDir that do not contain a manifest.json are
 // silently skipped.
 func IsDuplicate(backupDir string, newChecksum string) (bool, error) {
-	if newChecksum == "" {
-		return false, nil
-	}
-
-	manifests, err := listManifests(backupDir)
-	if err != nil {
-		return false, err
-	}
-
-	if len(manifests) == 0 {
-		return false, nil
-	}
-
-	// Find the most recent backup by CreatedAt.
-	latest := manifests[0]
-	for _, m := range manifests[1:] {
-		if m.CreatedAt.After(latest.CreatedAt) {
-			latest = m
-		}
-	}
-
-	if latest.Checksum == "" {
-		return false, nil
-	}
-
-	return latest.Checksum == newChecksum, nil
+	_, duplicate, err := DuplicateManifest(backupDir, newChecksum)
+	return duplicate, err
 }
 
 // Prune deletes the oldest unpinned backups in backupDir, keeping at most

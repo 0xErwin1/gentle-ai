@@ -245,12 +245,40 @@ func TestAdapterSkillBackupRollbackRemovesNewFiles(t *testing.T) {
 	}
 }
 
-func TestCompatibilityRefreshRollbackRemovesNewFiles(t *testing.T) {
+func TestPrepareBackupStep_CreatesSnapshotWhenDuplicateChecksumHasDifferentTargets(t *testing.T) {
+	home := t.TempDir()
+	backupRoot := filepath.Join(home, "backups")
+	existing := filepath.Join(home, "existing")
+	writeStale(t, existing)
+	if _, err := backup.NewSnapshotter().Create(filepath.Join(backupRoot, "first"), []string{existing}); err != nil {
+		t.Fatal(err)
+	}
+
+	freshDir := filepath.Join(backupRoot, "second")
+	state := &runtimeState{}
+	step := prepareBackupStep{snapshotter: backup.NewSnapshotter(), snapshotDir: freshDir,
+		targets: []string{existing, filepath.Join(home, "absent")}, state: state, backupRoot: backupRoot}
+	if err := step.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if state.manifest.RootDir != freshDir || len(state.manifest.Entries) != 2 {
+		t.Fatalf("reused stale manifest: root=%q entries=%d", state.manifest.RootDir, len(state.manifest.Entries))
+	}
+}
+
+func TestCompatibilityRefreshRollbackRemovesNewFilesAfterDuplicateBackup(t *testing.T) {
 	home := temporaryUserHome(t)
 	existing := filepath.Join(home, ".agents", "skills", "go-testing", "SKILL.md")
 	created := filepath.Join(home, ".agents", "skills", "go-testing", "references", "examples.md")
 	writeStale(t, existing)
 	selection := model.Selection{Components: []model.ComponentID{model.ComponentSkills}, Skills: []model.SkillID{model.SkillGoTesting}}
+	initialRuntime, err := newSyncRuntime(home, selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := initialRuntime.stagePlan().Prepare[0].Run(); err != nil {
+		t.Fatal(err)
+	}
 	runtime, err := newSyncRuntime(home, selection)
 	if err != nil {
 		t.Fatal(err)
