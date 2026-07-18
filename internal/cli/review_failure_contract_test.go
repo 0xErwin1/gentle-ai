@@ -150,21 +150,23 @@ func TestNegotiatedFailureLineageUsesCanonicalFlagParsing(t *testing.T) {
 	}
 }
 
-func TestNegotiatedStartLockFailuresAreTypedNonRetryableAndPreMutation(t *testing.T) {
+func TestNegotiatedStartLockFailuresPreservePreMutationRetryTruth(t *testing.T) {
 	lineage := "review-lock-boundary"
 	for _, tt := range []struct {
-		name string
-		err  error
-		code string
+		name  string
+		err   error
+		code  string
+		retry bool
+		next  string
 	}{
-		{name: "timeout", err: &reviewtransaction.AuthorityLockTimeoutError{}, code: "authority_lock_timeout"},
-		{name: "cancelled", err: &reviewtransaction.AuthorityLockCancelledError{}, code: "authority_lock_cancelled"},
+		{name: "timeout", err: &reviewtransaction.AuthorityLockTimeoutError{}, code: "authority_lock_timeout", retry: true, next: "retry_with_bounded_backoff"},
+		{name: "cancelled", err: &reviewtransaction.AuthorityLockCancelledError{}, code: "authority_lock_cancelled", next: "stop"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			failure := newReviewIntegrationFailure("review.start", []string{"--lineage", lineage}, tt.err)
 			if failure.Code != tt.code || failure.Phase != "pre_native" || failure.MutationOutcome != ReviewMutationNotStarted ||
-				failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired ||
-				failure.NextAction != "stop" || failure.LineageID != lineage {
+				failure.RetrySafe != tt.retry || failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired ||
+				failure.NextAction != tt.next || failure.LineageID != lineage {
 				t.Fatalf("lock failure = %#v", failure)
 			}
 			if err := failure.Validate(); err != nil {
@@ -639,11 +641,16 @@ func TestReviewIntegrationFailureSchemaAndFixtureAreStrict(t *testing.T) {
 	if failure.Code != "gate_scope_changed" || failure.Context == nil || failure.Context.ScopeChange == nil {
 		t.Fatalf("failure fixture = %#v", failure)
 	}
+	failure.Context.ScopeChange.Expected.PathsDigest = "invalid"
+	if err := failure.Validate(); err == nil {
+		t.Fatal("failure validation accepted malformed scope-change evidence")
+	}
 	var raw map[string]any
 	if err := json.Unmarshal(fixture, &raw); err != nil {
 		t.Fatal(err)
 	}
-	raw["unknown"] = true
+	contextObject := raw["context"].(map[string]any)
+	contextObject["scope_change"].(map[string]any)["paths"] = []string{"private/path"}
 	malformed, err := json.Marshal(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -651,7 +658,7 @@ func TestReviewIntegrationFailureSchemaAndFixtureAreStrict(t *testing.T) {
 	decoder := json.NewDecoder(bytes.NewReader(malformed))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&ReviewIntegrationFailure{}); err == nil {
-		t.Fatal("strict failure decoder accepted an unknown field")
+		t.Fatal("strict failure decoder accepted a private scope-change field")
 	}
 }
 

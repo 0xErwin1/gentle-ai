@@ -49,13 +49,15 @@ func TestOrchestratorsRequireNonSkippableGeneralDelegationTriggers(t *testing.T)
 			"stage every reviewed path",
 			"without changing content or mode",
 			"gentle-ai review validate --gate pre-commit --cwd <repo>",
+			"--lineage <known-lineage>",
 			"before push, PR, or release",
 			"content-bound receipt",
 			"gentle-ai review validate --gate <gate> --cwd <repo>",
-			"facade discover authority and artifacts",
+			"same exact `--lineage`",
+			"Never fall back to inventory discovery",
 			"launch a lens",
 			"Judgment Day",
-			"new budget at the gate",
+			"new budget at a repeated gate",
 		)(lifecycleLine) {
 			t.Fatalf("%s lifecycle gate must validate the existing receipt without launching a lens, Judgment Day, or a new budget: %q", path, lifecycleLine)
 		}
@@ -77,6 +79,15 @@ func TestOrchestratorsRequireNonSkippableGeneralDelegationTriggers(t *testing.T)
 			"`review/start(target)`",
 		)(freshReviewLine) {
 			t.Fatalf("%s fresh review rule must bind adversarial review to one explicit review/start target: %q", path, freshReviewLine)
+		}
+	}
+}
+
+func TestOrchestratorLifecycleGatesRetainKnownLineage(t *testing.T) {
+	for _, agent := range []string{"antigravity", "claude", "codex", "cursor", "gemini", "generic", "hermes", "kimi", "kiro", "opencode", "qwen", "windsurf"} {
+		content := MustRead(agent + "/sdd-orchestrator.md")
+		if !strings.Contains(content, "--lineage <known-lineage>") || strings.Contains(content, "Let the facade discover authority") {
+			t.Errorf("%s orchestrator does not retain exact lineage", agent)
 		}
 	}
 }
@@ -1647,11 +1658,13 @@ func boundedReviewRoutingProblems(content string) []string {
 				"before push, PR, or release",
 				"content-bound receipt",
 				"gentle-ai review validate --gate pre-commit --cwd <repo>",
+				"--lineage <known-lineage>",
 				"gentle-ai review validate --gate <gate> --cwd <repo>",
-				"facade discover authority and artifacts",
+				"same exact `--lineage`",
+				"Never fall back to inventory discovery",
 				"never launch a lens",
 				"Judgment Day",
-				"new budget at the gate",
+				"new budget at a repeated gate",
 				"stage every reviewed path",
 				"without changing content or mode",
 			),

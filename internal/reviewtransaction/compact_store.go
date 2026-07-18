@@ -71,8 +71,9 @@ const (
 )
 
 type CompactStartRequest struct {
-	State     CompactState
-	TracePath string
+	State           CompactState
+	TracePath       string
+	ExplicitLineage bool
 }
 
 type CompactStartResult struct {
@@ -427,6 +428,22 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 		return CompactStartResult{}, err
 	}
 	defer lock.release()
+	if request.ExplicitLineage {
+		record, loadErr := requestedStore.Load()
+		if loadErr == nil {
+			hasSuccessor, successorErr := explicitCompactSuccessor(ctx, requestedStore.repo, record)
+			if successorErr != nil {
+				return CompactStartResult{}, fmt.Errorf("validate explicit compact start successor: %w", successorErr)
+			}
+			if hasSuccessor {
+				return CompactStartResult{Record: record, Action: CompactStartBlocked}, nil
+			}
+			return resumeExplicitCompactStart(ctx, requestedStore, record, request.State)
+		}
+		if !errors.Is(loadErr, os.ErrNotExist) {
+			return CompactStartResult{}, fmt.Errorf("load explicit compact start authority: %w", loadErr)
+		}
+	}
 
 	stores, err := DiscoverCompactStores(ctx, requestedStore.repo)
 	if err != nil {
@@ -550,6 +567,83 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 		Record: record, Action: CompactStartCreated,
 		LensesRequired: len(request.State.SelectedLenses) > 0,
 	}, nil
+}
+
+func explicitCompactSuccessor(ctx context.Context, repo string, predecessor CompactRecord) (bool, error) {
+	stores, err := DiscoverCompactStores(ctx, repo)
+	if err != nil {
+		return false, err
+	}
+	needle := []byte(`"` + predecessor.State.LineageID + `"`)
+	children := 0
+	for _, store := range stores {
+		if store.lineageID == predecessor.State.LineageID {
+			continue
+		}
+		payload, readErr := os.ReadFile(store.StatePath())
+		if readErr != nil || !bytes.Contains(payload, needle) {
+			continue
+		}
+		record, parseErr := parseCompactRecord(payload, store.lineageID)
+		if parseErr != nil {
+			return false, fmt.Errorf("invalid related compact authority %q: %w", store.lineageID, parseErr)
+		}
+		if record.State.Recovery == nil || record.State.Recovery.PredecessorLineageID != predecessor.State.LineageID {
+			continue
+		}
+		if err := validateCompactRecoveryEdge(predecessor, record.State); err != nil {
+			return false, fmt.Errorf("invalid related compact authority %q: %w", store.lineageID, err)
+		}
+		children++
+		if children > 1 {
+			return false, fmt.Errorf("invalid compact authority graph: fork at %q", predecessor.State.LineageID)
+		}
+	}
+	return children == 1, nil
+}
+
+func resumeExplicitCompactStart(ctx context.Context, store CompactStore, record CompactRecord, requested CompactState) (CompactStartResult, error) {
+	existing := record.State
+	blocked := func() (CompactStartResult, error) {
+		return CompactStartResult{Record: record, Action: CompactStartBlocked}, nil
+	}
+	if existing.State == StateEscalated || compactHistoricalFailedValidator(existing) {
+		if compactStartDeliveryScopeMatches(existing, requested) &&
+			compactEscalatedRecoveryTargetChanged(existing.CurrentSnapshot, requested.InitialSnapshot) {
+			return CompactStartResult{Record: record, Action: CompactStartRecover}, nil
+		}
+		return blocked()
+	}
+	currentTarget := existing.State == StateCorrectionRequired || existing.State == StateValidating || existing.State == StateApproved
+	want := existing.InitialSnapshot
+	if currentTarget {
+		want = existing.CurrentSnapshot
+	}
+	if existing.PolicyHash != requested.PolicyHash || want.Identity != requested.InitialSnapshot.Identity ||
+		(SnapshotBuilder{Repo: store.repo}).ValidateEvidence(ctx, requested.InitialSnapshot) != nil {
+		return blocked()
+	}
+	switch existing.State {
+	case StateReviewing, StateCorrectionRequired, StateValidating:
+		return CompactStartResult{Record: record, Action: CompactStartResumed,
+			LensesRequired: len(existing.LensResults) < len(existing.SelectedLenses)}, nil
+	case StateApproved:
+		payload, err := os.ReadFile(store.ReceiptPath())
+		if err != nil {
+			if os.IsNotExist(err) {
+				return blocked()
+			}
+			return CompactStartResult{}, fmt.Errorf("load compact approved receipt: %w", err)
+		}
+		receipt, parseErr := ParseCompactReceipt(payload)
+		wantReceipt, receiptErr := existing.Receipt()
+		if parseErr != nil || receiptErr != nil || !compactReceiptEqual(receipt, wantReceipt) {
+			return blocked()
+		}
+		return CompactStartResult{Record: record, Action: CompactStartReuseReceipt}, nil
+	default:
+		return blocked()
+	}
 }
 
 func acquireCompactStartLock(ctx context.Context, path string) (*storeLock, error) {

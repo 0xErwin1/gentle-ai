@@ -830,6 +830,100 @@ func TestStartCompactAuthorityBlocksInvalidReceiptAndCorruptUnrelatedStore(t *te
 	})
 }
 
+func TestExplicitStartRequiresExactTargetAndPolicy(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state := newCompactTestState(t, repo, "compact-explicit-exact")
+	storeCompactStartAuthority(t, repo, state)
+
+	result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: state, ExplicitLineage: true})
+	if err != nil || result.Action != CompactStartResumed {
+		t.Fatalf("exact explicit START = %#v, %v", result, err)
+	}
+	changedPolicy := state
+	changedPolicy.PolicyHash = hash("2")
+	result, err = StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: changedPolicy, ExplicitLineage: true})
+	if err != nil || result.Action != CompactStartBlocked {
+		t.Fatalf("changed-policy explicit START = %#v, %v", result, err)
+	}
+}
+
+func TestExplicitStartChecksSelectedLineageSuccessorsWithoutMutation(t *testing.T) {
+	fixture := func(t *testing.T) (string, CompactStore, CompactStore, CompactState, []byte) {
+		t.Helper()
+		repo := initSnapshotRepo(t)
+		predecessor, predecessorStore, _ := approvedCompactRevisionFixture(t, repo, "compact-explicit-predecessor")
+		predecessorRecord, err := predecessorStore.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		original, err := os.ReadFile(filepath.Join(repo, "tracked.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeSnapshotFile(t, repo, "tracked.txt", "successor\n")
+		successor := newCompactTestState(t, repo, "compact-explicit-successor")
+		successor.Generation = predecessor.Generation + 1
+		if _, err := RecoverCompactAuthority(context.Background(), repo, CompactRecoveryRequest{
+			PredecessorLineageID: predecessor.LineageID, ExpectedPredecessorRevision: predecessorRecord.Revision,
+			Successor: successor, Disposition: RecoveryScopeChanged, Reason: "scope changed", Actor: "maintainer",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), original, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		request := newCompactTestState(t, repo, predecessor.LineageID)
+		successorStore, _ := CompactAuthoritativeStore(context.Background(), repo, successor.LineageID)
+		before, _ := os.ReadFile(predecessorStore.StatePath())
+		return repo, predecessorStore, successorStore, request, before
+	}
+
+	t.Run("valid child blocks predecessor and unrelated malformed is ignored", func(t *testing.T) {
+		repo, predecessorStore, _, request, before := fixture(t)
+		broken, _ := CompactAuthoritativeStore(context.Background(), repo, "compact-explicit-unrelated")
+		if err := os.MkdirAll(broken.Dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(broken.StatePath(), []byte("{\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: request, ExplicitLineage: true})
+		after, _ := os.ReadFile(predecessorStore.StatePath())
+		if err != nil || result.Action != CompactStartBlocked || !bytes.Equal(before, after) {
+			t.Fatalf("explicit predecessor retry = %#v, %v; mutated=%t", result, err, !bytes.Equal(before, after))
+		}
+	})
+
+	t.Run("related corruption fails closed", func(t *testing.T) {
+		repo, _, successorStore, request, _ := fixture(t)
+		payload, _ := os.ReadFile(successorStore.StatePath())
+		if err := os.WriteFile(successorStore.StatePath(), payload[:len(payload)-2], 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: request, ExplicitLineage: true}); err == nil {
+			t.Fatal("related corruption did not fail closed")
+		}
+	})
+
+	t.Run("fork fails closed", func(t *testing.T) {
+		repo, _, successorStore, request, _ := fixture(t)
+		child, err := successorStore.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		child.State.LineageID = "compact-explicit-fork"
+		_, payload, err := makeCompactRecord(child.State)
+		fork, _ := CompactAuthoritativeStore(context.Background(), repo, child.State.LineageID)
+		if err != nil || os.MkdirAll(fork.Dir, 0o755) != nil || os.WriteFile(fork.StatePath(), payload, 0o644) != nil {
+			t.Fatalf("write fork fixture: %v", err)
+		}
+		if _, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: request, ExplicitLineage: true}); err == nil || !strings.Contains(err.Error(), "fork") {
+			t.Fatalf("fork error = %v", err)
+		}
+	})
+}
+
 func TestCompactStoreReplacesCurrentStateWithCASAndExactRetry(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -1004,6 +1098,11 @@ func TestCompactHistoricalFailedValidatorRecoveryPreservesPredecessor(t *testing
 	if !bytes.Equal(before, afterLoad) {
 		t.Fatal("legacy multi-attempt load migrated persisted bytes")
 	}
+	explicit := newCompactTestState(t, repo, state.LineageID)
+	started, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: explicit, ExplicitLineage: true})
+	if err != nil || started.Action != CompactStartBlocked {
+		t.Fatalf("historical failed-validator explicit START = %#v, %v", started, err)
+	}
 	successor := newCompactTestState(t, repo, "legacy-failed-validator-g2")
 	successor.Generation = state.Generation + 1
 	request := CompactRecoveryRequest{PredecessorLineageID: state.LineageID, ExpectedPredecessorRevision: record.Revision, Successor: successor,
@@ -1013,6 +1112,11 @@ func TestCompactHistoricalFailedValidatorRecoveryPreservesPredecessor(t *testing
 		t.Fatalf("historical recovery accepted same target: %v", err)
 	}
 	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nchanged-again\n")
+	explicit = newCompactTestState(t, repo, state.LineageID)
+	started, err = StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: explicit, ExplicitLineage: true})
+	if err != nil || started.Action != CompactStartRecover {
+		t.Fatalf("changed historical failed-validator explicit START = %#v, %v", started, err)
+	}
 	request.Successor = newCompactTestState(t, repo, successor.LineageID)
 	request.Successor.Generation = state.Generation + 1
 	request.MaintainerAuthorization = compactRecoveryAuthorizationBinding(state.LineageID, record.Revision, request.Successor.InitialSnapshot.Identity, request.Actor, request.Reason)
