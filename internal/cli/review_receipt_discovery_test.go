@@ -394,7 +394,7 @@ func TestUnqualifiedPrePRDiscoveryComposesSequentialReceiptsForSamePath(t *testi
 	runReviewCLIGit(t, repo, "remote", "add", "origin", remote)
 
 	for index, lineage := range []string{"review-chain-overlap-first", "review-chain-overlap-second", "review-chain-overlap-third"} {
-		approveDiscoveryMarkdown(t, repo, lineage, "docs/shared.md", "reviewed "+string(rune('a'+index))+"\n")
+		approveDiscoveryMarkdown(t, repo, lineage, "docs/shared.md", "reviewed "+strings.Repeat(string(rune('a'+index)), index+1)+"\n")
 		runReviewCLIGit(t, repo, "add", "-A")
 		runReviewCLIGit(t, repo, "commit", "-qm", "deliver "+lineage)
 	}
