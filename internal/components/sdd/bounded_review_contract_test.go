@@ -13,8 +13,10 @@ import (
 var boundedReviewRequiredClauses = []string{
 	"Parent orchestrator and native CLI only",
 	"gentle-ai review start",
-	"gentle-ai review finalize --result <file>",
-	"Native Go assigns missing lens/IDs",
+	"selected lens once in the foreground",
+	"gentle-ai review capture-result",
+	"repeated `--result-artifact '<manifest-json>'` arguments",
+	"Native Go validates, canonicalizes, persists, hashes, reopens, and binds results",
 	"Only `introduced`, `behavior-activated`, or `worsened`",
 	"Route `pre-existing` and `base-only` to follow-ups; `unknown` escalates",
 	"one correction transaction",

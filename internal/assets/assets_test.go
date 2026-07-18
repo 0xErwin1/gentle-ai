@@ -407,13 +407,43 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(opencode/plugins) error = %v", err)
 	}
-	if len(pluginEntries) != 2 {
-		t.Fatalf("opencode plugins count = %d, want 2", len(pluginEntries))
+	if len(pluginEntries) != 3 {
+		t.Fatalf("opencode plugins count = %d, want 3", len(pluginEntries))
 	}
-	wantPlugins := map[string]bool{"model-variants.ts": true, "skill-registry.ts": true}
+	wantPlugins := map[string]bool{"model-variants.ts": true, "review-result-artifacts.ts": true, "skill-registry.ts": true}
 	for _, entry := range pluginEntries {
 		if !wantPlugins[entry.Name()] {
 			t.Fatalf("unexpected plugin entry = %q", entry.Name())
+		}
+	}
+}
+
+func TestReviewResultArtifactsPluginContract(t *testing.T) {
+	source, err := Read("opencode/plugins/review-result-artifacts.ts")
+	if err != nil {
+		t.Fatalf("Read(review-result-artifacts.ts) error = %v", err)
+	}
+	for _, want := range []string{
+		`spawn("gentle-ai"`,
+		`"review", "capture-result"`,
+		`"--lineage", binding.lineage`,
+		`"--target", binding.target`,
+		`"--lens", binding.lens`,
+		`"--order", String(binding.order)`,
+		`"--input", "-"`,
+		`"tool.execute.before"`,
+		`output.args.background === true`,
+		`!BINDING.test(input.args.prompt)`,
+		`output.output = await captureResult`,
+		`export default ReviewResultArtifactsPlugin`,
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("review-result-artifacts.ts missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"writeFile", "link(", "chmod(", "createHash", "export {", "export const"} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("review-result-artifacts.ts must delegate native persistence; found %q", forbidden)
 		}
 	}
 }
