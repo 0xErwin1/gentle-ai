@@ -95,6 +95,10 @@ func TestReviewArtifactSubstitutionFailsBeforeMutation(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			repo, started, store, record, artifact := capturedArtifact(t)
 			original, _ := os.ReadFile(artifact.Path)
+			replacement := filepath.Join(t.TempDir(), "replacement.json")
+			if err := os.WriteFile(replacement, original, 0o600); err != nil {
+				t.Fatal(err)
+			}
 			switch kind {
 			case "directory":
 				_ = os.Remove(artifact.Path)
@@ -112,8 +116,12 @@ func TestReviewArtifactSubstitutionFailsBeforeMutation(t *testing.T) {
 			case "race":
 				reviewArtifactAfterLstat = func() {
 					reviewArtifactAfterLstat = func() {}
-					_ = os.Rename(artifact.Path, artifact.Path+".old")
-					_ = os.WriteFile(artifact.Path, original, 0o600)
+					if err := os.Rename(artifact.Path, artifact.Path+".old"); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Rename(replacement, artifact.Path); err != nil {
+						t.Fatal(err)
+					}
 				}
 				t.Cleanup(func() { reviewArtifactAfterLstat = func() {} })
 			}
