@@ -68,6 +68,7 @@ const (
 
 type ReviewReceiptDiscoveryError struct {
 	Kind       ReviewReceiptDiscoveryKind
+	Category   string
 	Candidates []string
 	Context    *reviewtransaction.GateContext
 }
@@ -622,7 +623,8 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(*lineage) == "" {
+	explicitLineage := strings.TrimSpace(*lineage) != ""
+	if !explicitLineage {
 		*lineage = "review-" + strings.TrimPrefix(snapshot.Identity, "sha256:")[:16]
 	}
 	legacy, err := reviewtransaction.AuthoritativeStore(ctx, root, *lineage)
@@ -644,7 +646,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		return fmt.Errorf("create compact facade review: %w", err)
 	}
 	started, err := reviewtransaction.StartCompactAuthority(ctx, root, reviewtransaction.CompactStartRequest{
-		State: state, TracePath: strings.TrimSpace(*tracePath),
+		State: state, TracePath: strings.TrimSpace(*tracePath), ExplicitLineage: explicitLineage,
 	})
 	if err != nil {
 		return fmt.Errorf("start compact facade review: %w", err)
@@ -1141,11 +1143,11 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 	}
 	report, err := reviewtransaction.InventoryAuthority(ctx, repo)
 	if err != nil || !report.Complete || !report.Authoritative {
-		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted}
+		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted, Category: reviewAuthorityCauseCategory(report, err)}
 	}
 	stores, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
 	if err != nil {
-		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted}
+		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted, Category: "record_or_graph_invalid"}
 	}
 	type candidate struct {
 		store      reviewtransaction.CompactStore
@@ -1244,6 +1246,26 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 	}
 	sort.Strings(allLineages)
 	return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewReceiptUnrelated, Candidates: allLineages}
+}
+
+func reviewAuthorityCauseCategory(report reviewtransaction.AuthorityStatusReport, inventoryErr error) string {
+	if inventoryErr != nil || len(report.Diagnostics) > 0 {
+		return "inventory_io_or_layout"
+	}
+	for _, lock := range report.Locks {
+		if lock.Status == reviewtransaction.AuthorityLockAmbiguous {
+			return "lock_ambiguous"
+		}
+	}
+	for _, entry := range report.Entries {
+		switch entry.Status {
+		case reviewtransaction.AuthorityStatusReset:
+			return "reset_residue"
+		case reviewtransaction.AuthorityStatusInvalid, reviewtransaction.AuthorityStatusCollision:
+			return "record_or_graph_invalid"
+		}
+	}
+	return "inventory_incomplete"
 }
 
 func legacyExactFacadeGateLineages(ctx context.Context, repo string, input reviewtransaction.NativeGateRequestInput) int {

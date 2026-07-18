@@ -309,6 +309,62 @@ func TestNegotiatedReviewStartRejectsInvalidContractsBeforeAuthorityMutation(t *
 	}
 }
 
+func TestExplicitReviewStartRetriesAcrossSharedCommonDirWithoutReconstruction(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	linked := filepath.Join(t.TempDir(), "linked")
+	runReviewCLIGit(t, repo, "worktree", "add", "--detach", linked, "HEAD")
+	for _, root := range []string{repo, linked} {
+		if err := os.WriteFile(filepath.Join(root, "tracked.txt"), []byte("same candidate\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	lineage := "review-common-dir-retry"
+	start := func(root string) ([]byte, ReviewIntegrationStartResult) {
+		t.Helper()
+		var output bytes.Buffer
+		if err := RunReview([]string{"start", "--contract", ReviewIntegrationContractV1, "--cwd", root, "--lineage", lineage}, &output); err != nil {
+			t.Fatalf("START in %s: %v\n%s", root, err, output.String())
+		}
+		return append([]byte(nil), output.Bytes()...), decodeNegotiatedReviewStart(t, output.Bytes())
+	}
+	_, created := start(repo)
+	if created.Action != string(reviewtransaction.CompactStartCreated) || created.LineageID != lineage {
+		t.Fatalf("initial START = %#v", created)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	commonDir := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
+	broken := filepath.Join(commonDir, "gentle-ai", "review-transactions", "v2", "unrelated-broken")
+	if err := os.MkdirAll(broken, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(broken, "review-state.json"), []byte("{\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	firstRetry, resumed := start(linked)
+	secondRetry, resumedAgain := start(linked)
+	if resumed.Action != string(reviewtransaction.CompactStartResumed) || resumedAgain.Action != resumed.Action || !bytes.Equal(firstRetry, secondRetry) {
+		t.Fatalf("explicit START retries = %#v, %#v\n%s\n%s", resumed, resumedAgain, firstRetry, secondRetry)
+	}
+	if err := os.WriteFile(filepath.Join(linked, "tracked.txt"), []byte("different candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, blocked := start(linked)
+	if blocked.Action != string(reviewtransaction.CompactStartBlocked) || blocked.LineageID != lineage {
+		t.Fatalf("mismatched explicit START = %#v", blocked)
+	}
+	after, err := os.ReadFile(store.StatePath())
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("START retry mutated selected authority: %v", err)
+	}
+}
+
 func TestNegotiatedReviewStartSchemaAndFixtureAreStrict(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1")
 	schemaPayload, err := os.ReadFile(filepath.Join(root, "schemas", "start.schema.json"))
