@@ -2,6 +2,7 @@ package sddstatus
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -151,6 +152,8 @@ func readText(path string) string {
 	return string(content)
 }
 
+const incompatibleReviewTransactionReason = "bounded review transaction artifact is not a native JSON review transaction; regenerate it from native review authority"
+
 func readReviewTransaction(path, content string) (*reviewtransaction.Transaction, string) {
 	if path == "" && strings.TrimSpace(content) == "" {
 		return nil, "bounded review transaction is missing"
@@ -162,6 +165,12 @@ func readReviewTransaction(path, content string) (*reviewtransaction.Transaction
 			return nil, fmt.Sprintf("bounded review transaction cannot be read: %v", err)
 		}
 		payload = read
+	}
+	if !strings.HasPrefix(strings.TrimSpace(string(payload)), "{") {
+		if json.Valid(payload) {
+			return nil, "bounded review transaction is invalid: native review transaction must be a JSON object"
+		}
+		return nil, incompatibleReviewTransactionReason
 	}
 	transaction, err := reviewtransaction.ParseTransaction(payload)
 	if err != nil {

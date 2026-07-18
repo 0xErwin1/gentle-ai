@@ -339,7 +339,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 			nextRecommended = "resolve-review"
 			blockedReasons = append(blockedReasons, bindingErr.Error())
 		}
-	} else if applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || recoverable) && reviewState == nil {
+	} else if applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || recoverable) && compactBridgeableReviewArtifact(artifacts["reviewState"], reviewStateReason) {
 		fields, _ := authorityFailureFields(readText(firstPath(artifactPaths.VerifyReport)))
 		bridge = discoverCompactPreVerifyAuthority(context.Background(), workspaceRoot, changeName, fields["observed_authority_revision"])
 	}
@@ -499,7 +499,14 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	}
 	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyResult.Passing, remediationState.Complete)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, artifacts["verifyReport"] == ArtifactDone, remediationState)
-	applyPreVerifyReviewRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, reviewStateReason)
+	bridge := compactPreVerifyBridge{}
+	if applyState == ApplyAllDone && artifacts["verifyReport"] != ArtifactDone && compactBridgeableReviewArtifact(artifacts["reviewState"], reviewStateReason) {
+		bridge = discoverCompactPreVerifyAuthority(context.Background(), workspaceRoot, changeName, "")
+	}
+	applyPreVerifyCompactBridgeRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, bridge)
+	if !bridge.Eligible && !bridge.Relevant {
+		applyPreVerifyReviewRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, reviewStateReason)
+	}
 
 	changeRoot := fmt.Sprintf("engram:sdd/%s", changeName)
 	status := baseStatus(workspaceRoot, &changeName, &changeRoot, nextRecommended, blockedReasons)
@@ -524,6 +531,10 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		status.PhaseInstructions = &instructions
 	}
 	return status, true, nil
+}
+
+func compactBridgeableReviewArtifact(state ArtifactState, reason string) bool {
+	return state == ArtifactMissing || reason == incompatibleReviewTransactionReason
 }
 
 func blockedEngramStatus(workspaceRoot string, changeName *string, next string, reasons []string, includeInstructions bool) Status {
