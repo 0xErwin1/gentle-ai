@@ -397,6 +397,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	focus := flags.String("focus", "reliability", "dominant standard-risk focus; large pure documentation always uses readability")
 	baseRef := flags.String("base-ref", "", "optional base revision for immutable base-to-HEAD review")
 	committedOnly := flags.Bool("committed-only", false, "acknowledge that --base-ref excludes dirty tracked changes")
+	releaseScope := flags.Bool("release-scope", false, "recover an approved current-changes review into the immutable HEAD first-parent release scope")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -425,7 +426,16 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	base := strings.TrimSpace(*baseRef)
 	baseDiff := predecessorRecord.State.InitialSnapshot.Kind == reviewtransaction.TargetBaseDiff
 	overlay := predecessorRecord.State.InitialSnapshot.Kind == reviewtransaction.TargetBaseWorkspaceOverlay
-	if *committedOnly != (base != "") || baseDiff != *committedOnly {
+	if *releaseScope && (base != "" || *committedOnly) {
+		return errors.New("--release-scope cannot be combined with --base-ref or --committed-only")
+	}
+	if *releaseScope && reviewtransaction.RecoveryDisposition(*disposition) != reviewtransaction.RecoveryScopeChanged {
+		return errors.New("--release-scope requires --disposition scope_changed")
+	}
+	if *releaseScope && predecessorRecord.State.InitialSnapshot.Kind != reviewtransaction.TargetCurrentChanges {
+		return errors.New("--release-scope requires a current-changes predecessor")
+	}
+	if !*releaseScope && (*committedOnly != (base != "") || baseDiff != *committedOnly) {
 		return errors.New("base-diff recovery requires matching --base-ref and --committed-only")
 	}
 	projection := predecessorRecord.State.InitialSnapshot.Projection
@@ -442,14 +452,19 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	} else if overlay {
 		target.Kind, target.BaseRef = reviewtransaction.TargetBaseWorkspaceOverlay, predecessorRecord.State.InitialSnapshot.BaseTree
 	}
-	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: root}).Build(context.Background(), target)
+	var snapshot reviewtransaction.Snapshot
+	if *releaseScope {
+		snapshot, err = reviewtransaction.BuildReleaseScopeSnapshot(context.Background(), root)
+	} else {
+		snapshot, err = builder.Build(context.Background(), target)
+	}
 	if err != nil {
 		return err
 	}
-	if (baseDiff || overlay) && snapshot.BaseTree != predecessorRecord.State.InitialSnapshot.BaseTree {
+	if !*releaseScope && (baseDiff || overlay) && snapshot.BaseTree != predecessorRecord.State.InitialSnapshot.BaseTree {
 		return errors.New("recovery base-ref does not match predecessor base")
 	}
-	if (baseDiff || overlay) && snapshot.Identity == predecessorRecord.State.InitialSnapshot.Identity {
+	if !*releaseScope && (baseDiff || overlay) && snapshot.Identity == predecessorRecord.State.InitialSnapshot.Identity {
 		return errors.New("recovery scope has not changed")
 	}
 	assessment, err := (reviewtransaction.SnapshotBuilder{Repo: root}).AssessSnapshotRisk(context.Background(), snapshot)
@@ -471,6 +486,9 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	})
 	if err != nil {
 		return err
+	}
+	if *releaseScope {
+		*authorization = reviewtransaction.ReleaseScopeRecoveryAuthorization
 	}
 	record, err := reviewtransaction.RecoverCompactAuthority(context.Background(), root, reviewtransaction.CompactRecoveryRequest{
 		PredecessorLineageID: *predecessor, ExpectedPredecessorRevision: *expected, Successor: state,

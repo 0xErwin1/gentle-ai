@@ -108,6 +108,31 @@ type CompactRecoveryRequest struct {
 	MaintainerAuthorization     string
 }
 
+const ReleaseScopeRecoveryAuthorization = "gentle-ai.release-scope-recovery/v1"
+
+func BuildReleaseScopeSnapshot(ctx context.Context, repo string) (Snapshot, error) {
+	builder := SnapshotBuilder{Repo: repo}
+	root, err := builder.repositoryRoot(ctx)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	commitOutput, err := runGit(ctx, root, nil, nil, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil {
+		return Snapshot{}, err
+	}
+	commit := strings.TrimSpace(string(commitOutput))
+	if _, err := runGit(ctx, root, nil, nil, "rev-parse", "--verify", commit+"^2^{commit}"); err != nil {
+		return Snapshot{}, errors.New("release-scope recovery requires HEAD to be a merge commit")
+	}
+	snapshot, err := (SnapshotBuilder{Repo: root}).Build(ctx, Target{Kind: TargetExactRevision, Revision: commit})
+	if err != nil {
+		return Snapshot{}, err
+	}
+	snapshot.Kind = TargetBaseDiff
+	snapshot.Identity = snapshotIdentityForProjection(snapshot.Kind, snapshot.Projection, snapshot.BaseTree, snapshot.CandidateTree, snapshot.PathsDigest, snapshot.IntendedUntrackedProof, snapshot.IntendedUntracked, snapshot.LedgerIDs)
+	return snapshot, nil
+}
+
 func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRecoveryRequest) (CompactRecord, error) {
 	predecessorStore, err := CompactAuthoritativeStore(ctx, repo, request.PredecessorLineageID)
 	if err != nil {
@@ -184,6 +209,11 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 	if err := validateCompactRecoveryEdge(predecessor, request.Successor); err != nil {
 		return CompactRecord{}, err
 	}
+	if request.MaintainerAuthorization == ReleaseScopeRecoveryAuthorization {
+		if live, liveErr := BuildReleaseScopeSnapshot(ctx, successorStore.repo); liveErr != nil || !snapshotsEqual(live, request.Successor.InitialSnapshot) {
+			return CompactRecord{}, fmt.Errorf("%w: live release scope no longer matches successor", ErrInvalidSuccessor)
+		}
+	}
 	if err := validateCompactRepositoryEvidence(ctx, successorStore.repo, nil, request.Successor, "review/start"); err != nil {
 		return CompactRecord{}, fmt.Errorf("%w: %v", ErrInvalidSuccessor, err)
 	}
@@ -201,6 +231,17 @@ func compactRecoveryScopeChanged(previous, next Snapshot) bool {
 	return previous.CandidateTree != next.CandidateTree || previous.PathsDigest != next.PathsDigest || previous.Kind == next.Kind && previous.BaseTree != next.BaseTree
 }
 
+func compactReleaseScopeRecovery(predecessor CompactState, next Snapshot) bool {
+	previous := predecessor.CurrentSnapshot
+	if predecessor.InitialSnapshot.Kind != TargetCurrentChanges ||
+		(previous.Kind != TargetCurrentChanges && previous.Kind != TargetFixDiff) || next.Kind != TargetBaseDiff ||
+		previous.Projection != next.Projection || previous.CandidateTree != next.CandidateTree ||
+		len(next.Paths) <= len(predecessor.GenesisPaths) {
+		return false
+	}
+	return pathsAreSubset(predecessor.GenesisPaths, next.Paths) == nil
+}
+
 func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactState) error {
 	recovery := successor.Recovery
 	if recovery == nil || recovery.PredecessorLineageID != predecessor.State.LineageID {
@@ -216,7 +257,12 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 	case RecoveryScopeChanged:
 		switch predecessor.State.State {
 		case StateApproved:
-			if !compactRecoveryScopeChanged(predecessor.State.CurrentSnapshot, successor.InitialSnapshot) {
+			previous, next := predecessor.State.CurrentSnapshot, successor.InitialSnapshot
+			releaseScope := recovery.MaintainerAuthorization == ReleaseScopeRecoveryAuthorization
+			if releaseScope && !compactReleaseScopeRecovery(predecessor.State, next) {
+				return errors.New("approved recovery target-kind transition is not a complete release scope expansion")
+			}
+			if !releaseScope && !compactRecoveryScopeChanged(previous, next) {
 				return errors.New("approved predecessor scope has not changed")
 			}
 		case StateCorrectionRequired:
