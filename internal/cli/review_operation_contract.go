@@ -179,9 +179,35 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		Replayability: reviewtransaction.ReplayabilityStatusRequired, RequiredInputs: []string{}, NextAction: "review.status",
 	}
 	failure.LineageID = safeReviewIntegrationLineage(operation, args)
+	var replayMismatch *reviewtransaction.FinalizeAttemptReplayMismatchError
+	if errors.As(runErr, &replayMismatch) {
+		failure.Phase = "reconciliation"
+		failure.Code = "finalize_request_mismatch"
+		failure.Message = "The FINALIZE request differs from the durable incomplete attempt."
+		failure.MutationOutcome = ReviewMutationUnknown
+		failure.AuthorityApplicability = "current_target"
+		failure.RetrySafe = false
+		failure.Replayability = reviewtransaction.ReplayabilityStatusRequired
+		failure.LineageID = replayMismatch.LineageID
+		failure.RequiredInputs = []string{"lineage_id"}
+		failure.NextAction = "review.status"
+		return failure
+	}
 	var publication *ReviewFacadeReceiptPublicationError
 	if errors.As(runErr, &publication) {
 		failure.Phase = "native_committed"
+		if publication.Replayability == string(reviewtransaction.ReplayabilityManualActionRequired) {
+			failure.Code = "receipt_publication_conflict"
+			failure.Message = "Receipt publication conflicts with an existing immutable artifact."
+			failure.MutationOutcome = ReviewMutationCommitted
+			failure.AuthorityApplicability = "current_target"
+			failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
+			failure.LineageID = publication.LineageID
+			failure.RequestDigest = publication.RequestDigest
+			failure.RequiredInputs = []string{}
+			failure.NextAction = "explicit-maintainer-action"
+			return failure
+		}
 		failure.Code = "receipt_publication_pending"
 		failure.Message = "Receipt publication did not complete after terminal authority was committed."
 		failure.MutationOutcome = ReviewMutationCommitted
@@ -191,6 +217,20 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.RequestDigest = publication.RequestDigest
 		failure.RequiredInputs = []string{"lineage_id"}
 		failure.NextAction = "review.finalize"
+		return failure
+	}
+	var bindingPublication *sddstatus.ReviewBindingPublicationError
+	if errors.As(runErr, &bindingPublication) {
+		failure.Phase = "native_committed"
+		failure.Code = "binding_publication_pending"
+		failure.Message = "SDD review binding publication requires an exact replay to confirm directory durability."
+		failure.MutationOutcome = ReviewMutationCommitted
+		failure.AuthorityApplicability = "current_target"
+		failure.RetrySafe = true
+		failure.Replayability = reviewtransaction.ReplayabilityExactReplaySafe
+		failure.RequestDigest = facadeValueHash("bind-sdd-request", args)
+		failure.RequiredInputs = []string{"change", "lineage_id", "expected_binding_revision"}
+		failure.NextAction = ReviewIntegrationOperationBindSDD
 		return failure
 	}
 	var progress *reviewFacadeOperationProgressError
@@ -591,17 +631,29 @@ func (failure ReviewIntegrationFailure) Validate() error {
 	if failure.MutationOutcome == ReviewMutationUnknown && (failure.RetrySafe || failure.Replayability != reviewtransaction.ReplayabilityStatusRequired || failure.NextAction != "review.status") {
 		return errors.New("unknown negotiated review mutation must require status")
 	}
-	if failure.Replayability == reviewtransaction.ReplayabilityExactReplaySafe &&
-		(failure.MutationOutcome != ReviewMutationCommitted || failure.LineageID == "" || failure.RequestDigest == "" ||
-			len(failure.RequiredInputs) != 1 || failure.RequiredInputs[0] != "lineage_id" || failure.NextAction != "review.finalize") {
-		return errors.New("exact negotiated review replay is incomplete")
+	if failure.Replayability == reviewtransaction.ReplayabilityExactReplaySafe {
+		if failure.MutationOutcome != ReviewMutationCommitted || failure.LineageID == "" || failure.RequestDigest == "" {
+			return errors.New("exact negotiated review replay is incomplete")
+		}
+		switch failure.Operation {
+		case ReviewIntegrationOperationFinalize:
+			if !reflect.DeepEqual(failure.RequiredInputs, []string{"lineage_id"}) || failure.NextAction != ReviewIntegrationOperationFinalize {
+				return errors.New("exact negotiated review replay is incomplete")
+			}
+		case ReviewIntegrationOperationBindSDD:
+			if !reflect.DeepEqual(failure.RequiredInputs, []string{"change", "lineage_id", "expected_binding_revision"}) || failure.NextAction != ReviewIntegrationOperationBindSDD {
+				return errors.New("exact negotiated review replay is incomplete")
+			}
+		default:
+			return errors.New("exact negotiated review replay operation is unsupported")
+		}
 	}
 	return nil
 }
 
 func supportedReviewIntegrationFailureInput(input string) bool {
 	switch input {
-	case "lineage_id", "predecessor_lineage_id", "expected_predecessor_revision", "successor_lineage_id", "disposition", "reason", "actor":
+	case "lineage_id", "change", "expected_binding_revision", "predecessor_lineage_id", "expected_predecessor_revision", "successor_lineage_id", "disposition", "reason", "actor":
 		return true
 	default:
 		return false

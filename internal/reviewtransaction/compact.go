@@ -851,7 +851,7 @@ func WriteCompactReceiptAtomic(path string, receipt CompactReceipt) error {
 	if err != nil {
 		return err
 	}
-	return writeAtomic(path, append(payload, '\n'), 0o644)
+	return publishImmutable(path, append(payload, '\n'), 0o644)
 }
 
 func compactStateEqual(left, right CompactState) bool {

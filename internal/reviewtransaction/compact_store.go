@@ -1068,6 +1068,13 @@ func makeCompactRecord(state CompactState) (CompactRecord, []byte, error) {
 	return record, append(payload, '\n'), nil
 }
 
+// CompactRevisionForState derives the exact content-addressed revision without
+// writing authority. FINALIZE uses it for write-ahead successor planning.
+func CompactRevisionForState(state CompactState) (string, error) {
+	record, _, err := makeCompactRecord(state)
+	return record.Revision, err
+}
+
 func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error) {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()

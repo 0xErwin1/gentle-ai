@@ -186,6 +186,97 @@ func TestNegotiatedReviewStatusContractAndSchemasAreStrict(t *testing.T) {
 	}
 }
 
+func TestNegotiatedPendingFinalizeStatusMatchesPublishedSchema(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := startFacadeReview(t, repo)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := facadeFinalizeAttemptRequest(record, nil, nil, facadeRefuterResult{}, nil, 0, false)
+	if _, _, err := store.BeginFinalizeAttempt(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var status ReviewTargetStatusResult
+	decoder := json.NewDecoder(bytes.NewReader(output.Bytes()))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if err := status.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if status.Action != reviewtransaction.TargetStatusActionReconcileFinalize || status.Replayability != reviewtransaction.ReplayabilityStatusRequired || status.Reconciliation == nil || !status.Reconciliation.Required {
+		t.Fatalf("pending negotiated status = %#v", status)
+	}
+	assertStatusPayloadMatchesPublishedSchema(t, output.Bytes())
+	nonReconciliation := status
+	nonReconciliation.Action = reviewtransaction.TargetStatusActionFinalize
+	if err := nonReconciliation.Validate(); err == nil || !strings.Contains(err.Error(), "only pending finalize") {
+		t.Fatalf("non-reconciliation status accepted reconciliation metadata: %v", err)
+	}
+	unrelated := status
+	unrelated.Applicability = reviewtransaction.TargetApplicabilityUnrelated
+	unrelated.Authority = nil
+	unrelated.Frozen = nil
+	unrelated.Receipt = ReviewTargetStatusReceipt{Status: ReviewReceiptNotApplicable}
+	unrelated.Candidates = []string{}
+	if err := unrelated.Validate(); err == nil {
+		t.Fatal("unrelated target accepted reconcile_finalize")
+	}
+}
+
+func assertStatusPayloadMatchesPublishedSchema(t *testing.T, payload []byte) {
+	t.Helper()
+	schemaPath := filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas", "status.schema.json")
+	schemaBytes, err := os.ReadFile(schemaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Required   []string                   `json:"required"`
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(schemaBytes, &schema); err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range schema.Required {
+		if _, ok := document[required]; !ok {
+			t.Fatalf("status response misses schema-required property %q: %s", required, payload)
+		}
+	}
+	for field := range document {
+		if _, ok := schema.Properties[field]; !ok {
+			t.Fatalf("status response has property %q outside strict schema: %s", field, payload)
+		}
+	}
+	var reconciliation struct {
+		Required bool `json:"required"`
+	}
+	if err := json.Unmarshal(document["reconciliation"], &reconciliation); err != nil || !reconciliation.Required {
+		t.Fatalf("status response violates reconcile_finalize schema branch: %s (%v)", payload, err)
+	}
+	if !bytes.Contains(schemaBytes, []byte(`"applicability": { "const": "current_target" }`)) ||
+		!bytes.Contains(schemaBytes, []byte(`"else": { "not": { "required": ["reconciliation"] } }`)) {
+		t.Fatal("published status schema does not constrain reconciliation to current_target/reconcile_finalize")
+	}
+}
+
 func TestReviewTargetStatusProjectionRejectsNonCanonicalRepositoryPaths(t *testing.T) {
 	valid := ReviewTargetStatusProjection{
 		Schema: ReviewIntegrationProjectionSchema, Projection: reviewtransaction.ProjectionWorkspace,

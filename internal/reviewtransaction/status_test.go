@@ -2,6 +2,7 @@ package reviewtransaction
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -219,7 +220,11 @@ func TestInventoryAuthorityRejectsStructurallyValidReceiptsThatMismatchTerminalA
 				t.Helper()
 				_, store, receipt := approvedCompactCurrentChangesFixture(t, repo, "compact-stale-receipt", []string{})
 				receipt.PolicyHash = "sha256:" + strings.Repeat("a", 64)
-				if err := WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
+				payload, err := json.MarshalIndent(receipt, "", "  ")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(store.ReceiptPath(), append(payload, '\n'), 0o644); err != nil {
 					t.Fatal(err)
 				}
 			},

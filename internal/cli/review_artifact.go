@@ -141,7 +141,7 @@ func captureReviewerArtifact(storeDir string, state reviewtransaction.CompactSta
 	if err := temp.Close(); err != nil {
 		return reviewResultArtifact{}, err
 	}
-	if err := os.Link(temp.Name(), path); err != nil {
+	if err := reviewtransaction.PublishFileNoReplace(temp.Name(), path); err != nil {
 		if existing, readErr := readVerifiedReviewerArtifact(artifact, storeDir, state); readErr == nil && bytes.Equal(existing, payload) {
 			return artifact, nil
 		}

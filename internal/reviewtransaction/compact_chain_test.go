@@ -286,9 +286,7 @@ func TestCompactPrePRChainRejectsEscalatedAndSupersededMembers(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := WriteCompactReceiptAtomic(fixture.stores[1].ReceiptPath(), receipt); err != nil {
-			t.Fatal(err)
-		}
+		writeTestCompactReceipt(t, fixture.stores[1].ReceiptPath(), receipt)
 
 		got, attempted := EvaluateCompactPrePRChain(context.Background(), fixture.repo, fixture.input())
 		if !attempted || got.Result == GateAllow {

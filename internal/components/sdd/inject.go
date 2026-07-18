@@ -956,7 +956,7 @@ func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 		}
 		prompt, _ := reviewerPrompt(name)
 		agent["prompt"] = prompt
-		agent["tools"] = map[string]any{"read": true, "write": false, "edit": false, "bash": false, "task": false}
+		agent["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
 	}
 
 	for _, name := range []string{"jd-judge-a", "jd-judge-b"} {
@@ -965,12 +965,12 @@ func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
 			continue
 		}
 		agent["prompt"] = judgmentDayReviewerContract()
-		agent["tools"] = map[string]any{"read": true, "write": false, "edit": false, "bash": false, "task": false}
+		agent["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
 	}
 
 	if refuter, ok := agentsMap[opencode.ReviewRefuterAgent].(map[string]any); ok {
 		refuter["prompt"] = "You are the detached read-only refuter for exactly ONE transaction-wide inferential batch. Receive every inferential severe neutral claim and proof reference, return one corroborated | refuted | inconclusive result per finding, add no findings, modify nothing, return one complete result, and terminate. Missing or malformed entries are inconclusive."
-		refuter["tools"] = map[string]any{"read": true, "write": false, "edit": false, "bash": false, "task": false}
+		refuter["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
 	}
 }
 
