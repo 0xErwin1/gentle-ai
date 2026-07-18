@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -13,13 +14,17 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 )
 
-func assertScopeChangeRecovery(t *testing.T, failure ReviewIntegrationFailure, lineage, path string) {
+func assertScopeChangeRecovery(t *testing.T, failure ReviewIntegrationFailure, lineage, privatePath string) {
 	if failure.Context == nil || failure.Context.ScopeChange == nil {
 		t.Fatalf("scope-change context = %#v", failure)
 	}
 	scope := failure.Context.ScopeChange
-	if scope.PredecessorLineageID != lineage || scope.PredecessorRevision == "" || !reflect.DeepEqual(scope.DifferingPaths, []string{path}) || !reflect.DeepEqual(failure.RequiredInputs, []string{"predecessor_lineage_id", "expected_predecessor_revision", "successor_lineage_id", "disposition", "reason", "actor"}) || !reflect.DeepEqual(scope.RecoveryRequiredInputs, failure.RequiredInputs) {
+	if scope.PredecessorLineageID != lineage || scope.PredecessorRevision == "" || scope.Expected.CandidateTree == "" || scope.Expected.PathsDigest == "" || scope.Actual.CandidateTree == "" || scope.Actual.PathsDigest == "" || scope.DifferingPathCount != 1 || !reflect.DeepEqual(failure.RequiredInputs, []string{"predecessor_lineage_id", "expected_predecessor_revision", "successor_lineage_id", "disposition", "reason", "actor"}) || !reflect.DeepEqual(scope.RecoveryRequiredInputs, failure.RequiredInputs) {
 		t.Fatalf("scope-change provenance = %#v", failure)
+	}
+	payload, err := json.Marshal(failure)
+	if err != nil || strings.Contains(string(payload), privatePath) || strings.Contains(string(payload), `"paths"`) || strings.Contains(string(payload), `"differing_paths"`) {
+		t.Fatalf("scope-change failure exposed private paths: %s, %v", payload, err)
 	}
 }
 
@@ -285,15 +290,32 @@ func TestUnscopedGateDiscoveryFailsClosedOnMalformedUnrelatedInventory(t *testin
 	}
 
 	var explicit bytes.Buffer
-	if err := RunReview([]string{
-		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID,
-		"--gate", string(reviewtransaction.GatePostApply),
-	}, &explicit); err != nil {
-		t.Fatalf("explicit lineage was poisoned by unrelated inventory: %v\n%s", err, explicit.String())
+	statePath := filepath.Join(commonDir, "gentle-ai", "review-transactions", "v2", started.LineageID, "review-state.json")
+	before, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		var current bytes.Buffer
+		if err := RunReview([]string{
+			"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID,
+			"--gate", string(reviewtransaction.GatePostApply),
+		}, &current); err != nil {
+			t.Fatalf("explicit lineage was poisoned by unrelated inventory: %v\n%s", err, current.String())
+		}
+		if attempt == 0 {
+			explicit = current
+		} else if current.String() != explicit.String() {
+			t.Fatalf("repeated explicit validation changed bytes:\n%s\n%s", explicit.String(), current.String())
+		}
+	}
+	after, err := os.ReadFile(statePath)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("explicit validation mutated authority: %v", err)
 	}
 
 	var unscoped bytes.Buffer
-	err := RunReview([]string{
+	err = RunReview([]string{
 		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
 		"--gate", string(reviewtransaction.GatePostApply),
 	}, &unscoped)
@@ -301,8 +323,29 @@ func TestUnscopedGateDiscoveryFailsClosedOnMalformedUnrelatedInventory(t *testin
 		t.Fatal("unscoped discovery ignored malformed unrelated inventory")
 	}
 	failure := decodeReviewIntegrationFailure(t, unscoped.Bytes())
-	if failure.Code != "authority_corrupted" || failure.AuthorityApplicability != "corrupted" || failure.RetrySafe || failure.NextAction != "stop" {
+	if failure.Code != "authority_corrupted" || failure.AuthorityApplicability != "corrupted" || failure.CauseCategory != "record_or_graph_invalid" || failure.RetrySafe || failure.NextAction != "stop" {
 		t.Fatalf("corrupted inventory failure = %#v", failure)
+	}
+	if strings.Contains(unscoped.String(), broken) || strings.Contains(unscoped.String(), "not-a-revision") {
+		t.Fatalf("corrupted inventory failure exposed private payload: %s", unscoped.String())
+	}
+}
+
+func TestExplicitMalformedLineageFailsClosedWithoutMutation(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	started, store := approveDiscoveryMarkdown(t, repo, "review-selected-malformed", "docs/selected.md", "selected\n")
+	malformed := []byte("{\n")
+	if err := os.WriteFile(store.StatePath(), malformed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	err := RunReview([]string{"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID, "--gate", string(reviewtransaction.GatePostApply)}, &output)
+	if err == nil {
+		t.Fatal("selected malformed lineage validated")
+	}
+	after, readErr := os.ReadFile(store.StatePath())
+	if readErr != nil || !bytes.Equal(after, malformed) || strings.Contains(output.String(), store.StatePath()) || strings.Contains(output.String(), "unexpected end") {
+		t.Fatalf("selected malformed lineage was exposed or mutated: %v\n%s", readErr, output.String())
 	}
 }
 
@@ -351,7 +394,7 @@ func TestUnqualifiedPrePRDiscoveryComposesSequentialReceiptsForSamePath(t *testi
 	runReviewCLIGit(t, repo, "remote", "add", "origin", remote)
 
 	for index, lineage := range []string{"review-chain-overlap-first", "review-chain-overlap-second", "review-chain-overlap-third"} {
-		approveDiscoveryMarkdown(t, repo, lineage, "docs/shared.md", "reviewed "+string(rune('a'+index))+"\n")
+		approveDiscoveryMarkdown(t, repo, lineage, "docs/shared.md", "reviewed "+strings.Repeat(string(rune('a'+index)), index+1)+"\n")
 		runReviewCLIGit(t, repo, "add", "-A")
 		runReviewCLIGit(t, repo, "commit", "-qm", "deliver "+lineage)
 	}

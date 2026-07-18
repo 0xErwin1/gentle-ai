@@ -20,39 +20,15 @@
   ],
   "next_action": "explicit-maintainer-action",
   "context": {
-    "gate": "post-apply",
-    "lineage_id": "review-failure-fixture",
-    "generation": 1,
-    "store_revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "genesis_revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "chain_identity": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "bundle_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "base_tree": "1111111111111111111111111111111111111111",
-    "candidate_tree": "3333333333333333333333333333333333333333",
-    "paths_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-    "fix_delta_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-    "policy_hash": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-    "ledger_hash": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-    "evidence_hash": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
-    "base_relationship_valid": true,
-    "denial": {
-      "stage": "receipt-binding",
-      "code": "candidate-or-paths-mismatch"
-    },
     "scope_change": {
       "expected": {
-        "base_tree": "1111111111111111111111111111111111111111",
         "candidate_tree": "2222222222222222222222222222222222222222",
-        "paths_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "paths": ["docs/guide.md"]
+        "paths_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
       },
       "actual": {
-        "base_tree": "1111111111111111111111111111111111111111",
         "candidate_tree": "3333333333333333333333333333333333333333",
-        "paths_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-        "paths": ["docs/guide.md"]
+        "paths_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
       },
-      "differing_paths": ["docs/guide.md"],
       "differing_path_count": 1,
       "differing_paths_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
       "predecessor_lineage_id": "review-failure-fixture",

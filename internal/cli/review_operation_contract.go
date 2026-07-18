@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"reflect"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -37,21 +36,42 @@ const (
 )
 
 type ReviewIntegrationFailure struct {
-	Schema                 string                          `json:"schema"`
-	Contract               string                          `json:"contract"`
-	Operation              string                          `json:"operation"`
-	Phase                  string                          `json:"phase"`
-	Code                   string                          `json:"code"`
-	Message                string                          `json:"message"`
-	MutationOutcome        ReviewMutationOutcome           `json:"mutation_outcome"`
-	AuthorityApplicability string                          `json:"authority_applicability"`
-	RetrySafe              bool                            `json:"retry_safe"`
-	Replayability          reviewtransaction.Replayability `json:"replayability"`
-	LineageID              string                          `json:"lineage_id,omitempty"`
-	RequestDigest          string                          `json:"request_digest,omitempty"`
-	RequiredInputs         []string                        `json:"required_inputs"`
-	NextAction             string                          `json:"next_action"`
-	Context                *reviewtransaction.GateContext  `json:"context,omitempty"`
+	Schema                 string                           `json:"schema"`
+	Contract               string                           `json:"contract"`
+	Operation              string                           `json:"operation"`
+	Phase                  string                           `json:"phase"`
+	Code                   string                           `json:"code"`
+	Message                string                           `json:"message"`
+	MutationOutcome        ReviewMutationOutcome            `json:"mutation_outcome"`
+	AuthorityApplicability string                           `json:"authority_applicability"`
+	RetrySafe              bool                             `json:"retry_safe"`
+	Replayability          reviewtransaction.Replayability  `json:"replayability"`
+	LineageID              string                           `json:"lineage_id,omitempty"`
+	RequestDigest          string                           `json:"request_digest,omitempty"`
+	RequiredInputs         []string                         `json:"required_inputs"`
+	NextAction             string                           `json:"next_action"`
+	CauseCategory          string                           `json:"cause_category,omitempty"`
+	Context                *ReviewIntegrationFailureContext `json:"context,omitempty"`
+}
+
+type ReviewIntegrationFailureContext struct {
+	ScopeChange *ReviewIntegrationScopeChange `json:"scope_change"`
+}
+
+type ReviewIntegrationScopeChange struct {
+	Expected               ReviewIntegrationScopeTarget `json:"expected"`
+	Actual                 ReviewIntegrationScopeTarget `json:"actual"`
+	DifferingPathCount     int                          `json:"differing_path_count"`
+	DifferingPathsDigest   string                       `json:"differing_paths_digest"`
+	PredecessorLineageID   string                       `json:"predecessor_lineage_id"`
+	PredecessorRevision    string                       `json:"predecessor_revision"`
+	RecoveryOperation      string                       `json:"recovery_operation"`
+	RecoveryRequiredInputs []string                     `json:"recovery_required_inputs"`
+}
+
+type ReviewIntegrationScopeTarget struct {
+	CandidateTree string `json:"candidate_tree"`
+	PathsDigest   string `json:"paths_digest"`
 }
 
 type ReviewIntegrationFailureError struct {
@@ -256,9 +276,12 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		}
 		failure.MutationOutcome = ReviewMutationNotStarted
 		failure.AuthorityApplicability = "not_evaluated"
-		failure.RetrySafe = false
+		failure.RetrySafe = lockTimeout != nil
 		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
-		failure.NextAction = "stop"
+		failure.NextAction = "retry_with_bounded_backoff"
+		if lockCancelled != nil {
+			failure.NextAction = "stop"
+		}
 		return failure
 	}
 	var denied ReviewGateDeniedError
@@ -272,8 +295,7 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
 		failure.NextAction = reviewGateAction(denied.Result)
 		if denied.Context.Gate != "" && denied.Context.ScopeChange != nil {
-			contextCopy := denied.Context
-			failure.Context = &contextCopy
+			failure.Context = publicReviewScopeChangeContext(denied.Context.ScopeChange)
 		}
 		if denied.Result == reviewtransaction.GateScopeChanged && denied.Context.ScopeChange != nil {
 			failure.RetrySafe = false
@@ -299,11 +321,10 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 			failure.AuthorityApplicability = "not_evaluated"
 		case ReviewReceiptScopeChanged:
 			if discovery.Context != nil {
-				contextCopy := *discovery.Context
-				failure.Context = &contextCopy
+				failure.Context = publicReviewScopeChangeContext(discovery.Context.ScopeChange)
 				failure.AuthorityApplicability = "current_target"
-				if contextCopy.ScopeChange != nil {
-					failure.RequiredInputs = append([]string{}, contextCopy.ScopeChange.RecoveryRequiredInputs...)
+				if failure.Context != nil && failure.Context.ScopeChange != nil {
+					failure.RequiredInputs = append([]string{}, failure.Context.ScopeChange.RecoveryRequiredInputs...)
 				}
 			}
 			failure.NextAction = "explicit-maintainer-action"
@@ -313,6 +334,7 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 			failure.NextAction = "review.status"
 		case ReviewAuthorityCorrupted:
 			failure.AuthorityApplicability = "corrupted"
+			failure.CauseCategory = discovery.Category
 		}
 		return failure
 	}
@@ -326,6 +348,19 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.NextAction = "retry"
 	}
 	return failure
+}
+
+func publicReviewScopeChangeContext(scope *reviewtransaction.GateScopeChangeDiagnostics) *ReviewIntegrationFailureContext {
+	if scope == nil {
+		return nil
+	}
+	return &ReviewIntegrationFailureContext{ScopeChange: &ReviewIntegrationScopeChange{
+		Expected:           ReviewIntegrationScopeTarget{CandidateTree: scope.Expected.CandidateTree, PathsDigest: scope.Expected.PathsDigest},
+		Actual:             ReviewIntegrationScopeTarget{CandidateTree: scope.Actual.CandidateTree, PathsDigest: scope.Actual.PathsDigest},
+		DifferingPathCount: scope.DifferingPathCount, DifferingPathsDigest: scope.DifferingPathsDigest,
+		PredecessorLineageID: scope.PredecessorLineageID, PredecessorRevision: scope.PredecessorRevision,
+		RecoveryOperation: scope.RecoveryOperation, RecoveryRequiredInputs: append([]string{}, scope.RecoveryRequiredInputs...),
+	}}
 }
 
 func reviewOperationTimeoutFailure(failure ReviewIntegrationFailure, operation string) ReviewIntegrationFailure {
@@ -428,9 +463,10 @@ func reviewIntegrationOperationFlagShape(operation string) map[string]reviewInte
 	case "review.capabilities":
 	case "review.start":
 		valueFlags = append(valueFlags, "cwd", "lineage", "policy", "focus", "base-ref", "projection", "trace")
-		boolFlags = append(boolFlags, "committed-only")
+		boolFlags = append(boolFlags, "committed-only", "workspace-overlay")
 	case "review.status":
-		valueFlags = append(valueFlags, "cwd", "lineage", "projection", "base-ref")
+		valueFlags = append(valueFlags, "cwd", "lineage", "projection", "base-ref", "base-tree")
+		boolFlags = append(boolFlags, "workspace-overlay")
 	case ReviewIntegrationOperationFinalize:
 		valueFlags = append(valueFlags, "cwd", "lineage", "validation", "refuter", "evidence", "trace", "result")
 		boolFlags = append(boolFlags, "failed")
@@ -533,16 +569,16 @@ func (failure ReviewIntegrationFailure) Validate() error {
 		}
 	}
 	if failure.Context != nil {
-		if failure.Operation != ReviewIntegrationOperationValidate || failure.Context.Gate == "" {
+		if failure.Operation != ReviewIntegrationOperationValidate || failure.Context.ScopeChange == nil {
 			return errors.New("negotiated review failure context is not a gate denial")
 		}
-		if failure.Context.ScopeChange != nil {
-			scope := failure.Context.ScopeChange
-			if failure.Code != "gate_scope_changed" && failure.Code != "receipt_scope_changed" || failure.Context.Denial == nil || scope.DifferingPaths == nil ||
-				scope.Expected.Paths == nil || scope.Actual.Paths == nil || scope.DifferingPathCount != len(scope.DifferingPaths) ||
-				!sort.StringsAreSorted(scope.DifferingPaths) || !validReviewCapabilitySHA256(scope.DifferingPathsDigest) ||
+		if scope := failure.Context.ScopeChange; scope != nil {
+			if failure.Code != "gate_scope_changed" && failure.Code != "receipt_scope_changed" || scope.DifferingPathCount < 0 || scope.DifferingPathCount > 1000000 ||
+				!validReviewGitTree(scope.Expected.CandidateTree) || !validReviewCapabilitySHA256(scope.Expected.PathsDigest) ||
+				!validReviewGitTree(scope.Actual.CandidateTree) || !validReviewCapabilitySHA256(scope.Actual.PathsDigest) || !validReviewCapabilitySHA256(scope.DifferingPathsDigest) ||
 				!validReviewIntegrationLineage(scope.PredecessorLineageID) || !validReviewCapabilitySHA256(scope.PredecessorRevision) ||
-				scope.RecoveryOperation != "review.recover" || !reflect.DeepEqual(failure.RequiredInputs, scope.RecoveryRequiredInputs) {
+				scope.RecoveryOperation != "review.recover" || !reflect.DeepEqual(failure.RequiredInputs, scope.RecoveryRequiredInputs) ||
+				!reflect.DeepEqual(scope.RecoveryRequiredInputs, []string{"predecessor_lineage_id", "expected_predecessor_revision", "successor_lineage_id", "disposition", "reason", "actor"}) {
 				return errors.New("negotiated review scope-change diagnostics are incomplete")
 			}
 		}

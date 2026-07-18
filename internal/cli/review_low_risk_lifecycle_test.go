@@ -250,6 +250,40 @@ func TestLowRiskNativeVerificationSupportsStagedProjection(t *testing.T) {
 	}
 }
 
+func TestLowRiskNativeVerificationSupportsBaseWorkspaceOverlay(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	if err := os.MkdirAll(filepath.Join(repo, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "docs", "committed.md"), []byte("committed documentation\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "docs/committed.md")
+	runReviewCLIGit(t, repo, "commit", "-qm", "branch documentation")
+	if err := os.WriteFile(filepath.Join(repo, "docs", "overlay.md"), []byte("overlay documentation\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	if err := RunReviewFacadeStart([]string{
+		"--cwd", repo, "--base-ref", base, "--workspace-overlay", "--lineage", "low-risk-overlay",
+	}, &output); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	if err := RunReviewFacadeFinalize([]string{
+		"--cwd", repo, "--lineage", "low-risk-overlay",
+	}, &output); err != nil {
+		t.Fatalf("overlay empty FINALIZE: %v\n%s", err, output.String())
+	}
+	var finalized ReviewFacadeFinalizeResult
+	decodeStrictReviewJSON(t, output.Bytes(), &finalized)
+	if finalized.State != reviewtransaction.StateApproved {
+		t.Fatalf("overlay empty FINALIZE = %#v", finalized)
+	}
+}
+
 func TestMediumReviewCannotApproveWithoutExternalEvidence(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {

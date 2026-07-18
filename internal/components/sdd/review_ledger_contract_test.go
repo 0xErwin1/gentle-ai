@@ -20,7 +20,7 @@ const requiredOrchestratorMergeModeClause = "Parent orchestrator and native CLI 
 func TestBoundedReviewContractLeavesCanonicalizationToNativeGo(t *testing.T) {
 	content := boundedReviewContract()
 	for _, want := range []string{
-		"Native Go assigns missing lens/IDs",
+		"Native Go validates, canonicalizes, persists, hashes, reopens, and binds results",
 		"models never construct canonical bytes or hashes",
 		"Freeze merged findings",
 	} {
@@ -180,8 +180,8 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		wantChars     int
 		maxCharacters int
 	}{
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 6_459, maxCharacters: 7_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 13_650, maxCharacters: 16_000},
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 6_873, maxCharacters: 7_000},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 14_064, maxCharacters: 16_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

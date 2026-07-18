@@ -71,8 +71,9 @@ const (
 )
 
 type CompactStartRequest struct {
-	State     CompactState
-	TracePath string
+	State           CompactState
+	TracePath       string
+	ExplicitLineage bool
 }
 
 type CompactStartResult struct {
@@ -131,7 +132,7 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 	if predecessor.Revision != request.ExpectedPredecessorRevision {
 		return CompactRecord{}, fmt.Errorf("%w: expected predecessor revision %q, current %q", ErrConcurrentUpdate, request.ExpectedPredecessorRevision, predecessor.Revision)
 	}
-	if predecessor.State.State == StateCorrectionRequired && request.MaintainerAuthorization != compactRecoveryAuthorizationBinding(request.PredecessorLineageID, predecessor.Revision, request.Successor.InitialSnapshot.Identity, request.Actor, request.Reason) {
+	if predecessor.State.State == StateCorrectionRequired && request.Disposition != RecoveryEscalated && request.MaintainerAuthorization != compactRecoveryAuthorizationBinding(request.PredecessorLineageID, predecessor.Revision, request.Successor.InitialSnapshot.Identity, request.Actor, request.Reason) {
 		return CompactRecord{}, errors.New("correction-required scope recovery requires an exact maintainer authorization binding")
 	}
 	if predecessor.State.InitialSnapshot.Projection != request.Successor.InitialSnapshot.Projection {
@@ -233,16 +234,33 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 			return errors.New("recovery requires an invalidated predecessor")
 		}
 	case RecoveryEscalated:
-		if predecessor.State.State != StateEscalated {
+		historicalFailedValidator := compactHistoricalFailedValidator(predecessor.State)
+		if predecessor.State.State != StateEscalated && !historicalFailedValidator {
 			return errors.New("recovery requires an escalated predecessor")
 		}
-		if strings.TrimSpace(recovery.MaintainerAuthorization) == "" {
-			return errors.New("escalated recovery requires explicit maintainer authorization")
+		if !compactEscalatedRecoveryTargetChanged(predecessor.State.CurrentSnapshot, successor.InitialSnapshot) {
+			return errors.New("escalated recovery successor target has not changed")
+		}
+		if recovery.MaintainerAuthorization != compactRecoveryAuthorizationBinding(predecessor.State.LineageID, predecessor.Revision, successor.InitialSnapshot.Identity, recovery.Actor, recovery.Reason) {
+			return errors.New("escalated recovery requires an exact maintainer authorization binding")
 		}
 	default:
 		return errors.New("unsupported recovery disposition")
 	}
 	return nil
+}
+
+func compactEscalatedRecoveryTargetChanged(previous, next Snapshot) bool {
+	return previous.CandidateTree != next.CandidateTree && previous.Identity != next.Identity
+}
+
+func compactHistoricalFailedValidator(state CompactState) bool {
+	if state.State != StateCorrectionRequired || len(state.CorrectionAttempts) == 0 || state.ProposedCorrectionLines != nil || state.ActualCorrectionLines != nil ||
+		state.FixDeltaHash != EmptyFixDeltaHash || state.OriginalCriteria != nil || state.CorrectionRegression != nil {
+		return false
+	}
+	last := state.CorrectionAttempts[len(state.CorrectionAttempts)-1]
+	return !last.OriginalCriteria.Passed || !last.CorrectionRegression.Passed
 }
 
 func compactRecoveryAuthorizationBinding(lineage, revision, targetIdentity, actor, reason string) string {
@@ -410,6 +428,22 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 		return CompactStartResult{}, err
 	}
 	defer lock.release()
+	if request.ExplicitLineage {
+		record, loadErr := requestedStore.Load()
+		if loadErr == nil {
+			hasSuccessor, successorErr := explicitCompactSuccessor(ctx, requestedStore.repo, record)
+			if successorErr != nil {
+				return CompactStartResult{}, fmt.Errorf("validate explicit compact start successor: %w", successorErr)
+			}
+			if hasSuccessor {
+				return CompactStartResult{Record: record, Action: CompactStartBlocked}, nil
+			}
+			return resumeExplicitCompactStart(ctx, requestedStore, record, request.State)
+		}
+		if !errors.Is(loadErr, os.ErrNotExist) {
+			return CompactStartResult{}, fmt.Errorf("load explicit compact start authority: %w", loadErr)
+		}
+	}
 
 	stores, err := DiscoverCompactStores(ctx, requestedStore.repo)
 	if err != nil {
@@ -434,6 +468,15 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 	requestedClaims := false
 	for _, store := range leaves {
 		existing := records[store.lineageID].State
+		if existing.State == StateEscalated && compactStartDeliveryScopeMatches(existing, request.State) {
+			if compactEscalatedRecoveryTargetChanged(existing.CurrentSnapshot, request.State.InitialSnapshot) {
+				recoveryCandidates = append(recoveryCandidates, store)
+			} else {
+				claimants = append(claimants, store)
+				requestedClaims = requestedClaims || store.lineageID == request.State.LineageID
+			}
+			continue
+		}
 		if existing.State == StateCorrectionRequired {
 			claim := classifyCompactCorrectionTarget(ctx, requestedStore.repo, existing, request.State)
 			switch claim {
@@ -526,6 +569,83 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 	}, nil
 }
 
+func explicitCompactSuccessor(ctx context.Context, repo string, predecessor CompactRecord) (bool, error) {
+	stores, err := DiscoverCompactStores(ctx, repo)
+	if err != nil {
+		return false, err
+	}
+	needle := []byte(`"` + predecessor.State.LineageID + `"`)
+	children := 0
+	for _, store := range stores {
+		if store.lineageID == predecessor.State.LineageID {
+			continue
+		}
+		payload, readErr := os.ReadFile(store.StatePath())
+		if readErr != nil || !bytes.Contains(payload, needle) {
+			continue
+		}
+		record, parseErr := parseCompactRecord(payload, store.lineageID)
+		if parseErr != nil {
+			return false, fmt.Errorf("invalid related compact authority %q: %w", store.lineageID, parseErr)
+		}
+		if record.State.Recovery == nil || record.State.Recovery.PredecessorLineageID != predecessor.State.LineageID {
+			continue
+		}
+		if err := validateCompactRecoveryEdge(predecessor, record.State); err != nil {
+			return false, fmt.Errorf("invalid related compact authority %q: %w", store.lineageID, err)
+		}
+		children++
+		if children > 1 {
+			return false, fmt.Errorf("invalid compact authority graph: fork at %q", predecessor.State.LineageID)
+		}
+	}
+	return children == 1, nil
+}
+
+func resumeExplicitCompactStart(ctx context.Context, store CompactStore, record CompactRecord, requested CompactState) (CompactStartResult, error) {
+	existing := record.State
+	blocked := func() (CompactStartResult, error) {
+		return CompactStartResult{Record: record, Action: CompactStartBlocked}, nil
+	}
+	if existing.State == StateEscalated || compactHistoricalFailedValidator(existing) {
+		if compactStartDeliveryScopeMatches(existing, requested) &&
+			compactEscalatedRecoveryTargetChanged(existing.CurrentSnapshot, requested.InitialSnapshot) {
+			return CompactStartResult{Record: record, Action: CompactStartRecover}, nil
+		}
+		return blocked()
+	}
+	currentTarget := existing.State == StateCorrectionRequired || existing.State == StateValidating || existing.State == StateApproved
+	want := existing.InitialSnapshot
+	if currentTarget {
+		want = existing.CurrentSnapshot
+	}
+	if existing.PolicyHash != requested.PolicyHash || want.Identity != requested.InitialSnapshot.Identity ||
+		(SnapshotBuilder{Repo: store.repo}).ValidateEvidence(ctx, requested.InitialSnapshot) != nil {
+		return blocked()
+	}
+	switch existing.State {
+	case StateReviewing, StateCorrectionRequired, StateValidating:
+		return CompactStartResult{Record: record, Action: CompactStartResumed,
+			LensesRequired: len(existing.LensResults) < len(existing.SelectedLenses)}, nil
+	case StateApproved:
+		payload, err := os.ReadFile(store.ReceiptPath())
+		if err != nil {
+			if os.IsNotExist(err) {
+				return blocked()
+			}
+			return CompactStartResult{}, fmt.Errorf("load compact approved receipt: %w", err)
+		}
+		receipt, parseErr := ParseCompactReceipt(payload)
+		wantReceipt, receiptErr := existing.Receipt()
+		if parseErr != nil || receiptErr != nil || !compactReceiptEqual(receipt, wantReceipt) {
+			return blocked()
+		}
+		return CompactStartResult{Record: record, Action: CompactStartReuseReceipt}, nil
+	default:
+		return blocked()
+	}
+}
+
 func acquireCompactStartLock(ctx context.Context, path string) (*storeLock, error) {
 	timer := time.NewTimer(compactStartLockTimeout)
 	defer timer.Stop()
@@ -608,6 +728,12 @@ func classifyCompactCorrectionTarget(ctx context.Context, repo string, existing,
 		existing.InitialSnapshot.BaseTree != live.BaseTree || len(live.LedgerIDs) != 0 ||
 		(SnapshotBuilder{Repo: repo}).ValidateEvidence(ctx, live) != nil {
 		return compactCorrectionTargetUnclaimed
+	}
+	if compactHistoricalFailedValidator(existing) {
+		if compactEscalatedRecoveryTargetChanged(existing.CurrentSnapshot, live) {
+			return compactCorrectionTargetRecover
+		}
+		return compactCorrectionTargetBlocked
 	}
 	if compactRecoveryAddsGenesisPath(existing, live) {
 		return compactCorrectionTargetRecover
@@ -1015,6 +1141,19 @@ func ImportCompactTransport(ctx context.Context, repo string, transport CompactT
 	if legacy, legacyErr := AuthoritativeStore(ctx, repo, validated.Record.State.LineageID); legacyErr == nil {
 		if _, loadErr := legacy.LoadChain(); loadErr == nil {
 			return CompactRecord{}, errors.New("cannot import compact authority over an existing legacy v1 lineage")
+		}
+	}
+	if recovery := validated.Record.State.Recovery; recovery != nil {
+		predecessorStore, predecessorErr := CompactAuthoritativeStore(ctx, repo, recovery.PredecessorLineageID)
+		if predecessorErr != nil {
+			return CompactRecord{}, predecessorErr
+		}
+		predecessor, predecessorErr := predecessorStore.Load()
+		if predecessorErr != nil {
+			return CompactRecord{}, fmt.Errorf("load imported recovery predecessor: %w", predecessorErr)
+		}
+		if err := validateCompactRecoveryEdge(predecessor, validated.Record.State); err != nil {
+			return CompactRecord{}, fmt.Errorf("validate imported recovery edge: %w", err)
 		}
 	}
 	if err := store.installTransportRecord(ctx, validated.Record); err != nil {

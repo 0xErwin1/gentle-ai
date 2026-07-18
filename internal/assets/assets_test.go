@@ -49,13 +49,15 @@ func TestOrchestratorsRequireNonSkippableGeneralDelegationTriggers(t *testing.T)
 			"stage every reviewed path",
 			"without changing content or mode",
 			"gentle-ai review validate --gate pre-commit --cwd <repo>",
+			"--lineage <known-lineage>",
 			"before push, PR, or release",
 			"content-bound receipt",
 			"gentle-ai review validate --gate <gate> --cwd <repo>",
-			"facade discover authority and artifacts",
+			"same exact `--lineage`",
+			"Never fall back to inventory discovery",
 			"launch a lens",
 			"Judgment Day",
-			"new budget at the gate",
+			"new budget at a repeated gate",
 		)(lifecycleLine) {
 			t.Fatalf("%s lifecycle gate must validate the existing receipt without launching a lens, Judgment Day, or a new budget: %q", path, lifecycleLine)
 		}
@@ -77,6 +79,15 @@ func TestOrchestratorsRequireNonSkippableGeneralDelegationTriggers(t *testing.T)
 			"`review/start(target)`",
 		)(freshReviewLine) {
 			t.Fatalf("%s fresh review rule must bind adversarial review to one explicit review/start target: %q", path, freshReviewLine)
+		}
+	}
+}
+
+func TestOrchestratorLifecycleGatesRetainKnownLineage(t *testing.T) {
+	for _, agent := range []string{"antigravity", "claude", "codex", "cursor", "gemini", "generic", "hermes", "kimi", "kiro", "opencode", "qwen", "windsurf"} {
+		content := MustRead(agent + "/sdd-orchestrator.md")
+		if !strings.Contains(content, "--lineage <known-lineage>") || strings.Contains(content, "Let the facade discover authority") {
+			t.Errorf("%s orchestrator does not retain exact lineage", agent)
 		}
 	}
 }
@@ -396,13 +407,43 @@ func TestOpenCodeEmbeddedAssetLayout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadDir(opencode/plugins) error = %v", err)
 	}
-	if len(pluginEntries) != 2 {
-		t.Fatalf("opencode plugins count = %d, want 2", len(pluginEntries))
+	if len(pluginEntries) != 3 {
+		t.Fatalf("opencode plugins count = %d, want 3", len(pluginEntries))
 	}
-	wantPlugins := map[string]bool{"model-variants.ts": true, "skill-registry.ts": true}
+	wantPlugins := map[string]bool{"model-variants.ts": true, "review-result-artifacts.ts": true, "skill-registry.ts": true}
 	for _, entry := range pluginEntries {
 		if !wantPlugins[entry.Name()] {
 			t.Fatalf("unexpected plugin entry = %q", entry.Name())
+		}
+	}
+}
+
+func TestReviewResultArtifactsPluginContract(t *testing.T) {
+	source, err := Read("opencode/plugins/review-result-artifacts.ts")
+	if err != nil {
+		t.Fatalf("Read(review-result-artifacts.ts) error = %v", err)
+	}
+	for _, want := range []string{
+		`spawn("gentle-ai"`,
+		`"review", "capture-result"`,
+		`"--lineage", binding.lineage`,
+		`"--target", binding.target`,
+		`"--lens", binding.lens`,
+		`"--order", String(binding.order)`,
+		`"--input", "-"`,
+		`"tool.execute.before"`,
+		`output.args.background === true`,
+		`!BINDING.test(input.args.prompt)`,
+		`output.output = await captureResult`,
+		`export default ReviewResultArtifactsPlugin`,
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("review-result-artifacts.ts missing %q", want)
+		}
+	}
+	for _, forbidden := range []string{"writeFile", "link(", "chmod(", "createHash", "export {", "export const"} {
+		if strings.Contains(source, forbidden) {
+			t.Fatalf("review-result-artifacts.ts must delegate native persistence; found %q", forbidden)
 		}
 	}
 }
@@ -1647,11 +1688,13 @@ func boundedReviewRoutingProblems(content string) []string {
 				"before push, PR, or release",
 				"content-bound receipt",
 				"gentle-ai review validate --gate pre-commit --cwd <repo>",
+				"--lineage <known-lineage>",
 				"gentle-ai review validate --gate <gate> --cwd <repo>",
-				"facade discover authority and artifacts",
+				"same exact `--lineage`",
+				"Never fall back to inventory discovery",
 				"never launch a lens",
 				"Judgment Day",
-				"new budget at the gate",
+				"new budget at a repeated gate",
 				"stage every reviewed path",
 				"without changing content or mode",
 			),
