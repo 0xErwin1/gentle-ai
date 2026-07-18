@@ -463,9 +463,10 @@ func reviewIntegrationOperationFlagShape(operation string) map[string]reviewInte
 	case "review.capabilities":
 	case "review.start":
 		valueFlags = append(valueFlags, "cwd", "lineage", "policy", "focus", "base-ref", "projection", "trace")
-		boolFlags = append(boolFlags, "committed-only")
+		boolFlags = append(boolFlags, "committed-only", "workspace-overlay")
 	case "review.status":
-		valueFlags = append(valueFlags, "cwd", "lineage", "projection", "base-ref")
+		valueFlags = append(valueFlags, "cwd", "lineage", "projection", "base-ref", "base-tree")
+		boolFlags = append(boolFlags, "workspace-overlay")
 	case ReviewIntegrationOperationFinalize:
 		valueFlags = append(valueFlags, "cwd", "lineage", "validation", "refuter", "evidence", "trace", "result")
 		boolFlags = append(boolFlags, "failed")

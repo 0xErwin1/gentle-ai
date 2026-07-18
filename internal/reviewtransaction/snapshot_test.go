@@ -683,6 +683,42 @@ func TestSnapshotBuilderExactRevisionIgnoresReplacementObjects(t *testing.T) {
 	}
 }
 
+func TestBaseWorkspaceOverlayFreezesFullBoundaryWithoutMutation(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "committed.txt", "committed\n")
+	gitSnapshot(t, repo, "add", "committed.txt")
+	gitSnapshot(t, repo, "commit", "-m", "branch")
+	writeSnapshotFile(t, repo, "tracked.txt", "staged\n")
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	writeSnapshotFile(t, repo, "tracked.txt", "workspace wins\n")
+	writeSnapshotFile(t, repo, "new.txt", "intended\n")
+
+	beforeIndex := strings.TrimSpace(gitSnapshot(t, repo, "write-tree"))
+	beforeStatus := gitSnapshot(t, repo, "status", "--porcelain=v1")
+	target := Target{Kind: TargetBaseWorkspaceOverlay, BaseRef: base, IntendedUntracked: []string{"new.txt"}}
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(snapshot.Paths, []string{"committed.txt", "new.txt", "tracked.txt"}) || gitSnapshot(t, repo, "show", snapshot.CandidateTree+":tracked.txt") != "workspace wins\n" {
+		t.Fatalf("overlay snapshot = %#v", snapshot)
+	}
+	if strings.TrimSpace(gitSnapshot(t, repo, "write-tree")) != beforeIndex || gitSnapshot(t, repo, "status", "--porcelain=v1") != beforeStatus {
+		t.Fatal("overlay snapshot mutated the real index or worktree")
+	}
+
+	headBase, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetBaseWorkspaceOverlay, BaseRef: "HEAD", IntendedUntracked: []string{"new.txt"}})
+	if err != nil || headBase.CandidateTree != snapshot.CandidateTree || headBase.Identity == snapshot.Identity {
+		t.Fatalf("base identity binding = %#v, %v", headBase, err)
+	}
+	writeSnapshotFile(t, repo, "new.txt", "changed bytes\n")
+	changed, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), target)
+	if err != nil || changed.Identity == snapshot.Identity {
+		t.Fatalf("byte identity binding = %#v, %v", changed, err)
+	}
+}
+
 func initSnapshotRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()

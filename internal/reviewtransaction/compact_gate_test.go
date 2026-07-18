@@ -86,6 +86,54 @@ func TestCompactStagedPreCommitBindsIndexDespiteWorkspaceDivergence(t *testing.T
 	}
 }
 
+func TestBaseWorkspaceOverlayPreCommitUsesExactStagedIndexWithoutMutation(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "committed.txt", "committed\n")
+	gitSnapshot(t, repo, "add", "committed.txt")
+	gitSnapshot(t, repo, "commit", "-m", "branch")
+	writeSnapshotFile(t, repo, "tracked.txt", "overlay\n")
+	state := newCompactStartStateForTarget(t, repo, "overlay-precommit", Target{Kind: TargetBaseWorkspaceOverlay, BaseRef: base, IntendedUntracked: []string{}})
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, err := store.Replace("", "review/start", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make([]LensResult, len(state.SelectedLenses))
+	for index, lens := range state.SelectedLenses {
+		results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed"}}
+	}
+	if err := state.CompleteReview(CompactReviewInput{LensResults: results}); err != nil {
+		t.Fatal(err)
+	}
+	if revision, err = store.Replace(revision, "review/complete-review", state); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.CompleteVerification([]byte("verified\n"), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace(revision, "review/complete-verification", state); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := state.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitSnapshot(t, repo, "add", "tracked.txt")
+	beforeIndex := strings.TrimSpace(gitSnapshot(t, repo, "write-tree"))
+	beforeStatus := gitSnapshot(t, repo, "status", "--porcelain=v1")
+	got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{Gate: GatePreCommit, LineageID: state.LineageID})
+	if got.Result != GateAllow || got.Context.BaseTree != state.InitialSnapshot.BaseTree || got.Context.CandidateTree != state.InitialSnapshot.CandidateTree {
+		t.Fatalf("overlay pre-commit gate = %#v", got)
+	}
+	if strings.TrimSpace(gitSnapshot(t, repo, "write-tree")) != beforeIndex || gitSnapshot(t, repo, "status", "--porcelain=v1") != beforeStatus {
+		t.Fatal("overlay pre-commit mutated the real index or worktree")
+	}
+}
+
 func TestCompactPreCommitGatePreservesExactStagedIntendedTransition(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "reviewed tracked change\n")
@@ -679,6 +727,89 @@ func TestCompactCorrectedBaseDiffPrePushRejectsIntermediateUnreviewedPath(t *tes
 		t.Fatalf("publication range with hidden path = %#v", got)
 	}
 }
+
+func TestCompactBaseWorkspaceOverlayPublicationRejectsIntermediateUnreviewedPath(t *testing.T) {
+	for _, gate := range []GateKind{GatePrePush, GatePrePR} {
+		t.Run(string(gate), func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+			branch := currentBranch(context.Background(), repo)
+			configurePublicationRemote(t, repo, branch)
+			gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
+			gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+			writeSnapshotFile(t, repo, "committed.txt", "committed\n")
+			gitSnapshot(t, repo, "add", "committed.txt")
+			gitSnapshot(t, repo, "commit", "-m", "branch change")
+			writeSnapshotFile(t, repo, "tracked.txt", "overlay\n")
+			state := newCompactStartStateForTarget(t, repo, "overlay-hidden-range-"+string(gate), Target{
+				Kind: TargetBaseWorkspaceOverlay, BaseRef: base, IntendedUntracked: []string{},
+			})
+			state, receipt := persistApprovedCompactState(t, repo, state)
+			gitSnapshot(t, repo, "add", "tracked.txt")
+			gitSnapshot(t, repo, "commit", "-m", "overlay delivery")
+			writeSnapshotFile(t, repo, "secret.txt", "must never be published\n")
+			gitSnapshot(t, repo, "add", "secret.txt")
+			gitSnapshot(t, repo, "commit", "-m", "intermediate secret")
+			if err := os.Remove(filepath.Join(repo, "secret.txt")); err != nil {
+				t.Fatal(err)
+			}
+			gitSnapshot(t, repo, "add", "-A")
+			gitSnapshot(t, repo, "commit", "-m", "remove intermediate secret")
+
+			got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{
+				Gate: gate, LineageID: state.LineageID, BaseRef: "origin/" + branch,
+			})
+			if got.Result == GateAllow || !strings.Contains(got.Reason, "publication range exceeds immutable genesis scope") {
+				t.Fatalf("%s publication range with hidden path = %#v", gate, got)
+			}
+		})
+	}
+}
+
+func TestCompactBaseWorkspaceOverlayPublicationRejectsMergeResolutionPath(t *testing.T) {
+	for _, gate := range []GateKind{GatePrePush, GatePrePR} {
+		t.Run(string(gate), func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+			branch := currentBranch(context.Background(), repo)
+			configurePublicationRemote(t, repo, branch)
+			gitSnapshot(t, repo, "config", "branch."+branch+".remote", "origin")
+			gitSnapshot(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+			writeSnapshotFile(t, repo, "tracked.txt", "overlay\n")
+			state := newCompactStartStateForTarget(t, repo, "overlay-merge-resolution-"+string(gate), Target{
+				Kind: TargetBaseWorkspaceOverlay, BaseRef: base, IntendedUntracked: []string{},
+			})
+			state, receipt := persistApprovedCompactState(t, repo, state)
+			gitSnapshot(t, repo, "add", "tracked.txt")
+			gitSnapshot(t, repo, "commit", "-m", "reviewed delivery")
+			gitSnapshot(t, repo, "checkout", "-b", "merge-side", base)
+			writeSnapshotFile(t, repo, "side.txt", "side\n")
+			gitSnapshot(t, repo, "add", "side.txt")
+			gitSnapshot(t, repo, "commit", "-m", "side change")
+			gitSnapshot(t, repo, "checkout", branch)
+			gitSnapshot(t, repo, "merge", "--no-commit", "merge-side")
+			writeSnapshotFile(t, repo, "secret.txt", "merge resolution only\n")
+			gitSnapshot(t, repo, "add", "secret.txt")
+			gitSnapshot(t, repo, "commit", "-m", "merge with resolution path")
+			if err := os.Remove(filepath.Join(repo, "secret.txt")); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(repo, "side.txt")); err != nil {
+				t.Fatal(err)
+			}
+			gitSnapshot(t, repo, "add", "-A")
+			gitSnapshot(t, repo, "commit", "-m", "final reviewed tree")
+
+			got := EvaluateCompactGate(context.Background(), repo, receipt, NativeGateRequestInput{
+				Gate: gate, LineageID: state.LineageID, BaseRef: "origin/" + branch,
+			})
+			if got.Result == GateAllow || !strings.Contains(got.Reason, "publication range exceeds immutable genesis scope") {
+				t.Fatalf("%s merge-resolution publication path = %#v", gate, got)
+			}
+		})
+	}
+}
+
 func TestCompactCorrectedPreCommitBindsStagedIndexAndIgnoresWorkspace(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	state := correctedCompactTestStateWithIntended(t, repo, "compact-corrected-staged-index", []string{"new.txt"})

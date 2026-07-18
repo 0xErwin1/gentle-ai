@@ -16,6 +16,7 @@ repo = pathlib.Path(sys.argv[1]).resolve()
 dist_arg = sys.argv[2]
 contract_root = pathlib.PurePosixPath("contracts/review-integration/v1")
 expected_contract = [
+	contract_root / "fixtures/capabilities-v1.1.fixture.json",
     contract_root / "fixtures/capabilities.fixture.json",
     contract_root / "fixtures/failure.fixture.json",
     contract_root / "fixtures/operation.fixture.json",
@@ -24,6 +25,7 @@ expected_contract = [
     contract_root / "fixtures/status-corrupted.fixture.json",
     contract_root / "fixtures/status-unrelated.fixture.json",
     contract_root / "fixtures/status.fixture.json",
+	contract_root / "schemas/capabilities-v1.1.schema.json",
     contract_root / "schemas/capabilities.schema.json",
     contract_root / "schemas/failure.schema.json",
     contract_root / "schemas/operation.schema.json",
