@@ -434,12 +434,17 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`"tool.execute.before"`,
 		`output.args.background === true`,
 		`!BINDING.test(input.args.prompt)`,
+		`const lens = input.args.subagent_type`,
+		`const binding = parseBinding(input.args.prompt, lens)`,
 		`output.output = await captureResult`,
 		`export default ReviewResultArtifactsPlugin`,
 	} {
 		if !strings.Contains(source, want) {
 			t.Fatalf("review-result-artifacts.ts missing %q", want)
 		}
+	}
+	if strings.Contains(source, `.slice("review-".length)`) {
+		t.Fatal("review-result-artifacts.ts must preserve the exact full selected lens; found review- prefix stripping")
 	}
 	for _, forbidden := range []string{"writeFile", "link(", "chmod(", "createHash", "export {", "export const"} {
 		if strings.Contains(source, forbidden) {
