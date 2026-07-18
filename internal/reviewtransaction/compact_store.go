@@ -160,8 +160,12 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 	if predecessor.State.State == StateCorrectionRequired && request.Disposition != RecoveryEscalated && request.MaintainerAuthorization != compactRecoveryAuthorizationBinding(request.PredecessorLineageID, predecessor.Revision, request.Successor.InitialSnapshot.Identity, request.Actor, request.Reason) {
 		return CompactRecord{}, errors.New("correction-required scope recovery requires an exact maintainer authorization binding")
 	}
-	if predecessor.State.InitialSnapshot.Projection != request.Successor.InitialSnapshot.Projection {
+	if !sameRecoveryProjection(predecessor.State.InitialSnapshot.Projection, request.Successor.InitialSnapshot.Projection) && request.Disposition != RecoveryEscalated {
 		return CompactRecord{}, errors.New("recovery successor must retain the predecessor projection")
+	}
+	if !sameRecoveryProjection(predecessor.State.InitialSnapshot.Projection, request.Successor.InitialSnapshot.Projection) &&
+		request.MaintainerAuthorization != compactRecoveryAuthorizationBinding(request.PredecessorLineageID, predecessor.Revision, request.Successor.InitialSnapshot.Identity, request.Actor, request.Reason) {
+		return CompactRecord{}, compactRecoveryAuthorizationError(request.Successor.InitialSnapshot)
 	}
 	existing, existingErr := successorStore.Load()
 	if existingErr != nil && !os.IsNotExist(existingErr) {
@@ -214,6 +218,11 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 			return CompactRecord{}, fmt.Errorf("%w: live release scope no longer matches successor", ErrInvalidSuccessor)
 		}
 	}
+	if !sameRecoveryProjection(predecessor.State.InitialSnapshot.Projection, request.Successor.InitialSnapshot.Projection) {
+		if err := validateLiveRecoverySuccessor(ctx, successorStore.repo, request.Successor.InitialSnapshot); err != nil {
+			return CompactRecord{}, fmt.Errorf("%w: repository evidence for selected recovery projection changed: %v", ErrInvalidSuccessor, err)
+		}
+	}
 	if err := validateCompactRepositoryEvidence(ctx, successorStore.repo, nil, request.Successor, "review/start"); err != nil {
 		return CompactRecord{}, fmt.Errorf("%w: %v", ErrInvalidSuccessor, err)
 	}
@@ -225,6 +234,24 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 		return CompactRecord{}, err
 	}
 	return record, nil
+}
+
+func validateLiveRecoverySuccessor(ctx context.Context, repo string, expected Snapshot) error {
+	target := Target{
+		Kind: expected.Kind, Projection: expected.Projection, IntendedUntracked: expected.IntendedUntracked,
+		LedgerIDs: expected.LedgerIDs,
+	}
+	if expected.Kind == TargetBaseDiff || expected.Kind == TargetBaseWorkspaceOverlay || expected.Kind == TargetFixDiff {
+		target.BaseRef = expected.BaseTree
+	}
+	live, err := (SnapshotBuilder{Repo: repo}).Build(ctx, target)
+	if err != nil {
+		return err
+	}
+	if !snapshotsEqual(live, expected) {
+		return errors.New("live target no longer matches the prepared successor")
+	}
+	return nil
 }
 
 func compactRecoveryScopeChanged(previous, next Snapshot) bool {
@@ -252,6 +279,9 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 	}
 	if successor.Generation != predecessor.State.Generation+1 {
 		return errors.New("recovery successor generation must follow predecessor")
+	}
+	if !sameRecoveryProjection(predecessor.State.InitialSnapshot.Projection, successor.InitialSnapshot.Projection) && recovery.Disposition != RecoveryEscalated {
+		return errors.New("recovery successor must retain the predecessor projection")
 	}
 	switch recovery.Disposition {
 	case RecoveryScopeChanged:
@@ -288,7 +318,7 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 			return errors.New("escalated recovery successor target has not changed")
 		}
 		if recovery.MaintainerAuthorization != compactRecoveryAuthorizationBinding(predecessor.State.LineageID, predecessor.Revision, successor.InitialSnapshot.Identity, recovery.Actor, recovery.Reason) {
-			return errors.New("escalated recovery requires an exact maintainer authorization binding")
+			return compactRecoveryAuthorizationError(successor.InitialSnapshot)
 		}
 	default:
 		return errors.New("unsupported recovery disposition")
@@ -313,6 +343,24 @@ func compactRecoveryAuthorizationBinding(lineage, revision, targetIdentity, acto
 	return "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + lineage +
 		"\npredecessor_revision=" + revision + "\ntarget_identity=" + targetIdentity +
 		"\nactor=" + strings.TrimSpace(actor) + "\nreason=" + strings.TrimSpace(reason)
+}
+
+func sameRecoveryProjection(left, right Projection) bool {
+	if left == "" {
+		left = ProjectionWorkspace
+	}
+	if right == "" {
+		right = ProjectionWorkspace
+	}
+	return left == right
+}
+
+func compactRecoveryAuthorizationError(snapshot Snapshot) error {
+	projection := snapshot.Projection
+	if projection == "" {
+		projection = ProjectionWorkspace
+	}
+	return fmt.Errorf("escalated recovery requires an exact maintainer authorization binding (projection=%s target_identity=%s)", projection, snapshot.Identity)
 }
 
 func compactRecoveryAddsGenesisPath(predecessor CompactState, live Snapshot) bool {
