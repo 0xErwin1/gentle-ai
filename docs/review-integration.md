@@ -137,6 +137,8 @@ An ambiguous or lost transport result is never proof of `not_started`. Reconcile
 
 For `gate_scope_changed` or `receipt_scope_changed`, use the strict `context.scope_change` evidence to present the exact drift. Recovery remains explicit: pass `predecessor_lineage_id`, `expected_predecessor_revision`, a distinct `successor_lineage_id`, `disposition`, `reason`, and `actor` to `review.recover`. Diagnostics never create a successor, allocate another budget, or mutate the predecessor.
 
+When a release merge retains an approved `current-changes` candidate but expands its path scope, add `--release-scope` to that explicit `scope_changed` recovery. The provider derives an immutable `HEAD^1..HEAD` base-diff; it rejects caller-selected base flags, candidate-tree changes, projection changes, omitted predecessor paths, and non-expanding scopes. The fresh successor must complete its newly derived review tier before the release gate can allow publication.
+
 Malformed reviewer JSON, missing required reviewer arrays, canonicalization failures, and selected-lens mismatches are deterministic preflight failures. Negotiated finalize reports `invalid_request`, `mutation_outcome: not_started`, `retry_safe: true`, `replayability: not_replayable`, and `next_action: correct_request`, while preserving a valid requested lineage for target-scoped recovery. Correct the payload before retrying; do not run authority repair.
 
 ## Preserve compatibility without reopening legacy mutation

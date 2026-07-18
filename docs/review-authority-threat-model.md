@@ -54,6 +54,7 @@ Legacy v1 chains and bundles remain readable for compatibility, but their histor
 ## Recovery And Rollback
 
 - Use `gentle-ai review recover` with an explicit predecessor lineage and revision, a distinct successor lineage, a disposition, reason, and actor. Approved predecessors require a proven scope change; invalidated predecessors remain terminal; escalated predecessors additionally require explicit maintainer authorization.
+- `review recover --release-scope` is the only recovery target-kind expansion with dedicated constraints: an approved `current-changes` predecessor may become a repository-derived first-parent `base-diff` only when the candidate tree and projection are unchanged and every predecessor path remains covered by a strictly larger release scope.
 - Recovery runs under the shared v2 store lock, records predecessor and operator provenance in the successor, and starts a new generation and correction budget without rewriting or deleting history.
 - Discovery authorizes only a unique valid unsuperseded leaf. Forks, dangling or mismatched predecessor links, cycles, and unrelated leaves fail closed. Explicitly selecting a superseded lineage permits historical inspection but not delivery authorization.
 - Recovery imports an explicitly exported compact authority record and binds it to the live delivered tree and original base-to-final path scope; it does not require or reconstruct obsolete intermediate trees or event history.

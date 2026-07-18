@@ -220,6 +220,43 @@ func TestApprovedRecoveryTreatsBaseTreeMismatchAsScopeChange(t *testing.T) {
 	}
 }
 
+func TestCompactReleaseScopeRecoveryRequiresStrictSameCandidateExpansion(t *testing.T) {
+	candidate := strings.Repeat("c", 40)
+	previous := Snapshot{
+		Kind: TargetCurrentChanges, Projection: ProjectionWorkspace, CandidateTree: candidate,
+		Paths: []string{"reviewed.go"},
+	}
+	valid := Snapshot{
+		Kind: TargetBaseDiff, Projection: ProjectionWorkspace, CandidateTree: candidate,
+		Paths: []string{"release.go", "reviewed.go"},
+	}
+	predecessor := CompactState{InitialSnapshot: previous, CurrentSnapshot: previous, GenesisPaths: previous.Paths}
+	predecessor.CurrentSnapshot.Kind = TargetFixDiff
+	tests := []struct {
+		name   string
+		mutate func(*Snapshot)
+	}{
+		{name: "candidate changed", mutate: func(snapshot *Snapshot) { snapshot.CandidateTree = strings.Repeat("d", 40) }},
+		{name: "predecessor path omitted", mutate: func(snapshot *Snapshot) { snapshot.Paths = []string{"release.go", "unrelated.go"} }},
+		{name: "scope did not expand", mutate: func(snapshot *Snapshot) { snapshot.Paths = []string{"reviewed.go"} }},
+		{name: "projection changed", mutate: func(snapshot *Snapshot) { snapshot.Projection = ProjectionStaged }},
+		{name: "target kind is arbitrary", mutate: func(snapshot *Snapshot) { snapshot.Kind = TargetBaseWorkspaceOverlay }},
+	}
+	if !compactReleaseScopeRecovery(predecessor, valid) {
+		t.Fatal("corrected current-changes release scope expansion was rejected")
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := valid
+			candidate.Paths = append([]string(nil), valid.Paths...)
+			tt.mutate(&candidate)
+			if compactReleaseScopeRecovery(predecessor, candidate) {
+				t.Fatalf("invalid release scope expansion accepted: %#v", candidate)
+			}
+		})
+	}
+}
+
 func TestCompactGateFinalRecheckRejectsConcurrentRecoverySuccessor(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")

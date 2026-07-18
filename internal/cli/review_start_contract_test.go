@@ -379,6 +379,92 @@ func TestReviewRecoverRetainsWorkspaceOverlayBaseAndScope(t *testing.T) {
 	}
 }
 
+func TestReviewRecoverReleaseScopeExpandsMergedSliceToFirstParentDiff(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	mainBranch := strings.TrimSpace(runReviewCLIGit(t, repo, "branch", "--show-current"))
+	runReviewCLIGit(t, repo, "checkout", "-qb", "release-candidate")
+	if err := os.MkdirAll(filepath.Join(repo, ".github", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".github", "workflows", "release.yml"), []byte("name: Release\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", ".github/workflows/release.yml")
+	runReviewCLIGit(t, repo, "commit", "-qm", "release workflow")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed slice\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	lineage := "release-slice-predecessor"
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessor, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := predecessor.State
+	results := make([]reviewtransaction.LensResult, len(state.SelectedLenses))
+	for index, lens := range state.SelectedLenses {
+		results[index] = reviewtransaction.LensResult{Lens: lens, Findings: []reviewtransaction.Finding{}, Evidence: []string{"reviewed"}}
+	}
+	if err := state.CompleteReview(reviewtransaction.CompactReviewInput{LensResults: results}); err != nil {
+		t.Fatal(err)
+	}
+	revision, err := store.Replace(predecessor.Revision, "review/complete-review", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := state.CompleteVerification([]byte("verified\n"), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace(revision, "review/complete-verification", state); err != nil {
+		t.Fatal(err)
+	}
+	predecessor, err = store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "reviewed slice")
+	runReviewCLIGit(t, repo, "checkout", "-q", mainBranch)
+	runReviewCLIGit(t, repo, "merge", "--no-ff", "-qm", "release candidate", "release-candidate")
+	mergedTree := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD^{tree}"))
+	if mergedTree != predecessor.State.CurrentSnapshot.CandidateTree {
+		t.Fatalf("merged tree = %s, reviewed candidate = %s", mergedTree, predecessor.State.CurrentSnapshot.CandidateTree)
+	}
+
+	args := []string{"--cwd", repo, "--predecessor-lineage", lineage, "--expected-predecessor-revision", predecessor.Revision,
+		"--successor-lineage", "release-scope-successor", "--disposition", "scope_changed", "--reason", "prepare complete release scope", "--actor", "maintainer", "--release-scope"}
+	conflicting := append(append([]string{}, args...), "--base-ref", "HEAD^1")
+	if err := RunReviewRecover(conflicting, io.Discard); err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("release-scope selector conflict error = %v", err)
+	}
+	if err := RunReviewRecover(args, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	successorStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "release-scope-successor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	successor, err := successorStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := successor.State.InitialSnapshot
+	wantBase := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD^1^{tree}"))
+	wantPaths := []string{".github/workflows/release.yml", "tracked.txt"}
+	if snapshot.Kind != reviewtransaction.TargetBaseDiff || snapshot.BaseTree != wantBase || snapshot.CandidateTree != mergedTree ||
+		!reflect.DeepEqual(snapshot.Paths, wantPaths) || successor.State.RiskLevel != reviewtransaction.RiskHigh || len(successor.State.SelectedLenses) != 4 {
+		t.Fatalf("release-scope successor = %#v", successor.State)
+	}
+}
+
 func TestNegotiatedReviewStartPreservesLegacyPayloadAndAuthorityIdentity(t *testing.T) {
 	legacyRepo := initReviewCLIRepo(t)
 	negotiatedRepo := initReviewCLIRepo(t)
