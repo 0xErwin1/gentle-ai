@@ -2,6 +2,7 @@ package sddstatus
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -166,6 +167,9 @@ func readReviewTransaction(path, content string) (*reviewtransaction.Transaction
 		payload = read
 	}
 	if !strings.HasPrefix(strings.TrimSpace(string(payload)), "{") {
+		if json.Valid(payload) {
+			return nil, "bounded review transaction is invalid: native review transaction must be a JSON object"
+		}
 		return nil, incompatibleReviewTransactionReason
 	}
 	transaction, err := reviewtransaction.ParseTransaction(payload)

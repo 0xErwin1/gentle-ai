@@ -387,6 +387,17 @@ func TestReadReviewTransactionRejectsIncompatibleNonJSONArtifact(t *testing.T) {
 	}
 }
 
+func TestReadReviewTransactionRejectsJSONNonObjectsAsInvalid(t *testing.T) {
+	for _, payload := range []string{`[]`, `null`, `"legacy"`} {
+		t.Run(payload, func(t *testing.T) {
+			transaction, reason := readReviewTransaction("", payload)
+			if transaction != nil || !strings.Contains(reason, "bounded review transaction is invalid") {
+				t.Fatalf("readReviewTransaction() = (%#v, %q), want invalid native transaction", transaction, reason)
+			}
+		})
+	}
+}
+
 func TestResolveEngramBridgesCompactAuthorityOverIncompatibleTransactionArtifact(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
@@ -467,6 +478,16 @@ func TestResolveEngramDoesNotBridgeCompactAuthorityOverMalformedJSONTransaction(
 	}
 	if !strings.Contains(reasons, "bounded review transaction is invalid") {
 		t.Fatalf("BlockedReasons = %v, want malformed JSON reason", status.BlockedReasons)
+	}
+	for _, payload := range []string{`[]`, `null`, `"legacy"`} {
+		observations[len(observations)-1].Content = payload
+		status, _, err = resolveEngramStatus(root, "thin", false)
+		if err != nil {
+			t.Fatalf("resolveEngramStatus(%s) error = %v", payload, err)
+		}
+		if status.Dependencies.Verify != DependencyBlocked || status.NextRecommended != "review" {
+			t.Fatalf("payload=%s verify=%q next=%q, want blocked/review", payload, status.Dependencies.Verify, status.NextRecommended)
+		}
 	}
 }
 
