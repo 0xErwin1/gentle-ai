@@ -39,6 +39,8 @@
       "items": {
         "enum": [
           "lineage_id",
+          "change",
+          "expected_binding_revision",
           "predecessor_lineage_id",
           "expected_predecessor_revision",
           "successor_lineage_id",
@@ -48,7 +50,7 @@
         ]
       }
     },
-    "next_action": {"enum": ["correct_request", "retry", "retry_with_bounded_backoff", "review.status", "review.finalize", "explicit-maintainer-action", "stop"]},
+    "next_action": {"enum": ["correct_request", "retry", "retry_with_bounded_backoff", "review.status", "review.finalize", "review.bind_sdd", "explicit-maintainer-action", "stop"]},
     "cause_category": {"enum": ["inventory_io_or_layout", "lock_ambiguous", "reset_residue", "record_or_graph_invalid", "inventory_incomplete"]},
     "context": {"$ref": "#/$defs/gate_context"}
   },

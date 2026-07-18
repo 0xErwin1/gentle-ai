@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -195,9 +196,7 @@ func TestRecoverCompactAuthorityRejectsProjectionChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
-		t.Fatal(err)
-	}
+	writeTestCompactReceipt(t, store.ReceiptPath(), receipt)
 	writeSnapshotFile(t, repo, "tracked.txt", "new workspace scope\n")
 	successor := newCompactTestState(t, repo, "recovery-workspace-projection")
 	successor.Generation = state.Generation + 1
@@ -1019,6 +1018,109 @@ func TestCompactStoreReplaceContextRejectsCancelledMutation(t *testing.T) {
 	}
 }
 
+func TestWriteCompactReceiptAtomicPublishesWithoutClobberingTerminalContent(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state, _, receipt := approvedCompactCurrentChangesFixture(t, repo, "immutable-terminal-receipt", []string{})
+	path := filepath.Join(t.TempDir(), "receipt.json")
+
+	if err := WriteCompactReceiptAtomic(path, receipt); err != nil {
+		t.Fatal(err)
+	}
+	published, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCompactReceiptAtomic(path, receipt); err != nil {
+		t.Fatalf("exact receipt retry: %v", err)
+	}
+
+	conflicting := receipt
+	conflicting.TerminalState = TerminalEscalated
+	if err := WriteCompactReceiptAtomic(path, conflicting); err == nil {
+		t.Fatal("conflicting terminal receipt replaced existing content")
+	}
+	afterConflict, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(afterConflict, published) {
+		t.Fatalf("conflicting receipt changed published bytes: %q, %v", afterConflict, err)
+	}
+
+	blocked := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocked, []byte("block"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCompactReceiptAtomic(filepath.Join(blocked, "receipt.json"), stateReceipt(t, state)); err == nil {
+		t.Fatal("pre-publication failure unexpectedly published a receipt")
+	}
+}
+
+func TestWriteCompactReceiptAtomicRejectsExistingSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows symlink creation requires developer mode or elevated privileges")
+	}
+	state := newCompactTestState(t, initSnapshotRepo(t), "receipt-symlink")
+	state.State = StateApproved
+	state.EvidenceHash = FinalizeAttemptValueDigest("evidence", "approved")
+	receipt := stateReceipt(t, state)
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.json")
+	if err := WriteCompactReceiptAtomic(target, receipt); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "receipt.json")
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCompactReceiptAtomic(path, receipt); err == nil || !strings.Contains(err.Error(), "non-regular") {
+		t.Fatalf("symlink receipt publication error = %v", err)
+	}
+}
+
+func TestSyncReviewDirectoryHandlesUnsupportedWindowsDirectorySync(t *testing.T) {
+	originalSync, originalGOOS := syncReviewDirectory, reviewRuntimeGOOS
+	t.Cleanup(func() {
+		syncReviewDirectory, reviewRuntimeGOOS = originalSync, originalGOOS
+	})
+	for _, tt := range []struct {
+		name string
+		goos string
+		err  error
+		want bool
+	}{
+		{name: "windows permission is unsupported", goos: "windows", err: os.ErrPermission, want: false},
+		{name: "all platforms reject invalid directory handle", goos: "linux", err: syscall.EINVAL, want: false},
+		{name: "all platforms reject declared unsupported", goos: "linux", err: errors.ErrUnsupported, want: false},
+		{name: "other sync failures fail closed", goos: "windows", err: errors.New("disk failure"), want: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			syncReviewDirectory = func(string) error { return tt.err }
+			reviewRuntimeGOOS = func() string { return tt.goos }
+			if got := SyncReviewDirectory(t.TempDir()) != nil; got != tt.want {
+				t.Fatalf("SyncReviewDirectory() error presence = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+func stateReceipt(t *testing.T, state CompactState) CompactReceipt {
+	t.Helper()
+	receipt, err := state.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return receipt
+}
+
+func writeTestCompactReceipt(t *testing.T, path string, receipt CompactReceipt) {
+	t.Helper()
+	payload, err := json.MarshalIndent(receipt, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(payload, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCompactFirstCompletedValidatorIsTerminal(t *testing.T) {
 	tests := []struct {
 		name               string
@@ -1603,6 +1705,23 @@ func TestCompactTransportRoundTripRecoversEquivalentCurrentAuthority(t *testing.
 	}
 	if imported.Revision != transport.Record.Revision || !reflect.DeepEqual(destinationTransport.Record, transport.Record) || !reflect.DeepEqual(destinationTransport.Receipt, transport.Receipt) {
 		t.Fatalf("compact transport round trip changed authority")
+	}
+	if _, err := ImportCompactTransport(context.Background(), destination, transport); err != nil {
+		t.Fatalf("exact compact transport retry: %v", err)
+	}
+	beforeConflict, err := os.ReadFile(destinationStore.ReceiptPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(destinationStore.ReceiptPath(), []byte("conflicting receipt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ImportCompactTransport(context.Background(), destination, transport); err == nil {
+		t.Fatal("conflicting compact transport receipt was accepted")
+	}
+	afterConflict, err := os.ReadFile(destinationStore.ReceiptPath())
+	if err != nil || bytes.Equal(afterConflict, beforeConflict) {
+		t.Fatalf("conflicting compact transport receipt was replaced: %q, %v", afterConflict, err)
 	}
 	if _, err := os.Stat(filepath.Join(destinationStore.Dir, "events")); !os.IsNotExist(err) {
 		t.Fatalf("compact import reconstructed event history: %v", err)

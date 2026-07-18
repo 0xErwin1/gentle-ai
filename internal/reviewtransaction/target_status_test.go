@@ -296,6 +296,22 @@ func TestCorrectionScopeExpansionGuidesStatusAndStartToRecovery(t *testing.T) {
 	}
 }
 
+func TestCorrectionScopeExpansionPrioritizesPendingFinalize(t *testing.T) {
+	repo, predecessor, store, record := correctionScopeRecoveryFixture(t, "review-correction-pending")
+	request := finalizeAttemptTestRequest(predecessor.LineageID, record.Revision, "evidence")
+	request.CandidateDigest = FinalizeAttemptValueDigest("candidate", predecessor.CurrentSnapshot)
+	request.RequestDigest = FinalizeAttemptRequestDigest(request)
+	if _, _, err := store.BeginFinalizeAttempt(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	writeSnapshotFile(t, repo, "process_helper.go", "package processhelper\n")
+	target := Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{"process_helper.go"}}
+	status, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: target, LineageID: predecessor.LineageID})
+	if err != nil || status.Action != TargetStatusActionReconcileFinalize || status.Replayability != ReplayabilityStatusRequired {
+		t.Fatalf("pending finalize with expanded correction scope = %#v, %v", status, err)
+	}
+}
+
 func TestCompactTargetStatusUsesCurrentProofAndLiveProjection(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")

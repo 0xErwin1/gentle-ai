@@ -36,6 +36,41 @@ var syncReviewDirectory = func(path string) error {
 	return directory.Close()
 }
 
+type directorySyncError struct {
+	path  string
+	cause error
+}
+
+func (err *directorySyncError) Error() string {
+	return fmt.Sprintf("sync parent directory for %q: %v", err.path, err.cause)
+}
+
+func (err *directorySyncError) Unwrap() error { return err.cause }
+
+// ImmutablePublicationConflictError requires maintainer action because replay
+// cannot replace a conflicting immutable artifact.
+type ImmutablePublicationConflictError struct{ Cause error }
+
+func (err *ImmutablePublicationConflictError) Error() string {
+	return fmt.Sprintf("immutable review publication conflict: %v", err.Cause)
+}
+
+func (err *ImmutablePublicationConflictError) Unwrap() error { return err.Cause }
+
+// SyncReviewDirectory persists a directory entry when the platform supports it.
+// Windows filesystems may reject directory handles; in that case the file rename
+// remains atomic, but power-loss durability of the directory entry is not claimed.
+func SyncReviewDirectory(path string) error {
+	if err := syncReviewDirectory(path); err != nil {
+		unsupported := errors.Is(err, syscall.EINVAL) || errors.Is(err, errors.ErrUnsupported) ||
+			reviewRuntimeGOOS() == "windows" && errors.Is(err, os.ErrPermission)
+		if !unsupported {
+			return err
+		}
+	}
+	return nil
+}
+
 type Record struct {
 	Schema           string      `json:"schema"`
 	Operation        string      `json:"operation"`
@@ -262,7 +297,7 @@ func (store Store) append(expectedRevision string, record Record) (string, error
 		return "", err
 	}
 	eventPath := filepath.Join(store.Dir, "events", strings.TrimPrefix(revision, "sha256:")+".json")
-	if err := os.Link(tempPath, eventPath); err != nil {
+	if err := publishNoReplace(tempPath, eventPath); err != nil {
 		if os.IsExist(err) {
 			existing, readErr := os.ReadFile(eventPath)
 			if readErr != nil {
@@ -871,6 +906,16 @@ func WriteTransactionAtomic(path string, transaction Transaction) error {
 	return writeAtomic(path, append(payload, '\n'), 0o644)
 }
 
+// PublishFileNoReplace atomically publishes source only when destination is absent.
+func PublishFileNoReplace(source, destination string) error {
+	return publishNoReplace(source, destination)
+}
+
+// ReplaceFileAtomic atomically replaces destination with source.
+func ReplaceFileAtomic(source, destination string) error {
+	return replaceFileAtomic(source, destination)
+}
+
 func readRevision(path string) (string, error) {
 	payload, err := os.ReadFile(path)
 	if err != nil {
@@ -911,16 +956,66 @@ func writeAtomic(path string, payload []byte, mode os.FileMode) error {
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tempPath, path); err != nil {
+	if err := replaceFileAtomic(tempPath, path); err != nil {
 		return err
 	}
-	if err := syncReviewDirectory(filepath.Dir(path)); err != nil {
-		// NTFS and some filesystems do not support syncing directory handles.
-		unsupported := errors.Is(err, syscall.EINVAL) || errors.Is(err, errors.ErrUnsupported) ||
-			reviewRuntimeGOOS() == "windows" && errors.Is(err, os.ErrPermission)
-		if !unsupported {
-			return fmt.Errorf("sync parent directory for %q: %w", path, err)
+	if err := SyncReviewDirectory(filepath.Dir(path)); err != nil {
+		return &directorySyncError{path: path, cause: err}
+	}
+	return nil
+}
+
+func publishImmutable(path string, payload []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(dir, ".publish-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(mode); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if _, err := temp.Write(payload); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := publishNoReplace(tempPath, path); err != nil {
+		if !os.IsExist(err) {
+			return err
 		}
+		info, statErr := os.Lstat(path)
+		if statErr != nil {
+			return statErr
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return &ImmutablePublicationConflictError{Cause: errors.New("non-regular existing path")}
+		}
+		existing, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if !bytes.Equal(existing, payload) {
+			return &ImmutablePublicationConflictError{Cause: errors.New("existing content differs")}
+		}
+		if err := SyncReviewDirectory(dir); err != nil {
+			return &directorySyncError{path: path, cause: err}
+		}
+		return nil
+	}
+	if err := SyncReviewDirectory(dir); err != nil {
+		return &directorySyncError{path: path, cause: err}
 	}
 	return nil
 }

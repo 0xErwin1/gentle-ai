@@ -37,6 +37,11 @@ type ReviewTargetStatusResult struct {
 	TargetIdentity string                                `json:"target_identity"`
 	Projection     ReviewTargetStatusProjection          `json:"projection"`
 	Candidates     []string                              `json:"candidates"`
+	Reconciliation *ReviewFinalizeReconciliation         `json:"reconciliation,omitempty"`
+}
+
+type ReviewFinalizeReconciliation struct {
+	Required bool `json:"required"`
 }
 
 type ReviewTargetStatusAuthority struct {
@@ -90,6 +95,9 @@ func newReviewTargetStatusResult(native reviewtransaction.TargetStatusResult) Re
 	}
 	if native.Applicability != reviewtransaction.TargetApplicabilityCurrent {
 		return result
+	}
+	if native.Action == reviewtransaction.TargetStatusActionReconcileFinalize {
+		result.Reconciliation = &ReviewFinalizeReconciliation{Required: true}
 	}
 	result.Authority = &ReviewTargetStatusAuthority{
 		Version: native.AuthorityVersion, LineageID: native.LineageID, State: native.State,
@@ -176,6 +184,13 @@ func (result ReviewTargetStatusResult) Validate() error {
 	}
 	if strings.TrimSpace(string(result.Action)) == "" {
 		return errors.New("negotiated review status requires exactly one action")
+	}
+	if result.Action == reviewtransaction.TargetStatusActionReconcileFinalize {
+		if result.Applicability != reviewtransaction.TargetApplicabilityCurrent || result.Reconciliation == nil || !result.Reconciliation.Required || result.Replayability != reviewtransaction.ReplayabilityStatusRequired {
+			return errors.New("pending finalize status requires current-target reconciliation")
+		}
+	} else if result.Reconciliation != nil {
+		return errors.New("only pending finalize status may contain reconciliation")
 	}
 	switch result.Replayability {
 	case reviewtransaction.ReplayabilityNotReplayable, reviewtransaction.ReplayabilityExactReplaySafe,

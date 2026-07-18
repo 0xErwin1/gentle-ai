@@ -47,6 +47,18 @@ func TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree(t *testing.T) {
 		if approved.State != reviewtransaction.StateApproved || status.Authority == nil || status.Authority.State != reviewtransaction.StateApproved || status.Receipt.Status != ReviewReceiptPresent || status.Receipt.Identity == "" {
 			t.Fatalf("approved status = %#v, finalize = %#v", status, approved)
 		}
+		var validated ReviewValidateResult
+		decodeBinaryJSON(t, runReviewBinary(t, binary, true,
+			"validate", "--cwd", corrected, "--lineage", started.LineageID, "--gate", string(reviewtransaction.GatePostApply)), &validated)
+		if !validated.Allowed || validated.Result != reviewtransaction.GateAllow {
+			t.Fatalf("post-apply validation = %#v", validated)
+		}
+		var binding map[string]any
+		decodeBinaryJSON(t, runReviewBinary(t, binary, true,
+			"bind-sdd", "--cwd", corrected, "--change", "binary-review", "--lineage", started.LineageID, "--expected-binding-revision="), &binding)
+		if binding["schema"] != "gentle-ai.sdd-review-binding/v1" {
+			t.Fatalf("SDD review binding = %#v", binding)
+		}
 	})
 
 	for _, test := range []struct {
@@ -82,6 +94,21 @@ func TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree(t *testing.T) {
 func prepareBinaryCorrection(t *testing.T, binary string) (string, string, ReviewFacadeStartResult) {
 	t.Helper()
 	repo := initReviewCLIRepo(t)
+	change := filepath.Join(repo, "openspec", "changes", "binary-review")
+	for path, content := range map[string]string{
+		"tasks.md":    "- [x] 1.1 Exercise the native review lifecycle\n",
+		"proposal.md": "# Binary review acceptance\n",
+	} {
+		fullPath := filepath.Join(change, path)
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runReviewCLIGit(t, repo, "add", "openspec")
+	runReviewCLIGit(t, repo, "commit", "-qm", "add binary review fixture")
 	writeBinaryCandidate(t, repo, "wrong")
 	var started ReviewFacadeStartResult
 	decodeBinaryJSON(t, runReviewBinary(t, binary, true, "start", "--cwd", repo), &started)

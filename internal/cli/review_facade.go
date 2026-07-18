@@ -139,6 +139,7 @@ func (err *reviewFacadeOperationProgressError) record(lineage, revision string) 
 }
 
 var writeCompactFacadeReceipt = reviewtransaction.WriteCompactReceiptAtomic
+var reviewFacadeSyncDirectory = reviewtransaction.SyncReviewDirectory
 
 type ReviewInvalidateResult struct {
 	Operation     string                  `json:"operation"`
@@ -199,6 +200,7 @@ type facadeArtifacts struct {
 
 var reviewFacadeOperationTimeout = 25 * time.Second
 var reviewFacadeCommandRunner = runReviewCommandContext
+var reviewFacadePlannedTransitionHook = func(context.Context, string, string, string) error { return nil }
 var reviewFacadeCommittedTransitionHook = func(context.Context, string, string, string) error { return nil }
 
 func RunReview(args []string, stdout io.Writer) error {
@@ -807,9 +809,6 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	}
 	store.TracePath = strings.TrimSpace(*tracePath)
 	state := record.State
-	if len(resultArtifacts) != 0 && state.State != reviewtransaction.StateReviewing {
-		return reviewPreflightError(errors.New("reviewer artifacts are accepted only while the authority is reviewing"))
-	}
 	if strings.TrimSpace(*lineage) != "" {
 		leaves, err := reviewtransaction.CompactAuthorityLeaves(ctx, root)
 		if err != nil {
@@ -824,16 +823,43 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		}
 	}
 	terminalAtEntry := facadeTerminalState(state.State)
+	if state.State != reviewtransaction.StateReviewing && (len(resultArtifacts) != 0 || len(resultPaths) != 0) {
+		pending, pendingErr := store.PendingFinalizeAttempt()
+		if pendingErr != nil {
+			return pendingErr
+		}
+		if terminalAtEntry || pending == nil {
+			return reviewPreflightError(errors.New("reviewer results are accepted only while the authority is reviewing"))
+		}
+	}
 	var terminalReceipt reviewtransaction.CompactReceipt
 	terminalReceiptExists := false
+	var terminalPending *reviewtransaction.FinalizeAttempt
+	terminalComplete := false
 	if terminalAtEntry {
 		terminalReceipt, err = state.Receipt()
 		if err != nil {
 			return err
 		}
-		terminalReceiptExists, err = inspectCompactFacadeReceipt(store.ReceiptPath(), terminalReceipt)
+		terminalPending, err = store.PendingFinalizeAttempt()
 		if err != nil {
 			return err
+		}
+		terminalReceiptExists, err = inspectCompactFacadeReceipt(store.ReceiptPath(), terminalReceipt)
+		if err != nil {
+			requestDigest := ""
+			if terminalPending != nil {
+				requestDigest = terminalPending.Request.RequestDigest
+			}
+			return newFacadeReceiptPublicationError(state.LineageID, requestDigest, err)
+		}
+		if terminalReceiptExists {
+			if terminalPending == nil {
+				terminalComplete = true
+			}
+			if terminalPending != nil && !facadeFinalizeReplayInputsEmpty(resultPaths, resultArtifacts, *validationPath, *refuterPath, *evidencePath, *correctionLines, *failed, *tracePath) {
+				return errors.New("terminal review finalize accepts no review inputs; exact replay requires only --lineage")
+			}
 		}
 		if !terminalReceiptExists {
 			if !facadeFinalizeReplayInputsEmpty(resultPaths, resultArtifacts, *validationPath, *refuterPath, *evidencePath, *correctionLines, *failed, *tracePath) {
@@ -847,6 +873,12 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	reviewerResults, err := readFacadeReviewerResults(resultPaths)
 	if err != nil {
 		return reviewPreflightError(err)
+	}
+	if len(resultArtifacts) != 0 {
+		reviewerResults, err = readFacadeReviewerArtifacts(resultArtifacts, store.Dir, state)
+		if err != nil {
+			return reviewPreflightError(err)
+		}
 	}
 	var validation *facadeValidationResult
 	if strings.TrimSpace(*validationPath) != "" {
@@ -868,115 +900,97 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			return reviewPreflightError(fmt.Errorf("read final review evidence: %w", err))
 		}
 	}
-	exactNoInput := facadeFinalizeReplayInputsEmpty(
-		resultPaths, resultArtifacts, *validationPath, *refuterPath, *evidencePath, *correctionLines, *failed, *tracePath,
-	)
-	var nativeLowRiskEvidence []byte
-	if exactNoInput && facadeNativeLowRiskCandidate(state) {
-		nativeLowRiskEvidence, err = prepareFacadeNativeLowRiskVerification(ctx, root, state)
-		if err != nil {
-			return fmt.Errorf("prepare native low-risk verification: %w", err)
+	if terminalComplete {
+		if err := reviewFacadeSyncDirectory(filepath.Dir(store.FinalizeAttemptJournalPath())); err != nil {
+			return fmt.Errorf("sync completed finalize journal directory: %w", err)
 		}
+		return encodeCompactFacadeFinalize(stdout, negotiated, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>")
 	}
-
-	if state.State == reviewtransaction.StateReviewing {
-		if len(resultArtifacts) != 0 {
-			reviewerResults, err = readFacadeReviewerArtifacts(resultArtifacts, store.Dir, state)
+	var attempt reviewtransaction.FinalizeAttempt
+	attemptLoaded := false
+	if !terminalAtEntry {
+		pending, pendingErr := store.PendingFinalizeAttempt()
+		if pendingErr != nil {
+			return pendingErr
+		}
+		if index := facadeFinalizeTransitionIndex(pending, record.Revision); index >= 0 {
+			replayEvidence := evidence
+			if len(replayEvidence) == 0 && facadeNativeLowRiskCandidate(state) {
+				replayEvidence, err = prepareFacadeNativeLowRiskVerification(ctx, root, state)
+				if err != nil {
+					return reviewPreflightError(err)
+				}
+			}
+			replayRequest := facadeFinalizeAttemptRequestForCandidate(record, state.CurrentSnapshot, reviewerResults, validation, refuter, replayEvidence, *correctionLines, *failed)
+			attempt, attemptLoaded, err = store.ReconcileFinalizeAttempt(ctx, replayRequest)
 			if err != nil {
-				return reviewPreflightError(err)
+				return err
+			}
+			if index == len(attempt.Transitions)-1 {
+				if err := store.CompleteFinalizeAttempt(attempt.Request.RequestDigest); err != nil {
+					return err
+				}
+				return encodeCompactFacadeFinalize(stdout, negotiated, state, record.Revision, store, "continue the current review state")
 			}
 		}
-		input, err := prepareCompactReviewerResults(state, reviewerResults, refuter, facadeRepositoryEvidence{ctx: ctx, repo: root})
-		if err != nil {
-			return reviewPreflightError(err)
-		}
-		if err := state.CompleteReview(input); err != nil {
-			return reviewPreflightError(fmt.Errorf("complete compact review: %w", err))
-		}
-		revision, err := store.ReplaceContext(ctx, record.Revision, "review/complete-review", state)
-		if err != nil {
-			return err
-		}
-		progress.record(state.LineageID, revision)
-		if err := reviewFacadeCommittedTransitionHook(ctx, root, "review/complete-review", revision); err != nil {
-			return err
-		}
-		record.Revision, record.State = revision, state
 	}
-	if state.State == reviewtransaction.StateCorrectionRequired && state.ProposedCorrectionLines == nil && *correctionLines > 0 {
-		if err := state.BeginCorrection(*correctionLines); err != nil {
-			return fmt.Errorf("begin bounded compact correction: %w", err)
-		}
-		revision, err := store.ReplaceContext(ctx, record.Revision, "review/begin-fix", state)
-		if err != nil {
-			return err
-		}
-		progress.record(state.LineageID, revision)
-		if err := reviewFacadeCommittedTransitionHook(ctx, root, "review/begin-fix", revision); err != nil {
-			return err
-		}
-		record.Revision, record.State = revision, state
+	plan, err := prepareFacadeFinalizePlan(ctx, root, state, reviewerResults, refuter, validation, evidence, *correctionLines, *failed)
+	if err != nil {
+		return reviewPreflightError(err)
 	}
-	if state.State == reviewtransaction.StateCorrectionRequired && state.ProposedCorrectionLines == nil {
-		return encodeCompactFacadeFinalize(stdout, negotiated, state, record.Revision, store, "rerun with --correction-lines before editing")
+	request := facadeFinalizeAttemptRequestForCandidate(record, plan.Candidate, reviewerResults, validation, refuter, plan.Evidence, *correctionLines, *failed)
+	if terminalAtEntry {
+		if terminalPending != nil {
+			attempt = *terminalPending
+		} else {
+			attempt, err = facadePendingFinalizeAttempt(store, request)
+		}
+	} else if !attemptLoaded {
+		attempt, _, err = store.ReconcileFinalizeAttempt(ctx, request)
 	}
-	if state.State == reviewtransaction.StateCorrectionRequired {
-		if validation == nil {
-			return encodeCompactFacadeFinalize(stdout, negotiated, state, record.Revision, store, "apply the bounded correction, then rerun with --validation and --evidence")
-		}
-		if err := rejectFacadeCorrectionUntracked(ctx, root, state); err != nil {
-			return err
-		}
-		fixSnapshot, err := (reviewtransaction.SnapshotBuilder{Repo: root}).Build(ctx, reviewtransaction.Target{
-			Kind: reviewtransaction.TargetFixDiff, Projection: state.InitialSnapshot.Projection,
-			BaseRef: state.CurrentSnapshot.CandidateTree, IntendedUntracked: state.InitialSnapshot.IntendedUntracked,
-			LedgerIDs: state.FixFindingIDs,
-		})
-		if err != nil {
-			return fmt.Errorf("derive facade correction snapshot: %w", err)
-		}
-		actual, err := (reviewtransaction.SnapshotBuilder{Repo: root}).ChangedLines(ctx, fixSnapshot)
-		if err != nil {
-			return fmt.Errorf("derive facade correction size: %w", err)
-		}
-		nativeValidation, err := validation.compact(reviewtransaction.FixDeltaHashForSnapshot(fixSnapshot), state.FixFindingIDs)
-		if err != nil {
-			return err
-		}
-		if err := state.CompleteCorrection(fixSnapshot, actual, nativeValidation); err != nil {
-			return fmt.Errorf("complete compact correction: %w", err)
-		}
-		revision, err := store.ReplaceContext(ctx, record.Revision, "review/complete-fix", state)
-		if err != nil {
-			return err
-		}
-		progress.record(state.LineageID, revision)
-		if err := reviewFacadeCommittedTransitionHook(ctx, root, "review/complete-fix", revision); err != nil {
-			return err
-		}
-		record.Revision, record.State = revision, state
+	if err != nil {
+		return err
 	}
-	if state.State == reviewtransaction.StateValidating {
-		verificationEvidence := evidence
-		if len(verificationEvidence) == 0 {
-			verificationEvidence = nativeLowRiskEvidence
+	requestDigest := attempt.Request.RequestDigest
+	defer func() {
+		if returnErr == nil {
+			completionErr := store.CompleteFinalizeAttempt(requestDigest)
+			if completionErr != nil && facadeTerminalState(state.State) {
+				returnErr = newFacadeReceiptPublicationError(state.LineageID, requestDigest, completionErr)
+			} else {
+				returnErr = completionErr
+			}
 		}
-		if len(verificationEvidence) == 0 {
-			return encodeCompactFacadeFinalize(stdout, negotiated, state, record.Revision, store, "rerun with --evidence")
-		}
-		if err := state.CompleteVerification(verificationEvidence, !*failed); err != nil {
-			return fmt.Errorf("complete compact final verification: %w", err)
-		}
-		revision, err := store.ReplaceContext(ctx, record.Revision, "review/complete-verification", state)
+	}()
+	plannedRevisions := make([]string, len(plan.Transitions))
+	expectedRevision := record.Revision
+	for index, transition := range plan.Transitions {
+		planned, err := store.PlanFinalizeAttemptTransition(requestDigest, transition.Operation, expectedRevision, transition.State)
 		if err != nil {
 			return err
 		}
-		progress.record(state.LineageID, revision)
-		if err := reviewFacadeCommittedTransitionHook(ctx, root, "review/complete-verification", revision); err != nil {
+		plannedRevisions[index] = planned
+		expectedRevision = planned
+	}
+	for index, transition := range plan.Transitions {
+		planned := plannedRevisions[index]
+		if err := reviewFacadePlannedTransitionHook(ctx, root, transition.Operation, planned); err != nil {
 			return err
 		}
-		record.Revision, record.State = revision, state
+		revision, err := store.ReplaceContext(ctx, record.Revision, transition.Operation, transition.State)
+		if err != nil {
+			return err
+		}
+		if revision != planned {
+			return errors.New("compact finalize transition did not match its planned revision")
+		}
+		progress.record(transition.State.LineageID, revision)
+		if err := reviewFacadeCommittedTransitionHook(ctx, root, transition.Operation, revision); err != nil {
+			return err
+		}
+		record.Revision, record.State, state = revision, transition.State, transition.State
 	}
+
 	if state.State != reviewtransaction.StateApproved && state.State != reviewtransaction.StateEscalated {
 		return encodeCompactFacadeFinalize(stdout, negotiated, state, record.Revision, store, "continue the current review state")
 	}
@@ -990,18 +1004,141 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			return err
 		}
 	}
-	digest := facadeFinalizeReplayRequestDigest(state.LineageID, record.Revision, receipt)
 	if err := writeCompactFacadeReceipt(store.ReceiptPath(), receipt); err != nil {
-		return newFacadeReceiptPublicationError(state.LineageID, digest, err)
+		return newFacadeReceiptPublicationError(state.LineageID, requestDigest, err)
 	}
 	published, err := inspectCompactFacadeReceipt(store.ReceiptPath(), receipt)
 	if err != nil {
-		return newFacadeReceiptPublicationError(state.LineageID, digest, err)
+		return newFacadeReceiptPublicationError(state.LineageID, requestDigest, err)
 	}
 	if !published {
-		return newFacadeReceiptPublicationError(state.LineageID, digest, errors.New("receipt writer did not materialize the derived receipt"))
+		return newFacadeReceiptPublicationError(state.LineageID, requestDigest, errors.New("receipt writer did not materialize the derived receipt"))
+	}
+	if err := store.MarkFinalizeAttemptReceiptPublished(requestDigest); err != nil {
+		return err
 	}
 	return encodeCompactFacadeFinalize(stdout, negotiated, state, record.Revision, store, "validate delivery with gentle-ai review validate --gate <gate>")
+}
+
+func facadeFinalizeTransitionIndex(attempt *reviewtransaction.FinalizeAttempt, revision string) int {
+	if attempt == nil {
+		return -1
+	}
+	for index, transition := range attempt.Transitions {
+		if transition.Revision == revision {
+			return index
+		}
+	}
+	return -1
+}
+
+func facadePendingFinalizeAttempt(store reviewtransaction.CompactStore, request reviewtransaction.FinalizeAttemptRequest) (reviewtransaction.FinalizeAttempt, error) {
+	pending, err := store.PendingFinalizeAttempt()
+	if err != nil {
+		return reviewtransaction.FinalizeAttempt{}, err
+	}
+	if pending != nil {
+		return *pending, nil
+	}
+	attempt, _, err := store.BeginFinalizeAttempt(context.Background(), request)
+	return attempt, err
+}
+
+func facadeFinalizeAttemptRequest(record reviewtransaction.CompactRecord, results []facadeReviewerResult, validation *facadeValidationResult, refuter facadeRefuterResult, evidence []byte, correctionLines int, failed bool) reviewtransaction.FinalizeAttemptRequest {
+	return facadeFinalizeAttemptRequestForCandidate(record, record.State.CurrentSnapshot, results, validation, refuter, evidence, correctionLines, failed)
+}
+
+func facadeFinalizeAttemptRequestForCandidate(record reviewtransaction.CompactRecord, candidate reviewtransaction.Snapshot, results []facadeReviewerResult, validation *facadeValidationResult, refuter facadeRefuterResult, evidence []byte, correctionLines int, failed bool) reviewtransaction.FinalizeAttemptRequest {
+	request := reviewtransaction.FinalizeAttemptRequest{
+		LineageID: record.State.LineageID, ExpectedRevision: record.Revision,
+		CandidateDigest:          reviewtransaction.FinalizeAttemptValueDigest("candidate", candidate),
+		ReviewerResultsDigest:    reviewtransaction.FinalizeAttemptValueDigest("reviewer-results", results),
+		CorrectionForecastDigest: reviewtransaction.FinalizeAttemptValueDigest("correction-forecast", correctionLines),
+		ValidationDigest:         reviewtransaction.FinalizeAttemptValueDigest("validation", validation),
+		RefuterDigest:            reviewtransaction.FinalizeAttemptValueDigest("refuter", refuter),
+		EvidenceDigest:           reviewtransaction.FinalizeAttemptValueDigest("evidence", evidence),
+		FailedDigest:             reviewtransaction.FinalizeAttemptValueDigest("failed", failed),
+	}
+	request.RequestDigest = reviewtransaction.FinalizeAttemptRequestDigest(request)
+	return request
+}
+
+type facadeFinalizeTransition struct {
+	Operation string
+	State     reviewtransaction.CompactState
+}
+type facadeFinalizePlan struct {
+	Transitions []facadeFinalizeTransition
+	Candidate   reviewtransaction.Snapshot
+	Evidence    []byte
+}
+
+// prepareFacadeFinalizePlan performs every deterministic validation before the
+// attempt journal exists. Its states are the only states later admitted and
+// written through the write-ahead journal.
+func prepareFacadeFinalizePlan(ctx context.Context, repo string, state reviewtransaction.CompactState, results []facadeReviewerResult, refuter facadeRefuterResult, validation *facadeValidationResult, evidence []byte, correctionLines int, failed bool) (facadeFinalizePlan, error) {
+	entryState, entryProposed := state.State, state.ProposedCorrectionLines != nil
+	plan := facadeFinalizePlan{Transitions: []facadeFinalizeTransition{}, Candidate: state.CurrentSnapshot, Evidence: evidence}
+	appendState := func(operation string) {
+		plan.Transitions = append(plan.Transitions, facadeFinalizeTransition{Operation: operation, State: state})
+	}
+	if state.State == reviewtransaction.StateReviewing {
+		input, err := prepareCompactReviewerResults(state, results, refuter, facadeRepositoryEvidence{ctx: ctx, repo: repo})
+		if err != nil {
+			return plan, err
+		}
+		if err := state.CompleteReview(input); err != nil {
+			return plan, err
+		}
+		appendState("review/complete-review")
+	}
+	if state.State == reviewtransaction.StateCorrectionRequired && state.ProposedCorrectionLines == nil && correctionLines > 0 {
+		if err := state.BeginCorrection(correctionLines); err != nil {
+			return plan, err
+		}
+		appendState("review/begin-fix")
+	}
+	if state.State == reviewtransaction.StateCorrectionRequired && validation != nil && entryState == reviewtransaction.StateCorrectionRequired && entryProposed {
+		if err := rejectFacadeCorrectionUntracked(ctx, repo, state); err != nil {
+			return plan, err
+		}
+		fix, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(ctx, reviewtransaction.Target{Kind: reviewtransaction.TargetFixDiff, Projection: state.InitialSnapshot.Projection, BaseRef: state.CurrentSnapshot.CandidateTree, IntendedUntracked: state.InitialSnapshot.IntendedUntracked, LedgerIDs: state.FixFindingIDs})
+		if err != nil {
+			return plan, err
+		}
+		actual, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ChangedLines(ctx, fix)
+		if err != nil {
+			return plan, err
+		}
+		native, err := validation.compact(reviewtransaction.FixDeltaHashForSnapshot(fix), state.FixFindingIDs)
+		if err != nil {
+			return plan, err
+		}
+		if err := state.CompleteCorrection(fix, actual, native); err != nil {
+			return plan, err
+		}
+		plan.Candidate = fix
+		appendState("review/complete-fix")
+	}
+	if state.State == reviewtransaction.StateValidating {
+		if len(plan.Evidence) == 0 && facadeNativeLowRiskCandidate(state) {
+			generated, err := prepareFacadeNativeLowRiskVerification(ctx, repo, state)
+			if err != nil {
+				return plan, err
+			}
+			plan.Evidence = generated
+		}
+		if len(plan.Evidence) > 0 {
+			if err := state.CompleteVerification(plan.Evidence, !failed); err != nil {
+				return plan, err
+			}
+			appendState("review/complete-verification")
+		}
+	}
+	if state.State == reviewtransaction.StateValidating && len(plan.Evidence) == 0 {
+		return plan, nil
+	}
+	return plan, nil
 }
 
 func facadeNativeLowRiskCandidate(state reviewtransaction.CompactState) bool {
@@ -1053,21 +1190,26 @@ func inspectCompactFacadeReceipt(path string, expected reviewtransaction.Compact
 		return false, nil
 	}
 	if err != nil {
-		return false, fmt.Errorf("inspect compact review receipt: %w", err)
+		return false, &reviewtransaction.ImmutablePublicationConflictError{Cause: errors.New("existing receipt cannot be read")}
 	}
 	existing, err := reviewtransaction.ParseCompactReceipt(payload)
 	if err != nil {
-		return false, fmt.Errorf("existing compact review receipt is unsafe for replay: %w", err)
+		return false, &reviewtransaction.ImmutablePublicationConflictError{Cause: errors.New("existing receipt is invalid")}
 	}
 	if !reflect.DeepEqual(existing, expected) {
-		return false, errors.New("existing compact review receipt is unsafe for replay: receipt does not equal terminal authority")
+		return false, &reviewtransaction.ImmutablePublicationConflictError{Cause: errors.New("existing receipt differs from terminal authority")}
 	}
 	return true, nil
 }
 
 func newFacadeReceiptPublicationError(lineage, requestDigest string, cause error) error {
+	replayability := string(reviewtransaction.ReplayabilityExactReplaySafe)
+	var conflict *reviewtransaction.ImmutablePublicationConflictError
+	if errors.As(cause, &conflict) {
+		replayability = string(reviewtransaction.ReplayabilityManualActionRequired)
+	}
 	return &ReviewFacadeReceiptPublicationError{
-		MutationOutcome: "committed", Replayability: "exact_replay_safe",
+		MutationOutcome: "committed", Replayability: replayability,
 		LineageID: lineage, RequestDigest: requestDigest, Cause: cause,
 	}
 }
