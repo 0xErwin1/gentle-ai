@@ -57,6 +57,50 @@ func TestUnqualifiedGateDiscoverySelectsOneExactReceiptAcrossUnrelatedHistory(t 
 	}
 }
 
+func TestReceiptlessTerminalLegacyChainIsInventoryReadableButNeverGateAuthority(t *testing.T) {
+	fixture := newLegacyCLIFixture(t, "legacy-pre-receipt")
+	if err := os.Remove(fixture.receiptPath); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := reviewtransaction.InventoryAuthority(context.Background(), fixture.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.Complete || !report.Authoritative {
+		t.Fatalf("receiptless terminal legacy chain forced incomplete inventory = %#v", report)
+	}
+	if len(report.Entries) != 1 || report.Entries[0].Status != reviewtransaction.AuthorityStatusHistorical {
+		t.Fatalf("receiptless terminal legacy entry = %#v", report.Entries)
+	}
+
+	gateInput := reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply}
+	_, _, discoveryErr := discoverCompactFacadeGateReview(context.Background(), fixture.repo, "", gateInput)
+	var discovery *ReviewReceiptDiscoveryError
+	if !errors.As(discoveryErr, &discovery) || discovery.Kind != ReviewReceiptMissing {
+		t.Fatalf("receiptless legacy gate discovery = %#v, %v", discovery, discoveryErr)
+	}
+	if exact := legacyExactFacadeGateLineages(context.Background(), fixture.repo, gateInput); exact != 0 {
+		t.Fatalf("receiptless legacy chain counted as exact gate lineage %d times", exact)
+	}
+	if _, _, _, legacyErr := discoverFacadeReview(context.Background(), fixture.repo, fixture.lineage, true); legacyErr == nil {
+		t.Fatal("receiptless legacy chain was discovered as terminal facade authority")
+	}
+
+	var output bytes.Buffer
+	err = RunReview([]string{
+		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", fixture.repo,
+		"--gate", string(reviewtransaction.GatePostApply),
+	}, &output)
+	if err == nil {
+		t.Fatal("receiptless legacy chain acted as gate authority")
+	}
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Code != "receipt_missing" || failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe {
+		t.Fatalf("receiptless legacy gate failure = %#v", failure)
+	}
+}
+
 func TestUnqualifiedGateDiscoveryReturnsTypedMissingAndScopeChanged(t *testing.T) {
 	t.Run("missing", func(t *testing.T) {
 		repo := initReviewCLIRepo(t)
