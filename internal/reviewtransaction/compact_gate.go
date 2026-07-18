@@ -193,7 +193,9 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	if request.Gate == GatePrePush && record.State.InitialSnapshot.Kind == TargetCurrentChanges && resolvedPrePR.DeliveredCommitCount != 1 {
 		return invalid("pre-push current-changes receipt requires exactly one delivery commit")
 	}
-	if request.Gate == GatePrePush && record.State.InitialSnapshot.Kind == TargetBaseDiff {
+	validatePublicationRange := request.Gate == GatePrePush && record.State.InitialSnapshot.Kind == TargetBaseDiff ||
+		record.State.InitialSnapshot.Kind == TargetBaseWorkspaceOverlay && (request.Gate == GatePrePush || request.Gate == GatePrePR)
+	if validatePublicationRange {
 		if err := validateCompactPublicationRange(ctx, repo, record.State.GenesisPaths, resolvedPrePR); err != nil {
 			return invalid(err.Error())
 		}
@@ -342,7 +344,7 @@ func buildCompactLifecycleSnapshot(ctx context.Context, repo string, request Gat
 	if request.Gate == GatePreCommit && request.Target.Projection == ProjectionStaged {
 		request.Target.IntendedUntracked = []string{}
 	}
-	if request.Target.Kind == TargetFixDiff || request.Target.Kind == TargetBaseDiff && (request.Gate == GatePostApply || request.Gate == GatePreCommit) {
+	if request.Target.Kind == TargetFixDiff || (request.Target.Kind == TargetBaseDiff || request.Target.Kind == TargetBaseWorkspaceOverlay) && (request.Gate == GatePostApply || request.Gate == GatePreCommit) {
 		snapshot, err := (SnapshotBuilder{Repo: repo}).build(ctx, request.Target, request.Gate == GatePreCommit)
 		return snapshot, nil, err
 	}
@@ -370,6 +372,10 @@ func buildCompactGateRequest(ctx context.Context, repo string, state CompactStat
 				Kind: TargetFixDiff, Projection: projection, BaseRef: current.BaseTree,
 				IntendedUntracked: intended, LedgerIDs: append([]string(nil), current.LedgerIDs...),
 			}
+			break
+		}
+		if current.Kind == TargetBaseWorkspaceOverlay {
+			request.Target = Target{Kind: TargetBaseWorkspaceOverlay, Projection: projection, BaseRef: current.BaseTree, IntendedUntracked: intended}
 			break
 		}
 		headTree, err := (SnapshotBuilder{Repo: repo}).resolveTree(ctx, "HEAD")
@@ -463,7 +469,7 @@ func validateCompactCommittedTrackedScope(ctx context.Context, repo string, requ
 }
 
 func validateCompactPublicationRange(ctx context.Context, repo string, genesis []string, refs *resolvedPrePRRefs) error {
-	output, err := runGit(ctx, repo, nil, nil, "log", "--format=", "--name-only", "-z", "--no-renames", refs.BaseCommit+".."+refs.HeadCommit)
+	output, err := runGit(ctx, repo, nil, nil, "log", "-m", "--format=", "--name-only", "-z", "--no-renames", refs.BaseCommit+".."+refs.HeadCommit)
 	if err != nil {
 		return fmt.Errorf("inspect complete publication range: %w", err)
 	}

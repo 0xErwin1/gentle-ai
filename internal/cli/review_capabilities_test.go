@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,7 +16,7 @@ import (
 const capabilityFixtureExecutable = "gentle-ai capability fixture\n"
 
 func TestReviewCapabilitiesMatchesConformanceFixtureOutsideRepository(t *testing.T) {
-	fixturePath, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "capabilities.fixture.json"))
+	fixturePath, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "capabilities-v1.1.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +149,7 @@ func TestReviewCapabilitiesAdvertisesOnlyNativeSurface(t *testing.T) {
 
 func TestReviewCapabilitiesSchemaAndFixtureAreStrict(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1")
-	schemaPayload, err := os.ReadFile(filepath.Join(root, "schemas", "capabilities.schema.json"))
+	schemaPayload, err := os.ReadFile(filepath.Join(root, "schemas", "capabilities-v1.1.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +160,7 @@ func TestReviewCapabilitiesSchemaAndFixtureAreStrict(t *testing.T) {
 	if schema["$schema"] != "https://json-schema.org/draft/2020-12/schema" || schema["$id"] != ReviewIntegrationCapabilitiesSchemaID || schema["additionalProperties"] != false {
 		t.Fatalf("capabilities schema header = %#v", schema)
 	}
-	fixture, err := os.ReadFile(filepath.Join(root, "fixtures", "capabilities.fixture.json"))
+	fixture, err := os.ReadFile(filepath.Join(root, "fixtures", "capabilities-v1.1.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,6 +203,63 @@ func TestReviewCapabilitiesSchemaAndFixtureAreStrict(t *testing.T) {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&ReviewCapabilitiesResult{}); err == nil {
 		t.Fatal("strict capabilities decoder accepted unknown top-level field")
+	}
+}
+
+func TestReviewCapabilitiesVersionsKeepV1ReadableAndFailClosedAcrossSchemas(t *testing.T) {
+	root := filepath.Join("..", "..", "contracts", "review-integration", "v1")
+	legacySchemaPayload, err := os.ReadFile(filepath.Join(root, "schemas", "capabilities.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var legacySchema map[string]any
+	if err := json.Unmarshal(legacySchemaPayload, &legacySchema); err != nil {
+		t.Fatal(err)
+	}
+	if legacySchema["$id"] != ReviewIntegrationCapabilitiesSchemaIDV1 {
+		t.Fatalf("legacy capabilities schema identity = %#v", legacySchema["$id"])
+	}
+	legacyFixture, err := os.ReadFile(filepath.Join(root, "fixtures", "capabilities.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentFixture, err := os.ReadFile(filepath.Join(root, "fixtures", "capabilities-v1.1.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	type identity struct {
+		Schema   string                     `json:"schema"`
+		Protocol ReviewCapabilitiesProtocol `json:"protocol"`
+	}
+	validateLegacy := func(payload []byte) error {
+		var value identity
+		if err := json.Unmarshal(payload, &value); err != nil {
+			return err
+		}
+		if value.Schema != ReviewIntegrationCapabilitiesSchemaV1 || value.Protocol != (ReviewCapabilitiesProtocol{Major: 1, Minor: 0}) {
+			return errors.New("unknown legacy capabilities schema")
+		}
+		return nil
+	}
+	if err := validateLegacy(legacyFixture); err != nil {
+		t.Fatalf("legacy consumer rejected v1.0 artifact: %v", err)
+	}
+	if err := validateLegacy(currentFixture); err == nil {
+		t.Fatal("legacy consumer accepted unknown v1.1 capabilities schema")
+	}
+	var current ReviewCapabilitiesResult
+	if err := json.Unmarshal(currentFixture, &current); err != nil {
+		t.Fatal(err)
+	}
+	if err := current.Validate(); err != nil {
+		t.Fatalf("v1.1 consumer rejected negotiated artifact: %v", err)
+	}
+	var legacy ReviewCapabilitiesResult
+	if err := json.Unmarshal(legacyFixture, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Validate(); err == nil {
+		t.Fatal("v1.1 consumer accepted v1.0 artifact without explicit negotiation")
 	}
 }
 
@@ -276,6 +334,7 @@ func TestReviewCapabilitiesFeatureRequirementsAreExplicit(t *testing.T) {
 		{Name: "uniform_failure_envelope", Supported: true, Requires: []string{"repository_independent_capabilities"}},
 	}
 	wantOptional := []ReviewCapabilityFeature{
+		{Name: "base_ref_workspace_overlay", Supported: true, Requires: []string{"immutable_snapshot", "restart_safe_projection"}},
 		{Name: "bounded_process_waits", Supported: true, Requires: []string{"uniform_failure_envelope"}},
 		{Name: "exact_gate_receipt_discovery", Supported: true, Requires: []string{"five_delivery_gates"}},
 		{Name: "native_low_risk_verification", Supported: true, Requires: []string{"compact_v2_authority"}},
