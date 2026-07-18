@@ -140,6 +140,7 @@ func (err *reviewFacadeOperationProgressError) record(lineage, revision string) 
 
 var writeCompactFacadeReceipt = reviewtransaction.WriteCompactReceiptAtomic
 var reviewFacadeSyncDirectory = reviewtransaction.SyncReviewDirectory
+var reviewRecoverBeforePersist = func() {}
 
 type ReviewInvalidateResult struct {
 	Operation     string                  `json:"operation"`
@@ -149,11 +150,13 @@ type ReviewInvalidateResult struct {
 }
 
 type ReviewRecoverResult struct {
-	Operation     string                                      `json:"operation"`
-	LineageID     string                                      `json:"lineage_id"`
-	State         reviewtransaction.State                     `json:"state"`
-	StoreRevision string                                      `json:"store_revision"`
-	Recovery      reviewtransaction.CompactRecoveryProvenance `json:"recovery"`
+	Operation      string                                      `json:"operation"`
+	LineageID      string                                      `json:"lineage_id"`
+	State          reviewtransaction.State                     `json:"state"`
+	StoreRevision  string                                      `json:"store_revision"`
+	Projection     reviewtransaction.Projection                `json:"projection"`
+	TargetIdentity string                                      `json:"target_identity"`
+	Recovery       reviewtransaction.CompactRecoveryProvenance `json:"recovery"`
 }
 
 type facadeFinding struct {
@@ -394,7 +397,8 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	disposition := flags.String("disposition", "", "scope_changed, invalidated, or escalated")
 	reason := flags.String("reason", "", "recovery reason")
 	actor := flags.String("actor", "", "recovery actor")
-	authorization := flags.String("maintainer-authorization", "", "explicit authorization required for escalated or correction-required scope recovery")
+	projectionFlag := flags.String("projection", "", "successor projection: workspace or staged (default: predecessor projection)")
+	authorization := flags.String("maintainer-authorization", "", "exact six-line LF-only binding: gentle-ai.review-recovery-authorization/v1, predecessor_lineage, predecessor_revision, target_identity, actor, reason")
 	policySource := flags.String("policy", "", "optional review policy file")
 	focus := flags.String("focus", "reliability", "dominant standard-risk focus; large pure documentation always uses readability")
 	baseRef := flags.String("base-ref", "", "optional base revision for immutable base-to-HEAD review")
@@ -441,6 +445,12 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 		return errors.New("base-diff recovery requires matching --base-ref and --committed-only")
 	}
 	projection := predecessorRecord.State.InitialSnapshot.Projection
+	if selected := strings.TrimSpace(*projectionFlag); selected != "" {
+		projection = reviewtransaction.Projection(selected)
+		if projection != reviewtransaction.ProjectionWorkspace && projection != reviewtransaction.ProjectionStaged {
+			return fmt.Errorf("unsupported review recovery projection %q", selected)
+		}
+	}
 	intended := []string{}
 	if projection != reviewtransaction.ProjectionStaged {
 		intended, err = builder.DiscoverIntendedUntracked(context.Background())
@@ -492,6 +502,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	if *releaseScope {
 		*authorization = reviewtransaction.ReleaseScopeRecoveryAuthorization
 	}
+	reviewRecoverBeforePersist()
 	record, err := reviewtransaction.RecoverCompactAuthority(context.Background(), root, reviewtransaction.CompactRecoveryRequest{
 		PredecessorLineageID: *predecessor, ExpectedPredecessorRevision: *expected, Successor: state,
 		Disposition: reviewtransaction.RecoveryDisposition(*disposition), Reason: *reason, Actor: *actor, MaintainerAuthorization: *authorization,
@@ -499,7 +510,8 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return encodeReviewJSON(stdout, ReviewRecoverResult{Operation: "review/recover", LineageID: record.State.LineageID, State: record.State.State, StoreRevision: record.Revision, Recovery: *record.State.Recovery})
+	return encodeReviewJSON(stdout, ReviewRecoverResult{Operation: "review/recover", LineageID: record.State.LineageID, State: record.State.State,
+		StoreRevision: record.Revision, Projection: facadeProjection(snapshot.Projection), TargetIdentity: snapshot.Identity, Recovery: *record.State.Recovery})
 }
 
 func RunReviewBindSDD(args []string, stdout io.Writer) error {
