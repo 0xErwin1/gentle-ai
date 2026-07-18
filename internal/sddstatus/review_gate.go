@@ -163,6 +163,9 @@ func readReviewTransaction(path, content string) (*reviewtransaction.Transaction
 		}
 		payload = read
 	}
+	if !strings.HasPrefix(strings.TrimSpace(string(payload)), "{") {
+		return nil, "bounded review transaction artifact is not a native JSON review transaction; regenerate it from native review authority"
+	}
 	transaction, err := reviewtransaction.ParseTransaction(payload)
 	if err != nil {
 		return nil, fmt.Sprintf("bounded review transaction is invalid: %v", err)

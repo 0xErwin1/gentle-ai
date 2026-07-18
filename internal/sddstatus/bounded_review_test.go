@@ -359,6 +359,108 @@ func boundedEngramObservations(t *testing.T, project, changeRoot string) []engra
 	}
 }
 
+const incompatibleTransactionSummary = "# Native Review Transaction\n\n- lineage: thin-lineage\n- state: approved\n"
+
+func TestReadReviewTransactionRejectsIncompatibleNonJSONArtifact(t *testing.T) {
+	markdownPath := filepath.Join(t.TempDir(), "transaction.json")
+	write(t, markdownPath, incompatibleTransactionSummary)
+	for _, tt := range []struct {
+		name    string
+		path    string
+		content string
+	}{
+		{name: "engram markdown content", content: incompatibleTransactionSummary},
+		{name: "markdown transaction mirror", path: markdownPath},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			transaction, reason := readReviewTransaction(tt.path, tt.content)
+			if transaction != nil {
+				t.Fatalf("readReviewTransaction() = %#v, want nil transaction", transaction)
+			}
+			if strings.Contains(reason, "invalid character") {
+				t.Fatalf("readReviewTransaction() reason = %q, want compatibility reason instead of raw JSON parse error", reason)
+			}
+			if !strings.Contains(reason, "not a native JSON review transaction") {
+				t.Fatalf("readReviewTransaction() reason = %q, want incompatible-artifact reason", reason)
+			}
+		})
+	}
+}
+
+func TestResolveEngramBridgesCompactAuthorityOverIncompatibleTransactionArtifact(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-thin")
+	mkdir(t, filepath.Join(root, ".engram"))
+	project := strings.ToLower(filepath.Base(root))
+	observation := func(title, path string) engramObservation {
+		payload, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return engramObservation{Title: title, Content: string(payload), Project: project, Scope: "project"}
+	}
+	observations := []engramObservation{
+		observation("sdd/thin/proposal", filepath.Join(changeRoot, "proposal.md")),
+		observation("sdd/thin/spec", filepath.Join(changeRoot, "specs", "auth", "spec.md")),
+		observation("sdd/thin/design", filepath.Join(changeRoot, "design.md")),
+		observation("sdd/thin/tasks", filepath.Join(changeRoot, "tasks.md")),
+		{Title: "sdd/thin/apply-progress", Content: "all work units complete", Project: project, Scope: "project"},
+		{Title: "sdd/thin/review/transaction", Content: incompatibleTransactionSummary, Project: project, Scope: "project"},
+	}
+	restore := stubEngramExport(t, observations)
+	defer restore()
+
+	status, ok, err := resolveEngramStatus(root, "thin", false)
+	if err != nil {
+		t.Fatalf("resolveEngramStatus() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("resolveEngramStatus() did not retain the Engram change")
+	}
+	if status.ReviewTransaction != nil {
+		t.Fatalf("ReviewTransaction = %#v, want incompatible artifact treated as missing", status.ReviewTransaction)
+	}
+	reasons := strings.Join(status.BlockedReasons, "\n")
+	if strings.Contains(reasons, "invalid character") {
+		t.Fatalf("BlockedReasons = %v, want no raw JSON parse error", status.BlockedReasons)
+	}
+	if status.Dependencies.Verify != DependencyReady || status.NextRecommended != "verify" {
+		t.Fatalf("verify=%q next=%q reasons=%v, want compact authority bridged to ready/verify", status.Dependencies.Verify, status.NextRecommended, status.BlockedReasons)
+	}
+}
+
+func TestResolveEngramFailsClosedOnIncompatibleTransactionWithoutNativeAuthority(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, ".engram"))
+	project := strings.ToLower(filepath.Base(root))
+	observations := []engramObservation{
+		{Title: "sdd/thin/proposal", Content: "# Proposal\n", Project: project, Scope: "project"},
+		{Title: "sdd/thin/spec", Content: "### Requirement: Auth\n#### Scenario: Valid login\n", Project: project, Scope: "project"},
+		{Title: "sdd/thin/design", Content: "# Design\n", Project: project, Scope: "project"},
+		{Title: "sdd/thin/tasks", Content: "- [x] 1.1 Done\n", Project: project, Scope: "project"},
+		{Title: "sdd/thin/apply-progress", Content: "all work units complete", Project: project, Scope: "project"},
+		{Title: "sdd/thin/review/transaction", Content: incompatibleTransactionSummary, Project: project, Scope: "project"},
+	}
+	restore := stubEngramExport(t, observations)
+	defer restore()
+
+	status, ok, err := resolveEngramStatus(root, "thin", false)
+	if err != nil {
+		t.Fatalf("resolveEngramStatus() error = %v", err)
+	}
+	if !ok {
+		t.Fatal("resolveEngramStatus() did not retain the Engram change")
+	}
+	reasons := strings.Join(status.BlockedReasons, "\n")
+	if strings.Contains(reasons, "invalid character") {
+		t.Fatalf("BlockedReasons = %v, want no raw JSON parse error", status.BlockedReasons)
+	}
+	if status.Dependencies.Verify != DependencyBlocked || !strings.Contains(reasons, "not a native JSON review transaction") {
+		t.Fatalf("verify=%q reasons=%v, want fail-closed compatibility reason", status.Dependencies.Verify, status.BlockedReasons)
+	}
+}
+
 func TestResolveFinalVerifyWaitsForAllTasks(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n- [ ] 1.2 Pending\n")
