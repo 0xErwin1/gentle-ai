@@ -194,6 +194,10 @@ func readVerifiedReviewerArtifact(artifact reviewResultArtifact, storeDir string
 	if !pathInfo.Mode().IsRegular() || pathInfo.Mode()&os.ModeSymlink != 0 || !reviewArtifactModeSafe(pathInfo.Mode(), false) {
 		return nil, errors.New("artifact is not an owner-only regular file")
 	}
+	// Windows resolves file IDs lazily from the path; snapshot it before the path can be replaced.
+	if !os.SameFile(pathInfo, pathInfo) {
+		return nil, errors.New("artifact identity is unavailable")
+	}
 	reviewArtifactAfterLstat()
 	file, err := os.Open(artifact.Path)
 	if err != nil {
