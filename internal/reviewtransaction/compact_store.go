@@ -1209,6 +1209,23 @@ func validateCompactSuccessor(previous, next CompactState, operation string) err
 		if !reflectCompactReviewData(previous, next) || previous.EvidenceHash != next.EvidenceHash {
 			return fmt.Errorf("%w: compact correction changed frozen review evidence", ErrInvalidSuccessor)
 		}
+	case CompactResultDispositionOperation:
+		// reviewing -> escalated. The disposition may only append its own audit
+		// record and flip the terminal state; freezing every other field here is
+		// what keeps captured lens results, findings, and evidence untouched and
+		// makes it impossible to launder a refused payload into an admitted one.
+		if previous.State != StateReviewing || next.State != StateEscalated {
+			return fmt.Errorf("%w: a reviewer result disposition terminally escalates a reviewing authority only", ErrInvalidSuccessor)
+		}
+		if len(next.ResultDispositions) != len(previous.ResultDispositions)+1 {
+			return fmt.Errorf("%w: a reviewer result disposition records exactly one disposition", ErrInvalidSuccessor)
+		}
+		expected := previous
+		expected.State = StateEscalated
+		expected.ResultDispositions = next.ResultDispositions
+		if !compactStateEqual(expected, next) {
+			return fmt.Errorf("%w: reviewer result disposition changed unrelated state", ErrInvalidSuccessor)
+		}
 	case "review/complete-verification":
 		if previous.State != StateValidating || next.State != StateApproved && next.State != StateEscalated || !validSHA256(next.EvidenceHash) {
 			return fmt.Errorf("%w: invalid compact verification completion", ErrInvalidSuccessor)
