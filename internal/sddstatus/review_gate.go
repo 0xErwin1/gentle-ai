@@ -247,7 +247,7 @@ func applyReviewGate(
 	if status.Dependencies.Verify != DependencyAllDone || !status.TaskProgress.AllComplete {
 		return
 	}
-	applyReviewGateEvaluation(status, resolveReviewAuthority(context.Background(), repo, receiptPath, receiptContent))
+	applyReviewGateEvaluation(status, resolveReviewAuthority(context.Background(), repo, receiptPath, receiptContent, ""))
 }
 
 func applyReviewGateEvaluation(status *Status, evaluation reviewAuthorityEvaluation) {
@@ -258,7 +258,7 @@ func applyReviewGateEvaluation(status *Status, evaluation reviewAuthorityEvaluat
 	blockReviewGate(status, evaluation.Result, evaluation.Reason)
 }
 
-func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptContent string) reviewAuthorityEvaluation {
+func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptContent, changeName string) reviewAuthorityEvaluation {
 	receiptPayload, ok := readReviewArtifact(receiptPath, receiptContent)
 	if !ok {
 		var err error
@@ -272,6 +272,23 @@ func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptConte
 		receipt, err := reviewtransaction.ParseCompactReceipt(receiptPayload)
 		if err != nil {
 			return reviewAuthorityEvaluation{Result: reviewtransaction.GateInvalidated, Reason: fmt.Sprintf("compact review receipt is invalid or non-terminal: %v", err)}
+		}
+		if changeName != "" {
+			store, storeErr := reviewtransaction.CompactAuthoritativeStore(ctx, repo, receipt.LineageID)
+			if storeErr != nil {
+				return reviewAuthorityEvaluation{Result: reviewtransaction.GateInvalidated, Reason: "selected change compact authority cannot be loaded"}
+			}
+			record, loadErr := store.Load()
+			if loadErr != nil {
+				return reviewAuthorityEvaluation{Result: reviewtransaction.GateInvalidated, Reason: "selected change compact authority cannot be loaded"}
+			}
+			bound, reason := compactAuthorityPathsBound(record.State, changeName)
+			if !bound {
+				if reason == "" {
+					reason = fmt.Sprintf("compact review authority is not bound to selected change %q", changeName)
+				}
+				return reviewAuthorityEvaluation{Result: reviewtransaction.GateInvalidated, Reason: reason}
+			}
 		}
 		evaluation = reviewtransaction.EvaluateCompactGate(ctx, repo, receipt, reviewtransaction.NativeGateRequestInput{
 			Gate: reviewtransaction.GatePostApply, LineageID: receipt.LineageID,

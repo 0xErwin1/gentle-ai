@@ -316,9 +316,11 @@ func Resolve(options ResolveOptions) (Status, error) {
 	// not legacy remediation classification against a missing transaction.
 	var staleAllowAuthority *reviewAuthorityEvaluation
 	if !bindingPresent && reviewState == nil && applyState == ApplyAllDone && artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale {
-		evaluation := resolveReviewAuthority(context.Background(), workspaceRoot, firstPath(artifactPaths.ReviewReceipt), "")
+		evaluation := resolveReviewAuthority(context.Background(), workspaceRoot, firstPath(artifactPaths.ReviewReceipt), "", changeName)
 		if evaluation.Result == reviewtransaction.GateAllow {
 			staleAllowAuthority = &evaluation
+		} else {
+			blockedReasons = append(blockedReasons, evaluation.Reason)
 		}
 	}
 	remediationState := resolveBoundedRemediation(
@@ -513,9 +515,11 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	// not legacy remediation classification against a missing transaction.
 	var staleAllowAuthority *reviewAuthorityEvaluation
 	if reviewState == nil && applyState == ApplyAllDone && artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale {
-		evaluation := resolveReviewAuthority(context.Background(), workspaceRoot, "", artifactsByType["review/receipt"].Content)
+		evaluation := resolveReviewAuthority(context.Background(), workspaceRoot, "", artifactsByType["review/receipt"].Content, changeName)
 		if evaluation.Result == reviewtransaction.GateAllow {
 			staleAllowAuthority = &evaluation
+		} else {
+			blockedReasons = append(blockedReasons, evaluation.Reason)
 		}
 	}
 	remediationState := resolveBoundedRemediation(
