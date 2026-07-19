@@ -258,6 +258,163 @@ func TestReclaimCrashBeforeRenameLeavesPreparedOrphanAndRetrySucceeds(t *testing
 	}
 }
 
+func TestReclaimPreparedRecordFailureRemovesUnidentifiedQuarantine(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	root, _, err := reviewAuthorityRoot(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "v2", "reclaim-audit")
+	writeReclaimFixtureFile(t, filepath.Join(dir, "stray.tmp"), "stray\n")
+
+	original := persistReclaimRecord
+	persistReclaimRecord = func(CompactReclaimRecord) error {
+		return errors.New("simulated prepared record failure")
+	}
+	t.Cleanup(func() { persistReclaimRecord = original })
+
+	if _, err := ReclaimIncompleteCompactStore(context.Background(), repo, CompactReclaimRequest{
+		LineageID: "reclaim-audit", Reason: "residue", Actor: "maintainer",
+	}); err == nil {
+		t.Fatal("failed prepared record write reported success")
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "quarantine"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("prepared record failure left unidentified quarantine entries: %#v", entries)
+	}
+	if payload, err := os.ReadFile(filepath.Join(dir, "stray.tmp")); err != nil || !bytes.Equal(payload, []byte("stray\n")) {
+		t.Fatalf("prepared record failure mutated source residue: %q, %v", payload, err)
+	}
+}
+
+func TestReclaimRefusesSymlinkedQuarantineRoot(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	root, _, err := reviewAuthorityRoot(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "v2", "reclaim-audit")
+	writeReclaimFixtureFile(t, filepath.Join(dir, "stray.tmp"), "stray\n")
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "quarantine")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if _, err := ReclaimIncompleteCompactStore(context.Background(), repo, CompactReclaimRequest{
+		LineageID: "reclaim-audit", Reason: "residue", Actor: "maintainer",
+	}); err == nil {
+		t.Fatal("reclaim followed a symlinked quarantine root")
+	}
+	entries, err := os.ReadDir(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("reclaim escaped through quarantine symlink: %#v", entries)
+	}
+}
+
+func TestReclaimQuarantineCreationSyncFailureLeavesNoUnidentifiedDirectory(t *testing.T) {
+	for _, failedDirectory := range []string{"authority root", "quarantine root"} {
+		t.Run(failedDirectory, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			root, _, err := reviewAuthorityRoot(context.Background(), repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := filepath.Join(root, "v2", "reclaim-audit")
+			writeReclaimFixtureFile(t, filepath.Join(dir, "stray.tmp"), "stray\n")
+
+			originalSync := syncReviewDirectory
+			quarantineRootSyncs := 0
+			syncReviewDirectory = func(path string) error {
+				if path == filepath.Join(root, "quarantine") {
+					quarantineRootSyncs++
+				}
+				if failedDirectory == "authority root" && path == root ||
+					failedDirectory == "quarantine root" && path == filepath.Join(root, "quarantine") && quarantineRootSyncs == 1 {
+					return errors.New("simulated directory sync failure")
+				}
+				return nil
+			}
+			t.Cleanup(func() { syncReviewDirectory = originalSync })
+
+			if _, err := ReclaimIncompleteCompactStore(context.Background(), repo, CompactReclaimRequest{
+				LineageID: "reclaim-audit", Reason: "residue", Actor: "maintainer",
+			}); err == nil {
+				t.Fatal("quarantine creation sync failure reported success")
+			}
+			entries, err := os.ReadDir(filepath.Join(root, "quarantine"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("quarantine creation sync failure left unidentified entries: %#v", entries)
+			}
+		})
+	}
+}
+
+func TestReclaimRenameSyncFailureLeavesPreparedRecord(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		failedPath func(root, quarantineDir string) string
+	}{
+		{name: "source version root", failedPath: func(root, _ string) string { return filepath.Join(root, "v2") }},
+		{name: "quarantine directory", failedPath: func(_ string, quarantineDir string) string { return quarantineDir }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			root, _, err := reviewAuthorityRoot(context.Background(), repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := filepath.Join(root, "v2", "reclaim-audit")
+			writeReclaimFixtureFile(t, filepath.Join(dir, "stray.tmp"), "stray\n")
+
+			originalSync := syncReviewDirectory
+			var quarantineDir string
+			quarantineDirSyncs := 0
+			syncReviewDirectory = func(path string) error {
+				if strings.HasPrefix(path, filepath.Join(root, "quarantine")+string(os.PathSeparator)) {
+					quarantineDir = path
+					quarantineDirSyncs++
+				}
+				if quarantineDir != "" && path == tt.failedPath(root, quarantineDir) &&
+					(path != quarantineDir || quarantineDirSyncs > 1) {
+					return errors.New("simulated rename directory sync failure")
+				}
+				return nil
+			}
+			t.Cleanup(func() { syncReviewDirectory = originalSync })
+
+			record, err := ReclaimIncompleteCompactStore(context.Background(), repo, CompactReclaimRequest{
+				LineageID: "reclaim-audit", Reason: "residue", Actor: "maintainer",
+			})
+			if err == nil {
+				t.Fatal("rename directory sync failure reported success")
+			}
+			if record.Status != CompactReclaimPrepared || record.QuarantinePath == "" {
+				t.Fatalf("rename sync failure record = %#v", record)
+			}
+			payload, readErr := os.ReadFile(filepath.Join(record.QuarantinePath, "reclaim-record.json"))
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			var persisted CompactReclaimRecord
+			if err := json.Unmarshal(payload, &persisted); err != nil {
+				t.Fatal(err)
+			}
+			if persisted.Status != CompactReclaimPrepared {
+				t.Fatalf("rename sync failure published status %q", persisted.Status)
+			}
+		})
+	}
+}
+
 func TestReclaimCommitRewriteFailureReturnsPreparedRecordWithQuarantine(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	root, _, err := reviewAuthorityRoot(context.Background(), repo)
