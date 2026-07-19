@@ -38,7 +38,7 @@ Before recommending any contribution action, read the relevant local file. The r
 | `.github/ISSUE_TEMPLATE/bug_report.yml` | Bug report structure + `status:needs-review` auto-label + `status:approved` blocking gate |
 | `.github/ISSUE_TEMPLATE/feature_request.yml` | Feature request structure + same gates |
 | `.github/workflows/pr-check.yml` | Automated gates: `Check Issue Reference`, `Check Issue Has status:approved`, `Check PR Has type:* Label`, `Check PR Cognitive Load` |
-| `.github/ISSED_TEMPLATE/config.yml` | Issue-template routing rules; do not bypass |
+| `.github/ISSUE_TEMPLATE/config.yml` | Issue-template routing rules; do not bypass |
 | `skills/branch-pr/SKILL.md` | Branch + PR creation mechanics |
 | `skills/chained-pr/SKILL.md` | Chained vs Stacked PR strategy mechanics |
 | `skills/issue-creation/SKILL.md` | Issue creation mechanics |
@@ -56,7 +56,7 @@ These files evolve. Re-read them at the start of every contribution.
 3. **Exactly one `type:*` label per PR.** Two `type:*` labels fail the check. No `type:*` label fails the check.
 4. **400-line budget per PR** (`additions + deletions`). Above that, request `size:exception` from a maintainer with rationale documented in the PR body.
 5. **No `Co-Authored-By` trailers** on commits. AI attribution is not acceptable in this repo.
-6. **No force-push to `main` or `staging`.** Both branches are protected.
+6. **No force-push to `main`.** It is protected.
 7. **PR body checkboxes must reflect API state.** If `gh pr view --json labels` shows `labels: []`, do not check the "type:* added" box — write a `## Pending maintainer actions` section instead.
 8. **PR titles follow `^(type)(\(scope\))?!?: <description>`** with exactly **one scope** (no comma). See `skills/branch-pr/SKILL.md` for the regex.
 9. **Pre-existing test failures are named honestly.** This repo has pre-existing failures in `pi_codegraph`, `tui/sync`, and similar packages. Acknowledging them with the verification method (e.g. `git stash` baseline) is mandatory. Claiming "all tests pass" without that context is dishonest.
