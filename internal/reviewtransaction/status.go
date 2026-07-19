@@ -28,6 +28,12 @@ const (
 	AuthorityStatusSuperseded AuthorityStatus = "superseded"
 	AuthorityStatusRecovered  AuthorityStatus = "recovered"
 	AuthorityStatusCollision  AuthorityStatus = "same-lineage-mixed-collision"
+	// AuthorityStatusHistorical marks a structurally valid terminal legacy-v1
+	// chain that predates the receipt contract: its receipt file is absent
+	// (never corrupt or mismatched). Such chains stay inventory-readable
+	// without forcing the global inventory incomplete, but they are never
+	// discoverable as gate or receipt authority because no receipt exists.
+	AuthorityStatusHistorical AuthorityStatus = "historical-pre-receipt"
 )
 
 type AuthorityVersion string
@@ -266,7 +272,13 @@ func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion
 			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"legacy receipt does not match terminal authority"}
 		}
 	} else if os.IsNotExist(err) && (transaction.State == StateApproved || transaction.State == StateEscalated) {
-		entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"terminal legacy authority is missing its receipt"}
+		// A structurally valid terminal legacy-v1 chain whose receipt file is
+		// absent predates the receipt contract. It stays inventory-readable as
+		// historical context without forcing the global inventory incomplete,
+		// yet remains ineligible as gate or discovery authority because every
+		// receipt consumer requires the receipt file itself. A present-but-wrong
+		// receipt is handled above and stays invalid.
+		entry.Status = AuthorityStatusHistorical
 	} else if !os.IsNotExist(err) {
 		entry.Status, entry.Problems = AuthorityStatusInvalid, []string{"read legacy receipt: " + err.Error()}
 	}
