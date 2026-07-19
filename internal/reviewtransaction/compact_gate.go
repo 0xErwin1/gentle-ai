@@ -250,7 +250,13 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	validatePublicationRange := request.Gate == GatePrePush && (record.State.InitialSnapshot.Kind == TargetBaseDiff || bootstrapPublication) ||
 		record.State.InitialSnapshot.Kind == TargetBaseWorkspaceOverlay && (request.Gate == GatePrePush || request.Gate == GatePrePR)
 	if validatePublicationRange {
-		if err := validateReviewedPublicationRange(ctx, repo, record.State.GenesisPaths, resolvedPrePR); err != nil {
+		publicationGenesis := record.State.GenesisPaths
+		if record.State.Recovery != nil {
+			if chain, ok, chainErr := deriveCompactRecoveryBinding(ctx, repo, record.State); chainErr == nil && ok {
+				publicationGenesis = chain.GenesisPaths
+			}
+		}
+		if err := validateReviewedPublicationRange(ctx, repo, publicationGenesis, resolvedPrePR); err != nil {
 			return invalid(err.Error())
 		}
 	}
@@ -292,6 +298,10 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	baseMismatch := snapshot.BaseTree != receipt.BaseTree && request.Target.Kind != TargetFixDiff && !compatibleAdvance
 	if strictBinding {
 		baseMismatch = snapshot.BaseTree != binding.BaseTree && !squashedFixDelivery
+	}
+	recoveryBinding, recoveryBound, recoveryErr := deriveCompactRecoveryBinding(ctx, repo, record.State)
+	if recoveryErr != nil {
+		return invalid("compact recovery binding cannot be derived during authorization")
 	}
 	// A scope_changed recovery successor freezes only its own pristine scope,
 	// so a delivery already covered by its receipt-bound predecessors would be
@@ -353,10 +363,22 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	if loadErr != nil || snapshotErr != nil || finalUntrackedErr != nil || finalTrackedErr != nil || graphErr != nil || supersededErr != nil || finalSuperseded || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalSnapshot, snapshot) || !sameResolvedPrePRRefs(finalRefs, resolvedPrePR) {
 		return invalid("compact authority or repository target changed during final authorization")
 	}
-	if recoveryRebind != nil {
+	finalCompactGateAllowHook()
+	if recoveryBound {
 		finalChain, ok, chainErr := deriveCompactRecoveryBinding(ctx, repo, finalRecord.State)
-		if chainErr != nil || !ok || !reflect.DeepEqual(finalChain, *recoveryRebind) {
+		if chainErr != nil || !ok || !reflect.DeepEqual(finalChain, recoveryBinding) {
 			return invalid("compact authority or repository target changed during final authorization")
+		}
+		if recoveryRebind == nil && finalRefs != nil && (request.Gate == GatePrePush || request.Gate == GatePrePR) {
+			baseCommit := finalRefs.BaseCommit
+			if request.Gate == GatePrePush {
+				baseCommit = request.Target.BaseRef
+			}
+			leaf := finalChain.Members[len(finalChain.Members)-1]
+			direct := compactRecoveryBinding{Members: []CompactRecord{leaf}, BaseTree: leaf.State.InitialSnapshot.BaseTree}
+			if verifyCompactRecoveryDelivery(ctx, repo, direct, receipt.FinalCandidateTree, baseCommit, finalRefs.HeadCommit) != nil {
+				return invalid("compact recovery delivery changed during final authorization")
+			}
 		}
 	}
 	if request.Gate == GateRelease {
@@ -366,7 +388,6 @@ func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 			return invalid("release evidence changed during final authorization")
 		}
 	}
-	finalCompactGateAllowHook()
 	return NativeGateEvaluation{Result: GateAllow, Reason: nativeGateReason(GateAllow), Context: gateContext}
 }
 
