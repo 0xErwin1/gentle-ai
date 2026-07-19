@@ -43,12 +43,18 @@ func TestCheckOneTool_ShadowedBinary(t *testing.T) {
 	dir2 := t.TempDir()
 
 	// Create two copies of the "engram" binary in two dirs.
+	// chmod 0o755 so the Unix PATH-executable filter (#709) treats them as
+	// real binaries; Windows ignores the mode bit, so the chmod is a no-op there.
 	for _, dir := range []string{dir1, dir2} {
-		f, err := os.Create(filepath.Join(dir, "engram"))
+		p := filepath.Join(dir, "engram")
+		f, err := os.Create(p)
 		if err != nil {
 			t.Fatal(err)
 		}
 		_ = f.Close()
+		if err := os.Chmod(p, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	lookPathFn = func(string) (string, error) { return filepath.Join(dir1, "engram"), nil }
