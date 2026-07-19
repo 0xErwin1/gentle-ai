@@ -251,7 +251,18 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	}
 	snapshot, resolvedPrePR, err := buildCompactLifecycleSnapshot(ctx, repo, request)
 	if err != nil {
-		return invalid("current repository target cannot be derived: "+err.Error(), err)
+		// A snapshot derivation failure is either a genuine infrastructure
+		// fault (git/process/context) or a semantic scope denial such as an
+		// intended-untracked path that is now tracked or only partially
+		// staged. Guard exactly like validateCompactUntrackedScope above:
+		// attach Cause only for infrastructure faults so they still fail
+		// closed, and otherwise mark a semantic denial so the invalidation
+		// persists through compactInvalidationDenialBound.
+		denialContext.Denial = &GateDenial{Stage: "target-derivation", Code: "unavailable"}
+		if compactGateInfrastructureFailure(err) {
+			return invalid("current repository target cannot be derived: "+err.Error(), err)
+		}
+		return invalid("current repository target cannot be derived: " + err.Error())
 	}
 	if request.Gate == GatePrePush && record.State.InitialSnapshot.Kind == TargetCurrentChanges && snapshot.BaseTree == snapshot.CandidateTree {
 		return invalid("pre-push current-changes receipt requires a delivered tree change")

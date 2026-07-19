@@ -209,6 +209,72 @@ func TestInvalidateApprovedCompactAuthorityPersistsBoundSemanticDenial(t *testin
 		t.Fatalf("semantic invalidation retained receipt: %v", err)
 	}
 }
+func TestInvalidateApprovedCompactAuthorityPersistsStagedIntendedUntrackedDenial(t *testing.T) {
+	// Reproduces issue #1269: an approved current-changes lineage whose frozen
+	// intended-untracked path is later staged/tracked. The native gate derives
+	// an invalidated result from the buildCompactLifecycleSnapshot failure path
+	// ("intended-untracked path is already tracked"), which is a semantic scope
+	// denial rather than an infrastructure fault. Post-apply reaches this path
+	// because the staged path leaves DiscoverIntendedUntracked empty, so the
+	// earlier untracked-scope guard passes and the failure surfaces only at
+	// lifecycle snapshot derivation. The invalidation MUST persist so the
+	// authority becomes recovery-eligible instead of staying "approved".
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "intended.txt", "reviewed untracked\n")
+	state, store, _ := approvedCompactCurrentChangesFixture(t, repo, "invalidate-approved-staged-intended", []string{"intended.txt"})
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stage the frozen intended-untracked path so it is tracked in the index but
+	// absent from HEAD: the exact live state issue #1269 reports.
+	gitSnapshot(t, repo, "add", "--", "intended.txt")
+
+	record, evaluation, err := InvalidateApprovedCompactAuthority(context.Background(), repo, CompactApprovedInvalidationRequest{
+		LineageID: state.LineageID, ExpectedRevision: before.Revision,
+		Gate: NativeGateRequestInput{Gate: GatePostApply, LineageID: state.LineageID},
+	})
+	if err != nil {
+		t.Fatalf("persist staged intended-untracked denial: %v", err)
+	}
+	if evaluation.Result != GateInvalidated || evaluation.Cause != nil {
+		t.Fatalf("staged intended-untracked denial = evaluation %#v", evaluation)
+	}
+	if !strings.Contains(evaluation.Reason, "current repository target cannot be derived") ||
+		!strings.Contains(evaluation.Reason, "already tracked") {
+		t.Fatalf("denial did not surface from lifecycle snapshot derivation: %q", evaluation.Reason)
+	}
+	if evaluation.Context.Denial == nil || evaluation.Context.Denial.Stage != "target-derivation" {
+		t.Fatalf("semantic denial lacked target-derivation stage: %#v", evaluation.Context.Denial)
+	}
+	// Authority must terminally transition to invalidated and drop the receipt.
+	if record.State.State != StateInvalidated || record.Revision == before.Revision ||
+		record.State.InvalidationReason != evaluation.Reason {
+		t.Fatalf("staged intended-untracked invalidation = record %#v", record)
+	}
+	if record.State.InvalidationEvidence == nil ||
+		!reflect.DeepEqual(record.State.InvalidationEvidence.Context, evaluation.Context) {
+		t.Fatalf("persisted staged-intended evidence = %#v", record.State.InvalidationEvidence)
+	}
+	if _, err := os.Stat(store.ReceiptPath()); !os.IsNotExist(err) {
+		t.Fatalf("staged intended-untracked invalidation retained receipt: %v", err)
+	}
+	loaded, err := store.Load()
+	if err != nil || !reflect.DeepEqual(loaded, record) {
+		t.Fatalf("persisted staged-intended invalidation = %#v, %v", loaded, err)
+	}
+	// The invalidated authority must be recovery-eligible.
+	successor := newCompactTestState(t, repo, "invalidate-approved-staged-intended-g2")
+	successor.Generation = record.State.Generation + 1
+	recovered, err := RecoverCompactAuthority(context.Background(), repo, CompactRecoveryRequest{
+		PredecessorLineageID: record.State.LineageID, ExpectedPredecessorRevision: record.Revision,
+		Successor: successor, Disposition: RecoveryInvalidated, Reason: "replace invalidated delivery", Actor: "maintainer",
+	})
+	if err != nil || recovered.State.Recovery == nil || recovered.State.Recovery.PredecessorRevision != record.Revision {
+		t.Fatalf("recover staged intended-untracked invalidated predecessor = %#v, %v", recovered, err)
+	}
+}
+
 func TestInvalidateApprovedCompactAuthorityAcceptsCanonicalZeroLensReceipt(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "approved candidate\n")
