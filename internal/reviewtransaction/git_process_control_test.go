@@ -27,7 +27,9 @@ func TestRunGitTypesProcessStartFailure(t *testing.T) {
 	if strings.Join(control.Args, " ") != "status --short" {
 		t.Fatalf("process control args = %#v", control.Args)
 	}
-	if !errors.Is(err, fs.ErrNotExist) {
+	// Unix exec start failures wrap ENOENT (fs.ErrNotExist); Windows lookup
+	// failures wrap exec.ErrNotFound. Either proves the cause chain survived.
+	if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, exec.ErrNotFound) {
 		t.Fatalf("process control cause lost: %v", err)
 	}
 	if message := err.Error(); !strings.Contains(message, "status --short") || !strings.Contains(message, filepath.Base(missing)) {
