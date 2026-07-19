@@ -19,15 +19,20 @@ var probeExistingStoreLock = tryLockFile
 type AuthorityStatus string
 
 const (
-	AuthorityStatusClean      AuthorityStatus = "clean"
-	AuthorityStatusActive     AuthorityStatus = "active"
-	AuthorityStatusApproved   AuthorityStatus = "approved"
-	AuthorityStatusEscalated  AuthorityStatus = "escalated"
-	AuthorityStatusInvalid    AuthorityStatus = "invalid"
-	AuthorityStatusReset      AuthorityStatus = "reset-in-progress"
-	AuthorityStatusSuperseded AuthorityStatus = "superseded"
-	AuthorityStatusRecovered  AuthorityStatus = "recovered"
-	AuthorityStatusCollision  AuthorityStatus = "same-lineage-mixed-collision"
+	AuthorityStatusClean     AuthorityStatus = "clean"
+	AuthorityStatusActive    AuthorityStatus = "active"
+	AuthorityStatusApproved  AuthorityStatus = "approved"
+	AuthorityStatusEscalated AuthorityStatus = "escalated"
+	AuthorityStatusInvalid   AuthorityStatus = "invalid"
+	// AuthorityStatusInvalidated reports a structurally valid terminal
+	// StateInvalidated lifecycle record. It is distinct from malformed
+	// "invalid" authority and never poisons inventory completeness, while
+	// gates continue to treat it as unusable authority (issue #1314).
+	AuthorityStatusInvalidated AuthorityStatus = "invalidated"
+	AuthorityStatusReset       AuthorityStatus = "reset-in-progress"
+	AuthorityStatusSuperseded  AuthorityStatus = "superseded"
+	AuthorityStatusRecovered   AuthorityStatus = "recovered"
+	AuthorityStatusCollision   AuthorityStatus = "same-lineage-mixed-collision"
 	// AuthorityStatusHistorical marks a structurally valid terminal legacy-v1
 	// chain that predates the receipt contract: its receipt file is absent
 	// (never corrupt or mismatched). Such chains stay inventory-readable
@@ -292,7 +297,7 @@ func authorityStatusForState(state State) AuthorityStatus {
 	case StateEscalated:
 		return AuthorityStatusEscalated
 	case StateInvalidated:
-		return AuthorityStatusInvalid
+		return AuthorityStatusInvalidated
 	default:
 		return AuthorityStatusActive
 	}
@@ -353,8 +358,10 @@ func markCompactGraph(report *AuthorityStatusReport) {
 	children := map[string][]int{}
 	for index := range report.Entries {
 		entry := &report.Entries[index]
-		if entry.Version == AuthorityVersionCompact && entry.Status != AuthorityStatusReset &&
-			(entry.Status != AuthorityStatusInvalid || entry.State == StateInvalidated && len(entry.Problems) == 0) {
+		// Structurally valid StateInvalidated records classify as
+		// AuthorityStatusInvalidated (not Invalid), so they participate in
+		// the recovery graph here without a dedicated carve-out.
+		if entry.Version == AuthorityVersionCompact && entry.Status != AuthorityStatusReset && entry.Status != AuthorityStatusInvalid {
 			byLineage[entry.LineageID] = index
 		}
 	}
@@ -385,8 +392,7 @@ func markCompactGraph(report *AuthorityStatusReport) {
 			}
 			continue
 		}
-		if predecessor, ok := byLineage[lineage]; ok && (report.Entries[predecessor].Status != AuthorityStatusInvalid ||
-			report.Entries[predecessor].State == StateInvalidated && len(report.Entries[predecessor].Problems) == 0) {
+		if predecessor, ok := byLineage[lineage]; ok && report.Entries[predecessor].Status != AuthorityStatusInvalid {
 			report.Entries[predecessor].Status = AuthorityStatusSuperseded
 		}
 	}

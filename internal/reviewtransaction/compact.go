@@ -413,11 +413,23 @@ func validateCompactCorrection(state CompactState) error {
 	}
 	if len(state.CorrectionAttempts) > 0 {
 		base, cumulative := state.InitialSnapshot.CandidateTree, 0
-		for _, attempt := range state.CorrectionAttempts {
+		for index, attempt := range state.CorrectionAttempts {
 			if attempt.ProposedLines <= 0 || attempt.ActualLines < 0 || attempt.Snapshot.Kind != TargetFixDiff || attempt.Snapshot.Projection != state.InitialSnapshot.Projection || attempt.Snapshot.BaseTree != base ||
 				!equalStrings(attempt.Snapshot.LedgerIDs, state.FixFindingIDs) || pathsAreSubset(attempt.Snapshot.Paths, state.GenesisPaths) != nil ||
 				attempt.FixDeltaHash != FixDeltaHashForSnapshot(attempt.Snapshot) {
 				return errors.New("compact correction attempt is outside frozen scope")
+			}
+			// Load-time mirror of CompleteCorrection's zero-edit contract: an
+			// unchanged-tree attempt is only valid as a terminal escalation
+			// with zero actual lines, a failing original check, and a passing
+			// regression check.
+			if attempt.Snapshot.CandidateTree == attempt.Snapshot.BaseTree {
+				if attempt.ActualLines != 0 || attempt.OriginalCriteria.Passed || !attempt.CorrectionRegression.Passed {
+					return errors.New("zero-edit compact correction attempt requires zero actual lines, a failing original check, and a passing regression check")
+				}
+				if index != len(state.CorrectionAttempts)-1 || state.State != StateEscalated {
+					return errors.New("zero-edit compact correction must terminate in escalation")
+				}
 			}
 			result := ScopedValidationResult{OriginalCriteria: attempt.OriginalCriteria, CorrectionRegression: attempt.CorrectionRegression}
 			if err := validateTargetedValidation(result, attempt.FixDeltaHash); err != nil {
@@ -669,8 +681,15 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 	if snapshot.Kind != TargetFixDiff || snapshot.Projection != state.InitialSnapshot.Projection || snapshot.BaseTree != state.CurrentSnapshot.CandidateTree || !equalStrings(snapshot.LedgerIDs, state.FixFindingIDs) {
 		return errors.New("compact correction snapshot is not bound to the reviewed candidate, projection, and causal findings")
 	}
-	if snapshot.CandidateTree == snapshot.BaseTree {
-		return errors.New("compact correction has an unchanged candidate tree")
+	// A repository-derived zero-edit correction (candidate tree unchanged
+	// from its base) may terminate only as an explicit escalation: targeted
+	// validation must prove the original criteria still fail while the
+	// correction regression passes, with zero actual changed lines. Any
+	// other unchanged-tree submission remains rejected (issue #1314),
+	// consistent with the failed-validation escalation below.
+	if snapshot.CandidateTree == snapshot.BaseTree &&
+		(actual != 0 || validation.OriginalCriteria.Passed || !validation.CorrectionRegression.Passed) {
+		return errors.New("compact correction has an unchanged candidate tree without failing-original, passing-regression zero-edit validation")
 	}
 	if err := pathsAreSubset(snapshot.Paths, state.GenesisPaths); err != nil {
 		return err
