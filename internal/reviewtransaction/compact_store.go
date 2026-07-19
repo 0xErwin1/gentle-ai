@@ -1012,6 +1012,27 @@ func (store CompactStore) Replace(expectedRevision, operation string, next Compa
 }
 
 func (store CompactStore) ReplaceContext(ctx context.Context, expectedRevision, operation string, next CompactState) (string, error) {
+	return store.replaceContextGuarded(ctx, expectedRevision, operation, next, nil)
+}
+
+// replaceContextGuarded commits exactly like ReplaceContext, but runs guard
+// inside the same critical section that publishes the successor, immediately
+// before the state file is written and after the revision CAS has passed.
+//
+// It exists because the revision CAS alone cannot see every relevant change:
+// CaptureReviewerResult publishes its artifact under the reviewer-results
+// directory while holding this same store lock and never bumps the authority
+// revision, so a precondition an operation derived from that directory before
+// taking the lock is stale by the time the CAS succeeds. A guard re-derives
+// such a precondition from the authoritative on-disk state while the lock is
+// held, which makes the check atomic with the commit.
+//
+// The guard runs with the store lock already held and must never acquire it
+// again — acquireStoreLock and acquireLocalStoreLock take an exclusive advisory
+// lock on the same file, and a second acquisition from this process would be
+// refused rather than granted. Guards are therefore restricted to lock-free
+// reads of the authority directory.
+func (store CompactStore) replaceContextGuarded(ctx context.Context, expectedRevision, operation string, next CompactState, guard func() error) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -1077,6 +1098,11 @@ func (store CompactStore) ReplaceContext(ctx context.Context, expectedRevision, 
 	if store.repo != "" {
 		if err := validateCompactRepositoryEvidence(ctx, store.repo, current, next, operation); err != nil {
 			return "", fmt.Errorf("%w: %v", ErrInvalidSuccessor, err)
+		}
+	}
+	if guard != nil {
+		if err := guard(); err != nil {
+			return "", err
 		}
 	}
 	if err := ctx.Err(); err != nil {

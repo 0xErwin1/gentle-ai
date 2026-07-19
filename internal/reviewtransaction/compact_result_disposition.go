@@ -167,16 +167,16 @@ func DisposeUnreplayablePreservedResult(ctx context.Context, repo string, reques
 		return CompactResultDispositionRecord{}, fmt.Errorf("review dispose-result refused: lens %q is not the selected lens at order %d of lineage %q",
 			request.Lens, request.SelectedOrder, request.LineageID)
 	}
+	disposedResult := fmt.Sprintf("%02d-%s.json", request.SelectedOrder, request.Lens)
 	captured, err := compactCapturedReviewerResults(store.Dir)
 	if err != nil {
 		return CompactResultDispositionRecord{}, err
 	}
-	disposedResult := fmt.Sprintf("%02d-%s.json", request.SelectedOrder, request.Lens)
-	for _, name := range captured {
-		if name == disposedResult {
-			return CompactResultDispositionRecord{}, fmt.Errorf("review dispose-result refused: lens %q at order %d already holds a captured reviewer result; a valid capture is never dispositioned",
-				request.Lens, request.SelectedOrder)
-		}
+	// This is only the early, cheap refusal. It is deliberately not the
+	// authority: capture-result publishes without bumping the compact revision,
+	// so the same scan is repeated under the commit lock below.
+	if err := compactRefuseCapturedLens(captured, disposedResult, request); err != nil {
+		return CompactResultDispositionRecord{}, err
 	}
 	path, err := CompactPreservedResultPath(ctx, repository, request.LineageID, request.Lens, request.SelectedOrder, request.ArtifactDigest)
 	if err != nil {
@@ -206,7 +206,10 @@ func DisposeUnreplayablePreservedResult(ctx context.Context, repo string, reques
 	disposition := CompactResultDisposition{
 		Lens: request.Lens, SelectedOrder: request.SelectedOrder, TargetIdentity: request.TargetIdentity,
 		ArtifactDigest: request.ArtifactDigest, Class: request.Class,
-		Diagnostic: strings.TrimSpace(request.Diagnostic), AbsentPaths: absent,
+		// Recorded from the preserved bytes themselves, never from the request,
+		// so the persisted audit claim is the one that was actually proven.
+		PayloadDecodable: json.Valid(payload),
+		Diagnostic:       strings.TrimSpace(request.Diagnostic), AbsentPaths: absent,
 		Reason: strings.TrimSpace(request.Reason), Actor: strings.TrimSpace(request.Actor),
 		MaintainerAuthorization: strings.TrimSpace(request.MaintainerAuthorization),
 	}
@@ -226,14 +229,48 @@ func DisposeUnreplayablePreservedResult(ctx context.Context, repo string, reques
 	next := record.State
 	next.State = StateEscalated
 	next.ResultDispositions = append(append([]CompactResultDisposition{}, record.State.ResultDispositions...), disposition)
-	revision, err := store.ReplaceContext(ctx, request.ExpectedRevision, CompactResultDispositionOperation, next)
+	// The already-captured refusal has to be atomic with the commit. A
+	// capture-result publishes its artifact while holding the store lock and
+	// never mutates the compact authority state, so it does not move the
+	// revision the CAS compares: a capture landing between the early scan above
+	// and this commit would otherwise be invisible, and the lineage would be
+	// terminally escalated with a disposition for a lens that now holds a valid
+	// captured result, orphaning that work. Re-scanning inside the locked commit
+	// path closes the window, and the retained listing is recomputed from the
+	// same authoritative snapshot so the audit record cannot under-report.
+	retained := captured
+	revision, err := store.replaceContextGuarded(ctx, request.ExpectedRevision, CompactResultDispositionOperation, next, func() error {
+		locked, err := compactCapturedReviewerResults(store.Dir)
+		if err != nil {
+			return err
+		}
+		if err := compactRefuseCapturedLens(locked, disposedResult, request); err != nil {
+			return err
+		}
+		retained = locked
+		return nil
+	})
 	if err != nil {
 		return CompactResultDispositionRecord{}, err
 	}
 	return CompactResultDispositionRecord{
 		LineageID: request.LineageID, PreviousRevision: request.ExpectedRevision, Revision: revision,
-		State: StateEscalated, ArtifactPath: path, Disposition: disposition, RetainedLensResults: captured,
+		State: StateEscalated, ArtifactPath: path, Disposition: disposition, RetainedLensResults: retained,
 	}, nil
+}
+
+// compactRefuseCapturedLens refuses a disposition of a lens and order that
+// already holds a captured reviewer result. A valid capture is never
+// dispositioned away, so the same check runs both as an early refusal and,
+// authoritatively, inside the locked commit path.
+func compactRefuseCapturedLens(captured []string, disposedResult string, request CompactResultDispositionRequest) error {
+	for _, name := range captured {
+		if name == disposedResult {
+			return fmt.Errorf("review dispose-result refused: lens %q at order %d already holds a captured reviewer result; a valid capture is never dispositioned",
+				request.Lens, request.SelectedOrder)
+		}
+	}
+	return nil
 }
 
 // replayCommittedResultDisposition converges an exact replay of a committed
@@ -246,7 +283,8 @@ func replayCommittedResultDisposition(record CompactRecord, path string, capture
 		expected.DisposedAt = time.Time{}
 		if expected.Lens != request.Lens || expected.SelectedOrder != request.SelectedOrder ||
 			expected.TargetIdentity != request.TargetIdentity || expected.ArtifactDigest != request.ArtifactDigest ||
-			expected.Class != request.Class || expected.Diagnostic != request.Diagnostic ||
+			expected.Class != request.Class || expected.PayloadDecodable != request.PayloadDecodable ||
+			expected.Diagnostic != request.Diagnostic ||
 			expected.Reason != request.Reason || expected.Actor != request.Actor ||
 			expected.MaintainerAuthorization != request.MaintainerAuthorization ||
 			!equalStrings(expected.AbsentPaths, request.AbsentPaths) {
@@ -263,10 +301,14 @@ func replayCommittedResultDisposition(record CompactRecord, path string, capture
 
 // compactValidateResultInapplicability re-derives candidate inapplicability
 // from the preserved bytes and the frozen target alone; the caller's claim is
-// never trusted on its own. A transport/syntax disposition must name a payload
-// that is genuinely not decodable JSON, so an ordinary valid capture can never
-// be routed here. A wrong-target disposition must cite paths that the payload
-// actually references and that the frozen candidate does not contain.
+// never trusted on its own. The two classes are mutually exclusive on the exact
+// same evidence: a transport/syntax disposition must name a payload that is
+// genuinely not decodable JSON, so an ordinary valid capture can never be
+// routed here, and a wrong-target disposition must name a payload that did
+// decode and must cite paths that the payload actually references and that the
+// frozen candidate does not contain. Without the decodability check on both
+// sides, a payload that never decoded could be permanently audited as the
+// stronger semantic claim it does not support.
 func compactValidateResultInapplicability(state CompactState, request CompactResultDispositionRequest, payload []byte) ([]string, error) {
 	switch request.Class {
 	case ResultDispositionTransportSyntax:
@@ -281,6 +323,9 @@ func compactValidateResultInapplicability(state CompactState, request CompactRes
 		absent, err := canonicalPaths(request.AbsentPaths)
 		if err != nil || len(absent) == 0 {
 			return nil, fmt.Errorf("review dispose-result refused: class %q requires at least one canonical repository-relative absent path", ResultDispositionWrongTarget)
+		}
+		if !json.Valid(payload) {
+			return nil, fmt.Errorf("review dispose-result refused: class %q claims a decodable payload described a different candidate, but the preserved payload never decoded as JSON; disposition it as %q instead", ResultDispositionWrongTarget, ResultDispositionTransportSyntax)
 		}
 		for _, path := range absent {
 			for _, candidate := range state.InitialSnapshot.Paths {

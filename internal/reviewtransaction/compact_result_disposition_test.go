@@ -202,7 +202,7 @@ func TestDisposeUnreplayablePreservedResultRecordsWrongTargetEvidence(t *testing
 	if err != nil {
 		t.Fatalf("wrong-target disposition failed: %v", err)
 	}
-	if record.Disposition.Class != ResultDispositionWrongTarget ||
+	if record.Disposition.Class != ResultDispositionWrongTarget || !record.Disposition.PayloadDecodable ||
 		!equalStrings(record.Disposition.AbsentPaths, []string{"internal/billing/charge.go"}) {
 		t.Fatalf("wrong-target disposition = %+v", record.Disposition)
 	}
@@ -222,6 +222,21 @@ func TestDisposeUnreplayablePreservedResultRefusesUnboundRequests(t *testing.T) 
 	digest, rawPath := preserveRawResult(t, fixture.repo, fixture.record.State.LineageID, lenses[3], 3, []byte(unreplayablePayload))
 	valid := fixture.request(lenses[3], 3, digest, ResultDispositionTransportSyntax, nil)
 	otherRevision := "sha256:" + strings.Repeat("ab", 32)
+
+	// wrong_target evidence is only ever weighed against a payload that decoded,
+	// so the wrong-target refusals below are driven from a second preserved
+	// artifact that is valid JSON. Re-pointing the request at it also re-derives
+	// the authorization, since the digest is part of the binding.
+	decodableDigest, _ := preserveRawResult(t, fixture.repo, fixture.record.State.LineageID, lenses[3], 3,
+		[]byte(`{"findings":[{"id":"R1-001","location":"internal/billing/charge.go:42"}],"evidence":["read internal/billing/charge.go"]}`))
+	wrongTarget := func(request *CompactResultDispositionRequest, absent []string) {
+		request.Class = ResultDispositionWrongTarget
+		request.ArtifactDigest = decodableDigest
+		request.AbsentPaths = absent
+		request.MaintainerAuthorization = disposeAuthorization(fixture.root, request.LineageID, request.ExpectedRevision,
+			request.TargetIdentity, request.Lens, request.SelectedOrder, decodableDigest,
+			string(ResultDispositionWrongTarget), request.Actor, request.Reason)
+	}
 
 	cases := []struct {
 		name    string
@@ -282,18 +297,30 @@ func TestDisposeUnreplayablePreservedResultRefusesUnboundRequests(t *testing.T) 
 		{
 			name: "wrong-target claim citing a frozen candidate path",
 			mutate: func(request *CompactResultDispositionRequest) {
-				request.Class = ResultDispositionWrongTarget
-				request.AbsentPaths = []string{"internal/auth/token.go"}
+				wrongTarget(request, []string{"internal/auth/token.go"})
 			},
 			wantErr: "is inside the frozen candidate",
 		},
 		{
 			name: "wrong-target claim the preserved output never makes",
 			mutate: func(request *CompactResultDispositionRequest) {
-				request.Class = ResultDispositionWrongTarget
-				request.AbsentPaths = []string{"internal/unrelated/file.go"}
+				wrongTarget(request, []string{"internal/unrelated/file.go"})
 			},
 			wantErr: "does not appear in the preserved reviewer output",
+		},
+		{
+			// The #1469 false-audit defect: an invalid-JSON payload could be
+			// committed and permanently audited as the semantic wrong-target
+			// claim, which it can never support because it never decoded.
+			name: "wrong-target claim over a payload that never decoded",
+			mutate: func(request *CompactResultDispositionRequest) {
+				request.Class = ResultDispositionWrongTarget
+				request.AbsentPaths = []string{"internal/billing/charge.go"}
+				request.MaintainerAuthorization = disposeAuthorization(fixture.root, request.LineageID, request.ExpectedRevision,
+					request.TargetIdentity, request.Lens, request.SelectedOrder, digest,
+					string(ResultDispositionWrongTarget), request.Actor, request.Reason)
+			},
+			wantErr: "never decoded as JSON",
 		},
 		{
 			name: "transport claim carrying wrong-target evidence",
@@ -358,6 +385,69 @@ func TestDisposeUnreplayablePreservedResultRefusesCapturedLens(t *testing.T) {
 		fixture.request(lens, 0, digest, ResultDispositionTransportSyntax, nil))
 	if err == nil || !strings.Contains(err.Error(), "already holds a captured reviewer result") {
 		t.Fatalf("error = %v, want a refusal to disposition a captured lens", err)
+	}
+}
+
+// TestDisposeUnreplayablePreservedResultRefusesCaptureRacingTheCommit closes
+// the #1469 disposition/capture race. capture-result publishes its artifact
+// without mutating the compact authority state, so it never moves the revision
+// the disposition compare-and-swaps on: a capture that lands after the
+// disposition's early already-captured scan is invisible to the CAS, and the
+// lineage would be terminally escalated over a lens that now holds a valid
+// captured result, orphaning that work.
+//
+// The window is opened deterministically by holding the exclusive maintenance
+// lease the commit path must take before the store lock. The disposition
+// therefore completes its early scan, blocks, and only reaches its locked
+// already-captured re-scan after the capture has landed.
+func TestDisposeUnreplayablePreservedResultRefusesCaptureRacingTheCommit(t *testing.T) {
+	fixture := newDisposeFixture(t, "dispose-capture-race")
+	lens := fixture.record.State.SelectedLenses[3]
+	digest, rawPath := preserveRawResult(t, fixture.repo, fixture.record.State.LineageID, lens, 3, []byte(unreplayablePayload))
+	request := fixture.request(lens, 3, digest, ResultDispositionTransportSyntax, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	maintenance, err := AcquireReviewMaintenanceExclusive(ctx, fixture.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type outcome struct {
+		record CompactResultDispositionRecord
+		err    error
+	}
+	results := make(chan outcome, 1)
+	go func() {
+		record, disposeErr := DisposeUnreplayablePreservedResult(context.Background(), fixture.repo, request)
+		results <- outcome{record: record, err: disposeErr}
+	}()
+
+	// The disposition's early scan runs before the commit path takes the
+	// maintenance lease, so by now it has already observed an empty
+	// reviewer-results directory and is blocked ahead of its locked re-scan.
+	time.Sleep(100 * time.Millisecond)
+	capturedPath, capturedPayload := captureValidResult(t, fixture.store, lens, 3)
+	if err := maintenance.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	got := <-results
+	if got.err == nil || !strings.Contains(got.err.Error(), "already holds a captured reviewer result") {
+		t.Fatalf("error = %v, want the disposition refused for a lens captured during the commit window", got.err)
+	}
+	after, err := fixture.store.Load()
+	if err != nil || after.Revision != fixture.record.Revision || after.State.State != StateReviewing ||
+		len(after.State.ResultDispositions) != 0 {
+		t.Fatalf("racing capture was escalated over: revision %s state %q dispositions %+v (%v)",
+			after.Revision, after.State.State, after.State.ResultDispositions, err)
+	}
+	// The capture that won the race keeps its artifact byte-for-byte.
+	if raced, readErr := os.ReadFile(capturedPath); readErr != nil || !bytes.Equal(raced, capturedPayload) {
+		t.Fatalf("captured reviewer result changed: %v", readErr)
+	}
+	if raw, readErr := os.ReadFile(rawPath); readErr != nil || !bytes.Equal(raw, []byte(unreplayablePayload)) {
+		t.Fatalf("refused disposition touched the preserved output: %v", readErr)
 	}
 }
 
@@ -484,6 +574,24 @@ func TestCompactResultDispositionStateShapeIsValidated(t *testing.T) {
 				state.ResultDispositions[0].AbsentPaths = []string{"internal/auth/token.go"}
 			},
 			wantErr: "cites a path inside the frozen candidate",
+		},
+		{
+			// A persisted state may not carry the semantic wrong-target claim
+			// over a payload it recorded as never having decoded.
+			name: "wrong-target class over a payload that never decoded",
+			mutate: func(state *CompactState) {
+				state.ResultDispositions[0].Class = ResultDispositionWrongTarget
+				state.ResultDispositions[0].AbsentPaths = []string{"internal/billing/charge.go"}
+				state.ResultDispositions[0].PayloadDecodable = false
+			},
+			wantErr: "must record a payload that actually decoded",
+		},
+		{
+			name: "transport/syntax class over a payload that decoded",
+			mutate: func(state *CompactState) {
+				state.ResultDispositions[0].PayloadDecodable = true
+			},
+			wantErr: "must record a payload that did not decode",
 		},
 		{name: "unknown class", mutate: func(state *CompactState) { state.ResultDispositions[0].Class = "unreviewable" }, wantErr: "invalid reviewer result disposition class"},
 		{

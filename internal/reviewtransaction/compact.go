@@ -76,17 +76,24 @@ const (
 // it never carries findings, evidence, or any other admissible review content:
 // a disposition terminally escalates a lineage, it never contributes to one.
 type CompactResultDisposition struct {
-	Lens                    string                 `json:"lens"`
-	SelectedOrder           int                    `json:"selected_order"`
-	TargetIdentity          string                 `json:"target_identity"`
-	ArtifactDigest          string                 `json:"artifact_digest"`
-	Class                   ResultDispositionClass `json:"class"`
-	Diagnostic              string                 `json:"diagnostic"`
-	AbsentPaths             []string               `json:"absent_paths,omitempty"`
-	Reason                  string                 `json:"reason"`
-	Actor                   string                 `json:"actor"`
-	DisposedAt              time.Time              `json:"disposed_at"`
-	MaintainerAuthorization string                 `json:"maintainer_authorization"`
+	Lens           string                 `json:"lens"`
+	SelectedOrder  int                    `json:"selected_order"`
+	TargetIdentity string                 `json:"target_identity"`
+	ArtifactDigest string                 `json:"artifact_digest"`
+	Class          ResultDispositionClass `json:"class"`
+	// PayloadDecodable records the decodability the disposition actually
+	// observed in the preserved bytes. It is what makes the two classes
+	// mutually exclusive in persisted shape: transport_syntax may only be
+	// recorded for a payload that did not decode, and wrong_target only for one
+	// that did, so no stored record can claim the stronger semantic class over
+	// a payload that never decoded at all.
+	PayloadDecodable        bool      `json:"payload_decodable,omitempty"`
+	Diagnostic              string    `json:"diagnostic"`
+	AbsentPaths             []string  `json:"absent_paths,omitempty"`
+	Reason                  string    `json:"reason"`
+	Actor                   string    `json:"actor"`
+	DisposedAt              time.Time `json:"disposed_at"`
+	MaintainerAuthorization string    `json:"maintainer_authorization"`
 }
 
 type CompactCorrectionAttempt struct {
@@ -784,6 +791,9 @@ func validateCompactResultDispositions(state CompactState) error {
 			if len(disposition.AbsentPaths) != 0 {
 				return errors.New("transport/syntax reviewer result disposition carries no wrong-target path evidence")
 			}
+			if disposition.PayloadDecodable {
+				return errors.New("transport/syntax reviewer result disposition must record a payload that did not decode")
+			}
 		case ResultDispositionWrongTarget:
 			absent, err := canonicalPaths(disposition.AbsentPaths)
 			if err != nil || len(absent) == 0 || !equalStrings(absent, disposition.AbsentPaths) {
@@ -795,6 +805,9 @@ func validateCompactResultDispositions(state CompactState) error {
 						return errors.New("wrong-target reviewer result disposition cites a path inside the frozen candidate")
 					}
 				}
+			}
+			if !disposition.PayloadDecodable {
+				return errors.New("wrong-target reviewer result disposition must record a payload that actually decoded")
 			}
 		default:
 			return errors.New("invalid reviewer result disposition class")

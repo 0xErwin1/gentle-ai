@@ -14,8 +14,14 @@ import (
 )
 
 // unreplayableReviewerOutput reproduces the #1469 payload: syntactically
-// invalid JSON whose evidence cites a file the frozen candidate never had.
+// invalid JSON (note the trailing comma) that capture-result can never decode.
+// Because it never decoded, the only claim it can prove is transport_syntax.
 const unreplayableReviewerOutput = `{"findings":[{"id":"R1-001","location":"internal/billing/charge.go:42"},],"evidence":["read internal/billing/charge.go"]}`
+
+// wrongTargetReviewerOutput is the other #1469 shape: the payload decodes
+// perfectly, so the reviewer genuinely produced a result, but every claim in it
+// describes a candidate the frozen target never contained.
+const wrongTargetReviewerOutput = `{"findings":[{"id":"R1-001","location":"internal/billing/charge.go:42"}],"evidence":["read internal/billing/charge.go"]}`
 
 func disposeResultAuthorization(repository, lineage, revision, target, lens string, order int, digest, class, actor, reason string) string {
 	return "gentle-ai.review-result-disposition-authorization/v1" +
@@ -87,8 +93,12 @@ func TestReviewDisposeResultEscalatesStrandedLineage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const actor, reason = "maintainer@example.com", "reviewer output describes a different candidate"
-	const class = "wrong_target"
+	const actor, reason = "maintainer@example.com", "reviewer output never decoded"
+	// The preserved payload never decoded, so transport_syntax is the only class
+	// it proves. Claiming wrong_target over it would assert that a decodable
+	// reviewer result described a different candidate, which this payload cannot
+	// support; the facade refuses exactly that below.
+	const class = "transport_syntax"
 	authorization := disposeResultAuthorization(repository, started.LineageID, record.Revision, target,
 		lenses[3], 3, incident.SHA256, class, actor, reason)
 	args := []string{
@@ -96,8 +106,24 @@ func TestReviewDisposeResultEscalatesStrandedLineage(t *testing.T) {
 		"--expected-revision", record.Revision, "--target", target, "--lens", lenses[3], "--order", "3",
 		"--artifact-digest", incident.SHA256, "--class", class,
 		"--diagnostic", "decode reviewer result: invalid character after array element",
-		"--absent-path", "internal/billing/charge.go",
 		"--reason", reason, "--actor", actor, "--maintainer-authorization", authorization,
+	}
+
+	// An invalid-JSON payload may never be audited as the stronger semantic
+	// class, and that refusal must land before any authority is touched.
+	const wrongClass = "wrong_target"
+	wrongArgs := []string{
+		"dispose-result", "--cwd", repo, "--lineage", started.LineageID,
+		"--expected-revision", record.Revision, "--target", target, "--lens", lenses[3], "--order", "3",
+		"--artifact-digest", incident.SHA256, "--class", wrongClass,
+		"--diagnostic", "decode reviewer result: invalid character after array element",
+		"--absent-path", "internal/billing/charge.go",
+		"--reason", reason, "--actor", actor,
+		"--maintainer-authorization", disposeResultAuthorization(repository, started.LineageID, record.Revision,
+			target, lenses[3], 3, incident.SHA256, wrongClass, actor, reason),
+	}
+	if err := RunReview(wrongArgs, io.Discard); err == nil {
+		t.Fatal("wrong_target disposition of a payload that never decoded was accepted")
 	}
 
 	var output bytes.Buffer
@@ -108,7 +134,8 @@ func TestReviewDisposeResultEscalatesStrandedLineage(t *testing.T) {
 	decodeStrictReviewJSON(t, output.Bytes(), &result)
 	if result.Operation != reviewtransaction.CompactResultDispositionOperation ||
 		result.Record.State != reviewtransaction.StateEscalated || result.Record.Replayed ||
-		result.Record.Disposition.Class != reviewtransaction.ResultDispositionWrongTarget ||
+		result.Record.Disposition.Class != reviewtransaction.ResultDispositionTransportSyntax ||
+		result.Record.Disposition.PayloadDecodable ||
 		result.Record.Disposition.ArtifactDigest != incident.SHA256 ||
 		len(result.Record.RetainedLensResults) != 1 {
 		t.Fatalf("dispose-result = %#v", result)
@@ -146,6 +173,61 @@ func TestReviewDisposeResultEscalatesStrandedLineage(t *testing.T) {
 	}
 	if !strings.Contains(help.String(), "dispose-result") {
 		t.Fatalf("review help omits dispose-result: %s", help.String())
+	}
+}
+
+// TestReviewDisposeResultWrongTargetRequiresADecodablePayload pins the class
+// boundary through the facade: wrong_target is admitted only over a payload
+// that genuinely decoded, and the committed audit record says so.
+func TestReviewDisposeResultWrongTargetRequiresADecodablePayload(t *testing.T) {
+	repo, started, store, record := newArtifactReview(t, true)
+	lenses := record.State.SelectedLenses
+	target := record.State.InitialSnapshot.Identity
+
+	raw := filepath.Join(t.TempDir(), "raw.json")
+	if err := os.WriteFile(raw, []byte(wrongTargetReviewerOutput), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var preserved bytes.Buffer
+	if err := RunReviewPreserveResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", target,
+		"--lens", lenses[2], "--order", "2", "--input", raw,
+	}, &preserved); err != nil {
+		t.Fatalf("preserve-result: %v", err)
+	}
+	var incident reviewIncidentArtifact
+	decodeStrictReviewJSON(t, preserved.Bytes(), &incident)
+
+	repository, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const actor, reason = "maintainer@example.com", "reviewer output describes a different candidate"
+	const class = "wrong_target"
+	args := []string{
+		"dispose-result", "--cwd", repo, "--lineage", started.LineageID,
+		"--expected-revision", record.Revision, "--target", target, "--lens", lenses[2], "--order", "2",
+		"--artifact-digest", incident.SHA256, "--class", class,
+		"--diagnostic", "reviewer result cites internal/billing/charge.go, absent from the frozen candidate",
+		"--absent-path", "internal/billing/charge.go",
+		"--reason", reason, "--actor", actor,
+		"--maintainer-authorization", disposeResultAuthorization(repository, started.LineageID, record.Revision,
+			target, lenses[2], 2, incident.SHA256, class, actor, reason),
+	}
+	var output bytes.Buffer
+	if err := RunReview(args, &output); err != nil {
+		t.Fatalf("wrong-target dispose-result: %v\n%s", err, output.String())
+	}
+	var result ReviewDisposeResultResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if result.Record.Disposition.Class != reviewtransaction.ResultDispositionWrongTarget ||
+		!result.Record.Disposition.PayloadDecodable ||
+		result.Record.State != reviewtransaction.StateEscalated {
+		t.Fatalf("wrong-target dispose-result = %#v", result.Record)
+	}
+	after, err := store.Load()
+	if err != nil || len(after.State.ResultDispositions) != 1 || !after.State.ResultDispositions[0].PayloadDecodable {
+		t.Fatalf("persisted wrong-target disposition = %+v (%v)", after.State.ResultDispositions, err)
 	}
 }
 
