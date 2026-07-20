@@ -3,6 +3,7 @@ import { spawn } from "node:child_process"
 
 const REVIEW_AGENTS = new Set(["review-risk", "review-resilience", "review-readability", "review-reliability"])
 const BINDING = /^GENTLE_AI_REVIEW_BINDING (\{[^\n]+\})(?:\n|$)/
+const ACQUISITION = /^GENTLE_AI_REVIEW_ACQUISITION (\{[^\n]+\})$/m
 const TASK_RESULT = /^<task id="[^"\r\n]+" state="completed">\n<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/
 const TASK_TAG = /<\/?task(?:\s|>)|<\/?task_result>/
 
@@ -35,6 +36,37 @@ function parseBinding(prompt: unknown, lens: string): ReviewBinding {
     throw new Error("review task binding does not match the selected lens")
   }
   return value as ReviewBinding
+}
+
+// injectAcquisition splices GENTLE_AI_REVIEW_ACQUISITION onto its own line
+// immediately after the frozen GENTLE_AI_REVIEW_BINDING line, so the binding
+// prefix the model composed stays byte-for-byte unchanged and the durable
+// acquisition ID rides along in the launched prompt for tool.execute.after to
+// recover.
+function injectAcquisition(prompt: string, acquisitionId: string): string {
+  const match = BINDING.exec(prompt)
+  if (!match) return prompt
+  const line = `GENTLE_AI_REVIEW_ACQUISITION ${JSON.stringify({ id: acquisitionId })}\n`
+  return prompt.slice(0, match[0].length) + line + prompt.slice(match[0].length)
+}
+
+function parseAcquisition(prompt: unknown): string {
+  const match = ACQUISITION.exec(typeof prompt === "string" ? prompt : "")
+  if (!match) throw new Error("review task is missing GENTLE_AI_REVIEW_ACQUISITION")
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(match[1])
+  } catch {
+    throw new Error("review task acquisition is malformed")
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("review task acquisition must be an object")
+  }
+  const id = (parsed as Record<string, unknown>).id
+  if (typeof id !== "string" || id === "") {
+    throw new Error("review task acquisition must carry a non-empty id")
+  }
+  return id
 }
 
 function reviewerResult(output: unknown): string {
@@ -85,42 +117,55 @@ function runNative(cwd: string, args: string[], stdin: string): Promise<string> 
   })
 }
 
-function captureResult(cwd: string, binding: ReviewBinding, result: string): Promise<string> {
-  return runNative(cwd, [
-    "review", "capture-result", "--cwd", cwd,
-    "--lineage", binding.lineage, "--target", binding.target,
-    "--lens", binding.lens, "--order", String(binding.order), "--input", "-",
-  ], result)
-}
-
-async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<void> {
+// acquireResult durably and atomically reserves the exact pre-launch slot for
+// this binding before the reviewer task is launched. Its existence is the
+// exactly-once authority for the launch: a version-skewed or otherwise
+// unsupported native binary must fail closed here, never fall back to a
+// degraded pre-acquisition launch path.
+async function acquireResult(cwd: string, binding: ReviewBinding): Promise<string> {
+  let manifest: string
   try {
-    await runNative(cwd, [
-      "review", "capture-result", "--cwd", cwd,
+    manifest = await runNative(cwd, [
+      "review", "acquire-result", "--cwd", cwd,
       "--lineage", binding.lineage, "--target", binding.target,
-      "--lens", binding.lens, "--order", String(binding.order), "--preflight",
+      "--lens", binding.lens, "--order", String(binding.order),
     ], "")
   } catch (cause) {
-    // An older installed gentle-ai binary rejects the flag itself ("flag
-    // provided but not defined: -preflight"). That is version skew, not a
-    // binding problem: degrade gracefully and let the real capture path
-    // behave exactly as it did before preflight existed.
-    const message = errorMessage(cause)
-    if (message.includes("flag provided but not defined") && message.includes("-preflight")) return
     throw new Error(
-      `review capture preflight failed for lens ${binding.lens} under ${cwd}: ${errorMessage(cause)}. ` +
+      `review acquire-result failed for lens ${binding.lens} under ${cwd}: ${errorMessage(cause)}. ` +
       `The reviewer was not launched, so its exactly-once invocation is preserved. ` +
       `If lineage ${binding.lineage} was started in a different repository (for example a nested one), ` +
       `set GENTLE_AI_REVIEW_CWD to that repository and relaunch the lens.`,
     )
   }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(manifest)
+  } catch {
+    throw new Error(`review acquire-result returned a malformed acquisition manifest for lens ${binding.lens} under ${cwd}; the reviewer was not launched`)
+  }
+  const id = (parsed as { acquisition?: { id?: unknown } } | null)?.acquisition?.id
+  if (typeof id !== "string" || id === "") {
+    throw new Error(`review acquire-result returned no acquisition id for lens ${binding.lens} under ${cwd}; the reviewer was not launched`)
+  }
+  return id
 }
 
-function preserveResult(cwd: string, binding: ReviewBinding, raw: string, cls?: string): Promise<string> {
+function captureResult(cwd: string, binding: ReviewBinding, acquisitionId: string, result: string): Promise<string> {
+  return runNative(cwd, [
+    "review", "capture-result", "--cwd", cwd,
+    "--lineage", binding.lineage, "--target", binding.target,
+    "--lens", binding.lens, "--order", String(binding.order), "--input", "-",
+    "--acquisition", acquisitionId,
+  ], result)
+}
+
+function preserveResult(cwd: string, binding: ReviewBinding, acquisitionId: string, raw: string, cls?: string): Promise<string> {
   const args = [
     "review", "preserve-result", "--cwd", cwd,
     "--lineage", binding.lineage, "--target", binding.target,
     "--lens", binding.lens, "--order", String(binding.order), "--input", "-",
+    "--acquisition", acquisitionId,
   ]
   if (typeof cls === "string" && cls !== "") args.push("--class", cls)
   return runNative(cwd, args, raw)
@@ -150,13 +195,13 @@ function embeddedRawPayload(raw: string): string {
   return `${raw.slice(0, PRESERVE_EMBED_LIMIT)}\n[truncated: first ${PRESERVE_EMBED_LIMIT} of ${raw.length} characters embedded]`
 }
 
-async function preservedCaptureFailure(cwd: string, binding: ReviewBinding, raw: unknown, cause: unknown): Promise<Error> {
+async function preservedCaptureFailure(cwd: string, binding: ReviewBinding, acquisitionId: string, raw: unknown, cause: unknown): Promise<Error> {
   if (typeof raw !== "string" || raw.trim() === "") {
     return new Error(`${errorMessage(cause)}; no raw reviewer result was available to preserve`)
   }
   try {
     const reviewClass = extractionClass(cause)
-    const manifest = await preserveResult(cwd, binding, raw, reviewClass)
+    const manifest = await preserveResult(cwd, binding, acquisitionId, raw, reviewClass)
     return new Error(`${errorMessage(cause)}; raw reviewer result preserved for recovery at ${preservedReference(manifest)}`)
   } catch (preserveCause) {
     // Double failure: durable preservation itself failed, so the transcript
@@ -175,7 +220,10 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => (
     if (output.args.background === true) {
       throw new Error("bound review tasks must run in the foreground for native result capture")
     }
-    await preflightCapture(captureCwd(worktree, directory), parseBinding(output.args.prompt, output.args.subagent_type))
+    const cwd = captureCwd(worktree, directory)
+    const binding = parseBinding(output.args.prompt, output.args.subagent_type)
+    const acquisitionId = await acquireResult(cwd, binding)
+    output.args.prompt = injectAcquisition(output.args.prompt, acquisitionId)
   },
   "tool.execute.after": async (input, output) => {
     if (input.tool !== "task" || typeof input.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(input.args.subagent_type)) return
@@ -183,6 +231,16 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => (
     const lens = input.args.subagent_type
     const binding = parseBinding(input.args.prompt, lens)
     const cwd = captureCwd(worktree, directory)
+    let acquisitionId: string
+    try {
+      acquisitionId = parseAcquisition(input.args.prompt)
+    } catch (cause) {
+      // No valid acquisition id survived launch: preserve-result cannot be
+      // bound to one, so fail closed with the raw output embedded instead of
+      // silently discarding the only remaining evidence.
+      const raw = typeof output.output === "string" ? output.output : ""
+      throw new Error(`${errorMessage(cause)}; raw reviewer result follows for manual recovery:\n${embeddedRawPayload(raw)}`)
+    }
     // Extract the replayable payload exactly once, BEFORE capture: recovery
     // re-runs `review capture-result --input <preserved file>`, whose strict
     // decoder rejects the task envelope, so a capture failure must preserve
@@ -194,12 +252,12 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => (
       // Extraction itself failed (malformed envelope): there is no extracted
       // payload, so preserve the raw envelope under the distinct extraction
       // cause for manual inspection.
-      throw await preservedCaptureFailure(cwd, binding, output.output, cause)
+      throw await preservedCaptureFailure(cwd, binding, acquisitionId, output.output, cause)
     }
     try {
-      output.output = await captureResult(cwd, binding, result)
+      output.output = await captureResult(cwd, binding, acquisitionId, result)
     } catch (cause) {
-      throw await preservedCaptureFailure(cwd, binding, result, cause)
+      throw await preservedCaptureFailure(cwd, binding, acquisitionId, result, cause)
     }
   },
 })
