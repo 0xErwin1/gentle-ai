@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -291,6 +292,66 @@ func TestReviewPreserveResultRejectsUnsafeClass(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReviewPreserveResultRecordsIncidentClass(t *testing.T) {
+	repo, started, _, record := newArtifactReview(t, false)
+	preserve := func(t *testing.T, class string) reviewIncidentArtifact {
+		t.Helper()
+		input := filepath.Join(t.TempDir(), "raw.txt")
+		if err := os.WriteFile(input, []byte("raw output for "+class), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		args := []string{
+			"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+			"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+		}
+		if class != "" {
+			args = append(args, "--class", class)
+		}
+		var output bytes.Buffer
+		if err := RunReviewPreserveResult(args, &output); err != nil {
+			t.Fatalf("preserve --class %q failed: %v", class, err)
+		}
+		var artifact reviewIncidentArtifact
+		decodeStrictReviewJSON(t, output.Bytes(), &artifact)
+		if _, err := os.Stat(artifact.Path); err != nil {
+			t.Fatalf("preserved artifact does not exist at %q: %v", artifact.Path, err)
+		}
+		return artifact
+	}
+	t.Run("empty_result", func(t *testing.T) {
+		artifact := preserve(t, string(reviewtransaction.ResultIncidentEmptyResult))
+		if artifact.Class != reviewtransaction.ResultIncidentEmptyResult {
+			t.Fatalf("Class = %q, want %q", artifact.Class, reviewtransaction.ResultIncidentEmptyResult)
+		}
+		want := fmt.Sprintf("00-%s-empty_result-", record.State.SelectedLenses[0])
+		if !strings.HasPrefix(filepath.Base(artifact.Path), want) {
+			t.Fatalf("Path basename %q does not have prefix %q", filepath.Base(artifact.Path), want)
+		}
+	})
+	t.Run("nested_envelope", func(t *testing.T) {
+		artifact := preserve(t, string(reviewtransaction.ResultIncidentNestedEnvelope))
+		if artifact.Class != reviewtransaction.ResultIncidentNestedEnvelope {
+			t.Fatalf("Class = %q, want %q", artifact.Class, reviewtransaction.ResultIncidentNestedEnvelope)
+		}
+		want := fmt.Sprintf("00-%s-nested_envelope-", record.State.SelectedLenses[0])
+		if !strings.HasPrefix(filepath.Base(artifact.Path), want) {
+			t.Fatalf("Path basename %q does not have prefix %q", filepath.Base(artifact.Path), want)
+		}
+	})
+	t.Run("omitted class is backward compatible", func(t *testing.T) {
+		artifact := preserve(t, "")
+		if artifact.Class != "" {
+			t.Fatalf("Class = %q, want empty", artifact.Class)
+		}
+		prefix := fmt.Sprintf("00-%s-", record.State.SelectedLenses[0])
+		base := filepath.Base(artifact.Path)
+		digest12 := strings.TrimSuffix(strings.TrimPrefix(base, prefix), ".raw")
+		if !strings.HasPrefix(base, prefix) || !strings.HasSuffix(base, ".raw") || len(digest12) != 12 {
+			t.Fatalf("Path basename %q does not match the old-shape order-lens-digest12 format", base)
+		}
+	})
 }
 
 func initNestedReviewCLIRepo(t *testing.T) (string, string) {
