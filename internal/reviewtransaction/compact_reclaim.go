@@ -66,6 +66,9 @@ type CompactReclaimRecord struct {
 	// LegacyAliasRepair carries the natively re-derived proof for the narrow
 	// historical v1 operation-alias quarantine.
 	LegacyAliasRepair *LegacyAliasRepairProof `json:"legacy_alias_repair,omitempty"`
+	// LegacyFixScopeQuarantine carries the re-derived proof for the one
+	// historical complete-fix scope-expansion quarantine class.
+	LegacyFixScopeQuarantine *LegacyFixScopeQuarantineProof `json:"legacy_fix_scope_quarantine,omitempty"`
 }
 
 // compactAuthoritativeArtifact reports whether a store-entry name carries
