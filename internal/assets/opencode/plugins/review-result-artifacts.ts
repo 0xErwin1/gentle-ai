@@ -45,10 +45,18 @@ function reviewerResult(output: unknown): string {
     if (TASK_TAG.test(trimmed)) throw new Error("reviewer output contains a malformed task result envelope")
     return trimmed
   }
-  if (envelope[1].trim() === "" || TASK_TAG.test(envelope[1])) {
-    throw new Error("reviewer task result is empty or contains a nested envelope")
+  if (envelope[1].trim() === "") {
+    throw Object.assign(new Error("reviewer task result is empty"), { reviewClass: "empty_result" })
+  }
+  if (TASK_TAG.test(envelope[1])) {
+    throw Object.assign(new Error("reviewer task result contains a nested task envelope"), { reviewClass: "nested_envelope" })
   }
   return envelope[1]
+}
+
+function extractionClass(cause: unknown): string | undefined {
+  const value = (cause as { reviewClass?: unknown } | null)?.reviewClass
+  return typeof value === "string" ? value : undefined
 }
 
 function captureCwd(worktree: string | undefined, directory: string): string {
@@ -108,12 +116,14 @@ async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<vo
   }
 }
 
-function preserveResult(cwd: string, binding: ReviewBinding, raw: string): Promise<string> {
-  return runNative(cwd, [
+function preserveResult(cwd: string, binding: ReviewBinding, raw: string, cls?: string): Promise<string> {
+  const args = [
     "review", "preserve-result", "--cwd", cwd,
     "--lineage", binding.lineage, "--target", binding.target,
     "--lens", binding.lens, "--order", String(binding.order), "--input", "-",
-  ], raw)
+  ]
+  if (typeof cls === "string" && cls !== "") args.push("--class", cls)
+  return runNative(cwd, args, raw)
 }
 
 function errorMessage(cause: unknown): string {
@@ -145,7 +155,8 @@ async function preservedCaptureFailure(cwd: string, binding: ReviewBinding, raw:
     return new Error(`${errorMessage(cause)}; no raw reviewer result was available to preserve`)
   }
   try {
-    const manifest = await preserveResult(cwd, binding, raw)
+    const reviewClass = extractionClass(cause)
+    const manifest = await preserveResult(cwd, binding, raw, reviewClass)
     return new Error(`${errorMessage(cause)}; raw reviewer result preserved for recovery at ${preservedReference(manifest)}`)
   } catch (preserveCause) {
     // Double failure: durable preservation itself failed, so the transcript

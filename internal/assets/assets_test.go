@@ -453,6 +453,14 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`throw await preservedCaptureFailure(cwd, binding, output.output, cause)`,
 		`raw reviewer result preserved for recovery`,
 		`raw reviewer result could not be preserved`,
+		// The previously conflated empty/nested-envelope branch must throw two
+		// distinct, machine-readable classified errors instead of one free-text
+		// message, and the plugin must thread that class into --class.
+		`"reviewer task result is empty"`,
+		`"reviewer task result contains a nested task envelope"`,
+		`reviewClass`,
+		`extractionClass(cause)`,
+		`"--class"`,
 		// Double failure (capture and preserve both failed) must embed the
 		// bounded raw payload in the thrown error so the transcript retains it.
 		`raw reviewer result follows for manual recovery`,
