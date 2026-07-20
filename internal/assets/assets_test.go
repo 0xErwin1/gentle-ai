@@ -477,6 +477,11 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 	if strings.Contains(source, `.slice("review-".length)`) {
 		t.Fatal("review-result-artifacts.ts must preserve the exact full selected lens; found review- prefix stripping")
 	}
+	// Pin the split: the previously conflated empty/nested-envelope message
+	// must never regress back into one indistinguishable free-text throw.
+	if strings.Contains(source, `reviewer task result is empty or contains a nested envelope`) {
+		t.Fatal("review-result-artifacts.ts regressed to the conflated empty/nested-envelope error message")
+	}
 	for _, forbidden := range []string{"writeFile", "link(", "chmod(", "createHash", "export {", "export const"} {
 		if strings.Contains(source, forbidden) {
 			t.Fatalf("review-result-artifacts.ts must delegate native persistence; found %q", forbidden)
