@@ -226,7 +226,7 @@ var reviewFacadeCommittedTransitionHook = func(context.Context, string, string, 
 
 func RunReview(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <capabilities|start|finalize|validate|status|invalidate|abandon|recover|reclaim|reconcile-authority|dispose-result|quarantine-legacy|repair-legacy-alias|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go.")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <capabilities|start|finalize|validate|status|invalidate|abandon|recover|reclaim|reconcile-authority|dispose-result|quarantine-legacy|quarantine-legacy-fix-scope|repair-legacy-alias|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go.")
 		_, _ = fmt.Fprintln(stdout, "Additive headless capabilities: gentle-ai review capture-result (with --preflight) and gentle-ai review preserve-result.")
 		return nil
 	}
@@ -323,6 +323,8 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 		return RunReviewDisposeResult(args[1:], stdout)
 	case "quarantine-legacy":
 		return RunReviewLegacyQuarantine(args[1:], stdout)
+	case "quarantine-legacy-fix-scope":
+		return RunReviewLegacyFixScopeQuarantine(args[1:], stdout)
 	case "repair-legacy-alias":
 		return RunReviewLegacyAliasRepair(args[1:], stdout)
 	case "schema":

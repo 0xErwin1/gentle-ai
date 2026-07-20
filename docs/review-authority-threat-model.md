@@ -60,6 +60,16 @@ The maintainer authorization is an exact LF-only eight-line binding with schema 
 
 On success it moves the complete immutable lineage into `review-transactions/quarantine/`, writes a prepared then committed audit record with the re-derived chain identity and alias-event revisions, and reads the inventory back. It does not delete or rewrite authority. The status becomes complete/authoritative only if the remaining inventory is independently clean; unrelated invalid, incomplete, compact-v2, or graph authority continues to fail closed.
 
+## Historical Complete-Fix Scope Quarantine
+
+`gentle-ai review quarantine-legacy-fix-scope` is a separate narrow maintenance operation for immutable legacy-v1 `ordinary_4r` history whose sole semantic anomaly is a historical `review/complete-fix` expanding correction paths beyond frozen genesis scope. It is a quarantine, never validation, rewrite, migration, or repair.
+
+It accepts exactly two literal anomaly sets: `complete_fix_scope_expansion`, or `complete_fix_scope_expansion,validate_fix_alias`. The combined set additionally binds the exact alias event revision and literal `review/validate-fix` operation. Reordered, missing, extra, or unrelated anomalies fail closed.
+
+The only accepted disposition is `quarantine-historical-complete-fix-scope-expansion`. The exact LF-only eleven-line authorization order is `gentle-ai.review-legacy-fix-scope-quarantine-authorization/v2`, `repository`, `lineage`, `revision`, `diagnostic`, `disposition`, `anomaly_set`, `validate_fix_alias_revision`, `validate_fix_alias_operation`, `actor`, `reason`. The command recomputes the complete chain, fix delta, frozen and expanded paths, source lineage, and HEAD under the exclusive maintenance lock before atomically publishing an audited quarantine record. It rejects symlinks, unexpected components, and non-chain event residue at `gentle-ai`, `review-transactions`, `v1`, `quarantine`, lineage, and residue components.
+
+When the source is already absent, replay takes the same exclusive lock, rechecks both source and same-lineage compact-v2 authority, strictly decodes the unique committed audit JSON, re-derives the full physical residue proof, and reads the inventory back. A prepared record found while that lock is held is stale or orphaned, never a successful replay; it cannot hide malformed or conflicting committed data. Fabricated, partial, stale-only, duplicate, or path-mismatched audit records are refused.
+
 ## Recovery And Rollback
 
 - Use `gentle-ai review recover` with an explicit predecessor lineage and revision, a distinct successor lineage, a disposition, reason, and actor. `--projection workspace|staged` selects the successor target; omission preserves the predecessor projection for compatibility. Approved predecessors require a proven scope change; invalidated predecessors remain terminal. Only escalated recovery may cross projections, and it requires the exact six-line maintainer authorization binding built from the selected projection's target identity. Authorization diagnostics identify the projection and target identity without exposing repository paths.
