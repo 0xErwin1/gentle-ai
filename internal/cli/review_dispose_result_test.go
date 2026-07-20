@@ -176,6 +176,68 @@ func TestReviewDisposeResultEscalatesStrandedLineage(t *testing.T) {
 	}
 }
 
+// TestReviewDisposeResultFindsClassSuffixedIncidentArtifact reproduces the
+// review-083dd7c132820384 regression (found by review-resilience and
+// review-reliability): preserve-result now writes a class-suffixed filename
+// (`%02d-%s-%s-%s.raw`, order-lens-class-digest12) whenever a non-empty
+// ResultIncidentClass is supplied via --class, but dispose-result never
+// receives the incident's class as an input — only lineage/target/lens/order
+// — so the lookup path it drives must still locate the artifact without
+// knowing the class in advance.
+func TestReviewDisposeResultFindsClassSuffixedIncidentArtifact(t *testing.T) {
+	repo, started, store, record := newArtifactReview(t, true)
+	lenses := record.State.SelectedLenses
+	target := record.State.InitialSnapshot.Identity
+
+	raw := filepath.Join(t.TempDir(), "raw.txt")
+	if err := os.WriteFile(raw, []byte(unreplayableReviewerOutput), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var preserved bytes.Buffer
+	if err := RunReviewPreserveResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", target,
+		"--lens", lenses[3], "--order", "3", "--input", raw, "--class", "empty_result",
+	}, &preserved); err != nil {
+		t.Fatalf("preserve-result: %v", err)
+	}
+	var incident reviewIncidentArtifact
+	decodeStrictReviewJSON(t, preserved.Bytes(), &incident)
+	if !strings.Contains(filepath.Base(incident.Path), "-empty_result-") {
+		t.Fatalf("preserved incident path %q is not class-suffixed", incident.Path)
+	}
+
+	repository, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const actor, reason = "maintainer@example.com", "reviewer output never decoded"
+	const class = "transport_syntax"
+	authorization := disposeResultAuthorization(repository, started.LineageID, record.Revision, target,
+		lenses[3], 3, incident.SHA256, class, actor, reason)
+	args := []string{
+		"dispose-result", "--cwd", repo, "--lineage", started.LineageID,
+		"--expected-revision", record.Revision, "--target", target, "--lens", lenses[3], "--order", "3",
+		"--artifact-digest", incident.SHA256, "--class", class,
+		"--diagnostic", "decode reviewer result: invalid character after array element",
+		"--reason", reason, "--actor", actor, "--maintainer-authorization", authorization,
+	}
+	var output bytes.Buffer
+	if err := RunReview(args, &output); err != nil {
+		t.Fatalf("review dispose-result against a class-suffixed incident artifact: %v\n%s", err, output.String())
+	}
+	var result ReviewDisposeResultResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if result.Record.State != reviewtransaction.StateEscalated ||
+		result.Record.Disposition.Class != reviewtransaction.ResultDispositionTransportSyntax ||
+		result.Record.Disposition.ArtifactDigest != incident.SHA256 {
+		t.Fatalf("dispose-result over a class-suffixed incident = %#v", result.Record)
+	}
+	after, err := store.Load()
+	if err != nil || after.State.State != reviewtransaction.StateEscalated {
+		t.Fatalf("authority after class-suffixed disposition = %#v (%v)", after.State, err)
+	}
+}
+
 // TestReviewDisposeResultWrongTargetRequiresADecodablePayload pins the class
 // boundary through the facade: wrong_target is admitted only over a payload
 // that genuinely decoded, and the committed audit record says so.
