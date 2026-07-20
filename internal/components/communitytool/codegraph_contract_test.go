@@ -137,9 +137,12 @@ func TestAntigravityRequiresCanonicalCodeGraphEntry(t *testing.T) {
 		name, data string
 		want       bool
 	}{
-		{"valid", `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`, true},
+		{"valid bare command", `{"mcpServers":{"codegraph":{"command":"codegraph","args":["serve","--mcp"]}}}`, true},
+		{"valid absolute command", `{"mcpServers":{"codegraph":{"command":"/opt/homebrew/bin/codegraph","args":["serve","--mcp"]}}}`, true},
 		{"unrelated key", `{"mcpServers":{"not-codegraph":{"command":"codegraph"}}}`, false},
-		{"wrong command", `{"mcpServers":{"codegraph":{"command":"other-codegraph"}}}`, false},
+		{"wrong command", `{"mcpServers":{"codegraph":{"command":"other-codegraph","args":["serve","--mcp"]}}}`, false},
+		{"missing args", `{"mcpServers":{"codegraph":{"command":"codegraph"}}}`, false},
+		{"wrong args", `{"mcpServers":{"codegraph":{"command":"codegraph","args":["mcp"]}}}`, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			mustWrite(t, path, tt.data)
