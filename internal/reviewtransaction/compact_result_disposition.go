@@ -44,7 +44,13 @@ type CompactResultDispositionRequest struct {
 	Reason                  string
 	Actor                   string
 	MaintainerAuthorization string
-	DisposedAt              time.Time
+	// AcquisitionID is the exact ID a prior review acquire-result issued for
+	// this lineage, target, lens, and order. Disposition is a terminal
+	// operation over the same pre-launch authority as capture, so its native
+	// lookup must match the original acquisition binding exactly; a bare
+	// caller-supplied ID is never trusted on its own.
+	AcquisitionID string
+	DisposedAt    time.Time
 }
 
 // CompactResultDispositionRecord reports the committed disposition together
@@ -197,6 +203,9 @@ func DisposeUnreplayablePreservedResult(ctx context.Context, repo string, reques
 	if request.SelectedOrder >= len(record.State.SelectedLenses) || record.State.SelectedLenses[request.SelectedOrder] != request.Lens {
 		return CompactResultDispositionRecord{}, fmt.Errorf("review dispose-result refused: lens %q is not the selected lens at order %d of lineage %q",
 			request.Lens, request.SelectedOrder, request.LineageID)
+	}
+	if _, err := store.ReadResultAcquisition(request.LineageID, request.TargetIdentity, request.Lens, request.SelectedOrder, request.AcquisitionID); err != nil {
+		return CompactResultDispositionRecord{}, fmt.Errorf("review dispose-result refused: acquisition binding mismatch: %w", err)
 	}
 	disposedResult := fmt.Sprintf("%02d-%s.json", request.SelectedOrder, request.Lens)
 	captured, err := compactCapturedReviewerResults(store.Dir)

@@ -110,7 +110,23 @@ func disposeAuthorization(repository, lineage, revision, target, lens string, or
 		"\nreason=" + reason
 }
 
-func (fixture disposeFixture) request(lens string, order int, digest string, class ResultDispositionClass, absent []string) CompactResultDispositionRequest {
+// request builds a disposition request bound to a freshly acquired
+// pre-launch slot, mirroring the ordinary sequence: acquire, then (attempt)
+// capture, then dispose. Tests that need to acquire before simulating an
+// already-captured lens (dispose-result must refuse those) call
+// AcquireReviewerResult themselves and use requestWithAcquisition instead,
+// since AcquireReviewerResult itself refuses a slot that already holds a
+// captured result.
+func (fixture disposeFixture) request(t *testing.T, lens string, order int, digest string, class ResultDispositionClass, absent []string) CompactResultDispositionRequest {
+	t.Helper()
+	acquisition, err := fixture.store.AcquireReviewerResult(context.Background(), fixture.record.State.InitialSnapshot.Identity, lens, order)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fixture.requestWithAcquisition(acquisition.ID, lens, order, digest, class, absent)
+}
+
+func (fixture disposeFixture) requestWithAcquisition(acquisitionID, lens string, order int, digest string, class ResultDispositionClass, absent []string) CompactResultDispositionRequest {
 	const actor, reason = "maintainer@example.com", "reviewer output cannot be replayed"
 	const diagnostic = "decode reviewer result: invalid character after array element"
 	target := fixture.record.State.InitialSnapshot.Identity
@@ -120,6 +136,7 @@ func (fixture disposeFixture) request(lens string, order int, digest string, cla
 		Class: class, Diagnostic: diagnostic, AbsentPaths: absent, Reason: reason, Actor: actor,
 		MaintainerAuthorization: disposeAuthorization(fixture.root, fixture.record.State.LineageID,
 			fixture.record.Revision, target, lens, order, digest, string(class), actor, reason),
+		AcquisitionID: acquisitionID,
 	}
 }
 
@@ -137,7 +154,7 @@ func TestDisposeUnreplayablePreservedResultEscalatesAndRetainsCapturedResults(t 
 	digest, rawPath := preserveRawResult(t, fixture.repo, fixture.record.State.LineageID, lenses[3], 3, []byte(unreplayablePayload))
 
 	record, err := DisposeUnreplayablePreservedResult(context.Background(), fixture.repo,
-		fixture.request(lenses[3], 3, digest, ResultDispositionTransportSyntax, nil))
+		fixture.request(t, lenses[3], 3, digest, ResultDispositionTransportSyntax, nil))
 	if err != nil {
 		t.Fatalf("disposition of an unreplayable preserved result failed: %v", err)
 	}
@@ -198,7 +215,7 @@ func TestDisposeUnreplayablePreservedResultRecordsWrongTargetEvidence(t *testing
 	digest, rawPath := preserveRawResult(t, fixture.repo, fixture.record.State.LineageID, lens, 0, payload)
 
 	record, err := DisposeUnreplayablePreservedResult(context.Background(), fixture.repo,
-		fixture.request(lens, 0, digest, ResultDispositionWrongTarget, []string{"internal/billing/charge.go"}))
+		fixture.request(t, lens, 0, digest, ResultDispositionWrongTarget, []string{"internal/billing/charge.go"}))
 	if err != nil {
 		t.Fatalf("wrong-target disposition failed: %v", err)
 	}
@@ -220,7 +237,7 @@ func TestDisposeUnreplayablePreservedResultRefusesUnboundRequests(t *testing.T) 
 	fixture := newDisposeFixture(t, "dispose-refusals")
 	lenses := fixture.record.State.SelectedLenses
 	digest, rawPath := preserveRawResult(t, fixture.repo, fixture.record.State.LineageID, lenses[3], 3, []byte(unreplayablePayload))
-	valid := fixture.request(lenses[3], 3, digest, ResultDispositionTransportSyntax, nil)
+	valid := fixture.request(t, lenses[3], 3, digest, ResultDispositionTransportSyntax, nil)
 	otherRevision := "sha256:" + strings.Repeat("ab", 32)
 
 	// wrong_target evidence is only ever weighed against a payload that decoded,
@@ -368,7 +385,7 @@ func TestDisposeUnreplayablePreservedResultRefusesDecodablePayload(t *testing.T)
 	digest, _ := preserveRawResult(t, fixture.repo, fixture.record.State.LineageID, lens, 0,
 		[]byte(`{"findings":[],"evidence":["checked exact target"]}`))
 	_, err := DisposeUnreplayablePreservedResult(context.Background(), fixture.repo,
-		fixture.request(lens, 0, digest, ResultDispositionTransportSyntax, nil))
+		fixture.request(t, lens, 0, digest, ResultDispositionTransportSyntax, nil))
 	if err == nil || !strings.Contains(err.Error(), "syntactically valid JSON") {
 		t.Fatalf("error = %v, want a refusal that redirects to capture-result", err)
 	}
@@ -379,10 +396,16 @@ func TestDisposeUnreplayablePreservedResultRefusesDecodablePayload(t *testing.T)
 func TestDisposeUnreplayablePreservedResultRefusesCapturedLens(t *testing.T) {
 	fixture := newDisposeFixture(t, "dispose-captured-lens")
 	lens := fixture.record.State.SelectedLenses[0]
+	// AcquireReviewerResult itself refuses an already-captured slot, so the
+	// slot must be acquired before the capture is simulated below.
+	acquisition, err := fixture.store.AcquireReviewerResult(context.Background(), fixture.record.State.InitialSnapshot.Identity, lens, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	captureValidResult(t, fixture.store, lens, 0)
 	digest, _ := preserveRawResult(t, fixture.repo, fixture.record.State.LineageID, lens, 0, []byte(unreplayablePayload))
-	_, err := DisposeUnreplayablePreservedResult(context.Background(), fixture.repo,
-		fixture.request(lens, 0, digest, ResultDispositionTransportSyntax, nil))
+	_, err = DisposeUnreplayablePreservedResult(context.Background(), fixture.repo,
+		fixture.requestWithAcquisition(acquisition.ID, lens, 0, digest, ResultDispositionTransportSyntax, nil))
 	if err == nil || !strings.Contains(err.Error(), "already holds a captured reviewer result") {
 		t.Fatalf("error = %v, want a refusal to disposition a captured lens", err)
 	}
@@ -404,7 +427,7 @@ func TestDisposeUnreplayablePreservedResultRefusesCaptureRacingTheCommit(t *test
 	fixture := newDisposeFixture(t, "dispose-capture-race")
 	lens := fixture.record.State.SelectedLenses[3]
 	digest, rawPath := preserveRawResult(t, fixture.repo, fixture.record.State.LineageID, lens, 3, []byte(unreplayablePayload))
-	request := fixture.request(lens, 3, digest, ResultDispositionTransportSyntax, nil)
+	request := fixture.request(t, lens, 3, digest, ResultDispositionTransportSyntax, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -458,7 +481,7 @@ func TestDisposeUnreplayablePreservedResultReplayConverges(t *testing.T) {
 	fixture := newDisposeFixture(t, "dispose-replay")
 	lens := fixture.record.State.SelectedLenses[2]
 	digest, _ := preserveRawResult(t, fixture.repo, fixture.record.State.LineageID, lens, 2, []byte(unreplayablePayload))
-	request := fixture.request(lens, 2, digest, ResultDispositionTransportSyntax, nil)
+	request := fixture.request(t, lens, 2, digest, ResultDispositionTransportSyntax, nil)
 
 	first, err := DisposeUnreplayablePreservedResult(context.Background(), fixture.repo, request)
 	if err != nil {

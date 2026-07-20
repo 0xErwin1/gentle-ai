@@ -37,6 +37,7 @@ func RunReviewDisposeResult(args []string, stdout io.Writer) error {
 	reason := flags.String("reason", "", "non-empty disposition reason")
 	actor := flags.String("actor", "", "disposition actor")
 	authorization := flags.String("maintainer-authorization", "", "exact eleven-line LF-only binding: gentle-ai.review-result-disposition-authorization/v1, repository, lineage, revision, target_identity, lens, order, artifact_digest, class, actor, reason")
+	acquisition := flags.String("acquisition", "", "exact acquisition ID from the original review acquire-result binding for this lineage, target, lens, and order")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -46,9 +47,9 @@ func RunReviewDisposeResult(args []string, stdout io.Writer) error {
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected review dispose-result argument %q", flags.Arg(0))
 	}
-	for _, required := range []string{*lineage, *expected, *target, *lens, *digest, *class, *diagnostic, *reason, *actor, *authorization} {
+	for _, required := range []string{*lineage, *expected, *target, *lens, *digest, *class, *diagnostic, *reason, *actor, *authorization, *acquisition} {
 		if strings.TrimSpace(required) == "" {
-			return errors.New("review dispose-result requires --lineage, --expected-revision, --target, --lens, --order, --artifact-digest, --class, --diagnostic, --reason, --actor, and --maintainer-authorization")
+			return errors.New("review dispose-result requires --lineage, --expected-revision, --target, --lens, --order, --artifact-digest, --class, --diagnostic, --reason, --actor, --maintainer-authorization, and --acquisition")
 		}
 	}
 	if *order < 0 {
@@ -63,7 +64,7 @@ func RunReviewDisposeResult(args []string, stdout io.Writer) error {
 		LineageID: *lineage, ExpectedRevision: *expected, TargetIdentity: *target,
 		Lens: *lens, SelectedOrder: *order, ArtifactDigest: *digest,
 		Class: reviewtransaction.ResultDispositionClass(*class), Diagnostic: *diagnostic, AbsentPaths: absent,
-		Reason: *reason, Actor: *actor, MaintainerAuthorization: *authorization,
+		Reason: *reason, Actor: *actor, MaintainerAuthorization: *authorization, AcquisitionID: *acquisition,
 	})
 	if err != nil {
 		return err

@@ -19,13 +19,62 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 )
 
+// TestRunReviewAcquireResult drives the exactly-once pre-launch acquisition
+// CLI surface directly: a first acquisition over a valid binding succeeds and
+// is durable, a stale binding is refused before any write, and a repeated
+// acquisition over the identical binding — modeling a duplicate or post-crash
+// retry — always refuses.
+func TestRunReviewAcquireResult(t *testing.T) {
+	repo, started, store, record := newArtifactReview(t, false)
+	target, lens := record.State.InitialSnapshot.Identity, record.State.SelectedLenses[0]
+	args := func(target, lens string, order int) []string {
+		return []string{
+			"--cwd", repo, "--lineage", started.LineageID, "--target", target,
+			"--lens", lens, "--order", fmt.Sprint(order),
+		}
+	}
+	for _, bad := range [][]string{
+		args("sha256:"+strings.Repeat("0", 64), lens, 0),
+		args(target, "review-risk", 0),
+		args(target, lens, 1),
+	} {
+		if err := RunReviewAcquireResult(bad, io.Discard); err == nil {
+			t.Fatal("acquire-result over a stale binding was accepted")
+		}
+	}
+	if _, err := os.Stat(filepath.Join(store.Dir, reviewtransaction.CompactReviewerAcquisitionsDir)); !os.IsNotExist(err) {
+		t.Fatalf("stale acquire-result attempts wrote durable state: %v", err)
+	}
+	var output bytes.Buffer
+	if err := RunReviewAcquireResult(args(target, lens, 0), &output); err != nil {
+		t.Fatalf("acquire-result over a valid binding failed: %v", err)
+	}
+	var first ReviewAcquireResultResult
+	decodeStrictReviewJSON(t, output.Bytes(), &first)
+	if first.Operation != "review/acquire-result" || first.Acquisition.ID == "" ||
+		first.Acquisition.LineageID != started.LineageID || first.Acquisition.TargetIdentity != target ||
+		first.Acquisition.Lens != lens || first.Acquisition.SelectedOrder != 0 ||
+		first.Acquisition.State != reviewtransaction.CompactResultAcquisitionUnknownOutcome {
+		t.Fatalf("acquire-result result = %#v", first)
+	}
+	// A duplicate or post-crash retry of the identical binding must never
+	// authorize a second launch.
+	if err := RunReviewAcquireResult(args(target, lens, 0), io.Discard); err == nil {
+		t.Fatal("repeated acquire-result over the identical binding was accepted")
+	}
+	if _, err := store.ReadResultAcquisition(started.LineageID, target, lens, 0, first.Acquisition.ID); err != nil {
+		t.Fatalf("original acquisition unreadable after a rejected repeat: %v", err)
+	}
+}
+
 func TestReviewCaptureResultStrictBindingReplayAndFinalize(t *testing.T) {
 	repo, started, _, record := newArtifactReview(t, false)
 	input := filepath.Join(t.TempDir(), "result.json")
 	args := func(lineage, target, lens, order string) []string {
 		return []string{"--cwd", repo, "--lineage", lineage, "--target", target, "--lens", lens, "--order", order, "--input", input}
 	}
-	validArgs := args(started.LineageID, record.State.InitialSnapshot.Identity, record.State.SelectedLenses[0], "0")
+	acquisitionID := acquireResultForTest(t, repo, started.LineageID, record.State.InitialSnapshot.Identity, record.State.SelectedLenses[0], 0)
+	validArgs := append(args(started.LineageID, record.State.InitialSnapshot.Identity, record.State.SelectedLenses[0], "0"), "--acquisition", acquisitionID)
 	for _, payload := range []string{"prose", `{}`, `{"findings":[],"evidence":[]} {}`, `{"findings":[],"evidence":[],"unknown":true}`} {
 		if err := os.WriteFile(input, []byte(payload), 0o600); err != nil {
 			t.Fatal(err)
@@ -86,13 +135,16 @@ func TestReviewCaptureResultWaitsForMaintenanceBeforePublication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Acquire before the maintenance lock is held: AcquireReviewerResult takes
+	// the same store lock CaptureReviewerResult waits on below.
+	acquisitionID := acquireResultForTest(t, repo, started.LineageID, record.State.InitialSnapshot.Identity, record.State.SelectedLenses[0], 0)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	held, err := reviewtransaction.AcquireReviewMaintenanceExclusive(ctx, repo)
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := []string{"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input}
+	args := []string{"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input, "--acquisition", acquisitionID}
 	if err := RunReviewCaptureResult(args, io.Discard); !errors.Is(err, reviewtransaction.ErrAuthorityLockTimeout) {
 		t.Fatalf("capture while maintenance held = %v", err)
 	}
@@ -173,6 +225,10 @@ func TestReviewArtifactSubstitutionFailsBeforeMutation(t *testing.T) {
 func TestReviewCaptureResultConcurrentSelectedLenses(t *testing.T) {
 	repo, started, store, record := newArtifactReview(t, true)
 	manifests := make([]string, len(record.State.SelectedLenses))
+	acquisitions := make([]string, len(record.State.SelectedLenses))
+	for order, lens := range record.State.SelectedLenses {
+		acquisitions[order] = acquireResultForTest(t, repo, started.LineageID, record.State.InitialSnapshot.Identity, lens, order)
+	}
 	var wg sync.WaitGroup
 	for order, lens := range record.State.SelectedLenses {
 		wg.Add(1)
@@ -181,7 +237,7 @@ func TestReviewCaptureResultConcurrentSelectedLenses(t *testing.T) {
 			input := filepath.Join(t.TempDir(), fmt.Sprintf("%d.json", order))
 			_ = os.WriteFile(input, []byte(`{"findings":[],"evidence":["checked exact target"]}`), 0o600)
 			var output bytes.Buffer
-			err := RunReviewCaptureResult([]string{"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--lens", lens, "--order", fmt.Sprint(order), "--input", input}, &output)
+			err := RunReviewCaptureResult([]string{"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--lens", lens, "--order", fmt.Sprint(order), "--input", input, "--acquisition", acquisitions[order]}, &output)
 			if err != nil {
 				t.Errorf("capture %s: %v", lens, err)
 				return
@@ -229,6 +285,35 @@ func TestCaptureReviewerArtifactDirectorySync(t *testing.T) {
 		})
 	}
 }
+
+// testAcquisitionID is a syntactically valid but unbound placeholder
+// acquisition ID. review preserve-result durably saves evidence even from a
+// repository that cannot resolve the live compact store the acquisition was
+// published in (for example a nested-worktree misconfiguration), so it only
+// format-validates --acquisition; this placeholder exercises that path
+// without needing a real, resolvable acquisition record.
+func testAcquisitionID() string {
+	return "acq-" + strings.Repeat("0", 64)
+}
+
+// acquireResultForTest durably acquires the exact pre-launch slot for the
+// given binding, mirroring what `review acquire-result` (called by the
+// plugin's tool.execute.before hook) does before a bound reviewer task
+// launches. Tests exercising a real capture-result or preserve-result success
+// path must present this ID via --acquisition.
+func acquireResultForTest(t *testing.T, repo, lineage, target, lens string, order int) string {
+	t.Helper()
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	acquisition, err := store.AcquireReviewerResult(context.Background(), target, lens, order)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return acquisition.ID
+}
+
 func newArtifactReview(t *testing.T, high bool) (string, ReviewFacadeStartResult, reviewtransaction.CompactStore, reviewtransaction.CompactRecord) {
 	t.Helper()
 	repo := initReviewCLIRepo(t)
@@ -252,8 +337,9 @@ func capturedArtifact(t *testing.T) (string, ReviewFacadeStartResult, reviewtran
 	repo, started, store, record := newArtifactReview(t, false)
 	input := filepath.Join(t.TempDir(), "result.json")
 	_ = os.WriteFile(input, []byte(`{"findings":[],"evidence":["checked exact target"]}`), 0o600)
+	acquisitionID := acquireResultForTest(t, repo, started.LineageID, record.State.InitialSnapshot.Identity, record.State.SelectedLenses[0], 0)
 	var output bytes.Buffer
-	if err := RunReviewCaptureResult([]string{"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input}, &output); err != nil {
+	if err := RunReviewCaptureResult([]string{"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input, "--acquisition", acquisitionID}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var artifact reviewResultArtifact

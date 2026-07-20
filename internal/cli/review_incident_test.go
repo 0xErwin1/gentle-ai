@@ -102,8 +102,9 @@ func TestReviewCaptureResultNestedRepositoryFailsActionablyAndStaysRetriable(t *
 	}
 	// The failed parent-repository capture must not consume the exactly-once
 	// native lens slot: the same capture succeeds from the reviewing repository.
+	acquisitionID := acquireResultForTest(t, child, started.LineageID, record.State.InitialSnapshot.Identity, record.State.SelectedLenses[0], 0)
 	var output bytes.Buffer
-	if err := RunReviewCaptureResult(args(child, "--input", input), &output); err != nil {
+	if err := RunReviewCaptureResult(args(child, "--input", input, "--acquisition", acquisitionID), &output); err != nil {
 		t.Fatalf("retry from reviewing repository failed: %v", err)
 	}
 	manifest := strings.TrimSpace(output.String())
@@ -131,6 +132,7 @@ func TestReviewPreserveResultDurableIncidentArtifact(t *testing.T) {
 	args := []string{
 		"--cwd", parent, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
 		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+		"--acquisition", testAcquisitionID(),
 	}
 	var first, replay bytes.Buffer
 	if err := RunReviewPreserveResult(args, &first); err != nil {
@@ -189,6 +191,7 @@ func TestReviewPreserveResultDurableIncidentArtifact(t *testing.T) {
 // decoder and is not a recoverable artifact.
 func TestReviewPreservedResultReplaysThroughCaptureAndFinalize(t *testing.T) {
 	repo, started, _, record := newArtifactReview(t, false)
+	acquisitionID := acquireResultForTest(t, repo, started.LineageID, record.State.InitialSnapshot.Identity, record.State.SelectedLenses[0], 0)
 	extracted := `{"findings":[],"evidence":["checked exact target"]}`
 	envelope := "<task id=\"lens-1\" state=\"completed\">\n<task_result>\n" + extracted + "\n</task_result>\n</task>"
 	preserve := func(raw string) string {
@@ -201,6 +204,7 @@ func TestReviewPreservedResultReplaysThroughCaptureAndFinalize(t *testing.T) {
 		if err := RunReviewPreserveResult([]string{
 			"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
 			"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+			"--acquisition", acquisitionID,
 		}, &output); err != nil {
 			t.Fatalf("preserve failed: %v", err)
 		}
@@ -212,6 +216,7 @@ func TestReviewPreservedResultReplaysThroughCaptureAndFinalize(t *testing.T) {
 		return []string{
 			"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
 			"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", preserved,
+			"--acquisition", acquisitionID,
 		}
 	}
 	// An envelope-wrapped preserved payload is unrecoverable: strict replay
@@ -239,7 +244,7 @@ func TestReviewPreserveResultRejectsUnsafeBindings(t *testing.T) {
 	}
 	valid := map[string]string{
 		"cwd": repo, "lineage": started.LineageID, "target": record.State.InitialSnapshot.Identity,
-		"lens": record.State.SelectedLenses[0], "order": "0", "input": input,
+		"lens": record.State.SelectedLenses[0], "order": "0", "input": input, "acquisition": testAcquisitionID(),
 	}
 	cases := map[string]map[string]string{
 		"lineage":     {"lineage": "Not_A/Lineage"},
@@ -251,7 +256,7 @@ func TestReviewPreserveResultRejectsUnsafeBindings(t *testing.T) {
 	for name, override := range cases {
 		t.Run(name, func(t *testing.T) {
 			args := []string{}
-			for _, key := range []string{"cwd", "lineage", "target", "lens", "order", "input"} {
+			for _, key := range []string{"cwd", "lineage", "target", "lens", "order", "input", "acquisition"} {
 				value := valid[key]
 				if replacement, ok := override[key]; ok {
 					value = replacement
@@ -296,6 +301,7 @@ func TestReviewPreserveResultRejectsUnsafeClass(t *testing.T) {
 
 func TestReviewPreserveResultRecordsIncidentClass(t *testing.T) {
 	repo, started, _, record := newArtifactReview(t, false)
+	acquisitionID := acquireResultForTest(t, repo, started.LineageID, record.State.InitialSnapshot.Identity, record.State.SelectedLenses[0], 0)
 	preserve := func(t *testing.T, class string) reviewIncidentArtifact {
 		t.Helper()
 		input := filepath.Join(t.TempDir(), "raw.txt")
@@ -305,6 +311,7 @@ func TestReviewPreserveResultRecordsIncidentClass(t *testing.T) {
 		args := []string{
 			"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
 			"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+			"--acquisition", acquisitionID,
 		}
 		if class != "" {
 			args = append(args, "--class", class)
@@ -361,6 +368,7 @@ func TestReviewPreserveResultRecordsIncidentClass(t *testing.T) {
 // store-lock + CAS in CaptureReviewerResult, with no new revision minted.
 func TestReviewPreserveResultDuplicateRecoveryIsIdempotent(t *testing.T) {
 	repo, started, store, record := newArtifactReview(t, false)
+	acquisitionID := acquireResultForTest(t, repo, started.LineageID, record.State.InitialSnapshot.Identity, record.State.SelectedLenses[0], 0)
 	rawInput := filepath.Join(t.TempDir(), "raw.txt")
 	if err := os.WriteFile(rawInput, []byte("raw reviewer output\nthat is not JSON"), 0o600); err != nil {
 		t.Fatal(err)
@@ -369,6 +377,7 @@ func TestReviewPreserveResultDuplicateRecoveryIsIdempotent(t *testing.T) {
 	if err := RunReviewPreserveResult([]string{
 		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
 		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", rawInput, "--class", "empty_result",
+		"--acquisition", acquisitionID,
 	}, &preserved); err != nil {
 		t.Fatalf("preserve incident failed: %v", err)
 	}
@@ -385,6 +394,7 @@ func TestReviewPreserveResultDuplicateRecoveryIsIdempotent(t *testing.T) {
 	captureArgs := []string{
 		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
 		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", extractedInput,
+		"--acquisition", acquisitionID,
 	}
 	before, err := store.Load()
 	if err != nil {
@@ -415,6 +425,7 @@ func TestReviewPreserveResultDuplicateRecoveryIsIdempotent(t *testing.T) {
 // identical binding with the correct extracted payload succeeds and finalizes.
 func TestReviewPreserveResultInterruptedRecoveryRetries(t *testing.T) {
 	repo, started, _, record := newArtifactReview(t, false)
+	acquisitionID := acquireResultForTest(t, repo, started.LineageID, record.State.InitialSnapshot.Identity, record.State.SelectedLenses[0], 0)
 	rawInput := filepath.Join(t.TempDir(), "raw.txt")
 	if err := os.WriteFile(rawInput, []byte("raw reviewer output\nthat is not JSON"), 0o600); err != nil {
 		t.Fatal(err)
@@ -422,6 +433,7 @@ func TestReviewPreserveResultInterruptedRecoveryRetries(t *testing.T) {
 	if err := RunReviewPreserveResult([]string{
 		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
 		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", rawInput,
+		"--acquisition", acquisitionID,
 	}, io.Discard); err != nil {
 		t.Fatalf("preserve failed: %v", err)
 	}
@@ -430,6 +442,7 @@ func TestReviewPreserveResultInterruptedRecoveryRetries(t *testing.T) {
 		return []string{
 			"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
 			"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+			"--acquisition", acquisitionID,
 		}
 	}
 	// Simulate an interrupted recovery relaunch: the first attempt replays an

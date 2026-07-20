@@ -172,6 +172,54 @@ var syncReviewerArtifactDirectory = func(path string) error {
 	return directory.Close()
 }
 
+// ReviewAcquireResultResult reports the durable, immutable pre-launch
+// acquisition one bound reviewer task requires before it is launched. Its
+// existence is the exactly-once authority for the launch: capture-result,
+// preserve-result, and review dispose-result must present its exact ID.
+type ReviewAcquireResultResult struct {
+	Operation   string                                     `json:"operation"`
+	Acquisition reviewtransaction.CompactResultAcquisition `json:"acquisition"`
+}
+
+// RunReviewAcquireResult durably and atomically acquires the exact pre-launch
+// slot identified by the bound lineage, target, lens, and order, recording an
+// immutable unknown_outcome record while holding the store lock before the
+// caller launches the reviewer task. Its existence consumes the binding's
+// launch slot: a duplicate, concurrent, or post-crash retry of the identical
+// binding always refuses, because success would authorize a second launch.
+func RunReviewAcquireResult(args []string, stdout io.Writer) error {
+	flags := newReviewFlagSet("review acquire-result", stdout, "Durably and atomically acquire the exact pre-launch slot for one bound reviewer task before it is launched. Records an immutable unknown_outcome record that capture-result, preserve-result, and review dispose-result must reference by exact ID. A duplicate, concurrent, or post-crash retry of the identical binding always refuses.")
+	cwd := flags.String("cwd", ".", "repository path")
+	lineage := flags.String("lineage", "", "exact review lineage identifier")
+	target := flags.String("target", "", "exact frozen target identity")
+	lens := flags.String("lens", "", "exact selected lens")
+	order := flags.Int("order", -1, "zero-based selected lens order")
+	if err := parseReviewFlags(flags, args); err != nil {
+		return err
+	}
+	if reviewHelpRequested(args) {
+		return nil
+	}
+	if flags.NArg() != 0 || strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*target) == "" ||
+		strings.TrimSpace(*lens) == "" || *order < 0 {
+		return reviewPreflightError(errors.New("review acquire-result requires exact --cwd, --lineage, --target, --lens, and --order"))
+	}
+	ctx := context.Background()
+	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
+	if err != nil {
+		return fmt.Errorf("resolve review repository root: %w", err)
+	}
+	store, _, err := discoverCompactFacadeReview(ctx, root, *lineage, false)
+	if err != nil {
+		return reviewPreflightError(fmt.Errorf("resolve reviewing authority for lineage %q under repository %q: %w; if the review was started in a different repository (for example a nested one), re-run with --cwd set to that repository", *lineage, root, err))
+	}
+	acquisition, err := store.AcquireReviewerResult(ctx, *target, *lens, *order)
+	if err != nil {
+		return reviewPreflightError(err)
+	}
+	return encodeReviewJSON(stdout, ReviewAcquireResultResult{Operation: "review/acquire-result", Acquisition: acquisition})
+}
+
 func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review capture-result", stdout, "Capture one strict reviewer result in native authority and emit its bound manifest.")
 	cwd := flags.String("cwd", ".", "repository path")
@@ -182,6 +230,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	revision := flags.String("expected-revision", "", "exact reviewing authority revision")
 	input := flags.String("input", "", "raw reviewer result JSON file or - for stdin")
 	preflight := flags.Bool("preflight", false, "verify the capture binding against the current reviewing authority without reading or persisting any result")
+	acquisition := flags.String("acquisition", "", "exact acquisition ID from a prior review acquire-result for this exact binding; required unless --preflight")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -214,6 +263,12 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 			Schema: reviewCapturePreflightSchema, Capability: reviewCapturePreflightCapability, RepositoryRoot: root,
 			LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity, Lens: *lens, SelectedOrder: *order,
 		})
+	}
+	// The acquisition is the exactly-once pre-launch authority: capture must
+	// present the exact ID a prior review acquire-result issued for this exact
+	// binding. A missing or mismatched ID is refused before any input is read.
+	if _, err := store.ReadResultAcquisition(*lineage, *target, *lens, *order, *acquisition); err != nil {
+		return reviewPreflightError(fmt.Errorf("review capture-result refused: acquisition binding mismatch: %w", err))
 	}
 	payload, err := readFacadeBytes(*input)
 	if err != nil {

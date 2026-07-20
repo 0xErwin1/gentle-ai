@@ -374,3 +374,16 @@ func validReviewCapabilitySHA256(value string) bool {
 	_, err := hex.DecodeString(strings.TrimPrefix(value, "sha256:"))
 	return err == nil
 }
+
+// validReviewAcquisitionID checks only the shape native acquire-result IDs
+// take ("acq-" plus 64 lowercase hex characters), matching
+// compactResultAcquisitionID's generated format. It never proves the ID is a
+// real, binding-matched acquisition — only exact lookup validation
+// (reviewtransaction.CompactStore.ReadResultAcquisition) proves that.
+func validReviewAcquisitionID(value string) bool {
+	if !strings.HasPrefix(value, "acq-") || len(value) != len("acq-")+64 {
+		return false
+	}
+	_, err := hex.DecodeString(strings.TrimPrefix(value, "acq-"))
+	return err == nil
+}

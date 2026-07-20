@@ -65,6 +65,7 @@ func RunReviewPreserveResult(args []string, stdout io.Writer) error {
 	order := flags.Int("order", -1, "zero-based selected lens order from the capture binding")
 	input := flags.String("input", "", "raw reviewer result file or - for stdin")
 	class := flags.String("class", "", "extraction-failure classification: empty_result or nested_envelope")
+	acquisition := flags.String("acquisition", "", "exact acquisition ID from a prior review acquire-result for this exact binding")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -72,7 +73,7 @@ func RunReviewPreserveResult(args []string, stdout io.Writer) error {
 		return nil
 	}
 	if flags.NArg() != 0 || strings.TrimSpace(*input) == "" {
-		return reviewPreflightError(errors.New("review preserve-result requires exact --cwd, --lineage, --target, --lens, --order, and --input"))
+		return reviewPreflightError(errors.New("review preserve-result requires exact --cwd, --lineage, --target, --lens, --order, --input, and --acquisition"))
 	}
 	switch *lens {
 	case reviewtransaction.LensRisk, reviewtransaction.LensResilience, reviewtransaction.LensReadability, reviewtransaction.LensReliability:
@@ -84,6 +85,16 @@ func RunReviewPreserveResult(args []string, stdout io.Writer) error {
 	}
 	if !reviewtransaction.ValidResultIncidentClass(reviewtransaction.ResultIncidentClass(*class)) {
 		return reviewPreflightError(fmt.Errorf("review preserve-result requires --class to be empty or one exact canonical incident class; got %q", *class))
+	}
+	// Preserve-result durably saves evidence even from a repository that is not
+	// the reviewing repository (for example a nested-worktree misconfiguration),
+	// so it cannot require the acquisition to resolve against a live compact
+	// store the way capture-result and dispose-result do. It requires the exact
+	// acquire-result ID shape here as a fail-closed format guard; only the
+	// store-bound terminal operations (capture-result, review dispose-result)
+	// prove exact binding equality against the live acquisition record.
+	if !validReviewAcquisitionID(*acquisition) {
+		return reviewPreflightError(fmt.Errorf("review preserve-result requires --acquisition from a prior review acquire-result; got %q", *acquisition))
 	}
 	dir, err := reviewtransaction.CompactIncidentsDir(context.Background(), *cwd, *lineage)
 	if err != nil {
