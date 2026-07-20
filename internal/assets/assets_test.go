@@ -2,6 +2,7 @@ package assets
 
 import (
 	"encoding/json"
+	"io/fs"
 	"regexp"
 	"strings"
 	"testing"
@@ -1140,6 +1141,21 @@ func TestGentlemanLanguageInstructionsDoNotBiasEnglishSessions(t *testing.T) {
 				if !strings.Contains(content, required) {
 					t.Fatalf("%s missing output-style guardrail %q", path, required)
 				}
+			}
+		})
+	}
+
+	orchestratorPaths, err := fs.Glob(FS, "*/sdd-orchestrator.md")
+	if err != nil {
+		t.Fatalf("glob SDD orchestrator assets: %v", err)
+	}
+	if len(orchestratorPaths) == 0 {
+		t.Fatal("no SDD orchestrator assets found")
+	}
+	for _, path := range orchestratorPaths {
+		t.Run(path, func(t *testing.T) {
+			if strings.Contains(MustRead(path), "haceme un SDD para X") {
+				t.Fatalf("%s still contains a Spanish example that biases English sessions", path)
 			}
 		})
 	}
