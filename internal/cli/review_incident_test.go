@@ -13,6 +13,23 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 )
 
+func TestValidResultIncidentClass(t *testing.T) {
+	cases := map[reviewtransaction.ResultIncidentClass]bool{
+		reviewtransaction.ResultIncidentEmptyResult:    true,
+		reviewtransaction.ResultIncidentNestedEnvelope: true,
+		"":                          true,
+		"wrong_target":              false,
+		"transport_syntax":          false,
+		"../evil":                   false,
+		"arbitrary string not enum": false,
+	}
+	for class, want := range cases {
+		if got := reviewtransaction.ValidResultIncidentClass(class); got != want {
+			t.Fatalf("ValidResultIncidentClass(%q) = %v, want %v", class, got, want)
+		}
+	}
+}
+
 func TestReviewCaptureResultPreflightVerifiesBindingWithoutMutation(t *testing.T) {
 	repo, started, store, record := newArtifactReview(t, false)
 	bindingArgs := func(lens string, order string) []string {

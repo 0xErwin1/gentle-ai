@@ -70,6 +70,29 @@ const (
 	ResultDispositionWrongTarget     ResultDispositionClass = "wrong_target"
 )
 
+// ResultIncidentClass names which extraction-failure shape a preserved raw
+// reviewer envelope was classified as at the plugin boundary. This is a
+// distinct type from ResultDispositionClass on purpose: disposition classes
+// judge candidate-inapplicability of a decodable payload, while incident
+// classes describe why the plugin could never extract a payload at all.
+type ResultIncidentClass string
+
+const (
+	ResultIncidentEmptyResult    ResultIncidentClass = "empty_result"
+	ResultIncidentNestedEnvelope ResultIncidentClass = "nested_envelope"
+)
+
+// ValidResultIncidentClass reports whether c is a known incident class or the
+// empty string (backward-compatible: omitting --class remains valid).
+func ValidResultIncidentClass(c ResultIncidentClass) bool {
+	switch c {
+	case "", ResultIncidentEmptyResult, ResultIncidentNestedEnvelope:
+		return true
+	default:
+		return false
+	}
+}
+
 // CompactResultDisposition records one audited refusal of a preserved reviewer
 // result as candidate-inapplicable. It binds the exact lens, selected order,
 // frozen target identity, and preserved-artifact digest it dispositions, and
