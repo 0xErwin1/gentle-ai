@@ -264,6 +264,35 @@ func TestReviewPreserveResultRejectsUnsafeBindings(t *testing.T) {
 	}
 }
 
+func TestReviewPreserveResultRejectsUnsafeClass(t *testing.T) {
+	repo, started, _, record := newArtifactReview(t, false)
+	input := filepath.Join(t.TempDir(), "raw.txt")
+	if err := os.WriteFile(input, []byte("raw output"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := reviewtransaction.CompactIncidentsDir(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []string{"../evil", "transport_syntax", "../../etc/passwd"}
+	for _, class := range cases {
+		t.Run(class, func(t *testing.T) {
+			before, _ := os.ReadDir(dir)
+			args := []string{
+				"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+				"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input, "--class", class,
+			}
+			if err := RunReviewPreserveResult(args, io.Discard); err == nil {
+				t.Fatalf("unsafe --class %q was accepted", class)
+			}
+			after, _ := os.ReadDir(dir)
+			if len(after) != len(before) {
+				t.Fatalf("unsafe --class %q wrote a file under the incidents dir: before=%d after=%d", class, len(before), len(after))
+			}
+		})
+	}
+}
+
 func initNestedReviewCLIRepo(t *testing.T) (string, string) {
 	t.Helper()
 	parent := initReviewCLIRepo(t)

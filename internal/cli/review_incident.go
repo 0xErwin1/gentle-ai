@@ -63,6 +63,7 @@ func RunReviewPreserveResult(args []string, stdout io.Writer) error {
 	lens := flags.String("lens", "", "exact selected lens from the capture binding")
 	order := flags.Int("order", -1, "zero-based selected lens order from the capture binding")
 	input := flags.String("input", "", "raw reviewer result file or - for stdin")
+	class := flags.String("class", "", "extraction-failure classification: empty_result or nested_envelope")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -79,6 +80,9 @@ func RunReviewPreserveResult(args []string, stdout io.Writer) error {
 	}
 	if !validReviewCapabilitySHA256(*target) || *order < 0 || *order >= 4 {
 		return reviewPreflightError(errors.New("review preserve-result requires the exact frozen target identity and selected lens order"))
+	}
+	if !reviewtransaction.ValidResultIncidentClass(reviewtransaction.ResultIncidentClass(*class)) {
+		return reviewPreflightError(fmt.Errorf("review preserve-result requires --class to be empty or one exact canonical incident class; got %q", *class))
 	}
 	dir, err := reviewtransaction.CompactIncidentsDir(context.Background(), *cwd, *lineage)
 	if err != nil {
