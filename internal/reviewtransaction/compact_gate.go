@@ -114,7 +114,13 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 			return assessment, nil
 		}
 	}
-	relation := classifyCompactTargetRelation(state.CurrentSnapshot, snapshot, state.GenesisPaths, compactTargetRelationEvidence{})
+	relationExpected := state.CurrentSnapshot
+	// PRE-COMMIT deliberately projects the frozen workspace authority through
+	// the staged index. The request builder owns that projection choice, so the
+	// relation algebra compares content/scope inside the selected gate
+	// projection rather than treating the gate's own staged view as unrelated.
+	relationExpected.Projection = snapshot.Projection
+	relation := classifyCompactTargetRelation(relationExpected, snapshot, state.GenesisPaths, compactTargetRelationEvidence{})
 	if relation.Kind != compactTargetUnsafe {
 		assessment.Applicability = CompactGateTargetScopeChanged
 		return assessment, nil
