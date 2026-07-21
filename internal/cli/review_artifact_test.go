@@ -67,6 +67,56 @@ func TestRunReviewAcquireResult(t *testing.T) {
 	}
 }
 
+type reviewArtifactBrokenWriter struct{}
+
+func (reviewArtifactBrokenWriter) Write([]byte) (int, error) {
+	return 0, errors.New("broken pipe")
+}
+
+// TestRunReviewAcquireResultReplayRecoversBrokenHandoff pins the recovery
+// path for a caller that durably acquired a slot but never received its ID
+// because the handoff to stdout failed. The acquisition itself must remain
+// durable despite the write failure, --replay must recover the exact same
+// record without minting a new one, and replay must never authorize a launch
+// that a genuine acquisition attempt would otherwise refuse.
+func TestRunReviewAcquireResultReplayRecoversBrokenHandoff(t *testing.T) {
+	repo, started, store, record := newArtifactReview(t, false)
+	target, lens := record.State.InitialSnapshot.Identity, record.State.SelectedLenses[0]
+	args := func(extra ...string) []string {
+		base := []string{
+			"--cwd", repo, "--lineage", started.LineageID, "--target", target,
+			"--lens", lens, "--order", "0",
+		}
+		return append(base, extra...)
+	}
+	if err := RunReviewAcquireResult(args("--replay"), io.Discard); err == nil {
+		t.Fatal("acquire-result --replay recovered a never-acquired slot")
+	}
+	if err := RunReviewAcquireResult(args(), reviewArtifactBrokenWriter{}); err == nil {
+		t.Fatal("acquire-result over a broken writer unexpectedly reported success")
+	}
+	if _, err := os.Stat(filepath.Join(store.Dir, reviewtransaction.CompactReviewerAcquisitionsDir)); err != nil {
+		t.Fatalf("acquisition was not durably recorded despite the write failure: %v", err)
+	}
+	var replayed bytes.Buffer
+	if err := RunReviewAcquireResult(args("--replay"), &replayed); err != nil {
+		t.Fatalf("acquire-result --replay failed to recover a durable acquisition: %v", err)
+	}
+	var recovered ReviewAcquireResultResult
+	decodeStrictReviewJSON(t, replayed.Bytes(), &recovered)
+	if recovered.Acquisition.ID == "" || recovered.Acquisition.LineageID != started.LineageID ||
+		recovered.Acquisition.TargetIdentity != target || recovered.Acquisition.Lens != lens ||
+		recovered.Acquisition.SelectedOrder != 0 {
+		t.Fatalf("replayed acquisition = %#v", recovered.Acquisition)
+	}
+	if err := RunReviewAcquireResult(args(), io.Discard); err == nil {
+		t.Fatal("acquire-result over an already-acquired binding was accepted after replay")
+	}
+	if _, err := store.ReadResultAcquisition(started.LineageID, target, lens, 0, recovered.Acquisition.ID); err != nil {
+		t.Fatalf("recovered acquisition unreadable after a rejected repeat: %v", err)
+	}
+}
+
 func TestReviewCaptureResultStrictBindingReplayAndFinalize(t *testing.T) {
 	repo, started, _, record := newArtifactReview(t, false)
 	input := filepath.Join(t.TempDir(), "result.json")

@@ -159,3 +159,43 @@ func TestReadResultAcquisition(t *testing.T) {
 		})
 	}
 }
+
+// TestReadResultAcquisitionByBinding pins the durable-handoff recovery
+// contract: a caller that acquired a slot but never received its ID (for
+// example a broken stdout pipe) can recover the exact record by binding
+// alone, but a binding mismatch or a never-acquired slot is refused
+// identically, and recovery never creates or mutates an acquisition.
+func TestReadResultAcquisitionByBinding(t *testing.T) {
+	store, state := acquisitionTestStore(t, "acquire-replay")
+	target, lens := state.InitialSnapshot.Identity, state.SelectedLenses[0]
+	if _, err := store.ReadResultAcquisitionByBinding(state.LineageID, target, lens, 0); err == nil {
+		t.Fatal("ReadResultAcquisitionByBinding recovered a never-acquired slot")
+	}
+	acquisition, err := store.AcquireReviewerResult(context.Background(), target, lens, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.ReadResultAcquisitionByBinding(state.LineageID, target, lens, 0)
+	if err != nil || got.ID != acquisition.ID || got.State != CompactResultAcquisitionUnknownOutcome {
+		t.Fatalf("ReadResultAcquisitionByBinding(exact binding) = %#v, %v", got, err)
+	}
+	cases := []struct {
+		name    string
+		lineage string
+		target  string
+		lens    string
+		order   int
+	}{
+		{"wrong lineage", "other-lineage", target, lens, 0},
+		{"wrong target", state.LineageID, "sha256:" + strings.Repeat("0", 64), lens, 0},
+		{"wrong lens", state.LineageID, target, "review-risk", 0},
+		{"wrong order (no acquisition on that slot)", state.LineageID, target, lens, 1},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := store.ReadResultAcquisitionByBinding(tt.lineage, tt.target, tt.lens, tt.order); err == nil {
+				t.Fatalf("ReadResultAcquisitionByBinding(%q) accepted a mismatched binding", tt.name)
+			}
+		})
+	}
+}

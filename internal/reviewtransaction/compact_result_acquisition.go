@@ -85,6 +85,24 @@ func (store CompactStore) ReadResultAcquisition(lineage, target, lens string, or
 	if strings.TrimSpace(id) == "" {
 		return CompactResultAcquisition{}, errors.New("reviewer result acquisition ID is required")
 	}
+	acquisition, err := store.ReadResultAcquisitionByBinding(lineage, target, lens, order)
+	if err != nil {
+		return CompactResultAcquisition{}, err
+	}
+	if acquisition.ID != id {
+		return CompactResultAcquisition{}, errors.New("reviewer result acquisition does not match the exact bound lineage, target, lens, and order")
+	}
+	return acquisition, nil
+}
+
+// ReadResultAcquisitionByBinding recovers the acquisition record published
+// for the exact (order, lens) slot without requiring its ID. It exists
+// solely so a caller who durably acquired a slot but never received its ID
+// (for example a broken stdout pipe on the acquiring process) can recover
+// that exact record instead of the slot becoming permanently unbindable. It
+// never creates or mutates an acquisition, and a missing record or any
+// lineage/target/lens/order mismatch is refused identically.
+func (store CompactStore) ReadResultAcquisitionByBinding(lineage, target, lens string, order int) (CompactResultAcquisition, error) {
 	payload, err := os.ReadFile(compactResultAcquisitionPath(store.Dir, order, lens))
 	if err != nil {
 		return CompactResultAcquisition{}, fmt.Errorf("read reviewer result acquisition: %w", err)
@@ -93,7 +111,7 @@ func (store CompactStore) ReadResultAcquisition(lineage, target, lens string, or
 	if err := json.Unmarshal(payload, &acquisition); err != nil {
 		return CompactResultAcquisition{}, fmt.Errorf("decode reviewer result acquisition: %w", err)
 	}
-	if acquisition.Schema != CompactResultAcquisitionSchema || acquisition.ID != id || acquisition.LineageID != lineage ||
+	if acquisition.Schema != CompactResultAcquisitionSchema || acquisition.LineageID != lineage ||
 		acquisition.TargetIdentity != target || acquisition.Lens != lens || acquisition.SelectedOrder != order {
 		return CompactResultAcquisition{}, errors.New("reviewer result acquisition does not match the exact bound lineage, target, lens, and order")
 	}

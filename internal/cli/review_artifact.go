@@ -194,6 +194,7 @@ func RunReviewAcquireResult(args []string, stdout io.Writer) error {
 	target := flags.String("target", "", "exact frozen target identity")
 	lens := flags.String("lens", "", "exact selected lens")
 	order := flags.Int("order", -1, "zero-based selected lens order")
+	replay := flags.Bool("replay", false, "recover the ID of an acquisition already durably recorded for this exact binding instead of acquiring a new one; use only to recover from a failed handoff of a prior successful acquire-result, never to obtain a fresh launch authorization")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -212,6 +213,13 @@ func RunReviewAcquireResult(args []string, stdout io.Writer) error {
 	store, _, err := discoverCompactFacadeReview(ctx, root, *lineage, false)
 	if err != nil {
 		return reviewPreflightError(fmt.Errorf("resolve reviewing authority for lineage %q under repository %q: %w; if the review was started in a different repository (for example a nested one), re-run with --cwd set to that repository", *lineage, root, err))
+	}
+	if *replay {
+		acquisition, err := store.ReadResultAcquisitionByBinding(*lineage, *target, *lens, *order)
+		if err != nil {
+			return reviewPreflightError(err)
+		}
+		return encodeReviewJSON(stdout, ReviewAcquireResultResult{Operation: "review/acquire-result", Acquisition: acquisition})
 	}
 	acquisition, err := store.AcquireReviewerResult(ctx, *target, *lens, *order)
 	if err != nil {
