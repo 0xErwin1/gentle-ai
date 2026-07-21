@@ -2,6 +2,7 @@ package sdd
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,41 @@ func TestSharedPromptDir(t *testing.T) {
 	got := SharedPromptDir(filepath.FromSlash("/home/testuser"))
 	if got != want {
 		t.Fatalf("SharedPromptDir(%q) = %q, want %q", "/home/testuser", got, want)
+	}
+}
+
+func TestSharedPromptDirUsesXDGConfigHome(t *testing.T) {
+	home := t.TempDir()
+	xdgConfigHome := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
+
+	want := filepath.Join(xdgConfigHome, "opencode", "prompts", "sdd")
+	if got := SharedPromptDir(home); got != want {
+		t.Fatalf("SharedPromptDir() = %q, want %q", got, want)
+	}
+}
+
+func TestSharedPromptFileRefFallsBackToAbsolutePath(t *testing.T) {
+	home := t.TempDir()
+	xdgConfigHome := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
+
+	got, err := sharedPromptFileRef(
+		filepath.Join(xdgConfigHome, "opencode", "opencode.json"),
+		home,
+		"sdd-apply",
+		func(string, string) (string, error) { return "", errors.New("different volume") },
+	)
+	if err != nil {
+		t.Fatalf("sharedPromptFileRef() error = %v", err)
+	}
+	want := "{file:" + filepath.ToSlash(filepath.Join(xdgConfigHome, "opencode", "prompts", "sdd", "sdd-apply.md")) + "}"
+	if got != want {
+		t.Fatalf("sharedPromptFileRef() = %q, want %q", got, want)
 	}
 }
 
