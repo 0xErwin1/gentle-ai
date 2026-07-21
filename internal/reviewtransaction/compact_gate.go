@@ -114,26 +114,13 @@ func AssessCompactGateTarget(ctx context.Context, repo string, state CompactStat
 			return assessment, nil
 		}
 	}
-	if snapshot.BaseTree == state.CurrentSnapshot.BaseTree || snapshot.PathsDigest == state.CurrentSnapshot.PathsDigest ||
-		hasAnyReviewPath(snapshot.Paths, state.GenesisPaths) {
+	relation := classifyCompactTargetRelation(state.CurrentSnapshot, snapshot, state.GenesisPaths, compactTargetRelationEvidence{})
+	if relation.Kind != compactTargetUnsafe {
 		assessment.Applicability = CompactGateTargetScopeChanged
 		return assessment, nil
 	}
 	assessment.Applicability = CompactGateTargetUnrelated
 	return assessment, nil
-}
-
-func hasAnyReviewPath(left, right []string) bool {
-	paths := make(map[string]struct{}, len(left))
-	for _, logicalPath := range left {
-		paths[logicalPath] = struct{}{}
-	}
-	for _, logicalPath := range right {
-		if _, ok := paths[logicalPath]; ok {
-			return true
-		}
-	}
-	return false
 }
 
 func compactSquashedFixDelivery(gate GateKind, state CompactState, snapshot Snapshot, refs *resolvedPrePRRefs, finalCandidateTree string) bool {
