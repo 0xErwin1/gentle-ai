@@ -63,6 +63,12 @@ type CompactReclaimRecord struct {
 	// MalformedLegacyFreeze carries the natively re-derived semantic replay
 	// failure for a shipped legacy-v1 findings-freeze event.
 	MalformedLegacyFreeze *LegacyMalformedFreezeProof `json:"malformed_legacy_freeze,omitempty"`
+	// LegacyAliasRepair carries the natively re-derived proof for the narrow
+	// historical v1 operation-alias quarantine.
+	LegacyAliasRepair *LegacyAliasRepairProof `json:"legacy_alias_repair,omitempty"`
+	// LegacyFixScopeQuarantine carries the proof for the narrowly authorized
+	// complete-fix scope-expansion quarantine.
+	LegacyFixScopeQuarantine *LegacyFixScopeQuarantineProof `json:"legacy_fix_scope_quarantine,omitempty"`
 }
 
 // compactAuthoritativeArtifact reports whether a store-entry name carries
@@ -145,15 +151,14 @@ func ReclaimIncompleteCompactStore(ctx context.Context, repo string, request Com
 // populated prepared record alongside a non-nil error.
 func quarantineCompactStoreEntry(base, dir string, record CompactReclaimRecord) (CompactReclaimRecord, error) {
 	quarantineRoot := filepath.Join(base, "quarantine")
+	if err := ensureCanonicalReviewQuarantineRoot(base, quarantineRoot); err != nil {
+		return CompactReclaimRecord{}, err
+	}
 	if err := os.MkdirAll(quarantineRoot, 0o755); err != nil {
 		return CompactReclaimRecord{}, err
 	}
-	quarantineRootInfo, err := os.Lstat(quarantineRoot)
-	if err != nil {
+	if err := ensureCanonicalReviewQuarantineRoot(base, quarantineRoot); err != nil {
 		return CompactReclaimRecord{}, err
-	}
-	if quarantineRootInfo.Mode()&os.ModeSymlink != 0 || !quarantineRootInfo.IsDir() {
-		return CompactReclaimRecord{}, fmt.Errorf("review quarantine refused unsafe quarantine root %q", quarantineRoot)
 	}
 	if err := SyncReviewDirectory(base); err != nil {
 		return CompactReclaimRecord{}, fmt.Errorf("sync review authority root after quarantine creation: %w", err)
@@ -193,6 +198,40 @@ func quarantineCompactStoreEntry(base, dir string, record CompactReclaimRecord) 
 		return record, fmt.Errorf("residue was quarantined at %s but the reclaim audit record could not be marked committed: %w", quarantineDir, err)
 	}
 	return committed, nil
+}
+
+// ensureCanonicalReviewQuarantineRoot rejects symlinked authority components
+// before a quarantine operation can create, inspect, or rename inside them.
+func ensureCanonicalReviewQuarantineRoot(base, quarantineRoot string) error {
+	commonDir := filepath.Dir(filepath.Dir(base))
+	if filepath.Clean(base) != filepath.Join(commonDir, "gentle-ai", "review-transactions") ||
+		filepath.Clean(quarantineRoot) != filepath.Join(base, "quarantine") {
+		return errors.New("review quarantine refused noncanonical authority root")
+	}
+	for _, component := range []string{"gentle-ai", "review-transactions", "quarantine"} {
+		path := filepath.Join(commonDir, component)
+		if component == "review-transactions" {
+			path = base
+		}
+		if component == "quarantine" {
+			path = quarantineRoot
+		}
+		info, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("inspect review quarantine root component %q: %w", component, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return fmt.Errorf("review quarantine refused unsafe authority root component %q", component)
+		}
+		canonical, err := filepath.EvalSymlinks(path)
+		if err != nil || filepath.Clean(canonical) != path {
+			return fmt.Errorf("review quarantine refused noncanonical authority root component %q", component)
+		}
+	}
+	return nil
 }
 
 func persistCompactReclaimRecord(record CompactReclaimRecord) error {

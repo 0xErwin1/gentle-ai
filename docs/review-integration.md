@@ -15,7 +15,9 @@ gentle-ai review capabilities \
 
 The response identifies the protocol major, package and build identity, executable SHA-256, operations, five gates, projections, schemas, mandatory and optional features, and compatibility window. The executable digest is self-reported evidence; compare it with the published release manifest before trusting the binary.
 
-Protocol v1.1 advertises the distinct `gentle-ai.review-integration.capabilities/v1.1` schema and additive optional features for `base_ref_workspace_overlay`, `bounded_process_waits`, `exact_gate_receipt_discovery`, `native_low_risk_verification`, `risk_reasons`, and `scope_change_diagnostics`. Protocol v1.0 artifacts remain available under `gentle-ai.review-integration.capabilities/v1`; old consumers must reject the unknown v1.1 identity, and new consumers must require protocol 1.1 and validate its schema before using overlay. The overlay feature requires immutable snapshots and restart-safe projection.
+Protocol v1.2 advertises the distinct `gentle-ai.review-integration.capabilities/v1.2` schema and three additive optional features: `native_frozen_candidate_context`, `opaque_repository_context`, and `provider_targeted_validation_request`. Frozen context supplies the exact candidate diff and changed-path manifest. Opaque repository context lets an external actor return results without receiving or rediscovering a repository path. Provider-targeted validation supplies the exact corrected candidate and frozen finding IDs to validate. Protocol v1.0 and v1.1 schemas and fixtures remain packaged unchanged. Consumers must reject an unknown schema/minor identity they do not support; v1.2 consumers validate the v1.2 schema before relying on these features.
+
+The v1.1 artifact remains the compatibility record for `base_ref_workspace_overlay`, `bounded_process_waits`, `exact_gate_receipt_discovery`, `native_low_risk_verification`, `native_next_transition`, `risk_reasons`, and `scope_change_diagnostics`. The overlay feature requires immutable snapshots and restart-safe projection.
 
 Consumers MUST reject an incompatible protocol major, an unsupported mandatory feature, an unknown mandatory enum, or a schema identity mismatch. Unknown optional fields may be ignored only under the advertised additive-minor policy. Existing unnegotiated CLI responses remain separate compatibility surfaces and do not gain negotiated fields silently.
 
@@ -29,13 +31,24 @@ gentle-ai review validate --contract gentle-ai.review-integration/v1 --cwd . --g
 gentle-ai review bind-sdd --contract gentle-ai.review-integration/v1 --cwd . --change <change> --lineage <lineage> --expected-binding-revision=<revision>
 ```
 
+### Zero-help lifecycle bootstrap
+
+When capabilities advertise `native_next_transition`, the parent orchestrator starts lifecycle routing exactly once with:
+
+```bash
+gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition
+```
+
+Append a target selector only when its type is already known: `--projection staged`, `--base-ref <ref>`, `--workspace-overlay --base-ref <ref>`, or `--workspace-overlay --base-tree <tree>`. If the feature is unavailable, query exactly once `gentle-ai review capabilities --contract gentle-ai.review-integration/v1` and stop with `unsupported-capability`; do not explore commands or consult help. After bootstrap, only the parent executes the exact native `next_transition`. Reviewers, validators, executors, and refuters receive role inputs and return artifacts; they never invoke review lifecycle commands.
+
 ## Keep provider and consumer ownership separate
 
 | Gentle AI provider owns | Consumer owns |
 | --- | --- |
 | Git-derived immutable snapshot identity and projection | User interaction and explicit maintainer confirmation |
 | Deterministic risk reasons, tier, lenses, and correction budget | Reviewer, validator, and correction actor execution |
-| Compact-v2 authority transitions, lock, and expected-revision CAS | Process invocation, cancellation, and transport diagnostics |
+| Compact-v2 authority transitions, opaque repository context, lock, and expected-revision CAS | Process invocation, cancellation, and transport diagnostics |
+| Corrected-candidate identity and targeted-validation request | Running the requested validator and returning its typed result |
 | Receipt derivation and exact receipt publication replay | Rendering native outcomes without weakening them |
 | Target applicability, replayability, and gate evaluation | Rechecking command intent immediately before execution |
 | Approved-receipt binding for SDD | Derived worktree and temporary-view lifecycle |
@@ -47,15 +60,15 @@ Consumers MUST NOT reconstruct receipts, derive canonical hashes, inspect the Gi
 | Operation | Mutation boundary | Contract behavior |
 | --- | --- | --- |
 | `review.capabilities` | None | Reports the deterministic repository-independent provider surface. |
-| `review.start` | Compact authority | Freezes one target, tier, lens set, and correction budget; it never starts because a gate was invoked. |
-| `review.status` | None | Reconstructs target-scoped applicability, projection, lifecycle, and one next action. |
+| `review.start` | Compact authority | Freezes one target, tier, lens set, and correction budget; negotiated selected-lens responses also return context derived from that exact authority. It never starts because a gate was invoked. |
+| `review.status` | Provider-private derived context only | Reconstructs target-scoped applicability, projection, lifecycle, and one next action without mutating authority. |
 | `review.finalize` | Compact authority and derived receipt | Accepts selected lens results and bounded correction evidence, performs deterministic native verification for an eligible low-risk zero-lens target, or performs an exact receipt-publication replay. |
 | `review.validate` | None | Revalidates one existing content-bound receipt at a named lifecycle gate. |
 | `review.bind_sdd` | SDD binding artifact | Binds only an approved receipt to an SDD change. |
 
 `review.start` is the only ordinary entry point that creates a review budget. Finalize continues that frozen lifecycle. Status, validation, and gates are read-only and never allocate a reviewer, actor, lineage, or correction budget.
 
-`gentle-ai review capture-result` is an additive headless command, not a negotiated `review-integration/v1` repository operation. It accepts no `--contract` and emits a manifest with capability `review.native_result_artifact` and schema `gentle-ai.review-result-artifact/v1`; that native artifact schema remains advertised for consumer validation.
+`gentle-ai review capture-result` is an additive headless command, not a negotiated `review-integration/v1` repository operation. It accepts no `--contract` and emits a manifest with capability `review.native_result_artifact` and schema `gentle-ai.review-result-artifact/v1`; that native artifact schema remains advertised for consumer validation. A negotiated capture transition carries `--repository-context <opaque-handle>` plus `--expected-revision <revision>`, so the consumer can invoke capture from an unrelated working directory without learning the repository path. In that mode the manifest contains a provider-issued opaque `reference`, not a filesystem `path`; explicit `--cwd` remains the legacy path-manifest mode and cannot be combined with a repository-context handle.
 
 ### Choose the target explicitly
 
@@ -67,9 +80,57 @@ Consumers MUST NOT reconstruct receipts, derive canonical hashes, inspect the Gi
 
 Overlay mode requires workspace projection and cannot be combined with `--committed-only`. START returns `target_mode`, `target_identity`, `base_tree`, and `candidate_tree` only for this mode. Restarted consumers select the frozen target with `review status --base-tree <START base_tree> --workspace-overlay`; `--base-ref` remains available for a fresh symbolic selection, but cannot be combined with `--base-tree`. Existing workspace-only and committed-only payloads remain unchanged. Snapshot construction uses a temporary index and does not mutate the real index or worktree.
 
+### Use frozen reviewer context
+
+When negotiated START returns one or more selected lenses, it also returns both `candidate_diff` and `changed_path_manifest`. The provider derives them from the selected authority's persisted initial base/candidate trees and canonical paths—not from the current index, worktree, or a correction snapshot. Created, resumed, receipt-replay, blocked, and recovery-selected responses therefore retain the same bytes across process restarts and unrelated workspace mutation.
+
+The patch uses fixed binary/full-index, prefix, context, algorithm, rename, external-diff, text-conversion, submodule, color, and locale behavior. Rendering and START diff statistics run through a temporary bare Git view backed only by the repository object database, with repository, info, global, system, worktree, and committed `.gitattributes` sources excluded. Attribute state therefore cannot reinterpret frozen bytes or risk counts between retries. The raw patch is capped at 4 MiB while Git output is captured, matching the native reviewer-artifact ceiling and bounding the base64 plus indented-JSON copies in the START response. Oversized patches stop before a new authority is created.
+
+`candidate_diff` is an exact-byte object rather than a JSON string:
+
+| Field | Meaning |
+| --- | --- |
+| `encoding` | Always `base64`; `data` is canonical padded base64. |
+| `data` | The exact raw Git patch bytes, including bytes that are not valid UTF-8. |
+| `sha256` | `sha256:<lowercase hex>` over the decoded bytes. |
+| `byte_size` | Decoded byte count, from zero through 4,194,304. |
+
+The provider validates all four fields together before serialization. Consumers decode `data`, verify `byte_size` and `sha256`, and never reinterpret the patch as UTF-8 before that verification. Manifest entries stay in persisted path order and expose:
+
+| Field | Meaning |
+| --- | --- |
+| `path` | Repository-relative logical path; absolute repository paths are never emitted. |
+| `status` | Stable `A`, `D`, `M`, or `T` tree-diff status. |
+| `old_mode` / `new_mode` | Six-digit Git modes, including zero modes for additions/deletions and symlink or gitlink modes where supported. |
+| `deleted` / `type_changed` / `mode_only` | Explicit state that consumers do not need to infer from patch prose. |
+| `intended_untracked` | Whether the frozen snapshot bound the path as intended-untracked provenance. |
+
+Missing context is different from a valid empty candidate: the latter is encoded as `candidate_diff: {"encoding":"base64","data":"","sha256":"sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","byte_size":0}` with `changed_path_manifest: []`. The schema and runtime require both context fields or neither; selected lenses require both. START rejects incomplete, non-canonical, digest-mismatched, oversized, or structurally mismatched context before serialization. Unnegotiated START retains its legacy behavior and emits neither field nor candidate contents.
+
 Reviewer results may omit the top-level `lens`; when present, it must match the selected-lens position returned by start. Both the short names (`risk`, `resilience`, `readability`, `reliability`) and the negotiated facade names (`review-risk`, `review-resilience`, `review-readability`, `review-reliability`) map to the same native lenses. A mismatch is rejected before authority mutation instead of being overwritten.
 
-Durable controllers capture each result with exact lineage, target, lens, and selected order, then pass the emitted manifests to FINALIZE as ordered `--result-artifact` values. Legacy `--result` files remain compatible but cannot be mixed with artifact manifests and are not a durable cross-agent handoff.
+Durable controllers capture each result with exact lineage, target, lens, selected order, authority revision, and provider-issued repository context. Current captures emit pathless manifests with opaque references; the provider can discover every canonical result with `--captured-results`, or controllers can write each emitted manifest to its own file and pass those files to FINALIZE in selected-lens order with repeatable `--result-artifact-file <path>` flags. A `--result-artifact-file -` occurrence reads exactly one manifest from stdin; because FINALIZE has one shared stdin, `-` may appear only once across reviewer results, artifact manifests, validation, refuter outcomes, and evidence.
+
+Windows PowerShell 5.1 should use file transport because native argument reconstruction does not preserve dynamic inline JSON reliably. Write BOM-less UTF-8 so the strict JSON decoder receives the manifest bytes directly:
+
+```powershell
+$manifest = & gentle-ai review capture-result --repository-context $repositoryContext --expected-revision $revision --lineage $lineage --target $target --lens $lens --order $order --input $resultPath
+$manifestPath = Join-Path $env:TEMP "gentle-ai-review-manifest.json"
+$manifestText = [string]::Join([Environment]::NewLine, [string[]]$manifest)
+[System.IO.File]::WriteAllText($manifestPath, $manifestText, (New-Object System.Text.UTF8Encoding($false)))
+& gentle-ai review finalize --cwd $repo --lineage $lineage --result-artifact-file $manifestPath
+```
+
+Repeat `--result-artifact-file` once per selected lens. Each file contains one canonical manifest. For current captures, Gentle AI preserves the opaque reference and resolves it from private provider storage; for legacy path manifests, it preserves path bytes. Both forms retain the existing strict schema, lineage, target, lens, selected-order, ownership, lowercase SHA-256, file-identity, payload, and hash checks. File transport does not normalize manifest JSON or paths. Repository-context and artifact references are opaque capabilities, not serialized repository paths: the provider revalidates repository identity and Git-directory containment, and rejects them when lineage, target, revision, selected lens/order, or live authority no longer match.
+
+The POSIX inline form remains fully compatible:
+
+```bash
+gentle-ai review finalize --cwd "$repo" --lineage "$lineage" \
+  --result-artifact "$manifest_json"
+```
+
+Inline `--result-artifact`, file/stdin `--result-artifact-file`, legacy `--result`, and `--captured-results` are mutually exclusive reviewer-result sources. Legacy four-field captures use explicit `--cwd`; legacy `--result` files and path manifests remain compatible but are not a durable cross-agent handoff.
 
 Proof and evidence strings accept ordinary technical notation, including `HEAD^{tree}`, `{}`, `<A>`, and `=>`. Blank values and exact non-evidence sentinels such as `n/a`, `none`, `todo`, `tbd`, `pass`, `passed`, `success`, and `placeholder` remain invalid.
 
@@ -98,9 +159,13 @@ There is no `archive` gate. An advisory preflight is not delivery authorization;
 | `ambiguous` | More than one authority applies or a required lineage selector is missing. |
 | `corrupted` | Authority required for classification cannot be validated safely. |
 
-The provider returns one action from `start`, `finalize`, `validate`, `recover`, `maintainer_action`, `select_lineage`, `repair_authority`, `reconcile_finalize`, or `stop`. Applicable non-terminal legacy-v1 authority always returns `stop`; it never recommends finalize or another mutation. A consumer MUST stop on ambiguity, corruption, invalidation, escalation, or `stop` and present the provider's required action. It MUST NOT silently choose, reset, quarantine, or create a lineage.
+The provider returns one historical action from `start`, `finalize`, `validate`, `recover`, `maintainer_action`, `select_lineage`, `repair_authority`, `reconcile_finalize`, or `stop`. A consumer that negotiates `native_next_transition` requests `--next-transition` with STATUS or FINALIZE and MUST route only from its single `next_transition`. `execute` contains one native operation, every exact argument, immutable lineage/revision/target binding, and path-free native artifact identities; execute those values unchanged. `collect` names the exact missing input, schema, capture operation, and content-bound arguments. `stop` has exactly one reason code and contains no command, binding, or template. Existing v1 consumers that do not request the flag retain their historical strict payload; `eligibility` remains a compatibility detail and is never a routing authority. Missing worktrees, refs, targets, lineage, revisions, ambiguous/corrupt authority, and unverifiable materiality never yield an executable partial operation. Applicable non-terminal legacy-v1 authority always stops. A consumer MUST NOT infer an authorization, command binding, template, recovery disposition, or target selector from prose, state, eligibility, or a statusline.
 
-When an incomplete FINALIZE journal applies, negotiated status instead returns `action: reconcile_finalize`, `replayability: status_required`, and `reconciliation.required: true`. Re-run a non-terminal FINALIZE only with the original content-bound payload; a different payload is a typed reconciliation failure, not a retry. If authority is already terminal and only receipt publication remains, replay with the exact explicit lineage and no mutation inputs.
+After a correction forecast and an actual candidate change, FINALIZE or STATUS may collect `targeted_validation` with a strict `gentle-ai.review-targeted-validation-request/v1` object. Execute that request unchanged. Its provider-derived hash binds the lineage, expected authority revision, original target, exact frozen finding IDs, projection, corrected candidate tree and identity, and the exact canonical correction-path subset plus its digest. That subset is distinct from the complete current projection manifest and digest. If the candidate did not materially change, no request is issued and routing stops with `corrected_candidate_unavailable`; consumers must not invent a validator request or another correction forecast.
+
+When the action is `recover`, negotiated status also returns `action_disposition` — the exact `review recover --disposition` value the recovery rules accept for that predecessor: `scope_changed` for a correction-required lineage whose live scope expands beyond or is a pure contraction of frozen genesis paths, `escalated` for a historically failed scoped validator whose target has changed, and `invalidated` for an invalidated authority. The field is present exactly when the action is `recover` and is absent otherwise. It names the accepted disposition; it does not authorize recovery, which still enforces its own predicates and maintainer authorization. A materially changed escalated candidate exposes only `review.recover` with `disposition: escalated` and the required inputs. An unchanged escalated candidate exposes only `stop`. Terminal escalated authority with reviewer artifacts or a receipt always forbids `review.abandon`; no abandonment authorization template is emitted. A consumer MUST NOT substitute a different disposition.
+
+When an incomplete FINALIZE journal applies, negotiated status instead returns `action: reconcile_finalize`, `replayability: status_required`, `reconciliation.required: true`, and `next_transition.kind: stop`. Re-run a non-terminal FINALIZE only with the original content-bound payload; a different payload is a typed reconciliation failure, not a retry. If authority is already terminal and only receipt publication remains, `next_transition.execute` carries the exact explicit lineage and no mutation inputs.
 
 Unqualified gate discovery compares every valid terminal receipt with the live immutable target before selecting authority. Zero exact matches returns `receipt_missing` or `receipt_unrelated`; exactly one scope-changed predecessor returns `receipt_scope_changed` with its complete recovery context. Multiple exact or viable scope-changed predecessors return `receipt_ambiguous` without choosing a predecessor or inventing singular recovery context. The failure requires only `lineage_id`, directs the caller to target-scoped `review.status`, and status returns the canonical sorted candidate lineage IDs for explicit selection. An explicit lineage remains a direct fail-closed lookup and derives its own scope diagnostics. Truly unrelated historical receipts never create false ambiguity.
 
@@ -122,7 +187,7 @@ Every failed operation explicitly negotiated through `gentle-ai.review-integrati
 
 Messages never contain authority or receipt paths, locks, tokens, raw provider stderr, or canonical store bytes. Invalid or unsupported explicit contracts fail before mutation through the same envelope. A negotiated gate denial is a failure envelope, not a successful operation result; gate evaluation remains read-only.
 
-Negotiated operations have a 25-second aggregate budget. Local Git children have a 15-second budget, remote `ls-remote` children have a 20-second budget, and every child uses a one-second wait delay after cancellation. `operation_timeout`, `git_command_timeout`, and `git_command_failed` are typed, non-amplifying failures with `retry_safe: false`. Process-control failures — a Git child that could not be started or whose process tree could not be brought under control (for example Windows job-object or resume failures) — classify as `git_command_failed` and carry the underlying cause in `message`. Read-only and proven pre-transition Git failures report `not_started`. Once FINALIZE has committed any native transition, a later Git or process failure reports `mutation_outcome: unknown`, `authority_applicability: current_target`, and `next_action: review.status`; it never weakens committed progress to `not_started` or recommends replay. Deterministic lock, receipt-discovery, and scope-change failures never recommend automatic retry.
+Negotiated operations have a 25-second aggregate budget. Local Git children have a 15-second budget, remote `ls-remote` children have a 20-second budget, and every child uses a one-second wait delay after cancellation. `operation_timeout`, `git_command_timeout`, and `git_command_failed` are typed, non-amplifying failures with `retry_safe: false`. Process-control failures — a Git child that could not be started or whose process tree could not be brought under control (for example Windows job-object or resume failures) — classify as `git_command_failed` and carry the underlying cause in `message`. Read-only and proven pre-transition Git failures report `not_started`. Negotiated START renders and validates a new target's context before creating authority. If context rendering instead fails after START selected an existing durable authority, the failure reports `phase: native_committed`, `mutation_outcome: unknown`, the exact lineage input, and `next_action: review.status`; it never falsely reports `not_started` or recommends replay. Once FINALIZE has committed any native transition, a later Git or process failure follows the same unknown/status rule. Deterministic lock, receipt-discovery, and scope-change failures never recommend automatic retry.
 
 ## Reconcile interruptions before replay
 
@@ -189,8 +254,8 @@ Pi adoption, fallback retirement, package pinning, and Pi release sequencing are
 
 Each release archive contains:
 
-- `contracts/review-integration/v1/schemas/` — the original six strict JSON Schemas plus the result-artifact schema.
-- `contracts/review-integration/v1/fixtures/` — eight deterministic conformance fixtures, including all four target-applicability states.
+- `contracts/review-integration/v1/schemas/` — ten strict JSON Schemas, including preserved capability protocols v1.0/v1.1, current v1.2, and the provider-targeted validation request.
+- `contracts/review-integration/v1/fixtures/` — eleven deterministic conformance fixtures, including all three capability minors and all four target-applicability states.
 - `docs/review-integration.md` — this ownership and consumption guide.
 
 Repository maintainers can verify source inventory or a complete GoReleaser snapshot:
