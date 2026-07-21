@@ -402,6 +402,7 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		return invalid("compact authority or repository target changed during final authorization", cause)
 	}
 	finalCompactGateAllowHook()
+	finalRecoveryBinding := recoveryBinding
 	if recoveryBound {
 		finalChain, ok, chainErr := deriveCompactRecoveryBinding(ctx, repo, finalRecord.State)
 		if chainErr != nil || !ok || !reflect.DeepEqual(finalChain, recoveryBinding) {
@@ -410,12 +411,37 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 			}
 			return invalid("compact authority or repository target changed during final authorization", chainErr)
 		}
+		finalRecoveryBinding = finalChain
+	}
+	if compatibility != nil && compatibility.Status == baseAdvanceCompatibleStatus {
+		finalPreimages, preimageErr := rereadGateArtifactPreimages(request)
+		var finalCompatibility BaseAdvanceCompatibility
+		compatibilityErr := preimageErr
+		if compatibilityErr == nil {
+			if recoveryAdvance {
+				finalCompatibility, compatibilityErr = deriveCompactRecoveryAdvanceCompatibility(ctx, repo, finalRecoveryBinding, request, finalSnapshot, finalRefs, finalPreimages)
+			} else {
+				legacyShape := Receipt{BaseTree: receipt.BaseTree, FinalCandidateTree: receipt.FinalCandidateTree, PathsDigest: receipt.PathsDigest}
+				finalCompatibility, compatibilityErr = deriveBaseAdvanceCompatibility(ctx, repo, legacyShape, request, finalSnapshot, finalRefs, finalPreimages)
+			}
+		}
+		if compatibilityErr != nil || finalCompatibility != *compatibility {
+			if compatibilityErr == nil {
+				compatibilityErr = ErrConcurrentUpdate
+			}
+			return invalid("compatible base evidence changed during final authorization", compatibilityErr)
+		}
+		if recoveryAdvance {
+			recoveryCompatibility = &finalCompatibility
+		}
+	}
+	if recoveryBound {
 		if finalRefs != nil && (request.Gate == GatePrePush || request.Gate == GatePrePR) {
 			baseCommit := finalRefs.BaseCommit
 			if request.Gate == GatePrePush {
 				baseCommit = request.Target.BaseRef
 			}
-			if verifyCompactRecoveryRelationDelivery(ctx, repo, finalChain, finalSnapshot, receipt.FinalCandidateTree, baseCommit, finalRefs.HeadCommit, recoveryCompatibility) != nil {
+			if verifyCompactRecoveryRelationDelivery(ctx, repo, finalRecoveryBinding, finalSnapshot, receipt.FinalCandidateTree, baseCommit, finalRefs.HeadCommit, recoveryCompatibility) != nil {
 				return invalid("compact recovery delivery changed during final authorization")
 			}
 		}

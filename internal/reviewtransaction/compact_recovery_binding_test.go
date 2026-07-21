@@ -467,6 +467,33 @@ func TestCompactPrePRRecoveryAdvanceAttestationCannotRescueInvalidFullChain(t *t
 	}
 }
 
+func TestCompactPrePRRecoveryAdvanceRevalidatesArtifactsAtFinalAuthorization(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		path func(*attestedRecoveryAdvanceFixture) string
+	}{
+		{name: "policy", path: func(fixture *attestedRecoveryAdvanceFixture) string { return fixture.input.PolicyArtifact }},
+		{name: "attestation", path: func(fixture *attestedRecoveryAdvanceFixture) string { return fixture.input.PrePRCIAttestation }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := newAttestedRecoveryAdvanceFixture(t)
+			originalHook := finalGateAuthorizationHook
+			finalGateAuthorizationHook = func() {
+				finalGateAuthorizationHook = originalHook
+				if err := os.Remove(tt.path(fixture)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Cleanup(func() { finalGateAuthorizationHook = originalHook })
+
+			got := EvaluateCompactGate(context.Background(), fixture.recovery.repo, fixture.receipt, fixture.input)
+			if got.Result != GateInvalidated {
+				t.Fatalf("recovery %s mutation during final authorization = %#v", tt.name, got)
+			}
+		})
+	}
+}
+
 type attestedRecoveryAdvanceFixture struct {
 	recovery *chainedRecoveryFixture
 	state    CompactState
