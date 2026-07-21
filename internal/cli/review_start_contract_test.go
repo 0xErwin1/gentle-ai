@@ -42,14 +42,20 @@ func TestNegotiatedReviewStartMatchesVersionedFixture(t *testing.T) {
 		result.LineageID != "review-start-fixture" || result.State != reviewtransaction.StateReviewing ||
 		result.RiskLevel != reviewtransaction.RiskHigh || !reflect.DeepEqual(result.SelectedLenses, wantLenses) ||
 		result.Projection != reviewtransaction.ProjectionWorkspace || result.ChangedFiles != 1 ||
-		result.ChangedLines != 1 || result.CorrectionBudget != 1 || !reflect.DeepEqual(result.RiskReasons, wantReasons) {
+		result.ChangedLines != 1 || result.CorrectionBudget != 1 || !reflect.DeepEqual(result.RiskReasons, wantReasons) ||
+		result.RepositoryContext == nil || result.RepositoryContext.Capability != reviewtransaction.ReviewRepositoryContextCapability {
 		t.Fatalf("negotiated START = %#v\n%s", result, output.String())
 	}
 	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "start.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(output.Bytes(), fixture) {
+	var fixtureResult ReviewIntegrationStartResult
+	if err := json.Unmarshal(fixture, &fixtureResult); err != nil {
+		t.Fatal(err)
+	}
+	normalized := bytes.ReplaceAll(output.Bytes(), []byte(result.RepositoryContext.Handle), []byte(fixtureResult.RepositoryContext.Handle))
+	if !bytes.Equal(normalized, fixture) {
 		t.Fatalf("START fixture mismatch:\ngot=%s\nwant=%s", output.String(), fixture)
 	}
 }
@@ -822,6 +828,19 @@ func TestNegotiatedReviewStartSchemaAndFixtureAreStrict(t *testing.T) {
 	if schema["$schema"] != "https://json-schema.org/draft/2020-12/schema" ||
 		schema["$id"] != ReviewIntegrationStartSchemaID || schema["additionalProperties"] != false {
 		t.Fatalf("START schema header = %#v", schema)
+	}
+	properties := schema["properties"].(map[string]any)
+	if properties["candidate_diff"] == nil || properties["changed_path_manifest"] == nil || schema["allOf"] == nil {
+		t.Fatalf("START schema does not declare conditional frozen context: %#v", schema)
+	}
+	dependencies := schema["dependentRequired"].(map[string]any)
+	if !reflect.DeepEqual(dependencies["candidate_diff"], []any{"changed_path_manifest"}) ||
+		!reflect.DeepEqual(dependencies["changed_path_manifest"], []any{"candidate_diff"}) {
+		t.Fatalf("START schema does not require frozen context fields as a pair: %#v", dependencies)
+	}
+	candidateDiffSchema := properties["candidate_diff"].(map[string]any)
+	if candidateDiffSchema["$ref"] != "#/$defs/frozen_candidate_diff" {
+		t.Fatalf("START candidate_diff schema = %#v", candidateDiffSchema)
 	}
 	fixture, err := os.ReadFile(filepath.Join(root, "fixtures", "start.fixture.json"))
 	if err != nil {
