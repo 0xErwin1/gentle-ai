@@ -9,6 +9,7 @@ die() {
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 : "${GITHUB_REF_NAME:?GITHUB_REF_NAME is required}"
 : "${MINISIGN_PUBLIC_KEYS:?MINISIGN_PUBLIC_KEYS is required}"
+: "${MINISIGN_PUBLIC_KEYS_CANONICAL:?MINISIGN_PUBLIC_KEYS_CANONICAL is required}"
 : "${MINISIGN_SECRET_KEY_FILE:?MINISIGN_SECRET_KEY_FILE is required}"
 : "${MINISIGN_SIGNING_PUBLIC_KEY_FILE:?MINISIGN_SIGNING_PUBLIC_KEY_FILE is required}"
 
@@ -29,8 +30,14 @@ fi
 derived=$(sed -n '2{s/\r$//;p;}' "$derived_file")
 [[ -n "$derived" ]] || die "derived public key is empty"
 
+if ! validated_keys=$(./scripts/canonicalize-release-public-keys.sh); then
+  die "MINISIGN_PUBLIC_KEYS is not canonical"
+fi
+[[ "$validated_keys" == "$MINISIGN_PUBLIC_KEYS_CANONICAL" ]] ||
+  die "canonical trust anchors do not match the validated repository variable"
+
 matched=false
-IFS=',' read -r -a configured_keys <<<"$MINISIGN_PUBLIC_KEYS"
+IFS=',' read -r -a configured_keys <<<"$MINISIGN_PUBLIC_KEYS_CANONICAL"
 test_key=$(tr -d '\r\n' < internal/update/upgrade/testdata/minisign-test.pub)
 for key in "${configured_keys[@]}"; do
   [[ "$key" != "$test_key" ]] || die "isolated test key cannot be used for production"

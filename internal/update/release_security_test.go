@@ -2,6 +2,7 @@ package update
 
 import (
 	"bufio"
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,9 +31,12 @@ func TestReleaseWorkflowUsesFailClosedLeastPrivilegeGates(t *testing.T) {
 		"environment: release",
 		"contents: write",
 		"./scripts/release-preflight.sh",
+		"./scripts/canonicalize-release-public-keys.sh",
+		"id: trust-anchors",
 		"./scripts/release-signing-preflight.sh",
 		"./scripts/verify-release-assets.sh",
 		"MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}",
+		"MINISIGN_PUBLIC_KEYS_CANONICAL: ${{ steps.trust-anchors.outputs.canonical }}",
 		"MINISIGN_SECRET_KEY_FILE:",
 		"version: v2.15.2",
 	} {
@@ -48,6 +52,9 @@ func TestReleaseWorkflowUsesFailClosedLeastPrivilegeGates(t *testing.T) {
 	}
 	if strings.Contains(workflow, "version: \"~> v2\"") {
 		t.Error("release workflow uses a floating GoReleaser version")
+	}
+	if strings.Contains(workflow, "MINISIGN_PUBLIC_KEYS_CANONICAL=%s") {
+		t.Error("canonical trust anchors are persisted through GITHUB_ENV instead of a scoped step output")
 	}
 
 	action := regexp.MustCompile(`^\s*uses:\s*[^@\s]+@([0-9a-f]{40})(?:\s|$)`)
@@ -71,7 +78,7 @@ func TestGoReleaserSignsBoundManifestAndInjectsTrustAnchors(t *testing.T) {
 		`- "${artifact}"`,
 		`- "${signature}"`,
 		`repo=Gentleman-Programming/gentle-ai;tag={{ .Tag }}`,
-		`github.com/gentleman-programming/gentle-ai/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS }}`,
+		`github.com/gentleman-programming/gentle-ai/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}`,
 		"-trimpath",
 	} {
 		if !strings.Contains(config, required) {
@@ -84,6 +91,9 @@ func TestGoReleaserSignsBoundManifestAndInjectsTrustAnchors(t *testing.T) {
 	if strings.Contains(config, "{{ .ArtifactName }}") {
 		t.Error("signing uses filename-only ArtifactName instead of GoReleaser's full ${artifact} path")
 	}
+	if strings.Contains(config, `.Env.MINISIGN_PUBLIC_KEYS }}`) {
+		t.Error("GoReleaser injects the unvalidated raw MINISIGN_PUBLIC_KEYS value")
+	}
 }
 
 func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) {
@@ -91,6 +101,14 @@ func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) 
 		path     string
 		required []string
 	}{
+		{
+			path: "canonicalize-release-public-keys.sh",
+			required: []string{
+				`MINISIGN_PUBLIC_KEYS`,
+				`configure one canonical key or a two-key rotation overlap`,
+				`public key payload must decode to 42 bytes`,
+			},
+		},
 		{
 			path: "release-preflight.sh",
 			required: []string{
@@ -104,6 +122,7 @@ func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) 
 		{
 			path: "release-signing-preflight.sh",
 			required: []string{
+				`MINISIGN_PUBLIC_KEYS_CANONICAL`,
 				`minisign -R`,
 				`minisign -S`,
 				`minisign -VQ`,
@@ -139,6 +158,79 @@ func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) 
 				t.Fatalf("bash -n %s: %v\n%s", tc.path, err, output)
 			}
 		})
+	}
+}
+
+func TestCanonicalReleasePublicKeysControlRealLinkerBuild(t *testing.T) {
+	repoRoot := filepath.Clean(filepath.Join("..", ".."))
+	publicKey := strings.TrimSpace(readRepositoryFile(t, "internal", "update", "upgrade", "testdata", "minisign-test.pub"))
+	const linkerTarget = "github.com/gentleman-programming/gentle-ai/internal/update/upgrade.releaseMinisignPublicKeys"
+	const injectedOverride = "AUDIT_OVERRIDE"
+
+	build := func(t *testing.T, raw string) (string, []byte, error) {
+		t.Helper()
+		outPath := filepath.Join(t.TempDir(), "gentle-ai")
+		cmd := exec.Command("bash", "-c", `
+set -euo pipefail
+canonical=$(./scripts/canonicalize-release-public-keys.sh)
+go build -trimpath -o "$OUT" -ldflags "-X $LINKER_TARGET=$canonical" ./cmd/gentle-ai
+`)
+		cmd.Dir = repoRoot
+		cmd.Env = append(os.Environ(),
+			"MINISIGN_PUBLIC_KEYS="+raw,
+			"OUT="+outPath,
+			"LINKER_TARGET="+linkerTarget,
+		)
+		output, err := cmd.CombinedOutput()
+		return outPath, output, err
+	}
+
+	invalid := []struct {
+		name string
+		raw  string
+	}{
+		{
+			name: "newline linker override",
+			raw:  publicKey + "\n-X " + linkerTarget + "=" + injectedOverride,
+		},
+		{name: "same-line linker argument", raw: publicKey + " -X " + linkerTarget + "=" + injectedOverride},
+		{name: "trailing comma", raw: publicKey + ","},
+		{name: "leading whitespace", raw: " " + publicKey},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			outPath, output, err := build(t, tc.raw)
+			if err == nil {
+				t.Fatalf("linker build accepted noncanonical keys; output:\n%s", output)
+			}
+			if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
+				t.Fatalf("rejected key input produced a binary: %v", statErr)
+			}
+		})
+	}
+
+	t.Run("canonical key is the only linker value", func(t *testing.T) {
+		outPath, output, err := build(t, publicKey)
+		if err != nil {
+			t.Fatalf("canonical linker build failed: %v\n%s", err, output)
+		}
+		binary, err := os.ReadFile(outPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(binary, []byte(publicKey)) {
+			t.Fatal("built binary does not contain the canonical validated public key")
+		}
+		if bytes.Contains(binary, []byte(injectedOverride)) {
+			t.Fatal("built binary contains the rejected linker override")
+		}
+	})
+}
+
+func TestReleaseDocumentationStatesArchiveDownloadCeiling(t *testing.T) {
+	docs := readRepositoryFile(t, "docs", "release-signing.md") + readRepositoryFile(t, "README.md")
+	if !strings.Contains(docs, "128 MiB") {
+		t.Fatal("release documentation does not state the updater's 128 MiB archive ceiling")
 	}
 }
 

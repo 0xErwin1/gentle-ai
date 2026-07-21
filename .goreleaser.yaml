@@ -20,7 +20,7 @@ builds:
       - >-
         -s -w
         -X main.version={{ .Version }}
-        -X github.com/gentleman-programming/gentle-ai/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS }}
+        -X github.com/gentleman-programming/gentle-ai/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}
 
 archives:
   - formats:

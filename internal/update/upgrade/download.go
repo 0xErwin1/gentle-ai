@@ -43,6 +43,7 @@ var (
 const (
 	maxChecksumManifestBytes         = 1 << 20 // 1 MiB
 	maxChecksumSignatureBytes        = 16 << 10
+	maxReleaseArchiveBytes           = 128 << 20 // 128 MiB
 	unsetReleaseMinisignPublicKeys   = "UNSET"
 	legacyZeroMinisignKeyPlaceholder = "0000000000000000000000000000000000000000000000000000000000000000"
 )
@@ -68,6 +69,7 @@ var (
 var (
 	exactReleaseVersionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 	githubSlugPattern          = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+	canonicalPublicKeysPattern = regexp.MustCompile(`^[A-Za-z0-9+/]{56}(,[A-Za-z0-9+/]{56})?$`)
 )
 
 // Download downloads the GitHub release binary for the given tool, verifies its
@@ -131,7 +133,7 @@ func Download(ctx context.Context, r update.UpdateResult, profile system.Platfor
 	defer os.RemoveAll(tmpDir)
 
 	archivePath := filepath.Join(tmpDir, archiveName)
-	actualDigest, err := downloadToFile(ctx, assetURL, archivePath)
+	actualDigest, err := downloadToFile(ctx, assetURL, archivePath, maxReleaseArchiveBytes)
 	if err != nil {
 		return fmt.Errorf("download %s: %w", r.Tool.Name, err)
 	}
@@ -188,9 +190,13 @@ func resolveSignatureURL(owner, repo, version string) string {
 	return resolveChecksumURL(owner, repo, version) + ".minisig"
 }
 
-// downloadToFile downloads the resource at url to outPath and returns the
-// SHA256 hex digest of the downloaded content.
-func downloadToFile(ctx context.Context, url string, outPath string) (hexDigest string, err error) {
+// downloadToFile downloads at most maxBytes from url to outPath and returns
+// the SHA256 hex digest. It rejects both oversized Content-Length declarations
+// and chunked/unknown-length bodies, removing any partial output on failure.
+func downloadToFile(ctx context.Context, url string, outPath string, maxBytes int64) (hexDigest string, err error) {
+	if maxBytes <= 0 {
+		return "", errors.New("release archive has an invalid size limit")
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", fmt.Errorf("build request: %w", err)
@@ -204,6 +210,9 @@ func downloadToFile(ctx context.Context, url string, outPath string) (hexDigest 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
 	}
+	if resp.ContentLength > maxBytes {
+		return "", fmt.Errorf("release archive exceeds %d-byte limit", maxBytes)
+	}
 
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		return "", fmt.Errorf("create dir: %w", err)
@@ -212,13 +221,26 @@ func downloadToFile(ctx context.Context, url string, outPath string) (hexDigest 
 	if err != nil {
 		return "", fmt.Errorf("create %s: %w", outPath, err)
 	}
-	defer f.Close()
+	completed := false
+	defer func() {
+		if closeErr := f.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("close %s: %w", outPath, closeErr)
+		}
+		if !completed || err != nil {
+			_ = os.Remove(outPath)
+		}
+	}()
 
 	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(f, h), resp.Body); err != nil {
+	written, err := io.Copy(io.MultiWriter(f, h), io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
 		return "", fmt.Errorf("write %s: %w", outPath, err)
 	}
+	if written > maxBytes {
+		return "", fmt.Errorf("release archive exceeds %d-byte limit", maxBytes)
+	}
 
+	completed = true
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
@@ -409,9 +431,12 @@ func releaseTrustedComment(owner, repo, version string) string {
 }
 
 func configuredReleasePublicKeys() ([]minisign.PublicKey, error) {
-	raw := strings.TrimSpace(releaseMinisignPublicKeys)
+	raw := releaseMinisignPublicKeys
 	if raw == "" || raw == unsetReleaseMinisignPublicKeys || raw == legacyZeroMinisignKeyPlaceholder {
 		return nil, ErrReleaseTrustUnavailable
+	}
+	if !canonicalPublicKeysPattern.MatchString(raw) {
+		return nil, fmt.Errorf("%w: expected canonical one-key or two-key grammar", ErrReleaseTrustUnavailable)
 	}
 	parts := strings.Split(raw, ",")
 	if len(parts) < 1 || len(parts) > 2 {
@@ -420,7 +445,7 @@ func configuredReleasePublicKeys() ([]minisign.PublicKey, error) {
 	keys := make([]minisign.PublicKey, 0, len(parts))
 	seen := make(map[string]struct{}, len(parts))
 	for _, part := range parts {
-		encoded := strings.TrimSpace(part)
+		encoded := part
 		if encoded == "" || encoded == unsetReleaseMinisignPublicKeys || encoded == legacyZeroMinisignKeyPlaceholder {
 			return nil, ErrReleaseTrustUnavailable
 		}
@@ -445,7 +470,7 @@ func verifyChecksumsSignature(manifest, signatureBlob []byte, owner, repo, versi
 	if err != nil {
 		return err
 	}
-	signature, err := minisign.DecodeSignature(string(signatureBlob))
+	signature, err := decodeCanonicalMinisignSignature(signatureBlob)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrSignatureBlobMalformed, err)
 	}
@@ -461,4 +486,20 @@ func verifyChecksumsSignature(manifest, signatureBlob []byte, owner, repo, versi
 		return nil
 	}
 	return ErrSignatureVerificationFailed
+}
+
+func decodeCanonicalMinisignSignature(signatureBlob []byte) (minisign.Signature, error) {
+	lines := strings.SplitN(string(signatureBlob), "\n", 4)
+	if len(lines) < 4 {
+		return minisign.Signature{}, errors.New("incomplete signature envelope")
+	}
+	untrustedComment := strings.TrimSuffix(lines[0], "\r")
+	trustedComment := strings.TrimSuffix(lines[2], "\r")
+	if !strings.HasPrefix(untrustedComment, "untrusted comment: ") {
+		return minisign.Signature{}, errors.New("unexpected untrusted comment prefix")
+	}
+	if !strings.HasPrefix(trustedComment, "trusted comment: ") {
+		return minisign.Signature{}, errors.New("unexpected trusted comment prefix")
+	}
+	return minisign.DecodeSignature(string(signatureBlob))
 }

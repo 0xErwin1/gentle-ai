@@ -11,32 +11,6 @@ require_env() {
   [[ -n "${!name:-}" ]] || die "$name is required"
 }
 
-validate_public_keys() {
-  local raw=${MINISIGN_PUBLIC_KEYS:-}
-  [[ -n "$raw" && "$raw" != "UNSET" ]] || die "MINISIGN_PUBLIC_KEYS is unset"
-  [[ "$raw" != "0000000000000000000000000000000000000000000000000000000000000000" ]] || die "legacy placeholder public key is forbidden"
-
-  local keys
-  IFS=',' read -r -a keys <<<"$raw"
-  (( ${#keys[@]} >= 1 && ${#keys[@]} <= 2 )) || die "configure one key or a two-key rotation overlap"
-
-  local key decoded_hex
-  declare -A seen=()
-  for key in "${keys[@]}"; do
-    [[ -n "$key" && "$key" != *[[:space:]]* ]] || die "public keys must be non-empty base64 payloads without whitespace"
-    [[ -z "${seen[$key]:-}" ]] || die "duplicate public key"
-    if ! decoded_hex=$(printf '%s' "$key" | base64 --decode 2>/dev/null | od -An -v -tx1 | tr '\n' ' '); then
-      die "public key is not valid base64"
-    fi
-    # A minisign public key is: two algorithm bytes ('Ed'), eight key-ID
-    # bytes, and a 32-byte Ed25519 key.
-    read -r -a decoded <<<"$decoded_hex"
-    (( ${#decoded[@]} == 42 )) || die "public key payload must decode to 42 bytes"
-    [[ "${decoded[0]} ${decoded[1]}" == "45 64" ]] || die "public key algorithm must be Ed"
-    seen[$key]=1
-  done
-}
-
 require_env GITHUB_REPOSITORY
 require_env GITHUB_REF_TYPE
 require_env GITHUB_REF_NAME
@@ -46,7 +20,10 @@ require_env GITHUB_SHA
 
 tag=$GITHUB_REF_NAME
 [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || die "tag must be exact stable semver (vMAJOR.MINOR.PATCH)"
-validate_public_keys
+if ! canonical_public_keys=$(./scripts/canonicalize-release-public-keys.sh); then
+  die "MINISIGN_PUBLIC_KEYS is not canonical"
+fi
+[[ "$canonical_public_keys" == "$MINISIGN_PUBLIC_KEYS" ]] || die "public-key canonicalization changed the configured value"
 
 [[ "$(git cat-file -t "refs/tags/$tag")" == "tag" ]] || die "release tag must be annotated"
 head_sha=$(git rev-parse 'HEAD^{commit}')

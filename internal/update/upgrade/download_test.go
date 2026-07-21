@@ -434,7 +434,7 @@ func TestDownloadToFile(t *testing.T) {
 	httpClient = server.Client()
 
 	outPath := filepath.Join(t.TempDir(), "downloaded.tar.gz")
-	gotDigest, err := downloadToFile(context.Background(), server.URL+"/file", outPath)
+	gotDigest, err := downloadToFile(context.Background(), server.URL+"/file", outPath, maxReleaseArchiveBytes)
 	if err != nil {
 		t.Fatalf("downloadToFile: %v", err)
 	}

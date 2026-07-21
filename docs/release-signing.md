@@ -36,19 +36,21 @@ The public key is not secret, but its provenance is security-critical. A key fet
 
    | Name | Kind | Exact value |
    |---|---|---|
-   | `MINISIGN_PUBLIC_KEYS` | Repository Actions variable | One Minisign base64 public-key payload; during rotation, old and new payloads separated by one comma |
+   | `MINISIGN_PUBLIC_KEYS` | Repository Actions variable | One canonical Minisign base64 public-key payload; during rotation, exactly two distinct payloads separated by one comma, with no whitespace or trailing separator |
    | `MINISIGN_SECRET_KEY_BASE64` | Protected `release` environment secret | Base64 of the complete `gentle-ai-release.key` file |
 
 5. Keep the existing `HOMEBREW_TAP_TOKEN` environment secret. Do not add the Minisign private key to repository variables, files, logs, artifacts, caches, or command-line arguments.
 6. Run no release until `scripts/release-signing-preflight.sh` proves that the private key derives one configured public key, rejects the isolated test key, and signs/verifies an exact repository/tag canary.
 
-GoReleaser injects the trust anchors at build time through this exact linker variable:
+The workflow validates the complete repository-variable value, exports a separate canonical value, and permits GoReleaser to inject only that validated output through this exact linker variable:
 
 ```text
 github.com/gentleman-programming/gentle-ai/internal/update/upgrade.releaseMinisignPublicKeys
 ```
 
 Source/test builds retain `UNSET`; their binary self-updater refuses network replacement. There is no grace version and no unsigned fallback.
+
+The updater caps a release archive at **128 MiB**. It rejects both oversized `Content-Length` declarations and chunked or otherwise unknown-length responses that cross the same ceiling, deleting partial downloads without changing the installed binary.
 
 ### Bootstrap existing installations
 

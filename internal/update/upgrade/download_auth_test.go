@@ -83,6 +83,12 @@ func TestVerifyChecksumsSignatureFailsClosed(t *testing.T) {
 	publicKey, privateKey := testMinisignKey(t)
 	rotationKey, _ := minisignKeyFromDomain(t, testMinisignKeyDomain+" rotation fixture")
 	validSignature := signTestManifest(t, privateKey, manifest, owner, repo, version)
+	noncanonicalEnvelope := bytes.Replace(
+		bytes.Clone(validSignature),
+		[]byte("untrusted comment: "),
+		[]byte("comment: "),
+		1,
+	)
 
 	tests := []struct {
 		name      string
@@ -99,12 +105,16 @@ func TestVerifyChecksumsSignatureFailsClosed(t *testing.T) {
 		{name: "unset trust anchor", keys: unsetReleaseMinisignPublicKeys, manifest: manifest, signature: validSignature, owner: owner, repo: repo, version: version, wantErr: true},
 		{name: "more than two trust anchors", keys: rotationKey + "," + publicKey + "," + rotationKey, manifest: manifest, signature: validSignature, owner: owner, repo: repo, version: version, wantErr: true},
 		{name: "duplicate trust anchors", keys: publicKey + "," + publicKey, manifest: manifest, signature: validSignature, owner: owner, repo: repo, version: version, wantErr: true},
+		{name: "leading whitespace in trust anchor", keys: " " + publicKey, manifest: manifest, signature: validSignature, owner: owner, repo: repo, version: version, wantErr: true},
+		{name: "trailing separator in trust anchors", keys: publicKey + ",", manifest: manifest, signature: validSignature, owner: owner, repo: repo, version: version, wantErr: true},
+		{name: "newline linker injection in trust anchors", keys: publicKey + "\n-X override=value", manifest: manifest, signature: validSignature, owner: owner, repo: repo, version: version, wantErr: true},
 		{name: "tampered manifest", keys: publicKey, manifest: append(bytes.Clone(manifest), 'x'), signature: validSignature, owner: owner, repo: repo, version: version, wantErr: true},
 		{name: "wrong repository binding", keys: publicKey, manifest: manifest, signature: validSignature, owner: owner, repo: "lookalike", version: version, wantErr: true},
 		{name: "wrong tag binding", keys: publicKey, manifest: manifest, signature: validSignature, owner: owner, repo: repo, version: "2.2.1", wantErr: true},
 		{name: "version prefix rejected", keys: publicKey, manifest: manifest, signature: validSignature, owner: owner, repo: repo, version: "v2.2.0", wantErr: true},
 		{name: "prerelease rejected", keys: publicKey, manifest: manifest, signature: validSignature, owner: owner, repo: repo, version: "2.2.0-rc.1", wantErr: true},
 		{name: "comment injection rejected", keys: publicKey, manifest: manifest, signature: validSignature, owner: owner, repo: "gentle-ai\ntag=v2.2.0", version: version, wantErr: true},
+		{name: "noncanonical untrusted comment prefix rejected", keys: publicKey, manifest: manifest, signature: noncanonicalEnvelope, owner: owner, repo: repo, version: version, wantErr: true},
 		{name: "malformed signature", keys: publicKey, manifest: manifest, signature: []byte("not minisign"), owner: owner, repo: repo, version: version, wantErr: true},
 	}
 
@@ -175,6 +185,46 @@ func TestFetchBounded(t *testing.T) {
 			}
 			if !tc.wantErr && len(got) != len(tc.body) {
 				t.Fatalf("fetchBounded() length = %d, want %d", len(got), len(tc.body))
+			}
+		})
+	}
+}
+
+func TestDownloadToFileEnforcesLimitAndCleansPartialOutput(t *testing.T) {
+	const limit = int64(32)
+	tests := []struct {
+		name    string
+		chunked bool
+	}{
+		{name: "declared content length"},
+		{name: "chunked unknown length", chunked: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if !tc.chunked {
+					w.Header().Set("Content-Length", fmt.Sprint(limit+1))
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+				w.(http.Flusher).Flush()
+				_, _ = w.Write([]byte(strings.Repeat("x", int(limit+1))))
+			}))
+			defer server.Close()
+
+			original := httpClient
+			httpClient = server.Client()
+			t.Cleanup(func() { httpClient = original })
+
+			outPath := filepath.Join(t.TempDir(), "oversized.tar.gz")
+			_, err := downloadToFile(context.Background(), server.URL, outPath, limit)
+			if err == nil || !strings.Contains(err.Error(), "exceeds 32-byte limit") {
+				t.Fatalf("downloadToFile() error = %v, want archive size-limit error", err)
+			}
+			if _, statErr := os.Stat(outPath); !os.IsNotExist(statErr) {
+				t.Fatalf("oversized download left partial output behind: %v", statErr)
 			}
 		})
 	}
@@ -258,16 +308,27 @@ func TestDownloadVerifiesSignatureBeforeArchiveAndPreservesInstalledBinary(t *te
 	duplicateManifestSignature := signTestManifest(t, privateKey, duplicateManifest, owner, repo, version)
 
 	tests := []struct {
-		name           string
-		manifest       []byte
-		signature      []byte
-		wantErr        bool
-		wantArchiveGET bool
+		name                 string
+		manifest             []byte
+		signature            []byte
+		archiveContentLength int64
+		wantErr              bool
+		wantArchiveGET       bool
+		errContains          string
 	}{
 		{name: "valid metadata replaces binary", manifest: manifest, signature: validSignature, wantArchiveGET: true},
 		{name: "invalid signature never fetches archive", manifest: manifest, signature: append(bytes.Clone(validSignature), 'x'), wantErr: true},
 		{name: "duplicate signed checksum entry never fetches archive", manifest: duplicateManifest, signature: duplicateManifestSignature, wantErr: true},
 		{name: "checksum mismatch preserves binary and cleans download", manifest: wrongManifest, signature: wrongManifestSignature, wantErr: true, wantArchiveGET: true},
+		{
+			name:                 "oversized declared archive preserves binary and cleans download",
+			manifest:             manifest,
+			signature:            validSignature,
+			archiveContentLength: maxReleaseArchiveBytes + 1,
+			wantErr:              true,
+			wantArchiveGET:       true,
+			errContains:          "exceeds 134217728-byte limit",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -282,6 +343,11 @@ func TestDownloadVerifiesSignatureBeforeArchiveAndPreservesInstalledBinary(t *te
 				case "/checksums.txt.minisig":
 					_, _ = w.Write(tc.signature)
 				case "/" + archiveName:
+					if tc.archiveContentLength > 0 {
+						w.Header().Set("Content-Length", fmt.Sprint(tc.archiveContentLength))
+						w.WriteHeader(http.StatusOK)
+						return
+					}
 					_, _ = w.Write(archive)
 				default:
 					http.NotFound(w, r)
@@ -314,6 +380,9 @@ func TestDownloadVerifiesSignatureBeforeArchiveAndPreservesInstalledBinary(t *te
 			}, system.PlatformProfile{OS: runtime.GOOS})
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("Download() error = %v, wantErr %v", err, tc.wantErr)
+			}
+			if tc.errContains != "" && (err == nil || !strings.Contains(err.Error(), tc.errContains)) {
+				t.Fatalf("Download() error = %v, want substring %q", err, tc.errContains)
 			}
 
 			archiveFetched := false
