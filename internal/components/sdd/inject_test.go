@@ -2385,7 +2385,10 @@ func TestInjectKilocodeSubagentPromptUsesSharedRelativePath(t *testing.T) {
 	}
 
 	prompt := agentPrompt(t, readOpenCodeAgents(t, adapter.SettingsPath(home)), "sdd-apply")
-	want := "{file:../opencode/prompts/sdd/sdd-apply.md}"
+	want, err := SharedPromptFileRef(adapter.SettingsPath(home), home, "sdd-apply")
+	if err != nil {
+		t.Fatalf("SharedPromptFileRef() error = %v", err)
+	}
 	if prompt != want {
 		t.Fatalf("sdd-apply prompt = %q, want %q", prompt, want)
 	}
