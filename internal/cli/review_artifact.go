@@ -267,6 +267,12 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	// The acquisition is the exactly-once pre-launch authority: capture must
 	// present the exact ID a prior review acquire-result issued for this exact
 	// binding. A missing or mismatched ID is refused before any input is read.
+	// Checked only once the binding itself is proven to match the current
+	// reviewing authority under this repository, so a wrong --cwd or a stale
+	// lineage/target/lens/order still surfaces its own actionable error first.
+	if strings.TrimSpace(*acquisition) == "" {
+		return reviewPreflightError(errors.New("review capture-result requires --acquisition from a prior review acquire-result for this exact binding, unless --preflight"))
+	}
 	if _, err := store.ReadResultAcquisition(*lineage, *target, *lens, *order, *acquisition); err != nil {
 		return reviewPreflightError(fmt.Errorf("review capture-result refused: acquisition binding mismatch: %w", err))
 	}
