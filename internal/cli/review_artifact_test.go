@@ -78,29 +78,43 @@ func TestReviewCaptureResultStrictBindingReplayAndFinalize(t *testing.T) {
 
 func TestReviewFinalizeArtifactFiles(t *testing.T) {
 	for _, tt := range []struct {
-		name   string
-		stdin  bool
-		prefix []byte
+		name     string
+		stdin    bool
+		fileName string
+		prefix   []byte
 	}{
 		{name: "file"},
+		{name: "file with spaces and Unicode", fileName: "manifest café 文件.json"},
 		{name: "file with UTF-8 BOM", prefix: []byte("\xef\xbb\xbf")},
 		{name: "stdin", stdin: true},
 		{name: "stdin with UTF-8 BOM", stdin: true, prefix: []byte("\xef\xbb\xbf")},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			repo, started, _, _, artifacts := capturedArtifacts(t, false)
+			before, err := os.ReadFile(artifacts[0].Path)
+			if err != nil {
+				t.Fatal(err)
+			}
 			payload := append(tt.prefix, artifactManifestJSON(t, artifacts[0])...)
 			path := "-"
 			if tt.stdin {
 				withFacadeStdin(t, payload)
 			} else {
-				path = filepath.Join(t.TempDir(), "manifest.json")
+				fileName := tt.fileName
+				if fileName == "" {
+					fileName = "manifest.json"
+				}
+				path = filepath.Join(t.TempDir(), fileName)
 				if err := os.WriteFile(path, payload, 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
 			if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact-file", path}, io.Discard); err != nil {
 				t.Fatal(err)
+			}
+			after, err := os.ReadFile(artifacts[0].Path)
+			if err != nil || !bytes.Equal(after, before) {
+				t.Fatalf("canonical reviewer-result bytes changed: %v", err)
 			}
 		})
 	}
@@ -116,6 +130,103 @@ func TestReviewFinalizeArtifactFiles(t *testing.T) {
 		}
 	})
 
+}
+
+func TestReviewFinalizeArtifactFileSizeLimit(t *testing.T) {
+	t.Run("exact limit", func(t *testing.T) {
+		repo, started, _, _, artifacts := capturedArtifacts(t, false)
+		path := writeSizedArtifactManifest(t, artifacts[0], reviewResultArtifactLimit)
+		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact-file", path}, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("one byte over limit", func(t *testing.T) {
+		repo, started, store, record, artifacts := capturedArtifacts(t, false)
+		path := writeSizedArtifactManifest(t, artifacts[0], reviewResultArtifactLimit+1)
+		err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact-file", path}, io.Discard)
+		if err == nil || err.Error() != "read reviewer artifact manifest 1: artifact exceeds the native result size limit" {
+			t.Fatalf("over-limit manifest error = %v", err)
+		}
+		assertArtifactRevision(t, store, record.Revision)
+	})
+}
+
+func TestReviewFinalizeArtifactFileCancellationAndErrorPrivacy(t *testing.T) {
+	t.Run("active stdin read", func(t *testing.T) {
+		repo, started, store, record, artifacts := capturedArtifacts(t, false)
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		oldStdin := os.Stdin
+		os.Stdin = reader
+		t.Cleanup(func() {
+			os.Stdin = oldStdin
+			_ = writer.Close()
+			_ = reader.Close()
+		})
+		payload := append(artifactManifestJSON(t, artifacts[0]), bytes.Repeat([]byte(" "), 1<<20)...)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		result := make(chan error, 1)
+		go func() {
+			result <- runReviewFacadeFinalize(ctx, []string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact-file", "-"}, io.Discard)
+		}()
+		written := make(chan error, 1)
+		go func() {
+			_, writeErr := writer.Write(payload)
+			written <- writeErr
+		}()
+		select {
+		case err := <-written:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("finalize did not begin active stdin read")
+		}
+		cancel()
+		select {
+		case err := <-result:
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("active stdin cancellation error = %v", err)
+			}
+		case <-time.After(time.Second):
+			_ = writer.Close()
+			<-result
+			t.Fatal("active stdin read remained blocked after cancellation")
+		}
+		if _, err := reader.Stat(); err != nil {
+			t.Fatalf("cancellation closed the caller-owned input: %v", err)
+		}
+		assertArtifactRevision(t, store, record.Revision)
+	})
+
+	t.Run("cancelled context", func(t *testing.T) {
+		repo, started, store, record, artifacts := capturedArtifacts(t, false)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := runReviewFacadeFinalize(ctx, []string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact-file", writeArtifactManifest(t, artifacts[0])}, io.Discard)
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled finalize error = %v", err)
+		}
+		assertArtifactRevision(t, store, record.Revision)
+	})
+
+	t.Run("negotiated file error is path-free", func(t *testing.T) {
+		repo, started, store, record, _ := capturedArtifacts(t, false)
+		secret := filepath.Join(t.TempDir(), "token=private-manifest.json")
+		var output bytes.Buffer
+		err := RunReview([]string{"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID, "--result-artifact-file", secret}, &output)
+		if err == nil || strings.Contains(err.Error(), secret) || strings.Contains(output.String(), secret) {
+			t.Fatalf("negotiated manifest error leaked private path: output=%s error=%v", output.String(), err)
+		}
+		if failure := decodeReviewIntegrationFailure(t, output.Bytes()); failure.Code != "invalid_request" || failure.MutationOutcome != ReviewMutationNotStarted {
+			t.Fatalf("negotiated manifest failure = %#v", failure)
+		}
+		assertArtifactRevision(t, store, record.Revision)
+	})
 }
 
 func TestReviewFinalizeRejectsArtifactFileSourceMixing(t *testing.T) {
@@ -410,6 +521,20 @@ func writeArtifactManifest(t *testing.T, artifact reviewResultArtifact) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "manifest.json")
 	if err := os.WriteFile(path, artifactManifestJSON(t, artifact), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func writeSizedArtifactManifest(t *testing.T, artifact reviewResultArtifact, size int) string {
+	t.Helper()
+	payload := artifactManifestJSON(t, artifact)
+	if len(payload) > size {
+		t.Fatalf("manifest size = %d, exceeds requested %d", len(payload), size)
+	}
+	payload = append(payload, bytes.Repeat([]byte(" "), size-len(payload))...)
+	path := filepath.Join(t.TempDir(), "manifest.json")
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
