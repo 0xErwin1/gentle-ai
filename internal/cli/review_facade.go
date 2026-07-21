@@ -1024,6 +1024,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			if readErr != nil {
 				return reviewPreflightError(fmt.Errorf("read reviewer artifact manifest %d: %w", index+1, readErr))
 			}
+			payload = bytes.TrimPrefix(payload, []byte("\xef\xbb\xbf"))
 			manifests[index] = string(payload)
 		}
 		reviewerResults, err = readFacadeReviewerArtifacts(manifests, store.Dir, state)

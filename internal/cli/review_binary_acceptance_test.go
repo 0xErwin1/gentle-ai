@@ -75,7 +75,7 @@ func TestWindowsPowerShell51ArtifactManifestFileFinalize(t *testing.T) {
 $captured = & $Binary review capture-result --cwd $Repo --lineage $Lineage --target $Target --lens $Lens --order $Order --input $ResultPath
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $manifestText = [string]::Join([Environment]::NewLine, [string[]]$captured)
-[System.IO.File]::WriteAllText($Manifest, $manifestText, (New-Object System.Text.UTF8Encoding($false)))
+[System.IO.File]::WriteAllText($Manifest, $manifestText, (New-Object System.Text.UTF8Encoding($true)))
 & $Binary review finalize --cwd $Repo --lineage $Lineage --result-artifact-file $Manifest --evidence $EvidencePath
 exit $LASTEXITCODE
 `
@@ -93,8 +93,8 @@ exit $LASTEXITCODE
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(manifestBytes) >= 3 && string(manifestBytes[:3]) == "\xef\xbb\xbf" {
-		t.Fatal("PowerShell manifest file contains a UTF-8 BOM")
+	if len(manifestBytes) < 3 || string(manifestBytes[:3]) != "\xef\xbb\xbf" {
+		t.Fatal("PowerShell manifest file does not contain a UTF-8 BOM")
 	}
 	var finalized ReviewFacadeFinalizeResult
 	decodeBinaryJSON(t, output, &finalized)

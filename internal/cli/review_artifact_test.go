@@ -77,13 +77,33 @@ func TestReviewCaptureResultStrictBindingReplayAndFinalize(t *testing.T) {
 }
 
 func TestReviewFinalizeArtifactFiles(t *testing.T) {
-	t.Run("one file", func(t *testing.T) {
-		repo, started, _, _, artifacts := capturedArtifacts(t, false)
-		path := writeArtifactManifest(t, artifacts[0])
-		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact-file", path}, io.Discard); err != nil {
-			t.Fatal(err)
-		}
-	})
+	for _, tt := range []struct {
+		name   string
+		stdin  bool
+		prefix []byte
+	}{
+		{name: "file"},
+		{name: "file with UTF-8 BOM", prefix: []byte("\xef\xbb\xbf")},
+		{name: "stdin", stdin: true},
+		{name: "stdin with UTF-8 BOM", stdin: true, prefix: []byte("\xef\xbb\xbf")},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, started, _, _, artifacts := capturedArtifacts(t, false)
+			payload := append(tt.prefix, artifactManifestJSON(t, artifacts[0])...)
+			path := "-"
+			if tt.stdin {
+				withFacadeStdin(t, payload)
+			} else {
+				path = filepath.Join(t.TempDir(), "manifest.json")
+				if err := os.WriteFile(path, payload, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact-file", path}, io.Discard); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 
 	t.Run("repeated files preserve selected-lens order", func(t *testing.T) {
 		repo, started, _, _, artifacts := capturedArtifacts(t, true)
@@ -96,13 +116,6 @@ func TestReviewFinalizeArtifactFiles(t *testing.T) {
 		}
 	})
 
-	t.Run("stdin", func(t *testing.T) {
-		repo, started, _, _, artifacts := capturedArtifacts(t, false)
-		withFacadeStdin(t, artifactManifestJSON(t, artifacts[0]))
-		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact-file", "-"}, io.Discard); err != nil {
-			t.Fatal(err)
-		}
-	})
 }
 
 func TestReviewFinalizeRejectsArtifactFileSourceMixing(t *testing.T) {
@@ -154,6 +167,19 @@ func TestReviewFinalizeArtifactFilePreservesStrictManifestValidation(t *testing.
 		}
 		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact-file", path}, io.Discard); err == nil {
 			t.Fatal("malformed manifest accepted")
+		}
+		assertArtifactRevision(t, store, record.Revision)
+	})
+
+	t.Run("two leading UTF-8 BOMs", func(t *testing.T) {
+		repo, started, store, record, artifacts := capturedArtifacts(t, false)
+		payload := append([]byte("\xef\xbb\xbf\xef\xbb\xbf"), artifactManifestJSON(t, artifacts[0])...)
+		path := filepath.Join(t.TempDir(), "manifest.json")
+		if err := os.WriteFile(path, payload, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact-file", path}, io.Discard); err == nil {
+			t.Fatal("manifest with two leading UTF-8 BOMs accepted")
 		}
 		assertArtifactRevision(t, store, record.Revision)
 	})
