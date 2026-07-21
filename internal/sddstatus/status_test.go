@@ -873,3 +873,69 @@ func ptrValue(value *string) string {
 	}
 	return *value
 }
+
+func TestResolveAttemptLedgerExhaustion(t *testing.T) {
+	t.Run("OpenSpec attempt budget exhausted", func(t *testing.T) {
+		root := t.TempDir()
+		changeRoot := seedReadyChange(t, root, "exhaust-budget", "- [ ] 1.1 Wire routes\n")
+		// Write attempt ledger indicating budget exhausted
+		ledgerJSON := `{"schema":"gentle-ai.sdd-attempt-ledger/v1","change_name":"exhaust-budget","cumulative_attempts":2,"max_attempts":2}`
+		write(t, filepath.Join(changeRoot, "attempt-ledger.json"), ledgerJSON)
+
+		status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "exhaust-budget"})
+		if err != nil {
+			t.Fatalf("Resolve() error = %v", err)
+		}
+
+		// Next recommended must route to resolve-blockers since it's blocked
+		if status.NextRecommended != "resolve-blockers" {
+			t.Fatalf("NextRecommended = %q, want resolve-blockers", status.NextRecommended)
+		}
+
+		foundExhausted := false
+		for _, reason := range status.BlockedReasons {
+			if strings.Contains(reason, "attempt budget has been exhausted") {
+				foundExhausted = true
+				break
+			}
+		}
+		if !foundExhausted {
+			t.Fatalf("BlockedReasons %v missing budget exhausted reason", status.BlockedReasons)
+		}
+	})
+
+	t.Run("Engram attempt budget exhausted", func(t *testing.T) {
+		root := t.TempDir()
+		mkdir(t, filepath.Join(root, ".engram"))
+		write(t, filepath.Join(root, ".git", "config"), "[remote \"origin\"]\n\turl = git@github.com:Gentleman-Programming/gentle-ai.git\n")
+
+		restore := stubEngramExport(t, []engramObservation{
+			{Title: "sdd/exhaust-budget-engram/proposal", Content: "## Proposal\nAdd auth", Project: "gentle-ai", Scope: "project"},
+			{Title: "sdd/exhaust-budget-engram/spec", Content: "## Requirements\n- SHALL work", Project: "gentle-ai", Scope: "project"},
+			{Title: "sdd/exhaust-budget-engram/design", Content: "## Design\nUse middleware", Project: "gentle-ai", Scope: "project"},
+			{Title: "sdd/exhaust-budget-engram/tasks", Content: "- [ ] 1.1 Wire routes\n", Project: "gentle-ai", Scope: "project"},
+			{Title: "sdd/exhaust-budget-engram/attempt-ledger", Content: `{"schema":"gentle-ai.sdd-attempt-ledger/v1","change_name":"exhaust-budget-engram","cumulative_attempts":3,"max_attempts":2}`, Project: "gentle-ai", Scope: "project"},
+		})
+		defer restore()
+
+		status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "exhaust-budget-engram"})
+		if err != nil {
+			t.Fatalf("Resolve() error = %v", err)
+		}
+
+		if status.NextRecommended != "resolve-blockers" {
+			t.Fatalf("NextRecommended = %q, want resolve-blockers", status.NextRecommended)
+		}
+
+		foundExhausted := false
+		for _, reason := range status.BlockedReasons {
+			if strings.Contains(reason, "attempt budget has been exhausted") {
+				foundExhausted = true
+				break
+			}
+		}
+		if !foundExhausted {
+			t.Fatalf("BlockedReasons %v missing budget exhausted reason", status.BlockedReasons)
+		}
+	})
+}
