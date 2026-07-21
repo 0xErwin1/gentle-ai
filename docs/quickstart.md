@@ -38,6 +38,39 @@
 
 - Scoop installed. Gentle AI recommends Scoop as the Windows install path.
 
+## Version Policy
+
+Receipt-Driven Development (RDD) started in `gentle-ai` `v1.47.0` on 2026-07-10, when the first bounded native review transactions were added. The stable pre-RDD baseline is the immediately preceding release, `v1.46.0`.
+
+The latest release for trying RDD is currently `v2.1.11`. The negotiated public review contract was published in `v2.1.6`. Builds from `main` may contain changes after `v2.1.11` and are intended for unreleased RDD development testing.
+
+### Install the stable pre-RDD baseline
+
+Use an exact Go module version to keep the baseline reproducible on macOS, Linux, or Windows:
+
+```bash
+go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.46.0
+gentle-ai version
+```
+
+### Install the latest RDD release
+
+```bash
+go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v2.1.11
+gentle-ai version
+```
+
+### Install unreleased RDD changes
+
+Only use `main` when testing changes that are not part of a release yet:
+
+```bash
+go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@main
+gentle-ai version
+```
+
+The managed install scripts select the latest version for the chosen channel and do not accept arbitrary release pins. Use `go install` for an exact version pin.
+
 ## Run
 
 ```bash

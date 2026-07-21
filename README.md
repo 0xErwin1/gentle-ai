@@ -141,6 +141,35 @@ curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/mai
 $env:GENTLE_AI_CHANNEL="beta"; irm https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.ps1 | iex
 ```
 
+### RDD version policy
+
+Receipt-Driven Development (RDD) started in `gentle-ai` `v1.47.0` on 2026-07-10, with the first bounded native review transactions. The stable pre-RDD baseline is therefore pinned to `v1.46.0`. The negotiated public review contract was published later in `v2.1.6`.
+
+Use the latest release, currently `v2.1.11`, when you want to try RDD. Use `@main` only when you explicitly want unreleased changes after that release.
+
+**Stable pre-RDD baseline (`v1.46.0`)**
+
+```bash
+go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.46.0
+gentle-ai version
+```
+
+**Latest RDD release (`v2.1.11`)**
+
+```bash
+go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v2.1.11
+gentle-ai version
+```
+
+**Unreleased RDD development build (`main`)**
+
+```bash
+go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@main
+gentle-ai version
+```
+
+The managed installer tracks the channel's latest version and does not accept an arbitrary release pin. Use `go install` when reproducibility requires an exact version.
+
 </details>
 
 ---
