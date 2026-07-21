@@ -76,6 +76,107 @@ func TestReviewCaptureResultStrictBindingReplayAndFinalize(t *testing.T) {
 	}
 }
 
+func TestReviewFinalizeArtifactFiles(t *testing.T) {
+	t.Run("one file", func(t *testing.T) {
+		repo, started, _, _, artifacts := capturedArtifacts(t, false)
+		path := writeArtifactManifest(t, artifacts[0])
+		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact-file", path}, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("repeated files preserve selected-lens order", func(t *testing.T) {
+		repo, started, _, _, artifacts := capturedArtifacts(t, true)
+		args := []string{"--cwd", repo, "--lineage", started.LineageID}
+		for _, artifact := range artifacts {
+			args = append(args, "--result-artifact-file", writeArtifactManifest(t, artifact))
+		}
+		if err := RunReviewFacadeFinalize(args, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("stdin", func(t *testing.T) {
+		repo, started, _, _, artifacts := capturedArtifacts(t, false)
+		withFacadeStdin(t, artifactManifestJSON(t, artifacts[0]))
+		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact-file", "-"}, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestReviewFinalizeRejectsArtifactFileSourceMixing(t *testing.T) {
+	result := filepath.Join(t.TempDir(), "result.json")
+	if err := os.WriteFile(result, []byte(`{"findings":[],"evidence":["checked"]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name string
+		args func(string, string) []string
+	}{
+		{"inline manifest", func(path, manifest string) []string {
+			return []string{"--result-artifact-file", path, "--result-artifact", manifest}
+		}},
+		{"legacy result", func(path, _ string) []string { return []string{"--result-artifact-file", path, "--result", result} }},
+		{"captured results", func(path, _ string) []string { return []string{"--result-artifact-file", path, "--captured-results"} }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, started, store, record, artifacts := capturedArtifacts(t, false)
+			manifest := string(artifactManifestJSON(t, artifacts[0]))
+			args := append([]string{"--cwd", repo, "--lineage", started.LineageID}, tt.args(writeArtifactManifest(t, artifacts[0]), manifest)...)
+			if err := RunReviewFacadeFinalize(args, io.Discard); err == nil {
+				t.Fatal("mixed reviewer-result sources accepted")
+			}
+			assertArtifactRevision(t, store, record.Revision)
+		})
+	}
+}
+
+func TestReviewFinalizeArtifactFileStdinAccounting(t *testing.T) {
+	repo, started, _, _, _ := capturedArtifacts(t, false)
+	for _, args := range [][]string{
+		{"--result-artifact-file", "-", "--result-artifact-file", "-"},
+		{"--result-artifact-file", "-", "--result", "-"},
+	} {
+		finalize := append([]string{"--cwd", repo, "--lineage", started.LineageID}, args...)
+		if err := RunReviewFacadeFinalize(finalize, io.Discard); err == nil || !strings.Contains(err.Error(), "stdin for only one input") {
+			t.Fatalf("multiple stdin inputs = %v", err)
+		}
+	}
+}
+
+func TestReviewFinalizeArtifactFilePreservesStrictManifestValidation(t *testing.T) {
+	t.Run("malformed", func(t *testing.T) {
+		repo, started, store, record := newArtifactReview(t, false)
+		path := filepath.Join(t.TempDir(), "manifest.json")
+		if err := os.WriteFile(path, []byte(`{"schema":`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact-file", path}, io.Discard); err == nil {
+			t.Fatal("malformed manifest accepted")
+		}
+		assertArtifactRevision(t, store, record.Revision)
+	})
+
+	for _, tt := range []struct {
+		name   string
+		mutate func(*reviewResultArtifact)
+	}{
+		{"ownership", func(artifact *reviewResultArtifact) { artifact.Path = filepath.Join(t.TempDir(), "result.json") }},
+		{"hash", func(artifact *reviewResultArtifact) { artifact.SHA256 = "sha256:" + strings.Repeat("0", 64) }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo, started, store, record, artifacts := capturedArtifacts(t, false)
+			tt.mutate(&artifacts[0])
+			path := writeArtifactManifest(t, artifacts[0])
+			if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result-artifact-file", path}, io.Discard); err == nil {
+				t.Fatal("substituted artifact accepted")
+			}
+			assertArtifactRevision(t, store, record.Revision)
+		})
+	}
+}
+
 func TestReviewCaptureResultWaitsForMaintenanceBeforePublication(t *testing.T) {
 	repo, started, store, record := newArtifactReview(t, false)
 	input := filepath.Join(t.TempDir(), "result.json")
@@ -259,6 +360,73 @@ func capturedArtifact(t *testing.T) (string, ReviewFacadeStartResult, reviewtran
 	var artifact reviewResultArtifact
 	decodeStrictReviewJSON(t, output.Bytes(), &artifact)
 	return repo, started, store, record, artifact
+}
+
+func capturedArtifacts(t *testing.T, high bool) (string, ReviewFacadeStartResult, reviewtransaction.CompactStore, reviewtransaction.CompactRecord, []reviewResultArtifact) {
+	t.Helper()
+	repo, started, store, record := newArtifactReview(t, high)
+	artifacts := make([]reviewResultArtifact, len(record.State.SelectedLenses))
+	for order, lens := range record.State.SelectedLenses {
+		input := filepath.Join(t.TempDir(), fmt.Sprintf("%d.json", order))
+		if err := os.WriteFile(input, []byte(`{"findings":[],"evidence":["checked exact target"]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var output bytes.Buffer
+		if err := RunReviewCaptureResult([]string{"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--lens", lens, "--order", fmt.Sprint(order), "--input", input}, &output); err != nil {
+			t.Fatal(err)
+		}
+		decodeStrictReviewJSON(t, output.Bytes(), &artifacts[order])
+	}
+	return repo, started, store, record, artifacts
+}
+
+func writeArtifactManifest(t *testing.T, artifact reviewResultArtifact) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "manifest.json")
+	if err := os.WriteFile(path, artifactManifestJSON(t, artifact), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func artifactManifestJSON(t *testing.T, artifact reviewResultArtifact) []byte {
+	t.Helper()
+	payload, err := json.Marshal(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+func withFacadeStdin(t *testing.T, payload []byte) {
+	t.Helper()
+	old := os.Stdin
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin = reader
+	t.Cleanup(func() {
+		os.Stdin = old
+		_ = reader.Close()
+	})
+}
+
+func assertArtifactRevision(t *testing.T, store reviewtransaction.CompactStore, revision string) {
+	t.Helper()
+	after, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision != revision {
+		t.Fatal("artifact input failure mutated authority")
+	}
 }
 func assertArtifactFinalizeUnchanged(t *testing.T, repo, lineage string, store reviewtransaction.CompactStore, revision string, artifact reviewResultArtifact) {
 	t.Helper()
