@@ -11,7 +11,7 @@ func TestCompactTargetRelationAlgebra(t *testing.T) {
 		Status: baseAdvanceCompatibleStatus, Compatible: true,
 		OriginalMergeBaseTree: frozen.BaseTree, NewBaseTree: tree("3"),
 		OriginalPatchIdentity: hash("1"), DeliveredPatchIdentity: hash("1"),
-		DeliveredPathsDigest: hash("2"), BaseAdvancePathsDigest: hash("3"), PathsDisjoint: true,
+		DeliveredPathsDigest: digestPaths(frozen.Paths), BaseAdvancePathsDigest: hash("3"), PathsDisjoint: true,
 		MergedResultTree: tree("4"), CIAttestationArtifactHash: hash("4"),
 		CIAttestationIssuer: "trusted-ci", CIStatus: "success",
 	}
