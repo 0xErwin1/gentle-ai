@@ -552,7 +552,7 @@ func buildCompactGateRequestWithPushBase(ctx context.Context, repo string, state
 			break
 		}
 		if current.Kind == TargetBaseWorkspaceOverlay {
-			request.Target = Target{Kind: TargetBaseWorkspaceOverlay, Projection: projection, BaseRef: current.BaseTree, IntendedUntracked: intended}
+			request.Target = Target{Kind: TargetBaseWorkspaceOverlay, Projection: projection, BaseRef: state.InitialSnapshot.BaseTree, IntendedUntracked: intended}
 			break
 		}
 		headTree, _, err := (SnapshotBuilder{Repo: repo}).resolveCurrentChangesBase(ctx, projection)
