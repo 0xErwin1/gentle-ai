@@ -17,6 +17,15 @@
 
 ---
 
+> [!IMPORTANT]
+> **RDD version policy:** Receipt-Driven Development started in `gentle-ai` `v1.47.0`. The stable pre-RDD baseline is `v1.46.0`; the latest RDD release is `v2.1.11`.
+>
+> To try RDD, install the latest release explicitly:
+> ```bash
+> go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v2.1.11
+> ```
+> Use `@main` only for unreleased development changes. See the [full RDD version policy](docs/quickstart.md#version-policy).
+
 ## What It Does
 
 Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is an **ecosystem configurator** that equips the AI coding agent(s) you already use with persistent memory, Spec-Driven Development (SDD), curated skills, MCP servers, model routing, a teaching-oriented persona, and bounded native review.
