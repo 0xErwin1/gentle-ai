@@ -879,7 +879,7 @@ func TestResolveAttemptLedgerExhaustion(t *testing.T) {
 		root := t.TempDir()
 		changeRoot := seedReadyChange(t, root, "exhaust-budget", "- [ ] 1.1 Wire routes\n")
 		// Write attempt ledger indicating budget exhausted
-		ledgerJSON := `{"schema":"gentle-ai.sdd-attempt-ledger/v1","change_name":"exhaust-budget","cumulative_attempts":2,"max_attempts":2}`
+		ledgerJSON := `{"schema":"gentle-ai.sdd-attempt-ledger/v1","change_name":"exhaust-budget","work_unit":"auth-implementation","candidate_identity":"sha256:12345","evidence_goal":"run-tests","attempts":[],"cumulative_attempts":2,"max_attempts":2}`
 		write(t, filepath.Join(changeRoot, "attempt-ledger.json"), ledgerJSON)
 
 		status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "exhaust-budget"})
@@ -904,6 +904,59 @@ func TestResolveAttemptLedgerExhaustion(t *testing.T) {
 		}
 	})
 
+	t.Run("OpenSpec attempt ledger malformed fails closed", func(t *testing.T) {
+		root := t.TempDir()
+		changeRoot := seedReadyChange(t, root, "exhaust-budget", "- [ ] 1.1 Wire routes\n")
+		write(t, filepath.Join(changeRoot, "attempt-ledger.json"), `{"schema":`) // broken json
+
+		status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "exhaust-budget"})
+		if err != nil {
+			t.Fatalf("Resolve() error = %v", err)
+		}
+
+		if status.NextRecommended != "resolve-blockers" {
+			t.Fatalf("NextRecommended = %q, want resolve-blockers", status.NextRecommended)
+		}
+
+		foundMalformed := false
+		for _, reason := range status.BlockedReasons {
+			if strings.Contains(reason, "attempt ledger is malformed") {
+				foundMalformed = true
+				break
+			}
+		}
+		if !foundMalformed {
+			t.Fatalf("BlockedReasons %v missing malformed reason", status.BlockedReasons)
+		}
+	})
+
+	t.Run("OpenSpec attempt ledger mismatched change fails closed", func(t *testing.T) {
+		root := t.TempDir()
+		changeRoot := seedReadyChange(t, root, "exhaust-budget", "- [ ] 1.1 Wire routes\n")
+		ledgerJSON := `{"schema":"gentle-ai.sdd-attempt-ledger/v1","change_name":"wrong-change","work_unit":"auth-implementation","candidate_identity":"sha256:12345","evidence_goal":"run-tests","attempts":[],"cumulative_attempts":0,"max_attempts":2}`
+		write(t, filepath.Join(changeRoot, "attempt-ledger.json"), ledgerJSON)
+
+		status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "exhaust-budget"})
+		if err != nil {
+			t.Fatalf("Resolve() error = %v", err)
+		}
+
+		if status.NextRecommended != "resolve-blockers" {
+			t.Fatalf("NextRecommended = %q, want resolve-blockers", status.NextRecommended)
+		}
+
+		foundMismatched := false
+		for _, reason := range status.BlockedReasons {
+			if strings.Contains(reason, "unrelated or invalid") {
+				foundMismatched = true
+				break
+			}
+		}
+		if !foundMismatched {
+			t.Fatalf("BlockedReasons %v missing mismatched reason", status.BlockedReasons)
+		}
+	})
+
 	t.Run("Engram attempt budget exhausted", func(t *testing.T) {
 		root := t.TempDir()
 		mkdir(t, filepath.Join(root, ".engram"))
@@ -914,7 +967,7 @@ func TestResolveAttemptLedgerExhaustion(t *testing.T) {
 			{Title: "sdd/exhaust-budget-engram/spec", Content: "## Requirements\n- SHALL work", Project: "gentle-ai", Scope: "project"},
 			{Title: "sdd/exhaust-budget-engram/design", Content: "## Design\nUse middleware", Project: "gentle-ai", Scope: "project"},
 			{Title: "sdd/exhaust-budget-engram/tasks", Content: "- [ ] 1.1 Wire routes\n", Project: "gentle-ai", Scope: "project"},
-			{Title: "sdd/exhaust-budget-engram/attempt-ledger", Content: `{"schema":"gentle-ai.sdd-attempt-ledger/v1","change_name":"exhaust-budget-engram","cumulative_attempts":3,"max_attempts":2}`, Project: "gentle-ai", Scope: "project"},
+			{Title: "sdd/exhaust-budget-engram/attempt-ledger", Content: `{"schema":"gentle-ai.sdd-attempt-ledger/v1","change_name":"exhaust-budget-engram","work_unit":"auth-implementation","candidate_identity":"sha256:12345","evidence_goal":"run-tests","attempts":[],"cumulative_attempts":3,"max_attempts":2}`, Project: "gentle-ai", Scope: "project"},
 		})
 		defer restore()
 
