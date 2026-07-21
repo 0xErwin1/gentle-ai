@@ -28,6 +28,41 @@ func TestCompactPrePRChainAllowsExactThreeReceiptComposition(t *testing.T) {
 	}
 }
 
+func TestCompactPrePRChainAllowsAcceptedDegenerateScopeRecovery(t *testing.T) {
+	fixture := newCompactPrePRChainFixture(t, 2)
+	successor, receipt := recoverApprovedCompactSuccessor(t, fixture.repo, fixture.states[1].LineageID, "compact-chain-recovery", 2)
+	if receipt.BaseTree != receipt.FinalCandidateTree {
+		t.Fatalf("recovery receipt is not degenerate: %#v", receipt)
+	}
+
+	got, attempted := EvaluateCompactPrePRChain(context.Background(), fixture.repo, fixture.input())
+
+	if !attempted || got.Result != GateAllow {
+		t.Fatalf("accepted degenerate scope recovery = %#v, attempted %t, successor %s", got, attempted, successor.LineageID)
+	}
+	if got.Context.BaseTree != fixture.receipts[0].BaseTree || got.Context.CandidateTree != fixture.receipts[1].FinalCandidateTree {
+		t.Fatalf("recovered composed proof context = %#v", got.Context)
+	}
+}
+
+func TestCompactPrePRChainNormalizesDegenerateRecoveryInsideChain(t *testing.T) {
+	fixture := newCompactPrePRChainFixture(t, 2)
+	degenerate, _ := recoverApprovedCompactSuccessor(t, fixture.repo, fixture.states[1].LineageID, "compact-chain-degenerate", 2)
+	writeSnapshotFile(t, fixture.repo, "segment-b.txt", "reviewed after recovery\n")
+	successor, receipt := recoverApprovedCompactSuccessor(t, fixture.repo, degenerate.LineageID, "compact-chain-after-degenerate", 3)
+	gitSnapshot(t, fixture.repo, "add", "segment-b.txt")
+	gitSnapshot(t, fixture.repo, "commit", "-m", "deliver reviewed recovery successor")
+
+	got, attempted := EvaluateCompactPrePRChain(context.Background(), fixture.repo, fixture.input())
+
+	if !attempted || got.Result != GateAllow {
+		t.Fatalf("normalized interior degenerate recovery = %#v, attempted %t, successor %s", got, attempted, successor.LineageID)
+	}
+	if got.Context.BaseTree != fixture.receipts[0].BaseTree || got.Context.CandidateTree != receipt.FinalCandidateTree {
+		t.Fatalf("normalized interior recovery proof context = %#v", got.Context)
+	}
+}
+
 func TestCompactPrePRChainLeavesExactSingleReceiptToDirectEvaluation(t *testing.T) {
 	fixture := newCompactPrePRChainFixture(t, 1)
 	input := fixture.input()
