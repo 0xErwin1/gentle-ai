@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ const (
 	reviewCapturePreflightCapability = "review.native_capture_preflight"
 	reviewIncidentArtifactSchema     = "gentle-ai.review-incident-artifact/v1"
 	reviewIncidentArtifactCapability = "review.native_incident_artifact"
+	reviewIncidentReferencePrefix    = "rinc1_"
 )
 
 // reviewCapturePreflightResult confirms that one capture binding matches the
@@ -27,7 +29,7 @@ const (
 type reviewCapturePreflightResult struct {
 	Schema         string `json:"schema"`
 	Capability     string `json:"capability"`
-	RepositoryRoot string `json:"repository_root"`
+	RepositoryRoot string `json:"repository_root,omitempty"`
 	LineageID      string `json:"lineage_id"`
 	TargetIdentity string `json:"target_identity"`
 	Lens           string `json:"lens"`
@@ -41,7 +43,8 @@ type reviewCapturePreflightResult struct {
 type reviewIncidentArtifact struct {
 	Schema         string                                `json:"schema"`
 	Capability     string                                `json:"capability"`
-	Path           string                                `json:"path"`
+	Path           string                                `json:"path,omitempty"`
+	Reference      string                                `json:"reference,omitempty"`
 	SHA256         string                                `json:"sha256"`
 	LineageID      string                                `json:"lineage_id"`
 	TargetIdentity string                                `json:"target_identity"`
@@ -50,22 +53,36 @@ type reviewIncidentArtifact struct {
 	Class          reviewtransaction.ResultIncidentClass `json:"class,omitempty"`
 }
 
+type reviewOpaqueContextOperationError struct {
+	Code   string
+	Action string
+}
+
+func (err *reviewOpaqueContextOperationError) Error() string {
+	return fmt.Sprintf("%s: provider-issued review repository context operation failed; %s", err.Code, err.Action)
+}
+
+func reviewOpaqueContextFailure(code, action string) error {
+	return reviewPreflightError(&reviewOpaqueContextOperationError{Code: code, Action: action})
+}
+
 // RunReviewPreserveResult durably preserves one raw reviewer result as an
 // incident artifact beside the compact review authority root after a failed
-// capture. It never validates the payload against the reviewing authority and
-// never counts as a captured lens result; recovery re-runs
+// capture. It binds the incident to the exact live selected lens position but
+// never validates the payload contents or counts it as a captured lens result; recovery re-runs
 // `review capture-result` with the preserved payload from the reviewing
 // repository, which performs full native verification.
 func RunReviewPreserveResult(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review preserve-result", stdout, "Durably preserve one raw reviewer result as an incident artifact after a failed capture; never a captured lens result.")
 	cwd := flags.String("cwd", ".", "repository path")
+	repositoryContext := flags.String("repository-context", "", "opaque provider-issued repository context")
 	lineage := flags.String("lineage", "", "exact review lineage identifier from the capture binding")
 	target := flags.String("target", "", "exact frozen target identity from the capture binding")
 	lens := flags.String("lens", "", "exact selected lens from the capture binding")
 	order := flags.Int("order", -1, "zero-based selected lens order from the capture binding")
+	revision := flags.String("expected-revision", "", "exact reviewing authority revision")
 	input := flags.String("input", "", "raw reviewer result file or - for stdin")
 	class := flags.String("class", "", "extraction-failure classification: empty_result or nested_envelope")
-	acquisition := flags.String("acquisition", "", "exact acquisition ID from a prior review acquire-result for this exact binding")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -73,7 +90,17 @@ func RunReviewPreserveResult(args []string, stdout io.Writer) error {
 		return nil
 	}
 	if flags.NArg() != 0 || strings.TrimSpace(*input) == "" {
-		return reviewPreflightError(errors.New("review preserve-result requires exact --cwd, --lineage, --target, --lens, --order, --input, and --acquisition"))
+		return reviewPreflightError(errors.New("review preserve-result requires an exact repository context, --lineage, --target, --lens, --order, and --input"))
+	}
+	contextHandle := strings.TrimSpace(*repositoryContext)
+	if contextHandle != "" && reviewFlagWasProvided(flags, "cwd") {
+		return reviewPreflightError(errors.New("review preserve-result accepts either --repository-context or --cwd, not both"))
+	}
+	if contextHandle != "" && strings.TrimSpace(*revision) == "" {
+		return reviewPreflightError(errors.New("review preserve-result with --repository-context requires --expected-revision"))
+	}
+	if contextHandle == "" && strings.TrimSpace(*revision) != "" {
+		return reviewPreflightError(errors.New("review preserve-result accepts --expected-revision only with --repository-context"))
 	}
 	switch *lens {
 	case reviewtransaction.LensRisk, reviewtransaction.LensResilience, reviewtransaction.LensReadability, reviewtransaction.LensReliability:
@@ -86,18 +113,38 @@ func RunReviewPreserveResult(args []string, stdout io.Writer) error {
 	if !reviewtransaction.ValidResultIncidentClass(reviewtransaction.ResultIncidentClass(*class)) {
 		return reviewPreflightError(fmt.Errorf("review preserve-result requires --class to be empty or one exact canonical incident class; got %q", *class))
 	}
-	// Preserve-result durably saves evidence even from a repository that is not
-	// the reviewing repository (for example a nested-worktree misconfiguration),
-	// so it cannot require the acquisition to resolve against a live compact
-	// store the way capture-result and dispose-result do. It requires the exact
-	// acquire-result ID shape here as a fail-closed format guard; only the
-	// store-bound terminal operations (capture-result, review dispose-result)
-	// prove exact binding equality against the live acquisition record.
-	if !validReviewAcquisitionID(*acquisition) {
-		return reviewPreflightError(fmt.Errorf("review preserve-result requires --acquisition from a prior review acquire-result; got %q", *acquisition))
+	ctx := context.Background()
+	repo := *cwd
+	if contextHandle != "" {
+		resolved, err := reviewtransaction.ResolveReviewRepositoryContext(ctx, contextHandle, reviewtransaction.ReviewRepositoryContextBinding{
+			LineageID: *lineage, TargetIdentity: *target, Revision: *revision,
+		})
+		if err != nil {
+			return reviewOpaqueContextFailure("repository_context_unavailable", "refresh the exact native next_transition before retrying")
+		}
+		repo = resolved
 	}
-	dir, err := reviewtransaction.CompactIncidentsDir(context.Background(), *cwd, *lineage)
+	_, record, err := discoverCompactFacadeReview(ctx, repo, *lineage, false)
 	if err != nil {
+		if contextHandle != "" {
+			return reviewOpaqueContextFailure("repository_context_authority_unavailable", "refresh the exact native next_transition before retrying")
+		}
+		return reviewPreflightError(fmt.Errorf("resolve reviewing authority for preserve-result: %w", err))
+	}
+	state := record.State
+	if state.State != reviewtransaction.StateReviewing || state.LineageID != *lineage ||
+		state.InitialSnapshot.Identity != *target || contextHandle != "" && record.Revision != *revision ||
+		*order >= len(state.SelectedLenses) || state.SelectedLenses[*order] != *lens {
+		if contextHandle != "" {
+			return reviewOpaqueContextFailure("repository_context_binding_mismatch", "refresh the exact native next_transition before retrying")
+		}
+		return reviewPreflightError(errors.New("preserve-result binding does not match the current reviewing authority"))
+	}
+	dir, err := reviewtransaction.CompactIncidentsDir(ctx, repo, *lineage)
+	if err != nil {
+		if contextHandle != "" {
+			return reviewOpaqueContextFailure("repository_context_preserve_unavailable", "retry preserve-result with the same exact binding")
+		}
 		return reviewPreflightError(fmt.Errorf("resolve incident preservation directory: %w", err))
 	}
 	payload, err := readFacadeBytes(*input)
@@ -109,9 +156,29 @@ func RunReviewPreserveResult(args []string, stdout io.Writer) error {
 	}
 	artifact, err := preserveIncidentArtifact(dir, *lineage, *target, *lens, *order, payload, reviewtransaction.ResultIncidentClass(*class))
 	if err != nil {
+		if contextHandle != "" {
+			return reviewOpaqueContextFailure("repository_context_preserve_failed", "retry preserve-result with the same exact binding")
+		}
 		return reviewPreflightError(err)
 	}
+	if contextHandle != "" {
+		artifact.Reference = reviewIncidentReference(artifact)
+		artifact.Path = ""
+	}
 	return encodeReviewJSON(stdout, artifact)
+}
+
+func reviewIncidentReference(artifact reviewIncidentArtifact) string {
+	preimage := struct {
+		Schema, Capability, SHA256, LineageID, TargetIdentity, Lens string
+		SelectedOrder                                               int
+	}{
+		Schema: artifact.Schema, Capability: artifact.Capability, SHA256: artifact.SHA256,
+		LineageID: artifact.LineageID, TargetIdentity: artifact.TargetIdentity,
+		Lens: artifact.Lens, SelectedOrder: artifact.SelectedOrder,
+	}
+	payload, _ := json.Marshal(preimage)
+	return reviewIncidentReferencePrefix + strings.TrimPrefix(facadePayloadHash(payload), "sha256:")
 }
 
 func preserveIncidentArtifact(dir, lineage, target, lens string, order int, payload []byte, class reviewtransaction.ResultIncidentClass) (reviewIncidentArtifact, error) {

@@ -426,41 +426,38 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 	}
 	for _, want := range []string{
 		`spawn("gentle-ai"`,
-		`"review", "acquire-result"`,
 		`"review", "capture-result"`,
 		`"review", "preserve-result"`,
+		`"--repository-context", binding.repository_context`,
+		`"--expected-revision", binding.revision`,
+		`return ["--cwd", cwd]`,
+		`const current = fields === "lens,lineage,order,repository_context,revision,target"`,
 		`"--lineage", binding.lineage`,
 		`"--target", binding.target`,
 		`"--lens", binding.lens`,
 		`"--order", String(binding.order)`,
 		`"--input", "-"`,
-		`"--acquisition", acquisitionId`,
+		`"--preflight"`,
 		`GENTLE_AI_REVIEW_CWD`,
 		`"tool.execute.before"`,
 		`output.args.background === true`,
-		// The pre-launch acquisition is durable and atomic: it is acquired
-		// before launch, and its ID is injected into the launched prompt beside
-		// the unchanged GENTLE_AI_REVIEW_BINDING so tool.execute.after can
-		// recover it.
-		`const acquisitionId = await acquireResult(cwd, binding)`,
-		`output.args.prompt = injectAcquisition(output.args.prompt, acquisitionId)`,
-		`GENTLE_AI_REVIEW_ACQUISITION`,
-		`function injectAcquisition(prompt: string, acquisitionId: string): string`,
-		`function parseAcquisition(prompt: unknown): string`,
+		`await preflightCapture(captureCwd(worktree, directory), parseBinding(output.args.prompt, output.args.subagent_type))`,
 		`!BINDING.test(input.args.prompt)`,
 		`const lens = input.args.subagent_type`,
 		`const binding = parseBinding(input.args.prompt, lens)`,
 		`const cwd = captureCwd(worktree, directory)`,
-		`acquisitionId = parseAcquisition(input.args.prompt)`,
 		// The replayable payload is extracted exactly once before capture, so a
 		// capture failure preserves the extracted strict JSON, never the task
 		// envelope that `review capture-result --input` would reject on replay.
 		`result = reviewerResult(output.output)`,
-		`output.output = await captureResult(cwd, binding, acquisitionId, result)`,
-		`throw await preservedCaptureFailure(cwd, binding, acquisitionId, result, cause)`,
+		`output.output = await captureResult(cwd, binding, result)`,
+		`throw await preservedCaptureFailure(cwd, binding, result, cause)`,
 		// Envelope extraction itself can fail; only then is the raw envelope
 		// preserved, under a distinct extraction-failure cause.
-		`throw await preservedCaptureFailure(cwd, binding, acquisitionId, output.output, cause)`,
+		`throw await preservedCaptureFailure(cwd, binding, output.output, cause)`,
+		`function sessionErrorMessage(binding: ReviewBinding, cause: unknown, code: string): string`,
+		`sessionErrorMessage(binding, cause, "repository_context_preflight_failed")`,
+		`parsed.reference`,
 		`raw reviewer result preserved for recovery`,
 		`raw reviewer result could not be preserved`,
 		// The previously conflated empty/nested-envelope branch must throw two
@@ -475,17 +472,9 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		// bounded raw payload in the thrown error so the transcript retains it.
 		`raw reviewer result follows for manual recovery`,
 		`PRESERVE_EMBED_LIMIT`,
-		// A missing or malformed acquisition surviving launch must fail closed
-		// with the raw output embedded, not silently proceed.
-		`review task is missing GENTLE_AI_REVIEW_ACQUISITION`,
-		`review task acquisition is malformed`,
-		`review task acquisition must carry a non-empty id`,
-		// Version skew (an older installed gentle-ai without acquire-result, or
-		// a malformed/empty acquisition manifest) must fail before launch,
-		// never bypass acquisition with a degraded fallback path.
-		`The reviewer was not launched, so its exactly-once invocation is preserved`,
-		`review acquire-result returned a malformed acquisition manifest`,
-		`review acquire-result returned no acquisition id`,
+		// An older installed gentle-ai without --preflight must degrade
+		// gracefully instead of hard-blocking every bound lens launch.
+		`flag provided but not defined`,
 		`export default ReviewResultArtifactsPlugin`,
 	} {
 		if !strings.Contains(source, want) {
@@ -499,15 +488,6 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 	// must never regress back into one indistinguishable free-text throw.
 	if strings.Contains(source, `reviewer task result is empty or contains a nested envelope`) {
 		t.Fatal("review-result-artifacts.ts regressed to the conflated empty/nested-envelope error message")
-	}
-	// The read-only --preflight verification path and its graceful version-skew
-	// degrade are retired from the plugin: acquire-result is the exactly-once
-	// pre-launch authority now, and version skew must fail closed, never
-	// silently fall back to launching without an acquisition.
-	for _, retired := range []string{"--preflight", "preflightCapture", "flag provided but not defined", "degrade gracefully"} {
-		if strings.Contains(source, retired) {
-			t.Fatalf("review-result-artifacts.ts regressed to the retired preflight/graceful-degrade path: found %q", retired)
-		}
 	}
 	for _, forbidden := range []string{"writeFile", "link(", "chmod(", "createHash", "export {", "export const"} {
 		if strings.Contains(source, forbidden) {

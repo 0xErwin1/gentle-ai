@@ -17,6 +17,7 @@ dist_arg = sys.argv[2]
 contract_root = pathlib.PurePosixPath("contracts/review-integration/v1")
 expected_contract = [
 	contract_root / "fixtures/capabilities-v1.1.fixture.json",
+	contract_root / "fixtures/capabilities-v1.2.fixture.json",
     contract_root / "fixtures/capabilities.fixture.json",
     contract_root / "fixtures/failure.fixture.json",
     contract_root / "fixtures/operation.fixture.json",
@@ -27,6 +28,7 @@ expected_contract = [
     contract_root / "fixtures/status-unrelated.fixture.json",
     contract_root / "fixtures/status.fixture.json",
 	contract_root / "schemas/capabilities-v1.1.schema.json",
+	contract_root / "schemas/capabilities-v1.2.schema.json",
     contract_root / "schemas/capabilities.schema.json",
     contract_root / "schemas/failure.schema.json",
     contract_root / "schemas/operation.schema.json",
@@ -34,6 +36,7 @@ expected_contract = [
     contract_root / "schemas/result-artifact.schema.json",
     contract_root / "schemas/start.schema.json",
     contract_root / "schemas/status.schema.json",
+    contract_root / "schemas/targeted-validation-request.schema.json",
 ]
 expected_names = sorted(path.as_posix() for path in expected_contract)
 

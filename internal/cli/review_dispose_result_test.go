@@ -53,11 +53,10 @@ func TestReviewDisposeResultEscalatesStrandedLineage(t *testing.T) {
 	if err := os.WriteFile(input, []byte(`{"findings":[],"evidence":["checked exact target"]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	captureAcquisitionID := acquireResultForTest(t, repo, started.LineageID, target, lenses[0], 0)
 	var captured bytes.Buffer
 	if err := RunReviewCaptureResult([]string{
 		"--cwd", repo, "--lineage", started.LineageID, "--target", target,
-		"--lens", lenses[0], "--order", "0", "--input", input, "--acquisition", captureAcquisitionID,
+		"--lens", lenses[0], "--order", "0", "--input", input,
 	}, &captured); err != nil {
 		t.Fatalf("capture-result: %v", err)
 	}
@@ -68,7 +67,6 @@ func TestReviewDisposeResultEscalatesStrandedLineage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	disposedAcquisitionID := acquireResultForTest(t, repo, started.LineageID, target, lenses[3], 3)
 	raw := filepath.Join(t.TempDir(), "raw.txt")
 	if err := os.WriteFile(raw, []byte(unreplayableReviewerOutput), 0o600); err != nil {
 		t.Fatal(err)
@@ -76,7 +74,7 @@ func TestReviewDisposeResultEscalatesStrandedLineage(t *testing.T) {
 	var preserved bytes.Buffer
 	if err := RunReviewPreserveResult([]string{
 		"--cwd", repo, "--lineage", started.LineageID, "--target", target,
-		"--lens", lenses[3], "--order", "3", "--input", raw, "--acquisition", disposedAcquisitionID,
+		"--lens", lenses[3], "--order", "3", "--input", raw,
 	}, &preserved); err != nil {
 		t.Fatalf("preserve-result: %v", err)
 	}
@@ -86,7 +84,7 @@ func TestReviewDisposeResultEscalatesStrandedLineage(t *testing.T) {
 	// The preserved payload genuinely cannot be replayed through capture.
 	if err := RunReviewCaptureResult([]string{
 		"--cwd", repo, "--lineage", started.LineageID, "--target", target,
-		"--lens", lenses[3], "--order", "3", "--input", incident.Path, "--acquisition", disposedAcquisitionID,
+		"--lens", lenses[3], "--order", "3", "--input", incident.Path,
 	}, io.Discard); err == nil {
 		t.Fatal("the unreplayable payload was accepted by capture-result")
 	}
@@ -109,7 +107,6 @@ func TestReviewDisposeResultEscalatesStrandedLineage(t *testing.T) {
 		"--artifact-digest", incident.SHA256, "--class", class,
 		"--diagnostic", "decode reviewer result: invalid character after array element",
 		"--reason", reason, "--actor", actor, "--maintainer-authorization", authorization,
-		"--acquisition", disposedAcquisitionID,
 	}
 
 	// An invalid-JSON payload may never be audited as the stronger semantic
@@ -124,7 +121,6 @@ func TestReviewDisposeResultEscalatesStrandedLineage(t *testing.T) {
 		"--reason", reason, "--actor", actor,
 		"--maintainer-authorization", disposeResultAuthorization(repository, started.LineageID, record.Revision,
 			target, lenses[3], 3, incident.SHA256, wrongClass, actor, reason),
-		"--acquisition", disposedAcquisitionID,
 	}
 	if err := RunReview(wrongArgs, io.Discard); err == nil {
 		t.Fatal("wrong_target disposition of a payload that never decoded was accepted")
@@ -193,7 +189,6 @@ func TestReviewDisposeResultFindsClassSuffixedIncidentArtifact(t *testing.T) {
 	lenses := record.State.SelectedLenses
 	target := record.State.InitialSnapshot.Identity
 
-	acquisitionID := acquireResultForTest(t, repo, started.LineageID, target, lenses[3], 3)
 	raw := filepath.Join(t.TempDir(), "raw.txt")
 	if err := os.WriteFile(raw, []byte(unreplayableReviewerOutput), 0o600); err != nil {
 		t.Fatal(err)
@@ -202,7 +197,6 @@ func TestReviewDisposeResultFindsClassSuffixedIncidentArtifact(t *testing.T) {
 	if err := RunReviewPreserveResult([]string{
 		"--cwd", repo, "--lineage", started.LineageID, "--target", target,
 		"--lens", lenses[3], "--order", "3", "--input", raw, "--class", "empty_result",
-		"--acquisition", acquisitionID,
 	}, &preserved); err != nil {
 		t.Fatalf("preserve-result: %v", err)
 	}
@@ -226,7 +220,6 @@ func TestReviewDisposeResultFindsClassSuffixedIncidentArtifact(t *testing.T) {
 		"--artifact-digest", incident.SHA256, "--class", class,
 		"--diagnostic", "decode reviewer result: invalid character after array element",
 		"--reason", reason, "--actor", actor, "--maintainer-authorization", authorization,
-		"--acquisition", acquisitionID,
 	}
 	var output bytes.Buffer
 	if err := RunReview(args, &output); err != nil {
@@ -253,7 +246,6 @@ func TestReviewDisposeResultWrongTargetRequiresADecodablePayload(t *testing.T) {
 	lenses := record.State.SelectedLenses
 	target := record.State.InitialSnapshot.Identity
 
-	acquisitionID := acquireResultForTest(t, repo, started.LineageID, target, lenses[2], 2)
 	raw := filepath.Join(t.TempDir(), "raw.json")
 	if err := os.WriteFile(raw, []byte(wrongTargetReviewerOutput), 0o600); err != nil {
 		t.Fatal(err)
@@ -261,7 +253,7 @@ func TestReviewDisposeResultWrongTargetRequiresADecodablePayload(t *testing.T) {
 	var preserved bytes.Buffer
 	if err := RunReviewPreserveResult([]string{
 		"--cwd", repo, "--lineage", started.LineageID, "--target", target,
-		"--lens", lenses[2], "--order", "2", "--input", raw, "--acquisition", acquisitionID,
+		"--lens", lenses[2], "--order", "2", "--input", raw,
 	}, &preserved); err != nil {
 		t.Fatalf("preserve-result: %v", err)
 	}
@@ -283,7 +275,6 @@ func TestReviewDisposeResultWrongTargetRequiresADecodablePayload(t *testing.T) {
 		"--reason", reason, "--actor", actor,
 		"--maintainer-authorization", disposeResultAuthorization(repository, started.LineageID, record.Revision,
 			target, lenses[2], 2, incident.SHA256, class, actor, reason),
-		"--acquisition", acquisitionID,
 	}
 	var output bytes.Buffer
 	if err := RunReview(args, &output); err != nil {
@@ -310,7 +301,6 @@ func TestReviewDisposeResultRequiresCompleteBinding(t *testing.T) {
 	lenses := record.State.SelectedLenses
 	target := record.State.InitialSnapshot.Identity
 
-	acquisitionID := acquireResultForTest(t, repo, started.LineageID, target, lenses[1], 1)
 	raw := filepath.Join(t.TempDir(), "raw.txt")
 	if err := os.WriteFile(raw, []byte(unreplayableReviewerOutput), 0o600); err != nil {
 		t.Fatal(err)
@@ -318,7 +308,7 @@ func TestReviewDisposeResultRequiresCompleteBinding(t *testing.T) {
 	var preserved bytes.Buffer
 	if err := RunReviewPreserveResult([]string{
 		"--cwd", repo, "--lineage", started.LineageID, "--target", target,
-		"--lens", lenses[1], "--order", "1", "--input", raw, "--acquisition", acquisitionID,
+		"--lens", lenses[1], "--order", "1", "--input", raw,
 	}, &preserved); err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +327,6 @@ func TestReviewDisposeResultRequiresCompleteBinding(t *testing.T) {
 		"--target": target, "--lens": lenses[1], "--order": "1", "--artifact-digest": incident.SHA256,
 		"--class": class, "--diagnostic": "invalid character after array element",
 		"--reason": reason, "--actor": actor, "--maintainer-authorization": authorization,
-		"--acquisition": acquisitionID,
 	}
 	argsWithout := func(dropped string) []string {
 		args := []string{"dispose-result"}

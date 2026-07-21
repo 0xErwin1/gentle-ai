@@ -19,6 +19,7 @@ import (
 const (
 	reviewResultArtifactSchema     = "gentle-ai.review-result-artifact/v1"
 	reviewResultArtifactCapability = "review.native_result_artifact"
+	reviewResultReferencePrefix    = "rart1_"
 	reviewResultArtifactLimit      = 4 << 20
 	reviewFinalEvidenceDir         = "final-evidence"
 	reviewFinalEvidenceFile        = "verification.txt"
@@ -115,7 +116,8 @@ func readCapturedFinalEvidence(storeDir string, state reviewtransaction.CompactS
 type reviewResultArtifact struct {
 	Schema         string `json:"schema"`
 	Capability     string `json:"capability"`
-	Path           string `json:"path"`
+	Path           string `json:"path,omitempty"`
+	Reference      string `json:"reference,omitempty"`
 	SHA256         string `json:"sha256"`
 	LineageID      string `json:"lineage_id"`
 	TargetIdentity string `json:"target_identity"`
@@ -172,65 +174,10 @@ var syncReviewerArtifactDirectory = func(path string) error {
 	return directory.Close()
 }
 
-// ReviewAcquireResultResult reports the durable, immutable pre-launch
-// acquisition one bound reviewer task requires before it is launched. Its
-// existence is the exactly-once authority for the launch: capture-result,
-// preserve-result, and review dispose-result must present its exact ID.
-type ReviewAcquireResultResult struct {
-	Operation   string                                     `json:"operation"`
-	Acquisition reviewtransaction.CompactResultAcquisition `json:"acquisition"`
-}
-
-// RunReviewAcquireResult durably and atomically acquires the exact pre-launch
-// slot identified by the bound lineage, target, lens, and order, recording an
-// immutable unknown_outcome record while holding the store lock before the
-// caller launches the reviewer task. Its existence consumes the binding's
-// launch slot: a duplicate, concurrent, or post-crash retry of the identical
-// binding always refuses, because success would authorize a second launch.
-func RunReviewAcquireResult(args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review acquire-result", stdout, "Durably and atomically acquire the exact pre-launch slot for one bound reviewer task before it is launched. Records an immutable unknown_outcome record that capture-result, preserve-result, and review dispose-result must reference by exact ID. A duplicate, concurrent, or post-crash retry of the identical binding always refuses.")
-	cwd := flags.String("cwd", ".", "repository path")
-	lineage := flags.String("lineage", "", "exact review lineage identifier")
-	target := flags.String("target", "", "exact frozen target identity")
-	lens := flags.String("lens", "", "exact selected lens")
-	order := flags.Int("order", -1, "zero-based selected lens order")
-	replay := flags.Bool("replay", false, "recover the ID of an acquisition already durably recorded for this exact binding instead of acquiring a new one; use only to recover from a failed handoff of a prior successful acquire-result, never to obtain a fresh launch authorization")
-	if err := parseReviewFlags(flags, args); err != nil {
-		return err
-	}
-	if reviewHelpRequested(args) {
-		return nil
-	}
-	if flags.NArg() != 0 || strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*target) == "" ||
-		strings.TrimSpace(*lens) == "" || *order < 0 {
-		return reviewPreflightError(errors.New("review acquire-result requires exact --cwd, --lineage, --target, --lens, and --order"))
-	}
-	ctx := context.Background()
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
-	if err != nil {
-		return fmt.Errorf("resolve review repository root: %w", err)
-	}
-	store, _, err := discoverCompactFacadeReview(ctx, root, *lineage, false)
-	if err != nil {
-		return reviewPreflightError(fmt.Errorf("resolve reviewing authority for lineage %q under repository %q: %w; if the review was started in a different repository (for example a nested one), re-run with --cwd set to that repository", *lineage, root, err))
-	}
-	if *replay {
-		acquisition, err := store.ReadResultAcquisitionByBinding(*lineage, *target, *lens, *order)
-		if err != nil {
-			return reviewPreflightError(err)
-		}
-		return encodeReviewJSON(stdout, ReviewAcquireResultResult{Operation: "review/acquire-result", Acquisition: acquisition})
-	}
-	acquisition, err := store.AcquireReviewerResult(ctx, *target, *lens, *order)
-	if err != nil {
-		return reviewPreflightError(err)
-	}
-	return encodeReviewJSON(stdout, ReviewAcquireResultResult{Operation: "review/acquire-result", Acquisition: acquisition})
-}
-
 func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review capture-result", stdout, "Capture one strict reviewer result in native authority and emit its bound manifest.")
 	cwd := flags.String("cwd", ".", "repository path")
+	repositoryContext := flags.String("repository-context", "", "opaque provider-issued repository context")
 	lineage := flags.String("lineage", "", "exact review lineage identifier")
 	target := flags.String("target", "", "exact frozen target identity")
 	lens := flags.String("lens", "", "exact selected lens")
@@ -238,7 +185,6 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	revision := flags.String("expected-revision", "", "exact reviewing authority revision")
 	input := flags.String("input", "", "raw reviewer result JSON file or - for stdin")
 	preflight := flags.Bool("preflight", false, "verify the capture binding against the current reviewing authority without reading or persisting any result")
-	acquisition := flags.String("acquisition", "", "exact acquisition ID from a prior review acquire-result for this exact binding; required unless --preflight")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -247,42 +193,62 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	}
 	if flags.NArg() != 0 || strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*target) == "" ||
 		strings.TrimSpace(*lens) == "" || *order < 0 || (!*preflight && strings.TrimSpace(*input) == "") {
-		return reviewPreflightError(errors.New("review capture-result requires exact --cwd, --lineage, --target, --lens, --order, and --input (or --preflight)"))
+		return reviewPreflightError(errors.New("review capture-result requires an exact repository context, --lineage, --target, --lens, --order, and --input (or --preflight)"))
 	}
 	if *preflight && strings.TrimSpace(*input) != "" {
 		return reviewPreflightError(errors.New("review capture-result --preflight verifies the binding only and does not accept --input"))
 	}
+	contextHandle := strings.TrimSpace(*repositoryContext)
+	if contextHandle != "" && reviewFlagWasProvided(flags, "cwd") {
+		return reviewPreflightError(errors.New("review capture-result accepts either --repository-context or --cwd, not both"))
+	}
+	if contextHandle != "" && strings.TrimSpace(*revision) == "" {
+		return reviewPreflightError(errors.New("review capture-result with --repository-context requires --expected-revision"))
+	}
 	ctx := context.Background()
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
-	if err != nil {
-		return fmt.Errorf("resolve review repository root: %w", err)
+	var root string
+	var err error
+	if contextHandle != "" {
+		root, err = reviewtransaction.ResolveReviewRepositoryContext(ctx, contextHandle, reviewtransaction.ReviewRepositoryContextBinding{
+			LineageID: *lineage, TargetIdentity: *target, Revision: *revision,
+		})
+		if err != nil {
+			return reviewOpaqueContextFailure("repository_context_unavailable", "refresh the exact native next_transition before retrying")
+		}
+	} else {
+		root, err = (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
+		if err != nil {
+			return fmt.Errorf("resolve review repository root: %w", err)
+		}
 	}
 	store, record, err := discoverCompactFacadeReview(ctx, root, *lineage, false)
+	repositoryDescription := fmt.Sprintf("repository %q", root)
+	if contextHandle != "" {
+		repositoryDescription = "the provider-issued repository context"
+	}
 	if err != nil {
-		return reviewPreflightError(fmt.Errorf("resolve reviewing authority for lineage %q under repository %q: %w; if the review was started in a different repository (for example a nested one), re-run with --cwd set to that repository", *lineage, root, err))
+		if contextHandle != "" {
+			return reviewOpaqueContextFailure("repository_context_authority_unavailable", "refresh the exact native next_transition before retrying")
+		}
+		return reviewPreflightError(fmt.Errorf("resolve reviewing authority for lineage %q under %s: %w; if the review was started in a different repository (for example a nested one), re-run with --cwd set to that repository", *lineage, repositoryDescription, err))
 	}
 	state := record.State
 	if state.State != reviewtransaction.StateReviewing || state.LineageID != *lineage || state.InitialSnapshot.Identity != *target ||
 		(strings.TrimSpace(*revision) != "" && record.Revision != *revision) || *order >= len(state.SelectedLenses) || state.SelectedLenses[*order] != *lens {
+		if contextHandle != "" {
+			return reviewPreflightError(errors.New("capture binding does not match the current reviewing authority under the provider-issued repository context; refresh the exact native next transition"))
+		}
 		return reviewPreflightError(fmt.Errorf("capture binding does not match the current reviewing authority under repository %q; verify the frozen lineage, target, lens, and order for that repository, or re-run with --cwd set to the repository where the review was started", root))
 	}
 	if *preflight {
+		publicRoot := root
+		if contextHandle != "" {
+			publicRoot = ""
+		}
 		return encodeReviewJSON(stdout, reviewCapturePreflightResult{
-			Schema: reviewCapturePreflightSchema, Capability: reviewCapturePreflightCapability, RepositoryRoot: root,
+			Schema: reviewCapturePreflightSchema, Capability: reviewCapturePreflightCapability, RepositoryRoot: publicRoot,
 			LineageID: state.LineageID, TargetIdentity: state.InitialSnapshot.Identity, Lens: *lens, SelectedOrder: *order,
 		})
-	}
-	// The acquisition is the exactly-once pre-launch authority: capture must
-	// present the exact ID a prior review acquire-result issued for this exact
-	// binding. A missing or mismatched ID is refused before any input is read.
-	// Checked only once the binding itself is proven to match the current
-	// reviewing authority under this repository, so a wrong --cwd or a stale
-	// lineage/target/lens/order still surfaces its own actionable error first.
-	if strings.TrimSpace(*acquisition) == "" {
-		return reviewPreflightError(errors.New("review capture-result requires --acquisition from a prior review acquire-result for this exact binding, unless --preflight"))
-	}
-	if _, err := store.ReadResultAcquisition(*lineage, *target, *lens, *order, *acquisition); err != nil {
-		return reviewPreflightError(fmt.Errorf("review capture-result refused: acquisition binding mismatch: %w", err))
 	}
 	payload, err := readFacadeBytes(*input)
 	if err != nil {
@@ -313,9 +279,29 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		return captureErr
 	})
 	if err != nil {
+		if contextHandle != "" {
+			return reviewOpaqueContextFailure("repository_context_capture_failed", "retry capture-result with the same exact binding or refresh status")
+		}
 		return reviewPreflightError(err)
 	}
+	if contextHandle != "" {
+		artifact.Reference = reviewResultReference(artifact)
+		artifact.Path = ""
+	}
 	return encodeReviewJSON(stdout, artifact)
+}
+
+func reviewResultReference(artifact reviewResultArtifact) string {
+	preimage := struct {
+		Schema, Capability, SHA256, LineageID, TargetIdentity, Lens string
+		SelectedOrder                                               int
+	}{
+		Schema: artifact.Schema, Capability: artifact.Capability, SHA256: artifact.SHA256,
+		LineageID: artifact.LineageID, TargetIdentity: artifact.TargetIdentity,
+		Lens: artifact.Lens, SelectedOrder: artifact.SelectedOrder,
+	}
+	payload, _ := json.Marshal(preimage)
+	return reviewResultReferencePrefix + strings.TrimPrefix(facadePayloadHash(payload), "sha256:")
 }
 func captureReviewerArtifact(storeDir string, state reviewtransaction.CompactState, order int, payload []byte) (reviewResultArtifact, error) {
 	dir := filepath.Join(storeDir, reviewtransaction.CompactReviewerResultsDir)
@@ -518,10 +504,22 @@ func readVerifiedReviewerArtifact(artifact reviewResultArtifact, storeDir string
 		return nil, errors.New("artifact manifest does not match frozen lineage, target, lens, and order")
 	}
 	wantPath := filepath.Join(storeDir, reviewtransaction.CompactReviewerResultsDir, fmt.Sprintf("%02d-%s.json", artifact.SelectedOrder, artifact.Lens))
-	if !filepath.IsAbs(artifact.Path) || filepath.Clean(artifact.Path) != artifact.Path || artifact.Path != wantPath {
+	path := artifact.Path
+	switch {
+	case artifact.Path != "" && artifact.Reference != "":
+		return nil, errors.New("artifact manifest mixes legacy path and opaque reference")
+	case artifact.Reference != "":
+		if artifact.Reference != reviewResultReference(artifact) {
+			return nil, errors.New("artifact opaque reference does not match its frozen binding")
+		}
+		path = wantPath
+	case artifact.Path == "":
+		return nil, errors.New("artifact manifest has no provider-owned locator")
+	}
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || path != wantPath {
 		return nil, errors.New("artifact path is outside native transaction ownership")
 	}
-	pathInfo, err := os.Lstat(artifact.Path)
+	pathInfo, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
 	}
@@ -533,7 +531,7 @@ func readVerifiedReviewerArtifact(artifact reviewResultArtifact, storeDir string
 		return nil, errors.New("artifact identity is unavailable")
 	}
 	reviewArtifactAfterLstat()
-	file, err := os.Open(artifact.Path)
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
@@ -546,7 +544,7 @@ func readVerifiedReviewerArtifact(artifact reviewResultArtifact, storeDir string
 	if err != nil || len(payload) > reviewResultArtifactLimit {
 		return nil, errors.New("artifact exceeds the native result size limit")
 	}
-	after, err := os.Lstat(artifact.Path)
+	after, err := os.Lstat(path)
 	if err != nil || !os.SameFile(opened, after) {
 		return nil, errors.New("artifact path changed during read")
 	}
