@@ -491,15 +491,14 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
 =======================================
 
   [ok]  tool:gentle-ai                 gentle-ai found at /usr/local/bin/gentle-ai
-  [ok]  tool:engram                    engram found at /usr/local/bin/engram
   [ok]  tool:gga                       gga found at /usr/local/bin/gga
+  [ok]  tool:engram                    engram found at /usr/local/bin/engram
   [ok]  tool:claude                    claude found at /usr/local/bin/claude
-  [ok]  tool:opencode                  opencode found at /usr/local/bin/opencode
   [ok]  state:json                     state file OK — 1 agent(s) installed: claude-code
   [ok]  engram:reachable               engram health endpoint OK at http://localhost:7437/health (HTTP 200)
   [ok]  disk:space                     1024 MB free on %s filesystem
 
-Summary: 8 passed, 0 failed, 0 warnings
+Summary: 7 passed, 0 failed, 0 warnings
 Status:  healthy
 `, filepath.Join(homeDir, ".gentle-ai"))
 	if got := buf.String(); got != want {
@@ -610,7 +609,7 @@ func TestCheckToolBinaries_StateMissing_ChecksCoreOnly(t *testing.T) {
 
 	required := make(map[string]struct{}, len(results))
 	for _, r := range results {
-		required[r.Name] = struct{}{}
+		required[string(r.Name)] = struct{}{}
 	}
 	for _, core := range []string{"tool:gentle-ai", "tool:gga", "tool:engram"} {
 		if _, ok := required[core]; !ok {
