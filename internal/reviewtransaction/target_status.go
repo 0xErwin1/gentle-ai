@@ -91,6 +91,7 @@ type targetStatusCandidate struct {
 	lineage            string
 	compact            *CompactRecord
 	legacy             *ValidatedChain
+	legacyStore        *Store
 	receiptIdentity    string
 	receiptPublished   bool
 	receiptReplayable  bool
@@ -134,70 +135,14 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		CandidateLineageIDs: []string{},
 	}
 
-	var compactStores []CompactStore
-	var err error
-	if request.LineageID == "" {
-		compactStores, err = CompactAuthorityLeaves(ctx, repo)
-	} else {
-		compactStores, err = DiscoverCompactStores(ctx, repo)
-		for index := len(compactStores) - 1; index >= 0; index-- {
-			if compactStores[index].lineageID != request.LineageID {
-				compactStores = append(compactStores[:index], compactStores[index+1:]...)
-			}
-		}
-	}
+	view, err := loadTargetStatusAuthorityView(ctx, repo, request)
 	if err != nil {
-		return corruptedTargetStatus(base), nil
-	}
-	compact := make(map[string]targetStatusCandidate, len(compactStores))
-	for _, store := range compactStores {
-		record, loadErr := store.Load()
-		if loadErr != nil {
-			return corruptedTargetStatus(base), nil
-		}
-		identity, published, replayable, receiptErr := inspectCompactTargetReceipt(store, record.State)
-		if receiptErr != nil {
-			return corruptedTargetStatus(base), nil
-		}
-		pending, pendingErr := store.PendingFinalizeAttemptReadOnly()
-		if pendingErr != nil {
-			return corruptedTargetStatus(base), nil
-		}
-		copy := record
-		compact[record.State.LineageID] = targetStatusCandidate{
-			version: AuthorityVersionCompact, lineage: record.State.LineageID, compact: &copy,
-			receiptIdentity: identity, receiptPublished: published, receiptReplayable: replayable, pendingFinalize: pending != nil,
-		}
-	}
-
-	legacyStores, err := DiscoverAuthoritativeStores(ctx, repo)
-	if err != nil {
-		return corruptedTargetStatus(base), nil
-	}
-	legacy := make(map[string]ValidatedChain, len(legacyStores))
-	legacyStoreByLineage := make(map[string]Store, len(legacyStores))
-	for _, store := range legacyStores {
-		if request.LineageID != "" && store.lineageID != request.LineageID {
-			continue
-		}
-		chain, loadErr := store.LoadChain()
-		if loadErr != nil {
-			return corruptedTargetStatus(base), nil
-		}
-		lineage := chain.Records[len(chain.Records)-1].Transaction.LineageID
-		legacy[lineage] = chain
-		legacyStoreByLineage[lineage] = store
-	}
-	for lineage := range compact {
-		if _, mixed := legacy[lineage]; mixed {
-			return corruptedTargetStatus(base), nil
-		}
+		return targetStatusFailure(base, err)
 	}
 
 	candidates := []targetStatusCandidate{}
 	scopeChangedCandidates := []targetStatusCandidate{}
-	unassessableScopeCandidates := []targetStatusCandidate{}
-	for lineage, candidate := range compact {
+	for lineage, candidate := range view.compact {
 		if request.LineageID != "" && request.LineageID != lineage {
 			continue
 		}
@@ -214,9 +159,11 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 				continue
 			}
 		} else if state.State == StateCorrectionRequired {
-			requested := candidate.compact.State
-			requested.InitialSnapshot = live
-			switch classifyCompactCorrectionTarget(ctx, repo, state, requested) {
+			claim, claimErr := classifyCompactCorrectionTargetForStatus(ctx, repo, state, live)
+			if claimErr != nil {
+				return targetStatusFailure(base, claimErr)
+			}
+			switch claim {
 			case compactCorrectionTargetResume, compactCorrectionTargetBlocked:
 				candidates = append(candidates, candidate)
 				continue
@@ -226,45 +173,35 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 				candidates = append(candidates, candidate)
 				continue
 			}
-		} else if compactLiveTargetMatchesSnapshot(ctx, repo, state, live, true) {
+		} else if compactLiveTargetMatchesValidatedSnapshot(state, live, true) {
 			candidates = append(candidates, candidate)
 			continue
 		}
 		if request.LineageID == "" && candidate.receiptPublished && (state.State == StateApproved || state.State == StateEscalated) {
-			gate := GatePostApply
-			if live.Projection == ProjectionStaged {
-				gate = GatePreCommit
-			}
-			assessment, assessErr := AssessCompactGateTarget(ctx, repo, state, NativeGateRequestInput{
-				Gate: gate, LineageID: state.LineageID, IntendedUntracked: append([]string{}, state.CurrentSnapshot.IntendedUntracked...),
-			})
-			if assessErr != nil {
-				unassessableScopeCandidates = append(unassessableScopeCandidates, candidate)
-				continue
-			}
-			if assessment.Applicability == CompactGateTargetScopeChanged {
+			if projectCompactTerminalHistory(state, live) == compactTerminalHistoryScopeChanged {
 				scopeChangedCandidates = append(scopeChangedCandidates, candidate)
 			}
 		}
 	}
-	for lineage, chain := range legacy {
+	for lineage, candidate := range view.legacy {
 		if request.LineageID != "" && request.LineageID != lineage {
 			continue
 		}
+		chain := *candidate.legacy
 		transaction := chain.Records[len(chain.Records)-1].Transaction
-		if legacyLiveTargetMatchesSnapshot(ctx, repo, transaction, live) {
-			receiptIdentity := ""
+		if legacyLiveTargetMatchesValidatedSnapshot(transaction, live) {
 			if transaction.State == StateApproved {
-				receiptIdentity, err = inspectLegacyTargetReceipt(legacyStoreByLineage[lineage], transaction)
-				if err != nil {
+				if candidate.legacyStore == nil {
 					return corruptedTargetStatus(base), nil
 				}
+				identity, receiptErr := inspectLegacyTargetReceipt(*candidate.legacyStore, transaction)
+				if receiptErr != nil {
+					return targetStatusFailure(base, receiptErr)
+				}
+				candidate.receiptIdentity = identity
+				candidate.receiptPublished = identity != ""
 			}
-			copy := chain
-			candidates = append(candidates, targetStatusCandidate{
-				version: AuthorityVersionLegacy, lineage: lineage, legacy: &copy,
-				receiptIdentity: receiptIdentity, receiptPublished: receiptIdentity != "",
-			})
+			candidates = append(candidates, candidate)
 		}
 	}
 	sort.Slice(candidates, func(i, j int) bool {
@@ -276,11 +213,7 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 	sort.Slice(scopeChangedCandidates, func(i, j int) bool {
 		return scopeChangedCandidates[i].lineage < scopeChangedCandidates[j].lineage
 	})
-	if len(candidates) == 0 && len(scopeChangedCandidates) > 0 && len(scopeChangedCandidates)+len(unassessableScopeCandidates) > 1 {
-		scopeChangedCandidates = append(scopeChangedCandidates, unassessableScopeCandidates...)
-		sort.Slice(scopeChangedCandidates, func(i, j int) bool {
-			return scopeChangedCandidates[i].lineage < scopeChangedCandidates[j].lineage
-		})
+	if len(candidates) == 0 && len(scopeChangedCandidates) > 1 {
 		base.Applicability = TargetApplicabilityAmbiguous
 		base.Action = TargetStatusActionSelectLineage
 		base.Replayability = ReplayabilityStatusRequired
@@ -289,10 +222,6 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		}
 		return base, nil
 	}
-	if len(candidates) == 0 && len(unassessableScopeCandidates) > 0 {
-		return corruptedTargetStatus(base), nil
-	}
-
 	switch len(candidates) {
 	case 0:
 		base.Applicability = TargetApplicabilityUnrelated
@@ -396,33 +325,67 @@ func inspectLegacyTargetReceipt(store Store, transaction Transaction) (string, e
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
-func inspectCompactTargetReceipt(store CompactStore, state CompactState) (identity string, published, replayable bool, err error) {
+type compactTargetArtifactObservation struct {
+	exists    bool
+	identity  string
+	content   []byte
+	canonical []byte
+}
+
+func newCompactTargetArtifactObservation(payload, canonical []byte) compactTargetArtifactObservation {
+	sum := sha256.Sum256(payload)
+	return compactTargetArtifactObservation{
+		exists: true, identity: "sha256:" + hex.EncodeToString(sum[:]),
+		content: append([]byte(nil), payload...), canonical: append([]byte(nil), canonical...),
+	}
+}
+
+func compactTargetArtifactObservationsEqual(left, right compactTargetArtifactObservation) bool {
+	return left.exists == right.exists && left.identity == right.identity &&
+		bytes.Equal(left.content, right.content) && bytes.Equal(left.canonical, right.canonical)
+}
+
+type compactTargetReceiptObservation struct {
+	artifact   compactTargetArtifactObservation
+	published  bool
+	replayable bool
+}
+
+func inspectCompactTargetReceipt(store CompactStore, state CompactState) (compactTargetReceiptObservation, error) {
 	payload, readErr := os.ReadFile(store.ReceiptPath())
 	if errors.Is(readErr, os.ErrNotExist) {
 		if state.State != StateApproved && state.State != StateEscalated {
-			return "", false, false, nil
+			return compactTargetReceiptObservation{}, nil
 		}
 		if _, deriveErr := state.Receipt(); deriveErr != nil {
-			return "", false, false, fmt.Errorf("derive terminal compact receipt replay proof: %w", deriveErr)
+			return compactTargetReceiptObservation{}, fmt.Errorf("derive terminal compact receipt replay proof: %w", deriveErr)
 		}
-		return "", false, true, nil
+		return compactTargetReceiptObservation{replayable: true}, nil
 	}
 	if readErr != nil {
-		return "", false, false, fmt.Errorf("read compact target receipt: %w", readErr)
+		return compactTargetReceiptObservation{}, fmt.Errorf("read compact target receipt: %w", readErr)
+	}
+	observation := compactTargetReceiptObservation{
+		artifact: newCompactTargetArtifactObservation(payload, nil),
 	}
 	expected, deriveErr := state.Receipt()
 	if deriveErr != nil {
-		return "", false, false, errors.New("non-terminal compact authority has a published receipt")
+		return observation, errors.New("non-terminal compact authority has a published receipt")
 	}
 	existing, parseErr := ParseCompactReceipt(payload)
 	if parseErr != nil {
-		return "", false, false, fmt.Errorf("parse compact target receipt: %w", parseErr)
+		return observation, fmt.Errorf("parse compact target receipt: %w", parseErr)
 	}
 	if !CompactReceiptEqual(existing, expected) {
-		return "", false, false, errors.New("compact target receipt does not equal the derived receipt")
+		return observation, errors.New("compact target receipt does not equal the derived receipt")
 	}
-	sum := sha256.Sum256(payload)
-	return "sha256:" + hex.EncodeToString(sum[:]), true, false, nil
+	canonical, marshalErr := json.MarshalIndent(existing, "", "  ")
+	if marshalErr != nil {
+		return observation, fmt.Errorf("canonicalize compact target receipt: %w", marshalErr)
+	}
+	observation.artifact.canonical = append(canonical, '\n')
+	observation.published = true
+	return observation, nil
 }
 
 // targetStatusAction maps a state to the single operation that state accepts.
@@ -445,31 +408,14 @@ func targetStatusAction(state State) (TargetStatusAction, Replayability, Recover
 }
 
 func compactLiveTargetMatchesSnapshot(ctx context.Context, repo string, state CompactState, live Snapshot, requireCurrentCandidate bool) bool {
-	initial := state.InitialSnapshot
-	proof := initial.IntendedUntrackedProof
-	if requireCurrentCandidate {
-		proof = state.CurrentSnapshot.IntendedUntrackedProof
-	}
-	if initial.Projection != live.Projection || !compactStartTargetKindsCompatible(initial.Kind, live.Kind) ||
-		initial.BaseTree != live.BaseTree || requireCurrentCandidate && state.CurrentSnapshot.CandidateTree != live.CandidateTree ||
-		pathsAreSubset(live.Paths, state.GenesisPaths) != nil || !equalStrings(initial.IntendedUntracked, live.IntendedUntracked) ||
-		proof != live.IntendedUntrackedProof || len(live.LedgerIDs) != 0 {
+	if !compactLiveTargetMatchesValidatedSnapshot(state, live, requireCurrentCandidate) {
 		return false
 	}
 	return (SnapshotBuilder{Repo: repo}).ValidateEvidence(ctx, live) == nil
 }
 
 func legacyLiveTargetMatchesSnapshot(ctx context.Context, repo string, transaction Transaction, live Snapshot) bool {
-	genesis := transaction.GenesisPaths
-	if len(genesis) == 0 {
-		genesis = transaction.Snapshot.Paths
-	}
-	kindsMatch := compactStartTargetKindsCompatible(transaction.Snapshot.Kind, live.Kind) ||
-		transaction.Snapshot.Kind == TargetFixDiff && (live.Kind == TargetCurrentChanges || live.Kind == TargetBaseDiff)
-	if transaction.Snapshot.Projection != live.Projection || !kindsMatch ||
-		transaction.BaseTree != live.BaseTree || transaction.FinalCandidateTree != live.CandidateTree ||
-		pathsAreSubset(live.Paths, genesis) != nil || !equalStrings(transaction.Snapshot.IntendedUntracked, live.IntendedUntracked) ||
-		transaction.Snapshot.IntendedUntrackedProof != live.IntendedUntrackedProof || len(live.LedgerIDs) != 0 {
+	if !legacyLiveTargetMatchesValidatedSnapshot(transaction, live) {
 		return false
 	}
 	return (SnapshotBuilder{Repo: repo}).ValidateEvidence(ctx, live) == nil

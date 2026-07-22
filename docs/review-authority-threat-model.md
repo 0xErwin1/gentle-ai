@@ -11,7 +11,9 @@ The compact review store protects valid authority from accidental corruption and
 | Truncated, malformed, or semantically invalid state | Yes | Validation fails closed; existing authority remains unchanged. |
 | Interrupted replacement | Yes | Atomic replacement and filesystem synchronization preserve either the old or new valid record where practical. |
 | Concurrent or stale writer | Yes | A lock plus expected revision rejects stale transitions; an exact retry is idempotent. |
+| STATUS overlaps terminal receipt publication | Yes | A bounded double-collect rechecks state revision and snapshot identities, then requires matching receipt and journal existence, raw identity, and canonical content around that state observation; continuing churn returns a concurrency error. |
 | Repository changes after review | Yes | Gates re-derive evidence from live Git and reject incompatible scope or identity changes. |
+| Historical intended path becomes tracked or disappears | Yes | Read-only status treats frozen membership as receipt-bound history; healthy authority and receipt bytes remain unchanged. |
 | Terminal authority needs another review | Yes | `review recover` creates a distinct audited successor; predecessor state and receipt bytes remain immutable. |
 | Malicious same-user local actor | No | No authenticity or tamper-resistance claim is made. |
 
@@ -24,6 +26,7 @@ The compact review store protects valid authority from accidental corruption and
 - Native authority mutations first take a shared advisory maintenance lock at `<git-common-dir>/gentle-ai/REVIEW-MAINTENANCE.lock`, outside the replaceable `review-transactions` authority subtree, then their lineage or v2 lock; release is reversed. Approved maintenance tools take the same lock exclusively with a bounded context. The lock coordinates cooperative Gentle AI participants only and is not a defense against a malicious same-user actor.
 - Exact retry recognition for idempotent operations.
 - Live-Git gate re-derivation rather than trusting persisted mirrors.
+- Request-scoped status projection: one validated live snapshot is compared in memory with once-loaded authority, graph, and receipt evidence, so terminal history cannot amplify Git subprocesses.
 - Checksums only where useful for detecting accidental corruption; they are not authentication.
 
 ## Candidate Projections
@@ -33,6 +36,8 @@ The compact review store protects valid authority from accidental corruption and
 After committing a staged candidate, use `gentle-ai review start --projection staged --base-ref <ref>` (and `--committed-only` when tracked workspace changes exist) to record immutable base-to-HEAD delivery provenance. It accepts no intended-untracked paths, remains domain-separated in the v2 identity, and can reuse only the matching staged authority; an otherwise identical workspace authority remains separate.
 
 For a staged authority, `post-apply` and `pre-commit` re-derive the exact index; a divergent worktree alone does not broaden or invalidate that candidate. `pre-push` and `pre-pr` continue to validate the delivered commit/base-diff tree against the same staged receipt.
+
+Frozen intended-untracked membership proves what entered the reviewed candidate tree. It is never replayed as a live filesystem precondition during historical STATUS projection. If current `HEAD^{tree}` equals the stored final candidate tree, Git tree identity proves the reviewed bytes and modes were delivered; later tracking or deletion is normal repository evolution. Clean or disjoint follow-up work is unrelated, while overlap or contraction remains scope-changed. Neither case authorizes mutation of the historical state or receipt. Only malformed state, checksum, graph, or receipt evidence is corruption; operational Git and filesystem failures remain errors.
 
 ## Review Input Schemas
 

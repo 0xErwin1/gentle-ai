@@ -3,13 +3,17 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 )
@@ -814,4 +818,156 @@ func newPublishedV149CLIRepo(t *testing.T) (string, string, string) {
 		}
 	}
 	return repo, authorityRoot, filepath.Join(destination, "artifacts", "receipt.json")
+}
+
+func TestNegotiatedReviewStatusCompletesWithOneHundredHistoricalLeaves(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeNegotiatedStatusHistory(t, repo, 100)
+	if stores, err := reviewtransaction.CompactAuthorityLeaves(context.Background(), repo); err != nil {
+		t.Fatalf("load generated status history: %v", err)
+	} else if len(stores) != 100 {
+		t.Fatalf("generated status history leaves = %d, want 100", len(stores))
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("related follow-up\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	started := time.Now()
+	var output bytes.Buffer
+	err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo}, &output)
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatalf("negotiated status exceeded or failed inside %s deadline after %s: %v\n%s", reviewFacadeOperationTimeout, elapsed, err, output.String())
+	}
+	if elapsed >= reviewFacadeOperationTimeout {
+		t.Fatalf("negotiated status took %s, want less than %s", elapsed, reviewFacadeOperationTimeout)
+	}
+	var status ReviewTargetStatusResult
+	if err := json.Unmarshal(output.Bytes(), &status); err != nil {
+		t.Fatal(err)
+	}
+	if status.Applicability != reviewtransaction.TargetApplicabilityAmbiguous ||
+		status.Action != reviewtransaction.TargetStatusActionSelectLineage || len(status.Candidates) != 100 {
+		t.Fatalf("negotiated 100-leaf status = %#v", status)
+	}
+	t.Logf("negotiated status completed 100 terminal histories in %s within the %s contract deadline", elapsed, reviewFacadeOperationTimeout)
+}
+
+func TestNegotiatedReviewStatusReturnsFailureForUnreadableAuthority(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var startedOutput bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "status-unreadable-authority"}, &startedOutput); err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	if err := json.Unmarshal(startedOutput.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(store.StatePath()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(store.StatePath(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	err = RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo}, &output)
+	if err == nil {
+		t.Fatalf("negotiated status converted unreadable authority into semantic output: %s", output.String())
+	}
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Code != "operation_failed" || failure.Phase != "pre_native" ||
+		failure.MutationOutcome != ReviewMutationNotStarted || failure.AuthorityApplicability == "corrupted" {
+		t.Fatalf("unreadable authority failure = %#v", failure)
+	}
+}
+
+func writeNegotiatedStatusHistory(t *testing.T, repo string, count int) {
+	t.Helper()
+	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	risk, lines, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ClassifySnapshotRisk(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lenses := []string{}
+	if risk == reviewtransaction.RiskMedium {
+		lenses = []string{reviewtransaction.LensReliability}
+	} else if risk == reviewtransaction.RiskHigh {
+		lenses = []string{
+			reviewtransaction.LensRisk,
+			reviewtransaction.LensResilience,
+			reviewtransaction.LensReadability,
+			reviewtransaction.LensReliability,
+		}
+	}
+	rootStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "status-history-root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	versionRoot := filepath.Dir(rootStore.Dir)
+	stateName, receiptName := filepath.Base(rootStore.StatePath()), filepath.Base(rootStore.ReceiptPath())
+	for index := 0; index < count; index++ {
+		lineage := fmt.Sprintf("status-cli-history-%03d", index)
+		state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
+			LineageID: lineage, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
+			Snapshot: snapshot, PolicyHash: "sha256:" + strings.Repeat("1", 64), RiskLevel: risk,
+			SelectedLenses: append([]string(nil), lenses...), OriginalChangedLines: &lines,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		results := make([]reviewtransaction.LensResult, len(lenses))
+		for lensIndex, lens := range lenses {
+			results[lensIndex] = reviewtransaction.LensResult{Lens: lens, Findings: []reviewtransaction.Finding{}, Evidence: []string{"reviewed"}}
+		}
+		if err := state.CompleteReview(reviewtransaction.CompactReviewInput{
+			LensResults: results, Classifications: []reviewtransaction.FindingEvidence{}, RefuterOutcomes: []reviewtransaction.EvidenceResult{},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := state.CompleteVerification([]byte("verified\n"), true); err != nil {
+			t.Fatal(err)
+		}
+		statePayload, err := json.Marshal(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(append([]byte("gentle-ai.review-state/v2\x00"), statePayload...))
+		record := reviewtransaction.CompactRecord{
+			Schema: "gentle-ai.review-state-record/v2", Revision: "sha256:" + hex.EncodeToString(sum[:]), State: state,
+		}
+		payload, err := json.MarshalIndent(record, "", "  ")
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(versionRoot, lineage)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, stateName), append(payload, '\n'), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		receipt, err := state.Receipt()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := reviewtransaction.WriteCompactReceiptAtomic(filepath.Join(dir, receiptName), receipt); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
