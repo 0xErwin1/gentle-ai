@@ -98,8 +98,9 @@ func TestGoReleaserSignsBoundManifestAndInjectsTrustAnchors(t *testing.T) {
 
 func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) {
 	tests := []struct {
-		path     string
-		required []string
+		path         string
+		supportPaths []string
+		required     []string
 	}{
 		{
 			path: "canonicalize-release-public-keys.sh",
@@ -141,11 +142,17 @@ func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) 
 		},
 		{
 			path: "verify-release-distribution-policy.sh",
+			supportPaths: []string{
+				filepath.Join("internal", "releasepolicy", "policy.go"),
+				filepath.Join("internal", "releasepolicycmd", "main.go"),
+			},
 			required: []string{
-				`goos must be explicitly and exactly linux, darwin`,
+				`go run ./internal/releasepolicycmd`,
+				`expectedGoReleaserYAML`,
+				`expectedReleaseWorkflowYAML`,
 				`resolved Homebrew publisher changed`,
-				`release workflow action allowlist changed`,
-				`mock signing is forbidden`,
+				`snapshot output predates the current run marker`,
+				`snapshot output path contains a symlink`,
 			},
 		},
 	}
@@ -156,6 +163,13 @@ func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) 
 			content, err := os.ReadFile(path)
 			if err != nil {
 				t.Fatalf("read %s: %v", path, err)
+			}
+			for _, supportPath := range tc.supportPaths {
+				support, err := os.ReadFile(filepath.Join("..", "..", supportPath))
+				if err != nil {
+					t.Fatalf("read %s support %s: %v", tc.path, supportPath, err)
+				}
+				content = append(content, support...)
 			}
 			for _, required := range tc.required {
 				if !strings.Contains(string(content), required) {

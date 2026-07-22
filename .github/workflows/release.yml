@@ -34,6 +34,17 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Mark release distribution snapshot start
+        run: |
+          set -euo pipefail
+          run_id="${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}:${GITHUB_JOB}"
+          marker="$RUNNER_TEMP/gentle-ai-release-policy-snapshot-start"
+          rm -f -- "$marker"
+          umask 077
+          printf '%s\n' "$run_id" >"$marker"
+          printf 'RELEASE_POLICY_SNAPSHOT_MARKER=%s\n' "$marker" >>"$GITHUB_ENV"
+          printf 'RELEASE_POLICY_SNAPSHOT_RUN_ID=%s\n' "$run_id" >>"$GITHUB_ENV"
+
       - name: Resolve release distribution plan without publishing
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:

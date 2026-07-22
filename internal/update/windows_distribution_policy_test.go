@@ -1,12 +1,15 @@
 package update
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOfficialReleaseOmitsUnsignedWindowsDistribution(t *testing.T) {
@@ -127,6 +130,109 @@ func TestReleaseDistributionPolicyAssertionFailsClosed(t *testing.T) {
 				replaceReleasePolicyFile(t, root, filepath.Join("dist", "artifacts.json"), "\n]", ",\n  {"+`"name":"gentle-ai","path":"dist/gentle-ai_windows_amd64_v1/gentle-ai.exe","goos":"windows","goarch":"amd64","target":"windows_amd64_v1","type":"Binary","extra":{"Binary":"gentle-ai","ID":"gentle-ai"}`+"}\n]")
 			},
 		},
+		{
+			name: "stale metadata with absent outputs",
+			mutate: func(t *testing.T, root string) {
+				removeReleasePolicyOutputs(t, root)
+			},
+		},
+		{
+			name: "stale existing outputs from an earlier run",
+			mutate: func(t *testing.T, root string) {
+				marker, err := os.Stat(releasePolicyMarkerPath(root))
+				if err != nil {
+					t.Fatal(err)
+				}
+				setReleasePolicyOutputsMTime(t, root, marker.ModTime().Add(-time.Minute))
+			},
+		},
+		{
+			name: "snapshot metadata predates current run",
+			mutate: func(t *testing.T, root string) {
+				marker, err := os.Stat(releasePolicyMarkerPath(root))
+				if err != nil {
+					t.Fatal(err)
+				}
+				stamp := marker.ModTime().Add(-time.Minute)
+				if err := os.Chtimes(filepath.Join(root, "dist", "artifacts.json"), stamp, stamp); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "snapshot marker belongs to another run",
+			mutate: func(t *testing.T, root string) {
+				if err := os.WriteFile(releasePolicyMarkerPath(root), []byte("earlier-run\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "artifact path escapes snapshot directory",
+			mutate: func(t *testing.T, root string) {
+				replaceReleasePolicyFile(t, root, filepath.Join("dist", "artifacts.json"),
+					`"path":"dist/gentle-ai_linux_amd64_v1/gentle-ai"`,
+					`"path":"dist/../outside/gentle-ai"`)
+				outside := filepath.Join(root, "outside", "gentle-ai")
+				if err := os.MkdirAll(filepath.Dir(outside), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(outside, []byte("escaped output"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "artifact path resolves through symlink",
+			mutate: func(t *testing.T, root string) {
+				output := filepath.Join(root, "dist", "gentle-ai_linux_amd64_v1", "gentle-ai")
+				if err := os.Remove(output); err != nil {
+					t.Fatal(err)
+				}
+				outside := filepath.Join(root, "outside-binary")
+				if err := os.WriteFile(outside, []byte("stale external binary"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(outside, output); err != nil {
+					if runtime.GOOS == "windows" {
+						t.Skipf("Windows runner cannot create symlink fixture: %v", err)
+					}
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "snapshot can continue after failure",
+			mutate: func(t *testing.T, root string) {
+				replaceReleasePolicyFile(t, root, filepath.Join(".github", "workflows", "release.yml"),
+					"          MINISIGN_PUBLIC_KEYS_CANONICAL: release-policy-validation-only\n",
+					"          MINISIGN_PUBLIC_KEYS_CANONICAL: release-policy-validation-only\n        continue-on-error: true\n")
+			},
+		},
+		{
+			name: "preflight can continue after failure",
+			mutate: func(t *testing.T, root string) {
+				replaceReleasePolicyFile(t, root, filepath.Join(".github", "workflows", "release.yml"),
+					"      - name: Verify tag, main, trust anchors, and module immutability\n        run: ./scripts/release-preflight.sh\n",
+					"      - name: Verify tag, main, trust anchors, and module immutability\n        run: ./scripts/release-preflight.sh\n        continue-on-error: true\n")
+			},
+		},
+		{
+			name: "publication can continue after failure",
+			mutate: func(t *testing.T, root string) {
+				replaceReleasePolicyFile(t, root, filepath.Join(".github", "workflows", "release.yml"),
+					"      - name: Run GoReleaser\n        uses:",
+					"      - name: Run GoReleaser\n        continue-on-error: true\n        uses:")
+			},
+		},
+		{
+			name: "direct GitHub API release creation",
+			mutate: func(t *testing.T, root string) {
+				replaceReleasePolicyFile(t, root, filepath.Join(".github", "workflows", "release.yml"),
+					"      - name: Verify published assets from GitHub\n",
+					"      - name: Create release through GitHub API\n        run: gh api --method POST repos/Gentleman-Programming/gentle-ai/releases\n\n      - name: Verify published assets from GitHub\n")
+			},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := newReleasePolicyFixture(t)
@@ -138,12 +244,37 @@ func TestReleaseDistributionPolicyAssertionFailsClosed(t *testing.T) {
 	}
 }
 
+func TestReleaseDistributionPolicyAcceptsSemanticYAMLFormatting(t *testing.T) {
+	root := newReleasePolicyFixture(t)
+	replaceReleasePolicyFile(t, root, ".goreleaser.yaml",
+		"version: 2\n\nproject_name: gentle-ai\n",
+		"# Top-level key order and formatting are not release semantics.\nproject_name: gentle-ai\n\nversion: 2\n")
+	replaceReleasePolicyFile(t, root, filepath.Join(".github", "workflows", "release.yml"),
+		"permissions:\n  contents: read\n\nconcurrency:\n  group: release-${{ github.ref }}\n  cancel-in-progress: false\n",
+		"concurrency:\n  group: release-${{ github.ref }}\n  cancel-in-progress: false\n\n# Mapping order is intentionally non-semantic.\npermissions:\n  contents: read\n")
+	if output, err := runReleasePolicy(root); err != nil {
+		t.Fatalf("policy rejected a semantically identical YAML reordering: %v\n%s", err, output)
+	}
+}
+
 func newReleasePolicyFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
+	marker := releasePolicyMarkerPath(root)
+	if err := os.WriteFile(marker, []byte(releasePolicyRunID+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	markerTime := time.Now().Add(-time.Minute)
+	if err := os.Chtimes(marker, markerTime, markerTime); err != nil {
+		t.Fatal(err)
+	}
 	files := map[string]string{
 		".goreleaser.yaml": readRepositoryFile(t, ".goreleaser.yaml"),
+		"go.mod":           readRepositoryFile(t, "go.mod"),
+		"go.sum":           readRepositoryFile(t, "go.sum"),
 		filepath.Join(".github", "workflows", "release.yml"):              readRepositoryFile(t, ".github", "workflows", "release.yml"),
+		filepath.Join("internal", "releasepolicy", "policy.go"):           readRepositoryFile(t, "internal", "releasepolicy", "policy.go"),
+		filepath.Join("internal", "releasepolicycmd", "main.go"):          readRepositoryFile(t, "internal", "releasepolicycmd", "main.go"),
 		filepath.Join("scripts", "verify-release-distribution-policy.sh"): readRepositoryFile(t, "scripts", "verify-release-distribution-policy.sh"),
 		filepath.Join("dist", "artifacts.json"):                           releasePolicyArtifactsFixture,
 	}
@@ -156,13 +287,63 @@ func newReleasePolicyFixture(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
+	for _, path := range releasePolicyOutputPaths(t) {
+		fullPath := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(fullPath, []byte("current snapshot output\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 	return root
 }
 
 func runReleasePolicy(root string) ([]byte, error) {
 	command := exec.Command("bash", filepath.Join("scripts", "verify-release-distribution-policy.sh"))
 	command.Dir = root
+	command.Env = append(os.Environ(),
+		"RELEASE_POLICY_SNAPSHOT_MARKER="+releasePolicyMarkerPath(root),
+		"RELEASE_POLICY_SNAPSHOT_RUN_ID="+releasePolicyRunID,
+	)
 	return command.CombinedOutput()
+}
+
+func releasePolicyMarkerPath(root string) string {
+	return filepath.Join(root, "release-policy-snapshot-start")
+}
+
+func releasePolicyOutputPaths(t *testing.T) []string {
+	t.Helper()
+	var artifacts []struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(releasePolicyArtifactsFixture), &artifacts); err != nil {
+		t.Fatal(err)
+	}
+	paths := make([]string, 0, len(artifacts))
+	for _, artifact := range artifacts {
+		paths = append(paths, artifact.Path)
+	}
+	return paths
+}
+
+func removeReleasePolicyOutputs(t *testing.T, root string) {
+	t.Helper()
+	for _, path := range releasePolicyOutputPaths(t) {
+		if err := os.Remove(filepath.Join(root, filepath.FromSlash(path))); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func setReleasePolicyOutputsMTime(t *testing.T, root string, stamp time.Time) {
+	t.Helper()
+	for _, path := range releasePolicyOutputPaths(t) {
+		if err := os.Chtimes(filepath.Join(root, filepath.FromSlash(path)), stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func replaceReleasePolicyFile(t *testing.T, root, path, old, replacement string) {
@@ -194,6 +375,8 @@ const releasePolicyArtifactsFixture = `[
   {"name":"checksums.txt","path":"dist/checksums.txt","type":"Checksum","extra":{}},
   {"name":"gentle-ai.rb","path":"dist/homebrew/Formula/gentle-ai.rb","type":"Homebrew Formula","extra":{"BrewConfig":{"name":"gentle-ai","repository":{"owner":"Gentleman-Programming","name":"homebrew-tap","token":"{{ .Env.HOMEBREW_TAP_TOKEN }}"},"directory":"Formula"}}}
 ]`
+
+const releasePolicyRunID = "release-policy-test-run"
 
 func TestWindowsDistributionRestorationGateIsDocumented(t *testing.T) {
 	docs := readRepositoryFile(t, "README.md") + readRepositoryFile(t, "docs", "release-signing.md")
