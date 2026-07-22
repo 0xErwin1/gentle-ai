@@ -81,6 +81,161 @@ func TestNegotiatedReviewFinalizeRejectsReviewerPreflightWithoutAuthorityMutatio
 	}
 }
 
+func TestNegotiatedReviewFinalizeRetriesSameLineageAfterReviewerSchemaRejection(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	lineage := "review-preflight-retry"
+	var startedOutput bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage}, &startedOutput); err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedOutput.Bytes(), &started)
+	if !reflect.DeepEqual(started.SelectedLenses, []string{reviewtransaction.LensReliability}) {
+		t.Fatalf("selected lenses = %v, want reliability", started.SelectedLenses)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeBytes := readReviewOperationFile(t, store.StatePath())
+
+	resultPath := filepath.Join(t.TempDir(), "reviewer.json")
+	if err := os.WriteFile(resultPath, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{
+		"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
+		"--lineage", lineage, "--result", resultPath,
+	}
+	var output bytes.Buffer
+	if err := RunReview(args, &output); err == nil {
+		t.Fatalf("invalid reviewer payload succeeded: %s", output.String())
+	}
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Phase != "preflight" || failure.MutationOutcome != ReviewMutationNotStarted || !failure.RetrySafe {
+		t.Fatalf("preflight failure = %#v", failure)
+	}
+	rejected, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rejected.Revision != before.Revision || !bytes.Equal(readReviewOperationFile(t, store.StatePath()), beforeBytes) {
+		t.Fatalf("schema rejection changed compact authority: before=%s after=%s", before.Revision, rejected.Revision)
+	}
+	if _, err := os.Stat(store.FinalizeAttemptJournalPath()); !os.IsNotExist(err) {
+		t.Fatalf("schema rejection created finalize attempt journal: %v", err)
+	}
+
+	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
+		Lens: reviewtransaction.LensReliability, Findings: []facadeFinding{}, Evidence: []string{"reviewed exact candidate tree"},
+	})
+	output.Reset()
+	if err := RunReview(args, &output); err != nil {
+		t.Fatalf("corrected reviewer payload retry: %v\n%s", err, output.String())
+	}
+	var finalized ReviewFacadeFinalizeResult
+	decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, output.Bytes()).Result, &finalized)
+	after, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finalized.LineageID != lineage || finalized.State != reviewtransaction.StateValidating ||
+		finalized.StoreRevision != after.Revision || after.Revision == before.Revision {
+		t.Fatalf("finalize retry result = %#v, authority = %#v", finalized, after)
+	}
+	if after.State.LineageID != before.State.LineageID || after.State.Generation != before.State.Generation ||
+		after.State.CorrectionBudget != before.State.CorrectionBudget {
+		t.Fatalf("finalize retry changed frozen review identity or budget: before=%#v after=%#v", before.State, after.State)
+	}
+}
+
+func TestNegotiatedReviewFinalizeRequiresExplicitLineageWhenAuthorityIsAmbiguous(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var startedOutput bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-finalize-ambiguous-a"}, &startedOutput); err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedOutput.Bytes(), &started)
+	first, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRecord, err := first.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := firstRecord.State.OriginalChangedLines
+	clone, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
+		LineageID: "review-finalize-ambiguous-b", Mode: reviewtransaction.ModeOrdinaryBounded, Generation: firstRecord.State.Generation,
+		Snapshot: firstRecord.State.InitialSnapshot, PolicyHash: firstRecord.State.PolicyHash, RiskLevel: firstRecord.State.RiskLevel,
+		SelectedLenses: append([]string{}, firstRecord.State.SelectedLenses...), OriginalChangedLines: &lines,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, clone.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.Replace("", "review/start", clone); err != nil {
+		t.Fatal(err)
+	}
+	before := map[string][]byte{}
+	for _, store := range []reviewtransaction.CompactStore{first, second} {
+		before[store.StatePath()], err = os.ReadFile(store.StatePath())
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	resultPath := filepath.Join(t.TempDir(), "reviewer.json")
+	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
+		Lens: started.SelectedLenses[0], Findings: []facadeFinding{}, Evidence: []string{"reviewed exact candidate tree"},
+	})
+	args := []string{"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--result", resultPath}
+	var output bytes.Buffer
+	if err := RunReview(args, &output); err == nil {
+		t.Fatalf("ambiguous FINALIZE error = %v\n%s", err, output.String())
+	}
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.MutationOutcome != ReviewMutationUnknown || failure.Replayability != reviewtransaction.ReplayabilityStatusRequired || failure.NextAction != "review.status" {
+		t.Fatalf("ambiguous FINALIZE failure = %#v", failure)
+	}
+	for _, store := range []reviewtransaction.CompactStore{first, second} {
+		after, readErr := os.ReadFile(store.StatePath())
+		if readErr != nil || !bytes.Equal(before[store.StatePath()], after) {
+			t.Fatalf("ambiguous FINALIZE changed %s: %v", store.StatePath(), readErr)
+		}
+		if _, statErr := os.Stat(store.FinalizeAttemptJournalPath()); !os.IsNotExist(statErr) {
+			t.Fatalf("ambiguous FINALIZE created journal for %s: %v", store.StatePath(), statErr)
+		}
+	}
+
+	output.Reset()
+	args = append(args, "--lineage", started.LineageID)
+	if err := RunReview(args, &output); err != nil {
+		t.Fatalf("explicit FINALIZE failed: %v\n%s", err, output.String())
+	}
+	finalized, err := first.Load()
+	if err != nil || finalized.State.State != reviewtransaction.StateValidating {
+		t.Fatalf("explicit FINALIZE authority = %#v, %v", finalized, err)
+	}
+	secondAfter, err := os.ReadFile(second.StatePath())
+	if err != nil || !bytes.Equal(before[second.StatePath()], secondAfter) {
+		t.Fatalf("explicit FINALIZE changed unselected authority: %v", err)
+	}
+}
+
 func TestPrepareCompactReviewerResultsPreservesSelectedLensOrderAndAliases(t *testing.T) {
 	selected := []string{
 		reviewtransaction.LensRisk,

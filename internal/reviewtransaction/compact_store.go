@@ -120,6 +120,10 @@ type CompactStartRequest struct {
 	State           CompactState
 	TracePath       string
 	ExplicitLineage bool
+	// BeforeCreate runs under the START lock only after existing-authority
+	// selection is exhausted and immediately before a new record is built. It
+	// may validate derived response material without running for resumes.
+	BeforeCreate func() error
 }
 
 type CompactStartResult struct {
@@ -228,6 +232,15 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 		Disposition: request.Disposition, Reason: strings.TrimSpace(request.Reason), Actor: strings.TrimSpace(request.Actor),
 		RecoveredAt: request.RecoveredAt.UTC(), MaintainerAuthorization: strings.TrimSpace(request.MaintainerAuthorization),
 	}
+	if request.Disposition == RecoveryEscalated {
+		evidence, eligible, evidenceErr := deriveCompactRecoveredEvidence(ctx, successorStore.repo, predecessorStore, predecessor, request.Successor)
+		if evidenceErr != nil {
+			return CompactRecord{}, evidenceErr
+		}
+		if eligible {
+			importCompactRecoveredEvidence(&request.Successor, predecessor.State, evidence)
+		}
+	}
 	stores, err := DiscoverCompactStores(ctx, repo)
 	if err != nil {
 		return CompactRecord{}, err
@@ -253,8 +266,12 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 	if err := request.Successor.Validate(); err != nil {
 		return CompactRecord{}, err
 	}
-	if !compactPristineReviewing(request.Successor) || len(request.Successor.CorrectionAttempts) != 0 || request.Successor.CumulativeCorrectionLines != 0 {
-		return CompactRecord{}, errors.New("recovery successor must start as a fresh reviewing authority")
+	if request.Successor.Recovery.Evidence == nil {
+		if !compactPristineReviewing(request.Successor) || len(request.Successor.CorrectionAttempts) != 0 || request.Successor.CumulativeCorrectionLines != 0 {
+			return CompactRecord{}, errors.New("recovery successor must start as a fresh reviewing authority")
+		}
+	} else if request.Successor.State != StateValidating {
+		return CompactRecord{}, errors.New("recovery successor with imported evidence must start in validating state")
 	}
 	if err := validateCompactRecoveryEdge(predecessor, request.Successor); err != nil {
 		return CompactRecord{}, err
@@ -301,7 +318,8 @@ func validateLiveRecoverySuccessor(ctx context.Context, repo string, expected Sn
 }
 
 func compactRecoveryScopeChanged(previous, next Snapshot) bool {
-	return previous.CandidateTree != next.CandidateTree || previous.PathsDigest != next.PathsDigest || previous.Kind == next.Kind && previous.BaseTree != next.BaseTree
+	relation := classifyCompactTargetRelation(previous, next, previous.Paths, compactTargetRelationEvidence{ExplicitScopeChange: true})
+	return relation.Kind != compactTargetSame && relation.Kind != compactTargetUnsafe
 }
 
 func compactReleaseScopeRecovery(predecessor CompactState, next Snapshot) bool {
@@ -357,6 +375,15 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 			return errors.New("recovery requires an invalidated predecessor")
 		}
 	case RecoveryEscalated:
+		if recovery.Evidence != nil {
+			if recovery.MaintainerAuthorization != compactRecoveryAuthorizationBinding(predecessor.State.LineageID, predecessor.Revision, successor.InitialSnapshot.Identity, recovery.Actor, recovery.Reason) {
+				return compactRecoveryAuthorizationError(successor.InitialSnapshot)
+			}
+			if err := validateCompactRecoveredEvidenceEdge(predecessor, successor); err != nil {
+				return err
+			}
+			break
+		}
 		historicalFailedValidator := compactHistoricalFailedValidator(predecessor.State)
 		if predecessor.State.State != StateEscalated && !historicalFailedValidator {
 			return errors.New("recovery requires an escalated predecessor")
@@ -378,7 +405,7 @@ func compactEscalatedRecoveryTargetChanged(previous, next Snapshot) bool {
 }
 
 func compactHistoricalFailedValidator(state CompactState) bool {
-	if state.State != StateCorrectionRequired || len(state.CorrectionAttempts) == 0 || state.ProposedCorrectionLines != nil || state.ActualCorrectionLines != nil ||
+	if state.State != StateCorrectionRequired || !state.CorrectionAttemptConsumed() || state.ActualCorrectionLines != nil ||
 		state.FixDeltaHash != EmptyFixDeltaHash || state.OriginalCriteria != nil || state.CorrectionRegression != nil {
 		return false
 	}
@@ -411,31 +438,17 @@ func compactRecoveryAuthorizationError(snapshot Snapshot) error {
 }
 
 func compactRecoveryAddsGenesisPath(predecessor CompactState, live Snapshot) bool {
-	paths, pathErr := canonicalPaths(live.Paths)
-	genesis, genesisErr := canonicalPaths(predecessor.GenesisPaths)
-	if pathErr != nil || genesisErr != nil || !equalStrings(paths, live.Paths) || !equalStrings(genesis, predecessor.GenesisPaths) {
+	if classifyCompactPathSetRelation(predecessor.GenesisPaths, live.Paths) != compactPathsOverlap {
 		return false
 	}
-	known := make(map[string]struct{}, len(genesis))
-	for _, path := range genesis {
-		known[path] = struct{}{}
-	}
-	retained := false
-	reaches := false
-	for _, path := range paths {
-		if _, exists := known[path]; exists {
-			retained = true
-			continue
-		}
-		reaches = true
-	}
+	reaches := pathsAreSubset(live.Paths, predecessor.GenesisPaths) != nil
 	// An expansion must still be the frozen work: it retains at least one
 	// genesis path and reaches past the set. A live scope disjoint from genesis
 	// is unrelated work, not a wider view of this lineage, so it must not be
 	// admitted here. Worktrees of one repository share the review store and a
 	// base tree, so without the retention test an unrelated candidate would be
 	// captured by whichever stale lineage happened to be enumerated first.
-	return retained && reaches
+	return reaches
 }
 
 // compactRecoveryContractsGenesisPaths reports whether the live repository
@@ -443,15 +456,7 @@ func compactRecoveryAddsGenesisPath(predecessor CompactState, live Snapshot) boo
 // subset with no live path outside genesis. Disjoint or overlapping-different
 // path sets never qualify; they remain governed by the expansion rule.
 func compactRecoveryContractsGenesisPaths(predecessor CompactState, live Snapshot) bool {
-	paths, pathErr := canonicalPaths(live.Paths)
-	genesis, genesisErr := canonicalPaths(predecessor.GenesisPaths)
-	if pathErr != nil || genesisErr != nil || !equalStrings(paths, live.Paths) || !equalStrings(genesis, predecessor.GenesisPaths) {
-		return false
-	}
-	if len(paths) == 0 || len(paths) >= len(genesis) {
-		return false
-	}
-	return pathsAreSubset(paths, genesis) == nil
+	return classifyCompactPathSetRelation(predecessor.GenesisPaths, live.Paths) == compactPathsContraction
 }
 
 func CompactAuthorityLeaves(ctx context.Context, repo string) ([]CompactStore, error) {
@@ -537,6 +542,9 @@ func CompactAuthoritativeStore(ctx context.Context, repo, lineageID string) (Com
 	if err != nil {
 		return CompactStore{}, err
 	}
+	if err := ensureNoPreparedCompactBatchReconciliation(base); err != nil {
+		return CompactStore{}, err
+	}
 	versionRoot := filepath.Join(base, "v2")
 	dir := filepath.Join(versionRoot, lineageID)
 	return CompactStore{Dir: dir, lineageID: lineageID, repo: root, lockPath: filepath.Join(versionRoot, "LOCK"), maintenanceLockPath: compactMaintenanceLockPath(base)}, nil
@@ -565,6 +573,9 @@ func CompactIncidentsDir(ctx context.Context, repo, lineageID string) (string, e
 func DiscoverCompactStores(ctx context.Context, repo string) ([]CompactStore, error) {
 	base, root, err := reviewAuthorityRoot(ctx, repo)
 	if err != nil {
+		return nil, err
+	}
+	if err := ensureNoPreparedCompactBatchReconciliation(base); err != nil {
 		return nil, err
 	}
 	versionRoot := filepath.Join(base, "v2")
@@ -665,7 +676,10 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 			continue
 		}
 		if existing.State == StateCorrectionRequired {
-			claim := classifyCompactCorrectionTarget(ctx, requestedStore.repo, existing, request.State)
+			claim, claimErr := classifyCompactCorrectionTargetForStart(ctx, requestedStore.repo, existing, request.State)
+			if claimErr != nil {
+				return CompactStartResult{}, fmt.Errorf("classify compact correction target: %w", claimErr)
+			}
 			switch claim {
 			case compactCorrectionTargetResume, compactCorrectionTargetBlocked:
 				claimants = append(claimants, store)
@@ -741,6 +755,11 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 	}
 	if err := validateCompactRepositoryEvidence(ctx, requestedStore.repo, nil, request.State, "review/start"); err != nil {
 		return CompactStartResult{}, fmt.Errorf("validate compact start repository evidence: %w", err)
+	}
+	if request.BeforeCreate != nil {
+		if err := request.BeforeCreate(); err != nil {
+			return CompactStartResult{}, err
+		}
 	}
 	record, payload, err := makeCompactRecord(request.State)
 	if err != nil {
@@ -908,39 +927,79 @@ const (
 	compactCorrectionTargetRecover
 )
 
-// classifyCompactCorrectionTarget keeps correction ownership bound to the
-// original delivery boundary even when in-genesis bytes change. START may only
-// resume an authorized continuation; otherwise the existing authority blocks a
-// fresh budget. Repository-derived path expansion, and a pure non-empty
-// contraction of genesis scope, remain an explicit recovery.
-func classifyCompactCorrectionTarget(ctx context.Context, repo string, existing, requested CompactState) compactCorrectionTargetClaim {
+func classifyCompactCorrectionTargetForStart(ctx context.Context, repo string, existing, requested CompactState) (compactCorrectionTargetClaim, error) {
+	return classifyCompactCorrectionTarget(ctx, repo, existing, requested, false)
+}
+
+// classifyCompactCorrectionTarget is the single START/STATUS correction
+// ownership evaluator. It keeps correction ownership bound to the original
+// delivery boundary even when in-genesis bytes change. Callers that already
+// built the request-scoped live snapshot may skip duplicate evidence reads;
+// every target relationship and operational error still follows this path.
+func classifyCompactCorrectionTarget(ctx context.Context, repo string, existing, requested CompactState, liveAlreadyValidated bool) (compactCorrectionTargetClaim, error) {
 	live := requested.InitialSnapshot
 	if existing.State != StateCorrectionRequired ||
 		existing.InitialSnapshot.Projection != live.Projection ||
 		!compactStartTargetKindsCompatible(existing.InitialSnapshot.Kind, live.Kind) ||
-		existing.InitialSnapshot.BaseTree != live.BaseTree || len(live.LedgerIDs) != 0 ||
-		(SnapshotBuilder{Repo: repo}).ValidateEvidence(ctx, live) != nil {
-		return compactCorrectionTargetUnclaimed
+		existing.InitialSnapshot.BaseTree != live.BaseTree || len(live.LedgerIDs) != 0 {
+		return compactCorrectionTargetUnclaimed, nil
+	}
+	if !liveAlreadyValidated {
+		if err := (SnapshotBuilder{Repo: repo}).ValidateEvidence(ctx, live); err != nil {
+			if compactAuthorityOperationalFailure(err) {
+				return compactCorrectionTargetUnclaimed, err
+			}
+			return compactCorrectionTargetUnclaimed, nil
+		}
 	}
 	if compactHistoricalFailedValidator(existing) {
 		if compactEscalatedRecoveryTargetChanged(existing.CurrentSnapshot, live) {
-			return compactCorrectionTargetRecover
+			return compactCorrectionTargetRecover, nil
 		}
-		return compactCorrectionTargetBlocked
+		return compactCorrectionTargetBlocked, nil
 	}
 	if compactRecoveryAddsGenesisPath(existing, live) {
-		return compactCorrectionTargetRecover
+		return compactCorrectionTargetRecover, nil
 	}
 	if pathsAreSubset(live.Paths, existing.GenesisPaths) != nil {
-		return compactCorrectionTargetUnclaimed
+		return compactCorrectionTargetUnclaimed, nil
 	}
-	if compactStartCorrectionResume(ctx, repo, existing, requested) {
-		return compactCorrectionTargetResume
+	if compactStartLiveTargetMatchesValidated(existing, requested, false) {
+		if live.CandidateTree == existing.CurrentSnapshot.CandidateTree {
+			return compactCorrectionTargetResume, nil
+		}
+		matches, err := compactCorrectionCandidateMatches(ctx, repo, existing, requested)
+		if err != nil {
+			if compactAuthorityOperationalFailure(err) {
+				return compactCorrectionTargetUnclaimed, err
+			}
+		} else if matches {
+			return compactCorrectionTargetResume, nil
+		}
 	}
 	if compactRecoveryContractsGenesisPaths(existing, live) {
-		return compactCorrectionTargetRecover
+		return compactCorrectionTargetRecover, nil
 	}
-	return compactCorrectionTargetBlocked
+	return compactCorrectionTargetBlocked, nil
+}
+
+func compactAuthorityOperationalFailure(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrConcurrentUpdate) {
+		return true
+	}
+	var lockTimeout *AuthorityLockTimeoutError
+	var lockCancelled *AuthorityLockCancelledError
+	if errors.As(err, &lockTimeout) || errors.As(err, &lockCancelled) {
+		return true
+	}
+	var timeout *GitCommandTimeoutError
+	var command *GitCommandError
+	var processControl *GitProcessControlError
+	if errors.As(err, &timeout) || errors.As(err, &command) || errors.As(err, &processControl) {
+		return true
+	}
+	var pathErr *os.PathError
+	return errors.As(err, &pathErr) && !errors.Is(err, os.ErrNotExist)
 }
 
 // compactCorrectionRecoveryDisposition names the `review recover --disposition`
@@ -973,31 +1032,37 @@ func compactStartInitialSnapshotsEqual(existing, requested CompactState) bool {
 		existing.InitialSnapshot.CandidateTree == requested.InitialSnapshot.CandidateTree
 }
 
-func compactStartCorrectionResume(ctx context.Context, repo string, existing, requested CompactState) bool {
-	return compactStartLiveTargetMatches(ctx, repo, existing, requested, false) &&
-		(requested.InitialSnapshot.CandidateTree == existing.CurrentSnapshot.CandidateTree || compactStartCorrectionCandidateMatches(ctx, repo, existing, requested))
-}
-
-func compactStartCorrectionCandidateMatches(ctx context.Context, repo string, existing, requested CompactState) bool {
+func compactCorrectionCandidateMatches(ctx context.Context, repo string, existing, requested CompactState) (bool, error) {
 	if existing.ProposedCorrectionLines == nil {
-		return false
+		return false, nil
 	}
 	fix, err := (SnapshotBuilder{Repo: repo}).Build(ctx, Target{Kind: TargetFixDiff,
 		Projection: existing.InitialSnapshot.Projection, BaseRef: existing.CurrentSnapshot.CandidateTree,
 		IntendedUntracked: existing.InitialSnapshot.IntendedUntracked, LedgerIDs: existing.FixFindingIDs})
-	if err != nil || fix.CandidateTree != requested.InitialSnapshot.CandidateTree || pathsAreSubset(fix.Paths, existing.GenesisPaths) != nil {
-		return false
+	if err != nil {
+		return false, err
+	}
+	if fix.CandidateTree != requested.InitialSnapshot.CandidateTree || pathsAreSubset(fix.Paths, existing.GenesisPaths) != nil {
+		return false, nil
 	}
 	lines, err := (SnapshotBuilder{Repo: repo}).ChangedLines(ctx, fix)
-	return err == nil && lines <= existing.CorrectionBudget-existing.CumulativeCorrectionLines
+	if err != nil {
+		return false, err
+	}
+	return lines <= existing.CorrectionBudget-existing.CumulativeCorrectionLines, nil
 }
 
 func compactStartLiveTargetMatches(ctx context.Context, repo string, existing, requested CompactState, requireCurrentCandidate bool) bool {
+	return compactStartLiveTargetMatchesValidated(existing, requested, requireCurrentCandidate) &&
+		(SnapshotBuilder{Repo: repo}).ValidateEvidence(ctx, requested.InitialSnapshot) == nil
+}
+
+func compactStartLiveTargetMatchesValidated(existing, requested CompactState, requireCurrentCandidate bool) bool {
 	if existing.Generation != requested.Generation || existing.PolicyHash != requested.PolicyHash ||
 		!reflect.DeepEqual(existing.Recovery, requested.Recovery) {
 		return false
 	}
-	return compactLiveTargetMatchesSnapshot(ctx, repo, existing, requested.InitialSnapshot, requireCurrentCandidate)
+	return compactLiveTargetMatchesValidatedSnapshot(existing, requested.InitialSnapshot, requireCurrentCandidate)
 }
 
 func compactStartScopeEqual(existing, requested CompactState) bool {
@@ -1040,6 +1105,51 @@ func (store CompactStore) ReceiptPath() string {
 }
 
 func (store CompactStore) Load() (CompactRecord, error) {
+	return store.LoadContext(context.Background())
+}
+
+// LoadContext reads one compact record while preserving the caller's bounded
+// cancellation through shared maintenance-lock acquisition.
+func (store CompactStore) LoadContext(ctx context.Context) (CompactRecord, error) {
+	maintenance, err := store.acquireReadMaintenance(ctx)
+	if err != nil {
+		return CompactRecord{}, err
+	}
+	if maintenance != nil {
+		defer maintenance.Release()
+	}
+	return store.loadCompactRecordLocked()
+}
+
+// acquireReadMaintenance prevents a stale CompactStore handle from observing
+// a partially applied authority-maintenance transaction. The first marker
+// check refuses an already-prepared batch without waiting on its exclusive
+// lease; the maintenance acquisition closes the race with a batch that starts
+// after that check and repeats the marker check once shared access is held.
+func (store CompactStore) acquireReadMaintenance(ctx context.Context) (*MaintenanceLock, error) {
+	if store.maintenanceLockPath == "" {
+		return nil, nil
+	}
+	authorityRoot := filepath.Join(filepath.Dir(store.maintenanceLockPath), "review-transactions")
+	if err := ensureNoPreparedCompactBatchReconciliation(authorityRoot); err != nil {
+		return nil, err
+	}
+	// Preserve the historical read-only behavior for a handle whose compact
+	// authority record does not exist. There is no batch-owned record to
+	// coordinate in that case, and creating REVIEW-MAINTENANCE.lock would make
+	// a failed legacy fallback observably mutate authority metadata.
+	if _, err := os.Lstat(store.StatePath()); os.IsNotExist(err) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	return acquireMaintenanceLock(ctx, store.maintenanceLockPath, maintenanceShared)
+}
+
+// loadCompactRecordLocked is the uncoordinated record read for callers that
+// already hold the required maintenance/store coordination. It is also used by
+// batch reconciliation while its exclusive maintenance lease is held.
+func (store CompactStore) loadCompactRecordLocked() (CompactRecord, error) {
 	payload, err := os.ReadFile(store.StatePath())
 	if err != nil {
 		return CompactRecord{}, err
@@ -1132,7 +1242,7 @@ func (store CompactStore) replaceContextGuarded(ctx context.Context, expectedRev
 		if operation != "review/start" || next.State != StateReviewing {
 			return "", fmt.Errorf("%w: compact authority must start in reviewing state", ErrInvalidSuccessor)
 		}
-	} else if err := validateCompactSuccessor(current.State, next, operation); err != nil {
+	} else if err := validateCompactSuccessor(current.Revision, current.State, next, operation); err != nil {
 		return "", err
 	}
 	if store.repo != "" {
@@ -1162,7 +1272,7 @@ func (store CompactStore) replaceContextGuarded(ctx context.Context, expectedRev
 
 // CaptureReviewerResult revalidates the reviewing binding while holding shared
 // maintenance access and the compact version lock before publishing an artifact.
-func (store CompactStore) CaptureReviewerResult(target, lens string, order int, publish func(CompactState) error) error {
+func (store CompactStore) CaptureReviewerResult(expectedRevision, target, lens string, order int, publish func(CompactState) error) error {
 	deadline := time.NewTimer(maintenanceLockTimeout)
 	defer deadline.Stop()
 	var lock *storeLock
@@ -1187,7 +1297,7 @@ func (store CompactStore) CaptureReviewerResult(target, lens string, order int, 
 		return err
 	}
 	state := record.State
-	if state.State != StateReviewing || state.InitialSnapshot.Identity != target || order < 0 || order >= len(state.SelectedLenses) || state.SelectedLenses[order] != lens {
+	if record.Revision != expectedRevision || state.State != StateReviewing || state.InitialSnapshot.Identity != target || order < 0 || order >= len(state.SelectedLenses) || state.SelectedLenses[order] != lens {
 		return errors.New("capture binding does not match the current reviewing authority")
 	}
 	return publish(state)
@@ -1226,6 +1336,22 @@ func validateCompactRepositoryEvidence(ctx context.Context, repo string, current
 			}
 		}
 	}
+	if operation == CompactResultReopenOperation {
+		if current == nil || len(next.ResultReopens) != len(current.State.ResultReopens)+1 {
+			return errors.New("reviewer result reopen lacks an exact predecessor authority")
+		}
+		reopen := next.ResultReopens[len(next.ResultReopens)-1]
+		request := CompactResultReopenRequest{
+			LineageID:        current.State.LineageID,
+			ExpectedRevision: current.Revision,
+			TargetIdentity:   current.State.InitialSnapshot.Identity,
+			Reason:           reopen.Reason,
+			Actor:            reopen.Actor,
+		}
+		if reopen.MaintainerAuthorization != CompactResultReopenAuthorization(repo, request, reopen.Quarantined, reopen.Retained) {
+			return errors.New("reviewer result reopen does not carry the exact maintainer authorization")
+		}
+	}
 	if operation == "review/invalidate" {
 		if err := rebuildCurrentSnapshotEvidence(ctx, repo, next.InitialSnapshot); err != nil {
 			return err
@@ -1234,7 +1360,7 @@ func validateCompactRepositoryEvidence(ctx context.Context, repo string, current
 	return nil
 }
 
-func validateCompactSuccessor(previous, next CompactState, operation string) error {
+func validateCompactSuccessor(previousRevision string, previous, next CompactState, operation string) error {
 	if previous.LineageID != next.LineageID || previous.Generation != next.Generation ||
 		!snapshotsEqual(previous.InitialSnapshot, next.InitialSnapshot) || !equalStrings(previous.GenesisPaths, next.GenesisPaths) ||
 		previous.PolicyHash != next.PolicyHash || previous.RiskLevel != next.RiskLevel ||
@@ -1256,6 +1382,9 @@ func validateCompactSuccessor(previous, next CompactState, operation string) err
 			return fmt.Errorf("%w: compact review completion changed correction or delivery state", ErrInvalidSuccessor)
 		}
 	case "review/begin-fix":
+		if previous.CorrectionAttemptConsumed() {
+			return fmt.Errorf("%w: %w", ErrInvalidSuccessor, ErrCompactCorrectionConsumed)
+		}
 		if previous.State != StateCorrectionRequired || next.State != StateCorrectionRequired && next.State != StateEscalated || previous.ProposedCorrectionLines != nil || next.ProposedCorrectionLines == nil {
 			return fmt.Errorf("%w: invalid compact correction start", ErrInvalidSuccessor)
 		}
@@ -1266,6 +1395,9 @@ func validateCompactSuccessor(previous, next CompactState, operation string) err
 			return fmt.Errorf("%w: compact correction start changed unrelated state", ErrInvalidSuccessor)
 		}
 	case "review/complete-fix":
+		if previous.CorrectionAttemptConsumed() {
+			return fmt.Errorf("%w: %w", ErrInvalidSuccessor, ErrCompactCorrectionConsumed)
+		}
 		if previous.State != StateCorrectionRequired || previous.ProposedCorrectionLines == nil || next.State != StateValidating && next.State != StateCorrectionRequired && next.State != StateEscalated || len(next.CorrectionAttempts) != len(previous.CorrectionAttempts)+1 {
 			return fmt.Errorf("%w: invalid compact correction completion", ErrInvalidSuccessor)
 		}
@@ -1291,6 +1423,34 @@ func validateCompactSuccessor(previous, next CompactState, operation string) err
 		expected.ResultDispositions = next.ResultDispositions
 		if !compactStateEqual(expected, next) {
 			return fmt.Errorf("%w: reviewer result disposition changed unrelated state", ErrInvalidSuccessor)
+		}
+	case CompactResultReopenOperation:
+		if previous.State != StateValidating || next.State != StateReviewing ||
+			len(next.ResultReopens) != len(previous.ResultReopens)+1 ||
+			len(previous.ResultReopens) > 0 && !reflect.DeepEqual(previous.ResultReopens, next.ResultReopens[:len(previous.ResultReopens)]) {
+			return fmt.Errorf("%w: reviewer result reopen must append one validating-to-reviewing audit record", ErrInvalidSuccessor)
+		}
+		reopen := next.ResultReopens[len(next.ResultReopens)-1]
+		if reopen.PreviousRevision != previousRevision || reopen.TargetIdentity != previous.InitialSnapshot.Identity {
+			return fmt.Errorf("%w: reviewer result reopen does not bind the exact predecessor authority", ErrInvalidSuccessor)
+		}
+		expected := previous
+		expected.State = StateReviewing
+		expected.LensResults = []LensResult{}
+		expected.Findings = []Finding{}
+		expected.Classifications = map[string]FindingEvidence{}
+		expected.Outcomes = map[string]EvidenceOutcome{}
+		expected.FixFindingIDs = []string{}
+		expected.FollowUps = []FollowUp{}
+		expected.ProposedCorrectionLines = nil
+		expected.ActualCorrectionLines = nil
+		expected.FixDeltaHash = EmptyFixDeltaHash
+		expected.OriginalCriteria = nil
+		expected.CorrectionRegression = nil
+		expected.EvidenceHash = ""
+		expected.ResultReopens = next.ResultReopens
+		if !compactStateEqual(expected, next) {
+			return fmt.Errorf("%w: reviewer result reopen changed frozen scope, budget, or unrelated authority", ErrInvalidSuccessor)
 		}
 	case "review/complete-verification":
 		if previous.State != StateValidating || next.State != StateApproved && next.State != StateEscalated || !validSHA256(next.EvidenceHash) {
@@ -1507,7 +1667,14 @@ func appendCompactTrace(path string, entry CompactTraceEntry) error {
 }
 
 func (store CompactStore) ExportTransport() (CompactTransport, error) {
-	record, err := store.Load()
+	maintenance, err := store.acquireReadMaintenance(context.Background())
+	if err != nil {
+		return CompactTransport{}, err
+	}
+	if maintenance != nil {
+		defer maintenance.Release()
+	}
+	record, err := store.loadCompactRecordLocked()
 	if err != nil {
 		return CompactTransport{}, err
 	}
@@ -1613,11 +1780,11 @@ func ImportCompactTransport(ctx context.Context, repo string, transport CompactT
 			return CompactRecord{}, err
 		}
 	}
-	return store.Load()
+	return store.loadCompactRecordLocked()
 }
 
 func (store CompactStore) installTransportRecordLocked(ctx context.Context, record CompactRecord) error {
-	if existing, loadErr := store.Load(); loadErr == nil {
+	if existing, loadErr := store.loadCompactRecordLocked(); loadErr == nil {
 		if existing.Revision == record.Revision && compactStateEqual(existing.State, record.State) {
 			return nil
 		}
@@ -1647,7 +1814,7 @@ func (store CompactStore) WriteReceipt(ctx context.Context, receipt CompactRecei
 }
 
 func (store CompactStore) writeReceiptLocked(receipt CompactReceipt) error {
-	record, err := store.Load()
+	record, err := store.loadCompactRecordLocked()
 	if err != nil {
 		return err
 	}

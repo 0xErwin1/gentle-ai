@@ -463,6 +463,46 @@ func TestStartCompactAuthorityBlocksSupersededApprovedPredecessor(t *testing.T) 
 	}
 }
 
+func TestStartCompactAuthorityRunsBeforeCreateGuardOnlyAtNewAuthorityBoundary(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state := newCompactTestState(t, repo, "compact-start-before-create")
+	guardErr := errors.New("candidate context unavailable")
+	guardCalls := 0
+	_, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{
+		State: state,
+		BeforeCreate: func() error {
+			guardCalls++
+			return guardErr
+		},
+	})
+	if !errors.Is(err, guardErr) || guardCalls != 1 {
+		t.Fatalf("guarded START = calls %d error %v", guardCalls, err)
+	}
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(store.StatePath()); !os.IsNotExist(err) {
+		t.Fatalf("failed before-create guard persisted authority: %v", err)
+	}
+
+	created, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: state})
+	if err != nil || created.Action != CompactStartCreated {
+		t.Fatalf("unguarded START = %#v, %v", created, err)
+	}
+	replayed, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{
+		State: state,
+		BeforeCreate: func() error {
+			t.Fatal("before-create guard ran for existing authority")
+			return guardErr
+		},
+	})
+	if err != nil || replayed.Action != CompactStartResumed {
+		t.Fatalf("existing START = %#v, %v", replayed, err)
+	}
+}
+
 func TestStartCompactAuthorityKeepsStagedAndWorkspaceAuthoritiesDistinct(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -548,7 +588,7 @@ func TestCompactStagedCorrectionAcceptsIndexFixDespiteWorkspaceDivergence(t *tes
 	}
 	fixHash := FixDeltaHashForSnapshot(fix)
 	validation := ScopedValidationResult{LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{}, OriginalCriteria: ValidationCheck{Passed: true, EvidenceHash: hash("2"), FixDeltaHash: fixHash}, CorrectionRegression: ValidationCheck{Passed: true, EvidenceHash: hash("3"), FixDeltaHash: fixHash}}
-	if err := state.CompleteCorrection(fix, 2, validation); err != nil {
+	if err := state.CompleteCorrection(fix, 2, bindTargetedValidationForTest(validation, fix)); err != nil {
 		t.Fatalf("CompleteCorrection(staged fix) error = %v", err)
 	}
 	if state.State != StateValidating {
@@ -581,7 +621,7 @@ func TestCompactStagedCorrectionRejectsWorkspaceSnapshotWithoutMutatingState(t *
 	}
 	fixHash := FixDeltaHashForSnapshot(workspaceFix)
 	validation := ScopedValidationResult{LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{}, OriginalCriteria: ValidationCheck{Passed: true, EvidenceHash: hash("2"), FixDeltaHash: fixHash}, CorrectionRegression: ValidationCheck{Passed: true, EvidenceHash: hash("3"), FixDeltaHash: fixHash}}
-	if err := state.CompleteCorrection(workspaceFix, 1, validation); err == nil || !strings.Contains(err.Error(), "projection") {
+	if err := state.CompleteCorrection(workspaceFix, 1, bindTargetedValidationForTest(validation, workspaceFix)); err == nil || !strings.Contains(err.Error(), "projection") {
 		t.Fatalf("workspace correction error = %v", err)
 	}
 	if !reflect.DeepEqual(state, before) {
@@ -594,7 +634,7 @@ func TestCompactStagedCorrectionRejectsWorkspaceSnapshotWithoutMutatingState(t *
 	}
 	fixHash = FixDeltaHashForSnapshot(stagedFix)
 	validation.OriginalCriteria.FixDeltaHash, validation.CorrectionRegression.FixDeltaHash = fixHash, fixHash
-	if err := state.CompleteCorrection(stagedFix, 0, validation); err == nil || !strings.Contains(err.Error(), "unchanged candidate") {
+	if err := state.CompleteCorrection(stagedFix, 0, bindTargetedValidationForTest(validation, stagedFix)); err == nil || !strings.Contains(err.Error(), "unchanged candidate") {
 		t.Fatalf("unchanged staged correction error = %v", err)
 	}
 	if !reflect.DeepEqual(state, before) {
@@ -860,7 +900,7 @@ func TestStartCompactAuthorityPreservesTerminalFailedValidator(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixHash := FixDeltaHashForSnapshot(fix)
-	if err := state.CompleteCorrection(fix, 1, ScopedValidationResult{LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{}, OriginalCriteria: ValidationCheck{Passed: false, EvidenceHash: hash("2"), FixDeltaHash: fixHash}, CorrectionRegression: ValidationCheck{Passed: false, EvidenceHash: hash("3"), FixDeltaHash: fixHash}}); err != nil {
+	if err := state.CompleteCorrection(fix, 1, bindTargetedValidationForTest(ScopedValidationResult{LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{}, OriginalCriteria: ValidationCheck{Passed: false, EvidenceHash: hash("2"), FixDeltaHash: fixHash}, CorrectionRegression: ValidationCheck{Passed: false, EvidenceHash: hash("3"), FixDeltaHash: fixHash}}, fix)); err != nil {
 		t.Fatal(err)
 	}
 	revision, err = store.Replace(revision, "review/complete-fix", state)
@@ -1152,6 +1192,158 @@ func TestCompactStoreReplacesCurrentStateWithCASAndExactRetry(t *testing.T) {
 	}
 }
 
+func TestCompactCorrectionForecastCASIsIdempotentAndRejectsCompetingForecast(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	state, store, revision := persistedCompactCorrectionRequired(t, repo, "compact-correction-forecast-cas")
+
+	first := state
+	if err := first.BeginCorrection(1); err != nil {
+		t.Fatal(err)
+	}
+	committed, err := store.Replace(revision, "review/begin-fix", first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed, err := store.Replace(revision, "review/begin-fix", first); err != nil || replayed != committed {
+		t.Fatalf("identical forecast replay = %q, %v; want %q", replayed, err, committed)
+	}
+	competing := state
+	if err := competing.BeginCorrection(2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace(revision, "review/begin-fix", competing); !errors.Is(err, ErrConcurrentUpdate) {
+		t.Fatalf("competing forecast error = %v, want ErrConcurrentUpdate", err)
+	}
+	loaded, err := store.Load()
+	if err != nil || loaded.Revision != committed || loaded.State.ProposedCorrectionLines == nil || *loaded.State.ProposedCorrectionLines != 1 || len(loaded.State.CorrectionAttempts) != 0 {
+		t.Fatalf("forecast authority = %#v, %v", loaded, err)
+	}
+}
+
+func TestCompactStoreRejectsSecondOrdinaryCorrectionWithoutMutation(t *testing.T) {
+	const consumed = "ordinary compact correction already consumed"
+
+	t.Run("begin fix", func(t *testing.T) {
+		repo, state, record, _ := historicalFailedValidatorFixture(t, "compact-second-begin")
+		store, _ := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+		before, err := os.ReadFile(store.StatePath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		next := state
+		forecast := 1
+		next.ProposedCorrectionLines = &forecast
+		if err := next.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Replace(record.Revision, "review/begin-fix", next); !errors.Is(err, ErrInvalidSuccessor) || !strings.Contains(err.Error(), consumed) {
+			t.Fatalf("second begin error = %v", err)
+		}
+		assertCompactAuthorityBytes(t, store, record.Revision, before)
+		methodState := state
+		if err := methodState.BeginCorrection(1); err == nil || !strings.Contains(err.Error(), consumed) || !reflect.DeepEqual(methodState, state) {
+			t.Fatalf("BeginCorrection() = %v, state changed=%t", err, !reflect.DeepEqual(methodState, state))
+		}
+	})
+
+	t.Run("complete fix", func(t *testing.T) {
+		repo, state, _, _ := historicalFailedValidatorFixture(t, "compact-second-complete")
+		forecast := 1
+		state.ProposedCorrectionLines = &forecast
+		record, payload, err := makeCompactRecord(state)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store, _ := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+		if err := os.WriteFile(store.StatePath(), payload, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		methodState := state
+		if err := methodState.CompleteCorrection(Snapshot{}, 0, ScopedValidationResult{}); err == nil || !strings.Contains(err.Error(), consumed) || !reflect.DeepEqual(methodState, state) {
+			t.Fatalf("CompleteCorrection() = %v, state changed=%t", err, !reflect.DeepEqual(methodState, state))
+		}
+
+		writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nfixed\nextra\n")
+		fix, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+			Kind: TargetFixDiff, BaseRef: state.CurrentSnapshot.CandidateTree,
+			IntendedUntracked: state.InitialSnapshot.IntendedUntracked, LedgerIDs: state.FixFindingIDs,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual, err := (SnapshotBuilder{Repo: repo}).ChangedLines(context.Background(), fix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixHash := FixDeltaHashForSnapshot(fix)
+		validation := ScopedValidationResult{
+			LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
+			OriginalCriteria:              ValidationCheck{Passed: true, EvidenceHash: hash("8"), FixDeltaHash: fixHash},
+			CorrectionRegression:          ValidationCheck{Passed: true, EvidenceHash: hash("9"), FixDeltaHash: fixHash},
+			TargetedValidationRequestHash: hash("a"), CorrectionTargetIdentity: fix.Identity,
+		}
+		next := state
+		next.CorrectionAttempts = append(append([]CompactCorrectionAttempt{}, state.CorrectionAttempts...), CompactCorrectionAttempt{
+			Snapshot: fix, ProposedLines: forecast, ActualLines: actual, FixDeltaHash: fixHash,
+			OriginalCriteria: validation.OriginalCriteria, CorrectionRegression: validation.CorrectionRegression,
+			TargetedValidationRequestHash: validation.TargetedValidationRequestHash, CorrectionTargetIdentity: validation.CorrectionTargetIdentity,
+		})
+		next.CumulativeCorrectionLines += actual
+		next.CurrentSnapshot, next.FixDeltaHash = fix, fixHash
+		next.FollowUps = append(next.FollowUps, validation.FollowUps...)
+		next.ActualCorrectionLines = &actual
+		original, regression := validation.OriginalCriteria, validation.CorrectionRegression
+		next.OriginalCriteria, next.CorrectionRegression = &original, &regression
+		next.State = StateValidating
+		if err := next.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.ReadFile(store.StatePath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Replace(record.Revision, "review/complete-fix", next); !errors.Is(err, ErrInvalidSuccessor) || !strings.Contains(err.Error(), consumed) {
+			t.Fatalf("second complete error = %v", err)
+		}
+		assertCompactAuthorityBytes(t, store, record.Revision, before)
+	})
+}
+
+func persistedCompactCorrectionRequired(t *testing.T, repo, lineage string) (CompactState, CompactStore, string) {
+	t.Helper()
+	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nwrong\n")
+	state := newCompactTestState(t, repo, lineage)
+	store, _ := CompactAuthoritativeStore(context.Background(), repo, lineage)
+	revision, err := store.Replace("", "review/start", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finding := Finding{ID: "R3-001", Lens: strings.TrimPrefix(state.SelectedLenses[0], "review-"), Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "wrong value", ProofRefs: []string{"candidate-only failure"}}
+	if err := state.CompleteReview(CompactReviewInput{
+		LensResults:     []LensResult{{Lens: state.SelectedLenses[0], Findings: []Finding{finding}, Evidence: []string{"reviewed once"}}},
+		Classifications: []FindingEvidence{{FindingID: finding.ID, Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "changed hunk"}}, RefuterOutcomes: []EvidenceResult{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	revision, err = store.Replace(revision, "review/complete-review", state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state, store, revision
+}
+
+func assertCompactAuthorityBytes(t *testing.T, store CompactStore, revision string, before []byte) {
+	t.Helper()
+	after, err := os.ReadFile(store.StatePath())
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("rejected successor changed authority bytes: %v", err)
+	}
+	loaded, err := store.Load()
+	if err != nil || loaded.Revision != revision {
+		t.Fatalf("rejected successor changed authority revision: got %#v, %v; want %s", loaded, err, revision)
+	}
+}
+
 func TestCompactStoreReplaceContextRejectsCancelledMutation(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
@@ -1291,7 +1483,7 @@ func TestCompactFirstCompletedValidatorIsTerminal(t *testing.T) {
 			validation := ScopedValidationResult{LedgerIDs: append([]string(nil), state.FixFindingIDs...), FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
 				OriginalCriteria:     ValidationCheck{EvidenceHash: hash("1"), FixDeltaHash: fixHash, Passed: tt.originalPassed},
 				CorrectionRegression: ValidationCheck{EvidenceHash: hash(tt.regressionEvidence), FixDeltaHash: fixHash, Passed: tt.regressionPassed}}
-			if err := state.CompleteCorrection(fix, 1, validation); err != nil {
+			if err := state.CompleteCorrection(fix, 1, bindTargetedValidationForTest(validation, fix)); err != nil {
 				t.Fatal(err)
 			}
 			if state.State != tt.wantState || state.ProposedCorrectionLines == nil || *state.ProposedCorrectionLines != 1 || state.ActualCorrectionLines == nil || *state.ActualCorrectionLines != 1 ||
@@ -1329,8 +1521,56 @@ func TestCompactMalformedValidatorDoesNotConsumeAuthority(t *testing.T) {
 	validation := ScopedValidationResult{LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
 		OriginalCriteria:     ValidationCheck{EvidenceHash: "not-a-hash", FixDeltaHash: FixDeltaHashForSnapshot(fix)},
 		CorrectionRegression: ValidationCheck{EvidenceHash: hash("regression"), FixDeltaHash: FixDeltaHashForSnapshot(fix)}}
-	if err := state.CompleteCorrection(fix, 1, validation); err == nil || !reflect.DeepEqual(state, before) {
+	if err := state.CompleteCorrection(fix, 1, bindTargetedValidationForTest(validation, fix)); err == nil || !reflect.DeepEqual(state, before) {
 		t.Fatalf("malformed validator consumed authority: %#v, %v", state, err)
+	}
+}
+
+func TestCompactClearedEscalationRequiresHistoricalExhaustion(t *testing.T) {
+	forgedRepo := initSnapshotRepo(t)
+	forged, fix := pendingCompactCorrection(t, forgedRepo, "forged-cleared-escalation")
+	fixHash := FixDeltaHashForSnapshot(fix)
+	validation := ScopedValidationResult{LedgerIDs: forged.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
+		OriginalCriteria: ValidationCheck{EvidenceHash: hash("2"), FixDeltaHash: fixHash, Passed: true}, CorrectionRegression: ValidationCheck{EvidenceHash: hash("3"), FixDeltaHash: fixHash, Passed: true}}
+	if err := forged.CompleteCorrection(fix, 1, bindTargetedValidationForTest(validation, fix)); err != nil {
+		t.Fatal(err)
+	}
+	forged.State, forged.ActualCorrectionLines, forged.OriginalCriteria, forged.CorrectionRegression = StateEscalated, nil, nil, nil
+	forged.FixDeltaHash = EmptyFixDeltaHash
+	const want = "completed compact correction requires in-budget forecast and actual size"
+	if err := forged.Validate(); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("one-attempt cleared escalation validation = %v, want %q", err, want)
+	}
+	forgedRecord, _, _ := makeCompactRecord(forged)
+	forgedTransport := CompactTransport{Schema: CompactTransportSchema, Record: forgedRecord}
+	forgedTransport.BundleDigest = compactTransportDigest(forgedTransport)
+	gitSnapshot(t, forgedRepo, "commit", "-am", "forged correction delivery")
+	if _, err := ImportCompactTransport(context.Background(), forgedRepo, forgedTransport); err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("one-attempt cleared escalation import = %v, want %q", err, want)
+	}
+
+	historicalRepo := initSnapshotRepo(t)
+	historical, next := pendingCompactCorrection(t, historicalRepo, "historical-cleared-escalation")
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			writeSnapshotFile(t, historicalRepo, "tracked.txt", strings.Repeat("historical correction\n", attempt+1))
+			next, _ = (SnapshotBuilder{Repo: historicalRepo}).Build(context.Background(), Target{Kind: TargetFixDiff, BaseRef: historical.CurrentSnapshot.CandidateTree, IntendedUntracked: historical.InitialSnapshot.IntendedUntracked, LedgerIDs: historical.FixFindingIDs})
+		}
+		fixDelta := FixDeltaHashForSnapshot(next)
+		historical.CorrectionAttempts = append(historical.CorrectionAttempts, CompactCorrectionAttempt{Snapshot: next, ProposedLines: 1, FixDeltaHash: fixDelta,
+			OriginalCriteria: ValidationCheck{EvidenceHash: hash(string(rune('a' + attempt))), FixDeltaHash: fixDelta, Passed: true}, CorrectionRegression: ValidationCheck{EvidenceHash: hash(string(rune('d' + attempt))), FixDeltaHash: fixDelta}})
+		historical.CurrentSnapshot = next
+	}
+	historical.State, historical.ProposedCorrectionLines = StateEscalated, nil
+	if err := historical.Validate(); err != nil {
+		t.Fatalf("historical three-attempt cleared state: %v", err)
+	}
+	historicalRecord, _, _ := makeCompactRecord(historical)
+	historicalTransport := CompactTransport{Schema: CompactTransportSchema, Record: historicalRecord}
+	historicalTransport.BundleDigest = compactTransportDigest(historicalTransport)
+	gitSnapshot(t, historicalRepo, "commit", "-am", "historical correction delivery")
+	if _, err := ImportCompactTransport(context.Background(), historicalRepo, historicalTransport); err != nil {
+		t.Fatalf("import historical three-attempt cleared state: %v", err)
 	}
 }
 
@@ -1344,7 +1584,7 @@ func TestCompactHistoricalFailedValidatorRecoveryPreservesPredecessor(t *testing
 	failed := ScopedValidationResult{LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{},
 		OriginalCriteria:     ValidationCheck{EvidenceHash: hash("2"), FixDeltaHash: fixHash, Passed: true},
 		CorrectionRegression: ValidationCheck{EvidenceHash: hash("3"), FixDeltaHash: fixHash}}
-	if err := state.CompleteCorrection(fix, 1, failed); err != nil {
+	if err := state.CompleteCorrection(fix, 1, bindTargetedValidationForTest(failed, fix)); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(filepath.Join(repo, "tracked.txt"), 0o755); err != nil {
@@ -1623,7 +1863,7 @@ func TestCompactActualCumulativeOverflowPersistsTerminalAttempt(t *testing.T) {
 	actual := state.CorrectionBudget + 1
 	fixHash := FixDeltaHashForSnapshot(fix)
 	validation := ScopedValidationResult{LedgerIDs: state.FixFindingIDs, FixCausedFindings: []Finding{}, FollowUps: []FollowUp{}, OriginalCriteria: ValidationCheck{EvidenceHash: hash("2"), FixDeltaHash: fixHash, Passed: true}, CorrectionRegression: ValidationCheck{EvidenceHash: hash("3"), FixDeltaHash: fixHash, Passed: true}}
-	if err := state.CompleteCorrection(fix, actual, validation); err != nil {
+	if err := state.CompleteCorrection(fix, actual, bindTargetedValidationForTest(validation, fix)); err != nil {
 		t.Fatal(err)
 	}
 	if state.State != StateEscalated || state.CumulativeCorrectionLines <= state.CorrectionBudget || len(state.CorrectionAttempts) != 1 {
@@ -2315,7 +2555,7 @@ func correctedCompactTestStateWithIntended(t *testing.T, repo, lineage string, i
 		OriginalCriteria:     ValidationCheck{EvidenceHash: hash("2"), FixDeltaHash: fixHash, Passed: true},
 		CorrectionRegression: ValidationCheck{EvidenceHash: hash("3"), FixDeltaHash: fixHash, Passed: true},
 	}
-	if err := state.CompleteCorrection(fix, 2, validation); err != nil {
+	if err := state.CompleteCorrection(fix, 2, bindTargetedValidationForTest(validation, fix)); err != nil {
 		t.Fatal(err)
 	}
 	if err := state.CompleteVerification([]byte("tests pass\n"), true); err != nil {
@@ -2324,6 +2564,12 @@ func correctedCompactTestStateWithIntended(t *testing.T, repo, lineage string, i
 	// Preserve the legacy compact fixture shape for backward-compatibility tests.
 	state.CorrectionAttempts, state.CumulativeCorrectionLines = nil, 0
 	return state
+}
+
+func bindTargetedValidationForTest(validation ScopedValidationResult, fix Snapshot) ScopedValidationResult {
+	validation.TargetedValidationRequestHash = hash("9")
+	validation.CorrectionTargetIdentity = fix.Identity
+	return validation
 }
 
 func newCompactRevisionState(t *testing.T, repo, lineage string) CompactState {
