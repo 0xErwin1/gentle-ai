@@ -6,11 +6,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAssessTargetStatusDerivesReceiptTruthWithoutMutation(t *testing.T) {
@@ -822,4 +826,388 @@ func TestCorrectionRecoveryDispositionMirrorsRecoveryRules(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAssessTargetStatusTreatsCommittedCorrectedIntendedHistoryAsUnrelated(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	state := correctedCompactTestStateWithIntended(t, repo, "status-committed-correction", []string{"new.txt"})
+	store := writeTerminalTargetStatusAuthority(t, repo, state)
+
+	gitSnapshot(t, repo, "add", "-A")
+	gitSnapshot(t, repo, "commit", "-m", "deliver corrected candidate")
+	if headTree := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD^{tree}")); headTree != state.CurrentSnapshot.CandidateTree {
+		t.Fatalf("delivered HEAD tree = %q, want reviewed candidate %q", headTree, state.CurrentSnapshot.CandidateTree)
+	}
+
+	authorityRoot, _, err := reviewAuthorityRoot(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := authorityBytes(t, authorityRoot)
+	stateBefore, err := os.ReadFile(store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptBefore, err := os.ReadFile(store.ReceiptPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
+		Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Applicability != TargetApplicabilityUnrelated || got.Action != TargetStatusActionStart ||
+		got.LineageID != "" || got.ReceiptIdentity != "" {
+		t.Fatalf("committed corrected history status = %#v", got)
+	}
+	stateAfter, stateErr := os.ReadFile(store.StatePath())
+	receiptAfter, receiptErr := os.ReadFile(store.ReceiptPath())
+	if stateErr != nil || receiptErr != nil || !bytes.Equal(stateBefore, stateAfter) || !bytes.Equal(receiptBefore, receiptAfter) {
+		t.Fatalf("status changed authority or receipt bytes: stateErr=%v receiptErr=%v", stateErr, receiptErr)
+	}
+	if after := authorityBytes(t, authorityRoot); !reflect.DeepEqual(before, after) {
+		t.Fatalf("status mutated committed corrected history: before=%v after=%v", before, after)
+	}
+}
+
+func TestAssessTargetStatusTreatsMissingHistoricalIntendedPathAsNonApplicable(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "historical.txt", "reviewed historical content\n")
+	state, store, _ := approvedCompactCurrentChangesFixture(t, repo, "status-missing-intended", []string{"historical.txt"})
+	gitSnapshot(t, repo, "add", "-A")
+	gitSnapshot(t, repo, "commit", "-m", "deliver reviewed candidate")
+	if headTree := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD^{tree}")); headTree != state.CurrentSnapshot.CandidateTree {
+		t.Fatalf("delivered HEAD tree = %q, want reviewed candidate %q", headTree, state.CurrentSnapshot.CandidateTree)
+	}
+	gitSnapshot(t, repo, "rm", "historical.txt")
+	gitSnapshot(t, repo, "commit", "-m", "remove delivered historical path")
+
+	authorityRoot, _, err := reviewAuthorityRoot(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := authorityBytes(t, authorityRoot)
+	receiptBefore, err := os.ReadFile(store.ReceiptPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		name   string
+		target Target
+		setup  func()
+	}{
+		{name: "clean follow-up", target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}},
+		{name: "disjoint follow-up", target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{"next.txt"}}, setup: func() {
+			writeSnapshotFile(t, repo, "next.txt", "next slice\n")
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.setup != nil {
+				tt.setup()
+			}
+			got, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{Target: tt.target})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Applicability != TargetApplicabilityUnrelated || got.Action != TargetStatusActionStart || got.LineageID != "" {
+				t.Fatalf("missing historical intended path status = %#v", got)
+			}
+		})
+	}
+	receiptAfter, err := os.ReadFile(store.ReceiptPath())
+	if err != nil || !bytes.Equal(receiptBefore, receiptAfter) {
+		t.Fatalf("status changed historical receipt bytes: err=%v", err)
+	}
+	if after := authorityBytes(t, authorityRoot); !reflect.DeepEqual(before, after) {
+		t.Fatalf("status mutated missing-path history: before=%v after=%v", before, after)
+	}
+}
+
+func TestAssessTargetStatusGitSubprocessCountIsHistoryIndependent(t *testing.T) {
+	requireSnapshotGit(t)
+	originalCommand := gitCommandContext
+	t.Cleanup(func() { gitCommandContext = originalCommand })
+
+	sizes := []int{1, 10, 100}
+	counts := make([]int, 0, len(sizes))
+	for _, size := range sizes {
+		repo := initSnapshotRepo(t)
+		writeSnapshotFile(t, repo, "tracked.txt", "reviewed candidate\n")
+		writeApprovedTargetStatusHistory(t, repo, size)
+		gitSnapshot(t, repo, "add", "-A")
+		gitSnapshot(t, repo, "commit", "-m", "deliver reviewed candidate")
+		writeSnapshotFile(t, repo, "tracked.txt", "related follow-up\n")
+
+		count := 0
+		gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			count++
+			return originalCommand(ctx, name, args...)
+		}
+		_, err := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
+			Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}},
+		})
+		gitCommandContext = originalCommand
+		if err != nil {
+			t.Fatalf("AssessTargetStatus() for %d histories: %v", size, err)
+		}
+		counts = append(counts, count)
+	}
+
+	t.Logf("AssessTargetStatus Git subprocess counts for N=1/10/100: %v", counts)
+	if counts[0] != counts[1] || counts[1] != counts[2] || counts[0] > 20 {
+		t.Fatalf("Git subprocess counts = %v, want equal request-scoped counts no greater than 20", counts)
+	}
+}
+
+func TestAssessTargetStatusPropagatesOperationalAuthorityFailures(t *testing.T) {
+	requireSnapshotGit(t)
+
+	t.Run("git exit 73", func(t *testing.T) {
+		repo := targetStatusOperationalFailureFixture(t, "status-git-exit")
+		originalCommand := gitCommandContext
+		t.Cleanup(func() { gitCommandContext = originalCommand })
+		t.Setenv("GENTLE_AI_TARGET_STATUS_GIT_HELPER", "exit73")
+		gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			if gitInvocationContains(args, "--git-common-dir") {
+				return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestTargetStatusGitHelperProcess$", "--")
+			}
+			return originalCommand(ctx, name, args...)
+		}
+		got, err := AssessTargetStatus(context.Background(), repo, targetStatusCurrentChangesRequest())
+		var commandErr *GitCommandError
+		if !errors.As(err, &commandErr) || commandErr.ExitCode != 73 || got.Applicability == TargetApplicabilityCorrupted {
+			t.Fatalf("Git exit status = %#v, error = %T %v", got, err, err)
+		}
+	})
+
+	t.Run("git timeout", func(t *testing.T) {
+		repo := targetStatusOperationalFailureFixture(t, "status-git-timeout")
+		originalCommand, originalTimeout, originalWait := gitCommandContext, localGitCommandTimeout, gitCommandWaitDelay
+		t.Cleanup(func() {
+			gitCommandContext, localGitCommandTimeout, gitCommandWaitDelay = originalCommand, originalTimeout, originalWait
+		})
+		t.Setenv("GENTLE_AI_TARGET_STATUS_GIT_HELPER", "sleep")
+		localGitCommandTimeout, gitCommandWaitDelay = 25*time.Millisecond, 10*time.Millisecond
+		gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+			if gitInvocationContains(args, "--git-common-dir") {
+				return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestTargetStatusGitHelperProcess$", "--")
+			}
+			return originalCommand(ctx, name, args...)
+		}
+		got, err := AssessTargetStatus(context.Background(), repo, targetStatusCurrentChangesRequest())
+		var timeout *GitCommandTimeoutError
+		if !errors.As(err, &timeout) || got.Applicability == TargetApplicabilityCorrupted {
+			t.Fatalf("Git timeout status = %#v, error = %T %v", got, err, err)
+		}
+	})
+
+	t.Run("git process control", func(t *testing.T) {
+		repo := targetStatusOperationalFailureFixture(t, "status-git-control")
+		originalStarter := gitProcessTreeStarter
+		t.Cleanup(func() { gitProcessTreeStarter = originalStarter })
+		cause := errors.New("job object assignment denied")
+		gitProcessTreeStarter = func(command *exec.Cmd) (func() error, error) {
+			if gitInvocationContains(command.Args, "--git-common-dir") {
+				if err := command.Start(); err != nil {
+					return nil, err
+				}
+				return func() error { return command.Process.Kill() }, cause
+			}
+			return originalStarter(command)
+		}
+		got, err := AssessTargetStatus(context.Background(), repo, targetStatusCurrentChangesRequest())
+		var control *GitProcessControlError
+		if !errors.As(err, &control) || !errors.Is(err, cause) || got.Applicability == TargetApplicabilityCorrupted {
+			t.Fatalf("Git process-control status = %#v, error = %T %v", got, err, err)
+		}
+	})
+
+	t.Run("context cancellation", func(t *testing.T) {
+		repo := targetStatusOperationalFailureFixture(t, "status-context-cancel")
+		request := targetStatusCurrentChangesRequest()
+		live, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), request.Target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		got, err := assessTargetStatusSnapshot(ctx, repo, request, live)
+		if !errors.Is(err, context.Canceled) || got.Applicability == TargetApplicabilityCorrupted {
+			t.Fatalf("canceled status = %#v, error = %T %v", got, err, err)
+		}
+	})
+
+	t.Run("context deadline", func(t *testing.T) {
+		repo := targetStatusOperationalFailureFixture(t, "status-context-deadline")
+		request := targetStatusCurrentChangesRequest()
+		live, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), request.Target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		defer cancel()
+		got, err := assessTargetStatusSnapshot(ctx, repo, request, live)
+		if !errors.Is(err, context.DeadlineExceeded) || got.Applicability == TargetApplicabilityCorrupted {
+			t.Fatalf("expired status = %#v, error = %T %v", got, err, err)
+		}
+	})
+
+	t.Run("non-not-exist filesystem failure", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+		store := storeCompactStartAuthority(t, repo, newCompactTestState(t, repo, "status-filesystem-error"))
+		if err := os.Remove(store.StatePath()); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(store.StatePath(), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got, err := AssessTargetStatus(context.Background(), repo, targetStatusCurrentChangesRequest())
+		var pathErr *os.PathError
+		if !errors.As(err, &pathErr) || errors.Is(err, os.ErrNotExist) || got.Applicability == TargetApplicabilityCorrupted {
+			t.Fatalf("filesystem status = %#v, error = %T %v", got, err, err)
+		}
+	})
+}
+
+func TestAssessTargetStatusStillCorruptsMalformedAuthorityGraph(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "reviewed candidate\n")
+	predecessor, predecessorStore, _ := approvedCompactCurrentChangesFixture(t, repo, "status-graph-predecessor", []string{})
+	predecessorRecord, err := predecessorStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSnapshotFile(t, repo, "tracked.txt", "successor candidate\n")
+	successor := newCompactTestState(t, repo, "status-graph-successor")
+	successor.Generation = predecessor.Generation + 1
+	if _, err := RecoverCompactAuthority(context.Background(), repo, CompactRecoveryRequest{
+		PredecessorLineageID: predecessor.LineageID, ExpectedPredecessorRevision: predecessorRecord.Revision,
+		Successor: successor, Disposition: RecoveryScopeChanged, Reason: "scope changed", Actor: "maintainer",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(predecessorStore.Dir); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := AssessTargetStatus(context.Background(), repo, targetStatusCurrentChangesRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Applicability != TargetApplicabilityCorrupted || got.Action != TargetStatusActionRepairAuthority ||
+		got.Replayability != ReplayabilityManualActionRequired {
+		t.Fatalf("malformed graph status = %#v", got)
+	}
+}
+
+func TestTargetStatusGitHelperProcess(t *testing.T) {
+	switch os.Getenv("GENTLE_AI_TARGET_STATUS_GIT_HELPER") {
+	case "exit73":
+		os.Exit(73)
+	case "sleep":
+		time.Sleep(10 * time.Second)
+	}
+}
+
+func writeTerminalTargetStatusAuthority(t *testing.T, repo string, state CompactState) CompactStore {
+	t.Helper()
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, payload, err := makeCompactRecord(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(store.Dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.StatePath(), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := state.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteCompactReceiptAtomic(store.ReceiptPath(), receipt); err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+func writeApprovedTargetStatusHistory(t *testing.T, repo string, count int) {
+	t.Helper()
+	state := newCompactTestState(t, repo, "status-history-template")
+	results := make([]LensResult, len(state.SelectedLenses))
+	for index, lens := range state.SelectedLenses {
+		results[index] = LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed"}}
+	}
+	if err := state.CompleteReview(CompactReviewInput{LensResults: results, Classifications: []FindingEvidence{}, RefuterOutcomes: []EvidenceResult{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.CompleteVerification([]byte("verified\n"), true); err != nil {
+		t.Fatal(err)
+	}
+	root, _, err := reviewAuthorityRoot(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < count; index++ {
+		candidate := state
+		candidate.LineageID = fmt.Sprintf("status-history-%03d", index)
+		_, payload, err := makeCompactRecord(candidate)
+		if err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(root, "v2", candidate.LineageID)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, compactStateFileName), payload, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		receipt, err := candidate.Receipt()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := WriteCompactReceiptAtomic(filepath.Join(dir, compactReceiptFileName), receipt); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func targetStatusOperationalFailureFixture(t *testing.T, lineage string) string {
+	t.Helper()
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	storeCompactStartAuthority(t, repo, newCompactTestState(t, repo, lineage))
+	return repo
+}
+
+func targetStatusCurrentChangesRequest() TargetStatusRequest {
+	return TargetStatusRequest{Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}}
+}
+
+func gitInvocationContains(args []string, sequence ...string) bool {
+	if len(sequence) == 0 || len(args) < len(sequence) {
+		return false
+	}
+	for start := 0; start <= len(args)-len(sequence); start++ {
+		match := true
+		for index := range sequence {
+			match = match && args[start+index] == sequence[index]
+		}
+		if match {
+			return true
+		}
+	}
+	return false
 }
