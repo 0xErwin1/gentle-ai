@@ -260,6 +260,19 @@ Automatic mode does not override this guard. Always pass the resolved `delivery_
 
 When launching `/skill:sdd-apply` through `multiagent:Task`, always include the resolved `delivery_strategy`, `chain_strategy`, and any chosen PR boundary/exception in the custom-agent prompt.
 
+### Apply/Verify Context Forwarding (MANDATORY)
+
+Before invoking each `sdd-apply` or `sdd-verify` custom agent through `multiagent:Task`:
+
+1. Search `mem_search(query: "sdd-init/{project}", project: "{project}")`, then call `mem_get_observation(id)` for the matching ID and read the full project init. Search previews are not sufficient. Resolve the exact `strict_tdd` value and `test_command`; if the full project init cannot be retrieved, STOP instead of inferring Standard Mode.
+2. Search `mem_search(query: "sdd/{change-name}/apply-progress", project: "{project}")`. When it exists, call `mem_get_observation(id)` and read the full prior apply-progress before launch. Record an explicit `none` when it does not exist.
+3. Add both resolved values to the Kimi custom-agent prompt for apply **and** verify:
+   - `strict_tdd: true|false` plus the exact test command. When active, state that RED → GREEN → REFACTOR is non-negotiable and Standard Mode is forbidden.
+   - `previous_apply_progress: <full prior apply-progress | none>`. Verify consumes it as evidence; apply treats it as cumulative state.
+4. For `sdd-apply`, add: `READ-MERGE-WRITE the apply-progress artifact. Preserve every prior completed task, merge this batch, and persist the full combined apply-progress. Do NOT overwrite prior progress.`
+
+The custom-agent result must prove that persistence contract. Refresh prior progress before every apply/verify launch; do not rely on a cached search preview or conversation history.
+
 ### Sub-Agent Launch Deduplication (MANDATORY)
 
 Before invoking any Kimi custom agent via `multiagent:Task`, check your in-session launch log:
@@ -301,8 +314,8 @@ Sub-agents get a fresh context with NO memory. The orchestrator controls context
 | `sdd-spec` | proposal (required) | `spec` |
 | `sdd-design` | proposal (required) | `design` |
 | `sdd-tasks` | spec + design (required) | `tasks` |
-| `sdd-apply` | tasks + spec + design | `apply-progress` |
-| `sdd-verify` | spec + tasks | `verify-report` |
+| `sdd-apply` | project init + tasks + spec + design + **apply-progress (if exists)** | `apply-progress` |
+| `sdd-verify` | project init + spec + tasks + **apply-progress (if exists)** | `verify-report` |
 | `sdd-archive` | all artifacts | `archive-report` |
 
 ### Engram Topic Key Format
