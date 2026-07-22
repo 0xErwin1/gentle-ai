@@ -139,6 +139,14 @@ func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) 
 				`checksums.txt.minisig`,
 			},
 		},
+		{
+			path: "verify-release-distribution-policy.sh",
+			required: []string{
+				`Windows release targets are disabled`,
+				`Scoop publication is disabled`,
+				`mock signing is forbidden`,
+			},
+		},
 	}
 
 	for _, tc := range tests {
