@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 const ArtifactAdmissionSchema = "gentle-ai.review-artifact-admission/v1"
@@ -127,6 +129,19 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 		wantPaths[index] = entry.Path
 		allowed[entry.Path] = struct{}{}
 	}
+	repositoryPaths, err := canonicalPaths(request.FrozenContext.repositoryPaths)
+	if err != nil || request.FrozenContext.repositoryPaths == nil || !equalStrings(repositoryPaths, request.FrozenContext.repositoryPaths) {
+		return fail(ArtifactAdmissionBindingMismatch, "frozen repository path manifest is missing or non-canonical")
+	}
+	repository := make(map[string]struct{}, len(repositoryPaths))
+	for _, logicalPath := range repositoryPaths {
+		repository[logicalPath] = struct{}{}
+	}
+	for _, logicalPath := range wantPaths {
+		if _, ok := repository[logicalPath]; !ok {
+			return fail(ArtifactAdmissionBindingMismatch, "frozen changed path is absent from the repository path manifest")
+		}
+	}
 	if request.Inspection.Status != ArtifactInspectionCompleted {
 		return fail(ArtifactAdmissionIncomplete, "reviewer did not report completed candidate inspection")
 	}
@@ -153,7 +168,7 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 		if evidenceReportsUnavailableInspection(evidence) {
 			return fail(ArtifactAdmissionIncomplete, "reviewer evidence reports that candidate inspection was unavailable")
 		}
-		if referenceOutsideScope(evidence, allowed) {
+		if referenceOutsideScope(evidence, allowed, repository) {
 			return fail(ArtifactAdmissionOutOfScope, "reviewer evidence references a path outside the frozen candidate")
 		}
 	}
@@ -172,7 +187,7 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 			return fail(ArtifactAdmissionOutOfScope, "reviewer finding location is outside the frozen candidate")
 		}
 		for _, proof := range finding.ProofRefs {
-			if referenceOutsideScope(proof, allowed) {
+			if referenceOutsideScope(proof, allowed, repository) {
 				return fail(ArtifactAdmissionOutOfScope, "reviewer proof references a path outside the frozen candidate")
 			}
 		}
@@ -261,22 +276,111 @@ func ExtractBoundedSingleJSONObject(payload []byte, limit int) ([]byte, Artifact
 }
 
 var artifactFindingID = regexp.MustCompile(`^R[1-4]-[A-Za-z0-9][A-Za-z0-9._-]*$`)
-var artifactLocationReference = regexp.MustCompile(`(?:^|[[:space:]('"\[])([A-Za-z0-9_.@+-]+(?:/[A-Za-z0-9_.@+-]+)*):[1-9][0-9]*`)
 
-func referenceOutsideScope(value string, allowed map[string]struct{}) bool {
-	for _, match := range artifactLocationReference.FindAllStringSubmatch(value, -1) {
-		if len(match) != 2 {
-			continue
-		}
-		path, err := normalizeLogicalPath(match[1])
-		if err != nil || path != match[1] {
+type artifactReferenceToken struct {
+	value  string
+	quoted bool
+}
+
+// referenceOutsideScope recognizes only canonical path:positive-line tokens
+// that name an immutable base/candidate repository path. Bare root names need
+// a dot; extensionless root paths remain available through quoting. This keeps
+// status:500 and digest/timestamp labels out of the path grammar while still
+// supporting nested, Unicode, and quoted-space Git paths.
+func referenceOutsideScope(value string, allowed, repository map[string]struct{}) bool {
+	for _, token := range artifactReferenceTokens(value) {
+		path, known, malformed := artifactRepositoryPathReference(token, repository)
+		if malformed {
 			return true
+		}
+		if !known {
+			continue
 		}
 		if _, ok := allowed[path]; !ok {
 			return true
 		}
 	}
 	return false
+}
+
+func artifactRepositoryPathReference(token artifactReferenceToken, repository map[string]struct{}) (string, bool, bool) {
+	value := token.value
+	if !token.quoted {
+		value = strings.TrimLeft(value, "([{<")
+		value = strings.TrimRight(value, ")]}>.,;!?")
+	}
+	separator := strings.LastIndexByte(value, ':')
+	if separator <= 0 || separator == len(value)-1 {
+		return "", false, false
+	}
+	line := value[separator+1:]
+	nonzero := false
+	for index := range line {
+		if line[index] < '0' || line[index] > '9' {
+			return "", false, false
+		}
+		nonzero = nonzero || line[index] != '0'
+	}
+	if !nonzero {
+		return "", false, false
+	}
+	logicalPath := value[:separator]
+	if strings.Contains(logicalPath, "://") {
+		return "", false, false
+	}
+	pathLike := token.quoted || strings.Contains(logicalPath, "/") || strings.Contains(logicalPath, ".")
+	if !pathLike {
+		return "", false, false
+	}
+	canonical, err := normalizeLogicalPath(logicalPath)
+	if err != nil || canonical != logicalPath {
+		return "", false, true
+	}
+	_, known := repository[canonical]
+	return canonical, known, false
+}
+
+func artifactReferenceTokens(value string) []artifactReferenceToken {
+	tokens := make([]artifactReferenceToken, 0)
+	start := -1
+	flush := func(end int) {
+		if start >= 0 && start < end {
+			tokens = append(tokens, artifactReferenceToken{value: value[start:end]})
+		}
+		start = -1
+	}
+	for index := 0; index < len(value); {
+		r, size := utf8.DecodeRuneInString(value[index:])
+		if r == utf8.RuneError && size == 0 {
+			break
+		}
+		if r == '\'' || r == '"' || r == '`' {
+			flush(index)
+			closing := strings.IndexRune(value[index+size:], r)
+			if closing < 0 {
+				index += size
+				continue
+			}
+			begin := index + size
+			end := begin + closing
+			if begin < end {
+				tokens = append(tokens, artifactReferenceToken{value: value[begin:end], quoted: true})
+			}
+			index = end + size
+			continue
+		}
+		if unicode.IsSpace(r) {
+			flush(index)
+			index += size
+			continue
+		}
+		if start < 0 {
+			start = index
+		}
+		index += size
+	}
+	flush(len(value))
+	return tokens
 }
 
 func evidenceReportsUnavailableInspection(value string) bool {

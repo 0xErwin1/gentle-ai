@@ -18,9 +18,10 @@ func TestFrozenCandidateContextUsesImmutableTreesAndCanonicalManifest(t *testing
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "binary.bin", "base\x00binary\n")
+	writeSnapshotFile(t, repo, "docs/naïve guide.md", "unchanged reference target\n")
 	writeSnapshotFile(t, repo, "mode.sh", "#!/bin/sh\necho stable\n")
 	writeSnapshotFile(t, repo, "type-entry", "regular\n")
-	gitSnapshot(t, repo, "add", "--", "binary.bin", "mode.sh", "type-entry")
+	gitSnapshot(t, repo, "add", "--", "binary.bin", "docs/naïve guide.md", "mode.sh", "type-entry")
 	gitSnapshot(t, repo, "commit", "-m", "add context fixtures")
 
 	writeSnapshotFile(t, repo, "added.txt", "added\n")
@@ -68,6 +69,11 @@ func TestFrozenCandidateContextUsesImmutableTreesAndCanonicalManifest(t *testing
 	}
 	if !reflect.DeepEqual(manifestPaths(baseline.ChangedPathManifest), snapshot.Paths) {
 		t.Fatalf("manifest paths = %v, snapshot paths = %v", manifestPaths(baseline.ChangedPathManifest), snapshot.Paths)
+	}
+	for _, logicalPath := range []string{"added.txt", "deleted.txt", "docs/naïve guide.md", "tracked.txt"} {
+		if stringIndex(baseline.repositoryPaths, logicalPath) < 0 {
+			t.Fatalf("frozen repository path manifest omits %q: %v", logicalPath, baseline.repositoryPaths)
+		}
 	}
 	for _, marker := range []string{
 		"diff --git a/added.txt b/added.txt",

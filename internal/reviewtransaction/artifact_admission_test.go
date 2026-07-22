@@ -78,6 +78,15 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 			r.Result.Evidence = []string{"Inspection blocked: read access denied; no candidate contents were available."}
 		}, decision: ArtifactAdmissionIncomplete},
 		{name: "partial inspection", mutate: func(r *ArtifactAdmissionRequest) { r.Inspection.Paths = []string{"internal/a.go"} }, decision: ArtifactAdmissionIncomplete},
+		{name: "repository path manifest missing", mutate: func(r *ArtifactAdmissionRequest) {
+			r.FrozenContext.repositoryPaths = nil
+		}, decision: ArtifactAdmissionBindingMismatch},
+		{name: "repository path manifest non-canonical", mutate: func(r *ArtifactAdmissionRequest) {
+			r.FrozenContext.repositoryPaths = append([]string{"./not-canonical.go"}, r.FrozenContext.repositoryPaths...)
+		}, decision: ArtifactAdmissionBindingMismatch},
+		{name: "changed path absent from repository manifest", mutate: func(r *ArtifactAdmissionRequest) {
+			r.FrozenContext.repositoryPaths = []string{"internal/a.go"}
+		}, decision: ArtifactAdmissionBindingMismatch},
 		{name: "out of scope finding", mutate: func(r *ArtifactAdmissionRequest) { r.Result.Findings[0].Location = "unrelated/old.go:3" }, decision: ArtifactAdmissionOutOfScope},
 		{name: "out of scope proof", mutate: func(r *ArtifactAdmissionRequest) {
 			r.Result.Findings[0].ProofRefs = []string{"diff: unrelated/old.go:3"}
@@ -99,6 +108,50 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 			_, admission, err := AdmitArtifact(candidate)
 			if err == nil || admission.Decision != tc.decision {
 				t.Fatalf("AdmitArtifact() decision = %q, error = %v; want %q", admission.Decision, err, tc.decision)
+			}
+		})
+	}
+}
+
+func TestReferenceOutsideScopeRecognizesOnlyStructuredRepositoryPaths(t *testing.T) {
+	allowed := map[string]struct{}{
+		"docs/naïve guide.md": {},
+		"internal/a.go":       {},
+		"main.go":             {},
+		"Makefile":            {},
+	}
+	repository := map[string]struct{}{}
+	for _, logicalPath := range []string{
+		"Dockerfile", "Makefile", "docs/naïve guide.md", "docs/秘密 guide.md", "internal/a.go",
+		"internal/secret.go", "main.go", "secret.go", "sha256", "status",
+	} {
+		repository[logicalPath] = struct{}{}
+	}
+	tests := []struct {
+		name    string
+		value   string
+		outside bool
+	}{
+		{name: "root path in scope", value: "main.go:42"},
+		{name: "root path outside scope", value: "secret.go:42", outside: true},
+		{name: "nested path in scope", value: "diff: internal/a.go:7"},
+		{name: "nested path outside scope", value: "diff: internal/secret.go:7", outside: true},
+		{name: "quoted unicode and spaces in scope", value: "reviewed \"docs/naïve guide.md:9\""},
+		{name: "quoted unicode and spaces outside scope", value: "reviewed \"docs/秘密 guide.md:9\"", outside: true},
+		{name: "quoted extensionless root in scope", value: "reviewed `Makefile:12`"},
+		{name: "quoted extensionless root outside scope", value: "reviewed `Dockerfile:12`", outside: true},
+		{name: "sha256 digest", value: "sha256:1234567890123456789012345678901234567890123456789012345678901234"},
+		{name: "timestamp", value: "2026-07-22T12:34:56Z"},
+		{name: "timestamp without zone", value: "2026-07-22T12:34:56"},
+		{name: "numeric status", value: "status:500"},
+		{name: "filename token absent from repository", value: "not-in-repository.go:42"},
+		{name: "https URL", value: "https://example.test/internal/secret.go:42"},
+		{name: "URL port", value: "http://127.0.0.1:8080/path"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := referenceOutsideScope(tt.value, allowed, repository); got != tt.outside {
+				t.Fatalf("referenceOutsideScope(%q) = %v, want %v", tt.value, got, tt.outside)
 			}
 		})
 	}
