@@ -18,45 +18,48 @@ import (
 )
 
 const (
-	RuntimeStatusSchema        = "gentle-ai.sdd-runtime-status/v1"
-	runtimeRecordSchema        = "gentle-ai.sdd-runtime-record/v1"
-	runtimeObjectiveSchema     = "gentle-ai.sdd-runtime-objective/v1"
-	DefaultRuntimeAttemptLimit = 2
-	DefaultRuntimeChangedLines = 200
-	maximumRuntimeAttemptLimit = 100
-	maximumRuntimeChangedLines = 1_000_000
-	maximumRuntimeRecordBytes  = 1 << 20
-	maximumRuntimeChainRecords = 10_000
-	RuntimeActionBegin         = "begin"
-	RuntimeActionFinish        = "finish"
-	RuntimeActionReset         = "reset"
-	RuntimeActionComplete      = "complete"
-	runtimeOperationBegin      = "attempt/begin"
-	runtimeOperationFinish     = "attempt/finish"
-	runtimeOperationReset      = "objective/reset"
-	runtimeOperationBind       = "binding/set"
+	RuntimeStatusSchema               = "gentle-ai.sdd-runtime-status/v1"
+	runtimeRecordSchema               = "gentle-ai.sdd-runtime-record/v1"
+	runtimeObjectiveSchema            = "gentle-ai.sdd-runtime-objective/v1"
+	DefaultRuntimeAttemptLimit        = 2
+	DefaultRuntimeChangedLines        = 200
+	maximumRuntimeAttemptLimit        = 100
+	maximumRuntimeChangedLines        = 1_000_000
+	maximumRuntimeRecordBytes         = 1 << 20
+	maximumRuntimeChainRecords        = 10_000
+	RuntimeActionBegin                = "begin"
+	RuntimeActionFinish               = "finish"
+	RuntimeActionReset                = "reset"
+	RuntimeActionComplete             = "complete"
+	runtimeOperationBegin             = "attempt/begin"
+	runtimeOperationFinish            = "attempt/finish"
+	runtimeOperationFinishRemediation = "attempt/finish-remediation"
+	runtimeOperationReset             = "objective/reset"
+	runtimeOperationBind              = "binding/set"
 )
 
 var (
-	ErrRuntimeRevisionConflict = errors.New("SDD runtime ledger revision conflict")
-	ErrRuntimeConcurrentUpdate = errors.New("SDD runtime ledger is concurrently updated")
-	ErrRuntimeRequestConflict  = errors.New("SDD runtime request identifier was reused with different inputs")
-	ErrRuntimeBudgetExhausted  = errors.New("SDD runtime objective budget is exhausted")
-	ErrRuntimeAttemptActive    = errors.New("SDD runtime objective already has an active attempt")
-	ErrRuntimeNoActiveAttempt  = errors.New("SDD runtime objective has no active attempt")
-	ErrRuntimeObjectiveChange  = errors.New("SDD runtime objective changed without an explicit reset")
-	ErrRuntimeObjectiveDone    = errors.New("SDD runtime objective is complete")
-	ErrRuntimeNoObjective      = errors.New("SDD runtime ledger has no objective to reset")
-	ErrRuntimeResetNotAllowed  = errors.New("SDD runtime objective reset requires decision-required or complete state")
-	ErrBindingRevisionConflict = errors.New("SDD review binding revision conflict")
+	ErrRuntimeRevisionConflict             = errors.New("SDD runtime ledger revision conflict")
+	ErrRuntimeConcurrentUpdate             = errors.New("SDD runtime ledger is concurrently updated")
+	ErrRuntimeRequestConflict              = errors.New("SDD runtime request identifier was reused with different inputs")
+	ErrRuntimeBudgetExhausted              = errors.New("SDD runtime objective budget is exhausted")
+	ErrRuntimeAttemptActive                = errors.New("SDD runtime objective already has an active attempt")
+	ErrRuntimeNoActiveAttempt              = errors.New("SDD runtime objective has no active attempt")
+	ErrRuntimeObjectiveChange              = errors.New("SDD runtime objective changed without an explicit reset")
+	ErrRuntimeObjectiveDone                = errors.New("SDD runtime objective is complete")
+	ErrRuntimeNoObjective                  = errors.New("SDD runtime ledger has no objective to reset")
+	ErrRuntimeResetNotAllowed              = errors.New("SDD runtime objective reset requires decision-required or complete state")
+	ErrRuntimeRemediationSuccessorRequired = errors.New("a bound passing SDD runtime attempt requires an atomic approved recovery successor")
+	ErrBindingRevisionConflict             = errors.New("SDD review binding revision conflict")
 
 	runtimeRequestIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 	runtimeRevisionPattern  = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 	runtimeGitTreePattern   = regexp.MustCompile(`^[a-f0-9]{40}(?:[a-f0-9]{24})?$`)
 
-	runtimePublishRecord = reviewtransaction.PublishFileNoReplace
-	runtimeReplaceHead   = reviewtransaction.ReplaceFileAtomic
-	runtimeSyncDirectory = reviewtransaction.SyncReviewDirectory
+	runtimePublishRecord                     = reviewtransaction.PublishFileNoReplace
+	runtimeReplaceHead                       = reviewtransaction.ReplaceFileAtomic
+	runtimeSyncDirectory                     = reviewtransaction.SyncReviewDirectory
+	runtimeRemediationFinalAuthorizationHook = func() {}
 )
 
 // RuntimeRevisionConflictError is a deterministic pre-publication CAS denial.
@@ -129,21 +132,23 @@ type RuntimeObjective struct {
 }
 
 type RuntimeAttempt struct {
-	Ordinal                 int                `json:"ordinal"`
-	ObjectiveID             string             `json:"objective_id"`
-	ObjectiveGeneration     int                `json:"objective_generation"`
-	WorkUnit                string             `json:"work_unit"`
-	BeginCandidateIdentity  string             `json:"begin_candidate_identity"`
-	BeginCandidateTree      string             `json:"begin_candidate_tree"`
-	FinishCandidateIdentity string             `json:"finish_candidate_identity,omitempty"`
-	FinishCandidateTree     string             `json:"finish_candidate_tree,omitempty"`
-	Outcome                 AttemptOutcome     `json:"outcome"`
-	ChangedLines            int                `json:"changed_lines"`
-	EvidenceRevision        string             `json:"evidence_revision,omitempty"`
-	Diagnosis               string             `json:"diagnosis,omitempty"`
-	HarnessDisposition      HarnessDisposition `json:"harness_disposition,omitempty"`
-	CleanupEvidence         string             `json:"cleanup_evidence,omitempty"`
-	ProcessEvidence         string             `json:"process_evidence,omitempty"`
+	Ordinal                    int                `json:"ordinal"`
+	ObjectiveID                string             `json:"objective_id"`
+	ObjectiveGeneration        int                `json:"objective_generation"`
+	WorkUnit                   string             `json:"work_unit"`
+	BeginCandidateIdentity     string             `json:"begin_candidate_identity"`
+	BeginCandidateTree         string             `json:"begin_candidate_tree"`
+	FinishCandidateIdentity    string             `json:"finish_candidate_identity,omitempty"`
+	FinishCandidateTree        string             `json:"finish_candidate_tree,omitempty"`
+	Outcome                    AttemptOutcome     `json:"outcome"`
+	ChangedLines               int                `json:"changed_lines"`
+	EvidenceRevision           string             `json:"evidence_revision,omitempty"`
+	Diagnosis                  string             `json:"diagnosis,omitempty"`
+	HarnessDisposition         HarnessDisposition `json:"harness_disposition,omitempty"`
+	CleanupEvidence            string             `json:"cleanup_evidence,omitempty"`
+	ProcessEvidence            string             `json:"process_evidence,omitempty"`
+	RemediatesEvidenceRevision string             `json:"remediates_evidence_revision,omitempty"`
+	ChangedLineBudgetExceeded  bool               `json:"changed_line_budget_exceeded,omitempty"`
 }
 
 type RuntimeReset struct {
@@ -188,14 +193,17 @@ type BeginAttemptRequest struct {
 }
 
 type FinishAttemptRequest struct {
-	ExpectedRevision   string             `json:"expected_revision"`
-	RequestID          string             `json:"request_id"`
-	Outcome            AttemptOutcome     `json:"outcome"`
-	EvidenceRevision   string             `json:"evidence_revision"`
-	Diagnosis          string             `json:"diagnosis"`
-	HarnessDisposition HarnessDisposition `json:"harness_disposition"`
-	CleanupEvidence    string             `json:"cleanup_evidence"`
-	ProcessEvidence    string             `json:"process_evidence"`
+	ExpectedRevision           string             `json:"expected_revision"`
+	RequestID                  string             `json:"request_id"`
+	Outcome                    AttemptOutcome     `json:"outcome"`
+	EvidenceRevision           string             `json:"evidence_revision"`
+	Diagnosis                  string             `json:"diagnosis"`
+	HarnessDisposition         HarnessDisposition `json:"harness_disposition"`
+	CleanupEvidence            string             `json:"cleanup_evidence"`
+	ProcessEvidence            string             `json:"process_evidence"`
+	ExpectedBindingRevision    string             `json:"expected_binding_revision,omitempty"`
+	SuccessorLineageID         string             `json:"successor_lineage_id,omitempty"`
+	RemediatesEvidenceRevision string             `json:"remediates_evidence_revision,omitempty"`
 }
 
 type ResetObjectiveRequest struct {
@@ -220,6 +228,7 @@ type BindReviewRequest struct {
 type RuntimeStore struct {
 	Dir       string
 	Repo      string
+	Workspace string
 	Change    string
 	commonDir string
 }
@@ -259,16 +268,18 @@ type runtimeResetEvent struct {
 }
 
 type runtimeFinishEvent struct {
-	Ordinal                 int                `json:"ordinal"`
-	FinishCandidateIdentity string             `json:"finish_candidate_identity"`
-	FinishCandidateTree     string             `json:"finish_candidate_tree"`
-	Outcome                 AttemptOutcome     `json:"outcome"`
-	ChangedLines            int                `json:"changed_lines"`
-	EvidenceRevision        string             `json:"evidence_revision"`
-	Diagnosis               string             `json:"diagnosis"`
-	HarnessDisposition      HarnessDisposition `json:"harness_disposition"`
-	CleanupEvidence         string             `json:"cleanup_evidence"`
-	ProcessEvidence         string             `json:"process_evidence"`
+	Ordinal                    int                `json:"ordinal"`
+	FinishCandidateIdentity    string             `json:"finish_candidate_identity"`
+	FinishCandidateTree        string             `json:"finish_candidate_tree"`
+	Outcome                    AttemptOutcome     `json:"outcome"`
+	ChangedLines               int                `json:"changed_lines"`
+	EvidenceRevision           string             `json:"evidence_revision"`
+	Diagnosis                  string             `json:"diagnosis"`
+	HarnessDisposition         HarnessDisposition `json:"harness_disposition"`
+	CleanupEvidence            string             `json:"cleanup_evidence"`
+	ProcessEvidence            string             `json:"process_evidence"`
+	RemediatesEvidenceRevision string             `json:"remediates_evidence_revision,omitempty"`
+	ChangedLineBudgetExceeded  bool               `json:"changed_line_budget_exceeded,omitempty"`
 }
 
 type runtimeBindingEvent struct {
@@ -300,13 +311,21 @@ func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, e
 	if err != nil {
 		return RuntimeStore{}, err
 	}
+	workspace, err := filepath.Abs(repo)
+	if err != nil {
+		return RuntimeStore{}, err
+	}
+	workspace, err = filepath.EvalSymlinks(workspace)
+	if err != nil {
+		return RuntimeStore{}, err
+	}
 	probe, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, "sdd-runtime-probe")
 	if err != nil {
 		return RuntimeStore{}, err
 	}
 	commonDir := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(probe.Dir))))
 	dir := filepath.Join(commonDir, "gentle-ai", "sdd-runtime", "v1", change)
-	return RuntimeStore{Dir: dir, Repo: root, Change: change, commonDir: commonDir}, nil
+	return RuntimeStore{Dir: dir, Repo: root, Workspace: workspace, Change: change, commonDir: commonDir}, nil
 }
 
 func (store RuntimeStore) Status() (RuntimeStatus, error) {
@@ -365,9 +384,35 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 	}
 	digest := runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", request)
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
-		active := replay.Status.ActiveAttempt
+		status := replay.Status
+		active := status.ActiveAttempt
 		if active == nil {
 			return runtimeRecord{}, ErrRuntimeNoActiveAttempt
+		}
+		remediation := finishRequestsRemediation(request)
+		currentBinding := status.Binding
+		var legacyBinding *ReviewBinding
+		var legacyDigest string
+		if request.Outcome == AttemptPassed && currentBinding == nil {
+			legacyBinding, legacyDigest, err = store.readLegacyBinding()
+			if err != nil {
+				return runtimeRecord{}, fmt.Errorf("read legacy SDD review binding for remediation: %w", err)
+			}
+			currentBinding = legacyBinding
+		}
+		if request.Outcome == AttemptPassed && currentBinding != nil && !remediation {
+			return runtimeRecord{}, ErrRuntimeRemediationSuccessorRequired
+		}
+		if remediation {
+			if currentBinding == nil {
+				return runtimeRecord{}, errors.New("atomic SDD remediation successor requires a populated native binding")
+			}
+			if currentBinding.Revision != request.ExpectedBindingRevision {
+				return runtimeRecord{}, &BindingRevisionConflictError{Expected: request.ExpectedBindingRevision, Current: currentBinding.Revision}
+			}
+			if status.EvidenceRevision != "" && status.EvidenceRevision != request.RemediatesEvidenceRevision {
+				return runtimeRecord{}, fmt.Errorf("failed evidence revision %q does not match native runtime evidence %q", request.RemediatesEvidenceRevision, status.EvidenceRevision)
+			}
 		}
 		intended, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).DiscoverIntendedUntracked(ctx)
 		if err != nil {
@@ -389,6 +434,44 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			Outcome: request.Outcome, ChangedLines: changedLines, EvidenceRevision: request.EvidenceRevision,
 			Diagnosis: request.Diagnosis, HarnessDisposition: request.HarnessDisposition,
 			CleanupEvidence: request.CleanupEvidence, ProcessEvidence: request.ProcessEvidence,
+			RemediatesEvidenceRevision: request.RemediatesEvidenceRevision,
+			ChangedLineBudgetExceeded:  status.CumulativeChangedLines+changedLines > status.Objective.MaxChangedLines,
+		}
+		if remediation {
+			prepared, prepareErr := prepareApprovedReviewBinding(ctx, store.Repo, store.Workspace, store.Change, request.SuccessorLineageID)
+			if prepareErr != nil {
+				return runtimeRecord{}, prepareErr
+			}
+			if relationErr := validateRuntimeRemediationSuccessor(ctx, store.Repo, *currentBinding, prepared); relationErr != nil {
+				return runtimeRecord{}, relationErr
+			}
+			runtimeRemediationFinalAuthorizationHook()
+			finalPrepared, finalPrepareErr := prepareApprovedReviewBinding(ctx, store.Repo, store.Workspace, store.Change, request.SuccessorLineageID)
+			if finalPrepareErr != nil {
+				return runtimeRecord{}, fmt.Errorf("approved SDD remediation successor changed before native commit: %w", finalPrepareErr)
+			}
+			if finalPrepared.Revision != prepared.Revision {
+				return runtimeRecord{}, errors.New("approved SDD remediation successor changed before native commit")
+			}
+			if relationErr := validateRuntimeRemediationSuccessor(ctx, store.Repo, *currentBinding, finalPrepared); relationErr != nil {
+				return runtimeRecord{}, relationErr
+			}
+			if finalPrepared.GateContext.CandidateTree != snapshot.CandidateTree {
+				return runtimeRecord{}, errors.New("approved SDD remediation successor does not bind the natively charged candidate")
+			}
+			prepared = finalPrepared
+			bindingEvent := &runtimeBindingEvent{ExpectedRevision: request.ExpectedBindingRevision, Current: prepared}
+			if legacyBinding != nil {
+				finalLegacy, finalDigest, finalErr := store.readLegacyBinding()
+				if finalErr != nil || finalLegacy == nil || finalDigest != legacyDigest {
+					return runtimeRecord{}, errors.New("legacy SDD review binding changed before atomic remediation import")
+				}
+				bindingEvent.LegacyImport = &runtimeLegacyBindingImport{SourceDigest: legacyDigest, Binding: *legacyBinding}
+			}
+			return runtimeRecord{
+				Operation: runtimeOperationFinishRemediation, Finish: event,
+				Binding: bindingEvent,
+			}, nil
 		}
 		return runtimeRecord{Operation: runtimeOperationFinish, Finish: event}, nil
 	})
@@ -728,35 +811,32 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 		replay.Status.NextAction = RuntimeActionFinish
 
 	case runtimeOperationFinish:
-		event := record.Finish
-		active := replay.Status.ActiveAttempt
-		if active == nil || active.Ordinal != event.Ordinal || len(replay.Status.Attempts) == 0 ||
-			replay.Status.Attempts[len(replay.Status.Attempts)-1].Outcome != AttemptRunning {
-			return errors.New("finish record does not match the active attempt")
+		if err := applyRuntimeFinishEvent(replay, record.Finish); err != nil {
+			return err
 		}
-		attempt := &replay.Status.Attempts[len(replay.Status.Attempts)-1]
-		attempt.FinishCandidateIdentity = event.FinishCandidateIdentity
-		attempt.FinishCandidateTree = event.FinishCandidateTree
-		attempt.Outcome = event.Outcome
-		attempt.ChangedLines = event.ChangedLines
-		attempt.EvidenceRevision = event.EvidenceRevision
-		attempt.Diagnosis = event.Diagnosis
-		attempt.HarnessDisposition = event.HarnessDisposition
-		attempt.CleanupEvidence = event.CleanupEvidence
-		attempt.ProcessEvidence = event.ProcessEvidence
-		replay.Status.ActiveAttempt = nil
-		replay.Status.CumulativeChangedLines += event.ChangedLines
-		replay.Status.LifetimeChangedLines += event.ChangedLines
-		replay.Status.EvidenceRevision = event.EvidenceRevision
-		if event.Outcome == AttemptPassed {
-			replay.Status.Complete = true
-			replay.Status.NextAction = RuntimeActionComplete
-		} else if replay.Status.CumulativeAttempts >= replay.Status.Objective.MaxAttempts ||
-			replay.Status.CumulativeChangedLines >= replay.Status.Objective.MaxChangedLines {
-			replay.Status.DecisionRequired = true
-			replay.Status.NextAction = RuntimeActionReset
-		} else {
-			replay.Status.NextAction = RuntimeActionBegin
+
+	case runtimeOperationFinishRemediation:
+		currentBinding := replay.Status.Binding
+		if currentBinding == nil && record.Binding.LegacyImport != nil {
+			legacy := record.Binding.LegacyImport.Binding
+			currentBinding = &legacy
+		}
+		if currentBinding == nil || currentBinding.Revision != record.Binding.ExpectedRevision {
+			return errors.New("atomic remediation binding does not match replay state")
+		}
+		if replay.Status.EvidenceRevision != "" && replay.Status.EvidenceRevision != record.Finish.RemediatesEvidenceRevision {
+			return errors.New("atomic remediation failed evidence does not match replay state")
+		}
+		if record.Binding.Current.Lineage == currentBinding.Lineage {
+			return errors.New("atomic remediation binding does not select a distinct successor")
+		}
+		if err := applyRuntimeFinishEvent(replay, record.Finish); err != nil {
+			return err
+		}
+		if !record.Finish.ChangedLineBudgetExceeded {
+			if err := applyRuntimeBindingEvent(replay, record.Binding); err != nil {
+				return err
+			}
 		}
 
 	case runtimeOperationReset:
@@ -783,27 +863,72 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 		}
 
 	case runtimeOperationBind:
-		event := record.Binding
-		current := ""
-		if replay.Status.Binding != nil {
-			if event.LegacyImport != nil {
-				return errors.New("native binding successor cannot import legacy authority again")
-			}
-			current = replay.Status.BindingRevision
-		} else if event.LegacyImport != nil {
-			current = event.LegacyImport.Binding.Revision
+		if err := applyRuntimeBindingEvent(replay, record.Binding); err != nil {
+			return err
 		}
-		if current != event.ExpectedRevision {
-			return errors.New("binding record expected revision does not equal replay state")
-		}
-		binding := event.Current
-		replay.Status.Binding = &binding
-		replay.Status.BindingRevision = binding.Revision
 	default:
 		return errors.New("unsupported SDD runtime record operation")
 	}
 	replay.Status.Revision = revision
 	replay.Requests[record.RequestID] = runtimeRequestReceipt{Digest: record.RequestDigest, Revision: revision}
+	return nil
+}
+
+func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent) error {
+	active := replay.Status.ActiveAttempt
+	if active == nil || active.Ordinal != event.Ordinal || len(replay.Status.Attempts) == 0 ||
+		replay.Status.Attempts[len(replay.Status.Attempts)-1].Outcome != AttemptRunning {
+		return errors.New("finish record does not match the active attempt")
+	}
+	budgetExceeded := replay.Status.CumulativeChangedLines+event.ChangedLines > replay.Status.Objective.MaxChangedLines
+	if event.ChangedLineBudgetExceeded != budgetExceeded {
+		return errors.New("finish record changed-line budget decision does not match replay state")
+	}
+	attempt := &replay.Status.Attempts[len(replay.Status.Attempts)-1]
+	attempt.FinishCandidateIdentity = event.FinishCandidateIdentity
+	attempt.FinishCandidateTree = event.FinishCandidateTree
+	attempt.Outcome = event.Outcome
+	attempt.ChangedLines = event.ChangedLines
+	attempt.EvidenceRevision = event.EvidenceRevision
+	attempt.Diagnosis = event.Diagnosis
+	attempt.HarnessDisposition = event.HarnessDisposition
+	attempt.CleanupEvidence = event.CleanupEvidence
+	attempt.ProcessEvidence = event.ProcessEvidence
+	attempt.RemediatesEvidenceRevision = event.RemediatesEvidenceRevision
+	attempt.ChangedLineBudgetExceeded = event.ChangedLineBudgetExceeded
+	replay.Status.ActiveAttempt = nil
+	replay.Status.CumulativeChangedLines += event.ChangedLines
+	replay.Status.LifetimeChangedLines += event.ChangedLines
+	replay.Status.EvidenceRevision = event.EvidenceRevision
+	if event.Outcome == AttemptPassed && !event.ChangedLineBudgetExceeded {
+		replay.Status.Complete = true
+		replay.Status.NextAction = RuntimeActionComplete
+	} else if event.ChangedLineBudgetExceeded || replay.Status.CumulativeAttempts >= replay.Status.Objective.MaxAttempts ||
+		replay.Status.CumulativeChangedLines >= replay.Status.Objective.MaxChangedLines {
+		replay.Status.DecisionRequired = true
+		replay.Status.NextAction = RuntimeActionReset
+	} else {
+		replay.Status.NextAction = RuntimeActionBegin
+	}
+	return nil
+}
+
+func applyRuntimeBindingEvent(replay *runtimeReplay, event *runtimeBindingEvent) error {
+	current := ""
+	if replay.Status.Binding != nil {
+		if event.LegacyImport != nil {
+			return errors.New("native binding successor cannot import legacy authority again")
+		}
+		current = replay.Status.BindingRevision
+	} else if event.LegacyImport != nil {
+		current = event.LegacyImport.Binding.Revision
+	}
+	if current != event.ExpectedRevision {
+		return errors.New("binding record expected revision does not equal replay state")
+	}
+	binding := event.Current
+	replay.Status.Binding = &binding
+	replay.Status.BindingRevision = binding.Revision
 	return nil
 }
 
@@ -841,7 +966,8 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			event.ChangedLines > maximumRuntimeChangedLines || !runtimeRevisionPattern.MatchString(event.EvidenceRevision) ||
 			!runtimeRevisionPattern.MatchString(event.FinishCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.FinishCandidateTree) ||
 			validateRuntimeText(event.Diagnosis, 500) != nil || !validHarnessDisposition(event.HarnessDisposition) ||
-			validateRuntimeText(event.CleanupEvidence, 500) != nil || validateRuntimeText(event.ProcessEvidence, 500) != nil {
+			validateRuntimeText(event.CleanupEvidence, 500) != nil || validateRuntimeText(event.ProcessEvidence, 500) != nil ||
+			event.RemediatesEvidenceRevision != "" {
 			return errors.New("invalid SDD runtime finish event")
 		}
 		request := FinishAttemptRequest{
@@ -851,6 +977,45 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		}
 		if runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", request) != record.RequestDigest {
 			return errors.New("SDD runtime finish request digest does not match record")
+		}
+	case runtimeOperationFinishRemediation:
+		if record.Finish == nil || record.Binding == nil || record.Begin != nil || record.Reset != nil {
+			return errors.New("invalid atomic SDD runtime remediation record shape")
+		}
+		finish, binding := record.Finish, record.Binding
+		if finish.Ordinal < 1 || finish.Outcome != AttemptPassed || finish.ChangedLines < 0 ||
+			finish.ChangedLines > maximumRuntimeChangedLines || !runtimeRevisionPattern.MatchString(finish.EvidenceRevision) ||
+			!runtimeRevisionPattern.MatchString(finish.RemediatesEvidenceRevision) ||
+			!runtimeRevisionPattern.MatchString(finish.FinishCandidateIdentity) || !runtimeGitTreePattern.MatchString(finish.FinishCandidateTree) ||
+			validateRuntimeText(finish.Diagnosis, 500) != nil || !validHarnessDisposition(finish.HarnessDisposition) ||
+			validateRuntimeText(finish.CleanupEvidence, 500) != nil || validateRuntimeText(finish.ProcessEvidence, 500) != nil {
+			return errors.New("invalid atomic SDD runtime remediation finish event")
+		}
+		if !runtimeRevisionPattern.MatchString(binding.ExpectedRevision) {
+			return errors.New("invalid atomic SDD runtime remediation binding event")
+		}
+		if _, err := validatePreparedRuntimeBinding(binding.Current, record.Change, binding.Current.Lineage); err != nil {
+			return fmt.Errorf("invalid atomic SDD runtime remediation successor: %w", err)
+		}
+		if binding.LegacyImport != nil {
+			legacy, err := validatePreparedRuntimeBinding(binding.LegacyImport.Binding, record.Change, binding.LegacyImport.Binding.Lineage)
+			if err != nil {
+				return fmt.Errorf("invalid atomic remediation legacy binding import: %w", err)
+			}
+			payload, _ := bindingBytes(legacy)
+			if binding.LegacyImport.SourceDigest != bindingHash(payload) || binding.ExpectedRevision != legacy.Revision {
+				return errors.New("atomic remediation legacy binding import does not match its source or expected revision")
+			}
+		}
+		request := FinishAttemptRequest{
+			ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, Outcome: finish.Outcome,
+			EvidenceRevision: finish.EvidenceRevision, Diagnosis: finish.Diagnosis, HarnessDisposition: finish.HarnessDisposition,
+			CleanupEvidence: finish.CleanupEvidence, ProcessEvidence: finish.ProcessEvidence,
+			ExpectedBindingRevision: binding.ExpectedRevision, SuccessorLineageID: binding.Current.Lineage,
+			RemediatesEvidenceRevision: finish.RemediatesEvidenceRevision,
+		}
+		if runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", request) != record.RequestDigest {
+			return errors.New("atomic SDD runtime remediation request digest does not match record")
 		}
 	case runtimeOperationReset:
 		if record.Reset == nil || record.Begin != nil || record.Finish != nil || record.Binding != nil {
@@ -954,7 +1119,34 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 	if err := validateRuntimeText(request.ProcessEvidence, 500); err != nil {
 		return FinishAttemptRequest{}, fmt.Errorf("invalid process_evidence: %w", err)
 	}
+	remediationFields := 0
+	for _, value := range []string{request.ExpectedBindingRevision, request.SuccessorLineageID, request.RemediatesEvidenceRevision} {
+		if value != "" {
+			remediationFields++
+		}
+	}
+	if remediationFields != 0 && remediationFields != 3 {
+		return FinishAttemptRequest{}, errors.New("remediation successor requires expected_binding_revision, successor_lineage_id, and remediates_evidence_revision together")
+	}
+	if remediationFields == 3 {
+		if request.Outcome != AttemptPassed {
+			return FinishAttemptRequest{}, errors.New("an atomic remediation successor is valid only for a passed attempt")
+		}
+		if !runtimeRevisionPattern.MatchString(request.ExpectedBindingRevision) {
+			return FinishAttemptRequest{}, errors.New("expected_binding_revision must be sha256 for atomic remediation")
+		}
+		if !validReviewBindingLineage(request.SuccessorLineageID) {
+			return FinishAttemptRequest{}, errors.New("successor_lineage_id must be a canonical lowercase lineage")
+		}
+		if !runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) {
+			return FinishAttemptRequest{}, errors.New("remediates_evidence_revision must be sha256")
+		}
+	}
 	return request, nil
+}
+
+func finishRequestsRemediation(request FinishAttemptRequest) bool {
+	return request.ExpectedBindingRevision != "" || request.SuccessorLineageID != "" || request.RemediatesEvidenceRevision != ""
 }
 
 func normalizeResetObjectiveRequest(request ResetObjectiveRequest) (ResetObjectiveRequest, error) {

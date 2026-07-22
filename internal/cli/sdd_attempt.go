@@ -46,6 +46,9 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	harnessDisposition := flags.String("harness-disposition", "", "reused or invalidated")
 	cleanupEvidence := flags.String("cleanup-evidence", "", "bounded cleanup evidence")
 	processEvidence := flags.String("process-evidence", "", "bounded process evidence")
+	expectedBindingRevision := flags.String("expected-binding-revision", "", "exact populated binding revision for atomic remediation")
+	successorLineage := flags.String("successor-lineage", "", "approved compact recovery successor lineage")
+	remediatesEvidenceRevision := flags.String("remediates-evidence-revision", "", "failed evidence revision repaired by the successor")
 	reason := flags.String("reason", "", "explicit objective reset reason")
 	actor := flags.String("actor", "", "explicit reset actor")
 	if err := flags.Parse(args[1:]); err != nil {
@@ -81,11 +84,17 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		if missing := missingSDDAttemptFlags(args[1:], "expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence"); len(missing) != 0 {
 			return fmt.Errorf("sdd-attempt finish requires %s", strings.Join(missing, ", "))
 		}
+		remediationFlags := presentSDDAttemptFlags(args[1:], "expected-binding-revision", "successor-lineage", "remediates-evidence-revision")
+		if remediationFlags != 0 && remediationFlags != 3 {
+			return errors.New("remediation successor requires --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision together")
+		}
 		status, err = store.Finish(ctx, sddstatus.FinishAttemptRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, Outcome: sddstatus.AttemptOutcome(*outcome),
 			EvidenceRevision: *evidenceRevision, Diagnosis: *diagnosis,
 			HarnessDisposition: sddstatus.HarnessDisposition(*harnessDisposition),
 			CleanupEvidence:    *cleanupEvidence, ProcessEvidence: *processEvidence,
+			ExpectedBindingRevision: *expectedBindingRevision, SuccessorLineageID: *successorLineage,
+			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
 		})
 	case "reset":
 		if missing := missingSDDAttemptFlags(args[1:], "expected-revision", "request-id", "reason", "actor"); len(missing) != 0 {
@@ -107,7 +116,7 @@ func validateSDDAttemptOperationFlags(operation string, args []string) error {
 	allowed := map[string]bool{"cwd": true, "change": true}
 	for _, name := range map[string][]string{
 		"begin":  {"expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines"},
-		"finish": {"expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence"},
+		"finish": {"expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "expected-binding-revision", "successor-lineage", "remediates-evidence-revision"},
 		"reset":  {"expected-revision", "request-id", "reason", "actor"},
 	}[operation] {
 		allowed[name] = true
@@ -152,4 +161,9 @@ func missingSDDAttemptFlags(args []string, names ...string) []string {
 		}
 	}
 	return missing
+}
+
+func presentSDDAttemptFlags(args []string, names ...string) int {
+	present := len(names) - len(missingSDDAttemptFlags(args, names...))
+	return present
 }

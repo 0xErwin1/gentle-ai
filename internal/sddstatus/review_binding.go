@@ -149,6 +149,101 @@ func prepareApprovedReviewBinding(ctx context.Context, root, workspace, change, 
 	return binding, nil
 }
 
+// validateRuntimeRemediationSuccessor proves that an already approved binding
+// is the current leaf of the native compact recovery graph rooted at the
+// populated binding. It deliberately does not mutate compact authority: the
+// runtime ledger selects the independently approved successor and records the
+// attempt charge, evidence transition, and binding swap in its own one-HEAD
+// compare-and-swap.
+func validateRuntimeRemediationSuccessor(ctx context.Context, repo string, current, successor ReviewBinding) error {
+	if current.Lineage == successor.Lineage {
+		return errors.New("atomic SDD remediation requires a distinct recovery descendant")
+	}
+	currentRecord, err := loadRuntimeBoundCompactArtifacts(ctx, repo, current)
+	if err != nil {
+		return fmt.Errorf("validate current remediation binding: %w", err)
+	}
+	leaves, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
+	if err != nil {
+		return fmt.Errorf("validate compact recovery graph: %w", err)
+	}
+	leaf := false
+	for _, store := range leaves {
+		record, loadErr := store.Load()
+		if loadErr != nil {
+			return fmt.Errorf("load compact recovery leaf: %w", loadErr)
+		}
+		if record.State.LineageID == successor.Lineage && record.Revision == successor.AuthorityRevision {
+			leaf = true
+			break
+		}
+	}
+	if !leaf {
+		return errors.New("approved SDD remediation authority is not the current compact recovery leaf")
+	}
+
+	successorStore, err := reviewtransaction.CompactAuthoritativeStore(ctx, repo, successor.Lineage)
+	if err != nil {
+		return err
+	}
+	cursor, err := successorStore.Load()
+	if err != nil || cursor.Revision != successor.AuthorityRevision {
+		return errors.New("approved SDD remediation successor authority changed before native commit")
+	}
+	seen := map[string]struct{}{}
+	for steps := 0; steps < 10_000; steps++ {
+		if _, duplicate := seen[cursor.State.LineageID]; duplicate {
+			return errors.New("compact remediation recovery chain contains a cycle")
+		}
+		seen[cursor.State.LineageID] = struct{}{}
+		recovery := cursor.State.Recovery
+		if recovery == nil || recovery.Disposition != reviewtransaction.RecoveryScopeChanged {
+			return errors.New("approved SDD remediation authority is not a scope-changed recovery descendant of the populated binding")
+		}
+		predecessorStore, storeErr := reviewtransaction.CompactAuthoritativeStore(ctx, repo, recovery.PredecessorLineageID)
+		if storeErr != nil {
+			return storeErr
+		}
+		predecessor, loadErr := predecessorStore.Load()
+		if loadErr != nil || predecessor.Revision != recovery.PredecessorRevision {
+			return errors.New("compact remediation predecessor revision changed before native commit")
+		}
+		if predecessor.State.LineageID == current.Lineage {
+			if predecessor.Revision != currentRecord.Revision {
+				return errors.New("compact remediation recovery chain does not reach the populated binding revision")
+			}
+			return nil
+		}
+		cursor = predecessor
+	}
+	return errors.New("compact remediation recovery chain exceeds the bounded lineage count")
+}
+
+// loadRuntimeBoundCompactArtifacts validates immutable authority and receipt
+// identity without evaluating the live post-apply gate. The old binding is
+// expected to be live-stale after remediation; its exact approved bytes remain
+// the predecessor provenance that the successor recovery edge must name.
+func loadRuntimeBoundCompactArtifacts(ctx context.Context, repo string, binding ReviewBinding) (reviewtransaction.CompactRecord, error) {
+	store, err := reviewtransaction.CompactAuthoritativeStore(ctx, repo, binding.Lineage)
+	if err != nil {
+		return reviewtransaction.CompactRecord{}, err
+	}
+	record, err := store.Load()
+	if err != nil || record.Revision != binding.AuthorityRevision || record.State.State != reviewtransaction.StateApproved {
+		return reviewtransaction.CompactRecord{}, errors.New("bound compact predecessor is stale or not approved")
+	}
+	payload, err := os.ReadFile(store.ReceiptPath())
+	if err != nil || bindingHash(payload) != binding.ReceiptHash {
+		return reviewtransaction.CompactRecord{}, errors.New("bound compact predecessor receipt changed")
+	}
+	receipt, parseErr := reviewtransaction.ParseCompactReceipt(payload)
+	authoritative, receiptErr := record.State.Receipt()
+	if parseErr != nil || receiptErr != nil || !reflect.DeepEqual(receipt, authoritative) {
+		return reviewtransaction.CompactRecord{}, errors.New("bound compact predecessor receipt does not match authority")
+	}
+	return record, nil
+}
+
 func validateBoundReview(ctx context.Context, repo, change string) (ReviewBinding, reviewtransaction.NativeGateEvaluation, error) {
 	if !validReviewBindingChange(change) {
 		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("invalid OpenSpec change name")
