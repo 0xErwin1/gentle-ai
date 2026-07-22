@@ -33,6 +33,7 @@ const (
 	RuntimeActionComplete      = "complete"
 	runtimeOperationBegin      = "attempt/begin"
 	runtimeOperationFinish     = "attempt/finish"
+	runtimeOperationReset      = "objective/reset"
 	runtimeOperationBind       = "binding/set"
 )
 
@@ -45,6 +46,8 @@ var (
 	ErrRuntimeNoActiveAttempt  = errors.New("SDD runtime objective has no active attempt")
 	ErrRuntimeObjectiveChange  = errors.New("SDD runtime objective changed without an explicit reset")
 	ErrRuntimeObjectiveDone    = errors.New("SDD runtime objective is complete")
+	ErrRuntimeNoObjective      = errors.New("SDD runtime ledger has no objective to reset")
+	ErrRuntimeResetNotAllowed  = errors.New("SDD runtime objective reset requires decision-required or complete state")
 	ErrBindingRevisionConflict = errors.New("SDD review binding revision conflict")
 
 	runtimeRequestIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
@@ -116,6 +119,7 @@ const (
 
 type RuntimeObjective struct {
 	ID                       string `json:"id"`
+	Generation               int    `json:"generation"`
 	WorkUnit                 string `json:"work_unit"`
 	EvidenceGoal             string `json:"evidence_goal"`
 	InitialCandidateIdentity string `json:"initial_candidate_identity"`
@@ -126,6 +130,8 @@ type RuntimeObjective struct {
 
 type RuntimeAttempt struct {
 	Ordinal                 int                `json:"ordinal"`
+	ObjectiveID             string             `json:"objective_id"`
+	ObjectiveGeneration     int                `json:"objective_generation"`
 	WorkUnit                string             `json:"work_unit"`
 	BeginCandidateIdentity  string             `json:"begin_candidate_identity"`
 	BeginCandidateTree      string             `json:"begin_candidate_tree"`
@@ -140,6 +146,16 @@ type RuntimeAttempt struct {
 	ProcessEvidence         string             `json:"process_evidence,omitempty"`
 }
 
+type RuntimeReset struct {
+	Revision               string `json:"revision"`
+	PreviousObjectiveID    string `json:"previous_objective_id"`
+	PreviousGeneration     int    `json:"previous_generation"`
+	ResetCandidateIdentity string `json:"reset_candidate_identity"`
+	ResetCandidateTree     string `json:"reset_candidate_tree"`
+	Reason                 string `json:"reason"`
+	Actor                  string `json:"actor"`
+}
+
 type RuntimeStatus struct {
 	Schema                 string            `json:"schema"`
 	Change                 string            `json:"change"`
@@ -147,13 +163,17 @@ type RuntimeStatus struct {
 	Objective              *RuntimeObjective `json:"objective,omitempty"`
 	ActiveAttempt          *RuntimeAttempt   `json:"active_attempt,omitempty"`
 	Attempts               []RuntimeAttempt  `json:"attempts"`
+	ObjectiveGeneration    int               `json:"objective_generation"`
 	NextOrdinal            int               `json:"next_ordinal"`
 	CumulativeAttempts     int               `json:"cumulative_attempts"`
 	CumulativeChangedLines int               `json:"cumulative_changed_lines"`
+	LifetimeAttempts       int               `json:"lifetime_attempts"`
+	LifetimeChangedLines   int               `json:"lifetime_changed_lines"`
 	EvidenceRevision       string            `json:"evidence_revision"`
 	DecisionRequired       bool              `json:"decision_required"`
 	Complete               bool              `json:"complete"`
 	NextAction             string            `json:"next_action"`
+	LastReset              *RuntimeReset     `json:"last_reset,omitempty"`
 	BindingRevision        string            `json:"binding_revision"`
 	Binding                *ReviewBinding    `json:"binding,omitempty"`
 }
@@ -176,6 +196,13 @@ type FinishAttemptRequest struct {
 	HarnessDisposition HarnessDisposition `json:"harness_disposition"`
 	CleanupEvidence    string             `json:"cleanup_evidence"`
 	ProcessEvidence    string             `json:"process_evidence"`
+}
+
+type ResetObjectiveRequest struct {
+	ExpectedRevision string `json:"expected_revision"`
+	RequestID        string `json:"request_id"`
+	Reason           string `json:"reason"`
+	Actor            string `json:"actor"`
 }
 
 // BindReviewRequest performs a binding-only compare-and-swap. The expected
@@ -206,11 +233,13 @@ type runtimeRecord struct {
 	RequestDigest    string               `json:"request_digest"`
 	Begin            *runtimeBeginEvent   `json:"begin,omitempty"`
 	Finish           *runtimeFinishEvent  `json:"finish,omitempty"`
+	Reset            *runtimeResetEvent   `json:"reset,omitempty"`
 	Binding          *runtimeBindingEvent `json:"binding,omitempty"`
 }
 
 type runtimeBeginEvent struct {
 	ObjectiveID            string `json:"objective_id"`
+	ObjectiveGeneration    int    `json:"objective_generation,omitempty"`
 	WorkUnit               string `json:"work_unit"`
 	EvidenceGoal           string `json:"evidence_goal"`
 	MaxAttempts            int    `json:"max_attempts"`
@@ -218,6 +247,15 @@ type runtimeBeginEvent struct {
 	Ordinal                int    `json:"ordinal"`
 	BeginCandidateIdentity string `json:"begin_candidate_identity"`
 	BeginCandidateTree     string `json:"begin_candidate_tree"`
+}
+
+type runtimeResetEvent struct {
+	PreviousObjectiveID    string `json:"previous_objective_id"`
+	PreviousGeneration     int    `json:"previous_generation"`
+	ResetCandidateIdentity string `json:"reset_candidate_identity"`
+	ResetCandidateTree     string `json:"reset_candidate_tree"`
+	Reason                 string `json:"reason"`
+	Actor                  string `json:"actor"`
 }
 
 type runtimeFinishEvent struct {
@@ -298,9 +336,11 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate before launch: %w", err)
 		}
-		objectiveID := runtimeObjectiveID(store.Change, request.EvidenceGoal)
+		generation := status.ObjectiveGeneration + 1
+		objectiveID := runtimeObjectiveID(store.Change, request.EvidenceGoal, snapshot.Identity, generation)
 		if status.Objective != nil {
 			objectiveID = status.Objective.ID
+			generation = status.Objective.Generation
 			if request.EvidenceGoal != status.Objective.EvidenceGoal || request.MaxAttempts != status.Objective.MaxAttempts ||
 				request.MaxChangedLines != status.Objective.MaxChangedLines {
 				return runtimeRecord{}, ErrRuntimeObjectiveChange
@@ -310,7 +350,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			return runtimeRecord{}, ErrRuntimeBudgetExhausted
 		}
 		event := &runtimeBeginEvent{
-			ObjectiveID: objectiveID, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
+			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
 			Ordinal: status.NextOrdinal, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
 		}
@@ -351,6 +391,38 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			CleanupEvidence: request.CleanupEvidence, ProcessEvidence: request.ProcessEvidence,
 		}
 		return runtimeRecord{Operation: runtimeOperationFinish, Finish: event}, nil
+	})
+}
+
+// Reset closes a terminal objective scope without deleting its immutable
+// attempts. The next Begin receives a new generation and budget while global
+// ordinals and lifetime charges continue monotonically.
+func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveRequest) (RuntimeStatus, error) {
+	request, err := normalizeResetObjectiveRequest(request)
+	if err != nil {
+		return RuntimeStatus{}, err
+	}
+	digest := runtimeValueHash("gentle-ai.sdd-runtime-reset-request/v1", request)
+	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
+		status := replay.Status
+		if status.ActiveAttempt != nil {
+			return runtimeRecord{}, ErrRuntimeAttemptActive
+		}
+		if status.Objective == nil {
+			return runtimeRecord{}, ErrRuntimeNoObjective
+		}
+		if !status.DecisionRequired && !status.Complete {
+			return runtimeRecord{}, ErrRuntimeResetNotAllowed
+		}
+		snapshot, err := captureRuntimeCandidate(ctx, store.Repo)
+		if err != nil {
+			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate at objective reset: %w", err)
+		}
+		return runtimeRecord{Operation: runtimeOperationReset, Reset: &runtimeResetEvent{
+			PreviousObjectiveID: status.Objective.ID, PreviousGeneration: status.Objective.Generation,
+			ResetCandidateIdentity: snapshot.Identity, ResetCandidateTree: snapshot.CandidateTree,
+			Reason: request.Reason, Actor: request.Actor,
+		}}, nil
 	})
 }
 
@@ -605,21 +677,34 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 	switch record.Operation {
 	case runtimeOperationBegin:
 		event := record.Begin
+		generation := event.ObjectiveGeneration
+		if generation == 0 {
+			generation = replay.Status.ObjectiveGeneration + 1
+			if replay.Status.Objective != nil {
+				generation = replay.Status.Objective.Generation
+			}
+		}
 		if replay.Status.ActiveAttempt != nil || replay.Status.Complete || replay.Status.DecisionRequired {
 			return errors.New("begin record is not a valid successor")
 		}
 		if replay.Status.Objective == nil {
-			if event.Ordinal != 1 || event.ObjectiveID != runtimeObjectiveID(record.Change, event.EvidenceGoal) {
+			expectedObjectiveID := runtimeObjectiveID(record.Change, event.EvidenceGoal, event.BeginCandidateIdentity, generation)
+			if event.ObjectiveGeneration == 0 {
+				expectedObjectiveID = legacyRuntimeObjectiveID(record.Change, event.EvidenceGoal)
+			}
+			if event.Ordinal != replay.Status.NextOrdinal || generation != replay.Status.ObjectiveGeneration+1 ||
+				event.ObjectiveID != expectedObjectiveID {
 				return errors.New("initial objective identity or ordinal is invalid")
 			}
 			replay.Status.Objective = &RuntimeObjective{
-				ID: event.ObjectiveID, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
+				ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
 				InitialCandidateIdentity: event.BeginCandidateIdentity, InitialCandidateTree: event.BeginCandidateTree,
 				MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
 			}
+			replay.Status.ObjectiveGeneration = generation
 		} else {
 			objective := replay.Status.Objective
-			if event.ObjectiveID != objective.ID || event.EvidenceGoal != objective.EvidenceGoal ||
+			if event.ObjectiveID != objective.ID || generation != objective.Generation || event.EvidenceGoal != objective.EvidenceGoal ||
 				event.MaxAttempts != objective.MaxAttempts || event.MaxChangedLines != objective.MaxChangedLines ||
 				event.Ordinal != replay.Status.NextOrdinal {
 				return errors.New("begin record changes the active objective or ordinal")
@@ -630,13 +715,15 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 			return errors.New("begin record exceeds the persisted objective budget")
 		}
 		attempt := RuntimeAttempt{
-			Ordinal: event.Ordinal, WorkUnit: event.WorkUnit, BeginCandidateIdentity: event.BeginCandidateIdentity,
+			Ordinal: event.Ordinal, ObjectiveID: event.ObjectiveID, ObjectiveGeneration: generation,
+			WorkUnit: event.WorkUnit, BeginCandidateIdentity: event.BeginCandidateIdentity,
 			BeginCandidateTree: event.BeginCandidateTree, Outcome: AttemptRunning,
 		}
 		replay.Status.Attempts = append(replay.Status.Attempts, attempt)
 		active := attempt
 		replay.Status.ActiveAttempt = &active
 		replay.Status.CumulativeAttempts++
+		replay.Status.LifetimeAttempts++
 		replay.Status.NextOrdinal = event.Ordinal + 1
 		replay.Status.NextAction = RuntimeActionFinish
 
@@ -659,6 +746,7 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 		attempt.ProcessEvidence = event.ProcessEvidence
 		replay.Status.ActiveAttempt = nil
 		replay.Status.CumulativeChangedLines += event.ChangedLines
+		replay.Status.LifetimeChangedLines += event.ChangedLines
 		replay.Status.EvidenceRevision = event.EvidenceRevision
 		if event.Outcome == AttemptPassed {
 			replay.Status.Complete = true
@@ -669,6 +757,29 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 			replay.Status.NextAction = RuntimeActionReset
 		} else {
 			replay.Status.NextAction = RuntimeActionBegin
+		}
+
+	case runtimeOperationReset:
+		event := record.Reset
+		objective := replay.Status.Objective
+		if replay.Status.ActiveAttempt != nil || objective == nil || !replay.Status.DecisionRequired && !replay.Status.Complete {
+			return errors.New("objective reset is not a valid successor")
+		}
+		if event.PreviousObjectiveID != objective.ID || event.PreviousGeneration != objective.Generation ||
+			event.PreviousGeneration != replay.Status.ObjectiveGeneration {
+			return errors.New("objective reset does not match the terminal objective")
+		}
+		replay.Status.Objective = nil
+		replay.Status.CumulativeAttempts = 0
+		replay.Status.CumulativeChangedLines = 0
+		replay.Status.EvidenceRevision = ""
+		replay.Status.DecisionRequired = false
+		replay.Status.Complete = false
+		replay.Status.NextAction = RuntimeActionBegin
+		replay.Status.LastReset = &RuntimeReset{
+			Revision: revision, PreviousObjectiveID: event.PreviousObjectiveID, PreviousGeneration: event.PreviousGeneration,
+			ResetCandidateIdentity: event.ResetCandidateIdentity, ResetCandidateTree: event.ResetCandidateTree,
+			Reason: event.Reason, Actor: event.Actor,
 		}
 
 	case runtimeOperationBind:
@@ -704,11 +815,11 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 	}
 	switch record.Operation {
 	case runtimeOperationBegin:
-		if record.Begin == nil || record.Finish != nil || record.Binding != nil {
+		if record.Begin == nil || record.Finish != nil || record.Reset != nil || record.Binding != nil {
 			return errors.New("invalid SDD runtime begin record shape")
 		}
 		event := record.Begin
-		if !runtimeRevisionPattern.MatchString(event.ObjectiveID) || validateRuntimeText(event.WorkUnit, 160) != nil ||
+		if !runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 0 || validateRuntimeText(event.WorkUnit, 160) != nil ||
 			validateRuntimeText(event.EvidenceGoal, 240) != nil || event.MaxAttempts < 1 || event.MaxAttempts > maximumRuntimeAttemptLimit ||
 			event.MaxChangedLines < 1 || event.MaxChangedLines > maximumRuntimeChangedLines || event.Ordinal < 1 ||
 			!runtimeRevisionPattern.MatchString(event.BeginCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.BeginCandidateTree) {
@@ -722,7 +833,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime begin request digest does not match record")
 		}
 	case runtimeOperationFinish:
-		if record.Finish == nil || record.Begin != nil || record.Binding != nil {
+		if record.Finish == nil || record.Begin != nil || record.Reset != nil || record.Binding != nil {
 			return errors.New("invalid SDD runtime finish record shape")
 		}
 		event := record.Finish
@@ -741,8 +852,24 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		if runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", request) != record.RequestDigest {
 			return errors.New("SDD runtime finish request digest does not match record")
 		}
+	case runtimeOperationReset:
+		if record.Reset == nil || record.Begin != nil || record.Finish != nil || record.Binding != nil {
+			return errors.New("invalid SDD runtime reset record shape")
+		}
+		event := record.Reset
+		if !runtimeRevisionPattern.MatchString(event.PreviousObjectiveID) || event.PreviousGeneration < 1 ||
+			!runtimeRevisionPattern.MatchString(event.ResetCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.ResetCandidateTree) ||
+			validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil {
+			return errors.New("invalid SDD runtime reset event")
+		}
+		request := ResetObjectiveRequest{
+			ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, Reason: event.Reason, Actor: event.Actor,
+		}
+		if runtimeValueHash("gentle-ai.sdd-runtime-reset-request/v1", request) != record.RequestDigest {
+			return errors.New("SDD runtime reset request digest does not match record")
+		}
 	case runtimeOperationBind:
-		if record.Binding == nil || record.Begin != nil || record.Finish != nil {
+		if record.Binding == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil {
 			return errors.New("invalid SDD runtime binding record shape")
 		}
 		event := record.Binding
@@ -830,6 +957,22 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 	return request, nil
 }
 
+func normalizeResetObjectiveRequest(request ResetObjectiveRequest) (ResetObjectiveRequest, error) {
+	if request.ExpectedRevision == "" || !runtimeRevisionPattern.MatchString(request.ExpectedRevision) {
+		return ResetObjectiveRequest{}, errors.New("reset requires an exact expected runtime revision")
+	}
+	if !runtimeRequestIDPattern.MatchString(request.RequestID) {
+		return ResetObjectiveRequest{}, errors.New("request_id must be a canonical lowercase identifier")
+	}
+	if err := validateRuntimeText(request.Reason, 500); err != nil {
+		return ResetObjectiveRequest{}, fmt.Errorf("invalid reset reason: %w", err)
+	}
+	if err := validateRuntimeText(request.Actor, 128); err != nil {
+		return ResetObjectiveRequest{}, fmt.Errorf("invalid reset actor: %w", err)
+	}
+	return request, nil
+}
+
 func normalizeBindReviewRequest(request BindReviewRequest) (BindReviewRequest, error) {
 	// Expected revision syntax is checked only after candidate preparation so
 	// an identical-candidate retry remains idempotent even when an old caller
@@ -910,7 +1053,16 @@ func captureRuntimeCandidate(ctx context.Context, repo string) (reviewtransactio
 	})
 }
 
-func runtimeObjectiveID(change, evidenceGoal string) string {
+func runtimeObjectiveID(change, evidenceGoal, candidateIdentity string, generation int) string {
+	return runtimeValueHash(runtimeObjectiveSchema, struct {
+		Change            string `json:"change"`
+		EvidenceGoal      string `json:"evidence_goal"`
+		CandidateIdentity string `json:"candidate_identity"`
+		Generation        int    `json:"generation"`
+	}{Change: change, EvidenceGoal: evidenceGoal, CandidateIdentity: candidateIdentity, Generation: generation})
+}
+
+func legacyRuntimeObjectiveID(change, evidenceGoal string) string {
 	return runtimeValueHash(runtimeObjectiveSchema, struct {
 		Change       string `json:"change"`
 		EvidenceGoal string `json:"evidence_goal"`
