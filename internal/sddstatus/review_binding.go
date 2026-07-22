@@ -339,10 +339,12 @@ func bindingExists(ctx context.Context, repo, change string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if _, err = os.Lstat(filepath.Join(store.Dir, "HEAD")); err == nil {
-		return true, nil
-	} else if !os.IsNotExist(err) {
+	status, err := store.Status()
+	if err != nil {
 		return false, err
+	}
+	if status.Binding != nil {
+		return true, nil
 	}
 	legacyPath := filepath.Join(store.commonDir, "gentle-ai", "sdd-review-bindings", "v1", change, "binding.json")
 	_, err = os.Lstat(legacyPath)

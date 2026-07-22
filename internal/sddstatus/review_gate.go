@@ -185,7 +185,7 @@ func resolveBoundedRemediation(required bool, verify verifyResultEvaluation, tra
 	}
 	if transaction == nil && compact != nil {
 		if verify.EvidenceRevision == "" {
-			return RemediationState{Reason: "compact remediation requires a failed evidence revision"}
+			return RemediationState{Reason: fmt.Sprintf("compact remediation requires a failed evidence revision: %s", verify.Reason)}
 		}
 		remainingBudget := compact.CorrectionBudget - compact.CumulativeCorrectionLines
 		if remainingBudget <= 0 {

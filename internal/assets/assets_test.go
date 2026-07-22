@@ -1485,6 +1485,10 @@ func TestSDDStatusContractMatchesNativeShape(t *testing.T) {
 		"relationships:",
 		"dependsOn: []",
 		"sameDomainActiveChanges: []",
+		"runtimeStatus:",
+		"active_attempt:",
+		"decision_required: false",
+		"next_action: begin | finish | reset | complete",
 		"phaseInstructions:",
 		"blockedReasons: []",
 		"Manual fallback status MUST stay shape-compatible with native `gentle-ai.sdd-status` JSON",
@@ -1727,6 +1731,54 @@ func TestOrchestratorsRequireAutomaticGatekeeper(t *testing.T) {
 		}
 		if !lineContainsAny("does not inspect the code diff", "inspects no code diff")(validatorLine) {
 			t.Fatalf("%s fresh-context phase-contract validator must prohibit code-diff inspection: %q", path, validatorLine)
+		}
+	}
+}
+
+func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
+	paths := []string{
+		"antigravity/sdd-orchestrator.md",
+		"claude/sdd-orchestrator.md",
+		"codex/sdd-orchestrator.md",
+		"cursor/sdd-orchestrator.md",
+		"gemini/sdd-orchestrator.md",
+		"generic/sdd-orchestrator.md",
+		"hermes/sdd-orchestrator.md",
+		"kimi/sdd-orchestrator.md",
+		"kiro/sdd-orchestrator.md",
+		"opencode/sdd-orchestrator.md",
+		"qwen/sdd-orchestrator.md",
+		"windsurf/sdd-orchestrator.md",
+	}
+	required := []string{
+		"Native Runtime Attempt Authority",
+		"gentle-ai sdd-attempt status",
+		"gentle-ai sdd-attempt begin",
+		"gentle-ai sdd-attempt finish",
+		"gentle-ai sdd-attempt reset",
+		"decision_required",
+		"expected-binding-revision",
+		"successor-lineage",
+		"remediates-evidence-revision",
+	}
+	for _, path := range paths {
+		content := MustRead(path)
+		if path == "claude/sdd-orchestrator.md" {
+			content += "\n" + MustRead("claude/sdd-orchestrator-workflow.md")
+		}
+		for _, want := range required {
+			if !strings.Contains(content, want) {
+				t.Fatalf("%s missing native runtime-attempt authority wording %q", path, want)
+			}
+		}
+		for _, forbidden := range []string{
+			"gentle-ai.sdd-attempt-ledger/v1",
+			"attempt-ledger-{work-unit}.json",
+			"sdd/{change-name}/attempt-ledger",
+		} {
+			if strings.Contains(content, forbidden) {
+				t.Fatalf("%s still delegates native authority to mutable artifact %q", path, forbidden)
+			}
 		}
 	}
 }

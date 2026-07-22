@@ -367,13 +367,14 @@ func TestBindingFailsClosedForLedgerDriftAndChangedLiveEvidence(t *testing.T) {
 
 func TestResolveRejectsCorruptOrChangedBoundEvidence(t *testing.T) {
 	for _, tt := range []struct {
-		name   string
-		mutate func(t *testing.T, root string, store reviewtransaction.CompactStore, binding ReviewBinding)
+		name     string
+		wantNext string
+		mutate   func(t *testing.T, root string, store reviewtransaction.CompactStore, binding ReviewBinding)
 	}{
-		{name: "corrupt binding", mutate: func(t *testing.T, root string, _ reviewtransaction.CompactStore, _ ReviewBinding) {
+		{name: "corrupt binding", wantNext: "resolve-blockers", mutate: func(t *testing.T, root string, _ reviewtransaction.CompactStore, _ ReviewBinding) {
 			corruptNativeRuntimeBinding(t, mustRuntimeStore(t, root, "thin"))
 		}},
-		{name: "changed receipt", mutate: func(t *testing.T, _ string, store reviewtransaction.CompactStore, _ ReviewBinding) {
+		{name: "changed receipt", wantNext: "resolve-review", mutate: func(t *testing.T, _ string, store reviewtransaction.CompactStore, _ ReviewBinding) {
 			if err := os.WriteFile(store.ReceiptPath(), []byte("{}\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -393,7 +394,7 @@ func TestResolveRejectsCorruptOrChangedBoundEvidence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if status.NextRecommended != "resolve-review" || status.Dependencies.Verify != DependencyBlocked {
+			if status.NextRecommended != tt.wantNext || status.Dependencies.Verify != DependencyBlocked {
 				t.Fatalf("%s status = %#v", tt.name, status)
 			}
 		})
@@ -422,7 +423,7 @@ func TestBoundReviewUsesNormalVerifyThenArchiveRouting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "resolve-review" {
+	if status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "resolve-blockers" {
 		t.Fatalf("corrupt completed binding status = %#v", status)
 	}
 }
