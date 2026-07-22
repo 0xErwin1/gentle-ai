@@ -381,27 +381,18 @@ func reviewRepositoryIdentity(ctx context.Context, repo string) (reviewRepositor
 	if err != nil {
 		return reviewRepositoryIdentityRecord{}, err
 	}
-	topPayload, err := runGit(ctx, root, nil, nil, "rev-parse", "--path-format=absolute", "--show-toplevel")
+	top, err := resolveGitDirectory(ctx, root, "--show-toplevel")
 	if err != nil {
 		return reviewRepositoryIdentityRecord{}, err
 	}
-	top, err := canonicalLocatorDirectory(strings.TrimSpace(string(topPayload)))
-	if err != nil || !sameLocatorDirectory(root, top) {
+	if !sameLocatorDirectory(root, top) {
 		return reviewRepositoryIdentityRecord{}, errors.New("repository root identity changed")
 	}
-	commonPayload, err := runGit(ctx, root, nil, nil, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	commonDir, err := resolveGitDirectory(ctx, root, "--git-common-dir")
 	if err != nil {
 		return reviewRepositoryIdentityRecord{}, err
 	}
-	commonDir, err := canonicalLocatorDirectory(strings.TrimSpace(string(commonPayload)))
-	if err != nil {
-		return reviewRepositoryIdentityRecord{}, err
-	}
-	gitPayload, err := runGit(ctx, root, nil, nil, "rev-parse", "--path-format=absolute", "--git-dir")
-	if err != nil {
-		return reviewRepositoryIdentityRecord{}, err
-	}
-	gitDir, err := canonicalLocatorDirectory(strings.TrimSpace(string(gitPayload)))
+	gitDir, err := resolveGitDirectory(ctx, root, "--git-dir")
 	if err != nil {
 		return reviewRepositoryIdentityRecord{}, err
 	}

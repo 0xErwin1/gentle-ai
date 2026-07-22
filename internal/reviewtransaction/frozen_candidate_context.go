@@ -236,7 +236,7 @@ func frozenRepositoryPathManifest(ctx context.Context, repo string, isolation []
 }
 
 func isolatedImmutableTreeGit(ctx context.Context, repo string) ([]string, func(), error) {
-	commonOutput, err := runGit(ctx, repo, nil, nil, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	commonDir, err := resolveGitDirectory(ctx, repo, "--git-common-dir")
 	if err != nil {
 		return nil, func() {}, err
 	}
@@ -274,7 +274,6 @@ func isolatedImmutableTreeGit(ctx context.Context, repo string) ([]string, func(
 		cleanup()
 		return nil, func() {}, err
 	}
-	commonDir := strings.TrimSpace(string(commonOutput))
 	return []string{
 		"GIT_DIR=" + gitDir,
 		"GIT_OBJECT_DIRECTORY=" + filepath.Join(commonDir, "objects"),
