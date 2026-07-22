@@ -1039,6 +1039,21 @@ func TestResolveRejectsCompactRemediationWhenFrozenBudgetIsZero(t *testing.T) {
 	}
 }
 
+func TestResolveRejectsCompactRemediationAfterSingleConsumedAttempt(t *testing.T) {
+	compact := reviewtransaction.CompactState{
+		LineageID: "compact-thin", Generation: 1, State: reviewtransaction.StateApproved,
+		CorrectionBudget: 10, CumulativeCorrectionLines: 1,
+		CorrectionAttempts: []reviewtransaction.CompactCorrectionAttempt{{ActualLines: 1}},
+	}
+	state := resolveBoundedRemediation(true, verifyResultEvaluation{
+		EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
+	}, nil, &compact, "bounded review transaction is missing", "")
+
+	if state.Required || state.Reason != "compact review authority has exhausted its correction attempts" {
+		t.Fatalf("RemediationState = %#v, want exhausted attempts with remaining line budget", state)
+	}
+}
+
 func TestResolveRemediationIsBoundToBudgetAndFailedEvidenceRevision(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")

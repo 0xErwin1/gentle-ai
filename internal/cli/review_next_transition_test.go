@@ -108,6 +108,72 @@ func TestNegotiatedNextTransitionDiscoversCapturedArtifactsAndAdvances(t *testin
 	}
 }
 
+func TestCorrectionNextTransitionAgreesBetweenFinalizeAndRestartStatus(t *testing.T) {
+	for _, tt := range []struct {
+		name, reason string
+		forecast     bool
+		change       bool
+		kind         string
+	}{
+		{name: "forecast absent", reason: "correction_plan_required", kind: reviewNextTransitionCollect},
+		{name: "forecast present candidate unchanged", reason: "corrected_candidate_unavailable", forecast: true, kind: reviewNextTransitionStop},
+		{name: "forecast present candidate changed", reason: "targeted_validation_required", forecast: true, change: true, kind: reviewNextTransitionCollect},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initReviewCLIRepo(t)
+			candidatePath := filepath.Join(repo, "candidate.go")
+			if err := os.WriteFile(candidatePath, []byte("package candidate\n\nfunc value() int { return 1 }\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			started := runNegotiatedReviewStart(t, repo, "correction-routing-"+strings.ReplaceAll(tt.name, " ", "-"))
+			resultPath := filepath.Join(t.TempDir(), "blocking-result.json")
+			writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
+				Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
+					Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate value is wrong",
+					ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+					CausalDisposition: reviewtransaction.CausalIntroduced,
+				}}, Evidence: []string{"inspected exact candidate"},
+			})
+			if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, &bytes.Buffer{}); err != nil {
+				t.Fatal(err)
+			}
+			if tt.forecast {
+				if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "1"}, &bytes.Buffer{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.change {
+				if err := os.WriteFile(candidatePath, []byte("package candidate\n\nfunc value() int { return 2 }\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			var directOutput bytes.Buffer
+			if err := RunReviewFacadeFinalize([]string{
+				"--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition", "--lineage", started.LineageID,
+			}, &directOutput); err != nil {
+				t.Fatalf("direct FINALIZE: %v\n%s", err, directOutput.String())
+			}
+			var direct ReviewIntegrationFinalizeResult
+			decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, directOutput.Bytes()).Result, &direct)
+
+			var statusOutput bytes.Buffer
+			if err := RunReview([]string{
+				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition", "--lineage", started.LineageID,
+			}, &statusOutput); err != nil {
+				t.Fatalf("restarted STATUS: %v\n%s", err, statusOutput.String())
+			}
+			var status ReviewTargetStatusResult
+			decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
+			if direct.NextTransition == nil || status.NextTransition == nil || direct.NextTransition.Kind != tt.kind ||
+				direct.NextTransition.ReasonCode != tt.reason || !reflect.DeepEqual(direct.NextTransition, status.NextTransition) ||
+				!reflect.DeepEqual(direct.ValidationRequest, status.ValidationRequest) {
+				t.Fatalf("FINALIZE/STATUS routing mismatch:\ndirect=%#v request=%#v\nstatus=%#v request=%#v", direct.NextTransition, direct.ValidationRequest, status.NextTransition, status.ValidationRequest)
+			}
+		})
+	}
+}
+
 func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *testing.T) {
 	repo, started, _, record := newArtifactReview(t, true)
 	var output bytes.Buffer
