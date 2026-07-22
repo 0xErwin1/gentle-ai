@@ -1027,6 +1027,117 @@ func TestNonClaudeSDDOrchestratorChainStrategyParity(t *testing.T) {
 	}
 }
 
+func TestDelegatedSDDProvidersForwardApplyVerifyContext(t *testing.T) {
+	tests := []struct {
+		name               string
+		path               string
+		delegatedContext   string
+		dependencyReadRows []string
+	}{
+		{
+			name:             "Codex prompt",
+			path:             "codex/sdd-orchestrator.md",
+			delegatedContext: "Codex phase prompt",
+		},
+		{
+			name:             "Kimi custom agent",
+			path:             "kimi/sdd-orchestrator.md",
+			delegatedContext: "Kimi custom-agent prompt",
+			dependencyReadRows: []string{
+				"| `sdd-apply` | project init + tasks + spec + design + **apply-progress (if exists)** | `apply-progress` |",
+				"| `sdd-verify` | project init + spec + tasks + **apply-progress (if exists)** | `verify-report` |",
+			},
+		},
+		{
+			name:             "Kiro native subagent",
+			path:             "kiro/sdd-orchestrator.md",
+			delegatedContext: "native Kiro subagent context",
+			dependencyReadRows: []string{
+				"| `sdd-apply` | project init + tasks + spec + design + **apply-progress (if exists)** | `apply-progress` |",
+				"| `sdd-verify` | project init + spec + tasks + **apply-progress (if exists)** | `verify-report` |",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			content := MustRead(tc.path)
+			section := markdownSection(content, "### Apply/Verify Context Forwarding (MANDATORY)")
+			if section == "" {
+				t.Fatalf("%s missing apply/verify context forwarding section", tc.path)
+			}
+
+			required := []string{
+				"`sdd-apply`",
+				"`sdd-verify`",
+				`mem_search(query: "sdd-init/{project}", project: "{project}")`,
+				"mem_get_observation",
+				"full project init",
+				"Search previews are not sufficient",
+				"`strict_tdd: true|false`",
+				`mem_search(query: "sdd/{change-name}/apply-progress", project: "{project}")`,
+				"full prior apply-progress",
+				"`previous_apply_progress:",
+				"READ-MERGE-WRITE",
+				"Do NOT overwrite",
+				"full combined apply-progress",
+				tc.delegatedContext,
+			}
+			for _, required := range required {
+				if !strings.Contains(section, required) {
+					t.Fatalf("%s missing delegated apply/verify context contract %q", tc.path, required)
+				}
+			}
+			if !hasApplyVerifyContextFlow(section, tc.delegatedContext) {
+				t.Fatalf("%s does not relate retrieval, forwarding, and persistence", tc.path)
+			}
+
+			glossaryTokens := append(append([]string{}, required...), tc.dependencyReadRows...)
+			glossaryOnly := "### Apply/Verify Context Forwarding (MANDATORY)\n" + strings.Join(glossaryTokens, "\n")
+			if hasApplyVerifyContextFlow(glossaryOnly, tc.delegatedContext) {
+				t.Fatal("glossary-only token fixture must not satisfy the forwarding contract")
+			}
+
+			for _, row := range tc.dependencyReadRows {
+				if !strings.Contains(content, row) {
+					t.Fatalf("%s missing dependency forwarding row %q", tc.path, row)
+				}
+			}
+		})
+	}
+}
+
+func hasApplyVerifyContextFlow(section, delegatedContext string) bool {
+	steps := []struct {
+		prefix  string
+		needles []string
+	}{
+		{"Before ", []string{"`sdd-apply`", "`sdd-verify`"}},
+		{"1. ", []string{`mem_search(query: "sdd-init/{project}"`, "mem_get_observation", "full project init", "Search previews are not sufficient"}},
+		{"2. ", []string{`mem_search(query: "sdd/{change-name}/apply-progress"`, "mem_get_observation", "full prior apply-progress", "before launch"}},
+		{"3. ", []string{"Add both resolved values", delegatedContext, "apply **and** verify"}},
+		{"   - ", []string{"`strict_tdd: true|false`", "RED → GREEN → REFACTOR", "Standard Mode is forbidden"}},
+		{"   - ", []string{"`previous_apply_progress:", "Verify consumes it as evidence", "apply treats it as cumulative state"}},
+		{"4. ", []string{"`sdd-apply`", "READ-MERGE-WRITE", "Preserve every prior completed task", "full combined apply-progress", "Do NOT overwrite"}},
+	}
+
+	next := 0
+	for _, line := range strings.Split(section, "\n") {
+		if next == len(steps) {
+			break
+		}
+		step := steps[next]
+		if !strings.HasPrefix(line, step.prefix) {
+			continue
+		}
+		if !lineContainsAll(step.needles...)(line) {
+			return false
+		}
+		next++
+	}
+	return next == len(steps)
+}
+
 func TestSDDOrchestratorsUseTheZeroHelpNativeTransitionBootstrap(t *testing.T) {
 	paths := []string{
 		"antigravity/sdd-orchestrator.md", "claude/sdd-orchestrator.md", "codex/sdd-orchestrator.md",
