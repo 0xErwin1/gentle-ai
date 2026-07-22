@@ -464,7 +464,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				if storeErr != nil {
 					artifactErr = storeErr
 				} else {
-					record, loadErr := store.Load()
+					record, loadErr := store.LoadContext(ctx)
 					if loadErr != nil {
 						artifactErr = loadErr
 					} else {

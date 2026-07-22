@@ -246,7 +246,7 @@ func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion
 			return entry, locks
 		}
 		store := CompactStore{Dir: path, lineageID: lineage, repo: repo}
-		record, err := store.Load()
+		record, err := store.LoadContext(ctx)
 		if err != nil {
 			entry.Status, entry.Problems = AuthorityStatusInvalid, []string{err.Error()}
 			return entry, locks

@@ -370,12 +370,13 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 	var lockTimeout *reviewtransaction.AuthorityLockTimeoutError
 	var lockCancelled *reviewtransaction.AuthorityLockCancelledError
 	if errors.As(runErr, &lockTimeout) || errors.As(runErr, &lockCancelled) {
+		label := reviewLockOperationLabel(operation)
 		failure.Phase = "pre_native"
 		failure.Code = "authority_lock_timeout"
-		failure.Message = "Review START could not acquire the authority lock within the bounded wait."
+		failure.Message = label + " could not acquire the authority lock within the bounded wait."
 		if lockCancelled != nil {
 			failure.Code = "authority_lock_cancelled"
-			failure.Message = "Review START authority lock acquisition was cancelled."
+			failure.Message = label + " authority lock acquisition was cancelled."
 		}
 		failure.MutationOutcome = ReviewMutationNotStarted
 		failure.AuthorityApplicability = "not_evaluated"
@@ -451,6 +452,14 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.NextAction = "retry"
 	}
 	return failure
+}
+
+func reviewLockOperationLabel(operation string) string {
+	name := strings.TrimPrefix(operation, "review.")
+	if name == operation || name == "" {
+		return "Review operation"
+	}
+	return "Review " + strings.ToUpper(name)
 }
 
 func publicReviewScopeChangeContext(scope *reviewtransaction.GateScopeChangeDiagnostics) *ReviewIntegrationFailureContext {

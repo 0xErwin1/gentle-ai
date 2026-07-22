@@ -222,6 +222,97 @@ func TestNegotiatedStartLockFailuresPreservePreMutationRetryTruth(t *testing.T) 
 	}
 }
 
+func TestNegotiatedStatusLockFailuresAreTypedOperationSpecificAndPathFree(t *testing.T) {
+	privatePath := filepath.Join(t.TempDir(), "REVIEW-MAINTENANCE.lock")
+	for _, tt := range []struct {
+		name    string
+		err     error
+		code    string
+		message string
+		retry   bool
+		next    string
+	}{
+		{
+			name: "timeout", err: fmt.Errorf("acquire %s: %w", privatePath, &reviewtransaction.AuthorityLockTimeoutError{Timeout: 2 * time.Second}),
+			code: "authority_lock_timeout", message: "Review STATUS could not acquire the authority lock within the bounded wait.",
+			retry: true, next: "retry_with_bounded_backoff",
+		},
+		{
+			name: "cancelled", err: fmt.Errorf("acquire %s: %w", privatePath, &reviewtransaction.AuthorityLockCancelledError{Cause: context.Canceled}),
+			code: "authority_lock_cancelled", message: "Review STATUS authority lock acquisition was cancelled.", next: "stop",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			failure := newReviewIntegrationFailure("review.status", nil, tt.err)
+			if failure.Code != tt.code || failure.Message != tt.message || failure.Phase != "pre_native" ||
+				failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe != tt.retry ||
+				failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != tt.next {
+				t.Fatalf("STATUS lock failure = %#v", failure)
+			}
+			payload, err := json.Marshal(failure)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(payload, []byte(privatePath)) || bytes.Contains(payload, []byte("Review START")) {
+				t.Fatalf("STATUS lock failure leaked private or wrong-operation detail: %s", payload)
+			}
+			if err := failure.Validate(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestNegotiatedStatusUsesRealMaintenanceLockTruth(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	started := startFacadeReview(t, repo)
+	lockContext, cancelLock := context.WithTimeout(context.Background(), time.Second)
+	defer cancelLock()
+	exclusive, err := reviewtransaction.AcquireReviewMaintenanceExclusive(lockContext, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer exclusive.Release()
+
+	originalTimeout := reviewFacadeOperationTimeout
+	t.Cleanup(func() { reviewFacadeOperationTimeout = originalTimeout })
+	args := []string{
+		"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID,
+	}
+
+	reviewFacadeOperationTimeout = 3 * time.Second
+	var timeoutOutput bytes.Buffer
+	err = RunReview(args, &timeoutOutput)
+	if err == nil {
+		t.Fatal("STATUS succeeded while exclusive maintenance held")
+	}
+	timeout := decodeReviewIntegrationFailure(t, timeoutOutput.Bytes())
+	if timeout.Code != "authority_lock_timeout" || timeout.MutationOutcome != ReviewMutationNotStarted ||
+		!timeout.RetrySafe || timeout.NextAction != "retry_with_bounded_backoff" {
+		t.Fatalf("real STATUS lock timeout = %#v", timeout)
+	}
+	if strings.Contains(timeoutOutput.String(), repo) {
+		t.Fatalf("real STATUS lock timeout exposed repository path: %s", timeoutOutput.String())
+	}
+	assertNoPrivateReviewOperationFields(t, timeoutOutput.Bytes())
+
+	reviewFacadeOperationTimeout = 50 * time.Millisecond
+	var deadlineOutput bytes.Buffer
+	err = RunReview(args, &deadlineOutput)
+	if err == nil {
+		t.Fatal("STATUS caller deadline succeeded while exclusive maintenance held")
+	}
+	deadline := decodeReviewIntegrationFailure(t, deadlineOutput.Bytes())
+	if deadline.Code != "operation_timeout" || deadline.MutationOutcome != ReviewMutationNotStarted ||
+		deadline.RetrySafe || deadline.NextAction != "stop" {
+		t.Fatalf("STATUS caller deadline = %#v", deadline)
+	}
+	if strings.Contains(deadlineOutput.String(), repo) {
+		t.Fatalf("STATUS caller deadline exposed repository path: %s", deadlineOutput.String())
+	}
+	assertNoPrivateReviewOperationFields(t, deadlineOutput.Bytes())
+}
+
 func TestNegotiatedFacadeAggregateTimeoutPreservesMutationTruth(t *testing.T) {
 	originalRunner := reviewFacadeCommandRunner
 	originalTimeout := reviewFacadeOperationTimeout
