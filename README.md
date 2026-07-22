@@ -199,6 +199,20 @@ The managed installer tracks the channel's latest version and does not accept an
    gentle-ai sync
    ```
 
+### Release verification
+
+Official release archives require an authenticated `checksums.txt`. The built-in upgrader verifies its Minisign signature, its exact `Gentleman-Programming/gentle-ai` + release-tag binding, and the selected archive checksum **before** replacing the installed binary. Release archives are capped at **128 MiB**, including chunked or unknown-length responses. Missing, oversized, malformed, untrusted, or placeholder key material fails closed without changing the installed binary.
+
+To verify a release manually, obtain the production public-key payload and fingerprint from a maintainer-controlled channel, then download `checksums.txt` and `checksums.txt.minisig` from the same release:
+
+```bash
+minisign -VQm checksums.txt -x checksums.txt.minisig -P "$GENTLE_AI_MINISIGN_PUBLIC_KEY"
+# Expected output: repo=Gentleman-Programming/gentle-ai;tag=vX.Y.Z
+sha256sum --check --strict --ignore-missing checksums.txt
+```
+
+Do not bootstrap trust from a public key downloaded only beside the artifacts it verifies. See [Release signing and key rotation](docs/release-signing.md) for the first-signed-release procedure, exact CI injection points, and rotation runbook.
+
 ### Review a focused staged candidate
 
 For a monorepo or shared worktree, explicitly review exactly what is in the Git index:

@@ -2,10 +2,6 @@ version: 2
 
 project_name: gentle-ai
 
-before:
-  hooks:
-    - go mod tidy
-
 builds:
   - main: ./cmd/gentle-ai
     binary: gentle-ai
@@ -18,8 +14,13 @@ builds:
     goarch:
       - amd64
       - arm64
+    flags:
+      - -trimpath
     ldflags:
-      - -s -w -X main.version={{.Version}}
+      - >-
+        -s -w
+        -X main.version={{ .Version }}
+        -X github.com/gentleman-programming/gentle-ai/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}
 
 archives:
   - formats:
@@ -38,6 +39,27 @@ archives:
 
 checksum:
   name_template: "checksums.txt"
+
+# Sign only the checksum manifest. The signed trusted comment binds the exact
+# repository and tag; the updater rejects a valid signature copied from any
+# other release identity.
+signs:
+  - cmd: minisign
+    artifacts: checksum
+    signature: ${artifact}.minisig
+    args:
+      - "-S"
+      - "-s"
+      - "{{ .Env.MINISIGN_SECRET_KEY_FILE }}"
+      - "-m"
+      - "${artifact}"
+      - "-x"
+      - "${signature}"
+      - "-c"
+      - "signature from gentle-ai release"
+      - "-t"
+      - "repo=Gentleman-Programming/gentle-ai;tag={{ .Tag }}"
+    output: true
 
 changelog:
   sort: asc
