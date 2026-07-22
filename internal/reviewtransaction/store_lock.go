@@ -38,8 +38,10 @@ type storeLock struct {
 	maintenance *MaintenanceLock
 }
 
-// MaintenanceLock is an advisory exclusive authority-maintenance lease.
-// Callers must supply a bounded context and always Release the lease.
+// MaintenanceLock is an advisory authority-maintenance lease. It may be shared
+// by review writers or exclusive for approved maintenance. Acquisition is
+// bounded by maintenanceLockTimeout, including context.Background callers.
+// Callers must always Release the lease.
 type MaintenanceLock struct{ lock *storeLock }
 
 func (lock *MaintenanceLock) Release() error {
@@ -108,7 +110,7 @@ func acquireLocalStoreLock(path string) (*storeLock, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	file, err := secureOpenLocalStoreLock(path)
 	if err != nil {
 		return nil, err
 	}
@@ -153,6 +155,14 @@ func acquireLocalStoreLock(path string) (*storeLock, error) {
 }
 
 func acquireMaintenanceLock(ctx context.Context, path string, mode maintenanceLockMode) (*MaintenanceLock, error) {
+	return acquireMaintenanceLockInternal(ctx, path, mode, false)
+}
+
+func acquireMaintenanceLockForCompactBatch(ctx context.Context, path string) (*MaintenanceLock, error) {
+	return acquireMaintenanceLockInternal(ctx, path, maintenanceExclusive, true)
+}
+
+func acquireMaintenanceLockInternal(ctx context.Context, path string, mode maintenanceLockMode, allowPreparedBatch bool) (*MaintenanceLock, error) {
 	if err := ensureMaintenanceLockPath(path); err != nil {
 		return nil, err
 	}
@@ -179,7 +189,15 @@ func acquireMaintenanceLock(ctx context.Context, path string, mode maintenanceLo
 			return nil, err
 		}
 		if locked {
-			return &MaintenanceLock{lock: &storeLock{file: file}}, nil
+			lock := &MaintenanceLock{lock: &storeLock{file: file}}
+			if !allowPreparedBatch && filepath.Base(path) == "REVIEW-MAINTENANCE.lock" {
+				base := filepath.Join(filepath.Dir(path), "review-transactions")
+				if err := ensureNoPreparedCompactBatchReconciliation(base); err != nil {
+					_ = lock.Release()
+					return nil, err
+				}
+			}
+			return lock, nil
 		}
 		_ = file.Close()
 		select {
@@ -206,6 +224,9 @@ func AcquireReviewMaintenanceExclusive(ctx context.Context, repo string) (*Maint
 }
 
 func ensureMaintenanceLockPath(path string) error {
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("maintenance lock path %q must be absolute", path)
+	}
 	root := filepath.Dir(path)
 	for current := root; ; current = filepath.Dir(current) {
 		info, err := os.Lstat(current)

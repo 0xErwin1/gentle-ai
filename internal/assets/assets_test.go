@@ -2,6 +2,7 @@ package assets
 
 import (
 	"encoding/json"
+	"io/fs"
 	"regexp"
 	"strings"
 	"testing"
@@ -427,6 +428,17 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`spawn("gentle-ai"`,
 		`"review", "capture-result"`,
 		`"review", "preserve-result"`,
+		`"--repository-context", binding.repository_context`,
+		`"--expected-revision", binding.revision`,
+		`return ["--cwd", cwd]`,
+		`const current = fields === "lens,lineage,order,repository_context,revision,subject_hash,target"`,
+		`typeof subject.subject_hash !== "string"`,
+		`subject.subject_hash !== binding.subject_hash`,
+		`const FROZEN_CONTEXT = "GENTLE_AI_FROZEN_CANDIDATE_CONTEXT "`,
+		`artifact_subject`,
+		`candidate_diff`,
+		`changed_path_manifest`,
+		`output.args.prompt = await injectReviewerContext(`,
 		`"--lineage", binding.lineage`,
 		`"--target", binding.target`,
 		`"--lens", binding.lens`,
@@ -436,7 +448,6 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`GENTLE_AI_REVIEW_CWD`,
 		`"tool.execute.before"`,
 		`output.args.background === true`,
-		`await preflightCapture(captureCwd(worktree, directory), parseBinding(output.args.prompt, output.args.subagent_type))`,
 		`!BINDING.test(input.args.prompt)`,
 		`const lens = input.args.subagent_type`,
 		`const binding = parseBinding(input.args.prompt, lens)`,
@@ -450,8 +461,19 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		// Envelope extraction itself can fail; only then is the raw envelope
 		// preserved, under a distinct extraction-failure cause.
 		`throw await preservedCaptureFailure(cwd, binding, output.output, cause)`,
+		`function sessionErrorMessage(binding: ReviewBinding, cause: unknown, code: string): string`,
+		`sessionErrorMessage(binding, cause, "repository_context_preflight_failed")`,
+		`parsed.reference`,
 		`raw reviewer result preserved for recovery`,
 		`raw reviewer result could not be preserved`,
+		// The previously conflated empty/nested-envelope branch must throw two
+		// distinct, machine-readable classified errors instead of one free-text
+		// message, and the plugin must thread that class into --class.
+		`"reviewer task result is empty"`,
+		`"reviewer task result contains a nested task envelope"`,
+		`reviewClass`,
+		`extractionClass(cause)`,
+		`"--class"`,
 		// Double failure (capture and preserve both failed) must embed the
 		// bounded raw payload in the thrown error so the transcript retains it.
 		`raw reviewer result follows for manual recovery`,
@@ -467,6 +489,11 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 	}
 	if strings.Contains(source, `.slice("review-".length)`) {
 		t.Fatal("review-result-artifacts.ts must preserve the exact full selected lens; found review- prefix stripping")
+	}
+	// Pin the split: the previously conflated empty/nested-envelope message
+	// must never regress back into one indistinguishable free-text throw.
+	if strings.Contains(source, `reviewer task result is empty or contains a nested envelope`) {
+		t.Fatal("review-result-artifacts.ts regressed to the conflated empty/nested-envelope error message")
 	}
 	for _, forbidden := range []string{"writeFile", "link(", "chmod(", "createHash", "export {", "export const"} {
 		if strings.Contains(source, forbidden) {
@@ -1000,6 +1027,33 @@ func TestNonClaudeSDDOrchestratorChainStrategyParity(t *testing.T) {
 	}
 }
 
+func TestSDDOrchestratorsUseTheZeroHelpNativeTransitionBootstrap(t *testing.T) {
+	paths := []string{
+		"antigravity/sdd-orchestrator.md", "claude/sdd-orchestrator.md", "codex/sdd-orchestrator.md",
+		"cursor/sdd-orchestrator.md", "gemini/sdd-orchestrator.md", "generic/sdd-orchestrator.md",
+		"hermes/sdd-orchestrator.md", "kimi/sdd-orchestrator.md", "kiro/sdd-orchestrator.md",
+		"opencode/sdd-orchestrator.md", "qwen/sdd-orchestrator.md", "windsurf/sdd-orchestrator.md",
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			for _, required := range []string{
+				"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition",
+				"native_next_transition", "gentle-ai review capabilities --contract gentle-ai.review-integration/v1", "unsupported-capability",
+				"parent orchestrator alone executes only the exact native `next_transition`", "never infer flags, construct authorization or bindings, or call `gentle-ai ... --help`",
+				"Reviewers, validators, executors, and refuters receive role inputs and return artifacts; they never call review lifecycle commands",
+			} {
+				if !strings.Contains(content, required) {
+					t.Fatalf("%s missing native transition routing guard %q", path, required)
+				}
+			}
+			if strings.Contains(content, "gentle-ai review --help") || strings.Contains(content, "gentle-ai --help") {
+				t.Fatalf("%s suggests help-based lifecycle exploration", path)
+			}
+		})
+	}
+}
+
 func TestPlatformNativeSDDOrchestratorsAvoidOpenCodePersistenceClaims(t *testing.T) {
 	tests := []struct {
 		path     string
@@ -1113,6 +1167,21 @@ func TestGentlemanLanguageInstructionsDoNotBiasEnglishSessions(t *testing.T) {
 				if !strings.Contains(content, required) {
 					t.Fatalf("%s missing output-style guardrail %q", path, required)
 				}
+			}
+		})
+	}
+
+	orchestratorPaths, err := fs.Glob(FS, "*/sdd-orchestrator.md")
+	if err != nil {
+		t.Fatalf("glob SDD orchestrator assets: %v", err)
+	}
+	if len(orchestratorPaths) == 0 {
+		t.Fatal("no SDD orchestrator assets found")
+	}
+	for _, path := range orchestratorPaths {
+		t.Run(path, func(t *testing.T) {
+			if strings.Contains(MustRead(path), "haceme un SDD para X") {
+				t.Fatalf("%s still contains a Spanish example that biases English sessions", path)
 			}
 		})
 	}

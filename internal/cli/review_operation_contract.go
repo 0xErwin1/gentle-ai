@@ -233,6 +233,31 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.NextAction = ReviewIntegrationOperationBindSDD
 		return failure
 	}
+	var startContext *reviewStartContextError
+	if errors.As(runErr, &startContext) {
+		failure.Code = "candidate_context_unavailable"
+		failure.LineageID = startContext.LineageID
+		failure.RequiredInputs = []string{}
+		if !startContext.AuthoritySelected {
+			failure.Phase = "pre_native"
+			failure.Message = "Frozen candidate context could not be rendered before START authority creation."
+			failure.MutationOutcome = ReviewMutationNotStarted
+			failure.AuthorityApplicability = "not_evaluated"
+			failure.RetrySafe = false
+			failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
+			failure.NextAction = "stop"
+			return failure
+		}
+		failure.Phase = "native_committed"
+		failure.Message = "Frozen candidate context could not be rendered for the selected durable START authority."
+		failure.MutationOutcome = ReviewMutationUnknown
+		failure.AuthorityApplicability = "current_target"
+		failure.RetrySafe = false
+		failure.Replayability = reviewtransaction.ReplayabilityStatusRequired
+		failure.RequiredInputs = []string{"lineage_id"}
+		failure.NextAction = "review.status"
+		return failure
+	}
 	var progress *reviewFacadeOperationProgressError
 	if errors.As(runErr, &progress) {
 		failure.Phase = "native_committed"
@@ -714,11 +739,14 @@ type ReviewIntegrationOperationResult struct {
 // ReviewIntegrationFinalizeResult preserves the existing finalize semantics
 // while excluding the provider-private receipt path from negotiated output.
 type ReviewIntegrationFinalizeResult struct {
-	Operation     string                  `json:"operation"`
-	LineageID     string                  `json:"lineage_id"`
-	State         reviewtransaction.State `json:"state"`
-	Action        string                  `json:"action"`
-	StoreRevision string                  `json:"store_revision"`
+	Operation         string                                       `json:"operation"`
+	LineageID         string                                       `json:"lineage_id"`
+	State             reviewtransaction.State                      `json:"state"`
+	Action            string                                       `json:"action"`
+	StoreRevision     string                                       `json:"store_revision"`
+	Eligibility       *ReviewActionEligibility                     `json:"eligibility,omitempty"`
+	NextTransition    *ReviewNextTransition                        `json:"next_transition,omitempty"`
+	ValidationRequest *reviewtransaction.TargetedValidationRequest `json:"validation_request,omitempty"`
 }
 
 func reviewIntegrationNegotiation(flags *flag.FlagSet, contract string) (bool, error) {
@@ -780,6 +808,29 @@ func (result ReviewIntegrationOperationResult) Validate() error {
 		if finalized.Operation != "review/finalize" || strings.TrimSpace(finalized.LineageID) == "" ||
 			strings.TrimSpace(finalized.Action) == "" || !validReviewCapabilitySHA256(finalized.StoreRevision) || strings.TrimSpace(string(finalized.State)) == "" {
 			return errors.New("negotiated finalize result is incomplete")
+		}
+		if finalized.Eligibility != nil {
+			if err := finalized.Eligibility.ValidateFinalize(); err != nil {
+				return fmt.Errorf("negotiated finalize result action eligibility: %w", err)
+			}
+		}
+		if finalized.NextTransition != nil {
+			if err := finalized.NextTransition.Validate(); err != nil {
+				return fmt.Errorf("negotiated finalize result next transition: %w", err)
+			}
+			transitionRequest := reviewTransitionValidationRequest(finalized.NextTransition)
+			if (transitionRequest == nil) != (finalized.ValidationRequest == nil) ||
+				transitionRequest != nil && !reflect.DeepEqual(*transitionRequest, *finalized.ValidationRequest) {
+				return errors.New("negotiated finalize validation request copies differ")
+			}
+		}
+		if finalized.ValidationRequest != nil {
+			if finalized.State != reviewtransaction.StateCorrectionRequired ||
+				finalized.ValidationRequest.LineageID != finalized.LineageID ||
+				finalized.ValidationRequest.ExpectedRevision != finalized.StoreRevision ||
+				reviewtransaction.ValidateTargetedValidationRequest(*finalized.ValidationRequest) != nil {
+				return errors.New("negotiated finalize result validation request is invalid")
+			}
 		}
 	case ReviewIntegrationOperationValidate:
 		var validated ReviewValidateResult

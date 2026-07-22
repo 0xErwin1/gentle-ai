@@ -54,7 +54,7 @@ func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *test
 		t.Fatalf("unnegotiated status fields = %v, want %v\n%s", gotGlobalFields, wantGlobalFields, global.String())
 	}
 
-	args := []string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo}
+	args := []string{"status", "--contract", ReviewIntegrationContractV1, "--action-eligibility", "--next-transition", "--cwd", repo}
 	var first, second bytes.Buffer
 	if err := RunReview(args, &first); err != nil {
 		t.Fatal(err)
@@ -96,11 +96,21 @@ func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *test
 		t.Fatalf("negotiated status exposed provider-private field %q: %s", field, first.String())
 	}
 
-	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "status.fixture.json"))
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "status-v2.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(first.Bytes(), fixture) {
+	var fixtureStatus ReviewTargetStatusResult
+	if err := json.Unmarshal(fixture, &fixtureStatus); err != nil {
+		t.Fatal(err)
+	}
+	gotContext := transitionArgumentValue(t, status.NextTransition, "repository-context")
+	wantContext := transitionArgumentValue(t, fixtureStatus.NextTransition, "repository-context")
+	if err := reviewtransaction.ValidateReviewRepositoryContextHandle(gotContext); err != nil {
+		t.Fatalf("status repository context = %q: %v", gotContext, err)
+	}
+	normalized := bytes.ReplaceAll(first.Bytes(), []byte(gotContext), []byte(wantContext))
+	if !bytes.Equal(normalized, fixture) {
 		t.Fatalf("status fixture mismatch:\ngot=%s\nwant=%s", first.String(), fixture)
 	}
 	var denied bytes.Buffer
@@ -120,6 +130,20 @@ func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *test
 	}
 }
 
+func transitionArgumentValue(t *testing.T, transition *ReviewNextTransition, name string) string {
+	t.Helper()
+	if transition == nil || transition.Collect == nil || len(transition.Collect.Inputs) != 1 {
+		t.Fatalf("transition does not contain exactly one collected input: %#v", transition)
+	}
+	for _, argument := range transition.Collect.Inputs[0].Arguments {
+		if argument.Name == name {
+			return argument.Value
+		}
+	}
+	t.Fatalf("transition does not contain argument %q: %#v", name, transition)
+	return ""
+}
+
 func TestNegotiatedReviewStatusContractAndSchemasAreStrict(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	var output bytes.Buffer
@@ -135,8 +159,9 @@ func TestNegotiatedReviewStatusContractAndSchemasAreStrict(t *testing.T) {
 		name string
 		id   string
 	}{
-		{name: "status.schema.json", id: ReviewIntegrationStatusSchemaID},
+		{name: "status-v2.schema.json", id: ReviewIntegrationStatusSchemaID},
 		{name: "projection.schema.json", id: ReviewIntegrationProjectionSchemaID},
+		{name: "targeted-validation-request.schema.json", id: reviewtransaction.TargetedValidationRequestSchemaID},
 	} {
 		payload, readErr := os.ReadFile(filepath.Join(root, "schemas", item.name))
 		if readErr != nil {
@@ -154,10 +179,11 @@ func TestNegotiatedReviewStatusContractAndSchemasAreStrict(t *testing.T) {
 		name          string
 		applicability reviewtransaction.TargetApplicability
 	}{
-		{name: "status.fixture.json", applicability: reviewtransaction.TargetApplicabilityCurrent},
-		{name: "status-unrelated.fixture.json", applicability: reviewtransaction.TargetApplicabilityUnrelated},
-		{name: "status-ambiguous.fixture.json", applicability: reviewtransaction.TargetApplicabilityAmbiguous},
-		{name: "status-corrupted.fixture.json", applicability: reviewtransaction.TargetApplicabilityCorrupted},
+		{name: "status-v2.fixture.json", applicability: reviewtransaction.TargetApplicabilityCurrent},
+		{name: "status-v2-recover.fixture.json", applicability: reviewtransaction.TargetApplicabilityCurrent},
+		{name: "status-v2-unrelated.fixture.json", applicability: reviewtransaction.TargetApplicabilityUnrelated},
+		{name: "status-v2-ambiguous.fixture.json", applicability: reviewtransaction.TargetApplicabilityAmbiguous},
+		{name: "status-v2-corrupted.fixture.json", applicability: reviewtransaction.TargetApplicabilityCorrupted},
 	}
 	for _, item := range fixtures {
 		fixture, readErr := os.ReadFile(filepath.Join(root, "fixtures", item.name))
@@ -205,7 +231,7 @@ func TestNegotiatedPendingFinalizeStatusMatchesPublishedSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID}, &output); err != nil {
+	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--action-eligibility", "--cwd", repo, "--lineage", started.LineageID}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var status ReviewTargetStatusResult
@@ -219,6 +245,17 @@ func TestNegotiatedPendingFinalizeStatusMatchesPublishedSchema(t *testing.T) {
 	}
 	if status.Action != reviewtransaction.TargetStatusActionReconcileFinalize || status.Replayability != reviewtransaction.ReplayabilityStatusRequired || status.Reconciliation == nil || !status.Reconciliation.Required {
 		t.Fatalf("pending negotiated status = %#v", status)
+	}
+	if status.Eligibility == nil || len(status.Eligibility.AllowedActions) != 1 || status.Eligibility.AllowedActions[0].Action != "stop" ||
+		status.Eligibility.AllowedActions[0].ReasonCode != reviewActionForbiddenReconciliation {
+		t.Fatalf("pending journal advertised replay guidance: %#v", status.Eligibility)
+	}
+	forbiddenFinalize := false
+	for _, forbidden := range status.Eligibility.ForbiddenActions {
+		forbiddenFinalize = forbiddenFinalize || forbidden.Action == "review.finalize" && forbidden.ReasonCode == reviewActionForbiddenReconciliation
+	}
+	if !forbiddenFinalize {
+		t.Fatalf("pending journal did not forbid lineage-only finalize replay: %#v", status.Eligibility)
 	}
 	assertStatusPayloadMatchesPublishedSchema(t, output.Bytes())
 	nonReconciliation := status
@@ -237,9 +274,124 @@ func TestNegotiatedPendingFinalizeStatusMatchesPublishedSchema(t *testing.T) {
 	}
 }
 
+func TestActionEligibilityIsOptionalForV1Consumers(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	startFacadeReview(t, repo)
+	type v1Status struct {
+		Schema         string                                `json:"schema"`
+		Contract       string                                `json:"contract"`
+		Operation      string                                `json:"operation"`
+		Applicability  reviewtransaction.TargetApplicability `json:"applicability"`
+		Authority      *ReviewTargetStatusAuthority          `json:"authority,omitempty"`
+		Receipt        ReviewTargetStatusReceipt             `json:"receipt"`
+		Action         reviewtransaction.TargetStatusAction  `json:"action"`
+		Replayability  reviewtransaction.Replayability       `json:"replayability"`
+		Frozen         *ReviewTargetStatusFrozen             `json:"frozen,omitempty"`
+		TargetIdentity string                                `json:"target_identity"`
+		Projection     ReviewTargetStatusProjection          `json:"projection"`
+		Candidates     []string                              `json:"candidates"`
+	}
+	var legacyOutput bytes.Buffer
+	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo}, &legacyOutput); err != nil {
+		t.Fatal(err)
+	}
+	var legacy v1Status
+	decodeStrictReviewJSON(t, legacyOutput.Bytes(), &legacy)
+	var oldPayload ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, legacyOutput.Bytes(), &oldPayload)
+	if err := oldPayload.Validate(); err != nil || oldPayload.Eligibility != nil {
+		t.Fatalf("old valid v1 payload = %#v, %v", oldPayload, err)
+	}
+	var currentOutput bytes.Buffer
+	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV1, "--action-eligibility", "--cwd", repo}, &currentOutput); err != nil {
+		t.Fatal(err)
+	}
+	var current ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, currentOutput.Bytes(), &current)
+	if current.Eligibility == nil {
+		t.Fatalf("new v1 payload = %#v", current)
+	}
+}
+
+func TestReviewActionEligibilityStopsWithoutCompleteExecutionInputs(t *testing.T) {
+	base := func(applicability reviewtransaction.TargetApplicability, state reviewtransaction.State, action reviewtransaction.TargetStatusAction, replayability reviewtransaction.Replayability) ReviewTargetStatusResult {
+		native := reviewtransaction.TargetStatusResult{
+			Applicability: applicability, AuthorityVersion: reviewtransaction.AuthorityVersionCompact,
+			LineageID: "status-input-matrix", State: state, Generation: 1,
+			Revision: "sha256:" + strings.Repeat("a", 64), OriginalChangedLines: 2, Tier: reviewtransaction.RiskMedium, CorrectionBudget: 1,
+			Action: action, Replayability: replayability,
+		}
+		status := newReviewTargetStatusResult(native)
+		status.Projection = publishedStatusFixtureProjection(t)
+		status.TargetIdentity = status.Projection.CurrentSnapshotIdentity
+		status.Eligibility = newReviewActionEligibility(status)
+		return status
+	}
+	for _, tt := range []struct {
+		name          string
+		applicability reviewtransaction.TargetApplicability
+		state         reviewtransaction.State
+		action        reviewtransaction.TargetStatusAction
+		replayability reviewtransaction.Replayability
+		allowed       string
+		forbidden     string
+	}{
+		{"unrelated workspace start", reviewtransaction.TargetApplicabilityUnrelated, "", reviewtransaction.TargetStatusActionStart, reviewtransaction.ReplayabilityNotReplayable, reviewActionForbiddenInputsUnavailable, reviewActionForbiddenUnrelated},
+		{"unrelated staged start", reviewtransaction.TargetApplicabilityUnrelated, "", reviewtransaction.TargetStatusActionStart, reviewtransaction.ReplayabilityNotReplayable, reviewActionForbiddenInputsUnavailable, reviewActionForbiddenUnrelated},
+		{"unrelated base ref start", reviewtransaction.TargetApplicabilityUnrelated, "", reviewtransaction.TargetStatusActionStart, reviewtransaction.ReplayabilityNotReplayable, reviewActionForbiddenInputsUnavailable, reviewActionForbiddenUnrelated},
+		{"unrelated overlay start", reviewtransaction.TargetApplicabilityUnrelated, "", reviewtransaction.TargetStatusActionStart, reviewtransaction.ReplayabilityNotReplayable, reviewActionForbiddenInputsUnavailable, reviewActionForbiddenUnrelated},
+		{"reviewing selected lenses", reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateReviewing, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable, reviewActionForbiddenInputsUnavailable, reviewActionForbiddenInputsUnavailable},
+		{"pending finalize journal", reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateValidating, reviewtransaction.TargetStatusActionReconcileFinalize, reviewtransaction.ReplayabilityStatusRequired, reviewActionForbiddenReconciliation, reviewActionForbiddenReconciliation},
+		{"scope changed finalize", reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateCorrectionRequired, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable, reviewActionForbiddenInputsUnavailable, reviewActionForbiddenInputsUnavailable},
+		{"terminal validation", reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateApproved, reviewtransaction.TargetStatusActionValidate, reviewtransaction.ReplayabilityNotReplayable, reviewActionForbiddenInputsUnavailable, reviewActionForbiddenInputsUnavailable},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			status := base(tt.applicability, tt.state, tt.action, tt.replayability)
+			if err := status.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			allowed := status.Eligibility.AllowedActions
+			if len(allowed) != 1 || allowed[0].Action != "stop" || allowed[0].ReasonCode != tt.allowed || len(allowed[0].RequiredInputs) != 0 {
+				t.Fatalf("eligibility = %#v", status.Eligibility)
+			}
+			forbiddenStart := false
+			for _, forbidden := range status.Eligibility.ForbiddenActions {
+				forbiddenStart = forbiddenStart || forbidden.Action == "review.start" && forbidden.ReasonCode == tt.forbidden
+			}
+			if !forbiddenStart {
+				t.Fatalf("missing expected forbidden guidance: %#v", status.Eligibility)
+			}
+		})
+	}
+}
+
+func TestNegotiatedReviewFinalizeEligibilityRequiresTargetScopedStatus(t *testing.T) {
+	for _, state := range []reviewtransaction.State{
+		reviewtransaction.StateReviewing,
+		reviewtransaction.StateCorrectionRequired,
+		reviewtransaction.StateValidating,
+		reviewtransaction.StateApproved,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			var output bytes.Buffer
+			if err := encodeCompactFacadeFinalize(&output, true, true, false, reviewtransaction.CompactState{LineageID: "review-finalize-eligibility", State: state}, "sha256:"+strings.Repeat("a", 64), reviewtransaction.CompactStore{}, "finalize"); err != nil {
+				t.Fatal(err)
+			}
+			var result ReviewIntegrationFinalizeResult
+			decodeStrictReviewJSON(t, decodeReviewOperationEnvelope(t, output.Bytes()).Result, &result)
+			if result.Eligibility == nil || result.Eligibility.ValidateFinalize() != nil {
+				t.Fatalf("finalize eligibility = %#v", result.Eligibility)
+			}
+		})
+	}
+}
+
 func assertStatusPayloadMatchesPublishedSchema(t *testing.T, payload []byte) {
 	t.Helper()
-	schemaPath := filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas", "status.schema.json")
+	schemaPath := filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas", "status-v2.schema.json")
 	schemaBytes, err := os.ReadFile(schemaPath)
 	if err != nil {
 		t.Fatal(err)
@@ -430,13 +582,157 @@ func TestNegotiatedStatusPreservesManualRecoveryAuthorityContext(t *testing.T) {
 	native := reviewtransaction.TargetStatusResult{
 		Applicability: reviewtransaction.TargetApplicabilityCurrent, AuthorityVersion: reviewtransaction.AuthorityVersionCompact,
 		LineageID: "historical-validator", State: reviewtransaction.StateCorrectionRequired, Generation: 1, Revision: "sha256:" + strings.Repeat("a", 64),
-		Action: reviewtransaction.TargetStatusActionRecover, Replayability: reviewtransaction.ReplayabilityManualActionRequired,
+		Action: reviewtransaction.TargetStatusActionRecover, ActionDisposition: reviewtransaction.RecoveryEscalated,
+		Replayability: reviewtransaction.ReplayabilityManualActionRequired,
 	}
 	got := newReviewTargetStatusResult(native)
 	if got.Action != reviewtransaction.TargetStatusActionRecover || got.Replayability != reviewtransaction.ReplayabilityManualActionRequired ||
+		got.ActionDisposition != reviewtransaction.RecoveryEscalated ||
 		got.Authority == nil || got.Authority.LineageID != native.LineageID || got.Authority.Revision != native.Revision {
 		t.Fatalf("negotiated recovery status = %#v", got)
 	}
+}
+
+// TestNegotiatedStatusBindsRecoveryDispositionToRecoverAction pins issue #1469
+// Case B at the published contract boundary: a recover recommendation must
+// carry the disposition recovery accepts, and nothing else may carry one.
+func TestNegotiatedStatusBindsRecoveryDispositionToRecoverAction(t *testing.T) {
+	base := func() ReviewTargetStatusResult {
+		native := reviewtransaction.TargetStatusResult{
+			Applicability: reviewtransaction.TargetApplicabilityCurrent, AuthorityVersion: reviewtransaction.AuthorityVersionCompact,
+			LineageID: "disposition-contract", State: reviewtransaction.StateCorrectionRequired, Generation: 1,
+			Revision: "sha256:" + strings.Repeat("a", 64), OriginalChangedLines: 2, Tier: reviewtransaction.RiskMedium, CorrectionBudget: 1,
+			Action: reviewtransaction.TargetStatusActionRecover, ActionDisposition: reviewtransaction.RecoveryScopeChanged,
+			Replayability: reviewtransaction.ReplayabilityManualActionRequired,
+		}
+		result := newReviewTargetStatusResult(native)
+		result.Projection = publishedStatusFixtureProjection(t)
+		result.TargetIdentity = result.Projection.CurrentSnapshotIdentity
+		result.Eligibility = newReviewActionEligibility(result)
+		return result
+	}
+	valid := base()
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("scope-changed recover status rejected: %v", err)
+	}
+	for _, disposition := range []reviewtransaction.RecoveryDisposition{
+		reviewtransaction.RecoveryScopeChanged, reviewtransaction.RecoveryInvalidated, reviewtransaction.RecoveryEscalated,
+	} {
+		accepted := base()
+		accepted.ActionDisposition = disposition
+		accepted.Eligibility = newReviewActionEligibility(accepted)
+		if err := accepted.Validate(); err != nil {
+			t.Fatalf("recover status rejected disposition %q: %v", disposition, err)
+		}
+	}
+	missing := base()
+	missing.ActionDisposition = ""
+	if err := missing.Validate(); err == nil {
+		t.Fatal("recover status accepted without a recovery disposition")
+	}
+	unsupported := base()
+	unsupported.ActionDisposition = reviewtransaction.RecoveryDisposition("corrected")
+	if err := unsupported.Validate(); err == nil {
+		t.Fatal("recover status accepted an unsupported recovery disposition")
+	}
+	misplaced := base()
+	misplaced.Action = reviewtransaction.TargetStatusActionFinalize
+	misplaced.Replayability = reviewtransaction.ReplayabilityNotReplayable
+	if err := misplaced.Validate(); err == nil {
+		t.Fatal("finalize status accepted a recovery disposition")
+	}
+	misplaced.ActionDisposition = ""
+	misplaced.Eligibility = newReviewActionEligibility(misplaced)
+	if err := misplaced.Validate(); err != nil {
+		t.Fatalf("finalize status without a disposition rejected: %v", err)
+	}
+}
+
+func TestReviewActionEligibilityFailsClosedForEscalatedAuthority(t *testing.T) {
+	base := func(state reviewtransaction.State, action reviewtransaction.TargetStatusAction, disposition reviewtransaction.RecoveryDisposition, replayability reviewtransaction.Replayability) ReviewTargetStatusResult {
+		native := reviewtransaction.TargetStatusResult{
+			Applicability: reviewtransaction.TargetApplicabilityCurrent, AuthorityVersion: reviewtransaction.AuthorityVersionCompact,
+			LineageID: "escalated-authority", State: state, Generation: 2,
+			Revision: "sha256:" + strings.Repeat("a", 64), OriginalChangedLines: 2, Tier: reviewtransaction.RiskMedium, CorrectionBudget: 1,
+			Action: action, ActionDisposition: disposition, Replayability: replayability,
+		}
+		status := newReviewTargetStatusResult(native)
+		status.Projection = publishedStatusFixtureProjection(t)
+		status.TargetIdentity = status.Projection.CurrentSnapshotIdentity
+		status.Eligibility = newReviewActionEligibility(status)
+		return status
+	}
+	for _, tt := range []struct {
+		name            string
+		state           reviewtransaction.State
+		action          reviewtransaction.TargetStatusAction
+		disposition     reviewtransaction.RecoveryDisposition
+		replayability   reviewtransaction.Replayability
+		wantAllowed     string
+		wantAbandonCode string
+	}{
+		{"terminal captured authority stops", reviewtransaction.StateEscalated, reviewtransaction.TargetStatusActionStop, "", reviewtransaction.ReplayabilityManualActionRequired, "stop", reviewActionForbiddenTerminalEscalated},
+		{"unchanged escalated candidate stops", reviewtransaction.StateCorrectionRequired, reviewtransaction.TargetStatusActionStop, "", reviewtransaction.ReplayabilityManualActionRequired, "stop", reviewActionForbiddenUnchangedEscalated},
+		{"materially changed candidate recovers explicitly", reviewtransaction.StateCorrectionRequired, reviewtransaction.TargetStatusActionRecover, reviewtransaction.RecoveryEscalated, reviewtransaction.ReplayabilityManualActionRequired, "review.recover", reviewActionForbiddenNotSelected},
+		{"pending correction stops", reviewtransaction.StateCorrectionRequired, reviewtransaction.TargetStatusActionReconcileFinalize, "", reviewtransaction.ReplayabilityStatusRequired, "stop", reviewActionForbiddenReconciliation},
+		{"pending validation stops", reviewtransaction.StateValidating, reviewtransaction.TargetStatusActionReconcileFinalize, "", reviewtransaction.ReplayabilityStatusRequired, "stop", reviewActionForbiddenReconciliation},
+		{"terminal receipt replay remains exact", reviewtransaction.StateApproved, reviewtransaction.TargetStatusActionFinalize, "", reviewtransaction.ReplayabilityExactReplaySafe, "review.finalize", reviewActionForbiddenNotSelected},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			status := base(tt.state, tt.action, tt.disposition, tt.replayability)
+			if err := status.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			allowed := status.Eligibility.AllowedActions
+			if len(allowed) != 1 || allowed[0].Action != tt.wantAllowed {
+				t.Fatalf("allowed actions = %#v", allowed)
+			}
+			if tt.action == reviewtransaction.TargetStatusActionReconcileFinalize && allowed[0].ReasonCode != reviewActionForbiddenReconciliation ||
+				tt.replayability == reviewtransaction.ReplayabilityExactReplaySafe && !reflect.DeepEqual(allowed[0].RequiredInputs, []string{"lineage_id"}) {
+				t.Fatalf("replay eligibility = %#v", allowed[0])
+			}
+			if tt.wantAllowed == "review.recover" {
+				if allowed[0].Disposition != reviewtransaction.RecoveryEscalated || allowed[0].Binding == nil ||
+					allowed[0].Binding.LineageID != status.Authority.LineageID || allowed[0].Binding.Revision != status.Authority.Revision ||
+					allowed[0].Binding.TargetIdentity != status.TargetIdentity {
+					t.Fatalf("escalated recovery binding = %#v", allowed[0])
+				}
+			}
+			for _, forbidden := range status.Eligibility.ForbiddenActions {
+				if forbidden.Action == "review.abandon" && forbidden.ReasonCode != tt.wantAbandonCode {
+					t.Fatalf("abandon eligibility = %#v", forbidden)
+				}
+			}
+		})
+	}
+	status := base(reviewtransaction.StateCorrectionRequired, reviewtransaction.TargetStatusActionRecover, reviewtransaction.RecoveryEscalated, reviewtransaction.ReplayabilityManualActionRequired)
+	status.Eligibility.AllowedActions[0].Binding = nil
+	if err := status.Validate(); err == nil {
+		t.Fatal("fabricated recovery binding was accepted")
+	}
+}
+
+func TestReviewFinalizeEligibilityCannotPublishRecoveryBinding(t *testing.T) {
+	eligibility := ReviewActionEligibility{
+		AllowedActions:   []ReviewEligibleAction{{Action: "review.recover", ReasonCode: reviewActionEligibleEscalatedRecovery, RequiredInputs: []string{}, Disposition: reviewtransaction.RecoveryEscalated, Binding: &ReviewActionBinding{}}},
+		ForbiddenActions: []ReviewForbiddenAction{},
+	}
+	if err := eligibility.ValidateFinalize(); err == nil {
+		t.Fatal("finalize eligibility accepted a recovery binding")
+	}
+}
+
+func publishedStatusFixtureProjection(t *testing.T) ReviewTargetStatusProjection {
+	t.Helper()
+	payload, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "status-v2.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture ReviewTargetStatusResult
+	if err := json.Unmarshal(payload, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	return fixture.Projection
 }
 
 func TestNegotiatedLegacyReceiptStatusNeverUsesCompactPublicationPending(t *testing.T) {
