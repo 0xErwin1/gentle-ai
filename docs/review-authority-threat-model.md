@@ -38,8 +38,7 @@ For a staged authority, `post-apply` and `pre-commit` re-derive the exact index;
 
 Run `gentle-ai review schema reviewer`, `gentle-ai review schema refuter`, or `gentle-ai review schema validator` to print the versioned JSON Schema and one accepted example for the existing strict facade input. Final verification evidence remains arbitrary non-empty bytes and therefore has no invented JSON contract. Unknown JSON fields and semantic violations remain rejected before authority changes.
 
-Failed targeted validation stays in the same ordinary bounded lineage. The initial lenses and frozen finding IDs execute once, while each correction attempt records its snapshot, validation checks, and changed-line charge. Cumulative changed lines cannot exceed the original correction budget or expand immutable genesis paths.
-Three failed compact correction attempts exhaust the lineage even when their measured delta is zero; this bounds persisted retry history without rerunning review lenses or resetting the budget.
+An ordinary bounded lineage permits exactly one changed-target correction attempt. The initial lenses and frozen finding IDs execute once, while that correction records its snapshot, validation checks, and changed-line charge without expanding immutable genesis paths or the frozen budget. Consuming the attempt exhausts ordinary correction even when its measured delta is zero; a later change requires an authorized successor rather than another fix transition. Historical multi-attempt records remain readable, but cannot append another attempt.
 
 Synthetic Git trees used by persisted snapshots remain subject to repository object pruning. Durable retention needs a separate Git-lifecycle design; this correction does not create hidden refs or weaken missing-object validation.
 

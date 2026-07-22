@@ -20,10 +20,13 @@ const NativeLowRiskVerificationDomain = "gentle-ai.native-low-risk-verification/
 const CompactRecoveredEvidenceSchema = "gentle-ai.review-recovered-evidence/v1"
 
 const (
-	StateCorrectionRequired      State = "correction_required"
-	StateValidating              State = "validating"
-	MaxCompactCorrectionAttempts       = 3
+	StateCorrectionRequired             State = "correction_required"
+	StateValidating                     State = "validating"
+	MaxCompactCorrectionAttempts              = 1
+	historicalCompactCorrectionAttempts       = 3
 )
+
+var ErrCompactCorrectionConsumed = errors.New("ordinary compact correction already consumed")
 
 type CompactState struct {
 	Schema                    string                       `json:"schema"`
@@ -632,7 +635,9 @@ func validateCompactCorrection(state CompactState) error {
 		if state.State == StateEscalated && state.ProposedCorrectionLines != nil && state.CumulativeCorrectionLines+*state.ProposedCorrectionLines > state.CorrectionBudget && state.ActualCorrectionLines == nil {
 			return nil
 		}
-		if state.State == StateEscalated && len(state.CorrectionAttempts) >= MaxCompactCorrectionAttempts && state.ActualCorrectionLines == nil {
+		if state.State == StateEscalated && len(state.CorrectionAttempts) >= historicalCompactCorrectionAttempts &&
+			state.ProposedCorrectionLines == nil && state.ActualCorrectionLines == nil && state.FixDeltaHash == EmptyFixDeltaHash &&
+			state.OriginalCriteria == nil && state.CorrectionRegression == nil && state.EvidenceHash == "" {
 			return nil
 		}
 	}
@@ -1049,12 +1054,19 @@ func compactPristineReviewing(state CompactState) bool {
 		len(state.CorrectionAttempts) == 0 && state.CumulativeCorrectionLines == 0
 }
 
+// CorrectionAttemptConsumed reports whether current policy permits no further
+// ordinary correction append. Historical records may remain readable without
+// regaining permission to mutate their predecessor authority.
+func (state CompactState) CorrectionAttemptConsumed() bool {
+	return len(state.CorrectionAttempts) >= MaxCompactCorrectionAttempts
+}
+
 func (state *CompactState) BeginCorrection(proposed int) error {
+	if state.CorrectionAttemptConsumed() {
+		return ErrCompactCorrectionConsumed
+	}
 	if state.State != StateCorrectionRequired || state.ProposedCorrectionLines != nil {
 		return fmt.Errorf("cannot begin correction from compact state %q", state.State)
-	}
-	if len(state.CorrectionAttempts) != 0 {
-		return errors.New("compact correction validator was already consumed; use authorized successor recovery")
 	}
 	if proposed <= 0 {
 		return errors.New("compact correction requires a positive changed-line forecast")
@@ -1068,6 +1080,9 @@ func (state *CompactState) BeginCorrection(proposed int) error {
 }
 
 func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, validation ScopedValidationResult) error {
+	if state.CorrectionAttemptConsumed() {
+		return ErrCompactCorrectionConsumed
+	}
 	if state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil {
 		return fmt.Errorf("cannot complete correction from compact state %q", state.State)
 	}
