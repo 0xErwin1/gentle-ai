@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -289,6 +290,25 @@ func TestRunArgsSDDStatusIsDispatchedBeforePlatformValidation(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "## SDD Status: add-auth") {
 		t.Fatalf("sdd-status output missing markdown status:\n%s", buf.String())
+	}
+}
+
+func TestRunArgsSDDAttemptIsDispatchedBeforePlatformValidation(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error { return fmt.Errorf("unsupported platform") }
+
+	root := t.TempDir()
+	command := exec.Command("git", "init", "-q", root)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	var buf bytes.Buffer
+	if err := RunArgs([]string{"sdd-attempt", "status", "--cwd", root, "--change", "app-attempt"}, &buf); err != nil {
+		t.Fatalf("RunArgs(sdd-attempt) error = %v", err)
+	}
+	if !strings.Contains(buf.String(), `"schema": "gentle-ai.sdd-runtime-status/v1"`) || !strings.Contains(buf.String(), `"change": "app-attempt"`) {
+		t.Fatalf("sdd-attempt output missing native status:\n%s", buf.String())
 	}
 }
 
