@@ -55,7 +55,13 @@ type ReviewIntegrationFailure struct {
 }
 
 type ReviewIntegrationFailureContext struct {
-	ScopeChange *ReviewIntegrationScopeChange `json:"scope_change"`
+	ScopeChange     *ReviewIntegrationScopeChange             `json:"scope_change,omitempty"`
+	BindingRevision *ReviewIntegrationBindingRevisionConflict `json:"binding_revision,omitempty"`
+}
+
+type ReviewIntegrationBindingRevisionConflict struct {
+	Expected string `json:"expected"`
+	Current  string `json:"current"`
 }
 
 type ReviewIntegrationScopeChange struct {
@@ -179,6 +185,22 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		Replayability: reviewtransaction.ReplayabilityStatusRequired, RequiredInputs: []string{}, NextAction: "review.status",
 	}
 	failure.LineageID = safeReviewIntegrationLineage(operation, args)
+	var bindingConflict *sddstatus.BindingRevisionConflictError
+	if errors.As(runErr, &bindingConflict) {
+		failure.Phase = "pre_native"
+		failure.Code = "binding_revision_conflict"
+		failure.Message = "The expected SDD review binding revision does not match the current native binding."
+		failure.MutationOutcome = ReviewMutationNotStarted
+		failure.AuthorityApplicability = "current_target"
+		failure.RetrySafe = true
+		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
+		failure.RequiredInputs = []string{"change", "lineage_id", "expected_binding_revision"}
+		failure.NextAction = ReviewIntegrationOperationBindSDD
+		failure.Context = &ReviewIntegrationFailureContext{BindingRevision: &ReviewIntegrationBindingRevisionConflict{
+			Expected: bindingConflict.Expected, Current: bindingConflict.Current,
+		}}
+		return failure
+	}
 	var replayMismatch *reviewtransaction.FinalizeAttemptReplayMismatchError
 	if errors.As(runErr, &replayMismatch) {
 		failure.Phase = "reconciliation"
@@ -650,10 +672,13 @@ func (failure ReviewIntegrationFailure) Validate() error {
 		}
 	}
 	if failure.Context != nil {
-		if failure.Operation != ReviewIntegrationOperationValidate || failure.Context.ScopeChange == nil {
-			return errors.New("negotiated review failure context is not a gate denial")
+		if (failure.Context.ScopeChange == nil) == (failure.Context.BindingRevision == nil) {
+			return errors.New("negotiated review failure context must select exactly one diagnostic")
 		}
 		if scope := failure.Context.ScopeChange; scope != nil {
+			if failure.Operation != ReviewIntegrationOperationValidate {
+				return errors.New("negotiated review scope context is not a gate denial")
+			}
 			if failure.Code != "gate_scope_changed" && failure.Code != "receipt_scope_changed" || scope.DifferingPathCount < 0 || scope.DifferingPathCount > 1000000 ||
 				!validReviewGitTree(scope.Expected.CandidateTree) || !validReviewCapabilitySHA256(scope.Expected.PathsDigest) ||
 				!validReviewGitTree(scope.Actual.CandidateTree) || !validReviewCapabilitySHA256(scope.Actual.PathsDigest) || !validReviewCapabilitySHA256(scope.DifferingPathsDigest) ||
@@ -661,6 +686,14 @@ func (failure ReviewIntegrationFailure) Validate() error {
 				scope.RecoveryOperation != "review.recover" || !reflect.DeepEqual(failure.RequiredInputs, scope.RecoveryRequiredInputs) ||
 				!reflect.DeepEqual(scope.RecoveryRequiredInputs, []string{"predecessor_lineage_id", "expected_predecessor_revision", "successor_lineage_id", "disposition", "reason", "actor"}) {
 				return errors.New("negotiated review scope-change diagnostics are incomplete")
+			}
+		}
+		if conflict := failure.Context.BindingRevision; conflict != nil {
+			if failure.Operation != ReviewIntegrationOperationBindSDD || failure.Code != "binding_revision_conflict" ||
+				!validOptionalReviewSHA256(conflict.Expected) || !validOptionalReviewSHA256(conflict.Current) ||
+				!reflect.DeepEqual(failure.RequiredInputs, []string{"change", "lineage_id", "expected_binding_revision"}) ||
+				failure.NextAction != ReviewIntegrationOperationBindSDD {
+				return errors.New("negotiated review binding-revision diagnostics are incomplete")
 			}
 		}
 	}
@@ -690,6 +723,10 @@ func (failure ReviewIntegrationFailure) Validate() error {
 		}
 	}
 	return nil
+}
+
+func validOptionalReviewSHA256(value string) bool {
+	return value == "" || validReviewCapabilitySHA256(value)
 }
 
 func supportedReviewIntegrationFailureInput(input string) bool {

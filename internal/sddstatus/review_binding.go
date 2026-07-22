@@ -21,10 +21,9 @@ import (
 const reviewBindingSchema = "gentle-ai.sdd-review-binding/v1"
 
 var reviewBindingChange = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var reviewBindingLineage = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 var reviewBindingHash = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 var bindingFinalAuthorizationHook = func() {}
-var bindingRename = reviewtransaction.ReplaceFileAtomic
-var syncBindingDirectory = reviewtransaction.SyncReviewDirectory
 
 type ReviewBindingPublicationError struct{ Cause error }
 
@@ -52,7 +51,56 @@ func BindApprovedReview(ctx context.Context, repo, change, lineage, expected str
 	if err != nil {
 		return ReviewBinding{}, err
 	}
-	changeRoot, err := resolveBindingChangeRoot(root, repo, change)
+	if err := rejectHistoricalLegacyBinding(ctx, root, lineage); err != nil {
+		return ReviewBinding{}, err
+	}
+	runtimeStore, err := OpenRuntimeStore(ctx, root, change)
+	if err != nil {
+		return ReviewBinding{}, err
+	}
+	requestID := "bind-" + strings.TrimPrefix(runtimeValueHash("gentle-ai.sdd-review-binding-request-id/v1", struct {
+		Change   string `json:"change"`
+		Lineage  string `json:"lineage"`
+		Expected string `json:"expected"`
+	}{Change: change, Lineage: lineage, Expected: expected}), "sha256:")
+	status, err := runtimeStore.bindPreparedReview(ctx, BindReviewRequest{
+		ExpectedBindingRevision: expected, RequestID: requestID, LineageID: lineage,
+	}, func() (ReviewBinding, error) {
+		return prepareApprovedReviewBinding(ctx, root, repo, change, lineage)
+	})
+	if err != nil {
+		var publication *RuntimePublicationError
+		if errors.As(err, &publication) {
+			return ReviewBinding{}, &ReviewBindingPublicationError{Cause: err}
+		}
+		return ReviewBinding{}, err
+	}
+	if status.Binding == nil {
+		return ReviewBinding{}, errors.New("native SDD runtime binding commit returned no binding")
+	}
+	return *status.Binding, nil
+}
+
+func rejectHistoricalLegacyBinding(ctx context.Context, root, lineage string) error {
+	store, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, lineage)
+	if err != nil {
+		return err
+	}
+	if _, err := store.Load(); !errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	legacy, legacyErr := reviewtransaction.AuthoritativeStore(ctx, root, lineage)
+	if legacyErr != nil {
+		return nil
+	}
+	if _, legacyErr = legacy.LoadChain(); legacyErr == nil {
+		return reviewtransaction.NewLegacyReadOnlyError("review/bind-sdd", lineage)
+	}
+	return nil
+}
+
+func prepareApprovedReviewBinding(ctx context.Context, root, workspace, change, lineage string) (ReviewBinding, error) {
+	changeRoot, err := resolveBindingChangeRoot(root, workspace, change)
 	if err != nil {
 		return ReviewBinding{}, err
 	}
@@ -94,11 +142,11 @@ func BindApprovedReview(ctx context.Context, repo, change, lineage, expected str
 	final, finalErr := store.Load()
 	finalPayload, readErr := os.ReadFile(store.ReceiptPath())
 	finalGate := reviewtransaction.EvaluateCompactGate(ctx, root, receipt, input)
-	finalChangeRoot, changeErr := resolveBindingChangeRoot(root, repo, change)
+	finalChangeRoot, changeErr := resolveBindingChangeRoot(root, workspace, change)
 	if finalErr != nil || readErr != nil || changeErr != nil || finalChangeRoot != changeRoot || final.Revision != record.Revision || !bytes.Equal(payload, finalPayload) || finalGate.Result != reviewtransaction.GateAllow || !reflect.DeepEqual(gate.Context, finalGate.Context) {
 		return ReviewBinding{}, errors.New("authority or live gate changed before binding publish")
 	}
-	return binding, writeBinding(bindingPath(store, change), expected, binding)
+	return binding, nil
 }
 
 func validateBoundReview(ctx context.Context, repo, change string) (ReviewBinding, reviewtransaction.NativeGateEvaluation, error) {
@@ -113,17 +161,9 @@ func validateBoundReview(ctx context.Context, repo, change string) (ReviewBindin
 	if err != nil {
 		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, err
 	}
-	probe, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, "binding-probe")
+	binding, err := loadEffectiveReviewBinding(ctx, root, change)
 	if err != nil {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, err
-	}
-	payload, err := os.ReadFile(bindingPath(probe, change))
-	if err != nil {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, fmt.Errorf("approved review binding is missing: %w", err)
-	}
-	binding, err := parseBinding(payload)
-	if err != nil {
-		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, fmt.Errorf("approved review binding is invalid: %w", err)
+		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, fmt.Errorf("approved review binding is missing or invalid: %w", err)
 	}
 	if binding.Change != change {
 		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("approved review binding change does not match selected change")
@@ -153,11 +193,11 @@ func validateBoundReview(ctx context.Context, repo, change string) (ReviewBindin
 		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound compact post-apply gate context changed")
 	}
 	bindingFinalAuthorizationHook()
-	finalBinding, bindingErr := os.ReadFile(bindingPath(probe, change))
+	finalBinding, bindingErr := loadEffectiveReviewBinding(ctx, root, change)
 	finalRecord, recordErr := store.Load()
 	finalReceipt, receiptErr := os.ReadFile(store.ReceiptPath())
 	finalChangeRoot, changeErr := resolveBindingChangeRoot(root, repo, change)
-	if bindingErr != nil || recordErr != nil || receiptErr != nil || changeErr != nil || finalChangeRoot != changeRoot || !bytes.Equal(finalBinding, payload) || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalRecord.State, record.State) || finalRecord.State.State != reviewtransaction.StateApproved || !bytes.Equal(finalReceipt, receiptPayload) || bindingHash(finalReceipt) != binding.ReceiptHash {
+	if bindingErr != nil || recordErr != nil || receiptErr != nil || changeErr != nil || finalChangeRoot != changeRoot || !reflect.DeepEqual(finalBinding, binding) || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalRecord.State, record.State) || finalRecord.State.State != reviewtransaction.StateApproved || !bytes.Equal(finalReceipt, receiptPayload) || bindingHash(finalReceipt) != binding.ReceiptHash {
 		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("bound authority, receipt, or binding changed during final read")
 	}
 	finalReceiptValue, parseErr := reviewtransaction.ParseCompactReceipt(finalReceipt)
@@ -200,15 +240,43 @@ func bindingExists(ctx context.Context, repo, change string) (bool, error) {
 	if err != nil {
 		return false, nil
 	}
-	probe, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, "binding-probe")
+	store, err := OpenRuntimeStore(ctx, root, change)
 	if err != nil {
 		return false, err
 	}
-	_, err = os.Stat(bindingPath(probe, change))
+	if _, err = os.Lstat(filepath.Join(store.Dir, "HEAD")); err == nil {
+		return true, nil
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
+	legacyPath := filepath.Join(store.commonDir, "gentle-ai", "sdd-review-bindings", "v1", change, "binding.json")
+	_, err = os.Lstat(legacyPath)
 	if os.IsNotExist(err) {
 		return false, nil
 	}
 	return err == nil, err
+}
+
+func loadEffectiveReviewBinding(ctx context.Context, repo, change string) (ReviewBinding, error) {
+	store, err := OpenRuntimeStore(ctx, repo, change)
+	if err != nil {
+		return ReviewBinding{}, err
+	}
+	status, err := store.Status()
+	if err != nil {
+		return ReviewBinding{}, err
+	}
+	if status.Binding != nil {
+		return *status.Binding, nil
+	}
+	legacy, _, err := store.readLegacyBinding()
+	if err != nil {
+		return ReviewBinding{}, err
+	}
+	if legacy == nil {
+		return ReviewBinding{}, os.ErrNotExist
+	}
+	return *legacy, nil
 }
 
 func resolveBindingChangeRoot(root, workspace, change string) (string, error) {
@@ -362,6 +430,10 @@ func validReviewBindingChange(change string) bool {
 	return len(change) <= 96 && reviewBindingChange.MatchString(change)
 }
 
+func validReviewBindingLineage(lineage string) bool {
+	return len(lineage) <= 128 && reviewBindingLineage.MatchString(lineage)
+}
+
 func bindingBytes(binding ReviewBinding) ([]byte, error) {
 	payload, err := json.Marshal(binding)
 	if err != nil {
@@ -382,64 +454,8 @@ func parseBinding(payload []byte) (ReviewBinding, error) {
 		return ReviewBinding{}, errors.New("multiple binding values")
 	}
 	canonical, err := bindingBytes(binding)
-	if err != nil || !bytes.Equal(payload, canonical) || binding.Schema != reviewBindingSchema || !validReviewBindingChange(binding.Change) || !reviewBindingHash.MatchString(binding.Revision) || !reviewBindingHash.MatchString(binding.AuthorityRevision) || !reviewBindingHash.MatchString(binding.ReceiptHash) || binding.Revision != bindingDigest(binding) || binding.GateContext.Gate != reviewtransaction.GatePostApply || binding.GateContext.LineageID != binding.Lineage || binding.GateContext.StoreRevision != binding.AuthorityRevision {
+	if err != nil || !bytes.Equal(payload, canonical) || binding.Schema != reviewBindingSchema || !validReviewBindingChange(binding.Change) || !validReviewBindingLineage(binding.Lineage) || !reviewBindingHash.MatchString(binding.Revision) || !reviewBindingHash.MatchString(binding.AuthorityRevision) || !reviewBindingHash.MatchString(binding.ReceiptHash) || binding.Revision != bindingDigest(binding) || binding.GateContext.Gate != reviewtransaction.GatePostApply || binding.GateContext.LineageID != binding.Lineage || binding.GateContext.StoreRevision != binding.AuthorityRevision {
 		return ReviewBinding{}, errors.New("invalid binding")
 	}
 	return binding, nil
-}
-
-func writeBinding(path, expected string, binding ReviewBinding) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	lock, err := acquireBindingLock(filepath.Join(filepath.Dir(path), "LOCK"))
-	if err != nil {
-		return err
-	}
-	defer lock.release()
-	current := ""
-	if payload, err := os.ReadFile(path); err == nil {
-		old, parseErr := parseBinding(payload)
-		if parseErr != nil || old.Change != binding.Change {
-			return errors.New("invalid existing binding")
-		}
-		current = old.Revision
-		if current == binding.Revision {
-			if err := syncBindingDirectory(filepath.Dir(path)); err != nil {
-				return &ReviewBindingPublicationError{Cause: fmt.Errorf("sync SDD review binding directory: %w", err)}
-			}
-			return nil
-		}
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	if current != expected {
-		return fmt.Errorf("binding revision conflict: expected %q, current %q", expected, current)
-	}
-	payload, err := bindingBytes(binding)
-	if err != nil {
-		return err
-	}
-	temp, err := os.CreateTemp(filepath.Dir(path), ".binding-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(temp.Name())
-	if _, err = temp.Write(payload); err == nil {
-		err = temp.Sync()
-	}
-	if closeErr := temp.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		_ = os.Remove(temp.Name())
-		return err
-	}
-	if err := bindingRename(temp.Name(), path); err != nil {
-		return err
-	}
-	if err := syncBindingDirectory(filepath.Dir(path)); err != nil {
-		return &ReviewBindingPublicationError{Cause: fmt.Errorf("sync SDD review binding directory: %w", err)}
-	}
-	return nil
 }

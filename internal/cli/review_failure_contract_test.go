@@ -148,6 +148,25 @@ func TestNegotiatedReviewFailuresPreserveRequestedLineage(t *testing.T) {
 	}
 }
 
+func TestNegotiatedBindSDDClassifiesBindingRevisionConflictBeforePublication(t *testing.T) {
+	expected := "sha256:" + strings.Repeat("a", 64)
+	failure := newReviewIntegrationFailure(
+		ReviewIntegrationOperationBindSDD,
+		[]string{"--cwd", ".", "--change", "thin", "--lineage", "review-thin", "--expected-binding-revision", expected},
+		&sddstatus.BindingRevisionConflictError{Expected: expected, Current: ""},
+	)
+	if failure.Code != "binding_revision_conflict" || failure.Phase != "pre_native" ||
+		failure.MutationOutcome != ReviewMutationNotStarted || !failure.RetrySafe ||
+		failure.Replayability != reviewtransaction.ReplayabilityNotReplayable || failure.NextAction != ReviewIntegrationOperationBindSDD ||
+		failure.Context == nil || failure.Context.BindingRevision == nil || failure.Context.BindingRevision.Expected != expected ||
+		failure.Context.BindingRevision.Current != "" {
+		t.Fatalf("typed binding conflict failure = %#v", failure)
+	}
+	if err := failure.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNegotiatedFailureLineageUsesCanonicalFlagParsing(t *testing.T) {
 	tests := []struct {
 		name      string
