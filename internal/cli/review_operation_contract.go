@@ -115,6 +115,7 @@ func reviewIntegrationFailureRoute(args []string) (string, bool, *ReviewIntegrat
 		"capabilities": "review.capabilities",
 		"start":        "review.start",
 		"status":       "review.status",
+		"repair":       "review.repair",
 		"finalize":     "review.finalize",
 		"validate":     "review.validate",
 		"bind-sdd":     "review.bind_sdd",
@@ -749,7 +750,7 @@ func supportedReviewIntegrationFailureInput(input string) bool {
 
 func validReviewIntegrationFailureOperation(operation string) bool {
 	switch operation {
-	case "review.capabilities", "review.start", "review.status", "review.finalize", "review.validate", "review.bind_sdd":
+	case "review.capabilities", "review.start", "review.status", "review.repair", "review.finalize", "review.validate", "review.bind_sdd":
 		return true
 	default:
 		return false

@@ -247,7 +247,7 @@ func TestAbandonStalePristineReviewingQuarantinesEntryAndRestoresInventory(t *te
 	}
 }
 
-func TestAbandonPristineInvalidatedRestoresInventory(t *testing.T) {
+func TestAbandonPristineInvalidatedPreservesAuthoritativeInventory(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	approvedCompactFixture(t, repo, "abandon-unrelated-approved")
 	writeSnapshotFile(t, repo, "tracked.txt", "base\naccidental change\n")
@@ -267,8 +267,8 @@ func TestAbandonPristineInvalidatedRestoresInventory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if before.Complete || before.Authoritative {
-		t.Fatalf("pre-abandon poisoned inventory = %#v", before)
+	if !before.Complete || !before.Authoritative || len(before.Entries) != 2 || before.Entries[0].Status != AuthorityStatusInvalidated {
+		t.Fatalf("pre-abandon invalidated inventory = %#v", before)
 	}
 
 	committed, err := AbandonPristineCompactStore(context.Background(), repo, abandonFixtureRequest(record))

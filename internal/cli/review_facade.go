@@ -247,7 +247,7 @@ func (err *reviewStartContextError) Unwrap() error { return err.Cause }
 
 func RunReview(args []string, stdout io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <capabilities|start|finalize|validate|status|invalidate|abandon|recover|reclaim|inspect-authority|reconcile-authority|reconcile-authority-batch|dispose-result|reopen-results|quarantine-legacy|quarantine-legacy-fix-scope|repair-legacy-alias|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go.")
+		_, _ = fmt.Fprintln(stdout, "Usage: gentle-ai review <capabilities|start|finalize|validate|status|repair|invalidate|abandon|recover|reclaim|inspect-authority|reconcile-authority|reconcile-authority-batch|dispose-result|reopen-results|quarantine-legacy|quarantine-legacy-fix-scope|repair-legacy-alias|schema|bind-sdd> [flags]\n\nOrdinary review facade; repository scope, authority, canonical artifacts, and lifecycle transitions are derived by Go. Use review repair --preflight for provider-owned classified authority repair; repair-legacy-alias is compatibility-only.")
 		_, _ = fmt.Fprintln(stdout, "Additive headless capabilities: gentle-ai review capture-result (with --preflight) and gentle-ai review preserve-result.")
 		return nil
 	}
@@ -301,6 +301,8 @@ func runReviewCommandContext(ctx context.Context, args []string, stdout io.Write
 		return runReviewFacadeStart(ctx, args[1:], stdout)
 	case "status":
 		return runReviewStatus(ctx, args[1:], stdout)
+	case "repair":
+		return runReviewRepair(ctx, args[1:], stdout)
 	case "finalize":
 		return runReviewFacadeFinalize(ctx, args[1:], stdout)
 	case "validate":
@@ -332,6 +334,8 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 		return RunReviewFacadeValidate(args[1:], stdout)
 	case "status":
 		return RunReviewStatus(args[1:], stdout)
+	case "repair":
+		return RunReviewRepair(args[1:], stdout)
 	case "invalidate":
 		return RunReviewInvalidate(args[1:], stdout)
 	case "abandon":
@@ -385,6 +389,9 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	recoveryReason := flags.String("recovery-reason", "", "authorized recovery reason")
 	recoveryActor := flags.String("recovery-actor", "", "authorized recovery actor")
 	recoveryAuthorization := flags.String("recovery-authorization", "", "exact authorized recovery binding")
+	repairActor := flags.String("repair-actor", "", "authorized classified repair actor")
+	repairReason := flags.String("repair-reason", "", "authorized classified repair reason")
+	repairAuthorization := flags.String("repair-authorization", "", "exact classified repair authorization binding")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -448,6 +455,11 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			return errors.New("--base-tree does not identify an exact Git tree object")
 		}
 		result := newReviewTargetStatusResult(native)
+		repair, repairErr := reviewtransaction.AssessAuthorityRepairAtRepositoryRoot(ctx, root)
+		if repairErr != nil {
+			return fmt.Errorf("assess classified authority repair: %w", repairErr)
+		}
+		result.Repair = repair
 		if *actionEligibility {
 			result.Eligibility = newReviewActionEligibility(result)
 		}
@@ -499,7 +511,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					}
 				}
 			}
-			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, evidenceAvailable, artifactErr, reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext})
+			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, evidenceAvailable, artifactErr, reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext})
 			result.NextTransition = &transition
 		}
 		if err := result.Validate(); err != nil {
@@ -510,7 +522,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	if *actionEligibility || *nextTransition {
 		return errors.New("--action-eligibility and --next-transition require --contract")
 	}
-	if strings.TrimSpace(*lineage) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" {
+	if strings.TrimSpace(*lineage) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" || *repairActor != "" || *repairReason != "" || *repairAuthorization != "" {
 		return errors.New("review status target selectors require --contract")
 	}
 	report, err := reviewtransaction.InventoryAuthority(ctx, *cwd)

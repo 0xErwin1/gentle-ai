@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 )
 
 const capabilityFixtureExecutable = "gentle-ai capability fixture\n"
@@ -69,8 +71,10 @@ func TestReviewCapabilitiesMatchesConformanceFixtureOutsideRepository(t *testing
 	if result.Protocol != (ReviewCapabilitiesProtocol{Major: 1, Minor: 3}) ||
 		!slices.ContainsFunc(result.Features.Optional, func(feature ReviewCapabilityFeature) bool {
 			return feature.Name == "native_frozen_candidate_context" && feature.Supported && slices.Equal(feature.Requires, []string{"immutable_snapshot"})
-		}) {
-		t.Fatalf("capabilities do not advertise pre-START frozen-context detection: %#v", result)
+		}) || !slices.ContainsFunc(result.Features.Optional, func(feature ReviewCapabilityFeature) bool {
+		return feature.Name == "classified_authority_repair" && feature.Supported && slices.Equal(feature.Requires, []string{"native_next_transition", "uniform_failure_envelope"})
+	}) {
+		t.Fatalf("capabilities do not advertise the current optional surface: %#v", result)
 	}
 	entries, err := os.ReadDir(outside)
 	if err != nil || len(entries) != 0 {
@@ -127,15 +131,15 @@ func TestReviewCapabilitiesAdvertisesOnlyNativeSurface(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantOperations := []string{
-		"review.bind_sdd", "review.capabilities", "review.finalize", "review.start", "review.status", "review.validate",
+		"review.bind_sdd", "review.capabilities", "review.finalize", "review.repair", "review.start", "review.status", "review.validate",
 	}
 	wantGates := []string{"post-apply", "pre-commit", "pre-push", "pre-pr", "release"}
 	wantProjections := []string{"staged", "workspace"}
 	if !slices.Equal(result.Operations, wantOperations) || !slices.Equal(result.Gates, wantGates) || !slices.Equal(result.Projections, wantProjections) {
 		t.Fatalf("capability surface = operations %v gates %v projections %v", result.Operations, result.Gates, result.Projections)
 	}
-	if !slices.Contains(result.Schemas, reviewResultArtifactSchema) || !slices.Contains(result.Schemas, ReviewIntegrationOperationSchema) || !slices.Contains(result.Schemas, ReviewIntegrationStartSchema) || !slices.Contains(result.Schemas, ReviewIntegrationStatusSchema) || !slices.Contains(result.Schemas, ReviewIntegrationProjectionSchema) {
-		t.Fatalf("capability schemas do not advertise negotiated operations/START/status/projection: %v", result.Schemas)
+	if !slices.Contains(result.Schemas, reviewResultArtifactSchema) || !slices.Contains(result.Schemas, ReviewIntegrationOperationSchema) || !slices.Contains(result.Schemas, ReviewIntegrationStartSchema) || !slices.Contains(result.Schemas, ReviewIntegrationStatusSchema) || !slices.Contains(result.Schemas, ReviewIntegrationProjectionSchema) || !slices.Contains(result.Schemas, ReviewIntegrationRepairSchema) || !slices.Contains(result.Schemas, reviewtransaction.AuthorityRepairAssessmentSchema) {
+		t.Fatalf("capability schemas do not advertise the negotiated provider surface: %v", result.Schemas)
 	}
 	if result.Bootstrap == nil || result.Bootstrap.Command != "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition" ||
 		result.Bootstrap.RequiredFeature != "native_next_transition" || result.Bootstrap.UnsupportedOutcome != "unsupported-capability" || !result.Bootstrap.ParentOnly ||
@@ -420,6 +424,7 @@ func TestReviewCapabilitiesFeatureRequirementsAreExplicit(t *testing.T) {
 	wantOptional := []ReviewCapabilityFeature{
 		{Name: "base_ref_workspace_overlay", Supported: true, Requires: []string{"immutable_snapshot", "restart_safe_projection"}},
 		{Name: "bounded_process_waits", Supported: true, Requires: []string{"uniform_failure_envelope"}},
+		{Name: "classified_authority_repair", Supported: true, Requires: []string{"native_next_transition", "uniform_failure_envelope"}},
 		{Name: "exact_gate_receipt_discovery", Supported: true, Requires: []string{"five_delivery_gates"}},
 		{Name: "native_frozen_candidate_context", Supported: true, Requires: []string{"immutable_snapshot"}},
 		{Name: "native_low_risk_verification", Supported: true, Requires: []string{"compact_v2_authority"}},
