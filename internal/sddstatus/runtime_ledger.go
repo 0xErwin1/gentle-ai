@@ -472,7 +472,7 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			ChangedLineBudgetExceeded:  status.CumulativeChangedLines+changedLines > status.Objective.MaxChangedLines,
 		}
 		if remediation {
-			prepared, prepareErr := prepareApprovedReviewBinding(ctx, store.Repo, store.Workspace, store.Change, request.SuccessorLineageID)
+			prepared, prepareErr := prepareApprovedRuntimeSuccessorBinding(ctx, store.Repo, store.Workspace, store.Change, request.SuccessorLineageID)
 			if prepareErr != nil {
 				return runtimeRecord{}, prepareErr
 			}
@@ -480,7 +480,7 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 				return runtimeRecord{}, relationErr
 			}
 			runtimeRemediationFinalAuthorizationHook()
-			finalPrepared, finalPrepareErr := prepareApprovedReviewBinding(ctx, store.Repo, store.Workspace, store.Change, request.SuccessorLineageID)
+			finalPrepared, finalPrepareErr := prepareApprovedRuntimeSuccessorBinding(ctx, store.Repo, store.Workspace, store.Change, request.SuccessorLineageID)
 			if finalPrepareErr != nil {
 				return runtimeRecord{}, fmt.Errorf("approved SDD remediation successor changed before native commit: %w", finalPrepareErr)
 			}

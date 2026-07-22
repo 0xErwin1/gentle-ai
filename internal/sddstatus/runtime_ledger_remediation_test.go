@@ -103,6 +103,24 @@ func TestRuntimeRemediationFinishImportsLegacyBindingInTheSameAtomicRecord(t *te
 	}
 }
 
+func TestRuntimeRemediationFinishSupportsEngramWithoutOpenSpecRoot(t *testing.T) {
+	fixture := newRuntimeEngramRemediationFixture(t)
+	if _, err := os.Stat(filepath.Join(fixture.repo, "openspec")); !os.IsNotExist(err) {
+		t.Fatalf("pure Engram fixture unexpectedly has an OpenSpec root: %v", err)
+	}
+	completed, err := fixture.store.Finish(context.Background(), fixture.finishRequest("finish-engram-remediation"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !completed.Complete || completed.Binding == nil || completed.Binding.Lineage != fixture.successor.State.LineageID ||
+		completed.BindingRevision == fixture.predecessorBinding.Revision {
+		t.Fatalf("pure Engram remediation status = %#v", completed)
+	}
+	if _, err := os.Stat(filepath.Join(fixture.repo, "openspec")); !os.IsNotExist(err) {
+		t.Fatalf("runtime remediation created or required an OpenSpec root: %v", err)
+	}
+}
+
 func TestRuntimeRemediationFinishChargesButDoesNotSelectAnOverBudgetSuccessor(t *testing.T) {
 	fixture := newRuntimeRemediationFixtureConfigured(t, true, true, 1, 2)
 	beforeRecords := countRuntimeRecords(t, fixture.store.Dir)
@@ -431,6 +449,78 @@ func newRuntimeRemediationFixture(t *testing.T, approveSuccessor bool) runtimeRe
 
 func newRuntimeRemediationFixtureWithBinding(t *testing.T, approveSuccessor, nativeBinding bool) runtimeRemediationFixture {
 	return newRuntimeRemediationFixtureConfigured(t, approveSuccessor, nativeBinding, 40, 1)
+}
+
+func newRuntimeEngramRemediationFixture(t *testing.T) runtimeRemediationFixture {
+	t.Helper()
+	repo := initRuntimeLedgerRepo(t)
+	predecessor := createApprovedRuntimeAuthority(t, repo, "engram-runtime-predecessor", 1)
+	predecessorBinding := runtimeBindingFromCompactRecord(t, repo, "engram-runtime", predecessor)
+	store := mustRuntimeStore(t, repo, "engram-runtime")
+	bound, err := store.bindPreparedReview(context.Background(), BindReviewRequest{
+		ExpectedBindingRevision: "", RequestID: "bind-engram-runtime", LineageID: predecessorBinding.Lineage,
+	}, func() (ReviewBinding, error) { return predecessorBinding, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: bound.Revision, RequestID: "engram-remediation-begin-1", WorkUnit: "engram-runtime",
+		EvidenceGoal: "repair failed Engram verification evidence", MaxAttempts: 3, MaxChangedLines: 40,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failedEvidence := runtimeTestHash('d')
+	failed, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: first.Revision, RequestID: "engram-remediation-finish-1", Outcome: AttemptFailed,
+		EvidenceRevision: failedEvidence, Diagnosis: "pure Engram verification failed before remediation",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "Engram predecessor cleanup completed",
+		ProcessEvidence: "Engram predecessor process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: failed.Revision, RequestID: "engram-remediation-begin-2", WorkUnit: "engram-runtime",
+		EvidenceGoal: "repair failed Engram verification evidence", MaxAttempts: 3, MaxChangedLines: 40,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendRuntimeLedgerFile(t, repo, "bounded Engram remediation\n")
+	successor := createRuntimeRecoverySuccessor(t, repo, predecessor.State.LineageID, "engram-runtime-successor", true)
+	return runtimeRemediationFixture{
+		repo: repo, store: store, predecessorBinding: predecessorBinding,
+		failedEvidence: failedEvidence, active: active, successor: successor,
+	}
+}
+
+func runtimeBindingFromCompactRecord(t *testing.T, repo, change string, record reviewtransaction.CompactRecord) ReviewBinding {
+	t.Helper()
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, record.State.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := os.ReadFile(store.ReceiptPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := record.State.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	evaluation := reviewtransaction.EvaluateCompactGate(context.Background(), repo, receipt, reviewtransaction.NativeGateRequestInput{
+		Gate: reviewtransaction.GatePostApply, LineageID: record.State.LineageID,
+	})
+	if evaluation.Result != reviewtransaction.GateAllow {
+		t.Fatalf("compact binding gate = %#v, want allow", evaluation)
+	}
+	binding := ReviewBinding{
+		Schema: reviewBindingSchema, Change: change, Lineage: record.State.LineageID,
+		AuthorityRevision: record.Revision, ReceiptHash: bindingHash(payload), GateContext: evaluation.Context,
+	}
+	binding.Revision = bindingDigest(binding)
+	return binding
 }
 
 func newRuntimeRemediationFixtureConfigured(t *testing.T, approveSuccessor, nativeBinding bool, maxChangedLines, remediationLines int) runtimeRemediationFixture {

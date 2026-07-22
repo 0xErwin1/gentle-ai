@@ -149,6 +149,67 @@ func prepareApprovedReviewBinding(ctx context.Context, root, workspace, change, 
 	return binding, nil
 }
 
+// prepareApprovedRuntimeSuccessorBinding preserves the OpenSpec ledger check
+// whenever the selected change has a file-backed root. Pure Engram changes do
+// not have such a root, so their already-approved compact authority and live
+// post-apply gate are the complete native successor provenance.
+func prepareApprovedRuntimeSuccessorBinding(ctx context.Context, root, workspace, change, lineage string) (ReviewBinding, error) {
+	matches, err := bindingChangeRoots(root, change)
+	if err != nil {
+		return ReviewBinding{}, err
+	}
+	if len(matches) != 0 {
+		return prepareApprovedReviewBinding(ctx, root, workspace, change, lineage)
+	}
+	return prepareApprovedCompactBinding(ctx, root, change, lineage)
+}
+
+func prepareApprovedCompactBinding(ctx context.Context, root, change, lineage string) (ReviewBinding, error) {
+	if !validReviewBindingChange(change) || !validReviewBindingLineage(lineage) {
+		return ReviewBinding{}, errors.New("invalid compact SDD review binding identity")
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, lineage)
+	if err != nil {
+		return ReviewBinding{}, err
+	}
+	record, err := store.Load()
+	if err != nil || record.State.State != reviewtransaction.StateApproved {
+		return ReviewBinding{}, errors.New("explicit compact authority is not approved")
+	}
+	payload, err := os.ReadFile(store.ReceiptPath())
+	if err != nil {
+		return ReviewBinding{}, err
+	}
+	receipt, parseErr := reviewtransaction.ParseCompactReceipt(payload)
+	authoritative, receiptErr := record.State.Receipt()
+	if parseErr != nil || receiptErr != nil || !reflect.DeepEqual(receipt, authoritative) {
+		return ReviewBinding{}, errors.New("compact receipt does not match approved authority")
+	}
+	input := reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply, LineageID: lineage}
+	evaluation := reviewtransaction.EvaluateCompactGate(ctx, root, receipt, input)
+	if evaluation.Result != reviewtransaction.GateAllow {
+		return ReviewBinding{}, errors.New("compact post-apply gate is not allow")
+	}
+	binding := ReviewBinding{
+		Schema: reviewBindingSchema, Change: change, Lineage: lineage,
+		AuthorityRevision: record.Revision, ReceiptHash: bindingHash(payload), GateContext: evaluation.Context,
+	}
+	binding.Revision = bindingDigest(binding)
+	finalRecord, finalErr := loadRuntimeBoundCompactArtifacts(ctx, root, binding)
+	if finalErr != nil || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalRecord.State, record.State) {
+		return ReviewBinding{}, errors.New("authority or receipt changed before compact binding selection")
+	}
+	finalReceipt, finalReceiptErr := finalRecord.State.Receipt()
+	if finalReceiptErr != nil {
+		return ReviewBinding{}, errors.New("approved compact authority cannot produce its final receipt")
+	}
+	finalGate := reviewtransaction.EvaluateCompactGate(ctx, root, finalReceipt, input)
+	if finalGate.Result != reviewtransaction.GateAllow || !reflect.DeepEqual(evaluation.Context, finalGate.Context) {
+		return ReviewBinding{}, errors.New("compact post-apply gate changed before binding selection")
+	}
+	return binding, nil
+}
+
 // validateRuntimeRemediationSuccessor proves that an already approved binding
 // is the current leaf of the native compact recovery graph rooted at the
 // populated binding. It deliberately does not mutate compact authority: the

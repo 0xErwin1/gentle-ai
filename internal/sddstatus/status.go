@@ -632,10 +632,18 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
 	blockedReasons := artifactBlockedReasons(artifacts, taskProgress)
+	bindingPresent := false
+	if runtimeStatusErr == nil {
+		var bindingPathErr error
+		bindingPresent, bindingPathErr = bindingExists(context.Background(), workspaceRoot, changeName)
+		if bindingPathErr != nil {
+			runtimeStatusErr = fmt.Errorf("read native SDD runtime binding: %w", bindingPathErr)
+		}
+	}
 	// Stale evidence under a live allow authority needs a fresh verification,
 	// not legacy remediation classification against a missing transaction.
 	var staleAllowAuthority *reviewAuthorityEvaluation
-	if reviewState == nil && applyState == ApplyAllDone && artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale {
+	if !bindingPresent && reviewState == nil && applyState == ApplyAllDone && artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale {
 		evaluation := resolveReviewAuthority(context.Background(), workspaceRoot, "", artifactsByType["review/receipt"].Content, changeName)
 		if evaluation.Result == reviewtransaction.GateAllow {
 			staleAllowAuthority = &evaluation
@@ -643,9 +651,10 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 			blockedReasons = append(blockedReasons, evaluation.Reason)
 		}
 	}
-	remediationRequired := staleAllowAuthority == nil && artifacts["verifyReport"] == ArtifactDone && !verifyResult.Passing && applyState == ApplyAllDone
+	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, verifyResult)
+	remediationRequired := staleAllowAuthority == nil && !runtimeRemediationComplete && artifacts["verifyReport"] == ArtifactDone && !verifyResult.Passing && applyState == ApplyAllDone
 	compactRemediation := resolveCompactRemediationAuthority(
-		context.Background(), workspaceRoot, changeName, false, remediationRequired && reviewState == nil,
+		context.Background(), workspaceRoot, changeName, bindingPresent, remediationRequired && reviewState == nil,
 		"", artifactsByType["review/receipt"].Content,
 	)
 	remediationState := resolveBoundedRemediation(
@@ -666,13 +675,38 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		dependencies.Archive = DependencyBlocked
 		nextRecommended = "verify"
 	}
+	var boundGate *ReviewGateState
 	bridge := compactPreVerifyBridge{}
-	if applyState == ApplyAllDone && artifacts["verifyReport"] != ArtifactDone && compactBridgeableReviewArtifact(artifacts["reviewState"], reviewStateReason) {
-		bridge = discoverCompactPreVerifyAuthority(context.Background(), workspaceRoot, changeName, "")
-	}
-	applyPreVerifyCompactBridgeRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, bridge)
-	if !bridge.Eligible && !bridge.Relevant {
-		applyPreVerifyReviewRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, reviewStateReason)
+	if bindingPresent {
+		binding, bindingErr := loadEffectiveReviewBinding(context.Background(), workspaceRoot, changeName)
+		if bindingErr == nil {
+			bindingErr = validateRuntimeBoundCandidate(context.Background(), workspaceRoot, binding, binding.GateContext.CandidateTree)
+		}
+		if bindingErr == nil {
+			staleEvidence := artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale && reviewState == nil
+			if applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || staleEvidence || runtimeRemediationComplete) {
+				dependencies.Verify = DependencyReady
+				dependencies.Archive = DependencyBlocked
+				nextRecommended = "verify"
+				if staleEvidence || runtimeRemediationComplete {
+					remediationState = RemediationState{}
+				}
+			}
+			boundGate = &ReviewGateState{Result: reviewtransaction.GateAllow, Reason: "explicit bound compact authority exactly matches the current repository"}
+		} else {
+			dependencies.Verify = DependencyBlocked
+			dependencies.Archive = DependencyBlocked
+			nextRecommended = "resolve-review"
+			blockedReasons = append(blockedReasons, bindingErr.Error())
+		}
+	} else {
+		if applyState == ApplyAllDone && artifacts["verifyReport"] != ArtifactDone && compactBridgeableReviewArtifact(artifacts["reviewState"], reviewStateReason) {
+			bridge = discoverCompactPreVerifyAuthority(context.Background(), workspaceRoot, changeName, "")
+		}
+		applyPreVerifyCompactBridgeRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, bridge)
+		if !bridge.Eligible && !bridge.Relevant {
+			applyPreVerifyReviewRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, reviewStateReason)
+		}
 	}
 
 	changeRoot := fmt.Sprintf("engram:sdd/%s", changeName)
@@ -688,15 +722,20 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	status.RemediationState = remediationState
 	status.RuntimeStatus = runtimeStatus
 	status.ReviewTransaction = reviewState
-	if staleAllowAuthority != nil {
-		status.ReviewGate = &ReviewGateState{Result: staleAllowAuthority.Result, Reason: staleAllowAuthority.Reason}
-	} else {
-		applyReviewGate(
-			&status,
-			workspaceRoot,
-			"",
-			artifactsByType["review/receipt"].Content,
-		)
+	if !bindingPresent {
+		if staleAllowAuthority != nil {
+			status.ReviewGate = &ReviewGateState{Result: staleAllowAuthority.Result, Reason: staleAllowAuthority.Reason}
+		} else {
+			applyReviewGate(
+				&status,
+				workspaceRoot,
+				"",
+				artifactsByType["review/receipt"].Content,
+			)
+		}
+	}
+	if boundGate != nil {
+		status.ReviewGate = boundGate
 	}
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
