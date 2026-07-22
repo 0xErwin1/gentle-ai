@@ -61,6 +61,7 @@ func RepairHistoricalLegacyAlias(ctx context.Context, repo string, request Legac
 type legacyAliasRepairOptions struct {
 	waitForCooperativeRepair bool
 	maintenanceAlreadyHeld   bool
+	classifiedAudit          *ClassifiedAuthorityRepairAudit
 }
 
 // repairHistoricalLegacyAlias lets the provider-owned classified operation
@@ -156,10 +157,11 @@ func repairHistoricalLegacyAlias(ctx context.Context, repo string, request Legac
 	if err := releaseLocalLock(); err != nil {
 		return CompactReclaimRecord{}, fmt.Errorf("release legacy lineage lock before alias repair: %w", err)
 	}
-	record, err := quarantineCompactStoreEntry(base, dir, CompactReclaimRecord{
+	record, err := quarantineCompactStoreEntry(ctx, base, dir, CompactReclaimRecord{
 		Schema: CompactReclaimRecordSchema, Status: CompactReclaimPrepared,
 		LineageID: request.LineageID, Reason: strings.TrimSpace(request.Reason), Actor: strings.TrimSpace(request.Actor),
 		ReclaimedAt: request.RepairedAt.UTC(), SourcePath: dir, Residue: residue, LegacyAliasRepair: &proof,
+		ClassifiedAuthorityRepair: options.classifiedAudit,
 	})
 	if err != nil {
 		return record, err

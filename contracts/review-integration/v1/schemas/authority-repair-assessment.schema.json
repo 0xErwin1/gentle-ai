@@ -44,6 +44,8 @@
     },
     "supported_operations": {
       "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
       "prefixItems": [
         {
           "const": "review/complete-fix"

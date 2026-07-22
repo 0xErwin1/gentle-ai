@@ -81,7 +81,10 @@ func (result ReviewRepairResult) Validate() error {
 			execution.Cause != reviewtransaction.AuthorityRepairCauseUnsupportedHistoricalV1OperationAlias ||
 			execution.Disposition != reviewtransaction.AuthorityRepairDispositionQuarantineHistoricalAlias ||
 			strings.TrimSpace(execution.LineageID) == "" || !validReviewCapabilitySHA256(execution.Revision) ||
-			!validReviewCapabilitySHA256(execution.ChainIdentity) {
+			!validReviewCapabilitySHA256(execution.ChainIdentity) ||
+			!validReviewCapabilitySHA256(execution.AssessmentDigest) ||
+			!validReviewCapabilitySHA256(execution.RequestDigest) ||
+			!validReviewCapabilitySHA256(execution.RecordIdentity) {
 			return errors.New("review repair execution output is invalid")
 		}
 	default:

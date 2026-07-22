@@ -265,6 +265,8 @@ func RunReview(args []string, stdout io.Writer) error {
 	defer cancel()
 	var committed atomic.Pointer[reviewFacadeOperationProgressError]
 	ctx = context.WithValue(ctx, reviewFacadeOperationProgressError{}, &committed)
+	metadata, _ := reviewIntegrationOperationByName(operation)
+	joinOnTimeout := metadata.JoinOnTimeout && reviewIntegrationOperationMutates(metadata, args[1:])
 	var output bytes.Buffer
 	result := make(chan error, 1)
 	go func(runner func(context.Context, []string, io.Writer) error) { result <- runner(ctx, args, &output) }(reviewFacadeCommandRunner)
@@ -275,8 +277,11 @@ func RunReview(args []string, stdout io.Writer) error {
 			runErr = ctx.Err()
 		}
 	case <-ctx.Done():
-		if operation == ReviewIntegrationOperationBindSDD {
+		if operation == ReviewIntegrationOperationBindSDD || joinOnTimeout {
 			runErr = <-result
+			if runErr == nil && operation != ReviewIntegrationOperationBindSDD {
+				runErr = ctx.Err()
+			}
 		} else if progress := committed.Load(); progress != nil {
 			progress.Cause = &reviewtransaction.GitCommandTimeoutError{Timeout: reviewFacadeOperationTimeout, Aggregate: true, Cause: ctx.Err()}
 			runErr = progress
@@ -455,11 +460,14 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			return errors.New("--base-tree does not identify an exact Git tree object")
 		}
 		result := newReviewTargetStatusResult(native)
-		repair, repairErr := reviewtransaction.AssessAuthorityRepairAtRepositoryRoot(ctx, root)
-		if repairErr != nil {
-			return fmt.Errorf("assess classified authority repair: %w", repairErr)
+		if native.Applicability == reviewtransaction.TargetApplicabilityCorrupted &&
+			native.Action == reviewtransaction.TargetStatusActionRepairAuthority {
+			repair, repairErr := reviewtransaction.AssessAuthorityRepairAtRepositoryRoot(ctx, root)
+			if repairErr != nil {
+				return fmt.Errorf("assess classified authority repair: %w", repairErr)
+			}
+			result.Repair = repair
 		}
-		result.Repair = repair
 		if *actionEligibility {
 			result.Eligibility = newReviewActionEligibility(result)
 		}

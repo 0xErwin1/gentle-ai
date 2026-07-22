@@ -34,6 +34,8 @@ const (
 	authorityRepairMaxEventBytes                                                         = 1 << 20
 	authorityRepairMaxTotalBytes                                                         = 8 << 20
 	authorityRepairMaxOperations                                                         = 1024
+	authorityRepairMaxProofReads                                                         = 4*authorityRepairMaxEvents + 4*authorityRepairMaxLineages
+	authorityRepairMaxProofReadBytes                                                     = 3 * authorityRepairMaxTotalBytes
 )
 
 var authorityRepairSupportedOperations = []string{"review/complete-fix", "review/validate-fix"}
@@ -89,21 +91,29 @@ type ClassifiedAuthorityRepairRequest struct {
 }
 
 type ClassifiedAuthorityRepairExecution struct {
-	Status        string                     `json:"status"`
-	Class         AuthorityRepairClass       `json:"class"`
-	LineageID     string                     `json:"lineage_id"`
-	Revision      string                     `json:"revision"`
-	ChainIdentity string                     `json:"chain_identity"`
-	Cause         AuthorityRepairCause       `json:"cause"`
-	Disposition   AuthorityRepairDisposition `json:"disposition"`
+	Status           string                     `json:"status"`
+	Class            AuthorityRepairClass       `json:"class"`
+	LineageID        string                     `json:"lineage_id"`
+	Revision         string                     `json:"revision"`
+	ChainIdentity    string                     `json:"chain_identity"`
+	Cause            AuthorityRepairCause       `json:"cause"`
+	Disposition      AuthorityRepairDisposition `json:"disposition"`
+	AssessmentDigest string                     `json:"assessment_digest"`
+	RequestDigest    string                     `json:"request_digest"`
+	RecordIdentity   string                     `json:"record_identity"`
 }
 
 var classifiedAuthorityRepairAfterAssessmentHook = func() {}
 
 type authorityRepairBudget struct {
-	counts    *AuthorityRepairCounts
-	entries   int
-	truncated bool
+	ctx          context.Context
+	counts       *AuthorityRepairCounts
+	entries      int
+	proofReads   int
+	proofBytes   int
+	uniqueFiles  map[string]struct{}
+	uniqueEvents map[string]struct{}
+	truncated    bool
 }
 
 type authorityRepairScan struct {
@@ -181,7 +191,10 @@ func (scan *authorityRepairScan) run(ctx context.Context) error {
 		}
 		return err
 	}
-	budget := &authorityRepairBudget{counts: &scan.assessment.Counts}
+	budget := &authorityRepairBudget{
+		ctx: ctx, counts: &scan.assessment.Counts,
+		uniqueFiles: map[string]struct{}{}, uniqueEvents: map[string]struct{}{},
+	}
 	if !scan.maintenanceOwned {
 		if status := probeAuthorityRepairLock(compactMaintenanceLockPath(scan.base)); status != authorityRepairLockReleased {
 			if status != authorityRepairLockAbsent {
@@ -338,7 +351,7 @@ func (scan *authorityRepairScan) scanLegacy(ctx context.Context, budget *authori
 		if status := probeAuthorityRepairLock(filepath.Join(dir, "LOCK")); status != authorityRepairLockReleased && status != authorityRepairLockAbsent {
 			scan.conflicts++
 		}
-		candidate, final, classifyErr := scanLegacyAuthorityRepair(ctx, dir, lineage, budget)
+		candidate, final, _, _, classifyErr := scanLegacyAuthorityRepair(ctx, dir, lineage, budget)
 		if errors.Is(classifyErr, errAuthorityRepairTruncated) {
 			return classifyErr
 		}
@@ -429,54 +442,56 @@ func (scan *authorityRepairScan) finish() {
 	}
 }
 
-func scanLegacyAuthorityRepair(ctx context.Context, dir, lineage string, budget *authorityRepairBudget) (*AuthorityRepairCandidate, Transaction, error) {
+func scanLegacyAuthorityRepair(ctx context.Context, dir, lineage string, budget *authorityRepairBudget) (*AuthorityRepairCandidate, Transaction, []string, []string, error) {
 	headOne, err := readAuthorityRepairHead(dir, budget)
 	if err != nil {
-		return nil, Transaction{}, err
+		return nil, Transaction{}, nil, nil, err
 	}
-	first, firstFinal, err := scanLegacyAuthorityRepairOnce(ctx, dir, lineage, headOne, budget)
+	first, firstFinal, firstAliases, firstAliasOperations, err := scanLegacyAuthorityRepairOnce(ctx, dir, lineage, headOne, budget)
 	if err != nil {
-		return nil, Transaction{}, err
+		return nil, Transaction{}, nil, nil, err
 	}
 	headTwo, err := readAuthorityRepairHead(dir, budget)
 	if err != nil {
-		return nil, Transaction{}, err
+		return nil, Transaction{}, nil, nil, err
 	}
-	second, secondFinal, err := scanLegacyAuthorityRepairOnce(ctx, dir, lineage, headTwo, budget)
+	second, secondFinal, secondAliases, secondAliasOperations, err := scanLegacyAuthorityRepairOnce(ctx, dir, lineage, headTwo, budget)
 	if err != nil {
-		return nil, Transaction{}, err
+		return nil, Transaction{}, nil, nil, err
 	}
 	headThree, err := readAuthorityRepairHead(dir, budget)
 	if err != nil {
-		return nil, Transaction{}, err
+		return nil, Transaction{}, nil, nil, err
 	}
-	if headOne != headTwo || headTwo != headThree || !reflect.DeepEqual(first, second) || !transactionsEqual(firstFinal, secondFinal) {
-		return nil, Transaction{}, errAuthorityRepairConcurrent
+	if headOne != headTwo || headTwo != headThree || !reflect.DeepEqual(first, second) ||
+		!reflect.DeepEqual(firstAliases, secondAliases) || !reflect.DeepEqual(firstAliasOperations, secondAliasOperations) ||
+		!transactionsEqual(firstFinal, secondFinal) {
+		return nil, Transaction{}, nil, nil, errAuthorityRepairConcurrent
 	}
 	if first.AliasEventCount == 0 {
-		return nil, firstFinal, nil
+		return nil, firstFinal, nil, nil, nil
 	}
-	return &first, firstFinal, nil
+	return &first, firstFinal, firstAliases, firstAliasOperations, nil
 }
 
-func scanLegacyAuthorityRepairOnce(ctx context.Context, dir, lineage, head string, budget *authorityRepairBudget) (AuthorityRepairCandidate, Transaction, error) {
+func scanLegacyAuthorityRepairOnce(ctx context.Context, dir, lineage, head string, budget *authorityRepairBudget) (AuthorityRepairCandidate, Transaction, []string, []string, error) {
 	visited := map[string]bool{}
 	reverseRecords := []Record{}
 	reverseRevisions := []string{}
 	for revision := head; revision != ""; {
 		if err := ctx.Err(); err != nil {
-			return AuthorityRepairCandidate{}, Transaction{}, err
+			return AuthorityRepairCandidate{}, Transaction{}, nil, nil, err
 		}
 		if visited[revision] {
-			return AuthorityRepairCandidate{}, Transaction{}, errors.New("legacy repair chain cycle")
+			return AuthorityRepairCandidate{}, Transaction{}, nil, nil, errors.New("legacy repair chain cycle")
 		}
 		visited[revision] = true
 		if len(visited) > authorityRepairMaxOperations {
-			return AuthorityRepairCandidate{}, Transaction{}, errAuthorityRepairTruncated
+			return AuthorityRepairCandidate{}, Transaction{}, nil, nil, errAuthorityRepairTruncated
 		}
 		record, err := readAuthorityRepairRecord(dir, revision, budget)
 		if err != nil {
-			return AuthorityRepairCandidate{}, Transaction{}, err
+			return AuthorityRepairCandidate{}, Transaction{}, nil, nil, err
 		}
 		reverseRecords = append(reverseRecords, record)
 		reverseRevisions = append(reverseRevisions, revision)
@@ -489,13 +504,15 @@ func scanLegacyAuthorityRepairOnce(ctx context.Context, dir, lineage, head strin
 		records[index], revisions[index] = reverseRecords[reverse], reverseRevisions[reverse]
 	}
 	if len(records) == 0 || !validInitialStoreRecord(records[0]) || records[0].Transaction.LineageID != lineage {
-		return AuthorityRepairCandidate{}, Transaction{}, errors.New("legacy repair chain genesis invalid")
+		return AuthorityRepairCandidate{}, Transaction{}, nil, nil, errors.New("legacy repair chain genesis invalid")
 	}
 	operations := map[string]struct{}{}
+	aliasRevisions := []string{}
+	aliasOperations := []string{}
 	aliasEvents := 0
 	for index := 1; index < len(records); index++ {
 		if records[index].PreviousRevision != revisions[index-1] {
-			return AuthorityRepairCandidate{}, Transaction{}, errors.New("legacy repair chain discontinuous")
+			return AuthorityRepairCandidate{}, Transaction{}, nil, nil, errors.New("legacy repair chain discontinuous")
 		}
 		operation := records[index].Operation
 		if validatePersistedV1Successor(records[index-1].Transaction, records[index].Transaction, operation, index) == nil {
@@ -503,9 +520,11 @@ func scanLegacyAuthorityRepairOnce(ctx context.Context, dir, lineage, head strin
 		}
 		canonical, approved := approvedHistoricalAliasCanonicalOperation(operation)
 		if !approved || validateSuccessor(records[index-1].Transaction, records[index].Transaction, canonical) != nil {
-			return AuthorityRepairCandidate{}, Transaction{}, errors.New("legacy repair chain unsupported")
+			return AuthorityRepairCandidate{}, Transaction{}, nil, nil, errors.New("legacy repair chain unsupported")
 		}
 		operations[operation] = struct{}{}
+		aliasRevisions = append(aliasRevisions, revisions[index])
+		aliasOperations = append(aliasOperations, operation)
 		aliasEvents++
 	}
 	operationSet := make([]string, 0, len(operations))
@@ -516,21 +535,16 @@ func scanLegacyAuthorityRepairOnce(ctx context.Context, dir, lineage, head strin
 	return AuthorityRepairCandidate{
 		LineageID: lineage, Revision: head, ChainIdentity: chainIdentity(revisions), EventCount: len(records),
 		AliasEventCount: aliasEvents, Operations: operationSet,
-	}, records[len(records)-1].Transaction, nil
+	}, records[len(records)-1].Transaction, aliasRevisions, aliasOperations, nil
 }
 
 func readAuthorityRepairRecord(dir, revision string, budget *authorityRepairBudget) (Record, error) {
 	if !validSHA256(revision) {
 		return Record{}, errors.New("legacy repair revision invalid")
 	}
-	payload, err := budget.read(filepath.Join(dir, "events", strings.TrimPrefix(revision, "sha256:")+".json"), authorityRepairMaxEventBytes)
+	payload, err := budget.readEvent(filepath.Join(dir, "events", strings.TrimPrefix(revision, "sha256:")+".json"), authorityRepairMaxEventBytes)
 	if err != nil {
 		return Record{}, err
-	}
-	budget.counts.Events++
-	if budget.counts.Events > authorityRepairMaxEvents {
-		budget.truncated = true
-		return Record{}, errAuthorityRepairTruncated
 	}
 	sum := sha256.Sum256(payload)
 	if "sha256:"+hex.EncodeToString(sum[:]) != revision {
@@ -586,11 +600,32 @@ func (budget *authorityRepairBudget) addLineage(compact bool) {
 }
 
 func (budget *authorityRepairBudget) read(path string, limit int64) ([]byte, error) {
+	return budget.readKind(path, limit, false)
+}
+
+func (budget *authorityRepairBudget) readEvent(path string, limit int64) ([]byte, error) {
+	return budget.readKind(path, limit, true)
+}
+
+func (budget *authorityRepairBudget) readKind(path string, limit int64, event bool) ([]byte, error) {
+	if err := budget.ctx.Err(); err != nil {
+		return nil, err
+	}
+	budget.proofReads++
+	if budget.proofReads > authorityRepairMaxProofReads {
+		budget.truncated = true
+		return nil, errAuthorityRepairTruncated
+	}
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Size() < 0 || info.Size() > limit || int64(budget.counts.Bytes)+info.Size() > authorityRepairMaxTotalBytes {
+	_, uniqueFile := budget.uniqueFiles[path]
+	_, uniqueEvent := budget.uniqueEvents[path]
+	if !info.Mode().IsRegular() || info.Size() < 0 || info.Size() > limit ||
+		budget.proofBytes+int(info.Size()) > authorityRepairMaxProofReadBytes ||
+		!uniqueFile && int64(budget.counts.Bytes)+info.Size() > authorityRepairMaxTotalBytes ||
+		event && !uniqueEvent && budget.counts.Events+1 > authorityRepairMaxEvents {
 		budget.truncated = true
 		return nil, errAuthorityRepairTruncated
 	}
@@ -601,7 +636,15 @@ func (budget *authorityRepairBudget) read(path string, limit int64) ([]byte, err
 	if int64(len(payload)) != info.Size() {
 		return nil, errAuthorityRepairConcurrent
 	}
-	budget.counts.Bytes += len(payload)
+	budget.proofBytes += len(payload)
+	if !uniqueFile {
+		budget.uniqueFiles[path] = struct{}{}
+		budget.counts.Bytes += len(payload)
+	}
+	if event && !uniqueEvent {
+		budget.uniqueEvents[path] = struct{}{}
+		budget.counts.Events++
+	}
 	return payload, nil
 }
 
@@ -814,6 +857,9 @@ func RepairClassifiedAuthority(ctx context.Context, repo string, request Classif
 		return ClassifiedAuthorityRepairExecution{}, err
 	}
 	initiallyMatched := validateClassifiedAuthorityRepairRequest(request, assessment) == nil
+	if _, _, err := discoverClassifiedAuthorityRepairRecord(ctx, base, request); err != nil {
+		return ClassifiedAuthorityRepairExecution{}, err
+	}
 	classifiedAuthorityRepairAfterAssessmentHook()
 	maintenance, err := acquireMaintenanceLock(ctx, compactMaintenanceLockPath(base), maintenanceExclusive)
 	if err != nil {
@@ -823,6 +869,19 @@ func RepairClassifiedAuthority(ctx context.Context, repo string, request Classif
 	assessment, err = assessAuthorityRepairAtRepositoryRoot(ctx, root, true)
 	if err != nil {
 		return ClassifiedAuthorityRepairExecution{}, err
+	}
+	if replay, found, replayErr := discoverClassifiedAuthorityRepairRecord(ctx, base, request); replayErr != nil {
+		return ClassifiedAuthorityRepairExecution{}, replayErr
+	} else if found {
+		record, reconcileErr := reconcileClassifiedAuthorityRepairRecord(ctx, base, request, assessment, replay)
+		execution, progressErr := classifiedAuthorityRepairExecution(request, record)
+		if progressErr != nil {
+			return ClassifiedAuthorityRepairExecution{}, errors.Join(reconcileErr, progressErr)
+		}
+		if reconcileErr != nil {
+			return execution, &ClassifiedAuthorityRepairProgressError{Progress: execution, ExactReplaySafe: true, Cause: reconcileErr}
+		}
+		return execution, nil
 	}
 	legacyRequest := LegacyAliasRepairRequest{
 		LineageID: request.LineageID, ExpectedRevision: request.ExpectedRevision,
@@ -834,14 +893,10 @@ func RepairClassifiedAuthority(ctx context.Context, repo string, request Classif
 		legacyRequest.Disposition, legacyRequest.Actor, legacyRequest.Reason,
 	)
 	if assessment.Status != AuthorityRepairEligible {
-		replayed, replayErr := replayCommittedLegacyAliasRepair(base, root, legacyRequest)
-		if replayErr != nil {
-			if initiallyMatched {
-				return ClassifiedAuthorityRepairExecution{}, fmt.Errorf("classified authority repair changed before exclusive maintenance ownership: %w", ErrConcurrentUpdate)
-			}
-			return ClassifiedAuthorityRepairExecution{}, errors.New("classified authority repair is not eligible")
+		if initiallyMatched {
+			return ClassifiedAuthorityRepairExecution{}, fmt.Errorf("classified authority repair changed before exclusive maintenance ownership: %w", ErrConcurrentUpdate)
 		}
-		return classifiedAuthorityRepairExecution(request, replayed)
+		return ClassifiedAuthorityRepairExecution{}, errors.New("classified authority repair is not eligible")
 	}
 	if err := validateClassifiedAuthorityRepairRequest(request, assessment); err != nil {
 		if initiallyMatched {
@@ -849,24 +904,80 @@ func RepairClassifiedAuthority(ctx context.Context, repo string, request Classif
 		}
 		return ClassifiedAuthorityRepairExecution{}, err
 	}
-	record, err := repairHistoricalLegacyAlias(ctx, root, legacyRequest, legacyAliasRepairOptions{
-		waitForCooperativeRepair: true, maintenanceAlreadyHeld: true,
-	})
+	audit, err := newClassifiedAuthorityRepairAudit(assessment, request)
 	if err != nil {
 		return ClassifiedAuthorityRepairExecution{}, err
 	}
-	return classifiedAuthorityRepairExecution(request, record)
+	record, repairErr := repairHistoricalLegacyAlias(ctx, root, legacyRequest, legacyAliasRepairOptions{
+		waitForCooperativeRepair: true, maintenanceAlreadyHeld: true, classifiedAudit: audit,
+	})
+	execution, progressErr := classifiedAuthorityRepairExecution(request, record)
+	if repairErr != nil {
+		if progressErr == nil {
+			if execution.Status == CompactReclaimCommitted {
+				if verified, verifyErr := readBackClassifiedAuthorityRepair(ctx, root, base, request); verifyErr == nil {
+					execution = verified
+				} else {
+					repairErr = errors.Join(repairErr, verifyErr)
+				}
+			}
+			return execution, &ClassifiedAuthorityRepairProgressError{Progress: execution, ExactReplaySafe: true, Cause: repairErr}
+		}
+		return ClassifiedAuthorityRepairExecution{}, repairErr
+	}
+	if progressErr != nil {
+		return ClassifiedAuthorityRepairExecution{}, progressErr
+	}
+	verified, err := readBackClassifiedAuthorityRepair(ctx, root, base, request)
+	if err != nil {
+		return execution, &ClassifiedAuthorityRepairProgressError{Progress: execution, ExactReplaySafe: true, Cause: err}
+	}
+	return verified, nil
+}
+
+func readBackClassifiedAuthorityRepair(ctx context.Context, root, base string, request ClassifiedAuthorityRepairRequest) (ClassifiedAuthorityRepairExecution, error) {
+	readback, err := assessAuthorityRepairAtRepositoryRoot(ctx, root, true)
+	if err != nil {
+		return ClassifiedAuthorityRepairExecution{}, fmt.Errorf("read back classified authority repair inventory: %w", err)
+	}
+	replay, found, err := discoverClassifiedAuthorityRepairRecord(ctx, base, request)
+	if err != nil {
+		return ClassifiedAuthorityRepairExecution{}, err
+	}
+	if !found {
+		return ClassifiedAuthorityRepairExecution{}, errors.New("classified authority repair audit readback is missing")
+	}
+	record, reconcileErr := reconcileClassifiedAuthorityRepairRecord(ctx, base, request, readback, replay)
+	verified, verifyErr := classifiedAuthorityRepairExecution(request, record)
+	if verifyErr != nil {
+		return ClassifiedAuthorityRepairExecution{}, errors.Join(reconcileErr, verifyErr)
+	}
+	if reconcileErr != nil {
+		return verified, reconcileErr
+	}
+	if verified.Status != CompactReclaimCommitted {
+		return verified, errors.New("classified authority repair audit readback is not committed")
+	}
+	return verified, nil
 }
 
 func classifiedAuthorityRepairExecution(request ClassifiedAuthorityRepairRequest, record CompactReclaimRecord) (ClassifiedAuthorityRepairExecution, error) {
 	proof := record.LegacyAliasRepair
-	if record.Status != CompactReclaimCommitted || proof == nil || proof.LineageID != request.LineageID ||
-		proof.HeadRevision != request.ExpectedRevision || proof.Disposition != string(request.Disposition) || !validSHA256(proof.ChainIdentity) {
+	if (record.Status != CompactReclaimPrepared && record.Status != CompactReclaimCommitted) || proof == nil ||
+		proof.LineageID != request.LineageID || proof.HeadRevision != request.ExpectedRevision ||
+		proof.Disposition != string(request.Disposition) || !validSHA256(proof.ChainIdentity) ||
+		validateClassifiedAuthorityRepairAudit(record.ClassifiedAuthorityRepair, request) != nil {
 		return ClassifiedAuthorityRepairExecution{}, errors.New("classified authority repair audit readback is invalid")
+	}
+	recordIdentity, err := classifiedAuthorityRepairRecordIdentity(record)
+	if err != nil {
+		return ClassifiedAuthorityRepairExecution{}, err
 	}
 	return ClassifiedAuthorityRepairExecution{
 		Status: record.Status, Class: request.Class, LineageID: request.LineageID, Revision: request.ExpectedRevision,
 		ChainIdentity: proof.ChainIdentity, Cause: request.Cause, Disposition: request.Disposition,
+		AssessmentDigest: record.ClassifiedAuthorityRepair.AssessmentDigest,
+		RequestDigest:    record.ClassifiedAuthorityRepair.RequestDigest, RecordIdentity: recordIdentity,
 	}, nil
 }
 

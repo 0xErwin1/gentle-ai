@@ -474,7 +474,7 @@ func TestReviewIntegrationDocumentationMatchesRuntimeContract(t *testing.T) {
 	document := string(payload)
 	for _, required := range []string{
 		"`stop`", "`legacy_v1_read_only`", "`mutation_outcome`", "`not_started`", "`unknown`", "`committed`",
-		"sixteen strict JSON Schemas", "nineteen deterministic conformance fixtures",
+		"eighteen strict JSON Schemas", "twenty-one deterministic conformance fixtures",
 		"Legacy-v1 never reports `publication_pending`", "retry and replay disabled",
 		"Historical `ordinary_4r` legacy status omits `frozen`", "START, finalize, BIND-SDD, invalidation, and direct append",
 		"`native_frozen_candidate_context`", "`candidate_diff`", "`changed_path_manifest`",
@@ -489,7 +489,7 @@ func TestReviewIntegrationDocumentationMatchesRuntimeContract(t *testing.T) {
 			t.Fatalf("review integration documentation is missing %q", required)
 		}
 	}
-	for _, stale := range []string{"five strict JSON Schemas", "nine strict JSON Schemas", "ten strict JSON Schemas", "four deterministic conformance fixtures", "eleven deterministic conformance fixtures", "eighteen deterministic conformance fixtures"} {
+	for _, stale := range []string{"five strict JSON Schemas", "nine strict JSON Schemas", "ten strict JSON Schemas", "sixteen strict JSON Schemas", "four deterministic conformance fixtures", "eleven deterministic conformance fixtures", "eighteen deterministic conformance fixtures", "nineteen deterministic conformance fixtures"} {
 		if strings.Contains(document, stale) {
 			t.Fatalf("review integration documentation retains stale claim %q", stale)
 		}

@@ -87,6 +87,9 @@ func TestAssessAuthorityRepairDerivesExactCurrentLegacyHeadDeterministically(t *
 		first.RepositoryBinding == "" || first.AuthorizationSchema != AuthorityRepairAuthorizationSchema {
 		t.Fatalf("eligible assessment = %#v", first)
 	}
+	if first.Counts.Events != first.Candidate.EventCount {
+		t.Fatalf("public unique event count = %d, want candidate cardinality %d", first.Counts.Events, first.Candidate.EventCount)
+	}
 	if after := authorityBytes(t, root); !reflect.DeepEqual(before, after) {
 		t.Fatal("repair assessment changed authority bytes")
 	}
@@ -273,6 +276,51 @@ func TestAssessAuthorityRepairStopsLockedAndTruncatedInventory(t *testing.T) {
 	})
 }
 
+func TestAuthorityRepairBudgetAccepts1024UniqueEventsAndRejects1025(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		events    int
+		truncated bool
+	}{
+		{name: "maximum", events: authorityRepairMaxEvents},
+		{name: "over maximum", events: authorityRepairMaxEvents + 1, truncated: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			counts := AuthorityRepairCounts{}
+			budget := authorityRepairBudget{
+				ctx: context.Background(), counts: &counts,
+				uniqueFiles: map[string]struct{}{}, uniqueEvents: map[string]struct{}{},
+			}
+			paths := make([]string, tt.events)
+			for index := range paths {
+				paths[index] = filepath.Join(dir, fmt.Sprintf("%04d.json", index))
+				if err := os.WriteFile(paths[index], []byte("x"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var readErr error
+			for pass := 0; pass < 2 && readErr == nil; pass++ {
+				for _, path := range paths {
+					if _, readErr = budget.readEvent(path, authorityRepairMaxEventBytes); readErr != nil {
+						break
+					}
+				}
+			}
+			if tt.truncated {
+				if !errors.Is(readErr, errAuthorityRepairTruncated) || counts.Events != authorityRepairMaxEvents {
+					t.Fatalf("over-bound scan = events %d, error %v", counts.Events, readErr)
+				}
+				return
+			}
+			if readErr != nil || counts.Events != authorityRepairMaxEvents || counts.Bytes != authorityRepairMaxEvents ||
+				budget.proofReads != 2*authorityRepairMaxEvents {
+				t.Fatalf("bounded two-pass scan = counts %#v, reads %d, error %v", counts, budget.proofReads, readErr)
+			}
+		})
+	}
+}
+
 func TestAuthorityRepairAuthorizationRejectsNonExactBindings(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	_, head, _ := legacyAliasRepairFixture(t, repo, "alias-authorization")
@@ -432,6 +480,465 @@ func TestRepairClassifiedAuthorityConcurrentExecutionCommitsAndReplays(t *testin
 	if !reflect.DeepEqual(first, second) || first.Status != "committed" {
 		t.Fatalf("concurrent classified results = %#v / %#v", first, second)
 	}
+}
+
+func TestRepairClassifiedAuthorityPreservesPreparedProgress(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	store, _, _ := legacyAliasRepairFixture(t, repo, "classified-prepared-progress")
+	assessment, err := AssessAuthorityRepair(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := classifiedAuthorityRepairRequest(t, assessment)
+	originalPersist := persistReclaimRecord
+	t.Cleanup(func() { persistReclaimRecord = originalPersist })
+	persistReclaimRecord = func(record CompactReclaimRecord) error {
+		if record.Status == CompactReclaimCommitted {
+			return errors.New("injected committed audit failure")
+		}
+		return originalPersist(record)
+	}
+	progress, err := RepairClassifiedAuthority(context.Background(), repo, request)
+	if err == nil {
+		t.Fatal("classified repair unexpectedly completed")
+	}
+	if progress.Status != CompactReclaimPrepared || progress.LineageID != request.LineageID || progress.Revision != request.ExpectedRevision {
+		t.Fatalf("classified wrapper discarded prepared progress: %#v, %v", progress, err)
+	}
+	if _, statErr := os.Stat(store.Dir); !os.IsNotExist(statErr) {
+		t.Fatalf("prepared progress did not preserve moved-source truth: %v", statErr)
+	}
+}
+
+func TestRepairClassifiedAuthorityInitialCommitRequiresPhysicalReadback(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	legacyAliasRepairFixture(t, repo, "classified-initial-readback")
+	assessment, err := AssessAuthorityRepair(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := classifiedAuthorityRepairRequest(t, assessment)
+	originalPersist := persistReclaimRecord
+	corrupted := false
+	persistReclaimRecord = func(record CompactReclaimRecord) error {
+		if err := originalPersist(record); err != nil {
+			return err
+		}
+		if record.Status == CompactReclaimCommitted && !corrupted {
+			corrupted = true
+			events, err := os.ReadDir(filepath.Join(record.QuarantinePath, "residue", "events"))
+			if err != nil || len(events) == 0 {
+				t.Fatalf("read committed replay events = %d, %v", len(events), err)
+			}
+			path := filepath.Join(record.QuarantinePath, "residue", "events", events[0].Name())
+			payload, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload[0] ^= 1
+			if err := os.WriteFile(path, payload, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return nil
+	}
+	t.Cleanup(func() { persistReclaimRecord = originalPersist })
+	progress, err := RepairClassifiedAuthority(context.Background(), repo, request)
+	var typed *ClassifiedAuthorityRepairProgressError
+	if err == nil || !errors.As(err, &typed) || progress.Status != CompactReclaimCommitted || typed.Progress != progress || !typed.ExactReplaySafe {
+		t.Fatalf("classified repair accepted corrupt initial commit readback: %#v, %T %v", progress, err, err)
+	}
+}
+
+func TestRepairClassifiedAuthorityResumesEachDurablePhase(t *testing.T) {
+	for _, phase := range []string{compactReclaimPhasePrepared, compactReclaimPhaseRenamed, compactReclaimPhaseCommitted} {
+		t.Run(phase, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			store, _, _ := legacyAliasRepairFixture(t, repo, "classified-resume-"+phase)
+			assessment, err := AssessAuthorityRepair(context.Background(), repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := classifiedAuthorityRepairRequest(t, assessment)
+			originalHook := compactReclaimPhaseHook
+			injected := errors.New("injected " + phase + " interruption")
+			fired := false
+			compactReclaimPhaseHook = func(ctx context.Context, current string, record CompactReclaimRecord) error {
+				if current == phase && !fired {
+					fired = true
+					return injected
+				}
+				return originalHook(ctx, current, record)
+			}
+			t.Cleanup(func() { compactReclaimPhaseHook = originalHook })
+			progress, err := RepairClassifiedAuthority(context.Background(), repo, request)
+			if !errors.Is(err, injected) {
+				t.Fatalf("phase %s error = %v", phase, err)
+			}
+			var typed *ClassifiedAuthorityRepairProgressError
+			if !errors.As(err, &typed) || typed.Progress != progress || !validSHA256(progress.RecordIdentity) ||
+				!validSHA256(progress.RequestDigest) || !validSHA256(progress.AssessmentDigest) ||
+				!typed.ExactReplaySafe {
+				t.Fatalf("phase %s progress = %#v, %T %v", phase, progress, err, err)
+			}
+			wantStatus := CompactReclaimPrepared
+			if phase == compactReclaimPhaseCommitted {
+				wantStatus = CompactReclaimCommitted
+			}
+			if progress.Status != wantStatus {
+				t.Fatalf("phase %s status = %q, want %q", phase, progress.Status, wantStatus)
+			}
+			compactReclaimPhaseHook = originalHook
+			replayed, err := RepairClassifiedAuthority(context.Background(), repo, request)
+			if err != nil || replayed.Status != CompactReclaimCommitted || replayed.RecordIdentity != progress.RecordIdentity {
+				t.Fatalf("phase %s restart = %#v, %v", phase, replayed, err)
+			}
+			if _, err := os.Lstat(store.Dir); !os.IsNotExist(err) {
+				t.Fatalf("phase %s restart left source: %v", phase, err)
+			}
+		})
+	}
+
+	t.Run("prepare persistence failure is not durable progress", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		store, _, _ := legacyAliasRepairFixture(t, repo, "classified-prepare-failure")
+		assessment, err := AssessAuthorityRepair(context.Background(), repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := classifiedAuthorityRepairRequest(t, assessment)
+		originalPersist := persistReclaimRecord
+		injected := errors.New("injected prepare persistence failure")
+		persistReclaimRecord = func(record CompactReclaimRecord) error {
+			if record.Status == CompactReclaimPrepared {
+				return injected
+			}
+			return originalPersist(record)
+		}
+		t.Cleanup(func() { persistReclaimRecord = originalPersist })
+		progress, err := RepairClassifiedAuthority(context.Background(), repo, request)
+		var typed *ClassifiedAuthorityRepairProgressError
+		if !errors.Is(err, injected) || errors.As(err, &typed) || progress != (ClassifiedAuthorityRepairExecution{}) {
+			t.Fatalf("prepare failure invented durable progress: %#v, %T %v", progress, err, err)
+		}
+		if _, err := os.Lstat(store.Dir); err != nil {
+			t.Fatalf("prepare failure moved source: %v", err)
+		}
+		persistReclaimRecord = originalPersist
+		if replayed, err := RepairClassifiedAuthority(context.Background(), repo, request); err != nil || replayed.Status != CompactReclaimCommitted {
+			t.Fatalf("repair after nondurable prepare failure = %#v, %v", replayed, err)
+		}
+	})
+}
+
+func TestRepairClassifiedAuthorityTimeoutsPreserveEachDurablePhase(t *testing.T) {
+	for _, phase := range []string{compactReclaimPhasePrepared, compactReclaimPhaseRenamed, compactReclaimPhaseCommitted} {
+		t.Run(phase, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			legacyAliasRepairFixture(t, repo, "classified-timeout-"+phase)
+			assessment, err := AssessAuthorityRepair(context.Background(), repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := classifiedAuthorityRepairRequest(t, assessment)
+			originalHook := compactReclaimPhaseHook
+			compactReclaimPhaseHook = func(ctx context.Context, current string, record CompactReclaimRecord) error {
+				if current == phase {
+					<-ctx.Done()
+					return ctx.Err()
+				}
+				return originalHook(ctx, current, record)
+			}
+			t.Cleanup(func() { compactReclaimPhaseHook = originalHook })
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			progress, err := RepairClassifiedAuthority(ctx, repo, request)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("phase %s timeout = %v", phase, err)
+			}
+			var typed *ClassifiedAuthorityRepairProgressError
+			if !errors.As(err, &typed) || !typed.ExactReplaySafe {
+				t.Fatalf("phase %s timeout replay truth = %T %#v", phase, err, typed)
+			}
+			wantStatus := CompactReclaimPrepared
+			if phase == compactReclaimPhaseCommitted {
+				wantStatus = CompactReclaimCommitted
+			}
+			if progress.Status != wantStatus || !validSHA256(progress.RecordIdentity) {
+				t.Fatalf("phase %s timeout progress = %#v", phase, progress)
+			}
+			compactReclaimPhaseHook = originalHook
+			if replayed, err := RepairClassifiedAuthority(context.Background(), repo, request); err != nil || replayed.Status != CompactReclaimCommitted {
+				t.Fatalf("phase %s timeout restart = %#v, %v", phase, replayed, err)
+			}
+		})
+	}
+}
+
+func TestRepairClassifiedAuthorityRejectsCompatibilityReplayOrigin(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	_, head, _ := legacyAliasRepairFixture(t, repo, "classified-origin")
+	assessment, err := AssessAuthorityRepair(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := classifiedAuthorityRepairRequest(t, assessment)
+	legacyAliasRepairFixture(t, repo, "unrelated-unknown", "review/unknown-fix")
+	_, repository, err := reviewAuthorityRoot(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compatibility := LegacyAliasRepairRequest{
+		LineageID: request.LineageID, ExpectedRevision: head, ExpectedDiagnostic: legacyAliasRepairDiagnostic,
+		Disposition: LegacyAliasRepairDisposition, Actor: request.Actor, Reason: request.Reason,
+	}
+	compatibility.MaintainerAuthorization = legacyAliasRepairAuthorizationBinding(
+		repository, compatibility.LineageID, compatibility.ExpectedRevision, compatibility.ExpectedDiagnostic,
+		compatibility.Disposition, compatibility.Actor, compatibility.Reason,
+	)
+	if _, err := RepairHistoricalLegacyAlias(context.Background(), repo, compatibility); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RepairClassifiedAuthority(context.Background(), repo, request); err == nil {
+		t.Fatal("classified repair adopted a compatibility-origin audit record")
+	}
+}
+
+func TestRepairClassifiedAuthorityReplayRejectsCorruptAuditAndResidue(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		mutate func(t *testing.T, recordPath, residuePath string)
+	}{
+		{
+			name: "unknown audit field",
+			mutate: func(t *testing.T, recordPath, _ string) {
+				payload, err := os.ReadFile(recordPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var raw map[string]any
+				if err := json.Unmarshal(payload, &raw); err != nil {
+					t.Fatal(err)
+				}
+				raw["untrusted"] = true
+				payload, err = json.Marshal(raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(recordPath, payload, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "missing residue",
+			mutate: func(t *testing.T, _ string, residuePath string) {
+				if err := os.RemoveAll(residuePath); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "forged chain identity",
+			mutate: func(t *testing.T, recordPath, _ string) {
+				payload, err := os.ReadFile(recordPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var record CompactReclaimRecord
+				if err := json.Unmarshal(payload, &record); err != nil {
+					t.Fatal(err)
+				}
+				record.LegacyAliasRepair.ChainIdentity = hash("f")
+				payload, err = json.Marshal(record)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(recordPath, payload, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "replaced event",
+			mutate: func(t *testing.T, _ string, residuePath string) {
+				events, err := os.ReadDir(filepath.Join(residuePath, "events"))
+				if err != nil || len(events) == 0 {
+					t.Fatalf("read replay events = %d, %v", len(events), err)
+				}
+				path := filepath.Join(residuePath, "events", events[0].Name())
+				payload, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				payload[0] ^= 1
+				if err := os.WriteFile(path, payload, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "oversized replay record",
+			mutate: func(t *testing.T, recordPath, _ string) {
+				if err := os.WriteFile(recordPath, bytes.Repeat([]byte("x"), authorityRepairMaxEventBytes+1), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "symlinked nested event directory escape",
+			mutate: func(t *testing.T, _ string, residuePath string) {
+				eventsPath := filepath.Join(residuePath, "events")
+				outside := filepath.Join(t.TempDir(), "events")
+				if err := os.Rename(eventsPath, outside); err != nil {
+					t.Skipf("move events outside residue unavailable: %v", err)
+				}
+				if err := os.Symlink(outside, eventsPath); err != nil {
+					t.Skipf("symlink unavailable: %v", err)
+				}
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := initSnapshotRepo(t)
+			legacyAliasRepairFixture(t, repo, "classified-corrupt-replay")
+			assessment, err := AssessAuthorityRepair(context.Background(), repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := classifiedAuthorityRepairRequest(t, assessment)
+			if _, err := RepairClassifiedAuthority(context.Background(), repo, request); err != nil {
+				t.Fatal(err)
+			}
+			base, _, err := reviewAuthorityRoot(context.Background(), repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries, err := os.ReadDir(filepath.Join(base, "quarantine"))
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("quarantine entries = %d, %v", len(entries), err)
+			}
+			quarantinePath := filepath.Join(base, "quarantine", entries[0].Name())
+			tt.mutate(t, filepath.Join(quarantinePath, "reclaim-record.json"), filepath.Join(quarantinePath, "residue"))
+			if _, err := RepairClassifiedAuthority(context.Background(), repo, request); err == nil {
+				t.Fatal("classified replay accepted corrupt audit or residue")
+			}
+		})
+	}
+}
+
+func TestRepairClassifiedAuthorityReplayRequiresUniqueRecordAndGlobalInventory(t *testing.T) {
+	t.Run("duplicate classified records", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		legacyAliasRepairFixture(t, repo, "classified-duplicate-replay")
+		assessment, err := AssessAuthorityRepair(context.Background(), repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := classifiedAuthorityRepairRequest(t, assessment)
+		if _, err := RepairClassifiedAuthority(context.Background(), repo, request); err != nil {
+			t.Fatal(err)
+		}
+		base, quarantinePath, recordPath, _ := classifiedAuthorityRepairPaths(t, repo)
+		payload, err := os.ReadFile(recordPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var record CompactReclaimRecord
+		if err := json.Unmarshal(payload, &record); err != nil {
+			t.Fatal(err)
+		}
+		duplicatePath := filepath.Join(base, "quarantine", request.LineageID+"-duplicate")
+		if duplicatePath == quarantinePath {
+			t.Fatal("duplicate path did not differ")
+		}
+		if err := os.MkdirAll(duplicatePath, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		record.QuarantinePath = duplicatePath
+		payload, err = json.Marshal(record)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(duplicatePath, "reclaim-record.json"), payload, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := RepairClassifiedAuthority(context.Background(), repo, request); err == nil || !strings.Contains(err.Error(), "duplicate") {
+			t.Fatalf("classified replay duplicate result = %v", err)
+		}
+	})
+
+	t.Run("quarantine directory bound", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		legacyAliasRepairFixture(t, repo, "classified-bounded-replay")
+		assessment, err := AssessAuthorityRepair(context.Background(), repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := classifiedAuthorityRepairRequest(t, assessment)
+		if _, err := RepairClassifiedAuthority(context.Background(), repo, request); err != nil {
+			t.Fatal(err)
+		}
+		base, _, _, _ := classifiedAuthorityRepairPaths(t, repo)
+		for index := 0; index < authorityRepairMaxQuarantineRecords; index++ {
+			if err := os.Mkdir(filepath.Join(base, "quarantine", fmt.Sprintf("noise-%03d", index)), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := RepairClassifiedAuthority(context.Background(), repo, request); !errors.Is(err, errAuthorityRepairTruncated) {
+			t.Fatalf("classified replay directory bound = %v", err)
+		}
+	})
+
+	t.Run("global inventory changed after commit", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		legacyAliasRepairFixture(t, repo, "classified-global-replay")
+		assessment, err := AssessAuthorityRepair(context.Background(), repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := classifiedAuthorityRepairRequest(t, assessment)
+		if _, err := RepairClassifiedAuthority(context.Background(), repo, request); err != nil {
+			t.Fatal(err)
+		}
+		legacyAliasRepairFixture(t, repo, "classified-new-global-candidate")
+		if _, err := RepairClassifiedAuthority(context.Background(), repo, request); err == nil || !strings.Contains(err.Error(), "full-inventory") {
+			t.Fatalf("classified replay accepted changed global inventory: %v", err)
+		}
+	})
+
+	t.Run("cancelled bounded discovery", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		legacyAliasRepairFixture(t, repo, "classified-cancelled-replay")
+		assessment, err := AssessAuthorityRepair(context.Background(), repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := classifiedAuthorityRepairRequest(t, assessment)
+		if _, err := RepairClassifiedAuthority(context.Background(), repo, request); err != nil {
+			t.Fatal(err)
+		}
+		base, _, _, _ := classifiedAuthorityRepairPaths(t, repo)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, _, err := discoverClassifiedAuthorityRepairRecord(ctx, base, request); !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled classified replay discovery = %v", err)
+		}
+	})
+}
+
+func classifiedAuthorityRepairPaths(t *testing.T, repo string) (base, quarantinePath, recordPath, residuePath string) {
+	t.Helper()
+	base, _, err := reviewAuthorityRoot(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Join(base, "quarantine"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("quarantine entries = %d, %v", len(entries), err)
+	}
+	quarantinePath = filepath.Join(base, "quarantine", entries[0].Name())
+	return base, quarantinePath, filepath.Join(quarantinePath, "reclaim-record.json"), filepath.Join(quarantinePath, "residue")
 }
 
 func classifiedAuthorityRepairRequest(t *testing.T, assessment AuthorityRepairAssessment) ClassifiedAuthorityRepairRequest {

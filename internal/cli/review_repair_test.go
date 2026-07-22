@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 func TestNegotiatedStatusPublishesClassifiedRepairAuthorizationTransition(t *testing.T) {
@@ -89,6 +90,85 @@ func TestNegotiatedStatusPublishesClassifiedRepairAuthorizationTransition(t *tes
 	unsafe.NextTransition = &unsafeTransition
 	if err := unsafe.Validate(); err == nil {
 		t.Fatal("classified repair status accepted a completed public authorization")
+	}
+}
+
+func TestNegotiatedStatusKeepsExplicitHealthyTargetIsolatedFromUnrelatedRepair(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	appendClassifiedRepairCLIFixture(t, repo, "unrelated-repair-alias")
+	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).Build(context.Background(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	risk, lines, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ClassifySnapshotRisk(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lenses := []string{}
+	if risk == reviewtransaction.RiskMedium {
+		lenses = []string{reviewtransaction.LensReliability}
+	} else if risk == reviewtransaction.RiskHigh {
+		lenses = []string{
+			reviewtransaction.LensRisk,
+			reviewtransaction.LensResilience,
+			reviewtransaction.LensReadability,
+			reviewtransaction.LensReliability,
+		}
+	}
+	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
+		LineageID: "selected-healthy-compact", Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
+		Snapshot: snapshot, PolicyHash: "sha256:" + strings.Repeat("d", 64),
+		RiskLevel: risk, SelectedLenses: lenses,
+		OriginalChangedLines: &lines,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Replace("", "review/start", state); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, variant := range []struct {
+		name string
+		args []string
+	}{
+		{name: "status"},
+		{name: "eligibility", args: []string{"--action-eligibility"}},
+		{name: "transition", args: []string{"--next-transition"}},
+		{name: "eligibility and transition", args: []string{"--action-eligibility", "--next-transition"}},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			args := []string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", state.LineageID}
+			args = append(args, variant.args...)
+			var output bytes.Buffer
+			if err := RunReview(args, &output); err != nil {
+				t.Fatalf("explicit healthy STATUS absorbed unrelated repair: %v\n%s", err, output.String())
+			}
+			var status ReviewTargetStatusResult
+			decodeStrictReviewJSON(t, output.Bytes(), &status)
+			if err := status.Validate(); err != nil {
+				t.Fatalf("explicit healthy STATUS validation: %v\n%s", err, output.String())
+			}
+			if status.Applicability != reviewtransaction.TargetApplicabilityCurrent || status.Authority == nil ||
+				status.Authority.LineageID != state.LineageID || status.Repair.Status != reviewtransaction.AuthorityRepairUnsupported ||
+				status.Repair.Candidate != nil {
+				t.Fatalf("explicit healthy STATUS was contaminated by unrelated repair: %#v", status)
+			}
+			if status.Eligibility != nil && len(status.Eligibility.AllowedActions) == 1 &&
+				status.Eligibility.AllowedActions[0].Action == "review.repair" {
+				t.Fatalf("explicit healthy STATUS offered unrelated repair: %#v", status.Eligibility)
+			}
+			if status.NextTransition != nil && status.NextTransition.Execute != nil &&
+				status.NextTransition.Execute.Operation == "review.repair" {
+				t.Fatalf("explicit healthy STATUS routed unrelated repair: %#v", status.NextTransition)
+			}
+		})
 	}
 }
 
@@ -405,5 +485,120 @@ func TestReviewRepairContractAndPreflightFixtureAreStrict(t *testing.T) {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&ReviewRepairResult{}); err == nil {
 		t.Fatal("strict repair result accepted a completed authorization field")
+	}
+}
+
+func TestReviewRepairSchemasRejectShortContractArrays(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := os.ReadFile(filepath.Join(root, "fixtures", "repair-preflight.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(fixture, &document); err != nil {
+		t.Fatal(err)
+	}
+	compile := func(name string) *jsonschema.Schema {
+		t.Helper()
+		compiler := jsonschema.NewCompiler()
+		for _, resourceName := range []string{"authority-repair-assessment.schema.json", "repair.schema.json", "failure.schema.json"} {
+			resourcePath := filepath.Join(root, "schemas", resourceName)
+			payload, readErr := os.ReadFile(resourcePath)
+			if readErr != nil {
+				t.Fatalf("read %s: %v", resourceName, readErr)
+			}
+			var resource any
+			if decodeErr := json.Unmarshal(payload, &resource); decodeErr != nil {
+				t.Fatalf("decode %s: %v", resourceName, decodeErr)
+			}
+			location := "https://gentle-ai.dev/contracts/review-integration/v1/schemas/" + resourceName
+			if addErr := compiler.AddResource(location, resource); addErr != nil {
+				t.Fatalf("add %s: %v", resourceName, addErr)
+			}
+		}
+		location := "https://gentle-ai.dev/contracts/review-integration/v1/schemas/" + name
+		schema, compileErr := compiler.Compile(location)
+		if compileErr != nil {
+			t.Fatalf("compile %s: %v", name, compileErr)
+		}
+		return schema
+	}
+	repairSchema := compile("repair.schema.json")
+	if err := repairSchema.Validate(document); err != nil {
+		t.Fatalf("valid repair fixture rejected: %v", err)
+	}
+	shortInputs := cloneReviewJSONDocument(t, document)
+	shortInputs["required_inputs"] = []any{"actor", "reason"}
+	if err := repairSchema.Validate(shortInputs); err == nil {
+		t.Fatal("repair schema accepted an eligible preflight with only two required inputs")
+	}
+	assessmentSchema := compile("authority-repair-assessment.schema.json")
+	assessment, ok := document["assessment"].(map[string]any)
+	if !ok {
+		t.Fatalf("repair assessment shape = %T", document["assessment"])
+	}
+	if err := assessmentSchema.Validate(assessment); err != nil {
+		t.Fatalf("valid repair assessment rejected: %v", err)
+	}
+	shortOperations := cloneReviewJSONDocument(t, assessment)
+	shortOperations["supported_operations"] = []any{"review/complete-fix"}
+	if err := assessmentSchema.Validate(shortOperations); err == nil {
+		t.Fatal("authority repair schema accepted only one supported operation")
+	}
+	failureSchema := compile("failure.schema.json")
+	progress := reviewtransaction.ClassifiedAuthorityRepairExecution{
+		Status: reviewtransaction.CompactReclaimCommitted, LineageID: "repair-schema-progress",
+		RequestDigest: "sha256:" + strings.Repeat("d", 64), RecordIdentity: "sha256:" + strings.Repeat("e", 64),
+	}
+	failure := newReviewIntegrationFailure("review.repair", []string{"--lineage", progress.LineageID}, &reviewtransaction.ClassifiedAuthorityRepairProgressError{
+		Progress: progress, Cause: context.DeadlineExceeded,
+	})
+	payload, err := json.Marshal(failure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failureDocument map[string]any
+	if err := json.Unmarshal(payload, &failureDocument); err != nil {
+		t.Fatal(err)
+	}
+	if err := failureSchema.Validate(failureDocument); err != nil {
+		t.Fatalf("valid repair progress failure rejected: %v", err)
+	}
+	delete(failureDocument, "progress_identity")
+	if err := failureSchema.Validate(failureDocument); err == nil {
+		t.Fatal("failure schema accepted repair request digest without progress identity")
+	}
+}
+
+func cloneReviewJSONDocument(t *testing.T, document map[string]any) map[string]any {
+	t.Helper()
+	payload, err := json.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clone map[string]any
+	if err := json.Unmarshal(payload, &clone); err != nil {
+		t.Fatal(err)
+	}
+	return clone
+}
+
+func TestWindowsRuntimeIncludesRepairAndMaintenanceLockRegressions(t *testing.T) {
+	payload, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline",
+		"TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance",
+		"TestRepairClassifiedAuthorityConcurrentExecutionCommitsAndReplays",
+		"TestRepairClassifiedAuthorityResumesEachDurablePhase",
+	} {
+		if !bytes.Contains(payload, []byte(name)) {
+			t.Fatalf("Windows PR runtime allowlist is missing %s", name)
+		}
 	}
 }

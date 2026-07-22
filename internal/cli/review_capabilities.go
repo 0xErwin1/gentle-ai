@@ -179,12 +179,10 @@ func buildReviewCapabilities() (ReviewCapabilitiesResult, error) {
 
 func reviewCapabilitiesStaticSurface() ReviewCapabilitiesResult {
 	return ReviewCapabilitiesResult{
-		Schema:   ReviewIntegrationCapabilitiesSchema,
-		Contract: ReviewIntegrationContractV1,
-		Protocol: ReviewCapabilitiesProtocol{Major: 1, Minor: 3},
-		Operations: []string{
-			"review.bind_sdd", "review.capabilities", "review.finalize", "review.repair", "review.start", "review.status", "review.validate",
-		},
+		Schema:     ReviewIntegrationCapabilitiesSchema,
+		Contract:   ReviewIntegrationContractV1,
+		Protocol:   ReviewCapabilitiesProtocol{Major: 1, Minor: 3},
+		Operations: reviewIntegrationOperationNames(),
 		Gates: []string{
 			string(reviewtransaction.GatePostApply), string(reviewtransaction.GatePreCommit), string(reviewtransaction.GatePrePush),
 			string(reviewtransaction.GatePrePR), string(reviewtransaction.GateRelease),

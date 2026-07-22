@@ -113,6 +113,8 @@
         ],
         "properties": {
           "required_inputs": {
+            "minItems": 3,
+            "maxItems": 3,
             "prefixItems": [
               {
                 "const": "actor"
@@ -206,7 +208,10 @@
         "revision",
         "chain_identity",
         "cause",
-        "disposition"
+        "disposition",
+        "assessment_digest",
+        "request_digest",
+        "record_identity"
       ],
       "properties": {
         "status": {
@@ -230,6 +235,15 @@
         },
         "disposition": {
           "const": "quarantine-approved-historical-alias"
+        },
+        "assessment_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "request_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "record_identity": {
+          "$ref": "#/$defs/sha256"
         }
       }
     }
