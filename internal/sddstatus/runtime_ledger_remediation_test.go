@@ -132,7 +132,7 @@ func TestRuntimeRemediationFinishChargesButDoesNotSelectAnOverBudgetSuccessor(t 
 }
 
 func TestRuntimeRemediationFinishRejectsIncompleteStaleAndUnrelatedAuthority(t *testing.T) {
-	t.Run("successor required for a bound passing attempt", func(t *testing.T) {
+	t.Run("successor required for a changed bound passing attempt", func(t *testing.T) {
 		fixture := newRuntimeRemediationFixture(t, true)
 		request := fixture.finishRequest("finish-without-successor")
 		request.ExpectedBindingRevision = ""
@@ -209,6 +209,61 @@ func TestRuntimeRemediationFinishRejectsIncompleteStaleAndUnrelatedAuthority(t *
 		}
 		assertRuntimeRemediationUnchanged(t, fixture, before)
 	})
+}
+
+func TestRuntimeBoundFinishCompletesUnchangedCandidateWithoutReplacingBinding(t *testing.T) {
+	fixture := newRuntimeUnchangedBindingFixture(t, "unchanged-bound")
+	request := fixture.finishRequest("unchanged-finish")
+	beforeRecords := countRuntimeRecords(t, fixture.store.Dir)
+	completed, err := fixture.store.Finish(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !completed.Complete || completed.ActiveAttempt != nil || completed.NextAction != RuntimeActionComplete ||
+		completed.Binding == nil || completed.Binding.Revision != fixture.binding.Revision ||
+		completed.CumulativeChangedLines != 0 {
+		t.Fatalf("unchanged bound completion = %#v", completed)
+	}
+	replayed, err := fixture.store.Finish(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed.Revision != completed.Revision || countRuntimeRecords(t, fixture.store.Dir) != beforeRecords+1 {
+		t.Fatalf("unchanged exact replay = %#v records=%d", replayed, countRuntimeRecords(t, fixture.store.Dir))
+	}
+}
+
+func TestRuntimeBoundUnchangedFinishPostHeadFailureIsReplayable(t *testing.T) {
+	fixture := newRuntimeUnchangedBindingFixture(t, "unchanged-bound-fault")
+	request := fixture.finishRequest("unchanged-finish-fault")
+	beforeRecords := countRuntimeRecords(t, fixture.store.Dir)
+	originalSync := runtimeSyncDirectory
+	var fail atomic.Bool
+	fail.Store(true)
+	runtimeSyncDirectory = func(path string) error {
+		if filepath.Clean(path) == filepath.Clean(fixture.store.Dir) && fail.CompareAndSwap(true, false) {
+			return errors.New("simulated unchanged finish directory sync failure")
+		}
+		return originalSync(path)
+	}
+	t.Cleanup(func() { runtimeSyncDirectory = originalSync })
+
+	_, err := fixture.store.Finish(context.Background(), request)
+	runtimeSyncDirectory = originalSync
+	var publication *RuntimePublicationError
+	if !errors.As(err, &publication) || !publication.Committed {
+		t.Fatalf("post-HEAD unchanged finish error = %T %v", err, err)
+	}
+	committed, statusErr := fixture.store.Status()
+	if statusErr != nil || !committed.Complete || committed.Binding == nil ||
+		committed.Binding.Revision != fixture.binding.Revision || committed.CumulativeChangedLines != 0 ||
+		countRuntimeRecords(t, fixture.store.Dir) != beforeRecords+1 {
+		t.Fatalf("post-HEAD unchanged finish status = %#v err=%v records=%d", committed, statusErr, countRuntimeRecords(t, fixture.store.Dir))
+	}
+	replayed, err := fixture.store.Finish(context.Background(), request)
+	if err != nil || replayed.Revision != committed.Revision || countRuntimeRecords(t, fixture.store.Dir) != beforeRecords+1 {
+		t.Fatalf("post-HEAD unchanged finish replay = %#v err=%v records=%d", replayed, err, countRuntimeRecords(t, fixture.store.Dir))
+	}
 }
 
 func TestRuntimeRemediationFinishCrashWindowsRemainAtomicAndReplayable(t *testing.T) {
@@ -330,6 +385,46 @@ type runtimeRemediationFixture struct {
 	successor          reviewtransaction.CompactRecord
 }
 
+type runtimeUnchangedBindingFixture struct {
+	store   RuntimeStore
+	binding ReviewBinding
+	active  RuntimeStatus
+}
+
+func newRuntimeUnchangedBindingFixture(t *testing.T, change string) runtimeUnchangedBindingFixture {
+	t.Helper()
+	repo := t.TempDir()
+	changeRoot := seedReadyChange(t, repo, change, "- [x] 1.1 Done\n")
+	lineage := change + "-approved"
+	writeApprovedCompactAuthorityForChange(t, repo, changeRoot, lineage)
+	binding, err := BindApprovedReview(context.Background(), repo, change, lineage, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := mustRuntimeStore(t, repo, change)
+	bound, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: bound.Revision, RequestID: change + "-begin", WorkUnit: change,
+		EvidenceGoal: "verify unchanged approved candidate", MaxAttempts: 2, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runtimeUnchangedBindingFixture{store: store, binding: binding, active: active}
+}
+
+func (fixture runtimeUnchangedBindingFixture) finishRequest(requestID string) FinishAttemptRequest {
+	return FinishAttemptRequest{
+		ExpectedRevision: fixture.active.Revision, RequestID: requestID, Outcome: AttemptPassed,
+		EvidenceRevision: runtimeTestHash('c'), Diagnosis: "approved candidate passed unchanged verification",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "unchanged verification cleanup completed",
+		ProcessEvidence: "unchanged verification process scan found no descendants",
+	}
+}
+
 func newRuntimeRemediationFixture(t *testing.T, approveSuccessor bool) runtimeRemediationFixture {
 	return newRuntimeRemediationFixtureConfigured(t, approveSuccessor, true, 40, 1)
 }
@@ -379,7 +474,7 @@ func newRuntimeRemediationFixtureConfigured(t *testing.T, approveSuccessor, nati
 		t.Fatal(err)
 	}
 	active, err := store.Begin(context.Background(), BeginAttemptRequest{
-		ExpectedRevision: failed.Revision, RequestID: "remediation-begin-2", WorkUnit: "renamed-runtime-remediation",
+		ExpectedRevision: failed.Revision, RequestID: "remediation-begin-2", WorkUnit: "runtime-remediation",
 		EvidenceGoal: "repair failed verification evidence", MaxAttempts: 3, MaxChangedLines: maxChangedLines,
 	})
 	if err != nil {

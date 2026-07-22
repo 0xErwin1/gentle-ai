@@ -244,6 +244,30 @@ func loadRuntimeBoundCompactArtifacts(ctx context.Context, repo string, binding 
 	return record, nil
 }
 
+// validateRuntimeBoundCandidate proves that an unchanged runtime attempt still
+// has the exact approved compact authority, receipt, live gate context, and
+// candidate tree recorded by its existing binding. It deliberately does not
+// resolve an OpenSpec change root, so Engram-backed changes use the same native
+// compact authority path.
+func validateRuntimeBoundCandidate(ctx context.Context, repo string, binding ReviewBinding, candidateTree string) error {
+	record, err := loadRuntimeBoundCompactArtifacts(ctx, repo, binding)
+	if err != nil {
+		return err
+	}
+	receipt, err := record.State.Receipt()
+	if err != nil {
+		return errors.New("bound compact authority cannot produce its receipt")
+	}
+	evaluation := reviewtransaction.EvaluateCompactGate(ctx, repo, receipt, reviewtransaction.NativeGateRequestInput{
+		Gate: reviewtransaction.GatePostApply, LineageID: binding.Lineage,
+	})
+	if evaluation.Result != reviewtransaction.GateAllow || evaluation.Context.CandidateTree != candidateTree ||
+		!boundGateContextMatches(binding.GateContext, evaluation.Context) {
+		return errors.New("bound compact post-apply gate context changed")
+	}
+	return nil
+}
+
 func validateBoundReview(ctx context.Context, repo, change string) (ReviewBinding, reviewtransaction.NativeGateEvaluation, error) {
 	if !validReviewBindingChange(change) {
 		return ReviewBinding{}, reviewtransaction.NativeGateEvaluation{}, errors.New("invalid OpenSpec change name")

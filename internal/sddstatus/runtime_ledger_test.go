@@ -60,10 +60,9 @@ func TestRuntimeLedgerConsumesOrdinalBeforeLaunchAndChargesNativeLines(t *testin
 		t.Fatalf("failed finish status = %#v", failed)
 	}
 
-	// Renaming the caller's work-unit label cannot create a fresh objective or
-	// reset its attempt/line budgets.
+	// A later attempt stays within the same immutable work unit and objective.
 	beginTwo := BeginAttemptRequest{
-		ExpectedRevision: failed.Revision, RequestID: "begin-2", WorkUnit: "renamed-browser-proof",
+		ExpectedRevision: failed.Revision, RequestID: "begin-2", WorkUnit: "browser-harness",
 		EvidenceGoal: "prove process containment", MaxAttempts: 2, MaxChangedLines: 4,
 	}
 	second, err := store.Begin(context.Background(), beginTwo)
@@ -71,8 +70,8 @@ func TestRuntimeLedgerConsumesOrdinalBeforeLaunchAndChargesNativeLines(t *testin
 		t.Fatal(err)
 	}
 	if second.ActiveAttempt == nil || second.ActiveAttempt.Ordinal != 2 || second.CumulativeAttempts != 2 ||
-		second.Objective == nil || second.Objective.ID != first.Objective.ID || second.Objective.WorkUnit != "renamed-browser-proof" {
-		t.Fatalf("renamed second begin = %#v", second)
+		second.Objective == nil || second.Objective.ID != first.Objective.ID || second.Objective.WorkUnit != "browser-harness" {
+		t.Fatalf("second begin = %#v", second)
 	}
 
 	appendRuntimeLedgerFile(t, repo, "attempt-two\n")
@@ -90,7 +89,7 @@ func TestRuntimeLedgerConsumesOrdinalBeforeLaunchAndChargesNativeLines(t *testin
 	}
 	head := interrupted.Revision
 	_, err = store.Begin(context.Background(), BeginAttemptRequest{
-		ExpectedRevision: head, RequestID: "begin-3", WorkUnit: "another-rename",
+		ExpectedRevision: head, RequestID: "begin-3", WorkUnit: "browser-harness",
 		EvidenceGoal: "prove process containment", MaxAttempts: 2, MaxChangedLines: 4,
 	})
 	if !errors.Is(err, ErrRuntimeBudgetExhausted) {
@@ -102,6 +101,114 @@ func TestRuntimeLedgerConsumesOrdinalBeforeLaunchAndChargesNativeLines(t *testin
 	}
 	if unchanged.Revision != head || countRuntimeRecords(t, store.Dir) != 4 {
 		t.Fatalf("exhausted begin mutated authority: revision=%q records=%d", unchanged.Revision, countRuntimeRecords(t, store.Dir))
+	}
+}
+
+func TestRuntimeLedgerRejectsUnchargedCandidateDriftBetweenAttempts(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "candidate-continuity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "continuity-begin-1", WorkUnit: "runtime-proof",
+		EvidenceGoal: "prove candidate continuity", MaxAttempts: 3, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendRuntimeLedgerFile(t, repo, "attempt-one\n")
+	finished, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "continuity-finish-1", Outcome: AttemptFailed,
+		EvidenceRevision: runtimeTestHash('a'), Diagnosis: "first bounded attempt failed",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "first cleanup completed",
+		ProcessEvidence: "first process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finishBytes, err := os.ReadFile(filepath.Join(repo, "tracked.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendRuntimeLedgerFile(t, repo, "unreviewed-between-attempts\n")
+	beforeRecords := countRuntimeRecords(t, store.Dir)
+	request := BeginAttemptRequest{
+		ExpectedRevision: finished.Revision, RequestID: "continuity-begin-2", WorkUnit: "runtime-proof",
+		EvidenceGoal: "prove candidate continuity", MaxAttempts: 3, MaxChangedLines: 20,
+	}
+	_, err = store.Begin(context.Background(), request)
+	if !errors.Is(err, ErrRuntimeObjectiveChange) {
+		t.Fatalf("inter-attempt drift error = %T %v, want ErrRuntimeObjectiveChange", err, err)
+	}
+	unchanged, statusErr := store.Status()
+	if statusErr != nil || unchanged.Revision != finished.Revision || unchanged.CumulativeChangedLines != 1 ||
+		countRuntimeRecords(t, store.Dir) != beforeRecords {
+		t.Fatalf("rejected drift mutated authority: status=%#v err=%v records=%d", unchanged, statusErr, countRuntimeRecords(t, store.Dir))
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), finishBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	accepted, err := store.Begin(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := store.Begin(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accepted.ActiveAttempt == nil || accepted.ActiveAttempt.Ordinal != 2 || replayed.Revision != accepted.Revision ||
+		countRuntimeRecords(t, store.Dir) != beforeRecords+1 {
+		t.Fatalf("restored begin/replay = accepted %#v replayed %#v records=%d", accepted, replayed, countRuntimeRecords(t, store.Dir))
+	}
+}
+
+func TestRuntimeLedgerRejectsWorkUnitChangesWithinAnObjective(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "work-unit-continuity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "work-unit-begin-1", WorkUnit: "stable-work-unit",
+		EvidenceGoal: "prove immutable provenance", MaxAttempts: 3, MaxChangedLines: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished, err := store.Finish(context.Background(), FinishAttemptRequest{
+		ExpectedRevision: started.Revision, RequestID: "work-unit-finish-1", Outcome: AttemptFailed,
+		EvidenceRevision: runtimeTestHash('b'), Diagnosis: "first provenance attempt failed",
+		HarnessDisposition: HarnessReused, CleanupEvidence: "provenance cleanup completed",
+		ProcessEvidence: "provenance process scan found no descendants",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRecords := countRuntimeRecords(t, store.Dir)
+	request := BeginAttemptRequest{
+		ExpectedRevision: finished.Revision, RequestID: "work-unit-begin-2", WorkUnit: "renamed-work-unit",
+		EvidenceGoal: "prove immutable provenance", MaxAttempts: 3, MaxChangedLines: 20,
+	}
+	_, err = store.Begin(context.Background(), request)
+	if !errors.Is(err, ErrRuntimeObjectiveChange) {
+		t.Fatalf("changed work-unit error = %T %v, want ErrRuntimeObjectiveChange", err, err)
+	}
+	unchanged, statusErr := store.Status()
+	if statusErr != nil || unchanged.Revision != finished.Revision || unchanged.Objective == nil ||
+		unchanged.Objective.WorkUnit != "stable-work-unit" || countRuntimeRecords(t, store.Dir) != beforeRecords {
+		t.Fatalf("changed work-unit mutated authority: status=%#v err=%v records=%d", unchanged, statusErr, countRuntimeRecords(t, store.Dir))
+	}
+
+	request.WorkUnit = "stable-work-unit"
+	accepted, err := store.Begin(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accepted.Objective == nil || accepted.Objective.WorkUnit != "stable-work-unit" || accepted.ActiveAttempt == nil ||
+		accepted.ActiveAttempt.Ordinal != 2 {
+		t.Fatalf("corrected work-unit retry = %#v", accepted)
 	}
 }
 

@@ -33,7 +33,7 @@ func TestRuntimeLedgerExplicitResetStartsDistinctBudgetWithoutLosingHistory(t *t
 		t.Fatal(err)
 	}
 	second, err := store.Begin(context.Background(), BeginAttemptRequest{
-		ExpectedRevision: failed.Revision, RequestID: "begin-two", WorkUnit: "renamed-runtime-proof",
+		ExpectedRevision: failed.Revision, RequestID: "begin-two", WorkUnit: "browser-harness",
 		EvidenceGoal: "prove runtime containment", MaxAttempts: 2, MaxChangedLines: 20,
 	})
 	if err != nil {
@@ -41,7 +41,7 @@ func TestRuntimeLedgerExplicitResetStartsDistinctBudgetWithoutLosingHistory(t *t
 	}
 	if first.Objective == nil || second.Objective == nil || first.Objective.ID != second.Objective.ID ||
 		second.Objective.Generation != 1 || second.CumulativeAttempts != 2 || second.LifetimeAttempts != 2 {
-		t.Fatalf("renamed objective status = %#v", second)
+		t.Fatalf("continued objective status = %#v", second)
 	}
 	exhausted, err := store.Finish(context.Background(), FinishAttemptRequest{
 		ExpectedRevision: second.Revision, RequestID: "finish-two", Outcome: AttemptInterrupted,

@@ -21,6 +21,7 @@ const (
 	RuntimeStatusSchema               = "gentle-ai.sdd-runtime-status/v1"
 	runtimeRecordSchema               = "gentle-ai.sdd-runtime-record/v1"
 	runtimeObjectiveSchema            = "gentle-ai.sdd-runtime-objective/v1"
+	runtimeObjectiveSchemaV2          = "gentle-ai.sdd-runtime-objective/v2"
 	DefaultRuntimeAttemptLimit        = 2
 	DefaultRuntimeChangedLines        = 200
 	maximumRuntimeAttemptLimit        = 100
@@ -351,19 +352,44 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			return runtimeRecord{}, ErrRuntimeBudgetExhausted
 		}
 
-		snapshot, err := captureRuntimeCandidate(ctx, store.Repo)
-		if err != nil {
-			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate before launch: %w", err)
-		}
 		generation := status.ObjectiveGeneration + 1
-		objectiveID := runtimeObjectiveID(store.Change, request.EvidenceGoal, snapshot.Identity, generation)
+		var snapshot reviewtransaction.Snapshot
+		var err error
 		if status.Objective != nil {
-			objectiveID = status.Objective.ID
 			generation = status.Objective.Generation
-			if request.EvidenceGoal != status.Objective.EvidenceGoal || request.MaxAttempts != status.Objective.MaxAttempts ||
+			if request.WorkUnit != status.Objective.WorkUnit || request.EvidenceGoal != status.Objective.EvidenceGoal ||
+				request.MaxAttempts != status.Objective.MaxAttempts ||
 				request.MaxChangedLines != status.Objective.MaxChangedLines {
 				return runtimeRecord{}, ErrRuntimeObjectiveChange
 			}
+			if len(status.Attempts) == 0 {
+				return runtimeRecord{}, errors.New("SDD runtime objective has no terminal candidate provenance")
+			}
+			last := status.Attempts[len(status.Attempts)-1]
+			if last.ObjectiveID != status.Objective.ID || last.Outcome == AttemptRunning ||
+				last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
+				return runtimeRecord{}, errors.New("SDD runtime objective has invalid terminal candidate provenance")
+			}
+			intended, discoverErr := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).DiscoverIntendedUntracked(ctx)
+			if discoverErr != nil {
+				return runtimeRecord{}, fmt.Errorf("discover SDD runtime intended-untracked paths before launch: %w", discoverErr)
+			}
+			snapshot, err = (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).Build(ctx, reviewtransaction.Target{
+				Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: last.BeginCandidateTree,
+				Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: intended,
+			})
+			if err == nil && (snapshot.Identity != last.FinishCandidateIdentity || snapshot.CandidateTree != last.FinishCandidateTree) {
+				return runtimeRecord{}, ErrRuntimeObjectiveChange
+			}
+		} else {
+			snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
+		}
+		if err != nil {
+			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate before launch: %w", err)
+		}
+		objectiveID := runtimeObjectiveID(store.Change, request.WorkUnit, request.EvidenceGoal, snapshot.Identity, generation)
+		if status.Objective != nil {
+			objectiveID = status.Objective.ID
 		}
 		if status.CumulativeAttempts >= request.MaxAttempts || status.CumulativeChangedLines >= request.MaxChangedLines {
 			return runtimeRecord{}, ErrRuntimeBudgetExhausted
@@ -400,9 +426,6 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			}
 			currentBinding = legacyBinding
 		}
-		if request.Outcome == AttemptPassed && currentBinding != nil && !remediation {
-			return runtimeRecord{}, ErrRuntimeRemediationSuccessorRequired
-		}
 		if remediation {
 			if currentBinding == nil {
 				return runtimeRecord{}, errors.New("atomic SDD remediation successor requires a populated native binding")
@@ -428,6 +451,17 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		changedLines, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).ChangedLines(ctx, snapshot)
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("measure native SDD runtime line charge: %w", err)
+		}
+		if request.Outcome == AttemptPassed && currentBinding != nil && !remediation {
+			if snapshot.CandidateTree != active.BeginCandidateTree {
+				return runtimeRecord{}, ErrRuntimeRemediationSuccessorRequired
+			}
+			if currentBinding.Change != store.Change {
+				return runtimeRecord{}, errors.New("bound SDD review change does not match the runtime objective")
+			}
+			if validateErr := validateRuntimeBoundCandidate(ctx, store.Repo, *currentBinding, snapshot.CandidateTree); validateErr != nil {
+				return runtimeRecord{}, fmt.Errorf("validate unchanged bound SDD candidate: %w", validateErr)
+			}
 		}
 		event := &runtimeFinishEvent{
 			Ordinal: active.Ordinal, FinishCandidateIdentity: snapshot.Identity, FinishCandidateTree: snapshot.CandidateTree,
@@ -771,12 +805,14 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 			return errors.New("begin record is not a valid successor")
 		}
 		if replay.Status.Objective == nil {
-			expectedObjectiveID := runtimeObjectiveID(record.Change, event.EvidenceGoal, event.BeginCandidateIdentity, generation)
+			expectedObjectiveID := runtimeObjectiveID(record.Change, event.WorkUnit, event.EvidenceGoal, event.BeginCandidateIdentity, generation)
 			if event.ObjectiveGeneration == 0 {
 				expectedObjectiveID = legacyRuntimeObjectiveID(record.Change, event.EvidenceGoal)
 			}
-			if event.Ordinal != replay.Status.NextOrdinal || generation != replay.Status.ObjectiveGeneration+1 ||
-				event.ObjectiveID != expectedObjectiveID {
+			legacyGeneratedID := runtimeObjectiveIDV1(record.Change, event.EvidenceGoal, event.BeginCandidateIdentity, generation)
+			validObjectiveID := event.ObjectiveID == expectedObjectiveID ||
+				event.ObjectiveGeneration != 0 && event.ObjectiveID == legacyGeneratedID
+			if event.Ordinal != replay.Status.NextOrdinal || generation != replay.Status.ObjectiveGeneration+1 || !validObjectiveID {
 				return errors.New("initial objective identity or ordinal is invalid")
 			}
 			replay.Status.Objective = &RuntimeObjective{
@@ -788,11 +824,15 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 		} else {
 			objective := replay.Status.Objective
 			if event.ObjectiveID != objective.ID || generation != objective.Generation || event.EvidenceGoal != objective.EvidenceGoal ||
+				event.WorkUnit != objective.WorkUnit ||
 				event.MaxAttempts != objective.MaxAttempts || event.MaxChangedLines != objective.MaxChangedLines ||
 				event.Ordinal != replay.Status.NextOrdinal {
 				return errors.New("begin record changes the active objective or ordinal")
 			}
-			objective.WorkUnit = event.WorkUnit
+			if len(replay.Status.Attempts) == 0 ||
+				event.BeginCandidateTree != replay.Status.Attempts[len(replay.Status.Attempts)-1].FinishCandidateTree {
+				return errors.New("begin record does not continue the terminal candidate")
+			}
 		}
 		if replay.Status.CumulativeAttempts >= event.MaxAttempts || replay.Status.CumulativeChangedLines >= event.MaxChangedLines {
 			return errors.New("begin record exceeds the persisted objective budget")
@@ -1245,7 +1285,17 @@ func captureRuntimeCandidate(ctx context.Context, repo string) (reviewtransactio
 	})
 }
 
-func runtimeObjectiveID(change, evidenceGoal, candidateIdentity string, generation int) string {
+func runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity string, generation int) string {
+	return runtimeValueHash(runtimeObjectiveSchemaV2, struct {
+		Change            string `json:"change"`
+		WorkUnit          string `json:"work_unit"`
+		EvidenceGoal      string `json:"evidence_goal"`
+		CandidateIdentity string `json:"candidate_identity"`
+		Generation        int    `json:"generation"`
+	}{Change: change, WorkUnit: workUnit, EvidenceGoal: evidenceGoal, CandidateIdentity: candidateIdentity, Generation: generation})
+}
+
+func runtimeObjectiveIDV1(change, evidenceGoal, candidateIdentity string, generation int) string {
 	return runtimeValueHash(runtimeObjectiveSchema, struct {
 		Change            string `json:"change"`
 		EvidenceGoal      string `json:"evidence_goal"`
