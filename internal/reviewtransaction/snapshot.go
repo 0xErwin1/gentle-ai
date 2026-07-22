@@ -519,13 +519,13 @@ func (builder SnapshotBuilder) ResolveRepositoryRoot(ctx context.Context) (strin
 	if err != nil {
 		return "", err
 	}
-	output, err := runGit(ctx, abs, nil, nil, "rev-parse", "--show-toplevel")
+	root, err := resolveGitDirectory(ctx, abs, "--show-toplevel")
 	if err != nil {
 		return "", err
 	}
-	root, err := canonicalRepositoryPath(strings.TrimSpace(string(output)))
-	if err != nil {
-		return "", err
+	relative, err := filepath.Rel(root, abs)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return "", errors.New("resolved repository root does not contain the requested path")
 	}
 	return root, nil
 }
@@ -575,6 +575,57 @@ func canonicalRepositoryPath(path string) (string, error) {
 		return "", err
 	}
 	return filepath.Clean(resolved), nil
+}
+
+func resolveGitDirectory(ctx context.Context, repo, selector string) (string, error) {
+	switch selector {
+	case "--show-toplevel", "--git-common-dir", "--git-dir":
+	default:
+		return "", fmt.Errorf("unsupported Git directory selector %q", selector)
+	}
+	output, err := runGit(ctx, repo, nil, nil, "rev-parse", selector)
+	if err != nil {
+		return "", err
+	}
+	return canonicalGitDirectory(repo, output)
+}
+
+func canonicalGitDirectory(repo string, output []byte) (string, error) {
+	if len(output) == 0 || bytes.IndexByte(output, 0) >= 0 {
+		return "", errors.New("Git directory output is empty or contains NUL")
+	}
+	record := output
+	if record[len(record)-1] == '\n' {
+		record = record[:len(record)-1]
+		if len(record) > 0 && record[len(record)-1] == '\r' {
+			record = record[:len(record)-1]
+		}
+	}
+	if len(record) == 0 || bytes.ContainsAny(record, "\r\n") || strings.TrimSpace(string(record)) == "" || bytes.HasPrefix(record, []byte("--")) {
+		return "", errors.New("Git directory output is not exactly one valid path record")
+	}
+	root, err := canonicalRepositoryPath(repo)
+	if err != nil {
+		return "", err
+	}
+	directory := string(record)
+	relative := !filepath.IsAbs(directory)
+	if relative {
+		directory = filepath.Join(root, directory)
+		rel, relErr := filepath.Rel(root, directory)
+		if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			return "", errors.New("relative Git directory escapes the repository root")
+		}
+	}
+	directory, err = canonicalRepositoryPath(directory)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Stat(directory)
+	if err != nil || !info.IsDir() {
+		return "", errors.New("Git directory output is not a directory")
+	}
+	return filepath.Clean(directory), nil
 }
 
 func readSnapshotIndex(path string) ([]byte, time.Time, error) {
