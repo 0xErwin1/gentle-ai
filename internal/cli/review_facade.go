@@ -681,6 +681,9 @@ func runReviewBindSDD(ctx context.Context, args []string, stdout io.Writer) erro
 	if strings.TrimSpace(*cwd) == "" || strings.TrimSpace(*change) == "" || strings.TrimSpace(*lineage) == "" || !hasExpected {
 		return errors.New("review bind-sdd requires --cwd, --change, --lineage, and --expected-binding-revision")
 	}
+	if *expected != "" && !validReviewCapabilitySHA256(*expected) {
+		return reviewPreflightError(errors.New("review bind-sdd expected-binding-revision must be empty or sha256"))
+	}
 	binding, err := sddstatus.BindApprovedReview(ctx, *cwd, *change, *lineage, *expected)
 	if err != nil {
 		return err

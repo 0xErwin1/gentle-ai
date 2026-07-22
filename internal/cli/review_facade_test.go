@@ -1696,6 +1696,10 @@ func TestReviewBindSDDRequiresExplicitInputs(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "expected-binding-revision") {
 		t.Fatalf("bind-sdd missing explicit CAS input error = %v", err)
 	}
+	err = RunReview([]string{"bind-sdd", "--cwd", t.TempDir(), "--change", "thin", "--lineage", "approved", "--expected-binding-revision", "sha256:deadbeef"}, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "empty or sha256") {
+		t.Fatalf("bind-sdd malformed CAS input error = %v", err)
+	}
 }
 
 func TestReviewBindSDDAcceptsEqualsFormForEmptyExpectedRevision(t *testing.T) {

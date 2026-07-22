@@ -190,7 +190,7 @@ Every failed operation explicitly negotiated through `gentle-ai.review-integrati
 | `retry_safe`, `replayability` | Independent retry and replay safety. Unknown mutation requires status; exact replay requires the declared identity. |
 | `lineage_id`, `request_digest` | Present only when the provider has safe canonical replay evidence. |
 | `required_inputs`, `next_action` | The bounded input names and one safe follow-up action. |
-| `context` | Optional strict gate-denial evidence. Scope change includes denial stage/code, expected and actual tree/path evidence, canonical differing paths/count/digest, predecessor identity, and explicit `review.recover` inputs. |
+| `context` | Optional strict diagnostics. Scope change includes expected and actual tree/path evidence, canonical differing paths/count/digest, predecessor identity, and explicit `review.recover` inputs. Binding CAS conflicts expose the caller's expected binding revision and the current native revision; either value may be empty for the initial bind. |
 
 Messages never contain authority or receipt paths, locks, tokens, raw provider stderr, or canonical store bytes. Invalid or unsupported explicit contracts fail before mutation through the same envelope. A negotiated gate denial is a failure envelope, not a successful operation result; gate evaluation remains read-only.
 
@@ -209,7 +209,9 @@ Before FINALIZE mutates compact authority, the provider atomically writes a sepa
 
 Finalize commits terminal compact authority before publishing its derived receipt. If receipt publication is interrupted after that commit, the failure envelope reports `mutation_outcome: committed`, `exact_replay_safe`, the lineage, and the canonical request digest. That declaration permits the exact explicit-lineage finalize replay with no new review inputs; target status independently reports the same publication-pending condition after restart. The replay derives the same receipt bytes and does not mutate authority or open another budget. If a different or non-regular receipt already occupies the immutable path, replay cannot succeed: negotiated failure reports `receipt_publication_conflict`, `manual_action_required`, and `explicit-maintainer-action` instead.
 
-Terminal compact receipts are published with a synced temporary file and a platform-native atomic no-clobber operation: an exact existing byte sequence is an idempotent success, while different or non-regular existing content is rejected without replacement. On filesystems that support directory synchronization, the parent directory is synced after publication. Windows may reject directory-handle synchronization; Gentle AI still provides atomic visibility and conflict rejection there, but does not claim power-loss durability for the directory entry. SDD review-binding publication follows the same post-rename directory-sync rule. A post-rename sync failure reports `binding_publication_pending` with `exact_replay_safe`; replay `review.bind_sdd` with the same change, lineage, and expected binding revision.
+Terminal compact receipts are published with a synced temporary file and a platform-native atomic no-clobber operation: an exact existing byte sequence is an idempotent success, while different or non-regular existing content is rejected without replacement. On filesystems that support directory synchronization, the parent directory is synced after publication. Windows may reject directory-handle synchronization; Gentle AI still provides atomic visibility and conflict rejection there, but does not claim power-loss durability for the directory entry.
+
+SDD review bindings are records in the repository-common native SDD runtime CAS chain, not mutable `binding.json` authority. A repository with the old compatibility file imports it exactly once in the first native binding record and never writes it back or consults it after import. Binding replacement compares `expected_binding_revision` only with the effective binding revision; an authority revision or runtime-ledger HEAD is the wrong token and returns `binding_revision_conflict` before publication with `context.binding_revision.expected` and `.current`. Immutable records are published no-clobber, then one atomically replaced `HEAD` selects the chain. A post-HEAD directory-sync failure reports `binding_publication_pending` with `exact_replay_safe`; replay `review.bind_sdd` with the same change, lineage, and expected binding revision.
 
 An ambiguous or lost transport result is never proof of `not_started`. Reconcile it with `review.status`; do not launch another reviewer, correction, or lineage while the outcome is unknown.
 
@@ -270,7 +272,7 @@ Pi adoption, fallback retirement, package pinning, and Pi release sequencing are
 Each release archive contains:
 
 - `contracts/review-integration/v1/schemas/` — sixteen strict JSON Schemas, including preserved capability protocols v1.0–v1.2, current v1.3, versioned START/status/result-artifact contracts, provider subject/admission, and targeted validation.
-- `contracts/review-integration/v1/fixtures/` — eighteen deterministic conformance fixtures, including all four capability minors and preserved v1 plus current v2 START/status examples for every target-applicability state.
+- `contracts/review-integration/v1/fixtures/` — nineteen deterministic conformance fixtures, including all four capability minors, preserved v1 plus current v2 START/status examples for every target-applicability state, and the typed `binding_revision_conflict` failure envelope.
 - `docs/review-integration.md` — this ownership and consumption guide.
 
 Repository maintainers can verify source inventory or a complete GoReleaser snapshot:
