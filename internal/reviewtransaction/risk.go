@@ -97,6 +97,42 @@ type RiskInput struct {
 	TouchesConfiguration         bool
 }
 
+// SelectReviewLenses is the single RAR-owned 0/1/4 lens policy. The CLI only
+// supplies the user's medium-risk focus; it does not derive review authority.
+func SelectReviewLenses(assessment RiskAssessment, focus string) ([]string, error) {
+	if assessment.DominantLens != "" {
+		if assessment.Level != RiskMedium || assessment.DominantLens != LensReadability {
+			return nil, fmt.Errorf("unsupported dominant review lens %q for risk %q", assessment.DominantLens, assessment.Level)
+		}
+		if _, ok := reviewFocusLens(focus); !ok {
+			return nil, fmt.Errorf("unsupported review focus %q", focus)
+		}
+		return []string{assessment.DominantLens}, nil
+	}
+	switch assessment.Level {
+	case RiskLow:
+		return []string{}, nil
+	case RiskMedium:
+		lens, ok := reviewFocusLens(focus)
+		if !ok {
+			return nil, fmt.Errorf("unsupported review focus %q", focus)
+		}
+		return []string{lens}, nil
+	case RiskHigh:
+		return append([]string(nil), supportedLenses...), nil
+	default:
+		return nil, fmt.Errorf("unsupported review risk %q", assessment.Level)
+	}
+}
+
+func reviewFocusLens(focus string) (string, bool) {
+	lens, ok := map[string]string{
+		"risk": LensRisk, "resilience": LensResilience,
+		"readability": LensReadability, "reliability": LensReliability,
+	}[strings.TrimSpace(focus)]
+	return lens, ok
+}
+
 // ClassifyRisk evaluates semantic high risk before the size-based documentation
 // exception, then the remaining large, low, and medium tiers.
 // Model, provider, profile, and effort are intentionally not classifier inputs.

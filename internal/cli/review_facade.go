@@ -2165,37 +2165,7 @@ func legacyExactFacadeGateLineages(ctx context.Context, repo string, input revie
 }
 
 func facadeSelectedLenses(assessment reviewtransaction.RiskAssessment, focus string) ([]string, error) {
-	if assessment.DominantLens != "" {
-		if assessment.Level != reviewtransaction.RiskMedium || assessment.DominantLens != reviewtransaction.LensReadability {
-			return nil, fmt.Errorf("unsupported dominant review lens %q for risk %q", assessment.DominantLens, assessment.Level)
-		}
-		if _, ok := facadeFocusLens(focus); !ok {
-			return nil, fmt.Errorf("unsupported review focus %q", focus)
-		}
-		return []string{assessment.DominantLens}, nil
-	}
-	switch assessment.Level {
-	case reviewtransaction.RiskLow:
-		return []string{}, nil
-	case reviewtransaction.RiskHigh:
-		return []string{reviewtransaction.LensRisk, reviewtransaction.LensResilience, reviewtransaction.LensReadability, reviewtransaction.LensReliability}, nil
-	case reviewtransaction.RiskMedium:
-		lens, ok := facadeFocusLens(focus)
-		if !ok {
-			return nil, fmt.Errorf("unsupported review focus %q", focus)
-		}
-		return []string{lens}, nil
-	default:
-		return nil, fmt.Errorf("unsupported review risk %q", assessment.Level)
-	}
-}
-
-func facadeFocusLens(focus string) (string, bool) {
-	lens, ok := map[string]string{
-		"risk": reviewtransaction.LensRisk, "resilience": reviewtransaction.LensResilience,
-		"readability": reviewtransaction.LensReadability, "reliability": reviewtransaction.LensReliability,
-	}[strings.TrimSpace(focus)]
-	return lens, ok
+	return reviewtransaction.SelectReviewLenses(assessment, focus)
 }
 
 func (result facadeReviewerResult) nativeLensResult() reviewtransaction.LensResult {
