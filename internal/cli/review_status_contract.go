@@ -395,7 +395,7 @@ func (result ReviewTargetStatusResult) Validate() error {
 			return errors.New("current-target receipt status is invalid")
 		}
 	case reviewtransaction.TargetApplicabilityUnrelated:
-		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionStart || len(result.Candidates) != 0 {
+		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionStart && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired) || len(result.Candidates) != 0 {
 			return errors.New("unrelated target status is inconsistent")
 		}
 	case reviewtransaction.TargetApplicabilityAmbiguous:
@@ -453,6 +453,13 @@ func (result ReviewTargetStatusResult) Validate() error {
 	default:
 		return errors.New("unsupported review status recovery disposition")
 	}
+	if result.Applicability == reviewtransaction.TargetApplicabilityCurrent && result.Authority != nil &&
+		result.Authority.State == reviewtransaction.StateApproved && result.Action == reviewtransaction.TargetStatusActionRecover &&
+		(result.Receipt.Status != ReviewReceiptPresent || result.ActionDisposition != reviewtransaction.RecoveryScopeChanged ||
+			result.Projection.Kind != reviewtransaction.TargetBaseWorkspaceOverlay ||
+			result.Projection.Projection != reviewtransaction.ProjectionStaged) {
+		return errors.New("approved recovery status requires a published staged scope-expansion target")
+	}
 	return nil
 }
 
@@ -461,6 +468,12 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 		return nil
 	}
 	if result.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
+		if result.Action == reviewtransaction.TargetStatusActionStop {
+			if result.NextTransition.Kind != reviewNextTransitionStop || result.NextTransition.ReasonCode != "staged_workspace_overlay_recovery_unavailable" {
+				return errors.New("fresh staged workspace-overlay target lacks a STOP transition")
+			}
+			return nil
+		}
 		return result.validateStartNextTransition()
 	}
 	expectedExecutionTarget := result.TargetIdentity
@@ -529,8 +542,12 @@ func (result ReviewTargetStatusResult) validateSelectorNextTransition() error {
 	base, hasBase := arguments["base-ref"]
 	_, hasCommitted := arguments["committed-only"]
 	projection, hasProjection := arguments["projection"]
-	if !selectorsPresent && (hasBase || hasCommitted || hasProjection) {
+	workspaceOverlay, hasWorkspaceOverlay := arguments["workspace-overlay"]
+	if !selectorsPresent && (hasBase || hasCommitted || hasProjection || hasWorkspaceOverlay) {
 		return errors.New("negotiated transition omitted its normalized selector")
+	}
+	if hasWorkspaceOverlay && workspaceOverlay != "true" {
+		return errors.New("RECOVER transition workspace-overlay selector is invalid")
 	}
 	if execution.Operation == "review.validate" {
 		if result.Projection.Kind == reviewtransaction.TargetCurrentChanges && hasBase ||
@@ -541,16 +558,23 @@ func (result ReviewTargetStatusResult) validateSelectorNextTransition() error {
 	}
 	switch result.Projection.Kind {
 	case reviewtransaction.TargetCurrentChanges:
-		if hasBase || hasCommitted {
+		if hasBase || hasCommitted || hasWorkspaceOverlay {
 			return errors.New("current-changes RECOVER transition invented target selectors")
 		}
 	case reviewtransaction.TargetBaseDiff:
-		if !hasBase || !hasCommitted {
+		if !hasBase || !hasCommitted || hasWorkspaceOverlay {
 			return errors.New("base-diff RECOVER transition lacks exact target selectors")
 		}
 	case reviewtransaction.TargetBaseWorkspaceOverlay:
 		if !hasBase || hasCommitted {
 			return errors.New("workspace-overlay RECOVER transition has incompatible target selectors")
+		}
+		if result.Projection.Projection == reviewtransaction.ProjectionStaged &&
+			(!hasProjection || projection != string(reviewtransaction.ProjectionStaged) || !hasWorkspaceOverlay) {
+			return errors.New("staged workspace-overlay RECOVER transition lacks exact target selectors")
+		}
+		if result.Projection.Projection != reviewtransaction.ProjectionStaged && hasWorkspaceOverlay {
+			return errors.New("workspace-overlay RECOVER transition invented a staged selector")
 		}
 	default:
 		return errors.New("RECOVER transition target kind is unsupported")
@@ -820,7 +844,7 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 			}
 		}
 		for _, selector := range selectors {
-			if selector.Name != "base-ref" && selector.Name != "committed-only" && selector.Name != "projection" ||
+			if selector.Name != "base-ref" && selector.Name != "committed-only" && selector.Name != "projection" && selector.Name != "workspace-overlay" ||
 				arguments[selector.Name] != selector.Value {
 				return false
 			}
@@ -844,7 +868,7 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		}
 	case "review.recover":
 		wantSelectors := []ReviewTransitionArgument{}
-		for _, name := range []string{"base-ref", "committed-only", "projection"} {
+		for _, name := range []string{"base-ref", "committed-only", "projection", "workspace-overlay"} {
 			if value, present := arguments[name]; present {
 				wantSelectors = append(wantSelectors, ReviewTransitionArgument{Name: name, Value: value})
 			}
@@ -873,11 +897,14 @@ func validateReviewTransitionExecution(execution ReviewTransitionExecution, argu
 		base, hasBase := arguments["base-ref"]
 		committed, hasCommitted := arguments["committed-only"]
 		projection, hasProjection := arguments["projection"]
+		workspaceOverlay, hasWorkspaceOverlay := arguments["workspace-overlay"]
 		if arguments["maintainer-authorization"] != wantAuthorization ||
 			hasBase && !validReviewTransitionSelector(base) ||
 			hasCommitted && (!hasBase || committed != "true") ||
 			hasProjection && projection != string(reviewtransaction.ProjectionWorkspace) &&
-				projection != string(reviewtransaction.ProjectionStaged) {
+				projection != string(reviewtransaction.ProjectionStaged) ||
+			hasWorkspaceOverlay && (!hasBase || hasCommitted || !hasProjection ||
+				projection != string(reviewtransaction.ProjectionStaged) || workspaceOverlay != "true") {
 			return errors.New("review recover transition selectors are invalid")
 		}
 	}

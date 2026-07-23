@@ -532,7 +532,7 @@ func buildCompactLifecycleSnapshot(ctx context.Context, repo string, request Gat
 		request.Target.IntendedUntracked = []string{}
 	}
 	if request.Target.Kind == TargetFixDiff || (request.Target.Kind == TargetBaseDiff || request.Target.Kind == TargetBaseWorkspaceOverlay) && (request.Gate == GatePostApply || request.Gate == GatePreCommit) {
-		snapshot, err := (SnapshotBuilder{Repo: repo}).build(ctx, request.Target, request.Gate == GatePreCommit)
+		snapshot, err := (SnapshotBuilder{Repo: repo}).BuildStoredSnapshot(ctx, request.Target)
 		return snapshot, nil, err
 	}
 	return buildLifecycleSnapshot(ctx, repo, request)

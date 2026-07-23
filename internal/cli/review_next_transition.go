@@ -82,6 +82,10 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 	if status.Applicability != reviewtransaction.TargetApplicabilityCurrent {
 		switch status.Applicability {
 		case reviewtransaction.TargetApplicabilityUnrelated:
+			if input.Selector != nil && input.Selector.Kind == reviewtransaction.TargetBaseWorkspaceOverlay &&
+				input.Selector.Projection == reviewtransaction.ProjectionStaged {
+				return reviewStopTransition("staged_workspace_overlay_recovery_unavailable")
+			}
 			return reviewExecuteTransition("fresh_target_ready", "review.start", reviewStartArguments(status, input.StartLineage), []ReviewTransitionArgument{{Name: "target_identity", Value: status.TargetIdentity}}, ReviewTransitionBinding{LineageID: input.StartLineage, TargetIdentity: status.TargetIdentity}, nil)
 		case reviewtransaction.TargetApplicabilityAmbiguous:
 			return reviewCollectTransition("lineage_selection_required", ReviewTransitionInput{
@@ -162,6 +166,9 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 	case reviewtransaction.StateInvalidated:
 		return reviewRecoveryCollection(status, binding, input)
 	case reviewtransaction.StateApproved:
+		if status.Action == reviewtransaction.TargetStatusActionRecover {
+			return reviewRecoveryCollection(status, binding, input)
+		}
 		if status.Receipt.Status == ReviewReceiptPresent {
 			if input.Selector != nil && input.gate() == reviewtransaction.GatePrePR && !input.Selector.PrePRRepresentable {
 				return reviewStopTransition("pre_pr_selector_unrepresentable")
@@ -413,6 +420,13 @@ func (selector reviewTransitionSelector) recoveryArguments() ([]ReviewTransition
 			base = selector.BaseTree
 		}
 		arguments = append(arguments, ReviewTransitionArgument{Name: "base-ref", Value: base})
+		if selector.RecoveryProjection == reviewtransaction.ProjectionStaged {
+			arguments = append(arguments,
+				ReviewTransitionArgument{Name: "projection", Value: string(reviewtransaction.ProjectionStaged)},
+				ReviewTransitionArgument{Name: "workspace-overlay", Value: "true"},
+			)
+			return arguments, true
+		}
 	default:
 		return nil, false
 	}
