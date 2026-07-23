@@ -470,6 +470,9 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 	if result.NextTransition.Execute != nil && result.NextTransition.Execute.Binding.TargetIdentity != expectedExecutionTarget {
 		return errors.New("negotiated status execution target differs from the current target identity")
 	}
+	if err := result.validateSelectorNextTransition(); err != nil {
+		return err
+	}
 	if result.Repair.Status == reviewtransaction.AuthorityRepairEligible {
 		if err := result.validateRepairNextTransition(); err != nil {
 			return err
@@ -500,6 +503,61 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 			!reflect.DeepEqual(manifestPathsForStatus(*input.ChangedPathManifest), result.Projection.Paths) {
 			return errors.New("negotiated status capture target differs from the frozen target identity")
 		}
+	}
+	return nil
+}
+
+func (result ReviewTargetStatusResult) validateSelectorNextTransition() error {
+	execution := result.NextTransition.Execute
+	if execution == nil || (execution.Operation != "review.validate" && execution.Operation != "review.recover") {
+		return nil
+	}
+	arguments, err := reviewTransitionArgumentMap(execution.Arguments)
+	if err != nil {
+		return err
+	}
+	selectorsPresent := execution.SelectorArguments != nil
+	selectors := []ReviewTransitionArgument{}
+	if selectorsPresent {
+		selectors = *execution.SelectorArguments
+	}
+	for _, selector := range selectors {
+		if arguments[selector.Name] != selector.Value {
+			return errors.New("negotiated transition changed its normalized selector")
+		}
+	}
+	base, hasBase := arguments["base-ref"]
+	_, hasCommitted := arguments["committed-only"]
+	projection, hasProjection := arguments["projection"]
+	if !selectorsPresent && (hasBase || hasCommitted || hasProjection) {
+		return errors.New("negotiated transition omitted its normalized selector")
+	}
+	if execution.Operation == "review.validate" {
+		if result.Projection.Kind == reviewtransaction.TargetCurrentChanges && hasBase ||
+			reviewtransaction.GateKind(arguments["gate"]) == reviewtransaction.GatePrePR && result.Projection.Kind == reviewtransaction.TargetBaseDiff && !hasBase {
+			return errors.New("negotiated VALIDATE transition does not reproduce the selected target")
+		}
+		return nil
+	}
+	switch result.Projection.Kind {
+	case reviewtransaction.TargetCurrentChanges:
+		if hasBase || hasCommitted {
+			return errors.New("current-changes RECOVER transition invented target selectors")
+		}
+	case reviewtransaction.TargetBaseDiff:
+		if !hasBase || !hasCommitted {
+			return errors.New("base-diff RECOVER transition lacks exact target selectors")
+		}
+	case reviewtransaction.TargetBaseWorkspaceOverlay:
+		if !hasBase || hasCommitted {
+			return errors.New("workspace-overlay RECOVER transition has incompatible target selectors")
+		}
+	default:
+		return errors.New("RECOVER transition target kind is unsupported")
+	}
+	if result.Projection.Kind != reviewtransaction.TargetCurrentChanges && base == "" ||
+		hasProjection && projection != string(result.Projection.Projection) {
+		return errors.New("RECOVER transition selectors do not match the selected target")
 	}
 	return nil
 }
@@ -727,6 +785,13 @@ func (transition ReviewNextTransition) Validate() error {
 				return errors.New("execution transition has an incomplete precondition")
 			}
 		}
+		arguments, err := reviewTransitionArgumentMap(transition.Execute.Arguments)
+		if err != nil {
+			return err
+		}
+		if err := validateReviewTransitionExecution(*transition.Execute, arguments); err != nil {
+			return err
+		}
 	default:
 		return errors.New("unsupported review next transition kind")
 	}
@@ -742,6 +807,87 @@ func reviewTransitionArgumentMap(arguments []ReviewTransitionArgument) (map[stri
 		values[argument.Name] = argument.Value
 	}
 	return values, nil
+}
+
+func validateReviewTransitionExecution(execution ReviewTransitionExecution, arguments map[string]string) error {
+	exact := func(required []string, selectors []ReviewTransitionArgument) bool {
+		if len(arguments) != len(required)+len(selectors) {
+			return false
+		}
+		for _, name := range required {
+			if _, present := arguments[name]; !present {
+				return false
+			}
+		}
+		for _, selector := range selectors {
+			if selector.Name != "base-ref" && selector.Name != "committed-only" && selector.Name != "projection" ||
+				arguments[selector.Name] != selector.Value {
+				return false
+			}
+		}
+		return true
+	}
+	switch execution.Operation {
+	case "review.validate":
+		gate := reviewtransaction.GateKind(arguments["gate"])
+		wantSelectors := []ReviewTransitionArgument{}
+		if base, present := arguments["base-ref"]; present {
+			wantSelectors = append(wantSelectors, ReviewTransitionArgument{Name: "base-ref", Value: base})
+		}
+		if execution.SelectorArguments != nil && !reflect.DeepEqual(*execution.SelectorArguments, wantSelectors) {
+			return errors.New("review validate transition selectors are invalid")
+		}
+		if !exact([]string{"lineage", "gate"}, wantSelectors) ||
+			arguments["lineage"] != execution.Binding.LineageID || !validReviewIntegrationGate(gate) ||
+			arguments["base-ref"] != "" && (gate != reviewtransaction.GatePrePR || !validReviewTransitionSelector(arguments["base-ref"])) {
+			return errors.New("review validate transition selectors are invalid")
+		}
+	case "review.recover":
+		wantSelectors := []ReviewTransitionArgument{}
+		for _, name := range []string{"base-ref", "committed-only", "projection"} {
+			if value, present := arguments[name]; present {
+				wantSelectors = append(wantSelectors, ReviewTransitionArgument{Name: name, Value: value})
+			}
+		}
+		if execution.SelectorArguments != nil && !reflect.DeepEqual(*execution.SelectorArguments, wantSelectors) {
+			return errors.New("review recover transition selectors are invalid")
+		}
+		if !exact([]string{"predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "disposition", "reason", "actor", "maintainer-authorization"}, wantSelectors) ||
+			arguments["predecessor-lineage"] != execution.Binding.LineageID ||
+			arguments["expected-predecessor-revision"] != execution.Binding.Revision ||
+			!validReviewIntegrationLineage(arguments["successor-lineage"]) ||
+			arguments["successor-lineage"] == execution.Binding.LineageID {
+			return errors.New("review recover transition binding is invalid")
+		}
+		disposition := reviewtransaction.RecoveryDisposition(arguments["disposition"])
+		if disposition != reviewtransaction.RecoveryScopeChanged &&
+			disposition != reviewtransaction.RecoveryInvalidated &&
+			disposition != reviewtransaction.RecoveryEscalated {
+			return errors.New("review recover transition disposition is invalid")
+		}
+		authorizationSuccessor := ""
+		if execution.SelectorArguments != nil {
+			authorizationSuccessor = arguments["successor-lineage"]
+		}
+		wantAuthorization := reviewTransitionRecoveryAuthorization(execution.Binding, authorizationSuccessor, arguments["actor"], arguments["reason"])
+		base, hasBase := arguments["base-ref"]
+		committed, hasCommitted := arguments["committed-only"]
+		projection, hasProjection := arguments["projection"]
+		if arguments["maintainer-authorization"] != wantAuthorization ||
+			hasBase && !validReviewTransitionSelector(base) ||
+			hasCommitted && (!hasBase || committed != "true") ||
+			hasProjection && projection != string(reviewtransaction.ProjectionWorkspace) &&
+				projection != string(reviewtransaction.ProjectionStaged) {
+			return errors.New("review recover transition selectors are invalid")
+		}
+	}
+	return nil
+}
+
+func validReviewTransitionSelector(value string) bool {
+	fields := strings.Fields(value)
+	return len(fields) == 1 && fields[0] == value && !path.IsAbs(value) &&
+		!strings.HasPrefix(value, "-") && !strings.ContainsRune(value, 0)
 }
 
 func (eligibility ReviewActionEligibility) Validate(status ReviewTargetStatusResult) error {
