@@ -1,0 +1,16 @@
+{
+  "schema": "gentle-ai.work-status/v1",
+  "contract": "gentle-ai.work-status/v1",
+  "workRunId": "work-sdd-fixture",
+  "revision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "publicState": "checking",
+  "routeDecision": "propose_sdd",
+  "implementationRoute": "sdd",
+  "sddRunRef": "sdd:organic-recovery",
+  "verification": {
+    "outcome": "complete",
+    "resultRefs": ["verification:sdd-fixture"]
+  },
+  "deliveryIntentRef": "delivery:sdd-fixture",
+  "reviewReceiptRef": "review:sdd-fixture"
+}

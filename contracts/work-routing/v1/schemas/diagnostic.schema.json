@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/work-routing/v1/schemas/diagnostic.schema.json",
+  "title": "Gentle AI work routing diagnostic v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "operation",
+    "code",
+    "message",
+    "requestedContract",
+    "supportedContracts",
+    "mutationOutcome",
+    "nextAction"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.work-diagnostic/v1"},
+    "operation": {"enum": ["work.status", "work.transition.apply"]},
+    "code": {"const": "unsupported_contract"},
+    "message": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^[^\\r\\n\\x00]+$"
+    },
+    "requestedContract": {"type": "string", "maxLength": 240},
+    "supportedContracts": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["gentle-ai.work-status/v1", "gentle-ai.work-transition/v1"]
+      }
+    },
+    "mutationOutcome": {"const": "not_started"},
+    "nextAction": {"const": "select_supported_contract"}
+  }
+}

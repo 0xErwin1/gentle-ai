@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/work-routing/v1/schemas/work-transition.schema.json",
+  "title": "Gentle AI authorized work transition result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "contract",
+    "workRunId",
+    "previousRevision",
+    "revision",
+    "appliedAuthorizationRef",
+    "publicState"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.work-transition/v1"},
+    "contract": {"const": "gentle-ai.work-transition/v1"},
+    "workRunId": {"$ref": "#/$defs/ref"},
+    "previousRevision": {"$ref": "#/$defs/revision"},
+    "revision": {"$ref": "#/$defs/revision"},
+    "appliedAuthorizationRef": {"$ref": "#/$defs/ref"},
+    "publicState": {
+      "enum": ["working", "checking", "ready", "needs_your_decision"]
+    },
+    "nextAuthorizedTransition": {"$ref": "#/$defs/authorizedTransition"}
+  },
+  "$defs": {
+    "revision": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^[^\\r\\n\\x00]+$"
+    },
+    "authorizedTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "operation",
+        "authorizationRef",
+        "expectedRevision",
+        "candidateRef",
+        "actionTicketRef",
+        "applicableAuthorizationRef"
+      ],
+      "properties": {
+        "contract": {"const": "gentle-ai.work-transition/v1"},
+        "operation": {"const": "apply"},
+        "authorizationRef": {"$ref": "#/$defs/ref"},
+        "expectedRevision": {"$ref": "#/$defs/revision"},
+        "candidateRef": {"$ref": "#/$defs/ref"},
+        "actionTicketRef": {"$ref": "#/$defs/ref"},
+        "applicableAuthorizationRef": {"$ref": "#/$defs/ref"}
+      }
+    }
+  }
+}

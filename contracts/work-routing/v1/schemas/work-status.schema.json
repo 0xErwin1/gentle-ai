@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/work-routing/v1/schemas/work-status.schema.json",
+  "title": "Gentle AI route-neutral work status v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "contract",
+    "workRunId",
+    "revision",
+    "publicState",
+    "routeDecision",
+    "verification"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.work-status/v1"},
+    "contract": {"const": "gentle-ai.work-status/v1"},
+    "workRunId": {"$ref": "#/$defs/ref"},
+    "revision": {"$ref": "#/$defs/revision"},
+    "publicState": {
+      "enum": ["working", "checking", "ready", "needs_your_decision"]
+    },
+    "routeDecision": {
+      "enum": ["direct_inline", "delegated_direct", "propose_sdd"]
+    },
+    "implementationRoute": {
+      "enum": ["direct_inline", "delegated_direct", "sdd"]
+    },
+    "sddRunRef": {"$ref": "#/$defs/ref"},
+    "verification": {"$ref": "#/$defs/verification"},
+    "deliveryIntentRef": {"$ref": "#/$defs/ref"},
+    "reviewReceiptRef": {"$ref": "#/$defs/ref"},
+    "authorizedTransition": {"$ref": "#/$defs/authorizedTransition"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["implementationRoute"],
+        "properties": {"implementationRoute": {"const": "sdd"}}
+      },
+      "then": {"required": ["sddRunRef"]},
+      "else": {"not": {"required": ["sddRunRef"]}}
+    },
+    {
+      "if": {"properties": {"routeDecision": {"const": "direct_inline"}}},
+      "then": {"properties": {"implementationRoute": {"const": "direct_inline"}}}
+    },
+    {
+      "if": {"properties": {"routeDecision": {"const": "delegated_direct"}}},
+      "then": {"properties": {"implementationRoute": {"const": "delegated_direct"}}}
+    },
+    {
+      "if": {"properties": {"routeDecision": {"const": "propose_sdd"}}},
+      "then": {"properties": {"implementationRoute": {"const": "sdd"}}}
+    }
+  ],
+  "$defs": {
+    "revision": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^[^\\r\\n\\x00]+$"
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome", "resultRefs"],
+      "properties": {
+        "outcome": {
+          "enum": ["pending", "not_required", "complete", "failed", "partial", "unavailable"]
+        },
+        "resultRefs": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/ref"}
+        }
+      }
+    },
+    "authorizedTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "operation",
+        "authorizationRef",
+        "expectedRevision",
+        "candidateRef",
+        "actionTicketRef",
+        "applicableAuthorizationRef"
+      ],
+      "properties": {
+        "contract": {"const": "gentle-ai.work-transition/v1"},
+        "operation": {"const": "apply"},
+        "authorizationRef": {"$ref": "#/$defs/ref"},
+        "expectedRevision": {"$ref": "#/$defs/revision"},
+        "candidateRef": {"$ref": "#/$defs/ref"},
+        "actionTicketRef": {"$ref": "#/$defs/ref"},
+        "applicableAuthorizationRef": {"$ref": "#/$defs/ref"}
+      }
+    }
+  }
+}

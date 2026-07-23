@@ -196,6 +196,7 @@ type CommandArgs struct {
 	CWD                 string
 	JSON                bool
 	IncludeInstructions bool
+	Contract            string
 }
 
 type engramObservation struct {
@@ -222,7 +223,23 @@ func ParseCommandArgs(args []string) (CommandArgs, error) {
 			}
 			parsed.CWD = args[i+1]
 			i++
+		case "--contract":
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") {
+				return CommandArgs{}, fmt.Errorf("--contract requires a value")
+			}
+			parsed.Contract = args[i+1]
+			i++
+			if err := validateStatusContract(parsed.Contract); err != nil {
+				return CommandArgs{}, err
+			}
 		default:
+			if strings.HasPrefix(arg, "--contract=") {
+				parsed.Contract = strings.TrimPrefix(arg, "--contract=")
+				if err := validateStatusContract(parsed.Contract); err != nil {
+					return CommandArgs{}, err
+				}
+				continue
+			}
 			if strings.HasPrefix(arg, "-") {
 				return CommandArgs{}, fmt.Errorf("unknown sdd-status argument %q", arg)
 			}
@@ -234,6 +251,13 @@ func ParseCommandArgs(args []string) (CommandArgs, error) {
 		}
 	}
 	return parsed, nil
+}
+
+func validateStatusContract(contract string) error {
+	if contract == StatusContractV1 {
+		return nil
+	}
+	return fmt.Errorf("unsupported sdd-status contract %q; supported contract is %s", contract, StatusContractV1)
 }
 
 func ListActiveOpenSpecChanges(cwd string) ([]string, error) {
@@ -988,7 +1012,7 @@ func RenderMarkdown(status Status) string {
 		changeName = *status.ChangeName
 	}
 
-	jsonBytes, err := json.MarshalIndent(status, "", "  ")
+	jsonBytes, err := marshalStatusV1Indent(status)
 	if err != nil {
 		jsonBytes = []byte("{}")
 	}
@@ -1023,7 +1047,7 @@ func RenderDispatcherMarkdown(status Status) string {
 		changeName = *status.ChangeName
 	}
 
-	jsonBytes, err := json.MarshalIndent(status, "", "  ")
+	jsonBytes, err := marshalStatusV1Indent(status)
 	if err != nil {
 		jsonBytes = []byte("{}")
 	}
@@ -1079,7 +1103,7 @@ func RenderNativePhasePrompt(status Status, phase Phase) string {
 		changeName = *status.ChangeName
 	}
 
-	jsonBytes, err := json.MarshalIndent(status, "", "  ")
+	jsonBytes, err := marshalStatusV1Indent(status)
 	if err != nil {
 		jsonBytes = []byte("{}")
 	}

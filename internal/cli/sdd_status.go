@@ -25,9 +25,13 @@ func RunSDDStatus(args []string, stdout io.Writer) error {
 	}
 
 	if parsed.JSON {
+		projected, projectionErr := sddstatus.ProjectStatusV1(status)
+		if projectionErr != nil {
+			return fmt.Errorf("project SDD status v1: %w", projectionErr)
+		}
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
-		return encoder.Encode(status)
+		return encoder.Encode(projected)
 	}
 
 	_, err = fmt.Fprintln(stdout, sddstatus.RenderMarkdown(status))
@@ -51,9 +55,13 @@ func RunSDDContinue(args []string, stdout io.Writer) error {
 	}
 
 	if parsed.JSON {
+		projected, projectionErr := sddstatus.ProjectStatusV1(status)
+		if projectionErr != nil {
+			return fmt.Errorf("project SDD status v1: %w", projectionErr)
+		}
 		encoder := json.NewEncoder(stdout)
 		encoder.SetIndent("", "  ")
-		return encoder.Encode(status)
+		return encoder.Encode(projected)
 	}
 
 	_, err = fmt.Fprintln(stdout, sddstatus.RenderDispatcherMarkdown(status))

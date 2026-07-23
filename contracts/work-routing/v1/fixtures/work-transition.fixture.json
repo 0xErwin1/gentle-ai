@@ -1,0 +1,18 @@
+{
+  "schema": "gentle-ai.work-transition/v1",
+  "contract": "gentle-ai.work-transition/v1",
+  "workRunId": "work-direct-fixture",
+  "previousRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "revision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "appliedAuthorizationRef": "authorization:direct-fixture",
+  "publicState": "checking",
+  "nextAuthorizedTransition": {
+    "contract": "gentle-ai.work-transition/v1",
+    "operation": "apply",
+    "authorizationRef": "authorization:check-fixture",
+    "expectedRevision": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "candidateRef": "candidate:direct-fixture",
+    "actionTicketRef": "ticket:check-fixture",
+    "applicableAuthorizationRef": "authorization:applicability-fixture"
+  }
+}

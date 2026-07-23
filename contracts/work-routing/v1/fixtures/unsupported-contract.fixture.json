@@ -1,0 +1,10 @@
+{
+  "schema": "gentle-ai.work-diagnostic/v1",
+  "operation": "work.status",
+  "code": "unsupported_contract",
+  "message": "The requested work status contract is unsupported.",
+  "requestedContract": "",
+  "supportedContracts": ["gentle-ai.work-status/v1"],
+  "mutationOutcome": "not_started",
+  "nextAction": "select_supported_contract"
+}
