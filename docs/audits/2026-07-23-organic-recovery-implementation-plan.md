@@ -4,12 +4,12 @@
 - **Status:** Proposed for maintainer approval
 - **Architecture baseline:** `main` at `0d95c399c79edb341e3d874032eba4654b2b3f17`
 - **Parent architecture:** [Systemic Remediation Architecture](./2026-07-23-systemic-remediation-architecture.md)
-- **Scope:** proportional verification, the SDD/RDD/PAD handoff, an outcome-first user experience, and typed delivery routes
+- **Scope:** canonical implementation routing, optional SDD planning, proportional verification, the common RAR/PAD handoff, an outcome-first user experience, and typed delivery routes
 - **Delivery posture:** one `size:exception` Gentle AI pull request composed of reversible work-unit commits; release Gentle AI before adapting Gentle Pi
 
-> **Decision:** Restore Gentle AI's organic “ask for the outcome” experience without removing its trust kernel. Keep byte integrity, immutable candidate identity, typed evidence, bounded review, receipts, and gate revalidation invisible behind one provider-owned flow. Make semantic verification proportional to applicability, risk, and cost; surface only decisions that materially affect the user's intent, exposure, or delivery.
+> **Decision:** Restore Gentle AI's organic “ask for the outcome” experience without removing its trust kernel. Keep byte integrity, immutable candidate identity, typed evidence, bounded review, receipts, and gate revalidation invisible behind one provider-owned safety envelope shared by multiple implementation routes. Make semantic verification proportional to applicability, risk, and cost; surface only decisions that materially affect the user's intent, exposure, or delivery.
 
-This is a recovery slice within the nine-context systemic architecture, not a replacement architecture and not a second workflow engine. It changes the `EPD`, `RAR`, `SDD`, and `PAD` handoffs while consuming existing `HCR`, `MMI`, and `ACI` ports. The product invariant is end-to-end: a person asks for an outcome, the system performs the necessary work and proof, and the person sees either **Ready** or one actionable decision. The slice must preserve the one-way dependency rules and authority ownership from the parent architecture.
+This is a recovery slice within the nine-context systemic architecture, not a replacement architecture and not a second workflow engine. It normalizes the orchestrator's existing delegation rules, makes SDD one optional implementation route, and changes the `EPD`, `RAR`, `SDD`, and `PAD` handoffs while consuming existing `HCR`, `MMI`, and `ACI` ports. Direct and delegated work must not create synthetic SDD runs. The product invariant is end-to-end: a person asks for an outcome, the system performs the necessary work and proof, and the person sees either **Ready** or one actionable decision. The slice must preserve the one-way dependency rules and authority ownership from the parent architecture.
 
 ## 1. Executive decision
 
@@ -17,9 +17,9 @@ Gentle AI should return to a simple public mental model:
 
 1. The user asks for an outcome.
 2. PAD records an initial admission decision and typed delivery intent.
-3. SDD helps shape a proposal when the work benefits from one.
-4. Apply implements the work, using TDD for executable behavior when applicable.
-5. Gentle AI performs only the verification and review justified by the exact change.
+3. The canonical implementation router selects direct execution, delegated execution, or proposes SDD.
+4. Small, already-understood work executes inline. Broader or research-heavy work uses the smallest useful subagent workflow. Genuinely complex work enters SDD only after the proposal is accepted or when the user explicitly requested SDD.
+5. Every implementation route converges on the same normalization, proportional verification, RAR review, and PAD authorization.
 6. PAD authorizes the selected delivery route against the final receipt and live destination.
 7. The user sees either a ready result or one bounded decision.
 
@@ -37,6 +37,8 @@ Hashes, lineages, revisions, locks, actor tickets, attempt ordinals, recovery cl
 ### Non-negotiable constraints
 
 - No second SDD review state machine, authority kernel, or evidence ledger.
+- No SDD artifacts, phase prompts, or SDD attempt ledger for `direct_inline` or `delegated_direct`.
+- No delegation trigger may be interpreted as automatic SDD admission. Implementation routing and safety classification remain independent.
 - No model-authored `not_applicable`, identity, hash, authorization, or PASS.
 - No loop-until-clean review or verification.
 - No silent downgrade from missing or expensive proof to approval.
@@ -57,6 +59,7 @@ The four-R review model improved investigation and found risks that the previous
 - missing tools and timeouts can lead to retries or opaque blocking states;
 - the user has to understand review internals to recover;
 - issue-first and pull-request-first governance is treated as if it were universal security policy;
+- ordinary subagent delegation and full SDD planning are conflated even though they solve different complexity problems;
 - SDD, RDD, gates, CLI adapters, and Gentle Pi can each infer a next action.
 
 The result is safe stopping without an operable path forward. Users who were satisfied with “build this for me” encounter review vocabulary, repeated prompts, and non-convergent flows after the implementation is already correct.
@@ -69,7 +72,7 @@ The parent audit proved that ticket-by-ticket remediation is the wrong strategy:
 - **74 PRs form one collision component** spanning eight canonical contexts;
 - **16 PRs require decomposition** because they cross too many contexts or act as oversized collision hubs.
 
-This recovery therefore cannot be another sequence of isolated workflow patches. It must establish one owner for each decision and one explicit handoff between SDD, RAR, EPD, and PAD.
+This recovery therefore cannot be another sequence of isolated workflow patches. It must establish one implementation-route decision before any optional SDD lifecycle, one owner for each safety decision, and one explicit handoff into RAR, EPD, and PAD.
 
 ### 2.3 Existing implementation seams
 
@@ -77,18 +80,39 @@ Gentle AI already contains reusable foundations:
 
 | Existing seam | Reuse decision |
 |---|---|
+| [Generic orchestrator delegation rules](../../internal/assets/generic/sdd-orchestrator.md#delegation-rules) and their adapter projections | Preserve the canonical thresholds: read 1–3 files to decide/verify inline; delegate narrow exploration when understanding requires 4+ files; keep one already-understood mechanical file inline; delegate one writer for 2+ non-trivial files and delegate execution-heavy tests/builds when supported. The [Codex projection](../../internal/assets/codex/sdd-orchestrator.md#general-delegation-rules-always-active) explicitly applies these rules to all non-trivial work, not only SDD phases. They are ordinary orchestration rules, not SDD admission. |
 | `internal/reviewtransaction/risk.go` | Reuse native path/content risk assessment, operational Markdown detection, and static MDX inspection. Extend it through an owner-issued applicability contract rather than file-extension heuristics. |
 | `NativeLowRiskVerificationEvidence` in `internal/reviewtransaction/compact.go` | Retain only as post-freeze RAR evidence for a genuine low-risk, zero-lens review. It cannot prove pre-review applicability because it requires an existing frozen compact state. |
-| `RuntimeStore` and SDD CAS records | Reuse as the durable work/attempt ledger. Do not create a second verification database. |
+| `RuntimeStore` and SDD CAS records | Extract/reuse the route-neutral verification reservation/result core as `WorkRunStore`. SDD composes it with its phase graph and budgets only when SDD was selected; direct and delegated work never become fake SDD runs. |
 | `CandidateIdentity`, review authority, and immutable receipts | Preserve unchanged as the trust kernel. |
 | `applyPreVerifyReviewRouting` in `internal/sddstatus/status.go` | Replace the current review-before-final-verification ordering with functional verification before the review candidate is frozen. |
-| `gentle-ai.sdd-status` v1 | Introduce an explicit strict v1 projection that matches the current Gentle Pi decoder and cannot leak `runtimeStatus`, `remediationState.correctionBudget`, new root keys, or v2-only next-action tokens. |
+| `gentle-ai.sdd-status` v1 | Introduce an explicit strict v1 projection for legacy SDD consumers that matches the current Gentle Pi decoder and cannot leak `runtimeStatus`, `remediationState.correctionBudget`, new root keys, or work-contract-only next-action tokens. |
 
 Pre-review `not_applicable` requires a new RAR-owned applicability decision bound to the post-normalization snapshot and supported by EPD-admitted evidence. It must not reuse the RAR-only low-risk evidence preimage.
 
 ## 3. Product contract
 
-### 3.1 Outcome-first interaction
+### 3.1 Implementation routing before lifecycle
+
+The parent orchestrator applies its always-active delegation rules before deciding whether SDD is useful:
+
+| Route decision | Canonical trigger | Behavior |
+|---|---|---|
+| `direct_inline` | Decide/verify from 1–3 files, or perform one mechanical, already-understood file change with no research or unresolved design decision | Keep the work inline. Create no SDD change, artifact graph, phase prompt, or SDD attempt. |
+| `delegated_direct` | Understanding requires 4+ files; reading prepares a write; implementation touches 2+ non-trivial files; or broad research/context compression is needed to establish the implementation | Use the smallest useful native implementation topology: a narrow explorer and/or one writer according to the fired rule. Create no SDD lifecycle. The common verification and review flow is selected independently afterward. |
+| `propose_sdd` | The work is genuinely substantial or ambiguous and durable proposal/spec/design/task decisions would materially reduce cross-context, architectural, security, migration, rollback, or multi-unit uncertainty | Explain why SDD would help and offer it. This is a pending decision, not an implementation route. The selected route becomes `sdd` only after acceptance or when the user explicitly requested SDD. |
+
+The 4-file rule is **4 or more files needed to understand the work**. It is not a changed-file limit and not an SDD threshold. Likewise, the 2-file rule means **2 or more non-trivial files to implement** and selects one delegated writer, not SDD. Risk alone selects stronger verification/review; it does not force SDD when the work remains local and already understood.
+
+The delegation contract applies per action, not only once per work item. A `direct_inline` implementation may still delegate execution-heavy tests, builds, installs, or common review actors without being relabeled `delegated_direct`; that downstream delegation also does not trigger SDD.
+
+If an apparently simple task reveals genuine complexity, the router may propose SDD at the next safe boundary. It may not silently enroll the work, retroactively fabricate SDD artifacts, or treat rejection as permission to continue unsafely. It must reduce scope, continue through a safe direct/delegated route, or return **Needs your decision**.
+
+The router emits an `ImplementationRouteDecision` with `direct_inline`, `delegated_direct`, or `propose_sdd`. Only a selected executable route—`direct_inline`, `delegated_direct`, or `sdd`—is persisted as `ImplementationRoute` in a `WorkRun`; `sdd` additionally requires acceptance unless the user requested it explicitly.
+
+Implementation route is a context-management and planning choice, not a safety profile. Direct work receives the same candidate identity, proportional verification, RAR receipt, and PAD delivery checks as delegated or SDD work.
+
+### 3.2 Outcome-first interaction
 
 The normal user does not invoke SDD, RDD, or PAD commands. Natural language remains the primary interface:
 
@@ -107,7 +131,7 @@ The system asks a question only when the answer changes at least one of:
 
 It does not ask the user to choose hashes, lenses, recovery verbs, attempt budgets, or authority states.
 
-### 3.2 One visible checking phase
+### 3.3 One visible checking phase
 
 Functional verification and adversarial review may remain distinct internal operations, but they map to one public **Checking** state. The user should not see a separate ceremony for:
 
@@ -122,7 +146,7 @@ Functional verification and adversarial review may remain distinct internal oper
 
 Repeated gates validate the same content-bound receipt. They never open another review or verification budget.
 
-### 3.3 Guaranteed convergence
+### 3.4 Guaranteed convergence
 
 For one immutable candidate generation:
 
@@ -141,31 +165,44 @@ Operational replay of an interrupted durable operation does not consume the corr
 
 | Context | Owns in this slice | Must not own |
 |---|---|---|
-| `HCR` | Execute already-authorized argv with exact cwd and allowlisted environment, deadlines, bounded and secret-safe streams, cancellation, descendant cleanup, and terminal process evidence | Verification policy, model-selected commands, SDD advancement, or delivery authorization |
+| `HCR` | Execute already-authorized argv with exact cwd and allowlisted environment, deadlines, bounded and secret-safe streams, cancellation, descendant cleanup, and terminal process evidence | Verification policy, model-selected commands, work/SDD advancement, or delivery authorization |
 | `MMI` | Atomic/rollback-safe writes, path and mode safety, and post-write structural readback | Semantic correctness, review selection, or delivery policy |
-| `ACI` | Advertise canonical capabilities and render the canonical recovery modules for each supported adapter | Runtime detection, verification outcomes, or lifecycle transitions |
-| `EPD` | Action tickets, evidence envelopes, evidence admission, diagnostic identity, and ordered policy versions | Applicability, durable attempts, SDD advancement, process execution, or delivery authorization |
+| `ACI` | Advertise canonical capabilities and render semantically equivalent delegation rules and recovery modules for each supported adapter | Runtime detection, verification outcomes, SDD admission, or lifecycle transitions |
+| `EPD` | Action tickets, evidence envelopes, evidence admission, diagnostic identity, and ordered policy versions | Applicability, durable attempts, work/SDD advancement, process execution, or delivery authorization |
 | `RAR` | Candidate identity, native verification applicability, risk-selected review plan, bounded correction, terminal content receipt, and gate validation | Implementation planning, attempt budgets, test-selection prose, or route-specific issue policy |
-| `SDD` | Proposal/spec/design/tasks/apply lifecycle, declared verification obligations, durable attempts/budgets, forecast/disposition/result lifecycle, TDD evidence, and references to external evidence/receipts | Copied review states, applicability policy, lenses, recovery algebra, process execution, or delivery authority |
+| `SDD` | Collaborative proposal/spec/design/tasks, SDD-route Apply/TDD, phase attempts/budgets, archive, and binding common evidence/receipt references when the `sdd` route was selected | Direct/delegated work, global verification state, copied review states, applicability policy, lenses, recovery algebra, process execution, or delivery authority |
 | `PAD` | `DeliveryIntent`, route-specific governance applicability, final admission, and delivery authorization | Candidate hashing, reviewer execution, or mutation mechanics |
-| CLI/Pi/adapters | Present the four public states and execute exact owner-issued transitions | Reconstruct policy, identity, flags, recovery, or PASS |
+| Thin use case / `ImplementationRouter` | Apply the canonical delegation rules, emit an `ImplementationRouteDecision`, bind only an accepted executable route in a `WorkRun`, coordinate owner references, and present public progress | Mutation integrity, applicability, evidence truth, PASS, candidate identity, review, or delivery authorization |
+| CLI/Pi/adapters | Present the four public states, run the supported direct/delegated topology, offer SDD when selected, and execute exact owner-issued transitions | Reconstruct policy, identity, flags, recovery, or PASS |
 
 The handoff rule is reference-only:
 
-- SDD references `VerificationResultRef` and `ReviewReceiptRef`.
-- RAR consumes owner-issued evidence; it does not recreate SDD tasks.
+- Every `WorkRun` references `VerificationResultRef` and `ReviewReceiptRef`; it never copies their authority state.
+- An SDD run additionally binds those references to its artifact graph. Direct and delegated runs have no `SDDRunRef`.
+- RAR consumes the normalized candidate, declared obligations, and owner-issued evidence; it does not recreate direct tasks, delegated tasks, or SDD tasks.
 - PAD references the exact content receipt and route evidence; it does not perform another review.
+
+`WorkRunStore` is an application-coordination journal extracted from the existing runtime primitives, not a tenth bounded context or another workflow engine. It persists only the accepted route, revision, idempotent verification reservation, and owner-reference bindings; it does not become authoritative for the referenced facts. RAR, EPD, HCR, MMI, SDD, and PAD remain authoritative for their own facts and effects.
 
 ## 5. Canonical flow
 
 ```mermaid
 flowchart TD
     U["User outcome"] --> PA["PAD initial admission + DeliveryIntent"]
-    PA --> P["SDD proposal when useful"]
-    P --> F["Verification forecast"]
-    F --> A["Apply + TDD where applicable"]
-    A --> N["Source-mutating normalization"]
-    N --> V{"Verification applicability/cost"}
+    PA --> IR{"Canonical ImplementationRouter"}
+    IR -->|"small + known"| DI["Direct inline implementation"]
+    IR -->|"broad / research-heavy"| DG["Delegated exploration and/or one writer"]
+    IR -->|"genuinely complex / uncertain"| SP{"Propose SDD"}
+    SP -->|"accepted / explicitly requested"| SA["SDD proposal/spec/design/tasks + Apply/TDD"]
+    SP -->|"declined"| SD{"Owner rules permit a reduced route?"}
+    SD -->|"accepted smaller scope: small + known"| DI
+    SD -->|"delegation sufficient without scope loss"| DG
+    SD -->|"no safe route"| SND["Needs your decision: implementation route"]
+    DI --> N["Source-mutating normalization"]
+    DG --> N
+    SA --> N
+    N --> F["Route-neutral exact verification forecast"]
+    F --> V{"Verification applicability/cost"}
     V -->|"not applicable"| E["Native structural evidence"]
     V -->|"quick"| Q["Run once automatically"]
     V -->|"long / very long"| C["One consent checkpoint before launch"]
@@ -185,7 +222,7 @@ flowchart TD
     X --> R{"RAR plan: 0 / 1 / 4"}
     R --> B["Bounded review"]
     B -->|"approved"| RR["Content-bound receipt"]
-    B -->|"one correction"| T["Correct + owner-derived recheck closure"]
+    B -->|"one correction"| T["Correct through selected route + owner-derived recheck closure"]
     T --> CR{"Corrected VerificationResult"}
     CR -->|"complete / not_required"| CO["Post-recheck snapshot equality"]
     CR -->|"failed"| CD["Needs your decision: corrected candidate"]
@@ -204,19 +241,28 @@ flowchart TD
     PAD --> READY["Ready"]
 ```
 
-### 5.1 SDD relationship
+### 5.1 Implementation routing and optional SDD
 
-SDD remains valuable because it helps a person turn an outcome into a coherent proposal. It does not become a classical “write tests first for everything” system.
+The implementation router applies the existing delegation rules before any lifecycle is created:
 
-- **Proposal:** clarify outcome, constraints, and acceptance when ambiguity justifies it. Compute the verification forecast once scope stabilizes.
-- **Spec/design/tasks:** use only when they reduce implementation ambiguity; trivial work can collapse these phases.
+- **Direct inline:** one already-understood mechanical file or a bounded decision/verification read across 1–3 files. No SDD artifacts are created.
+- **Delegated direct:** narrow mapping when understanding requires 4+ files and/or one writer when implementation touches 2+ non-trivial files. Delegation is context compression, not SDD; common verification/review actors are selected independently after implementation.
+- **Full SDD:** proposed when genuine complexity means a collaborative proposal, durable product decisions, architecture, cross-context dependencies, migration/rollback planning, or multiple reviewable work units materially reduce uncertainty. Explicit user requests enter this route directly; otherwise the user accepts the proposal first.
+
+SDD remains valuable because it helps a person turn a genuinely complex outcome into a coherent proposal. It does not become a classical “write tests first for everything” system and it is not the universal implementation container.
+
+These are implementation/planning routes, not a ban on action-level delegation. Tests, builds, installs, and review work continue to use fresh workers when the always-active delegation rules require them, regardless of which implementation route produced the candidate.
+
+Within the selected SDD route:
+
+- **Proposal:** clarify outcome, constraints, and acceptance. Compute a preliminary verification forecast once scope stabilizes.
+- **Spec/design/tasks:** use them only when they reduce implementation ambiguity.
 - **Apply:** use TDD for executable behavior and focused checks for each work unit. Static human content does not need artificial tests.
-- **Normalize:** run every source-mutating formatter or generator before candidate freeze.
-- **Functional verification:** prove the applicable behavior once against the final normalized candidate.
-- **Review handoff:** freeze the exact candidate only after applicable functional verification.
-- **Archive:** store references to evidence and the receipt rather than copying their internal state.
+- **Archive:** bind common evidence and receipt references rather than copying their internal state.
 
-If a correction changes executable behavior, SDD reruns only the obligations affected by the corrected paths and requirements. Any evidence whose binding no longer matches is rejected.
+Every route emits the same `ImplementationHandoff`: route, scope digest, normalized subject, declared verification obligations, and evidence references. The optional `SDDRunRef` is populated only for SDD. Common normalization, functional verification, review identity freeze, RAR receipt, and PAD delivery happen after that handoff.
+
+Corrections run through the implementation route that produced the candidate. The common work run recalculates affected obligations and rejects stale evidence; SDD updates its artifact graph only when the route was SDD.
 
 ### 5.2 RDD/RAR relationship
 
@@ -235,7 +281,7 @@ RDD does not plan implementation, run an open-ended TDD loop, choose delivery go
 
 PAD operates twice:
 
-1. **Initial admission:** before SDD or implementation, issue an owner-authenticated admission decision and a provisional `DeliveryIntent`.
+1. **Initial admission:** before implementation routing, issue an owner-authenticated admission decision and a provisional `DeliveryIntent`.
 2. **Final authorization:** after RAR emits a terminal content receipt, re-evaluate the exact destination, live repository policy, route evidence, and any authorized exception.
 
 The caller or model may request a route, but only repository and maintainer policy can issue `not_applicable`, exception, direct-main, or emergency authority.
@@ -287,14 +333,14 @@ Product routing is derived from their combination. No single enum may collapse a
 
 The negotiated provider contract exposes four typed artifacts without moving their underlying authority:
 
-| Artifact | Owner | Purpose |
+| Artifact | Lifecycle record | Purpose and authoritative inputs |
 |---|---|---|
-| `VerificationApplicability` | `RAR` | Decides `applicable`, `not_applicable`, or `unknown` for the exact subject using native policy and EPD-admitted evidence. |
-| `VerificationForecast` | `SDD` | Declares the applicability reference, exact obligations, expected cost class, prerequisites, policy/provenance, and what cannot currently be proven. It contains no PASS. |
-| `VerificationDisposition` | `SDD` | Records the automatic policy or user decision to run, defer, reduce scope, or select a trusted deferred runner. It binds the forecast and its validity conditions. |
-| `VerificationResult` | `SDD` | Records the actual candidate-bound result of every obligation and references immutable EPD evidence. RAR consumes this artifact, never the forecast. |
+| `VerificationApplicability` | `RAR` | RAR decides `applicable`, `not_applicable`, or `unknown` for the exact subject using native policy and EPD-admitted evidence. |
+| `VerificationForecast` | `WorkRun` | Records the applicability reference, route-declared obligations, expected cost class, prerequisites, policy/provenance, and what cannot currently be proven. It contains no PASS and does not take authority from RAR, EPD, or the selected implementation route. |
+| `VerificationDisposition` | `WorkRun` | Records the owner policy or explicit user decision to run, defer, reduce scope, or select a trusted deferred runner. It binds the forecast and its validity conditions without turning the journal into the decision authority. |
+| `VerificationResult` | `WorkRun` | Records the actual candidate-bound result of every obligation and references immutable EPD evidence and owner decisions. RAR consumes this artifact, never the forecast; the record does not manufacture evidence or PASS. |
 
-The first forecast is produced when the planned scope is stable. It may reference a RAR policy projection over that planned scope, but that projection cannot authorize `not_required` or launch a process. After normalization, RAR issues the exact subject-bound applicability decision. Only that decision controls execution or `not_required`, and SDD records it in the final forecast/result binding. A material scope, plan, policy, capability, applicability, or candidate change invalidates any authorization whose assumptions no longer hold.
+The first forecast is produced when route planning stabilizes scope: a minimal plan for direct work, delegated exploration/planning for delegated work, or the proposal/specification for SDD. It may reference a RAR policy projection over that planned scope, but that projection cannot authorize `not_required` or launch a process. After normalization, RAR issues the exact subject-bound applicability decision. Only that decision controls execution or `not_required`, and the common `WorkRun` records it in the final forecast/result binding. SDD contributes its declared obligations only when selected. A material route, scope, plan, policy, capability, applicability, or candidate change invalidates any authorization whose assumptions no longer hold.
 
 ### 6.3 Provider-owned execution evidence
 
@@ -313,7 +359,7 @@ This is the bounded provider-evidence slice needed by proportional verification.
 
 | Coordinates | Product behavior |
 |---|---|
-| `not_applicable` with native evidence | Launch no semantic verification actor and consume no SDD runtime attempt. Preserve MMI readback, the RAR applicability decision, and its EPD evidence references. |
+| `not_applicable` with native evidence | Launch no semantic verification actor and consume no verification attempt. Preserve MMI readback, the RAR applicability decision, and its EPD evidence references. |
 | `applicable + quick + available` | Run automatically exactly once without asking. Quick means predicted p95 at most 120 seconds with no paid, network, privileged, credential, device, or external effect. |
 | `applicable + long + available` | Forecast the reason and expected range, then ask once before launching a process or consuming an attempt. Long means above 120 seconds, unknown/high variance, or dependent on an external capability or effect. |
 | `applicable + very_long + available` | Recommend a trusted CI/deferred runner. Very long means above 15 minutes or unsuitable for an interactive session. |
@@ -383,7 +429,7 @@ For “create a poster from this copy”:
 
 ### 6.7 Long-check consent
 
-When long verification was not already accepted in the proposal, the UI presents one compact decision before process launch:
+When long verification was not already accepted during route planning, including an SDD proposal when applicable, the UI presents one compact decision before process launch:
 
 > Full checking is expected to take about 8–12 minutes and requires Docker.
 >
@@ -401,7 +447,7 @@ The exact wording is adapter-specific, but the envelope must include:
 - what delivery remains possible if it is deferred;
 - a recommended option.
 
-The proposal-level choice is a reusable disposition, not launch authority. Immediately before execution, the SDD-owned `RuntimeStore.Begin` must atomically commit:
+The route-planning choice is a reusable disposition, not launch authority. Immediately before execution, the route-neutral `WorkRunStore.Begin` must atomically commit:
 
 - the canonical verification-plan revision and preimage reference;
 - the exact post-normalization candidate identity;
@@ -409,7 +455,7 @@ The proposal-level choice is a reusable disposition, not launch authority. Immed
 - the authorization actor and decision identifier;
 - the allowed action ticket and attempt ordinal.
 
-No process launches and no attempt is consumed unless that atomic begin succeeds. The user is not asked again while the committed assumptions remain valid. A mismatch invalidates the disposition and returns one updated decision instead of silently launching or looping.
+No process launches and no verification attempt is consumed unless that atomic begin succeeds. On the SDD route, the resulting reservation reference is also bound into the SDD phase attempt before launch; direct and delegated routes create no SDD attempt. The user is not asked again while the committed assumptions remain valid. A mismatch invalidates the disposition and returns one updated decision instead of silently launching or looping.
 
 ## 7. Contract invariants
 
@@ -423,7 +469,7 @@ No process launches and no attempt is consumed unless that atomic begin succeeds
 
 ### 7.2 Mutation ordering
 
-1. Apply the work.
+1. Complete the selected implementation route.
 2. Run source-mutating normalizers.
 3. Capture the verification subject snapshot.
 4. Perform applicable final checks in a sandbox or through explicitly non-mutating operations.
@@ -435,8 +481,9 @@ Any byte, path, or mode mutation during final verification discards that evidenc
 
 ### 7.3 Attempt and retry behavior
 
-- Quick verification starts exactly once through a successful atomic `Begin`.
-- Long verification consumes no attempt before the exact consent-bound `Begin`.
+- Quick verification starts exactly once through a successful atomic `WorkRunStore.Begin`.
+- Long verification consumes no verification attempt before the exact consent-bound `WorkRunStore.Begin`.
+- SDD phase attempts and budgets exist only for an accepted SDD route. Direct and delegated runs never allocate them.
 - Exact durable replay after an interrupted publication is read-only with respect to budgets.
 - Missing tools, timeout, cancellation, and declined consent do not trigger automatic relaunch.
 - One correction is the only candidate-changing automatic recovery.
@@ -470,20 +517,20 @@ User-facing adapters translate internals without dropping choices or inventing r
 
 Gentle AI owns policy and must publish the new contracts first. Gentle Pi adapts only after the provider release exists.
 
-Compatibility is explicit rather than inferred:
+The canonical delegation rules remain an ACI-owned projection, and every capable adapter must preserve the same three implementation routes. The provider contract that carries common progress and authority is route-neutral:
 
 | Invocation | Provider response |
 |---|---|
-| `gentle-ai sdd-status ... --json` | A strict `StatusV1Projection` containing only the fields and tokens accepted by the current Gentle Pi decoder. |
-| `gentle-ai sdd-status ... --json --contract gentle-ai.sdd-status/v2` | A separately typed `StatusV2` with the public state, verification summary/references, delivery intent, and at most one provider-issued `AuthorizedTransition`. |
-| `gentle-ai sdd-transition apply --contract gentle-ai.sdd-transition/v1 --authorization-ref <ref> --expected-revision <revision> --json` | The only v2 mutation surface. It applies the stored owner-issued transition through CAS and returns the resulting durable revision and next transition, if any. |
-| An explicitly empty or unknown `--contract` value on either surface | A typed unsupported-contract diagnostic and a read-only exit before any transition or mutation. |
+| `gentle-ai sdd-status ... --json` | A strict `StatusV1Projection` only for legacy/current SDD runs, containing exactly the fields and tokens accepted by the current Gentle Pi decoder. It never selects an implementation route. |
+| `gentle-ai work-status ... --json --contract gentle-ai.work-status/v1` | A typed `WorkStatusV1` with the route decision, optional selected `implementationRoute`, optional `sddRunRef`, verification summary/references, delivery intent, and at most one provider-issued `AuthorizedTransition`. |
+| `gentle-ai work-transition apply --contract gentle-ai.work-transition/v1 --authorization-ref <ref> --expected-revision <revision> --json` | The only common-work mutation surface. It applies the stored owner-issued transition through CAS and returns the resulting durable revision and next transition, if any. |
+| An explicitly empty or unknown `--contract` value on any contract-bearing surface | A typed unsupported-contract diagnostic and a read-only exit before any transition or mutation. |
 
-The default v1 projection must exclude `runtimeStatus`, `remediationState.correctionBudget`, new root keys, and v2-only next-action tokens even when the internal aggregate contains them. Gentle Pi's current decoder rejects unknown root fields, so adding “optional” fields is not compatible.
+The default SDD v1 projection must exclude `runtimeStatus`, `remediationState.correctionBudget`, new root keys, and work-contract-only next-action tokens even when the internal aggregate contains them. Gentle Pi's current decoder rejects unknown root fields, so adding “optional” fields is not compatible.
 
-`StatusV2` does not publish a menu from which a client reconstructs policy. The native controller returns zero or one exact `AuthorizedTransition`, bound to `gentle-ai.sdd-transition/v1`, its opaque authorization reference, expected revision, candidate, action ticket, and applicable authorization. A client may present it and submit only the returned reference and revision to `sdd-transition apply`; it may not choose other flags, rebuild recovery algebra, or synthesize an alternative transition. Missing, expired, replayed-with-different-inputs, or mismatched authorization fails CAS without mutation.
+`WorkStatusV1` distinguishes the pending `routeDecision` from the selected `implementationRoute`; `sddRunRef` is valid only when the latter is `sdd`. It does not publish a menu from which a client reconstructs policy. The native controller returns zero or one exact `AuthorizedTransition`, bound to `gentle-ai.work-transition/v1`, its opaque authorization reference, expected work revision, candidate, action ticket, and applicable authorization. A client may present it and submit only the returned reference and revision to `work-transition apply`; it may not choose other flags, rebuild recovery algebra, or synthesize an alternative transition. Missing, expired, replayed-with-different-inputs, or mismatched authorization fails CAS without mutation.
 
-The current `sdd-continue` contract remains unchanged for v1 consumers. The new behavior stays behind the advertised v2 capability until a consumer explicitly requests the recognized contract. There is no ambient upgrade based on provider version, field presence, prose, or adapter detection.
+The current `sdd-continue` contract remains unchanged for SDD v1 consumers. Direct and delegated runs never call it, never call `sdd-status`, and carry no `sddRunRef`. The new common behavior stays behind the advertised `gentle-ai.work-routing/v1` capability until a consumer explicitly requests the recognized contract. There is no ambient upgrade based on provider version, field presence, prose, or adapter detection.
 
 ### 8.2 Historical authority
 
@@ -496,9 +543,11 @@ The current `sdd-continue` contract remains unchanged for v1 consumers. The new 
 
 The Gentle Pi change is intentionally outside this provider PR. Its subsequent implementation should:
 
-- negotiate the new capability;
+- apply the canonical delegation rules before any SDD negotiation;
+- negotiate `gentle-ai.work-routing/v1`;
 - consume the provider-issued next transition;
-- invoke the exact `gentle-ai.sdd-transition/v1` apply surface with the returned authorization reference and revision;
+- invoke the exact `gentle-ai.work-transition/v1` apply surface with the returned authorization reference and revision;
+- invoke SDD-specific status/continuation only after the `sdd` route was accepted or explicitly requested;
 - present only the four public states;
 - execute forecast consent without constructing policy;
 - preserve v1 behavior against older providers;
@@ -511,8 +560,8 @@ The recovery lands in one `size:exception` pull request because the user-visible
 The pull request is not one undifferentiated change:
 
 - Wave 0 inventory and every required owner foundation are checked before behavior is activated.
-- Existing `MMI` and `ACI` foundations are prerequisites. Changed owner units follow `HCR` facts/execution, `RAR` authority, `EPD` evidence/policy, `SDD` lifecycle, and `PAD` delivery. Final `ACI` work only projects contracts already proven by those owners; SDD may not depend on that generated projection.
-- The v2 capability remains unadvertised and unable to start new work throughout intermediate commits.
+- Existing `MMI` and `ACI` foundations are prerequisites. Changed owner units follow `HCR` facts/execution, `RAR` authority, `EPD` evidence/policy, route-neutral `WorkRun` coordination, optional `SDD` integration, and `PAD` delivery. Final `ACI` work projects the already-proven routing and owner contracts; SDD may not depend on generated projection.
+- The `gentle-ai.work-routing/v1` capability remains unadvertised and unable to start new work throughout intermediate commits.
 - A missing foundation is implemented only inside its owning work unit and port. It is never improvised inside SDD, CLI, Pi, prompts, or generated assets.
 - Each work unit must build and prove its owner acceptance before the next dependent unit is considered reviewable.
 - The pull request may merge only when the complete provider contract is coherent and the exact final candidate passes independent review.
@@ -521,13 +570,13 @@ Changed LOC below means **additions plus deletions**, not net growth. It include
 
 | Work-unit commit | Outcome | Estimated changed LOC |
 |---|---|---:|
-| 1. Status compatibility floor | Add the strict v1 projection, separate v2 schemas, and contract selection without advertising new behavior. | 300–500 |
+| 1. Status compatibility floor | Add the strict legacy SDD v1 projection plus separate route-neutral `work-status/v1` and `work-transition/v1` schemas without advertising new behavior. | 300–500 |
 | 2. HCR bounded execution | Add the authorized execution inputs and terminal process evidence required by the slice. | 600–800 |
 | 3. RAR authority and native policy | Add subject-bound verification applicability; extend candidate/risk classification, zero/one/four lens routing, correction impact rules, full target-relation validation, and receipt reuse. | 1,300–1,900 |
 | 4. EPD evidence and diagnostics | Add action tickets, provider evidence envelopes, admission, typed diagnostics, and ordered verification-policy inputs without owning lifecycle state. | 1,400–2,000 |
-| 5. SDD lifecycle and ledger routing | Add forecast/disposition/result records, durable attempts and atomic consent-bound `Begin`, TDD/apply evidence, normalization and equality proof, verification before review freeze, status, and truthful blockers. | 1,800–2,600 |
+| 5. Implementation routing, common work ledger, and optional SDD | Normalize `direct_inline`/`delegated_direct`/`propose_sdd`, extract `WorkRunStore`, bind atomic consent and common results, and integrate SDD phase attempts/artifacts only after SDD selection. | 1,800–2,600 |
 | 6. PAD delivery intents | Add PR-with-issue, PR-without-issue, direct-main, and emergency admission with route-specific policy. | 1,300–1,900 |
-| 7. ACI projection and outcome-first UX | Map internal states to four product states; update canonical capability descriptors, skills, commands, help, diagnostics, and docs. | 1,300–2,000 |
+| 7. ACI projection and outcome-first UX | Project semantically equivalent delegation rules and capabilities across adapters; map common states to four product states; update skills, commands, help, diagnostics, and docs. | 1,300–2,000 |
 | 8. Tests, fixtures, and architecture fitness | Add only cross-cutting classification matrices, property tests, route journeys, failure injection, v1 compatibility, and rollback coverage not already colocated with behavior. | 2,000–3,000 |
 | 9. Generated mirrors and goldens | Regenerate provider assets and adapter mirrors from the exact canonical sources. | 2,000–3,800 |
 | **Total** | Full provider recovery slice. | **12,000–18,500** |
@@ -548,6 +597,11 @@ The planning center is approximately **15,000 changed lines**. LOC is a review-l
 
 - [ ] A normal user can ask for an outcome without learning SDD, RDD, PAD, hashes, lenses, or recovery commands.
 - [ ] The only public progress states are **Working**, **Checking**, **Ready**, and **Needs your decision**.
+- [ ] One already-understood mechanical file and 1–3-file decide/verify reads can remain `direct_inline` without creating SDD artifacts.
+- [ ] Understanding 4+ files delegates a narrow exploration, and writing 2+ non-trivial files delegates one writer; neither trigger starts SDD.
+- [ ] Direct implementation may still delegate execution-heavy tests/builds/installs and common review actors without changing its implementation route or starting SDD.
+- [ ] Genuinely complex or uncertain work produces the pending decision `propose_sdd`; SDD starts only after acceptance or an explicit user request, and risk alone does not force it.
+- [ ] Declining SDD leads to safe scope reduction, a justified direct/delegated route, or **Needs your decision**, never silent SDD enrollment or unsafe inline continuation.
 - [ ] A passive ordinary document or image launches no semantic-verification subagent and consumes no verification attempt.
 - [ ] MMI still proves the intended file mutation and structural readback for passive work.
 - [ ] An applicable quick check runs exactly once without prompting.
@@ -566,9 +620,11 @@ The planning center is approximately **15,000 changed lines**. LOC is a review-l
 - [ ] High-risk obligations cannot be downgraded by an adapter or low-capability actor.
 - [ ] Any changed byte, path, mode, scope, policy, or required capability invalidates the applicable plan/evidence/receipt binding.
 
-### 10.3 SDD/RDD convergence
+### 10.3 Implementation/RAR convergence
 
-- [ ] Apply/TDD and source-mutating normalization precede final functional verification.
+- [ ] Completion of the selected implementation route and source-mutating normalization precede final functional verification; Apply/TDD and SDD phase attempts exist only on the SDD route.
+- [ ] Direct, delegated, and SDD routes emit the same normalized `ImplementationHandoff` and enter identical evidence, RAR, receipt, and PAD safety gates.
+- [ ] Direct and delegated runs have no `SDDRunRef`, SDD artifacts, SDD prompts, or SDD attempt budget.
 - [ ] Applicable final functional verification precedes review identity freeze.
 - [ ] The post-verification snapshot exactly equals the evidence subject; a mutation discards the evidence and triggers bounded replanning.
 - [ ] Native policy selects exactly zero, one, or four review lenses.
@@ -591,11 +647,12 @@ The planning center is approximately **15,000 changed lines**. LOC is a review-l
 ### 10.5 Compatibility and operations
 
 - [ ] The default `sdd-status` v1 JSON remains byte-shape compatible for current Gentle Pi fixtures.
-- [ ] `StatusV1Projection` strips `runtimeStatus`, `remediationState.correctionBudget`, new root keys, and v2-only tokens regardless of internal state.
-- [ ] An explicit `gentle-ai.sdd-status/v2` request returns the separate typed schema and zero or one exact provider-issued `AuthorizedTransition`.
-- [ ] `gentle-ai.sdd-transition/v1` is the sole v2 mutation surface and rejects missing, expired, mismatched, or stale authorizations without mutation.
-- [ ] An empty explicit or unknown contract fails read-only before mutation; absence of the flag continues to select v1.
+- [ ] `StatusV1Projection` strips `runtimeStatus`, `remediationState.correctionBudget`, new root keys, and work-contract-only tokens regardless of internal state.
+- [ ] An explicit `gentle-ai.work-status/v1` request distinguishes `routeDecision` from the optional selected `implementationRoute`, permits `sddRunRef` only for `sdd`, and returns zero or one exact provider-issued `AuthorizedTransition`.
+- [ ] `gentle-ai.work-transition/v1` is the sole common-work mutation surface and rejects missing, expired, mismatched, or stale authorizations without mutation.
+- [ ] An empty explicit or unknown contract fails read-only before mutation; absence of a contract on `sdd-status` continues to select legacy SDD v1.
 - [ ] Capable and incapable consumers are covered by a provider-version/contract matrix, and `sdd-continue` remains unchanged for v1 consumers.
+- [ ] Semantic parity fixtures prove the 1–3/4+/2+ delegation thresholds and SDD proposal semantics across every supported orchestrator projection.
 - [ ] Historical v1 verification records and receipts remain readable and retain their original authority.
 - [ ] Disabling the new capability produces safe read-only/unsupported diagnostics and never restores prose or consumer inference.
 - [ ] The full provider test suite, asset parity suite, schema fixtures, and generated-asset checks pass.
@@ -605,17 +662,17 @@ The planning center is approximately **15,000 changed lines**. LOC is a review-l
 
 ### 11.1 Runtime rollback
 
-- Disable advertising the new capability and reject new v2 starts.
-- Keep current v1 status and historical authority readable.
-- Keep v2 compatibility readers plus owner-issued recovery and terminalization available for already-started v2 work.
+- Disable advertising `gentle-ai.work-routing/v1` and reject new `WorkRun` starts.
+- Keep current SDD v1 status and historical authority readable.
+- Keep `WorkRun` compatibility readers plus owner-issued recovery and terminalization available for already-started common work.
 - Reject every other new proportional-verification or delivery-intent transition with a typed unsupported/read-only result.
 - Do not fall back to a retired prompt parser, consumer-side transition planner, or unsigned arbitrary command.
 - Disable `direct_main` and `emergency` routes independently if their admission policy is implicated.
 
 ### 11.2 Source rollback
 
-- Before capability activation, or while no v2 record exists, revert the one provider PR or the last safe dormant work-unit boundary.
-- After any v2 record exists, never deploy a binary that cannot read it. Use a compatibility-preserving rollback release or fix forward while new starts remain disabled.
+- Before capability activation, or while no `WorkRun` record exists, revert the one provider PR or the last safe dormant work-unit boundary.
+- After any `WorkRun` record exists, never deploy a binary that cannot read it. Use a compatibility-preserving rollback release or fix forward while new starts remain disabled.
 - Preserve additive versioned schemas, readers, recovery/terminalization paths, and historical fixtures for every persisted authority version.
 - Regenerate mirrors from the reverted canonical source and prove parity.
 - Re-run current v1 compatibility fixtures before publishing a rollback release.
@@ -653,4 +710,5 @@ The planning center is approximately **15,000 changed lines**. LOC is a review-l
 
 - [Systemic Remediation Architecture](./2026-07-23-systemic-remediation-architecture.md)
 - [Receipt-Driven Development System Audit](./2026-07-21-rdd-system-audit.md)
+- [Implementation tracker #1794](https://github.com/Gentleman-Programming/gentle-ai/issues/1794)
 - [Architecture baseline commit `0d95c399c79edb341e3d874032eba4654b2b3f17`](https://github.com/Gentleman-Programming/gentle-ai/commit/0d95c399c79edb341e3d874032eba4654b2b3f17)
