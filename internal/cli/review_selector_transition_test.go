@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -176,6 +178,154 @@ func TestStatusRecoverTransitionExecutesExactBaseDiffSelectors(t *testing.T) {
 	}
 }
 
+func TestStatusStopsFreshStagedWorkspaceOverlay(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	writeReviewStartCandidate(t, repo, "docs/fresh.md", "# Fresh\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "docs/fresh.md")
+	status := selectorTransitionStatus(t, repo, "--action-eligibility", "--base-ref", base, "--projection", "staged", "--workspace-overlay")
+	if status.Applicability != reviewtransaction.TargetApplicabilityUnrelated || status.Action != reviewtransaction.TargetStatusActionStop ||
+		status.Replayability != reviewtransaction.ReplayabilityManualActionRequired ||
+		status.NextTransition == nil || status.NextTransition.Kind != reviewNextTransitionStop ||
+		status.NextTransition.ReasonCode != "staged_workspace_overlay_recovery_unavailable" ||
+		status.Eligibility == nil || status.Eligibility.AllowedActions[0].Action != "stop" {
+		t.Fatalf("fresh staged overlay status = %#v", status)
+	}
+}
+
+func TestStatusRecoverTransitionExecutesApprovedStagedScopeExpansion(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	writeReviewStartCandidate(t, repo, "docs/candidate.md", "# Candidate\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "docs/candidate.md")
+	runReviewCLIGit(t, repo, "commit", "-qm", "add reviewed candidate")
+	var output bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "staged-scope-root", "--base-ref", base, "--committed-only"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", "staged-scope-root"}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "staged-scope-root")
+	predecessor, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateBefore, _ := os.ReadFile(store.StatePath())
+	receiptBefore, _ := os.ReadFile(store.ReceiptPath())
+
+	writeReviewStartCandidate(t, repo, "docs/extra.md", "# Extra\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "docs/extra.md")
+	writeReviewStartCandidate(t, repo, "tracked.txt", "unstaged divergence\n", 0o644)
+	writeReviewStartCandidate(t, repo, "scratch.txt", "untracked noise\n", 0o644)
+	wantTree := strings.TrimSpace(runReviewCLIGit(t, repo, "write-tree"))
+	selectors := []string{"--lineage", predecessor.State.LineageID, "--base-ref", base, "--projection", "staged", "--workspace-overlay"}
+	probe := selectorTransitionStatus(t, repo, selectors...)
+	if probe.Action != reviewtransaction.TargetStatusActionRecover ||
+		probe.ActionDisposition != reviewtransaction.RecoveryScopeChanged ||
+		probe.NextTransition == nil || probe.NextTransition.Collect == nil {
+		t.Fatalf("staged scope probe = %#v", probe)
+	}
+	reason, actor, successor := "include staged release notes", "maintainer", "staged-scope-successor"
+	authorization := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + predecessor.State.LineageID +
+		"\npredecessor_revision=" + probe.Authority.Revision + "\ntarget_identity=" + probe.TargetIdentity +
+		"\nsuccessor_lineage=" + successor + "\nactor=" + actor + "\nreason=" + reason
+	status := selectorTransitionStatus(t, repo, append(selectors,
+		"--recovery-successor-lineage", successor, "--recovery-reason", reason,
+		"--recovery-actor", actor, "--recovery-authorization", authorization)...)
+	arguments := selectorTransitionArguments(t, status)
+	if arguments["base-ref"] != base || arguments["projection"] != "staged" ||
+		arguments["workspace-overlay"] != "true" || arguments["committed-only"] != "" {
+		t.Fatalf("staged RECOVER selectors = %#v", arguments)
+	}
+	for _, name := range []string{"base-ref", "projection", "workspace-overlay"} {
+		name := name
+		assertSelectorTransitionMutationRejected(t, status, func(arguments []ReviewTransitionArgument) []ReviewTransitionArgument {
+			return removeSelectorTransitionArgument(arguments, name)
+		})
+	}
+	assertSelectorTransitionMutationRejected(t, status, func(arguments []ReviewTransitionArgument) []ReviewTransitionArgument {
+		return setSelectorTransitionArgument(arguments, "workspace-overlay", "false")
+	})
+
+	payload := executeSelectorTransition(t, repo, status)
+	var recovered ReviewRecoverResult
+	decodeStrictReviewJSON(t, payload, &recovered)
+	successorStore, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, successor)
+	successorRecord, err := successorStore.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.TargetIdentity != status.TargetIdentity ||
+		successorRecord.State.InitialSnapshot.Kind != reviewtransaction.TargetBaseWorkspaceOverlay ||
+		successorRecord.State.InitialSnapshot.Projection != reviewtransaction.ProjectionStaged ||
+		successorRecord.State.InitialSnapshot.CandidateTree != wantTree ||
+		!reflect.DeepEqual(successorRecord.State.GenesisPaths, []string{"docs/candidate.md", "docs/extra.md"}) {
+		t.Fatalf("staged successor = %#v", successorRecord.State)
+	}
+	if _, err := os.Stat(successorStore.ReceiptPath()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fresh staged successor receipt = %v", err)
+	}
+	if stateAfter, _ := os.ReadFile(store.StatePath()); !bytes.Equal(stateBefore, stateAfter) {
+		t.Fatal("staged RECOVER changed predecessor state")
+	}
+	if receiptAfter, _ := os.ReadFile(store.ReceiptPath()); !bytes.Equal(receiptBefore, receiptAfter) {
+		t.Fatal("staged RECOVER changed predecessor receipt")
+	}
+	if got := strings.TrimSpace(runReviewCLIGit(t, repo, "write-tree")); got != wantTree {
+		t.Fatalf("staged RECOVER changed index tree: got %s want %s", got, wantTree)
+	}
+
+	if err := RunReviewInvalidate([]string{
+		"--cwd", repo, "--lineage", successor, "--expected-revision", successorRecord.Revision,
+		"--reason", "replace invalidated staged review",
+	}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	writeReviewStartCandidate(t, repo, "docs/later.md", "# Later\n", 0o644)
+	runReviewCLIGit(t, repo, "add", "docs/later.md")
+	laterSelectors := []string{"--lineage", successor, "--base-ref", base, "--projection", "staged", "--workspace-overlay"}
+	laterProbe := selectorTransitionStatus(t, repo, laterSelectors...)
+	laterLineage, laterReason := "staged-scope-later", "replace invalidated staged review"
+	laterAuthorization := "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + successor +
+		"\npredecessor_revision=" + laterProbe.Authority.Revision + "\ntarget_identity=" + laterProbe.TargetIdentity +
+		"\nsuccessor_lineage=" + laterLineage + "\nactor=" + actor + "\nreason=" + laterReason
+	later := selectorTransitionStatus(t, repo, append(laterSelectors,
+		"--recovery-successor-lineage", laterLineage, "--recovery-reason", laterReason,
+		"--recovery-actor", actor, "--recovery-authorization", laterAuthorization)...)
+	laterArguments := selectorTransitionArguments(t, later)
+	if later.ActionDisposition != reviewtransaction.RecoveryInvalidated ||
+		laterArguments["base-ref"] != base || laterArguments["projection"] != "staged" ||
+		laterArguments["workspace-overlay"] != "true" {
+		t.Fatalf("later staged recovery = %#v, selectors %#v", later, laterArguments)
+	}
+	executeSelectorTransition(t, repo, later)
+	laterStore, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, laterLineage)
+	laterRecord, err := laterStore.Load()
+	if err != nil || laterRecord.State.Recovery == nil ||
+		laterRecord.State.Recovery.Disposition != reviewtransaction.RecoveryInvalidated {
+		t.Fatalf("later staged successor = %#v, %v", laterRecord, err)
+	}
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", laterLineage}, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	approved := selectorTransitionStatus(t, repo, "--lineage", laterLineage, "--base-ref", base, "--projection", "staged", "--workspace-overlay")
+	if approved.Action != reviewtransaction.TargetStatusActionValidate {
+		t.Fatalf("finalized staged status = %#v", approved)
+	}
+	assertReviewGateResult(t, executeSelectorTransition(t, repo, approved), reviewtransaction.GateAllow)
+	var postApply bytes.Buffer
+	if err := RunReviewFacadeValidate([]string{
+		"--cwd", repo, "--lineage", laterLineage, "--gate", string(reviewtransaction.GatePostApply),
+	}, &postApply); err != nil {
+		t.Fatal(err)
+	}
+	assertReviewGateResult(t, postApply.Bytes(), reviewtransaction.GateAllow)
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "direct-staged-start", "--base-ref", base, "--workspace-overlay", "--projection", "staged"}, &bytes.Buffer{}); err == nil {
+		t.Fatal("direct staged workspace-overlay START succeeded")
+	}
+}
+
 func TestCurrentChangesRecoverSelectorPresenceSurvivesJSONRoundTrip(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
@@ -310,6 +460,7 @@ func TestTransitionSelectorFlagsRejectMixedAliases(t *testing.T) {
 		{name: "recover base", operation: "review.recover", args: []string{"-base-ref=HEAD^", "--base-ref=HEAD"}},
 		{name: "recover committed", operation: "review.recover", args: []string{"--committed-only", "-committed-only=true"}},
 		{name: "recover projection", operation: "review.recover", args: []string{"-projection=workspace", "--projection", "staged"}},
+		{name: "recover workspace overlay", operation: "review.recover", args: []string{"--workspace-overlay", "-workspace-overlay=true"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

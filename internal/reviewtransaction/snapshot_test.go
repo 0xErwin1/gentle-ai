@@ -317,6 +317,53 @@ func TestSnapshotProjectionValidationAndIdentity(t *testing.T) {
 	}
 }
 
+func TestBuildStagedWorkspaceOverlayRecoveryUsesOnlyTheRealIndex(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	base := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+	writeSnapshotFile(t, repo, "reviewed.txt", "reviewed\n")
+	gitSnapshot(t, repo, "add", "reviewed.txt")
+	writeSnapshotFile(t, repo, "tracked.txt", "unstaged\n")
+	writeSnapshotFile(t, repo, "untracked.txt", "untracked\n")
+	beforeIndex := gitSnapshot(t, repo, "diff", "--cached", "--binary")
+	target := Target{
+		Kind: TargetBaseWorkspaceOverlay, Projection: ProjectionStaged,
+		BaseRef: base, IntendedUntracked: []string{},
+	}
+	builder := SnapshotBuilder{Repo: repo}
+
+	if _, err := builder.Build(context.Background(), target); err == nil {
+		t.Fatal("ordinary snapshot builder accepted a staged workspace overlay")
+	}
+	snapshot, err := builder.BuildStagedWorkspaceOverlayRecovery(context.Background(), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.CandidateTree != strings.TrimSpace(gitSnapshot(t, repo, "write-tree")) ||
+		!equalStrings(snapshot.Paths, []string{"reviewed.txt"}) ||
+		len(snapshot.IntendedUntracked) != 0 || len(snapshot.LedgerIDs) != 0 {
+		t.Fatalf("staged recovery snapshot = %#v", snapshot)
+	}
+	for _, path := range []string{"tracked.txt", "untracked.txt"} {
+		if gitSnapshotSucceeds(repo, "cat-file", "-e", snapshot.CandidateTree+":"+path) && path == "untracked.txt" {
+			t.Fatalf("staged recovery snapshot included %s", path)
+		}
+	}
+	if afterIndex := gitSnapshot(t, repo, "diff", "--cached", "--binary"); afterIndex != beforeIndex {
+		t.Fatal("staged recovery snapshot mutated the real index")
+	}
+	for _, invalid := range []Target{
+		{Kind: TargetBaseDiff, Projection: ProjectionStaged, BaseRef: base, IntendedUntracked: []string{}},
+		{Kind: TargetBaseWorkspaceOverlay, Projection: ProjectionWorkspace, BaseRef: base, IntendedUntracked: []string{}},
+		{Kind: TargetBaseWorkspaceOverlay, Projection: ProjectionStaged, BaseRef: base, IntendedUntracked: []string{"untracked.txt"}},
+		{Kind: TargetBaseWorkspaceOverlay, Projection: ProjectionStaged, BaseRef: base, IntendedUntracked: []string{}, LedgerIDs: []string{"R3-001"}},
+	} {
+		if _, err := builder.BuildStagedWorkspaceOverlayRecovery(context.Background(), invalid); err == nil {
+			t.Fatalf("invalid staged recovery target accepted: %#v", invalid)
+		}
+	}
+}
+
 func TestPreCommitSnapshotAllowsOnlyCompleteStagedIntendedTransition(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)
