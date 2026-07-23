@@ -80,6 +80,7 @@ type ProcessEvidence struct {
 	Stderr            StreamEvidence `json:"stderr"`
 	CleanupScope      string         `json:"cleanupScope"`
 	CleanupComplete   bool           `json:"cleanupComplete"`
+	provenanceSeal    [sha256.Size]byte
 }
 
 type ValidationError struct {
@@ -133,7 +134,7 @@ func (executor *Executor) Execute(ctx context.Context, step ExecStep) (ProcessEv
 		}
 		evidence.Stdout = newStreamCollector(canonical.Limits.StdoutBytes, canonical.Redaction.Literals).Evidence()
 		evidence.Stderr = newStreamCollector(canonical.Limits.StderrBytes, canonical.Redaction.Literals).Evidence()
-		return evidence, nil
+		return sealProcessEvidence(evidence), nil
 	}
 
 	commandContext, cancel := context.WithTimeout(ctx, canonical.Deadline)
@@ -162,7 +163,7 @@ func (executor *Executor) Execute(ctx context.Context, step ExecStep) (ProcessEv
 		if !evidence.CleanupComplete && command.Process != nil {
 			evidence.TerminalCause = TerminalCleanupFailed
 		}
-		return evidence, &ExecutionError{Kind: evidence.TerminalCause}
+		return sealProcessEvidence(evidence), &ExecutionError{Kind: evidence.TerminalCause}
 	}
 	evidence.CleanupScope = processTreeCleanupScope()
 
@@ -207,9 +208,9 @@ func (executor *Executor) Execute(ctx context.Context, step ExecStep) (ProcessEv
 
 	if releaseErr != nil {
 		evidence.TerminalCause = TerminalCleanupFailed
-		return evidence, &ExecutionError{Kind: TerminalCleanupFailed}
+		return sealProcessEvidence(evidence), &ExecutionError{Kind: TerminalCleanupFailed}
 	}
-	return evidence, nil
+	return sealProcessEvidence(evidence), nil
 }
 
 func validateStep(step ExecStep) (ExecStep, error) {
