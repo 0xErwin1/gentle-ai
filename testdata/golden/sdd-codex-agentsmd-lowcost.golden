@@ -17,6 +17,8 @@ These rules apply to **all non-trivial work**, not only SDD phases. Delegation i
 
 Core principle: **does this inflate my context without need?** If yes -> delegate. If no -> do it inline.
 
+- **Lossless Blocking Prompts**: When a sub-agent or tool result contains a blocking prompt or menu that requires a user choice (such as the SDD Session Preflight menu), forward it losslessly or restate every single option fully in your response. Never summarize or abbreviate the option list.
+
 | Action | Inline | Delegate |
 |--------|--------|----------|
 | Read to decide/verify (1-3 files) | Yes | No |
