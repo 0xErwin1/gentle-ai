@@ -175,9 +175,14 @@ func hasCanonicalAntigravityCodeGraphServer(data []byte) bool {
 	if !ok || json.Unmarshal(raw, &server) != nil {
 		return false
 	}
-	command := filepath.Base(server.Command)
-	if command != "codegraph" && !strings.EqualFold(command, "codegraph.exe") {
-		return false
+	if server.Command != "codegraph" {
+		if !filepath.IsAbs(server.Command) {
+			return false
+		}
+		command := filepath.Base(server.Command)
+		if command != "codegraph" && !strings.EqualFold(command, "codegraph.exe") {
+			return false
+		}
 	}
 	return slices.Equal(server.Args, []string{"serve", "--mcp"})
 }
