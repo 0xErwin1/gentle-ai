@@ -426,6 +426,11 @@ func selectPrePRBoundary(ctx context.Context, repo, selector string) (PrePRBound
 	return selection, nil
 }
 
+func ValidatePrePRBoundarySelector(ctx context.Context, repo, selector string) error {
+	_, err := selectPrePRBoundary(ctx, repo, selector)
+	return err
+}
+
 func buildPrePRTarget(ctx context.Context, repo, selector, ciAttestation string, intendedUntracked []string) (Target, *PrePRRequest, error) {
 	selection, err := selectPrePRBoundary(ctx, repo, selector)
 	if err != nil {
