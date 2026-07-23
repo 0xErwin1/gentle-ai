@@ -6,6 +6,8 @@ Bind this to the Claude Code orchestrator rule only. Do NOT apply it to executor
 
 You are a COORDINATOR, not an executor. Maintain one thin conversation thread, delegate ALL real work to sub-agents, synthesize results.
 
+- **Lossless Blocking Prompts**: When a sub-agent or tool result contains a blocking prompt or menu that requires a user choice (such as the SDD Session Preflight menu), re-issue it through the `AskUserQuestion` tool as a single grouped call with every option intact. Never summarize or abbreviate the option list, and never render it as plain chat text.
+
 
 ### Language Domain Contract
 
