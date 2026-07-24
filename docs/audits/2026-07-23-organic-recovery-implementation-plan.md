@@ -1,7 +1,7 @@
 # Organic Recovery Architecture and Implementation Plan
 
 - **Decision date:** 2026-07-23
-- **Status:** Dormant provider implementation; 47 of 52 acceptance criteria proved; activation remains **NO-GO**
+- **Status:** Dormant provider implementation; 48 of 52 acceptance criteria proved; activation remains **NO-GO**
 - **Architecture baseline:** `main` at `0d95c399c79edb341e3d874032eba4654b2b3f17`
 - **Implementation baseline:** `main` at `0d216f26d1e2fdb21f6fcfbefa05a1767f92eba8`
 - **Parent architecture:** [Systemic Remediation Architecture](./2026-07-23-systemic-remediation-architecture.md)
@@ -605,12 +605,12 @@ The implementation exceeded the forecast and must be reviewed as such:
 
 | Result | Evidence |
 |---|---|
-| Exact branch footprint | `65,538` additions + `3,950` deletions = **69,488 changed lines** across `227` files, measured against implementation baseline `0d216f26d1e2fdb21f6fcfbefa05a1767f92eba8`. |
+| Exact branch footprint | `65,534` additions + `3,950` deletions = **69,484 changed lines** across `227` files, measured against implementation baseline `0d216f26d1e2fdb21f6fcfbefa05a1767f92eba8`. |
 | Commit topology | The nine conceptual work units were decomposed into small reversible commits so identity, replay, compatibility, and activation fixes can be inspected and reverted independently. |
 | Forecast variance | Most additional volume is owner repositories, linked-worktree and stale-identity hardening, adversarial failure/replay coverage, and generated adapter projections. The variance is not treated as proof of completion. |
 | Retired coverage | The prompt-owned router, its byte golden, and 32 obsolete prompt-router Go tests/assertions were removed with an exact migration map. No valid E2E was changed or deleted. |
 | Live E2E | The suite still defines and invokes all 113 scenarios for installation, layout, idempotency, and optional SDD. The canonical Docker matrix could not run locally because `docker` is unavailable; CI remains required. |
-| Independent acceptance audit | **NO-GO:** 47 of 52 criteria proved. Product activation still requires the normal runtime consumer, authenticated runtime/PAD composition, real-agent E2E, the Gentle Pi provider/consumer matrix, and a final adversarial audit of the exact candidate. |
+| Independent acceptance audit | **PASS for the dormant checkpoint, NO-GO for activation:** 48 of 52 criteria proved. Two independent adversarial audits passed the exact candidate. Product activation still requires the normal runtime consumer, authenticated runtime/PAD composition, real-agent E2E, and the Gentle Pi provider/consumer matrix. |
 
 The audit's release blockers are architectural, not test flakes:
 
@@ -624,9 +624,6 @@ The audit's release blockers are architectural, not test flakes:
    evidence rather than only provider harnesses.
 4. Gentle Pi still needs the explicit provider-version/contract matrix while
    preserving its strict SDD v1 behavior.
-5. The exact final candidate still needs the independent adversarial audit
-   recorded by the final acceptance item.
-
 The bounded runtime/connector follow-up for the first two blockers is forecast
 in changed lines, not days:
 
@@ -752,7 +749,7 @@ assumed complete because adjacent unit tests pass.
 - [x] Historical v1 verification records and receipts remain readable and retain their original authority.
 - [x] Disabling the new capability produces safe read-only/unsupported diagnostics and never restores prose or consumer inference.
 - [x] The full provider test suite, asset parity suite, schema fixtures, and generated-asset checks pass.
-- [ ] **Pending after blockers:** Independent adversarial review runs against the exact final candidate, followed by no more than the one permitted correction cycle.
+- [x] Independent adversarial review runs against the exact final candidate, followed by no more than the one permitted correction cycle.
 
 ## 11. Rollback
 
@@ -803,8 +800,7 @@ assumed complete because adjacent unit tests pass.
    delivery.
 4. Run the real-agent direct/delegated/common-review E2E journeys.
 5. Adapt Gentle Pi and prove the provider-version/consumer contract matrix.
-6. Run independent adversarial review against the exact final provider SHA.
-7. Advertise or enable `gentle-ai.work-routing/v1` only after the remaining
+6. Advertise or enable `gentle-ai.work-routing/v1` only after the remaining
    invariant passes and a maintainer explicitly authorizes activation.
 
 ## 14. References
