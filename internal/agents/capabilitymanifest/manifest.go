@@ -113,7 +113,7 @@ func ForAgent(agent model.AgentID) (AgentCapabilityManifest, error) {
 		Contracts: ContractClaims{
 			WorkRoutingV1: ContractClaim{
 				ID:       ContractWorkRoutingV1,
-				Exposure: ContractExposureDormant,
+				Exposure: ContractExposureAdvertised,
 			},
 		},
 	}, nil

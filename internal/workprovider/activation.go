@@ -20,9 +20,9 @@ const (
 	ActivationReadOnly     ActivationMode = "read_only"
 	ActivationDisabled     ActivationMode = "disabled"
 
-	// DefaultActivationMode remains read-only until the owner repositories and
-	// transition applier are integrated and the final ACI activation lands.
-	DefaultActivationMode = ActivationReadOnly
+	// The final provider ships enabled. Operators can still select recovery,
+	// read-only, or disabled modes through the sole explicit kill switch.
+	DefaultActivationMode = ActivationEnabled
 )
 
 var ErrInvalidActivationMode = errors.New("invalid work-routing activation mode")
@@ -80,7 +80,7 @@ func (resolver StaticActivationResolver) ResolveActivation(
 }
 
 // EnvironmentActivationResolver reads one operator-owned bootstrap setting.
-// Unset means read-only. An explicitly empty or unknown value is invalid and
+// Unset means enabled. An explicitly empty or unknown value is invalid and
 // resolves to disabled; it never silently enables the provider.
 type EnvironmentActivationResolver struct {
 	LookupEnv func(string) (string, bool)
