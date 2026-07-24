@@ -1778,7 +1778,8 @@ func organicStartCommand() map[string]any {
 		`explicitSddRequested:false}),encoding:'utf8',env:process.env,` +
 		`timeout:30000});` +
 		`const status=Number.isInteger(r.status)?r.status:1;` +
-		`const stderr=r.stderr||String(r.error||r.signal||'process did not exit');` +
+		`const stderr=r.stderr||(Number.isInteger(r.status)?'':` +
+		`String(r.error||r.signal||'process did not exit'));` +
 		`if(status===0){const v=JSON.parse(r.stdout);` +
 		`fs.writeFileSync(process.env.ORGANIC_E2E_START_REVISION_FILE,` +
 		`v.revision,{encoding:'utf8',mode:384});}` +
@@ -1814,7 +1815,8 @@ func organicAdvanceCommand(killSwitch bool) map[string]any {
 		`'--contract','gentle-ai.work-advance/v1','--json'],{` +
 		`encoding:'utf8',env:` + environment + `,timeout:120000});` +
 		`const status=Number.isInteger(r.status)?r.status:1;` +
-		`const stderr=r.stderr||String(r.error||r.signal||'process did not exit');` +
+		`const stderr=r.stderr||(Number.isInteger(r.status)?'':` +
+		`String(r.error||r.signal||'process did not exit'));` +
 		`process.stdout.write(JSON.stringify({status,` +
 		`stdout:r.stdout||'',stderr}));` +
 		`process.exit(status===0?0:1)"`}
@@ -1843,7 +1845,8 @@ func organicNodeCommand(arguments string, extraOptions string) string {
 		arguments + `,{` + extraOptions +
 		`encoding:'utf8',env:process.env,timeout:30000});` +
 		`const status=Number.isInteger(r.status)?r.status:1;` +
-		`const stderr=r.stderr||String(r.error||r.signal||'process did not exit');` +
+		`const stderr=r.stderr||(Number.isInteger(r.status)?'':` +
+		`String(r.error||r.signal||'process did not exit'));` +
 		`process.stdout.write(JSON.stringify({status,` +
 		`stdout:r.stdout||'',stderr}));` +
 		`process.exit(status===0?0:1)"`
