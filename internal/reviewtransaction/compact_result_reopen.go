@@ -332,15 +332,14 @@ func compactProviderLensMatches(provided, expected string) bool {
 }
 
 func readCompactReviewerArtifact(path string) ([]byte, string, error) {
-	info, err := os.Lstat(path)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return nil, "", errors.New("reviewer artifact is not a regular provider-owned file")
-	}
-	payload, err := os.ReadFile(path)
-	if err != nil || len(payload) == 0 || len(payload) > compactReviewerResultSizeLimit {
+	payload, err := readPrivateCompactReviewerFile(
+		path,
+		compactReviewerResultSizeLimit,
+	)
+	if err != nil {
 		return nil, "", errors.New("reviewer artifact is unreadable or outside the native size bound")
 	}
-	digestPayload, err := os.ReadFile(path + ".sha256")
+	digestPayload, err := readPrivateCompactReviewerFile(path+".sha256", 256)
 	if err != nil {
 		return nil, "", errors.New("reviewer artifact digest sidecar is unavailable")
 	}

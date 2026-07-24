@@ -1399,6 +1399,12 @@ func (store CompactStore) CaptureReviewerResult(expectedRevision, target, lens s
 	if err != nil {
 		return err
 	}
+	if record.HistoricalCompat {
+		return NewLegacyReadOnlyError(
+			"review/capture-result",
+			record.State.LineageID,
+		)
+	}
 	state := record.State
 	if record.Revision != expectedRevision || state.State != StateReviewing || state.InitialSnapshot.Identity != target || order < 0 || order >= len(state.SelectedLenses) || state.SelectedLenses[order] != lens {
 		return errors.New("capture binding does not match the current reviewing authority")
