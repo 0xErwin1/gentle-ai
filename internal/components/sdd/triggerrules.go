@@ -43,7 +43,7 @@ func RenderTriggerRules() string {
 	output.WriteString("- When a managed WorkRun exists, request exactly `gentle-ai work-status --cwd <repo> --work-run <id> --contract gentle-ai.work-status/v1 --json`.\n")
 	output.WriteString("- Apply only the zero-or-one `authorizedTransition` returned by that status using `gentle-ai work-transition apply --cwd <repo> --work-run <id> --contract gentle-ai.work-transition/v1 --authorization-ref <ref> --expected-revision <revision> --json`.\n")
 	output.WriteString("- Never synthesize alternate flags, choose a review lens, rebuild recovery policy, or retry a stale, expired, mismatched, or replayed authorization.\n")
-	output.WriteString("- If the capability is unavailable, disabled, unknown, or read-only, report the typed stop and do not fall back to prompt-owned authority. Existing SDD v1 runs continue through their SDD-specific status contract.\n")
+	output.WriteString("- After a managed WorkRun has started, a missing, stale, malformed, disabled, unavailable, empty, unknown, or read-only managed capability, contract, or result is one typed stop. Do not retry or downgrade that WorkRun or infer replacement authority; do not fall back to prompt-owned authority or legacy behavior. Before `work-start`, a dormant, unavailable, or inexact capability handshake preserves legacy direct-inline, delegated-direct, and optional-SDD behavior without pretending that a managed WorkRun exists. Existing SDD v1 runs continue through their SDD-specific status contract.\n")
 
 	return output.String()
 }

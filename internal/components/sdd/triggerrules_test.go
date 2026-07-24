@@ -3,6 +3,8 @@ package sdd
 import (
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/internal/assets"
 )
 
 func TestRenderTriggerRulesProjectsNativeOrganicRouting(t *testing.T) {
@@ -45,6 +47,42 @@ func TestRenderTriggerRulesUsesOnlyProviderIssuedTransitions(t *testing.T) {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("RenderTriggerRules() missing %q\n%s", want, rendered)
 		}
+	}
+}
+
+func TestRenderTriggerRulesKeepsPreStartEscapeAndPostStartStopConsistent(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	const legacyEscape = "legacy direct-inline, delegated-direct, and optional-SDD behavior"
+	orchestrator := assets.MustRead("generic/sdd-orchestrator.md")
+	if !strings.Contains(orchestrator, legacyEscape) ||
+		!strings.Contains(
+			orchestrator,
+			"After start, never degrade a managed WorkRun to legacy behavior",
+		) {
+		t.Fatal("canonical normal intake contract lost its pre/post-START boundary")
+	}
+
+	rendered := RenderTriggerRules()
+	for _, want := range []string{
+		"After a managed WorkRun has started",
+		"Do not retry or downgrade that WorkRun",
+		"infer replacement authority",
+		"Before `work-start`",
+		legacyEscape,
+		"without pretending that a managed WorkRun exists",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("RenderTriggerRules() missing boundary %q\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(
+		rendered,
+		"If the capability is unavailable, disabled, unknown, or read-only",
+	) {
+		t.Fatal("trigger rules retained an unconditional pre-START stop")
 	}
 }
 
