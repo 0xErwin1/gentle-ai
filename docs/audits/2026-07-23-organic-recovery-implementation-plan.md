@@ -1,7 +1,7 @@
 # Organic Recovery Architecture and Implementation Plan
 
 - **Decision date:** 2026-07-23
-- **Status:** Dormant provider foundation implemented; activation remains **NO-GO**
+- **Status:** Dormant provider implementation; 47 of 52 acceptance criteria proved; activation remains **NO-GO**
 - **Architecture baseline:** `main` at `0d95c399c79edb341e3d874032eba4654b2b3f17`
 - **Implementation baseline:** `main` at `0d216f26d1e2fdb21f6fcfbefa05a1767f92eba8`
 - **Parent architecture:** [Systemic Remediation Architecture](./2026-07-23-systemic-remediation-architecture.md)
@@ -10,14 +10,17 @@
 
 > **Decision:** Restore Gentle AI's organic “ask for the outcome” experience without removing its trust kernel. Keep byte integrity, immutable candidate identity, typed evidence, bounded review, receipts, and gate revalidation invisible behind one provider-owned safety envelope shared by multiple implementation routes. Make semantic verification proportional to applicability, risk, and cost; surface only decisions that materially affect the user's intent, exposure, or delivery.
 
-> **Implementation audit:** The provider contracts, durable owner repositories,
-> routing projection, and rollback controls are implemented, but an independent
-> end-to-end review found that the current tree cannot honestly advertise the
-> capability yet. There is no productive owner-controlled intake/start surface;
-> MMI completion evidence, post-execution resnapshot/replanning, corrected-plan
-> closure, and live PAD delivery remain disconnected. The canonical manifest
-> therefore stays dormant and the unset runtime mode stays read-only. This is a
-> safe foundation checkpoint, not completion of the product invariant.
+> **Implementation audit:** The provider now owns outcome intake and start,
+> MMI completion, semantic execution proof, verification-before-review ordering,
+> post-verification resnapshot and bounded replanning, correction closure,
+> partial/unavailable PAD exceptions, common route convergence, owner-issued
+> delivery authorization, and route-only reevaluation. The capability still
+> cannot be advertised honestly: no normal runtime consumer composes the
+> authenticated intake, semantic evaluator, live policy, Git/hosting transport,
+> and PAD executor; real-agent E2E and the Gentle Pi contract matrix are also
+> outstanding. The canonical manifest therefore stays dormant and the unset
+> runtime mode stays read-only. This is a safe provider checkpoint, not
+> completion of the product invariant.
 
 This is a recovery slice within the nine-context systemic architecture, not a replacement architecture and not a second workflow engine. It normalizes the orchestrator's existing delegation rules, makes SDD one optional implementation route, and changes the `EPD`, `RAR`, `SDD`, and `PAD` handoffs while consuming existing `HCR`, `MMI`, and `ACI` ports. Direct and delegated work must not create synthetic SDD runs. The product invariant is end-to-end: a person asks for an outcome, the system performs the necessary work and proof, and the person sees either **Ready** or one actionable decision. The slice must preserve the one-way dependency rules and authority ownership from the parent architecture.
 
@@ -590,7 +593,7 @@ Changed LOC below means **additions plus deletions**, not net growth. It include
 | 5. Implementation routing, common work ledger, and optional SDD | Normalize `direct_inline`/`delegated_direct`/`propose_sdd`, extract `WorkRunStore`, bind atomic consent and common results, and integrate SDD phase attempts/artifacts only after SDD selection. | 1,800–2,600 |
 | 6. PAD delivery intents | Add PR-with-issue, PR-without-issue, direct-main, and emergency admission with route-specific policy. | 1,300–1,900 |
 | 7. ACI projection and outcome-first UX | Project semantically equivalent delegation rules and capabilities across adapters; map common states to four product states; update skills, commands, help, diagnostics, and docs. | 1,300–2,000 |
-| 8. Test migration and architecture fitness | Remove E2E/unit tests, fixtures, and goldens that assert intentionally retired workflow behavior; replace them with cross-cutting classification matrices, route journeys, failure injection, v1 compatibility, rollback coverage, and architecture fitness not already colocated with behavior. | 2,000–3,000 |
+| 8. Test migration and architecture fitness | Retire only demonstrably obsolete prompt-router unit assertions, types, fixtures, and goldens; preserve every valid E2E, safety invariant, and legacy-v1 compatibility test; add cross-cutting classification matrices, route journeys, failure injection, rollback coverage, and architecture fitness not already colocated with behavior. | 2,000–3,000 |
 | 9. Generated mirrors and goldens | Regenerate provider assets and adapter mirrors from the exact canonical sources. | 2,000–3,800 |
 | **Total** | Full provider recovery slice. | **12,000–18,500** |
 
@@ -602,31 +605,41 @@ The implementation exceeded the forecast and must be reviewed as such:
 
 | Result | Evidence |
 |---|---|
-| Exact branch footprint | `45,524` additions + `3,886` deletions = **49,410 changed lines** across `191` files, measured against implementation baseline `0d216f26d1e2fdb21f6fcfbefa05a1767f92eba8`. |
+| Exact branch footprint | `65,538` additions + `3,950` deletions = **69,488 changed lines** across `227` files, measured against implementation baseline `0d216f26d1e2fdb21f6fcfbefa05a1767f92eba8`. |
 | Commit topology | The nine conceptual work units were decomposed into small reversible commits so identity, replay, compatibility, and activation fixes can be inspected and reverted independently. |
 | Forecast variance | Most additional volume is owner repositories, linked-worktree and stale-identity hardening, adversarial failure/replay coverage, and generated adapter projections. The variance is not treated as proof of completion. |
-| Retired coverage | The prompt-owned router, three obsolete router/release tests, and its byte golden were removed. No live repository E2E was deleted. |
+| Retired coverage | The prompt-owned router, its byte golden, and 32 obsolete prompt-router Go tests/assertions were removed with an exact migration map. No valid E2E was changed or deleted. |
 | Live E2E | The suite still defines and invokes all 113 scenarios for installation, layout, idempotency, and optional SDD. The canonical Docker matrix could not run locally because `docker` is unavailable; CI remains required. |
-| Independent acceptance audit | **NO-GO:** 35 of 52 criteria proved, 1 projection implemented but runtime-E2E unavailable, 14 not implemented, and 2 explicitly deferred to the Gentle Pi consumer. |
+| Independent acceptance audit | **NO-GO:** 47 of 52 criteria proved. Product activation still requires the normal runtime consumer, authenticated runtime/PAD composition, real-agent E2E, the Gentle Pi provider/consumer matrix, and a final adversarial audit of the exact candidate. |
 
 The audit's release blockers are architectural, not test flakes:
 
-1. No productive control-plane caller can admit PAD facts and invoke
-   `OwnerCoordinator.StartWork`; exposing raw refs would create a confused
-   deputy.
-2. `ImplementationHandoff` does not yet require owner-issued MMI
-   completion/structural-readback evidence.
-3. Clean exit zero is process evidence, not yet semantic proof of an obligation
-   or an exact toolchain.
-4. The productive flow does not yet resnapshot after HCR, replan boundedly on
-   mutation, or run final verification before freezing the review candidate.
-5. Correction-impact closure and partial/unavailable exception branching are
-   valid isolated contracts but are not connected to the owner flow.
-6. PAD validates route contracts but lacks the productive default selector,
-   live remote/protection probe, delivery executor, and route-only reevaluation
-   operation.
-7. The effective ACI overlay has no productive consumer. Advertising the
-   canonical capability would therefore be false.
+1. No normal runtime consumer accepts an outcome and invokes the provider-owned
+   intake/start surface without exposing internal authority references.
+2. No authenticated runtime composition supplies the concrete semantic
+   evaluator, live policy provisioning, exact Git candidate catalog, or
+   hosting/PAD transports. Generic CLI flags or GitHub REST calls cannot replace
+   those authorities.
+3. Direct/delegated execution and common review actors still need real-agent E2E
+   evidence rather than only provider harnesses.
+4. Gentle Pi still needs the explicit provider-version/contract matrix while
+   preserving its strict SDD v1 behavior.
+5. The exact final candidate still needs the independent adversarial audit
+   recorded by the final acceptance item.
+
+The bounded runtime/connector follow-up for the first two blockers is forecast
+in changed lines, not days:
+
+| Remaining scope | Forecast changed LOC |
+|---|---:|
+| Gentle AI composition, fail-closed preflight, candidate catalog, fixed HCR Git observations, owner execution, and local conformance tests | 3,700–5,550 |
+| Authenticated connector plus disposable-repository delivery E2E | 1,000–1,600 |
+| **Bounded 669/713 follow-up total** | **4,700–7,150** |
+
+This forecast excludes unrelated Gentle Pi product work. Without the connector,
+criteria 669 and 713 remain honestly unavailable rather than falling back to
+text-derived routing, generic argv, `HEAD`, `origin`, `gh`, or force/bypass
+flags.
 
 Commit `db6e8607` reverted the premature activation: the canonical capability is
 dormant and an unset `GENTLE_AI_WORK_ROUTING_MODE` resolves to read-only. Existing
@@ -684,7 +697,7 @@ assumed complete because adjacent unit tests pass.
 - [x] Genuinely complex or uncertain work produces the pending decision `propose_sdd`; SDD starts only after acceptance or an explicit user request, and risk alone does not force it.
 - [x] Declining SDD leads to safe scope reduction, a justified direct/delegated route, or **Needs your decision**, never silent SDD enrollment or unsafe inline continuation.
 - [x] A passive ordinary document or image launches no semantic-verification subagent and consumes no verification attempt.
-- [ ] **Pending MMI integration:** MMI still proves the intended file mutation and structural readback for passive work.
+- [x] MMI proves the intended file mutation and structural readback for passive work.
 - [x] An applicable quick check runs exactly once without prompting.
 - [x] A long or very-long check presents one forecast before any process, ordinal, credential, network effect, or paid action begins.
 - [x] An already accepted forecast is not prompted again unless its binding assumptions change.
@@ -695,35 +708,35 @@ assumed complete because adjacent unit tests pass.
 - [x] `AGENTS.md`, `SKILL.md`, prompts, policies, workflows, runtime config, active MDX, and registry-loaded content never receive the passive shortcut.
 - [x] Mixed, unknown, mode-changing, symlink, submodule, executable, or ambiguous candidates fail closed.
 - [x] A free-text or model-authored `not_applicable` claim is rejected.
-- [ ] **Pending semantic runner/toolchain authority:** Exit zero with empty output, a literal PASS, stale command/cwd/toolchain data, or stale candidate identity is rejected as proof.
+- [x] Exit zero with empty output, a literal PASS, stale command/cwd/toolchain data, or stale candidate identity is rejected as proof.
 - [x] Missing tool, timeout, cancellation, or declined execution remains incomplete and never aggregates to `complete`.
-- [ ] **Pending property coverage:** Aggregate result rules are monotonic under property tests: adding weaker/missing evidence cannot improve the outcome.
+- [x] Aggregate result rules are monotonic under property tests: adding weaker/missing evidence cannot improve the outcome.
 - [x] High-risk obligations cannot be downgraded by an adapter or low-capability actor.
 - [x] Any changed byte, path, mode, scope, policy, or required capability invalidates the applicable plan/evidence/receipt binding.
 
 ### 10.3 Implementation/RAR convergence
 
-- [ ] **Pending implementation-completion authority:** Completion of the selected implementation route and source-mutating normalization precede final functional verification; Apply/TDD and SDD phase attempts exist only on the SDD route.
+- [x] Completion of the selected implementation route and source-mutating normalization precede final functional verification; Apply/TDD and SDD phase attempts exist only on the SDD route.
 - [x] Direct, delegated, and SDD routes emit the same normalized `ImplementationHandoff` and enter identical evidence, RAR, receipt, and PAD safety gates.
 - [x] Direct and delegated runs have no `SDDRunRef`, SDD artifacts, SDD prompts, or SDD attempt budget.
-- [ ] **Pending RAR ordering change:** Applicable final functional verification precedes review identity freeze.
-- [ ] **Pending productive resnapshot/replanning:** The post-verification snapshot exactly equals the evidence subject; a mutation discards the evidence and triggers bounded replanning.
+- [x] Applicable final functional verification precedes review identity freeze.
+- [x] The post-verification snapshot exactly equals the evidence subject; a mutation discards the evidence and triggers bounded replanning.
 - [x] Native policy selects exactly zero, one, or four review lenses.
 - [x] At most one scoped candidate correction is permitted.
-- [ ] **Pending correction-closure integration:** Native owners recompute correction dependency closure and mandatory global obligations; unknown, mixed, ambiguous, security-sensitive, or high-risk impact reruns every required obligation.
-- [ ] **Pending correction-closure integration:** Only demonstrably unaffected evidence may be reused; stale affected evidence is rejected and clients/models cannot shrink the closure.
-- [ ] **Pending terminal branch integration:** Corrected verification branches explicitly: complete/not-required plus equality reaches targeted terminalization; failed/mutated stops; policy-permitted partial/unavailable follows the separate exception decision and never restarts the initial lens plan.
+- [x] Native owners recompute correction dependency closure and mandatory global obligations; unknown, mixed, ambiguous, security-sensitive, or high-risk impact reruns every required obligation.
+- [x] Only demonstrably unaffected evidence may be reused; stale affected evidence is rejected and clients/models cannot shrink the closure.
+- [x] Corrected verification branches explicitly: complete/not-required plus equality reaches targeted terminalization; failed/mutated stops; policy-permitted partial/unavailable follows the separate exception decision and never restarts the initial lens plan.
 - [x] A corrected candidate receives an exact new identity and terminal decision.
 - [x] Later post-apply, commit, push, PR, main, and release gates reuse the same valid receipt and do not relaunch review.
 
 ### 10.4 Delivery
 
-- [ ] **Pending productive route selector:** `pr_with_issue` remains the default route and validates current approved linkage.
+- [x] `pr_with_issue` remains the provider-owned default route and validates current approved linkage.
 - [x] `pr_without_issue` marks issue admission not applicable without weakening PR or safety gates.
 - [ ] **Pending live probe/executor:** `direct_main` is maintainer-authorized, validates exact remote freshness, respects protection, and never force-pushes.
 - [x] `emergency` is explicit, expiring, reasoned, candidate-bound, and auditable.
 - [x] Emergency residual risk remains recorded as `partial` or `unavailable` under a distinct PAD exception, never as PASS or a normal review receipt.
-- [ ] **Pending route-only reevaluation:** Changing only the delivery route can reuse unchanged content evidence while reevaluating route-specific governance.
+- [x] Changing only the delivery route can reuse unchanged content evidence while reevaluating route-specific governance.
 
 ### 10.5 Compatibility and operations
 
@@ -737,7 +750,7 @@ assumed complete because adjacent unit tests pass.
 - [x] E2E/unit tests, fixtures, and goldens that assert intentionally retired workflow behavior are removed with a recorded replacement or retirement rationale; CI/scripts contain no stale reference.
 - [x] Tests that still prove live safety invariants or strict legacy SDD v1 compatibility remain.
 - [x] Historical v1 verification records and receipts remain readable and retain their original authority.
-- [ ] **Pending productive ACI/intake:** Disabling the new capability produces safe read-only/unsupported diagnostics and never restores prose or consumer inference.
+- [x] Disabling the new capability produces safe read-only/unsupported diagnostics and never restores prose or consumer inference.
 - [x] The full provider test suite, asset parity suite, schema fixtures, and generated-asset checks pass.
 - [ ] **Pending after blockers:** Independent adversarial review runs against the exact final candidate, followed by no more than the one permitted correction cycle.
 
@@ -783,17 +796,16 @@ assumed complete because adjacent unit tests pass.
 ## 13. Immediate next action
 
 1. Keep the provider PR in draft and the canonical capability dormant.
-2. Add the owner-controlled PAD intake/bootstrap and production
-   `OwnerCoordinator` factory before exposing any start command.
-3. Bind MMI completion evidence, semantic runner/toolchain proof, post-HCR
-   resnapshot/replanning, and correction closure into one productive sequence.
-4. Add live PAD probes/delivery plus route-only governance reevaluation.
-5. Run the Docker E2E matrix and repeat the independent acceptance audit on the
-   exact corrected candidate.
-6. Adapt Gentle Pi only after those provider contracts are stable; add the
-   provider-version/consumer matrix there.
-7. Advertise and enable `gentle-ai.work-routing/v1` only after the complete
-   end-to-end invariant passes and a maintainer explicitly authorizes activation.
+2. Finish local validation, push the owner-authority work units, and require the
+   exact CI matrix rather than reusing results from an older head.
+3. Integrate a normal outcome-first runtime consumer and authenticated connector
+   for intake, semantic evaluation, live policy, exact Git facts, and PAD
+   delivery.
+4. Run the real-agent direct/delegated/common-review E2E journeys.
+5. Adapt Gentle Pi and prove the provider-version/consumer contract matrix.
+6. Run independent adversarial review against the exact final provider SHA.
+7. Advertise or enable `gentle-ai.work-routing/v1` only after the remaining
+   invariant passes and a maintainer explicitly authorizes activation.
 
 ## 14. References
 

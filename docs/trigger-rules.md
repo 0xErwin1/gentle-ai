@@ -85,8 +85,10 @@ contract; direct and delegated runs do not create or consume an SDD run.
 
 Unavailable, disabled, unknown, or read-only authority never becomes local
 adapter policy. The adapter remains read-only and surfaces the typed stop instead
-of inventing a transition. The canonical capability remains dormant until a
-productive owner-controlled intake and start surface is available.
+of inventing a transition. The provider-owned outcome intake and start surface
+exists, but the canonical capability remains dormant until a normal runtime
+consumer composes it with authenticated intake, semantic-evaluation, live-policy,
+and PAD delivery authorities.
 
 ## Installation and refresh
 
