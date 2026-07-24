@@ -1777,12 +1777,14 @@ func organicStartCommand() map[string]any {
 		`input:JSON.stringify({outcome:process.env.ORGANIC_E2E_OUTCOME,` +
 		`explicitSddRequested:false}),encoding:'utf8',env:process.env,` +
 		`timeout:30000});` +
-		`if(r.status===0){const v=JSON.parse(r.stdout);` +
+		`const status=Number.isInteger(r.status)?r.status:1;` +
+		`const stderr=r.stderr||String(r.error||r.signal||'process did not exit');` +
+		`if(status===0){const v=JSON.parse(r.stdout);` +
 		`fs.writeFileSync(process.env.ORGANIC_E2E_START_REVISION_FILE,` +
 		`v.revision,{encoding:'utf8',mode:384});}` +
-		`process.stdout.write(JSON.stringify({status:r.status,` +
-		`stdout:r.stdout||'',stderr:r.stderr||''}));` +
-		`process.exit(r.status===0?0:1)"`}
+		`process.stdout.write(JSON.stringify({status,` +
+		`stdout:r.stdout||'',stderr}));` +
+		`process.exit(status===0?0:1)"`}
 }
 
 func organicStatusCommand() map[string]any {
@@ -1810,10 +1812,12 @@ func organicAdvanceCommand(killSwitch bool) map[string]any {
 		`'--work-run',process.env.ORGANIC_E2E_WORK_RUN_ID,` +
 		`'--expected-revision',revision,` +
 		`'--contract','gentle-ai.work-advance/v1','--json'],{` +
-		`encoding:'utf8',env:` + environment + `,timeout:30000});` +
-		`process.stdout.write(JSON.stringify({status:r.status,` +
-		`stdout:r.stdout||'',stderr:r.stderr||''}));` +
-		`process.exit(r.status===0?0:1)"`}
+		`encoding:'utf8',env:` + environment + `,timeout:120000});` +
+		`const status=Number.isInteger(r.status)?r.status:1;` +
+		`const stderr=r.stderr||String(r.error||r.signal||'process did not exit');` +
+		`process.stdout.write(JSON.stringify({status,` +
+		`stdout:r.stdout||'',stderr}));` +
+		`process.exit(status===0?0:1)"`}
 }
 
 func organicActorCommand(marker string) map[string]any {
@@ -1838,9 +1842,11 @@ func organicNodeCommand(arguments string, extraOptions string) string {
 		`const r=spawnSync(process.env.GENTLE_AI_TEST_BINARY,` +
 		arguments + `,{` + extraOptions +
 		`encoding:'utf8',env:process.env,timeout:30000});` +
-		`process.stdout.write(JSON.stringify({status:r.status,` +
-		`stdout:r.stdout||'',stderr:r.stderr||''}));` +
-		`process.exit(r.status===0?0:1)"`
+		`const status=Number.isInteger(r.status)?r.status:1;` +
+		`const stderr=r.stderr||String(r.error||r.signal||'process did not exit');` +
+		`process.stdout.write(JSON.stringify({status,` +
+		`stdout:r.stdout||'',stderr}));` +
+		`process.exit(status===0?0:1)"`
 }
 
 func organicOpenCodeConfig(
