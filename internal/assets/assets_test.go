@@ -19,7 +19,8 @@ func TestOrchestratorsProjectOrganicRoutingAndNativeAuthority(t *testing.T) {
 			"Context rule", "reading that prepares a write", "broad research",
 			"Per-action rule", "Optional SDD rule",
 			"explicit request or accepted proposal", "risk alone never forces SDD",
-			"Native authority rule", "gentle-ai.work-status/v1", "gentle-ai.work-transition/v1",
+			"Native authority rule", "gentle-ai.work-status/v1", "gentle-ai.work-advance/v1", "gentle-ai.work-transition/v1",
+			"`work-status` is read-only", "cannot advance or terminalize",
 			"zero-or-one exact `authorizedTransition`", "Capability stop rule",
 		} {
 			if !strings.Contains(content, required) {
@@ -89,6 +90,7 @@ func TestOrchestratorsNegotiateNormalWorkIntake(t *testing.T) {
 			"binds `repositoryRef` to the current repository",
 			"`workRouting.exposure` as `advertised`",
 			"`contracts.start` as exactly `gentle-ai.work-start/v1`",
+			"`contracts.advance` as exactly `gentle-ai.work-advance/v1`",
 			"non-empty `connectorSessionRef`",
 			"Start with outcome only",
 			"exactly two request keys",
@@ -104,10 +106,10 @@ func TestOrchestratorsNegotiateNormalWorkIntake(t *testing.T) {
 			"do not invent a WorkRun, retry, or fall back to legacy execution",
 			"stop once as unavailable or ambiguous because a mutation may have started",
 			"retain the returned `workRunId`, `revision`",
-			"internally for later status and transition calls",
+			"internally for the post-actor advance, read-only status, and exact transition calls",
 			"Never expose handshake vocabulary",
 			"route, agent, repository, policy, hash, nonce, issue, pull request, or delivery mechanism",
-			"capability response is dormant, unavailable, unauthenticated, malformed, or unsupported",
+			"omits either exact start or advance advertisement",
 			"do not call `work-start` and never infer support",
 			"legacy direct-inline, delegated-direct, and optional-SDD behavior",
 			"without pretending that a managed WorkRun exists",
@@ -1222,13 +1224,140 @@ func TestSDDOrchestratorsUseExactWorkRunTransitionContract(t *testing.T) {
 			content := MustRead(path)
 			for _, required := range []string{
 				"gentle-ai work-status --cwd <repo> --work-run <id> --contract gentle-ai.work-status/v1 --json",
+				"`work-status` is read-only",
+				"it cannot advance or terminalize the run",
 				"zero-or-one exact `authorizedTransition`",
 				"gentle-ai work-transition apply",
 				"Never choose review lenses, invent transitions, reconstruct flags, or infer PASS from prose",
-				"Never fall back to prompt-owned authority",
+				"Do not retry the mutation or fall back to legacy or prompt-owned authority",
 			} {
 				if !strings.Contains(content, required) {
 					t.Fatalf("%s missing exact WorkRun transition guard %q", path, required)
+				}
+			}
+		})
+	}
+}
+
+func TestSDDOrchestratorsUseExactPostActorWorkAdvanceContract(t *testing.T) {
+	const advanceCommand = "gentle-ai work-advance --cwd <repo> --work-run <id> --expected-revision <sha256> --contract gentle-ai.work-advance/v1 --json"
+	paths := allSDDOrchestratorAssetPaths(t)
+	if len(paths) != 12 {
+		t.Fatalf("post-actor work-advance parity covers %d orchestrators, want 12", len(paths))
+	}
+
+	parityLabels := []string{
+		"**Native authority rule**",
+		"**Capability stop rule**",
+		"**Require effective authenticated advertisement**",
+		"**Keep authority invisible**",
+		"**Preserve legacy behavior**",
+		"**Post-actor advance rule**",
+		"**Advance result rule**",
+	}
+	parity := make(map[string]string, len(parityLabels))
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			checking := markdownSection(content, "#### Native Checking Contract")
+			if checking == "" {
+				t.Fatalf("%s missing Native Checking Contract", path)
+			}
+			for _, required := range []string{
+				"selected implementation actor has completed the authorized edit",
+				"explicitly created the candidate commit",
+				"invoke exactly once",
+				advanceCommand,
+				"using the retained `workRunId` and current returned `revision`",
+				"The provider never creates or guesses the commit",
+				"exact `gentle-ai.work-advance/v1` schema and contract",
+				"`previousRevision` bound to the requested CAS",
+				"nested status bound to the same WorkRun",
+				"`work-status` only as a read-only observation",
+				"nested status's zero-or-one exact `authorizedTransition`",
+				"never retry, fall back to legacy execution, reconstruct authority",
+				"invent candidate, verification, receipt, delivery, or PASS facts",
+			} {
+				if !strings.Contains(checking, required) {
+					t.Fatalf("%s native checking contract missing post-actor advance rule %q", path, required)
+				}
+			}
+			if count := strings.Count(content, advanceCommand); count != 1 {
+				t.Fatalf("%s exact work-advance command count = %d, want 1", path, count)
+			}
+			actor := strings.Index(checking, "selected implementation actor has completed")
+			commit := strings.Index(checking, "explicitly created the candidate commit")
+			advance := strings.Index(checking, advanceCommand)
+			if actor < 0 || commit <= actor || advance <= commit {
+				t.Fatalf("%s must order actor completion, explicit candidate commit, then work-advance", path)
+			}
+
+			for _, label := range parityLabels {
+				line := markdownLineContaining(content, label)
+				if line == "" {
+					t.Fatalf("%s missing parity line %q", path, label)
+				}
+				if want, ok := parity[label]; ok {
+					if line != want {
+						t.Fatalf("%s diverged from all-orchestrator parity for %q\nwant: %s\ngot:  %s", path, label, want, line)
+					}
+				} else {
+					parity[label] = line
+				}
+			}
+		})
+	}
+}
+
+func TestSDDOrchestratorsFailClosedAfterManagedWorkAdvanceBoundary(t *testing.T) {
+	paths := allSDDOrchestratorAssetPaths(t)
+	if len(paths) != 12 {
+		t.Fatalf("managed work-advance failure coverage covers %d orchestrators, want 12", len(paths))
+	}
+
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			stopRule := markdownLineContaining(content, "**Capability stop rule**")
+			advanceRule := markdownLineContaining(content, "**Advance result rule**")
+			intake := markdownSection(content, "#### Normal Work Intake Contract (MANDATORY)")
+			for _, required := range []string{
+				"missing, stale, malformed, disabled, unavailable, empty, or unknown",
+				"`work-advance`",
+				"one typed **Needs your decision** stop",
+				"Do not retry the mutation",
+				"fall back to legacy or prompt-owned authority for an existing WorkRun",
+			} {
+				if !strings.Contains(stopRule, required) {
+					t.Fatalf("%s capability stop rule missing fail-closed clause %q", path, required)
+				}
+			}
+			afterStart := strings.Index(stopRule, "after a managed WorkRun has started")
+			stop := strings.Index(stopRule, "becomes one typed **Needs your decision** stop")
+			noFallback := strings.Index(stopRule, "Do not retry the mutation")
+			beforeStart := strings.Index(stopRule, "Before start")
+			if afterStart < 0 || stop <= afterStart || noFallback <= stop || beforeStart <= noFallback {
+				t.Fatalf("%s must state managed stop/no-fallback before the pre-start legacy carve-out", path)
+			}
+			for _, required := range []string{
+				"If advance is missing, stale, malformed, disabled, unavailable, empty, or unknown",
+				"preserve any typed result and stop once as **Needs your decision**",
+				"never retry, fall back to legacy execution",
+			} {
+				if !strings.Contains(advanceRule, required) {
+					t.Fatalf("%s advance result rule missing fail-closed clause %q", path, required)
+				}
+			}
+			for _, required := range []string{
+				"`contracts.start` as exactly `gentle-ai.work-start/v1`",
+				"`contracts.advance` as exactly `gentle-ai.work-advance/v1`",
+				"omits either exact start or advance advertisement",
+				"do not call `work-start`",
+				"legacy direct-inline, delegated-direct, and optional-SDD behavior",
+			} {
+				if !strings.Contains(intake, required) {
+					t.Fatalf("%s pre-start capability boundary missing %q", path, required)
 				}
 			}
 		})
