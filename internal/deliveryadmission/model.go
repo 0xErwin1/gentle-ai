@@ -1,5 +1,6 @@
-// Package deliveryadmission defines PAD-owned delivery contracts. It is
-// intentionally dormant: nothing here mutates Git, GitHub, or workflow state.
+// Package deliveryadmission defines PAD-owned delivery contracts and use cases.
+// It never shells out or reconstructs Git/GitHub commands: live observation and
+// delivery effects cross explicit typed ports owned by their runtime adapters.
 package deliveryadmission
 
 import (

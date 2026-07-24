@@ -37,6 +37,9 @@ type AuthorizationUse struct {
 	Schema                 string             `json:"schema"`
 	Kind                   AuthorizationKind  `json:"kind"`
 	AuthorizationRef       string             `json:"authorizationRef"`
+	ExecutionCommandRef    string             `json:"executionCommandRef,omitempty"`
+	LiveGateRef            string             `json:"liveGateRef,omitempty"`
+	ExecutionExpiresAt     int64              `json:"executionExpiresAt,omitempty"`
 	DecisionRef            string             `json:"decisionRef"`
 	IntentRef              string             `json:"intentRef"`
 	Route                  Route              `json:"route"`
@@ -63,6 +66,25 @@ func (use AuthorizationUse) Validate() error {
 	} {
 		if err := validateDigest(name, ref); err != nil {
 			return err
+		}
+	}
+	hasExecutionCommand := use.ExecutionCommandRef != ""
+	hasLiveGate := use.LiveGateRef != ""
+	hasExecutionExpiry := use.ExecutionExpiresAt != 0
+	if hasExecutionCommand != hasLiveGate ||
+		hasExecutionCommand != hasExecutionExpiry {
+		return fmt.Errorf("%w: partial delivery execution reservation", ErrInvalid)
+	}
+	if hasExecutionCommand {
+		if err := validateDigest("use.executionCommandRef", use.ExecutionCommandRef); err != nil {
+			return err
+		}
+		if err := validateDigest("use.liveGateRef", use.LiveGateRef); err != nil {
+			return err
+		}
+		if use.ExecutionExpiresAt <= use.ConsumedAt ||
+			use.ExecutionExpiresAt > use.AuthorizationExpiresAt {
+			return fmt.Errorf("%w: invalid delivery execution deadline", ErrInvalid)
 		}
 	}
 	if err := use.Candidate.validate(); err != nil {
