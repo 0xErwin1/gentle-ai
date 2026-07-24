@@ -445,7 +445,8 @@ func (store Store) objectPath(kind, ref, suffix string, create bool) (string, er
 		return "", errors.New("immutable evidence ref must be lowercase SHA-256")
 	}
 	switch kind {
-	case "tickets", "executions", "diagnostics", "ticket-slots", "ticket-executions":
+	case "tickets", "executions", "diagnostics", "ticket-slots",
+		"ticket-executions", "semantic-authority-seeds":
 	default:
 		return "", errors.New("unsupported immutable evidence object kind")
 	}
