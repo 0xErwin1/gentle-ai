@@ -658,6 +658,16 @@ retired:
 | Trigger action/event types and their tests in `internal/model` | Public model enums that let prompts reconstruct owner policy | No compatibility replacement: reconstruction is intentionally forbidden; typed owner contracts replace it |
 | `internal/testdata/golden/trigger-rules-default.golden` | Byte golden for the retired prompt router | Semantic route assertions across every supported orchestrator projection |
 
+The rows above account for 15 named test functions. Seventeen additional
+prompt-router assertions were removed from retained test files.
+Their exact migration is:
+
+| Retained test file | Removed assertions | Replacement authority or assertion |
+|---|---|---|
+| `internal/assets/assets_test.go` (5) | `TestOrchestratorsRequireNonSkippableGeneralDelegationTriggers`<br>`TestOrchestratorLifecycleGatesRetainKnownLineage`<br>`TestSDDOrchestratorsUseTheZeroHelpNativeTransitionBootstrap`<br>`TestSDDStatusContractMatchesNativeShape`<br>`TestSDDOrchestratorsRouteFreshReviewsToConcreteReviewLenses` | `TestOrchestratorsProjectOrganicRoutingAndNativeAuthority`, `TestSDDOrchestratorsUseExactWorkRunTransitionContract`, `TestSDDStatusContractPreservesFrozenExternalV1Projection`, and `TestSDDOrchestratorsProjectNativeCheckingWithoutPromptOwnedLenses` assert the canonical delegation projection, exact provider-issued transitions, frozen SDD v1 compatibility, and owner-selected checking. |
+| `internal/components/sdd/inject_test.go` (2) | `TestInjectOpenCodeUpgradesV1DelegationLensTable`<br>`TestEnsurePreservedOpenCodeDelegationHardGatesMigratesCanonicalReviewCommand` | `TestInjectOpenCodeUpgradesPromptOwnedLensRouter`, `TestEnsurePreservedOpenCodeDelegationHardGatesMigratesToNativeTransition`, and `TestEnsurePreservedOpenCodeDelegationHardGatesPreservesUnmarkedUserTail` prove migration to native authority without deleting user-owned prompt content. |
+| `internal/components/sdd/triggerrules_test.go` (10) | `TestRenderTriggerRules_Deterministic`<br>`TestRenderTriggerRules_UsesBoundedReceiptLifecycle`<br>`TestRenderTriggerRules_MarkerFree`<br>`TestRenderTriggerRules_DeterministicRouterNote`<br>`TestRenderTriggerRules_TriageTiers`<br>`TestRenderTriggerRules_RiskTableScopeParity`<br>`TestRenderTriggerRules_ModeWording`<br>`TestRenderTriggerRules_WhenPhrasing`<br>`TestRenderTriggerRules_LineBudget`<br>`TestRenderTriggerRules_Golden` | The four current `TestRenderTriggerRules*` assertions cover deterministic/scannable rendering, canonical organic routing, exact provider-issued transitions, marker-free output, and explicit absence of prompt-owned review ceremony. |
+
 ## 10. Acceptance evidence
 
 Checked items are proved by the provider suite on the audited branch. Unchecked
