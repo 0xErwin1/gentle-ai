@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -60,6 +59,7 @@ type coordinationRepositoryIdentity struct {
 	repositoryInfo     fs.FileInfo
 	commonInfo         fs.FileInfo
 	gitDirInfo         fs.FileInfo
+	lease              *reviewtransaction.RepositoryIdentityLease
 }
 
 // CoordinationAuthorityStore is bound to one exact Git identity and WorkRun.
@@ -81,13 +81,34 @@ func OpenCoordinationAuthorityStore(
 	workRunID string,
 	plans RARPlanAuthorityPort,
 ) (*CoordinationAuthorityStore, error) {
+	lease, err := reviewtransaction.OpenRepositoryIdentityLease(ctx, repo)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"resolve coordination repository identity: %w",
+			err,
+		)
+	}
+	return openCoordinationAuthorityStoreWithLease(
+		ctx,
+		lease,
+		workRunID,
+		plans,
+	)
+}
+
+func openCoordinationAuthorityStoreWithLease(
+	ctx context.Context,
+	lease *reviewtransaction.RepositoryIdentityLease,
+	workRunID string,
+	plans RARPlanAuthorityPort,
+) (*CoordinationAuthorityStore, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if err := validateCoordinationWorkRunID(workRunID); err != nil {
 		return nil, err
 	}
-	identity, err := resolveCoordinationRepositoryIdentity(ctx, repo)
+	identity, err := coordinationRepositoryIdentityFromLease(ctx, lease)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"resolve coordination repository identity: %w",
@@ -687,33 +708,28 @@ func (store *CoordinationAuthorityStore) validateIdentity(
 	if store == nil ||
 		store.identity.repositoryRoot == "" ||
 		store.identity.gitCommonDir == "" ||
-		store.identity.gitDir == "" {
+		store.identity.gitDir == "" ||
+		store.identity.lease == nil {
 		return errors.New("coordination authority store is not initialized")
 	}
-	live, err := resolveCoordinationRepositoryIdentity(
-		ctx,
-		store.identity.repositoryRoot,
-	)
-	if err != nil {
-		return err
+	if err := store.identity.lease.Validate(ctx); err != nil {
+		return errors.Join(
+			ErrCoordinationAuthorityStale,
+			fmt.Errorf("Git repository identity changed: %w", err),
+		)
 	}
-	if live.repositoryIdentity != store.identity.repositoryIdentity ||
-		!sameCoordinationDirectory(
-			live.repositoryRoot,
-			store.identity.repositoryRoot,
-		) ||
-		!sameCoordinationDirectory(
-			live.gitCommonDir,
-			store.identity.gitCommonDir,
-		) ||
-		!sameCoordinationDirectory(live.gitDir, store.identity.gitDir) {
+	live := store.identity.lease.Identity()
+	if live.RepositoryRef != store.identity.repositoryIdentity ||
+		live.RepositoryRoot != store.identity.repositoryRoot ||
+		live.GitCommonDir != store.identity.gitCommonDir ||
+		live.GitDir != store.identity.gitDir {
 		return fmt.Errorf(
 			"%w: Git repository identity changed",
 			ErrCoordinationAuthorityStale,
 		)
 	}
 	wantRoot := filepath.Join(
-		live.gitCommonDir,
+		live.GitCommonDir,
 		"gentle-ai",
 		"work-provider",
 		"coordination-authority",
@@ -1040,36 +1056,30 @@ func resolveCoordinationRepositoryIdentity(
 	if err := ctx.Err(); err != nil {
 		return coordinationRepositoryIdentity{}, err
 	}
-	repositoryRoot, err := (reviewtransaction.SnapshotBuilder{
-		Repo: repo,
-	}).ResolveRepositoryRoot(ctx)
+	lease, err := reviewtransaction.OpenRepositoryIdentityLease(ctx, repo)
 	if err != nil {
 		return coordinationRepositoryIdentity{}, err
 	}
-	paths, err := queryCoordinationGitDirectories(ctx, repositoryRoot)
-	if err != nil {
-		return coordinationRepositoryIdentity{}, err
-	}
-	if !sameCoordinationDirectory(repositoryRoot, paths[0]) {
+	return coordinationRepositoryIdentityFromLease(ctx, lease)
+}
+
+func coordinationRepositoryIdentityFromLease(
+	ctx context.Context,
+	lease *reviewtransaction.RepositoryIdentityLease,
+) (coordinationRepositoryIdentity, error) {
+	if lease == nil {
 		return coordinationRepositoryIdentity{}, errors.New(
-			"coordination repository root changed during Git resolution",
+			"coordination repository identity lease is required",
 		)
 	}
-	probe, err := reviewtransaction.CompactAuthoritativeStore(
-		ctx,
-		repositoryRoot,
-		"coordination-authority-probe",
-	)
-	if err != nil {
+	if err := lease.Validate(ctx); err != nil {
 		return coordinationRepositoryIdentity{}, err
 	}
-	probeCommon := filepath.Dir(
-		filepath.Dir(filepath.Dir(filepath.Dir(probe.Dir))),
-	)
-	if !sameCoordinationDirectory(probeCommon, paths[1]) {
-		return coordinationRepositoryIdentity{}, errors.New(
-			"coordination Git common-dir differs from native review authority",
-		)
+	value := lease.Identity()
+	paths := [...]string{
+		value.RepositoryRoot,
+		value.GitCommonDir,
+		value.GitDir,
 	}
 	infos := make([]fs.FileInfo, len(paths))
 	for index, path := range paths {
@@ -1086,127 +1096,25 @@ func resolveCoordinationRepositoryIdentity(
 		}
 		infos[index] = info
 	}
-	second, err := queryCoordinationGitDirectories(ctx, repositoryRoot)
-	if err != nil {
+	if err := lease.Validate(ctx); err != nil {
 		return coordinationRepositoryIdentity{}, err
 	}
-	for index, path := range paths {
-		current, statErr := os.Lstat(path)
-		if statErr != nil ||
-			!sameCoordinationDirectory(path, second[index]) ||
-			!os.SameFile(infos[index], current) {
-			return coordinationRepositoryIdentity{}, errors.New(
-				"coordination Git identity changed during resolution",
-			)
-		}
-	}
 	identity := coordinationRepositoryIdentity{
-		repositoryRoot: repositoryRoot,
+		repositoryRoot: paths[0],
 		gitCommonDir:   paths[1],
 		gitDir:         paths[2],
 		repositoryInfo: infos[0],
 		commonInfo:     infos[1],
 		gitDirInfo:     infos[2],
+		lease:          lease,
 	}
 	identity.repositoryIdentity = coordinationRepositoryIdentityDigest(identity)
+	if identity.repositoryIdentity != value.RepositoryRef {
+		return coordinationRepositoryIdentity{}, errors.New(
+			"coordination repository identity differs from shared lease",
+		)
+	}
 	return identity, nil
-}
-
-func queryCoordinationGitDirectories(
-	ctx context.Context,
-	repositoryRoot string,
-) ([3]string, error) {
-	var result [3]string
-	command := exec.CommandContext(
-		ctx,
-		"git",
-		"--no-replace-objects",
-		"-C",
-		repositoryRoot,
-		"rev-parse",
-		"--path-format=absolute",
-		"--show-toplevel",
-		"--git-common-dir",
-		"--git-dir",
-	)
-	command.Env = sanitizedCoordinationGitEnvironment(os.Environ())
-	output, err := command.Output()
-	if err != nil {
-		return result, fmt.Errorf("resolve coordination Git identity: %w", err)
-	}
-	lines := strings.Split(strings.TrimSuffix(string(output), "\n"), "\n")
-	if len(lines) != len(result) {
-		return result, errors.New(
-			"coordination Git identity returned an unexpected path count",
-		)
-	}
-	for index, line := range lines {
-		line = strings.TrimSuffix(line, "\r")
-		path, pathErr := canonicalCoordinationDirectory(
-			repositoryRoot,
-			line,
-		)
-		if pathErr != nil {
-			return result, pathErr
-		}
-		result[index] = path
-	}
-	return result, nil
-}
-
-func sanitizedCoordinationGitEnvironment(environment []string) []string {
-	result := make([]string, 0, len(environment)+4)
-	for _, entry := range environment {
-		name, _, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(strings.ToUpper(name), "GIT_") ||
-			strings.EqualFold(name, "LC_ALL") {
-			continue
-		}
-		result = append(result, entry)
-	}
-	return append(
-		result,
-		"LC_ALL=C",
-		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_CONFIG_SYSTEM="+os.DevNull,
-		"GIT_CONFIG_GLOBAL="+os.DevNull,
-	)
-}
-
-func canonicalCoordinationDirectory(base, value string) (string, error) {
-	if value == "" || value != strings.TrimSpace(value) ||
-		strings.ContainsAny(value, "\x00\r\n") ||
-		strings.HasPrefix(value, "-") {
-		return "", errors.New("coordination Git directory path is invalid")
-	}
-	path := value
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(base, path)
-	}
-	path, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	path = filepath.Clean(path)
-	canonical, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		return "", err
-	}
-	canonical = filepath.Clean(canonical)
-	if canonical != path {
-		return "", errors.New(
-			"coordination Git directory contains a symlink or reparse point",
-		)
-	}
-	info, err := os.Lstat(canonical)
-	if err != nil || !info.IsDir() ||
-		coordinationPathUnsafe(canonical, info) {
-		if err != nil {
-			return "", err
-		}
-		return "", errors.New("coordination Git path is not a safe directory")
-	}
-	return canonical, nil
 }
 
 func coordinationRepositoryIdentityDigest(

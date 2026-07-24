@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
 
@@ -154,6 +155,139 @@ func TestTransitionAuthorityStoreExactSlotClaimAndcompletionReplay(t *testing.T)
 	)
 	if err != nil || phase != TransitionCompleted {
 		t.Fatalf("completed resolve phase = %q, %v", phase, err)
+	}
+}
+
+func TestTransitionAuthorityStoreIsolatesLinkedWorktreesWithSameRun(
+	t *testing.T,
+) {
+	repo := initProductionRepositoryGit(t)
+	linked := filepath.Join(t.TempDir(), "linked")
+	runProductionGit(
+		t,
+		repo,
+		"worktree",
+		"add",
+		"-qb",
+		"transition-linked-isolation",
+		linked,
+		"HEAD",
+	)
+	t.Cleanup(func() {
+		runProductionGit(t, repo, "worktree", "remove", "--force", linked)
+	})
+
+	mainStore, err := OpenTransitionAuthorityStore(
+		context.Background(),
+		repo,
+		"shared-transition-run",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linkedStore, err := OpenTransitionAuthorityStore(
+		context.Background(),
+		linked,
+		"shared-transition-run",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mainStore.identity.repositoryIdentity ==
+		linkedStore.identity.repositoryIdentity {
+		t.Fatal("linked transition stores share a repository identity")
+	}
+
+	authorization := validVerificationTransitionAuthorization(t)
+	authorization.WorkRunID = "shared-transition-run"
+	authorization.AuthorizationRef, err =
+		verificationTransitionAuthorizationRef(authorization)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mainStore.PublishAuthorization(
+		context.Background(),
+		authorization,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if current, err := linkedStore.CurrentAuthorization(
+		context.Background(),
+		authorization.ExpectedRevision,
+		15,
+	); err != nil || current != nil {
+		t.Fatalf(
+			"linked worktree observed main authorization: %#v, %v",
+			current,
+			err,
+		)
+	}
+	if err := linkedStore.PublishAuthorization(
+		context.Background(),
+		authorization,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := mainStore.withAuthorizationLock(
+		context.Background(),
+		authorization.AuthorizationRef,
+		func() error { return mainStore.markClaimed(authorization, 15) },
+	); err != nil {
+		t.Fatal(err)
+	}
+	current, err := linkedStore.CurrentAuthorization(
+		context.Background(),
+		authorization.ExpectedRevision,
+		15,
+	)
+	if err != nil || current == nil {
+		t.Fatalf(
+			"main claim affected linked transition shard: %#v, %v",
+			current,
+			err,
+		)
+	}
+}
+
+func TestTransitionAuthorityStoreRejectsReplacedGitIdentityWithoutWriting(
+	t *testing.T,
+) {
+	repo := initProductionRepositoryGit(t)
+	store, err := OpenTransitionAuthorityStore(
+		context.Background(),
+		repo,
+		"transition-git-swap",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalGit := filepath.Join(repo, ".git")
+	if err := os.Rename(
+		originalGit,
+		filepath.Join(repo, ".git-retired"),
+	); err != nil {
+		t.Skipf("cannot replace Git control directory on this platform: %v", err)
+	}
+	runProductionGit(t, repo, "init")
+
+	if _, err := store.HasIndeterminate(context.Background()); !errors.Is(
+		err,
+		reviewtransaction.ErrRepositoryIdentityChanged,
+	) {
+		t.Fatalf("HasIndeterminate() after Git replacement error = %v", err)
+	}
+	replacementRoot := filepath.Join(
+		originalGit,
+		"gentle-ai",
+		"work-provider",
+		"coordination-authority",
+		coordinationRootVersion,
+	)
+	if _, err := os.Lstat(replacementRoot); !os.IsNotExist(err) {
+		t.Fatalf(
+			"stale transition handle wrote replacement Git identity: %v",
+			err,
+		)
 	}
 }
 

@@ -29,37 +29,46 @@ func (ProductionRepositoryOpener) OpenRepository(
 	repo string,
 	workRunID string,
 ) (Repository, error) {
-	padAuthority, err := NewPADRepositoryAuthority(ctx, repo)
+	lease, err := reviewtransaction.OpenRepositoryIdentityLease(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
-	repositoryRoot := padAuthority.identity.repositoryRoot
+	padAuthority, err := newPADRepositoryAuthorityWithLease(ctx, lease)
+	if err != nil {
+		return nil, err
+	}
+	repositoryRoot := lease.Identity().RepositoryRoot
 	pad, err := NewPADWorkRunAdapter(padAuthority)
 	if err != nil {
 		return nil, err
 	}
-	rar, err := reviewtransaction.OpenRARAuthorityRepository(ctx, repositoryRoot)
+	rar, err := reviewtransaction.
+		OpenRARAuthorityRepositoryWithRepositoryIdentityLease(ctx, lease)
 	if err != nil {
 		return nil, err
 	}
-	coordination, err := OpenCoordinationAuthorityStore(
+	coordination, err := openCoordinationAuthorityStoreWithLease(
 		ctx,
-		repositoryRoot,
+		lease,
 		workRunID,
 		rar,
 	)
 	if err != nil {
 		return nil, err
 	}
-	transitions, err := OpenTransitionAuthorityStore(
+	transitions, err := openTransitionAuthorityStoreWithLease(
 		ctx,
-		repositoryRoot,
+		lease,
 		workRunID,
 	)
 	if err != nil {
 		return nil, err
 	}
-	store, err := workrun.OpenWorkRunStore(ctx, repositoryRoot, workRunID)
+	store, err := workrun.OpenWorkRunStoreWithRepositoryIdentityLease(
+		ctx,
+		lease,
+		workRunID,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +93,7 @@ func (ProductionRepositoryOpener) OpenRepository(
 		Plans:       rar,
 		Executor:    executor,
 		OpenEvidence: func(ctx context.Context) (evidence.Store, error) {
-			return evidence.OpenStore(ctx, repositoryRoot)
+			return evidence.OpenStoreWithRepositoryIdentityLease(ctx, lease)
 		},
 	}, nil
 }

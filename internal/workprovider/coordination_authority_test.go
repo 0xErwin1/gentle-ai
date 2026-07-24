@@ -205,6 +205,54 @@ func TestCoordinationExplicitSDDRequestPrecedesRouteDecision(t *testing.T) {
 	}
 }
 
+func TestCoordinationStoreRejectsReplacedGitIdentityWithoutPublishing(
+	t *testing.T,
+) {
+	repo := initCoordinationRepository(t)
+	store, err := OpenCoordinationAuthorityStore(
+		context.Background(),
+		repo,
+		"coordination-git-swap",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalGit := filepath.Join(repo, ".git")
+	if err := os.Rename(
+		originalGit,
+		filepath.Join(repo, ".git-retired"),
+	); err != nil {
+		t.Skipf("cannot replace Git control directory on this platform: %v", err)
+	}
+	runCoordinationGit(t, repo, "init")
+
+	_, err = store.ResolveExplicitSDDRequest(
+		context.Background(),
+		coordinationTestRef("missing-after-swap"),
+	)
+	if !errors.Is(err, ErrCoordinationAuthorityStale) ||
+		!errors.Is(err, reviewtransaction.ErrRepositoryIdentityChanged) {
+		t.Fatalf(
+			"ResolveExplicitSDDRequest() after Git replacement error = %v",
+			err,
+		)
+	}
+	replacementRoot := filepath.Join(
+		originalGit,
+		"gentle-ai",
+		"work-provider",
+		"coordination-authority",
+		coordinationRootVersion,
+	)
+	if _, err := os.Lstat(replacementRoot); !os.IsNotExist(err) {
+		t.Fatalf(
+			"stale coordination handle wrote replacement Git identity: %v",
+			err,
+		)
+	}
+}
+
 func TestCoordinationAuthorityExactReplayAndConflict(t *testing.T) {
 	fixture := newCoordinationFixture(t, "coordination-replay")
 	ctx := context.Background()

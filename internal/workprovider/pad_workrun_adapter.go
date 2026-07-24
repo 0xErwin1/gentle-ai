@@ -5,10 +5,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/deliveryadmission"
+	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
 
@@ -29,7 +29,18 @@ func NewPADRepositoryAuthority(
 	ctx context.Context,
 	repo string,
 ) (*PADRepositoryAuthority, error) {
-	identity, err := resolveCoordinationRepositoryIdentity(ctx, repo)
+	lease, err := reviewtransaction.OpenRepositoryIdentityLease(ctx, repo)
+	if err != nil {
+		return nil, fmt.Errorf("resolve PAD repository authority: %w", err)
+	}
+	return newPADRepositoryAuthorityWithLease(ctx, lease)
+}
+
+func newPADRepositoryAuthorityWithLease(
+	ctx context.Context,
+	lease *reviewtransaction.RepositoryIdentityLease,
+) (*PADRepositoryAuthority, error) {
+	identity, err := coordinationRepositoryIdentityFromLease(ctx, lease)
 	if err != nil {
 		return nil, fmt.Errorf("resolve PAD repository authority: %w", err)
 	}
@@ -57,40 +68,27 @@ func (authority *PADRepositoryAuthority) ResolveDeliveryRepository(
 		repositoryRef != authority.RepositoryRef() {
 		return "", ErrPADRepositoryAuthorityMismatch
 	}
-	live, err := resolveCoordinationRepositoryIdentity(
-		ctx,
-		authority.identity.repositoryRoot,
-	)
-	if err != nil {
+	if authority.identity.lease == nil {
+		return "", ErrPADRepositoryAuthorityMismatch
+	}
+	if err := authority.identity.lease.Validate(ctx); err != nil {
 		return "", fmt.Errorf(
-			"%w: re-resolve Git identity: %w",
+			"%w: revalidate Git identity: %w",
 			ErrPADRepositoryAuthorityMismatch,
 			err,
 		)
 	}
-	if live.repositoryIdentity != authority.identity.repositoryIdentity ||
-		!samePADRepositoryObject(
-			live.repositoryInfo,
-			authority.identity.repositoryInfo,
-		) ||
-		!samePADRepositoryObject(
-			live.commonInfo,
-			authority.identity.commonInfo,
-		) ||
-		!samePADRepositoryObject(
-			live.gitDirInfo,
-			authority.identity.gitDirInfo,
-		) {
+	live := authority.identity.lease.Identity()
+	if live.RepositoryRef != authority.identity.repositoryIdentity ||
+		live.RepositoryRoot != authority.identity.repositoryRoot ||
+		live.GitCommonDir != authority.identity.gitCommonDir ||
+		live.GitDir != authority.identity.gitDir {
 		return "", fmt.Errorf(
 			"%w: Git filesystem identity changed",
 			ErrPADRepositoryAuthorityMismatch,
 		)
 	}
 	return authority.identity.repositoryRoot, nil
-}
-
-func samePADRepositoryObject(left, right os.FileInfo) bool {
-	return left != nil && right != nil && os.SameFile(left, right)
 }
 
 type padTrustedRepository interface {

@@ -146,13 +146,25 @@ func OpenTransitionAuthorityStore(
 	repo string,
 	workRunID string,
 ) (*TransitionAuthorityStore, error) {
+	lease, err := reviewtransaction.OpenRepositoryIdentityLease(ctx, repo)
+	if err != nil {
+		return nil, fmt.Errorf("resolve transition repository identity: %w", err)
+	}
+	return openTransitionAuthorityStoreWithLease(ctx, lease, workRunID)
+}
+
+func openTransitionAuthorityStoreWithLease(
+	ctx context.Context,
+	lease *reviewtransaction.RepositoryIdentityLease,
+	workRunID string,
+) (*TransitionAuthorityStore, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if !workRunIDPattern.MatchString(workRunID) {
 		return nil, errors.New("verification transition work run identifier is invalid")
 	}
-	identity, err := resolveCoordinationRepositoryIdentity(ctx, repo)
+	identity, err := coordinationRepositoryIdentityFromLease(ctx, lease)
 	if err != nil {
 		return nil, fmt.Errorf("resolve transition repository identity: %w", err)
 	}
@@ -644,21 +656,27 @@ func (store *TransitionAuthorityStore) validateContext(ctx context.Context) erro
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if store == nil || store.root == "" || store.workRunID == "" {
+	if store == nil || store.root == "" || store.workRunID == "" ||
+		store.identity.lease == nil {
 		return errors.New("verification transition authority store is not initialized")
 	}
-	live, err := resolveCoordinationRepositoryIdentity(ctx, store.identity.repositoryRoot)
-	if err != nil {
-		return err
+	storageKey := store.identity.lease.StorageKey()
+	if len(storageKey) != 64 ||
+		"sha256:"+storageKey != store.identity.repositoryIdentity {
+		return errors.New("verification transition repository shard is invalid")
 	}
-	if live.repositoryIdentity != store.identity.repositoryIdentity ||
-		!sameCoordinationDirectory(live.repositoryRoot, store.identity.repositoryRoot) ||
-		!sameCoordinationDirectory(live.gitCommonDir, store.identity.gitCommonDir) ||
-		!sameCoordinationDirectory(live.gitDir, store.identity.gitDir) {
+	if err := store.identity.lease.Validate(ctx); err != nil {
+		return errors.Join(ErrAuthorizationStale, err)
+	}
+	live := store.identity.lease.Identity()
+	if live.RepositoryRef != store.identity.repositoryIdentity ||
+		live.RepositoryRoot != store.identity.repositoryRoot ||
+		live.GitCommonDir != store.identity.gitCommonDir ||
+		live.GitDir != store.identity.gitDir {
 		return ErrAuthorizationStale
 	}
 	wantRoot := filepath.Join(
-		live.gitCommonDir,
+		live.GitCommonDir,
 		"gentle-ai",
 		"work-provider",
 		"coordination-authority",
@@ -697,13 +715,12 @@ func (store *TransitionAuthorityStore) ensureWriteDirectories(ref string) error 
 }
 
 func (store *TransitionAuthorityStore) objectsRoot() string {
-	return filepath.Join(store.root, "transitions", "objects")
+	return filepath.Join(store.repositoryRoot(), "objects")
 }
 
 func (store *TransitionAuthorityStore) slotsRoot() string {
 	return filepath.Join(
-		store.root,
-		"transitions",
+		store.repositoryRoot(),
 		"slots",
 		transitionWorkRunDirectory(store.workRunID),
 	)
@@ -711,8 +728,7 @@ func (store *TransitionAuthorityStore) slotsRoot() string {
 
 func (store *TransitionAuthorityStore) stateRoot() string {
 	return filepath.Join(
-		store.root,
-		"transitions",
+		store.repositoryRoot(),
 		"state",
 		transitionWorkRunDirectory(store.workRunID),
 	)
@@ -720,10 +736,22 @@ func (store *TransitionAuthorityStore) stateRoot() string {
 
 func (store *TransitionAuthorityStore) locksRoot() string {
 	return filepath.Join(
-		store.root,
-		"transitions",
+		store.repositoryRoot(),
 		"locks",
 		transitionWorkRunDirectory(store.workRunID),
+	)
+}
+
+func (store *TransitionAuthorityStore) repositoryRoot() string {
+	key := ""
+	if store != nil && store.identity.lease != nil {
+		key = store.identity.lease.StorageKey()
+	}
+	return filepath.Join(
+		store.root,
+		"transitions",
+		"repositories",
+		key,
 	)
 }
 
