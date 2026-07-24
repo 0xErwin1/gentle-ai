@@ -25,6 +25,86 @@ func TestOwnerOnlyWindowsUseDescriptorsAreProtectedAndCurrentUserOnly(t *testing
 	}
 }
 
+func TestPrivateWindowsUseDescriptorAcceptsOnlyCanonicalDirectoryACESplit(
+	t *testing.T,
+) {
+	current, err := currentWindowsUseSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sid := current.String()
+	tests := []struct {
+		name      string
+		dacl      string
+		directory bool
+		want      bool
+	}{
+		{
+			name: "effective then inherit-only",
+			dacl: "(A;;FA;;;" + sid + ")" +
+				"(A;OICIIO;GA;;;" + sid + ")",
+			directory: true,
+			want:      true,
+		},
+		{
+			name: "inherit-only then effective",
+			dacl: "(A;OICIIO;GA;;;" + sid + ")" +
+				"(A;;FA;;;" + sid + ")",
+			directory: true,
+			want:      true,
+		},
+		{
+			name: "directory split rejected for file",
+			dacl: "(A;;FA;;;" + sid + ")" +
+				"(A;OICIIO;GA;;;" + sid + ")",
+			directory: false,
+			want:      false,
+		},
+		{
+			name: "inheritance ACE must be inherit-only",
+			dacl: "(A;;FA;;;" + sid + ")" +
+				"(A;OICI;GA;;;" + sid + ")",
+			directory: true,
+			want:      false,
+		},
+		{
+			name: "inheritance ACE must remain current-user-only",
+			dacl: "(A;;FA;;;" + sid + ")" +
+				"(A;OICIIO;GA;;;SY)",
+			directory: true,
+			want:      false,
+		},
+		{
+			name: "additional ACE rejected",
+			dacl: "(A;;FA;;;" + sid + ")" +
+				"(A;OICIIO;GA;;;" + sid + ")" +
+				"(A;;FA;;;" + sid + ")",
+			directory: true,
+			want:      false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			descriptor, err := windows.SecurityDescriptorFromString(
+				"O:" + sid + "D:P" + test.dacl,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := privateWindowsUseDescriptorSafe(
+				descriptor,
+				test.directory,
+			); got != test.want {
+				t.Fatalf(
+					"private descriptor accepted = %t, want %t",
+					got,
+					test.want,
+				)
+			}
+		})
+	}
+}
+
 func TestWindowsUseDirectoryKeepsSharedNamespaceInheritedAndProtectsOnlyPADSubtree(t *testing.T) {
 	parent, err := openAbsoluteWindowsUseDirectory(t.TempDir(), windowsUseDirectoryAccess)
 	if err != nil {

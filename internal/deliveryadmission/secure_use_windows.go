@@ -688,28 +688,14 @@ func protectWindowsUseHandle(file *os.File, directory bool) error {
 	if err != nil || owner == nil || !owner.IsValid() {
 		return errors.New("owner-only authorization-use owner is unavailable")
 	}
-	// Harden the DACL before rebinding ownership. Directory ACL propagation and
-	// ownership are separate Windows mutations; keeping them ordered also makes
-	// an interrupted rebind fail closed with the current-user-only DACL applied.
 	if err := windows.SetSecurityInfo(
 		windows.Handle(file.Fd()),
 		windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|
 			windows.PROTECTED_DACL_SECURITY_INFORMATION,
-		nil,
-		nil,
-		dacl,
-		nil,
-	); err != nil {
-		return err
-	}
-	if err := windows.SetSecurityInfo(
-		windows.Handle(file.Fd()),
-		windows.SE_FILE_OBJECT,
-		windows.OWNER_SECURITY_INFORMATION,
 		owner,
 		nil,
-		nil,
+		dacl,
 		nil,
 	); err != nil {
 		return err
@@ -798,33 +784,62 @@ func privateWindowsUseDescriptorSafe(
 		return false
 	}
 	dacl, defaulted, err := descriptor.DACL()
-	if err != nil || dacl == nil || defaulted || dacl.AceCount != 1 {
-		return false
-	}
-	var ace *windows.ACCESS_ALLOWED_ACE
-	if err := windows.GetAce(dacl, 0, &ace); err != nil || ace == nil ||
-		ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
-		return false
-	}
-	wantFlags := uint8(0)
-	if directory {
-		wantFlags = windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE
-	}
-	if ace.Header.AceFlags != wantFlags || !ownerOnlyWindowsUseAccessMask(ace.Mask) {
+	if err != nil || dacl == nil || defaulted {
 		return false
 	}
 	current, err := currentWindowsUseSID()
 	if err != nil {
 		return false
 	}
-	const sidOffset = unsafe.Offsetof(windows.ACCESS_ALLOWED_ACE{}.SidStart)
-	if uintptr(ace.Header.AceSize) < sidOffset+unsafe.Sizeof(ace.SidStart) {
+	matches := func(index uint32, flags uint8) bool {
+		ace, sid, ok := windowsUseAccessAllowedACE(dacl, index)
+		return ok &&
+			ace.Header.AceFlags == flags &&
+			ownerOnlyWindowsUseAccessMask(ace.Mask) &&
+			sid.Equals(current)
+	}
+	if !directory {
+		return dacl.AceCount == 1 && matches(0, 0)
+	}
+	const inheritFlags = windows.OBJECT_INHERIT_ACE |
+		windows.CONTAINER_INHERIT_ACE
+	if dacl.AceCount == 1 {
+		return matches(0, inheritFlags)
+	}
+	if dacl.AceCount != 2 {
 		return false
 	}
-	aceSID := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
-	return aceSID.IsValid() &&
-		uintptr(ace.Header.AceSize) >= sidOffset+uintptr(aceSID.Len()) &&
-		aceSID.Equals(current)
+	// Windows may canonicalize one inheritable GENERIC_ALL directory ACE into
+	// an effective FILE_ALL_ACCESS ACE plus an inherit-only GENERIC_ALL ACE.
+	// Accept only that exact current-user-only split; any additional principal,
+	// permission, or inheritance shape remains fail closed.
+	const inheritOnlyFlags = inheritFlags | windows.INHERIT_ONLY_ACE
+	return matches(0, 0) && matches(1, inheritOnlyFlags) ||
+		matches(1, 0) && matches(0, inheritOnlyFlags)
+}
+
+func windowsUseAccessAllowedACE(
+	dacl *windows.ACL,
+	index uint32,
+) (*windows.ACCESS_ALLOWED_ACE, *windows.SID, bool) {
+	if dacl == nil || index >= uint32(dacl.AceCount) {
+		return nil, nil, false
+	}
+	var ace *windows.ACCESS_ALLOWED_ACE
+	if err := windows.GetAce(dacl, index, &ace); err != nil || ace == nil ||
+		ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
+		return nil, nil, false
+	}
+	const sidOffset = unsafe.Offsetof(windows.ACCESS_ALLOWED_ACE{}.SidStart)
+	if uintptr(ace.Header.AceSize) < sidOffset+unsafe.Sizeof(ace.SidStart) {
+		return nil, nil, false
+	}
+	sid := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+	if !sid.IsValid() ||
+		uintptr(ace.Header.AceSize) < sidOffset+uintptr(sid.Len()) {
+		return nil, nil, false
+	}
+	return ace, sid, true
 }
 
 func privateWindowsUseDescriptorDiagnostic(
