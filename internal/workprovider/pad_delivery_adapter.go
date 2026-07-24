@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"regexp"
 	"strings"
 	"sync"
@@ -265,6 +266,39 @@ func (adapter *PADDeliveryAdapter) ExecuteOnce(
 		return err
 	})
 	return result, err
+}
+
+// ResolveOnce returns only an already-durable terminal result. Unlike
+// ExecuteOnce it opens no creating store, acquires no publication lock, probes
+// no Git/hosting state, and never enters the effect path.
+func (adapter *PADDeliveryAdapter) ResolveOnce(
+	ctx context.Context,
+	command deliveryadmission.ExecutionCommand,
+) (deliveryadmission.ExecutionResult, bool, error) {
+	if adapter == nil || adapter.authority == nil {
+		return deliveryadmission.ExecutionResult{}, false, errors.New(
+			"PAD delivery result resolver is unavailable",
+		)
+	}
+	if err := command.Validate(); err != nil {
+		return deliveryadmission.ExecutionResult{}, false, err
+	}
+	if command.Destination.RepositoryRef != adapter.authority.RepositoryRef() {
+		return deliveryadmission.ExecutionResult{}, false,
+			ErrPADRepositoryAuthorityMismatch
+	}
+	commandRef, err := command.Ref()
+	if err != nil {
+		return deliveryadmission.ExecutionResult{}, false, err
+	}
+	store, err := existingPADDeliveryResultStore(ctx, adapter.authority)
+	if errors.Is(err, fs.ErrNotExist) {
+		return deliveryadmission.ExecutionResult{}, false, nil
+	}
+	if err != nil {
+		return deliveryadmission.ExecutionResult{}, false, err
+	}
+	return store.readTerminal(command, commandRef)
 }
 
 func (adapter *PADDeliveryAdapter) executeLocked(

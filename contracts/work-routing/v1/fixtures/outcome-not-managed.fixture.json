@@ -1,0 +1,10 @@
+{
+  "schema": "gentle-ai.work-diagnostic/v1",
+  "operation": "work.start",
+  "code": "outcome_not_managed",
+  "message": "The owner classified this outcome as not requiring a managed write lifecycle.",
+  "requestedContract": "gentle-ai.work-start/v1",
+  "supportedContracts": ["gentle-ai.work-start/v1"],
+  "mutationOutcome": "not_started",
+  "nextAction": "continue_unmanaged"
+}

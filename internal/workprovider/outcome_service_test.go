@@ -100,6 +100,132 @@ func TestDefaultOutcomeServiceUnsetFailsBeforeIntakeOrPublication(
 	}
 }
 
+func TestOutcomeServiceLeavesOwnerTypedNoWriteOutcomeUnmanaged(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	repo := initPADAdapterGitRepository(t)
+	providerRoot := defaultProviderRoot(t, repo)
+	intakeValue := ownerOutcomeTestIntake(
+		"outcome-read-only",
+		deliveryadmission.RouteDirectMain,
+	)
+	intakeValue.RoutingFacts = workrun.ImplementationRouteInput{
+		ReadIntent:     workrun.ReadIntentDecideOrVerify,
+		ReadFileCount:  1,
+		WriteIntent:    workrun.WriteIntentNone,
+		WriteFileCount: 0,
+	}
+	intake := &stubOwnerOutcomeIntakeAuthority{intake: intakeValue}
+	service, err := NewProductionOutcomeService(
+		ctx,
+		repo,
+		model.AgentCodex,
+		intake,
+		StaticActivationResolver{Mode: ActivationEnabled},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.StartOutcome(ctx, OutcomeStartRequest{
+		Outcome: "Explain whether the current document is correct.",
+	})
+	if !errors.Is(err, ErrOutcomeNotManaged) {
+		t.Fatalf("read-only outcome error = %v", err)
+	}
+	if intake.calls != 1 {
+		t.Fatalf("owner intake calls = %d, want 1", intake.calls)
+	}
+	if _, err := os.Lstat(providerRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unmanaged outcome published provider storage: %v", err)
+	}
+}
+
+func TestOutcomeServiceLeavesExactZeroReadAndWriteOutcomeUnmanaged(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	repo := initPADAdapterGitRepository(t)
+	providerRoot := defaultProviderRoot(t, repo)
+	intakeValue := ownerOutcomeTestIntake(
+		"outcome-zero-read-write",
+		deliveryadmission.RouteDirectMain,
+	)
+	intakeValue.RoutingFacts = workrun.ImplementationRouteInput{
+		ReadIntent:     workrun.ReadIntentNone,
+		ReadFileCount:  0,
+		WriteIntent:    workrun.WriteIntentNone,
+		WriteFileCount: 0,
+	}
+	if err := workrun.ValidateImplementationRouteInput(
+		intakeValue.RoutingFacts,
+	); err != nil {
+		t.Fatalf("zero read/write structural facts = %v", err)
+	}
+	if _, err := workrun.DecideImplementationRoute(
+		intakeValue.RoutingFacts,
+	); !errors.Is(err, workrun.ErrInsufficientRoutingFacts) {
+		t.Fatalf("zero read/write route decision = %v", err)
+	}
+	intake := &stubOwnerOutcomeIntakeAuthority{intake: intakeValue}
+	service, err := NewProductionOutcomeService(
+		ctx,
+		repo,
+		model.AgentCodex,
+		intake,
+		StaticActivationResolver{Mode: ActivationEnabled},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.StartOutcome(ctx, OutcomeStartRequest{
+		Outcome: "Explain the current state without changing it.",
+	})
+	if !errors.Is(err, ErrOutcomeNotManaged) {
+		t.Fatalf("zero read/write unmanaged outcome = %v", err)
+	}
+	if _, err := os.Lstat(providerRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("zero read/write outcome published provider storage: %v", err)
+	}
+}
+
+func TestOutcomeServiceDoesNotDowngradeAmbiguousWriteIntent(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	repo := initPADAdapterGitRepository(t)
+	providerRoot := defaultProviderRoot(t, repo)
+	intakeValue := ownerOutcomeTestIntake(
+		"outcome-ambiguous-write",
+		deliveryadmission.RouteDirectMain,
+	)
+	intakeValue.RoutingFacts = workrun.ImplementationRouteInput{
+		ReadIntent:    workrun.ReadIntentDecideOrVerify,
+		ReadFileCount: 1,
+	}
+	intake := &stubOwnerOutcomeIntakeAuthority{intake: intakeValue}
+	service, err := NewProductionOutcomeService(
+		ctx,
+		repo,
+		model.AgentCodex,
+		intake,
+		StaticActivationResolver{Mode: ActivationEnabled},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = service.StartOutcome(ctx, OutcomeStartRequest{
+		Outcome: "Explain whether the current document is correct.",
+	})
+	if err == nil || errors.Is(err, ErrOutcomeNotManaged) ||
+		!strings.Contains(err.Error(), "explicitly classify write intent") {
+		t.Fatalf("ambiguous write-intent error = %v", err)
+	}
+	if _, err := os.Lstat(providerRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ambiguous outcome published provider storage: %v", err)
+	}
+}
+
 func TestProductiveOwnerPreflightCapabilityMatrix(t *testing.T) {
 	tests := []struct {
 		name      string

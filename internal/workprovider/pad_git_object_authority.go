@@ -30,6 +30,7 @@ type fixedPADGitOperation uint8
 
 const (
 	fixedPADGitObjectFormat fixedPADGitOperation = iota + 1
+	fixedPADGitHeadCommit
 	fixedPADGitObjectType
 	fixedPADGitCommitTree
 	fixedPADGitAncestry
@@ -143,6 +144,48 @@ func (authority *FixedPADGitObjectAuthority) RequireCommit(
 ) error {
 	_, err := authority.requireCommit(ctx, repositoryRef, revision, "")
 	return err
+}
+
+// ResolveHeadRevision resolves the exact current HEAD commit through the same
+// closed, environment-scrubbed Git boundary used for PAD object proofs. The
+// symbolic name never escapes this owner method; callers receive one full
+// object identity in PAD's git:<oid> form.
+func (authority *FixedPADGitObjectAuthority) ResolveHeadRevision(
+	ctx context.Context,
+	repositoryRef string,
+) (string, error) {
+	root, err := authority.repositoryRoot(ctx, repositoryRef)
+	if err != nil {
+		return "", err
+	}
+	result, err := authority.run(
+		ctx,
+		root,
+		fixedPADGitHeadCommit,
+		"",
+		"",
+	)
+	if err != nil {
+		return "", err
+	}
+	if result.exitCode != 0 || len(result.stderr) != 0 {
+		return "", fmt.Errorf(
+			"%w: resolve exact HEAD commit",
+			ErrPADGitObjectUnavailable,
+		)
+	}
+	objectID := strings.TrimSpace(string(result.stdout))
+	if !authority.validObjectID(objectID) {
+		return "", fmt.Errorf(
+			"%w: HEAD did not resolve to one full commit identity",
+			ErrPADGitObjectMismatch,
+		)
+	}
+	revision := "git:" + objectID
+	if err := authority.RequireCommit(ctx, repositoryRef, revision); err != nil {
+		return "", err
+	}
+	return revision, nil
 }
 
 // RequireCommitTree additionally proves that the exact commit resolves to the
@@ -508,6 +551,19 @@ func fixedPADGitArguments(
 			)
 		}
 		return []string{"rev-parse", "--show-object-format"}, nil
+	}
+	if operation == fixedPADGitHeadCommit {
+		if firstObject != "" || secondObject != "" {
+			return nil, fmt.Errorf(
+				"%w: invalid fixed Git HEAD operation",
+				ErrPADGitObjectMismatch,
+			)
+		}
+		return []string{
+			"rev-parse",
+			"--verify",
+			"HEAD^{commit}",
+		}, nil
 	}
 	if !validPADGitObjectID(firstObject) {
 		return nil, fmt.Errorf(

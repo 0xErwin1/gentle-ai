@@ -97,7 +97,7 @@ func DecideImplementationRoute(input ImplementationRouteInput) (ImplementationRo
 	if input.WriteIntent == "" {
 		input.WriteIntent = WriteIntentNone
 	}
-	if err := validateImplementationRouteInput(input); err != nil {
+	if err := ValidateImplementationRouteInput(input); err != nil {
 		return ImplementationRouteDecision{}, err
 	}
 
@@ -209,7 +209,17 @@ func newImplementationRouteDecision(
 	return result, nil
 }
 
-func validateImplementationRouteInput(input ImplementationRouteInput) error {
+// ValidateImplementationRouteInput validates owner-typed routing facts without
+// requiring them to select an executable write route. This distinction lets a
+// trusted intake classify an exact no-write outcome before any managed
+// lifecycle exists.
+func ValidateImplementationRouteInput(input ImplementationRouteInput) error {
+	if input.ReadIntent == "" {
+		input.ReadIntent = ReadIntentNone
+	}
+	if input.WriteIntent == "" {
+		input.WriteIntent = WriteIntentNone
+	}
 	if input.ReadFileCount < 0 || input.WriteFileCount < 0 ||
 		input.ReadFileCount > 100_000 || input.WriteFileCount > 100_000 {
 		return fmt.Errorf("%w: file counts are outside supported bounds", ErrInvalidRoutingFacts)

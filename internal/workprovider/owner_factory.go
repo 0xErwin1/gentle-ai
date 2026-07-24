@@ -413,6 +413,27 @@ func (factory *ProductionOwnerCoordinatorFactory) openWithProductivePreflight(
 	); err != nil {
 		return nil, err
 	}
+	return factory.openOwnerCoordinator(ctx, workRunID)
+}
+
+// openForProductiveRecovery composes existing owner authorities without an
+// enabled-capability preflight. Its caller may only use the coordinator's
+// observation and terminal-reconciliation methods; no new probe or effect is
+// authorized by opening this composition.
+func (factory *ProductionOwnerCoordinatorFactory) openForProductiveRecovery(
+	ctx context.Context,
+	workRunID string,
+) (*OwnerCoordinator, error) {
+	if _, err := factory.repositoryIdentityLease(ctx); err != nil {
+		return nil, err
+	}
+	return factory.openOwnerCoordinator(ctx, workRunID)
+}
+
+func (factory *ProductionOwnerCoordinatorFactory) openOwnerCoordinator(
+	ctx context.Context,
+	workRunID string,
+) (*OwnerCoordinator, error) {
 	if !workRunIDPattern.MatchString(workRunID) {
 		return nil, errors.New(
 			"production owner coordinator requires a canonical work-run identifier",
@@ -474,6 +495,15 @@ func (factory *ProductionOwnerCoordinatorFactory) openWithProductivePreflight(
 		return nil, err
 	}
 	executor := hostruntime.NewExecutor()
+	advanceStore, err := openProductiveAdvanceStore(
+		ctx,
+		factory.lease,
+		workRunID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	advanceStore.pad = factory.pad
 	return NewOwnerCoordinator(ctx, OwnerCoordinatorDependencies{
 		WorkRun:                work,
 		Coordination:           coordination,
@@ -482,6 +512,8 @@ func (factory *ProductionOwnerCoordinatorFactory) openWithProductivePreflight(
 		Evidence:               evidenceStore,
 		Mutations:              mutationStore,
 		PADAuthority:           factory.pad,
+		DeliveryResult:         advanceStore,
+		ProductiveDiagnostic:   advanceStore,
 		PADDelivery:            factory.padDelivery,
 		PADRouteProbe:          factory.padDelivery,
 		PADCandidateCatalog:    factory.candidateStore,

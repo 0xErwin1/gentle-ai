@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/gentleman-programming/gentle-ai/internal/hostruntime"
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
@@ -25,6 +26,154 @@ type PADAuthorityPort interface {
 		context.Context,
 		string,
 	) (DeliveryAuthorizationAuthority, error)
+}
+
+// DeliveryResultAuthorityPort resolves the durable terminal PAD execution
+// fact after its one-shot authorization has been consumed.
+type DeliveryResultAuthorityPort interface {
+	ResolveDeliveryResult(
+		context.Context,
+		string,
+	) (DeliveryResultAuthority, error)
+}
+
+// ProductiveDiagnosticAuthorityPort resolves the owner-authored reason that
+// terminally stops productive convergence. WorkRun must validate the complete
+// source-stage binding before it journals the immutable reference; accepting a
+// hash-shaped caller value would let an arbitrary internal caller wedge a run.
+type ProductiveDiagnosticAuthorityPort interface {
+	ResolveProductiveDiagnostic(
+		context.Context,
+		string,
+	) (ProductiveDiagnosticAuthority, error)
+}
+
+type ProductiveDiagnosticAuthority struct {
+	Diagnostic               WorkAdvanceDiagnosticV1
+	RepositoryRef            string
+	WorkRunID                string
+	SourceRevision           string
+	DeliveryIntentRef        string
+	Handoff                  *ImplementationHandoff
+	VerificationResultRef    string
+	ReviewReceiptRef         string
+	DeliveryAuthorizationRef string
+}
+
+// Validate accepts either the exact pre-mutation source state or the exact
+// terminal replay state. The source revision cryptographically binds every
+// WorkRun fact not copied into this narrow projection.
+func (authority ProductiveDiagnosticAuthority) Validate(
+	requestedRef string,
+	repositoryRef string,
+	state WorkRunState,
+) error {
+	if err := authority.Diagnostic.Validate(); err != nil {
+		return err
+	}
+	if authority.Diagnostic.Ref != requestedRef ||
+		!validSHA256Ref(authority.RepositoryRef) ||
+		authority.RepositoryRef != repositoryRef ||
+		!workRunIDPattern.MatchString(authority.WorkRunID) ||
+		authority.WorkRunID != state.WorkRunID ||
+		!validSHA256Ref(authority.SourceRevision) ||
+		!validSHA256Ref(authority.DeliveryIntentRef) ||
+		authority.DeliveryIntentRef != state.DeliveryIntentRef ||
+		!reflect.DeepEqual(authority.Handoff, state.Handoff) ||
+		authority.VerificationResultRef != state.VerificationResultRef ||
+		authority.ReviewReceiptRef != state.ReviewReceiptRef ||
+		authority.DeliveryAuthorizationRef != state.DeliveryAuthorizationRef ||
+		state.DeliveryResultRef != "" {
+		return fmt.Errorf(
+			"%w: productive diagnostic stage",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	if authority.Handoff != nil {
+		if err := authority.Handoff.Validate(); err != nil {
+			return err
+		}
+	}
+	for _, ref := range []string{
+		authority.VerificationResultRef,
+		authority.ReviewReceiptRef,
+		authority.DeliveryAuthorizationRef,
+	} {
+		if ref != "" && !validSHA256Ref(ref) {
+			return errors.New(
+				"productive diagnostic authority has invalid stage references",
+			)
+		}
+	}
+	switch {
+	case state.ProductiveBlockerRef == "":
+		if authority.SourceRevision != state.Revision ||
+			!productiveBlockerBindable(state) {
+			return fmt.Errorf(
+				"%w: productive diagnostic source",
+				ErrAuthorityBindingMismatch,
+			)
+		}
+	case state.ProductiveBlockerRef == requestedRef:
+		if authority.SourceRevision != state.ProductiveBlockerSourceRevision {
+			return fmt.Errorf(
+				"%w: productive diagnostic terminal replay",
+				ErrAuthorityBindingMismatch,
+			)
+		}
+	default:
+		return fmt.Errorf(
+			"%w: productive diagnostic terminal reference",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	return nil
+}
+
+type DeliveryResultAuthority struct {
+	ResultRef             string `json:"result_ref"`
+	AuthorizationRef      string `json:"authorization_ref"`
+	DeliveryIntentRef     string `json:"delivery_intent_ref"`
+	CandidateRef          string `json:"candidate_ref"`
+	ReviewReceiptRef      string `json:"review_receipt_ref"`
+	VerificationResultRef string `json:"verification_result_ref"`
+	DeliveryRef           string `json:"delivery_ref"`
+	CompletedAt           int64  `json:"completed_at"`
+}
+
+func (authority DeliveryResultAuthority) Validate(
+	requestedRef string,
+	state WorkRunState,
+) error {
+	for _, ref := range []string{
+		authority.ResultRef,
+		authority.AuthorizationRef,
+		authority.DeliveryIntentRef,
+		authority.CandidateRef,
+		authority.ReviewReceiptRef,
+		authority.VerificationResultRef,
+	} {
+		if !validSHA256Ref(ref) {
+			return errors.New(
+				"delivery result authority has invalid immutable references",
+			)
+		}
+	}
+	if authority.ResultRef != requestedRef ||
+		authority.CompletedAt <= 0 ||
+		!validOpaqueRef(authority.DeliveryRef) ||
+		state.Handoff == nil ||
+		authority.AuthorizationRef != state.DeliveryAuthorizationRef ||
+		authority.DeliveryIntentRef != state.DeliveryIntentRef ||
+		authority.CandidateRef != state.Handoff.CandidateRef ||
+		authority.ReviewReceiptRef != state.ReviewReceiptRef ||
+		authority.VerificationResultRef != state.VerificationResultRef {
+		return fmt.Errorf(
+			"%w: terminal delivery result",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	return nil
 }
 
 type DeliveryIntentAuthority struct {
@@ -605,12 +754,14 @@ type LaunchAuthorityPort interface {
 }
 
 type AuthorityPorts struct {
-	PAD                PADAuthorityPort
-	DeliveryRoute      DeliveryRouteReevaluationAuthorityPort
-	ExplicitSDDRequest ExplicitSDDRequestAuthorityPort
-	MutationCompletion MutationCompletionAuthorityPort
-	Route              RouteAuthorityPort
-	SDD                SDDAuthorityPort
-	Verification       VerificationAuthorityPort
-	Launch             LaunchAuthorityPort
+	PAD                  PADAuthorityPort
+	DeliveryResult       DeliveryResultAuthorityPort
+	ProductiveDiagnostic ProductiveDiagnosticAuthorityPort
+	DeliveryRoute        DeliveryRouteReevaluationAuthorityPort
+	ExplicitSDDRequest   ExplicitSDDRequestAuthorityPort
+	MutationCompletion   MutationCompletionAuthorityPort
+	Route                RouteAuthorityPort
+	SDD                  SDDAuthorityPort
+	Verification         VerificationAuthorityPort
+	Launch               LaunchAuthorityPort
 }

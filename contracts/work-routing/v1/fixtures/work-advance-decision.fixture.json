@@ -1,0 +1,24 @@
+{
+  "schema": "gentle-ai.work-advance/v1",
+  "contract": "gentle-ai.work-advance/v1",
+  "previousRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "status": {
+    "schema": "gentle-ai.work-status/v1",
+    "contract": "gentle-ai.work-status/v1",
+    "workRunId": "work-advance-decision-fixture",
+    "revision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "publicState": "needs_your_decision",
+    "routeDecision": "delegated_direct",
+    "implementationRoute": "delegated_direct",
+    "verification": {
+      "outcome": "pending",
+      "resultRefs": []
+    },
+    "deliveryIntentRef": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  },
+  "diagnostic": {
+    "ref": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "code": "scope_mismatch",
+    "message": "The committed candidate paths differ from the exact admitted scope."
+  }
+}

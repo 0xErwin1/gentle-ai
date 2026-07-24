@@ -89,14 +89,24 @@ func (opener ProductionRepositoryOpener) OpenRepository(
 	} else if !errors.Is(openErr, mutationintegrity.ErrCompletionNotFound) {
 		return nil, openErr
 	}
+	deliveryResultAuthority, err := existingProductiveAdvanceStore(
+		lease,
+		workRunID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	deliveryResultAuthority.pad = pad
 	store = store.WithAuthorityPorts(workrun.AuthorityPorts{
-		PAD:                pad,
-		ExplicitSDDRequest: coordination,
-		MutationCompletion: mutationAuthority,
-		Route:              coordination,
-		SDD:                SDDWorkRunAuthority{Repo: repositoryRoot},
-		Verification:       RARWorkRunAuthority{Coordination: coordination, RAR: rar},
-		Launch:             executor,
+		PAD:                  pad,
+		ExplicitSDDRequest:   coordination,
+		MutationCompletion:   mutationAuthority,
+		Route:                coordination,
+		SDD:                  SDDWorkRunAuthority{Repo: repositoryRoot},
+		Verification:         RARWorkRunAuthority{Coordination: coordination, RAR: rar},
+		Launch:               executor,
+		DeliveryResult:       deliveryResultAuthority,
+		ProductiveDiagnostic: deliveryResultAuthority,
 	})
 	if _, err := padAuthority.ResolveDeliveryRepository(
 		ctx,

@@ -130,6 +130,39 @@ func openPADDeliveryResultStore(
 	return &padDeliveryResultStore{authority: authority, root: root}, nil
 }
 
+func existingPADDeliveryResultStore(
+	ctx context.Context,
+	authority *PADRepositoryAuthority,
+) (*padDeliveryResultStore, error) {
+	if authority == nil || authority.identity.gitCommonDir == "" {
+		return nil, errors.New(
+			"PAD delivery result store requires repository authority",
+		)
+	}
+	if _, err := authority.ResolveDeliveryRepository(
+		ctx,
+		authority.RepositoryRef(),
+	); err != nil {
+		return nil, err
+	}
+	store := &padDeliveryResultStore{
+		authority: authority,
+		root: filepath.Join(
+			authority.identity.gitCommonDir,
+			"gentle-ai",
+			"work-provider",
+			"pad-delivery",
+			padDeliveryStoreVersion,
+			"repositories",
+			authority.identity.lease.StorageKey(),
+		),
+	}
+	if err := store.validate(ctx); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
 func ensurePADDeliveryStoreDirectories(commonDir string, root string) error {
 	if err := validateSharedCoordinationDirectory(commonDir); err != nil {
 		return err

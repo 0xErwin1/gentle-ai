@@ -30,6 +30,7 @@
   },
   "contracts": {
     "start": "gentle-ai.work-start/v1",
+    "advance": "gentle-ai.work-advance/v1",
     "status": "gentle-ai.work-status/v1",
     "transition": "gentle-ai.work-transition/v1"
   },

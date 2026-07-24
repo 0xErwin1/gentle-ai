@@ -16,6 +16,15 @@ func (store WorkRunStore) PublicStatus(ctx context.Context) (WorkStatusV1, error
 	if err != nil {
 		return WorkStatusV1{}, err
 	}
+	if state.ProductiveBlockerRef != "" {
+		if err := store.resolveProductiveDiagnostic(
+			ctx,
+			state.ProductiveBlockerRef,
+			state,
+		); err != nil {
+			return WorkStatusV1{}, err
+		}
+	}
 	var result *VerificationResultAuthority
 	if state.VerificationResultRef != "" {
 		resolved, err := store.resolveBoundVerificationResult(ctx, state)
@@ -25,7 +34,29 @@ func (store WorkRunStore) PublicStatus(ctx context.Context) (WorkStatusV1, error
 		result = &resolved
 	}
 	var authorization *DeliveryAuthorizationAuthority
-	if state.DeliveryAuthorizationRef != "" {
+	var deliveryResult *DeliveryResultAuthority
+	if state.DeliveryResultRef != "" {
+		if store.authority.DeliveryResult == nil {
+			return WorkStatusV1{}, ErrAuthorityPortUnavailable
+		}
+		resolved, err := store.authority.DeliveryResult.ResolveDeliveryResult(
+			ctx,
+			state.DeliveryResultRef,
+		)
+		if err != nil {
+			return WorkStatusV1{}, fmt.Errorf(
+				"resolve terminal PAD delivery result: %w",
+				err,
+			)
+		}
+		if err := resolved.Validate(state.DeliveryResultRef, state); err != nil {
+			return WorkStatusV1{}, err
+		}
+		deliveryResult = &resolved
+	}
+	if state.DeliveryAuthorizationRef != "" &&
+		deliveryResult == nil &&
+		state.ProductiveBlockerRef == "" {
 		if result == nil || state.Handoff == nil || state.ReviewReceiptRef == "" {
 			return WorkStatusV1{}, errors.New(
 				"delivery authorization is bound without terminal WorkRun facts",
@@ -40,7 +71,7 @@ func (store WorkRunStore) PublicStatus(ctx context.Context) (WorkStatusV1, error
 		)
 		if err != nil {
 			if errors.Is(err, ErrDeliveryAuthorizationInactive) {
-				return projectPublicStatus(state, result, nil)
+				return projectPublicStatus(state, result, nil, nil)
 			}
 			return WorkStatusV1{}, fmt.Errorf(
 				"resolve live PAD delivery authorization: %w",
@@ -52,7 +83,7 @@ func (store WorkRunStore) PublicStatus(ctx context.Context) (WorkStatusV1, error
 			state,
 		); err != nil {
 			if errors.Is(err, ErrDeliveryAuthorizationInactive) {
-				return projectPublicStatus(state, result, nil)
+				return projectPublicStatus(state, result, nil, nil)
 			}
 			return WorkStatusV1{}, err
 		}
@@ -64,13 +95,44 @@ func (store WorkRunStore) PublicStatus(ctx context.Context) (WorkStatusV1, error
 		}
 		authorization = &resolved
 	}
-	return projectPublicStatus(state, result, authorization)
+	return projectPublicStatus(state, result, authorization, deliveryResult)
+}
+
+func (store WorkRunStore) resolveProductiveDiagnostic(
+	ctx context.Context,
+	ref string,
+	state WorkRunState,
+) error {
+	if !validSHA256Ref(ref) {
+		return errors.New(
+			"WorkRun productive diagnostic reference is invalid",
+		)
+	}
+	if store.authority.ProductiveDiagnostic == nil {
+		return ErrAuthorityPortUnavailable
+	}
+	resolved, err := store.authority.ProductiveDiagnostic.
+		ResolveProductiveDiagnostic(ctx, ref)
+	if err != nil {
+		return fmt.Errorf(
+			"resolve owner productive diagnostic: %w",
+			err,
+		)
+	}
+	repositoryRef := store.RepositoryRef()
+	if repositoryRef == "" {
+		return errors.New(
+			"WorkRun repository authority is unavailable",
+		)
+	}
+	return resolved.Validate(ref, repositoryRef, state)
 }
 
 func projectPublicStatus(
 	state WorkRunState,
 	result *VerificationResultAuthority,
 	authorization *DeliveryAuthorizationAuthority,
+	deliveryResult *DeliveryResultAuthority,
 ) (WorkStatusV1, error) {
 	if !state.Started {
 		return WorkStatusV1{}, ErrWorkRunNotStarted
@@ -96,7 +158,8 @@ func projectPublicStatus(
 		status.Verification.Outcome = publicVerificationOutcome(result.Result.Aggregate)
 		status.Verification.ResultRefs = []string{result.Result.ResultRef}
 	}
-	if authorization != nil {
+	if state.ProductiveBlockerRef == "" &&
+		(authorization != nil || deliveryResult != nil) {
 		status.PublicState = PublicStateReady
 	}
 	if err := status.Validate(); err != nil {
@@ -214,6 +277,9 @@ func publicStateForWorkRun(
 		return PublicStateNeedsYourDecision
 	}
 	if state.VerificationStop != nil {
+		return PublicStateNeedsYourDecision
+	}
+	if state.ProductiveBlockerRef != "" {
 		return PublicStateNeedsYourDecision
 	}
 	if result != nil {

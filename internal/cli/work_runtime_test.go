@@ -29,6 +29,7 @@ func (opener *cliRuntimeOpener) OpenRuntimeOutcome(
 type cliRuntime struct {
 	capabilities workprovider.RuntimeCapabilitiesV1
 	status       workrun.WorkStatusV1
+	advance      workrun.WorkAdvanceV1
 	requests     []workprovider.OutcomeStartRequest
 }
 
@@ -44,6 +45,14 @@ func (runtime *cliRuntime) StartOutcome(
 ) (workrun.WorkStatusV1, error) {
 	runtime.requests = append(runtime.requests, request)
 	return runtime.status, nil
+}
+
+func (runtime *cliRuntime) AdvanceOutcome(
+	context.Context,
+	string,
+	string,
+) (workrun.WorkAdvanceV1, error) {
+	return runtime.advance, nil
 }
 
 func TestWorkCapabilitiesAndStartUseMachineContracts(t *testing.T) {
@@ -66,6 +75,7 @@ func TestWorkCapabilitiesAndStartUseMachineContracts(t *testing.T) {
 			},
 			Contracts: workprovider.RuntimeContractSetV1{
 				Start:      workrun.WorkStartContractV1,
+				Advance:    workrun.WorkAdvanceContractV1,
 				Status:     workrun.WorkStatusContractV1,
 				Transition: workrun.WorkTransitionContractV1,
 			},

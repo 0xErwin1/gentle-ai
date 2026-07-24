@@ -1,0 +1,23 @@
+{
+  "schema": "gentle-ai.work-advance/v1",
+  "contract": "gentle-ai.work-advance/v1",
+  "previousRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "status": {
+    "schema": "gentle-ai.work-status/v1",
+    "contract": "gentle-ai.work-status/v1",
+    "workRunId": "work-advance-ready-fixture",
+    "revision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "publicState": "ready",
+    "routeDecision": "direct_inline",
+    "implementationRoute": "direct_inline",
+    "verification": {
+      "outcome": "not_required",
+      "resultRefs": [
+        "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      ]
+    },
+    "deliveryIntentRef": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "reviewReceiptRef": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "deliveryResultRef": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+}

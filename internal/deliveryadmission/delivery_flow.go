@@ -16,9 +16,12 @@ const (
 )
 
 var (
-	ErrLiveProbeRejected = errors.New("live delivery probe rejected")
-	ErrExecutionRejected = errors.New("delivery execution rejected")
-	ErrRouteNotChanged   = errors.New("delivery route was not changed")
+	ErrLiveProbeRejected          = errors.New("live delivery probe rejected")
+	ErrExecutionRejected          = errors.New("delivery execution rejected")
+	ErrExecutionResultUnavailable = errors.New(
+		"consumed delivery execution has no durable terminal result",
+	)
+	ErrRouteNotChanged = errors.New("delivery route was not changed")
 )
 
 // IntentSelectionRequest contains only user intent. An empty RequestedRoute is
@@ -476,6 +479,16 @@ type DeliveryExecutorPort interface {
 	ExecuteOnce(context.Context, ExecutionCommand) (ExecutionResult, error)
 }
 
+// DeliveryResultResolverPort is the read-only half of a one-shot executor. It
+// may return only an already-durable terminal result for the exact command and
+// must never probe mutable hosting state or begin an effect.
+type DeliveryResultResolverPort interface {
+	ResolveOnce(
+		context.Context,
+		ExecutionCommand,
+	) (ExecutionResult, bool, error)
+}
+
 type ExecuteDeliveryRequest struct {
 	AuthorizationRef  string
 	AuthorizationKind AuthorizationKind
@@ -674,6 +687,91 @@ func ExecuteAuthorizedDelivery(
 		return ExecutionResult{}, err
 	}
 	return executeOnce(ctx, executor, command, use.ConsumedAt)
+}
+
+// ReplayAuthorizedDeliveryResult resolves an already-consumed authorization
+// and asks the executor's read-only authority for the exact durable terminal
+// result. It never creates a reservation, probes a live gate, checks expiry, or
+// invokes an effect.
+func ReplayAuthorizedDeliveryResult(
+	ctx context.Context,
+	resolver TrustedResolver,
+	rar RARAuthorityPort,
+	results DeliveryResultResolverPort,
+	store *DirectoryUseStore,
+	request ExecuteDeliveryRequest,
+) (ExecutionResult, bool, error) {
+	if results == nil {
+		return ExecutionResult{}, false, fmt.Errorf(
+			"%w: missing delivery result resolver",
+			ErrInvalid,
+		)
+	}
+	binding, decision, err := resolveExecutionAuthority(
+		ctx,
+		resolver,
+		rar,
+		request,
+	)
+	if err != nil {
+		return ExecutionResult{}, false, err
+	}
+	if store == nil ||
+		store.repositoryRef != binding.Destination.RepositoryRef {
+		return ExecutionResult{}, false, fmt.Errorf(
+			"%w: delivery recovery use repository",
+			ErrBindingMismatch,
+		)
+	}
+	use, consumed, err := store.authorizationUse(ctx, request.AuthorizationRef)
+	if err != nil || !consumed {
+		return ExecutionResult{}, false, err
+	}
+	if use.ExecutionCommandRef == "" || use.LiveGateRef == "" {
+		return ExecutionResult{}, false, fmt.Errorf(
+			"%w: authorization was not reserved by the delivery executor",
+			ErrBindingMismatch,
+		)
+	}
+	command := executionCommand(
+		request.AuthorizationRef,
+		request.AuthorizationKind,
+		binding,
+		decision,
+		use.LiveGateRef,
+		use.ExecutionExpiresAt,
+	)
+	commandRef, err := command.Ref()
+	if err != nil {
+		return ExecutionResult{}, false, err
+	}
+	if err := validateExecutionUse(
+		use,
+		request.AuthorizationKind,
+		binding,
+		commandRef,
+		use.LiveGateRef,
+		use.ExecutionExpiresAt,
+	); err != nil {
+		return ExecutionResult{}, false, err
+	}
+	result, found, err := results.ResolveOnce(ctx, command)
+	if err != nil {
+		return ExecutionResult{}, false, err
+	}
+	if !found {
+		return ExecutionResult{}, false, ErrExecutionResultUnavailable
+	}
+	if err := result.Validate(command); err != nil {
+		return ExecutionResult{}, false, err
+	}
+	if result.CompletedAt < use.ConsumedAt {
+		return ExecutionResult{}, false, fmt.Errorf(
+			"%w: recovered execution result predates durable reservation",
+			ErrBindingMismatch,
+		)
+	}
+	return result, true, nil
 }
 
 func resolveExecutionAuthority(

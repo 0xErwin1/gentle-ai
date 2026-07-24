@@ -56,6 +56,8 @@ type OwnerCoordinatorDependencies struct {
 	Mutations    mutationintegrity.Store
 
 	PADAuthority           *PADWorkRunAdapter
+	DeliveryResult         workrun.DeliveryResultAuthorityPort
+	ProductiveDiagnostic   workrun.ProductiveDiagnosticAuthorityPort
 	PADDelivery            *PADDeliveryAdapter
 	PADRouteProbe          PADRouteReevaluationProbe
 	PADCandidateCatalog    *PADCandidateCatalog
@@ -174,9 +176,11 @@ func NewOwnerCoordinator(
 	configured := dependencies.WorkRun.
 		WithEvidencePort(EvidenceWorkRunPort{Store: dependencies.Evidence}).
 		WithAuthorityPorts(workrun.AuthorityPorts{
-			PAD:                dependencies.PADAuthority,
-			DeliveryRoute:      dependencies.PADAuthority,
-			ExplicitSDDRequest: dependencies.Coordination,
+			PAD:                  dependencies.PADAuthority,
+			DeliveryResult:       dependencies.DeliveryResult,
+			ProductiveDiagnostic: dependencies.ProductiveDiagnostic,
+			DeliveryRoute:        dependencies.PADAuthority,
+			ExplicitSDDRequest:   dependencies.Coordination,
 			MutationCompletion: MutationCompletionWorkRunAuthority{
 				Store: dependencies.Mutations,
 			},
@@ -887,6 +891,84 @@ func (coordinator *OwnerCoordinator) BindImplementationHandoff(
 		return current, nil
 	}
 	return applied, nil
+}
+
+func (coordinator *OwnerCoordinator) RecordProductiveBlocker(
+	ctx context.Context,
+	expectedRevision string,
+	diagnosticRef string,
+) (workrun.WorkRunState, error) {
+	if err := coordinator.guardGeneralMutation(ctx); err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	current, err := coordinator.work.Status()
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	if current.ProductiveBlockerRef == diagnosticRef {
+		status, err := coordinator.work.PublicStatus(ctx)
+		if err != nil {
+			return workrun.WorkRunState{}, err
+		}
+		if status.PublicState != workrun.PublicStateNeedsYourDecision {
+			return workrun.WorkRunState{}, ErrProviderResultMismatch
+		}
+		return current, nil
+	}
+	requestID, err := ownerRequestID("productive-blocker", struct {
+		ExpectedRevision string
+		DiagnosticRef    string
+	}{expectedRevision, diagnosticRef})
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	return coordinator.work.RecordProductiveBlocker(
+		ctx,
+		workrun.RecordProductiveBlockerRequest{
+			ExpectedRevision: expectedRevision,
+			RequestID:        requestID,
+			DiagnosticRef:    diagnosticRef,
+		},
+	)
+}
+
+func (coordinator *OwnerCoordinator) recordRecoveredProductiveBlocker(
+	ctx context.Context,
+	expectedRevision string,
+	diagnosticRef string,
+) (workrun.WorkRunState, error) {
+	if err := coordinator.validate(ctx); err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	current, err := coordinator.work.Status()
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	if current.ProductiveBlockerRef == diagnosticRef {
+		status, err := coordinator.work.PublicStatus(ctx)
+		if err != nil {
+			return workrun.WorkRunState{}, err
+		}
+		if status.PublicState != workrun.PublicStateNeedsYourDecision {
+			return workrun.WorkRunState{}, ErrProviderResultMismatch
+		}
+		return current, nil
+	}
+	requestID, err := ownerRequestID("productive-blocker-recovery", struct {
+		ExpectedRevision string
+		DiagnosticRef    string
+	}{expectedRevision, diagnosticRef})
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	return coordinator.work.RecordProductiveBlocker(
+		ctx,
+		workrun.RecordProductiveBlockerRequest{
+			ExpectedRevision: expectedRevision,
+			RequestID:        requestID,
+			DiagnosticRef:    diagnosticRef,
+		},
+	)
 }
 
 type OwnerCorrectionReplanRequest struct {
@@ -1815,6 +1897,84 @@ func (coordinator *OwnerCoordinator) BindDeliveryAuthorization(
 			ExpectedRevision: request.ExpectedRevision,
 			RequestID:        requestID,
 			AuthorizationRef: request.AuthorizationRef,
+		},
+	)
+}
+
+func (coordinator *OwnerCoordinator) BindDeliveryResult(
+	ctx context.Context,
+	expectedRevision string,
+	resultRef string,
+) (workrun.WorkRunState, error) {
+	if err := coordinator.guardTerminalMutation(ctx); err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	current, err := coordinator.work.Status()
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	if current.DeliveryResultRef == resultRef {
+		status, err := coordinator.work.PublicStatus(ctx)
+		if err != nil {
+			return workrun.WorkRunState{}, err
+		}
+		if status.PublicState != workrun.PublicStateReady {
+			return workrun.WorkRunState{}, ErrProviderResultMismatch
+		}
+		return current, nil
+	}
+	requestID, err := ownerRequestID("bind-delivery-result", struct {
+		ExpectedRevision string
+		ResultRef        string
+	}{expectedRevision, resultRef})
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	return coordinator.work.BindDeliveryResult(
+		ctx,
+		workrun.BindDeliveryResultRequest{
+			ExpectedRevision: expectedRevision,
+			RequestID:        requestID,
+			ResultRef:        resultRef,
+		},
+	)
+}
+
+func (coordinator *OwnerCoordinator) bindRecoveredDeliveryResult(
+	ctx context.Context,
+	expectedRevision string,
+	resultRef string,
+) (workrun.WorkRunState, error) {
+	if err := coordinator.validate(ctx); err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	current, err := coordinator.work.Status()
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	if current.DeliveryResultRef == resultRef {
+		status, err := coordinator.work.PublicStatus(ctx)
+		if err != nil {
+			return workrun.WorkRunState{}, err
+		}
+		if status.PublicState != workrun.PublicStateReady {
+			return workrun.WorkRunState{}, ErrProviderResultMismatch
+		}
+		return current, nil
+	}
+	requestID, err := ownerRequestID("bind-delivery-result-recovery", struct {
+		ExpectedRevision string
+		ResultRef        string
+	}{expectedRevision, resultRef})
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	return coordinator.work.BindDeliveryResult(
+		ctx,
+		workrun.BindDeliveryResultRequest{
+			ExpectedRevision: expectedRevision,
+			RequestID:        requestID,
+			ResultRef:        resultRef,
 		},
 	)
 }

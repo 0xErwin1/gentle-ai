@@ -17,6 +17,10 @@ import (
 
 const maximumOutcomeRequestBytes = 64 << 10
 
+var ErrOutcomeNotManaged = errors.New(
+	"outcome does not require a managed write lifecycle",
+)
+
 // OutcomeStartRequest is the entire caller-authored start surface. It contains
 // no repository identity, hash, policy, authority, route, argv, or durable
 // reference. ExplicitSDDRequested records user intent only; the coordination
@@ -127,17 +131,25 @@ func (intake OwnerOutcomeIntake) validate(
 	if err := validateOwnerOutcomeDestinationShape(intake.Destination); err != nil {
 		return err
 	}
+	if intake.RoutingFacts.ExplicitSDDRequestRef != "" {
+		return errors.New(
+			"owner outcome intake cannot provide an explicit SDD authority reference",
+		)
+	}
+	if intake.RoutingFacts.WriteIntent == "" {
+		return errors.New(
+			"owner outcome intake must explicitly classify write intent",
+		)
+	}
+	if intake.RoutingFacts.WriteIntent == workrun.WriteIntentNone {
+		return workrun.ValidateImplementationRouteInput(intake.RoutingFacts)
+	}
 	if _, err := outcomeScopeDigest(
 		repositoryRef,
 		request.Outcome,
 		intake.ScopeSelectors,
 	); err != nil {
 		return err
-	}
-	if intake.RoutingFacts.ExplicitSDDRequestRef != "" {
-		return errors.New(
-			"owner outcome intake cannot provide an explicit SDD authority reference",
-		)
 	}
 	if _, err := workrun.DecideImplementationRoute(intake.RoutingFacts); err != nil {
 		return fmt.Errorf("validate owner implementation routing facts: %w", err)
@@ -277,6 +289,22 @@ func (service *OutcomeService) StartOutcome(
 	if err := intake.validate(ownerContext.RepositoryRef, request); err != nil {
 		return workrun.WorkStatusV1{}, err
 	}
+	selectors, err := canonicalProductiveSelectors(intake.ScopeSelectors)
+	if err != nil {
+		return workrun.WorkStatusV1{}, err
+	}
+	intake.ScopeSelectors = selectors
+	if intake.RoutingFacts.WriteIntent == workrun.WriteIntentNone {
+		return workrun.WorkStatusV1{}, ErrOutcomeNotManaged
+	}
+	scopeDigest, err := outcomeScopeDigest(
+		ownerContext.RepositoryRef,
+		request.Outcome,
+		selectors,
+	)
+	if err != nil {
+		return workrun.WorkStatusV1{}, err
+	}
 
 	coordinator, err := service.factory.openWithProductivePreflight(
 		ctx,
@@ -288,6 +316,29 @@ func (service *OutcomeService) StartOutcome(
 	}
 	admission, err := coordinator.admitOwnerOutcome(ctx, request.Outcome, intake)
 	if err != nil {
+		return workrun.WorkStatusV1{}, err
+	}
+	advanceStore, err := openProductiveAdvanceStore(
+		ctx,
+		service.factory.lease,
+		intake.WorkRunID,
+	)
+	if err != nil {
+		return workrun.WorkStatusV1{}, err
+	}
+	if err := advanceStore.publishStartAuthority(
+		ctx,
+		productiveStartAuthority{
+			Schema:            productiveStartAuthoritySchema,
+			RepositoryRef:     service.factory.RepositoryRef(),
+			WorkRunID:         intake.WorkRunID,
+			DeliveryIntentRef: admission.IntentRef,
+			Outcome:           request.Outcome,
+			ScopeDigest:       scopeDigest,
+			BaseRevision:      intake.Destination.ObservedRevision,
+			ScopeSelectors:    selectors,
+		},
+	); err != nil {
 		return workrun.WorkStatusV1{}, err
 	}
 	state, err := coordinator.StartWork(ctx, OwnerStartWorkRequest{

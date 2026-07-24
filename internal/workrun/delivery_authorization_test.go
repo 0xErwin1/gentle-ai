@@ -156,6 +156,240 @@ func TestDeliveryAuthorizationNormalReadyAndLiveRevalidation(t *testing.T) {
 	}
 }
 
+func TestProductiveBlockerAfterLiveAuthorizationIsTerminalAndReplaySafe(
+	t *testing.T,
+) {
+	fixture := newTerminalWorkRunFixture(
+		t,
+		reviewtransaction.VerificationAggregateNotRequired,
+	)
+	authorizationRef := testSHARef("post-auth-blocker-authorization")
+	fixture.authority.authorizations[authorizationRef] = liveDeliveryAuthorization(
+		fixture.state,
+		authorizationRef,
+		DeliveryAuthorizationNormal,
+	)
+	bound, err := fixture.store.BindDeliveryAuthorization(
+		context.Background(),
+		BindDeliveryAuthorizationRequest{
+			ExpectedRevision: fixture.state.Revision,
+			RequestID:        "post-auth-blocker-bind",
+			AuthorizationRef: authorizationRef,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := RecordProductiveBlockerRequest{
+		ExpectedRevision: bound.Revision,
+		RequestID:        "post-auth-blocker",
+		DiagnosticRef:    testSHARef("post-auth-blocker-diagnostic"),
+	}
+	fixture.authority.productiveDiagnostics[request.DiagnosticRef] =
+		testProductiveDiagnosticAuthority(
+			fixture.store,
+			bound,
+			request.DiagnosticRef,
+		)
+	blocked, err := fixture.store.RecordProductiveBlocker(
+		context.Background(),
+		request,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked.ProductiveBlockerRef != request.DiagnosticRef ||
+		blocked.ProductiveBlockerSourceRevision != bound.Revision {
+		t.Fatalf("post-authorization blocker = %#v", blocked)
+	}
+	fixture.authority.mu.Lock()
+	authorizationCalls := fixture.authority.authorizationResolveCalls
+	fixture.authority.authorizationErrors[authorizationRef] = os.ErrPermission
+	fixture.authority.mu.Unlock()
+	status, err := fixture.store.PublicStatus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.PublicState != PublicStateNeedsYourDecision {
+		t.Fatalf("post-authorization blocker status = %#v", status)
+	}
+	fixture.authority.mu.Lock()
+	authorizationCallsAfterBlock :=
+		fixture.authority.authorizationResolveCalls
+	fixture.authority.mu.Unlock()
+	if authorizationCallsAfterBlock != authorizationCalls {
+		t.Fatalf(
+			"terminal blocker resolved PAD authorization %d additional times",
+			authorizationCallsAfterBlock-authorizationCalls,
+		)
+	}
+	replayed, err := fixture.store.RecordProductiveBlocker(
+		context.Background(),
+		request,
+	)
+	if err != nil {
+		t.Fatalf("exact blocker replay = %v", err)
+	}
+	if replayed.Revision != blocked.Revision {
+		t.Fatalf("blocker replay revision = %q, want %q", replayed.Revision, blocked.Revision)
+	}
+	if _, err := fixture.store.RecordProductiveBlocker(
+		context.Background(),
+		RecordProductiveBlockerRequest{
+			ExpectedRevision: blocked.Revision,
+			RequestID:        "post-auth-second-blocker",
+			DiagnosticRef:    testSHARef("post-auth-second-diagnostic"),
+		},
+	); !errors.Is(err, ErrWorkRunInvalidTransition) {
+		t.Fatalf("mutation after productive blocker = %v", err)
+	}
+}
+
+func TestProductiveBlockerRequiresExactOwnerAuthorityBeforeMutation(
+	t *testing.T,
+) {
+	fixture := newTerminalWorkRunFixture(
+		t,
+		reviewtransaction.VerificationAggregateNotRequired,
+	)
+	ctx := context.Background()
+	before, err := fixture.store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := testSHARef("owner-authority-required-diagnostic")
+	request := RecordProductiveBlockerRequest{
+		ExpectedRevision: before.Revision,
+		RequestID:        "owner-authority-required",
+		DiagnosticRef:    ref,
+	}
+	if _, err := fixture.store.RecordProductiveBlocker(
+		ctx,
+		request,
+	); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fabricated diagnostic error = %v", err)
+	}
+	unchanged, err := fixture.store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Revision != before.Revision ||
+		unchanged.ProductiveBlockerRef != "" {
+		t.Fatalf("fabricated diagnostic mutated WorkRun: %#v", unchanged)
+	}
+
+	mismatched := testProductiveDiagnosticAuthority(
+		fixture.store,
+		before,
+		ref,
+	)
+	mismatched.SourceRevision = testSHARef("another-source-stage")
+	fixture.authority.productiveDiagnostics[ref] = mismatched
+	if _, err := fixture.store.RecordProductiveBlocker(
+		ctx,
+		request,
+	); !errors.Is(err, ErrAuthorityBindingMismatch) {
+		t.Fatalf("mismatched diagnostic stage error = %v", err)
+	}
+	unchanged, err = fixture.store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Revision != before.Revision ||
+		unchanged.ProductiveBlockerRef != "" {
+		t.Fatalf("mismatched diagnostic mutated WorkRun: %#v", unchanged)
+	}
+}
+
+func TestProductiveBlockerReportsCommittedPostPublicationAuthorityFailure(
+	t *testing.T,
+) {
+	fixture := newTerminalWorkRunFixture(
+		t,
+		reviewtransaction.VerificationAggregateNotRequired,
+	)
+	before, err := fixture.store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := testSHARef("post-publication-authority-failure")
+	port := &failSecondProductiveDiagnosticPort{
+		authority: testProductiveDiagnosticAuthority(
+			fixture.store,
+			before,
+			ref,
+		),
+	}
+	ports := fixture.store.authority
+	ports.ProductiveDiagnostic = port
+	fixture.store = fixture.store.WithAuthorityPorts(ports)
+	_, err = fixture.store.RecordProductiveBlocker(
+		context.Background(),
+		RecordProductiveBlockerRequest{
+			ExpectedRevision: before.Revision,
+			RequestID:        "post-publication-authority-failure",
+			DiagnosticRef:    ref,
+		},
+	)
+	var publication *PublicationError
+	if !errors.As(err, &publication) ||
+		!publication.Committed ||
+		publication.Revision == "" {
+		t.Fatalf("post-publication authority error = %#v", err)
+	}
+	terminal, statusErr := fixture.store.Status()
+	if statusErr != nil {
+		t.Fatal(statusErr)
+	}
+	if terminal.ProductiveBlockerRef != ref ||
+		terminal.ProductiveBlockerSourceRevision != before.Revision ||
+		terminal.Revision != publication.Revision {
+		t.Fatalf(
+			"committed blocker/status = %#v / %#v",
+			terminal,
+			publication,
+		)
+	}
+}
+
+type failSecondProductiveDiagnosticPort struct {
+	authority ProductiveDiagnosticAuthority
+	calls     int
+}
+
+func (port *failSecondProductiveDiagnosticPort) ResolveProductiveDiagnostic(
+	_ context.Context,
+	_ string,
+) (ProductiveDiagnosticAuthority, error) {
+	port.calls++
+	if port.calls > 1 {
+		return ProductiveDiagnosticAuthority{}, os.ErrPermission
+	}
+	return port.authority, nil
+}
+
+func testProductiveDiagnosticAuthority(
+	store WorkRunStore,
+	state WorkRunState,
+	ref string,
+) ProductiveDiagnosticAuthority {
+	code := WorkAdvanceDiagnosticProviderAuthorityUnavailable
+	message, _ := WorkAdvanceDiagnosticMessage(code)
+	return ProductiveDiagnosticAuthority{
+		Diagnostic: WorkAdvanceDiagnosticV1{
+			Ref: ref, Code: code, Message: message,
+		},
+		RepositoryRef:            store.RepositoryRef(),
+		WorkRunID:                state.WorkRunID,
+		SourceRevision:           state.Revision,
+		DeliveryIntentRef:        state.DeliveryIntentRef,
+		Handoff:                  cloneHandoff(state.Handoff),
+		VerificationResultRef:    state.VerificationResultRef,
+		ReviewReceiptRef:         state.ReviewReceiptRef,
+		DeliveryAuthorizationRef: state.DeliveryAuthorizationRef,
+	}
+}
+
 func TestDeliveryAuthorizationExceptionKeepsUnavailableReasonWhileReady(t *testing.T) {
 	fixture := newTerminalWorkRunFixture(
 		t,

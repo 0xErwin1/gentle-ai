@@ -19,18 +19,21 @@ type reviewReceiptLookup struct {
 type testAuthorityRepository struct {
 	mu sync.Mutex
 
-	intents             map[string]DeliveryIntentAuthority
-	deliveryRoutes      map[string]DeliveryRouteReevaluationAuthority
-	explicitSDDRequests map[string]ExplicitSDDRequestAuthority
-	routes              map[string]RouteSelectionAuthority
-	runs                map[string]SDDRunAuthority
-	completions         map[string]MutationCompletionAuthority
-	forecasts           map[string]VerificationForecastAuthority
-	dispositions        map[string]VerificationDispositionAuthority
-	results             map[string]VerificationResultAuthority
-	receipts            map[reviewReceiptLookup]ReviewReceiptAuthority
-	authorizations      map[string]DeliveryAuthorizationAuthority
-	authorizationErrors map[string]error
+	intents                    map[string]DeliveryIntentAuthority
+	deliveryRoutes             map[string]DeliveryRouteReevaluationAuthority
+	explicitSDDRequests        map[string]ExplicitSDDRequestAuthority
+	routes                     map[string]RouteSelectionAuthority
+	runs                       map[string]SDDRunAuthority
+	completions                map[string]MutationCompletionAuthority
+	forecasts                  map[string]VerificationForecastAuthority
+	dispositions               map[string]VerificationDispositionAuthority
+	results                    map[string]VerificationResultAuthority
+	receipts                   map[reviewReceiptLookup]ReviewReceiptAuthority
+	authorizations             map[string]DeliveryAuthorizationAuthority
+	authorizationErrors        map[string]error
+	productiveDiagnostics      map[string]ProductiveDiagnosticAuthority
+	productiveDiagnosticErrors map[string]error
+	authorizationResolveCalls  int
 
 	sddBindings []SDDReservationBinding
 	sddBindErr  error
@@ -38,19 +41,21 @@ type testAuthorityRepository struct {
 
 func newTestAuthorityRepository() *testAuthorityRepository {
 	return &testAuthorityRepository{
-		intents:             map[string]DeliveryIntentAuthority{},
-		deliveryRoutes:      map[string]DeliveryRouteReevaluationAuthority{},
-		explicitSDDRequests: map[string]ExplicitSDDRequestAuthority{},
-		routes:              map[string]RouteSelectionAuthority{},
-		runs:                map[string]SDDRunAuthority{},
-		completions:         map[string]MutationCompletionAuthority{},
-		forecasts:           map[string]VerificationForecastAuthority{},
-		dispositions:        map[string]VerificationDispositionAuthority{},
-		results:             map[string]VerificationResultAuthority{},
-		receipts:            map[reviewReceiptLookup]ReviewReceiptAuthority{},
-		authorizations:      map[string]DeliveryAuthorizationAuthority{},
-		authorizationErrors: map[string]error{},
-		sddBindings:         []SDDReservationBinding{},
+		intents:                    map[string]DeliveryIntentAuthority{},
+		deliveryRoutes:             map[string]DeliveryRouteReevaluationAuthority{},
+		explicitSDDRequests:        map[string]ExplicitSDDRequestAuthority{},
+		routes:                     map[string]RouteSelectionAuthority{},
+		runs:                       map[string]SDDRunAuthority{},
+		completions:                map[string]MutationCompletionAuthority{},
+		forecasts:                  map[string]VerificationForecastAuthority{},
+		dispositions:               map[string]VerificationDispositionAuthority{},
+		results:                    map[string]VerificationResultAuthority{},
+		receipts:                   map[reviewReceiptLookup]ReviewReceiptAuthority{},
+		authorizations:             map[string]DeliveryAuthorizationAuthority{},
+		authorizationErrors:        map[string]error{},
+		productiveDiagnostics:      map[string]ProductiveDiagnosticAuthority{},
+		productiveDiagnosticErrors: map[string]error{},
+		sddBindings:                []SDDReservationBinding{},
 	}
 }
 
@@ -96,6 +101,7 @@ func (repository *testAuthorityRepository) ResolveLiveDeliveryAuthorization(
 ) (DeliveryAuthorizationAuthority, error) {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
+	repository.authorizationResolveCalls++
 	if err, ok := repository.authorizationErrors[ref]; ok {
 		return DeliveryAuthorizationAuthority{}, err
 	}
@@ -103,6 +109,23 @@ func (repository *testAuthorityRepository) ResolveLiveDeliveryAuthorization(
 	if !ok {
 		return DeliveryAuthorizationAuthority{}, os.ErrNotExist
 	}
+	return value, nil
+}
+
+func (repository *testAuthorityRepository) ResolveProductiveDiagnostic(
+	_ context.Context,
+	ref string,
+) (ProductiveDiagnosticAuthority, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	if err, ok := repository.productiveDiagnosticErrors[ref]; ok {
+		return ProductiveDiagnosticAuthority{}, err
+	}
+	value, ok := repository.productiveDiagnostics[ref]
+	if !ok {
+		return ProductiveDiagnosticAuthority{}, os.ErrNotExist
+	}
+	value.Handoff = cloneHandoff(value.Handoff)
 	return value, nil
 }
 

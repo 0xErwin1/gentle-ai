@@ -107,9 +107,10 @@
     "contracts": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["start", "status", "transition"],
+      "required": ["start", "advance", "status", "transition"],
       "properties": {
         "start": {"const": "gentle-ai.work-start/v1"},
+        "advance": {"const": "gentle-ai.work-advance/v1"},
         "status": {"const": "gentle-ai.work-status/v1"},
         "transition": {"const": "gentle-ai.work-transition/v1"}
       }

@@ -29,6 +29,7 @@ const (
 	workOperationReroute            = "route/reroute"
 	workOperationBindSDD            = "route/bind-sdd"
 	workOperationBindHandoff        = "implementation/bind-handoff"
+	workOperationBlockProductive    = "implementation/block-productive"
 	workOperationReplanVerification = "verification/replan-correction"
 	workOperationRecordForecast     = "verification/record-forecast"
 	workOperationRecordDisposition  = "verification/record-disposition"
@@ -39,6 +40,7 @@ const (
 	workOperationBindReview         = "review/bind-receipt"
 	workOperationBindDeliveryRoute  = "delivery/bind-route-reevaluation"
 	workOperationBindDelivery       = "delivery/bind-authorization"
+	workOperationBindDeliveryResult = "delivery/bind-result"
 
 	maximumWorkRunRecordBytes  = 1 << 20
 	maximumWorkRunChainRecords = 10_000
@@ -99,6 +101,8 @@ type WorkRunState struct {
 	SDDRunRef                       string                      `json:"sdd_run_ref,omitempty"`
 	DeliveryIntentRef               string                      `json:"delivery_intent_ref"`
 	Handoff                         *ImplementationHandoff      `json:"handoff,omitempty"`
+	ProductiveBlockerRef            string                      `json:"productive_blocker_ref,omitempty"`
+	ProductiveBlockerSourceRevision string                      `json:"productive_blocker_source_revision,omitempty"`
 	VerificationReplan              *VerificationReplan         `json:"verification_replan,omitempty"`
 	Forecast                        *VerificationForecast       `json:"forecast,omitempty"`
 	Disposition                     *VerificationDisposition    `json:"disposition,omitempty"`
@@ -113,6 +117,7 @@ type WorkRunState struct {
 	ReviewReceiptRef                string                      `json:"review_receipt_ref,omitempty"`
 	DeliveryRouteReevaluationRef    string                      `json:"delivery_route_reevaluation_ref,omitempty"`
 	DeliveryAuthorizationRef        string                      `json:"delivery_authorization_ref,omitempty"`
+	DeliveryResultRef               string                      `json:"delivery_result_ref,omitempty"`
 }
 
 type WorkRunStore struct {
@@ -176,6 +181,12 @@ type ReplanVerificationAfterCorrectionRequest struct {
 	CorrectedHandoff ImplementationHandoff `json:"corrected_handoff"`
 }
 
+type RecordProductiveBlockerRequest struct {
+	ExpectedRevision string `json:"expected_revision"`
+	RequestID        string `json:"request_id"`
+	DiagnosticRef    string `json:"diagnostic_ref"`
+}
+
 type RecordVerificationForecastRequest struct {
 	ExpectedRevision string                    `json:"expected_revision"`
 	RequestID        string                    `json:"request_id"`
@@ -233,6 +244,12 @@ type BindDeliveryRouteReevaluationRequest struct {
 	ReevaluationRef  string `json:"reevaluation_ref"`
 }
 
+type BindDeliveryResultRequest struct {
+	ExpectedRevision string `json:"expected_revision"`
+	RequestID        string `json:"request_id"`
+	ResultRef        string `json:"result_ref"`
+}
+
 type workStartEvent struct {
 	RouteDecision     ImplementationRouteDecision `json:"route_decision"`
 	DeliveryIntentRef string                      `json:"delivery_intent_ref"`
@@ -256,6 +273,10 @@ type workBindReviewEvent struct {
 	ReviewReceiptRef string `json:"review_receipt_ref"`
 }
 
+type workProductiveBlockerEvent struct {
+	DiagnosticRef string `json:"diagnostic_ref"`
+}
+
 type workBindResultEvent struct {
 	ResultRef                   string            `json:"result_ref"`
 	PostVerificationSnapshotRef string            `json:"post_verification_snapshot_ref,omitempty"`
@@ -277,6 +298,10 @@ type workBindDeliveryAuthorizationEvent struct {
 	AuthorizationRef string `json:"authorization_ref"`
 }
 
+type workBindDeliveryResultEvent struct {
+	ResultRef string `json:"result_ref"`
+}
+
 type workBindDeliveryRouteEvent struct {
 	ReevaluationRef         string `json:"reevaluation_ref"`
 	SourceDeliveryIntentRef string `json:"source_delivery_intent_ref"`
@@ -291,21 +316,23 @@ type workRunRecord struct {
 	RequestID        string `json:"request_id"`
 	RequestDigest    string `json:"request_digest"`
 
-	Start         *workStartEvent                     `json:"start,omitempty"`
-	AcceptSDD     *workAcceptSDDEvent                 `json:"accept_sdd,omitempty"`
-	Reroute       *workRerouteEvent                   `json:"reroute,omitempty"`
-	BindSDD       *workBindSDDEvent                   `json:"bind_sdd,omitempty"`
-	Handoff       *ImplementationHandoff              `json:"handoff,omitempty"`
-	Replan        *workVerificationReplanEvent        `json:"replan,omitempty"`
-	Forecast      *VerificationForecast               `json:"forecast,omitempty"`
-	Disposition   *VerificationDisposition            `json:"disposition,omitempty"`
-	Reservation   *VerificationReservation            `json:"reservation,omitempty"`
-	Launch        *VerificationLaunchClaim            `json:"launch,omitempty"`
-	Result        *workBindResultEvent                `json:"result,omitempty"`
-	StopMutation  *workStopMutationEvent              `json:"stop_mutation,omitempty"`
-	Review        *workBindReviewEvent                `json:"review,omitempty"`
-	DeliveryRoute *workBindDeliveryRouteEvent         `json:"delivery_route,omitempty"`
-	Delivery      *workBindDeliveryAuthorizationEvent `json:"delivery,omitempty"`
+	Start          *workStartEvent                     `json:"start,omitempty"`
+	AcceptSDD      *workAcceptSDDEvent                 `json:"accept_sdd,omitempty"`
+	Reroute        *workRerouteEvent                   `json:"reroute,omitempty"`
+	BindSDD        *workBindSDDEvent                   `json:"bind_sdd,omitempty"`
+	Handoff        *ImplementationHandoff              `json:"handoff,omitempty"`
+	Blocker        *workProductiveBlockerEvent         `json:"productive_blocker,omitempty"`
+	Replan         *workVerificationReplanEvent        `json:"replan,omitempty"`
+	Forecast       *VerificationForecast               `json:"forecast,omitempty"`
+	Disposition    *VerificationDisposition            `json:"disposition,omitempty"`
+	Reservation    *VerificationReservation            `json:"reservation,omitempty"`
+	Launch         *VerificationLaunchClaim            `json:"launch,omitempty"`
+	Result         *workBindResultEvent                `json:"result,omitempty"`
+	StopMutation   *workStopMutationEvent              `json:"stop_mutation,omitempty"`
+	Review         *workBindReviewEvent                `json:"review,omitempty"`
+	DeliveryRoute  *workBindDeliveryRouteEvent         `json:"delivery_route,omitempty"`
+	Delivery       *workBindDeliveryAuthorizationEvent `json:"delivery,omitempty"`
+	DeliveryResult *workBindDeliveryResultEvent        `json:"delivery_result,omitempty"`
 }
 
 type workRequestReceipt struct {
@@ -634,6 +661,83 @@ func (store WorkRunStore) BindImplementationHandoff(
 		event := request.Handoff
 		return workRunRecord{Operation: workOperationBindHandoff, Handoff: &event}, nil
 	})
+}
+
+// RecordProductiveBlocker durably stops automatic convergence when native
+// classification proves that a complete owner plan is unavailable. The
+// diagnostic is immutable owner evidence; no model-authored disposition or
+// synthetic verification result is accepted.
+func (store WorkRunStore) RecordProductiveBlocker(
+	ctx context.Context,
+	request RecordProductiveBlockerRequest,
+) (WorkRunState, error) {
+	if err := validateMutationEnvelope(
+		request.ExpectedRevision,
+		request.RequestID,
+	); err != nil {
+		return WorkRunState{}, err
+	}
+	if !validSHA256Ref(request.DiagnosticRef) {
+		return WorkRunState{}, errors.New(
+			"productive blocker requires an immutable diagnostic reference",
+		)
+	}
+	digest, err := digestValue(
+		"gentle-ai.work-run-productive-blocker-request/v1",
+		request,
+	)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	applied, err := store.mutate(
+		ctx,
+		request.ExpectedRevision,
+		request.RequestID,
+		digest,
+		func(replay workReplay) (workRunRecord, error) {
+			if !productiveBlockerBindable(replay.State) {
+				return workRunRecord{}, fmt.Errorf(
+					"%w: WorkRun cannot accept a productive blocker",
+					ErrWorkRunInvalidTransition,
+				)
+			}
+			if err := store.resolveProductiveDiagnostic(
+				ctx,
+				request.DiagnosticRef,
+				replay.State,
+			); err != nil {
+				return workRunRecord{}, err
+			}
+			event := workProductiveBlockerEvent{
+				DiagnosticRef: request.DiagnosticRef,
+			}
+			return workRunRecord{
+				Operation: workOperationBlockProductive,
+				Blocker:   &event,
+			}, nil
+		},
+	)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	// Exact request replay bypasses the build callback. Re-resolve the terminal
+	// authority before returning so a lost-response retry cannot rely on an
+	// absent, tampered, or differently-bound diagnostic.
+	if err := store.resolveProductiveDiagnostic(
+		ctx,
+		request.DiagnosticRef,
+		applied,
+	); err != nil {
+		return WorkRunState{}, &PublicationError{
+			Revision:  applied.Revision,
+			Committed: true,
+			Cause: fmt.Errorf(
+				"revalidate committed productive diagnostic authority: %w",
+				err,
+			),
+		}
+	}
+	return applied, nil
 }
 
 // ReplanVerificationAfterCorrection replaces only the active verification
@@ -1355,6 +1459,64 @@ func (store WorkRunStore) BindDeliveryAuthorization(
 	)
 }
 
+func (store WorkRunStore) BindDeliveryResult(
+	ctx context.Context,
+	request BindDeliveryResultRequest,
+) (WorkRunState, error) {
+	if err := validateMutationEnvelope(
+		request.ExpectedRevision,
+		request.RequestID,
+	); err != nil {
+		return WorkRunState{}, err
+	}
+	if !validSHA256Ref(request.ResultRef) {
+		return WorkRunState{}, errors.New(
+			"delivery result must be an immutable SHA-256 reference",
+		)
+	}
+	if store.authority.DeliveryResult == nil {
+		return WorkRunState{}, ErrAuthorityPortUnavailable
+	}
+	authority, err := store.authority.DeliveryResult.ResolveDeliveryResult(
+		ctx,
+		request.ResultRef,
+	)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	digest, err := digestValue(
+		"gentle-ai.work-run-bind-delivery-result-request/v1",
+		request,
+	)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	return store.mutate(
+		ctx,
+		request.ExpectedRevision,
+		request.RequestID,
+		digest,
+		func(replay workReplay) (workRunRecord, error) {
+			state := replay.State
+			if state.DeliveryAuthorizationRef == "" ||
+				state.DeliveryResultRef != "" {
+				return workRunRecord{}, fmt.Errorf(
+					"%w: delivery result is not bindable",
+					ErrWorkRunInvalidTransition,
+				)
+			}
+			if err := authority.Validate(request.ResultRef, state); err != nil {
+				return workRunRecord{}, err
+			}
+			event := workBindDeliveryResultEvent{ResultRef: request.ResultRef}
+			return workRunRecord{
+				Operation:      workOperationBindDeliveryResult,
+				DeliveryResult: &event,
+			}, nil
+		},
+	)
+}
+
 // BindDeliveryRouteReevaluation advances only PAD's delivery intent after the
 // exact terminal content has already been frozen. The implementation route,
 // handoff, MMI completion, verification result, and review receipt remain
@@ -1528,6 +1690,12 @@ func (store WorkRunStore) mutate(
 		return WorkRunState{}, &RevisionConflictError{
 			Expected: expectedRevision, Current: replay.State.Revision,
 		}
+	}
+	if replay.State.ProductiveBlockerRef != "" {
+		return WorkRunState{}, fmt.Errorf(
+			"%w: productive blocker is terminal",
+			ErrWorkRunInvalidTransition,
+		)
 	}
 	record, err := build(replay)
 	if err != nil {
@@ -1988,6 +2156,12 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 	if record.WorkRunID != state.WorkRunID {
 		return errors.New("work run record identifier does not match store")
 	}
+	if state.ProductiveBlockerRef != "" {
+		return fmt.Errorf(
+			"%w: productive blocker is terminal",
+			ErrWorkRunInvalidTransition,
+		)
+	}
 	switch record.Operation {
 	case workOperationStart:
 		if state.Started || state.Revision != "" {
@@ -2077,6 +2251,17 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 		}
 		state.Handoff = cloneHandoff(record.Handoff)
 		state.ReusableVerificationObligations = []string{}
+	case workOperationBlockProductive:
+		if !productiveBlockerBindable(*state) ||
+			record.Blocker == nil ||
+			!validSHA256Ref(record.Blocker.DiagnosticRef) {
+			return fmt.Errorf(
+				"%w: productive blocker is not bindable",
+				ErrWorkRunInvalidTransition,
+			)
+		}
+		state.ProductiveBlockerRef = record.Blocker.DiagnosticRef
+		state.ProductiveBlockerSourceRevision = record.PreviousRevision
 	case workOperationReplanVerification:
 		if state.Handoff == nil ||
 			state.Forecast == nil ||
@@ -2130,6 +2315,7 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 		state.VerificationStop = nil
 		state.ReviewReceiptRef = ""
 		state.DeliveryAuthorizationRef = ""
+		state.DeliveryResultRef = ""
 	case workOperationRecordForecast:
 		if state.Handoff == nil {
 			return fmt.Errorf("%w: implementation handoff is missing", ErrWorkRunInvalidTransition)
@@ -2254,6 +2440,7 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 		state.VerificationStop = cloneVerificationStop(record.Result.Stop)
 		state.ReviewReceiptRef = ""
 		state.DeliveryAuthorizationRef = ""
+		state.DeliveryResultRef = ""
 	case workOperationStopMutation:
 		if state.Forecast == nil ||
 			state.VerificationResultRef != "" ||
@@ -2279,6 +2466,7 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 		state.ReusableVerificationObligations = []string{}
 		state.ReviewReceiptRef = ""
 		state.DeliveryAuthorizationRef = ""
+		state.DeliveryResultRef = ""
 	case workOperationBindReview:
 		if state.VerificationResultRef == "" ||
 			state.PostVerificationSnapshotRef == "" ||
@@ -2336,10 +2524,29 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 			)
 		}
 		state.DeliveryAuthorizationRef = record.Delivery.AuthorizationRef
+		state.DeliveryResultRef = ""
+	case workOperationBindDeliveryResult:
+		if state.DeliveryAuthorizationRef == "" ||
+			state.DeliveryResultRef != "" ||
+			record.DeliveryResult == nil ||
+			!validSHA256Ref(record.DeliveryResult.ResultRef) {
+			return fmt.Errorf(
+				"%w: delivery result is not bindable",
+				ErrWorkRunInvalidTransition,
+			)
+		}
+		state.DeliveryResultRef = record.DeliveryResult.ResultRef
 	default:
 		return fmt.Errorf("unsupported work run operation %q", record.Operation)
 	}
 	return nil
+}
+
+func productiveBlockerBindable(state WorkRunState) bool {
+	return state.Started &&
+		state.ImplementationRoute != "" &&
+		state.ProductiveBlockerRef == "" &&
+		state.DeliveryResultRef == ""
 }
 
 func validateWorkRunRecordShape(record workRunRecord) error {
@@ -2360,11 +2567,13 @@ func validateWorkRunRecordShape(record workRunRecord) error {
 	}
 	fields := []bool{
 		record.Start != nil, record.AcceptSDD != nil, record.Reroute != nil,
-		record.BindSDD != nil, record.Handoff != nil, record.Replan != nil,
+		record.BindSDD != nil, record.Handoff != nil, record.Blocker != nil,
+		record.Replan != nil,
 		record.Forecast != nil,
 		record.Disposition != nil, record.Reservation != nil, record.Result != nil,
 		record.StopMutation != nil, record.Launch != nil, record.Review != nil,
 		record.DeliveryRoute != nil, record.Delivery != nil,
+		record.DeliveryResult != nil,
 	}
 	count := 0
 	for _, present := range fields {
@@ -2380,6 +2589,8 @@ func validateWorkRunRecordShape(record workRunRecord) error {
 		record.Operation == workOperationReroute && record.Reroute != nil ||
 		record.Operation == workOperationBindSDD && record.BindSDD != nil ||
 		record.Operation == workOperationBindHandoff && record.Handoff != nil ||
+		record.Operation == workOperationBlockProductive &&
+			record.Blocker != nil ||
 		record.Operation == workOperationReplanVerification &&
 			record.Replan != nil ||
 		record.Operation == workOperationRecordForecast && record.Forecast != nil ||
@@ -2392,7 +2603,9 @@ func validateWorkRunRecordShape(record workRunRecord) error {
 		record.Operation == workOperationBindReview && record.Review != nil ||
 		record.Operation == workOperationBindDeliveryRoute &&
 			record.DeliveryRoute != nil ||
-		record.Operation == workOperationBindDelivery && record.Delivery != nil
+		record.Operation == workOperationBindDelivery && record.Delivery != nil ||
+		record.Operation == workOperationBindDeliveryResult &&
+			record.DeliveryResult != nil
 	if !validOperation {
 		return errors.New("work run record operation and typed event differ")
 	}

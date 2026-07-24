@@ -39,6 +39,7 @@ type RuntimeCapabilityClaimV1 struct {
 // command presence, fields, or prose.
 type RuntimeContractSetV1 struct {
 	Start      string `json:"start"`
+	Advance    string `json:"advance"`
 	Status     string `json:"status"`
 	Transition string `json:"transition"`
 }
@@ -80,6 +81,7 @@ func (capabilities RuntimeCapabilitiesV1) Validate() error {
 	}
 	if capabilities.Contracts != (RuntimeContractSetV1{
 		Start:      workrun.WorkStartContractV1,
+		Advance:    workrun.WorkAdvanceContractV1,
 		Status:     workrun.WorkStatusContractV1,
 		Transition: workrun.WorkTransitionContractV1,
 	}) {
@@ -114,6 +116,7 @@ func (capabilities RuntimeCapabilitiesV1) Validate() error {
 type RuntimeOutcome interface {
 	Capabilities(context.Context) (RuntimeCapabilitiesV1, error)
 	StartOutcome(context.Context, OutcomeStartRequest) (workrun.WorkStatusV1, error)
+	AdvanceOutcome(context.Context, string, string) (workrun.WorkAdvanceV1, error)
 }
 
 type RuntimeOutcomeOpener interface {
@@ -190,6 +193,77 @@ type RuntimeStartResult struct {
 	Diagnostic *workrun.WorkDiagnosticV1
 }
 
+type RuntimeAdvanceRequest struct {
+	Repo             string
+	WorkRunID        string
+	ExpectedRevision string
+	Contract         string
+}
+
+type RuntimeAdvanceResult struct {
+	Advance    *workrun.WorkAdvanceV1
+	Diagnostic *workrun.WorkDiagnosticV1
+}
+
+func (result RuntimeAdvanceResult) Output() any {
+	if result.Diagnostic != nil {
+		return *result.Diagnostic
+	}
+	if result.Advance != nil {
+		return *result.Advance
+	}
+	return nil
+}
+
+// Advance performs one provider-owned bounded convergence attempt. Consumers
+// never repeat internal phases or reconstruct owner inputs.
+func (controller RuntimeController) Advance(
+	ctx context.Context,
+	request RuntimeAdvanceRequest,
+) (RuntimeAdvanceResult, error) {
+	if diagnostic := unsupportedContractDiagnostic(
+		workrun.DiagnosticOperationWorkAdvance,
+		request.Contract,
+		workrun.WorkAdvanceContractV1,
+		"The requested work advance contract is unsupported.",
+	); diagnostic != nil {
+		return RuntimeAdvanceResult{Diagnostic: diagnostic}, nil
+	}
+	if !workRunIDPattern.MatchString(request.WorkRunID) {
+		return RuntimeAdvanceResult{}, errors.New(
+			"work-advance requires a canonical --work-run identifier",
+		)
+	}
+	if !revisionPattern.MatchString(request.ExpectedRevision) {
+		return RuntimeAdvanceResult{}, errors.New(
+			"work-advance requires a lowercase SHA-256 --expected-revision",
+		)
+	}
+	runtime, err := controller.open(ctx, request.Repo)
+	if err != nil {
+		return RuntimeAdvanceResult{}, err
+	}
+	advance, err := runtime.AdvanceOutcome(
+		ctx,
+		request.WorkRunID,
+		request.ExpectedRevision,
+	)
+	if err != nil {
+		return RuntimeAdvanceResult{}, err
+	}
+	if err := advance.Validate(); err != nil {
+		return RuntimeAdvanceResult{}, fmt.Errorf(
+			"validate productive runtime advance: %w",
+			err,
+		)
+	}
+	if advance.Status.WorkRunID != request.WorkRunID ||
+		advance.PreviousRevision != request.ExpectedRevision {
+		return RuntimeAdvanceResult{}, ErrProviderResultMismatch
+	}
+	return RuntimeAdvanceResult{Advance: &advance}, nil
+}
+
 func (result RuntimeStartResult) Output() any {
 	if result.Diagnostic != nil {
 		return *result.Diagnostic
@@ -221,6 +295,13 @@ func (controller RuntimeController) Start(
 		return RuntimeStartResult{}, err
 	}
 	status, err := runtime.StartOutcome(ctx, outcome)
+	if errors.Is(err, ErrOutcomeNotManaged) {
+		diagnostic := outcomeNotManagedDiagnostic()
+		if validateErr := diagnostic.Validate(); validateErr != nil {
+			return RuntimeStartResult{}, validateErr
+		}
+		return RuntimeStartResult{Diagnostic: &diagnostic}, nil
+	}
 	if err != nil {
 		return RuntimeStartResult{}, err
 	}
@@ -231,6 +312,19 @@ func (controller RuntimeController) Start(
 		)
 	}
 	return RuntimeStartResult{Status: &status}, nil
+}
+
+func outcomeNotManagedDiagnostic() workrun.WorkDiagnosticV1 {
+	return workrun.WorkDiagnosticV1{
+		Schema:             workrun.WorkDiagnosticSchemaV1,
+		Operation:          workrun.DiagnosticOperationWorkStart,
+		Code:               "outcome_not_managed",
+		Message:            "The owner classified this outcome as not requiring a managed write lifecycle.",
+		RequestedContract:  workrun.WorkStartContractV1,
+		SupportedContracts: []string{workrun.WorkStartContractV1},
+		MutationOutcome:    "not_started",
+		NextAction:         "continue_unmanaged",
+	}
 }
 
 func (controller RuntimeController) open(

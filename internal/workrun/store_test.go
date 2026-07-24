@@ -56,7 +56,8 @@ func TestWorkRunStoreReopenKeepsExactRepositoryShard(t *testing.T) {
 	authority := newTestAuthorityRepository()
 	first = first.WithAuthorityPorts(AuthorityPorts{
 		PAD: authority, DeliveryRoute: authority,
-		ExplicitSDDRequest: authority, Route: authority, SDD: authority,
+		ProductiveDiagnostic: authority,
+		ExplicitSDDRequest:   authority, Route: authority, SDD: authority,
 		MutationCompletion: authority, Verification: authority,
 		Launch: hostruntime.NewExecutor(),
 	})
@@ -752,7 +753,8 @@ func openTestWorkRunStore(t *testing.T, repo, workRunID string) WorkRunStore {
 	executor := hostruntime.NewExecutor()
 	return store.WithAuthorityPorts(AuthorityPorts{
 		PAD: authority, DeliveryRoute: authority,
-		ExplicitSDDRequest: authority, Route: authority, SDD: authority,
+		ProductiveDiagnostic: authority,
+		ExplicitSDDRequest:   authority, Route: authority, SDD: authority,
 		MutationCompletion: authority, Verification: authority, Launch: executor,
 	})
 }

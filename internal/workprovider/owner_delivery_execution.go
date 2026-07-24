@@ -31,6 +31,24 @@ func (coordinator *OwnerCoordinator) preparePADCandidateBinding(
 	ctx context.Context,
 	decision deliveryadmission.DeliveryDecision,
 ) error {
+	return coordinator.preparePADCandidateBindingFor(
+		ctx,
+		decision.Candidate,
+		decision.Gates.Destination,
+		decision.Gates.Mechanism,
+		decision.ReviewReceiptRef,
+		decision.VerificationResultRef,
+	)
+}
+
+func (coordinator *OwnerCoordinator) preparePADCandidateBindingFor(
+	ctx context.Context,
+	candidate deliveryadmission.CandidateBinding,
+	destination deliveryadmission.DestinationBinding,
+	mechanism deliveryadmission.Mechanism,
+	receiptRef string,
+	resultRef string,
+) error {
 	if coordinator.padCandidates == nil &&
 		coordinator.padBindingSource == nil {
 		return nil
@@ -43,16 +61,16 @@ func (coordinator *OwnerCoordinator) preparePADCandidateBinding(
 	}
 	authority, err := coordinator.rar.ResolveReceiptResult(
 		ctx,
-		decision.ReviewReceiptRef,
-		decision.VerificationResultRef,
+		receiptRef,
+		resultRef,
 	)
 	if err != nil {
 		return fmt.Errorf("resolve reviewed PAD candidate tree: %w", err)
 	}
 	candidateTree := authority.Receipt.CandidateTree()
 	if candidateTree == "" ||
-		authority.Receipt.ReceiptRef != decision.ReviewReceiptRef ||
-		authority.Result.ResultRef != decision.VerificationResultRef ||
+		authority.Receipt.ReceiptRef != receiptRef ||
+		authority.Result.ResultRef != resultRef ||
 		authority.Result.Subject.CandidateTree != candidateTree {
 		return fmt.Errorf(
 			"%w: RAR returned a mismatched reviewed candidate tree",
@@ -60,9 +78,6 @@ func (coordinator *OwnerCoordinator) preparePADCandidateBinding(
 		)
 	}
 
-	candidate := decision.Candidate
-	destination := decision.Gates.Destination
-	mechanism := decision.Gates.Mechanism
 	binding, resolveErr := coordinator.padCandidates.ResolvePADGitBinding(
 		ctx,
 		candidate,
@@ -261,6 +276,90 @@ func (coordinator *OwnerCoordinator) ExecuteBoundDelivery(
 		repository,
 		repository,
 		coordinator.padDelivery,
+		coordinator.padDelivery,
+		useStore,
+		deliveryadmission.ExecuteDeliveryRequest{
+			AuthorizationRef:  state.DeliveryAuthorizationRef,
+			AuthorizationKind: authorization.kind,
+		},
+	)
+}
+
+// RecoverBoundDelivery resolves only an already-consumed, already-durable PAD
+// terminal result. It deliberately bypasses the activation mutation guard
+// because it cannot reserve, probe, or execute an effect; this is the
+// reconciliation path used after a kill switch changes during a lost response.
+func (coordinator *OwnerCoordinator) RecoverBoundDelivery(
+	ctx context.Context,
+) (
+	result deliveryadmission.ExecutionResult,
+	found bool,
+	err error,
+) {
+	if err := coordinator.validate(ctx); err != nil {
+		return deliveryadmission.ExecutionResult{}, false, err
+	}
+	state, err := coordinator.work.Status()
+	if err != nil {
+		return deliveryadmission.ExecutionResult{}, false, err
+	}
+	if err := validateOwnerBoundDeliveryState(state); err != nil {
+		return deliveryadmission.ExecutionResult{}, false, err
+	}
+	opened, err := coordinator.pad.openRepository(ctx)
+	if err != nil {
+		return deliveryadmission.ExecutionResult{}, false, err
+	}
+	repository, ok := opened.(ownerPADDeliveryExecutionRepository)
+	if !ok {
+		_ = opened.Close()
+		return deliveryadmission.ExecutionResult{}, false, errors.New(
+			"PAD owner repository does not support bound delivery recovery",
+		)
+	}
+	defer func() {
+		if closeErr := repository.Close(); closeErr != nil {
+			result = deliveryadmission.ExecutionResult{}
+			found = false
+			err = errors.Join(err, closeErr)
+		}
+	}()
+	authorization, err := resolveOwnerBoundDeliveryAuthorization(
+		ctx,
+		repository,
+		state.DeliveryAuthorizationRef,
+	)
+	if err != nil {
+		return deliveryadmission.ExecutionResult{}, false, err
+	}
+	if err := validateOwnerBoundDeliveryAuthorization(
+		ctx,
+		repository,
+		state,
+		authorization.binding,
+		coordinator.padDelivery.RepositoryRef(),
+	); err != nil {
+		return deliveryadmission.ExecutionResult{}, false, err
+	}
+	useStore, err := deliveryadmission.OpenDirectoryUseStore(
+		ctx,
+		repository,
+		coordinator.padDelivery.RepositoryRef(),
+	)
+	if err != nil {
+		return deliveryadmission.ExecutionResult{}, false, err
+	}
+	defer func() {
+		if closeErr := useStore.Close(); closeErr != nil {
+			result = deliveryadmission.ExecutionResult{}
+			found = false
+			err = errors.Join(err, closeErr)
+		}
+	}()
+	return deliveryadmission.ReplayAuthorizedDeliveryResult(
+		ctx,
+		repository,
+		repository,
 		coordinator.padDelivery,
 		useStore,
 		deliveryadmission.ExecuteDeliveryRequest{
