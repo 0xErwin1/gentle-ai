@@ -1,108 +1,115 @@
-# Agent Trigger Rules
+# Organic Implementation Trigger Rules
 
 <- [Back to README](../README.md)
 
----
+Ask for the outcome. Gentle AI keeps already-understood work inline, delegates only
+the actions that benefit from fresh context, and offers SDD only when durable
+planning would materially reduce uncertainty. Verification, review, delivery, and
+lifecycle authority remain native provider responsibilities behind that simple
+interaction.
 
-gentle-ai injects a **trigger-rules** section into every supported agent's system prompt or orchestrator configuration. This section is a deterministic triage router that tells the AI orchestrator which review and verification agents to run at each moment of the development workflow.
+## Quick path
 
-## What Are Trigger Rules?
+1. Describe the outcome in natural language.
+2. Gentle AI uses the smallest useful implementation route: direct inline,
+   delegated direct, or an optional SDD proposal.
+3. The normal interaction reports only **Working**, **Checking**, **Ready**, or
+   **Needs your decision**.
 
-Trigger rules are a **deterministic triage router, not advice**. gentle-ai renders the rules as plain instruction text and injects them into the agent's prompt; the AI orchestrator applies them as a decision procedure at each event. gentle-ai never fires, blocks, or executes any rule itself — it renders text only, and nothing in the router pauses or gates the user's workflow.
+The user does not choose review internals, hashes, receipts, or lifecycle
+transitions. A question is necessary only when the answer changes requested
+scope, destructive or irreversible impact, permission or security exposure,
+verification cost or external side effects, accepted residual risk, or delivery.
 
-The injected section looks like this in your agent's system-prompt file:
+## Implementation routes
 
-```markdown
-<!-- gentle-ai:trigger-rules -->
-## Agent Trigger Rules
+| Route | Use it when | What happens |
+|---|---|---|
+| **Direct inline** | Deciding or verifying requires **1–3 files**; or the change is **one mechanical, already-understood file** with no research or unresolved design decision. | Keep the bounded action inline. |
+| **Delegated direct** | Understanding requires **4+ files**; reading prepares a write; broad research is needed; or a writer must change **2+ non-trivial files**. | Delegate the narrow exploration and/or one writer needed for that action. |
+| **Optional SDD** | The work has substantial ambiguity, or durable proposal, spec, design, or task artifacts would materially reduce uncertainty. | Propose SDD. Select it only after an explicit request or an accepted proposal. |
 
-Deterministic triage router. gentle-ai renders this text; the AI orchestrator
-applies it as a decision procedure, not advice. Triage every diff into exactly
-one tier before acting:
+The file counts describe the context needed for the current action, not a risk
+score and not an SDD threshold. Risk may strengthen native verification or
+review, but it never forces SDD.
 
-1. **Trivial diff** (ONLY documentation, comments, formatting, or typo fixes
-   in strings — zero executable code and zero configuration changes): run no
-   review lens. Any diff touching executable code or configuration is at
-   least standard tier.
-2. **Standard diff**: run exactly ONE lens — the risk-table row matching the
-   dominant risk; do not add lenses.
-3. **Hot path or large operational diff**: run the full 4R fan-out; never at
-   pre-commit or pre-push. Pure human documentation above 400 authored lines
-   runs only `review-readability`.
+Delegation also applies per action. Tests, builds, installs, and native review
+actors may use fresh workers without changing the implementation route or
+creating an SDD run. Direct and delegated work create no SDD artifacts, phase
+attempts, or synthetic SDD lifecycle.
 
-- At **pre-commit**, always: trivial diff → no lens; otherwise run exactly ONE
-  lens selected by the risk table (default `review-readability`); never the
-  full 4R fan-out here.
-- At **pre-pr**: validate the existing content-bound receipt; reviewer lenses
-  run only inside explicit `review/start(target)`. At START, hot paths and
-  diffs above 400 authored lines outside pure human documentation run all four
-  4R lenses; large pure human documentation runs only `review-readability`.
-- ...
-<!-- /gentle-ai:trigger-rules -->
+If apparently simple work reveals substantial ambiguity, Gentle AI may offer SDD
+at the next safe boundary. Declining it leads to a safely reduced scope, a
+justified direct or delegated route, or **Needs your decision**—never silent SDD
+enrollment.
+
+## Native progress and authority
+
+| Public state | Meaning |
+|---|---|
+| **Working** | The implementation can still change. |
+| **Checking** | Gentle AI is performing the applicable functional proof and bounded review. |
+| **Ready** | The exact candidate has sufficient evidence for the selected delivery route. |
+| **Needs your decision** | Safe automatic convergence is impossible; Gentle AI presents the cause, impact, and concrete choices. |
+
+Managed adapters read common-work status with exactly:
+
+```bash
+gentle-ai work-status --cwd <repo> --work-run <id> --contract gentle-ai.work-status/v1 --json
 ```
 
-## Where the Section Is Injected
+Status returns zero or one provider-issued `authorizedTransition`. When one is
+present, the adapter may apply only that exact authorization and revision:
 
-| Agent | Location |
-|-------|----------|
-| Claude Code | `~/.claude/CLAUDE.md` (marker section) |
-| Gemini CLI | `~/.gemini/GEMINI.md` (marker section) |
-| Cursor | `~/.cursor/rules/gentle-ai.mdc` (marker section) |
-| VS Code Copilot | `.instructions.md` (marker section) |
-| Codex | `~/.codex/AGENTS.md` (marker section) |
-| Antigravity | `~/.gemini/GEMINI.md` (marker section) |
-| Windsurf | `~/.codeium/windsurf/memories/global_rules.md` (marker section) |
-| Kiro | `~/.kiro/steering/gentle-ai.md` (marker section) |
-| Hermes | `~/.hermes/SOUL.md` (marker section) |
-| OpenCode | `opencode.json` → `agent.gentle-orchestrator.prompt` (inline) |
-| Kilocode | `opencode.json` → `agent.gentle-orchestrator.prompt` (inline) |
-| Kimi | `~/.kimi/trigger-rules.md` (Jinja module, included via `KIMI.md`) |
+```bash
+gentle-ai work-transition apply --cwd <repo> --work-run <id> --contract gentle-ai.work-transition/v1 --authorization-ref <ref> --expected-revision <revision> --json
+```
 
-## Triage Tiers
+`work-transition apply` is the only common-work mutation surface. Adapters do not
+invent alternate flags, select review lenses, reconstruct recovery policy, infer
+success from prose, or retry stale, expired, mismatched, or replayed
+authorizations. Existing SDD v1 runs continue through their SDD-specific status
+contract; direct and delegated runs do not create or consume an SDD run.
 
-The orchestrator triages every diff into exactly one tier before acting:
+## Fail-closed activation
 
-**Tier 1 — Trivial diff → no lens**
+`GENTLE_AI_WORK_ROUTING_MODE` is the single operator-owned kill switch:
 
-- A diff is trivial ONLY if it changes documentation, comments, formatting, or fixes typos in strings — zero executable code and zero configuration changes. Run no review lens at all.
-  Cost: 0x. Trivial work never pays a review cycle. Any diff touching executable code or configuration is at least standard tier.
+| Value | Effect |
+|---|---|
+| Unset or `enabled` | Advertise and run the common-work capability. |
+| `recovery_only` | Keep capability advertisement dormant and expose only recovery-safe continuation. |
+| `read_only` | Keep capability advertisement dormant, return status without an authorized mutation, and reject apply. |
+| `disabled` | Keep capability advertisement dormant and reject common-work use. |
+| Empty or unknown | Resolve to disabled with a typed invalid-mode error. |
 
-**Tier 2 — Standard diff → exactly ONE lens**
+Unavailable, disabled, unknown, or read-only authority never becomes local
+adapter policy. The adapter remains read-only and surfaces the typed stop instead
+of inventing a transition.
 
-- Every non-trivial diff runs exactly one lens: the risk-table row matching the dominant risk (clear naming, structure, maintainability, or small refactors → `review-readability`; behavior, state, tests, determinism, or regressions → `review-reliability`; shell/process integration, partial failures, recovery, or degraded dependencies → `review-resilience`; security, permissions, data exposure/loss, architecture, or dependencies → `review-risk`). If multiple rows match, the orchestrator picks the single highest-impact row; it never adds lenses.
-  Cost: ~1x. This is the everyday tier for `pre-commit`, `pre-push`, and off-hot-path `pre-pr` diffs.
+## Installation and refresh
 
-**Tier 3 — Hot path or large operational diff → full 4R fan-out**
+`gentle-ai install` and `gentle-ai sync` project the same canonical rules into
+every supported adapter:
 
-- Inside explicit `review/start(target)`, auth/update/security/payments paths or
-  more than 400 authored lines in code, configuration, prompts, agent rules,
-  workflows, runtime instruction docs, mixed content, or active content run all
-  four 4R lenses (`review-risk`, `review-resilience`, `review-readability`,
-  `review-reliability`). Pure human documentation above 400 lines runs only
-  `review-readability`.
-  Cost: ~4x for full 4R and ~1x for large pure documentation. Lifecycle gates
-  validate the receipt and never launch reviewers.
-
-For ad-hoc 4R outside a native ordinary transaction, after a fix rerun only the
-originating lens or lenses that produced open verified BLOCKER/CRITICAL
-findings. Do not rerun clean lenses or lenses with only WARNING/SUGGESTION
-findings. Native ordinary review keeps its targeted validator and never reruns
-initial lenses.
-
-**High-stakes SDD phases**
-
-- `post-sdd-phase` after the `design` or `apply` phase: run `judgment-day` adversarial verification.
-  Cost: two blind judges per judgment round, with no refuter fan-out. Reserved for the SDD phases most likely to introduce architectural debt.
-
-**No built-in binding for `on-ci` and `on-schedule`** — the appropriate agent and cadence for CI and scheduled runs are installation-specific. Both events are part of the supported event vocabulary and can be used in a future override mechanism.
-
-## Refreshing the Injected Section
-
-Re-run install or sync after an update to refresh the injected section:
+- Standard adapters receive the managed `trigger-rules` marker in their
+  adapter-owned system-prompt file.
+- OpenCode and Kilocode receive it inside
+  `agent.gentle-orchestrator.prompt` in their adapter-owned `opencode.json`.
+- Kimi receives `~/.kimi/trigger-rules.md`, included by `KIMI.md`.
 
 ```bash
 gentle-ai install   # full install
-gentle-ai sync      # re-sync only (faster)
+gentle-ai sync      # refresh managed content
 ```
 
-The injection is idempotent — running it twice replaces the existing section without duplication.
+Refresh is idempotent: the managed projection is replaced without duplication.
+
+## Source of truth
+
+The rendered projection comes from
+[`internal/components/sdd/triggerrules.go`](../internal/components/sdd/triggerrules.go).
+Canonical route facts come from
+[`internal/agents/capabilitymanifest/manifest.go`](../internal/agents/capabilitymanifest/manifest.go).
+The complete authority and recovery rationale is documented in the
+[Organic Recovery implementation plan](audits/2026-07-23-organic-recovery-implementation-plan.md).
