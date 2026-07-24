@@ -20,14 +20,183 @@ func TestWorkRunStoreReadDoesNotCreateAuthority(t *testing.T) {
 	repo := initWorkRunRepository(t)
 	store := openTestWorkRunStore(t, repo, "read-only")
 
-	if _, err := os.Lstat(store.Dir); !os.IsNotExist(err) {
-		t.Fatalf("work run root exists before read: %v", err)
+	authorityRoot := filepath.Join(store.commonDir, "gentle-ai", "work-runs")
+	for _, path := range []string{authorityRoot, store.repositoryDir, store.Dir} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("work run authority %q exists before read: %v", path, err)
+		}
 	}
 	if _, err := store.Status(); !errors.Is(err, ErrWorkRunNotStarted) {
 		t.Fatalf("Status() error = %v, want ErrWorkRunNotStarted", err)
 	}
-	if _, err := os.Lstat(store.Dir); !os.IsNotExist(err) {
-		t.Fatalf("read created work run root: %v", err)
+	for _, path := range []string{authorityRoot, store.repositoryDir, store.Dir} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("read created work run authority %q: %v", path, err)
+		}
+	}
+}
+
+func TestWorkRunStoreReopenKeepsExactRepositoryShard(t *testing.T) {
+	repo := initWorkRunRepository(t)
+	lease, err := reviewtransaction.OpenRepositoryIdentityLease(
+		context.Background(),
+		repo,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := OpenWorkRunStoreWithRepositoryIdentityLease(
+		context.Background(),
+		lease,
+		"stable-reopen",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority := newTestAuthorityRepository()
+	first = first.WithAuthorityPorts(AuthorityPorts{
+		PAD: authority, ExplicitSDDRequest: authority, Route: authority, SDD: authority,
+		Verification: authority, Launch: hostruntime.NewExecutor(),
+	})
+	started := startDirectWorkRun(t, first)
+
+	reopened := openTestWorkRunStore(t, repo, "stable-reopen")
+	if reopened.Dir != first.Dir ||
+		reopened.repositoryDir != first.repositoryDir ||
+		reopened.RepositoryRef() != first.RepositoryRef() ||
+		reopened.storageKey != first.storageKey {
+		t.Fatalf(
+			"reopened WorkRun identity differs:\nfirst=%#v\nreopened=%#v",
+			first,
+			reopened,
+		)
+	}
+	state, err := reopened.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Revision != started.Revision || state.WorkRunID != "stable-reopen" {
+		t.Fatalf("reopened state = %#v, want revision %q", state, started.Revision)
+	}
+	want := filepath.Join(
+		first.commonDir,
+		"gentle-ai",
+		"work-runs",
+		"v1",
+		"repositories",
+		first.storageKey,
+		"stable-reopen",
+	)
+	if first.Dir != want {
+		t.Fatalf("WorkRun Dir = %q, want %q", first.Dir, want)
+	}
+	if _, err := OpenWorkRunStoreWithRepositoryIdentityLease(
+		context.Background(),
+		nil,
+		"stable-reopen",
+	); err == nil {
+		t.Fatal("nil WorkRun repository identity lease was accepted")
+	}
+}
+
+func TestWorkRunStoreIsolatesMainAndLinkedWorktreeWithSameID(t *testing.T) {
+	repo := initWorkRunRepository(t)
+	linked := filepath.Join(t.TempDir(), "linked")
+	runWorkRunGit(t, repo, "worktree", "add", "-q", "-b", "workrun-linked", linked)
+
+	mainStore := openTestWorkRunStore(t, repo, "shared-id")
+	linkedStore := openTestWorkRunStore(t, linked, "shared-id")
+	if mainStore.commonDir != linkedStore.commonDir {
+		t.Fatalf(
+			"linked worktrees have different common dirs: %q != %q",
+			mainStore.commonDir,
+			linkedStore.commonDir,
+		)
+	}
+	if mainStore.storageKey == linkedStore.storageKey ||
+		mainStore.RepositoryRef() == linkedStore.RepositoryRef() ||
+		mainStore.Dir == linkedStore.Dir {
+		t.Fatalf(
+			"linked worktrees share WorkRun authority:\nmain=%q (%s)\nlinked=%q (%s)",
+			mainStore.Dir,
+			mainStore.RepositoryRef(),
+			linkedStore.Dir,
+			linkedStore.RepositoryRef(),
+		)
+	}
+
+	mainStarted := startDirectWorkRun(t, mainStore)
+	linkedStarted := startDirectWorkRun(t, linkedStore)
+	if _, err := mainStore.BindImplementationHandoff(
+		context.Background(),
+		BindImplementationHandoffRequest{
+			ExpectedRevision: mainStarted.Revision,
+			RequestID:        "main-handoff",
+			Handoff: testHandoff(
+				t,
+				ImplementationRouteDirectInline,
+				"",
+				"main-scope",
+			),
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
+	linkedState, err := linkedStore.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if linkedState.Revision != linkedStarted.Revision || linkedState.Handoff != nil {
+		t.Fatalf("main worktree mutated linked WorkRun state: %#v", linkedState)
+	}
+}
+
+func TestWorkRunStoreOldHandleRejectsGitControlSwapWithoutWritingReplacement(t *testing.T) {
+	repo := initWorkRunRepository(t)
+	store := openTestWorkRunStore(t, repo, "stale-handle")
+	deliveryRef := testSHARef("stale-handle-delivery")
+	registerTestDeliveryIntent(t, store, deliveryRef)
+
+	originalGitDir := filepath.Join(repo, ".git")
+	movedGitDir := filepath.Join(repo, ".git-before-swap")
+	if err := os.Rename(originalGitDir, movedGitDir); err != nil {
+		t.Skipf("platform cannot replace Git control directory: %v", err)
+	}
+	runWorkRunGit(t, repo, "init", "-q")
+
+	if _, err := store.Start(context.Background(), StartRequest{
+		RequestID: "stale-start", RouteDecision: directRouteDecision(t),
+		DeliveryIntentRef: deliveryRef,
+	}); !errors.Is(err, reviewtransaction.ErrRepositoryIdentityChanged) {
+		t.Fatalf(
+			"stale WorkRun Start error = %v, want ErrRepositoryIdentityChanged",
+			err,
+		)
+	}
+	if _, err := store.Status(); !errors.Is(
+		err,
+		reviewtransaction.ErrRepositoryIdentityChanged,
+	) {
+		t.Fatalf(
+			"stale WorkRun Status error = %v, want ErrRepositoryIdentityChanged",
+			err,
+		)
+	}
+	for _, path := range []string{
+		store.Dir,
+		filepath.Join(
+			movedGitDir,
+			"gentle-ai",
+			"work-runs",
+			"v1",
+			"repositories",
+			store.storageKey,
+			store.WorkRunID,
+		),
+	} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			t.Fatalf("stale handle wrote WorkRun authority at %q: %v", path, err)
+		}
 	}
 }
 
@@ -47,12 +216,18 @@ func TestWorkRunStoreRejectsHashShapedFactsWithoutOwnerAuthority(t *testing.T) {
 
 	mutated := store
 	mutated.Dir = filepath.Join(filepath.Dir(store.Dir), "attacker-selected")
+	if mutated.RepositoryRef() != "" {
+		t.Fatal("caller-mutated WorkRunStore exposed a repository reference")
+	}
 	registerTestDeliveryIntent(t, mutated, deliveryRef)
 	if _, err := mutated.Start(context.Background(), StartRequest{
 		RequestID: "mutated-path", RouteDecision: directRouteDecision(t),
 		DeliveryIntentRef: deliveryRef,
 	}); err == nil {
 		t.Fatal("caller-mutated WorkRunStore.Dir was accepted")
+	}
+	if _, err := os.Lstat(mutated.Dir); !os.IsNotExist(err) {
+		t.Fatalf("caller-mutated WorkRunStore.Dir was written: %v", err)
 	}
 }
 
@@ -89,6 +264,8 @@ func TestWorkRunStoreRejectsAuthoritySymlinkAndPublishesPrivateArtifacts(t *test
 	for _, directory := range []string{
 		filepath.Join(sharedRoot, "work-runs"),
 		filepath.Join(sharedRoot, "work-runs", "v1"),
+		filepath.Join(sharedRoot, "work-runs", "v1", "repositories"),
+		store.repositoryDir,
 		store.Dir,
 		filepath.Join(store.Dir, "records"),
 	} {
@@ -98,6 +275,11 @@ func TestWorkRunStoreRejectsAuthoritySymlinkAndPublishesPrivateArtifacts(t *test
 	}
 	if err := validatePrivateWorkRunFile(filepath.Join(store.Dir, "HEAD")); err != nil {
 		t.Fatalf("published HEAD is not owner-only: %v", err)
+	}
+	if err := validatePrivateWorkRunFile(
+		filepath.Join(store.repositoryDir, "repository-binding.json"),
+	); err != nil {
+		t.Fatalf("published repository binding is not owner-only: %v", err)
 	}
 	records, err := os.ReadDir(filepath.Join(store.Dir, "records"))
 	if err != nil {

@@ -20,8 +20,9 @@ import (
 )
 
 const (
-	WorkRunStateSchemaV1  = "gentle-ai.work-run-state/v1"
-	workRunRecordSchemaV1 = "gentle-ai.work-run-record/v1"
+	WorkRunStateSchemaV1             = "gentle-ai.work-run-state/v1"
+	workRunRecordSchemaV1            = "gentle-ai.work-run-record/v1"
+	workRunRepositoryBindingSchemaV1 = "gentle-ai.work-run-repository-binding/v1"
 
 	workOperationStart             = "run/start"
 	workOperationAcceptSDD         = "route/accept-sdd"
@@ -51,8 +52,9 @@ var (
 	ErrVerificationReserved      = errors.New("verification slot is already reserved")
 	ErrVerificationLaunchClaimed = errors.New("verification reservation launch is already claimed")
 
-	workRunIDPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
-	workRequestIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
+	workRunIDPattern         = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
+	workRequestIDPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
+	workRunStorageKeyPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
 type RevisionConflictError struct {
@@ -105,12 +107,26 @@ type WorkRunState struct {
 }
 
 type WorkRunStore struct {
-	Dir       string
-	Repo      string
-	WorkRunID string
-	commonDir string
-	evidence  EvidencePort
-	authority AuthorityPorts
+	Dir            string
+	Repo           string
+	WorkRunID      string
+	commonDir      string
+	repositoryDir  string
+	canonicalDir   string
+	storageKey     string
+	boundWorkRunID string
+	lease          *reviewtransaction.RepositoryIdentityLease
+	evidence       EvidencePort
+	authority      AuthorityPorts
+}
+
+type workRunRepositoryBinding struct {
+	Schema         string `json:"schema"`
+	StorageKey     string `json:"storage_key"`
+	RepositoryRef  string `json:"repository_ref"`
+	RepositoryRoot string `json:"repository_root"`
+	GitCommonDir   string `json:"git_common_dir"`
+	GitDir         string `json:"git_dir"`
 }
 
 type StartRequest struct {
@@ -261,20 +277,64 @@ type workReplay struct {
 }
 
 func OpenWorkRunStore(ctx context.Context, repo, workRunID string) (WorkRunStore, error) {
+	if ctx == nil {
+		return WorkRunStore{}, errors.New("work run context is nil")
+	}
 	if !workRunIDPattern.MatchString(workRunID) {
 		return WorkRunStore{}, errors.New("invalid work run identifier")
 	}
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
+	lease, err := reviewtransaction.OpenRepositoryIdentityLease(ctx, repo)
 	if err != nil {
 		return WorkRunStore{}, err
 	}
-	probe, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, "work-run-probe")
-	if err != nil {
+	return OpenWorkRunStoreWithRepositoryIdentityLease(ctx, lease, workRunID)
+}
+
+// OpenWorkRunStoreWithRepositoryIdentityLease retains one owner-resolved
+// exact-worktree lease so production composition can share a single Git
+// identity snapshot across adjacent authority stores.
+func OpenWorkRunStoreWithRepositoryIdentityLease(
+	ctx context.Context,
+	lease *reviewtransaction.RepositoryIdentityLease,
+	workRunID string,
+) (WorkRunStore, error) {
+	if ctx == nil {
+		return WorkRunStore{}, errors.New("work run context is nil")
+	}
+	if err := ctx.Err(); err != nil {
 		return WorkRunStore{}, err
 	}
-	commonDir := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(probe.Dir))))
-	dir := filepath.Join(commonDir, "gentle-ai", "work-runs", "v1", workRunID)
-	return WorkRunStore{Dir: dir, Repo: root, WorkRunID: workRunID, commonDir: commonDir}, nil
+	if !workRunIDPattern.MatchString(workRunID) {
+		return WorkRunStore{}, errors.New("invalid work run identifier")
+	}
+	if lease == nil {
+		return WorkRunStore{}, errors.New("work run repository identity lease is unavailable")
+	}
+	identity := lease.Identity()
+	storageKey := lease.StorageKey()
+	if !workRunStorageKeyPattern.MatchString(storageKey) ||
+		identity.RepositoryRef != "sha256:"+storageKey {
+		return WorkRunStore{}, errors.New("invalid WorkRun repository identity lease")
+	}
+	repositoryDir := filepath.Join(
+		identity.GitCommonDir,
+		"gentle-ai",
+		"work-runs",
+		"v1",
+		"repositories",
+		storageKey,
+	)
+	dir := filepath.Join(repositoryDir, workRunID)
+	store := WorkRunStore{
+		Dir: dir, Repo: identity.RepositoryRoot, WorkRunID: workRunID,
+		commonDir: identity.GitCommonDir, repositoryDir: repositoryDir,
+		canonicalDir: dir, storageKey: storageKey, boundWorkRunID: workRunID,
+		lease: lease,
+	}
+	if err := store.validateContext(ctx); err != nil {
+		return WorkRunStore{}, err
+	}
+	return store, nil
 }
 
 // WithEvidencePort binds an EPD adapter without coupling WorkRun to the
@@ -291,10 +351,28 @@ func (store WorkRunStore) WithAuthorityPorts(ports AuthorityPorts) WorkRunStore 
 	return store
 }
 
+// RepositoryRef returns the stable exact-worktree identity captured by the
+// retained lease. Callers must not treat it as a substitute for live store
+// validation performed by every read and mutation.
+func (store WorkRunStore) RepositoryRef() string {
+	if store.lease == nil {
+		return ""
+	}
+	identity := store.lease.Identity()
+	if store.validateCanonicalLocation() != nil ||
+		store.Repo != identity.RepositoryRoot ||
+		store.commonDir != identity.GitCommonDir ||
+		store.lease.StorageKey() != store.storageKey ||
+		identity.RepositoryRef != "sha256:"+store.storageKey {
+		return ""
+	}
+	return identity.RepositoryRef
+}
+
 // Status is read-only. Opening or reading a missing run never creates its
 // authority directory.
 func (store WorkRunStore) Status() (WorkRunState, error) {
-	replay, err := store.load()
+	replay, err := store.load(context.Background())
 	if err != nil {
 		return WorkRunState{}, err
 	}
@@ -944,7 +1022,13 @@ func (store WorkRunStore) mutate(
 	if err := ctx.Err(); err != nil {
 		return WorkRunState{}, err
 	}
-	if err := store.ensureDirectories(); err != nil {
+	if err := store.validateContext(ctx); err != nil {
+		return WorkRunState{}, err
+	}
+	if err := store.ensureDirectories(ctx); err != nil {
+		return WorkRunState{}, err
+	}
+	if err := store.validateContext(ctx); err != nil {
 		return WorkRunState{}, err
 	}
 	directoryIdentity, err := openWorkRunDirectoryIdentity(store.Dir)
@@ -958,6 +1042,9 @@ func (store WorkRunStore) mutate(
 	}
 	defer recordsIdentity.Close()
 
+	if err := store.validateContext(ctx); err != nil {
+		return WorkRunState{}, err
+	}
 	lock, err := reviewtransaction.AcquireAuthorityFileLock(filepath.Join(store.Dir, "LOCK"))
 	if err != nil {
 		if errors.Is(err, reviewtransaction.ErrConcurrentUpdate) {
@@ -966,11 +1053,14 @@ func (store WorkRunStore) mutate(
 		return WorkRunState{}, err
 	}
 	defer lock.Release()
+	if err := store.validateContext(ctx); err != nil {
+		return WorkRunState{}, err
+	}
 	if err := validateWorkRunDirectoryIdentities(directoryIdentity, recordsIdentity); err != nil {
 		return WorkRunState{}, err
 	}
 
-	replay, err := store.load()
+	replay, err := store.load(ctx)
 	if err != nil {
 		return WorkRunState{}, err
 	}
@@ -987,7 +1077,7 @@ func (store WorkRunStore) mutate(
 				"work run replay receipt has no validated historical state",
 			)
 		}
-		if err := store.syncReplay(); err != nil {
+		if err := store.syncReplay(ctx); err != nil {
 			return WorkRunState{}, &PublicationError{
 				Revision: receipt.Revision, Committed: true, Cause: err,
 			}
@@ -996,6 +1086,9 @@ func (store WorkRunStore) mutate(
 			return WorkRunState{}, &PublicationError{
 				Revision: receipt.Revision, Committed: true, Cause: err,
 			}
+		}
+		if err := store.validateContext(ctx); err != nil {
+			return WorkRunState{}, err
 		}
 		return cloneWorkRunState(historical), nil
 	}
@@ -1020,10 +1113,14 @@ func (store WorkRunStore) mutate(
 	if err := applyWorkRunRecord(&candidate, record); err != nil {
 		return WorkRunState{}, err
 	}
-	return store.commitRecordLocked(record, directoryIdentity, recordsIdentity)
+	if err := store.validateContext(ctx); err != nil {
+		return WorkRunState{}, err
+	}
+	return store.commitRecordLocked(ctx, record, directoryIdentity, recordsIdentity)
 }
 
 func (store WorkRunStore) commitRecordLocked(
+	ctx context.Context,
 	record workRunRecord,
 	directoryIdentity *workRunDirectoryIdentity,
 	recordsIdentity *workRunDirectoryIdentity,
@@ -1035,8 +1132,17 @@ func (store WorkRunStore) commitRecordLocked(
 	if err := validateWorkRunDirectoryIdentities(directoryIdentity, recordsIdentity); err != nil {
 		return WorkRunState{}, err
 	}
+	if err := store.validateContext(ctx); err != nil {
+		return WorkRunState{}, err
+	}
 	if err := store.publishRecord(revision, payload); err != nil {
 		return WorkRunState{}, err
+	}
+	if err := store.validateContext(ctx); err != nil {
+		return WorkRunState{}, fmt.Errorf(
+			"WorkRun repository identity changed after immutable record publication: %w",
+			err,
+		)
 	}
 	if err := validateWorkRunDirectoryIdentities(directoryIdentity, recordsIdentity); err != nil {
 		return WorkRunState{}, fmt.Errorf(
@@ -1044,8 +1150,16 @@ func (store WorkRunStore) commitRecordLocked(
 			err,
 		)
 	}
+	if err := store.validateContext(ctx); err != nil {
+		return WorkRunState{}, err
+	}
 	if err := store.publishHead(revision); err != nil {
 		return WorkRunState{}, err
+	}
+	if err := store.validateContext(ctx); err != nil {
+		return WorkRunState{}, &PublicationError{
+			Revision: revision, Committed: true, Cause: err,
+		}
 	}
 	if err := validateWorkRunDirectoryIdentities(directoryIdentity, recordsIdentity); err != nil {
 		return WorkRunState{}, &PublicationError{
@@ -1058,7 +1172,7 @@ func (store WorkRunStore) commitRecordLocked(
 			Cause: fmt.Errorf("sync work run HEAD directory: %w", err),
 		}
 	}
-	committed, err := store.load()
+	committed, err := store.load(ctx)
 	if err != nil {
 		return WorkRunState{}, &PublicationError{
 			Revision: revision, Committed: true,
@@ -1072,6 +1186,11 @@ func (store WorkRunStore) commitRecordLocked(
 		}
 	}
 	if err := validateWorkRunDirectoryIdentities(directoryIdentity, recordsIdentity); err != nil {
+		return WorkRunState{}, &PublicationError{
+			Revision: revision, Committed: true, Cause: err,
+		}
+	}
+	if err := store.validateContext(ctx); err != nil {
 		return WorkRunState{}, &PublicationError{
 			Revision: revision, Committed: true, Cause: err,
 		}
@@ -1152,7 +1271,9 @@ func newLaunchClaimRequestID() (string, error) {
 	return "claim-" + hex.EncodeToString(nonce[:]), nil
 }
 
-func (store WorkRunStore) load() (workReplay, error) {
+func (store WorkRunStore) load(
+	ctx context.Context,
+) (result workReplay, resultErr error) {
 	replay := workReplay{
 		State: WorkRunState{
 			Schema: WorkRunStateSchemaV1, WorkRunID: store.WorkRunID,
@@ -1162,6 +1283,15 @@ func (store WorkRunStore) load() (workReplay, error) {
 		Requests: map[string]workRequestReceipt{},
 		States:   map[string]WorkRunState{},
 	}
+	if err := store.validateContext(ctx); err != nil {
+		return workReplay{}, err
+	}
+	defer func() {
+		if err := store.validateContext(ctx); err != nil {
+			result = workReplay{}
+			resultErr = err
+		}
+	}()
 	if err := store.validateExistingAuthorityPath(); err != nil {
 		return workReplay{}, err
 	}
@@ -1232,7 +1362,7 @@ func (store WorkRunStore) validateExistingAuthorityPath() error {
 		current = filepath.Join(current, segment)
 		info, err := os.Lstat(current)
 		if os.IsNotExist(err) {
-			return nil
+			return store.validateExistingRepositoryBinding()
 		}
 		if err != nil {
 			return err
@@ -1246,28 +1376,175 @@ func (store WorkRunStore) validateExistingAuthorityPath() error {
 			}
 		}
 	}
-	return nil
+	return store.validateExistingRepositoryBinding()
 }
 
 func (store WorkRunStore) validateCanonicalLocation() error {
-	if !workRunIDPattern.MatchString(store.WorkRunID) {
+	if !workRunIDPattern.MatchString(store.WorkRunID) ||
+		store.WorkRunID != store.boundWorkRunID {
 		return errors.New("work run store has invalid identifier")
 	}
 	commonDir := filepath.Clean(store.commonDir)
-	if commonDir == "." || !filepath.IsAbs(commonDir) {
+	if commonDir == "." || !filepath.IsAbs(commonDir) ||
+		commonDir != store.commonDir ||
+		!workRunStorageKeyPattern.MatchString(store.storageKey) {
 		return errors.New("work run Git common directory is invalid")
 	}
-	expected := filepath.Join(
+	expectedRepositoryDir := filepath.Join(
 		commonDir,
 		"gentle-ai",
 		"work-runs",
 		"v1",
-		store.WorkRunID,
+		"repositories",
+		store.storageKey,
 	)
-	if filepath.Clean(store.Dir) != expected {
+	expected := filepath.Join(expectedRepositoryDir, store.boundWorkRunID)
+	if store.repositoryDir != expectedRepositoryDir ||
+		store.canonicalDir != expected ||
+		store.Dir != expected ||
+		filepath.Clean(store.Dir) != store.Dir {
 		return errors.New("work run store directory is not its canonical authority path")
 	}
 	return nil
+}
+
+func (store WorkRunStore) validateContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("work run context is nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if store.lease == nil {
+		return errors.New("work run repository identity lease is unavailable")
+	}
+	identity := store.lease.Identity()
+	if !workRunStorageKeyPattern.MatchString(store.storageKey) ||
+		store.lease.StorageKey() != store.storageKey ||
+		identity.RepositoryRef != "sha256:"+store.storageKey ||
+		!validSHA256Ref(identity.RepositoryRef) ||
+		!cleanAbsoluteWorkRunPath(identity.RepositoryRoot) ||
+		!cleanAbsoluteWorkRunPath(identity.GitCommonDir) ||
+		!cleanAbsoluteWorkRunPath(identity.GitDir) ||
+		store.Repo != identity.RepositoryRoot ||
+		store.commonDir != identity.GitCommonDir {
+		return errors.New("work run repository identity binding is invalid")
+	}
+	if err := store.validateCanonicalLocation(); err != nil {
+		return err
+	}
+	if err := store.lease.Validate(ctx); err != nil {
+		return fmt.Errorf("validate WorkRun repository identity: %w", err)
+	}
+	return nil
+}
+
+func cleanAbsoluteWorkRunPath(path string) bool {
+	return path != "" && filepath.IsAbs(path) && filepath.Clean(path) == path
+}
+
+func (store WorkRunStore) expectedRepositoryBinding() (
+	workRunRepositoryBinding,
+	error,
+) {
+	if store.lease == nil {
+		return workRunRepositoryBinding{}, errors.New(
+			"work run repository identity lease is unavailable",
+		)
+	}
+	identity := store.lease.Identity()
+	binding := workRunRepositoryBinding{
+		Schema: workRunRepositoryBindingSchemaV1, StorageKey: store.storageKey,
+		RepositoryRef: identity.RepositoryRef, RepositoryRoot: identity.RepositoryRoot,
+		GitCommonDir: identity.GitCommonDir, GitDir: identity.GitDir,
+	}
+	if err := binding.validate(); err != nil {
+		return workRunRepositoryBinding{}, err
+	}
+	return binding, nil
+}
+
+func (binding workRunRepositoryBinding) validate() error {
+	if binding.Schema != workRunRepositoryBindingSchemaV1 ||
+		!workRunStorageKeyPattern.MatchString(binding.StorageKey) ||
+		binding.RepositoryRef != "sha256:"+binding.StorageKey ||
+		!validSHA256Ref(binding.RepositoryRef) ||
+		!cleanAbsoluteWorkRunPath(binding.RepositoryRoot) ||
+		!cleanAbsoluteWorkRunPath(binding.GitCommonDir) ||
+		!cleanAbsoluteWorkRunPath(binding.GitDir) {
+		return errors.New("work run repository binding is invalid")
+	}
+	return nil
+}
+
+func (store WorkRunStore) validateExistingRepositoryBinding() error {
+	info, err := os.Lstat(store.repositoryDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if workRunPathUnsafe(store.repositoryDir, info) || !info.IsDir() {
+		return errors.New("work run repository shard is not a directory")
+	}
+	if err := validatePrivateWorkRunDirectory(store.repositoryDir); err != nil {
+		return fmt.Errorf("validate private work run repository shard: %w", err)
+	}
+	path := filepath.Join(store.repositoryDir, "repository-binding.json")
+	payload, err := readBoundedPrivateWorkRunFile(path, maximumWorkRunRecordBytes)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return errors.New("work run repository shard has no immutable binding")
+		}
+		return fmt.Errorf("read work run repository binding: %w", err)
+	}
+	binding, err := decodeWorkRunRepositoryBinding(payload)
+	if err != nil {
+		return err
+	}
+	expected, err := store.expectedRepositoryBinding()
+	if err != nil {
+		return err
+	}
+	if binding != expected {
+		return errors.New("work run repository binding does not match its identity lease")
+	}
+	return nil
+}
+
+func decodeWorkRunRepositoryBinding(payload []byte) (
+	workRunRepositoryBinding,
+	error,
+) {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var binding workRunRepositoryBinding
+	if err := decoder.Decode(&binding); err != nil {
+		return workRunRepositoryBinding{}, fmt.Errorf(
+			"decode work run repository binding: %w",
+			err,
+		)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return workRunRepositoryBinding{}, errors.New(
+			"work run repository binding contains multiple JSON values",
+		)
+	}
+	if err := binding.validate(); err != nil {
+		return workRunRepositoryBinding{}, err
+	}
+	canonical, err := json.Marshal(binding)
+	if err != nil {
+		return workRunRepositoryBinding{}, err
+	}
+	canonical = append(canonical, '\n')
+	if !bytes.Equal(payload, canonical) {
+		return workRunRepositoryBinding{}, errors.New(
+			"work run repository binding is not canonical",
+		)
+	}
+	return binding, nil
 }
 
 func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
@@ -1718,11 +1995,32 @@ func workRunRecordRevision(record workRunRecord) (string, []byte, error) {
 	return "sha256:" + hex.EncodeToString(sum[:]), payload, nil
 }
 
-func (store WorkRunStore) ensureDirectories() error {
-	if err := store.validateCanonicalLocation(); err != nil {
+func (store WorkRunStore) ensureDirectories(ctx context.Context) error {
+	if err := store.validateContext(ctx); err != nil {
 		return err
 	}
-	target := filepath.Join(store.Dir, "records")
+	if err := store.ensureDirectoryTree(ctx, store.repositoryDir); err != nil {
+		return err
+	}
+	if err := store.validateContext(ctx); err != nil {
+		return err
+	}
+	if err := store.ensureRepositoryBinding(ctx); err != nil {
+		return err
+	}
+	if err := store.validateContext(ctx); err != nil {
+		return err
+	}
+	if err := store.ensureDirectoryTree(ctx, filepath.Join(store.Dir, "records")); err != nil {
+		return err
+	}
+	return store.validateContext(ctx)
+}
+
+func (store WorkRunStore) ensureDirectoryTree(
+	ctx context.Context,
+	target string,
+) error {
 	relative, err := filepath.Rel(store.commonDir, target)
 	if err != nil || relative == "." || relative == ".." || filepath.IsAbs(relative) ||
 		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
@@ -1731,6 +2029,9 @@ func (store WorkRunStore) ensureDirectories() error {
 	current := store.commonDir
 	created := make([]string, 0, 6)
 	for index, segment := range strings.Split(relative, string(filepath.Separator)) {
+		if err := store.validateContext(ctx); err != nil {
+			return err
+		}
 		if segment == "" || segment == "." || segment == ".." {
 			return errors.New("work run authority contains an invalid path segment")
 		}
@@ -1759,6 +2060,9 @@ func (store WorkRunStore) ensureDirectories() error {
 		if wasCreated {
 			created = append(created, current)
 		}
+		if err := store.validateContext(ctx); err != nil {
+			return err
+		}
 	}
 	if filepath.Clean(current) != filepath.Clean(target) {
 		return errors.New("work run authority path resolution is inconsistent")
@@ -1767,8 +2071,84 @@ func (store WorkRunStore) ensureDirectories() error {
 		if err := reviewtransaction.SyncReviewDirectory(filepath.Dir(path)); err != nil {
 			return fmt.Errorf("sync parent of work run authority directory: %w", err)
 		}
+		if err := store.validateContext(ctx); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func (store WorkRunStore) ensureRepositoryBinding(ctx context.Context) error {
+	if err := store.validateContext(ctx); err != nil {
+		return err
+	}
+	expected, err := store.expectedRepositoryBinding()
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(expected)
+	if err != nil {
+		return err
+	}
+	payload = append(payload, '\n')
+	path := filepath.Join(store.repositoryDir, "repository-binding.json")
+	existing, err := readBoundedPrivateWorkRunFile(path, maximumWorkRunRecordBytes)
+	if err == nil {
+		binding, decodeErr := decodeWorkRunRepositoryBinding(existing)
+		if decodeErr != nil {
+			return decodeErr
+		}
+		if binding != expected || !bytes.Equal(existing, payload) {
+			return errors.New("work run repository binding conflicts")
+		}
+		return store.validateContext(ctx)
+	}
+	if !os.IsNotExist(err) {
+		return fmt.Errorf("read work run repository binding: %w", err)
+	}
+
+	temp, tempPath, err := createPrivateTempWorkRunFile(
+		store.repositoryDir,
+		".repository-binding-",
+	)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tempPath)
+	if _, err = temp.Write(payload); err == nil {
+		err = temp.Sync()
+	}
+	if closeErr := temp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err := validatePrivateWorkRunFile(tempPath); err != nil {
+		return err
+	}
+	if err := store.validateContext(ctx); err != nil {
+		return err
+	}
+	if err := reviewtransaction.PublishFileNoReplace(tempPath, path); err != nil &&
+		!os.IsExist(err) {
+		return err
+	}
+	existing, err = readBoundedPrivateWorkRunFile(path, maximumWorkRunRecordBytes)
+	if err != nil {
+		return err
+	}
+	binding, err := decodeWorkRunRepositoryBinding(existing)
+	if err != nil {
+		return err
+	}
+	if binding != expected || !bytes.Equal(existing, payload) {
+		return errors.New("concurrent work run repository binding conflicts")
+	}
+	if err := reviewtransaction.SyncReviewDirectory(store.repositoryDir); err != nil {
+		return fmt.Errorf("sync work run repository binding: %w", err)
+	}
+	return store.validateContext(ctx)
 }
 
 func (store WorkRunStore) publishRecord(revision string, payload []byte) error {
@@ -1858,14 +2238,17 @@ func createPrivateTempWorkRunFile(
 	return nil, "", errors.New("could not allocate a private work run temporary path")
 }
 
-func (store WorkRunStore) syncReplay() error {
+func (store WorkRunStore) syncReplay(ctx context.Context) error {
+	if err := store.validateContext(ctx); err != nil {
+		return err
+	}
 	if err := reviewtransaction.SyncReviewDirectory(filepath.Join(store.Dir, "records")); err != nil {
 		return fmt.Errorf("sync immutable work run records: %w", err)
 	}
 	if err := reviewtransaction.SyncReviewDirectory(store.Dir); err != nil {
 		return fmt.Errorf("sync work run HEAD: %w", err)
 	}
-	return nil
+	return store.validateContext(ctx)
 }
 
 func readWorkRunHead(path string) (string, bool, error) {
