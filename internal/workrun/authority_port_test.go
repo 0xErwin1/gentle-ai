@@ -2,12 +2,18 @@ package workrun
 
 import (
 	"context"
+	"errors"
 	"os"
 	"sync"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/hostruntime"
 )
+
+type reviewReceiptLookup struct {
+	receiptRef string
+	resultRef  string
+}
 
 type testAuthorityRepository struct {
 	mu sync.Mutex
@@ -18,7 +24,7 @@ type testAuthorityRepository struct {
 	forecasts           map[string]VerificationForecastAuthority
 	dispositions        map[string]VerificationDispositionAuthority
 	results             map[string]VerificationResultAuthority
-	receipts            map[string]ReviewReceiptAuthority
+	receipts            map[reviewReceiptLookup]ReviewReceiptAuthority
 	authorizations      map[string]DeliveryAuthorizationAuthority
 	authorizationErrors map[string]error
 
@@ -34,7 +40,7 @@ func newTestAuthorityRepository() *testAuthorityRepository {
 		forecasts:           map[string]VerificationForecastAuthority{},
 		dispositions:        map[string]VerificationDispositionAuthority{},
 		results:             map[string]VerificationResultAuthority{},
-		receipts:            map[string]ReviewReceiptAuthority{},
+		receipts:            map[reviewReceiptLookup]ReviewReceiptAuthority{},
 		authorizations:      map[string]DeliveryAuthorizationAuthority{},
 		authorizationErrors: map[string]error{},
 		sddBindings:         []SDDReservationBinding{},
@@ -151,15 +157,84 @@ func (repository *testAuthorityRepository) ResolveResult(
 
 func (repository *testAuthorityRepository) ResolveReviewReceipt(
 	_ context.Context,
-	ref string,
+	receiptRef string,
+	resultRef string,
 ) (ReviewReceiptAuthority, error) {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
-	value, ok := repository.receipts[ref]
+	value, ok := repository.receipts[reviewReceiptLookup{
+		receiptRef: receiptRef,
+		resultRef:  resultRef,
+	}]
 	if !ok {
 		return ReviewReceiptAuthority{}, os.ErrNotExist
 	}
 	return value, nil
+}
+
+func TestReviewReceiptAuthorityRequiresExactTerminalTuple(t *testing.T) {
+	receiptRef := testSHARef("exact-review-receipt")
+	candidateRef := testSHARef("exact-review-candidate")
+	resultRef := testSHARef("exact-review-result")
+	authority := ReviewReceiptAuthority{
+		ReceiptRef:            receiptRef,
+		CandidateRef:          candidateRef,
+		VerificationResultRef: resultRef,
+	}
+
+	tests := []struct {
+		name         string
+		receiptRef   string
+		candidateRef string
+		resultRef    string
+		wantErr      bool
+	}{
+		{
+			name:         "exact tuple",
+			receiptRef:   receiptRef,
+			candidateRef: candidateRef,
+			resultRef:    resultRef,
+		},
+		{
+			name:         "different receipt",
+			receiptRef:   testSHARef("other-review-receipt"),
+			candidateRef: candidateRef,
+			resultRef:    resultRef,
+			wantErr:      true,
+		},
+		{
+			name:         "different candidate",
+			receiptRef:   receiptRef,
+			candidateRef: testSHARef("other-review-candidate"),
+			resultRef:    resultRef,
+			wantErr:      true,
+		},
+		{
+			name:         "different result",
+			receiptRef:   receiptRef,
+			candidateRef: candidateRef,
+			resultRef:    testSHARef("other-review-result"),
+			wantErr:      true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := authority.Validate(
+				test.receiptRef,
+				test.candidateRef,
+				test.resultRef,
+			)
+			if test.wantErr {
+				if !errors.Is(err, ErrAuthorityBindingMismatch) {
+					t.Fatalf("Validate error = %v, want authority binding mismatch", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Validate exact tuple: %v", err)
+			}
+		})
+	}
 }
 
 func testAuthorityForStore(t *testing.T, store WorkRunStore) *testAuthorityRepository {

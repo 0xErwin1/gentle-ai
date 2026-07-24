@@ -260,7 +260,33 @@ func TestWorkRunNotRequiredResultAndReviewRemainReferenceOnly(t *testing.T) {
 	); err == nil {
 		t.Fatal("hash-shaped but unowned review receipt was accepted")
 	}
-	authority.receipts[reviewRef] = ReviewReceiptAuthority{
+	t.Run("valid receipt cannot cross result identity", func(t *testing.T) {
+		wrongResultRef := testSHARef("other-not-required-result")
+		authority.receipts[reviewReceiptLookup{
+			receiptRef: reviewRef,
+			resultRef:  wrongResultRef,
+		}] = ReviewReceiptAuthority{
+			ReceiptRef: reviewRef, CandidateRef: handoff.CandidateRef,
+			VerificationResultRef: wrongResultRef,
+		}
+		if _, err := store.BindReviewReceipt(
+			context.Background(),
+			reviewRequest,
+		); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("cross-result review bind error = %v, want exact-pair lookup miss", err)
+		}
+		unchanged, err := store.Status()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if unchanged.Revision != state.Revision || unchanged.ReviewReceiptRef != "" {
+			t.Fatalf("cross-result review attempt mutated WorkRun: %#v", unchanged)
+		}
+	})
+	authority.receipts[reviewReceiptLookup{
+		receiptRef: reviewRef,
+		resultRef:  result.ResultRef,
+	}] = ReviewReceiptAuthority{
 		ReceiptRef: reviewRef, CandidateRef: handoff.CandidateRef,
 		VerificationResultRef: result.ResultRef,
 	}

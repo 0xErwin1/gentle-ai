@@ -836,6 +836,7 @@ func (store WorkRunStore) BindReviewReceipt(
 		receipt, err := store.authority.Verification.ResolveReviewReceipt(
 			ctx,
 			request.ReviewReceiptRef,
+			state.VerificationResultRef,
 		)
 		if err != nil {
 			return workRunRecord{}, fmt.Errorf("resolve terminal review receipt: %w", err)

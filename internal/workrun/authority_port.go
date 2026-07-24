@@ -226,13 +226,18 @@ func (binding SDDReservationBinding) Validate() error {
 }
 
 // VerificationAuthorityPort resolves every RAR-owned plan, result, and receipt
-// preimage plus provider-owned forecast/consent observations. WorkRun compares
-// exact preimages but persists only their immutable references.
+// preimage plus provider-owned forecast/consent observations. A review receipt
+// is resolved by its exact receipt/result pair and then revalidated against the
+// WorkRun candidate. WorkRun persists only immutable references.
 type VerificationAuthorityPort interface {
 	ResolveForecast(context.Context, string) (VerificationForecastAuthority, error)
 	ResolveDisposition(context.Context, string) (VerificationDispositionAuthority, error)
 	ResolveResult(context.Context, string) (VerificationResultAuthority, error)
-	ResolveReviewReceipt(context.Context, string) (ReviewReceiptAuthority, error)
+	ResolveReviewReceipt(
+		ctx context.Context,
+		receiptRef string,
+		resultRef string,
+	) (ReviewReceiptAuthority, error)
 }
 
 type VerificationForecastAuthority struct {
@@ -356,9 +361,23 @@ func (authority ReviewReceiptAuthority) Validate(
 	candidateRef string,
 	resultRef string,
 ) error {
-	if !validSHA256Ref(authority.ReceiptRef) || authority.ReceiptRef != receiptRef ||
-		!validSHA256Ref(authority.CandidateRef) || authority.CandidateRef != candidateRef ||
-		!validSHA256Ref(authority.VerificationResultRef) ||
+	for _, ref := range []string{
+		receiptRef,
+		candidateRef,
+		resultRef,
+		authority.ReceiptRef,
+		authority.CandidateRef,
+		authority.VerificationResultRef,
+	} {
+		if !validSHA256Ref(ref) {
+			return fmt.Errorf(
+				"%w: terminal review receipt contains an invalid immutable reference",
+				ErrAuthorityBindingMismatch,
+			)
+		}
+	}
+	if authority.ReceiptRef != receiptRef ||
+		authority.CandidateRef != candidateRef ||
 		authority.VerificationResultRef != resultRef {
 		return fmt.Errorf("%w: terminal review receipt", ErrAuthorityBindingMismatch)
 	}

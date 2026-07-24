@@ -493,7 +493,10 @@ func newTerminalWorkRunFixture(
 		t.Fatal(err)
 	}
 	receiptRef := testSHARef("terminal-review")
-	authority.receipts[receiptRef] = ReviewReceiptAuthority{
+	authority.receipts[reviewReceiptLookup{
+		receiptRef: receiptRef,
+		resultRef:  result.ResultRef,
+	}] = ReviewReceiptAuthority{
 		ReceiptRef: receiptRef, CandidateRef: handoff.CandidateRef,
 		VerificationResultRef: result.ResultRef,
 	}
