@@ -44,8 +44,12 @@ func openSecureUseDirectory(
 		}
 	}()
 
+	components, err := secureUseDirectoryComponents(commonPath, directoryPath)
+	if err != nil {
+		return nil, err
+	}
 	currentFD := commonFD
-	for index, component := range []string{"gentle-ai", "delivery-authorization-uses", "v1"} {
+	for index, component := range components {
 		nextFD, _, openErr := openOrCreateUseDirectoryAt(currentFD, component, index > 0)
 		if openErr != nil {
 			if currentFD != commonFD {
@@ -242,8 +246,8 @@ func (directory *secureUseDirectory) validate() error {
 }
 
 func (directory *secureUseDirectory) publishNoReplace(target string, payload []byte) error {
-	if !validUseRecordName(target) || len(payload) == 0 ||
-		len(payload) > maximumAuthorizationUseBytes {
+	if !validSecureRecordName(target) || len(payload) == 0 ||
+		len(payload) > maximumSecureRecordBytes {
 		return fmt.Errorf("%w: invalid authorization-use publication", ErrInvalid)
 	}
 	if err := directory.validate(); err != nil {
@@ -312,8 +316,69 @@ func (directory *secureUseDirectory) publishNoReplace(target string, payload []b
 	return directory.validate()
 }
 
+func (directory *secureUseDirectory) replace(target string, payload []byte) error {
+	if !validSecureRecordName(target) || len(payload) == 0 ||
+		len(payload) > maximumSecureRecordBytes {
+		return fmt.Errorf("%w: invalid secure record replacement", ErrInvalid)
+	}
+	if err := directory.validate(); err != nil {
+		return err
+	}
+	temporary, err := randomUseStoreName()
+	if err != nil {
+		return err
+	}
+	fd, err := unix.Openat(
+		directory.directoryFD, temporary,
+		unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC|unix.O_NOFOLLOW,
+		0o600,
+	)
+	if err != nil {
+		return err
+	}
+	file := os.NewFile(uintptr(fd), temporary)
+	renamed := false
+	defer func() {
+		_ = file.Close()
+		if !renamed {
+			_ = unix.Unlinkat(directory.directoryFD, temporary, 0)
+		}
+	}()
+	written, err := file.Write(payload)
+	if err != nil {
+		return err
+	}
+	if written != len(payload) {
+		return io.ErrShortWrite
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if err := validateUnixUseFileInfo(info, int64(len(payload))); err != nil {
+		return err
+	}
+	if err := directory.validate(); err != nil {
+		return err
+	}
+	if err := unix.Renameat(
+		directory.directoryFD, temporary,
+		directory.directoryFD, target,
+	); err != nil {
+		return err
+	}
+	renamed = true
+	if err := syncSecureUseDirectory(directory); err != nil {
+		return fmt.Errorf("sync replaced secure record: %w", err)
+	}
+	return directory.validate()
+}
+
 func (directory *secureUseDirectory) readBounded(name string, maximum int) ([]byte, error) {
-	if !validUseRecordName(name) || maximum < 1 {
+	if !validSecureRecordName(name) || maximum < 1 || maximum > maximumSecureRecordBytes {
 		return nil, fmt.Errorf("%w: invalid authorization-use read", ErrInvalid)
 	}
 	if err := directory.validate(); err != nil {
@@ -397,23 +462,4 @@ func sameExpectedUnixUseIdentity(expected fs.FileInfo, current unix.Stat_t) bool
 	stat, ok := expected.Sys().(*syscall.Stat_t)
 	return ok && uint64(stat.Dev) == uint64(current.Dev) &&
 		uint64(stat.Ino) == uint64(current.Ino)
-}
-
-func validUseStoreComponent(value string) bool {
-	return value != "" && value != "." && value != ".." &&
-		!strings.ContainsAny(value, `/\`) && filepath.Base(value) == value
-}
-
-func validUseRecordName(value string) bool {
-	if len(value) != len(strings.Repeat("0", 64))+len(".json") ||
-		!strings.HasSuffix(value, ".json") || !validUseStoreComponent(value) {
-		return false
-	}
-	digest := strings.TrimSuffix(value, ".json")
-	for _, character := range digest {
-		if !strings.ContainsRune("0123456789abcdef", character) {
-			return false
-		}
-	}
-	return len(digest) == 64
 }

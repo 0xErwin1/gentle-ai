@@ -250,6 +250,59 @@ func (store *DirectoryUseStore) consumeOnce(ctx context.Context, use Authorizati
 	return nil
 }
 
+// authorizationUse reads one reservation through the same stable handle used
+// for publication. Absence is an expected "not consumed" result; malformed,
+// non-canonical, or mismatched records are hard authority failures.
+func (store *DirectoryUseStore) authorizationUse(
+	ctx context.Context,
+	authorizationRef string,
+) (AuthorizationUse, bool, error) {
+	if store == nil {
+		return AuthorizationUse{}, false, fmt.Errorf("%w: unopened use store", ErrInvalid)
+	}
+	if err := validateDigest("authorization use lookup ref", authorizationRef); err != nil {
+		return AuthorizationUse{}, false, err
+	}
+	store.closeMu.RLock()
+	defer store.closeMu.RUnlock()
+	if store.closed {
+		return AuthorizationUse{}, false, fmt.Errorf("%w: closed use store", ErrInvalid)
+	}
+	if err := store.validateAuthorityLocked(ctx); err != nil {
+		return AuthorizationUse{}, false, err
+	}
+	target := strings.TrimPrefix(authorizationRef, "sha256:") + ".json"
+	payload, err := store.secureDirectory.readBounded(target, maximumAuthorizationUseBytes)
+	if err != nil {
+		if secureRecordNotExist(err) {
+			return AuthorizationUse{}, false, nil
+		}
+		return AuthorizationUse{}, false, err
+	}
+	var use AuthorizationUse
+	if err := json.Unmarshal(payload, &use); err != nil {
+		return AuthorizationUse{}, false, fmt.Errorf("decode authorization use: %w", err)
+	}
+	canonical, err := json.Marshal(use)
+	if err != nil {
+		return AuthorizationUse{}, false, fmt.Errorf("re-encode authorization use: %w", err)
+	}
+	if err := use.Validate(); err != nil || !bytes.Equal(payload, canonical) ||
+		use.AuthorizationRef != authorizationRef {
+		if err != nil {
+			return AuthorizationUse{}, false, fmt.Errorf("validate authorization use: %w", err)
+		}
+		return AuthorizationUse{}, false, fmt.Errorf(
+			"%w: authorization-use record is non-canonical or misbound",
+			ErrUntrustedPreimage,
+		)
+	}
+	if err := store.validateAuthorityLocked(ctx); err != nil {
+		return AuthorizationUse{}, false, err
+	}
+	return use, true, nil
+}
+
 func sameAuthorizationUse(left, right AuthorizationUse) bool {
 	left.ConsumedAt = 0
 	right.ConsumedAt = 0

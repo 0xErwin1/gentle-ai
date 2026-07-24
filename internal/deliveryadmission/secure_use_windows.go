@@ -83,8 +83,12 @@ func openSecureUseDirectory(
 		return nil, err
 	}
 
+	components, err := secureUseDirectoryComponents(commonPath, directoryPath)
+	if err != nil {
+		return nil, err
+	}
 	current := commonFile
-	for index, component := range []string{"gentle-ai", "delivery-authorization-uses", "v1"} {
+	for index, component := range components {
 		next, created, openErr := openOrCreateWindowsUseDirectory(
 			current, component, index > 0,
 		)
@@ -244,8 +248,8 @@ func (directory *secureUseDirectory) validate() error {
 }
 
 func (directory *secureUseDirectory) publishNoReplace(target string, payload []byte) error {
-	if !validUseRecordName(target) || len(payload) == 0 ||
-		len(payload) > maximumAuthorizationUseBytes {
+	if !validSecureRecordName(target) || len(payload) == 0 ||
+		len(payload) > maximumSecureRecordBytes {
 		return fmt.Errorf("%w: invalid authorization-use publication", ErrInvalid)
 	}
 	if err := directory.validate(); err != nil {
@@ -282,8 +286,8 @@ func (directory *secureUseDirectory) publishNoReplace(target string, payload []b
 	if err := directory.validate(); err != nil {
 		return err
 	}
-	if err := renameWindowsUseFileNoReplace(
-		file, windows.Handle(directory.directoryFile.Fd()), target,
+	if err := renameWindowsUseFile(
+		file, windows.Handle(directory.directoryFile.Fd()), target, false,
 	); err != nil {
 		cleanupErr := deleteWindowsUseFile(file)
 		if cleanupErr != nil {
@@ -298,6 +302,57 @@ func (directory *secureUseDirectory) publishNoReplace(target string, payload []b
 	renamed = true
 	if err := syncSecureUseDirectory(directory); err != nil {
 		return fmt.Errorf("flush published authorization use: %w", err)
+	}
+	return directory.validate()
+}
+
+func (directory *secureUseDirectory) replace(target string, payload []byte) error {
+	if !validSecureRecordName(target) || len(payload) == 0 ||
+		len(payload) > maximumSecureRecordBytes {
+		return fmt.Errorf("%w: invalid secure record replacement", ErrInvalid)
+	}
+	if err := directory.validate(); err != nil {
+		return err
+	}
+	temporary, err := randomUseStoreName()
+	if err != nil {
+		return err
+	}
+	file, err := createPrivateWindowsUseFile(directory.directoryFile, temporary)
+	if err != nil {
+		return err
+	}
+	renamed := false
+	defer func() {
+		if !renamed {
+			_ = deleteWindowsUseFile(file)
+		}
+		_ = file.Close()
+	}()
+	written, err := file.Write(payload)
+	if err != nil {
+		return err
+	}
+	if written != len(payload) {
+		return io.ErrShortWrite
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if _, err := validateWindowsUseHandle(file, false, true); err != nil {
+		return err
+	}
+	if err := directory.validate(); err != nil {
+		return err
+	}
+	if err := renameWindowsUseFile(
+		file, windows.Handle(directory.directoryFile.Fd()), target, true,
+	); err != nil {
+		return err
+	}
+	renamed = true
+	if err := syncSecureUseDirectory(directory); err != nil {
+		return fmt.Errorf("flush replaced secure record: %w", err)
 	}
 	return directory.validate()
 }
@@ -354,12 +409,13 @@ func createPrivateWindowsUseFile(parent *os.File, name string) (*os.File, error)
 	return file, nil
 }
 
-func renameWindowsUseFileNoReplace(
+func renameWindowsUseFile(
 	file *os.File,
 	root windows.Handle,
 	target string,
+	replace bool,
 ) error {
-	if file == nil || !validUseRecordName(target) {
+	if file == nil || !validSecureRecordName(target) {
 		return fmt.Errorf("%w: invalid authorization-use rename", ErrInvalid)
 	}
 	name, err := windows.UTF16FromString(target)
@@ -371,7 +427,9 @@ func renameWindowsUseFileNoReplace(
 	size := int(unsafe.Offsetof(layout.FileName)) + nameLength
 	buffer := make([]byte, size)
 	information := (*windowsFileRenameInformation)(unsafe.Pointer(&buffer[0]))
-	information.ReplaceIfExists = 0
+	if replace {
+		information.ReplaceIfExists = 1
+	}
 	information.RootDirectory = root
 	information.FileNameLength = uint32(nameLength)
 	copy(
@@ -431,7 +489,7 @@ func windowsUseTargetExists(err error) bool {
 }
 
 func (directory *secureUseDirectory) readBounded(name string, maximum int) ([]byte, error) {
-	if !validUseRecordName(name) || maximum < 1 {
+	if !validSecureRecordName(name) || maximum < 1 || maximum > maximumSecureRecordBytes {
 		return nil, fmt.Errorf("%w: invalid authorization-use read", ErrInvalid)
 	}
 	if err := directory.validate(); err != nil {
@@ -466,7 +524,7 @@ func (directory *secureUseDirectory) readBounded(name string, maximum int) ([]by
 }
 
 func openRelativeWindowsUseFile(parent *os.File, name string) (*os.File, error) {
-	if parent == nil || !validUseRecordName(name) {
+	if parent == nil || !validSecureRecordName(name) {
 		return nil, fmt.Errorf("%w: invalid authorization-use record name", ErrInvalid)
 	}
 	objectName, err := windows.NewNTUnicodeString(name)
@@ -821,22 +879,4 @@ func queryWindowsUseDosDevice(device string) ([]string, error) {
 
 func windowsUseASCIILetter(value byte) bool {
 	return value >= 'A' && value <= 'Z' || value >= 'a' && value <= 'z'
-}
-
-func validUseStoreComponent(value string) bool {
-	return value != "" && value != "." && value != ".." &&
-		!strings.ContainsAny(value, `/\`) && filepath.Base(value) == value
-}
-
-func validUseRecordName(value string) bool {
-	if len(value) != 64+len(".json") ||
-		!strings.HasSuffix(value, ".json") || !validUseStoreComponent(value) {
-		return false
-	}
-	for _, character := range strings.TrimSuffix(value, ".json") {
-		if !strings.ContainsRune("0123456789abcdef", character) {
-			return false
-		}
-	}
-	return true
 }
