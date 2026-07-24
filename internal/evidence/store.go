@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/hostruntime"
+	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 )
 
 const (
@@ -23,7 +23,6 @@ const (
 	maxTicketRecordBytes     = 4 << 20
 	maxExecutionRecordBytes  = hostruntime.MaxRetainedOutputBytes*6 + 2<<20
 	maxDiagnosticRecordBytes = 64 << 10
-	maxGitPathOutputBytes    = 64 << 10
 )
 
 var ErrEvidenceNotFound = errors.New("immutable evidence artifact not found")
@@ -52,11 +51,32 @@ func (err *CorruptionError) Error() string {
 type Store struct {
 	root      string
 	commonDir string
+	lease     *reviewtransaction.RepositoryIdentityLease
 }
 
 func OpenStore(ctx context.Context, repositoryPath string) (Store, error) {
-	commonDir, err := resolveGitCommonDirectory(ctx, repositoryPath)
+	lease, err := reviewtransaction.OpenRepositoryIdentityLease(
+		ctx,
+		repositoryPath,
+	)
 	if err != nil {
+		return Store{}, err
+	}
+	return OpenStoreWithRepositoryIdentityLease(ctx, lease)
+}
+
+// OpenStoreWithRepositoryIdentityLease lets the production composition bind
+// lazy EPD access to the exact Git identity captured with its other owners.
+func OpenStoreWithRepositoryIdentityLease(
+	ctx context.Context,
+	lease *reviewtransaction.RepositoryIdentityLease,
+) (Store, error) {
+	if lease == nil {
+		return Store{}, errors.New("evidence store requires a repository identity lease")
+	}
+	identity := lease.Identity()
+	commonDir := identity.GitCommonDir
+	if err := lease.Validate(ctx); err != nil {
 		return Store{}, err
 	}
 	parent := filepath.Join(commonDir, "gentle-ai")
@@ -67,13 +87,25 @@ func OpenStore(ctx context.Context, repositoryPath string) (Store, error) {
 	if err := ensureDirectoryBelow(parent, root, 0o700, true); err != nil {
 		return Store{}, err
 	}
-	return Store{root: root, commonDir: commonDir}, nil
+	if err := lease.Validate(ctx); err != nil {
+		return Store{}, err
+	}
+	return Store{root: root, commonDir: commonDir, lease: lease}, nil
 }
 
 // Root returns the provider-private storage location for diagnostics and
 // maintenance tooling. It is not an authority or a portable artifact ref.
 func (store Store) Root() string {
 	return store.root
+}
+
+// RepositoryRef returns the exact path-free Git identity captured when this
+// store was opened. Store operations still validate the live lease.
+func (store Store) RepositoryRef() string {
+	if store.lease == nil {
+		return ""
+	}
+	return store.lease.Identity().RepositoryRef
 }
 
 func (store Store) PutTicket(ticket ActionTicket) (string, error) {
@@ -246,8 +278,21 @@ func (store Store) AdmitAndStore(ticket ActionTicket, process hostruntime.Proces
 
 func (store Store) validate() error {
 	if store.root == "" || store.commonDir == "" ||
-		!filepath.IsAbs(store.root) || !filepath.IsAbs(store.commonDir) {
+		!filepath.IsAbs(store.root) || !filepath.IsAbs(store.commonDir) ||
+		store.lease == nil {
 		return errors.New("evidence store is not initialized")
+	}
+	identityContext, cancel := context.WithTimeout(
+		context.Background(),
+		15*time.Second,
+	)
+	defer cancel()
+	if err := store.lease.Validate(identityContext); err != nil {
+		return fmt.Errorf("evidence store repository identity changed: %w", err)
+	}
+	identity := store.lease.Identity()
+	if identity.GitCommonDir != store.commonDir {
+		return errors.New("evidence store Git common directory differs from its repository lease")
 	}
 	commonInfo, err := os.Lstat(store.commonDir)
 	if err != nil || !commonInfo.IsDir() || evidencePathUnsafe(store.commonDir, commonInfo) {
@@ -269,14 +314,23 @@ func (store Store) validate() error {
 }
 
 func (store Store) publishObject(kind, ref string, payload []byte) error {
+	if err := store.validate(); err != nil {
+		return err
+	}
 	path, err := store.objectPath(kind, ref, ".json", true)
 	if err != nil {
 		return err
 	}
-	return publishImmutable(path, payload)
+	if err := publishImmutable(path, payload); err != nil {
+		return err
+	}
+	return store.validate()
 }
 
 func (store Store) publishBinding(kind, bindingRef, artifactRef string) error {
+	if err := store.validate(); err != nil {
+		return err
+	}
 	path, err := store.objectPath(kind, bindingRef, ".ref", true)
 	if err != nil {
 		return err
@@ -284,7 +338,7 @@ func (store Store) publishBinding(kind, bindingRef, artifactRef string) error {
 	payload := []byte(artifactRef + "\n")
 	err = publishImmutable(path, payload)
 	if err == nil {
-		return nil
+		return store.validate()
 	}
 	var conflict *immutableBytesConflict
 	if !errors.As(err, &conflict) {
@@ -307,7 +361,14 @@ func (store Store) readObject(kind, ref string, limit int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return readImmutable(path, limit)
+	payload, err := readImmutable(path, limit)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.validate(); err != nil {
+		return nil, err
+	}
+	return payload, nil
 }
 
 func (store Store) readBinding(kind, bindingRef string) (string, error) {
@@ -328,6 +389,9 @@ func (store Store) readBinding(kind, bindingRef string) (string, error) {
 	ref := strings.TrimSuffix(string(payload), "\n")
 	if !validSHA256Ref(ref) {
 		return "", &CorruptionError{Artifact: kind}
+	}
+	if err := store.validate(); err != nil {
+		return "", err
 	}
 	return ref, nil
 }
@@ -594,103 +658,6 @@ func syncDirectoryCompatible(path string) error {
 var evidenceRuntimeGOOS = func() string { return runtime.GOOS }
 var syncEvidenceDirectory = syncDirectoryCompatible
 
-var evidenceGitCommandContext = exec.CommandContext
-
-func resolveGitCommonDirectory(ctx context.Context, repositoryPath string) (string, error) {
-	repositoryPath = strings.TrimSpace(repositoryPath)
-	if repositoryPath == "" {
-		return "", errors.New("repository path is required")
-	}
-	absolute, err := filepath.Abs(repositoryPath)
-	if err != nil {
-		return "", err
-	}
-	absolute, err = filepath.EvalSymlinks(absolute)
-	if err != nil {
-		return "", err
-	}
-	info, err := os.Stat(absolute)
-	if err != nil || !info.IsDir() {
-		return "", errors.New("repository path is not a directory")
-	}
-	rootOutput, err := runGitPathQuery(ctx, absolute, "--show-toplevel")
-	if err != nil {
-		return "", err
-	}
-	root, err := canonicalGitDirectory(absolute, rootOutput, true)
-	if err != nil {
-		return "", err
-	}
-	relative, err := filepath.Rel(root, absolute)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) ||
-		filepath.IsAbs(relative) {
-		return "", errors.New("resolved repository does not contain the requested path")
-	}
-	output, err := runGitPathQuery(ctx, root, "--git-common-dir", "--git-dir")
-	if err != nil {
-		return "", err
-	}
-	records := bytes.Split(bytes.TrimSuffix(output, []byte{'\n'}), []byte{'\n'})
-	if len(records) != 2 {
-		return "", errors.New("Git repository selection must return exactly two directory records")
-	}
-	commonDir, err := canonicalGitDirectory(root, bytes.TrimSuffix(records[0], []byte{'\r'}), false)
-	if err != nil {
-		return "", err
-	}
-	gitDir, err := canonicalGitDirectory(root, bytes.TrimSuffix(records[1], []byte{'\r'}), false)
-	if err != nil {
-		return "", err
-	}
-	if err := validateGitCommonRelationship(gitDir, commonDir); err != nil {
-		return "", err
-	}
-	return commonDir, nil
-}
-
-func runGitPathQuery(ctx context.Context, repo string, selectors ...string) ([]byte, error) {
-	queryContext, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	args := []string{"--no-replace-objects", "--no-optional-locks", "-C", repo, "rev-parse"}
-	args = append(args, selectors...)
-	command := evidenceGitCommandContext(queryContext, "git", args...)
-	command.Env = sanitizedGitEnvironment(os.Environ())
-	var stdout, stderr boundedBuffer
-	stdout.limit, stderr.limit = maxGitPathOutputBytes, maxGitPathOutputBytes
-	command.Stdout, command.Stderr = &stdout, &stderr
-	if err := command.Run(); err != nil {
-		if queryContext.Err() != nil {
-			return nil, errors.New("resolve Git evidence store timed out")
-		}
-		return nil, errors.New("resolve Git evidence store failed")
-	}
-	if stdout.exceeded || stderr.exceeded || stderr.buffer.Len() != 0 {
-		return nil, errors.New("Git evidence-store path query produced invalid output")
-	}
-	return append([]byte(nil), stdout.buffer.Bytes()...), nil
-}
-
-type boundedBuffer struct {
-	buffer   bytes.Buffer
-	limit    int
-	exceeded bool
-}
-
-func (buffer *boundedBuffer) Write(payload []byte) (int, error) {
-	remaining := buffer.limit - buffer.buffer.Len()
-	if remaining > 0 {
-		count := len(payload)
-		if count > remaining {
-			count = remaining
-		}
-		_, _ = buffer.buffer.Write(payload[:count])
-	}
-	if len(payload) > remaining {
-		buffer.exceeded = true
-	}
-	return len(payload), nil
-}
-
 func sanitizedGitEnvironment(environment []string) []string {
 	sanitized := make([]string, 0, len(environment)+2)
 	for _, entry := range environment {
@@ -704,73 +671,4 @@ func sanitizedGitEnvironment(environment []string) []string {
 		sanitized = append(sanitized, entry)
 	}
 	return append(sanitized, "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_COUNT=0")
-}
-
-func canonicalGitDirectory(base string, record []byte, requireAbsolute bool) (string, error) {
-	if len(record) > 0 && record[len(record)-1] == '\n' {
-		record = record[:len(record)-1]
-		if len(record) > 0 && record[len(record)-1] == '\r' {
-			record = record[:len(record)-1]
-		}
-	}
-	if len(record) == 0 || bytes.IndexByte(record, 0) >= 0 ||
-		bytes.ContainsAny(record, "\r\n") || bytes.HasPrefix(record, []byte("--")) ||
-		strings.TrimSpace(string(record)) == "" {
-		return "", errors.New("Git directory output is not exactly one valid path record")
-	}
-	path := string(record)
-	if requireAbsolute && !filepath.IsAbs(path) {
-		return "", errors.New("Git repository root is not absolute")
-	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(base, path)
-		relative, err := filepath.Rel(base, path)
-		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) ||
-			filepath.IsAbs(relative) {
-			return "", errors.New("relative Git directory escapes the repository root")
-		}
-	}
-	path, err := filepath.EvalSymlinks(filepath.Clean(path))
-	if err != nil {
-		return "", err
-	}
-	info, err := os.Stat(path)
-	if err != nil || !info.IsDir() {
-		return "", errors.New("Git directory output is not a directory")
-	}
-	return filepath.Clean(path), nil
-}
-
-func validateGitCommonRelationship(gitDir, commonDir string) error {
-	gitInfo, err := os.Stat(gitDir)
-	if err != nil {
-		return err
-	}
-	commonInfo, err := os.Stat(commonDir)
-	if err != nil {
-		return err
-	}
-	if os.SameFile(gitInfo, commonInfo) {
-		return nil
-	}
-	record, err := os.ReadFile(filepath.Join(gitDir, "commondir"))
-	record = bytes.TrimSuffix(bytes.TrimSuffix(record, []byte{'\n'}), []byte{'\r'})
-	if err != nil || len(record) == 0 || bytes.IndexByte(record, 0) >= 0 ||
-		bytes.ContainsAny(record, "\r\n") || bytes.HasPrefix(record, []byte("--")) ||
-		strings.TrimSpace(string(record)) == "" {
-		return errors.New("Git common directory relationship is invalid")
-	}
-	path := string(record)
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(gitDir, path)
-	}
-	path, err = filepath.EvalSymlinks(filepath.Clean(path))
-	if err != nil {
-		return errors.New("Git common directory relationship is invalid")
-	}
-	resolved, err := os.Stat(path)
-	if err != nil || !os.SameFile(resolved, commonInfo) {
-		return errors.New("Git common directory relationship is invalid")
-	}
-	return nil
 }

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 )
 
 func TestStorePublishesCanonicalTicketEvidenceAndDiagnostic(t *testing.T) {
@@ -400,21 +402,47 @@ func TestOpenStoreRejectsSymlinkedPrivateRoot(t *testing.T) {
 	}
 }
 
-func TestCanonicalGitDirectoryRejectsAmbiguousOrEscapingRecords(t *testing.T) {
+func TestStoreRejectsReplacedGitIdentityWithoutPublishing(t *testing.T) {
 	t.Parallel()
 
-	base := t.TempDir()
-	tests := [][]byte{
-		{},
-		[]byte("--path-format=absolute\n"),
-		[]byte(".git\nother\n"),
-		[]byte("../outside"),
-		[]byte(".git\x00outside"),
+	repo := initEvidenceRepository(t)
+	store, err := OpenStore(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, record := range tests {
-		if _, err := canonicalGitDirectory(base, record, false); err == nil {
-			t.Fatalf("canonicalGitDirectory() accepted %q", record)
-		}
+	originalGit := filepath.Join(repo, ".git")
+	retiredGit := filepath.Join(repo, ".git-retired")
+	if err := os.Rename(originalGit, retiredGit); err != nil {
+		t.Skipf("cannot replace Git control directory on this platform: %v", err)
+	}
+	command := exec.Command("git", "init", "--quiet", repo)
+	command.Env = sanitizedGitEnvironment(os.Environ())
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("reinitialize Git repository: %v: %s", err, output)
+	}
+
+	ticket := mustActionTicket(t, "exit", "0")
+	if _, err := store.PutTicket(ticket); !errors.Is(
+		err,
+		reviewtransaction.ErrRepositoryIdentityChanged,
+	) {
+		t.Fatalf("PutTicket() after Git identity replacement error = %v", err)
+	}
+	if _, err := store.ReadTicket(ticket.TicketRef); !errors.Is(
+		err,
+		reviewtransaction.ErrRepositoryIdentityChanged,
+	) {
+		t.Fatalf("ReadTicket() after Git identity replacement error = %v", err)
+	}
+	replacementRoot := filepath.Join(
+		originalGit,
+		filepath.FromSlash(storeRelativeRoot),
+	)
+	if _, err := os.Lstat(replacementRoot); !os.IsNotExist(err) {
+		t.Fatalf(
+			"stale evidence handle published under replacement Git identity: %v",
+			err,
+		)
 	}
 }
 
