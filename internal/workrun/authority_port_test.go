@@ -31,6 +31,8 @@ type testAuthorityRepository struct {
 	receipts                   map[reviewReceiptLookup]ReviewReceiptAuthority
 	authorizations             map[string]DeliveryAuthorizationAuthority
 	authorizationErrors        map[string]error
+	deliveryResults            map[string]DeliveryResultAuthority
+	productiveExecutionResults map[string]ProductiveExecutionResultAuthority
 	productiveDiagnostics      map[string]ProductiveDiagnosticAuthority
 	productiveDiagnosticErrors map[string]error
 	authorizationResolveCalls  int
@@ -53,10 +55,39 @@ func newTestAuthorityRepository() *testAuthorityRepository {
 		receipts:                   map[reviewReceiptLookup]ReviewReceiptAuthority{},
 		authorizations:             map[string]DeliveryAuthorizationAuthority{},
 		authorizationErrors:        map[string]error{},
+		deliveryResults:            map[string]DeliveryResultAuthority{},
+		productiveExecutionResults: map[string]ProductiveExecutionResultAuthority{},
 		productiveDiagnostics:      map[string]ProductiveDiagnosticAuthority{},
 		productiveDiagnosticErrors: map[string]error{},
 		sddBindings:                []SDDReservationBinding{},
 	}
+}
+
+func (repository *testAuthorityRepository) ResolveDeliveryResult(
+	_ context.Context,
+	ref string,
+) (DeliveryResultAuthority, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	value, ok := repository.deliveryResults[ref]
+	if !ok {
+		return DeliveryResultAuthority{}, os.ErrNotExist
+	}
+	return value, nil
+}
+
+func (repository *testAuthorityRepository) ResolveProductiveExecutionResult(
+	_ context.Context,
+	ref string,
+) (ProductiveExecutionResultAuthority, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	value, ok := repository.productiveExecutionResults[ref]
+	if !ok {
+		return ProductiveExecutionResultAuthority{}, os.ErrNotExist
+	}
+	value.Handoff = cloneHandoff(value.Handoff)
+	return value, nil
 }
 
 func (repository *testAuthorityRepository) ResolveDeliveryRouteReevaluation(

@@ -75,6 +75,7 @@ func cliValidStatus() workrun.WorkStatusV1 {
 		WorkRunID: "cli-work-run", Revision: cliRevision("a"),
 		PublicState:         workrun.PublicStateWorking,
 		RouteDecision:       workrun.RouteDecisionDirectInline,
+		RoutePhase:          workrun.RoutePhaseImplementationSelected,
 		ImplementationRoute: workrun.ImplementationRouteDirectInline,
 		Verification: workrun.VerificationSummaryV1{
 			Outcome: workrun.VerificationPending, ResultRefs: []string{},

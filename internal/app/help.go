@@ -30,8 +30,17 @@ COMMANDS
                Negotiate the authenticated effective work-routing capability
   work-start --cwd <repo> --contract gentle-ai.work-start/v1 --json
                Start an outcome-only WorkRun from a JSON request on stdin
+  work-route decide --cwd <repo> --work-run <id> --expected-revision <revision>
+               --contract gentle-ai.work-route/v1 --choice <accept_sdd|decline_sdd> --json
+               Submit only the human SDD choice; the owner selects any fallback route
+  work-route bind-sdd --cwd <repo> --work-run <id> --expected-revision <revision>
+               --contract gentle-ai.work-route/v1 --run-ref <existing-run> --json
+               Bind an already-existing SDD runtime to its accepted owner route
   work-advance --cwd <repo> --work-run <id> --expected-revision <revision> --contract gentle-ai.work-advance/v1 --json
                Run one bounded owner convergence attempt; consumers never loop its phases
+  work-reconcile --cwd <repo> --work-run <id> --expected-revision <revision>
+               --diagnostic-ref <ref> --contract gentle-ai.work-reconcile/v1 --json
+               Explicitly reconcile one owner diagnostic; never runs automatically
   work-status --cwd <repo> --work-run <id> --contract gentle-ai.work-status/v1 --json
                Read the route-neutral common-work status
   work-transition apply --cwd <repo> --work-run <id> --contract gentle-ai.work-transition/v1

@@ -1,0 +1,23 @@
+{
+  "schema": "gentle-ai.work-route/v1",
+  "contract": "gentle-ai.work-route/v1",
+  "operation": "bind-sdd",
+  "previousRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "selectedRoute": "sdd",
+  "status": {
+    "schema": "gentle-ai.work-status/v1",
+    "contract": "gentle-ai.work-status/v1",
+    "workRunId": "organic-recovery",
+    "revision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "publicState": "working",
+    "routeDecision": "propose_sdd",
+    "routePhase": "implementation_selected",
+    "implementationRoute": "sdd",
+    "sddRunRef": "organic-recovery",
+    "verification": {
+      "outcome": "pending",
+      "resultRefs": []
+    },
+    "deliveryIntentRef": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  }
+}

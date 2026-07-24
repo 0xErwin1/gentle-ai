@@ -55,16 +55,18 @@ type OwnerCoordinatorDependencies struct {
 	Evidence     evidence.Store
 	Mutations    mutationintegrity.Store
 
-	PADAuthority           *PADWorkRunAdapter
-	DeliveryResult         workrun.DeliveryResultAuthorityPort
-	ProductiveDiagnostic   workrun.ProductiveDiagnosticAuthorityPort
-	PADDelivery            *PADDeliveryAdapter
-	PADRouteProbe          PADRouteReevaluationProbe
-	PADCandidateCatalog    *PADCandidateCatalog
-	PADGitBindingAuthority PADGitBindingAuthority
-	SDDAuthority           SDDWorkRunAuthority
-	LaunchAuthority        workrun.LaunchAuthorityPort
-	Activation             ActivationResolver
+	PADAuthority              *PADWorkRunAdapter
+	DeliveryResult            workrun.DeliveryResultAuthorityPort
+	ProductiveExecutionResult workrun.ProductiveExecutionResultAuthorityPort
+	ProductiveDiagnostic      workrun.ProductiveDiagnosticAuthorityPort
+	ProductiveReconciliation  workrun.ProductiveReconciliationAuthorityPort
+	PADDelivery               *PADDeliveryAdapter
+	PADRouteProbe             PADRouteReevaluationProbe
+	PADCandidateCatalog       *PADCandidateCatalog
+	PADGitBindingAuthority    PADGitBindingAuthority
+	SDDAuthority              SDDWorkRunAuthority
+	LaunchAuthority           workrun.LaunchAuthorityPort
+	Activation                ActivationResolver
 }
 
 func NewOwnerCoordinator(
@@ -93,9 +95,9 @@ func NewOwnerCoordinator(
 	}
 	hasCandidateCatalog := dependencies.PADCandidateCatalog != nil
 	hasGitBinding := dependencies.PADGitBindingAuthority != nil
-	if hasCandidateCatalog != hasGitBinding {
+	if hasGitBinding && !hasCandidateCatalog {
 		return nil, errors.New(
-			"owner coordinator requires both PAD candidate catalog authorities or neither",
+			"owner coordinator requires a PAD candidate catalog for mutable Git binding authority",
 		)
 	}
 	if dependencies.Coordination.workRunID != dependencies.WorkRun.WorkRunID ||
@@ -176,11 +178,13 @@ func NewOwnerCoordinator(
 	configured := dependencies.WorkRun.
 		WithEvidencePort(EvidenceWorkRunPort{Store: dependencies.Evidence}).
 		WithAuthorityPorts(workrun.AuthorityPorts{
-			PAD:                  dependencies.PADAuthority,
-			DeliveryResult:       dependencies.DeliveryResult,
-			ProductiveDiagnostic: dependencies.ProductiveDiagnostic,
-			DeliveryRoute:        dependencies.PADAuthority,
-			ExplicitSDDRequest:   dependencies.Coordination,
+			PAD:                       dependencies.PADAuthority,
+			DeliveryResult:            dependencies.DeliveryResult,
+			ProductiveExecutionResult: dependencies.ProductiveExecutionResult,
+			ProductiveDiagnostic:      dependencies.ProductiveDiagnostic,
+			ProductiveReconciliation:  dependencies.ProductiveReconciliation,
+			DeliveryRoute:             dependencies.PADAuthority,
+			ExplicitSDDRequest:        dependencies.Coordination,
 			MutationCompletion: MutationCompletionWorkRunAuthority{
 				Store: dependencies.Mutations,
 			},
@@ -357,8 +361,9 @@ func ownerResolvedAdmission(
 }
 
 type OwnerStartWorkRequest struct {
-	DeliveryIntentRef string
-	RouteInput        workrun.ImplementationRouteInput
+	DeliveryIntentRef     string
+	RouteInput            workrun.ImplementationRouteInput
+	SDDDeclineFallbackRef string
 	// ExplicitSDDRequested is the typed user intent. The coordinator, not its
 	// caller, issues the immutable authority reference consumed by the router.
 	ExplicitSDDRequested bool
@@ -378,8 +383,19 @@ func (coordinator *OwnerCoordinator) StartWork(
 			"owner start request cannot provide an explicit SDD authority reference",
 		)
 	}
+	if request.SDDDeclineFallbackRef != "" &&
+		!validPADImmutableRef(request.SDDDeclineFallbackRef) {
+		return workrun.WorkRunState{}, errors.New(
+			"owner start request has an invalid SDD decline fallback reference",
+		)
+	}
 	routeInput := request.RouteInput
 	if request.ExplicitSDDRequested {
+		if request.SDDDeclineFallbackRef != "" {
+			return workrun.WorkRunState{}, errors.New(
+				"explicit SDD work cannot carry a decline fallback",
+			)
+		}
 		intent, err := coordinator.pad.ResolveDeliveryIntent(
 			ctx,
 			request.DeliveryIntentRef,
@@ -412,7 +428,8 @@ func (coordinator *OwnerCoordinator) StartWork(
 			if current.DeliveryIntentRef != request.DeliveryIntentRef ||
 				current.RouteDecision.Digest != decision.Digest ||
 				current.RouteDecision.ExplicitSDDRequestRef !=
-					candidate.AuthorityRef {
+					candidate.AuthorityRef ||
+				current.SDDDeclineFallbackRef != "" {
 				return workrun.WorkRunState{}, workrun.ErrWorkRunAlreadyStarted
 			}
 			authority, err :=
@@ -447,18 +464,31 @@ func (coordinator *OwnerCoordinator) StartWork(
 				)
 			}
 		}
-		return coordinator.startWork(ctx, request.DeliveryIntentRef, decision)
+		return coordinator.startWork(
+			ctx,
+			request.DeliveryIntentRef,
+			"",
+			decision,
+		)
 	}
 	decision, err := workrun.DecideImplementationRoute(routeInput)
 	if err != nil {
 		return workrun.WorkRunState{}, err
+	}
+	if request.SDDDeclineFallbackRef != "" &&
+		decision.Decision != workrun.RouteDecisionProposeSDD {
+		return workrun.WorkRunState{}, errors.New(
+			"SDD decline fallback does not bind an optional SDD proposal",
+		)
 	}
 	current, statusErr := coordinator.work.Status()
 	switch {
 	case statusErr == nil:
 		if current.DeliveryIntentRef != request.DeliveryIntentRef ||
 			current.RouteDecision.Digest != decision.Digest ||
-			current.RouteDecision.ExplicitSDDRequestRef != "" {
+			current.RouteDecision.ExplicitSDDRequestRef != "" ||
+			current.SDDDeclineFallbackRef !=
+				request.SDDDeclineFallbackRef {
 			return workrun.WorkRunState{}, workrun.ErrWorkRunAlreadyStarted
 		}
 		intent, err := coordinator.pad.ResolveDeliveryIntent(
@@ -475,25 +505,33 @@ func (coordinator *OwnerCoordinator) StartWork(
 	case !errors.Is(statusErr, workrun.ErrWorkRunNotStarted):
 		return workrun.WorkRunState{}, statusErr
 	}
-	return coordinator.startWork(ctx, request.DeliveryIntentRef, decision)
+	return coordinator.startWork(
+		ctx,
+		request.DeliveryIntentRef,
+		request.SDDDeclineFallbackRef,
+		decision,
+	)
 }
 
 func (coordinator *OwnerCoordinator) startWork(
 	ctx context.Context,
 	deliveryIntentRef string,
+	sddDeclineFallbackRef string,
 	decision workrun.ImplementationRouteDecision,
 ) (workrun.WorkRunState, error) {
 	requestID, err := ownerRequestID("start", struct {
-		DeliveryIntentRef string
-		DecisionDigest    string
-	}{deliveryIntentRef, decision.Digest})
+		DeliveryIntentRef     string
+		DecisionDigest        string
+		SDDDeclineFallbackRef string `json:"SDDDeclineFallbackRef,omitempty"`
+	}{deliveryIntentRef, decision.Digest, sddDeclineFallbackRef})
 	if err != nil {
 		return workrun.WorkRunState{}, err
 	}
 	return coordinator.work.Start(ctx, workrun.StartRequest{
-		RequestID:         requestID,
-		RouteDecision:     decision,
-		DeliveryIntentRef: deliveryIntentRef,
+		RequestID:             requestID,
+		RouteDecision:         decision,
+		DeliveryIntentRef:     deliveryIntentRef,
+		SDDDeclineFallbackRef: sddDeclineFallbackRef,
 	})
 }
 
@@ -561,7 +599,6 @@ func (coordinator *OwnerCoordinator) AcceptProposedSDD(
 		); err != nil {
 			return workrun.WorkRunState{}, err
 		}
-		return current, nil
 	}
 	if !exactReplay {
 		published, err := coordinator.coordination.PublishRouteSelection(
@@ -603,11 +640,32 @@ func (coordinator *OwnerCoordinator) RerouteProposedSDD(
 	ctx context.Context,
 	request OwnerRerouteRequest,
 ) (workrun.WorkRunState, error) {
+	decision, err := workrun.DecideImplementationRoute(request.RouteInput)
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	return coordinator.rerouteProposedSDD(
+		ctx,
+		request.ExpectedRevision,
+		request.PendingDecisionDigest,
+		decision,
+	)
+}
+
+// rerouteProposedSDD consumes an owner-derived decision. The productive
+// runtime uses it only with the immutable decline-fallback authority anchored
+// by WorkRun START; the public route request never carries planning facts or a
+// route.
+func (coordinator *OwnerCoordinator) rerouteProposedSDD(
+	ctx context.Context,
+	expectedRevision string,
+	pendingDecisionDigest string,
+	decision workrun.ImplementationRouteDecision,
+) (workrun.WorkRunState, error) {
 	if err := coordinator.guardGeneralMutation(ctx); err != nil {
 		return workrun.WorkRunState{}, err
 	}
-	decision, err := workrun.DecideImplementationRoute(request.RouteInput)
-	if err != nil {
+	if err := decision.Validate(); err != nil {
 		return workrun.WorkRunState{}, err
 	}
 	selectedRoute := workrun.ImplementationRouteDirectInline
@@ -622,7 +680,7 @@ func (coordinator *OwnerCoordinator) RerouteProposedSDD(
 	}
 	publication := RouteSelectionPublication{
 		WorkRunID:              coordinator.work.WorkRunID,
-		PendingDecisionDigest:  request.PendingDecisionDigest,
+		PendingDecisionDigest:  pendingDecisionDigest,
 		SelectedRoute:          selectedRoute,
 		SelectedDecisionDigest: decision.Digest,
 	}
@@ -640,14 +698,14 @@ func (coordinator *OwnerCoordinator) RerouteProposedSDD(
 	exactReplay := current.RouteDecision.Digest == decision.Digest &&
 		current.ImplementationRoute == selectedRoute &&
 		current.RouteAcceptanceRef == candidate.AuthorityRef
-	if current.Revision != request.ExpectedRevision {
+	if current.Revision != expectedRevision {
 		if !exactReplay {
 			return workrun.WorkRunState{}, ownerRevisionConflict(
-				request.ExpectedRevision,
+				expectedRevision,
 				current.Revision,
 			)
 		}
-	} else if !ownerPendingSDDProposal(current, request.PendingDecisionDigest) {
+	} else if !ownerPendingSDDProposal(current, pendingDecisionDigest) {
 		return workrun.WorkRunState{}, fmt.Errorf(
 			"%w: SDD proposal is not eligible for reroute",
 			workrun.ErrWorkRunInvalidTransition,
@@ -663,13 +721,12 @@ func (coordinator *OwnerCoordinator) RerouteProposedSDD(
 		}
 		if err := authority.Validate(
 			candidate.AuthorityRef,
-			request.PendingDecisionDigest,
+			pendingDecisionDigest,
 			selectedRoute,
 			decision.Digest,
 		); err != nil {
 			return workrun.WorkRunState{}, err
 		}
-		return current, nil
 	}
 	if !exactReplay {
 		published, err := coordinator.coordination.PublishRouteSelection(
@@ -689,12 +746,12 @@ func (coordinator *OwnerCoordinator) RerouteProposedSDD(
 		ExpectedRevision string
 		SelectionRef     string
 		DecisionDigest   string
-	}{request.ExpectedRevision, candidate.AuthorityRef, decision.Digest})
+	}{expectedRevision, candidate.AuthorityRef, decision.Digest})
 	if err != nil {
 		return workrun.WorkRunState{}, err
 	}
 	return coordinator.work.Reroute(ctx, workrun.RerouteRequest{
-		ExpectedRevision: request.ExpectedRevision,
+		ExpectedRevision: expectedRevision,
 		RequestID:        requestID,
 		OwnerDecisionRef: candidate.AuthorityRef,
 		RouteDecision:    decision,
@@ -713,19 +770,27 @@ type OwnerBindSDDRunRequest struct {
 func (coordinator *OwnerCoordinator) BindAcceptedSDDRun(
 	ctx context.Context,
 	request OwnerBindSDDRunRequest,
-) (workrun.WorkRunState, error) {
+) (
+	result workrun.WorkRunState,
+	err error,
+) {
+	if err := coordinator.guardGeneralMutation(ctx); err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	lock, err := acquirePADDeliveryOwnerLock(ctx, coordinator.work.Dir)
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	defer func() {
+		if releaseErr := lock.Release(); releaseErr != nil {
+			result = workrun.WorkRunState{}
+			err = errors.Join(err, releaseErr)
+		}
+	}()
 	if err := coordinator.guardGeneralMutation(ctx); err != nil {
 		return workrun.WorkRunState{}, err
 	}
 	current, err := coordinator.work.Status()
-	if err != nil {
-		return workrun.WorkRunState{}, err
-	}
-	runtime, err := sddstatus.OpenRuntimeStore(
-		ctx,
-		coordinator.sdd.Repo,
-		request.RunRef,
-	)
 	if err != nil {
 		return workrun.WorkRunState{}, err
 	}
@@ -742,8 +807,17 @@ func (coordinator *OwnerCoordinator) BindAcceptedSDDRun(
 			workrun.ErrWorkRunInvalidTransition,
 		)
 	}
+	runtime, err := sddstatus.OpenRuntimeStore(
+		ctx,
+		coordinator.sdd.Repo,
+		request.RunRef,
+	)
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	var binding sddstatus.SDDWorkRunBinding
 	if exactReplay {
-		binding, err := runtime.ResolveWorkRunBinding(ctx)
+		binding, err = runtime.ResolveWorkRunBinding(ctx)
 		if err != nil {
 			return workrun.WorkRunState{}, err
 		}
@@ -754,15 +828,48 @@ func (coordinator *OwnerCoordinator) BindAcceptedSDDRun(
 				"SDD owner returned a mismatched WorkRun binding",
 			)
 		}
-		return current, nil
-	}
-	binding, err := runtime.BindWorkRun(
-		ctx,
-		coordinator.work.WorkRunID,
-		request.RouteAcceptanceRef,
-	)
-	if err != nil {
-		return workrun.WorkRunState{}, err
+	} else {
+		binding, err = runtime.BindWorkRunWithIntent(
+			ctx,
+			coordinator.work.WorkRunID,
+			request.RouteAcceptanceRef,
+			func(candidate sddstatus.SDDWorkRunBinding) error {
+				if candidate.RunRef != request.RunRef ||
+					candidate.WorkRunID != coordinator.work.WorkRunID ||
+					candidate.RouteAcceptanceRef !=
+						request.RouteAcceptanceRef {
+					return errors.New(
+						"SDD owner prepared a mismatched WorkRun binding",
+					)
+				}
+				intent, intentErr :=
+					coordinator.coordination.PublishSDDBindingIntent(
+						ctx,
+						SDDBindingIntentPublication{
+							WorkRunID:          coordinator.work.WorkRunID,
+							ExpectedRevision:   request.ExpectedRevision,
+							RouteAcceptanceRef: request.RouteAcceptanceRef,
+							RunRef:             request.RunRef,
+						},
+					)
+				if intentErr != nil {
+					return intentErr
+				}
+				if intent.WorkRunID != coordinator.work.WorkRunID ||
+					intent.ExpectedRevision != request.ExpectedRevision ||
+					intent.RouteAcceptanceRef !=
+						request.RouteAcceptanceRef ||
+					intent.RunRef != request.RunRef {
+					return errors.New(
+						"SDD owner published a mismatched binding intent",
+					)
+				}
+				return nil
+			},
+		)
+		if err != nil {
+			return workrun.WorkRunState{}, err
+		}
 	}
 	if binding.RunRef != request.RunRef ||
 		binding.WorkRunID != coordinator.work.WorkRunID ||
@@ -893,11 +1000,100 @@ func (coordinator *OwnerCoordinator) BindImplementationHandoff(
 	return applied, nil
 }
 
+func (coordinator *OwnerCoordinator) RecordProductiveExecutionResult(
+	ctx context.Context,
+	expectedRevision string,
+	resultRef string,
+) (
+	result workrun.WorkRunState,
+	err error,
+) {
+	if err := coordinator.guardTerminalMutation(ctx); err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	lock, err := acquirePADDeliveryOwnerLock(ctx, coordinator.work.Dir)
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	defer func() {
+		if releaseErr := lock.Release(); releaseErr != nil {
+			result = workrun.WorkRunState{}
+			err = errors.Join(err, releaseErr)
+		}
+	}()
+	if err := coordinator.guardTerminalMutation(ctx); err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	current, err := coordinator.work.Status()
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	if current.ProductiveExecutionResultRef == resultRef {
+		if _, err := coordinator.work.ResolveProductiveExecutionResult(
+			ctx,
+			resultRef,
+		); err != nil {
+			return workrun.WorkRunState{}, err
+		}
+		return current, nil
+	}
+	if current.ProductiveExecutionResultRef != "" ||
+		current.Revision != expectedRevision {
+		return workrun.WorkRunState{}, ownerRevisionConflict(
+			expectedRevision,
+			current.Revision,
+		)
+	}
+	requestID, err := ownerRequestID(
+		"productive-execution-result",
+		struct {
+			ExpectedRevision string
+			ResultRef        string
+		}{expectedRevision, resultRef},
+	)
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	applied, err := coordinator.work.RecordProductiveExecutionResult(
+		ctx,
+		workrun.RecordProductiveExecutionResultRequest{
+			ExpectedRevision: expectedRevision,
+			RequestID:        requestID,
+			ResultRef:        resultRef,
+		},
+	)
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	if applied.ProductiveExecutionResultRef != resultRef ||
+		applied.ProductiveExecutionResultSourceRevision !=
+			expectedRevision {
+		return workrun.WorkRunState{}, ErrProviderResultMismatch
+	}
+	return applied, nil
+}
+
 func (coordinator *OwnerCoordinator) RecordProductiveBlocker(
 	ctx context.Context,
 	expectedRevision string,
 	diagnosticRef string,
-) (workrun.WorkRunState, error) {
+) (
+	result workrun.WorkRunState,
+	err error,
+) {
+	if err := coordinator.guardGeneralMutation(ctx); err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	lock, err := acquirePADDeliveryOwnerLock(ctx, coordinator.work.Dir)
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	defer func() {
+		if releaseErr := lock.Release(); releaseErr != nil {
+			result = workrun.WorkRunState{}
+			err = errors.Join(err, releaseErr)
+		}
+	}()
 	if err := coordinator.guardGeneralMutation(ctx); err != nil {
 		return workrun.WorkRunState{}, err
 	}
@@ -932,11 +1128,101 @@ func (coordinator *OwnerCoordinator) RecordProductiveBlocker(
 	)
 }
 
+// beginProductiveAdvance binds the caller's one public CAS token to the
+// authoritative WorkRun chain. Recovery may resume that exact source without
+// relying on activation, but neither mode can create or switch to a second
+// source once the anchor exists.
+func (coordinator *OwnerCoordinator) beginProductiveAdvance(
+	ctx context.Context,
+	expectedRevision string,
+	recovery bool,
+) (workrun.WorkRunState, error) {
+	if recovery {
+		if err := coordinator.validate(ctx); err != nil {
+			return workrun.WorkRunState{}, err
+		}
+	} else if err := coordinator.guardGeneralMutation(ctx); err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	current, err := coordinator.work.Status()
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	if current.ProductiveAdvanceSourceRevision != "" {
+		if current.ProductiveAdvanceSourceRevision != expectedRevision {
+			return workrun.WorkRunState{}, ownerRevisionConflict(
+				expectedRevision,
+				current.ProductiveAdvanceSourceRevision,
+			)
+		}
+		return current, nil
+	}
+	if current.ProductiveBlockerRef != "" ||
+		current.DeliveryResultRef != "" ||
+		current.ProductiveReconciliationRef != "" {
+		return workrun.WorkRunState{}, fmt.Errorf(
+			"%w: work advance is already terminal",
+			workrun.ErrWorkRunInvalidTransition,
+		)
+	}
+	if current.Revision != expectedRevision {
+		return workrun.WorkRunState{}, ownerRevisionConflict(
+			expectedRevision,
+			current.Revision,
+		)
+	}
+	requestID, err := ownerRequestID("begin-productive-advance", struct {
+		SourceRevision string
+	}{SourceRevision: expectedRevision})
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	if recovery {
+		if err := coordinator.validate(ctx); err != nil {
+			return workrun.WorkRunState{}, err
+		}
+	} else if err := coordinator.guardGeneralMutation(ctx); err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	applied, err := coordinator.work.BeginProductiveAdvance(
+		ctx,
+		workrun.BeginProductiveAdvanceRequest{
+			ExpectedRevision: expectedRevision,
+			RequestID:        requestID,
+			SourceRevision:   expectedRevision,
+		},
+	)
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	if applied.ProductiveAdvanceSourceRevision != expectedRevision ||
+		applied.Revision == expectedRevision {
+		return workrun.WorkRunState{}, ErrProviderResultMismatch
+	}
+	return applied, nil
+}
+
 func (coordinator *OwnerCoordinator) recordRecoveredProductiveBlocker(
 	ctx context.Context,
 	expectedRevision string,
 	diagnosticRef string,
-) (workrun.WorkRunState, error) {
+) (
+	result workrun.WorkRunState,
+	err error,
+) {
+	if err := coordinator.validate(ctx); err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	lock, err := acquirePADDeliveryOwnerLock(ctx, coordinator.work.Dir)
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	defer func() {
+		if releaseErr := lock.Release(); releaseErr != nil {
+			result = workrun.WorkRunState{}
+			err = errors.Join(err, releaseErr)
+		}
+	}()
 	if err := coordinator.validate(ctx); err != nil {
 		return workrun.WorkRunState{}, err
 	}
@@ -967,6 +1253,38 @@ func (coordinator *OwnerCoordinator) recordRecoveredProductiveBlocker(
 			ExpectedRevision: expectedRevision,
 			RequestID:        requestID,
 			DiagnosticRef:    diagnosticRef,
+		},
+	)
+}
+
+func (coordinator *OwnerCoordinator) recordProductiveReconciliation(
+	ctx context.Context,
+	expectedRevision string,
+	originalDiagnosticRef string,
+	reconciliationRef string,
+) (workrun.WorkRunState, error) {
+	if err := coordinator.validate(ctx); err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	requestID, err := ownerRequestID("productive-reconciliation", struct {
+		ExpectedRevision      string
+		OriginalDiagnosticRef string
+		ReconciliationRef     string
+	}{
+		ExpectedRevision:      expectedRevision,
+		OriginalDiagnosticRef: originalDiagnosticRef,
+		ReconciliationRef:     reconciliationRef,
+	})
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	return coordinator.work.RecordProductiveReconciliation(
+		ctx,
+		workrun.RecordProductiveReconciliationRequest{
+			ExpectedRevision:      expectedRevision,
+			RequestID:             requestID,
+			OriginalDiagnosticRef: originalDiagnosticRef,
+			ReconciliationRef:     reconciliationRef,
 		},
 	)
 }

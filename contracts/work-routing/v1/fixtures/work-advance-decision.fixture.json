@@ -9,16 +9,24 @@
     "revision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "publicState": "needs_your_decision",
     "routeDecision": "delegated_direct",
+    "routePhase": "implementation_selected",
     "implementationRoute": "delegated_direct",
     "verification": {
       "outcome": "pending",
       "resultRefs": []
     },
-    "deliveryIntentRef": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    "deliveryIntentRef": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "diagnostic": {
+      "ref": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "code": "scope_mismatch",
+      "message": "The committed candidate paths differ from the exact admitted scope.",
+      "nextAction": "start_fresh_work_run"
+    }
   },
   "diagnostic": {
     "ref": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     "code": "scope_mismatch",
-    "message": "The committed candidate paths differ from the exact admitted scope."
+    "message": "The committed candidate paths differ from the exact admitted scope.",
+    "nextAction": "start_fresh_work_run"
   }
 }

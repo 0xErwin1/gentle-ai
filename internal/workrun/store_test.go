@@ -56,8 +56,10 @@ func TestWorkRunStoreReopenKeepsExactRepositoryShard(t *testing.T) {
 	authority := newTestAuthorityRepository()
 	first = first.WithAuthorityPorts(AuthorityPorts{
 		PAD: authority, DeliveryRoute: authority,
-		ProductiveDiagnostic: authority,
-		ExplicitSDDRequest:   authority, Route: authority, SDD: authority,
+		DeliveryResult:            authority,
+		ProductiveExecutionResult: authority,
+		ProductiveDiagnostic:      authority,
+		ExplicitSDDRequest:        authority, Route: authority, SDD: authority,
 		MutationCompletion: authority, Verification: authority,
 		Launch: hostruntime.NewExecutor(),
 	})
@@ -522,7 +524,10 @@ func TestWorkRunProposalAcceptanceBindingAndSafeReroute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.PublicState != PublicStateWorking || status.ImplementationRoute != "" || status.SDDRunRef != "" {
+	if status.PublicState != PublicStateWorking ||
+		status.RoutePhase != RoutePhaseSDDRuntimePending ||
+		status.ImplementationRoute != "" ||
+		status.SDDRunRef != "" {
 		t.Fatalf("accepted but unbound SDD route leaked publicly: %#v", status)
 	}
 	authority.runs["change-a"] = SDDRunAuthority{
@@ -753,8 +758,10 @@ func openTestWorkRunStore(t *testing.T, repo, workRunID string) WorkRunStore {
 	executor := hostruntime.NewExecutor()
 	return store.WithAuthorityPorts(AuthorityPorts{
 		PAD: authority, DeliveryRoute: authority,
-		ProductiveDiagnostic: authority,
-		ExplicitSDDRequest:   authority, Route: authority, SDD: authority,
+		DeliveryResult:            authority,
+		ProductiveExecutionResult: authority,
+		ProductiveDiagnostic:      authority,
+		ExplicitSDDRequest:        authority, Route: authority, SDD: authority,
 		MutationCompletion: authority, Verification: authority, Launch: executor,
 	})
 }

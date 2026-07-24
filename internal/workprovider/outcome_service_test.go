@@ -2,6 +2,7 @@ package workprovider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -55,6 +56,322 @@ func (resolver *sequenceOwnerActivationResolver) ResolveActivation(
 		index = len(resolver.modes) - 1
 	}
 	return resolver.modes[index], nil
+}
+
+func TestOwnerOutcomeIntakeRequiresOnlyOwnerAuthoredOptionalSDDFallback(
+	t *testing.T,
+) {
+	t.Parallel()
+	repositoryRef := testPADRef("outcome-intake-fallback")
+	request := OutcomeStartRequest{
+		Outcome: "Implement the architectural change safely.",
+	}
+	proposal := ownerOutcomeTestIntake(
+		"outcome-intake-proposal",
+		deliveryadmission.RoutePRWithoutIssue,
+	)
+	proposal.RoutingFacts = workrun.ImplementationRouteInput{
+		WriteIntent:    workrun.WriteIntentAnalytical,
+		WriteFileCount: 2,
+		DurablePlanning: []workrun.DurablePlanningReason{
+			workrun.PlanningArchitecture,
+		},
+	}
+	if err := proposal.validate(repositoryRef, request); err == nil ||
+		!strings.Contains(err.Error(), "requires an owner-authored") {
+		t.Fatalf("proposal without fallback error = %v", err)
+	}
+
+	valid := proposal
+	valid.DeclinedSDDFallback = &workrun.ImplementationRouteInput{
+		WriteIntent:    workrun.WriteIntentAnalytical,
+		WriteFileCount: 2,
+	}
+	if err := valid.validate(repositoryRef, request); err != nil {
+		t.Fatalf("owner-authored delegated fallback error = %v", err)
+	}
+
+	recursive := proposal
+	recursive.DeclinedSDDFallback = &workrun.ImplementationRouteInput{
+		WriteIntent:    workrun.WriteIntentAnalytical,
+		WriteFileCount: 2,
+		DurablePlanning: []workrun.DurablePlanningReason{
+			workrun.PlanningMigration,
+		},
+	}
+	if err := recursive.validate(repositoryRef, request); err == nil ||
+		!strings.Contains(err.Error(), "must select direct or delegated") {
+		t.Fatalf("recursive SDD fallback error = %v", err)
+	}
+
+	direct := ownerOutcomeTestIntake(
+		"outcome-intake-direct",
+		deliveryadmission.RoutePRWithoutIssue,
+	)
+	direct.DeclinedSDDFallback = valid.DeclinedSDDFallback
+	if err := direct.validate(repositoryRef, request); err == nil ||
+		!strings.Contains(err.Error(), "without a pending optional proposal") {
+		t.Fatalf("direct intake fallback error = %v", err)
+	}
+
+	explicit := proposal
+	explicit.DeclinedSDDFallback = nil
+	explicitRequest := request
+	explicitRequest.ExplicitSDDRequested = true
+	if err := explicit.validate(repositoryRef, explicitRequest); err != nil {
+		t.Fatalf("explicit SDD should need no decline fallback: %v", err)
+	}
+}
+
+func TestOutcomeServiceReplaysLegacySDDStartAfterExactOwnerIntake(t *testing.T) {
+	ctx := context.Background()
+	repo := initPADAdapterGitRepository(t)
+	ownerIntake := ownerOutcomeTestIntake(
+		"outcome-legacy-sdd-replay",
+		deliveryadmission.RoutePRWithoutIssue,
+	)
+	ownerIntake.RoutingFacts = workrun.ImplementationRouteInput{
+		WriteIntent:    workrun.WriteIntentAnalytical,
+		WriteFileCount: 2,
+		DurablePlanning: []workrun.DurablePlanningReason{
+			workrun.PlanningArchitecture,
+		},
+	}
+	ownerIntake.DeclinedSDDFallback = &workrun.ImplementationRouteInput{
+		WriteIntent:    workrun.WriteIntentAnalytical,
+		WriteFileCount: 2,
+	}
+	provisionOutcomeLivePolicy(
+		t,
+		repo,
+		deliveryadmission.RoutePRWithoutIssue,
+		false,
+	)
+	intake := &stubOwnerOutcomeIntakeAuthority{intake: ownerIntake}
+	service, err := NewProductionOutcomeService(
+		ctx,
+		repo,
+		model.AgentCodex,
+		intake,
+		StaticActivationResolver{Mode: ActivationEnabled},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := OutcomeStartRequest{
+		Outcome: "Recover the active proposal without replacing its authority.",
+	}
+	started, err := service.StartOutcome(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if intake.calls != 1 {
+		t.Fatalf("initial START intake calls = %d", intake.calls)
+	}
+
+	store, err := existingProductiveAdvanceStore(
+		service.factory.lease,
+		ownerIntake.WorkRunID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.startAuthority(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyFallback, err := ownerSDDDeclineFallback(ownerIntake, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority.SDDDeclineFallbackRef = ""
+	authority.SDDDeclineFallback = legacyFallback
+	payload, err := json.Marshal(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = append(payload, '\n')
+	if err := os.WriteFile(
+		filepath.Join(store.root, "start-authority.json"),
+		payload,
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if legacy, err := store.startAuthority(ctx); err != nil ||
+		legacy.SDDDeclineFallbackRef != "" ||
+		legacy.SDDDeclineFallback == nil {
+		t.Fatalf("legacy START authority = %#v error=%v", legacy, err)
+	}
+
+	before := ownerTreeFingerprint(t, defaultProviderRoot(t, repo))
+	intake.intake.DeclinedSDDFallback = nil
+	replayed, err := service.StartOutcome(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(replayed, started) {
+		t.Fatalf("legacy START replay = %#v, want %#v", replayed, started)
+	}
+	if intake.calls != 2 {
+		t.Fatalf("legacy START replay intake calls = %d", intake.calls)
+	}
+	if after := ownerTreeFingerprint(
+		t,
+		defaultProviderRoot(t, repo),
+	); after != before {
+		t.Fatalf(
+			"legacy START replay mutated owner stores:\nbefore %s\nafter  %s",
+			before,
+			after,
+		)
+	}
+
+	intake.intake.Nonce = "nonce:different-owner-start"
+	if _, err := service.StartOutcome(ctx, request); !errors.Is(
+		err,
+		ErrProviderResultMismatch,
+	) {
+		t.Fatalf("mismatched legacy START intake error = %v", err)
+	}
+	intake.intake.Nonce = ownerIntake.Nonce
+	intake.intake.PrimaryAuthority.SignalID = "different-owner-signal"
+	if _, err := service.StartOutcome(ctx, request); !errors.Is(
+		err,
+		ErrProviderResultMismatch,
+	) {
+		t.Fatalf("mismatched legacy START authority error = %v", err)
+	}
+}
+
+func TestOutcomeServiceLegacySDDReplayRejectsEveryOwnerPreimageMismatch(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	repo := initPADAdapterGitRepository(t)
+	ownerIntake := ownerOutcomeTestIntake(
+		"outcome-legacy-owner-preimages",
+		deliveryadmission.RouteEmergency,
+	)
+	ownerIntake.SecondAuthority = &OwnerAuthoritySignalInput{
+		SignalID:   "signal:second-legacy-owner-preimages",
+		IssuerRef:  "maintainer:second-owner",
+		Provenance: deliveryadmission.ProvenanceSecondMaintainer,
+		ExpiresAt:  ownerIntake.PrimaryAuthority.ExpiresAt,
+	}
+	ownerIntake.RoutingFacts = workrun.ImplementationRouteInput{
+		WriteIntent:    workrun.WriteIntentAnalytical,
+		WriteFileCount: 2,
+		DurablePlanning: []workrun.DurablePlanningReason{
+			workrun.PlanningArchitecture,
+		},
+	}
+	ownerIntake.DeclinedSDDFallback = &workrun.ImplementationRouteInput{
+		WriteIntent:    workrun.WriteIntentAnalytical,
+		WriteFileCount: 2,
+	}
+	provisionOutcomeLivePolicy(
+		t,
+		repo,
+		deliveryadmission.RouteEmergency,
+		true,
+	)
+	intake := &stubOwnerOutcomeIntakeAuthority{intake: ownerIntake}
+	service, err := NewProductionOutcomeService(
+		ctx,
+		repo,
+		model.AgentCodex,
+		intake,
+		StaticActivationResolver{Mode: ActivationEnabled},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := OutcomeStartRequest{
+		Outcome: "Recover only the exact historical owner preimages.",
+	}
+	if _, err := service.StartOutcome(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	store, err := existingProductiveAdvanceStore(
+		service.factory.lease,
+		ownerIntake.WorkRunID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := store.startAuthority(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority.SDDDeclineFallbackRef = ""
+	authority.SDDDeclineFallback = nil
+	payload, err := json.Marshal(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(store.root, "start-authority.json"),
+		append(payload, '\n'),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	legacy := ownerIntake
+	legacy.DeclinedSDDFallback = nil
+	cloneLegacy := func() OwnerOutcomeIntake {
+		cloned := legacy
+		if legacy.SecondAuthority != nil {
+			value := *legacy.SecondAuthority
+			cloned.SecondAuthority = &value
+		}
+		if legacy.Governance != nil {
+			value := *legacy.Governance
+			cloned.Governance = &value
+		}
+		return cloned
+	}
+	intake.intake = cloneLegacy()
+	if _, err := service.StartOutcome(ctx, request); err != nil {
+		t.Fatalf("exact historical owner preimages error = %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		tamper func(*OwnerOutcomeIntake)
+	}{
+		{
+			name: "primary authority",
+			tamper: func(value *OwnerOutcomeIntake) {
+				value.PrimaryAuthority.SignalID = "signal:different-primary"
+			},
+		},
+		{
+			name: "second authority",
+			tamper: func(value *OwnerOutcomeIntake) {
+				value.SecondAuthority.SignalID = "signal:different-second"
+			},
+		},
+		{
+			name: "governance",
+			tamper: func(value *OwnerOutcomeIntake) {
+				value.Governance.Reason = "Different emergency governance."
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := cloneLegacy()
+			test.tamper(&candidate)
+			intake.intake = candidate
+			if _, err := service.StartOutcome(ctx, request); !errors.Is(
+				err,
+				ErrProviderResultMismatch,
+			) {
+				t.Fatalf("mismatched owner preimage error = %v", err)
+			}
+		})
+	}
 }
 
 func TestDefaultOutcomeServiceUnsetFailsBeforeIntakeOrPublication(
@@ -844,6 +1161,7 @@ func TestProductionOutcomeServiceDerivesExplicitSDDAuthority(t *testing.T) {
 	}
 	if status.RouteDecision != workrun.RouteDecisionProposeSDD ||
 		status.PublicState != workrun.PublicStateWorking ||
+		status.RoutePhase != workrun.RoutePhaseSDDRuntimePending ||
 		status.ImplementationRoute != "" ||
 		status.SDDRunRef != "" {
 		t.Fatalf("explicit SDD public status = %#v", status)

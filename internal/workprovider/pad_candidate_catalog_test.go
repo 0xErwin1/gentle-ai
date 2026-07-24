@@ -24,7 +24,7 @@ func TestPADCandidateCatalogPublishesIdempotentlyAndSurvivesReopen(
 
 	const workers = 8
 	var wait sync.WaitGroup
-	results := make(chan PADGitBinding, workers)
+	results := make(chan PADCandidateAuthority, workers)
 	failures := make(chan error, workers)
 	for range workers {
 		wait.Add(1)
@@ -49,8 +49,10 @@ func TestPADCandidateCatalogPublishesIdempotentlyAndSurvivesReopen(
 		t.Errorf("concurrent idempotent publication: %v", err)
 	}
 	for result := range results {
-		if result != binding {
-			t.Errorf("published binding = %#v, want %#v", result, binding)
+		if result.Binding != binding ||
+			result.CandidateTree != fixture.headTree ||
+			!validPADImmutableRef(result.RecordRef) {
+			t.Errorf("published authority = %#v, want binding %#v", result, binding)
 		}
 	}
 	if t.Failed() {
@@ -138,6 +140,137 @@ func TestPADCandidateCatalogRejectsRebindingOccupiedSlot(t *testing.T) {
 	}
 	if resolved != binding {
 		t.Fatalf("conflict changed binding to %#v", resolved)
+	}
+}
+
+func TestPADCandidateCatalogExactAuthorityRejectsCoherentIndexRewire(
+	t *testing.T,
+) {
+	fixture, authority, _, catalog := newPADCandidateCatalogFixture(t)
+	bindingA := fixedPADCandidateBinding(
+		authority.RepositoryRef(),
+		fixture.baseRevision,
+		fixture.headRevision,
+		deliveryadmission.MechanismFastForwardOnly,
+	)
+	authorityA, err := catalog.BindCandidate(
+		context.Background(),
+		fixture.headTree,
+		bindingA,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinnedA, err := newPADPinnedCandidateBindingAuthority(
+		context.Background(),
+		catalog,
+		authorityA,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(
+		filepath.Join(fixture.root, "candidate.txt"),
+		[]byte("coherent replacement\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	runFixedPADTestGit(t, fixture.root, "add", "candidate.txt")
+	runFixedPADTestGit(
+		t,
+		fixture.root,
+		"commit",
+		"--quiet",
+		"-m",
+		"coherent replacement",
+	)
+	bindingB := bindingA
+	bindingB.CandidateRevision = "git:" + runFixedPADTestGit(
+		t,
+		fixture.root,
+		"rev-parse",
+		"HEAD",
+	)
+	treeB := runFixedPADTestGit(
+		t,
+		fixture.root,
+		"rev-parse",
+		"HEAD^{tree}",
+	)
+	recordB, err := catalog.newRecord(treeB, bindingB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordPayload, err := canonicalCoordinationPayload(recordB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		catalog.recordPath(recordB.RecordRef),
+		recordPayload,
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	indexB := padCandidateCatalogIndex{
+		Schema:        padCandidateCatalogIndexSchema,
+		RepositoryRef: authority.RepositoryRef(),
+		LookupRef:     recordB.LookupRef,
+		RecordRef:     recordB.RecordRef,
+	}
+	indexPayload, err := canonicalCoordinationPayload(indexB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		catalog.indexPath(recordB.LookupRef),
+		indexPayload,
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	mutable, err := catalog.ResolvePADGitBinding(
+		context.Background(),
+		bindingA.Candidate,
+		bindingA.Destination,
+		bindingA.Mechanism,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mutable != bindingB {
+		t.Fatalf("coherently rewired lookup = %#v, want B %#v", mutable, bindingB)
+	}
+	exact, err := catalog.ResolveCandidateAuthority(
+		context.Background(),
+		authorityA.RecordRef,
+		bindingA.Candidate,
+		bindingA.Destination,
+		bindingA.Mechanism,
+		fixture.headTree,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exact != authorityA {
+		t.Fatalf("exact authority changed:\ngot  %#v\nwant %#v", exact, authorityA)
+	}
+	if err := catalog.RequireCurrentCandidateAuthority(
+		context.Background(),
+		authorityA,
+	); !errors.Is(err, ErrPADCandidateCatalogConflict) {
+		t.Fatalf("rewired continuity guard = %v", err)
+	}
+	if _, err := pinnedA.ResolvePADGitBinding(
+		context.Background(),
+		bindingA.Candidate,
+		bindingA.Destination,
+		bindingA.Mechanism,
+	); !errors.Is(err, ErrPADCandidateCatalogConflict) {
+		t.Fatalf("pinned authority accepted rewired lookup = %v", err)
 	}
 }
 
@@ -235,8 +368,11 @@ func TestPADCandidateCatalogBindsPullRequestFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved != binding || resolved.PullRequestRef != "github:pull/42" {
-		t.Fatalf("pull-request binding = %#v", resolved)
+	if resolved.Binding != binding ||
+		resolved.Binding.PullRequestRef != "github:pull/42" ||
+		resolved.CandidateTree != fixture.headTree ||
+		!validPADImmutableRef(resolved.RecordRef) {
+		t.Fatalf("pull-request authority = %#v", resolved)
 	}
 
 	missingPR := binding

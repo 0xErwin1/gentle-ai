@@ -108,14 +108,22 @@ func (coordinator *OwnerCoordinator) DeriveAndPublishDeliveryDecision(
 		Ref:    "work-run:" + state.WorkRunID,
 		Digest: state.Handoff.CandidateRef,
 	}
-	if err := coordinator.preparePADCandidateBindingFor(
+	candidateAuthority, err := coordinator.preparePADCandidateBindingFor(
 		ctx,
 		candidate,
 		admission.Destination,
 		mechanism,
 		state.ReviewReceiptRef,
 		state.VerificationResultRef,
-	); err != nil {
+	)
+	if err != nil {
+		return "", err
+	}
+	deliveryPort, err := coordinator.padDeliveryForCandidateAuthority(
+		ctx,
+		candidateAuthority,
+	)
+	if err != nil {
 		return "", err
 	}
 	probeRequest, err := deliveryadmission.NewLiveGateProbeRequest(
@@ -132,7 +140,7 @@ func (coordinator *OwnerCoordinator) DeriveAndPublishDeliveryDecision(
 	gates, err := deliveryadmission.ProbeGateEvidence(
 		ctx,
 		repository,
-		coordinator.padDelivery,
+		deliveryPort,
 		probeRequest,
 	)
 	if err != nil {
@@ -151,6 +159,7 @@ func (coordinator *OwnerCoordinator) DeriveAndPublishDeliveryDecision(
 			PolicyRef:             admission.PolicyRef,
 			ReviewReceiptRef:      state.ReviewReceiptRef,
 			VerificationResultRef: state.VerificationResultRef,
+			CandidateAuthorityRef: candidateAuthority.RecordRef,
 			GateRef:               gateRef,
 			AuthorityRef:          admission.AuthorityRef,
 			SecondAuthorityRef:    admission.SecondAuthorityRef,

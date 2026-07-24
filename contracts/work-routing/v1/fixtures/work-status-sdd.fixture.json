@@ -5,11 +5,14 @@
   "revision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "publicState": "checking",
   "routeDecision": "propose_sdd",
+  "routePhase": "implementation_selected",
   "implementationRoute": "sdd",
-  "sddRunRef": "sdd:organic-recovery",
+  "sddRunRef": "organic-recovery",
   "verification": {
     "outcome": "complete",
-    "resultRefs": ["verification:sdd-fixture"]
+    "resultRefs": [
+      "verification:sdd-fixture"
+    ]
   },
   "deliveryIntentRef": "delivery:sdd-fixture",
   "reviewReceiptRef": "review:sdd-fixture"

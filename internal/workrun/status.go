@@ -16,13 +16,45 @@ func (store WorkRunStore) PublicStatus(ctx context.Context) (WorkStatusV1, error
 	if err != nil {
 		return WorkStatusV1{}, err
 	}
-	if state.ProductiveBlockerRef != "" {
-		if err := store.resolveProductiveDiagnostic(
+	var productiveExecution *ProductiveExecutionResultAuthority
+	if state.ProductiveExecutionResultRef != "" {
+		resolved, err := store.resolveProductiveExecutionResult(
 			ctx,
-			state.ProductiveBlockerRef,
+			state.ProductiveExecutionResultRef,
 			state,
-		); err != nil {
+		)
+		if err != nil {
 			return WorkStatusV1{}, err
+		}
+		productiveExecution = &resolved
+	}
+	var diagnostic *WorkAdvanceDiagnosticV1
+	if state.ProductiveBlockerRef != "" {
+		if state.ProductiveReconciliationRef != "" {
+			reconciliation, err := store.resolveProductiveReconciliation(
+				ctx,
+				state.ProductiveReconciliationRef,
+				state,
+			)
+			if err != nil {
+				return WorkStatusV1{}, err
+			}
+			diagnostic = nil
+			if reconciliation.Diagnostic != nil {
+				value := *reconciliation.Diagnostic
+				diagnostic = &value
+			}
+		} else {
+			resolved, err := store.resolveProductiveDiagnosticAuthority(
+				ctx,
+				state.ProductiveBlockerRef,
+				state,
+			)
+			if err != nil {
+				return WorkStatusV1{}, err
+			}
+			value := resolved.Diagnostic
+			diagnostic = &value
 		}
 	}
 	var result *VerificationResultAuthority
@@ -56,7 +88,8 @@ func (store WorkRunStore) PublicStatus(ctx context.Context) (WorkStatusV1, error
 	}
 	if state.DeliveryAuthorizationRef != "" &&
 		deliveryResult == nil &&
-		state.ProductiveBlockerRef == "" {
+		state.ProductiveBlockerRef == "" &&
+		productiveExecution == nil {
 		if result == nil || state.Handoff == nil || state.ReviewReceiptRef == "" {
 			return WorkStatusV1{}, errors.New(
 				"delivery authorization is bound without terminal WorkRun facts",
@@ -71,7 +104,13 @@ func (store WorkRunStore) PublicStatus(ctx context.Context) (WorkStatusV1, error
 		)
 		if err != nil {
 			if errors.Is(err, ErrDeliveryAuthorizationInactive) {
-				return projectPublicStatus(state, result, nil, nil)
+				return projectPublicStatus(
+					state,
+					result,
+					nil,
+					nil,
+					diagnostic,
+				)
 			}
 			return WorkStatusV1{}, fmt.Errorf(
 				"resolve live PAD delivery authorization: %w",
@@ -83,7 +122,13 @@ func (store WorkRunStore) PublicStatus(ctx context.Context) (WorkStatusV1, error
 			state,
 		); err != nil {
 			if errors.Is(err, ErrDeliveryAuthorizationInactive) {
-				return projectPublicStatus(state, result, nil, nil)
+				return projectPublicStatus(
+					state,
+					result,
+					nil,
+					nil,
+					diagnostic,
+				)
 			}
 			return WorkStatusV1{}, err
 		}
@@ -95,7 +140,13 @@ func (store WorkRunStore) PublicStatus(ctx context.Context) (WorkStatusV1, error
 		}
 		authorization = &resolved
 	}
-	return projectPublicStatus(state, result, authorization, deliveryResult)
+	return projectPublicStatus(
+		state,
+		result,
+		authorization,
+		deliveryResult,
+		diagnostic,
+	)
 }
 
 func (store WorkRunStore) resolveProductiveDiagnostic(
@@ -103,29 +154,41 @@ func (store WorkRunStore) resolveProductiveDiagnostic(
 	ref string,
 	state WorkRunState,
 ) error {
+	_, err := store.resolveProductiveDiagnosticAuthority(ctx, ref, state)
+	return err
+}
+
+func (store WorkRunStore) resolveProductiveDiagnosticAuthority(
+	ctx context.Context,
+	ref string,
+	state WorkRunState,
+) (ProductiveDiagnosticAuthority, error) {
 	if !validSHA256Ref(ref) {
-		return errors.New(
+		return ProductiveDiagnosticAuthority{}, errors.New(
 			"WorkRun productive diagnostic reference is invalid",
 		)
 	}
 	if store.authority.ProductiveDiagnostic == nil {
-		return ErrAuthorityPortUnavailable
+		return ProductiveDiagnosticAuthority{}, ErrAuthorityPortUnavailable
 	}
 	resolved, err := store.authority.ProductiveDiagnostic.
 		ResolveProductiveDiagnostic(ctx, ref)
 	if err != nil {
-		return fmt.Errorf(
+		return ProductiveDiagnosticAuthority{}, fmt.Errorf(
 			"resolve owner productive diagnostic: %w",
 			err,
 		)
 	}
 	repositoryRef := store.RepositoryRef()
 	if repositoryRef == "" {
-		return errors.New(
+		return ProductiveDiagnosticAuthority{}, errors.New(
 			"WorkRun repository authority is unavailable",
 		)
 	}
-	return resolved.Validate(ref, repositoryRef, state)
+	if err := resolved.Validate(ref, repositoryRef, state); err != nil {
+		return ProductiveDiagnosticAuthority{}, err
+	}
+	return resolved, nil
 }
 
 func projectPublicStatus(
@@ -133,39 +196,65 @@ func projectPublicStatus(
 	result *VerificationResultAuthority,
 	authorization *DeliveryAuthorizationAuthority,
 	deliveryResult *DeliveryResultAuthority,
+	diagnostic *WorkAdvanceDiagnosticV1,
 ) (WorkStatusV1, error) {
 	if !state.Started {
 		return WorkStatusV1{}, ErrWorkRunNotStarted
 	}
 	route := state.ImplementationRoute
 	sddRunRef := state.SDDRunRef
+	routePhase := RoutePhaseImplementationSelected
 	if route == ImplementationRouteSDD && sddRunRef == "" {
 		route = ""
+		routePhase = RoutePhaseSDDRuntimePending
+	} else if state.RouteDecision.Decision == RouteDecisionProposeSDD &&
+		route == "" {
+		routePhase = RoutePhaseDecisionPending
 	}
 	status := WorkStatusV1{
 		Schema: WorkStatusContractV1, Contract: WorkStatusContractV1,
-		WorkRunID: state.WorkRunID, Revision: state.Revision,
+		WorkRunID: state.WorkRunID, Revision: publicWorkRunRevision(state),
 		PublicState:         publicStateForWorkRun(state, result),
 		RouteDecision:       state.RouteDecision.Decision,
+		RoutePhase:          routePhase,
 		ImplementationRoute: route, SDDRunRef: sddRunRef,
 		Verification: VerificationSummaryV1{
 			Outcome: VerificationPending, ResultRefs: []string{},
 		},
 		DeliveryIntentRef: state.DeliveryIntentRef,
 		ReviewReceiptRef:  state.ReviewReceiptRef,
+		Diagnostic:        diagnostic,
 	}
 	if result != nil {
 		status.Verification.Outcome = publicVerificationOutcome(result.Result.Aggregate)
 		status.Verification.ResultRefs = []string{result.Result.ResultRef}
 	}
-	if state.ProductiveBlockerRef == "" &&
+	if (state.ProductiveBlockerRef == "" ||
+		state.ProductiveReconciliationOutcome ==
+			WorkReconcileDeliveryConfirmed) &&
 		(authorization != nil || deliveryResult != nil) {
 		status.PublicState = PublicStateReady
+		status.Diagnostic = nil
 	}
 	if err := status.Validate(); err != nil {
 		return WorkStatusV1{}, err
 	}
 	return status, nil
+}
+
+// publicWorkRunRevision keeps the caller's productive Advance CAS stable while
+// the owner resumes the one WorkRun-anchored attempt. The ledger may advance
+// through internal implementation, verification, review, and delivery records,
+// but consumers must keep retrying the exact source token. Once the attempt is
+// terminal, the real ledger revision becomes public again.
+func publicWorkRunRevision(state WorkRunState) string {
+	if state.ProductiveAdvanceSourceRevision != "" &&
+		state.ProductiveBlockerRef == "" &&
+		state.DeliveryResultRef == "" &&
+		state.ProductiveReconciliationRef == "" {
+		return state.ProductiveAdvanceSourceRevision
+	}
+	return state.Revision
 }
 
 func (store WorkRunStore) resolveBoundVerificationResult(

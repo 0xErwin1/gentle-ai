@@ -821,7 +821,10 @@ func (connector *HTTPSProductiveRuntimeConnector) ResolveOutcomeIntake(
 	); err != nil {
 		return OwnerOutcomeIntake{}, err
 	}
-	if err := intake.validate(connector.RepositoryRef(), request); err != nil {
+	if err := intake.validateStructure(
+		connector.RepositoryRef(),
+		request,
+	); err != nil {
 		return OwnerOutcomeIntake{}, fmt.Errorf(
 			"%w: %v",
 			ErrProductiveRuntimeBindingMismatch,

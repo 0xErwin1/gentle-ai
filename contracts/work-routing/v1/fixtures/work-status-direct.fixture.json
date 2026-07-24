@@ -5,6 +5,7 @@
   "revision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "publicState": "working",
   "routeDecision": "direct_inline",
+  "routePhase": "implementation_selected",
   "implementationRoute": "direct_inline",
   "verification": {
     "outcome": "pending",

@@ -20,6 +20,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/evidence"
 	"github.com/gentleman-programming/gentle-ai/internal/hostruntime"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
 
 const (
@@ -94,10 +95,18 @@ func TestHTTPSProductiveRuntimeConnectorImplementsExactTypedPorts(t *testing.T) 
 					input.Request.Outcome != "Ship the exact governed result." {
 					t.Fatalf("outcome input = %#v", input)
 				}
-				payload = ownerOutcomeTestIntake(
+				legacy := ownerOutcomeTestIntake(
 					"runtime-connector-run",
 					deliveryadmission.RouteDirectMain,
 				)
+				legacy.RoutingFacts = workrun.ImplementationRouteInput{
+					WriteIntent:    workrun.WriteIntentAnalytical,
+					WriteFileCount: 2,
+					DurablePlanning: []workrun.DurablePlanningReason{
+						workrun.PlanningArchitecture,
+					},
+				}
+				payload = legacy
 			case ProductiveRuntimeOperationSemantic:
 				var input productiveSemanticEvaluationRequest
 				runtimeConnectorDecodePayload(t, call.Payload, &input)
@@ -220,8 +229,17 @@ func TestHTTPSProductiveRuntimeConnectorImplementsExactTypedPorts(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if intake.WorkRunID != "runtime-connector-run" {
+	if intake.WorkRunID != "runtime-connector-run" ||
+		intake.DeclinedSDDFallback != nil {
 		t.Fatalf("outcome intake = %#v", intake)
+	}
+	if err := intake.validate(repositoryRef, OutcomeStartRequest{
+		Outcome: "Ship the exact governed result.",
+	}); err == nil || !strings.Contains(
+		err.Error(),
+		"requires an owner-authored",
+	) {
+		t.Fatalf("legacy transport intake strict validation error = %v", err)
 	}
 	evaluation, err := connector.EvaluateSemanticExecution(
 		context.Background(),

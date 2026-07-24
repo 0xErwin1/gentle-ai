@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/internal/deliveryadmission"
 	"github.com/gentleman-programming/gentle-ai/internal/hostruntime"
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 )
@@ -24,23 +25,26 @@ const (
 	workRunRecordSchemaV1            = "gentle-ai.work-run-record/v1"
 	workRunRepositoryBindingSchemaV1 = "gentle-ai.work-run-repository-binding/v1"
 
-	workOperationStart              = "run/start"
-	workOperationAcceptSDD          = "route/accept-sdd"
-	workOperationReroute            = "route/reroute"
-	workOperationBindSDD            = "route/bind-sdd"
-	workOperationBindHandoff        = "implementation/bind-handoff"
-	workOperationBlockProductive    = "implementation/block-productive"
-	workOperationReplanVerification = "verification/replan-correction"
-	workOperationRecordForecast     = "verification/record-forecast"
-	workOperationRecordDisposition  = "verification/record-disposition"
-	workOperationBeginVerification  = "verification/begin"
-	workOperationClaimLaunch        = "verification/claim-launch"
-	workOperationBindResult         = "verification/bind-result"
-	workOperationStopMutation       = "verification/stop-mutated"
-	workOperationBindReview         = "review/bind-receipt"
-	workOperationBindDeliveryRoute  = "delivery/bind-route-reevaluation"
-	workOperationBindDelivery       = "delivery/bind-authorization"
-	workOperationBindDeliveryResult = "delivery/bind-result"
+	workOperationStart                           = "run/start"
+	workOperationAcceptSDD                       = "route/accept-sdd"
+	workOperationReroute                         = "route/reroute"
+	workOperationBindSDD                         = "route/bind-sdd"
+	workOperationBindHandoff                     = "implementation/bind-handoff"
+	workOperationBeginProductive                 = "implementation/begin-productive-advance"
+	workOperationRecordProductiveExecutionResult = "implementation/record-productive-execution-result"
+	workOperationBlockProductive                 = "implementation/block-productive"
+	workOperationReconcileProductive             = "implementation/reconcile-productive"
+	workOperationReplanVerification              = "verification/replan-correction"
+	workOperationRecordForecast                  = "verification/record-forecast"
+	workOperationRecordDisposition               = "verification/record-disposition"
+	workOperationBeginVerification               = "verification/begin"
+	workOperationClaimLaunch                     = "verification/claim-launch"
+	workOperationBindResult                      = "verification/bind-result"
+	workOperationStopMutation                    = "verification/stop-mutated"
+	workOperationBindReview                      = "review/bind-receipt"
+	workOperationBindDeliveryRoute               = "delivery/bind-route-reevaluation"
+	workOperationBindDelivery                    = "delivery/bind-authorization"
+	workOperationBindDeliveryResult              = "delivery/bind-result"
 
 	maximumWorkRunRecordBytes  = 1 << 20
 	maximumWorkRunChainRecords = 10_000
@@ -91,33 +95,40 @@ func (err *PublicationError) Unwrap() error { return err.Cause }
 // artifacts retain authority; this journal records only their immutable refs
 // and the ordering of accepted application-level transitions.
 type WorkRunState struct {
-	Schema                          string                      `json:"schema"`
-	WorkRunID                       string                      `json:"work_run_id"`
-	Revision                        string                      `json:"revision,omitempty"`
-	Started                         bool                        `json:"started"`
-	RouteDecision                   ImplementationRouteDecision `json:"route_decision"`
-	ImplementationRoute             ImplementationRoute         `json:"implementation_route,omitempty"`
-	RouteAcceptanceRef              string                      `json:"route_acceptance_ref,omitempty"`
-	SDDRunRef                       string                      `json:"sdd_run_ref,omitempty"`
-	DeliveryIntentRef               string                      `json:"delivery_intent_ref"`
-	Handoff                         *ImplementationHandoff      `json:"handoff,omitempty"`
-	ProductiveBlockerRef            string                      `json:"productive_blocker_ref,omitempty"`
-	ProductiveBlockerSourceRevision string                      `json:"productive_blocker_source_revision,omitempty"`
-	VerificationReplan              *VerificationReplan         `json:"verification_replan,omitempty"`
-	Forecast                        *VerificationForecast       `json:"forecast,omitempty"`
-	Disposition                     *VerificationDisposition    `json:"disposition,omitempty"`
-	Reservations                    []VerificationReservation   `json:"reservations"`
-	LaunchClaims                    []VerificationLaunchClaim   `json:"launch_claims"`
-	NextOrdinal                     int                         `json:"next_ordinal"`
-	VerificationResultRef           string                      `json:"verification_result_ref,omitempty"`
-	PostVerificationSnapshotRef     string                      `json:"post_verification_snapshot_ref,omitempty"`
-	CorrectionImpactClosureRef      string                      `json:"correction_impact_closure_ref,omitempty"`
-	ReusableVerificationObligations []string                    `json:"reusable_verification_obligations"`
-	VerificationStop                *VerificationStop           `json:"verification_stop,omitempty"`
-	ReviewReceiptRef                string                      `json:"review_receipt_ref,omitempty"`
-	DeliveryRouteReevaluationRef    string                      `json:"delivery_route_reevaluation_ref,omitempty"`
-	DeliveryAuthorizationRef        string                      `json:"delivery_authorization_ref,omitempty"`
-	DeliveryResultRef               string                      `json:"delivery_result_ref,omitempty"`
+	Schema                                  string                      `json:"schema"`
+	WorkRunID                               string                      `json:"work_run_id"`
+	Revision                                string                      `json:"revision,omitempty"`
+	Started                                 bool                        `json:"started"`
+	RouteDecision                           ImplementationRouteDecision `json:"route_decision"`
+	ImplementationRoute                     ImplementationRoute         `json:"implementation_route,omitempty"`
+	RouteAcceptanceRef                      string                      `json:"route_acceptance_ref,omitempty"`
+	SDDRunRef                               string                      `json:"sdd_run_ref,omitempty"`
+	DeliveryIntentRef                       string                      `json:"delivery_intent_ref"`
+	SDDDeclineFallbackRef                   string                      `json:"sdd_decline_fallback_ref,omitempty"`
+	Handoff                                 *ImplementationHandoff      `json:"handoff,omitempty"`
+	ProductiveAdvanceSourceRevision         string                      `json:"productive_advance_source_revision,omitempty"`
+	ProductiveExecutionResultRef            string                      `json:"productive_execution_result_ref,omitempty"`
+	ProductiveExecutionResultSourceRevision string                      `json:"productive_execution_result_source_revision,omitempty"`
+	ProductiveBlockerRef                    string                      `json:"productive_blocker_ref,omitempty"`
+	ProductiveBlockerSourceRevision         string                      `json:"productive_blocker_source_revision,omitempty"`
+	ProductiveReconciliationRef             string                      `json:"productive_reconciliation_ref,omitempty"`
+	ProductiveReconciliationSourceRevision  string                      `json:"productive_reconciliation_source_revision,omitempty"`
+	ProductiveReconciliationOutcome         WorkReconcileOutcome        `json:"productive_reconciliation_outcome,omitempty"`
+	VerificationReplan                      *VerificationReplan         `json:"verification_replan,omitempty"`
+	Forecast                                *VerificationForecast       `json:"forecast,omitempty"`
+	Disposition                             *VerificationDisposition    `json:"disposition,omitempty"`
+	Reservations                            []VerificationReservation   `json:"reservations"`
+	LaunchClaims                            []VerificationLaunchClaim   `json:"launch_claims"`
+	NextOrdinal                             int                         `json:"next_ordinal"`
+	VerificationResultRef                   string                      `json:"verification_result_ref,omitempty"`
+	PostVerificationSnapshotRef             string                      `json:"post_verification_snapshot_ref,omitempty"`
+	CorrectionImpactClosureRef              string                      `json:"correction_impact_closure_ref,omitempty"`
+	ReusableVerificationObligations         []string                    `json:"reusable_verification_obligations"`
+	VerificationStop                        *VerificationStop           `json:"verification_stop,omitempty"`
+	ReviewReceiptRef                        string                      `json:"review_receipt_ref,omitempty"`
+	DeliveryRouteReevaluationRef            string                      `json:"delivery_route_reevaluation_ref,omitempty"`
+	DeliveryAuthorizationRef                string                      `json:"delivery_authorization_ref,omitempty"`
+	DeliveryResultRef                       string                      `json:"delivery_result_ref,omitempty"`
 }
 
 type WorkRunStore struct {
@@ -144,10 +155,11 @@ type workRunRepositoryBinding struct {
 }
 
 type StartRequest struct {
-	ExpectedRevision  string                      `json:"expected_revision"`
-	RequestID         string                      `json:"request_id"`
-	RouteDecision     ImplementationRouteDecision `json:"route_decision"`
-	DeliveryIntentRef string                      `json:"delivery_intent_ref"`
+	ExpectedRevision      string                      `json:"expected_revision"`
+	RequestID             string                      `json:"request_id"`
+	RouteDecision         ImplementationRouteDecision `json:"route_decision"`
+	DeliveryIntentRef     string                      `json:"delivery_intent_ref"`
+	SDDDeclineFallbackRef string                      `json:"sdd_decline_fallback_ref,omitempty"`
 }
 
 type AcceptSDDRequest struct {
@@ -175,6 +187,18 @@ type BindImplementationHandoffRequest struct {
 	Handoff          ImplementationHandoff `json:"handoff"`
 }
 
+type BeginProductiveAdvanceRequest struct {
+	ExpectedRevision string `json:"expected_revision"`
+	RequestID        string `json:"request_id"`
+	SourceRevision   string `json:"source_revision"`
+}
+
+type RecordProductiveExecutionResultRequest struct {
+	ExpectedRevision string `json:"expected_revision"`
+	RequestID        string `json:"request_id"`
+	ResultRef        string `json:"result_ref"`
+}
+
 type ReplanVerificationAfterCorrectionRequest struct {
 	ExpectedRevision string                `json:"expected_revision"`
 	RequestID        string                `json:"request_id"`
@@ -185,6 +209,13 @@ type RecordProductiveBlockerRequest struct {
 	ExpectedRevision string `json:"expected_revision"`
 	RequestID        string `json:"request_id"`
 	DiagnosticRef    string `json:"diagnostic_ref"`
+}
+
+type RecordProductiveReconciliationRequest struct {
+	ExpectedRevision      string `json:"expected_revision"`
+	RequestID             string `json:"request_id"`
+	OriginalDiagnosticRef string `json:"original_diagnostic_ref"`
+	ReconciliationRef     string `json:"reconciliation_ref"`
 }
 
 type RecordVerificationForecastRequest struct {
@@ -251,8 +282,9 @@ type BindDeliveryResultRequest struct {
 }
 
 type workStartEvent struct {
-	RouteDecision     ImplementationRouteDecision `json:"route_decision"`
-	DeliveryIntentRef string                      `json:"delivery_intent_ref"`
+	RouteDecision         ImplementationRouteDecision `json:"route_decision"`
+	DeliveryIntentRef     string                      `json:"delivery_intent_ref"`
+	SDDDeclineFallbackRef string                      `json:"sdd_decline_fallback_ref,omitempty"`
 }
 
 type workAcceptSDDEvent struct {
@@ -275,6 +307,20 @@ type workBindReviewEvent struct {
 
 type workProductiveBlockerEvent struct {
 	DiagnosticRef string `json:"diagnostic_ref"`
+}
+
+type workBeginProductiveAdvanceEvent struct {
+	SourceRevision string `json:"source_revision"`
+}
+
+type workProductiveExecutionResultEvent struct {
+	ResultRef string `json:"result_ref"`
+}
+
+type workProductiveReconciliationEvent struct {
+	ReconciliationRef string               `json:"reconciliation_ref"`
+	Outcome           WorkReconcileOutcome `json:"outcome"`
+	DeliveryResultRef string               `json:"delivery_result_ref,omitempty"`
 }
 
 type workBindResultEvent struct {
@@ -316,23 +362,26 @@ type workRunRecord struct {
 	RequestID        string `json:"request_id"`
 	RequestDigest    string `json:"request_digest"`
 
-	Start          *workStartEvent                     `json:"start,omitempty"`
-	AcceptSDD      *workAcceptSDDEvent                 `json:"accept_sdd,omitempty"`
-	Reroute        *workRerouteEvent                   `json:"reroute,omitempty"`
-	BindSDD        *workBindSDDEvent                   `json:"bind_sdd,omitempty"`
-	Handoff        *ImplementationHandoff              `json:"handoff,omitempty"`
-	Blocker        *workProductiveBlockerEvent         `json:"productive_blocker,omitempty"`
-	Replan         *workVerificationReplanEvent        `json:"replan,omitempty"`
-	Forecast       *VerificationForecast               `json:"forecast,omitempty"`
-	Disposition    *VerificationDisposition            `json:"disposition,omitempty"`
-	Reservation    *VerificationReservation            `json:"reservation,omitempty"`
-	Launch         *VerificationLaunchClaim            `json:"launch,omitempty"`
-	Result         *workBindResultEvent                `json:"result,omitempty"`
-	StopMutation   *workStopMutationEvent              `json:"stop_mutation,omitempty"`
-	Review         *workBindReviewEvent                `json:"review,omitempty"`
-	DeliveryRoute  *workBindDeliveryRouteEvent         `json:"delivery_route,omitempty"`
-	Delivery       *workBindDeliveryAuthorizationEvent `json:"delivery,omitempty"`
-	DeliveryResult *workBindDeliveryResultEvent        `json:"delivery_result,omitempty"`
+	Start                     *workStartEvent                     `json:"start,omitempty"`
+	AcceptSDD                 *workAcceptSDDEvent                 `json:"accept_sdd,omitempty"`
+	Reroute                   *workRerouteEvent                   `json:"reroute,omitempty"`
+	BindSDD                   *workBindSDDEvent                   `json:"bind_sdd,omitempty"`
+	Handoff                   *ImplementationHandoff              `json:"handoff,omitempty"`
+	BeginProductive           *workBeginProductiveAdvanceEvent    `json:"begin_productive_advance,omitempty"`
+	ProductiveExecutionResult *workProductiveExecutionResultEvent `json:"productive_execution_result,omitempty"`
+	Blocker                   *workProductiveBlockerEvent         `json:"productive_blocker,omitempty"`
+	Reconciliation            *workProductiveReconciliationEvent  `json:"productive_reconciliation,omitempty"`
+	Replan                    *workVerificationReplanEvent        `json:"replan,omitempty"`
+	Forecast                  *VerificationForecast               `json:"forecast,omitempty"`
+	Disposition               *VerificationDisposition            `json:"disposition,omitempty"`
+	Reservation               *VerificationReservation            `json:"reservation,omitempty"`
+	Launch                    *VerificationLaunchClaim            `json:"launch,omitempty"`
+	Result                    *workBindResultEvent                `json:"result,omitempty"`
+	StopMutation              *workStopMutationEvent              `json:"stop_mutation,omitempty"`
+	Review                    *workBindReviewEvent                `json:"review,omitempty"`
+	DeliveryRoute             *workBindDeliveryRouteEvent         `json:"delivery_route,omitempty"`
+	Delivery                  *workBindDeliveryAuthorizationEvent `json:"delivery,omitempty"`
+	DeliveryResult            *workBindDeliveryResultEvent        `json:"delivery_result,omitempty"`
 }
 
 type workRequestReceipt struct {
@@ -465,6 +514,18 @@ func (store WorkRunStore) Start(ctx context.Context, request StartRequest) (Work
 	if !validSHA256Ref(request.DeliveryIntentRef) {
 		return WorkRunState{}, errors.New("work run start requires an immutable delivery intent reference")
 	}
+	if request.SDDDeclineFallbackRef != "" &&
+		!validSHA256Ref(request.SDDDeclineFallbackRef) {
+		return WorkRunState{}, errors.New(
+			"work run start has an invalid SDD decline fallback reference",
+		)
+	}
+	if err := validateSDDDeclineFallbackBinding(
+		request.RouteDecision,
+		request.SDDDeclineFallbackRef,
+	); err != nil {
+		return WorkRunState{}, err
+	}
 	if store.authority.PAD == nil {
 		return WorkRunState{}, ErrAuthorityPortUnavailable
 	}
@@ -504,8 +565,9 @@ func (store WorkRunStore) Start(ctx context.Context, request StartRequest) (Work
 			return workRunRecord{}, ErrWorkRunAlreadyStarted
 		}
 		event := workStartEvent{
-			RouteDecision:     request.RouteDecision,
-			DeliveryIntentRef: request.DeliveryIntentRef,
+			RouteDecision:         request.RouteDecision,
+			DeliveryIntentRef:     request.DeliveryIntentRef,
+			SDDDeclineFallbackRef: request.SDDDeclineFallbackRef,
 		}
 		return workRunRecord{Operation: workOperationStart, Start: &event}, nil
 	})
@@ -663,6 +725,187 @@ func (store WorkRunStore) BindImplementationHandoff(
 	})
 }
 
+// BeginProductiveAdvance anchors the caller's exact source revision in the
+// WorkRun hash chain before any product-driving mutation or external effect.
+// Filesystem markers may cache this fact but can never create it.
+func (store WorkRunStore) BeginProductiveAdvance(
+	ctx context.Context,
+	request BeginProductiveAdvanceRequest,
+) (WorkRunState, error) {
+	if err := validateMutationEnvelope(
+		request.ExpectedRevision,
+		request.RequestID,
+	); err != nil {
+		return WorkRunState{}, err
+	}
+	if !validSHA256Ref(request.SourceRevision) ||
+		request.SourceRevision != request.ExpectedRevision {
+		return WorkRunState{}, errors.New(
+			"productive advance source must equal its exact expected revision",
+		)
+	}
+	digest, err := digestValue(
+		"gentle-ai.work-run-begin-productive-advance-request/v1",
+		request,
+	)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	return store.mutate(
+		ctx,
+		request.ExpectedRevision,
+		request.RequestID,
+		digest,
+		func(replay workReplay) (workRunRecord, error) {
+			state := replay.State
+			if !state.Started ||
+				state.ImplementationRoute == "" ||
+				state.ProductiveAdvanceSourceRevision != "" ||
+				state.ProductiveExecutionResultRef != "" ||
+				state.ProductiveExecutionResultSourceRevision != "" ||
+				state.ProductiveBlockerRef != "" ||
+				state.ProductiveReconciliationRef != "" ||
+				state.DeliveryResultRef != "" {
+				return workRunRecord{}, fmt.Errorf(
+					"%w: WorkRun cannot begin productive advance",
+					ErrWorkRunInvalidTransition,
+				)
+			}
+			event := workBeginProductiveAdvanceEvent{
+				SourceRevision: request.SourceRevision,
+			}
+			return workRunRecord{
+				Operation:       workOperationBeginProductive,
+				BeginProductive: &event,
+			}, nil
+		},
+	)
+}
+
+// RecordProductiveExecutionResult commits the exact content-addressed PAD
+// terminal result into the WorkRun hash chain before any outcome-derived
+// blocker or successful delivery projection can be journaled. The referenced
+// authority covers succeeded, failed, and indeterminate results alike.
+func (store WorkRunStore) RecordProductiveExecutionResult(
+	ctx context.Context,
+	request RecordProductiveExecutionResultRequest,
+) (WorkRunState, error) {
+	if err := validateMutationEnvelope(
+		request.ExpectedRevision,
+		request.RequestID,
+	); err != nil {
+		return WorkRunState{}, err
+	}
+	if !validSHA256Ref(request.ResultRef) {
+		return WorkRunState{}, errors.New(
+			"productive execution result must be an immutable SHA-256 reference",
+		)
+	}
+	digest, err := digestValue(
+		"gentle-ai.work-run-productive-execution-result-request/v1",
+		request,
+	)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	applied, err := store.mutate(
+		ctx,
+		request.ExpectedRevision,
+		request.RequestID,
+		digest,
+		func(replay workReplay) (workRunRecord, error) {
+			if !productiveExecutionResultBindable(replay.State) {
+				return workRunRecord{}, fmt.Errorf(
+					"%w: WorkRun cannot accept a productive execution result",
+					ErrWorkRunInvalidTransition,
+				)
+			}
+			if _, err := store.resolveProductiveExecutionResult(
+				ctx,
+				request.ResultRef,
+				replay.State,
+			); err != nil {
+				return workRunRecord{}, err
+			}
+			event := workProductiveExecutionResultEvent{
+				ResultRef: request.ResultRef,
+			}
+			return workRunRecord{
+				Operation:                 workOperationRecordProductiveExecutionResult,
+				ProductiveExecutionResult: &event,
+			}, nil
+		},
+	)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	// Exact request replay bypasses the build callback. Re-resolve the complete
+	// owner authority against the historical committed post-state so replay
+	// never degrades into trusting the SHA shape alone.
+	if _, err := store.resolveProductiveExecutionResult(
+		ctx,
+		request.ResultRef,
+		applied,
+	); err != nil {
+		return WorkRunState{}, &PublicationError{
+			Revision:  applied.Revision,
+			Committed: true,
+			Cause: fmt.Errorf(
+				"revalidate committed productive execution result authority: %w",
+				err,
+			),
+		}
+	}
+	return applied, nil
+}
+
+// ResolveProductiveExecutionResult resolves the full authority bound by the
+// current WorkRun. Provider replay/reconciliation uses this method to compare
+// every PAD terminal field, not merely the content reference.
+func (store WorkRunStore) ResolveProductiveExecutionResult(
+	ctx context.Context,
+	resultRef string,
+) (ProductiveExecutionResultAuthority, error) {
+	state, err := store.Status()
+	if err != nil {
+		return ProductiveExecutionResultAuthority{}, err
+	}
+	if state.ProductiveExecutionResultRef != resultRef {
+		return ProductiveExecutionResultAuthority{}, fmt.Errorf(
+			"%w: productive execution result is not bound to WorkRun",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	return store.resolveProductiveExecutionResult(ctx, resultRef, state)
+}
+
+func (store WorkRunStore) resolveProductiveExecutionResult(
+	ctx context.Context,
+	resultRef string,
+	state WorkRunState,
+) (ProductiveExecutionResultAuthority, error) {
+	if store.authority.ProductiveExecutionResult == nil {
+		return ProductiveExecutionResultAuthority{},
+			ErrAuthorityPortUnavailable
+	}
+	authority, err := store.authority.ProductiveExecutionResult.
+		ResolveProductiveExecutionResult(ctx, resultRef)
+	if err != nil {
+		return ProductiveExecutionResultAuthority{}, fmt.Errorf(
+			"resolve productive execution result: %w",
+			err,
+		)
+	}
+	if err := authority.Validate(
+		resultRef,
+		store.RepositoryRef(),
+		state,
+	); err != nil {
+		return ProductiveExecutionResultAuthority{}, err
+	}
+	return authority, nil
+}
+
 // RecordProductiveBlocker durably stops automatic convergence when native
 // classification proves that a complete owner plan is unavailable. The
 // diagnostic is immutable owner evidence; no model-authored disposition or
@@ -738,6 +981,236 @@ func (store WorkRunStore) RecordProductiveBlocker(
 		}
 	}
 	return applied, nil
+}
+
+// RecordProductiveReconciliation journals the one owner-authored resolution
+// attempt for a terminal productive blocker. The blocker remains immutable
+// history; only the reconciliation authority may supply the outcome and any
+// confirmed delivery result.
+func (store WorkRunStore) RecordProductiveReconciliation(
+	ctx context.Context,
+	request RecordProductiveReconciliationRequest,
+) (WorkRunState, error) {
+	if err := validateMutationEnvelope(
+		request.ExpectedRevision,
+		request.RequestID,
+	); err != nil {
+		return WorkRunState{}, err
+	}
+	if !validSHA256Ref(request.OriginalDiagnosticRef) ||
+		!validSHA256Ref(request.ReconciliationRef) {
+		return WorkRunState{}, errors.New(
+			"productive reconciliation requires immutable diagnostic and authority references",
+		)
+	}
+	digest, err := digestValue(
+		"gentle-ai.work-run-productive-reconciliation-request/v1",
+		request,
+	)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	applied, err := store.mutateProductiveReconciliation(
+		ctx,
+		request.ExpectedRevision,
+		request.RequestID,
+		digest,
+		func(replay workReplay) (workRunRecord, error) {
+			if !productiveReconciliationBindable(replay.State) ||
+				request.OriginalDiagnosticRef !=
+					replay.State.ProductiveBlockerRef {
+				return workRunRecord{}, fmt.Errorf(
+					"%w: WorkRun cannot accept a productive reconciliation",
+					ErrWorkRunInvalidTransition,
+				)
+			}
+			authority, err := store.resolveProductiveReconciliation(
+				ctx,
+				request.ReconciliationRef,
+				replay.State,
+			)
+			if err != nil {
+				return workRunRecord{}, err
+			}
+			var execution *ProductiveExecutionResultAuthority
+			if replay.State.ProductiveExecutionResultRef != "" {
+				resolved, err := store.resolveProductiveExecutionResult(
+					ctx,
+					replay.State.ProductiveExecutionResultRef,
+					replay.State,
+				)
+				if err != nil {
+					return workRunRecord{}, err
+				}
+				execution = &resolved
+			}
+			switch authority.Outcome {
+			case WorkReconcileDeliveryConfirmed:
+				if execution == nil ||
+					execution.Execution.Outcome !=
+						deliveryadmission.ExecutionSucceeded {
+					return workRunRecord{}, fmt.Errorf(
+						"%w: confirmed reconciliation has no anchored succeeded execution",
+						ErrAuthorityBindingMismatch,
+					)
+				}
+			case WorkReconcileNoDeliveryConfirmed:
+				if execution != nil &&
+					execution.Execution.Outcome !=
+						deliveryadmission.ExecutionFailed {
+					return workRunRecord{}, fmt.Errorf(
+						"%w: no-delivery reconciliation differs from anchored execution",
+						ErrAuthorityBindingMismatch,
+					)
+				}
+			case WorkReconcileManualResolution:
+				if execution != nil &&
+					execution.Execution.Outcome !=
+						deliveryadmission.ExecutionIndeterminate {
+					return workRunRecord{}, fmt.Errorf(
+						"%w: manual reconciliation differs from anchored execution",
+						ErrAuthorityBindingMismatch,
+					)
+				}
+			}
+			if authority.Outcome ==
+				WorkReconcileDeliveryConfirmed {
+				if store.authority.DeliveryResult == nil {
+					return workRunRecord{},
+						ErrAuthorityPortUnavailable
+				}
+				delivery, err := store.authority.DeliveryResult.
+					ResolveDeliveryResult(
+						ctx,
+						authority.DeliveryResultRef,
+					)
+				if err != nil {
+					return workRunRecord{}, fmt.Errorf(
+						"resolve reconciled delivery result: %w",
+						err,
+					)
+				}
+				if err := delivery.Validate(
+					authority.DeliveryResultRef,
+					replay.State,
+				); err != nil {
+					return workRunRecord{}, err
+				}
+			}
+			event := workProductiveReconciliationEvent{
+				ReconciliationRef: request.ReconciliationRef,
+				Outcome:           authority.Outcome,
+				DeliveryResultRef: authority.DeliveryResultRef,
+			}
+			return workRunRecord{
+				Operation:      workOperationReconcileProductive,
+				Reconciliation: &event,
+			}, nil
+		},
+	)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	// Exact request replay bypasses the build callback. Re-resolve the owner
+	// authority against the committed post-state before returning.
+	reconciled, err := store.resolveProductiveReconciliation(
+		ctx,
+		request.ReconciliationRef,
+		applied,
+	)
+	if err == nil && applied.ProductiveExecutionResultRef != "" {
+		var execution ProductiveExecutionResultAuthority
+		execution, err = store.resolveProductiveExecutionResult(
+			ctx,
+			applied.ProductiveExecutionResultRef,
+			applied,
+		)
+		if err == nil {
+			switch reconciled.Outcome {
+			case WorkReconcileDeliveryConfirmed:
+				if execution.Execution.Outcome !=
+					deliveryadmission.ExecutionSucceeded {
+					err = fmt.Errorf(
+						"%w: reconciled delivery differs from anchored execution",
+						ErrAuthorityBindingMismatch,
+					)
+				}
+			case WorkReconcileNoDeliveryConfirmed:
+				if execution.Execution.Outcome !=
+					deliveryadmission.ExecutionFailed {
+					err = fmt.Errorf(
+						"%w: reconciled no-delivery differs from anchored execution",
+						ErrAuthorityBindingMismatch,
+					)
+				}
+			case WorkReconcileManualResolution:
+				if execution.Execution.Outcome !=
+					deliveryadmission.ExecutionIndeterminate {
+					err = fmt.Errorf(
+						"%w: reconciled manual outcome differs from anchored execution",
+						ErrAuthorityBindingMismatch,
+					)
+				}
+			}
+		}
+	}
+	if err == nil &&
+		reconciled.Outcome == WorkReconcileDeliveryConfirmed {
+		if store.authority.DeliveryResult == nil {
+			err = ErrAuthorityPortUnavailable
+		} else {
+			var delivery DeliveryResultAuthority
+			delivery, err = store.authority.DeliveryResult.
+				ResolveDeliveryResult(
+					ctx,
+					reconciled.DeliveryResultRef,
+				)
+			if err == nil {
+				err = delivery.Validate(
+					reconciled.DeliveryResultRef,
+					applied,
+				)
+			}
+		}
+	}
+	if err != nil {
+		return WorkRunState{}, &PublicationError{
+			Revision:  applied.Revision,
+			Committed: true,
+			Cause: fmt.Errorf(
+				"revalidate committed productive reconciliation authority: %w",
+				err,
+			),
+		}
+	}
+	return applied, nil
+}
+
+func (store WorkRunStore) resolveProductiveReconciliation(
+	ctx context.Context,
+	ref string,
+	state WorkRunState,
+) (ProductiveReconciliationAuthority, error) {
+	if store.authority.ProductiveReconciliation == nil {
+		return ProductiveReconciliationAuthority{},
+			ErrAuthorityPortUnavailable
+	}
+	authority, err := store.authority.ProductiveReconciliation.
+		ResolveProductiveReconciliation(ctx, ref)
+	if err != nil {
+		return ProductiveReconciliationAuthority{}, fmt.Errorf(
+			"resolve productive reconciliation: %w",
+			err,
+		)
+	}
+	if err := authority.Validate(
+		ref,
+		store.RepositoryRef(),
+		state,
+	); err != nil {
+		return ProductiveReconciliationAuthority{}, err
+	}
+	return authority, nil
 }
 
 // ReplanVerificationAfterCorrection replaces only the active verification
@@ -1499,6 +1972,9 @@ func (store WorkRunStore) BindDeliveryResult(
 		func(replay workReplay) (workRunRecord, error) {
 			state := replay.State
 			if state.DeliveryAuthorizationRef == "" ||
+				!validSHA256Ref(
+					state.ProductiveExecutionResultRef,
+				) ||
 				state.DeliveryResultRef != "" {
 				return workRunRecord{}, fmt.Errorf(
 					"%w: delivery result is not bindable",
@@ -1613,6 +2089,41 @@ func (store WorkRunStore) mutate(
 	requestDigest string,
 	build func(workReplay) (workRunRecord, error),
 ) (WorkRunState, error) {
+	return store.mutateWithProductiveReconciliation(
+		ctx,
+		expectedRevision,
+		requestID,
+		requestDigest,
+		false,
+		build,
+	)
+}
+
+func (store WorkRunStore) mutateProductiveReconciliation(
+	ctx context.Context,
+	expectedRevision string,
+	requestID string,
+	requestDigest string,
+	build func(workReplay) (workRunRecord, error),
+) (WorkRunState, error) {
+	return store.mutateWithProductiveReconciliation(
+		ctx,
+		expectedRevision,
+		requestID,
+		requestDigest,
+		true,
+		build,
+	)
+}
+
+func (store WorkRunStore) mutateWithProductiveReconciliation(
+	ctx context.Context,
+	expectedRevision string,
+	requestID string,
+	requestDigest string,
+	allowProductiveReconciliation bool,
+	build func(workReplay) (workRunRecord, error),
+) (WorkRunState, error) {
 	if err := ctx.Err(); err != nil {
 		return WorkRunState{}, err
 	}
@@ -1691,7 +2202,8 @@ func (store WorkRunStore) mutate(
 			Expected: expectedRevision, Current: replay.State.Revision,
 		}
 	}
-	if replay.State.ProductiveBlockerRef != "" {
+	if replay.State.ProductiveBlockerRef != "" &&
+		!allowProductiveReconciliation {
 		return WorkRunState{}, fmt.Errorf(
 			"%w: productive blocker is terminal",
 			ErrWorkRunInvalidTransition,
@@ -2156,7 +2668,8 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 	if record.WorkRunID != state.WorkRunID {
 		return errors.New("work run record identifier does not match store")
 	}
-	if state.ProductiveBlockerRef != "" {
+	if state.ProductiveBlockerRef != "" &&
+		record.Operation != workOperationReconcileProductive {
 		return fmt.Errorf(
 			"%w: productive blocker is terminal",
 			ErrWorkRunInvalidTransition,
@@ -2173,9 +2686,22 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 		if !validSHA256Ref(record.Start.DeliveryIntentRef) {
 			return errors.New("work run start has invalid delivery intent reference")
 		}
+		if record.Start.SDDDeclineFallbackRef != "" &&
+			!validSHA256Ref(record.Start.SDDDeclineFallbackRef) {
+			return errors.New(
+				"work run start has invalid SDD decline fallback reference",
+			)
+		}
+		if err := validateSDDDeclineFallbackBinding(
+			record.Start.RouteDecision,
+			record.Start.SDDDeclineFallbackRef,
+		); err != nil {
+			return err
+		}
 		state.Started = true
 		state.RouteDecision = record.Start.RouteDecision
 		state.DeliveryIntentRef = record.Start.DeliveryIntentRef
+		state.SDDDeclineFallbackRef = record.Start.SDDDeclineFallbackRef
 		switch record.Start.RouteDecision.Decision {
 		case RouteDecisionDirectInline:
 			state.ImplementationRoute = ImplementationRouteDirectInline
@@ -2231,6 +2757,41 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 			return errors.New("work run SDD reference is invalid")
 		}
 		state.SDDRunRef = record.BindSDD.SDDRunRef
+	case workOperationBeginProductive:
+		if !state.Started ||
+			state.ImplementationRoute == "" ||
+			state.ProductiveAdvanceSourceRevision != "" ||
+			record.BeginProductive == nil ||
+			!validSHA256Ref(record.BeginProductive.SourceRevision) ||
+			record.BeginProductive.SourceRevision !=
+				record.PreviousRevision ||
+			state.ProductiveExecutionResultRef != "" ||
+			state.ProductiveExecutionResultSourceRevision != "" ||
+			state.ProductiveBlockerRef != "" ||
+			state.ProductiveReconciliationRef != "" ||
+			state.DeliveryResultRef != "" {
+			return fmt.Errorf(
+				"%w: productive advance source is not bindable",
+				ErrWorkRunInvalidTransition,
+			)
+		}
+		state.ProductiveAdvanceSourceRevision =
+			record.BeginProductive.SourceRevision
+	case workOperationRecordProductiveExecutionResult:
+		if !productiveExecutionResultBindable(*state) ||
+			record.ProductiveExecutionResult == nil ||
+			!validSHA256Ref(
+				record.ProductiveExecutionResult.ResultRef,
+			) {
+			return fmt.Errorf(
+				"%w: productive execution result is not bindable",
+				ErrWorkRunInvalidTransition,
+			)
+		}
+		state.ProductiveExecutionResultRef =
+			record.ProductiveExecutionResult.ResultRef
+		state.ProductiveExecutionResultSourceRevision =
+			record.PreviousRevision
 	case workOperationBindHandoff:
 		if !state.Started || state.ImplementationRoute == "" {
 			return ErrWorkRunRoutePending
@@ -2262,6 +2823,45 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 		}
 		state.ProductiveBlockerRef = record.Blocker.DiagnosticRef
 		state.ProductiveBlockerSourceRevision = record.PreviousRevision
+	case workOperationReconcileProductive:
+		if !productiveReconciliationBindable(*state) ||
+			record.Reconciliation == nil ||
+			!validSHA256Ref(record.Reconciliation.ReconciliationRef) {
+			return fmt.Errorf(
+				"%w: productive reconciliation is not bindable",
+				ErrWorkRunInvalidTransition,
+			)
+		}
+		switch record.Reconciliation.Outcome {
+		case WorkReconcileDeliveryConfirmed:
+			if !validSHA256Ref(
+				record.Reconciliation.DeliveryResultRef,
+			) {
+				return errors.New(
+					"delivery-confirmed reconciliation has no delivery result",
+				)
+			}
+		case WorkReconcileNoDeliveryConfirmed,
+			WorkReconcileManualResolution:
+			if record.Reconciliation.DeliveryResultRef != "" {
+				return errors.New(
+					"non-delivery reconciliation cannot bind a delivery result",
+				)
+			}
+		default:
+			return fmt.Errorf(
+				"unsupported productive reconciliation outcome %q",
+				record.Reconciliation.Outcome,
+			)
+		}
+		state.ProductiveReconciliationRef =
+			record.Reconciliation.ReconciliationRef
+		state.ProductiveReconciliationSourceRevision =
+			record.PreviousRevision
+		state.ProductiveReconciliationOutcome =
+			record.Reconciliation.Outcome
+		state.DeliveryResultRef =
+			record.Reconciliation.DeliveryResultRef
 	case workOperationReplanVerification:
 		if state.Handoff == nil ||
 			state.Forecast == nil ||
@@ -2527,6 +3127,7 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 		state.DeliveryResultRef = ""
 	case workOperationBindDeliveryResult:
 		if state.DeliveryAuthorizationRef == "" ||
+			!validSHA256Ref(state.ProductiveExecutionResultRef) ||
 			state.DeliveryResultRef != "" ||
 			record.DeliveryResult == nil ||
 			!validSHA256Ref(record.DeliveryResult.ResultRef) {
@@ -2542,10 +3143,58 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 	return nil
 }
 
+func validateSDDDeclineFallbackBinding(
+	decision ImplementationRouteDecision,
+	fallbackRef string,
+) error {
+	if fallbackRef == "" {
+		return nil
+	}
+	if decision.Decision != RouteDecisionProposeSDD ||
+		decision.ExplicitSDDRequestRef != "" {
+		return errors.New(
+			"SDD decline fallback must bind only an optional SDD proposal",
+		)
+	}
+	return nil
+}
+
 func productiveBlockerBindable(state WorkRunState) bool {
 	return state.Started &&
 		state.ImplementationRoute != "" &&
+		validSHA256Ref(state.ProductiveAdvanceSourceRevision) &&
 		state.ProductiveBlockerRef == "" &&
+		state.ProductiveReconciliationRef == "" &&
+		state.ProductiveReconciliationSourceRevision == "" &&
+		state.ProductiveReconciliationOutcome == "" &&
+		state.DeliveryResultRef == ""
+}
+
+func productiveExecutionResultBindable(state WorkRunState) bool {
+	return state.Started &&
+		state.ImplementationRoute != "" &&
+		validSHA256Ref(state.ProductiveAdvanceSourceRevision) &&
+		state.Handoff != nil &&
+		validSHA256Ref(state.VerificationResultRef) &&
+		validSHA256Ref(state.ReviewReceiptRef) &&
+		validSHA256Ref(state.DeliveryAuthorizationRef) &&
+		state.ProductiveExecutionResultRef == "" &&
+		state.ProductiveExecutionResultSourceRevision == "" &&
+		state.ProductiveBlockerRef == "" &&
+		state.ProductiveReconciliationRef == "" &&
+		state.ProductiveReconciliationSourceRevision == "" &&
+		state.ProductiveReconciliationOutcome == "" &&
+		state.DeliveryResultRef == ""
+}
+
+func productiveReconciliationBindable(state WorkRunState) bool {
+	return state.Started &&
+		state.ImplementationRoute != "" &&
+		validSHA256Ref(state.ProductiveBlockerRef) &&
+		validSHA256Ref(state.ProductiveBlockerSourceRevision) &&
+		state.ProductiveReconciliationRef == "" &&
+		state.ProductiveReconciliationSourceRevision == "" &&
+		state.ProductiveReconciliationOutcome == "" &&
 		state.DeliveryResultRef == ""
 }
 
@@ -2567,7 +3216,11 @@ func validateWorkRunRecordShape(record workRunRecord) error {
 	}
 	fields := []bool{
 		record.Start != nil, record.AcceptSDD != nil, record.Reroute != nil,
-		record.BindSDD != nil, record.Handoff != nil, record.Blocker != nil,
+		record.BindSDD != nil, record.Handoff != nil,
+		record.BeginProductive != nil,
+		record.ProductiveExecutionResult != nil,
+		record.Blocker != nil,
+		record.Reconciliation != nil,
 		record.Replan != nil,
 		record.Forecast != nil,
 		record.Disposition != nil, record.Reservation != nil, record.Result != nil,
@@ -2589,8 +3242,15 @@ func validateWorkRunRecordShape(record workRunRecord) error {
 		record.Operation == workOperationReroute && record.Reroute != nil ||
 		record.Operation == workOperationBindSDD && record.BindSDD != nil ||
 		record.Operation == workOperationBindHandoff && record.Handoff != nil ||
+		record.Operation == workOperationBeginProductive &&
+			record.BeginProductive != nil ||
+		record.Operation ==
+			workOperationRecordProductiveExecutionResult &&
+			record.ProductiveExecutionResult != nil ||
 		record.Operation == workOperationBlockProductive &&
 			record.Blocker != nil ||
+		record.Operation == workOperationReconcileProductive &&
+			record.Reconciliation != nil ||
 		record.Operation == workOperationReplanVerification &&
 			record.Replan != nil ||
 		record.Operation == workOperationRecordForecast && record.Forecast != nil ||

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 const (
@@ -13,6 +14,8 @@ const (
 	ExecutionResultContractV1      = "gentle-ai.delivery-execution-result/v1"
 	RouteReevaluationContractV1    = "gentle-ai.delivery-route-reevaluation/v1"
 	maximumDeliveryGateTTLSeconds  = int64(300)
+	executionResultAnchorWait      = 2 * time.Second
+	executionResultAnchorPoll      = 5 * time.Millisecond
 )
 
 var (
@@ -20,6 +23,9 @@ var (
 	ErrExecutionRejected          = errors.New("delivery execution rejected")
 	ErrExecutionResultUnavailable = errors.New(
 		"consumed delivery execution has no durable terminal result",
+	)
+	ErrExecutionResultCorrupt = errors.New(
+		"durable delivery execution result authority is corrupt",
 	)
 	ErrRouteNotChanged = errors.New("delivery route was not changed")
 )
@@ -470,6 +476,12 @@ func (result ExecutionResult) Validate(command ExecutionCommand) error {
 	}
 }
 
+// Ref is the stable content identity shared by the productive executor's
+// content-addressed object and the independent authorization-use anchor.
+func (result ExecutionResult) Ref(command ExecutionCommand) (string, error) {
+	return contentRef(result, result.Validate(command))
+}
+
 // DeliveryExecutorPort performs one content-addressed effect. ExecuteOnce MUST
 // first return any durable terminal result stored under command.Ref(). If no
 // terminal result exists, it MUST use its owner-controlled clock to reject at
@@ -557,7 +569,21 @@ func ExecuteAuthorizedDelivery(
 		); err != nil {
 			return ExecutionResult{}, err
 		}
-		return executeOnce(ctx, executor, command, priorUse.ConsumedAt)
+		results, ok := executor.(DeliveryResultResolverPort)
+		if !ok {
+			return ExecutionResult{}, fmt.Errorf(
+				"%w: delivery executor has no read-only result authority",
+				ErrInvalid,
+			)
+		}
+		return replayAnchoredExecutionResult(
+			ctx,
+			results,
+			store,
+			priorUse,
+			command,
+			false,
+		)
 	}
 
 	probeRequest, err := NewLiveGateProbeRequest(
@@ -635,8 +661,10 @@ func ExecuteAuthorizedDelivery(
 		Policy: binding.Policy.Binding(), ConsumedAt: now,
 		AuthorizationExpiresAt: binding.ExpiresAt,
 	}
+	wonReservation := true
 	err = store.consumeOnce(ctx, use)
 	if errors.Is(err, ErrAlreadyConsumed) || errors.Is(err, ErrBindingMismatch) {
+		wonReservation = false
 		reservationErr := err
 		priorUse, consumed, readErr := store.authorizationUse(ctx, request.AuthorizationRef)
 		if readErr != nil {
@@ -686,7 +714,24 @@ func ExecuteAuthorizedDelivery(
 	); err != nil {
 		return ExecutionResult{}, err
 	}
-	return executeOnce(ctx, executor, command, use.ConsumedAt)
+	if !wonReservation {
+		results, ok := executor.(DeliveryResultResolverPort)
+		if !ok {
+			return ExecutionResult{}, fmt.Errorf(
+				"%w: delivery executor has no read-only result authority",
+				ErrInvalid,
+			)
+		}
+		return replayAnchoredExecutionResult(
+			ctx,
+			results,
+			store,
+			use,
+			command,
+			true,
+		)
+	}
+	return executeAndAnchorOnce(ctx, executor, store, use, command)
 }
 
 // ReplayAuthorizedDeliveryResult resolves an already-consumed authorization
@@ -755,23 +800,24 @@ func ReplayAuthorizedDeliveryResult(
 	); err != nil {
 		return ExecutionResult{}, false, err
 	}
-	result, found, err := results.ResolveOnce(ctx, command)
+	anchor, found, err := store.executionResultAnchor(ctx, use, command)
 	if err != nil {
 		return ExecutionResult{}, false, err
 	}
 	if !found {
 		return ExecutionResult{}, false, ErrExecutionResultUnavailable
 	}
-	if err := result.Validate(command); err != nil {
+	result, found, err := results.ResolveOnce(ctx, command)
+	if err != nil {
 		return ExecutionResult{}, false, err
 	}
-	if result.CompletedAt < use.ConsumedAt {
+	if !found || result != anchor.Result {
 		return ExecutionResult{}, false, fmt.Errorf(
-			"%w: recovered execution result predates durable reservation",
-			ErrBindingMismatch,
+			"%w: PAD terminal result differs from authorization-use anchor",
+			ErrExecutionResultCorrupt,
 		)
 	}
-	return result, true, nil
+	return anchor.Result, true, nil
 }
 
 func resolveExecutionAuthority(
@@ -889,6 +935,102 @@ func executeOnce(
 	return result, nil
 }
 
+func executeAndAnchorOnce(
+	ctx context.Context,
+	executor DeliveryExecutorPort,
+	store *DirectoryUseStore,
+	use AuthorizationUse,
+	command ExecutionCommand,
+) (ExecutionResult, error) {
+	result, err := executeOnce(ctx, executor, command, use.ConsumedAt)
+	if err != nil {
+		return ExecutionResult{}, err
+	}
+	if err := store.publishExecutionResultAnchor(ctx, use, command, result); err != nil {
+		return ExecutionResult{}, err
+	}
+	anchor, found, err := store.executionResultAnchor(ctx, use, command)
+	if err != nil {
+		return ExecutionResult{}, err
+	}
+	if !found || anchor.Result != result {
+		return ExecutionResult{}, fmt.Errorf(
+			"%w: execution-result anchor read-back mismatch",
+			ErrExecutionResultCorrupt,
+		)
+	}
+	// The winning caller returns only the independently reloaded value, never
+	// the unanchored in-memory executor response.
+	return anchor.Result, nil
+}
+
+func replayAnchoredExecutionResult(
+	ctx context.Context,
+	results DeliveryResultResolverPort,
+	store *DirectoryUseStore,
+	use AuthorizationUse,
+	command ExecutionCommand,
+	waitForWinner bool,
+) (ExecutionResult, error) {
+	anchor, found, err := awaitExecutionResultAnchor(
+		ctx,
+		store,
+		use,
+		command,
+		waitForWinner,
+	)
+	if err != nil {
+		return ExecutionResult{}, err
+	}
+	if !found {
+		// A consumed use without its independent terminal anchor is the
+		// post-effect/pre-anchor crash gap. Never invoke ExecuteOnce or trust
+		// a PAD-only result here.
+		return ExecutionResult{}, ErrExecutionResultUnavailable
+	}
+	result, found, err := results.ResolveOnce(ctx, command)
+	if err != nil {
+		return ExecutionResult{}, err
+	}
+	if !found || result != anchor.Result {
+		return ExecutionResult{}, fmt.Errorf(
+			"%w: PAD terminal result differs from authorization-use anchor",
+			ErrExecutionResultCorrupt,
+		)
+	}
+	return anchor.Result, nil
+}
+
+func awaitExecutionResultAnchor(
+	ctx context.Context,
+	store *DirectoryUseStore,
+	use AuthorizationUse,
+	command ExecutionCommand,
+	waitForWinner bool,
+) (executionResultAnchor, bool, error) {
+	anchor, found, err := store.executionResultAnchor(ctx, use, command)
+	if err != nil || found || !waitForWinner {
+		return anchor, found, err
+	}
+	timeout := time.NewTimer(executionResultAnchorWait)
+	defer timeout.Stop()
+	ticker := time.NewTicker(executionResultAnchorPoll)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return executionResultAnchor{}, false, ctx.Err()
+		case <-timeout.C:
+			return executionResultAnchor{}, false, nil
+		case <-ticker.C:
+			anchor, found, err = store.executionResultAnchor(ctx, use, command)
+			if err != nil || found {
+				return anchor, found, err
+			}
+		}
+	}
+}
+
 // RouteReevaluationRepository is the existing PAD owner repository, narrowed to
 // the two immutable objects emitted by a route-only reevaluation. It is not a
 // second ledger or store.
@@ -908,9 +1050,10 @@ type RouteReevaluationResolver interface {
 }
 
 type RouteReevaluationRequest struct {
-	SourceDecisionRef          string
-	TargetAdmissionDecisionRef string
-	Mechanism                  Mechanism
+	SourceDecisionRef           string
+	TargetAdmissionDecisionRef  string
+	TargetCandidateAuthorityRef string
+	Mechanism                   Mechanism
 }
 
 type RouteReevaluation struct {
@@ -980,6 +1123,19 @@ func ReevaluateDeliveryRoute(
 	if err != nil {
 		return RouteReevaluation{}, err
 	}
+	if request.TargetCandidateAuthorityRef == "" {
+		if source.CandidateAuthorityRef != "" {
+			return RouteReevaluation{}, fmt.Errorf(
+				"%w: anchored route reevaluation cannot drop candidate authority",
+				ErrBindingMismatch,
+			)
+		}
+	} else if err := validateDigest(
+		"target delivery candidate authority ref",
+		request.TargetCandidateAuthorityRef,
+	); err != nil {
+		return RouteReevaluation{}, err
+	}
 	targetAdmission, err := ValidateAdmissionDecision(
 		ctx,
 		repository,
@@ -1029,6 +1185,7 @@ func ReevaluateDeliveryRoute(
 			PolicyRef:             targetAdmission.PolicyRef,
 			ReviewReceiptRef:      source.ReviewReceiptRef,
 			VerificationResultRef: source.VerificationResultRef,
+			CandidateAuthorityRef: request.TargetCandidateAuthorityRef,
 			GateRef:               gateRef,
 			AuthorityRef:          targetAdmission.AuthorityRef,
 			SecondAuthorityRef:    targetAdmission.SecondAuthorityRef,
@@ -1038,6 +1195,8 @@ func ReevaluateDeliveryRoute(
 		return RouteReevaluation{}, err
 	}
 	if decision.Candidate != source.Candidate ||
+		decision.CandidateAuthorityRef !=
+			request.TargetCandidateAuthorityRef ||
 		decision.ReviewReceiptRef != source.ReviewReceiptRef ||
 		decision.VerificationResultRef != source.VerificationResultRef {
 		return RouteReevaluation{}, fmt.Errorf(

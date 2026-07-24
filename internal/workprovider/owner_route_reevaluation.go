@@ -174,23 +174,113 @@ func (coordinator *OwnerCoordinator) ReevaluateDeliveryRoute(
 			State:           state,
 		}, nil
 	}
-	if err := coordinator.validatePADRouteReevaluationSource(
+	source, err := coordinator.validatePADRouteReevaluationSource(
 		ctx,
 		repository,
 		current,
 		request.SourceDecisionRef,
+	)
+	if err != nil {
+		return OwnerDeliveryRouteReevaluation{}, err
+	}
+	sourceCandidateAuthority, err := coordinator.resolvePADCandidateBinding(
+		ctx,
+		source,
+		true,
+	)
+	if err != nil {
+		return OwnerDeliveryRouteReevaluation{}, err
+	}
+	targetAdmission, err := deliveryadmission.ValidateAdmissionDecision(
+		ctx,
+		repository,
+		request.TargetAdmissionDecisionRef,
+	)
+	if err != nil {
+		return OwnerDeliveryRouteReevaluation{}, err
+	}
+	if targetAdmission.Disposition != deliveryadmission.AdmissionAdmitted ||
+		targetAdmission.Route == source.AdmissionDecision.Route ||
+		targetAdmission.Intent.ScopeDigest !=
+			source.AdmissionDecision.Intent.ScopeDigest ||
+		targetAdmission.Destination != source.Gates.Destination {
+		return OwnerDeliveryRouteReevaluation{}, fmt.Errorf(
+			"%w: target admission is not a route-only change",
+			deliveryadmission.ErrBindingMismatch,
+		)
+	}
+	if _, err := deliveryadmission.NewLiveGateProbeRequest(
+		targetAdmission.Route,
+		source.Candidate,
+		targetAdmission.Destination,
+		targetAdmission.PolicyRef,
+		targetAdmission.Policy.Binding(),
+		request.Mechanism,
 	); err != nil {
 		return OwnerDeliveryRouteReevaluation{}, err
+	}
+	targetCandidateTree, targetBinding, err :=
+		coordinator.resolvePADCandidateBindingProposal(
+			ctx,
+			source.Candidate,
+			targetAdmission.Destination,
+			request.Mechanism,
+			source.ReviewReceiptRef,
+			source.VerificationResultRef,
+		)
+	if err != nil {
+		return OwnerDeliveryRouteReevaluation{}, err
+	}
+	targetCandidateAuthority := PADCandidateAuthority{}
+	if targetCandidateTree != "" {
+		targetRecord, recordErr := coordinator.padCandidates.newRecord(
+			targetCandidateTree,
+			targetBinding,
+		)
+		if recordErr != nil {
+			return OwnerDeliveryRouteReevaluation{}, recordErr
+		}
+		targetCandidateAuthority = targetRecord.authority()
+	}
+	if err := validatePADRouteCandidateTransition(
+		sourceCandidateAuthority,
+		targetCandidateAuthority,
+		targetAdmission.Destination,
+		request.Mechanism,
+	); err != nil {
+		return OwnerDeliveryRouteReevaluation{}, err
+	}
+	if targetCandidateAuthority.RecordRef != "" {
+		targetCandidateAuthority, err =
+			coordinator.publishPADCandidateBinding(
+				ctx,
+				targetCandidateTree,
+				targetBinding,
+			)
+		if err != nil {
+			return OwnerDeliveryRouteReevaluation{}, err
+		}
+	}
+	routeProbe := coordinator.padRoute
+	if targetCandidateAuthority.RecordRef != "" {
+		routeProbe, err = coordinator.padDeliveryForCandidateAuthority(
+			ctx,
+			targetCandidateAuthority,
+		)
+		if err != nil {
+			return OwnerDeliveryRouteReevaluation{}, err
+		}
 	}
 	reevaluation, err := deliveryadmission.ReevaluateDeliveryRoute(
 		ctx,
 		repository,
 		coordinator.rar,
-		coordinator.padRoute,
+		routeProbe,
 		deliveryadmission.RouteReevaluationRequest{
-			SourceDecisionRef:          request.SourceDecisionRef,
-			TargetAdmissionDecisionRef: request.TargetAdmissionDecisionRef,
-			Mechanism:                  request.Mechanism,
+			SourceDecisionRef:           request.SourceDecisionRef,
+			TargetAdmissionDecisionRef:  request.TargetAdmissionDecisionRef,
+			TargetCandidateAuthorityRef: targetCandidateAuthority.RecordRef,
+			Mechanism:                   request.Mechanism,
 		},
 	)
 	if err != nil {
@@ -223,14 +313,14 @@ func (coordinator *OwnerCoordinator) validatePADRouteReevaluationSource(
 	repository ownerPADRouteReevaluationRepository,
 	state workrun.WorkRunState,
 	sourceDecisionRef string,
-) error {
+) (deliveryadmission.DeliveryDecision, error) {
 	if state.Handoff == nil ||
 		state.VerificationResultRef == "" ||
 		state.PostVerificationSnapshotRef == "" ||
 		state.ReviewReceiptRef == "" ||
 		state.VerificationStop != nil ||
 		state.DeliveryAuthorizationRef != "" {
-		return fmt.Errorf(
+		return deliveryadmission.DeliveryDecision{}, fmt.Errorf(
 			"%w: exact terminal content is required before PAD route reevaluation",
 			workrun.ErrWorkRunInvalidTransition,
 		)
@@ -242,17 +332,17 @@ func (coordinator *OwnerCoordinator) validatePADRouteReevaluationSource(
 		state.Handoff.MutationCompletionRef,
 	)
 	if err != nil {
-		return err
+		return deliveryadmission.DeliveryDecision{}, err
 	}
 	if err := completion.Validate(
 		state.Handoff.MutationCompletionRef,
 		state.WorkRunID,
 		*state.Handoff,
 	); err != nil {
-		return err
+		return deliveryadmission.DeliveryDecision{}, err
 	}
 	if completion.RepositoryRef != coordinator.work.RepositoryRef() {
-		return fmt.Errorf(
+		return deliveryadmission.DeliveryDecision{}, fmt.Errorf(
 			"%w: PAD route reevaluation MMI repository",
 			workrun.ErrAuthorityBindingMismatch,
 		)
@@ -264,7 +354,7 @@ func (coordinator *OwnerCoordinator) validatePADRouteReevaluationSource(
 		sourceDecisionRef,
 	)
 	if err != nil {
-		return err
+		return deliveryadmission.DeliveryDecision{}, err
 	}
 	if source.AdmissionDecision.IntentRef != state.DeliveryIntentRef ||
 		source.AdmissionDecision.Intent.ScopeDigest !=
@@ -273,9 +363,40 @@ func (coordinator *OwnerCoordinator) validatePADRouteReevaluationSource(
 		source.Candidate.Digest != state.PostVerificationSnapshotRef ||
 		source.VerificationResultRef != state.VerificationResultRef ||
 		source.ReviewReceiptRef != state.ReviewReceiptRef {
-		return fmt.Errorf(
+		return deliveryadmission.DeliveryDecision{}, fmt.Errorf(
 			"%w: PAD source decision does not bind the current WorkRun",
 			workrun.ErrAuthorityBindingMismatch,
+		)
+	}
+	return source, nil
+}
+
+func validatePADRouteCandidateTransition(
+	source PADCandidateAuthority,
+	target PADCandidateAuthority,
+	targetDestination deliveryadmission.DestinationBinding,
+	targetMechanism deliveryadmission.Mechanism,
+) error {
+	if source.RecordRef == "" && target.RecordRef == "" {
+		return nil
+	}
+	if source.RecordRef == "" ||
+		target.RecordRef == "" ||
+		source.CandidateTree != target.CandidateTree ||
+		source.Binding.Schema != target.Binding.Schema ||
+		source.Binding.Candidate != target.Binding.Candidate ||
+		source.Binding.Destination != target.Binding.Destination ||
+		target.Binding.Destination != targetDestination ||
+		source.Binding.HostingRepositoryRef !=
+			target.Binding.HostingRepositoryRef ||
+		source.Binding.CandidateRevision !=
+			target.Binding.CandidateRevision ||
+		source.Binding.ExpectedRemoteRevision !=
+			target.Binding.ExpectedRemoteRevision ||
+		target.Binding.Mechanism != targetMechanism {
+		return fmt.Errorf(
+			"%w: target route changed exact candidate authority",
+			deliveryadmission.ErrBindingMismatch,
 		)
 	}
 	return nil

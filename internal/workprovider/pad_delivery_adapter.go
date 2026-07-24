@@ -298,7 +298,30 @@ func (adapter *PADDeliveryAdapter) ResolveOnce(
 	if err != nil {
 		return deliveryadmission.ExecutionResult{}, false, err
 	}
-	return store.readTerminal(command, commandRef)
+	result, exists, err := store.readTerminal(command, commandRef)
+	if err != nil || exists {
+		return result, exists, err
+	}
+	indeterminate, err := store.readIndeterminate(commandRef)
+	if err != nil {
+		return deliveryadmission.ExecutionResult{}, false, err
+	}
+	if indeterminate {
+		return deliveryadmission.ExecutionResult{}, false,
+			ErrPADDeliveryIndeterminate
+	}
+	_, claimed, err := store.readClaim(command, commandRef)
+	if err != nil {
+		return deliveryadmission.ExecutionResult{}, false, err
+	}
+	if claimed {
+		// A claim crossed the first-effect boundary, but no exact terminal
+		// binding exists. Read-only replay must never infer success or
+		// no-delivery from mutable Git/hosting state.
+		return deliveryadmission.ExecutionResult{}, false,
+			ErrPADDeliveryIndeterminate
+	}
+	return deliveryadmission.ExecutionResult{}, false, nil
 }
 
 func (adapter *PADDeliveryAdapter) executeLocked(
@@ -308,14 +331,22 @@ func (adapter *PADDeliveryAdapter) executeLocked(
 	claim padDeliveryClaim,
 	claimed bool,
 ) (deliveryadmission.ExecutionResult, error) {
-	if !claimed {
-		now, err := adapter.nowUnix()
-		if err != nil {
+	if claimed {
+		// A claim without a terminal binding is an ambiguous crash boundary.
+		// Never probe mutable hosting state to manufacture a replacement
+		// success/failure result. Persist the stop and require explicit manual
+		// recovery.
+		if err := adapter.store.publishIndeterminate(commandRef); err != nil {
 			return deliveryadmission.ExecutionResult{}, err
 		}
-		if now >= command.ExecutionExpiresAt {
-			return deliveryadmission.ExecutionResult{}, deliveryadmission.ErrExpired
-		}
+		return deliveryadmission.ExecutionResult{}, ErrPADDeliveryIndeterminate
+	}
+	now, err := adapter.nowUnix()
+	if err != nil {
+		return deliveryadmission.ExecutionResult{}, err
+	}
+	if now >= command.ExecutionExpiresAt {
+		return deliveryadmission.ExecutionResult{}, deliveryadmission.ErrExpired
 	}
 	resolution, err := adapter.resolveCurrent(
 		ctx,
@@ -327,60 +358,8 @@ func (adapter *PADDeliveryAdapter) executeLocked(
 	if err != nil {
 		return deliveryadmission.ExecutionResult{}, err
 	}
-	if claimed {
-		if claim.CandidateRevision != resolution.observation.CandidateRevision ||
-			claim.ExpectedRevision != resolution.observation.ExpectedRemoteRevision ||
-			claim.HostingRepositoryRef != resolution.binding.HostingRepositoryRef ||
-			claim.PullRequestRef != resolution.binding.PullRequestRef {
-			if publishErr := adapter.store.publishIndeterminate(commandRef); publishErr != nil {
-				return deliveryadmission.ExecutionResult{}, publishErr
-			}
-			return deliveryadmission.ExecutionResult{}, fmt.Errorf(
-				"%w: Git resolution changed after durable claim",
-				ErrPADDeliveryIndeterminate,
-			)
-		}
-		if recovered, ok, err := adapter.recoverApplied(
-			command,
-			commandRef,
-			resolution,
-		); err != nil || ok {
-			return recovered, err
-		}
-		// A durable claim proves that a previous invocation crossed the
-		// first-effect boundary. If current state does not prove the exact
-		// effect already landed, retrying could duplicate an asynchronously
-		// completed hosting operation. Stop for an explicit recovery decision.
-		if err := adapter.store.publishIndeterminate(commandRef); err != nil {
-			return deliveryadmission.ExecutionResult{}, err
-		}
-		return deliveryadmission.ExecutionResult{}, ErrPADDeliveryIndeterminate
-	}
 	if err := validatePendingDelivery(command, resolution); err != nil {
 		return deliveryadmission.ExecutionResult{}, err
-	}
-	now, err := adapter.nowUnix()
-	if err != nil {
-		return deliveryadmission.ExecutionResult{}, err
-	}
-	if now >= command.ExecutionExpiresAt {
-		return deliveryadmission.ExecutionResult{}, deliveryadmission.ErrExpired
-	}
-	if !claimed {
-		claim, err = newPADDeliveryClaim(
-			command,
-			commandRef,
-			resolution.binding.HostingRepositoryRef,
-			resolution.observation.CandidateRevision,
-			resolution.observation.ExpectedRemoteRevision,
-			now,
-		)
-		if err != nil {
-			return deliveryadmission.ExecutionResult{}, err
-		}
-		if err := adapter.store.publishClaim(claim); err != nil {
-			return deliveryadmission.ExecutionResult{}, err
-		}
 	}
 	now, err = adapter.nowUnix()
 	if err != nil {
@@ -389,14 +368,32 @@ func (adapter *PADDeliveryAdapter) executeLocked(
 	if now >= command.ExecutionExpiresAt {
 		return deliveryadmission.ExecutionResult{}, deliveryadmission.ErrExpired
 	}
-	result, err := adapter.performEffect(ctx, command, commandRef, claim)
+	claim, err = newPADDeliveryClaim(
+		command,
+		commandRef,
+		resolution.binding.HostingRepositoryRef,
+		resolution.observation.CandidateRevision,
+		resolution.observation.ExpectedRemoteRevision,
+		now,
+	)
 	if err != nil {
 		return deliveryadmission.ExecutionResult{}, err
 	}
-	if err := adapter.store.publishTerminal(command, result); err != nil {
+	if err := adapter.store.publishClaim(claim); err != nil {
 		return deliveryadmission.ExecutionResult{}, err
 	}
-	return result, nil
+	now, err = adapter.nowUnix()
+	if err != nil {
+		return deliveryadmission.ExecutionResult{}, err
+	}
+	if now >= command.ExecutionExpiresAt {
+		return deliveryadmission.ExecutionResult{}, deliveryadmission.ErrExpired
+	}
+	evidence, err := adapter.performEffect(ctx, command, commandRef, claim)
+	if err != nil {
+		return deliveryadmission.ExecutionResult{}, err
+	}
+	return adapter.store.publishTerminal(command, evidence)
 }
 
 func (adapter *PADDeliveryAdapter) resolveCurrent(
@@ -516,74 +513,12 @@ func validatePendingDelivery(
 	return nil
 }
 
-func (adapter *PADDeliveryAdapter) recoverApplied(
-	command deliveryadmission.ExecutionCommand,
-	commandRef string,
-	resolution padDeliveryResolution,
-) (deliveryadmission.ExecutionResult, bool, error) {
-	observation := resolution.observation
-	switch command.Mechanism {
-	case deliveryadmission.MechanismFastForwardOnly:
-		if observation.RemoteRevision != observation.CandidateRevision {
-			return deliveryadmission.ExecutionResult{}, false, nil
-		}
-		result, err := adapter.newExecutionResult(
-			command,
-			commandRef,
-			deliveryadmission.ExecutionSucceeded,
-			observation.CandidateRevision,
-			padDeliveryDigest("gentle-ai.pad-direct-recovery/v1", observation),
-		)
-		if err != nil {
-			return deliveryadmission.ExecutionResult{}, true, err
-		}
-		if err := adapter.store.publishTerminal(command, result); err != nil {
-			return deliveryadmission.ExecutionResult{}, true, err
-		}
-		return result, true, nil
-	case deliveryadmission.MechanismPullRequest:
-		if observation.PullRequestState != HostingPullRequestMerged {
-			return deliveryadmission.ExecutionResult{}, false, nil
-		}
-		if observation.PullRequestHeadRevision != observation.CandidateRevision ||
-			observation.PullRequestBaseRevision != observation.ExpectedRemoteRevision ||
-			!validPADHostingToken(observation.DeliveryRef) {
-			if err := adapter.store.publishIndeterminate(commandRef); err != nil {
-				return deliveryadmission.ExecutionResult{}, true, err
-			}
-			return deliveryadmission.ExecutionResult{}, true, fmt.Errorf(
-				"%w: merged pull request no longer binds the claimed head and base",
-				ErrPADDeliveryIndeterminate,
-			)
-		}
-		result, err := adapter.newExecutionResult(
-			command,
-			commandRef,
-			deliveryadmission.ExecutionSucceeded,
-			observation.DeliveryRef,
-			padDeliveryDigest("gentle-ai.pad-pr-recovery/v1", observation),
-		)
-		if err != nil {
-			return deliveryadmission.ExecutionResult{}, true, err
-		}
-		if err := adapter.store.publishTerminal(command, result); err != nil {
-			return deliveryadmission.ExecutionResult{}, true, err
-		}
-		return result, true, nil
-	default:
-		if err := adapter.store.publishIndeterminate(commandRef); err != nil {
-			return deliveryadmission.ExecutionResult{}, true, err
-		}
-		return deliveryadmission.ExecutionResult{}, true, ErrPADDeliveryIndeterminate
-	}
-}
-
 func (adapter *PADDeliveryAdapter) performEffect(
 	ctx context.Context,
 	command deliveryadmission.ExecutionCommand,
 	commandRef string,
 	claim padDeliveryClaim,
-) (deliveryadmission.ExecutionResult, error) {
+) (padDeliveryTerminalEvidence, error) {
 	operationContext, cancel := context.WithTimeout(ctx, padDeliveryOperationTTL)
 	defer cancel()
 	switch command.Mechanism {
@@ -599,24 +534,18 @@ func (adapter *PADDeliveryAdapter) performEffect(
 		}
 		receipt, err := adapter.hosting.CompareAndSwapBranch(operationContext, request)
 		if err != nil {
-			return deliveryadmission.ExecutionResult{}, err
+			return padDeliveryTerminalEvidence{}, err
 		}
 		if err := receipt.Validate(request); err != nil {
-			return deliveryadmission.ExecutionResult{}, err
+			return padDeliveryTerminalEvidence{}, err
 		}
-		outcome := deliveryadmission.ExecutionSucceeded
-		deliveryRef := receipt.DeliveryRef
-		if receipt.Outcome == HostingEffectConflict ||
-			receipt.Outcome == HostingEffectRejected {
-			outcome = deliveryadmission.ExecutionFailed
-			deliveryRef = ""
-		}
-		return adapter.newExecutionResult(
+		return adapter.newTerminalEvidence(
 			command,
 			commandRef,
-			outcome,
-			deliveryRef,
-			padDeliveryDigest("gentle-ai.pad-direct-effect/v1", receipt),
+			claim,
+			padDeliveryTerminalEvidenceBranchCAS,
+			&receipt,
+			nil,
 		)
 	case deliveryadmission.MechanismPullRequest:
 		request := HostingPullRequestMergeRequest{
@@ -631,53 +560,64 @@ func (adapter *PADDeliveryAdapter) performEffect(
 		}
 		receipt, err := adapter.hosting.MergePullRequest(operationContext, request)
 		if err != nil {
-			return deliveryadmission.ExecutionResult{}, err
+			return padDeliveryTerminalEvidence{}, err
 		}
 		if err := receipt.Validate(request); err != nil {
-			return deliveryadmission.ExecutionResult{}, err
+			return padDeliveryTerminalEvidence{}, err
 		}
-		outcome := deliveryadmission.ExecutionSucceeded
-		deliveryRef := receipt.DeliveryRef
-		if receipt.Outcome == HostingEffectConflict ||
-			receipt.Outcome == HostingEffectRejected {
-			outcome = deliveryadmission.ExecutionFailed
-			deliveryRef = ""
-		}
-		return adapter.newExecutionResult(
+		return adapter.newTerminalEvidence(
 			command,
 			commandRef,
-			outcome,
-			deliveryRef,
-			padDeliveryDigest("gentle-ai.pad-pr-effect/v1", receipt),
+			claim,
+			padDeliveryTerminalEvidencePRMerge,
+			nil,
+			&receipt,
 		)
 	default:
-		return deliveryadmission.ExecutionResult{}, ErrPADDeliveryConflict
+		return padDeliveryTerminalEvidence{}, ErrPADDeliveryConflict
 	}
 }
 
-func (adapter *PADDeliveryAdapter) newExecutionResult(
+func (adapter *PADDeliveryAdapter) newTerminalEvidence(
 	command deliveryadmission.ExecutionCommand,
 	commandRef string,
-	outcome deliveryadmission.ExecutionOutcome,
-	deliveryRef string,
-	evidenceRef string,
-) (deliveryadmission.ExecutionResult, error) {
+	claim padDeliveryClaim,
+	kind padDeliveryTerminalEvidenceKind,
+	branchReceipt *HostingBranchCASReceipt,
+	pullRequestReceipt *HostingPullRequestMergeReceipt,
+) (padDeliveryTerminalEvidence, error) {
 	completedAt, err := adapter.nowUnix()
 	if err != nil {
-		return deliveryadmission.ExecutionResult{}, err
+		return padDeliveryTerminalEvidence{}, err
 	}
-	result := deliveryadmission.ExecutionResult{
-		Schema:           deliveryadmission.ExecutionResultContractV1,
-		CommandRef:       commandRef,
-		AuthorizationRef: command.AuthorizationRef,
-		Route:            command.Route,
-		Candidate:        command.Candidate,
-		Outcome:          outcome,
-		DeliveryRef:      deliveryRef,
-		EvidenceRef:      evidenceRef,
-		CompletedAt:      completedAt,
+	claimPayload, err := canonicalCoordinationPayload(claim)
+	if err != nil {
+		return padDeliveryTerminalEvidence{}, err
 	}
-	return result, result.Validate(command)
+	evidence := padDeliveryTerminalEvidence{
+		Schema:                  padDeliveryTerminalEvidenceSchema,
+		CommandRef:              commandRef,
+		RepositoryRef:           command.Destination.RepositoryRef,
+		ClaimRef:                padDeliveryContentRef(claimPayload),
+		Kind:                    kind,
+		CompletedAt:             completedAt,
+		BranchCASReceipt:        branchReceipt,
+		PullRequestMergeReceipt: pullRequestReceipt,
+	}
+	payload, err := canonicalCoordinationPayload(evidence)
+	if err != nil {
+		return padDeliveryTerminalEvidence{}, err
+	}
+	if _, err := evidence.executionResult(
+		command,
+		commandRef,
+		claim,
+		evidence.ClaimRef,
+		padDeliveryContentRef(payload),
+	); err != nil {
+		return padDeliveryTerminalEvidence{}, err
+	}
+	return evidence, nil
 }
 
 func (adapter *PADDeliveryAdapter) validate(ctx context.Context) error {

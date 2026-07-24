@@ -7,13 +7,17 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
 	WorkRoutingCapabilityV1    = "gentle-ai.work-routing/v1"
 	WorkCapabilitiesContractV1 = "gentle-ai.work-capabilities/v1"
 	WorkStartContractV1        = "gentle-ai.work-start/v1"
+	WorkRouteContractV1        = "gentle-ai.work-route/v1"
 	WorkAdvanceContractV1      = "gentle-ai.work-advance/v1"
+	WorkReconcileContractV1    = "gentle-ai.work-reconcile/v1"
 	WorkStatusContractV1       = "gentle-ai.work-status/v1"
 	WorkTransitionContractV1   = "gentle-ai.work-transition/v1"
 	WorkDiagnosticSchemaV1     = "gentle-ai.work-diagnostic/v1"
@@ -42,6 +46,17 @@ const (
 	PublicStateChecking          PublicState = "checking"
 	PublicStateReady             PublicState = "ready"
 	PublicStateNeedsYourDecision PublicState = "needs_your_decision"
+)
+
+// RoutePhase distinguishes an unanswered SDD proposal from an accepted SDD
+// route whose real runtime authority has not been bound yet. Consumers must
+// not infer either state from an omitted implementationRoute.
+type RoutePhase string
+
+const (
+	RoutePhaseDecisionPending        RoutePhase = "decision_pending"
+	RoutePhaseSDDRuntimePending      RoutePhase = "sdd_runtime_pending"
+	RoutePhaseImplementationSelected RoutePhase = "implementation_selected"
 )
 
 type VerificationOutcome string
@@ -73,18 +88,133 @@ type AuthorizedTransitionV1 struct {
 }
 
 type WorkStatusV1 struct {
-	Schema               string                  `json:"schema"`
-	Contract             string                  `json:"contract"`
-	WorkRunID            string                  `json:"workRunId"`
-	Revision             string                  `json:"revision"`
-	PublicState          PublicState             `json:"publicState"`
-	RouteDecision        RouteDecision           `json:"routeDecision"`
-	ImplementationRoute  ImplementationRoute     `json:"implementationRoute,omitempty"`
-	SDDRunRef            string                  `json:"sddRunRef,omitempty"`
-	Verification         VerificationSummaryV1   `json:"verification"`
-	DeliveryIntentRef    string                  `json:"deliveryIntentRef,omitempty"`
-	ReviewReceiptRef     string                  `json:"reviewReceiptRef,omitempty"`
-	AuthorizedTransition *AuthorizedTransitionV1 `json:"authorizedTransition,omitempty"`
+	Schema               string                   `json:"schema"`
+	Contract             string                   `json:"contract"`
+	WorkRunID            string                   `json:"workRunId"`
+	Revision             string                   `json:"revision"`
+	PublicState          PublicState              `json:"publicState"`
+	RouteDecision        RouteDecision            `json:"routeDecision"`
+	RoutePhase           RoutePhase               `json:"routePhase"`
+	ImplementationRoute  ImplementationRoute      `json:"implementationRoute,omitempty"`
+	SDDRunRef            string                   `json:"sddRunRef,omitempty"`
+	Verification         VerificationSummaryV1    `json:"verification"`
+	DeliveryIntentRef    string                   `json:"deliveryIntentRef,omitempty"`
+	ReviewReceiptRef     string                   `json:"reviewReceiptRef,omitempty"`
+	Diagnostic           *WorkAdvanceDiagnosticV1 `json:"diagnostic,omitempty"`
+	AuthorizedTransition *AuthorizedTransitionV1  `json:"authorizedTransition,omitempty"`
+}
+
+type WorkRouteOperation string
+
+const (
+	WorkRouteOperationDecideSDD WorkRouteOperation = "decide"
+	WorkRouteOperationBindSDD   WorkRouteOperation = "bind-sdd"
+)
+
+type WorkRouteChoice string
+
+const (
+	WorkRouteChoiceAcceptSDD  WorkRouteChoice = "accept_sdd"
+	WorkRouteChoiceDeclineSDD WorkRouteChoice = "decline_sdd"
+)
+
+// WorkRouteV1 is the exact result of one human route decision or one
+// post-consent SDD runtime binding. selectedRoute is owner output, never caller
+// input. The embedded status is the read-only recovery projection.
+type WorkRouteV1 struct {
+	Schema           string              `json:"schema"`
+	Contract         string              `json:"contract"`
+	Operation        WorkRouteOperation  `json:"operation"`
+	Choice           WorkRouteChoice     `json:"choice,omitempty"`
+	PreviousRevision string              `json:"previousRevision"`
+	SelectedRoute    ImplementationRoute `json:"selectedRoute"`
+	Status           WorkStatusV1        `json:"status"`
+}
+
+func (route WorkRouteV1) Validate() error {
+	if route.Schema != WorkRouteContractV1 ||
+		route.Contract != WorkRouteContractV1 {
+		return errors.New("work route must use gentle-ai.work-route/v1")
+	}
+	if !workRevisionPattern.MatchString(route.PreviousRevision) {
+		return errors.New("work route previousRevision must be sha256")
+	}
+	if err := route.Status.Validate(); err != nil {
+		return err
+	}
+	if route.Status.Revision == route.PreviousRevision {
+		return errors.New("work route must advance the WorkRun revision")
+	}
+	if route.Status.AuthorizedTransition != nil {
+		return errors.New(
+			"work route result must not carry an authorized transition",
+		)
+	}
+	if route.Status.PublicState != PublicStateWorking ||
+		route.Status.Verification.Outcome != VerificationPending ||
+		len(route.Status.Verification.ResultRefs) != 0 ||
+		route.Status.DeliveryIntentRef == "" ||
+		route.Status.ReviewReceiptRef != "" ||
+		route.Status.Diagnostic != nil {
+		return errors.New(
+			"work route result must expose only its immediate working successor",
+		)
+	}
+	switch route.Operation {
+	case WorkRouteOperationDecideSDD:
+		switch route.Choice {
+		case WorkRouteChoiceAcceptSDD:
+			if route.SelectedRoute != ImplementationRouteSDD ||
+				route.Status.RouteDecision != RouteDecisionProposeSDD ||
+				route.Status.RoutePhase != RoutePhaseSDDRuntimePending ||
+				route.Status.ImplementationRoute != "" ||
+				route.Status.SDDRunRef != "" ||
+				route.Status.PublicState != PublicStateWorking {
+				return errors.New(
+					"accepted SDD decision must await a bound SDD runtime",
+				)
+			}
+		case WorkRouteChoiceDeclineSDD:
+			if route.SelectedRoute != ImplementationRouteDirectInline &&
+				route.SelectedRoute != ImplementationRouteDelegatedDirect {
+				return errors.New(
+					"declined SDD decision must select direct or delegated work",
+				)
+			}
+			if route.Status.RoutePhase !=
+				RoutePhaseImplementationSelected ||
+				route.Status.ImplementationRoute != route.SelectedRoute {
+				return errors.New(
+					"declined SDD decision must expose the owner-selected route",
+				)
+			}
+			expectedDecision := RouteDecisionDirectInline
+			if route.SelectedRoute == ImplementationRouteDelegatedDirect {
+				expectedDecision = RouteDecisionDelegatedDirect
+			}
+			if route.Status.RouteDecision != expectedDecision {
+				return errors.New(
+					"declined SDD decision does not match the fresh owner decision",
+				)
+			}
+		default:
+			return fmt.Errorf("unsupported work route choice %q", route.Choice)
+		}
+	case WorkRouteOperationBindSDD:
+		if route.Choice != "" ||
+			route.SelectedRoute != ImplementationRouteSDD ||
+			route.Status.RouteDecision != RouteDecisionProposeSDD ||
+			route.Status.RoutePhase != RoutePhaseImplementationSelected ||
+			route.Status.ImplementationRoute != ImplementationRouteSDD ||
+			route.Status.SDDRunRef == "" {
+			return errors.New(
+				"bound SDD route must expose the accepted runtime",
+			)
+		}
+	default:
+		return fmt.Errorf("unsupported work route operation %q", route.Operation)
+	}
+	return nil
 }
 
 type WorkTransitionV1 struct {
@@ -131,12 +261,23 @@ const (
 	WorkAdvanceDiagnosticDeliveryEffectFailed             WorkAdvanceDiagnosticCode = "delivery_effect_failed"
 	WorkAdvanceDiagnosticDeliveryOutcomeIndeterminate     WorkAdvanceDiagnosticCode = "delivery_outcome_indeterminate"
 	WorkAdvanceDiagnosticProviderAuthorityUnavailable     WorkAdvanceDiagnosticCode = "provider_authority_unavailable"
+	WorkAdvanceDiagnosticDeliveryNotCompleted             WorkAdvanceDiagnosticCode = "delivery_not_completed"
+	WorkAdvanceDiagnosticManualResolutionRequired         WorkAdvanceDiagnosticCode = "delivery_manual_resolution_required"
+)
+
+type WorkAdvanceDiagnosticNextAction string
+
+const (
+	WorkAdvanceNextActionStartFresh WorkAdvanceDiagnosticNextAction = "start_fresh_work_run"
+	WorkAdvanceNextActionReconcile  WorkAdvanceDiagnosticNextAction = "reconcile_before_new_work"
+	WorkAdvanceNextActionManual     WorkAdvanceDiagnosticNextAction = "manual_delivery_resolution_required"
 )
 
 type WorkAdvanceDiagnosticV1 struct {
-	Ref     string                    `json:"ref"`
-	Code    WorkAdvanceDiagnosticCode `json:"code"`
-	Message string                    `json:"message"`
+	Ref        string                          `json:"ref"`
+	Code       WorkAdvanceDiagnosticCode       `json:"code"`
+	Message    string                          `json:"message"`
+	NextAction WorkAdvanceDiagnosticNextAction `json:"nextAction"`
 }
 
 var workAdvanceDiagnosticMessages = map[WorkAdvanceDiagnosticCode]string{
@@ -158,6 +299,8 @@ var workAdvanceDiagnosticMessages = map[WorkAdvanceDiagnosticCode]string{
 	WorkAdvanceDiagnosticDeliveryEffectFailed:             "The authorized delivery effect completed without delivering the candidate.",
 	WorkAdvanceDiagnosticDeliveryOutcomeIndeterminate:     "The delivery effect may have started, but its terminal outcome is not provable.",
 	WorkAdvanceDiagnosticProviderAuthorityUnavailable:     "Required owner authority is unavailable; no additional effect was started.",
+	WorkAdvanceDiagnosticDeliveryNotCompleted:             "Reconciliation proved that the candidate was not delivered.",
+	WorkAdvanceDiagnosticManualResolutionRequired:         "Delivery remains indeterminate after owner reconciliation.",
 }
 
 func WorkAdvanceDiagnosticMessage(
@@ -179,13 +322,67 @@ func (diagnostic WorkAdvanceDiagnosticV1) Validate() error {
 		)
 	}
 	if diagnostic.Message != message ||
-		len(diagnostic.Message) > 240 ||
+		!utf8.ValidString(diagnostic.Message) ||
+		utf8.RuneCountInString(diagnostic.Message) > 240 ||
 		strings.ContainsAny(diagnostic.Message, "\x00\r\n") {
 		return errors.New(
 			"work advance diagnostic message must match its stable code",
 		)
 	}
+	switch diagnostic.NextAction {
+	case WorkAdvanceNextActionStartFresh,
+		WorkAdvanceNextActionReconcile,
+		WorkAdvanceNextActionManual:
+	default:
+		return fmt.Errorf(
+			"unsupported work advance diagnostic next action %q",
+			diagnostic.NextAction,
+		)
+	}
+	if !validWorkAdvanceDiagnosticNextAction(
+		diagnostic.Code,
+		diagnostic.NextAction,
+	) {
+		return errors.New(
+			"work advance diagnostic next action must match its stable code",
+		)
+	}
 	return nil
+}
+
+func validWorkAdvanceDiagnosticNextAction(
+	code WorkAdvanceDiagnosticCode,
+	nextAction WorkAdvanceDiagnosticNextAction,
+) bool {
+	switch code {
+	case WorkAdvanceDiagnosticCandidateBaseNotGit,
+		WorkAdvanceDiagnosticCandidateNotCommitted,
+		WorkAdvanceDiagnosticNoMutation,
+		WorkAdvanceDiagnosticCandidateWrongBase,
+		WorkAdvanceDiagnosticScopeMismatch,
+		WorkAdvanceDiagnosticCandidateChanged,
+		WorkAdvanceDiagnosticVerificationApplicabilityUnknown,
+		WorkAdvanceDiagnosticCompleteVerificationPlanRequired,
+		WorkAdvanceDiagnosticReviewRiskUnknown,
+		WorkAdvanceDiagnosticReviewLensesUnknown,
+		WorkAdvanceDiagnosticCompleteReviewRequired,
+		WorkAdvanceDiagnosticDeliveryDecisionUnavailable,
+		WorkAdvanceDiagnosticDeliveryAuthorizationExpired,
+		WorkAdvanceDiagnosticDeliveryConflict,
+		WorkAdvanceDiagnosticDeliveryEffectFailed,
+		WorkAdvanceDiagnosticDeliveryNotCompleted:
+		return nextAction == WorkAdvanceNextActionStartFresh
+	case WorkAdvanceDiagnosticDeliveryOutcomeIndeterminate:
+		return nextAction == WorkAdvanceNextActionReconcile
+	case WorkAdvanceDiagnosticDeliveryAuthorizationUnavailable,
+		WorkAdvanceDiagnosticProviderAuthorityUnavailable:
+		return nextAction == WorkAdvanceNextActionStartFresh ||
+			nextAction == WorkAdvanceNextActionReconcile
+	case WorkAdvanceDiagnosticManualResolutionRequired:
+		return nextAction == WorkAdvanceNextActionManual
+	default:
+		return false
+	}
 }
 
 func (advance WorkAdvanceV1) Validate() error {
@@ -210,7 +407,8 @@ func (advance WorkAdvanceV1) Validate() error {
 	switch advance.Status.PublicState {
 	case PublicStateReady:
 		if !workRevisionPattern.MatchString(advance.DeliveryResultRef) ||
-			advance.Diagnostic != nil {
+			advance.Diagnostic != nil ||
+			advance.Status.Diagnostic != nil {
 			return errors.New(
 				"ready work advance requires only a SHA-256 delivery result",
 			)
@@ -218,6 +416,9 @@ func (advance WorkAdvanceV1) Validate() error {
 	case PublicStateNeedsYourDecision:
 		if advance.Diagnostic == nil ||
 			advance.Diagnostic.Validate() != nil ||
+			advance.Status.Diagnostic == nil ||
+			*advance.Status.Diagnostic != *advance.Diagnostic ||
+			!initialWorkAdvanceDiagnostic(*advance.Diagnostic) ||
 			advance.DeliveryResultRef != "" {
 			return errors.New(
 				"needs-your-decision work advance requires only one typed diagnostic",
@@ -231,12 +432,113 @@ func (advance WorkAdvanceV1) Validate() error {
 	return nil
 }
 
+func initialWorkAdvanceDiagnostic(
+	diagnostic WorkAdvanceDiagnosticV1,
+) bool {
+	if diagnostic.Code == WorkAdvanceDiagnosticDeliveryNotCompleted ||
+		diagnostic.Code == WorkAdvanceDiagnosticManualResolutionRequired {
+		return false
+	}
+	return diagnostic.NextAction == WorkAdvanceNextActionStartFresh ||
+		diagnostic.NextAction == WorkAdvanceNextActionReconcile
+}
+
+type WorkReconcileOutcome string
+
+const (
+	WorkReconcileDeliveryConfirmed   WorkReconcileOutcome = "delivery_confirmed"
+	WorkReconcileNoDeliveryConfirmed WorkReconcileOutcome = "no_delivery_confirmed"
+	WorkReconcileManualResolution    WorkReconcileOutcome = "manual_resolution_required"
+)
+
+// WorkReconcileV1 is the exact replay-safe result of one owner-only
+// reconciliation attempt. Consumers submit only the terminal WorkRun CAS and
+// its already-projected diagnostic reference; they never submit an outcome,
+// route, command, policy, or delivery authority.
+type WorkReconcileV1 struct {
+	Schema            string               `json:"schema"`
+	Contract          string               `json:"contract"`
+	PreviousRevision  string               `json:"previousRevision"`
+	DiagnosticRef     string               `json:"diagnosticRef"`
+	ReconciliationRef string               `json:"reconciliationRef"`
+	Outcome           WorkReconcileOutcome `json:"outcome"`
+	Status            WorkStatusV1         `json:"status"`
+	DeliveryResultRef string               `json:"deliveryResultRef,omitempty"`
+}
+
+func (reconcile WorkReconcileV1) Validate() error {
+	if reconcile.Schema != WorkReconcileContractV1 ||
+		reconcile.Contract != WorkReconcileContractV1 {
+		return errors.New(
+			"work reconcile must use gentle-ai.work-reconcile/v1",
+		)
+	}
+	if !workRevisionPattern.MatchString(reconcile.PreviousRevision) ||
+		!workRevisionPattern.MatchString(reconcile.DiagnosticRef) ||
+		!workRevisionPattern.MatchString(reconcile.ReconciliationRef) {
+		return errors.New(
+			"work reconcile references must be SHA-256 authorities",
+		)
+	}
+	if err := reconcile.Status.Validate(); err != nil {
+		return err
+	}
+	if reconcile.Status.Revision == reconcile.PreviousRevision ||
+		reconcile.Status.AuthorizedTransition != nil {
+		return errors.New(
+			"work reconcile must advance revision without an authorized transition",
+		)
+	}
+	switch reconcile.Outcome {
+	case WorkReconcileDeliveryConfirmed:
+		if reconcile.Status.PublicState != PublicStateReady ||
+			reconcile.Status.Diagnostic != nil ||
+			!workRevisionPattern.MatchString(reconcile.DeliveryResultRef) {
+			return errors.New(
+				"confirmed reconciliation requires only a delivery result",
+			)
+		}
+	case WorkReconcileNoDeliveryConfirmed:
+		if reconcile.Status.PublicState != PublicStateNeedsYourDecision ||
+			reconcile.Status.Diagnostic == nil ||
+			reconcile.Status.Diagnostic.Code !=
+				WorkAdvanceDiagnosticDeliveryNotCompleted ||
+			reconcile.Status.Diagnostic.NextAction !=
+				WorkAdvanceNextActionStartFresh ||
+			reconcile.DeliveryResultRef != "" {
+			return errors.New(
+				"no-delivery reconciliation must authorize a fresh WorkRun",
+			)
+		}
+	case WorkReconcileManualResolution:
+		if reconcile.Status.PublicState != PublicStateNeedsYourDecision ||
+			reconcile.Status.Diagnostic == nil ||
+			reconcile.Status.Diagnostic.Code !=
+				WorkAdvanceDiagnosticManualResolutionRequired ||
+			reconcile.Status.Diagnostic.NextAction !=
+				WorkAdvanceNextActionManual ||
+			reconcile.DeliveryResultRef != "" {
+			return errors.New(
+				"indeterminate reconciliation must require manual resolution",
+			)
+		}
+	default:
+		return fmt.Errorf(
+			"unsupported work reconcile outcome %q",
+			reconcile.Outcome,
+		)
+	}
+	return nil
+}
+
 type DiagnosticOperation string
 
 const (
 	DiagnosticOperationWorkCapabilities    DiagnosticOperation = "work.capabilities"
 	DiagnosticOperationWorkStart           DiagnosticOperation = "work.start"
+	DiagnosticOperationWorkRoute           DiagnosticOperation = "work.route"
 	DiagnosticOperationWorkAdvance         DiagnosticOperation = "work.advance"
+	DiagnosticOperationWorkReconcile       DiagnosticOperation = "work.reconcile"
 	DiagnosticOperationWorkStatus          DiagnosticOperation = "work.status"
 	DiagnosticOperationWorkTransitionApply DiagnosticOperation = "work.transition.apply"
 )
@@ -252,7 +554,12 @@ type WorkDiagnosticV1 struct {
 	NextAction         string              `json:"nextAction"`
 }
 
-var workRevisionPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+var (
+	workRevisionPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	workSDDRunPattern   = regexp.MustCompile(
+		`^[a-z0-9]+(?:-[a-z0-9]+)*$`,
+	)
+)
 
 func (status WorkStatusV1) Validate() error {
 	if status.Schema != WorkStatusContractV1 || status.Contract != WorkStatusContractV1 {
@@ -268,6 +575,15 @@ func (status WorkStatusV1) Validate() error {
 		return fmt.Errorf("unsupported public state %q", status.PublicState)
 	}
 	if err := validateRoute(status.RouteDecision, status.ImplementationRoute, status.SDDRunRef); err != nil {
+		return err
+	}
+	if err := validateRoutePhase(
+		status.RouteDecision,
+		status.RoutePhase,
+		status.ImplementationRoute,
+		status.SDDRunRef,
+		status.PublicState,
+	); err != nil {
 		return err
 	}
 	if err := status.Verification.validate(); err != nil {
@@ -286,6 +602,18 @@ func (status WorkStatusV1) Validate() error {
 	if status.AuthorizedTransition != nil {
 		if err := status.AuthorizedTransition.validate(status.Revision); err != nil {
 			return err
+		}
+	}
+	if status.Diagnostic != nil {
+		if err := status.Diagnostic.Validate(); err != nil {
+			return err
+		}
+		if status.PublicState != PublicStateNeedsYourDecision ||
+			status.AuthorizedTransition != nil ||
+			status.RoutePhase != RoutePhaseImplementationSelected {
+			return errors.New(
+				"work status diagnostic requires one terminal implementation decision",
+			)
 		}
 	}
 	return nil
@@ -324,7 +652,9 @@ func (diagnostic WorkDiagnosticV1) Validate() error {
 	}
 	if diagnostic.Operation != DiagnosticOperationWorkCapabilities &&
 		diagnostic.Operation != DiagnosticOperationWorkStart &&
+		diagnostic.Operation != DiagnosticOperationWorkRoute &&
 		diagnostic.Operation != DiagnosticOperationWorkAdvance &&
+		diagnostic.Operation != DiagnosticOperationWorkReconcile &&
 		diagnostic.Operation != DiagnosticOperationWorkStatus &&
 		diagnostic.Operation != DiagnosticOperationWorkTransitionApply {
 		return fmt.Errorf("unsupported diagnostic operation %q", diagnostic.Operation)
@@ -332,17 +662,33 @@ func (diagnostic WorkDiagnosticV1) Validate() error {
 	if err := validateCanonical("message", diagnostic.Message); err != nil {
 		return err
 	}
+	if !utf8.ValidString(diagnostic.RequestedContract) ||
+		utf8.RuneCountInString(diagnostic.RequestedContract) > 240 {
+		return errors.New(
+			"requestedContract must be valid UTF-8 with at most 240 characters",
+		)
+	}
 	if len(diagnostic.SupportedContracts) == 0 {
 		return errors.New("supportedContracts must not be empty")
 	}
+	seenContracts := make(
+		map[string]struct{},
+		len(diagnostic.SupportedContracts),
+	)
 	for _, contract := range diagnostic.SupportedContracts {
 		if contract != WorkCapabilitiesContractV1 &&
 			contract != WorkStartContractV1 &&
+			contract != WorkRouteContractV1 &&
 			contract != WorkAdvanceContractV1 &&
+			contract != WorkReconcileContractV1 &&
 			contract != WorkStatusContractV1 &&
 			contract != WorkTransitionContractV1 {
 			return fmt.Errorf("unsupported advertised contract %q", contract)
 		}
+		if _, exists := seenContracts[contract]; exists {
+			return fmt.Errorf("duplicate supported contract %q", contract)
+		}
+		seenContracts[contract] = struct{}{}
 	}
 	if diagnostic.MutationOutcome != "not_started" {
 		return errors.New("work diagnostic must precede any mutation")
@@ -370,12 +716,78 @@ func (diagnostic WorkDiagnosticV1) Validate() error {
 	return nil
 }
 
+func validateRoutePhase(
+	decision RouteDecision,
+	phase RoutePhase,
+	selected ImplementationRoute,
+	sddRunRef string,
+	publicState PublicState,
+) error {
+	switch decision {
+	case RouteDecisionDirectInline:
+		if phase != RoutePhaseImplementationSelected ||
+			selected != ImplementationRouteDirectInline ||
+			sddRunRef != "" {
+			return errors.New(
+				"direct work requires an implementation-selected route phase",
+			)
+		}
+	case RouteDecisionDelegatedDirect:
+		if phase != RoutePhaseImplementationSelected ||
+			selected != ImplementationRouteDelegatedDirect ||
+			sddRunRef != "" {
+			return errors.New(
+				"delegated work requires an implementation-selected route phase",
+			)
+		}
+	case RouteDecisionProposeSDD:
+		switch phase {
+		case RoutePhaseDecisionPending:
+			if selected != "" || sddRunRef != "" {
+				return errors.New(
+					"pending SDD route phase cannot expose an implementation runtime",
+				)
+			}
+			if publicState != PublicStateNeedsYourDecision {
+				return errors.New(
+					"pending SDD decision must require user input",
+				)
+			}
+		case RoutePhaseSDDRuntimePending:
+			if selected != "" || sddRunRef != "" {
+				return errors.New(
+					"pending SDD route phase cannot expose an implementation runtime",
+				)
+			}
+			if publicState != PublicStateWorking {
+				return errors.New(
+					"accepted SDD runtime binding must remain working",
+				)
+			}
+		case RoutePhaseImplementationSelected:
+			if selected != ImplementationRouteSDD || sddRunRef == "" {
+				return errors.New(
+					"selected SDD route phase requires its bound runtime",
+				)
+			}
+		default:
+			return fmt.Errorf("unsupported SDD route phase %q", phase)
+		}
+	default:
+		return fmt.Errorf("unsupported route decision %q", decision)
+	}
+	return nil
+}
+
 func (summary VerificationSummaryV1) validate() error {
 	switch summary.Outcome {
 	case VerificationPending, VerificationNotRequired, VerificationComplete, VerificationFailed,
 		VerificationPartial, VerificationUnavailable:
 	default:
 		return fmt.Errorf("unsupported verification outcome %q", summary.Outcome)
+	}
+	if summary.ResultRefs == nil {
+		return errors.New("verification resultRefs must be an array")
 	}
 	seen := make(map[string]struct{}, len(summary.ResultRefs))
 	for _, ref := range summary.ResultRefs {
@@ -426,7 +838,14 @@ func validateRoute(decision RouteDecision, selected ImplementationRoute, sddRunR
 		return fmt.Errorf("implementation route %q does not match route decision %q", selected, decision)
 	}
 	if selected == ImplementationRouteSDD {
-		return validateCanonical("sddRunRef", sddRunRef)
+		if !utf8.ValidString(sddRunRef) ||
+			utf8.RuneCountInString(sddRunRef) > 96 ||
+			!workSDDRunPattern.MatchString(sddRunRef) {
+			return errors.New(
+				"sddRunRef must be a canonical native SDD change identifier",
+			)
+		}
+		return nil
 	}
 	if sddRunRef != "" {
 		return errors.New("sddRunRef requires the selected sdd implementation route")
@@ -440,9 +859,24 @@ func validPublicState(state PublicState) bool {
 }
 
 func validateCanonical(name, value string) error {
-	if value == "" || value != strings.TrimSpace(value) || len(value) > 240 ||
+	if value == "" || !utf8.ValidString(value) ||
+		!hasCanonicalTextEdges(value) ||
+		utf8.RuneCountInString(value) > 240 ||
 		strings.ContainsAny(value, "\r\n\x00") {
 		return fmt.Errorf("%s must be a non-empty canonical string", name)
 	}
 	return nil
+}
+
+func hasCanonicalTextEdges(value string) bool {
+	if value == "" || !utf8.ValidString(value) {
+		return false
+	}
+	first, _ := utf8.DecodeRuneInString(value)
+	last, _ := utf8.DecodeLastRuneInString(value)
+	return !isPublicEdgeWhitespace(first) && !isPublicEdgeWhitespace(last)
+}
+
+func isPublicEdgeWhitespace(value rune) bool {
+	return unicode.IsSpace(value) || value == '\uFEFF'
 }

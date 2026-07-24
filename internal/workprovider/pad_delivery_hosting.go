@@ -23,6 +23,9 @@ var (
 	ErrPADDeliveryIndeterminate = errors.New(
 		"PAD delivery effect is indeterminate",
 	)
+	ErrPADDeliveryResultCorrupt = errors.New(
+		"PAD delivery terminal authority is corrupt",
+	)
 )
 
 type HostingProtectionState string

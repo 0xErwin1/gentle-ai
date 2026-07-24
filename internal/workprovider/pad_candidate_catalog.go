@@ -31,6 +31,7 @@ var (
 	ErrPADCandidateCatalogUnavailable = errors.New("PAD candidate catalog is unavailable")
 	ErrPADCandidateCatalogCorrupt     = errors.New("PAD candidate catalog is corrupt")
 	ErrPADCandidateCatalogConflict    = errors.New("PAD candidate catalog binding conflicts")
+	errPADCandidateCatalogNotFound    = errors.New("PAD candidate catalog was not published")
 )
 
 // PADCandidateCatalog is an append-only owner mapping from PAD's opaque
@@ -41,6 +42,15 @@ type PADCandidateCatalog struct {
 	authority *PADRepositoryAuthority
 	objects   *FixedPADGitObjectAuthority
 	root      string
+}
+
+// PADCandidateAuthority is the exact content-addressed catalog record selected
+// for one reviewed candidate. RecordRef binds both CandidateTree and the full
+// Git/hosting binding, including CandidateRevision.
+type PADCandidateAuthority struct {
+	RecordRef     string
+	CandidateTree string
+	Binding       PADGitBinding
 }
 
 type padCandidateCatalogLookup struct {
@@ -73,6 +83,26 @@ func NewPADCandidateCatalog(
 	ctx context.Context,
 	authority *PADRepositoryAuthority,
 	objects *FixedPADGitObjectAuthority,
+) (*PADCandidateCatalog, error) {
+	return openPADCandidateCatalog(ctx, authority, objects, true)
+}
+
+// openExistingPADCandidateCatalog opens only a catalog already published by a
+// productive owner. It creates no directory, record, index, or lock and is
+// therefore safe for terminal recovery after the runtime connector is gone.
+func openExistingPADCandidateCatalog(
+	ctx context.Context,
+	authority *PADRepositoryAuthority,
+	objects *FixedPADGitObjectAuthority,
+) (*PADCandidateCatalog, error) {
+	return openPADCandidateCatalog(ctx, authority, objects, false)
+}
+
+func openPADCandidateCatalog(
+	ctx context.Context,
+	authority *PADRepositoryAuthority,
+	objects *FixedPADGitObjectAuthority,
+	create bool,
 ) (*PADCandidateCatalog, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -109,15 +139,22 @@ func NewPADCandidateCatalog(
 		"repositories",
 		authority.identity.lease.StorageKey(),
 	)
-	if err := ensurePADCandidateCatalogDirectories(
-		authority.identity.gitCommonDir,
-		catalogRoot,
-	); err != nil {
-		return nil, fmt.Errorf(
-			"%w: open durable catalog: %w",
-			ErrPADCandidateCatalogUnavailable,
-			err,
-		)
+	if create {
+		if err := ensurePADCandidateCatalogDirectories(
+			authority.identity.gitCommonDir,
+			catalogRoot,
+		); err != nil {
+			return nil, fmt.Errorf(
+				"%w: open durable catalog: %w",
+				ErrPADCandidateCatalogUnavailable,
+				err,
+			)
+		}
+	} else if _, err := os.Lstat(catalogRoot); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, errPADCandidateCatalogNotFound
+		}
+		return nil, err
 	}
 	catalog := &PADCandidateCatalog{
 		authority: authority,
@@ -138,12 +175,12 @@ func (catalog *PADCandidateCatalog) BindCandidate(
 	ctx context.Context,
 	candidateTree string,
 	binding PADGitBinding,
-) (PADGitBinding, error) {
+) (PADCandidateAuthority, error) {
 	record, err := catalog.newRecord(candidateTree, binding)
 	if err != nil {
-		return PADGitBinding{}, err
+		return PADCandidateAuthority{}, err
 	}
-	var resolved PADGitBinding
+	var resolved PADCandidateAuthority
 	err = catalog.withLookupLock(ctx, record.LookupRef, func() error {
 		if err := catalog.requireRecordObjects(ctx, record); err != nil {
 			return err
@@ -160,7 +197,7 @@ func (catalog *PADCandidateCatalog) BindCandidate(
 			if existing != record {
 				return ErrPADCandidateCatalogConflict
 			}
-			resolved = existing.Binding
+			resolved = existing.authority()
 			return nil
 		}
 		recordPayload, err := canonicalCoordinationPayload(record)
@@ -209,18 +246,18 @@ func (catalog *PADCandidateCatalog) BindCandidate(
 		if reloaded != record {
 			return ErrPADCandidateCatalogConflict
 		}
-		resolved = reloaded.Binding
+		resolved = reloaded.authority()
 		return nil
 	})
 	if err != nil {
-		return PADGitBinding{}, err
+		return PADCandidateAuthority{}, err
 	}
 	return resolved, nil
 }
 
-// ResolvePADGitBinding resolves only the immutable catalog slot identified by
-// the caller's already-authorized PAD bindings. Every resolution re-proves the
-// exact commit/tree objects and retained repository identity.
+// ResolvePADGitBinding resolves the catalog's current lookup slot. It is used
+// only while selecting and publishing a new candidate authority. Authorization,
+// probe, and effect instead resolve an exact RecordRef.
 func (catalog *PADCandidateCatalog) ResolvePADGitBinding(
 	ctx context.Context,
 	candidate deliveryadmission.CandidateBinding,
@@ -269,6 +306,159 @@ func (catalog *PADCandidateCatalog) ResolvePADGitBinding(
 		return PADGitBinding{}, err
 	}
 	return binding, nil
+}
+
+// ResolveCandidateAuthority loads a record directly by its content address,
+// without using the mutable lookup index to select candidate semantics. The
+// caller must supply every expected binding dimension plus the reviewed RAR
+// tree, and the exact Git objects are re-proved on every resolution.
+func (catalog *PADCandidateCatalog) ResolveCandidateAuthority(
+	ctx context.Context,
+	recordRef string,
+	candidate deliveryadmission.CandidateBinding,
+	destination deliveryadmission.DestinationBinding,
+	mechanism deliveryadmission.Mechanism,
+	candidateTree string,
+) (PADCandidateAuthority, error) {
+	return catalog.resolveCandidateAuthority(
+		ctx,
+		recordRef,
+		candidate,
+		destination,
+		mechanism,
+		candidateTree,
+		true,
+	)
+}
+
+// resolveCandidateAuthorityReadOnly proves one exact record without consulting
+// or locking the mutable lookup index. Decisions already content-address the
+// record, so terminal recovery needs no connector and performs no publication.
+func (catalog *PADCandidateCatalog) resolveCandidateAuthorityReadOnly(
+	ctx context.Context,
+	recordRef string,
+	candidate deliveryadmission.CandidateBinding,
+	destination deliveryadmission.DestinationBinding,
+	mechanism deliveryadmission.Mechanism,
+	candidateTree string,
+) (PADCandidateAuthority, error) {
+	return catalog.resolveCandidateAuthority(
+		ctx,
+		recordRef,
+		candidate,
+		destination,
+		mechanism,
+		candidateTree,
+		false,
+	)
+}
+
+func (catalog *PADCandidateCatalog) resolveCandidateAuthority(
+	ctx context.Context,
+	recordRef string,
+	candidate deliveryadmission.CandidateBinding,
+	destination deliveryadmission.DestinationBinding,
+	mechanism deliveryadmission.Mechanism,
+	candidateTree string,
+	lockLookup bool,
+) (PADCandidateAuthority, error) {
+	lookup, lookupRef, err := catalog.lookup(
+		candidate,
+		destination,
+		mechanism,
+	)
+	if err != nil {
+		return PADCandidateAuthority{}, err
+	}
+	if !validPADImmutableRef(recordRef) ||
+		!validPADGitObjectID(candidateTree) {
+		return PADCandidateAuthority{}, fmt.Errorf(
+			"%w: invalid exact candidate authority",
+			ErrPADCandidateCatalogCorrupt,
+		)
+	}
+	var resolved PADCandidateAuthority
+	resolve := func() error {
+		record, err := catalog.readRecordRef(recordRef)
+		if err != nil {
+			return err
+		}
+		if record.LookupRef != lookupRef ||
+			record.CandidateTree != candidateTree ||
+			record.Binding.Candidate != lookup.Candidate ||
+			record.Binding.Destination != lookup.Destination ||
+			record.Binding.Mechanism != lookup.Mechanism {
+			return fmt.Errorf(
+				"%w: exact candidate authority differs from reviewed binding",
+				ErrPADCandidateCatalogConflict,
+			)
+		}
+		if err := catalog.requireRecordObjects(ctx, record); err != nil {
+			return err
+		}
+		resolved = record.authority()
+		return nil
+	}
+	if lockLookup {
+		err = catalog.withLookupLock(ctx, lookupRef, resolve)
+	} else {
+		if err = catalog.validate(ctx); err == nil {
+			err = resolve()
+		}
+		if err == nil {
+			err = catalog.validate(ctx)
+		}
+	}
+	if err != nil {
+		return PADCandidateAuthority{}, err
+	}
+	return resolved, nil
+}
+
+// RequireCurrentCandidateAuthority treats the lookup index only as a
+// continuity/tamper guard. Candidate semantics are loaded from RecordRef above;
+// the index is never allowed to select a replacement during probe or effect.
+func (catalog *PADCandidateCatalog) RequireCurrentCandidateAuthority(
+	ctx context.Context,
+	authority PADCandidateAuthority,
+) error {
+	if catalog == nil || catalog.authority == nil {
+		return ErrPADCandidateCatalogUnavailable
+	}
+	if err := authority.validate(catalog.authority.RepositoryRef()); err != nil {
+		return err
+	}
+	_, lookupRef, err := catalog.lookup(
+		authority.Binding.Candidate,
+		authority.Binding.Destination,
+		authority.Binding.Mechanism,
+	)
+	if err != nil {
+		return err
+	}
+	return catalog.withLookupLock(ctx, lookupRef, func() error {
+		record, err := catalog.readRecordRef(authority.RecordRef)
+		if err != nil {
+			return err
+		}
+		if record.authority() != authority {
+			return fmt.Errorf(
+				"%w: exact candidate authority changed",
+				ErrPADCandidateCatalogConflict,
+			)
+		}
+		index, exists, err := catalog.readIndex(lookupRef)
+		if err != nil {
+			return err
+		}
+		if !exists || index.RecordRef != authority.RecordRef {
+			return fmt.Errorf(
+				"%w: candidate lookup no longer names exact authority",
+				ErrPADCandidateCatalogConflict,
+			)
+		}
+		return catalog.requireRecordObjects(ctx, record)
+	})
 }
 
 func (catalog *PADCandidateCatalog) newRecord(
@@ -321,6 +511,37 @@ func (catalog *PADCandidateCatalog) newRecord(
 		return padCandidateCatalogRecord{}, err
 	}
 	return record, nil
+}
+
+func (authority PADCandidateAuthority) validate(
+	repositoryRef string,
+) error {
+	if !validPADImmutableRef(authority.RecordRef) ||
+		!validPADGitObjectID(authority.CandidateTree) {
+		return fmt.Errorf(
+			"%w: invalid candidate authority header",
+			ErrPADCandidateCatalogCorrupt,
+		)
+	}
+	lookup := padCandidateCatalogLookup{
+		Schema:        padCandidateCatalogLookupSchema,
+		RepositoryRef: repositoryRef,
+		Candidate:     authority.Binding.Candidate,
+		Destination:   authority.Binding.Destination,
+		Mechanism:     authority.Binding.Mechanism,
+	}
+	if err := lookup.Validate(repositoryRef); err != nil {
+		return err
+	}
+	record := padCandidateCatalogRecord{
+		Schema:        padCandidateCatalogRecordSchema,
+		RepositoryRef: repositoryRef,
+		LookupRef:     padCandidateCatalogLookupRef(lookup),
+		CandidateTree: authority.CandidateTree,
+		Binding:       authority.Binding,
+		RecordRef:     authority.RecordRef,
+	}
+	return record.Validate(repositoryRef)
 }
 
 func (catalog *PADCandidateCatalog) lookup(
@@ -415,6 +636,14 @@ func (record padCandidateCatalogRecord) Validate(
 		)
 	}
 	return nil
+}
+
+func (record padCandidateCatalogRecord) authority() PADCandidateAuthority {
+	return PADCandidateAuthority{
+		RecordRef:     record.RecordRef,
+		CandidateTree: record.CandidateTree,
+		Binding:       record.Binding,
+	}
 }
 
 func (index padCandidateCatalogIndex) Validate(
@@ -539,6 +768,46 @@ func (catalog *PADCandidateCatalog) readRecord(
 		record.Validate(catalog.authority.RepositoryRef()) != nil {
 		return padCandidateCatalogRecord{}, fmt.Errorf(
 			"%w: candidate record is not canonical",
+			ErrPADCandidateCatalogCorrupt,
+		)
+	}
+	return record, nil
+}
+
+func (catalog *PADCandidateCatalog) readRecordRef(
+	recordRef string,
+) (padCandidateCatalogRecord, error) {
+	if !validPADImmutableRef(recordRef) {
+		return padCandidateCatalogRecord{}, fmt.Errorf(
+			"%w: invalid candidate record reference",
+			ErrPADCandidateCatalogCorrupt,
+		)
+	}
+	payload, err := readPrivateCoordinationFile(
+		catalog.recordPath(recordRef),
+	)
+	if err != nil {
+		return padCandidateCatalogRecord{}, fmt.Errorf(
+			"%w: read exact candidate record: %w",
+			ErrPADCandidateCatalogCorrupt,
+			err,
+		)
+	}
+	var record padCandidateCatalogRecord
+	if err := decodeStrictCoordinationJSON(payload, &record); err != nil {
+		return padCandidateCatalogRecord{}, fmt.Errorf(
+			"%w: decode exact candidate record: %w",
+			ErrPADCandidateCatalogCorrupt,
+			err,
+		)
+	}
+	canonical, err := canonicalCoordinationPayload(record)
+	if err != nil ||
+		!bytes.Equal(payload, canonical) ||
+		record.RecordRef != recordRef ||
+		record.Validate(catalog.authority.RepositoryRef()) != nil {
+		return padCandidateCatalogRecord{}, fmt.Errorf(
+			"%w: exact candidate record is not canonical",
 			ErrPADCandidateCatalogCorrupt,
 		)
 	}

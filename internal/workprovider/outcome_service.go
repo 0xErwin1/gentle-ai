@@ -7,15 +7,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gentleman-programming/gentle-ai/internal/deliveryadmission"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
 
-const maximumOutcomeRequestBytes = 64 << 10
+const maximumOutcomeRequestCodePoints = 64 << 10
 
 var ErrOutcomeNotManaged = errors.New(
 	"outcome does not require a managed write lifecycle",
@@ -32,8 +34,10 @@ type OutcomeStartRequest struct {
 
 func (request OutcomeStartRequest) validate() error {
 	if request.Outcome == "" ||
-		request.Outcome != strings.TrimSpace(request.Outcome) ||
-		len(request.Outcome) > maximumOutcomeRequestBytes ||
+		!utf8.ValidString(request.Outcome) ||
+		!hasCanonicalTextEdges(request.Outcome) ||
+		utf8.RuneCountInString(request.Outcome) >
+			maximumOutcomeRequestCodePoints ||
 		strings.ContainsRune(request.Outcome, '\x00') {
 		return errors.New("outcome start requires bounded canonical outcome text")
 	}
@@ -113,11 +117,39 @@ type OwnerOutcomeIntake struct {
 	SecondAuthority  *OwnerAuthoritySignalInput
 	Governance       *OwnerGovernanceInput
 	RoutingFacts     workrun.ImplementationRouteInput
+	// DeclinedSDDFallback is supplied only by the trusted intake authority and
+	// only when the primary facts would propose optional SDD. The provider
+	// persists the resulting direct/delegated decision before START; a route
+	// consumer can decline SDD but can never author the replacement route.
+	DeclinedSDDFallback *workrun.ImplementationRouteInput `json:"declinedSDDFallback,omitempty"`
 }
 
 func (intake OwnerOutcomeIntake) validate(
 	repositoryRef string,
 	request OutcomeStartRequest,
+) error {
+	return intake.validateAllowLegacyMissingFallback(
+		repositoryRef,
+		request,
+		false,
+	)
+}
+
+func (intake OwnerOutcomeIntake) validateStructure(
+	repositoryRef string,
+	request OutcomeStartRequest,
+) error {
+	return intake.validateAllowLegacyMissingFallback(
+		repositoryRef,
+		request,
+		true,
+	)
+}
+
+func (intake OwnerOutcomeIntake) validateAllowLegacyMissingFallback(
+	repositoryRef string,
+	request OutcomeStartRequest,
+	allowLegacyMissingFallback bool,
 ) error {
 	if !workRunIDPattern.MatchString(intake.WorkRunID) {
 		return errors.New("owner outcome intake returned an invalid work-run identifier")
@@ -142,6 +174,11 @@ func (intake OwnerOutcomeIntake) validate(
 		)
 	}
 	if intake.RoutingFacts.WriteIntent == workrun.WriteIntentNone {
+		if intake.DeclinedSDDFallback != nil {
+			return errors.New(
+				"unmanaged outcome intake cannot provide an SDD decline fallback",
+			)
+		}
 		return workrun.ValidateImplementationRouteInput(intake.RoutingFacts)
 	}
 	if _, err := outcomeScopeDigest(
@@ -151,8 +188,39 @@ func (intake OwnerOutcomeIntake) validate(
 	); err != nil {
 		return err
 	}
-	if _, err := workrun.DecideImplementationRoute(intake.RoutingFacts); err != nil {
+	primary, err := workrun.DecideImplementationRoute(intake.RoutingFacts)
+	if err != nil {
 		return fmt.Errorf("validate owner implementation routing facts: %w", err)
+	}
+	awaitsSDDDecision := primary.Decision == workrun.RouteDecisionProposeSDD &&
+		!request.ExplicitSDDRequested
+	if !awaitsSDDDecision {
+		if intake.DeclinedSDDFallback != nil {
+			return errors.New(
+				"owner outcome intake provided an SDD decline fallback without a pending optional proposal",
+			)
+		}
+		return nil
+	}
+	if intake.DeclinedSDDFallback == nil {
+		if allowLegacyMissingFallback {
+			return nil
+		}
+		return errors.New(
+			"optional SDD proposal requires an owner-authored decline fallback",
+		)
+	}
+	fallback, err := workrun.DecideImplementationRoute(
+		*intake.DeclinedSDDFallback,
+	)
+	if err != nil {
+		return fmt.Errorf("validate owner SDD decline fallback: %w", err)
+	}
+	if fallback.Decision != workrun.RouteDecisionDirectInline &&
+		fallback.Decision != workrun.RouteDecisionDelegatedDirect {
+		return errors.New(
+			"owner SDD decline fallback must select direct or delegated work",
+		)
 	}
 	return nil
 }
@@ -286,6 +354,22 @@ func (service *OutcomeService) StartOutcome(
 			err,
 		)
 	}
+	if err := intake.validateStructure(
+		ownerContext.RepositoryRef,
+		request,
+	); err != nil {
+		return workrun.WorkStatusV1{}, err
+	}
+	if replay, found, err := service.replayLegacySDDStart(
+		ctx,
+		preflight,
+		intake,
+		request,
+	); err != nil {
+		return workrun.WorkStatusV1{}, err
+	} else if found {
+		return replay, nil
+	}
 	if err := intake.validate(ownerContext.RepositoryRef, request); err != nil {
 		return workrun.WorkStatusV1{}, err
 	}
@@ -305,6 +389,10 @@ func (service *OutcomeService) StartOutcome(
 	if err != nil {
 		return workrun.WorkStatusV1{}, err
 	}
+	sddDeclineFallback, err := ownerSDDDeclineFallback(intake, request)
+	if err != nil {
+		return workrun.WorkStatusV1{}, err
+	}
 
 	coordinator, err := service.factory.openWithProductivePreflight(
 		ctx,
@@ -318,6 +406,44 @@ func (service *OutcomeService) StartOutcome(
 	if err != nil {
 		return workrun.WorkStatusV1{}, err
 	}
+	sddDeclineFallbackRef := ""
+	if sddDeclineFallback != nil {
+		published, publishErr :=
+			coordinator.coordination.PublishSDDDeclineFallback(
+				ctx,
+				SDDDeclineFallbackPublication{
+					WorkRunID:             intake.WorkRunID,
+					DeliveryIntentRef:     admission.IntentRef,
+					PendingDecisionDigest: sddDeclineFallback.PendingDecisionDigest,
+					RouteDecision:         sddDeclineFallback.RouteDecision,
+				},
+			)
+		if publishErr != nil {
+			return workrun.WorkStatusV1{}, publishErr
+		}
+		resolved, resolveErr :=
+			coordinator.coordination.ResolveSDDDeclineFallback(
+				ctx,
+				published.AuthorityRef,
+			)
+		if resolveErr != nil {
+			return workrun.WorkStatusV1{}, resolveErr
+		}
+		if resolved.AuthorityRef != published.AuthorityRef ||
+			resolved.RepositoryIdentity !=
+				service.factory.RepositoryRef() ||
+			resolved.WorkRunID != intake.WorkRunID ||
+			resolved.DeliveryIntentRef != admission.IntentRef ||
+			resolved.PendingDecisionDigest !=
+				sddDeclineFallback.PendingDecisionDigest ||
+			resolved.RouteDecision.Digest !=
+				sddDeclineFallback.RouteDecision.Digest {
+			return workrun.WorkStatusV1{}, errors.New(
+				"published SDD decline fallback authority differs from owner intake",
+			)
+		}
+		sddDeclineFallbackRef = published.AuthorityRef
+	}
 	advanceStore, err := openProductiveAdvanceStore(
 		ctx,
 		service.factory.lease,
@@ -329,22 +455,24 @@ func (service *OutcomeService) StartOutcome(
 	if err := advanceStore.publishStartAuthority(
 		ctx,
 		productiveStartAuthority{
-			Schema:            productiveStartAuthoritySchema,
-			RepositoryRef:     service.factory.RepositoryRef(),
-			WorkRunID:         intake.WorkRunID,
-			DeliveryIntentRef: admission.IntentRef,
-			Outcome:           request.Outcome,
-			ScopeDigest:       scopeDigest,
-			BaseRevision:      intake.Destination.ObservedRevision,
-			ScopeSelectors:    selectors,
+			Schema:                productiveStartAuthoritySchema,
+			RepositoryRef:         service.factory.RepositoryRef(),
+			WorkRunID:             intake.WorkRunID,
+			DeliveryIntentRef:     admission.IntentRef,
+			Outcome:               request.Outcome,
+			ScopeDigest:           scopeDigest,
+			BaseRevision:          intake.Destination.ObservedRevision,
+			ScopeSelectors:        selectors,
+			SDDDeclineFallbackRef: sddDeclineFallbackRef,
 		},
 	); err != nil {
 		return workrun.WorkStatusV1{}, err
 	}
 	state, err := coordinator.StartWork(ctx, OwnerStartWorkRequest{
-		DeliveryIntentRef:    admission.IntentRef,
-		RouteInput:           intake.RoutingFacts,
-		ExplicitSDDRequested: request.ExplicitSDDRequested,
+		DeliveryIntentRef:     admission.IntentRef,
+		RouteInput:            intake.RoutingFacts,
+		SDDDeclineFallbackRef: sddDeclineFallbackRef,
+		ExplicitSDDRequested:  request.ExplicitSDDRequested,
 	})
 	if err != nil {
 		return workrun.WorkStatusV1{}, err
@@ -359,6 +487,238 @@ func (service *OutcomeService) StartOutcome(
 		return workrun.WorkStatusV1{}, ErrProviderResultMismatch
 	}
 	return status, nil
+}
+
+// replayLegacySDDStart provides compatibility only after trusted intake has
+// named the exact WorkRun and nonce. It never indexes or deduplicates by
+// caller-authored outcome text, does not promise general START retry, and does
+// not retrofit the immutable v1 START authority. Legacy accept remains valid;
+// decline remains fail-closed because no immutable fallback ref exists.
+func (service *OutcomeService) replayLegacySDDStart(
+	ctx context.Context,
+	preflight ownerProductivePreflight,
+	intake OwnerOutcomeIntake,
+	request OutcomeStartRequest,
+) (workrun.WorkStatusV1, bool, error) {
+	if err := preflight.validate(ctx, service.factory); err != nil {
+		return workrun.WorkStatusV1{}, false, err
+	}
+	store, err := existingProductiveAdvanceStore(
+		preflight.lease,
+		intake.WorkRunID,
+	)
+	if err != nil {
+		return workrun.WorkStatusV1{}, false, err
+	}
+	authority, err := store.startAuthority(ctx)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return workrun.WorkStatusV1{}, false, nil
+		}
+		return workrun.WorkStatusV1{}, false, err
+	}
+	if authority.SDDDeclineFallbackRef != "" {
+		return workrun.WorkStatusV1{}, false, nil
+	}
+	work, err := workrun.OpenWorkRunStoreWithRepositoryIdentityLease(
+		ctx,
+		preflight.lease,
+		intake.WorkRunID,
+	)
+	if err != nil {
+		return workrun.WorkStatusV1{}, false, err
+	}
+	state, err := work.Status()
+	if err != nil {
+		return workrun.WorkStatusV1{}, false, err
+	}
+	if state.RouteDecision.Decision != workrun.RouteDecisionProposeSDD {
+		return workrun.WorkStatusV1{}, false, nil
+	}
+	if err := service.validateLegacySDDStartBinding(
+		ctx,
+		authority,
+		state,
+		intake,
+		request,
+	); err != nil {
+		return workrun.WorkStatusV1{}, false, err
+	}
+	status, err := work.PublicStatus(ctx)
+	if err != nil {
+		return workrun.WorkStatusV1{}, false, err
+	}
+	return status, true, nil
+}
+
+func (service *OutcomeService) validateLegacySDDStartBinding(
+	ctx context.Context,
+	authority productiveStartAuthority,
+	state workrun.WorkRunState,
+	intake OwnerOutcomeIntake,
+	request OutcomeStartRequest,
+) (resultErr error) {
+	selectors, err := canonicalProductiveSelectors(intake.ScopeSelectors)
+	if err != nil {
+		return err
+	}
+	scopeDigest, err := outcomeScopeDigest(
+		service.factory.RepositoryRef(),
+		request.Outcome,
+		selectors,
+	)
+	if err != nil {
+		return err
+	}
+	if !state.Started ||
+		authority.Outcome != request.Outcome ||
+		authority.WorkRunID != intake.WorkRunID ||
+		state.WorkRunID != authority.WorkRunID ||
+		state.DeliveryIntentRef != authority.DeliveryIntentRef ||
+		authority.ScopeDigest != scopeDigest ||
+		!equalProductiveStrings(authority.ScopeSelectors, selectors) ||
+		authority.BaseRevision != intake.Destination.ObservedRevision ||
+		state.RouteDecision.Decision != workrun.RouteDecisionProposeSDD ||
+		state.Handoff != nil ||
+		state.ProductiveBlockerRef != "" ||
+		state.VerificationResultRef != "" ||
+		state.ReviewReceiptRef != "" ||
+		state.DeliveryAuthorizationRef != "" ||
+		state.DeliveryResultRef != "" {
+		return ErrProviderResultMismatch
+	}
+	explicit := state.RouteDecision.ExplicitSDDRequestRef != ""
+	if explicit != request.ExplicitSDDRequested {
+		return ErrProviderResultMismatch
+	}
+	if explicit {
+		if state.ImplementationRoute != workrun.ImplementationRouteSDD ||
+			state.RouteAcceptanceRef !=
+				state.RouteDecision.ExplicitSDDRequestRef {
+			return ErrProviderResultMismatch
+		}
+	} else {
+		primary, err := workrun.DecideImplementationRoute(
+			intake.RoutingFacts,
+		)
+		if err != nil ||
+			primary.Decision != workrun.RouteDecisionProposeSDD ||
+			primary.Digest != state.RouteDecision.Digest ||
+			(state.ImplementationRoute != "" &&
+				state.ImplementationRoute !=
+					workrun.ImplementationRouteSDD) {
+			return ErrProviderResultMismatch
+		}
+	}
+
+	opened, err := service.factory.pad.openRepository(ctx)
+	if err != nil {
+		return err
+	}
+	pad, ok := opened.(ownerPADOutcomeRepository)
+	if !ok {
+		_ = opened.Close()
+		return errors.New(
+			"PAD owner repository does not support legacy START replay",
+		)
+	}
+	defer func() {
+		if closeErr := pad.Close(); resultErr == nil && closeErr != nil {
+			resultErr = fmt.Errorf(
+				"close PAD legacy START replay repository: %w",
+				closeErr,
+			)
+		}
+	}()
+	admitted, err := pad.ResolveAdmittedDecision(
+		ctx,
+		authority.DeliveryIntentRef,
+	)
+	if err != nil {
+		return err
+	}
+	intent := admitted.Decision.Intent
+	if intent.Nonce != intake.Nonce ||
+		intent.ScopeDigest != authority.ScopeDigest ||
+		intent.Destination.RepositoryRef != service.factory.RepositoryRef() ||
+		intent.Destination.TargetRef != intake.Destination.TargetRef ||
+		intent.Destination.ObservedRevision !=
+			intake.Destination.ObservedRevision ||
+		intent.Destination.DefaultBranch != intake.Destination.DefaultBranch ||
+		(intake.Route != "" && intent.Route != intake.Route) {
+		return ErrProviderResultMismatch
+	}
+	replayIntake, err := intake.validateSelectedRoute(
+		intent.Route,
+		intent.RequestedAt,
+	)
+	if err != nil {
+		return err
+	}
+	preimages, err := buildOwnerOutcomePreimages(
+		service.factory.RepositoryRef(),
+		admitted.Decision.Policy,
+		intent,
+		replayIntake,
+	)
+	if err != nil {
+		return err
+	}
+	if _, err := ownerResolvedAdmission(
+		OwnerDeliveryAdmissionRequest{
+			Intent:             preimages.intent,
+			GovernanceRef:      preimages.governanceRef,
+			AuthorityRef:       preimages.authorityRef,
+			SecondAuthorityRef: preimages.secondAuthorityRef,
+		},
+		admitted,
+	); err != nil {
+		return ErrProviderResultMismatch
+	}
+	return nil
+}
+
+func ownerSDDDeclineFallback(
+	intake OwnerOutcomeIntake,
+	request OutcomeStartRequest,
+) (*productiveSDDDeclineFallback, error) {
+	if intake.DeclinedSDDFallback == nil {
+		return nil, nil
+	}
+	if request.ExplicitSDDRequested {
+		return nil, errors.New(
+			"explicit SDD work cannot carry a decline fallback",
+		)
+	}
+	primary, err := workrun.DecideImplementationRoute(intake.RoutingFacts)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"derive pending SDD proposal for decline fallback: %w",
+			err,
+		)
+	}
+	if primary.Decision != workrun.RouteDecisionProposeSDD {
+		return nil, errors.New(
+			"SDD decline fallback does not bind a pending proposal",
+		)
+	}
+	fallback, err := workrun.DecideImplementationRoute(
+		*intake.DeclinedSDDFallback,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"derive owner SDD decline fallback decision: %w",
+			err,
+		)
+	}
+	binding := &productiveSDDDeclineFallback{
+		PendingDecisionDigest: primary.Digest,
+		RouteDecision:         fallback,
+	}
+	if err := validateProductiveSDDDeclineFallback(binding); err != nil {
+		return nil, err
+	}
+	return binding, nil
 }
 
 type ownerPADOutcomeRepository interface {

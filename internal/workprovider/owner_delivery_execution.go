@@ -19,25 +19,18 @@ type ownerBoundDeliveryAuthorization struct {
 	binding deliveryadmission.AuthorizationBinding
 }
 
-// preparePADCandidateBinding derives the reviewed Git tree exclusively from
-// RAR's exact terminal receipt and occupies the local candidate-catalog slot
-// with the connector-issued Git/hosting binding. Legacy composition has
-// neither optional authority and intentionally remains unchanged.
-//
-// The catalog is checked first so a crash after catalog publication but before
-// PAD authorization publication can replay without asking mutable transport
-// state to reconstruct an already-occupied append-only slot.
+// preparePADCandidateBinding re-resolves the reviewed Git tree exclusively
+// from RAR and requires the decision's exact content-addressed candidate
+// record. Productive owner composition never reconstructs that authority from
+// the mutable catalog lookup after the decision exists.
 func (coordinator *OwnerCoordinator) preparePADCandidateBinding(
 	ctx context.Context,
 	decision deliveryadmission.DeliveryDecision,
-) error {
-	return coordinator.preparePADCandidateBindingFor(
+) (PADCandidateAuthority, error) {
+	return coordinator.resolvePADCandidateBinding(
 		ctx,
-		decision.Candidate,
-		decision.Gates.Destination,
-		decision.Gates.Mechanism,
-		decision.ReviewReceiptRef,
-		decision.VerificationResultRef,
+		decision,
+		true,
 	)
 }
 
@@ -48,34 +41,55 @@ func (coordinator *OwnerCoordinator) preparePADCandidateBindingFor(
 	mechanism deliveryadmission.Mechanism,
 	receiptRef string,
 	resultRef string,
-) error {
+) (PADCandidateAuthority, error) {
+	candidateTree, binding, err :=
+		coordinator.resolvePADCandidateBindingProposal(
+			ctx,
+			candidate,
+			destination,
+			mechanism,
+			receiptRef,
+			resultRef,
+		)
+	if err != nil || candidateTree == "" {
+		return PADCandidateAuthority{}, err
+	}
+	return coordinator.publishPADCandidateBinding(
+		ctx,
+		candidateTree,
+		binding,
+	)
+}
+
+// resolvePADCandidateBindingProposal observes and validates the candidate
+// binding without occupying its catalog slot. Callers that must compare a
+// route transition against an existing exact authority can therefore reject a
+// drifted connector response before it poisons the single-assignment index.
+func (coordinator *OwnerCoordinator) resolvePADCandidateBindingProposal(
+	ctx context.Context,
+	candidate deliveryadmission.CandidateBinding,
+	destination deliveryadmission.DestinationBinding,
+	mechanism deliveryadmission.Mechanism,
+	receiptRef string,
+	resultRef string,
+) (string, PADGitBinding, error) {
 	if coordinator.padCandidates == nil &&
 		coordinator.padBindingSource == nil {
-		return nil
+		return "", PADGitBinding{}, nil
 	}
 	if coordinator.padCandidates == nil ||
 		coordinator.padBindingSource == nil {
-		return errors.New(
+		return "", PADGitBinding{}, errors.New(
 			"owner coordinator PAD candidate binding authorities are incomplete",
 		)
 	}
-	authority, err := coordinator.rar.ResolveReceiptResult(
+	candidateTree, err := coordinator.resolveReviewedPADCandidateTree(
 		ctx,
 		receiptRef,
 		resultRef,
 	)
 	if err != nil {
-		return fmt.Errorf("resolve reviewed PAD candidate tree: %w", err)
-	}
-	candidateTree := authority.Receipt.CandidateTree()
-	if candidateTree == "" ||
-		authority.Receipt.ReceiptRef != receiptRef ||
-		authority.Result.ResultRef != resultRef ||
-		authority.Result.Subject.CandidateTree != candidateTree {
-		return fmt.Errorf(
-			"%w: RAR returned a mismatched reviewed candidate tree",
-			deliveryadmission.ErrBindingMismatch,
-		)
+		return "", PADGitBinding{}, err
 	}
 
 	binding, resolveErr := coordinator.padCandidates.ResolvePADGitBinding(
@@ -89,7 +103,7 @@ func (coordinator *OwnerCoordinator) preparePADCandidateBindingFor(
 			resolveErr,
 			ErrPADCandidateCatalogUnavailable,
 		) {
-			return resolveErr
+			return "", PADGitBinding{}, resolveErr
 		}
 		binding, err = coordinator.padBindingSource.ResolvePADGitBinding(
 			ctx,
@@ -98,42 +112,182 @@ func (coordinator *OwnerCoordinator) preparePADCandidateBindingFor(
 			mechanism,
 		)
 		if err != nil {
-			return err
+			return "", PADGitBinding{}, err
 		}
 	}
 	if err := binding.Validate(candidate, destination, mechanism); err != nil {
-		return err
+		return "", PADGitBinding{}, err
 	}
+	return candidateTree, binding, nil
+}
+
+func (coordinator *OwnerCoordinator) publishPADCandidateBinding(
+	ctx context.Context,
+	candidateTree string,
+	binding PADGitBinding,
+) (PADCandidateAuthority, error) {
 	published, err := coordinator.padCandidates.BindCandidate(
 		ctx,
 		candidateTree,
 		binding,
 	)
 	if err != nil {
-		return err
+		return PADCandidateAuthority{}, err
 	}
-	if published != binding {
-		return fmt.Errorf(
+	if published.Binding != binding ||
+		published.CandidateTree != candidateTree {
+		return PADCandidateAuthority{}, fmt.Errorf(
 			"%w: PAD candidate catalog published a mismatched binding",
 			ErrPADCandidateCatalogConflict,
 		)
 	}
-	resolved, err := coordinator.padCandidates.ResolvePADGitBinding(
+	resolved, err := coordinator.padCandidates.ResolveCandidateAuthority(
 		ctx,
-		candidate,
-		destination,
-		mechanism,
+		published.RecordRef,
+		binding.Candidate,
+		binding.Destination,
+		binding.Mechanism,
+		candidateTree,
 	)
 	if err != nil {
-		return err
+		return PADCandidateAuthority{}, err
 	}
-	if resolved != binding {
-		return fmt.Errorf(
+	if resolved != published {
+		return PADCandidateAuthority{}, fmt.Errorf(
 			"%w: PAD candidate catalog resolved a mismatched binding",
 			ErrPADCandidateCatalogCorrupt,
 		)
 	}
-	return nil
+	if err := coordinator.padCandidates.RequireCurrentCandidateAuthority(
+		ctx,
+		resolved,
+	); err != nil {
+		return PADCandidateAuthority{}, err
+	}
+	return resolved, nil
+}
+
+func (coordinator *OwnerCoordinator) resolvePADCandidateBinding(
+	ctx context.Context,
+	decision deliveryadmission.DeliveryDecision,
+	requireCurrent bool,
+) (PADCandidateAuthority, error) {
+	if coordinator.padCandidates == nil {
+		if decision.CandidateAuthorityRef != "" {
+			return PADCandidateAuthority{}, errors.New(
+				"owner coordinator cannot resolve the decision candidate authority",
+			)
+		}
+		return PADCandidateAuthority{}, nil
+	}
+	if decision.CandidateAuthorityRef == "" {
+		if coordinator.padBindingSource == nil {
+			// Historical generic decisions predate the exact candidate anchor.
+			// Recovery may read them, but a productive composition capable of
+			// selecting new bindings must never downgrade to that shape.
+			return PADCandidateAuthority{}, nil
+		}
+		return PADCandidateAuthority{}, fmt.Errorf(
+			"%w: productive delivery decision lacks exact candidate authority",
+			deliveryadmission.ErrBindingMismatch,
+		)
+	}
+	candidateTree, err := coordinator.resolveReviewedPADCandidateTree(
+		ctx,
+		decision.ReviewReceiptRef,
+		decision.VerificationResultRef,
+	)
+	if err != nil {
+		return PADCandidateAuthority{}, err
+	}
+	var resolved PADCandidateAuthority
+	if requireCurrent {
+		resolved, err = coordinator.padCandidates.ResolveCandidateAuthority(
+			ctx,
+			decision.CandidateAuthorityRef,
+			decision.Candidate,
+			decision.Gates.Destination,
+			decision.Gates.Mechanism,
+			candidateTree,
+		)
+	} else {
+		resolved, err =
+			coordinator.padCandidates.resolveCandidateAuthorityReadOnly(
+				ctx,
+				decision.CandidateAuthorityRef,
+				decision.Candidate,
+				decision.Gates.Destination,
+				decision.Gates.Mechanism,
+				candidateTree,
+			)
+	}
+	if err != nil {
+		return PADCandidateAuthority{}, err
+	}
+	if requireCurrent {
+		if err := coordinator.padCandidates.RequireCurrentCandidateAuthority(
+			ctx,
+			resolved,
+		); err != nil {
+			return PADCandidateAuthority{}, err
+		}
+	}
+	return resolved, nil
+}
+
+func (coordinator *OwnerCoordinator) resolveReviewedPADCandidateTree(
+	ctx context.Context,
+	receiptRef string,
+	resultRef string,
+) (string, error) {
+	authority, err := coordinator.rar.ResolveReceiptResult(
+		ctx,
+		receiptRef,
+		resultRef,
+	)
+	if err != nil {
+		return "", fmt.Errorf("resolve reviewed PAD candidate tree: %w", err)
+	}
+	candidateTree := authority.Receipt.CandidateTree()
+	if candidateTree == "" ||
+		authority.Receipt.ReceiptRef != receiptRef ||
+		authority.Result.ResultRef != resultRef ||
+		authority.Result.Subject.CandidateTree != candidateTree {
+		return "", fmt.Errorf(
+			"%w: RAR returned a mismatched reviewed candidate tree",
+			deliveryadmission.ErrBindingMismatch,
+		)
+	}
+	return candidateTree, nil
+}
+
+func (coordinator *OwnerCoordinator) padDeliveryForCandidateAuthority(
+	ctx context.Context,
+	authority PADCandidateAuthority,
+) (*PADDeliveryAdapter, error) {
+	if authority.RecordRef == "" {
+		return coordinator.padDelivery, nil
+	}
+	pinned, err := newPADPinnedCandidateBindingAuthority(
+		ctx,
+		coordinator.padCandidates,
+		authority,
+	)
+	if err != nil {
+		return nil, err
+	}
+	adapter, err := NewPADDeliveryAdapter(
+		ctx,
+		coordinator.padDelivery.authority,
+		pinned,
+		coordinator.padDelivery.git,
+		coordinator.padDelivery.hosting,
+	)
+	if err != nil {
+		return nil, err
+	}
+	adapter.now = coordinator.padDelivery.now
+	return adapter, nil
 }
 
 // ExecuteBoundDelivery performs the one delivery effect already authorized by
@@ -159,7 +313,7 @@ func (coordinator *OwnerCoordinator) ExecuteBoundDelivery(
 	if err != nil {
 		return deliveryadmission.ExecutionResult{}, err
 	}
-	if err := validateOwnerBoundDeliveryState(state); err != nil {
+	if err := validateOwnerBoundDeliveryState(state, false); err != nil {
 		return deliveryadmission.ExecutionResult{}, err
 	}
 
@@ -202,6 +356,30 @@ func (coordinator *OwnerCoordinator) ExecuteBoundDelivery(
 		authorization.binding,
 		coordinator.padDelivery.RepositoryRef(),
 	); err != nil {
+		return deliveryadmission.ExecutionResult{}, err
+	}
+	decision, err := deliveryadmission.ValidateDeliveryDecision(
+		ctx,
+		repository,
+		repository,
+		authorization.binding.DecisionRef,
+	)
+	if err != nil {
+		return deliveryadmission.ExecutionResult{}, err
+	}
+	candidateAuthority, err := coordinator.resolvePADCandidateBinding(
+		ctx,
+		decision,
+		true,
+	)
+	if err != nil {
+		return deliveryadmission.ExecutionResult{}, err
+	}
+	deliveryPort, err := coordinator.padDeliveryForCandidateAuthority(
+		ctx,
+		candidateAuthority,
+	)
+	if err != nil {
 		return deliveryadmission.ExecutionResult{}, err
 	}
 
@@ -264,6 +442,9 @@ func (coordinator *OwnerCoordinator) ExecuteBoundDelivery(
 	if err != nil {
 		return deliveryadmission.ExecutionResult{}, err
 	}
+	if err := validateOwnerBoundDeliveryState(live, false); err != nil {
+		return deliveryadmission.ExecutionResult{}, err
+	}
 	if live.Revision != state.Revision ||
 		live.DeliveryAuthorizationRef != state.DeliveryAuthorizationRef {
 		return deliveryadmission.ExecutionResult{}, fmt.Errorf(
@@ -271,17 +452,35 @@ func (coordinator *OwnerCoordinator) ExecuteBoundDelivery(
 			workrun.ErrWorkRunConcurrentUpdate,
 		)
 	}
+	replayRequest := deliveryadmission.ExecuteDeliveryRequest{
+		AuthorizationRef:  state.DeliveryAuthorizationRef,
+		AuthorizationKind: authorization.kind,
+	}
+	if _, found, replayErr :=
+		deliveryadmission.ReplayAuthorizedDeliveryResult(
+			ctx,
+			repository,
+			repository,
+			coordinator.padDelivery,
+			useStore,
+			replayRequest,
+		); replayErr != nil {
+		// A consumed authorization is recovery-only. In particular, a
+		// post-effect/pre-WorkRun crash must never be reclassified as a fresh
+		// effect and promoted into the ledger.
+		return deliveryadmission.ExecutionResult{}, replayErr
+	} else if found {
+		return deliveryadmission.ExecutionResult{},
+			deliveryadmission.ErrExecutionResultUnavailable
+	}
 	return deliveryadmission.ExecuteAuthorizedDelivery(
 		ctx,
 		repository,
 		repository,
-		coordinator.padDelivery,
-		coordinator.padDelivery,
+		deliveryPort,
+		deliveryPort,
 		useStore,
-		deliveryadmission.ExecuteDeliveryRequest{
-			AuthorizationRef:  state.DeliveryAuthorizationRef,
-			AuthorizationKind: authorization.kind,
-		},
+		replayRequest,
 	)
 }
 
@@ -303,8 +502,23 @@ func (coordinator *OwnerCoordinator) RecoverBoundDelivery(
 	if err != nil {
 		return deliveryadmission.ExecutionResult{}, false, err
 	}
-	if err := validateOwnerBoundDeliveryState(state); err != nil {
+	if err := validateOwnerBoundDeliveryState(state, true); err != nil {
 		return deliveryadmission.ExecutionResult{}, false, err
+	}
+	var anchored workrun.ProductiveExecutionResultAuthority
+	if state.ProductiveExecutionResultRef != "" {
+		anchored, err = coordinator.work.ResolveProductiveExecutionResult(
+			ctx,
+			state.ProductiveExecutionResultRef,
+		)
+		if err != nil {
+			return deliveryadmission.ExecutionResult{}, false,
+				fmt.Errorf(
+					"%w: resolve WorkRun execution result authority: %v",
+					deliveryadmission.ErrExecutionResultCorrupt,
+					err,
+				)
+		}
 	}
 	opened, err := coordinator.pad.openRepository(ctx)
 	if err != nil {
@@ -341,6 +555,25 @@ func (coordinator *OwnerCoordinator) RecoverBoundDelivery(
 	); err != nil {
 		return deliveryadmission.ExecutionResult{}, false, err
 	}
+	decision, err := deliveryadmission.ValidateDeliveryDecision(
+		ctx,
+		repository,
+		repository,
+		authorization.binding.DecisionRef,
+	)
+	if err != nil {
+		return deliveryadmission.ExecutionResult{}, false, err
+	}
+	if _, err := coordinator.resolvePADCandidateBinding(
+		ctx,
+		decision,
+		false,
+	); err != nil {
+		return deliveryadmission.ExecutionResult{}, false, err
+	}
+	// Recovery consumes only the exact terminal result store. The candidate
+	// authority was proved above; no mutable connector, candidate index, Git
+	// probe, or hosting effect is needed to corroborate the stored command.
 	useStore, err := deliveryadmission.OpenDirectoryUseStore(
 		ctx,
 		repository,
@@ -356,23 +589,74 @@ func (coordinator *OwnerCoordinator) RecoverBoundDelivery(
 			err = errors.Join(err, closeErr)
 		}
 	}()
-	return deliveryadmission.ReplayAuthorizedDeliveryResult(
-		ctx,
-		repository,
-		repository,
-		coordinator.padDelivery,
-		useStore,
-		deliveryadmission.ExecuteDeliveryRequest{
-			AuthorizationRef:  state.DeliveryAuthorizationRef,
-			AuthorizationKind: authorization.kind,
-		},
-	)
+	replayed, found, replayErr :=
+		deliveryadmission.ReplayAuthorizedDeliveryResult(
+			ctx,
+			repository,
+			repository,
+			coordinator.padDelivery,
+			useStore,
+			deliveryadmission.ExecuteDeliveryRequest{
+				AuthorizationRef:  state.DeliveryAuthorizationRef,
+				AuthorizationKind: authorization.kind,
+			},
+		)
+	if replayErr != nil {
+		if state.ProductiveExecutionResultRef != "" &&
+			!errors.Is(
+				replayErr,
+				deliveryadmission.ErrExecutionResultCorrupt,
+			) {
+			return deliveryadmission.ExecutionResult{}, false,
+				fmt.Errorf(
+					"%w: PAD result behind WorkRun anchor is unavailable: %v",
+					deliveryadmission.ErrExecutionResultCorrupt,
+					replayErr,
+				)
+		}
+		return deliveryadmission.ExecutionResult{}, false, replayErr
+	}
+	if state.ProductiveExecutionResultRef == "" {
+		if found {
+			return deliveryadmission.ExecutionResult{}, false,
+				deliveryadmission.ErrExecutionResultUnavailable
+		}
+		return deliveryadmission.ExecutionResult{}, false, nil
+	}
+	if !found ||
+		anchored.ResultRef != state.ProductiveExecutionResultRef ||
+		anchored.CommandRef != replayed.CommandRef ||
+		anchored.Execution != replayed {
+		return deliveryadmission.ExecutionResult{}, false,
+			fmt.Errorf(
+				"%w: PAD terminal result differs from WorkRun authority",
+				deliveryadmission.ErrExecutionResultCorrupt,
+			)
+	}
+	// WorkRun is the semantic source. PAD/use replay is consulted only as an
+	// exact byte-for-byte corroboration of that independently anchored fact.
+	return anchored.Execution, true, nil
 }
 
-func validateOwnerBoundDeliveryState(state workrun.WorkRunState) error {
+func validateOwnerBoundDeliveryState(
+	state workrun.WorkRunState,
+	recoveryOnly bool,
+) error {
+	if state.ProductiveBlockerRef != "" && !recoveryOnly {
+		return fmt.Errorf(
+			"%w: productive blocker fences bound delivery execution",
+			workrun.ErrWorkRunInvalidTransition,
+		)
+	}
 	if state.DeliveryAuthorizationRef == "" {
 		return fmt.Errorf(
 			"%w: WorkRun has no bound delivery authorization",
+			workrun.ErrWorkRunInvalidTransition,
+		)
+	}
+	if !recoveryOnly && state.ProductiveExecutionResultRef != "" {
+		return fmt.Errorf(
+			"%w: productive execution result is already anchored",
 			workrun.ErrWorkRunInvalidTransition,
 		)
 	}

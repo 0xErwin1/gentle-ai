@@ -10,7 +10,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/workprovider"
 )
 
-const maximumWorkStartInputBytes = 128 << 10
+// maximumWorkStartInputBytes is only a transport cap. It admits 65,536 Unicode
+// code points even when every scalar uses the largest valid JSON escape (a
+// twelve-byte surrogate pair), plus bounded envelope overhead.
+const maximumWorkStartInputBytes = 12*(64<<10) + 1024
 
 func RunWorkStart(args []string, stdin io.Reader, stdout io.Writer) error {
 	return runWorkStart(

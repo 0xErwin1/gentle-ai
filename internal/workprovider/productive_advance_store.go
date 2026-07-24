@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gentleman-programming/gentle-ai/internal/deliveryadmission"
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
@@ -22,43 +23,74 @@ import (
 
 const (
 	productiveStartAuthoritySchema    = "gentle-ai.productive-start-authority/v1"
-	productiveAdvanceAttemptSchema    = "gentle-ai.productive-advance-attempt/v1"
 	productiveAdvanceDiagnosticSchema = "gentle-ai.productive-advance-diagnostic/v1"
+	productiveExecutionResultSchema   = "gentle-ai.productive-execution-result/v1"
+	productiveReconciliationSchema    = "gentle-ai.productive-reconciliation/v1"
+	productiveHistoricalAdvanceDomain = "gentle-ai.productive-historical-advance-ref/v1"
 	productiveDeliveryResultSchema    = "gentle-ai.productive-delivery-result/v1"
 	productiveDeliveryResultDomain    = "gentle-ai.productive-delivery-result-ref/v1"
 	maximumProductiveAdvanceRecord    = 1 << 20
 )
 
 type productiveStartAuthority struct {
-	Schema            string   `json:"schema"`
-	RepositoryRef     string   `json:"repositoryRef"`
-	WorkRunID         string   `json:"workRunId"`
-	DeliveryIntentRef string   `json:"deliveryIntentRef"`
-	Outcome           string   `json:"outcome"`
-	ScopeDigest       string   `json:"scopeDigest"`
-	BaseRevision      string   `json:"baseRevision"`
-	ScopeSelectors    []string `json:"scopeSelectors"`
+	Schema                string   `json:"schema"`
+	RepositoryRef         string   `json:"repositoryRef"`
+	WorkRunID             string   `json:"workRunId"`
+	DeliveryIntentRef     string   `json:"deliveryIntentRef"`
+	Outcome               string   `json:"outcome"`
+	ScopeDigest           string   `json:"scopeDigest"`
+	BaseRevision          string   `json:"baseRevision"`
+	ScopeSelectors        []string `json:"scopeSelectors"`
+	SDDDeclineFallbackRef string   `json:"sddDeclineFallbackRef,omitempty"`
+	// SDDDeclineFallback is retained only so pre-authority START records can
+	// still be read and replayed. New publications must leave it empty.
+	SDDDeclineFallback *productiveSDDDeclineFallback `json:"sddDeclineFallback,omitempty"`
+}
+
+// productiveSDDDeclineFallback is the historical inline representation and a
+// transient pre-publication value for new START. Once read from legacy START
+// it is never mutation authority; only the WorkRun-anchored coordination ref
+// can authorize decline_sdd.
+type productiveSDDDeclineFallback struct {
+	PendingDecisionDigest string                              `json:"pendingDecisionDigest"`
+	RouteDecision         workrun.ImplementationRouteDecision `json:"routeDecision"`
 }
 
 type productiveAdvanceDiagnostic struct {
-	Schema                   string                            `json:"schema"`
-	RepositoryRef            string                            `json:"repositoryRef"`
-	WorkRunID                string                            `json:"workRunId"`
-	WorkRevision             string                            `json:"workRevision"`
-	DeliveryIntentRef        string                            `json:"deliveryIntentRef"`
-	Handoff                  *workrun.ImplementationHandoff    `json:"handoff,omitempty"`
-	VerificationResultRef    string                            `json:"verificationResultRef,omitempty"`
-	ReviewReceiptRef         string                            `json:"reviewReceiptRef,omitempty"`
-	DeliveryAuthorizationRef string                            `json:"deliveryAuthorizationRef,omitempty"`
-	Code                     workrun.WorkAdvanceDiagnosticCode `json:"code"`
-	Message                  string                            `json:"message"`
+	Schema                       string                                  `json:"schema"`
+	RepositoryRef                string                                  `json:"repositoryRef"`
+	WorkRunID                    string                                  `json:"workRunId"`
+	AdvanceExpectedRevision      string                                  `json:"advanceExpectedRevision,omitempty"`
+	WorkRevision                 string                                  `json:"workRevision"`
+	DeliveryIntentRef            string                                  `json:"deliveryIntentRef"`
+	Handoff                      *workrun.ImplementationHandoff          `json:"handoff,omitempty"`
+	VerificationResultRef        string                                  `json:"verificationResultRef,omitempty"`
+	ReviewReceiptRef             string                                  `json:"reviewReceiptRef,omitempty"`
+	DeliveryAuthorizationRef     string                                  `json:"deliveryAuthorizationRef,omitempty"`
+	ProductiveExecutionResultRef string                                  `json:"productiveExecutionResultRef,omitempty"`
+	Code                         workrun.WorkAdvanceDiagnosticCode       `json:"code"`
+	Message                      string                                  `json:"message"`
+	NextAction                   workrun.WorkAdvanceDiagnosticNextAction `json:"nextAction"`
 }
 
-type productiveAdvanceAttempt struct {
-	Schema           string `json:"schema"`
-	RepositoryRef    string `json:"repositoryRef"`
-	WorkRunID        string `json:"workRunId"`
-	ExpectedRevision string `json:"expectedRevision"`
+type productiveReconciliation struct {
+	Schema                       string                           `json:"schema"`
+	RepositoryRef                string                           `json:"repositoryRef"`
+	WorkRunID                    string                           `json:"workRunId"`
+	SourceRevision               string                           `json:"sourceRevision"`
+	AdvanceSourceRevision        string                           `json:"advanceSourceRevision"`
+	OriginalDiagnosticRef        string                           `json:"originalDiagnosticRef"`
+	HistoricalAdvanceRef         string                           `json:"historicalAdvanceRef"`
+	HistoricalAdvance            workrun.WorkAdvanceV1            `json:"historicalAdvance"`
+	DeliveryIntentRef            string                           `json:"deliveryIntentRef"`
+	Handoff                      *workrun.ImplementationHandoff   `json:"handoff,omitempty"`
+	VerificationResultRef        string                           `json:"verificationResultRef,omitempty"`
+	ReviewReceiptRef             string                           `json:"reviewReceiptRef,omitempty"`
+	DeliveryAuthorizationRef     string                           `json:"deliveryAuthorizationRef,omitempty"`
+	ProductiveExecutionResultRef string                           `json:"productiveExecutionResultRef,omitempty"`
+	Outcome                      workrun.WorkReconcileOutcome     `json:"outcome"`
+	Diagnostic                   *workrun.WorkAdvanceDiagnosticV1 `json:"diagnostic,omitempty"`
+	DeliveryResultRef            string                           `json:"deliveryResultRef,omitempty"`
 }
 
 type productiveAdvanceDecision struct {
@@ -74,12 +106,28 @@ type productiveDeliveryResultRecord struct {
 	RepositoryRef         string                            `json:"repositoryRef"`
 	WorkRunID             string                            `json:"workRunId"`
 	ResultRef             string                            `json:"resultRef"`
+	ExecutionResultRef    string                            `json:"executionResultRef"`
 	AuthorizationRef      string                            `json:"authorizationRef"`
 	DeliveryIntentRef     string                            `json:"deliveryIntentRef"`
 	CandidateRef          string                            `json:"candidateRef"`
 	ReviewReceiptRef      string                            `json:"reviewReceiptRef"`
 	VerificationResultRef string                            `json:"verificationResultRef"`
 	Execution             deliveryadmission.ExecutionResult `json:"execution"`
+}
+
+type productiveExecutionResultRecord struct {
+	Schema                   string                            `json:"schema"`
+	RepositoryRef            string                            `json:"repositoryRef"`
+	WorkRunID                string                            `json:"workRunId"`
+	ResultRef                string                            `json:"resultRef"`
+	SourceRevision           string                            `json:"sourceRevision"`
+	DeliveryIntentRef        string                            `json:"deliveryIntentRef"`
+	Handoff                  *workrun.ImplementationHandoff    `json:"handoff"`
+	VerificationResultRef    string                            `json:"verificationResultRef"`
+	ReviewReceiptRef         string                            `json:"reviewReceiptRef"`
+	DeliveryAuthorizationRef string                            `json:"deliveryAuthorizationRef"`
+	CommandRef               string                            `json:"commandRef"`
+	Execution                deliveryadmission.ExecutionResult `json:"execution"`
 }
 
 type productiveAdvanceStore struct {
@@ -163,7 +211,8 @@ func (store productiveAdvanceStore) publishStartAuthority(
 		!validPADImmutableRef(authority.DeliveryIntentRef) ||
 		(OutcomeStartRequest{Outcome: authority.Outcome}).validate() != nil ||
 		!validPADImmutableRef(authority.ScopeDigest) ||
-		validateOwnerOutcomeToken("base revision", authority.BaseRevision) != nil {
+		validateOwnerOutcomeToken("base revision", authority.BaseRevision) != nil ||
+		validatePublishedProductiveSDDDeclineFallback(authority) != nil {
 		return errors.New("productive start authority is invalid")
 	}
 	return store.publishJSON(ctx, "start-authority.json", authority)
@@ -185,7 +234,8 @@ func (store productiveAdvanceStore) startAuthority(
 		!validPADImmutableRef(authority.DeliveryIntentRef) ||
 		(OutcomeStartRequest{Outcome: authority.Outcome}).validate() != nil ||
 		!validPADImmutableRef(authority.ScopeDigest) ||
-		validateOwnerOutcomeToken("base revision", authority.BaseRevision) != nil {
+		validateOwnerOutcomeToken("base revision", authority.BaseRevision) != nil ||
+		validateStoredProductiveSDDDeclineFallback(authority) != nil {
 		return productiveStartAuthority{}, errors.New(
 			"productive start authority is corrupt",
 		)
@@ -193,13 +243,86 @@ func (store productiveAdvanceStore) startAuthority(
 	return authority, nil
 }
 
+func validateProductiveSDDDeclineFallback(
+	fallback *productiveSDDDeclineFallback,
+) error {
+	if fallback == nil {
+		return nil
+	}
+	if !validPADImmutableRef(fallback.PendingDecisionDigest) {
+		return errors.New(
+			"productive SDD decline fallback has an invalid proposal digest",
+		)
+	}
+	if err := fallback.RouteDecision.Validate(); err != nil {
+		return fmt.Errorf(
+			"validate productive SDD decline fallback decision: %w",
+			err,
+		)
+	}
+	if fallback.RouteDecision.Decision != workrun.RouteDecisionDirectInline &&
+		fallback.RouteDecision.Decision !=
+			workrun.RouteDecisionDelegatedDirect {
+		return errors.New(
+			"productive SDD decline fallback is not direct or delegated",
+		)
+	}
+	return nil
+}
+
+func validatePublishedProductiveSDDDeclineFallback(
+	authority productiveStartAuthority,
+) error {
+	if authority.SDDDeclineFallback != nil {
+		return errors.New(
+			"new productive START authority cannot embed an SDD decline fallback",
+		)
+	}
+	if authority.SDDDeclineFallbackRef != "" &&
+		!validPADImmutableRef(authority.SDDDeclineFallbackRef) {
+		return errors.New(
+			"productive SDD decline fallback ref is invalid",
+		)
+	}
+	return nil
+}
+
+func validateStoredProductiveSDDDeclineFallback(
+	authority productiveStartAuthority,
+) error {
+	if authority.SDDDeclineFallbackRef != "" {
+		if !validPADImmutableRef(authority.SDDDeclineFallbackRef) {
+			return errors.New(
+				"productive SDD decline fallback ref is invalid",
+			)
+		}
+		if authority.SDDDeclineFallback != nil {
+			return errors.New(
+				"productive START authority mixes immutable and legacy SDD decline fallback authority",
+			)
+		}
+		return nil
+	}
+	return validateProductiveSDDDeclineFallback(
+		authority.SDDDeclineFallback,
+	)
+}
+
 func (store productiveAdvanceStore) publishDiagnostic(
 	ctx context.Context,
 	state workrun.WorkRunState,
+	advanceExpectedRevision string,
 	code workrun.WorkAdvanceDiagnosticCode,
+	nextAction workrun.WorkAdvanceDiagnosticNextAction,
 ) (workrun.WorkAdvanceDiagnosticV1, error) {
 	if err := store.validate(ctx); err != nil {
 		return workrun.WorkAdvanceDiagnosticV1{}, err
+	}
+	if !revisionPattern.MatchString(advanceExpectedRevision) ||
+		state.ProductiveAdvanceSourceRevision != advanceExpectedRevision {
+		return workrun.WorkAdvanceDiagnosticV1{}, errors.New(
+			"productive diagnostic requires the anchored advance source",
+		)
 	}
 	message, ok := workrun.WorkAdvanceDiagnosticMessage(code)
 	if !ok {
@@ -208,17 +331,20 @@ func (store productiveAdvanceStore) publishDiagnostic(
 		)
 	}
 	diagnostic := productiveAdvanceDiagnostic{
-		Schema:                   productiveAdvanceDiagnosticSchema,
-		RepositoryRef:            store.lease.Identity().RepositoryRef,
-		WorkRunID:                store.workRunID,
-		WorkRevision:             state.Revision,
-		DeliveryIntentRef:        state.DeliveryIntentRef,
-		Handoff:                  cloneProductiveHandoff(state.Handoff),
-		VerificationResultRef:    state.VerificationResultRef,
-		ReviewReceiptRef:         state.ReviewReceiptRef,
-		DeliveryAuthorizationRef: state.DeliveryAuthorizationRef,
-		Code:                     code,
-		Message:                  message,
+		Schema:                       productiveAdvanceDiagnosticSchema,
+		RepositoryRef:                store.lease.Identity().RepositoryRef,
+		WorkRunID:                    store.workRunID,
+		AdvanceExpectedRevision:      advanceExpectedRevision,
+		WorkRevision:                 state.Revision,
+		DeliveryIntentRef:            state.DeliveryIntentRef,
+		Handoff:                      cloneProductiveHandoff(state.Handoff),
+		VerificationResultRef:        state.VerificationResultRef,
+		ReviewReceiptRef:             state.ReviewReceiptRef,
+		DeliveryAuthorizationRef:     state.DeliveryAuthorizationRef,
+		ProductiveExecutionResultRef: state.ProductiveExecutionResultRef,
+		Code:                         code,
+		Message:                      message,
+		NextAction:                   nextAction,
 	}
 	ref, err := productiveAdvanceDiagnosticReference(diagnostic)
 	if err != nil {
@@ -235,13 +361,14 @@ func (store productiveAdvanceStore) publishDiagnostic(
 	if err != nil {
 		return workrun.WorkAdvanceDiagnosticV1{}, err
 	}
-	if resolved.Code != code || resolved.Message != message {
+	if resolved.Code != code || resolved.Message != message ||
+		resolved.NextAction != nextAction {
 		return workrun.WorkAdvanceDiagnosticV1{}, errors.New(
 			"productive diagnostic durability check failed",
 		)
 	}
 	public := workrun.WorkAdvanceDiagnosticV1{
-		Ref: ref, Code: code, Message: message,
+		Ref: ref, Code: code, Message: message, NextAction: nextAction,
 	}
 	if err := public.Validate(); err != nil {
 		return workrun.WorkAdvanceDiagnosticV1{}, err
@@ -289,19 +416,398 @@ func (store productiveAdvanceStore) ResolveProductiveDiagnostic(
 	}
 	return workrun.ProductiveDiagnosticAuthority{
 		Diagnostic: workrun.WorkAdvanceDiagnosticV1{
-			Ref:     ref,
-			Code:    diagnostic.Code,
-			Message: diagnostic.Message,
+			Ref:        ref,
+			Code:       diagnostic.Code,
+			Message:    diagnostic.Message,
+			NextAction: diagnostic.NextAction,
 		},
-		RepositoryRef:            diagnostic.RepositoryRef,
-		WorkRunID:                diagnostic.WorkRunID,
-		SourceRevision:           diagnostic.WorkRevision,
-		DeliveryIntentRef:        diagnostic.DeliveryIntentRef,
-		Handoff:                  cloneProductiveHandoff(diagnostic.Handoff),
-		VerificationResultRef:    diagnostic.VerificationResultRef,
-		ReviewReceiptRef:         diagnostic.ReviewReceiptRef,
-		DeliveryAuthorizationRef: diagnostic.DeliveryAuthorizationRef,
+		RepositoryRef:                diagnostic.RepositoryRef,
+		WorkRunID:                    diagnostic.WorkRunID,
+		SourceRevision:               diagnostic.WorkRevision,
+		DeliveryIntentRef:            diagnostic.DeliveryIntentRef,
+		Handoff:                      cloneProductiveHandoff(diagnostic.Handoff),
+		VerificationResultRef:        diagnostic.VerificationResultRef,
+		ReviewReceiptRef:             diagnostic.ReviewReceiptRef,
+		DeliveryAuthorizationRef:     diagnostic.DeliveryAuthorizationRef,
+		ProductiveExecutionResultRef: diagnostic.ProductiveExecutionResultRef,
 	}, nil
+}
+
+func (store productiveAdvanceStore) publishReconciliation(
+	ctx context.Context,
+	state workrun.WorkRunState,
+	originalDiagnosticRef string,
+	historicalAdvance workrun.WorkAdvanceV1,
+	outcome workrun.WorkReconcileOutcome,
+	deliveryResultRef string,
+) (string, *workrun.WorkAdvanceDiagnosticV1, error) {
+	if err := store.validate(ctx); err != nil {
+		return "", nil, err
+	}
+	if state.ProductiveBlockerRef != originalDiagnosticRef ||
+		state.ProductiveReconciliationRef != "" ||
+		state.DeliveryResultRef != "" {
+		return "", nil, errors.New(
+			"productive reconciliation does not bind the terminal WorkRun",
+		)
+	}
+	historicalAdvanceRef, err := productiveHistoricalAdvanceReference(
+		historicalAdvance,
+	)
+	if err != nil {
+		return "", nil, err
+	}
+	record := productiveReconciliation{
+		Schema:                       productiveReconciliationSchema,
+		RepositoryRef:                store.lease.Identity().RepositoryRef,
+		WorkRunID:                    store.workRunID,
+		SourceRevision:               state.Revision,
+		AdvanceSourceRevision:        state.ProductiveAdvanceSourceRevision,
+		OriginalDiagnosticRef:        originalDiagnosticRef,
+		HistoricalAdvanceRef:         historicalAdvanceRef,
+		HistoricalAdvance:            historicalAdvance,
+		DeliveryIntentRef:            state.DeliveryIntentRef,
+		Handoff:                      cloneProductiveHandoff(state.Handoff),
+		VerificationResultRef:        state.VerificationResultRef,
+		ReviewReceiptRef:             state.ReviewReceiptRef,
+		DeliveryAuthorizationRef:     state.DeliveryAuthorizationRef,
+		ProductiveExecutionResultRef: state.ProductiveExecutionResultRef,
+		Outcome:                      outcome,
+		DeliveryResultRef:            deliveryResultRef,
+	}
+	switch outcome {
+	case workrun.WorkReconcileDeliveryConfirmed:
+		if !validPADImmutableRef(deliveryResultRef) {
+			return "", nil, errors.New(
+				"confirmed productive reconciliation requires a delivery result",
+			)
+		}
+	case workrun.WorkReconcileNoDeliveryConfirmed:
+		diagnostic, err := productiveReconciliationDiagnostic(
+			record,
+			workrun.WorkAdvanceDiagnosticDeliveryNotCompleted,
+			workrun.WorkAdvanceNextActionStartFresh,
+		)
+		if err != nil {
+			return "", nil, err
+		}
+		record.Diagnostic = &diagnostic
+	case workrun.WorkReconcileManualResolution:
+		diagnostic, err := productiveReconciliationDiagnostic(
+			record,
+			workrun.WorkAdvanceDiagnosticManualResolutionRequired,
+			workrun.WorkAdvanceNextActionManual,
+		)
+		if err != nil {
+			return "", nil, err
+		}
+		record.Diagnostic = &diagnostic
+	default:
+		return "", nil, fmt.Errorf(
+			"unsupported productive reconciliation outcome %q",
+			outcome,
+		)
+	}
+	ref, err := productiveReconciliationReference(record)
+	if err != nil {
+		return "", nil, err
+	}
+	if err := store.publishJSON(
+		ctx,
+		"reconciliation-"+productiveAdvanceRevisionKey(ref)+".json",
+		record,
+	); err != nil {
+		return "", nil, err
+	}
+	resolved, err := store.resolveReconciliation(ctx, ref)
+	if err != nil {
+		return "", nil, err
+	}
+	if !reflect.DeepEqual(resolved, record) {
+		return "", nil, errors.New(
+			"productive reconciliation durability check failed",
+		)
+	}
+	var diagnostic *workrun.WorkAdvanceDiagnosticV1
+	if record.Diagnostic != nil {
+		value := *record.Diagnostic
+		diagnostic = &value
+	}
+	return ref, diagnostic, nil
+}
+
+func productiveReconciliationDiagnostic(
+	record productiveReconciliation,
+	code workrun.WorkAdvanceDiagnosticCode,
+	nextAction workrun.WorkAdvanceDiagnosticNextAction,
+) (workrun.WorkAdvanceDiagnosticV1, error) {
+	message, ok := workrun.WorkAdvanceDiagnosticMessage(code)
+	if !ok {
+		return workrun.WorkAdvanceDiagnosticV1{}, errors.New(
+			"productive reconciliation diagnostic code is unsupported",
+		)
+	}
+	preimage := struct {
+		Schema                       string                                  `json:"schema"`
+		RepositoryRef                string                                  `json:"repositoryRef"`
+		WorkRunID                    string                                  `json:"workRunId"`
+		SourceRevision               string                                  `json:"sourceRevision"`
+		OriginalDiagnosticRef        string                                  `json:"originalDiagnosticRef"`
+		ProductiveExecutionResultRef string                                  `json:"productiveExecutionResultRef,omitempty"`
+		Outcome                      workrun.WorkReconcileOutcome            `json:"outcome"`
+		Code                         workrun.WorkAdvanceDiagnosticCode       `json:"code"`
+		Message                      string                                  `json:"message"`
+		NextAction                   workrun.WorkAdvanceDiagnosticNextAction `json:"nextAction"`
+	}{
+		Schema:        "gentle-ai.productive-reconciliation-diagnostic-ref/v1",
+		RepositoryRef: record.RepositoryRef, WorkRunID: record.WorkRunID,
+		SourceRevision:               record.SourceRevision,
+		OriginalDiagnosticRef:        record.OriginalDiagnosticRef,
+		ProductiveExecutionResultRef: record.ProductiveExecutionResultRef,
+		Outcome:                      record.Outcome, Code: code, Message: message,
+		NextAction: nextAction,
+	}
+	payload, err := json.Marshal(preimage)
+	if err != nil {
+		return workrun.WorkAdvanceDiagnosticV1{}, err
+	}
+	diagnostic := workrun.WorkAdvanceDiagnosticV1{
+		Ref:        productiveAdvanceSHA256(payload),
+		Code:       code,
+		Message:    message,
+		NextAction: nextAction,
+	}
+	if err := diagnostic.Validate(); err != nil {
+		return workrun.WorkAdvanceDiagnosticV1{}, err
+	}
+	return diagnostic, nil
+}
+
+func (store productiveAdvanceStore) resolveReconciliation(
+	ctx context.Context,
+	ref string,
+) (productiveReconciliation, error) {
+	if !validPADImmutableRef(ref) {
+		return productiveReconciliation{}, errors.New(
+			"productive reconciliation reference is invalid",
+		)
+	}
+	var record productiveReconciliation
+	if err := store.readJSON(
+		ctx,
+		"reconciliation-"+productiveAdvanceRevisionKey(ref)+".json",
+		&record,
+	); err != nil {
+		return productiveReconciliation{}, err
+	}
+	computed, err := productiveReconciliationReference(record)
+	if err != nil ||
+		record.RepositoryRef != store.lease.Identity().RepositoryRef ||
+		record.WorkRunID != store.workRunID ||
+		computed != ref {
+		return productiveReconciliation{}, errors.New(
+			"productive reconciliation record is corrupt",
+		)
+	}
+	return record, nil
+}
+
+func (store productiveAdvanceStore) ResolveProductiveReconciliation(
+	ctx context.Context,
+	ref string,
+) (workrun.ProductiveReconciliationAuthority, error) {
+	record, err := store.resolveReconciliation(ctx, ref)
+	if err != nil {
+		return workrun.ProductiveReconciliationAuthority{}, err
+	}
+	return productiveReconciliationAuthority(record, ref), nil
+}
+
+func productiveReconciliationAuthority(
+	record productiveReconciliation,
+	ref string,
+) workrun.ProductiveReconciliationAuthority {
+	var diagnostic *workrun.WorkAdvanceDiagnosticV1
+	if record.Diagnostic != nil {
+		value := *record.Diagnostic
+		diagnostic = &value
+	}
+	return workrun.ProductiveReconciliationAuthority{
+		ReconciliationRef:            ref,
+		RepositoryRef:                record.RepositoryRef,
+		WorkRunID:                    record.WorkRunID,
+		SourceRevision:               record.SourceRevision,
+		AdvanceSourceRevision:        record.AdvanceSourceRevision,
+		OriginalDiagnosticRef:        record.OriginalDiagnosticRef,
+		HistoricalAdvanceRef:         record.HistoricalAdvanceRef,
+		DeliveryIntentRef:            record.DeliveryIntentRef,
+		Handoff:                      cloneProductiveHandoff(record.Handoff),
+		VerificationResultRef:        record.VerificationResultRef,
+		ReviewReceiptRef:             record.ReviewReceiptRef,
+		DeliveryAuthorizationRef:     record.DeliveryAuthorizationRef,
+		ProductiveExecutionResultRef: record.ProductiveExecutionResultRef,
+		Outcome:                      record.Outcome,
+		Diagnostic:                   diagnostic,
+		DeliveryResultRef:            record.DeliveryResultRef,
+	}
+}
+
+func productiveReconciliationReference(
+	record productiveReconciliation,
+) (string, error) {
+	if record.Schema != productiveReconciliationSchema ||
+		!validPADImmutableRef(record.RepositoryRef) ||
+		!workRunIDPattern.MatchString(record.WorkRunID) ||
+		!revisionPattern.MatchString(record.SourceRevision) ||
+		!revisionPattern.MatchString(record.AdvanceSourceRevision) ||
+		!validPADImmutableRef(record.OriginalDiagnosticRef) ||
+		!validPADImmutableRef(record.HistoricalAdvanceRef) ||
+		!validPADImmutableRef(record.DeliveryIntentRef) {
+		return "", errors.New("productive reconciliation is invalid")
+	}
+	if err := validateProductiveHistoricalAdvance(record); err != nil {
+		return "", err
+	}
+	if record.Handoff != nil {
+		if err := record.Handoff.Validate(); err != nil {
+			return "", err
+		}
+	}
+	for _, ref := range []string{
+		record.VerificationResultRef,
+		record.ReviewReceiptRef,
+		record.DeliveryAuthorizationRef,
+		record.ProductiveExecutionResultRef,
+	} {
+		if ref != "" && !validPADImmutableRef(ref) {
+			return "", errors.New(
+				"productive reconciliation stage reference is invalid",
+			)
+		}
+	}
+	switch record.Outcome {
+	case workrun.WorkReconcileDeliveryConfirmed:
+		if record.Diagnostic != nil ||
+			!validPADImmutableRef(
+				record.ProductiveExecutionResultRef,
+			) ||
+			!validPADImmutableRef(record.DeliveryResultRef) {
+			return "", errors.New(
+				"confirmed productive reconciliation is invalid",
+			)
+		}
+	case workrun.WorkReconcileNoDeliveryConfirmed:
+		if record.Diagnostic == nil ||
+			record.Diagnostic.Code !=
+				workrun.WorkAdvanceDiagnosticDeliveryNotCompleted ||
+			record.Diagnostic.NextAction !=
+				workrun.WorkAdvanceNextActionStartFresh ||
+			record.DeliveryResultRef != "" {
+			return "", errors.New(
+				"no-delivery productive reconciliation is invalid",
+			)
+		}
+	case workrun.WorkReconcileManualResolution:
+		if record.Diagnostic == nil ||
+			record.Diagnostic.Code !=
+				workrun.WorkAdvanceDiagnosticManualResolutionRequired ||
+			record.Diagnostic.NextAction != workrun.WorkAdvanceNextActionManual ||
+			record.DeliveryResultRef != "" {
+			return "", errors.New(
+				"manual productive reconciliation is invalid",
+			)
+		}
+	default:
+		return "", errors.New(
+			"productive reconciliation outcome is unsupported",
+		)
+	}
+	if record.Diagnostic != nil {
+		expected, err := productiveReconciliationDiagnostic(
+			productiveReconciliation{
+				Schema:                       record.Schema,
+				RepositoryRef:                record.RepositoryRef,
+				WorkRunID:                    record.WorkRunID,
+				SourceRevision:               record.SourceRevision,
+				OriginalDiagnosticRef:        record.OriginalDiagnosticRef,
+				ProductiveExecutionResultRef: record.ProductiveExecutionResultRef,
+				Outcome:                      record.Outcome,
+			},
+			record.Diagnostic.Code,
+			record.Diagnostic.NextAction,
+		)
+		if err != nil || expected != *record.Diagnostic {
+			return "", errors.New(
+				"productive reconciliation diagnostic is invalid",
+			)
+		}
+	}
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return "", err
+	}
+	return productiveAdvanceSHA256(payload), nil
+}
+
+func validateProductiveHistoricalAdvance(
+	record productiveReconciliation,
+) error {
+	advance := record.HistoricalAdvance
+	ref, err := productiveHistoricalAdvanceReference(advance)
+	if err != nil ||
+		ref != record.HistoricalAdvanceRef ||
+		advance.PreviousRevision != record.AdvanceSourceRevision ||
+		advance.Status.WorkRunID != record.WorkRunID ||
+		advance.Status.Revision != record.SourceRevision ||
+		advance.Status.PublicState !=
+			workrun.PublicStateNeedsYourDecision ||
+		advance.Status.AuthorizedTransition != nil ||
+		advance.Status.DeliveryIntentRef != record.DeliveryIntentRef ||
+		advance.Status.ReviewReceiptRef != record.ReviewReceiptRef ||
+		advance.DeliveryResultRef != "" ||
+		advance.Diagnostic == nil ||
+		advance.Diagnostic.Ref != record.OriginalDiagnosticRef ||
+		advance.Status.Diagnostic == nil ||
+		*advance.Status.Diagnostic != *advance.Diagnostic {
+		return errors.New(
+			"productive reconciliation historical advance is invalid",
+		)
+	}
+	switch {
+	case record.VerificationResultRef == "":
+		if len(advance.Status.Verification.ResultRefs) != 0 {
+			return errors.New(
+				"productive reconciliation historical verification is invalid",
+			)
+		}
+	case len(advance.Status.Verification.ResultRefs) != 1 ||
+		advance.Status.Verification.ResultRefs[0] !=
+			record.VerificationResultRef:
+		return errors.New(
+			"productive reconciliation historical verification is invalid",
+		)
+	}
+	return nil
+}
+
+func productiveHistoricalAdvanceReference(
+	advance workrun.WorkAdvanceV1,
+) (string, error) {
+	if err := advance.Validate(); err != nil {
+		return "", err
+	}
+	preimage := struct {
+		Schema  string                `json:"schema"`
+		Advance workrun.WorkAdvanceV1 `json:"advance"`
+	}{
+		Schema:  productiveHistoricalAdvanceDomain,
+		Advance: advance,
+	}
+	payload, err := json.Marshal(preimage)
+	if err != nil {
+		return "", err
+	}
+	return productiveAdvanceSHA256(payload), nil
 }
 
 func (store productiveAdvanceStore) resolveDiagnosticForState(
@@ -316,11 +822,17 @@ func (store productiveAdvanceStore) resolveDiagnosticForState(
 	if state.WorkRunID != store.workRunID ||
 		state.ProductiveBlockerRef != ref ||
 		state.ProductiveBlockerSourceRevision != diagnostic.WorkRevision ||
+		(diagnostic.AdvanceExpectedRevision != "" &&
+			state.ProductiveAdvanceSourceRevision !=
+				diagnostic.AdvanceExpectedRevision) ||
 		state.DeliveryIntentRef != diagnostic.DeliveryIntentRef ||
 		!reflect.DeepEqual(state.Handoff, diagnostic.Handoff) ||
 		state.VerificationResultRef != diagnostic.VerificationResultRef ||
 		state.ReviewReceiptRef != diagnostic.ReviewReceiptRef ||
-		state.DeliveryAuthorizationRef != diagnostic.DeliveryAuthorizationRef {
+		state.DeliveryAuthorizationRef !=
+			diagnostic.DeliveryAuthorizationRef ||
+		state.ProductiveExecutionResultRef !=
+			diagnostic.ProductiveExecutionResultRef {
 		return productiveAdvanceDiagnostic{}, errors.New(
 			"productive diagnostic does not bind the terminal WorkRun stage",
 		)
@@ -334,16 +846,36 @@ func productiveAdvanceDiagnosticReference(
 	if diagnostic.Schema != productiveAdvanceDiagnosticSchema ||
 		!validPADImmutableRef(diagnostic.RepositoryRef) ||
 		!workRunIDPattern.MatchString(diagnostic.WorkRunID) ||
+		(diagnostic.AdvanceExpectedRevision != "" &&
+			!revisionPattern.MatchString(
+				diagnostic.AdvanceExpectedRevision,
+			)) ||
 		!revisionPattern.MatchString(diagnostic.WorkRevision) ||
 		!validPADImmutableRef(diagnostic.DeliveryIntentRef) ||
 		diagnostic.Code == "" ||
 		diagnostic.Message == "" ||
-		strings.ContainsAny(string(diagnostic.Code)+diagnostic.Message, "\x00\r\n") {
+		diagnostic.NextAction == "" ||
+		strings.ContainsAny(
+			string(diagnostic.Code)+diagnostic.Message+
+				string(diagnostic.NextAction),
+			"\x00\r\n",
+		) {
 		return "", errors.New("productive diagnostic is invalid")
 	}
 	message, ok := workrun.WorkAdvanceDiagnosticMessage(diagnostic.Code)
-	if !ok || diagnostic.Message != message || len(diagnostic.Message) > 240 {
+	if !ok || diagnostic.Message != message ||
+		!utf8.ValidString(diagnostic.Message) ||
+		utf8.RuneCountInString(diagnostic.Message) > 240 {
 		return "", errors.New("productive diagnostic message is invalid")
+	}
+	public := workrun.WorkAdvanceDiagnosticV1{
+		Ref:        productiveAdvanceSHA256([]byte("validation-placeholder")),
+		Code:       diagnostic.Code,
+		Message:    diagnostic.Message,
+		NextAction: diagnostic.NextAction,
+	}
+	if err := public.Validate(); err != nil {
+		return "", err
 	}
 	if diagnostic.Handoff != nil {
 		if err := diagnostic.Handoff.Validate(); err != nil {
@@ -354,6 +886,7 @@ func productiveAdvanceDiagnosticReference(
 		diagnostic.VerificationResultRef,
 		diagnostic.ReviewReceiptRef,
 		diagnostic.DeliveryAuthorizationRef,
+		diagnostic.ProductiveExecutionResultRef,
 	} {
 		if ref != "" && !validPADImmutableRef(ref) {
 			return "", errors.New(
@@ -396,42 +929,6 @@ func cloneProductiveHandoff(
 	return &clone
 }
 
-func (store productiveAdvanceStore) beginAttempt(
-	ctx context.Context,
-	expectedRevision string,
-) error {
-	if !revisionPattern.MatchString(expectedRevision) {
-		return errors.New("productive advance expected revision is invalid")
-	}
-	return store.publishJSON(ctx, store.attemptName(expectedRevision), productiveAdvanceAttempt{
-		Schema:           productiveAdvanceAttemptSchema,
-		RepositoryRef:    store.lease.Identity().RepositoryRef,
-		WorkRunID:        store.workRunID,
-		ExpectedRevision: expectedRevision,
-	})
-}
-
-func (store productiveAdvanceStore) attemptExists(
-	ctx context.Context,
-	expectedRevision string,
-) (bool, error) {
-	var attempt productiveAdvanceAttempt
-	err := store.readJSON(ctx, store.attemptName(expectedRevision), &attempt)
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if attempt.Schema != productiveAdvanceAttemptSchema ||
-		attempt.RepositoryRef != store.lease.Identity().RepositoryRef ||
-		attempt.WorkRunID != store.workRunID ||
-		attempt.ExpectedRevision != expectedRevision {
-		return false, errors.New("productive advance attempt is corrupt")
-	}
-	return true, nil
-}
-
 func (store productiveAdvanceStore) publishResult(
 	ctx context.Context,
 	result workrun.WorkAdvanceV1,
@@ -440,6 +937,20 @@ func (store productiveAdvanceStore) publishResult(
 		return err
 	}
 	return store.publishJSON(ctx, store.resultName(result.PreviousRevision), result)
+}
+
+func (store productiveAdvanceStore) publishReconcileResult(
+	ctx context.Context,
+	result workrun.WorkReconcileV1,
+) error {
+	if err := result.Validate(); err != nil {
+		return err
+	}
+	return store.publishJSON(
+		ctx,
+		store.reconcileResultName(result.PreviousRevision),
+		result,
+	)
 }
 
 func (store productiveAdvanceStore) publishDecision(
@@ -490,6 +1001,145 @@ func (store productiveAdvanceStore) decision(
 	return value.DecisionRef, true, nil
 }
 
+// publishProductiveExecutionResult stores the complete PAD terminal result
+// under its raw content identity. WorkRun resolves this authority before
+// journaling ResultRef, so failed and indeterminate outcomes receive the same
+// immutable treatment as successful delivery.
+func (store productiveAdvanceStore) publishProductiveExecutionResult(
+	ctx context.Context,
+	state workrun.WorkRunState,
+	execution deliveryadmission.ExecutionResult,
+) (string, error) {
+	if err := store.validate(ctx); err != nil {
+		return "", err
+	}
+	admitted, err := store.resolveAdmittedDelivery(
+		ctx,
+		state.DeliveryIntentRef,
+	)
+	if err != nil {
+		return "", err
+	}
+	if state.WorkRunID != store.workRunID ||
+		!revisionPattern.MatchString(state.Revision) ||
+		!validPADImmutableRef(state.ProductiveAdvanceSourceRevision) ||
+		state.Handoff == nil ||
+		!validPADImmutableRef(state.DeliveryIntentRef) ||
+		!validPADImmutableRef(state.ReviewReceiptRef) ||
+		!validPADImmutableRef(state.VerificationResultRef) ||
+		!validPADImmutableRef(state.DeliveryAuthorizationRef) ||
+		state.ProductiveExecutionResultRef != "" ||
+		state.ProductiveExecutionResultSourceRevision != "" ||
+		state.ProductiveBlockerRef != "" ||
+		state.ProductiveReconciliationRef != "" ||
+		state.DeliveryResultRef != "" ||
+		!validProductiveTerminalExecutionResult(execution) ||
+		execution.AuthorizationRef != state.DeliveryAuthorizationRef ||
+		execution.Route != admitted.Decision.Route ||
+		execution.Candidate.Ref != "work-run:"+state.WorkRunID ||
+		execution.Candidate.Digest != state.Handoff.CandidateRef {
+		return "", errors.New(
+			"PAD execution result does not bind the productive WorkRun stage",
+		)
+	}
+	resultRef, err := padDeliveryCanonicalValueRef(execution)
+	if err != nil {
+		return "", err
+	}
+	record := productiveExecutionResultRecord{
+		Schema:                   productiveExecutionResultSchema,
+		RepositoryRef:            store.lease.Identity().RepositoryRef,
+		WorkRunID:                state.WorkRunID,
+		ResultRef:                resultRef,
+		SourceRevision:           state.Revision,
+		DeliveryIntentRef:        state.DeliveryIntentRef,
+		Handoff:                  cloneProductiveHandoff(state.Handoff),
+		VerificationResultRef:    state.VerificationResultRef,
+		ReviewReceiptRef:         state.ReviewReceiptRef,
+		DeliveryAuthorizationRef: state.DeliveryAuthorizationRef,
+		CommandRef:               execution.CommandRef,
+		Execution:                execution,
+	}
+	if err := store.publishJSON(
+		ctx,
+		"execution-result-"+productiveAdvanceRevisionKey(resultRef)+".json",
+		record,
+	); err != nil {
+		return "", err
+	}
+	resolved, err := store.ResolveProductiveExecutionResult(ctx, resultRef)
+	if err != nil {
+		return "", err
+	}
+	if resolved.ResultRef != resultRef ||
+		resolved.SourceRevision != state.Revision ||
+		resolved.Execution != execution {
+		return "", errors.New(
+			"productive execution result durability check failed",
+		)
+	}
+	return resultRef, nil
+}
+
+func (store productiveAdvanceStore) ResolveProductiveExecutionResult(
+	ctx context.Context,
+	resultRef string,
+) (workrun.ProductiveExecutionResultAuthority, error) {
+	if !validPADImmutableRef(resultRef) {
+		return workrun.ProductiveExecutionResultAuthority{}, errors.New(
+			"productive execution result reference is invalid",
+		)
+	}
+	var record productiveExecutionResultRecord
+	if err := store.readJSON(
+		ctx,
+		"execution-result-"+productiveAdvanceRevisionKey(resultRef)+".json",
+		&record,
+	); err != nil {
+		return workrun.ProductiveExecutionResultAuthority{}, err
+	}
+	recomputed, err := padDeliveryCanonicalValueRef(record.Execution)
+	if err != nil ||
+		record.Schema != productiveExecutionResultSchema ||
+		record.RepositoryRef != store.lease.Identity().RepositoryRef ||
+		record.WorkRunID != store.workRunID ||
+		record.ResultRef != resultRef ||
+		recomputed != resultRef ||
+		!revisionPattern.MatchString(record.SourceRevision) ||
+		!validPADImmutableRef(record.DeliveryIntentRef) ||
+		record.Handoff == nil ||
+		record.Handoff.Validate() != nil ||
+		!validPADImmutableRef(record.VerificationResultRef) ||
+		!validPADImmutableRef(record.ReviewReceiptRef) ||
+		!validPADImmutableRef(record.DeliveryAuthorizationRef) ||
+		!validPADImmutableRef(record.CommandRef) ||
+		record.Execution.CommandRef != record.CommandRef ||
+		!validProductiveTerminalExecutionResult(record.Execution) ||
+		record.Execution.AuthorizationRef !=
+			record.DeliveryAuthorizationRef ||
+		record.Execution.Candidate.Ref !=
+			"work-run:"+record.WorkRunID ||
+		record.Execution.Candidate.Digest !=
+			record.Handoff.CandidateRef {
+		return workrun.ProductiveExecutionResultAuthority{}, errors.New(
+			"productive execution result record is corrupt",
+		)
+	}
+	return workrun.ProductiveExecutionResultAuthority{
+		ResultRef:                record.ResultRef,
+		RepositoryRef:            record.RepositoryRef,
+		WorkRunID:                record.WorkRunID,
+		SourceRevision:           record.SourceRevision,
+		DeliveryIntentRef:        record.DeliveryIntentRef,
+		Handoff:                  cloneProductiveHandoff(record.Handoff),
+		VerificationResultRef:    record.VerificationResultRef,
+		ReviewReceiptRef:         record.ReviewReceiptRef,
+		DeliveryAuthorizationRef: record.DeliveryAuthorizationRef,
+		CommandRef:               record.CommandRef,
+		Execution:                record.Execution,
+	}, nil
+}
+
 // publishDeliveryResult records an immutable owner index of the already
 // validated PAD ExecutionResult. It is not a caller publication and contains
 // no independently authored outcome.
@@ -507,6 +1157,7 @@ func (store productiveAdvanceStore) publishDeliveryResult(
 	}
 	if state.WorkRunID != store.workRunID ||
 		state.Handoff == nil ||
+		!validPADImmutableRef(state.ProductiveExecutionResultRef) ||
 		!validPADImmutableRef(state.DeliveryIntentRef) ||
 		!validPADImmutableRef(state.ReviewReceiptRef) ||
 		!validPADImmutableRef(state.VerificationResultRef) ||
@@ -524,10 +1175,20 @@ func (store productiveAdvanceStore) publishDeliveryResult(
 			"PAD execution result does not bind the terminal WorkRun",
 		)
 	}
+	executionResultRef, err := padDeliveryCanonicalValueRef(execution)
+	if err != nil {
+		return "", err
+	}
+	if executionResultRef != state.ProductiveExecutionResultRef {
+		return "", errors.New(
+			"PAD delivery result differs from the WorkRun execution anchor",
+		)
+	}
 	record := productiveDeliveryResultRecord{
 		Schema:                productiveDeliveryResultSchema,
 		RepositoryRef:         store.lease.Identity().RepositoryRef,
 		WorkRunID:             state.WorkRunID,
+		ExecutionResultRef:    executionResultRef,
 		AuthorizationRef:      execution.AuthorizationRef,
 		DeliveryIntentRef:     state.DeliveryIntentRef,
 		CandidateRef:          state.Handoff.CandidateRef,
@@ -567,18 +1228,23 @@ func (store productiveAdvanceStore) ResolveDeliveryResult(
 		ctx,
 		record.DeliveryIntentRef,
 	)
+	executionResultRef, executionRefErr :=
+		padDeliveryCanonicalValueRef(record.Execution)
 	if admittedErr != nil ||
+		executionRefErr != nil ||
 		record.Schema != productiveDeliveryResultSchema ||
 		record.RepositoryRef != store.lease.Identity().RepositoryRef ||
 		record.WorkRunID != store.workRunID ||
 		record.ResultRef != resultRef ||
 		productiveDeliveryResultReference(record) != resultRef ||
+		!validPADImmutableRef(record.ExecutionResultRef) ||
 		!validPADImmutableRef(record.AuthorizationRef) ||
 		!validPADImmutableRef(record.DeliveryIntentRef) ||
 		!validPADImmutableRef(record.CandidateRef) ||
 		!validPADImmutableRef(record.ReviewReceiptRef) ||
 		!validPADImmutableRef(record.VerificationResultRef) ||
 		!validProductiveExecutionResult(record.Execution) ||
+		executionResultRef != record.ExecutionResultRef ||
 		record.Execution.AuthorizationRef != record.AuthorizationRef ||
 		record.Execution.Route != admitted.Decision.Route ||
 		record.Execution.Candidate.Ref != "work-run:"+store.workRunID ||
@@ -588,7 +1254,9 @@ func (store productiveAdvanceStore) ResolveDeliveryResult(
 		)
 	}
 	return workrun.DeliveryResultAuthority{
-		ResultRef: record.ResultRef, AuthorizationRef: record.AuthorizationRef,
+		ResultRef:             record.ResultRef,
+		ExecutionResultRef:    record.ExecutionResultRef,
+		AuthorizationRef:      record.AuthorizationRef,
 		DeliveryIntentRef:     record.DeliveryIntentRef,
 		CandidateRef:          record.CandidateRef,
 		ReviewReceiptRef:      record.ReviewReceiptRef,
@@ -654,6 +1322,7 @@ func productiveDeliveryResultReference(
 		Schema                string                            `json:"schema"`
 		RepositoryRef         string                            `json:"repositoryRef"`
 		WorkRunID             string                            `json:"workRunId"`
+		ExecutionResultRef    string                            `json:"executionResultRef"`
 		AuthorizationRef      string                            `json:"authorizationRef"`
 		DeliveryIntentRef     string                            `json:"deliveryIntentRef"`
 		CandidateRef          string                            `json:"candidateRef"`
@@ -664,6 +1333,7 @@ func productiveDeliveryResultReference(
 		Schema:                record.Schema,
 		RepositoryRef:         record.RepositoryRef,
 		WorkRunID:             record.WorkRunID,
+		ExecutionResultRef:    record.ExecutionResultRef,
 		AuthorizationRef:      record.AuthorizationRef,
 		DeliveryIntentRef:     record.DeliveryIntentRef,
 		CandidateRef:          record.CandidateRef,
@@ -688,12 +1358,43 @@ func validProductiveExecutionResult(
 		execution.CompletedAt > 0
 }
 
+func validProductiveTerminalExecutionResult(
+	execution deliveryadmission.ExecutionResult,
+) bool {
+	if execution.Schema !=
+		deliveryadmission.ExecutionResultContractV1 ||
+		!validOutcomeDeliveryRoute(execution.Route) ||
+		!validPADImmutableRef(execution.CommandRef) ||
+		!validPADImmutableRef(execution.AuthorizationRef) ||
+		!validPADCandidateBinding(execution.Candidate) ||
+		!validPADImmutableRef(execution.EvidenceRef) ||
+		execution.CompletedAt <= 0 {
+		return false
+	}
+	switch execution.Outcome {
+	case deliveryadmission.ExecutionSucceeded:
+		return validPADHostingToken(execution.DeliveryRef)
+	case deliveryadmission.ExecutionFailed,
+		deliveryadmission.ExecutionIndeterminate:
+		return execution.DeliveryRef == ""
+	default:
+		return false
+	}
+}
+
 func (store productiveAdvanceStore) result(
 	ctx context.Context,
 	expectedRevision string,
 	state workrun.WorkRunState,
 	status workrun.WorkStatusV1,
 ) (workrun.WorkAdvanceV1, bool, error) {
+	if historical, ok, err := store.reconciledHistoricalResult(
+		ctx,
+		expectedRevision,
+		state,
+	); err != nil || ok {
+		return historical, ok, err
+	}
 	var result workrun.WorkAdvanceV1
 	err := store.readJSON(ctx, store.resultName(expectedRevision), &result)
 	if os.IsNotExist(err) {
@@ -702,11 +1403,12 @@ func (store productiveAdvanceStore) result(
 	if err != nil {
 		return workrun.WorkAdvanceV1{}, false, err
 	}
+	statusMatches := reflect.DeepEqual(result.Status, status)
 	if err := result.Validate(); err != nil ||
 		result.PreviousRevision != expectedRevision ||
 		result.Status.WorkRunID != store.workRunID ||
 		state.WorkRunID != store.workRunID ||
-		!reflect.DeepEqual(result.Status, status) {
+		!statusMatches {
 		return workrun.WorkAdvanceV1{}, false, errors.New(
 			"productive advance result is corrupt",
 		)
@@ -744,7 +1446,8 @@ func (store productiveAdvanceStore) result(
 		)
 		if err != nil ||
 			diagnostic.Code != result.Diagnostic.Code ||
-			diagnostic.Message != result.Diagnostic.Message {
+			diagnostic.Message != result.Diagnostic.Message ||
+			diagnostic.NextAction != result.Diagnostic.NextAction {
 			return workrun.WorkAdvanceV1{}, false, errors.New(
 				"productive advance diagnostic authority is unavailable",
 			)
@@ -757,12 +1460,137 @@ func (store productiveAdvanceStore) result(
 	return result, true, nil
 }
 
-func (store productiveAdvanceStore) attemptName(revision string) string {
-	return "attempt-" + productiveAdvanceRevisionKey(revision) + ".json"
+func (store productiveAdvanceStore) reconciledHistoricalResult(
+	ctx context.Context,
+	expectedRevision string,
+	state workrun.WorkRunState,
+) (workrun.WorkAdvanceV1, bool, error) {
+	if state.ProductiveReconciliationRef == "" ||
+		expectedRevision != state.ProductiveAdvanceSourceRevision {
+		return workrun.WorkAdvanceV1{}, false, nil
+	}
+	record, err := store.resolveReconciliation(
+		ctx,
+		state.ProductiveReconciliationRef,
+	)
+	if err != nil {
+		return workrun.WorkAdvanceV1{}, false, err
+	}
+	authority := productiveReconciliationAuthority(
+		record,
+		state.ProductiveReconciliationRef,
+	)
+	if err := authority.Validate(
+		state.ProductiveReconciliationRef,
+		store.lease.Identity().RepositoryRef,
+		state,
+	); err != nil {
+		return workrun.WorkAdvanceV1{}, false, err
+	}
+	historical := record.HistoricalAdvance
+	if record.AdvanceSourceRevision != expectedRevision ||
+		historical.PreviousRevision != expectedRevision ||
+		historical.Status.Revision !=
+			state.ProductiveReconciliationSourceRevision ||
+		historical.Diagnostic == nil ||
+		historical.Diagnostic.Ref != state.ProductiveBlockerRef {
+		return workrun.WorkAdvanceV1{}, false, errors.New(
+			"productive reconciliation historical advance does not bind the WorkRun",
+		)
+	}
+	var cached workrun.WorkAdvanceV1
+	err = store.readJSON(
+		ctx,
+		store.resultName(expectedRevision),
+		&cached,
+	)
+	switch {
+	case os.IsNotExist(err):
+		if err := store.publishResult(ctx, historical); err != nil {
+			return workrun.WorkAdvanceV1{}, false, err
+		}
+	case err != nil:
+		return workrun.WorkAdvanceV1{}, false, err
+	case !reflect.DeepEqual(cached, historical):
+		return workrun.WorkAdvanceV1{}, false, errors.New(
+			"productive historical advance cache differs from reconciliation authority",
+		)
+	}
+	return historical, true, nil
+}
+
+func (store productiveAdvanceStore) reconcileResult(
+	ctx context.Context,
+	expectedRevision string,
+	diagnosticRef string,
+	state workrun.WorkRunState,
+	status workrun.WorkStatusV1,
+) (workrun.WorkReconcileV1, bool, error) {
+	var result workrun.WorkReconcileV1
+	err := store.readJSON(
+		ctx,
+		store.reconcileResultName(expectedRevision),
+		&result,
+	)
+	if os.IsNotExist(err) {
+		return workrun.WorkReconcileV1{}, false, nil
+	}
+	if err != nil {
+		return workrun.WorkReconcileV1{}, false, err
+	}
+	if err := result.Validate(); err != nil ||
+		result.PreviousRevision != expectedRevision ||
+		result.DiagnosticRef != diagnosticRef ||
+		result.Status.WorkRunID != store.workRunID ||
+		state.WorkRunID != store.workRunID ||
+		state.ProductiveBlockerRef != diagnosticRef ||
+		state.ProductiveReconciliationRef != result.ReconciliationRef ||
+		state.ProductiveReconciliationSourceRevision != expectedRevision ||
+		state.ProductiveReconciliationOutcome != result.Outcome ||
+		!reflect.DeepEqual(result.Status, status) {
+		return workrun.WorkReconcileV1{}, false, errors.New(
+			"productive reconciliation result is corrupt",
+		)
+	}
+	switch result.Outcome {
+	case workrun.WorkReconcileDeliveryConfirmed:
+		if state.DeliveryResultRef != result.DeliveryResultRef {
+			return workrun.WorkReconcileV1{}, false, errors.New(
+				"confirmed reconciliation result is not bound to WorkRun",
+			)
+		}
+	default:
+		if state.DeliveryResultRef != "" {
+			return workrun.WorkReconcileV1{}, false, errors.New(
+				"non-delivery reconciliation unexpectedly binds a result",
+			)
+		}
+	}
+	authority, err := store.ResolveProductiveReconciliation(
+		ctx,
+		result.ReconciliationRef,
+	)
+	if err != nil ||
+		authority.Validate(
+			result.ReconciliationRef,
+			store.lease.Identity().RepositoryRef,
+			state,
+		) != nil {
+		return workrun.WorkReconcileV1{}, false, errors.New(
+			"productive reconciliation authority is unavailable",
+		)
+	}
+	return result, true, nil
 }
 
 func (store productiveAdvanceStore) resultName(revision string) string {
 	return "result-" + productiveAdvanceRevisionKey(revision) + ".json"
+}
+
+func (store productiveAdvanceStore) reconcileResultName(revision string) string {
+	return "reconcile-result-" +
+		productiveAdvanceRevisionKey(revision) +
+		".json"
 }
 
 func productiveAdvanceRevisionKey(revision string) string {

@@ -226,20 +226,21 @@ func putRisk(t *testing.T, repository *trustedRepository, value ResidualRisk) st
 }
 
 type scenario struct {
-	repository    *trustedRepository
-	policy        RoutePolicy
-	policyRef     string
-	authorityRef  string
-	secondRef     string
-	intentRef     string
-	governanceRef string
-	admissionRef  string
-	receiptRef    string
-	resultRef     string
-	gateRef       string
-	decisionRef   string
-	decision      DeliveryDecision
-	verification  reviewtransaction.VerificationResultRef
+	repository            *trustedRepository
+	policy                RoutePolicy
+	policyRef             string
+	authorityRef          string
+	secondRef             string
+	intentRef             string
+	governanceRef         string
+	admissionRef          string
+	receiptRef            string
+	resultRef             string
+	gateRef               string
+	candidateAuthorityRef string
+	decisionRef           string
+	decision              DeliveryDecision
+	verification          reviewtransaction.VerificationResultRef
 }
 
 func newScenario(
@@ -382,13 +383,15 @@ func newScenarioForRepository(
 	}
 	gateRef := mustRef(t, gates)
 	repository.gates[gateRef] = gates
+	candidateAuthorityRef := testDigest("8")
 	repository.now++
 	decision, err := Decide(
 		context.Background(), repository, repository,
 		DeliveryRequest{
 			AdmissionDecisionRef: admissionRef, PolicyRef: policyRef,
 			ReviewReceiptRef: receiptRef, VerificationResultRef: resultRef,
-			GateRef: gateRef, AuthorityRef: authorityRef,
+			CandidateAuthorityRef: candidateAuthorityRef,
+			GateRef:               gateRef, AuthorityRef: authorityRef,
 			SecondAuthorityRef: secondRef,
 		},
 	)
@@ -402,7 +405,8 @@ func newScenarioForRepository(
 		authorityRef: authorityRef, secondRef: secondRef, intentRef: intentRef,
 		governanceRef: governanceRef, admissionRef: admissionRef,
 		receiptRef: receiptRef, resultRef: resultRef, gateRef: gateRef,
-		decisionRef: decisionRef, decision: decision, verification: verification,
+		candidateAuthorityRef: candidateAuthorityRef,
+		decisionRef:           decisionRef, decision: decision, verification: verification,
 	}
 }
 
@@ -704,6 +708,41 @@ func TestExactPreimagesRejectAliasesAndPoisonedLookup(t *testing.T) {
 	_, err = resolvePolicy(context.Background(), current.repository, current.policyRef)
 	if !errors.Is(err, ErrUntrustedPreimage) {
 		t.Fatalf("poisoned preimage error = %v, want ErrUntrustedPreimage", err)
+	}
+}
+
+func TestDeliveryDecisionContentAddressesOptionalCandidateAuthority(
+	t *testing.T,
+) {
+	t.Parallel()
+	current := newScenario(
+		t,
+		RouteDirectMain,
+		reviewtransaction.VerificationAggregateComplete,
+		false,
+		false,
+	)
+	if current.decision.CandidateAuthorityRef !=
+		current.candidateAuthorityRef {
+		t.Fatalf(
+			"candidate authority ref = %q, want %q",
+			current.decision.CandidateAuthorityRef,
+			current.candidateAuthorityRef,
+		)
+	}
+	withoutAuthority := current.decision
+	withoutAuthority.CandidateAuthorityRef = ""
+	if err := withoutAuthority.Validate(); err != nil {
+		t.Fatalf("historical v1 decision without candidate authority: %v", err)
+	}
+	withoutRef := mustRef(t, withoutAuthority)
+	if withoutRef == current.decisionRef {
+		t.Fatal("candidate authority did not contribute to decision content address")
+	}
+	invalid := current.decision
+	invalid.CandidateAuthorityRef = "candidate-authority:alias"
+	if err := invalid.Validate(); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid candidate authority ref = %v", err)
 	}
 }
 

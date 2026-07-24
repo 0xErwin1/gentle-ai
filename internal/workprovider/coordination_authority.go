@@ -20,11 +20,15 @@ const (
 	DispositionAuthorityRecordSchema = "gentle-ai.disposition-authority-record/v1"
 	ExplicitSDDRequestRecordSchema   = "gentle-ai.explicit-sdd-request-record/v1"
 	RouteSelectionRecordSchema       = "gentle-ai.route-selection-record/v1"
+	SDDDeclineFallbackRecordSchema   = "gentle-ai.sdd-decline-fallback-record/v1"
+	SDDBindingIntentRecordSchema     = "gentle-ai.sdd-binding-intent-record/v1"
 
 	forecastAuthorityDigestDomain    = "gentle-ai.forecast-authority-record-digest/v1"
 	dispositionAuthorityDigestDomain = "gentle-ai.disposition-authority-record-digest/v1"
 	explicitSDDRequestDigestDomain   = "gentle-ai.explicit-sdd-request-record-digest/v1"
 	routeSelectionDigestDomain       = "gentle-ai.route-selection-record-digest/v1"
+	sddDeclineFallbackDigestDomain   = "gentle-ai.sdd-decline-fallback-record-digest/v1"
+	sddBindingIntentDigestDomain     = "gentle-ai.sdd-binding-intent-record-digest/v1"
 )
 
 var (
@@ -145,6 +149,47 @@ type RouteSelectionRecord struct {
 	PendingDecisionDigest  string                      `json:"pending_decision_digest"`
 	SelectedRoute          workrun.ImplementationRoute `json:"selected_route"`
 	SelectedDecisionDigest string                      `json:"selected_decision_digest,omitempty"`
+}
+
+// SDDDeclineFallbackPublication binds the owner-authored replacement decision
+// to the exact admitted delivery intent and pending optional SDD proposal. It
+// is published before START and occupies a dedicated single-assignment slot;
+// the later public decline request supplies no part of this authority.
+type SDDDeclineFallbackPublication struct {
+	WorkRunID             string
+	DeliveryIntentRef     string
+	PendingDecisionDigest string
+	RouteDecision         workrun.ImplementationRouteDecision
+}
+
+type SDDDeclineFallbackRecord struct {
+	Schema                string                              `json:"schema"`
+	AuthorityRef          string                              `json:"authority_ref"`
+	RepositoryIdentity    string                              `json:"repository_identity"`
+	WorkRunID             string                              `json:"work_run_id"`
+	DeliveryIntentRef     string                              `json:"delivery_intent_ref"`
+	PendingDecisionDigest string                              `json:"pending_decision_digest"`
+	RouteDecision         workrun.ImplementationRouteDecision `json:"route_decision"`
+}
+
+// SDDBindingIntentPublication single-assigns one native SDD run before its
+// separate ledger is mutated. The slot is keyed by WorkRun plus route
+// acceptance, so a lost response or crash can resume only the original run.
+type SDDBindingIntentPublication struct {
+	WorkRunID          string
+	ExpectedRevision   string
+	RouteAcceptanceRef string
+	RunRef             string
+}
+
+type SDDBindingIntentRecord struct {
+	Schema             string `json:"schema"`
+	AuthorityRef       string `json:"authority_ref"`
+	RepositoryIdentity string `json:"repository_identity"`
+	WorkRunID          string `json:"work_run_id"`
+	ExpectedRevision   string `json:"expected_revision"`
+	RouteAcceptanceRef string `json:"route_acceptance_ref"`
+	RunRef             string `json:"run_ref"`
 }
 
 func newForecastAuthorityRecord(
@@ -582,6 +627,149 @@ func (record RouteSelectionRecord) routeAuthority() workrun.RouteSelectionAuthor
 	}
 }
 
+func newSDDDeclineFallbackRecord(
+	repositoryIdentity string,
+	request SDDDeclineFallbackPublication,
+) (SDDDeclineFallbackRecord, error) {
+	if err := validateCoordinationWorkRunID(request.WorkRunID); err != nil {
+		return SDDDeclineFallbackRecord{}, err
+	}
+	if !validCoordinationRef(request.DeliveryIntentRef) ||
+		!validCoordinationRef(request.PendingDecisionDigest) {
+		return SDDDeclineFallbackRecord{}, errors.New(
+			"SDD decline fallback requires exact delivery and pending decision authority",
+		)
+	}
+	if err := request.RouteDecision.Validate(); err != nil {
+		return SDDDeclineFallbackRecord{}, fmt.Errorf(
+			"validate SDD decline fallback decision: %w",
+			err,
+		)
+	}
+	if request.RouteDecision.Decision != workrun.RouteDecisionDirectInline &&
+		request.RouteDecision.Decision !=
+			workrun.RouteDecisionDelegatedDirect {
+		return SDDDeclineFallbackRecord{}, errors.New(
+			"SDD decline fallback must select direct or delegated work",
+		)
+	}
+	record := SDDDeclineFallbackRecord{
+		Schema:                SDDDeclineFallbackRecordSchema,
+		RepositoryIdentity:    repositoryIdentity,
+		WorkRunID:             request.WorkRunID,
+		DeliveryIntentRef:     request.DeliveryIntentRef,
+		PendingDecisionDigest: request.PendingDecisionDigest,
+		RouteDecision:         request.RouteDecision,
+	}
+	ref, err := sddDeclineFallbackRecordDigest(record)
+	if err != nil {
+		return SDDDeclineFallbackRecord{}, err
+	}
+	record.AuthorityRef = ref
+	if err := record.Validate(); err != nil {
+		return SDDDeclineFallbackRecord{}, err
+	}
+	return record, nil
+}
+
+func (record SDDDeclineFallbackRecord) Validate() error {
+	if record.Schema != SDDDeclineFallbackRecordSchema {
+		return errors.New("unsupported SDD decline fallback record schema")
+	}
+	if err := validateCoordinationRecordIdentity(
+		record.AuthorityRef,
+		record.RepositoryIdentity,
+		record.WorkRunID,
+	); err != nil {
+		return err
+	}
+	if !validCoordinationRef(record.DeliveryIntentRef) ||
+		!validCoordinationRef(record.PendingDecisionDigest) {
+		return errors.New("SDD decline fallback authority binding is invalid")
+	}
+	if err := record.RouteDecision.Validate(); err != nil {
+		return fmt.Errorf("validate SDD decline fallback decision: %w", err)
+	}
+	if record.RouteDecision.Decision != workrun.RouteDecisionDirectInline &&
+		record.RouteDecision.Decision !=
+			workrun.RouteDecisionDelegatedDirect {
+		return errors.New(
+			"SDD decline fallback must select direct or delegated work",
+		)
+	}
+	want, err := sddDeclineFallbackRecordDigest(record)
+	if err != nil {
+		return err
+	}
+	if record.AuthorityRef != want {
+		return errors.New(
+			"SDD decline fallback ref does not match canonical content",
+		)
+	}
+	return nil
+}
+
+func newSDDBindingIntentRecord(
+	repositoryIdentity string,
+	request SDDBindingIntentPublication,
+) (SDDBindingIntentRecord, error) {
+	if err := validateCoordinationWorkRunID(request.WorkRunID); err != nil {
+		return SDDBindingIntentRecord{}, err
+	}
+	if !validCoordinationRef(request.ExpectedRevision) ||
+		!validCoordinationRef(request.RouteAcceptanceRef) ||
+		!validNativeSDDRunRef(request.RunRef) {
+		return SDDBindingIntentRecord{}, errors.New(
+			"SDD binding intent requires exact route authority and a native run",
+		)
+	}
+	record := SDDBindingIntentRecord{
+		Schema:             SDDBindingIntentRecordSchema,
+		RepositoryIdentity: repositoryIdentity,
+		WorkRunID:          request.WorkRunID,
+		ExpectedRevision:   request.ExpectedRevision,
+		RouteAcceptanceRef: request.RouteAcceptanceRef,
+		RunRef:             request.RunRef,
+	}
+	ref, err := sddBindingIntentRecordDigest(record)
+	if err != nil {
+		return SDDBindingIntentRecord{}, err
+	}
+	record.AuthorityRef = ref
+	if err := record.Validate(); err != nil {
+		return SDDBindingIntentRecord{}, err
+	}
+	return record, nil
+}
+
+func (record SDDBindingIntentRecord) Validate() error {
+	if record.Schema != SDDBindingIntentRecordSchema {
+		return errors.New("unsupported SDD binding intent record schema")
+	}
+	if err := validateCoordinationRecordIdentity(
+		record.AuthorityRef,
+		record.RepositoryIdentity,
+		record.WorkRunID,
+	); err != nil {
+		return err
+	}
+	if !validCoordinationRef(record.ExpectedRevision) ||
+		!validCoordinationRef(record.RouteAcceptanceRef) ||
+		!validNativeSDDRunRef(record.RunRef) {
+		return errors.New("SDD binding intent authority is invalid")
+	}
+	want, err := sddBindingIntentRecordDigest(record)
+	if err != nil {
+		return err
+	}
+	if record.AuthorityRef != want {
+		return errors.New(
+			"SDD binding intent ref does not match canonical content",
+		)
+	}
+	return nil
+}
+
 func validateResolvedPlanAuthority(
 	authority reviewtransaction.RARPlanAuthority,
 	repositoryIdentity string,
@@ -681,6 +869,20 @@ func explicitSDDRequestRecordDigest(record ExplicitSDDRequestRecord) (string, er
 func routeSelectionRecordDigest(record RouteSelectionRecord) (string, error) {
 	record.AuthorityRef = ""
 	return coordinationDigest(routeSelectionDigestDomain, record)
+}
+
+func sddDeclineFallbackRecordDigest(
+	record SDDDeclineFallbackRecord,
+) (string, error) {
+	record.AuthorityRef = ""
+	return coordinationDigest(sddDeclineFallbackDigestDomain, record)
+}
+
+func sddBindingIntentRecordDigest(
+	record SDDBindingIntentRecord,
+) (string, error) {
+	record.AuthorityRef = ""
+	return coordinationDigest(sddBindingIntentDigestDomain, record)
 }
 
 func coordinationDigest(domain string, value any) (string, error) {

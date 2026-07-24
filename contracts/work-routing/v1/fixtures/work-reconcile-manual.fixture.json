@@ -1,0 +1,29 @@
+{
+  "schema": "gentle-ai.work-reconcile/v1",
+  "contract": "gentle-ai.work-reconcile/v1",
+  "previousRevision": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "diagnosticRef": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "reconciliationRef": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "outcome": "manual_resolution_required",
+  "status": {
+    "schema": "gentle-ai.work-status/v1",
+    "contract": "gentle-ai.work-status/v1",
+    "workRunId": "organic-recovery",
+    "revision": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "publicState": "needs_your_decision",
+    "routeDecision": "direct_inline",
+    "routePhase": "implementation_selected",
+    "implementationRoute": "direct_inline",
+    "verification": {
+      "outcome": "not_required",
+      "resultRefs": []
+    },
+    "deliveryIntentRef": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "diagnostic": {
+      "ref": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "code": "delivery_manual_resolution_required",
+      "message": "Delivery remains indeterminate after owner reconciliation.",
+      "nextAction": "manual_delivery_resolution_required"
+    }
+  }
+}

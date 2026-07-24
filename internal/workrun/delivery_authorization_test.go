@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -180,6 +181,13 @@ func TestProductiveBlockerAfterLiveAuthorizationIsTerminalAndReplaySafe(
 	if err != nil {
 		t.Fatal(err)
 	}
+	advanceSourceRevision := bound.Revision
+	bound = beginTestProductiveAdvance(
+		t,
+		fixture.store,
+		bound,
+		"post-auth-blocker-begin",
+	)
 	request := RecordProductiveBlockerRequest{
 		ExpectedRevision: bound.Revision,
 		RequestID:        "post-auth-blocker",
@@ -199,7 +207,9 @@ func TestProductiveBlockerAfterLiveAuthorizationIsTerminalAndReplaySafe(
 		t.Fatal(err)
 	}
 	if blocked.ProductiveBlockerRef != request.DiagnosticRef ||
-		blocked.ProductiveBlockerSourceRevision != bound.Revision {
+		blocked.ProductiveBlockerSourceRevision != bound.Revision ||
+		blocked.ProductiveAdvanceSourceRevision !=
+			advanceSourceRevision {
 		t.Fatalf("post-authorization blocker = %#v", blocked)
 	}
 	fixture.authority.mu.Lock()
@@ -257,6 +267,12 @@ func TestProductiveBlockerRequiresExactOwnerAuthorityBeforeMutation(
 	if err != nil {
 		t.Fatal(err)
 	}
+	before = beginTestProductiveAdvance(
+		t,
+		fixture.store,
+		before,
+		"owner-authority-required-begin",
+	)
 	ref := testSHARef("owner-authority-required-diagnostic")
 	request := RecordProductiveBlockerRequest{
 		ExpectedRevision: before.Revision,
@@ -312,6 +328,12 @@ func TestProductiveBlockerReportsCommittedPostPublicationAuthorityFailure(
 	if err != nil {
 		t.Fatal(err)
 	}
+	before = beginTestProductiveAdvance(
+		t,
+		fixture.store,
+		before,
+		"post-publication-authority-failure-begin",
+	)
 	ref := testSHARef("post-publication-authority-failure")
 	port := &failSecondProductiveDiagnosticPort{
 		authority: testProductiveDiagnosticAuthority(
@@ -352,6 +374,138 @@ func TestProductiveBlockerReportsCommittedPostPublicationAuthorityFailure(
 	}
 }
 
+func TestProductiveBlockerWithoutBeginFailsBeforeMutation(
+	t *testing.T,
+) {
+	fixture := newTerminalWorkRunFixture(
+		t,
+		reviewtransaction.VerificationAggregateNotRequired,
+	)
+	ctx := context.Background()
+	before, err := fixture.store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	headPath := filepath.Join(fixture.store.Dir, "HEAD")
+	headBefore, err := os.ReadFile(headPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordsBefore, err := os.ReadDir(
+		filepath.Join(fixture.store.Dir, "records"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := testSHARef("blocker-without-productive-begin")
+	diagnostic := testProductiveDiagnosticAuthority(
+		fixture.store,
+		before,
+		ref,
+	)
+	if err := diagnostic.Validate(
+		ref,
+		fixture.store.RepositoryRef(),
+		before,
+	); !errors.Is(err, ErrAuthorityBindingMismatch) {
+		t.Fatalf("diagnostic without Begin validation = %v", err)
+	}
+	fixture.authority.productiveDiagnostics[ref] = diagnostic
+	candidate := before
+	if err := applyWorkRunRecord(
+		&candidate,
+		workRunRecord{
+			Schema:           workRunRecordSchemaV1,
+			WorkRunID:        before.WorkRunID,
+			PreviousRevision: before.Revision,
+			RequestID:        "apply-blocker-without-begin",
+			RequestDigest:    testSHARef("apply-blocker-without-begin"),
+			Operation:        workOperationBlockProductive,
+			Blocker: &workProductiveBlockerEvent{
+				DiagnosticRef: ref,
+			},
+		},
+	); !errors.Is(err, ErrWorkRunInvalidTransition) {
+		t.Fatalf("blocker record without Begin apply = %v", err)
+	}
+	if candidate.ProductiveBlockerRef != "" {
+		t.Fatalf("invalid blocker apply mutated candidate: %#v", candidate)
+	}
+	if _, err := fixture.store.RecordProductiveBlocker(
+		ctx,
+		RecordProductiveBlockerRequest{
+			ExpectedRevision: before.Revision,
+			RequestID:        "blocker-without-productive-begin",
+			DiagnosticRef:    ref,
+		},
+	); !errors.Is(err, ErrWorkRunInvalidTransition) {
+		t.Fatalf("blocker without Begin error = %v", err)
+	}
+	unchanged, err := fixture.store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	headAfter, err := os.ReadFile(headPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordsAfter, err := os.ReadDir(
+		filepath.Join(fixture.store.Dir, "records"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Revision != before.Revision ||
+		unchanged.ProductiveBlockerRef != "" ||
+		unchanged.ProductiveAdvanceSourceRevision != "" ||
+		string(headAfter) != string(headBefore) ||
+		len(recordsAfter) != len(recordsBefore) {
+		t.Fatalf(
+			"blocker without Begin mutated WorkRun: before=%#v after=%#v records=%d->%d",
+			before,
+			unchanged,
+			len(recordsBefore),
+			len(recordsAfter),
+		)
+	}
+
+	begun := beginTestProductiveAdvance(
+		t,
+		fixture.store,
+		before,
+		"begin-before-productivity-blocker",
+	)
+	fixture.authority.productiveDiagnostics[ref] =
+		testProductiveDiagnosticAuthority(
+			fixture.store,
+			begun,
+			ref,
+		)
+	request := RecordProductiveBlockerRequest{
+		ExpectedRevision: begun.Revision,
+		RequestID:        "blocker-after-productive-begin",
+		DiagnosticRef:    ref,
+	}
+	blocked, err := fixture.store.RecordProductiveBlocker(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := fixture.store.RecordProductiveBlocker(ctx, request)
+	if err != nil {
+		t.Fatalf("exact blocker replay after Begin: %v", err)
+	}
+	if blocked.ProductiveAdvanceSourceRevision != before.Revision ||
+		blocked.ProductiveBlockerSourceRevision != begun.Revision ||
+		replayed.Revision != blocked.Revision {
+		t.Fatalf(
+			"Begin/blocker/replay = begun %#v blocked %#v replayed %#v",
+			begun,
+			blocked,
+			replayed,
+		)
+	}
+}
+
 type failSecondProductiveDiagnosticPort struct {
 	authority ProductiveDiagnosticAuthority
 	calls     int
@@ -368,6 +522,27 @@ func (port *failSecondProductiveDiagnosticPort) ResolveProductiveDiagnostic(
 	return port.authority, nil
 }
 
+func beginTestProductiveAdvance(
+	t *testing.T,
+	store WorkRunStore,
+	state WorkRunState,
+	requestID string,
+) WorkRunState {
+	t.Helper()
+	begun, err := store.BeginProductiveAdvance(
+		context.Background(),
+		BeginProductiveAdvanceRequest{
+			ExpectedRevision: state.Revision,
+			RequestID:        requestID,
+			SourceRevision:   state.Revision,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return begun
+}
+
 func testProductiveDiagnosticAuthority(
 	store WorkRunStore,
 	state WorkRunState,
@@ -378,15 +553,17 @@ func testProductiveDiagnosticAuthority(
 	return ProductiveDiagnosticAuthority{
 		Diagnostic: WorkAdvanceDiagnosticV1{
 			Ref: ref, Code: code, Message: message,
+			NextAction: WorkAdvanceNextActionStartFresh,
 		},
-		RepositoryRef:            store.RepositoryRef(),
-		WorkRunID:                state.WorkRunID,
-		SourceRevision:           state.Revision,
-		DeliveryIntentRef:        state.DeliveryIntentRef,
-		Handoff:                  cloneHandoff(state.Handoff),
-		VerificationResultRef:    state.VerificationResultRef,
-		ReviewReceiptRef:         state.ReviewReceiptRef,
-		DeliveryAuthorizationRef: state.DeliveryAuthorizationRef,
+		RepositoryRef:                store.RepositoryRef(),
+		WorkRunID:                    state.WorkRunID,
+		SourceRevision:               state.Revision,
+		DeliveryIntentRef:            state.DeliveryIntentRef,
+		Handoff:                      cloneHandoff(state.Handoff),
+		VerificationResultRef:        state.VerificationResultRef,
+		ReviewReceiptRef:             state.ReviewReceiptRef,
+		DeliveryAuthorizationRef:     state.DeliveryAuthorizationRef,
+		ProductiveExecutionResultRef: state.ProductiveExecutionResultRef,
 	}
 }
 

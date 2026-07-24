@@ -134,6 +134,7 @@ type DeliveryRequest struct {
 	PolicyRef             string
 	ReviewReceiptRef      string
 	VerificationResultRef string
+	CandidateAuthorityRef string
 	GateRef               string
 	AuthorityRef          string
 	SecondAuthorityRef    string
@@ -147,6 +148,14 @@ func Decide(
 	rar RARAuthorityPort,
 	request DeliveryRequest,
 ) (DeliveryDecision, error) {
+	if request.CandidateAuthorityRef != "" {
+		if err := validateDigest(
+			"delivery candidate authority ref",
+			request.CandidateAuthorityRef,
+		); err != nil {
+			return DeliveryDecision{}, err
+		}
+	}
 	now, err := trustedNow(ctx, resolver)
 	if err != nil {
 		return DeliveryDecision{}, err
@@ -209,6 +218,7 @@ func Decide(
 		ReviewReceiptRef:      request.ReviewReceiptRef,
 		VerificationResultRef: request.VerificationResultRef,
 		Candidate:             gates.Candidate,
+		CandidateAuthorityRef: request.CandidateAuthorityRef,
 		GateRef:               request.GateRef,
 		Gates:                 gates,
 		Disposition:           deliveryDisposition(policy, review.result.Aggregate),

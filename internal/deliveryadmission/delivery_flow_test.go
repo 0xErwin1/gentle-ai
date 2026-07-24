@@ -162,6 +162,20 @@ func (executor *testDeliveryExecutor) ExecuteOnce(
 	return result, nil
 }
 
+func (executor *testDeliveryExecutor) ResolveOnce(
+	_ context.Context,
+	command ExecutionCommand,
+) (ExecutionResult, bool, error) {
+	commandRef, err := command.Ref()
+	if err != nil {
+		return ExecutionResult{}, false, err
+	}
+	executor.mu.Lock()
+	defer executor.mu.Unlock()
+	result, ok := executor.results[commandRef]
+	return result, ok, nil
+}
+
 type testRouteReevaluationRepository struct {
 	*trustedRepository
 	reevaluations map[string]RouteReevaluation
@@ -484,9 +498,10 @@ func TestReevaluateDeliveryRouteReusesContentAndRecomputesGovernance(t *testing.
 	}
 	probe := &testLiveGateProbe{now: source.repository.now}
 	request := RouteReevaluationRequest{
-		SourceDecisionRef:          source.decisionRef,
-		TargetAdmissionDecisionRef: targetAdmissionRef,
-		Mechanism:                  MechanismFastForwardOnly,
+		SourceDecisionRef:           source.decisionRef,
+		TargetAdmissionDecisionRef:  targetAdmissionRef,
+		TargetCandidateAuthorityRef: testDigest("9"),
+		Mechanism:                   MechanismFastForwardOnly,
 	}
 
 	first, err := ReevaluateDeliveryRoute(
@@ -515,6 +530,8 @@ func TestReevaluateDeliveryRouteReusesContentAndRecomputesGovernance(t *testing.
 	decision := repository.decisions[first.DecisionRef]
 	if first.SourceRoute != RoutePRWithIssue || first.TargetRoute != RouteDirectMain ||
 		decision.Candidate != source.decision.Candidate ||
+		decision.CandidateAuthorityRef !=
+			request.TargetCandidateAuthorityRef ||
 		decision.ReviewReceiptRef != source.receiptRef ||
 		decision.VerificationResultRef != source.resultRef ||
 		decision.AdmissionDecisionRef != targetAdmissionRef ||
@@ -524,6 +541,61 @@ func TestReevaluateDeliveryRouteReusesContentAndRecomputesGovernance(t *testing.
 	}
 	if probe.calls.Load() != 2 {
 		t.Fatalf("live governance probes = %d, want 2", probe.calls.Load())
+	}
+}
+
+func TestReevaluateDeliveryRouteCandidateAuthorityCompatibility(t *testing.T) {
+	source := newScenario(
+		t,
+		RoutePRWithIssue,
+		reviewtransaction.VerificationAggregateComplete,
+		false,
+		false,
+	)
+	targetAdmissionRef, _ := addDirectMainTargetAdmission(
+		t,
+		source,
+		source.decision.Gates.Destination,
+		source.decision.AdmissionDecision.Intent.ScopeDigest,
+	)
+	repository := &testRouteReevaluationRepository{
+		trustedRepository: source.repository,
+	}
+	probe := &testLiveGateProbe{now: source.repository.now}
+	_, err := ReevaluateDeliveryRoute(
+		context.Background(),
+		repository,
+		repository,
+		probe,
+		RouteReevaluationRequest{
+			SourceDecisionRef:          source.decisionRef,
+			TargetAdmissionDecisionRef: targetAdmissionRef,
+			Mechanism:                  MechanismFastForwardOnly,
+		},
+	)
+	if !errors.Is(err, ErrBindingMismatch) {
+		t.Fatalf("dropping candidate authority error = %v", err)
+	}
+	if probe.calls.Load() != 0 {
+		t.Fatalf("invalid authority downgrade launched %d probes", probe.calls.Load())
+	}
+
+	legacy := source.decision
+	legacy.CandidateAuthorityRef = ""
+	legacyRef := mustRef(t, legacy)
+	source.repository.decisions[legacyRef] = legacy
+	if _, err := ReevaluateDeliveryRoute(
+		context.Background(),
+		repository,
+		repository,
+		probe,
+		RouteReevaluationRequest{
+			SourceDecisionRef:          legacyRef,
+			TargetAdmissionDecisionRef: targetAdmissionRef,
+			Mechanism:                  MechanismFastForwardOnly,
+		},
+	); err != nil {
+		t.Fatalf("legacy empty-to-empty candidate authority failed: %v", err)
 	}
 }
 
@@ -573,9 +645,10 @@ func TestReevaluateDeliveryRouteRejectsScopeOrDestinationChange(t *testing.T) {
 				repository,
 				probe,
 				RouteReevaluationRequest{
-					SourceDecisionRef:          source.decisionRef,
-					TargetAdmissionDecisionRef: targetAdmissionRef,
-					Mechanism:                  MechanismFastForwardOnly,
+					SourceDecisionRef:           source.decisionRef,
+					TargetAdmissionDecisionRef:  targetAdmissionRef,
+					TargetCandidateAuthorityRef: testDigest("9"),
+					Mechanism:                   MechanismFastForwardOnly,
 				},
 			)
 			if !errors.Is(err, ErrBindingMismatch) {
@@ -690,9 +763,9 @@ func TestExecuteAuthorizedDirectMainReprobesAndReplaysOneEffect(t *testing.T) {
 	if probe.calls.Load() != 1 {
 		t.Fatalf("live probes = %d, want one before first effect", probe.calls.Load())
 	}
-	if executor.calls != 2 || executor.effects != 1 {
+	if executor.calls != 1 || executor.effects != 1 {
 		t.Fatalf(
-			"executor calls/effects = %d/%d, want 2/1",
+			"executor calls/effects = %d/%d, want 1/1",
 			executor.calls,
 			executor.effects,
 		)
@@ -816,15 +889,15 @@ func TestExecuteAuthorizedDeliveryRejectsResumedFirstEffectAfterLiveGateExpiry(
 		store,
 		request,
 	)
-	if !errors.Is(err, ErrExecutionRejected) || !errors.Is(err, ErrExpired) {
+	if !errors.Is(err, ErrExecutionResultUnavailable) {
 		t.Fatalf(
-			"resumed first effect error = %v, want ErrExecutionRejected and ErrExpired",
+			"resumed first effect error = %v, want ErrExecutionResultUnavailable",
 			err,
 		)
 	}
-	if probe.calls.Load() != 1 || executor.calls != 2 || executor.effects != 0 {
+	if probe.calls.Load() != 1 || executor.calls != 1 || executor.effects != 0 {
 		t.Fatalf(
-			"resumed expired probe/executor/effects = %d/%d/%d, want 1/2/0",
+			"resumed expired probe/executor/effects = %d/%d/%d, want 1/1/0",
 			probe.calls.Load(),
 			executor.calls,
 			executor.effects,
@@ -899,15 +972,15 @@ func TestExecuteAuthorizedDeliveryBoundsFirstEffectByAuthorizationExpiry(t *test
 		store,
 		request,
 	)
-	if !errors.Is(err, ErrExecutionRejected) || !errors.Is(err, ErrExpired) {
+	if !errors.Is(err, ErrExecutionResultUnavailable) {
 		t.Fatalf(
-			"resumed first effect error = %v, want ErrExecutionRejected and ErrExpired",
+			"resumed first effect error = %v, want ErrExecutionResultUnavailable",
 			err,
 		)
 	}
-	if probe.calls.Load() != 1 || executor.calls != 2 || executor.effects != 0 {
+	if probe.calls.Load() != 1 || executor.calls != 1 || executor.effects != 0 {
 		t.Fatalf(
-			"authorization-expired probe/executor/effects = %d/%d/%d, want 1/2/0",
+			"authorization-expired probe/executor/effects = %d/%d/%d, want 1/1/0",
 			probe.calls.Load(),
 			executor.calls,
 			executor.effects,
@@ -968,9 +1041,9 @@ func TestExecuteAuthorizedDeliveryReplaysTerminalResultAfterLiveGateExpiry(t *te
 	if second != first {
 		t.Fatalf("terminal replay changed\nfirst:  %#v\nsecond: %#v", first, second)
 	}
-	if probe.calls.Load() != 1 || executor.calls != 2 || executor.effects != 1 {
+	if probe.calls.Load() != 1 || executor.calls != 1 || executor.effects != 1 {
 		t.Fatalf(
-			"terminal replay probe/executor/effects = %d/%d/%d, want 1/2/1",
+			"terminal replay probe/executor/effects = %d/%d/%d, want 1/1/1",
 			probe.calls.Load(),
 			executor.calls,
 			executor.effects,
@@ -1201,12 +1274,11 @@ func TestExecuteAuthorizedDeliveryConcurrentReplayHasOneEffect(t *testing.T) {
 	}
 	executor.mu.Lock()
 	defer executor.mu.Unlock()
-	if executor.effects != 1 || executor.calls != contenders {
+	if executor.effects != 1 || executor.calls != 1 {
 		t.Fatalf(
-			"concurrent executor calls/effects = %d/%d, want %d/1",
+			"concurrent executor calls/effects = %d/%d, want 1/1",
 			executor.calls,
 			executor.effects,
-			contenders,
 		)
 	}
 	if executor.last.LiveGateRef != use.LiveGateRef {

@@ -95,6 +95,44 @@ func (store RuntimeStore) BindWorkRun(
 	workRunID string,
 	routeAcceptanceRef string,
 ) (SDDWorkRunBinding, error) {
+	return store.bindWorkRun(
+		ctx,
+		workRunID,
+		routeAcceptanceRef,
+		nil,
+	)
+}
+
+// BindWorkRunWithIntent runs prepare while holding the native SDD authority
+// lock, after proving that the run exists and is either unbound or exactly
+// bound to this request, but before any new SDD ledger record is committed.
+// It lets a cross-store owner durably single-assign its intent without letting
+// invalid or foreign-bound runs poison that intent.
+func (store RuntimeStore) BindWorkRunWithIntent(
+	ctx context.Context,
+	workRunID string,
+	routeAcceptanceRef string,
+	prepare func(SDDWorkRunBinding) error,
+) (SDDWorkRunBinding, error) {
+	if prepare == nil {
+		return SDDWorkRunBinding{}, errors.New(
+			"SDD WorkRun binding intent callback is required",
+		)
+	}
+	return store.bindWorkRun(
+		ctx,
+		workRunID,
+		routeAcceptanceRef,
+		prepare,
+	)
+}
+
+func (store RuntimeStore) bindWorkRun(
+	ctx context.Context,
+	workRunID string,
+	routeAcceptanceRef string,
+	prepare func(SDDWorkRunBinding) error,
+) (SDDWorkRunBinding, error) {
 	request := bindWorkRunRequest{
 		WorkRunID:          workRunID,
 		RouteAcceptanceRef: routeAcceptanceRef,
@@ -137,6 +175,11 @@ func (store RuntimeStore) BindWorkRun(
 		if *replay.Status.WorkRunBinding != candidate {
 			return SDDWorkRunBinding{}, ErrSDDWorkRunBindingConflict
 		}
+		if prepare != nil {
+			if err := prepare(candidate); err != nil {
+				return SDDWorkRunBinding{}, err
+			}
+		}
 		if err := store.syncReplay(); err != nil {
 			return SDDWorkRunBinding{}, &RuntimePublicationError{
 				Revision: replay.Status.Revision, Committed: true, Cause: err,
@@ -163,6 +206,11 @@ func (store RuntimeStore) BindWorkRun(
 	}
 	if err := validateRuntimeRecordShape(record); err != nil {
 		return SDDWorkRunBinding{}, err
+	}
+	if prepare != nil {
+		if err := prepare(candidate); err != nil {
+			return SDDWorkRunBinding{}, err
+		}
 	}
 	status, err := store.commitRecordLocked(record)
 	if err != nil {

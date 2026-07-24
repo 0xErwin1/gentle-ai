@@ -11,42 +11,95 @@
     "status"
   ],
   "properties": {
-    "schema": {"const": "gentle-ai.work-advance/v1"},
-    "contract": {"const": "gentle-ai.work-advance/v1"},
-    "previousRevision": {"$ref": "#/$defs/revision"},
+    "schema": {
+      "const": "gentle-ai.work-advance/v1"
+    },
+    "contract": {
+      "const": "gentle-ai.work-advance/v1"
+    },
+    "previousRevision": {
+      "$ref": "#/$defs/revision"
+    },
     "status": {
       "allOf": [
-        {"$ref": "work-status.schema.json"},
-        {"not": {"required": ["authorizedTransition"]}}
+        {
+          "$ref": "work-status.schema.json"
+        },
+        {
+          "not": {
+            "required": [
+              "authorizedTransition"
+            ]
+          }
+        }
       ]
     },
-    "deliveryResultRef": {"$ref": "#/$defs/revision"},
-    "diagnostic": {"$ref": "#/$defs/diagnostic"}
+    "deliveryResultRef": {
+      "$ref": "#/$defs/revision"
+    },
+    "diagnostic": {
+      "$ref": "#/$defs/initialDiagnostic"
+    }
   },
   "oneOf": [
     {
-      "required": ["deliveryResultRef"],
-      "not": {"required": ["diagnostic"]},
+      "required": [
+        "deliveryResultRef"
+      ],
+      "not": {
+        "required": [
+          "diagnostic"
+        ]
+      },
       "properties": {
         "status": {
           "allOf": [
-            {"$ref": "work-status.schema.json"},
-            {"properties": {"publicState": {"const": "ready"}}}
+            {
+              "$ref": "work-status.schema.json"
+            },
+            {
+              "properties": {
+                "publicState": {
+                  "const": "ready"
+                }
+              },
+              "not": {
+                "required": [
+                  "diagnostic"
+                ]
+              }
+            }
           ]
         }
       }
     },
     {
-      "required": ["diagnostic"],
-      "not": {"required": ["deliveryResultRef"]},
+      "required": [
+        "diagnostic"
+      ],
+      "not": {
+        "required": [
+          "deliveryResultRef"
+        ]
+      },
       "properties": {
         "status": {
           "allOf": [
-            {"$ref": "work-status.schema.json"},
+            {
+              "$ref": "work-status.schema.json"
+            },
             {
               "properties": {
-                "publicState": {"const": "needs_your_decision"}
-              }
+                "publicState": {
+                  "const": "needs_your_decision"
+                },
+                "diagnostic": {
+                  "$ref": "#/$defs/initialDiagnostic"
+                }
+              },
+              "required": [
+                "diagnostic"
+              ]
             }
           ]
         }
@@ -54,156 +107,28 @@
     }
   ],
   "$defs": {
-    "revision": {
-      "type": "string",
-      "pattern": "^sha256:[0-9a-f]{64}$"
-    },
-    "diagnostic": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["ref", "code", "message"],
-      "properties": {
-        "ref": {"$ref": "#/$defs/revision"},
-        "code": {
-          "type": "string",
-          "enum": [
-            "candidate_base_not_git",
-            "candidate_not_committed",
-            "no_mutation",
-            "candidate_wrong_base",
-            "scope_mismatch",
-            "candidate_changed_during_advance",
-            "verification_applicability_unknown",
-            "complete_verification_plan_required",
-            "review_risk_unknown",
-            "review_lenses_unknown",
-            "complete_review_required",
-            "delivery_decision_unavailable",
-            "delivery_authorization_unavailable",
-            "delivery_authorization_expired",
-            "delivery_conflict",
-            "delivery_effect_failed",
-            "delivery_outcome_indeterminate",
-            "provider_authority_unavailable"
-          ]
-        },
-        "message": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 240,
-          "pattern": "^[^\\x00\\r\\n]+$"
-        }
-      },
-      "oneOf": [
+    "initialDiagnostic": {
+      "allOf": [
         {
-          "properties": {
-            "code": {"const": "candidate_base_not_git"},
-            "message": {"const": "The admitted START base is not an exact Git commit."}
-          }
+          "$ref": "work-advance-diagnostic.schema.json"
         },
         {
           "properties": {
-            "code": {"const": "candidate_not_committed"},
-            "message": {"const": "Commit the candidate and leave the worktree clean before advancing."}
-          }
-        },
-        {
-          "properties": {
-            "code": {"const": "no_mutation"},
-            "message": {"const": "The committed candidate contains no admitted change."}
-          }
-        },
-        {
-          "properties": {
-            "code": {"const": "candidate_wrong_base"},
-            "message": {"const": "The candidate HEAD is not a descendant of the admitted START base."}
-          }
-        },
-        {
-          "properties": {
-            "code": {"const": "scope_mismatch"},
-            "message": {"const": "The committed candidate paths differ from the exact admitted scope."}
-          }
-        },
-        {
-          "properties": {
-            "code": {"const": "candidate_changed_during_advance"},
-            "message": {"const": "The committed candidate changed while the owner was advancing it."}
-          }
-        },
-        {
-          "properties": {
-            "code": {"const": "verification_applicability_unknown"},
-            "message": {"const": "Verification applicability could not be established safely."}
-          }
-        },
-        {
-          "properties": {
-            "code": {"const": "complete_verification_plan_required"},
-            "message": {"const": "This candidate requires a complete verification plan."}
-          }
-        },
-        {
-          "properties": {
-            "code": {"const": "review_risk_unknown"},
-            "message": {"const": "Review risk could not be established safely."}
-          }
-        },
-        {
-          "properties": {
-            "code": {"const": "review_lenses_unknown"},
-            "message": {"const": "Required review lenses could not be established safely."}
-          }
-        },
-        {
-          "properties": {
-            "code": {"const": "complete_review_required"},
-            "message": {"const": "This candidate requires a complete review."}
-          }
-        },
-        {
-          "properties": {
-            "code": {"const": "delivery_decision_unavailable"},
-            "message": {"const": "A delivery decision could not be established safely."}
-          }
-        },
-        {
-          "properties": {
-            "code": {"const": "delivery_authorization_unavailable"},
-            "message": {"const": "A delivery authorization could not be established safely."}
-          }
-        },
-        {
-          "properties": {
-            "code": {"const": "delivery_authorization_expired"},
-            "message": {"const": "The delivery authorization expired before its first effect."}
-          }
-        },
-        {
-          "properties": {
-            "code": {"const": "delivery_conflict"},
-            "message": {"const": "The delivery destination changed or rejected the admitted candidate."}
-          }
-        },
-        {
-          "properties": {
-            "code": {"const": "delivery_effect_failed"},
-            "message": {"const": "The authorized delivery effect completed without delivering the candidate."}
-          }
-        },
-        {
-          "properties": {
-            "code": {"const": "delivery_outcome_indeterminate"},
-            "message": {"const": "The delivery effect may have started, but its terminal outcome is not provable."}
-          }
-        },
-        {
-          "properties": {
-            "code": {"const": "provider_authority_unavailable"},
-            "message": {"const": "Required owner authority is unavailable; no additional effect was started."}
+            "code": {
+              "not": {
+                "enum": [
+                  "delivery_not_completed",
+                  "delivery_manual_resolution_required"
+                ]
+              }
+            }
           }
         }
       ]
+    },
+    "revision": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
     }
   }
 }

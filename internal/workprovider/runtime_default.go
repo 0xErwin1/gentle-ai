@@ -342,7 +342,9 @@ func (runtimeOutcome *productiveRuntimeOutcome) Capabilities(
 		},
 		Contracts: RuntimeContractSetV1{
 			Start:      workrun.WorkStartContractV1,
+			Route:      workrun.WorkRouteContractV1,
 			Advance:    workrun.WorkAdvanceContractV1,
+			Reconcile:  workrun.WorkReconcileContractV1,
 			Status:     workrun.WorkStatusContractV1,
 			Transition: workrun.WorkTransitionContractV1,
 		},

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
@@ -26,6 +28,7 @@ var (
 var (
 	workRunIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 	revisionPattern  = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	sddRunRefPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
 )
 
 // AuthorizationClass is owner metadata resolved from immutable provider
@@ -167,12 +170,16 @@ func (controller Controller) Status(
 	ctx context.Context,
 	request StatusRequest,
 ) (StatusResult, error) {
-	if diagnostic := unsupportedContractDiagnostic(
+	diagnostic, err := unsupportedContractDiagnostic(
 		workrun.DiagnosticOperationWorkStatus,
 		request.Contract,
 		workrun.WorkStatusContractV1,
 		"The requested work status contract is unsupported.",
-	); diagnostic != nil {
+	)
+	if err != nil {
+		return StatusResult{}, err
+	}
+	if diagnostic != nil {
 		return StatusResult{Diagnostic: diagnostic}, nil
 	}
 	if err := validateStatusRequest(request); err != nil {
@@ -228,12 +235,16 @@ func (controller Controller) Apply(
 	ctx context.Context,
 	request ApplyRequest,
 ) (ApplyResult, error) {
-	if diagnostic := unsupportedContractDiagnostic(
+	diagnostic, err := unsupportedContractDiagnostic(
 		workrun.DiagnosticOperationWorkTransitionApply,
 		request.Contract,
 		workrun.WorkTransitionContractV1,
 		"The requested work transition contract is unsupported.",
-	); diagnostic != nil {
+	)
+	if err != nil {
+		return ApplyResult{}, err
+	}
+	if diagnostic != nil {
 		return ApplyResult{Diagnostic: diagnostic}, nil
 	}
 	if err := validateApplyRequest(request); err != nil {
@@ -361,9 +372,9 @@ func unsupportedContractDiagnostic(
 	requested string,
 	supported string,
 	message string,
-) *workrun.WorkDiagnosticV1 {
+) (*workrun.WorkDiagnosticV1, error) {
 	if requested == supported {
-		return nil
+		return nil, nil
 	}
 	diagnostic := workrun.WorkDiagnosticV1{
 		Schema:             workrun.WorkDiagnosticSchemaV1,
@@ -376,9 +387,9 @@ func unsupportedContractDiagnostic(
 		NextAction:         "select_supported_contract",
 	}
 	if err := diagnostic.Validate(); err != nil {
-		panic(fmt.Sprintf("invalid static work-contract diagnostic: %v", err))
+		return nil, fmt.Errorf("invalid requested work contract: %w", err)
 	}
-	return &diagnostic
+	return &diagnostic, nil
 }
 
 func validateStatusRequest(request StatusRequest) error {
@@ -416,9 +427,24 @@ func validateRepository(repo string) error {
 }
 
 func validateCanonical(name string, value string) error {
-	if value == "" || value != strings.TrimSpace(value) || len(value) > 240 ||
+	if value == "" || !utf8.ValidString(value) ||
+		!hasCanonicalTextEdges(value) ||
+		utf8.RuneCountInString(value) > 240 ||
 		strings.ContainsAny(value, "\r\n\x00") {
 		return fmt.Errorf("%s must be a non-empty canonical string", name)
 	}
 	return nil
+}
+
+func hasCanonicalTextEdges(value string) bool {
+	if value == "" || !utf8.ValidString(value) {
+		return false
+	}
+	first, _ := utf8.DecodeRuneInString(value)
+	last, _ := utf8.DecodeLastRuneInString(value)
+	return !isPublicEdgeWhitespace(first) && !isPublicEdgeWhitespace(last)
+}
+
+func isPublicEdgeWhitespace(value rune) bool {
+	return unicode.IsSpace(value) || value == '\uFEFF'
 }

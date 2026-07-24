@@ -427,12 +427,51 @@ func (factory *ProductionOwnerCoordinatorFactory) openForProductiveRecovery(
 	if _, err := factory.repositoryIdentityLease(ctx); err != nil {
 		return nil, err
 	}
-	return factory.openOwnerCoordinator(ctx, workRunID)
+	candidateStore := factory.candidateStore
+	if candidateStore == nil {
+		objects, err := NewFixedPADGitObjectAuthority(
+			ctx,
+			factory.padAuthority,
+		)
+		if err != nil {
+			return nil, err
+		}
+		candidateStore, err = openExistingPADCandidateCatalog(
+			ctx,
+			factory.padAuthority,
+			objects,
+		)
+		if errors.Is(err, errPADCandidateCatalogNotFound) {
+			candidateStore = nil
+		} else if err != nil {
+			return nil, err
+		}
+	}
+	return factory.openOwnerCoordinatorWithCandidateAuthorities(
+		ctx,
+		workRunID,
+		candidateStore,
+		factory.bindingSource,
+	)
 }
 
 func (factory *ProductionOwnerCoordinatorFactory) openOwnerCoordinator(
 	ctx context.Context,
 	workRunID string,
+) (*OwnerCoordinator, error) {
+	return factory.openOwnerCoordinatorWithCandidateAuthorities(
+		ctx,
+		workRunID,
+		factory.candidateStore,
+		factory.bindingSource,
+	)
+}
+
+func (factory *ProductionOwnerCoordinatorFactory) openOwnerCoordinatorWithCandidateAuthorities(
+	ctx context.Context,
+	workRunID string,
+	candidateStore *PADCandidateCatalog,
+	bindingSource PADGitBindingAuthority,
 ) (*OwnerCoordinator, error) {
 	if !workRunIDPattern.MatchString(workRunID) {
 		return nil, errors.New(
@@ -505,19 +544,21 @@ func (factory *ProductionOwnerCoordinatorFactory) openOwnerCoordinator(
 	}
 	advanceStore.pad = factory.pad
 	return NewOwnerCoordinator(ctx, OwnerCoordinatorDependencies{
-		WorkRun:                work,
-		Coordination:           coordination,
-		RAR:                    rar,
-		Transitions:            transitions,
-		Evidence:               evidenceStore,
-		Mutations:              mutationStore,
-		PADAuthority:           factory.pad,
-		DeliveryResult:         advanceStore,
-		ProductiveDiagnostic:   advanceStore,
-		PADDelivery:            factory.padDelivery,
-		PADRouteProbe:          factory.padDelivery,
-		PADCandidateCatalog:    factory.candidateStore,
-		PADGitBindingAuthority: factory.bindingSource,
+		WorkRun:                   work,
+		Coordination:              coordination,
+		RAR:                       rar,
+		Transitions:               transitions,
+		Evidence:                  evidenceStore,
+		Mutations:                 mutationStore,
+		PADAuthority:              factory.pad,
+		DeliveryResult:            advanceStore,
+		ProductiveExecutionResult: advanceStore,
+		ProductiveDiagnostic:      advanceStore,
+		ProductiveReconciliation:  advanceStore,
+		PADDelivery:               factory.padDelivery,
+		PADRouteProbe:             factory.padDelivery,
+		PADCandidateCatalog:       candidateStore,
+		PADGitBindingAuthority:    bindingSource,
 		SDDAuthority: SDDWorkRunAuthority{
 			Repo: factory.repositoryRoot(),
 		},

@@ -107,10 +107,19 @@
     "contracts": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["start", "advance", "status", "transition"],
+      "required": [
+        "start",
+        "route",
+        "advance",
+        "reconcile",
+        "status",
+        "transition"
+      ],
       "properties": {
         "start": {"const": "gentle-ai.work-start/v1"},
+        "route": {"const": "gentle-ai.work-route/v1"},
         "advance": {"const": "gentle-ai.work-advance/v1"},
+        "reconcile": {"const": "gentle-ai.work-reconcile/v1"},
         "status": {"const": "gentle-ai.work-status/v1"},
         "transition": {"const": "gentle-ai.work-transition/v1"}
       }
@@ -135,7 +144,7 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 240,
-      "pattern": "^[^\\s\\r\\n\\x00](?:[^\\r\\n\\x00]*[^\\s\\r\\n\\x00])?$"
+      "pattern": "^[^\\x00\\x09-\\x0D\\x20\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF](?:[^\\r\\n\\x00]*[^\\x00\\x09-\\x0D\\x20\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF])?$"
     }
   }
 }

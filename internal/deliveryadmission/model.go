@@ -522,6 +522,7 @@ type DeliveryDecision struct {
 	ReviewReceiptRef      string              `json:"reviewReceiptRef"`
 	VerificationResultRef string              `json:"verificationResultRef"`
 	Candidate             CandidateBinding    `json:"candidate"`
+	CandidateAuthorityRef string              `json:"candidateAuthorityRef,omitempty"`
 	GateRef               string              `json:"gateRef"`
 	Gates                 GateEvidence        `json:"gates"`
 	Disposition           DeliveryDisposition `json:"disposition"`
@@ -558,6 +559,18 @@ func (decision DeliveryDecision) Validate() error {
 	}
 	if err := decision.Candidate.validate(); err != nil {
 		return err
+	}
+	// CandidateAuthorityRef was added compatibly to the v1 envelope: generic
+	// and historical decisions may omit it, while productive owner flows
+	// require it before authorization. When present it is part of the
+	// decision's content address and must itself be immutable.
+	if decision.CandidateAuthorityRef != "" {
+		if err := validateDigest(
+			"decision.candidateAuthorityRef",
+			decision.CandidateAuthorityRef,
+		); err != nil {
+			return err
+		}
 	}
 	route := decision.AdmissionDecision.Route
 	if decision.Policy.Route != route || decision.Gates.Route != route ||

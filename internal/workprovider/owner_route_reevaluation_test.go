@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -25,6 +26,118 @@ type ownerTestRouteReevaluationProbe struct {
 	entered       chan struct{}
 	release       chan struct{}
 	enterOnce     sync.Once
+}
+
+type ownerProductiveRouteBindingAuthority struct {
+	mu      sync.Mutex
+	binding PADGitBinding
+	calls   int
+}
+
+func (authority *ownerProductiveRouteBindingAuthority) ResolvePADGitBinding(
+	_ context.Context,
+	candidate deliveryadmission.CandidateBinding,
+	destination deliveryadmission.DestinationBinding,
+	mechanism deliveryadmission.Mechanism,
+) (PADGitBinding, error) {
+	authority.mu.Lock()
+	defer authority.mu.Unlock()
+	authority.calls++
+	if err := authority.binding.Validate(
+		candidate,
+		destination,
+		mechanism,
+	); err != nil {
+		return PADGitBinding{}, err
+	}
+	return authority.binding, nil
+}
+
+func (authority *ownerProductiveRouteBindingAuthority) count() int {
+	authority.mu.Lock()
+	defer authority.mu.Unlock()
+	return authority.calls
+}
+
+func (authority *ownerProductiveRouteBindingAuthority) setBinding(
+	binding PADGitBinding,
+) {
+	authority.mu.Lock()
+	defer authority.mu.Unlock()
+	authority.binding = binding
+}
+
+type ownerProductiveRouteHostingAuthority struct {
+	mu           sync.Mutex
+	observations int
+	effects      int
+}
+
+func (authority *ownerProductiveRouteHostingAuthority) ObserveDelivery(
+	_ context.Context,
+	request HostingObservationRequest,
+) (HostingDeliveryObservation, error) {
+	authority.mu.Lock()
+	authority.observations++
+	authority.mu.Unlock()
+	observation := HostingDeliveryObservation{
+		Schema:                 HostingDeliveryObservationSchema,
+		Request:                request,
+		CandidateRevision:      request.Binding.CandidateRevision,
+		ExpectedRemoteRevision: request.Binding.ExpectedRemoteRevision,
+		RemoteIdentity:         request.Binding.ExpectedRemoteRevision,
+		RemoteRevision:         request.Binding.ExpectedRemoteRevision,
+		ProtectionState:        HostingProtectionPermitted,
+		ProtectionRevision:     "protection:productive-route",
+	}
+	switch request.Mechanism {
+	case deliveryadmission.MechanismFastForwardOnly:
+		observation.PullRequestState = HostingPullRequestNotApplicable
+		observation.RequiredChecksState = HostingChecksNotApplicable
+	case deliveryadmission.MechanismPullRequest:
+		observation.PullRequestRef = request.PullRequestRef
+		observation.PullRequestState = HostingPullRequestOpen
+		observation.PullRequestHeadRevision =
+			request.Binding.CandidateRevision
+		observation.PullRequestBaseRevision =
+			request.Binding.ExpectedRemoteRevision
+		observation.RequiredChecksState = HostingChecksPassed
+		observation.RequiredChecksRevision = "checks:productive-route"
+	}
+	return observation, observation.Validate(request)
+}
+
+func (authority *ownerProductiveRouteHostingAuthority) CompareAndSwapBranch(
+	context.Context,
+	HostingBranchCASRequest,
+) (HostingBranchCASReceipt, error) {
+	authority.mu.Lock()
+	authority.effects++
+	authority.mu.Unlock()
+	return HostingBranchCASReceipt{}, errors.New(
+		"productive route test unexpectedly reached a branch effect",
+	)
+}
+
+func (authority *ownerProductiveRouteHostingAuthority) MergePullRequest(
+	context.Context,
+	HostingPullRequestMergeRequest,
+) (HostingPullRequestMergeReceipt, error) {
+	authority.mu.Lock()
+	authority.effects++
+	authority.mu.Unlock()
+	return HostingPullRequestMergeReceipt{}, errors.New(
+		"productive route test unexpectedly reached a merge effect",
+	)
+}
+
+func (authority *ownerProductiveRouteHostingAuthority) snapshot() (
+	observations int,
+	effects int,
+) {
+	authority.mu.Lock()
+	defer authority.mu.Unlock()
+	return authority.observations, authority.effects
 }
 
 type ownerTestMutableActivationResolver struct {
@@ -343,6 +456,403 @@ func TestOwnerCoordinatorReevaluatesDeliveryRouteWithoutChangingContentAuthority
 	}
 	if live.Binding.DecisionRef != changed.Reevaluation.DecisionRef {
 		t.Fatalf("target-route live authorization = %#v", live)
+	}
+}
+
+func TestOwnerCoordinatorReevaluatesRouteWithExactTargetCandidateAuthority(
+	t *testing.T,
+) {
+	fixture := newOwnerProductiveRouteReevaluationFixture(
+		t,
+		"productive-route-exact-target",
+	)
+	changed, err := fixture.coordinator.ReevaluateDeliveryRoute(
+		context.Background(),
+		fixture.request(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetDecision, err := fixture.owner.pad.ResolveDeliveryDecision(
+		context.Background(),
+		changed.Reevaluation.DecisionRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, targetLookupRef, err := fixture.catalog.lookup(
+		fixture.targetBinding.Candidate,
+		fixture.targetBinding.Destination,
+		fixture.targetBinding.Mechanism,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetIndex, exists, err := fixture.catalog.readIndex(targetLookupRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists ||
+		targetDecision.CandidateAuthorityRef != targetIndex.RecordRef ||
+		targetDecision.CandidateAuthorityRef ==
+			fixture.sourceAuthority.RecordRef {
+		t.Fatalf(
+			"target decision authority = %q, source %q, index %#v",
+			targetDecision.CandidateAuthorityRef,
+			fixture.sourceAuthority.RecordRef,
+			targetIndex,
+		)
+	}
+	targetAuthority, err := fixture.catalog.ResolveCandidateAuthority(
+		context.Background(),
+		targetDecision.CandidateAuthorityRef,
+		fixture.targetBinding.Candidate,
+		fixture.targetBinding.Destination,
+		fixture.targetBinding.Mechanism,
+		fixture.sourceAuthority.CandidateTree,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validatePADRouteCandidateTransition(
+		fixture.sourceAuthority,
+		targetAuthority,
+		fixture.targetBinding.Destination,
+		fixture.targetBinding.Mechanism,
+	); err != nil {
+		t.Fatal(err)
+	}
+	observations, effects := fixture.hosting.snapshot()
+	if fixture.bindings.count() != 1 ||
+		observations != 1 ||
+		effects != 0 {
+		t.Fatalf(
+			"target authority/probe/effects = %d/%d/%d, want 1/1/0",
+			fixture.bindings.count(),
+			observations,
+			effects,
+		)
+	}
+}
+
+func TestOwnerCoordinatorRejectsCandidateRewireBeforeRouteReevaluation(
+	t *testing.T,
+) {
+	fixture := newOwnerProductiveRouteReevaluationFixture(
+		t,
+		"productive-route-source-rewire",
+	)
+	replacement := ownerCoherentlyRewirePADCandidateCatalog(
+		t,
+		fixture.owner.repo,
+		fixture.owner.repositoryRef,
+		fixture.catalog,
+		fixture.sourceBinding,
+		"route-source-replacement.txt",
+	)
+	if replacement.RecordRef == fixture.sourceAuthority.RecordRef {
+		t.Fatal("source candidate rewire did not change the catalog record")
+	}
+	before, err := fixture.coordinator.work.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(fixture.owner.commonDir, "gentle-ai")
+	beforeGates := ownerCountFilesWithSuffix(
+		t,
+		root,
+		".gate-evidence.json",
+	)
+	beforeDecisions := ownerCountFilesWithSuffix(
+		t,
+		root,
+		".delivery-decision.json",
+	)
+	beforeReevaluations := ownerCountFilesWithSuffix(
+		t,
+		root,
+		".route-reevaluation.json",
+	)
+
+	if _, err := fixture.coordinator.ReevaluateDeliveryRoute(
+		context.Background(),
+		fixture.request(),
+	); !errors.Is(err, ErrPADCandidateCatalogConflict) {
+		t.Fatalf("coherently rewired source route candidate = %v", err)
+	}
+	observations, effects := fixture.hosting.snapshot()
+	if observations != 0 || effects != 0 || fixture.bindings.count() != 0 {
+		t.Fatalf(
+			"source rewire reached target authority/probe/effect = %d/%d/%d",
+			fixture.bindings.count(),
+			observations,
+			effects,
+		)
+	}
+	after, err := fixture.coordinator.work.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(after, before) ||
+		ownerCountFilesWithSuffix(t, root, ".gate-evidence.json") !=
+			beforeGates ||
+		ownerCountFilesWithSuffix(t, root, ".delivery-decision.json") !=
+			beforeDecisions ||
+		ownerCountFilesWithSuffix(t, root, ".route-reevaluation.json") !=
+			beforeReevaluations {
+		t.Fatal("source candidate rewire published authority or mutated WorkRun")
+	}
+}
+
+func TestOwnerCoordinatorRejectsTargetCandidateAuthorityDrift(
+	t *testing.T,
+) {
+	for _, test := range []struct {
+		name   string
+		mutate func(
+			t *testing.T,
+			fixture *ownerProductiveRouteReevaluationFixture,
+			binding *PADGitBinding,
+		)
+	}{
+		{
+			name: "same_tree_different_commit",
+			mutate: func(
+				t *testing.T,
+				fixture *ownerProductiveRouteReevaluationFixture,
+				binding *PADGitBinding,
+			) {
+				binding.CandidateRevision = "git:" + strings.TrimSpace(
+					ownerGit(
+						t,
+						fixture.owner.repo,
+						"commit-tree",
+						fixture.sourceAuthority.CandidateTree,
+						"-p",
+						strings.TrimPrefix(
+							fixture.sourceBinding.CandidateRevision,
+							"git:",
+						),
+						"-m",
+						"same tree replacement commit",
+					),
+				)
+			},
+		},
+		{
+			name: "hosting_repository",
+			mutate: func(
+				_ *testing.T,
+				_ *ownerProductiveRouteReevaluationFixture,
+				binding *PADGitBinding,
+			) {
+				binding.HostingRepositoryRef =
+					"github:attacker/replacement"
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newOwnerProductiveRouteReevaluationFixture(
+				t,
+				"productive-route-target-drift-"+test.name,
+			)
+			replacementBinding := fixture.targetBinding
+			test.mutate(t, &fixture, &replacementBinding)
+			replacementRecord, err := fixture.catalog.newRecord(
+				fixture.sourceAuthority.CandidateTree,
+				replacementBinding,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ownerRewritePADCandidateCatalogRecord(
+				t,
+				fixture.catalog,
+				replacementRecord,
+			)
+			before, err := fixture.coordinator.work.Status()
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := filepath.Join(fixture.owner.commonDir, "gentle-ai")
+			beforeGates := ownerCountFilesWithSuffix(
+				t,
+				root,
+				".gate-evidence.json",
+			)
+			beforeDecisions := ownerCountFilesWithSuffix(
+				t,
+				root,
+				".delivery-decision.json",
+			)
+			beforeReevaluations := ownerCountFilesWithSuffix(
+				t,
+				root,
+				".route-reevaluation.json",
+			)
+
+			if _, err := fixture.coordinator.ReevaluateDeliveryRoute(
+				context.Background(),
+				fixture.request(),
+			); !errors.Is(err, deliveryadmission.ErrBindingMismatch) {
+				t.Fatalf("target authority drift = %v", err)
+			}
+			observations, effects := fixture.hosting.snapshot()
+			if observations != 0 || effects != 0 {
+				t.Fatalf(
+					"target drift reached probe/effect = %d/%d",
+					observations,
+					effects,
+				)
+			}
+			after, err := fixture.coordinator.work.Status()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(after, before) ||
+				ownerCountFilesWithSuffix(
+					t,
+					root,
+					".gate-evidence.json",
+				) != beforeGates ||
+				ownerCountFilesWithSuffix(
+					t,
+					root,
+					".delivery-decision.json",
+				) != beforeDecisions ||
+				ownerCountFilesWithSuffix(
+					t,
+					root,
+					".route-reevaluation.json",
+				) != beforeReevaluations {
+				t.Fatal(
+					"target authority drift published authority or mutated WorkRun",
+				)
+			}
+		})
+	}
+}
+
+func TestOwnerCoordinatorRejectsUnpublishedTargetCandidateAuthorityDrift(
+	t *testing.T,
+) {
+	fixture := newOwnerProductiveRouteReevaluationFixture(
+		t,
+		"productive-route-unpublished-target-drift",
+	)
+	_, targetLookupRef, err := fixture.catalog.lookup(
+		fixture.targetBinding.Candidate,
+		fixture.targetBinding.Destination,
+		fixture.targetBinding.Mechanism,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists, err := fixture.catalog.readIndex(targetLookupRef); err != nil {
+		t.Fatal(err)
+	} else if exists {
+		t.Fatal("target candidate slot unexpectedly occupied before reevaluation")
+	}
+	drifted := fixture.targetBinding
+	drifted.HostingRepositoryRef = "github:attacker/replacement"
+	fixture.bindings.setBinding(drifted)
+
+	before, err := fixture.coordinator.work.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(fixture.owner.commonDir, "gentle-ai")
+	beforeObjects := ownerCountFilesWithSuffix(
+		t,
+		filepath.Join(fixture.catalog.root, "objects"),
+		".json",
+	)
+	beforeBindings := ownerCountFilesWithSuffix(
+		t,
+		filepath.Join(fixture.catalog.root, "bindings"),
+		".json",
+	)
+	beforeGates := ownerCountFilesWithSuffix(
+		t,
+		root,
+		".gate-evidence.json",
+	)
+	beforeDecisions := ownerCountFilesWithSuffix(
+		t,
+		root,
+		".delivery-decision.json",
+	)
+	beforeReevaluations := ownerCountFilesWithSuffix(
+		t,
+		root,
+		".route-reevaluation.json",
+	)
+
+	if _, err := fixture.coordinator.ReevaluateDeliveryRoute(
+		context.Background(),
+		fixture.request(),
+	); !errors.Is(err, deliveryadmission.ErrBindingMismatch) {
+		t.Fatalf("unpublished target authority drift = %v", err)
+	}
+	after, err := fixture.coordinator.work.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	observations, effects := fixture.hosting.snapshot()
+	if !reflect.DeepEqual(after, before) ||
+		fixture.bindings.count() != 1 ||
+		observations != 0 ||
+		effects != 0 ||
+		ownerCountFilesWithSuffix(
+			t,
+			filepath.Join(fixture.catalog.root, "objects"),
+			".json",
+		) != beforeObjects ||
+		ownerCountFilesWithSuffix(
+			t,
+			filepath.Join(fixture.catalog.root, "bindings"),
+			".json",
+		) != beforeBindings ||
+		ownerCountFilesWithSuffix(t, root, ".gate-evidence.json") !=
+			beforeGates ||
+		ownerCountFilesWithSuffix(t, root, ".delivery-decision.json") !=
+			beforeDecisions ||
+		ownerCountFilesWithSuffix(t, root, ".route-reevaluation.json") !=
+			beforeReevaluations {
+		t.Fatal("rejected target proposal published authority or mutated WorkRun")
+	}
+	if _, exists, err := fixture.catalog.readIndex(targetLookupRef); err != nil {
+		t.Fatal(err)
+	} else if exists {
+		t.Fatal("rejected target proposal poisoned the candidate slot")
+	}
+
+	fixture.bindings.setBinding(fixture.targetBinding)
+	changed, err := fixture.coordinator.ReevaluateDeliveryRoute(
+		context.Background(),
+		fixture.request(),
+	)
+	if err != nil {
+		t.Fatalf("legitimate retry after rejected target proposal: %v", err)
+	}
+	if changed.ReevaluationRef == "" {
+		t.Fatal("legitimate retry did not publish route reevaluation")
+	}
+	if _, exists, err := fixture.catalog.readIndex(targetLookupRef); err != nil {
+		t.Fatal(err)
+	} else if !exists {
+		t.Fatal("legitimate retry did not publish target candidate authority")
+	}
+	observations, effects = fixture.hosting.snapshot()
+	if fixture.bindings.count() != 2 ||
+		observations != 1 ||
+		effects != 0 {
+		t.Fatalf(
+			"legitimate retry authority/probe/effect = %d/%d/%d, want 2/1/0",
+			fixture.bindings.count(),
+			observations,
+			effects,
+		)
 	}
 }
 
@@ -1041,6 +1551,229 @@ func TestOwnerRouteReevaluationRequestHasNoCallerAuthoritySurface(
 		if typ.Field(index).Name != name {
 			t.Fatalf("route reevaluation field %d = %q, want %q", index, typ.Field(index).Name, name)
 		}
+	}
+}
+
+type ownerProductiveRouteReevaluationFixture struct {
+	owner             ownerCoordinatorFixture
+	coordinator       *OwnerCoordinator
+	before            workrun.WorkRunState
+	sourceDecisionRef string
+	targetAdmission   ownerAdmittedDelivery
+	catalog           *PADCandidateCatalog
+	sourceAuthority   PADCandidateAuthority
+	sourceBinding     PADGitBinding
+	targetBinding     PADGitBinding
+	bindings          *ownerProductiveRouteBindingAuthority
+	hosting           *ownerProductiveRouteHostingAuthority
+}
+
+func (fixture ownerProductiveRouteReevaluationFixture) request() OwnerDeliveryRouteReevaluationRequest {
+	return OwnerDeliveryRouteReevaluationRequest{
+		ExpectedRevision:           fixture.before.Revision,
+		SourceDecisionRef:          fixture.sourceDecisionRef,
+		TargetAdmissionDecisionRef: fixture.targetAdmission.Admission.AdmissionDecisionRef,
+		Mechanism:                  deliveryadmission.MechanismFastForwardOnly,
+	}
+}
+
+func newOwnerProductiveRouteReevaluationFixture(
+	t *testing.T,
+	seed string,
+) ownerProductiveRouteReevaluationFixture {
+	t.Helper()
+	ctx := context.Background()
+	owner := newOwnerCoordinatorFixture(t, seed)
+	baseRevision := "git:" + strings.TrimSpace(
+		ownerGit(t, owner.repo, "rev-parse", "HEAD"),
+	)
+	destination := deliveryadmission.DestinationBinding{
+		RepositoryRef:    owner.repositoryRef,
+		TargetRef:        "refs/heads/main",
+		ObservedRevision: baseRevision,
+		DefaultBranch:    true,
+	}
+	scopeDigest := ownerTestRef(seed + "-scope")
+	sourceAdmission := ownerAdmitRouteOnlyDelivery(
+		t,
+		owner,
+		deliveryadmission.RoutePRWithoutIssue,
+		seed+"-source",
+		scopeDigest,
+		destination,
+	)
+	before, legacySourceDecisionRef := ownerPrepareTerminalRouteDecision(
+		t,
+		owner,
+		sourceAdmission,
+	)
+	sourceDecision, err := owner.pad.ResolveDeliveryDecision(
+		ctx,
+		legacySourceDecisionRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateTree, err := owner.coordinator.resolveReviewedPADCandidateTree(
+		ctx,
+		sourceDecision.ReviewReceiptRef,
+		sourceDecision.VerificationResultRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidateRevision := "git:" + strings.TrimSpace(
+		ownerGit(
+			t,
+			owner.repo,
+			"commit-tree",
+			candidateTree,
+			"-p",
+			strings.TrimPrefix(baseRevision, "git:"),
+			"-m",
+			"reviewed productive route candidate",
+		),
+	)
+	objects, err := NewFixedPADGitObjectAuthority(
+		ctx,
+		owner.coordinator.pad.authority,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := NewPADCandidateCatalog(
+		ctx,
+		owner.coordinator.pad.authority,
+		objects,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceBinding := PADGitBinding{
+		Schema:                 PADGitBindingSchema,
+		Candidate:              sourceDecision.Candidate,
+		Destination:            sourceDecision.Gates.Destination,
+		Mechanism:              sourceDecision.Gates.Mechanism,
+		HostingRepositoryRef:   "github:owner/productive-route",
+		CandidateRevision:      candidateRevision,
+		ExpectedRemoteRevision: baseRevision,
+		PullRequestRef:         sourceDecision.Gates.PullRequestRef,
+	}
+	sourceAuthority, err := catalog.BindCandidate(
+		ctx,
+		candidateTree,
+		sourceBinding,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceDecision.CandidateAuthorityRef = sourceAuthority.RecordRef
+	sourceDecisionRef, err := owner.pad.PublishDeliveryDecision(
+		ctx,
+		sourceDecision,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetAdmission := ownerAdmitRouteOnlyDelivery(
+		t,
+		owner,
+		deliveryadmission.RouteDirectMain,
+		seed+"-target",
+		scopeDigest,
+		destination,
+	)
+	targetBinding := sourceBinding
+	targetBinding.Destination = targetAdmission.Intent.Destination
+	targetBinding.Mechanism = deliveryadmission.MechanismFastForwardOnly
+	targetBinding.PullRequestRef = ""
+	bindings := &ownerProductiveRouteBindingAuthority{
+		binding: targetBinding,
+	}
+	hosting := &ownerProductiveRouteHostingAuthority{}
+	adapter, err := NewPADDeliveryAdapter(
+		ctx,
+		owner.coordinator.pad.authority,
+		catalog,
+		objects,
+		hosting,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter.now = func() time.Time {
+		return time.Unix(owner.now, 0).UTC()
+	}
+	coordinator, err := NewOwnerCoordinator(
+		ctx,
+		OwnerCoordinatorDependencies{
+			WorkRun:                owner.coordinator.work,
+			Coordination:           owner.coordinator.coordination,
+			RAR:                    owner.coordinator.rar,
+			Transitions:            owner.coordinator.transitions,
+			Evidence:               owner.coordinator.evidence,
+			Mutations:              owner.coordinator.mutations,
+			PADAuthority:           owner.coordinator.pad,
+			PADDelivery:            adapter,
+			PADRouteProbe:          adapter,
+			PADCandidateCatalog:    catalog,
+			PADGitBindingAuthority: bindings,
+			SDDAuthority:           owner.coordinator.sdd,
+			LaunchAuthority:        ownerTestLaunchAuthority{},
+			Activation:             StaticActivationResolver{Mode: ActivationEnabled},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ownerProductiveRouteReevaluationFixture{
+		owner:             owner,
+		coordinator:       coordinator,
+		before:            before,
+		sourceDecisionRef: sourceDecisionRef,
+		targetAdmission:   targetAdmission,
+		catalog:           catalog,
+		sourceAuthority:   sourceAuthority,
+		sourceBinding:     sourceBinding,
+		targetBinding:     targetBinding,
+		bindings:          bindings,
+		hosting:           hosting,
+	}
+}
+
+func ownerRewritePADCandidateCatalogRecord(
+	t *testing.T,
+	catalog *PADCandidateCatalog,
+	record padCandidateCatalogRecord,
+) {
+	t.Helper()
+	recordPayload, err := canonicalCoordinationPayload(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		catalog.recordPath(record.RecordRef),
+		recordPayload,
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	index := padCandidateCatalogIndex{
+		Schema:        padCandidateCatalogIndexSchema,
+		RepositoryRef: record.RepositoryRef,
+		LookupRef:     record.LookupRef,
+		RecordRef:     record.RecordRef,
+	}
+	indexPayload, err := canonicalCoordinationPayload(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		catalog.indexPath(record.LookupRef),
+		indexPayload,
+		0o600,
+	); err != nil {
+		t.Fatal(err)
 	}
 }
 

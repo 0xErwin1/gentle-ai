@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 )
@@ -937,7 +938,9 @@ func validSHA256Ref(value string) bool {
 }
 
 func validOpaqueRef(value string) bool {
-	return value != "" && value == strings.TrimSpace(value) && len(value) <= 240 &&
+	return value != "" && utf8.ValidString(value) &&
+		hasCanonicalTextEdges(value) &&
+		utf8.RuneCountInString(value) <= 240 &&
 		!strings.ContainsAny(value, "\r\n\x00")
 }
 

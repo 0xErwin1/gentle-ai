@@ -100,8 +100,12 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunWorkCapabilities(args[1:], stdout)
 		case "work-start":
 			return cli.RunWorkStart(args[1:], os.Stdin, stdout)
+		case "work-route":
+			return cli.RunWorkRoute(args[1:], stdout)
 		case "work-advance":
 			return cli.RunWorkAdvance(args[1:], stdout)
+		case "work-reconcile":
+			return cli.RunWorkReconcile(args[1:], stdout)
 		case "work-status":
 			return cli.RunWorkStatus(args[1:], stdout)
 		case "work-transition":

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents/capabilitymanifest"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -47,12 +48,39 @@ func (runtime *cliRuntime) StartOutcome(
 	return runtime.status, nil
 }
 
+func (runtime *cliRuntime) DecideRoute(
+	context.Context,
+	string,
+	string,
+	workrun.WorkRouteChoice,
+) (workrun.WorkRouteV1, error) {
+	return workrun.WorkRouteV1{}, nil
+}
+
+func (runtime *cliRuntime) BindSDDRoute(
+	context.Context,
+	string,
+	string,
+	string,
+) (workrun.WorkRouteV1, error) {
+	return workrun.WorkRouteV1{}, nil
+}
+
 func (runtime *cliRuntime) AdvanceOutcome(
 	context.Context,
 	string,
 	string,
 ) (workrun.WorkAdvanceV1, error) {
 	return runtime.advance, nil
+}
+
+func (runtime *cliRuntime) ReconcileOutcome(
+	context.Context,
+	string,
+	string,
+	string,
+) (workrun.WorkReconcileV1, error) {
+	return workrun.WorkReconcileV1{}, nil
 }
 
 func TestWorkCapabilitiesAndStartUseMachineContracts(t *testing.T) {
@@ -75,7 +103,9 @@ func TestWorkCapabilitiesAndStartUseMachineContracts(t *testing.T) {
 			},
 			Contracts: workprovider.RuntimeContractSetV1{
 				Start:      workrun.WorkStartContractV1,
+				Route:      workrun.WorkRouteContractV1,
 				Advance:    workrun.WorkAdvanceContractV1,
+				Reconcile:  workrun.WorkReconcileContractV1,
 				Status:     workrun.WorkStatusContractV1,
 				Transition: workrun.WorkTransitionContractV1,
 			},
@@ -88,6 +118,7 @@ func TestWorkCapabilitiesAndStartUseMachineContracts(t *testing.T) {
 			Revision:            cliRuntimeRef("revision"),
 			PublicState:         workrun.PublicStateWorking,
 			RouteDecision:       workrun.RouteDecisionDelegatedDirect,
+			RoutePhase:          workrun.RoutePhaseImplementationSelected,
 			ImplementationRoute: workrun.ImplementationRouteDelegatedDirect,
 			Verification: workrun.VerificationSummaryV1{
 				Outcome:    workrun.VerificationPending,
@@ -144,6 +175,107 @@ func TestWorkCapabilitiesAndStartUseMachineContracts(t *testing.T) {
 		len(runtime.requests) != 1 ||
 		runtime.requests[0].Outcome != "Implement the requested change." {
 		t.Fatalf("status/requests = %#v / %#v", status, runtime.requests)
+	}
+}
+
+func TestWorkStartUnicodeOutcomeBoundariesAndTransportCap(t *testing.T) {
+	const maximumOutcomeCodePoints = (maximumWorkStartInputBytes - 1024) / 12
+	tests := []struct {
+		name    string
+		payload string
+		valid   bool
+	}{
+		{
+			name: "compact UTF-8 at boundary",
+			payload: `{"outcome":"` +
+				strings.Repeat("界", maximumOutcomeCodePoints) +
+				`"}`,
+			valid: true,
+		},
+		{
+			name: "compact UTF-8 over boundary",
+			payload: `{"outcome":"` +
+				strings.Repeat("界", maximumOutcomeCodePoints+1) +
+				`"}`,
+		},
+		{
+			name: "escaped Unicode at boundary",
+			payload: `{"outcome":"` +
+				strings.Repeat(`\ud83d\ude00`, maximumOutcomeCodePoints) +
+				`"}`,
+			valid: true,
+		},
+		{
+			name: "escaped Unicode over boundary",
+			payload: `{"outcome":"` +
+				strings.Repeat(
+					`\ud83d\ude00`,
+					maximumOutcomeCodePoints+1,
+				) +
+				`"}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runtime := &cliRuntime{status: cliRuntimeStartStatus()}
+			opener := &cliRuntimeOpener{runtime: runtime}
+			err := runWorkStart(
+				context.Background(),
+				[]string{
+					"--cwd", "/repo",
+					"--contract", workrun.WorkStartContractV1,
+					"--json",
+				},
+				strings.NewReader(test.payload),
+				&bytes.Buffer{},
+				workprovider.NewRuntimeController(opener),
+			)
+			if (err == nil) != test.valid {
+				t.Fatalf(
+					"runWorkStart() error = %v, want valid=%t",
+					err,
+					test.valid,
+				)
+			}
+			if test.valid {
+				if opener.calls != 1 || len(runtime.requests) != 1 ||
+					utf8.RuneCountInString(runtime.requests[0].Outcome) !=
+						maximumOutcomeCodePoints {
+					t.Fatalf(
+						"valid start calls/requests = %d/%#v",
+						opener.calls,
+						runtime.requests,
+					)
+				}
+			} else if opener.calls != 0 || len(runtime.requests) != 0 {
+				t.Fatalf(
+					"invalid start calls/requests = %d/%#v",
+					opener.calls,
+					runtime.requests,
+				)
+			}
+		})
+	}
+
+	opener := &cliRuntimeOpener{}
+	err := runWorkStart(
+		context.Background(),
+		[]string{
+			"--contract", workrun.WorkStartContractV1,
+			"--json",
+		},
+		strings.NewReader(strings.Repeat(
+			"x",
+			maximumWorkStartInputBytes+1,
+		)),
+		&bytes.Buffer{},
+		workprovider.NewRuntimeController(opener),
+	)
+	if err == nil || !strings.Contains(err.Error(), "input limit") {
+		t.Fatalf("transport-cap error = %v", err)
+	}
+	if opener.calls != 0 {
+		t.Fatalf("transport-cap request opened runtime %d times", opener.calls)
 	}
 }
 
@@ -223,6 +355,23 @@ func TestWorkStartUnsupportedContractDoesNotValidateBodyOrOpen(t *testing.T) {
 		diagnostic.MutationOutcome != "not_started" ||
 		opener.calls != 0 {
 		t.Fatalf("diagnostic/opener = %#v/%d", diagnostic, opener.calls)
+	}
+}
+
+func cliRuntimeStartStatus() workrun.WorkStatusV1 {
+	return workrun.WorkStatusV1{
+		Schema:              workrun.WorkStatusContractV1,
+		Contract:            workrun.WorkStatusContractV1,
+		WorkRunID:           "work-cli-unicode",
+		Revision:            cliRuntimeRef("unicode-revision"),
+		PublicState:         workrun.PublicStateWorking,
+		RouteDecision:       workrun.RouteDecisionDirectInline,
+		RoutePhase:          workrun.RoutePhaseImplementationSelected,
+		ImplementationRoute: workrun.ImplementationRouteDirectInline,
+		Verification: workrun.VerificationSummaryV1{
+			Outcome:    workrun.VerificationPending,
+			ResultRefs: []string{},
+		},
 	}
 }
 

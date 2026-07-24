@@ -453,17 +453,30 @@ func TestPADDeliveryAdapterExecutesOneExactCASAcrossConcurrentReplay(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	resultPath := filepath.Join(
-		padDeliveryTestStoreRoot(fixture.authority),
-		"results",
-		strings.TrimPrefix(commandRef, "sha256:")+".json",
-	)
-	if _, err := os.Stat(resultPath); err != nil {
+	store := fixture.adapter.store
+	bindingPayload, err := os.ReadFile(store.terminalBindingPath(commandRef))
+	if err != nil {
+		t.Fatalf("single-assignment terminal binding: %v", err)
+	}
+	var binding padDeliveryTerminalBinding
+	if err := decodeStrictCoordinationJSON(bindingPayload, &binding); err != nil {
+		t.Fatal(err)
+	}
+	if binding.CommandRef != commandRef ||
+		binding.EvidenceRef != results[0].EvidenceRef {
+		t.Fatalf("terminal binding = %#v", binding)
+	}
+	if _, err := os.Stat(store.terminalResultPath(binding.ResultRef)); err != nil {
 		t.Fatalf("content-addressed terminal result: %v", err)
+	}
+	if _, err := os.Stat(
+		store.terminalEvidencePath(binding.EvidenceRef),
+	); err != nil {
+		t.Fatalf("content-addressed terminal evidence: %v", err)
 	}
 }
 
-func TestPADDeliveryAdapterRecoversLostEffectAndReplaysAfterExpiry(t *testing.T) {
+func TestPADDeliveryAdapterFailsClosedAfterLostEffectResponse(t *testing.T) {
 	fixture := newPADDeliveryTestFixture(
 		t,
 		deliveryadmission.RouteEmergency,
@@ -479,40 +492,49 @@ func TestPADDeliveryAdapterRecoversLostEffectAndReplaysAfterExpiry(t *testing.T)
 	assertPADDeliveryRemote(t, fixture.hosting, fixture.candidate)
 
 	fixture.clock.SetUnix(fixture.command.ExecutionExpiresAt + 10)
-	recovered, err := fixture.adapter.ExecuteOnce(
+	fixture.hosting.mu.Lock()
+	observationsBeforeReplay := fixture.hosting.observationCalls
+	fixture.hosting.mu.Unlock()
+	if _, err := fixture.adapter.ExecuteOnce(
 		context.Background(),
 		fixture.command,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if recovered.Outcome != deliveryadmission.ExecutionSucceeded ||
-		recovered.DeliveryRef != fixture.candidate {
-		t.Fatalf("recovered result = %+v", recovered)
+	); !errors.Is(err, ErrPADDeliveryIndeterminate) {
+		t.Fatalf("claimed crash replay = %v", err)
 	}
 	fixture.hosting.mu.Lock()
 	casCalls := fixture.hosting.casCalls
-	observationsBeforeReplay := fixture.hosting.observationCalls
+	observationsAfterReplay := fixture.hosting.observationCalls
 	fixture.hosting.mu.Unlock()
 	if casCalls != 1 {
-		t.Fatalf("CAS calls after recovery = %d, want 1", casCalls)
+		t.Fatalf("CAS calls after fail-closed replay = %d, want 1", casCalls)
 	}
-
-	replayed, err := fixture.adapter.ExecuteOnce(
+	if observationsAfterReplay != observationsBeforeReplay {
+		t.Fatal("claimed crash replay probed mutable hosting state")
+	}
+	if _, _, err := fixture.adapter.ResolveOnce(
 		context.Background(),
 		fixture.command,
-	)
+	); !errors.Is(err, ErrPADDeliveryIndeterminate) {
+		t.Fatalf("read-only claimed replay = %v", err)
+	}
+	fixture.hosting.mu.Lock()
+	observationsAfterReadOnlyReplay := fixture.hosting.observationCalls
+	fixture.hosting.mu.Unlock()
+	if observationsAfterReadOnlyReplay != observationsBeforeReplay {
+		t.Fatal("read-only claimed replay touched live hosting state")
+	}
+	commandRef, err := fixture.command.Ref()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if replayed != recovered {
-		t.Fatal("post-expiry replay did not return the durable terminal result")
-	}
-	fixture.hosting.mu.Lock()
-	observationsAfterReplay := fixture.hosting.observationCalls
-	fixture.hosting.mu.Unlock()
-	if observationsAfterReplay != observationsBeforeReplay {
-		t.Fatal("terminal replay touched live hosting state")
+	assertPADDeliveryPathMissing(
+		t,
+		fixture.adapter.store.terminalBindingPath(commandRef),
+	)
+	if _, err := os.Stat(
+		fixture.adapter.store.indeterminatePath(commandRef),
+	); err != nil {
+		t.Fatalf("durable indeterminate stop: %v", err)
 	}
 }
 

@@ -26,6 +26,8 @@ const (
 	coordinationKindDisposition coordinationRecordKind = "disposition"
 	coordinationKindExplicitSDD coordinationRecordKind = "explicit_sdd_request"
 	coordinationKindRoute       coordinationRecordKind = "route_selection"
+	coordinationKindSDDFallback coordinationRecordKind = "sdd_decline_fallback"
+	coordinationKindSDDBinding  coordinationRecordKind = "sdd_binding_intent"
 )
 
 type coordinationRecordKind string
@@ -254,6 +256,74 @@ func (store *CoordinationAuthorityStore) PublishRouteSelection(
 		payload,
 	); err != nil {
 		return RouteSelectionRecord{}, err
+	}
+	return record, nil
+}
+
+func (store *CoordinationAuthorityStore) PublishSDDDeclineFallback(
+	ctx context.Context,
+	request SDDDeclineFallbackPublication,
+) (SDDDeclineFallbackRecord, error) {
+	if err := store.validateRequestContext(ctx, request.WorkRunID); err != nil {
+		return SDDDeclineFallbackRecord{}, err
+	}
+	record, err := newSDDDeclineFallbackRecord(
+		store.identity.repositoryIdentity,
+		request,
+	)
+	if err != nil {
+		return SDDDeclineFallbackRecord{}, err
+	}
+	slotRef, err := sddDeclineFallbackSlotRef(record)
+	if err != nil {
+		return SDDDeclineFallbackRecord{}, err
+	}
+	payload, err := canonicalCoordinationPayload(record)
+	if err != nil {
+		return SDDDeclineFallbackRecord{}, err
+	}
+	if err := store.publish(
+		ctx,
+		coordinationKindSDDFallback,
+		slotRef,
+		record.AuthorityRef,
+		payload,
+	); err != nil {
+		return SDDDeclineFallbackRecord{}, err
+	}
+	return record, nil
+}
+
+func (store *CoordinationAuthorityStore) PublishSDDBindingIntent(
+	ctx context.Context,
+	request SDDBindingIntentPublication,
+) (SDDBindingIntentRecord, error) {
+	if err := store.validateRequestContext(ctx, request.WorkRunID); err != nil {
+		return SDDBindingIntentRecord{}, err
+	}
+	record, err := newSDDBindingIntentRecord(
+		store.identity.repositoryIdentity,
+		request,
+	)
+	if err != nil {
+		return SDDBindingIntentRecord{}, err
+	}
+	slotRef, err := sddBindingIntentSlotRef(record)
+	if err != nil {
+		return SDDBindingIntentRecord{}, err
+	}
+	payload, err := canonicalCoordinationPayload(record)
+	if err != nil {
+		return SDDBindingIntentRecord{}, err
+	}
+	if err := store.publish(
+		ctx,
+		coordinationKindSDDBinding,
+		slotRef,
+		record.AuthorityRef,
+		payload,
+	); err != nil {
+		return SDDBindingIntentRecord{}, err
 	}
 	return record, nil
 }
@@ -496,6 +566,68 @@ func (store *CoordinationAuthorityStore) ResolveRouteSelection(
 		return workrun.RouteSelectionAuthority{}, err
 	}
 	return record.routeAuthority(), nil
+}
+
+func (store *CoordinationAuthorityStore) ResolveSDDDeclineFallback(
+	ctx context.Context,
+	authorityRef string,
+) (SDDDeclineFallbackRecord, error) {
+	if err := store.validateRequestContext(ctx, store.workRunID); err != nil {
+		return SDDDeclineFallbackRecord{}, err
+	}
+	payload, err := store.readObject(
+		coordinationKindSDDFallback,
+		authorityRef,
+	)
+	if err != nil {
+		return SDDDeclineFallbackRecord{}, err
+	}
+	var record SDDDeclineFallbackRecord
+	if err := decodeStrictCoordinationJSON(payload, &record); err != nil {
+		return SDDDeclineFallbackRecord{}, fmt.Errorf(
+			"%w: decode SDD decline fallback: %v",
+			ErrCoordinationAuthorityCorrupt,
+			err,
+		)
+	}
+	canonical, err := canonicalCoordinationPayload(record)
+	if err != nil || !bytes.Equal(payload, canonical) {
+		return SDDDeclineFallbackRecord{}, fmt.Errorf(
+			"%w: SDD decline fallback is not canonical",
+			ErrCoordinationAuthorityCorrupt,
+		)
+	}
+	if err := record.Validate(); err != nil {
+		return SDDDeclineFallbackRecord{}, fmt.Errorf(
+			"%w: validate SDD decline fallback: %v",
+			ErrCoordinationAuthorityCorrupt,
+			err,
+		)
+	}
+	if record.AuthorityRef != authorityRef {
+		return SDDDeclineFallbackRecord{}, fmt.Errorf(
+			"%w: SDD decline fallback lookup binding mismatch",
+			ErrCoordinationAuthorityCorrupt,
+		)
+	}
+	if err := store.validateRecordBinding(
+		record.RepositoryIdentity,
+		record.WorkRunID,
+	); err != nil {
+		return SDDDeclineFallbackRecord{}, err
+	}
+	slotRef, err := sddDeclineFallbackSlotRef(record)
+	if err != nil {
+		return SDDDeclineFallbackRecord{}, err
+	}
+	if err := store.validatePublishedSlot(
+		coordinationKindSDDFallback,
+		slotRef,
+		record.AuthorityRef,
+	); err != nil {
+		return SDDDeclineFallbackRecord{}, err
+	}
+	return record, nil
 }
 
 func (store *CoordinationAuthorityStore) resolveForecastRecord(
@@ -833,6 +965,40 @@ func routeSelectionSlotRef(
 	)
 }
 
+func sddDeclineFallbackSlotRef(
+	record SDDDeclineFallbackRecord,
+) (string, error) {
+	return coordinationDigest(
+		"gentle-ai.sdd-decline-fallback-slot/v1",
+		struct {
+			RepositoryIdentity string `json:"repository_identity"`
+			WorkRunID          string `json:"work_run_id"`
+			DeliveryIntentRef  string `json:"delivery_intent_ref"`
+		}{
+			RepositoryIdentity: record.RepositoryIdentity,
+			WorkRunID:          record.WorkRunID,
+			DeliveryIntentRef:  record.DeliveryIntentRef,
+		},
+	)
+}
+
+func sddBindingIntentSlotRef(
+	record SDDBindingIntentRecord,
+) (string, error) {
+	return coordinationDigest(
+		"gentle-ai.sdd-binding-intent-slot/v1",
+		struct {
+			RepositoryIdentity string `json:"repository_identity"`
+			WorkRunID          string `json:"work_run_id"`
+			RouteAcceptanceRef string `json:"route_acceptance_ref"`
+		}{
+			RepositoryIdentity: record.RepositoryIdentity,
+			WorkRunID:          record.WorkRunID,
+			RouteAcceptanceRef: record.RouteAcceptanceRef,
+		},
+	)
+}
+
 // validatePublishedSlot distinguishes an authorized publication from a
 // harmless content-addressed orphan left by a crash before index publication.
 func (store *CoordinationAuthorityStore) validatePublishedSlot(
@@ -1042,7 +1208,8 @@ func (store *CoordinationAuthorityStore) slotPath(
 func validCoordinationKind(kind coordinationRecordKind) bool {
 	switch kind {
 	case coordinationKindForecast, coordinationKindDisposition,
-		coordinationKindExplicitSDD, coordinationKindRoute:
+		coordinationKindExplicitSDD, coordinationKindRoute,
+		coordinationKindSDDFallback, coordinationKindSDDBinding:
 		return true
 	default:
 		return false

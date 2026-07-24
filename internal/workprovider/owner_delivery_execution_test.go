@@ -3,6 +3,7 @@ package workprovider
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -124,7 +125,7 @@ func TestOwnerCoordinatorRequiresOneSameRepositoryPADDeliveryAdapter(
 	}
 }
 
-func TestOwnerCoordinatorRequiresCompleteSameRepositoryCandidateBindingAuthorities(
+func TestOwnerCoordinatorAllowsReadOnlyCandidateCatalogAndRequiresCatalogForMutableBindings(
 	t *testing.T,
 ) {
 	left := newOwnerCoordinatorFixture(t, "candidate-authority-left")
@@ -176,11 +177,21 @@ func TestOwnerCoordinatorRequiresCompleteSameRepositoryCandidateBindingAuthoriti
 	if _, err := NewOwnerCoordinator(
 		context.Background(),
 		dependencies,
-	); err == nil || !strings.Contains(err.Error(), "both PAD candidate") {
-		t.Fatalf("partial candidate binding composition = %v", err)
+	); err != nil {
+		t.Fatalf("read-only candidate catalog composition = %v", err)
 	}
 
+	dependencies.PADCandidateCatalog = nil
 	dependencies.PADGitBindingAuthority = ownerUnavailablePADDeliveryPorts{}
+	if _, err := NewOwnerCoordinator(
+		context.Background(),
+		dependencies,
+	); err == nil ||
+		!strings.Contains(err.Error(), "requires a PAD candidate catalog") {
+		t.Fatalf("mutable binding without candidate catalog = %v", err)
+	}
+
+	dependencies.PADCandidateCatalog = leftCatalog
 	if _, err := NewOwnerCoordinator(
 		context.Background(),
 		dependencies,
@@ -218,6 +229,29 @@ func TestOwnerCoordinatorExecuteBoundDeliveryRequiresAuthorization(
 		context.Background(),
 	); !errors.Is(err, workrun.ErrWorkRunInvalidTransition) {
 		t.Fatalf("delivery without authorization = %v", err)
+	}
+}
+
+func TestBoundDeliveryExecutionRejectsTerminalProductiveBlocker(
+	t *testing.T,
+) {
+	state := workrun.WorkRunState{
+		DeliveryAuthorizationRef: ownerTestRef("bound-authorization"),
+		ProductiveBlockerRef:     ownerTestRef("terminal-blocker"),
+	}
+	if err := validateOwnerBoundDeliveryState(
+		state,
+		false,
+	); !errors.Is(err, workrun.ErrWorkRunInvalidTransition) {
+		t.Fatalf("blocked bound delivery validation = %v", err)
+	}
+	if err := validateOwnerBoundDeliveryState(state, true); err == nil ||
+		!errors.Is(err, workrun.ErrWorkRunInvalidTransition) ||
+		strings.Contains(err.Error(), "productive blocker fences") {
+		t.Fatalf(
+			"recovery-only validation bypassed blocker but not normal authority: %v",
+			err,
+		)
 	}
 }
 
@@ -285,7 +319,7 @@ func TestOwnerCoordinatorExecutesNormalAndExceptionBoundDelivery(
 	}
 }
 
-func TestOwnerCoordinatorExecuteBoundDeliveryReplaysAfterExpiry(
+func TestOwnerCoordinatorExecuteBoundDeliveryDoesNotPromoteUnanchoredTerminalAfterExpiry(
 	t *testing.T,
 ) {
 	fixture := newOwnerBoundDeliveryFixture(
@@ -299,19 +333,30 @@ func TestOwnerCoordinatorExecuteBoundDeliveryReplaysAfterExpiry(
 	if err != nil {
 		t.Fatal(err)
 	}
+	if first.Outcome != deliveryadmission.ExecutionSucceeded ||
+		first.AuthorizationRef != fixture.authorizationRef ||
+		first.DeliveryRef != fixture.candidateRevision {
+		t.Fatalf("fresh terminal delivery = %#v", first)
+	}
 	fixture.clock.SetUnix(fixture.authorizationExpiresAt + 60)
 	fixture.hosting.mu.Lock()
 	observationsBefore := fixture.hosting.observationCalls
 	fixture.hosting.mu.Unlock()
 
-	second, err := fixture.owner.coordinator.ExecuteBoundDelivery(
+	if _, err := fixture.owner.coordinator.ExecuteBoundDelivery(
 		context.Background(),
-	)
-	if err != nil {
-		t.Fatal(err)
+	); !errors.Is(err, deliveryadmission.ErrExecutionResultUnavailable) {
+		t.Fatalf("unanchored terminal execution replay = %v", err)
 	}
-	if second != first {
-		t.Fatalf("terminal delivery replay changed:\nfirst  %#v\nsecond %#v", first, second)
+	if _, found, err := fixture.owner.coordinator.RecoverBoundDelivery(
+		context.Background(),
+	); found ||
+		!errors.Is(err, deliveryadmission.ErrExecutionResultUnavailable) {
+		t.Fatalf(
+			"unanchored terminal recovery = found %t, result %v",
+			found,
+			err,
+		)
 	}
 	fixture.hosting.mu.Lock()
 	observationsAfter := fixture.hosting.observationCalls
@@ -349,7 +394,7 @@ func TestOwnerCoordinatorExecuteBoundDeliveryRejectsExpiredFirstUse(
 	}
 }
 
-func TestOwnerCoordinatorExecuteBoundDeliveryConcurrentReplayHasOneEffect(
+func TestOwnerCoordinatorExecuteBoundDeliveryConcurrentLosersRequireWorkRunAnchor(
 	t *testing.T,
 ) {
 	fixture := newOwnerBoundDeliveryFixture(
@@ -372,13 +417,32 @@ func TestOwnerCoordinatorExecuteBoundDeliveryConcurrentReplayHasOneEffect(
 		}()
 	}
 	wait.Wait()
+	successes := 0
+	unavailable := 0
 	for index := range workers {
-		if errs[index] != nil {
+		switch {
+		case errs[index] == nil:
+			successes++
+			if results[index].Outcome != deliveryadmission.ExecutionSucceeded ||
+				results[index].AuthorizationRef != fixture.authorizationRef ||
+				results[index].DeliveryRef != fixture.candidateRevision {
+				t.Fatalf("worker %d result = %#v", index, results[index])
+			}
+		case errors.Is(
+			errs[index],
+			deliveryadmission.ErrExecutionResultUnavailable,
+		):
+			unavailable++
+		default:
 			t.Fatalf("worker %d: %v", index, errs[index])
 		}
-		if results[index] != results[0] {
-			t.Fatalf("worker %d observed a different terminal result", index)
-		}
+	}
+	if successes != 1 || unavailable != workers-1 {
+		t.Fatalf(
+			"concurrent results: successes %d, unavailable %d",
+			successes,
+			unavailable,
+		)
 	}
 	fixture.hosting.mu.Lock()
 	mergeCalls := fixture.hosting.mergeCalls
@@ -439,14 +503,320 @@ func TestOwnerCoordinatorExecuteBoundDeliveryRechecksKillSwitch(
 	}
 }
 
+func TestOwnerCoordinatorRejectsCoherentCandidateRewireBeforeConsumption(
+	t *testing.T,
+) {
+	fixture := newOwnerBoundDeliveryFixture(
+		t,
+		"bound-delivery-candidate-rewire",
+		reviewtransaction.VerificationAggregateNotRequired,
+	)
+	stateBefore, err := fixture.owner.coordinator.work.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	remoteBefore, err := fixture.hosting.remoteRevision(
+		fixture.binding.Destination.TargetRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.hosting.mu.Lock()
+	observationsBefore := fixture.hosting.observationCalls
+	mergeCallsBefore := fixture.hosting.mergeCalls
+	fixture.hosting.mu.Unlock()
+
+	replacement := ownerCoherentlyRewireCandidateCatalog(t, &fixture)
+	if replacement.RecordRef == fixture.candidateAuthority.RecordRef ||
+		replacement.CandidateTree == fixture.candidateAuthority.CandidateTree ||
+		replacement.Binding.CandidateRevision ==
+			fixture.candidateAuthority.Binding.CandidateRevision {
+		t.Fatalf(
+			"coherent replacement did not change exact authority:\nA %#v\nB %#v",
+			fixture.candidateAuthority,
+			replacement,
+		)
+	}
+	if _, err := fixture.owner.coordinator.ExecuteBoundDelivery(
+		context.Background(),
+	); !errors.Is(err, ErrPADCandidateCatalogConflict) {
+		t.Fatalf("coherently rewired bound delivery = %v", err)
+	}
+
+	stateAfter, err := fixture.owner.coordinator.work.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stateAfter.Revision != stateBefore.Revision ||
+		stateAfter.DeliveryAuthorizationRef !=
+			stateBefore.DeliveryAuthorizationRef {
+		t.Fatalf(
+			"failed candidate continuity check mutated WorkRun:\nbefore %#v\nafter  %#v",
+			stateBefore,
+			stateAfter,
+		)
+	}
+	fixture.hosting.mu.Lock()
+	observationsAfter := fixture.hosting.observationCalls
+	mergeCallsAfter := fixture.hosting.mergeCalls
+	fixture.hosting.mu.Unlock()
+	if observationsAfter != observationsBefore ||
+		mergeCallsAfter != mergeCallsBefore {
+		t.Fatalf(
+			"rewire reached hosting: observations %d -> %d, merges %d -> %d",
+			observationsBefore,
+			observationsAfter,
+			mergeCallsBefore,
+			mergeCallsAfter,
+		)
+	}
+	remoteAfter, err := fixture.hosting.remoteRevision(
+		fixture.binding.Destination.TargetRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remoteAfter != remoteBefore {
+		t.Fatalf("rewire changed remote %q -> %q", remoteBefore, remoteAfter)
+	}
+	if _, err := os.Stat(ownerBoundAuthorizationUsePath(fixture)); !errors.Is(
+		err,
+		os.ErrNotExist,
+	) {
+		t.Fatalf("rewire consumed authorization before failing: %v", err)
+	}
+}
+
+func TestOwnerCoordinatorRejectsCandidateRewireBetweenProbeAndEffect(
+	t *testing.T,
+) {
+	fixture := newOwnerBoundDeliveryFixture(
+		t,
+		"bound-delivery-midflight-candidate-rewire",
+		reviewtransaction.VerificationAggregateNotRequired,
+	)
+	remoteBefore, err := fixture.hosting.remoteRevision(
+		fixture.binding.Destination.TargetRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.hosting.mu.Lock()
+	observationsBefore := fixture.hosting.observationCalls
+	mergeCallsBefore := fixture.hosting.mergeCalls
+	fixture.hosting.mu.Unlock()
+
+	var replacement PADCandidateAuthority
+	hooked := &ownerHookedHostingAuthority{
+		delegate: fixture.owner.coordinator.padDelivery.hosting,
+		afterFirstObservation: func() {
+			replacement = ownerCoherentlyRewireCandidateCatalog(
+				t,
+				&fixture,
+			)
+		},
+	}
+	fixture.owner.coordinator.padDelivery.hosting = hooked
+	if _, err := fixture.owner.coordinator.ExecuteBoundDelivery(
+		context.Background(),
+	); !errors.Is(err, ErrPADCandidateCatalogConflict) {
+		t.Fatalf("mid-flight candidate rewire = %v", err)
+	}
+	if replacement.RecordRef == "" ||
+		replacement.RecordRef == fixture.candidateAuthority.RecordRef {
+		t.Fatalf("mid-flight hook did not install replacement: %#v", replacement)
+	}
+	fixture.hosting.mu.Lock()
+	observationsAfter := fixture.hosting.observationCalls
+	mergeCallsAfter := fixture.hosting.mergeCalls
+	fixture.hosting.mu.Unlock()
+	if observationsAfter != observationsBefore+1 ||
+		mergeCallsAfter != mergeCallsBefore {
+		t.Fatalf(
+			"mid-flight rewire crossed effect boundary: observations %d -> %d, merges %d -> %d",
+			observationsBefore,
+			observationsAfter,
+			mergeCallsBefore,
+			mergeCallsAfter,
+		)
+	}
+	remoteAfter, err := fixture.hosting.remoteRevision(
+		fixture.binding.Destination.TargetRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remoteAfter != remoteBefore {
+		t.Fatalf(
+			"mid-flight rewire changed remote %q -> %q",
+			remoteBefore,
+			remoteAfter,
+		)
+	}
+	if _, err := os.Stat(ownerBoundAuthorizationUsePath(fixture)); err != nil {
+		t.Fatalf(
+			"mid-flight guard failed before the expected probe reservation: %v",
+			err,
+		)
+	}
+}
+
+type ownerHookedHostingAuthority struct {
+	delegate              HostingAuthority
+	once                  sync.Once
+	afterFirstObservation func()
+}
+
+func (authority *ownerHookedHostingAuthority) ObserveDelivery(
+	ctx context.Context,
+	request HostingObservationRequest,
+) (HostingDeliveryObservation, error) {
+	observation, err := authority.delegate.ObserveDelivery(ctx, request)
+	if err == nil && authority.afterFirstObservation != nil {
+		authority.once.Do(authority.afterFirstObservation)
+	}
+	return observation, err
+}
+
+func (authority *ownerHookedHostingAuthority) CompareAndSwapBranch(
+	ctx context.Context,
+	request HostingBranchCASRequest,
+) (HostingBranchCASReceipt, error) {
+	return authority.delegate.CompareAndSwapBranch(ctx, request)
+}
+
+func (authority *ownerHookedHostingAuthority) MergePullRequest(
+	ctx context.Context,
+	request HostingPullRequestMergeRequest,
+) (HostingPullRequestMergeReceipt, error) {
+	return authority.delegate.MergePullRequest(ctx, request)
+}
+
 type ownerBoundDeliveryFixture struct {
 	owner                  ownerCoordinatorFixture
 	hosting                *padDeliveryTestHosting
 	clock                  *padDeliveryTestClock
+	catalog                *PADCandidateCatalog
+	candidateAuthority     PADCandidateAuthority
+	binding                PADGitBinding
 	kind                   deliveryadmission.AuthorizationKind
 	authorizationRef       string
 	authorizationExpiresAt int64
 	candidateRevision      string
+}
+
+func ownerCoherentlyRewireCandidateCatalog(
+	t *testing.T,
+	fixture *ownerBoundDeliveryFixture,
+) PADCandidateAuthority {
+	t.Helper()
+	return ownerCoherentlyRewirePADCandidateCatalog(
+		t,
+		fixture.owner.repo,
+		fixture.owner.repositoryRef,
+		fixture.catalog,
+		fixture.binding,
+		"candidate-authority-replacement.txt",
+	)
+}
+
+func ownerCoherentlyRewirePADCandidateCatalog(
+	t *testing.T,
+	repository string,
+	repositoryRef string,
+	catalog *PADCandidateCatalog,
+	original PADGitBinding,
+	filename string,
+) PADCandidateAuthority {
+	t.Helper()
+	path := filepath.Join(repository, filename)
+	if err := os.WriteFile(path, []byte("replacement\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ownerGit(
+		t,
+		repository,
+		"add",
+		filename,
+	)
+	ownerGit(
+		t,
+		repository,
+		"commit",
+		"--quiet",
+		"-m",
+		"candidate authority replacement",
+	)
+	binding := original
+	binding.CandidateRevision = "git:" + strings.TrimSpace(
+		ownerGit(t, repository, "rev-parse", "HEAD"),
+	)
+	candidateTree := strings.TrimSpace(
+		ownerGit(t, repository, "rev-parse", "HEAD^{tree}"),
+	)
+	record, err := catalog.newRecord(candidateTree, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordPayload, err := canonicalCoordinationPayload(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		catalog.recordPath(record.RecordRef),
+		recordPayload,
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	index := padCandidateCatalogIndex{
+		Schema:        padCandidateCatalogIndexSchema,
+		RepositoryRef: repositoryRef,
+		LookupRef:     record.LookupRef,
+		RecordRef:     record.RecordRef,
+	}
+	indexPayload, err := canonicalCoordinationPayload(index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		catalog.indexPath(record.LookupRef),
+		indexPayload,
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := catalog.ResolvePADGitBinding(
+		context.Background(),
+		binding.Candidate,
+		binding.Destination,
+		binding.Mechanism,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != binding {
+		t.Fatalf(
+			"coherent replacement lookup = %#v, want %#v",
+			resolved,
+			binding,
+		)
+	}
+	return record.authority()
+}
+
+func ownerBoundAuthorizationUsePath(
+	fixture ownerBoundDeliveryFixture,
+) string {
+	return filepath.Join(
+		fixture.owner.commonDir,
+		"gentle-ai",
+		"delivery-authorization-uses",
+		"v1",
+		"repositories",
+		fixture.owner.coordinator.pad.authority.identity.lease.StorageKey(),
+		strings.TrimPrefix(fixture.authorizationRef, "sha256:")+".json",
+	)
 }
 
 func newOwnerBoundDeliveryFixture(
@@ -554,26 +924,6 @@ func newOwnerBoundDeliveryFixtureWithConnectorBinding(
 	if err != nil {
 		t.Fatal(err)
 	}
-	decision, err := deliveryadmission.Decide(
-		ctx,
-		owner.pad,
-		owner.coordinator.rar,
-		deliveryadmission.DeliveryRequest{
-			AdmissionDecisionRef:  admission.Admission.AdmissionDecisionRef,
-			PolicyRef:             admission.PolicyRef,
-			ReviewReceiptRef:      terminal.authority.Receipt.ReceiptRef,
-			VerificationResultRef: terminal.authority.Result.ResultRef,
-			GateRef:               gateRef,
-			AuthorityRef:          admission.AuthorityRef,
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	decisionRef, err := owner.pad.PublishDeliveryDecision(ctx, decision)
-	if err != nil {
-		t.Fatal(err)
-	}
 	binding := PADGitBinding{
 		Schema:                 PADGitBindingSchema,
 		Candidate:              candidate,
@@ -646,21 +996,15 @@ func newOwnerBoundDeliveryFixtureWithConnectorBinding(
 			deliveryadmission.WithTrustedRepositoryClock(clock),
 		)
 	}
-	request := OwnerIssueDeliveryAuthorizationRequest{
-		ExpectedRevision: terminal.state.Revision,
-		DecisionRef:      decisionRef,
-	}
-	if allowIncomplete {
-		request.HumanDecisionRef = ownerPublishExceptionGovernance(
-			t,
-			owner,
-			decisionRef,
+	candidateAuthority, err :=
+		owner.coordinator.preparePADCandidateBindingFor(
+			ctx,
+			candidate,
+			admission.Intent.Destination,
+			deliveryadmission.MechanismPullRequest,
+			terminal.authority.Receipt.ReceiptRef,
+			terminal.authority.Result.ResultRef,
 		)
-	}
-	delivered, err := owner.coordinator.IssueAndBindDeliveryAuthorization(
-		ctx,
-		request,
-	)
 	if mismatchedBinding {
 		if !errors.Is(err, ErrPADHostingCorrupt) {
 			t.Fatalf("mismatched connector binding error = %v", err)
@@ -688,6 +1032,45 @@ func newOwnerBoundDeliveryFixtureWithConnectorBinding(
 		}
 		return ownerBoundDeliveryFixture{}
 	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := deliveryadmission.Decide(
+		ctx,
+		owner.pad,
+		owner.coordinator.rar,
+		deliveryadmission.DeliveryRequest{
+			AdmissionDecisionRef:  admission.Admission.AdmissionDecisionRef,
+			PolicyRef:             admission.PolicyRef,
+			ReviewReceiptRef:      terminal.authority.Receipt.ReceiptRef,
+			VerificationResultRef: terminal.authority.Result.ResultRef,
+			CandidateAuthorityRef: candidateAuthority.RecordRef,
+			GateRef:               gateRef,
+			AuthorityRef:          admission.AuthorityRef,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decisionRef, err := owner.pad.PublishDeliveryDecision(ctx, decision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := OwnerIssueDeliveryAuthorizationRequest{
+		ExpectedRevision: terminal.state.Revision,
+		DecisionRef:      decisionRef,
+	}
+	if allowIncomplete {
+		request.HumanDecisionRef = ownerPublishExceptionGovernance(
+			t,
+			owner,
+			decisionRef,
+		)
+	}
+	delivered, err := owner.coordinator.IssueAndBindDeliveryAuthorization(
+		ctx,
+		request,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -772,6 +1155,9 @@ func newOwnerBoundDeliveryFixtureWithConnectorBinding(
 		owner:                  owner,
 		hosting:                hostingTransport,
 		clock:                  clock,
+		catalog:                catalog,
+		candidateAuthority:     candidateAuthority,
+		binding:                binding,
 		kind:                   kind,
 		authorizationRef:       delivered.DeliveryAuthorizationRef,
 		authorizationExpiresAt: expiresAt,

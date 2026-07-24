@@ -43,6 +43,28 @@ func (runtime *cliAdvanceRuntime) StartOutcome(
 	)
 }
 
+func (runtime *cliAdvanceRuntime) DecideRoute(
+	context.Context,
+	string,
+	string,
+	workrun.WorkRouteChoice,
+) (workrun.WorkRouteV1, error) {
+	return workrun.WorkRouteV1{}, errors.New(
+		"work advance must not decide routes",
+	)
+}
+
+func (runtime *cliAdvanceRuntime) BindSDDRoute(
+	context.Context,
+	string,
+	string,
+	string,
+) (workrun.WorkRouteV1, error) {
+	return workrun.WorkRouteV1{}, errors.New(
+		"work advance must not bind SDD routes",
+	)
+}
+
 func (runtime *cliAdvanceRuntime) AdvanceOutcome(
 	_ context.Context,
 	workRunID string,
@@ -53,6 +75,17 @@ func (runtime *cliAdvanceRuntime) AdvanceOutcome(
 		expectedRevision: expectedRevision,
 	})
 	return runtime.advance, runtime.err
+}
+
+func (runtime *cliAdvanceRuntime) ReconcileOutcome(
+	context.Context,
+	string,
+	string,
+	string,
+) (workrun.WorkReconcileV1, error) {
+	return workrun.WorkReconcileV1{}, errors.New(
+		"work advance must not reconcile outcomes",
+	)
 }
 
 type cliAdvanceRuntimeOpener struct {
@@ -246,6 +279,7 @@ func cliReadyAdvance(
 			Revision:            cliAdvanceRef("ready"),
 			PublicState:         workrun.PublicStateReady,
 			RouteDecision:       workrun.RouteDecisionDirectInline,
+			RoutePhase:          workrun.RoutePhaseImplementationSelected,
 			ImplementationRoute: workrun.ImplementationRouteDirectInline,
 			Verification: workrun.VerificationSummaryV1{
 				Outcome: workrun.VerificationNotRequired,
@@ -269,6 +303,12 @@ func cliDecisionAdvance(
 	if !ok {
 		panic("closed work-advance diagnostic unavailable")
 	}
+	diagnostic := workrun.WorkAdvanceDiagnosticV1{
+		Ref:        cliAdvanceRef("diagnostic"),
+		Code:       code,
+		Message:    message,
+		NextAction: workrun.WorkAdvanceNextActionStartFresh,
+	}
 	return workrun.WorkAdvanceV1{
 		Schema:           workrun.WorkAdvanceContractV1,
 		Contract:         workrun.WorkAdvanceContractV1,
@@ -280,18 +320,16 @@ func cliDecisionAdvance(
 			Revision:            cliAdvanceRef("decision"),
 			PublicState:         workrun.PublicStateNeedsYourDecision,
 			RouteDecision:       workrun.RouteDecisionDelegatedDirect,
+			RoutePhase:          workrun.RoutePhaseImplementationSelected,
 			ImplementationRoute: workrun.ImplementationRouteDelegatedDirect,
 			Verification: workrun.VerificationSummaryV1{
 				Outcome:    workrun.VerificationPending,
 				ResultRefs: []string{},
 			},
 			DeliveryIntentRef: cliAdvanceRef("intent"),
+			Diagnostic:        &diagnostic,
 		},
-		Diagnostic: &workrun.WorkAdvanceDiagnosticV1{
-			Ref:     cliAdvanceRef("diagnostic"),
-			Code:    code,
-			Message: message,
-		},
+		Diagnostic: &diagnostic,
 	}
 }
 

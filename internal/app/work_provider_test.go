@@ -22,6 +22,9 @@ func TestWorkProviderCommandsDispatchBeforePlatformDetection(t *testing.T) {
 	tests := [][]string{
 		{"work-capabilities", "--contract=", "--json"},
 		{"work-start", "--contract=", "--json"},
+		{"work-route", "decide", "--contract=", "--json"},
+		{"work-route", "bind-sdd", "--contract=", "--json"},
+		{"work-reconcile", "--contract=", "--json"},
 		{"work-status", "--contract=", "--json"},
 		{"work-transition", "apply", "--contract=", "--json"},
 	}
@@ -53,6 +56,12 @@ func TestGlobalHelpDocumentsOnlyOpaqueWorkTransitionApply(t *testing.T) {
 	for _, required := range []string{
 		"work-capabilities --cwd <repo> --contract gentle-ai.work-capabilities/v1 --json",
 		"work-start --cwd <repo> --contract gentle-ai.work-start/v1 --json",
+		"work-route decide --cwd <repo> --work-run <id> --expected-revision <revision>",
+		"--contract gentle-ai.work-route/v1 --choice <accept_sdd|decline_sdd> --json",
+		"work-route bind-sdd --cwd <repo> --work-run <id> --expected-revision <revision>",
+		"--contract gentle-ai.work-route/v1 --run-ref <existing-run> --json",
+		"work-reconcile --cwd <repo> --work-run <id> --expected-revision <revision>",
+		"--diagnostic-ref <ref> --contract gentle-ai.work-reconcile/v1 --json",
 		"work-status --cwd <repo> --work-run <id> --contract gentle-ai.work-status/v1 --json",
 		"work-transition apply --cwd <repo> --work-run <id> --contract gentle-ai.work-transition/v1",
 		"--authorization-ref <ref> --expected-revision <revision> --json",
@@ -64,6 +73,8 @@ func TestGlobalHelpDocumentsOnlyOpaqueWorkTransitionApply(t *testing.T) {
 	for _, forbidden := range []string{
 		"work-transition start",
 		"work-transition issue",
+		"--route",
+		"--routing-facts",
 		"--plan",
 		"--argv",
 	} {

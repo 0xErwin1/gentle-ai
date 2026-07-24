@@ -36,6 +36,14 @@ func (opener ProductionRepositoryOpener) OpenRepository(
 	repo string,
 	workRunID string,
 ) (Repository, error) {
+	return opener.openRepository(ctx, repo, workRunID)
+}
+
+func (opener ProductionRepositoryOpener) openRepository(
+	ctx context.Context,
+	repo string,
+	workRunID string,
+) (*ProductionRepository, error) {
 	lease, err := reviewtransaction.OpenRepositoryIdentityLease(ctx, repo)
 	if err != nil {
 		return nil, err
@@ -98,15 +106,18 @@ func (opener ProductionRepositoryOpener) OpenRepository(
 	}
 	deliveryResultAuthority.pad = pad
 	store = store.WithAuthorityPorts(workrun.AuthorityPorts{
-		PAD:                  pad,
-		ExplicitSDDRequest:   coordination,
-		MutationCompletion:   mutationAuthority,
-		Route:                coordination,
-		SDD:                  SDDWorkRunAuthority{Repo: repositoryRoot},
-		Verification:         RARWorkRunAuthority{Coordination: coordination, RAR: rar},
-		Launch:               executor,
-		DeliveryResult:       deliveryResultAuthority,
-		ProductiveDiagnostic: deliveryResultAuthority,
+		PAD:                       pad,
+		ExplicitSDDRequest:        coordination,
+		MutationCompletion:        mutationAuthority,
+		Route:                     coordination,
+		SDD:                       SDDWorkRunAuthority{Repo: repositoryRoot},
+		Verification:              RARWorkRunAuthority{Coordination: coordination, RAR: rar},
+		Launch:                    executor,
+		DeliveryResult:            deliveryResultAuthority,
+		ProductiveExecutionResult: deliveryResultAuthority,
+		ProductiveDiagnostic:      deliveryResultAuthority,
+		ProductiveReconciliation:  deliveryResultAuthority,
+		DeliveryRoute:             pad,
 	})
 	if _, err := padAuthority.ResolveDeliveryRepository(
 		ctx,
@@ -135,11 +146,15 @@ func (ReadOnlyWorkRunRepositoryOpener) OpenRepository(
 	repo string,
 	workRunID string,
 ) (Repository, error) {
-	store, err := workrun.OpenWorkRunStore(ctx, repo, workRunID)
+	production, err := (ProductionRepositoryOpener{}).openRepository(
+		ctx,
+		repo,
+		workRunID,
+	)
 	if err != nil {
 		return nil, err
 	}
-	return readOnlyWorkRunRepository{store: store}, nil
+	return readOnlyWorkRunRepository{store: production.WorkRun}, nil
 }
 
 type readOnlyWorkRunRepository struct {

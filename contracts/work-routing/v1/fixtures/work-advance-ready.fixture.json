@@ -9,6 +9,7 @@
     "revision": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
     "publicState": "ready",
     "routeDecision": "direct_inline",
+    "routePhase": "implementation_selected",
     "implementationRoute": "direct_inline",
     "verification": {
       "outcome": "not_required",

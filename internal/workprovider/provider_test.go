@@ -393,6 +393,7 @@ func validStatus() workrun.WorkStatusV1 {
 		WorkRunID: "work-provider-test", Revision: testRevision("a"),
 		PublicState:         workrun.PublicStateWorking,
 		RouteDecision:       workrun.RouteDecisionDirectInline,
+		RoutePhase:          workrun.RoutePhaseImplementationSelected,
 		ImplementationRoute: workrun.ImplementationRouteDirectInline,
 		Verification: workrun.VerificationSummaryV1{
 			Outcome: workrun.VerificationPending, ResultRefs: []string{},

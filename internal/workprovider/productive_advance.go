@@ -411,6 +411,15 @@ func (runtimeOutcome *productiveRuntimeOutcome) failProductiveAdvance(
 	if err != nil {
 		return workrun.WorkAdvanceV1{}, err
 	}
+	if replay, ok, err := store.reconciledHistoricalResult(
+		ctx,
+		expectedRevision,
+		state,
+	); err != nil {
+		return workrun.WorkAdvanceV1{}, err
+	} else if ok {
+		return replay, nil
+	}
 	status, err := coordinator.work.PublicStatus(ctx)
 	if err != nil {
 		return workrun.WorkAdvanceV1{}, err
@@ -425,12 +434,14 @@ func (runtimeOutcome *productiveRuntimeOutcome) failProductiveAdvance(
 	} else if ok {
 		return replay, nil
 	}
-	if err := gateProductiveAdvanceAttempt(
+	state, err = gateProductiveAdvanceAttempt(
 		ctx,
-		store,
+		coordinator,
 		state,
 		expectedRevision,
-	); err != nil {
+		true,
+	)
+	if err != nil {
 		return workrun.WorkAdvanceV1{}, err
 	}
 	if state.DeliveryResultRef != "" {
@@ -460,6 +471,7 @@ func (runtimeOutcome *productiveRuntimeOutcome) failProductiveAdvance(
 		expectedRevision,
 		state,
 		workrun.WorkAdvanceDiagnosticProviderAuthorityUnavailable,
+		productiveProviderFailureNextAction(state),
 	)
 }
 
@@ -504,6 +516,15 @@ func recoverProductiveWork(
 	if err != nil {
 		return workrun.WorkAdvanceV1{}, err
 	}
+	if replay, ok, err := store.reconciledHistoricalResult(
+		ctx,
+		expectedRevision,
+		state,
+	); err != nil {
+		return workrun.WorkAdvanceV1{}, err
+	} else if ok {
+		return replay, nil
+	}
 	status, err := coordinator.work.PublicStatus(ctx)
 	if err != nil {
 		return workrun.WorkAdvanceV1{}, err
@@ -518,12 +539,14 @@ func recoverProductiveWork(
 	} else if ok {
 		return replay, nil
 	}
-	if err := gateProductiveAdvanceAttempt(
+	state, err = gateProductiveAdvanceAttempt(
 		ctx,
-		store,
+		coordinator,
 		state,
 		expectedRevision,
-	); err != nil {
+		true,
+	)
+	if err != nil {
 		return workrun.WorkAdvanceV1{}, err
 	}
 	if state.DeliveryResultRef != "" {
@@ -551,6 +574,12 @@ func recoverProductiveWork(
 			errProductiveAdvanceRecoveryUnavailable
 	}
 	execution, found, recoveryErr := coordinator.RecoverBoundDelivery(ctx)
+	if errors.Is(recoveryErr, ErrPADDeliveryResultCorrupt) ||
+		errors.Is(recoveryErr, deliveryadmission.ErrExecutionResultCorrupt) {
+		// Corrupt terminal authority is not a recoverable product outcome.
+		// Propagate it before publishing a blocker or mutating WorkRun.
+		return workrun.WorkAdvanceV1{}, recoveryErr
+	}
 	if errors.Is(
 		recoveryErr,
 		deliveryadmission.ErrExecutionResultUnavailable,
@@ -562,6 +591,7 @@ func recoverProductiveWork(
 			expectedRevision,
 			state,
 			workrun.WorkAdvanceDiagnosticDeliveryOutcomeIndeterminate,
+			workrun.WorkAdvanceNextActionReconcile,
 		)
 	}
 	if recoveryErr != nil || !found {
@@ -572,6 +602,7 @@ func recoverProductiveWork(
 			expectedRevision,
 			state,
 			workrun.WorkAdvanceDiagnosticProviderAuthorityUnavailable,
+			workrun.WorkAdvanceNextActionReconcile,
 		)
 	}
 	switch execution.Outcome {
@@ -607,6 +638,7 @@ func recoverProductiveWork(
 			expectedRevision,
 			state,
 			workrun.WorkAdvanceDiagnosticDeliveryEffectFailed,
+			workrun.WorkAdvanceNextActionStartFresh,
 		)
 	default:
 		return blockRecoveredProductiveAdvance(
@@ -616,6 +648,7 @@ func recoverProductiveWork(
 			expectedRevision,
 			state,
 			workrun.WorkAdvanceDiagnosticDeliveryOutcomeIndeterminate,
+			workrun.WorkAdvanceNextActionReconcile,
 		)
 	}
 }
@@ -658,6 +691,15 @@ func advanceProductiveWork(
 	if state.DeliveryIntentRef != authority.DeliveryIntentRef {
 		return workrun.WorkAdvanceV1{}, ErrProviderResultMismatch
 	}
+	if replay, ok, err := store.reconciledHistoricalResult(
+		ctx,
+		expectedRevision,
+		state,
+	); err != nil {
+		return workrun.WorkAdvanceV1{}, err
+	} else if ok {
+		return replay, nil
+	}
 	publicStatus, err := coordinator.work.PublicStatus(ctx)
 	if err != nil {
 		return workrun.WorkAdvanceV1{}, err
@@ -680,12 +722,14 @@ func advanceProductiveWork(
 	if err != nil {
 		return workrun.WorkAdvanceV1{}, err
 	}
-	if err := gateProductiveAdvanceAttempt(
+	state, err = gateProductiveAdvanceAttempt(
 		ctx,
-		store,
+		coordinator,
 		state,
 		expectedRevision,
-	); err != nil {
+		false,
+	)
+	if err != nil {
 		return workrun.WorkAdvanceV1{}, err
 	}
 	if state.ProductiveBlockerRef != "" {
@@ -716,6 +760,7 @@ func advanceProductiveWork(
 			expectedRevision,
 			state,
 			blockerCode,
+			workrun.WorkAdvanceNextActionStartFresh,
 		)
 	}
 	if state.Handoff == nil {
@@ -750,6 +795,7 @@ func advanceProductiveWork(
 			expectedRevision,
 			state,
 			blockerCode,
+			workrun.WorkAdvanceNextActionStartFresh,
 		)
 	}
 	if state.DeliveryAuthorizationRef != "" {
@@ -770,6 +816,7 @@ func advanceProductiveWork(
 				expectedRevision,
 				state,
 				deliveryBlocker,
+				productiveExecutionNextAction(deliveryBlocker),
 			)
 		}
 		return finishProductiveAdvance(
@@ -810,6 +857,7 @@ func advanceProductiveWork(
 			expectedRevision,
 			state,
 			workrun.WorkAdvanceDiagnosticVerificationApplicabilityUnknown,
+			workrun.WorkAdvanceNextActionStartFresh,
 		)
 	}
 	if applicability.Decision !=
@@ -821,6 +869,7 @@ func advanceProductiveWork(
 			expectedRevision,
 			state,
 			workrun.WorkAdvanceDiagnosticCompleteVerificationPlanRequired,
+			workrun.WorkAdvanceNextActionStartFresh,
 		)
 	}
 	assessment, err := builder.AssessSnapshotRisk(ctx, candidate)
@@ -832,6 +881,7 @@ func advanceProductiveWork(
 			expectedRevision,
 			state,
 			workrun.WorkAdvanceDiagnosticReviewRiskUnknown,
+			workrun.WorkAdvanceNextActionStartFresh,
 		)
 	}
 	lenses, err := reviewtransaction.SelectReviewLenses(
@@ -846,6 +896,7 @@ func advanceProductiveWork(
 			expectedRevision,
 			state,
 			workrun.WorkAdvanceDiagnosticReviewLensesUnknown,
+			workrun.WorkAdvanceNextActionStartFresh,
 		)
 	}
 	if assessment.Level != reviewtransaction.RiskLow ||
@@ -857,6 +908,7 @@ func advanceProductiveWork(
 			expectedRevision,
 			state,
 			workrun.WorkAdvanceDiagnosticCompleteReviewRequired,
+			workrun.WorkAdvanceNextActionStartFresh,
 		)
 	}
 	plan, err := reviewtransaction.BuildVerificationPlan(
@@ -951,6 +1003,7 @@ func advanceProductiveWork(
 			expectedRevision,
 			state,
 			blockerCode,
+			workrun.WorkAdvanceNextActionStartFresh,
 		)
 	}
 	decisionRef, ok, err := store.decision(ctx, expectedRevision)
@@ -967,6 +1020,7 @@ func advanceProductiveWork(
 				expectedRevision,
 				state,
 				productiveDeliveryDecisionBlocker(err),
+				workrun.WorkAdvanceNextActionStartFresh,
 			)
 		}
 		if err := store.publishDecision(
@@ -992,6 +1046,7 @@ func advanceProductiveWork(
 			expectedRevision,
 			state,
 			productiveDeliveryAuthorizationBlocker(err),
+			workrun.WorkAdvanceNextActionStartFresh,
 		)
 	}
 	_, blockerCode, err = recheckProductiveCommittedCandidate(
@@ -1011,6 +1066,7 @@ func advanceProductiveWork(
 			expectedRevision,
 			state,
 			blockerCode,
+			workrun.WorkAdvanceNextActionStartFresh,
 		)
 	}
 	deliveryResultRef, deliveryBlocker, err := executeAndBindProductiveDelivery(
@@ -1030,6 +1086,7 @@ func advanceProductiveWork(
 			expectedRevision,
 			state,
 			deliveryBlocker,
+			productiveExecutionNextAction(deliveryBlocker),
 		)
 	}
 	return finishProductiveAdvance(
@@ -1044,28 +1101,39 @@ func advanceProductiveWork(
 
 func gateProductiveAdvanceAttempt(
 	ctx context.Context,
-	store productiveAdvanceStore,
+	coordinator *OwnerCoordinator,
 	state workrun.WorkRunState,
 	expectedRevision string,
-) error {
-	attempted, err := store.attemptExists(ctx, expectedRevision)
-	if err != nil {
-		return err
-	}
-	if attempted {
-		return nil
+	recovery bool,
+) (workrun.WorkRunState, error) {
+	if state.ProductiveAdvanceSourceRevision != "" {
+		if state.ProductiveAdvanceSourceRevision != expectedRevision {
+			return workrun.WorkRunState{}, ownerRevisionConflict(
+				expectedRevision,
+				state.ProductiveAdvanceSourceRevision,
+			)
+		}
+		return state, nil
 	}
 	if state.ProductiveBlockerRef != "" ||
-		state.DeliveryResultRef != "" {
-		return fmt.Errorf(
+		state.DeliveryResultRef != "" ||
+		state.ProductiveReconciliationRef != "" {
+		return workrun.WorkRunState{}, fmt.Errorf(
 			"%w: work advance is already terminal",
 			workrun.ErrWorkRunInvalidTransition,
 		)
 	}
 	if state.Revision != expectedRevision {
-		return ownerRevisionConflict(expectedRevision, state.Revision)
+		return workrun.WorkRunState{}, ownerRevisionConflict(
+			expectedRevision,
+			state.Revision,
+		)
 	}
-	return store.beginAttempt(ctx, expectedRevision)
+	return coordinator.beginProductiveAdvance(
+		ctx,
+		expectedRevision,
+		recovery,
+	)
 }
 
 func executeAndBindProductiveDelivery(
@@ -1077,13 +1145,52 @@ func executeAndBindProductiveDelivery(
 	if state.DeliveryResultRef != "" {
 		return state.DeliveryResultRef, "", nil
 	}
-	execution, err := coordinator.ExecuteBoundDelivery(ctx)
+	var execution deliveryadmission.ExecutionResult
+	var err error
+	if state.ProductiveExecutionResultRef != "" {
+		var found bool
+		execution, found, err = coordinator.RecoverBoundDelivery(ctx)
+		if err == nil && !found {
+			err = deliveryadmission.ErrExecutionResultUnavailable
+		}
+	} else {
+		execution, err = coordinator.ExecuteBoundDelivery(ctx)
+	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) ||
 			errors.Is(err, context.DeadlineExceeded) {
 			return "", "", err
 		}
+		if errors.Is(err, ErrPADDeliveryResultCorrupt) ||
+			errors.Is(err, deliveryadmission.ErrExecutionResultCorrupt) {
+			// Integrity failures must not be normalized into a terminal
+			// product diagnostic because doing so would mutate WorkRun based
+			// on untrusted authority.
+			return "", "", err
+		}
 		return "", productiveDeliveryExecutionBlocker(err), nil
+	}
+	if state.ProductiveExecutionResultRef == "" {
+		executionResultRef, err :=
+			store.publishProductiveExecutionResult(
+				ctx,
+				state,
+				execution,
+			)
+		if err != nil {
+			return "", "", err
+		}
+		state, err = coordinator.RecordProductiveExecutionResult(
+			ctx,
+			state.Revision,
+			executionResultRef,
+		)
+		if err != nil {
+			return "", "", err
+		}
+		if state.ProductiveExecutionResultRef != executionResultRef {
+			return "", "", ErrProviderResultMismatch
+		}
 	}
 	switch execution.Outcome {
 	case deliveryadmission.ExecutionFailed:
@@ -1163,6 +1270,28 @@ func productiveDeliveryExecutionBlocker(
 	}
 }
 
+func productiveExecutionNextAction(
+	code workrun.WorkAdvanceDiagnosticCode,
+) workrun.WorkAdvanceDiagnosticNextAction {
+	switch code {
+	case workrun.WorkAdvanceDiagnosticDeliveryOutcomeIndeterminate,
+		workrun.WorkAdvanceDiagnosticDeliveryAuthorizationUnavailable,
+		workrun.WorkAdvanceDiagnosticProviderAuthorityUnavailable:
+		return workrun.WorkAdvanceNextActionReconcile
+	default:
+		return workrun.WorkAdvanceNextActionStartFresh
+	}
+}
+
+func productiveProviderFailureNextAction(
+	state workrun.WorkRunState,
+) workrun.WorkAdvanceDiagnosticNextAction {
+	if state.DeliveryAuthorizationRef != "" {
+		return workrun.WorkAdvanceNextActionReconcile
+	}
+	return workrun.WorkAdvanceNextActionStartFresh
+}
+
 func (coordinator *OwnerCoordinator) productiveVerificationPolicyHash(
 	ctx context.Context,
 ) (policyHash string, err error) {
@@ -1209,6 +1338,7 @@ func blockProductiveAdvance(
 	expectedRevision string,
 	state workrun.WorkRunState,
 	code workrun.WorkAdvanceDiagnosticCode,
+	nextAction workrun.WorkAdvanceDiagnosticNextAction,
 ) (workrun.WorkAdvanceV1, error) {
 	current, err := coordinator.Status(ctx)
 	if err != nil {
@@ -1238,7 +1368,9 @@ func blockProductiveAdvance(
 	diagnostic, err := store.publishDiagnostic(
 		ctx,
 		state,
+		expectedRevision,
 		code,
+		nextAction,
 	)
 	if err != nil {
 		return workrun.WorkAdvanceV1{}, err
@@ -1268,8 +1400,15 @@ func blockRecoveredProductiveAdvance(
 	expectedRevision string,
 	state workrun.WorkRunState,
 	code workrun.WorkAdvanceDiagnosticCode,
+	nextAction workrun.WorkAdvanceDiagnosticNextAction,
 ) (workrun.WorkAdvanceV1, error) {
-	diagnostic, err := store.publishDiagnostic(ctx, state, code)
+	diagnostic, err := store.publishDiagnostic(
+		ctx,
+		state,
+		expectedRevision,
+		code,
+		nextAction,
+	)
 	if err != nil {
 		return workrun.WorkAdvanceV1{}, err
 	}
@@ -1318,15 +1457,17 @@ func finishProductiveAdvance(
 			return workrun.WorkAdvanceV1{}, resolveErr
 		}
 		value := workrun.WorkAdvanceDiagnosticV1{
-			Ref:     diagnosticRef,
-			Code:    resolved.Code,
-			Message: resolved.Message,
+			Ref:        diagnosticRef,
+			Code:       resolved.Code,
+			Message:    resolved.Message,
+			NextAction: resolved.NextAction,
 		}
 		if err := value.Validate(); err != nil {
 			return workrun.WorkAdvanceV1{}, err
 		}
 		diagnostic = &value
 	}
+	status.Diagnostic = diagnostic
 	result := workrun.WorkAdvanceV1{
 		Schema:            workrun.WorkAdvanceContractV1,
 		Contract:          workrun.WorkAdvanceContractV1,

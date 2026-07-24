@@ -192,6 +192,28 @@ func (resolver *productiveAdvanceTestActivation) ResolveActivation(
 	return ActivationEnabled, nil
 }
 
+type productiveAdvanceDisableAfterExecutionAnchor struct {
+	store workrun.WorkRunStore
+}
+
+func (resolver productiveAdvanceDisableAfterExecutionAnchor) ResolveActivation(
+	ctx context.Context,
+	_ string,
+) (ActivationMode, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	state, err := resolver.store.Status()
+	if err != nil {
+		return "", err
+	}
+	if state.ProductiveExecutionResultRef != "" &&
+		state.DeliveryResultRef == "" {
+		return ActivationDisabled, nil
+	}
+	return ActivationEnabled, nil
+}
+
 type productiveAdvanceTestFixture struct {
 	repo       string
 	bare       string
@@ -689,30 +711,35 @@ func TestWorkAdvanceNeedsDecisionBindsExactStageAndReplaysStableDiagnostic(
 		name     string
 		mode     productiveAdvanceTestCASMode
 		code     workrun.WorkAdvanceDiagnosticCode
+		next     workrun.WorkAdvanceDiagnosticNextAction
 		casCalls int
 	}{
 		{
 			name:     "expired before first effect",
 			mode:     productiveAdvanceTestCASExpired,
 			code:     workrun.WorkAdvanceDiagnosticDeliveryAuthorizationExpired,
+			next:     workrun.WorkAdvanceNextActionStartFresh,
 			casCalls: 0,
 		},
 		{
 			name:     "failed effect",
 			mode:     productiveAdvanceTestCASFailed,
 			code:     workrun.WorkAdvanceDiagnosticDeliveryEffectFailed,
+			next:     workrun.WorkAdvanceNextActionStartFresh,
 			casCalls: 1,
 		},
 		{
 			name:     "expired after durable claim",
 			mode:     productiveAdvanceTestCASPostClaim,
 			code:     workrun.WorkAdvanceDiagnosticDeliveryOutcomeIndeterminate,
+			next:     workrun.WorkAdvanceNextActionReconcile,
 			casCalls: 1,
 		},
 		{
 			name:     "indeterminate effect",
 			mode:     productiveAdvanceTestCASIndeterminate,
 			code:     workrun.WorkAdvanceDiagnosticDeliveryOutcomeIndeterminate,
+			next:     workrun.WorkAdvanceNextActionReconcile,
 			casCalls: 1,
 		},
 	}
@@ -751,6 +778,12 @@ func TestWorkAdvanceNeedsDecisionBindsExactStageAndReplaysStableDiagnostic(
 				first.Diagnostic == nil ||
 				first.Diagnostic.Code != test.code ||
 				first.Diagnostic.Message != message ||
+				first.Diagnostic.NextAction != test.next ||
+				first.Status.Diagnostic == nil ||
+				!reflect.DeepEqual(
+					first.Status.Diagnostic,
+					first.Diagnostic,
+				) ||
 				diagnosticErr != nil {
 				t.Fatalf(
 					"bounded diagnostic = %#v; diagnostic = %#v; want code=%q message=%q; validate=%v",
@@ -1083,7 +1116,7 @@ func TestWorkAdvanceConcurrentSameExpectedRevisionHasOneEffectAndExactReplay(
 	}
 }
 
-func TestWorkAdvanceKillSwitchReconcilesDurableEffectWithoutSecondEffect(
+func TestWorkAdvanceKillSwitchBeforeExecutionAnchorRequiresManualReconciliation(
 	t *testing.T,
 ) {
 	fixture := newProductiveAdvanceTestFixture(
@@ -1106,6 +1139,23 @@ func TestWorkAdvanceKillSwitchReconcilesDurableEffectWithoutSecondEffect(
 	if fixture.remoteRevision(t) != fixture.connector.candidateRevision {
 		t.Fatal("kill-switch test did not cross the durable delivery-effect boundary")
 	}
+	workStore, err := workrun.OpenWorkRunStore(
+		context.Background(),
+		fixture.repo,
+		fixture.workRunID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crashed, err := workStore.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if crashed.ProductiveExecutionResultRef != "" ||
+		crashed.DeliveryResultRef != "" ||
+		crashed.ProductiveBlockerRef != "" {
+		t.Fatalf("pre-anchor crash unexpectedly committed terminal authority: %#v", crashed)
+	}
 	recovered, err := fixture.runtime.AdvanceOutcome(
 		context.Background(),
 		fixture.workRunID,
@@ -1114,13 +1164,114 @@ func TestWorkAdvanceKillSwitchReconcilesDurableEffectWithoutSecondEffect(
 	if err != nil {
 		t.Fatalf("read-only recovery: %v", err)
 	}
+	if recovered.Status.PublicState != workrun.PublicStateNeedsYourDecision ||
+		recovered.DeliveryResultRef != "" ||
+		recovered.Diagnostic == nil ||
+		recovered.Diagnostic.Code !=
+			workrun.WorkAdvanceDiagnosticDeliveryOutcomeIndeterminate ||
+		recovered.Diagnostic.NextAction !=
+			workrun.WorkAdvanceNextActionReconcile ||
+		fixture.casCalls() != 1 {
+		t.Fatalf(
+			"read-only recovery/effects = %#v / %d",
+			recovered,
+			fixture.casCalls(),
+		)
+	}
+	reconciled, err := fixture.runtime.ReconcileOutcome(
+		context.Background(),
+		fixture.workRunID,
+		recovered.Status.Revision,
+		recovered.Diagnostic.Ref,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reconciled.Outcome != workrun.WorkReconcileManualResolution ||
+		reconciled.DeliveryResultRef != "" ||
+		reconciled.Status.PublicState !=
+			workrun.PublicStateNeedsYourDecision ||
+		fixture.casCalls() != 1 {
+		t.Fatalf(
+			"pre-anchor reconciliation/effects = %#v / %d",
+			reconciled,
+			fixture.casCalls(),
+		)
+	}
+}
+
+func TestWorkAdvanceKillSwitchAfterExecutionAnchorRecoversExactDeliveryWithoutSecondEffect(
+	t *testing.T,
+) {
+	fixture := newProductiveAdvanceTestFixture(
+		t,
+		"kill-switch-post-anchor-recovery",
+		productiveAdvanceTestCASSucceed,
+		false,
+	)
+	ctx := context.Background()
+	workStore, err := workrun.OpenWorkRunStore(
+		ctx,
+		fixture.repo,
+		fixture.workRunID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.runtime.activation =
+		productiveAdvanceDisableAfterExecutionAnchor{store: workStore}
+	if _, err := fixture.runtime.AdvanceOutcome(
+		ctx,
+		fixture.workRunID,
+		fixture.start.Revision,
+	); !errors.Is(err, ErrCapabilityDisabled) {
+		t.Fatalf("post-anchor kill switch error = %v", err)
+	}
+	crashed, err := workStore.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if crashed.ProductiveExecutionResultRef == "" ||
+		crashed.DeliveryResultRef != "" ||
+		crashed.ProductiveBlockerRef != "" ||
+		fixture.casCalls() != 1 {
+		t.Fatalf(
+			"post-anchor crash state/effects = %#v / %d",
+			crashed,
+			fixture.casCalls(),
+		)
+	}
+
+	recovered, err := fixture.runtime.AdvanceOutcome(
+		ctx,
+		fixture.workRunID,
+		fixture.start.Revision,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if recovered.Status.PublicState != workrun.PublicStateReady ||
 		recovered.DeliveryResultRef == "" ||
 		recovered.Diagnostic != nil ||
 		fixture.casCalls() != 1 {
 		t.Fatalf(
-			"read-only recovery/effects = %#v / %d",
+			"post-anchor recovery/effects = %#v / %d",
 			recovered,
+			fixture.casCalls(),
+		)
+	}
+	replayed, err := fixture.runtime.AdvanceOutcome(
+		ctx,
+		fixture.workRunID,
+		fixture.start.Revision,
+	)
+	if err != nil ||
+		!reflect.DeepEqual(replayed, recovered) ||
+		fixture.casCalls() != 1 {
+		t.Fatalf(
+			"post-anchor exact replay = %#v, %v; CAS %d",
+			replayed,
+			err,
 			fixture.casCalls(),
 		)
 	}

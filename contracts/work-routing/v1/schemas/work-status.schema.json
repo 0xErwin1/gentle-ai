@@ -11,48 +11,243 @@
     "revision",
     "publicState",
     "routeDecision",
+    "routePhase",
     "verification"
   ],
   "properties": {
-    "schema": {"const": "gentle-ai.work-status/v1"},
-    "contract": {"const": "gentle-ai.work-status/v1"},
-    "workRunId": {"$ref": "#/$defs/ref"},
-    "revision": {"$ref": "#/$defs/revision"},
+    "schema": {
+      "const": "gentle-ai.work-status/v1"
+    },
+    "contract": {
+      "const": "gentle-ai.work-status/v1"
+    },
+    "workRunId": {
+      "$ref": "#/$defs/ref"
+    },
+    "revision": {
+      "$ref": "#/$defs/revision"
+    },
     "publicState": {
-      "enum": ["working", "checking", "ready", "needs_your_decision"]
+      "enum": [
+        "working",
+        "checking",
+        "ready",
+        "needs_your_decision"
+      ]
     },
     "routeDecision": {
-      "enum": ["direct_inline", "delegated_direct", "propose_sdd"]
+      "enum": [
+        "direct_inline",
+        "delegated_direct",
+        "propose_sdd"
+      ]
+    },
+    "routePhase": {
+      "enum": [
+        "decision_pending",
+        "sdd_runtime_pending",
+        "implementation_selected"
+      ]
     },
     "implementationRoute": {
-      "enum": ["direct_inline", "delegated_direct", "sdd"]
+      "enum": [
+        "direct_inline",
+        "delegated_direct",
+        "sdd"
+      ]
     },
-    "sddRunRef": {"$ref": "#/$defs/ref"},
-    "verification": {"$ref": "#/$defs/verification"},
-    "deliveryIntentRef": {"$ref": "#/$defs/ref"},
-    "reviewReceiptRef": {"$ref": "#/$defs/ref"},
-    "authorizedTransition": {"$ref": "#/$defs/authorizedTransition"}
+    "sddRunRef": {
+      "$ref": "#/$defs/sddRunRef"
+    },
+    "verification": {
+      "$ref": "#/$defs/verification"
+    },
+    "deliveryIntentRef": {
+      "$ref": "#/$defs/ref"
+    },
+    "reviewReceiptRef": {
+      "$ref": "#/$defs/ref"
+    },
+    "authorizedTransition": {
+      "$ref": "#/$defs/authorizedTransition"
+    },
+    "diagnostic": {
+      "$ref": "work-advance-diagnostic.schema.json"
+    }
   },
   "allOf": [
     {
       "if": {
-        "required": ["implementationRoute"],
-        "properties": {"implementationRoute": {"const": "sdd"}}
+        "required": [
+          "implementationRoute"
+        ],
+        "properties": {
+          "implementationRoute": {
+            "const": "sdd"
+          }
+        }
       },
-      "then": {"required": ["sddRunRef"]},
-      "else": {"not": {"required": ["sddRunRef"]}}
+      "then": {
+        "required": [
+          "sddRunRef"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "sddRunRef"
+          ]
+        }
+      }
     },
     {
-      "if": {"properties": {"routeDecision": {"const": "direct_inline"}}},
-      "then": {"properties": {"implementationRoute": {"const": "direct_inline"}}}
+      "if": {
+        "properties": {
+          "routeDecision": {
+            "const": "direct_inline"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "implementationRoute"
+        ],
+        "properties": {
+          "routePhase": {
+            "const": "implementation_selected"
+          },
+          "implementationRoute": {
+            "const": "direct_inline"
+          }
+        }
+      }
     },
     {
-      "if": {"properties": {"routeDecision": {"const": "delegated_direct"}}},
-      "then": {"properties": {"implementationRoute": {"const": "delegated_direct"}}}
+      "if": {
+        "properties": {
+          "routeDecision": {
+            "const": "delegated_direct"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "implementationRoute"
+        ],
+        "properties": {
+          "routePhase": {
+            "const": "implementation_selected"
+          },
+          "implementationRoute": {
+            "const": "delegated_direct"
+          }
+        }
+      }
     },
     {
-      "if": {"properties": {"routeDecision": {"const": "propose_sdd"}}},
-      "then": {"properties": {"implementationRoute": {"const": "sdd"}}}
+      "if": {
+        "properties": {
+          "routeDecision": {
+            "const": "propose_sdd"
+          }
+        }
+      },
+      "then": {
+        "oneOf": [
+          {
+            "required": [
+              "implementationRoute",
+              "sddRunRef"
+            ],
+            "properties": {
+              "routePhase": {
+                "const": "implementation_selected"
+              },
+              "implementationRoute": {
+                "const": "sdd"
+              }
+            }
+          },
+          {
+            "properties": {
+              "routePhase": {
+                "enum": [
+                  "decision_pending",
+                  "sdd_runtime_pending"
+                ]
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "implementationRoute"
+                  ]
+                },
+                {
+                  "required": [
+                    "sddRunRef"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "routePhase": {
+            "const": "decision_pending"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "publicState": {
+            "const": "needs_your_decision"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "routePhase": {
+            "const": "sdd_runtime_pending"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "publicState": {
+            "const": "working"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "diagnostic"
+        ]
+      },
+      "then": {
+        "properties": {
+          "publicState": {
+            "const": "needs_your_decision"
+          },
+          "routePhase": {
+            "const": "implementation_selected"
+          }
+        },
+        "not": {
+          "required": [
+            "authorizedTransition"
+          ]
+        }
+      }
     }
   ],
   "$defs": {
@@ -64,20 +259,38 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 240,
-      "pattern": "^[^\\r\\n\\x00]+$"
+      "pattern": "^[^\\x00\\x09-\\x0D\\x20\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF](?:[^\\r\\n\\x00]*[^\\x00\\x09-\\x0D\\x20\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF])?$"
+    },
+    "sddRunRef": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 96,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
     },
     "verification": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["outcome", "resultRefs"],
+      "required": [
+        "outcome",
+        "resultRefs"
+      ],
       "properties": {
         "outcome": {
-          "enum": ["pending", "not_required", "complete", "failed", "partial", "unavailable"]
+          "enum": [
+            "pending",
+            "not_required",
+            "complete",
+            "failed",
+            "partial",
+            "unavailable"
+          ]
         },
         "resultRefs": {
           "type": "array",
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/ref"}
+          "items": {
+            "$ref": "#/$defs/ref"
+          }
         }
       }
     },
@@ -94,13 +307,27 @@
         "applicableAuthorizationRef"
       ],
       "properties": {
-        "contract": {"const": "gentle-ai.work-transition/v1"},
-        "operation": {"const": "apply"},
-        "authorizationRef": {"$ref": "#/$defs/ref"},
-        "expectedRevision": {"$ref": "#/$defs/revision"},
-        "candidateRef": {"$ref": "#/$defs/ref"},
-        "actionTicketRef": {"$ref": "#/$defs/ref"},
-        "applicableAuthorizationRef": {"$ref": "#/$defs/ref"}
+        "contract": {
+          "const": "gentle-ai.work-transition/v1"
+        },
+        "operation": {
+          "const": "apply"
+        },
+        "authorizationRef": {
+          "$ref": "#/$defs/ref"
+        },
+        "expectedRevision": {
+          "$ref": "#/$defs/revision"
+        },
+        "candidateRef": {
+          "$ref": "#/$defs/ref"
+        },
+        "actionTicketRef": {
+          "$ref": "#/$defs/ref"
+        },
+        "applicableAuthorizationRef": {
+          "$ref": "#/$defs/ref"
+        }
       }
     }
   }

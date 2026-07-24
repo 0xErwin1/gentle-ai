@@ -2,10 +2,14 @@ package workrun
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
 
+	"github.com/gentleman-programming/gentle-ai/internal/deliveryadmission"
 	"github.com/gentleman-programming/gentle-ai/internal/hostruntime"
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 )
@@ -37,6 +41,17 @@ type DeliveryResultAuthorityPort interface {
 	) (DeliveryResultAuthority, error)
 }
 
+// ProductiveExecutionResultAuthorityPort resolves the exact terminal PAD
+// ExecutionResult that a productive advance is about to journal. Unlike the
+// later delivery projection, this authority covers every terminal outcome:
+// succeeded, failed, and indeterminate.
+type ProductiveExecutionResultAuthorityPort interface {
+	ResolveProductiveExecutionResult(
+		context.Context,
+		string,
+	) (ProductiveExecutionResultAuthority, error)
+}
+
 // ProductiveDiagnosticAuthorityPort resolves the owner-authored reason that
 // terminally stops productive convergence. WorkRun must validate the complete
 // source-stage binding before it journals the immutable reference; accepting a
@@ -48,16 +63,28 @@ type ProductiveDiagnosticAuthorityPort interface {
 	) (ProductiveDiagnosticAuthority, error)
 }
 
+// ProductiveReconciliationAuthorityPort resolves the single owner-authored
+// reconciliation of a terminal productive blocker. The caller supplies only
+// the immutable authority reference; outcome and any terminal evidence remain
+// owner output.
+type ProductiveReconciliationAuthorityPort interface {
+	ResolveProductiveReconciliation(
+		context.Context,
+		string,
+	) (ProductiveReconciliationAuthority, error)
+}
+
 type ProductiveDiagnosticAuthority struct {
-	Diagnostic               WorkAdvanceDiagnosticV1
-	RepositoryRef            string
-	WorkRunID                string
-	SourceRevision           string
-	DeliveryIntentRef        string
-	Handoff                  *ImplementationHandoff
-	VerificationResultRef    string
-	ReviewReceiptRef         string
-	DeliveryAuthorizationRef string
+	Diagnostic                   WorkAdvanceDiagnosticV1
+	RepositoryRef                string
+	WorkRunID                    string
+	SourceRevision               string
+	DeliveryIntentRef            string
+	Handoff                      *ImplementationHandoff
+	VerificationResultRef        string
+	ReviewReceiptRef             string
+	DeliveryAuthorizationRef     string
+	ProductiveExecutionResultRef string
 }
 
 // Validate accepts either the exact pre-mutation source state or the exact
@@ -77,12 +104,15 @@ func (authority ProductiveDiagnosticAuthority) Validate(
 		!workRunIDPattern.MatchString(authority.WorkRunID) ||
 		authority.WorkRunID != state.WorkRunID ||
 		!validSHA256Ref(authority.SourceRevision) ||
+		!validSHA256Ref(state.ProductiveAdvanceSourceRevision) ||
 		!validSHA256Ref(authority.DeliveryIntentRef) ||
 		authority.DeliveryIntentRef != state.DeliveryIntentRef ||
 		!reflect.DeepEqual(authority.Handoff, state.Handoff) ||
 		authority.VerificationResultRef != state.VerificationResultRef ||
 		authority.ReviewReceiptRef != state.ReviewReceiptRef ||
 		authority.DeliveryAuthorizationRef != state.DeliveryAuthorizationRef ||
+		authority.ProductiveExecutionResultRef !=
+			state.ProductiveExecutionResultRef ||
 		state.DeliveryResultRef != "" {
 		return fmt.Errorf(
 			"%w: productive diagnostic stage",
@@ -98,6 +128,7 @@ func (authority ProductiveDiagnosticAuthority) Validate(
 		authority.VerificationResultRef,
 		authority.ReviewReceiptRef,
 		authority.DeliveryAuthorizationRef,
+		authority.ProductiveExecutionResultRef,
 	} {
 		if ref != "" && !validSHA256Ref(ref) {
 			return errors.New(
@@ -130,8 +161,361 @@ func (authority ProductiveDiagnosticAuthority) Validate(
 	return nil
 }
 
+type ProductiveReconciliationAuthority struct {
+	ReconciliationRef            string
+	RepositoryRef                string
+	WorkRunID                    string
+	SourceRevision               string
+	AdvanceSourceRevision        string
+	OriginalDiagnosticRef        string
+	HistoricalAdvanceRef         string
+	DeliveryIntentRef            string
+	Handoff                      *ImplementationHandoff
+	VerificationResultRef        string
+	ReviewReceiptRef             string
+	DeliveryAuthorizationRef     string
+	ProductiveExecutionResultRef string
+	Outcome                      WorkReconcileOutcome
+	Diagnostic                   *WorkAdvanceDiagnosticV1
+	DeliveryResultRef            string
+}
+
+// Validate accepts only the exact blocked pre-state or the exact replayed
+// reconciliation post-state. SourceRevision binds the complete blocked
+// WorkRun record while the narrow stage projection prevents an authority from
+// being transplanted to another repository, run, diagnostic, or delivery
+// stage.
+func (authority ProductiveReconciliationAuthority) Validate(
+	requestedRef string,
+	repositoryRef string,
+	state WorkRunState,
+) error {
+	if !validSHA256Ref(authority.ReconciliationRef) ||
+		authority.ReconciliationRef != requestedRef ||
+		!validSHA256Ref(authority.RepositoryRef) ||
+		authority.RepositoryRef != repositoryRef ||
+		!validSHA256Ref(repositoryRef) ||
+		!workRunIDPattern.MatchString(authority.WorkRunID) ||
+		authority.WorkRunID != state.WorkRunID ||
+		!validSHA256Ref(authority.SourceRevision) ||
+		!validSHA256Ref(authority.AdvanceSourceRevision) ||
+		authority.AdvanceSourceRevision !=
+			state.ProductiveAdvanceSourceRevision ||
+		!validSHA256Ref(authority.OriginalDiagnosticRef) ||
+		authority.OriginalDiagnosticRef != state.ProductiveBlockerRef ||
+		!validSHA256Ref(authority.HistoricalAdvanceRef) ||
+		!validSHA256Ref(state.ProductiveBlockerSourceRevision) ||
+		!validSHA256Ref(authority.DeliveryIntentRef) ||
+		authority.DeliveryIntentRef != state.DeliveryIntentRef ||
+		!reflect.DeepEqual(authority.Handoff, state.Handoff) ||
+		authority.VerificationResultRef != state.VerificationResultRef ||
+		authority.ReviewReceiptRef != state.ReviewReceiptRef ||
+		authority.DeliveryAuthorizationRef !=
+			state.DeliveryAuthorizationRef ||
+		authority.ProductiveExecutionResultRef !=
+			state.ProductiveExecutionResultRef {
+		return fmt.Errorf(
+			"%w: productive reconciliation stage",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	if authority.Handoff != nil {
+		if err := authority.Handoff.Validate(); err != nil {
+			return err
+		}
+	}
+	for _, ref := range []string{
+		authority.VerificationResultRef,
+		authority.ReviewReceiptRef,
+		authority.DeliveryAuthorizationRef,
+		authority.ProductiveExecutionResultRef,
+	} {
+		if ref != "" && !validSHA256Ref(ref) {
+			return errors.New(
+				"productive reconciliation authority has invalid stage references",
+			)
+		}
+	}
+	if err := authority.validateOutcome(); err != nil {
+		return err
+	}
+	switch {
+	case state.ProductiveReconciliationRef == "":
+		if authority.SourceRevision != state.Revision ||
+			state.ProductiveReconciliationSourceRevision != "" ||
+			state.ProductiveReconciliationOutcome != "" ||
+			state.DeliveryResultRef != "" {
+			return fmt.Errorf(
+				"%w: productive reconciliation source",
+				ErrAuthorityBindingMismatch,
+			)
+		}
+	case state.ProductiveReconciliationRef == requestedRef:
+		if !validSHA256Ref(state.Revision) ||
+			state.Revision == authority.SourceRevision ||
+			state.ProductiveReconciliationSourceRevision !=
+				authority.SourceRevision ||
+			state.ProductiveReconciliationOutcome != authority.Outcome ||
+			state.DeliveryResultRef != authority.DeliveryResultRef {
+			return fmt.Errorf(
+				"%w: productive reconciliation replay",
+				ErrAuthorityBindingMismatch,
+			)
+		}
+	default:
+		return fmt.Errorf(
+			"%w: productive reconciliation reference",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	return nil
+}
+
+func (authority ProductiveReconciliationAuthority) validateOutcome() error {
+	switch authority.Outcome {
+	case WorkReconcileDeliveryConfirmed:
+		if authority.Diagnostic != nil ||
+			!validSHA256Ref(
+				authority.ProductiveExecutionResultRef,
+			) ||
+			!validSHA256Ref(authority.DeliveryResultRef) {
+			return errors.New(
+				"delivery-confirmed reconciliation requires only a delivery result",
+			)
+		}
+	case WorkReconcileNoDeliveryConfirmed:
+		if authority.DeliveryResultRef != "" ||
+			authority.Diagnostic == nil {
+			return errors.New(
+				"no-delivery reconciliation requires only an owner diagnostic",
+			)
+		}
+		if err := authority.Diagnostic.Validate(); err != nil {
+			return err
+		}
+		if authority.Diagnostic.Code !=
+			WorkAdvanceDiagnosticDeliveryNotCompleted ||
+			authority.Diagnostic.NextAction !=
+				WorkAdvanceNextActionStartFresh {
+			return fmt.Errorf(
+				"%w: no-delivery reconciliation outcome",
+				ErrAuthorityBindingMismatch,
+			)
+		}
+	case WorkReconcileManualResolution:
+		if authority.DeliveryResultRef != "" ||
+			authority.Diagnostic == nil {
+			return errors.New(
+				"manual reconciliation requires only an owner diagnostic",
+			)
+		}
+		if err := authority.Diagnostic.Validate(); err != nil {
+			return err
+		}
+		if authority.Diagnostic.Code !=
+			WorkAdvanceDiagnosticManualResolutionRequired ||
+			authority.Diagnostic.NextAction !=
+				WorkAdvanceNextActionManual {
+			return fmt.Errorf(
+				"%w: manual reconciliation outcome",
+				ErrAuthorityBindingMismatch,
+			)
+		}
+	default:
+		return fmt.Errorf(
+			"unsupported productive reconciliation outcome %q",
+			authority.Outcome,
+		)
+	}
+	return nil
+}
+
+// ProductiveExecutionResultAuthority is the complete owner record behind the
+// raw PAD ExecutionResultRef committed to WorkRun. ResultRef is deliberately
+// the content identity of Execution itself, not of this surrounding record,
+// so PAD, the authorization-use ledger, and WorkRun all compare the same
+// terminal fact while the remaining fields prevent cross-run transplantation.
+type ProductiveExecutionResultAuthority struct {
+	ResultRef                string
+	RepositoryRef            string
+	WorkRunID                string
+	SourceRevision           string
+	DeliveryIntentRef        string
+	Handoff                  *ImplementationHandoff
+	VerificationResultRef    string
+	ReviewReceiptRef         string
+	DeliveryAuthorizationRef string
+	CommandRef               string
+	Execution                deliveryadmission.ExecutionResult
+}
+
+// Validate accepts either the exact source state before the result event or
+// any later state carrying the same immutable result/source pair. Every
+// terminal field is validated and ResultRef is recomputed from the canonical
+// ExecutionResult bytes; a hash-shaped caller value is never authority.
+func (authority ProductiveExecutionResultAuthority) Validate(
+	requestedRef string,
+	repositoryRef string,
+	state WorkRunState,
+) error {
+	recomputed, err := productiveExecutionResultRef(authority.Execution)
+	if err != nil {
+		return err
+	}
+	if !validSHA256Ref(requestedRef) ||
+		authority.ResultRef != requestedRef ||
+		recomputed != requestedRef ||
+		!validSHA256Ref(authority.RepositoryRef) ||
+		authority.RepositoryRef != repositoryRef ||
+		!validSHA256Ref(repositoryRef) ||
+		!workRunIDPattern.MatchString(authority.WorkRunID) ||
+		authority.WorkRunID != state.WorkRunID ||
+		!validSHA256Ref(authority.SourceRevision) ||
+		!validSHA256Ref(authority.DeliveryIntentRef) ||
+		authority.DeliveryIntentRef != state.DeliveryIntentRef ||
+		!reflect.DeepEqual(authority.Handoff, state.Handoff) ||
+		!validSHA256Ref(authority.VerificationResultRef) ||
+		authority.VerificationResultRef != state.VerificationResultRef ||
+		!validSHA256Ref(authority.ReviewReceiptRef) ||
+		authority.ReviewReceiptRef != state.ReviewReceiptRef ||
+		!validSHA256Ref(authority.DeliveryAuthorizationRef) ||
+		authority.DeliveryAuthorizationRef !=
+			state.DeliveryAuthorizationRef ||
+		!validSHA256Ref(authority.CommandRef) ||
+		authority.Execution.CommandRef != authority.CommandRef ||
+		authority.Execution.AuthorizationRef !=
+			authority.DeliveryAuthorizationRef {
+		return fmt.Errorf(
+			"%w: productive execution result stage",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	if authority.Handoff == nil {
+		return fmt.Errorf(
+			"%w: productive execution result handoff",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	if err := authority.Handoff.Validate(); err != nil {
+		return err
+	}
+	if authority.Execution.Schema !=
+		deliveryadmission.ExecutionResultContractV1 ||
+		authority.Execution.Candidate.Ref !=
+			"work-run:"+authority.WorkRunID ||
+		authority.Execution.Candidate.Digest !=
+			authority.Handoff.CandidateRef ||
+		!validSHA256Ref(authority.Execution.Candidate.Digest) ||
+		!validSHA256Ref(authority.Execution.EvidenceRef) ||
+		authority.Execution.CompletedAt <= 0 {
+		return fmt.Errorf(
+			"%w: productive execution result content",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	switch authority.Execution.Route {
+	case deliveryadmission.RoutePRWithIssue,
+		deliveryadmission.RoutePRWithoutIssue,
+		deliveryadmission.RouteDirectMain,
+		deliveryadmission.RouteEmergency:
+	default:
+		return fmt.Errorf(
+			"%w: productive execution result route",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	switch authority.Execution.Outcome {
+	case deliveryadmission.ExecutionSucceeded:
+		if !validOpaqueRef(authority.Execution.DeliveryRef) {
+			return fmt.Errorf(
+				"%w: productive succeeded execution result",
+				ErrAuthorityBindingMismatch,
+			)
+		}
+	case deliveryadmission.ExecutionFailed,
+		deliveryadmission.ExecutionIndeterminate:
+		if authority.Execution.DeliveryRef != "" {
+			return fmt.Errorf(
+				"%w: productive unsuccessful execution result",
+				ErrAuthorityBindingMismatch,
+			)
+		}
+	default:
+		return fmt.Errorf(
+			"%w: productive execution result outcome",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	if !validSHA256Ref(state.ProductiveAdvanceSourceRevision) {
+		return fmt.Errorf(
+			"%w: productive execution result advance",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	switch {
+	case state.ProductiveExecutionResultRef == "":
+		if state.ProductiveExecutionResultSourceRevision != "" ||
+			authority.SourceRevision != state.Revision ||
+			state.ProductiveBlockerRef != "" ||
+			state.ProductiveReconciliationRef != "" ||
+			state.DeliveryResultRef != "" {
+			return fmt.Errorf(
+				"%w: productive execution result source",
+				ErrAuthorityBindingMismatch,
+			)
+		}
+	case state.ProductiveExecutionResultRef == requestedRef:
+		if state.ProductiveExecutionResultSourceRevision !=
+			authority.SourceRevision ||
+			state.Revision == authority.SourceRevision {
+			return fmt.Errorf(
+				"%w: productive execution result replay",
+				ErrAuthorityBindingMismatch,
+			)
+		}
+	default:
+		return fmt.Errorf(
+			"%w: productive execution result reference",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	if state.DeliveryResultRef != "" &&
+		authority.Execution.Outcome !=
+			deliveryadmission.ExecutionSucceeded {
+		return fmt.Errorf(
+			"%w: delivery projection differs from productive execution result",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	if state.ProductiveReconciliationOutcome ==
+		WorkReconcileDeliveryConfirmed &&
+		authority.Execution.Outcome !=
+			deliveryadmission.ExecutionSucceeded {
+		return fmt.Errorf(
+			"%w: delivery reconciliation differs from productive execution result",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	return nil
+}
+
+func productiveExecutionResultRef(
+	result deliveryadmission.ExecutionResult,
+) (string, error) {
+	payload, err := json.Marshal(result)
+	if err != nil {
+		return "", fmt.Errorf(
+			"canonicalize productive execution result: %w",
+			err,
+		)
+	}
+	sum := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
 type DeliveryResultAuthority struct {
 	ResultRef             string `json:"result_ref"`
+	ExecutionResultRef    string `json:"execution_result_ref"`
 	AuthorizationRef      string `json:"authorization_ref"`
 	DeliveryIntentRef     string `json:"delivery_intent_ref"`
 	CandidateRef          string `json:"candidate_ref"`
@@ -147,6 +531,7 @@ func (authority DeliveryResultAuthority) Validate(
 ) error {
 	for _, ref := range []string{
 		authority.ResultRef,
+		authority.ExecutionResultRef,
 		authority.AuthorizationRef,
 		authority.DeliveryIntentRef,
 		authority.CandidateRef,
@@ -163,6 +548,8 @@ func (authority DeliveryResultAuthority) Validate(
 		authority.CompletedAt <= 0 ||
 		!validOpaqueRef(authority.DeliveryRef) ||
 		state.Handoff == nil ||
+		authority.ExecutionResultRef !=
+			state.ProductiveExecutionResultRef ||
 		authority.AuthorizationRef != state.DeliveryAuthorizationRef ||
 		authority.DeliveryIntentRef != state.DeliveryIntentRef ||
 		authority.CandidateRef != state.Handoff.CandidateRef ||
@@ -754,14 +1141,16 @@ type LaunchAuthorityPort interface {
 }
 
 type AuthorityPorts struct {
-	PAD                  PADAuthorityPort
-	DeliveryResult       DeliveryResultAuthorityPort
-	ProductiveDiagnostic ProductiveDiagnosticAuthorityPort
-	DeliveryRoute        DeliveryRouteReevaluationAuthorityPort
-	ExplicitSDDRequest   ExplicitSDDRequestAuthorityPort
-	MutationCompletion   MutationCompletionAuthorityPort
-	Route                RouteAuthorityPort
-	SDD                  SDDAuthorityPort
-	Verification         VerificationAuthorityPort
-	Launch               LaunchAuthorityPort
+	PAD                       PADAuthorityPort
+	DeliveryResult            DeliveryResultAuthorityPort
+	ProductiveExecutionResult ProductiveExecutionResultAuthorityPort
+	ProductiveDiagnostic      ProductiveDiagnosticAuthorityPort
+	ProductiveReconciliation  ProductiveReconciliationAuthorityPort
+	DeliveryRoute             DeliveryRouteReevaluationAuthorityPort
+	ExplicitSDDRequest        ExplicitSDDRequestAuthorityPort
+	MutationCompletion        MutationCompletionAuthorityPort
+	Route                     RouteAuthorityPort
+	SDD                       SDDAuthorityPort
+	Verification              VerificationAuthorityPort
+	Launch                    LaunchAuthorityPort
 }
