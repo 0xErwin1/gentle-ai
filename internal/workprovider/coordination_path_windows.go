@@ -154,7 +154,7 @@ func coordinationSharedDirectorySafe(
 		windows.OWNER_SECURITY_INFORMATION,
 	)
 	return err == nil &&
-		coordinationSecurityDescriptorOwnedByCurrentUser(descriptor)
+		coordinationSharedSecurityDescriptorOwnedByCurrentProcess(descriptor)
 }
 
 func coordinationSharedOpenDirectorySafe(
@@ -173,7 +173,7 @@ func coordinationSharedOpenDirectorySafe(
 		windows.OWNER_SECURITY_INFORMATION,
 	)
 	return err == nil &&
-		coordinationSecurityDescriptorOwnedByCurrentUser(descriptor)
+		coordinationSharedSecurityDescriptorOwnedByCurrentProcess(descriptor)
 }
 
 func openCoordinationPathNoFollow(
@@ -332,6 +332,24 @@ func coordinationSecurityDescriptorOwnedByCurrentUser(
 	return err == nil && owner.Equals(currentUser)
 }
 
+func coordinationSharedSecurityDescriptorOwnedByCurrentProcess(
+	descriptor *windows.SECURITY_DESCRIPTOR,
+) bool {
+	if descriptor == nil || !descriptor.IsValid() {
+		return false
+	}
+	owner, _, err := descriptor.Owner()
+	if err != nil || owner == nil || !owner.IsValid() {
+		return false
+	}
+	currentUser, err := currentCoordinationWindowsUserSID()
+	if err == nil && owner.Equals(currentUser) {
+		return true
+	}
+	tokenOwner, err := currentCoordinationWindowsTokenOwnerSID()
+	return err == nil && owner.Equals(tokenOwner)
+}
+
 func ownerOnlyCoordinationSecurityDescriptor(
 	directory bool,
 ) (*windows.SECURITY_DESCRIPTOR, error) {
@@ -378,6 +396,57 @@ func currentCoordinationWindowsUserSID() (*windows.SID, error) {
 		return nil, fmt.Errorf("copy current Windows user SID: %w", err)
 	}
 	return sid, nil
+}
+
+type coordinationWindowsTokenOwner struct {
+	Owner *windows.SID
+}
+
+func currentCoordinationWindowsTokenOwnerSID() (*windows.SID, error) {
+	token := windows.GetCurrentProcessToken()
+	var size uint32
+	err := windows.GetTokenInformation(
+		token,
+		windows.TokenOwner,
+		nil,
+		0,
+		&size,
+	)
+	if !errors.Is(err, windows.ERROR_INSUFFICIENT_BUFFER) ||
+		size < uint32(unsafe.Sizeof(coordinationWindowsTokenOwner{})) {
+		if err != nil {
+			return nil, fmt.Errorf(
+				"resolve current Windows token owner size: %w",
+				err,
+			)
+		}
+		return nil, errors.New(
+			"current Windows token owner has an invalid size",
+		)
+	}
+	buffer := make([]byte, size)
+	if err := windows.GetTokenInformation(
+		token,
+		windows.TokenOwner,
+		&buffer[0],
+		size,
+		&size,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"resolve current Windows token owner: %w",
+			err,
+		)
+	}
+	value := (*coordinationWindowsTokenOwner)(unsafe.Pointer(&buffer[0]))
+	if value.Owner == nil || !value.Owner.IsValid() {
+		return nil, errors.New("current Windows token owner SID is invalid")
+	}
+	owner, err := value.Owner.Copy()
+	runtime.KeepAlive(buffer)
+	if err != nil {
+		return nil, fmt.Errorf("copy current Windows token owner SID: %w", err)
+	}
+	return owner, nil
 }
 
 func ownerOnlyCoordinationWindowsAccessMask(

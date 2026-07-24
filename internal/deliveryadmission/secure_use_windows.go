@@ -648,7 +648,7 @@ func validateWindowsUseHandle(
 		if !privateWindowsUseDescriptorSafe(descriptor, directory) {
 			return windowsUseIdentity{}, fmt.Errorf("%w: Windows authority DACL", ErrUntrustedPreimage)
 		}
-	} else if !currentWindowsUseOwner(descriptor) {
+	} else if !currentWindowsSharedUseOwner(descriptor) {
 		return windowsUseIdentity{}, fmt.Errorf("%w: Windows authority owner", ErrUntrustedPreimage)
 	}
 	return windowsUseIdentity{
@@ -737,6 +737,24 @@ func currentWindowsUseOwner(descriptor *windows.SECURITY_DESCRIPTOR) bool {
 	return err == nil && owner.Equals(current)
 }
 
+func currentWindowsSharedUseOwner(
+	descriptor *windows.SECURITY_DESCRIPTOR,
+) bool {
+	if descriptor == nil || !descriptor.IsValid() {
+		return false
+	}
+	owner, _, err := descriptor.Owner()
+	if err != nil || owner == nil || !owner.IsValid() {
+		return false
+	}
+	current, err := currentWindowsUseSID()
+	if err == nil && owner.Equals(current) {
+		return true
+	}
+	tokenOwner, err := currentWindowsUseTokenOwnerSID()
+	return err == nil && owner.Equals(tokenOwner)
+}
+
 func privateWindowsUseDescriptorSafe(
 	descriptor *windows.SECURITY_DESCRIPTOR,
 	directory bool,
@@ -777,6 +795,57 @@ func privateWindowsUseDescriptorSafe(
 	return aceSID.IsValid() &&
 		uintptr(ace.Header.AceSize) >= sidOffset+uintptr(aceSID.Len()) &&
 		aceSID.Equals(current)
+}
+
+type windowsUseTokenOwner struct {
+	Owner *windows.SID
+}
+
+func currentWindowsUseTokenOwnerSID() (*windows.SID, error) {
+	token := windows.GetCurrentProcessToken()
+	var size uint32
+	err := windows.GetTokenInformation(
+		token,
+		windows.TokenOwner,
+		nil,
+		0,
+		&size,
+	)
+	if !errors.Is(err, windows.ERROR_INSUFFICIENT_BUFFER) ||
+		size < uint32(unsafe.Sizeof(windowsUseTokenOwner{})) {
+		if err != nil {
+			return nil, fmt.Errorf(
+				"resolve current Windows token owner size: %w",
+				err,
+			)
+		}
+		return nil, errors.New(
+			"current Windows token owner has an invalid size",
+		)
+	}
+	buffer := make([]byte, size)
+	if err := windows.GetTokenInformation(
+		token,
+		windows.TokenOwner,
+		&buffer[0],
+		size,
+		&size,
+	); err != nil {
+		return nil, fmt.Errorf(
+			"resolve current Windows token owner: %w",
+			err,
+		)
+	}
+	value := (*windowsUseTokenOwner)(unsafe.Pointer(&buffer[0]))
+	if value.Owner == nil || !value.Owner.IsValid() {
+		return nil, errors.New("current Windows token owner SID is invalid")
+	}
+	owner, err := value.Owner.Copy()
+	runtime.KeepAlive(buffer)
+	if err != nil {
+		return nil, fmt.Errorf("copy current Windows token owner SID: %w", err)
+	}
+	return owner, nil
 }
 
 func ownerOnlyWindowsUseAccessMask(mask windows.ACCESS_MASK) bool {

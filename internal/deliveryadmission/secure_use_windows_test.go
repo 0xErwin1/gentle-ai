@@ -76,8 +76,8 @@ func TestWindowsUseDirectoryKeepsSharedNamespaceInheritedAndProtectsOnlyPADSubtr
 	if privateWindowsUseDescriptorSafe(sharedDescriptor, true) {
 		t.Fatal("shared .git/gentle-ai namespace was rewritten as PAD-private")
 	}
-	if !currentWindowsUseOwner(sharedDescriptor) {
-		t.Fatal("shared namespace is not owned by the current user")
+	if !currentWindowsSharedUseOwner(sharedDescriptor) {
+		t.Fatal("shared namespace is not owned by the current token")
 	}
 
 	private, created, err := openOrCreateWindowsUseDirectory(
@@ -105,6 +105,66 @@ func TestWindowsUseDirectoryKeepsSharedNamespaceInheritedAndProtectsOnlyPADSubtr
 	}
 }
 
+func TestWindowsUseSharedOwnerAcceptsOnlyCurrentPrincipals(t *testing.T) {
+	currentUser, err := currentWindowsUseSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenOwner, err := currentWindowsUseTokenOwnerSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	world, err := windows.CreateWellKnownSid(windows.WinWorldSid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name  string
+		owner *windows.SID
+		want  bool
+	}{
+		{name: "token user", owner: currentUser, want: true},
+		{name: "token owner", owner: tokenOwner, want: true},
+		{name: "Everyone", owner: world, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			descriptor := windowsUseDescriptorForOwner(t, test.owner)
+			if got := currentWindowsSharedUseOwner(descriptor); got != test.want {
+				t.Fatalf("shared owner accepted = %t, want %t", got, test.want)
+			}
+		})
+	}
+}
+
+func TestWindowsUsePrivateOwnerRemainsTokenUserOnly(t *testing.T) {
+	descriptor, err := ownerOnlyUseSecurityDescriptor(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !privateWindowsUseDescriptorSafe(descriptor, false) {
+		t.Fatal("current-user-only private descriptor was rejected")
+	}
+
+	tokenOwner, err := currentWindowsUseTokenOwnerSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentUser, err := currentWindowsUseSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokenOwner.Equals(currentUser) {
+		t.Skip("token owner and token user are identical")
+	}
+	if privateWindowsUseDescriptorSafe(
+		windowsUseDescriptorForOwner(t, tokenOwner),
+		false,
+	) {
+		t.Fatal("token-owner group was accepted for private PAD state")
+	}
+}
+
 func TestWindowsUseDirectoryRejectsReparsePoints(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "target")
 	if err := os.Mkdir(target, 0o700); err != nil {
@@ -119,6 +179,27 @@ func TestWindowsUseDirectoryRejectsReparsePoints(t *testing.T) {
 		_ = file.Close()
 		t.Fatal("Windows reparse-point directory was accepted")
 	}
+}
+
+func windowsUseDescriptorForOwner(
+	t *testing.T,
+	owner *windows.SID,
+) *windows.SECURITY_DESCRIPTOR {
+	t.Helper()
+	if owner == nil || !owner.IsValid() || owner.String() == "" {
+		t.Fatal("test owner SID is invalid")
+	}
+	sid := owner.String()
+	descriptor, err := windows.SecurityDescriptorFromString(
+		"O:" + sid + "D:P(A;;GA;;;" + sid + ")",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor == nil || !descriptor.IsValid() {
+		t.Fatal("test security descriptor is invalid")
+	}
+	return descriptor
 }
 
 func TestWindowsUseDirectoryRejectsWeakenedDACLBeforeUse(t *testing.T) {
