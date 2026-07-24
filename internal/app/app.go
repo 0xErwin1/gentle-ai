@@ -69,7 +69,9 @@ func RunArgs(args []string, stdout io.Writer) error {
 	// --yes as a global CLI flag for self-update is handled via GENTLE_AI_YES=1.
 	// Per-subcommand --yes flags (e.g. restore --yes) are parsed by each subcommand.
 
-	// Info commands: no system detection, no self-update, no platform validation.
+	// Platform-independent commands: no system detection, self-update, or
+	// platform validation. Contract-bearing work commands perform their own
+	// fail-closed provider preflight before any repository access or mutation.
 	if len(args) > 0 {
 		switch args[0] {
 		case "version", "--version", "-v":
@@ -94,6 +96,10 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunSDDAttempt(args[1:], stdout)
 		case "sdd-verify-validate":
 			return cli.RunSDDVerifyValidate(args[1:], stdout)
+		case "work-status":
+			return cli.RunWorkStatus(args[1:], stdout)
+		case "work-transition":
+			return cli.RunWorkTransition(args[1:], stdout)
 		case "codegraph":
 			return cli.RunCodeGraph(args[1:], stdout)
 		case "review":

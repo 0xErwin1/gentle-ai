@@ -43,7 +43,8 @@ type Adapter interface {
 	// MCP path resolution
 	MCPConfigPath(homeDir string, serverName string) string
 
-	// Optional capabilities — agents declare what they support.
+	// Optional capabilities — compatibility projections of the adapter's
+	// canonical AgentCapabilityManifest.
 	SupportsOutputStyles() bool
 	OutputStyleDir(homeDir string) string
 

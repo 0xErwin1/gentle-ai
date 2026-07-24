@@ -26,6 +26,11 @@ COMMANDS
                Read or mutate the artifact-store-agnostic runtime-attempt ledger
   sdd-verify-validate --input <path|-> --requirements <n> --scenarios <n>
                Validate exact verification-report bytes without persistence
+  work-status --cwd <repo> --work-run <id> --contract gentle-ai.work-status/v1 --json
+               Read the route-neutral common-work status
+  work-transition apply --cwd <repo> --work-run <id> --contract gentle-ai.work-transition/v1
+               --authorization-ref <ref> --expected-revision <revision> --json
+               Apply only the exact owner-issued common-work transition
   review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>]
   review finalize [--cwd <repo>] [--result <review.json> ...] [--evidence <path>]
   review validate --gate <gate> [--cwd <repo>]
