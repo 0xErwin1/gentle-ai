@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/internal/versions"
 )
 
 func TestSDDOrchestratorsRequireSafeFormatterOrdering(t *testing.T) {
@@ -75,6 +77,17 @@ func TestRequiredChecksFailClosedWhenFormatFails(t *testing.T) {
 				t.Fatalf("%s can bypass the failed format guard", job.id)
 			}
 		})
+	}
+}
+
+func TestOrganicRuntimeE2EUsesInstalledOpenCodePin(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	install := "npm install --global opencode-ai@" + versions.OpenCode
+	if strings.Count(string(data), install) != 1 {
+		t.Fatalf("organic runtime E2E must install exact supported OpenCode pin %q once", install)
 	}
 }
 

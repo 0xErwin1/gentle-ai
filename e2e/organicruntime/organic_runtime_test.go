@@ -25,6 +25,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/deliveryadmission"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/internal/versions"
 	"github.com/gentleman-programming/gentle-ai/internal/workprovider"
 	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
@@ -32,7 +33,7 @@ import (
 const (
 	realAgentE2EEnvironment = "GENTLE_AI_REAL_AGENT_E2E"
 	testBinaryEnvironment   = "GENTLE_AI_TEST_BINARY"
-	pinnedOpenCodeVersion   = "1.18.4"
+	pinnedOpenCodeVersion   = versions.OpenCode
 	runtimeBearerToken      = "organic-e2e-owner-secret"
 	runtimeSessionRef       = "session:organic-runtime-e2e"
 )
