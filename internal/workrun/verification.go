@@ -14,10 +14,13 @@ import (
 
 const (
 	ImplementationHandoffSchemaV1   = "gentle-ai.implementation-handoff/v1"
+	ImplementationHandoffSchemaV2   = "gentle-ai.implementation-handoff/v2"
 	VerificationForecastSchemaV1    = "gentle-ai.verification-forecast/v1"
 	VerificationDispositionSchemaV1 = "gentle-ai.verification-disposition/v1"
 	VerificationReservationSchemaV1 = "gentle-ai.verification-reservation/v1"
 	VerificationLaunchClaimSchemaV1 = "gentle-ai.verification-launch-claim/v1"
+	VerificationReplanSchemaV1      = "gentle-ai.verification-replan/v1"
+	VerificationStopSchemaV1        = "gentle-ai.verification-stop/v1"
 )
 
 type ForecastAvailability string
@@ -47,6 +50,7 @@ type ImplementationHandoff struct {
 	ScopeDigest            string                                `json:"scope_digest"`
 	Subject                reviewtransaction.VerificationSubject `json:"subject"`
 	CandidateRef           string                                `json:"candidate_ref"`
+	MutationCompletionRef  string                                `json:"mutation_completion_ref,omitempty"`
 	DeclaredObligationRefs []string                              `json:"declared_obligation_refs"`
 	EvidenceRefs           []string                              `json:"evidence_refs"`
 	SDDRunRef              string                                `json:"sdd_run_ref,omitempty"`
@@ -60,6 +64,7 @@ func NewImplementationHandoff(
 	declaredObligationRefs []string,
 	evidenceRefs []string,
 	sddRunRef string,
+	mutationCompletionRef ...string,
 ) (ImplementationHandoff, error) {
 	declared, err := canonicalSHA256Refs(declaredObligationRefs)
 	if err != nil {
@@ -69,9 +74,19 @@ func NewImplementationHandoff(
 	if err != nil {
 		return ImplementationHandoff{}, fmt.Errorf("canonicalize implementation evidence: %w", err)
 	}
+	completionRef := ""
+	if len(mutationCompletionRef) > 1 {
+		return ImplementationHandoff{}, errors.New(
+			"implementation handoff accepts exactly one mutation completion reference",
+		)
+	}
+	if len(mutationCompletionRef) == 1 {
+		completionRef = mutationCompletionRef[0]
+	}
 	handoff := ImplementationHandoff{
-		Schema: ImplementationHandoffSchemaV1, Route: route, ScopeDigest: scopeDigest,
+		Schema: ImplementationHandoffSchemaV2, Route: route, ScopeDigest: scopeDigest,
 		Subject: subject, CandidateRef: candidateRefForSubject(subject),
+		MutationCompletionRef:  completionRef,
 		DeclaredObligationRefs: declared, EvidenceRefs: evidence, SDDRunRef: sddRunRef,
 	}
 	digest, err := implementationHandoffDigest(handoff)
@@ -86,11 +101,27 @@ func NewImplementationHandoff(
 }
 
 func (handoff ImplementationHandoff) Validate() error {
-	if handoff.Schema != ImplementationHandoffSchemaV1 {
+	switch handoff.Schema {
+	case ImplementationHandoffSchemaV1:
+		if handoff.MutationCompletionRef != "" {
+			return errors.New(
+				"legacy implementation handoff cannot carry a mutation completion reference",
+			)
+		}
+	case ImplementationHandoffSchemaV2:
+		if !validSHA256Ref(handoff.MutationCompletionRef) {
+			return errors.New(
+				"implementation handoff requires an immutable mutation completion reference",
+			)
+		}
+	default:
 		return errors.New("unsupported implementation handoff schema")
 	}
-	if !validSHA256Ref(handoff.ScopeDigest) || !validSHA256Ref(handoff.CandidateRef) {
-		return errors.New("implementation handoff requires immutable scope and candidate references")
+	if !validSHA256Ref(handoff.ScopeDigest) ||
+		!validSHA256Ref(handoff.CandidateRef) {
+		return errors.New(
+			"implementation handoff requires immutable scope and candidate references",
+		)
 	}
 	if err := handoff.Subject.Validate(); err != nil {
 		return err
@@ -114,12 +145,189 @@ func (handoff ImplementationHandoff) Validate() error {
 	default:
 		return fmt.Errorf("unsupported implementation handoff route %q", handoff.Route)
 	}
-	want, err := implementationHandoffDigest(handoff)
+	var (
+		want string
+		err  error
+	)
+	if handoff.Schema == ImplementationHandoffSchemaV1 {
+		want, err = implementationHandoffDigestV1(handoff)
+	} else {
+		want, err = implementationHandoffDigest(handoff)
+	}
 	if err != nil {
 		return err
 	}
 	if handoff.Digest != want {
 		return errors.New("implementation handoff digest does not match its canonical content")
+	}
+	return nil
+}
+
+// VerificationReplan records the single correction-driven replacement of the
+// active verification subject. It preserves the implementation route and
+// points back to the prior forecast rather than starting another workflow.
+type VerificationReplan struct {
+	Schema                      string `json:"schema"`
+	Ordinal                     int    `json:"ordinal"`
+	PreviousHandoffDigest       string `json:"previous_handoff_digest"`
+	PreviousForecastDigest      string `json:"previous_forecast_digest"`
+	OriginalApplicabilityDigest string `json:"original_applicability_digest"`
+	OriginalRegistryDigest      string `json:"original_registry_digest"`
+	OriginalPlanDigest          string `json:"original_plan_digest"`
+	OriginalAvailabilityRef     string `json:"original_availability_ref"`
+	CorrectedHandoffDigest      string `json:"corrected_handoff_digest"`
+	MutationCompletionRef       string `json:"mutation_completion_ref"`
+	Digest                      string `json:"digest"`
+}
+
+func newVerificationReplan(
+	ordinal int,
+	previousHandoff ImplementationHandoff,
+	previousForecast VerificationForecast,
+	correctedHandoff ImplementationHandoff,
+) (VerificationReplan, error) {
+	replan := VerificationReplan{
+		Schema:                      VerificationReplanSchemaV1,
+		Ordinal:                     ordinal,
+		PreviousHandoffDigest:       previousHandoff.Digest,
+		PreviousForecastDigest:      previousForecast.Digest,
+		OriginalApplicabilityDigest: previousForecast.ApplicabilityDigest,
+		OriginalRegistryDigest:      previousForecast.RegistryDigest,
+		OriginalPlanDigest:          previousForecast.PlanDigest,
+		OriginalAvailabilityRef:     previousForecast.AvailabilityRef,
+		CorrectedHandoffDigest:      correctedHandoff.Digest,
+		MutationCompletionRef:       correctedHandoff.MutationCompletionRef,
+	}
+	digest, err := verificationReplanDigest(replan)
+	if err != nil {
+		return VerificationReplan{}, err
+	}
+	replan.Digest = digest
+	if err := replan.Validate(); err != nil {
+		return VerificationReplan{}, err
+	}
+	return replan, nil
+}
+
+func (replan VerificationReplan) Validate() error {
+	if replan.Schema != VerificationReplanSchemaV1 ||
+		replan.Ordinal < 1 ||
+		replan.Ordinal > reviewtransaction.MaxCompactCorrectionAttempts {
+		return errors.New("verification replan exceeds the native correction bound")
+	}
+	for _, ref := range []string{
+		replan.PreviousHandoffDigest,
+		replan.PreviousForecastDigest,
+		replan.OriginalApplicabilityDigest,
+		replan.OriginalRegistryDigest,
+		replan.OriginalPlanDigest,
+		replan.OriginalAvailabilityRef,
+		replan.CorrectedHandoffDigest,
+		replan.MutationCompletionRef,
+		replan.Digest,
+	} {
+		if !validSHA256Ref(ref) {
+			return errors.New(
+				"verification replan has an invalid immutable reference",
+			)
+		}
+	}
+	if replan.PreviousHandoffDigest == replan.CorrectedHandoffDigest {
+		return errors.New("verification replan requires a corrected handoff")
+	}
+	want, err := verificationReplanDigest(replan)
+	if err != nil {
+		return err
+	}
+	if replan.Digest != want {
+		return errors.New(
+			"verification replan digest does not match its canonical content",
+		)
+	}
+	return nil
+}
+
+type VerificationStopReason string
+
+const (
+	VerificationStopFailed  VerificationStopReason = "failed"
+	VerificationStopMutated VerificationStopReason = "mutated"
+)
+
+// VerificationStop is coordination state, not a copied verification result.
+// Failed results retain their owner result ref; mutation stops retain only the
+// attempted result ref and both snapshot identities.
+type VerificationStop struct {
+	Schema              string                 `json:"schema"`
+	Reason              VerificationStopReason `json:"reason"`
+	ResultRef           string                 `json:"result_ref"`
+	ExpectedSnapshotRef string                 `json:"expected_snapshot_ref"`
+	ObservedSnapshotRef string                 `json:"observed_snapshot_ref"`
+	Digest              string                 `json:"digest"`
+}
+
+func newVerificationStop(
+	reason VerificationStopReason,
+	resultRef string,
+	expectedSnapshotRef string,
+	observedSnapshotRef string,
+) (VerificationStop, error) {
+	stop := VerificationStop{
+		Schema: VerificationStopSchemaV1, Reason: reason, ResultRef: resultRef,
+		ExpectedSnapshotRef: expectedSnapshotRef,
+		ObservedSnapshotRef: observedSnapshotRef,
+	}
+	digest, err := verificationStopDigest(stop)
+	if err != nil {
+		return VerificationStop{}, err
+	}
+	stop.Digest = digest
+	if err := stop.Validate(); err != nil {
+		return VerificationStop{}, err
+	}
+	return stop, nil
+}
+
+func (stop VerificationStop) Validate() error {
+	if stop.Schema != VerificationStopSchemaV1 {
+		return errors.New("unsupported verification stop schema")
+	}
+	for _, ref := range []string{
+		stop.ResultRef,
+		stop.ExpectedSnapshotRef,
+		stop.ObservedSnapshotRef,
+		stop.Digest,
+	} {
+		if !validSHA256Ref(ref) {
+			return errors.New(
+				"verification stop has an invalid immutable reference",
+			)
+		}
+	}
+	switch stop.Reason {
+	case VerificationStopFailed:
+		if stop.ExpectedSnapshotRef != stop.ObservedSnapshotRef {
+			return errors.New(
+				"failed verification stop requires an unchanged subject",
+			)
+		}
+	case VerificationStopMutated:
+		if stop.ExpectedSnapshotRef == stop.ObservedSnapshotRef {
+			return errors.New(
+				"mutated verification stop requires distinct subjects",
+			)
+		}
+	default:
+		return fmt.Errorf("unsupported verification stop reason %q", stop.Reason)
+	}
+	want, err := verificationStopDigest(stop)
+	if err != nil {
+		return err
+	}
+	if stop.Digest != want {
+		return errors.New(
+			"verification stop digest does not match its canonical content",
+		)
 	}
 	return nil
 }
@@ -578,6 +786,32 @@ func implementationHandoffDigest(handoff ImplementationHandoff) (string, error) 
 	return digestValue("gentle-ai.implementation-handoff-digest/v1", value)
 }
 
+func implementationHandoffDigestV1(
+	handoff ImplementationHandoff,
+) (string, error) {
+	legacy := struct {
+		Schema                 string                                `json:"schema"`
+		Route                  ImplementationRoute                   `json:"route"`
+		ScopeDigest            string                                `json:"scope_digest"`
+		Subject                reviewtransaction.VerificationSubject `json:"subject"`
+		CandidateRef           string                                `json:"candidate_ref"`
+		DeclaredObligationRefs []string                              `json:"declared_obligation_refs"`
+		EvidenceRefs           []string                              `json:"evidence_refs"`
+		SDDRunRef              string                                `json:"sdd_run_ref,omitempty"`
+		Digest                 string                                `json:"digest"`
+	}{
+		Schema:                 handoff.Schema,
+		Route:                  handoff.Route,
+		ScopeDigest:            handoff.ScopeDigest,
+		Subject:                handoff.Subject,
+		CandidateRef:           handoff.CandidateRef,
+		DeclaredObligationRefs: handoff.DeclaredObligationRefs,
+		EvidenceRefs:           handoff.EvidenceRefs,
+		SDDRunRef:              handoff.SDDRunRef,
+	}
+	return digestValue("gentle-ai.implementation-handoff-digest/v1", legacy)
+}
+
 func verificationForecastDigest(forecast VerificationForecast) (string, error) {
 	value := forecast
 	value.Digest = ""
@@ -600,6 +834,18 @@ func verificationLaunchClaimDigest(claim VerificationLaunchClaim) (string, error
 	value := claim
 	value.ClaimRef = ""
 	return digestValue("gentle-ai.verification-launch-claim-digest/v1", value)
+}
+
+func verificationReplanDigest(replan VerificationReplan) (string, error) {
+	value := replan
+	value.Digest = ""
+	return digestValue("gentle-ai.verification-replan-digest/v1", value)
+}
+
+func verificationStopDigest(stop VerificationStop) (string, error) {
+	value := stop
+	value.Digest = ""
+	return digestValue("gentle-ai.verification-stop-digest/v1", value)
 }
 
 func digestValue(domain string, value any) (string, error) {

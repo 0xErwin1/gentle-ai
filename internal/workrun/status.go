@@ -137,6 +137,40 @@ func (store WorkRunStore) resolveBoundVerificationResult(
 			"owner verification result does not bind WorkRun forecast",
 		)
 	}
+	if state.PostVerificationSnapshotRef != "" &&
+		resolved.Result.Subject.SnapshotIdentity !=
+			state.PostVerificationSnapshotRef {
+		return VerificationResultAuthority{}, errors.New(
+			"owner verification result does not bind the exact post-verification snapshot",
+		)
+	}
+	if state.CorrectionImpactClosureRef != "" {
+		if state.VerificationReplan == nil {
+			return VerificationResultAuthority{}, errors.New(
+				"correction closure is bound without a correction replan",
+			)
+		}
+		closure, err := store.buildCorrectionImpactClosure(
+			ctx,
+			*state.VerificationReplan,
+			resolved.Applicability,
+			resolved.Registry,
+			resolved.Plan,
+			resolved.Result,
+		)
+		if err != nil {
+			return VerificationResultAuthority{}, err
+		}
+		if closure.Digest != state.CorrectionImpactClosureRef ||
+			!equalStrings(
+				reusableCorrectionObligations(closure),
+				state.ReusableVerificationObligations,
+			) {
+			return VerificationResultAuthority{}, errors.New(
+				"owner correction closure does not bind WorkRun convergence",
+			)
+		}
+	}
 	return resolved, nil
 }
 
@@ -177,6 +211,9 @@ func publicStateForWorkRun(
 ) PublicState {
 	if state.RouteDecision.Decision == RouteDecisionProposeSDD &&
 		state.ImplementationRoute == "" {
+		return PublicStateNeedsYourDecision
+	}
+	if state.VerificationStop != nil {
 		return PublicStateNeedsYourDecision
 	}
 	if result != nil {

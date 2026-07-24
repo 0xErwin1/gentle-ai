@@ -56,7 +56,8 @@ func TestWorkRunStoreReopenKeepsExactRepositoryShard(t *testing.T) {
 	authority := newTestAuthorityRepository()
 	first = first.WithAuthorityPorts(AuthorityPorts{
 		PAD: authority, ExplicitSDDRequest: authority, Route: authority, SDD: authority,
-		Verification: authority, Launch: hostruntime.NewExecutor(),
+		MutationCompletion: authority, Verification: authority,
+		Launch: hostruntime.NewExecutor(),
 	})
 	started := startDirectWorkRun(t, first)
 
@@ -133,7 +134,7 @@ func TestWorkRunStoreIsolatesMainAndLinkedWorktreeWithSameID(t *testing.T) {
 			ExpectedRevision: mainStarted.Revision,
 			RequestID:        "main-handoff",
 			Handoff: testHandoff(
-				t,
+				t, mainStore,
 				ImplementationRouteDirectInline,
 				"",
 				"main-scope",
@@ -325,7 +326,9 @@ func TestWorkRunStoreExactReplayConflictAndStaleCAS(t *testing.T) {
 		t.Fatalf("request-ID conflict error = %v", err)
 	}
 
-	handoff := testHandoff(t, ImplementationRouteDirectInline, "", "scope-a")
+	handoff := testHandoff(
+		t, store, ImplementationRouteDirectInline, "", "scope-a",
+	)
 	applied, err := store.BindImplementationHandoff(context.Background(), BindImplementationHandoffRequest{
 		ExpectedRevision: started.Revision, RequestID: "handoff-1", Handoff: handoff,
 	})
@@ -374,7 +377,9 @@ func TestWorkRunStoreExactReplayConflictAndStaleCAS(t *testing.T) {
 	if err != nil || replayed.Revision != applied.Revision {
 		t.Fatalf("handoff exact replay = %q, %v; want %q", replayed.Revision, err, applied.Revision)
 	}
-	changedHandoff := testHandoff(t, ImplementationRouteDirectInline, "", "scope-b")
+	changedHandoff := testHandoff(
+		t, store, ImplementationRouteDirectInline, "", "scope-b",
+	)
 	if _, err := store.BindImplementationHandoff(context.Background(), BindImplementationHandoffRequest{
 		ExpectedRevision: started.Revision, RequestID: "handoff-1", Handoff: changedHandoff,
 	}); !errors.Is(err, ErrWorkRunRequestConflict) {
@@ -394,11 +399,15 @@ func TestWorkRunStoreConcurrentCASPublishesOneSuccessor(t *testing.T) {
 	requests := []BindImplementationHandoffRequest{
 		{
 			ExpectedRevision: started.Revision, RequestID: "handoff-a",
-			Handoff: testHandoff(t, ImplementationRouteDirectInline, "", "scope-a"),
+			Handoff: testHandoff(
+				t, store, ImplementationRouteDirectInline, "", "scope-a",
+			),
 		},
 		{
 			ExpectedRevision: started.Revision, RequestID: "handoff-b",
-			Handoff: testHandoff(t, ImplementationRouteDirectInline, "", "scope-b"),
+			Handoff: testHandoff(
+				t, store, ImplementationRouteDirectInline, "", "scope-b",
+			),
 		},
 	}
 	start := make(chan struct{})
@@ -531,7 +540,9 @@ func TestWorkRunProposalAcceptanceBindingAndSafeReroute(t *testing.T) {
 	if status.ImplementationRoute != ImplementationRouteSDD || status.SDDRunRef != "change-a" {
 		t.Fatalf("bound SDD route = %#v", status)
 	}
-	sddHandoff := testHandoff(t, ImplementationRouteSDD, "change-a", "scope-sdd")
+	sddHandoff := testHandoff(
+		t, store, ImplementationRouteSDD, "change-a", "scope-sdd",
+	)
 	if _, err := store.BindImplementationHandoff(context.Background(), BindImplementationHandoffRequest{
 		ExpectedRevision: state.Revision, RequestID: "handoff-sdd", Handoff: sddHandoff,
 	}); err != nil {
@@ -637,19 +648,89 @@ func directRouteDecision(t *testing.T) ImplementationRouteDecision {
 
 func testHandoff(
 	t *testing.T,
+	store WorkRunStore,
 	route ImplementationRoute,
 	sddRunRef string,
 	scopeSeed string,
 ) ImplementationHandoff {
 	t.Helper()
+	snapshot := currentWorkRunSnapshot(t, store.Repo)
+	return testHandoffForSnapshot(
+		t,
+		store,
+		route,
+		testSHARef(scopeSeed),
+		snapshot,
+		[]string{},
+		[]string{},
+		sddRunRef,
+	)
+}
+
+func testHandoffForSnapshot(
+	t *testing.T,
+	store WorkRunStore,
+	route ImplementationRoute,
+	scopeDigest string,
+	snapshot reviewtransaction.Snapshot,
+	declaredObligationRefs []string,
+	evidenceRefs []string,
+	sddRunRef string,
+) ImplementationHandoff {
+	t.Helper()
+	subject, err := reviewtransaction.VerificationSubjectFromSnapshot(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completionRef := testSHARef(
+		"mutation-completion:" + store.WorkRunID + ":" +
+			scopeDigest + ":" + snapshot.Identity,
+	)
 	handoff, err := NewImplementationHandoff(
-		route, testSHARef(scopeSeed), testVerificationSubject(),
-		[]string{}, []string{}, sddRunRef,
+		route,
+		scopeDigest,
+		subject,
+		declaredObligationRefs,
+		evidenceRefs,
+		sddRunRef,
+		completionRef,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	authority := testAuthorityForStore(t, store)
+	authority.completions[completionRef] = MutationCompletionAuthority{
+		CompletionRef: completionRef,
+		RepositoryRef: store.RepositoryRef(),
+		WorkRunID:     store.WorkRunID,
+		Route:         string(route),
+		ScopeDigest:   scopeDigest,
+		Snapshot:      cloneTestSnapshot(snapshot),
+	}
 	return handoff
+}
+
+func currentWorkRunSnapshot(
+	t *testing.T,
+	repo string,
+) reviewtransaction.Snapshot {
+	t.Helper()
+	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+	intended, err := builder.DiscoverIntendedUntracked(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := builder.Build(
+		context.Background(),
+		reviewtransaction.Target{
+			Kind:              reviewtransaction.TargetCurrentChanges,
+			IntendedUntracked: intended,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return snapshot
 }
 
 func testVerificationSubject() reviewtransaction.VerificationSubject {
@@ -670,7 +751,7 @@ func openTestWorkRunStore(t *testing.T, repo, workRunID string) WorkRunStore {
 	executor := hostruntime.NewExecutor()
 	return store.WithAuthorityPorts(AuthorityPorts{
 		PAD: authority, ExplicitSDDRequest: authority, Route: authority, SDD: authority,
-		Verification: authority, Launch: executor,
+		MutationCompletion: authority, Verification: authority, Launch: executor,
 	})
 }
 

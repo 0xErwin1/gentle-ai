@@ -175,6 +175,67 @@ func (authority ExplicitSDDRequestAuthority) Validate(
 	return nil
 }
 
+// MutationCompletionAuthorityPort resolves the existing MMI completion record.
+// WorkRun deliberately defines only a narrow projection so it neither imports
+// the mutationintegrity package nor creates a second completion lifecycle.
+type MutationCompletionAuthorityPort interface {
+	ResolveMutationCompletion(
+		context.Context,
+		string,
+	) (MutationCompletionAuthority, error)
+}
+
+type MutationCompletionAuthority struct {
+	CompletionRef string
+	RepositoryRef string
+	WorkRunID     string
+	Route         string
+	ScopeDigest   string
+	Snapshot      reviewtransaction.Snapshot
+}
+
+func (authority MutationCompletionAuthority) Validate(
+	completionRef string,
+	workRunID string,
+	handoff ImplementationHandoff,
+) error {
+	for _, ref := range []string{
+		authority.CompletionRef,
+		authority.RepositoryRef,
+		authority.ScopeDigest,
+	} {
+		if !validSHA256Ref(ref) {
+			return errors.New(
+				"mutation completion authority has invalid immutable references",
+			)
+		}
+	}
+	if authority.CompletionRef != completionRef ||
+		authority.CompletionRef != handoff.MutationCompletionRef ||
+		authority.WorkRunID != workRunID ||
+		authority.Route != string(handoff.Route) ||
+		authority.ScopeDigest != handoff.ScopeDigest {
+		return fmt.Errorf(
+			"%w: mutation completion",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	subject, err := reviewtransaction.VerificationSubjectFromSnapshot(
+		authority.Snapshot,
+	)
+	if err != nil {
+		return err
+	}
+	if subject != handoff.Subject ||
+		subject.SnapshotIdentity != handoff.CandidateRef {
+		return fmt.Errorf(
+			"%w: mutation completion snapshot",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	return nil
+}
+
 // RouteAuthorityPort resolves accepted proposals and safe reroutes from the
 // provider-owned decision repository. Explicit pre-route requests use the
 // separate ExplicitSDDRequestAuthorityPort.
@@ -378,12 +439,15 @@ func (authority VerificationResultAuthority) Validate(ref string) error {
 	if authority.Result.ResultRef != ref {
 		return fmt.Errorf("%w: verification result", ErrAuthorityBindingMismatch)
 	}
-	return reviewtransaction.ValidateVerificationResultRef(
+	if err := reviewtransaction.ValidateVerificationResultRef(
 		authority.Applicability,
 		authority.Registry,
 		authority.Plan,
 		authority.Result,
-	)
+	); err != nil {
+		return err
+	}
+	return nil
 }
 
 type ReviewReceiptAuthority struct {
@@ -434,6 +498,7 @@ type LaunchAuthorityPort interface {
 type AuthorityPorts struct {
 	PAD                PADAuthorityPort
 	ExplicitSDDRequest ExplicitSDDRequestAuthorityPort
+	MutationCompletion MutationCompletionAuthorityPort
 	Route              RouteAuthorityPort
 	SDD                SDDAuthorityPort
 	Verification       VerificationAuthorityPort

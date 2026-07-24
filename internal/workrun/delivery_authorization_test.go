@@ -426,17 +426,17 @@ func newTerminalWorkRunFixture(
 		availability = ForecastUnavailable
 		diagnostics = []string{testSHARef("terminal-unavailable-diagnostic")}
 	}
-	handoff, err := NewImplementationHandoff(
+	handoff := testHandoffForSnapshot(
+		t,
+		store,
 		ImplementationRouteDirectInline,
 		testSHARef("terminal-scope"),
-		plan.Subject,
+		currentWorkRunSnapshot(t, repo),
 		requirements,
 		[]string{},
 		"",
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	var err error
 	state, err = store.BindImplementationHandoff(
 		context.Background(),
 		BindImplementationHandoffRequest{

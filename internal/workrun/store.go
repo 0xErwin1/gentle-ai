@@ -24,18 +24,20 @@ const (
 	workRunRecordSchemaV1            = "gentle-ai.work-run-record/v1"
 	workRunRepositoryBindingSchemaV1 = "gentle-ai.work-run-repository-binding/v1"
 
-	workOperationStart             = "run/start"
-	workOperationAcceptSDD         = "route/accept-sdd"
-	workOperationReroute           = "route/reroute"
-	workOperationBindSDD           = "route/bind-sdd"
-	workOperationBindHandoff       = "implementation/bind-handoff"
-	workOperationRecordForecast    = "verification/record-forecast"
-	workOperationRecordDisposition = "verification/record-disposition"
-	workOperationBeginVerification = "verification/begin"
-	workOperationClaimLaunch       = "verification/claim-launch"
-	workOperationBindResult        = "verification/bind-result"
-	workOperationBindReview        = "review/bind-receipt"
-	workOperationBindDelivery      = "delivery/bind-authorization"
+	workOperationStart              = "run/start"
+	workOperationAcceptSDD          = "route/accept-sdd"
+	workOperationReroute            = "route/reroute"
+	workOperationBindSDD            = "route/bind-sdd"
+	workOperationBindHandoff        = "implementation/bind-handoff"
+	workOperationReplanVerification = "verification/replan-correction"
+	workOperationRecordForecast     = "verification/record-forecast"
+	workOperationRecordDisposition  = "verification/record-disposition"
+	workOperationBeginVerification  = "verification/begin"
+	workOperationClaimLaunch        = "verification/claim-launch"
+	workOperationBindResult         = "verification/bind-result"
+	workOperationStopMutation       = "verification/stop-mutated"
+	workOperationBindReview         = "review/bind-receipt"
+	workOperationBindDelivery       = "delivery/bind-authorization"
 
 	maximumWorkRunRecordBytes  = 1 << 20
 	maximumWorkRunChainRecords = 10_000
@@ -86,24 +88,29 @@ func (err *PublicationError) Unwrap() error { return err.Cause }
 // artifacts retain authority; this journal records only their immutable refs
 // and the ordering of accepted application-level transitions.
 type WorkRunState struct {
-	Schema                   string                      `json:"schema"`
-	WorkRunID                string                      `json:"work_run_id"`
-	Revision                 string                      `json:"revision,omitempty"`
-	Started                  bool                        `json:"started"`
-	RouteDecision            ImplementationRouteDecision `json:"route_decision"`
-	ImplementationRoute      ImplementationRoute         `json:"implementation_route,omitempty"`
-	RouteAcceptanceRef       string                      `json:"route_acceptance_ref,omitempty"`
-	SDDRunRef                string                      `json:"sdd_run_ref,omitempty"`
-	DeliveryIntentRef        string                      `json:"delivery_intent_ref"`
-	Handoff                  *ImplementationHandoff      `json:"handoff,omitempty"`
-	Forecast                 *VerificationForecast       `json:"forecast,omitempty"`
-	Disposition              *VerificationDisposition    `json:"disposition,omitempty"`
-	Reservations             []VerificationReservation   `json:"reservations"`
-	LaunchClaims             []VerificationLaunchClaim   `json:"launch_claims"`
-	NextOrdinal              int                         `json:"next_ordinal"`
-	VerificationResultRef    string                      `json:"verification_result_ref,omitempty"`
-	ReviewReceiptRef         string                      `json:"review_receipt_ref,omitempty"`
-	DeliveryAuthorizationRef string                      `json:"delivery_authorization_ref,omitempty"`
+	Schema                          string                      `json:"schema"`
+	WorkRunID                       string                      `json:"work_run_id"`
+	Revision                        string                      `json:"revision,omitempty"`
+	Started                         bool                        `json:"started"`
+	RouteDecision                   ImplementationRouteDecision `json:"route_decision"`
+	ImplementationRoute             ImplementationRoute         `json:"implementation_route,omitempty"`
+	RouteAcceptanceRef              string                      `json:"route_acceptance_ref,omitempty"`
+	SDDRunRef                       string                      `json:"sdd_run_ref,omitempty"`
+	DeliveryIntentRef               string                      `json:"delivery_intent_ref"`
+	Handoff                         *ImplementationHandoff      `json:"handoff,omitempty"`
+	VerificationReplan              *VerificationReplan         `json:"verification_replan,omitempty"`
+	Forecast                        *VerificationForecast       `json:"forecast,omitempty"`
+	Disposition                     *VerificationDisposition    `json:"disposition,omitempty"`
+	Reservations                    []VerificationReservation   `json:"reservations"`
+	LaunchClaims                    []VerificationLaunchClaim   `json:"launch_claims"`
+	NextOrdinal                     int                         `json:"next_ordinal"`
+	VerificationResultRef           string                      `json:"verification_result_ref,omitempty"`
+	PostVerificationSnapshotRef     string                      `json:"post_verification_snapshot_ref,omitempty"`
+	CorrectionImpactClosureRef      string                      `json:"correction_impact_closure_ref,omitempty"`
+	ReusableVerificationObligations []string                    `json:"reusable_verification_obligations"`
+	VerificationStop                *VerificationStop           `json:"verification_stop,omitempty"`
+	ReviewReceiptRef                string                      `json:"review_receipt_ref,omitempty"`
+	DeliveryAuthorizationRef        string                      `json:"delivery_authorization_ref,omitempty"`
 }
 
 type WorkRunStore struct {
@@ -159,6 +166,12 @@ type BindImplementationHandoffRequest struct {
 	ExpectedRevision string                `json:"expected_revision"`
 	RequestID        string                `json:"request_id"`
 	Handoff          ImplementationHandoff `json:"handoff"`
+}
+
+type ReplanVerificationAfterCorrectionRequest struct {
+	ExpectedRevision string                `json:"expected_revision"`
+	RequestID        string                `json:"request_id"`
+	CorrectedHandoff ImplementationHandoff `json:"corrected_handoff"`
 }
 
 type RecordVerificationForecastRequest struct {
@@ -236,7 +249,20 @@ type workBindReviewEvent struct {
 }
 
 type workBindResultEvent struct {
-	ResultRef string `json:"result_ref"`
+	ResultRef                   string            `json:"result_ref"`
+	PostVerificationSnapshotRef string            `json:"post_verification_snapshot_ref,omitempty"`
+	CorrectionImpactClosureRef  string            `json:"correction_impact_closure_ref,omitempty"`
+	ReusableObligations         []string          `json:"reusable_obligations,omitempty"`
+	Stop                        *VerificationStop `json:"stop,omitempty"`
+}
+
+type workVerificationReplanEvent struct {
+	Handoff ImplementationHandoff `json:"handoff"`
+	Replan  VerificationReplan    `json:"replan"`
+}
+
+type workStopMutationEvent struct {
+	Stop VerificationStop `json:"stop"`
 }
 
 type workBindDeliveryAuthorizationEvent struct {
@@ -251,18 +277,20 @@ type workRunRecord struct {
 	RequestID        string `json:"request_id"`
 	RequestDigest    string `json:"request_digest"`
 
-	Start       *workStartEvent                     `json:"start,omitempty"`
-	AcceptSDD   *workAcceptSDDEvent                 `json:"accept_sdd,omitempty"`
-	Reroute     *workRerouteEvent                   `json:"reroute,omitempty"`
-	BindSDD     *workBindSDDEvent                   `json:"bind_sdd,omitempty"`
-	Handoff     *ImplementationHandoff              `json:"handoff,omitempty"`
-	Forecast    *VerificationForecast               `json:"forecast,omitempty"`
-	Disposition *VerificationDisposition            `json:"disposition,omitempty"`
-	Reservation *VerificationReservation            `json:"reservation,omitempty"`
-	Launch      *VerificationLaunchClaim            `json:"launch,omitempty"`
-	Result      *workBindResultEvent                `json:"result,omitempty"`
-	Review      *workBindReviewEvent                `json:"review,omitempty"`
-	Delivery    *workBindDeliveryAuthorizationEvent `json:"delivery,omitempty"`
+	Start        *workStartEvent                     `json:"start,omitempty"`
+	AcceptSDD    *workAcceptSDDEvent                 `json:"accept_sdd,omitempty"`
+	Reroute      *workRerouteEvent                   `json:"reroute,omitempty"`
+	BindSDD      *workBindSDDEvent                   `json:"bind_sdd,omitempty"`
+	Handoff      *ImplementationHandoff              `json:"handoff,omitempty"`
+	Replan       *workVerificationReplanEvent        `json:"replan,omitempty"`
+	Forecast     *VerificationForecast               `json:"forecast,omitempty"`
+	Disposition  *VerificationDisposition            `json:"disposition,omitempty"`
+	Reservation  *VerificationReservation            `json:"reservation,omitempty"`
+	Launch       *VerificationLaunchClaim            `json:"launch,omitempty"`
+	Result       *workBindResultEvent                `json:"result,omitempty"`
+	StopMutation *workStopMutationEvent              `json:"stop_mutation,omitempty"`
+	Review       *workBindReviewEvent                `json:"review,omitempty"`
+	Delivery     *workBindDeliveryAuthorizationEvent `json:"delivery,omitempty"`
 }
 
 type workRequestReceipt struct {
@@ -572,6 +600,17 @@ func (store WorkRunStore) BindImplementationHandoff(
 	if err := request.Handoff.Validate(); err != nil {
 		return WorkRunState{}, err
 	}
+	if request.Handoff.Schema != ImplementationHandoffSchemaV2 {
+		return WorkRunState{}, errors.New(
+			"new implementation handoff requires owner-issued mutation completion",
+		)
+	}
+	if _, err := store.resolveLiveMutationCompletion(
+		ctx,
+		request.Handoff,
+	); err != nil {
+		return WorkRunState{}, err
+	}
 	digest, err := digestValue("gentle-ai.work-run-bind-handoff-request/v1", request)
 	if err != nil {
 		return WorkRunState{}, err
@@ -580,6 +619,93 @@ func (store WorkRunStore) BindImplementationHandoff(
 		event := request.Handoff
 		return workRunRecord{Operation: workOperationBindHandoff, Handoff: &event}, nil
 	})
+}
+
+// ReplanVerificationAfterCorrection replaces only the active verification
+// subject after the native review kernel has consumed its one correction
+// attempt. Route, SDD identity, reservation history, launch history, and
+// ordinal budget remain in the same WorkRun.
+func (store WorkRunStore) ReplanVerificationAfterCorrection(
+	ctx context.Context,
+	request ReplanVerificationAfterCorrectionRequest,
+) (WorkRunState, error) {
+	if err := validateMutationEnvelope(
+		request.ExpectedRevision,
+		request.RequestID,
+	); err != nil {
+		return WorkRunState{}, err
+	}
+	if err := request.CorrectedHandoff.Validate(); err != nil {
+		return WorkRunState{}, err
+	}
+	if request.CorrectedHandoff.Schema != ImplementationHandoffSchemaV2 {
+		return WorkRunState{}, errors.New(
+			"corrected handoff requires owner-issued mutation completion",
+		)
+	}
+	if _, err := store.resolveLiveMutationCompletion(
+		ctx,
+		request.CorrectedHandoff,
+	); err != nil {
+		return WorkRunState{}, err
+	}
+	digest, err := digestValue(
+		"gentle-ai.work-run-replan-verification-request/v1",
+		request,
+	)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	return store.mutate(
+		ctx,
+		request.ExpectedRevision,
+		request.RequestID,
+		digest,
+		func(replay workReplay) (workRunRecord, error) {
+			state := replay.State
+			if state.Handoff == nil ||
+				state.Forecast == nil ||
+				state.VerificationReplan != nil ||
+				state.VerificationResultRef != "" ||
+				state.PostVerificationSnapshotRef != "" ||
+				state.VerificationStop != nil ||
+				state.ReviewReceiptRef != "" ||
+				state.DeliveryAuthorizationRef != "" {
+				return workRunRecord{}, fmt.Errorf(
+					"%w: verification is not eligible for correction replanning",
+					ErrWorkRunInvalidTransition,
+				)
+			}
+			corrected := request.CorrectedHandoff
+			if corrected.Route != state.Handoff.Route ||
+				corrected.Route != state.ImplementationRoute ||
+				corrected.ScopeDigest != state.Handoff.ScopeDigest ||
+				corrected.CandidateRef == state.Handoff.CandidateRef ||
+				corrected.Subject == state.Handoff.Subject ||
+				corrected.SDDRunRef != state.Handoff.SDDRunRef {
+				return workRunRecord{}, errors.New(
+					"corrected verification handoff changes route, scope, SDD identity, or keeps the old subject",
+				)
+			}
+			replan, err := newVerificationReplan(
+				1,
+				*state.Handoff,
+				*state.Forecast,
+				corrected,
+			)
+			if err != nil {
+				return workRunRecord{}, err
+			}
+			event := workVerificationReplanEvent{
+				Handoff: corrected,
+				Replan:  replan,
+			}
+			return workRunRecord{
+				Operation: workOperationReplanVerification,
+				Replan:    &event,
+			}, nil
+		},
+	)
 }
 
 func (store WorkRunStore) RecordVerificationForecast(
@@ -704,6 +830,24 @@ func (store WorkRunStore) Begin(
 				ErrWorkRunInvalidTransition,
 			)
 		}
+		if state.VerificationStop != nil {
+			return workRunRecord{}, fmt.Errorf(
+				"%w: verification is already stopped",
+				ErrWorkRunInvalidTransition,
+			)
+		}
+		if state.Handoff == nil {
+			return workRunRecord{}, fmt.Errorf(
+				"%w: implementation handoff is missing",
+				ErrWorkRunInvalidTransition,
+			)
+		}
+		if _, err := store.resolveLiveMutationCompletion(
+			ctx,
+			*state.Handoff,
+		); err != nil {
+			return workRunRecord{}, err
+		}
 		ticket, err := store.evidence.ReadActionTicket(ctx, request.ActionTicketRef)
 		if err != nil {
 			return workRunRecord{}, fmt.Errorf("read verification action ticket: %w", err)
@@ -754,8 +898,10 @@ func (store WorkRunStore) Begin(
 			return workRunRecord{}, errors.New("action ticket does not bind the exact forecast and planned obligation")
 		}
 		for _, reservation := range state.Reservations {
-			if reservation.Slot == ticket.Slot || reservation.ActionTicketRef == ticket.TicketRef ||
-				reservation.SlotBindingRef == slotBindingRef {
+			if reservation.ActionTicketRef == ticket.TicketRef ||
+				reservation.SlotBindingRef == slotBindingRef ||
+				reservation.ForecastDigest == state.Forecast.Digest &&
+					reservation.Slot == ticket.Slot {
 				return workRunRecord{}, ErrVerificationReserved
 			}
 		}
@@ -873,23 +1019,153 @@ func (store WorkRunStore) BindVerificationResult(
 	if err != nil {
 		return WorkRunState{}, err
 	}
-	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay workReplay) (workRunRecord, error) {
-		state := replay.State
-		if state.Forecast == nil {
-			return workRunRecord{}, fmt.Errorf("%w: verification forecast is missing", ErrWorkRunInvalidTransition)
+	var mutationErr error
+	state, err := store.mutate(
+		ctx,
+		request.ExpectedRevision,
+		request.RequestID,
+		digest,
+		func(replay workReplay) (workRunRecord, error) {
+			state := replay.State
+			if state.Forecast == nil || state.Handoff == nil {
+				return workRunRecord{}, fmt.Errorf(
+					"%w: verification forecast and handoff are missing",
+					ErrWorkRunInvalidTransition,
+				)
+			}
+			if state.VerificationResultRef != "" || state.VerificationStop != nil {
+				return workRunRecord{}, fmt.Errorf(
+					"%w: verification is already terminal",
+					ErrWorkRunInvalidTransition,
+				)
+			}
+			if err := state.Forecast.MatchesPlan(
+				request.Applicability,
+				request.Registry,
+				request.Plan,
+			); err != nil {
+				return workRunRecord{}, err
+			}
+			completion, err := store.resolveMutationCompletion(
+				ctx,
+				*state.Handoff,
+			)
+			if err != nil {
+				return workRunRecord{}, err
+			}
+			completionSubject, err :=
+				reviewtransaction.VerificationSubjectFromSnapshot(
+					completion.Snapshot,
+				)
+			if err != nil {
+				return workRunRecord{}, err
+			}
+			if completionSubject != ownerResult.Result.Subject {
+				return workRunRecord{}, fmt.Errorf(
+					"%w: result subject differs from mutation completion",
+					ErrAuthorityBindingMismatch,
+				)
+			}
+			live, resnapshotErr := reviewtransaction.ResnapshotVerificationSubject(
+				ctx,
+				store.Repo,
+				completion.Snapshot,
+			)
+			if resnapshotErr != nil {
+				if !errors.Is(
+					resnapshotErr,
+					reviewtransaction.ErrVerificationSubjectMutated,
+				) {
+					return workRunRecord{}, resnapshotErr
+				}
+				stop, stopErr := newVerificationStop(
+					VerificationStopMutated,
+					request.Result.ResultRef,
+					completion.Snapshot.Identity,
+					live.Identity,
+				)
+				if stopErr != nil {
+					return workRunRecord{}, stopErr
+				}
+				mutationErr = resnapshotErr
+				event := workStopMutationEvent{Stop: stop}
+				return workRunRecord{
+					Operation:    workOperationStopMutation,
+					StopMutation: &event,
+				}, nil
+			}
+			if err := store.validateResultEvidence(
+				ctx,
+				state,
+				request.Result,
+			); err != nil {
+				return workRunRecord{}, err
+			}
+			closureRef := ""
+			reusable := []string{}
+			if state.VerificationReplan != nil {
+				switch request.Result.Aggregate {
+				case reviewtransaction.VerificationAggregateComplete,
+					reviewtransaction.VerificationAggregateNotRequired:
+					closure, err := store.buildCorrectionImpactClosure(
+						ctx,
+						*state.VerificationReplan,
+						request.Applicability,
+						request.Registry,
+						request.Plan,
+						request.Result,
+					)
+					if err != nil {
+						return workRunRecord{}, err
+					}
+					closureRef = closure.Digest
+					reusable = reusableCorrectionObligations(closure)
+				}
+			}
+			var stop *VerificationStop
+			if request.Result.Aggregate ==
+				reviewtransaction.VerificationAggregateFailed {
+				value, err := newVerificationStop(
+					VerificationStopFailed,
+					request.Result.ResultRef,
+					completion.Snapshot.Identity,
+					live.Identity,
+				)
+				if err != nil {
+					return workRunRecord{}, err
+				}
+				stop = &value
+			}
+			event := workBindResultEvent{
+				ResultRef:                   request.Result.ResultRef,
+				PostVerificationSnapshotRef: live.Identity,
+				CorrectionImpactClosureRef:  closureRef,
+				ReusableObligations:         reusable,
+				Stop:                        stop,
+			}
+			return workRunRecord{
+				Operation: workOperationBindResult,
+				Result:    &event,
+			}, nil
+		},
+	)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	if state.VerificationStop != nil &&
+		state.VerificationStop.Reason == VerificationStopMutated &&
+		state.VerificationStop.ResultRef == request.Result.ResultRef {
+		if mutationErr != nil {
+			return state, mutationErr
 		}
-		if state.VerificationResultRef != "" {
-			return workRunRecord{}, fmt.Errorf("%w: verification result is already terminal", ErrWorkRunInvalidTransition)
-		}
-		if err := state.Forecast.MatchesPlan(request.Applicability, request.Registry, request.Plan); err != nil {
-			return workRunRecord{}, err
-		}
-		if err := store.validateResultEvidence(ctx, state, request.Result); err != nil {
-			return workRunRecord{}, err
-		}
-		event := workBindResultEvent{ResultRef: request.Result.ResultRef}
-		return workRunRecord{Operation: workOperationBindResult, Result: &event}, nil
-	})
+		return state, fmt.Errorf(
+			"%w: expected %s, observed %s",
+			reviewtransaction.ErrVerificationSubjectMutated,
+			state.VerificationStop.ExpectedSnapshotRef,
+			state.VerificationStop.ObservedSnapshotRef,
+		)
+	}
+	return state, nil
 }
 
 func (store WorkRunStore) BindReviewReceipt(
@@ -911,9 +1187,30 @@ func (store WorkRunStore) BindReviewReceipt(
 	}
 	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay workReplay) (workRunRecord, error) {
 		state := replay.State
-		if state.Handoff == nil || state.VerificationResultRef == "" {
+		if state.Handoff == nil ||
+			state.VerificationResultRef == "" ||
+			state.PostVerificationSnapshotRef == "" ||
+			state.VerificationStop != nil {
 			return workRunRecord{}, fmt.Errorf(
-				"%w: terminal result and candidate are required before review",
+				"%w: exact converged result and candidate are required before review",
+				ErrWorkRunInvalidTransition,
+			)
+		}
+		result, err := store.resolveBoundVerificationResult(ctx, state)
+		if err != nil {
+			return workRunRecord{}, err
+		}
+		if result.Result.Subject.SnapshotIdentity !=
+			state.PostVerificationSnapshotRef {
+			return workRunRecord{}, fmt.Errorf(
+				"%w: post-verification snapshot",
+				ErrAuthorityBindingMismatch,
+			)
+		}
+		if result.Result.Aggregate ==
+			reviewtransaction.VerificationAggregateFailed {
+			return workRunRecord{}, fmt.Errorf(
+				"%w: failed verification stops before review freeze",
 				ErrWorkRunInvalidTransition,
 			)
 		}
@@ -965,6 +1262,8 @@ func (store WorkRunStore) BindDeliveryAuthorization(
 			state := replay.State
 			if state.Handoff == nil ||
 				state.VerificationResultRef == "" ||
+				state.PostVerificationSnapshotRef == "" ||
+				state.VerificationStop != nil ||
 				state.ReviewReceiptRef == "" ||
 				state.DeliveryAuthorizationRef != "" {
 				return workRunRecord{}, fmt.Errorf(
@@ -1277,8 +1576,10 @@ func (store WorkRunStore) load(
 	replay := workReplay{
 		State: WorkRunState{
 			Schema: WorkRunStateSchemaV1, WorkRunID: store.WorkRunID,
-			Reservations: []VerificationReservation{},
-			LaunchClaims: []VerificationLaunchClaim{}, NextOrdinal: 1,
+			Reservations:                    []VerificationReservation{},
+			LaunchClaims:                    []VerificationLaunchClaim{},
+			ReusableVerificationObligations: []string{},
+			NextOrdinal:                     1,
 		},
 		Requests: map[string]workRequestReceipt{},
 		States:   map[string]WorkRunState{},
@@ -1642,6 +1943,60 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 			}
 		}
 		state.Handoff = cloneHandoff(record.Handoff)
+		state.ReusableVerificationObligations = []string{}
+	case workOperationReplanVerification:
+		if state.Handoff == nil ||
+			state.Forecast == nil ||
+			state.VerificationReplan != nil ||
+			state.VerificationResultRef != "" ||
+			state.PostVerificationSnapshotRef != "" ||
+			state.VerificationStop != nil ||
+			state.ReviewReceiptRef != "" ||
+			state.DeliveryAuthorizationRef != "" {
+			return fmt.Errorf(
+				"%w: verification is not eligible for correction replanning",
+				ErrWorkRunInvalidTransition,
+			)
+		}
+		if err := record.Replan.Handoff.Validate(); err != nil {
+			return err
+		}
+		if err := record.Replan.Replan.Validate(); err != nil {
+			return err
+		}
+		if record.Replan.Handoff.Route != state.Handoff.Route ||
+			record.Replan.Handoff.ScopeDigest != state.Handoff.ScopeDigest ||
+			record.Replan.Handoff.CandidateRef == state.Handoff.CandidateRef ||
+			record.Replan.Handoff.SDDRunRef != state.Handoff.SDDRunRef ||
+			record.Replan.Replan.PreviousHandoffDigest != state.Handoff.Digest ||
+			record.Replan.Replan.PreviousForecastDigest != state.Forecast.Digest ||
+			record.Replan.Replan.OriginalApplicabilityDigest !=
+				state.Forecast.ApplicabilityDigest ||
+			record.Replan.Replan.OriginalRegistryDigest !=
+				state.Forecast.RegistryDigest ||
+			record.Replan.Replan.OriginalPlanDigest != state.Forecast.PlanDigest ||
+			record.Replan.Replan.OriginalAvailabilityRef !=
+				state.Forecast.AvailabilityRef ||
+			record.Replan.Replan.CorrectedHandoffDigest !=
+				record.Replan.Handoff.Digest ||
+			record.Replan.Replan.MutationCompletionRef !=
+				record.Replan.Handoff.MutationCompletionRef {
+			return errors.New(
+				"verification replan does not bind the exact prior and corrected subjects",
+			)
+		}
+		state.Handoff = cloneHandoff(&record.Replan.Handoff)
+		replan := record.Replan.Replan
+		state.VerificationReplan = &replan
+		state.Forecast = nil
+		state.Disposition = nil
+		state.VerificationResultRef = ""
+		state.PostVerificationSnapshotRef = ""
+		state.CorrectionImpactClosureRef = ""
+		state.ReusableVerificationObligations = []string{}
+		state.VerificationStop = nil
+		state.ReviewReceiptRef = ""
+		state.DeliveryAuthorizationRef = ""
 	case workOperationRecordForecast:
 		if state.Handoff == nil {
 			return fmt.Errorf("%w: implementation handoff is missing", ErrWorkRunInvalidTransition)
@@ -1659,7 +2014,11 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 		}
 		state.Forecast = cloneForecast(record.Forecast)
 	case workOperationRecordDisposition:
-		if state.Forecast == nil || len(state.Reservations) != 0 ||
+		if state.Forecast == nil ||
+			hasReservationForForecast(
+				state.Reservations,
+				state.Forecast.Digest,
+			) ||
 			state.VerificationResultRef != "" {
 			return fmt.Errorf("%w: forecast is not eligible for a disposition", ErrWorkRunInvalidTransition)
 		}
@@ -1683,9 +2042,12 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 			return errors.New("verification reservation does not bind the current forecast ordinal")
 		}
 		for _, existing := range state.Reservations {
-			if existing.Slot == record.Reservation.Slot ||
-				existing.ActionTicketRef == record.Reservation.ActionTicketRef ||
+			if existing.ActionTicketRef == record.Reservation.ActionTicketRef ||
 				existing.SlotBindingRef == record.Reservation.SlotBindingRef {
+				return ErrVerificationReserved
+			}
+			if existing.ForecastDigest == state.Forecast.Digest &&
+				existing.Slot == record.Reservation.Slot {
 				return ErrVerificationReserved
 			}
 		}
@@ -1707,17 +2069,88 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 		}
 		state.LaunchClaims = append(state.LaunchClaims, *record.Launch)
 	case workOperationBindResult:
-		if state.Forecast == nil || state.VerificationResultRef != "" {
+		if state.Forecast == nil ||
+			state.VerificationResultRef != "" ||
+			state.VerificationStop != nil {
 			return fmt.Errorf("%w: verification result is not bindable", ErrWorkRunInvalidTransition)
 		}
 		if !validSHA256Ref(record.Result.ResultRef) {
 			return errors.New("verification result reference is invalid")
 		}
+		if record.Result.PostVerificationSnapshotRef != "" &&
+			!validSHA256Ref(record.Result.PostVerificationSnapshotRef) {
+			return errors.New(
+				"post-verification snapshot reference is invalid",
+			)
+		}
+		if record.Result.CorrectionImpactClosureRef != "" &&
+			!validSHA256Ref(record.Result.CorrectionImpactClosureRef) {
+			return errors.New("correction-impact closure reference is invalid")
+		}
+		if record.Result.ReusableObligations != nil &&
+			!equalStrings(
+				record.Result.ReusableObligations,
+				canonicalIdentifiers(record.Result.ReusableObligations),
+			) {
+			return errors.New(
+				"reusable verification obligations must be canonical",
+			)
+		}
+		if record.Result.Stop != nil {
+			if err := record.Result.Stop.Validate(); err != nil {
+				return err
+			}
+			if record.Result.Stop.Reason != VerificationStopFailed ||
+				record.Result.Stop.ResultRef != record.Result.ResultRef ||
+				record.Result.Stop.ExpectedSnapshotRef !=
+					record.Result.PostVerificationSnapshotRef {
+				return errors.New(
+					"failed verification stop does not bind its exact result",
+				)
+			}
+		}
 		state.VerificationResultRef = record.Result.ResultRef
+		state.PostVerificationSnapshotRef =
+			record.Result.PostVerificationSnapshotRef
+		state.CorrectionImpactClosureRef =
+			record.Result.CorrectionImpactClosureRef
+		state.ReusableVerificationObligations = append(
+			[]string{},
+			record.Result.ReusableObligations...,
+		)
+		state.VerificationStop = cloneVerificationStop(record.Result.Stop)
+		state.ReviewReceiptRef = ""
+		state.DeliveryAuthorizationRef = ""
+	case workOperationStopMutation:
+		if state.Forecast == nil ||
+			state.VerificationResultRef != "" ||
+			state.VerificationStop != nil {
+			return fmt.Errorf(
+				"%w: verification mutation stop is not bindable",
+				ErrWorkRunInvalidTransition,
+			)
+		}
+		if err := record.StopMutation.Stop.Validate(); err != nil {
+			return err
+		}
+		if record.StopMutation.Stop.Reason != VerificationStopMutated {
+			return errors.New(
+				"verification mutation event requires a mutated stop",
+			)
+		}
+		stop := record.StopMutation.Stop
+		state.VerificationStop = &stop
+		state.VerificationResultRef = ""
+		state.PostVerificationSnapshotRef = ""
+		state.CorrectionImpactClosureRef = ""
+		state.ReusableVerificationObligations = []string{}
 		state.ReviewReceiptRef = ""
 		state.DeliveryAuthorizationRef = ""
 	case workOperationBindReview:
-		if state.VerificationResultRef == "" || state.ReviewReceiptRef != "" {
+		if state.VerificationResultRef == "" ||
+			state.PostVerificationSnapshotRef == "" ||
+			state.VerificationStop != nil ||
+			state.ReviewReceiptRef != "" {
 			return fmt.Errorf("%w: review receipt is not bindable", ErrWorkRunInvalidTransition)
 		}
 		if !validSHA256Ref(record.Review.ReviewReceiptRef) {
@@ -1727,6 +2160,8 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 	case workOperationBindDelivery:
 		if state.Handoff == nil ||
 			state.VerificationResultRef == "" ||
+			state.PostVerificationSnapshotRef == "" ||
+			state.VerificationStop != nil ||
 			state.ReviewReceiptRef == "" ||
 			state.DeliveryAuthorizationRef != "" {
 			return fmt.Errorf(
@@ -1764,9 +2199,11 @@ func validateWorkRunRecordShape(record workRunRecord) error {
 	}
 	fields := []bool{
 		record.Start != nil, record.AcceptSDD != nil, record.Reroute != nil,
-		record.BindSDD != nil, record.Handoff != nil, record.Forecast != nil,
+		record.BindSDD != nil, record.Handoff != nil, record.Replan != nil,
+		record.Forecast != nil,
 		record.Disposition != nil, record.Reservation != nil, record.Result != nil,
-		record.Launch != nil, record.Review != nil, record.Delivery != nil,
+		record.StopMutation != nil, record.Launch != nil, record.Review != nil,
+		record.Delivery != nil,
 	}
 	count := 0
 	for _, present := range fields {
@@ -1782,11 +2219,15 @@ func validateWorkRunRecordShape(record workRunRecord) error {
 		record.Operation == workOperationReroute && record.Reroute != nil ||
 		record.Operation == workOperationBindSDD && record.BindSDD != nil ||
 		record.Operation == workOperationBindHandoff && record.Handoff != nil ||
+		record.Operation == workOperationReplanVerification &&
+			record.Replan != nil ||
 		record.Operation == workOperationRecordForecast && record.Forecast != nil ||
 		record.Operation == workOperationRecordDisposition && record.Disposition != nil ||
 		record.Operation == workOperationBeginVerification && record.Reservation != nil ||
 		record.Operation == workOperationClaimLaunch && record.Launch != nil ||
 		record.Operation == workOperationBindResult && record.Result != nil ||
+		record.Operation == workOperationStopMutation &&
+			record.StopMutation != nil ||
 		record.Operation == workOperationBindReview && record.Review != nil ||
 		record.Operation == workOperationBindDelivery && record.Delivery != nil
 	if !validOperation {
@@ -1798,13 +2239,143 @@ func validateWorkRunRecordShape(record workRunRecord) error {
 	return nil
 }
 
+func (store WorkRunStore) resolveMutationCompletion(
+	ctx context.Context,
+	handoff ImplementationHandoff,
+) (MutationCompletionAuthority, error) {
+	if store.authority.MutationCompletion == nil {
+		return MutationCompletionAuthority{}, ErrAuthorityPortUnavailable
+	}
+	completion, err := store.authority.MutationCompletion.
+		ResolveMutationCompletion(ctx, handoff.MutationCompletionRef)
+	if err != nil {
+		return MutationCompletionAuthority{}, fmt.Errorf(
+			"resolve mutation completion: %w",
+			err,
+		)
+	}
+	if err := completion.Validate(
+		handoff.MutationCompletionRef,
+		store.WorkRunID,
+		handoff,
+	); err != nil {
+		return MutationCompletionAuthority{}, err
+	}
+	if completion.RepositoryRef != store.RepositoryRef() {
+		return MutationCompletionAuthority{}, fmt.Errorf(
+			"%w: mutation completion repository",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	return completion, nil
+}
+
+func (store WorkRunStore) resolveLiveMutationCompletion(
+	ctx context.Context,
+	handoff ImplementationHandoff,
+) (MutationCompletionAuthority, error) {
+	completion, err := store.resolveMutationCompletion(ctx, handoff)
+	if err != nil {
+		return MutationCompletionAuthority{}, err
+	}
+	if _, err := reviewtransaction.ResnapshotVerificationSubject(
+		ctx,
+		store.Repo,
+		completion.Snapshot,
+	); err != nil {
+		return MutationCompletionAuthority{}, err
+	}
+	return completion, nil
+}
+
+func (store WorkRunStore) buildCorrectionImpactClosure(
+	ctx context.Context,
+	replan VerificationReplan,
+	correctedApplicability reviewtransaction.VerificationApplicability,
+	correctedRegistry reviewtransaction.VerificationPlanRegistry,
+	correctedPlan reviewtransaction.VerificationPlan,
+	result reviewtransaction.VerificationResultRef,
+) (reviewtransaction.CorrectionImpactClosure, error) {
+	if err := replan.Validate(); err != nil {
+		return reviewtransaction.CorrectionImpactClosure{}, err
+	}
+	if store.authority.Verification == nil {
+		return reviewtransaction.CorrectionImpactClosure{},
+			ErrAuthorityPortUnavailable
+	}
+	original, err := store.authority.Verification.ResolveForecast(
+		ctx,
+		replan.OriginalAvailabilityRef,
+	)
+	if err != nil {
+		return reviewtransaction.CorrectionImpactClosure{}, fmt.Errorf(
+			"resolve original correction forecast: %w",
+			err,
+		)
+	}
+	if err := original.Validate(); err != nil {
+		return reviewtransaction.CorrectionImpactClosure{}, err
+	}
+	if original.AvailabilityRef != replan.OriginalAvailabilityRef ||
+		original.Applicability.Digest !=
+			replan.OriginalApplicabilityDigest ||
+		original.Registry.Digest != replan.OriginalRegistryDigest ||
+		original.Plan.Digest != replan.OriginalPlanDigest {
+		return reviewtransaction.CorrectionImpactClosure{}, fmt.Errorf(
+			"%w: original correction forecast",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	closure, err := reviewtransaction.BuildCorrectionImpactClosure(
+		original.Applicability,
+		original.Registry,
+		original.Plan,
+		correctedApplicability,
+		correctedRegistry,
+		correctedPlan,
+		result,
+	)
+	if err != nil {
+		return reviewtransaction.CorrectionImpactClosure{}, err
+	}
+	return closure, nil
+}
+
+// reusableCorrectionObligations derives reuse instead of accepting a caller
+// set. Only completed obligations outside the owner-validated rerun closure
+// survive. The current conservative RAR closure marks every corrected
+// obligation for rerun, so this safely returns an empty set today.
+func reusableCorrectionObligations(
+	closure reviewtransaction.CorrectionImpactClosure,
+) []string {
+	reusable := make([]string, 0)
+	rerunIndex := 0
+	for _, completed := range closure.Result.CompletedObligations {
+		for rerunIndex < len(closure.RerunObligations) &&
+			closure.RerunObligations[rerunIndex] < completed {
+			rerunIndex++
+		}
+		if rerunIndex < len(closure.RerunObligations) &&
+			closure.RerunObligations[rerunIndex] == completed {
+			continue
+		}
+		reusable = append(reusable, completed)
+	}
+	return reusable
+}
+
 func (store WorkRunStore) validateResultEvidence(
 	ctx context.Context,
 	state WorkRunState,
 	result reviewtransaction.VerificationResultRef,
 ) error {
 	if result.Aggregate == reviewtransaction.VerificationAggregateNotRequired {
-		if len(result.EvidenceRefs) != 0 || len(state.Reservations) != 0 {
+		if len(result.EvidenceRefs) != 0 ||
+			state.Forecast == nil ||
+			hasReservationForForecast(
+				state.Reservations,
+				state.Forecast.Digest,
+			) {
 			return errors.New("not-required verification cannot consume execution reservations or evidence")
 		}
 		return nil
@@ -1823,6 +2394,10 @@ func (store WorkRunStore) validateResultEvidence(
 	}
 	reservations := make(map[string]VerificationReservation, len(state.Reservations))
 	for _, reservation := range state.Reservations {
+		if state.Forecast == nil ||
+			reservation.ForecastDigest != state.Forecast.Digest {
+			continue
+		}
 		reservations[reservation.ActionTicketRef] = reservation
 	}
 	completeSlots := make(map[string]struct{}, len(result.CompletedObligations))
@@ -1861,6 +2436,18 @@ func (store WorkRunStore) validateResultEvidence(
 		}
 	}
 	return nil
+}
+
+func hasReservationForForecast(
+	reservations []VerificationReservation,
+	forecastDigest string,
+) bool {
+	for _, reservation := range reservations {
+		if reservation.ForecastDigest == forecastDigest {
+			return true
+		}
+	}
+	return false
 }
 
 func verificationObligationByID(
@@ -1925,8 +2512,15 @@ func cloneWorkRunState(state WorkRunState) WorkRunState {
 	result.LaunchClaims = make([]VerificationLaunchClaim, len(state.LaunchClaims))
 	copy(result.LaunchClaims, state.LaunchClaims)
 	result.Handoff = cloneHandoff(state.Handoff)
+	if state.VerificationReplan != nil {
+		replan := *state.VerificationReplan
+		result.VerificationReplan = &replan
+	}
 	result.Forecast = cloneForecast(state.Forecast)
 	result.Disposition = cloneDisposition(state.Disposition)
+	result.ReusableVerificationObligations =
+		cloneStrings(state.ReusableVerificationObligations)
+	result.VerificationStop = cloneVerificationStop(state.VerificationStop)
 	return result
 }
 
@@ -1955,6 +2549,14 @@ func cloneForecast(value *VerificationForecast) *VerificationForecast {
 }
 
 func cloneDisposition(value *VerificationDisposition) *VerificationDisposition {
+	if value == nil {
+		return nil
+	}
+	result := *value
+	return &result
+}
+
+func cloneVerificationStop(value *VerificationStop) *VerificationStop {
 	if value == nil {
 		return nil
 	}

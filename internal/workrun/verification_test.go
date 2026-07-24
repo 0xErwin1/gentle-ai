@@ -22,13 +22,17 @@ func TestWorkRunBeginAtomicallyReservesExactPlanAndTicket(t *testing.T) {
 	state := startDirectWorkRun(t, store)
 
 	requirements := verificationRequirementRefs(plan)
-	handoff, err := NewImplementationHandoff(
-		ImplementationRouteDirectInline, testSHARef("reservation-scope"), plan.Subject,
-		requirements, []string{}, "",
+	handoff := testHandoffForSnapshot(
+		t,
+		store,
+		ImplementationRouteDirectInline,
+		testSHARef("reservation-scope"),
+		currentWorkRunSnapshot(t, repo),
+		requirements,
+		[]string{},
+		"",
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	var err error
 	state, err = store.BindImplementationHandoff(context.Background(), BindImplementationHandoffRequest{
 		ExpectedRevision: state.Revision, RequestID: "handoff",
 		Handoff: handoff,
@@ -196,13 +200,17 @@ func TestWorkRunBeginRejectsTerminalResultWithoutAdvancingHead(t *testing.T) {
 	store := openTestWorkRunStore(t, repo, "terminal-begin")
 	state := startDirectWorkRun(t, store)
 
-	handoff, err := NewImplementationHandoff(
-		ImplementationRouteDirectInline, testSHARef("terminal-begin-scope"), plan.Subject,
-		verificationRequirementRefs(plan), []string{}, "",
+	handoff := testHandoffForSnapshot(
+		t,
+		store,
+		ImplementationRouteDirectInline,
+		testSHARef("terminal-begin-scope"),
+		currentWorkRunSnapshot(t, repo),
+		verificationRequirementRefs(plan),
+		[]string{},
+		"",
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	var err error
 	state, err = store.BindImplementationHandoff(
 		context.Background(),
 		BindImplementationHandoffRequest{
@@ -371,13 +379,17 @@ func TestWorkRunNotRequiredResultAndReviewRemainReferenceOnly(t *testing.T) {
 	applicability, registry, plan := verificationFixture(t, repo, false)
 	store := openTestWorkRunStore(t, repo, "not-required")
 	state := startDirectWorkRun(t, store)
-	handoff, err := NewImplementationHandoff(
-		ImplementationRouteDirectInline, testSHARef("passive-scope"), plan.Subject,
-		[]string{}, []string{}, "",
+	handoff := testHandoffForSnapshot(
+		t,
+		store,
+		ImplementationRouteDirectInline,
+		testSHARef("passive-scope"),
+		currentWorkRunSnapshot(t, repo),
+		[]string{},
+		[]string{},
+		"",
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	var err error
 	state, err = store.BindImplementationHandoff(context.Background(), BindImplementationHandoffRequest{
 		ExpectedRevision: state.Revision, RequestID: "handoff-passive", Handoff: handoff,
 	})
@@ -541,17 +553,17 @@ func TestWorkRunLongForecastAwaitsDecisionWithoutCeremony(t *testing.T) {
 			)
 			store := openTestWorkRunStore(t, repo, "forecast-cost")
 			state := startDirectWorkRun(t, store)
-			handoff, err := NewImplementationHandoff(
+			handoff := testHandoffForSnapshot(
+				t,
+				store,
 				ImplementationRouteDirectInline,
 				testSHARef("cost-scope"),
-				plan.Subject,
+				currentWorkRunSnapshot(t, repo),
 				verificationRequirementRefs(plan),
 				[]string{},
 				"",
 			)
-			if err != nil {
-				t.Fatal(err)
-			}
+			var err error
 			state, err = store.BindImplementationHandoff(
 				context.Background(),
 				BindImplementationHandoffRequest{
@@ -638,17 +650,16 @@ func TestWorkRunSDDReservationMustBindBeforeCapabilityActivation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handoff, err := NewImplementationHandoff(
+	handoff := testHandoffForSnapshot(
+		t,
+		store,
 		ImplementationRouteSDD,
 		testSHARef("sdd-scope"),
-		plan.Subject,
+		currentWorkRunSnapshot(t, repo),
 		verificationRequirementRefs(plan),
 		[]string{},
 		runRef,
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	state, err = store.BindImplementationHandoff(
 		context.Background(),
 		BindImplementationHandoffRequest{

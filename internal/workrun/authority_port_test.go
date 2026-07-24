@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/internal/hostruntime"
+	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 )
 
 type reviewReceiptLookup struct {
@@ -22,6 +23,7 @@ type testAuthorityRepository struct {
 	explicitSDDRequests map[string]ExplicitSDDRequestAuthority
 	routes              map[string]RouteSelectionAuthority
 	runs                map[string]SDDRunAuthority
+	completions         map[string]MutationCompletionAuthority
 	forecasts           map[string]VerificationForecastAuthority
 	dispositions        map[string]VerificationDispositionAuthority
 	results             map[string]VerificationResultAuthority
@@ -39,6 +41,7 @@ func newTestAuthorityRepository() *testAuthorityRepository {
 		explicitSDDRequests: map[string]ExplicitSDDRequestAuthority{},
 		routes:              map[string]RouteSelectionAuthority{},
 		runs:                map[string]SDDRunAuthority{},
+		completions:         map[string]MutationCompletionAuthority{},
 		forecasts:           map[string]VerificationForecastAuthority{},
 		dispositions:        map[string]VerificationDispositionAuthority{},
 		results:             map[string]VerificationResultAuthority{},
@@ -47,6 +50,29 @@ func newTestAuthorityRepository() *testAuthorityRepository {
 		authorizationErrors: map[string]error{},
 		sddBindings:         []SDDReservationBinding{},
 	}
+}
+
+func (repository *testAuthorityRepository) ResolveMutationCompletion(
+	_ context.Context,
+	ref string,
+) (MutationCompletionAuthority, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	value, ok := repository.completions[ref]
+	if !ok {
+		return MutationCompletionAuthority{}, os.ErrNotExist
+	}
+	value.Snapshot = cloneTestSnapshot(value.Snapshot)
+	return value, nil
+}
+
+func cloneTestSnapshot(
+	value reviewtransaction.Snapshot,
+) reviewtransaction.Snapshot {
+	value.IntendedUntracked = append([]string{}, value.IntendedUntracked...)
+	value.LedgerIDs = append([]string{}, value.LedgerIDs...)
+	value.Paths = append([]string{}, value.Paths...)
+	return value
 }
 
 func (repository *testAuthorityRepository) ResolveLiveDeliveryAuthorization(
