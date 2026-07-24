@@ -12,6 +12,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/evidence"
 	"github.com/gentleman-programming/gentle-ai/internal/hostruntime"
+	"github.com/gentleman-programming/gentle-ai/internal/mutationintegrity"
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
@@ -96,12 +97,27 @@ func TestProductionRepositoryExecutesOnceAndReplaysExactReceipt(t *testing.T) {
 	}
 	executor := hostruntime.NewExecutor()
 	intentRef := testRevision("1")
-	store, err := workrun.OpenWorkRunStore(ctx, repo, workRunID)
+	lease, err := reviewtransaction.OpenRepositoryIdentityLease(ctx, repo)
+	if err != nil {
+		t.Fatalf("OpenRepositoryIdentityLease() error = %v", err)
+	}
+	mutationStore, err := mutationintegrity.OpenStore(ctx, lease)
+	if err != nil {
+		t.Fatalf("Open mutation-integrity store error = %v", err)
+	}
+	store, err := workrun.OpenWorkRunStoreWithRepositoryIdentityLease(
+		ctx,
+		lease,
+		workRunID,
+	)
 	if err != nil {
 		t.Fatalf("OpenWorkRunStore() error = %v", err)
 	}
 	store = store.WithAuthorityPorts(workrun.AuthorityPorts{
 		PAD: productionTestPAD{intentRef: intentRef},
+		MutationCompletion: MutationCompletionWorkRunAuthority{
+			Store: mutationStore,
+		},
 		Verification: RARWorkRunAuthority{
 			Coordination: coordination,
 			RAR:          rar,
@@ -127,13 +143,40 @@ func TestProductionRepositoryExecutesOnceAndReplaysExactReceipt(t *testing.T) {
 	for _, obligation := range plan.Obligations {
 		requirements = append(requirements, obligation.RequirementRef)
 	}
+	scopeDigest := testRevision("2")
+	target := reviewtransaction.Target{
+		Kind:              reviewtransaction.TargetCurrentChanges,
+		IntendedUntracked: append([]string(nil), snapshot.IntendedUntracked...),
+	}
+	completion, err := mutationintegrity.Complete(
+		ctx,
+		lease,
+		mutationintegrity.CompleteRequest{
+			WorkRunID:   workRunID,
+			Route:       string(workrun.ImplementationRouteDirectInline),
+			ScopeDigest: scopeDigest,
+			Target:      target,
+			IntendedPaths: append(
+				[]string(nil),
+				snapshot.Paths...,
+			),
+		},
+	)
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	completionRef, err := mutationStore.Put(ctx, completion)
+	if err != nil {
+		t.Fatalf("Put(completion) error = %v", err)
+	}
 	handoff, err := workrun.NewImplementationHandoff(
 		workrun.ImplementationRouteDirectInline,
-		testRevision("2"),
+		scopeDigest,
 		plan.Subject,
 		requirements,
 		[]string{},
 		"",
+		completionRef,
 	)
 	if err != nil {
 		t.Fatal(err)

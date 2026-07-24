@@ -15,6 +15,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/internal/mutationintegrity"
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
@@ -823,6 +824,31 @@ func newCoordinationFixture(
 	if err != nil {
 		t.Fatalf("OpenCoordinationAuthorityStore() error = %v", err)
 	}
+	mutationStore, err := mutationintegrity.OpenStore(ctx, identity.lease)
+	if err != nil {
+		t.Fatalf("Open mutation-integrity store error = %v", err)
+	}
+	completion, err := mutationintegrity.Complete(
+		ctx,
+		identity.lease,
+		mutationintegrity.CompleteRequest{
+			WorkRunID:   workRunID,
+			Route:       string(workrun.ImplementationRouteDirectInline),
+			ScopeDigest: testRevision("4"),
+			Target: reviewtransaction.Target{
+				Kind:              reviewtransaction.TargetCurrentChanges,
+				IntendedUntracked: []string{},
+			},
+			IntendedPaths: append([]string(nil), snapshot.Paths...),
+		},
+	)
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	completionRef, err := mutationStore.Put(ctx, completion)
+	if err != nil {
+		t.Fatalf("Put(completion) error = %v", err)
+	}
 	handoff, err := workrun.NewImplementationHandoff(
 		workrun.ImplementationRouteDirectInline,
 		testRevision("4"),
@@ -830,6 +856,7 @@ func newCoordinationFixture(
 		[]string{obligation.RequirementRef},
 		[]string{},
 		"",
+		completionRef,
 	)
 	if err != nil {
 		t.Fatalf("NewImplementationHandoff() error = %v", err)

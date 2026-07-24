@@ -19,6 +19,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/deliveryadmission"
 	"github.com/gentleman-programming/gentle-ai/internal/evidence"
 	"github.com/gentleman-programming/gentle-ai/internal/hostruntime"
+	"github.com/gentleman-programming/gentle-ai/internal/mutationintegrity"
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/internal/sddstatus"
 	"github.com/gentleman-programming/gentle-ai/internal/workrun"
@@ -127,6 +128,13 @@ func newOwnerCoordinatorFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
+	mutationStore, err := mutationintegrity.OpenStore(
+		ctx,
+		coordination.identity.lease,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	workStore, err := workrun.OpenWorkRunStore(ctx, repo, workRunID)
 	if err != nil {
 		t.Fatal(err)
@@ -171,6 +179,7 @@ func newOwnerCoordinatorFixture(
 	coordinator, err := NewOwnerCoordinator(ctx, OwnerCoordinatorDependencies{
 		WorkRun: workStore, Coordination: coordination,
 		RAR: rar, Transitions: transitions, Evidence: evidenceStore,
+		Mutations:       mutationStore,
 		PADAuthority:    padAuthority,
 		SDDAuthority:    SDDWorkRunAuthority{Repo: repo},
 		LaunchAuthority: ownerTestLaunchAuthority{},
@@ -715,6 +724,7 @@ func TestOwnerCoordinatorRejectsCrossRepositoryComposition(t *testing.T) {
 			RAR:             right.coordinator.rar,
 			Transitions:     right.coordinator.transitions,
 			Evidence:        right.coordinator.evidence,
+			Mutations:       right.coordinator.mutations,
 			PADAuthority:    right.coordinator.pad,
 			SDDAuthority:    right.coordinator.sdd,
 			LaunchAuthority: ownerTestLaunchAuthority{},
@@ -724,6 +734,30 @@ func TestOwnerCoordinatorRejectsCrossRepositoryComposition(t *testing.T) {
 	if err == nil ||
 		!strings.Contains(err.Error(), "different repository identities") {
 		t.Fatalf("cross-repository composition error = %v", err)
+	}
+}
+
+func TestOwnerCoordinatorRejectsForeignMutationIntegrityStore(t *testing.T) {
+	left := newOwnerCoordinatorFixture(t, "foreign-mmi")
+	right := newOwnerCoordinatorFixture(t, "foreign-mmi")
+	_, err := NewOwnerCoordinator(
+		context.Background(),
+		OwnerCoordinatorDependencies{
+			WorkRun:         left.coordinator.work,
+			Coordination:    left.coordinator.coordination,
+			RAR:             left.coordinator.rar,
+			Transitions:     left.coordinator.transitions,
+			Evidence:        left.coordinator.evidence,
+			Mutations:       right.coordinator.mutations,
+			PADAuthority:    left.coordinator.pad,
+			SDDAuthority:    left.coordinator.sdd,
+			LaunchAuthority: ownerTestLaunchAuthority{},
+			Activation:      StaticActivationResolver{Mode: ActivationEnabled},
+		},
+	)
+	if err == nil ||
+		!strings.Contains(err.Error(), "different repository identities") {
+		t.Fatalf("foreign mutation-integrity composition error = %v", err)
 	}
 }
 
@@ -766,6 +800,7 @@ func TestOwnerCoordinatorRejectsLinkedWorktreeEvidenceStore(t *testing.T) {
 			RAR:             fixture.coordinator.rar,
 			Transitions:     fixture.coordinator.transitions,
 			Evidence:        foreignEvidence,
+			Mutations:       fixture.coordinator.mutations,
 			PADAuthority:    fixture.coordinator.pad,
 			SDDAuthority:    fixture.coordinator.sdd,
 			LaunchAuthority: ownerTestLaunchAuthority{},
@@ -822,6 +857,7 @@ func TestOwnerCoordinatorRejectsLinkedWorktreeRARStore(t *testing.T) {
 			RAR:             foreignRAR,
 			Transitions:     fixture.coordinator.transitions,
 			Evidence:        fixture.coordinator.evidence,
+			Mutations:       fixture.coordinator.mutations,
 			PADAuthority:    fixture.coordinator.pad,
 			SDDAuthority:    fixture.coordinator.sdd,
 			LaunchAuthority: ownerTestLaunchAuthority{},
@@ -846,6 +882,7 @@ func TestOwnerCoordinatorRequiresActivationWithoutPublishing(t *testing.T) {
 			RAR:             fixture.coordinator.rar,
 			Transitions:     fixture.coordinator.transitions,
 			Evidence:        fixture.coordinator.evidence,
+			Mutations:       fixture.coordinator.mutations,
 			PADAuthority:    fixture.coordinator.pad,
 			SDDAuthority:    fixture.coordinator.sdd,
 			LaunchAuthority: ownerTestLaunchAuthority{},
@@ -1096,42 +1133,46 @@ func TestOwnerCoordinatorRunsRARForecastDispositionAndEPDTransition(
 	for _, obligation := range plan.Obligations {
 		requirements = append(requirements, obligation.RequirementRef)
 	}
-	handoff, err := workrun.NewImplementationHandoff(
-		workrun.ImplementationRouteDirectInline,
-		ownerTestRef("verification-scope"),
-		plan.Subject,
-		requirements,
-		[]string{},
-		"",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	handoffExpectedRevision := state.Revision
+	handoffRequest := OwnerBindHandoffRequest{
+		ExpectedRevision: handoffExpectedRevision,
+		Target: reviewtransaction.Target{
+			Kind: reviewtransaction.TargetCurrentChanges,
+			IntendedUntracked: append(
+				[]string(nil),
+				snapshot.IntendedUntracked...,
+			),
+		},
+		IntendedPaths:          append([]string(nil), snapshot.Paths...),
+		DeclaredObligationRefs: requirements,
+		EvidenceRefs:           []string{},
+	}
 	state, err = fixture.coordinator.BindImplementationHandoff(
 		ctx,
-		OwnerBindHandoffRequest{
-			ExpectedRevision: handoffExpectedRevision,
-			Handoff:          handoff,
-		},
+		handoffRequest,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if state.Handoff == nil ||
+		state.Handoff.Schema != workrun.ImplementationHandoffSchemaV2 ||
+		state.Handoff.ScopeDigest != admission.Intent.ScopeDigest ||
+		state.Handoff.Subject != plan.Subject ||
+		state.Handoff.MutationCompletionRef == "" {
+		t.Fatalf("owner-derived handoff = %#v", state.Handoff)
+	}
+	handoff := *state.Handoff
 
 	root := filepath.Join(fixture.commonDir, "gentle-ai")
-	beforeHandoffReplay := ownerTreeFingerprint(t, root)
+	beforeHandoffReplay := ownerTreeContentFingerprint(t, root)
 	handoffReplay, err := fixture.coordinator.BindImplementationHandoff(
 		ctx,
-		OwnerBindHandoffRequest{
-			ExpectedRevision: handoffExpectedRevision,
-			Handoff:          handoff,
-		},
+		handoffRequest,
 	)
 	if err != nil || handoffReplay.Revision != state.Revision {
 		t.Fatalf("handoff replay = %#v, %v", handoffReplay, err)
 	}
-	if after := ownerTreeFingerprint(t, root); after != beforeHandoffReplay {
+	if after := ownerTreeContentFingerprint(t, root); after != beforeHandoffReplay {
 		t.Fatalf(
 			"handoff replay published authority:\nbefore %s\nafter  %s",
 			beforeHandoffReplay,
@@ -1333,6 +1374,174 @@ func TestOwnerCoordinatorRunsRARForecastDispositionAndEPDTransition(
 	}
 }
 
+func TestOwnerCoordinatorReplansOneCorrectionWithFreshMMICompletion(
+	t *testing.T,
+) {
+	fixture := newOwnerCoordinatorFixture(t, "correction-replan")
+	ctx := context.Background()
+	admission := fixture.admitDefaultDelivery(t, "correction-replan")
+	applicability, registry, plan, snapshot := ownerVerificationPlan(
+		t,
+		fixture.repo,
+		"correction-replan",
+	)
+	planAuthority, err := fixture.coordinator.PublishVerificationPlan(
+		ctx,
+		reviewtransaction.RARPlanPublication{
+			Snapshot:      snapshot,
+			Applicability: applicability,
+			Registry:      registry,
+			Plan:          plan,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := fixture.coordinator.StartWork(
+		ctx,
+		OwnerStartWorkRequest{
+			DeliveryIntentRef: admission.Admission.IntentRef,
+			RouteInput: workrun.ImplementationRouteInput{
+				WriteIntent:    workrun.WriteIntentAtomicMechanical,
+				WriteFileCount: 1,
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirements := make([]string, 0, len(plan.Obligations))
+	for _, obligation := range plan.Obligations {
+		requirements = append(requirements, obligation.RequirementRef)
+	}
+	target := reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges,
+		IntendedUntracked: append(
+			[]string(nil),
+			snapshot.IntendedUntracked...,
+		),
+	}
+	state, err = fixture.coordinator.BindImplementationHandoff(
+		ctx,
+		OwnerBindHandoffRequest{
+			ExpectedRevision:       state.Revision,
+			Target:                 target,
+			IntendedPaths:          append([]string(nil), snapshot.Paths...),
+			DeclaredObligationRefs: requirements,
+			EvidenceRefs:           []string{},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalHandoff := *state.Handoff
+	state, err = fixture.coordinator.PublishVerificationForecast(
+		ctx,
+		OwnerForecastRequest{
+			ExpectedRevision: state.Revision,
+			Handoff:          originalHandoff,
+			PlanRevisionRef:  planAuthority.AuthorityRef,
+			Availability:     workrun.ForecastAvailable,
+			DiagnosticRefs:   []string{},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalForecast := *state.Forecast
+	logicalPath := "correction-replan.go"
+	if err := os.WriteFile(
+		filepath.Join(fixture.repo, logicalPath),
+		[]byte("package ownerfixture\n\nfunc value() int { return 2 }\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	correctionRequest := OwnerCorrectionReplanRequest{
+		ExpectedRevision:       state.Revision,
+		Target:                 target,
+		IntendedPaths:          []string{logicalPath},
+		DeclaredObligationRefs: requirements,
+		EvidenceRefs:           []string{},
+	}
+	correctionExpectedRevision := state.Revision
+	state, err = fixture.coordinator.ReplanVerificationAfterCorrection(
+		ctx,
+		correctionRequest,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Handoff == nil ||
+		state.VerificationReplan == nil ||
+		state.Forecast != nil ||
+		state.Handoff.CandidateRef == originalHandoff.CandidateRef ||
+		state.Handoff.MutationCompletionRef ==
+			originalHandoff.MutationCompletionRef ||
+		state.Handoff.Route != originalHandoff.Route ||
+		state.Handoff.ScopeDigest != admission.Intent.ScopeDigest ||
+		state.Handoff.SDDRunRef != originalHandoff.SDDRunRef ||
+		state.VerificationReplan.OriginalAvailabilityRef !=
+			originalForecast.AvailabilityRef {
+		t.Fatalf("corrected WorkRun state = %#v", state)
+	}
+	if _, err := fixture.coordinator.mutations.Read(
+		ctx,
+		state.Handoff.MutationCompletionRef,
+	); err != nil {
+		t.Fatalf("read corrected MMI completion: %v", err)
+	}
+
+	replayed, err := fixture.coordinator.ReplanVerificationAfterCorrection(
+		ctx,
+		correctionRequest,
+	)
+	if err != nil || replayed.Revision != state.Revision {
+		t.Fatalf("correction replay = %#v, %v", replayed, err)
+	}
+	wrongCAS := correctionRequest
+	wrongCAS.ExpectedRevision = state.Revision
+	if _, err := fixture.coordinator.ReplanVerificationAfterCorrection(
+		ctx,
+		wrongCAS,
+	); err == nil {
+		t.Fatal("correction replay accepted a different CAS/request identity")
+	}
+
+	if err := os.WriteFile(
+		filepath.Join(fixture.repo, logicalPath),
+		[]byte("package ownerfixture\n\nfunc value() int { return 3 }\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	second := correctionRequest
+	second.ExpectedRevision = state.Revision
+	beforeSecond := ownerTreeFingerprint(
+		t,
+		filepath.Join(fixture.commonDir, "gentle-ai"),
+	)
+	if _, err := fixture.coordinator.ReplanVerificationAfterCorrection(
+		ctx,
+		second,
+	); !errors.Is(err, workrun.ErrWorkRunInvalidTransition) {
+		t.Fatalf("second correction error = %v", err)
+	}
+	if afterSecond := ownerTreeFingerprint(
+		t,
+		filepath.Join(fixture.commonDir, "gentle-ai"),
+	); afterSecond != beforeSecond {
+		t.Fatalf(
+			"rejected second correction persisted authority:\nbefore %s\nafter  %s",
+			beforeSecond,
+			afterSecond,
+		)
+	}
+	if correctionExpectedRevision == state.Revision {
+		t.Fatal("correction did not advance WorkRun revision")
+	}
+}
+
 func TestOwnerCoordinatorRecoveryOnlyCompletesRARPADTerminalization(
 	t *testing.T,
 ) {
@@ -1369,27 +1578,30 @@ func TestOwnerCoordinatorRecoveryOnlyCompletesRARPADTerminalization(
 	if err != nil {
 		t.Fatal(err)
 	}
-	handoff, err := workrun.NewImplementationHandoff(
-		workrun.ImplementationRouteDirectInline,
-		ownerTestRef("recovery-terminal-scope"),
-		plan.Subject,
-		[]string{},
-		[]string{},
-		"",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
 	state, err = fixture.coordinator.BindImplementationHandoff(
 		ctx,
 		OwnerBindHandoffRequest{
 			ExpectedRevision: state.Revision,
-			Handoff:          handoff,
+			Target: reviewtransaction.Target{
+				Kind: reviewtransaction.TargetCurrentChanges,
+				IntendedUntracked: append(
+					[]string(nil),
+					snapshot.IntendedUntracked...,
+				),
+			},
+			IntendedPaths:          append([]string(nil), snapshot.Paths...),
+			DeclaredObligationRefs: []string{},
+			EvidenceRefs:           []string{},
 		},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if state.Handoff == nil ||
+		state.Handoff.ScopeDigest != admission.Intent.ScopeDigest {
+		t.Fatalf("owner-derived recovery handoff = %#v", state.Handoff)
+	}
+	handoff := *state.Handoff
 	state, err = fixture.coordinator.PublishVerificationForecast(
 		ctx,
 		OwnerForecastRequest{
@@ -1746,6 +1958,30 @@ func TestOwnerVerificationTransitionRequestCannotSelectActivationClass(t *testin
 	}
 }
 
+func TestOwnerImplementationRequestsCannotAuthorMMIAuthority(t *testing.T) {
+	for _, requestType := range []reflect.Type{
+		reflect.TypeOf(OwnerBindHandoffRequest{}),
+		reflect.TypeOf(OwnerCorrectionReplanRequest{}),
+	} {
+		for _, forbidden := range []string{
+			"Handoff",
+			"Route",
+			"ScopeDigest",
+			"Subject",
+			"CandidateRef",
+			"MutationCompletionRef",
+		} {
+			if _, exists := requestType.FieldByName(forbidden); exists {
+				t.Fatalf(
+					"%s exposes caller-authored %s",
+					requestType.Name(),
+					forbidden,
+				)
+			}
+		}
+	}
+}
+
 func ownerGit(t *testing.T, repo string, args ...string) string {
 	t.Helper()
 	commandArgs := append([]string{"-C", repo}, args...)
@@ -2090,6 +2326,59 @@ func ownerTreeFingerprint(t *testing.T, root string) string {
 			line += "|" + hex.EncodeToString(sum[:])
 		}
 		entries = append(entries, line)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(entries)
+	sum := sha256.Sum256([]byte(strings.Join(entries, "\n")))
+	return hex.EncodeToString(sum[:])
+}
+
+// ownerTreeContentFingerprint ignores transient directory mtimes from owner
+// lock acquisition while still proving that replay publishes no durable file
+// or authority-content change.
+func ownerTreeContentFingerprint(t *testing.T, root string) string {
+	t.Helper()
+	entries := make([]string, 0, 64)
+	err := filepath.WalkDir(root, func(
+		path string,
+		entry fs.DirEntry,
+		err error,
+	) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if filepath.Base(relative) == "LOCK" {
+			// Advisory lock ownership is deliberately refreshed on every
+			// replay. It is transient coordination metadata, not durable
+			// authority or state.
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		payload, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(payload)
+		entries = append(entries, fmt.Sprintf(
+			"%s|%s|%d|%s",
+			filepath.ToSlash(relative),
+			info.Mode().String(),
+			info.Size(),
+			hex.EncodeToString(sum[:]),
+		))
 		return nil
 	})
 	if err != nil {

@@ -2,12 +2,95 @@ package workprovider
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/gentleman-programming/gentle-ai/internal/evidence"
+	"github.com/gentleman-programming/gentle-ai/internal/mutationintegrity"
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
+
+// MutationCompletionWorkRunAuthority projects immutable MMI completion
+// records into WorkRun's narrow owner port. It neither rebuilds snapshots nor
+// accepts caller-authored hashes: Store.Read validates the durable record and
+// exact repository binding before this projection is returned.
+type MutationCompletionWorkRunAuthority struct {
+	Store mutationintegrity.Store
+	lease *reviewtransaction.RepositoryIdentityLease
+	// existingOnly preserves the provider status invariant: resolving an
+	// already-bound handoff may open its existing MMI store, but a read path
+	// must never publish a missing owner repository.
+	existingOnly bool
+}
+
+func (authority MutationCompletionWorkRunAuthority) ResolveMutationCompletion(
+	ctx context.Context,
+	ref string,
+) (workrun.MutationCompletionAuthority, error) {
+	store, err := authority.resolveStore(ctx)
+	if err != nil {
+		return workrun.MutationCompletionAuthority{}, err
+	}
+	completion, err := store.Read(ctx, ref)
+	if err != nil {
+		return workrun.MutationCompletionAuthority{}, err
+	}
+	if err := completion.Validate(); err != nil {
+		return workrun.MutationCompletionAuthority{}, err
+	}
+	return workrun.MutationCompletionAuthority{
+		CompletionRef: completion.CompletionRef,
+		RepositoryRef: completion.RepositoryRef,
+		WorkRunID:     completion.WorkRunID,
+		Route:         completion.Route,
+		ScopeDigest:   completion.ScopeDigest,
+		Snapshot:      completion.Snapshot,
+	}, nil
+}
+
+func (authority MutationCompletionWorkRunAuthority) resolveStore(
+	ctx context.Context,
+) (mutationintegrity.Store, error) {
+	if authority.Store.Root() != "" {
+		return authority.Store, nil
+	}
+	if authority.lease == nil {
+		return mutationintegrity.Store{}, fmt.Errorf(
+			"%w: mutation completion authority",
+			workrun.ErrAuthorityPortUnavailable,
+		)
+	}
+	if err := authority.lease.Validate(ctx); err != nil {
+		return mutationintegrity.Store{}, err
+	}
+	if authority.existingOnly {
+		root := filepath.Join(
+			authority.lease.Identity().GitCommonDir,
+			"gentle-ai",
+			"mutation-integrity",
+			"v1",
+			"repositories",
+			authority.lease.StorageKey(),
+			"completions",
+		)
+		info, err := os.Lstat(root)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			return mutationintegrity.Store{},
+				mutationintegrity.ErrCompletionNotFound
+		case err != nil:
+			return mutationintegrity.Store{}, err
+		case !info.IsDir() || info.Mode()&os.ModeSymlink != 0:
+			return mutationintegrity.Store{}, errors.New(
+				"mutation completion store root is unsafe",
+			)
+		}
+	}
+	return mutationintegrity.OpenStore(ctx, authority.lease)
+}
 
 // ForecastDispositionAuthority is the coordination-owner subset required
 // before a terminal RAR result exists. Terminal result and receipt authority
@@ -178,4 +261,5 @@ func (port EvidenceWorkRunPort) ReadExecutionEvidence(
 }
 
 var _ workrun.VerificationAuthorityPort = RARWorkRunAuthority{}
+var _ workrun.MutationCompletionAuthorityPort = MutationCompletionWorkRunAuthority{}
 var _ workrun.EvidencePort = EvidenceWorkRunPort{}

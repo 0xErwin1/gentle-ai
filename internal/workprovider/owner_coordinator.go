@@ -12,6 +12,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/deliveryadmission"
 	"github.com/gentleman-programming/gentle-ai/internal/evidence"
+	"github.com/gentleman-programming/gentle-ai/internal/mutationintegrity"
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/internal/sddstatus"
 	"github.com/gentleman-programming/gentle-ai/internal/workrun"
@@ -32,6 +33,7 @@ type OwnerCoordinator struct {
 	rar          *reviewtransaction.RARAuthorityRepository
 	transitions  *TransitionAuthorityStore
 	evidence     evidence.Store
+	mutations    mutationintegrity.Store
 	activation   ActivationResolver
 	repository   string
 }
@@ -45,6 +47,7 @@ type OwnerCoordinatorDependencies struct {
 	RAR          *reviewtransaction.RARAuthorityRepository
 	Transitions  *TransitionAuthorityStore
 	Evidence     evidence.Store
+	Mutations    mutationintegrity.Store
 
 	PADAuthority    *PADWorkRunAdapter
 	SDDAuthority    SDDWorkRunAuthority
@@ -69,8 +72,11 @@ func NewOwnerCoordinator(
 		return nil, errors.New("owner coordinator requires every owner authority")
 	}
 	if dependencies.WorkRun.WorkRunID == "" ||
-		dependencies.Evidence.Root() == "" {
-		return nil, errors.New("owner coordinator requires opened WorkRun and EPD stores")
+		dependencies.Evidence.Root() == "" ||
+		dependencies.Mutations.Root() == "" {
+		return nil, errors.New(
+			"owner coordinator requires opened WorkRun, EPD, and MMI stores",
+		)
 	}
 	if dependencies.Coordination.workRunID != dependencies.WorkRun.WorkRunID ||
 		dependencies.Transitions.workRunID != dependencies.WorkRun.WorkRunID {
@@ -92,6 +98,15 @@ func NewOwnerCoordinator(
 		"execution-evidence",
 		"v1",
 	)
+	expectedMutationRoot := filepath.Join(
+		identity.gitCommonDir,
+		"gentle-ai",
+		"mutation-integrity",
+		"v1",
+		"repositories",
+		identity.lease.StorageKey(),
+		"completions",
+	)
 	sddIdentity, err := resolveCoordinationRepositoryIdentity(
 		ctx,
 		dependencies.SDDAuthority.Repo,
@@ -104,6 +119,7 @@ func NewOwnerCoordinator(
 		filepath.Clean(dependencies.WorkRun.Dir) != expectedWorkRunRoot ||
 		dependencies.Evidence.RepositoryRef() != identity.repositoryIdentity ||
 		filepath.Clean(dependencies.Evidence.Root()) != expectedEvidenceRoot ||
+		filepath.Clean(dependencies.Mutations.Root()) != expectedMutationRoot ||
 		dependencies.Transitions.identity.repositoryIdentity !=
 			identity.repositoryIdentity ||
 		dependencies.Transitions.root != dependencies.Coordination.root ||
@@ -127,16 +143,20 @@ func NewOwnerCoordinator(
 		WithAuthorityPorts(workrun.AuthorityPorts{
 			PAD:                dependencies.PADAuthority,
 			ExplicitSDDRequest: dependencies.Coordination,
-			Route:              dependencies.Coordination,
-			SDD:                dependencies.SDDAuthority,
-			Verification:       verification,
-			Launch:             dependencies.LaunchAuthority,
+			MutationCompletion: MutationCompletionWorkRunAuthority{
+				Store: dependencies.Mutations,
+			},
+			Route:        dependencies.Coordination,
+			SDD:          dependencies.SDDAuthority,
+			Verification: verification,
+			Launch:       dependencies.LaunchAuthority,
 		})
 	return &OwnerCoordinator{
 		pad: dependencies.PADAuthority, sdd: dependencies.SDDAuthority,
 		work:         configured,
 		coordination: dependencies.Coordination, rar: dependencies.RAR,
 		transitions: dependencies.Transitions, evidence: dependencies.Evidence,
+		mutations:  dependencies.Mutations,
 		activation: dependencies.Activation, repository: identity.repositoryRoot,
 	}, nil
 }
@@ -719,10 +739,18 @@ func (coordinator *OwnerCoordinator) BindAcceptedSDDRun(
 }
 
 type OwnerBindHandoffRequest struct {
-	ExpectedRevision string
-	Handoff          workrun.ImplementationHandoff
+	ExpectedRevision       string
+	Target                 reviewtransaction.Target
+	IntendedPaths          []string
+	DeclaredObligationRefs []string
+	EvidenceRefs           []string
+	SDDRunRef              string
 }
 
+// BindImplementationHandoff observes implementation completion through MMI
+// and derives handoff v2 exclusively from owner state plus the resulting live
+// snapshot. The caller cannot author route, scope, candidate, or completion
+// identity.
 func (coordinator *OwnerCoordinator) BindImplementationHandoff(
 	ctx context.Context,
 	request OwnerBindHandoffRequest,
@@ -730,34 +758,365 @@ func (coordinator *OwnerCoordinator) BindImplementationHandoff(
 	if err := coordinator.guardGeneralMutation(ctx); err != nil {
 		return workrun.WorkRunState{}, err
 	}
-	if err := request.Handoff.Validate(); err != nil {
+	current, err := coordinator.work.Status()
+	if err != nil {
 		return workrun.WorkRunState{}, err
 	}
-	current, statusErr := coordinator.work.Status()
-	if statusErr == nil &&
-		current.Handoff != nil &&
-		current.Handoff.Digest == request.Handoff.Digest {
-		return current, nil
+	if current.Revision != request.ExpectedRevision &&
+		current.Handoff == nil {
+		return workrun.WorkRunState{}, ownerRevisionConflict(
+			request.ExpectedRevision,
+			current.Revision,
+		)
 	}
-	if statusErr != nil &&
-		!errors.Is(statusErr, workrun.ErrWorkRunNotStarted) {
-		return workrun.WorkRunState{}, statusErr
+	completion, handoff, err := coordinator.observeImplementationCompletion(
+		ctx,
+		current,
+		ownerImplementationCompletionRequest{
+			Target:                 request.Target,
+			IntendedPaths:          request.IntendedPaths,
+			DeclaredObligationRefs: request.DeclaredObligationRefs,
+			EvidenceRefs:           request.EvidenceRefs,
+			SDDRunRef:              request.SDDRunRef,
+		},
+	)
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	if current.Handoff != nil {
+		if current.Handoff.Digest != handoff.Digest {
+			if current.Revision != request.ExpectedRevision {
+				return workrun.WorkRunState{}, ownerRevisionConflict(
+					request.ExpectedRevision,
+					current.Revision,
+				)
+			}
+			return workrun.WorkRunState{}, fmt.Errorf(
+				"%w: implementation handoff is already bound",
+				workrun.ErrWorkRunInvalidTransition,
+			)
+		}
+		if err := coordinator.resolvePersistedCompletion(
+			ctx,
+			completion.CompletionRef,
+		); err != nil {
+			return workrun.WorkRunState{}, err
+		}
+	} else {
+		completionRef, err := coordinator.mutations.Put(ctx, completion)
+		if err != nil {
+			return workrun.WorkRunState{}, err
+		}
+		if completionRef != completion.CompletionRef ||
+			completionRef != handoff.MutationCompletionRef {
+			return workrun.WorkRunState{}, errors.New(
+				"MMI owner persisted a mismatched mutation completion",
+			)
+		}
 	}
 	requestID, err := ownerRequestID("bind-handoff", struct {
 		ExpectedRevision string
 		HandoffDigest    string
-	}{request.ExpectedRevision, request.Handoff.Digest})
+		CompletionRef    string
+	}{
+		request.ExpectedRevision,
+		handoff.Digest,
+		completion.CompletionRef,
+	})
 	if err != nil {
 		return workrun.WorkRunState{}, err
 	}
-	return coordinator.work.BindImplementationHandoff(
+	applied, err := coordinator.work.BindImplementationHandoff(
 		ctx,
 		workrun.BindImplementationHandoffRequest{
 			ExpectedRevision: request.ExpectedRevision,
 			RequestID:        requestID,
-			Handoff:          request.Handoff,
+			Handoff:          handoff,
 		},
 	)
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	if current.Handoff != nil {
+		// WorkRun returns the historical state associated with an idempotency
+		// receipt. The owner already validated that receipt above, but callers
+		// must still observe any later progress in the live WorkRun.
+		return current, nil
+	}
+	return applied, nil
+}
+
+type OwnerCorrectionReplanRequest struct {
+	ExpectedRevision       string
+	Target                 reviewtransaction.Target
+	IntendedPaths          []string
+	DeclaredObligationRefs []string
+	EvidenceRefs           []string
+	SDDRunRef              string
+}
+
+// ReplanVerificationAfterCorrection consumes the native single correction
+// budget without starting a second workflow. Route, scope, and accepted SDD
+// identity come from the live WorkRun; only the corrected repository
+// observation and its typed implementation references enter from the caller.
+func (coordinator *OwnerCoordinator) ReplanVerificationAfterCorrection(
+	ctx context.Context,
+	request OwnerCorrectionReplanRequest,
+) (workrun.WorkRunState, error) {
+	if err := coordinator.guardGeneralMutation(ctx); err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	current, err := coordinator.work.Status()
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	replayCandidate := current.VerificationReplan != nil
+	if current.Revision != request.ExpectedRevision && !replayCandidate {
+		return workrun.WorkRunState{}, ownerRevisionConflict(
+			request.ExpectedRevision,
+			current.Revision,
+		)
+	}
+	if !replayCandidate &&
+		(current.Handoff == nil ||
+			current.Forecast == nil ||
+			current.VerificationResultRef != "" ||
+			current.PostVerificationSnapshotRef != "" ||
+			current.VerificationStop != nil ||
+			current.ReviewReceiptRef != "" ||
+			current.DeliveryAuthorizationRef != "") {
+		return workrun.WorkRunState{}, fmt.Errorf(
+			"%w: verification is not eligible for correction replanning",
+			workrun.ErrWorkRunInvalidTransition,
+		)
+	}
+	completion, handoff, err := coordinator.observeImplementationCompletion(
+		ctx,
+		current,
+		ownerImplementationCompletionRequest{
+			Target:                 request.Target,
+			IntendedPaths:          request.IntendedPaths,
+			DeclaredObligationRefs: request.DeclaredObligationRefs,
+			EvidenceRefs:           request.EvidenceRefs,
+			SDDRunRef:              request.SDDRunRef,
+		},
+	)
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	if replayCandidate {
+		if current.Handoff == nil ||
+			current.Handoff.Digest != handoff.Digest ||
+			current.VerificationReplan.MutationCompletionRef !=
+				completion.CompletionRef {
+			if current.Revision != request.ExpectedRevision {
+				return workrun.WorkRunState{}, ownerRevisionConflict(
+					request.ExpectedRevision,
+					current.Revision,
+				)
+			}
+			return workrun.WorkRunState{}, fmt.Errorf(
+				"%w: correction replan is already consumed",
+				workrun.ErrWorkRunInvalidTransition,
+			)
+		}
+		if err := coordinator.resolvePersistedCompletion(
+			ctx,
+			completion.CompletionRef,
+		); err != nil {
+			return workrun.WorkRunState{}, err
+		}
+	} else {
+		completionRef, err := coordinator.mutations.Put(ctx, completion)
+		if err != nil {
+			return workrun.WorkRunState{}, err
+		}
+		if completionRef != completion.CompletionRef ||
+			completionRef != handoff.MutationCompletionRef {
+			return workrun.WorkRunState{}, errors.New(
+				"MMI owner persisted a mismatched corrected completion",
+			)
+		}
+	}
+	requestID, err := ownerRequestID("replan-correction", struct {
+		ExpectedRevision string
+		HandoffDigest    string
+		CompletionRef    string
+	}{
+		request.ExpectedRevision,
+		handoff.Digest,
+		completion.CompletionRef,
+	})
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	applied, err := coordinator.work.ReplanVerificationAfterCorrection(
+		ctx,
+		workrun.ReplanVerificationAfterCorrectionRequest{
+			ExpectedRevision: request.ExpectedRevision,
+			RequestID:        requestID,
+			CorrectedHandoff: handoff,
+		},
+	)
+	if err != nil {
+		return workrun.WorkRunState{}, err
+	}
+	if replayCandidate {
+		return current, nil
+	}
+	return applied, nil
+}
+
+type ownerImplementationCompletionRequest struct {
+	Target                 reviewtransaction.Target
+	IntendedPaths          []string
+	DeclaredObligationRefs []string
+	EvidenceRefs           []string
+	SDDRunRef              string
+}
+
+func (coordinator *OwnerCoordinator) observeImplementationCompletion(
+	ctx context.Context,
+	state workrun.WorkRunState,
+	request ownerImplementationCompletionRequest,
+) (mutationintegrity.Completion, workrun.ImplementationHandoff, error) {
+	if !state.Started ||
+		state.WorkRunID != coordinator.work.WorkRunID ||
+		state.DeliveryIntentRef == "" ||
+		state.ImplementationRoute == "" {
+		return mutationintegrity.Completion{},
+			workrun.ImplementationHandoff{},
+			workrun.ErrWorkRunRoutePending
+	}
+	switch state.ImplementationRoute {
+	case workrun.ImplementationRouteDirectInline,
+		workrun.ImplementationRouteDelegatedDirect:
+		if state.SDDRunRef != "" || request.SDDRunRef != "" {
+			return mutationintegrity.Completion{},
+				workrun.ImplementationHandoff{},
+				errors.New("direct implementation completion cannot bind an SDD run")
+		}
+	case workrun.ImplementationRouteSDD:
+		if state.SDDRunRef == "" || request.SDDRunRef != state.SDDRunRef {
+			return mutationintegrity.Completion{},
+				workrun.ImplementationHandoff{},
+				errors.New(
+					"SDD implementation completion must bind the accepted SDD run",
+				)
+		}
+	default:
+		return mutationintegrity.Completion{},
+			workrun.ImplementationHandoff{},
+			fmt.Errorf(
+				"unsupported implementation route %q",
+				state.ImplementationRoute,
+			)
+	}
+	scopeDigest, err := coordinator.resolveImplementationScope(
+		ctx,
+		state.DeliveryIntentRef,
+	)
+	if err != nil {
+		return mutationintegrity.Completion{},
+			workrun.ImplementationHandoff{},
+			err
+	}
+	completion, err := mutationintegrity.Complete(
+		ctx,
+		coordinator.coordination.identity.lease,
+		mutationintegrity.CompleteRequest{
+			WorkRunID:   coordinator.work.WorkRunID,
+			Route:       string(state.ImplementationRoute),
+			ScopeDigest: scopeDigest,
+			Target:      request.Target,
+			IntendedPaths: append(
+				[]string(nil),
+				request.IntendedPaths...,
+			),
+		},
+	)
+	if err != nil {
+		return mutationintegrity.Completion{},
+			workrun.ImplementationHandoff{},
+			err
+	}
+	subject, err := reviewtransaction.VerificationSubjectFromSnapshot(
+		completion.Snapshot,
+	)
+	if err != nil {
+		return mutationintegrity.Completion{},
+			workrun.ImplementationHandoff{},
+			err
+	}
+	handoff, err := workrun.NewImplementationHandoff(
+		state.ImplementationRoute,
+		completion.ScopeDigest,
+		subject,
+		request.DeclaredObligationRefs,
+		request.EvidenceRefs,
+		request.SDDRunRef,
+		completion.CompletionRef,
+	)
+	if err != nil {
+		return mutationintegrity.Completion{},
+			workrun.ImplementationHandoff{},
+			err
+	}
+	return completion, handoff, nil
+}
+
+func (coordinator *OwnerCoordinator) resolveImplementationScope(
+	ctx context.Context,
+	intentRef string,
+) (scopeDigest string, err error) {
+	opened, err := coordinator.pad.openRepository(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer func() {
+		if closeErr := opened.Close(); closeErr != nil {
+			scopeDigest = ""
+			err = errors.Join(
+				err,
+				fmt.Errorf("close PAD implementation scope repository: %w", closeErr),
+			)
+		}
+	}()
+	intent, err := opened.ResolveAdmittedIntent(ctx, intentRef)
+	if err != nil {
+		return "", fmt.Errorf(
+			"resolve admitted implementation scope: %w",
+			err,
+		)
+	}
+	resolvedRef, err := intent.Ref()
+	if err != nil {
+		return "", err
+	}
+	if resolvedRef != intentRef ||
+		intent.Destination.RepositoryRef !=
+			coordinator.pad.authority.RepositoryRef() {
+		return "", errors.New(
+			"admitted implementation scope does not bind the owner repository",
+		)
+	}
+	return intent.ScopeDigest, nil
+}
+
+func (coordinator *OwnerCoordinator) resolvePersistedCompletion(
+	ctx context.Context,
+	completionRef string,
+) error {
+	completion, err := coordinator.mutations.Read(ctx, completionRef)
+	if err != nil {
+		return err
+	}
+	if completion.CompletionRef != completionRef ||
+		completion.RepositoryRef != coordinator.work.RepositoryRef() ||
+		completion.WorkRunID != coordinator.work.WorkRunID {
+		return errors.New("MMI owner returned a mismatched mutation completion")
+	}
+	return nil
 }
 
 func (coordinator *OwnerCoordinator) PublishVerificationPlan(
@@ -1373,6 +1732,10 @@ func (coordinator *OwnerCoordinator) guardMutation(
 	if err := mode.Validate(); err != nil {
 		return err
 	}
+	return activationMutationError(mode, terminal)
+}
+
+func activationMutationError(mode ActivationMode, terminal bool) error {
 	switch mode {
 	case ActivationEnabled:
 		return nil
@@ -1403,6 +1766,7 @@ func (coordinator *OwnerCoordinator) validate(ctx context.Context) error {
 		coordinator.transitions == nil ||
 		coordinator.work.WorkRunID == "" ||
 		coordinator.evidence.Root() == "" ||
+		coordinator.mutations.Root() == "" ||
 		coordinator.activation == nil ||
 		coordinator.repository == "" {
 		return errors.New("owner coordinator is not initialized")

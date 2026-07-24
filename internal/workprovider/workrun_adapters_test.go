@@ -2,6 +2,7 @@ package workprovider
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,9 +11,115 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/evidence"
 	"github.com/gentleman-programming/gentle-ai/internal/hostruntime"
+	"github.com/gentleman-programming/gentle-ai/internal/mutationintegrity"
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
+
+func TestMutationCompletionWorkRunAuthorityProjectsPersistedMMI(
+	t *testing.T,
+) {
+	repo := initWorkRunAdapterRepository(t)
+	ownerGit(t, repo, "config", "user.name", "MMI Adapter Test")
+	ownerGit(t, repo, "config", "user.email", "mmi-adapter@example.test")
+	if err := os.WriteFile(
+		filepath.Join(repo, "README.md"),
+		[]byte("baseline\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	ownerGit(t, repo, "add", "README.md")
+	ownerGit(t, repo, "commit", "--quiet", "-m", "baseline")
+	const logicalPath = "mutation.txt"
+	if err := os.WriteFile(
+		filepath.Join(repo, logicalPath),
+		[]byte("owner observed\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	lease, err := reviewtransaction.OpenRepositoryIdentityLease(ctx, repo)
+	if err != nil {
+		t.Fatalf("OpenRepositoryIdentityLease() error = %v", err)
+	}
+	store, err := mutationintegrity.OpenStore(ctx, lease)
+	if err != nil {
+		t.Fatalf("OpenStore() error = %v", err)
+	}
+	completion, err := mutationintegrity.Complete(
+		ctx,
+		lease,
+		mutationintegrity.CompleteRequest{
+			WorkRunID:   "adapter-mmi",
+			Route:       string(workrun.ImplementationRouteDirectInline),
+			ScopeDigest: ownerTestRef("adapter-mmi-scope"),
+			Target: reviewtransaction.Target{
+				Kind:              reviewtransaction.TargetCurrentChanges,
+				IntendedUntracked: []string{logicalPath},
+			},
+			IntendedPaths: []string{logicalPath},
+		},
+	)
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if _, err := store.Put(ctx, completion); err != nil {
+		t.Fatalf("Put() error = %v", err)
+	}
+
+	projected, err := (MutationCompletionWorkRunAuthority{
+		Store: store,
+	}).ResolveMutationCompletion(ctx, completion.CompletionRef)
+	if err != nil {
+		t.Fatalf("ResolveMutationCompletion() error = %v", err)
+	}
+	if projected.CompletionRef != completion.CompletionRef ||
+		projected.RepositoryRef != completion.RepositoryRef ||
+		projected.WorkRunID != completion.WorkRunID ||
+		projected.Route != completion.Route ||
+		projected.ScopeDigest != completion.ScopeDigest ||
+		!reviewtransaction.SnapshotsEqualExact(
+			projected.Snapshot,
+			completion.Snapshot,
+		) {
+		t.Fatalf("projected mutation completion = %#v", projected)
+	}
+}
+
+func TestLazyMutationCompletionAuthorityDoesNotPublishMissingStore(
+	t *testing.T,
+) {
+	repo := initWorkRunAdapterRepository(t)
+	ctx := context.Background()
+	lease, err := reviewtransaction.OpenRepositoryIdentityLease(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(
+		lease.Identity().GitCommonDir,
+		"gentle-ai",
+		"mutation-integrity",
+		"v1",
+		"repositories",
+		lease.StorageKey(),
+		"completions",
+	)
+	authority := MutationCompletionWorkRunAuthority{
+		lease:        lease,
+		existingOnly: true,
+	}
+	if _, err := authority.ResolveMutationCompletion(
+		ctx,
+		testRevision("missing-mmi"),
+	); !errors.Is(err, mutationintegrity.ErrCompletionNotFound) {
+		t.Fatalf("missing lazy completion error = %v", err)
+	}
+	if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lazy MMI read published store root: %v", err)
+	}
+}
 
 func TestEvidenceWorkRunPortProjectsOnlyAdmittedOwnerRecords(t *testing.T) {
 	repo := initWorkRunAdapterRepository(t)

@@ -2,9 +2,11 @@ package workprovider
 
 import (
 	"context"
+	"errors"
 
 	"github.com/gentleman-programming/gentle-ai/internal/evidence"
 	"github.com/gentleman-programming/gentle-ai/internal/hostruntime"
+	"github.com/gentleman-programming/gentle-ai/internal/mutationintegrity"
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
@@ -73,9 +75,19 @@ func (ProductionRepositoryOpener) OpenRepository(
 		return nil, err
 	}
 	executor := hostruntime.NewExecutor()
+	mutationAuthority := MutationCompletionWorkRunAuthority{
+		lease:        lease,
+		existingOnly: true,
+	}
+	if mutationStore, openErr := mutationAuthority.resolveStore(ctx); openErr == nil {
+		mutationAuthority.Store = mutationStore
+	} else if !errors.Is(openErr, mutationintegrity.ErrCompletionNotFound) {
+		return nil, openErr
+	}
 	store = store.WithAuthorityPorts(workrun.AuthorityPorts{
 		PAD:                pad,
 		ExplicitSDDRequest: coordination,
+		MutationCompletion: mutationAuthority,
 		Route:              coordination,
 		SDD:                SDDWorkRunAuthority{Repo: repositoryRoot},
 		Verification:       RARWorkRunAuthority{Coordination: coordination, RAR: rar},
