@@ -190,6 +190,182 @@ func TestWorkRunBeginAtomicallyReservesExactPlanAndTicket(t *testing.T) {
 	}
 }
 
+func TestWorkRunBeginRejectsTerminalResultWithoutAdvancingHead(t *testing.T) {
+	repo := initWorkRunRepository(t)
+	applicability, registry, plan := verificationFixture(t, repo, true)
+	store := openTestWorkRunStore(t, repo, "terminal-begin")
+	state := startDirectWorkRun(t, store)
+
+	handoff, err := NewImplementationHandoff(
+		ImplementationRouteDirectInline, testSHARef("terminal-begin-scope"), plan.Subject,
+		verificationRequirementRefs(plan), []string{}, "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = store.BindImplementationHandoff(
+		context.Background(),
+		BindImplementationHandoffRequest{
+			ExpectedRevision: state.Revision,
+			RequestID:        "terminal-begin-handoff",
+			Handoff:          handoff,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forecastInput := VerificationForecastInput{
+		WorkRunID: store.WorkRunID, Handoff: handoff,
+		Applicability: applicability, Registry: registry, Plan: plan,
+		PlanRevisionRef: testSHARef("terminal-begin-plan-revision"),
+		Availability:    ForecastAvailable,
+		AvailabilityRef: testSHARef("terminal-begin-availability"),
+		DiagnosticRefs:  []string{},
+	}
+	registerTestForecast(t, store, forecastInput)
+	state, err = store.RecordVerificationForecast(
+		context.Background(),
+		RecordVerificationForecastRequest{
+			ExpectedRevision: state.Revision,
+			RequestID:        "terminal-begin-forecast",
+			Input:            forecastInput,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispositionRequest := RecordVerificationDispositionRequest{
+		ExpectedRevision: state.Revision,
+		RequestID:        "terminal-begin-disposition",
+		Kind:             DispositionRun,
+		AssumptionsRef:   testSHARef("terminal-begin-assumptions"),
+		ActorRef:         testSHARef("terminal-begin-provider"),
+		DecisionRef:      testSHARef("terminal-begin-decision"),
+	}
+	registerTestDisposition(t, store, *state.Forecast, dispositionRequest)
+	state, err = store.RecordVerificationDisposition(
+		context.Background(),
+		dispositionRequest,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := reviewtransaction.VerificationResultRef{
+		Schema:    reviewtransaction.VerificationResultRefSchema,
+		ResultRef: testSHARef("terminal-begin-result"),
+		Subject:   plan.Subject, PolicyHash: plan.PolicyHash,
+		PlanDigest: plan.Digest, ApplicabilityDigest: plan.ApplicabilityDigest,
+		Aggregate:            reviewtransaction.VerificationAggregateUnavailable,
+		CompletedObligations: []string{},
+		EvidenceRefs:         []string{},
+	}
+	authority := testAuthorityForStore(t, store)
+	authority.results[result.ResultRef] = VerificationResultAuthority{
+		Applicability: applicability,
+		Registry:      registry,
+		Plan:          plan,
+		Result:        result,
+	}
+	state, err = store.BindVerificationResult(
+		context.Background(),
+		BindVerificationResultRequest{
+			ExpectedRevision: state.Revision,
+			RequestID:        "terminal-begin-result",
+			Applicability:    applicability,
+			Registry:         registry,
+			Plan:             plan,
+			Result:           result,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	obligation := plan.Obligations[0]
+	ticket := AdmittedActionTicket{
+		TicketRef:              testSHARef("terminal-begin-ticket"),
+		SubjectRef:             applicability.Digest,
+		CandidateRef:           handoff.CandidateRef,
+		VerificationContextRef: state.Forecast.Digest,
+		ExpectedRevision:       forecastInput.PlanRevisionRef,
+		Slot:                   obligation.ID,
+		Capability:             obligation.CapabilityRef,
+		SlotBindingRef:         testSHARef("terminal-begin-slot"),
+		HostRequestDigest:      testSHARef("terminal-begin-host-request"),
+	}
+	port := &countingEvidencePort{
+		fakeEvidencePort: fakeEvidencePort{
+			tickets:    map[string]AdmittedActionTicket{ticket.TicketRef: ticket},
+			executions: map[string]AdmittedExecutionEvidence{},
+		},
+	}
+	store = store.WithEvidencePort(port)
+	request := BeginRequest{
+		ExpectedRevision: state.Revision,
+		RequestID:        "terminal-begin-attempt",
+		Applicability:    applicability,
+		Registry:         registry,
+		Plan:             plan,
+		ActionTicketRef:  ticket.TicketRef,
+	}
+	headPath := filepath.Join(store.Dir, "HEAD")
+	headBefore, err := os.ReadFile(headPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateBefore, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordsBefore, err := os.ReadDir(filepath.Join(store.Dir, "records"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		outcome, beginErr := store.Begin(context.Background(), request)
+		if !errors.Is(beginErr, ErrWorkRunInvalidTransition) {
+			t.Fatalf("terminal Begin attempt %d error = %v", attempt+1, beginErr)
+		}
+		if outcome.Capability != nil {
+			t.Fatalf("terminal Begin attempt %d issued launch capability", attempt+1)
+		}
+	}
+	if port.ticketReads != 0 {
+		t.Fatalf("terminal Begin consulted action-ticket evidence %d times", port.ticketReads)
+	}
+
+	headAfter, err := os.ReadFile(headPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(headAfter) != string(headBefore) {
+		t.Fatalf("terminal Begin advanced HEAD: before %q after %q", headBefore, headAfter)
+	}
+	after, err := store.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stateAfter, err := json.Marshal(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stateAfter) != string(stateBefore) {
+		t.Fatalf("terminal Begin changed state: before %s after %s", stateBefore, stateAfter)
+	}
+	recordsAfter, err := os.ReadDir(filepath.Join(store.Dir, "records"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recordsAfter) != len(recordsBefore) {
+		t.Fatalf(
+			"terminal Begin published a record: before %d after %d",
+			len(recordsBefore),
+			len(recordsAfter),
+		)
+	}
+}
+
 func TestWorkRunNotRequiredResultAndReviewRemainReferenceOnly(t *testing.T) {
 	repo := initWorkRunRepository(t)
 	applicability, registry, plan := verificationFixture(t, repo, false)
@@ -572,6 +748,19 @@ func TestWorkRunSDDReservationMustBindBeforeCapabilityActivation(t *testing.T) {
 type fakeEvidencePort struct {
 	tickets    map[string]AdmittedActionTicket
 	executions map[string]AdmittedExecutionEvidence
+}
+
+type countingEvidencePort struct {
+	fakeEvidencePort
+	ticketReads int
+}
+
+func (port *countingEvidencePort) ReadActionTicket(
+	ctx context.Context,
+	ref string,
+) (AdmittedActionTicket, error) {
+	port.ticketReads++
+	return port.fakeEvidencePort.ReadActionTicket(ctx, ref)
 }
 
 func (port *fakeEvidencePort) ReadActionTicket(

@@ -619,6 +619,13 @@ func (store WorkRunStore) Begin(
 		return BeginOutcome{}, err
 	}
 	state, err := store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay workReplay) (workRunRecord, error) {
+		state := replay.State
+		if state.VerificationResultRef != "" {
+			return workRunRecord{}, fmt.Errorf(
+				"%w: verification result is already terminal",
+				ErrWorkRunInvalidTransition,
+			)
+		}
 		ticket, err := store.evidence.ReadActionTicket(ctx, request.ActionTicketRef)
 		if err != nil {
 			return workRunRecord{}, fmt.Errorf("read verification action ticket: %w", err)
@@ -627,7 +634,6 @@ func (store WorkRunStore) Begin(
 			return workRunRecord{}, fmt.Errorf("validate verification action ticket: %w", err)
 		}
 		slotBindingRef := ticket.SlotBindingRef
-		state := replay.State
 		if state.Forecast == nil || state.Disposition == nil {
 			return workRunRecord{}, fmt.Errorf("%w: forecast and disposition are required before begin", ErrWorkRunInvalidTransition)
 		}
