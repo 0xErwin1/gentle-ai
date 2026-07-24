@@ -3,19 +3,94 @@ package workprovider
 import (
 	"context"
 
+	"github.com/gentleman-programming/gentle-ai/internal/evidence"
+	"github.com/gentleman-programming/gentle-ai/internal/hostruntime"
+	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
 
-// NewDefaultController exposes the existing WorkRun reader under a read-only
-// default. The owner authorization repository/applier is intentionally absent
-// until its integration work lands.
+// NewDefaultController exposes the production common-work composition. Runtime
+// activation can narrow or disable it, but the enabled path is never backed by
+// a read-only placeholder.
 func NewDefaultController() Controller {
 	return NewController(
-		ReadOnlyWorkRunRepositoryOpener{},
+		ProductionRepositoryOpener{},
 		EnvironmentActivationResolver{},
 	)
 }
 
+// ProductionRepositoryOpener binds every provider authority to the same exact
+// repository and WorkRun. Opening is read-only: provider storage is published
+// only by an owner operation or by an already-authorized transition.
+type ProductionRepositoryOpener struct{}
+
+func (ProductionRepositoryOpener) OpenRepository(
+	ctx context.Context,
+	repo string,
+	workRunID string,
+) (Repository, error) {
+	padAuthority, err := NewPADRepositoryAuthority(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	repositoryRoot := padAuthority.identity.repositoryRoot
+	pad, err := NewPADWorkRunAdapter(padAuthority)
+	if err != nil {
+		return nil, err
+	}
+	rar, err := reviewtransaction.OpenRARAuthorityRepository(ctx, repositoryRoot)
+	if err != nil {
+		return nil, err
+	}
+	coordination, err := OpenCoordinationAuthorityStore(
+		ctx,
+		repositoryRoot,
+		workRunID,
+		rar,
+	)
+	if err != nil {
+		return nil, err
+	}
+	transitions, err := OpenTransitionAuthorityStore(
+		ctx,
+		repositoryRoot,
+		workRunID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	store, err := workrun.OpenWorkRunStore(ctx, repositoryRoot, workRunID)
+	if err != nil {
+		return nil, err
+	}
+	executor := hostruntime.NewExecutor()
+	store = store.WithAuthorityPorts(workrun.AuthorityPorts{
+		PAD:                pad,
+		ExplicitSDDRequest: coordination,
+		Route:              coordination,
+		SDD:                SDDWorkRunAuthority{Repo: repositoryRoot},
+		Verification:       RARWorkRunAuthority{Coordination: coordination, RAR: rar},
+		Launch:             executor,
+	})
+	if _, err := padAuthority.ResolveDeliveryRepository(
+		ctx,
+		padAuthority.RepositoryRef(),
+	); err != nil {
+		return nil, err
+	}
+	return &ProductionRepository{
+		WorkRun:     store,
+		Transitions: transitions,
+		Plans:       rar,
+		Executor:    executor,
+		OpenEvidence: func(ctx context.Context) (evidence.Store, error) {
+			return evidence.OpenStore(ctx, repositoryRoot)
+		},
+	}, nil
+}
+
+// ReadOnlyWorkRunRepositoryOpener remains available as an explicit rollback
+// composition and for compatibility tests; it is not the shipped default.
 type ReadOnlyWorkRunRepositoryOpener struct{}
 
 func (ReadOnlyWorkRunRepositoryOpener) OpenRepository(
@@ -55,5 +130,6 @@ func (readOnlyWorkRunRepository) ApplyAuthorized(
 	return workrun.WorkTransitionV1{}, ErrCapabilityReadOnly
 }
 
+var _ RepositoryOpener = ProductionRepositoryOpener{}
 var _ RepositoryOpener = ReadOnlyWorkRunRepositoryOpener{}
 var _ Repository = readOnlyWorkRunRepository{}
