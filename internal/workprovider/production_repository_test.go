@@ -3,6 +3,7 @@ package workprovider
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,6 +52,28 @@ func (opener productionRepositoryOpener) OpenRepository(
 	return opener.repository, nil
 }
 
+type passingProductionSemanticEvaluator struct {
+	calls int
+}
+
+func (evaluator *passingProductionSemanticEvaluator) EvaluateSemanticExecution(
+	_ context.Context,
+	ticket evidence.ActionTicket,
+	process hostruntime.ProcessEvidence,
+) (SemanticEvaluation, error) {
+	evaluator.calls++
+	return SemanticEvaluation{
+		Schema:               SemanticEvaluationSchemaV1,
+		RequirementRef:       ticket.SemanticRequirementRef,
+		CandidateRef:         ticket.CandidateRef,
+		RequestDigest:        process.RequestDigest,
+		ToolchainIdentityRef: process.ToolchainIdentityRef,
+		StdoutRawDigest:      process.Stdout.RawDigest,
+		StderrRawDigest:      process.Stderr.RawDigest,
+		Outcome:              SemanticEvaluationPassed,
+	}, nil
+}
+
 func TestProductionRepositoryExecutesOnceAndReplaysExactReceipt(t *testing.T) {
 	if os.Getenv("GENTLE_AI_PRODUCTION_HELPER") == "1" {
 		marker := os.Getenv("GENTLE_AI_PRODUCTION_MARKER")
@@ -70,7 +93,46 @@ func TestProductionRepositoryExecutesOnceAndReplaysExactReceipt(t *testing.T) {
 
 	ctx := context.Background()
 	repo := initProductionRepositoryGit(t)
-	applicability, registry, plan, snapshot := productionVerificationPlan(t, repo)
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "launches.log")
+	semanticRequest := evidence.SemanticActionTicketRequest{
+		Program: executable,
+		Args: []string{
+			"-test.run=TestProductionRepositoryExecutesOnceAndReplaysExactReceipt",
+		},
+		CWD: repo,
+		Environment: map[string]string{
+			"GENTLE_AI_PRODUCTION_HELPER": "1",
+			"GENTLE_AI_PRODUCTION_MARKER": marker,
+		},
+		Deadline: 10 * time.Second,
+		OutputLimits: hostruntime.StreamLimits{
+			StdoutBytes: 1024,
+			StderrBytes: 1024,
+		},
+		Capability:        "go.test",
+		RedactionLiterals: []string{},
+	}
+	semanticObservation, err := evidence.ObserveSemanticRequirement(
+		evidence.SemanticRequirementRequest{
+			Program:     semanticRequest.Program,
+			Args:        semanticRequest.Args,
+			CWD:         semanticRequest.CWD,
+			Environment: semanticRequest.Environment,
+			Capability:  semanticRequest.Capability,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applicability, registry, plan, snapshot := productionVerificationPlan(
+		t,
+		repo,
+		semanticObservation,
+	)
 	rar, err := reviewtransaction.OpenRARAuthorityRepository(ctx, repo)
 	if err != nil {
 		t.Fatalf("OpenRARAuthorityRepository() error = %v", err)
@@ -262,39 +324,18 @@ func TestProductionRepositoryExecutesOnceAndReplaysExactReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("evidence.OpenStore() error = %v", err)
 	}
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	marker := filepath.Join(t.TempDir(), "launches.log")
 	obligation := plan.Obligations[0]
-	ticket, err := evidence.NewActionTicket(evidence.ActionTicketRequest{
-		IssuerRef:              actorRef,
-		SubjectRef:             state.Forecast.SubjectRef,
-		CandidateRef:           handoff.CandidateRef,
-		VerificationContextRef: state.Forecast.Digest,
-		ExpectedRevision:       planAuthority.AuthorityRef,
-		Slot:                   obligation.ID,
-		Program:                executable,
-		Args:                   []string{"-test.run=TestProductionRepositoryExecutesOnceAndReplaysExactReceipt"},
-		CWD:                    repo,
-		Environment: map[string]string{
-			"GENTLE_AI_PRODUCTION_HELPER": "1",
-			"GENTLE_AI_PRODUCTION_MARKER": marker,
-		},
-		Deadline: 10 * time.Second,
-		OutputLimits: hostruntime.StreamLimits{
-			StdoutBytes: 1024,
-			StderrBytes: 1024,
-		},
-		Capability:        obligation.CapabilityRef,
-		RedactionLiterals: []string{},
-	})
+	semanticRequest.SubjectRef = state.Forecast.SubjectRef
+	semanticRequest.CandidateRef = handoff.CandidateRef
+	semanticRequest.VerificationContextRef = state.Forecast.Digest
+	semanticRequest.ExpectedRevision = planAuthority.AuthorityRef
+	semanticRequest.Slot = obligation.ID
+	ticket, err := evidenceStore.IssueSemanticActionTicket(
+		ctx,
+		semanticRequest,
+	)
 	if err != nil {
-		t.Fatalf("NewActionTicket() error = %v", err)
-	}
-	if _, err := evidenceStore.PutTicket(ticket); err != nil {
-		t.Fatalf("PutTicket() error = %v", err)
+		t.Fatalf("IssueSemanticActionTicket() error = %v", err)
 	}
 
 	transitions, err := OpenTransitionAuthorityStore(ctx, repo, workRunID)
@@ -319,6 +360,7 @@ func TestProductionRepositoryExecutesOnceAndReplaysExactReceipt(t *testing.T) {
 	if err := transitions.PublishAuthorization(ctx, authorization); err != nil {
 		t.Fatalf("PublishAuthorization() error = %v", err)
 	}
+	semanticEvaluator := &passingProductionSemanticEvaluator{}
 	repository := &ProductionRepository{
 		WorkRun:     store,
 		Transitions: transitions,
@@ -327,7 +369,8 @@ func TestProductionRepositoryExecutesOnceAndReplaysExactReceipt(t *testing.T) {
 		OpenEvidence: func(context.Context) (evidence.Store, error) {
 			return evidenceStore, nil
 		},
-		Now: func() time.Time { return time.Unix(20, 0).UTC() },
+		SemanticEvaluator: semanticEvaluator,
+		Now:               func() time.Time { return time.Unix(20, 0).UTC() },
 	}
 	controller := NewController(
 		productionRepositoryOpener{repository: repository},
@@ -372,8 +415,19 @@ func TestProductionRepositoryExecutesOnceAndReplaysExactReceipt(t *testing.T) {
 	if strings.Count(string(payload), "launch\n") != 1 {
 		t.Fatalf("process launched %q times, marker = %q", payload, payload)
 	}
-	if _, err := evidenceStore.ReadExecutionForTicket(ticket.TicketRef); err != nil {
+	admitted, err := evidenceStore.ReadExecutionForTicket(ticket.TicketRef)
+	if err != nil {
 		t.Fatalf("admitted execution missing: %v", err)
+	}
+	if admitted.Outcome != evidence.ExecutionComplete ||
+		admitted.SemanticProof == nil ||
+		semanticEvaluator.calls != 1 {
+		t.Fatalf(
+			"semantic execution = outcome:%q proof:%#v evaluator calls:%d",
+			admitted.Outcome,
+			admitted.SemanticProof,
+			semanticEvaluator.calls,
+		)
 	}
 	after, err := controller.Status(ctx, StatusRequest{
 		Repo:      repo,
@@ -396,6 +450,181 @@ func TestProductionRepositoryRejectsClaimedLaunchWithoutEPD(t *testing.T) {
 		testRevision("b"),
 	); !errors.Is(err, ErrRepositoryUnavailable) {
 		t.Fatalf("uninitialized ApplyAuthorized() error = %v", err)
+	}
+}
+
+func TestProductiveExitZeroNeedsIndependentSemanticEvaluator(t *testing.T) {
+	switch os.Getenv("GENTLE_AI_SEMANTIC_OUTPUT_HELPER") {
+	case "empty":
+		return
+	case "pass":
+		_, _ = fmt.Fprint(os.Stdout, "PASS")
+		return
+	}
+
+	for _, output := range []string{"empty", "pass"} {
+		t.Run(output, func(t *testing.T) {
+			ctx := context.Background()
+			repo := initProductionRepositoryGit(t)
+			store, err := evidence.OpenStore(ctx, repo)
+			if err != nil {
+				t.Fatal(err)
+			}
+			executable, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			ticket, err := store.IssueSemanticActionTicket(
+				ctx,
+				evidence.SemanticActionTicketRequest{
+					SubjectRef:             ownerTestRef("semantic-subject-" + output),
+					CandidateRef:           ownerTestRef("semantic-candidate-" + output),
+					VerificationContextRef: ownerTestRef("semantic-context-" + output),
+					ExpectedRevision:       ownerTestRef("semantic-revision-" + output),
+					Slot:                   "unit.test",
+					Program:                executable,
+					Args: []string{
+						"-test.run=TestProductiveExitZeroNeedsIndependentSemanticEvaluator",
+					},
+					CWD: repo,
+					Environment: map[string]string{
+						"GENTLE_AI_SEMANTIC_OUTPUT_HELPER": output,
+					},
+					Deadline: 5 * time.Second,
+					OutputLimits: hostruntime.StreamLimits{
+						StdoutBytes: 1024,
+						StderrBytes: 1024,
+					},
+					Capability:        "go.test",
+					RedactionLiterals: []string{},
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			step, err := ticket.ExecStep()
+			if err != nil {
+				t.Fatal(err)
+			}
+			executor := hostruntime.NewExecutor()
+			capability, err := executor.ActivateLaunch(
+				ctx,
+				hostruntime.LaunchBinding{
+					Schema:          hostruntime.LaunchBindingSchemaV1,
+					WorkRunID:       "semantic-output-" + output,
+					ReservationRef:  ownerTestRef("semantic-reservation-" + output),
+					ActionTicketRef: ticket.TicketRef,
+					RequestDigest:   ticket.RequestBinding.RequestDigest,
+				},
+				func(context.Context) error { return nil },
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			process, err := executor.ExecuteAuthorized(ctx, step, capability)
+			if err != nil {
+				t.Fatal(err)
+			}
+			admitted, err := admitProductiveExecution(
+				ctx,
+				store,
+				nil,
+				ticket,
+				process,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if admitted.Outcome != evidence.ExecutionIncomplete ||
+				admitted.SemanticProof != nil {
+				t.Fatalf(
+					"exit-zero %s evidence = outcome:%q proof:%#v",
+					output,
+					admitted.Outcome,
+					admitted.SemanticProof,
+				)
+			}
+		})
+	}
+}
+
+func TestPlanContainsTicketBindsRequirementArgvAndRepositoryIssuer(t *testing.T) {
+	ctx := context.Background()
+	repo := initProductionRepositoryGit(t)
+	store, err := evidence.OpenStore(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket, err := store.IssueSemanticActionTicket(
+		ctx,
+		evidence.SemanticActionTicketRequest{
+			SubjectRef:             ownerTestRef("plan-subject"),
+			CandidateRef:           ownerTestRef("plan-candidate"),
+			VerificationContextRef: ownerTestRef("plan-context"),
+			ExpectedRevision:       ownerTestRef("plan-revision"),
+			Slot:                   "unit.test",
+			Program:                executable,
+			Args:                   []string{"-test.run=^$"},
+			CWD:                    repo,
+			Environment:            map[string]string{},
+			Deadline:               time.Second,
+			OutputLimits: hostruntime.StreamLimits{
+				StdoutBytes: 128,
+				StderrBytes: 128,
+			},
+			Capability:        "go.test",
+			RedactionLiterals: []string{},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := reviewtransaction.VerificationPlan{
+		Obligations: []reviewtransaction.VerificationObligation{{
+			ID:             ticket.Slot,
+			RequirementRef: ticket.SemanticRequirementRef,
+			ArgvRef:        ticket.RequestBinding.ArgvDigest,
+			CapabilityRef:  ticket.Capability,
+			Cost:           reviewtransaction.VerificationCostQuick,
+		}},
+	}
+	if !planContainsTicket(plan, ticket) {
+		t.Fatal("exact owner semantic ticket did not match its RAR obligation")
+	}
+	tampered := plan
+	tampered.Obligations = append(
+		[]reviewtransaction.VerificationObligation(nil),
+		plan.Obligations...,
+	)
+	tampered.Obligations[0].RequirementRef = ownerTestRef("foreign-requirement")
+	if planContainsTicket(tampered, ticket) {
+		t.Fatal("RAR obligation accepted a foreign semantic requirement")
+	}
+	tampered.Obligations[0] = plan.Obligations[0]
+	tampered.Obligations[0].ArgvRef = ownerTestRef("foreign-argv")
+	if planContainsTicket(tampered, ticket) {
+		t.Fatal("RAR obligation accepted foreign argv")
+	}
+
+	foreignStore, err := evidence.OpenStore(
+		ctx,
+		initProductionRepositoryGit(t),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admitProductiveExecution(
+		ctx,
+		foreignStore,
+		nil,
+		ticket,
+		hostruntime.ProcessEvidence{},
+	); err == nil {
+		t.Fatal("productive admission accepted a foreign repository issuer")
 	}
 }
 
@@ -426,6 +655,7 @@ func initProductionRepositoryGit(t *testing.T) string {
 func productionVerificationPlan(
 	t *testing.T,
 	repo string,
+	observation evidence.SemanticRequirementObservation,
 ) (
 	reviewtransaction.VerificationApplicability,
 	reviewtransaction.VerificationPlanRegistry,
@@ -446,8 +676,8 @@ func productionVerificationPlan(
 		[]string{},
 		[]reviewtransaction.VerificationObligation{{
 			ID:             "unit.test",
-			RequirementRef: testRevision("6"),
-			ArgvRef:        testRevision("7"),
+			RequirementRef: observation.RequirementRef,
+			ArgvRef:        observation.ArgvRef,
 			CapabilityRef:  "go.test",
 			Cost:           reviewtransaction.VerificationCostQuick,
 		}},

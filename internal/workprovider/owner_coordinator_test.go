@@ -1099,10 +1099,34 @@ func TestOwnerCoordinatorRunsRARForecastDispositionAndEPDTransition(
 	fixture := newOwnerCoordinatorFixture(t, "verification-journey")
 	ctx := context.Background()
 	admission := fixture.admitDefaultDelivery(t, "verification-journey")
-	applicability, registry, plan, snapshot := ownerVerificationPlan(
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	semanticInputs := evidence.SemanticRequirementRequest{
+		Program:     executable,
+		Args:        []string{"-test.run=^$"},
+		CWD:         fixture.repo,
+		Environment: map[string]string{},
+		Capability:  "go.test",
+	}
+	semanticObservation, err := evidence.ObserveSemanticRequirement(
+		semanticInputs,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applicability, registry, plan, snapshot := ownerVerificationPlanWithObligation(
 		t,
 		fixture.repo,
 		"verification-journey",
+		reviewtransaction.VerificationObligation{
+			ID:             "unit.test",
+			RequirementRef: semanticObservation.RequirementRef,
+			ArgvRef:        semanticObservation.ArgvRef,
+			CapabilityRef:  semanticInputs.Capability,
+			Cost:           reviewtransaction.VerificationCostQuick,
+		},
 	)
 	planAuthority, err := fixture.coordinator.PublishVerificationPlan(
 		ctx,
@@ -1282,13 +1306,8 @@ func TestOwnerCoordinatorRunsRARForecastDispositionAndEPDTransition(
 		)
 	}
 
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
 	obligation := plan.Obligations[0]
-	ticket, err := evidence.NewActionTicket(evidence.ActionTicketRequest{
-		IssuerRef:              dispositionRequest.ActorRef,
+	ticketRequest := evidence.SemanticActionTicketRequest{
 		SubjectRef:             dispositionState.Forecast.SubjectRef,
 		CandidateRef:           handoff.CandidateRef,
 		VerificationContextRef: dispositionState.Forecast.Digest,
@@ -1305,13 +1324,57 @@ func TestOwnerCoordinatorRunsRARForecastDispositionAndEPDTransition(
 		},
 		Capability:        obligation.CapabilityRef,
 		RedactionLiterals: []string{},
-	})
+	}
+	mismatchedTicketRequest := ticketRequest
+	mismatchedTicketRequest.Args = []string{"-test.run=TestAnotherCommand"}
+	beforeMismatchedTicket := ownerTreeFingerprint(t, root)
+	if _, err := fixture.coordinator.IssueVerificationActionTicket(
+		ctx,
+		OwnerVerificationActionRequest{
+			ExpectedRevision: dispositionState.Revision,
+			Ticket:           mismatchedTicketRequest,
+		},
+	); err == nil {
+		t.Fatal("semantic ticket issue accepted argv outside the RAR obligation")
+	}
+	if after := ownerTreeFingerprint(t, root); after != beforeMismatchedTicket {
+		t.Fatalf(
+			"mismatched semantic ticket issue published authority:\nbefore %s\nafter  %s",
+			beforeMismatchedTicket,
+			after,
+		)
+	}
+	staleTicketRequest := OwnerVerificationActionRequest{
+		ExpectedRevision: ownerTestRef("stale-ticket"),
+		Ticket:           ticketRequest,
+	}
+	beforeStaleTicket := ownerTreeFingerprint(t, root)
+	if _, err := fixture.coordinator.IssueVerificationActionTicket(
+		ctx,
+		staleTicketRequest,
+	); !errors.As(err, new(*workrun.RevisionConflictError)) {
+		t.Fatalf("stale semantic ticket issue error = %v", err)
+	}
+	if after := ownerTreeFingerprint(t, root); after != beforeStaleTicket {
+		t.Fatalf(
+			"stale semantic ticket issue published authority:\nbefore %s\nafter  %s",
+			beforeStaleTicket,
+			after,
+		)
+	}
+	ticket, err := fixture.coordinator.IssueVerificationActionTicket(
+		ctx,
+		OwnerVerificationActionRequest{
+			ExpectedRevision: dispositionState.Revision,
+			Ticket:           ticketRequest,
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	transitionRequest := OwnerVerificationTransitionRequest{
 		ExpectedRevision: dispositionState.Revision,
-		Ticket:           ticket,
+		ActionTicketRef:  ticket.TicketRef,
 		IssuedAt:         fixture.now,
 		ExpiresAt:        fixture.now + 300,
 	}
@@ -1956,6 +2019,23 @@ func TestOwnerVerificationTransitionRequestCannotSelectActivationClass(t *testin
 	if _, exists := requestType.FieldByName("Class"); exists {
 		t.Fatal("ordinary owner transition request can select a privileged activation class")
 	}
+	if _, exists := requestType.FieldByName("Ticket"); exists {
+		t.Fatal("ordinary owner transition request can inject a sealed ticket")
+	}
+	actionType := reflect.TypeOf(evidence.SemanticActionTicketRequest{})
+	for _, forbidden := range []string{
+		"IssuerRef",
+		"SemanticRequirementRef",
+		"SemanticAuthority",
+		"SemanticAuthorityIdentity",
+	} {
+		if _, exists := actionType.FieldByName(forbidden); exists {
+			t.Fatalf(
+				"semantic action request exposes caller-authored %s",
+				forbidden,
+			)
+		}
+	}
 }
 
 func TestOwnerImplementationRequestsCannotAuthorMMIAuthority(t *testing.T) {
@@ -2007,6 +2087,31 @@ func ownerVerificationPlan(
 	reviewtransaction.VerificationPlan,
 	reviewtransaction.Snapshot,
 ) {
+	return ownerVerificationPlanWithObligation(
+		t,
+		repo,
+		seed,
+		reviewtransaction.VerificationObligation{
+			ID:             "unit.test",
+			RequirementRef: ownerTestRef(seed + "-requirement"),
+			ArgvRef:        ownerTestRef(seed + "-argv"),
+			CapabilityRef:  "go.test",
+			Cost:           reviewtransaction.VerificationCostQuick,
+		},
+	)
+}
+
+func ownerVerificationPlanWithObligation(
+	t *testing.T,
+	repo string,
+	seed string,
+	obligation reviewtransaction.VerificationObligation,
+) (
+	reviewtransaction.VerificationApplicability,
+	reviewtransaction.VerificationPlanRegistry,
+	reviewtransaction.VerificationPlan,
+	reviewtransaction.Snapshot,
+) {
 	t.Helper()
 	logicalPath := seed + ".go"
 	if err := os.WriteFile(
@@ -2015,13 +2120,6 @@ func ownerVerificationPlan(
 		0o644,
 	); err != nil {
 		t.Fatal(err)
-	}
-	obligation := reviewtransaction.VerificationObligation{
-		ID:             "unit.test",
-		RequirementRef: ownerTestRef(seed + "-requirement"),
-		ArgvRef:        ownerTestRef(seed + "-argv"),
-		CapabilityRef:  "go.test",
-		Cost:           reviewtransaction.VerificationCostQuick,
 	}
 	registry, err := reviewtransaction.NewVerificationPlanRegistry(
 		ownerTestRef(seed+"-policy"),

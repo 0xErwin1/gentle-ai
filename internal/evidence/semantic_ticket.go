@@ -106,6 +106,65 @@ type SemanticActionTicketRequest struct {
 	RedactionLiterals      []string
 }
 
+// SemanticRequirementRequest is the acyclic portion of a future action
+// ticket. RAR can observe this before a forecast exists because none of these
+// fields depends on the plan, WorkRun revision, ticket ref, or execution ID.
+type SemanticRequirementRequest struct {
+	Program     string
+	Args        []string
+	CWD         string
+	Environment map[string]string
+	Capability  string
+}
+
+// SemanticRequirementObservation is the owner-observed precommit that RAR
+// stores in one VerificationObligation. Final ticket issuance must reproduce
+// both refs exactly or the plan/ticket binding is rejected.
+type SemanticRequirementObservation struct {
+	RequirementRef string
+	ArgvRef        string
+}
+
+// ObserveSemanticRequirement validates the exact execution inputs and
+// observes the executable toolchain without publishing EPD state. The fixed
+// HCR-only fields deliberately cannot affect the returned acyclic refs.
+func ObserveSemanticRequirement(
+	request SemanticRequirementRequest,
+) (SemanticRequirementObservation, error) {
+	step := hostruntime.ExecStep{
+		ExecutionID: "semantic-requirement-observation",
+		Program:     request.Program,
+		Args:        append([]string(nil), request.Args...),
+		CWD:         request.CWD,
+		Env:         cloneEnvironment(request.Environment),
+		Deadline:    time.Nanosecond,
+		Limits: hostruntime.StreamLimits{
+			StdoutBytes: 1,
+			StderrBytes: 1,
+		},
+		Redaction:       hostruntime.RedactionPlan{Literals: []string{}},
+		EvidenceVersion: 2,
+	}
+	binding, err := hostruntime.BindExecStep(step)
+	if err != nil {
+		return SemanticRequirementObservation{}, fmt.Errorf(
+			"observe semantic requirement host request: %w",
+			err,
+		)
+	}
+	requirementRef, err := DeriveSemanticRequirementRef(
+		request.Capability,
+		binding,
+	)
+	if err != nil {
+		return SemanticRequirementObservation{}, err
+	}
+	return SemanticRequirementObservation{
+		RequirementRef: requirementRef,
+		ArgvRef:        binding.ArgvDigest,
+	}, nil
+}
+
 // IssueSemanticActionTicket derives and publishes one v2 ticket through the
 // EPD owner boundary. Issuance observes the toolchain once to derive the
 // acyclic requirement and once more while sealing the final HCR request. A
@@ -131,17 +190,13 @@ func (store Store) IssueSemanticActionTicket(
 	}
 
 	ownerRequest := request.actionTicketRequest(store.RepositoryRef())
-	provisional, err := NewActionTicket(ownerRequest)
-	if err != nil {
-		return ActionTicket{}, err
-	}
-	requirementRef, err := DeriveSemanticRequirementRef(
-		provisional.Capability,
-		provisional.RequestBinding,
+	observation, err := ObserveSemanticRequirement(
+		request.semanticRequirementRequest(),
 	)
 	if err != nil {
 		return ActionTicket{}, err
 	}
+	requirementRef := observation.RequirementRef
 	if err := ctx.Err(); err != nil {
 		return ActionTicket{}, err
 	}
@@ -169,6 +224,11 @@ func (store Store) IssueSemanticActionTicket(
 			hostruntime.ErrToolchainIdentityChanged,
 		)
 	}
+	if ticket.RequestBinding.ArgvDigest != observation.ArgvRef {
+		return ActionTicket{}, errors.New(
+			"semantic action ticket argv changed during owner issuance",
+		)
+	}
 	if ticket.Schema != ActionTicketSchemaV2 ||
 		ticket.IssuerRef != store.RepositoryRef() ||
 		ticket.SemanticRequirementRef != requirementRef ||
@@ -187,6 +247,18 @@ func (store Store) IssueSemanticActionTicket(
 		return ActionTicket{}, err
 	}
 	return ticket, nil
+}
+
+func (request SemanticActionTicketRequest) semanticRequirementRequest() (
+	result SemanticRequirementRequest,
+) {
+	return SemanticRequirementRequest{
+		Program:     request.Program,
+		Args:        append([]string(nil), request.Args...),
+		CWD:         request.CWD,
+		Environment: cloneEnvironment(request.Environment),
+		Capability:  request.Capability,
+	}
 }
 
 func (request SemanticActionTicketRequest) actionTicketRequest(

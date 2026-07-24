@@ -213,6 +213,56 @@ func TestDeriveSemanticRequirementRefBindsProgramAndToolchainContent(
 	}
 }
 
+func TestObserveSemanticRequirementMatchesFinalTicketWithoutPublication(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	store, err := OpenStore(
+		context.Background(),
+		initEvidenceRepository(t),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := actionTicketRequest(t, "output", "owner verified")
+	request := semanticTicketRequest(base)
+	before, err := directoryFingerprint(store.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	observation, err := ObserveSemanticRequirement(
+		request.semanticRequirementRequest(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := directoryFingerprint(store.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatal("semantic requirement observation published EPD state")
+	}
+
+	ticket, err := store.IssueSemanticActionTicket(
+		context.Background(),
+		request,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observation.RequirementRef != ticket.SemanticRequirementRef ||
+		observation.ArgvRef != ticket.RequestBinding.ArgvDigest {
+		t.Fatalf(
+			"observation = %#v; ticket requirement=%q argv=%q",
+			observation,
+			ticket.SemanticRequirementRef,
+			ticket.RequestBinding.ArgvDigest,
+		)
+	}
+}
+
 func TestDeriveSemanticRequirementRefRejectsIncoherentBindings(t *testing.T) {
 	t.Parallel()
 

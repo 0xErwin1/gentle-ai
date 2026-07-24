@@ -26,7 +26,10 @@ type ProductionRepository struct {
 	Plans        *reviewtransaction.RARAuthorityRepository
 	Executor     *hostruntime.Executor
 	OpenEvidence EvidenceStoreOpener
-	Now          func() time.Time
+	// SemanticEvaluator is optional because absence must fail safe: a clean
+	// zero exit remains incomplete rather than becoming semantic proof.
+	SemanticEvaluator SemanticEvaluatorPort
+	Now               func() time.Time
 }
 
 func (repository *ProductionRepository) Status(
@@ -273,7 +276,13 @@ func (repository *ProductionRepository) ApplyAuthorized(
 				}
 				return err
 			}
-			admitted, err = evidenceStore.AdmitAndStore(ticket, process)
+			admitted, err = admitProductiveExecution(
+				ctx,
+				evidenceStore,
+				repository.SemanticEvaluator,
+				ticket,
+				process,
+			)
 			if err != nil {
 				_ = repository.Transitions.markIndeterminate(authorization)
 				return fmt.Errorf("admit execution evidence: %w", err)
@@ -340,7 +349,8 @@ func (repository *ProductionRepository) validatePendingAuthorization(
 	if err != nil {
 		return reviewtransaction.RARPlanAuthority{}, err
 	}
-	if ticket.CandidateRef != authorization.CandidateRef ||
+	if ticket.IssuerRef != evidenceStore.RepositoryRef() ||
+		ticket.CandidateRef != authorization.CandidateRef ||
 		ticket.SubjectRef != state.Forecast.SubjectRef ||
 		ticket.VerificationContextRef != state.Forecast.Digest ||
 		ticket.ExpectedRevision != plan.AuthorityRef {
@@ -429,13 +439,112 @@ func planContainsTicket(
 	plan reviewtransaction.VerificationPlan,
 	ticket evidence.ActionTicket,
 ) bool {
+	requirementRef, err := evidence.DeriveSemanticRequirementRef(
+		ticket.Capability,
+		ticket.RequestBinding,
+	)
+	if err != nil ||
+		requirementRef != ticket.SemanticRequirementRef {
+		return false
+	}
 	for _, obligation := range plan.Obligations {
 		if obligation.ID == ticket.Slot &&
-			obligation.CapabilityRef == ticket.Capability {
+			obligation.CapabilityRef == ticket.Capability &&
+			obligation.RequirementRef == ticket.SemanticRequirementRef &&
+			obligation.ArgvRef == ticket.RequestBinding.ArgvDigest {
 			return true
 		}
 	}
 	return false
+}
+
+func planContainsSemanticRequest(
+	plan reviewtransaction.VerificationPlan,
+	request evidence.SemanticActionTicketRequest,
+	observation evidence.SemanticRequirementObservation,
+) bool {
+	for _, obligation := range plan.Obligations {
+		if obligation.ID == request.Slot &&
+			obligation.CapabilityRef == request.Capability &&
+			obligation.RequirementRef == observation.RequirementRef &&
+			obligation.ArgvRef == observation.ArgvRef {
+			return true
+		}
+	}
+	return false
+}
+
+func admitProductiveExecution(
+	ctx context.Context,
+	store evidence.Store,
+	evaluator SemanticEvaluatorPort,
+	ticket evidence.ActionTicket,
+	process hostruntime.ProcessEvidence,
+) (evidence.ExecutionEvidence, error) {
+	if ticket.Schema != evidence.ActionTicketSchemaV2 ||
+		ticket.IssuerRef != store.RepositoryRef() {
+		return evidence.ExecutionEvidence{}, errors.New(
+			"productive execution requires an owner-issued semantic ticket",
+		)
+	}
+	requirementRef, err := evidence.DeriveSemanticRequirementRef(
+		ticket.Capability,
+		ticket.RequestBinding,
+	)
+	if err != nil ||
+		requirementRef != ticket.SemanticRequirementRef {
+		return evidence.ExecutionEvidence{}, errors.New(
+			"productive execution ticket has no exact semantic requirement",
+		)
+	}
+	if err := ticket.RequestBinding.ValidateProcessEvidence(process); err != nil {
+		return evidence.ExecutionEvidence{}, err
+	}
+	if process.TerminalCause != hostruntime.TerminalExited ||
+		process.ExitCode != 0 ||
+		!process.CleanupComplete ||
+		process.Stdout.Truncated ||
+		process.Stderr.Truncated ||
+		process.ToolchainState != hostruntime.ToolchainIdentityObserved {
+		return store.AdmitAndStore(ticket, process)
+	}
+	if evaluator == nil {
+		return store.AdmitAndStore(ticket, process)
+	}
+	evaluation, err := evaluator.EvaluateSemanticExecution(
+		ctx,
+		ticket,
+		process,
+	)
+	if err != nil ||
+		evaluation.validateFor(ticket, process) != nil ||
+		evaluation.Outcome != SemanticEvaluationPassed {
+		// The exact HCR facts remain valuable and replayable, but an absent,
+		// failed, mismatched, or negative evaluator decision proves no semantic
+		// completion.
+		return store.AdmitAndStore(ticket, process)
+	}
+	authority, err := store.SemanticAuthority(
+		ctx,
+		ticket.SemanticRequirementRef,
+	)
+	if err != nil {
+		return evidence.ExecutionEvidence{}, err
+	}
+	if authority.Identity() != ticket.SemanticAuthorityIdentity {
+		return evidence.ExecutionEvidence{}, errors.New(
+			"productive semantic authority does not match the action ticket",
+		)
+	}
+	verdict, err := authority.AttestPassed(ticket, process)
+	if err != nil {
+		return evidence.ExecutionEvidence{}, err
+	}
+	return store.AdmitAndStoreWithSemanticVerdict(
+		ticket,
+		process,
+		verdict,
+	)
 }
 
 var _ Repository = (*ProductionRepository)(nil)

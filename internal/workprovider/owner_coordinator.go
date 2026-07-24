@@ -1362,9 +1362,107 @@ func (coordinator *OwnerCoordinator) PublishVerificationDisposition(
 	)
 }
 
+type OwnerVerificationActionRequest struct {
+	ExpectedRevision string
+	Ticket           evidence.SemanticActionTicketRequest
+}
+
+// IssueVerificationActionTicket observes the exact command/toolchain against
+// the live RAR obligation, then lets EPD derive and persist the repository
+// issuer, semantic requirement, and signing identity. Callers never provide a
+// signer or an already-sealed ticket.
+func (coordinator *OwnerCoordinator) IssueVerificationActionTicket(
+	ctx context.Context,
+	request OwnerVerificationActionRequest,
+) (evidence.ActionTicket, error) {
+	if err := coordinator.guardGeneralMutation(ctx); err != nil {
+		return evidence.ActionTicket{}, err
+	}
+	state, err := coordinator.work.Status()
+	if err != nil {
+		return evidence.ActionTicket{}, err
+	}
+	if state.Revision != request.ExpectedRevision {
+		return evidence.ActionTicket{}, ownerRevisionConflict(
+			request.ExpectedRevision,
+			state.Revision,
+		)
+	}
+	if state.Handoff == nil || state.Forecast == nil ||
+		state.Disposition == nil ||
+		state.Disposition.Kind != workrun.DispositionRun ||
+		state.VerificationResultRef != "" ||
+		(state.ImplementationRoute == workrun.ImplementationRouteSDD &&
+			state.SDDRunRef == "") ||
+		request.Ticket.CandidateRef != state.Handoff.CandidateRef ||
+		request.Ticket.SubjectRef != state.Forecast.SubjectRef ||
+		request.Ticket.VerificationContextRef != state.Forecast.Digest ||
+		request.Ticket.ExpectedRevision != state.Forecast.PlanRevisionRef {
+		return evidence.ActionTicket{}, errors.New(
+			"semantic action request does not bind the current WorkRun verification authority",
+		)
+	}
+	plan, err := coordinator.rar.ResolvePlan(
+		ctx,
+		request.Ticket.ExpectedRevision,
+	)
+	if err != nil {
+		return evidence.ActionTicket{}, err
+	}
+	observation, err := evidence.ObserveSemanticRequirement(
+		evidence.SemanticRequirementRequest{
+			Program:     request.Ticket.Program,
+			Args:        request.Ticket.Args,
+			CWD:         request.Ticket.CWD,
+			Environment: request.Ticket.Environment,
+			Capability:  request.Ticket.Capability,
+		},
+	)
+	if err != nil {
+		return evidence.ActionTicket{}, err
+	}
+	if plan.Subject.SnapshotIdentity != request.Ticket.CandidateRef ||
+		plan.Applicability.Digest != state.Forecast.ApplicabilityDigest ||
+		plan.Registry.Digest != state.Forecast.RegistryDigest ||
+		plan.Plan.Digest != state.Forecast.PlanDigest ||
+		!planContainsSemanticRequest(
+			plan.Plan,
+			request.Ticket,
+			observation,
+		) {
+		return evidence.ActionTicket{}, errors.New(
+			"semantic action request does not bind the exact live RAR plan",
+		)
+	}
+	ticket, err := coordinator.evidence.IssueSemanticActionTicket(
+		ctx,
+		request.Ticket,
+	)
+	if err != nil {
+		return evidence.ActionTicket{}, err
+	}
+	if ticket.IssuerRef != coordinator.evidence.RepositoryRef() ||
+		!planContainsTicket(plan.Plan, ticket) {
+		return evidence.ActionTicket{}, errors.New(
+			"EPD semantic action ticket does not bind its repository owner and RAR plan",
+		)
+	}
+	live, err := coordinator.work.Status()
+	if err != nil {
+		return evidence.ActionTicket{}, err
+	}
+	if live.Revision != request.ExpectedRevision {
+		return evidence.ActionTicket{}, ownerRevisionConflict(
+			request.ExpectedRevision,
+			live.Revision,
+		)
+	}
+	return ticket, nil
+}
+
 type OwnerVerificationTransitionRequest struct {
 	ExpectedRevision string
-	Ticket           evidence.ActionTicket
+	ActionTicketRef  string
 	IssuedAt         int64
 	ExpiresAt        int64
 }
@@ -1374,8 +1472,9 @@ type OwnerVerificationTransition struct {
 	Authorization VerificationTransitionAuthorization
 }
 
-// IssueVerificationTransition admits one sealed EPD ActionTicket and publishes
-// one opaque apply authorization. It never exposes or accepts argv itself.
+// IssueVerificationTransition resolves one owner-issued EPD ticket by ref and
+// publishes one opaque apply authorization. It never accepts a caller-sealed
+// ticket, signer, argv, or semantic requirement.
 func (coordinator *OwnerCoordinator) IssueVerificationTransition(
 	ctx context.Context,
 	request OwnerVerificationTransitionRequest,
@@ -1383,8 +1482,15 @@ func (coordinator *OwnerCoordinator) IssueVerificationTransition(
 	if err := coordinator.guardGeneralMutation(ctx); err != nil {
 		return OwnerVerificationTransition{}, err
 	}
-	if err := request.Ticket.Validate(); err != nil {
+	ticket, err := coordinator.evidence.ReadTicket(request.ActionTicketRef)
+	if err != nil {
 		return OwnerVerificationTransition{}, err
+	}
+	if ticket.TicketRef != request.ActionTicketRef ||
+		ticket.IssuerRef != coordinator.evidence.RepositoryRef() {
+		return OwnerVerificationTransition{}, errors.New(
+			"EPD action ticket does not belong to the repository owner",
+		)
 	}
 	state, err := coordinator.work.Status()
 	if err != nil {
@@ -1393,8 +1499,8 @@ func (coordinator *OwnerCoordinator) IssueVerificationTransition(
 	replay, reservationConflict := ownerTicketReservationState(
 		state,
 		request.ExpectedRevision,
-		request.Ticket.TicketRef,
-		request.Ticket.Slot,
+		ticket.TicketRef,
+		ticket.Slot,
 	)
 	if reservationConflict {
 		return OwnerVerificationTransition{}, errors.New(
@@ -1413,26 +1519,26 @@ func (coordinator *OwnerCoordinator) IssueVerificationTransition(
 		(state.VerificationResultRef != "" && !replay) ||
 		(state.ImplementationRoute == workrun.ImplementationRouteSDD &&
 			state.SDDRunRef == "") ||
-		request.Ticket.CandidateRef != state.Handoff.CandidateRef ||
-		request.Ticket.SubjectRef != state.Forecast.SubjectRef ||
-		request.Ticket.VerificationContextRef != state.Forecast.Digest ||
-		request.Ticket.ExpectedRevision != state.Forecast.PlanRevisionRef {
+		ticket.CandidateRef != state.Handoff.CandidateRef ||
+		ticket.SubjectRef != state.Forecast.SubjectRef ||
+		ticket.VerificationContextRef != state.Forecast.Digest ||
+		ticket.ExpectedRevision != state.Forecast.PlanRevisionRef {
 		return OwnerVerificationTransition{}, errors.New(
 			"EPD action ticket does not bind the current WorkRun verification authority",
 		)
 	}
 	plan, err := coordinator.rar.ResolvePlan(
 		ctx,
-		request.Ticket.ExpectedRevision,
+		ticket.ExpectedRevision,
 	)
 	if err != nil {
 		return OwnerVerificationTransition{}, err
 	}
-	if plan.Subject.SnapshotIdentity != request.Ticket.CandidateRef ||
+	if plan.Subject.SnapshotIdentity != ticket.CandidateRef ||
 		plan.Applicability.Digest != state.Forecast.ApplicabilityDigest ||
 		plan.Registry.Digest != state.Forecast.RegistryDigest ||
 		plan.Plan.Digest != state.Forecast.PlanDigest ||
-		!planContainsTicket(plan.Plan, request.Ticket) {
+		!planContainsTicket(plan.Plan, ticket) {
 		return OwnerVerificationTransition{}, errors.New(
 			"EPD action ticket does not bind the exact live RAR plan",
 		)
@@ -1441,8 +1547,8 @@ func (coordinator *OwnerCoordinator) IssueVerificationTransition(
 		VerificationTransitionAuthorizationRequest{
 			WorkRunID:                  coordinator.work.WorkRunID,
 			ExpectedRevision:           request.ExpectedRevision,
-			CandidateRef:               request.Ticket.CandidateRef,
-			ActionTicketRef:            request.Ticket.TicketRef,
+			CandidateRef:               ticket.CandidateRef,
+			ActionTicketRef:            ticket.TicketRef,
 			ApplicableAuthorizationRef: plan.AuthorityRef,
 			Class:                      AuthorizationGeneral, IssuedAt: request.IssuedAt,
 			ExpiresAt: request.ExpiresAt,
@@ -1451,46 +1557,24 @@ func (coordinator *OwnerCoordinator) IssueVerificationTransition(
 	if err != nil {
 		return OwnerVerificationTransition{}, err
 	}
-	storedTicket, readErr := coordinator.evidence.ReadTicket(
-		request.Ticket.TicketRef,
+	existing, _, resolveErr := coordinator.transitions.ResolveAuthorization(
+		ctx,
+		authorization.AuthorizationRef,
+		request.IssuedAt,
 	)
-	if readErr == nil {
-		if storedTicket.TicketRef != request.Ticket.TicketRef {
+	if resolveErr == nil {
+		if existing != authorization {
 			return OwnerVerificationTransition{}, errors.New(
-				"EPD returned a mismatched action ticket reference",
+				"transition owner returned mismatched replay authority",
 			)
 		}
-		existing, _, resolveErr :=
-			coordinator.transitions.ResolveAuthorization(
-				ctx,
-				authorization.AuthorizationRef,
-				request.IssuedAt,
-			)
-		if resolveErr == nil {
-			if existing != authorization {
-				return OwnerVerificationTransition{}, errors.New(
-					"transition owner returned mismatched replay authority",
-				)
-			}
-			return OwnerVerificationTransition{
-				TicketRef:     storedTicket.TicketRef,
-				Authorization: existing,
-			}, nil
-		}
-		if !errors.Is(resolveErr, ErrAuthorizationNotFound) {
-			return OwnerVerificationTransition{}, resolveErr
-		}
-	} else if !errors.Is(readErr, evidence.ErrEvidenceNotFound) {
-		return OwnerVerificationTransition{}, readErr
+		return OwnerVerificationTransition{
+			TicketRef:     ticket.TicketRef,
+			Authorization: existing,
+		}, nil
 	}
-	ticketRef, err := coordinator.evidence.PutTicket(request.Ticket)
-	if err != nil {
-		return OwnerVerificationTransition{}, err
-	}
-	if ticketRef != request.Ticket.TicketRef {
-		return OwnerVerificationTransition{}, errors.New(
-			"EPD returned a mismatched action ticket reference",
-		)
+	if !errors.Is(resolveErr, ErrAuthorizationNotFound) {
+		return OwnerVerificationTransition{}, resolveErr
 	}
 	if err := coordinator.transitions.PublishAuthorization(
 		ctx,
@@ -1505,8 +1589,8 @@ func (coordinator *OwnerCoordinator) IssueVerificationTransition(
 	liveReplay, _ := ownerTicketReservationState(
 		live,
 		request.ExpectedRevision,
-		request.Ticket.TicketRef,
-		request.Ticket.Slot,
+		ticket.TicketRef,
+		ticket.Slot,
 	)
 	if live.Revision != request.ExpectedRevision && !liveReplay {
 		return OwnerVerificationTransition{}, ownerRevisionConflict(
@@ -1515,7 +1599,7 @@ func (coordinator *OwnerCoordinator) IssueVerificationTransition(
 		)
 	}
 	return OwnerVerificationTransition{
-		TicketRef: ticketRef, Authorization: authorization,
+		TicketRef: ticket.TicketRef, Authorization: authorization,
 	}, nil
 }
 

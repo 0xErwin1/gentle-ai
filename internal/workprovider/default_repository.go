@@ -24,9 +24,14 @@ func NewDefaultController() Controller {
 // ProductionRepositoryOpener binds every provider authority to the same exact
 // repository and WorkRun. Opening is read-only: provider storage is published
 // only by an owner operation or by an already-authorized transition.
-type ProductionRepositoryOpener struct{}
+type ProductionRepositoryOpener struct {
+	// SemanticEvaluator is supplied by the owner runtime that understands the
+	// registered RAR requirements. Nil is deliberately safe: clean process
+	// evidence remains incomplete.
+	SemanticEvaluator SemanticEvaluatorPort
+}
 
-func (ProductionRepositoryOpener) OpenRepository(
+func (opener ProductionRepositoryOpener) OpenRepository(
 	ctx context.Context,
 	repo string,
 	workRunID string,
@@ -107,6 +112,7 @@ func (ProductionRepositoryOpener) OpenRepository(
 		OpenEvidence: func(ctx context.Context) (evidence.Store, error) {
 			return evidence.OpenStoreWithRepositoryIdentityLease(ctx, lease)
 		},
+		SemanticEvaluator: opener.SemanticEvaluator,
 	}, nil
 }
 
