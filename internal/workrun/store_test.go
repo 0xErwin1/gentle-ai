@@ -402,9 +402,18 @@ func TestWorkRunProposalAcceptanceBindingAndSafeReroute(t *testing.T) {
 	explicitDeliveryRef := testSHARef("delivery-explicit")
 	registerTestDeliveryIntent(t, explicitStore, explicitDeliveryRef)
 	explicitAuthority := testAuthorityForStore(t, explicitStore)
-	explicitAuthority.routes[explicitRef] = RouteSelectionAuthority{
-		DecisionRef: explicitRef, PendingDecisionDigest: explicitDecision.Digest,
-		SelectedRoute: ImplementationRouteSDD,
+	if _, err := explicitStore.Start(context.Background(), StartRequest{
+		RequestID: "start-explicit-unowned", RouteDecision: explicitDecision,
+		DeliveryIntentRef: explicitDeliveryRef,
+	}); err == nil {
+		t.Fatal("hash-shaped but unowned explicit SDD request was accepted")
+	}
+	if _, err := explicitStore.Status(); !errors.Is(err, ErrWorkRunNotStarted) {
+		t.Fatalf("failed explicit SDD start mutated state: %v", err)
+	}
+	explicitAuthority.explicitSDDRequests[explicitRef] = ExplicitSDDRequestAuthority{
+		AuthorityRef: explicitRef, WorkRunID: explicitStore.WorkRunID,
+		DeliveryIntentRef: explicitDeliveryRef,
 	}
 	explicit, err := explicitStore.Start(context.Background(), StartRequest{
 		RequestID: "start-explicit", RouteDecision: explicitDecision,
@@ -478,7 +487,7 @@ func openTestWorkRunStore(t *testing.T, repo, workRunID string) WorkRunStore {
 	authority := newTestAuthorityRepository()
 	executor := hostruntime.NewExecutor()
 	return store.WithAuthorityPorts(AuthorityPorts{
-		PAD: authority, Route: authority, SDD: authority,
+		PAD: authority, ExplicitSDDRequest: authority, Route: authority, SDD: authority,
 		Verification: authority, Launch: executor,
 	})
 }

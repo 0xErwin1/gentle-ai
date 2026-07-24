@@ -19,6 +19,7 @@ type testAuthorityRepository struct {
 	mu sync.Mutex
 
 	intents             map[string]DeliveryIntentAuthority
+	explicitSDDRequests map[string]ExplicitSDDRequestAuthority
 	routes              map[string]RouteSelectionAuthority
 	runs                map[string]SDDRunAuthority
 	forecasts           map[string]VerificationForecastAuthority
@@ -35,6 +36,7 @@ type testAuthorityRepository struct {
 func newTestAuthorityRepository() *testAuthorityRepository {
 	return &testAuthorityRepository{
 		intents:             map[string]DeliveryIntentAuthority{},
+		explicitSDDRequests: map[string]ExplicitSDDRequestAuthority{},
 		routes:              map[string]RouteSelectionAuthority{},
 		runs:                map[string]SDDRunAuthority{},
 		forecasts:           map[string]VerificationForecastAuthority{},
@@ -72,6 +74,19 @@ func (repository *testAuthorityRepository) ResolveDeliveryIntent(
 	value, ok := repository.intents[ref]
 	if !ok {
 		return DeliveryIntentAuthority{}, os.ErrNotExist
+	}
+	return value, nil
+}
+
+func (repository *testAuthorityRepository) ResolveExplicitSDDRequest(
+	_ context.Context,
+	ref string,
+) (ExplicitSDDRequestAuthority, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	value, ok := repository.explicitSDDRequests[ref]
+	if !ok {
+		return ExplicitSDDRequestAuthority{}, os.ErrNotExist
 	}
 	return value, nil
 }
@@ -170,6 +185,72 @@ func (repository *testAuthorityRepository) ResolveReviewReceipt(
 		return ReviewReceiptAuthority{}, os.ErrNotExist
 	}
 	return value, nil
+}
+
+func TestExplicitSDDRequestAuthorityRequiresExactStartBinding(t *testing.T) {
+	authorityRef := testSHARef("explicit-sdd-authority")
+	deliveryIntentRef := testSHARef("explicit-sdd-delivery")
+	authority := ExplicitSDDRequestAuthority{
+		AuthorityRef:      authorityRef,
+		WorkRunID:         "explicit-run",
+		DeliveryIntentRef: deliveryIntentRef,
+	}
+	tests := []struct {
+		name              string
+		authorityRef      string
+		workRunID         string
+		deliveryIntentRef string
+		wantErr           bool
+	}{
+		{
+			name:              "exact binding",
+			authorityRef:      authorityRef,
+			workRunID:         "explicit-run",
+			deliveryIntentRef: deliveryIntentRef,
+		},
+		{
+			name:              "different authority",
+			authorityRef:      testSHARef("other-explicit-authority"),
+			workRunID:         "explicit-run",
+			deliveryIntentRef: deliveryIntentRef,
+			wantErr:           true,
+		},
+		{
+			name:              "different work run",
+			authorityRef:      authorityRef,
+			workRunID:         "other-run",
+			deliveryIntentRef: deliveryIntentRef,
+			wantErr:           true,
+		},
+		{
+			name:              "different delivery intent",
+			authorityRef:      authorityRef,
+			workRunID:         "explicit-run",
+			deliveryIntentRef: testSHARef("other-explicit-delivery"),
+			wantErr:           true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := authority.Validate(
+				test.authorityRef,
+				test.workRunID,
+				test.deliveryIntentRef,
+			)
+			if test.wantErr {
+				if !errors.Is(err, ErrAuthorityBindingMismatch) {
+					t.Fatalf(
+						"Validate error = %v, want authority binding mismatch",
+						err,
+					)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Validate exact binding: %v", err)
+			}
+		})
+	}
 }
 
 func TestReviewReceiptAuthorityRequiresExactTerminalTuple(t *testing.T) {

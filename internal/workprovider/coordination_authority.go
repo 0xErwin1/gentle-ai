@@ -18,10 +18,12 @@ import (
 const (
 	ForecastAuthorityRecordSchema    = "gentle-ai.forecast-authority-record/v1"
 	DispositionAuthorityRecordSchema = "gentle-ai.disposition-authority-record/v1"
+	ExplicitSDDRequestRecordSchema   = "gentle-ai.explicit-sdd-request-record/v1"
 	RouteSelectionRecordSchema       = "gentle-ai.route-selection-record/v1"
 
 	forecastAuthorityDigestDomain    = "gentle-ai.forecast-authority-record-digest/v1"
 	dispositionAuthorityDigestDomain = "gentle-ai.disposition-authority-record-digest/v1"
+	explicitSDDRequestDigestDomain   = "gentle-ai.explicit-sdd-request-record-digest/v1"
 	routeSelectionDigestDomain       = "gentle-ai.route-selection-record-digest/v1"
 )
 
@@ -106,6 +108,23 @@ type DispositionAuthorityRecord struct {
 	Kind                 workrun.VerificationDispositionKind `json:"kind"`
 	ActorRef             string                              `json:"actor_ref"`
 	RunnerRef            string                              `json:"runner_ref,omitempty"`
+}
+
+// ExplicitSDDRequestPublication records the user's explicit SDD choice before
+// route calculation. Binding the already-owned delivery intent makes one
+// semantic request slot per Git repository and WorkRun deterministic while a
+// conflicting intent fails closed.
+type ExplicitSDDRequestPublication struct {
+	WorkRunID         string
+	DeliveryIntentRef string
+}
+
+type ExplicitSDDRequestRecord struct {
+	Schema             string `json:"schema"`
+	AuthorityRef       string `json:"authority_ref"`
+	RepositoryIdentity string `json:"repository_identity"`
+	WorkRunID          string `json:"work_run_id"`
+	DeliveryIntentRef  string `json:"delivery_intent_ref"`
 }
 
 // RouteSelectionPublication is a provider-owned choice for one pending route
@@ -392,6 +411,71 @@ func (record DispositionAuthorityRecord) dispositionAuthority() workrun.Verifica
 	}
 }
 
+func newExplicitSDDRequestRecord(
+	repositoryIdentity string,
+	request ExplicitSDDRequestPublication,
+) (ExplicitSDDRequestRecord, error) {
+	if err := validateCoordinationWorkRunID(request.WorkRunID); err != nil {
+		return ExplicitSDDRequestRecord{}, err
+	}
+	if !validCoordinationRef(request.DeliveryIntentRef) {
+		return ExplicitSDDRequestRecord{}, errors.New(
+			"explicit SDD request requires an immutable delivery intent reference",
+		)
+	}
+	record := ExplicitSDDRequestRecord{
+		Schema:             ExplicitSDDRequestRecordSchema,
+		RepositoryIdentity: repositoryIdentity,
+		WorkRunID:          request.WorkRunID,
+		DeliveryIntentRef:  request.DeliveryIntentRef,
+	}
+	ref, err := explicitSDDRequestRecordDigest(record)
+	if err != nil {
+		return ExplicitSDDRequestRecord{}, err
+	}
+	record.AuthorityRef = ref
+	if err := record.Validate(); err != nil {
+		return ExplicitSDDRequestRecord{}, err
+	}
+	return record, nil
+}
+
+func (record ExplicitSDDRequestRecord) Validate() error {
+	if record.Schema != ExplicitSDDRequestRecordSchema {
+		return errors.New("unsupported explicit SDD request record schema")
+	}
+	if err := validateCoordinationRecordIdentity(
+		record.AuthorityRef,
+		record.RepositoryIdentity,
+		record.WorkRunID,
+	); err != nil {
+		return err
+	}
+	if !validCoordinationRef(record.DeliveryIntentRef) {
+		return errors.New(
+			"explicit SDD request delivery intent reference is invalid",
+		)
+	}
+	want, err := explicitSDDRequestRecordDigest(record)
+	if err != nil {
+		return err
+	}
+	if record.AuthorityRef != want {
+		return errors.New(
+			"explicit SDD request ref does not match canonical content",
+		)
+	}
+	return nil
+}
+
+func (record ExplicitSDDRequestRecord) explicitSDDRequestAuthority() workrun.ExplicitSDDRequestAuthority {
+	return workrun.ExplicitSDDRequestAuthority{
+		AuthorityRef:      record.AuthorityRef,
+		WorkRunID:         record.WorkRunID,
+		DeliveryIntentRef: record.DeliveryIntentRef,
+	}
+}
+
 func newRouteSelectionRecord(
 	repositoryIdentity string,
 	request RouteSelectionPublication,
@@ -589,6 +673,11 @@ func dispositionAuthorityRecordDigest(record DispositionAuthorityRecord) (string
 	return coordinationDigest(dispositionAuthorityDigestDomain, record)
 }
 
+func explicitSDDRequestRecordDigest(record ExplicitSDDRequestRecord) (string, error) {
+	record.AuthorityRef = ""
+	return coordinationDigest(explicitSDDRequestDigestDomain, record)
+}
+
 func routeSelectionRecordDigest(record RouteSelectionRecord) (string, error) {
 	record.AuthorityRef = ""
 	return coordinationDigest(routeSelectionDigestDomain, record)
@@ -699,4 +788,5 @@ type forecastDispositionAuthorityPort interface {
 }
 
 var _ forecastDispositionAuthorityPort = (*CoordinationAuthorityStore)(nil)
+var _ workrun.ExplicitSDDRequestAuthorityPort = (*CoordinationAuthorityStore)(nil)
 var _ workrun.RouteAuthorityPort = (*CoordinationAuthorityStore)(nil)

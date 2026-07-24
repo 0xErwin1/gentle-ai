@@ -328,21 +328,21 @@ func (store WorkRunStore) Start(ctx context.Context, request StartRequest) (Work
 		return WorkRunState{}, err
 	}
 	if request.RouteDecision.ExplicitSDDRequestRef != "" {
-		if store.authority.Route == nil {
+		if store.authority.ExplicitSDDRequest == nil {
 			return WorkRunState{}, ErrAuthorityPortUnavailable
 		}
-		selection, resolveErr := store.authority.Route.ResolveRouteSelection(
-			ctx,
-			request.RouteDecision.ExplicitSDDRequestRef,
-		)
+		explicitRequest, resolveErr :=
+			store.authority.ExplicitSDDRequest.ResolveExplicitSDDRequest(
+				ctx,
+				request.RouteDecision.ExplicitSDDRequestRef,
+			)
 		if resolveErr != nil {
 			return WorkRunState{}, fmt.Errorf("resolve explicit SDD request: %w", resolveErr)
 		}
-		if err := selection.Validate(
+		if err := explicitRequest.Validate(
 			request.RouteDecision.ExplicitSDDRequestRef,
-			request.RouteDecision.Digest,
-			ImplementationRouteSDD,
-			"",
+			store.WorkRunID,
+			request.DeliveryIntentRef,
 		); err != nil {
 			return WorkRunState{}, err
 		}

@@ -25,6 +25,7 @@ const (
 
 	coordinationKindForecast    coordinationRecordKind = "forecast"
 	coordinationKindDisposition coordinationRecordKind = "disposition"
+	coordinationKindExplicitSDD coordinationRecordKind = "explicit_sdd_request"
 	coordinationKindRoute       coordinationRecordKind = "route_selection"
 )
 
@@ -236,12 +237,108 @@ func (store *CoordinationAuthorityStore) PublishRouteSelection(
 	return record, nil
 }
 
+func (store *CoordinationAuthorityStore) PublishExplicitSDDRequest(
+	ctx context.Context,
+	request ExplicitSDDRequestPublication,
+) (ExplicitSDDRequestRecord, error) {
+	if err := store.validateRequestContext(ctx, request.WorkRunID); err != nil {
+		return ExplicitSDDRequestRecord{}, err
+	}
+	record, err := newExplicitSDDRequestRecord(
+		store.identity.repositoryIdentity,
+		request,
+	)
+	if err != nil {
+		return ExplicitSDDRequestRecord{}, err
+	}
+	slotRef, err := explicitSDDRequestSlotRef(record)
+	if err != nil {
+		return ExplicitSDDRequestRecord{}, err
+	}
+	payload, err := canonicalCoordinationPayload(record)
+	if err != nil {
+		return ExplicitSDDRequestRecord{}, err
+	}
+	if err := store.publish(
+		ctx,
+		coordinationKindExplicitSDD,
+		slotRef,
+		record.AuthorityRef,
+		payload,
+	); err != nil {
+		return ExplicitSDDRequestRecord{}, err
+	}
+	return record, nil
+}
+
 func (store *CoordinationAuthorityStore) ResolveForecast(
 	ctx context.Context,
 	authorityRef string,
 ) (workrun.VerificationForecastAuthority, error) {
 	_, authority, err := store.resolveForecastRecord(ctx, authorityRef)
 	return authority, err
+}
+
+func (store *CoordinationAuthorityStore) ResolveExplicitSDDRequest(
+	ctx context.Context,
+	authorityRef string,
+) (workrun.ExplicitSDDRequestAuthority, error) {
+	if err := store.validateRequestContext(ctx, store.workRunID); err != nil {
+		return workrun.ExplicitSDDRequestAuthority{}, err
+	}
+	payload, err := store.readObject(
+		coordinationKindExplicitSDD,
+		authorityRef,
+	)
+	if err != nil {
+		return workrun.ExplicitSDDRequestAuthority{}, err
+	}
+	var record ExplicitSDDRequestRecord
+	if err := decodeStrictCoordinationJSON(payload, &record); err != nil {
+		return workrun.ExplicitSDDRequestAuthority{}, fmt.Errorf(
+			"%w: decode explicit SDD request: %v",
+			ErrCoordinationAuthorityCorrupt,
+			err,
+		)
+	}
+	canonical, err := canonicalCoordinationPayload(record)
+	if err != nil || !bytes.Equal(payload, canonical) {
+		return workrun.ExplicitSDDRequestAuthority{}, fmt.Errorf(
+			"%w: explicit SDD request is not canonical",
+			ErrCoordinationAuthorityCorrupt,
+		)
+	}
+	if err := record.Validate(); err != nil {
+		return workrun.ExplicitSDDRequestAuthority{}, fmt.Errorf(
+			"%w: validate explicit SDD request: %v",
+			ErrCoordinationAuthorityCorrupt,
+			err,
+		)
+	}
+	if record.AuthorityRef != authorityRef {
+		return workrun.ExplicitSDDRequestAuthority{}, fmt.Errorf(
+			"%w: explicit SDD request lookup binding mismatch",
+			ErrCoordinationAuthorityCorrupt,
+		)
+	}
+	if err := store.validateRecordBinding(
+		record.RepositoryIdentity,
+		record.WorkRunID,
+	); err != nil {
+		return workrun.ExplicitSDDRequestAuthority{}, err
+	}
+	slotRef, err := explicitSDDRequestSlotRef(record)
+	if err != nil {
+		return workrun.ExplicitSDDRequestAuthority{}, err
+	}
+	if err := store.validatePublishedSlot(
+		coordinationKindExplicitSDD,
+		slotRef,
+		record.AuthorityRef,
+	); err != nil {
+		return workrun.ExplicitSDDRequestAuthority{}, err
+	}
+	return record.explicitSDDRequestAuthority(), nil
 }
 
 func (store *CoordinationAuthorityStore) ResolveDisposition(
@@ -688,6 +785,21 @@ func dispositionAuthoritySlotRef(
 	)
 }
 
+func explicitSDDRequestSlotRef(
+	record ExplicitSDDRequestRecord,
+) (string, error) {
+	return coordinationDigest(
+		"gentle-ai.explicit-sdd-request-slot/v1",
+		struct {
+			RepositoryIdentity string `json:"repository_identity"`
+			WorkRunID          string `json:"work_run_id"`
+		}{
+			RepositoryIdentity: record.RepositoryIdentity,
+			WorkRunID:          record.WorkRunID,
+		},
+	)
+}
+
 func routeSelectionSlotRef(
 	record RouteSelectionRecord,
 ) (string, error) {
@@ -914,7 +1026,7 @@ func (store *CoordinationAuthorityStore) slotPath(
 func validCoordinationKind(kind coordinationRecordKind) bool {
 	switch kind {
 	case coordinationKindForecast, coordinationKindDisposition,
-		coordinationKindRoute:
+		coordinationKindExplicitSDD, coordinationKindRoute:
 		return true
 	default:
 		return false

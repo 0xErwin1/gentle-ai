@@ -140,8 +140,44 @@ func (authority DeliveryAuthorizationAuthority) Validate(
 	return nil
 }
 
-// RouteAuthorityPort resolves explicit requests, accepted proposals, and safe
-// reroutes from the provider-owned decision repository.
+// ExplicitSDDRequestAuthorityPort resolves the owner-authored request that
+// selects SDD before an implementation route decision exists. The authority
+// must be durable and independently content-addressed; it cannot depend on the
+// digest of the decision that later references it.
+type ExplicitSDDRequestAuthorityPort interface {
+	ResolveExplicitSDDRequest(
+		context.Context,
+		string,
+	) (ExplicitSDDRequestAuthority, error)
+}
+
+type ExplicitSDDRequestAuthority struct {
+	AuthorityRef      string
+	WorkRunID         string
+	DeliveryIntentRef string
+}
+
+func (authority ExplicitSDDRequestAuthority) Validate(
+	ref string,
+	workRunID string,
+	deliveryIntentRef string,
+) error {
+	if !validSHA256Ref(authority.AuthorityRef) ||
+		authority.AuthorityRef != ref ||
+		authority.WorkRunID != workRunID ||
+		!validSHA256Ref(authority.DeliveryIntentRef) ||
+		authority.DeliveryIntentRef != deliveryIntentRef {
+		return fmt.Errorf(
+			"%w: explicit SDD request",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	return nil
+}
+
+// RouteAuthorityPort resolves accepted proposals and safe reroutes from the
+// provider-owned decision repository. Explicit pre-route requests use the
+// separate ExplicitSDDRequestAuthorityPort.
 type RouteAuthorityPort interface {
 	ResolveRouteSelection(context.Context, string) (RouteSelectionAuthority, error)
 }
@@ -396,9 +432,10 @@ type LaunchAuthorityPort interface {
 }
 
 type AuthorityPorts struct {
-	PAD          PADAuthorityPort
-	Route        RouteAuthorityPort
-	SDD          SDDAuthorityPort
-	Verification VerificationAuthorityPort
-	Launch       LaunchAuthorityPort
+	PAD                PADAuthorityPort
+	ExplicitSDDRequest ExplicitSDDRequestAuthorityPort
+	Route              RouteAuthorityPort
+	SDD                SDDAuthorityPort
+	Verification       VerificationAuthorityPort
+	Launch             LaunchAuthorityPort
 }

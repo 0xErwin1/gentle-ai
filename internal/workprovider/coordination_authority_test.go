@@ -38,6 +38,28 @@ func (port *coordinationPlanPort) ResolvePlan(
 	return port.repository.ResolvePlan(context.Background(), ref)
 }
 
+type coordinationTestPAD struct {
+	intentRef string
+}
+
+func (pad coordinationTestPAD) ResolveDeliveryIntent(
+	_ context.Context,
+	ref string,
+) (workrun.DeliveryIntentAuthority, error) {
+	if ref != pad.intentRef {
+		return workrun.DeliveryIntentAuthority{}, os.ErrNotExist
+	}
+	return workrun.DeliveryIntentAuthority{IntentRef: ref}, nil
+}
+
+func (coordinationTestPAD) ResolveLiveDeliveryAuthorization(
+	context.Context,
+	string,
+) (workrun.DeliveryAuthorizationAuthority, error) {
+	return workrun.DeliveryAuthorizationAuthority{},
+		workrun.ErrDeliveryAuthorizationInactive
+}
+
 type coordinationFixture struct {
 	repo        string
 	plans       *coordinationPlanPort
@@ -48,6 +70,139 @@ type coordinationFixture struct {
 	forecastRun workrun.VerificationForecast
 	disposition DispositionAuthorityRecord
 	route       RouteSelectionRecord
+}
+
+func TestCoordinationExplicitSDDRequestPrecedesRouteDecision(t *testing.T) {
+	repo := initCoordinationRepository(t)
+	const workRunID = "explicit-sdd-start"
+	ctx := context.Background()
+	coordination, err := OpenCoordinationAuthorityStore(
+		ctx,
+		repo,
+		workRunID,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("OpenCoordinationAuthorityStore() error = %v", err)
+	}
+	deliveryIntentRef := coordinationTestRef("explicit-delivery")
+	explicit, err := coordination.PublishExplicitSDDRequest(
+		ctx,
+		ExplicitSDDRequestPublication{
+			WorkRunID:         workRunID,
+			DeliveryIntentRef: deliveryIntentRef,
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishExplicitSDDRequest() error = %v", err)
+	}
+	replayed, err := coordination.PublishExplicitSDDRequest(
+		ctx,
+		ExplicitSDDRequestPublication{
+			WorkRunID:         workRunID,
+			DeliveryIntentRef: deliveryIntentRef,
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishExplicitSDDRequest(replay) error = %v", err)
+	}
+	if replayed.AuthorityRef != explicit.AuthorityRef {
+		t.Fatalf(
+			"explicit SDD replay ref = %q, want %q",
+			replayed.AuthorityRef,
+			explicit.AuthorityRef,
+		)
+	}
+	if _, err := coordination.PublishExplicitSDDRequest(
+		ctx,
+		ExplicitSDDRequestPublication{
+			WorkRunID:         workRunID,
+			DeliveryIntentRef: coordinationTestRef("conflicting-delivery"),
+		},
+	); !errors.Is(err, ErrCoordinationAuthorityConflict) {
+		t.Fatalf("PublishExplicitSDDRequest(conflict) error = %v", err)
+	}
+
+	// The owner authority exists before route calculation, so its ref can be
+	// included without either digest depending on the other.
+	decision, err := workrun.DecideImplementationRoute(
+		workrun.ImplementationRouteInput{
+			ExplicitSDDRequestRef: explicit.AuthorityRef,
+		},
+	)
+	if err != nil {
+		t.Fatalf("DecideImplementationRoute() error = %v", err)
+	}
+	if decision.ExplicitSDDRequestRef != explicit.AuthorityRef ||
+		decision.Digest == explicit.AuthorityRef {
+		t.Fatalf(
+			"explicit SDD authority/decision binding = %#v, authority %q",
+			decision,
+			explicit.AuthorityRef,
+		)
+	}
+	work, err := workrun.OpenWorkRunStore(ctx, repo, workRunID)
+	if err != nil {
+		t.Fatalf("OpenWorkRunStore() error = %v", err)
+	}
+
+	fabricatedRef := coordinationTestRef("fabricated-explicit")
+	fabricatedDecision, err := workrun.DecideImplementationRoute(
+		workrun.ImplementationRouteInput{
+			ExplicitSDDRequestRef: fabricatedRef,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fabricated := work.WithAuthorityPorts(workrun.AuthorityPorts{
+		PAD:                coordinationTestPAD{intentRef: deliveryIntentRef},
+		ExplicitSDDRequest: coordination,
+	})
+	if _, err := fabricated.Start(ctx, workrun.StartRequest{
+		RequestID:         "fabricated-explicit",
+		RouteDecision:     fabricatedDecision,
+		DeliveryIntentRef: deliveryIntentRef,
+	}); err == nil {
+		t.Fatal("unpublished explicit SDD request was accepted")
+	}
+	if _, err := work.Status(); !errors.Is(err, workrun.ErrWorkRunNotStarted) {
+		t.Fatalf("failed explicit SDD start mutated WorkRun: %v", err)
+	}
+
+	otherDeliveryIntentRef := coordinationTestRef("other-delivery")
+	mismatched := work.WithAuthorityPorts(workrun.AuthorityPorts{
+		PAD:                coordinationTestPAD{intentRef: otherDeliveryIntentRef},
+		ExplicitSDDRequest: coordination,
+	})
+	if _, err := mismatched.Start(ctx, workrun.StartRequest{
+		RequestID:         "mismatched-explicit-intent",
+		RouteDecision:     decision,
+		DeliveryIntentRef: otherDeliveryIntentRef,
+	}); !errors.Is(err, workrun.ErrAuthorityBindingMismatch) {
+		t.Fatalf("explicit SDD delivery-intent mismatch error = %v", err)
+	}
+	if _, err := work.Status(); !errors.Is(err, workrun.ErrWorkRunNotStarted) {
+		t.Fatalf("mismatched explicit SDD start mutated WorkRun: %v", err)
+	}
+
+	configured := work.WithAuthorityPorts(workrun.AuthorityPorts{
+		PAD:                coordinationTestPAD{intentRef: deliveryIntentRef},
+		ExplicitSDDRequest: coordination,
+	})
+	started, err := configured.Start(ctx, workrun.StartRequest{
+		RequestID:         "start-explicit-sdd",
+		RouteDecision:     decision,
+		DeliveryIntentRef: deliveryIntentRef,
+	})
+	if err != nil {
+		t.Fatalf("WorkRun.Start(explicit SDD) error = %v", err)
+	}
+	if started.ImplementationRoute != workrun.ImplementationRouteSDD ||
+		started.RouteAcceptanceRef != explicit.AuthorityRef ||
+		started.SDDRunRef != "" {
+		t.Fatalf("explicit SDD WorkRun state = %#v", started)
+	}
 }
 
 func TestCoordinationAuthorityExactReplayAndConflict(t *testing.T) {
@@ -248,6 +403,16 @@ func TestCoordinationAuthorityConcurrentPublicationConverges(t *testing.T) {
 
 func TestCoordinationAuthorityRejectsCrossRunReplay(t *testing.T) {
 	fixture := newCoordinationFixture(t, "coordination-run-a")
+	explicit, err := fixture.store.PublishExplicitSDDRequest(
+		context.Background(),
+		ExplicitSDDRequestPublication{
+			WorkRunID:         fixture.store.workRunID,
+			DeliveryIntentRef: coordinationTestRef("explicit-cross-run"),
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishExplicitSDDRequest() error = %v", err)
+	}
 	other, err := OpenCoordinationAuthorityStore(
 		context.Background(),
 		fixture.repo,
@@ -277,6 +442,16 @@ func TestCoordinationAuthorityRejectsCrossRunReplay(t *testing.T) {
 				_, err := other.ResolveDisposition(
 					context.Background(),
 					fixture.disposition.AuthorityRef,
+				)
+				return err
+			},
+		},
+		{
+			name: "explicit_sdd_request",
+			call: func() error {
+				_, err := other.ResolveExplicitSDDRequest(
+					context.Background(),
+					explicit.AuthorityRef,
 				)
 				return err
 			},
@@ -336,6 +511,35 @@ func TestCoordinationAuthorityRevalidatesLivePlan(t *testing.T) {
 }
 
 func TestCoordinationAuthorityDetectsCorruption(t *testing.T) {
+	t.Run("explicit_sdd_request", func(t *testing.T) {
+		fixture := newCoordinationFixture(t, "coordination-corrupt-explicit")
+		record, err := fixture.store.PublishExplicitSDDRequest(
+			context.Background(),
+			ExplicitSDDRequestPublication{
+				WorkRunID:         fixture.store.workRunID,
+				DeliveryIntentRef: coordinationTestRef("explicit-corruption"),
+			},
+		)
+		if err != nil {
+			t.Fatalf("PublishExplicitSDDRequest() error = %v", err)
+		}
+		if err := os.WriteFile(
+			fixture.store.objectPath(
+				coordinationKindExplicitSDD,
+				record.AuthorityRef,
+			),
+			[]byte("{}\n"),
+			0o600,
+		); err != nil {
+			t.Fatalf("corrupt explicit SDD request object: %v", err)
+		}
+		if _, err := fixture.store.ResolveExplicitSDDRequest(
+			context.Background(),
+			record.AuthorityRef,
+		); !errors.Is(err, ErrCoordinationAuthorityCorrupt) {
+			t.Fatalf("ResolveExplicitSDDRequest(corrupt) error = %v", err)
+		}
+	})
 	t.Run("object", func(t *testing.T) {
 		fixture := newCoordinationFixture(t, "coordination-corrupt-object")
 		objectPath := fixture.store.objectPath(
@@ -370,6 +574,28 @@ func TestCoordinationAuthorityDetectsCorruption(t *testing.T) {
 			t.Fatalf("ResolveForecast(orphan) error = %v", err)
 		}
 	})
+}
+
+func TestCoordinationExplicitSDDResolveDoesNotCreateStorage(t *testing.T) {
+	repo := initCoordinationRepository(t)
+	store, err := OpenCoordinationAuthorityStore(
+		context.Background(),
+		repo,
+		"explicit-read-only",
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("OpenCoordinationAuthorityStore() error = %v", err)
+	}
+	if _, err := store.ResolveExplicitSDDRequest(
+		context.Background(),
+		coordinationTestRef("missing-explicit"),
+	); err == nil {
+		t.Fatal("missing explicit SDD authority resolved")
+	}
+	if _, err := os.Stat(store.root); !os.IsNotExist(err) {
+		t.Fatalf("read-only explicit SDD resolve created storage: %v", err)
+	}
 }
 
 func TestCoordinationAuthorityUsesPrivateStableGitPath(t *testing.T) {
@@ -696,6 +922,11 @@ func testDomainDigest[T any](
 	_, _ = hash.Write([]byte{0})
 	_, _ = hash.Write(payload)
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
+}
+
+func coordinationTestRef(seed string) string {
+	sum := sha256.Sum256([]byte(seed))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func initCoordinationRepository(t *testing.T) string {
