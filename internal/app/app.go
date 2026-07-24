@@ -96,6 +96,10 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunSDDAttempt(args[1:], stdout)
 		case "sdd-verify-validate":
 			return cli.RunSDDVerifyValidate(args[1:], stdout)
+		case "work-capabilities":
+			return cli.RunWorkCapabilities(args[1:], stdout)
+		case "work-start":
+			return cli.RunWorkStart(args[1:], os.Stdin, stdout)
 		case "work-status":
 			return cli.RunWorkStatus(args[1:], stdout)
 		case "work-transition":

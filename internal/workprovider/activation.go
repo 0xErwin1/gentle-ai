@@ -20,8 +20,8 @@ const (
 	ActivationReadOnly     ActivationMode = "read_only"
 	ActivationDisabled     ActivationMode = "disabled"
 
-	// DefaultActivationMode remains read-only until the owner repositories and
-	// transition applier are integrated and the final ACI activation lands.
+	// DefaultActivationMode remains read-only unless an operator explicitly
+	// activates the fully authenticated productive composition.
 	DefaultActivationMode = ActivationReadOnly
 )
 

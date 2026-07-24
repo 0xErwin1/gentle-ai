@@ -16,7 +16,7 @@ import (
 // a read-only placeholder.
 func NewDefaultController() Controller {
 	return NewController(
-		ProductionRepositoryOpener{},
+		EnvironmentProductionRepositoryOpener{},
 		EnvironmentActivationResolver{},
 	)
 }

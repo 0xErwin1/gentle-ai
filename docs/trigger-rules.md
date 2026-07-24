@@ -52,7 +52,27 @@ enrollment.
 | **Ready** | The exact candidate has sufficient evidence for the selected delivery route. |
 | **Needs your decision** | Safe automatic convergence is impossible; Gentle AI presents the cause, impact, and concrete choices. |
 
-Managed adapters read common-work status with exactly:
+Managed adapters first negotiate the repository-bound capability:
+
+```bash
+gentle-ai work-capabilities --cwd <repo> --contract gentle-ai.work-capabilities/v1 --json
+```
+
+Only an exact authenticated `advertised` response permits outcome start. The
+adapter sends exactly `outcome` plus `explicitSddRequested` on stdin:
+
+```bash
+gentle-ai work-start --cwd <repo> --contract gentle-ai.work-start/v1 --json < request.json
+```
+
+The user still asks only for the outcome. Repository identity, route, policy,
+candidate, delivery mechanism, and authority references remain owner-derived.
+Before a managed run starts, a dormant or unavailable capability preserves the
+legacy direct, delegated, and optional-SDD flow. After a managed run starts,
+failure stays typed and fail-closed; the adapter never creates a second run or
+falls back to prompt-owned authority.
+
+Managed adapters then read common-work status with exactly:
 
 ```bash
 gentle-ai work-status --cwd <repo> --work-run <id> --contract gentle-ai.work-status/v1 --json
@@ -77,18 +97,27 @@ contract; direct and delegated runs do not create or consume an SDD run.
 
 | Value | Effect |
 |---|---|
-| Unset or `read_only` | Keep the native common-work capability dormant, return status without an authorized mutation, and reject apply. |
-| `enabled` | Explicitly enable status/apply for already owner-provisioned common work. It does not create or admit a new work run. |
+| Unset or `read_only` | Keep native outcome start dormant, return existing status without an authorized general mutation, and reject apply. |
+| `enabled` | Permit authenticated capability advertisement, outcome start, status, and owner-authorized transitions through the complete productive composition. |
 | `recovery_only` | Keep capability advertisement dormant and expose only recovery-safe continuation. |
 | `disabled` | Keep capability advertisement dormant and reject common-work use. |
 | Empty or unknown | Resolve to disabled with a typed invalid-mode error. |
 
-Unavailable, disabled, unknown, or read-only authority never becomes local
-adapter policy. The adapter remains read-only and surfaces the typed stop instead
-of inventing a transition. The provider-owned outcome intake and start surface
-exists, but the canonical capability remains dormant until a normal runtime
-consumer composes it with authenticated intake, semantic-evaluation, live-policy,
-and PAD delivery authorities.
+Enabled mode also requires operator-owned productive connector configuration:
+
+| Setting | Requirement |
+|---|---|
+| `GENTLE_AI_PRODUCTIVE_RUNTIME_AGENT` | One supported canonical agent ID matching the active adapter. |
+| `GENTLE_AI_PRODUCTIVE_RUNTIME_URL` | HTTPS endpoint implementing the exact closed productive-runtime operation set. |
+| `GENTLE_AI_PRODUCTIVE_RUNTIME_TOKEN_FILE` | Private regular bearer-token file; on Unix, group/other permission bits must be clear. |
+| `GENTLE_AI_PRODUCTIVE_RUNTIME_CA_FILE` | Optional bounded PEM trust bundle for a private runtime CA. |
+
+Advertisement additionally requires an exact authenticated repository, agent,
+operation-set, and connector-session handshake. Live policy provisioning,
+candidate/Git proof, semantic evaluation, hosting probes, and delivery effects
+all reuse that binding. Missing, changed, disabled, unknown, or read-only
+authority never becomes local adapter policy and never falls back to inferred
+flags, `HEAD`, `origin`, arbitrary shell, or force/bypass behavior.
 
 ## Installation and refresh
 

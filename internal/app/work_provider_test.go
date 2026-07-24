@@ -20,6 +20,8 @@ func TestWorkProviderCommandsDispatchBeforePlatformDetection(t *testing.T) {
 	}
 
 	tests := [][]string{
+		{"work-capabilities", "--contract=", "--json"},
+		{"work-start", "--contract=", "--json"},
 		{"work-status", "--contract=", "--json"},
 		{"work-transition", "apply", "--contract=", "--json"},
 	}
@@ -49,6 +51,8 @@ func TestGlobalHelpDocumentsOnlyOpaqueWorkTransitionApply(t *testing.T) {
 	printHelp(&output, "test")
 	help := output.String()
 	for _, required := range []string{
+		"work-capabilities --cwd <repo> --contract gentle-ai.work-capabilities/v1 --json",
+		"work-start --cwd <repo> --contract gentle-ai.work-start/v1 --json",
 		"work-status --cwd <repo> --work-run <id> --contract gentle-ai.work-status/v1 --json",
 		"work-transition apply --cwd <repo> --work-run <id> --contract gentle-ai.work-transition/v1",
 		"--authorization-ref <ref> --expected-revision <revision> --json",
