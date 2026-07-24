@@ -10,10 +10,12 @@ import (
 )
 
 const (
-	WorkRoutingCapabilityV1  = "gentle-ai.work-routing/v1"
-	WorkStatusContractV1     = "gentle-ai.work-status/v1"
-	WorkTransitionContractV1 = "gentle-ai.work-transition/v1"
-	WorkDiagnosticSchemaV1   = "gentle-ai.work-diagnostic/v1"
+	WorkRoutingCapabilityV1    = "gentle-ai.work-routing/v1"
+	WorkCapabilitiesContractV1 = "gentle-ai.work-capabilities/v1"
+	WorkStartContractV1        = "gentle-ai.work-start/v1"
+	WorkStatusContractV1       = "gentle-ai.work-status/v1"
+	WorkTransitionContractV1   = "gentle-ai.work-transition/v1"
+	WorkDiagnosticSchemaV1     = "gentle-ai.work-diagnostic/v1"
 )
 
 type RouteDecision string
@@ -98,6 +100,8 @@ type WorkTransitionV1 struct {
 type DiagnosticOperation string
 
 const (
+	DiagnosticOperationWorkCapabilities    DiagnosticOperation = "work.capabilities"
+	DiagnosticOperationWorkStart           DiagnosticOperation = "work.start"
 	DiagnosticOperationWorkStatus          DiagnosticOperation = "work.status"
 	DiagnosticOperationWorkTransitionApply DiagnosticOperation = "work.transition.apply"
 )
@@ -183,7 +187,9 @@ func (diagnostic WorkDiagnosticV1) Validate() error {
 	if diagnostic.Schema != WorkDiagnosticSchemaV1 {
 		return errors.New("work diagnostic must use gentle-ai.work-diagnostic/v1")
 	}
-	if diagnostic.Operation != DiagnosticOperationWorkStatus &&
+	if diagnostic.Operation != DiagnosticOperationWorkCapabilities &&
+		diagnostic.Operation != DiagnosticOperationWorkStart &&
+		diagnostic.Operation != DiagnosticOperationWorkStatus &&
 		diagnostic.Operation != DiagnosticOperationWorkTransitionApply {
 		return fmt.Errorf("unsupported diagnostic operation %q", diagnostic.Operation)
 	}
@@ -197,7 +203,10 @@ func (diagnostic WorkDiagnosticV1) Validate() error {
 		return errors.New("supportedContracts must not be empty")
 	}
 	for _, contract := range diagnostic.SupportedContracts {
-		if contract != WorkStatusContractV1 && contract != WorkTransitionContractV1 {
+		if contract != WorkCapabilitiesContractV1 &&
+			contract != WorkStartContractV1 &&
+			contract != WorkStatusContractV1 &&
+			contract != WorkTransitionContractV1 {
 			return fmt.Errorf("unsupported advertised contract %q", contract)
 		}
 	}

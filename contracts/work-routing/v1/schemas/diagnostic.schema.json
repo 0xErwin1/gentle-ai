@@ -16,7 +16,14 @@
   ],
   "properties": {
     "schema": {"const": "gentle-ai.work-diagnostic/v1"},
-    "operation": {"enum": ["work.status", "work.transition.apply"]},
+    "operation": {
+      "enum": [
+        "work.capabilities",
+        "work.start",
+        "work.status",
+        "work.transition.apply"
+      ]
+    },
     "code": {"const": "unsupported_contract"},
     "message": {
       "type": "string",
@@ -30,7 +37,12 @@
       "minItems": 1,
       "uniqueItems": true,
       "items": {
-        "enum": ["gentle-ai.work-status/v1", "gentle-ai.work-transition/v1"]
+        "enum": [
+          "gentle-ai.work-capabilities/v1",
+          "gentle-ai.work-start/v1",
+          "gentle-ai.work-status/v1",
+          "gentle-ai.work-transition/v1"
+        ]
       }
     },
     "mutationOutcome": {"const": "not_started"},

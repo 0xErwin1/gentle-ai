@@ -20,6 +20,24 @@ func TestWorkRoutingV1FixturesMatchSchemasAndGoContracts(t *testing.T) {
 		decode     func(*testing.T, []byte)
 	}{
 		{
+			name:       "advertised runtime capabilities",
+			schemaName: "work-capabilities.schema.json",
+			fixture:    "work-capabilities-advertised.fixture.json",
+			decode: func(t *testing.T, payload []byte) {
+				var value map[string]any
+				decodeStrict(t, payload, &value)
+			},
+		},
+		{
+			name:       "outcome-first start request",
+			schemaName: "work-start-request.schema.json",
+			fixture:    "work-start-request.fixture.json",
+			decode: func(t *testing.T, payload []byte) {
+				var value map[string]any
+				decodeStrict(t, payload, &value)
+			},
+		},
+		{
 			name: "direct work status", schemaName: "work-status.schema.json",
 			fixture: "work-status-direct.fixture.json",
 			decode: func(t *testing.T, payload []byte) {

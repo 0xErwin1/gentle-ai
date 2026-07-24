@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/work-routing/v1/schemas/work-start-request.schema.json",
+  "title": "Gentle AI outcome-first work start request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["outcome"],
+  "properties": {
+    "outcome": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 65536,
+      "pattern": "^[^\\s\\x00](?:[^\\x00]*[^\\s\\x00])?$"
+    },
+    "explicitSddRequested": {"type": "boolean"}
+  }
+}
