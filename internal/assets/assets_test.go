@@ -90,7 +90,11 @@ func TestOrchestratorsNegotiateNormalWorkIntake(t *testing.T) {
 			"binds `repositoryRef` to the current repository",
 			"`workRouting.exposure` as `advertised`",
 			"`contracts.start` as exactly `gentle-ai.work-start/v1`",
+			"`contracts.route` as exactly `gentle-ai.work-route/v1`",
 			"`contracts.advance` as exactly `gentle-ai.work-advance/v1`",
+			"`contracts.reconcile` as exactly `gentle-ai.work-reconcile/v1`",
+			"`contracts.status` as exactly `gentle-ai.work-status/v1`",
+			"`contracts.transition` as exactly `gentle-ai.work-transition/v1`",
 			"non-empty `connectorSessionRef`",
 			"Start with outcome only",
 			"exactly two request keys",
@@ -106,13 +110,14 @@ func TestOrchestratorsNegotiateNormalWorkIntake(t *testing.T) {
 			"do not invent a WorkRun, retry, or fall back to legacy execution",
 			"stop once as unavailable or ambiguous because a mutation may have started",
 			"retain the returned `workRunId`, `revision`",
-			"internally for the post-actor advance, read-only status, and exact transition calls",
+			"internally for route, post-actor advance, reconciliation, read-only status, and exact transition calls",
 			"Never expose handshake vocabulary",
 			"route, agent, repository, policy, hash, nonce, issue, pull request, or delivery mechanism",
-			"omits either exact start or advance advertisement",
+			"omits any one of the six exact start, route, advance, reconcile, status, or transition advertisements",
 			"do not call `work-start` and never infer support",
 			"legacy direct-inline, delegated-direct, and optional-SDD behavior",
 			"without pretending that a managed WorkRun exists",
+			"After start, never degrade a managed WorkRun to legacy behavior",
 		} {
 			if !strings.Contains(section, required) {
 				t.Fatalf("%s normal work intake contract missing %q", path, required)
@@ -141,6 +146,122 @@ func TestOrchestratorsNegotiateNormalWorkIntake(t *testing.T) {
 				t.Fatalf("%s normal work intake exposes unsupported wire vocabulary or flag %q", path, forbidden)
 			}
 		}
+	}
+}
+
+func TestOrchestratorsProjectExactManagedRouteAndReconciliation(t *testing.T) {
+	const (
+		decideCommand    = "gentle-ai work-route decide --cwd <repo> --work-run <id> --expected-revision <sha256> --contract gentle-ai.work-route/v1 --choice <accept_sdd|decline_sdd> --json"
+		bindCommand      = "gentle-ai work-route bind-sdd --cwd <repo> --work-run <id> --expected-revision <sha256> --contract gentle-ai.work-route/v1 --run-ref <existing-sdd-run-ref> --json"
+		reconcileCommand = "gentle-ai work-reconcile --cwd <repo> --work-run <id> --expected-revision <sha256> --diagnostic-ref <ref> --contract gentle-ai.work-reconcile/v1 --json"
+	)
+
+	paths := allSDDOrchestratorAssetPaths(t)
+	if len(paths) != 12 {
+		t.Fatalf("managed route/reconciliation parity covers %d orchestrators, want 12", len(paths))
+	}
+
+	var intakeParity string
+	var managedParity string
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			intake := markdownSection(content, "#### Normal Work Intake Contract (MANDATORY)")
+			managed := markdownSection(content, "#### Managed Route and Reconciliation Contract (MANDATORY)")
+			if intake == "" || managed == "" {
+				t.Fatalf("%s missing managed intake/route contract", path)
+			}
+			if intakeParity == "" {
+				intakeParity = intake
+			} else if intake != intakeParity {
+				t.Fatalf("%s diverged from exact all-orchestrator intake parity", path)
+			}
+			if managedParity == "" {
+				managedParity = managed
+			} else if managed != managedParity {
+				t.Fatalf("%s diverged from exact all-orchestrator route/reconciliation parity", path)
+			}
+
+			for _, required := range []string{
+				"`publicState: needs_your_decision`",
+				"`routePhase: decision_pending`",
+				"`routeDecision: propose_sdd`",
+				"exactly one human route question",
+				"`accept_sdd|decline_sdd`",
+				"Do not add fallback",
+				"do not invoke a mutation",
+				"Decide exactly once",
+				decideCommand,
+				"Never choose, infer, author, or expose the fallback",
+				"`decline_sdd`",
+				"owner-selected `direct_inline` or `delegated_direct`",
+				"`publicState: working`",
+				"`routePhase: sdd_runtime_pending`",
+				"an accepted SDD proposal or explicit-SDD start must return exact status",
+				"Do not ask for route consent again",
+				"Create the native SDD runtime first",
+				bindCommand,
+				"Bind only that already-existing native SDD runtime to that already-existing WorkRun",
+				"`routePhase: implementation_selected`",
+				"`implementationRoute: sdd`",
+				"top-level `diagnostic` to be field-for-field identical to `status.diagnostic`",
+				"Consume only the exact owner-authored `nextAction`",
+				"`manual_delivery_resolution_required` is valid only in a manual reconciliation result",
+				"`nextAction: start_fresh_work_run` closes the current local generation",
+				"Never retry `work-advance`",
+				"Only the next normal user input may negotiate and create a different WorkRun",
+				"`nextAction: reconcile_before_new_work` is one user-facing recovery action",
+				"Only after the user explicitly chooses it",
+				reconcileCommand,
+				"Never invoke reconciliation from advance handling, status polling, hydration, startup, agent completion, retry logic, or a fresh-input path",
+				"Exact replay of the same reconciliation request may return the same result",
+				"`delivery_confirmed`",
+				"`publicState: ready`",
+				"`no_delivery_confirmed`",
+				"`manual_resolution_required`",
+				"`nextAction: manual_delivery_resolution_required`",
+				"block terminally",
+			} {
+				if !strings.Contains(managed, required) {
+					t.Fatalf("%s managed route/reconciliation contract missing %q", path, required)
+				}
+			}
+
+			for _, command := range []string{decideCommand, bindCommand, reconcileCommand} {
+				if count := strings.Count(content, command); count != 1 {
+					t.Fatalf("%s exact command %q count = %d, want 1", path, command, count)
+				}
+			}
+
+			consent := strings.Index(managed, "exactly one human route question")
+			decide := strings.Index(managed, decideCommand)
+			create := strings.Index(managed, "Create the native SDD runtime first")
+			bind := strings.Index(managed, bindCommand)
+			diagnostic := strings.Index(managed, "field-for-field identical")
+			fresh := strings.Index(managed, "`nextAction: start_fresh_work_run`")
+			reconcileAction := strings.Index(managed, "`nextAction: reconcile_before_new_work`")
+			reconcile := strings.Index(managed, reconcileCommand)
+			outcomes := strings.Index(managed, "**Apply the typed reconciliation outcome**")
+			if consent < 0 || decide <= consent || create <= decide || bind <= create ||
+				diagnostic <= bind || fresh <= diagnostic || reconcileAction <= fresh ||
+				reconcile <= reconcileAction || outcomes <= reconcile {
+				t.Fatalf("%s must order consent, decide, native create, bind, advance action, explicit reconcile, then outcomes", path)
+			}
+
+			for _, forbidden := range []string{
+				"Automatically invoke `gentle-ai work-reconcile",
+				"Automatically run `gentle-ai work-reconcile",
+				"`reconcile_before_new_work` immediately invokes",
+				"`start_fresh_work_run` retries",
+				"Bind first, then create",
+				"Retry reconciliation until",
+				"Infer the fallback",
+			} {
+				if strings.Contains(managed, forbidden) {
+					t.Fatalf("%s permits forbidden route/reconciliation automation %q", path, forbidden)
+				}
+			}
+		})
 	}
 }
 
@@ -1351,10 +1472,15 @@ func TestSDDOrchestratorsFailClosedAfterManagedWorkAdvanceBoundary(t *testing.T)
 			}
 			for _, required := range []string{
 				"`contracts.start` as exactly `gentle-ai.work-start/v1`",
+				"`contracts.route` as exactly `gentle-ai.work-route/v1`",
 				"`contracts.advance` as exactly `gentle-ai.work-advance/v1`",
-				"omits either exact start or advance advertisement",
+				"`contracts.reconcile` as exactly `gentle-ai.work-reconcile/v1`",
+				"`contracts.status` as exactly `gentle-ai.work-status/v1`",
+				"`contracts.transition` as exactly `gentle-ai.work-transition/v1`",
+				"omits any one of the six exact start, route, advance, reconcile, status, or transition advertisements",
 				"do not call `work-start`",
 				"legacy direct-inline, delegated-direct, and optional-SDD behavior",
+				"After start, never degrade a managed WorkRun to legacy behavior",
 			} {
 				if !strings.Contains(intake, required) {
 					t.Fatalf("%s pre-start capability boundary missing %q", path, required)
