@@ -1622,6 +1622,38 @@ func TestOwnerCoordinatorResolvesKillSwitchLiveBeforeMutations(t *testing.T) {
 	}
 }
 
+func TestOwnerCoordinatorUnsetEnvironmentDefaultsReadOnlyWithoutPublication(
+	t *testing.T,
+) {
+	restoreDefaultActivationEnvironment(t)
+	fixture := newOwnerCoordinatorFixture(t, "activation-default-read-only")
+	intentRef := fixture.admitDefaultIntent(t, "activation-default-read-only")
+	fixture.coordinator.activation = EnvironmentActivationResolver{}
+	root := filepath.Join(fixture.commonDir, "gentle-ai")
+
+	before := ownerTreeFingerprint(t, root)
+	_, err := fixture.coordinator.StartWork(
+		context.Background(),
+		OwnerStartWorkRequest{
+			DeliveryIntentRef: intentRef,
+			RouteInput: workrun.ImplementationRouteInput{
+				WriteIntent:    workrun.WriteIntentAtomicMechanical,
+				WriteFileCount: 1,
+			},
+		},
+	)
+	if !errors.Is(err, ErrCapabilityReadOnly) {
+		t.Fatalf("unset environment start error = %v", err)
+	}
+	if after := ownerTreeFingerprint(t, root); after != before {
+		t.Fatalf(
+			"unset environment start published authority:\nbefore %s\nafter  %s",
+			before,
+			after,
+		)
+	}
+}
+
 func TestOwnerCoordinatorKillSwitchModesFailClosedWithoutPublication(
 	t *testing.T,
 ) {
