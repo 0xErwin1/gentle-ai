@@ -26,17 +26,22 @@ import (
 // payload. HCR inputs can reach it only inside an already-issued EPD
 // ActionTicket.
 type OwnerCoordinator struct {
-	pad          *PADWorkRunAdapter
-	padRoute     PADRouteReevaluationProbe
-	sdd          SDDWorkRunAuthority
-	work         workrun.WorkRunStore
-	coordination *CoordinationAuthorityStore
-	rar          *reviewtransaction.RARAuthorityRepository
-	transitions  *TransitionAuthorityStore
-	evidence     evidence.Store
-	mutations    mutationintegrity.Store
-	activation   ActivationResolver
-	repository   string
+	pad              *PADWorkRunAdapter
+	padDelivery      *PADDeliveryAdapter
+	padRoute         PADRouteReevaluationProbe
+	padCandidates    *PADCandidateCatalog
+	padBindingSource PADGitBindingAuthority
+	sdd              SDDWorkRunAuthority
+	work             workrun.WorkRunStore
+	coordination     *CoordinationAuthorityStore
+	rar              *reviewtransaction.RARAuthorityRepository
+	transitions      *TransitionAuthorityStore
+	evidence         evidence.Store
+	mutations        mutationintegrity.Store
+	activation       ActivationResolver
+	repository       string
+
+	deliveryExecutionGate chan struct{}
 }
 
 // OwnerCoordinatorDependencies are already-open owner repositories and the
@@ -50,11 +55,14 @@ type OwnerCoordinatorDependencies struct {
 	Evidence     evidence.Store
 	Mutations    mutationintegrity.Store
 
-	PADAuthority    *PADWorkRunAdapter
-	PADRouteProbe   PADRouteReevaluationProbe
-	SDDAuthority    SDDWorkRunAuthority
-	LaunchAuthority workrun.LaunchAuthorityPort
-	Activation      ActivationResolver
+	PADAuthority           *PADWorkRunAdapter
+	PADDelivery            *PADDeliveryAdapter
+	PADRouteProbe          PADRouteReevaluationProbe
+	PADCandidateCatalog    *PADCandidateCatalog
+	PADGitBindingAuthority PADGitBindingAuthority
+	SDDAuthority           SDDWorkRunAuthority
+	LaunchAuthority        workrun.LaunchAuthorityPort
+	Activation             ActivationResolver
 }
 
 func NewOwnerCoordinator(
@@ -68,6 +76,7 @@ func NewOwnerCoordinator(
 		dependencies.RAR == nil ||
 		dependencies.Transitions == nil ||
 		dependencies.PADAuthority == nil ||
+		dependencies.PADDelivery == nil ||
 		dependencies.SDDAuthority.Repo == "" ||
 		dependencies.LaunchAuthority == nil ||
 		dependencies.Activation == nil {
@@ -78,6 +87,13 @@ func NewOwnerCoordinator(
 		dependencies.Mutations.Root() == "" {
 		return nil, errors.New(
 			"owner coordinator requires opened WorkRun, EPD, and MMI stores",
+		)
+	}
+	hasCandidateCatalog := dependencies.PADCandidateCatalog != nil
+	hasGitBinding := dependencies.PADGitBindingAuthority != nil
+	if hasCandidateCatalog != hasGitBinding {
+		return nil, errors.New(
+			"owner coordinator requires both PAD candidate catalog authorities or neither",
 		)
 	}
 	if dependencies.Coordination.workRunID != dependencies.WorkRun.WorkRunID ||
@@ -130,6 +146,18 @@ func NewOwnerCoordinator(
 		dependencies.PADAuthority.authority == nil ||
 		dependencies.PADAuthority.authority.identity.repositoryIdentity !=
 			identity.repositoryIdentity ||
+		dependencies.PADDelivery.authority == nil ||
+		dependencies.PADDelivery.authority !=
+			dependencies.PADAuthority.authority ||
+		dependencies.PADDelivery.RepositoryRef() !=
+			identity.repositoryIdentity ||
+		(dependencies.PADCandidateCatalog != nil &&
+			(dependencies.PADCandidateCatalog.authority == nil ||
+				dependencies.PADCandidateCatalog.authority !=
+					dependencies.PADAuthority.authority ||
+				dependencies.PADCandidateCatalog.objects == nil ||
+				dependencies.PADCandidateCatalog.objects.authority !=
+					dependencies.PADAuthority.authority)) ||
 		(dependencies.PADRouteProbe != nil &&
 			dependencies.PADRouteProbe.RepositoryRef() !=
 				identity.repositoryIdentity) ||
@@ -158,13 +186,21 @@ func NewOwnerCoordinator(
 			Launch:       dependencies.LaunchAuthority,
 		})
 	return &OwnerCoordinator{
-		pad: dependencies.PADAuthority, sdd: dependencies.SDDAuthority,
-		padRoute:     dependencies.PADRouteProbe,
-		work:         configured,
-		coordination: dependencies.Coordination, rar: dependencies.RAR,
-		transitions: dependencies.Transitions, evidence: dependencies.Evidence,
-		mutations:  dependencies.Mutations,
-		activation: dependencies.Activation, repository: identity.repositoryRoot,
+		pad:                   dependencies.PADAuthority,
+		padDelivery:           dependencies.PADDelivery,
+		padRoute:              dependencies.PADRouteProbe,
+		padCandidates:         dependencies.PADCandidateCatalog,
+		padBindingSource:      dependencies.PADGitBindingAuthority,
+		sdd:                   dependencies.SDDAuthority,
+		work:                  configured,
+		coordination:          dependencies.Coordination,
+		rar:                   dependencies.RAR,
+		transitions:           dependencies.Transitions,
+		evidence:              dependencies.Evidence,
+		mutations:             dependencies.Mutations,
+		activation:            dependencies.Activation,
+		repository:            identity.repositoryRoot,
+		deliveryExecutionGate: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -1851,6 +1887,8 @@ func (coordinator *OwnerCoordinator) validate(ctx context.Context) error {
 	if coordinator == nil ||
 		coordinator.pad == nil ||
 		coordinator.pad.authority == nil ||
+		coordinator.padDelivery == nil ||
+		coordinator.padDelivery.authority != coordinator.pad.authority ||
 		coordinator.sdd.Repo == "" ||
 		coordinator.coordination == nil ||
 		coordinator.rar == nil ||
@@ -1859,6 +1897,7 @@ func (coordinator *OwnerCoordinator) validate(ctx context.Context) error {
 		coordinator.evidence.Root() == "" ||
 		coordinator.mutations.Root() == "" ||
 		coordinator.activation == nil ||
+		coordinator.deliveryExecutionGate == nil ||
 		coordinator.repository == "" {
 		return errors.New("owner coordinator is not initialized")
 	}

@@ -163,6 +163,10 @@ func newOwnerCoordinatorFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
+	padDelivery := newOwnerUnavailablePADDeliveryAdapter(
+		t,
+		padRepositoryAuthority,
+	)
 	padAuthority.open = func(
 		ctx context.Context,
 		authority *PADRepositoryAuthority,
@@ -181,6 +185,7 @@ func newOwnerCoordinatorFixture(
 		RAR: rar, Transitions: transitions, Evidence: evidenceStore,
 		Mutations:       mutationStore,
 		PADAuthority:    padAuthority,
+		PADDelivery:     padDelivery,
 		SDDAuthority:    SDDWorkRunAuthority{Repo: repo},
 		LaunchAuthority: ownerTestLaunchAuthority{},
 		Activation:      StaticActivationResolver{Mode: ActivationEnabled},
@@ -726,6 +731,7 @@ func TestOwnerCoordinatorRejectsCrossRepositoryComposition(t *testing.T) {
 			Evidence:        right.coordinator.evidence,
 			Mutations:       right.coordinator.mutations,
 			PADAuthority:    right.coordinator.pad,
+			PADDelivery:     right.coordinator.padDelivery,
 			SDDAuthority:    right.coordinator.sdd,
 			LaunchAuthority: ownerTestLaunchAuthority{},
 			Activation:      StaticActivationResolver{Mode: ActivationEnabled},
@@ -750,6 +756,7 @@ func TestOwnerCoordinatorRejectsForeignMutationIntegrityStore(t *testing.T) {
 			Evidence:        left.coordinator.evidence,
 			Mutations:       right.coordinator.mutations,
 			PADAuthority:    left.coordinator.pad,
+			PADDelivery:     left.coordinator.padDelivery,
 			SDDAuthority:    left.coordinator.sdd,
 			LaunchAuthority: ownerTestLaunchAuthority{},
 			Activation:      StaticActivationResolver{Mode: ActivationEnabled},
@@ -802,6 +809,7 @@ func TestOwnerCoordinatorRejectsLinkedWorktreeEvidenceStore(t *testing.T) {
 			Evidence:        foreignEvidence,
 			Mutations:       fixture.coordinator.mutations,
 			PADAuthority:    fixture.coordinator.pad,
+			PADDelivery:     fixture.coordinator.padDelivery,
 			SDDAuthority:    fixture.coordinator.sdd,
 			LaunchAuthority: ownerTestLaunchAuthority{},
 			Activation:      StaticActivationResolver{Mode: ActivationEnabled},
@@ -859,6 +867,7 @@ func TestOwnerCoordinatorRejectsLinkedWorktreeRARStore(t *testing.T) {
 			Evidence:        fixture.coordinator.evidence,
 			Mutations:       fixture.coordinator.mutations,
 			PADAuthority:    fixture.coordinator.pad,
+			PADDelivery:     fixture.coordinator.padDelivery,
 			SDDAuthority:    fixture.coordinator.sdd,
 			LaunchAuthority: ownerTestLaunchAuthority{},
 			Activation:      StaticActivationResolver{Mode: ActivationEnabled},
@@ -884,6 +893,7 @@ func TestOwnerCoordinatorRequiresActivationWithoutPublishing(t *testing.T) {
 			Evidence:        fixture.coordinator.evidence,
 			Mutations:       fixture.coordinator.mutations,
 			PADAuthority:    fixture.coordinator.pad,
+			PADDelivery:     fixture.coordinator.padDelivery,
 			SDDAuthority:    fixture.coordinator.sdd,
 			LaunchAuthority: ownerTestLaunchAuthority{},
 		},

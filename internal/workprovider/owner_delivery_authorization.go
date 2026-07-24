@@ -136,6 +136,12 @@ func (coordinator *OwnerCoordinator) IssueAndBindDeliveryAuthorization(
 	); err != nil {
 		return workrun.WorkRunState{}, err
 	}
+	if err := coordinator.preparePADCandidateBinding(
+		ctx,
+		decision,
+	); err != nil {
+		return workrun.WorkRunState{}, err
+	}
 
 	if current.DeliveryAuthorizationRef != "" {
 		if err := validateOwnerAuthorizationReplay(

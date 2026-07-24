@@ -26,9 +26,14 @@ var ErrAgentWorkRoutingUnavailable = errors.New(
 // cannot create provider storage merely because a future caller prepares the
 // outcome service.
 type ProductionOwnerCoordinatorFactory struct {
-	lease      *reviewtransaction.RepositoryIdentityLease
-	agent      model.AgentID
-	activation ActivationResolver
+	lease          *reviewtransaction.RepositoryIdentityLease
+	agent          model.AgentID
+	activation     ActivationResolver
+	padAuthority   *PADRepositoryAuthority
+	pad            *PADWorkRunAdapter
+	padDelivery    *PADDeliveryAdapter
+	candidateStore *PADCandidateCatalog
+	bindingSource  PADGitBindingAuthority
 }
 
 // NewProductionOwnerCoordinatorFactory resolves the exact Git identity without
@@ -39,6 +44,48 @@ func NewProductionOwnerCoordinatorFactory(
 	repo string,
 	agent model.AgentID,
 	activation ActivationResolver,
+) (*ProductionOwnerCoordinatorFactory, error) {
+	return newProductionOwnerCoordinatorFactory(
+		ctx,
+		repo,
+		agent,
+		activation,
+		nil,
+	)
+}
+
+// NewProductiveOwnerCoordinatorFactory composes the exact authenticated PAD
+// authorities required by normal outcome-first work. The connector supplies
+// typed owner facts and hosting effects, while the local candidate catalog and
+// fixed Git authority retain the reviewed-object proof inside the repository
+// identity lease.
+func NewProductiveOwnerCoordinatorFactory(
+	ctx context.Context,
+	repo string,
+	agent model.AgentID,
+	activation ActivationResolver,
+	connector ProductiveRuntimeConnector,
+) (*ProductionOwnerCoordinatorFactory, error) {
+	if connector == nil {
+		return nil, errors.New(
+			"productive owner coordinator factory requires a runtime connector",
+		)
+	}
+	return newProductionOwnerCoordinatorFactory(
+		ctx,
+		repo,
+		agent,
+		activation,
+		connector,
+	)
+}
+
+func newProductionOwnerCoordinatorFactory(
+	ctx context.Context,
+	repo string,
+	agent model.AgentID,
+	activation ActivationResolver,
+	connector ProductiveRuntimeConnector,
 ) (*ProductionOwnerCoordinatorFactory, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -55,10 +102,74 @@ func NewProductionOwnerCoordinatorFactory(
 	if err := lease.Validate(ctx); err != nil {
 		return nil, fmt.Errorf("validate production owner repository identity: %w", err)
 	}
+	padAuthority, err := newPADRepositoryAuthorityWithLease(ctx, lease)
+	if err != nil {
+		return nil, err
+	}
+	pad, err := NewPADWorkRunAdapter(padAuthority)
+	if err != nil {
+		return nil, err
+	}
+	var (
+		padDelivery    *PADDeliveryAdapter
+		candidateStore *PADCandidateCatalog
+		bindingSource  PADGitBindingAuthority
+	)
+	if connector == nil {
+		padDelivery, err = newUnavailablePADDeliveryAdapter(
+			ctx,
+			padAuthority,
+		)
+	} else {
+		if connector.RepositoryRef() != lease.Identity().RepositoryRef ||
+			connector.AgentID() != agent {
+			return nil, errors.New(
+				"productive runtime connector does not match owner repository and agent",
+			)
+		}
+		objects, objectErr := NewFixedPADGitObjectAuthority(
+			ctx,
+			padAuthority,
+		)
+		if objectErr != nil {
+			return nil, objectErr
+		}
+		candidateStore, err = NewPADCandidateCatalog(
+			ctx,
+			padAuthority,
+			objects,
+		)
+		if err != nil {
+			return nil, err
+		}
+		bindingSource, err = NewTransportPADGitBindingAuthority(connector)
+		if err != nil {
+			return nil, err
+		}
+		hosting, hostingErr := NewTransportHostingAuthority(connector)
+		if hostingErr != nil {
+			return nil, hostingErr
+		}
+		padDelivery, err = NewPADDeliveryAdapter(
+			ctx,
+			padAuthority,
+			candidateStore,
+			objects,
+			hosting,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
 	return &ProductionOwnerCoordinatorFactory{
-		lease:      lease,
-		agent:      agent,
-		activation: activation,
+		lease:          lease,
+		agent:          agent,
+		activation:     activation,
+		padAuthority:   padAuthority,
+		pad:            pad,
+		padDelivery:    padDelivery,
+		candidateStore: candidateStore,
+		bindingSource:  bindingSource,
 	}, nil
 }
 
@@ -308,15 +419,17 @@ func (factory *ProductionOwnerCoordinatorFactory) openWithProductivePreflight(
 		)
 	}
 
-	padRepositoryAuthority, err := newPADRepositoryAuthorityWithLease(
-		ctx,
-		factory.lease,
-	)
-	if err != nil {
-		return nil, err
+	if factory.padAuthority == nil ||
+		factory.pad == nil ||
+		factory.padDelivery == nil {
+		return nil, errors.New(
+			"production owner coordinator factory lacks PAD composition",
+		)
 	}
-	pad, err := NewPADWorkRunAdapter(padRepositoryAuthority)
-	if err != nil {
+	if _, err := factory.padAuthority.ResolveDeliveryRepository(
+		ctx,
+		factory.RepositoryRef(),
+	); err != nil {
 		return nil, err
 	}
 	rar, err := reviewtransaction.
@@ -362,13 +475,17 @@ func (factory *ProductionOwnerCoordinatorFactory) openWithProductivePreflight(
 	}
 	executor := hostruntime.NewExecutor()
 	return NewOwnerCoordinator(ctx, OwnerCoordinatorDependencies{
-		WorkRun:      work,
-		Coordination: coordination,
-		RAR:          rar,
-		Transitions:  transitions,
-		Evidence:     evidenceStore,
-		Mutations:    mutationStore,
-		PADAuthority: pad,
+		WorkRun:                work,
+		Coordination:           coordination,
+		RAR:                    rar,
+		Transitions:            transitions,
+		Evidence:               evidenceStore,
+		Mutations:              mutationStore,
+		PADAuthority:           factory.pad,
+		PADDelivery:            factory.padDelivery,
+		PADRouteProbe:          factory.padDelivery,
+		PADCandidateCatalog:    factory.candidateStore,
+		PADGitBindingAuthority: factory.bindingSource,
 		SDDAuthority: SDDWorkRunAuthority{
 			Repo: factory.repositoryRoot(),
 		},

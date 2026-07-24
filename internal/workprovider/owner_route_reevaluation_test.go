@@ -1308,6 +1308,7 @@ func ownerCoordinatorWithRouteProbe(
 			Evidence:        fixture.coordinator.evidence,
 			Mutations:       fixture.coordinator.mutations,
 			PADAuthority:    fixture.coordinator.pad,
+			PADDelivery:     fixture.coordinator.padDelivery,
 			PADRouteProbe:   probe,
 			SDDAuthority:    fixture.coordinator.sdd,
 			LaunchAuthority: ownerTestLaunchAuthority{},
