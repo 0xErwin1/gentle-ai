@@ -653,7 +653,11 @@ func validateWindowsUseHandle(
 	}
 	if private {
 		if !privateWindowsUseDescriptorSafe(descriptor, directory) {
-			return windowsUseIdentity{}, fmt.Errorf("%w: Windows authority DACL", ErrUntrustedPreimage)
+			return windowsUseIdentity{}, fmt.Errorf(
+				"%w: Windows authority DACL (%s)",
+				ErrUntrustedPreimage,
+				privateWindowsUseDescriptorDiagnostic(descriptor, directory),
+			)
 		}
 	} else if !currentWindowsSharedUseOwner(descriptor) {
 		return windowsUseIdentity{}, fmt.Errorf("%w: Windows authority owner", ErrUntrustedPreimage)
@@ -821,6 +825,64 @@ func privateWindowsUseDescriptorSafe(
 	return aceSID.IsValid() &&
 		uintptr(ace.Header.AceSize) >= sidOffset+uintptr(aceSID.Len()) &&
 		aceSID.Equals(current)
+}
+
+func privateWindowsUseDescriptorDiagnostic(
+	descriptor *windows.SECURITY_DESCRIPTOR,
+	directory bool,
+) string {
+	if descriptor == nil || !descriptor.IsValid() {
+		return "descriptor=invalid"
+	}
+	ownerCurrent := currentWindowsUseOwner(descriptor)
+	control, _, controlErr := descriptor.Control()
+	dacl, defaulted, daclErr := descriptor.DACL()
+	if controlErr != nil || daclErr != nil || dacl == nil {
+		return fmt.Sprintf(
+			"owner-current=%t control-error=%t dacl-error=%t dacl-present=%t",
+			ownerCurrent,
+			controlErr != nil,
+			daclErr != nil,
+			dacl != nil,
+		)
+	}
+	diagnostic := fmt.Sprintf(
+		"owner-current=%t control=%#x dacl-defaulted=%t ace-count=%d",
+		ownerCurrent,
+		uint16(control),
+		defaulted,
+		dacl.AceCount,
+	)
+	if dacl.AceCount == 0 {
+		return diagnostic
+	}
+	var ace *windows.ACCESS_ALLOWED_ACE
+	if err := windows.GetAce(dacl, 0, &ace); err != nil || ace == nil {
+		return diagnostic + " first-ace=unavailable"
+	}
+	wantFlags := uint8(0)
+	if directory {
+		wantFlags = windows.OBJECT_INHERIT_ACE | windows.CONTAINER_INHERIT_ACE
+	}
+	current, currentErr := currentWindowsUseSID()
+	const sidOffset = unsafe.Offsetof(windows.ACCESS_ALLOWED_ACE{}.SidStart)
+	aceCurrent := false
+	if currentErr == nil &&
+		uintptr(ace.Header.AceSize) >= sidOffset+unsafe.Sizeof(ace.SidStart) {
+		aceSID := (*windows.SID)(unsafe.Pointer(&ace.SidStart))
+		aceCurrent = aceSID.IsValid() &&
+			uintptr(ace.Header.AceSize) >= sidOffset+uintptr(aceSID.Len()) &&
+			aceSID.Equals(current)
+	}
+	return fmt.Sprintf(
+		"%s ace-type=%d ace-flags=%#x want-flags=%#x ace-mask=%#x ace-current=%t",
+		diagnostic,
+		ace.Header.AceType,
+		ace.Header.AceFlags,
+		wantFlags,
+		uint32(ace.Mask),
+		aceCurrent,
+	)
 }
 
 type windowsUseTokenOwner struct {
