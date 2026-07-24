@@ -165,6 +165,112 @@ func TestWindowsUsePrivateOwnerRemainsTokenUserOnly(t *testing.T) {
 	}
 }
 
+func TestProtectWindowsUseHandleRebindsTokenOwnerToTokenUser(t *testing.T) {
+	currentUser, err := currentWindowsUseSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tokenOwner, err := currentWindowsUseTokenOwnerSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tokenOwner.Equals(currentUser) {
+		if os.Getenv("GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER") == "1" {
+			t.Fatal(
+				"release-blocker environment must expose a TokenOwner distinct from TokenUser",
+			)
+		}
+		t.Skip("token owner and token user are identical")
+	}
+
+	parent, err := openAbsoluteWindowsUseDirectory(
+		t.TempDir(),
+		windowsUseDirectoryAccess,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+
+	for _, test := range []struct {
+		name      string
+		directory bool
+	}{
+		{name: "file", directory: false},
+		{name: "directory", directory: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var file *os.File
+			var err error
+			if test.directory {
+				var created bool
+				file, created, err = openOrCreateWindowsUseDirectory(
+					parent,
+					"owner-rebinding-directory",
+					true,
+				)
+				if err == nil && !created {
+					t.Fatal("private directory fixture already existed")
+				}
+			} else {
+				file, err = createPrivateWindowsUseFile(
+					parent,
+					"owner-rebinding-file",
+				)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer file.Close()
+
+			if err := windows.SetSecurityInfo(
+				windows.Handle(file.Fd()),
+				windows.SE_FILE_OBJECT,
+				windows.OWNER_SECURITY_INFORMATION,
+				tokenOwner,
+				nil,
+				nil,
+				nil,
+			); err != nil {
+				t.Fatal(err)
+			}
+			descriptor := windowsUseHandleDescriptor(t, file)
+			owner, _, err := descriptor.Owner()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if owner == nil || !owner.Equals(tokenOwner) {
+				t.Fatal("private fixture owner was not changed to TokenOwner")
+			}
+			if privateWindowsUseDescriptorSafe(descriptor, test.directory) {
+				t.Fatal("TokenOwner fixture was already accepted as PAD-private")
+			}
+			if _, err := validateWindowsUseHandle(
+				file,
+				test.directory,
+				false,
+			); err != nil {
+				t.Fatalf("TokenOwner fixture is not a trusted shared preimage: %v", err)
+			}
+
+			if err := protectWindowsUseHandle(file, test.directory); err != nil {
+				t.Fatal(err)
+			}
+			descriptor = windowsUseHandleDescriptor(t, file)
+			owner, _, err = descriptor.Owner()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if owner == nil || !owner.Equals(currentUser) {
+				t.Fatal("PAD protection did not rebind owner to TokenUser")
+			}
+			if !privateWindowsUseDescriptorSafe(descriptor, test.directory) {
+				t.Fatal("rebound fixture is not protected for TokenUser only")
+			}
+		})
+	}
+}
+
 func TestWindowsUseDirectoryRejectsReparsePoints(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "target")
 	if err := os.Mkdir(target, 0o700); err != nil {
@@ -198,6 +304,28 @@ func windowsUseDescriptorForOwner(
 	}
 	if descriptor == nil || !descriptor.IsValid() {
 		t.Fatal("test security descriptor is invalid")
+	}
+	return descriptor
+}
+
+func windowsUseHandleDescriptor(
+	t *testing.T,
+	file *os.File,
+) *windows.SECURITY_DESCRIPTOR {
+	t.Helper()
+	if file == nil {
+		t.Fatal("test Windows authority handle is nil")
+	}
+	descriptor, err := windows.GetSecurityInfo(
+		windows.Handle(file.Fd()),
+		windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor == nil || !descriptor.IsValid() {
+		t.Fatal("test Windows authority security descriptor is invalid")
 	}
 	return descriptor
 }

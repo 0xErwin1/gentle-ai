@@ -21,11 +21,14 @@ const (
 		windows.READ_CONTROL |
 		windows.WRITE_DAC |
 		windows.SYNCHRONIZE
+	windowsPrivateUseDirectoryAccess = windowsUseDirectoryAccess |
+		windows.WRITE_OWNER
 	windowsUseFileAccess = windows.FILE_GENERIC_READ |
 		windows.FILE_GENERIC_WRITE |
 		windows.DELETE |
 		windows.READ_CONTROL |
 		windows.WRITE_DAC |
+		windows.WRITE_OWNER |
 		windows.SYNCHRONIZE
 	windowsFileCreated = 2
 )
@@ -169,9 +172,13 @@ func openOrCreateWindowsUseDirectory(
 	}
 	var handle windows.Handle
 	var status windows.IO_STATUS_BLOCK
+	access := uint32(windowsUseDirectoryAccess)
+	if private {
+		access = windowsPrivateUseDirectoryAccess
+	}
 	err = windows.NtCreateFile(
 		&handle,
-		windowsUseDirectoryAccess,
+		access,
 		attributes,
 		&status,
 		nil,
@@ -673,11 +680,16 @@ func protectWindowsUseHandle(file *os.File, directory bool) error {
 	if err != nil || dacl == nil {
 		return errors.New("owner-only authorization-use DACL is unavailable")
 	}
+	owner, _, err := descriptor.Owner()
+	if err != nil || owner == nil || !owner.IsValid() {
+		return errors.New("owner-only authorization-use owner is unavailable")
+	}
 	if err := windows.SetSecurityInfo(
 		windows.Handle(file.Fd()),
 		windows.SE_FILE_OBJECT,
-		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
-		nil,
+		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|
+			windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		owner,
 		nil,
 		dacl,
 		nil,

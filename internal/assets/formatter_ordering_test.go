@@ -91,6 +91,47 @@ func TestOrganicRuntimeE2EUsesInstalledOpenCodePin(t *testing.T) {
 	}
 }
 
+func TestWindowsReleaseBlockerCannotSkipOwnerRebinding(t *testing.T) {
+	workflow, err := os.ReadFile(filepath.Join(
+		"..",
+		"..",
+		".github",
+		"workflows",
+		"ci.yml",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		"TestProtectWindowsUseHandleRebindsTokenOwnerToTokenUser",
+		`GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER: "1"`,
+	} {
+		if !strings.Contains(string(workflow), required) {
+			t.Fatalf(
+				"Windows release-blocker workflow missing %q",
+				required,
+			)
+		}
+	}
+
+	testSource, err := os.ReadFile(filepath.Join(
+		"..",
+		"deliveryadmission",
+		"secure_use_windows_test.go",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(
+		string(testSource),
+		`os.Getenv("GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER") == "1"`,
+	) {
+		t.Fatal(
+			"native Windows owner-rebinding test can skip the release precondition",
+		)
+	}
+}
+
 type formatterCandidate struct {
 	path    string
 	mode    string
