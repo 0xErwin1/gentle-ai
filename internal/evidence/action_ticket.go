@@ -17,9 +17,16 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/hostruntime"
 )
 
-const ActionTicketSchema = "gentle-ai.action-ticket/v1"
+const (
+	ActionTicketSchemaV1 = "gentle-ai.action-ticket/v1"
+	ActionTicketSchemaV2 = "gentle-ai.action-ticket/v2"
+	ActionTicketSchema   = ActionTicketSchemaV2
+)
 
-const actionExecutionDomain = "gentle-ai.action-ticket-execution/v1"
+const (
+	actionExecutionDomainV1 = "gentle-ai.action-ticket-execution/v1"
+	actionExecutionDomainV2 = "gentle-ai.action-ticket-execution/v2"
+)
 
 var (
 	sha256RefPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
@@ -44,6 +51,14 @@ type ActionTicketRequest struct {
 	OutputLimits           hostruntime.StreamLimits
 	Capability             string
 	RedactionLiterals      []string
+	// SemanticRequirementRef is an opaque owner-issued definition of what a
+	// successful exit means for this exact candidate and capability. Without
+	// it, a v2 zero exit remains process evidence but cannot become semantic
+	// completion.
+	SemanticRequirementRef string
+	// SemanticAuthority is the public identity of the owner-held authority
+	// allowed to issue a typed verdict for SemanticRequirementRef.
+	SemanticAuthority SemanticAuthorityIdentity
 }
 
 // ActionTicket is the immutable, versioned execution authorization preimage.
@@ -51,24 +66,26 @@ type ActionTicketRequest struct {
 // ambient argv, cwd, or environment. Ticket files are provider-private and
 // stored with owner-only permissions.
 type ActionTicket struct {
-	Schema                 string                     `json:"schema"`
-	TicketRef              string                     `json:"ticketRef"`
-	IssuerRef              string                     `json:"issuerRef"`
-	SubjectRef             string                     `json:"subjectRef"`
-	CandidateRef           string                     `json:"candidateRef"`
-	VerificationContextRef string                     `json:"verificationContextRef"`
-	ExpectedRevision       string                     `json:"expectedRevision"`
-	Slot                   string                     `json:"slot"`
-	ExecutionID            string                     `json:"executionId"`
-	Program                string                     `json:"program"`
-	Args                   []string                   `json:"args"`
-	CWD                    string                     `json:"cwd"`
-	Environment            map[string]string          `json:"environment"`
-	DeadlineNanos          int64                      `json:"deadlineNanos"`
-	OutputLimits           hostruntime.StreamLimits   `json:"outputLimits"`
-	Capability             string                     `json:"capability"`
-	RedactionLiterals      []string                   `json:"redactionLiterals"`
-	RequestBinding         hostruntime.RequestBinding `json:"requestBinding"`
+	Schema                 string                   `json:"schema"`
+	TicketRef              string                   `json:"ticketRef"`
+	IssuerRef              string                   `json:"issuerRef"`
+	SubjectRef             string                   `json:"subjectRef"`
+	CandidateRef           string                   `json:"candidateRef"`
+	VerificationContextRef string                   `json:"verificationContextRef"`
+	ExpectedRevision       string                   `json:"expectedRevision"`
+	Slot                   string                   `json:"slot"`
+	ExecutionID            string                   `json:"executionId"`
+	Program                string                   `json:"program"`
+	Args                   []string                 `json:"args"`
+	CWD                    string                   `json:"cwd"`
+	Environment            map[string]string        `json:"environment"`
+	DeadlineNanos          int64                    `json:"deadlineNanos"`
+	OutputLimits           hostruntime.StreamLimits `json:"outputLimits"`
+	Capability             string                   `json:"capability"`
+	RedactionLiterals      []string                 `json:"redactionLiterals"`
+	SemanticRequirementRef string                   `json:"semanticRequirementRef,omitempty"`
+	SemanticAuthorityIdentity
+	RequestBinding hostruntime.RequestBinding `json:"requestBinding"`
 }
 
 // NewActionTicket issues a deterministic ticket. ExecutionID is derived from
@@ -80,14 +97,16 @@ func NewActionTicket(request ActionTicketRequest) (ActionTicket, error) {
 	request.RedactionLiterals = canonicalRedactions(request.RedactionLiterals)
 
 	ticket := ActionTicket{
-		Schema:    ActionTicketSchema,
+		Schema:    ActionTicketSchemaV2,
 		IssuerRef: request.IssuerRef, SubjectRef: request.SubjectRef,
 		CandidateRef: request.CandidateRef, VerificationContextRef: request.VerificationContextRef,
 		ExpectedRevision: request.ExpectedRevision, Slot: request.Slot,
 		Program: request.Program, Args: request.Args, CWD: request.CWD,
 		Environment: request.Environment, DeadlineNanos: int64(request.Deadline),
 		OutputLimits: request.OutputLimits, Capability: request.Capability,
-		RedactionLiterals: request.RedactionLiterals,
+		RedactionLiterals:         request.RedactionLiterals,
+		SemanticRequirementRef:    request.SemanticRequirementRef,
+		SemanticAuthorityIdentity: request.SemanticAuthority,
 	}
 	if err := ticket.validateInputs(); err != nil {
 		return ActionTicket{}, err
@@ -122,7 +141,18 @@ func NewActionTicket(request ActionTicketRequest) (ActionTicket, error) {
 // Validate proves that every raw ticket input still matches both its HCR
 // request projection and its content identity.
 func (ticket ActionTicket) Validate() error {
-	if ticket.Schema != ActionTicketSchema {
+	switch ticket.Schema {
+	case ActionTicketSchemaV1:
+		if ticket.SemanticRequirementRef != "" ||
+			!ticket.SemanticAuthorityIdentity.IsZero() ||
+			ticket.RequestBinding.Schema != hostruntime.RequestBindingSchemaV1 {
+			return errors.New("legacy action ticket carries v2 semantic bindings")
+		}
+	case ActionTicketSchemaV2:
+		if ticket.RequestBinding.Schema != hostruntime.RequestBindingSchemaV2 {
+			return errors.New("v2 action ticket is missing its host request binding")
+		}
+	default:
 		return errors.New("unsupported action ticket schema")
 	}
 	if err := ticket.validateInputs(); err != nil {
@@ -135,12 +165,11 @@ func (ticket ActionTicket) Validate() error {
 	if ticket.ExecutionID != "evidence-"+strings.TrimPrefix(executionDigest, "sha256:") {
 		return errors.New("action ticket execution ID does not bind its exact subject and request")
 	}
-	binding, err := hostruntime.BindExecStep(ticket.execStep())
-	if err != nil {
-		return fmt.Errorf("bind action ticket host request: %w", err)
-	}
-	if ticket.RequestBinding != binding {
-		return errors.New("action ticket request binding does not match its exact execution inputs")
+	if err := hostruntime.ValidateBoundExecStep(
+		ticket.execStep(),
+		ticket.RequestBinding,
+	); err != nil {
+		return fmt.Errorf("validate action ticket host request binding: %w", err)
 	}
 	want, err := actionTicketDigest(ticket)
 	if err != nil {
@@ -199,6 +228,20 @@ func (ticket ActionTicket) validateInputs() error {
 	if !validCanonicalID(ticket.Capability) {
 		return errors.New("action ticket capability must be a canonical identifier")
 	}
+	if ticket.SemanticRequirementRef != "" &&
+		!validSHA256Ref(ticket.SemanticRequirementRef) {
+		return errors.New("action ticket semantic requirement must be a lowercase SHA-256 reference")
+	}
+	if ticket.SemanticRequirementRef == "" {
+		if !ticket.SemanticAuthorityIdentity.IsZero() {
+			return errors.New("action ticket semantic authority has no requirement")
+		}
+	} else if err := ticket.SemanticAuthorityIdentity.validateFor(
+		ticket.IssuerRef,
+		ticket.SemanticRequirementRef,
+	); err != nil {
+		return err
+	}
 	if ticket.Program == "" || !filepath.IsAbs(ticket.Program) || filepath.Clean(ticket.Program) != ticket.Program {
 		return errors.New("action ticket program must be an absolute canonical path")
 	}
@@ -253,7 +296,7 @@ func (ticket ActionTicket) validateInputs() error {
 }
 
 func (ticket ActionTicket) execStep() hostruntime.ExecStep {
-	return hostruntime.ExecStep{
+	step := hostruntime.ExecStep{
 		ExecutionID: ticket.ExecutionID,
 		Program:     ticket.Program,
 		Args:        append([]string{}, ticket.Args...),
@@ -264,10 +307,47 @@ func (ticket ActionTicket) execStep() hostruntime.ExecStep {
 		Redaction: hostruntime.RedactionPlan{
 			Literals: append([]string{}, ticket.RedactionLiterals...),
 		},
+		SemanticRequirementRef: ticket.SemanticRequirementRef,
 	}
+	if ticket.Schema == ActionTicketSchemaV1 {
+		step.EvidenceVersion = 1
+	} else {
+		step.EvidenceVersion = 2
+		step.ToolchainIdentity = ticket.RequestBinding.ToolchainIdentity
+	}
+	return step
 }
 
 func actionTicketExecutionDigest(ticket ActionTicket) (string, error) {
+	if ticket.Schema == ActionTicketSchemaV1 {
+		preimage := struct {
+			Domain                 string                   `json:"domain"`
+			IssuerRef              string                   `json:"issuerRef"`
+			SubjectRef             string                   `json:"subjectRef"`
+			CandidateRef           string                   `json:"candidateRef"`
+			VerificationContextRef string                   `json:"verificationContextRef"`
+			ExpectedRevision       string                   `json:"expectedRevision"`
+			Slot                   string                   `json:"slot"`
+			Program                string                   `json:"program"`
+			Args                   []string                 `json:"args"`
+			CWD                    string                   `json:"cwd"`
+			Environment            map[string]string        `json:"environment"`
+			DeadlineNanos          int64                    `json:"deadlineNanos"`
+			OutputLimits           hostruntime.StreamLimits `json:"outputLimits"`
+			Capability             string                   `json:"capability"`
+			RedactionLiterals      []string                 `json:"redactionLiterals"`
+		}{
+			Domain: actionExecutionDomainV1, IssuerRef: ticket.IssuerRef,
+			SubjectRef: ticket.SubjectRef, CandidateRef: ticket.CandidateRef,
+			VerificationContextRef: ticket.VerificationContextRef,
+			ExpectedRevision:       ticket.ExpectedRevision, Slot: ticket.Slot,
+			Program: ticket.Program, Args: ticket.Args, CWD: ticket.CWD,
+			Environment: ticket.Environment, DeadlineNanos: ticket.DeadlineNanos,
+			OutputLimits: ticket.OutputLimits, Capability: ticket.Capability,
+			RedactionLiterals: ticket.RedactionLiterals,
+		}
+		return digestJSON(preimage)
+	}
 	preimage := struct {
 		Domain                 string                   `json:"domain"`
 		IssuerRef              string                   `json:"issuerRef"`
@@ -284,15 +364,19 @@ func actionTicketExecutionDigest(ticket ActionTicket) (string, error) {
 		OutputLimits           hostruntime.StreamLimits `json:"outputLimits"`
 		Capability             string                   `json:"capability"`
 		RedactionLiterals      []string                 `json:"redactionLiterals"`
+		SemanticRequirementRef string                   `json:"semanticRequirementRef"`
+		SemanticAuthorityRef   string                   `json:"semanticAuthorityRef"`
 	}{
-		Domain: actionExecutionDomain, IssuerRef: ticket.IssuerRef,
+		Domain: actionExecutionDomainV2, IssuerRef: ticket.IssuerRef,
 		SubjectRef: ticket.SubjectRef, CandidateRef: ticket.CandidateRef,
 		VerificationContextRef: ticket.VerificationContextRef,
 		ExpectedRevision:       ticket.ExpectedRevision, Slot: ticket.Slot,
 		Program: ticket.Program, Args: ticket.Args, CWD: ticket.CWD,
 		Environment: ticket.Environment, DeadlineNanos: ticket.DeadlineNanos,
 		OutputLimits: ticket.OutputLimits, Capability: ticket.Capability,
-		RedactionLiterals: ticket.RedactionLiterals,
+		RedactionLiterals:      ticket.RedactionLiterals,
+		SemanticRequirementRef: ticket.SemanticRequirementRef,
+		SemanticAuthorityRef:   ticket.SemanticAuthorityRef,
 	}
 	return digestJSON(preimage)
 }

@@ -9,7 +9,11 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/hostruntime"
 )
 
-const ExecutionEvidenceSchema = "gentle-ai.execution-evidence/v1"
+const (
+	ExecutionEvidenceSchemaV1 = "gentle-ai.execution-evidence/v1"
+	ExecutionEvidenceSchemaV2 = "gentle-ai.execution-evidence/v2"
+	ExecutionEvidenceSchema   = ExecutionEvidenceSchemaV2
+)
 
 type ExecutionOutcome string
 
@@ -42,29 +46,50 @@ func (err *AdmissionError) Error() string {
 }
 
 // ExecutionEvidence is the immutable EPD envelope for one exact ActionTicket.
-// A failed command is coherent evidence, but only an untruncated zero exit with
-// complete cleanup is complete. Every other terminal cause is incomplete.
+// A failed command is coherent process evidence. In v2, even an untruncated
+// zero exit is incomplete until a signed owner semantic verdict is admitted.
 type ExecutionEvidence struct {
-	Schema                 string                      `json:"schema"`
-	EvidenceRef            string                      `json:"evidenceRef"`
-	TicketRef              string                      `json:"ticketRef"`
-	SlotBindingRef         string                      `json:"slotBindingRef"`
-	IssuerRef              string                      `json:"issuerRef"`
-	SubjectRef             string                      `json:"subjectRef"`
-	CandidateRef           string                      `json:"candidateRef"`
-	VerificationContextRef string                      `json:"verificationContextRef"`
-	ExpectedRevision       string                      `json:"expectedRevision"`
-	Slot                   string                      `json:"slot"`
-	Capability             string                      `json:"capability"`
-	RequestBinding         hostruntime.RequestBinding  `json:"requestBinding"`
-	Process                hostruntime.ProcessEvidence `json:"process"`
-	Outcome                ExecutionOutcome            `json:"outcome"`
-	admissionSeal          [sha256.Size]byte
+	Schema                 string `json:"schema"`
+	EvidenceRef            string `json:"evidenceRef"`
+	TicketRef              string `json:"ticketRef"`
+	SlotBindingRef         string `json:"slotBindingRef"`
+	IssuerRef              string `json:"issuerRef"`
+	SubjectRef             string `json:"subjectRef"`
+	CandidateRef           string `json:"candidateRef"`
+	VerificationContextRef string `json:"verificationContextRef"`
+	ExpectedRevision       string `json:"expectedRevision"`
+	Slot                   string `json:"slot"`
+	Capability             string `json:"capability"`
+	SemanticAuthorityIdentity
+	RequestBinding hostruntime.RequestBinding  `json:"requestBinding"`
+	Process        hostruntime.ProcessEvidence `json:"process"`
+	Outcome        ExecutionOutcome            `json:"outcome"`
+	SemanticProof  *SemanticVerdict            `json:"semanticProof,omitempty"`
+	admissionSeal  [sha256.Size]byte
 }
 
 // AdmitExecution validates the HCR-owned process facts against the exact
 // provider-issued ticket and derives the only allowed monotonic outcome.
 func AdmitExecution(ticket ActionTicket, process hostruntime.ProcessEvidence) (ExecutionEvidence, error) {
+	return admitExecution(ticket, process, nil)
+}
+
+// AdmitExecutionWithSemanticVerdict is the only v2 path to semantic
+// completion. The signed owner verdict is validated against the exact HCR
+// process facts; stdout text and exit status never mint it implicitly.
+func AdmitExecutionWithSemanticVerdict(
+	ticket ActionTicket,
+	process hostruntime.ProcessEvidence,
+	verdict SemanticVerdict,
+) (ExecutionEvidence, error) {
+	return admitExecution(ticket, process, &verdict)
+}
+
+func admitExecution(
+	ticket ActionTicket,
+	process hostruntime.ProcessEvidence,
+	verdict *SemanticVerdict,
+) (ExecutionEvidence, error) {
 	if err := ticket.Validate(); err != nil {
 		return ExecutionEvidence{}, &AdmissionError{Code: AdmissionInvalidTicket, Field: "ticket"}
 	}
@@ -78,15 +103,31 @@ func AdmitExecution(ticket ActionTicket, process hostruntime.ProcessEvidence) (E
 	if err != nil {
 		return ExecutionEvidence{}, &AdmissionError{Code: AdmissionInvalidTicket, Field: "slotBinding"}
 	}
+	schema := ExecutionEvidenceSchemaV2
+	if ticket.Schema == ActionTicketSchemaV1 {
+		schema = ExecutionEvidenceSchemaV1
+	}
 	envelope := ExecutionEvidence{
-		Schema: ExecutionEvidenceSchema, TicketRef: ticket.TicketRef,
+		Schema: schema, TicketRef: ticket.TicketRef,
 		SlotBindingRef: slotBinding, IssuerRef: ticket.IssuerRef,
 		SubjectRef: ticket.SubjectRef, CandidateRef: ticket.CandidateRef,
 		VerificationContextRef: ticket.VerificationContextRef,
 		ExpectedRevision:       ticket.ExpectedRevision, Slot: ticket.Slot,
 		Capability: ticket.Capability, RequestBinding: ticket.RequestBinding,
-		Process: process, Outcome: executionOutcome(process),
+		Process:                   process,
+		SemanticAuthorityIdentity: ticket.SemanticAuthorityIdentity,
 	}
+	if verdict != nil {
+		if ticket.Schema != ActionTicketSchemaV2 ||
+			verdict.ValidateFor(ticket, process) != nil {
+			return ExecutionEvidence{}, &AdmissionError{
+				Code: AdmissionInvalidEvidence, Field: "semanticVerdict",
+			}
+		}
+		copied := *verdict
+		envelope.SemanticProof = &copied
+	}
+	envelope.Outcome = executionOutcome(envelope.Schema, process, envelope.SemanticProof)
 	envelope.EvidenceRef, err = executionEvidenceDigest(envelope)
 	if err != nil {
 		return ExecutionEvidence{}, &AdmissionError{Code: AdmissionInvalidEvidence, Field: "canonical"}
@@ -112,7 +153,28 @@ func (evidence ExecutionEvidence) Validate() error {
 }
 
 func (evidence ExecutionEvidence) validateStored() error {
-	if evidence.Schema != ExecutionEvidenceSchema {
+	switch evidence.Schema {
+	case ExecutionEvidenceSchemaV1:
+		if evidence.Process.SchemaVersion != 1 ||
+			!evidence.SemanticAuthorityIdentity.IsZero() ||
+			evidence.SemanticProof != nil {
+			return errors.New("legacy execution evidence carries v2 semantic bindings")
+		}
+	case ExecutionEvidenceSchemaV2:
+		if evidence.Process.SchemaVersion != 2 {
+			return errors.New("v2 execution evidence requires v2 host process evidence")
+		}
+		if evidence.Process.SemanticRequirementRef == "" {
+			if !evidence.SemanticAuthorityIdentity.IsZero() {
+				return errors.New("v2 execution evidence carries a semantic authority without a requirement")
+			}
+		} else if err := evidence.SemanticAuthorityIdentity.validateFor(
+			evidence.IssuerRef,
+			evidence.Process.SemanticRequirementRef,
+		); err != nil {
+			return err
+		}
+	default:
 		return errors.New("unsupported execution evidence schema")
 	}
 	for name, ref := range map[string]string{
@@ -132,7 +194,14 @@ func (evidence ExecutionEvidence) validateStored() error {
 	if err := evidence.RequestBinding.ValidateProcessEvidenceRecord(evidence.Process); err != nil {
 		return err
 	}
-	if evidence.Outcome != executionOutcome(evidence.Process) {
+	if err := validateSemanticProofForEvidence(evidence); err != nil {
+		return err
+	}
+	if evidence.Outcome != executionOutcome(
+		evidence.Schema,
+		evidence.Process,
+		evidence.SemanticProof,
+	) {
 		return errors.New("execution evidence outcome does not match terminal process facts")
 	}
 	want, err := executionEvidenceDigest(evidence)
@@ -174,22 +243,54 @@ func (evidence ExecutionEvidence) validateStoredFor(ticket ActionTicket) error {
 		evidence.ExpectedRevision != ticket.ExpectedRevision ||
 		evidence.Slot != ticket.Slot ||
 		evidence.Capability != ticket.Capability ||
+		evidence.SemanticAuthorityIdentity != ticket.SemanticAuthorityIdentity ||
 		evidence.RequestBinding != ticket.RequestBinding {
 		return errors.New("execution evidence does not bind the exact action ticket")
+	}
+	if ticket.Schema == ActionTicketSchemaV1 &&
+		evidence.Schema != ExecutionEvidenceSchemaV1 ||
+		ticket.Schema == ActionTicketSchemaV2 &&
+			evidence.Schema != ExecutionEvidenceSchemaV2 {
+		return errors.New("execution evidence schema does not match its action ticket")
 	}
 	return nil
 }
 
-func executionOutcome(process hostruntime.ProcessEvidence) ExecutionOutcome {
+func executionOutcome(
+	schema string,
+	process hostruntime.ProcessEvidence,
+	proof *SemanticVerdict,
+) ExecutionOutcome {
 	if process.TerminalCause != hostruntime.TerminalExited ||
 		!process.CleanupComplete ||
 		process.Stdout.Truncated || process.Stderr.Truncated {
 		return ExecutionIncomplete
 	}
 	if process.ExitCode == 0 {
-		return ExecutionComplete
+		if schema == ExecutionEvidenceSchemaV1 {
+			return ExecutionComplete
+		}
+		if proof != nil {
+			return ExecutionComplete
+		}
+		return ExecutionIncomplete
 	}
 	return ExecutionFailed
+}
+
+func validateSemanticProofForEvidence(evidence ExecutionEvidence) error {
+	if evidence.SemanticProof == nil {
+		return nil
+	}
+	proof := *evidence.SemanticProof
+	ticketProjection := ActionTicket{
+		Schema:                    ActionTicketSchemaV2,
+		IssuerRef:                 evidence.IssuerRef,
+		CandidateRef:              evidence.CandidateRef,
+		SemanticRequirementRef:    evidence.Process.SemanticRequirementRef,
+		SemanticAuthorityIdentity: evidence.SemanticAuthorityIdentity,
+	}
+	return proof.validateStoredFor(ticketProjection, evidence.Process)
 }
 
 func executionEvidenceDigest(evidence ExecutionEvidence) (string, error) {
@@ -204,5 +305,9 @@ func sealExecutionEvidence(evidence ExecutionEvidence) ExecutionEvidence {
 }
 
 func executionAdmissionSeal(evidence ExecutionEvidence) [sha256.Size]byte {
-	return sha256.Sum256([]byte("gentle-ai.execution-evidence-admission/v1\x00" + evidence.EvidenceRef))
+	domain := "gentle-ai.execution-evidence-admission/v2\x00"
+	if evidence.Schema == ExecutionEvidenceSchemaV1 {
+		domain = "gentle-ai.execution-evidence-admission/v1\x00"
+	}
+	return sha256.Sum256([]byte(domain + evidence.EvidenceRef))
 }

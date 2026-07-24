@@ -259,6 +259,24 @@ func (store Store) ReadDiagnostic(diagnosticRef string) (Diagnostic, error) {
 // envelope. Production callers should PutTicket before launching HCR; this
 // helper still requires that ticket to exist and never starts a process.
 func (store Store) AdmitAndStore(ticket ActionTicket, process hostruntime.ProcessEvidence) (ExecutionEvidence, error) {
+	return store.admitAndStore(ticket, process, nil)
+}
+
+// AdmitAndStoreWithSemanticVerdict publishes semantic completion only after
+// EPD validates an explicit signed owner verdict for the exact HCR result.
+func (store Store) AdmitAndStoreWithSemanticVerdict(
+	ticket ActionTicket,
+	process hostruntime.ProcessEvidence,
+	verdict SemanticVerdict,
+) (ExecutionEvidence, error) {
+	return store.admitAndStore(ticket, process, &verdict)
+}
+
+func (store Store) admitAndStore(
+	ticket ActionTicket,
+	process hostruntime.ProcessEvidence,
+	verdict *SemanticVerdict,
+) (ExecutionEvidence, error) {
 	stored, err := store.ReadTicket(ticket.TicketRef)
 	if err != nil {
 		return ExecutionEvidence{}, err
@@ -266,7 +284,16 @@ func (store Store) AdmitAndStore(ticket ActionTicket, process hostruntime.Proces
 	if stored.TicketRef != ticket.TicketRef {
 		return ExecutionEvidence{}, &CorruptionError{Artifact: "action_ticket"}
 	}
-	evidence, err := AdmitExecution(ticket, process)
+	var evidence ExecutionEvidence
+	if verdict == nil {
+		evidence, err = AdmitExecution(ticket, process)
+	} else {
+		evidence, err = AdmitExecutionWithSemanticVerdict(
+			ticket,
+			process,
+			*verdict,
+		)
+	}
 	if err != nil {
 		return ExecutionEvidence{}, err
 	}

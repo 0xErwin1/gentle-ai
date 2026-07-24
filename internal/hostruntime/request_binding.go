@@ -11,42 +11,92 @@ import (
 	"time"
 )
 
-const RequestBindingSchema = "gentle-ai.host-request-binding/v1"
+const (
+	RequestBindingSchemaV1 = "gentle-ai.host-request-binding/v1"
+	RequestBindingSchemaV2 = "gentle-ai.host-request-binding/v2"
+	RequestBindingSchema   = RequestBindingSchemaV2
+)
 
 // RequestBinding is the non-secret, immutable projection of one validated
 // ExecStep. Consumers can compare ProcessEvidence with the exact request HCR
 // accepted without reproducing HCR's canonicalization or digest preimages.
 type RequestBinding struct {
-	Schema            string `json:"schema"`
-	ExecutionID       string `json:"executionId"`
-	RequestDigest     string `json:"requestDigest"`
-	ProgramDigest     string `json:"programDigest"`
-	ArgvDigest        string `json:"argvDigest"`
-	CWDDigest         string `json:"cwdDigest"`
-	EnvironmentDigest string `json:"environmentDigest"`
+	Schema                 string `json:"schema"`
+	ExecutionID            string `json:"executionId"`
+	RequestDigest          string `json:"requestDigest"`
+	ProgramDigest          string `json:"programDigest"`
+	ArgvDigest             string `json:"argvDigest"`
+	CWDDigest              string `json:"cwdDigest"`
+	EnvironmentDigest      string `json:"environmentDigest"`
+	SemanticRequirementRef string `json:"semanticRequirementRef,omitempty"`
+	ToolchainIdentity
 }
 
 // BindExecStep validates and canonicalizes step through the same boundary used
 // by Executor.Execute, then returns only its non-secret request identities.
 func BindExecStep(step ExecStep) (RequestBinding, error) {
-	canonical, err := validateStep(step)
+	_, binding, err := prepareRequest(step)
 	if err != nil {
 		return RequestBinding{}, err
 	}
-	return requestBindingForCanonical(canonical), nil
+	return binding, nil
+}
+
+// ValidateBoundExecStep proves that an already owner-observed binding is the
+// exact projection of step without re-reading ambient toolchain state.
+func ValidateBoundExecStep(step ExecStep, binding RequestBinding) error {
+	canonical, err := validateStep(step)
+	if err != nil {
+		return err
+	}
+	if canonical.EvidenceVersion == 2 && canonical.ToolchainIdentity.IsZero() {
+		return errors.New("host request binding is missing its owner-observed toolchain identity")
+	}
+	want := requestBindingForCanonical(canonical)
+	if binding != want {
+		return errors.New("host request binding does not match the exact execution inputs")
+	}
+	return nil
+}
+
+func prepareRequest(step ExecStep) (ExecStep, RequestBinding, error) {
+	canonical, err := validateStep(step)
+	if err != nil {
+		return ExecStep{}, RequestBinding{}, err
+	}
+	if canonical.EvidenceVersion == 1 {
+		return canonical, requestBindingForCanonical(canonical), nil
+	}
+	observed, err := ObserveToolchainIdentity(canonical.Program)
+	if err != nil {
+		return ExecStep{}, RequestBinding{}, err
+	}
+	if !canonical.ToolchainIdentity.IsZero() &&
+		canonical.ToolchainIdentity != observed {
+		return ExecStep{}, RequestBinding{}, ErrToolchainIdentityChanged
+	}
+	canonical.ToolchainIdentity = observed
+	return canonical, requestBindingForCanonical(canonical), nil
 }
 
 func requestBindingForCanonical(canonical ExecStep) RequestBinding {
 	evidence := newProcessEvidence(canonical)
-	return RequestBinding{
-		Schema:            RequestBindingSchema,
-		ExecutionID:       evidence.ExecutionID,
-		RequestDigest:     evidence.RequestDigest,
-		ProgramDigest:     evidence.ProgramDigest,
-		ArgvDigest:        evidence.ArgvDigest,
-		CWDDigest:         evidence.CWDDigest,
-		EnvironmentDigest: evidence.EnvironmentDigest,
+	binding := RequestBinding{
+		Schema:                 RequestBindingSchemaV2,
+		ExecutionID:            evidence.ExecutionID,
+		RequestDigest:          evidence.RequestDigest,
+		ProgramDigest:          evidence.ProgramDigest,
+		ArgvDigest:             evidence.ArgvDigest,
+		CWDDigest:              evidence.CWDDigest,
+		EnvironmentDigest:      evidence.EnvironmentDigest,
+		SemanticRequirementRef: evidence.SemanticRequirementRef,
 	}
+	if canonical.EvidenceVersion == 1 {
+		binding.Schema = RequestBindingSchemaV1
+	} else {
+		binding.ToolchainIdentity = evidence.ToolchainIdentity
+	}
+	return binding
 }
 
 // ValidateProcessEvidence confirms that evidence was produced for exactly this
@@ -61,18 +111,38 @@ func (binding RequestBinding) ValidateProcessEvidence(evidence ProcessEvidence) 
 // ValidateProcessEvidenceRecord validates the durable, non-secret structure
 // and exact request identities without claiming live HCR provenance.
 func (binding RequestBinding) ValidateProcessEvidenceRecord(evidence ProcessEvidence) error {
-	if binding.Schema != RequestBindingSchema {
-		return errors.New("unsupported host request binding schema")
-	}
-	if evidence.SchemaName != "gentle-ai.host-process-evidence" || evidence.SchemaVersion != 1 {
+	if evidence.SchemaName != "gentle-ai.host-process-evidence" {
 		return errors.New("unsupported host process evidence schema")
+	}
+	switch binding.Schema {
+	case RequestBindingSchemaV1:
+		if evidence.SchemaVersion != 1 ||
+			binding.SemanticRequirementRef != "" ||
+			!binding.ToolchainIdentity.IsZero() {
+			return errors.New("unsupported host request binding schema")
+		}
+	case RequestBindingSchemaV2:
+		if evidence.SchemaVersion != 2 {
+			return errors.New("unsupported host request binding schema")
+		}
+		if err := binding.ToolchainIdentity.Validate(); err != nil {
+			return err
+		}
+		if binding.SemanticRequirementRef != "" &&
+			!validEvidenceDigest(binding.SemanticRequirementRef) {
+			return errors.New("host request semantic requirement is invalid")
+		}
+	default:
+		return errors.New("unsupported host request binding schema")
 	}
 	if evidence.ExecutionID != binding.ExecutionID ||
 		evidence.RequestDigest != binding.RequestDigest ||
 		evidence.ProgramDigest != binding.ProgramDigest ||
 		evidence.ArgvDigest != binding.ArgvDigest ||
 		evidence.CWDDigest != binding.CWDDigest ||
-		evidence.EnvironmentDigest != binding.EnvironmentDigest {
+		evidence.EnvironmentDigest != binding.EnvironmentDigest ||
+		evidence.SemanticRequirementRef != binding.SemanticRequirementRef ||
+		evidence.ToolchainIdentity != binding.ToolchainIdentity {
 		return errors.New("host process evidence does not match the exact request binding")
 	}
 	return ValidateProcessEvidenceRecord(evidence)
@@ -95,7 +165,24 @@ func ValidateProcessEvidence(evidence ProcessEvidence) error {
 // ValidateProcessEvidenceRecord validates durable structural invariants only.
 // It never proves that the value was returned by a live HCR execution.
 func ValidateProcessEvidenceRecord(evidence ProcessEvidence) error {
-	if evidence.SchemaName != "gentle-ai.host-process-evidence" || evidence.SchemaVersion != 1 {
+	if evidence.SchemaName != "gentle-ai.host-process-evidence" {
+		return errors.New("unsupported host process evidence schema")
+	}
+	switch evidence.SchemaVersion {
+	case 1:
+		if evidence.SemanticRequirementRef != "" ||
+			!evidence.ToolchainIdentity.IsZero() {
+			return errors.New("legacy host process evidence carries v2 bindings")
+		}
+	case 2:
+		if evidence.SemanticRequirementRef != "" &&
+			!validEvidenceDigest(evidence.SemanticRequirementRef) {
+			return errors.New("host process semantic requirement is invalid")
+		}
+		if err := evidence.ToolchainIdentity.Validate(); err != nil {
+			return err
+		}
+	default:
 		return errors.New("unsupported host process evidence schema")
 	}
 	if evidence.ExecutionID == "" || !validEvidenceDigest(evidence.RequestDigest) ||
@@ -132,6 +219,20 @@ func ValidateProcessEvidenceRecord(evidence ProcessEvidence) error {
 		if evidence.CleanupComplete {
 			return errors.New("cleanup-failed host process evidence is incoherent")
 		}
+	case TerminalToolchainChanged:
+		if evidence.SchemaVersion != 2 {
+			return errors.New("legacy host process evidence cannot report toolchain change")
+		}
+		switch evidence.CleanupScope {
+		case "not_started":
+			if !evidence.CleanupComplete || evidence.ExitCode != -1 ||
+				evidence.Stdout.RawBytes != 0 || evidence.Stderr.RawBytes != 0 {
+				return errors.New("pre-start toolchain-change evidence is incoherent")
+			}
+		case "process_group", "job_object":
+		default:
+			return errors.New("toolchain-change cleanup scope is invalid")
+		}
 	case TerminalDeadlineExceeded, TerminalCancelled, TerminalSpawnFailed, TerminalControlFailed:
 	default:
 		return errors.New("host process evidence terminal cause is invalid")
@@ -150,7 +251,11 @@ func sealProcessEvidence(evidence ProcessEvidence) ProcessEvidence {
 
 func processEvidenceProvenance(evidence ProcessEvidence) [sha256.Size]byte {
 	hash := sha256.New()
-	writeValue(hash, "gentle-ai.host-process-evidence-provenance/v1")
+	domain := "gentle-ai.host-process-evidence-provenance/v2"
+	if evidence.SchemaVersion == 1 {
+		domain = "gentle-ai.host-process-evidence-provenance/v1"
+	}
+	writeValue(hash, domain)
 	writeValue(hash, evidence.SchemaName)
 	writeValue(hash, strconv.Itoa(evidence.SchemaVersion))
 	writeValue(hash, evidence.ExecutionID)
@@ -167,6 +272,15 @@ func processEvidenceProvenance(evidence ProcessEvidence) [sha256.Size]byte {
 	writeStreamEvidence(hash, evidence.Stderr)
 	writeValue(hash, evidence.CleanupScope)
 	writeValue(hash, strconv.FormatBool(evidence.CleanupComplete))
+	if evidence.SchemaVersion == 2 {
+		writeValue(hash, evidence.SemanticRequirementRef)
+		writeValue(hash, evidence.ToolchainIdentitySchema)
+		writeValue(hash, evidence.ToolchainIdentityRef)
+		writeValue(hash, string(evidence.ToolchainState))
+		writeValue(hash, evidence.ToolchainProgramDigest)
+		writeValue(hash, evidence.ToolchainContentDigest)
+		writeValue(hash, strconv.FormatInt(evidence.ToolchainBytes, 10))
+	}
 	var seal [sha256.Size]byte
 	copy(seal[:], hash.Sum(nil))
 	return seal

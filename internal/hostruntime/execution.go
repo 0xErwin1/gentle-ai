@@ -17,7 +17,10 @@ import (
 	"time"
 )
 
-const requestDomain = "gentle-ai.host-runtime-request/v1"
+const (
+	requestDomainV1 = "gentle-ai.host-runtime-request/v1"
+	requestDomainV2 = "gentle-ai.host-runtime-request/v2"
+)
 
 const (
 	MaxRetainedStreamBytes = 4 << 20
@@ -34,6 +37,7 @@ const (
 	TerminalControlFailed    TerminalCause = "control_failed"
 	TerminalOutputTruncated  TerminalCause = "output_truncated"
 	TerminalCleanupFailed    TerminalCause = "cleanup_failed"
+	TerminalToolchainChanged TerminalCause = "toolchain_changed"
 )
 
 type StreamLimits struct {
@@ -54,6 +58,11 @@ type ExecStep struct {
 	Deadline    time.Duration     `json:"-"`
 	Limits      StreamLimits      `json:"limits"`
 	Redaction   RedactionPlan     `json:"-"`
+	// EvidenceVersion is provider-private compatibility metadata. Zero selects
+	// the current v2 request/evidence contract; persisted v1 tickets set 1.
+	EvidenceVersion        int    `json:"-"`
+	SemanticRequirementRef string `json:"-"`
+	ToolchainIdentity
 }
 
 type StreamEvidence struct {
@@ -65,23 +74,25 @@ type StreamEvidence struct {
 }
 
 type ProcessEvidence struct {
-	SchemaName        string         `json:"schemaName"`
-	SchemaVersion     int            `json:"schemaVersion"`
-	ExecutionID       string         `json:"executionId"`
-	RequestDigest     string         `json:"requestDigest"`
-	ProgramDigest     string         `json:"programDigest"`
-	ArgvDigest        string         `json:"argvDigest"`
-	CWDDigest         string         `json:"cwdDigest"`
-	EnvironmentDigest string         `json:"environmentDigest"`
-	StartedAt         time.Time      `json:"startedAt"`
-	FinishedAt        time.Time      `json:"finishedAt"`
-	TerminalCause     TerminalCause  `json:"terminalCause"`
-	ExitCode          int            `json:"exitCode"`
-	Stdout            StreamEvidence `json:"stdout"`
-	Stderr            StreamEvidence `json:"stderr"`
-	CleanupScope      string         `json:"cleanupScope"`
-	CleanupComplete   bool           `json:"cleanupComplete"`
-	provenanceSeal    [sha256.Size]byte
+	SchemaName             string         `json:"schemaName"`
+	SchemaVersion          int            `json:"schemaVersion"`
+	ExecutionID            string         `json:"executionId"`
+	RequestDigest          string         `json:"requestDigest"`
+	ProgramDigest          string         `json:"programDigest"`
+	ArgvDigest             string         `json:"argvDigest"`
+	CWDDigest              string         `json:"cwdDigest"`
+	EnvironmentDigest      string         `json:"environmentDigest"`
+	StartedAt              time.Time      `json:"startedAt"`
+	FinishedAt             time.Time      `json:"finishedAt"`
+	TerminalCause          TerminalCause  `json:"terminalCause"`
+	ExitCode               int            `json:"exitCode"`
+	Stdout                 StreamEvidence `json:"stdout"`
+	Stderr                 StreamEvidence `json:"stderr"`
+	CleanupScope           string         `json:"cleanupScope"`
+	CleanupComplete        bool           `json:"cleanupComplete"`
+	SemanticRequirementRef string         `json:"semanticRequirementRef,omitempty"`
+	ToolchainIdentity
+	provenanceSeal [sha256.Size]byte
 }
 
 type ValidationError struct {
@@ -105,6 +116,16 @@ type Executor struct {
 	now         func() time.Time
 	launchKey   [sha256.Size]byte
 	launchReady bool
+	testHooks   executorTestHooks
+}
+
+// executorTestHooks opens deterministic race windows to package tests without
+// exposing production bypasses. Production executors always leave every hook
+// nil.
+type executorTestHooks struct {
+	beforeFinalPreStartObservation func()
+	afterFinalPreStartObservation  func()
+	beforeFinalEvidenceObservation func()
 }
 
 func NewExecutor() *Executor {
@@ -124,11 +145,10 @@ func (executor *Executor) ExecuteAuthorized(
 	step ExecStep,
 	capability *LaunchCapability,
 ) (ProcessEvidence, error) {
-	canonical, err := validateStep(step)
+	canonical, binding, err := prepareRequest(step)
 	if err != nil {
 		return ProcessEvidence{}, err
 	}
-	binding := requestBindingForCanonical(canonical)
 	if executor == nil || !executor.launchReady {
 		return ProcessEvidence{}, errors.New("host runtime executor launch authority is not initialized")
 	}
@@ -141,7 +161,7 @@ func (executor *Executor) ExecuteAuthorized(
 // execute is deliberately package-private. HCR's own tests exercise terminal
 // process behavior through it; provider code must use ExecuteAuthorized.
 func (executor *Executor) execute(ctx context.Context, step ExecStep) (ProcessEvidence, error) {
-	canonical, err := validateStep(step)
+	canonical, _, err := prepareRequest(step)
 	if err != nil {
 		return ProcessEvidence{}, err
 	}
@@ -188,6 +208,23 @@ func (executor *Executor) executeCanonical(
 	command.Stderr = stderr
 
 	evidence.StartedAt = executor.now()
+	if hook := executor.testHooks.beforeFinalPreStartObservation; hook != nil {
+		hook()
+	}
+	if !toolchainIdentityUnchanged(canonical) {
+		evidence.FinishedAt = executor.now()
+		evidence.TerminalCause = TerminalToolchainChanged
+		evidence.CleanupScope = "not_started"
+		evidence.CleanupComplete = true
+		evidence.Stdout = stdout.Evidence()
+		evidence.Stderr = stderr.Evidence()
+		return sealProcessEvidence(evidence), &ExecutionError{
+			Kind: TerminalToolchainChanged,
+		}
+	}
+	if hook := executor.testHooks.afterFinalPreStartObservation; hook != nil {
+		hook()
+	}
 	release, startErr := startProcessTree(command)
 	if startErr != nil {
 		evidence.FinishedAt = executor.now()
@@ -220,6 +257,23 @@ func (executor *Executor) executeCanonical(
 		waited <- command.Wait()
 	}()
 
+	// The executable is selected by pathname on every supported platform.
+	// Re-observe immediately after start to detect replacement in the final
+	// hash-to-start window.
+	if !toolchainIdentityUnchanged(canonical) {
+		releaseTree()
+		waitErr := <-waited
+		evidence.FinishedAt = executor.now()
+		evidence.Stdout = stdout.Evidence()
+		evidence.Stderr = stderr.Evidence()
+		evidence.CleanupComplete = releaseErr == nil
+		evidence.ExitCode = exitCode(waitErr)
+		evidence.TerminalCause = TerminalToolchainChanged
+		return sealProcessEvidence(evidence), &ExecutionError{
+			Kind: TerminalToolchainChanged,
+		}
+	}
+
 	var (
 		waitErr      error
 		contextCause TerminalCause
@@ -244,11 +298,38 @@ func (executor *Executor) executeCanonical(
 	evidence.ExitCode = exitCode(waitErr)
 	evidence.TerminalCause = classifyTerminalCause(contextCause, waitErr, evidence)
 
+	if hook := executor.testHooks.beforeFinalEvidenceObservation; hook != nil {
+		hook()
+	}
+	// A final observation prevents HCR from accepting evidence after the bound
+	// pathname changed while the process was running.
+	if !toolchainIdentityUnchanged(canonical) {
+		evidence.TerminalCause = TerminalToolchainChanged
+		return sealProcessEvidence(evidence), &ExecutionError{
+			Kind: TerminalToolchainChanged,
+		}
+	}
 	if releaseErr != nil {
 		evidence.TerminalCause = TerminalCleanupFailed
 		return sealProcessEvidence(evidence), &ExecutionError{Kind: TerminalCleanupFailed}
 	}
 	return sealProcessEvidence(evidence), nil
+}
+
+func toolchainIdentityUnchanged(step ExecStep) bool {
+	// Cross-platform pathname launch cannot make observation and exec one
+	// atomic operation. Production owners must still select executables from
+	// owner-controlled, non-writable storage; the surrounding observations
+	// fail closed for every change HCR can observe before, during, or after
+	// launch.
+	if step.EvidenceVersion == 1 {
+		return true
+	}
+	if step.ToolchainIdentity.IsZero() {
+		return false
+	}
+	observed, err := ObserveToolchainIdentity(step.Program)
+	return err == nil && observed == step.ToolchainIdentity
 }
 
 func validateStep(step ExecStep) (ExecStep, error) {
@@ -317,21 +398,66 @@ func validateStep(step ExecStep) (ExecStep, error) {
 	step.Redaction.Literals = redactions
 	step.Args = append([]string(nil), step.Args...)
 	step.Env = cloneEnvironment(step.Env)
+	if step.EvidenceVersion == 0 {
+		step.EvidenceVersion = 2
+	}
+	switch step.EvidenceVersion {
+	case 1:
+		if step.SemanticRequirementRef != "" || !step.ToolchainIdentity.IsZero() {
+			return ExecStep{}, &ValidationError{
+				Field:  "evidenceVersion",
+				Reason: "v1 cannot carry semantic or toolchain bindings",
+			}
+		}
+	case 2:
+		if step.SemanticRequirementRef != "" &&
+			!validEvidenceDigest(step.SemanticRequirementRef) {
+			return ExecStep{}, &ValidationError{
+				Field:  "semanticRequirementRef",
+				Reason: "must be empty or a lowercase SHA-256 reference",
+			}
+		}
+		if !step.ToolchainIdentity.IsZero() {
+			if err := step.ToolchainIdentity.Validate(); err != nil {
+				return ExecStep{}, &ValidationError{
+					Field:  "toolchainIdentity",
+					Reason: err.Error(),
+				}
+			}
+			if step.ToolchainProgramDigest !=
+				digestValues("gentle-ai.host-program/v1", step.Program) {
+				return ExecStep{}, &ValidationError{
+					Field:  "toolchainIdentity",
+					Reason: "does not bind the exact program",
+				}
+			}
+		}
+	default:
+		return ExecStep{}, &ValidationError{
+			Field:  "evidenceVersion",
+			Reason: "must be 1 or 2",
+		}
+	}
 	return step, nil
 }
 
 func newProcessEvidence(step ExecStep) ProcessEvidence {
-	return ProcessEvidence{
-		SchemaName:        "gentle-ai.host-process-evidence",
-		SchemaVersion:     1,
-		ExecutionID:       step.ExecutionID,
-		RequestDigest:     requestDigest(step),
-		ProgramDigest:     digestValues("gentle-ai.host-program/v1", step.Program),
-		ArgvDigest:        digestValues("gentle-ai.host-argv/v1", step.Args...),
-		CWDDigest:         digestValues("gentle-ai.host-cwd/v1", step.CWD),
-		EnvironmentDigest: digestEnvironment(step.Env),
-		ExitCode:          -1,
+	evidence := ProcessEvidence{
+		SchemaName:             "gentle-ai.host-process-evidence",
+		SchemaVersion:          step.EvidenceVersion,
+		ExecutionID:            step.ExecutionID,
+		RequestDigest:          requestDigest(step),
+		ProgramDigest:          digestValues("gentle-ai.host-program/v1", step.Program),
+		ArgvDigest:             digestValues("gentle-ai.host-argv/v1", step.Args...),
+		CWDDigest:              digestValues("gentle-ai.host-cwd/v1", step.CWD),
+		EnvironmentDigest:      digestEnvironment(step.Env),
+		ExitCode:               -1,
+		SemanticRequirementRef: step.SemanticRequirementRef,
 	}
+	if step.EvidenceVersion == 2 {
+		evidence.ToolchainIdentity = step.ToolchainIdentity
+	}
+	return evidence
 }
 
 func classifyTerminalCause(contextCause TerminalCause, waitErr error, evidence ProcessEvidence) TerminalCause {
@@ -461,7 +587,11 @@ func digestEnvironment(environment map[string]string) string {
 
 func requestDigest(step ExecStep) string {
 	hash := sha256.New()
-	writeValue(hash, requestDomain)
+	domain := requestDomainV2
+	if step.EvidenceVersion == 1 {
+		domain = requestDomainV1
+	}
+	writeValue(hash, domain)
 	writeValue(hash, step.ExecutionID)
 	writeValue(hash, step.Program)
 	for _, arg := range step.Args {
@@ -476,6 +606,10 @@ func requestDigest(step ExecStep) string {
 	writeValue(hash, strconv.Itoa(step.Limits.StderrBytes))
 	for _, literal := range step.Redaction.Literals {
 		writeValue(hash, digestValues("gentle-ai.host-redaction-literal/v1", literal))
+	}
+	if step.EvidenceVersion == 2 {
+		writeValue(hash, step.SemanticRequirementRef)
+		writeValue(hash, step.ToolchainIdentityRef)
 	}
 	return "sha256:" + hex.EncodeToString(hash.Sum(nil))
 }

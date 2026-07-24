@@ -41,7 +41,7 @@ func TestStorePublishesCanonicalTicketEvidenceAndDiagnostic(t *testing.T) {
 		t.Fatalf("store root is not owner-only: mode=%v, err=%v", rootInfo.Mode().Perm(), err)
 	}
 
-	ticket := mustActionTicket(t, "exit", "0")
+	ticket, authority := mustSemanticActionTicket(t, "output", "verified details")
 	if ref, err := store.PutTicket(ticket); err != nil || ref != ticket.TicketRef {
 		t.Fatalf("PutTicket() = %q, %v", ref, err)
 	}
@@ -58,7 +58,15 @@ func TestStorePublishesCanonicalTicketEvidenceAndDiagnostic(t *testing.T) {
 	}
 
 	process := executeTicket(t, context.Background(), ticket, false)
-	evidence, err := store.AdmitAndStore(ticket, process)
+	verdict, err := authority.AttestPassed(ticket, process)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := store.AdmitAndStoreWithSemanticVerdict(
+		ticket,
+		process,
+		verdict,
+	)
 	if err != nil {
 		t.Fatalf("AdmitAndStore() error = %v", err)
 	}
@@ -366,7 +374,7 @@ func TestStoreFailsClosedOnTamperAndDoesNotCreateMissingReadShards(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	tampered := bytes.Replace(payload, []byte(`"outcome":"complete"`), []byte(`"outcome":"failed"`), 1)
+	tampered := bytes.Replace(payload, []byte(`"outcome":"incomplete"`), []byte(`"outcome":"failed"`), 1)
 	if bytes.Equal(tampered, payload) {
 		t.Fatal("test failed to locate outcome field")
 	}

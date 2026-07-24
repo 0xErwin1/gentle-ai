@@ -2,6 +2,7 @@ package evidence
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,7 +20,7 @@ import (
 func TestActionTicketBindsExactRequestAndReturnsDefensiveStep(t *testing.T) {
 	t.Parallel()
 
-	request := actionTicketRequest(t, "exit", "0")
+	request, _ := semanticActionTicketRequest(t, "exit", "0")
 	request.Environment["B"] = "2"
 	request.Environment["A"] = "1"
 	request.RedactionLiterals = []string{"secret", "longer-secret", "secret"}
@@ -32,7 +33,11 @@ func TestActionTicketBindsExactRequestAndReturnsDefensiveStep(t *testing.T) {
 	}
 	if !validSHA256Ref(ticket.TicketRef) ||
 		!strings.HasPrefix(ticket.ExecutionID, "evidence-") ||
-		ticket.RequestBinding.RequestDigest == "" {
+		ticket.RequestBinding.RequestDigest == "" ||
+		ticket.RequestBinding.SemanticRequirementRef != request.SemanticRequirementRef ||
+		ticket.RequestBinding.ToolchainState != hostruntime.ToolchainIdentityObserved ||
+		ticket.SemanticAuthorityRef != request.SemanticAuthority.SemanticAuthorityRef ||
+		!validSHA256Ref(ticket.RequestBinding.ToolchainIdentityRef) {
 		t.Fatalf("ticket identities are incomplete: %#v", ticket)
 	}
 	if got, want := ticket.RedactionLiterals, []string{"longer-secret", "secret"}; !equalStrings(got, want) {
@@ -76,7 +81,7 @@ func TestActionTicketBindsExactRequestAndReturnsDefensiveStep(t *testing.T) {
 func TestActionTicketRejectsTamperedBindings(t *testing.T) {
 	t.Parallel()
 
-	ticket := mustActionTicket(t, "exit", "0")
+	ticket, _ := mustSemanticActionTicket(t, "exit", "0")
 	tests := []struct {
 		name   string
 		mutate func(*ActionTicket)
@@ -91,6 +96,12 @@ func TestActionTicketRejectsTamperedBindings(t *testing.T) {
 		{name: "deadline", mutate: func(value *ActionTicket) { value.DeadlineNanos++ }},
 		{name: "limits", mutate: func(value *ActionTicket) { value.OutputLimits.StdoutBytes++ }},
 		{name: "capability", mutate: func(value *ActionTicket) { value.Capability = "Bad Capability" }},
+		{name: "semantic requirement", mutate: func(value *ActionTicket) {
+			value.SemanticRequirementRef = testRef("other-semantic-requirement")
+		}},
+		{name: "semantic authority", mutate: func(value *ActionTicket) {
+			value.SemanticAuthorityRef = testRef("other-semantic-authority")
+		}},
 		{name: "request binding", mutate: func(value *ActionTicket) { value.RequestBinding.RequestDigest = testRef("other-request") }},
 		{name: "ticket ref", mutate: func(value *ActionTicket) { value.TicketRef = testRef("other-ticket") }},
 	}
@@ -173,12 +184,42 @@ func TestExecutionAdmissionDerivesConservativeTerminalOutcomes(t *testing.T) {
 		wantCause hostruntime.TerminalCause
 	}{
 		{
-			name:   "zero exit is complete",
-			ticket: func(t *testing.T) ActionTicket { return mustActionTicket(t, "exit", "0") },
+			name: "owner-bound empty zero exit without verdict is incomplete",
+			ticket: func(t *testing.T) ActionTicket {
+				ticket, _ := mustSemanticActionTicket(t, "exit", "0")
+				return ticket
+			},
 			execute: func(t *testing.T, ticket ActionTicket) hostruntime.ProcessEvidence {
 				return executeTicket(t, context.Background(), ticket, false)
 			},
-			want: ExecutionComplete, wantCause: hostruntime.TerminalExited,
+			want: ExecutionIncomplete, wantCause: hostruntime.TerminalExited,
+		},
+		{
+			name: "empty zero exit without owner requirement is incomplete",
+			ticket: func(t *testing.T) ActionTicket {
+				request := actionTicketRequest(t, "exit", "0")
+				request.SemanticRequirementRef = ""
+				ticket, err := NewActionTicket(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return ticket
+			},
+			execute: func(t *testing.T, ticket ActionTicket) hostruntime.ProcessEvidence {
+				return executeTicket(t, context.Background(), ticket, false)
+			},
+			want: ExecutionIncomplete, wantCause: hostruntime.TerminalExited,
+		},
+		{
+			name: "owner-bound literal pass without verdict is incomplete",
+			ticket: func(t *testing.T) ActionTicket {
+				ticket, _ := mustSemanticActionTicket(t, "output", "PASS")
+				return ticket
+			},
+			execute: func(t *testing.T, ticket ActionTicket) hostruntime.ProcessEvidence {
+				return executeTicket(t, context.Background(), ticket, false)
+			},
+			want: ExecutionIncomplete, wantCause: hostruntime.TerminalExited,
 		},
 		{
 			name:   "nonzero exit is failed",
@@ -264,7 +305,202 @@ func TestExecutionAdmissionDerivesConservativeTerminalOutcomes(t *testing.T) {
 			if err := evidence.ValidateFor(ticket); err != nil {
 				t.Fatalf("ValidateFor() error = %v", err)
 			}
+			if evidence.Outcome == ExecutionComplete {
+				t.Fatal("v2 execution completed without an explicit trusted semantic verdict")
+			}
+			if evidence.SemanticProof != nil {
+				t.Fatal("EPD minted a semantic proof without a trusted verdict")
+			}
 		})
+	}
+}
+
+func TestTrustedSemanticVerdictCompletesExactExecution(t *testing.T) {
+	t.Parallel()
+
+	ticket, authority := mustSemanticActionTicket(t, "output", "verified details")
+	process := executeTicket(t, context.Background(), ticket, false)
+	verdict, err := authority.AttestPassed(ticket, process)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := AdmitExecutionWithSemanticVerdict(ticket, process, verdict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Outcome != ExecutionComplete || evidence.SemanticProof == nil {
+		t.Fatalf("semantic evidence = %#v", evidence)
+	}
+	if evidence.SemanticProof.VerdictRef != verdict.VerdictRef ||
+		evidence.SemanticProof.AuthorityRef != ticket.SemanticAuthorityRef ||
+		evidence.SemanticProof.CandidateRef != ticket.CandidateRef ||
+		evidence.SemanticProof.RequestDigest != ticket.RequestBinding.RequestDigest ||
+		evidence.SemanticProof.CWDDigest != ticket.RequestBinding.CWDDigest ||
+		evidence.SemanticProof.ToolchainIdentityRef !=
+			ticket.RequestBinding.ToolchainIdentityRef {
+		t.Fatalf("semantic verdict does not bind exact ticket: %#v", evidence.SemanticProof)
+	}
+	if err := evidence.ValidateFor(ticket); err != nil {
+		t.Fatalf("ValidateFor() error = %v", err)
+	}
+}
+
+func TestSemanticProofRejectsCandidateCommandCWDAndToolchainMismatch(t *testing.T) {
+	t.Parallel()
+
+	ticket, authority := mustSemanticActionTicket(t, "output", "verified details")
+	process := executeTicket(t, context.Background(), ticket, false)
+	verdict, err := authority.AttestPassed(ticket, process)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admitted, err := AdmitExecutionWithSemanticVerdict(ticket, process, verdict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admitted.Outcome != ExecutionComplete || admitted.SemanticProof == nil {
+		t.Fatalf("admitted semantic evidence = %#v", admitted)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*ExecutionEvidence)
+	}{
+		{
+			name: "candidate",
+			mutate: func(value *ExecutionEvidence) {
+				value.SemanticProof.CandidateRef = testRef("stale-candidate")
+			},
+		},
+		{
+			name: "command",
+			mutate: func(value *ExecutionEvidence) {
+				value.SemanticProof.RequestDigest = testRef("stale-command")
+			},
+		},
+		{
+			name: "cwd",
+			mutate: func(value *ExecutionEvidence) {
+				value.SemanticProof.CWDDigest = testRef("stale-cwd")
+			},
+		},
+		{
+			name: "toolchain",
+			mutate: func(value *ExecutionEvidence) {
+				value.SemanticProof.ToolchainIdentityRef = testRef("stale-toolchain")
+			},
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			changed := admitted
+			proof := *admitted.SemanticProof
+			changed.SemanticProof = &proof
+			test.mutate(&changed)
+			changed.SemanticProof.VerdictRef, _ =
+				semanticVerdictRef(*changed.SemanticProof)
+			changed.EvidenceRef, _ = executionEvidenceDigest(changed)
+			changed = sealExecutionEvidence(changed)
+			if err := changed.ValidateFor(ticket); err == nil {
+				t.Fatal("ValidateFor() accepted mismatched semantic proof")
+			}
+		})
+	}
+}
+
+func TestSemanticVerdictRejectsForeignAuthoritySignatureAndCrossExecutionReplay(t *testing.T) {
+	t.Parallel()
+
+	ticket, authority := mustSemanticActionTicket(t, "output", "verified details")
+	process := executeTicket(t, context.Background(), ticket, false)
+	verdict, err := authority.AttestPassed(ticket, process)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	foreign := mustProvisionSemanticAuthority(
+		t,
+		ticket.IssuerRef,
+		ticket.SemanticRequirementRef,
+	)
+	if _, err := foreign.AttestPassed(ticket, process); err == nil {
+		t.Fatal("foreign semantic authority attested a ticket bound to another identity")
+	}
+
+	tampered := verdict
+	replacement := byte('A')
+	if tampered.Signature[0] == replacement {
+		replacement = 'B'
+	}
+	tampered.Signature = string(replacement) + tampered.Signature[1:]
+	tampered.VerdictRef, _ = semanticVerdictRef(tampered)
+	if _, err := AdmitExecutionWithSemanticVerdict(
+		ticket,
+		process,
+		tampered,
+	); err == nil {
+		t.Fatal("EPD accepted a semantic verdict with a forged signature")
+	}
+
+	nextRequest := requestFromTicket(ticket)
+	nextRequest.CandidateRef = testRef("next-candidate")
+	next, err := NewActionTicket(nextRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextProcess := executeTicket(t, context.Background(), next, false)
+	if _, err := AdmitExecutionWithSemanticVerdict(
+		next,
+		nextProcess,
+		verdict,
+	); err == nil {
+		t.Fatal("EPD replayed a semantic verdict across candidate and request identities")
+	}
+}
+
+func TestLegacyV1TicketAndProcessEvidenceRemainReadable(t *testing.T) {
+	t.Parallel()
+
+	ticket := mustLegacyActionTicketV1(t, "exit", "0")
+	ticketPayload, err := json.Marshal(ticket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(ticketPayload), "semanticAuthority") ||
+		strings.Contains(string(ticketPayload), "semanticRequirementRef") ||
+		strings.Contains(string(ticketPayload), "toolchainIdentity") {
+		t.Fatalf("legacy ticket JSON gained v2 fields: %s", ticketPayload)
+	}
+	process := executeTicket(t, context.Background(), ticket, false)
+	if process.SchemaVersion != 1 || !process.ToolchainIdentity.IsZero() {
+		t.Fatalf("legacy process evidence changed shape: %#v", process)
+	}
+	admitted, err := AdmitExecution(ticket, process)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if admitted.Schema != ExecutionEvidenceSchemaV1 ||
+		admitted.Outcome != ExecutionComplete ||
+		admitted.SemanticProof != nil {
+		t.Fatalf("legacy execution evidence = %#v", admitted)
+	}
+	payload, err := json.Marshal(admitted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), "semanticAuthority") ||
+		strings.Contains(string(payload), "semanticProof") ||
+		strings.Contains(string(payload), "semanticRequirementRef") ||
+		strings.Contains(string(payload), "toolchainIdentity") {
+		t.Fatalf("legacy execution JSON gained v2 fields: %s", payload)
+	}
+	var replayed ExecutionEvidence
+	if err := json.Unmarshal(payload, &replayed); err != nil {
+		t.Fatal(err)
+	}
+	if err := replayed.validateStoredFor(ticket); err != nil {
+		t.Fatalf("legacy durable replay validation error = %v", err)
 	}
 }
 
@@ -350,6 +586,92 @@ func mustActionTicket(t *testing.T, mode string, args ...string) ActionTicket {
 	return ticket
 }
 
+func semanticActionTicketRequest(
+	t *testing.T,
+	mode string,
+	args ...string,
+) (ActionTicketRequest, *SemanticAuthority) {
+	t.Helper()
+	request := actionTicketRequest(t, mode, args...)
+	request.SemanticRequirementRef = testRef("semantic-requirement")
+	authority := mustProvisionSemanticAuthority(
+		t,
+		request.IssuerRef,
+		request.SemanticRequirementRef,
+	)
+	request.SemanticAuthority = authority.Identity()
+	return request, authority
+}
+
+func mustSemanticActionTicket(
+	t *testing.T,
+	mode string,
+	args ...string,
+) (ActionTicket, *SemanticAuthority) {
+	t.Helper()
+	request, authority := semanticActionTicketRequest(t, mode, args...)
+	ticket, err := NewActionTicket(request)
+	if err != nil {
+		t.Fatalf("NewActionTicket() error = %v", err)
+	}
+	return ticket, authority
+}
+
+func mustProvisionSemanticAuthority(
+	t *testing.T,
+	ownerRef string,
+	requirementRef string,
+) *SemanticAuthority {
+	t.Helper()
+	seed := make([]byte, SemanticAuthoritySeedBytes)
+	if _, err := rand.Read(seed); err != nil {
+		t.Fatal(err)
+	}
+	authority, err := ProvisionSemanticAuthority(
+		ownerRef,
+		requirementRef,
+		seed,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return authority
+}
+
+func mustLegacyActionTicketV1(t *testing.T, mode string, args ...string) ActionTicket {
+	t.Helper()
+	request := actionTicketRequest(t, mode, args...)
+	ticket := ActionTicket{
+		Schema:    ActionTicketSchemaV1,
+		IssuerRef: request.IssuerRef, SubjectRef: request.SubjectRef,
+		CandidateRef:           request.CandidateRef,
+		VerificationContextRef: request.VerificationContextRef,
+		ExpectedRevision:       request.ExpectedRevision, Slot: request.Slot,
+		Program: request.Program, Args: append([]string{}, request.Args...),
+		CWD: request.CWD, Environment: cloneEnvironment(request.Environment),
+		DeadlineNanos: int64(request.Deadline), OutputLimits: request.OutputLimits,
+		Capability:        request.Capability,
+		RedactionLiterals: canonicalRedactions(request.RedactionLiterals),
+	}
+	executionDigest, err := actionTicketExecutionDigest(ticket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket.ExecutionID = "evidence-" + strings.TrimPrefix(executionDigest, "sha256:")
+	ticket.RequestBinding, err = hostruntime.BindExecStep(ticket.execStep())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticket.TicketRef, err = actionTicketDigest(ticket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ticket.Validate(); err != nil {
+		t.Fatalf("legacy action ticket validation error = %v", err)
+	}
+	return ticket
+}
+
 func cloneTicket(ticket ActionTicket) ActionTicket {
 	cloned := ticket
 	cloned.Args = append([]string{}, ticket.Args...)
@@ -367,8 +689,10 @@ func requestFromTicket(ticket ActionTicket) ActionTicketRequest {
 		Program: ticket.Program, Args: append([]string{}, ticket.Args...),
 		CWD: ticket.CWD, Environment: cloneEnvironment(ticket.Environment),
 		Deadline: time.Duration(ticket.DeadlineNanos), OutputLimits: ticket.OutputLimits,
-		Capability:        ticket.Capability,
-		RedactionLiterals: append([]string{}, ticket.RedactionLiterals...),
+		Capability:             ticket.Capability,
+		RedactionLiterals:      append([]string{}, ticket.RedactionLiterals...),
+		SemanticRequirementRef: ticket.SemanticRequirementRef,
+		SemanticAuthority:      ticket.SemanticAuthorityIdentity,
 	}
 }
 
@@ -437,6 +761,8 @@ func TestEvidenceHelperProcess(t *testing.T) {
 		count, _ := strconv.Atoi(args[0])
 		_, _ = os.Stdout.WriteString(strings.Repeat("o", count))
 		_, _ = os.Stderr.WriteString(strings.Repeat("e", count))
+	case "output":
+		_, _ = os.Stdout.WriteString(strings.Join(args, " "))
 	case "sleep":
 		milliseconds, _ := strconv.Atoi(args[0])
 		time.Sleep(time.Duration(milliseconds) * time.Millisecond)
