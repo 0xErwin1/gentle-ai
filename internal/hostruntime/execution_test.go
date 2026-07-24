@@ -21,7 +21,7 @@ func TestExecutePreservesLiteralArgumentsAndExactEnvironment(t *testing.T) {
 	cwd := t.TempDir()
 	step := helperStep(t, cwd, "echo", `a;b`, `$(touch nope)`, `space value`, `*.go`)
 	step.Env["DECLARED_VALUE"] = "visible"
-	evidence, err := NewExecutor().Execute(context.Background(), step)
+	evidence, err := NewExecutor().execute(context.Background(), step)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -73,7 +73,7 @@ func TestExecuteRecordsZeroAndNonzeroExitAsCoherentEvidence(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			step := helperStep(t, t.TempDir(), "exit", strconv.Itoa(test.code))
-			evidence, err := NewExecutor().Execute(context.Background(), step)
+			evidence, err := NewExecutor().execute(context.Background(), step)
 			if err != nil {
 				t.Fatalf("Execute() error = %v", err)
 			}
@@ -95,7 +95,7 @@ func TestExecuteDrainsAndClassifiesTruncatedStreams(t *testing.T) {
 
 	step := helperStep(t, t.TempDir(), "streams", "1048576")
 	step.Limits = StreamLimits{StdoutBytes: 31, StderrBytes: 29}
-	evidence, err := NewExecutor().Execute(context.Background(), step)
+	evidence, err := NewExecutor().execute(context.Background(), step)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -122,7 +122,7 @@ func TestExecuteRedactsRetainedOutputWithoutChangingRawEvidence(t *testing.T) {
 	const secret = "super-secret-token"
 	step := helperStep(t, t.TempDir(), "redact", secret)
 	step.Redaction = RedactionPlan{Literals: []string{"secret", secret}}
-	evidence, err := NewExecutor().Execute(context.Background(), step)
+	evidence, err := NewExecutor().execute(context.Background(), step)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -146,7 +146,7 @@ func TestExecuteDistinguishesDeadlineAndCancellation(t *testing.T) {
 		t.Parallel()
 		step := helperStep(t, t.TempDir(), "sleep", "5000")
 		step.Deadline = 75 * time.Millisecond
-		evidence, err := NewExecutor().Execute(context.Background(), step)
+		evidence, err := NewExecutor().execute(context.Background(), step)
 		if err != nil {
 			t.Fatalf("Execute() error = %v", err)
 		}
@@ -167,7 +167,7 @@ func TestExecuteDistinguishesDeadlineAndCancellation(t *testing.T) {
 			time.Sleep(75 * time.Millisecond)
 			cancel()
 		}()
-		evidence, err := NewExecutor().Execute(ctx, step)
+		evidence, err := NewExecutor().execute(ctx, step)
 		if err != nil {
 			t.Fatalf("Execute() error = %v", err)
 		}
@@ -209,7 +209,7 @@ func TestExecuteRejectsInvalidStepsBeforeStarting(t *testing.T) {
 			step.Args = append([]string(nil), valid.Args...)
 			step.Env = cloneEnvironment(valid.Env)
 			test.mutate(&step)
-			_, err := NewExecutor().Execute(context.Background(), step)
+			_, err := NewExecutor().execute(context.Background(), step)
 			var validationErr *ValidationError
 			if !errors.As(err, &validationErr) {
 				t.Fatalf("error = %v, want ValidationError", err)
@@ -226,7 +226,7 @@ func TestExecuteReportsSpawnFailureWithoutLeakingProgramPath(t *testing.T) {
 
 	step := helperStep(t, t.TempDir(), "exit", "0")
 	step.Program = filepath.Join(t.TempDir(), "missing-secret-program")
-	evidence, err := NewExecutor().Execute(context.Background(), step)
+	evidence, err := NewExecutor().execute(context.Background(), step)
 	var executionErr *ExecutionError
 	if !errors.As(err, &executionErr) {
 		t.Fatalf("error = %v, want ExecutionError", err)
@@ -248,7 +248,7 @@ func TestExecuteDoesNotLaunchWithPreCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	step := helperStep(t, t.TempDir(), "redact", "must-not-run")
-	evidence, err := NewExecutor().Execute(ctx, step)
+	evidence, err := NewExecutor().execute(ctx, step)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}

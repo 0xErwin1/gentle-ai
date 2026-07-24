@@ -2,6 +2,7 @@ package hostruntime
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -101,24 +102,61 @@ func (err *ExecutionError) Error() string {
 }
 
 type Executor struct {
-	now func() time.Time
+	now         func() time.Time
+	launchKey   [sha256.Size]byte
+	launchReady bool
 }
 
 func NewExecutor() *Executor {
-	return &Executor{now: func() time.Time { return time.Now().UTC() }}
+	executor := &Executor{now: func() time.Time { return time.Now().UTC() }}
+	if _, err := rand.Read(executor.launchKey[:]); err != nil {
+		panic(fmt.Sprintf("initialize host runtime launch authority: %v", err))
+	}
+	executor.launchReady = true
+	return executor
 }
 
-func (executor *Executor) Execute(ctx context.Context, step ExecStep) (ProcessEvidence, error) {
+// ExecuteAuthorized is the only production process-launch surface. It validates
+// the exact HCR request, consumes one opaque WorkRun-issued launch capability,
+// durably claims that reservation, and only then creates a process.
+func (executor *Executor) ExecuteAuthorized(
+	ctx context.Context,
+	step ExecStep,
+	capability *LaunchCapability,
+) (ProcessEvidence, error) {
+	canonical, err := validateStep(step)
+	if err != nil {
+		return ProcessEvidence{}, err
+	}
+	binding := requestBindingForCanonical(canonical)
+	if executor == nil || !executor.launchReady {
+		return ProcessEvidence{}, errors.New("host runtime executor launch authority is not initialized")
+	}
+	if err := capability.consume(ctx, binding.RequestDigest, executor.launchKey); err != nil {
+		return ProcessEvidence{}, err
+	}
+	return executor.executeCanonical(ctx, canonical)
+}
+
+// execute is deliberately package-private. HCR's own tests exercise terminal
+// process behavior through it; provider code must use ExecuteAuthorized.
+func (executor *Executor) execute(ctx context.Context, step ExecStep) (ProcessEvidence, error) {
+	canonical, err := validateStep(step)
+	if err != nil {
+		return ProcessEvidence{}, err
+	}
+	return executor.executeCanonical(ctx, canonical)
+}
+
+func (executor *Executor) executeCanonical(
+	ctx context.Context,
+	canonical ExecStep,
+) (ProcessEvidence, error) {
 	if executor == nil {
 		executor = NewExecutor()
 	}
 	if executor.now == nil {
 		executor.now = func() time.Time { return time.Now().UTC() }
-	}
-
-	canonical, err := validateStep(step)
-	if err != nil {
-		return ProcessEvidence{}, err
 	}
 	evidence := newProcessEvidence(canonical)
 	if ctx.Err() != nil {

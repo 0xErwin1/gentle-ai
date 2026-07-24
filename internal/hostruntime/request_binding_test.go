@@ -16,7 +16,7 @@ func TestBindExecStepMatchesExecutorEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BindExecStep() error = %v", err)
 	}
-	evidence, err := NewExecutor().Execute(context.Background(), step)
+	evidence, err := NewExecutor().execute(context.Background(), step)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -29,7 +29,7 @@ func TestProcessEvidenceProvenanceRejectsTerminalFactMutation(t *testing.T) {
 	t.Parallel()
 
 	step := helperStep(t, t.TempDir(), "exit", "0")
-	evidence, err := NewExecutor().Execute(context.Background(), step)
+	evidence, err := NewExecutor().execute(context.Background(), step)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestDurableProcessRecordHasNoLiveProvenanceAndRequiresCleanupScope(t *testi
 	t.Parallel()
 
 	step := helperStep(t, t.TempDir(), "exit", "0")
-	evidence, err := NewExecutor().Execute(context.Background(), step)
+	evidence, err := NewExecutor().execute(context.Background(), step)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestRequestBindingRejectsDifferentExactRequest(t *testing.T) {
 	changed := step
 	changed.Args = append([]string(nil), step.Args...)
 	changed.Args[len(changed.Args)-1] = "23"
-	evidence, err := NewExecutor().Execute(context.Background(), changed)
+	evidence, err := NewExecutor().execute(context.Background(), changed)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}

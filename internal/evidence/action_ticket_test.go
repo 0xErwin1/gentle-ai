@@ -378,7 +378,18 @@ func executeTicket(t *testing.T, ctx context.Context, ticket ActionTicket, wantE
 	if err != nil {
 		t.Fatal(err)
 	}
-	process, err := hostruntime.NewExecutor().Execute(ctx, step)
+	executor := hostruntime.NewExecutor()
+	capability, err := executor.ActivateLaunch(context.Background(), hostruntime.LaunchBinding{
+		Schema:          hostruntime.LaunchBindingSchemaV1,
+		WorkRunID:       "evidence-test",
+		ReservationRef:  testRef("reservation-" + ticket.TicketRef),
+		ActionTicketRef: ticket.TicketRef,
+		RequestDigest:   ticket.RequestBinding.RequestDigest,
+	}, func(context.Context) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	process, err := executor.ExecuteAuthorized(ctx, step, capability)
 	if wantError && err == nil {
 		t.Fatal("Execute() error = nil, want typed terminal error")
 	}

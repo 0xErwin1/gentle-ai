@@ -15,7 +15,7 @@ import (
 func TestExecuteDeadlineTerminatesDescendantProcessGroup(t *testing.T) {
 	step := helperStep(t, t.TempDir(), "spawn-child")
 	step.Deadline = 150 * time.Millisecond
-	evidence, err := NewExecutor().Execute(context.Background(), step)
+	evidence, err := NewExecutor().execute(context.Background(), step)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}

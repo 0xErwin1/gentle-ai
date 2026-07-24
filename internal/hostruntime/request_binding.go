@@ -33,6 +33,10 @@ func BindExecStep(step ExecStep) (RequestBinding, error) {
 	if err != nil {
 		return RequestBinding{}, err
 	}
+	return requestBindingForCanonical(canonical), nil
+}
+
+func requestBindingForCanonical(canonical ExecStep) RequestBinding {
 	evidence := newProcessEvidence(canonical)
 	return RequestBinding{
 		Schema:            RequestBindingSchema,
@@ -42,7 +46,7 @@ func BindExecStep(step ExecStep) (RequestBinding, error) {
 		ArgvDigest:        evidence.ArgvDigest,
 		CWDDigest:         evidence.CWDDigest,
 		EnvironmentDigest: evidence.EnvironmentDigest,
-	}, nil
+	}
 }
 
 // ValidateProcessEvidence confirms that evidence was produced for exactly this

@@ -1,0 +1,1921 @@
+package workrun
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/internal/hostruntime"
+	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+)
+
+const (
+	WorkRunStateSchemaV1  = "gentle-ai.work-run-state/v1"
+	workRunRecordSchemaV1 = "gentle-ai.work-run-record/v1"
+
+	workOperationStart             = "run/start"
+	workOperationAcceptSDD         = "route/accept-sdd"
+	workOperationReroute           = "route/reroute"
+	workOperationBindSDD           = "route/bind-sdd"
+	workOperationBindHandoff       = "implementation/bind-handoff"
+	workOperationRecordForecast    = "verification/record-forecast"
+	workOperationRecordDisposition = "verification/record-disposition"
+	workOperationBeginVerification = "verification/begin"
+	workOperationClaimLaunch       = "verification/claim-launch"
+	workOperationBindResult        = "verification/bind-result"
+	workOperationBindReview        = "review/bind-receipt"
+	workOperationBindDelivery      = "delivery/bind-authorization"
+
+	maximumWorkRunRecordBytes  = 1 << 20
+	maximumWorkRunChainRecords = 10_000
+)
+
+var (
+	ErrWorkRunNotStarted         = errors.New("work run has not started")
+	ErrWorkRunAlreadyStarted     = errors.New("work run already started")
+	ErrWorkRunRevisionConflict   = errors.New("work run revision conflict")
+	ErrWorkRunRequestConflict    = errors.New("work run request identifier was reused with different inputs")
+	ErrWorkRunConcurrentUpdate   = errors.New("work run is concurrently updated")
+	ErrWorkRunInvalidTransition  = errors.New("invalid work run transition")
+	ErrWorkRunRoutePending       = errors.New("work run implementation route is pending")
+	ErrVerificationReserved      = errors.New("verification slot is already reserved")
+	ErrVerificationLaunchClaimed = errors.New("verification reservation launch is already claimed")
+
+	workRunIDPattern     = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
+	workRequestIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
+)
+
+type RevisionConflictError struct {
+	Expected string
+	Current  string
+}
+
+func (err *RevisionConflictError) Error() string {
+	return fmt.Sprintf("%v: expected %q, current %q", ErrWorkRunRevisionConflict, err.Expected, err.Current)
+}
+
+func (err *RevisionConflictError) Unwrap() error { return ErrWorkRunRevisionConflict }
+
+// PublicationError means HEAD was replaced but directory durability could not
+// be confirmed. Replaying the exact request is safe and consumes no ordinal.
+type PublicationError struct {
+	Revision  string
+	Committed bool
+	Cause     error
+}
+
+func (err *PublicationError) Error() string {
+	return fmt.Sprintf("work run publication for %s requires exact replay: %v", err.Revision, err.Cause)
+}
+
+func (err *PublicationError) Unwrap() error { return err.Cause }
+
+// WorkRunState is a route-neutral coordination projection. Referenced owner
+// artifacts retain authority; this journal records only their immutable refs
+// and the ordering of accepted application-level transitions.
+type WorkRunState struct {
+	Schema                   string                      `json:"schema"`
+	WorkRunID                string                      `json:"work_run_id"`
+	Revision                 string                      `json:"revision,omitempty"`
+	Started                  bool                        `json:"started"`
+	RouteDecision            ImplementationRouteDecision `json:"route_decision"`
+	ImplementationRoute      ImplementationRoute         `json:"implementation_route,omitempty"`
+	RouteAcceptanceRef       string                      `json:"route_acceptance_ref,omitempty"`
+	SDDRunRef                string                      `json:"sdd_run_ref,omitempty"`
+	DeliveryIntentRef        string                      `json:"delivery_intent_ref"`
+	Handoff                  *ImplementationHandoff      `json:"handoff,omitempty"`
+	Forecast                 *VerificationForecast       `json:"forecast,omitempty"`
+	Disposition              *VerificationDisposition    `json:"disposition,omitempty"`
+	Reservations             []VerificationReservation   `json:"reservations"`
+	LaunchClaims             []VerificationLaunchClaim   `json:"launch_claims"`
+	NextOrdinal              int                         `json:"next_ordinal"`
+	VerificationResultRef    string                      `json:"verification_result_ref,omitempty"`
+	ReviewReceiptRef         string                      `json:"review_receipt_ref,omitempty"`
+	DeliveryAuthorizationRef string                      `json:"delivery_authorization_ref,omitempty"`
+}
+
+type WorkRunStore struct {
+	Dir       string
+	Repo      string
+	WorkRunID string
+	commonDir string
+	evidence  EvidencePort
+	authority AuthorityPorts
+}
+
+type StartRequest struct {
+	ExpectedRevision  string                      `json:"expected_revision"`
+	RequestID         string                      `json:"request_id"`
+	RouteDecision     ImplementationRouteDecision `json:"route_decision"`
+	DeliveryIntentRef string                      `json:"delivery_intent_ref"`
+}
+
+type AcceptSDDRequest struct {
+	ExpectedRevision string `json:"expected_revision"`
+	RequestID        string `json:"request_id"`
+	AcceptanceRef    string `json:"acceptance_ref"`
+}
+
+type RerouteRequest struct {
+	ExpectedRevision string                      `json:"expected_revision"`
+	RequestID        string                      `json:"request_id"`
+	OwnerDecisionRef string                      `json:"owner_decision_ref"`
+	RouteDecision    ImplementationRouteDecision `json:"route_decision"`
+}
+
+type BindSDDRunRequest struct {
+	ExpectedRevision string `json:"expected_revision"`
+	RequestID        string `json:"request_id"`
+	SDDRunRef        string `json:"sdd_run_ref"`
+}
+
+type BindImplementationHandoffRequest struct {
+	ExpectedRevision string                `json:"expected_revision"`
+	RequestID        string                `json:"request_id"`
+	Handoff          ImplementationHandoff `json:"handoff"`
+}
+
+type RecordVerificationForecastRequest struct {
+	ExpectedRevision string                    `json:"expected_revision"`
+	RequestID        string                    `json:"request_id"`
+	Input            VerificationForecastInput `json:"input"`
+}
+
+type RecordVerificationDispositionRequest struct {
+	ExpectedRevision string                      `json:"expected_revision"`
+	RequestID        string                      `json:"request_id"`
+	Kind             VerificationDispositionKind `json:"kind"`
+	AssumptionsRef   string                      `json:"assumptions_ref"`
+	ActorRef         string                      `json:"actor_ref"`
+	DecisionRef      string                      `json:"decision_ref"`
+	RunnerRef        string                      `json:"runner_ref,omitempty"`
+}
+
+type BeginRequest struct {
+	ExpectedRevision string                                      `json:"expected_revision"`
+	RequestID        string                                      `json:"request_id"`
+	Applicability    reviewtransaction.VerificationApplicability `json:"applicability"`
+	Registry         reviewtransaction.VerificationPlanRegistry  `json:"registry"`
+	Plan             reviewtransaction.VerificationPlan          `json:"plan"`
+	ActionTicketRef  string                                      `json:"action_ticket_ref"`
+}
+
+type BeginOutcome struct {
+	State      WorkRunState
+	Capability *hostruntime.LaunchCapability
+}
+
+type BindVerificationResultRequest struct {
+	ExpectedRevision string                                      `json:"expected_revision"`
+	RequestID        string                                      `json:"request_id"`
+	Applicability    reviewtransaction.VerificationApplicability `json:"applicability"`
+	Registry         reviewtransaction.VerificationPlanRegistry  `json:"registry"`
+	Plan             reviewtransaction.VerificationPlan          `json:"plan"`
+	Result           reviewtransaction.VerificationResultRef     `json:"result"`
+}
+
+type BindReviewReceiptRequest struct {
+	ExpectedRevision string `json:"expected_revision"`
+	RequestID        string `json:"request_id"`
+	ReviewReceiptRef string `json:"review_receipt_ref"`
+}
+
+type BindDeliveryAuthorizationRequest struct {
+	ExpectedRevision string `json:"expected_revision"`
+	RequestID        string `json:"request_id"`
+	AuthorizationRef string `json:"authorization_ref"`
+}
+
+type workStartEvent struct {
+	RouteDecision     ImplementationRouteDecision `json:"route_decision"`
+	DeliveryIntentRef string                      `json:"delivery_intent_ref"`
+}
+
+type workAcceptSDDEvent struct {
+	AcceptanceRef string `json:"acceptance_ref"`
+}
+
+type workRerouteEvent struct {
+	PreviousDecisionDigest string                      `json:"previous_decision_digest"`
+	OwnerDecisionRef       string                      `json:"owner_decision_ref"`
+	RouteDecision          ImplementationRouteDecision `json:"route_decision"`
+}
+
+type workBindSDDEvent struct {
+	SDDRunRef string `json:"sdd_run_ref"`
+}
+
+type workBindReviewEvent struct {
+	ReviewReceiptRef string `json:"review_receipt_ref"`
+}
+
+type workBindResultEvent struct {
+	ResultRef string `json:"result_ref"`
+}
+
+type workBindDeliveryAuthorizationEvent struct {
+	AuthorizationRef string `json:"authorization_ref"`
+}
+
+type workRunRecord struct {
+	Schema           string `json:"schema"`
+	WorkRunID        string `json:"work_run_id"`
+	PreviousRevision string `json:"previous_revision"`
+	Operation        string `json:"operation"`
+	RequestID        string `json:"request_id"`
+	RequestDigest    string `json:"request_digest"`
+
+	Start       *workStartEvent                     `json:"start,omitempty"`
+	AcceptSDD   *workAcceptSDDEvent                 `json:"accept_sdd,omitempty"`
+	Reroute     *workRerouteEvent                   `json:"reroute,omitempty"`
+	BindSDD     *workBindSDDEvent                   `json:"bind_sdd,omitempty"`
+	Handoff     *ImplementationHandoff              `json:"handoff,omitempty"`
+	Forecast    *VerificationForecast               `json:"forecast,omitempty"`
+	Disposition *VerificationDisposition            `json:"disposition,omitempty"`
+	Reservation *VerificationReservation            `json:"reservation,omitempty"`
+	Launch      *VerificationLaunchClaim            `json:"launch,omitempty"`
+	Result      *workBindResultEvent                `json:"result,omitempty"`
+	Review      *workBindReviewEvent                `json:"review,omitempty"`
+	Delivery    *workBindDeliveryAuthorizationEvent `json:"delivery,omitempty"`
+}
+
+type workRequestReceipt struct {
+	Digest   string
+	Revision string
+}
+
+type workReplay struct {
+	State    WorkRunState
+	Requests map[string]workRequestReceipt
+	States   map[string]WorkRunState
+}
+
+func OpenWorkRunStore(ctx context.Context, repo, workRunID string) (WorkRunStore, error) {
+	if !workRunIDPattern.MatchString(workRunID) {
+		return WorkRunStore{}, errors.New("invalid work run identifier")
+	}
+	root, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
+	if err != nil {
+		return WorkRunStore{}, err
+	}
+	probe, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, "work-run-probe")
+	if err != nil {
+		return WorkRunStore{}, err
+	}
+	commonDir := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(probe.Dir))))
+	dir := filepath.Join(commonDir, "gentle-ai", "work-runs", "v1", workRunID)
+	return WorkRunStore{Dir: dir, Repo: root, WorkRunID: workRunID, commonDir: commonDir}, nil
+}
+
+// WithEvidencePort binds an EPD adapter without coupling WorkRun to the
+// provider's opaque admission-seal representation.
+func (store WorkRunStore) WithEvidencePort(port EvidencePort) WorkRunStore {
+	store.evidence = port
+	return store
+}
+
+// WithAuthorityPorts wires provider-owned resolvers. The store never treats a
+// hash-shaped caller value as proof that an owner artifact exists.
+func (store WorkRunStore) WithAuthorityPorts(ports AuthorityPorts) WorkRunStore {
+	store.authority = ports
+	return store
+}
+
+// Status is read-only. Opening or reading a missing run never creates its
+// authority directory.
+func (store WorkRunStore) Status() (WorkRunState, error) {
+	replay, err := store.load()
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	if !replay.State.Started {
+		return WorkRunState{}, ErrWorkRunNotStarted
+	}
+	return cloneWorkRunState(replay.State), nil
+}
+
+func (store WorkRunStore) Start(ctx context.Context, request StartRequest) (WorkRunState, error) {
+	if request.ExpectedRevision != "" {
+		return WorkRunState{}, errors.New("new work run expected revision must be empty")
+	}
+	if err := validateRequestID(request.RequestID); err != nil {
+		return WorkRunState{}, err
+	}
+	if err := request.RouteDecision.Validate(); err != nil {
+		return WorkRunState{}, err
+	}
+	if !validSHA256Ref(request.DeliveryIntentRef) {
+		return WorkRunState{}, errors.New("work run start requires an immutable delivery intent reference")
+	}
+	if store.authority.PAD == nil {
+		return WorkRunState{}, ErrAuthorityPortUnavailable
+	}
+	intent, err := store.authority.PAD.ResolveDeliveryIntent(ctx, request.DeliveryIntentRef)
+	if err != nil {
+		return WorkRunState{}, fmt.Errorf("resolve PAD delivery intent: %w", err)
+	}
+	if err := intent.Validate(request.DeliveryIntentRef); err != nil {
+		return WorkRunState{}, err
+	}
+	if request.RouteDecision.ExplicitSDDRequestRef != "" {
+		if store.authority.Route == nil {
+			return WorkRunState{}, ErrAuthorityPortUnavailable
+		}
+		selection, resolveErr := store.authority.Route.ResolveRouteSelection(
+			ctx,
+			request.RouteDecision.ExplicitSDDRequestRef,
+		)
+		if resolveErr != nil {
+			return WorkRunState{}, fmt.Errorf("resolve explicit SDD request: %w", resolveErr)
+		}
+		if err := selection.Validate(
+			request.RouteDecision.ExplicitSDDRequestRef,
+			request.RouteDecision.Digest,
+			ImplementationRouteSDD,
+			"",
+		); err != nil {
+			return WorkRunState{}, err
+		}
+	}
+	digest, err := digestValue("gentle-ai.work-run-start-request/v1", request)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay workReplay) (workRunRecord, error) {
+		if replay.State.Started {
+			return workRunRecord{}, ErrWorkRunAlreadyStarted
+		}
+		event := workStartEvent{
+			RouteDecision:     request.RouteDecision,
+			DeliveryIntentRef: request.DeliveryIntentRef,
+		}
+		return workRunRecord{Operation: workOperationStart, Start: &event}, nil
+	})
+}
+
+func (store WorkRunStore) AcceptSDD(ctx context.Context, request AcceptSDDRequest) (WorkRunState, error) {
+	if err := validateMutationEnvelope(request.ExpectedRevision, request.RequestID); err != nil {
+		return WorkRunState{}, err
+	}
+	if !validSHA256Ref(request.AcceptanceRef) {
+		return WorkRunState{}, errors.New("SDD acceptance requires an immutable owner-decision reference")
+	}
+	digest, err := digestValue("gentle-ai.work-run-accept-sdd-request/v1", request)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay workReplay) (workRunRecord, error) {
+		if store.authority.Route == nil {
+			return workRunRecord{}, ErrAuthorityPortUnavailable
+		}
+		selection, err := store.authority.Route.ResolveRouteSelection(ctx, request.AcceptanceRef)
+		if err != nil {
+			return workRunRecord{}, fmt.Errorf("resolve SDD acceptance: %w", err)
+		}
+		if err := selection.Validate(
+			request.AcceptanceRef,
+			replay.State.RouteDecision.Digest,
+			ImplementationRouteSDD,
+			"",
+		); err != nil {
+			return workRunRecord{}, err
+		}
+		event := workAcceptSDDEvent{AcceptanceRef: request.AcceptanceRef}
+		return workRunRecord{Operation: workOperationAcceptSDD, AcceptSDD: &event}, nil
+	})
+}
+
+// Reroute records a new owner-approved decision after a proposal was declined.
+// It never converts the existing propose_sdd decision into direct execution.
+func (store WorkRunStore) Reroute(ctx context.Context, request RerouteRequest) (WorkRunState, error) {
+	if err := validateMutationEnvelope(request.ExpectedRevision, request.RequestID); err != nil {
+		return WorkRunState{}, err
+	}
+	if !validSHA256Ref(request.OwnerDecisionRef) {
+		return WorkRunState{}, errors.New("reroute requires an immutable owner decision reference")
+	}
+	if err := request.RouteDecision.Validate(); err != nil {
+		return WorkRunState{}, err
+	}
+	if request.RouteDecision.Decision != RouteDecisionDirectInline &&
+		request.RouteDecision.Decision != RouteDecisionDelegatedDirect {
+		return WorkRunState{}, errors.New("reroute must select a fresh direct or delegated decision")
+	}
+	digest, err := digestValue("gentle-ai.work-run-reroute-request/v1", request)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay workReplay) (workRunRecord, error) {
+		if store.authority.Route == nil {
+			return workRunRecord{}, ErrAuthorityPortUnavailable
+		}
+		selectedRoute := ImplementationRouteDirectInline
+		if request.RouteDecision.Decision == RouteDecisionDelegatedDirect {
+			selectedRoute = ImplementationRouteDelegatedDirect
+		}
+		selection, err := store.authority.Route.ResolveRouteSelection(ctx, request.OwnerDecisionRef)
+		if err != nil {
+			return workRunRecord{}, fmt.Errorf("resolve implementation reroute: %w", err)
+		}
+		if err := selection.Validate(
+			request.OwnerDecisionRef,
+			replay.State.RouteDecision.Digest,
+			selectedRoute,
+			request.RouteDecision.Digest,
+		); err != nil {
+			return workRunRecord{}, err
+		}
+		event := workRerouteEvent{
+			PreviousDecisionDigest: replay.State.RouteDecision.Digest,
+			OwnerDecisionRef:       request.OwnerDecisionRef, RouteDecision: request.RouteDecision,
+		}
+		return workRunRecord{Operation: workOperationReroute, Reroute: &event}, nil
+	})
+}
+
+func (store WorkRunStore) BindSDDRun(ctx context.Context, request BindSDDRunRequest) (WorkRunState, error) {
+	if err := validateMutationEnvelope(request.ExpectedRevision, request.RequestID); err != nil {
+		return WorkRunState{}, err
+	}
+	if !validOpaqueRef(request.SDDRunRef) {
+		return WorkRunState{}, errors.New("invalid SDD run reference")
+	}
+	digest, err := digestValue("gentle-ai.work-run-bind-sdd-request/v1", request)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay workReplay) (workRunRecord, error) {
+		if !replay.State.Started ||
+			replay.State.ImplementationRoute != ImplementationRouteSDD ||
+			!validSHA256Ref(replay.State.RouteAcceptanceRef) ||
+			replay.State.SDDRunRef != "" ||
+			replay.State.Handoff != nil {
+			return workRunRecord{}, fmt.Errorf(
+				"%w: accepted SDD route is not ready for binding",
+				ErrWorkRunInvalidTransition,
+			)
+		}
+		if store.authority.SDD == nil {
+			return workRunRecord{}, ErrAuthorityPortUnavailable
+		}
+		run, err := store.authority.SDD.ResolveRun(ctx, request.SDDRunRef)
+		if err != nil {
+			return workRunRecord{}, fmt.Errorf("resolve accepted SDD run: %w", err)
+		}
+		if err := run.Validate(
+			request.SDDRunRef,
+			replay.State.WorkRunID,
+			replay.State.RouteAcceptanceRef,
+		); err != nil {
+			return workRunRecord{}, err
+		}
+		event := workBindSDDEvent{SDDRunRef: request.SDDRunRef}
+		return workRunRecord{Operation: workOperationBindSDD, BindSDD: &event}, nil
+	})
+}
+
+func (store WorkRunStore) BindImplementationHandoff(
+	ctx context.Context,
+	request BindImplementationHandoffRequest,
+) (WorkRunState, error) {
+	if err := validateMutationEnvelope(request.ExpectedRevision, request.RequestID); err != nil {
+		return WorkRunState{}, err
+	}
+	if err := request.Handoff.Validate(); err != nil {
+		return WorkRunState{}, err
+	}
+	digest, err := digestValue("gentle-ai.work-run-bind-handoff-request/v1", request)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay workReplay) (workRunRecord, error) {
+		event := request.Handoff
+		return workRunRecord{Operation: workOperationBindHandoff, Handoff: &event}, nil
+	})
+}
+
+func (store WorkRunStore) RecordVerificationForecast(
+	ctx context.Context,
+	request RecordVerificationForecastRequest,
+) (WorkRunState, error) {
+	if err := validateMutationEnvelope(request.ExpectedRevision, request.RequestID); err != nil {
+		return WorkRunState{}, err
+	}
+	if request.Input.WorkRunID != store.WorkRunID {
+		return WorkRunState{}, errors.New("verification forecast work run does not match store")
+	}
+	if store.authority.Verification == nil {
+		return WorkRunState{}, ErrAuthorityPortUnavailable
+	}
+	ownerForecast, err := store.authority.Verification.ResolveForecast(
+		ctx,
+		request.Input.AvailabilityRef,
+	)
+	if err != nil {
+		return WorkRunState{}, fmt.Errorf("resolve owner verification forecast: %w", err)
+	}
+	if err := ownerForecast.MatchesInput(request.Input); err != nil {
+		return WorkRunState{}, err
+	}
+	forecast, err := newVerificationForecast(request.Input)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	if err := forecast.MatchesPlan(request.Input.Applicability, request.Input.Registry, request.Input.Plan); err != nil {
+		return WorkRunState{}, err
+	}
+	digest, err := digestValue("gentle-ai.work-run-record-forecast-request/v1", request)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay workReplay) (workRunRecord, error) {
+		event := forecast
+		return workRunRecord{Operation: workOperationRecordForecast, Forecast: &event}, nil
+	})
+}
+
+func (store WorkRunStore) RecordVerificationDisposition(
+	ctx context.Context,
+	request RecordVerificationDispositionRequest,
+) (WorkRunState, error) {
+	if err := validateMutationEnvelope(request.ExpectedRevision, request.RequestID); err != nil {
+		return WorkRunState{}, err
+	}
+	digest, err := digestValue("gentle-ai.work-run-record-disposition-request/v1", request)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay workReplay) (workRunRecord, error) {
+		if replay.State.Forecast == nil {
+			return workRunRecord{}, fmt.Errorf("%w: verification forecast is missing", ErrWorkRunInvalidTransition)
+		}
+		if store.authority.Verification == nil {
+			return workRunRecord{}, ErrAuthorityPortUnavailable
+		}
+		ownerDisposition, err := store.authority.Verification.ResolveDisposition(
+			ctx,
+			request.DecisionRef,
+		)
+		if err != nil {
+			return workRunRecord{}, fmt.Errorf("resolve owner verification disposition: %w", err)
+		}
+		if err := ownerDisposition.Validate(*replay.State.Forecast); err != nil {
+			return workRunRecord{}, err
+		}
+		if ownerDisposition.Kind != request.Kind ||
+			ownerDisposition.AssumptionsRef != request.AssumptionsRef ||
+			ownerDisposition.ActorRef != request.ActorRef ||
+			ownerDisposition.RunnerRef != request.RunnerRef {
+			return workRunRecord{}, fmt.Errorf(
+				"%w: verification disposition",
+				ErrAuthorityBindingMismatch,
+			)
+		}
+		disposition, err := newVerificationDisposition(
+			*replay.State.Forecast, request.Kind, request.AssumptionsRef,
+			request.ActorRef, request.DecisionRef, request.RunnerRef,
+		)
+		if err != nil {
+			return workRunRecord{}, err
+		}
+		return workRunRecord{Operation: workOperationRecordDisposition, Disposition: &disposition}, nil
+	})
+}
+
+// Begin atomically reserves the exact ticket, subject, plan,
+// consent/automatic decision, availability observation, slot, and ordinal.
+// Callers may launch HCR only after this method succeeds.
+func (store WorkRunStore) Begin(
+	ctx context.Context,
+	request BeginRequest,
+) (BeginOutcome, error) {
+	if err := validateMutationEnvelope(request.ExpectedRevision, request.RequestID); err != nil {
+		return BeginOutcome{}, err
+	}
+	if !validSHA256Ref(request.ActionTicketRef) {
+		return BeginOutcome{}, errors.New("verification begin requires an immutable action ticket reference")
+	}
+	if err := reviewtransaction.ValidateVerificationPlan(request.Applicability, request.Registry, request.Plan); err != nil {
+		return BeginOutcome{}, err
+	}
+	if store.evidence == nil {
+		return BeginOutcome{}, ErrEvidencePortUnavailable
+	}
+	if store.authority.Verification == nil || store.authority.Launch == nil {
+		return BeginOutcome{}, ErrAuthorityPortUnavailable
+	}
+	digest, err := digestValue("gentle-ai.work-run-begin-verification-request/v1", request)
+	if err != nil {
+		return BeginOutcome{}, err
+	}
+	state, err := store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay workReplay) (workRunRecord, error) {
+		ticket, err := store.evidence.ReadActionTicket(ctx, request.ActionTicketRef)
+		if err != nil {
+			return workRunRecord{}, fmt.Errorf("read verification action ticket: %w", err)
+		}
+		if err := ticket.Validate(); err != nil {
+			return workRunRecord{}, fmt.Errorf("validate verification action ticket: %w", err)
+		}
+		slotBindingRef := ticket.SlotBindingRef
+		state := replay.State
+		if state.Forecast == nil || state.Disposition == nil {
+			return workRunRecord{}, fmt.Errorf("%w: forecast and disposition are required before begin", ErrWorkRunInvalidTransition)
+		}
+		ownerForecast, err := store.authority.Verification.ResolveForecast(
+			ctx,
+			state.Forecast.AvailabilityRef,
+		)
+		if err != nil {
+			return workRunRecord{}, fmt.Errorf("resolve owner verification plan: %w", err)
+		}
+		if err := ownerForecast.MatchesInput(VerificationForecastInput{
+			WorkRunID: state.WorkRunID, Handoff: *state.Handoff,
+			Applicability: request.Applicability, Registry: request.Registry, Plan: request.Plan,
+			PlanRevisionRef: state.Forecast.PlanRevisionRef,
+			Availability:    state.Forecast.Availability,
+			AvailabilityRef: state.Forecast.AvailabilityRef,
+			DiagnosticRefs:  state.Forecast.DiagnosticRefs,
+		}); err != nil {
+			return workRunRecord{}, err
+		}
+		if err := state.Forecast.MatchesPlan(request.Applicability, request.Registry, request.Plan); err != nil {
+			return workRunRecord{}, err
+		}
+		if err := state.Disposition.ValidateFor(*state.Forecast); err != nil {
+			return workRunRecord{}, err
+		}
+		if state.Disposition.Kind != DispositionRun {
+			return workRunRecord{}, fmt.Errorf("%w: disposition does not authorize launch", ErrWorkRunInvalidTransition)
+		}
+		obligation, ok := verificationObligationByID(request.Plan, ticket.Slot)
+		if !ok {
+			return workRunRecord{}, errors.New("action ticket slot is not an exact planned obligation")
+		}
+		if ticket.TicketRef != request.ActionTicketRef ||
+			ticket.SubjectRef != state.Forecast.SubjectRef ||
+			ticket.CandidateRef != state.Forecast.CandidateRef ||
+			ticket.VerificationContextRef != state.Forecast.Digest ||
+			ticket.ExpectedRevision != state.Forecast.PlanRevisionRef ||
+			ticket.Capability != obligation.CapabilityRef {
+			return workRunRecord{}, errors.New("action ticket does not bind the exact forecast and planned obligation")
+		}
+		for _, reservation := range state.Reservations {
+			if reservation.Slot == ticket.Slot || reservation.ActionTicketRef == ticket.TicketRef ||
+				reservation.SlotBindingRef == slotBindingRef {
+				return workRunRecord{}, ErrVerificationReserved
+			}
+		}
+		reservation, err := newVerificationReservation(
+			*state.Forecast, *state.Disposition, obligation.Cost,
+			state.WorkRunID, state.Revision, ticket.TicketRef, slotBindingRef,
+			ticket.Slot, ticket.Capability, state.NextOrdinal,
+		)
+		if err != nil {
+			return workRunRecord{}, err
+		}
+		return workRunRecord{Operation: workOperationBeginVerification, Reservation: &reservation}, nil
+	})
+	if err != nil {
+		return BeginOutcome{}, err
+	}
+
+	reservation, ok := reservationForTicket(state.Reservations, request.ActionTicketRef)
+	if !ok {
+		return BeginOutcome{State: state}, errors.New("committed verification reservation is missing")
+	}
+	liveState, err := store.Status()
+	if err != nil {
+		return BeginOutcome{State: state}, err
+	}
+	liveReservation, ok := reservationByRef(
+		liveState.Reservations,
+		reservation.ReservationRef,
+	)
+	if !ok ||
+		liveReservation.ActionTicketRef != reservation.ActionTicketRef ||
+		liveReservation.SlotBindingRef != reservation.SlotBindingRef {
+		return BeginOutcome{State: state}, errors.New(
+			"live WorkRun no longer contains the exact committed verification reservation",
+		)
+	}
+	if liveState.VerificationResultRef != "" {
+		return BeginOutcome{State: state}, fmt.Errorf(
+			"%w: verification result is already terminal",
+			ErrWorkRunInvalidTransition,
+		)
+	}
+	if launchClaimExists(liveState.LaunchClaims, reservation.ReservationRef) {
+		return BeginOutcome{State: state}, ErrVerificationLaunchClaimed
+	}
+	ticket, err := store.evidence.ReadActionTicket(ctx, request.ActionTicketRef)
+	if err != nil {
+		return BeginOutcome{State: state}, fmt.Errorf("re-read verification action ticket: %w", err)
+	}
+	if err := ticket.Validate(); err != nil {
+		return BeginOutcome{State: state}, err
+	}
+	if state.ImplementationRoute == ImplementationRouteSDD {
+		if store.authority.SDD == nil {
+			return BeginOutcome{State: state}, ErrAuthorityPortUnavailable
+		}
+		binding := SDDReservationBinding{
+			WorkRunID: state.WorkRunID, WorkRunRevision: reservation.ExpectedWorkRevision,
+			SDDRunRef: state.SDDRunRef, ReservationRef: reservation.ReservationRef,
+			ActionTicketRef: reservation.ActionTicketRef,
+		}
+		if err := binding.Validate(); err != nil {
+			return BeginOutcome{State: state}, err
+		}
+		if err := store.authority.SDD.BindVerificationReservation(ctx, binding); err != nil {
+			return BeginOutcome{State: state}, fmt.Errorf("bind reservation into SDD attempt: %w", err)
+		}
+	}
+	launchBinding := hostruntime.LaunchBinding{
+		Schema: hostruntime.LaunchBindingSchemaV1, WorkRunID: state.WorkRunID,
+		ReservationRef: reservation.ReservationRef, ActionTicketRef: ticket.TicketRef,
+		RequestDigest: ticket.HostRequestDigest,
+	}
+	claimRequestID, err := newLaunchClaimRequestID()
+	if err != nil {
+		return BeginOutcome{State: state}, err
+	}
+	capability, err := store.authority.Launch.ActivateLaunch(
+		ctx,
+		launchBinding,
+		func(claimContext context.Context) error {
+			return store.claimLaunch(claimContext, launchBinding, claimRequestID)
+		},
+	)
+	if err != nil {
+		return BeginOutcome{State: state}, fmt.Errorf("activate HCR launch capability: %w", err)
+	}
+	return BeginOutcome{State: state, Capability: capability}, nil
+}
+
+func (store WorkRunStore) BindVerificationResult(
+	ctx context.Context,
+	request BindVerificationResultRequest,
+) (WorkRunState, error) {
+	if err := validateMutationEnvelope(request.ExpectedRevision, request.RequestID); err != nil {
+		return WorkRunState{}, err
+	}
+	if store.authority.Verification == nil {
+		return WorkRunState{}, ErrAuthorityPortUnavailable
+	}
+	ownerResult, err := store.authority.Verification.ResolveResult(ctx, request.Result.ResultRef)
+	if err != nil {
+		return WorkRunState{}, fmt.Errorf("resolve owner verification result: %w", err)
+	}
+	if err := ownerResult.Validate(request.Result.ResultRef); err != nil {
+		return WorkRunState{}, err
+	}
+	if !equalCanonicalValue(ownerResult.Applicability, request.Applicability) ||
+		!equalCanonicalValue(ownerResult.Registry, request.Registry) ||
+		!equalCanonicalValue(ownerResult.Plan, request.Plan) ||
+		!equalCanonicalValue(ownerResult.Result, request.Result) {
+		return WorkRunState{}, fmt.Errorf("%w: verification result preimage", ErrAuthorityBindingMismatch)
+	}
+	digest, err := digestValue("gentle-ai.work-run-bind-result-request/v1", request)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay workReplay) (workRunRecord, error) {
+		state := replay.State
+		if state.Forecast == nil {
+			return workRunRecord{}, fmt.Errorf("%w: verification forecast is missing", ErrWorkRunInvalidTransition)
+		}
+		if state.VerificationResultRef != "" {
+			return workRunRecord{}, fmt.Errorf("%w: verification result is already terminal", ErrWorkRunInvalidTransition)
+		}
+		if err := state.Forecast.MatchesPlan(request.Applicability, request.Registry, request.Plan); err != nil {
+			return workRunRecord{}, err
+		}
+		if err := store.validateResultEvidence(ctx, state, request.Result); err != nil {
+			return workRunRecord{}, err
+		}
+		event := workBindResultEvent{ResultRef: request.Result.ResultRef}
+		return workRunRecord{Operation: workOperationBindResult, Result: &event}, nil
+	})
+}
+
+func (store WorkRunStore) BindReviewReceipt(
+	ctx context.Context,
+	request BindReviewReceiptRequest,
+) (WorkRunState, error) {
+	if err := validateMutationEnvelope(request.ExpectedRevision, request.RequestID); err != nil {
+		return WorkRunState{}, err
+	}
+	if !validSHA256Ref(request.ReviewReceiptRef) {
+		return WorkRunState{}, errors.New("review receipt must be an immutable SHA-256 reference")
+	}
+	if store.authority.Verification == nil {
+		return WorkRunState{}, ErrAuthorityPortUnavailable
+	}
+	digest, err := digestValue("gentle-ai.work-run-bind-review-request/v1", request)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay workReplay) (workRunRecord, error) {
+		state := replay.State
+		if state.Handoff == nil || state.VerificationResultRef == "" {
+			return workRunRecord{}, fmt.Errorf(
+				"%w: terminal result and candidate are required before review",
+				ErrWorkRunInvalidTransition,
+			)
+		}
+		receipt, err := store.authority.Verification.ResolveReviewReceipt(
+			ctx,
+			request.ReviewReceiptRef,
+		)
+		if err != nil {
+			return workRunRecord{}, fmt.Errorf("resolve terminal review receipt: %w", err)
+		}
+		if err := receipt.Validate(
+			request.ReviewReceiptRef,
+			state.Handoff.CandidateRef,
+			state.VerificationResultRef,
+		); err != nil {
+			return workRunRecord{}, err
+		}
+		event := workBindReviewEvent{ReviewReceiptRef: request.ReviewReceiptRef}
+		return workRunRecord{Operation: workOperationBindReview, Review: &event}, nil
+	})
+}
+
+func (store WorkRunStore) BindDeliveryAuthorization(
+	ctx context.Context,
+	request BindDeliveryAuthorizationRequest,
+) (WorkRunState, error) {
+	if err := validateMutationEnvelope(request.ExpectedRevision, request.RequestID); err != nil {
+		return WorkRunState{}, err
+	}
+	if !validSHA256Ref(request.AuthorizationRef) {
+		return WorkRunState{}, errors.New(
+			"delivery authorization must be an immutable SHA-256 reference",
+		)
+	}
+	digest, err := digestValue(
+		"gentle-ai.work-run-bind-delivery-authorization-request/v1",
+		request,
+	)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	return store.mutate(
+		ctx,
+		request.ExpectedRevision,
+		request.RequestID,
+		digest,
+		func(replay workReplay) (workRunRecord, error) {
+			state := replay.State
+			if state.Handoff == nil ||
+				state.VerificationResultRef == "" ||
+				state.ReviewReceiptRef == "" ||
+				state.DeliveryAuthorizationRef != "" {
+				return workRunRecord{}, fmt.Errorf(
+					"%w: terminal candidate, result, and review are required before delivery authorization",
+					ErrWorkRunInvalidTransition,
+				)
+			}
+			result, err := store.resolveBoundVerificationResult(ctx, state)
+			if err != nil {
+				return workRunRecord{}, err
+			}
+			if store.authority.PAD == nil {
+				return workRunRecord{}, ErrAuthorityPortUnavailable
+			}
+			authorization, err := store.authority.PAD.ResolveLiveDeliveryAuthorization(
+				ctx,
+				request.AuthorizationRef,
+			)
+			if err != nil {
+				return workRunRecord{}, fmt.Errorf(
+					"resolve live PAD delivery authorization: %w",
+					err,
+				)
+			}
+			if err := authorization.Validate(
+				request.AuthorizationRef,
+				state,
+			); err != nil {
+				return workRunRecord{}, err
+			}
+			if err := validateAuthorizedDeliveryAggregate(
+				authorization.Kind,
+				result.Result.Aggregate,
+			); err != nil {
+				return workRunRecord{}, err
+			}
+			event := workBindDeliveryAuthorizationEvent{
+				AuthorizationRef: request.AuthorizationRef,
+			}
+			return workRunRecord{
+				Operation: workOperationBindDelivery,
+				Delivery:  &event,
+			}, nil
+		},
+	)
+}
+
+func (store WorkRunStore) mutate(
+	ctx context.Context,
+	expectedRevision string,
+	requestID string,
+	requestDigest string,
+	build func(workReplay) (workRunRecord, error),
+) (WorkRunState, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkRunState{}, err
+	}
+	if err := store.ensureDirectories(); err != nil {
+		return WorkRunState{}, err
+	}
+	directoryIdentity, err := openWorkRunDirectoryIdentity(store.Dir)
+	if err != nil {
+		return WorkRunState{}, fmt.Errorf("open work run authority identity: %w", err)
+	}
+	defer directoryIdentity.Close()
+	recordsIdentity, err := openWorkRunDirectoryIdentity(filepath.Join(store.Dir, "records"))
+	if err != nil {
+		return WorkRunState{}, fmt.Errorf("open work run records identity: %w", err)
+	}
+	defer recordsIdentity.Close()
+
+	lock, err := reviewtransaction.AcquireAuthorityFileLock(filepath.Join(store.Dir, "LOCK"))
+	if err != nil {
+		if errors.Is(err, reviewtransaction.ErrConcurrentUpdate) {
+			return WorkRunState{}, fmt.Errorf("%w: %v", ErrWorkRunConcurrentUpdate, err)
+		}
+		return WorkRunState{}, err
+	}
+	defer lock.Release()
+	if err := validateWorkRunDirectoryIdentities(directoryIdentity, recordsIdentity); err != nil {
+		return WorkRunState{}, err
+	}
+
+	replay, err := store.load()
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	if err := validateWorkRunDirectoryIdentities(directoryIdentity, recordsIdentity); err != nil {
+		return WorkRunState{}, err
+	}
+	if receipt, exists := replay.Requests[requestID]; exists {
+		if receipt.Digest != requestDigest {
+			return WorkRunState{}, ErrWorkRunRequestConflict
+		}
+		historical, exists := replay.States[receipt.Revision]
+		if !exists || historical.Revision != receipt.Revision {
+			return WorkRunState{}, errors.New(
+				"work run replay receipt has no validated historical state",
+			)
+		}
+		if err := store.syncReplay(); err != nil {
+			return WorkRunState{}, &PublicationError{
+				Revision: receipt.Revision, Committed: true, Cause: err,
+			}
+		}
+		if err := validateWorkRunDirectoryIdentities(directoryIdentity, recordsIdentity); err != nil {
+			return WorkRunState{}, &PublicationError{
+				Revision: receipt.Revision, Committed: true, Cause: err,
+			}
+		}
+		return cloneWorkRunState(historical), nil
+	}
+	if replay.State.Revision != expectedRevision {
+		return WorkRunState{}, &RevisionConflictError{
+			Expected: expectedRevision, Current: replay.State.Revision,
+		}
+	}
+	record, err := build(replay)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	record.Schema = workRunRecordSchemaV1
+	record.WorkRunID = store.WorkRunID
+	record.PreviousRevision = expectedRevision
+	record.RequestID = requestID
+	record.RequestDigest = requestDigest
+	if err := validateWorkRunRecordShape(record); err != nil {
+		return WorkRunState{}, err
+	}
+	candidate := cloneWorkRunState(replay.State)
+	if err := applyWorkRunRecord(&candidate, record); err != nil {
+		return WorkRunState{}, err
+	}
+	return store.commitRecordLocked(record, directoryIdentity, recordsIdentity)
+}
+
+func (store WorkRunStore) commitRecordLocked(
+	record workRunRecord,
+	directoryIdentity *workRunDirectoryIdentity,
+	recordsIdentity *workRunDirectoryIdentity,
+) (WorkRunState, error) {
+	revision, payload, err := workRunRecordRevision(record)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	if err := validateWorkRunDirectoryIdentities(directoryIdentity, recordsIdentity); err != nil {
+		return WorkRunState{}, err
+	}
+	if err := store.publishRecord(revision, payload); err != nil {
+		return WorkRunState{}, err
+	}
+	if err := validateWorkRunDirectoryIdentities(directoryIdentity, recordsIdentity); err != nil {
+		return WorkRunState{}, fmt.Errorf(
+			"work run authority changed after immutable record publication and before HEAD: %w",
+			err,
+		)
+	}
+	if err := store.publishHead(revision); err != nil {
+		return WorkRunState{}, err
+	}
+	if err := validateWorkRunDirectoryIdentities(directoryIdentity, recordsIdentity); err != nil {
+		return WorkRunState{}, &PublicationError{
+			Revision: revision, Committed: true, Cause: err,
+		}
+	}
+	if err := reviewtransaction.SyncReviewDirectory(store.Dir); err != nil {
+		return WorkRunState{}, &PublicationError{
+			Revision: revision, Committed: true,
+			Cause: fmt.Errorf("sync work run HEAD directory: %w", err),
+		}
+	}
+	committed, err := store.load()
+	if err != nil {
+		return WorkRunState{}, &PublicationError{
+			Revision: revision, Committed: true,
+			Cause: fmt.Errorf("replay committed work run: %w", err),
+		}
+	}
+	if committed.State.Revision != revision {
+		return WorkRunState{}, &PublicationError{
+			Revision: revision, Committed: true,
+			Cause: errors.New("committed work run did not replay to candidate revision"),
+		}
+	}
+	if err := validateWorkRunDirectoryIdentities(directoryIdentity, recordsIdentity); err != nil {
+		return WorkRunState{}, &PublicationError{
+			Revision: revision, Committed: true, Cause: err,
+		}
+	}
+	return cloneWorkRunState(committed.State), nil
+}
+
+func validateWorkRunDirectoryIdentities(identities ...*workRunDirectoryIdentity) error {
+	for _, identity := range identities {
+		if err := identity.Validate(); err != nil {
+			return fmt.Errorf("work run authority directory changed during mutation: %w", err)
+		}
+	}
+	return nil
+}
+
+func (store WorkRunStore) claimLaunch(
+	ctx context.Context,
+	binding hostruntime.LaunchBinding,
+	requestID string,
+) error {
+	if err := binding.Validate(); err != nil {
+		return err
+	}
+	if binding.WorkRunID != store.WorkRunID {
+		return errors.New("host launch binding work run does not match store")
+	}
+	if err := validateRequestID(requestID); err != nil {
+		return err
+	}
+	current, err := store.Status()
+	if err != nil {
+		return err
+	}
+	if launchClaimExists(current.LaunchClaims, binding.ReservationRef) {
+		return ErrVerificationLaunchClaimed
+	}
+	claim, err := newVerificationLaunchClaim(
+		binding.ReservationRef,
+		binding.ActionTicketRef,
+		binding.RequestDigest,
+	)
+	if err != nil {
+		return err
+	}
+	requestDigest, err := digestValue("gentle-ai.work-run-claim-launch-request/v1", claim)
+	if err != nil {
+		return err
+	}
+	_, err = store.mutate(
+		ctx,
+		current.Revision,
+		requestID,
+		requestDigest,
+		func(replay workReplay) (workRunRecord, error) {
+			reservation, ok := reservationByRef(
+				replay.State.Reservations,
+				binding.ReservationRef,
+			)
+			if !ok || reservation.ActionTicketRef != binding.ActionTicketRef {
+				return workRunRecord{}, errors.New("host launch does not bind a durable reservation")
+			}
+			if launchClaimExists(replay.State.LaunchClaims, binding.ReservationRef) {
+				return workRunRecord{}, ErrVerificationLaunchClaimed
+			}
+			event := claim
+			return workRunRecord{Operation: workOperationClaimLaunch, Launch: &event}, nil
+		},
+	)
+	return err
+}
+
+func newLaunchClaimRequestID() (string, error) {
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return "", fmt.Errorf("generate launch claim request identifier: %w", err)
+	}
+	return "claim-" + hex.EncodeToString(nonce[:]), nil
+}
+
+func (store WorkRunStore) load() (workReplay, error) {
+	replay := workReplay{
+		State: WorkRunState{
+			Schema: WorkRunStateSchemaV1, WorkRunID: store.WorkRunID,
+			Reservations: []VerificationReservation{},
+			LaunchClaims: []VerificationLaunchClaim{}, NextOrdinal: 1,
+		},
+		Requests: map[string]workRequestReceipt{},
+		States:   map[string]WorkRunState{},
+	}
+	if err := store.validateExistingAuthorityPath(); err != nil {
+		return workReplay{}, err
+	}
+	head, exists, err := readWorkRunHead(filepath.Join(store.Dir, "HEAD"))
+	if err != nil || !exists {
+		return replay, err
+	}
+
+	type revisionRecord struct {
+		revision string
+		record   workRunRecord
+	}
+	reverse := make([]revisionRecord, 0, 16)
+	seen := make(map[string]struct{})
+	for revision := head; revision != ""; {
+		if len(reverse) >= maximumWorkRunChainRecords {
+			return workReplay{}, errors.New("work run chain exceeds the bounded record count")
+		}
+		if _, duplicate := seen[revision]; duplicate {
+			return workReplay{}, errors.New("work run chain contains a revision cycle")
+		}
+		seen[revision] = struct{}{}
+		record, err := store.loadRecord(revision)
+		if err != nil {
+			return workReplay{}, err
+		}
+		reverse = append(reverse, revisionRecord{revision: revision, record: record})
+		revision = record.PreviousRevision
+	}
+
+	for index := len(reverse) - 1; index >= 0; index-- {
+		entry := reverse[index]
+		if entry.record.PreviousRevision != replay.State.Revision {
+			return workReplay{}, errors.New("work run chain has a broken predecessor")
+		}
+		if _, duplicate := replay.Requests[entry.record.RequestID]; duplicate {
+			return workReplay{}, errors.New("work run chain contains a duplicate request identifier")
+		}
+		if err := applyWorkRunRecord(&replay.State, entry.record); err != nil {
+			return workReplay{}, fmt.Errorf("apply work run revision %s: %w", entry.revision, err)
+		}
+		replay.State.Revision = entry.revision
+		replay.Requests[entry.record.RequestID] = workRequestReceipt{
+			Digest: entry.record.RequestDigest, Revision: entry.revision,
+		}
+		replay.States[entry.revision] = cloneWorkRunState(replay.State)
+	}
+	if replay.State.Revision != head {
+		return workReplay{}, errors.New("work run replay did not reach HEAD")
+	}
+	return replay, nil
+}
+
+func (store WorkRunStore) validateExistingAuthorityPath() error {
+	if err := store.validateCanonicalLocation(); err != nil {
+		return err
+	}
+	relative, err := filepath.Rel(store.commonDir, filepath.Join(store.Dir, "records"))
+	if err != nil || relative == "." || relative == ".." || filepath.IsAbs(relative) ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return errors.New("work run authority escapes the Git common directory")
+	}
+	current := store.commonDir
+	for index, segment := range strings.Split(relative, string(filepath.Separator)) {
+		if segment == "" || segment == "." || segment == ".." {
+			return errors.New("work run authority contains an invalid path segment")
+		}
+		current = filepath.Join(current, segment)
+		info, err := os.Lstat(current)
+		if os.IsNotExist(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if workRunPathUnsafe(current, info) || !info.IsDir() {
+			return errors.New("work run authority path is not a directory")
+		}
+		if index > 0 {
+			if err := validatePrivateWorkRunDirectory(current); err != nil {
+				return fmt.Errorf("validate private work run authority directory: %w", err)
+			}
+		}
+	}
+	return nil
+}
+
+func (store WorkRunStore) validateCanonicalLocation() error {
+	if !workRunIDPattern.MatchString(store.WorkRunID) {
+		return errors.New("work run store has invalid identifier")
+	}
+	commonDir := filepath.Clean(store.commonDir)
+	if commonDir == "." || !filepath.IsAbs(commonDir) {
+		return errors.New("work run Git common directory is invalid")
+	}
+	expected := filepath.Join(
+		commonDir,
+		"gentle-ai",
+		"work-runs",
+		"v1",
+		store.WorkRunID,
+	)
+	if filepath.Clean(store.Dir) != expected {
+		return errors.New("work run store directory is not its canonical authority path")
+	}
+	return nil
+}
+
+func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
+	if err := validateWorkRunRecordShape(record); err != nil {
+		return err
+	}
+	if record.WorkRunID != state.WorkRunID {
+		return errors.New("work run record identifier does not match store")
+	}
+	switch record.Operation {
+	case workOperationStart:
+		if state.Started || state.Revision != "" {
+			return ErrWorkRunAlreadyStarted
+		}
+		if err := record.Start.RouteDecision.Validate(); err != nil {
+			return err
+		}
+		if !validSHA256Ref(record.Start.DeliveryIntentRef) {
+			return errors.New("work run start has invalid delivery intent reference")
+		}
+		state.Started = true
+		state.RouteDecision = record.Start.RouteDecision
+		state.DeliveryIntentRef = record.Start.DeliveryIntentRef
+		switch record.Start.RouteDecision.Decision {
+		case RouteDecisionDirectInline:
+			state.ImplementationRoute = ImplementationRouteDirectInline
+		case RouteDecisionDelegatedDirect:
+			state.ImplementationRoute = ImplementationRouteDelegatedDirect
+		case RouteDecisionProposeSDD:
+			if record.Start.RouteDecision.ExplicitSDDRequestRef != "" {
+				state.ImplementationRoute = ImplementationRouteSDD
+				state.RouteAcceptanceRef = record.Start.RouteDecision.ExplicitSDDRequestRef
+			}
+		}
+	case workOperationAcceptSDD:
+		if !state.Started || state.RouteDecision.Decision != RouteDecisionProposeSDD ||
+			state.ImplementationRoute != "" || state.RouteAcceptanceRef != "" ||
+			state.Handoff != nil {
+			return fmt.Errorf("%w: SDD proposal is not awaiting acceptance", ErrWorkRunInvalidTransition)
+		}
+		if !validSHA256Ref(record.AcceptSDD.AcceptanceRef) {
+			return errors.New("work run SDD acceptance reference is invalid")
+		}
+		state.ImplementationRoute = ImplementationRouteSDD
+		state.RouteAcceptanceRef = record.AcceptSDD.AcceptanceRef
+	case workOperationReroute:
+		if !state.Started || state.RouteDecision.Decision != RouteDecisionProposeSDD ||
+			state.ImplementationRoute != "" || state.RouteAcceptanceRef != "" ||
+			state.Handoff != nil {
+			return fmt.Errorf("%w: SDD proposal is not eligible for reroute", ErrWorkRunInvalidTransition)
+		}
+		if record.Reroute.PreviousDecisionDigest != state.RouteDecision.Digest ||
+			!validSHA256Ref(record.Reroute.OwnerDecisionRef) {
+			return errors.New("work run reroute does not bind the pending owner decision")
+		}
+		if err := record.Reroute.RouteDecision.Validate(); err != nil {
+			return err
+		}
+		switch record.Reroute.RouteDecision.Decision {
+		case RouteDecisionDirectInline:
+			state.ImplementationRoute = ImplementationRouteDirectInline
+		case RouteDecisionDelegatedDirect:
+			state.ImplementationRoute = ImplementationRouteDelegatedDirect
+		default:
+			return errors.New("work run reroute must produce an executable non-SDD decision")
+		}
+		state.RouteDecision = record.Reroute.RouteDecision
+		state.RouteAcceptanceRef = record.Reroute.OwnerDecisionRef
+	case workOperationBindSDD:
+		if !state.Started || state.ImplementationRoute != ImplementationRouteSDD ||
+			!validSHA256Ref(state.RouteAcceptanceRef) || state.SDDRunRef != "" ||
+			state.Handoff != nil {
+			return fmt.Errorf("%w: accepted SDD route is not ready for binding", ErrWorkRunInvalidTransition)
+		}
+		if !validOpaqueRef(record.BindSDD.SDDRunRef) {
+			return errors.New("work run SDD reference is invalid")
+		}
+		state.SDDRunRef = record.BindSDD.SDDRunRef
+	case workOperationBindHandoff:
+		if !state.Started || state.ImplementationRoute == "" {
+			return ErrWorkRunRoutePending
+		}
+		if state.Handoff != nil {
+			return fmt.Errorf("%w: implementation handoff is already bound", ErrWorkRunInvalidTransition)
+		}
+		if err := record.Handoff.Validate(); err != nil {
+			return err
+		}
+		if record.Handoff.Route != state.ImplementationRoute {
+			return errors.New("implementation handoff route differs from selected route")
+		}
+		if state.ImplementationRoute == ImplementationRouteSDD {
+			if state.SDDRunRef == "" || record.Handoff.SDDRunRef != state.SDDRunRef {
+				return errors.New("SDD handoff does not bind the accepted SDD run")
+			}
+		}
+		state.Handoff = cloneHandoff(record.Handoff)
+	case workOperationRecordForecast:
+		if state.Handoff == nil {
+			return fmt.Errorf("%w: implementation handoff is missing", ErrWorkRunInvalidTransition)
+		}
+		if state.Forecast != nil {
+			return fmt.Errorf("%w: verification forecast is already bound", ErrWorkRunInvalidTransition)
+		}
+		if err := record.Forecast.Validate(); err != nil {
+			return err
+		}
+		if record.Forecast.WorkRunID != state.WorkRunID ||
+			record.Forecast.HandoffDigest != state.Handoff.Digest ||
+			record.Forecast.CandidateRef != state.Handoff.CandidateRef {
+			return errors.New("verification forecast does not bind the current handoff")
+		}
+		state.Forecast = cloneForecast(record.Forecast)
+	case workOperationRecordDisposition:
+		if state.Forecast == nil || len(state.Reservations) != 0 ||
+			state.VerificationResultRef != "" {
+			return fmt.Errorf("%w: forecast is not eligible for a disposition", ErrWorkRunInvalidTransition)
+		}
+		if err := record.Disposition.ValidateFor(*state.Forecast); err != nil {
+			return err
+		}
+		state.Disposition = cloneDisposition(record.Disposition)
+	case workOperationBeginVerification:
+		if state.Forecast == nil || state.Disposition == nil ||
+			state.VerificationResultRef != "" {
+			return fmt.Errorf("%w: verification cannot begin in the current state", ErrWorkRunInvalidTransition)
+		}
+		if err := record.Reservation.Validate(); err != nil {
+			return err
+		}
+		if record.Reservation.ForecastDigest != state.Forecast.Digest ||
+			record.Reservation.DispositionDigest != state.Disposition.Digest ||
+			record.Reservation.WorkRunID != state.WorkRunID ||
+			record.Reservation.ExpectedWorkRevision != state.Revision ||
+			record.Reservation.Ordinal != state.NextOrdinal {
+			return errors.New("verification reservation does not bind the current forecast ordinal")
+		}
+		for _, existing := range state.Reservations {
+			if existing.Slot == record.Reservation.Slot ||
+				existing.ActionTicketRef == record.Reservation.ActionTicketRef ||
+				existing.SlotBindingRef == record.Reservation.SlotBindingRef {
+				return ErrVerificationReserved
+			}
+		}
+		state.Reservations = append(state.Reservations, *record.Reservation)
+		state.NextOrdinal++
+	case workOperationClaimLaunch:
+		if state.Forecast == nil || state.VerificationResultRef != "" {
+			return fmt.Errorf("%w: verification launch is not claimable", ErrWorkRunInvalidTransition)
+		}
+		if err := record.Launch.Validate(); err != nil {
+			return err
+		}
+		reservation, ok := reservationByRef(state.Reservations, record.Launch.ReservationRef)
+		if !ok || reservation.ActionTicketRef != record.Launch.ActionTicketRef {
+			return errors.New("verification launch claim does not bind a reservation")
+		}
+		if launchClaimExists(state.LaunchClaims, record.Launch.ReservationRef) {
+			return ErrVerificationLaunchClaimed
+		}
+		state.LaunchClaims = append(state.LaunchClaims, *record.Launch)
+	case workOperationBindResult:
+		if state.Forecast == nil || state.VerificationResultRef != "" {
+			return fmt.Errorf("%w: verification result is not bindable", ErrWorkRunInvalidTransition)
+		}
+		if !validSHA256Ref(record.Result.ResultRef) {
+			return errors.New("verification result reference is invalid")
+		}
+		state.VerificationResultRef = record.Result.ResultRef
+		state.ReviewReceiptRef = ""
+		state.DeliveryAuthorizationRef = ""
+	case workOperationBindReview:
+		if state.VerificationResultRef == "" || state.ReviewReceiptRef != "" {
+			return fmt.Errorf("%w: review receipt is not bindable", ErrWorkRunInvalidTransition)
+		}
+		if !validSHA256Ref(record.Review.ReviewReceiptRef) {
+			return errors.New("work run review receipt reference is invalid")
+		}
+		state.ReviewReceiptRef = record.Review.ReviewReceiptRef
+	case workOperationBindDelivery:
+		if state.Handoff == nil ||
+			state.VerificationResultRef == "" ||
+			state.ReviewReceiptRef == "" ||
+			state.DeliveryAuthorizationRef != "" {
+			return fmt.Errorf(
+				"%w: delivery authorization is not bindable",
+				ErrWorkRunInvalidTransition,
+			)
+		}
+		if !validSHA256Ref(record.Delivery.AuthorizationRef) {
+			return errors.New(
+				"work run delivery authorization reference is invalid",
+			)
+		}
+		state.DeliveryAuthorizationRef = record.Delivery.AuthorizationRef
+	default:
+		return fmt.Errorf("unsupported work run operation %q", record.Operation)
+	}
+	return nil
+}
+
+func validateWorkRunRecordShape(record workRunRecord) error {
+	if record.Schema != workRunRecordSchemaV1 {
+		return errors.New("unsupported work run record schema")
+	}
+	if !workRunIDPattern.MatchString(record.WorkRunID) {
+		return errors.New("work run record has invalid identifier")
+	}
+	if record.PreviousRevision != "" && !validSHA256Ref(record.PreviousRevision) {
+		return errors.New("work run record has invalid previous revision")
+	}
+	if err := validateRequestID(record.RequestID); err != nil {
+		return err
+	}
+	if !validSHA256Ref(record.RequestDigest) {
+		return errors.New("work run record has invalid request digest")
+	}
+	fields := []bool{
+		record.Start != nil, record.AcceptSDD != nil, record.Reroute != nil,
+		record.BindSDD != nil, record.Handoff != nil, record.Forecast != nil,
+		record.Disposition != nil, record.Reservation != nil, record.Result != nil,
+		record.Launch != nil, record.Review != nil, record.Delivery != nil,
+	}
+	count := 0
+	for _, present := range fields {
+		if present {
+			count++
+		}
+	}
+	if count != 1 {
+		return errors.New("work run record must contain exactly one typed event")
+	}
+	validOperation := record.Operation == workOperationStart && record.Start != nil ||
+		record.Operation == workOperationAcceptSDD && record.AcceptSDD != nil ||
+		record.Operation == workOperationReroute && record.Reroute != nil ||
+		record.Operation == workOperationBindSDD && record.BindSDD != nil ||
+		record.Operation == workOperationBindHandoff && record.Handoff != nil ||
+		record.Operation == workOperationRecordForecast && record.Forecast != nil ||
+		record.Operation == workOperationRecordDisposition && record.Disposition != nil ||
+		record.Operation == workOperationBeginVerification && record.Reservation != nil ||
+		record.Operation == workOperationClaimLaunch && record.Launch != nil ||
+		record.Operation == workOperationBindResult && record.Result != nil ||
+		record.Operation == workOperationBindReview && record.Review != nil ||
+		record.Operation == workOperationBindDelivery && record.Delivery != nil
+	if !validOperation {
+		return errors.New("work run record operation and typed event differ")
+	}
+	if record.Operation == workOperationStart && record.PreviousRevision != "" {
+		return errors.New("work run genesis must not have a previous revision")
+	}
+	return nil
+}
+
+func (store WorkRunStore) validateResultEvidence(
+	ctx context.Context,
+	state WorkRunState,
+	result reviewtransaction.VerificationResultRef,
+) error {
+	if result.Aggregate == reviewtransaction.VerificationAggregateNotRequired {
+		if len(result.EvidenceRefs) != 0 || len(state.Reservations) != 0 {
+			return errors.New("not-required verification cannot consume execution reservations or evidence")
+		}
+		return nil
+	}
+	if len(result.EvidenceRefs) == 0 {
+		if result.Aggregate == reviewtransaction.VerificationAggregateComplete ||
+			result.Aggregate == reviewtransaction.VerificationAggregateFailed ||
+			result.Aggregate == reviewtransaction.VerificationAggregatePartial ||
+			len(result.CompletedObligations) != 0 {
+			return errors.New("verification outcome requires admitted execution evidence")
+		}
+		return nil
+	}
+	if store.evidence == nil {
+		return ErrEvidencePortUnavailable
+	}
+	reservations := make(map[string]VerificationReservation, len(state.Reservations))
+	for _, reservation := range state.Reservations {
+		reservations[reservation.ActionTicketRef] = reservation
+	}
+	completeSlots := make(map[string]struct{}, len(result.CompletedObligations))
+	for _, evidenceRef := range result.EvidenceRefs {
+		execution, err := store.evidence.ReadExecutionEvidence(ctx, evidenceRef)
+		if err != nil {
+			return fmt.Errorf("read admitted verification evidence %s: %w", evidenceRef, err)
+		}
+		if err := execution.Validate(); err != nil {
+			return fmt.Errorf("validate admitted verification evidence %s: %w", evidenceRef, err)
+		}
+		reservation, exists := reservations[execution.TicketRef]
+		if !exists {
+			return errors.New("verification evidence has no successful atomic reservation")
+		}
+		if !launchClaimExists(state.LaunchClaims, reservation.ReservationRef) {
+			return errors.New("verification evidence has no durable pre-launch claim")
+		}
+		if execution.EvidenceRef != evidenceRef ||
+			execution.SlotBindingRef != reservation.SlotBindingRef ||
+			execution.SubjectRef != reservation.SubjectRef ||
+			execution.CandidateRef != reservation.CandidateRef ||
+			execution.VerificationContextRef != reservation.ForecastDigest ||
+			execution.ExpectedRevision != reservation.PlanRevisionRef ||
+			execution.Slot != reservation.Slot ||
+			execution.Capability != reservation.Capability {
+			return errors.New("verification evidence does not bind its exact reservation")
+		}
+		if execution.Complete {
+			completeSlots[execution.Slot] = struct{}{}
+		}
+	}
+	for _, obligationID := range result.CompletedObligations {
+		if _, complete := completeSlots[obligationID]; !complete {
+			return fmt.Errorf("completed obligation %q lacks complete admitted evidence", obligationID)
+		}
+	}
+	return nil
+}
+
+func verificationObligationByID(
+	plan reviewtransaction.VerificationPlan,
+	id string,
+) (reviewtransaction.VerificationObligation, bool) {
+	for _, obligation := range plan.Obligations {
+		if obligation.ID == id {
+			return obligation, true
+		}
+	}
+	return reviewtransaction.VerificationObligation{}, false
+}
+
+func reservationForTicket(
+	reservations []VerificationReservation,
+	ticketRef string,
+) (VerificationReservation, bool) {
+	for _, reservation := range reservations {
+		if reservation.ActionTicketRef == ticketRef {
+			return reservation, true
+		}
+	}
+	return VerificationReservation{}, false
+}
+
+func reservationByRef(
+	reservations []VerificationReservation,
+	reservationRef string,
+) (VerificationReservation, bool) {
+	for _, reservation := range reservations {
+		if reservation.ReservationRef == reservationRef {
+			return reservation, true
+		}
+	}
+	return VerificationReservation{}, false
+}
+
+func launchClaimExists(
+	claims []VerificationLaunchClaim,
+	reservationRef string,
+) bool {
+	for _, claim := range claims {
+		if claim.ReservationRef == reservationRef {
+			return true
+		}
+	}
+	return false
+}
+
+func equalCanonicalValue(left, right any) bool {
+	leftPayload, leftErr := json.Marshal(left)
+	rightPayload, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftPayload, rightPayload)
+}
+
+func cloneWorkRunState(state WorkRunState) WorkRunState {
+	result := state
+	result.RouteDecision.Reasons = append([]RouteDecisionReason(nil), state.RouteDecision.Reasons...)
+	result.Reservations = make([]VerificationReservation, len(state.Reservations))
+	copy(result.Reservations, state.Reservations)
+	result.LaunchClaims = make([]VerificationLaunchClaim, len(state.LaunchClaims))
+	copy(result.LaunchClaims, state.LaunchClaims)
+	result.Handoff = cloneHandoff(state.Handoff)
+	result.Forecast = cloneForecast(state.Forecast)
+	result.Disposition = cloneDisposition(state.Disposition)
+	return result
+}
+
+func cloneHandoff(value *ImplementationHandoff) *ImplementationHandoff {
+	if value == nil {
+		return nil
+	}
+	result := *value
+	result.DeclaredObligationRefs = cloneStrings(value.DeclaredObligationRefs)
+	result.EvidenceRefs = cloneStrings(value.EvidenceRefs)
+	return &result
+}
+
+func cloneForecast(value *VerificationForecast) *VerificationForecast {
+	if value == nil {
+		return nil
+	}
+	result := *value
+	result.CapabilityRefs = cloneStrings(value.CapabilityRefs)
+	result.DiagnosticRefs = cloneStrings(value.DiagnosticRefs)
+	if value.MaximumCost != nil {
+		cost := *value.MaximumCost
+		result.MaximumCost = &cost
+	}
+	return &result
+}
+
+func cloneDisposition(value *VerificationDisposition) *VerificationDisposition {
+	if value == nil {
+		return nil
+	}
+	result := *value
+	return &result
+}
+
+func cloneStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	result := make([]string, len(values))
+	copy(result, values)
+	return result
+}
+
+func validateMutationEnvelope(expectedRevision, requestID string) error {
+	if !validSHA256Ref(expectedRevision) {
+		return errors.New("work run mutation requires the exact current revision")
+	}
+	return validateRequestID(requestID)
+}
+
+func validateRequestID(requestID string) error {
+	if !workRequestIDPattern.MatchString(requestID) {
+		return errors.New("invalid work run request identifier")
+	}
+	return nil
+}
+
+func workRunRecordRevision(record workRunRecord) (string, []byte, error) {
+	payload, err := json.Marshal(record)
+	if err != nil {
+		return "", nil, err
+	}
+	payload = append(payload, '\n')
+	sum := sha256.Sum256(payload)
+	return "sha256:" + hex.EncodeToString(sum[:]), payload, nil
+}
+
+func (store WorkRunStore) ensureDirectories() error {
+	if err := store.validateCanonicalLocation(); err != nil {
+		return err
+	}
+	target := filepath.Join(store.Dir, "records")
+	relative, err := filepath.Rel(store.commonDir, target)
+	if err != nil || relative == "." || relative == ".." || filepath.IsAbs(relative) ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return errors.New("work run authority escapes the Git common directory")
+	}
+	current := store.commonDir
+	created := make([]string, 0, 6)
+	for index, segment := range strings.Split(relative, string(filepath.Separator)) {
+		if segment == "" || segment == "." || segment == ".." {
+			return errors.New("work run authority contains an invalid path segment")
+		}
+		current = filepath.Join(current, segment)
+		if index == 0 {
+			info, statErr := os.Lstat(current)
+			if os.IsNotExist(statErr) {
+				if err := os.Mkdir(current, 0o755); err != nil && !os.IsExist(err) {
+					return err
+				}
+				created = append(created, current)
+				info, statErr = os.Lstat(current)
+			}
+			if statErr != nil {
+				return statErr
+			}
+			if workRunPathUnsafe(current, info) || !info.IsDir() {
+				return errors.New("shared gentle-ai authority path is not a directory")
+			}
+			continue
+		}
+		wasCreated, err := createPrivateWorkRunDirectory(current)
+		if err != nil {
+			return fmt.Errorf("create private work run authority directory: %w", err)
+		}
+		if wasCreated {
+			created = append(created, current)
+		}
+	}
+	if filepath.Clean(current) != filepath.Clean(target) {
+		return errors.New("work run authority path resolution is inconsistent")
+	}
+	for _, path := range created {
+		if err := reviewtransaction.SyncReviewDirectory(filepath.Dir(path)); err != nil {
+			return fmt.Errorf("sync parent of work run authority directory: %w", err)
+		}
+	}
+	return nil
+}
+
+func (store WorkRunStore) publishRecord(revision string, payload []byte) error {
+	recordsDir := filepath.Join(store.Dir, "records")
+	path := filepath.Join(recordsDir, strings.TrimPrefix(revision, "sha256:")+".json")
+	temp, tempPath, err := createPrivateTempWorkRunFile(recordsDir, ".record-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tempPath)
+	_, err = temp.Write(payload)
+	if err == nil {
+		err = temp.Sync()
+	}
+	if closeErr := temp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err := validatePrivateWorkRunFile(tempPath); err != nil {
+		return err
+	}
+	if err := reviewtransaction.PublishFileNoReplace(tempPath, path); err != nil {
+		if !os.IsExist(err) {
+			return err
+		}
+		existing, readErr := readBoundedWorkRunFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if !bytes.Equal(existing, payload) {
+			return errors.New("existing immutable work run record differs from its revision")
+		}
+	}
+	if err := validatePrivateWorkRunFile(path); err != nil {
+		return fmt.Errorf("validate published immutable work run record: %w", err)
+	}
+	return reviewtransaction.SyncReviewDirectory(recordsDir)
+}
+
+func (store WorkRunStore) publishHead(revision string) error {
+	temp, tempPath, err := createPrivateTempWorkRunFile(store.Dir, ".head-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tempPath)
+	_, err = temp.WriteString(revision + "\n")
+	if err == nil {
+		err = temp.Sync()
+	}
+	if closeErr := temp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if err := validatePrivateWorkRunFile(tempPath); err != nil {
+		return err
+	}
+	headPath := filepath.Join(store.Dir, "HEAD")
+	if err := reviewtransaction.ReplaceFileAtomic(tempPath, headPath); err != nil {
+		return err
+	}
+	return validatePrivateWorkRunFile(headPath)
+}
+
+func createPrivateTempWorkRunFile(
+	directory string,
+	prefix string,
+) (*os.File, string, error) {
+	for attempt := 0; attempt < 32; attempt++ {
+		var nonce [16]byte
+		if _, err := rand.Read(nonce[:]); err != nil {
+			return nil, "", fmt.Errorf("generate private work run temporary path: %w", err)
+		}
+		path := filepath.Join(directory, prefix+hex.EncodeToString(nonce[:]))
+		file, err := createPrivateWorkRunFile(path)
+		if os.IsExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		return file, path, nil
+	}
+	return nil, "", errors.New("could not allocate a private work run temporary path")
+}
+
+func (store WorkRunStore) syncReplay() error {
+	if err := reviewtransaction.SyncReviewDirectory(filepath.Join(store.Dir, "records")); err != nil {
+		return fmt.Errorf("sync immutable work run records: %w", err)
+	}
+	if err := reviewtransaction.SyncReviewDirectory(store.Dir); err != nil {
+		return fmt.Errorf("sync work run HEAD: %w", err)
+	}
+	return nil
+}
+
+func readWorkRunHead(path string) (string, bool, error) {
+	payload, err := readBoundedWorkRunFile(path)
+	if os.IsNotExist(err) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if len(payload) != len("sha256:")+64+1 || payload[len(payload)-1] != '\n' {
+		return "", true, errors.New("invalid work run HEAD encoding")
+	}
+	revision := strings.TrimSuffix(string(payload), "\n")
+	if !validSHA256Ref(revision) {
+		return "", true, errors.New("invalid work run HEAD revision")
+	}
+	return revision, true, nil
+}
+
+func (store WorkRunStore) loadRecord(revision string) (workRunRecord, error) {
+	if !validSHA256Ref(revision) {
+		return workRunRecord{}, errors.New("invalid work run record revision")
+	}
+	path := filepath.Join(store.Dir, "records", strings.TrimPrefix(revision, "sha256:")+".json")
+	payload, err := readBoundedWorkRunFile(path)
+	if err != nil {
+		return workRunRecord{}, fmt.Errorf("load work run revision %s: %w", revision, err)
+	}
+	sum := sha256.Sum256(payload)
+	actual := "sha256:" + hex.EncodeToString(sum[:])
+	if actual != revision {
+		return workRunRecord{}, fmt.Errorf(
+			"work run record revision mismatch: expected %s, got %s",
+			revision, actual,
+		)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.DisallowUnknownFields()
+	var record workRunRecord
+	if err := decoder.Decode(&record); err != nil {
+		return workRunRecord{}, fmt.Errorf("decode work run revision %s: %w", revision, err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return workRunRecord{}, errors.New("work run record contains multiple JSON values")
+	}
+	_, canonical, err := workRunRecordRevision(record)
+	if err != nil || !bytes.Equal(payload, canonical) {
+		return workRunRecord{}, errors.New("work run record is not canonical")
+	}
+	if record.WorkRunID != store.WorkRunID {
+		return workRunRecord{}, errors.New("work run record identifier does not match store")
+	}
+	return record, nil
+}
+
+func readBoundedWorkRunFile(path string) ([]byte, error) {
+	return readBoundedPrivateWorkRunFile(path, maximumWorkRunRecordBytes)
+}
