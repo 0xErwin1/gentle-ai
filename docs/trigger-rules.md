@@ -77,15 +77,16 @@ contract; direct and delegated runs do not create or consume an SDD run.
 
 | Value | Effect |
 |---|---|
-| Unset or `enabled` | Advertise and run the common-work capability. |
+| Unset or `read_only` | Keep the native common-work capability dormant, return status without an authorized mutation, and reject apply. |
+| `enabled` | Explicitly enable status/apply for already owner-provisioned common work. It does not create or admit a new work run. |
 | `recovery_only` | Keep capability advertisement dormant and expose only recovery-safe continuation. |
-| `read_only` | Keep capability advertisement dormant, return status without an authorized mutation, and reject apply. |
 | `disabled` | Keep capability advertisement dormant and reject common-work use. |
 | Empty or unknown | Resolve to disabled with a typed invalid-mode error. |
 
 Unavailable, disabled, unknown, or read-only authority never becomes local
 adapter policy. The adapter remains read-only and surfaces the typed stop instead
-of inventing a transition.
+of inventing a transition. The canonical capability remains dormant until a
+productive owner-controlled intake and start surface is available.
 
 ## Installation and refresh
 
