@@ -250,7 +250,7 @@ func TestInjectClaudeKeepsHeavySDDWorkflowLazy(t *testing.T) {
 	for _, eager := range []string{
 		"### Delegation Rules",
 		"#### Mandatory Delegation Triggers",
-		"#### Review Lens Selection",
+		"#### Native Checking Contract",
 		"#### Cost and Context Balance",
 		"~/.claude/skills/_shared/sdd-orchestrator-workflow.md",
 	} {
@@ -641,26 +641,18 @@ func TestInjectOpenCodePreservesExistingOrchestratorPromptWhenRequested(t *testi
 		"fully mandatory",
 		"Semantic guard",
 		"execution, not delegation",
-		"not a substitute for delegation",
-		"Lifecycle receipt rule",
-		"validate the same content-bound receipt",
-		"generated-artifact, and provenance targets remain immutable",
-		"fresh adversarial lenses run only inside one explicit",
-		"#### Review Lens Selection",
-		"`reviewer` is an intent, not a concrete installed agent",
-		"triage the diff deterministically",
-		"**Trivial diff**",
-		"zero executable code and zero configuration changes",
-		"run exactly ONE lens",
-		"Large pure human documentation",
-		"run only `review-readability`",
-		"Full 4R is reserved for tier 3",
-		"after a fix rerun only the originating lens(es)",
-		"Native ordinary review keeps its targeted validator",
-		"`review-readability`",
-		"`review-reliability`",
-		"`review-resilience`",
-		"`review-risk`",
+		"Bounded read rule",
+		"read 1–3 files inline",
+		"4-file rule",
+		"Write rule",
+		"2+ non-trivial files",
+		"Context rule",
+		"Optional SDD rule",
+		"explicit request or accepted proposal",
+		"Per-action rule",
+		"Authority rule",
+		"gentle-ai.work-status/v1",
+		"gentle-ai.work-transition/v1",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing migrated preserved prompt hard gate %q", wanted)
@@ -674,6 +666,9 @@ func TestInjectOpenCodePreservesExistingOrchestratorPromptWhenRequested(t *testi
 		"Large PR, hot path, or >400 changed lines",
 		"small mechanical changes",
 		"trivial docs/text",
+		"#### Review Lens Selection",
+		"run exactly ONE lens",
+		"Full 4R",
 	} {
 		if strings.Contains(text, stale) {
 			t.Fatalf("opencode.json retained stale generic review routing %q", stale)
@@ -723,6 +718,10 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"use fresh context for adversarial review of diffs",
 		"trivial docs/text",
 		"small mechanical changes",
+		"run the concrete review lens(es) selected by Review Lens Selection",
+		"#### Review Lens Selection",
+		"run exactly ONE lens",
+		"Full 4R",
 	} {
 		if strings.Contains(text, unwanted) {
 			t.Fatalf("opencode.json still contains stale preserved prompt reference %q", unwanted)
@@ -755,28 +754,20 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"Never launch `sdd-apply` just because the user asked to implement a feature",
 		"### Mandatory Delegation Triggers (Non-Skippable)",
 		"fully mandatory",
+		"Bounded read rule",
+		"read 1–3 files inline",
 		"4-file rule",
-		"Multi-file write rule",
-		"Lifecycle receipt rule",
-		"Incident rule",
-		"Long-session rule",
-		"Fresh review rule",
+		"Write rule",
+		"2+ non-trivial files",
+		"Context rule",
+		"Optional SDD rule",
+		"explicit request or accepted proposal",
+		"Per-action rule",
+		"Authority rule",
 		"Semantic guard",
 		"execution, not delegation",
-		"not a substitute for delegation",
-		"run the concrete review lens(es) selected by Review Lens Selection",
-		"generated-artifact, and provenance targets remain immutable",
-		"fresh adversarial lenses run only inside one explicit",
-		"#### Review Lens Selection",
-		"triage the diff deterministically",
-		"**Trivial diff**",
-		"zero executable code and zero configuration changes",
-		"run exactly ONE lens",
-		"Full 4R is reserved for tier 3",
-		"`review-readability`",
-		"`review-reliability`",
-		"`review-resilience`",
-		"`review-risk`",
+		"gentle-ai.work-status/v1",
+		"gentle-ai.work-transition/v1",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing migrated preserved prompt reference %q", wanted)
@@ -784,10 +775,9 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 	}
 }
 
-// A preserved prompt that already carries the v1 delegation-hard-gates
-// migration block (with the v1 advisory lens-selection table) must be
-// upgraded in place to the v2 deterministic triage router.
-func TestInjectOpenCodeUpgradesV1DelegationLensTable(t *testing.T) {
+// A preserved prompt that carries the retired prompt-owned lens router is
+// upgraded in place to native route/status/transition authority.
+func TestInjectOpenCodeUpgradesPromptOwnedLensRouter(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
@@ -858,16 +848,19 @@ func TestInjectOpenCodeUpgradesV1DelegationLensTable(t *testing.T) {
 	}
 	for _, wanted := range []string{
 		"fully mandatory",
-		"triage the diff deterministically",
-		"**Trivial diff**",
-		"zero executable code and zero configuration changes",
-		"Lifecycle receipt rule",
-		"validate the same content-bound receipt",
-		"run exactly ONE lens",
-		"Full 4R is reserved for tier 3",
+		"Bounded read rule",
+		"read 1–3 files inline",
+		"4-file rule",
+		"Write rule",
+		"2+ non-trivial files",
+		"Optional SDD rule",
+		"explicit request or accepted proposal",
+		"Authority rule",
+		"gentle-ai.work-status/v1",
+		"gentle-ai.work-transition/v1",
 	} {
 		if !strings.Contains(text, wanted) {
-			t.Fatalf("opencode.json missing v2 triage fragment %q after migration", wanted)
+			t.Fatalf("opencode.json missing native routing fragment %q after migration", wanted)
 		}
 	}
 	for _, stale := range []string{
@@ -876,6 +869,9 @@ func TestInjectOpenCodeUpgradesV1DelegationLensTable(t *testing.T) {
 		"run the narrow set that covers the risk",
 		"small mechanical changes",
 		"trivial docs/text",
+		"#### Review Lens Selection",
+		"run exactly ONE lens",
+		"Full 4R",
 	} {
 		if strings.Contains(text, stale) {
 			t.Fatalf("opencode.json retained stale v1 lens-selection text %q", stale)
@@ -893,19 +889,43 @@ func TestInjectOpenCodeUpgradesV1DelegationLensTable(t *testing.T) {
 	if !strings.Contains(managedBlock, "fully mandatory") {
 		t.Fatal("managed delegation block missing migrated wording \"fully mandatory\"")
 	}
-	if strings.Count(text, "#### Review Lens Selection") != 1 {
-		t.Fatalf("opencode.json must contain exactly one Review Lens Selection section; got %d", strings.Count(text, "#### Review Lens Selection"))
+	if strings.Contains(managedBlock, "Review Lens Selection") {
+		t.Fatal("managed delegation block retained prompt-owned review selection")
 	}
 }
 
-func TestEnsurePreservedOpenCodeDelegationHardGatesMigratesCanonicalReviewCommand(t *testing.T) {
-	legacy := "before commit, push, or PR after code changes, run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1)"
+func TestEnsurePreservedOpenCodeDelegationHardGatesMigratesToNativeTransition(t *testing.T) {
+	legacy := "### Mandatory Delegation Triggers (Non-Skippable)\n\n" +
+		"before commit, push, or PR after code changes, run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1)"
 	got := ensurePreservedOpenCodeDelegationHardGates(legacy)
-	if !strings.Contains(got, "`gentle-ai review validate --gate <gate> --cwd <repo>`") {
-		t.Fatalf("migrated delegation gates missing canonical review command:\n%s", got)
+	for _, want := range []string{"`gentle-ai.work-status/v1`", "`gentle-ai.work-transition/v1`", "apply only its exact provider-issued"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("migrated delegation gates missing native transition clause %q:\n%s", want, got)
+		}
 	}
-	if strings.Contains(got, "native review validate --gate") {
-		t.Fatalf("migrated delegation gates retained non-existent command:\n%s", got)
+	if strings.Contains(got, "Review Lens Selection") {
+		t.Fatalf("migrated delegation gates retained prompt-owned lens router:\n%s", got)
+	}
+}
+
+func TestEnsurePreservedOpenCodeDelegationHardGatesPreservesUnmarkedUserTail(t *testing.T) {
+	const userTail = `#### User-Owned Policy
+
+PRESERVE_THIS_H4_AND_PLAIN_TEXT exactly as authored.
+The words TOTALMENTE obligatorio here belong to the user.`
+	legacy := "### Mandatory Delegation Triggers (Non-Skippable)\n\n" +
+		"3. **PR rule**: before commit, push, or PR after code changes, run a fresh-context review unless the diff is trivial docs/text.\n\n" +
+		userTail
+
+	got := ensurePreservedOpenCodeDelegationHardGates(legacy)
+	if !strings.Contains(got, userTail) {
+		t.Fatalf("unmarked legacy migration changed or deleted user-owned tail:\n%s", got)
+	}
+	if strings.Count(got, "<!-- gentle-ai:delegation-hard-gates-migration -->") != 1 {
+		t.Fatalf("unmarked legacy migration must append exactly one managed block:\n%s", got)
+	}
+	if second := ensurePreservedOpenCodeDelegationHardGates(got); second != got {
+		t.Fatalf("unmarked legacy migration is not idempotent:\nfirst:\n%s\nsecond:\n%s", got, second)
 	}
 }
 
@@ -6649,15 +6669,15 @@ func TestInjectTriggerRules_SystemPromptAgent(t *testing.T) {
 		t.Error("CLAUDE.md missing <!-- /gentle-ai:trigger-rules --> close marker")
 	}
 
-	// At least one rendered binding line must appear between the markers.
+	// The replacement projects the native routing/status contract between the markers.
 	openIdx := strings.Index(text, "<!-- gentle-ai:trigger-rules -->")
 	closeIdx := strings.Index(text, "<!-- /gentle-ai:trigger-rules -->")
 	if openIdx < 0 || closeIdx < 0 || closeIdx <= openIdx {
 		t.Fatal("trigger-rules markers found but in wrong order")
 	}
 	between := text[openIdx : closeIdx+len("<!-- /gentle-ai:trigger-rules -->")]
-	if !strings.Contains(between, "pre-commit") {
-		t.Error("CLAUDE.md trigger-rules section does not contain binding content (expected 'pre-commit')")
+	if !strings.Contains(between, "gentle-ai.work-status/v1") {
+		t.Error("CLAUDE.md trigger-rules section does not contain the native work-status contract")
 	}
 }
 
@@ -6708,8 +6728,8 @@ func TestInjectTriggerRules_JinjaModule(t *testing.T) {
 	text := string(content)
 
 	// The module itself is the content (no markers — KIMI.md includes it via {% include %}).
-	if !strings.Contains(text, "pre-commit") {
-		t.Error("trigger-rules.md missing binding content (expected 'pre-commit')")
+	if !strings.Contains(text, "gentle-ai.work-status/v1") {
+		t.Error("trigger-rules.md missing native work-status contract")
 	}
 	if !strings.Contains(text, "Agent Trigger Rules") {
 		t.Error("trigger-rules.md missing header 'Agent Trigger Rules'")

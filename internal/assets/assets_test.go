@@ -8,87 +8,58 @@ import (
 	"testing"
 )
 
-func TestOrchestratorsRequireNonSkippableGeneralDelegationTriggers(t *testing.T) {
-	paths := []string{
-		"claude/sdd-orchestrator.md",
-		"opencode/sdd-orchestrator.md",
-		"codex/sdd-orchestrator.md",
-	}
-	requiredControls := []string{
-		"Mandatory Delegation Triggers",
-		"non-skippable hard gates",
-		"fully mandatory",
-		"4-file rule",
-		"Multi-file write rule",
-		"Lifecycle receipt rule",
-		"Incident rule",
-		"Long-session rule",
-		"Fresh review rule",
-		"Semantic guard",
-		"execution, not delegation",
-		"not a substitute for delegation",
-	}
-	for _, path := range paths {
+func TestOrchestratorsProjectOrganicRoutingAndNativeAuthority(t *testing.T) {
+	for _, path := range allSDDOrchestratorAssetPaths(t) {
 		content := MustRead(path)
-		for _, want := range requiredControls {
-			if !strings.Contains(content, want) {
-				t.Fatalf("%s missing non-skippable delegation guard %q", path, want)
+		for _, required := range []string{
+			"Mandatory Delegation Triggers",
+			"Bounded read rule", "read 1–3 files inline",
+			"4-file rule", "understanding requires 4+ files",
+			"Write rule", "2+ non-trivial files",
+			"Context rule", "reading that prepares a write", "broad research",
+			"Per-action rule", "Optional SDD rule",
+			"explicit request or accepted proposal", "risk alone never forces SDD",
+			"Native authority rule", "gentle-ai.work-status/v1", "gentle-ai.work-transition/v1",
+			"zero-or-one exact `authorizedTransition`", "Capability stop rule",
+		} {
+			if !strings.Contains(content, required) {
+				t.Fatalf("%s missing organic routing/native authority contract %q", path, required)
+			}
+		}
+		for _, retired := range []string{
+			"#### Review Lens Selection", "run exactly ONE lens", "run the full 4R set",
+			"review/start(target)", "gentle-ai.review-integration/v1 --next-transition",
+		} {
+			if strings.Contains(content, retired) {
+				t.Fatalf("%s retained prompt-owned review ceremony %q", path, retired)
 			}
 		}
 
-		triggerSection := firstMarkdownSection(content,
-			"### Mandatory Delegation Triggers",
-			"#### Mandatory Delegation Triggers",
-		)
-		if triggerSection == "" {
-			t.Fatalf("%s missing Mandatory Delegation Triggers section", path)
+		delegationHeading := "### Delegation Rules"
+		if path == "codex/sdd-orchestrator.md" {
+			delegationHeading = "## General Delegation Rules (Always Active)"
 		}
-
-		lifecycleLine := markdownLineContaining(triggerSection, "**Lifecycle receipt rule**")
-		if !lineContainsAll(
-			"before commit",
-			"stage every reviewed path",
-			"without changing content or mode",
-			"gentle-ai review validate --gate pre-commit --cwd <repo>",
-			"--lineage <known-lineage>",
-			"before push, PR, or release",
-			"content-bound receipt",
-			"gentle-ai review validate --gate <gate> --cwd <repo>",
-			"same exact `--lineage`",
-			"Never fall back to inventory discovery",
-			"launch a lens",
-			"Judgment Day",
-			"new budget at a repeated gate",
-		)(lifecycleLine) {
-			t.Fatalf("%s lifecycle gate must validate the existing receipt without launching a lens, Judgment Day, or a new budget: %q", path, lifecycleLine)
+		start := strings.Index(content, delegationHeading)
+		end := strings.Index(content, "#### Mandatory Delegation Triggers")
+		if start < 0 || end <= start {
+			t.Fatalf("%s missing bounded general delegation section", path)
 		}
-
-		incidentLine := markdownLineContaining(triggerSection, "**Incident rule**")
-		if !lineContainsAll(
-			"remain immutable",
-			"validate the existing receipt",
-			"explicit scope action",
-			"not reopened review",
-		)(incidentLine) {
-			t.Fatalf("%s incident gate must prove immutable targets and validate the existing receipt: %q", path, incidentLine)
+		delegation := content[start:end]
+		for _, required := range []string{"delegated direct", "never selects SDD", "creates SDD state", "`sdd-*`"} {
+			if !strings.Contains(delegation, required) {
+				t.Fatalf("%s general delegation section missing route-neutral clause %q", path, required)
+			}
 		}
-
-		freshReviewLine := markdownLineContaining(triggerSection, "**Fresh review rule**")
-		if !lineContainsAll(
-			"fresh adversarial lenses",
-			"only inside one explicit",
-			"`review/start(target)`",
-		)(freshReviewLine) {
-			t.Fatalf("%s fresh review rule must bind adversarial review to one explicit review/start target: %q", path, freshReviewLine)
-		}
-	}
-}
-
-func TestOrchestratorLifecycleGatesRetainKnownLineage(t *testing.T) {
-	for _, agent := range []string{"antigravity", "claude", "codex", "cursor", "gemini", "generic", "hermes", "kimi", "kiro", "opencode", "qwen", "windsurf"} {
-		content := MustRead(agent + "/sdd-orchestrator.md")
-		if !strings.Contains(content, "--lineage <known-lineage>") || strings.Contains(content, "Let the facade discover authority") {
-			t.Errorf("%s orchestrator does not retain exact lineage", agent)
+		for _, forbidden := range []string{
+			"4+ files) | — | ✅ `sdd-explore`",
+			"4+ files) | — | ✅ run as sdd-explore",
+			"multiple files, new logic) | — | ✅ run as sdd-apply",
+			"tests, builds, installs | — | ✅ `sdd-verify`",
+			"Phase boundaries are not optional",
+		} {
+			if strings.Contains(delegation, forbidden) {
+				t.Fatalf("%s general delegation section routes ordinary work through SDD %q", path, forbidden)
+			}
 		}
 	}
 }
@@ -1167,28 +1138,20 @@ func hasApplyVerifyContextFlow(section, delegatedContext string) bool {
 	return next == len(steps)
 }
 
-func TestSDDOrchestratorsUseTheZeroHelpNativeTransitionBootstrap(t *testing.T) {
-	paths := []string{
-		"antigravity/sdd-orchestrator.md", "claude/sdd-orchestrator.md", "codex/sdd-orchestrator.md",
-		"cursor/sdd-orchestrator.md", "gemini/sdd-orchestrator.md", "generic/sdd-orchestrator.md",
-		"hermes/sdd-orchestrator.md", "kimi/sdd-orchestrator.md", "kiro/sdd-orchestrator.md",
-		"opencode/sdd-orchestrator.md", "qwen/sdd-orchestrator.md", "windsurf/sdd-orchestrator.md",
-	}
-	for _, path := range paths {
+func TestSDDOrchestratorsUseExactWorkRunTransitionContract(t *testing.T) {
+	for _, path := range allSDDOrchestratorAssetPaths(t) {
 		t.Run(path, func(t *testing.T) {
 			content := MustRead(path)
 			for _, required := range []string{
-				"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition",
-				"native_next_transition", "gentle-ai review capabilities --contract gentle-ai.review-integration/v1", "unsupported-capability",
-				"parent orchestrator alone executes only the exact native `next_transition`", "never infer flags, construct authorization or bindings, or call `gentle-ai ... --help`",
-				"Reviewers, validators, executors, and refuters receive role inputs and return artifacts; they never call review lifecycle commands",
+				"gentle-ai work-status --cwd <repo> --work-run <id> --contract gentle-ai.work-status/v1 --json",
+				"zero-or-one exact `authorizedTransition`",
+				"gentle-ai work-transition apply",
+				"Never choose review lenses, invent transitions, reconstruct flags, or infer PASS from prose",
+				"Never fall back to prompt-owned authority",
 			} {
 				if !strings.Contains(content, required) {
-					t.Fatalf("%s missing native transition routing guard %q", path, required)
+					t.Fatalf("%s missing exact WorkRun transition guard %q", path, required)
 				}
-			}
-			if strings.Contains(content, "gentle-ai review --help") || strings.Contains(content, "gentle-ai --help") {
-				t.Fatalf("%s suggests help-based lifecycle exploration", path)
 			}
 		})
 	}
@@ -1604,41 +1567,80 @@ func TestSDDPhaseCommonEnforcesExecutorBoundary(t *testing.T) {
 	}
 }
 
-func TestSDDStatusContractMatchesNativeShape(t *testing.T) {
+func TestSDDStatusContractPreservesFrozenExternalV1Projection(t *testing.T) {
 	content := MustRead("skills/_shared/sdd-status-contract.md")
 
 	for _, want := range []string{
+		"exact frozen external `StatusV1Projection`",
 		"schemaName: gentle-ai.sdd-status",
 		"schemaVersion: 1",
 		"changeName: <change-name-or-null>",
-		"artifactStore: openspec",
+		"artifactStore: openspec | engram | none",
+		"planningHome:",
 		"mode: repo-local",
 		"path: <absolute path to openspec>",
 		"changeRoot: <absolute path to openspec/changes/<change> or null>",
+		"artifactPaths:",
+		"contextFiles:",
+		"artifacts:",
+		"reviewPolicy: [<absolute path>]",
+		"reviewPolicy: [<absolute readable files>]",
+		"reviewPolicy: missing | done | partial",
+		"taskProgress:",
+		"total: 0",
 		"completed: 0",
 		"pending: 0",
 		"allComplete: false",
+		"dependencies:",
 		"proposal: blocked | ready | all_done",
 		"specs: blocked | ready | all_done",
 		"design: blocked | ready | all_done",
 		"tasks: blocked | ready | all_done",
+		"apply: blocked | ready | all_done",
+		"verify: blocked | ready | all_done",
+		"archive: blocked | ready | all_done",
+		"applyState: blocked | all_done | ready",
+		"actionContext:",
 		"relationships:",
 		"dependsOn: []",
+		"supersedes: []",
+		"amends: []",
+		"conflictsWith: []",
 		"sameDomainActiveChanges: []",
-		"runtimeStatus:",
-		"active_attempt:",
-		"decision_required: false",
-		"next_action: begin | finish | reset | complete",
+		"remediationState:",
+		"failedEvidenceRevision:",
+		"lineageId:",
+		"generation: 0",
+		"fixBatch: 0",
+		"reviewGate:",
+		"result: allow | scope-changed | invalidated | escalated",
+		"reviewTransaction: <optional exact gentle-ai.review-transaction/v1 object>",
 		"phaseInstructions:",
+		"apply: [<instruction strings>]",
+		"verify: [<instruction strings>]",
+		"remediate: [<instruction strings>]",
+		"archive: [<instruction strings>]",
+		"nextRecommended: propose | spec | design | tasks | apply | review | verify | remediate | archive | sdd-new | select-change | resolve-blockers | resolve-review",
 		"blockedReasons: []",
 		"Manual fallback status MUST stay shape-compatible with native `gentle-ai.sdd-status` JSON",
 	} {
 		if !strings.Contains(content, want) {
-			t.Fatalf("sdd-status-contract missing native-shape field %q", want)
+			t.Fatalf("sdd-status-contract missing frozen SDD v1 field or token %q", want)
 		}
 	}
 
 	for _, forbidden := range []string{
+		"runtimeStatus",
+		"correctionBudget",
+		"routeDecision:",
+		"implementationRoute:",
+		"sddRunRef:",
+		"publicState:",
+		"verification:",
+		"deliveryIntentRef:",
+		"authorizedTransition:",
+		"gentle-ai.work-status/v1",
+		"gentle-ai.work-transition/v1",
 		"schemaName: spec-driven",
 		"root: <project-or-openspec-root>",
 		"changesDir: <openspec/changes or engram topic prefix>",
@@ -1648,7 +1650,7 @@ func TestSDDStatusContractMatchesNativeShape(t *testing.T) {
 		"warnings: []",
 	} {
 		if strings.Contains(content, forbidden) {
-			t.Fatalf("sdd-status-contract contains legacy field %q", forbidden)
+			t.Fatalf("sdd-status-contract contains internal, work-routing, or retired field %q", forbidden)
 		}
 	}
 }
@@ -1923,178 +1925,39 @@ func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 	}
 }
 
-func TestSDDOrchestratorsRouteFreshReviewsToConcreteReviewLenses(t *testing.T) {
-	t.Run("rejects lifecycle gates that reopen review", func(t *testing.T) {
-		weakContent := `### Mandatory Delegation Triggers (Non-Skippable)
-3. **Lifecycle receipt rule**: before commit, push, PR, or release, launch a fresh review through Review Lens Selection.
-4. **Incident rule**: after wrong cwd or merge recovery, run Review Lens Selection before continuing.
-6. **Fresh review rule**: use fresh context for adversarial review of diffs.
-
-#### Review Lens Selection
-- review-risk
-- review-resilience
-- review-readability
-- review-reliability
-- If multiple rows match, run the narrow set that covers the risk.
-`
-		if problems := boundedReviewRoutingProblems(weakContent); len(problems) == 0 {
-			t.Fatal("fixture should fail because lifecycle and incident gates reopen review and fresh review lacks an explicit review/start target")
+func TestSDDOrchestratorsProjectNativeCheckingWithoutPromptOwnedLenses(t *testing.T) {
+	for _, path := range allSDDOrchestratorAssetPaths(t) {
+		content := MustRead(path)
+		section := markdownSection(content, "#### Native Checking Contract")
+		if section == "" {
+			t.Fatalf("%s missing Native Checking Contract", path)
 		}
-	})
-
-	paths := []string{
-		"antigravity/sdd-orchestrator.md",
-		"claude/sdd-orchestrator.md",
-		"codex/sdd-orchestrator.md",
-		"cursor/sdd-orchestrator.md",
-		"gemini/sdd-orchestrator.md",
-		"generic/sdd-orchestrator.md",
-		"hermes/sdd-orchestrator.md",
-		"kimi/sdd-orchestrator.md",
-		"kiro/sdd-orchestrator.md",
-		"opencode/sdd-orchestrator.md",
-		"qwen/sdd-orchestrator.md",
-		"windsurf/sdd-orchestrator.md",
-	}
-	requiredLenses := []string{
-		"Review Lens Selection",
-		"review-risk",
-		"review-resilience",
-		"review-readability",
-		"review-reliability",
-	}
-	for _, path := range paths {
-		t.Run(path, func(t *testing.T) {
-			content := MustRead(path)
-			section := markdownSection(content, "#### Review Lens Selection")
-			if section == "" {
-				t.Fatalf("%s missing Review Lens Selection section", path)
+		for _, required := range []string{
+			"Native RAR owns verification applicability",
+			"bounded zero/one/four-lens plan",
+			"never select lenses or author PASS",
+			"passive ordinary document or image",
+			"structural readback",
+			"quick check runs once",
+			"Long or very-long work gets one cost/side-effect forecast",
+			"Needs your decision",
+			"Functional proof and adversarial review both project as **Checking**",
+			"at most one scoped correction",
+			"never reopen review for unchanged content",
+		} {
+			if !strings.Contains(section, required) {
+				t.Fatalf("%s native checking contract missing %q", path, required)
 			}
-			for _, want := range requiredLenses {
-				if !strings.Contains(section, want) {
-					t.Fatalf("%s Review Lens Selection section missing %q", path, want)
-				}
-			}
-
-			tierChecks := []struct {
-				label    string
-				matcher  func(string) bool
-				contract string
-			}{
-				{
-					label:    "**Trivial diff**",
-					matcher:  lineContainsAll("run no lens"),
-					contract: "must route to zero lenses",
-				},
-				{
-					label:    "**Standard diff**",
-					matcher:  lineContainsAll("run exactly ONE lens"),
-					contract: "must route to exactly one concrete lens",
-				},
-				{
-					label: "**Hot path**",
-					matcher: lineContainsAll(
-						"run the full 4R set",
-						"`review-risk`",
-						"`review-resilience`",
-						"`review-readability`",
-						"`review-reliability`",
-					),
-					contract: "must route to all four concrete lenses",
-				},
-			}
-			for _, check := range tierChecks {
-				line := markdownLineContaining(section, check.label)
-				if !check.matcher(line) {
-					t.Fatalf("%s Review Lens Selection %s: %q", path, check.contract, line)
-				}
-			}
-			for _, want := range []string{
-				"rerun only the originating lens(es) that produced open verified BLOCKER/CRITICAL findings",
-				"never rerun clean lenses or lenses with only WARNING/SUGGESTION findings",
-				"Native ordinary review keeps its targeted validator and never reruns initial lenses",
-			} {
-				if !strings.Contains(content, want) {
-					t.Fatalf("%s missing ad-hoc severe recheck contract %q", path, want)
-				}
-			}
-
-			if problems := boundedReviewRoutingProblems(content); len(problems) > 0 {
-				t.Fatalf("%s bounded review guidance violates receipt or explicit review-start routing: %s", path, strings.Join(problems, "; "))
-			}
-		})
-	}
-}
-
-func boundedReviewRoutingProblems(content string) []string {
-	triggerSection := firstMarkdownSection(content,
-		"### Mandatory Delegation Triggers",
-		"#### Mandatory Phase-Boundary Triggers",
-	)
-	if triggerSection == "" {
-		return []string{"missing Mandatory Delegation Triggers or Mandatory Phase-Boundary Triggers section"}
-	}
-
-	checks := []struct {
-		label    string
-		matcher  func(string) bool
-		contract string
-	}{
-		{
-			label: "Lifecycle receipt rule",
-			matcher: lineContainsAll(
-				"before commit",
-				"before push, PR, or release",
-				"content-bound receipt",
-				"gentle-ai review validate --gate pre-commit --cwd <repo>",
-				"--lineage <known-lineage>",
-				"gentle-ai review validate --gate <gate> --cwd <repo>",
-				"same exact `--lineage`",
-				"Never fall back to inventory discovery",
-				"never launch a lens",
-				"Judgment Day",
-				"new budget at a repeated gate",
-				"stage every reviewed path",
-				"without changing content or mode",
-			),
-			contract: "must validate the content-bound receipt without launching a lens, Judgment Day, or a new budget",
-		},
-		{
-			label:    "Incident rule",
-			matcher:  lineContainsAll("remain immutable", "validate the existing receipt", "explicit scope action", "not reopened review"),
-			contract: "must prove target immutability and validate the existing receipt without reopening review",
-		},
-		{
-			label:    "Fresh review rule",
-			matcher:  lineContainsAll("fresh adversarial lenses", "only inside one explicit", "`review/start(target)`"),
-			contract: "must start fresh adversarial lenses only through an explicit review/start target",
-		},
-	}
-
-	var problems []string
-	for _, check := range checks {
-		line := markdownLineContaining(triggerSection, "**"+check.label+"**")
-		if line == "" {
-			problems = append(problems, check.label+": missing trigger rule")
-			continue
 		}
-		if !check.matcher(line) {
-			problems = append(problems, check.label+": "+check.contract)
+		for _, retired := range []string{
+			"Review Lens Selection", "review-risk", "review-readability",
+			"review-reliability", "review-resilience", "loop-until-dry",
+		} {
+			if strings.Contains(content, retired) {
+				t.Fatalf("%s retained prompt-owned review mechanism %q", path, retired)
+			}
 		}
 	}
-	if starts := strings.Count(triggerSection, "`review/start(target)`"); starts != 1 {
-		problems = append(problems, "Fresh review rule: expected exactly one explicit review/start target in trigger rules")
-	}
-	return problems
-}
-
-func firstMarkdownSection(content string, headings ...string) string {
-	for _, heading := range headings {
-		if section := markdownSection(content, heading); section != "" {
-			return section
-		}
-	}
-	return ""
 }
 
 func markdownLineContaining(content, needle string) string {

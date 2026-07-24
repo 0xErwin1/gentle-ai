@@ -10,7 +10,6 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/agents"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/internal/components/skills"
@@ -312,7 +311,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	// adapter adopts Jinja modules it must add its own {% include "trigger-rules.md" %}
 	// line and will be handled by the StrategyJinjaModules branch below.
 	{
-		rendered := RenderTriggerRules(catalog.DefaultTriggerRuleSet())
+		rendered := RenderTriggerRules()
 
 		if adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode {
 			// OpenCode / Kilocode: trigger-rules is appended to the gentle-orchestrator
@@ -1069,19 +1068,21 @@ func removeLegacyOpenCodePlainChatPreflightLines(prompt string) string {
 
 func ensurePreservedOpenCodeDelegationHardGates(prompt string) string {
 	prompt = migrateLegacyMandatoryWordingInDelegationHardGates(prompt)
+	// Unmarked v1 prompts predate managed ownership boundaries. Migrate only
+	// exact generated sentences here; never infer that every byte after the
+	// legacy heading belongs to gentle-ai because users may have appended H4 or
+	// plain-text policy beneath it.
 	prompt = strings.NewReplacer(
 		"run a fresh-context review unless the diff is trivial docs/text",
-		"run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1)",
-		"run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial docs/text",
-		"run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1)",
+		"validate the exact owner-issued receipt; never launch prompt-owned review at the gate",
 		"stop and run a fresh audit before continuing",
-		"prove code, configuration, generated-artifact, and provenance targets remain immutable, then validate the existing receipt",
+		"stop with one typed Needs your decision result until native authority validates the immutable candidate",
 		"use fresh context for adversarial review of diffs, conflicts, PR readiness, and incidents",
-		"run fresh adversarial lenses only inside one explicit review/start(target); PR readiness and incidents validate the receipt",
-		"before commit, push, or PR after code changes, run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1)",
-		"before commit, push, PR, or release, validate the same content-bound receipt with native `gentle-ai review validate --gate <gate> --cwd <repo>`; never create a review budget at the gate",
-		"after wrong `cwd`, accidental repo/worktree mutation, merge recovery, confusing test command, or environment workaround, stop and run the concrete audit/review lens(es) selected by Review Lens Selection before continuing",
-		"after a workflow incident, prove code, configuration, generated-artifact, and provenance targets remain immutable, then validate the existing receipt",
+		"let native RAR schedule adversarial review; PR readiness and incidents validate the same receipt",
+		"run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial docs/text",
+		"validate the exact owner-issued receipt; never launch prompt-owned review at the gate",
+		"run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1)",
+		"validate the exact owner-issued receipt; never launch prompt-owned review at the gate",
 	).Replace(prompt)
 
 	delegation := `
@@ -1089,70 +1090,36 @@ func ensurePreservedOpenCodeDelegationHardGates(prompt string) string {
 <!-- gentle-ai:delegation-hard-gates-migration -->
 ### Mandatory Delegation Triggers (Non-Skippable)
 
-These gates are non-skippable hard gates, not recommendations. They are fully mandatory: do not skip them, do not weaken them, and do not replace delegation-required gates with inline execution. Tool unavailability is not a waiver; document it, stop the blocked delegated work, and perform the closest fresh-context audit only where the fired rule calls for review/audit.
+These routing boundaries are fully mandatory. They protect context quality without making SDD the universal implementation workflow.
 
 Semantic guard: **delegate** means using OpenCode's native Task tool to invoke a configured sub-agent. Running local scripts, Python, or Bash inline is execution, not delegation.
 
 Do not pass these rules to child agents as permission to spawn more agents; children receive concrete role work and must not orchestrate.
 
-1. **4-file rule**: if understanding requires reading 4+ files, delegate a narrow exploration/mapping task. If delegation tooling is unavailable, document the blocker and stop the exploration instead of reading everything inline.
-2. **Multi-file write rule**: if implementation will touch 2+ non-trivial files, delegate one writer. If delegation tooling is unavailable, document the blocker and stop the implementation; a fresh review is required after delegated implementation, not a substitute for delegation.
-3. **Lifecycle receipt rule**: before commit, push, PR, or release, run one native ` + "`gentle-ai review validate --gate <gate> --cwd <repo>`" + ` command for the same content-bound receipt; let the facade discover authority and artifacts, follow missing/scope-changed/invalidated/escalated action, and never launch a lens, Judgment Day, or new budget at the gate.
-4. **Incident rule**: after a workflow incident, prove code, configuration, generated-artifact, and provenance targets remain immutable, then validate the existing receipt. Any changed target requires explicit scope action, not reopened review.
-5. **Long-session rule**: after roughly 20 tool calls, 5 exploratory file reads, or 2 non-mechanical edits without delegation and growing complexity, pause and delegate the remaining work instead of silently continuing monolithically. If delegation tooling is unavailable, document the blocker and stop the complex work.
-6. **Fresh review rule**: fresh adversarial lenses run only inside one explicit ` + "`review/start(target)`" + `. PR readiness and incidents validate the receipt and never create another budget.
-
-#### Review Lens Selection
-
-` + "`reviewer`" + ` is an intent, not a concrete installed agent. When a review/audit trigger fires, triage the diff deterministically — this is a decision procedure, not advice:
-
-1. **Trivial diff** (ONLY documentation, comments, formatting, or typo fixes in strings — zero executable code and zero configuration changes): run no lens. Any diff touching executable code or configuration is at least standard tier.
-2. **Standard diff**: run exactly ONE lens — the row in the table below that matches the dominant risk. If multiple rows match, pick the single highest-impact row; do not add lenses.
-3. **Hot path** (the diff touches auth/update/security/payments paths) **or >400 changed lines outside pure human documentation**: run the full 4R set — ` + "`review-risk`" + `, ` + "`review-resilience`" + `, ` + "`review-readability`" + `, ` + "`review-reliability`" + `.
-4. **Large pure human documentation** (>400 authored lines with no code, configuration, prompts, agent rules, workflows, runtime instruction docs, mixed content, or active content): run only ` + "`review-readability`" + `.
-
-| Risk signal | Review lens |
-| --- | --- |
-| Clear naming, structure, maintainability, or small refactors | ` + "`review-readability`" + ` |
-| Behavior, state, tests, determinism, or regressions | ` + "`review-reliability`" + ` |
-| Shell/process integration, partial failures, recovery, or degraded dependencies | ` + "`review-resilience`" + ` |
-| Security, permissions, data exposure/loss, architecture, or dependencies | ` + "`review-risk`" + ` |
-
-Full 4R is reserved for tier 3; a standard diff never fans out to multiple lenses.
-
-For ad-hoc 4R outside a native ordinary transaction, after a fix rerun only the originating lens(es) that produced open verified BLOCKER/CRITICAL findings. Never rerun clean lenses or lenses with only WARNING/SUGGESTION findings. Native ordinary review keeps its targeted validator and never reruns initial lenses.
+1. **Bounded read rule**: read 1–3 files inline to decide or verify.
+2. **4-file rule**: if understanding requires 4+ files, delegate one narrow exploration/mapping task.
+3. **Write rule**: keep one mechanical, already-understood file inline; delegate one writer for 2+ non-trivial files.
+4. **Context rule**: delegate reading that prepares a write and broad research.
+5. **Optional SDD rule**: propose SDD only when durable proposal/spec/design/tasks materially reduce substantial ambiguity. Select it only after explicit request or accepted proposal.
+6. **Per-action rule**: tests, builds, installs, and native review actors may use fresh workers without changing the implementation route or creating SDD state.
+7. **Authority rule**: when a WorkRun exists, request ` + "`gentle-ai.work-status/v1`" + ` and apply only its exact provider-issued ` + "`gentle-ai.work-transition/v1`" + ` authorization. Never select lenses, synthesize transitions, or infer PASS from prose.
 <!-- /gentle-ai:delegation-hard-gates-migration -->
 `
 
-	if strings.Contains(prompt, "Mandatory Delegation Triggers") &&
-		strings.Contains(prompt, "non-skippable hard gates") &&
+	if strings.Contains(prompt, "<!-- gentle-ai:delegation-hard-gates-migration -->") &&
 		strings.Contains(prompt, "fully mandatory") &&
+		strings.Contains(prompt, "Bounded read rule") &&
 		strings.Contains(prompt, "4-file rule") &&
-		strings.Contains(prompt, "Multi-file write rule") &&
-		strings.Contains(prompt, "Lifecycle receipt rule") &&
-		strings.Contains(prompt, "Incident rule") &&
-		strings.Contains(prompt, "Long-session rule") &&
-		strings.Contains(prompt, "Fresh review rule") &&
+		strings.Contains(prompt, "Write rule") &&
+		strings.Contains(prompt, "Context rule") &&
+		strings.Contains(prompt, "Optional SDD rule") &&
+		strings.Contains(prompt, "Per-action rule") &&
+		strings.Contains(prompt, "Authority rule") &&
 		strings.Contains(prompt, "Semantic guard") &&
 		strings.Contains(prompt, "execution, not delegation") &&
-		strings.Contains(prompt, "fresh review is required after delegated implementation, not a substitute for delegation") &&
-		strings.Contains(prompt, "validate the same content-bound receipt") &&
-		strings.Contains(prompt, "generated-artifact, and provenance targets remain immutable") &&
-		strings.Contains(prompt, "fresh adversarial lenses run only inside one explicit") &&
-		strings.Contains(prompt, "#### Review Lens Selection") &&
-		strings.Contains(prompt, "`reviewer` is an intent, not a concrete installed agent") &&
-		// 4R v2 deterministic-triage markers: their absence means the prompt
-		// carries the v1 advisory lens table (or a pre-objective-boundary v2
-		// block) and must be re-migrated.
-		strings.Contains(prompt, "triage the diff deterministically") &&
-		strings.Contains(prompt, "**Trivial diff**") &&
-		strings.Contains(prompt, "zero executable code and zero configuration changes") &&
-		strings.Contains(prompt, "run exactly ONE lens") &&
-		strings.Contains(prompt, "Full 4R is reserved for tier 3") &&
-		strings.Contains(prompt, "`review-readability`") &&
-		strings.Contains(prompt, "`review-reliability`") &&
-		strings.Contains(prompt, "`review-resilience`") &&
-		strings.Contains(prompt, "`review-risk`") {
+		strings.Contains(prompt, "gentle-ai.work-status/v1") &&
+		strings.Contains(prompt, "gentle-ai.work-transition/v1") &&
+		!strings.Contains(prompt, "#### Review Lens Selection") {
 		return prompt
 	}
 
@@ -1164,6 +1131,10 @@ For ad-hoc 4R outside a native ordinary transaction, after a fix rerun only the 
 			return strings.TrimRight(prompt[:startIdx], "\n") + delegation + prompt[endIdx:]
 		}
 	}
+	const legacyHeading = "### Mandatory Delegation Triggers (Non-Skippable)"
+	if strings.Contains(prompt, legacyHeading) {
+		return strings.TrimRight(prompt, "\n") + delegation
+	}
 
 	return strings.TrimRight(prompt, "\n") + delegation
 }
@@ -1172,7 +1143,6 @@ func migrateLegacyMandatoryWordingInDelegationHardGates(prompt string) string {
 	const (
 		startMarker = "<!-- gentle-ai:delegation-hard-gates-migration -->"
 		endMarker   = "<!-- /gentle-ai:delegation-hard-gates-migration -->"
-		heading     = "### Mandatory Delegation Triggers (Non-Skippable)"
 	)
 
 	start := strings.Index(prompt, startMarker)
@@ -1183,20 +1153,10 @@ func migrateLegacyMandatoryWordingInDelegationHardGates(prompt string) string {
 		}
 	}
 	if end < 0 {
-		start = strings.Index(prompt, heading)
-		if start < 0 {
-			return prompt
-		}
-		end = len(prompt)
-		remainder := prompt[start+len(heading):]
-		for _, nextHeading := range []string{"\n### ", "\n## ", "\n# "} {
-			if relativeEnd := strings.Index(remainder, nextHeading); relativeEnd >= 0 {
-				candidateEnd := start + len(heading) + relativeEnd
-				if candidateEnd < end {
-					end = candidateEnd
-				}
-			}
-		}
+		// Without markers there is no trustworthy ownership boundary. Preserve
+		// the legacy block byte-for-byte; the managed replacement is appended by
+		// ensurePreservedOpenCodeDelegationHardGates.
+		return prompt
 	}
 
 	managed := strings.ReplaceAll(prompt[start:end], legacyMandatoryWording, "fully mandatory")

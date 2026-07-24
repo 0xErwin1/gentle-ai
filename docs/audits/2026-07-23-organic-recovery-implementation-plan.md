@@ -577,7 +577,7 @@ Changed LOC below means **additions plus deletions**, not net growth. It include
 | 5. Implementation routing, common work ledger, and optional SDD | Normalize `direct_inline`/`delegated_direct`/`propose_sdd`, extract `WorkRunStore`, bind atomic consent and common results, and integrate SDD phase attempts/artifacts only after SDD selection. | 1,800–2,600 |
 | 6. PAD delivery intents | Add PR-with-issue, PR-without-issue, direct-main, and emergency admission with route-specific policy. | 1,300–1,900 |
 | 7. ACI projection and outcome-first UX | Project semantically equivalent delegation rules and capabilities across adapters; map common states to four product states; update skills, commands, help, diagnostics, and docs. | 1,300–2,000 |
-| 8. Tests, fixtures, and architecture fitness | Add only cross-cutting classification matrices, property tests, route journeys, failure injection, v1 compatibility, and rollback coverage not already colocated with behavior. | 2,000–3,000 |
+| 8. Test migration and architecture fitness | Remove E2E/unit tests, fixtures, and goldens that assert intentionally retired workflow behavior; replace them with cross-cutting classification matrices, route journeys, failure injection, v1 compatibility, rollback coverage, and architecture fitness not already colocated with behavior. | 2,000–3,000 |
 | 9. Generated mirrors and goldens | Regenerate provider assets and adapter mirrors from the exact canonical sources. | 2,000–3,800 |
 | **Total** | Full provider recovery slice. | **12,000–18,500** |
 
@@ -587,9 +587,26 @@ The planning center is approximately **15,000 changed lines**. LOC is a review-l
 
 - Tests ship in the same commit as the behavior they protect; the dedicated test unit covers cross-cutting journeys and fitness functions.
 - Generated mirrors ship with the canonical source revision that produced them or in the immediately following mechanically provable generation commit.
+- Every removed E2E/unit test, fixture, or golden maps to intentionally retired behavior or a named replacement assertion. Live safety invariants and strict legacy SDD v1 compatibility tests remain, and CI/scripts retain no references to deleted suites.
 - No work unit introduces a second transition planner or duplicates an owner enum.
 - Every commit states its rollback and compatibility effect.
 - The PR description provides a reviewer path by work unit and identifies generated files.
+
+#### Retired-test migration map
+
+Deletion is based on ownership, not age alone. The repository-level E2E suite
+still proves live installation, layout, and idempotency behavior for optional
+SDD, so it remains. The following prompt-router coverage is intentionally
+retired:
+
+| Removed path | Retired behavior | Replacement authority or assertion |
+|---|---|---|
+| `internal/catalog/triggers.go` | Prompt-owned event-to-review routing and lens selection | Native RAR applicability/plan contracts plus the ACI-derived organic routing projection |
+| `internal/catalog/triggers_test.go` | Unit assertions for the retired trigger catalog | `internal/components/sdd/triggerrules_test.go` and cross-adapter semantic parity in `internal/assets/assets_test.go` |
+| `internal/catalog/bounded_review_triggers_test.go` | Prompt inference of bounded-review lifecycle actions | Native RAR plan, WorkRun convergence, and receipt-reuse tests |
+| `internal/catalog/release_event_test.go` | Prompt inference of release review actions | PAD route admission and native receipt/delivery-gate validation |
+| Trigger action/event types and their tests in `internal/model` | Public model enums that let prompts reconstruct owner policy | No compatibility replacement: reconstruction is intentionally forbidden; typed owner contracts replace it |
+| `internal/testdata/golden/trigger-rules-default.golden` | Byte golden for the retired prompt router | Semantic route assertions across every supported orchestrator projection |
 
 ## 10. Acceptance criteria
 
@@ -653,6 +670,8 @@ The planning center is approximately **15,000 changed lines**. LOC is a review-l
 - [ ] An empty explicit or unknown contract fails read-only before mutation; absence of a contract on `sdd-status` continues to select legacy SDD v1.
 - [ ] Capable and incapable consumers are covered by a provider-version/contract matrix, and `sdd-continue` remains unchanged for v1 consumers.
 - [ ] Semantic parity fixtures prove the 1–3/4+/2+ delegation thresholds and SDD proposal semantics across every supported orchestrator projection.
+- [ ] E2E/unit tests, fixtures, and goldens that assert intentionally retired workflow behavior are removed with a recorded replacement or retirement rationale; CI/scripts contain no stale reference.
+- [ ] Tests that still prove live safety invariants or strict legacy SDD v1 compatibility remain.
 - [ ] Historical v1 verification records and receipts remain readable and retain their original authority.
 - [ ] Disabling the new capability produces safe read-only/unsupported diagnostics and never restores prose or consumer inference.
 - [ ] The full provider test suite, asset parity suite, schema fixtures, and generated-asset checks pass.
