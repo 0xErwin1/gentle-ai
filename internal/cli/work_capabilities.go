@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"github.com/gentleman-programming/gentle-ai/internal/workprovider"
+	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
 
 func RunWorkCapabilities(args []string, stdout io.Writer) error {
@@ -44,14 +45,23 @@ func runWorkCapabilities(
 		return errors.New("work-capabilities requires --json")
 	}
 
-	result, err := controller.Capabilities(
-		ctx,
-		workprovider.RuntimeCapabilitiesRequest{
-			Repo: *cwd, Contract: *contract,
-		},
-	)
-	if err != nil {
-		return err
+	request := workprovider.RuntimeCapabilitiesRequest{
+		Repo: *cwd, Contract: *contract,
 	}
-	return encodeWorkJSON(stdout, result.Output())
+	switch *contract {
+	case workprovider.RuntimeCapabilitiesContractV2:
+		result, err := controller.CapabilitiesV2(ctx, request)
+		if err != nil {
+			return err
+		}
+		return encodeWorkJSON(stdout, result.Output())
+	case workrun.WorkCapabilitiesContractV1:
+		result, err := controller.Capabilities(ctx, request)
+		if err != nil {
+			return err
+		}
+		return encodeWorkJSON(stdout, result.Output())
+	default:
+		return errors.New("the requested work capabilities contract is unsupported")
+	}
 }

@@ -104,6 +104,8 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunWorkRoute(args[1:], stdout)
 		case "work-advance":
 			return cli.RunWorkAdvance(args[1:], stdout)
+		case "work-verification-decide":
+			return cli.RunWorkVerificationDecide(args[1:], stdout)
 		case "work-reconcile":
 			return cli.RunWorkReconcile(args[1:], stdout)
 		case "work-status":

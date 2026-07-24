@@ -17,26 +17,37 @@ import (
 type cliRuntimeOpener struct {
 	runtime *cliRuntime
 	calls   int
+	repo    string
 }
 
 func (opener *cliRuntimeOpener) OpenRuntimeOutcome(
-	context.Context,
-	string,
+	_ context.Context,
+	repo string,
 ) (workprovider.RuntimeOutcome, error) {
 	opener.calls++
+	opener.repo = repo
 	return opener.runtime, nil
 }
 
 type cliRuntime struct {
-	capabilities workprovider.RuntimeCapabilitiesV1
-	status       workrun.WorkStatusV1
-	advance      workrun.WorkAdvanceV1
-	requests     []workprovider.OutcomeStartRequest
+	capabilities    workprovider.RuntimeCapabilitiesV1
+	capabilitiesV2  workprovider.RuntimeCapabilitiesV2
+	status          workrun.WorkStatusV1
+	advance         workrun.WorkAdvanceV1
+	advanceV2       workrun.WorkAdvanceV2
+	decision        workrun.WorkVerificationDecideV1
+	requests        []workprovider.OutcomeStartRequest
+	capabilityV1    int
+	capabilityV2    int
+	decisionRuns    []string
+	decisionPrompts []string
+	decisionChoices []workrun.VerificationDecisionChoice
 }
 
 func (runtime *cliRuntime) Capabilities(
 	context.Context,
 ) (workprovider.RuntimeCapabilitiesV1, error) {
+	runtime.capabilityV1++
 	return runtime.capabilities, nil
 }
 
@@ -74,6 +85,33 @@ func (runtime *cliRuntime) AdvanceOutcome(
 	return runtime.advance, nil
 }
 
+func (runtime *cliRuntime) CapabilitiesV2(
+	context.Context,
+) (workprovider.RuntimeCapabilitiesV2, error) {
+	runtime.capabilityV2++
+	return runtime.capabilitiesV2, nil
+}
+
+func (runtime *cliRuntime) AdvanceOutcomeV2(
+	context.Context,
+	string,
+	string,
+) (workrun.WorkAdvanceV2, error) {
+	return runtime.advanceV2, nil
+}
+
+func (runtime *cliRuntime) DecideVerificationOutcome(
+	_ context.Context,
+	workRunID string,
+	promptRef string,
+	choice workrun.VerificationDecisionChoice,
+) (workrun.WorkVerificationDecideV1, error) {
+	runtime.decisionRuns = append(runtime.decisionRuns, workRunID)
+	runtime.decisionPrompts = append(runtime.decisionPrompts, promptRef)
+	runtime.decisionChoices = append(runtime.decisionChoices, choice)
+	return runtime.decision, nil
+}
+
 func (runtime *cliRuntime) ReconcileOutcome(
 	context.Context,
 	string,
@@ -98,7 +136,7 @@ func TestWorkCapabilitiesAndStartUseMachineContracts(t *testing.T) {
 			AgentID:       model.AgentPi,
 			WorkRouting: workprovider.RuntimeCapabilityClaimV1{
 				ID:                    workrun.WorkRoutingCapabilityV1,
-				Exposure:              workprovider.WorkRoutingAdvertised,
+				Exposure:              workprovider.WorkRoutingDormant,
 				ImplementationRouting: canonical.ImplementationRouting,
 			},
 			Contracts: workprovider.RuntimeContractSetV1{
@@ -108,6 +146,26 @@ func TestWorkCapabilitiesAndStartUseMachineContracts(t *testing.T) {
 				Reconcile:  workrun.WorkReconcileContractV1,
 				Status:     workrun.WorkStatusContractV1,
 				Transition: workrun.WorkTransitionContractV1,
+			},
+		},
+		capabilitiesV2: workprovider.RuntimeCapabilitiesV2{
+			Schema:        workprovider.RuntimeCapabilitiesContractV2,
+			Contract:      workprovider.RuntimeCapabilitiesContractV2,
+			RepositoryRef: cliRuntimeRef("repo"),
+			AgentID:       model.AgentPi,
+			WorkRouting: workprovider.RuntimeCapabilityClaimV1{
+				ID:                    workrun.WorkRoutingCapabilityV1,
+				Exposure:              workprovider.WorkRoutingAdvertised,
+				ImplementationRouting: canonical.ImplementationRouting,
+			},
+			Contracts: workprovider.RuntimeContractSetV2{
+				Start:              workrun.WorkStartContractV1,
+				Route:              workrun.WorkRouteContractV1,
+				Advance:            workrun.WorkAdvanceContractV2,
+				VerificationDecide: workrun.WorkVerificationDecideContractV1,
+				Reconcile:          workrun.WorkReconcileContractV1,
+				Status:             workrun.WorkStatusContractV1,
+				Transition:         workrun.WorkTransitionContractV1,
 			},
 			ConnectorSessionRef: cliRuntimeRef("session"),
 		},
@@ -146,9 +204,48 @@ func TestWorkCapabilitiesAndStartUseMachineContracts(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &capabilities); err != nil {
 		t.Fatalf("decode capabilities: %v\n%s", err, output.String())
 	}
-	if capabilities.ConnectorSessionRef !=
-		runtime.capabilities.ConnectorSessionRef {
+	if capabilities.WorkRouting.Exposure != workprovider.WorkRoutingDormant ||
+		capabilities.ConnectorSessionRef != "" {
 		t.Fatalf("capabilities = %#v", capabilities)
+	}
+	if runtime.capabilityV1 != 1 || runtime.capabilityV2 != 0 {
+		t.Fatalf(
+			"v1 capability dispatch = %d/%d",
+			runtime.capabilityV1,
+			runtime.capabilityV2,
+		)
+	}
+
+	output.Reset()
+	if err := runWorkCapabilities(
+		context.Background(),
+		[]string{
+			"--cwd", "/repo",
+			"--contract", workprovider.RuntimeCapabilitiesContractV2,
+			"--json",
+		},
+		&output,
+		controller,
+	); err != nil {
+		t.Fatalf("runWorkCapabilities(v2) error = %v", err)
+	}
+	var capabilitiesV2 workprovider.RuntimeCapabilitiesV2
+	if err := json.Unmarshal(output.Bytes(), &capabilitiesV2); err != nil {
+		t.Fatalf("decode capabilities v2: %v\n%s", err, output.String())
+	}
+	if err := capabilitiesV2.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if capabilitiesV2.Contracts.VerificationDecide !=
+		workrun.WorkVerificationDecideContractV1 {
+		t.Fatalf("capabilities v2 = %#v", capabilitiesV2)
+	}
+	if runtime.capabilityV1 != 1 || runtime.capabilityV2 != 1 {
+		t.Fatalf(
+			"v2 capability dispatch = %d/%d",
+			runtime.capabilityV1,
+			runtime.capabilityV2,
+		)
 	}
 
 	output.Reset()
@@ -329,6 +426,28 @@ func TestWorkRuntimeCommandsRejectAuthorityFlags(t *testing.T) {
 				t.Fatalf("command error = %v", err)
 			}
 		})
+	}
+}
+
+func TestWorkCapabilitiesRejectsUnknownContractBeforeOpen(t *testing.T) {
+	t.Parallel()
+	opener := &cliRuntimeOpener{}
+	var output bytes.Buffer
+	err := runWorkCapabilities(
+		context.Background(),
+		[]string{"--contract=unknown", "--json"},
+		&output,
+		workprovider.NewRuntimeController(opener),
+	)
+	if err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("unsupported capabilities error = %v", err)
+	}
+	if output.Len() != 0 || opener.calls != 0 {
+		t.Fatalf(
+			"unsupported capabilities output/opener = %q / %d",
+			output.String(),
+			opener.calls,
+		)
 	}
 }
 

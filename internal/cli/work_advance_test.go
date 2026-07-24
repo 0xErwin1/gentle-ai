@@ -21,9 +21,11 @@ type cliAdvanceRuntimeCall struct {
 }
 
 type cliAdvanceRuntime struct {
-	advance workrun.WorkAdvanceV1
-	err     error
-	calls   []cliAdvanceRuntimeCall
+	advance   workrun.WorkAdvanceV1
+	advanceV2 workrun.WorkAdvanceV2
+	err       error
+	calls     []cliAdvanceRuntimeCall
+	v2Calls   []cliAdvanceRuntimeCall
 }
 
 func (runtime *cliAdvanceRuntime) Capabilities(
@@ -75,6 +77,37 @@ func (runtime *cliAdvanceRuntime) AdvanceOutcome(
 		expectedRevision: expectedRevision,
 	})
 	return runtime.advance, runtime.err
+}
+
+func (runtime *cliAdvanceRuntime) CapabilitiesV2(
+	context.Context,
+) (workprovider.RuntimeCapabilitiesV2, error) {
+	return workprovider.RuntimeCapabilitiesV2{}, errors.New(
+		"work advance must not call capabilities v2",
+	)
+}
+
+func (runtime *cliAdvanceRuntime) AdvanceOutcomeV2(
+	_ context.Context,
+	workRunID string,
+	expectedRevision string,
+) (workrun.WorkAdvanceV2, error) {
+	runtime.v2Calls = append(runtime.v2Calls, cliAdvanceRuntimeCall{
+		workRunID:        workRunID,
+		expectedRevision: expectedRevision,
+	})
+	return runtime.advanceV2, runtime.err
+}
+
+func (runtime *cliAdvanceRuntime) DecideVerificationOutcome(
+	context.Context,
+	string,
+	string,
+	workrun.VerificationDecisionChoice,
+) (workrun.WorkVerificationDecideV1, error) {
+	return workrun.WorkVerificationDecideV1{}, errors.New(
+		"work advance must not decide verification",
+	)
 }
 
 func (runtime *cliAdvanceRuntime) ReconcileOutcome(
@@ -164,7 +197,9 @@ func TestRunWorkAdvanceKeepsMachineFlagsClosed(t *testing.T) {
 	}
 }
 
-func TestRunWorkAdvanceUnsupportedContractIsJSONAndOpensNothing(t *testing.T) {
+func TestRunWorkAdvanceUnsupportedContractFailsClosedAndOpensNothing(
+	t *testing.T,
+) {
 	t.Parallel()
 	opener := &cliAdvanceRuntimeOpener{}
 	var output bytes.Buffer
@@ -174,21 +209,11 @@ func TestRunWorkAdvanceUnsupportedContractIsJSONAndOpensNothing(t *testing.T) {
 		&output,
 		workprovider.NewRuntimeController(opener),
 	)
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("unsupported work-advance error = %v", err)
 	}
-	var diagnostic workrun.WorkDiagnosticV1
-	if err := json.Unmarshal(output.Bytes(), &diagnostic); err != nil {
-		t.Fatalf("decode diagnostic: %v\n%s", err, output.String())
-	}
-	if err := diagnostic.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if diagnostic.Operation != workrun.DiagnosticOperationWorkAdvance ||
-		diagnostic.Code != "unsupported_contract" ||
-		diagnostic.MutationOutcome != "not_started" ||
-		opener.calls != 0 {
-		t.Fatalf("diagnostic/opener = %#v / %d", diagnostic, opener.calls)
+	if output.Len() != 0 || opener.calls != 0 {
+		t.Fatalf("unsupported output/opener = %q / %d", output.String(), opener.calls)
 	}
 }
 
@@ -261,6 +286,64 @@ func TestRunWorkAdvanceEmitsExactTerminalJSONAndAuthority(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestRunWorkAdvanceV2UsesOnlyResumableRuntime(t *testing.T) {
+	t.Parallel()
+	const workRunID = "work-cli-advance-v2"
+	previousRevision := cliAdvanceRef("v2-previous")
+	legacy := cliReadyAdvance(workRunID, previousRevision)
+	advance := workrun.WorkAdvanceV2{
+		Schema:            workrun.WorkAdvanceContractV2,
+		Contract:          workrun.WorkAdvanceContractV2,
+		PreviousRevision:  legacy.PreviousRevision,
+		Status:            legacy.Status,
+		DeliveryResultRef: legacy.DeliveryResultRef,
+	}
+	if err := advance.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &cliAdvanceRuntime{advanceV2: advance}
+	opener := &cliAdvanceRuntimeOpener{runtime: runtime}
+	var output bytes.Buffer
+	err := runWorkAdvance(
+		context.Background(),
+		[]string{
+			"--cwd=/repo",
+			"--work-run=" + workRunID,
+			"--expected-revision=" + previousRevision,
+			"--contract=" + workrun.WorkAdvanceContractV2,
+			"--json",
+		},
+		&output,
+		workprovider.NewRuntimeController(opener),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedJSON, err := json.MarshalIndent(advance, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedJSON = append(expectedJSON, '\n')
+	if !bytes.Equal(output.Bytes(), expectedJSON) {
+		t.Fatalf(
+			"work-advance/v2 JSON differs:\ngot:\n%s\nwant:\n%s",
+			output.Bytes(),
+			expectedJSON,
+		)
+	}
+	if len(runtime.calls) != 0 ||
+		!reflect.DeepEqual(runtime.v2Calls, []cliAdvanceRuntimeCall{{
+			workRunID:        workRunID,
+			expectedRevision: previousRevision,
+		}}) {
+		t.Fatalf(
+			"v1/v2 runtime calls = %#v / %#v",
+			runtime.calls,
+			runtime.v2Calls,
+		)
 	}
 }
 

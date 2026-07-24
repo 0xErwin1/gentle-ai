@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"github.com/gentleman-programming/gentle-ai/internal/workprovider"
+	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
 
 func RunWorkAdvance(args []string, stdout io.Writer) error {
@@ -50,14 +51,36 @@ func runWorkAdvance(
 	if !*asJSON {
 		return errors.New("work-advance requires --json")
 	}
-	result, err := controller.Advance(ctx, workprovider.RuntimeAdvanceRequest{
-		Repo:             *cwd,
-		WorkRunID:        *workRunID,
-		ExpectedRevision: *expectedRevision,
-		Contract:         *contract,
-	})
-	if err != nil {
-		return err
+	switch *contract {
+	case workrun.WorkAdvanceContractV2:
+		result, err := controller.AdvanceV2(
+			ctx,
+			workprovider.RuntimeAdvanceV2Request{
+				Repo:             *cwd,
+				WorkRunID:        *workRunID,
+				ExpectedRevision: *expectedRevision,
+				Contract:         *contract,
+			},
+		)
+		if err != nil {
+			return err
+		}
+		return encodeWorkJSON(stdout, result.Output())
+	case workrun.WorkAdvanceContractV1:
+		result, err := controller.Advance(
+			ctx,
+			workprovider.RuntimeAdvanceRequest{
+				Repo:             *cwd,
+				WorkRunID:        *workRunID,
+				ExpectedRevision: *expectedRevision,
+				Contract:         *contract,
+			},
+		)
+		if err != nil {
+			return err
+		}
+		return encodeWorkJSON(stdout, result.Output())
+	default:
+		return errors.New("the requested work advance contract is unsupported")
 	}
-	return encodeWorkJSON(stdout, result.Output())
 }

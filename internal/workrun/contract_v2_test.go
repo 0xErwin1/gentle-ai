@@ -7,6 +7,41 @@ import (
 	"testing"
 )
 
+func TestWorkCapabilitiesV2FixturesMatchSchema(t *testing.T) {
+	root := workRoutingContractRoot()
+	schema := compileWorkRoutingSchema(
+		t,
+		root,
+		"work-capabilities-v2.schema.json",
+	)
+	for _, fixture := range []string{
+		"work-capabilities-v2-advertised.fixture.json",
+		"work-capabilities-v2-dormant.fixture.json",
+	} {
+		t.Run(fixture, func(t *testing.T) {
+			payload, err := os.ReadFile(
+				filepath.Join(root, "fixtures", fixture),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document any
+			if err := json.Unmarshal(payload, &document); err != nil {
+				t.Fatal(err)
+			}
+			if err := schema.Validate(document); err != nil {
+				t.Fatalf(
+					"work-capabilities-v2 schema rejected %s: %v",
+					fixture,
+					err,
+				)
+			}
+			var exact map[string]any
+			decodeStrict(t, payload, &exact)
+		})
+	}
+}
+
 func TestWorkAdvanceV2AndVerificationDecisionFixturesMatchContracts(
 	t *testing.T,
 ) {

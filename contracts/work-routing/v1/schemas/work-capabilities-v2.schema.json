@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/work-routing/v1/schemas/work-capabilities-v2.schema.json",
+  "title": "Gentle AI effective resumable work-routing capabilities v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "contract",
+    "repositoryRef",
+    "agentId",
+    "workRouting",
+    "contracts"
+  ],
+  "properties": {
+    "schema": {"const": "gentle-ai.work-capabilities/v2"},
+    "contract": {"const": "gentle-ai.work-capabilities/v2"},
+    "repositoryRef": {"$ref": "#/$defs/ref"},
+    "agentId": {
+      "enum": [
+        "antigravity",
+        "claude-code",
+        "codex",
+        "cursor",
+        "gemini-cli",
+        "hermes",
+        "kilocode",
+        "kimi",
+        "kiro-ide",
+        "openclaw",
+        "opencode",
+        "pi",
+        "qwen-code",
+        "trae-ide",
+        "vscode-copilot",
+        "windsurf"
+      ]
+    },
+    "workRouting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "exposure", "implementationRouting"],
+      "properties": {
+        "id": {"const": "gentle-ai.work-routing/v1"},
+        "exposure": {"enum": ["dormant", "advertised"]},
+        "implementationRouting": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["directInline", "delegatedDirect", "sdd"],
+          "properties": {
+            "directInline": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "minUnderstandingFiles",
+                "maxUnderstandingFiles",
+                "maxMechanicalWriteFiles",
+                "mechanicalWriteMustBeAlreadyUnderstood",
+                "mechanicalWriteMustNotRequireResearch",
+                "mechanicalWriteMustNotHaveOpenDesignWork"
+              ],
+              "properties": {
+                "minUnderstandingFiles": {"const": 1},
+                "maxUnderstandingFiles": {"const": 3},
+                "maxMechanicalWriteFiles": {"const": 1},
+                "mechanicalWriteMustBeAlreadyUnderstood": {"const": true},
+                "mechanicalWriteMustNotRequireResearch": {"const": true},
+                "mechanicalWriteMustNotHaveOpenDesignWork": {"const": true}
+              }
+            },
+            "delegatedDirect": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "mappingMinUnderstandingFiles",
+                "writerMinNonTrivialFiles",
+                "delegateWhenReadPreparesWrite",
+                "delegateWhenBroadResearch"
+              ],
+              "properties": {
+                "mappingMinUnderstandingFiles": {"const": 4},
+                "writerMinNonTrivialFiles": {"const": 2},
+                "delegateWhenReadPreparesWrite": {"const": true},
+                "delegateWhenBroadResearch": {"const": true}
+              }
+            },
+            "sdd": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "proposeWhenSubstantialOrAmbiguous",
+                "durableArtifactsMustReduceUncertainty",
+                "selectionPolicy"
+              ],
+              "properties": {
+                "proposeWhenSubstantialOrAmbiguous": {"const": true},
+                "durableArtifactsMustReduceUncertainty": {"const": true},
+                "selectionPolicy": {
+                  "const": "explicit_request_or_accepted_proposal"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "contracts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "start",
+        "route",
+        "advance",
+        "verificationDecide",
+        "reconcile",
+        "status",
+        "transition"
+      ],
+      "properties": {
+        "start": {"const": "gentle-ai.work-start/v1"},
+        "route": {"const": "gentle-ai.work-route/v1"},
+        "advance": {"const": "gentle-ai.work-advance/v2"},
+        "verificationDecide": {"const": "gentle-ai.work-verification-decide/v1"},
+        "reconcile": {"const": "gentle-ai.work-reconcile/v1"},
+        "status": {"const": "gentle-ai.work-status/v1"},
+        "transition": {"const": "gentle-ai.work-transition/v1"}
+      }
+    },
+    "connectorSessionRef": {"$ref": "#/$defs/ref"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "workRouting": {
+            "properties": {"exposure": {"const": "advertised"}}
+          }
+        }
+      },
+      "then": {"required": ["connectorSessionRef"]},
+      "else": {"not": {"required": ["connectorSessionRef"]}}
+    }
+  ],
+  "$defs": {
+    "ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 240,
+      "pattern": "^[^\\x00\\x09-\\x0D\\x20\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF](?:[^\\r\\n\\x00]*[^\\x00\\x09-\\x0D\\x20\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF])?$"
+    }
+  }
+}

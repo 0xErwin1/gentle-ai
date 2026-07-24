@@ -19,7 +19,7 @@ func TestOrchestratorsProjectOrganicRoutingAndNativeAuthority(t *testing.T) {
 			"Context rule", "reading that prepares a write", "broad research",
 			"Per-action rule", "Optional SDD rule",
 			"explicit request or accepted proposal", "risk alone never forces SDD",
-			"Native authority rule", "gentle-ai.work-status/v1", "gentle-ai.work-advance/v1", "gentle-ai.work-transition/v1",
+			"Native authority rule", "gentle-ai.work-status/v1", "gentle-ai.work-advance/v2", "gentle-ai.work-verification-decide/v1", "gentle-ai.work-transition/v1",
 			"`work-status` is read-only", "cannot advance or terminalize",
 			"zero-or-one exact `authorizedTransition`", "Capability stop rule",
 		} {
@@ -67,7 +67,7 @@ func TestOrchestratorsProjectOrganicRoutingAndNativeAuthority(t *testing.T) {
 
 func TestOrchestratorsNegotiateNormalWorkIntake(t *testing.T) {
 	const (
-		capabilitiesCommand = "gentle-ai work-capabilities --cwd <repo> --contract gentle-ai.work-capabilities/v1 --json"
+		capabilitiesCommand = "gentle-ai work-capabilities --cwd <repo> --contract gentle-ai.work-capabilities/v2 --json"
 		startCommand        = "gentle-ai work-start --cwd <repo> --contract gentle-ai.work-start/v1 --json"
 	)
 
@@ -85,13 +85,14 @@ func TestOrchestratorsNegotiateNormalWorkIntake(t *testing.T) {
 			capabilitiesCommand,
 			"Never infer support",
 			"effective authenticated advertisement",
-			"exact `gentle-ai.work-capabilities/v1` schema and contract",
+			"exact `gentle-ai.work-capabilities/v2` schema and contract",
 			"binds `agentId` to the current runtime identity",
 			"binds `repositoryRef` to the current repository",
 			"`workRouting.exposure` as `advertised`",
 			"`contracts.start` as exactly `gentle-ai.work-start/v1`",
 			"`contracts.route` as exactly `gentle-ai.work-route/v1`",
-			"`contracts.advance` as exactly `gentle-ai.work-advance/v1`",
+			"`contracts.advance` as exactly `gentle-ai.work-advance/v2`",
+			"`contracts.verificationDecide` as exactly `gentle-ai.work-verification-decide/v1`",
 			"`contracts.reconcile` as exactly `gentle-ai.work-reconcile/v1`",
 			"`contracts.status` as exactly `gentle-ai.work-status/v1`",
 			"`contracts.transition` as exactly `gentle-ai.work-transition/v1`",
@@ -110,10 +111,13 @@ func TestOrchestratorsNegotiateNormalWorkIntake(t *testing.T) {
 			"do not invent a WorkRun, retry, or fall back to legacy execution",
 			"stop once as unavailable or ambiguous because a mutation may have started",
 			"retain the returned `workRunId`, `revision`",
-			"internally for route, post-actor advance, reconciliation, read-only status, and exact transition calls",
+			"internally for route, post-actor advance, verification decision, reconciliation, read-only status, and exact transition calls",
 			"Never expose handshake vocabulary",
+			"minimal human projections, not wire envelopes",
+			"shows only cost plus every owner-offered choice in original order through fixed human labels",
+			"Do not surface schema, WorkRun identity, revisions, hashes, or retained refs unless the user explicitly requests diagnostic detail",
 			"route, agent, repository, policy, hash, nonce, issue, pull request, or delivery mechanism",
-			"omits any one of the six exact start, route, advance, reconcile, status, or transition advertisements",
+			"omits any one of the seven exact start, route, advance, verificationDecide, reconcile, status, or transition advertisements",
 			"do not call `work-start` and never infer support",
 			"legacy direct-inline, delegated-direct, and optional-SDD behavior",
 			"without pretending that a managed WorkRun exists",
@@ -1360,11 +1364,15 @@ func TestSDDOrchestratorsUseExactWorkRunTransitionContract(t *testing.T) {
 	}
 }
 
-func TestSDDOrchestratorsUseExactPostActorWorkAdvanceContract(t *testing.T) {
-	const advanceCommand = "gentle-ai work-advance --cwd <repo> --work-run <id> --expected-revision <sha256> --contract gentle-ai.work-advance/v1 --json"
+func TestSDDOrchestratorsUseExactProductiveAdvanceAndConsentContracts(t *testing.T) {
+	const (
+		initialAdvanceCommand = "gentle-ai work-advance --cwd <repo> --work-run <id> --expected-revision <sha256> --contract gentle-ai.work-advance/v2 --json"
+		decideCommand         = "gentle-ai work-verification-decide --cwd <repo> --work-run <id> --prompt-ref <sha256> --contract gentle-ai.work-verification-decide/v1 --choice <run|defer|reduce_scope|deferred_runner> --json"
+		resumeAdvanceCommand  = "gentle-ai work-advance --cwd <repo> --work-run <id> --expected-revision <receipt.status.revision> --contract gentle-ai.work-advance/v2 --json"
+	)
 	paths := allSDDOrchestratorAssetPaths(t)
 	if len(paths) != 12 {
-		t.Fatalf("post-actor work-advance parity covers %d orchestrators, want 12", len(paths))
+		t.Fatalf("productive advance/consent parity covers %d orchestrators, want 12", len(paths))
 	}
 
 	parityLabels := []string{
@@ -1375,43 +1383,84 @@ func TestSDDOrchestratorsUseExactPostActorWorkAdvanceContract(t *testing.T) {
 		"**Preserve legacy behavior**",
 		"**Post-actor advance rule**",
 		"**Advance result rule**",
+		"**Retain typed authority; ask once in human language**",
+		"**Decide verification exactly once**",
+		"**Resume only `run` once**",
+		"**Stop every non-run choice**",
 	}
 	parity := make(map[string]string, len(parityLabels))
+	var contractParity string
 
 	for _, path := range paths {
 		t.Run(path, func(t *testing.T) {
 			content := MustRead(path)
-			checking := markdownSection(content, "#### Native Checking Contract")
-			if checking == "" {
-				t.Fatalf("%s missing Native Checking Contract", path)
+			contract := markdownSection(content, "#### Productive Advance and Verification Consent Contract (MANDATORY)")
+			if contract == "" {
+				t.Fatalf("%s missing productive advance/verification consent contract", path)
+			}
+			if contractParity == "" {
+				contractParity = contract
+			} else if contract != contractParity {
+				t.Fatalf("%s diverged from exact productive advance/consent parity", path)
 			}
 			for _, required := range []string{
-				"selected implementation actor has completed the authorized edit",
-				"explicitly created the candidate commit",
-				"invoke exactly once",
-				advanceCommand,
-				"using the retained `workRunId` and current returned `revision`",
-				"The provider never creates or guesses the commit",
-				"exact `gentle-ai.work-advance/v1` schema and contract",
-				"`previousRevision` bound to the requested CAS",
-				"nested status bound to the same WorkRun",
-				"`work-status` only as a read-only observation",
-				"nested status's zero-or-one exact `authorizedTransition`",
-				"never retry, fall back to legacy execution, reconstruct authority",
-				"invent candidate, verification, receipt, delivery, or PASS facts",
+				"validate and retain internally its complete owner-authored typed envelope", "`schema`, `contract`, `operation`, `promptRef`, `workRunId`, `expectedRevision`, `forecastRef`, `assumptionsRef`, `cost`, and ordered `choices`",
+				"`workRunId` to match `status.workRunId`", "`expectedRevision` to equal `status.revision`",
+				"Ask exactly once in human language", "Map owner `cost` through fixed labels",
+				"`quick` → `Quick`", "`long` → `Long`", "`very_long` → `Very long`", "`unknown` → `Unknown`",
+				"show only `Estimated verification cost: <fixed label>`", "every owner-offered choice exactly once in original order",
+				"`run` → `Run now`", "`defer` → `Defer`", "`reduce_scope` → `Reduce scope`", "`deferred_runner` → `Use deferred runner`",
+				"Do not surface `schema`, `contract`, `operation`, `workRunId`, revisions, hashes, `promptRef`, `forecastRef`, or `assumptionsRef` unless the user explicitly requests diagnostic detail",
+				"Map exactly one unambiguous selection 1:1 to the exact offered choice", "never invent, reorder, omit, merge, or widen options",
+				"stop without a mutation, retry, or second question",
+				decideCommand,
+				"`previousRevision` equal to the owner prompt's `expectedRevision`", "The receipt contains no inline advance",
+				"only when the exact receipt records `choice: run`", resumeAdvanceCommand, "never issue a second resumed advance",
+				"`choice: defer`", "`choice: reduce_scope`", "`choice: deferred_runner`",
+				"Do not launch verification, an agent, a runner, a command, or any subsequent advance", "Never invent deferred-runner mechanics",
 			} {
-				if !strings.Contains(checking, required) {
-					t.Fatalf("%s native checking contract missing post-actor advance rule %q", path, required)
+				if !strings.Contains(contract, required) {
+					t.Fatalf("%s productive advance/consent contract missing %q", path, required)
 				}
 			}
-			if count := strings.Count(content, advanceCommand); count != 1 {
-				t.Fatalf("%s exact work-advance command count = %d, want 1", path, count)
+			for command, want := range map[string]int{
+				initialAdvanceCommand: 1,
+				decideCommand:         1,
+				resumeAdvanceCommand:  1,
+			} {
+				if count := strings.Count(content, command); count != want {
+					t.Fatalf("%s exact command %q count = %d, want %d", path, command, count, want)
+				}
 			}
-			actor := strings.Index(checking, "selected implementation actor has completed")
-			commit := strings.Index(checking, "explicitly created the candidate commit")
-			advance := strings.Index(checking, advanceCommand)
-			if actor < 0 || commit <= actor || advance <= commit {
-				t.Fatalf("%s must order actor completion, explicit candidate commit, then work-advance", path)
+			if count := strings.Count(contract, "gentle-ai work-advance --cwd <repo>"); count != 2 {
+				t.Fatalf("%s productive contract has %d advance calls, want initial plus one bounded resume", path, count)
+			}
+			if strings.Contains(content, "gentle-ai.work-advance/v1") ||
+				strings.Contains(content, "gentle-ai.work-capabilities/v1") {
+				t.Fatalf("%s retained a legacy v1 capability/advance downgrade", path)
+			}
+			for _, forbidden := range []string{
+				"Present the owner envelope intact",
+				"preserve and present its complete owner-authored envelope",
+			} {
+				if strings.Contains(content, forbidden) {
+					t.Fatalf("%s exposes typed verification authority through retired wording %q", path, forbidden)
+				}
+			}
+
+			actor := strings.Index(contract, "selected implementation actor has completed")
+			commit := strings.Index(contract, "explicitly created the candidate commit")
+			initialAdvance := strings.Index(contract, initialAdvanceCommand)
+			internalAuthority := strings.Index(contract, "Retain typed authority; ask once in human language")
+			humanProjection := strings.Index(contract, "Ask exactly once in human language")
+			decide := strings.Index(contract, decideCommand)
+			receipt := strings.Index(contract, "The receipt contains no inline advance")
+			resume := strings.Index(contract, resumeAdvanceCommand)
+			nonRunStop := strings.Index(contract, "Stop every non-run choice")
+			if actor < 0 || commit <= actor || initialAdvance <= commit || internalAuthority <= initialAdvance ||
+				humanProjection <= internalAuthority || decide <= humanProjection || receipt <= decide ||
+				resume <= receipt || nonRunStop <= resume {
+				t.Fatalf("%s must order actor, commit, initial advance, internal authority, minimal human question, decision, receipt, bounded run resume, then non-run stop", path)
 			}
 
 			for _, label := range parityLabels {
@@ -1446,6 +1495,7 @@ func TestSDDOrchestratorsFailClosedAfterManagedWorkAdvanceBoundary(t *testing.T)
 			for _, required := range []string{
 				"missing, stale, malformed, disabled, unavailable, empty, or unknown",
 				"`work-advance`",
+				"`work-verification-decide`",
 				"one typed **Needs your decision** stop",
 				"Do not retry the mutation",
 				"fall back to legacy or prompt-owned authority for an existing WorkRun",
@@ -1473,11 +1523,12 @@ func TestSDDOrchestratorsFailClosedAfterManagedWorkAdvanceBoundary(t *testing.T)
 			for _, required := range []string{
 				"`contracts.start` as exactly `gentle-ai.work-start/v1`",
 				"`contracts.route` as exactly `gentle-ai.work-route/v1`",
-				"`contracts.advance` as exactly `gentle-ai.work-advance/v1`",
+				"`contracts.advance` as exactly `gentle-ai.work-advance/v2`",
+				"`contracts.verificationDecide` as exactly `gentle-ai.work-verification-decide/v1`",
 				"`contracts.reconcile` as exactly `gentle-ai.work-reconcile/v1`",
 				"`contracts.status` as exactly `gentle-ai.work-status/v1`",
 				"`contracts.transition` as exactly `gentle-ai.work-transition/v1`",
-				"omits any one of the six exact start, route, advance, reconcile, status, or transition advertisements",
+				"omits any one of the seven exact start, route, advance, verificationDecide, reconcile, status, or transition advertisements",
 				"do not call `work-start`",
 				"legacy direct-inline, delegated-direct, and optional-SDD behavior",
 				"After start, never degrade a managed WorkRun to legacy behavior",
