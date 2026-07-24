@@ -1,26 +1,28 @@
 # Organic Recovery Architecture and Implementation Plan
 
 - **Decision date:** 2026-07-23
-- **Status:** Dormant provider implementation; 48 of 52 acceptance criteria proved; activation remains **NO-GO**
+- **Status:** Gentle AI provider release-ready subject to exact-candidate CI; 51 of 52 acceptance criteria proved; ecosystem activation remains pending on the sole deferred Gentle Pi consumer matrix
 - **Architecture baseline:** `main` at `0d95c399c79edb341e3d874032eba4654b2b3f17`
 - **Implementation baseline:** `main` at `0d216f26d1e2fdb21f6fcfbefa05a1767f92eba8`
 - **Parent architecture:** [Systemic Remediation Architecture](./2026-07-23-systemic-remediation-architecture.md)
 - **Scope:** canonical implementation routing, optional SDD planning, proportional verification, the common RAR/PAD handoff, an outcome-first user experience, and typed delivery routes
-- **Delivery posture:** one draft `size:exception` Gentle AI pull request composed of reversible work-unit commits; do not activate or merge as complete until the open acceptance gaps below are closed
+- **Delivery posture:** provider-first GO: merge and publish Gentle AI after freezing and validating the exact candidate; keep default/unset activation read-only and do not claim ecosystem activation until Gentle Pi passes its subsequent provider-version/consumer matrix
 
 > **Decision:** Restore Gentle AI's organic “ask for the outcome” experience without removing its trust kernel. Keep byte integrity, immutable candidate identity, typed evidence, bounded review, receipts, and gate revalidation invisible behind one provider-owned safety envelope shared by multiple implementation routes. Make semantic verification proportional to applicability, risk, and cost; surface only decisions that materially affect the user's intent, exposure, or delivery.
 
-> **Implementation audit:** The provider now owns outcome intake and start,
-> MMI completion, semantic execution proof, verification-before-review ordering,
-> post-verification resnapshot and bounded replanning, correction closure,
-> partial/unavailable PAD exceptions, common route convergence, owner-issued
-> delivery authorization, and route-only reevaluation. The capability still
-> cannot be advertised honestly: no normal runtime consumer composes the
-> authenticated intake, semantic evaluator, live policy, Git/hosting transport,
-> and PAD executor; real-agent E2E and the Gentle Pi contract matrix are also
-> outstanding. The canonical manifest therefore stays dormant and the unset
-> runtime mode stays read-only. This is a safe provider checkpoint, not
-> completion of the product invariant.
+> **Implementation audit:** Gentle AI now composes the productive path end to
+> end: normal outcome-only intake, authenticated connector/bootstrap, semantic
+> evaluation, live policy provisioning, exact Git candidate authority,
+> hosting/PAD probe and execution, connectorless recovery, and route-neutral
+> terminal replay. The pinned real-agent suite passes all four direct,
+> delegated, common-review, and kill-switch journeys. Independent adversarial
+> review reports PASS with P0/P1/P2 = 0/0/0. The provider is therefore
+> release-ready at 51 of 52 criteria. The sole unchecked criterion is the
+> downstream Gentle Pi provider-version/consumer matrix. Publishing the
+> provider does not activate the ecosystem: the canonical manifest and unset
+> runtime mode remain dormant/read-only, while effective advertisement still
+> requires explicit enabled mode and an authenticated repository- and
+> agent-bound connector.
 
 This is a recovery slice within the nine-context systemic architecture, not a replacement architecture and not a second workflow engine. It normalizes the orchestrator's existing delegation rules, makes SDD one optional implementation route, and changes the `EPD`, `RAR`, `SDD`, and `PAD` handoffs while consuming existing `HCR`, `MMI`, and `ACI` ports. Direct and delegated work must not create synthetic SDD runs. The product invariant is end-to-end: a person asks for an outcome, the system performs the necessary work and proof, and the person sees either **Ready** or one actionable decision. The slice must preserve the one-way dependency rules and authority ownership from the parent architecture.
 
@@ -32,9 +34,10 @@ Gentle AI should return to a simple public mental model:
 2. PAD records an initial admission decision and typed delivery intent.
 3. The canonical implementation router selects direct execution, delegated execution, or proposes SDD.
 4. Small, already-understood work executes inline. Broader or research-heavy work uses the smallest useful subagent workflow. Genuinely complex work enters SDD only after the proposal is accepted or when the user explicitly requested SDD.
-5. Every implementation route converges on the same normalization, proportional verification, RAR review, and PAD authorization.
-6. PAD authorizes the selected delivery route against the final receipt and live destination.
-7. The user sees either a ready result or one bounded decision.
+5. An accepted or explicit SDD route remains **Working** while the consumer creates a native SDD runtime and binds that already-existing runtime; it never asks for route consent twice.
+6. Every implementation route converges on the same normalization, proportional verification, RAR review, and PAD authorization.
+7. PAD authorizes the selected delivery route against the final receipt and live destination.
+8. The user sees either a ready result or one bounded decision. A terminal delivery ambiguity stops once and offers only the exact owner-issued recovery action.
 
 The public product exposes only four states:
 
@@ -57,6 +60,7 @@ Hashes, lineages, revisions, locks, actor tickets, attempt ordinals, recovery cl
 - No silent downgrade from missing or expensive proof to approval.
 - No requirement that every delivery use both an issue and a pull request.
 - No route may weaken immutable candidate identity, managed mutation integrity, receipt binding, remote revalidation, or repository protection.
+- No consumer may author an SDD decline fallback, infer a recovery action from prose, retry `work-start` after an ambiguous result, or invoke delivery reconciliation automatically.
 - No optional fields may be added to the existing `sdd-status` v1 response because Gentle Pi decodes that shape exactly.
 - A kill switch may disable the new capability or reduce it to read-only diagnostics; it may not restore consumer-side inference or prose authority.
 
@@ -123,6 +127,13 @@ If an apparently simple task reveals genuine complexity, the router may propose 
 
 The router emits an `ImplementationRouteDecision` with `direct_inline`, `delegated_direct`, or `propose_sdd`. Only a selected executable route—`direct_inline`, `delegated_direct`, or `sdd`—is persisted as `ImplementationRoute` in a `WorkRun`; `sdd` additionally requires acceptance unless the user requested it explicitly.
 
+`gentle-ai.work-route/v1` makes that boundary explicit:
+
+- `work-route decide` accepts only the human choice `accept_sdd` or `decline_sdd`. The consumer cannot submit a replacement route or routing facts.
+- The provider persists the safe decline fallback with the original `propose_sdd` authority. A decline selects only that owner-authored `direct_inline` or `delegated_direct` fallback; if none exists, the decision fails closed.
+- Acceptance, and an explicit SDD request at `work-start`, both produce `publicState: working` with `routePhase: sdd_runtime_pending`. The route is already accepted; this is not another decision state.
+- The consumer creates the native SDD runtime first, then uses `work-route bind-sdd` to bind that already-existing run reference. Binding moves the same WorkRun to `routePhase: implementation_selected` with `implementationRoute: sdd`; it cannot create either run or attach a foreign one.
+
 Implementation route is a context-management and planning choice, not a safety profile. Direct work receives the same candidate identity, proportional verification, RAR receipt, and PAD delivery checks as delegated or SDD work.
 
 ### 3.2 Outcome-first interaction
@@ -174,6 +185,38 @@ For one immutable candidate generation:
 
 Operational replay of an interrupted durable operation does not consume the correction budget. Changed content is a new candidate generation, not another invisible attempt on the old one.
 
+### 3.5 One terminal stop, one explicit recovery
+
+`gentle-ai.work-advance/v1` is terminal: one bounded call returns either
+**Ready** with `deliveryResultRef`, or **Needs your decision** with one owner
+diagnostic. It never returns an intermediate **Working** or **Checking**
+envelope. When the diagnostic branch is present, its top-level value must be
+field-for-field identical to `status.diagnostic`, including the exact
+`nextAction`:
+
+| Owner action | Consumer behavior |
+|---|---|
+| `start_fresh_work_run` | Close the current local generation and return control to the user. Do not retry `work-advance`, restart the same WorkRun, fall back, or create its replacement in the same turn. Only the next normal user input may negotiate a different WorkRun. |
+| `reconcile_before_new_work` | Present one explicit recovery choice and stop. Do not reconcile during advance handling, polling, hydration, startup, agent completion, retry logic, or fresh-input handling. |
+
+A terminal blocker recorded near delivery fences later delivery execution even
+when authorization was already bound. The old WorkRun cannot continue around
+that blocker.
+
+If the user explicitly chooses recovery,
+`gentle-ai.work-reconcile/v1` performs one owner-only reconciliation against
+the exact terminal revision and diagnostic reference:
+
+| Reconciliation outcome | Public result |
+|---|---|
+| `delivery_confirmed` | **Ready**, with the owner-confirmed `deliveryResultRef`. |
+| `no_delivery_confirmed` | **Needs your decision** with `start_fresh_work_run`; the closed WorkRun is not retried. |
+| `manual_resolution_required` | **Needs your decision** with `manual_delivery_resolution_required`; no automatic route remains. |
+
+Exact replay of the same reconciliation request may reproduce the same result,
+but it cannot launch another effect or become a loop. The consumer supplies no
+outcome, delivery fact, policy, fallback, or authority.
+
 ## 4. Authority and ownership
 
 | Context | Owns in this slice | Must not own |
@@ -206,7 +249,9 @@ flowchart TD
     IR -->|"small + known"| DI["Direct inline implementation"]
     IR -->|"broad / research-heavy"| DG["Delegated exploration and/or one writer"]
     IR -->|"genuinely complex / uncertain"| SP{"Propose SDD"}
-    SP -->|"accepted / explicitly requested"| SA["SDD proposal/spec/design/tasks + Apply/TDD"]
+    SP -->|"accepted / explicitly requested"| SR["Working: SDD runtime pending"]
+    SR --> SB["Create native SDD runtime + bind existing run ref"]
+    SB --> SA["SDD proposal/spec/design/tasks + Apply/TDD"]
     SP -->|"declined"| SD{"Owner rules permit a reduced route?"}
     SD -->|"accepted smaller scope: small + known"| DI
     SD -->|"delegation sufficient without scope loss"| DG
@@ -260,9 +305,15 @@ The implementation router applies the existing delegation rules before any lifec
 
 - **Direct inline:** one already-understood mechanical file or a bounded decision/verification read across 1–3 files. No SDD artifacts are created.
 - **Delegated direct:** narrow mapping when understanding requires 4+ files and/or one writer when implementation touches 2+ non-trivial files. Delegation is context compression, not SDD; common verification/review actors are selected independently after implementation.
-- **Full SDD:** proposed when genuine complexity means a collaborative proposal, durable product decisions, architecture, cross-context dependencies, migration/rollback planning, or multiple reviewable work units materially reduce uncertainty. Explicit user requests enter this route directly; otherwise the user accepts the proposal first.
+- **Full SDD:** proposed when genuine complexity means a collaborative proposal, durable product decisions, architecture, cross-context dependencies, migration/rollback planning, or multiple reviewable work units materially reduce uncertainty. Explicit user requests enter this route directly; otherwise `work-route decide` records only `accept_sdd` or `decline_sdd`, while the provider owns any safe decline fallback.
 
 SDD remains valuable because it helps a person turn a genuinely complex outcome into a coherent proposal. It does not become a classical “write tests first for everything” system and it is not the universal implementation container.
+
+Acceptance and explicit SDD requests both expose **Working** with
+`routePhase: sdd_runtime_pending`. The consumer does not ask again: it creates
+the native SDD runtime, then binds that pre-existing runtime with
+`work-route bind-sdd`. Only the resulting `implementation_selected` state may
+dispatch SDD phases.
 
 These are implementation/planning routes, not a ban on action-level delegation. Tests, builds, installs, and review work continue to use fresh workers when the always-active delegation rules require them, regardless of which implementation route produced the candidate.
 
@@ -494,13 +545,17 @@ Any byte, path, or mode mutation during final verification discards that evidenc
 
 ### 7.3 Attempt and retry behavior
 
+- `work-start` is not a consumer retry contract. An interrupted, malformed, diagnostic, or ambiguous advertised START stops without automatic retry or legacy fallback because a mutation may already have begun.
 - Quick verification starts exactly once through a successful atomic `WorkRunStore.Begin`.
 - Long verification consumes no verification attempt before the exact consent-bound `WorkRunStore.Begin`.
 - SDD phase attempts and budgets exist only for an accepted SDD route. Direct and delegated runs never allocate them.
 - Exact durable replay after an interrupted publication is read-only with respect to budgets.
 - Missing tools, timeout, cancellation, and declined consent do not trigger automatic relaunch.
 - One correction is the only candidate-changing automatic recovery.
-- Exhausted convergence always becomes **Needs your decision**.
+- Exhausted convergence always becomes **Needs your decision** with one exact owner-authored action.
+- `start_fresh_work_run` closes the current generation; it never restarts or advances the same WorkRun, and replacement starts only from the next normal user input.
+- `reconcile_before_new_work` is an explicit user recovery action. It permits one exact `work-reconcile/v1` request, never automatic invocation or a loop.
+- A terminal delivery blocker permanently fences every later delivery effect for that generation. One-shot reconciliation can terminalize it as `delivery_confirmed`, `no_delivery_confirmed`, or `manual_resolution_required`; it never resumes the effect.
 
 ### 7.4 Correction impact closure
 
@@ -524,26 +579,51 @@ Owner-issued diagnostics are typed and actionable:
 
 User-facing adapters translate internals without dropping choices or inventing remediation.
 
+For `work-advance/v1`, the top-level diagnostic and
+`status.diagnostic` are the same exact owner artifact. Consumers trust only its
+`nextAction`; they do not derive behavior from the diagnostic code, message,
+public state, cached local state, or prose. The
+`manual_delivery_resolution_required` action is valid only after
+`work-reconcile/v1`, never as an initial advance result.
+
 ## 8. Compatibility and rollout
 
 ### 8.1 Provider first
 
 Gentle AI owns policy and must publish the new contracts first. Gentle Pi adapts only after the provider release exists.
 
+> **Release boundary:** Provider GO means the Gentle AI contracts and productive
+> composition may be merged and published first. It does not authorize
+> ecosystem-wide consumer activation. Gentle Pi must adapt against that
+> published provider, prove its consumer matrix, and release before operators
+> explicitly enable or advertise the combined ecosystem path.
+
 The canonical delegation rules remain an ACI-owned projection, and every capable adapter must preserve the same three implementation routes. The provider contract that carries common progress and authority is route-neutral:
 
 | Invocation | Provider response |
 |---|---|
+| `gentle-ai work-capabilities --cwd <repo> --contract gentle-ai.work-capabilities/v1 --json` | The authenticated effective capability. A managed start is permitted only when exposure is `advertised` and all six exact `start`, `route`, `advance`, `reconcile`, `status`, and `transition` contracts are present for the current agent and repository. |
+| `gentle-ai work-start --cwd <repo> --contract gentle-ai.work-start/v1 --json` with the outcome-only request on stdin | A typed initial `WorkStatusV1`. START is not a consumer retry promise: an interrupted, diagnostic, malformed, or ambiguous result stops without automatic retry or legacy fallback because a mutation may have started. |
 | `gentle-ai sdd-status ... --json` | A strict `StatusV1Projection` only for legacy/current SDD runs, containing exactly the fields and tokens accepted by the current Gentle Pi decoder. It never selects an implementation route. |
-| `gentle-ai work-status ... --json --contract gentle-ai.work-status/v1` | A typed `WorkStatusV1` with the route decision, optional selected `implementationRoute`, optional `sddRunRef`, verification summary/references, delivery intent, and at most one provider-issued `AuthorizedTransition`. |
-| `gentle-ai work-transition apply --contract gentle-ai.work-transition/v1 --authorization-ref <ref> --expected-revision <revision> --json` | The only common-work mutation surface. It applies the stored owner-issued transition through CAS and returns the resulting durable revision and next transition, if any. |
-| An explicitly empty or unknown `--contract` value on any contract-bearing surface | A typed unsupported-contract diagnostic and a read-only exit before any transition or mutation. |
+| `gentle-ai work-route decide --cwd <repo> --work-run <id> --expected-revision <revision> --contract gentle-ai.work-route/v1 --choice <choice> --json` | Records only the human choice `accept_sdd` or `decline_sdd`. Acceptance reaches **Working**/`sdd_runtime_pending`; decline uses only the provider-persisted fallback and fails closed when no safe fallback exists. |
+| `gentle-ai work-route bind-sdd --cwd <repo> --work-run <id> --expected-revision <revision> --contract gentle-ai.work-route/v1 --run-ref <existing-run> --json` | Binds an already-existing native SDD runtime to an already-accepted SDD WorkRun and reaches `implementation_selected`; it never creates a run or performs a second route decision. |
+| `gentle-ai work-advance --cwd <repo> --work-run <id> --expected-revision <revision> --contract gentle-ai.work-advance/v1 --json` | Performs one bounded owner convergence attempt and terminates as **Ready** with `deliveryResultRef` or **Needs your decision** with one diagnostic duplicated exactly in `status.diagnostic`. That diagnostic carries only `start_fresh_work_run` or `reconcile_before_new_work`; the consumer never loops or infers another action. |
+| `gentle-ai work-reconcile --cwd <repo> --work-run <id> --expected-revision <revision> --diagnostic-ref <ref> --contract gentle-ai.work-reconcile/v1 --json` | After explicit user choice, performs one owner-only reconciliation and returns `delivery_confirmed`, `no_delivery_confirmed`, or `manual_resolution_required`. Exact request replay may reproduce the result but cannot launch another effect. |
+| `gentle-ai work-status --cwd <repo> --work-run <id> --contract gentle-ai.work-status/v1 --json` | A typed `WorkStatusV1` with the route decision, optional selected `implementationRoute`, optional `sddRunRef`, verification summary/references, delivery intent, and at most one provider-issued `AuthorizedTransition`. |
+| `gentle-ai work-transition apply --cwd <repo> --work-run <id> --contract gentle-ai.work-transition/v1 --authorization-ref <ref> --expected-revision <revision> --json` | The only generic `WorkStatusV1`-authorized transition surface. It applies the stored owner-issued transition through CAS; route choice/binding and explicit terminal reconciliation remain separate closed mutations under their own exact contracts. |
+| An explicitly empty or unknown `--contract` value on any contract-bearing surface | A typed unsupported-contract diagnostic and a read-only exit before any transition or mutation. No contract, result, or status shape is inferred from command presence, prose, cached state, or provider version. |
 
 The default SDD v1 projection must exclude `runtimeStatus`, `remediationState.correctionBudget`, new root keys, and work-contract-only next-action tokens even when the internal aggregate contains them. Gentle Pi's current decoder rejects unknown root fields, so adding “optional” fields is not compatible.
 
 `WorkStatusV1` distinguishes the pending `routeDecision` from the selected `implementationRoute`; `sddRunRef` is valid only when the latter is `sdd`. It does not publish a menu from which a client reconstructs policy. The native controller returns zero or one exact `AuthorizedTransition`, bound to `gentle-ai.work-transition/v1`, its opaque authorization reference, expected work revision, candidate, action ticket, and applicable authorization. A client may present it and submit only the returned reference and revision to `work-transition apply`; it may not choose other flags, rebuild recovery algebra, or synthesize an alternative transition. Missing, expired, replayed-with-different-inputs, or mismatched authorization fails CAS without mutation.
 
 The current `sdd-continue` contract remains unchanged for SDD v1 consumers. Direct and delegated runs never call it, never call `sdd-status`, and carry no `sddRunRef`. The new common behavior stays behind the advertised `gentle-ai.work-routing/v1` capability until a consumer explicitly requests the recognized contract. There is no ambient upgrade based on provider version, field presence, prose, or adapter detection.
+
+Compatibility is asymmetric and fail-closed:
+
+- **Before START:** a dormant, unavailable, unauthenticated, malformed, unsupported, or incomplete capability handshake preserves the legacy direct/delegated/optional-SDD flow without pretending a managed WorkRun exists.
+- **After START:** a missing, stale, malformed, disabled, unavailable, empty, or unknown managed contract or result becomes one typed stop. The consumer does not retry, downgrade the run to legacy behavior, or reconstruct authority.
+- A provider may recognize an exact historical START authority for narrow rolling compatibility, but callers cannot depend on that internal replay path. Public START semantics still promise no retry, and a legacy proposal with no owner-authored decline fallback remains fail-closed.
 
 ### 8.2 Historical authority
 
@@ -552,15 +632,24 @@ The current `sdd-continue` contract remains unchanged for SDD v1 consumers. Dire
 - New readers may render old records, but cannot silently upgrade their authorization.
 - Unsupported capability yields read-only status or a typed stop, not adapter inference.
 
-### 8.3 Gentle Pi follow-up
+### 8.3 Gentle Pi follow-up — sole deferred criterion
 
-The Gentle Pi change is intentionally outside this provider PR. Its subsequent implementation should:
+The Gentle Pi change is intentionally outside this provider PR and represents
+the sole unchecked acceptance criterion. Its subsequent implementation against
+the published Gentle AI provider must:
 
 - apply the canonical delegation rules before any SDD negotiation;
-- negotiate `gentle-ai.work-routing/v1`;
+- negotiate `gentle-ai.work-capabilities/v1` and require the exact six-contract set before START;
+- preserve the legacy direct/delegated/optional-SDD path only when negotiation fails before a managed WorkRun exists;
+- treat START as non-retryable from the consumer side and never downgrade an existing WorkRun to legacy behavior;
+- submit only `accept_sdd` or `decline_sdd`; never construct a decline fallback;
+- after an accepted or explicit SDD status reaches `working`/`sdd_runtime_pending`, create a native SDD runtime and bind that already-existing run without asking for consent again;
 - consume the provider-issued next transition;
 - invoke the exact `gentle-ai.work-transition/v1` apply surface with the returned authorization reference and revision;
 - invoke SDD-specific status/continuation only after the `sdd` route was accepted or explicitly requested;
+- require a WorkAdvance diagnostic to equal `status.diagnostic`, close the current generation on `start_fresh_work_run`, and never retry the same WorkRun;
+- present `reconcile_before_new_work` as an explicit human action and never invoke reconciliation from advance handling, polling, hydration, startup, completion, or retry logic;
+- map `delivery_confirmed`, `no_delivery_confirmed`, and `manual_resolution_required` without inventing a fourth reconciliation outcome or automatic loop;
 - present only the four public states;
 - execute forecast consent without constructing policy;
 - preserve v1 behavior against older providers;
@@ -575,9 +664,12 @@ The pull request is not one undifferentiated change:
 - Wave 0 inventory and every required owner foundation are checked before behavior is activated.
 - Existing `MMI` and `ACI` foundations are prerequisites. Changed owner units follow `HCR` facts/execution, `RAR` authority, `EPD` evidence/policy, route-neutral `WorkRun` coordination, optional `SDD` integration, and `PAD` delivery. Final `ACI` work projects the already-proven routing and owner contracts; SDD may not depend on generated projection.
 - The `gentle-ai.work-routing/v1` capability remains unadvertised and unable to
-  start new work throughout intermediate commits. The final foundation also
-  remains dormant after the acceptance audit; activation is a separate,
-  evidence-gated boundary, not an automatic last commit.
+  start new work throughout intermediate commits.
+- The canonical capability manifest and unset runtime mode remain
+  dormant/read-only. A released provider advertises only through an explicit
+  `enabled` runtime overlay with an authenticated, repository- and agent-bound
+  connector. Publishing Gentle AI is therefore safe before consumer activation;
+  ecosystem enablement remains separately gated by the Gentle Pi matrix.
 - A missing foundation is implemented only inside its owning work unit and port. It is never improvised inside SDD, CLI, Pi, prompts, or generated assets.
 - Each work unit must build and prove its owner acceptance before the next dependent unit is considered reviewable.
 - The pull request may merge only when the complete provider contract is coherent and the exact final candidate passes independent review.
@@ -601,47 +693,25 @@ The planning center was approximately **15,000 changed lines**. LOC is a review-
 
 ### 9.1 Implemented foundation and audit result
 
-The implementation exceeded the forecast and must be reviewed as such:
+The Gentle AI provider implementation is complete enough to publish first. The
+remaining downstream consumer gate is intentionally separate.
 
 | Result | Evidence |
 |---|---|
-| Exact branch footprint | `65,534` additions + `3,950` deletions = **69,484 changed lines** across `227` files, measured against implementation baseline `0d216f26d1e2fdb21f6fcfbefa05a1767f92eba8`. |
-| Commit topology | The nine conceptual work units were decomposed into small reversible commits so identity, replay, compatibility, and activation fixes can be inspected and reverted independently. |
-| Forecast variance | Most additional volume is owner repositories, linked-worktree and stale-identity hardening, adversarial failure/replay coverage, and generated adapter projections. The variance is not treated as proof of completion. |
-| Retired coverage | The prompt-owned router, its byte golden, and 32 obsolete prompt-router Go tests/assertions were removed with an exact migration map. No valid E2E was changed or deleted. |
-| Live E2E | The suite still defines and invokes all 113 scenarios for installation, layout, idempotency, and optional SDD. The canonical Docker matrix could not run locally because `docker` is unavailable; CI remains required. |
-| Independent acceptance audit | **PASS for the dormant checkpoint, NO-GO for activation:** 48 of 52 criteria proved. Two independent adversarial audits passed the exact candidate. Product activation still requires the normal runtime consumer, authenticated runtime/PAD composition, real-agent E2E, and the Gentle Pi provider/consumer matrix. |
+| Exact branch footprint | `105,691` additions + `4,026` deletions = **109,717 changed lines** across `302` files, measured on the clean candidate against implementation baseline `0d216f26d1e2fdb21f6fcfbefa05a1767f92eba8`. |
+| Contract freeze | The sorted 28-file `contracts/work-routing/v1/{fixtures,schemas}` manifest is SHA-256 `8dc64d275f17ab213de7ed3561bb351bd5fecc061eee1aaaa60ddaa15341f878`; recompute it from the published tag before Gentle Pi adapts. |
+| Provider composition | Normal outcome-only intake, authenticated TLS connector, live policy provisioning, exact candidate catalog, productive execution, hosting/PAD transport, connectorless recovery, and default/read-only authority composition are implemented and tested. |
+| Real-agent E2E | Pinned OpenCode `1.18.4` completed **4/4 PASS**: direct inline, delegated direct, direct route with common review, and kill-switch-before-advance. Full package: `41.986s`; repeated direct-inline package: `22.304s`. |
+| Authority and replay audit | **PASS**, P0/P1/P2 = **0/0/0**. CandidateAuthority, terminal replay, historical reconciliation, cache-loss recovery, production/default/read-only wiring, and one-effect delivery behavior passed adversarial review. |
+| Additional gates | Full repository suite `321.25s`; full repository race suite `440.79s`; Workprovider full suite `339.638s`; WorkRun full suite `23.469s`; app/assets/CLI/status focused normal and race suites passed; 72 contract JSON files parsed; repository gofmt checker, actionlint, and `git diff --check` passed. |
+| Legacy platform E2E | The 113-scenario installation/platform suite remains retained. Docker was unavailable locally, so its exact-candidate Linux matrix remains a CI release gate rather than a claimed local pass. |
+| Acceptance result | **51 of 52 proved.** Gentle AI provider release: GO after exact-candidate CI. Ecosystem activation: pending the sole Gentle Pi provider-version/consumer matrix. |
 
-The audit's release blockers are architectural, not test flakes:
-
-1. No normal runtime consumer accepts an outcome and invokes the provider-owned
-   intake/start surface without exposing internal authority references.
-2. No authenticated runtime composition supplies the concrete semantic
-   evaluator, live policy provisioning, exact Git candidate catalog, or
-   hosting/PAD transports. Generic CLI flags or GitHub REST calls cannot replace
-   those authorities.
-3. Direct/delegated execution and common review actors still need real-agent E2E
-   evidence rather than only provider harnesses.
-4. Gentle Pi still needs the explicit provider-version/contract matrix while
-   preserving its strict SDD v1 behavior.
-The bounded runtime/connector follow-up for the first two blockers is forecast
-in changed lines, not days:
-
-| Remaining scope | Forecast changed LOC |
-|---|---:|
-| Gentle AI composition, fail-closed preflight, candidate catalog, fixed HCR Git observations, owner execution, and local conformance tests | 3,700–5,550 |
-| Authenticated connector plus disposable-repository delivery E2E | 1,000–1,600 |
-| **Bounded 669/713 follow-up total** | **4,700–7,150** |
-
-This forecast excludes unrelated Gentle Pi product work. Without the connector,
-criteria 669 and 713 remain honestly unavailable rather than falling back to
-text-derived routing, generic argv, `HEAD`, `origin`, `gh`, or force/bypass
-flags.
-
-Commit `db6e8607` reverted the premature activation: the canonical capability is
-dormant and an unset `GENTLE_AI_WORK_ROUTING_MODE` resolves to read-only. Existing
-status readers and explicitly authorized recovery remain available without
-creating new work.
+Commit `db6e8607` remains the historical safety boundary that reverted premature
+activation. Provider completion does not weaken it: the canonical manifest and
+unset `GENTLE_AI_WORK_ROUTING_MODE` remain dormant/read-only. Explicit enabled
+mode is still required, and downstream ecosystem activation remains gated by
+Gentle Pi.
 
 ### Work-unit rules
 
@@ -680,25 +750,26 @@ Their exact migration is:
 
 ## 10. Acceptance evidence
 
-Checked items are proved by the provider suite on the audited branch. Unchecked
-items are explicit blockers or deferred consumer/runtime evidence; they are not
-assumed complete because adjacent unit tests pass.
+Exactly 51 checked items are proved by Gentle AI provider, integration, and
+real-agent evidence. The sole unchecked item is downstream Gentle Pi consumer
+evidence. It does not block publishing the provider, but it does block claiming
+or enabling ecosystem-wide activation.
 
 ### 10.1 Product behavior
 
-- [ ] **Pending productive consumer:** A normal user can ask for an outcome without learning SDD, RDD, PAD, hashes, lenses, or recovery commands.
+- [x] **Proved by productive consumer and real-agent E2E:** A normal user can ask for an outcome without learning SDD, RDD, PAD, hashes, lenses, or recovery commands.
 - [x] The only public progress states are **Working**, **Checking**, **Ready**, and **Needs your decision**.
 - [x] One already-understood mechanical file and 1–3-file decide/verify reads can remain `direct_inline` without creating SDD artifacts.
 - [x] Understanding 4+ files delegates a narrow exploration, and writing 2+ non-trivial files delegates one writer; neither trigger starts SDD.
-- [ ] **Pending runtime-agent E2E:** Direct implementation may still delegate execution-heavy tests/builds/installs and common review actors without changing its implementation route or starting SDD.
-- [x] Genuinely complex or uncertain work produces the pending decision `propose_sdd`; SDD starts only after acceptance or an explicit user request, and risk alone does not force it.
-- [x] Declining SDD leads to safe scope reduction, a justified direct/delegated route, or **Needs your decision**, never silent SDD enrollment or unsafe inline continuation.
+- [x] **Proved by real-agent E2E:** Direct implementation may delegate execution-heavy tests/builds/installs and common review actors without changing its implementation route or starting SDD.
+- [x] Genuinely complex or uncertain work produces the pending decision `propose_sdd`; `work-route decide` accepts only `accept_sdd`/`decline_sdd`, and accepted or explicit SDD reaches **Working**/`sdd_runtime_pending` before an already-existing native SDD runtime is bound without a second decision.
+- [x] Declining SDD selects only the provider-persisted direct/delegated fallback or fails closed when none exists; the consumer cannot author routing facts, silently enroll SDD, or continue inline unsafely.
 - [x] A passive ordinary document or image launches no semantic-verification subagent and consumes no verification attempt.
 - [x] MMI proves the intended file mutation and structural readback for passive work.
 - [x] An applicable quick check runs exactly once without prompting.
 - [x] A long or very-long check presents one forecast before any process, ordinal, credential, network effect, or paid action begins.
 - [x] An already accepted forecast is not prompted again unless its binding assumptions change.
-- [x] Exhausted automatic convergence ends in one actionable decision, never an infinite loop.
+- [x] Exhausted automatic convergence returns one exact WorkAdvance diagnostic equal to `status.diagnostic`: `start_fresh_work_run` closes the generation, while `reconcile_before_new_work` permits only one explicitly chosen reconciliation; neither becomes an automatic loop.
 
 ### 10.2 Classification and evidence
 
@@ -724,13 +795,13 @@ assumed complete because adjacent unit tests pass.
 - [x] Only demonstrably unaffected evidence may be reused; stale affected evidence is rejected and clients/models cannot shrink the closure.
 - [x] Corrected verification branches explicitly: complete/not-required plus equality reaches targeted terminalization; failed/mutated stops; policy-permitted partial/unavailable follows the separate exception decision and never restarts the initial lens plan.
 - [x] A corrected candidate receives an exact new identity and terminal decision.
-- [x] Later post-apply, commit, push, PR, main, and release gates reuse the same valid receipt and do not relaunch review.
+- [x] Later post-apply, commit, push, PR, main, and release gates reuse the same valid receipt and do not relaunch review; a terminal blocker recorded near delivery fences every later delivery effect.
 
 ### 10.4 Delivery
 
 - [x] `pr_with_issue` remains the provider-owned default route and validates current approved linkage.
 - [x] `pr_without_issue` marks issue admission not applicable without weakening PR or safety gates.
-- [ ] **Pending live probe/executor:** `direct_main` is maintainer-authorized, validates exact remote freshness, respects protection, and never force-pushes.
+- [x] **Proved by authenticated PAD live probe/executor:** `direct_main` is maintainer-authorized, validates exact remote freshness, respects protection, and never force-pushes.
 - [x] `emergency` is explicit, expiring, reasoned, candidate-bound, and auditable.
 - [x] Emergency residual risk remains recorded as `partial` or `unavailable` under a distinct PAD exception, never as PASS or a normal review receipt.
 - [x] Changing only the delivery route can reuse unchanged content evidence while reevaluating route-specific governance.
@@ -739,10 +810,10 @@ assumed complete because adjacent unit tests pass.
 
 - [x] The default `sdd-status` v1 JSON remains byte-shape compatible for current Gentle Pi fixtures.
 - [x] `StatusV1Projection` strips `runtimeStatus`, `remediationState.correctionBudget`, new root keys, and work-contract-only tokens regardless of internal state.
-- [x] An explicit `gentle-ai.work-status/v1` request distinguishes `routeDecision` from the optional selected `implementationRoute`, permits `sddRunRef` only for `sdd`, and returns zero or one exact provider-issued `AuthorizedTransition`.
-- [x] `gentle-ai.work-transition/v1` is the sole common-work mutation surface and rejects missing, expired, mismatched, or stale authorizations without mutation.
-- [x] An empty explicit or unknown contract fails read-only before mutation; absence of a contract on `sdd-status` continues to select legacy SDD v1.
-- [ ] **Deferred to Gentle Pi:** Capable and incapable consumers are covered by a provider-version/contract matrix, and `sdd-continue` remains unchanged for v1 consumers.
+- [x] Exact `gentle-ai.work-route/v1`, `gentle-ai.work-advance/v1`, and `gentle-ai.work-reconcile/v1` requests preserve owner-only route choice, diagnostic action, delivery fencing, and one-shot reconciliation; `gentle-ai.work-status/v1` distinguishes decision from selected route and permits `sddRunRef` only for `sdd`.
+- [x] `gentle-ai.work-transition/v1` is the sole generic `WorkStatusV1`-authorized transition surface and rejects missing, expired, mismatched, or stale authorizations; route and reconciliation mutations remain closed under their own exact contracts.
+- [x] An empty explicit or unknown contract fails read-only before mutation; before START an inexact handshake preserves legacy behavior, while after START no failure retries, downgrades, or falls back; absence of a contract on `sdd-status` continues to select legacy SDD v1.
+- [ ] **Deferred to Gentle Pi:** Capable and incapable consumers are covered by a provider-version/contract matrix; START is never retried, accepted/explicit SDD binds once without new consent, fresh-start closes the generation, reconciliation requires explicit human action, and `sdd-continue` remains unchanged for v1 consumers.
 - [x] Semantic parity fixtures prove the 1–3/4+/2+ delegation thresholds and SDD proposal semantics across every supported orchestrator projection.
 - [x] E2E/unit tests, fixtures, and goldens that assert intentionally retired workflow behavior are removed with a recorded replacement or retirement rationale; CI/scripts contain no stale reference.
 - [x] Tests that still prove live safety invariants or strict legacy SDD v1 compatibility remain.
@@ -757,16 +828,17 @@ assumed complete because adjacent unit tests pass.
 
 - Disable advertising `gentle-ai.work-routing/v1` and reject new `WorkRun` starts.
 - Keep current SDD v1 status and historical authority readable.
-- Keep `WorkRun` compatibility readers plus owner-issued recovery and terminalization available for already-started common work.
+- Keep `WorkRun`/`work-status` compatibility readers plus owner-issued terminalization and explicitly requested one-shot reconciliation available for already-started common work. Pending `work-route decide` or `bind-sdd` mutations are not terminal recovery and remain stopped until a compatible enabled provider can resume them.
 - Reject every other new proportional-verification or delivery-intent transition with a typed unsupported/read-only result.
 - Do not fall back to a retired prompt parser, consumer-side transition planner, or unsigned arbitrary command.
 - Disable `direct_main` and `emergency` routes independently if their admission policy is implicated.
+- Consumers must never retry an ambiguous START, reinterpret `start_fresh_work_run` as same-run recovery, automatically execute a pending reconciliation during hydration/startup, or detach an already-bound native SDD runtime.
 
 ### 11.2 Source rollback
 
 - Before capability activation, or while no `WorkRun` record exists, revert the one provider PR or the last safe dormant work-unit boundary.
 - After any `WorkRun` record exists, never deploy a binary that cannot read it. Use a compatibility-preserving rollback release or fix forward while new starts remain disabled.
-- Preserve additive versioned schemas, readers, recovery/terminalization paths, and historical fixtures for every persisted authority version.
+- Preserve additive versioned schemas, readers, route binding, recovery/terminalization paths, reconciliation outcomes, and historical fixtures for every persisted authority version.
 - Regenerate mirrors from the reverted canonical source and prove parity.
 - Re-run current v1 compatibility fixtures before publishing a rollback release.
 
@@ -776,6 +848,7 @@ assumed complete because adjacent unit tests pass.
 - Existing runs continue under their originating authority version.
 - New-version runs remain inspectable and can execute only owner-issued recovery or terminalization when their general capability is disabled.
 - Interrupted durable publications use exact replay; they do not synthesize a replacement authorization.
+- Preserve the original terminal blocker and any one-shot reconciliation record. Never erase an indeterminate/manual result to reopen delivery or manufacture a fresh generation under the old WorkRun ID.
 
 ## 12. Out of scope
 
@@ -792,16 +865,18 @@ assumed complete because adjacent unit tests pass.
 
 ## 13. Immediate next action
 
-1. Keep the provider PR in draft and the canonical capability dormant.
-2. Finish local validation, push the owner-authority work units, and require the
-   exact CI matrix rather than reusing results from an older head.
-3. Integrate a normal outcome-first runtime consumer and authenticated connector
-   for intake, semantic evaluation, live policy, exact Git facts, and PAD
-   delivery.
-4. Run the real-agent direct/delegated/common-review E2E journeys.
-5. Adapt Gentle Pi and prove the provider-version/consumer contract matrix.
-6. Advertise or enable `gentle-ai.work-routing/v1` only after the remaining
-   invariant passes and a maintainer explicitly authorizes activation.
+1. Freeze the exact Gentle AI candidate, update its final LOC footprint, rerun
+   the release gates, and record the audited SHA.
+2. Merge and publish the Gentle AI provider first while default/unset activation
+   remains read-only.
+3. Adapt Gentle Pi against the published provider, including the exact
+   six-contract capability matrix, non-retryable START, one-time SDD binding,
+   generation closure, and explicit reconciliation behavior.
+4. Run the Gentle Pi provider-version matrix and real consumer journeys, then
+   publish Gentle Pi.
+5. Only after both releases and the consumer matrix pass may a maintainer
+   explicitly authorize ecosystem activation. Provider presence or version
+   alone must never activate it.
 
 ## 14. References
 
