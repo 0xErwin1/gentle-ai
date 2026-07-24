@@ -45,7 +45,8 @@ func TestRequiredChecksFailClosedWhenFormatFails(t *testing.T) {
 
 	jobs := []struct{ id, next string }{
 		{id: "unit-tests", next: "windows-runtime"},
-		{id: "windows-runtime", next: "e2e-tests"},
+		{id: "windows-runtime", next: "organic-runtime-e2e"},
+		{id: "organic-runtime-e2e", next: "e2e-tests"},
 		{id: "e2e-tests"},
 	}
 	for _, job := range jobs {
