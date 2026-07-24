@@ -698,7 +698,7 @@ remaining downstream consumer gate is intentionally separate.
 
 | Result | Evidence |
 |---|---|
-| Exact branch footprint | `105,691` additions + `4,026` deletions = **109,717 changed lines** across `302` files, measured on the clean candidate against implementation baseline `0d216f26d1e2fdb21f6fcfbefa05a1767f92eba8`. |
+| Exact branch footprint | `105,705` additions + `4,026` deletions = **109,731 changed lines** across `302` files, measured on the clean candidate against implementation baseline `0d216f26d1e2fdb21f6fcfbefa05a1767f92eba8`. |
 | Contract freeze | The sorted 28-file `contracts/work-routing/v1/{fixtures,schemas}` manifest is SHA-256 `8dc64d275f17ab213de7ed3561bb351bd5fecc061eee1aaaa60ddaa15341f878`; recompute it from the published tag before Gentle Pi adapts. |
 | Provider composition | Normal outcome-only intake, authenticated TLS connector, live policy provisioning, exact candidate catalog, productive execution, hosting/PAD transport, connectorless recovery, and default/read-only authority composition are implemented and tested. |
 | Real-agent E2E | Pinned OpenCode `1.18.4` completed **4/4 PASS**: direct inline, delegated direct, direct route with common review, and kill-switch-before-advance. Full package: `41.986s`; repeated direct-inline package: `22.304s`. |

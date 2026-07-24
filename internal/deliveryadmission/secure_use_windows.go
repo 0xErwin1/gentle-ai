@@ -684,14 +684,28 @@ func protectWindowsUseHandle(file *os.File, directory bool) error {
 	if err != nil || owner == nil || !owner.IsValid() {
 		return errors.New("owner-only authorization-use owner is unavailable")
 	}
+	// Harden the DACL before rebinding ownership. Directory ACL propagation and
+	// ownership are separate Windows mutations; keeping them ordered also makes
+	// an interrupted rebind fail closed with the current-user-only DACL applied.
 	if err := windows.SetSecurityInfo(
 		windows.Handle(file.Fd()),
 		windows.SE_FILE_OBJECT,
-		windows.OWNER_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION|
+		windows.DACL_SECURITY_INFORMATION|
 			windows.PROTECTED_DACL_SECURITY_INFORMATION,
-		owner,
+		nil,
 		nil,
 		dacl,
+		nil,
+	); err != nil {
+		return err
+	}
+	if err := windows.SetSecurityInfo(
+		windows.Handle(file.Fd()),
+		windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION,
+		owner,
+		nil,
+		nil,
 		nil,
 	); err != nil {
 		return err
