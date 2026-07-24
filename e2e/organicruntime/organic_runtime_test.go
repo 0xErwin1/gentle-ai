@@ -456,7 +456,10 @@ func (fixture *organicRuntimeServer) serveHTTP(
 				&intakeRequest,
 			); err != nil ||
 				intakeRequest.Context.RepositoryRef != fixture.repositoryRef ||
-				intakeRequest.Context.RepositoryRoot != fixture.repository.worktree ||
+				!sameOrganicDirectory(
+					intakeRequest.Context.RepositoryRoot,
+					fixture.repository.worktree,
+				) ||
 				intakeRequest.Request.Outcome != fixture.scenario.outcome ||
 				intakeRequest.Request.ExplicitSDDRequested {
 				http.Error(writer, "unexpected outcome intake payload", http.StatusBadRequest)
@@ -1921,6 +1924,34 @@ type organicRepository struct {
 	worktree     string
 	bare         string
 	baseRevision string
+}
+
+func TestSameOrganicDirectoryAcceptsCanonicalAliases(t *testing.T) {
+	directory := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(directory, alias); err != nil {
+		t.Skipf("directory aliases are unavailable: %v", err)
+	}
+	if !sameOrganicDirectory(directory, alias) {
+		t.Fatal("same repository directory alias was rejected")
+	}
+	file := filepath.Join(directory, "file")
+	if err := os.WriteFile(file, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if sameOrganicDirectory(directory, file) {
+		t.Fatal("regular file was accepted as the repository directory")
+	}
+}
+
+func sameOrganicDirectory(left, right string) bool {
+	leftInfo, leftErr := os.Stat(left)
+	rightInfo, rightErr := os.Stat(right)
+	return leftErr == nil &&
+		rightErr == nil &&
+		leftInfo.IsDir() &&
+		rightInfo.IsDir() &&
+		os.SameFile(leftInfo, rightInfo)
 }
 
 func initOrganicRepository(t *testing.T) organicRepository {
