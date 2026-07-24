@@ -212,11 +212,11 @@ func TestProductiveDeliveryResultBindsOwnerWorkRunCandidateAndIntent(
 	store.pad = owner.coordinator.pad
 	candidateRef := productiveAdvanceSHA256([]byte("productive-candidate"))
 	state := workrun.WorkRunState{
-		WorkRunID:               owner.workRunID,
-		DeliveryIntentRef:       admission.Admission.IntentRef,
-		Handoff:                 &workrun.ImplementationHandoff{CandidateRef: candidateRef},
-		ReviewReceiptRef:        productiveAdvanceSHA256([]byte("productive-review")),
-		VerificationResultRef:   productiveAdvanceSHA256([]byte("productive-verification")),
+		WorkRunID:                owner.workRunID,
+		DeliveryIntentRef:        admission.Admission.IntentRef,
+		Handoff:                  &workrun.ImplementationHandoff{CandidateRef: candidateRef},
+		ReviewReceiptRef:         productiveAdvanceSHA256([]byte("productive-review")),
+		VerificationResultRef:    productiveAdvanceSHA256([]byte("productive-verification")),
 		DeliveryAuthorizationRef: productiveAdvanceSHA256([]byte("productive-authorization")),
 	}
 	execution := deliveryadmission.ExecutionResult{
