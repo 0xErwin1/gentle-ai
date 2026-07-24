@@ -982,6 +982,80 @@ type VerificationAuthorityPort interface {
 	) (ReviewReceiptAuthority, error)
 }
 
+// VerificationDecisionAuthorityPort resolves one owner-authored prompt and the
+// exact owner decision derived from the caller's sole permitted input: one
+// offered choice. The caller never supplies actor, decision, assumptions, or
+// deferred-runner authority.
+type VerificationDecisionAuthorityPort interface {
+	ResolveVerificationDecision(
+		context.Context,
+		string,
+		VerificationDecisionChoice,
+	) (VerificationDecisionAuthority, error)
+}
+
+type VerificationDecisionAuthority struct {
+	Prompt      VerificationDecisionPromptV1
+	Choice      VerificationDecisionChoice
+	ActorRef    string
+	DecisionRef string
+	RunnerRef   string
+}
+
+func (authority VerificationDecisionAuthority) Validate(
+	state WorkRunState,
+) (VerificationDisposition, error) {
+	if state.Forecast == nil {
+		return VerificationDisposition{}, errors.New(
+			"verification decision authority requires a durable forecast",
+		)
+	}
+	if err := authority.Prompt.ValidateFor(*state.Forecast); err != nil {
+		return VerificationDisposition{}, err
+	}
+	if authority.Prompt.WorkRunID != state.WorkRunID ||
+		authority.Prompt.ExpectedRevision != state.Revision ||
+		authority.Prompt.ForecastRef != state.Forecast.Digest ||
+		!containsVerificationChoice(
+			authority.Prompt.Choices,
+			authority.Choice,
+		) {
+		return VerificationDisposition{}, fmt.Errorf(
+			"%w: verification decision prompt",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	if !validSHA256Ref(authority.ActorRef) ||
+		!validSHA256Ref(authority.DecisionRef) {
+		return VerificationDisposition{}, errors.New(
+			"verification decision authority has invalid owner references",
+		)
+	}
+	kind, err := dispositionKindForChoice(authority.Choice)
+	if err != nil {
+		return VerificationDisposition{}, err
+	}
+	if kind == DispositionDeferredRunner {
+		if !validSHA256Ref(authority.RunnerRef) {
+			return VerificationDisposition{}, errors.New(
+				"deferred-runner decision requires owner runner authority",
+			)
+		}
+	} else if authority.RunnerRef != "" {
+		return VerificationDisposition{}, errors.New(
+			"caller-independent runner authority is valid only for deferred_runner",
+		)
+	}
+	return newVerificationDisposition(
+		*state.Forecast,
+		kind,
+		authority.Prompt.AssumptionsRef,
+		authority.ActorRef,
+		authority.DecisionRef,
+		authority.RunnerRef,
+	)
+}
+
 type VerificationForecastAuthority struct {
 	AvailabilityRef string
 	Applicability   reviewtransaction.VerificationApplicability
@@ -989,6 +1063,7 @@ type VerificationForecastAuthority struct {
 	Plan            reviewtransaction.VerificationPlan
 	PlanRevisionRef string
 	Availability    ForecastAvailability
+	RequiresConsent bool
 	DiagnosticRefs  []string
 }
 
@@ -1013,6 +1088,12 @@ func (authority VerificationForecastAuthority) Validate() error {
 	default:
 		return fmt.Errorf("unsupported owner forecast availability %q", authority.Availability)
 	}
+	if authority.RequiresConsent &&
+		authority.Availability != ForecastAvailable {
+		return errors.New(
+			"owner verification consent requires an available forecast",
+		)
+	}
 	return nil
 }
 
@@ -1028,6 +1109,7 @@ func (authority VerificationForecastAuthority) MatchesInput(
 		authority.Plan.Digest != input.Plan.Digest ||
 		authority.PlanRevisionRef != input.PlanRevisionRef ||
 		authority.Availability != input.Availability ||
+		authority.RequiresConsent != input.RequiresConsent ||
 		!equalStrings(authority.DiagnosticRefs, input.DiagnosticRefs) {
 		return fmt.Errorf("%w: verification forecast", ErrAuthorityBindingMismatch)
 	}
@@ -1152,5 +1234,6 @@ type AuthorityPorts struct {
 	Route                     RouteAuthorityPort
 	SDD                       SDDAuthorityPort
 	Verification              VerificationAuthorityPort
+	VerificationDecision      VerificationDecisionAuthorityPort
 	Launch                    LaunchAuthorityPort
 }

@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/work-routing/v1/schemas/work-verification-decide.schema.json",
+  "title": "Gentle AI verification decision receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "contract",
+    "workRunId",
+    "previousRevision",
+    "promptRef",
+    "forecastRef",
+    "assumptionsRef",
+    "choice",
+    "dispositionRef",
+    "status"
+  ],
+  "properties": {
+    "schema": {
+      "const": "gentle-ai.work-verification-decide/v1"
+    },
+    "contract": {
+      "const": "gentle-ai.work-verification-decide/v1"
+    },
+    "workRunId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "previousRevision": {
+      "$ref": "#/$defs/revision"
+    },
+    "promptRef": {
+      "$ref": "#/$defs/revision"
+    },
+    "forecastRef": {
+      "$ref": "#/$defs/revision"
+    },
+    "assumptionsRef": {
+      "$ref": "#/$defs/revision"
+    },
+    "choice": {
+      "enum": [
+        "run",
+        "defer",
+        "reduce_scope",
+        "deferred_runner"
+      ]
+    },
+    "dispositionRef": {
+      "$ref": "#/$defs/revision"
+    },
+    "status": {
+      "allOf": [
+        {
+          "$ref": "work-status.schema.json"
+        },
+        {
+          "required": [
+            "deliveryIntentRef"
+          ],
+          "properties": {
+            "routePhase": {
+              "const": "implementation_selected"
+            },
+            "verification": {
+              "properties": {
+                "outcome": {
+                  "const": "pending"
+                },
+                "resultRefs": {
+                  "maxItems": 0
+                }
+              }
+            }
+          },
+          "not": {
+            "anyOf": [
+              {
+                "required": [
+                  "authorizedTransition"
+                ]
+              },
+              {
+                "required": [
+                  "diagnostic"
+                ]
+              },
+              {
+                "required": [
+                  "reviewReceiptRef"
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "choice": {
+            "const": "run"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "status": {
+            "properties": {
+              "publicState": {
+                "const": "checking"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "status": {
+            "properties": {
+              "publicState": {
+                "const": "needs_your_decision"
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "revision": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

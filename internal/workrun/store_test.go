@@ -762,7 +762,8 @@ func openTestWorkRunStore(t *testing.T, repo, workRunID string) WorkRunStore {
 		ProductiveExecutionResult: authority,
 		ProductiveDiagnostic:      authority,
 		ExplicitSDDRequest:        authority, Route: authority, SDD: authority,
-		MutationCompletion: authority, Verification: authority, Launch: executor,
+		MutationCompletion: authority, Verification: authority,
+		VerificationDecision: authority, Launch: executor,
 	})
 }
 

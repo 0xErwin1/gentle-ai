@@ -1,0 +1,121 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/work-routing/v1/schemas/verification-decision-prompt.schema.json",
+  "title": "Gentle AI owner-authored verification decision prompt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "contract",
+    "operation",
+    "promptRef",
+    "workRunId",
+    "expectedRevision",
+    "forecastRef",
+    "assumptionsRef",
+    "cost",
+    "choices"
+  ],
+  "properties": {
+    "schema": {
+      "const": "gentle-ai.verification-decision-prompt/v1"
+    },
+    "contract": {
+      "const": "gentle-ai.work-verification-decide/v1"
+    },
+    "operation": {
+      "const": "decide"
+    },
+    "promptRef": {
+      "$ref": "#/$defs/revision"
+    },
+    "workRunId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"
+    },
+    "expectedRevision": {
+      "$ref": "#/$defs/revision"
+    },
+    "forecastRef": {
+      "$ref": "#/$defs/revision"
+    },
+    "assumptionsRef": {
+      "$ref": "#/$defs/revision"
+    },
+    "cost": {
+      "enum": [
+        "quick",
+        "long",
+        "very_long",
+        "unknown"
+      ]
+    },
+    "choices": {
+      "type": "array"
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "cost": {
+          "const": "quick"
+        },
+        "choices": {
+          "const": [
+            "run",
+            "defer",
+            "reduce_scope"
+          ]
+        }
+      }
+    },
+    {
+      "properties": {
+        "cost": {
+          "enum": [
+            "long",
+            "very_long"
+          ]
+        },
+        "choices": {
+          "oneOf": [
+            {
+              "const": [
+                "run",
+                "defer",
+                "reduce_scope"
+              ]
+            },
+            {
+              "const": [
+                "run",
+                "defer",
+                "reduce_scope",
+                "deferred_runner"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "properties": {
+        "cost": {
+          "const": "unknown"
+        },
+        "choices": {
+          "const": [
+            "defer",
+            "reduce_scope"
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "revision": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

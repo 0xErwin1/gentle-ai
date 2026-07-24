@@ -37,6 +37,7 @@ const (
 	workOperationReplanVerification              = "verification/replan-correction"
 	workOperationRecordForecast                  = "verification/record-forecast"
 	workOperationRecordDisposition               = "verification/record-disposition"
+	workOperationDecideVerification              = "verification/decide"
 	workOperationBeginVerification               = "verification/begin"
 	workOperationClaimLaunch                     = "verification/claim-launch"
 	workOperationBindResult                      = "verification/bind-result"
@@ -107,6 +108,7 @@ type WorkRunState struct {
 	SDDDeclineFallbackRef                   string                      `json:"sdd_decline_fallback_ref,omitempty"`
 	Handoff                                 *ImplementationHandoff      `json:"handoff,omitempty"`
 	ProductiveAdvanceSourceRevision         string                      `json:"productive_advance_source_revision,omitempty"`
+	ProductiveResumeRevision                string                      `json:"productive_resume_revision,omitempty"`
 	ProductiveExecutionResultRef            string                      `json:"productive_execution_result_ref,omitempty"`
 	ProductiveExecutionResultSourceRevision string                      `json:"productive_execution_result_source_revision,omitempty"`
 	ProductiveBlockerRef                    string                      `json:"productive_blocker_ref,omitempty"`
@@ -232,6 +234,16 @@ type RecordVerificationDispositionRequest struct {
 	ActorRef         string                      `json:"actor_ref"`
 	DecisionRef      string                      `json:"decision_ref"`
 	RunnerRef        string                      `json:"runner_ref,omitempty"`
+}
+
+// DecideVerificationRequest is the complete caller-controlled consent input.
+// Actor, decision, assumptions, runner, policy, ticket, and command authority
+// are deliberately absent and must be resolved from the owner prompt.
+type DecideVerificationRequest struct {
+	ExpectedRevision string                     `json:"expected_revision"`
+	RequestID        string                     `json:"request_id"`
+	PromptRef        string                     `json:"prompt_ref"`
+	Choice           VerificationDecisionChoice `json:"choice"`
 }
 
 type BeginRequest struct {
@@ -1355,6 +1367,12 @@ func (store WorkRunStore) RecordVerificationDisposition(
 		if replay.State.Forecast == nil {
 			return workRunRecord{}, fmt.Errorf("%w: verification forecast is missing", ErrWorkRunInvalidTransition)
 		}
+		if forecastRequiresExplicitConsent(*replay.State.Forecast) {
+			return workRunRecord{}, fmt.Errorf(
+				"%w: verification forecast requires an owner prompt decision",
+				ErrWorkRunInvalidTransition,
+			)
+		}
 		if store.authority.Verification == nil {
 			return workRunRecord{}, ErrAuthorityPortUnavailable
 		}
@@ -1386,6 +1404,91 @@ func (store WorkRunStore) RecordVerificationDisposition(
 		}
 		return workRunRecord{Operation: workOperationRecordDisposition, Disposition: &disposition}, nil
 	})
+}
+
+// DecideVerification records one owner-resolved consent disposition.
+// It never reserves an ordinal, issues a ticket, claims a launch, or invokes
+// HCR. WorkRun.Begin remains the sole process-launch boundary.
+func (store WorkRunStore) DecideVerification(
+	ctx context.Context,
+	request DecideVerificationRequest,
+) (WorkRunState, error) {
+	if err := validateMutationEnvelope(
+		request.ExpectedRevision,
+		request.RequestID,
+	); err != nil {
+		return WorkRunState{}, err
+	}
+	if !validSHA256Ref(request.PromptRef) {
+		return WorkRunState{}, errors.New(
+			"verification decision requires an immutable owner prompt reference",
+		)
+	}
+	if _, err := dispositionKindForChoice(request.Choice); err != nil {
+		return WorkRunState{}, err
+	}
+	if store.authority.VerificationDecision == nil {
+		return WorkRunState{}, ErrAuthorityPortUnavailable
+	}
+	digest, err := digestValue(
+		"gentle-ai.work-run-verification-decision-request/v1",
+		request,
+	)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	return store.mutate(
+		ctx,
+		request.ExpectedRevision,
+		request.RequestID,
+		digest,
+		func(replay workReplay) (workRunRecord, error) {
+			state := replay.State
+			if state.ProductiveAdvanceSourceRevision == "" ||
+				state.Handoff == nil ||
+				state.Forecast == nil ||
+				state.Disposition != nil ||
+				len(state.Reservations) != 0 ||
+				len(state.LaunchClaims) != 0 ||
+				state.VerificationResultRef != "" ||
+				state.VerificationStop != nil ||
+				state.ReviewReceiptRef != "" ||
+				state.DeliveryAuthorizationRef != "" ||
+				state.DeliveryResultRef != "" {
+				return workRunRecord{}, fmt.Errorf(
+					"%w: WorkRun is not awaiting verification consent",
+					ErrWorkRunInvalidTransition,
+				)
+			}
+			authority, err := store.authority.VerificationDecision.
+				ResolveVerificationDecision(
+					ctx,
+					request.PromptRef,
+					request.Choice,
+				)
+			if err != nil {
+				return workRunRecord{}, fmt.Errorf(
+					"resolve owner verification decision: %w",
+					err,
+				)
+			}
+			if authority.Prompt.PromptRef != request.PromptRef ||
+				authority.Choice != request.Choice {
+				return workRunRecord{}, fmt.Errorf(
+					"%w: verification decision request",
+					ErrAuthorityBindingMismatch,
+				)
+			}
+			disposition, err := authority.Validate(state)
+			if err != nil {
+				return workRunRecord{}, err
+			}
+			return workRunRecord{
+				Operation:   workOperationDecideVerification,
+				Disposition: &disposition,
+			}, nil
+		},
+	)
 }
 
 // Begin atomically reserves the exact ticket, subject, plan,
@@ -1464,6 +1567,7 @@ func (store WorkRunStore) Begin(
 			PlanRevisionRef: state.Forecast.PlanRevisionRef,
 			Availability:    state.Forecast.Availability,
 			AvailabilityRef: state.Forecast.AvailabilityRef,
+			RequiresConsent: state.Forecast.RequiresConsent,
 			DiagnosticRefs:  state.Forecast.DiagnosticRefs,
 		}); err != nil {
 			return workRunRecord{}, err
@@ -2448,6 +2552,9 @@ func (store WorkRunStore) load(
 			return workReplay{}, fmt.Errorf("apply work run revision %s: %w", entry.revision, err)
 		}
 		replay.State.Revision = entry.revision
+		if entry.record.Operation == workOperationDecideVerification {
+			replay.State.ProductiveResumeRevision = entry.revision
+		}
 		replay.Requests[entry.record.RequestID] = workRequestReceipt{
 			Digest: entry.record.RequestDigest, Revision: entry.revision,
 		}
@@ -2932,14 +3039,23 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 			return errors.New("verification forecast does not bind the current handoff")
 		}
 		state.Forecast = cloneForecast(record.Forecast)
-	case workOperationRecordDisposition:
+	case workOperationRecordDisposition, workOperationDecideVerification:
 		if state.Forecast == nil ||
+			state.Disposition != nil ||
 			hasReservationForForecast(
 				state.Reservations,
 				state.Forecast.Digest,
 			) ||
 			state.VerificationResultRef != "" {
 			return fmt.Errorf("%w: forecast is not eligible for a disposition", ErrWorkRunInvalidTransition)
+		}
+		if record.Operation == workOperationDecideVerification &&
+			(state.ProductiveAdvanceSourceRevision == "" ||
+				!forecastRequiresExplicitConsent(*state.Forecast)) {
+			return fmt.Errorf(
+				"%w: owner prompt decision has no consent checkpoint",
+				ErrWorkRunInvalidTransition,
+			)
 		}
 		if err := record.Disposition.ValidateFor(*state.Forecast); err != nil {
 			return err
@@ -3255,6 +3371,7 @@ func validateWorkRunRecordShape(record workRunRecord) error {
 			record.Replan != nil ||
 		record.Operation == workOperationRecordForecast && record.Forecast != nil ||
 		record.Operation == workOperationRecordDisposition && record.Disposition != nil ||
+		record.Operation == workOperationDecideVerification && record.Disposition != nil ||
 		record.Operation == workOperationBeginVerification && record.Reservation != nil ||
 		record.Operation == workOperationClaimLaunch && record.Launch != nil ||
 		record.Operation == workOperationBindResult && record.Result != nil ||

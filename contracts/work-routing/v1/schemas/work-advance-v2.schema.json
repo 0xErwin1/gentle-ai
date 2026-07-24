@@ -1,0 +1,221 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gentle-ai.dev/contracts/work-routing/v1/schemas/work-advance-v2.schema.json",
+  "title": "Gentle AI resumable productive work advance v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "contract",
+    "previousRevision",
+    "status"
+  ],
+  "properties": {
+    "schema": {
+      "const": "gentle-ai.work-advance/v2"
+    },
+    "contract": {
+      "const": "gentle-ai.work-advance/v2"
+    },
+    "previousRevision": {
+      "$ref": "#/$defs/revision"
+    },
+    "status": {
+      "allOf": [
+        {
+          "$ref": "work-status.schema.json"
+        },
+        {
+          "not": {
+            "required": [
+              "authorizedTransition"
+            ]
+          }
+        }
+      ]
+    },
+    "verificationDecision": {
+      "$ref": "verification-decision-prompt.schema.json"
+    },
+    "deliveryResultRef": {
+      "$ref": "#/$defs/revision"
+    },
+    "diagnostic": {
+      "$ref": "#/$defs/initialDiagnostic"
+    }
+  },
+  "oneOf": [
+    {
+      "required": [
+        "deliveryResultRef"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "diagnostic"
+            ]
+          },
+          {
+            "required": [
+              "verificationDecision"
+            ]
+          }
+        ]
+      },
+      "properties": {
+        "status": {
+          "allOf": [
+            {
+              "$ref": "work-status.schema.json"
+            },
+            {
+              "properties": {
+                "publicState": {
+                  "const": "ready"
+                }
+              },
+              "not": {
+                "required": [
+                  "diagnostic"
+                ]
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "required": [
+        "diagnostic"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "deliveryResultRef"
+            ]
+          },
+          {
+            "required": [
+              "verificationDecision"
+            ]
+          }
+        ]
+      },
+      "properties": {
+        "status": {
+          "allOf": [
+            {
+              "$ref": "work-status.schema.json"
+            },
+            {
+              "required": [
+                "diagnostic"
+              ],
+              "properties": {
+                "publicState": {
+                  "const": "needs_your_decision"
+                },
+                "diagnostic": {
+                  "$ref": "#/$defs/initialDiagnostic"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "required": [
+        "verificationDecision"
+      ],
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "deliveryResultRef"
+            ]
+          },
+          {
+            "required": [
+              "diagnostic"
+            ]
+          }
+        ]
+      },
+      "properties": {
+        "status": {
+          "allOf": [
+            {
+              "$ref": "work-status.schema.json"
+            },
+            {
+              "required": [
+                "deliveryIntentRef"
+              ],
+              "properties": {
+                "publicState": {
+                  "const": "needs_your_decision"
+                },
+                "routePhase": {
+                  "const": "implementation_selected"
+                },
+                "verification": {
+                  "type": "object",
+                  "properties": {
+                    "outcome": {
+                      "const": "pending"
+                    },
+                    "resultRefs": {
+                      "maxItems": 0
+                    }
+                  }
+                }
+              },
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "diagnostic"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "reviewReceiptRef"
+                    ]
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "initialDiagnostic": {
+      "allOf": [
+        {
+          "$ref": "work-advance-diagnostic.schema.json"
+        },
+        {
+          "properties": {
+            "code": {
+              "not": {
+                "enum": [
+                  "delivery_not_completed",
+                  "delivery_manual_resolution_required"
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "revision": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

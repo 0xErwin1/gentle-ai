@@ -242,12 +242,24 @@ func projectPublicStatus(
 	return status, nil
 }
 
-// publicWorkRunRevision keeps the caller's productive Advance CAS stable while
-// the owner resumes the one WorkRun-anchored attempt. The ledger may advance
-// through internal implementation, verification, review, and delivery records,
-// but consumers must keep retrying the exact source token. Once the attempt is
-// terminal, the real ledger revision becomes public again.
+// publicWorkRunRevision keeps the productive Advance CAS stable while the owner
+// progresses autonomously. A durable consent checkpoint yields control, so its
+// current ledger revision becomes observable through both work-status and the
+// owner prompt. A durable decision then advances that revision once more and
+// records that successor as the stable bounded resume token.
 func publicWorkRunRevision(state WorkRunState) string {
+	if state.Forecast != nil &&
+		state.Forecast.Availability == ForecastAvailable &&
+		state.Disposition == nil &&
+		forecastRequiresExplicitConsent(*state.Forecast) {
+		return state.Revision
+	}
+	if validSHA256Ref(state.ProductiveResumeRevision) &&
+		state.ProductiveBlockerRef == "" &&
+		state.DeliveryResultRef == "" &&
+		state.ProductiveReconciliationRef == "" {
+		return state.ProductiveResumeRevision
+	}
 	if state.ProductiveAdvanceSourceRevision != "" &&
 		state.ProductiveBlockerRef == "" &&
 		state.DeliveryResultRef == "" &&
@@ -386,13 +398,9 @@ func publicStateForWorkRun(
 		case ForecastPartial, ForecastUnavailable, ForecastUnknown:
 			return PublicStateNeedsYourDecision
 		case ForecastAvailable:
-			if state.Disposition == nil && state.Forecast.MaximumCost != nil {
-				switch *state.Forecast.MaximumCost {
-				case reviewtransaction.VerificationCostLong,
-					reviewtransaction.VerificationCostVeryLong,
-					reviewtransaction.VerificationCostUnknown:
-					return PublicStateNeedsYourDecision
-				}
+			if state.Disposition == nil &&
+				forecastRequiresExplicitConsent(*state.Forecast) {
+				return PublicStateNeedsYourDecision
 			}
 		}
 	}

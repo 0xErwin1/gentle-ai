@@ -1,0 +1,26 @@
+{
+  "schema": "gentle-ai.work-verification-decide/v1",
+  "contract": "gentle-ai.work-verification-decide/v1",
+  "workRunId": "work-verification-defer-fixture",
+  "previousRevision": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "promptRef": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+  "forecastRef": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "assumptionsRef": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "choice": "defer",
+  "dispositionRef": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+  "status": {
+    "schema": "gentle-ai.work-status/v1",
+    "contract": "gentle-ai.work-status/v1",
+    "workRunId": "work-verification-defer-fixture",
+    "revision": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+    "publicState": "needs_your_decision",
+    "routeDecision": "delegated_direct",
+    "routePhase": "implementation_selected",
+    "implementationRoute": "delegated_direct",
+    "verification": {
+      "outcome": "pending",
+      "resultRefs": []
+    },
+    "deliveryIntentRef": "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+  }
+}

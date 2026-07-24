@@ -342,11 +342,13 @@ type VerificationForecastInput struct {
 	PlanRevisionRef string                                      `json:"plan_revision_ref"`
 	Availability    ForecastAvailability                        `json:"availability"`
 	AvailabilityRef string                                      `json:"availability_ref"`
+	RequiresConsent bool                                        `json:"requires_consent,omitempty"`
 	DiagnosticRefs  []string                                    `json:"diagnostic_refs"`
 }
 
 // VerificationForecast binds exact RAR facts to an availability observation.
-// It forecasts work but is never launch authority.
+// RequiresConsent is an owner fact sealed into the digest; neither it nor the
+// forecast grants launch authority.
 type VerificationForecast struct {
 	Schema              string                              `json:"schema"`
 	WorkRunID           string                              `json:"work_run_id"`
@@ -361,6 +363,7 @@ type VerificationForecast struct {
 	MaximumCost         *reviewtransaction.VerificationCost `json:"maximum_cost,omitempty"`
 	Availability        ForecastAvailability                `json:"availability"`
 	AvailabilityRef     string                              `json:"availability_ref"`
+	RequiresConsent     bool                                `json:"requires_consent,omitempty"`
 	CapabilityRefs      []string                            `json:"capability_refs"`
 	DiagnosticRefs      []string                            `json:"diagnostic_refs"`
 	Digest              string                              `json:"digest"`
@@ -404,7 +407,8 @@ func newVerificationForecast(input VerificationForecastInput) (VerificationForec
 		PlanDigest: input.Plan.Digest, PlanRevisionRef: input.PlanRevisionRef,
 		PlanPreimageRef: input.Plan.Digest, MaximumCost: maximumCost,
 		Availability: input.Availability, AvailabilityRef: input.AvailabilityRef,
-		CapabilityRefs: capabilities, DiagnosticRefs: diagnostics,
+		RequiresConsent: input.RequiresConsent,
+		CapabilityRefs:  capabilities, DiagnosticRefs: diagnostics,
 	}
 	digest, err := verificationForecastDigest(forecast)
 	if err != nil {
@@ -463,6 +467,12 @@ func (forecast VerificationForecast) Validate() error {
 	default:
 		return fmt.Errorf("unsupported verification forecast availability %q", forecast.Availability)
 	}
+	if forecast.RequiresConsent &&
+		forecast.Availability != ForecastAvailable {
+		return errors.New(
+			"verification consent requires an available forecast",
+		)
+	}
 	if forecast.MaximumCost != nil && !validVerificationCost(*forecast.MaximumCost) {
 		return fmt.Errorf("unsupported verification forecast cost %q", *forecast.MaximumCost)
 	}
@@ -474,6 +484,23 @@ func (forecast VerificationForecast) Validate() error {
 		return errors.New("verification forecast digest does not match its canonical content")
 	}
 	return nil
+}
+
+func forecastRequiresExplicitConsent(forecast VerificationForecast) bool {
+	if forecast.RequiresConsent {
+		return true
+	}
+	if forecast.MaximumCost == nil {
+		return false
+	}
+	switch *forecast.MaximumCost {
+	case reviewtransaction.VerificationCostLong,
+		reviewtransaction.VerificationCostVeryLong,
+		reviewtransaction.VerificationCostUnknown:
+		return true
+	default:
+		return false
+	}
 }
 
 // MatchesPlan proves the forecast came from the exact current RAR facts.

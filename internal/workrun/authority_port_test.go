@@ -16,6 +16,11 @@ type reviewReceiptLookup struct {
 	resultRef  string
 }
 
+type verificationDecisionLookup struct {
+	promptRef string
+	choice    VerificationDecisionChoice
+}
+
 type testAuthorityRepository struct {
 	mu sync.Mutex
 
@@ -27,6 +32,7 @@ type testAuthorityRepository struct {
 	completions                map[string]MutationCompletionAuthority
 	forecasts                  map[string]VerificationForecastAuthority
 	dispositions               map[string]VerificationDispositionAuthority
+	verificationDecisions      map[verificationDecisionLookup]VerificationDecisionAuthority
 	results                    map[string]VerificationResultAuthority
 	receipts                   map[reviewReceiptLookup]ReviewReceiptAuthority
 	authorizations             map[string]DeliveryAuthorizationAuthority
@@ -51,6 +57,7 @@ func newTestAuthorityRepository() *testAuthorityRepository {
 		completions:                map[string]MutationCompletionAuthority{},
 		forecasts:                  map[string]VerificationForecastAuthority{},
 		dispositions:               map[string]VerificationDispositionAuthority{},
+		verificationDecisions:      map[verificationDecisionLookup]VerificationDecisionAuthority{},
 		results:                    map[string]VerificationResultAuthority{},
 		receipts:                   map[reviewReceiptLookup]ReviewReceiptAuthority{},
 		authorizations:             map[string]DeliveryAuthorizationAuthority{},
@@ -61,6 +68,27 @@ func newTestAuthorityRepository() *testAuthorityRepository {
 		productiveDiagnosticErrors: map[string]error{},
 		sddBindings:                []SDDReservationBinding{},
 	}
+}
+
+func (repository *testAuthorityRepository) ResolveVerificationDecision(
+	_ context.Context,
+	promptRef string,
+	choice VerificationDecisionChoice,
+) (VerificationDecisionAuthority, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	value, ok := repository.verificationDecisions[verificationDecisionLookup{
+		promptRef: promptRef,
+		choice:    choice,
+	}]
+	if !ok {
+		return VerificationDecisionAuthority{}, os.ErrNotExist
+	}
+	value.Prompt.Choices = append(
+		[]VerificationDecisionChoice{},
+		value.Prompt.Choices...,
+	)
+	return value, nil
 }
 
 func (repository *testAuthorityRepository) ResolveDeliveryResult(
@@ -455,6 +483,7 @@ func registerTestForecast(
 		Plan:            input.Plan,
 		PlanRevisionRef: input.PlanRevisionRef,
 		Availability:    input.Availability,
+		RequiresConsent: input.RequiresConsent,
 		DiagnosticRefs:  cloneStrings(input.DiagnosticRefs),
 	}
 }
