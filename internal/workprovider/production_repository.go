@@ -39,6 +39,18 @@ func (repository *ProductionRepository) Status(
 	if err != nil {
 		return workrun.WorkStatusV1{}, err
 	}
+	indeterminate, err := repository.Transitions.HasIndeterminate(ctx)
+	if err != nil {
+		return workrun.WorkStatusV1{}, err
+	}
+	if indeterminate {
+		status.PublicState = workrun.PublicStateNeedsYourDecision
+		status.AuthorizedTransition = nil
+		if err := status.Validate(); err != nil {
+			return workrun.WorkStatusV1{}, err
+		}
+		return status, nil
+	}
 	authorization, err := repository.Transitions.CurrentAuthorization(
 		ctx,
 		status.Revision,

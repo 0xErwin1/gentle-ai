@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -19,6 +20,7 @@ const (
 	transitionClaimSchema         = "gentle-ai.verification-transition-claim/v1"
 	transitioncompletionSchema    = "gentle-ai.verification-transition-completion/v1"
 	transitionIndeterminateSchema = "gentle-ai.verification-transition-indeterminate/v1"
+	maxTransitionStateEntries     = 4096
 )
 
 var (
@@ -286,6 +288,69 @@ func (store *TransitionAuthorityStore) ResolveAuthorization(
 		return VerificationTransitionAuthorization{}, phase, ErrTransitionIndeterminate
 	}
 	return authorization, phase, nil
+}
+
+// HasIndeterminate reports only durable ambiguity for this exact WorkRun.
+// The state root is sharded by WorkRun and reads are bounded, so one repository
+// cannot turn status polling into an unbounded global scan.
+func (store *TransitionAuthorityStore) HasIndeterminate(
+	ctx context.Context,
+) (bool, error) {
+	if err := store.validateContext(ctx); err != nil {
+		return false, err
+	}
+	if err := ensureCoordinationRepositoryRoot(
+		store.identity.gitCommonDir,
+		store.root,
+		false,
+	); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	if err := ensurePrivateCoordinationDirectoryTree(
+		store.root,
+		store.stateRoot(),
+		false,
+	); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, nil
+		}
+		return false, err
+	}
+	entries, err := os.ReadDir(store.stateRoot())
+	if err != nil {
+		return false, err
+	}
+	if len(entries) > maxTransitionStateEntries {
+		return false, ErrTransitionAuthorityCorrupt
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() ||
+			len(name) != 64 ||
+			!sha256AuthorityRefPattern.MatchString("sha256:"+name) {
+			return false, ErrTransitionAuthorityCorrupt
+		}
+		directory := filepath.Join(store.stateRoot(), name)
+		if err := validatePrivateCoordinationDirectory(directory); err != nil {
+			return false, err
+		}
+		ref := "sha256:" + name
+		authorization, err := store.readAuthorization(ref)
+		if err != nil {
+			return false, err
+		}
+		phase, _, err := store.state(authorization)
+		if err != nil {
+			return false, err
+		}
+		if phase == TransitionIndeterminate {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // withAuthorizationLock serializes the complete launch/recovery transaction
@@ -645,11 +710,21 @@ func (store *TransitionAuthorityStore) slotsRoot() string {
 }
 
 func (store *TransitionAuthorityStore) stateRoot() string {
-	return filepath.Join(store.root, "transitions", "state")
+	return filepath.Join(
+		store.root,
+		"transitions",
+		"state",
+		transitionWorkRunDirectory(store.workRunID),
+	)
 }
 
 func (store *TransitionAuthorityStore) locksRoot() string {
-	return filepath.Join(store.root, "transitions", "locks")
+	return filepath.Join(
+		store.root,
+		"transitions",
+		"locks",
+		transitionWorkRunDirectory(store.workRunID),
+	)
 }
 
 func (store *TransitionAuthorityStore) objectPath(ref string) string {

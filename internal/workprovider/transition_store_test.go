@@ -197,4 +197,8 @@ func TestTransitionAuthorityIndeterminateNeverResolvesExecutable(t *testing.T) {
 		phase != TransitionIndeterminate {
 		t.Fatalf("ResolveAuthorization() phase = %q, error = %v", phase, err)
 	}
+	indeterminate, err := store.HasIndeterminate(context.Background())
+	if err != nil || !indeterminate {
+		t.Fatalf("HasIndeterminate() = %t, %v", indeterminate, err)
+	}
 }
