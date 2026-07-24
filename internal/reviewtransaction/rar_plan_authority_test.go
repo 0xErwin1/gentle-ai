@@ -114,6 +114,49 @@ func TestRARPlanAuthorityConcurrentExactReplayConverges(t *testing.T) {
 	}
 }
 
+func TestRARAuthorityRepositoryRejectsReplacedGitIdentityWithoutPublishing(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	fixture := newRARPlanFixture(t, "plan-git-identity-swap")
+	authority, err := fixture.repository.PublishPlan(
+		context.Background(),
+		fixture.publication,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalGit := filepath.Join(fixture.repo, ".git")
+	retiredGit := filepath.Join(fixture.repo, ".git-retired")
+	if err := os.Rename(originalGit, retiredGit); err != nil {
+		t.Skipf("cannot replace Git control directory on this platform: %v", err)
+	}
+	if err := runSnapshotGit(fixture.repo, "init"); err != nil {
+		t.Fatalf("reinitialize Git repository: %v", err)
+	}
+
+	if _, err := fixture.repository.ResolvePlan(
+		context.Background(),
+		authority.AuthorityRef,
+	); !errors.Is(err, ErrRepositoryIdentityChanged) {
+		t.Fatalf("ResolvePlan() after Git identity replacement error = %v", err)
+	}
+	replacementRoot := filepath.Join(
+		originalGit,
+		"gentle-ai",
+		"review-transactions",
+		rarAuthorityDirectory,
+		rarAuthorityVersion,
+	)
+	if _, err := os.Lstat(replacementRoot); !os.IsNotExist(err) {
+		t.Fatalf(
+			"stale RAR handle published under replacement Git identity: %v",
+			err,
+		)
+	}
+}
+
 func TestRARPlanAuthorityDetectsConflictCorruptionAndDurabilityFailure(t *testing.T) {
 	t.Run("occupied content address conflicts", func(t *testing.T) {
 		fixture := newRARPlanFixture(t, "plan-conflict")

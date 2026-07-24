@@ -229,6 +229,7 @@ type RARAuthorityPublication struct {
 type RARAuthorityRepository struct {
 	identity reviewRepositoryIdentityRecord
 	root     string
+	lease    *RepositoryIdentityLease
 }
 
 // OpenRARAuthorityRepository binds a repository handle without creating any
@@ -237,10 +238,26 @@ func OpenRARAuthorityRepository(ctx context.Context, repo string) (*RARAuthority
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	identity, err := reviewRepositoryIdentity(ctx, repo)
+	lease, err := OpenRepositoryIdentityLease(ctx, repo)
 	if err != nil {
 		return nil, fmt.Errorf("resolve RAR repository identity: %w", err)
 	}
+	return OpenRARAuthorityRepositoryWithRepositoryIdentityLease(ctx, lease)
+}
+
+// OpenRARAuthorityRepositoryWithRepositoryIdentityLease lets the production
+// composition share one exact Git identity across every owner repository.
+func OpenRARAuthorityRepositoryWithRepositoryIdentityLease(
+	ctx context.Context,
+	lease *RepositoryIdentityLease,
+) (*RARAuthorityRepository, error) {
+	if lease == nil {
+		return nil, errors.New("RAR authority repository requires a repository identity lease")
+	}
+	if err := lease.Validate(ctx); err != nil {
+		return nil, fmt.Errorf("validate RAR repository identity: %w", err)
+	}
+	identity := reviewRepositoryIdentityRecordFromLease(lease)
 	root := filepath.Join(
 		identity.GitCommonDir,
 		"gentle-ai",
@@ -248,7 +265,15 @@ func OpenRARAuthorityRepository(ctx context.Context, repo string) (*RARAuthority
 		rarAuthorityDirectory,
 		rarAuthorityVersion,
 	)
-	return &RARAuthorityRepository{identity: identity, root: root}, nil
+	return &RARAuthorityRepository{identity: identity, root: root, lease: lease}, nil
+}
+
+// RepositoryRef returns the exact path-free Git identity retained by RAR.
+func (repository *RARAuthorityRepository) RepositoryRef() string {
+	if repository == nil || repository.lease == nil {
+		return ""
+	}
+	return repository.lease.Identity().RepositoryRef
 }
 
 // Publish validates the exact result tuple, locks and revalidates the native
@@ -316,7 +341,13 @@ func (repository *RARAuthorityRepository) Publish(
 		return RARVerificationAuthority{}, err
 	}
 
+	if err := repository.validateIdentity(ctx); err != nil {
+		return RARVerificationAuthority{}, err
+	}
 	if err := ensureRARRepositoryRoot(repository.identity.GitCommonDir, repository.root, true); err != nil {
+		return RARVerificationAuthority{}, err
+	}
+	if err := repository.validateIdentity(ctx); err != nil {
 		return RARVerificationAuthority{}, err
 	}
 	lock, err := acquireRARAuthorityLock(ctx, filepath.Join(repository.root, "LOCK"))
@@ -324,10 +355,13 @@ func (repository *RARAuthorityRepository) Publish(
 		return RARVerificationAuthority{}, err
 	}
 	defer lock.release()
-	if err := ctx.Err(); err != nil {
+	if err := repository.validateIdentity(ctx); err != nil {
 		return RARVerificationAuthority{}, err
 	}
 	if err := repository.publishLocked(authority, payload); err != nil {
+		return RARVerificationAuthority{}, err
+	}
+	if err := repository.validateIdentity(ctx); err != nil {
 		return RARVerificationAuthority{}, err
 	}
 	return authority, nil
@@ -471,6 +505,9 @@ func (repository *RARAuthorityRepository) resolve(
 	if err := repository.validateLiveAuthority(ctx, authority); err != nil {
 		return RARVerificationAuthority{}, err
 	}
+	if err := repository.validateIdentity(ctx); err != nil {
+		return RARVerificationAuthority{}, err
+	}
 	return authority, nil
 }
 
@@ -496,17 +533,15 @@ func (repository *RARAuthorityRepository) validateLiveAuthority(
 }
 
 func (repository *RARAuthorityRepository) validateIdentity(ctx context.Context) error {
-	if repository == nil || strings.TrimSpace(repository.root) == "" {
+	if repository == nil || repository.lease == nil ||
+		strings.TrimSpace(repository.root) == "" {
 		return errors.New("RAR authority repository is not initialized")
 	}
-	live, err := reviewRepositoryIdentity(ctx, repository.identity.RepositoryRoot)
-	if err != nil {
-		return err
+	if err := repository.lease.Validate(ctx); err != nil {
+		return fmt.Errorf("RAR authority repository identity changed: %w", err)
 	}
-	if live.RepositoryIdentity != repository.identity.RepositoryIdentity ||
-		!sameLocatorDirectory(live.RepositoryRoot, repository.identity.RepositoryRoot) ||
-		!sameLocatorDirectory(live.GitCommonDir, repository.identity.GitCommonDir) ||
-		!sameLocatorDirectory(live.GitDir, repository.identity.GitDir) {
+	live := reviewRepositoryIdentityRecordFromLease(repository.lease)
+	if live != repository.identity {
 		return errors.New("RAR authority repository identity changed")
 	}
 	wantRoot := filepath.Join(

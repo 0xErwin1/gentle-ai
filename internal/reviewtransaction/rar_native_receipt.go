@@ -26,6 +26,9 @@ func (repository *RARAuthorityRepository) lockNativeReceipt(
 	if err != nil {
 		return RARNativeReceiptAuthority{}, VerificationSubject{}, func() {}, err
 	}
+	if err := repository.validateIdentity(ctx); err != nil {
+		return RARNativeReceiptAuthority{}, VerificationSubject{}, func() {}, err
+	}
 	maintenance, err := acquireMaintenanceLock(
 		ctx,
 		compactMaintenanceLockPath(base),
@@ -43,6 +46,9 @@ func (repository *RARAuthorityRepository) lockNativeReceipt(
 	) {
 		release()
 		return RARNativeReceiptAuthority{}, VerificationSubject{}, func() {}, err
+	}
+	if err := repository.validateIdentity(ctx); err != nil {
+		return fail(err)
 	}
 
 	compact, err := CompactAuthoritativeStore(ctx, repository.identity.RepositoryRoot, lineageID)

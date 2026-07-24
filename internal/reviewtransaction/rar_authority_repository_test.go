@@ -245,6 +245,35 @@ func TestRARAuthorityDetectsTamperAndStaleNativeReceipt(t *testing.T) {
 	})
 }
 
+func TestRARResultAuthorityRejectsReplacedGitIdentityWithoutPublishing(t *testing.T) {
+	fixture := newRARCompactFixture(t, "rar-result-git-identity-swap")
+	originalGit := filepath.Join(fixture.repo, ".git")
+	retiredGit := filepath.Join(fixture.repo, ".git-retired")
+	if err := os.Rename(originalGit, retiredGit); err != nil {
+		t.Skipf("cannot replace Git control directory on this platform: %v", err)
+	}
+	if err := runSnapshotGit(fixture.repo, "init"); err != nil {
+		t.Fatalf("reinitialize Git repository: %v", err)
+	}
+
+	if _, err := fixture.repository.Publish(
+		context.Background(),
+		fixture.request,
+	); !errors.Is(err, ErrRepositoryIdentityChanged) {
+		t.Fatalf("Publish() after Git identity replacement error = %v", err)
+	}
+	replacementRoot := filepath.Join(
+		originalGit,
+		"gentle-ai",
+		"review-transactions",
+		rarAuthorityDirectory,
+		rarAuthorityVersion,
+	)
+	if _, err := os.Lstat(replacementRoot); !os.IsNotExist(err) {
+		t.Fatalf("stale RAR result handle published under replacement Git identity: %v", err)
+	}
+}
+
 func TestRARAuthorityExactReplayConflictAndConcurrentPublication(t *testing.T) {
 	t.Run("exact replay and same-result conflict", func(t *testing.T) {
 		fixture := newRARCompactFixture(t, "rar-replay")

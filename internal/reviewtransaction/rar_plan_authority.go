@@ -140,10 +140,16 @@ func (repository *RARAuthorityRepository) PublishPlan(
 		return RARPlanAuthority{}, err
 	}
 
+	if err := repository.validateIdentity(ctx); err != nil {
+		return RARPlanAuthority{}, err
+	}
 	if err := ensureRARRepositoryRoot(repository.identity.GitCommonDir, repository.root, true); err != nil {
 		return RARPlanAuthority{}, err
 	}
 	if err := ensurePrivateRARDirectoryTree(repository.root, repository.planObjectsRoot(), true); err != nil {
+		return RARPlanAuthority{}, err
+	}
+	if err := repository.validateIdentity(ctx); err != nil {
 		return RARPlanAuthority{}, err
 	}
 	lock, err := acquireRARAuthorityLock(ctx, filepath.Join(repository.root, "LOCK"))
@@ -169,9 +175,15 @@ func (repository *RARAuthorityRepository) PublishPlan(
 	if err := publishPrivateRARImmutable(repository.planObjectPath(authority.AuthorityRef), payload); err != nil {
 		return RARPlanAuthority{}, err
 	}
+	if err := repository.validateIdentity(ctx); err != nil {
+		return RARPlanAuthority{}, err
+	}
 	// A concurrent workspace mutation cannot turn a stale publication into a
 	// successful issuance. The immutable orphan remains harmless and retry-safe.
 	if err := repository.validateLivePlanSnapshot(ctx, request.Snapshot); err != nil {
+		return RARPlanAuthority{}, err
+	}
+	if err := repository.validateIdentity(ctx); err != nil {
 		return RARPlanAuthority{}, err
 	}
 	return authority, nil
@@ -226,6 +238,9 @@ func (repository *RARAuthorityRepository) ResolvePlan(
 		authority.Registry,
 		authority.Plan,
 	); err != nil {
+		return RARPlanAuthority{}, err
+	}
+	if err := repository.validateIdentity(ctx); err != nil {
 		return RARPlanAuthority{}, err
 	}
 	return authority, nil
