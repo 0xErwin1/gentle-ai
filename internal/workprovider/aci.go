@@ -9,9 +9,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
-// EffectiveCapabilityManifest is an immutable runtime view. The canonical ACI
-// advertises the shipped provider; recovery/read-only/disabled modes may only
-// narrow that claim through the central kill switch.
+// EffectiveCapabilityManifest is an immutable runtime view. Keeping the
+// canonical ACI value private prevents callers from treating an enabled overlay
+// as the frozen dormant manifest or attempting to validate it with the wrong
+// contract.
 type EffectiveCapabilityManifest struct {
 	manifest capabilitymanifest.AgentCapabilityManifest
 	mode     ActivationMode
@@ -32,8 +33,8 @@ func (controller Controller) EffectiveCapabilityManifest(
 }
 
 // effectiveAgentCapabilityManifest overlays runtime exposure without changing
-// the canonical advertised manifest or its frozen digest. Non-enabled modes
-// mask the capability as dormant; they can never create a stronger claim.
+// the canonical dormant manifest or its frozen digest. Only enabled advertises
+// the capability; recovery/read-only/disabled modes remain explicitly dormant.
 func effectiveAgentCapabilityManifest(
 	agent model.AgentID,
 	mode ActivationMode,
@@ -45,9 +46,9 @@ func effectiveAgentCapabilityManifest(
 	if err != nil {
 		return EffectiveCapabilityManifest{}, err
 	}
-	if mode != ActivationEnabled {
+	if mode == ActivationEnabled {
 		manifest.Contracts.WorkRoutingV1.Exposure =
-			capabilitymanifest.ContractExposureDormant
+			capabilitymanifest.ContractExposureAdvertised
 	}
 	if err := validateEffectiveManifest(manifest, mode); err != nil {
 		return EffectiveCapabilityManifest{}, err
@@ -84,13 +85,13 @@ func validateEffectiveManifest(
 	if err != nil {
 		return err
 	}
-	expectedExposure := capabilitymanifest.ContractExposureAdvertised
-	if mode != ActivationEnabled {
-		expectedExposure = capabilitymanifest.ContractExposureDormant
+	expectedExposure := capabilitymanifest.ContractExposureDormant
+	if mode == ActivationEnabled {
+		expectedExposure = capabilitymanifest.ContractExposureAdvertised
 	}
 	manifestExposure := manifest.Contracts.WorkRoutingV1.Exposure
 	manifest.Contracts.WorkRoutingV1.Exposure =
-		capabilitymanifest.ContractExposureAdvertised
+		capabilitymanifest.ContractExposureDormant
 	if manifest != canonical || manifestExposure != expectedExposure {
 		return fmt.Errorf(
 			"effective capability manifest for %q does not match activation %q",

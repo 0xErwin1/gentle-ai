@@ -25,13 +25,13 @@ func TestActivationParsingAndEnvironmentDefaultFailClosed(t *testing.T) {
 		})
 	}
 
-	t.Run("unset defaults enabled", func(t *testing.T) {
+	t.Run("unset defaults read-only", func(t *testing.T) {
 		t.Parallel()
 		resolver := EnvironmentActivationResolver{
 			LookupEnv: func(string) (string, bool) { return "", false },
 		}
 		mode, err := resolver.ResolveActivation(context.Background(), "/repo")
-		if err != nil || mode != ActivationEnabled {
+		if err != nil || mode != ActivationReadOnly {
 			t.Fatalf("ResolveActivation() = %q, %v", mode, err)
 		}
 	})

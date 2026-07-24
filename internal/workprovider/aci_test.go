@@ -8,7 +8,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 )
 
-func TestEffectiveACIOverlayCanOnlyNarrowCanonicalAdvertisedManifest(t *testing.T) {
+func TestEffectiveACIOverlayDoesNotChangeCanonicalDormantManifest(t *testing.T) {
 	t.Parallel()
 
 	canonical, err := capabilitymanifest.ForAgent(model.AgentCodex)
@@ -19,8 +19,8 @@ func TestEffectiveACIOverlayCanOnlyNarrowCanonicalAdvertisedManifest(t *testing.
 	if err != nil {
 		t.Fatalf("canonical Digest() error = %v", err)
 	}
-	if !canonical.Advertises(capabilitymanifest.ContractWorkRoutingV1) {
-		t.Fatal("final canonical manifest does not advertise work routing")
+	if canonical.Advertises(capabilitymanifest.ContractWorkRoutingV1) {
+		t.Fatal("canonical manifest unexpectedly advertises work routing")
 	}
 
 	for _, mode := range []ActivationMode{
@@ -67,23 +67,7 @@ func TestEffectiveACIOverlayCanOnlyNarrowCanonicalAdvertisedManifest(t *testing.
 		t.Fatalf("second Digest() error = %v", err)
 	}
 	if againDigest != canonicalDigest ||
-		again.Contracts.WorkRoutingV1.Exposure != capabilitymanifest.ContractExposureAdvertised {
+		again.Contracts.WorkRoutingV1.Exposure != capabilitymanifest.ContractExposureDormant {
 		t.Fatalf("canonical manifest changed after overlay: %#v", again)
-	}
-}
-
-func TestDefaultControllerAdvertisesEnabledCapabilityWhenUnset(t *testing.T) {
-	restoreDefaultActivationEnvironment(t)
-
-	effective, err := NewDefaultController().EffectiveCapabilityManifest(
-		context.Background(),
-		"/repository-is-not-opened-for-manifest-resolution",
-		model.AgentCodex,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !effective.Advertises(capabilitymanifest.ContractWorkRoutingV1) {
-		t.Fatal("default controller did not advertise shipped work routing")
 	}
 }

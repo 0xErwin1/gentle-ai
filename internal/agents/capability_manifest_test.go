@@ -45,8 +45,8 @@ func TestDefaultRegistryManifestsMatchEveryAdapterProjection(t *testing.T) {
 			t.Fatalf("adapter %q weakened or changed shared routing semantics: %q != %q", agent, gotRoutingDigest, routingDigest)
 		}
 
-		if !stored.Advertises(ContractWorkRoutingV1) {
-			t.Fatalf("adapter %q does not advertise active %q", agent, ContractWorkRoutingV1)
+		if stored.Advertises(ContractWorkRoutingV1) {
+			t.Fatalf("adapter %q advertises dormant %q", agent, ContractWorkRoutingV1)
 		}
 	}
 }

@@ -117,27 +117,27 @@ func TestManifestRejectsWeakenedRoutingFacts(t *testing.T) {
 	}
 }
 
-func TestEveryManifestAdvertisesWorkRoutingAndHashesCanonically(t *testing.T) {
+func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) {
 	t.Parallel()
 
 	const wantRoutingDigest = "sha256:ed03b86f20c9449a6e4c018f51d1e05619e1070b1076287a0792a74c458762b2"
 	wantManifestDigests := map[model.AgentID]string{
-		model.AgentAntigravity:   "sha256:82c6d22012ce6baf73b5c11ed13e689f7c0cd3c121252eb790591ef91d59af6e",
-		model.AgentClaudeCode:    "sha256:6387c2b1cad3be4983d17736614dfbe269062c7c010adf41d9162d38b02e1f2c",
-		model.AgentCodex:         "sha256:3d2613841279bc09307bddf753193f9991f2b4f27435c27ab75d6726da8124b0",
-		model.AgentCursor:        "sha256:7ecb005b9e05dcb1a12aae18e6863ca4ea4ad47dba6eeb04fd9792fac7aedf51",
-		model.AgentGeminiCLI:     "sha256:0020354d31a8decbfb0f31d042fb367297fe0c84ba2816fe3e0ad6f5bd556091",
-		model.AgentHermes:        "sha256:69aaaee5f0ed11a027229266a721c195337095672baa9e6ad1face8302475b18",
-		model.AgentKilocode:      "sha256:4bd8cc582fef1a59ec0b89adf45662c5aaf003c423d52fd0a4c201908053838d",
-		model.AgentKimi:          "sha256:24e3bbb3f0f47f253db0852646fb1238249829c29578acc2928a85412f60de00",
-		model.AgentKiroIDE:       "sha256:ad2469d1bd938ebc29168fd181fca998bf1d1b11babcbb82f91121ddd961b318",
-		model.AgentOpenClaw:      "sha256:803ccdbb06332a969b427c4cbeaca430a2635aee2d23ebb6f10422b05dec3182",
-		model.AgentOpenCode:      "sha256:62bfa1e59c91e1a9a6caa0bbc0634793c1d59f6601bd95652cb814a5850c3fa6",
-		model.AgentPi:            "sha256:5a9da3b75edf1cd85cb9722bd016dcdde1dcf813f781fc20509f90685e3d7a23",
-		model.AgentQwenCode:      "sha256:1910b87bd14baf97d992b7d33172bce41c1b022f2eba3145fde8d7e97e8f560b",
-		model.AgentTrae:          "sha256:162c1682be62ef2910c15de3acba7d2bf976932a73e7d8c8c5a64b02f28b2748",
-		model.AgentVSCodeCopilot: "sha256:92d1d6e9feead113e1e70b747bee0626d26b4f0f68cb090bbfcb4750ec2329a0",
-		model.AgentWindsurf:      "sha256:f9a83cc0fd07ddf7e91c524731a81ef6e04d690848273c5893c74807facce9e5",
+		model.AgentAntigravity:   "sha256:2f72974f6abdce68ca28a585705227d37d1c64c965120281727455223d678394",
+		model.AgentClaudeCode:    "sha256:1954836303597cd9efc3e9736f2eb7c72d2c3b5107f6f36e0ca63d82c561c005",
+		model.AgentCodex:         "sha256:fd1ed4fc30881c9ce53550f4c57ad7bd007e1b76bba943510ef53840b2e43a16",
+		model.AgentCursor:        "sha256:5ec0323fd33720a5a99ec2ff8b876312f52aa6a588871a71920516f748f23f80",
+		model.AgentGeminiCLI:     "sha256:3d51601fb11f71e2cc22daba09fd19dfdf473fbcbf3b16d732d4100f0a09cbbb",
+		model.AgentHermes:        "sha256:00d1f1d2db659d33a032a97dae373a0f5e4a676921ef65d0f1162923e4758aa1",
+		model.AgentKilocode:      "sha256:5472e4fb098caa868c650cf0d065bf277e079ddb8d5b8996b0cd9e8faa72d381",
+		model.AgentKimi:          "sha256:20da639dbb4c852aef56c81e417641bc0b817a7fa41fd6aa2eecfe42aad9fafa",
+		model.AgentKiroIDE:       "sha256:00cec3beeaa3506476151a6aa19966a6b3bfe52c3648ecf2e9d1804adafb86c2",
+		model.AgentOpenClaw:      "sha256:e3dadd12614a5d27daf1c3fbdde875df5cb52888b7987ded87e5abd7bca8d49f",
+		model.AgentOpenCode:      "sha256:77b30ecfac3cd3a6d54db33328b9ddddd8db3f11fa19ddd5e3829c5a0a506b80",
+		model.AgentPi:            "sha256:f1f8f67171ef2ea40f5690b4c2f20f7e0073e6292092b218c81a69b31281d5ae",
+		model.AgentQwenCode:      "sha256:def191f9b6ec065eda9fdd490817f27bbc89634b393db4bbbe9e81dffe1d9fba",
+		model.AgentTrae:          "sha256:aada07d8d187a2649cf18613c2ba4be6eefd1632c39a7e792c6ec23dcc8e803d",
+		model.AgentVSCodeCopilot: "sha256:3be9f31260509c10c8f4b2866c76f950ab4d2fabd8bf8684fd3af7a9b2391657",
+		model.AgentWindsurf:      "sha256:a8c46fa07497092005ce74cd3b71ef230704408ea035b08229ebd054f42794ae",
 	}
 
 	for agent, wantDigest := range wantManifestDigests {
@@ -150,11 +150,11 @@ func TestEveryManifestAdvertisesWorkRoutingAndHashesCanonically(t *testing.T) {
 			if err := manifest.Validate(); err != nil {
 				t.Fatalf("Validate() error = %v", err)
 			}
-			if manifest.Contracts.WorkRoutingV1.Exposure != ContractExposureAdvertised {
-				t.Fatalf("work-routing exposure = %q, want %q", manifest.Contracts.WorkRoutingV1.Exposure, ContractExposureAdvertised)
+			if manifest.Contracts.WorkRoutingV1.Exposure != ContractExposureDormant {
+				t.Fatalf("work-routing exposure = %q, want %q", manifest.Contracts.WorkRoutingV1.Exposure, ContractExposureDormant)
 			}
-			if !manifest.Advertises(ContractWorkRoutingV1) {
-				t.Fatal("final canonical manifest must advertise work routing")
+			if manifest.Advertises(ContractWorkRoutingV1) {
+				t.Fatal("work-routing must remain unadvertised before final activation")
 			}
 
 			payload, err := manifest.CanonicalJSON()
