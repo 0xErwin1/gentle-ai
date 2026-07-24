@@ -103,6 +103,13 @@ type padTrustedRepository interface {
 	Close() error
 }
 
+type padRouteReevaluationRepository interface {
+	padTrustedRepository
+	deliveryadmission.TrustedResolver
+	deliveryadmission.RARAuthorityPort
+	deliveryadmission.RouteReevaluationResolver
+}
+
 type padTrustedRepositoryOpener func(
 	context.Context,
 	*PADRepositoryAuthority,
@@ -264,6 +271,7 @@ func (adapter *PADWorkRunAdapter) ResolveLiveDeliveryAuthorization(
 	}
 	return workrun.DeliveryAuthorizationAuthority{
 		AuthorizationRef:      live.AuthorizationRef,
+		DecisionRef:           live.Binding.DecisionRef,
 		Kind:                  kind,
 		DeliveryIntentRef:     live.Binding.IntentRef,
 		CandidateRef:          live.Binding.Candidate.Digest,
@@ -273,6 +281,149 @@ func (adapter *PADWorkRunAdapter) ResolveLiveDeliveryAuthorization(
 		ObservedAt:            live.ObservedAt,
 		ExpiresAt:             live.Binding.ExpiresAt,
 	}, nil
+}
+
+func (adapter *PADWorkRunAdapter) ResolveDeliveryRouteReevaluation(
+	ctx context.Context,
+	reevaluationRef string,
+) (
+	authority workrun.DeliveryRouteReevaluationAuthority,
+	err error,
+) {
+	if !validPADImmutableRef(reevaluationRef) {
+		return workrun.DeliveryRouteReevaluationAuthority{}, errors.New(
+			"PAD route reevaluation ref must be a canonical SHA-256 reference",
+		)
+	}
+	opened, err := adapter.openRepository(ctx)
+	if err != nil {
+		return workrun.DeliveryRouteReevaluationAuthority{}, err
+	}
+	repository, ok := opened.(padRouteReevaluationRepository)
+	if !ok {
+		_ = opened.Close()
+		return workrun.DeliveryRouteReevaluationAuthority{}, errors.New(
+			"PAD owner repository does not support route reevaluation",
+		)
+	}
+	defer func() {
+		if closeErr := repository.Close(); closeErr != nil {
+			authority = workrun.DeliveryRouteReevaluationAuthority{}
+			err = errors.Join(
+				err,
+				fmt.Errorf("close PAD trusted repository: %w", closeErr),
+			)
+		}
+	}()
+	reevaluation, source, target, err :=
+		resolveValidatedPADRouteReevaluation(
+			ctx,
+			repository,
+			reevaluationRef,
+		)
+	if err != nil {
+		return workrun.DeliveryRouteReevaluationAuthority{}, err
+	}
+	return workrun.DeliveryRouteReevaluationAuthority{
+		ReevaluationRef:            reevaluationRef,
+		RepositoryRef:              reevaluation.Destination.RepositoryRef,
+		SourceDecisionRef:          reevaluation.SourceDecisionRef,
+		TargetAdmissionDecisionRef: reevaluation.TargetAdmissionDecisionRef,
+		TargetDecisionRef:          reevaluation.DecisionRef,
+		SourceDeliveryIntentRef:    source.AdmissionDecision.IntentRef,
+		TargetDeliveryIntentRef:    target.AdmissionDecision.IntentRef,
+		SourceRoute:                string(reevaluation.SourceRoute),
+		TargetRoute:                string(reevaluation.TargetRoute),
+		Mechanism:                  string(reevaluation.Mechanism),
+		ScopeDigest:                source.AdmissionDecision.Intent.ScopeDigest,
+		CandidateRef:               reevaluation.Candidate.Digest,
+		ReviewReceiptRef:           reevaluation.ReviewReceiptRef,
+		VerificationResultRef:      reevaluation.VerificationResultRef,
+	}, nil
+}
+
+func resolveValidatedPADRouteReevaluation(
+	ctx context.Context,
+	repository padRouteReevaluationRepository,
+	reevaluationRef string,
+) (
+	deliveryadmission.RouteReevaluation,
+	deliveryadmission.DeliveryDecision,
+	deliveryadmission.DeliveryDecision,
+	error,
+) {
+	reevaluation, err := repository.ResolveRouteReevaluation(
+		ctx,
+		reevaluationRef,
+	)
+	if err != nil {
+		return deliveryadmission.RouteReevaluation{},
+			deliveryadmission.DeliveryDecision{},
+			deliveryadmission.DeliveryDecision{},
+			fmt.Errorf("resolve PAD route reevaluation: %w", err)
+	}
+	resolvedRef, err := reevaluation.Ref()
+	if err != nil || resolvedRef != reevaluationRef {
+		return deliveryadmission.RouteReevaluation{},
+			deliveryadmission.DeliveryDecision{},
+			deliveryadmission.DeliveryDecision{},
+			fmt.Errorf(
+				"%w: route reevaluation immutable reference",
+				deliveryadmission.ErrTrustedRepositoryCorrupt,
+			)
+	}
+	source, err := deliveryadmission.ValidateDeliveryDecision(
+		ctx,
+		repository,
+		repository,
+		reevaluation.SourceDecisionRef,
+	)
+	if err != nil {
+		return deliveryadmission.RouteReevaluation{},
+			deliveryadmission.DeliveryDecision{},
+			deliveryadmission.DeliveryDecision{},
+			fmt.Errorf("validate PAD source delivery decision: %w", err)
+	}
+	target, err := deliveryadmission.ValidateDeliveryDecision(
+		ctx,
+		repository,
+		repository,
+		reevaluation.DecisionRef,
+	)
+	if err != nil {
+		return deliveryadmission.RouteReevaluation{},
+			deliveryadmission.DeliveryDecision{},
+			deliveryadmission.DeliveryDecision{},
+			fmt.Errorf("validate PAD target delivery decision: %w", err)
+	}
+	if source.AdmissionDecision.Route != reevaluation.SourceRoute ||
+		target.AdmissionDecision.Route != reevaluation.TargetRoute ||
+		target.AdmissionDecisionRef !=
+			reevaluation.TargetAdmissionDecisionRef ||
+		source.AdmissionDecision.Intent.ScopeDigest !=
+			target.AdmissionDecision.Intent.ScopeDigest ||
+		source.Gates.Destination != target.Gates.Destination ||
+		target.Gates.Destination != reevaluation.Destination ||
+		target.Gates.Mechanism != reevaluation.Mechanism ||
+		target.GateRef != reevaluation.GateRef ||
+		target.DecidedAt != reevaluation.EvaluatedAt ||
+		source.Candidate != reevaluation.Candidate ||
+		target.Candidate != reevaluation.Candidate ||
+		source.ReviewReceiptRef != reevaluation.ReviewReceiptRef ||
+		target.ReviewReceiptRef != reevaluation.ReviewReceiptRef ||
+		source.VerificationResultRef !=
+			reevaluation.VerificationResultRef ||
+		target.VerificationResultRef !=
+			reevaluation.VerificationResultRef {
+		return deliveryadmission.RouteReevaluation{},
+			deliveryadmission.DeliveryDecision{},
+			deliveryadmission.DeliveryDecision{},
+			fmt.Errorf(
+				"%w: route reevaluation content lineage",
+				deliveryadmission.ErrTrustedRepositoryCorrupt,
+			)
+	}
+	return reevaluation, source, target, nil
 }
 
 func (adapter *PADWorkRunAdapter) openRepository(
@@ -326,3 +477,4 @@ func validPADImmutableRef(ref string) bool {
 
 var _ deliveryadmission.DeliveryRepositoryAuthority = (*PADRepositoryAuthority)(nil)
 var _ workrun.PADAuthorityPort = (*PADWorkRunAdapter)(nil)
+var _ workrun.DeliveryRouteReevaluationAuthorityPort = (*PADWorkRunAdapter)(nil)

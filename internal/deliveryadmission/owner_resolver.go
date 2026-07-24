@@ -135,6 +135,22 @@ func (repository *TrustedRepository) PublishDeliveryDecision(
 	)
 }
 
+func (repository *TrustedRepository) PublishRouteReevaluation(
+	ctx context.Context,
+	value RouteReevaluation,
+) (string, error) {
+	if err := repository.requireRepositoryBinding(
+		value.Destination.RepositoryRef,
+	); err != nil {
+		return "", err
+	}
+	return publishTrustedValue(
+		ctx, repository, "route-reevaluation", value,
+		func(value RouteReevaluation) error { return value.Validate() },
+		func(value RouteReevaluation) (string, error) { return value.Ref() },
+	)
+}
+
 func (repository *TrustedRepository) PublishAuthorization(
 	ctx context.Context,
 	value DeliveryAuthorization,
@@ -312,6 +328,21 @@ func (repository *TrustedRepository) ResolveDeliveryDecision(
 	)
 	if err == nil {
 		err = repository.requireRepositoryBinding(value.Gates.Destination.RepositoryRef)
+	}
+	return value, err
+}
+
+func (repository *TrustedRepository) ResolveRouteReevaluation(
+	ctx context.Context,
+	ref string,
+) (RouteReevaluation, error) {
+	value, err := resolveTrustedValue(
+		ctx, repository, ref, "route-reevaluation",
+		func(value RouteReevaluation) error { return value.Validate() },
+		func(value RouteReevaluation) (string, error) { return value.Ref() },
+	)
+	if err == nil {
+		err = repository.requireRepositoryBinding(value.Destination.RepositoryRef)
 	}
 	return value, err
 }

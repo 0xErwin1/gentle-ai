@@ -37,6 +37,7 @@ const (
 	workOperationBindResult         = "verification/bind-result"
 	workOperationStopMutation       = "verification/stop-mutated"
 	workOperationBindReview         = "review/bind-receipt"
+	workOperationBindDeliveryRoute  = "delivery/bind-route-reevaluation"
 	workOperationBindDelivery       = "delivery/bind-authorization"
 
 	maximumWorkRunRecordBytes  = 1 << 20
@@ -110,6 +111,7 @@ type WorkRunState struct {
 	ReusableVerificationObligations []string                    `json:"reusable_verification_obligations"`
 	VerificationStop                *VerificationStop           `json:"verification_stop,omitempty"`
 	ReviewReceiptRef                string                      `json:"review_receipt_ref,omitempty"`
+	DeliveryRouteReevaluationRef    string                      `json:"delivery_route_reevaluation_ref,omitempty"`
 	DeliveryAuthorizationRef        string                      `json:"delivery_authorization_ref,omitempty"`
 }
 
@@ -225,6 +227,12 @@ type BindDeliveryAuthorizationRequest struct {
 	AuthorizationRef string `json:"authorization_ref"`
 }
 
+type BindDeliveryRouteReevaluationRequest struct {
+	ExpectedRevision string `json:"expected_revision"`
+	RequestID        string `json:"request_id"`
+	ReevaluationRef  string `json:"reevaluation_ref"`
+}
+
 type workStartEvent struct {
 	RouteDecision     ImplementationRouteDecision `json:"route_decision"`
 	DeliveryIntentRef string                      `json:"delivery_intent_ref"`
@@ -269,6 +277,12 @@ type workBindDeliveryAuthorizationEvent struct {
 	AuthorizationRef string `json:"authorization_ref"`
 }
 
+type workBindDeliveryRouteEvent struct {
+	ReevaluationRef         string `json:"reevaluation_ref"`
+	SourceDeliveryIntentRef string `json:"source_delivery_intent_ref"`
+	TargetDeliveryIntentRef string `json:"target_delivery_intent_ref"`
+}
+
 type workRunRecord struct {
 	Schema           string `json:"schema"`
 	WorkRunID        string `json:"work_run_id"`
@@ -277,20 +291,21 @@ type workRunRecord struct {
 	RequestID        string `json:"request_id"`
 	RequestDigest    string `json:"request_digest"`
 
-	Start        *workStartEvent                     `json:"start,omitempty"`
-	AcceptSDD    *workAcceptSDDEvent                 `json:"accept_sdd,omitempty"`
-	Reroute      *workRerouteEvent                   `json:"reroute,omitempty"`
-	BindSDD      *workBindSDDEvent                   `json:"bind_sdd,omitempty"`
-	Handoff      *ImplementationHandoff              `json:"handoff,omitempty"`
-	Replan       *workVerificationReplanEvent        `json:"replan,omitempty"`
-	Forecast     *VerificationForecast               `json:"forecast,omitempty"`
-	Disposition  *VerificationDisposition            `json:"disposition,omitempty"`
-	Reservation  *VerificationReservation            `json:"reservation,omitempty"`
-	Launch       *VerificationLaunchClaim            `json:"launch,omitempty"`
-	Result       *workBindResultEvent                `json:"result,omitempty"`
-	StopMutation *workStopMutationEvent              `json:"stop_mutation,omitempty"`
-	Review       *workBindReviewEvent                `json:"review,omitempty"`
-	Delivery     *workBindDeliveryAuthorizationEvent `json:"delivery,omitempty"`
+	Start         *workStartEvent                     `json:"start,omitempty"`
+	AcceptSDD     *workAcceptSDDEvent                 `json:"accept_sdd,omitempty"`
+	Reroute       *workRerouteEvent                   `json:"reroute,omitempty"`
+	BindSDD       *workBindSDDEvent                   `json:"bind_sdd,omitempty"`
+	Handoff       *ImplementationHandoff              `json:"handoff,omitempty"`
+	Replan        *workVerificationReplanEvent        `json:"replan,omitempty"`
+	Forecast      *VerificationForecast               `json:"forecast,omitempty"`
+	Disposition   *VerificationDisposition            `json:"disposition,omitempty"`
+	Reservation   *VerificationReservation            `json:"reservation,omitempty"`
+	Launch        *VerificationLaunchClaim            `json:"launch,omitempty"`
+	Result        *workBindResultEvent                `json:"result,omitempty"`
+	StopMutation  *workStopMutationEvent              `json:"stop_mutation,omitempty"`
+	Review        *workBindReviewEvent                `json:"review,omitempty"`
+	DeliveryRoute *workBindDeliveryRouteEvent         `json:"delivery_route,omitempty"`
+	Delivery      *workBindDeliveryAuthorizationEvent `json:"delivery,omitempty"`
 }
 
 type workRequestReceipt struct {
@@ -1294,6 +1309,35 @@ func (store WorkRunStore) BindDeliveryAuthorization(
 			); err != nil {
 				return workRunRecord{}, err
 			}
+			if state.DeliveryRouteReevaluationRef != "" {
+				if store.authority.DeliveryRoute == nil {
+					return workRunRecord{}, ErrAuthorityPortUnavailable
+				}
+				reevaluation, err := store.authority.DeliveryRoute.
+					ResolveDeliveryRouteReevaluation(
+						ctx,
+						state.DeliveryRouteReevaluationRef,
+					)
+				if err != nil {
+					return workRunRecord{}, fmt.Errorf(
+						"resolve bound PAD delivery route reevaluation: %w",
+						err,
+					)
+				}
+				if err := reevaluation.validateTargetBinding(
+					state.DeliveryRouteReevaluationRef,
+					state,
+				); err != nil {
+					return workRunRecord{}, err
+				}
+				if reevaluation.RepositoryRef != store.RepositoryRef() ||
+					authorization.DecisionRef != reevaluation.TargetDecisionRef {
+					return workRunRecord{}, fmt.Errorf(
+						"%w: delivery authorization route decision",
+						ErrAuthorityBindingMismatch,
+					)
+				}
+			}
 			if err := validateAuthorizedDeliveryAggregate(
 				authorization.Kind,
 				result.Result.Aggregate,
@@ -1306,6 +1350,95 @@ func (store WorkRunStore) BindDeliveryAuthorization(
 			return workRunRecord{
 				Operation: workOperationBindDelivery,
 				Delivery:  &event,
+			}, nil
+		},
+	)
+}
+
+// BindDeliveryRouteReevaluation advances only PAD's delivery intent after the
+// exact terminal content has already been frozen. The implementation route,
+// handoff, MMI completion, verification result, and review receipt remain
+// untouched.
+func (store WorkRunStore) BindDeliveryRouteReevaluation(
+	ctx context.Context,
+	request BindDeliveryRouteReevaluationRequest,
+) (WorkRunState, error) {
+	if err := validateMutationEnvelope(request.ExpectedRevision, request.RequestID); err != nil {
+		return WorkRunState{}, err
+	}
+	if !validSHA256Ref(request.ReevaluationRef) {
+		return WorkRunState{}, errors.New(
+			"delivery route reevaluation must be an immutable SHA-256 reference",
+		)
+	}
+	digest, err := digestValue(
+		"gentle-ai.work-run-bind-delivery-route-reevaluation-request/v1",
+		request,
+	)
+	if err != nil {
+		return WorkRunState{}, err
+	}
+	return store.mutate(
+		ctx,
+		request.ExpectedRevision,
+		request.RequestID,
+		digest,
+		func(replay workReplay) (workRunRecord, error) {
+			state := replay.State
+			if state.Handoff == nil ||
+				state.VerificationResultRef == "" ||
+				state.PostVerificationSnapshotRef == "" ||
+				state.VerificationStop != nil ||
+				state.ReviewReceiptRef == "" ||
+				state.DeliveryRouteReevaluationRef != "" ||
+				state.DeliveryAuthorizationRef != "" {
+				return workRunRecord{}, fmt.Errorf(
+					"%w: exact terminal content is required before delivery route reevaluation",
+					ErrWorkRunInvalidTransition,
+				)
+			}
+			if store.authority.DeliveryRoute == nil {
+				return workRunRecord{}, ErrAuthorityPortUnavailable
+			}
+			authority, err := store.authority.DeliveryRoute.
+				ResolveDeliveryRouteReevaluation(
+					ctx,
+					request.ReevaluationRef,
+				)
+			if err != nil {
+				return workRunRecord{}, fmt.Errorf(
+					"resolve PAD delivery route reevaluation: %w",
+					err,
+				)
+			}
+			if err := authority.Validate(request.ReevaluationRef, state); err != nil {
+				return workRunRecord{}, err
+			}
+			if authority.RepositoryRef != store.RepositoryRef() {
+				return workRunRecord{}, fmt.Errorf(
+					"%w: delivery route reevaluation repository",
+					ErrAuthorityBindingMismatch,
+				)
+			}
+			completion, err := store.resolveMutationCompletion(ctx, *state.Handoff)
+			if err != nil {
+				return workRunRecord{}, err
+			}
+			if completion.CompletionRef != state.Handoff.MutationCompletionRef ||
+				completion.Snapshot.Identity != authority.CandidateRef {
+				return workRunRecord{}, fmt.Errorf(
+					"%w: delivery route reevaluation MMI completion",
+					ErrAuthorityBindingMismatch,
+				)
+			}
+			event := workBindDeliveryRouteEvent{
+				ReevaluationRef:         request.ReevaluationRef,
+				SourceDeliveryIntentRef: authority.SourceDeliveryIntentRef,
+				TargetDeliveryIntentRef: authority.TargetDeliveryIntentRef,
+			}
+			return workRunRecord{
+				Operation:     workOperationBindDeliveryRoute,
+				DeliveryRoute: &event,
 			}, nil
 		},
 	)
@@ -2157,6 +2290,34 @@ func applyWorkRunRecord(state *WorkRunState, record workRunRecord) error {
 			return errors.New("work run review receipt reference is invalid")
 		}
 		state.ReviewReceiptRef = record.Review.ReviewReceiptRef
+	case workOperationBindDeliveryRoute:
+		if state.Handoff == nil ||
+			state.VerificationResultRef == "" ||
+			state.PostVerificationSnapshotRef == "" ||
+			state.VerificationStop != nil ||
+			state.ReviewReceiptRef == "" ||
+			state.DeliveryRouteReevaluationRef != "" ||
+			state.DeliveryAuthorizationRef != "" {
+			return fmt.Errorf(
+				"%w: delivery route reevaluation is not bindable",
+				ErrWorkRunInvalidTransition,
+			)
+		}
+		if !validSHA256Ref(record.DeliveryRoute.ReevaluationRef) ||
+			!validSHA256Ref(record.DeliveryRoute.SourceDeliveryIntentRef) ||
+			!validSHA256Ref(record.DeliveryRoute.TargetDeliveryIntentRef) ||
+			record.DeliveryRoute.SourceDeliveryIntentRef !=
+				state.DeliveryIntentRef ||
+			record.DeliveryRoute.SourceDeliveryIntentRef ==
+				record.DeliveryRoute.TargetDeliveryIntentRef {
+			return errors.New(
+				"work run delivery route reevaluation has invalid intent lineage",
+			)
+		}
+		state.DeliveryIntentRef =
+			record.DeliveryRoute.TargetDeliveryIntentRef
+		state.DeliveryRouteReevaluationRef =
+			record.DeliveryRoute.ReevaluationRef
 	case workOperationBindDelivery:
 		if state.Handoff == nil ||
 			state.VerificationResultRef == "" ||
@@ -2203,7 +2364,7 @@ func validateWorkRunRecordShape(record workRunRecord) error {
 		record.Forecast != nil,
 		record.Disposition != nil, record.Reservation != nil, record.Result != nil,
 		record.StopMutation != nil, record.Launch != nil, record.Review != nil,
-		record.Delivery != nil,
+		record.DeliveryRoute != nil, record.Delivery != nil,
 	}
 	count := 0
 	for _, present := range fields {
@@ -2229,6 +2390,8 @@ func validateWorkRunRecordShape(record workRunRecord) error {
 		record.Operation == workOperationStopMutation &&
 			record.StopMutation != nil ||
 		record.Operation == workOperationBindReview && record.Review != nil ||
+		record.Operation == workOperationBindDeliveryRoute &&
+			record.DeliveryRoute != nil ||
 		record.Operation == workOperationBindDelivery && record.Delivery != nil
 	if !validOperation {
 		return errors.New("work run record operation and typed event differ")

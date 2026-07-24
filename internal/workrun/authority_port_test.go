@@ -20,6 +20,7 @@ type testAuthorityRepository struct {
 	mu sync.Mutex
 
 	intents             map[string]DeliveryIntentAuthority
+	deliveryRoutes      map[string]DeliveryRouteReevaluationAuthority
 	explicitSDDRequests map[string]ExplicitSDDRequestAuthority
 	routes              map[string]RouteSelectionAuthority
 	runs                map[string]SDDRunAuthority
@@ -38,6 +39,7 @@ type testAuthorityRepository struct {
 func newTestAuthorityRepository() *testAuthorityRepository {
 	return &testAuthorityRepository{
 		intents:             map[string]DeliveryIntentAuthority{},
+		deliveryRoutes:      map[string]DeliveryRouteReevaluationAuthority{},
 		explicitSDDRequests: map[string]ExplicitSDDRequestAuthority{},
 		routes:              map[string]RouteSelectionAuthority{},
 		runs:                map[string]SDDRunAuthority{},
@@ -50,6 +52,19 @@ func newTestAuthorityRepository() *testAuthorityRepository {
 		authorizationErrors: map[string]error{},
 		sddBindings:         []SDDReservationBinding{},
 	}
+}
+
+func (repository *testAuthorityRepository) ResolveDeliveryRouteReevaluation(
+	_ context.Context,
+	ref string,
+) (DeliveryRouteReevaluationAuthority, error) {
+	repository.mu.Lock()
+	defer repository.mu.Unlock()
+	value, ok := repository.deliveryRoutes[ref]
+	if !ok {
+		return DeliveryRouteReevaluationAuthority{}, os.ErrNotExist
+	}
+	return value, nil
 }
 
 func (repository *testAuthorityRepository) ResolveMutationCompletion(

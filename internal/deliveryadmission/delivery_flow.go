@@ -798,6 +798,15 @@ type RouteReevaluationRepository interface {
 	TrustedResolver
 	PublishGateEvidence(context.Context, GateEvidence) (string, error)
 	PublishDeliveryDecision(context.Context, DeliveryDecision) (string, error)
+	PublishRouteReevaluation(context.Context, RouteReevaluation) (string, error)
+}
+
+// RouteReevaluationResolver resolves the immutable PAD object that proves one
+// delivery-route-only change. It remains separate from TrustedResolver so
+// consumers that do not participate in route reevaluation do not gain another
+// authority surface.
+type RouteReevaluationResolver interface {
+	ResolveRouteReevaluation(context.Context, string) (RouteReevaluation, error)
 }
 
 type RouteReevaluationRequest struct {
@@ -812,6 +821,7 @@ type RouteReevaluation struct {
 	TargetAdmissionDecisionRef string             `json:"targetAdmissionDecisionRef"`
 	SourceRoute                Route              `json:"sourceRoute"`
 	TargetRoute                Route              `json:"targetRoute"`
+	Mechanism                  Mechanism          `json:"mechanism"`
 	Candidate                  CandidateBinding   `json:"candidate"`
 	ReviewReceiptRef           string             `json:"reviewReceiptRef"`
 	VerificationResultRef      string             `json:"verificationResultRef"`
@@ -826,6 +836,10 @@ func (result RouteReevaluation) Validate() error {
 		!result.SourceRoute.valid() || !result.TargetRoute.valid() ||
 		result.SourceRoute == result.TargetRoute || result.EvaluatedAt <= 0 {
 		return fmt.Errorf("%w: route reevaluation header", ErrInvalid)
+	}
+	if result.Mechanism != MechanismPullRequest &&
+		result.Mechanism != MechanismFastForwardOnly {
+		return fmt.Errorf("%w: route reevaluation mechanism", ErrInvalid)
 	}
 	for name, ref := range map[string]string{
 		"route reevaluation source decision":  result.SourceDecisionRef,
@@ -943,6 +957,7 @@ func ReevaluateDeliveryRoute(
 		TargetAdmissionDecisionRef: request.TargetAdmissionDecisionRef,
 		SourceRoute:                source.AdmissionDecision.Route,
 		TargetRoute:                targetAdmission.Route,
+		Mechanism:                  request.Mechanism,
 		Candidate:                  source.Candidate,
 		ReviewReceiptRef:           source.ReviewReceiptRef,
 		VerificationResultRef:      source.VerificationResultRef,
@@ -951,7 +966,25 @@ func ReevaluateDeliveryRoute(
 		Destination:                targetAdmission.Destination,
 		EvaluatedAt:                decision.DecidedAt,
 	}
-	return result, result.Validate()
+	if err := result.Validate(); err != nil {
+		return RouteReevaluation{}, err
+	}
+	ref, err := result.Ref()
+	if err != nil {
+		return RouteReevaluation{}, err
+	}
+	publishedRef, err := repository.PublishRouteReevaluation(ctx, result)
+	if err != nil {
+		return RouteReevaluation{}, err
+	}
+	if publishedRef != ref {
+		return RouteReevaluation{}, fmt.Errorf(
+			"%w: route reevaluation publication",
+			ErrBindingMismatch,
+		)
+	}
+	return result, nil
 }
 
 var _ RouteReevaluationRepository = (*TrustedRepository)(nil)
+var _ RouteReevaluationResolver = (*TrustedRepository)(nil)

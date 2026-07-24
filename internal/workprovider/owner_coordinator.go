@@ -27,6 +27,7 @@ import (
 // ActionTicket.
 type OwnerCoordinator struct {
 	pad          *PADWorkRunAdapter
+	padRoute     PADRouteReevaluationProbe
 	sdd          SDDWorkRunAuthority
 	work         workrun.WorkRunStore
 	coordination *CoordinationAuthorityStore
@@ -50,6 +51,7 @@ type OwnerCoordinatorDependencies struct {
 	Mutations    mutationintegrity.Store
 
 	PADAuthority    *PADWorkRunAdapter
+	PADRouteProbe   PADRouteReevaluationProbe
 	SDDAuthority    SDDWorkRunAuthority
 	LaunchAuthority workrun.LaunchAuthorityPort
 	Activation      ActivationResolver
@@ -128,6 +130,9 @@ func NewOwnerCoordinator(
 		dependencies.PADAuthority.authority == nil ||
 		dependencies.PADAuthority.authority.identity.repositoryIdentity !=
 			identity.repositoryIdentity ||
+		(dependencies.PADRouteProbe != nil &&
+			dependencies.PADRouteProbe.RepositoryRef() !=
+				identity.repositoryIdentity) ||
 		sddIdentity.repositoryIdentity != identity.repositoryIdentity {
 		return nil, errors.New(
 			"owner coordinator authorities belong to different repository identities",
@@ -142,6 +147,7 @@ func NewOwnerCoordinator(
 		WithEvidencePort(EvidenceWorkRunPort{Store: dependencies.Evidence}).
 		WithAuthorityPorts(workrun.AuthorityPorts{
 			PAD:                dependencies.PADAuthority,
+			DeliveryRoute:      dependencies.PADAuthority,
 			ExplicitSDDRequest: dependencies.Coordination,
 			MutationCompletion: MutationCompletionWorkRunAuthority{
 				Store: dependencies.Mutations,
@@ -153,6 +159,7 @@ func NewOwnerCoordinator(
 		})
 	return &OwnerCoordinator{
 		pad: dependencies.PADAuthority, sdd: dependencies.SDDAuthority,
+		padRoute:     dependencies.PADRouteProbe,
 		work:         configured,
 		coordination: dependencies.Coordination, rar: dependencies.RAR,
 		transitions: dependencies.Transitions, evidence: dependencies.Evidence,

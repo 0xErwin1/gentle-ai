@@ -190,6 +190,7 @@ func TestPADWorkRunAdapterProjectsLiveNormalAndExceptionAuthority(t *testing.T) 
 			}
 			if resolved.Kind != test.work ||
 				resolved.AuthorizationRef != live.AuthorizationRef ||
+				resolved.DecisionRef != live.Binding.DecisionRef ||
 				resolved.DeliveryIntentRef != live.Binding.IntentRef ||
 				resolved.CandidateRef != live.Binding.Candidate.Digest ||
 				resolved.ReviewReceiptRef != live.Binding.ReviewReceiptRef ||

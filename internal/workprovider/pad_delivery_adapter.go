@@ -108,6 +108,16 @@ func NewPADDeliveryAdapter(
 	}, nil
 }
 
+// RepositoryRef identifies the exact owner repository observed by this live
+// PAD port. OwnerCoordinator uses it to reject cross-repository composition
+// before any route reevaluation can publish authority.
+func (adapter *PADDeliveryAdapter) RepositoryRef() string {
+	if adapter == nil || adapter.authority == nil {
+		return ""
+	}
+	return adapter.authority.RepositoryRef()
+}
+
 func (adapter *PADDeliveryAdapter) ProbeLiveGate(
 	ctx context.Context,
 	request deliveryadmission.LiveGateProbeRequest,

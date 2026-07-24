@@ -164,6 +164,7 @@ func (executor *testDeliveryExecutor) ExecuteOnce(
 
 type testRouteReevaluationRepository struct {
 	*trustedRepository
+	reevaluations map[string]RouteReevaluation
 }
 
 func (repository *testRouteReevaluationRepository) PublishGateEvidence(
@@ -187,6 +188,21 @@ func (repository *testRouteReevaluationRepository) PublishDeliveryDecision(
 		return "", err
 	}
 	repository.decisions[ref] = value
+	return ref, nil
+}
+
+func (repository *testRouteReevaluationRepository) PublishRouteReevaluation(
+	_ context.Context,
+	value RouteReevaluation,
+) (string, error) {
+	ref, err := value.Ref()
+	if err != nil {
+		return "", err
+	}
+	if repository.reevaluations == nil {
+		repository.reevaluations = make(map[string]RouteReevaluation)
+	}
+	repository.reevaluations[ref] = value
 	return ref, nil
 }
 

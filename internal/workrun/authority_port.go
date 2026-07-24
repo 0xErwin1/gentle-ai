@@ -38,6 +38,113 @@ func (authority DeliveryIntentAuthority) Validate(ref string) error {
 	return nil
 }
 
+// DeliveryRouteReevaluationAuthorityPort resolves one immutable PAD
+// route-reevaluation object. WorkRun never accepts a replacement intent
+// directly from its caller: PAD must prove the exact source/target lineage and
+// that all terminal content authorities were preserved.
+type DeliveryRouteReevaluationAuthorityPort interface {
+	ResolveDeliveryRouteReevaluation(
+		context.Context,
+		string,
+	) (DeliveryRouteReevaluationAuthority, error)
+}
+
+type DeliveryRouteReevaluationAuthority struct {
+	ReevaluationRef            string
+	RepositoryRef              string
+	SourceDecisionRef          string
+	TargetAdmissionDecisionRef string
+	TargetDecisionRef          string
+	SourceDeliveryIntentRef    string
+	TargetDeliveryIntentRef    string
+	SourceRoute                string
+	TargetRoute                string
+	Mechanism                  string
+	ScopeDigest                string
+	CandidateRef               string
+	ReviewReceiptRef           string
+	VerificationResultRef      string
+}
+
+func (authority DeliveryRouteReevaluationAuthority) Validate(
+	ref string,
+	state WorkRunState,
+) error {
+	if err := authority.validateHeader(ref); err != nil {
+		return err
+	}
+	if state.Handoff == nil ||
+		authority.SourceDeliveryIntentRef != state.DeliveryIntentRef ||
+		authority.ScopeDigest != state.Handoff.ScopeDigest ||
+		authority.CandidateRef != state.Handoff.CandidateRef ||
+		authority.VerificationResultRef != state.VerificationResultRef ||
+		authority.ReviewReceiptRef != state.ReviewReceiptRef {
+		return fmt.Errorf(
+			"%w: delivery route reevaluation terminal facts",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	return nil
+}
+
+func (authority DeliveryRouteReevaluationAuthority) validateTargetBinding(
+	ref string,
+	state WorkRunState,
+) error {
+	if err := authority.validateHeader(ref); err != nil {
+		return err
+	}
+	if state.Handoff == nil ||
+		authority.TargetDeliveryIntentRef != state.DeliveryIntentRef ||
+		authority.ScopeDigest != state.Handoff.ScopeDigest ||
+		authority.CandidateRef != state.Handoff.CandidateRef ||
+		authority.VerificationResultRef != state.VerificationResultRef ||
+		authority.ReviewReceiptRef != state.ReviewReceiptRef {
+		return fmt.Errorf(
+			"%w: bound delivery route reevaluation terminal facts",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	return nil
+}
+
+func (authority DeliveryRouteReevaluationAuthority) validateHeader(
+	ref string,
+) error {
+	for _, immutableRef := range []string{
+		authority.ReevaluationRef,
+		authority.RepositoryRef,
+		authority.SourceDecisionRef,
+		authority.TargetAdmissionDecisionRef,
+		authority.TargetDecisionRef,
+		authority.SourceDeliveryIntentRef,
+		authority.TargetDeliveryIntentRef,
+		authority.ScopeDigest,
+		authority.CandidateRef,
+		authority.ReviewReceiptRef,
+		authority.VerificationResultRef,
+	} {
+		if !validSHA256Ref(immutableRef) {
+			return errors.New(
+				"delivery route reevaluation authority has invalid immutable references",
+			)
+		}
+	}
+	if authority.ReevaluationRef != ref ||
+		authority.SourceDecisionRef == authority.TargetDecisionRef ||
+		authority.SourceDeliveryIntentRef == authority.TargetDeliveryIntentRef ||
+		authority.SourceRoute == "" ||
+		authority.TargetRoute == "" ||
+		authority.SourceRoute == authority.TargetRoute ||
+		authority.Mechanism == "" {
+		return fmt.Errorf(
+			"%w: delivery route reevaluation header",
+			ErrAuthorityBindingMismatch,
+		)
+	}
+	return nil
+}
+
 type DeliveryAuthorizationKind string
 
 const (
@@ -80,6 +187,7 @@ func (err *DeliveryAuthorizationInactiveError) Unwrap() error {
 // PAD authorization. Its immutable ref remains the only persisted value.
 type DeliveryAuthorizationAuthority struct {
 	AuthorizationRef      string                    `json:"authorization_ref"`
+	DecisionRef           string                    `json:"decision_ref"`
 	Kind                  DeliveryAuthorizationKind `json:"kind"`
 	DeliveryIntentRef     string                    `json:"delivery_intent_ref"`
 	CandidateRef          string                    `json:"candidate_ref"`
@@ -96,6 +204,7 @@ func (authority DeliveryAuthorizationAuthority) Validate(
 ) error {
 	for _, ref := range []string{
 		authority.AuthorizationRef,
+		authority.DecisionRef,
 		authority.DeliveryIntentRef,
 		authority.CandidateRef,
 		authority.ReviewReceiptRef,
@@ -497,6 +606,7 @@ type LaunchAuthorityPort interface {
 
 type AuthorityPorts struct {
 	PAD                PADAuthorityPort
+	DeliveryRoute      DeliveryRouteReevaluationAuthorityPort
 	ExplicitSDDRequest ExplicitSDDRequestAuthorityPort
 	MutationCompletion MutationCompletionAuthorityPort
 	Route              RouteAuthorityPort

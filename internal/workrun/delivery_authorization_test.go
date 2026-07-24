@@ -524,7 +524,9 @@ func liveDeliveryAuthorization(
 ) DeliveryAuthorizationAuthority {
 	observedAt := time.Now().Unix()
 	return DeliveryAuthorizationAuthority{
-		AuthorizationRef: ref, Kind: kind,
+		AuthorizationRef:      ref,
+		DecisionRef:           testSHARef("delivery-decision:" + ref),
+		Kind:                  kind,
 		DeliveryIntentRef:     state.DeliveryIntentRef,
 		CandidateRef:          state.Handoff.CandidateRef,
 		ReviewReceiptRef:      state.ReviewReceiptRef,
