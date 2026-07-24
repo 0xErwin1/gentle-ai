@@ -73,7 +73,19 @@ func TestTrustedRepositoryAdmitsAndResolvesAllFourRoutes(t *testing.T) {
 	} {
 		t.Run(string(route), func(t *testing.T) {
 			repositoryRef := "github:trusted-" + string(route)
-			repository, _, _ := openProductTrustedRepository(t, repositoryRef, testNow)
+			repository, _, clock := openProductTrustedRepository(
+				t,
+				repositoryRef,
+				testNow,
+			)
+			missingIntentRef := testDigest("f")
+			if _, err := repository.ResolveAdmittedDecision(
+				context.Background(),
+				missingIntentRef,
+			); !errors.Is(err, ErrAdmittedDecisionNotFound) ||
+				errors.Is(err, ErrTrustedRepositoryUnavailable) {
+				t.Fatalf("missing admitted decision error = %v", err)
+			}
 			policy, err := NewRoutePolicy(
 				"policy:"+string(route),
 				"revision:1",
@@ -229,6 +241,29 @@ func TestTrustedRepositoryAdmitsAndResolvesAllFourRoutes(t *testing.T) {
 			); err != nil || replay != admissionRef {
 				t.Fatalf("exact replay = %q, %v; want %q", replay, err, admissionRef)
 			}
+			clock.set(testNow + 2_000)
+			resolvedDecision, err := repository.ResolveAdmittedDecision(
+				context.Background(),
+				intentRef,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolvedDecisionRef, err := resolvedDecision.Decision.Ref()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolvedDecision.AdmissionDecisionRef != admissionRef ||
+				resolvedDecisionRef != admissionRef ||
+				resolvedDecision.Decision.Intent != intent ||
+				resolvedDecision.Decision.AuthorityRef != authorityRef ||
+				resolvedDecision.Decision.GovernanceRef != governanceRef {
+				t.Fatalf(
+					"resolved admitted decision = %#v, want ref %q",
+					resolvedDecision,
+					admissionRef,
+				)
+			}
 			resolved, err := repository.ResolveAdmittedIntent(
 				context.Background(),
 				intentRef,
@@ -238,6 +273,18 @@ func TestTrustedRepositoryAdmitsAndResolvesAllFourRoutes(t *testing.T) {
 			}
 			if resolved != intent {
 				t.Fatalf("resolved intent = %#v, want %#v", resolved, intent)
+			}
+			if err := repository.directory.replace(
+				indexRecordName(intentRef, "admitted-intent"),
+				[]byte("{"),
+			); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := repository.ResolveAdmittedDecision(
+				context.Background(),
+				intentRef,
+			); !errors.Is(err, ErrTrustedRepositoryCorrupt) {
+				t.Fatalf("corrupt admitted decision error = %v", err)
 			}
 		})
 	}

@@ -29,6 +29,7 @@ var (
 	ErrLiveAuthorizationInactive    = errors.New("PAD delivery authorization is inactive")
 	ErrLiveAuthorizationExpired     = errors.New("PAD delivery authorization expired")
 	ErrLiveAuthorizationConsumed    = errors.New("PAD delivery authorization consumed")
+	ErrAdmittedDecisionNotFound     = errors.New("PAD admitted decision was not found")
 )
 
 type LiveAuthorizationInactiveReason string
@@ -626,33 +627,87 @@ type LiveAuthorization struct {
 	ObservedAt       int64
 }
 
+// AdmittedDecision is the exact PAD-owned winner for one delivery intent.
+// Callers use it to distinguish byte-identical replay from an attempt to reuse
+// an admitted intent with different governance or maintainer authority.
+type AdmittedDecision struct {
+	AdmissionDecisionRef string
+	Decision             AdmissionDecision
+}
+
+func (repository *TrustedRepository) ResolveAdmittedDecision(
+	ctx context.Context,
+	intentRef string,
+) (AdmittedDecision, error) {
+	if err := validateDigest("admitted intent ref", intentRef); err != nil {
+		return AdmittedDecision{}, err
+	}
+	if err := repository.validateAuthority(ctx); err != nil {
+		return AdmittedDecision{}, err
+	}
+	name := indexRecordName(intentRef, "admitted-intent")
+	payload, exists, err := repository.readRawOptional(name)
+	if err != nil {
+		return AdmittedDecision{}, err
+	}
+	if !exists {
+		return AdmittedDecision{}, fmt.Errorf(
+			"%w: %s",
+			ErrAdmittedDecisionNotFound,
+			intentRef,
+		)
+	}
+	var index admittedIntentIndex
+	if err := decodeCanonicalTrusted(
+		payload,
+		&index,
+		func() error { return index.validate() },
+	); err != nil {
+		return AdmittedDecision{}, err
+	}
+	if err := repository.validateAuthority(ctx); err != nil {
+		return AdmittedDecision{}, err
+	}
+	if index.IntentRef != intentRef {
+		return AdmittedDecision{}, fmt.Errorf(
+			"%w: admitted-intent key mismatch",
+			ErrTrustedRepositoryCorrupt,
+		)
+	}
+	decision, err := ValidateAdmissionDecision(
+		ctx,
+		repository,
+		index.AdmissionRef,
+	)
+	if err != nil {
+		return AdmittedDecision{}, fmt.Errorf(
+			"%w: validate admitted intent authority: %v",
+			ErrTrustedRepositoryCorrupt,
+			err,
+		)
+	}
+	if decision.Disposition != AdmissionAdmitted ||
+		decision.IntentRef != intentRef {
+		return AdmittedDecision{}, fmt.Errorf(
+			"%w: intent has no admitted decision",
+			ErrTrustedRepositoryCorrupt,
+		)
+	}
+	return AdmittedDecision{
+		AdmissionDecisionRef: index.AdmissionRef,
+		Decision:             decision,
+	}, nil
+}
+
 func (repository *TrustedRepository) ResolveAdmittedIntent(
 	ctx context.Context,
 	intentRef string,
 ) (DeliveryIntent, error) {
-	if err := validateDigest("admitted intent ref", intentRef); err != nil {
-		return DeliveryIntent{}, err
-	}
-	index, err := readTrustedValue(
-		ctx,
-		repository,
-		indexRecordName(intentRef, "admitted-intent"),
-		func(value admittedIntentIndex) error { return value.validate() },
-	)
+	admitted, err := repository.ResolveAdmittedDecision(ctx, intentRef)
 	if err != nil {
 		return DeliveryIntent{}, err
 	}
-	if index.IntentRef != intentRef {
-		return DeliveryIntent{}, fmt.Errorf("%w: admitted-intent key mismatch", ErrTrustedRepositoryCorrupt)
-	}
-	decision, err := ValidateAdmissionDecision(ctx, repository, index.AdmissionRef)
-	if err != nil {
-		return DeliveryIntent{}, fmt.Errorf("%w: validate admitted intent authority: %v", ErrTrustedRepositoryCorrupt, err)
-	}
-	if decision.Disposition != AdmissionAdmitted || decision.IntentRef != intentRef {
-		return DeliveryIntent{}, fmt.Errorf("%w: intent has no admitted decision", ErrTrustedRepositoryCorrupt)
-	}
-	return decision.Intent, nil
+	return admitted.Decision.Intent, nil
 }
 
 func (repository *TrustedRepository) ResolveLiveAuthorization(
