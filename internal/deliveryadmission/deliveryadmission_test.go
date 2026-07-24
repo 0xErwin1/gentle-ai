@@ -36,6 +36,44 @@ func testTree(character string) string {
 	return strings.Repeat(character, 40)
 }
 
+func initExactDeliveryRepository(
+	t *testing.T,
+) (string, reviewtransaction.RepositoryIdentity, string) {
+	t.Helper()
+	root := filepath.Join(t.TempDir(), "repository")
+	if output, err := exec.Command("git", "init", "--quiet", root).CombinedOutput(); err != nil {
+		t.Fatalf("git init exact delivery repository: %v\n%s", err, output)
+	}
+	absolute, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root = filepath.Clean(absolute)
+	lease, err := reviewtransaction.OpenRepositoryIdentityLease(
+		context.Background(),
+		root,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root, lease.Identity(), lease.StorageKey()
+}
+
+func exactDeliveryIdentityForRoot(
+	t *testing.T,
+	root string,
+) (reviewtransaction.RepositoryIdentity, string) {
+	t.Helper()
+	lease, err := reviewtransaction.OpenRepositoryIdentityLease(
+		context.Background(),
+		root,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return lease.Identity(), lease.StorageKey()
+}
+
 type reviewKey struct {
 	receipt string
 	result  string
@@ -212,6 +250,25 @@ func newScenario(
 	secondMaintainer bool,
 ) scenario {
 	t.Helper()
+	return newScenarioForRepository(
+		t,
+		route,
+		outcome,
+		allowIncomplete,
+		secondMaintainer,
+		"github:gentle-ai",
+	)
+}
+
+func newScenarioForRepository(
+	t *testing.T,
+	route Route,
+	outcome reviewtransaction.VerificationAggregate,
+	allowIncomplete bool,
+	secondMaintainer bool,
+	repositoryRef string,
+) scenario {
+	t.Helper()
 	repository := newTrustedRepository()
 	exceptionTTL := int64(0)
 	if allowIncomplete {
@@ -245,7 +302,7 @@ func newScenario(
 		secondRef = putAuthority(t, repository, second)
 	}
 	initialDestination := DestinationBinding{
-		RepositoryRef: "github:gentle-ai", TargetRef: "refs/heads/main",
+		RepositoryRef: repositoryRef, TargetRef: "refs/heads/main",
 		ObservedRevision: "git:base/1", DefaultBranch: true,
 	}
 	repository.livePolicies[livePolicyKey{
@@ -870,9 +927,51 @@ func openScenarioUseStore(
 	if err != nil {
 		t.Fatal(err)
 	}
-	repository.repositories[repositoryRef] = filepath.Clean(root)
-	store, err := OpenDirectoryUseStore(context.Background(), repository, repositoryRef)
+	root = filepath.Clean(root)
+	repository.repositories[repositoryRef] = root
+	return openAliasedScenarioUseStore(t, repository, repositoryRef, root)
+}
+
+// openAliasedScenarioUseStore keeps the older pure PAD scenarios focused on
+// one-shot semantics even though their synthetic `github:*` refs intentionally
+// predate the production exact-Git-ref contract. Public opener coverage below
+// always uses the exact lease ref.
+func openAliasedScenarioUseStore(
+	t *testing.T,
+	repository *trustedRepository,
+	repositoryRef string,
+	root string,
+) *DirectoryUseStore {
+	t.Helper()
+	identity, err := resolveDeliveryGitIdentity(context.Background(), root)
 	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(
+		identity.commonDir,
+		"gentle-ai",
+		"delivery-authorization-uses",
+		"v1",
+		"repositories",
+		identity.storageKey,
+	)
+	secureDirectory, err := openSecureUseDirectory(
+		identity.commonDir,
+		directory,
+		identity.commonInfo,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := &DirectoryUseStore{
+		directory: directory, repositoryRoot: identity.repositoryRoot,
+		repositoryRef: repositoryRef, identityRef: identity.repositoryRef,
+		gitCommonDir: identity.commonDir, gitDir: identity.gitDir,
+		storageKey: identity.storageKey, identityLease: identity.lease,
+		resolver: repository, secureDirectory: secureDirectory,
+	}
+	if err := store.validateAuthority(context.Background()); err != nil {
+		_ = secureDirectory.close()
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -885,7 +984,6 @@ func openScenarioUseStore(
 
 func TestDirectoryUseStoreIgnoresAmbientGitRepositorySelection(t *testing.T) {
 	repository := newTrustedRepository()
-	repositoryRef := "github:ambient-git-selection"
 	root := filepath.Join(t.TempDir(), "repository")
 	if output, err := exec.Command("git", "init", "--quiet", root).CombinedOutput(); err != nil {
 		t.Fatalf("git init repository: %v\n%s", err, output)
@@ -895,6 +993,8 @@ func TestDirectoryUseStoreIgnoresAmbientGitRepositorySelection(t *testing.T) {
 		t.Fatal(err)
 	}
 	root = filepath.Clean(root)
+	identity, _ := exactDeliveryIdentityForRoot(t, root)
+	repositoryRef := identity.RepositoryRef
 	attackerCommon := filepath.Join(t.TempDir(), "attacker.git")
 	if output, err := exec.Command(
 		"git", "init", "--quiet", "--bare", attackerCommon,
@@ -957,7 +1057,8 @@ func TestDirectoryUseStoreRejectsRepositoryRootIdentityReplacement(t *testing.T)
 	}
 	selectedRoot = filepath.Clean(selectedRoot)
 	repository := newTrustedRepository()
-	repositoryRef := "github:root-replacement"
+	identity, _ := exactDeliveryIdentityForRoot(t, selectedRoot)
+	repositoryRef := identity.RepositoryRef
 	repository.repositories[repositoryRef] = selectedRoot
 	store, err := OpenDirectoryUseStore(context.Background(), repository, repositoryRef)
 	if err != nil {
@@ -1100,15 +1201,12 @@ func TestDirectoryUseStoreOneShotSpansIndependentHandles(t *testing.T) {
 	current, authorizationRef, authorization := normalAuthorization(t)
 	repositoryRef := authorization.Binding.Destination.RepositoryRef
 	first := openScenarioUseStore(t, current.repository, repositoryRef)
-	second, err := OpenDirectoryUseStore(
-		context.Background(),
+	second := openAliasedScenarioUseStore(
+		t,
 		current.repository,
 		repositoryRef,
+		first.repositoryRoot,
 	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = second.Close() })
 
 	current.repository.now++
 	var winners atomic.Int32

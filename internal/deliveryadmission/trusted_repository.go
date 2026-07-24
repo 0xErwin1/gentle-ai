@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -111,8 +110,10 @@ type DeliveryRepositoryAuthority interface {
 type TrustedRepository struct {
 	repositoryRef  string
 	repositoryRoot string
-	repositoryInfo os.FileInfo
 	gitCommonDir   string
+	gitDir         string
+	storageKey     string
+	identityLease  *reviewtransaction.RepositoryIdentityLease
 	owner          DeliveryRepositoryAuthority
 	clock          OwnerClock
 	rar            RARAuthorityPort
@@ -126,20 +127,28 @@ type trustedRepositoryBinding struct {
 	RepositoryRef  string `json:"repositoryRef"`
 	RepositoryRoot string `json:"repositoryRoot"`
 	GitCommonDir   string `json:"gitCommonDir"`
+	GitDir         string `json:"gitDir"`
+	StorageKey     string `json:"storageKey"`
 }
 
 func (binding trustedRepositoryBinding) validate() error {
 	if binding.Schema != trustedRepositoryBindingSchema {
 		return fmt.Errorf("%w: trusted repository binding schema", ErrInvalid)
 	}
+	if !validDeliveryIdentityRef(binding.RepositoryRef) {
+		return fmt.Errorf("%w: trusted repository identity ref", ErrInvalid)
+	}
+	if !validDeliveryStorageKey(binding.StorageKey) ||
+		binding.StorageKey != strings.TrimPrefix(binding.RepositoryRef, "sha256:") {
+		return fmt.Errorf("%w: trusted repository storage key", ErrInvalid)
+	}
+	if !validDeliveryIdentityPath(binding.RepositoryRoot) ||
+		!validDeliveryIdentityPath(binding.GitCommonDir) ||
+		!validDeliveryIdentityPath(binding.GitDir) {
+		return fmt.Errorf("%w: trusted repository binding paths", ErrInvalid)
+	}
 	if err := validateToken("trusted repository ref", binding.RepositoryRef); err != nil {
 		return err
-	}
-	if !filepath.IsAbs(binding.RepositoryRoot) ||
-		filepath.Clean(binding.RepositoryRoot) != binding.RepositoryRoot ||
-		!filepath.IsAbs(binding.GitCommonDir) ||
-		filepath.Clean(binding.GitCommonDir) != binding.GitCommonDir {
-		return fmt.Errorf("%w: trusted repository binding paths", ErrInvalid)
 	}
 	return nil
 }
@@ -179,11 +188,19 @@ func OpenTrustedRepository(
 	if err != nil {
 		return nil, fmt.Errorf("%w: resolve trusted Git identity: %v", ErrTrustedRepositoryUnavailable, err)
 	}
+	if identity.repositoryRef != repositoryRef {
+		return nil, fmt.Errorf(
+			"%w: owner repository ref does not match the exact Git identity",
+			ErrTrustedRepositoryCorrupt,
+		)
+	}
 	storePath := filepath.Join(
 		identity.commonDir,
 		"gentle-ai",
 		"delivery-admission",
 		"v1",
+		"repositories",
+		identity.storageKey,
 	)
 	directory, err := openSecureUseDirectory(
 		identity.commonDir,
@@ -200,12 +217,14 @@ func OpenTrustedRepository(
 	}
 	repository := &TrustedRepository{
 		repositoryRef: repositoryRef, repositoryRoot: identity.repositoryRoot,
-		repositoryInfo: identity.repositoryInfo, gitCommonDir: identity.commonDir,
+		gitCommonDir: identity.commonDir, gitDir: identity.gitDir,
+		storageKey: identity.storageKey, identityLease: identity.lease,
 		owner: owner, clock: settings.clock, rar: rar, directory: directory,
 	}
 	binding := trustedRepositoryBinding{
 		Schema: trustedRepositoryBindingSchema, RepositoryRef: repositoryRef,
 		RepositoryRoot: identity.repositoryRoot, GitCommonDir: identity.commonDir,
+		GitDir: identity.gitDir, StorageKey: identity.storageKey,
 	}
 	if err := repository.bind(ctx, binding); err != nil {
 		_ = repository.Close()
@@ -248,9 +267,10 @@ func (repository *TrustedRepository) validateAuthorityLocked(ctx context.Context
 		return err
 	}
 	if repository.closed || repository.owner == nil || repository.clock == nil ||
-		repository.directory == nil || repository.repositoryInfo == nil ||
+		repository.directory == nil || repository.identityLease == nil ||
 		repository.repositoryRef == "" || repository.repositoryRoot == "" ||
-		repository.gitCommonDir == "" {
+		repository.gitCommonDir == "" || repository.gitDir == "" ||
+		!validDeliveryStorageKey(repository.storageKey) {
 		return fmt.Errorf("%w: closed or incomplete PAD repository", ErrTrustedRepositoryUnavailable)
 	}
 	root, err := repository.owner.ResolveDeliveryRepository(ctx, repository.repositoryRef)
@@ -260,18 +280,33 @@ func (repository *TrustedRepository) validateAuthorityLocked(ctx context.Context
 	if root != repository.repositoryRoot {
 		return fmt.Errorf("%w: repository authority mapping changed", ErrTrustedRepositoryCorrupt)
 	}
-	identity, err := resolveDeliveryGitIdentity(ctx, root)
-	if err != nil {
-		return fmt.Errorf("%w: revalidate trusted Git identity: %v", ErrTrustedRepositoryUnavailable, err)
+	if err := repository.identityLease.Validate(ctx); err != nil {
+		return fmt.Errorf(
+			"%w: revalidate trusted Git identity: %w",
+			ErrTrustedRepositoryCorrupt,
+			err,
+		)
 	}
-	if identity.repositoryRoot != repository.repositoryRoot ||
-		identity.commonDir != repository.gitCommonDir ||
-		identity.repositoryInfo == nil ||
-		!os.SameFile(repository.repositoryInfo, identity.repositoryInfo) {
-		return fmt.Errorf("%w: trusted Git identity changed", ErrTrustedRepositoryCorrupt)
+	identity := repository.identityLease.Identity()
+	if identity.RepositoryRoot != repository.repositoryRoot ||
+		identity.GitCommonDir != repository.gitCommonDir ||
+		identity.GitDir != repository.gitDir ||
+		identity.RepositoryRef != repository.repositoryRef ||
+		repository.identityLease.StorageKey() != repository.storageKey {
+		return fmt.Errorf(
+			"%w: retained Git identity lease changed",
+			ErrTrustedRepositoryCorrupt,
+		)
 	}
 	if err := repository.directory.validate(); err != nil {
 		return fmt.Errorf("%w: validate PAD provider store: %v", ErrTrustedRepositoryCorrupt, err)
+	}
+	if err := repository.identityLease.Validate(ctx); err != nil {
+		return fmt.Errorf(
+			"%w: revalidate trusted Git identity after store access: %w",
+			ErrTrustedRepositoryCorrupt,
+			err,
+		)
 	}
 	return nil
 }

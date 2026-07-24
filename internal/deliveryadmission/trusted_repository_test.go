@@ -3,8 +3,6 @@ package deliveryadmission
 import (
 	"context"
 	"errors"
-	"os/exec"
-	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -32,20 +30,18 @@ func (clock *mutableOwnerClock) set(now int64) {
 
 func openProductTrustedRepository(
 	t *testing.T,
-	repositoryRef string,
 	now int64,
-) (*TrustedRepository, *trustedRepository, *mutableOwnerClock) {
+) (
+	*TrustedRepository,
+	*trustedRepository,
+	*mutableOwnerClock,
+	string,
+) {
 	t.Helper()
-	root := filepath.Join(t.TempDir(), "repository")
-	if output, err := exec.Command("git", "init", "--quiet", root).CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v\n%s", err, output)
-	}
-	absolute, err := filepath.Abs(root)
-	if err != nil {
-		t.Fatal(err)
-	}
+	root, identity, _ := initExactDeliveryRepository(t)
+	repositoryRef := identity.RepositoryRef
 	owner := newTrustedRepository()
-	owner.repositories[repositoryRef] = filepath.Clean(absolute)
+	owner.repositories[repositoryRef] = root
 	clock := &mutableOwnerClock{now: now}
 	repository, err := OpenTrustedRepository(
 		context.Background(),
@@ -61,7 +57,7 @@ func openProductTrustedRepository(
 			t.Errorf("close trusted repository: %v", err)
 		}
 	})
-	return repository, owner, clock
+	return repository, owner, clock, repositoryRef
 }
 
 func TestTrustedRepositoryAdmitsAndResolvesAllFourRoutes(t *testing.T) {
@@ -72,10 +68,8 @@ func TestTrustedRepositoryAdmitsAndResolvesAllFourRoutes(t *testing.T) {
 		RouteEmergency,
 	} {
 		t.Run(string(route), func(t *testing.T) {
-			repositoryRef := "github:trusted-" + string(route)
-			repository, _, clock := openProductTrustedRepository(
+			repository, _, clock, repositoryRef := openProductTrustedRepository(
 				t,
-				repositoryRef,
 				testNow,
 			)
 			missingIntentRef := testDigest("f")
@@ -291,9 +285,8 @@ func TestTrustedRepositoryAdmitsAndResolvesAllFourRoutes(t *testing.T) {
 }
 
 func TestTrustedRepositoryLivePolicyCASRotationAndConcurrency(t *testing.T) {
-	repository, _, _ := openProductTrustedRepository(
+	repository, _, _, _ := openProductTrustedRepository(
 		t,
-		"github:policy-rotation",
 		testNow,
 	)
 	policies := make([]RoutePolicy, 4)
@@ -384,9 +377,8 @@ func TestTrustedRepositoryLivePolicyCASRotationAndConcurrency(t *testing.T) {
 }
 
 func TestTrustedRepositoryRejectsCrossRepositoryPreimages(t *testing.T) {
-	repository, _, _ := openProductTrustedRepository(
+	repository, _, _, _ := openProductTrustedRepository(
 		t,
-		"github:bound-repository",
 		testNow,
 	)
 	policy, err := NewRoutePolicy(
@@ -438,13 +430,19 @@ func TestTrustedRepositoryRejectsCrossRepositoryPreimages(t *testing.T) {
 }
 
 func TestTrustedRepositoryLiveAuthorizationExpiryAndConsumption(t *testing.T) {
-	current := newScenario(
+	repository, owner, clock, repositoryRef := openProductTrustedRepository(
+		t,
+		testNow,
+	)
+	current := newScenarioForRepository(
 		t,
 		RouteDirectMain,
 		reviewtransaction.VerificationAggregateComplete,
 		false,
 		false,
+		repositoryRef,
 	)
+	current.repository.repositories[repositoryRef] = owner.repositories[repositoryRef]
 	current.repository.now++
 	authorization, err := IssueAuthorization(
 		context.Background(),
@@ -459,13 +457,7 @@ func TestTrustedRepositoryLiveAuthorizationExpiryAndConsumption(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repositoryRef := authorization.Binding.Destination.RepositoryRef
-	repository, owner, clock := openProductTrustedRepository(
-		t,
-		repositoryRef,
-		current.repository.now,
-	)
-	current.repository.repositories[repositoryRef] = owner.repositories[repositoryRef]
+	clock.set(current.repository.now)
 	repository.rar = current.repository
 	publishScenarioToProduct(t, repository, current)
 	authorizationRef, err := repository.PublishAuthorization(
@@ -528,13 +520,19 @@ func TestTrustedRepositoryLiveAuthorizationExpiryAndConsumption(t *testing.T) {
 }
 
 func TestTrustedRepositoryResolvesLiveExceptionAuthorization(t *testing.T) {
-	current := newScenario(
+	repository, owner, clock, repositoryRef := openProductTrustedRepository(
+		t,
+		testNow,
+	)
+	current := newScenarioForRepository(
 		t,
 		RouteEmergency,
 		reviewtransaction.VerificationAggregateUnavailable,
 		true,
 		false,
+		repositoryRef,
 	)
+	current.repository.repositories[repositoryRef] = owner.repositories[repositoryRef]
 	current.repository.now++
 	humanRef := putExceptionGovernance(t, current)
 	authorization, err := IssueExceptionAuthorization(
@@ -553,13 +551,7 @@ func TestTrustedRepositoryResolvesLiveExceptionAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repositoryRef := authorization.Binding.Destination.RepositoryRef
-	repository, owner, _ := openProductTrustedRepository(
-		t,
-		repositoryRef,
-		current.repository.now,
-	)
-	current.repository.repositories[repositoryRef] = owner.repositories[repositoryRef]
+	clock.set(current.repository.now)
 	repository.rar = current.repository
 	publishScenarioToProduct(t, repository, current)
 	authorizationRef, err := repository.PublishExceptionAuthorization(
@@ -582,13 +574,19 @@ func TestTrustedRepositoryResolvesLiveExceptionAuthorization(t *testing.T) {
 }
 
 func TestTrustedRepositoryRevalidatesCompactRARAuthorization(t *testing.T) {
-	current := newScenario(
+	repository, owner, clock, repositoryRef := openProductTrustedRepository(
+		t,
+		testNow,
+	)
+	current := newScenarioForRepository(
 		t,
 		RouteDirectMain,
 		reviewtransaction.VerificationAggregateComplete,
 		false,
 		false,
+		repositoryRef,
 	)
+	current.repository.repositories[repositoryRef] = owner.repositories[repositoryRef]
 	historicalKey := reviewKey{
 		receipt: current.receiptRef,
 		result:  current.resultRef,
@@ -634,13 +632,7 @@ func TestTrustedRepositoryRevalidatesCompactRARAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	repositoryRef := authorization.Binding.Destination.RepositoryRef
-	repository, owner, _ := openProductTrustedRepository(
-		t,
-		repositoryRef,
-		current.repository.now,
-	)
-	current.repository.repositories[repositoryRef] = owner.repositories[repositoryRef]
+	clock.set(current.repository.now)
 	repository.rar = current.repository
 	publishScenarioToProduct(t, repository, current)
 	authorizationRef, err := repository.PublishAuthorization(

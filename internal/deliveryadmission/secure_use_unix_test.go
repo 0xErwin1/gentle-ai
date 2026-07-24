@@ -28,8 +28,10 @@ func initDeliveryUseRepository(t *testing.T) string {
 
 func TestDirectoryUseStoreRejectsCallerRootAndBindsRepositoryAuthority(t *testing.T) {
 	current, authorizationRef, authorization := normalAuthorization(t)
-	otherRef := "github:other"
-	current.repository.repositories[otherRef] = initDeliveryUseRepository(t)
+	otherRoot := initDeliveryUseRepository(t)
+	identity, _ := exactDeliveryIdentityForRoot(t, otherRoot)
+	otherRef := identity.RepositoryRef
+	current.repository.repositories[otherRef] = otherRoot
 	store, err := OpenDirectoryUseStore(context.Background(), current.repository, otherRef)
 	if err != nil {
 		t.Fatal(err)
@@ -55,8 +57,9 @@ func TestDirectoryUseStoreRejectsCallerRootAndBindsRepositoryAuthority(t *testin
 
 func TestDirectoryUseStoreDoesNotRewriteSharedGitAuthorityModes(t *testing.T) {
 	repository := newTrustedRepository()
-	repositoryRef := "github:shared-modes"
 	root := initDeliveryUseRepository(t)
+	identity, _ := exactDeliveryIdentityForRoot(t, root)
+	repositoryRef := identity.RepositoryRef
 	common := filepath.Join(root, ".git")
 	shared := filepath.Join(common, "gentle-ai")
 	if err := os.Chmod(common, 0o775); err != nil {

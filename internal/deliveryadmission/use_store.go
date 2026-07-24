@@ -8,10 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 )
 
 const maximumAuthorizationUseBytes = 1 << 20
@@ -76,9 +77,12 @@ func (use AuthorizationUse) Validate() error {
 type DirectoryUseStore struct {
 	directory       string
 	repositoryRoot  string
-	repositoryInfo  os.FileInfo
 	repositoryRef   string
+	identityRef     string
 	gitCommonDir    string
+	gitDir          string
+	storageKey      string
+	identityLease   *reviewtransaction.RepositoryIdentityLease
 	resolver        TrustedResolver
 	secureDirectory *secureUseDirectory
 	closeMu         sync.RWMutex
@@ -112,8 +116,19 @@ func OpenDirectoryUseStore(
 	if err != nil {
 		return nil, err
 	}
+	if identity.repositoryRef != repositoryRef {
+		return nil, fmt.Errorf(
+			"%w: delivery use repository ref does not match the exact Git identity",
+			ErrBindingMismatch,
+		)
+	}
 	directory := filepath.Join(
-		identity.commonDir, "gentle-ai", "delivery-authorization-uses", "v1",
+		identity.commonDir,
+		"gentle-ai",
+		"delivery-authorization-uses",
+		"v1",
+		"repositories",
+		identity.storageKey,
 	)
 	secureDirectory, err := openSecureUseDirectory(
 		identity.commonDir, directory, identity.commonInfo,
@@ -123,9 +138,11 @@ func OpenDirectoryUseStore(
 	}
 	store := &DirectoryUseStore{
 		directory: directory, repositoryRoot: identity.repositoryRoot,
-		repositoryInfo: identity.repositoryInfo,
-		repositoryRef:  repositoryRef, gitCommonDir: identity.commonDir,
-		resolver: resolver, secureDirectory: secureDirectory,
+		repositoryRef: repositoryRef, identityRef: identity.repositoryRef,
+		gitCommonDir: identity.commonDir,
+		gitDir:       identity.gitDir, storageKey: identity.storageKey,
+		identityLease: identity.lease,
+		resolver:      resolver, secureDirectory: secureDirectory,
 	}
 	if err := store.validateAuthority(ctx); err != nil {
 		_ = secureDirectory.close()
@@ -161,8 +178,15 @@ func (store *DirectoryUseStore) validateAuthority(ctx context.Context) error {
 }
 
 func (store *DirectoryUseStore) validateAuthorityLocked(ctx context.Context) error {
-	if store.repositoryRef == "" || store.repositoryRoot == "" || store.repositoryInfo == nil ||
-		store.gitCommonDir == "" || store.resolver == nil || store.secureDirectory == nil {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if store.repositoryRef == "" || !validDeliveryIdentityRef(store.identityRef) ||
+		store.repositoryRoot == "" ||
+		store.gitCommonDir == "" || store.gitDir == "" ||
+		!validDeliveryStorageKey(store.storageKey) ||
+		store.identityLease == nil || store.resolver == nil ||
+		store.secureDirectory == nil {
 		return fmt.Errorf("%w: unopened use store", ErrInvalid)
 	}
 	if store.closed {
@@ -175,18 +199,33 @@ func (store *DirectoryUseStore) validateAuthorityLocked(ctx context.Context) err
 	if liveRoot != store.repositoryRoot {
 		return fmt.Errorf("%w: delivery repository authority root changed", ErrBindingMismatch)
 	}
-	identity, err := resolveDeliveryGitIdentity(ctx, store.repositoryRoot)
-	if err != nil {
-		return err
+	if err := store.identityLease.Validate(ctx); err != nil {
+		return fmt.Errorf(
+			"%w: delivery repository Git identity changed: %w",
+			ErrBindingMismatch,
+			err,
+		)
 	}
-	if identity.repositoryRoot != store.repositoryRoot ||
-		identity.commonDir != store.gitCommonDir ||
-		identity.repositoryInfo == nil ||
-		!os.SameFile(store.repositoryInfo, identity.repositoryInfo) {
-		return fmt.Errorf("%w: delivery repository Git identity changed", ErrBindingMismatch)
+	identity := store.identityLease.Identity()
+	if identity.RepositoryRoot != store.repositoryRoot ||
+		identity.GitCommonDir != store.gitCommonDir ||
+		identity.GitDir != store.gitDir ||
+		identity.RepositoryRef != store.identityRef ||
+		store.identityLease.StorageKey() != store.storageKey {
+		return fmt.Errorf(
+			"%w: retained delivery repository identity lease changed",
+			ErrBindingMismatch,
+		)
 	}
 	if err := store.secureDirectory.validate(); err != nil {
 		return fmt.Errorf("validate secure delivery use store: %w", err)
+	}
+	if err := store.identityLease.Validate(ctx); err != nil {
+		return fmt.Errorf(
+			"%w: delivery repository Git identity changed after store access: %w",
+			ErrBindingMismatch,
+			err,
+		)
 	}
 	return nil
 }
