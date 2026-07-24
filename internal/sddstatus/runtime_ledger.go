@@ -37,6 +37,8 @@ const (
 	runtimeOperationFinishRemediation = "attempt/finish-remediation"
 	runtimeOperationReset             = "objective/reset"
 	runtimeOperationBind              = "binding/set"
+	runtimeOperationBindWorkRun       = "workrun/bind"
+	runtimeOperationBindReservation   = "verification-reservation/bind"
 )
 
 var (
@@ -52,6 +54,10 @@ var (
 	ErrRuntimeResetNotAllowed              = errors.New("SDD runtime objective reset requires decision-required or complete state")
 	ErrRuntimeRemediationSuccessorRequired = errors.New("a bound passing SDD runtime attempt requires an atomic approved recovery successor")
 	ErrBindingRevisionConflict             = errors.New("SDD review binding revision conflict")
+	ErrSDDRunAuthorityNotFound             = errors.New("SDD change or runtime authority does not exist")
+	ErrSDDWorkRunBindingNotFound           = errors.New("SDD WorkRun binding does not exist")
+	ErrSDDWorkRunBindingConflict           = errors.New("SDD run is already bound to a different WorkRun")
+	ErrSDDReservationBindingConflict       = errors.New("SDD verification reservation conflicts with existing authority")
 
 	runtimeRequestIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 	runtimeRevisionPattern  = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -163,25 +169,27 @@ type RuntimeReset struct {
 }
 
 type RuntimeStatus struct {
-	Schema                 string            `json:"schema"`
-	Change                 string            `json:"change"`
-	Revision               string            `json:"revision"`
-	Objective              *RuntimeObjective `json:"objective,omitempty"`
-	ActiveAttempt          *RuntimeAttempt   `json:"active_attempt,omitempty"`
-	Attempts               []RuntimeAttempt  `json:"attempts"`
-	ObjectiveGeneration    int               `json:"objective_generation"`
-	NextOrdinal            int               `json:"next_ordinal"`
-	CumulativeAttempts     int               `json:"cumulative_attempts"`
-	CumulativeChangedLines int               `json:"cumulative_changed_lines"`
-	LifetimeAttempts       int               `json:"lifetime_attempts"`
-	LifetimeChangedLines   int               `json:"lifetime_changed_lines"`
-	EvidenceRevision       string            `json:"evidence_revision"`
-	DecisionRequired       bool              `json:"decision_required"`
-	Complete               bool              `json:"complete"`
-	NextAction             string            `json:"next_action"`
-	LastReset              *RuntimeReset     `json:"last_reset,omitempty"`
-	BindingRevision        string            `json:"binding_revision"`
-	Binding                *ReviewBinding    `json:"binding,omitempty"`
+	Schema                   string                                 `json:"schema"`
+	Change                   string                                 `json:"change"`
+	Revision                 string                                 `json:"revision"`
+	Objective                *RuntimeObjective                      `json:"objective,omitempty"`
+	ActiveAttempt            *RuntimeAttempt                        `json:"active_attempt,omitempty"`
+	Attempts                 []RuntimeAttempt                       `json:"attempts"`
+	ObjectiveGeneration      int                                    `json:"objective_generation"`
+	NextOrdinal              int                                    `json:"next_ordinal"`
+	CumulativeAttempts       int                                    `json:"cumulative_attempts"`
+	CumulativeChangedLines   int                                    `json:"cumulative_changed_lines"`
+	LifetimeAttempts         int                                    `json:"lifetime_attempts"`
+	LifetimeChangedLines     int                                    `json:"lifetime_changed_lines"`
+	EvidenceRevision         string                                 `json:"evidence_revision"`
+	DecisionRequired         bool                                   `json:"decision_required"`
+	Complete                 bool                                   `json:"complete"`
+	NextAction               string                                 `json:"next_action"`
+	LastReset                *RuntimeReset                          `json:"last_reset,omitempty"`
+	BindingRevision          string                                 `json:"binding_revision"`
+	Binding                  *ReviewBinding                         `json:"binding,omitempty"`
+	WorkRunBinding           *SDDWorkRunBinding                     `json:"work_run_binding,omitempty"`
+	VerificationReservations []CommonVerificationReservationBinding `json:"verification_reservations,omitempty"`
 }
 
 type BeginAttemptRequest struct {
@@ -235,16 +243,18 @@ type RuntimeStore struct {
 }
 
 type runtimeRecord struct {
-	Schema           string               `json:"schema"`
-	Change           string               `json:"change"`
-	PreviousRevision string               `json:"previous_revision"`
-	Operation        string               `json:"operation"`
-	RequestID        string               `json:"request_id"`
-	RequestDigest    string               `json:"request_digest"`
-	Begin            *runtimeBeginEvent   `json:"begin,omitempty"`
-	Finish           *runtimeFinishEvent  `json:"finish,omitempty"`
-	Reset            *runtimeResetEvent   `json:"reset,omitempty"`
-	Binding          *runtimeBindingEvent `json:"binding,omitempty"`
+	Schema             string                                `json:"schema"`
+	Change             string                                `json:"change"`
+	PreviousRevision   string                                `json:"previous_revision"`
+	Operation          string                                `json:"operation"`
+	RequestID          string                                `json:"request_id"`
+	RequestDigest      string                                `json:"request_digest"`
+	Begin              *runtimeBeginEvent                    `json:"begin,omitempty"`
+	Finish             *runtimeFinishEvent                   `json:"finish,omitempty"`
+	Reset              *runtimeResetEvent                    `json:"reset,omitempty"`
+	Binding            *runtimeBindingEvent                  `json:"binding,omitempty"`
+	WorkRunBinding     *SDDWorkRunBinding                    `json:"work_run_binding,omitempty"`
+	ReservationBinding *CommonVerificationReservationBinding `json:"verification_reservation,omitempty"`
 }
 
 type runtimeBeginEvent struct {
@@ -906,6 +916,43 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 		if err := applyRuntimeBindingEvent(replay, record.Binding); err != nil {
 			return err
 		}
+	case runtimeOperationBindWorkRun:
+		if replay.Status.WorkRunBinding != nil {
+			return errors.New("WorkRun binding record attempts to replace existing authority")
+		}
+		binding := *record.WorkRunBinding
+		if binding.RunRef != record.Change {
+			return errors.New("WorkRun binding record does not match SDD run")
+		}
+		replay.Status.WorkRunBinding = &binding
+	case runtimeOperationBindReservation:
+		binding := *record.ReservationBinding
+		if replay.Status.WorkRunBinding == nil ||
+			replay.Status.WorkRunBinding.WorkRunID != binding.WorkRunID {
+			return errors.New("reservation binding record does not match SDD WorkRun authority")
+		}
+		active := replay.Status.ActiveAttempt
+		if active == nil || replay.Status.Objective == nil ||
+			active.ObjectiveID != replay.Status.Objective.ID ||
+			active.ObjectiveGeneration != replay.Status.Objective.Generation ||
+			binding.ObjectiveID != active.ObjectiveID ||
+			binding.ObjectiveGeneration != active.ObjectiveGeneration ||
+			binding.AttemptOrdinal != active.Ordinal ||
+			active.Outcome != AttemptRunning {
+			return errors.New("reservation binding record does not match the exact active SDD attempt")
+		}
+		for _, existing := range replay.Status.VerificationReservations {
+			if existing.ReservationRef == binding.ReservationRef ||
+				existing.ActionTicketRef == binding.ActionTicketRef ||
+				existing.WorkRunRevision == binding.WorkRunRevision ||
+				existing.BindingRef == binding.BindingRef {
+				return errors.New("reservation binding record reuses existing SDD authority")
+			}
+		}
+		replay.Status.VerificationReservations = append(
+			replay.Status.VerificationReservations,
+			binding,
+		)
 	default:
 		return errors.New("unsupported SDD runtime record operation")
 	}
@@ -980,7 +1027,8 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 	}
 	switch record.Operation {
 	case runtimeOperationBegin:
-		if record.Begin == nil || record.Finish != nil || record.Reset != nil || record.Binding != nil {
+		if record.Begin == nil || record.Finish != nil || record.Reset != nil || record.Binding != nil ||
+			record.WorkRunBinding != nil || record.ReservationBinding != nil {
 			return errors.New("invalid SDD runtime begin record shape")
 		}
 		event := record.Begin
@@ -998,7 +1046,8 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime begin request digest does not match record")
 		}
 	case runtimeOperationFinish:
-		if record.Finish == nil || record.Begin != nil || record.Reset != nil || record.Binding != nil {
+		if record.Finish == nil || record.Begin != nil || record.Reset != nil || record.Binding != nil ||
+			record.WorkRunBinding != nil || record.ReservationBinding != nil {
 			return errors.New("invalid SDD runtime finish record shape")
 		}
 		event := record.Finish
@@ -1019,7 +1068,8 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime finish request digest does not match record")
 		}
 	case runtimeOperationFinishRemediation:
-		if record.Finish == nil || record.Binding == nil || record.Begin != nil || record.Reset != nil {
+		if record.Finish == nil || record.Binding == nil || record.Begin != nil || record.Reset != nil ||
+			record.WorkRunBinding != nil || record.ReservationBinding != nil {
 			return errors.New("invalid atomic SDD runtime remediation record shape")
 		}
 		finish, binding := record.Finish, record.Binding
@@ -1058,7 +1108,8 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("atomic SDD runtime remediation request digest does not match record")
 		}
 	case runtimeOperationReset:
-		if record.Reset == nil || record.Begin != nil || record.Finish != nil || record.Binding != nil {
+		if record.Reset == nil || record.Begin != nil || record.Finish != nil || record.Binding != nil ||
+			record.WorkRunBinding != nil || record.ReservationBinding != nil {
 			return errors.New("invalid SDD runtime reset record shape")
 		}
 		event := record.Reset
@@ -1074,7 +1125,8 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime reset request digest does not match record")
 		}
 	case runtimeOperationBind:
-		if record.Binding == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil {
+		if record.Binding == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil ||
+			record.WorkRunBinding != nil || record.ReservationBinding != nil {
 			return errors.New("invalid SDD runtime binding record shape")
 		}
 		event := record.Binding
@@ -1099,6 +1151,60 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		}
 		if runtimeValueHash("gentle-ai.sdd-runtime-bind-request/v1", request) != record.RequestDigest {
 			return errors.New("SDD runtime binding request digest does not match record")
+		}
+	case runtimeOperationBindWorkRun:
+		if record.WorkRunBinding == nil || record.Begin != nil || record.Finish != nil ||
+			record.Reset != nil || record.Binding != nil || record.ReservationBinding != nil {
+			return errors.New("invalid SDD WorkRun binding record shape")
+		}
+		binding := *record.WorkRunBinding
+		wantRequestID := "bind-workrun-" + strings.TrimPrefix(
+			binding.BindingRef,
+			"sha256:",
+		)
+		if record.RequestID != wantRequestID {
+			return errors.New("invalid SDD WorkRun binding request identifier")
+		}
+		if err := binding.Validate(); err != nil || binding.RunRef != record.Change {
+			if err != nil {
+				return err
+			}
+			return errors.New("SDD WorkRun binding record does not match change")
+		}
+		request := bindWorkRunRequest{
+			WorkRunID: binding.WorkRunID, RouteAcceptanceRef: binding.RouteAcceptanceRef,
+		}
+		if runtimeValueHash("gentle-ai.sdd-bind-work-run-request/v1", request) != record.RequestDigest {
+			return errors.New("SDD WorkRun binding request digest does not match record")
+		}
+	case runtimeOperationBindReservation:
+		if record.ReservationBinding == nil || record.Begin != nil || record.Finish != nil ||
+			record.Reset != nil || record.Binding != nil || record.WorkRunBinding != nil {
+			return errors.New("invalid SDD reservation binding record shape")
+		}
+		binding := *record.ReservationBinding
+		if err := binding.Validate(); err != nil || binding.RunRef != record.Change {
+			if err != nil {
+				return err
+			}
+			return errors.New("SDD reservation binding record does not match change")
+		}
+		wantRequestID := "bind-reservation-" + strings.TrimPrefix(
+			binding.ReservationRef,
+			"sha256:",
+		)
+		if record.RequestID != wantRequestID {
+			return errors.New("invalid SDD reservation binding request identifier")
+		}
+		request := bindCommonVerificationReservationRequest{
+			WorkRunID: binding.WorkRunID, WorkRunRevision: binding.WorkRunRevision,
+			ReservationRef: binding.ReservationRef, ActionTicketRef: binding.ActionTicketRef,
+		}
+		if runtimeValueHash(
+			"gentle-ai.sdd-bind-common-verification-reservation-request/v1",
+			request,
+		) != record.RequestDigest {
+			return errors.New("SDD reservation binding request digest does not match record")
 		}
 	default:
 		return errors.New("invalid SDD runtime record operation")
