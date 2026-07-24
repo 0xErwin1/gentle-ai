@@ -63,9 +63,19 @@ func ensureRARRepositoryRoot(commonDir, root string, create bool) error {
 				}
 				_, statErr = os.Lstat(current)
 			} else {
-				// Native review authority must already own these parents because
-				// RAR publication requires a native terminal receipt.
-				return fmt.Errorf("%w: native review authority parent is absent", fs.ErrNotExist)
+				// Pre-execution plan authority exists before a native terminal
+				// receipt. Create missing owner-only parents without weakening
+				// already-existing native review directory permissions.
+				created, createErr := createPrivateRARDirectory(current)
+				if createErr != nil {
+					return createErr
+				}
+				if created {
+					if err := SyncReviewDirectory(parent); err != nil {
+						return err
+					}
+				}
+				_, statErr = os.Lstat(current)
 			}
 		}
 		if statErr != nil {
