@@ -64,6 +64,84 @@ func TestOrchestratorsProjectOrganicRoutingAndNativeAuthority(t *testing.T) {
 	}
 }
 
+func TestOrchestratorsNegotiateNormalWorkIntake(t *testing.T) {
+	const (
+		capabilitiesCommand = "gentle-ai work-capabilities --cwd <repo> --contract gentle-ai.work-capabilities/v1 --json"
+		startCommand        = "gentle-ai work-start --cwd <repo> --contract gentle-ai.work-start/v1 --json"
+	)
+
+	for _, path := range allSDDOrchestratorAssetPaths(t) {
+		content := MustRead(path)
+		section := markdownSection(content, "#### Normal Work Intake Contract (MANDATORY)")
+		if section == "" {
+			t.Fatalf("%s missing Normal Work Intake Contract", path)
+		}
+
+		for _, required := range []string{
+			"Keep normal requests outcome-first",
+			"internal handshake, not a user-facing ceremony",
+			"Negotiate every normal request",
+			capabilitiesCommand,
+			"Never infer support",
+			"effective authenticated advertisement",
+			"exact `gentle-ai.work-capabilities/v1` schema and contract",
+			"binds `agentId` to the current runtime identity",
+			"binds `repositoryRef` to the current repository",
+			"`workRouting.exposure` as `advertised`",
+			"`contracts.start` as exactly `gentle-ai.work-start/v1`",
+			"non-empty `connectorSessionRef`",
+			"Start with outcome only",
+			"exactly two request keys",
+			"`outcome` and `explicitSddRequested`",
+			"through stdin, never command arguments",
+			startCommand,
+			"`true` only when the user's initial request explicitly asks for SDD",
+			"otherwise set it to `false`",
+			"Complexity may justify a proposal; it never silently selects SDD.",
+			"Accept only a typed start result",
+			"exact `gentle-ai.work-status/v1` schema and contract",
+			"advertised start fails, is interrupted, or returns a diagnostic or malformed response",
+			"do not invent a WorkRun, retry, or fall back to legacy execution",
+			"stop once as unavailable or ambiguous because a mutation may have started",
+			"retain the returned `workRunId`, `revision`",
+			"internally for later status and transition calls",
+			"Never expose handshake vocabulary",
+			"route, agent, repository, policy, hash, nonce, issue, pull request, or delivery mechanism",
+			"capability response is dormant, unavailable, unauthenticated, malformed, or unsupported",
+			"do not call `work-start` and never infer support",
+			"legacy direct-inline, delegated-direct, and optional-SDD behavior",
+			"without pretending that a managed WorkRun exists",
+		} {
+			if !strings.Contains(section, required) {
+				t.Fatalf("%s normal work intake contract missing %q", path, required)
+			}
+		}
+
+		if capabilities := strings.Index(section, capabilitiesCommand); capabilities == -1 {
+			t.Fatalf("%s missing exact capabilities command", path)
+		} else if start := strings.Index(section, startCommand); start <= capabilities {
+			t.Fatalf("%s must authenticate capabilities before work-start", path)
+		}
+		for _, forbidden := range []string{
+			"explicit_sdd_intent",
+			"explicitSDDRequested",
+			"--agent",
+			"--route",
+			"--repository",
+			"--policy",
+			"--hash",
+			"--nonce",
+			"--issue",
+			"--pr",
+			"--work-run",
+		} {
+			if strings.Contains(section, forbidden) {
+				t.Fatalf("%s normal work intake exposes unsupported wire vocabulary or flag %q", path, forbidden)
+			}
+		}
+	}
+}
+
 func TestOrchestratorsRejectDelegationBypassLanguage(t *testing.T) {
 	contents := map[string]string{
 		"claude/sdd-orchestrator.md":   MustRead("claude/sdd-orchestrator.md"),
@@ -1938,6 +2016,12 @@ func TestSDDOrchestratorsProjectNativeCheckingWithoutPromptOwnedLenses(t *testin
 			"never select lenses or author PASS",
 			"passive ordinary document or image",
 			"structural readback",
+			"trivial passive documentation-only edit",
+			"structural readback is the complete proportional check",
+			"do not open a separate semantic-verification or heavy review ceremony",
+			"applicable verifier is unavailable",
+			"preserve the typed unavailable result",
+			"never invent PASS, retry indefinitely, or escalate into extra ceremony",
 			"quick check runs once",
 			"Long or very-long work gets one cost/side-effect forecast",
 			"Needs your decision",
