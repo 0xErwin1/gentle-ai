@@ -394,6 +394,56 @@ func prePRBoundaryForRequest(ctx context.Context, repo string, request GateReque
 	return selectPrePRBoundary(ctx, repo, "")
 }
 
+// shellUnsafeBoundaryRefCharacters lists every POSIX shell metacharacter plus
+// the glob and brace-expansion characters. The gate binds boundary selectors as
+// structured fields and launches Git only through an argv, but a bound selector
+// is replayed verbatim into whatever process consumes it (`check-ref-format`,
+// `ls-remote`, `merge-base`, `rev-list`), so a selector that carries `;`,
+// `&&`, `$(...)`, a backtick, a redirection, or a glob would become a composed
+// command the moment any consumer is less careful than the gate. Git ref names
+// never need these characters, so rejecting the whole set costs nothing and
+// fails closed.
+const shellUnsafeBoundaryRefCharacters = "|&;<>()$`\\\"'*?[]{}!"
+
+// errCommandLikeBoundaryRef marks a publication-boundary selector that only
+// means something to a shell or an argument parser, never to Git.
+var errCommandLikeBoundaryRef = errors.New("boundary ref must be a structured ref, not a command")
+
+// validateBoundaryRefSelector hardens the refs that name the PR head and its
+// destination — the "PR commands" threat-matrix boundary. Beyond the ordinary
+// token rules (printable ASCII, no surrounding whitespace, bounded length) it
+// rejects three families that only mean something to a shell or an argument
+// parser:
+//
+//  1. Composed-shell forms, via shellUnsafeBoundaryRefCharacters.
+//     Environment-prefix forms (`env VAR=x refs/heads/main`,
+//     `GIT_DIR=/tmp refs/heads/main`) are already rejected by the token rule
+//     because they contain whitespace.
+//  2. Argument injection: a leading `-` would still be read as an option by a
+//     structured argument list, so `--upload-pack=id` can never be a ref.
+//  3. Selector and traversal forms Git itself forbids in ref names: `..`
+//     escapes the ref namespace and `@{` is a reflog/upstream selector.
+//
+// The rule deliberately keeps `:`, `/`, `.`, `-`, `_`, `+`, `,`, `%` and `@`
+// legal, because it is a shell/argument boundary, not a ref-name policy;
+// `git check-ref-format` still governs branch resolution downstream.
+func validateBoundaryRefSelector(name, value string) error {
+	if value == "" || value != strings.TrimSpace(value) || len(value) > 512 {
+		return fmt.Errorf("%w: %s", errCommandLikeBoundaryRef, name)
+	}
+	for _, character := range value {
+		if character < 0x21 || character > 0x7e {
+			return fmt.Errorf("%w: %s", errCommandLikeBoundaryRef, name)
+		}
+	}
+	if strings.ContainsAny(value, shellUnsafeBoundaryRefCharacters) ||
+		strings.HasPrefix(value, "-") ||
+		strings.Contains(value, "..") || strings.Contains(value, "@{") {
+		return fmt.Errorf("%w: %s", errCommandLikeBoundaryRef, name)
+	}
+	return nil
+}
+
 func selectPrePRBoundary(ctx context.Context, repo, selector string) (PrePRBoundarySelection, error) {
 	selector = strings.TrimSpace(selector)
 	var selection PrePRBoundarySelection
@@ -401,6 +451,9 @@ func selectPrePRBoundary(ctx context.Context, repo, selector string) (PrePRBound
 	if selector != "" {
 		if filepath.IsAbs(selector) {
 			return PrePRBoundarySelection{}, errors.New("explicit pre-PR base selector must not be an absolute path")
+		}
+		if err := validateBoundaryRefSelector("pre-PR base selector", selector); err != nil {
+			return PrePRBoundarySelection{}, err
 		}
 		selection, err = resolveAdvertisedSelector(ctx, repo, selector, PrePRBoundaryExplicit)
 	} else {
@@ -1198,6 +1251,14 @@ func validateGateRequest(request GateRequest) error {
 	}
 	if !validSHA256(request.StoreRevision) || !validSHA256(request.GenesisRevision) || !validSHA256(request.ChainIdentity) || !validSHA256(request.BundleDigest) {
 		return errors.New("gate request requires the exact authoritative store revision, genesis, chain identity, and bundle digest")
+	}
+	// The target base ref is replayed verbatim as a Git argv element before the
+	// pre-PR boundary re-resolution runs, so it is held to the same
+	// structured-ref rule as an explicit boundary selector.
+	if request.Target.BaseRef != "" {
+		if err := validateBoundaryRefSelector("target base ref", request.Target.BaseRef); err != nil {
+			return err
+		}
 	}
 	if request.Gate == GateRelease && request.Release == nil {
 		return errors.New("release gate requires an immutable release request")
