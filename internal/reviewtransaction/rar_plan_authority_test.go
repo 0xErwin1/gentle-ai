@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -378,6 +379,350 @@ func TestRARPlanAuthorityRejectsNonLiveExactRevision(t *testing.T) {
 	}
 }
 
+// TestRARPlanAuthorityBindsEveryVerificationDimension proves the authority is
+// the single place where applicability, cost, mutation effect, and permission
+// effect are frozen together. Omitting any one of them is rejected.
+func TestRARPlanAuthorityBindsEveryVerificationDimension(t *testing.T) {
+	t.Parallel()
+	complete := VerificationEffectProfile{
+		Applicability: VerificationApplicable, Cost: VerificationCostQuick,
+		MutationEffect: VerificationMutationDestructive, PermissionEffect: VerificationPermissionOrdinary,
+	}
+	authority := syntheticPlanAuthority(t, "bind-all", VerificationCostQuick, &complete)
+	if err := authority.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	gate, err := authority.Gate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gate.RequiresImmediateAuthorization || gate.RequiresFrozenPlanConsent {
+		t.Fatalf("quick destructive plan gate = %#v", gate)
+	}
+
+	t.Run("applicable plan cannot omit the effect profile", func(t *testing.T) {
+		t.Parallel()
+		tampered := syntheticPlanAuthority(t, "bind-all", VerificationCostQuick, nil)
+		if err := tampered.Validate(); !errors.Is(err, ErrVerificationDimensionMissing) {
+			t.Fatalf("Validate() error = %v, want ErrVerificationDimensionMissing", err)
+		}
+	})
+	for _, missing := range []struct {
+		name    string
+		profile VerificationEffectProfile
+	}{
+		{"cost", VerificationEffectProfile{
+			Applicability:  VerificationApplicable,
+			MutationEffect: VerificationMutationReadOnly, PermissionEffect: VerificationPermissionOrdinary,
+		}},
+		{"mutation effect", VerificationEffectProfile{
+			Applicability: VerificationApplicable, Cost: VerificationCostQuick,
+			PermissionEffect: VerificationPermissionOrdinary,
+		}},
+		{"permission effect", VerificationEffectProfile{
+			Applicability: VerificationApplicable, Cost: VerificationCostQuick,
+			MutationEffect: VerificationMutationReadOnly,
+		}},
+	} {
+		t.Run("applicable plan cannot omit "+missing.name, func(t *testing.T) {
+			t.Parallel()
+			profile := missing.profile
+			tampered := syntheticPlanAuthority(t, "bind-all", VerificationCostQuick, &profile)
+			if err := tampered.Validate(); !errors.Is(err, ErrVerificationDimensionMissing) {
+				t.Fatalf("Validate() error = %v, want ErrVerificationDimensionMissing", err)
+			}
+		})
+	}
+	t.Run("declared cost must bind the exact obligation costs", func(t *testing.T) {
+		t.Parallel()
+		profile := complete
+		profile.Cost = VerificationCostLong
+		tampered := syntheticPlanAuthority(t, "bind-all", VerificationCostQuick, &profile)
+		if err := tampered.Validate(); err == nil {
+			t.Fatal("Validate() accepted an effect cost that contradicts the frozen obligations")
+		}
+	})
+	t.Run("declared applicability must bind the exact plan", func(t *testing.T) {
+		t.Parallel()
+		profile := complete
+		profile.Applicability = VerificationUnknown
+		tampered := syntheticPlanAuthority(t, "bind-all", VerificationCostQuick, &profile)
+		if err := tampered.Validate(); err == nil {
+			t.Fatal("Validate() accepted an effect applicability that contradicts the frozen plan")
+		}
+	})
+}
+
+// TestNotApplicablePlanAuthorityPlansAndRunsNothing proves a plan that runs
+// nothing neither needs nor may claim effect dimensions.
+func TestNotApplicablePlanAuthorityPlansAndRunsNothing(t *testing.T) {
+	t.Parallel()
+	authority := syntheticNonExecutablePlanAuthority(t, "no-work", VerificationNotApplicable, nil)
+	if err := authority.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if len(authority.Plan.Obligations) != 0 {
+		t.Fatalf("not-applicable plan carried %d obligations", len(authority.Plan.Obligations))
+	}
+	gate, err := authority.Gate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gate.Decision != VerificationDecisionRecordNotApplicable ||
+		gate.RequiresFrozenPlanConsent || gate.RequiresImmediateAuthorization || gate.AllowsAutomaticRun() {
+		t.Fatalf("not-applicable authority gate = %#v", gate)
+	}
+
+	profile := VerificationEffectProfile{
+		Applicability: VerificationNotApplicable, Cost: VerificationCostQuick,
+		MutationEffect: VerificationMutationReadOnly, PermissionEffect: VerificationPermissionOrdinary,
+	}
+	tampered := syntheticNonExecutablePlanAuthority(t, "no-work", VerificationNotApplicable, &profile)
+	if err := tampered.Validate(); err == nil {
+		t.Fatal("Validate() accepted effect dimensions on a plan that runs nothing")
+	}
+}
+
+func TestUnknownPlanAuthorityRecordsEvidenceGap(t *testing.T) {
+	t.Parallel()
+	authority := syntheticNonExecutablePlanAuthority(t, "gap", VerificationUnknown, nil)
+	gate, err := authority.Gate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gate.Decision != VerificationDecisionRecordEvidenceGap ||
+		gate.RequiresFrozenPlanConsent || gate.RequiresImmediateAuthorization || gate.AllowsAutomaticRun() {
+		t.Fatalf("unknown authority gate = %#v", gate)
+	}
+	if _, err := NewVerificationFrozenPlanConsent(authority); err == nil {
+		t.Fatal("NewVerificationFrozenPlanConsent() asked for consent on a recorded evidence gap")
+	}
+}
+
+// TestFrozenPlanConsentResumeReusesTheIdenticalPlan proves one consent is
+// enough: the resume replays the exact frozen plan and never asks again.
+func TestFrozenPlanConsentResumeReusesTheIdenticalPlan(t *testing.T) {
+	t.Parallel()
+	profile := VerificationEffectProfile{
+		Applicability: VerificationApplicable, Cost: VerificationCostLong,
+		MutationEffect: VerificationMutationReadOnly, PermissionEffect: VerificationPermissionOrdinary,
+	}
+	authority := syntheticPlanAuthority(t, "frozen-consent", VerificationCostLong, &profile)
+	gate, err := authority.Gate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gate.Decision != VerificationDecisionFrozenPlanConsent || !gate.RequiresFrozenPlanConsent {
+		t.Fatalf("long read-only authority gate = %#v", gate)
+	}
+	consent, err := NewVerificationFrozenPlanConsent(authority)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if consent.AuthorityRef != authority.AuthorityRef || consent.PlanDigest != authority.Plan.Digest {
+		t.Fatalf("consent = %#v, want the exact frozen plan binding", consent)
+	}
+
+	for range 3 {
+		plan, resumed, err := ResumeFrozenVerificationPlan(authority, consent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(plan, authority.Plan) {
+			t.Fatalf("resume regenerated the plan:\ngot  %#v\nwant %#v", plan, authority.Plan)
+		}
+		if resumed.RequiresFrozenPlanConsent {
+			t.Fatalf("resume asked for consent a second time: %#v", resumed)
+		}
+		if !resumed.AllowsAutomaticRun() {
+			t.Fatalf("resumed gate = %#v, want the consented plan to launch", resumed)
+		}
+	}
+
+	t.Run("consent cannot cross to another frozen plan", func(t *testing.T) {
+		t.Parallel()
+		other := syntheticPlanAuthority(t, "frozen-consent-other", VerificationCostLong, &profile)
+		if _, _, err := ResumeFrozenVerificationPlan(other, consent); !errors.Is(err, ErrVerificationAuthorizationStale) {
+			t.Fatalf("ResumeFrozenVerificationPlan() error = %v, want ErrVerificationAuthorizationStale", err)
+		}
+	})
+	t.Run("consent cannot be forged", func(t *testing.T) {
+		t.Parallel()
+		forged := consent
+		forged.Effects.Cost = VerificationCostQuick
+		if _, _, err := ResumeFrozenVerificationPlan(authority, forged); err == nil {
+			t.Fatal("ResumeFrozenVerificationPlan() accepted a forged consent")
+		}
+	})
+}
+
+// TestVerificationEffectAuthorizationRejectsStaleAndCrossBoundReplay proves an
+// authorization is only ever valid for the exact frozen plan it was issued
+// against, so a replay against any other plan is rejected before any effect.
+func TestVerificationEffectAuthorizationRejectsStaleAndCrossBoundReplay(t *testing.T) {
+	t.Parallel()
+	profile := VerificationEffectProfile{
+		Applicability: VerificationApplicable, Cost: VerificationCostQuick,
+		MutationEffect: VerificationMutationDestructive, PermissionEffect: VerificationPermissionOrdinary,
+	}
+	authority := syntheticPlanAuthority(t, "effect-auth", VerificationCostQuick, &profile)
+	authorization, err := NewVerificationEffectAuthorization(authority, "unit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateVerificationEffectAuthorization(authority, authorization); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("stale authority ref", func(t *testing.T) {
+		t.Parallel()
+		superseded := syntheticPlanAuthority(t, "effect-auth-next", VerificationCostQuick, &profile)
+		if err := ValidateVerificationEffectAuthorization(superseded, authorization); !errors.Is(
+			err, ErrVerificationAuthorizationStale,
+		) {
+			t.Fatalf("ValidateVerificationEffectAuthorization() error = %v, want stale", err)
+		}
+	})
+	t.Run("cross-bound plan digest", func(t *testing.T) {
+		t.Parallel()
+		tampered := authorization
+		tampered.PlanDigest = verificationTestHash("other-plan")
+		if err := ValidateVerificationEffectAuthorization(authority, tampered); err == nil {
+			t.Fatal("ValidateVerificationEffectAuthorization() accepted a cross-bound plan digest")
+		}
+	})
+	t.Run("unplanned obligation", func(t *testing.T) {
+		t.Parallel()
+		if _, err := NewVerificationEffectAuthorization(authority, "absent"); err == nil {
+			t.Fatal("NewVerificationEffectAuthorization() authorized an unplanned obligation")
+		}
+	})
+	t.Run("forged effect profile", func(t *testing.T) {
+		t.Parallel()
+		tampered := authorization
+		tampered.Effects.MutationEffect = VerificationMutationReadOnly
+		if err := ValidateVerificationEffectAuthorization(authority, tampered); err == nil {
+			t.Fatal("ValidateVerificationEffectAuthorization() accepted a downgraded mutation effect")
+		}
+	})
+	t.Run("ordinary read-only plan needs no authorization", func(t *testing.T) {
+		t.Parallel()
+		harmless := VerificationEffectProfile{
+			Applicability: VerificationApplicable, Cost: VerificationCostQuick,
+			MutationEffect: VerificationMutationReadOnly, PermissionEffect: VerificationPermissionOrdinary,
+		}
+		ordinary := syntheticPlanAuthority(t, "effect-auth-ordinary", VerificationCostQuick, &harmless)
+		if _, err := NewVerificationEffectAuthorization(ordinary, "unit"); err == nil {
+			t.Fatal("NewVerificationEffectAuthorization() issued an unnecessary authorization")
+		}
+	})
+}
+
+// syntheticPlanAuthority freezes a pure in-memory applicable plan authority.
+// It needs no live repository because only ResolvePlan revalidates liveness.
+func syntheticPlanAuthority(
+	t *testing.T,
+	name string,
+	cost VerificationCost,
+	effects *VerificationEffectProfile,
+) RARPlanAuthority {
+	t.Helper()
+	registry, applicability := syntheticPlanContracts(t, name, cost)
+	plan, err := BuildVerificationPlan(applicability, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return syntheticAuthorityFor(t, name, applicability, registry, plan, effects)
+}
+
+func syntheticNonExecutablePlanAuthority(
+	t *testing.T,
+	name string,
+	decision VerificationApplicabilityValue,
+	effects *VerificationEffectProfile,
+) RARPlanAuthority {
+	t.Helper()
+	registry, applicability := syntheticPlanContracts(t, name, VerificationCostQuick)
+	applicability.Decision = decision
+	if decision == VerificationNotApplicable {
+		applicability.ContentActivity = VerificationContentPassive
+		applicability.Reasons = []VerificationApplicabilityReason{
+			{Code: VerificationReasonPassiveDocument, Path: "README.md"},
+		}
+	} else {
+		applicability.ContentActivity = VerificationContentUnknown
+		applicability.Reasons = []VerificationApplicabilityReason{
+			{Code: VerificationReasonUnknownContent, Path: "asset.opaque"},
+		}
+	}
+	var err error
+	if applicability.Digest, err = verificationApplicabilityDigest(applicability); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := BuildVerificationPlan(applicability, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return syntheticAuthorityFor(t, name, applicability, registry, plan, effects)
+}
+
+func syntheticPlanContracts(
+	t *testing.T,
+	name string,
+	cost VerificationCost,
+) (VerificationPlanRegistry, VerificationApplicability) {
+	t.Helper()
+	registry, err := NewVerificationPlanRegistry(
+		verificationTestHash(name+"-policy"),
+		[]string{},
+		[]VerificationObligation{{
+			ID: "unit", RequirementRef: verificationTestHash(name + "-requirement"),
+			ArgvRef: verificationTestHash(name + "-argv"), CapabilityRef: "host.exec", Cost: cost,
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applicability := verificationTestApplicability(
+		t,
+		registry,
+		strings.Repeat("b", 40),
+		verificationTestHash(name+"-identity"),
+	)
+	return registry, applicability
+}
+
+func syntheticAuthorityFor(
+	t *testing.T,
+	name string,
+	applicability VerificationApplicability,
+	registry VerificationPlanRegistry,
+	plan VerificationPlan,
+	effects *VerificationEffectProfile,
+) RARPlanAuthority {
+	t.Helper()
+	authority := RARPlanAuthority{
+		Schema:             RARPlanAuthoritySchema,
+		RepositoryIdentity: verificationTestHash(name + "-repository"),
+		Snapshot: Snapshot{
+			Kind: applicability.Subject.Kind, BaseTree: applicability.Subject.BaseTree,
+			CandidateTree: applicability.Subject.CandidateTree,
+			PathsDigest:   applicability.Subject.PathsDigest,
+			Identity:      applicability.Subject.SnapshotIdentity,
+		},
+		Subject:       applicability.Subject,
+		Applicability: applicability,
+		Registry:      registry,
+		Plan:          plan,
+		Effects:       effects,
+	}
+	var err error
+	if authority.AuthorityRef, err = rarPlanAuthorityDigest(authority); err != nil {
+		t.Fatal(err)
+	}
+	return authority
+}
+
 func newRARPlanFixture(t *testing.T, name string) rarPlanFixture {
 	t.Helper()
 	repo := initSnapshotRepo(t)
@@ -471,5 +816,6 @@ func rarPlanAuthoritiesEqual(left, right RARPlanAuthority) bool {
 		left.Subject == right.Subject &&
 		reflect.DeepEqual(left.Applicability, right.Applicability) &&
 		reflect.DeepEqual(left.Registry, right.Registry) &&
-		reflect.DeepEqual(left.Plan, right.Plan)
+		reflect.DeepEqual(left.Plan, right.Plan) &&
+		reflect.DeepEqual(left.Effects, right.Effects)
 }

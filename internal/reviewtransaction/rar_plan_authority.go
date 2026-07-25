@@ -15,22 +15,33 @@ import (
 const (
 	RARPlanAuthoritySchema = "gentle-ai.rar-plan-authority/v1"
 
-	rarPlanAuthorityDigestDomain = "gentle-ai.rar-plan-authority-digest/v1"
+	VerificationFrozenPlanConsentSchema   = "gentle-ai.verification-frozen-plan-consent/v1"
+	VerificationEffectAuthorizationSchema = "gentle-ai.verification-effect-authorization/v1"
+
+	rarPlanAuthorityDigestDomain              = "gentle-ai.rar-plan-authority-digest/v1"
+	verificationFrozenPlanConsentDigestDomain = "gentle-ai.verification-frozen-plan-consent-digest/v1"
+	verificationEffectAuthorizationDomain     = "gentle-ai.verification-effect-authorization-digest/v1"
 )
 
 // RARPlanAuthority is the complete RAR-owned pre-execution plan preimage.
 // AuthorityRef is also the PlanRevisionRef consumed by WorkRun. Repository
 // identity and the full Snapshot are retained because the smaller Subject is
 // intentionally insufficient to revalidate a live workspace by itself.
+//
+// Effects is the single place where all four independent verification
+// dimensions are frozen together. It is a pointer because a plan that runs
+// nothing has no effect to declare; an executable plan must declare all of
+// them, and omission is rejected rather than defaulted to harmless.
 type RARPlanAuthority struct {
-	Schema             string                    `json:"schema"`
-	AuthorityRef       string                    `json:"authority_ref"`
-	RepositoryIdentity string                    `json:"repository_identity"`
-	Snapshot           Snapshot                  `json:"snapshot"`
-	Subject            VerificationSubject       `json:"subject"`
-	Applicability      VerificationApplicability `json:"applicability"`
-	Registry           VerificationPlanRegistry  `json:"registry"`
-	Plan               VerificationPlan          `json:"plan"`
+	Schema             string                     `json:"schema"`
+	AuthorityRef       string                     `json:"authority_ref"`
+	RepositoryIdentity string                     `json:"repository_identity"`
+	Snapshot           Snapshot                   `json:"snapshot"`
+	Subject            VerificationSubject        `json:"subject"`
+	Applicability      VerificationApplicability  `json:"applicability"`
+	Registry           VerificationPlanRegistry   `json:"registry"`
+	Plan               VerificationPlan           `json:"plan"`
+	Effects            *VerificationEffectProfile `json:"effects,omitempty"`
 }
 
 // Validate proves canonical self-consistency. Only ResolvePlan additionally
@@ -59,6 +70,9 @@ func (authority RARPlanAuthority) Validate() error {
 	); err != nil {
 		return fmt.Errorf("validate RAR plan contracts: %w", err)
 	}
+	if err := validatePlanEffectBinding(authority.Plan, authority.Effects); err != nil {
+		return err
+	}
 	want, err := rarPlanAuthorityDigest(authority)
 	if err != nil {
 		return err
@@ -77,6 +91,229 @@ type RARPlanPublication struct {
 	Applicability VerificationApplicability
 	Registry      VerificationPlanRegistry
 	Plan          VerificationPlan
+	Effects       *VerificationEffectProfile
+}
+
+// validatePlanEffectBinding proves the authority binds all four independent
+// dimensions. An executable plan must declare cost, mutation effect, and
+// permission effect, and its declared cost must be the exact fold of the frozen
+// obligations so a "quick" claim cannot hide a long obligation. A plan that
+// runs nothing must not claim effects it can never produce.
+func validatePlanEffectBinding(plan VerificationPlan, effects *VerificationEffectProfile) error {
+	if plan.Applicability != VerificationApplicable {
+		if effects != nil {
+			return errors.New("verification plan that runs nothing cannot bind effect dimensions")
+		}
+		return nil
+	}
+	if effects == nil {
+		return fmt.Errorf("%w: applicable verification plan effect profile", ErrVerificationDimensionMissing)
+	}
+	if err := effects.Validate(); err != nil {
+		return fmt.Errorf("validate RAR plan effect dimensions: %w", err)
+	}
+	if effects.Applicability != plan.Applicability {
+		return errors.New("RAR plan effect profile does not bind the exact plan applicability")
+	}
+	if cost := AggregateVerificationCost(plan.Obligations); effects.Cost != cost {
+		return fmt.Errorf(
+			"RAR plan effect cost %q does not bind the exact obligation cost %q",
+			effects.Cost,
+			cost,
+		)
+	}
+	return nil
+}
+
+// Gate resolves the single proportional decision for this exact frozen plan.
+// A plan that runs nothing is resolved from applicability alone; it declares no
+// cost or effect, so none is invented for it here either.
+func (authority RARPlanAuthority) Gate() (VerificationGate, error) {
+	if err := authority.Validate(); err != nil {
+		return rejectedVerificationGate(), fmt.Errorf("resolve RAR plan gate: %w", err)
+	}
+	switch authority.Plan.Applicability {
+	case VerificationNotApplicable:
+		return VerificationGate{Decision: VerificationDecisionRecordNotApplicable}, nil
+	case VerificationUnknown:
+		return VerificationGate{Decision: VerificationDecisionRecordEvidenceGap}, nil
+	}
+	return ResolveVerificationGate(*authority.Effects)
+}
+
+// VerificationFrozenPlanConsent is the single human consent for an expensive
+// frozen plan. It binds the exact authority and plan so a resume replays that
+// plan instead of regenerating it or asking a second time.
+type VerificationFrozenPlanConsent struct {
+	Schema       string                    `json:"schema"`
+	AuthorityRef string                    `json:"authority_ref"`
+	PlanDigest   string                    `json:"plan_digest"`
+	Effects      VerificationEffectProfile `json:"effects"`
+	ConsentRef   string                    `json:"consent_ref"`
+}
+
+// NewVerificationFrozenPlanConsent records consent only for a plan whose gate
+// actually asks for it. Nothing else can manufacture a consent record.
+func NewVerificationFrozenPlanConsent(authority RARPlanAuthority) (VerificationFrozenPlanConsent, error) {
+	gate, err := authority.Gate()
+	if err != nil {
+		return VerificationFrozenPlanConsent{}, err
+	}
+	if !gate.RequiresFrozenPlanConsent {
+		return VerificationFrozenPlanConsent{}, errors.New("verification plan does not require frozen-plan consent")
+	}
+	consent := VerificationFrozenPlanConsent{
+		Schema:       VerificationFrozenPlanConsentSchema,
+		AuthorityRef: authority.AuthorityRef,
+		PlanDigest:   authority.Plan.Digest,
+		Effects:      *authority.Effects,
+	}
+	if consent.ConsentRef, err = verificationFrozenPlanConsentDigest(consent); err != nil {
+		return VerificationFrozenPlanConsent{}, err
+	}
+	return consent, nil
+}
+
+// ResumeFrozenVerificationPlan returns the identical frozen plan and the gate
+// that remains. Consent is already spent, so it is never asked again; an
+// immediate-authorization obligation deliberately survives the resume because
+// it answers a different question than cost.
+func ResumeFrozenVerificationPlan(
+	authority RARPlanAuthority,
+	consent VerificationFrozenPlanConsent,
+) (VerificationPlan, VerificationGate, error) {
+	gate, err := authority.Gate()
+	if err != nil {
+		return VerificationPlan{}, rejectedVerificationGate(), err
+	}
+	if consent.Schema != VerificationFrozenPlanConsentSchema {
+		return VerificationPlan{}, rejectedVerificationGate(),
+			errors.New("unsupported verification frozen-plan consent schema")
+	}
+	if consent.AuthorityRef != authority.AuthorityRef || consent.PlanDigest != authority.Plan.Digest {
+		return VerificationPlan{}, rejectedVerificationGate(),
+			fmt.Errorf("%w: frozen-plan consent", ErrVerificationAuthorizationStale)
+	}
+	if authority.Effects == nil || consent.Effects != *authority.Effects {
+		return VerificationPlan{}, rejectedVerificationGate(),
+			fmt.Errorf("%w: consent effect dimensions", ErrVerificationAuthorizationStale)
+	}
+	want, err := verificationFrozenPlanConsentDigest(consent)
+	if err != nil {
+		return VerificationPlan{}, rejectedVerificationGate(), err
+	}
+	if consent.ConsentRef != want {
+		return VerificationPlan{}, rejectedVerificationGate(),
+			errors.New("verification frozen-plan consent ref does not match its canonical content")
+	}
+	if !gate.RequiresFrozenPlanConsent {
+		return VerificationPlan{}, rejectedVerificationGate(),
+			errors.New("verification plan does not require frozen-plan consent")
+	}
+	resumed := VerificationGate{
+		Decision:                       VerificationDecisionAutoRun,
+		RequiresImmediateAuthorization: gate.RequiresImmediateAuthorization,
+	}
+	if resumed.RequiresImmediateAuthorization {
+		resumed.Decision = VerificationDecisionImmediateAuthorization
+	}
+	return authority.Plan, resumed, nil
+}
+
+// VerificationEffectAuthorization admits one destructive or
+// permission-sensitive obligation immediately before its effect. It binds the
+// exact frozen plan, so replaying it against any other plan is rejected.
+type VerificationEffectAuthorization struct {
+	Schema           string                    `json:"schema"`
+	AuthorityRef     string                    `json:"authority_ref"`
+	PlanDigest       string                    `json:"plan_digest"`
+	ObligationID     string                    `json:"obligation_id"`
+	Effects          VerificationEffectProfile `json:"effects"`
+	AuthorizationRef string                    `json:"authorization_ref"`
+}
+
+// NewVerificationEffectAuthorization issues authority only for a planned
+// obligation of a plan whose gate demands immediate authorization. An ordinary
+// read-only plan cannot obtain one, so the record itself proves the effect.
+func NewVerificationEffectAuthorization(
+	authority RARPlanAuthority,
+	obligationID string,
+) (VerificationEffectAuthorization, error) {
+	gate, err := authority.Gate()
+	if err != nil {
+		return VerificationEffectAuthorization{}, err
+	}
+	if !gate.RequiresImmediateAuthorization {
+		return VerificationEffectAuthorization{}, errors.New("verification plan does not require immediate authorization")
+	}
+	if !containsSorted(verificationObligationIDs(authority.Plan.Obligations), obligationID) {
+		return VerificationEffectAuthorization{}, fmt.Errorf(
+			"verification obligation %q is not part of the frozen plan",
+			obligationID,
+		)
+	}
+	authorization := VerificationEffectAuthorization{
+		Schema:       VerificationEffectAuthorizationSchema,
+		AuthorityRef: authority.AuthorityRef,
+		PlanDigest:   authority.Plan.Digest,
+		ObligationID: obligationID,
+		Effects:      *authority.Effects,
+	}
+	if authorization.AuthorizationRef, err = verificationEffectAuthorizationDigest(authorization); err != nil {
+		return VerificationEffectAuthorization{}, err
+	}
+	return authorization, nil
+}
+
+// ValidateVerificationEffectAuthorization rejects stale and cross-bound
+// authority before any effect can start. Because the authority ref is content
+// addressed, a superseded plan produces a different ref and the earlier
+// authorization can never be reused against it.
+func ValidateVerificationEffectAuthorization(
+	authority RARPlanAuthority,
+	authorization VerificationEffectAuthorization,
+) error {
+	gate, err := authority.Gate()
+	if err != nil {
+		return err
+	}
+	if !gate.RequiresImmediateAuthorization {
+		return errors.New("verification plan does not require immediate authorization")
+	}
+	if authorization.Schema != VerificationEffectAuthorizationSchema {
+		return errors.New("unsupported verification effect authorization schema")
+	}
+	if authorization.AuthorityRef != authority.AuthorityRef ||
+		authorization.PlanDigest != authority.Plan.Digest {
+		return fmt.Errorf("%w: effect authorization", ErrVerificationAuthorizationStale)
+	}
+	if authority.Effects == nil || authorization.Effects != *authority.Effects {
+		return fmt.Errorf("%w: authorization effect dimensions", ErrVerificationAuthorizationStale)
+	}
+	if !containsSorted(verificationObligationIDs(authority.Plan.Obligations), authorization.ObligationID) {
+		return fmt.Errorf(
+			"verification obligation %q is not part of the frozen plan",
+			authorization.ObligationID,
+		)
+	}
+	want, err := verificationEffectAuthorizationDigest(authorization)
+	if err != nil {
+		return err
+	}
+	if authorization.AuthorizationRef != want {
+		return errors.New("verification effect authorization ref does not match its canonical content")
+	}
+	return nil
+}
+
+func verificationFrozenPlanConsentDigest(consent VerificationFrozenPlanConsent) (string, error) {
+	consent.ConsentRef = ""
+	return verificationContractDigest(verificationFrozenPlanConsentDigestDomain, consent)
+}
+
+func verificationEffectAuthorizationDigest(authorization VerificationEffectAuthorization) (string, error) {
+	authorization.AuthorizationRef = ""
+	return verificationContractDigest(verificationEffectAuthorizationDomain, authorization)
 }
 
 // PublishPlan validates the exact live snapshot, constructs its owner
@@ -106,6 +343,9 @@ func (repository *RARAuthorityRepository) PublishPlan(
 	); err != nil {
 		return RARPlanAuthority{}, fmt.Errorf("validate RAR plan publication: %w", err)
 	}
+	if err := validatePlanEffectBinding(request.Plan, request.Effects); err != nil {
+		return RARPlanAuthority{}, err
+	}
 	if err := repository.validateLivePlanSnapshot(ctx, request.Snapshot); err != nil {
 		return RARPlanAuthority{}, err
 	}
@@ -127,6 +367,7 @@ func (repository *RARAuthorityRepository) PublishPlan(
 		Applicability:      request.Applicability,
 		Registry:           request.Registry,
 		Plan:               request.Plan,
+		Effects:            request.Effects,
 	}
 	authority.AuthorityRef, err = rarPlanAuthorityDigest(authority)
 	if err != nil {

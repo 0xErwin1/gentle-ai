@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -576,6 +577,309 @@ func TestVerificationClassifierExecutableModeIntegration(t *testing.T) {
 	}
 	if got.Decision != VerificationUnknown || got.Reasons[0].Code != VerificationReasonUnknownModeChange {
 		t.Fatalf("executable mode applicability = %#v", got)
+	}
+}
+
+// TestResolveVerificationGateCoversEveryDimensionCrossProduct proves the four
+// dimensions are resolved independently. Cost never implies effect: the table
+// below deliberately contains a quick destructive row and a very-long
+// read-only row that resolve to different gates.
+func TestResolveVerificationGateCoversEveryDimensionCrossProduct(t *testing.T) {
+	t.Parallel()
+	autoRun := VerificationGate{Decision: VerificationDecisionAutoRun}
+	consentOnly := VerificationGate{
+		Decision:                  VerificationDecisionFrozenPlanConsent,
+		RequiresFrozenPlanConsent: true,
+	}
+	authorizationOnly := VerificationGate{
+		Decision:                       VerificationDecisionImmediateAuthorization,
+		RequiresImmediateAuthorization: true,
+	}
+	consentAndAuthorization := VerificationGate{
+		Decision:                       VerificationDecisionImmediateAuthorization,
+		RequiresFrozenPlanConsent:      true,
+		RequiresImmediateAuthorization: true,
+	}
+	gap := VerificationGate{Decision: VerificationDecisionRecordEvidenceGap}
+	notApplicable := VerificationGate{Decision: VerificationDecisionRecordNotApplicable}
+
+	type effectKey struct {
+		cost       VerificationCost
+		mutation   VerificationMutationEffect
+		permission VerificationPermissionEffect
+	}
+	applicableGates := map[effectKey]VerificationGate{
+		{VerificationCostQuick, VerificationMutationReadOnly, VerificationPermissionOrdinary}:        autoRun,
+		{VerificationCostQuick, VerificationMutationReadOnly, VerificationPermissionSensitive}:       authorizationOnly,
+		{VerificationCostQuick, VerificationMutationDestructive, VerificationPermissionOrdinary}:     authorizationOnly,
+		{VerificationCostQuick, VerificationMutationDestructive, VerificationPermissionSensitive}:    authorizationOnly,
+		{VerificationCostLong, VerificationMutationReadOnly, VerificationPermissionOrdinary}:         consentOnly,
+		{VerificationCostLong, VerificationMutationReadOnly, VerificationPermissionSensitive}:        consentAndAuthorization,
+		{VerificationCostLong, VerificationMutationDestructive, VerificationPermissionOrdinary}:      consentAndAuthorization,
+		{VerificationCostLong, VerificationMutationDestructive, VerificationPermissionSensitive}:     consentAndAuthorization,
+		{VerificationCostVeryLong, VerificationMutationReadOnly, VerificationPermissionOrdinary}:     consentOnly,
+		{VerificationCostVeryLong, VerificationMutationReadOnly, VerificationPermissionSensitive}:    consentAndAuthorization,
+		{VerificationCostVeryLong, VerificationMutationDestructive, VerificationPermissionOrdinary}:  consentAndAuthorization,
+		{VerificationCostVeryLong, VerificationMutationDestructive, VerificationPermissionSensitive}: consentAndAuthorization,
+		{VerificationCostUnknown, VerificationMutationReadOnly, VerificationPermissionOrdinary}:      gap,
+		{VerificationCostUnknown, VerificationMutationReadOnly, VerificationPermissionSensitive}:     gap,
+		{VerificationCostUnknown, VerificationMutationDestructive, VerificationPermissionOrdinary}:   gap,
+		{VerificationCostUnknown, VerificationMutationDestructive, VerificationPermissionSensitive}:  gap,
+	}
+
+	applicabilities := []VerificationApplicabilityValue{
+		VerificationApplicable, VerificationNotApplicable, VerificationUnknown,
+	}
+	costs := []VerificationCost{
+		VerificationCostQuick, VerificationCostLong, VerificationCostVeryLong, VerificationCostUnknown,
+	}
+	mutations := []VerificationMutationEffect{
+		VerificationMutationReadOnly, VerificationMutationDestructive,
+	}
+	permissions := []VerificationPermissionEffect{
+		VerificationPermissionOrdinary, VerificationPermissionSensitive,
+	}
+
+	resolved := 0
+	for _, applicability := range applicabilities {
+		for _, cost := range costs {
+			for _, mutation := range mutations {
+				for _, permission := range permissions {
+					profile := VerificationEffectProfile{
+						Applicability: applicability, Cost: cost,
+						MutationEffect: mutation, PermissionEffect: permission,
+					}
+					want := notApplicable
+					switch applicability {
+					case VerificationUnknown:
+						want = gap
+					case VerificationApplicable:
+						known, ok := applicableGates[effectKey{cost, mutation, permission}]
+						if !ok {
+							t.Fatalf("cross-product combination %#v is unhandled by the expectation table", profile)
+						}
+						want = known
+					}
+					got, err := ResolveVerificationGate(profile)
+					if err != nil {
+						t.Fatalf("ResolveVerificationGate(%#v) error = %v", profile, err)
+					}
+					if got != want {
+						t.Fatalf("ResolveVerificationGate(%#v) = %#v, want %#v", profile, got, want)
+					}
+					resolved++
+				}
+			}
+		}
+	}
+	if resolved != len(applicabilities)*len(costs)*len(mutations)*len(permissions) {
+		t.Fatalf("resolved %d cross-product combinations, want %d",
+			resolved, len(applicabilities)*len(costs)*len(mutations)*len(permissions))
+	}
+}
+
+// TestQuickDestructiveVerificationStillRequiresImmediateAuthorization is the
+// headline invariant the old two-dimension model could not express.
+func TestQuickDestructiveVerificationStillRequiresImmediateAuthorization(t *testing.T) {
+	t.Parallel()
+	gate, err := ResolveVerificationGate(VerificationEffectProfile{
+		Applicability: VerificationApplicable, Cost: VerificationCostQuick,
+		MutationEffect: VerificationMutationDestructive, PermissionEffect: VerificationPermissionOrdinary,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gate.RequiresImmediateAuthorization {
+		t.Fatalf("quick destructive gate = %#v, want immediate authorization", gate)
+	}
+	if gate.Decision != VerificationDecisionImmediateAuthorization || gate.AllowsAutomaticRun() {
+		t.Fatalf("quick destructive gate = %#v, want a blocked non-automatic decision", gate)
+	}
+}
+
+func TestVeryLongReadOnlyVerificationNeedsConsentButNotAuthorization(t *testing.T) {
+	t.Parallel()
+	gate, err := ResolveVerificationGate(VerificationEffectProfile{
+		Applicability: VerificationApplicable, Cost: VerificationCostVeryLong,
+		MutationEffect: VerificationMutationReadOnly, PermissionEffect: VerificationPermissionOrdinary,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gate.Decision != VerificationDecisionFrozenPlanConsent ||
+		!gate.RequiresFrozenPlanConsent || gate.RequiresImmediateAuthorization {
+		t.Fatalf("very-long read-only gate = %#v, want consent without immediate authorization", gate)
+	}
+}
+
+func TestQuickReadOnlyOrdinaryVerificationRunsAutomatically(t *testing.T) {
+	t.Parallel()
+	gate, err := ResolveVerificationGate(VerificationEffectProfile{
+		Applicability: VerificationApplicable, Cost: VerificationCostQuick,
+		MutationEffect: VerificationMutationReadOnly, PermissionEffect: VerificationPermissionOrdinary,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !gate.AllowsAutomaticRun() || gate.RequiresFrozenPlanConsent || gate.RequiresImmediateAuthorization {
+		t.Fatalf("quick read-only ordinary gate = %#v, want an automatic run", gate)
+	}
+}
+
+// TestUnknownVerificationDimensionRecordsGapWithoutLoop proves an unknown
+// dimension is an explicit recorded gap, never an invented result and never a
+// retry: repeated resolution is idempotent and asks for nothing.
+func TestUnknownVerificationDimensionRecordsGapWithoutLoop(t *testing.T) {
+	t.Parallel()
+	profiles := []VerificationEffectProfile{
+		{
+			Applicability: VerificationUnknown, Cost: VerificationCostQuick,
+			MutationEffect: VerificationMutationReadOnly, PermissionEffect: VerificationPermissionOrdinary,
+		},
+		{
+			Applicability: VerificationApplicable, Cost: VerificationCostUnknown,
+			MutationEffect: VerificationMutationDestructive, PermissionEffect: VerificationPermissionSensitive,
+		},
+	}
+	for _, profile := range profiles {
+		first, err := ResolveVerificationGate(profile)
+		if err != nil {
+			t.Fatalf("ResolveVerificationGate(%#v) error = %v", profile, err)
+		}
+		if first.Decision != VerificationDecisionRecordEvidenceGap {
+			t.Fatalf("ResolveVerificationGate(%#v) = %#v, want a recorded evidence gap", profile, first)
+		}
+		if first.RequiresFrozenPlanConsent || first.RequiresImmediateAuthorization || first.AllowsAutomaticRun() {
+			t.Fatalf("evidence gap %#v started work or a prompt", first)
+		}
+		second, err := ResolveVerificationGate(profile)
+		if err != nil || second != first {
+			t.Fatalf("repeated resolution diverged: %#v, %#v, %v", first, second, err)
+		}
+	}
+}
+
+func TestNotApplicableVerificationPlansAndRunsNothing(t *testing.T) {
+	t.Parallel()
+	gate, err := ResolveVerificationGate(VerificationEffectProfile{
+		Applicability: VerificationNotApplicable, Cost: VerificationCostVeryLong,
+		MutationEffect: VerificationMutationDestructive, PermissionEffect: VerificationPermissionSensitive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gate.Decision != VerificationDecisionRecordNotApplicable ||
+		gate.RequiresFrozenPlanConsent || gate.RequiresImmediateAuthorization || gate.AllowsAutomaticRun() {
+		t.Fatalf("not-applicable gate = %#v, want a recorded outcome with no work", gate)
+	}
+}
+
+// TestVerificationEffectProfileFailsClosedForMissingOrUnknownDimensions proves
+// a caller that ignores the returned error still cannot run anything.
+func TestVerificationEffectProfileFailsClosedForMissingOrUnknownDimensions(t *testing.T) {
+	t.Parallel()
+	complete := VerificationEffectProfile{
+		Applicability: VerificationApplicable, Cost: VerificationCostQuick,
+		MutationEffect: VerificationMutationReadOnly, PermissionEffect: VerificationPermissionOrdinary,
+	}
+	tests := []struct {
+		name    string
+		mutate  func(VerificationEffectProfile) VerificationEffectProfile
+		missing bool
+	}{
+		{"missing applicability", func(p VerificationEffectProfile) VerificationEffectProfile {
+			p.Applicability = ""
+			return p
+		}, true},
+		{"missing cost", func(p VerificationEffectProfile) VerificationEffectProfile {
+			p.Cost = ""
+			return p
+		}, true},
+		{"missing mutation effect", func(p VerificationEffectProfile) VerificationEffectProfile {
+			p.MutationEffect = ""
+			return p
+		}, true},
+		{"missing permission effect", func(p VerificationEffectProfile) VerificationEffectProfile {
+			p.PermissionEffect = ""
+			return p
+		}, true},
+		{"unsupported applicability", func(p VerificationEffectProfile) VerificationEffectProfile {
+			p.Applicability = "maybe"
+			return p
+		}, false},
+		{"unsupported cost", func(p VerificationEffectProfile) VerificationEffectProfile {
+			p.Cost = "instant"
+			return p
+		}, false},
+		{"unsupported mutation effect", func(p VerificationEffectProfile) VerificationEffectProfile {
+			p.MutationEffect = "harmless"
+			return p
+		}, false},
+		{"unsupported permission effect", func(p VerificationEffectProfile) VerificationEffectProfile {
+			p.PermissionEffect = "trusted"
+			return p
+		}, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			profile := test.mutate(complete)
+			if err := profile.Validate(); err == nil {
+				t.Fatalf("Validate() accepted %#v", profile)
+			} else if test.missing && !errors.Is(err, ErrVerificationDimensionMissing) {
+				t.Fatalf("Validate() error = %v, want ErrVerificationDimensionMissing", err)
+			} else if !test.missing && !errors.Is(err, ErrVerificationDimensionUnsupported) {
+				t.Fatalf("Validate() error = %v, want ErrVerificationDimensionUnsupported", err)
+			}
+			gate, err := ResolveVerificationGate(profile)
+			if err == nil {
+				t.Fatalf("ResolveVerificationGate() accepted %#v", profile)
+			}
+			if gate.AllowsAutomaticRun() || gate.Decision != VerificationDecisionRejected {
+				t.Fatalf("rejected gate = %#v, want a fail-closed rejection", gate)
+			}
+			if !gate.RequiresFrozenPlanConsent || !gate.RequiresImmediateAuthorization {
+				t.Fatalf("rejected gate = %#v, want every gate closed for error-ignoring callers", gate)
+			}
+		})
+	}
+}
+
+func TestAggregateVerificationCostFoldsObligationsWithUnknownDominating(t *testing.T) {
+	t.Parallel()
+	obligation := func(id string, cost VerificationCost) VerificationObligation {
+		return VerificationObligation{
+			ID: id, RequirementRef: verificationTestHash(id + "-requirement"),
+			ArgvRef: verificationTestHash(id + "-argv"), CapabilityRef: "host.exec", Cost: cost,
+		}
+	}
+	tests := []struct {
+		name        string
+		obligations []VerificationObligation
+		want        VerificationCost
+	}{
+		{"empty", nil, VerificationCostUnknown},
+		{"quick only", []VerificationObligation{obligation("a", VerificationCostQuick)}, VerificationCostQuick},
+		{"quick and long", []VerificationObligation{
+			obligation("a", VerificationCostQuick), obligation("b", VerificationCostLong),
+		}, VerificationCostLong},
+		{"long and very long", []VerificationObligation{
+			obligation("a", VerificationCostLong), obligation("b", VerificationCostVeryLong),
+		}, VerificationCostVeryLong},
+		{"unknown dominates", []VerificationObligation{
+			obligation("a", VerificationCostVeryLong), obligation("b", VerificationCostUnknown),
+		}, VerificationCostUnknown},
+		{"unsupported is unknown", []VerificationObligation{
+			obligation("a", VerificationCost("instant")),
+		}, VerificationCostUnknown},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := AggregateVerificationCost(test.obligations); got != test.want {
+				t.Fatalf("AggregateVerificationCost() = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 

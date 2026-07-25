@@ -197,6 +197,186 @@ const (
 	VerificationCostUnknown  VerificationCost = "unknown"
 )
 
+// VerificationMutationEffect answers what a check DOES to the workspace. It is
+// deliberately independent of VerificationCost: a quick check can still destroy
+// state and a very-long check can still be read-only, so folding effect into
+// cost would let a fast destructive check pass as harmless.
+type VerificationMutationEffect string
+
+const (
+	VerificationMutationReadOnly    VerificationMutationEffect = "read_only"
+	VerificationMutationDestructive VerificationMutationEffect = "destructive"
+)
+
+// VerificationPermissionEffect answers what a check REACHES beyond the ordinary
+// sandbox. It varies independently of both cost and mutation effect: a quick
+// read-only check can still need credentials or network authority.
+type VerificationPermissionEffect string
+
+const (
+	VerificationPermissionOrdinary  VerificationPermissionEffect = "ordinary"
+	VerificationPermissionSensitive VerificationPermissionEffect = "permission_sensitive"
+)
+
+// VerificationDecision is the single proportional outcome resolved from the
+// four independent dimensions. Rejected is the fail-closed sentinel; it is
+// never a runnable state.
+type VerificationDecision string
+
+const (
+	VerificationDecisionRejected               VerificationDecision = "rejected"
+	VerificationDecisionRecordNotApplicable    VerificationDecision = "record_not_applicable"
+	VerificationDecisionRecordEvidenceGap      VerificationDecision = "record_evidence_gap"
+	VerificationDecisionAutoRun                VerificationDecision = "auto_run"
+	VerificationDecisionFrozenPlanConsent      VerificationDecision = "frozen_plan_consent"
+	VerificationDecisionImmediateAuthorization VerificationDecision = "immediate_authorization"
+)
+
+var (
+	// ErrVerificationDimensionMissing marks an omitted dimension. Omission is
+	// never read as a harmless default, because the whole point of modelling
+	// effect separately is that "unstated" and "read-only" are not the same.
+	ErrVerificationDimensionMissing = errors.New("verification effect dimension is missing")
+	// ErrVerificationDimensionUnsupported marks a value outside its closed set.
+	ErrVerificationDimensionUnsupported = errors.New("verification effect dimension is unsupported")
+	// ErrVerificationAuthorizationStale marks consent or authorization that does
+	// not bind the exact frozen plan it is presented against.
+	ErrVerificationAuthorizationStale = errors.New("verification authorization does not bind the exact frozen plan")
+)
+
+// VerificationEffectProfile carries the four independent verification
+// dimensions. Every dimension is a closed set and none of them is derivable
+// from another, so all four must be stated explicitly.
+type VerificationEffectProfile struct {
+	Applicability    VerificationApplicabilityValue `json:"applicability"`
+	Cost             VerificationCost               `json:"cost"`
+	MutationEffect   VerificationMutationEffect     `json:"mutation_effect"`
+	PermissionEffect VerificationPermissionEffect   `json:"permission_effect"`
+}
+
+func (profile VerificationEffectProfile) Validate() error {
+	switch profile.Applicability {
+	case VerificationApplicable, VerificationNotApplicable, VerificationUnknown:
+	case "":
+		return fmt.Errorf("%w: applicability", ErrVerificationDimensionMissing)
+	default:
+		return fmt.Errorf("%w: applicability %q", ErrVerificationDimensionUnsupported, profile.Applicability)
+	}
+	switch profile.Cost {
+	case VerificationCostQuick, VerificationCostLong, VerificationCostVeryLong, VerificationCostUnknown:
+	case "":
+		return fmt.Errorf("%w: cost", ErrVerificationDimensionMissing)
+	default:
+		return fmt.Errorf("%w: cost %q", ErrVerificationDimensionUnsupported, profile.Cost)
+	}
+	switch profile.MutationEffect {
+	case VerificationMutationReadOnly, VerificationMutationDestructive:
+	case "":
+		return fmt.Errorf("%w: mutation effect", ErrVerificationDimensionMissing)
+	default:
+		return fmt.Errorf("%w: mutation effect %q", ErrVerificationDimensionUnsupported, profile.MutationEffect)
+	}
+	switch profile.PermissionEffect {
+	case VerificationPermissionOrdinary, VerificationPermissionSensitive:
+	case "":
+		return fmt.Errorf("%w: permission effect", ErrVerificationDimensionMissing)
+	default:
+		return fmt.Errorf("%w: permission effect %q", ErrVerificationDimensionUnsupported, profile.PermissionEffect)
+	}
+	return nil
+}
+
+// VerificationGate is the one resolved decision plus the two gates it implies.
+// Cost consent and effect authorization are separate obligations because they
+// answer different questions: consent pays for time, authorization admits an
+// effect. A long destructive check owes both.
+type VerificationGate struct {
+	Decision                       VerificationDecision `json:"decision"`
+	RequiresFrozenPlanConsent      bool                 `json:"requires_frozen_plan_consent"`
+	RequiresImmediateAuthorization bool                 `json:"requires_immediate_authorization"`
+}
+
+// AllowsAutomaticRun is true only for the single unattended combination:
+// applicable, quick, read-only, and ordinary.
+func (gate VerificationGate) AllowsAutomaticRun() bool {
+	return gate.Decision == VerificationDecisionAutoRun &&
+		!gate.RequiresFrozenPlanConsent && !gate.RequiresImmediateAuthorization
+}
+
+// rejectedVerificationGate closes every gate as well as the decision so a
+// caller that ignores the returned error still cannot start any work, whichever
+// field it happens to inspect.
+func rejectedVerificationGate() VerificationGate {
+	return VerificationGate{
+		Decision:                       VerificationDecisionRejected,
+		RequiresFrozenPlanConsent:      true,
+		RequiresImmediateAuthorization: true,
+	}
+}
+
+// ResolveVerificationGate is total over the closed cross product of the four
+// dimensions. Precedence is deliberate: a plan that runs nothing cannot be
+// promoted into work by an effect, and an unknown dimension is recorded as an
+// evidence gap rather than guessed, so it also runs nothing and needs no
+// authorization. Only once work is genuinely planned do effect and cost apply,
+// and effect then overrides cost: a quick destructive check is still gated.
+func ResolveVerificationGate(profile VerificationEffectProfile) (VerificationGate, error) {
+	if err := profile.Validate(); err != nil {
+		return rejectedVerificationGate(), fmt.Errorf("resolve verification gate: %w", err)
+	}
+	switch profile.Applicability {
+	case VerificationNotApplicable:
+		return VerificationGate{Decision: VerificationDecisionRecordNotApplicable}, nil
+	case VerificationUnknown:
+		return VerificationGate{Decision: VerificationDecisionRecordEvidenceGap}, nil
+	}
+	if profile.Cost == VerificationCostUnknown {
+		return VerificationGate{Decision: VerificationDecisionRecordEvidenceGap}, nil
+	}
+	expensive := profile.Cost == VerificationCostLong || profile.Cost == VerificationCostVeryLong
+	sensitive := profile.MutationEffect == VerificationMutationDestructive ||
+		profile.PermissionEffect == VerificationPermissionSensitive
+	switch {
+	case sensitive:
+		return VerificationGate{
+			Decision:                       VerificationDecisionImmediateAuthorization,
+			RequiresFrozenPlanConsent:      expensive,
+			RequiresImmediateAuthorization: true,
+		}, nil
+	case expensive:
+		return VerificationGate{
+			Decision:                  VerificationDecisionFrozenPlanConsent,
+			RequiresFrozenPlanConsent: true,
+		}, nil
+	default:
+		return VerificationGate{Decision: VerificationDecisionAutoRun}, nil
+	}
+}
+
+// AggregateVerificationCost folds obligation costs into the single plan-level
+// cost dimension. Unknown dominates every other value, and an empty or
+// unsupported input is unknown too, because an unmeasurable obligation makes
+// the plan an evidence gap rather than a cheap check.
+func AggregateVerificationCost(obligations []VerificationObligation) VerificationCost {
+	if len(obligations) == 0 {
+		return VerificationCostUnknown
+	}
+	rank := map[VerificationCost]int{
+		VerificationCostQuick: 1, VerificationCostLong: 2, VerificationCostVeryLong: 3,
+	}
+	highest := VerificationCostQuick
+	for _, obligation := range obligations {
+		level, known := rank[obligation.Cost]
+		if !known {
+			return VerificationCostUnknown
+		}
+		if level > rank[highest] {
+			highest = obligation.Cost
+		}
+	}
+	return highest
+}
+
 // VerificationObligation contains refs, never shell text. ArgvRef identifies
 // an immutable literal-argv value; RequirementRef identifies the exact check
 // obligation. CapabilityRef names the provider capability needed to execute it.
