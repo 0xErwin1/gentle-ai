@@ -10,11 +10,18 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
+// LargeChangeLines is a review-composition boundary, not a tier input. Volume
+// deliberately no longer selects a review tier: a five-line authorization edit
+// outranks a five-thousand-line mechanical rename, so only evidence escalates.
 const LargeChangeLines = 400
 const MaxCorrectionChangedLines = 200
 
+// processBoundaryScanByteLimit caps every content readback this classifier
+// performs, so neither process-boundary detection nor passive-content proof can
+// be turned into an unbounded repository read by a large candidate.
 var processBoundaryScanByteLimit int64 = 8 << 20
 
 var semanticSourceExtensions = map[string]struct{}{
@@ -58,12 +65,15 @@ type DiffStat struct {
 type RiskReasonCode string
 
 const (
-	RiskReasonHotPath             RiskReasonCode = "hot_path"
-	RiskReasonServiceToken        RiskReasonCode = "service_token"
-	RiskReasonShellSource         RiskReasonCode = "shell_source"
-	RiskReasonProcessBoundary     RiskReasonCode = "process_boundary"
-	RiskReasonProcessScanLimit    RiskReasonCode = "process_scan_limit"
-	RiskReasonExecutableMode      RiskReasonCode = "executable_mode"
+	RiskReasonHotPath          RiskReasonCode = "hot_path"
+	RiskReasonServiceToken     RiskReasonCode = "service_token"
+	RiskReasonShellSource      RiskReasonCode = "shell_source"
+	RiskReasonProcessBoundary  RiskReasonCode = "process_boundary"
+	RiskReasonProcessScanLimit RiskReasonCode = "process_scan_limit"
+	RiskReasonExecutableMode   RiskReasonCode = "executable_mode"
+	// RiskReasonLargeChange is never derived anymore; size stopped selecting a
+	// tier. It stays declared so authorities frozen under the old size rule can
+	// still be read back and replayed by the delivery gates.
 	RiskReasonLargeChange         RiskReasonCode = "large_change"
 	RiskReasonNonExecutableOnly   RiskReasonCode = "non_executable_only"
 	RiskReasonConfigurationChange RiskReasonCode = "configuration_change"
@@ -86,15 +96,19 @@ type RiskAssessment struct {
 	Level        RiskLevel    `json:"level"`
 	ChangedLines int          `json:"changed_lines"`
 	Reasons      []RiskReason `json:"reasons"`
-	DominantLens string       `json:"-"`
+	// DominantLens is no longer derived: it only ever existed to steer the
+	// size-based large-documentation exception. It stays declared so authorities
+	// frozen before that exception was removed still replay unchanged.
+	DominantLens string `json:"-"`
 }
 
 type RiskInput struct {
-	Stats                        []DiffStat
-	Signals                      []RiskSignal
-	OnlyNonExecutableChanges     bool
-	OnlyPureDocumentationChanges bool
-	TouchesConfiguration         bool
+	Stats   []DiffStat
+	Signals []RiskSignal
+	// OnlyPassiveContentChanges is true only when every authored path is a
+	// passive document proven by its frozen bytes and mode, never by extension.
+	OnlyPassiveContentChanges bool
+	TouchesConfiguration      bool
 }
 
 // SelectReviewLenses is the single RAR-owned 0/1/4 lens policy. The CLI only
@@ -133,12 +147,15 @@ func reviewFocusLens(focus string) (string, bool) {
 	return lens, ok
 }
 
-// ClassifyRisk evaluates semantic high risk before the size-based documentation
-// exception, then the remaining large, low, and medium tiers.
-// Model, provider, profile, and effort are intentionally not classifier inputs.
+// ClassifyRisk selects the review tier from evidence alone. Focused 4R requires
+// a named risk signal or a hot-path touch; structural readback with zero
+// reviewers requires proof that every authored byte is passive; everything else
+// is one consolidated review. Change volume, file count, model, provider,
+// profile, and effort are intentionally not classifier inputs.
 func ClassifyRisk(input RiskInput) (RiskLevel, error) {
-	changedLines, err := CountChangedLines(input.Stats)
-	if err != nil {
+	// Counting still runs to reject malformed or duplicated stats before any
+	// tier is published; its result deliberately does not reach the decision.
+	if _, err := CountChangedLines(input.Stats); err != nil {
 		return "", err
 	}
 	for _, signal := range input.Signals {
@@ -150,16 +167,25 @@ func ClassifyRisk(input RiskInput) (RiskLevel, error) {
 	if hasHighSignal(input.Signals) || touchesHotPath(input.Stats) {
 		return RiskHigh, nil
 	}
-	if changedLines > LargeChangeLines {
-		if isLargePureDocumentation(input, changedLines) {
-			return RiskMedium, nil
-		}
-		return RiskHigh, nil
-	}
-	if input.OnlyNonExecutableChanges && !input.TouchesConfiguration {
+	if input.OnlyPassiveContentChanges && !input.TouchesConfiguration {
 		return RiskLow, nil
 	}
 	return RiskMedium, nil
+}
+
+// riskLevelFromReasons mirrors the tier a consumer derives from the published
+// reasons alone. Keeping both derivations equal is what lets the consent prompt
+// tell a human why a tier was chosen without re-deriving review authority.
+func riskLevelFromReasons(reasons []RiskReason) RiskLevel {
+	for _, reason := range reasons {
+		if reason.Signal != "" {
+			return RiskHigh
+		}
+	}
+	if len(reasons) == 1 && reasons[0].Code == RiskReasonNonExecutableOnly {
+		return RiskLow
+	}
+	return RiskMedium
 }
 
 // CountChangedLines is the cross-adapter counting contract. Callers provide the
@@ -217,7 +243,11 @@ func (builder SnapshotBuilder) AssessSnapshotRisk(ctx context.Context, snapshot 
 	if err != nil {
 		return RiskAssessment{}, err
 	}
-	reasons := deriveSnapshotRiskReasons(stats, changedLines)
+	activeContent, err := builder.activePassiveContentPaths(ctx, snapshot, stats)
+	if err != nil {
+		return RiskAssessment{}, err
+	}
+	reasons := deriveSnapshotRiskReasons(stats, activeContent)
 	processReasons, err := builder.processBoundaryRiskReasons(ctx, snapshot, stats)
 	if err != nil {
 		return RiskAssessment{}, err
@@ -226,40 +256,144 @@ func (builder SnapshotBuilder) AssessSnapshotRisk(ctx context.Context, snapshot 
 		reasons = removeFallbackRiskReasons(reasons)
 		reasons = canonicalRiskReasons(append(reasons, processReasons...))
 	}
-	onlyNonExecutable := true
-	onlyPureDocumentation := true
+	onlyPassiveContent := true
 	touchesConfiguration := false
 	for _, stat := range stats {
 		if isGeneratedGoldenPath(stat.Path) {
 			continue
 		}
-		onlyNonExecutable = onlyNonExecutable && isLowRiskNonExecutableStat(stat)
-		onlyPureDocumentation = onlyPureDocumentation && isPureDocumentationReviewStat(stat)
+		_, contradicted := activeContent[stat.Path]
+		onlyPassiveContent = onlyPassiveContent && !contradicted && isPassiveContentCandidateStat(stat)
 		touchesConfiguration = touchesConfiguration || isConfigurationReviewPath(stat.Path)
 	}
-	if onlyPureDocumentation {
-		onlyPureDocumentation, err = builder.hasOnlyStaticMDX(ctx, snapshot, stats)
-		if err != nil {
-			return RiskAssessment{}, err
-		}
-	}
-	input := RiskInput{
-		Stats: stats, OnlyNonExecutableChanges: onlyNonExecutable,
-		OnlyPureDocumentationChanges: onlyPureDocumentation, TouchesConfiguration: touchesConfiguration,
-	}
-	if isLargePureDocumentation(input, changedLines) {
-		reasons = canonicalRiskReasons(append(reasons, RiskReason{Code: RiskReasonNonExecutableOnly}))
-	}
-	input.Signals = riskSignalsFromReasons(reasons)
-	risk, err := ClassifyRisk(input)
+	risk, err := ClassifyRisk(RiskInput{
+		Stats: stats, Signals: riskSignalsFromReasons(reasons),
+		OnlyPassiveContentChanges: onlyPassiveContent, TouchesConfiguration: touchesConfiguration,
+	})
 	if err != nil {
 		return RiskAssessment{}, err
 	}
-	dominantLens := ""
-	if risk == RiskMedium && isLargePureDocumentation(input, changedLines) {
-		dominantLens = LensReadability
+	// Fail closed on an unexplained tier: a decision whose own reasons imply a
+	// different tier could never be shown honestly to the user who has to
+	// consent to its cost.
+	if explained := riskLevelFromReasons(reasons); explained != risk {
+		return RiskAssessment{}, fmt.Errorf("review tier %q is not explained by its reasons (%q)", risk, explained)
 	}
-	return RiskAssessment{Level: risk, ChangedLines: changedLines, Reasons: reasons, DominantLens: dominantLens}, nil
+	return RiskAssessment{Level: risk, ChangedLines: changedLines, Reasons: reasons}, nil
+}
+
+// activePassiveContentPaths reads the frozen bytes behind every passive
+// candidate and returns the paths whose content contradicts the passive shape
+// their extension advertises. Sizes are probed before any blob is read so tier
+// classification stays bounded; an over-budget candidate set is never proven
+// passive and therefore fails closed into the higher tier.
+func (builder SnapshotBuilder) activePassiveContentPaths(ctx context.Context, snapshot Snapshot, stats []DiffStat) (map[string]struct{}, error) {
+	candidates := make([]DiffStat, 0, len(stats))
+	paths := make([]string, 0, len(stats))
+	for _, stat := range stats {
+		if isGeneratedGoldenPath(stat.Path) || !isPassiveContentCandidateStat(stat) {
+			continue
+		}
+		candidates = append(candidates, stat)
+		paths = append(paths, stat.Path)
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	repo, err := builder.repositoryRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	scanned := int64(0)
+	for _, tree := range []string{snapshot.BaseTree, snapshot.CandidateTree} {
+		blobs, err := treeBlobSizes(ctx, repo, tree, paths)
+		if err != nil {
+			return nil, err
+		}
+		for _, blob := range blobs {
+			scanned += blob.size
+		}
+	}
+	active := make(map[string]struct{}, len(candidates))
+	if scanned > processBoundaryScanByteLimit {
+		for _, logicalPath := range paths {
+			active[logicalPath] = struct{}{}
+		}
+		return active, nil
+	}
+	for _, stat := range candidates {
+		for _, version := range []struct {
+			tree string
+			mode string
+		}{{tree: snapshot.BaseTree, mode: stat.OldMode}, {tree: snapshot.CandidateTree, mode: stat.NewMode}} {
+			if version.mode == "" || version.mode == "000000" {
+				continue
+			}
+			content, err := runGit(ctx, repo, nil, nil, "cat-file", "blob", version.tree+":"+stat.Path)
+			if err != nil {
+				return nil, fmt.Errorf("read immutable passive candidate %q: %w", stat.Path, err)
+			}
+			if !isPassiveDocumentContent(stat.Path, content) {
+				active[stat.Path] = struct{}{}
+				break
+			}
+		}
+	}
+	return active, nil
+}
+
+// isPassiveDocumentContent proves a document is inert from its own bytes.
+// Extensions only nominate a candidate; an interpreter directive, runtime MDX
+// syntax, or bytes that are not decodable text all withdraw the nomination.
+func isPassiveDocumentContent(logicalPath string, content []byte) bool {
+	if bytes.IndexByte(content, 0) >= 0 || !utf8.Valid(content) {
+		return false
+	}
+	if hasInterpreterDirective(content) {
+		return false
+	}
+	if strings.EqualFold(path.Ext(logicalPath), ".mdx") {
+		return isStaticMDXDocument(content)
+	}
+	return true
+}
+
+// hasInterpreterDirective reports the shebang that makes a file executable no
+// matter which passive extension it wears.
+func hasInterpreterDirective(content []byte) bool {
+	return bytes.HasPrefix(bytes.TrimPrefix(content, []byte("\uFEFF")), []byte("#!"))
+}
+
+type treeBlob struct {
+	path string
+	size int64
+}
+
+// treeBlobSizes lists the blob sizes of the given logical paths inside one
+// immutable tree, so a caller can refuse an oversized scan before reading it.
+func treeBlobSizes(ctx context.Context, repo, tree string, paths []string) ([]treeBlob, error) {
+	args := []string{"ls-tree", "-r", "-l", "-z", tree, "--"}
+	for _, logicalPath := range paths {
+		args = append(args, literalPathspec(logicalPath))
+	}
+	entries, err := runGit(ctx, repo, nil, nil, args...)
+	if err != nil {
+		return nil, err
+	}
+	blobs := make([]treeBlob, 0, len(paths))
+	for _, entry := range bytes.Split(entries, []byte{0}) {
+		tab := bytes.IndexByte(entry, '\t')
+		fields := strings.Fields(string(entry[:max(tab, 0)]))
+		if tab < 0 || len(fields) != 4 {
+			continue
+		}
+		size, parseErr := strconv.ParseInt(fields[3], 10, 64)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse source blob size: %w", parseErr)
+		}
+		blobs = append(blobs, treeBlob{path: string(entry[tab+1:]), size: size})
+	}
+	return blobs, nil
 }
 
 func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, snapshot Snapshot, stats []DiffStat) ([]RiskReason, error) {
@@ -269,7 +403,7 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 	}
 	paths := make([]string, 0, len(stats))
 	for _, stat := range stats {
-		if isSemanticRiskEligible(stat) {
+		if isContentScanEligible(stat) {
 			paths = append(paths, stat.Path)
 		}
 	}
@@ -278,36 +412,28 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 	}
 	reasons, scanned := make([]RiskReason, 0), int64(0)
 	for _, tree := range []string{snapshot.BaseTree, snapshot.CandidateTree} {
-		args := []string{"ls-tree", "-r", "-l", "-z", tree, "--"}
-		for _, logicalPath := range paths {
-			args = append(args, literalPathspec(logicalPath))
-		}
-		entries, err := runGit(ctx, repo, nil, nil, args...)
+		blobs, err := treeBlobSizes(ctx, repo, tree, paths)
 		if err != nil {
 			return nil, err
 		}
-		treePaths := make([]string, 0, len(paths))
-		for _, entry := range bytes.Split(entries, []byte{0}) {
-			tab := bytes.IndexByte(entry, '\t')
-			fields := strings.Fields(string(entry[:max(tab, 0)]))
-			if tab < 0 || len(fields) != 4 {
-				continue
-			}
-			size, parseErr := strconv.ParseInt(fields[3], 10, 64)
-			if parseErr != nil {
-				return nil, fmt.Errorf("parse source blob size: %w", parseErr)
-			}
-			logicalPath := string(entry[tab+1:])
-			scanned += size
+		treePaths := make([]string, 0, len(blobs))
+		for _, blob := range blobs {
+			scanned += blob.size
 			if scanned > processBoundaryScanByteLimit {
-				return []RiskReason{{Code: RiskReasonProcessScanLimit, Signal: SignalShellProcess, Path: logicalPath}}, nil
+				return []RiskReason{{Code: RiskReasonProcessScanLimit, Signal: SignalShellProcess, Path: blob.path}}, nil
 			}
-			treePaths = append(treePaths, logicalPath)
+			treePaths = append(treePaths, blob.path)
 		}
 		if len(treePaths) == 0 {
 			continue
 		}
-		args = []string{"grep", "-I", "-l", "-z", "-i", "-E", `(^|[^[:alnum:]_])(subprocess|exec)([^[:alnum:]_]|$)`, tree, "--"}
+		// An interpreter directive and a spawn construct are both process
+		// boundaries the file's extension can neither promise nor deny, so the
+		// same bounded pass looks for either inside the frozen bytes.
+		args := []string{
+			"grep", "-I", "-l", "-z", "-i", "-E",
+			`(^#!)|((^|[^[:alnum:]_])(subprocess|execute_process|exec)([^[:alnum:]_]|$))`, tree, "--",
+		}
 		for _, logicalPath := range treePaths {
 			args = append(args, literalPathspec(logicalPath))
 		}
@@ -339,12 +465,8 @@ func removeFallbackRiskReasons(reasons []RiskReason) []RiskReason {
 	return filtered
 }
 
-func isLargePureDocumentation(input RiskInput, changedLines int) bool {
-	return changedLines > LargeChangeLines && input.OnlyPureDocumentationChanges && !input.TouchesConfiguration
-}
-
 func deriveSemanticRiskSignals(stats []DiffStat) []RiskSignal {
-	reasons := deriveSnapshotRiskReasons(stats, 0)
+	reasons := deriveSnapshotRiskReasons(stats, nil)
 	signals := make([]RiskSignal, 0, len(reasons))
 	for _, reason := range reasons {
 		switch reason.Code {
@@ -355,7 +477,11 @@ func deriveSemanticRiskSignals(stats []DiffStat) []RiskSignal {
 	return canonicalRiskSignals(signals)
 }
 
-func deriveSnapshotRiskReasons(stats []DiffStat, changedLines int) []RiskReason {
+// deriveSnapshotRiskReasons names the evidence behind a tier. activeContent
+// carries the paths whose frozen bytes contradicted their passive extension, so
+// the fallback reason reports what the content proved rather than what the file
+// name suggested.
+func deriveSnapshotRiskReasons(stats []DiffStat, activeContent map[string]struct{}) []RiskReason {
 	candidates := make([]RiskReason, 0, len(stats)+1)
 	for _, stat := range stats {
 		if isSemanticRiskEligible(stat) {
@@ -378,11 +504,8 @@ func deriveSnapshotRiskReasons(stats []DiffStat, changedLines int) []RiskReason 
 			}
 		}
 	}
-	if changedLines > LargeChangeLines {
-		candidates = append(candidates, RiskReason{Code: RiskReasonLargeChange})
-	}
 	if len(candidates) == 0 {
-		candidates = append(candidates, fallbackRiskReason(stats))
+		candidates = append(candidates, fallbackRiskReason(stats, activeContent))
 	}
 	return canonicalRiskReasons(candidates)
 }
@@ -416,7 +539,7 @@ func executableModeChanged(oldMode, newMode string) bool {
 	return oldErr == nil && newErr == nil && oldValue&0o111 != newValue&0o111
 }
 
-func fallbackRiskReason(stats []DiffStat) RiskReason {
+func fallbackRiskReason(stats []DiffStat, activeContent map[string]struct{}) RiskReason {
 	for _, stat := range stats {
 		if isGeneratedGoldenPath(stat.Path) {
 			continue
@@ -424,7 +547,7 @@ func fallbackRiskReason(stats []DiffStat) RiskReason {
 		if isConfigurationReviewPath(stat.Path) {
 			return RiskReason{Code: RiskReasonConfigurationChange, Path: stat.Path}
 		}
-		if !isLowRiskNonExecutableStat(stat) {
+		if _, contradicted := activeContent[stat.Path]; contradicted || !isPassiveContentCandidateStat(stat) {
 			return RiskReason{Code: RiskReasonExecutableChange, Path: stat.Path}
 		}
 	}
@@ -483,25 +606,56 @@ func canonicalRiskSignals(signals []RiskSignal) []RiskSignal {
 	return canonical
 }
 
+// isSemanticRiskEligible gates the signals derived from a path NAME. Names are
+// weak evidence, so documentation, fixtures, and README-shaped files are kept
+// out: a file called service-token must never escalate on its name alone.
 func isSemanticRiskEligible(stat DiffStat) bool {
-	if stat.Additions+stat.Deletions == 0 || stat.Binary || stat.ModeOnly || stat.Generated || isGeneratedGoldenPath(stat.Path) {
+	if !isInspectableStat(stat) || hasExcludedRiskSegment(stat.Path) {
 		return false
 	}
-	segments := strings.Split(stat.Path, "/")
-	for _, segment := range segments {
-		lower := asciiLower(segment)
-		if lower == "docs" || lower == "testdata" || lower == "fixture" || lower == "fixtures" || lower == "__fixtures__" {
-			return false
-		}
-	}
-	base := asciiLower(path.Base(stat.Path))
-	if strings.HasPrefix(base, "readme") {
+	if strings.HasPrefix(asciiLower(path.Base(stat.Path)), "readme") {
 		return false
 	}
 	if _, ok := semanticSourceExtensions[asciiLower(path.Ext(stat.Path))]; ok {
 		return true
 	}
 	return isConfigurationReviewPath(stat.Path)
+}
+
+// isContentScanEligible gates the signals derived from the frozen BYTES. It is
+// deliberately more permissive than name eligibility: a README-prefixed shell
+// script and an inert-looking dependency or build manifest still get read,
+// because only content can prove or disprove that a file executes.
+func isContentScanEligible(stat DiffStat) bool {
+	if !isInspectableStat(stat) || hasExcludedRiskSegment(stat.Path) {
+		return false
+	}
+	extension := asciiLower(path.Ext(stat.Path))
+	if _, ok := semanticSourceExtensions[extension]; ok {
+		return true
+	}
+	if extension == ".txt" {
+		return true
+	}
+	return isConfigurationReviewPath(stat.Path)
+}
+
+// isInspectableStat rejects entries whose bytes cannot carry authored evidence.
+func isInspectableStat(stat DiffStat) bool {
+	return stat.Additions+stat.Deletions != 0 && !stat.Binary && !stat.ModeOnly &&
+		!stat.Generated && !isGeneratedGoldenPath(stat.Path)
+}
+
+// hasExcludedRiskSegment keeps documentation and test material outside source
+// inspection; their bytes describe behavior instead of performing it.
+func hasExcludedRiskSegment(logicalPath string) bool {
+	for _, segment := range strings.Split(logicalPath, "/") {
+		switch asciiLower(segment) {
+		case "docs", "testdata", "fixture", "fixtures", "__fixtures__":
+			return true
+		}
+	}
+	return false
 }
 
 func stripSemanticPathExtension(segment string) string {
@@ -539,13 +693,6 @@ func (builder SnapshotBuilder) ChangedLines(ctx context.Context, snapshot Snapsh
 	return CountChangedLines(stats)
 }
 
-func isLowRiskNonExecutableStat(stat DiffStat) bool {
-	if stat.Binary || stat.ModeOnly || !isRegularNonExecutableGitMode(stat.OldMode) || !isRegularNonExecutableGitMode(stat.NewMode) {
-		return false
-	}
-	return isNonExecutableReviewPath(stat.Path)
-}
-
 func isRegularNonExecutableGitMode(mode string) bool {
 	switch mode {
 	case "", "000000", "100644":
@@ -555,12 +702,13 @@ func isRegularNonExecutableGitMode(mode string) bool {
 	}
 }
 
-func isNonExecutableReviewPath(logicalPath string) bool {
-	extension := strings.ToLower(path.Ext(logicalPath))
-	switch extension {
+// isPassiveDocumentExtension nominates the extensions whose content can still be
+// passive. Membership is only a nomination: mode and bytes decide the tier.
+func isPassiveDocumentExtension(logicalPath string) bool {
+	switch strings.ToLower(path.Ext(logicalPath)) {
 	case ".md":
 		return !isOperationalMarkdownPath(logicalPath)
-	case ".rst", ".adoc", ".png", ".jpg", ".jpeg", ".gif":
+	case ".mdx", ".rst", ".adoc", ".png", ".jpg", ".jpeg", ".gif":
 		return true
 	default:
 		return false
@@ -599,11 +747,11 @@ func isOperationalMarkdownPath(logicalPath string) bool {
 	return false
 }
 
-func isPureDocumentationReviewPath(logicalPath string) bool {
-	if (path.Ext(strings.ToLower(logicalPath)) != ".mdx" && !isNonExecutableReviewPath(logicalPath)) || isConfigurationReviewPath(logicalPath) {
-		return false
-	}
-	if strings.EqualFold(path.Ext(logicalPath), ".svg") {
+// isPassiveContentCandidatePath nominates a path for tier 0. Operational,
+// agent-facing, and configuration material is excluded because those documents
+// are consumed as instructions rather than read as prose.
+func isPassiveContentCandidatePath(logicalPath string) bool {
+	if !isPassiveDocumentExtension(logicalPath) || isConfigurationReviewPath(logicalPath) {
 		return false
 	}
 	if strings.HasPrefix(strings.ToLower(logicalPath), "internal/assets/") {
@@ -633,40 +781,14 @@ func isPureDocumentationReviewPath(logicalPath string) bool {
 	return true
 }
 
-func isPureDocumentationReviewStat(stat DiffStat) bool {
-	if !isPureDocumentationReviewPath(stat.Path) {
+// isPassiveContentCandidateStat adds the mode half of the tier-0 nomination: a
+// binary blob, a symlink, a gitlink, a mode-only entry, or an executable bit
+// cannot be reviewed as prose whatever its extension claims.
+func isPassiveContentCandidateStat(stat DiffStat) bool {
+	if stat.Binary || stat.ModeOnly || !isPassiveContentCandidatePath(stat.Path) {
 		return false
 	}
-	for _, mode := range []string{stat.OldMode, stat.NewMode} {
-		if mode != "" && mode != "000000" && mode != "100644" {
-			return false
-		}
-	}
-	return true
-}
-
-func (builder SnapshotBuilder) hasOnlyStaticMDX(ctx context.Context, snapshot Snapshot, stats []DiffStat) (bool, error) {
-	for _, stat := range stats {
-		if !strings.EqualFold(path.Ext(stat.Path), ".mdx") {
-			continue
-		}
-		for _, version := range []struct {
-			tree string
-			mode string
-		}{{tree: snapshot.BaseTree, mode: stat.OldMode}, {tree: snapshot.CandidateTree, mode: stat.NewMode}} {
-			if version.mode == "" || version.mode == "000000" {
-				continue
-			}
-			content, err := runGit(ctx, builder.Repo, nil, nil, "cat-file", "blob", version.tree+":"+stat.Path)
-			if err != nil {
-				return false, fmt.Errorf("read immutable MDX %q: %w", stat.Path, err)
-			}
-			if !isStaticMDXDocument(content) {
-				return false, nil
-			}
-		}
-	}
-	return true, nil
+	return isRegularNonExecutableGitMode(stat.OldMode) && isRegularNonExecutableGitMode(stat.NewMode)
 }
 
 func isStaticMDXDocument(content []byte) bool {

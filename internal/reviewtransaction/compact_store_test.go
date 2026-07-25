@@ -127,7 +127,11 @@ func TestCompactStoreReloadsLegacyV2ReceiptWithoutRewritingItsIdentity(t *testin
 	}
 }
 
-func TestCompactStartResumesPrePolicyLargeDocumentationAuthority(t *testing.T) {
+// TestCompactStartNeverNarrowsAPrePolicyLargeDocumentationAuthority pins the
+// evidence-driven tier for a large documentation candidate: it is structural
+// readback with zero reviewers, and an authority frozen under the old size rule
+// with the full 4R set is blocked rather than silently narrowed to it.
+func TestCompactStartNeverNarrowsAPrePolicyLargeDocumentationAuthority(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "docs/guide.md", strings.Repeat("line\n", 401))
 	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
@@ -140,10 +144,14 @@ func TestCompactStartResumesPrePolicyLargeDocumentationAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	lenses, err := SelectReviewLenses(assessment, "risk")
+	if err != nil || assessment.Level != RiskLow || len(lenses) != 0 {
+		t.Fatalf("large documentation assessment = %q with lenses %v, %v; want low with zero reviewers", assessment.Level, lenses, err)
+	}
 	requested, err := NewCompactState(Start{
 		LineageID: "pre-policy-large-doc", Mode: ModeOrdinaryBounded, Generation: 1,
 		Snapshot: snapshot, PolicyHash: hash("d"), RiskLevel: assessment.Level,
-		SelectedLenses: []string{assessment.DominantLens}, OriginalChangedLines: &assessment.ChangedLines,
+		SelectedLenses: lenses, OriginalChangedLines: &assessment.ChangedLines,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +178,7 @@ func TestCompactStartResumesPrePolicyLargeDocumentationAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Action != CompactStartResumed || result.Record.State.RiskLevel != RiskHigh ||
+	if result.Action != CompactStartBlocked || result.Record.State.RiskLevel != RiskHigh ||
 		!equalStrings(result.Record.State.SelectedLenses, existing.SelectedLenses) {
 		t.Fatalf("pre-policy resume = action %q, risk %q, lenses %v", result.Action, result.Record.State.RiskLevel, result.Record.State.SelectedLenses)
 	}

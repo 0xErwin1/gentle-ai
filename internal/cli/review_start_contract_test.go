@@ -133,11 +133,17 @@ func TestNegotiatedReviewStartRiskReasonsUseOnlyImmutableSnapshotEvidence(t *tes
 	})
 }
 
-func TestNegotiatedReviewStartRoutesLargePureDocumentationToReadability(t *testing.T) {
+// TestNegotiatedReviewStartRoutesLargeCandidatesByEvidence pins the negotiated
+// START projection of the evidence-driven tiers: passive documentation is
+// structural readback with zero reviewers at any size, everything else without
+// named evidence is one consolidated review, and only genuine risk evidence
+// reaches focused 4R. The former 401-line escalation is deliberately gone.
+func TestNegotiatedReviewStartRoutesLargeCandidatesByEvidence(t *testing.T) {
 	full4R := []string{
 		reviewtransaction.LensRisk, reviewtransaction.LensResilience,
 		reviewtransaction.LensReadability, reviewtransaction.LensReliability,
 	}
+	consolidated := []string{reviewtransaction.LensReliability}
 	tests := []struct {
 		name       string
 		path       string
@@ -148,18 +154,18 @@ func TestNegotiatedReviewStartRoutesLargePureDocumentationToReadability(t *testi
 		wantLenses []string
 	}{
 		{name: "400 pure doc lines remain low", path: "docs/guide.md", lines: 400, wantRisk: reviewtransaction.RiskLow, wantLenses: []string{}},
-		{name: "401 pure doc lines select readability", path: "docs/guide.md", lines: 401, focus: "risk", wantRisk: reviewtransaction.RiskMedium, wantLenses: []string{reviewtransaction.LensReadability}},
-		{name: "401 static MDX lines select readability", path: "book/chapter.mdx", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: []string{reviewtransaction.LensReadability}},
-		{name: "active MDX keeps high routing", path: "book/chapter.mdx", lines: 400, prefix: "import Widget from './widget'\n", wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
-		{name: "SVG keeps high routing", path: "docs/diagram.svg", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
+		{name: "401 pure doc lines remain low", path: "docs/guide.md", lines: 401, focus: "risk", wantRisk: reviewtransaction.RiskLow, wantLenses: []string{}},
+		{name: "401 static MDX lines remain low", path: "book/chapter.mdx", lines: 401, wantRisk: reviewtransaction.RiskLow, wantLenses: []string{}},
+		{name: "active MDX content escalates out of tier 0", path: "book/chapter.mdx", lines: 400, prefix: "import Widget from './widget'\n", wantRisk: reviewtransaction.RiskMedium, wantLenses: consolidated},
+		{name: "SVG is one consolidated review", path: "docs/diagram.svg", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: consolidated},
 		{name: "semantic doc path keeps high routing", path: "docs/security/guide.md", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
-		{name: "prompt markdown keeps normal large routing", path: "prompts/system.md", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
-		{name: "compound prompt filename keeps normal large routing", path: "docs/system-prompt.md", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
-		{name: "agent rules keep normal large routing", path: "AGENTS.md", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
-		{name: "workflow markdown keeps normal large routing", path: ".github/workflows/release.md", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
-		{name: "runtime docs keep normal large routing", path: "runtime/README.md", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
-		{name: "configuration keeps normal large routing", path: "config/settings.yaml", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
-		{name: "code keeps normal large routing", path: "internal/app.go", lines: 401, wantRisk: reviewtransaction.RiskHigh, wantLenses: full4R},
+		{name: "prompt markdown is one consolidated review", path: "prompts/system.md", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: consolidated},
+		{name: "compound prompt filename is one consolidated review", path: "docs/system-prompt.md", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: consolidated},
+		{name: "agent rules are one consolidated review", path: "AGENTS.md", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: consolidated},
+		{name: "workflow markdown is one consolidated review", path: ".github/workflows/release.md", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: consolidated},
+		{name: "runtime docs are one consolidated review", path: "runtime/README.md", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: consolidated},
+		{name: "configuration is one consolidated review", path: "config/settings.yaml", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: consolidated},
+		{name: "code is one consolidated review", path: "internal/app.go", lines: 401, wantRisk: reviewtransaction.RiskMedium, wantLenses: consolidated},
 	}
 	for index, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -186,10 +192,10 @@ func TestNegotiatedReviewStartRoutesLargePureDocumentationToReadability(t *testi
 	}
 
 	repo := initReviewCLIRepo(t)
-	writeReviewStartCandidate(t, repo, "docs/guide.md", strings.Repeat("line\n", 401), 0o644)
+	writeReviewStartCandidate(t, repo, "internal/app.go", strings.Repeat("line\n", 401), 0o644)
 	err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "large-doc-invalid-focus", "--focus", "unknown"}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "unsupported review focus") {
-		t.Fatalf("large pure documentation invalid focus error = %v", err)
+		t.Fatalf("consolidated review invalid focus error = %v", err)
 	}
 }
 
