@@ -90,7 +90,7 @@ Native review commands MUST remain local and machine-readable. They MUST NOT exp
 
 ### Requirement: User-controlled safe disablement
 
-Global user mode and an uncommitted clone-local Git-common-dir override MUST combine with `off` winning. A repository MAY disable RDD but MUST NOT force it on; another clone MUST NOT inherit it. `gentle-ai review mode enable|disable|status` and diagnostics MUST report source/effective mode. Disabled mode MUST reject starts, freeze active authority read-only, preserve tests/hooks/CI, and report `disabled/unmanaged` delivery under repository policy. Re-enable MUST affect only future candidates, never retroactively approve work or restore retired paths.
+Global user mode and an uncommitted clone-local Git-common-dir override MUST combine with `off` winning. A repository MAY disable RDD but MUST NOT force it on; another clone MUST NOT inherit it. `gentle-ai review mode enable|disable|status` and diagnostics MUST report source/effective mode. Disabled mode MUST reject starts, freeze active authority read-only, preserve tests/hooks/CI, and report `disabled/unmanaged` delivery under repository policy. Re-enable MUST permit a fresh frozen review of the current candidate whatever its authorship time, so work produced during the disabled window is recoverable without being discarded; re-enable MUST NOT carry forward, inherit, or reinstate any approval or receipt for work that was never reviewed, and MUST NOT restore retired paths. An approval MUST be content-bound: a receipt approves only the exact frozen candidate bytes and policy it was issued for, so a receipt issued before or during the disabled window can never govern different bytes.
 
 #### Scenario: Effective mode is asymmetric and observable
 
@@ -104,4 +104,18 @@ Global user mode and an uncommitted clone-local Git-common-dir override MUST com
 - GIVEN candidates created before and after re-enable
 - WHEN review or delivery is attempted
 - THEN active authority stays read-only and disabled work stays unmanaged
-- AND only later candidates may start RDD while tests, hooks, and CI remain active
+- AND unreviewed work never reports an approval while tests, hooks, and CI remain active
+
+#### Scenario: Re-enable recovers work authored while disabled
+
+- GIVEN RDD was disabled, the user kept working, and RDD is re-enabled
+- WHEN a review starts on the current candidate
+- THEN the candidate is frozen and reviewed now regardless of when it was authored
+- AND it reaches a fresh receipt content-bound to exactly those frozen bytes
+
+#### Scenario: Re-enable never inherits an approval across the disabled window
+
+- GIVEN a receipt issued before the disabled window and bytes changed while disabled
+- WHEN delivery or verification is attempted after re-enable
+- THEN the earlier receipt does not govern the changed bytes because it binds other content
+- AND a candidate that has not completed a review yields no receipt at all

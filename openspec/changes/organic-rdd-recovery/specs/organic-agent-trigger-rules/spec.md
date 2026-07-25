@@ -49,6 +49,21 @@ When the user kill switch disables new RDD starts, implementation routing MUST r
 - THEN it reports RDD as disabled without retry
 - AND no WorkRun or remote fallback is activated
 
+### Requirement: The RDD kill switch is discoverable from installed guidance
+Installed routing guidance MUST make the user-owned RDD kill switch discoverable for every configured agent by naming its exact command surface `gentle-ai review mode enable|disable|status` and stating that `status` is read-only and reports the deciding source plus the effective mode. The guidance MUST state that when the user asks to stop using RDD the agent runs `disable` instead of arguing, working around it, or proposing alternatives first. The guidance MUST state that the agent MUST NOT enable RDD on the user's behalf unless the user explicitly asks.
+
+#### Scenario: User asks to stop using RDD
+- GIVEN a configured agent whose installed routing guidance is present
+- WHEN the user asks to stop using review-driven development
+- THEN the agent runs `gentle-ai review mode disable` without arguing or proposing an alternative first
+- AND it keeps implementing through direct, delegated, or optional SDD
+
+#### Scenario: Routing guidance is installed
+- GIVEN any supported adapter configured with or without the optional SDD component
+- WHEN its routing guidance is generated
+- THEN it names `gentle-ai review mode enable|disable|status` and the read-only nature of `status`
+- AND it forbids enabling RDD on the user's behalf without an explicit request
+
 ## MODIFIED Requirements
 
 ### Requirement: Capability manifests describe facts, not outcomes
