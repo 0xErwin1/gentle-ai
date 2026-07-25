@@ -404,8 +404,15 @@ These profile files apply to whole CLI sessions: `codex --profile <name> "<promp
 
 | Profile (CLI) | Model | `reasoning_effort` (spawn_agent) | SDD phases |
 |---------------|-------|----------------------------------|------------|
+<<<<<<< HEAD
 | `sdd-strong` | `gpt-5.6-sol` | `medium` | explore, propose, design, verify, judge |
 | `sdd-mid` | `gpt-5.6-terra` | `medium` | apply, fix-agent |
 | `sdd-cheap` | `gpt-5.6-luna` | `high` | spec, tasks, archive, onboard |
+=======
+| `sdd-strong` | `gpt-5.6-terra` | `medium` | propose, design, verify, judge |
+| `sdd-spec` | `gpt-5.6-terra` | `medium` | spec |
+| `sdd-mid` | `gpt-5.6-terra` | `medium` | apply, tasks, fix-agent |
+| `sdd-cheap` | `gpt-5.6-luna` | `low` | explore, archive, onboard |
+>>>>>>> 5615f456 (test(codex): update golden fixtures and picker tests for sdd-spec profile (#1820))
 
 <!-- /gentle-ai:sdd-orchestrator -->
