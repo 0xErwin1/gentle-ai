@@ -223,6 +223,19 @@ func TestCodexTierGroups_AllPhasesAssigned(t *testing.T) {
 		t.Errorf("sdd-tasks phase mapped to %q, want sdd-mid", got)
 	}
 
+	// Verify exact sdd-cheap phase set
+	var cheapPhases []string
+	for _, g := range tiers {
+		if g.Profile == "sdd-cheap" {
+			cheapPhases = g.Phases
+			break
+		}
+	}
+	wantCheap := []string{"sdd-explore", "sdd-archive", "sdd-onboard"}
+	if !reflect.DeepEqual(cheapPhases, wantCheap) {
+		t.Errorf("sdd-cheap phases = %v, want %v", cheapPhases, wantCheap)
+	}
+
 	// Verify sdd-spec effort across presets
 	if got := model.CodexModelPresetRecommended()["sdd-spec"]; got != model.CodexEffortHigh {
 		t.Errorf("Recommended preset sdd-spec effort = %q, want %q", got, model.CodexEffortHigh)
