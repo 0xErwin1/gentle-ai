@@ -534,6 +534,7 @@ on:
   push:
     tags:
       - "v*"
+      - "!v*-*"
 permissions:
   contents: read
 concurrency:
