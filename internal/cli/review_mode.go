@@ -374,12 +374,17 @@ func reviewConsentPrompt(assessment reviewtransaction.RiskAssessment) string {
 		reviewConsentAnswers, reviewConsentOffPath, reviewConsentQuestion)
 }
 
+// reviewConsentMediumReason is the single wording source for the tier-1
+// reason: the interactive consent prompt speaks it and the machine-readable
+// START result relays it verbatim, so the two surfaces cannot drift.
+const reviewConsentMediumReason = "this change is not purely passive documentation, so it gets one consolidated review."
+
 // reviewConsentReason states why this candidate is reviewed, in the user's own
 // terms. Tier 1 is one consolidated review; tier 2 names the evidence that
 // triggered the deeper review, so its extra cost is never unexplained.
 func reviewConsentReason(assessment reviewtransaction.RiskAssessment) string {
 	if assessment.Level != reviewtransaction.RiskHigh {
-		return "this change is not purely passive documentation, so it gets one consolidated review."
+		return reviewConsentMediumReason
 	}
 	evidence := reviewConsentEvidence(assessment.Reasons)
 	if evidence == "" {
@@ -400,6 +405,23 @@ func reviewConsentEvidence(reasons []reviewtransaction.RiskReason) string {
 	default:
 		// Naming every path would bury the decision the user has to make.
 		return fmt.Sprintf("%s, %s, and %d more", phrases[0], phrases[1], len(phrases)-2)
+	}
+}
+
+// reviewConsentRiskEvidence projects an already-classified assessment into
+// the risk_evidence phrases a non-interactive START result carries. It is an
+// output-only projection of facts the start already computed: tier 2 names
+// the triggering evidence, tier 1 relays the exact consolidated-review reason
+// the consent prompt speaks, and tier 0 stays nil so the omitempty field is
+// absent rather than empty-string noise.
+func reviewConsentRiskEvidence(assessment reviewtransaction.RiskAssessment) []string {
+	switch assessment.Level {
+	case reviewtransaction.RiskHigh:
+		return reviewConsentEvidencePhrases(assessment.Reasons)
+	case reviewtransaction.RiskMedium:
+		return []string{reviewConsentMediumReason}
+	default:
+		return nil
 	}
 }
 

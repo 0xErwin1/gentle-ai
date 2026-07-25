@@ -1050,7 +1050,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		// froze exactly the snapshot that was assessed above; a blocked start
 		// reporting a different frozen authority keeps the previous shape.
 		if authority.InitialSnapshot.Identity == snapshot.Identity {
-			legacyResult.RiskEvidence = reviewConsentEvidencePhrases(assessment.Reasons)
+			legacyResult.RiskEvidence = reviewConsentRiskEvidence(assessment)
 			if legacyResult.ChangedFiles == 0 && target.Kind == reviewtransaction.TargetCurrentChanges {
 				legacyResult.Hint = reviewStartEmptyCandidateHint
 			}

@@ -686,7 +686,7 @@ func TestNegotiatedReviewStartPreservesLegacyPayloadAndAuthorityIdentity(t *test
 	sortStrings(gotFields)
 	wantFields := []string{
 		"action", "changed_files", "changed_lines", "correction_budget", "lens_bindings", "lenses_required",
-		"lineage_id", "operation", "projection", "risk_level", "selected_lenses", "state", "target_identity",
+		"lineage_id", "operation", "projection", "risk_evidence", "risk_level", "selected_lenses", "state", "target_identity",
 	}
 	if !reflect.DeepEqual(gotFields, wantFields) {
 		t.Fatalf("unnegotiated START fields = %v, want %v\n%s", gotFields, wantFields, legacyOutput.String())

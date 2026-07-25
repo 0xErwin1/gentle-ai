@@ -66,6 +66,52 @@ func TestReviewFacadeStartHighRiskCarriesConsentEvidencePhrases(t *testing.T) {
 	}
 }
 
+// TestReviewFacadeStartMediumRiskCarriesConsentReason proves a tier-1 start
+// relays the same consolidated-review reason the interactive consent prompt
+// speaks, so a headless agent can explain WHY a review is wanted. Issue #1822:
+// the phrase must come from the one shared wording source, never a second copy.
+func TestReviewFacadeStartMediumRiskCarriesConsentReason(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "view.go"), []byte("package view\n\nconst label = \"candidate\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "evidence-medium"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	if err := json.Unmarshal(output.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+	if started.RiskLevel != reviewtransaction.RiskMedium {
+		t.Fatalf("plain-source start risk = %q, want medium", started.RiskLevel)
+	}
+	if len(started.RiskEvidence) != 1 {
+		t.Fatalf("medium start risk_evidence = %#v, want exactly the one consolidated-review reason", started.RiskEvidence)
+	}
+	// Prompt parity: the JSON reason must be byte-identical to the Why line the
+	// interactive consent prompt speaks for the same assessed candidate.
+	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+	intended, err := builder.DiscoverIntendedUntracked(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := builder.Build(context.Background(), reviewtransaction.Target{
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: intended,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assessment, err := builder.AssessSnapshotRisk(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := reviewConsentPrompt(assessment)
+	if !strings.Contains(prompt, "\nWhy: "+started.RiskEvidence[0]+"\n") {
+		t.Fatalf("interactive consent prompt %q does not speak the start reason %q", prompt, started.RiskEvidence[0])
+	}
+}
+
 // TestReviewFacadeStartDocsOnlyOmitsRiskEvidence proves a tier-0 start carries
 // no risk_evidence key at all: absence, not empty-string noise.
 func TestReviewFacadeStartDocsOnlyOmitsRiskEvidence(t *testing.T) {
