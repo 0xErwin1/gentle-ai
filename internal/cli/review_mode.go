@@ -227,10 +227,13 @@ func reviewModeLabel(mode reviewtransaction.RDDMode) string {
 	return string(mode)
 }
 
-// ErrReviewDeclinedForCandidate reports that the user declined the review for
-// this candidate only. Nothing is persisted, so the next candidate is reviewed
-// normally without asking again.
-var ErrReviewDeclinedForCandidate = errors.New("review declined for this candidate")
+// errReviewDeclinedForCandidate signals internally that the user declined the
+// review for this candidate only. Nothing is persisted, so the next candidate
+// asks again. It never surfaces as a command error: START reports the decline
+// as a typed consent outcome, because a deliberate user choice is not a
+// failure — the same principle that keeps disabled/unmanaged delivery a
+// reported disposition rather than a veto.
+var errReviewDeclinedForCandidate = errors.New("review declined for this candidate")
 
 const (
 	reviewConsentAnswerRun    = "1"
@@ -254,6 +257,10 @@ const (
 		"Run 'gentle-ai review mode disable' to turn reviews off, or 'gentle-ai review mode status' to see the current setting."
 	reviewConsentUnreadableNotice = "Gentle AI could not read an answer, so it reviewed this change and will ask again next time."
 	reviewConsentUnknownNotice    = "Gentle AI did not recognize that answer, so it reviewed this change and will ask again next time."
+
+	// reviewConsentDeclinedNotice confirms a decline in the user's own terms.
+	// It goes to the console stream, never stdout: stdout stays pure JSON.
+	reviewConsentDeclinedNotice = "Review skipped for this candidate at your request. It will be offered again on the next change."
 )
 
 // reviewConsentSession is the console the one-time question uses.
@@ -337,7 +344,8 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 	case reviewConsentAnswerRun:
 		return recordReviewConsentAsked(ctx, repo)
 	case reviewConsentAnswerNotNow:
-		return fmt.Errorf("%w: the next candidate is asked again", ErrReviewDeclinedForCandidate)
+		_, _ = fmt.Fprintln(console.Output, reviewConsentDeclinedNotice)
+		return fmt.Errorf("%w: the next candidate is asked again", errReviewDeclinedForCandidate)
 	default:
 		_, _ = fmt.Fprintln(console.Output, reviewConsentUnknownNotice)
 		return nil

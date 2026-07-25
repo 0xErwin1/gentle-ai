@@ -50,7 +50,20 @@ type ReviewFacadeStartResult struct {
 	// Hint is a purely informational recovery pointer; it never changes START
 	// behavior and is absent outside its one scoped case.
 	Hint string `json:"hint,omitempty"`
+	// Consent reports a user consent choice as a typed outcome instead of an
+	// error, in the same additive omitted-by-default spirit as RiskEvidence,
+	// Hint, and the gate result's Delivery: every start that already shipped
+	// keeps its exact field set, and only a candidate the user declined
+	// carries the extra token. A decline is a reported choice, never a veto.
+	Consent string `json:"consent,omitempty"`
 }
+
+// ReviewStartConsentDeclinedThisCandidate reports that the user answered the
+// one-time consent question with "Not now, just this once": this candidate was
+// not reviewed, nothing was persisted, and the next candidate asks again. The
+// token mirrors the snake_case delivery vocabulary (receipt_governed,
+// unmanaged) so agents can distinguish this outcome from every other start.
+const ReviewStartConsentDeclinedThisCandidate = "declined_this_candidate"
 
 // reviewStartEmptyCandidateHint makes the committed-work recovery path
 // discoverable where it is needed: a clean worktree yields an empty candidate,
@@ -964,6 +977,13 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	// name the real reason. Nothing has been persisted yet, so refusing here
 	// leaves no authority behind.
 	if err := authorizeReviewStart(ctx, root, assessment); err != nil {
+		if !negotiated && errors.Is(err, errReviewDeclinedForCandidate) {
+			// A decline is a reported user choice, not a failure. Nothing has
+			// been persisted and no latch was recorded, so the next candidate
+			// simply asks again; the typed consent token lets an agent tell
+			// "user declined this work unit" apart from every other outcome.
+			return encodeReviewJSON(stdout, reviewFacadeStartDeclinedResult(snapshot, assessment))
+		}
 		return err
 	}
 	explicitLineage := strings.TrimSpace(*lineage) != ""
@@ -1235,6 +1255,22 @@ func validateReviewTransitionSelectorFlagCounts(args []string, operation string)
 		}
 	}
 	return nil
+}
+
+// reviewFacadeStartDeclinedResult projects a consent decline as a typed START
+// outcome. No authority exists, so it carries only facts this start already
+// computed about the frozen candidate: no lineage, no state, no lenses, and a
+// zero correction budget, because no review was selected and nothing persists.
+func reviewFacadeStartDeclinedResult(snapshot reviewtransaction.Snapshot, assessment reviewtransaction.RiskAssessment) ReviewFacadeStartResult {
+	return ReviewFacadeStartResult{
+		Operation: "review/start", Action: "declined",
+		SelectedLenses: []string{}, LensBindings: []ReviewFacadeLensBinding{},
+		Projection:     facadeProjection(snapshot.Projection),
+		TargetIdentity: snapshot.Identity, ChangedFiles: len(snapshot.Paths),
+		ChangedLines: assessment.ChangedLines, RiskLevel: assessment.Level,
+		RiskEvidence: reviewConsentRiskEvidence(assessment),
+		Consent:      ReviewStartConsentDeclinedThisCandidate,
+	}
 }
 
 func reviewFacadeStartResultFor(action reviewtransaction.CompactStartAction, lensesRequired bool, authority reviewtransaction.CompactState) ReviewFacadeStartResult {

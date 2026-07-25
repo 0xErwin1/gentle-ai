@@ -350,9 +350,10 @@ func TestReviewConsentUnrecognizedAnswerReviewsAndAsksAgain(t *testing.T) {
 	assertReviewConsentPrompt(t, console.String(), "one consolidated review")
 }
 
-// TestReviewConsentNotNowIsNotPersisted pins the asymmetric latch: declining
-// applies to this candidate only, because today's README says nothing about
-// tomorrow's migration.
+// TestReviewConsentNotNowIsNotPersisted pins the asymmetric latch and the
+// non-error decline: "not now" is a reported user choice, never a failure.
+// Declining applies to this candidate only, because today's README says
+// nothing about tomorrow's migration.
 func TestReviewConsentNotNowIsNotPersisted(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
@@ -360,11 +361,27 @@ func TestReviewConsentNotNowIsNotPersisted(t *testing.T) {
 	writeReviewStartCandidate(t, repo, "internal/app.go", "package internal\n", 0o644)
 
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-not-now"}, &output); !errors.Is(err, ErrReviewDeclinedForCandidate) {
-		t.Fatalf("not-now start error = %v, want ErrReviewDeclinedForCandidate", err)
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-not-now"}, &output); err != nil {
+		t.Fatalf("declining the review must not be an error: %v\n%s", err, output.String())
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, output.Bytes(), &started)
+	if started.Consent != ReviewStartConsentDeclinedThisCandidate {
+		t.Fatalf("declined START consent = %q, want %q", started.Consent, ReviewStartConsentDeclinedThisCandidate)
+	}
+	if started.LensesRequired || len(started.SelectedLenses) != 0 || started.LineageID != "" {
+		t.Fatalf("declined START still selected a review: %#v", started)
+	}
+	if !strings.Contains(console.String(), "at your request") {
+		t.Fatalf("declining did not report the skip on the console:\n%s", console.String())
 	}
 	if asked, err := reviewtransaction.RDDConsentAsked(context.Background(), repo); err != nil || asked {
 		t.Fatalf("not-now recorded the answer: asked=%v err=%v", asked, err)
+	}
+	if store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "review-not-now"); err == nil {
+		if _, loadErr := store.Load(); !errors.Is(loadErr, os.ErrNotExist) {
+			t.Fatalf("declined START persisted review authority: %v", loadErr)
+		}
 	}
 
 	var modeOutput bytes.Buffer
@@ -378,10 +395,15 @@ func TestReviewConsentNotNowIsNotPersisted(t *testing.T) {
 	console.Reset()
 	writeReviewStartCandidate(t, repo, "internal/second.go", "package internal\n", 0o644)
 	output.Reset()
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-not-now-second"}, &output); !errors.Is(err, ErrReviewDeclinedForCandidate) {
-		t.Fatalf("the next candidate after not-now must ask again, got: %v\n%s", err, output.String())
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-not-now-second"}, &output); err != nil {
+		t.Fatalf("the next candidate after not-now must ask again without an error: %v\n%s", err, output.String())
 	}
 	assertReviewConsentPrompt(t, console.String(), "one consolidated review")
+	var second ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, output.Bytes(), &second)
+	if second.Consent != ReviewStartConsentDeclinedThisCandidate {
+		t.Fatalf("second declined START consent = %q, want %q", second.Consent, ReviewStartConsentDeclinedThisCandidate)
+	}
 }
 
 func TestNonInteractiveReviewStartNeverBlocksOnConsent(t *testing.T) {
