@@ -1534,14 +1534,14 @@ func TestRealAgentOrganicJourneys(t *testing.T) {
 			lineage := "organic-real-" + test.role
 
 			script := []openCodeTurn{
-				{tool: "bash", arguments: map[string]any{"command": organicActorShellCommand()}},
-				{tool: "bash", arguments: map[string]any{"command": organicReviewShellCommand(
+				{tool: "bash", arguments: map[string]any{"command": organicActorToolCommand(t)}},
+				{tool: "bash", arguments: map[string]any{"command": organicReviewToolCommand(t,
 					"review", "start", "--cwd", harness.repo.worktree, "--base-ref", "origin/main", "--lineage", lineage,
 				)}},
-				{tool: "bash", arguments: map[string]any{"command": organicReviewShellCommand(
+				{tool: "bash", arguments: map[string]any{"command": organicReviewToolCommand(t,
 					"review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage,
 				)}},
-				{tool: "bash", arguments: map[string]any{"command": organicReviewShellCommand(
+				{tool: "bash", arguments: map[string]any{"command": organicReviewToolCommand(t,
 					"review", "validate", "--cwd", harness.repo.worktree, "--gate", "pre-push",
 				)}},
 			}
@@ -1621,18 +1621,56 @@ func TestRealAgentOrganicJourneys(t *testing.T) {
 	}
 }
 
-// organicActorShellCommand runs the compiled actor process from the agent's own
+// organicActorToolCommand runs the compiled actor process from the agent's own
 // bash tool, so the implementation step is a real child process of a real agent.
-func organicActorShellCommand() string {
-	return `"$GENTLE_AI_ORGANIC_ACTOR_EXECUTABLE"`
+func organicActorToolCommand(t *testing.T) string {
+	t.Helper()
+	return organicToolCommand(t, "GENTLE_AI_ORGANIC_ACTOR_EXECUTABLE")
 }
 
-func organicReviewShellCommand(arguments ...string) string {
-	quoted := make([]string, 0, len(arguments))
-	for _, argument := range arguments {
-		quoted = append(quoted, "'"+strings.ReplaceAll(argument, "'", `'\''`)+"'")
+func organicReviewToolCommand(t *testing.T, arguments ...string) string {
+	t.Helper()
+	return organicToolCommand(t, "GENTLE_AI_ORGANIC_BINARY", arguments...)
+}
+
+// organicToolCommand turns one fixture-authored argv into the string the
+// agent's bash tool executes, without round-tripping the argv through a shell
+// flavour we do not control.
+//
+// On POSIX systems the agent's tool shell is sh-compatible, so the argv is
+// authored directly in sh syntax — byte-identical to what the journeys always
+// ran on Linux. On Windows the agent's tool shell is PowerShell (or cmd),
+// neither of which parses POSIX single-quoting (PowerShell fails with
+// "ParserError: Unexpected token" on a single-quoted argument such as
+// 'review'), so the argv is baked by Go into a generated .cmd trampoline
+// and the command becomes that script's bare path: a single token that
+// PowerShell and cmd both resolve as a plain invocation.
+func organicToolCommand(t *testing.T, binaryEnvironment string, arguments ...string) string {
+	t.Helper()
+	if runtime.GOOS != "windows" {
+		command := `"$` + binaryEnvironment + `"`
+		for _, argument := range arguments {
+			command += " '" + strings.ReplaceAll(argument, "'", `'\''`) + "'"
+		}
+		return command
 	}
-	return `"$GENTLE_AI_ORGANIC_BINARY" ` + strings.Join(quoted, " ")
+
+	invocation := `"%` + binaryEnvironment + `%"`
+	for _, argument := range arguments {
+		if strings.ContainsAny(argument, `"%`) {
+			t.Fatalf("tool argument %q cannot be embedded safely in a cmd trampoline", argument)
+		}
+		invocation += ` "` + argument + `"`
+	}
+	script := filepath.Join(t.TempDir(), "tool.cmd")
+	if strings.ContainsAny(script, " \t'\"") {
+		t.Fatalf("tool trampoline path %q would itself need shell quoting", script)
+	}
+	content := strings.Join([]string{"@echo off", invocation, "exit /b %ERRORLEVEL%"}, "\r\n") + "\r\n"
+	if err := os.WriteFile(script, []byte(content), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return script
 }
 
 type openCodeTurn struct {
@@ -1645,6 +1683,7 @@ type openCodeFixtureServer struct {
 	mu             sync.Mutex
 	script         []openCodeTurn
 	actorPrompt    string
+	actorCommand   string
 	mainCalls      int
 	subagentStarts int
 	failure        string
@@ -1652,7 +1691,13 @@ type openCodeFixtureServer struct {
 
 func newOpenCodeFixtureServer(t *testing.T, script []openCodeTurn, actorPrompt string) *openCodeFixtureServer {
 	t.Helper()
-	fixture := &openCodeFixtureServer{script: script, actorPrompt: actorPrompt}
+	fixture := &openCodeFixtureServer{
+		script:      script,
+		actorPrompt: actorPrompt,
+		// Precomputed with the test handle: the HTTP handler that serves the
+		// delegated worker turn has no *testing.T of its own.
+		actorCommand: organicActorToolCommand(t),
+	}
 	fixture.Server = httptest.NewServer(http.HandlerFunc(fixture.serveHTTP))
 	return fixture
 }
@@ -1690,7 +1735,7 @@ func (fixture *openCodeFixtureServer) serveHTTP(writer http.ResponseWriter, requ
 			fixture.writeText(writer, organicDelegatedActorMarker, "stop")
 			return
 		}
-		fixture.writeTool(writer, "delegated-actor", "bash", map[string]any{"command": organicActorShellCommand()})
+		fixture.writeTool(writer, "delegated-actor", "bash", map[string]any{"command": fixture.actorCommand})
 		return
 	}
 
