@@ -56,7 +56,7 @@ type CandidateBinding struct {
 }
 
 func (binding CandidateBinding) validate() error {
-	if err := validateToken("candidate.ref", binding.Ref); err != nil {
+	if err := validateDeliveryRefToken("candidate.ref", binding.Ref); err != nil {
 		return err
 	}
 	return validateDigest("candidate.digest", binding.Digest)
@@ -76,7 +76,7 @@ func (binding DestinationBinding) validate() error {
 	if !strings.HasPrefix(binding.TargetRef, "refs/heads/") {
 		return fmt.Errorf("%w: destination target must use refs/heads", ErrInvalid)
 	}
-	if err := validateToken("destination.targetRef", binding.TargetRef); err != nil {
+	if err := validateDeliveryRefToken("destination.targetRef", binding.TargetRef); err != nil {
 		return err
 	}
 	return validateToken("destination.observedRevision", binding.ObservedRevision)
@@ -470,7 +470,7 @@ func (evidence GateEvidence) Validate() error {
 		if evidence.Mechanism != MechanismPullRequest {
 			return fmt.Errorf("%w: route requires pull request", ErrInvalid)
 		}
-		if err := validateToken("gate.pullRequestRef", evidence.PullRequestRef); err != nil {
+		if err := validateDeliveryRefToken("gate.pullRequestRef", evidence.PullRequestRef); err != nil {
 			return err
 		}
 		return validateDigest("gate.requiredChecksRef", evidence.RequiredChecksRef)
@@ -678,6 +678,43 @@ func validateToken(name, value string) error {
 		if character < 0x21 || character > 0x7e {
 			return fmt.Errorf("%w: %s", ErrInvalid, name)
 		}
+	}
+	return nil
+}
+
+// shellUnsafeRefCharacters lists every POSIX shell metacharacter plus the glob
+// and brace-expansion characters. PAD binds refs as structured fields and never
+// composes a command line, but a bound ref is replayed verbatim into whatever
+// delivery mechanism executes it, so a ref that carries `;`, `&&`, `$(...)`, a
+// backtick, a redirection, or a glob would become a composed command the moment
+// any consumer is less careful than PAD. Git ref names never need these
+// characters, so rejecting the whole set costs nothing and fails closed.
+const shellUnsafeRefCharacters = "|&;<>()$`\\\"'*?[]{}!"
+
+// validateDeliveryRefToken hardens the refs that name the PR head and its
+// destination — the "PR commands" threat-matrix boundary. Beyond the ordinary
+// token rules it rejects three families that only mean something to a shell or
+// an argument parser:
+//
+//  1. Composed-shell forms, via shellUnsafeRefCharacters. Environment-prefix
+//     forms (`env VAR=x refs/heads/main`, `GIT_DIR=/tmp refs/heads/main`) are
+//     already rejected by validateToken because they contain whitespace.
+//  2. Argument injection: a leading `-` would still be read as an option by a
+//     structured argument list, so `--upload-pack=id` can never be a ref.
+//  3. Selector and traversal forms Git itself forbids in ref names: `..`
+//     escapes the ref namespace and `@{` is a reflog/upstream selector.
+//
+// The rule deliberately keeps `:`, `/`, `.`, `-`, `_`, `+`, `,`, `%` and `@`
+// legal, because PAD candidate refs are opaque owner labels such as
+// `candidate:normalized/1` and `github:issue/1794`.
+func validateDeliveryRefToken(name, value string) error {
+	if err := validateToken(name, value); err != nil {
+		return err
+	}
+	if strings.ContainsAny(value, shellUnsafeRefCharacters) ||
+		strings.HasPrefix(value, "-") ||
+		strings.Contains(value, "..") || strings.Contains(value, "@{") {
+		return fmt.Errorf("%w: %s must be a structured ref, not a command", ErrInvalid, name)
 	}
 	return nil
 }

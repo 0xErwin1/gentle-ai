@@ -245,7 +245,7 @@ func (result LiveGateProbeResult) Validate() error {
 		if result.FastForwardSatisfied || result.FastForwardRef != "" {
 			return fmt.Errorf("%w: pull-request probe carries direct-update facts", ErrInvalid)
 		}
-		if err := validateToken("live gate pull request ref", result.PullRequestRef); err != nil {
+		if err := validateDeliveryRefToken("live gate pull request ref", result.PullRequestRef); err != nil {
 			return err
 		}
 		if !result.RequiredChecksSatisfied {
@@ -410,7 +410,7 @@ func (command ExecutionCommand) Validate() error {
 		if command.Mechanism != MechanismPullRequest {
 			return fmt.Errorf("%w: PR execution mechanism", ErrInvalid)
 		}
-		return validateToken("execution pull request ref", command.PullRequestRef)
+		return validateDeliveryRefToken("execution pull request ref", command.PullRequestRef)
 	case RouteDirectMain:
 		if command.Mechanism != MechanismFastForwardOnly ||
 			command.PullRequestRef != "" || !command.Destination.DefaultBranch {
@@ -422,7 +422,7 @@ func (command ExecutionCommand) Validate() error {
 			return fmt.Errorf("%w: emergency execution mechanism", ErrInvalid)
 		}
 		if command.Mechanism == MechanismPullRequest {
-			return validateToken("execution pull request ref", command.PullRequestRef)
+			return validateDeliveryRefToken("execution pull request ref", command.PullRequestRef)
 		}
 		if command.PullRequestRef != "" || !command.Destination.DefaultBranch {
 			return fmt.Errorf("%w: emergency direct execution", ErrUnauthorized)
