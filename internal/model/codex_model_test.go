@@ -184,6 +184,7 @@ func TestCodexTierGroups_AllPhasesAssigned(t *testing.T) {
 	tiers := model.CodexTierGroups()
 	validCarrils := map[string]bool{
 		"sdd-strong": true,
+		"sdd-spec":   true,
 		"sdd-mid":    true,
 		"sdd-cheap":  true,
 	}
@@ -219,14 +220,17 @@ func TestDefaultCarrilModels(t *testing.T) {
 	if m["sdd-strong"] != "gpt-5.6-sol" {
 		t.Errorf("sdd-strong = %q, want gpt-5.6-sol", m["sdd-strong"])
 	}
+	if m["sdd-spec"] != "gpt-5.6-terra" {
+		t.Errorf("sdd-spec = %q, want gpt-5.6-terra", m["sdd-spec"])
+	}
 	if m["sdd-mid"] != "gpt-5.6-terra" {
 		t.Errorf("sdd-mid = %q, want gpt-5.6-terra", m["sdd-mid"])
 	}
 	if m["sdd-cheap"] != "gpt-5.6-luna" {
 		t.Errorf("sdd-cheap = %q, want gpt-5.6-luna", m["sdd-cheap"])
 	}
-	if len(m) != 3 {
-		t.Errorf("DefaultCarrilModels() has %d entries, want 3", len(m))
+	if len(m) != 4 {
+		t.Errorf("DefaultCarrilModels() has %d entries, want 4", len(m))
 	}
 }
 
