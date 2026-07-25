@@ -86,9 +86,14 @@ exit $LASTEXITCODE
 	command := exec.Command(powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script,
 		"-Binary", binary, "-Repo", repo, "-Lineage", started.LineageID, "-Target", record.State.InitialSnapshot.Identity,
 		"-Lens", record.State.SelectedLenses[0], "-Order", "0", "-ResultPath", input, "-EvidencePath", evidence, "-Manifest", manifest)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("PowerShell 5.1 artifact-file finalize: %v\n%s", err, output)
+	// Stdout and stderr stay separate: the script's stdout is the finalize
+	// JSON, while any binary notice (such as the non-interactive consent
+	// notice) lands on stderr and must never pollute the decode.
+	var scriptStdout, scriptStderr bytes.Buffer
+	command.Stdout = &scriptStdout
+	command.Stderr = &scriptStderr
+	if err := command.Run(); err != nil {
+		t.Fatalf("PowerShell 5.1 artifact-file finalize: %v\nstdout:\n%s\nstderr:\n%s", err, scriptStdout.String(), scriptStderr.String())
 	}
 	manifestBytes, err := os.ReadFile(manifest)
 	if err != nil {
@@ -98,7 +103,7 @@ exit $LASTEXITCODE
 		t.Fatal("PowerShell manifest file does not contain a UTF-8 BOM")
 	}
 	var finalized ReviewFacadeFinalizeResult
-	decodeBinaryJSON(t, output, &finalized)
+	decodeBinaryJSON(t, scriptStdout.Bytes(), &finalized)
 	status := binaryReviewStatus(t, binary, repo, started.LineageID)
 	if finalized.State != reviewtransaction.StateApproved || status.Authority == nil || status.Authority.State != reviewtransaction.StateApproved || status.Receipt.Status != ReviewReceiptPresent || status.Receipt.Identity == "" {
 		t.Fatalf("approved status = %#v, finalize = %#v", status, finalized)
@@ -237,8 +242,16 @@ func prepareBinaryCorrection(t *testing.T, binary string) (string, string, Revie
 	runReviewCLIGit(t, repo, "add", "openspec")
 	runReviewCLIGit(t, repo, "commit", "-qm", "add binary review fixture")
 	writeBinaryCandidate(t, repo, "wrong")
+	startStdout, startStderr := runReviewBinaryStreams(t, binary, true, "start", "--cwd", repo)
 	var started ReviewFacadeStartResult
-	decodeBinaryJSON(t, runReviewBinary(t, binary, true, "start", "--cwd", repo), &started)
+	decodeBinaryJSON(t, startStdout, &started)
+	// The one-time consent notice is deliberate product behavior for
+	// non-interactive sessions, and it must land on stderr — never on the
+	// stdout JSON contract. Pinning it here keeps the discoverability
+	// behavior intact instead of merely tolerated.
+	if !strings.Contains(startStderr, "Gentle AI reviewed this change without asking") {
+		t.Fatalf("non-interactive review start did not print the consent notice on stderr:\n%s", startStderr)
+	}
 	reviewer := filepath.Join(t.TempDir(), "reviewer.json")
 	writeReviewCLIJSON(t, reviewer, facadeReviewerResult{Findings: []facadeFinding{{
 		Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate returns the wrong terminal value",
@@ -264,12 +277,25 @@ func writeBinaryCandidate(t *testing.T, repo, value string) {
 
 func runReviewBinary(t *testing.T, binary string, wantSuccess bool, args ...string) []byte {
 	t.Helper()
+	stdout, _ := runReviewBinaryStreams(t, binary, wantSuccess, args...)
+	return stdout
+}
+
+// runReviewBinaryStreams captures stdout and stderr separately. Stdout carries
+// the machine-readable JSON contract; stderr carries human-facing notices such
+// as the non-interactive consent notice, and mixing the two corrupts the JSON
+// decode that every acceptance assertion depends on.
+func runReviewBinaryStreams(t *testing.T, binary string, wantSuccess bool, args ...string) ([]byte, string) {
+	t.Helper()
 	command := exec.Command(binary, append([]string{"review"}, args...)...)
-	output, err := command.CombinedOutput()
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
 	if (err == nil) != wantSuccess {
-		t.Fatalf("gentle-ai review %v: %v\n%s", args, err, output)
+		t.Fatalf("gentle-ai review %v: %v\nstdout:\n%s\nstderr:\n%s", args, err, stdout.String(), stderr.String())
 	}
-	return output
+	return stdout.Bytes(), stderr.String()
 }
 
 func decodeBinaryJSON(t *testing.T, payload []byte, target any) {
