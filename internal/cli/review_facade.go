@@ -1939,16 +1939,20 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 		}
 		var discovery *ReviewReceiptDiscoveryError
 		if errors.As(compactErr, &discovery) {
-			// No receipt was discovered at all. While the user has switched
+			// No receipt governs this candidate. While the user has switched
 			// review-driven development off that is not a fault, so the gate
 			// reports the typed disabled/unmanaged disposition instead of
-			// denying delivery it has no authority over. Only this kind
-			// qualifies: ambiguous, scope-changed, or corrupted authority means
-			// something is wrong rather than unmanaged by choice, and those keep
-			// failing closed so the user resolves them explicitly.
-			if discovery.Kind == ReviewReceiptMissing &&
+			// denying delivery it has no authority over. That covers a missing
+			// receipt and equally a stale one — scope-changed or unrelated —
+			// because no new receipt could have been created while disabled, so
+			// prior receipts that stopped matching the candidate are the
+			// expected state of a disabled clone. Ambiguous or corrupted
+			// authority means something is wrong rather than unmanaged by
+			// choice, and keeps failing closed so the user resolves it
+			// explicitly.
+			if reviewReceiptDiscoveryIsUnmanagedWhileDisabled(discovery.Kind) &&
 				reviewDeliveryDisposition(ctx, root, false) == reviewtransaction.RDDDeliveryDisabledUnmanaged {
-				return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate)
+				return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, discovery)
 			}
 			result := reviewtransaction.GateInvalidated
 			reason := discovery.Error()
@@ -2714,27 +2718,47 @@ func rejectFacadeCorrectionUntracked(ctx context.Context, repo string, state rev
 	return nil
 }
 
-// emitDisabledUnmanagedDelivery reports a receiptless candidate under a
+// reviewReceiptDiscoveryIsUnmanagedWhileDisabled reports whether a discovery
+// outcome means "no receipt governs this candidate" — the expected state of a
+// clone whose kill switch is off, where no new receipt could have been created.
+// A missing receipt qualifies, and so does a prior receipt that stopped
+// governing: scope-changed or unrelated. Ambiguous and corrupted authority are
+// genuine damage and never qualify.
+func reviewReceiptDiscoveryIsUnmanagedWhileDisabled(kind ReviewReceiptDiscoveryKind) bool {
+	switch kind {
+	case ReviewReceiptMissing, ReviewReceiptUnrelated, ReviewReceiptScopeChanged:
+		return true
+	default:
+		return false
+	}
+}
+
+// emitDisabledUnmanagedDelivery reports a candidate no receipt governs under a
 // user-disabled kill switch.
 //
 // It never approves: `allowed` stays false, the result is not an allow, and no
 // receipt, PASS, or authority is invented. It also never vetoes, because a
 // disabled switch defers delivery to ordinary repository policy — hooks, tests,
 // and CI stay active and decide — so the command exits successfully and the
-// typed result names `disabled/unmanaged` as what governs. The receipt-discovery
-// context is preserved so the reason no receipt governs stays discoverable, and
-// the whole result is derived from constants so replaying the same request
-// returns the same bytes.
-func emitDisabledUnmanagedDelivery(stdout io.Writer, gate reviewtransaction.GateKind) error {
+// typed result names `disabled/unmanaged` as what governs. The discovery
+// context is preserved so the reason no receipt governs stays discoverable —
+// including the full scope-change diagnostics when a stale receipt stopped
+// matching the candidate — and the whole result is derived from the same frozen
+// authority so replaying the same request returns the same bytes.
+func emitDisabledUnmanagedDelivery(stdout io.Writer, gate reviewtransaction.GateKind, discovery *ReviewReceiptDiscoveryError) error {
+	context := reviewtransaction.GateContext{
+		Gate:   gate,
+		Denial: &reviewtransaction.GateDenial{Stage: "receipt-discovery", Code: string(discovery.Kind)},
+	}
+	if discovery.Kind == ReviewReceiptScopeChanged && discovery.Context != nil {
+		context = *discovery.Context
+	}
 	return encodeReviewJSON(stdout, ReviewValidateResult{
 		Schema: ReviewValidateSchema, Result: reviewtransaction.GateInvalidated, Allowed: false,
 		Action:   reviewDeliveryPolicyAction,
 		Reason:   "review-driven development is disabled and no receipt governs this candidate, so delivery follows ordinary repository policy",
 		Delivery: reviewtransaction.RDDDeliveryDisabledUnmanaged,
-		Context: reviewtransaction.GateContext{
-			Gate:   gate,
-			Denial: &reviewtransaction.GateDenial{Stage: "receipt-discovery", Code: string(ReviewReceiptMissing)},
-		},
+		Context:  context,
 	})
 }
 
