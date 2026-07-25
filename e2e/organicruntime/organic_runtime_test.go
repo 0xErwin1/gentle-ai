@@ -761,6 +761,62 @@ func TestOrganicKillSwitchReportsUnmanagedDeliveryOverPriorReceipts(t *testing.T
 	harness.assertNoSDDArtifacts()
 }
 
+// TestOrganicKillSwitchReportsUnmanagedDeliveryOverWorkspaceReceipt proves the
+// second community-reported shape (Wladimirfn, PR #1801): a workspace
+// (current-changes) receipt delivered exactly as reviewed in one commit, then a
+// new commit authored while disabled, then pre-push. The candidate now
+// publishes two commits past the reviewed base, so the receipt's one-commit
+// delivery rule cannot hold — a deterministic mismatch between candidate shape
+// and a provably healthy receipt, never corruption — and the disabled gate
+// still reports `disabled/unmanaged` with a successful exit.
+func TestOrganicKillSwitchReportsUnmanagedDeliveryOverWorkspaceReceipt(t *testing.T) {
+	t.Parallel()
+	harness := newOrganicHarness(t)
+	const lineage = "organic-killed-workspace"
+	const path = "docs/workspace-note.md"
+
+	// A completed workspace reviewed flow over the dirty candidate...
+	harness.writeFiles(map[string]string{path: organicLines("workspace line", 8)})
+	started, _ := harness.startReview(lineage)
+	if approved := harness.approveReview(lineage, started); approved.State != organicStateApproved {
+		t.Fatalf("the workspace reviewed flow did not approve its candidate: %#v", approved)
+	}
+	// ...delivered exactly as reviewed, in one commit that was never pushed.
+	harness.git("add", "--", path)
+	harness.git("commit", "-q", "-m", "docs: reviewed workspace delivery")
+
+	if mode := harness.disableReview(); mode.Status.Effective != organicModeOff {
+		t.Fatalf("kill switch produced no typed outcome: %#v", mode)
+	}
+
+	// The community-reported shape: a second commit authored while disabled.
+	harness.writeFiles(map[string]string{"docs/disabled-note.md": organicLines("disabled line", 6)})
+	harness.git("add", "--", "docs/disabled-note.md")
+	harness.git("commit", "-q", "-m", "docs: authored while disabled")
+
+	// harness.gate fails the test on a non-zero exit, so this also proves the
+	// gate reports instead of vetoing with a fabricated corruption verdict.
+	gate := harness.gate("pre-push")
+	if gate.Schema != organicGateSchema || gate.Allowed || gate.Result == organicGateAllow {
+		t.Fatalf("disabled delivery over a workspace receipt fabricated an approval: %#v", gate)
+	}
+	if gate.Delivery != "disabled/unmanaged" {
+		t.Fatalf("disabled delivery over a workspace receipt did not report the promised disposition: %q", gate.Delivery)
+	}
+	// The healthy receipt's real relation to the candidate stays discoverable:
+	// the delivery shape moved past it, and the store was never corrupted.
+	if gate.Context.Denial == nil || gate.Context.Denial.Code != "delivery-shape-mismatch" {
+		t.Fatalf("disabled delivery hid why the workspace receipt does not govern: %#v", gate.Context.Denial)
+	}
+
+	// Reporting moved nothing: the remote is untouched and no branch appeared.
+	if remote := harness.bareGit("rev-parse", "refs/heads/main"); remote != harness.repo.baseRevision {
+		t.Fatalf("the remote moved while review was disabled: %s != %s", remote, harness.repo.baseRevision)
+	}
+	harness.assertOnlyMainRef()
+	harness.assertNoSDDArtifacts()
+}
+
 // TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect keeps the
 // expiry-stable terminal state. The authorization that permitted the review is
 // withdrawn afterwards, and the terminal receipt still validates, replays

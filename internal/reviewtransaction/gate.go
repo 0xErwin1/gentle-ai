@@ -721,6 +721,15 @@ func currentBranch(ctx context.Context, repo string) string {
 	return strings.TrimSpace(string(output))
 }
 
+// ErrReviewedDeliveryNotOneCommit reports the deterministic pre-push delivery
+// shape rule for current-changes receipts: the candidate publishes a range
+// that is not exactly one commit beyond the reviewed base the receipt froze.
+// It is a typed statement about candidate shape versus the reviewed receipt —
+// never about authority integrity — so receipt discovery can classify it as a
+// receipt/scope mismatch instead of corruption. Infrastructure or derivation
+// failures while computing the shape stay untyped and keep failing closed.
+var ErrReviewedDeliveryNotOneCommit = errors.New("reviewed delivery is not exactly one commit from its reviewed base")
+
 func buildPushTarget(ctx context.Context, repo, selector, deliveryBaseTree, reviewedBaseTree string) (Target, *PushRequest, error) {
 	selection, err := selectPrePushBoundary(ctx, repo, selector)
 	if err != nil {
@@ -750,9 +759,18 @@ func buildPushTarget(ctx context.Context, repo, selector, deliveryBaseTree, revi
 	base := push.MergeBase
 	if deliveryBaseTree != "" {
 		base, err = reviewedDeliveryBase(ctx, repo, push.MergeBase, head, deliveryBaseTree)
+		if err != nil {
+			return Target{}, nil, fmt.Errorf("could not derive the reviewed delivery base: %w", err)
+		}
 		count, countErr := commitCount(ctx, repo, base, head)
-		if err != nil || countErr != nil || count != 1 {
-			return Target{}, nil, errors.New("reviewed delivery is not exactly one commit from its reviewed base")
+		if countErr != nil {
+			return Target{}, nil, fmt.Errorf("could not derive the reviewed delivery commit count: %w", countErr)
+		}
+		if count != 1 {
+			// The base commit resolved and the range counted: this outcome is
+			// the deterministic shape rule itself, so it carries the typed
+			// sentinel instead of an opaque derivation failure.
+			return Target{}, nil, ErrReviewedDeliveryNotOneCommit
 		}
 	}
 	return Target{Kind: TargetBaseDiff, BaseRef: base, IntendedUntracked: []string{}}, push, nil
@@ -914,8 +932,11 @@ func buildBootstrapPushTarget(ctx context.Context, repo string, selection PrePRB
 	}
 	if deliveryBaseTree != "" {
 		count, countErr := commitCount(ctx, repo, base, head)
-		if countErr != nil || count != 1 {
-			return Target{}, nil, errors.New("reviewed delivery is not exactly one commit from its reviewed base")
+		if countErr != nil {
+			return Target{}, nil, fmt.Errorf("could not derive the reviewed delivery commit count: %w", countErr)
+		}
+		if count != 1 {
+			return Target{}, nil, ErrReviewedDeliveryNotOneCommit
 		}
 	}
 	return Target{Kind: TargetBaseDiff, BaseRef: base, IntendedUntracked: []string{}}, push, nil

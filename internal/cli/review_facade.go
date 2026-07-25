@@ -116,23 +116,29 @@ type ReviewReceiptDiscoveryError struct {
 	Category   string
 	Candidates []string
 	Context    *reviewtransaction.GateContext
+	// Detail preserves the exact typed cause of a deterministic mismatch so
+	// the denial states what is actually true instead of a generic projection.
+	Detail string
 }
 
 func (err *ReviewReceiptDiscoveryError) Error() string {
+	message := "review receipt discovery failed"
 	switch err.Kind {
 	case ReviewReceiptMissing:
-		return "no terminal review receipt exists for gate validation"
+		message = "no terminal review receipt exists for gate validation"
 	case ReviewReceiptUnrelated:
-		return "terminal review receipts exist only for unrelated targets"
+		message = "terminal review receipts exist only for unrelated targets"
 	case ReviewReceiptScopeChanged:
-		return "terminal review receipts do not exactly match the live gate target"
+		message = "terminal review receipts do not exactly match the live gate target"
 	case ReviewReceiptAmbiguous:
-		return "multiple terminal review receipts require explicit target selection"
+		message = "multiple terminal review receipts require explicit target selection"
 	case ReviewAuthorityCorrupted:
-		return "complete review authority inventory is unavailable or corrupted"
-	default:
-		return "review receipt discovery failed"
+		message = "complete review authority inventory is unavailable or corrupted"
 	}
+	if err.Detail != "" {
+		return message + ": " + err.Detail
+	}
+	return message
 }
 
 // ReviewFacadeReceiptPublicationError reports the only safe interpretation of
@@ -2019,6 +2025,17 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 	scopeChanged := []candidate{}
 	scopeWithoutContext := []string{}
 	assessmentUnknown := []string{}
+	// deliveryShape collects receipts whose assessment failed only on the
+	// deterministic pre-push one-commit delivery rule: a typed statement about
+	// candidate shape versus the reviewed receipt, made over an inventory the
+	// authority check above already proved healthy. It classifies with the
+	// scope-changed family; every other assessment failure stays fail-closed
+	// as corruption.
+	type deliveryShapeMismatch struct {
+		lineage string
+		context reviewtransaction.GateContext
+	}
+	deliveryShape := []deliveryShapeMismatch{}
 	type targetResolutionFailure struct {
 		lineage string
 		err     error
@@ -2053,6 +2070,23 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 			var targetErr *reviewtransaction.GateTargetResolutionError
 			if errors.As(assessErr, &targetErr) {
 				targetResolution = append(targetResolution, targetResolutionFailure{lineage: record.State.LineageID, err: assessErr})
+				continue
+			}
+			if errors.Is(assessErr, reviewtransaction.ErrReviewedDeliveryNotOneCommit) {
+				// The context binds the frozen receipt values — the expected
+				// side of the mismatch — exactly as evidence-bearing denials
+				// do, so the real cause stays discoverable.
+				deliveryShape = append(deliveryShape, deliveryShapeMismatch{
+					lineage: record.State.LineageID,
+					context: reviewtransaction.GateContext{
+						Gate: input.Gate, LineageID: record.State.LineageID, Generation: record.State.Generation,
+						StoreRevision: record.Revision, GenesisRevision: record.Revision, ChainIdentity: record.Revision, BundleDigest: record.Revision,
+						BaseTree: record.State.CurrentSnapshot.BaseTree, CandidateTree: record.State.CurrentSnapshot.CandidateTree, PathsDigest: record.State.CurrentSnapshot.PathsDigest,
+						FixDeltaHash: record.State.FixDeltaHash, PolicyHash: record.State.PolicyHash,
+						LedgerHash: record.State.LedgerHash(), EvidenceHash: record.State.EvidenceHash,
+						Denial: &reviewtransaction.GateDenial{Stage: "delivery-derivation", Code: "delivery-shape-mismatch"},
+					},
+				})
 				continue
 			}
 			assessmentUnknown = append(assessmentUnknown, record.State.LineageID)
@@ -2094,13 +2128,16 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 	if terminalCount == 0 {
 		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewReceiptMissing}
 	}
-	scopeCandidateCount := len(scopeChanged) + len(scopeWithoutContext)
+	scopeCandidateCount := len(scopeChanged) + len(scopeWithoutContext) + len(deliveryShape)
 	if scopeCandidateCount > 0 && scopeCandidateCount+len(assessmentUnknown)+len(targetResolution) > 1 {
 		lineages := make([]string, 0, scopeCandidateCount+len(assessmentUnknown)+len(targetResolution))
 		for index := range scopeChanged {
 			lineages = append(lineages, scopeChanged[index].record.State.LineageID)
 		}
 		lineages = append(lineages, scopeWithoutContext...)
+		for index := range deliveryShape {
+			lineages = append(lineages, deliveryShape[index].lineage)
+		}
 		lineages = append(lineages, assessmentUnknown...)
 		for _, failure := range targetResolution {
 			lineages = append(lineages, failure.lineage)
@@ -2108,10 +2145,17 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 		sort.Strings(lineages)
 		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewReceiptAmbiguous, Candidates: lineages}
 	}
-	if len(scopeChanged) == 1 && len(scopeWithoutContext) == 0 && len(assessmentUnknown) == 0 && len(targetResolution) == 0 {
+	if len(scopeChanged) == 1 && len(deliveryShape) == 0 && len(scopeWithoutContext) == 0 && len(assessmentUnknown) == 0 && len(targetResolution) == 0 {
 		context := scopeChanged[0].context
 		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{
 			Kind: ReviewReceiptScopeChanged, Candidates: []string{scopeChanged[0].record.State.LineageID}, Context: &context,
+		}
+	}
+	if len(deliveryShape) == 1 && len(scopeChanged) == 0 && len(scopeWithoutContext) == 0 && len(assessmentUnknown) == 0 && len(targetResolution) == 0 {
+		context := deliveryShape[0].context
+		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{
+			Kind: ReviewReceiptScopeChanged, Detail: reviewtransaction.ErrReviewedDeliveryNotOneCommit.Error(),
+			Candidates: []string{deliveryShape[0].lineage}, Context: &context,
 		}
 	}
 	if len(scopeWithoutContext) > 0 || len(assessmentUnknown) > 0 {

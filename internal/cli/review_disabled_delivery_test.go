@@ -264,6 +264,186 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryWithPriorReceipt(t *testi
 	}
 }
 
+// TestReviewValidateReportsDisabledUnmanagedDeliveryOverDeliveredWorkspaceReceiptAtPrePush
+// closes the second community-reported gap (Wladimirfn, PR #1801): a workspace
+// (current-changes) receipt whose candidate was delivered exactly as reviewed,
+// then a new commit authored while disabled, then pre-push. The candidate now
+// publishes two commits past the reviewed base, so the receipt's one-commit
+// delivery rule cannot hold — a deterministic statement about candidate shape
+// versus the reviewed receipt, made over a provably healthy authority store.
+// It must classify as a receipt/scope mismatch that the disabled switch
+// reports as `disabled/unmanaged` with exit 0, never as `authority_corrupted`.
+func TestReviewValidateReportsDisabledUnmanagedDeliveryOverDeliveredWorkspaceReceiptAtPrePush(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
+	// The publication boundary stays at the base commit: the reviewed delivery
+	// was never pushed, which is exactly why pre-push runs here.
+	configureCLIReviewPublicationRemote(t, repo, branch)
+
+	// A workspace review of the dirty candidate, delivered exactly as reviewed
+	// in one commit.
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate behavior\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	finalizeFacadeReviewForRepo(t, repo)
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "reviewed candidate")
+
+	disableReviewForClone(t, repo)
+
+	// New work authored and committed while disabled: no receipt can exist for
+	// it, and the healthy prior receipt must not become a corruption verdict.
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("work authored while disabled\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "authored while disabled")
+
+	var output bytes.Buffer
+	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePrePush)}, &output)
+	// The gate reports; it does not veto: ordinary repository policy governs
+	// delivery once review-driven development is off.
+	if err != nil {
+		t.Fatalf("disabled delivery over a delivered workspace receipt was denied instead of reported: %v\n%s", err, output.String())
+	}
+	var result ReviewValidateResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if result.Schema != ReviewValidateSchema {
+		t.Fatalf("disabled delivery left the typed gate schema = %q", result.Schema)
+	}
+	if result.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
+		t.Fatalf("disabled delivery over a delivered workspace receipt = %q, want %q", result.Delivery, reviewtransaction.RDDDeliveryDisabledUnmanaged)
+	}
+	// Unmanaged by choice is neither an approval nor a fault.
+	if result.Allowed || result.Result == reviewtransaction.GateAllow {
+		t.Fatalf("disabled delivery fabricated an approval: %#v", result)
+	}
+	var denied ReviewGateDeniedError
+	if errors.As(err, &denied) {
+		t.Fatalf("disabled delivery was reported as a denial: %#v", denied)
+	}
+	// The real reason the receipt does not govern stays discoverable, and it is
+	// the delivery shape — never corruption of a provably healthy store.
+	if result.Context.Denial == nil || result.Context.Denial.Code != "delivery-shape-mismatch" {
+		t.Fatalf("disabled delivery hid why no receipt governs: %#v, want code %q", result.Context.Denial, "delivery-shape-mismatch")
+	}
+
+	// The report is an observation: replaying returns the same bytes.
+	var replay bytes.Buffer
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePrePush)}, &replay); err != nil {
+		t.Fatalf("replayed disabled delivery gate: %v\n%s", err, replay.String())
+	}
+	if !bytes.Equal(replay.Bytes(), output.Bytes()) {
+		t.Fatalf("disabled delivery report is not replay stable:\nfirst:\n%s\nreplay:\n%s", output.String(), replay.String())
+	}
+}
+
+// TestReviewValidateDeniesDeliveredWorkspaceReceiptPrePushAsScopeMismatchWhileEnabled
+// is the enabled half of the same forensic finding: the user's authority store
+// is provably healthy, so the denial must say what is actually true — the
+// candidate's delivered shape no longer matches the reviewed receipt — and
+// never claim `authority_corrupted`.
+func TestReviewValidateDeniesDeliveredWorkspaceReceiptPrePushAsScopeMismatchWhileEnabled(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
+	configureCLIReviewPublicationRemote(t, repo, branch)
+
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate behavior\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	finalizeFacadeReviewForRepo(t, repo)
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "reviewed candidate")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("unreviewed second commit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "unreviewed second commit")
+
+	var output bytes.Buffer
+	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePrePush)}, &output)
+	var denied ReviewGateDeniedError
+	if !errors.As(err, &denied) {
+		t.Fatalf("enabled two-commit delivery over a workspace receipt error = %T %v", err, err)
+	}
+	if fields := strictReviewJSONFields(t, output.Bytes()); !reflect.DeepEqual(fields, wantEnabledReviewGateFields) {
+		t.Fatalf("enabled gate fields = %v, want %v", fields, wantEnabledReviewGateFields)
+	}
+	var result ReviewValidateResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if result.Delivery != "" {
+		t.Fatalf("an enabled switch reported a delivery disposition: %#v", result)
+	}
+	if result.Allowed || result.Result != reviewtransaction.GateScopeChanged {
+		t.Fatalf("enabled delivery-shape denial = %#v, want result %q", result, reviewtransaction.GateScopeChanged)
+	}
+	// The store is healthy: the denial must name the shape mismatch, not
+	// corruption.
+	if result.Context.Denial == nil || result.Context.Denial.Code != "delivery-shape-mismatch" {
+		t.Fatalf("enabled delivery-shape denial code = %#v, want %q", result.Context.Denial, "delivery-shape-mismatch")
+	}
+	if result.Context.Denial.Code == string(ReviewAuthorityCorrupted) {
+		t.Fatalf("a healthy authority was reported as corrupted: %#v", result.Context.Denial)
+	}
+	if !strings.Contains(result.Reason, "reviewed delivery is not exactly one commit from its reviewed base") {
+		t.Fatalf("enabled delivery-shape denial reason = %q, want the one-commit delivery rule", result.Reason)
+	}
+}
+
+// TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileDisabledAtPrePush
+// holds the line for the reclassified pre-push path: the delivery-shape
+// mismatch moves only when the authority inventory is provably healthy. The
+// same Wladimirfn shape over a genuinely damaged store keeps failing closed as
+// `authority_corrupted` even while disabled.
+func TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileDisabledAtPrePush(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
+	configureCLIReviewPublicationRemote(t, repo, branch)
+
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate behavior\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	finalizeFacadeReviewForRepo(t, repo)
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "reviewed candidate")
+
+	disableReviewForClone(t, repo)
+
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("work authored while disabled\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "authored while disabled")
+
+	// Damage the authority inventory: a truncated compact record is corruption,
+	// not a stale-but-healthy receipt.
+	broken := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "v2", "corrupt-while-disabled")
+	if err := os.MkdirAll(broken, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(broken, "review-state.json"), []byte("{\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePrePush)}, &output)
+	var denied ReviewGateDeniedError
+	if !errors.As(err, &denied) {
+		t.Fatalf("corrupted authority while disabled did not fail closed at pre-push: %T %v\n%s", err, err, output.String())
+	}
+	var result ReviewValidateResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if result.Delivery == reviewtransaction.RDDDeliveryDisabledUnmanaged {
+		t.Fatalf("corrupted authority was reported as unmanaged by choice: %#v", result)
+	}
+	if result.Allowed || result.Context.Denial == nil || result.Context.Denial.Code != string(ReviewAuthorityCorrupted) {
+		t.Fatalf("corrupted-authority denial while disabled = %#v", result)
+	}
+}
+
 // TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileDisabled holds
 // the line the disposition must never cross: corrupted review authority is
 // genuine damage, not "unmanaged by choice", so it keeps failing closed with
