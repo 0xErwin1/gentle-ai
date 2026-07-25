@@ -1,12 +1,17 @@
+// Package organicruntime_test proves the journeys a configured agent actually
+// performs once Gentle AI stopped owning implementation: the agent implements
+// organically, and Gentle AI's authority begins only after a candidate exists.
+//
+// Every assertion here is driven through the real gentle-ai binary and the real
+// `review` command surface against real Git repositories and a real bare remote.
+// There is no runtime fixture, no TLS control plane, and no bearer session: the
+// retired control plane cannot be proven, only the shipped product can.
 package organicruntime_test
 
 import (
-	"bufio"
 	"bytes"
 	"context"
-	"crypto/x509"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -16,1014 +21,1455 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/deliveryadmission"
-	"github.com/gentleman-programming/gentle-ai/internal/evidence"
-	"github.com/gentleman-programming/gentle-ai/internal/hostruntime"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/internal/versions"
-	"github.com/gentleman-programming/gentle-ai/internal/workprovider"
-	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
 
 const (
-	realAgentE2EEnvironment             = "GENTLE_AI_REAL_AGENT_E2E"
-	testBinaryEnvironment               = "GENTLE_AI_TEST_BINARY"
-	pinnedOpenCodeVersion               = versions.OpenCode
-	runtimeBearerToken                  = "organic-e2e-owner-secret"
-	runtimeSessionRef                   = "session:organic-runtime-e2e"
-	organicAgentTimeout                 = 4 * time.Minute
-	organicSetupTimeout                 = 2 * time.Minute
-	organicLocalTimeout                 = 30 * time.Second
-	organicCommandWaitDelay             = 10 * time.Second
-	organicShortAuthorizationTTLSeconds = int64(15)
+	// realAgentE2EEnvironment gates the pinned real-agent journeys, which need a
+	// pinned OpenCode plus network access to the pinned plugin package.
+	realAgentE2EEnvironment = "GENTLE_AI_REAL_AGENT_E2E"
+	pinnedOpenCodeVersion   = versions.OpenCode
+
+	organicLocalTimeout     = 90 * time.Second
+	organicSetupTimeout     = 5 * time.Minute
+	organicAgentTimeout     = 4 * time.Minute
+	organicCommandWaitDelay = 10 * time.Second
+
+	// organicWithdrawalDeadline replaces the retired short-TTL harness. The
+	// surviving authorization has no wall-clock lifetime: it is withdrawn by an
+	// explicit user action instead of expiring, so the harness that used to sleep
+	// out a TTL now performs the withdrawal instantly. The deadline only keeps CI
+	// honest — a journey that needs longer than this has stopped being a journey.
+	organicWithdrawalDeadline = 60 * time.Second
 )
 
-type realAgentScenario struct {
-	name                string
-	workRunID           string
-	outcome             string
-	routing             workrun.ImplementationRouteInput
-	expectedRoute       workrun.ImplementationRoute
-	actorTool           string
-	actorMarker         string
-	actorPrompt         string
-	commonReview        bool
-	activeVerification  bool
-	killSwitchAtAdvance bool
-	proveTerminalReplay bool
+// Actor process contract. The delegated worker must be a real, separate OS
+// process rather than an in-test closure, because the behaviour under test is
+// exactly what a sub-agent does on its own: it implements and commits, and it
+// never escalates its own route. Re-executing the compiled test binary keeps
+// that real without adding a language runtime dependency to the suite.
+const (
+	organicActorRoleEnvironment    = "GENTLE_AI_ORGANIC_ACTOR_ROLE"
+	organicActorRepoEnvironment    = "GENTLE_AI_ORGANIC_ACTOR_REPO"
+	organicActorPathEnvironment    = "GENTLE_AI_ORGANIC_ACTOR_PATH"
+	organicActorBodyEnvironment    = "GENTLE_AI_ORGANIC_ACTOR_BODY"
+	organicActorMessageEnvironment = "GENTLE_AI_ORGANIC_ACTOR_MESSAGE"
+	organicActorBinaryEnvironment  = "GENTLE_AI_ORGANIC_ACTOR_BINARY"
+
+	organicActorRoleDirect    = "direct"
+	organicActorRoleDelegated = "delegated"
+
+	organicDirectActorMarker    = "ORGANIC_DIRECT_CANDIDATE_COMMITTED"
+	organicDelegatedActorMarker = "ORGANIC_DELEGATED_CANDIDATE_COMMITTED"
+)
+
+// Wire vocabulary. These are literals on purpose: an end-to-end test pins the
+// contract the product emits, it does not re-derive it from the packages that
+// emit it.
+const (
+	organicRiskLow    = "low"
+	organicRiskMedium = "medium"
+	organicRiskHigh   = "high"
+
+	organicStateApproved           = "approved"
+	organicStateValidating         = "validating"
+	organicStateCorrectionRequired = "correction_required"
+
+	organicGateSchema = "gentle-ai.review-gate-result/v1"
+	organicModeSchema = "gentle-ai.review-mode/v1"
+
+	organicGateAllow = "allow"
+	organicModeOff   = "off"
+)
+
+var organicBinary string
+
+func TestMain(m *testing.M) {
+	if role := strings.TrimSpace(os.Getenv(organicActorRoleEnvironment)); role != "" {
+		os.Exit(runOrganicActor(role))
+	}
+	workspace, err := os.MkdirTemp("", "organic-e2e-binary")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create organic binary workspace: %v\n", err)
+		os.Exit(1)
+	}
+	binary, err := buildOrganicBinary(workspace)
+	if err != nil {
+		_ = os.RemoveAll(workspace)
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+	organicBinary = binary
+	code := m.Run()
+	_ = os.RemoveAll(workspace)
+	os.Exit(code)
 }
 
-func TestRealOpenCodeOrganicRuntimeJourneys(t *testing.T) {
-	if os.Getenv(realAgentE2EEnvironment) != "1" {
-		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the pinned real-agent journeys")
+// runOrganicActor is the implementation actor. It edits exactly one already
+// understood file and explicitly creates the candidate commit, which is the only
+// thing an organic actor owes: the provider never creates or guesses a commit.
+func runOrganicActor(role string) int {
+	repo := os.Getenv(organicActorRepoEnvironment)
+	relative := os.Getenv(organicActorPathEnvironment)
+	body := os.Getenv(organicActorBodyEnvironment)
+	message := os.Getenv(organicActorMessageEnvironment)
+	if repo == "" || relative == "" || message == "" {
+		fmt.Fprintln(os.Stderr, "organic actor requires repository, path, and message")
+		return 1
 	}
-	requireExecutableVersion(t, "opencode", pinnedOpenCodeVersion)
-	requireExecutable(t, "node")
-	moduleRoot := organicModuleRoot(t)
-	binary := organicTestBinary(t, moduleRoot)
-	orchestrator, err := os.ReadFile(
-		filepath.Join(moduleRoot, "internal", "assets", "opencode", "sdd-orchestrator.md"),
-	)
+
+	marker := organicDirectActorMarker
+	if role == organicActorRoleDelegated {
+		marker = organicDelegatedActorMarker
+		// A delegated worker observes authority read-only. It must not start a
+		// review, select a route, or promote itself into SDD: escalating its own
+		// route is precisely the failure this journey exists to catch.
+		if err := assertOrganicDelegatedWorkerStaysInRoute(repo); err != nil {
+			fmt.Fprintf(os.Stderr, "delegated actor escalated its own route: %v\n", err)
+			return 1
+		}
+	}
+
+	target := filepath.Join(repo, filepath.FromSlash(relative))
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "organic actor mkdir: %v\n", err)
+		return 1
+	}
+	if err := os.WriteFile(target, []byte(body), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "organic actor write: %v\n", err)
+		return 1
+	}
+	for _, arguments := range [][]string{
+		{"add", "--", relative},
+		{"commit", "-q", "-m", message},
+	} {
+		if _, err := organicGitOutput(context.Background(), repo, arguments...); err != nil {
+			fmt.Fprintf(os.Stderr, "organic actor git: %v\n", err)
+			return 1
+		}
+	}
+	fmt.Print(marker)
+	return 0
+}
+
+func assertOrganicDelegatedWorkerStaysInRoute(repo string) error {
+	binary := os.Getenv(organicActorBinaryEnvironment)
+	if binary == "" {
+		return errors.New("delegated actor has no gentle-ai binary to observe authority with")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), organicLocalTimeout)
+	defer cancel()
+	command := organicCommandContext(ctx, binary, "review", "mode", "status", "--cwd", repo, "--json")
+	command.Env = os.Environ()
+	output, err := command.Output()
+	if err != nil {
+		return fmt.Errorf("read review mode: %w", err)
+	}
+	var mode organicModeResult
+	if err := json.Unmarshal(output, &mode); err != nil {
+		return fmt.Errorf("decode review mode: %w", err)
+	}
+	if mode.Schema != organicModeSchema || mode.Operation != "status" {
+		return fmt.Errorf("delegated actor read an unexpected authority projection %#v", mode)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Journeys
+// ---------------------------------------------------------------------------
+
+// TestOrganicDirectoryIdentityAcceptsCanonicalAliases keeps the repository
+// selection boundary: relative, absolute, aliased, and `git -C` forms all denote
+// exactly one repository, and a non-directory never does.
+func TestOrganicDirectoryIdentityAcceptsCanonicalAliases(t *testing.T) {
+	t.Parallel()
+	harness := newOrganicHarness(t)
+	worktree := harness.repo.worktree
+
+	canonical := harness.commonDir()
+	relative := harness.git("rev-parse", "--git-common-dir")
+	if !filepath.IsAbs(relative) {
+		relative = filepath.Join(worktree, relative)
+	}
+	if !sameOrganicDirectory(canonical, relative) {
+		t.Fatalf("relative and absolute common-dir forms denote different repositories: %q vs %q", relative, canonical)
+	}
+
+	parent := filepath.Dir(worktree)
+	viaParent, err := organicGitOutput(context.Background(), parent, "-C", worktree, "rev-parse", "--absolute-git-dir")
 	if err != nil {
 		t.Fatal(err)
 	}
-	sharedCache := t.TempDir()
-	sharedConfig := prepareOpenCodeConfig(t)
-
-	// Evidence replacement map:
-	//   marker-only actor + post-actor work-status -> committed candidate +
-	//     terminal work-advance + real remote effect;
-	//   unchanged WorkRun revision after actor -> exact START CAS consumed by
-	//     work-advance and a new terminal revision;
-	//   simulated delivery marker -> bare-repository update-ref CAS, exact tree
-	//     and blob proof, expiry-stable Ready, and lost-response replay.
-	// The route/no-SDD status checks and real delegated/common task actors remain
-	// because they prove distinct safety behavior rather than delivery success.
-	scenarios := []realAgentScenario{
-		{
-			name:      "direct inline implementation",
-			workRunID: "organic-e2e-direct",
-			outcome:   "Apply one already-understood mechanical file change.",
-			routing: workrun.ImplementationRouteInput{
-				WriteIntent:    workrun.WriteIntentAtomicMechanical,
-				WriteFileCount: 1,
-			},
-			expectedRoute:       workrun.ImplementationRouteDirectInline,
-			actorTool:           "bash",
-			actorMarker:         "DIRECT_IMPLEMENTATION_COMMITTED",
-			proveTerminalReplay: true,
-		},
-		{
-			name:      "quick Go implementation",
-			workRunID: "organic-e2e-quick-go",
-			outcome:   "Apply one small Go source change and deliver it safely.",
-			routing: workrun.ImplementationRouteInput{
-				WriteIntent:    workrun.WriteIntentAtomicMechanical,
-				WriteFileCount: 1,
-			},
-			expectedRoute:      workrun.ImplementationRouteDirectInline,
-			actorTool:          "bash",
-			actorMarker:        "QUICK_GO_IMPLEMENTATION_COMMITTED",
-			activeVerification: true,
-		},
-		{
-			name:      "delegated direct implementation",
-			workRunID: "organic-e2e-delegated",
-			outcome:   "Understand four files and implement the bounded outcome.",
-			routing: workrun.ImplementationRouteInput{
-				ReadIntent:     workrun.ReadIntentExploreUnderstand,
-				ReadFileCount:  4,
-				WriteIntent:    workrun.WriteIntentAtomicMechanical,
-				WriteFileCount: 1,
-			},
-			expectedRoute: workrun.ImplementationRouteDelegatedDirect,
-			actorTool:     "task",
-			actorMarker:   "DELEGATED_IMPLEMENTATION_COMMITTED",
-			actorPrompt: "Act as the delegated-direct implementation worker. " +
-				"Read the exact managed WorkRun status, confirm its route is " +
-				"delegated_direct with no SDD run, implement the exact admitted " +
-				"documentation scope, explicitly commit it, then return exactly " +
-				"DELEGATED_IMPLEMENTATION_COMMITTED.",
-		},
-		{
-			name:      "direct route with common review actor",
-			workRunID: "organic-e2e-common-review",
-			outcome:   "Apply one mechanical change and run the common review actor.",
-			routing: workrun.ImplementationRouteInput{
-				WriteIntent:    workrun.WriteIntentAtomicMechanical,
-				WriteFileCount: 1,
-			},
-			expectedRoute: workrun.ImplementationRouteDirectInline,
-			actorTool:     "bash",
-			actorMarker:   "COMMON_REVIEW_OK",
-			commonReview:  true,
-			actorPrompt: "Act as the common native review worker after direct " +
-				"implementation. Read the exact managed WorkRun status, confirm " +
-				"the route remains direct_inline with no SDD run, then return " +
-				"exactly COMMON_REVIEW_OK.",
-		},
-		{
-			name:      "managed start kill switch before advance",
-			workRunID: "organic-e2e-kill-switch",
-			outcome:   "Apply one mechanical file change, then stop if the owner runtime is disabled.",
-			routing: workrun.ImplementationRouteInput{
-				WriteIntent:    workrun.WriteIntentAtomicMechanical,
-				WriteFileCount: 1,
-			},
-			expectedRoute:       workrun.ImplementationRouteDirectInline,
-			actorTool:           "bash",
-			actorMarker:         "KILL_SWITCH_CANDIDATE_COMMITTED",
-			killSwitchAtAdvance: true,
-		},
+	if !sameOrganicDirectory(canonical, viaParent) {
+		t.Fatalf("git -C form denotes a different repository: %q vs %q", viaParent, canonical)
 	}
 
-	for _, scenario := range scenarios {
-		t.Run(scenario.name, func(t *testing.T) {
-			runRealAgentScenario(
-				t,
-				moduleRoot,
-				binary,
-				string(orchestrator),
-				sharedCache,
-				sharedConfig,
-				scenario,
+	alias := filepath.Join(t.TempDir(), "alias")
+	if err := os.Symlink(worktree, alias); err != nil {
+		t.Skipf("directory aliases are unavailable: %v", err)
+	}
+	viaAlias, err := organicGitOutput(context.Background(), alias, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sameOrganicDirectory(canonical, viaAlias) {
+		t.Fatalf("aliased worktree denotes a different repository: %q vs %q", viaAlias, canonical)
+	}
+
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if sameOrganicDirectory(canonical, file) {
+		t.Fatal("a regular file was accepted as the repository directory")
+	}
+}
+
+// TestOrganicConfiguredAgentReceivesRoutingGuidance is the optional-SDD
+// "proposed" leg. Every configured agent is told the same thing through its own
+// delivery strategy: three routes exist, SDD is only ever proposed, and it is
+// selected only by an explicit request or an accepted proposal.
+func TestOrganicConfiguredAgentReceivesRoutingGuidance(t *testing.T) {
+	t.Parallel()
+	// One row per adapter delivery strategy: a markdown section, an always-loaded
+	// orchestrator prompt inside agent settings, and a markdown rules file.
+	agents := []struct {
+		name    string
+		agentID string
+		path    string
+	}{
+		{name: "markdown section", agentID: "claude-code", path: ".claude/CLAUDE.md"},
+		{name: "orchestrator prompt", agentID: "opencode", path: ".config/opencode/opencode.json"},
+		{name: "markdown rules", agentID: "cursor", path: ".cursor/rules/gentle-ai.mdc"},
+	}
+	required := []string{
+		"Direct inline",
+		"Delegated direct",
+		"Optional SDD",
+		"never selects SDD",
+		"never create SDD artifacts",
+		"gentle-ai review mode enable|disable|status",
+		"disabled/unmanaged",
+	}
+	for _, agent := range agents {
+		t.Run(agent.name, func(t *testing.T) {
+			t.Parallel()
+			workspace := t.TempDir()
+			home := t.TempDir()
+			if _, err := organicGitOutput(context.Background(), workspace, "init", "--quiet", "--initial-branch=main", "."); err != nil {
+				t.Fatal(err)
+			}
+			output, stderr, err := runOrganicCommand(
+				t, organicBinary, workspace, organicEnvironment(home),
+				"install", "--agent", agent.agentID, "--scope", "workspace", "--components", "permissions",
 			)
+			if err != nil {
+				t.Fatalf("install %s: %v\nstdout:\n%s\nstderr:\n%s", agent.agentID, err, output, stderr)
+			}
+			rendered, readErr := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(agent.path)))
+			if readErr != nil {
+				t.Fatalf("configured agent %s received no routing guidance at %s: %v", agent.agentID, agent.path, readErr)
+			}
+			for _, fragment := range required {
+				if !bytes.Contains(rendered, []byte(fragment)) {
+					t.Fatalf("routing guidance for %s omits %q:\n%s", agent.agentID, fragment, rendered)
+				}
+			}
 		})
 	}
 }
 
-func runRealAgentScenario(
-	t *testing.T,
-	moduleRoot string,
-	binary string,
-	orchestrator string,
-	sharedCache string,
-	sharedConfig string,
-	scenario realAgentScenario,
-) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(
-		context.Background(),
-		organicAgentTimeout,
-	)
-	defer cancel()
-
-	repository := initOrganicRepository(t)
-	repo := repository.worktree
-	lease, err := reviewtransaction.OpenRepositoryIdentityLease(ctx, repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	repositoryRef := lease.Identity().RepositoryRef
-	baseRevision := "git:" + repository.baseRevision
-
-	authorizationTTL := int64(3600)
-	if scenario.proveTerminalReplay {
-		authorizationTTL = organicShortAuthorizationTTLSeconds
-	}
-	policies := organicRoutePolicies(t, 1, authorizationTTL)
-	snapshot, err := workprovider.NewProductivePolicySnapshot(
-		repositoryRef,
-		model.AgentOpenCode,
-		runtimeSessionRef,
-		1,
-		policies,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intake := workprovider.OwnerOutcomeIntake{
-		WorkRunID:      scenario.workRunID,
-		Nonce:          "nonce:" + scenario.workRunID,
-		Route:          deliveryadmission.RouteDirectMain,
-		ScopeSelectors: []string{"docs/passive-note.md"},
-		Destination: workprovider.OwnerDestinationInput{
-			TargetRef:        "refs/heads/main",
-			ObservedRevision: baseRevision,
-			DefaultBranch:    true,
+// TestOrganicReviewTierIsSelectedByEvidenceNotSize pins the proportional tier.
+// Tier 0 runs zero AI reviewers and asks nothing; tier 1 runs exactly one
+// consolidated review; tier 2 runs the focused 4R only when named evidence
+// demands it. The two large mechanical rows exist to prove the inverse: volume
+// never escalates a tier.
+func TestOrganicReviewTierIsSelectedByEvidenceNotSize(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name        string
+		files       map[string]string
+		risk        string
+		lensCount   int
+		wantsPrompt bool
+		minLines    int
+	}{
+		{
+			name:  "tier 0 passive documentation",
+			files: map[string]string{"docs/note.md": organicLines("documentation line", 12)},
+			risk:  organicRiskLow,
 		},
-		PrimaryAuthority: workprovider.OwnerAuthoritySignalInput{
-			SignalID:   "signal:" + scenario.workRunID,
-			IssuerRef:  "maintainer:organic-e2e",
-			Provenance: deliveryadmission.ProvenanceMaintainerControl,
-			ExpiresAt:  time.Now().UTC().Add(time.Hour).Unix(),
+		{
+			name:  "tier 0 large passive documentation",
+			files: map[string]string{"docs/handbook.md": organicLines("handbook line", 2000)},
+			risk:  organicRiskLow,
+			// Two thousand authored lines of prose stay at zero reviewers: the
+			// classifier reads content, never volume.
+			minLines: 2000,
 		},
-		RoutingFacts: scenario.routing,
+		{
+			name:        "tier 1 ordinary source",
+			files:       map[string]string{"internal/feature/flag.go": "package feature\n\nfunc Enabled() bool { return true }\n"},
+			risk:        organicRiskMedium,
+			lensCount:   1,
+			wantsPrompt: true,
+		},
+		{
+			name:        "tier 1 large mechanical source",
+			files:       organicMechanicalFiles(12, 100),
+			risk:        organicRiskMedium,
+			lensCount:   1,
+			wantsPrompt: true,
+			// 1200+ mechanical lines across 12 files must stay on one consolidated
+			// review. Escalating here would be size-driven, not evidence-driven.
+			minLines: 1200,
+		},
+		{
+			name:        "tier 2 authorization hot path",
+			files:       map[string]string{"internal/auth/session.go": "package auth\n\nfunc Session() bool { return true }\n"},
+			risk:        organicRiskHigh,
+			lensCount:   4,
+			wantsPrompt: true,
+		},
+		{
+			name:        "tier 2 shell process source",
+			files:       map[string]string{"scripts/deploy.sh": "#!/bin/sh\nset -eu\necho deploy\n"},
+			risk:        organicRiskHigh,
+			lensCount:   4,
+			wantsPrompt: true,
+		},
 	}
-	if scenario.activeVerification {
-		intake.ScopeSelectors = []string{"internal/active.go"}
-	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			harness := newOrganicHarness(t)
+			harness.writeFiles(test.files)
 
-	runtimeServer := newOrganicRuntimeServer(
-		t,
-		repositoryRef,
-		repository,
-		snapshot,
-		intake,
-		scenario,
-	)
-	defer runtimeServer.Close()
-	caFile := writeOrganicServerCA(t, runtimeServer)
-	tokenFile := filepath.Join(t.TempDir(), "runtime.token")
-	if err := os.WriteFile(tokenFile, []byte(runtimeBearerToken), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	modelServer := newOpenCodeFixtureServer(t, scenario, orchestrator)
-	defer modelServer.Close()
-	config := organicOpenCodeConfig(t, modelServer.URL, orchestrator)
-	home := t.TempDir()
-	startRevisionFile := filepath.Join(home, "start-revision")
-	for _, path := range []string{
-		filepath.Join(home, "data"),
-		filepath.Join(home, "state"),
-		filepath.Join(home, "opencode"),
-		sharedCache,
-		sharedConfig,
-	} {
-		if err := os.MkdirAll(path, 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	command := organicCommandContext(
-		ctx,
-		"opencode",
-		"run",
-		"--pure",
-		"--format",
-		"json",
-		"--agent",
-		"organic",
-		"--model",
-		"fixture/fixture",
-		"--dir",
-		repo,
-		scenario.outcome,
-	)
-	command.Dir = repo
-	environment := append(os.Environ(),
-		"HOME="+home,
-		"XDG_CONFIG_HOME="+sharedConfig,
-		"XDG_CACHE_HOME="+sharedCache,
-		"XDG_DATA_HOME="+filepath.Join(home, "data"),
-		"XDG_STATE_HOME="+filepath.Join(home, "state"),
-		"OPENCODE_CONFIG_DIR="+filepath.Join(sharedConfig, "opencode"),
-		"OPENCODE_TEST_HOME="+filepath.Join(home, "opencode"),
-		"OPENCODE_CONFIG_CONTENT="+config,
-		"OPENCODE_AUTH_CONTENT={}",
-		"OPENCODE_DISABLE_PROJECT_CONFIG=1",
-		"OPENCODE_DISABLE_AUTOUPDATE=1",
-		"OPENCODE_DISABLE_AUTOCOMPACT=1",
-		"OPENCODE_DISABLE_CLAUDE_CODE=1",
-		"OPENCODE_DISABLE_DEFAULT_PLUGINS=1",
-		"OPENCODE_DISABLE_EXTERNAL_SKILLS=1",
-		"OPENCODE_DISABLE_LSP_DOWNLOAD=1",
-		"OPENCODE_DISABLE_MODELS_FETCH=1",
-		"OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER=1",
-		"OPENCODE_FAST_BOOT=1",
-		"OPENCODE_PURE=1",
-		workprovider.WorkRoutingModeEnvironment+"="+
-			string(workprovider.ActivationEnabled),
-		workprovider.ProductiveRuntimeURLEnvironment+"="+runtimeServer.URL,
-		workprovider.ProductiveRuntimeTokenFileEnvironment+"="+tokenFile,
-		workprovider.ProductiveRuntimeCAFileEnvironment+"="+caFile,
-		testBinaryEnvironment+"="+binary,
-		"ORGANIC_E2E_REPO="+repo,
-		"ORGANIC_E2E_OUTCOME="+scenario.outcome,
-		"ORGANIC_E2E_WORK_RUN_ID="+scenario.workRunID,
-		"ORGANIC_E2E_START_REVISION_FILE="+startRevisionFile,
-	)
-	command.Env = environment
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
-		t.Fatalf(
-			"opencode run: %v\nstdout:\n%s\nstderr:\n%s",
-			err,
-			stdout.String(),
-			stderr.String(),
-		)
-	}
-	if stderr.Len() != 0 {
-		t.Fatalf("opencode stderr:\n%s", stderr.String())
-	}
-
-	events := decodeOpenCodeEvents(t, stdout.Bytes())
-	evidence := assertOrganicJourney(
-		t,
-		events,
-		scenario,
-		repositoryRef,
-		runtimeSessionRef,
-	)
-	modelServer.assertComplete(t)
-	assertOrganicNoSDD(t, repository)
-	if scenario.killSwitchAtAdvance {
-		assertOrganicKilledAdvance(t, repository, runtimeServer, evidence)
-	} else {
-		assertOrganicDeliveredCandidate(
-			t,
-			repository,
-			runtimeServer,
-			evidence,
-			scenario,
-		)
-	}
-	if scenario.proveTerminalReplay {
-		assertOrganicTerminalReplay(
-			t,
-			binary,
-			repo,
-			environment,
-			runtimeServer,
-			evidence,
-		)
-	}
-	runtimeServer.assertCalls(t)
-	assertOrganicOnlyMainRef(t, repository.bare)
-}
-
-type organicRuntimeServer struct {
-	*httptest.Server
-	mu                 sync.Mutex
-	repositoryRef      string
-	repository         organicRepository
-	snapshot           workprovider.ProductivePolicySnapshot
-	intake             workprovider.OwnerOutcomeIntake
-	scenario           realAgentScenario
-	verificationEnv    map[string]string
-	operations         []workprovider.ProductiveRuntimeOperation
-	bootstraps         int
-	branchCASCalls     int
-	branchCASEffects   int
-	executionExpiresAt int64
-	candidateRevision  string
-	failure            string
-}
-
-type organicPADGitBindingRequest struct {
-	Candidate   deliveryadmission.CandidateBinding   `json:"candidate"`
-	Destination deliveryadmission.DestinationBinding `json:"destination"`
-	Mechanism   deliveryadmission.Mechanism          `json:"mechanism"`
-}
-
-type organicSemanticEvaluationRequest struct {
-	Ticket  evidence.ActionTicket       `json:"ticket"`
-	Process hostruntime.ProcessEvidence `json:"process"`
-}
-
-func newOrganicRuntimeServer(
-	t *testing.T,
-	repositoryRef string,
-	repository organicRepository,
-	snapshot workprovider.ProductivePolicySnapshot,
-	intake workprovider.OwnerOutcomeIntake,
-	scenario realAgentScenario,
-) *organicRuntimeServer {
-	t.Helper()
-	fixture := &organicRuntimeServer{
-		repositoryRef: repositoryRef,
-		repository:    repository,
-		snapshot:      snapshot,
-		intake:        intake,
-		scenario:      scenario,
-	}
-	if scenario.activeVerification {
-		fixture.verificationEnv = organicGoVerificationEnvironment(t)
-	}
-	fixture.Server = httptest.NewTLSServer(http.HandlerFunc(fixture.serveHTTP))
-	return fixture
-}
-
-func organicGoVerificationEnvironment(t *testing.T) map[string]string {
-	t.Helper()
-	root := t.TempDir()
-	directories := map[string]string{
-		"GOCACHE":    filepath.Join(root, "build-cache"),
-		"GOMODCACHE": filepath.Join(root, "module-cache"),
-		"GOPATH":     filepath.Join(root, "gopath"),
-		"GOTMPDIR":   filepath.Join(root, "tmp"),
-		"HOME":       filepath.Join(root, "home"),
-	}
-	for _, directory := range directories {
-		if err := os.MkdirAll(directory, 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	environment := map[string]string{
-		"CGO_ENABLED": "0",
-		"GOENV":       "off",
-		"GOTOOLCHAIN": "local",
-		"GOPROXY":     "off",
-		"GOROOT":      runtime.GOROOT(),
-		"GOSUMDB":     "off",
-		"GOWORK":      "off",
-		"USERPROFILE": directories["HOME"],
-		"TMPDIR":      directories["GOTMPDIR"],
-		"TEMP":        directories["GOTMPDIR"],
-		"TMP":         directories["GOTMPDIR"],
-	}
-	for name, value := range directories {
-		environment[name] = value
-	}
-	if runtime.GOOS == "windows" {
-		for _, name := range []string{"SystemRoot", "WINDIR", "ComSpec"} {
-			if value := os.Getenv(name); value != "" {
-				environment[name] = value
+			started, stderr := harness.startReview("organic-tier")
+			if started.RiskLevel != test.risk || len(started.SelectedLenses) != test.lensCount {
+				t.Fatalf("tier = %q with %d lenses, want %q with %d", started.RiskLevel, len(started.SelectedLenses), test.risk, test.lensCount)
 			}
+			if started.LensesRequired != (test.lensCount > 0) {
+				t.Fatalf("lenses_required = %t for %d selected lenses", started.LensesRequired, test.lensCount)
+			}
+			if test.minLines > 0 && started.ChangedLines < test.minLines {
+				t.Fatalf("changed lines = %d, want at least %d for the volume claim to mean anything", started.ChangedLines, test.minLines)
+			}
+			// Tier 0 is silent structural readback. Emitting a consent prompt here
+			// would reintroduce exactly the ceremony the readback exists to remove.
+			if prompted := strings.TrimSpace(stderr) != ""; prompted != test.wantsPrompt {
+				t.Fatalf("consent prompt emitted = %t, want %t; stderr:\n%s", prompted, test.wantsPrompt, stderr)
+			}
+
+			approved := harness.approveReview("organic-tier", started)
+			if approved.State != organicStateApproved || approved.ReceiptPath == "" {
+				t.Fatalf("tier %q did not reach one terminal receipt: %#v", test.risk, approved)
+			}
+			harness.assertNoSDDArtifacts()
+		})
+	}
+}
+
+// TestOrganicImplementationRoutesReachDelivery walks the two organic
+// implementation routes end to end: a real actor process produces the candidate,
+// the proportional review approves it, the delivery gate authorizes the push,
+// and the bare remote moves exactly once under compare-and-swap.
+func TestOrganicImplementationRoutesReachDelivery(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		role   string
+		marker string
+		path   string
+		body   string
+	}{
+		{
+			name:   "direct inline",
+			role:   organicActorRoleDirect,
+			marker: organicDirectActorMarker,
+			path:   "docs/direct-note.md",
+			body:   organicLines("direct implementation line", 10),
+		},
+		{
+			name:   "delegated direct",
+			role:   organicActorRoleDelegated,
+			marker: organicDelegatedActorMarker,
+			path:   "docs/delegated-note.md",
+			body:   organicLines("delegated implementation line", 10),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			harness := newOrganicHarness(t)
+			harness.runActor(test.role, test.path, test.body, "docs: add an organic note", test.marker)
+
+			candidate := harness.git("rev-parse", "HEAD")
+			if candidate == harness.repo.baseRevision {
+				t.Fatal("the actor never created a candidate commit")
+			}
+
+			lineage := "organic-" + strings.ReplaceAll(test.name, " ", "-")
+			started, _ := harness.startReview(lineage, "--base-ref", "origin/main")
+			approved := harness.approveReview(lineage, started)
+			if approved.State != organicStateApproved {
+				t.Fatalf("%s route did not approve its candidate: %#v", test.name, approved)
+			}
+
+			gate := harness.gate("pre-push")
+			if !gate.Allowed || gate.Result != organicGateAllow {
+				t.Fatalf("pre-push gate refused an approved candidate: %#v", gate)
+			}
+
+			harness.pushWithLease(harness.repo.baseRevision)
+			harness.assertRemoteBlob(test.path, test.body)
+			harness.assertOnlyMainRef()
+			harness.assertStaleLeaseIsRejected(harness.repo.baseRevision)
+
+			// The route is what this journey selects; SDD is what it must never
+			// select. A delegated worker in particular must not promote itself.
+			harness.assertNoSDDArtifacts()
+			harness.assertSingleReviewLineage(lineage)
+		})
+	}
+}
+
+// TestOrganicOptionalSDDDeclineAndAccept covers both answers to the one optional
+// route question. Declining leaves the repository free of SDD state; accepting
+// creates the SDD runtime and binds it to the same approved organic receipt.
+func TestOrganicOptionalSDDDeclineAndAccept(t *testing.T) {
+	t.Parallel()
+
+	t.Run("declined", func(t *testing.T) {
+		t.Parallel()
+		harness := newOrganicHarness(t)
+		harness.runActor(organicActorRoleDirect, "docs/declined.md", organicLines("declined line", 8), "docs: implement directly", organicDirectActorMarker)
+
+		started, _ := harness.startReview("organic-sdd-declined", "--base-ref", "origin/main")
+		if approved := harness.approveReview("organic-sdd-declined", started); approved.State != organicStateApproved {
+			t.Fatalf("declined route did not approve: %#v", approved)
 		}
+		// This is the proposal's core claim, so it stays verbatim: direct and
+		// delegated work never create SDD artifacts, prompts, phase attempts, or
+		// synthetic SDD runs.
+		harness.assertNoSDDArtifacts()
+		if _, err := os.Stat(filepath.Join(harness.repo.worktree, "openspec")); !os.IsNotExist(err) {
+			t.Fatalf("declined route created OpenSpec artifacts: %v", err)
+		}
+	})
+
+	t.Run("accepted", func(t *testing.T) {
+		t.Parallel()
+		harness := newOrganicHarness(t)
+		const change = "organic-accepted-change"
+		harness.writeFiles(map[string]string{
+			filepath.ToSlash(filepath.Join("openspec", "changes", change, "proposal.md")): "# Proposal\n\nAccepted optional SDD.\n",
+			"docs/accepted.md": organicLines("accepted line", 8),
+		})
+
+		started, _ := harness.startReview("organic-sdd-accepted")
+		approved := harness.approveReview("organic-sdd-accepted", started)
+		if approved.State != organicStateApproved {
+			t.Fatalf("accepted route did not approve: %#v", approved)
+		}
+
+		payload := harness.gentle("review", "bind-sdd",
+			"--cwd", harness.repo.worktree,
+			"--change", change,
+			"--lineage", "organic-sdd-accepted",
+			"--expected-binding-revision", "",
+		)
+		var binding struct {
+			Schema      string `json:"schema"`
+			Change      string `json:"change"`
+			Lineage     string `json:"lineage"`
+			ReceiptHash string `json:"receipt_hash"`
+			GateContext struct {
+				Gate string `json:"gate"`
+			} `json:"gate_context"`
+		}
+		if err := json.Unmarshal(payload, &binding); err != nil {
+			t.Fatalf("decode bind-sdd result: %v\n%s", err, payload)
+		}
+		if binding.Change != change || binding.Lineage != "organic-sdd-accepted" || binding.ReceiptHash == "" {
+			t.Fatalf("accepted SDD binding = %#v", binding)
+		}
+		// The accepted answer is the only one that may create SDD state, so this
+		// is the exact inverse of the declined assertion above.
+		if !harness.hasSDDArtifacts() {
+			t.Fatal("accepted optional SDD created no SDD runtime state")
+		}
+	})
+}
+
+// TestOrganicBoundedCorrectionAllowsExactlyOne proves the ordinary review budget:
+// one candidate-caused blocker buys one scoped correction, and the transaction
+// refuses a second one instead of looping until clean.
+func TestOrganicBoundedCorrectionAllowsExactlyOne(t *testing.T) {
+	t.Parallel()
+	harness := newOrganicHarness(t)
+	const lineage = "organic-correction"
+	const path = "internal/feature/limit.go"
+
+	harness.writeFiles(map[string]string{path: organicLimitSource("broken")})
+	started, _ := harness.startReview(lineage)
+	if started.RiskLevel != organicRiskMedium || len(started.SelectedLenses) != 1 || started.CorrectionBudget <= 0 {
+		t.Fatalf("correction journey needs one consolidated review with a budget: %#v", started)
+	}
+
+	blocker := harness.writeJSON("blocker.json", organicReviewerResult{
+		Lens: started.SelectedLenses[0],
+		Findings: []organicFinding{{
+			Location:          path + ":5",
+			Severity:          "CRITICAL",
+			Claim:             "the candidate returns the wrong terminal value",
+			ProofRefs:         []string{"a differential test passes on base and fails on the candidate"},
+			EvidenceClass:     "deterministic",
+			CausalDisposition: "introduced",
+		}},
+		Evidence: []string{"the focused differential test failed on the candidate"},
+	})
+	required := harness.finalize(lineage, "--result", blocker)
+	if required.State != organicStateCorrectionRequired {
+		t.Fatalf("candidate-caused blocker did not require a correction: %#v", required)
+	}
+
+	forecast := harness.finalize(lineage, "--correction-lines", "2")
+	if forecast.State != organicStateCorrectionRequired {
+		t.Fatalf("in-budget forecast escalated: %#v", forecast)
+	}
+
+	harness.writeFiles(map[string]string{path: organicLimitSource("fixed")})
+	validation := harness.writeJSON("validation.json", organicValidationResult{
+		OriginalCriteria:     organicValidationCheck{Passed: true, Evidence: []string{"the original acceptance test passed"}},
+		CorrectionRegression: organicValidationCheck{Passed: true, Evidence: []string{"the targeted regression test passed"}},
+		FollowUps:            []any{},
+	})
+	validating := harness.finalize(lineage, "--validation", validation)
+	if validating.State != organicStateValidating {
+		t.Fatalf("scoped correction did not reach validation: %#v", validating)
+	}
+
+	approved := harness.finalize(lineage, "--evidence", harness.writeEvidence())
+	if approved.State != organicStateApproved || approved.ReceiptPath == "" {
+		t.Fatalf("one bounded correction did not produce a terminal receipt: %#v", approved)
+	}
+
+	before := harness.lineageDigest(lineage)
+	_, stderr, err := harness.gentleAllowFailure("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage, "--result", blocker)
+	if err == nil {
+		t.Fatal("a second correction was accepted after the bounded one was consumed")
+	}
+	if !strings.Contains(stderr, "terminal review finalize accepts no review inputs") {
+		t.Fatalf("second correction was refused without a discoverable reason: %s", stderr)
+	}
+	if after := harness.lineageDigest(lineage); after != before {
+		t.Fatal("the refused second correction still mutated review authority")
+	}
+}
+
+// TestOrganicFlexibleDeliveryReusesOneReceipt proves the receipt is content
+// bound, not route bound: one immutable receipt authorizes direct commit, direct
+// push, and a pull request with or without an issue, and none of those routes
+// reopens review.
+func TestOrganicFlexibleDeliveryReusesOneReceipt(t *testing.T) {
+	t.Parallel()
+	harness := newOrganicHarness(t)
+	const lineage = "organic-delivery"
+	const path = "docs/delivery-note.md"
+	body := organicLines("delivery line", 10)
+
+	harness.writeFiles(map[string]string{path: body})
+	harness.git("add", "--", path)
+
+	started, _ := harness.startReview(lineage, "--projection", "staged")
+	if approved := harness.approveReview(lineage, started); approved.State != organicStateApproved {
+		t.Fatalf("staged candidate did not approve: %#v", approved)
+	}
+
+	// Route 1: direct commit.
+	commitGate := harness.gate("pre-commit")
+	if !commitGate.Allowed {
+		t.Fatalf("pre-commit refused the approved candidate: %#v", commitGate)
+	}
+	harness.git("commit", "-q", "-m", "docs: add a delivery note")
+
+	// Route 2: direct push, under the same receipt and after the commit.
+	pushGate := harness.gate("pre-push")
+	if !pushGate.Allowed {
+		t.Fatalf("pre-push refused the approved candidate: %#v", pushGate)
+	}
+
+	// Routes 3 and 4: a pull request with and without an issue reference. The two
+	// branches carry the same tree under different commits, which is the point:
+	// Gentle AI binds content, so neither the delivery route nor the commit
+	// identity reopens review, and the issue reference is repository policy that
+	// the receipt neither requires nor records. Both run before publication,
+	// because the pull-request boundary is the unpublished remote base.
+	prGate := harness.gate("pre-pr", "--base-ref", "origin/main")
+	if !prGate.Allowed {
+		t.Fatalf("pre-pr without an issue refused the approved candidate: %#v", prGate)
+	}
+	harness.git("checkout", "-q", "-b", "organic-pr-with-issue")
+	harness.git("commit", "-q", "--amend", "--allow-empty", "-m", "docs: add a delivery note\n\nRefs: #17")
+	issueGate := harness.gate("pre-pr", "--base-ref", "origin/main")
+	if !issueGate.Allowed {
+		t.Fatalf("pre-pr with an issue refused the approved candidate: %#v", issueGate)
+	}
+
+	harness.git("checkout", "-q", "main")
+	harness.pushWithLease(harness.repo.baseRevision)
+	harness.assertRemoteBlob(path, body)
+
+	digests := map[string]string{
+		"pre-commit":              commitGate.Context.BundleDigest,
+		"pre-push":                pushGate.Context.BundleDigest,
+		"pre-pr without an issue": prGate.Context.BundleDigest,
+		"pre-pr with an issue":    issueGate.Context.BundleDigest,
+	}
+	for gate, digest := range digests {
+		if digest == "" || digest != commitGate.Context.BundleDigest {
+			t.Fatalf("%s validated a different receipt (%q) than the one that was approved (%q)", gate, digest, commitGate.Context.BundleDigest)
+		}
+	}
+	// Four delivery routes, one lineage: changing the route, or rewriting the
+	// commit over an unchanged tree, never reopened review.
+	harness.assertSingleReviewLineage(lineage)
+	harness.assertNoSDDArtifacts()
+	harness.assertOnlyMainRef()
+}
+
+// TestOrganicKillSwitchStopsAtTheDeliveryBoundary proves safe disablement. The
+// candidate still exists locally, nothing reaches the remote, no authority
+// generation is written, and the refusal is typed and discoverable rather than a
+// silent no-op or a fabricated approval.
+func TestOrganicKillSwitchStopsAtTheDeliveryBoundary(t *testing.T) {
+	t.Parallel()
+	harness := newOrganicHarness(t)
+	harness.runActor(organicActorRoleDirect, "docs/killed.md", organicLines("killed line", 8), "docs: implement before the switch", organicDirectActorMarker)
+
+	mode := harness.disableReview()
+	if mode.Schema != organicModeSchema || mode.Status.Effective != organicModeOff || mode.Status.Source != "clone_local" {
+		t.Fatalf("kill switch produced no typed outcome: %#v", mode)
+	}
+	generationsAfterDisable := harness.reviewModeGenerations()
+
+	// The candidate is committed locally. That is deliberate: disabling review
+	// must never destroy the user's work.
+	if harness.git("rev-parse", "HEAD") == harness.repo.baseRevision {
+		t.Fatal("the kill-switch journey never reached a committed candidate")
+	}
+
+	_, stderr, err := harness.gentleAllowFailure("review", "start", "--cwd", harness.repo.worktree, "--lineage", "organic-killed")
+	if err == nil {
+		t.Fatal("review start succeeded while review-driven development was disabled")
+	}
+	if !strings.Contains(stderr, "review-driven development is disabled") || !strings.Contains(stderr, "clone_local") {
+		t.Fatalf("disabled start was refused without naming the deciding source: %s", stderr)
+	}
+
+	// The delivery boundary reports an unmanaged, receiptless candidate instead of
+	// inventing an approval.
+	gate := harness.gateAllowFailure("pre-push")
+	if gate.Schema != organicGateSchema || gate.Allowed || gate.Result == organicGateAllow {
+		t.Fatalf("disabled delivery gate did not fail closed: %#v", gate)
+	}
+	if gate.Context.Denial == nil || gate.Context.Denial.Stage != "receipt-discovery" {
+		t.Fatalf("disabled delivery gate denial is not discoverable: %#v", gate.Context.Denial)
+	}
+	// The guidance installed on all 16 adapters promises this exact token under a
+	// disabled switch. Asserting it here is what keeps that promise honest, and
+	// distinguishes "unmanaged by choice" from "blocked because something broke".
+	if gate.Delivery != "disabled/unmanaged" {
+		t.Fatalf("disabled delivery gate did not report the promised disposition: %q", gate.Delivery)
+	}
+
+	// Zero effects: no review authority, no additional compare-and-swap
+	// generation, and a remote that never moved.
+	if _, err := os.Stat(filepath.Join(harness.commonDir(), "gentle-ai", "review-transactions", "v2")); !os.IsNotExist(err) {
+		t.Fatalf("a disabled start still created review authority: %v", err)
+	}
+	if after := harness.reviewModeGenerations(); !equalOrganicStrings(after, generationsAfterDisable) {
+		t.Fatalf("a disabled start advanced review-mode CAS generations: %v -> %v", generationsAfterDisable, after)
+	}
+	remote := harness.bareGit("rev-parse", "refs/heads/main")
+	if remote != harness.repo.baseRevision {
+		t.Fatalf("the remote moved while review was disabled: %s != %s", remote, harness.repo.baseRevision)
+	}
+	harness.assertOnlyMainRef()
+	harness.assertNoSDDArtifacts()
+}
+
+// TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect keeps the
+// expiry-stable terminal state. The authorization that permitted the review is
+// withdrawn afterwards, and the terminal receipt still validates, replays
+// byte-identically, and produces no additional effect.
+func TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect(t *testing.T) {
+	t.Parallel()
+	deadline := time.Now().Add(organicWithdrawalDeadline)
+	harness := newOrganicHarness(t)
+	const lineage = "organic-withdrawal"
+	const path = "docs/withdrawn.md"
+	body := organicLines("withdrawal line", 10)
+
+	harness.writeFiles(map[string]string{path: body})
+	started, _ := harness.startReview(lineage)
+	if approved := harness.approveReview(lineage, started); approved.State != organicStateApproved {
+		t.Fatalf("withdrawal journey did not approve its candidate: %#v", approved)
+	}
+
+	firstGate := harness.gentle("review", "validate", "--cwd", harness.repo.worktree, "--gate", "post-apply")
+	firstFinalize := harness.gentle("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage)
+	beforeWithdrawal := harness.lineageDigest(lineage)
+
+	// Withdraw the authorization. Unlike the retired wall-clock lease this is an
+	// explicit event, so the harness withdraws instead of sleeping.
+	if mode := harness.disableReview(); mode.Status.Effective != organicModeOff {
+		t.Fatalf("authorization withdrawal did not take effect: %#v", mode)
+	}
+	generationsAfterWithdrawal := harness.reviewModeGenerations()
+
+	// The withdrawal must be real, otherwise everything below is vacuous.
+	if _, _, err := harness.gentleAllowFailure("review", "start", "--cwd", harness.repo.worktree, "--lineage", "organic-withdrawal-successor"); err == nil {
+		t.Fatal("a new review started after the authorization was withdrawn")
+	}
+
+	replayedGate := harness.gentle("review", "validate", "--cwd", harness.repo.worktree, "--gate", "post-apply")
+	if !bytes.Equal(replayedGate, firstGate) {
+		t.Fatalf("the terminal gate result changed after withdrawal:\nfirst:\n%s\nreplay:\n%s", firstGate, replayedGate)
+	}
+	replayedFinalize := harness.gentle("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage)
+	if !bytes.Equal(replayedFinalize, firstFinalize) {
+		t.Fatalf("the terminal finalize replay changed bytes:\nfirst:\n%s\nreplay:\n%s", firstFinalize, replayedFinalize)
+	}
+
+	if after := harness.lineageDigest(lineage); after != beforeWithdrawal {
+		t.Fatal("replaying a terminal review mutated its authority")
+	}
+	if after := harness.reviewModeGenerations(); !equalOrganicStrings(after, generationsAfterWithdrawal) {
+		t.Fatalf("replay advanced review-mode CAS generations: %v -> %v", generationsAfterWithdrawal, after)
+	}
+	if remote := harness.bareGit("rev-parse", "refs/heads/main"); remote != harness.repo.baseRevision {
+		t.Fatalf("replay moved the remote: %s != %s", remote, harness.repo.baseRevision)
+	}
+	harness.assertOnlyMainRef()
+
+	if time.Now().After(deadline) {
+		t.Fatalf("the withdrawal journey exceeded its %s CI budget", organicWithdrawalDeadline)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Harness
+// ---------------------------------------------------------------------------
+
+type organicRepository struct {
+	worktree     string
+	bare         string
+	baseRevision string
+}
+
+type organicHarness struct {
+	t    *testing.T
+	repo organicRepository
+	home string
+}
+
+func newOrganicHarness(t *testing.T) *organicHarness {
+	t.Helper()
+	return &organicHarness{t: t, repo: initOrganicRepository(t), home: t.TempDir()}
+}
+
+// environment isolates the run from the developer's own global review mode. A
+// suite that reads the real user state would pass or fail for reasons that have
+// nothing to do with the product.
+func (harness *organicHarness) environment() []string {
+	return organicEnvironment(harness.home)
+}
+
+func organicEnvironment(home string) []string {
+	environment := []string{
+		"HOME=" + home,
+		"USERPROFILE=" + home,
+		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
+		"XDG_DATA_HOME=" + filepath.Join(home, ".local", "share"),
+		"XDG_STATE_HOME=" + filepath.Join(home, ".local", "state"),
+		"XDG_CACHE_HOME=" + filepath.Join(home, ".cache"),
+		"PATH=" + os.Getenv("PATH"),
+		"LC_ALL=C",
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_TERMINAL_PROMPT=0",
+		// CI makes the one-time consent question deterministically unanswerable,
+		// which is exactly the non-interactive path this suite asserts on.
+		"CI=1",
+	}
+	if value := os.Getenv("SYSTEMROOT"); value != "" {
+		environment = append(environment, "SYSTEMROOT="+value)
+	}
+	if value := os.Getenv("TMPDIR"); value != "" {
+		environment = append(environment, "TMPDIR="+value)
 	}
 	return environment
 }
 
-func (fixture *organicRuntimeServer) verificationCatalog(
-	request workprovider.ProductiveVerificationCatalogRequest,
-) (workprovider.ProductiveVerificationCatalog, error) {
-	if err := request.Validate(); err != nil {
-		return workprovider.ProductiveVerificationCatalog{}, err
-	}
-	if len(request.Paths) != 1 || request.Paths[0] != "internal/active.go" {
-		return workprovider.ProductiveVerificationCatalog{}, errors.New(
-			"verification catalog escaped the admitted Go candidate",
-		)
-	}
-	goExecutable, err := exec.LookPath("go")
+func (harness *organicHarness) gentle(arguments ...string) []byte {
+	harness.t.Helper()
+	stdout, stderr, err := runOrganicCommand(harness.t, organicBinary, harness.repo.worktree, harness.environment(), arguments...)
 	if err != nil {
-		return workprovider.ProductiveVerificationCatalog{}, err
+		harness.t.Fatalf("gentle-ai %v: %v\nstdout:\n%s\nstderr:\n%s", arguments, err, stdout, stderr)
 	}
-	goExecutable, err = filepath.Abs(goExecutable)
-	if err != nil {
-		return workprovider.ProductiveVerificationCatalog{}, err
-	}
-	action := func(id, subcommand string) workprovider.ProductiveVerificationAction {
-		environment := make(
-			map[string]string,
-			len(fixture.verificationEnv),
-		)
-		for name, value := range fixture.verificationEnv {
-			environment[name] = value
-		}
-		return workprovider.ProductiveVerificationAction{
-			ID: id, Program: goExecutable,
-			Args:        []string{subcommand, "./..."},
-			CWD:         fixture.repository.worktree,
-			Environment: environment,
-			Capability:  id,
-			Cost:        reviewtransaction.VerificationCostQuick,
-			DeadlineMilliseconds: int64(
-				(30 * time.Second) / time.Millisecond,
-			),
-			OutputLimits: hostruntime.StreamLimits{
-				StdoutBytes: 64 << 10,
-				StderrBytes: 64 << 10,
-			},
-			RedactionLiterals: []string{},
-		}
-	}
-	return workprovider.ProductiveVerificationCatalog{
-		Schema:  workprovider.ProductiveVerificationCatalogSchemaV1,
-		Subject: request.Subject,
-		Actions: []workprovider.ProductiveVerificationAction{
-			action("go-test", "test"),
-			action("go-vet", "vet"),
-		},
-	}, nil
+	return []byte(stdout)
 }
 
-func (fixture *organicRuntimeServer) serveHTTP(
-	writer http.ResponseWriter,
-	request *http.Request,
-) {
-	if request.Method != http.MethodPost ||
-		request.Header.Get("Authorization") != "Bearer "+runtimeBearerToken {
-		http.Error(writer, "forbidden", http.StatusForbidden)
-		return
-	}
-	switch request.URL.Path {
-	case workprovider.ProductiveRuntimeBootstrapPathV1:
-		var bootstrap workprovider.ProductiveRuntimeBootstrapRequest
-		if err := decodeExactJSON(request.Body, &bootstrap); err != nil {
-			http.Error(writer, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if bootstrap.RepositoryRef != fixture.repositoryRef ||
-			bootstrap.AgentID != model.AgentOpenCode {
-			http.Error(writer, "unexpected bootstrap identity", http.StatusBadRequest)
-			return
-		}
-		response, err := workprovider.NewProductiveRuntimeBootstrapResponse(
-			bootstrap,
-			runtimeSessionRef,
-		)
-		if err != nil {
-			http.Error(writer, err.Error(), http.StatusBadRequest)
-			return
-		}
-		fixture.mu.Lock()
-		fixture.bootstraps++
-		fixture.mu.Unlock()
-		writeExactJSON(writer, response)
-	case workprovider.ProductiveRuntimeCallPathV1:
-		var call workprovider.ProductiveRuntimeRequest
-		if err := decodeExactJSON(request.Body, &call); err != nil {
-			http.Error(writer, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if err := call.Validate(); err != nil ||
-			call.RepositoryRef != fixture.repositoryRef ||
-			call.AgentID != model.AgentOpenCode ||
-			call.ConnectorSessionRef != runtimeSessionRef {
-			http.Error(writer, "invalid call binding", http.StatusBadRequest)
-			return
-		}
-		var payload any
-		switch call.Operation {
-		case workprovider.ProductiveRuntimeOperationPolicySnapshot:
-			if string(bytes.TrimSpace(call.Payload)) != "{}" {
-				http.Error(writer, "unexpected policy payload", http.StatusBadRequest)
-				return
-			}
-			payload = fixture.snapshot
-		case workprovider.ProductiveRuntimeOperationOutcomeIntake:
-			var intakeRequest struct {
-				Context workprovider.OwnerOutcomeContext `json:"context"`
-				Request workprovider.OutcomeStartRequest `json:"request"`
-			}
-			if err := decodeExactJSON(
-				bytes.NewReader(call.Payload),
-				&intakeRequest,
-			); err != nil ||
-				intakeRequest.Context.RepositoryRef != fixture.repositoryRef ||
-				!sameOrganicDirectory(
-					intakeRequest.Context.RepositoryRoot,
-					fixture.repository.worktree,
-				) ||
-				intakeRequest.Request.Outcome != fixture.scenario.outcome ||
-				intakeRequest.Request.ExplicitSDDRequested {
-				http.Error(writer, "unexpected outcome intake payload", http.StatusBadRequest)
-				return
-			}
-			payload = fixture.intake
-		case workprovider.ProductiveRuntimeOperationVerificationCatalog:
-			if !fixture.scenario.activeVerification {
-				http.Error(writer, "unexpected verification catalog", http.StatusBadRequest)
-				return
-			}
-			var catalogRequest workprovider.ProductiveVerificationCatalogRequest
-			if err := decodeExactJSON(
-				bytes.NewReader(call.Payload),
-				&catalogRequest,
-			); err != nil {
-				fixture.reject(writer, "decode verification catalog: %v", err)
-				return
-			}
-			catalog, err := fixture.verificationCatalog(catalogRequest)
-			if err != nil {
-				fixture.reject(writer, "verification catalog: %v", err)
-				return
-			}
-			payload = catalog
-		case workprovider.ProductiveRuntimeOperationSemantic:
-			if !fixture.scenario.activeVerification {
-				http.Error(writer, "unexpected semantic evaluation", http.StatusBadRequest)
-				return
-			}
-			var evaluationRequest organicSemanticEvaluationRequest
-			if err := decodeExactJSON(
-				bytes.NewReader(call.Payload),
-				&evaluationRequest,
-			); err != nil {
-				fixture.reject(writer, "decode semantic evaluation: %v", err)
-				return
-			}
-			payload = workprovider.SemanticEvaluation{
-				Schema: workprovider.SemanticEvaluationSchemaV1,
-				RequirementRef: evaluationRequest.Ticket.
-					SemanticRequirementRef,
-				CandidateRef:  evaluationRequest.Ticket.CandidateRef,
-				RequestDigest: evaluationRequest.Process.RequestDigest,
-				ToolchainIdentityRef: evaluationRequest.Process.
-					ToolchainIdentityRef,
-				StdoutRawDigest: evaluationRequest.Process.Stdout.RawDigest,
-				StderrRawDigest: evaluationRequest.Process.Stderr.RawDigest,
-				Outcome:         workprovider.SemanticEvaluationPassed,
-			}
-		case workprovider.ProductiveRuntimeOperationReview:
-			if !fixture.scenario.activeVerification {
-				http.Error(writer, "unexpected review evaluation", http.StatusBadRequest)
-				return
-			}
-			var reviewRequest workprovider.ProductiveReviewRequest
-			if err := decodeExactJSON(
-				bytes.NewReader(call.Payload),
-				&reviewRequest,
-			); err != nil {
-				fixture.reject(writer, "decode review evaluation: %v", err)
-				return
-			}
-			paths := make([]string, len(reviewRequest.ChangedPathManifest))
-			for index, entry := range reviewRequest.ChangedPathManifest {
-				paths[index] = entry.Path
-			}
-			payload = workprovider.ProductiveReviewResult{
-				Schema:      workprovider.ProductiveReviewResultSchemaV1,
-				SubjectHash: reviewRequest.Subject.SubjectHash,
-				Inspection: reviewtransaction.ArtifactInspection{
-					Status: reviewtransaction.ArtifactInspectionCompleted,
-					Paths:  paths,
-				},
-				Findings: []reviewtransaction.Finding{},
-				Evidence: []string{
-					"inspected " + paths[0] +
-						":1 against the complete frozen candidate",
-				},
-			}
-		case workprovider.ProductiveRuntimeOperationPADGitBinding:
-			var bindingRequest organicPADGitBindingRequest
-			if err := decodeExactJSON(
-				bytes.NewReader(call.Payload),
-				&bindingRequest,
-			); err != nil {
-				fixture.reject(
-					writer,
-					"decode PAD Git binding request: %v",
-					err,
-				)
-				return
-			}
-			binding, err := fixture.resolvePADGitBinding(bindingRequest)
-			if err != nil {
-				fixture.reject(writer, "resolve PAD Git binding: %v", err)
-				return
-			}
-			payload = binding
-		case workprovider.ProductiveRuntimeOperationObserveDelivery:
-			var observationRequest workprovider.HostingObservationRequest
-			if err := decodeExactJSON(
-				bytes.NewReader(call.Payload),
-				&observationRequest,
-			); err != nil {
-				fixture.reject(
-					writer,
-					"decode delivery observation request: %v",
-					err,
-				)
-				return
-			}
-			observation, err := fixture.observeDelivery(observationRequest)
-			if err != nil {
-				fixture.reject(writer, "observe delivery: %v", err)
-				return
-			}
-			payload = observation
-		case workprovider.ProductiveRuntimeOperationBranchCAS:
-			var casRequest workprovider.HostingBranchCASRequest
-			if err := decodeExactJSON(
-				bytes.NewReader(call.Payload),
-				&casRequest,
-			); err != nil {
-				fixture.reject(writer, "decode branch CAS request: %v", err)
-				return
-			}
-			receipt, err := fixture.compareAndSwapBranch(
-				request.Context(),
-				casRequest,
-			)
-			if err != nil {
-				fixture.reject(writer, "branch CAS: %v", err)
-				return
-			}
-			payload = receipt
-		default:
-			http.Error(writer, "unexpected operation", http.StatusBadRequest)
-			return
-		}
-		response, err := workprovider.NewProductiveRuntimeResponse(call, payload)
-		if err != nil {
-			http.Error(writer, err.Error(), http.StatusBadRequest)
-			return
-		}
-		fixture.mu.Lock()
-		fixture.operations = append(fixture.operations, call.Operation)
-		fixture.mu.Unlock()
-		writeExactJSON(writer, response)
-	default:
-		http.NotFound(writer, request)
-	}
+func (harness *organicHarness) gentleAllowFailure(arguments ...string) (string, string, error) {
+	harness.t.Helper()
+	return runOrganicCommand(harness.t, organicBinary, harness.repo.worktree, harness.environment(), arguments...)
 }
 
-func (fixture *organicRuntimeServer) resolvePADGitBinding(
-	request organicPADGitBindingRequest,
-) (workprovider.PADGitBinding, error) {
-	if request.Destination.RepositoryRef != fixture.repositoryRef ||
-		request.Destination.TargetRef != "refs/heads/main" ||
-		request.Destination.ObservedRevision !=
-			"git:"+fixture.repository.baseRevision ||
-		request.Mechanism != deliveryadmission.MechanismFastForwardOnly {
-		return workprovider.PADGitBinding{}, errors.New(
-			"PAD Git binding request escaped the admitted direct-main destination",
-		)
-	}
-	candidate, err := organicGitOutput(
-		context.Background(),
-		fixture.repository.worktree,
-		"rev-parse",
-		"HEAD",
-	)
-	if err != nil {
-		return workprovider.PADGitBinding{}, err
-	}
-	if _, err := organicBareGitOutput(
-		context.Background(),
-		fixture.repository.bare,
-		"cat-file",
-		"-e",
-		candidate+"^{commit}",
-	); err != nil {
-		return workprovider.PADGitBinding{}, fmt.Errorf(
-			"resolve candidate through pre-existing owner object authority: %w",
-			err,
-		)
-	}
-	remote, err := organicBareGitOutput(
-		context.Background(),
-		fixture.repository.bare,
-		"rev-parse",
-		"refs/heads/main",
-	)
-	if err != nil {
-		return workprovider.PADGitBinding{}, err
-	}
-	binding := workprovider.PADGitBinding{
-		Schema:                 workprovider.PADGitBindingSchema,
-		Candidate:              request.Candidate,
-		Destination:            request.Destination,
-		Mechanism:              request.Mechanism,
-		HostingRepositoryRef:   "bare:organic-runtime-e2e",
-		CandidateRevision:      "git:" + candidate,
-		ExpectedRemoteRevision: "git:" + remote,
-	}
-	if binding.ExpectedRemoteRevision != request.Destination.ObservedRevision ||
-		binding.CandidateRevision == binding.ExpectedRemoteRevision {
-		return workprovider.PADGitBinding{}, errors.New(
-			"PAD Git binding did not bind one new committed candidate",
-		)
-	}
-	if err := binding.Validate(
-		request.Candidate,
-		request.Destination,
-		request.Mechanism,
-	); err != nil {
-		return workprovider.PADGitBinding{}, err
-	}
-	fixture.mu.Lock()
-	defer fixture.mu.Unlock()
-	if fixture.candidateRevision != "" &&
-		fixture.candidateRevision != binding.CandidateRevision {
-		return workprovider.PADGitBinding{}, errors.New(
-			"candidate revision changed across owner binding calls",
-		)
-	}
-	fixture.candidateRevision = binding.CandidateRevision
-	return binding, nil
-}
-
-func (fixture *organicRuntimeServer) observeDelivery(
-	request workprovider.HostingObservationRequest,
-) (workprovider.HostingDeliveryObservation, error) {
-	if err := request.Validate(); err != nil {
-		return workprovider.HostingDeliveryObservation{}, err
-	}
-	if request.Mechanism != deliveryadmission.MechanismFastForwardOnly ||
-		request.Binding.Destination.RepositoryRef != fixture.repositoryRef {
-		return workprovider.HostingDeliveryObservation{}, errors.New(
-			"delivery observation escaped direct-main",
-		)
-	}
-	remote, err := organicBareGitOutput(
-		context.Background(),
-		fixture.repository.bare,
-		"rev-parse",
-		"refs/heads/main",
-	)
-	if err != nil {
-		return workprovider.HostingDeliveryObservation{}, err
-	}
-	observation := workprovider.HostingDeliveryObservation{
-		Schema:                 workprovider.HostingDeliveryObservationSchema,
-		Request:                request,
-		CandidateRevision:      request.Binding.CandidateRevision,
-		ExpectedRemoteRevision: request.Binding.ExpectedRemoteRevision,
-		RemoteIdentity:         request.Binding.ExpectedRemoteRevision,
-		RemoteRevision:         "git:" + remote,
-		ProtectionState:        workprovider.HostingProtectionPermitted,
-		ProtectionRevision:     "protection:organic-runtime-e2e:1",
-		PullRequestState:       workprovider.HostingPullRequestNotApplicable,
-		RequiredChecksState:    workprovider.HostingChecksNotApplicable,
-	}
-	if err := observation.Validate(request); err != nil {
-		return workprovider.HostingDeliveryObservation{}, err
-	}
-	return observation, nil
-}
-
-func (fixture *organicRuntimeServer) compareAndSwapBranch(
-	ctx context.Context,
-	request workprovider.HostingBranchCASRequest,
-) (workprovider.HostingBranchCASReceipt, error) {
-	if err := request.Validate(); err != nil {
-		return workprovider.HostingBranchCASReceipt{}, err
-	}
-	fixture.mu.Lock()
-	defer fixture.mu.Unlock()
-	fixture.branchCASCalls++
-	if request.RepositoryRef != fixture.repositoryRef ||
-		request.HostingRepositoryRef != "bare:organic-runtime-e2e" ||
-		request.TargetRef != "refs/heads/main" ||
-		request.ExpectedRevision != "git:"+fixture.repository.baseRevision ||
-		request.CandidateRevision != fixture.candidateRevision {
-		return workprovider.HostingBranchCASReceipt{}, errors.New(
-			"branch CAS request escaped its exact owner binding",
-		)
-	}
-	if time.Now().UTC().Unix() >= request.ExecutionExpiresAt {
-		return workprovider.HostingBranchCASReceipt{}, errors.New(
-			"branch CAS arrived after execution expiry",
-		)
-	}
-	if fixture.executionExpiresAt != 0 &&
-		fixture.executionExpiresAt != request.ExecutionExpiresAt {
-		return workprovider.HostingBranchCASReceipt{}, errors.New(
-			"branch CAS execution expiry changed",
-		)
-	}
-	if err := requireOrganicOnlyMainRef(ctx, fixture.repository.bare); err != nil {
-		return workprovider.HostingBranchCASReceipt{}, err
-	}
-	fixture.executionExpiresAt = request.ExecutionExpiresAt
-	if _, err := organicBareGitOutput(
-		ctx,
-		fixture.repository.bare,
-		"update-ref",
-		request.TargetRef,
-		strings.TrimPrefix(request.CandidateRevision, "git:"),
-		strings.TrimPrefix(request.ExpectedRevision, "git:"),
-	); err != nil {
-		return workprovider.HostingBranchCASReceipt{}, err
-	}
-	remote, err := organicBareGitOutput(
-		ctx,
-		fixture.repository.bare,
-		"rev-parse",
-		request.TargetRef,
-	)
-	if err != nil {
-		return workprovider.HostingBranchCASReceipt{}, err
-	}
-	if err := requireOrganicOnlyMainRef(ctx, fixture.repository.bare); err != nil {
-		return workprovider.HostingBranchCASReceipt{}, err
-	}
-	fixture.branchCASEffects++
-	receipt := workprovider.HostingBranchCASReceipt{
-		Schema:           workprovider.HostingBranchCASReceiptSchema,
-		Request:          request,
-		Outcome:          workprovider.HostingEffectApplied,
-		RemoteRevision:   "git:" + remote,
-		DeliveryRef:      request.CandidateRevision,
-		EvidenceRevision: "evidence:organic-runtime-e2e:branch-cas:1",
-	}
-	if err := receipt.Validate(request); err != nil {
-		return workprovider.HostingBranchCASReceipt{}, err
-	}
-	return receipt, nil
-}
-
-func (fixture *organicRuntimeServer) reject(
-	writer http.ResponseWriter,
-	format string,
-	arguments ...any,
-) {
-	fixture.mu.Lock()
-	fixture.failure = fmt.Sprintf(format, arguments...)
-	fixture.mu.Unlock()
-	http.Error(writer, "runtime fixture failure", http.StatusBadRequest)
-}
-
-func (fixture *organicRuntimeServer) assertCalls(t *testing.T) {
+func runOrganicCommand(t *testing.T, binary, dir string, environment []string, arguments ...string) (string, string, error) {
 	t.Helper()
-	fixture.mu.Lock()
-	defer fixture.mu.Unlock()
-	if fixture.failure != "" {
-		t.Fatal(fixture.failure)
+	ctx, cancel := context.WithTimeout(context.Background(), organicLocalTimeout)
+	defer cancel()
+	command := organicCommandContext(ctx, binary, arguments...)
+	command.Dir = dir
+	command.Env = environment
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	err := command.Run()
+	return stdout.String(), stderr.String(), err
+}
+
+// startReview freezes the live candidate and returns both the typed result and
+// the console stream, because whether a question was asked is itself an
+// assertion in the tier-0 journey.
+func (harness *organicHarness) startReview(lineage string, extra ...string) (organicStartResult, string) {
+	harness.t.Helper()
+	arguments := []string{"review", "start", "--cwd", harness.repo.worktree}
+	if lineage != "" {
+		arguments = append(arguments, "--lineage", lineage)
 	}
-	wantBootstraps := 3
-	if !fixture.scenario.killSwitchAtAdvance {
-		wantBootstraps++
+	arguments = append(arguments, extra...)
+	stdout, stderr, err := harness.gentleAllowFailure(arguments...)
+	if err != nil {
+		harness.t.Fatalf("review start %v: %v\nstdout:\n%s\nstderr:\n%s", arguments, err, stdout, stderr)
 	}
-	if fixture.scenario.actorTool == "task" ||
-		fixture.scenario.commonReview {
-		wantBootstraps++
+	var started organicStartResult
+	if err := json.Unmarshal([]byte(stdout), &started); err != nil {
+		harness.t.Fatalf("decode review start: %v\n%s", err, stdout)
 	}
-	if fixture.scenario.proveTerminalReplay {
-		wantBootstraps += 2
+	return started, stderr
+}
+
+// approveReview runs the proportional plan the tier selected: zero reviewers for
+// passive content, and one result per selected lens plus final evidence
+// otherwise. The suite never selects lenses itself.
+func (harness *organicHarness) approveReview(lineage string, started organicStartResult) organicFinalizeResult {
+	harness.t.Helper()
+	if len(started.SelectedLenses) == 0 {
+		return harness.finalize(lineage)
 	}
-	if fixture.bootstraps != wantBootstraps {
-		t.Fatalf(
-			"runtime bootstraps = %d, want %d",
-			fixture.bootstraps,
-			wantBootstraps,
-		)
+	arguments := make([]string, 0, len(started.SelectedLenses)*2)
+	for index, lens := range started.SelectedLenses {
+		arguments = append(arguments, "--result", harness.writeJSON(
+			fmt.Sprintf("reviewer-%d.json", index),
+			organicReviewerResult{
+				Lens:     lens,
+				Findings: []organicFinding{},
+				Evidence: []string{"inspected every frozen candidate path for " + lens},
+			},
+		))
 	}
-	wantOperations := []workprovider.ProductiveRuntimeOperation{
-		workprovider.ProductiveRuntimeOperationPolicySnapshot,
-		workprovider.ProductiveRuntimeOperationOutcomeIntake,
+	if result := harness.finalize(lineage, arguments...); result.State != organicStateValidating {
+		harness.t.Fatalf("reviewer results did not reach validation: %#v", result)
 	}
-	if !fixture.scenario.killSwitchAtAdvance {
-		wantOperations = append(
-			wantOperations,
-			workprovider.ProductiveRuntimeOperationPolicySnapshot,
-		)
-		if fixture.scenario.activeVerification {
-			wantOperations = append(
-				wantOperations,
-				workprovider.ProductiveRuntimeOperationVerificationCatalog,
-				workprovider.ProductiveRuntimeOperationSemantic,
-				workprovider.ProductiveRuntimeOperationSemantic,
-				workprovider.ProductiveRuntimeOperationReview,
-			)
+	return harness.finalize(lineage, "--evidence", harness.writeEvidence())
+}
+
+func (harness *organicHarness) finalize(lineage string, extra ...string) organicFinalizeResult {
+	harness.t.Helper()
+	arguments := []string{"review", "finalize", "--cwd", harness.repo.worktree}
+	if lineage != "" {
+		arguments = append(arguments, "--lineage", lineage)
+	}
+	arguments = append(arguments, extra...)
+	var result organicFinalizeResult
+	payload := harness.gentle(arguments...)
+	if err := json.Unmarshal(payload, &result); err != nil {
+		harness.t.Fatalf("decode review finalize: %v\n%s", err, payload)
+	}
+	return result
+}
+
+func (harness *organicHarness) gate(gate string, extra ...string) organicGateResult {
+	harness.t.Helper()
+	arguments := append([]string{"review", "validate", "--cwd", harness.repo.worktree, "--gate", gate}, extra...)
+	var result organicGateResult
+	payload := harness.gentle(arguments...)
+	if err := json.Unmarshal(payload, &result); err != nil {
+		harness.t.Fatalf("decode review validate: %v\n%s", err, payload)
+	}
+	return result
+}
+
+// gateAllowFailure decodes a denied gate. A denial exits non-zero on purpose, so
+// the typed projection still has to be readable.
+func (harness *organicHarness) gateAllowFailure(gate string, extra ...string) organicGateResult {
+	harness.t.Helper()
+	arguments := append([]string{"review", "validate", "--cwd", harness.repo.worktree, "--gate", gate}, extra...)
+	stdout, _, _ := harness.gentleAllowFailure(arguments...)
+	var result organicGateResult
+	decoder := json.NewDecoder(strings.NewReader(stdout))
+	if err := decoder.Decode(&result); err != nil {
+		harness.t.Fatalf("decode denied review validate: %v\n%s", err, stdout)
+	}
+	return result
+}
+
+func (harness *organicHarness) disableReview() organicModeResult {
+	harness.t.Helper()
+	payload := harness.gentle("review", "mode", "disable", "--cwd", harness.repo.worktree, "--scope", "clone", "--json")
+	var mode organicModeResult
+	if err := json.Unmarshal(payload, &mode); err != nil {
+		harness.t.Fatalf("decode review mode: %v\n%s", err, payload)
+	}
+	return mode
+}
+
+// reviewModeGenerations lists the clone-local kill-switch compare-and-swap
+// records. Their count is how a rejected operation proves it wrote nothing.
+func (harness *organicHarness) reviewModeGenerations() []string {
+	harness.t.Helper()
+	root := filepath.Join(harness.commonDir(), "gentle-ai", "review-transactions", "rar-authority", "v1", "rdd-mode")
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		harness.t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "gen-") {
+			names = append(names, entry.Name())
 		}
-		wantOperations = append(
-			wantOperations,
-			workprovider.ProductiveRuntimeOperationPADGitBinding,
-			workprovider.ProductiveRuntimeOperationObserveDelivery,
-			workprovider.ProductiveRuntimeOperationObserveDelivery,
-			workprovider.ProductiveRuntimeOperationObserveDelivery,
-			workprovider.ProductiveRuntimeOperationBranchCAS,
-		)
 	}
-	if fixture.scenario.proveTerminalReplay {
-		wantOperations = append(
-			wantOperations,
-			workprovider.ProductiveRuntimeOperationPolicySnapshot,
-		)
+	sort.Strings(names)
+	return names
+}
+
+// lineageDigest fingerprints every authority file of one lineage so a replay can
+// prove it changed nothing at all, not merely that it reported the same state.
+func (harness *organicHarness) lineageDigest(lineage string) string {
+	harness.t.Helper()
+	root := filepath.Join(harness.commonDir(), "gentle-ai", "review-transactions", "v2", lineage)
+	var builder strings.Builder
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		payload, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		relative, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		fmt.Fprintf(&builder, "%s\x00%x\n", filepath.ToSlash(relative), payload)
+		return nil
+	})
+	if err != nil {
+		harness.t.Fatalf("digest review lineage %q: %v", lineage, err)
 	}
-	if !equalOrganicOperations(fixture.operations, wantOperations) {
-		t.Fatalf(
-			"runtime operations = %#v, want %#v",
-			fixture.operations,
-			wantOperations,
-		)
+	return builder.String()
+}
+
+func (harness *organicHarness) assertSingleReviewLineage(expected string) {
+	harness.t.Helper()
+	root := filepath.Join(harness.commonDir(), "gentle-ai", "review-transactions", "v2")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		harness.t.Fatalf("read review authority: %v", err)
 	}
-	wantCAS := 1
-	if fixture.scenario.killSwitchAtAdvance {
-		wantCAS = 0
+	lineages := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			lineages = append(lineages, entry.Name())
+		}
 	}
-	if fixture.branchCASCalls != wantCAS ||
-		fixture.branchCASEffects != wantCAS {
-		t.Fatalf(
-			"branch CAS calls/effects = %d/%d, want %d/%d",
-			fixture.branchCASCalls,
-			fixture.branchCASEffects,
-			wantCAS,
-			wantCAS,
-		)
+	if len(lineages) != 1 || lineages[0] != expected {
+		harness.t.Fatalf("review lineages = %v, want exactly [%s]", lineages, expected)
 	}
 }
 
-func equalOrganicOperations(
-	left []workprovider.ProductiveRuntimeOperation,
-	right []workprovider.ProductiveRuntimeOperation,
-) bool {
+// assertNoSDDArtifacts is the proposal's core claim and survives verbatim:
+// direct and delegated work never create SDD, trace, or evaluation state.
+func (harness *organicHarness) assertNoSDDArtifacts() {
+	harness.t.Helper()
+	if name, found := harness.sddArtifact(); found {
+		harness.t.Fatalf("organic implementation created forbidden SDD/trace/evaluation artifact %q", name)
+	}
+}
+
+func (harness *organicHarness) hasSDDArtifacts() bool {
+	harness.t.Helper()
+	_, found := harness.sddArtifact()
+	return found
+}
+
+func (harness *organicHarness) sddArtifact() (string, bool) {
+	harness.t.Helper()
+	root := filepath.Join(harness.commonDir(), "gentle-ai")
+	entries, err := os.ReadDir(root)
+	if os.IsNotExist(err) {
+		return "", false
+	}
+	if err != nil {
+		harness.t.Fatal(err)
+	}
+	for _, entry := range entries {
+		name := strings.ToLower(entry.Name())
+		if strings.HasPrefix(name, "sdd-") || name == "sdd" || name == "trace" || name == "evaluation" {
+			return filepath.Join(root, entry.Name()), true
+		}
+	}
+	return "", false
+}
+
+// commonDir resolves the repository the way the product does, so an aliased or
+// relative invocation cannot silently point the assertions at another clone.
+func (harness *organicHarness) commonDir() string {
+	harness.t.Helper()
+	common := harness.git("rev-parse", "--git-common-dir")
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(harness.repo.worktree, common)
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Clean(common))
+	if err != nil {
+		harness.t.Fatal(err)
+	}
+	return resolved
+}
+
+func (harness *organicHarness) runActor(role, path, body, message, marker string) {
+	harness.t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), organicLocalTimeout)
+	defer cancel()
+	command := organicCommandContext(ctx, os.Args[0])
+	command.Dir = harness.repo.worktree
+	command.Env = append(harness.environment(),
+		organicActorRoleEnvironment+"="+role,
+		organicActorRepoEnvironment+"="+harness.repo.worktree,
+		organicActorPathEnvironment+"="+path,
+		organicActorBodyEnvironment+"="+body,
+		organicActorMessageEnvironment+"="+message,
+		organicActorBinaryEnvironment+"="+organicBinary,
+	)
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		harness.t.Fatalf("%s actor: %v\nstdout:\n%s\nstderr:\n%s", role, err, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), marker) {
+		harness.t.Fatalf("%s actor did not report %q: %s", role, marker, stdout.String())
+	}
+}
+
+func (harness *organicHarness) writeFiles(files map[string]string) {
+	harness.t.Helper()
+	for relative, body := range files {
+		target := filepath.Join(harness.repo.worktree, filepath.FromSlash(relative))
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			harness.t.Fatal(err)
+		}
+		if err := os.WriteFile(target, []byte(body), 0o644); err != nil {
+			harness.t.Fatal(err)
+		}
+	}
+}
+
+func (harness *organicHarness) writeJSON(name string, value any) string {
+	harness.t.Helper()
+	payload, err := json.Marshal(value)
+	if err != nil {
+		harness.t.Fatal(err)
+	}
+	// Review inputs live outside the repository so they never become part of the
+	// candidate they describe.
+	path := filepath.Join(harness.t.TempDir(), name)
+	if err := os.WriteFile(path, payload, 0o600); err != nil {
+		harness.t.Fatal(err)
+	}
+	return path
+}
+
+func (harness *organicHarness) writeEvidence() string {
+	harness.t.Helper()
+	path := filepath.Join(harness.t.TempDir(), "evidence.txt")
+	if err := os.WriteFile(path, []byte("focused and full verification: pass\n"), 0o600); err != nil {
+		harness.t.Fatal(err)
+	}
+	return path
+}
+
+func (harness *organicHarness) git(arguments ...string) string {
+	harness.t.Helper()
+	output, err := organicGitOutput(context.Background(), harness.repo.worktree, arguments...)
+	if err != nil {
+		harness.t.Fatal(err)
+	}
+	return output
+}
+
+func (harness *organicHarness) bareGit(arguments ...string) string {
+	harness.t.Helper()
+	output, err := organicBareGitOutput(context.Background(), harness.repo.bare, arguments...)
+	if err != nil {
+		harness.t.Fatal(err)
+	}
+	return output
+}
+
+// pushWithLease publishes under compare-and-swap against the exact revision the
+// candidate was reviewed on top of.
+func (harness *organicHarness) pushWithLease(expected string) {
+	harness.t.Helper()
+	harness.git("push", "--quiet", "--force-with-lease=refs/heads/main:"+expected, "origin", "HEAD:refs/heads/main")
+	local := harness.git("rev-parse", "HEAD")
+	if remote := harness.bareGit("rev-parse", "refs/heads/main"); remote != local {
+		harness.t.Fatalf("remote ref = %s, want the delivered candidate %s", remote, local)
+	}
+}
+
+// assertStaleLeaseIsRejected proves the publication really is a compare-and-swap.
+// It needs something to publish, because an up-to-date push would succeed
+// without ever consulting the lease and would prove nothing.
+func (harness *organicHarness) assertStaleLeaseIsRejected(stale string) {
+	harness.t.Helper()
+	before := harness.bareGit("rev-parse", "refs/heads/main")
+	harness.writeFiles(map[string]string{"docs/lease-probe.md": "lease probe\n"})
+	harness.git("add", "--", "docs/lease-probe.md")
+	harness.git("commit", "-q", "-m", "test: probe the publication lease")
+	if _, err := organicGitOutput(
+		context.Background(), harness.repo.worktree,
+		"push", "--quiet", "--force-with-lease=refs/heads/main:"+stale, "origin", "HEAD:refs/heads/main",
+	); err == nil {
+		harness.t.Fatal("a stale compare-and-swap lease was accepted")
+	}
+	if after := harness.bareGit("rev-parse", "refs/heads/main"); after != before {
+		harness.t.Fatalf("a rejected compare-and-swap still moved the remote: %s -> %s", before, after)
+	}
+	harness.git("reset", "--quiet", "--hard", before)
+}
+
+// assertRemoteBlob proves delivery reached the bare repository as exact content,
+// not merely as a moved ref.
+func (harness *organicHarness) assertRemoteBlob(path, body string) {
+	harness.t.Helper()
+	entry := harness.bareGit("ls-tree", "refs/heads/main", "--", path)
+	if entry == "" {
+		harness.t.Fatalf("delivered path %q is absent from the remote tree", path)
+	}
+	fields := strings.Fields(entry)
+	if len(fields) < 3 {
+		harness.t.Fatalf("unreadable remote tree entry %q", entry)
+	}
+	if fields[0] != "100644" {
+		harness.t.Fatalf("delivered mode = %q, want 100644", fields[0])
+	}
+	blob := harness.bareGit("cat-file", "blob", fields[2])
+	if blob != strings.TrimRight(body, "\n") {
+		harness.t.Fatalf("delivered blob content differs:\nwant:\n%s\ngot:\n%s", body, blob)
+	}
+	tree := harness.bareGit("rev-parse", "refs/heads/main^{tree}")
+	if localTree := harness.git("rev-parse", "HEAD^{tree}"); tree != localTree {
+		harness.t.Fatalf("delivered tree = %s, want the reviewed tree %s", tree, localTree)
+	}
+}
+
+func (harness *organicHarness) assertOnlyMainRef() {
+	harness.t.Helper()
+	refs := harness.bareGit("for-each-ref", "--format=%(refname)")
+	if refs != "refs/heads/main" {
+		harness.t.Fatalf("bare repository refs = %q, want only refs/heads/main", refs)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Wire projections
+// ---------------------------------------------------------------------------
+
+type organicStartResult struct {
+	Operation        string   `json:"operation"`
+	Action           string   `json:"action"`
+	LensesRequired   bool     `json:"lenses_required"`
+	LineageID        string   `json:"lineage_id"`
+	State            string   `json:"state"`
+	RiskLevel        string   `json:"risk_level"`
+	SelectedLenses   []string `json:"selected_lenses"`
+	ChangedFiles     int      `json:"changed_files"`
+	ChangedLines     int      `json:"changed_lines"`
+	CorrectionBudget int      `json:"correction_budget"`
+}
+
+type organicFinalizeResult struct {
+	Operation     string `json:"operation"`
+	LineageID     string `json:"lineage_id"`
+	State         string `json:"state"`
+	Action        string `json:"action"`
+	StoreRevision string `json:"store_revision"`
+	ReceiptPath   string `json:"receipt_path"`
+}
+
+type organicGateResult struct {
+	Schema  string             `json:"schema"`
+	Result  string             `json:"result"`
+	Allowed bool               `json:"allowed"`
+	Action  string             `json:"action"`
+	Reason  string             `json:"reason"`
+	Context organicGateContext `json:"context"`
+	// Delivery carries the disposition the shipped agent guidance promises. The
+	// guidance tells all 16 adapters to expect this token under a disabled
+	// switch, so the wire has to actually produce it.
+	Delivery string `json:"delivery"`
+}
+
+type organicGateContext struct {
+	Gate          string             `json:"gate"`
+	LineageID     string             `json:"lineage_id"`
+	StoreRevision string             `json:"store_revision"`
+	BundleDigest  string             `json:"bundle_digest"`
+	BaseTree      string             `json:"base_tree"`
+	CandidateTree string             `json:"candidate_tree"`
+	Denial        *organicGateDenial `json:"denial"`
+}
+
+type organicGateDenial struct {
+	Stage string `json:"stage"`
+	Code  string `json:"code"`
+}
+
+type organicModeResult struct {
+	Schema    string `json:"schema"`
+	Operation string `json:"operation"`
+	Scope     string `json:"scope"`
+	Status    struct {
+		Schema     string `json:"schema"`
+		Global     string `json:"global"`
+		CloneLocal string `json:"clone_local"`
+		Effective  string `json:"effective"`
+		Source     string `json:"source"`
+		Revision   string `json:"revision"`
+	} `json:"status"`
+}
+
+type organicReviewerResult struct {
+	Lens     string           `json:"lens"`
+	Findings []organicFinding `json:"findings"`
+	Evidence []string         `json:"evidence"`
+}
+
+type organicFinding struct {
+	Location          string   `json:"location"`
+	Severity          string   `json:"severity"`
+	Claim             string   `json:"claim"`
+	ProofRefs         []string `json:"proof_refs"`
+	EvidenceClass     string   `json:"evidence_class"`
+	CausalDisposition string   `json:"causal_disposition"`
+}
+
+type organicValidationCheck struct {
+	Passed   bool     `json:"passed"`
+	Evidence []string `json:"evidence"`
+}
+
+type organicValidationResult struct {
+	OriginalCriteria     organicValidationCheck `json:"original_criteria"`
+	CorrectionRegression organicValidationCheck `json:"correction_regression"`
+	FollowUps            []any                  `json:"follow_ups"`
+}
+
+// ---------------------------------------------------------------------------
+// Repository fixtures and shared utilities
+// ---------------------------------------------------------------------------
+
+func initOrganicRepository(t *testing.T) organicRepository {
+	t.Helper()
+	repo := t.TempDir()
+	for _, arguments := range [][]string{
+		{"init", "--quiet", "--initial-branch=main", "."},
+		{"config", "user.name", "Organic E2E"},
+		{"config", "user.email", "organic-e2e@example.invalid"},
+		{"config", "commit.gpgsign", "false"},
+	} {
+		if _, err := organicGitOutput(context.Background(), repo, arguments...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("organic runtime\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := organicGitOutput(context.Background(), repo, "add", "--", "tracked.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := organicGitOutput(context.Background(), repo, "commit", "-q", "-m", "test: seed the organic repository"); err != nil {
+		t.Fatal(err)
+	}
+	baseRevision, err := organicGitOutput(context.Background(), repo, "rev-parse", "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bare := filepath.Join(t.TempDir(), "origin.git")
+	if _, err := organicGitOutput(context.Background(), repo, "init", "--bare", "--quiet", bare); err != nil {
+		t.Fatal(err)
+	}
+	for _, arguments := range [][]string{
+		{"remote", "add", "origin", bare},
+		{"push", "--quiet", "--set-upstream", "origin", "main:refs/heads/main"},
+	} {
+		if _, err := organicGitOutput(context.Background(), repo, arguments...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := requireOrganicOnlyMainRef(context.Background(), bare); err != nil {
+		t.Fatal(err)
+	}
+	return organicRepository{worktree: repo, bare: bare, baseRevision: baseRevision}
+}
+
+func organicGitOutput(parent context.Context, repo string, arguments ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(parent, organicLocalTimeout)
+	defer cancel()
+	command := organicCommandContext(ctx, "git", append([]string{"-C", repo}, arguments...)...)
+	command.Env = append(os.Environ(), "LC_ALL=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git -C %q %v: %w\n%s", repo, arguments, err, output)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+func organicBareGitOutput(parent context.Context, bare string, arguments ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(parent, organicLocalTimeout)
+	defer cancel()
+	command := organicCommandContext(ctx, "git", append([]string{"--git-dir=" + bare}, arguments...)...)
+	command.Env = append(os.Environ(), "LC_ALL=C", "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git --git-dir=%q %v: %w\n%s", bare, arguments, err, output)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+func requireOrganicOnlyMainRef(parent context.Context, bare string) error {
+	refs, err := organicBareGitOutput(parent, bare, "for-each-ref", "--format=%(refname)")
+	if err != nil {
+		return err
+	}
+	if refs != "refs/heads/main" {
+		return fmt.Errorf("bare repository refs = %q, want only refs/heads/main", refs)
+	}
+	return nil
+}
+
+func sameOrganicDirectory(left, right string) bool {
+	leftInfo, leftErr := os.Stat(left)
+	rightInfo, rightErr := os.Stat(right)
+	return leftErr == nil && rightErr == nil && leftInfo.IsDir() && rightInfo.IsDir() && os.SameFile(leftInfo, rightInfo)
+}
+
+func organicCommandContext(ctx context.Context, name string, arguments ...string) *exec.Cmd {
+	command := exec.CommandContext(ctx, name, arguments...)
+	command.WaitDelay = organicCommandWaitDelay
+	return command
+}
+
+func organicModuleRoot() (string, error) {
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		return "", errors.New("resolve the organic test source")
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(source), "..", "..")), nil
+}
+
+// buildOrganicBinary compiles the product once for the whole package. Every
+// journey drives that one binary, so a per-journey build would only buy slower
+// feedback for the same proof.
+func buildOrganicBinary(workspace string) (string, error) {
+	moduleRoot, err := organicModuleRoot()
+	if err != nil {
+		return "", err
+	}
+	name := "gentle-ai"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(workspace, name)
+	ctx, cancel := context.WithTimeout(context.Background(), organicSetupTimeout)
+	defer cancel()
+	command := organicCommandContext(ctx, "go", "build", "-trimpath", "-o", path, "./cmd/gentle-ai")
+	command.Dir = moduleRoot
+	command.Env = os.Environ()
+	if output, err := command.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("build the gentle-ai test binary: %w\n%s", err, output)
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", fmt.Errorf("built gentle-ai binary %q is unusable: %v", path, err)
+	}
+	return path, nil
+}
+
+func organicLines(prefix string, count int) string {
+	var builder strings.Builder
+	for index := 1; index <= count; index++ {
+		fmt.Fprintf(&builder, "%s %03d\n", prefix, index)
+	}
+	return builder.String()
+}
+
+func organicMechanicalFiles(files, linesPerFile int) map[string]string {
+	rendered := make(map[string]string, files)
+	for index := 1; index <= files; index++ {
+		var builder strings.Builder
+		builder.WriteString("package mechanical\n\n")
+		for line := 1; line <= linesPerFile; line++ {
+			fmt.Fprintf(&builder, "// mechanical line %03d\n", line)
+		}
+		rendered[fmt.Sprintf("internal/mechanical/unit%02d.go", index)] = builder.String()
+	}
+	return rendered
+}
+
+// organicLimitSource renders the same unit twice with exactly one differing
+// line, so the bounded correction stays inside the frozen budget and the budget
+// itself is what the assertions are about.
+func organicLimitSource(state string) string {
+	var builder strings.Builder
+	builder.WriteString("package feature\n\n")
+	for index := 1; index <= 12; index++ {
+		fmt.Fprintf(&builder, "// Limit documents the bounded terminal value, note %02d.\n", index)
+	}
+	builder.WriteString("func Limit() int {\n")
+	fmt.Fprintf(&builder, "\treturn %s\n", map[string]string{"broken": "-1", "fixed": "1"}[state])
+	builder.WriteString("}\n")
+	return builder.String()
+}
+
+func equalOrganicStrings(left, right []string) bool {
 	if len(left) != len(right) {
 		return false
 	}
@@ -1035,17 +1481,180 @@ func equalOrganicOperations(
 	return true
 }
 
+// ---------------------------------------------------------------------------
+// Pinned real-agent journeys
+// ---------------------------------------------------------------------------
+
+// TestRealAgentOrganicJourneys runs the same organic journeys through a real
+// configured agent. The agent runtime, its sub-agent mechanism, its tool calls,
+// the gentle-ai binary, and the repository are all real; only the model is a
+// fixture, because a scripted model is what makes an agent journey repeatable.
+func TestRealAgentOrganicJourneys(t *testing.T) {
+	if os.Getenv(realAgentE2EEnvironment) != "1" {
+		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the pinned real-agent journeys")
+	}
+	requireOrganicExecutableVersion(t, "opencode", pinnedOpenCodeVersion)
+	sharedConfig := prepareOpenCodeConfig(t)
+	sharedCache := t.TempDir()
+
+	tests := []struct {
+		name         string
+		outcome      string
+		role         string
+		marker       string
+		path         string
+		delegated    bool
+		actorPrompt  string
+		wantSubagent bool
+	}{
+		{
+			name:    "direct inline implementation",
+			outcome: "Apply one already-understood mechanical documentation change and deliver it.",
+			role:    organicActorRoleDirect,
+			marker:  organicDirectActorMarker,
+			path:    "docs/real-direct.md",
+		},
+		{
+			name:      "delegated direct implementation",
+			outcome:   "Understand the documentation set, implement the bounded outcome, and deliver it.",
+			role:      organicActorRoleDelegated,
+			marker:    organicDelegatedActorMarker,
+			path:      "docs/real-delegated.md",
+			delegated: true,
+			actorPrompt: "Act as the delegated-direct implementation worker. Implement the exact " +
+				"admitted documentation scope, explicitly commit it, and return exactly " +
+				organicDelegatedActorMarker + ". Never propose or create SDD state.",
+			wantSubagent: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			harness := newOrganicHarness(t)
+			body := organicLines("real agent line", 10)
+			lineage := "organic-real-" + test.role
+
+			script := []openCodeTurn{
+				{tool: "bash", arguments: map[string]any{"command": organicActorShellCommand()}},
+				{tool: "bash", arguments: map[string]any{"command": organicReviewShellCommand(
+					"review", "start", "--cwd", harness.repo.worktree, "--base-ref", "origin/main", "--lineage", lineage,
+				)}},
+				{tool: "bash", arguments: map[string]any{"command": organicReviewShellCommand(
+					"review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage,
+				)}},
+				{tool: "bash", arguments: map[string]any{"command": organicReviewShellCommand(
+					"review", "validate", "--cwd", harness.repo.worktree, "--gate", "pre-push",
+				)}},
+			}
+			if test.delegated {
+				// The implementation step becomes a real sub-agent, and only the
+				// sub-agent may commit the candidate.
+				script[0] = openCodeTurn{tool: "task", arguments: map[string]any{
+					"description":   "Run the delegated organic actor",
+					"prompt":        test.actorPrompt,
+					"subagent_type": "general",
+				}}
+			}
+
+			model := newOpenCodeFixtureServer(t, script, test.actorPrompt)
+			defer model.Close()
+
+			home := t.TempDir()
+			environment := append(harness.environment(),
+				"XDG_CONFIG_HOME="+sharedConfig,
+				"XDG_CACHE_HOME="+sharedCache,
+				"OPENCODE_CONFIG_DIR="+filepath.Join(sharedConfig, "opencode"),
+				"OPENCODE_TEST_HOME="+filepath.Join(home, "opencode"),
+				"OPENCODE_CONFIG_CONTENT="+organicOpenCodeConfig(t, model.URL),
+				"OPENCODE_AUTH_CONTENT={}",
+				"OPENCODE_DISABLE_PROJECT_CONFIG=1",
+				"OPENCODE_DISABLE_AUTOUPDATE=1",
+				"OPENCODE_DISABLE_AUTOCOMPACT=1",
+				"OPENCODE_DISABLE_CLAUDE_CODE=1",
+				"OPENCODE_DISABLE_DEFAULT_PLUGINS=1",
+				"OPENCODE_DISABLE_EXTERNAL_SKILLS=1",
+				"OPENCODE_DISABLE_LSP_DOWNLOAD=1",
+				"OPENCODE_DISABLE_MODELS_FETCH=1",
+				"OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER=1",
+				"OPENCODE_FAST_BOOT=1",
+				"OPENCODE_PURE=1",
+				organicActorRoleEnvironment+"="+test.role,
+				organicActorRepoEnvironment+"="+harness.repo.worktree,
+				organicActorPathEnvironment+"="+test.path,
+				organicActorBodyEnvironment+"="+body,
+				organicActorMessageEnvironment+"=docs: implement the real-agent outcome",
+				organicActorBinaryEnvironment+"="+organicBinary,
+				"GENTLE_AI_ORGANIC_ACTOR_EXECUTABLE="+os.Args[0],
+				"GENTLE_AI_ORGANIC_BINARY="+organicBinary,
+			)
+
+			ctx, cancel := context.WithTimeout(context.Background(), organicAgentTimeout)
+			defer cancel()
+			command := organicCommandContext(ctx, "opencode", "run", "--pure",
+				"--format", "json", "--agent", "organic", "--model", "fixture/fixture",
+				"--dir", harness.repo.worktree, test.outcome,
+			)
+			command.Dir = harness.repo.worktree
+			command.Env = environment
+			var stdout, stderr bytes.Buffer
+			command.Stdout = &stdout
+			command.Stderr = &stderr
+			if err := command.Run(); err != nil {
+				t.Fatalf("opencode run: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			}
+			model.assertComplete(t, test.wantSubagent)
+
+			transcript := stdout.String()
+			if !strings.Contains(transcript, test.marker) {
+				t.Fatalf("the real agent never reported %q:\n%s", test.marker, transcript)
+			}
+			if harness.git("rev-parse", "HEAD") == harness.repo.baseRevision {
+				t.Fatal("the real agent never created a candidate commit")
+			}
+			gate := harness.gate("pre-push")
+			if !gate.Allowed || gate.Result != organicGateAllow {
+				t.Fatalf("the real-agent candidate was refused at delivery: %#v", gate)
+			}
+			// A real sub-agent must not escalate its own route either.
+			harness.assertNoSDDArtifacts()
+			harness.assertSingleReviewLineage(lineage)
+		})
+	}
+}
+
+// organicActorShellCommand runs the compiled actor process from the agent's own
+// bash tool, so the implementation step is a real child process of a real agent.
+func organicActorShellCommand() string {
+	return `"$GENTLE_AI_ORGANIC_ACTOR_EXECUTABLE"`
+}
+
+func organicReviewShellCommand(arguments ...string) string {
+	quoted := make([]string, 0, len(arguments))
+	for _, argument := range arguments {
+		quoted = append(quoted, "'"+strings.ReplaceAll(argument, "'", `'\''`)+"'")
+	}
+	return `"$GENTLE_AI_ORGANIC_BINARY" ` + strings.Join(quoted, " ")
+}
+
+type openCodeTurn struct {
+	tool      string
+	arguments map[string]any
+}
+
 type openCodeFixtureServer struct {
 	*httptest.Server
-	mu               sync.Mutex
-	scenario         realAgentScenario
-	requiredPrompt   string
-	mainCalls        int
-	subagentStarts   int
-	subagentChecks   int
-	subagentCommits  int
-	issuedActorTools int
-	failure          string
+	mu             sync.Mutex
+	script         []openCodeTurn
+	actorPrompt    string
+	mainCalls      int
+	subagentStarts int
+	failure        string
+}
+
+func newOpenCodeFixtureServer(t *testing.T, script []openCodeTurn, actorPrompt string) *openCodeFixtureServer {
+	t.Helper()
+	fixture := &openCodeFixtureServer{script: script, actorPrompt: actorPrompt}
+	fixture.Server = httptest.NewServer(http.HandlerFunc(fixture.serveHTTP))
+	return fixture
 }
 
 type openAIRequest struct {
@@ -1058,32 +1667,13 @@ type openAIMessage struct {
 	Content any    `json:"content"`
 }
 
-func newOpenCodeFixtureServer(
-	t *testing.T,
-	scenario realAgentScenario,
-	requiredPrompt string,
-) *openCodeFixtureServer {
-	t.Helper()
-	fixture := &openCodeFixtureServer{
-		scenario:       scenario,
-		requiredPrompt: requiredPrompt,
-	}
-	fixture.Server = httptest.NewServer(http.HandlerFunc(fixture.serveHTTP))
-	return fixture
-}
-
-func (fixture *openCodeFixtureServer) serveHTTP(
-	writer http.ResponseWriter,
-	request *http.Request,
-) {
+func (fixture *openCodeFixtureServer) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodPost {
 		http.Error(writer, "method", http.StatusMethodNotAllowed)
 		return
 	}
 	var input openAIRequest
-	if err := json.NewDecoder(
-		io.LimitReader(request.Body, 4<<20),
-	).Decode(&input); err != nil {
+	if err := json.NewDecoder(io.LimitReader(request.Body, 8<<20)).Decode(&input); err != nil {
 		fixture.fail(writer, "decode model request: %v", err)
 		return
 	}
@@ -1091,250 +1681,65 @@ func (fixture *openCodeFixtureServer) serveHTTP(
 		fixture.writeText(writer, "Organic runtime journey", "stop")
 		return
 	}
-	if len(input.Messages) == 0 {
-		fixture.fail(writer, "model request has no messages")
+	if fixture.isSubagent(input) {
+		fixture.mu.Lock()
+		fixture.subagentStarts++
+		fixture.mu.Unlock()
+		last := input.Messages[len(input.Messages)-1]
+		if last.Role == "tool" {
+			fixture.writeText(writer, organicDelegatedActorMarker, "stop")
+			return
+		}
+		fixture.writeTool(writer, "delegated-actor", "bash", map[string]any{"command": organicActorShellCommand()})
 		return
 	}
-	last := input.Messages[len(input.Messages)-1]
-	system := ""
-	hasActorPrompt := false
-	for _, message := range input.Messages {
-		if message.Role == "system" {
-			system += messageText(message.Content)
-		}
-		if message.Role == "user" &&
-			strings.Contains(
-				messageText(message.Content),
-				fixture.scenario.actorPrompt,
-			) {
-			hasActorPrompt = true
-		}
-	}
-	isMain := strings.Contains(system, fixture.requiredPrompt)
-	lastText := messageText(last.Content)
-	if !isMain && hasActorPrompt {
-		switch last.Role {
-		case "user":
-			if !strings.Contains(lastText, fixture.scenario.actorPrompt) {
-				fixture.fail(
-					writer,
-					"subagent prompt does not contain %q: %q",
-					fixture.scenario.actorPrompt,
-					lastText,
-				)
-				return
-			}
-			fixture.mu.Lock()
-			fixture.subagentStarts++
-			fixture.mu.Unlock()
-			fixture.writeTool(
-				writer,
-				"actor-status",
-				"bash",
-				organicStatusCommand(),
-			)
-			return
-		case "tool":
-			if strings.Contains(lastText, fixture.scenario.actorMarker) {
-				if fixture.scenario.actorTool != "task" {
-					fixture.fail(
-						writer,
-						"only delegated implementation may commit inside the task actor",
-					)
-					return
-				}
-				fixture.mu.Lock()
-				fixture.subagentCommits++
-				fixture.mu.Unlock()
-				fixture.writeText(
-					writer,
-					fixture.scenario.actorMarker,
-					"stop",
-				)
-				return
-			}
-			if !strings.Contains(lastText, fixture.scenario.workRunID) ||
-				!strings.Contains(lastText, string(fixture.scenario.expectedRoute)) ||
-				strings.Contains(lastText, "sddRunRef") {
-				fixture.fail(
-					writer,
-					"subagent status evidence does not prove route/no-SDD: %s",
-					lastText,
-				)
-				return
-			}
-			fixture.mu.Lock()
-			fixture.subagentChecks++
-			fixture.mu.Unlock()
-			if fixture.scenario.actorTool == "task" {
-				fixture.writeTool(
-					writer,
-					"delegated-implementation",
-					"bash",
-					organicActorCommand(
-						fixture.scenario.actorMarker,
-						fixture.scenario.activeVerification,
-					),
-				)
-				return
-			}
-			fixture.writeText(writer, fixture.scenario.actorMarker, "stop")
-			return
-		default:
-			fixture.fail(
-				writer,
-				"unexpected subagent terminal role %q",
-				last.Role,
-			)
-			return
-		}
-	}
-	if !isMain {
-		fixture.fail(writer, "production organic orchestrator contract is absent")
-		return
-	}
+
 	fixture.mu.Lock()
 	fixture.mainCalls++
 	call := fixture.mainCalls
 	fixture.mu.Unlock()
-	switch call {
-	case 1:
-		fixture.writeTool(writer, "capabilities", "bash", organicCapabilityCommand())
-	case 2:
-		fixture.writeTool(writer, "start", "bash", organicStartCommand())
-	case 3:
-		fixture.writeTool(writer, "status", "bash", organicStatusCommand())
-	case 4:
-		fixture.mu.Lock()
-		fixture.issuedActorTools++
-		fixture.mu.Unlock()
-		if fixture.scenario.actorTool == "task" {
-			fixture.writeTool(
-				writer,
-				"actor",
-				"task",
-				map[string]any{
-					"description":   "Run organic actor",
-					"prompt":        fixture.scenario.actorPrompt,
-					"subagent_type": "general",
-				},
-			)
-			return
-		}
-		fixture.writeTool(
-			writer,
-			"actor",
-			"bash",
-			organicActorCommand(
-				fixture.scenario.actorMarker,
-				fixture.scenario.activeVerification,
-			),
-		)
-	case 5:
-		if fixture.scenario.commonReview {
-			if !strings.Contains(lastText, fixture.scenario.actorMarker) {
-				fixture.fail(
-					writer,
-					"common review was requested before committed implementation evidence: %s",
-					lastText,
-				)
-				return
-			}
-			fixture.mu.Lock()
-			fixture.issuedActorTools++
-			fixture.mu.Unlock()
-			fixture.writeTool(
-				writer,
-				"common-review",
-				"task",
-				map[string]any{
-					"description":   "Run common native review",
-					"prompt":        fixture.scenario.actorPrompt,
-					"subagent_type": "general",
-				},
-			)
-			return
-		}
-		if !strings.Contains(lastText, fixture.scenario.actorMarker) {
-			fixture.fail(
-				writer,
-				"work-advance was requested before actor commit evidence: %s",
-				lastText,
-			)
-			return
-		}
-		fixture.writeTool(
-			writer,
-			"advance",
-			"bash",
-			organicAdvanceCommand(fixture.scenario.killSwitchAtAdvance),
-		)
-	case 6:
-		if fixture.scenario.commonReview {
-			if !strings.Contains(lastText, fixture.scenario.actorMarker) {
-				fixture.fail(
-					writer,
-					"work-advance was requested before common review evidence: %s",
-					lastText,
-				)
-				return
-			}
-			fixture.writeTool(
-				writer,
-				"advance",
-				"bash",
-				organicAdvanceCommand(false),
-			)
-			return
-		}
+	if call > len(fixture.script) {
 		fixture.writeText(writer, "Organic journey complete.", "stop")
-	case 7:
-		if !fixture.scenario.commonReview {
-			fixture.fail(writer, "unexpected seventh main model call")
-			return
-		}
-		fixture.writeText(writer, "Organic journey complete.", "stop")
-	default:
-		fixture.fail(writer, "unexpected main model call %d", call)
+		return
 	}
+	turn := fixture.script[call-1]
+	fixture.writeTool(writer, fmt.Sprintf("turn-%d", call), turn.tool, turn.arguments)
 }
 
-func (fixture *openCodeFixtureServer) fail(
-	writer http.ResponseWriter,
-	format string,
-	arguments ...any,
-) {
+// isSubagent recognises the delegated worker session. OpenCode gives the
+// sub-agent its own conversation seeded with the delegation prompt, so the
+// prompt's presence in a user message is what distinguishes the two sessions.
+func (fixture *openCodeFixtureServer) isSubagent(input openAIRequest) bool {
+	if strings.TrimSpace(fixture.actorPrompt) == "" {
+		return false
+	}
+	for _, message := range input.Messages {
+		if message.Role == "user" && strings.Contains(messageText(message.Content), fixture.actorPrompt) {
+			return true
+		}
+	}
+	return false
+}
+
+func (fixture *openCodeFixtureServer) fail(writer http.ResponseWriter, format string, arguments ...any) {
 	fixture.mu.Lock()
 	fixture.failure = fmt.Sprintf(format, arguments...)
 	fixture.mu.Unlock()
 	http.Error(writer, "fixture failure", http.StatusInternalServerError)
 }
 
-func (fixture *openCodeFixtureServer) writeTool(
-	writer http.ResponseWriter,
-	id string,
-	name string,
-	arguments any,
-) {
+func (fixture *openCodeFixtureServer) writeTool(writer http.ResponseWriter, id, name string, arguments any) {
 	encoded, _ := json.Marshal(arguments)
 	fixture.writeChunks(writer, []any{
 		map[string]any{
-			"id":      "chat",
-			"object":  "chat.completion.chunk",
-			"created": 0,
-			"model":   "fixture",
+			"id": "chat", "object": "chat.completion.chunk", "created": 0, "model": "fixture",
 			"choices": []any{map[string]any{
 				"index": 0,
 				"delta": map[string]any{
 					"role": "assistant",
 					"tool_calls": []any{map[string]any{
-						"index": 0,
-						"id":    "call_" + id,
-						"type":  "function",
-						"function": map[string]any{
-							"name":      name,
-							"arguments": string(encoded),
-						},
+						"index": 0, "id": "call_" + id, "type": "function",
+						"function": map[string]any{"name": name, "arguments": string(encoded)},
 					}},
 				},
 				"finish_reason": nil,
@@ -1344,23 +1749,13 @@ func (fixture *openCodeFixtureServer) writeTool(
 	})
 }
 
-func (fixture *openCodeFixtureServer) writeText(
-	writer http.ResponseWriter,
-	content string,
-	reason string,
-) {
+func (fixture *openCodeFixtureServer) writeText(writer http.ResponseWriter, content, reason string) {
 	fixture.writeChunks(writer, []any{
 		map[string]any{
-			"id":      "chat",
-			"object":  "chat.completion.chunk",
-			"created": 0,
-			"model":   "fixture",
+			"id": "chat", "object": "chat.completion.chunk", "created": 0, "model": "fixture",
 			"choices": []any{map[string]any{
-				"index": 0,
-				"delta": map[string]any{
-					"role":    "assistant",
-					"content": content,
-				},
+				"index":         0,
+				"delta":         map[string]any{"role": "assistant", "content": content},
 				"finish_reason": nil,
 			}},
 		},
@@ -1370,27 +1765,13 @@ func (fixture *openCodeFixtureServer) writeText(
 
 func organicFinishChunk(reason string) map[string]any {
 	return map[string]any{
-		"id":      "chat",
-		"object":  "chat.completion.chunk",
-		"created": 0,
-		"model":   "fixture",
-		"choices": []any{map[string]any{
-			"index":         0,
-			"delta":         map[string]any{},
-			"finish_reason": reason,
-		}},
-		"usage": map[string]any{
-			"prompt_tokens":     1,
-			"completion_tokens": 1,
-			"total_tokens":      2,
-		},
+		"id": "chat", "object": "chat.completion.chunk", "created": 0, "model": "fixture",
+		"choices": []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": reason}},
+		"usage":   map[string]any{"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
 	}
 }
 
-func (fixture *openCodeFixtureServer) writeChunks(
-	writer http.ResponseWriter,
-	chunks []any,
-) {
+func (fixture *openCodeFixtureServer) writeChunks(writer http.ResponseWriter, chunks []any) {
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.WriteHeader(http.StatusOK)
 	for _, chunk := range chunks {
@@ -1403,711 +1784,30 @@ func (fixture *openCodeFixtureServer) writeChunks(
 	_, _ = io.WriteString(writer, "data: [DONE]\n\n")
 }
 
-func (fixture *openCodeFixtureServer) assertComplete(t *testing.T) {
+func (fixture *openCodeFixtureServer) assertComplete(t *testing.T, wantSubagent bool) {
 	t.Helper()
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
 	if fixture.failure != "" {
 		t.Fatal(fixture.failure)
 	}
-	wantMainCalls := 6
-	wantActorTools := 1
-	if fixture.scenario.commonReview {
-		wantMainCalls = 7
-		wantActorTools = 2
+	if fixture.mainCalls < len(fixture.script) {
+		t.Fatalf("the agent issued %d of %d scripted turns", fixture.mainCalls, len(fixture.script))
 	}
-	if fixture.mainCalls != wantMainCalls ||
-		fixture.issuedActorTools != wantActorTools {
-		t.Fatalf(
-			"model calls/actor tools = %d/%d, want %d/%d",
-			fixture.mainCalls,
-			fixture.issuedActorTools,
-			wantMainCalls,
-			wantActorTools,
-		)
-	}
-	wantSubagents := 0
-	if fixture.scenario.actorTool == "task" ||
-		fixture.scenario.commonReview {
-		wantSubagents = 1
-	}
-	if fixture.subagentStarts != wantSubagents {
-		t.Fatalf(
-			"subagent starts = %d, want %d",
-			fixture.subagentStarts,
-			wantSubagents,
-		)
-	}
-	if fixture.subagentChecks != wantSubagents {
-		t.Fatalf(
-			"subagent status checks = %d, want %d",
-			fixture.subagentChecks,
-			wantSubagents,
-		)
-	}
-	wantSubagentCommits := 0
-	if fixture.scenario.actorTool == "task" {
-		wantSubagentCommits = 1
-	}
-	if fixture.subagentCommits != wantSubagentCommits {
-		t.Fatalf(
-			"subagent commits = %d, want %d",
-			fixture.subagentCommits,
-			wantSubagentCommits,
-		)
+	if hadSubagent := fixture.subagentStarts > 0; hadSubagent != wantSubagent {
+		t.Fatalf("real sub-agent used = %t, want %t", hadSubagent, wantSubagent)
 	}
 }
 
-type openCodeEvent struct {
-	Type string `json:"type"`
-	Part struct {
-		Tool  string `json:"tool"`
-		State struct {
-			Status string `json:"status"`
-			Input  struct {
-				Command string `json:"command"`
-			} `json:"input"`
-			Output string `json:"output"`
-		} `json:"state"`
-	} `json:"part"`
-}
-
-func decodeOpenCodeEvents(t *testing.T, payload []byte) []openCodeEvent {
-	t.Helper()
-	scanner := bufio.NewScanner(bytes.NewReader(payload))
-	scanner.Buffer(make([]byte, 64<<10), 4<<20)
-	var events []openCodeEvent
-	for scanner.Scan() {
-		line := bytes.TrimSpace(scanner.Bytes())
-		if len(line) == 0 {
-			continue
-		}
-		var event openCodeEvent
-		if err := json.Unmarshal(line, &event); err != nil {
-			t.Fatalf("decode OpenCode JSONL %q: %v", line, err)
-		}
-		events = append(events, event)
-	}
-	if err := scanner.Err(); err != nil {
-		t.Fatal(err)
-	}
-	return events
-}
-
-type organicJourneyEvidence struct {
-	start         workrun.WorkStatusV1
-	beforeActor   workrun.WorkStatusV1
-	advance       workrun.WorkAdvanceV2
-	advanceOutput []byte
-}
-
-func assertOrganicJourney(
-	t *testing.T,
-	events []openCodeEvent,
-	scenario realAgentScenario,
-	repositoryRef string,
-	sessionRef string,
-) organicJourneyEvidence {
-	t.Helper()
-	var (
-		capabilities *workprovider.RuntimeCapabilitiesV2
-		start        *workrun.WorkStatusV1
-		statuses     []workrun.WorkStatusV1
-		advance      *workrun.WorkAdvanceV2
-		advanceBytes []byte
-		actorSeen    bool
-		taskSeen     bool
-	)
-	for _, event := range events {
-		if event.Type != "tool_use" {
-			continue
-		}
-		if event.Part.State.Status != "completed" {
-			t.Fatalf("tool %s state = %#v", event.Part.Tool, event.Part.State)
-		}
-		if event.Part.Tool == "task" {
-			taskSeen = true
-			if !strings.Contains(event.Part.State.Output, scenario.actorMarker) {
-				t.Fatalf("task actor output = %q", event.Part.State.Output)
-			}
-			actorSeen = true
-			continue
-		}
-		if strings.Contains(event.Part.State.Output, scenario.actorMarker) {
-			actorSeen = true
-			continue
-		}
-		var result struct {
-			Status int    `json:"status"`
-			Stdout string `json:"stdout"`
-			Stderr string `json:"stderr"`
-		}
-		if err := json.Unmarshal([]byte(event.Part.State.Output), &result); err != nil {
-			t.Fatalf("decode command result %q: %v", event.Part.State.Output, err)
-		}
-		if result.Status != 0 || result.Stderr != "" {
-			t.Fatalf("command result = %#v", result)
-		}
-		switch {
-		case strings.Contains(event.Part.State.Input.Command, "work-capabilities"):
-			var value workprovider.RuntimeCapabilitiesV2
-			if err := json.Unmarshal([]byte(result.Stdout), &value); err != nil {
-				t.Fatal(err)
-			}
-			capabilities = &value
-		case strings.Contains(event.Part.State.Input.Command, "work-start"):
-			var value workrun.WorkStatusV1
-			if err := json.Unmarshal([]byte(result.Stdout), &value); err != nil {
-				t.Fatal(err)
-			}
-			start = &value
-		case strings.Contains(event.Part.State.Input.Command, "work-status"):
-			var value workrun.WorkStatusV1
-			if err := json.Unmarshal([]byte(result.Stdout), &value); err != nil {
-				t.Fatal(err)
-			}
-			statuses = append(statuses, value)
-		case strings.Contains(event.Part.State.Input.Command, "work-advance"):
-			if advance != nil {
-				t.Fatal("actor invoked work-advance more than once")
-			}
-			var value workrun.WorkAdvanceV2
-			if err := json.Unmarshal([]byte(result.Stdout), &value); err != nil {
-				t.Fatal(err)
-			}
-			advance = &value
-			advanceBytes = []byte(result.Stdout)
-		}
-	}
-	if capabilities == nil ||
-		capabilities.RepositoryRef != repositoryRef ||
-		capabilities.AgentID != model.AgentOpenCode ||
-		capabilities.WorkRouting.Exposure != workprovider.WorkRoutingAdvertised ||
-		capabilities.Contracts.Advance != workrun.WorkAdvanceContractV2 ||
-		capabilities.Contracts.VerificationDecide !=
-			workrun.WorkVerificationDecideContractV1 ||
-		capabilities.ConnectorSessionRef != sessionRef {
-		t.Fatalf("capabilities = %#v", capabilities)
-	}
-	if len(statuses) != 1 {
-		t.Fatalf(
-			"main status observations = %d, want one pre-actor observation",
-			len(statuses),
-		)
-	}
-	values := []struct {
-		name  string
-		value *workrun.WorkStatusV1
-	}{
-		{name: "start", value: start},
-		{name: "status-before-actor", value: &statuses[0]},
-	}
-	for _, observed := range values {
-		name, value := observed.name, observed.value
-		if value == nil ||
-			value.WorkRunID != scenario.workRunID ||
-			value.ImplementationRoute != scenario.expectedRoute ||
-			value.SDDRunRef != "" {
-			t.Fatalf("%s = %#v", name, value)
-		}
-		if err := value.Validate(); err != nil {
-			t.Fatalf("%s validation = %v", name, err)
-		}
-	}
-	if !actorSeen {
-		t.Fatal("real agent did not execute the scenario actor")
-	}
-	wantTask := scenario.actorTool == "task" || scenario.commonReview
-	if taskSeen != wantTask {
-		t.Fatalf("task actor seen = %t, want %t", taskSeen, wantTask)
-	}
-	if start.Revision != statuses[0].Revision ||
-		start.ImplementationRoute != statuses[0].ImplementationRoute {
-		t.Fatalf(
-			"pre-actor status changed route/revision: %#v -> %#v",
-			start,
-			statuses[0],
-		)
-	}
-	if advance == nil {
-		t.Fatal("real agent did not invoke the required post-actor work-advance")
-	}
-	if err := advance.Validate(); err != nil {
-		t.Fatalf("work-advance validation = %v", err)
-	}
-	if advance.PreviousRevision != start.Revision ||
-		advance.Status.WorkRunID != scenario.workRunID ||
-		advance.Status.ImplementationRoute != scenario.expectedRoute ||
-		advance.Status.SDDRunRef != "" ||
-		advance.VerificationDecision != nil {
-		t.Fatalf("work-advance authority binding = %#v", advance)
-	}
-	if scenario.killSwitchAtAdvance {
-		if advance.Status.PublicState != workrun.PublicStateNeedsYourDecision ||
-			advance.Diagnostic == nil ||
-			advance.Diagnostic.Code !=
-				workrun.WorkAdvanceDiagnosticProviderAuthorityUnavailable ||
-			advance.DeliveryResultRef != "" {
-			t.Fatalf("kill-switch terminal result = %#v", advance)
-		}
-	} else if advance.Status.PublicState != workrun.PublicStateReady ||
-		advance.DeliveryResultRef == "" ||
-		advance.Diagnostic != nil {
-		t.Fatalf(
-			"productive terminal result = %#v / diagnostic %#v",
-			advance,
-			advance.Diagnostic,
-		)
-	}
-	return organicJourneyEvidence{
-		start:         *start,
-		beforeActor:   statuses[0],
-		advance:       *advance,
-		advanceOutput: advanceBytes,
-	}
-}
-
-func assertOrganicDeliveredCandidate(
-	t *testing.T,
-	repository organicRepository,
-	runtimeServer *organicRuntimeServer,
-	evidence organicJourneyEvidence,
-	scenario realAgentScenario,
-) {
-	t.Helper()
-	candidate := organicGit(t, repository.worktree, "rev-parse", "HEAD")
-	if candidate == repository.baseRevision {
-		t.Fatal("actor marker did not produce a new committed candidate")
-	}
-	if dirty := organicGit(
-		t,
-		repository.worktree,
-		"status",
-		"--porcelain=v1",
-		"--untracked-files=all",
-	); dirty != "" {
-		t.Fatalf("actor left an uncommitted worktree: %q", dirty)
-	}
-	remote, err := organicBareGitOutput(
-		context.Background(),
-		repository.bare,
-		"rev-parse",
-		"refs/heads/main",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if remote != candidate {
-		t.Fatalf("remote main = %s, want committed candidate %s", remote, candidate)
-	}
-	if _, err := organicBareGitOutput(
-		context.Background(),
-		repository.bare,
-		"merge-base",
-		"--is-ancestor",
-		repository.baseRevision,
-		candidate,
-	); err != nil {
-		t.Fatalf("delivered candidate is not a base descendant: %v", err)
-	}
-	localTree := organicGit(
-		t,
-		repository.worktree,
-		"rev-parse",
-		candidate+"^{tree}",
-	)
-	remoteTree, err := organicBareGitOutput(
-		context.Background(),
-		repository.bare,
-		"rev-parse",
-		"refs/heads/main^{tree}",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if remoteTree != localTree {
-		t.Fatalf("remote/local candidate trees = %s/%s", remoteTree, localTree)
-	}
-	path := "docs/passive-note.md"
-	wantContent := "# Passive note\n\n" +
-		"Organic runtime delivered this committed documentation change."
-	if scenario.activeVerification {
-		path = "internal/active.go"
-		wantContent = "package internal\n\nfunc Active() bool { return true }"
-	}
-	document, err := organicBareGitOutput(
-		context.Background(),
-		repository.bare,
-		"show",
-		"refs/heads/main:"+path,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if document != wantContent {
-		t.Fatalf("delivered content = %q, want %q", document, wantContent)
-	}
-	paths := organicGit(
-		t,
-		repository.worktree,
-		"diff-tree",
-		"--no-commit-id",
-		"--name-only",
-		"-r",
-		repository.baseRevision,
-		candidate,
-	)
-	if paths != path {
-		t.Fatalf("committed candidate paths = %q", paths)
-	}
-	runtimeServer.mu.Lock()
-	casCalls := runtimeServer.branchCASCalls
-	casEffects := runtimeServer.branchCASEffects
-	boundCandidate := runtimeServer.candidateRevision
-	runtimeServer.mu.Unlock()
-	if casCalls != 1 || casEffects != 1 ||
-		boundCandidate != "git:"+candidate ||
-		evidence.advance.Status.PublicState != workrun.PublicStateReady {
-		t.Fatalf(
-			"productive delivery evidence = calls %d effects %d candidate %q advance %#v",
-			casCalls,
-			casEffects,
-			boundCandidate,
-			evidence.advance,
-		)
-	}
-}
-
-func assertOrganicKilledAdvance(
-	t *testing.T,
-	repository organicRepository,
-	runtimeServer *organicRuntimeServer,
-	evidence organicJourneyEvidence,
-) {
-	t.Helper()
-	candidate := organicGit(t, repository.worktree, "rev-parse", "HEAD")
-	if candidate == repository.baseRevision {
-		t.Fatal("kill-switch journey did not reach a committed actor candidate")
-	}
-	remote, err := organicBareGitOutput(
-		context.Background(),
-		repository.bare,
-		"rev-parse",
-		"refs/heads/main",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	runtimeServer.mu.Lock()
-	casCalls := runtimeServer.branchCASCalls
-	casEffects := runtimeServer.branchCASEffects
-	expiresAt := runtimeServer.executionExpiresAt
-	runtimeServer.mu.Unlock()
-	if remote != repository.baseRevision ||
-		casCalls != 0 ||
-		casEffects != 0 ||
-		expiresAt != 0 ||
-		evidence.advance.Status.PublicState !=
-			workrun.PublicStateNeedsYourDecision ||
-		evidence.advance.Diagnostic == nil ||
-		evidence.advance.Diagnostic.Code !=
-			workrun.WorkAdvanceDiagnosticProviderAuthorityUnavailable {
-		t.Fatalf(
-			"kill switch did not fail closed: remote %s base %s calls/effects %d/%d expiry %d advance %#v",
-			remote,
-			repository.baseRevision,
-			casCalls,
-			casEffects,
-			expiresAt,
-			evidence.advance,
-		)
-	}
-}
-
-func assertOrganicTerminalReplay(
-	t *testing.T,
-	binary string,
-	repo string,
-	environment []string,
-	runtimeServer *organicRuntimeServer,
-	evidence organicJourneyEvidence,
-) {
-	t.Helper()
-	runtimeServer.mu.Lock()
-	expiresAt := runtimeServer.executionExpiresAt
-	runtimeServer.mu.Unlock()
-	now := time.Now().UTC()
-	expiry := time.Unix(expiresAt, 0).UTC()
-	remaining := expiry.Sub(now)
-	if expiresAt <= 0 ||
-		remaining <= 0 ||
-		remaining > time.Duration(
-			organicShortAuthorizationTTLSeconds+2,
-		)*time.Second {
-		t.Fatalf(
-			"execution expiry/remaining = %d/%s; short bound was not captured",
-			expiresAt,
-			remaining,
-		)
-	}
-	timer := time.NewTimer(time.Until(expiry.Add(1100 * time.Millisecond)))
-	defer timer.Stop()
-	<-timer.C
-	if time.Now().UTC().Unix() < expiresAt {
-		t.Fatalf("terminal status check ran before execution expiry %d", expiresAt)
-	}
-	statusBytes := runOrganicBinary(
-		t,
-		binary,
-		repo,
-		environment,
-		"work-status",
-		"--cwd",
-		repo,
-		"--work-run",
-		evidence.start.WorkRunID,
-		"--contract",
-		workrun.WorkStatusContractV1,
-		"--json",
-	)
-	var status workrun.WorkStatusV1
-	if err := json.Unmarshal(statusBytes, &status); err != nil {
-		t.Fatal(err)
-	}
-	if err := status.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	if status.PublicState != workrun.PublicStateReady ||
-		status.Revision != evidence.advance.Status.Revision ||
-		status.WorkRunID != evidence.start.WorkRunID {
-		t.Fatalf("Ready did not survive execution expiry: %#v", status)
-	}
-	replayBytes := runOrganicBinary(
-		t,
-		binary,
-		repo,
-		environment,
-		"work-advance",
-		"--cwd",
-		repo,
-		"--work-run",
-		evidence.start.WorkRunID,
-		"--expected-revision",
-		evidence.start.Revision,
-		"--contract",
-		workrun.WorkAdvanceContractV2,
-		"--json",
-	)
-	if !bytes.Equal(replayBytes, evidence.advanceOutput) {
-		t.Fatalf(
-			"same-CAS replay changed exact result bytes:\nfirst  %s\nreplay %s",
-			evidence.advanceOutput,
-			replayBytes,
-		)
-	}
-	runtimeServer.mu.Lock()
-	defer runtimeServer.mu.Unlock()
-	if runtimeServer.branchCASCalls != 1 ||
-		runtimeServer.branchCASEffects != 1 {
-		t.Fatalf(
-			"same-CAS replay repeated effect: calls/effects %d/%d",
-			runtimeServer.branchCASCalls,
-			runtimeServer.branchCASEffects,
-		)
-	}
-}
-
-func assertOrganicNoSDD(t *testing.T, repository organicRepository) {
-	t.Helper()
-	common := organicGit(
-		t,
-		repository.worktree,
-		"rev-parse",
-		"--git-common-dir",
-	)
-	if !filepath.IsAbs(common) {
-		common = filepath.Join(repository.worktree, common)
-	}
-	root := filepath.Join(filepath.Clean(common), "gentle-ai")
-	entries, err := os.ReadDir(root)
-	if os.IsNotExist(err) {
-		return
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range entries {
-		name := strings.ToLower(entry.Name())
-		if strings.HasPrefix(name, "sdd-") ||
-			name == "sdd" ||
-			name == "trace" ||
-			name == "evaluation" {
-			t.Fatalf(
-				"direct implementation created forbidden SDD/trace/evaluation artifact %q",
-				filepath.Join(root, entry.Name()),
-			)
-		}
-	}
-}
-
-func runOrganicBinary(
-	t *testing.T,
-	binary string,
-	repo string,
-	environment []string,
-	arguments ...string,
-) []byte {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(
-		context.Background(),
-		organicLocalTimeout,
-	)
-	defer cancel()
-	command := organicCommandContext(ctx, binary, arguments...)
-	command.Dir = repo
-	command.Env = environment
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	command.Stdout = &stdout
-	command.Stderr = &stderr
-	if err := command.Run(); err != nil {
-		t.Fatalf(
-			"%s %v: %v\nstdout:\n%s\nstderr:\n%s",
-			binary,
-			arguments,
-			err,
-			stdout.String(),
-			stderr.String(),
-		)
-	}
-	if stderr.Len() != 0 {
-		t.Fatalf("%s %v stderr:\n%s", binary, arguments, stderr.String())
-	}
-	return append([]byte(nil), stdout.Bytes()...)
-}
-
-func organicCapabilityCommand() map[string]any {
-	return map[string]any{"command": organicNodeCommand(
-		"['work-capabilities','--cwd',process.env.ORGANIC_E2E_REPO,"+
-			"'--agent','opencode',"+
-			"'--contract','gentle-ai.work-capabilities/v2','--json']",
-		"",
-	)}
-}
-
-func organicStartCommand() map[string]any {
-	return map[string]any{"command": `node -e "const fs=require('fs');` +
-		`const {spawnSync}=require('child_process');` +
-		`const r=spawnSync(process.env.GENTLE_AI_TEST_BINARY,` +
-		`['work-start','--cwd',process.env.ORGANIC_E2E_REPO,` +
-		`'--agent','opencode',` +
-		`'--contract','gentle-ai.work-start/v1','--json'],{` +
-		`input:JSON.stringify({outcome:process.env.ORGANIC_E2E_OUTCOME,` +
-		`explicitSddRequested:false}),encoding:'utf8',env:process.env,` +
-		`timeout:30000});` +
-		`const status=Number.isInteger(r.status)?r.status:1;` +
-		`const stderr=r.stderr||(Number.isInteger(r.status)?'':` +
-		`String(r.error||r.signal||'process did not exit'));` +
-		`if(status===0){const v=JSON.parse(r.stdout);` +
-		`fs.writeFileSync(process.env.ORGANIC_E2E_START_REVISION_FILE,` +
-		`v.revision,{encoding:'utf8',mode:384});}` +
-		`process.stdout.write(JSON.stringify({status,` +
-		`stdout:r.stdout||'',stderr}));` +
-		`process.exit(status===0?0:1)"`}
-}
-
-func organicStatusCommand() map[string]any {
-	return map[string]any{"command": organicNodeCommand(
-		"['work-status','--cwd',process.env.ORGANIC_E2E_REPO,"+
-			"'--work-run',process.env.ORGANIC_E2E_WORK_RUN_ID,"+
-			"'--contract','gentle-ai.work-status/v1','--json']",
-		"",
-	)}
-}
-
-func organicAdvanceCommand(killSwitch bool) map[string]any {
-	environment := "process.env"
-	if killSwitch {
-		environment = `Object.assign({},process.env,{'` +
-			workprovider.WorkRoutingModeEnvironment + `':'` +
-			string(workprovider.ActivationDisabled) + `'})`
-	}
-	return map[string]any{"command": `node -e "const fs=require('fs');` +
-		`const {spawnSync}=require('child_process');` +
-		`const revision=fs.readFileSync(` +
-		`process.env.ORGANIC_E2E_START_REVISION_FILE,'utf8');` +
-		`const r=spawnSync(process.env.GENTLE_AI_TEST_BINARY,` +
-		`['work-advance','--cwd',process.env.ORGANIC_E2E_REPO,` +
-		`'--work-run',process.env.ORGANIC_E2E_WORK_RUN_ID,` +
-		`'--expected-revision',revision,` +
-		`'--contract','gentle-ai.work-advance/v2','--json'],{` +
-		`encoding:'utf8',env:` + environment + `,timeout:120000});` +
-		`const status=Number.isInteger(r.status)?r.status:1;` +
-		`const stderr=r.stderr||(Number.isInteger(r.status)?'':` +
-		`String(r.error||r.signal||'process did not exit'));` +
-		`process.stdout.write(JSON.stringify({status,` +
-		`stdout:r.stdout||'',stderr}));` +
-		`process.exit(status===0?0:1)"`}
-}
-
-func organicActorCommand(marker string, active bool) map[string]any {
-	directory := "docs"
-	path := "docs/passive-note.md"
-	content := "# Passive note\\n\\n" +
-		"Organic runtime delivered this committed documentation change.\\n"
-	message := "docs: add passive organic runtime note"
-	if active {
-		directory = "internal"
-		path = "internal/active.go"
-		content = "package internal\\n\\nfunc Active() bool { return true }\\n"
-		message = "feat: activate organic runtime"
-	}
-	return map[string]any{"command": `node -e "const fs=require('fs');` +
-		`const {spawnSync}=require('child_process');` +
-		`const repo=process.env.ORGANIC_E2E_REPO;` +
-		`const run=(args)=>{const r=spawnSync('git',args,{cwd:repo,` +
-		`encoding:'utf8',env:process.env,timeout:30000});` +
-		`if(r.status!==0){` +
-		`process.stderr.write(r.stderr||r.stdout||'git failed');` +
-		`process.exit(r.status||1);}};` +
-		`fs.mkdirSync(repo+'/` + directory + `',{recursive:true});` +
-		`fs.writeFileSync(repo+'/` + path + `','` + content + `');` +
-		`run(['add','--','` + path + `']);` +
-		`run(['commit','-m','` + message + `']);` +
-		`process.stdout.write('` + marker + `')"`}
-}
-
-func organicNodeCommand(arguments string, extraOptions string) string {
-	return `node -e "const {spawnSync}=require('child_process');` +
-		`const r=spawnSync(process.env.GENTLE_AI_TEST_BINARY,` +
-		arguments + `,{` + extraOptions +
-		`encoding:'utf8',env:process.env,timeout:30000});` +
-		`const status=Number.isInteger(r.status)?r.status:1;` +
-		`const stderr=r.stderr||(Number.isInteger(r.status)?'':` +
-		`String(r.error||r.signal||'process did not exit'));` +
-		`process.stdout.write(JSON.stringify({status,` +
-		`stdout:r.stdout||'',stderr}));` +
-		`process.exit(status===0?0:1)"`
-}
-
-func organicOpenCodeConfig(
-	t *testing.T,
-	serverURL string,
-	orchestrator string,
-) string {
+func organicOpenCodeConfig(t *testing.T, serverURL string) string {
 	t.Helper()
 	config := map[string]any{
 		"provider": map[string]any{
 			"fixture": map[string]any{
-				"npm":  "@ai-sdk/openai-compatible",
-				"name": "Organic E2E Fixture",
-				"options": map[string]any{
-					"baseURL": serverURL + "/v1",
-					"apiKey":  "fixture",
-				},
-				"models": map[string]any{
-					"fixture": map[string]any{"name": "Fixture"},
-				},
+				"npm":     "@ai-sdk/openai-compatible",
+				"name":    "Organic E2E Fixture",
+				"options": map[string]any{"baseURL": serverURL + "/v1", "apiKey": "fixture"},
+				"models":  map[string]any{"fixture": map[string]any{"name": "Fixture"}},
 			},
 		},
 		"agent": map[string]any{
@@ -2115,18 +1815,11 @@ func organicOpenCodeConfig(
 				"description": "Organic runtime E2E",
 				"mode":        "primary",
 				"model":       "fixture/fixture",
-				"prompt":      orchestrator,
-				"permission": map[string]any{
-					"bash": "allow",
-					"task": "allow",
-					"edit": "deny",
-				},
+				"permission":  map[string]any{"bash": "allow", "task": "allow", "edit": "deny"},
 			},
 		},
-		"plugin": []any{},
-		"compaction": map[string]any{
-			"auto": false,
-		},
+		"plugin":     []any{},
+		"compaction": map[string]any{"auto": false},
 	}
 	encoded, err := json.Marshal(config)
 	if err != nil {
@@ -2135,391 +1828,38 @@ func organicOpenCodeConfig(
 	return string(encoded)
 }
 
-func organicRoutePolicies(
-	t *testing.T,
-	revision uint64,
-	authorizationTTLSeconds int64,
-) []deliveryadmission.RoutePolicy {
-	t.Helper()
-	routes := []deliveryadmission.Route{
-		deliveryadmission.RoutePRWithIssue,
-		deliveryadmission.RoutePRWithoutIssue,
-		deliveryadmission.RouteDirectMain,
-		deliveryadmission.RouteEmergency,
-	}
-	policies := make([]deliveryadmission.RoutePolicy, 0, len(routes))
-	for _, route := range routes {
-		policy, err := deliveryadmission.NewRoutePolicy(
-			"policy:"+string(route),
-			"snapshot:"+strconv.FormatUint(revision, 10),
-			route,
-			true,
-			false,
-			false,
-			authorizationTTLSeconds,
-			0,
-		)
-		if err != nil {
-			t.Fatal(err)
-		}
-		policies = append(policies, policy)
-	}
-	return policies
-}
-
-type organicRepository struct {
-	worktree     string
-	bare         string
-	baseRevision string
-}
-
-func TestSameOrganicDirectoryAcceptsCanonicalAliases(t *testing.T) {
-	directory := t.TempDir()
-	alias := filepath.Join(t.TempDir(), "alias")
-	if err := os.Symlink(directory, alias); err != nil {
-		t.Skipf("directory aliases are unavailable: %v", err)
-	}
-	if !sameOrganicDirectory(directory, alias) {
-		t.Fatal("same repository directory alias was rejected")
-	}
-	file := filepath.Join(directory, "file")
-	if err := os.WriteFile(file, []byte("not a directory"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if sameOrganicDirectory(directory, file) {
-		t.Fatal("regular file was accepted as the repository directory")
-	}
-}
-
-func sameOrganicDirectory(left, right string) bool {
-	leftInfo, leftErr := os.Stat(left)
-	rightInfo, rightErr := os.Stat(right)
-	return leftErr == nil &&
-		rightErr == nil &&
-		leftInfo.IsDir() &&
-		rightInfo.IsDir() &&
-		os.SameFile(leftInfo, rightInfo)
-}
-
-func initOrganicRepository(t *testing.T) organicRepository {
-	t.Helper()
-	repo := t.TempDir()
-	organicGit(t, repo, "init", "--initial-branch=main")
-	organicGit(t, repo, "config", "user.name", "Organic E2E")
-	organicGit(t, repo, "config", "user.email", "organic-e2e@example.invalid")
-	if err := os.WriteFile(
-		filepath.Join(repo, "tracked.txt"),
-		[]byte("organic runtime\n"),
-		0o600,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(repo, "internal"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for path, content := range map[string]string{
-		"go.mod":             "module example.invalid/organic\n\ngo 1.22\n",
-		"internal/active.go": "package internal\n\nfunc Active() bool { return false }\n",
-	} {
-		if err := os.WriteFile(
-			filepath.Join(repo, path),
-			[]byte(content),
-			0o600,
-		); err != nil {
-			t.Fatal(err)
-		}
-	}
-	organicGit(t, repo, "add", "tracked.txt", "go.mod", "internal/active.go")
-	organicGit(t, repo, "commit", "-m", "test: seed organic runtime")
-	baseRevision := organicGit(t, repo, "rev-parse", "HEAD")
-	bare := filepath.Join(t.TempDir(), "origin.git")
-	organicGit(t, repo, "init", "--bare", "--quiet", bare)
-	organicGit(t, repo, "remote", "add", "origin", bare)
-	organicGit(
-		t,
-		repo,
-		"push",
-		"--quiet",
-		"origin",
-		"main:refs/heads/main",
-	)
-	configureOrganicBareObjectAuthority(t, repo, bare, baseRevision)
-	assertOrganicOnlyMainRef(t, bare)
-	return organicRepository{
-		worktree:     repo,
-		bare:         bare,
-		baseRevision: baseRevision,
-	}
-}
-
-func configureOrganicBareObjectAuthority(
-	t *testing.T,
-	repo string,
-	bare string,
-	baseRevision string,
-) {
-	t.Helper()
-	gitDir := organicGit(t, repo, "rev-parse", "--absolute-git-dir")
-	objectDir, err := filepath.EvalSymlinks(filepath.Join(gitDir, "objects"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	objectDir, err = filepath.Abs(objectDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !filepath.IsAbs(objectDir) {
-		t.Fatalf("alternate object authority is not absolute: %q", objectDir)
-	}
-	info, err := os.Stat(objectDir)
-	if err != nil || !info.IsDir() {
-		t.Fatalf("alternate object authority %q: %v", objectDir, err)
-	}
-	alternate := filepath.ToSlash(filepath.Clean(objectDir))
-	if strings.ContainsAny(alternate, "\x00\r\n") {
-		t.Fatalf("alternate object authority is not one portable path: %q", alternate)
-	}
-	infoDir := filepath.Join(bare, "objects", "info")
-	if err := os.MkdirAll(infoDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(infoDir, "alternates"),
-		[]byte(alternate+"\n"),
-		0o600,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := organicBareGitOutput(
-		context.Background(),
-		bare,
-		"cat-file",
-		"-e",
-		baseRevision+"^{commit}",
-	); err != nil {
-		t.Fatalf("pre-existing bare object authority cannot resolve base: %v", err)
-	}
-}
-
-func organicGit(t *testing.T, repo string, arguments ...string) string {
-	t.Helper()
-	output, err := organicGitOutput(
-		context.Background(),
-		repo,
-		arguments...,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return output
-}
-
-func organicGitOutput(
-	parent context.Context,
-	repo string,
-	arguments ...string,
-) (string, error) {
-	ctx, cancel := context.WithTimeout(
-		parent,
-		organicLocalTimeout,
-	)
-	defer cancel()
-	command := organicCommandContext(
-		ctx,
-		"git",
-		append([]string{"-C", repo}, arguments...)...,
-	)
-	command.Env = append(
-		os.Environ(),
-		"LC_ALL=C",
-		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_TERMINAL_PROMPT=0",
-	)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("git -C %q %v: %w\n%s", repo, arguments, err, output)
-	}
-	return strings.TrimSpace(string(output)), nil
-}
-
-func organicBareGitOutput(
-	parent context.Context,
-	bare string,
-	arguments ...string,
-) (string, error) {
-	ctx, cancel := context.WithTimeout(parent, organicLocalTimeout)
-	defer cancel()
-	command := organicCommandContext(
-		ctx,
-		"git",
-		append([]string{"--git-dir=" + bare}, arguments...)...,
-	)
-	command.Env = append(
-		os.Environ(),
-		"LC_ALL=C",
-		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_TERMINAL_PROMPT=0",
-	)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf(
-			"git --git-dir=%q %v: %w\n%s",
-			bare,
-			arguments,
-			err,
-			output,
-		)
-	}
-	return strings.TrimSpace(string(output)), nil
-}
-
-func requireOrganicOnlyMainRef(parent context.Context, bare string) error {
-	refs, err := organicBareGitOutput(
-		parent,
-		bare,
-		"for-each-ref",
-		"--format=%(refname)",
-	)
-	if err != nil {
-		return err
-	}
-	if refs != "refs/heads/main" {
-		return fmt.Errorf(
-			"bare repository refs = %q, want only refs/heads/main",
-			refs,
-		)
-	}
-	return nil
-}
-
-func assertOrganicOnlyMainRef(t *testing.T, bare string) {
-	t.Helper()
-	if err := requireOrganicOnlyMainRef(context.Background(), bare); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func organicModuleRoot(t *testing.T) string {
-	t.Helper()
-	_, source, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve test source")
-	}
-	return filepath.Clean(filepath.Join(filepath.Dir(source), "..", ".."))
-}
-
-func organicTestBinary(t *testing.T, moduleRoot string) string {
-	t.Helper()
-	if configured := os.Getenv(testBinaryEnvironment); configured != "" {
-		path, err := filepath.Abs(configured)
-		if err != nil {
-			t.Fatal(err)
-		}
-		requireRegularFile(t, path)
-		return path
-	}
-	name := "gentle-ai"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	path := filepath.Join(t.TempDir(), name)
-	ctx, cancel := context.WithTimeout(
-		context.Background(),
-		organicSetupTimeout,
-	)
-	defer cancel()
-	command := organicCommandContext(
-		ctx,
-		"go",
-		"build",
-		"-trimpath",
-		"-o",
-		path,
-		"./cmd/gentle-ai",
-	)
-	command.Dir = moduleRoot
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("build test binary: %v\n%s", err, output)
-	}
-	requireRegularFile(t, path)
-	return path
-}
-
 func prepareOpenCodeConfig(t *testing.T) string {
 	t.Helper()
-	requireExecutable(t, "npm")
+	requireOrganicExecutable(t, "npm")
 	root := t.TempDir()
 	config := filepath.Join(root, "opencode")
 	if err := os.MkdirAll(config, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	manifest := []byte(
-		`{"private":true,"dependencies":{"@opencode-ai/plugin":"` +
-			pinnedOpenCodeVersion + `"}}` + "\n",
-	)
-	if err := os.WriteFile(
-		filepath.Join(config, "package.json"),
-		manifest,
-		0o600,
-	); err != nil {
+	manifest := []byte(`{"private":true,"dependencies":{"@opencode-ai/plugin":"` + pinnedOpenCodeVersion + `"}}` + "\n")
+	if err := os.WriteFile(filepath.Join(config, "package.json"), manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(
-		context.Background(),
-		organicSetupTimeout,
-	)
+	ctx, cancel := context.WithTimeout(context.Background(), organicSetupTimeout)
 	defer cancel()
-	command := organicCommandContext(
-		ctx,
-		"npm",
-		"install",
-		"--ignore-scripts",
-		"--no-audit",
-		"--no-fund",
-		"--package-lock=false",
-		"--prefix",
-		config,
-	)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("prepare pinned OpenCode plugin: %v\n%s", err, output)
+	command := organicCommandContext(ctx, "npm", "install", "--ignore-scripts", "--no-audit", "--no-fund", "--package-lock=false", "--prefix", config)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("prepare the pinned OpenCode plugin: %v\n%s", err, output)
 	}
-	requireRegularFile(
-		t,
-		filepath.Join(
-			config,
-			"node_modules",
-			"@opencode-ai",
-			"plugin",
-			"package.json",
-		),
-	)
 	return root
 }
 
-func requireRegularFile(t *testing.T, path string) {
-	t.Helper()
-	info, err := os.Stat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		t.Fatalf("required file %q: %v", path, err)
-	}
-}
-
-func requireExecutable(t *testing.T, name string) {
+func requireOrganicExecutable(t *testing.T, name string) {
 	t.Helper()
 	if _, err := exec.LookPath(name); err != nil {
 		t.Fatalf("required executable %s: %v", name, err)
 	}
 }
 
-func requireExecutableVersion(t *testing.T, name string, expected string) {
+func requireOrganicExecutableVersion(t *testing.T, name, expected string) {
 	t.Helper()
-	requireExecutable(t, name)
-	ctx, cancel := context.WithTimeout(
-		context.Background(),
-		organicLocalTimeout,
-	)
+	requireOrganicExecutable(t, name)
+	ctx, cancel := context.WithTimeout(context.Background(), organicLocalTimeout)
 	defer cancel()
 	command := organicCommandContext(ctx, name, "--version")
 	output, err := command.CombinedOutput()
@@ -2527,67 +1867,7 @@ func requireExecutableVersion(t *testing.T, name string, expected string) {
 		t.Fatalf("%s --version: %v\n%s", name, err, output)
 	}
 	if strings.TrimSpace(string(output)) != expected {
-		t.Fatalf(
-			"%s version = %q, want %q",
-			name,
-			strings.TrimSpace(string(output)),
-			expected,
-		)
-	}
-}
-
-func organicCommandContext(
-	ctx context.Context,
-	name string,
-	arguments ...string,
-) *exec.Cmd {
-	command := exec.CommandContext(ctx, name, arguments...)
-	command.WaitDelay = organicCommandWaitDelay
-	return command
-}
-
-func writeOrganicServerCA(
-	t *testing.T,
-	server *organicRuntimeServer,
-) string {
-	t.Helper()
-	certificate := server.Certificate()
-	if certificate == nil {
-		t.Fatal("TLS server has no certificate")
-	}
-	if _, err := x509.ParseCertificate(certificate.Raw); err != nil {
-		t.Fatal(err)
-	}
-	payload := pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: certificate.Raw,
-	})
-	path := filepath.Join(t.TempDir(), "runtime-ca.pem")
-	if err := os.WriteFile(path, payload, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
-}
-
-func decodeExactJSON(reader io.Reader, destination any) error {
-	decoder := json.NewDecoder(io.LimitReader(reader, 4<<20))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(destination); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("trailing JSON value")
-		}
-		return err
-	}
-	return nil
-}
-
-func writeExactJSON(writer http.ResponseWriter, value any) {
-	writer.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(writer).Encode(value); err != nil {
-		http.Error(writer, err.Error(), http.StatusInternalServerError)
+		t.Fatalf("%s version = %q, want %q", name, strings.TrimSpace(string(output)), expected)
 	}
 }
 
