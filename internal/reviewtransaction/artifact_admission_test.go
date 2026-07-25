@@ -113,6 +113,31 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 	}
 }
 
+// TestAdmitArtifactOmittedSubjectDiagnosticNamesContinuation pins the
+// discoverability contract for the community-reported dead end (PR #1801): a
+// rejected admission never consumes the lens slot, so the incomplete
+// diagnostic must tell the operator that the lens can be re-run and captured
+// again with the required top-level subject_hash and inspection envelope. The
+// machine-readable decision stays "incomplete"; only the prose is extended.
+func TestAdmitArtifactOmittedSubjectDiagnosticNamesContinuation(t *testing.T) {
+	_, _, request := admittedArtifactFixture(t)
+	request.EchoedSubjectHash = ""
+	_, admission, err := AdmitArtifact(request)
+	if err == nil || admission.Decision != ArtifactAdmissionIncomplete {
+		t.Fatalf("AdmitArtifact() decision = %q, error = %v; want incomplete", admission.Decision, err)
+	}
+	for _, want := range []string{
+		"omitted the provider-owned artifact subject",
+		"subject_hash",
+		"inspection",
+		"re-run",
+	} {
+		if !strings.Contains(admission.Diagnostic, want) {
+			t.Fatalf("incomplete diagnostic %q does not name %q", admission.Diagnostic, want)
+		}
+	}
+}
+
 func TestReferenceOutsideScopeRecognizesOnlyStructuredRepositoryPaths(t *testing.T) {
 	allowed := map[string]struct{}{
 		"docs/naïve guide.md": {},

@@ -111,7 +111,16 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 		return fail(ArtifactAdmissionIncomplete, "raw and canonical reviewer payloads are required")
 	}
 	if request.EchoedSubjectHash == "" {
-		return fail(ArtifactAdmissionIncomplete, "reviewer result omitted the provider-owned artifact subject")
+		// Name the continuation explicitly: a rejected admission never consumes
+		// the immutable lens slot, so without this guidance an operator holding
+		// only the preserved incident payload has no discoverable way forward
+		// (community report, PR #1801). The decision stays "incomplete" so the
+		// machine-readable shape is extended, never reshaped.
+		return fail(ArtifactAdmissionIncomplete,
+			"reviewer result omitted the provider-owned artifact subject: "+
+				"the rejected admission did not consume the lens slot, so re-run the lens "+
+				"and invoke review capture-result again on the same lineage with a result "+
+				"that echoes the binding's top-level subject_hash and a completed inspection envelope")
 	}
 	if request.EchoedSubjectHash != request.ExpectedSubject.SubjectHash {
 		return fail(ArtifactAdmissionBindingMismatch, "reviewer result echoed a different artifact subject")

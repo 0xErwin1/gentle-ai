@@ -75,6 +75,15 @@ func reviewOpaqueContextFailure(code, action string) error {
 // never validates the payload contents or counts it as a captured lens result; recovery re-runs
 // `review capture-result` with the preserved payload from the reviewing
 // repository, which performs full native verification.
+//
+// Incidents are append-only audit history: each distinct raw payload for a
+// slot is preserved under its own digest-suffixed name, so repeated failures
+// accumulate instead of replacing earlier evidence, and a later successful
+// capture of the same lens never removes them. Because a rejected admission
+// never consumes the immutable lens slot, the recovery for a malformed
+// payload (for example one missing the top-level subject_hash/inspection
+// envelope) is to re-run the lens and capture a corrected result on the same
+// lineage.
 func RunReviewPreserveResult(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review preserve-result", stdout, "Durably preserve one raw reviewer result as an incident artifact after a failed capture; never a captured lens result.")
 	cwd := flags.String("cwd", ".", "repository path")
