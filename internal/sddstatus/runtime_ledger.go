@@ -476,7 +476,19 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			if prepareErr != nil {
 				return runtimeRecord{}, prepareErr
 			}
-			if relationErr := validateRuntimeRemediationSuccessor(ctx, store.Repo, *currentBinding, prepared); relationErr != nil {
+			// An approved self-successor is the same lineage whose corrected,
+			// re-approved authority repairs the failed evidence. It never
+			// requires invalidating healthy approved authority or minting a
+			// distinct recovery lineage for an unchanged scope.
+			selfSuccessor := prepared.Lineage == currentBinding.Lineage
+			if selfSuccessor && request.EvidenceRevision == request.RemediatesEvidenceRevision {
+				return runtimeRecord{}, errors.New("approved SDD self-remediation requires distinct corrected evidence")
+			}
+			validateSuccessor := validateRuntimeRemediationSuccessor
+			if selfSuccessor {
+				validateSuccessor = validateRuntimeRemediationSelfSuccessor
+			}
+			if relationErr := validateSuccessor(ctx, store.Repo, *currentBinding, prepared); relationErr != nil {
 				return runtimeRecord{}, relationErr
 			}
 			runtimeRemediationFinalAuthorizationHook()
@@ -487,7 +499,7 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			if finalPrepared.Revision != prepared.Revision {
 				return runtimeRecord{}, errors.New("approved SDD remediation successor changed before native commit")
 			}
-			if relationErr := validateRuntimeRemediationSuccessor(ctx, store.Repo, *currentBinding, finalPrepared); relationErr != nil {
+			if relationErr := validateSuccessor(ctx, store.Repo, *currentBinding, finalPrepared); relationErr != nil {
 				return runtimeRecord{}, relationErr
 			}
 			if finalPrepared.GateContext.CandidateTree != snapshot.CandidateTree {
@@ -867,8 +879,11 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 		if replay.Status.EvidenceRevision != "" && replay.Status.EvidenceRevision != record.Finish.RemediatesEvidenceRevision {
 			return errors.New("atomic remediation failed evidence does not match replay state")
 		}
-		if record.Binding.Current.Lineage == currentBinding.Lineage {
-			return errors.New("atomic remediation binding does not select a distinct successor")
+		if record.Binding.Current.Lineage == currentBinding.Lineage &&
+			record.Finish.EvidenceRevision == record.Finish.RemediatesEvidenceRevision {
+			// A same-lineage record is a legal approved self-successor only when
+			// its corrected evidence differs from the failed evidence it repairs.
+			return errors.New("atomic remediation binding does not select a distinct successor or corrected self-successor")
 		}
 		if err := applyRuntimeFinishEvent(replay, record.Finish); err != nil {
 			return err

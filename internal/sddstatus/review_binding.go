@@ -283,6 +283,37 @@ func validateRuntimeRemediationSuccessor(ctx context.Context, repo string, curre
 	return errors.New("compact remediation recovery chain exceeds the bounded lineage count")
 }
 
+// validateRuntimeRemediationSelfSuccessor proves that an approved
+// self-successor — the corrected authority of the very lineage the runtime
+// binding already names — is healthy, current, content-bound, and still the
+// leaf of the compact recovery graph. A same-lineage remediation never mutates
+// compact authority and never demands the impossible invalidation of a healthy
+// approved predecessor: the corrected approved receipt itself is the successor
+// provenance. A lineage that has since gained a true recovery successor is no
+// longer the leaf and must be refused.
+func validateRuntimeRemediationSelfSuccessor(ctx context.Context, repo string, current, successor ReviewBinding) error {
+	if current.Lineage != successor.Lineage {
+		return errors.New("approved SDD self-remediation requires the bound lineage")
+	}
+	if _, err := loadRuntimeBoundCompactArtifacts(ctx, repo, successor); err != nil {
+		return fmt.Errorf("validate approved self-remediation authority: %w", err)
+	}
+	leaves, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
+	if err != nil {
+		return fmt.Errorf("validate compact recovery graph: %w", err)
+	}
+	for _, store := range leaves {
+		record, loadErr := store.Load()
+		if loadErr != nil {
+			return fmt.Errorf("load compact recovery leaf: %w", loadErr)
+		}
+		if record.State.LineageID == successor.Lineage && record.Revision == successor.AuthorityRevision {
+			return nil
+		}
+	}
+	return errors.New("approved SDD self-remediation authority is not the current compact recovery leaf")
+}
+
 // loadRuntimeBoundCompactArtifacts validates immutable authority and receipt
 // identity without evaluating the live post-apply gate. The old binding is
 // expected to be live-stale after remediation; its exact approved bytes remain
