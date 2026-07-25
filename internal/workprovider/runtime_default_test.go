@@ -2,6 +2,7 @@ package workprovider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/internal/deliveryadmission"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
 
@@ -86,14 +88,20 @@ func TestEnvironmentRuntimeOutcomeOpenerKeepsDormantHandshakeReadOnly(
 			return nil, errors.New("must not open")
 		},
 	}
-	opened, err := opener.OpenRuntimeOutcome(context.Background(), repo)
+	result, err := NewRuntimeController(opener).Capabilities(
+		context.Background(),
+		RuntimeCapabilitiesRequest{
+			Repo:     repo,
+			Contract: workrun.WorkCapabilitiesContractV1,
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	capabilities, err := opened.Capabilities(context.Background())
-	if err != nil {
-		t.Fatal(err)
+	if result.Capabilities == nil {
+		t.Fatal("legacy capabilities returned no dormant envelope")
 	}
+	capabilities := *result.Capabilities
 	if called {
 		t.Fatal("dormant capability opened the authenticated connector")
 	}
@@ -110,7 +118,7 @@ func TestEnvironmentRuntimeOutcomeOpenerKeepsDormantHandshakeReadOnly(
 	}
 }
 
-func TestEnvironmentRuntimeOutcomeOpenerAdvertisesOnlyBoundConnector(
+func TestEnvironmentRuntimeOutcomeOpenerAdvertisesBoundConnectorOnlyInV2(
 	t *testing.T,
 ) {
 	repo := initPADAdapterGitRepository(t)
@@ -123,7 +131,7 @@ func TestEnvironmentRuntimeOutcomeOpenerAdvertisesOnlyBoundConnector(
 		t.Fatal(err)
 	}
 	values := map[string]string{
-		ProductiveRuntimeAgentEnvironment:     string(model.AgentCodex),
+		ProductiveRuntimeAgentEnvironment:     string(model.AgentClaudeCode),
 		ProductiveRuntimeURLEnvironment:       "https://runtime.invalid",
 		ProductiveRuntimeTokenFileEnvironment: tokenPath,
 	}
@@ -147,11 +155,26 @@ func TestEnvironmentRuntimeOutcomeOpenerAdvertisesOnlyBoundConnector(
 			}, nil
 		},
 	}
-	opened, err := opener.OpenRuntimeOutcome(context.Background(), repo)
+	opened, err := opener.OpenRuntimeOutcomeForInvocation(
+		context.Background(),
+		repo,
+		model.AgentCodex,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	capabilities, err := opened.Capabilities(context.Background())
+	legacy, err := opened.Capabilities(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if received != (ProductiveRuntimeConnectorConfig{}) {
+		t.Fatal("capabilities/v1 opened the authenticated connector")
+	}
+	resumable, ok := opened.(ResumableRuntimeOutcome)
+	if !ok {
+		t.Fatal("productive runtime does not expose capabilities/v2")
+	}
+	capabilities, err := resumable.CapabilitiesV2(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,13 +183,17 @@ func TestEnvironmentRuntimeOutcomeOpenerAdvertisesOnlyBoundConnector(
 		received.EndpointURL != values[ProductiveRuntimeURLEnvironment] {
 		t.Fatalf("connector config = %#v", received)
 	}
+	if legacy.WorkRouting.Exposure != WorkRoutingDormant ||
+		legacy.ConnectorSessionRef != "" {
+		t.Fatalf("legacy capabilities were advertised = %#v", legacy)
+	}
 	if capabilities.WorkRouting.Exposure != WorkRoutingAdvertised ||
 		capabilities.ConnectorSessionRef != "session:runtime-default" {
-		t.Fatalf("advertised capabilities = %#v", capabilities)
+		t.Fatalf("advertised v2 capabilities = %#v", capabilities)
 	}
 }
 
-func TestEnvironmentRuntimeOutcomeOpenerRejectsConnectorRebinding(
+func TestEnvironmentRuntimeOutcomeOpenerKeepsReboundConnectorDormant(
 	t *testing.T,
 ) {
 	repo := initPADAdapterGitRepository(t)
@@ -177,7 +204,7 @@ func TestEnvironmentRuntimeOutcomeOpenerRejectsConnectorRebinding(
 	opener := EnvironmentRuntimeOutcomeOpener{
 		Activation: StaticActivationResolver{Mode: ActivationEnabled},
 		LookupEnv: runtimeDefaultEnvironment(map[string]string{
-			ProductiveRuntimeAgentEnvironment:     string(model.AgentCodex),
+			ProductiveRuntimeAgentEnvironment:     string(model.AgentClaudeCode),
 			ProductiveRuntimeURLEnvironment:       "https://runtime.invalid",
 			ProductiveRuntimeTokenFileEnvironment: tokenPath,
 		}),
@@ -193,11 +220,146 @@ func TestEnvironmentRuntimeOutcomeOpenerRejectsConnectorRebinding(
 			}, nil
 		},
 	}
-	if _, err := opener.OpenRuntimeOutcome(
+	opened, err := opener.OpenRuntimeOutcomeForInvocation(
 		context.Background(),
 		repo,
-	); !errors.Is(err, ErrProductiveRuntimeBindingMismatch) {
-		t.Fatalf("connector rebinding error = %v", err)
+		model.AgentCodex,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumable := opened.(ResumableRuntimeOutcome)
+	capabilities, err := resumable.CapabilitiesV2(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if capabilities.WorkRouting.Exposure != WorkRoutingDormant ||
+		capabilities.ConnectorSessionRef != "" {
+		t.Fatalf("rebound connector capabilities = %#v", capabilities)
+	}
+}
+
+func TestEnvironmentRuntimeOutcomeOpenerReturnsIdentitylessDormantV2(
+	t *testing.T,
+) {
+	repo := initPADAdapterGitRepository(t)
+	called := false
+	opener := EnvironmentRuntimeOutcomeOpener{
+		Activation: StaticActivationResolver{Mode: ActivationEnabled},
+		ConnectorFactory: func(
+			context.Context,
+			ProductiveRuntimeConnectorConfig,
+			string,
+		) (ProductiveRuntimeConnector, error) {
+			called = true
+			return nil, errors.New("must not open")
+		},
+	}
+	result, err := NewRuntimeController(opener).CapabilitiesV2(
+		context.Background(),
+		RuntimeCapabilitiesRequest{
+			Repo:     repo,
+			Contract: RuntimeCapabilitiesContractV2,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Capabilities == nil ||
+		result.Capabilities.AgentID != "" ||
+		result.Capabilities.WorkRouting.Exposure != WorkRoutingDormant ||
+		result.Capabilities.ConnectorSessionRef != "" {
+		t.Fatalf("identityless capabilities = %#v", result)
+	}
+	if called {
+		t.Fatal("identityless capabilities opened the connector")
+	}
+	if _, err := os.Stat(filepath.Join(
+		repo,
+		".git",
+		"gentle-ai",
+	)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("identityless capabilities created provider storage: %v", err)
+	}
+}
+
+func TestEnvironmentRuntimeOutcomeOpenerRejectsInvalidExplicitAgentBeforeIO(
+	t *testing.T,
+) {
+	called := false
+	opener := EnvironmentRuntimeOutcomeOpener{
+		Activation: StaticActivationResolver{Mode: ActivationEnabled},
+		ConnectorFactory: func(
+			context.Context,
+			ProductiveRuntimeConnectorConfig,
+			string,
+		) (ProductiveRuntimeConnector, error) {
+			called = true
+			return nil, errors.New("must not open")
+		},
+	}
+	_, err := NewRuntimeController(opener).CapabilitiesV2(
+		context.Background(),
+		RuntimeCapabilitiesRequest{
+			Repo:     filepath.Join(t.TempDir(), "missing-repository"),
+			Contract: RuntimeCapabilitiesContractV2,
+			AgentID:  model.AgentID("unsupported-agent"),
+		},
+	)
+	if !errors.Is(err, ErrProductiveRuntimeInvocationAgentInvalid) {
+		t.Fatalf("invalid explicit agent error = %v", err)
+	}
+	if called {
+		t.Fatal("invalid explicit agent opened the connector")
+	}
+}
+
+func TestEnvironmentRuntimeOutcomeStartWithoutAgentCreatesNoProviderStorage(
+	t *testing.T,
+) {
+	repo := initPADAdapterGitRepository(t)
+	called := false
+	opener := EnvironmentRuntimeOutcomeOpener{
+		Activation: StaticActivationResolver{Mode: ActivationEnabled},
+		ConnectorFactory: func(
+			context.Context,
+			ProductiveRuntimeConnectorConfig,
+			string,
+		) (ProductiveRuntimeConnector, error) {
+			called = true
+			return nil, errors.New("must not open")
+		},
+	}
+	_, err := opener.OpenRuntimeOutcomeForInvocation(
+		context.Background(),
+		repo,
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewRuntimeController(opener).Start(
+		context.Background(),
+		RuntimeStartRequest{
+			Repo:     repo,
+			Contract: workrun.WorkStartContractV1,
+			Payload: []byte(
+				`{"outcome":"Change one file.","explicitSddRequested":false}`,
+			),
+		},
+	)
+	if !errors.Is(err, ErrProductiveRuntimeInvocationAgentUnavailable) {
+		t.Fatalf("missing start agent error = %v", err)
+	}
+	if called {
+		t.Fatal("missing start agent opened the connector")
+	}
+	if _, err := os.Stat(filepath.Join(
+		repo,
+		".git",
+		"gentle-ai",
+	)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing start agent created provider storage: %v", err)
 	}
 }
 
@@ -268,6 +430,7 @@ func TestEnvironmentRuntimeOutcomeStartsProductiveOutcomeWithoutSDD(
 			deliveryadmission.RoutePRWithoutIssue,
 		),
 	}
+	connectorOpenCalls := 0
 	opener := EnvironmentRuntimeOutcomeOpener{
 		Activation: StaticActivationResolver{Mode: ActivationEnabled},
 		LookupEnv: runtimeDefaultEnvironment(map[string]string{
@@ -285,10 +448,15 @@ func TestEnvironmentRuntimeOutcomeStartsProductiveOutcomeWithoutSDD(
 				token != "owner-secret" {
 				t.Fatalf("connector config/token = %#v/%q", config, token)
 			}
+			connectorOpenCalls++
 			return connector, nil
 		},
 	}
-	opened, err := opener.OpenRuntimeOutcome(ctx, repo)
+	opened, err := opener.OpenRuntimeOutcomeForInvocation(
+		ctx,
+		repo,
+		model.AgentCodex,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,6 +478,82 @@ func TestEnvironmentRuntimeOutcomeStartsProductiveOutcomeWithoutSDD(
 	}
 	if err := status.Validate(); err != nil {
 		t.Fatalf("productive start status validation = %v", err)
+	}
+	lease, err := reviewtransaction.OpenRepositoryIdentityLease(ctx, repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := existingProductiveAdvanceStore(lease, status.WorkRunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, err := store.startAuthority(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if start.AgentID != model.AgentCodex {
+		t.Fatalf("durable START agent = %q", start.AgentID)
+	}
+	workStore, err := workrun.OpenWorkRunStoreWithRepositoryIdentityLease(
+		ctx,
+		lease,
+		status.WorkRunID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orphaned := workStore.Dir + ".orphaned"
+	if err := os.Rename(workStore.Dir, orphaned); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (EnvironmentProductionRepositoryOpener{
+		Runtime: opener,
+	}).OpenRepository(
+		ctx,
+		repo,
+		status.WorkRunID,
+	); err == nil {
+		t.Fatal("orphan START opened a production repository")
+	}
+	if connectorOpenCalls != 1 {
+		t.Fatalf(
+			"orphan START connector opens = %d, want 1",
+			connectorOpenCalls,
+		)
+	}
+	if err := os.Rename(orphaned, workStore.Dir); err != nil {
+		t.Fatal(err)
+	}
+
+	start.DeliveryIntentRef = productiveAdvanceSHA256(
+		[]byte("tampered delivery intent"),
+	)
+	payload, err := json.Marshal(start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = append(payload, '\n')
+	if err := os.WriteFile(
+		filepath.Join(store.root, "start-authority.json"),
+		payload,
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (EnvironmentProductionRepositoryOpener{
+		Runtime: opener,
+	}).OpenRepository(
+		ctx,
+		repo,
+		status.WorkRunID,
+	); !errors.Is(err, ErrProductiveRuntimeBindingMismatch) {
+		t.Fatalf("tampered START binding error = %v", err)
+	}
+	if connectorOpenCalls != 1 {
+		t.Fatalf(
+			"tampered START connector opens = %d, want 1",
+			connectorOpenCalls,
+		)
 	}
 }
 

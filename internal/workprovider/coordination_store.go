@@ -726,6 +726,7 @@ func (store *CoordinationAuthorityStore) resolveForecastRecord(
 		Plan:            plan.Plan,
 		PlanRevisionRef: plan.AuthorityRef,
 		Availability:    record.Availability,
+		RequiresConsent: record.RequiresConsent,
 		DiagnosticRefs:  cloneCoordinationStrings(record.DiagnosticRefs),
 	}
 	if err := authority.Validate(); err != nil {

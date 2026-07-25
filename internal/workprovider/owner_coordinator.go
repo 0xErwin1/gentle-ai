@@ -66,6 +66,7 @@ type OwnerCoordinatorDependencies struct {
 	PADGitBindingAuthority    PADGitBindingAuthority
 	SDDAuthority              SDDWorkRunAuthority
 	LaunchAuthority           workrun.LaunchAuthorityPort
+	VerificationDecision      workrun.VerificationDecisionAuthorityPort
 	Activation                ActivationResolver
 }
 
@@ -188,10 +189,11 @@ func NewOwnerCoordinator(
 			MutationCompletion: MutationCompletionWorkRunAuthority{
 				Store: dependencies.Mutations,
 			},
-			Route:        dependencies.Coordination,
-			SDD:          dependencies.SDDAuthority,
-			Verification: verification,
-			Launch:       dependencies.LaunchAuthority,
+			Route:                dependencies.Coordination,
+			SDD:                  dependencies.SDDAuthority,
+			Verification:         verification,
+			VerificationDecision: dependencies.VerificationDecision,
+			Launch:               dependencies.LaunchAuthority,
 		})
 	return &OwnerCoordinator{
 		pad:                   dependencies.PADAuthority,
@@ -1577,6 +1579,7 @@ type OwnerForecastRequest struct {
 	Handoff          workrun.ImplementationHandoff
 	PlanRevisionRef  string
 	Availability     workrun.ForecastAvailability
+	RequiresConsent  bool
 	DiagnosticRefs   []string
 }
 
@@ -1599,6 +1602,7 @@ func (coordinator *OwnerCoordinator) PublishVerificationForecast(
 		Handoff:         request.Handoff,
 		PlanRevisionRef: request.PlanRevisionRef,
 		Availability:    request.Availability,
+		RequiresConsent: request.RequiresConsent,
 		DiagnosticRefs:  append([]string{}, request.DiagnosticRefs...),
 	}
 	candidate, err := newForecastAuthorityRecord(
@@ -1646,6 +1650,7 @@ func (coordinator *OwnerCoordinator) PublishVerificationForecast(
 			Plan:            plan.Plan,
 			PlanRevisionRef: plan.AuthorityRef,
 			Availability:    candidate.Availability,
+			RequiresConsent: candidate.RequiresConsent,
 			AvailabilityRef: candidate.AuthorityRef,
 			DiagnosticRefs:  append([]string{}, candidate.DiagnosticRefs...),
 		}); err != nil {
@@ -1687,6 +1692,7 @@ func (coordinator *OwnerCoordinator) PublishVerificationForecast(
 				Plan:            plan.Plan,
 				PlanRevisionRef: plan.AuthorityRef,
 				Availability:    candidate.Availability,
+				RequiresConsent: candidate.RequiresConsent,
 				AvailabilityRef: candidate.AuthorityRef,
 				DiagnosticRefs:  append([]string{}, candidate.DiagnosticRefs...),
 			},

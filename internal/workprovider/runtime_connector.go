@@ -74,19 +74,23 @@ var (
 type ProductiveRuntimeOperation string
 
 const (
-	ProductiveRuntimeOperationPolicySnapshot  ProductiveRuntimeOperation = "policy_snapshot"
-	ProductiveRuntimeOperationOutcomeIntake   ProductiveRuntimeOperation = "outcome_intake"
-	ProductiveRuntimeOperationSemantic        ProductiveRuntimeOperation = "semantic_evaluation"
-	ProductiveRuntimeOperationPADGitBinding   ProductiveRuntimeOperation = "pad_git_binding"
-	ProductiveRuntimeOperationObserveDelivery ProductiveRuntimeOperation = "observe_delivery"
-	ProductiveRuntimeOperationBranchCAS       ProductiveRuntimeOperation = "branch_cas"
-	ProductiveRuntimeOperationMergePR         ProductiveRuntimeOperation = "merge_pull_request"
+	ProductiveRuntimeOperationPolicySnapshot      ProductiveRuntimeOperation = "policy_snapshot"
+	ProductiveRuntimeOperationOutcomeIntake       ProductiveRuntimeOperation = "outcome_intake"
+	ProductiveRuntimeOperationVerificationCatalog ProductiveRuntimeOperation = "verification_catalog"
+	ProductiveRuntimeOperationSemantic            ProductiveRuntimeOperation = "semantic_evaluation"
+	ProductiveRuntimeOperationReview              ProductiveRuntimeOperation = "review_evaluation"
+	ProductiveRuntimeOperationPADGitBinding       ProductiveRuntimeOperation = "pad_git_binding"
+	ProductiveRuntimeOperationObserveDelivery     ProductiveRuntimeOperation = "observe_delivery"
+	ProductiveRuntimeOperationBranchCAS           ProductiveRuntimeOperation = "branch_cas"
+	ProductiveRuntimeOperationMergePR             ProductiveRuntimeOperation = "merge_pull_request"
 )
 
 var productiveRuntimeOperationsV1 = []ProductiveRuntimeOperation{
 	ProductiveRuntimeOperationPolicySnapshot,
 	ProductiveRuntimeOperationOutcomeIntake,
+	ProductiveRuntimeOperationVerificationCatalog,
 	ProductiveRuntimeOperationSemantic,
+	ProductiveRuntimeOperationReview,
 	ProductiveRuntimeOperationPADGitBinding,
 	ProductiveRuntimeOperationObserveDelivery,
 	ProductiveRuntimeOperationBranchCAS,

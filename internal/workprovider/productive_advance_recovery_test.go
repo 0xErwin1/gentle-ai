@@ -15,8 +15,17 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/evidence"
 	"github.com/gentleman-programming/gentle-ai/internal/hostruntime"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
+
+const productiveAdvanceVerificationHelper = "GENTLE_AI_PRODUCTIVE_ADVANCE_VERIFY"
+
+func TestProductiveAdvanceVerificationHelper(t *testing.T) {
+	if os.Getenv(productiveAdvanceVerificationHelper) != "1" {
+		return
+	}
+}
 
 type productiveAdvanceTestCASMode string
 
@@ -34,6 +43,11 @@ type productiveAdvanceTestConnector struct {
 	candidateRevision string
 	hosting           *padDeliveryTestHosting
 	casMode           productiveAdvanceTestCASMode
+	verification      []ProductiveVerificationAction
+	verificationMu    sync.Mutex
+	catalogCalls      int
+	semanticCalls     int
+	reviewCalls       int
 }
 
 func (connector *productiveAdvanceTestConnector) RepositoryRef() string {
@@ -67,13 +81,76 @@ func (connector *productiveAdvanceTestConnector) ResolveOutcomeIntake(
 }
 
 func (connector *productiveAdvanceTestConnector) EvaluateSemanticExecution(
-	context.Context,
-	evidence.ActionTicket,
-	hostruntime.ProcessEvidence,
+	_ context.Context,
+	ticket evidence.ActionTicket,
+	process hostruntime.ProcessEvidence,
 ) (SemanticEvaluation, error) {
-	return SemanticEvaluation{}, errors.New(
-		"passive productive advance must not execute semantic verification",
+	connector.verificationMu.Lock()
+	defer connector.verificationMu.Unlock()
+	if len(connector.verification) == 0 {
+		return SemanticEvaluation{}, errors.New(
+			"passive productive advance must not execute semantic verification",
+		)
+	}
+	connector.semanticCalls++
+	return SemanticEvaluation{
+		Schema:               SemanticEvaluationSchemaV1,
+		RequirementRef:       ticket.SemanticRequirementRef,
+		CandidateRef:         ticket.CandidateRef,
+		RequestDigest:        process.RequestDigest,
+		ToolchainIdentityRef: process.ToolchainIdentityRef,
+		StdoutRawDigest:      process.Stdout.RawDigest,
+		StderrRawDigest:      process.Stderr.RawDigest,
+		Outcome:              SemanticEvaluationPassed,
+	}, nil
+}
+
+func (connector *productiveAdvanceTestConnector) ResolveVerificationCatalog(
+	_ context.Context,
+	request ProductiveVerificationCatalogRequest,
+) (ProductiveVerificationCatalog, error) {
+	connector.verificationMu.Lock()
+	defer connector.verificationMu.Unlock()
+	connector.catalogCalls++
+	actions := make(
+		[]ProductiveVerificationAction,
+		len(connector.verification),
 	)
+	copy(actions, connector.verification)
+	return ProductiveVerificationCatalog{
+		Schema:  ProductiveVerificationCatalogSchemaV1,
+		Subject: request.Subject,
+		Actions: actions,
+	}, nil
+}
+
+func (connector *productiveAdvanceTestConnector) ReviewCandidate(
+	_ context.Context,
+	request ProductiveReviewRequest,
+) (ProductiveReviewResult, error) {
+	connector.verificationMu.Lock()
+	defer connector.verificationMu.Unlock()
+	connector.reviewCalls++
+	paths := make(
+		[]string,
+		len(request.ChangedPathManifest),
+	)
+	for index, entry := range request.ChangedPathManifest {
+		paths[index] = entry.Path
+	}
+	return ProductiveReviewResult{
+		Schema:      ProductiveReviewResultSchemaV1,
+		SubjectHash: request.Subject.SubjectHash,
+		Inspection: reviewtransaction.ArtifactInspection{
+			Status: reviewtransaction.ArtifactInspectionCompleted,
+			Paths:  paths,
+		},
+		Findings: []reviewtransaction.Finding{},
+		Evidence: []string{
+			"inspected " + paths[0] +
+				":1 against the complete frozen candidate",
+		},
+	}, nil
 }
 
 func (connector *productiveAdvanceTestConnector) ResolvePADGitBinding(
@@ -232,6 +309,35 @@ func newProductiveAdvanceTestFixture(
 	mode productiveAdvanceTestCASMode,
 	disableAfterEffect bool,
 ) productiveAdvanceTestFixture {
+	return newProductiveAdvanceTestFixtureForCandidate(
+		t,
+		seed,
+		mode,
+		disableAfterEffect,
+		false,
+	)
+}
+
+func newProductiveActiveAdvanceTestFixture(
+	t *testing.T,
+	seed string,
+) productiveAdvanceTestFixture {
+	return newProductiveAdvanceTestFixtureForCandidate(
+		t,
+		seed,
+		productiveAdvanceTestCASSucceed,
+		false,
+		true,
+	)
+}
+
+func newProductiveAdvanceTestFixtureForCandidate(
+	t *testing.T,
+	seed string,
+	mode productiveAdvanceTestCASMode,
+	disableAfterEffect bool,
+	active bool,
+) productiveAdvanceTestFixture {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("productive work-advance proof uses real Git repositories")
@@ -290,6 +396,9 @@ func newProductiveAdvanceTestFixture(
 		deliveryadmission.RouteDirectMain,
 	)
 	intake.ScopeSelectors = []string{"docs/passive-note.md"}
+	if active {
+		intake.ScopeSelectors = []string{"internal/active.go"}
+	}
 	intake.Destination.ObservedRevision = baseRevision
 	clock := &padDeliveryTestClock{now: time.Now().UTC()}
 	hosting := &padDeliveryTestHosting{
@@ -322,23 +431,64 @@ func newProductiveAdvanceTestFixture(
 		activation:    activation,
 		connector:     connector,
 	}
+	outcome := "Commit and deliver one passive documentation change."
+	if active {
+		outcome = "Commit and deliver one small Go source change."
+	}
 	start, err := runtimeOutcome.StartOutcome(ctx, OutcomeStartRequest{
-		Outcome: "Commit and deliver one passive documentation change.",
+		Outcome: outcome,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(repo, "docs"), 0o755); err != nil {
-		t.Fatal(err)
+	if active {
+		if err := os.MkdirAll(filepath.Join(repo, "internal"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(
+			filepath.Join(repo, "internal", "active.go"),
+			[]byte("package internal\n\nfunc Active() bool { return true }\n"),
+			0o644,
+		); err != nil {
+			t.Fatal(err)
+		}
+		ownerGit(t, repo, "add", "internal/active.go")
+		executable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		connector.verification = []ProductiveVerificationAction{{
+			ID:      "go-test",
+			Program: executable,
+			Args: []string{
+				"-test.run=^TestProductiveAdvanceVerificationHelper$",
+			},
+			CWD: repo,
+			Environment: map[string]string{
+				productiveAdvanceVerificationHelper: "1",
+			},
+			Capability:           "go-test",
+			Cost:                 reviewtransaction.VerificationCostQuick,
+			DeadlineMilliseconds: int64((10 * time.Second) / time.Millisecond),
+			OutputLimits: hostruntime.StreamLimits{
+				StdoutBytes: 32 << 10,
+				StderrBytes: 32 << 10,
+			},
+			RedactionLiterals: []string{},
+		}}
+	} else {
+		if err := os.MkdirAll(filepath.Join(repo, "docs"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(
+			filepath.Join(repo, "docs", "passive-note.md"),
+			[]byte("# Passive note\n\nThis change requires no executable verification.\n"),
+			0o644,
+		); err != nil {
+			t.Fatal(err)
+		}
+		ownerGit(t, repo, "add", "docs/passive-note.md")
 	}
-	if err := os.WriteFile(
-		filepath.Join(repo, "docs", "passive-note.md"),
-		[]byte("# Passive note\n\nThis change requires no executable verification.\n"),
-		0o644,
-	); err != nil {
-		t.Fatal(err)
-	}
-	ownerGit(t, repo, "add", "docs/passive-note.md")
 	ownerGit(t, repo, "commit", "--quiet", "-m", "docs: add passive note")
 	connector.candidateRevision = "git:" + ownerGitOID(t, repo, "HEAD")
 	ownerGit(
@@ -438,6 +588,18 @@ func (fixture productiveAdvanceTestFixture) casCalls() int {
 	return fixture.connector.hosting.casCalls
 }
 
+func (fixture productiveAdvanceTestFixture) verificationCalls() (int, int) {
+	fixture.connector.verificationMu.Lock()
+	defer fixture.connector.verificationMu.Unlock()
+	return fixture.connector.semanticCalls, fixture.connector.reviewCalls
+}
+
+func (fixture productiveAdvanceTestFixture) verificationCatalogCalls() int {
+	fixture.connector.verificationMu.Lock()
+	defer fixture.connector.verificationMu.Unlock()
+	return fixture.connector.catalogCalls
+}
+
 func (fixture productiveAdvanceTestFixture) existingStore(
 	t *testing.T,
 ) (productiveAdvanceStore, *ProductionOwnerCoordinatorFactory) {
@@ -485,6 +647,590 @@ func (fixture productiveAdvanceTestFixture) currentStateAndStatus(
 		t.Fatal(err)
 	}
 	return state, status
+}
+
+func TestWorkAdvanceQuickGoUsesOwnerCatalogSemanticEvidenceAndRealReview(
+	t *testing.T,
+) {
+	fixture := newProductiveActiveAdvanceTestFixture(t, "quick-go")
+	ctx := context.Background()
+	first, err := fixture.runtime.AdvanceOutcome(
+		ctx,
+		fixture.workRunID,
+		fixture.start.Revision,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	semanticCalls, reviewCalls := fixture.verificationCalls()
+	if first.Status.PublicState != workrun.PublicStateReady ||
+		first.DeliveryResultRef == "" ||
+		first.Diagnostic != nil ||
+		semanticCalls != 1 ||
+		reviewCalls != 1 ||
+		fixture.casCalls() != 1 {
+		t.Fatalf(
+			"quick Go advance/calls = %#v / semantic:%d review:%d CAS:%d",
+			first,
+			semanticCalls,
+			reviewCalls,
+			fixture.casCalls(),
+		)
+	}
+
+	_, factory := fixture.existingStore(t)
+	state, _ := fixture.currentStateAndStatus(t, factory)
+	if state.Handoff == nil ||
+		len(state.Handoff.DeclaredObligationRefs) != 1 ||
+		state.Forecast == nil ||
+		state.Forecast.Availability != workrun.ForecastAvailable ||
+		state.Forecast.MaximumCost == nil ||
+		*state.Forecast.MaximumCost !=
+			reviewtransaction.VerificationCostQuick ||
+		state.Disposition == nil ||
+		state.Disposition.Kind != workrun.DispositionRun ||
+		len(state.Reservations) != 1 ||
+		len(state.LaunchClaims) != 1 ||
+		state.VerificationResultRef == "" ||
+		state.ReviewReceiptRef == "" {
+		t.Fatalf("quick Go authority state = %#v", state)
+	}
+	coordinator, err := factory.openForProductiveRecovery(
+		ctx,
+		fixture.workRunID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution, err := coordinator.evidence.ReadExecutionForTicket(
+		state.Reservations[0].ActionTicketRef,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execution.Outcome != evidence.ExecutionComplete ||
+		execution.SemanticProof == nil {
+		t.Fatalf("quick Go semantic evidence = %#v", execution)
+	}
+	reviewStore, err := reviewtransaction.CompactAuthoritativeStore(
+		ctx,
+		fixture.repo,
+		productiveAdvanceLineage(
+			fixture.connector.RepositoryRef(),
+			fixture.workRunID,
+		),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := os.ReadFile(filepath.Join(
+		reviewStore.Dir,
+		reviewtransaction.CompactReviewerResultsDir,
+		"00-"+reviewtransaction.LensReliability+".json",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(
+		string(artifact),
+		reviewtransaction.AdmittedReviewerResultSchema,
+	) {
+		t.Fatal("quick Go review lacks a durable admitted reviewer artifact")
+	}
+
+	replayed, err := fixture.runtime.AdvanceOutcome(
+		ctx,
+		fixture.workRunID,
+		fixture.start.Revision,
+	)
+	semanticAfter, reviewAfter := fixture.verificationCalls()
+	if err != nil ||
+		!reflect.DeepEqual(replayed, first) ||
+		semanticAfter != semanticCalls ||
+		reviewAfter != reviewCalls ||
+		fixture.casCalls() != 1 {
+		t.Fatalf(
+			"quick Go replay = %#v, %v; semantic:%d review:%d CAS:%d",
+			replayed,
+			err,
+			semanticAfter,
+			reviewAfter,
+			fixture.casCalls(),
+		)
+	}
+}
+
+func TestWorkAdvanceV2QuickOwnerConsentIsIndependentOfCost(
+	t *testing.T,
+) {
+	fixture := newProductiveActiveAdvanceTestFixture(
+		t,
+		"quick-explicit-consent",
+	)
+	fixture.connector.verification[0].RequiresConsent = true
+	checkpoint, err := fixture.runtime.AdvanceOutcomeV2(
+		context.Background(),
+		fixture.workRunID,
+		fixture.start.Revision,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, factory := fixture.existingStore(t)
+	state, _ := fixture.currentStateAndStatus(t, factory)
+	semanticCalls, reviewCalls := fixture.verificationCalls()
+	if checkpoint.VerificationDecision == nil ||
+		checkpoint.VerificationDecision.Cost !=
+			reviewtransaction.VerificationCostQuick ||
+		state.Forecast == nil ||
+		!state.Forecast.RequiresConsent ||
+		state.Forecast.MaximumCost == nil ||
+		*state.Forecast.MaximumCost !=
+			reviewtransaction.VerificationCostQuick ||
+		state.Disposition != nil ||
+		len(state.Reservations) != 0 ||
+		len(state.LaunchClaims) != 0 ||
+		semanticCalls != 0 ||
+		reviewCalls != 0 ||
+		fixture.casCalls() != 0 {
+		t.Fatalf(
+			"quick explicit-consent checkpoint = %#v state=%#v calls=%d/%d/%d",
+			checkpoint,
+			state,
+			semanticCalls,
+			reviewCalls,
+			fixture.casCalls(),
+		)
+	}
+}
+
+func TestWorkAdvanceV2LongVerificationRequiresPureDecisionThenResumesOnce(
+	t *testing.T,
+) {
+	fixture := newProductiveActiveAdvanceTestFixture(t, "long-consent")
+	fixture.connector.verification[0].Cost =
+		reviewtransaction.VerificationCostLong
+	ctx := context.Background()
+
+	checkpoint, err := fixture.runtime.AdvanceOutcomeV2(
+		ctx,
+		fixture.workRunID,
+		fixture.start.Revision,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.VerificationDecision == nil ||
+		checkpoint.PreviousRevision != fixture.start.Revision ||
+		checkpoint.Status.PublicState !=
+			workrun.PublicStateNeedsYourDecision ||
+		checkpoint.Status.Revision ==
+			checkpoint.PreviousRevision ||
+		checkpoint.VerificationDecision.ExpectedRevision !=
+			checkpoint.Status.Revision ||
+		checkpoint.VerificationDecision.Cost !=
+			reviewtransaction.VerificationCostLong ||
+		checkpoint.Diagnostic != nil ||
+		checkpoint.DeliveryResultRef != "" {
+		t.Fatalf("long verification checkpoint = %#v", checkpoint)
+	}
+	semanticCalls, reviewCalls := fixture.verificationCalls()
+	if semanticCalls != 0 || reviewCalls != 0 || fixture.casCalls() != 0 {
+		t.Fatalf(
+			"checkpoint executed work: semantic=%d review=%d CAS=%d",
+			semanticCalls,
+			reviewCalls,
+			fixture.casCalls(),
+		)
+	}
+	advanceStore, recoveryFactory := fixture.existingStore(t)
+	checkpointState, _ := fixture.currentStateAndStatus(
+		t,
+		recoveryFactory,
+	)
+	if checkpointState.Forecast == nil ||
+		checkpointState.Forecast.RequiresConsent ||
+		checkpointState.Forecast.MaximumCost == nil ||
+		*checkpointState.Forecast.MaximumCost !=
+			reviewtransaction.VerificationCostLong ||
+		checkpointState.Disposition != nil ||
+		checkpointState.ProductiveResumeRevision != "" ||
+		len(checkpointState.Reservations) != 0 ||
+		len(checkpointState.LaunchClaims) != 0 ||
+		checkpointState.VerificationResultRef != "" ||
+		checkpointState.ReviewReceiptRef != "" ||
+		checkpointState.DeliveryAuthorizationRef != "" {
+		t.Fatalf(
+			"checkpoint mutated past consent = %#v",
+			checkpointState,
+		)
+	}
+
+	promptPath := filepath.Join(
+		advanceStore.root,
+		productiveVerificationPromptName(
+			checkpoint.VerificationDecision.PromptRef,
+		),
+	)
+	if err := os.Remove(promptPath); err != nil {
+		t.Fatal(err)
+	}
+	tokenPath := filepath.Join(t.TempDir(), "runtime.token")
+	if err := os.WriteFile(tokenPath, []byte("owner-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	connectorOpenCalls := 0
+	outageController := NewRuntimeController(
+		EnvironmentRuntimeOutcomeOpener{
+			Activation: fixture.activation,
+			LookupEnv: runtimeDefaultEnvironment(map[string]string{
+				ProductiveRuntimeURLEnvironment:       "https://runtime.invalid",
+				ProductiveRuntimeTokenFileEnvironment: tokenPath,
+			}),
+			ConnectorFactory: func(
+				context.Context,
+				ProductiveRuntimeConnectorConfig,
+				string,
+			) (ProductiveRuntimeConnector, error) {
+				connectorOpenCalls++
+				return nil, errors.New("connector outage")
+			},
+		},
+	)
+	replayedResult, err := outageController.AdvanceV2(
+		ctx,
+		RuntimeAdvanceV2Request{
+			Repo:             fixture.repo,
+			WorkRunID:        fixture.workRunID,
+			ExpectedRevision: fixture.start.Revision,
+			Contract:         workrun.WorkAdvanceContractV2,
+		},
+	)
+	if err != nil ||
+		replayedResult.Advance == nil ||
+		!reflect.DeepEqual(*replayedResult.Advance, checkpoint) {
+		t.Fatalf(
+			"outage checkpoint replay = %#v, %v",
+			replayedResult,
+			err,
+		)
+	}
+	if connectorOpenCalls != 0 {
+		t.Fatalf(
+			"fresh outage checkpoint opened connector %d times",
+			connectorOpenCalls,
+		)
+	}
+	if _, err := os.Stat(promptPath); err != nil {
+		t.Fatalf("checkpoint replay did not repair prompt lookup: %v", err)
+	}
+	semanticCalls, reviewCalls = fixture.verificationCalls()
+	if fixture.verificationCatalogCalls() != 1 ||
+		semanticCalls != 0 ||
+		reviewCalls != 0 ||
+		fixture.casCalls() != 0 {
+		t.Fatal("checkpoint replay executed productive work")
+	}
+
+	decisionResult, err := outageController.DecideVerification(
+		ctx,
+		RuntimeVerificationDecisionRequest{
+			Repo:      fixture.repo,
+			WorkRunID: fixture.workRunID,
+			Contract:  workrun.WorkVerificationDecideContractV1,
+			PromptRef: checkpoint.VerificationDecision.PromptRef,
+			Choice:    workrun.VerificationDecisionRun,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decisionResult.Decision == nil {
+		t.Fatal("fresh-process decision returned no receipt")
+	}
+	decision := *decisionResult.Decision
+	if decision.PreviousRevision != checkpoint.Status.Revision ||
+		decision.Status.PublicState != workrun.PublicStateChecking ||
+		decision.Status.Revision == decision.PreviousRevision ||
+		decision.DispositionRef == "" {
+		t.Fatalf("run decision receipt = %#v", decision)
+	}
+	decisionState, _ := fixture.currentStateAndStatus(t, recoveryFactory)
+	if decisionState.Disposition == nil ||
+		decisionState.Disposition.Kind != workrun.DispositionRun ||
+		decisionState.ProductiveResumeRevision !=
+			decision.Status.Revision ||
+		len(decisionState.Reservations) != 0 ||
+		len(decisionState.LaunchClaims) != 0 ||
+		decisionState.VerificationResultRef != "" ||
+		decisionState.ReviewReceiptRef != "" ||
+		decisionState.DeliveryAuthorizationRef != "" {
+		t.Fatalf("run decision launched work = %#v", decisionState)
+	}
+	semanticCalls, reviewCalls = fixture.verificationCalls()
+	if semanticCalls != 0 || reviewCalls != 0 || fixture.casCalls() != 0 {
+		t.Fatal("run decision executed productive work")
+	}
+	if connectorOpenCalls != 0 {
+		t.Fatalf("pure decision opened connector %d times", connectorOpenCalls)
+	}
+	replayedDecision, err := fixture.runtime.DecideVerificationOutcome(
+		ctx,
+		fixture.workRunID,
+		checkpoint.VerificationDecision.PromptRef,
+		workrun.VerificationDecisionRun,
+	)
+	if err != nil || !reflect.DeepEqual(replayedDecision, decision) {
+		t.Fatalf(
+			"decision replay = %#v, %v",
+			replayedDecision,
+			err,
+		)
+	}
+	if _, err := fixture.runtime.AdvanceOutcomeV2(
+		ctx,
+		fixture.workRunID,
+		fixture.start.Revision,
+	); err == nil {
+		t.Fatal("stale pre-consent revision resumed verification")
+	}
+
+	terminal, err := fixture.runtime.AdvanceOutcomeV2(
+		ctx,
+		fixture.workRunID,
+		decision.Status.Revision,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	semanticCalls, reviewCalls = fixture.verificationCalls()
+	if terminal.VerificationDecision != nil ||
+		terminal.PreviousRevision != decision.Status.Revision ||
+		terminal.Status.PublicState != workrun.PublicStateReady ||
+		terminal.DeliveryResultRef == "" ||
+		terminal.Diagnostic != nil ||
+		semanticCalls != 1 ||
+		reviewCalls != 1 ||
+		fixture.casCalls() != 1 {
+		t.Fatalf(
+			"resumed terminal/calls = %#v / semantic:%d review:%d CAS:%d",
+			terminal,
+			semanticCalls,
+			reviewCalls,
+			fixture.casCalls(),
+		)
+	}
+	replayedTerminal, err := fixture.runtime.AdvanceOutcomeV2(
+		ctx,
+		fixture.workRunID,
+		decision.Status.Revision,
+	)
+	semanticAfter, reviewAfter := fixture.verificationCalls()
+	if err != nil ||
+		!reflect.DeepEqual(replayedTerminal, terminal) ||
+		semanticAfter != semanticCalls ||
+		reviewAfter != reviewCalls ||
+		fixture.casCalls() != 1 {
+		t.Fatalf(
+			"resume replay = %#v, %v; semantic:%d review:%d CAS:%d",
+			replayedTerminal,
+			err,
+			semanticAfter,
+			reviewAfter,
+			fixture.casCalls(),
+		)
+	}
+	terminalDecisionResult, err := outageController.DecideVerification(
+		ctx,
+		RuntimeVerificationDecisionRequest{
+			Repo:      fixture.repo,
+			WorkRunID: fixture.workRunID,
+			Contract:  workrun.WorkVerificationDecideContractV1,
+			PromptRef: checkpoint.VerificationDecision.PromptRef,
+			Choice:    workrun.VerificationDecisionRun,
+		},
+	)
+	semanticFinal, reviewFinal := fixture.verificationCalls()
+	if err != nil ||
+		terminalDecisionResult.Decision == nil ||
+		!reflect.DeepEqual(*terminalDecisionResult.Decision, decision) ||
+		connectorOpenCalls != 0 ||
+		semanticFinal != semanticAfter ||
+		reviewFinal != reviewAfter ||
+		fixture.casCalls() != 1 {
+		t.Fatalf(
+			"terminal decision replay = %#v, %v; connector:%d semantic:%d review:%d CAS:%d",
+			terminalDecisionResult,
+			err,
+			connectorOpenCalls,
+			semanticFinal,
+			reviewFinal,
+			fixture.casCalls(),
+		)
+	}
+}
+
+func TestWorkVerificationDecisionRejectsPrecreatedUnboundReceipt(
+	t *testing.T,
+) {
+	fixture := newProductiveActiveAdvanceTestFixture(
+		t,
+		"precreated-decision-receipt",
+	)
+	fixture.connector.verification[0].Cost =
+		reviewtransaction.VerificationCostLong
+	ctx := context.Background()
+	checkpoint, err := fixture.runtime.AdvanceOutcomeV2(
+		ctx,
+		fixture.workRunID,
+		fixture.start.Revision,
+	)
+	if err != nil || checkpoint.VerificationDecision == nil {
+		t.Fatalf("checkpoint = %#v, %v", checkpoint, err)
+	}
+	store, factory := fixture.existingStore(t)
+	fakeStatus := checkpoint.Status
+	fakeStatus.Revision = productiveAdvanceSHA256(
+		[]byte("unbound-verification-decision-revision"),
+	)
+	fakeStatus.PublicState = workrun.PublicStateChecking
+	fakeReceipt := workrun.WorkVerificationDecideV1{
+		Schema:           workrun.WorkVerificationDecideContractV1,
+		Contract:         workrun.WorkVerificationDecideContractV1,
+		WorkRunID:        fixture.workRunID,
+		PreviousRevision: checkpoint.Status.Revision,
+		PromptRef:        checkpoint.VerificationDecision.PromptRef,
+		ForecastRef:      checkpoint.VerificationDecision.ForecastRef,
+		AssumptionsRef:   checkpoint.VerificationDecision.AssumptionsRef,
+		Choice:           workrun.VerificationDecisionRun,
+		DispositionRef: productiveAdvanceSHA256(
+			[]byte("unbound-verification-disposition"),
+		),
+		Status: fakeStatus,
+	}
+	if err := fakeReceipt.Validate(); err != nil {
+		t.Fatalf("fake receipt fixture is not syntactically valid: %v", err)
+	}
+	record := productiveVerificationReceiptRecord{
+		Schema:        productiveVerificationReceiptSchema,
+		RepositoryRef: store.lease.Identity().RepositoryRef,
+		WorkRunID:     fixture.workRunID,
+		PromptRef:     fakeReceipt.PromptRef,
+		Choice:        fakeReceipt.Choice,
+		Receipt:       fakeReceipt,
+	}
+	if err := store.publishJSON(
+		ctx,
+		productiveVerificationReceiptName(
+			fakeReceipt.PromptRef,
+			fakeReceipt.Choice,
+		),
+		record,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.runtime.DecideVerificationOutcome(
+		ctx,
+		fixture.workRunID,
+		fakeReceipt.PromptRef,
+		fakeReceipt.Choice,
+	); err == nil {
+		t.Fatal("precreated receipt bypassed durable decision authority")
+	}
+	state, _ := fixture.currentStateAndStatus(t, factory)
+	semanticCalls, reviewCalls := fixture.verificationCalls()
+	if state.Disposition != nil ||
+		state.ProductiveResumeRevision != "" ||
+		len(state.Reservations) != 0 ||
+		len(state.LaunchClaims) != 0 ||
+		semanticCalls != 0 ||
+		reviewCalls != 0 ||
+		fixture.casCalls() != 0 {
+		t.Fatalf(
+			"rejected precreated receipt mutated state: %#v calls=%d/%d/%d",
+			state,
+			semanticCalls,
+			reviewCalls,
+			fixture.casCalls(),
+		)
+	}
+}
+
+func TestWorkAdvanceV2NonRunDecisionsNeverCreateResumeAuthority(
+	t *testing.T,
+) {
+	for _, choice := range []workrun.VerificationDecisionChoice{
+		workrun.VerificationDecisionDefer,
+		workrun.VerificationDecisionReduceScope,
+	} {
+		t.Run(string(choice), func(t *testing.T) {
+			fixture := newProductiveActiveAdvanceTestFixture(
+				t,
+				"long-"+string(choice),
+			)
+			fixture.connector.verification[0].Cost =
+				reviewtransaction.VerificationCostLong
+			ctx := context.Background()
+			checkpoint, err := fixture.runtime.AdvanceOutcomeV2(
+				ctx,
+				fixture.workRunID,
+				fixture.start.Revision,
+			)
+			if err != nil || checkpoint.VerificationDecision == nil {
+				t.Fatalf("checkpoint = %#v, %v", checkpoint, err)
+			}
+			decision, err := fixture.runtime.DecideVerificationOutcome(
+				ctx,
+				fixture.workRunID,
+				checkpoint.VerificationDecision.PromptRef,
+				choice,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, factory := fixture.existingStore(t)
+			state, _ := fixture.currentStateAndStatus(t, factory)
+			semanticCalls, reviewCalls := fixture.verificationCalls()
+			if decision.Choice != choice ||
+				decision.Status.PublicState !=
+					workrun.PublicStateNeedsYourDecision ||
+				state.Disposition == nil ||
+				state.Disposition.DecisionRef !=
+					decision.DispositionRef ||
+				state.ProductiveResumeRevision !=
+					decision.Status.Revision ||
+				len(state.Reservations) != 0 ||
+				len(state.LaunchClaims) != 0 ||
+				state.VerificationResultRef != "" ||
+				state.ReviewReceiptRef != "" ||
+				state.DeliveryAuthorizationRef != "" ||
+				semanticCalls != 0 ||
+				reviewCalls != 0 ||
+				fixture.casCalls() != 0 {
+				t.Fatalf(
+					"non-run decision created work authority: receipt=%#v state=%#v calls=%d/%d/%d",
+					decision,
+					state,
+					semanticCalls,
+					reviewCalls,
+					fixture.casCalls(),
+				)
+			}
+			if _, err := fixture.runtime.AdvanceOutcomeV2(
+				ctx,
+				fixture.workRunID,
+				decision.Status.Revision,
+			); err == nil {
+				t.Fatal("non-run decision authorized a productive resume")
+			}
+			semanticCalls, reviewCalls = fixture.verificationCalls()
+			if semanticCalls != 0 ||
+				reviewCalls != 0 ||
+				fixture.casCalls() != 0 {
+				t.Fatal("rejected non-run resume executed productive work")
+			}
+		})
+	}
 }
 
 func TestWorkAdvanceReadySurvivesConsumedAuthorizationExpiryAndRestart(

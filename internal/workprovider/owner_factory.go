@@ -34,6 +34,8 @@ type ProductionOwnerCoordinatorFactory struct {
 	padDelivery    *PADDeliveryAdapter
 	candidateStore *PADCandidateCatalog
 	bindingSource  PADGitBindingAuthority
+	active         ProductiveActiveVerificationAuthority
+	semantic       SemanticEvaluatorPort
 }
 
 // NewProductionOwnerCoordinatorFactory resolves the exact Git identity without
@@ -114,6 +116,8 @@ func newProductionOwnerCoordinatorFactory(
 		padDelivery    *PADDeliveryAdapter
 		candidateStore *PADCandidateCatalog
 		bindingSource  PADGitBindingAuthority
+		active         ProductiveActiveVerificationAuthority
+		semantic       SemanticEvaluatorPort
 	)
 	if connector == nil {
 		padDelivery, err = newUnavailablePADDeliveryAdapter(
@@ -157,6 +161,8 @@ func newProductionOwnerCoordinatorFactory(
 			objects,
 			hosting,
 		)
+		active, _ = connector.(ProductiveActiveVerificationAuthority)
+		semantic = connector
 	}
 	if err != nil {
 		return nil, err
@@ -170,6 +176,8 @@ func newProductionOwnerCoordinatorFactory(
 		padDelivery:    padDelivery,
 		candidateStore: candidateStore,
 		bindingSource:  bindingSource,
+		active:         active,
+		semantic:       semantic,
 	}, nil
 }
 
@@ -543,6 +551,7 @@ func (factory *ProductionOwnerCoordinatorFactory) openOwnerCoordinatorWithCandid
 		return nil, err
 	}
 	advanceStore.pad = factory.pad
+	advanceStore.coordination = coordination
 	return NewOwnerCoordinator(ctx, OwnerCoordinatorDependencies{
 		WorkRun:                   work,
 		Coordination:              coordination,
@@ -562,7 +571,8 @@ func (factory *ProductionOwnerCoordinatorFactory) openOwnerCoordinatorWithCandid
 		SDDAuthority: SDDWorkRunAuthority{
 			Repo: factory.repositoryRoot(),
 		},
-		LaunchAuthority: executor,
+		LaunchAuthority:      executor,
+		VerificationDecision: advanceStore,
 		// The preflight gates store opening, but the reusable coordinator must
 		// still resolve the live kill switch before every later mutation.
 		Activation: factory.activation,

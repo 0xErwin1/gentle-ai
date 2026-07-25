@@ -67,8 +67,8 @@ func TestOrchestratorsProjectOrganicRoutingAndNativeAuthority(t *testing.T) {
 
 func TestOrchestratorsNegotiateNormalWorkIntake(t *testing.T) {
 	const (
-		capabilitiesCommand = "gentle-ai work-capabilities --cwd <repo> --contract gentle-ai.work-capabilities/v2 --json"
-		startCommand        = "gentle-ai work-start --cwd <repo> --contract gentle-ai.work-start/v1 --json"
+		capabilitiesCommand = "gentle-ai work-capabilities --cwd <repo> --agent {{GENTLE_AI_RUNTIME_AGENT_ID}} --contract gentle-ai.work-capabilities/v2 --json"
+		startCommand        = "gentle-ai work-start --cwd <repo> --agent {{GENTLE_AI_RUNTIME_AGENT_ID}} --contract gentle-ai.work-start/v1 --json"
 	)
 
 	for _, path := range allSDDOrchestratorAssetPaths(t) {
@@ -136,7 +136,6 @@ func TestOrchestratorsNegotiateNormalWorkIntake(t *testing.T) {
 		for _, forbidden := range []string{
 			"explicit_sdd_intent",
 			"explicitSDDRequested",
-			"--agent",
 			"--route",
 			"--repository",
 			"--policy",

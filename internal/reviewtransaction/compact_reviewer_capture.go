@@ -26,6 +26,59 @@ type CompactAdmittedReviewerResultRequest struct {
 	RawPayload                []byte
 }
 
+// ResolveAdmittedReviewerResult reads and re-admits one already captured
+// reviewer slot without publishing or changing compact authority.
+func (store CompactStore) ResolveAdmittedReviewerResult(ctx context.Context, expectedRevision, targetIdentity string, frozen FrozenCandidateContext, subject ArtifactSubject) (result LensResult, found bool, err error) {
+	if ctx == nil {
+		return LensResult{}, false, errors.New("resolve admitted reviewer result context is nil")
+	}
+	if err = ctx.Err(); err != nil {
+		return LensResult{}, false, err
+	}
+	if !validSHA256(expectedRevision) || !validSHA256(targetIdentity) || targetIdentity != subject.TargetIdentity || subject.AuthorityRevision != expectedRevision {
+		return LensResult{}, false, errors.New("resolve admitted reviewer result requires an exact revision and target")
+	}
+	err = store.CaptureReviewerResult(expectedRevision, targetIdentity, subject.Lens, subject.SelectedOrder, func(state CompactState) error {
+		nativeFrozen, err := (SnapshotBuilder{Repo: store.repo}).FrozenCandidateContext(ctx, state.InitialSnapshot)
+		if err != nil {
+			return err
+		}
+		expected, err := NewArtifactSubject(state, expectedRevision, nativeFrozen, subject.Lens, subject.SelectedOrder, subject.CorrectionTargetIdentity)
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(nativeFrozen, frozen) || expected != subject {
+			return errors.New("resolved reviewer result does not match repository authority")
+		}
+		path := filepath.Join(store.Dir, CompactReviewerResultsDir, fmt.Sprintf("%02d-%s.json", subject.SelectedOrder, subject.Lens))
+		if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		payload, _, err := readCompactReviewerArtifact(path)
+		if err != nil {
+			return err
+		}
+		decoder := json.NewDecoder(bytes.NewReader(payload))
+		decoder.DisallowUnknownFields()
+		var envelope compactAdmittedReviewerResult
+		if err := decoder.Decode(&envelope); err != nil {
+			return fmt.Errorf("decode admitted reviewer result: %w", err)
+		}
+		var extra any
+		if err := decoder.Decode(&extra); err != io.EOF || envelope.Schema != AdmittedReviewerResultSchema || envelope.Subject != expected || envelope.Admission.Validate(expected) != nil || len(envelope.Result) == 0 {
+			return errors.New("admitted reviewer result does not match locked authority")
+		}
+		result, found = reAdmitCompactReviewerResult(envelope, expected, nativeFrozen)
+		if !found {
+			return errors.New("admitted reviewer result failed native re-admission")
+		}
+		return nil
+	})
+	return result, found, err
+}
+
 // CaptureAdmittedReviewerResult admits and durably publishes one real reviewer
 // result while the compact reviewing authority and selected lens slot remain
 // locked to the request's exact revision and target.

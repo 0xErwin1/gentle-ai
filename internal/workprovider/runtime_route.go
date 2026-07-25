@@ -181,13 +181,20 @@ func (runtimeOutcome *productiveRuntimeOutcome) resolveProductiveRouteAuthority(
 			"productive route requires a canonical WorkRun identifier",
 		)
 	}
-	capabilities, err := runtimeOutcome.Capabilities(ctx)
+	start, err := runtimeOutcome.bindWorkRunAgent(ctx, workRunID)
 	if err != nil {
 		return productiveRouteAuthority{}, err
 	}
-	if capabilities.WorkRouting.Exposure != WorkRoutingAdvertised ||
-		runtimeOutcome.connector == nil {
+	capabilities, err := runtimeOutcome.CapabilitiesV2(ctx)
+	if err != nil {
+		return productiveRouteAuthority{}, err
+	}
+	if capabilities.WorkRouting.Exposure != WorkRoutingAdvertised {
 		return productiveRouteAuthority{}, ErrCapabilityReadOnly
+	}
+	connector, err := runtimeOutcome.ensureConnector(ctx)
+	if err != nil {
+		return productiveRouteAuthority{}, err
 	}
 	lease, err := reviewtransaction.OpenRepositoryIdentityLease(
 		ctx,
@@ -214,17 +221,6 @@ func (runtimeOutcome *productiveRuntimeOutcome) resolveProductiveRouteAuthority(
 	if err != nil {
 		return productiveRouteAuthority{}, err
 	}
-	startStore, err := existingProductiveAdvanceStore(
-		lease,
-		workRunID,
-	)
-	if err != nil {
-		return productiveRouteAuthority{}, err
-	}
-	start, err := startStore.startAuthority(ctx)
-	if err != nil {
-		return productiveRouteAuthority{}, err
-	}
 	if start.RepositoryRef != lease.Identity().RepositoryRef ||
 		start.WorkRunID != state.WorkRunID ||
 		start.DeliveryIntentRef != state.DeliveryIntentRef {
@@ -246,7 +242,7 @@ func (runtimeOutcome *productiveRuntimeOutcome) resolveProductiveRouteAuthority(
 		runtimeOutcome.repo,
 		runtimeOutcome.agent,
 		runtimeOutcome.activation,
-		runtimeOutcome.connector,
+		connector,
 	)
 	if err != nil {
 		return productiveRouteAuthority{}, err

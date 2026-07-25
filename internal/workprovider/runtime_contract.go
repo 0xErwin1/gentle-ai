@@ -19,7 +19,10 @@ import (
 // outcome limit. Twelve bytes per code point admits the largest valid JSON
 // representation: one supplementary Unicode scalar escaped as a surrogate
 // pair, plus bounded envelope overhead.
-const maximumOutcomeStartEnvelopeBytes = 12*maximumOutcomeRequestCodePoints + 1024
+const (
+	maximumOutcomeStartEnvelopeBytes = 12*maximumOutcomeRequestCodePoints + 1024
+	RuntimeCapabilitiesContractV2    = "gentle-ai.work-capabilities/v2"
+)
 
 // WorkRoutingExposure is the effective runtime exposure returned by the
 // authenticated capability handshake. It is deliberately separate from the
@@ -62,6 +65,96 @@ type RuntimeCapabilitiesV1 struct {
 	WorkRouting         RuntimeCapabilityClaimV1 `json:"workRouting"`
 	Contracts           RuntimeContractSetV1     `json:"contracts"`
 	ConnectorSessionRef string                   `json:"connectorSessionRef,omitempty"`
+}
+
+type RuntimeContractSetV2 struct {
+	Start              string `json:"start"`
+	Route              string `json:"route"`
+	Advance            string `json:"advance"`
+	VerificationDecide string `json:"verificationDecide"`
+	Reconcile          string `json:"reconcile"`
+	Status             string `json:"status"`
+	Transition         string `json:"transition"`
+}
+
+// RuntimeCapabilitiesV2 advertises the resumable advance and pure consent
+// mutation without changing the frozen capabilities/v1 shape.
+type RuntimeCapabilitiesV2 struct {
+	Schema              string                   `json:"schema"`
+	Contract            string                   `json:"contract"`
+	RepositoryRef       string                   `json:"repositoryRef"`
+	AgentID             model.AgentID            `json:"agentId,omitempty"`
+	WorkRouting         RuntimeCapabilityClaimV1 `json:"workRouting"`
+	Contracts           RuntimeContractSetV2     `json:"contracts"`
+	ConnectorSessionRef string                   `json:"connectorSessionRef,omitempty"`
+}
+
+func (capabilities RuntimeCapabilitiesV2) Validate() error {
+	if capabilities.Schema != RuntimeCapabilitiesContractV2 ||
+		capabilities.Contract != RuntimeCapabilitiesContractV2 {
+		return errors.New(
+			"runtime capabilities must use gentle-ai.work-capabilities/v2",
+		)
+	}
+	if err := validateCanonical(
+		"runtime capabilities repositoryRef",
+		capabilities.RepositoryRef,
+	); err != nil {
+		return err
+	}
+	if capabilities.WorkRouting.ID != workrun.WorkRoutingCapabilityV1 ||
+		capabilities.WorkRouting.ImplementationRouting !=
+			capabilitymanifest.CanonicalImplementationRouting() {
+		return errors.New(
+			"runtime capabilities do not match canonical ACI routing",
+		)
+	}
+	if capabilities.Contracts != (RuntimeContractSetV2{
+		Start:              workrun.WorkStartContractV1,
+		Route:              workrun.WorkRouteContractV1,
+		Advance:            workrun.WorkAdvanceContractV2,
+		VerificationDecide: workrun.WorkVerificationDecideContractV1,
+		Reconcile:          workrun.WorkReconcileContractV1,
+		Status:             workrun.WorkStatusContractV1,
+		Transition:         workrun.WorkTransitionContractV1,
+	}) {
+		return errors.New(
+			"runtime capabilities contain an unsupported v2 contract set",
+		)
+	}
+	switch capabilities.WorkRouting.Exposure {
+	case WorkRoutingAdvertised:
+		if _, err := capabilitymanifest.ForAgent(
+			capabilities.AgentID,
+		); err != nil {
+			return err
+		}
+		if err := validateCanonical(
+			"runtime capabilities connectorSessionRef",
+			capabilities.ConnectorSessionRef,
+		); err != nil {
+			return err
+		}
+	case WorkRoutingDormant:
+		if capabilities.AgentID != "" {
+			if _, err := capabilitymanifest.ForAgent(
+				capabilities.AgentID,
+			); err != nil {
+				return err
+			}
+		}
+		if capabilities.ConnectorSessionRef != "" {
+			return errors.New(
+				"dormant runtime capabilities cannot bind a connector session",
+			)
+		}
+	default:
+		return fmt.Errorf(
+			"unsupported work-routing exposure %q",
+			capabilities.WorkRouting.Exposure,
+		)
+	}
+	return nil
 }
 
 func (capabilities RuntimeCapabilitiesV1) Validate() error {
@@ -146,8 +239,47 @@ type RuntimeOutcome interface {
 	) (workrun.WorkReconcileV1, error)
 }
 
+// ResumableRuntimeOutcome is the additive owner seam for explicit
+// verification consent. RuntimeOutcome remains the frozen v1 compatibility
+// surface.
+type ResumableRuntimeOutcome interface {
+	CapabilitiesV2(context.Context) (RuntimeCapabilitiesV2, error)
+	AdvanceOutcomeV2(
+		context.Context,
+		string,
+		string,
+	) (workrun.WorkAdvanceV2, error)
+	DecideVerificationOutcome(
+		context.Context,
+		string,
+		string,
+		workrun.VerificationDecisionChoice,
+	) (workrun.WorkVerificationDecideV1, error)
+}
+
 type RuntimeOutcomeOpener interface {
 	OpenRuntimeOutcome(context.Context, string) (RuntimeOutcome, error)
+}
+
+// InvocationRuntimeOutcomeOpener is the additive composition seam used only
+// before START. The adapter names itself so the authenticated connector can
+// prove that assertion; callers of an existing WorkRun never supply an agent.
+type InvocationRuntimeOutcomeOpener interface {
+	OpenRuntimeOutcomeForInvocation(
+		context.Context,
+		string,
+		model.AgentID,
+	) (RuntimeOutcome, error)
+}
+
+// LegacyCapabilitiesRuntimeOutcomeOpener preserves the frozen v1 environment
+// composition without letting ambient identity leak into START or an existing
+// WorkRun.
+type LegacyCapabilitiesRuntimeOutcomeOpener interface {
+	OpenRuntimeOutcomeForLegacyCapabilities(
+		context.Context,
+		string,
+	) (RuntimeOutcome, error)
 }
 
 // RuntimeController keeps contract negotiation ahead of repository access,
@@ -163,11 +295,23 @@ func NewRuntimeController(opener RuntimeOutcomeOpener) RuntimeController {
 type RuntimeCapabilitiesRequest struct {
 	Repo     string
 	Contract string
+	AgentID  model.AgentID
 }
 
 type RuntimeCapabilitiesResult struct {
 	Capabilities *RuntimeCapabilitiesV1
 	Diagnostic   *workrun.WorkDiagnosticV1
+}
+
+type RuntimeCapabilitiesV2Result struct {
+	Capabilities *RuntimeCapabilitiesV2
+}
+
+func (result RuntimeCapabilitiesV2Result) Output() any {
+	if result.Capabilities != nil {
+		return *result.Capabilities
+	}
+	return nil
 }
 
 func (result RuntimeCapabilitiesResult) Output() any {
@@ -196,12 +340,21 @@ func (controller RuntimeController) Capabilities(
 	if diagnostic != nil {
 		return RuntimeCapabilitiesResult{Diagnostic: diagnostic}, nil
 	}
-	runtime, err := controller.open(ctx, request.Repo)
+	runtime, err := controller.openForLegacyCapabilities(
+		ctx,
+		request.Repo,
+	)
 	if err != nil {
 		return RuntimeCapabilitiesResult{}, err
 	}
 	capabilities, err := runtime.Capabilities(ctx)
 	if err != nil {
+		if errors.Is(
+			err,
+			ErrProductiveRuntimeInvocationAgentUnavailable,
+		) {
+			return RuntimeCapabilitiesResult{}, nil
+		}
 		return RuntimeCapabilitiesResult{}, err
 	}
 	if err := capabilities.Validate(); err != nil {
@@ -213,10 +366,60 @@ func (controller RuntimeController) Capabilities(
 	return RuntimeCapabilitiesResult{Capabilities: &capabilities}, nil
 }
 
+func (controller RuntimeController) CapabilitiesV2(
+	ctx context.Context,
+	request RuntimeCapabilitiesRequest,
+) (RuntimeCapabilitiesV2Result, error) {
+	if request.Contract != RuntimeCapabilitiesContractV2 {
+		return RuntimeCapabilitiesV2Result{}, errors.New(
+			"the requested work capabilities v2 contract is unsupported",
+		)
+	}
+	runtime, err := controller.openForInvocation(
+		ctx,
+		request.Repo,
+		request.AgentID,
+	)
+	if err != nil {
+		if errors.Is(
+			err,
+			ErrProductiveRuntimeInvocationAgentUnavailable,
+		) {
+			return RuntimeCapabilitiesV2Result{}, nil
+		}
+		return RuntimeCapabilitiesV2Result{}, err
+	}
+	resumable, ok := runtime.(ResumableRuntimeOutcome)
+	if !ok {
+		return RuntimeCapabilitiesV2Result{}, fmt.Errorf(
+			"%w: runtime does not own capabilities/v2",
+			ErrCapabilityReadOnly,
+		)
+	}
+	capabilities, err := resumable.CapabilitiesV2(ctx)
+	if err != nil {
+		if errors.Is(
+			err,
+			ErrProductiveRuntimeInvocationAgentUnavailable,
+		) {
+			return RuntimeCapabilitiesV2Result{}, nil
+		}
+		return RuntimeCapabilitiesV2Result{}, err
+	}
+	if err := capabilities.Validate(); err != nil {
+		return RuntimeCapabilitiesV2Result{}, fmt.Errorf(
+			"validate productive runtime capabilities v2: %w",
+			err,
+		)
+	}
+	return RuntimeCapabilitiesV2Result{Capabilities: &capabilities}, nil
+}
+
 type RuntimeStartRequest struct {
 	Repo     string
 	Contract string
 	Payload  []byte
+	AgentID  model.AgentID
 }
 
 type RuntimeStartResult struct {
@@ -273,6 +476,43 @@ func (result RuntimeAdvanceResult) Output() any {
 	}
 	if result.Advance != nil {
 		return *result.Advance
+	}
+	return nil
+}
+
+type RuntimeAdvanceV2Request struct {
+	Repo             string
+	WorkRunID        string
+	ExpectedRevision string
+	Contract         string
+}
+
+type RuntimeAdvanceV2Result struct {
+	Advance *workrun.WorkAdvanceV2
+}
+
+func (result RuntimeAdvanceV2Result) Output() any {
+	if result.Advance != nil {
+		return *result.Advance
+	}
+	return nil
+}
+
+type RuntimeVerificationDecisionRequest struct {
+	Repo      string
+	WorkRunID string
+	Contract  string
+	PromptRef string
+	Choice    workrun.VerificationDecisionChoice
+}
+
+type RuntimeVerificationDecisionResult struct {
+	Decision *workrun.WorkVerificationDecideV1
+}
+
+func (result RuntimeVerificationDecisionResult) Output() any {
+	if result.Decision != nil {
+		return *result.Decision
 	}
 	return nil
 }
@@ -507,6 +747,119 @@ func (controller RuntimeController) Advance(
 	return RuntimeAdvanceResult{Advance: &advance}, nil
 }
 
+// AdvanceV2 performs one resumable convergence attempt. It may return one
+// durable consent checkpoint; unlike v1, that checkpoint is never normalized
+// into a terminal blocker.
+func (controller RuntimeController) AdvanceV2(
+	ctx context.Context,
+	request RuntimeAdvanceV2Request,
+) (RuntimeAdvanceV2Result, error) {
+	if request.Contract != workrun.WorkAdvanceContractV2 {
+		return RuntimeAdvanceV2Result{}, errors.New(
+			"the requested work advance v2 contract is unsupported",
+		)
+	}
+	if !workRunIDPattern.MatchString(request.WorkRunID) {
+		return RuntimeAdvanceV2Result{}, errors.New(
+			"work-advance v2 requires a canonical --work-run identifier",
+		)
+	}
+	if !revisionPattern.MatchString(request.ExpectedRevision) {
+		return RuntimeAdvanceV2Result{}, errors.New(
+			"work-advance v2 requires a lowercase SHA-256 --expected-revision",
+		)
+	}
+	runtime, err := controller.open(ctx, request.Repo)
+	if err != nil {
+		return RuntimeAdvanceV2Result{}, err
+	}
+	resumable, ok := runtime.(ResumableRuntimeOutcome)
+	if !ok {
+		return RuntimeAdvanceV2Result{}, fmt.Errorf(
+			"%w: runtime does not own work-advance/v2",
+			ErrCapabilityReadOnly,
+		)
+	}
+	advance, err := resumable.AdvanceOutcomeV2(
+		ctx,
+		request.WorkRunID,
+		request.ExpectedRevision,
+	)
+	if err != nil {
+		return RuntimeAdvanceV2Result{}, err
+	}
+	if err := advance.Validate(); err != nil {
+		return RuntimeAdvanceV2Result{}, fmt.Errorf(
+			"validate productive runtime advance v2: %w",
+			err,
+		)
+	}
+	if advance.Status.WorkRunID != request.WorkRunID ||
+		advance.PreviousRevision != request.ExpectedRevision {
+		return RuntimeAdvanceV2Result{}, ErrProviderResultMismatch
+	}
+	return RuntimeAdvanceV2Result{Advance: &advance}, nil
+}
+
+// DecideVerification accepts only the opaque prompt and one offered choice.
+// The owner resolves the prompt's hidden CAS and all disposition authority.
+func (controller RuntimeController) DecideVerification(
+	ctx context.Context,
+	request RuntimeVerificationDecisionRequest,
+) (RuntimeVerificationDecisionResult, error) {
+	if request.Contract != workrun.WorkVerificationDecideContractV1 {
+		return RuntimeVerificationDecisionResult{}, errors.New(
+			"the requested work verification decision contract is unsupported",
+		)
+	}
+	if !workRunIDPattern.MatchString(request.WorkRunID) {
+		return RuntimeVerificationDecisionResult{}, errors.New(
+			"work-verification-decide requires a canonical --work-run identifier",
+		)
+	}
+	if !revisionPattern.MatchString(request.PromptRef) {
+		return RuntimeVerificationDecisionResult{}, errors.New(
+			"work-verification-decide requires a lowercase SHA-256 --prompt-ref",
+		)
+	}
+	if _, err := productiveDispositionKind(request.Choice); err != nil {
+		return RuntimeVerificationDecisionResult{}, err
+	}
+	runtime, err := controller.open(ctx, request.Repo)
+	if err != nil {
+		return RuntimeVerificationDecisionResult{}, err
+	}
+	resumable, ok := runtime.(ResumableRuntimeOutcome)
+	if !ok {
+		return RuntimeVerificationDecisionResult{}, fmt.Errorf(
+			"%w: runtime does not own verification consent",
+			ErrCapabilityReadOnly,
+		)
+	}
+	decision, err := resumable.DecideVerificationOutcome(
+		ctx,
+		request.WorkRunID,
+		request.PromptRef,
+		request.Choice,
+	)
+	if err != nil {
+		return RuntimeVerificationDecisionResult{}, err
+	}
+	if err := decision.Validate(); err != nil {
+		return RuntimeVerificationDecisionResult{}, fmt.Errorf(
+			"validate productive verification decision: %w",
+			err,
+		)
+	}
+	if decision.WorkRunID != request.WorkRunID ||
+		decision.PromptRef != request.PromptRef ||
+		decision.Choice != request.Choice {
+		return RuntimeVerificationDecisionResult{},
+			ErrProviderResultMismatch
+	}
+	return RuntimeVerificationDecisionResult{Decision: &decision}, nil
+}
+
 // Reconcile performs exactly one owner-only recovery attempt for a terminal
 // diagnostic that explicitly requires reconciliation. The consumer supplies
 // no outcome, effect, authority, policy, or fallback.
@@ -601,7 +954,11 @@ func (controller RuntimeController) Start(
 	if err != nil {
 		return RuntimeStartResult{}, err
 	}
-	runtime, err := controller.open(ctx, request.Repo)
+	runtime, err := controller.openForInvocation(
+		ctx,
+		request.Repo,
+		request.AgentID,
+	)
 	if err != nil {
 		return RuntimeStartResult{}, err
 	}
@@ -642,6 +999,54 @@ func (controller RuntimeController) open(
 	ctx context.Context,
 	repo string,
 ) (RuntimeOutcome, error) {
+	return controller.openWith(ctx, repo, func(
+		opener RuntimeOutcomeOpener,
+	) (RuntimeOutcome, error) {
+		return opener.OpenRuntimeOutcome(ctx, repo)
+	})
+}
+
+func (controller RuntimeController) openForInvocation(
+	ctx context.Context,
+	repo string,
+	agent model.AgentID,
+) (RuntimeOutcome, error) {
+	return controller.openWith(ctx, repo, func(
+		opener RuntimeOutcomeOpener,
+	) (RuntimeOutcome, error) {
+		if invocation, ok := opener.(InvocationRuntimeOutcomeOpener); ok {
+			return invocation.OpenRuntimeOutcomeForInvocation(
+				ctx,
+				repo,
+				agent,
+			)
+		}
+		return opener.OpenRuntimeOutcome(ctx, repo)
+	})
+}
+
+func (controller RuntimeController) openForLegacyCapabilities(
+	ctx context.Context,
+	repo string,
+) (RuntimeOutcome, error) {
+	return controller.openWith(ctx, repo, func(
+		opener RuntimeOutcomeOpener,
+	) (RuntimeOutcome, error) {
+		if legacy, ok := opener.(LegacyCapabilitiesRuntimeOutcomeOpener); ok {
+			return legacy.OpenRuntimeOutcomeForLegacyCapabilities(
+				ctx,
+				repo,
+			)
+		}
+		return opener.OpenRuntimeOutcome(ctx, repo)
+	})
+}
+
+func (controller RuntimeController) openWith(
+	ctx context.Context,
+	repo string,
+	open func(RuntimeOutcomeOpener) (RuntimeOutcome, error),
+) (RuntimeOutcome, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -655,7 +1060,7 @@ func (controller RuntimeController) open(
 			ErrRepositoryUnavailable,
 		)
 	}
-	runtime, err := controller.opener.OpenRuntimeOutcome(ctx, repo)
+	runtime, err := open(controller.opener)
 	if err != nil {
 		return nil, err
 	}

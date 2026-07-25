@@ -26,9 +26,9 @@ COMMANDS
                Read or mutate the artifact-store-agnostic runtime-attempt ledger
   sdd-verify-validate --input <path|-> --requirements <n> --scenarios <n>
                Validate exact verification-report bytes without persistence
-  work-capabilities --cwd <repo> --contract gentle-ai.work-capabilities/v2 --json
+  work-capabilities --cwd <repo> --agent <agent-id> --contract gentle-ai.work-capabilities/v2 --json
                Negotiate the authenticated resumable work-routing capability
-  work-start --cwd <repo> --contract gentle-ai.work-start/v1 --json
+  work-start --cwd <repo> --agent <agent-id> --contract gentle-ai.work-start/v1 --json
                Start an outcome-only WorkRun from a JSON request on stdin
   work-route decide --cwd <repo> --work-run <id> --expected-revision <revision>
                --contract gentle-ai.work-route/v1 --choice <accept_sdd|decline_sdd> --json

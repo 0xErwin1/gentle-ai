@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -226,6 +227,145 @@ func TestCompactStoreCaptureAdmittedReviewerResultPublishesDurableExactReplay(
 	if record.Revision != fixture.request.ExpectedRevision ||
 		record.State.State != StateReviewing {
 		t.Fatalf("capture mutated compact authority = %#v", record)
+	}
+}
+
+func TestCompactStoreResolveAdmittedReviewerResultIsExactAndReadOnly(
+	t *testing.T,
+) {
+	fixture := newCompactReviewerCaptureFixture(
+		t,
+		"resolve-native-admitted-reviewer",
+	)
+	stateBefore, err := os.ReadFile(fixture.store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing, found, err := fixture.store.ResolveAdmittedReviewerResult(
+		context.Background(),
+		fixture.request.ExpectedRevision,
+		fixture.request.TargetIdentity,
+		fixture.request.FrozenContext,
+		fixture.request.ArtifactSubject,
+	)
+	if err != nil || found || !reflect.DeepEqual(missing, LensResult{}) {
+		t.Fatalf("missing admitted result = %#v, %t, %v", missing, found, err)
+	}
+	if _, err := os.Lstat(filepath.Dir(fixture.path)); !errors.Is(
+		err,
+		fs.ErrNotExist,
+	) {
+		t.Fatalf("read-only miss created reviewer directory: %v", err)
+	}
+	want, err := fixture.store.CaptureAdmittedReviewerResult(
+		context.Background(),
+		fixture.request,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactBefore, err := os.ReadFile(fixture.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digestBefore, err := os.ReadFile(fixture.path + ".sha256")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, found, err := fixture.store.ResolveAdmittedReviewerResult(
+		context.Background(),
+		fixture.request.ExpectedRevision,
+		fixture.request.TargetIdentity,
+		fixture.request.FrozenContext,
+		fixture.request.ArtifactSubject,
+	)
+	if err != nil || !found || !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolved admitted result = %#v, %t, %v", got, found, err)
+	}
+	stateAfter, err := os.ReadFile(fixture.store.StatePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactAfter, err := os.ReadFile(fixture.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digestAfter, err := os.ReadFile(fixture.path + ".sha256")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stateBefore, stateAfter) ||
+		!bytes.Equal(artifactBefore, artifactAfter) ||
+		!bytes.Equal(digestBefore, digestAfter) {
+		t.Fatal("resolver changed compact authority or reviewer artifacts")
+	}
+}
+
+func TestCompactStoreResolveAdmittedReviewerResultFailsClosed(
+	t *testing.T,
+) {
+	fixture := newCompactReviewerCaptureFixture(
+		t,
+		"resolve-admitted-reviewer-refusal",
+	)
+	if _, err := fixture.store.CaptureAdmittedReviewerResult(
+		context.Background(),
+		fixture.request,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := fixture.store.ResolveAdmittedReviewerResult(
+		context.Background(),
+		fixture.request.ExpectedRevision,
+		verificationTestHash("different-review-target"),
+		fixture.request.FrozenContext,
+		fixture.request.ArtifactSubject,
+	); err == nil || found {
+		t.Fatalf("mismatched target = found %t, error %v", found, err)
+	}
+	tamperedFrozen := fixture.request.FrozenContext
+	tamperedFrozen.ChangedPathManifest = append(
+		[]ChangedPathManifestEntry(nil),
+		tamperedFrozen.ChangedPathManifest...,
+	)
+	tamperedFrozen.ChangedPathManifest[0].ModeOnly = true
+	if _, found, err := fixture.store.ResolveAdmittedReviewerResult(
+		context.Background(),
+		fixture.request.ExpectedRevision,
+		fixture.request.TargetIdentity,
+		tamperedFrozen,
+		fixture.request.ArtifactSubject,
+	); err == nil || found {
+		t.Fatalf("tampered frozen context = found %t, error %v", found, err)
+	}
+
+	payload, err := os.ReadFile(fixture.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = append(
+		append([]byte(nil), bytes.TrimSuffix(payload, []byte("}\n"))...),
+		[]byte(",\"unexpected\":true}\n")...,
+	)
+	if err := os.WriteFile(fixture.path, payload, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		fixture.path+".sha256",
+		[]byte(compactPreservedPayloadDigest(payload)+"\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := fixture.store.ResolveAdmittedReviewerResult(
+		context.Background(),
+		fixture.request.ExpectedRevision,
+		fixture.request.TargetIdentity,
+		fixture.request.FrozenContext,
+		fixture.request.ArtifactSubject,
+	); err == nil || found {
+		t.Fatalf("unknown-field artifact = found %t, error %v", found, err)
 	}
 }
 

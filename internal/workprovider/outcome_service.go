@@ -458,6 +458,7 @@ func (service *OutcomeService) StartOutcome(
 			Schema:                productiveStartAuthoritySchema,
 			RepositoryRef:         service.factory.RepositoryRef(),
 			WorkRunID:             intake.WorkRunID,
+			AgentID:               service.factory.agent,
 			DeliveryIntentRef:     admission.IntentRef,
 			Outcome:               request.Outcome,
 			ScopeDigest:           scopeDigest,

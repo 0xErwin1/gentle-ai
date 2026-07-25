@@ -42,6 +42,17 @@ func TestBoundedReviewContractRendersForEverySupportedAgent(t *testing.T) {
 		t.Run(string(agent.ID), func(t *testing.T) {
 			content := renderSDDOrchestratorAsset(agent.ID)
 			assertTextContainsClauses(t, string(agent.ID), content, boundedReviewRequiredClauses)
+			for _, command := range []string{
+				"gentle-ai work-capabilities --cwd <repo> --agent " + string(agent.ID) + " --contract gentle-ai.work-capabilities/v2 --json",
+				"gentle-ai work-start --cwd <repo> --agent " + string(agent.ID) + " --contract gentle-ai.work-start/v1 --json",
+			} {
+				if !strings.Contains(content, command) {
+					t.Errorf("rendered %s missing invocation identity command %q", agent.ID, command)
+				}
+			}
+			if strings.Contains(content, runtimeAgentIDPlaceholder) {
+				t.Errorf("rendered %s retains runtime agent placeholder", agent.ID)
+			}
 			for _, forbidden := range []string{"review-start", "review-step", "review-resume", "review-validate", "review-bundle-export", "review-bundle-import"} {
 				if strings.Contains(content, forbidden) {
 					t.Errorf("rendered %s exposes lower-level compatibility command %q", agent.ID, forbidden)
@@ -68,6 +79,31 @@ func TestBoundedReviewContractRendersForEverySupportedAgent(t *testing.T) {
 	}
 	if got := sddOrchestratorAsset(model.AgentPi); got != "generic/sdd-orchestrator.md" {
 		t.Fatalf("Pi orchestrator asset = %q, want generic adapter", got)
+	}
+}
+
+func TestPreservedSharedOrchestratorUsesActualAdapterIdentity(t *testing.T) {
+	t.Parallel()
+
+	legacy := strings.Join([]string{
+		"gentle-ai work-capabilities --cwd <repo> --contract gentle-ai.work-capabilities/v2 --json",
+		"gentle-ai work-start --cwd <repo> --contract gentle-ai.work-start/v1 --json",
+		runtimeAgentIDPlaceholder,
+	}, "\n")
+	rendered := renderPreservedOpenCodeOrchestratorPrompt(
+		legacy,
+		model.AgentKilocode,
+	)
+	for _, command := range []string{
+		"gentle-ai work-capabilities --cwd <repo> --agent kilocode --contract gentle-ai.work-capabilities/v2 --json",
+		"gentle-ai work-start --cwd <repo> --agent kilocode --contract gentle-ai.work-start/v1 --json",
+	} {
+		if !strings.Contains(rendered, command) {
+			t.Fatalf("preserved prompt missing %q:\n%s", command, rendered)
+		}
+	}
+	if strings.Contains(rendered, runtimeAgentIDPlaceholder) {
+		t.Fatal("preserved prompt retained runtime agent placeholder")
 	}
 }
 

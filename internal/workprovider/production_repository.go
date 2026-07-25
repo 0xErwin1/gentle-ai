@@ -367,16 +367,25 @@ func (repository *ProductionRepository) complete(
 	authorization VerificationTransitionAuthorization,
 	evidenceRef string,
 ) (workrun.WorkTransitionV1, error) {
+	state, err := repository.WorkRun.Status()
+	if err != nil {
+		return workrun.WorkTransitionV1{}, err
+	}
 	status, err := repository.WorkRun.PublicStatus(ctx)
 	if err != nil {
 		return workrun.WorkTransitionV1{}, err
+	}
+	if state.WorkRunID != authorization.WorkRunID ||
+		status.WorkRunID != authorization.WorkRunID {
+		return workrun.WorkTransitionV1{},
+			ErrProviderResultMismatch
 	}
 	transition := workrun.WorkTransitionV1{
 		Schema:                  workrun.WorkTransitionContractV1,
 		Contract:                workrun.WorkTransitionContractV1,
 		WorkRunID:               authorization.WorkRunID,
 		PreviousRevision:        authorization.ExpectedRevision,
-		Revision:                status.Revision,
+		Revision:                state.Revision,
 		AppliedAuthorizationRef: authorization.AuthorizationRef,
 		PublicState:             status.PublicState,
 	}

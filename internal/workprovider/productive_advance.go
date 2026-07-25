@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/internal/deliveryadmission"
+	"github.com/gentleman-programming/gentle-ai/internal/evidence"
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
@@ -259,19 +260,93 @@ func (runtimeOutcome *productiveRuntimeOutcome) AdvanceOutcome(
 	workRunID string,
 	expectedRevision string,
 ) (workrun.WorkAdvanceV1, error) {
+	return runtimeOutcome.advanceOutcome(
+		ctx,
+		workRunID,
+		expectedRevision,
+		false,
+	)
+}
+
+func (runtimeOutcome *productiveRuntimeOutcome) AdvanceOutcomeV2(
+	ctx context.Context,
+	workRunID string,
+	expectedRevision string,
+) (workrun.WorkAdvanceV2, error) {
+	if !workRunIDPattern.MatchString(workRunID) ||
+		!revisionPattern.MatchString(expectedRevision) {
+		return workrun.WorkAdvanceV2{}, errors.New(
+			"productive advance requires exact WorkRun authority",
+		)
+	}
+	if _, err := runtimeOutcome.bindWorkRunAgent(
+		ctx,
+		workRunID,
+	); err != nil {
+		return workrun.WorkAdvanceV2{}, err
+	}
+	if replay, ok, err := runtimeOutcome.replayVerificationCheckpoint(
+		ctx,
+		workRunID,
+		expectedRevision,
+	); err != nil {
+		return workrun.WorkAdvanceV2{}, err
+	} else if ok {
+		return replay, nil
+	}
+	terminal, err := runtimeOutcome.advanceOutcome(
+		ctx,
+		workRunID,
+		expectedRevision,
+		true,
+	)
+	var checkpoint *productiveVerificationCheckpointError
+	if errors.As(err, &checkpoint) {
+		return checkpoint.advance, nil
+	}
+	if err != nil {
+		return workrun.WorkAdvanceV2{}, err
+	}
+	advance := workrun.WorkAdvanceV2{
+		Schema:            workrun.WorkAdvanceContractV2,
+		Contract:          workrun.WorkAdvanceContractV2,
+		PreviousRevision:  terminal.PreviousRevision,
+		Status:            terminal.Status,
+		DeliveryResultRef: terminal.DeliveryResultRef,
+		Diagnostic:        terminal.Diagnostic,
+	}
+	if err := advance.Validate(); err != nil {
+		return workrun.WorkAdvanceV2{}, err
+	}
+	return advance, nil
+}
+
+func (runtimeOutcome *productiveRuntimeOutcome) advanceOutcome(
+	ctx context.Context,
+	workRunID string,
+	expectedRevision string,
+	resumable bool,
+) (workrun.WorkAdvanceV1, error) {
 	if !workRunIDPattern.MatchString(workRunID) ||
 		!revisionPattern.MatchString(expectedRevision) {
 		return workrun.WorkAdvanceV1{}, errors.New(
 			"productive advance requires exact WorkRun authority",
 		)
 	}
-	capabilities, err := runtimeOutcome.Capabilities(ctx)
+	if _, err := runtimeOutcome.bindWorkRunAgent(
+		ctx,
+		workRunID,
+	); err != nil {
+		return workrun.WorkAdvanceV1{}, err
+	}
+	capabilities, err := runtimeOutcome.CapabilitiesV2(ctx)
 	if err != nil {
 		return runtimeOutcome.failProductiveAdvance(
 			ctx,
 			workRunID,
 			expectedRevision,
 			err,
+			resumable,
 		)
 	}
 	if capabilities.WorkRouting.Exposure != WorkRoutingAdvertised ||
@@ -305,6 +380,7 @@ func (runtimeOutcome *productiveRuntimeOutcome) AdvanceOutcome(
 			workRunID,
 			expectedRevision,
 			ErrCapabilityReadOnly,
+			resumable,
 		)
 	}
 	factory, err := NewProductiveOwnerCoordinatorFactory(
@@ -320,6 +396,7 @@ func (runtimeOutcome *productiveRuntimeOutcome) AdvanceOutcome(
 			workRunID,
 			expectedRevision,
 			err,
+			resumable,
 		)
 	}
 	provisioner, err := NewProductivePolicyProvisioner(
@@ -332,6 +409,7 @@ func (runtimeOutcome *productiveRuntimeOutcome) AdvanceOutcome(
 			workRunID,
 			expectedRevision,
 			err,
+			resumable,
 		)
 	}
 	snapshot, err := runtimeOutcome.connector.ResolvePolicySnapshot(ctx)
@@ -341,6 +419,7 @@ func (runtimeOutcome *productiveRuntimeOutcome) AdvanceOutcome(
 			workRunID,
 			expectedRevision,
 			err,
+			resumable,
 		)
 	}
 	if err := provisioner.Provision(ctx, snapshot); err != nil {
@@ -349,13 +428,15 @@ func (runtimeOutcome *productiveRuntimeOutcome) AdvanceOutcome(
 			workRunID,
 			expectedRevision,
 			err,
+			resumable,
 		)
 	}
-	return advanceProductiveWork(
+	return advanceProductiveWorkWithMode(
 		ctx,
 		factory,
 		workRunID,
 		expectedRevision,
+		resumable,
 	)
 }
 
@@ -364,6 +445,7 @@ func (runtimeOutcome *productiveRuntimeOutcome) failProductiveAdvance(
 	workRunID string,
 	expectedRevision string,
 	cause error,
+	resumable bool,
 ) (workrun.WorkAdvanceV1, error) {
 	if errors.Is(cause, context.Canceled) ||
 		errors.Is(cause, context.DeadlineExceeded) {
@@ -407,6 +489,7 @@ func (runtimeOutcome *productiveRuntimeOutcome) failProductiveAdvance(
 	if err != nil {
 		return workrun.WorkAdvanceV1{}, err
 	}
+	store.coordination = coordinator.coordination
 	state, err := coordinator.Status(ctx)
 	if err != nil {
 		return workrun.WorkAdvanceV1{}, err
@@ -434,8 +517,26 @@ func (runtimeOutcome *productiveRuntimeOutcome) failProductiveAdvance(
 	} else if ok {
 		return replay, nil
 	}
+	if resumable {
+		checkpoint, ok, err := store.verificationCheckpoint(
+			ctx,
+			expectedRevision,
+			state,
+			status,
+		)
+		if err != nil {
+			return workrun.WorkAdvanceV1{}, err
+		}
+		if ok {
+			return workrun.WorkAdvanceV1{},
+				&productiveVerificationCheckpointError{
+					advance: checkpoint,
+				}
+		}
+	}
 	state, err = gateProductiveAdvanceAttempt(
 		ctx,
+		store,
 		coordinator,
 		state,
 		expectedRevision,
@@ -512,6 +613,7 @@ func recoverProductiveWork(
 	if err != nil {
 		return workrun.WorkAdvanceV1{}, err
 	}
+	store.coordination = coordinator.coordination
 	state, err := coordinator.Status(ctx)
 	if err != nil {
 		return workrun.WorkAdvanceV1{}, err
@@ -541,6 +643,7 @@ func recoverProductiveWork(
 	}
 	state, err = gateProductiveAdvanceAttempt(
 		ctx,
+		store,
 		coordinator,
 		state,
 		expectedRevision,
@@ -659,6 +762,22 @@ func advanceProductiveWork(
 	workRunID string,
 	expectedRevision string,
 ) (workrun.WorkAdvanceV1, error) {
+	return advanceProductiveWorkWithMode(
+		ctx,
+		factory,
+		workRunID,
+		expectedRevision,
+		false,
+	)
+}
+
+func advanceProductiveWorkWithMode(
+	ctx context.Context,
+	factory *ProductionOwnerCoordinatorFactory,
+	workRunID string,
+	expectedRevision string,
+	resumable bool,
+) (workrun.WorkAdvanceV1, error) {
 	store, err := existingProductiveAdvanceStore(factory.lease, workRunID)
 	if err != nil {
 		return workrun.WorkAdvanceV1{}, err
@@ -684,6 +803,7 @@ func advanceProductiveWork(
 	if err != nil {
 		return workrun.WorkAdvanceV1{}, err
 	}
+	store.coordination = coordinator.coordination
 	state, err := coordinator.Status(ctx)
 	if err != nil {
 		return workrun.WorkAdvanceV1{}, err
@@ -714,6 +834,23 @@ func advanceProductiveWork(
 	} else if ok {
 		return replay, nil
 	}
+	if resumable {
+		checkpoint, ok, err := store.verificationCheckpoint(
+			ctx,
+			expectedRevision,
+			state,
+			publicStatus,
+		)
+		if err != nil {
+			return workrun.WorkAdvanceV1{}, err
+		}
+		if ok {
+			return workrun.WorkAdvanceV1{},
+				&productiveVerificationCheckpointError{
+					advance: checkpoint,
+				}
+		}
+	}
 	admitted, err := resolveProductiveStartAuthority(
 		ctx,
 		coordinator,
@@ -724,6 +861,7 @@ func advanceProductiveWork(
 	}
 	state, err = gateProductiveAdvanceAttempt(
 		ctx,
+		store,
 		coordinator,
 		state,
 		expectedRevision,
@@ -763,15 +901,42 @@ func advanceProductiveWork(
 			workrun.WorkAdvanceNextActionStartFresh,
 		)
 	}
+	var preparation productiveVerificationPreparation
+	prepared := false
 	if state.Handoff == nil {
+		preparation, blockerCode, err = resolveProductiveVerificationIntent(
+			ctx,
+			store,
+			factory,
+			state.ProductiveAdvanceSourceRevision,
+			candidate,
+			admitted.Decision.PolicyRef,
+		)
+		if err != nil {
+			return workrun.WorkAdvanceV1{}, err
+		}
+		if blockerCode != "" {
+			return blockProductiveAdvance(
+				ctx,
+				store,
+				coordinator,
+				expectedRevision,
+				state,
+				blockerCode,
+				productivePreparationNextAction(blockerCode),
+			)
+		}
+		prepared = true
 		state, err = coordinator.BindImplementationHandoff(
 			ctx,
 			OwnerBindHandoffRequest{
-				ExpectedRevision:       state.Revision,
-				Target:                 target,
-				IntendedPaths:          authority.ScopeSelectors,
-				DeclaredObligationRefs: []string{},
-				EvidenceRefs:           []string{},
+				ExpectedRevision: state.Revision,
+				Target:           target,
+				IntendedPaths:    authority.ScopeSelectors,
+				DeclaredObligationRefs: productiveVerificationRequirementRefs(
+					preparation.Plan,
+				),
+				EvidenceRefs: []string{},
 			},
 		)
 		if err != nil {
@@ -829,102 +994,44 @@ func advanceProductiveWork(
 		)
 	}
 
-	builder := reviewtransaction.SnapshotBuilder{Repo: factory.repositoryRoot()}
-	if state.Handoff == nil ||
-		state.Handoff.CandidateRef != candidate.Identity {
-		return workrun.WorkAdvanceV1{}, ErrProviderResultMismatch
+	if !prepared {
+		preparation, blockerCode, err = resolveProductiveVerificationIntent(
+			ctx,
+			store,
+			factory,
+			state.ProductiveAdvanceSourceRevision,
+			candidate,
+			admitted.Decision.PolicyRef,
+		)
+		if err != nil {
+			return workrun.WorkAdvanceV1{}, err
+		}
+		if blockerCode != "" {
+			return blockProductiveAdvance(
+				ctx,
+				store,
+				coordinator,
+				expectedRevision,
+				state,
+				blockerCode,
+				productivePreparationNextAction(blockerCode),
+			)
+		}
 	}
-	policyHash := admitted.Decision.PolicyRef
-	registry, err := reviewtransaction.NewVerificationPlanRegistry(
-		policyHash,
-		[]string{},
-		[]reviewtransaction.VerificationObligation{},
-	)
-	if err != nil {
-		return workrun.WorkAdvanceV1{}, err
-	}
-	applicability, err := builder.ClassifyVerificationApplicability(
-		ctx,
+	if err := validateProductivePreparedHandoff(
+		state.Handoff,
 		candidate,
-		registry,
-		[]string{},
-	)
-	if err != nil {
-		return blockProductiveAdvance(
-			ctx,
-			store,
-			coordinator,
-			expectedRevision,
-			state,
-			workrun.WorkAdvanceDiagnosticVerificationApplicabilityUnknown,
-			workrun.WorkAdvanceNextActionStartFresh,
-		)
-	}
-	if applicability.Decision !=
-		reviewtransaction.VerificationNotApplicable {
-		return blockProductiveAdvance(
-			ctx,
-			store,
-			coordinator,
-			expectedRevision,
-			state,
-			workrun.WorkAdvanceDiagnosticCompleteVerificationPlanRequired,
-			workrun.WorkAdvanceNextActionStartFresh,
-		)
-	}
-	assessment, err := builder.AssessSnapshotRisk(ctx, candidate)
-	if err != nil {
-		return blockProductiveAdvance(
-			ctx,
-			store,
-			coordinator,
-			expectedRevision,
-			state,
-			workrun.WorkAdvanceDiagnosticReviewRiskUnknown,
-			workrun.WorkAdvanceNextActionStartFresh,
-		)
-	}
-	lenses, err := reviewtransaction.SelectReviewLenses(
-		assessment,
-		"reliability",
-	)
-	if err != nil {
-		return blockProductiveAdvance(
-			ctx,
-			store,
-			coordinator,
-			expectedRevision,
-			state,
-			workrun.WorkAdvanceDiagnosticReviewLensesUnknown,
-			workrun.WorkAdvanceNextActionStartFresh,
-		)
-	}
-	if assessment.Level != reviewtransaction.RiskLow ||
-		len(lenses) != 0 {
-		return blockProductiveAdvance(
-			ctx,
-			store,
-			coordinator,
-			expectedRevision,
-			state,
-			workrun.WorkAdvanceDiagnosticCompleteReviewRequired,
-			workrun.WorkAdvanceNextActionStartFresh,
-		)
-	}
-	plan, err := reviewtransaction.BuildVerificationPlan(
-		applicability,
-		registry,
-	)
-	if err != nil {
-		return workrun.WorkAdvanceV1{}, err
+		preparation.Plan,
+	); err != nil {
+		return workrun.WorkAdvanceV1{}, ErrProviderResultMismatch
 	}
 	planAuthority, err := coordinator.PublishVerificationPlan(
 		ctx,
 		reviewtransaction.RARPlanPublication{
 			Snapshot:      candidate,
-			Applicability: applicability,
-			Registry:      registry,
-			Plan:          plan,
+			Applicability: preparation.Applicability,
+			Registry:      preparation.Registry,
+			Plan:          preparation.Plan,
 		},
 	)
 	if err != nil {
@@ -937,29 +1044,139 @@ func advanceProductiveWork(
 				ExpectedRevision: state.Revision,
 				Handoff:          *state.Handoff,
 				PlanRevisionRef:  planAuthority.AuthorityRef,
-				Availability:     workrun.ForecastNotRequired,
-				DiagnosticRefs:   []string{},
+				Availability: productiveForecastAvailability(
+					preparation,
+				),
+				RequiresConsent: productiveVerificationExplicitConsent(
+					preparation,
+				),
+				DiagnosticRefs: []string{},
 			},
 		)
 		if err != nil {
 			return workrun.WorkAdvanceV1{}, err
 		}
+	} else if err := validateProductivePreparedForecast(
+		ctx,
+		coordinator,
+		state,
+		planAuthority,
+		preparation,
+	); err != nil {
+		return workrun.WorkAdvanceV1{}, ErrProviderResultMismatch
 	}
 
 	lineageID := productiveAdvanceLineage(factory.RepositoryRef(), workRunID)
-	receiptRef, resultRef, err := publishNativePassiveRAR(
-		ctx,
-		coordinator,
-		factory.repositoryRoot(),
-		lineageID,
-		candidate,
-		applicability,
-		registry,
-		plan,
-		assessment,
-		lenses,
-	)
+	var receiptRef, resultRef string
+	if preparation.Applicability.Decision ==
+		reviewtransaction.VerificationNotApplicable {
+		receiptRef, resultRef, err = publishNativePassiveRAR(
+			ctx,
+			coordinator,
+			factory.repositoryRoot(),
+			lineageID,
+			candidate,
+			preparation.Applicability,
+			preparation.Registry,
+			preparation.Plan,
+			preparation.Assessment,
+			preparation.Lenses,
+		)
+	} else {
+		if state.VerificationResultRef != "" {
+			authority, resolveErr := coordinator.rar.ResolveResult(
+				ctx,
+				state.VerificationResultRef,
+			)
+			if resolveErr != nil {
+				return workrun.WorkAdvanceV1{}, resolveErr
+			}
+			if authority.Result.ResultRef !=
+				state.VerificationResultRef ||
+				!reflect.DeepEqual(
+					authority.Applicability,
+					preparation.Applicability,
+				) ||
+				!reflect.DeepEqual(
+					authority.Registry,
+					preparation.Registry,
+				) ||
+				!reflect.DeepEqual(authority.Plan, preparation.Plan) ||
+				(state.ReviewReceiptRef != "" &&
+					state.ReviewReceiptRef !=
+						authority.Receipt.ReceiptRef) {
+				return workrun.WorkAdvanceV1{},
+					ErrProviderResultMismatch
+			}
+			receiptRef = authority.Receipt.ReceiptRef
+			resultRef = authority.Result.ResultRef
+		} else if resumable &&
+			productiveVerificationNeedsDecision(preparation) &&
+			state.Disposition == nil {
+			checkpoint, checkpointErr := checkpointProductiveVerification(
+				ctx,
+				store,
+				coordinator,
+				expectedRevision,
+				state,
+				preparation,
+			)
+			if checkpointErr != nil {
+				return workrun.WorkAdvanceV1{}, checkpointErr
+			}
+			return workrun.WorkAdvanceV1{},
+				&productiveVerificationCheckpointError{
+					advance: checkpoint,
+				}
+		} else {
+			var executions []evidence.ExecutionEvidence
+			var aggregate reviewtransaction.VerificationAggregate
+			state, executions, aggregate, err =
+				executeProductiveActiveVerification(
+					ctx,
+					factory,
+					coordinator,
+					state,
+					planAuthority,
+					preparation,
+				)
+			if err == nil {
+				receiptRef, resultRef, err = publishNativeActiveRAR(
+					ctx,
+					factory,
+					coordinator,
+					lineageID,
+					candidate,
+					preparation,
+					executions,
+					aggregate,
+				)
+			}
+		}
+	}
 	if err != nil {
+		switch {
+		case errors.Is(err, errProductiveActiveConsentRequired):
+			return blockProductiveAdvance(
+				ctx,
+				store,
+				coordinator,
+				expectedRevision,
+				state,
+				workrun.WorkAdvanceDiagnosticCompleteVerificationPlanRequired,
+				workrun.WorkAdvanceNextActionStartFresh,
+			)
+		case errors.Is(err, errProductiveActiveReviewRequired):
+			return blockProductiveAdvance(
+				ctx,
+				store,
+				coordinator,
+				expectedRevision,
+				state,
+				workrun.WorkAdvanceDiagnosticCompleteReviewRequired,
+				workrun.WorkAdvanceNextActionStartFresh,
+			)
+		}
 		return workrun.WorkAdvanceV1{}, err
 	}
 	if state.VerificationResultRef == "" {
@@ -1101,12 +1318,29 @@ func advanceProductiveWork(
 
 func gateProductiveAdvanceAttempt(
 	ctx context.Context,
+	store productiveAdvanceStore,
 	coordinator *OwnerCoordinator,
 	state workrun.WorkRunState,
 	expectedRevision string,
 	recovery bool,
 ) (workrun.WorkRunState, error) {
 	if state.ProductiveAdvanceSourceRevision != "" {
+		if state.ProductiveResumeRevision != "" {
+			if state.ProductiveResumeRevision != expectedRevision {
+				return workrun.WorkRunState{}, ownerRevisionConflict(
+					expectedRevision,
+					state.ProductiveResumeRevision,
+				)
+			}
+			if err := store.validateVerificationResume(
+				ctx,
+				expectedRevision,
+				state,
+			); err != nil {
+				return workrun.WorkRunState{}, err
+			}
+			return state, nil
+		}
 		if state.ProductiveAdvanceSourceRevision != expectedRevision {
 			return workrun.WorkRunState{}, ownerRevisionConflict(
 				expectedRevision,

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"io"
 
+	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/workprovider"
 	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
@@ -26,7 +27,7 @@ func runWorkCapabilities(
 	controller workprovider.RuntimeController,
 ) error {
 	if err := validateExactWorkFlags(args, map[string]struct{}{
-		"cwd": {}, "contract": {}, "json": {},
+		"cwd": {}, "contract": {}, "agent": {}, "json": {},
 	}); err != nil {
 		return err
 	}
@@ -34,6 +35,7 @@ func runWorkCapabilities(
 	flags.SetOutput(io.Discard)
 	cwd := flags.String("cwd", "", "repository path")
 	contract := flags.String("contract", "", "exact work capabilities contract")
+	agent := flags.String("agent", "", "invoking agent identity")
 	asJSON := flags.Bool("json", false, "emit the typed JSON contract")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -46,7 +48,7 @@ func runWorkCapabilities(
 	}
 
 	request := workprovider.RuntimeCapabilitiesRequest{
-		Repo: *cwd, Contract: *contract,
+		Repo: *cwd, Contract: *contract, AgentID: model.AgentID(*agent),
 	}
 	switch *contract {
 	case workprovider.RuntimeCapabilitiesContractV2:

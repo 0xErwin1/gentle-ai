@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/workprovider"
 )
 
@@ -33,7 +34,7 @@ func runWorkStart(
 	controller workprovider.RuntimeController,
 ) error {
 	if err := validateExactWorkFlags(args, map[string]struct{}{
-		"cwd": {}, "contract": {}, "json": {},
+		"cwd": {}, "contract": {}, "agent": {}, "json": {},
 	}); err != nil {
 		return err
 	}
@@ -41,6 +42,7 @@ func runWorkStart(
 	flags.SetOutput(io.Discard)
 	cwd := flags.String("cwd", "", "repository path")
 	contract := flags.String("contract", "", "exact work start contract")
+	agent := flags.String("agent", "", "invoking agent identity")
 	asJSON := flags.Bool("json", false, "emit the typed JSON contract")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -64,6 +66,7 @@ func runWorkStart(
 
 	result, err := controller.Start(ctx, workprovider.RuntimeStartRequest{
 		Repo: *cwd, Contract: *contract, Payload: payload,
+		AgentID: model.AgentID(*agent),
 	})
 	if err != nil {
 		return err

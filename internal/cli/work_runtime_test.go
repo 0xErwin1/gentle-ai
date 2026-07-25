@@ -18,6 +18,7 @@ type cliRuntimeOpener struct {
 	runtime *cliRuntime
 	calls   int
 	repo    string
+	agent   model.AgentID
 }
 
 func (opener *cliRuntimeOpener) OpenRuntimeOutcome(
@@ -26,6 +27,17 @@ func (opener *cliRuntimeOpener) OpenRuntimeOutcome(
 ) (workprovider.RuntimeOutcome, error) {
 	opener.calls++
 	opener.repo = repo
+	return opener.runtime, nil
+}
+
+func (opener *cliRuntimeOpener) OpenRuntimeOutcomeForInvocation(
+	_ context.Context,
+	repo string,
+	agent model.AgentID,
+) (workprovider.RuntimeOutcome, error) {
+	opener.calls++
+	opener.repo = repo
+	opener.agent = agent
 	return opener.runtime, nil
 }
 
@@ -221,6 +233,7 @@ func TestWorkCapabilitiesAndStartUseMachineContracts(t *testing.T) {
 		context.Background(),
 		[]string{
 			"--cwd", "/repo",
+			"--agent", string(model.AgentPi),
 			"--contract", workprovider.RuntimeCapabilitiesContractV2,
 			"--json",
 		},
@@ -247,12 +260,16 @@ func TestWorkCapabilitiesAndStartUseMachineContracts(t *testing.T) {
 			runtime.capabilityV2,
 		)
 	}
+	if opener.agent != model.AgentPi {
+		t.Fatalf("v2 capability invocation agent = %q", opener.agent)
+	}
 
 	output.Reset()
 	if err := runWorkStart(
 		context.Background(),
 		[]string{
 			"--cwd", "/repo",
+			"--agent", string(model.AgentPi),
 			"--contract", workrun.WorkStartContractV1,
 			"--json",
 		},
@@ -272,6 +289,9 @@ func TestWorkCapabilitiesAndStartUseMachineContracts(t *testing.T) {
 		len(runtime.requests) != 1 ||
 		runtime.requests[0].Outcome != "Implement the requested change." {
 		t.Fatalf("status/requests = %#v / %#v", status, runtime.requests)
+	}
+	if opener.agent != model.AgentPi {
+		t.Fatalf("start invocation agent = %q", opener.agent)
 	}
 }
 
@@ -384,17 +404,6 @@ func TestWorkRuntimeCommandsRejectAuthorityFlags(t *testing.T) {
 		name string
 		run  func() error
 	}{
-		{
-			name: "capabilities agent",
-			run: func() error {
-				return runWorkCapabilities(
-					context.Background(),
-					[]string{"--agent", "pi", "--json"},
-					&bytes.Buffer{},
-					controller,
-				)
-			},
-		},
 		{
 			name: "start route",
 			run: func() error {

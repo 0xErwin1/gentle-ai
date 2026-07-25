@@ -41,6 +41,7 @@ const (
 	authorityFirstProcedurePlaceholder = "{{GENTLE_AI_AUTHORITY_FIRST_TERMINAL_PROCEDURE}}"
 	authorityFirstProcedureStart       = "<!-- authority-first-terminal-procedure:start -->"
 	authorityFirstProcedureEnd         = "<!-- authority-first-terminal-procedure:end -->"
+	runtimeAgentIDPlaceholder          = "{{GENTLE_AI_RUNTIME_AGENT_ID}}"
 )
 
 func boundedReviewContract() string {
@@ -48,7 +49,8 @@ func boundedReviewContract() string {
 }
 
 func renderSDDOrchestratorAsset(agent model.AgentID) string {
-	return renderBoundedReviewAsset(sddOrchestratorAsset(agent))
+	content := renderBoundedReviewAsset(sddOrchestratorAsset(agent))
+	return strings.ReplaceAll(content, runtimeAgentIDPlaceholder, string(agent))
 }
 
 func renderBoundedReviewAsset(path string) string {

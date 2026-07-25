@@ -64,6 +64,7 @@ type ForecastAuthorityPublication struct {
 	Handoff         workrun.ImplementationHandoff
 	PlanRevisionRef string
 	Availability    workrun.ForecastAvailability
+	RequiresConsent bool
 	DiagnosticRefs  []string
 }
 
@@ -81,6 +82,7 @@ type ForecastAuthorityRecord struct {
 	PlanRegistryDigest  string                       `json:"plan_registry_digest"`
 	PlanDigest          string                       `json:"plan_digest"`
 	Availability        workrun.ForecastAvailability `json:"availability"`
+	RequiresConsent     bool                         `json:"requires_consent,omitempty"`
 	DiagnosticRefs      []string                     `json:"diagnostic_refs"`
 }
 
@@ -243,6 +245,7 @@ func newForecastAuthorityRecord(
 		PlanRegistryDigest:  plan.Registry.Digest,
 		PlanDigest:          plan.Plan.Digest,
 		Availability:        request.Availability,
+		RequiresConsent:     request.RequiresConsent,
 		DiagnosticRefs:      diagnostics,
 	}
 	ref, err := forecastAuthorityRecordDigest(record)
@@ -290,6 +293,12 @@ func (record ForecastAuthorityRecord) Validate() error {
 		return fmt.Errorf(
 			"unsupported forecast availability %q",
 			record.Availability,
+		)
+	}
+	if record.RequiresConsent &&
+		record.Availability != workrun.ForecastAvailable {
+		return errors.New(
+			"forecast authority consent requires an available forecast",
 		)
 	}
 	want, err := forecastAuthorityRecordDigest(record)
@@ -355,6 +364,7 @@ func newDispositionAuthorityRecord(
 		Plan:            forecastAuthority.Plan,
 		PlanRevisionRef: forecastRecord.PlanRevisionRef,
 		Availability:    forecastRecord.Availability,
+		RequiresConsent: forecastRecord.RequiresConsent,
 		AvailabilityRef: forecastRecord.AuthorityRef,
 		DiagnosticRefs:  cloneCoordinationStrings(forecastRecord.DiagnosticRefs),
 	}); err != nil {

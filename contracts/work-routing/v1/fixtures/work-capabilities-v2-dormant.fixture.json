@@ -2,7 +2,6 @@
   "schema": "gentle-ai.work-capabilities/v2",
   "contract": "gentle-ai.work-capabilities/v2",
   "repositoryRef": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "agentId": "pi",
   "workRouting": {
     "id": "gentle-ai.work-routing/v1",
     "exposure": "dormant",

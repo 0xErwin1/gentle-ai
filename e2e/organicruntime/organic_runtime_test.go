@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/deliveryadmission"
+	"github.com/gentleman-programming/gentle-ai/internal/evidence"
+	"github.com/gentleman-programming/gentle-ai/internal/hostruntime"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/internal/versions"
@@ -53,6 +55,7 @@ type realAgentScenario struct {
 	actorMarker         string
 	actorPrompt         string
 	commonReview        bool
+	activeVerification  bool
 	killSwitchAtAdvance bool
 	proveTerminalReplay bool
 }
@@ -96,6 +99,19 @@ func TestRealOpenCodeOrganicRuntimeJourneys(t *testing.T) {
 			actorTool:           "bash",
 			actorMarker:         "DIRECT_IMPLEMENTATION_COMMITTED",
 			proveTerminalReplay: true,
+		},
+		{
+			name:      "quick Go implementation",
+			workRunID: "organic-e2e-quick-go",
+			outcome:   "Apply one small Go source change and deliver it safely.",
+			routing: workrun.ImplementationRouteInput{
+				WriteIntent:    workrun.WriteIntentAtomicMechanical,
+				WriteFileCount: 1,
+			},
+			expectedRoute:      workrun.ImplementationRouteDirectInline,
+			actorTool:          "bash",
+			actorMarker:        "QUICK_GO_IMPLEMENTATION_COMMITTED",
+			activeVerification: true,
 		},
 		{
 			name:      "delegated direct implementation",
@@ -221,6 +237,9 @@ func runRealAgentScenario(
 		},
 		RoutingFacts: scenario.routing,
 	}
+	if scenario.activeVerification {
+		intake.ScopeSelectors = []string{"internal/active.go"}
+	}
 
 	runtimeServer := newOrganicRuntimeServer(
 		t,
@@ -296,7 +315,6 @@ func runRealAgentScenario(
 		workprovider.ProductiveRuntimeURLEnvironment+"="+runtimeServer.URL,
 		workprovider.ProductiveRuntimeTokenFileEnvironment+"="+tokenFile,
 		workprovider.ProductiveRuntimeCAFileEnvironment+"="+caFile,
-		workprovider.ProductiveRuntimeAgentEnvironment+"="+string(model.AgentOpenCode),
 		testBinaryEnvironment+"="+binary,
 		"ORGANIC_E2E_REPO="+repo,
 		"ORGANIC_E2E_OUTCOME="+scenario.outcome,
@@ -333,7 +351,13 @@ func runRealAgentScenario(
 	if scenario.killSwitchAtAdvance {
 		assertOrganicKilledAdvance(t, repository, runtimeServer, evidence)
 	} else {
-		assertOrganicDeliveredCandidate(t, repository, runtimeServer, evidence)
+		assertOrganicDeliveredCandidate(
+			t,
+			repository,
+			runtimeServer,
+			evidence,
+			scenario,
+		)
 	}
 	if scenario.proveTerminalReplay {
 		assertOrganicTerminalReplay(
@@ -357,6 +381,7 @@ type organicRuntimeServer struct {
 	snapshot           workprovider.ProductivePolicySnapshot
 	intake             workprovider.OwnerOutcomeIntake
 	scenario           realAgentScenario
+	verificationEnv    map[string]string
 	operations         []workprovider.ProductiveRuntimeOperation
 	bootstraps         int
 	branchCASCalls     int
@@ -370,6 +395,11 @@ type organicPADGitBindingRequest struct {
 	Candidate   deliveryadmission.CandidateBinding   `json:"candidate"`
 	Destination deliveryadmission.DestinationBinding `json:"destination"`
 	Mechanism   deliveryadmission.Mechanism          `json:"mechanism"`
+}
+
+type organicSemanticEvaluationRequest struct {
+	Ticket  evidence.ActionTicket       `json:"ticket"`
+	Process hostruntime.ProcessEvidence `json:"process"`
 }
 
 func newOrganicRuntimeServer(
@@ -388,8 +418,106 @@ func newOrganicRuntimeServer(
 		intake:        intake,
 		scenario:      scenario,
 	}
+	if scenario.activeVerification {
+		fixture.verificationEnv = organicGoVerificationEnvironment(t)
+	}
 	fixture.Server = httptest.NewTLSServer(http.HandlerFunc(fixture.serveHTTP))
 	return fixture
+}
+
+func organicGoVerificationEnvironment(t *testing.T) map[string]string {
+	t.Helper()
+	root := t.TempDir()
+	directories := map[string]string{
+		"GOCACHE":    filepath.Join(root, "build-cache"),
+		"GOMODCACHE": filepath.Join(root, "module-cache"),
+		"GOPATH":     filepath.Join(root, "gopath"),
+		"GOTMPDIR":   filepath.Join(root, "tmp"),
+		"HOME":       filepath.Join(root, "home"),
+	}
+	for _, directory := range directories {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	environment := map[string]string{
+		"CGO_ENABLED": "0",
+		"GOENV":       "off",
+		"GOTOOLCHAIN": "local",
+		"GOPROXY":     "off",
+		"GOROOT":      runtime.GOROOT(),
+		"GOSUMDB":     "off",
+		"GOWORK":      "off",
+		"USERPROFILE": directories["HOME"],
+		"TMPDIR":      directories["GOTMPDIR"],
+		"TEMP":        directories["GOTMPDIR"],
+		"TMP":         directories["GOTMPDIR"],
+	}
+	for name, value := range directories {
+		environment[name] = value
+	}
+	if runtime.GOOS == "windows" {
+		for _, name := range []string{"SystemRoot", "WINDIR", "ComSpec"} {
+			if value := os.Getenv(name); value != "" {
+				environment[name] = value
+			}
+		}
+	}
+	return environment
+}
+
+func (fixture *organicRuntimeServer) verificationCatalog(
+	request workprovider.ProductiveVerificationCatalogRequest,
+) (workprovider.ProductiveVerificationCatalog, error) {
+	if err := request.Validate(); err != nil {
+		return workprovider.ProductiveVerificationCatalog{}, err
+	}
+	if len(request.Paths) != 1 || request.Paths[0] != "internal/active.go" {
+		return workprovider.ProductiveVerificationCatalog{}, errors.New(
+			"verification catalog escaped the admitted Go candidate",
+		)
+	}
+	goExecutable, err := exec.LookPath("go")
+	if err != nil {
+		return workprovider.ProductiveVerificationCatalog{}, err
+	}
+	goExecutable, err = filepath.Abs(goExecutable)
+	if err != nil {
+		return workprovider.ProductiveVerificationCatalog{}, err
+	}
+	action := func(id, subcommand string) workprovider.ProductiveVerificationAction {
+		environment := make(
+			map[string]string,
+			len(fixture.verificationEnv),
+		)
+		for name, value := range fixture.verificationEnv {
+			environment[name] = value
+		}
+		return workprovider.ProductiveVerificationAction{
+			ID: id, Program: goExecutable,
+			Args:        []string{subcommand, "./..."},
+			CWD:         fixture.repository.worktree,
+			Environment: environment,
+			Capability:  id,
+			Cost:        reviewtransaction.VerificationCostQuick,
+			DeadlineMilliseconds: int64(
+				(30 * time.Second) / time.Millisecond,
+			),
+			OutputLimits: hostruntime.StreamLimits{
+				StdoutBytes: 64 << 10,
+				StderrBytes: 64 << 10,
+			},
+			RedactionLiterals: []string{},
+		}
+	}
+	return workprovider.ProductiveVerificationCatalog{
+		Schema:  workprovider.ProductiveVerificationCatalogSchemaV1,
+		Subject: request.Subject,
+		Actions: []workprovider.ProductiveVerificationAction{
+			action("go-test", "test"),
+			action("go-vet", "vet"),
+		},
+	}, nil
 }
 
 func (fixture *organicRuntimeServer) serveHTTP(
@@ -466,6 +594,80 @@ func (fixture *organicRuntimeServer) serveHTTP(
 				return
 			}
 			payload = fixture.intake
+		case workprovider.ProductiveRuntimeOperationVerificationCatalog:
+			if !fixture.scenario.activeVerification {
+				http.Error(writer, "unexpected verification catalog", http.StatusBadRequest)
+				return
+			}
+			var catalogRequest workprovider.ProductiveVerificationCatalogRequest
+			if err := decodeExactJSON(
+				bytes.NewReader(call.Payload),
+				&catalogRequest,
+			); err != nil {
+				fixture.reject(writer, "decode verification catalog: %v", err)
+				return
+			}
+			catalog, err := fixture.verificationCatalog(catalogRequest)
+			if err != nil {
+				fixture.reject(writer, "verification catalog: %v", err)
+				return
+			}
+			payload = catalog
+		case workprovider.ProductiveRuntimeOperationSemantic:
+			if !fixture.scenario.activeVerification {
+				http.Error(writer, "unexpected semantic evaluation", http.StatusBadRequest)
+				return
+			}
+			var evaluationRequest organicSemanticEvaluationRequest
+			if err := decodeExactJSON(
+				bytes.NewReader(call.Payload),
+				&evaluationRequest,
+			); err != nil {
+				fixture.reject(writer, "decode semantic evaluation: %v", err)
+				return
+			}
+			payload = workprovider.SemanticEvaluation{
+				Schema: workprovider.SemanticEvaluationSchemaV1,
+				RequirementRef: evaluationRequest.Ticket.
+					SemanticRequirementRef,
+				CandidateRef:  evaluationRequest.Ticket.CandidateRef,
+				RequestDigest: evaluationRequest.Process.RequestDigest,
+				ToolchainIdentityRef: evaluationRequest.Process.
+					ToolchainIdentityRef,
+				StdoutRawDigest: evaluationRequest.Process.Stdout.RawDigest,
+				StderrRawDigest: evaluationRequest.Process.Stderr.RawDigest,
+				Outcome:         workprovider.SemanticEvaluationPassed,
+			}
+		case workprovider.ProductiveRuntimeOperationReview:
+			if !fixture.scenario.activeVerification {
+				http.Error(writer, "unexpected review evaluation", http.StatusBadRequest)
+				return
+			}
+			var reviewRequest workprovider.ProductiveReviewRequest
+			if err := decodeExactJSON(
+				bytes.NewReader(call.Payload),
+				&reviewRequest,
+			); err != nil {
+				fixture.reject(writer, "decode review evaluation: %v", err)
+				return
+			}
+			paths := make([]string, len(reviewRequest.ChangedPathManifest))
+			for index, entry := range reviewRequest.ChangedPathManifest {
+				paths[index] = entry.Path
+			}
+			payload = workprovider.ProductiveReviewResult{
+				Schema:      workprovider.ProductiveReviewResultSchemaV1,
+				SubjectHash: reviewRequest.Subject.SubjectHash,
+				Inspection: reviewtransaction.ArtifactInspection{
+					Status: reviewtransaction.ArtifactInspectionCompleted,
+					Paths:  paths,
+				},
+				Findings: []reviewtransaction.Finding{},
+				Evidence: []string{
+					"inspected " + paths[0] +
+						":1 against the complete frozen candidate",
+				},
+			}
 		case workprovider.ProductiveRuntimeOperationPADGitBinding:
 			var bindingRequest organicPADGitBindingRequest
 			if err := decodeExactJSON(
@@ -770,6 +972,18 @@ func (fixture *organicRuntimeServer) assertCalls(t *testing.T) {
 		wantOperations = append(
 			wantOperations,
 			workprovider.ProductiveRuntimeOperationPolicySnapshot,
+		)
+		if fixture.scenario.activeVerification {
+			wantOperations = append(
+				wantOperations,
+				workprovider.ProductiveRuntimeOperationVerificationCatalog,
+				workprovider.ProductiveRuntimeOperationSemantic,
+				workprovider.ProductiveRuntimeOperationSemantic,
+				workprovider.ProductiveRuntimeOperationReview,
+			)
+		}
+		wantOperations = append(
+			wantOperations,
 			workprovider.ProductiveRuntimeOperationPADGitBinding,
 			workprovider.ProductiveRuntimeOperationObserveDelivery,
 			workprovider.ProductiveRuntimeOperationObserveDelivery,
@@ -959,6 +1173,7 @@ func (fixture *openCodeFixtureServer) serveHTTP(
 					"bash",
 					organicActorCommand(
 						fixture.scenario.actorMarker,
+						fixture.scenario.activeVerification,
 					),
 				)
 				return
@@ -1010,7 +1225,10 @@ func (fixture *openCodeFixtureServer) serveHTTP(
 			writer,
 			"actor",
 			"bash",
-			organicActorCommand(fixture.scenario.actorMarker),
+			organicActorCommand(
+				fixture.scenario.actorMarker,
+				fixture.scenario.activeVerification,
+			),
 		)
 	case 5:
 		if fixture.scenario.commonReview {
@@ -1279,7 +1497,7 @@ func decodeOpenCodeEvents(t *testing.T, payload []byte) []openCodeEvent {
 type organicJourneyEvidence struct {
 	start         workrun.WorkStatusV1
 	beforeActor   workrun.WorkStatusV1
-	advance       workrun.WorkAdvanceV1
+	advance       workrun.WorkAdvanceV2
 	advanceOutput []byte
 }
 
@@ -1292,10 +1510,10 @@ func assertOrganicJourney(
 ) organicJourneyEvidence {
 	t.Helper()
 	var (
-		capabilities *workprovider.RuntimeCapabilitiesV1
+		capabilities *workprovider.RuntimeCapabilitiesV2
 		start        *workrun.WorkStatusV1
 		statuses     []workrun.WorkStatusV1
-		advance      *workrun.WorkAdvanceV1
+		advance      *workrun.WorkAdvanceV2
 		advanceBytes []byte
 		actorSeen    bool
 		taskSeen     bool
@@ -1332,7 +1550,7 @@ func assertOrganicJourney(
 		}
 		switch {
 		case strings.Contains(event.Part.State.Input.Command, "work-capabilities"):
-			var value workprovider.RuntimeCapabilitiesV1
+			var value workprovider.RuntimeCapabilitiesV2
 			if err := json.Unmarshal([]byte(result.Stdout), &value); err != nil {
 				t.Fatal(err)
 			}
@@ -1353,7 +1571,7 @@ func assertOrganicJourney(
 			if advance != nil {
 				t.Fatal("actor invoked work-advance more than once")
 			}
-			var value workrun.WorkAdvanceV1
+			var value workrun.WorkAdvanceV2
 			if err := json.Unmarshal([]byte(result.Stdout), &value); err != nil {
 				t.Fatal(err)
 			}
@@ -1365,7 +1583,9 @@ func assertOrganicJourney(
 		capabilities.RepositoryRef != repositoryRef ||
 		capabilities.AgentID != model.AgentOpenCode ||
 		capabilities.WorkRouting.Exposure != workprovider.WorkRoutingAdvertised ||
-		capabilities.Contracts.Advance != workrun.WorkAdvanceContractV1 ||
+		capabilities.Contracts.Advance != workrun.WorkAdvanceContractV2 ||
+		capabilities.Contracts.VerificationDecide !=
+			workrun.WorkVerificationDecideContractV1 ||
 		capabilities.ConnectorSessionRef != sessionRef {
 		t.Fatalf("capabilities = %#v", capabilities)
 	}
@@ -1418,7 +1638,8 @@ func assertOrganicJourney(
 	if advance.PreviousRevision != start.Revision ||
 		advance.Status.WorkRunID != scenario.workRunID ||
 		advance.Status.ImplementationRoute != scenario.expectedRoute ||
-		advance.Status.SDDRunRef != "" {
+		advance.Status.SDDRunRef != "" ||
+		advance.VerificationDecision != nil {
 		t.Fatalf("work-advance authority binding = %#v", advance)
 	}
 	if scenario.killSwitchAtAdvance {
@@ -1451,6 +1672,7 @@ func assertOrganicDeliveredCandidate(
 	repository organicRepository,
 	runtimeServer *organicRuntimeServer,
 	evidence organicJourneyEvidence,
+	scenario realAgentScenario,
 ) {
 	t.Helper()
 	candidate := organicGit(t, repository.worktree, "rev-parse", "HEAD")
@@ -1506,20 +1728,24 @@ func assertOrganicDeliveredCandidate(
 	if remoteTree != localTree {
 		t.Fatalf("remote/local candidate trees = %s/%s", remoteTree, localTree)
 	}
-	const wantDocument = "" +
-		"# Passive note\n\n" +
+	path := "docs/passive-note.md"
+	wantContent := "# Passive note\n\n" +
 		"Organic runtime delivered this committed documentation change."
+	if scenario.activeVerification {
+		path = "internal/active.go"
+		wantContent = "package internal\n\nfunc Active() bool { return true }"
+	}
 	document, err := organicBareGitOutput(
 		context.Background(),
 		repository.bare,
 		"show",
-		"refs/heads/main:docs/passive-note.md",
+		"refs/heads/main:"+path,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if document != wantDocument {
-		t.Fatalf("delivered document = %q, want %q", document, wantDocument)
+	if document != wantContent {
+		t.Fatalf("delivered content = %q, want %q", document, wantContent)
 	}
 	paths := organicGit(
 		t,
@@ -1531,7 +1757,7 @@ func assertOrganicDeliveredCandidate(
 		repository.baseRevision,
 		candidate,
 	)
-	if paths != "docs/passive-note.md" {
+	if paths != path {
 		t.Fatalf("committed candidate paths = %q", paths)
 	}
 	runtimeServer.mu.Lock()
@@ -1669,7 +1895,7 @@ func assertOrganicTerminalReplay(
 		"--expected-revision",
 		evidence.start.Revision,
 		"--contract",
-		workrun.WorkAdvanceContractV1,
+		workrun.WorkAdvanceContractV2,
 		"--json",
 	)
 	if !bytes.Equal(replayBytes, evidence.advanceOutput) {
@@ -1763,7 +1989,8 @@ func runOrganicBinary(
 func organicCapabilityCommand() map[string]any {
 	return map[string]any{"command": organicNodeCommand(
 		"['work-capabilities','--cwd',process.env.ORGANIC_E2E_REPO,"+
-			"'--contract','gentle-ai.work-capabilities/v1','--json']",
+			"'--agent','opencode',"+
+			"'--contract','gentle-ai.work-capabilities/v2','--json']",
 		"",
 	)}
 }
@@ -1773,6 +2000,7 @@ func organicStartCommand() map[string]any {
 		`const {spawnSync}=require('child_process');` +
 		`const r=spawnSync(process.env.GENTLE_AI_TEST_BINARY,` +
 		`['work-start','--cwd',process.env.ORGANIC_E2E_REPO,` +
+		`'--agent','opencode',` +
 		`'--contract','gentle-ai.work-start/v1','--json'],{` +
 		`input:JSON.stringify({outcome:process.env.ORGANIC_E2E_OUTCOME,` +
 		`explicitSddRequested:false}),encoding:'utf8',env:process.env,` +
@@ -1812,7 +2040,7 @@ func organicAdvanceCommand(killSwitch bool) map[string]any {
 		`['work-advance','--cwd',process.env.ORGANIC_E2E_REPO,` +
 		`'--work-run',process.env.ORGANIC_E2E_WORK_RUN_ID,` +
 		`'--expected-revision',revision,` +
-		`'--contract','gentle-ai.work-advance/v1','--json'],{` +
+		`'--contract','gentle-ai.work-advance/v2','--json'],{` +
 		`encoding:'utf8',env:` + environment + `,timeout:120000});` +
 		`const status=Number.isInteger(r.status)?r.status:1;` +
 		`const stderr=r.stderr||(Number.isInteger(r.status)?'':` +
@@ -1822,7 +2050,18 @@ func organicAdvanceCommand(killSwitch bool) map[string]any {
 		`process.exit(status===0?0:1)"`}
 }
 
-func organicActorCommand(marker string) map[string]any {
+func organicActorCommand(marker string, active bool) map[string]any {
+	directory := "docs"
+	path := "docs/passive-note.md"
+	content := "# Passive note\\n\\n" +
+		"Organic runtime delivered this committed documentation change.\\n"
+	message := "docs: add passive organic runtime note"
+	if active {
+		directory = "internal"
+		path = "internal/active.go"
+		content = "package internal\\n\\nfunc Active() bool { return true }\\n"
+		message = "feat: activate organic runtime"
+	}
 	return map[string]any{"command": `node -e "const fs=require('fs');` +
 		`const {spawnSync}=require('child_process');` +
 		`const repo=process.env.ORGANIC_E2E_REPO;` +
@@ -1831,11 +2070,10 @@ func organicActorCommand(marker string) map[string]any {
 		`if(r.status!==0){` +
 		`process.stderr.write(r.stderr||r.stdout||'git failed');` +
 		`process.exit(r.status||1);}};` +
-		`fs.mkdirSync(repo+'/docs',{recursive:true});` +
-		`fs.writeFileSync(repo+'/docs/passive-note.md',` +
-		`'# Passive note\\n\\nOrganic runtime delivered this committed documentation change.\\n');` +
-		`run(['add','--','docs/passive-note.md']);` +
-		`run(['commit','-m','docs: add passive organic runtime note']);` +
+		`fs.mkdirSync(repo+'/` + directory + `',{recursive:true});` +
+		`fs.writeFileSync(repo+'/` + path + `','` + content + `');` +
+		`run(['add','--','` + path + `']);` +
+		`run(['commit','-m','` + message + `']);` +
 		`process.stdout.write('` + marker + `')"`}
 }
 
@@ -1976,7 +2214,22 @@ func initOrganicRepository(t *testing.T) organicRepository {
 	); err != nil {
 		t.Fatal(err)
 	}
-	organicGit(t, repo, "add", "tracked.txt")
+	if err := os.MkdirAll(filepath.Join(repo, "internal"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range map[string]string{
+		"go.mod":             "module example.invalid/organic\n\ngo 1.22\n",
+		"internal/active.go": "package internal\n\nfunc Active() bool { return false }\n",
+	} {
+		if err := os.WriteFile(
+			filepath.Join(repo, path),
+			[]byte(content),
+			0o600,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	organicGit(t, repo, "add", "tracked.txt", "go.mod", "internal/active.go")
 	organicGit(t, repo, "commit", "-m", "test: seed organic runtime")
 	baseRevision := organicGit(t, repo, "rev-parse", "HEAD")
 	bare := filepath.Join(t.TempDir(), "origin.git")

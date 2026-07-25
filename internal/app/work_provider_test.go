@@ -113,8 +113,8 @@ func TestGlobalHelpDocumentsOnlyOpaqueWorkTransitionApply(t *testing.T) {
 	printHelp(&output, "test")
 	help := output.String()
 	for _, required := range []string{
-		"work-capabilities --cwd <repo> --contract gentle-ai.work-capabilities/v2 --json",
-		"work-start --cwd <repo> --contract gentle-ai.work-start/v1 --json",
+		"work-capabilities --cwd <repo> --agent <agent-id> --contract gentle-ai.work-capabilities/v2 --json",
+		"work-start --cwd <repo> --agent <agent-id> --contract gentle-ai.work-start/v1 --json",
 		"work-route decide --cwd <repo> --work-run <id> --expected-revision <revision>",
 		"--contract gentle-ai.work-route/v1 --choice <accept_sdd|decline_sdd> --json",
 		"work-route bind-sdd --cwd <repo> --work-run <id> --expected-revision <revision>",

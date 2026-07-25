@@ -23,7 +23,10 @@ func (runtimeOutcome *productiveRuntimeOutcome) ReconcileOutcome(
 			"productive reconciliation requires exact WorkRun authority",
 		)
 	}
-	if err := runtimeOutcome.validate(ctx); err != nil {
+	if _, err := runtimeOutcome.bindWorkRunAgent(
+		ctx,
+		workRunID,
+	); err != nil {
 		return workrun.WorkReconcileV1{}, err
 	}
 	factory, err := NewProductionOwnerCoordinatorFactory(

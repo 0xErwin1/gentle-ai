@@ -475,7 +475,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 				changed = changed || promptsChanged
 			}
 
-			overlayBytes, err = inlineOpenCodeSDDPrompts(overlayBytes, homeDir, settingsPath, opts.PreserveOpenCodeOrchestratorPrompt, opts.triggerRulesContent, opts.CodeGraphGuidanceMarkdown)
+			overlayBytes, err = inlineOpenCodeSDDPrompts(overlayBytes, homeDir, settingsPath, adapter.Agent(), opts.PreserveOpenCodeOrchestratorPrompt, opts.triggerRulesContent, opts.CodeGraphGuidanceMarkdown)
 			if err != nil {
 				return InjectionResult{}, fmt.Errorf("inline OpenCode SDD prompts: %w", err)
 			}
@@ -851,7 +851,7 @@ func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) 
 	return nil
 }
 
-func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string, preserveExistingOrchestratorPrompt bool, triggerRulesContent string, codeGraphGuidance string) ([]byte, error) {
+func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string, agent model.AgentID, preserveExistingOrchestratorPrompt bool, triggerRulesContent string, codeGraphGuidance string) ([]byte, error) {
 	var overlay map[string]any
 	if err := json.Unmarshal(overlayBytes, &overlay); err != nil {
 		return nil, fmt.Errorf("unmarshal OpenCode SDD overlay: %w", err)
@@ -895,12 +895,12 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 			}
 		}
 		if existingPrompt != "" {
-			orchestratorMap["prompt"] = migratePreservedOpenCodeOrchestratorPrompt(existingPrompt)
+			orchestratorMap["prompt"] = renderPreservedOpenCodeOrchestratorPrompt(existingPrompt, agent)
 		} else {
-			orchestratorMap["prompt"] = renderSDDOrchestratorAsset(model.AgentOpenCode)
+			orchestratorMap["prompt"] = renderSDDOrchestratorAsset(agent)
 		}
 	} else {
-		orchestratorMap["prompt"] = renderSDDOrchestratorAsset(model.AgentOpenCode)
+		orchestratorMap["prompt"] = renderSDDOrchestratorAsset(agent)
 	}
 
 	// Append the trigger-rules section to the orchestrator prompt when provided.
@@ -999,6 +999,24 @@ func migratePreservedOpenCodeOrchestratorPrompt(prompt string) string {
 	migrated = ensurePreservedOpenCodeOrchestratorPreflight(migrated)
 	migrated = ensurePreservedOpenCodeDelegationHardGates(migrated)
 	return ensurePreservedOpenCodeReviewExecutionContract(migrated)
+}
+
+func renderPreservedOpenCodeOrchestratorPrompt(
+	prompt string,
+	agent model.AgentID,
+) string {
+	migrated := migratePreservedOpenCodeOrchestratorPrompt(prompt)
+	migrated = strings.ReplaceAll(
+		migrated,
+		"gentle-ai work-capabilities --cwd <repo> --contract gentle-ai.work-capabilities/v2 --json",
+		"gentle-ai work-capabilities --cwd <repo> --agent "+string(agent)+" --contract gentle-ai.work-capabilities/v2 --json",
+	)
+	migrated = strings.ReplaceAll(
+		migrated,
+		"gentle-ai work-start --cwd <repo> --contract gentle-ai.work-start/v1 --json",
+		"gentle-ai work-start --cwd <repo> --agent "+string(agent)+" --contract gentle-ai.work-start/v1 --json",
+	)
+	return strings.ReplaceAll(migrated, runtimeAgentIDPlaceholder, string(agent))
 }
 
 func removeLegacyOpenCodePlainChatPreflightLines(prompt string) string {

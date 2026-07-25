@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gentleman-programming/gentle-ai/internal/deliveryadmission"
+	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/internal/workrun"
 )
@@ -33,15 +34,16 @@ const (
 )
 
 type productiveStartAuthority struct {
-	Schema                string   `json:"schema"`
-	RepositoryRef         string   `json:"repositoryRef"`
-	WorkRunID             string   `json:"workRunId"`
-	DeliveryIntentRef     string   `json:"deliveryIntentRef"`
-	Outcome               string   `json:"outcome"`
-	ScopeDigest           string   `json:"scopeDigest"`
-	BaseRevision          string   `json:"baseRevision"`
-	ScopeSelectors        []string `json:"scopeSelectors"`
-	SDDDeclineFallbackRef string   `json:"sddDeclineFallbackRef,omitempty"`
+	Schema                string        `json:"schema"`
+	RepositoryRef         string        `json:"repositoryRef"`
+	WorkRunID             string        `json:"workRunId"`
+	AgentID               model.AgentID `json:"agentId"`
+	DeliveryIntentRef     string        `json:"deliveryIntentRef"`
+	Outcome               string        `json:"outcome"`
+	ScopeDigest           string        `json:"scopeDigest"`
+	BaseRevision          string        `json:"baseRevision"`
+	ScopeSelectors        []string      `json:"scopeSelectors"`
+	SDDDeclineFallbackRef string        `json:"sddDeclineFallbackRef,omitempty"`
 	// SDDDeclineFallback is retained only so pre-authority START records can
 	// still be read and replayed. New publications must leave it empty.
 	SDDDeclineFallback *productiveSDDDeclineFallback `json:"sddDeclineFallback,omitempty"`
@@ -131,10 +133,11 @@ type productiveExecutionResultRecord struct {
 }
 
 type productiveAdvanceStore struct {
-	lease     *reviewtransaction.RepositoryIdentityLease
-	root      string
-	workRunID string
-	pad       *PADWorkRunAdapter
+	lease        *reviewtransaction.RepositoryIdentityLease
+	root         string
+	workRunID    string
+	pad          *PADWorkRunAdapter
+	coordination *CoordinationAuthorityStore
 }
 
 func openProductiveAdvanceStore(
@@ -208,6 +211,7 @@ func (store productiveAdvanceStore) publishStartAuthority(
 	if authority.Schema != productiveStartAuthoritySchema ||
 		authority.RepositoryRef != store.lease.Identity().RepositoryRef ||
 		authority.WorkRunID != store.workRunID ||
+		!validProductiveRuntimeAgent(authority.AgentID) ||
 		!validPADImmutableRef(authority.DeliveryIntentRef) ||
 		(OutcomeStartRequest{Outcome: authority.Outcome}).validate() != nil ||
 		!validPADImmutableRef(authority.ScopeDigest) ||
@@ -231,6 +235,7 @@ func (store productiveAdvanceStore) startAuthority(
 		authority.Schema != productiveStartAuthoritySchema ||
 		authority.RepositoryRef != store.lease.Identity().RepositoryRef ||
 		authority.WorkRunID != store.workRunID ||
+		!validProductiveRuntimeAgent(authority.AgentID) ||
 		!validPADImmutableRef(authority.DeliveryIntentRef) ||
 		(OutcomeStartRequest{Outcome: authority.Outcome}).validate() != nil ||
 		!validPADImmutableRef(authority.ScopeDigest) ||

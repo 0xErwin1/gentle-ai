@@ -56,6 +56,8 @@ func TestHTTPSProductiveRuntimeConnectorImplementsExactTypedPorts(t *testing.T) 
 	pullRequestBinding.PullRequestRef = "pull-request:42"
 	policies := runtimeConnectorTestPolicies(t, 7, false)
 	ticket, process := runtimeConnectorTestSemanticExecution(t)
+	catalogRequest, catalog := productiveVerificationCatalogTestFixture(t)
+	reviewRequest, reviewResult := productiveReviewTestFixture(t)
 
 	var calls atomic.Int64
 	server := httptest.NewTLSServer(http.HandlerFunc(func(
@@ -107,6 +109,13 @@ func TestHTTPSProductiveRuntimeConnectorImplementsExactTypedPorts(t *testing.T) 
 					},
 				}
 				payload = legacy
+			case ProductiveRuntimeOperationVerificationCatalog:
+				var input ProductiveVerificationCatalogRequest
+				runtimeConnectorDecodePayload(t, call.Payload, &input)
+				if !reflect.DeepEqual(input, catalogRequest) {
+					t.Fatalf("verification catalog request = %#v", input)
+				}
+				payload = catalog
 			case ProductiveRuntimeOperationSemantic:
 				var input productiveSemanticEvaluationRequest
 				runtimeConnectorDecodePayload(t, call.Payload, &input)
@@ -120,6 +129,13 @@ func TestHTTPSProductiveRuntimeConnectorImplementsExactTypedPorts(t *testing.T) 
 					StderrRawDigest:      input.Process.Stderr.RawDigest,
 					Outcome:              SemanticEvaluationPassed,
 				}
+			case ProductiveRuntimeOperationReview:
+				var input ProductiveReviewRequest
+				runtimeConnectorDecodePayload(t, call.Payload, &input)
+				if !reflect.DeepEqual(input, reviewRequest) {
+					t.Fatalf("review request = %#v", input)
+				}
+				payload = reviewResult
 			case ProductiveRuntimeOperationPADGitBinding:
 				var input productivePADGitBindingRequest
 				runtimeConnectorDecodePayload(t, call.Payload, &input)
@@ -201,6 +217,24 @@ func TestHTTPSProductiveRuntimeConnectorImplementsExactTypedPorts(t *testing.T) 
 		connector.ConnectorSessionRef() != runtimeConnectorTestSession {
 		t.Fatalf("connector identity = %#v", connector.Handshake())
 	}
+	wantOperations := []ProductiveRuntimeOperation{
+		ProductiveRuntimeOperationPolicySnapshot,
+		ProductiveRuntimeOperationOutcomeIntake,
+		ProductiveRuntimeOperationVerificationCatalog,
+		ProductiveRuntimeOperationSemantic,
+		ProductiveRuntimeOperationReview,
+		ProductiveRuntimeOperationPADGitBinding,
+		ProductiveRuntimeOperationObserveDelivery,
+		ProductiveRuntimeOperationBranchCAS,
+		ProductiveRuntimeOperationMergePR,
+	}
+	if !reflect.DeepEqual(connector.Handshake().Operations, wantOperations) {
+		t.Fatalf(
+			"connector operations = %v, want %v",
+			connector.Handshake().Operations,
+			wantOperations,
+		)
+	}
 	handshake := connector.Handshake()
 	handshake.Operations[0] = ProductiveRuntimeOperation("tampered")
 	if connector.Handshake().Operations[0] != ProductiveRuntimeOperationPolicySnapshot {
@@ -251,6 +285,26 @@ func TestHTTPSProductiveRuntimeConnectorImplementsExactTypedPorts(t *testing.T) 
 	}
 	if evaluation.Outcome != SemanticEvaluationPassed {
 		t.Fatalf("semantic evaluation = %#v", evaluation)
+	}
+	resolvedCatalog, err := connector.ResolveVerificationCatalog(
+		context.Background(),
+		catalogRequest,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(resolvedCatalog, catalog) {
+		t.Fatalf("verification catalog = %#v", resolvedCatalog)
+	}
+	resolvedReview, err := connector.ReviewCandidate(
+		context.Background(),
+		reviewRequest,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(resolvedReview, reviewResult) {
+		t.Fatalf("review result = %#v", resolvedReview)
 	}
 
 	bindingTransport, err := NewTransportPADGitBindingAuthority(connector)
@@ -326,8 +380,8 @@ func TestHTTPSProductiveRuntimeConnectorImplementsExactTypedPorts(t *testing.T) 
 	if mergeReceipt.Outcome != HostingEffectApplied {
 		t.Fatalf("pull-request merge receipt = %#v", mergeReceipt)
 	}
-	if calls.Load() != 9 {
-		t.Fatalf("authenticated calls = %d, want 9", calls.Load())
+	if calls.Load() != 11 {
+		t.Fatalf("authenticated calls = %d, want 11", calls.Load())
 	}
 }
 

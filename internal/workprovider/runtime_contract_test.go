@@ -48,6 +48,17 @@ type stubRuntimeOutcome struct {
 	reconciled   []stubRuntimeReconcileRequest
 }
 
+type stubResumableRuntimeOutcome struct {
+	*stubRuntimeOutcome
+	capabilitiesV2 RuntimeCapabilitiesV2
+	advanceV2      workrun.WorkAdvanceV2
+	decision       workrun.WorkVerificationDecideV1
+	advanceV2Err   error
+	decisionErr    error
+	advanceV2Calls []stubRuntimeAdvanceRequest
+	decisionCalls  []RuntimeVerificationDecisionRequest
+}
+
 type stubRuntimeRouteRequest struct {
 	workRunID        string
 	expectedRevision string
@@ -143,6 +154,44 @@ func (runtime *stubRuntimeOutcome) ReconcileOutcome(
 		)
 	}
 	return *runtime.reconcile, nil
+}
+
+func (runtime *stubResumableRuntimeOutcome) CapabilitiesV2(
+	context.Context,
+) (RuntimeCapabilitiesV2, error) {
+	return runtime.capabilitiesV2, nil
+}
+
+func (runtime *stubResumableRuntimeOutcome) AdvanceOutcomeV2(
+	_ context.Context,
+	workRunID string,
+	expectedRevision string,
+) (workrun.WorkAdvanceV2, error) {
+	runtime.advanceV2Calls = append(
+		runtime.advanceV2Calls,
+		stubRuntimeAdvanceRequest{
+			workRunID:        workRunID,
+			expectedRevision: expectedRevision,
+		},
+	)
+	return runtime.advanceV2, runtime.advanceV2Err
+}
+
+func (runtime *stubResumableRuntimeOutcome) DecideVerificationOutcome(
+	_ context.Context,
+	workRunID string,
+	promptRef string,
+	choice workrun.VerificationDecisionChoice,
+) (workrun.WorkVerificationDecideV1, error) {
+	runtime.decisionCalls = append(
+		runtime.decisionCalls,
+		RuntimeVerificationDecisionRequest{
+			WorkRunID: workRunID,
+			PromptRef: promptRef,
+			Choice:    choice,
+		},
+	)
+	return runtime.decision, runtime.decisionErr
 }
 
 func TestRuntimeControllerNegotiatesBeforeOpenOrPayloadValidation(t *testing.T) {
@@ -768,6 +817,199 @@ func TestRuntimeControllerAdvanceRejectsInvalidOrMismatchedProviderResult(
 	}
 }
 
+func TestRuntimeControllerV2ContractsFailBeforeOpen(t *testing.T) {
+	t.Parallel()
+	opener := &stubRuntimeOutcomeOpener{
+		err: errors.New("unsupported contracts must not open runtime"),
+	}
+	controller := NewRuntimeController(opener)
+	if _, err := controller.CapabilitiesV2(
+		context.Background(),
+		RuntimeCapabilitiesRequest{
+			Repo:     "/repo",
+			Contract: workrun.WorkCapabilitiesContractV1,
+		},
+	); err == nil {
+		t.Fatal("CapabilitiesV2 accepted capabilities/v1")
+	}
+	if _, err := controller.AdvanceV2(
+		context.Background(),
+		RuntimeAdvanceV2Request{
+			Repo:             "/repo",
+			WorkRunID:        "work-v2",
+			ExpectedRevision: runtimeContractRef("v2-previous"),
+			Contract:         workrun.WorkAdvanceContractV1,
+		},
+	); err == nil {
+		t.Fatal("AdvanceV2 accepted work-advance/v1")
+	}
+	if _, err := controller.DecideVerification(
+		context.Background(),
+		RuntimeVerificationDecisionRequest{
+			Repo:      "/repo",
+			WorkRunID: "work-v2",
+			Contract:  workrun.WorkAdvanceContractV2,
+			PromptRef: runtimeContractRef("prompt"),
+			Choice:    workrun.VerificationDecisionRun,
+		},
+	); err == nil {
+		t.Fatal("DecideVerification accepted the wrong contract")
+	}
+	if opener.calls != 0 {
+		t.Fatalf("unsupported v2 contracts opened runtime %d times", opener.calls)
+	}
+}
+
+func TestRuntimeControllerRoutesCapabilitiesAdvanceAndDecisionV2(t *testing.T) {
+	t.Parallel()
+	checkpoint := runtimeContractAdvanceV2Fixture(t)
+	decision := runtimeContractVerificationDecisionFixture(t)
+	canonical, err := capabilitymanifest.ForAgent(model.AgentCodex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capabilities := RuntimeCapabilitiesV2{
+		Schema:        RuntimeCapabilitiesContractV2,
+		Contract:      RuntimeCapabilitiesContractV2,
+		RepositoryRef: runtimeContractRef("repository-v2"),
+		AgentID:       model.AgentCodex,
+		WorkRouting: RuntimeCapabilityClaimV1{
+			ID:                    workrun.WorkRoutingCapabilityV1,
+			Exposure:              WorkRoutingAdvertised,
+			ImplementationRouting: canonical.ImplementationRouting,
+		},
+		Contracts: RuntimeContractSetV2{
+			Start:              workrun.WorkStartContractV1,
+			Route:              workrun.WorkRouteContractV1,
+			Advance:            workrun.WorkAdvanceContractV2,
+			VerificationDecide: workrun.WorkVerificationDecideContractV1,
+			Reconcile:          workrun.WorkReconcileContractV1,
+			Status:             workrun.WorkStatusContractV1,
+			Transition:         workrun.WorkTransitionContractV1,
+		},
+		ConnectorSessionRef: runtimeContractRef("connector-v2"),
+	}
+	runtime := &stubResumableRuntimeOutcome{
+		stubRuntimeOutcome: &stubRuntimeOutcome{},
+		capabilitiesV2:     capabilities,
+		advanceV2:          checkpoint,
+		decision:           decision,
+	}
+	opener := &stubRuntimeOutcomeOpener{runtime: runtime}
+	controller := NewRuntimeController(opener)
+
+	capabilityResult, err := controller.CapabilitiesV2(
+		context.Background(),
+		RuntimeCapabilitiesRequest{
+			Repo: "/repo", Contract: RuntimeCapabilitiesContractV2,
+		},
+	)
+	if err != nil ||
+		capabilityResult.Capabilities == nil ||
+		!reflect.DeepEqual(
+			*capabilityResult.Capabilities,
+			capabilities,
+		) {
+		t.Fatalf(
+			"CapabilitiesV2 result/error = %#v, %v",
+			capabilityResult,
+			err,
+		)
+	}
+	advanceResult, err := controller.AdvanceV2(
+		context.Background(),
+		RuntimeAdvanceV2Request{
+			Repo:             "/repo",
+			WorkRunID:        checkpoint.Status.WorkRunID,
+			ExpectedRevision: checkpoint.PreviousRevision,
+			Contract:         workrun.WorkAdvanceContractV2,
+		},
+	)
+	if err != nil ||
+		advanceResult.Advance == nil ||
+		!reflect.DeepEqual(*advanceResult.Advance, checkpoint) {
+		t.Fatalf(
+			"AdvanceV2 result/error = %#v, %v",
+			advanceResult,
+			err,
+		)
+	}
+	decisionResult, err := controller.DecideVerification(
+		context.Background(),
+		RuntimeVerificationDecisionRequest{
+			Repo:      "/repo",
+			WorkRunID: decision.WorkRunID,
+			Contract:  workrun.WorkVerificationDecideContractV1,
+			PromptRef: decision.PromptRef,
+			Choice:    decision.Choice,
+		},
+	)
+	if err != nil ||
+		decisionResult.Decision == nil ||
+		!reflect.DeepEqual(*decisionResult.Decision, decision) {
+		t.Fatalf(
+			"DecideVerification result/error = %#v, %v",
+			decisionResult,
+			err,
+		)
+	}
+	if opener.calls != 3 ||
+		len(runtime.advanceV2Calls) != 1 ||
+		len(runtime.decisionCalls) != 1 {
+		t.Fatalf(
+			"v2 provider calls = open:%d advance:%#v decide:%#v",
+			opener.calls,
+			runtime.advanceV2Calls,
+			runtime.decisionCalls,
+		)
+	}
+}
+
+func TestRuntimeCapabilitiesV2ValidatesAdvertisedAndDormantExposure(
+	t *testing.T,
+) {
+	t.Parallel()
+	canonical, err := capabilitymanifest.ForAgent(model.AgentPi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	advertised := RuntimeCapabilitiesV2{
+		Schema:        RuntimeCapabilitiesContractV2,
+		Contract:      RuntimeCapabilitiesContractV2,
+		RepositoryRef: runtimeContractRef("repository-v2"),
+		AgentID:       model.AgentPi,
+		WorkRouting: RuntimeCapabilityClaimV1{
+			ID:                    workrun.WorkRoutingCapabilityV1,
+			Exposure:              WorkRoutingAdvertised,
+			ImplementationRouting: canonical.ImplementationRouting,
+		},
+		Contracts: RuntimeContractSetV2{
+			Start:              workrun.WorkStartContractV1,
+			Route:              workrun.WorkRouteContractV1,
+			Advance:            workrun.WorkAdvanceContractV2,
+			VerificationDecide: workrun.WorkVerificationDecideContractV1,
+			Reconcile:          workrun.WorkReconcileContractV1,
+			Status:             workrun.WorkStatusContractV1,
+			Transition:         workrun.WorkTransitionContractV1,
+		},
+		ConnectorSessionRef: runtimeContractRef("connector-v2"),
+	}
+	if err := advertised.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	dormant := advertised
+	dormant.WorkRouting.Exposure = WorkRoutingDormant
+	dormant.ConnectorSessionRef = ""
+	if err := dormant.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	tampered := advertised
+	tampered.Contracts.Advance = workrun.WorkAdvanceContractV1
+	if err := tampered.Validate(); err == nil {
+		t.Fatal("capabilities/v2 advertised legacy advance")
+	}
+}
+
 func TestRuntimeCapabilitiesValidateAdvertisementBinding(t *testing.T) {
 	t.Parallel()
 
@@ -1158,6 +1400,56 @@ func runtimeContractReconcileFixture(t *testing.T) workrun.WorkReconcileV1 {
 		t.Fatalf("reconcile fixture Validate() error = %v", err)
 	}
 	return reconcile
+}
+
+func runtimeContractAdvanceV2Fixture(t *testing.T) workrun.WorkAdvanceV2 {
+	t.Helper()
+	payload, err := os.ReadFile(filepath.Join(
+		"..",
+		"..",
+		"contracts",
+		"work-routing",
+		"v1",
+		"fixtures",
+		"work-advance-v2-checkpoint.fixture.json",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var advance workrun.WorkAdvanceV2
+	if err := json.Unmarshal(payload, &advance); err != nil {
+		t.Fatal(err)
+	}
+	if err := advance.Validate(); err != nil {
+		t.Fatalf("advance v2 fixture Validate() error = %v", err)
+	}
+	return advance
+}
+
+func runtimeContractVerificationDecisionFixture(
+	t *testing.T,
+) workrun.WorkVerificationDecideV1 {
+	t.Helper()
+	payload, err := os.ReadFile(filepath.Join(
+		"..",
+		"..",
+		"contracts",
+		"work-routing",
+		"v1",
+		"fixtures",
+		"work-verification-decide-run.fixture.json",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decision workrun.WorkVerificationDecideV1
+	if err := json.Unmarshal(payload, &decision); err != nil {
+		t.Fatal(err)
+	}
+	if err := decision.Validate(); err != nil {
+		t.Fatalf("verification decision fixture Validate() error = %v", err)
+	}
+	return decision
 }
 
 func runtimeContractReadyAdvance(
