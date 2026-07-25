@@ -103,7 +103,7 @@ func TestWindowsReleaseBlockerCannotSkipOwnerRebinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, required := range []string{
-		"TestProtectWindowsUseHandleRebindsTokenOwnerToTokenUser",
+		"TestRARPrivateOwnerRemainsTokenUserOnly",
 		`GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER: "1"`,
 	} {
 		if !strings.Contains(string(workflow), required) {
@@ -113,11 +113,16 @@ func TestWindowsReleaseBlockerCannotSkipOwnerRebinding(t *testing.T) {
 			)
 		}
 	}
+	if strings.Contains(string(workflow), "internal/deliveryadmission") {
+		t.Fatal(
+			"Windows release-blocker workflow still tests the retired deliveryadmission package",
+		)
+	}
 
 	testSource, err := os.ReadFile(filepath.Join(
 		"..",
-		"deliveryadmission",
-		"secure_use_windows_test.go",
+		"reviewtransaction",
+		"rar_path_safety_windows_test.go",
 	))
 	if err != nil {
 		t.Fatal(err)

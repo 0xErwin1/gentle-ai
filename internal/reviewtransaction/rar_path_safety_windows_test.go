@@ -3,6 +3,7 @@
 package reviewtransaction
 
 import (
+	"os"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -66,6 +67,14 @@ func TestRARPrivateOwnerRemainsTokenUserOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	if tokenOwner.Equals(currentUser) {
+		// The release blocker runs this test on an account whose token owner
+		// differs from its token user; there the rebind class must be proven,
+		// never skipped.
+		if os.Getenv("GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER") == "1" {
+			t.Fatal(
+				"release blocker requires a distinct Windows token owner; the rebind class was not exercised",
+			)
+		}
 		t.Skip("token owner and token user are identical")
 	}
 	if privateRARSecurityDescriptorSafe(

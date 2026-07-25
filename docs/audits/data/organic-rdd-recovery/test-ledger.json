@@ -151,6 +151,18 @@
       ]
     },
     {
+      "path": "internal/cli/review_mode.go",
+      "proof": [
+        "internal/cli/review_mode_test.go"
+      ]
+    },
+    {
+      "path": "internal/cli/review_mode_test.go",
+      "proof": [
+        "internal/cli/review_mode_test.go"
+      ]
+    },
+    {
       "path": "internal/cli/review_next_transition.go",
       "proof": [
         "internal/cli/review_next_transition_test.go"
@@ -193,16 +205,16 @@
       ]
     },
     {
-      "path": "internal/cli/work_verification_decide.go",
-      "proof": [
-        "internal/cli/work_verification_decide_test.go"
-      ]
+      "destinationProof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ],
+      "path": "internal/cli/work_verification_decide.go"
     },
     {
-      "path": "internal/cli/work_verification_decide_test.go",
-      "proof": [
-        "internal/cli/work_verification_decide_test.go"
-      ]
+      "destinationProof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ],
+      "path": "internal/cli/work_verification_decide_test.go"
     },
     {
       "path": "internal/components/agentguidance/inject.go",
@@ -271,6 +283,12 @@
       "path": "internal/components/sdd/triggerrules_test.go"
     },
     {
+      "destinationProof": [
+        "internal/reviewtransaction/pr_command_boundary_test.go"
+      ],
+      "path": "internal/deliveryadmission/"
+    },
+    {
       "path": "internal/doctor/doctor.go",
       "proof": [
         "internal/doctor/doctor_test.go"
@@ -304,6 +322,18 @@
       "path": "internal/reviewtransaction/rar_plan_authority_test.go",
       "proof": [
         "internal/reviewtransaction/rar_plan_authority_test.go"
+      ]
+    },
+    {
+      "path": "internal/reviewtransaction/rdd_mode.go",
+      "proof": [
+        "internal/reviewtransaction/rdd_mode_test.go"
+      ]
+    },
+    {
+      "path": "internal/reviewtransaction/rdd_mode_test.go",
+      "proof": [
+        "internal/reviewtransaction/rdd_mode_test.go"
       ]
     },
     {
@@ -362,16 +392,18 @@
       "path": "internal/workprovider/"
     },
     {
-      "path": "internal/workprovider/productive_advance_recovery_test.go",
-      "proof": [
-        "internal/workprovider/productive_advance_recovery_test.go"
-      ]
+      "destinationProof": [
+        "internal/reviewtransaction/rdd_mode_test.go",
+        "internal/reviewtransaction/authority_repair_test.go",
+        "internal/reviewtransaction/compact_batch_reconcile_journal_test.go"
+      ],
+      "path": "internal/workprovider/productive_advance_recovery_test.go"
     },
     {
-      "path": "internal/workprovider/productive_verification_consent.go",
-      "proof": [
-        "internal/workprovider/productive_verification_test.go"
-      ]
+      "destinationProof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ],
+      "path": "internal/workprovider/productive_verification_consent.go"
     },
     {
       "destinationProof": [
@@ -381,10 +413,10 @@
       "path": "internal/workrun/"
     },
     {
-      "path": "internal/workrun/verification_consent.go",
-      "proof": [
-        "internal/workrun/verification_consent_test.go"
-      ]
+      "destinationProof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ],
+      "path": "internal/workrun/verification_consent.go"
     }
   ]
 }

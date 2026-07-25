@@ -202,6 +202,22 @@
     },
     {
       "context": "RAR",
+      "invariant": "the review mode command is the only route to the kill switch and status never mutates",
+      "path": "internal/cli/review_mode.go",
+      "proof": [
+        "internal/cli/review_mode_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "every mode transition and its source/effective diagnostics are asserted by code",
+      "path": "internal/cli/review_mode_test.go",
+      "proof": [
+        "internal/cli/review_mode_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
       "invariant": "at most one authorized transition is offered, and a stale authorization is refused",
       "path": "internal/cli/review_next_transition.go",
       "proof": [
@@ -254,22 +270,6 @@
       "path": "internal/cli/sync_test.go",
       "proof": [
         "internal/cli/sync_test.go"
-      ]
-    },
-    {
-      "context": "RAR",
-      "invariant": "a consent decision is taken exactly once against the owner's prompt reference",
-      "path": "internal/cli/work_verification_decide.go",
-      "proof": [
-        "internal/cli/work_verification_decide_test.go"
-      ]
-    },
-    {
-      "context": "RAR",
-      "invariant": "an invalid, ambiguous, or unoffered consent answer mutates nothing",
-      "path": "internal/cli/work_verification_decide_test.go",
-      "proof": [
-        "internal/cli/work_verification_decide_test.go"
       ]
     },
     {
@@ -394,6 +394,22 @@
     },
     {
       "context": "RAR",
+      "invariant": "review mode is user-owned and off-only per clone: any off wins, and re-enabling applies to future candidates only",
+      "path": "internal/reviewtransaction/rdd_mode.go",
+      "proof": [
+        "internal/reviewtransaction/rdd_mode_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
+      "invariant": "disabled review authority stays read-only frozen and delivery reports disabled/unmanaged",
+      "path": "internal/reviewtransaction/rdd_mode_test.go",
+      "proof": [
+        "internal/reviewtransaction/rdd_mode_test.go"
+      ]
+    },
+    {
+      "context": "RAR",
       "invariant": "review tier follows authorization, data-loss, mutation, release, and security risk; size alone never escalates",
       "path": "internal/reviewtransaction/risk.go",
       "proof": [
@@ -454,30 +470,6 @@
       "path": "internal/state/state_test.go",
       "proof": [
         "internal/state/state_test.go"
-      ]
-    },
-    {
-      "context": "HCR",
-      "invariant": "fourteen distinct crash and kill-switch failure classes leave recoverable state",
-      "path": "internal/workprovider/productive_advance_recovery_test.go",
-      "proof": [
-        "internal/workprovider/productive_advance_recovery_test.go"
-      ]
-    },
-    {
-      "context": "RAR",
-      "invariant": "the consent prompt is owner-authored and offers only the choices the owner declared",
-      "path": "internal/workprovider/productive_verification_consent.go",
-      "proof": [
-        "internal/workprovider/productive_verification_test.go"
-      ]
-    },
-    {
-      "context": "RAR",
-      "invariant": "verification consent is frozen once, replayed exactly, and never re-asked",
-      "path": "internal/workrun/verification_consent.go",
-      "proof": [
-        "internal/workrun/verification_consent_test.go"
       ]
     }
   ]

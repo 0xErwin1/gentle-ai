@@ -162,12 +162,12 @@
     },
     {
       "context": "RAR",
-      "disposition": "DEFER",
+      "disposition": "KEEP",
       "path": "internal/cli/review_mode.go"
     },
     {
       "context": "RAR",
-      "disposition": "DEFER",
+      "disposition": "KEEP",
       "path": "internal/cli/review_mode_test.go"
     },
     {
@@ -292,12 +292,12 @@
     },
     {
       "context": "RAR",
-      "disposition": "TRANSPLANT",
+      "disposition": "DELETE",
       "path": "internal/cli/work_verification_decide.go"
     },
     {
       "context": "RAR",
-      "disposition": "TRANSPLANT",
+      "disposition": "DELETE",
       "path": "internal/cli/work_verification_decide_test.go"
     },
     {
@@ -422,12 +422,12 @@
     },
     {
       "context": "RAR",
-      "disposition": "DEFER",
+      "disposition": "KEEP",
       "path": "internal/reviewtransaction/rdd_mode.go"
     },
     {
       "context": "RAR",
-      "disposition": "DEFER",
+      "disposition": "KEEP",
       "path": "internal/reviewtransaction/rdd_mode_test.go"
     },
     {
@@ -522,12 +522,12 @@
     },
     {
       "context": "HCR",
-      "disposition": "TRANSPLANT",
+      "disposition": "DELETE",
       "path": "internal/workprovider/productive_advance_recovery_test.go"
     },
     {
       "context": "RAR",
-      "disposition": "TRANSPLANT",
+      "disposition": "DELETE",
       "path": "internal/workprovider/productive_verification_consent.go"
     },
     {
@@ -562,7 +562,7 @@
     },
     {
       "context": "RAR",
-      "disposition": "TRANSPLANT",
+      "disposition": "DELETE",
       "path": "internal/workrun/verification_consent.go"
     },
     {

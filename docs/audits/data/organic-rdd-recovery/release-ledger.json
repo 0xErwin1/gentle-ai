@@ -2379,7 +2379,7 @@
       ]
     },
     {
-      "earlyDeviation": false,
+      "earlyDeviation": true,
       "path": "internal/cli/work_verification_decide.go",
       "publication": [
         {
@@ -2397,7 +2397,7 @@
       ]
     },
     {
-      "earlyDeviation": false,
+      "earlyDeviation": true,
       "path": "internal/cli/work_verification_decide_test.go",
       "publication": [
         {
@@ -3207,7 +3207,7 @@
       ]
     },
     {
-      "earlyDeviation": false,
+      "earlyDeviation": true,
       "path": "internal/workprovider/productive_advance_recovery_test.go",
       "publication": [
         {
@@ -3225,7 +3225,7 @@
       ]
     },
     {
-      "earlyDeviation": false,
+      "earlyDeviation": true,
       "path": "internal/workprovider/productive_verification_consent.go",
       "publication": [
         {
@@ -3351,7 +3351,7 @@
       ]
     },
     {
-      "earlyDeviation": false,
+      "earlyDeviation": true,
       "path": "internal/workrun/verification_consent.go",
       "publication": [
         {

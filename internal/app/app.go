@@ -70,8 +70,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 	// Per-subcommand --yes flags (e.g. restore --yes) are parsed by each subcommand.
 
 	// Platform-independent commands: no system detection, self-update, or
-	// platform validation. Contract-bearing work commands perform their own
-	// fail-closed provider preflight before any repository access or mutation.
+	// platform validation.
 	if len(args) > 0 {
 		switch args[0] {
 		case "version", "--version", "-v":
@@ -96,22 +95,6 @@ func RunArgs(args []string, stdout io.Writer) error {
 			return cli.RunSDDAttempt(args[1:], stdout)
 		case "sdd-verify-validate":
 			return cli.RunSDDVerifyValidate(args[1:], stdout)
-		case "work-capabilities":
-			return cli.RunWorkCapabilities(args[1:], stdout)
-		case "work-start":
-			return cli.RunWorkStart(args[1:], os.Stdin, stdout)
-		case "work-route":
-			return cli.RunWorkRoute(args[1:], stdout)
-		case "work-advance":
-			return cli.RunWorkAdvance(args[1:], stdout)
-		case "work-verification-decide":
-			return cli.RunWorkVerificationDecide(args[1:], stdout)
-		case "work-reconcile":
-			return cli.RunWorkReconcile(args[1:], stdout)
-		case "work-status":
-			return cli.RunWorkStatus(args[1:], stdout)
-		case "work-transition":
-			return cli.RunWorkTransition(args[1:], stdout)
 		case "codegraph":
 			return cli.RunCodeGraph(args[1:], stdout)
 		case "review":

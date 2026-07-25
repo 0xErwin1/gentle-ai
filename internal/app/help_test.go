@@ -11,10 +11,29 @@ func TestHelpContainsAllCommands(t *testing.T) {
 	printHelp(&buf, "v1.0.0-test")
 	output := buf.String()
 
-	commands := []string{"install", "uninstall", "sync", "sdd-status", "sdd-continue", "sdd-attempt", "sdd-verify-validate", "work-capabilities", "work-start", "work-route decide", "work-route bind-sdd", "work-advance", "work-verification-decide", "work-reconcile", "work-status", "work-transition apply", "review start", "review finalize", "review validate", "review status", "review repair", "review-start", "review-resume", "review-bundle-export", "review-bundle-import", "review-validate", "update", "upgrade", "restore", "version"}
+	commands := []string{"install", "uninstall", "sync", "sdd-status", "sdd-continue", "sdd-attempt", "sdd-verify-validate", "review start", "review finalize", "review validate", "review status", "review repair", "review-start", "review-resume", "review-bundle-export", "review-bundle-import", "review-validate", "update", "upgrade", "restore", "version"}
 	for _, cmd := range commands {
 		if !strings.Contains(output, cmd) {
 			t.Errorf("help output missing command %q", cmd)
+		}
+	}
+}
+
+// TestHelpAdvertisesNoRetiredWorkCommands keeps help and dispatch aligned: the
+// retired remote control-plane commands no longer dispatch, so help must not
+// advertise any of them.
+func TestHelpAdvertisesNoRetiredWorkCommands(t *testing.T) {
+	var buf bytes.Buffer
+	printHelp(&buf, "v1.0.0-test")
+	output := buf.String()
+
+	for _, cmd := range []string{
+		"work-capabilities", "work-start", "work-route", "work-advance",
+		"work-verification-decide", "work-reconcile", "work-status", "work-transition",
+		"WORK CONTRACT COMPATIBILITY",
+	} {
+		if strings.Contains(output, cmd) {
+			t.Errorf("help output still advertises retired command surface %q", cmd)
 		}
 	}
 }

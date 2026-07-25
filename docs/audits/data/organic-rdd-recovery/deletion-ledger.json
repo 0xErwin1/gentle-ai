@@ -324,6 +324,52 @@
       ]
     },
     {
+      "destinationPath": "internal/reviewtransaction/rar_plan_authority.go",
+      "destinationProof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ],
+      "earlyDeviation": true,
+      "noRetainedInvariant": false,
+      "path": "internal/cli/work_verification_decide.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "destinationPath": "internal/reviewtransaction/rar_plan_authority.go",
+      "destinationProof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ],
+      "earlyDeviation": true,
+      "noRetainedInvariant": false,
+      "path": "internal/cli/work_verification_decide_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
       "destinationPath": "internal/components/agentguidance/routing.go",
       "destinationProof": [
         "internal/components/agentguidance/routing_test.go"
@@ -370,8 +416,12 @@
       ]
     },
     {
+      "destinationPath": "internal/reviewtransaction/gate.go",
+      "destinationProof": [
+        "internal/reviewtransaction/pr_command_boundary_test.go"
+      ],
       "earlyDeviation": true,
-      "noRetainedInvariant": true,
+      "noRetainedInvariant": false,
       "path": "internal/deliveryadmission/",
       "publication": [
         {
@@ -584,6 +634,54 @@
       ]
     },
     {
+      "destinationPath": "internal/reviewtransaction/",
+      "destinationProof": [
+        "internal/reviewtransaction/rdd_mode_test.go",
+        "internal/reviewtransaction/authority_repair_test.go",
+        "internal/reviewtransaction/compact_batch_reconcile_journal_test.go"
+      ],
+      "earlyDeviation": true,
+      "noRetainedInvariant": false,
+      "path": "internal/workprovider/productive_advance_recovery_test.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "destinationPath": "internal/reviewtransaction/rar_plan_authority.go",
+      "destinationProof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ],
+      "earlyDeviation": true,
+      "noRetainedInvariant": false,
+      "path": "internal/workprovider/productive_verification_consent.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
       "earlyDeviation": true,
       "noRetainedInvariant": true,
       "path": "internal/workprovider/runtime_policy_provisioner.go",
@@ -687,6 +785,29 @@
       "earlyDeviation": true,
       "noRetainedInvariant": true,
       "path": "internal/workrun/store.go",
+      "publication": [
+        {
+          "present": false,
+          "ref": "origin/main"
+        },
+        {
+          "present": false,
+          "ref": "main"
+        },
+        {
+          "present": false,
+          "ref": "v2.1.11"
+        }
+      ]
+    },
+    {
+      "destinationPath": "internal/reviewtransaction/rar_plan_authority.go",
+      "destinationProof": [
+        "internal/reviewtransaction/rar_plan_authority_test.go"
+      ],
+      "earlyDeviation": true,
+      "noRetainedInvariant": false,
+      "path": "internal/workrun/verification_consent.go",
       "publication": [
         {
           "present": false,

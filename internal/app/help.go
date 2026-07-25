@@ -26,31 +26,6 @@ COMMANDS
                Read or mutate the artifact-store-agnostic runtime-attempt ledger
   sdd-verify-validate --input <path|-> --requirements <n> --scenarios <n>
                Validate exact verification-report bytes without persistence
-  work-capabilities --cwd <repo> --agent <agent-id> --contract gentle-ai.work-capabilities/v2 --json
-               Negotiate the authenticated resumable work-routing capability
-  work-start --cwd <repo> --agent <agent-id> --contract gentle-ai.work-start/v1 --json
-               Start an outcome-only WorkRun from a JSON request on stdin
-  work-route decide --cwd <repo> --work-run <id> --expected-revision <revision>
-               --contract gentle-ai.work-route/v1 --choice <accept_sdd|decline_sdd> --json
-               Submit only the human SDD choice; the owner selects any fallback route
-  work-route bind-sdd --cwd <repo> --work-run <id> --expected-revision <revision>
-               --contract gentle-ai.work-route/v1 --run-ref <existing-run> --json
-               Bind an already-existing SDD runtime to its accepted owner route
-  work-advance --cwd <repo> --work-run <id> --expected-revision <revision> --contract gentle-ai.work-advance/v2 --json
-               Run one bounded owner attempt; it may return one no-launch verification prompt
-  work-verification-decide --cwd <repo> --work-run <id> --prompt-ref <ref>
-               --contract gentle-ai.work-verification-decide/v1
-               --choice <run|defer|reduce_scope|deferred_runner> --json
-               Record one offered choice; the receipt never contains or triggers an advance
-               Only run permits one later work-advance/v2; every other choice stops
-  work-reconcile --cwd <repo> --work-run <id> --expected-revision <revision>
-               --diagnostic-ref <ref> --contract gentle-ai.work-reconcile/v1 --json
-               Explicitly reconcile one owner diagnostic; never runs automatically
-  work-status --cwd <repo> --work-run <id> --contract gentle-ai.work-status/v1 --json
-               Read the route-neutral common-work status
-  work-transition apply --cwd <repo> --work-run <id> --contract gentle-ai.work-transition/v1
-               --authorization-ref <ref> --expected-revision <revision> --json
-               Apply only the exact owner-issued common-work transition
   review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>]
   review finalize [--cwd <repo>] [--result <review.json> ...] [--evidence <path>]
   review validate --gate <gate> [--cwd <repo>]
@@ -67,12 +42,6 @@ COMMANDS
                and persists nothing, turning reviews off for good needs a deliberate
                'gentle-ai review mode disable', and a session without a terminal reviews
                the change and says so instead of asking
-
-WORK CONTRACT COMPATIBILITY
-  work-capabilities --cwd <repo> --contract gentle-ai.work-capabilities/v1 --json
-               Read the frozen dormant six-contract compatibility envelope
-  work-advance --cwd <repo> --work-run <id> --expected-revision <revision> --contract gentle-ai.work-advance/v1 --json
-               Preserve the frozen terminal advance contract; it cannot return a consent prompt
 
 COMPATIBILITY COMMANDS
   review-start --cwd <repo> --lineage <id> --policy-file <path>

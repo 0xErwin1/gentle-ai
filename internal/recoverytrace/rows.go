@@ -422,23 +422,31 @@ func reviewAuthorityRows() []Row {
 			Contributor: recoveryContributor,
 			Publication: unpublished(),
 		},
-		// The kill switch and the consent surface are designed but unwritten. They
-		// are deferred rather than kept, because an invariant nothing implements
-		// cannot be proven by any test that exists.
+		// The kill switch is written now: rdd_mode.go carries the global plus
+		// clone-local off-only review mode, and review_mode.go projects it as the
+		// command surface. Its rows are KEEP so the deletion rows that name
+		// rdd_mode_test.go as a destination proof cite a path the ledger itself
+		// acknowledges exists.
 		{
 			Path:        "internal/reviewtransaction/rdd_mode.go",
-			Disposition: DispositionDefer,
+			Disposition: DispositionKeep,
 			Context:     ContextRAR,
+			Invariant:   "review mode is user-owned and off-only per clone: any off wins, and re-enabling applies to future candidates only",
+			Proof:       []string{"internal/reviewtransaction/rdd_mode_test.go"},
 			Contributor: recoveryContributor,
 			Publication: unpublished(),
 		},
 		{
 			Path:        "internal/reviewtransaction/rdd_mode_test.go",
-			Disposition: DispositionDefer,
+			Disposition: DispositionKeep,
 			Context:     ContextRAR,
+			Invariant:   "disabled review authority stays read-only frozen and delivery reports disabled/unmanaged",
+			Proof:       []string{"internal/reviewtransaction/rdd_mode_test.go"},
 			Contributor: recoveryContributor,
 			Publication: unpublished(),
 		},
+		// The dedicated consent surface remains designed but unwritten; the
+		// frozen-plan consent obligation is owned by rar_plan_authority.go today.
 		{
 			Path:        "internal/reviewtransaction/verification_consent.go",
 			Disposition: DispositionDefer,
@@ -455,15 +463,19 @@ func reviewAuthorityRows() []Row {
 		},
 		{
 			Path:        "internal/cli/review_mode.go",
-			Disposition: DispositionDefer,
+			Disposition: DispositionKeep,
 			Context:     ContextRAR,
+			Invariant:   "the review mode command is the only route to the kill switch and status never mutates",
+			Proof:       []string{"internal/cli/review_mode_test.go"},
 			Contributor: recoveryContributor,
 			Publication: unpublished(),
 		},
 		{
 			Path:        "internal/cli/review_mode_test.go",
-			Disposition: DispositionDefer,
+			Disposition: DispositionKeep,
 			Context:     ContextRAR,
+			Invariant:   "every mode transition and its source/effective diagnostics are asserted by code",
+			Proof:       []string{"internal/cli/review_mode_test.go"},
 			Contributor: recoveryContributor,
 			Publication: unpublished(),
 		},
@@ -599,83 +611,91 @@ func sddLifecycleRows() []Row {
 	}
 }
 
-// transplantSourceRows covers the highest-loss sources whose invariant is
-// implemented nowhere else in the surviving tree. Each is TRANSPLANT rather than
-// DELETE because the receiving file does not exist yet: the proof named here is
-// the source-side test that proves the invariant today, and the DELETE cannot
-// land until a destination proves it too.
-//
-// Every source the design listed was re-checked against the surviving packages
-// before it was allowed to stay here. The ones whose obligation already lives in
-// internal/reviewtransaction moved to alreadyImplementedDeletionRows; what
-// remains is verified absent from every surviving package.
+// transplantSourceRows once carried the highest-loss sources whose invariant
+// was implemented nowhere else in the surviving tree. Every one of them has
+// since been resolved: the RAR plan authority (rar_plan_authority.go with
+// verification_contract.go) now owns frozen-plan consent end to end, and the
+// kill switch (rdd_mode.go) landed with its recovery classes. Each former
+// TRANSPLANT row is therefore a DELETE whose destination names the surviving
+// test that proves the invariant today.
 func transplantSourceRows() []Row {
 	return []Row{
-		// Verification consent survives the re-check: no surviving package
-		// implements it. internal/reviewtransaction/verification_consent.go and
-		// internal/cli/review_verification_decide.go are both still DEFER, and the
-		// only Go files naming a consent prompt or its promptRef today are the
-		// retired internal/workrun, internal/workprovider, and internal/cli/work_*
-		// sources themselves.
+		// NewVerificationFrozenPlanConsent manufactures consent only from a plan
+		// whose gate asks for it; ResumeFrozenVerificationPlan replays the exact
+		// frozen plan once, never asks again, and rejects stale, cross-bound, or
+		// forged consent (TestFrozenPlanConsentResumeReusesTheIdenticalPlan).
 		{
-			Path:            "internal/workrun/verification_consent.go",
-			Disposition:     DispositionTransplant,
-			Context:         ContextRAR,
-			Invariant:       "verification consent is frozen once, replayed exactly, and never re-asked",
-			Proof:           []string{"internal/workrun/verification_consent_test.go"},
-			Contributor:     recoveryContributor,
-			Publication:     unpublished(),
-			DestinationPath: "internal/reviewtransaction/verification_consent.go",
+			Path:             "internal/workrun/verification_consent.go",
+			Disposition:      DispositionDelete,
+			Context:          ContextRAR,
+			Invariant:        "verification consent is frozen once, replayed exactly, and never re-asked",
+			Contributor:      recoveryContributor,
+			Publication:      unpublished(),
+			EarlyDeviation:   true,
+			DestinationPath:  "internal/reviewtransaction/rar_plan_authority.go",
+			DestinationProof: []string{"internal/reviewtransaction/rar_plan_authority_test.go"},
 		},
+		// The consent record binds AuthorityRef and PlanDigest of the exact
+		// owner-authored frozen plan; nothing else can manufacture one, and a
+		// plan that does not require consent refuses to issue it.
 		{
-			Path:            "internal/workprovider/productive_verification_consent.go",
-			Disposition:     DispositionTransplant,
-			Context:         ContextRAR,
-			Invariant:       "the consent prompt is owner-authored and offers only the choices the owner declared",
-			Proof:           []string{"internal/workprovider/productive_verification_test.go"},
-			Contributor:     recoveryContributor,
-			Publication:     unpublished(),
-			DestinationPath: "internal/reviewtransaction/verification_consent.go",
+			Path:             "internal/workprovider/productive_verification_consent.go",
+			Disposition:      DispositionDelete,
+			Context:          ContextRAR,
+			Invariant:        "the consent prompt is owner-authored and offers only the choices the owner declared",
+			Contributor:      recoveryContributor,
+			Publication:      unpublished(),
+			EarlyDeviation:   true,
+			DestinationPath:  "internal/reviewtransaction/rar_plan_authority.go",
+			DestinationProof: []string{"internal/reviewtransaction/rar_plan_authority_test.go"},
 		},
+		// One consent resumes one identical plan; the resumed gate never asks
+		// twice, and consent cannot cross to another frozen plan.
 		{
-			Path:            "internal/cli/work_verification_decide.go",
-			Disposition:     DispositionTransplant,
-			Context:         ContextRAR,
-			Invariant:       "a consent decision is taken exactly once against the owner's prompt reference",
-			Proof:           []string{"internal/cli/work_verification_decide_test.go"},
-			Contributor:     recoveryContributor,
-			Publication:     unpublished(),
-			DestinationPath: "internal/cli/review_verification_decide.go",
+			Path:             "internal/cli/work_verification_decide.go",
+			Disposition:      DispositionDelete,
+			Context:          ContextRAR,
+			Invariant:        "a consent decision is taken exactly once against the owner's prompt reference",
+			Contributor:      recoveryContributor,
+			Publication:      unpublished(),
+			EarlyDeviation:   true,
+			DestinationPath:  "internal/reviewtransaction/rar_plan_authority.go",
+			DestinationProof: []string{"internal/reviewtransaction/rar_plan_authority_test.go"},
 		},
-		// The design lists this test in the DELETE set, but it carries the RED
-		// proof for the consent decision above. It is recorded as TRANSPLANT so
-		// the ledger cannot claim the failure classes were dropped.
+		// The failure classes this test carried — stale, cross-bound, and forged
+		// consent answers that must mutate nothing — are asserted against the
+		// surviving plan authority rather than the retired CLI surface.
 		{
-			Path:            "internal/cli/work_verification_decide_test.go",
-			Disposition:     DispositionTransplant,
-			Context:         ContextRAR,
-			Invariant:       "an invalid, ambiguous, or unoffered consent answer mutates nothing",
-			Proof:           []string{"internal/cli/work_verification_decide_test.go"},
-			Contributor:     recoveryContributor,
-			Publication:     unpublished(),
-			DestinationPath: "internal/cli/review_verification_decide_test.go",
+			Path:             "internal/cli/work_verification_decide_test.go",
+			Disposition:      DispositionDelete,
+			Context:          ContextRAR,
+			Invariant:        "an invalid, ambiguous, or unoffered consent answer mutates nothing",
+			Contributor:      recoveryContributor,
+			Publication:      unpublished(),
+			EarlyDeviation:   true,
+			DestinationPath:  "internal/reviewtransaction/rar_plan_authority.go",
+			DestinationProof: []string{"internal/reviewtransaction/rar_plan_authority_test.go"},
 		},
-		// The surviving tree recovers review authority (authority_repair.go,
-		// classified_authority_replay.go, compact_recovery_binding.go,
-		// compact_reclaim.go), but none of it covers the kill-switch classes this
-		// test owns: a kill before the execution anchor that requires manual
-		// reconciliation, and one after it that must recover the exact delivery
-		// without a second effect. The kill switch itself is still unwritten, so
-		// this stays a transplant rather than a delete.
+		// The kill switch this row waited for exists now (rdd_mode.go), and the
+		// recovery classes live in the surviving review transaction: disabled
+		// frozen authority stays read-only (rdd_mode_test.go), interrupted
+		// authority is repaired without a second effect (authority_repair_test.go),
+		// and the prepared reconcile journal admits exactly one replay
+		// (compact_batch_reconcile_journal_test.go).
 		{
 			Path:            "internal/workprovider/productive_advance_recovery_test.go",
-			Disposition:     DispositionTransplant,
+			Disposition:     DispositionDelete,
 			Context:         ContextHCR,
-			Invariant:       "fourteen distinct crash and kill-switch failure classes leave recoverable state",
-			Proof:           []string{"internal/workprovider/productive_advance_recovery_test.go"},
+			Invariant:       "crash and kill-switch failure classes leave recoverable state without a second effect",
 			Contributor:     recoveryContributor,
 			Publication:     unpublished(),
+			EarlyDeviation:  true,
 			DestinationPath: "internal/reviewtransaction/",
+			DestinationProof: []string{
+				"internal/reviewtransaction/rdd_mode_test.go",
+				"internal/reviewtransaction/authority_repair_test.go",
+				"internal/reviewtransaction/compact_batch_reconcile_journal_test.go",
+			},
 		},
 	}
 }
@@ -846,14 +866,22 @@ func retiredPackageRows() []Row {
 		//     prepared marker admits exactly one replay and no second effect.
 		//   - Trusted-repository identity lease: repository_locator.go, which pins
 		//     directory identity across eleven os.SameFile checks.
+		//
+		// One invariant was retained rather than found pre-implemented: the "PR
+		// commands" threat-matrix boundary (validateDeliveryRefToken) moved to
+		// gate.go validateBoundaryRefSelector, which holds every pre-PR/pre-push
+		// boundary selector and gate-request base ref to the same structured-ref
+		// rule before it can become a Git argv element.
 		{
-			Path:                "internal/deliveryadmission/",
-			Disposition:         DispositionDelete,
-			Context:             ContextMMI,
-			Contributor:         recoveryContributor,
-			Publication:         unpublished(),
-			EarlyDeviation:      true,
-			NoRetainedInvariant: true,
+			Path:             "internal/deliveryadmission/",
+			Disposition:      DispositionDelete,
+			Context:          ContextMMI,
+			Invariant:        "PR head and destination refs are structured bindings, never command strings",
+			Contributor:      recoveryContributor,
+			Publication:      unpublished(),
+			EarlyDeviation:   true,
+			DestinationPath:  "internal/reviewtransaction/gate.go",
+			DestinationProof: []string{"internal/reviewtransaction/pr_command_boundary_test.go"},
 		},
 		// Already implemented in the surviving review transaction:
 		//   - Immutable append-only, replay-safe execution admission:

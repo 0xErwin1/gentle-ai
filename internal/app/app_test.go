@@ -1344,6 +1344,42 @@ func TestUnknownCommandSuggestsHelp(t *testing.T) {
 	}
 }
 
+// TestRunArgsRetiredWorkCommandsNoLongerDispatch proves the remote control
+// plane's command surface is gone: every retired work-* command falls through
+// to the unknown-command error instead of dispatching provider machinery.
+func TestRunArgsRetiredWorkCommandsNoLongerDispatch(t *testing.T) {
+	origSelfUpdate := selfUpdateFn
+	origDetect := detectSystem
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() {
+		selfUpdateFn = origSelfUpdate
+		detectSystem = origDetect
+		ensureCurrentOSSupported = origEnsure
+	})
+	ensureCurrentOSSupported = func() error { return nil }
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{System: system.SystemInfo{Supported: true}}, nil
+	}
+	selfUpdateFn = func(context.Context, string, system.PlatformProfile, io.Writer) error { return nil }
+
+	retired := []string{
+		"work-capabilities", "work-start", "work-route", "work-advance",
+		"work-verification-decide", "work-reconcile", "work-status", "work-transition",
+	}
+	for _, command := range retired {
+		t.Run(command, func(t *testing.T) {
+			var buf bytes.Buffer
+			err := RunArgs([]string{command}, &buf)
+			if err == nil {
+				t.Fatalf("RunArgs(%q) error = nil, want unknown command", command)
+			}
+			if !strings.Contains(err.Error(), fmt.Sprintf("unknown command %q", command)) {
+				t.Fatalf("RunArgs(%q) error = %v, want unknown command", command, err)
+			}
+		})
+	}
+}
+
 func TestRunArgs_UpdateSkipsSelfUpdate(t *testing.T) {
 	origSelfUpdate := selfUpdateFn
 	origCheckAll := updateCheckAll
