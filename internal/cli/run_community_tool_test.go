@@ -489,6 +489,10 @@ func TestInstallPipelineDoesNotDuplicatePiPendingWhenSelected(t *testing.T) {
 		return pending, communitytool.ErrPiCodeGraphAdapterHealthUnavailable
 	}
 	runtime := &installRuntime{
+		// newInstallRuntime never yields an empty homeDir, and the routing
+		// guidance step fails closed on one. Keep the fixture faithful to the
+		// constructor rather than relaxing that check.
+		homeDir:   t.TempDir(),
 		selection: model.Selection{CommunityTools: []model.CommunityToolID{model.CommunityToolCodeGraph}},
 		resolved:  planner.ResolvedPlan{Agents: []model.AgentID{model.AgentPi}},
 		state:     &runtimeState{},

@@ -52,44 +52,11 @@ enrollment.
 | **Ready** | The exact candidate has sufficient evidence for the selected delivery route. |
 | **Needs your decision** | Safe automatic convergence is impossible; Gentle AI presents the cause, impact, and concrete choices. |
 
-Managed adapters first negotiate the repository-bound capability:
-
-```bash
-gentle-ai work-capabilities --cwd <repo> --contract gentle-ai.work-capabilities/v1 --json
-```
-
-Only an exact authenticated `advertised` response permits outcome start. The
-adapter sends exactly `outcome` plus `explicitSddRequested` on stdin:
-
-```bash
-gentle-ai work-start --cwd <repo> --contract gentle-ai.work-start/v1 --json < request.json
-```
-
 The user still asks only for the outcome. Repository identity, route, policy,
 candidate, delivery mechanism, and authority references remain owner-derived.
-Before a managed run starts, a dormant or unavailable capability preserves the
-legacy direct, delegated, and optional-SDD flow. After a managed run starts,
-failure stays typed and fail-closed; the adapter never creates a second run or
-falls back to prompt-owned authority.
-
-Managed adapters then read common-work status with exactly:
-
-```bash
-gentle-ai work-status --cwd <repo> --work-run <id> --contract gentle-ai.work-status/v1 --json
-```
-
-Status returns zero or one provider-issued `authorizedTransition`. When one is
-present, the adapter may apply only that exact authorization and revision:
-
-```bash
-gentle-ai work-transition apply --cwd <repo> --work-run <id> --contract gentle-ai.work-transition/v1 --authorization-ref <ref> --expected-revision <revision> --json
-```
-
-`work-transition apply` is the only common-work mutation surface. Adapters do not
-invent alternate flags, select review lenses, reconstruct recovery policy, infer
-success from prose, or retry stale, expired, mismatched, or replayed
-authorizations. Existing SDD v1 runs continue through their SDD-specific status
-contract; direct and delegated runs do not create or consume an SDD run.
+Adapters do not select review lenses, reconstruct recovery policy, or infer
+success from prose. Existing SDD v1 runs continue through their SDD-specific
+status contract; direct and delegated runs do not create or consume an SDD run.
 
 ## Fail-closed activation
 

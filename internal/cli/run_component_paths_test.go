@@ -1,12 +1,20 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
+	"github.com/gentleman-programming/gentle-ai/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/internal/components/agentguidance"
+	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/internal/components/opencodedefault"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/internal/system"
 )
 
 func TestComponentPathsSDDIncludesSystemPromptForAllSupportedAgents(t *testing.T) {
@@ -513,4 +521,302 @@ func containsPath(paths []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// ─── Organic routing guidance is installed for every configured agent ──────
+//
+// Routing guidance decides how an agent picks between direct, delegated, and
+// proposed work. It is therefore unconditional: an install that did not select
+// the optional SDD component must still receive it (issue #1794).
+
+const (
+	routingOpenMarker  = "<!-- gentle-ai:" + agentguidance.RoutingSectionID + " -->"
+	routingCloseMarker = "<!-- /gentle-ai:" + agentguidance.RoutingSectionID + " -->"
+
+	legacyTriggerRulesOpenMarker = "<!-- gentle-ai:trigger-rules -->"
+)
+
+// newTestInstallRuntime builds an install runtime whose resolved plan mirrors
+// the selection, which is what the real planner produces for these inputs.
+func newTestInstallRuntime(t *testing.T, home string, selection model.Selection) *installRuntime {
+	t.Helper()
+
+	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
+	rt, err := newInstallRuntime(home, ScopeGlobal, ChannelStable, selection, resolved, system.PlatformProfile{PackageManager: "brew"})
+	if err != nil {
+		t.Fatalf("newInstallRuntime() error = %v", err)
+	}
+	return rt
+}
+
+// runInstallInjectionSteps executes the staged apply steps that write managed
+// assets. Agent installation steps are skipped because they shell out to real
+// package managers, which is unrelated to what these tests assert.
+func runInstallInjectionSteps(t *testing.T, rt *installRuntime) {
+	t.Helper()
+
+	for _, step := range rt.stagePlan().Apply {
+		if _, isAgentInstall := step.(agentInstallStep); isAgentInstall {
+			continue
+		}
+		if err := step.Run(); err != nil {
+			t.Fatalf("Run(%s) error = %v", step.ID(), err)
+		}
+	}
+}
+
+// runInstallComponentSteps executes only the component steps, which is how a
+// later run reaches an already-guided installation.
+func runInstallComponentSteps(t *testing.T, rt *installRuntime) {
+	t.Helper()
+
+	for _, step := range rt.stagePlan().Apply {
+		if _, isComponent := step.(componentApplyStep); !isComponent {
+			continue
+		}
+		if err := step.Run(); err != nil {
+			t.Fatalf("Run(%s) error = %v", step.ID(), err)
+		}
+	}
+}
+
+func systemPromptFileFor(t *testing.T, home string, agent model.AgentID) string {
+	t.Helper()
+
+	adapter, err := agents.NewAdapter(agent)
+	if err != nil {
+		t.Fatalf("NewAdapter(%q) error = %v", agent, err)
+	}
+	return adapter.SystemPromptFile(home)
+}
+
+func readTextFile(t *testing.T, path string) string {
+	t.Helper()
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+	return string(content)
+}
+
+func openCodeSettingsPath(home string) string {
+	return filepath.Join(home, ".config", "opencode", "opencode.json")
+}
+
+// openCodeOrchestratorPrompt returns the decoded managed orchestrator prompt.
+// Reading the raw settings bytes would not do: Go's JSON encoder escapes "<" to
+// "<", so the managed markers only exist as such in the decoded string the
+// agent actually loads.
+func openCodeOrchestratorPrompt(t *testing.T, home string) string {
+	t.Helper()
+
+	var settings struct {
+		Agent map[string]struct {
+			Prompt string `json:"prompt"`
+		} `json:"agent"`
+	}
+	if err := json.Unmarshal([]byte(readTextFile(t, openCodeSettingsPath(home))), &settings); err != nil {
+		t.Fatalf("decode OpenCode settings error = %v", err)
+	}
+	return settings.Agent[opencodedefault.ManagedAgent].Prompt
+}
+
+func TestInstallDeliversRoutingGuidanceWithoutSDDComponent(t *testing.T) {
+	home := t.TempDir()
+
+	rt := newTestInstallRuntime(t, home, model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentPersona},
+		Persona:    model.PersonaGentleman,
+	})
+	runInstallInjectionSteps(t, rt)
+
+	prompt := readTextFile(t, systemPromptFileFor(t, home, model.AgentClaudeCode))
+	if !strings.Contains(prompt, routingOpenMarker) || !strings.Contains(prompt, routingCloseMarker) {
+		t.Fatalf("install without the SDD component left the agent unrouted:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Implementation Routing") {
+		t.Fatalf("routing section is present but carries no routing guidance:\n%s", prompt)
+	}
+}
+
+func TestInstallRoutingGuidanceIsIndependentOfSDDSelection(t *testing.T) {
+	const sddMarker = "<!-- gentle-ai:sdd-orchestrator -->"
+
+	withoutSDD := t.TempDir()
+	runInstallInjectionSteps(t, newTestInstallRuntime(t, withoutSDD, model.Selection{
+		Agents: []model.AgentID{model.AgentClaudeCode},
+	}))
+
+	withSDD := t.TempDir()
+	runInstallInjectionSteps(t, newTestInstallRuntime(t, withSDD, model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentSDD},
+		SDDMode:    model.SDDModeSingle,
+	}))
+
+	plain := readTextFile(t, systemPromptFileFor(t, withoutSDD, model.AgentClaudeCode))
+	sdd := readTextFile(t, systemPromptFileFor(t, withSDD, model.AgentClaudeCode))
+
+	for label, prompt := range map[string]string{"without sdd": plain, "with sdd": sdd} {
+		if !strings.Contains(prompt, routingOpenMarker) {
+			t.Fatalf("%s: routing guidance missing:\n%s", label, prompt)
+		}
+	}
+
+	if strings.Contains(plain, sddMarker) {
+		t.Fatalf("install without the SDD component gained SDD orchestration assets:\n%s", plain)
+	}
+	if !strings.Contains(sdd, sddMarker) {
+		t.Fatalf("install with the SDD component lost SDD orchestration assets:\n%s", sdd)
+	}
+}
+
+// TestInstallRoutingGuidanceSurvivesOpenCodeSDDInjection pins the ordering
+// hazard: the OpenCode SDD injector assigns the orchestrator prompt wholesale,
+// so guidance that is not preserved across that assignment disappears from the
+// only always-loaded scope OpenCode reads.
+//
+// The SDD component step is replayed on its own after a complete install. That
+// isolates the hazard from the staged step order: a fix that merely schedules
+// guidance last would still pass a full-plan run and still destroy guidance
+// here, which is the sequence a later sync actually performs.
+func TestInstallRoutingGuidanceSurvivesOpenCodeSDDInjection(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentSDD},
+		SDDMode:    model.SDDModeSingle,
+	}
+
+	runInstallInjectionSteps(t, newTestInstallRuntime(t, home, selection))
+	if installed := openCodeOrchestratorPrompt(t, home); !strings.Contains(installed, routingOpenMarker) {
+		t.Fatalf("install did not deliver routing guidance to the OpenCode orchestrator prompt:\n%s", installed)
+	}
+
+	runInstallComponentSteps(t, newTestInstallRuntime(t, home, selection))
+
+	prompt := openCodeOrchestratorPrompt(t, home)
+	if !strings.Contains(prompt, routingOpenMarker) || !strings.Contains(prompt, routingCloseMarker) {
+		t.Fatalf("SDD injection erased the routing guidance from the OpenCode orchestrator prompt:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "SDD Orchestrator") {
+		t.Fatalf("preserving routing guidance erased the SDD orchestrator prompt:\n%s", prompt)
+	}
+}
+
+func TestInstallStripsLegacyTriggerRulesSection(t *testing.T) {
+	home := t.TempDir()
+
+	promptPath := systemPromptFileFor(t, home, model.AgentClaudeCode)
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(promptPath), err)
+	}
+	seeded := filemerge.InjectMarkdownSection("# My own notes\n", "trigger-rules", "Retired WorkRun ceremony\n")
+	if err := os.WriteFile(promptPath, []byte(seeded), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", promptPath, err)
+	}
+
+	runInstallInjectionSteps(t, newTestInstallRuntime(t, home, model.Selection{
+		Agents: []model.AgentID{model.AgentClaudeCode},
+	}))
+
+	prompt := readTextFile(t, promptPath)
+	if strings.Contains(prompt, legacyTriggerRulesOpenMarker) {
+		t.Fatalf("legacy trigger-rules section survived the install:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "Retired WorkRun ceremony") {
+		t.Fatalf("legacy trigger-rules content survived the install:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "# My own notes") {
+		t.Fatalf("stripping the legacy section destroyed unmanaged user content:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, routingOpenMarker) {
+		t.Fatalf("routing guidance missing after the legacy strip:\n%s", prompt)
+	}
+}
+
+func TestInstallRoutingGuidanceSecondRunIsByteIdentical(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode, model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentSDD},
+		SDDMode:    model.SDDModeSingle,
+	}
+
+	runInstallInjectionSteps(t, newTestInstallRuntime(t, home, selection))
+	first := map[string]string{
+		"opencode.json": readTextFile(t, openCodeSettingsPath(home)),
+		"claude prompt": readTextFile(t, systemPromptFileFor(t, home, model.AgentClaudeCode)),
+	}
+
+	runInstallInjectionSteps(t, newTestInstallRuntime(t, home, selection))
+	second := map[string]string{
+		"opencode.json": readTextFile(t, openCodeSettingsPath(home)),
+		"claude prompt": readTextFile(t, systemPromptFileFor(t, home, model.AgentClaudeCode)),
+	}
+
+	for label, before := range first {
+		if second[label] != before {
+			t.Fatalf("second install rewrote %s; routing delivery is not idempotent", label)
+		}
+	}
+}
+
+// ─── Routing guidance is part of the rollback contract ─────────────────────
+//
+// Routing guidance is installed for every configured agent, independently of
+// the selected components. A selection whose components happen to cover the
+// same file hid the gap; a selection with no components at all exposes it:
+// without the routing path in the snapshot, install rewrites a file that was
+// never backed up and a rollback cannot restore it.
+
+func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.T) {
+	home := t.TempDir()
+	agent := model.AgentClaudeCode
+	selection := model.Selection{Agents: []model.AgentID{agent}}
+	resolved := planner.ResolvedPlan{Agents: selection.Agents}
+
+	targets := backupTargets(home, "", ScopeGlobal, selection, resolved)
+
+	routing, err := agentguidance.RoutingPaths(home, agent)
+	if err != nil {
+		t.Fatalf("RoutingPaths(%q) error = %v", agent, err)
+	}
+	if len(routing) == 0 {
+		t.Fatalf("RoutingPaths(%q) returned no path; the test proves nothing", agent)
+	}
+	for _, path := range routing {
+		if !containsPath(targets, path) {
+			t.Fatalf("backupTargets missing routing guidance path %q\ntargets = %v", path, targets)
+		}
+	}
+}
+
+func TestBackupTargetsContainNoDuplicatePaths(t *testing.T) {
+	home := t.TempDir()
+	agentIDs := []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKimi}
+	selection := model.Selection{
+		Agents:     agentIDs,
+		Components: []model.ComponentID{model.ComponentSDD, model.ComponentEngram, model.ComponentPersona},
+		SDDMode:    model.SDDModeSingle,
+	}
+	resolved := planner.ResolvedPlan{Agents: agentIDs, OrderedComponents: selection.Components}
+
+	targets := backupTargets(home, "", ScopeGlobal, selection, resolved)
+
+	assertNoDuplicatePaths(t, "backupTargets", targets)
+}
+
+func assertNoDuplicatePaths(t *testing.T, label string, paths []string) {
+	t.Helper()
+
+	seen := map[string]struct{}{}
+	for _, path := range paths {
+		if _, duplicate := seen[path]; duplicate {
+			t.Fatalf("%s returned duplicate path %q\npaths = %v", label, path, paths)
+		}
+		seen[path] = struct{}{}
+	}
 }

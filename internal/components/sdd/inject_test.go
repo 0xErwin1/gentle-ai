@@ -651,8 +651,8 @@ func TestInjectOpenCodePreservesExistingOrchestratorPromptWhenRequested(t *testi
 		"explicit request or accepted proposal",
 		"Per-action rule",
 		"Authority rule",
-		"gentle-ai.work-status/v1",
-		"gentle-ai.work-transition/v1",
+		"gentle-ai review status",
+		"gentle-ai review validate --gate",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing migrated preserved prompt hard gate %q", wanted)
@@ -766,8 +766,8 @@ func TestInjectOpenCodeMigratesPreservedLegacyOrchestratorPromptReferences(t *te
 		"Authority rule",
 		"Semantic guard",
 		"execution, not delegation",
-		"gentle-ai.work-status/v1",
-		"gentle-ai.work-transition/v1",
+		"gentle-ai review status",
+		"gentle-ai review validate --gate",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing migrated preserved prompt reference %q", wanted)
@@ -856,8 +856,8 @@ func TestInjectOpenCodeUpgradesPromptOwnedLensRouter(t *testing.T) {
 		"Optional SDD rule",
 		"explicit request or accepted proposal",
 		"Authority rule",
-		"gentle-ai.work-status/v1",
-		"gentle-ai.work-transition/v1",
+		"gentle-ai review status",
+		"gentle-ai review validate --gate",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("opencode.json missing native routing fragment %q after migration", wanted)
@@ -898,9 +898,9 @@ func TestEnsurePreservedOpenCodeDelegationHardGatesMigratesToNativeTransition(t 
 	legacy := "### Mandatory Delegation Triggers (Non-Skippable)\n\n" +
 		"before commit, push, or PR after code changes, run the concrete review lens(es) selected by Review Lens Selection unless the diff is trivial (tier 1)"
 	got := ensurePreservedOpenCodeDelegationHardGates(legacy)
-	for _, want := range []string{"`gentle-ai.work-status/v1`", "`gentle-ai.work-transition/v1`", "apply only its exact provider-issued"} {
+	for _, want := range []string{"`gentle-ai review status`", "`gentle-ai review validate --gate <gate>`", "exact owner-issued receipt"} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("migrated delegation gates missing native transition clause %q:\n%s", want, got)
+			t.Fatalf("migrated delegation gates missing native review authority clause %q:\n%s", want, got)
 		}
 	}
 	if strings.Contains(got, "Review Lens Selection") {
@@ -926,6 +926,134 @@ The words TOTALMENTE obligatorio here belong to the user.`
 	}
 	if second := ensurePreservedOpenCodeDelegationHardGates(got); second != got {
 		t.Fatalf("unmarked legacy migration is not idempotent:\nfirst:\n%s\nsecond:\n%s", got, second)
+	}
+}
+
+// Vocabulary from the retired work-routing contracts. A preserved prompt is a
+// user-visible artifact, so none of it may survive a migration: the commands it
+// names no longer exist and would send the orchestrator after dead authority.
+var retiredWorkRoutingTokens = []string{
+	"work-capabilities",
+	"work-start",
+	"work-advance",
+	"work-route",
+	"work-status",
+	"work-transition",
+	"work-reconcile",
+	"work-verification-decide",
+	"WorkRun",
+	"authorizedTransition",
+}
+
+// The exact rule 7 a previous install wrote into every preserved OpenCode and
+// Kilocode orchestrator prompt.
+const retiredWorkRoutingAuthorityRule = "7. **Authority rule**: when a WorkRun exists, request `gentle-ai.work-status/v1`" +
+	" and apply only its exact provider-issued `gentle-ai.work-transition/v1` authorization." +
+	" Never select lenses, synthesize transitions, or infer PASS from prose."
+
+// The replacement rule 7, keyed on authority surfaces that still exist.
+const nativeReviewAuthorityRuleText = "7. **Authority rule**: read native review state with `gentle-ai review status`" +
+	" and let `gentle-ai review validate --gate <gate>` check the exact owner-issued receipt at every lifecycle gate." +
+	" Never select lenses, synthesize transitions, or infer PASS from prose."
+
+// previouslyInstalledDelegationHardGates reproduces, byte for byte, the managed
+// block that shipped before this migration, including the retired rule 7.
+func previouslyInstalledDelegationHardGates(userHead string) string {
+	return userHead + "\n\n" +
+		"<!-- gentle-ai:delegation-hard-gates-migration -->\n" +
+		"### Mandatory Delegation Triggers (Non-Skippable)\n\n" +
+		"These routing boundaries are fully mandatory. They protect context quality without making SDD the universal implementation workflow.\n\n" +
+		"Semantic guard: **delegate** means using OpenCode's native Task tool to invoke a configured sub-agent. Running local scripts, Python, or Bash inline is execution, not delegation.\n\n" +
+		"Do not pass these rules to child agents as permission to spawn more agents; children receive concrete role work and must not orchestrate.\n\n" +
+		"1. **Bounded read rule**: read 1–3 files inline to decide or verify.\n" +
+		"2. **4-file rule**: if understanding requires 4+ files, delegate one narrow exploration/mapping task.\n" +
+		"3. **Write rule**: keep one mechanical, already-understood file inline; delegate one writer for 2+ non-trivial files.\n" +
+		"4. **Context rule**: delegate reading that prepares a write and broad research.\n" +
+		"5. **Optional SDD rule**: propose SDD only when durable proposal/spec/design/tasks materially reduce substantial ambiguity. Select it only after explicit request or accepted proposal.\n" +
+		"6. **Per-action rule**: tests, builds, installs, and native review actors may use fresh workers without changing the implementation route or creating SDD state.\n" +
+		retiredWorkRoutingAuthorityRule + "\n" +
+		"<!-- /gentle-ai:delegation-hard-gates-migration -->\n"
+}
+
+func TestEnsurePreservedOpenCodeDelegationHardGatesRewritesRetiredWorkRoutingAuthorityRule(t *testing.T) {
+	t.Parallel()
+
+	const userHead = "CUSTOM_PROMPT_HEAD user-authored policy."
+	installed := previouslyInstalledDelegationHardGates(userHead)
+
+	got := ensurePreservedOpenCodeDelegationHardGates(installed)
+
+	if strings.Contains(got, retiredWorkRoutingAuthorityRule) {
+		t.Fatalf("preserved prompt kept the retired authority rule:\n%s", got)
+	}
+	if count := strings.Count(got, nativeReviewAuthorityRuleText); count != 1 {
+		t.Fatalf("native authority rule occurrences = %d, want 1:\n%s", count, got)
+	}
+	if !strings.HasPrefix(got, userHead+"\n\n") {
+		t.Fatalf("migration disturbed user-authored content outside the managed block:\n%s", got)
+	}
+	if count := strings.Count(got, "<!-- gentle-ai:delegation-hard-gates-migration -->"); count != 1 {
+		t.Fatalf("managed block occurrences = %d, want 1:\n%s", count, got)
+	}
+	if second := ensurePreservedOpenCodeDelegationHardGates(got); second != got {
+		t.Fatalf("retired authority rule migration is not idempotent:\nfirst:\n%s\nsecond:\n%s", got, second)
+	}
+}
+
+func TestEnsurePreservedOpenCodeDelegationHardGatesAddsNativeAuthorityRuleToFreshPrompt(t *testing.T) {
+	t.Parallel()
+
+	const fresh = "EXTERNAL_PROFILE_MANAGER_CUSTOM_PROMPT_DO_NOT_OVERWRITE"
+
+	got := ensurePreservedOpenCodeDelegationHardGates(fresh)
+
+	if count := strings.Count(got, nativeReviewAuthorityRuleText); count != 1 {
+		t.Fatalf("native authority rule occurrences = %d, want 1:\n%s", count, got)
+	}
+	if !strings.Contains(got, fresh) {
+		t.Fatalf("fresh preserved prompt lost its user-authored content:\n%s", got)
+	}
+	if second := ensurePreservedOpenCodeDelegationHardGates(got); second != got {
+		t.Fatalf("fresh preserved prompt migration is not idempotent:\nfirst:\n%s\nsecond:\n%s", got, second)
+	}
+}
+
+func TestEnsurePreservedOpenCodeDelegationHardGatesNeverEmitsRetiredWorkRoutingVocabulary(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		prompt string
+	}{
+		{
+			name:   "previously installed prompt carrying the retired rule",
+			prompt: previouslyInstalledDelegationHardGates("CUSTOM_PROMPT_HEAD user-authored policy."),
+		},
+		{
+			name:   "fresh preserved prompt",
+			prompt: "EXTERNAL_PROFILE_MANAGER_CUSTOM_PROMPT_DO_NOT_OVERWRITE",
+		},
+		{
+			name: "unmarked stray copy of the retired rule",
+			prompt: "CUSTOM_PROMPT_HEAD user-authored policy.\n\n" +
+				"### Mandatory Delegation Triggers (Non-Skippable)\n\n" +
+				retiredWorkRoutingAuthorityRule + "\n",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := ensurePreservedOpenCodeDelegationHardGates(testCase.prompt)
+
+			for _, retired := range retiredWorkRoutingTokens {
+				if strings.Contains(got, retired) {
+					t.Errorf("migrated prompt still carries retired token %q:\n%s", retired, got)
+				}
+			}
+			if count := strings.Count(got, nativeReviewAuthorityRuleText); count != 1 {
+				t.Errorf("native authority rule occurrences = %d, want 1:\n%s", count, got)
+			}
+		})
 	}
 }
 
@@ -6639,356 +6767,6 @@ func TestInjectNonCodexAdapterCarrilUnaffected(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Inject(claude, carrilModels) should not error; got: %v", err)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Unit 4 — Trigger-rules injection tests
-// ---------------------------------------------------------------------------
-
-// 4.1 — Inject for a system-prompt agent (claude) places trigger-rules markers.
-func TestInjectTriggerRules_SystemPromptAgent(t *testing.T) {
-	home := t.TempDir()
-
-	_, err := Inject(home, claudeAdapter(), "")
-	if err != nil {
-		t.Fatalf("Inject(claude) error = %v", err)
-	}
-
-	path := filepath.Join(home, ".claude", "CLAUDE.md")
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(CLAUDE.md) error = %v", err)
-	}
-	text := string(content)
-
-	if !strings.Contains(text, "<!-- gentle-ai:trigger-rules -->") {
-		t.Error("CLAUDE.md missing <!-- gentle-ai:trigger-rules --> open marker")
-	}
-	if !strings.Contains(text, "<!-- /gentle-ai:trigger-rules -->") {
-		t.Error("CLAUDE.md missing <!-- /gentle-ai:trigger-rules --> close marker")
-	}
-
-	// The replacement projects the native routing/status contract between the markers.
-	openIdx := strings.Index(text, "<!-- gentle-ai:trigger-rules -->")
-	closeIdx := strings.Index(text, "<!-- /gentle-ai:trigger-rules -->")
-	if openIdx < 0 || closeIdx < 0 || closeIdx <= openIdx {
-		t.Fatal("trigger-rules markers found but in wrong order")
-	}
-	between := text[openIdx : closeIdx+len("<!-- /gentle-ai:trigger-rules -->")]
-	if !strings.Contains(between, "gentle-ai.work-status/v1") {
-		t.Error("CLAUDE.md trigger-rules section does not contain the native work-status contract")
-	}
-}
-
-// 4.2 — Inject is idempotent for trigger-rules (section appears exactly once after two calls).
-func TestInjectTriggerRules_Idempotent(t *testing.T) {
-	home := t.TempDir()
-
-	_, err := Inject(home, claudeAdapter(), "")
-	if err != nil {
-		t.Fatalf("Inject(claude) first error = %v", err)
-	}
-	_, err = Inject(home, claudeAdapter(), "")
-	if err != nil {
-		t.Fatalf("Inject(claude) second error = %v", err)
-	}
-
-	path := filepath.Join(home, ".claude", "CLAUDE.md")
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile(CLAUDE.md) error = %v", err)
-	}
-	text := string(content)
-
-	openCount := strings.Count(text, "<!-- gentle-ai:trigger-rules -->")
-	if openCount != 1 {
-		t.Errorf("CLAUDE.md trigger-rules open marker count = %d, want 1 (idempotency)", openCount)
-	}
-	closeCount := strings.Count(text, "<!-- /gentle-ai:trigger-rules -->")
-	if closeCount != 1 {
-		t.Errorf("CLAUDE.md trigger-rules close marker count = %d, want 1 (idempotency)", closeCount)
-	}
-}
-
-// 4.3 — Inject for a JinjaModules agent (kimi) writes trigger-rules.md module.
-func TestInjectTriggerRules_JinjaModule(t *testing.T) {
-	home := t.TempDir()
-
-	_, err := Inject(home, kimiAdapter(), "")
-	if err != nil {
-		t.Fatalf("Inject(kimi) error = %v", err)
-	}
-
-	modulePath := filepath.Join(home, ".kimi", "trigger-rules.md")
-	content, err := os.ReadFile(modulePath)
-	if err != nil {
-		t.Fatalf("ReadFile(trigger-rules.md) error = %v", err)
-	}
-	text := string(content)
-
-	// The module itself is the content (no markers — KIMI.md includes it via {% include %}).
-	if !strings.Contains(text, "gentle-ai.work-status/v1") {
-		t.Error("trigger-rules.md missing native work-status contract")
-	}
-	if !strings.Contains(text, "Agent Trigger Rules") {
-		t.Error("trigger-rules.md missing header 'Agent Trigger Rules'")
-	}
-	// The module must NOT contain markers (those are only for marker-based injection).
-	if strings.Contains(text, "<!-- gentle-ai:") {
-		t.Error("trigger-rules.md must not contain <!-- gentle-ai: markers (file is a Jinja module, not a marker-injected file)")
-	}
-}
-
-// 4.4 — Inject for OpenCode places trigger-rules content in the gentle-orchestrator prompt.
-func TestInjectTriggerRules_OpenCodePlacement(t *testing.T) {
-	home := t.TempDir()
-
-	_, err := Inject(home, opencodeAdapter(), "")
-	if err != nil {
-		t.Fatalf("Inject(opencode) error = %v", err)
-	}
-
-	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
-	content, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(opencode.json) error = %v", err)
-	}
-	text := string(content)
-
-	// The trigger-rules section should appear in the gentle-orchestrator prompt scope.
-	if !strings.Contains(text, "trigger-rules") {
-		t.Error("opencode.json does not contain trigger-rules content in the gentle-orchestrator prompt")
-	}
-}
-
-// 4.5 — Inject for Kilocode places trigger-rules content in the gentle-orchestrator prompt.
-func TestInjectTriggerRules_KilocodePlacement(t *testing.T) {
-	home := t.TempDir()
-
-	_, err := Inject(home, kilocodeAdapter(), "")
-	if err != nil {
-		t.Fatalf("Inject(kilocode) error = %v", err)
-	}
-
-	settingsPath := kilocodeAdapter().SettingsPath(home)
-	content, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatalf("ReadFile(kilocode settings) error = %v", err)
-	}
-	text := string(content)
-
-	if !strings.Contains(text, "trigger-rules") {
-		t.Error("kilocode settings does not contain trigger-rules content")
-	}
-}
-
-// 4.6 — All adapters receive trigger-rules content after Inject.
-//
-// This test enumerates ALL adapters registered in agents.NewDefaultRegistry()
-// and asserts that Inject writes trigger-rules content for each one. A count
-// guard ensures that adding a new adapter to the factory without handling its
-// trigger-rules injection causes this test to fail immediately.
-func TestInjectTriggerRules_AllAdapters(t *testing.T) {
-	// Build the canonical registry to get the exact registered adapter count.
-	// SupportedAgents() returns one entry per registered adapter.
-	registry, err := agents.NewDefaultRegistry()
-	if err != nil {
-		t.Fatalf("NewDefaultRegistry() error = %v", err)
-	}
-	registryLen := len(registry.SupportedAgents())
-
-	type adapterCase struct {
-		name    string
-		agentID model.AgentID
-		// getContent returns the primary system-prompt, Jinja module, or orchestrator
-		// content where trigger-rules is expected to appear after Inject.
-		// nil means the adapter does not support system prompts (Pi) — only no-error
-		// is asserted.
-		getContent func(home string, adapter agents.Adapter) (string, error)
-		// injectOpts customizes Inject() for adapters that require special setup
-		// (e.g. OpenClaw uses workspaceDir = home).
-		injectOpts func(home string) InjectOptions
-	}
-
-	allAdapters := []adapterCase{
-		{
-			name:    "claude",
-			agentID: model.AgentClaudeCode,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			name:    "opencode",
-			agentID: model.AgentOpenCode,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SettingsPath(home))
-			},
-		},
-		{
-			name:    "kilocode",
-			agentID: model.AgentKilocode,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SettingsPath(home))
-			},
-		},
-		{
-			name:    "gemini",
-			agentID: model.AgentGeminiCLI,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			name:    "cursor",
-			agentID: model.AgentCursor,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			name:    "vscode",
-			agentID: model.AgentVSCodeCopilot,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			name:    "codex",
-			agentID: model.AgentCodex,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			name:    "antigravity",
-			agentID: model.AgentAntigravity,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			name:    "windsurf",
-			agentID: model.AgentWindsurf,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			name:    "kimi",
-			agentID: model.AgentKimi,
-			getContent: func(home string, _ agents.Adapter) (string, error) {
-				// Kimi uses StrategyJinjaModules: trigger-rules is written as a
-				// standalone module file, not injected into the base template via markers.
-				return readFileOrEmpty(filepath.Join(home, ".kimi", "trigger-rules.md"))
-			},
-		},
-		{
-			name:    "qwencode",
-			agentID: model.AgentQwenCode,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			name:    "kiroide",
-			agentID: model.AgentKiroIDE,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			// OpenClaw is workspace-first: homeDir is the workspace path.
-			name:    "openclaw",
-			agentID: model.AgentOpenClaw,
-			getContent: func(home string, _ agents.Adapter) (string, error) {
-				// OpenClaw writes to AGENTS.md in the workspace root (= home in tests).
-				return readFileOrEmpty(filepath.Join(home, "AGENTS.md"))
-			},
-			injectOpts: func(home string) InjectOptions {
-				return InjectOptions{WorkspaceDir: home}
-			},
-		},
-		{
-			// Pi does not support system prompts (SupportsSystemPrompt = false).
-			// Inject() returns immediately with no error and no files written.
-			// We assert only that Inject does not error.
-			name:       "pi",
-			agentID:    model.AgentPi,
-			getContent: nil, // skip content check
-		},
-		{
-			name:    "trae",
-			agentID: model.AgentTrae,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-		{
-			name:    "hermes",
-			agentID: model.AgentHermes,
-			getContent: func(home string, a agents.Adapter) (string, error) {
-				return readFileOrEmpty(a.SystemPromptFile(home))
-			},
-		},
-	}
-
-	// Count guard: the test table must enumerate exactly as many adapters as the
-	// default registry. If a new adapter is added to factory.go without a
-	// corresponding entry here, this assertion catches it immediately.
-	if len(allAdapters) != registryLen {
-		t.Fatalf(
-			"TestInjectTriggerRules_AllAdapters: test table has %d adapters but agents.NewDefaultRegistry() returned %d. "+
-				"Add the missing adapter(s) to the allAdapters table and handle trigger-rules injection for them.",
-			len(allAdapters), registryLen,
-		)
-	}
-
-	for _, tc := range allAdapters {
-		tc := tc // capture
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			home := t.TempDir()
-
-			adapter, newErr := agents.NewAdapter(tc.agentID)
-			if newErr != nil {
-				t.Fatalf("NewAdapter(%s) error = %v", tc.agentID, newErr)
-			}
-
-			var opts InjectOptions
-			if tc.injectOpts != nil {
-				opts = tc.injectOpts(home)
-			}
-
-			_, injectErr := Inject(home, adapter, "", opts)
-			if injectErr != nil {
-				t.Fatalf("Inject(%s) error = %v", tc.name, injectErr)
-			}
-
-			// Pi skips the content check — it returns early from Inject.
-			if tc.getContent == nil {
-				return
-			}
-
-			content, readErr := tc.getContent(home, adapter)
-			if readErr != nil {
-				t.Fatalf("getContent(%s) error = %v", tc.name, readErr)
-			}
-
-			// System-prompt agents: the marker string "trigger-rules" appears in the
-			// injected section or in the settings JSON key.
-			// Jinja module agents (kimi): the file contains "Agent Trigger Rules" header.
-			hasTriggerRulesMarker := strings.Contains(content, "trigger-rules")
-			hasAgentTriggerRulesHeader := strings.Contains(content, "Agent Trigger Rules")
-			if !hasTriggerRulesMarker && !hasAgentTriggerRulesHeader {
-				t.Errorf(
-					"adapter %s: primary prompt/module does not contain trigger-rules content after Inject "+
-						"(checked for 'trigger-rules' and 'Agent Trigger Rules'); content len=%d",
-					tc.name, len(content),
-				)
-			}
-		})
 	}
 }
 

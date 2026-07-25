@@ -488,6 +488,22 @@ func (r *syncRuntime) stagePlan() pipeline.StagePlan {
 		})
 	}
 
+	// Routing guidance is refreshed per agent and outside the component loop, for
+	// the same reason install schedules it there: a persisted selection without
+	// the optional SDD component must still leave every agent able to choose an
+	// implementation route (issue #1794). It runs after the components so the
+	// refreshed SDD assets are already on disk when guidance is merged.
+	for _, agent := range r.agentIDs {
+		apply = append(apply, agentRoutingGuidanceStep{
+			id:           "sync:agent-guidance:" + string(agent),
+			agent:        agent,
+			homeDir:      r.homeDir,
+			workspaceDir: r.workspaceDir,
+			scope:        ScopeGlobal,
+			changedFiles: &r.changedFiles,
+		})
+	}
+
 	// Managed OpenCode-compatible plugins are versioned runtime artifacts tied
 	// to the installed binary (OpenCode and Kilocode receive them). When the
 	// persisted selection lacks the SDD component, no SDD step is planned and
@@ -527,6 +543,13 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
 			paths[path] = struct{}{}
 		}
+	}
+	// Routing guidance is refreshed per agent outside the component loop, at
+	// ScopeGlobal like the step itself. A persisted selection whose components
+	// do not cover the same file would otherwise be rewritten without a
+	// snapshot and could never be rolled back (issue #1794).
+	for _, path := range routingGuidancePaths(homeDir, workspaceDir, ScopeGlobal, adapters) {
+		paths[path] = struct{}{}
 	}
 	// Managed OpenCode-compatible plugin paths are part of sync's
 	// backup/snapshot contract whenever a plugin-receiving agent (OpenCode,

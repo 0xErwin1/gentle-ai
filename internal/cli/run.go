@@ -18,8 +18,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/kimi"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/internal/components/mcp"
 	"github.com/gentleman-programming/gentle-ai/internal/components/opencodedefault"
@@ -556,6 +558,22 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 			state:        r.state,
 		})
 	}
+
+	// Routing guidance is scheduled per agent and outside the component loop:
+	// an agent that cannot choose between direct, delegated, and proposed work is
+	// unusable, so guidance must never depend on the optional SDD component being
+	// selected. It runs after the components so the freshly written SDD assets are
+	// already on disk when guidance is merged into the same scope.
+	for _, agent := range r.resolved.Agents {
+		apply = append(apply, agentRoutingGuidanceStep{
+			id:           "agent-guidance:" + string(agent),
+			agent:        agent,
+			homeDir:      r.homeDir,
+			workspaceDir: r.workspaceDir,
+			scope:        r.scope,
+		})
+	}
+
 	if containsAgent(r.resolved.Agents, model.AgentPi) {
 		selected := r.selection.HasCommunityTool(model.CommunityToolCodeGraph)
 		stepID := "community-tool:pi-codegraph-reconcile"
@@ -566,6 +584,190 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	return pipeline.StagePlan{Prepare: prepare, Apply: apply}
+}
+
+// legacyTriggerRulesSection is the retired managed section that used to carry
+// prompt-owned WorkRun ceremony. Nothing authors it anymore, so any copy still
+// on disk is a stale instruction to invoke authority that no longer exists —
+// it has to be removed, not refreshed.
+const legacyTriggerRulesSection = "trigger-rules"
+
+// agentRoutingGuidanceStep delivers the organic routing guidance for one agent.
+//
+// It is deliberately not a component step. Routing guidance is what lets an
+// agent choose between direct, delegated, and proposed work at all, so every
+// configured agent receives it whether or not the optional SDD component was
+// selected (issue #1794).
+type agentRoutingGuidanceStep struct {
+	id           string
+	agent        model.AgentID
+	homeDir      string
+	workspaceDir string
+	scope        InstallScope
+
+	// changedFiles is the shared sync accumulator. Install leaves it nil and
+	// reports progress through the pipeline instead.
+	changedFiles *[]string
+}
+
+func (s agentRoutingGuidanceStep) ID() string { return s.id }
+
+func (s agentRoutingGuidanceStep) Run() error {
+	adapter, err := agents.NewAdapter(s.agent)
+	if err != nil {
+		return fmt.Errorf("create adapter for %q: %w", s.agent, err)
+	}
+	targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
+
+	// Strip first: an installation upgraded from an older release still carries
+	// the retired block, and leaving it beside fresh guidance would hand the
+	// agent two conflicting sets of instructions.
+	stripped, err := stripLegacyTriggerRules(targetDir, adapter)
+	if err != nil {
+		return err
+	}
+
+	injected, err := agentguidance.InjectRouting(targetDir, s.agent)
+	if err != nil {
+		return fmt.Errorf("inject routing guidance for %q: %w", s.agent, err)
+	}
+
+	s.recordChanged(stripped)
+	s.recordChanged(injected)
+	return nil
+}
+
+func (s agentRoutingGuidanceStep) recordChanged(result agentguidance.Result) {
+	if s.changedFiles == nil || !result.Changed {
+		return
+	}
+	*s.changedFiles = append(*s.changedFiles, result.Files...)
+}
+
+// stripLegacyTriggerRules removes the retired section from the scope the agent
+// actually loads, mirroring the three delivery strategies routing guidance uses.
+//
+// Removal reuses filemerge.InjectMarkdownSection with empty content, which is
+// already the defined "delete this section" operation, so no second merge
+// implementation exists that could drift from the injector.
+func stripLegacyTriggerRules(targetDir string, adapter agents.Adapter) (agentguidance.Result, error) {
+	switch {
+	case adapter.Agent() == model.AgentOpenCode || adapter.Agent() == model.AgentKilocode:
+		return stripLegacyTriggerRulesFromOrchestrator(adapter.SettingsPath(targetDir))
+	case adapter.SystemPromptStrategy() == model.StrategyJinjaModules:
+		return removeLegacyTriggerRulesModule(filepath.Join(adapter.GlobalConfigDir(targetDir), legacyTriggerRulesSection+".md"))
+	default:
+		return stripLegacyTriggerRulesFromPrompt(adapter.SystemPromptFile(targetDir))
+	}
+}
+
+func stripLegacyTriggerRulesFromPrompt(promptPath string) (agentguidance.Result, error) {
+	if strings.TrimSpace(promptPath) == "" {
+		return agentguidance.Result{}, nil
+	}
+
+	existing, err := os.ReadFile(promptPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return agentguidance.Result{}, nil
+		}
+		return agentguidance.Result{}, fmt.Errorf("read system prompt %q: %w", promptPath, err)
+	}
+
+	updated := filemerge.InjectMarkdownSection(string(existing), legacyTriggerRulesSection, "")
+	if updated == string(existing) {
+		return agentguidance.Result{}, nil
+	}
+
+	writeResult, err := filemerge.WriteFileAtomic(promptPath, []byte(updated), 0o644)
+	if err != nil {
+		return agentguidance.Result{}, err
+	}
+	return agentguidance.Result{Changed: writeResult.Changed, Files: []string{promptPath}}, nil
+}
+
+// removeLegacyTriggerRulesModule deletes the standalone include module used by
+// Jinja adapters. Their router template includes it with "ignore missing", so
+// deleting the file is exactly the section removal for that strategy.
+func removeLegacyTriggerRulesModule(modulePath string) (agentguidance.Result, error) {
+	if strings.TrimSpace(modulePath) == "" {
+		return agentguidance.Result{}, nil
+	}
+
+	if err := os.Remove(modulePath); err != nil {
+		if os.IsNotExist(err) {
+			return agentguidance.Result{}, nil
+		}
+		return agentguidance.Result{}, fmt.Errorf("remove legacy %q module %q: %w", legacyTriggerRulesSection, modulePath, err)
+	}
+	return agentguidance.Result{Changed: true, Files: []string{modulePath}}, nil
+}
+
+// stripLegacyTriggerRulesFromOrchestrator removes the section from the managed
+// orchestrator prompt inside an agent settings document.
+//
+// Every unexpected shape yields a silent no-op rather than an error: this is
+// best-effort cleanup, and the routing injector that runs immediately after is
+// the fail-closed authority on an unreadable settings document.
+func stripLegacyTriggerRulesFromOrchestrator(settingsPath string) (agentguidance.Result, error) {
+	if strings.TrimSpace(settingsPath) == "" {
+		return agentguidance.Result{}, nil
+	}
+
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return agentguidance.Result{}, nil
+		}
+		return agentguidance.Result{}, fmt.Errorf("read agent settings %q: %w", settingsPath, err)
+	}
+
+	prompt, ok := managedOrchestratorPromptFromSettings(raw)
+	if !ok {
+		return agentguidance.Result{}, nil
+	}
+
+	updated := filemerge.InjectMarkdownSection(prompt, legacyTriggerRulesSection, "")
+	if updated == prompt {
+		return agentguidance.Result{}, nil
+	}
+
+	overlay, err := json.Marshal(map[string]any{
+		"agent": map[string]any{
+			opencodedefault.ManagedAgent: map[string]any{"prompt": updated},
+		},
+	})
+	if err != nil {
+		return agentguidance.Result{}, fmt.Errorf("encode legacy %q removal for %q: %w", legacyTriggerRulesSection, settingsPath, err)
+	}
+
+	merged, err := filemerge.MergeJSONObjects(raw, overlay)
+	if err != nil {
+		return agentguidance.Result{}, fmt.Errorf("merge legacy %q removal into %q: %w", legacyTriggerRulesSection, settingsPath, err)
+	}
+
+	writeResult, err := filemerge.WriteFileAtomic(settingsPath, merged, 0o644)
+	if err != nil {
+		return agentguidance.Result{}, err
+	}
+	return agentguidance.Result{Changed: writeResult.Changed, Files: []string{settingsPath}}, nil
+}
+
+func managedOrchestratorPromptFromSettings(raw []byte) (string, bool) {
+	settings, err := filemerge.UnmarshalJSONObject(raw)
+	if err != nil {
+		return "", false
+	}
+	agentsMap, ok := settings["agent"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	orchestrator, ok := agentsMap[opencodedefault.ManagedAgent].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	prompt, ok := orchestrator["prompt"].(string)
+	return prompt, ok
 }
 
 type piCodeGraphReconcileStep struct {
@@ -1381,6 +1583,12 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 			paths[path] = struct{}{}
 		}
 	}
+	// Routing guidance is delivered per agent outside the component loop, so a
+	// selection whose components do not happen to cover the same file would be
+	// rewritten without ever having been snapshotted (issue #1794).
+	for _, path := range routingGuidancePaths(homeDir, workspaceDir, scope, adapters) {
+		paths[path] = struct{}{}
+	}
 	if containsAgent(resolved.Agents, model.AgentPi) {
 		for _, path := range communitytool.PiCodeGraphPaths(homeDir, workspaceDir) {
 			paths[path] = struct{}{}
@@ -1398,6 +1606,28 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 	}
 
 	return targets
+}
+
+// routingGuidancePaths declares the files agentRoutingGuidanceStep rewrites for
+// the given adapters.
+//
+// The target directory is resolved exactly the way that step resolves it, and
+// the paths themselves come from the injector's own delivery dispatch, so the
+// backup contract cannot drift from what is actually written.
+func routingGuidancePaths(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter) []string {
+	paths := []string{}
+	for _, adapter := range adapters {
+		targetDir := componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)
+		routing, err := agentguidance.RoutingPaths(targetDir, adapter.Agent())
+		if err != nil {
+			// The guidance step resolves the same delivery and fails loudly when
+			// it runs. Declaring a target we could not resolve would only add a
+			// path to the snapshot that is never written.
+			continue
+		}
+		paths = append(paths, routing...)
+	}
+	return paths
 }
 
 func componentPaths(homeDir string, selection model.Selection, adapters []agents.Adapter, component model.ComponentID) []string {

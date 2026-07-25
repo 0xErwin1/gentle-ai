@@ -42,14 +42,9 @@ func TestBoundedReviewContractRendersForEverySupportedAgent(t *testing.T) {
 		t.Run(string(agent.ID), func(t *testing.T) {
 			content := renderSDDOrchestratorAsset(agent.ID)
 			assertTextContainsClauses(t, string(agent.ID), content, boundedReviewRequiredClauses)
-			for _, command := range []string{
-				"gentle-ai work-capabilities --cwd <repo> --agent " + string(agent.ID) + " --contract gentle-ai.work-capabilities/v2 --json",
-				"gentle-ai work-start --cwd <repo> --agent " + string(agent.ID) + " --contract gentle-ai.work-start/v1 --json",
-			} {
-				if !strings.Contains(content, command) {
-					t.Errorf("rendered %s missing invocation identity command %q", agent.ID, command)
-				}
-			}
+			// The retired WorkRun commands are gone from the assets, so nothing
+			// here may require them. internal/assets/assets_test.go owns the
+			// inverse assertion that they never come back.
 			if strings.Contains(content, runtimeAgentIDPlaceholder) {
 				t.Errorf("rendered %s retains runtime agent placeholder", agent.ID)
 			}
@@ -82,28 +77,49 @@ func TestBoundedReviewContractRendersForEverySupportedAgent(t *testing.T) {
 	}
 }
 
-func TestPreservedSharedOrchestratorUsesActualAdapterIdentity(t *testing.T) {
+func TestPreservedSharedOrchestratorSubstitutesRuntimeAgentIdentity(t *testing.T) {
 	t.Parallel()
 
-	legacy := strings.Join([]string{
-		"gentle-ai work-capabilities --cwd <repo> --contract gentle-ai.work-capabilities/v2 --json",
-		"gentle-ai work-start --cwd <repo> --contract gentle-ai.work-start/v1 --json",
+	preserved := strings.Join([]string{
+		"Bind this to the dedicated `sdd-orchestrator` agent only.",
 		runtimeAgentIDPlaceholder,
 	}, "\n")
 	rendered := renderPreservedOpenCodeOrchestratorPrompt(
-		legacy,
+		preserved,
 		model.AgentKilocode,
 	)
-	for _, command := range []string{
-		"gentle-ai work-capabilities --cwd <repo> --agent kilocode --contract gentle-ai.work-capabilities/v2 --json",
-		"gentle-ai work-start --cwd <repo> --agent kilocode --contract gentle-ai.work-start/v1 --json",
-	} {
-		if !strings.Contains(rendered, command) {
-			t.Fatalf("preserved prompt missing %q:\n%s", command, rendered)
-		}
+	if !strings.Contains(rendered, "Bind this to the dedicated `gentle-orchestrator` agent only.") {
+		t.Fatalf("preserved prompt lost its migration:\n%s", rendered)
 	}
 	if strings.Contains(rendered, runtimeAgentIDPlaceholder) {
 		t.Fatal("preserved prompt retained runtime agent placeholder")
+	}
+	if !strings.Contains(rendered, string(model.AgentKilocode)) {
+		t.Fatalf("preserved prompt missing runtime agent identity:\n%s", rendered)
+	}
+}
+
+// The retired WorkRun commands no longer exist, so a preserved prompt that
+// still mentions them must pass through migration untouched instead of being
+// rewritten into a better-formed invocation of a deleted command.
+func TestPreservedSharedOrchestratorLeavesRetiredWorkCommandsUntouched(t *testing.T) {
+	t.Parallel()
+
+	retired := []string{
+		"gentle-ai work-capabilities --cwd <repo> --contract gentle-ai.work-capabilities/v2 --json",
+		"gentle-ai work-start --cwd <repo> --contract gentle-ai.work-start/v1 --json",
+	}
+	rendered := renderPreservedOpenCodeOrchestratorPrompt(
+		strings.Join(retired, "\n"),
+		model.AgentKilocode,
+	)
+	for _, command := range retired {
+		if !strings.Contains(rendered, command) {
+			t.Fatalf("preserved prompt rewrote retired command %q:\n%s", command, rendered)
+		}
+	}
+	if strings.Contains(rendered, "--agent "+string(model.AgentKilocode)) {
+		t.Fatalf("preserved prompt injected an adapter identity into a retired command:\n%s", rendered)
 	}
 }
 

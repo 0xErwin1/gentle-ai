@@ -16,6 +16,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/agents/codex"
 	"github.com/gentleman-programming/gentle-ai/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/internal/components/communitytool"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
@@ -665,10 +666,15 @@ func TestRunSyncRefreshesPersistedVisualComponents(t *testing.T) {
 		backup.UserHomeDirFn = restoreBackupHome
 	})
 
+	// The last two entries are the routing guidance targets. Guidance is written
+	// for every configured agent regardless of which components are persisted, so
+	// a first sync of a purely visual selection still delivers it (issue #1794).
 	wantFiles := []string{
 		filepath.Join(home, ".claude", "themes", "gentleman.json"),
 		filepath.Join(home, ".config", "opencode", "tui-plugins", "gentle-logo.tsx"),
 		filepath.Join(home, ".config", "opencode", "tui.json"),
+		filepath.Join(home, ".claude", "CLAUDE.md"),
+		filepath.Join(home, ".config", "opencode", "opencode.json"),
 	}
 
 	first, err := RunSync([]string{"--agents", "claude-code,opencode"})
@@ -4128,4 +4134,194 @@ func TestRunSync_RestoresCodexPhaseModelAssignments(t *testing.T) {
 	if strings.Contains(text, "| `sdd-strong` |") {
 		t.Fatalf("AGENTS.md rendered carril table instead of Custom per-phase table; got:\n%s", text)
 	}
+}
+
+// ─── Organic routing guidance is refreshed for every configured agent ──────
+//
+// Sync must reach the same unconditional guarantee install does: a persisted
+// selection without the optional SDD component still routes work (issue #1794).
+
+// runSyncInjectionSteps executes every staged sync apply step and returns the
+// paths the runtime reported as actually changed.
+func runSyncInjectionSteps(t *testing.T, home string, selection model.Selection) []string {
+	t.Helper()
+
+	rt, err := newSyncRuntime(home, selection)
+	if err != nil {
+		t.Fatalf("newSyncRuntime() error = %v", err)
+	}
+	for _, step := range rt.stagePlan().Apply {
+		if err := step.Run(); err != nil {
+			t.Fatalf("Run(%s) error = %v", step.ID(), err)
+		}
+	}
+	return rt.changedFiles
+}
+
+// runSyncComponentSteps executes only the component steps of a sync plan.
+func runSyncComponentSteps(t *testing.T, home string, selection model.Selection) {
+	t.Helper()
+
+	rt, err := newSyncRuntime(home, selection)
+	if err != nil {
+		t.Fatalf("newSyncRuntime() error = %v", err)
+	}
+	for _, step := range rt.stagePlan().Apply {
+		if _, isComponent := step.(componentSyncStep); !isComponent {
+			continue
+		}
+		if err := step.Run(); err != nil {
+			t.Fatalf("Run(%s) error = %v", step.ID(), err)
+		}
+	}
+}
+
+func TestSyncDeliversRoutingGuidanceWithoutSDDComponent(t *testing.T) {
+	home := t.TempDir()
+
+	runSyncInjectionSteps(t, home, model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentPersona},
+		Persona:    model.PersonaGentleman,
+	})
+
+	prompt := readTextFile(t, systemPromptFileFor(t, home, model.AgentClaudeCode))
+	if !strings.Contains(prompt, routingOpenMarker) || !strings.Contains(prompt, routingCloseMarker) {
+		t.Fatalf("sync without the SDD component left the agent unrouted:\n%s", prompt)
+	}
+}
+
+func TestSyncRoutingGuidanceIsIndependentOfSDDSelection(t *testing.T) {
+	const sddMarker = "<!-- gentle-ai:sdd-orchestrator -->"
+
+	withoutSDD := t.TempDir()
+	runSyncInjectionSteps(t, withoutSDD, model.Selection{
+		Agents: []model.AgentID{model.AgentClaudeCode},
+	})
+
+	withSDD := t.TempDir()
+	runSyncInjectionSteps(t, withSDD, model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentSDD},
+		SDDMode:    model.SDDModeSingle,
+	})
+
+	plain := readTextFile(t, systemPromptFileFor(t, withoutSDD, model.AgentClaudeCode))
+	sdd := readTextFile(t, systemPromptFileFor(t, withSDD, model.AgentClaudeCode))
+
+	if !strings.Contains(plain, routingOpenMarker) || !strings.Contains(sdd, routingOpenMarker) {
+		t.Fatalf("routing guidance is not independent of the SDD selection\nwithout sdd:\n%s\nwith sdd:\n%s", plain, sdd)
+	}
+	if strings.Contains(plain, sddMarker) {
+		t.Fatalf("sync without the SDD component gained SDD orchestration assets:\n%s", plain)
+	}
+	if !strings.Contains(sdd, sddMarker) {
+		t.Fatalf("sync with the SDD component lost SDD orchestration assets:\n%s", sdd)
+	}
+}
+
+// TestSyncRoutingGuidanceSurvivesOpenCodeSDDInjection replays only the SDD
+// component step on an already-guided home. Scheduling guidance last would hide
+// the hazard on a full plan while still destroying guidance in this sequence.
+func TestSyncRoutingGuidanceSurvivesOpenCodeSDDInjection(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode},
+		Components: []model.ComponentID{model.ComponentSDD},
+		SDDMode:    model.SDDModeSingle,
+	}
+
+	runSyncInjectionSteps(t, home, selection)
+	if synced := openCodeOrchestratorPrompt(t, home); !strings.Contains(synced, routingOpenMarker) {
+		t.Fatalf("sync did not deliver routing guidance to the OpenCode orchestrator prompt:\n%s", synced)
+	}
+
+	runSyncComponentSteps(t, home, selection)
+
+	prompt := openCodeOrchestratorPrompt(t, home)
+	if !strings.Contains(prompt, routingOpenMarker) || !strings.Contains(prompt, routingCloseMarker) {
+		t.Fatalf("SDD sync erased the routing guidance from the OpenCode orchestrator prompt:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "SDD Orchestrator") {
+		t.Fatalf("preserving routing guidance erased the SDD orchestrator prompt:\n%s", prompt)
+	}
+}
+
+func TestSyncStripsLegacyTriggerRulesSection(t *testing.T) {
+	home := t.TempDir()
+
+	promptPath := systemPromptFileFor(t, home, model.AgentClaudeCode)
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(promptPath), err)
+	}
+	seeded := filemerge.InjectMarkdownSection("# My own notes\n", "trigger-rules", "Retired WorkRun ceremony\n")
+	if err := os.WriteFile(promptPath, []byte(seeded), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", promptPath, err)
+	}
+
+	runSyncInjectionSteps(t, home, model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}})
+
+	prompt := readTextFile(t, promptPath)
+	if strings.Contains(prompt, legacyTriggerRulesOpenMarker) {
+		t.Fatalf("legacy trigger-rules section survived the sync:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "# My own notes") {
+		t.Fatalf("stripping the legacy section destroyed unmanaged user content:\n%s", prompt)
+	}
+}
+
+func TestSyncRoutingGuidanceSecondRunReportsNoChange(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentOpenCode, model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentSDD},
+		SDDMode:    model.SDDModeSingle,
+	}
+
+	if changed := runSyncInjectionSteps(t, home, selection); len(changed) == 0 {
+		t.Fatal("first sync reported no changed files; the fixture wrote nothing")
+	}
+	if changed := runSyncInjectionSteps(t, home, selection); len(changed) != 0 {
+		t.Fatalf("second identical sync rewrote %v; routing delivery is not idempotent", changed)
+	}
+}
+
+// ─── Routing guidance is part of sync's rollback contract ──────────────────
+//
+// The routing guidance step runs for every synced agent regardless of the
+// persisted components, so its target has to be snapshotted even when no
+// component contributes the same file.
+
+func TestSyncBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.T) {
+	home := t.TempDir()
+	agent := model.AgentClaudeCode
+	selection := model.Selection{Agents: []model.AgentID{agent}}
+
+	targets := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+
+	routing, err := agentguidance.RoutingPaths(home, agent)
+	if err != nil {
+		t.Fatalf("RoutingPaths(%q) error = %v", agent, err)
+	}
+	if len(routing) == 0 {
+		t.Fatalf("RoutingPaths(%q) returned no path; the test proves nothing", agent)
+	}
+	for _, path := range routing {
+		if !containsPath(targets, path) {
+			t.Fatalf("syncBackupTargets missing routing guidance path %q\ntargets = %v", path, targets)
+		}
+	}
+}
+
+func TestSyncBackupTargetsContainNoDuplicatePaths(t *testing.T) {
+	home := t.TempDir()
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKimi},
+		Components: []model.ComponentID{model.ComponentSDD, model.ComponentEngram, model.ComponentPersona},
+		SDDMode:    model.SDDModeSingle,
+	}
+
+	targets := syncBackupTargets(home, "", selection, resolveAdapters(selection.Agents))
+
+	assertNoDuplicatePaths(t, "syncBackupTargets", targets)
 }
