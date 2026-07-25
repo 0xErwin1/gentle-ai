@@ -63,6 +63,57 @@ func TestInjectRoutingInstallsGuidanceForEverySupportedAgent(t *testing.T) {
 	}
 }
 
+// TestInjectRoutingStaysContainedUnderHostileEnvironment pins containment
+// against ambient config-redirection environment. CI runners (and real user
+// shells) export XDG_CONFIG_HOME and APPDATA; an adapter that resolves paths
+// from the environment instead of the passed installation root writes guidance
+// outside the target dir — into the real user config — and the idempotency
+// guarantee silently breaks because state leaks across runs.
+//
+// No t.Parallel here: t.Setenv is process-wide and forbids it.
+func TestInjectRoutingStaysContainedUnderHostileEnvironment(t *testing.T) {
+	hostile := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(hostile, "xdg"))
+	t.Setenv("APPDATA", filepath.Join(hostile, "AppData", "Roaming"))
+
+	for _, agent := range catalog.AllAgents() {
+		t.Run(string(agent.ID), func(t *testing.T) {
+			targetDir := t.TempDir()
+
+			declared, err := RoutingPaths(targetDir, agent.ID)
+			if err != nil {
+				t.Fatalf("RoutingPaths(%q) error = %v", agent.ID, err)
+			}
+			for _, path := range declared {
+				if !strings.HasPrefix(path, targetDir) {
+					t.Fatalf("RoutingPaths(%q) declared a path outside the target dir: %q", agent.ID, path)
+				}
+			}
+
+			result, err := InjectRouting(targetDir, agent.ID)
+			if err != nil {
+				t.Fatalf("InjectRouting(%q) error = %v", agent.ID, err)
+			}
+			if !result.Changed {
+				t.Fatalf("InjectRouting(%q) reported no change on a fresh target", agent.ID)
+			}
+			for _, path := range result.Files {
+				if !strings.HasPrefix(path, targetDir) {
+					t.Fatalf("InjectRouting(%q) wrote outside the target dir: %q", agent.ID, path)
+				}
+			}
+
+			entries, err := os.ReadDir(hostile)
+			if err != nil {
+				t.Fatalf("ReadDir(hostile) error = %v", err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("InjectRouting(%q) created %d entries under the hostile config root", agent.ID, len(entries))
+			}
+		})
+	}
+}
+
 func TestInjectRoutingIsIdempotent(t *testing.T) {
 	t.Parallel()
 
