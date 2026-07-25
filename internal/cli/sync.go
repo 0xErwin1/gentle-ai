@@ -846,10 +846,19 @@ func (s componentSyncStep) Run() error {
 	case model.ComponentEngram:
 		// Sync: inject MCP config + system prompt protocol only.
 		// NO binary install. NO engram setup.
+		//
+		// Resolve the installed engram version exactly like the install path
+		// (internal/cli/run.go) so InjectOptions.Version feeds the same
+		// Decision 1 slim/full gate (bug #1824): without it every sync
+		// silently re-inflated the slim Claude Code engram-protocol section
+		// back to the full one. Errors are intentionally ignored — an empty
+		// version safely falls back to the full section.
+		engramVersion, _ := resolveEngramVersion("engram")
 		engramOpts := engram.InjectOptions{
 			CodexOrchestratorAssignment: s.selection.CodexOrchestratorAssignment,
 			CodexCarrilModelAssignments: s.selection.CodexCarrilModelAssignments,
 			CodexModelAssignments:       s.selection.CodexModelAssignments,
+			Version:                     engramVersion,
 		}
 		for _, adapter := range adapters {
 			var res engram.InjectionResult

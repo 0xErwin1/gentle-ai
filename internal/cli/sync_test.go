@@ -18,6 +18,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/internal/components/agentguidance"
 	"github.com/gentleman-programming/gentle-ai/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/internal/model"
 	"github.com/gentleman-programming/gentle-ai/internal/pipeline"
@@ -478,6 +479,81 @@ func TestComponentSyncStepSkipsEngramBinaryInstall(t *testing.T) {
 		if strings.Contains(cmd, "engram setup") {
 			t.Errorf("componentSyncStep must not run engram setup, got command: %s", cmd)
 		}
+	}
+}
+
+// TestComponentSyncStepPreservesSlimEngramProtocol pins bug #1824: install
+// threads the detected engram binary version into engram.InjectOptions.Version
+// (internal/cli/run.go), so a verified Claude Code install renders the SLIM
+// engram-protocol CLAUDE.md section. The sync path built InjectOptions WITHOUT
+// Version, so every `gentle-ai sync` silently re-inflated the slim section
+// back to the full (~6.7 KB) one. Sync must detect the version identically
+// (resolveEngramVersion) and keep the installed slim section byte-identical.
+func TestComponentSyncStepPreservesSlimEngramProtocol(t *testing.T) {
+	home := t.TempDir()
+
+	const installedEngramVersion = "engram 1.18.0" // above the v1.4.0 slim floor
+	restoreVerify := verifyEngramVersion
+	t.Cleanup(func() { verifyEngramVersion = restoreVerify })
+	verifyEngramVersion = func() (string, error) { return installedEngramVersion, nil }
+
+	adapter, err := agents.NewAdapter(model.AgentClaudeCode)
+	if err != nil {
+		t.Fatalf("NewAdapter(claude-code) error = %v", err)
+	}
+
+	// Install path: Version is threaded, so the SLIM section is written.
+	if _, err := engram.InjectWithOptions(home, adapter, engram.InjectOptions{Version: installedEngramVersion}); err != nil {
+		t.Fatalf("install-path InjectWithOptions error = %v", err)
+	}
+	claudeMD := filepath.Join(home, ".claude", "CLAUDE.md")
+	installed, err := os.ReadFile(claudeMD)
+	if err != nil {
+		t.Fatalf("ReadFile(CLAUDE.md) after install error = %v", err)
+	}
+	if strings.Contains(string(installed), "needs_review") || !strings.Contains(string(installed), "SessionStart hook") {
+		t.Fatalf("precondition failed: install did not write the SLIM section:\n%s", installed)
+	}
+
+	// Sync over the installed state must preserve the slim section.
+	var changed []string
+	step := componentSyncStep{
+		id:           "sync:engram",
+		component:    model.ComponentEngram,
+		homeDir:      home,
+		agents:       []model.AgentID{model.AgentClaudeCode},
+		changedFiles: &changed,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("componentSyncStep.Run() error = %v", err)
+	}
+	afterSync, err := os.ReadFile(claudeMD)
+	if err != nil {
+		t.Fatalf("ReadFile(CLAUDE.md) after sync error = %v", err)
+	}
+	if strings.Contains(string(afterSync), "needs_review") {
+		t.Fatalf("sync re-inflated the SLIM engram-protocol section back to FULL (bug #1824):\n%s", afterSync)
+	}
+	if !bytes.Equal(installed, afterSync) {
+		t.Fatalf("sync must leave the installed CLAUDE.md byte-identical\ninstalled:\n%s\nafter sync:\n%s", installed, afterSync)
+	}
+
+	// Idempotency guard: a second sync must not report the section changed.
+	changed = nil
+	if err := step.Run(); err != nil {
+		t.Fatalf("second componentSyncStep.Run() error = %v", err)
+	}
+	for _, f := range changed {
+		if f == claudeMD {
+			t.Errorf("second sync reported CLAUDE.md as changed; want no-op on the engram-protocol section")
+		}
+	}
+	afterSecond, err := os.ReadFile(claudeMD)
+	if err != nil {
+		t.Fatalf("ReadFile(CLAUDE.md) after second sync error = %v", err)
+	}
+	if !bytes.Equal(installed, afterSecond) {
+		t.Fatalf("second sync must remain byte-identical to the installed CLAUDE.md")
 	}
 }
 
