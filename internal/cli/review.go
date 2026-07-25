@@ -27,7 +27,19 @@ type ReviewValidateResult struct {
 	Action  string                        `json:"action"`
 	Reason  string                        `json:"reason"`
 	Context reviewtransaction.GateContext `json:"context"`
+	// Delivery names what governs delivery when the answer is not the receipt
+	// itself. It is an additive, omitted-by-default extension of
+	// gentle-ai.review-gate-result/v1: every projection that already shipped
+	// keeps its exact field set, and only a candidate that is unmanaged by the
+	// user's own choice carries the extra token. It never carries an approval.
+	Delivery reviewtransaction.RDDDelivery `json:"delivery,omitempty"`
 }
+
+// reviewDeliveryPolicyAction is the action reported when the review gate has no
+// authority to apply. It is deliberately not "explicit-maintainer-action":
+// nothing is wrong and nobody has to intervene, ordinary repository policy
+// simply governs delivery.
+const reviewDeliveryPolicyAction = "repository-policy"
 
 func newReviewFlagSet(name string, stdout io.Writer, details string) *flag.FlagSet {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)

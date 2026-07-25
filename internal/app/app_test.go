@@ -399,6 +399,26 @@ func TestRunArgsDispatchesCompactReviewFacadeBeforePlatformValidation(t *testing
 	}
 }
 
+func TestRunArgsDispatchesReviewModeBeforePlatformValidation(t *testing.T) {
+	origEnsure := ensureCurrentOSSupported
+	t.Cleanup(func() { ensureCurrentOSSupported = origEnsure })
+	ensureCurrentOSSupported = func() error { return fmt.Errorf("unsupported platform") }
+
+	var output bytes.Buffer
+	if err := RunArgs([]string{"review", "mode", "--help"}, &output); err != nil {
+		t.Fatalf("RunArgs(review mode --help) error = %v", err)
+	}
+	if !strings.Contains(output.String(), "gentle-ai review mode <enable|disable|status>") {
+		t.Fatalf("review mode help missing:\n%s", output.String())
+	}
+
+	output.Reset()
+	err := RunArgs([]string{"review", "mode", "toggle"}, &output)
+	if err == nil || !strings.Contains(err.Error(), "unknown review mode command") {
+		t.Fatalf("RunArgs(review mode toggle) error = %v", err)
+	}
+}
+
 // TestListBackupsFallsBackGracefullyForOldManifests verifies that old manifests
 // without Source/Description are still returned (not skipped) and can be displayed
 // via DisplayLabel without panicking.

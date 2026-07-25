@@ -74,6 +74,32 @@ func TestHelpRejectsStaleMutableAndMandatoryReviewWording(t *testing.T) {
 	}
 }
 
+func TestHelpDocumentsUserControlledReviewModeKillSwitch(t *testing.T) {
+	var buf bytes.Buffer
+	printHelp(&buf, "v1.0.0-test")
+	output := buf.String()
+	for _, want := range []string{
+		"review mode <enable|disable|status>",
+		"--scope <global|clone>",
+		"off wins",
+		"status never mutates",
+		"asks once per clone",
+		"'not now' applies to that candidate only",
+		"gentle-ai review mode disable",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("help output missing review mode documentation %q:\n%s", want, output)
+		}
+	}
+	// The permanent disable stopped being a numbered answer, so the help must
+	// not keep advertising it as one.
+	for _, stale := range []string{"never ask again", "Never ask again"} {
+		if strings.Contains(output, stale) {
+			t.Fatalf("help output still offers a permanent disable as an answer %q:\n%s", stale, output)
+		}
+	}
+}
+
 func TestHelpCommandsHeadingIsAligned(t *testing.T) {
 	var buf bytes.Buffer
 	printHelp(&buf, "v1.2.3")

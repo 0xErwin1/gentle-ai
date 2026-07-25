@@ -43,7 +43,19 @@ type ReviewFacadeStartResult struct {
 	ChangedFiles     int                          `json:"changed_files"`
 	ChangedLines     int                          `json:"changed_lines"`
 	CorrectionBudget int                          `json:"correction_budget"`
+	// RiskEvidence carries the same human phrases the interactive consent
+	// prompt speaks for the frozen candidate, so a headless consumer can relay
+	// WHY the tier escalated. Absent when no evidence drove an escalation.
+	RiskEvidence []string `json:"risk_evidence,omitempty"`
+	// Hint is a purely informational recovery pointer; it never changes START
+	// behavior and is absent outside its one scoped case.
+	Hint string `json:"hint,omitempty"`
 }
+
+// reviewStartEmptyCandidateHint makes the committed-work recovery path
+// discoverable where it is needed: a clean worktree yields an empty candidate,
+// and the fix is to name the base to compare against, not to redo the work.
+const reviewStartEmptyCandidateHint = "the candidate has no pending changes; already-committed work can be reviewed by rerunning review start with --base-ref <commit> naming the base to compare against"
 
 // ReviewFacadeLensBinding pairs one selected lens with its frozen zero-based
 // order so orchestrators build capture bindings exclusively from START output.
@@ -947,6 +959,13 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	if err != nil {
 		return err
 	}
+	// The candidate is frozen and the tier is classified, so this is the one
+	// point where the kill switch can stop a start and the one-time question can
+	// name the real reason. Nothing has been persisted yet, so refusing here
+	// leaves no authority behind.
+	if err := authorizeReviewStart(ctx, root, assessment); err != nil {
+		return err
+	}
 	explicitLineage := strings.TrimSpace(*lineage) != ""
 	if !explicitLineage {
 		*lineage = "review-" + strings.TrimPrefix(snapshot.Identity, "sha256:")[:16]
@@ -1026,6 +1045,16 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	authority := started.Record.State
 	legacyResult := reviewFacadeStartResultFor(started.Action, started.LensesRequired, authority)
 	if !negotiated {
+		// Output-only projections of facts this start already computed. Both
+		// describe the frozen candidate, so they attach only when this start
+		// froze exactly the snapshot that was assessed above; a blocked start
+		// reporting a different frozen authority keeps the previous shape.
+		if authority.InitialSnapshot.Identity == snapshot.Identity {
+			legacyResult.RiskEvidence = reviewConsentEvidencePhrases(assessment.Reasons)
+			if legacyResult.ChangedFiles == 0 && target.Kind == reviewtransaction.TargetCurrentChanges {
+				legacyResult.Hint = reviewStartEmptyCandidateHint
+			}
+		}
 		return encodeReviewJSON(stdout, legacyResult)
 	}
 	if started.Action == reviewtransaction.CompactStartRecover {
@@ -1874,6 +1903,17 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 		}
 		var discovery *ReviewReceiptDiscoveryError
 		if errors.As(compactErr, &discovery) {
+			// No receipt was discovered at all. While the user has switched
+			// review-driven development off that is not a fault, so the gate
+			// reports the typed disabled/unmanaged disposition instead of
+			// denying delivery it has no authority over. Only this kind
+			// qualifies: ambiguous, scope-changed, or corrupted authority means
+			// something is wrong rather than unmanaged by choice, and those keep
+			// failing closed so the user resolves them explicitly.
+			if discovery.Kind == ReviewReceiptMissing &&
+				reviewDeliveryDisposition(ctx, root, false) == reviewtransaction.RDDDeliveryDisabledUnmanaged {
+				return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate)
+			}
 			result := reviewtransaction.GateInvalidated
 			reason := discovery.Error()
 			context := reviewtransaction.GateContext{
@@ -2636,6 +2676,30 @@ func rejectFacadeCorrectionUntracked(ctx context.Context, repo string, state rev
 		return fmt.Errorf("correction contains untracked paths outside the frozen review scope: %s", strings.Join(unexpected, ", "))
 	}
 	return nil
+}
+
+// emitDisabledUnmanagedDelivery reports a receiptless candidate under a
+// user-disabled kill switch.
+//
+// It never approves: `allowed` stays false, the result is not an allow, and no
+// receipt, PASS, or authority is invented. It also never vetoes, because a
+// disabled switch defers delivery to ordinary repository policy — hooks, tests,
+// and CI stay active and decide — so the command exits successfully and the
+// typed result names `disabled/unmanaged` as what governs. The receipt-discovery
+// context is preserved so the reason no receipt governs stays discoverable, and
+// the whole result is derived from constants so replaying the same request
+// returns the same bytes.
+func emitDisabledUnmanagedDelivery(stdout io.Writer, gate reviewtransaction.GateKind) error {
+	return encodeReviewJSON(stdout, ReviewValidateResult{
+		Schema: ReviewValidateSchema, Result: reviewtransaction.GateInvalidated, Allowed: false,
+		Action:   reviewDeliveryPolicyAction,
+		Reason:   "review-driven development is disabled and no receipt governs this candidate, so delivery follows ordinary repository policy",
+		Delivery: reviewtransaction.RDDDeliveryDisabledUnmanaged,
+		Context: reviewtransaction.GateContext{
+			Gate:   gate,
+			Denial: &reviewtransaction.GateDenial{Stage: "receipt-discovery", Code: string(ReviewReceiptMissing)},
+		},
+	})
 }
 
 func emitFacadeGateEvaluation(stdout io.Writer, evaluation reviewtransaction.NativeGateEvaluation) error {
