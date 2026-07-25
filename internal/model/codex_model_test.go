@@ -213,6 +213,26 @@ func TestCodexTierGroups_AllPhasesAssigned(t *testing.T) {
 	if len(seen) != 13 {
 		t.Errorf("expected 13 phases total, got %d", len(seen))
 	}
+
+	// Explicit assertions requested by CodeRabbit review:
+	// Verify sdd-spec belongs to sdd-spec carril and sdd-tasks belongs to sdd-mid
+	if got := seen["sdd-spec"]; got != "sdd-spec" {
+		t.Errorf("sdd-spec phase mapped to %q, want sdd-spec", got)
+	}
+	if got := seen["sdd-tasks"]; got != "sdd-mid" {
+		t.Errorf("sdd-tasks phase mapped to %q, want sdd-mid", got)
+	}
+
+	// Verify sdd-spec effort across presets
+	if got := model.CodexModelPresetRecommended()["sdd-spec"]; got != model.CodexEffortHigh {
+		t.Errorf("Recommended preset sdd-spec effort = %q, want %q", got, model.CodexEffortHigh)
+	}
+	if got := model.CodexModelPresetLowCost()["sdd-spec"]; got != model.CodexEffortMedium {
+		t.Errorf("LowCost preset sdd-spec effort = %q, want %q", got, model.CodexEffortMedium)
+	}
+	if got := model.CodexModelPresetPowerful()["sdd-spec"]; got != model.CodexEffortHigh {
+		t.Errorf("Powerful preset sdd-spec effort = %q, want %q", got, model.CodexEffortHigh)
+	}
 }
 
 func TestDefaultCarrilModels(t *testing.T) {
