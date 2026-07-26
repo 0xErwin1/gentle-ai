@@ -212,8 +212,18 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 		}
 	}
 	wantCandidateCausalIDs, wantErr := canonicalStrings(wantCandidateCausalIDs, "candidate-causal finding id")
+	if wantErr != nil {
+		return fail(ArtifactAdmissionIncomplete, wantErr.Error())
+	}
 	verifiedIDs, err := canonicalStrings(request.CandidateCausalFindingIDs, "candidate-causal finding id")
-	if wantErr != nil || err != nil || !equalStrings(verifiedIDs, request.CandidateCausalFindingIDs) || !equalStrings(verifiedIDs, wantCandidateCausalIDs) {
+	if err != nil {
+		return fail(ArtifactAdmissionIncomplete, err.Error())
+	}
+	// Both sides are canonicalized before comparing: a submission that names
+	// the same candidate-causal findings in a different order or with
+	// non-canonical formatting must still admit, since admission persists the
+	// canonical form below rather than the caller's raw bytes.
+	if !equalStrings(verifiedIDs, wantCandidateCausalIDs) {
 		return fail(ArtifactAdmissionOutOfScope, "candidate-causal findings are not proven by repository-derived changed-line evidence")
 	}
 	admission.Decision, admission.ResultHash = ArtifactAdmissionCompleted, canonical.ResultHash

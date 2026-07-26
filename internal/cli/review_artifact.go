@@ -306,7 +306,19 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	canonicalResult = append(canonicalResult, '\n')
 	nativeResult := result.nativeLensResult()
 	nativeResult.Lens = *lens
-	candidateCausalIDs, err := verifiedCandidateCausalFindingIDs(ctx, root, state.InitialSnapshot, nativeResult)
+	// Derive verified candidate-causal IDs from the CANONICALIZED result, not
+	// the raw one: CanonicalCompactLensResult assigns a fallback ID
+	// (`<prefix>-NNN`) to any severe finding submitted without an explicit
+	// "id", and AdmitArtifact below canonicalizes independently before
+	// comparing against this set. Verifying against the raw result left a
+	// severe candidate-causal finding with no "id" permanently unmatchable
+	// against admission's canonicalized fallback ID (community report,
+	// issue-1699, confirmed unresolved by the earlier Group A fix).
+	canonicalForCausality, err := reviewtransaction.CanonicalCompactLensResult(nativeResult)
+	if err != nil {
+		return reviewPreflightError(fmt.Errorf("canonicalize reviewer result: %w", err))
+	}
+	candidateCausalIDs, err := verifiedCandidateCausalFindingIDs(ctx, root, state.InitialSnapshot, canonicalForCausality)
 	if err != nil {
 		return reviewPreflightError(err)
 	}

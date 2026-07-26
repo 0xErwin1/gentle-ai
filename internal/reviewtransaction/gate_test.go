@@ -1656,6 +1656,72 @@ func repositoryLineageStoreDir(t *testing.T, repo, lineage string) string {
 	return filepath.Join(commonDir, "gentle-ai", "review-transactions", "v1", lineage)
 }
 
+// TestDiscoverCompactFacadeGateReviewClassification is the ladder table for
+// Group A (1699-adjacent target typing, and the published-delivery release
+// blocker): every producer that used to reach the pre-push path as an opaque
+// error now carries a typed sentinel the caller can act on.
+func TestDiscoverCompactFacadeGateReviewClassification(t *testing.T) {
+	t.Run("merge-base ambiguity types as target resolution (gate.go:748)", func(t *testing.T) {
+		repo, _ := emptyRemoteTrackingRepo(t)
+		branch := currentBranch(context.Background(), repo)
+		reviewedBaseTree := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD^{tree}"))
+		gitSnapshot(t, repo, "checkout", "--orphan", "unrelated")
+		writeSnapshotFile(t, repo, "unrelated.txt", "unrelated\n")
+		gitSnapshot(t, repo, "add", "unrelated.txt")
+		gitSnapshot(t, repo, "commit", "-m", "unrelated")
+		gitSnapshot(t, repo, "push", "origin", "HEAD:refs/heads/"+branch)
+		gitSnapshot(t, repo, "checkout", branch)
+		writeSnapshotFile(t, repo, "tracked.txt", "reviewed delivery\n")
+		gitSnapshot(t, repo, "commit", "-am", "reviewed delivery")
+
+		_, _, err := buildPushTarget(context.Background(), repo, "", reviewedBaseTree, "")
+		var targetErr *GateTargetResolutionError
+		if !errors.As(err, &targetErr) || targetErr.RequiredInput != "base_ref" || !strings.Contains(err.Error(), "--base-ref") {
+			t.Fatalf("merge-base ambiguity error = %T %v, want *GateTargetResolutionError naming --base-ref", err, err)
+		}
+	})
+
+	t.Run("unconfigured push remote types as target resolution (gate.go:752)", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		branch := currentBranch(context.Background(), repo)
+		remote := filepath.Join(t.TempDir(), "upstream.git")
+		gitSnapshot(t, repo, "init", "--bare", remote)
+		gitSnapshot(t, repo, "remote", "add", "upstream", remote)
+		gitSnapshot(t, repo, "push", "upstream", "HEAD:refs/heads/"+branch)
+
+		// The explicit selector resolves through the "upstream" remote alone,
+		// so no origin remote and no push-remote configuration ever exists:
+		// publicationRemote() has nothing to find.
+		_, _, err := buildPushTarget(context.Background(), repo, "upstream/"+branch, "", "")
+		var targetErr *GateTargetResolutionError
+		if !errors.As(err, &targetErr) || targetErr.RequiredInput != "base_ref" || !strings.Contains(err.Error(), "not configured") {
+			t.Fatalf("unconfigured push remote error = %T %v, want *GateTargetResolutionError naming the unconfigured remote", err, err)
+		}
+	})
+
+	t.Run("ambiguous reviewed delivery base types as delivery-base resolution (gate.go:1153)", func(t *testing.T) {
+		repo := initSnapshotRepo(t)
+		reviewedTree := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD^{tree}"))
+		mergeBase := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+		writeSnapshotFile(t, repo, "tracked.txt", "candidate change\n")
+		gitSnapshot(t, repo, "commit", "-am", "candidate change")
+		// Revert tracked.txt to the exact reviewed base content: this second
+		// commit's tree is byte-identical to the reviewed base tree, so the
+		// publication range now contains two commits whose tree equals the
+		// reviewed tree — publicationBase itself and this revert — which is
+		// exactly the ambiguous-match shape the sentinel exists for.
+		writeSnapshotFile(t, repo, "tracked.txt", "base\n")
+		gitSnapshot(t, repo, "commit", "-am", "revert to reviewed tree")
+		head := trimGit(gitSnapshot(t, repo, "rev-parse", "HEAD"))
+
+		_, err := reviewedDeliveryBase(context.Background(), repo, mergeBase, head, reviewedTree)
+		var deliveryErr *GateDeliveryBaseResolutionError
+		if !errors.As(err, &deliveryErr) {
+			t.Fatalf("ambiguous reviewed delivery base error = %T %v, want *GateDeliveryBaseResolutionError", err, err)
+		}
+	})
+}
+
 func trimGit(value string) string {
 	for len(value) > 0 && (value[len(value)-1] == '\n' || value[len(value)-1] == '\r') {
 		value = value[:len(value)-1]

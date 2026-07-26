@@ -90,23 +90,28 @@ const (
 )
 
 type ReviewIntegrationFailure struct {
-	Schema                 string                           `json:"schema"`
-	Contract               string                           `json:"contract"`
-	Operation              string                           `json:"operation"`
-	Phase                  string                           `json:"phase"`
-	Code                   string                           `json:"code"`
-	Message                string                           `json:"message"`
-	MutationOutcome        ReviewMutationOutcome            `json:"mutation_outcome"`
-	AuthorityApplicability string                           `json:"authority_applicability"`
-	RetrySafe              bool                             `json:"retry_safe"`
-	Replayability          reviewtransaction.Replayability  `json:"replayability"`
-	LineageID              string                           `json:"lineage_id,omitempty"`
-	RequestDigest          string                           `json:"request_digest,omitempty"`
-	ProgressIdentity       string                           `json:"progress_identity,omitempty"`
-	RequiredInputs         []string                         `json:"required_inputs"`
-	NextAction             string                           `json:"next_action"`
-	CauseCategory          string                           `json:"cause_category,omitempty"`
-	Context                *ReviewIntegrationFailureContext `json:"context,omitempty"`
+	Schema                 string                          `json:"schema"`
+	Contract               string                          `json:"contract"`
+	Operation              string                          `json:"operation"`
+	Phase                  string                          `json:"phase"`
+	Code                   string                          `json:"code"`
+	Message                string                          `json:"message"`
+	MutationOutcome        ReviewMutationOutcome           `json:"mutation_outcome"`
+	AuthorityApplicability string                          `json:"authority_applicability"`
+	RetrySafe              bool                            `json:"retry_safe"`
+	Replayability          reviewtransaction.Replayability `json:"replayability"`
+	LineageID              string                          `json:"lineage_id,omitempty"`
+	RequestDigest          string                          `json:"request_digest,omitempty"`
+	ProgressIdentity       string                          `json:"progress_identity,omitempty"`
+	RequiredInputs         []string                        `json:"required_inputs"`
+	NextAction             string                          `json:"next_action"`
+	CauseCategory          string                          `json:"cause_category,omitempty"`
+	// Cause is additive: the wrapped real native cause for the
+	// operation_outcome_unknown default envelope, so a caller is never left
+	// with only a fixed placeholder message. It is never populated on the
+	// read-only catch-all, which stays deliberately content-free.
+	Cause   string                           `json:"cause,omitempty"`
+	Context *ReviewIntegrationFailureContext `json:"context,omitempty"`
 }
 
 type ReviewIntegrationFailureContext struct {
@@ -404,6 +409,18 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		}
 		return failure
 	}
+	var preLock *reviewtransaction.StoreLockPreAcquisitionError
+	if errors.As(runErr, &preLock) {
+		failure.Phase = "pre_native"
+		failure.Code = "store_lock_unavailable"
+		failure.Message = "The authoritative review store lock could not be acquired before review authority mutation: " + preLock.Error()
+		failure.MutationOutcome = ReviewMutationNotStarted
+		failure.AuthorityApplicability = "not_evaluated"
+		failure.RetrySafe = false
+		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
+		failure.NextAction = "stop"
+		return failure
+	}
 	var gitTimeout *reviewtransaction.GitCommandTimeoutError
 	if errors.As(runErr, &gitTimeout) {
 		if gitTimeout.Aggregate {
@@ -558,6 +575,15 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.RetrySafe = true
 		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
 		failure.NextAction = "retry"
+		return failure
+	}
+	// The true operation_outcome_unknown default: no typed branch above
+	// matched, and the operation mutates authority, so the caller cannot be
+	// told a safe canned story. Code, Message, and MutationOutcome stay
+	// byte-identical to the struct literal above; only the additive Cause
+	// field carries the real native reason instead of discarding it.
+	if runErr != nil {
+		failure.Cause = runErr.Error()
 	}
 	return failure
 }

@@ -555,6 +555,23 @@ func TestNegotiatedGitFailuresAreTypedNonAmplifyingAndPreMutation(t *testing.T) 
 	}
 }
 
+// TestNegotiatedStoreLockPreAcquisitionFailureIsNotStarted proves 1781: a
+// failure that happens before the authoritative store lock is acquired must
+// classify as not-started, exactly like the pre-mutation Git failure family,
+// instead of falling through to the generic unknown-mutation catch-all.
+func TestNegotiatedStoreLockPreAcquisitionFailureIsNotStarted(t *testing.T) {
+	err := &reviewtransaction.StoreLockPreAcquisitionError{Err: errors.New("permission denied")}
+	failure := newReviewIntegrationFailure("review.start", []string{"--lineage", "review-lock-boundary"}, err)
+	if failure.Code != "store_lock_unavailable" || failure.Phase != "pre_native" ||
+		failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe ||
+		failure.Replayability != reviewtransaction.ReplayabilityManualActionRequired || failure.NextAction != "stop" {
+		t.Fatalf("pre-lock-acquisition failure = %#v, want a not-started classification", failure)
+	}
+	if !strings.Contains(failure.Message, "permission denied") {
+		t.Fatalf("pre-lock-acquisition failure message masks cause: %q", failure.Message)
+	}
+}
+
 func TestNegotiatedStatusProcessControlFailureIsTypedAndDiagnosable(t *testing.T) {
 	originalRunner := reviewFacadeCommandRunner
 	t.Cleanup(func() { reviewFacadeCommandRunner = originalRunner })
@@ -1029,6 +1046,33 @@ func TestReviewIntegrationFailureMapsTargetResolutionBeforeGateDenial(t *testing
 	}
 	if err := failure.Validate(); err != nil {
 		t.Fatalf("target-resolution failure validation = %v", err)
+	}
+}
+
+// TestNewReviewIntegrationFailureCause is the RED-first proof for 1666/1807:
+// the operation_outcome_unknown default envelope used to discard the real
+// native cause behind a fixed placeholder message. Code, Message, and
+// MutationOutcome stay byte-identical; the wrapped cause is now additive.
+func TestNewReviewIntegrationFailureCause(t *testing.T) {
+	runErr := errors.New("unexpected native repository state: dangling worktree lock file")
+	failure := newReviewIntegrationFailure("review.start", nil, runErr)
+	if failure.Code != "operation_outcome_unknown" || failure.Phase != "native_running" ||
+		failure.MutationOutcome != ReviewMutationUnknown ||
+		failure.Message != "The negotiated review operation failed without authoritative mutation evidence." {
+		t.Fatalf("operation_outcome_unknown envelope changed byte-identical fields = %#v", failure)
+	}
+	if failure.Cause != runErr.Error() {
+		t.Fatalf("failure.Cause = %q, want the wrapped native cause %q", failure.Cause, runErr.Error())
+	}
+	if err := failure.Validate(); err != nil {
+		t.Fatalf("operation_outcome_unknown failure with cause validation = %v", err)
+	}
+
+	// The read-only catch-all stays content-free: it must never leak the raw
+	// cause, which is exactly why it resets the message to a canned string.
+	readOnly := newReviewIntegrationFailure("review.status", nil, runErr)
+	if readOnly.Cause != "" {
+		t.Fatalf("read-only catch-all leaked cause = %q", readOnly.Cause)
 	}
 }
 

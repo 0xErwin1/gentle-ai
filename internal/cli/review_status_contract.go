@@ -605,6 +605,10 @@ func (result ReviewTargetStatusResult) validateStartNextTransition() error {
 		return errors.New("fresh target START lineage is not canonical")
 	}
 	wantArguments := reviewStartArguments(result, lineage)
+	for index, argument := range wantArguments {
+		argument.Token = reviewTransitionArgumentToken(argument)
+		wantArguments[index] = argument
+	}
 	wantPreconditions := []ReviewTransitionArgument{{Name: "target_identity", Value: result.TargetIdentity}}
 	wantBinding := ReviewTransitionBinding{LineageID: lineage, TargetIdentity: result.TargetIdentity}
 	if !reflect.DeepEqual(transition.Execute.Arguments, wantArguments) ||

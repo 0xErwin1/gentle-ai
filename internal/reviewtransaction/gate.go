@@ -730,6 +730,31 @@ func currentBranch(ctx context.Context, repo string) string {
 // failures while computing the shape stay untyped and keep failing closed.
 var ErrReviewedDeliveryNotOneCommit = errors.New("reviewed delivery is not exactly one commit from its reviewed base")
 
+// GateDeliveryBaseResolutionError reports that the reviewed candidate's base
+// commit could not be uniquely located inside the publication range: either
+// no commit in range carries the reviewed tree, or more than one does. This
+// is the "published delivery" release blocker — a receipt that stopped
+// governing a candidate that already moved, not authority damage — so
+// discovery classifies it with the scope-changed family instead of the
+// corruption catch-all.
+type GateDeliveryBaseResolutionError struct {
+	Err error
+}
+
+func (err *GateDeliveryBaseResolutionError) Error() string {
+	if err == nil || err.Err == nil {
+		return "reviewed delivery base could not be resolved in the publication range"
+	}
+	return err.Err.Error()
+}
+
+func (err *GateDeliveryBaseResolutionError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	return err.Err
+}
+
 func buildPushTarget(ctx context.Context, repo, selector, deliveryBaseTree, reviewedBaseTree string) (Target, *PushRequest, error) {
 	selection, err := selectPrePushBoundary(ctx, repo, selector)
 	if err != nil {
@@ -745,11 +770,11 @@ func buildPushTarget(ctx context.Context, repo, selector, deliveryBaseTree, revi
 	bases, err := runGit(ctx, repo, nil, nil, "merge-base", "--all", head, selection.Commit)
 	mergeBases := strings.Fields(string(bases))
 	if err != nil || len(mergeBases) != 1 {
-		return Target{}, nil, fmt.Errorf("publication base has %d merge bases; pass --base-ref <remote>/<branch>", len(mergeBases))
+		return Target{}, nil, prePushTargetResolutionError(fmt.Sprintf("publication base has %d merge bases; pass --base-ref <remote>/<branch>", len(mergeBases)))
 	}
 	pushRemote, configured, err := publicationRemote(ctx, repo)
 	if err != nil || !configured {
-		return Target{}, nil, errors.New("push destination remote is not configured")
+		return Target{}, nil, prePushTargetResolutionError("push destination remote is not configured; pass --base-ref <remote>/<branch>")
 	}
 	pushIdentity, err := pushRepositoryIdentity(ctx, repo, pushRemote)
 	if err != nil {
@@ -1150,7 +1175,7 @@ func reviewedDeliveryBase(ctx context.Context, repo, publicationBase, head, revi
 		}
 	}
 	if len(matches) != 1 {
-		return "", errors.New("reviewed delivery base commit is missing or ambiguous in publication range")
+		return "", &GateDeliveryBaseResolutionError{Err: errors.New("reviewed delivery base commit is missing or ambiguous in publication range")}
 	}
 	return matches[0], nil
 }
