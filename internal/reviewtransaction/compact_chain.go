@@ -449,11 +449,14 @@ func selectCompactPrePRChain(ctx context.Context, repo string, request GateReque
 		if len(adjacency[node]) != wantOutgoing {
 			return nil, nil, errors.New("compact receipt chain contains a fork")
 		}
-		wantIncoming := 1
 		if node == path[0].receipt.BaseTree {
-			wantIncoming = 0
+			// A historical approved receipt whose chain merely ends exactly at
+			// the selected chain's own root is a linear predecessor, not a
+			// convergence (issue-1782): it is not part of the selected path, so
+			// its incoming edge into this node must not be counted against it.
+			continue
 		}
-		if incoming[node] != wantIncoming {
+		if incoming[node] != 1 {
 			return nil, nil, errors.New("compact receipt chain contains a convergence")
 		}
 	}
