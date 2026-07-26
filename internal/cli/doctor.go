@@ -166,20 +166,38 @@ func checkToolBinaries(pathDirs []string, installedAgents []string) []CheckResul
 func checkOneTool(tool string, pathDirs []string) CheckResult {
 	resolved, shim, err := resolveDoctorTool(tool)
 	if err != nil {
+		// resolved is "" here: there is no PATH-resolved copy to name or to
+		// compare against, but the executable running THIS check is still
+		// independently derivable (osExecutableDoctor does not depend on
+		// PATH lookup succeeding). doctorInvokedGentleAIClause("") names it
+		// without fabricating a comparison that has nothing to compare
+		// against (organic-dx recovery: the clause must render on every
+		// derivable gentle-ai branch, not only the healthy one).
+		detail := tool + " not found in PATH"
+		if tool == "gentle-ai" {
+			detail += doctorInvokedGentleAIClause(resolved)
+		}
 		return CheckResult{
 			Name:   doctor.ToolCheckID(tool),
 			Status: CheckStatusFail,
-			Detail: tool + " not found in PATH",
+			Detail: detail,
 			Remedy: doctor.NewRemedy(doctor.RemedyInstallTool, "Install "+tool+" or add its directory to PATH"),
 		}
 	}
 
 	copies := doctorToolCopies(tool, pathDirs)
 	if len(copies) > 1 {
+		// The duplicate branch is exactly where ambiguity about which build
+		// is running is guaranteed, so this is the branch that most needs
+		// the invoked-executable clause -- it must not be dropped here.
+		detail := fmt.Sprintf("%s resolved to %s but %d copies found in PATH: %s", tool, resolved, len(copies), strings.Join(copies, ", "))
+		if tool == "gentle-ai" {
+			detail += doctorInvokedGentleAIClause(resolved)
+		}
 		return CheckResult{
 			Name:   doctor.ToolCheckID(tool),
 			Status: CheckStatusWarn,
-			Detail: fmt.Sprintf("%s resolved to %s but %d copies found in PATH: %s", tool, resolved, len(copies), strings.Join(copies, ", ")),
+			Detail: detail,
 			Remedy: doctor.NewRemedy(doctor.RemedyRemoveDuplicates, "Remove duplicate binaries; keep only one copy of "+tool+" in PATH"),
 		}
 	}
@@ -204,6 +222,14 @@ func checkOneTool(tool string, pathDirs []string) CheckResult {
 // different gentle-ai earlier on PATH; without this, doctor would report only
 // that other, unexercised copy as healthy, leaving the report ambiguous about
 // which build was actually under test (organic-dx Phase 3f task 3f.5).
+//
+// It must render on every gentle-ai branch where it is derivable -- not only
+// the healthy one -- since PATH duplicates are exactly the situation where
+// knowing which build is actually running matters most. pathResolved may be
+// "" when the tool check has no PATH-resolved copy to name (e.g. gentle-ai
+// itself is not found on PATH); in that case the clause still names the
+// invoked executable but skips the comparison, since there is honestly
+// nothing to compare it against.
 func doctorInvokedGentleAIClause(pathResolved string) string {
 	invoked, err := osExecutableDoctor()
 	if err != nil {
@@ -211,7 +237,7 @@ func doctorInvokedGentleAIClause(pathResolved string) string {
 	}
 	version, _ := reviewGentleAIVersionAndCommit()
 	clause := fmt.Sprintf("; invoked executable: %s (version %s)", invoked, version)
-	if !doctorSameExecutable(invoked, pathResolved) {
+	if pathResolved != "" && !doctorSameExecutable(invoked, pathResolved) {
 		clause += " -- this differs from the PATH-resolved copy above; the PATH copy's health does not describe the build actually running"
 	}
 	return clause

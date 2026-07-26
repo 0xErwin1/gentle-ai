@@ -2,9 +2,12 @@ package cli
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/internal/doctor"
 )
 
 // TestCheckOneTool_GentleAINamesTheInvokedExecutable closes fisidj finding 5
@@ -103,5 +106,120 @@ func TestCheckOneTool_OtherToolsUnaffected(t *testing.T) {
 	}
 	if called {
 		t.Fatal("osExecutableDoctor was called for a non-gentle-ai tool")
+	}
+}
+
+// TestCheckOneTool_GentleAIDuplicatesStillNameInvokedExecutable reproduces
+// the reported regression: when 2+ copies of gentle-ai are found in PATH the
+// check moves to the Warn/duplicate branch, which never called
+// doctorInvokedGentleAIClause, so the one piece of information that
+// disambiguates which build is actually running disappeared exactly when
+// ambiguity is guaranteed. The invoked-executable clause must survive the
+// duplicate branch without changing the duplicate detection, its severity,
+// or the remedy.
+func TestCheckOneTool_GentleAIDuplicatesStillNameInvokedExecutable(t *testing.T) {
+	origLook := lookPathFn
+	origExec := osExecutableDoctor
+	origExts := executableExtsFn
+	defer func() {
+		lookPathFn = origLook
+		osExecutableDoctor = origExec
+		executableExtsFn = origExts
+	}()
+	executableExtsFn = func() []string { return []string{""} }
+
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+	for _, dir := range []string{dir1, dir2} {
+		p := filepath.Join(dir, "gentle-ai")
+		if err := os.WriteFile(p, []byte("fake"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	invokedCopy := filepath.Join(t.TempDir(), "gentle-ai")
+	lookPathFn = func(string) (string, error) { return filepath.Join(dir1, "gentle-ai"), nil }
+	osExecutableDoctor = func() (string, error) { return invokedCopy, nil }
+
+	got := checkOneTool("gentle-ai", []string{dir1, dir2})
+
+	if got.Status != CheckStatusWarn {
+		t.Fatalf("expected warn for duplicate copies, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "2 copies found") {
+		t.Fatalf("duplicate detection message missing: %q", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "invoked executable: "+invokedCopy) {
+		t.Fatalf("Detail dropped the invoked-executable clause on the duplicate branch: %q", got.Detail)
+	}
+	if got.Remedy == nil || got.Remedy.ID != doctor.RemedyRemoveDuplicates {
+		t.Fatalf("expected the unchanged remove-duplicates remedy, got %+v", got.Remedy)
+	}
+}
+
+// TestCheckOneTool_GentleAINotFoundNamesInvokedExecutableWithoutComparison
+// covers the Fail branch: when gentle-ai cannot be resolved via PATH at all,
+// there is no PATH-resolved copy to compare against, but the executable
+// currently running THIS doctor check is still independently derivable via
+// osExecutableDoctor. The clause must name it honestly, without fabricating
+// a "differs from the PATH-resolved copy" comparison that has nothing to
+// compare against.
+func TestCheckOneTool_GentleAINotFoundNamesInvokedExecutableWithoutComparison(t *testing.T) {
+	origLook := lookPathFn
+	origExec := osExecutableDoctor
+	defer func() { lookPathFn = origLook; osExecutableDoctor = origExec }()
+
+	invokedCopy := filepath.Join(t.TempDir(), "gentle-ai")
+	lookPathFn = func(string) (string, error) { return "", errors.New("not found") }
+	osExecutableDoctor = func() (string, error) { return invokedCopy, nil }
+
+	got := checkOneTool("gentle-ai", nil)
+
+	if got.Status != CheckStatusFail {
+		t.Fatalf("expected fail, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "not found in PATH") {
+		t.Fatalf("Detail dropped the not-found message: %q", got.Detail)
+	}
+	if !strings.Contains(got.Detail, "invoked executable: "+invokedCopy) {
+		t.Fatalf("Detail dropped the invoked-executable clause on the not-found branch: %q", got.Detail)
+	}
+	if strings.Contains(got.Detail, "differs") {
+		t.Fatalf("Detail fabricated a PATH-resolved comparison with nothing to compare against: %q", got.Detail)
+	}
+}
+
+// TestCheckOneTool_GentleAIExecutableUnresolvable proves the honesty
+// contract: when osExecutableDoctor itself cannot resolve the invoked
+// executable, the clause stays empty on every branch rather than fabricating
+// a version — this covers the duplicate branch, which previously had no
+// clause call at all to exercise this path.
+func TestCheckOneTool_GentleAIExecutableUnresolvable(t *testing.T) {
+	origLook := lookPathFn
+	origExec := osExecutableDoctor
+	origExts := executableExtsFn
+	defer func() {
+		lookPathFn = origLook
+		osExecutableDoctor = origExec
+		executableExtsFn = origExts
+	}()
+	executableExtsFn = func() []string { return []string{""} }
+
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+	for _, dir := range []string{dir1, dir2} {
+		p := filepath.Join(dir, "gentle-ai")
+		if err := os.WriteFile(p, []byte("fake"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	lookPathFn = func(string) (string, error) { return filepath.Join(dir1, "gentle-ai"), nil }
+	osExecutableDoctor = func() (string, error) { return "", errors.New("cannot resolve") }
+
+	got := checkOneTool("gentle-ai", []string{dir1, dir2})
+
+	if strings.Contains(got.Detail, "invoked executable") {
+		t.Fatalf("Detail fabricated an invoked-executable clause despite resolution failure: %q", got.Detail)
 	}
 }
