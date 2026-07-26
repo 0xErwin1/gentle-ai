@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
+
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 )
 
@@ -479,13 +481,24 @@ func TestReviewTransitionArgumentToken(t *testing.T) {
 }
 
 // TestNewReviewNextTransitionEscalatedRouting is the RED-first proof for
-// 1800: StateEscalated used to dead-end with Stop("escalated_authority")
-// unconditionally, unlike StateInvalidated which routes to recovery. It must
-// now route to reviewRecoveryCollection with the disposition forced to
-// RecoveryEscalated, and Stop with a new reason naming the changed-target
-// requirement whenever the target is unchanged — regardless of whether a
-// Selector is present, since the generic recovery_scope_unchanged guard only
-// fires when one is.
+// 1800 (StateEscalated used to dead-end with Stop("escalated_authority")
+// unconditionally, unlike StateInvalidated which routes to recovery) plus the
+// organic-dx stop-invariant sweep's follow-up fix for the "third case" 1800
+// left unsoftened: native STATUS (target_status.go:176-199) only ever sets
+// Action == TargetStatusActionRecover for StateEscalated when either the
+// target changed OR the authority is an accounting-only escalation eligible
+// for RecoverCompactAuthority's evidence-derived edge (issue found while
+// investigating "escalated_recovery_requires_changed_target" as a Phase 3
+// SUSPECT stop code) — TargetStatusActionStop is the only other outcome, and
+// it is routed away to native_stop_required before this switch is ever
+// reached (see the TargetStatusActionStop branch above). So this switch case
+// can trust status.Action unconditionally, exactly like every other case:
+// StateEscalated always routes to reviewRecoveryCollection with the
+// disposition forced to RecoveryEscalated, regardless of whether the target
+// changed. When a Selector is present and the target has not changed, the
+// generic recovery_scope_unchanged guard already inside reviewRecoveryCollection
+// still applies — that guard is unrelated to StateEscalated and is not
+// softened by this fix.
 func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
 	baseStatus := func(target, authorityTarget string) ReviewTargetStatusResult {
 		return ReviewTargetStatusResult{
@@ -523,21 +536,276 @@ func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
 		}
 	})
 
-	for _, name := range []string{"without a selector", "with a selector"} {
-		t.Run("unchanged target stops naming the changed-target requirement "+name, func(t *testing.T) {
-			status := baseStatus(unchangedTarget, unchangedTarget)
-			input := reviewNextTransitionInput{}
-			if name == "with a selector" {
-				input.Selector = &reviewTransitionSelector{Kind: reviewtransaction.TargetCurrentChanges, RecoveryRepresentable: true}
+	t.Run("unchanged target without a selector still routes to recovery (accounting-only edge)", func(t *testing.T) {
+		status := baseStatus(unchangedTarget, unchangedTarget)
+		input := reviewNextTransitionInput{
+			Successor: "review-escalated-successor", Reason: "authorized recovery", Actor: "maintainer",
+			Authorization: "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=review-escalated\npredecessor_revision=sha256:" + strings.Repeat("a", 64) + "\ntarget_identity=" + unchangedTarget + "\nactor=maintainer\nreason=authorized recovery",
+		}
+		got := newReviewNextTransition(status, nil, nil, false, nil, input)
+		if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.recover" {
+			t.Fatalf("escalated unchanged-target transition (no selector) = %#v, want an execute review.recover transition — status.Action already vetted this as legal (accounting-only escalation), so this switch must not re-derive a target-changed requirement", got)
+		}
+		arguments, err := reviewTransitionArgumentMap(got.Execute.Arguments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if arguments["disposition"] != string(reviewtransaction.RecoveryEscalated) {
+			t.Fatalf("escalated recovery disposition = %q, want %q", arguments["disposition"], reviewtransaction.RecoveryEscalated)
+		}
+	})
+
+	t.Run("unchanged target with a selector still stops via the generic recovery_scope_unchanged guard", func(t *testing.T) {
+		status := baseStatus(unchangedTarget, unchangedTarget)
+		input := reviewNextTransitionInput{Selector: &reviewTransitionSelector{Kind: reviewtransaction.TargetCurrentChanges, RecoveryRepresentable: true}}
+		got := newReviewNextTransition(status, nil, nil, false, nil, input)
+		if got.Kind != reviewNextTransitionStop || got.Execute != nil || got.Collect != nil {
+			t.Fatalf("escalated unchanged-target transition (selector) = %#v, want a bare stop", got)
+		}
+		if got.ReasonCode != "recovery_scope_unchanged" {
+			t.Fatalf("escalated unchanged-target reason (selector) = %q, want the generic reviewRecoveryCollection guard reason %q", got.ReasonCode, "recovery_scope_unchanged")
+		}
+	})
+}
+
+// TestReviewNextTransitionExecuteArgumentValidatesAgainstPublishedSchema is
+// the RED-first proof for the 1745 follow-up: the "token" field 1745 added to
+// ReviewTransitionArgument for execution arguments must be admissible under
+// the published, byte-pinned review-integration/v1 status.schema.json
+// contract. Before the schema fix, $defs/transition_argument declared
+// "additionalProperties": false with only name/value, so this real
+// "--captured-results=true" execute payload was schema-illegal even though
+// the CLI has emitted it since 1745.
+func TestReviewNextTransitionExecuteArgumentValidatesAgainstPublishedSchema(t *testing.T) {
+	status := ReviewTargetStatusResult{
+		Applicability:  reviewtransaction.TargetApplicabilityCurrent,
+		Action:         reviewtransaction.TargetStatusActionFinalize,
+		Replayability:  reviewtransaction.ReplayabilityNotReplayable,
+		TargetIdentity: "sha256:" + strings.Repeat("b", 64),
+		Authority:      &ReviewTargetStatusAuthority{LineageID: "review-schema", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateReviewing},
+		Frozen:         &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium},
+		Projection:     ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace, BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40)},
+	}
+	got := newReviewNextTransition(status, nil, nil, false, nil, reviewNextTransitionInput{})
+	if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.finalize" {
+		t.Fatalf("next transition = %#v, want an execute review.finalize transition", got)
+	}
+	found := false
+	for _, argument := range got.Execute.Arguments {
+		if argument.Name == "captured_results" {
+			found = true
+			if argument.Token != "--captured-results=true" {
+				t.Fatalf("captured_results token = %q, want --captured-results=true", argument.Token)
 			}
-			got := newReviewNextTransition(status, nil, nil, false, nil, input)
-			if got.Kind != reviewNextTransitionStop || got.Execute != nil || got.Collect != nil {
-				t.Fatalf("escalated unchanged-target transition = %#v, want a bare stop", got)
+		}
+	}
+	if !found {
+		t.Fatal("captured_results argument missing from execute transition")
+	}
+	payload, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateAgainstPublishedNextTransitionSchema(t, payload)
+}
+
+// TestReviewNextTransitionExecuteArtifactsValidateAgainstPublishedSchema is
+// the RED-first proof that a real "captured results" execute transition
+// carrying artifacts is admissible under the published, byte-pinned
+// review-integration/v1 status.schema.json contract. discoverCapturedReviewer
+// Artifacts (internal/cli/review_artifact.go) always populates SubjectHash and
+// AdmissionDecision on every ReviewTransitionArtifact it returns (no
+// omitempty on either field), but $defs/transition_artifact never declared
+// either property, so every execute transition carrying artifacts was
+// schema-illegal under "additionalProperties": false.
+func TestReviewNextTransitionExecuteArtifactsValidateAgainstPublishedSchema(t *testing.T) {
+	status := ReviewTargetStatusResult{
+		Applicability:  reviewtransaction.TargetApplicabilityCurrent,
+		Action:         reviewtransaction.TargetStatusActionFinalize,
+		Replayability:  reviewtransaction.ReplayabilityNotReplayable,
+		TargetIdentity: "sha256:" + strings.Repeat("b", 64),
+		Authority:      &ReviewTargetStatusAuthority{LineageID: "review-artifact-schema", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateReviewing},
+		Frozen:         &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium},
+		Projection:     ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace, BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40)},
+	}
+	artifacts := []ReviewTransitionArtifact{{
+		Schema: reviewResultArtifactSchema, Capability: reviewResultArtifactCapability,
+		SHA256: "sha256:" + strings.Repeat("e", 64), LineageID: "review-artifact-schema",
+		TargetIdentity: status.TargetIdentity, Lens: reviewtransaction.LensReliability, SelectedOrder: 0,
+		SubjectHash: "sha256:" + strings.Repeat("f", 64), AdmissionDecision: reviewtransaction.ArtifactAdmissionCompleted,
+	}}
+	got := newReviewNextTransition(status, []string{reviewtransaction.LensReliability}, artifacts, false, nil, reviewNextTransitionInput{})
+	if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.finalize" || len(got.Execute.Artifacts) != 1 {
+		t.Fatalf("next transition = %#v, want an execute review.finalize transition carrying one artifact", got)
+	}
+	payload, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateAgainstPublishedNextTransitionSchema(t, payload)
+}
+
+// TestReviewNextTransitionExecuteSelectorArgumentsValidateAgainstPublishedSchema
+// is the RED-first proof that a real pre-PR base-ref VALIDATE execute
+// transition carrying SelectorArguments is admissible under the published,
+// byte-pinned review-integration/v1 status.schema.json contract.
+// $defs/transition_execution never declared "selector_arguments" at all
+// (unlike status-v2.schema.json, which already does), so any populated
+// selector_arguments was rejected outright by "additionalProperties": false.
+func TestReviewNextTransitionExecuteSelectorArgumentsValidateAgainstPublishedSchema(t *testing.T) {
+	status := ReviewTargetStatusResult{
+		Applicability:  reviewtransaction.TargetApplicabilityCurrent,
+		Action:         reviewtransaction.TargetStatusActionValidate,
+		Replayability:  reviewtransaction.ReplayabilityNotReplayable,
+		TargetIdentity: "sha256:" + strings.Repeat("b", 64),
+		Authority:      &ReviewTargetStatusAuthority{LineageID: "review-selector-schema", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateApproved},
+		Frozen:         &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium},
+		Receipt:        ReviewTargetStatusReceipt{Status: ReviewReceiptPresent},
+		Projection:     ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace, Kind: reviewtransaction.TargetBaseDiff, BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40)},
+	}
+	input := reviewNextTransitionInput{
+		Gate:     reviewtransaction.GatePrePR,
+		Selector: &reviewTransitionSelector{Kind: reviewtransaction.TargetBaseDiff, BaseRef: "main", PrePRRepresentable: true},
+	}
+	got := newReviewNextTransition(status, nil, nil, false, nil, input)
+	if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.SelectorArguments == nil {
+		t.Fatalf("next transition = %#v, want an execute transition carrying selector arguments", got)
+	}
+	payload, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateAgainstPublishedNextTransitionSchema(t, payload)
+}
+
+// TestReviewNextTransitionExecuteArgumentValidatesAgainstPublishedV2Schema is
+// the v2 sibling of TestReviewNextTransitionExecuteArgumentValidatesAgainst
+// PublishedSchema: the same "token" field is emitted on every Execute
+// .Arguments entry regardless of which status schema version renders it, but
+// status-v2.schema.json's own $defs/transition_argument had the identical
+// "additionalProperties": false gap the v1 file just had fixed.
+func TestReviewNextTransitionExecuteArgumentValidatesAgainstPublishedV2Schema(t *testing.T) {
+	status := ReviewTargetStatusResult{
+		Applicability:  reviewtransaction.TargetApplicabilityCurrent,
+		Action:         reviewtransaction.TargetStatusActionFinalize,
+		Replayability:  reviewtransaction.ReplayabilityNotReplayable,
+		TargetIdentity: "sha256:" + strings.Repeat("b", 64),
+		Authority:      &ReviewTargetStatusAuthority{LineageID: "review-schema-v2", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateReviewing},
+		Frozen:         &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium},
+		Projection:     ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace, BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40)},
+	}
+	got := newReviewNextTransition(status, nil, nil, false, nil, reviewNextTransitionInput{})
+	if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.finalize" {
+		t.Fatalf("next transition = %#v, want an execute review.finalize transition", got)
+	}
+	found := false
+	for _, argument := range got.Execute.Arguments {
+		if argument.Name == "captured_results" {
+			found = true
+			if argument.Token != "--captured-results=true" {
+				t.Fatalf("captured_results token = %q, want --captured-results=true", argument.Token)
 			}
-			if got.ReasonCode == "recovery_scope_unchanged" || got.ReasonCode == "" {
-				t.Fatalf("escalated unchanged-target reason = %q, want a new reason naming the changed-target requirement", got.ReasonCode)
-			}
-		})
+		}
+	}
+	if !found {
+		t.Fatal("captured_results argument missing from execute transition")
+	}
+	payload, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validateAgainstPublishedNextTransitionSchemaV2(t, payload)
+}
+
+// validateAgainstPublishedNextTransitionSchema validates payload against the
+// live $defs/next_transition subtree read straight out of the shipped
+// contracts/review-integration/v1/schemas/status.schema.json, so the
+// assertion stays honest as that file evolves. It deliberately compiles a
+// synthetic root document ($defs/next_transition's own keys merged with the
+// file's real, unmodified $defs) instead of status.schema.json's top-level
+// object schema: that top-level schema's unrelated "projection" property
+// resolves contracts/review-integration/v1/schemas/projection.schema.json,
+// whose $defs/paths/items pattern uses a negative-lookahead regex Go's RE2
+// engine cannot compile, which would fail metaschema validation for a
+// reason wholly unrelated to what this test checks.
+func validateAgainstPublishedNextTransitionSchema(t *testing.T, payload []byte) {
+	t.Helper()
+	validateAgainstPublishedStatusNextTransitionSchema(t, "status.schema.json", payload)
+}
+
+// validateAgainstPublishedNextTransitionSchemaV2 performs the identical
+// live-schema validation as validateAgainstPublishedNextTransitionSchema, but
+// against contracts/review-integration/v1/schemas/status-v2.schema.json's own
+// $defs/next_transition subtree, so the v2 wire shape stays pinned too.
+func validateAgainstPublishedNextTransitionSchemaV2(t *testing.T, payload []byte) {
+	t.Helper()
+	validateAgainstPublishedStatusNextTransitionSchema(t, "status-v2.schema.json", payload)
+}
+
+// validateAgainstPublishedStatusNextTransitionSchema is the shared engine
+// behind both the v1 and v2 published-schema validators above. It registers
+// every schema file that either version's $defs/next_transition subtree can
+// $ref (targeted-validation-request.schema.json for both; artifact-subject
+// .schema.json and start-v2.schema.json for v2's $defs/transition_input),
+// deliberately excluding the top-level schema's "projection" property so
+// compiling never touches projection.schema.json's RE2-incompatible
+// negative-lookahead regex (see the comment above the v1 wrapper).
+func validateAgainstPublishedStatusNextTransitionSchema(t *testing.T, schemaFile string, payload []byte) {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusSchemaBytes, err := os.ReadFile(filepath.Join(root, schemaFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var statusSchema map[string]any
+	if err := json.Unmarshal(statusSchemaBytes, &statusSchema); err != nil {
+		t.Fatal(err)
+	}
+	defs, ok := statusSchema["$defs"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s has no $defs object: %#v", schemaFile, statusSchema["$defs"])
+	}
+	nextTransition, ok := defs["next_transition"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s $defs.next_transition is missing or not an object: %#v", schemaFile, defs["next_transition"])
+	}
+
+	const location = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/_test-next-transition.schema.json"
+	synthetic := map[string]any{"$schema": statusSchema["$schema"], "$id": location, "$defs": defs}
+	for key, value := range nextTransition {
+		synthetic[key] = value
+	}
+
+	compiler := jsonschema.NewCompiler()
+	for _, ref := range []string{"targeted-validation-request.schema.json", "artifact-subject.schema.json", "start-v2.schema.json"} {
+		refBytes, err := os.ReadFile(filepath.Join(root, ref))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var refSchema any
+		if err := json.Unmarshal(refBytes, &refSchema); err != nil {
+			t.Fatal(err)
+		}
+		if err := compiler.AddResource("https://gentle-ai.dev/contracts/review-integration/v1/schemas/"+ref, refSchema); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := compiler.AddResource(location, synthetic); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := compiler.Compile(location)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document any
+	if err := json.Unmarshal(payload, &document); err != nil {
+		t.Fatal(err)
+	}
+	if err := schema.Validate(document); err != nil {
+		t.Fatalf("published next_transition schema (%s) rejected the emitted transition: %v", schemaFile, err)
 	}
 }
 

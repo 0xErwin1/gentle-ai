@@ -92,7 +92,7 @@
     },
     "transition_argument": {
       "type": "object", "additionalProperties": false, "required": ["name", "value"],
-      "properties": { "name": { "type": "string", "pattern": "^[a-z0-9_-]+$" }, "value": { "type": "string", "minLength": 1 } }
+      "properties": { "name": { "type": "string", "pattern": "^[a-z0-9_-]+$" }, "value": { "type": "string", "minLength": 1 }, "token": { "type": "string", "minLength": 1 } }
     },
     "transition_binding": {
       "type": "object", "additionalProperties": false, "required": ["target_identity"],
@@ -103,16 +103,18 @@
       "properties": {
         "operation": { "enum": ["review.start", "review.finalize", "review.recover", "review.validate"] },
         "arguments": { "type": "array", "items": { "$ref": "#/$defs/transition_argument" } },
+        "selector_arguments": { "type": "array", "items": { "$ref": "#/$defs/transition_argument" } },
         "preconditions": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/transition_argument" } },
         "binding": { "$ref": "#/$defs/transition_binding" },
         "artifacts": { "type": "array", "items": { "$ref": "#/$defs/transition_artifact" } }
       }
     },
     "transition_artifact": {
-      "type": "object", "additionalProperties": false, "required": ["schema", "capability", "sha256", "lineage_id", "target_identity", "lens", "selected_order"],
+      "type": "object", "additionalProperties": false, "required": ["schema", "capability", "sha256", "lineage_id", "target_identity", "lens", "selected_order", "subject_hash", "admission_decision"],
       "properties": {
-        "schema": { "const": "gentle-ai.review-result-artifact/v1" }, "capability": { "const": "review.native_result_artifact" }, "sha256": { "$ref": "#/$defs/sha256" },
-        "lineage_id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" }, "target_identity": { "$ref": "#/$defs/sha256" }, "lens": { "type": "string", "minLength": 1 }, "selected_order": { "type": "integer", "minimum": 0 }
+        "schema": { "const": "gentle-ai.review-result-artifact/v2" }, "capability": { "const": "review.native_result_artifact" }, "sha256": { "$ref": "#/$defs/sha256" },
+        "lineage_id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" }, "target_identity": { "$ref": "#/$defs/sha256" }, "lens": { "type": "string", "minLength": 1 }, "selected_order": { "type": "integer", "minimum": 0 },
+        "subject_hash": { "$ref": "#/$defs/sha256" }, "admission_decision": { "const": "completed" }
       }
     },
     "transition_collection": {
