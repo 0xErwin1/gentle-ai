@@ -63,10 +63,16 @@ type ReviewTransitionArgument struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
 	// Token is the exact, literally executable argv token for this argument
-	// (e.g. "--captured-results=true"). It is populated only on
-	// ReviewTransitionExecution.Arguments, never on Preconditions, which are
-	// assertions rather than argv. Name/Value stay byte-identical so existing
-	// consumers of those two fields never move.
+	// (e.g. "--captured-results=true"). It is populated wherever the argument
+	// really is argv: on ReviewTransitionExecution.Arguments, and on the
+	// Arguments of a ReviewTransitionInput whose CaptureOperation names an
+	// operation this product performs (see reviewNativeCaptureVerb). It stays
+	// empty on Preconditions, which are assertions rather than argv, on
+	// SelectorArguments, which are a normalized echo of arguments already
+	// carried, and on the Arguments of an "external.*" capture operation,
+	// which are values to hand to whoever performs it somewhere this product
+	// does not run. Name/Value stay byte-identical so existing consumers of
+	// those two fields never move.
 	Token string `json:"token,omitempty"`
 }
 
@@ -295,10 +301,34 @@ func reviewMissingCaptureTransition(binding ReviewTransitionBinding, selectedLen
 // itself already emits.
 const reviewCaptureResultCaptureOperation = "review.capture-result"
 
+// reviewNativeCaptureOperationPrefix marks a capture_operation this product
+// performs itself. Everything after it is the runnable `gentle-ai review`
+// verb, which is exactly why such an input's arguments are argv.
+const reviewNativeCaptureOperationPrefix = "review."
+
+// reviewNativeCaptureVerb resolves the runnable CLI verb of a capture
+// operation this product performs: "review.capture-result" yields
+// "capture-result". It is the single classifier separating the two kinds of
+// collect input. A native one names a real command whose flags are the input's
+// own arguments, so those arguments are tokenized. Anything else -- today the
+// "external.*" family, which is performed where this product does not run --
+// resolves to no verb and is never tokenized, because rendering those values
+// as flags would invent a command line nothing here can execute. The check
+// fails closed: an unrecognised prefix is treated as non-native rather than
+// guessed at.
+func reviewNativeCaptureVerb(captureOperation string) (string, bool) {
+	verb, found := strings.CutPrefix(captureOperation, reviewNativeCaptureOperationPrefix)
+	if !found || verb == "" {
+		return "", false
+	}
+	return verb, true
+}
+
 // reviewCaptureResultCommandName renders the exact runnable command name for
 // reviewCaptureResultCaptureOperation, e.g. "gentle-ai review capture-result".
 func reviewCaptureResultCommandName() string {
-	return "gentle-ai " + strings.Replace(reviewCaptureResultCaptureOperation, "review.", "review ", 1)
+	verb, _ := reviewNativeCaptureVerb(reviewCaptureResultCaptureOperation)
+	return reviewTransitionCommandTool + " review " + verb
 }
 
 func reviewCaptureInput(binding ReviewTransitionBinding, lens string, order int, context *reviewCaptureContext) ReviewTransitionInput {
@@ -653,24 +683,26 @@ func reviewTransitionArgumentToken(argument ReviewTransitionArgument) string {
 
 // reviewCollectTransition assembles one collect transition.
 //
-// No `command` is emitted, deliberately. `review capture-result` requires
-// --input pointing at a reviewer-result artifact that does not exist yet,
-// because no model has run the lens; a printed command carrying a placeholder
-// for it would break the rule that a named command runs exactly as printed.
+// The arguments of an input whose capture_operation names an operation this
+// product performs are tokenized through the same single tokenizer the execute
+// form uses, because they are the same thing: the flags of a real
+// `gentle-ai review <verb>` command. A caller no longer re-derives
+// "--lineage=" + value by hand, which is where a hand-assembled invocation
+// twice dropped or mispaired --repository-context. An "external.*" input is
+// left untokenized on purpose; see reviewNativeCaptureVerb.
 //
-// KNOWN GAP: unlike Execute.Arguments, these arguments carry no Token, so a
-// caller still assembles "--lineage=" + value by hand even though the
-// capture_operation of a native "review.<verb>" input is a real command whose
-// flags are exactly these arguments. Tokenizing them is correct and was
-// deliberately deferred: it makes contracts/review-integration/v1 fixtures
-// stale (one of them digest-pinned) and trips a status-contract test whose
-// provider-private field list rejects any JSON key named "token", which
-// collides by name with the published argv token rather than describing a
-// leak. Those are contract decisions to take deliberately, not alongside a
-// release.
+// No `command` is emitted, deliberately, and tokenizing the arguments does not
+// change that. `review capture-result` also requires --input pointing at a
+// reviewer-result artifact that does not exist yet, because no model has run
+// the lens; a printed command carrying a placeholder for it would break the
+// rule that a named command runs exactly as printed. The tokens are each
+// individually runnable; the command line as a whole is not yet complete.
 func reviewCollectTransition(reason string, inputs ...ReviewTransitionInput) ReviewNextTransition {
 	collected := make([]ReviewTransitionInput, len(inputs))
 	for index, input := range inputs {
+		if _, native := reviewNativeCaptureVerb(input.CaptureOperation); native {
+			input.Arguments = reviewTokenizedTransitionArguments(input.Arguments)
+		}
 		collected[index] = input
 	}
 	return ReviewNextTransition{Kind: reviewNextTransitionCollect, ReasonCode: reason, Collect: &ReviewTransitionCollection{Inputs: collected}}

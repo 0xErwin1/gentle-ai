@@ -293,6 +293,12 @@ func TestReviewTransitionCommandQuotedTokensSurviveShellWordSplitting(t *testing
 // TestReviewNextTransitionCollectAndStopCarryNoCommand proves the command is
 // scoped to the execute form only: a collect transition names an input to
 // gather, and a stop transition intentionally contains no command-shaped data.
+//
+// The collect half matters most now that a native collect input's arguments
+// carry runnable tokens. Tokens are per-argument; a command is a complete line.
+// `review capture-result` also needs --input pointing at a reviewer result that
+// does not exist until a model has run the lens, so no printable line would run
+// verbatim and none is emitted.
 func TestReviewNextTransitionCollectAndStopCarryNoCommand(t *testing.T) {
 	stop := reviewStopTransition("native_stop_required")
 	if stop.Execute != nil {
@@ -304,6 +310,25 @@ func TestReviewNextTransitionCollectAndStopCarryNoCommand(t *testing.T) {
 	}
 	if strings.Contains(string(payload), "\"command\"") {
 		t.Fatalf("stop transition payload = %s, want no command field", payload)
+	}
+	binding := ReviewTransitionBinding{
+		LineageID:      "review-collect-no-command",
+		Revision:       "sha256:" + strings.Repeat("a", 64),
+		TargetIdentity: "sha256:" + strings.Repeat("b", 64),
+	}
+	collect := reviewCollectTransition("reviewer_results_required", reviewCaptureInput(binding, "review-reliability", 0, nil))
+	if collect.Execute != nil {
+		t.Fatalf("collect transition = %#v, want no execute payload", collect)
+	}
+	if collect.Collect.Inputs[0].Arguments[0].Token == "" {
+		t.Fatal("native collect input carries no token, so this test would pass vacuously")
+	}
+	payload, err = json.Marshal(collect)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), "\"command\"") {
+		t.Fatalf("collect transition payload = %s, want no command field", payload)
 	}
 }
 
@@ -353,10 +378,13 @@ func TestReviewNextTransitionQuotedCommandValidatesAgainstPublishedSchemas(t *te
 // its exact runnable token is the field docs/testing Flow 11 step 2 depends
 // on, so a schema-conforming payload must not be allowed to omit it.
 //
-// It is deliberately scoped to execute.arguments. Preconditions,
-// selector_arguments and collect inputs are assertions and captured inputs,
-// not argv, and the product never tokenizes them -- requiring token on the
-// shared $defs/transition_argument would invalidate the product's own
+// It is deliberately scoped to execute.arguments, because that is the only
+// position where a token is unconditional. Preconditions and
+// selector_arguments are assertions and a normalized echo, never argv, and a
+// collect input carries tokens only when its capture_operation names an
+// operation this product performs -- an "external.*" one is performed
+// elsewhere and has no argv to render. Requiring token on the shared
+// $defs/transition_argument would therefore invalidate the product's own
 // payloads.
 func TestPublishedStatusSchemasRequireTokenOnExecutableArguments(t *testing.T) {
 	for _, schemaFile := range []string{"status.schema.json", "status-v2.schema.json"} {

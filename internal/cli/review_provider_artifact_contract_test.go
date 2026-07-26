@@ -16,14 +16,14 @@ func TestReviewProviderArtifactV1ContractsRemainByteIdentical(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1")
 	want := map[string]string{
 		"fixtures/start.fixture.json":            "f369160ac26eb3427b57de2dd01c9d8c81e51c8a2bd546446780129d31b1945b",
-		"fixtures/status.fixture.json":           "9404f7f6bc06cf515e59898e1277f03fdd751d00e68fb52cd4787568ff26c50d",
+		"fixtures/status.fixture.json":           "555054d8046a896162995dcb117752f9cd1ef903fb9ebaad29af1b7e7f319bb3",
 		"fixtures/status-ambiguous.fixture.json": "ee695fd58ba72adfb3b51dfd16432a177498173a45bfcb594d6bdc53bfa32e6e",
 		"fixtures/status-corrupted.fixture.json": "4cfc0048c28a39cec8a32fecfaad66e56e5c1248263ceb4ce66b6717981880b2",
 		"fixtures/status-recover.fixture.json":   "714f762f72380ce93d567626cafbaa536ab3aae02af73d3d40ca123f1f30d8b0",
 		"fixtures/status-unrelated.fixture.json": "deab36c877ced3c9b480ca33724c10d88f75c761d6426fa14be850345122891d",
 		"schemas/result-artifact.schema.json":    "91296bd2c261fd2fe03bffd63efe58badd4927e0d0d8480cd4213f651ecacdf6",
 		"schemas/start.schema.json":              "4296aebbd4128ce51945a2f6d3228aa77ac7215c802978d559bff5279ec56229",
-		"schemas/status.schema.json":             "f76f54a9c570ad4cfa7c983f15930e2e9e1239db7817326755d0ce248da976d8",
+		"schemas/status.schema.json":             "67f3bddf5f5feeb3213bce489de8548546163b2e1d49a0e3965c0091dabc8c39",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))

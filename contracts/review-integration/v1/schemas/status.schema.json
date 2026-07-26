@@ -91,11 +91,12 @@
       ]
     },
     "transition_argument": {
+      "$comment": "One argument of a transition. \"token\", when present, is the exact argv token rendering this argument for a command this product runs, e.g. \"--lineage=review-abc\". It is required on an execute argument (see executable_transition_argument) and present on the arguments of a collect input whose capture_operation names an operation this product performs, because those arguments are literally that command's flags. It is absent on preconditions, on selector_arguments, and on the arguments of an \"external.*\" capture operation, which are assertions, a normalized echo, and values to hand elsewhere rather than argv.",
       "type": "object", "additionalProperties": false, "required": ["name", "value"],
       "properties": { "name": { "type": "string", "pattern": "^[a-z0-9_-]+$" }, "value": { "type": "string", "minLength": 1 }, "token": { "type": "string", "minLength": 1 } }
     },
     "executable_transition_argument": {
-      "$comment": "One argv entry of an execute transition. Unlike preconditions, selector_arguments and collect inputs -- which are assertions and captured inputs the product never tokenizes -- an execute argument is literally executed, so its exact runnable token is required rather than optional.",
+      "$comment": "One argv entry of an execute transition. Unlike preconditions and selector_arguments -- which are assertions and a normalized echo the product never tokenizes -- an execute argument is always literally executed, so its exact runnable token is required rather than optional.",
       "allOf": [{ "$ref": "#/$defs/transition_argument" }],
       "type": "object", "required": ["name", "value", "token"]
     },

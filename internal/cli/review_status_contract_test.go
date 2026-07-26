@@ -96,7 +96,12 @@ func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *test
 	forbidden := map[string]struct{}{
 		"repository": {}, "store_path": {}, "authority_path": {}, "receipt_path": {}, "lock": {}, "locks": {}, "token": {}, "tokens": {}, "directory": {},
 	}
-	if field := findCapabilityForbiddenField(document, forbidden); field != "" || strings.Contains(first.String(), repo) {
+	// "token" stays forbidden by name; it is checked by position rather than
+	// by name alone because the status schemas publish a token property on
+	// transition arguments holding the literal argv a caller pastes. See
+	// negotiatedPrivateFieldPath: everywhere the contract does not declare it,
+	// the key is still a violation.
+	if field := negotiatedPrivateFieldPath(document, forbidden, publishedNegotiatedTransitionTokens()); field != "" || strings.Contains(first.String(), repo) {
 		t.Fatalf("negotiated status exposed provider-private field %q: %s", field, first.String())
 	}
 

@@ -225,13 +225,16 @@ func TestNativeNextTransitionCarriesRepositoryContextCaptureBinding(t *testing.T
 		t.Fatalf("next transition = %#v", status.NextTransition)
 	}
 	input := status.NextTransition.Collect.Inputs[0]
+	// review.capture-result is an operation this product performs, so these
+	// arguments are that command's own argv and carry their exact runnable
+	// token alongside the name/value pair, which stays byte-identical.
 	want := []ReviewTransitionArgument{
-		{Name: "lineage", Value: started.LineageID},
-		{Name: "expected-revision", Value: started.RepositoryContext.Revision},
-		{Name: "target", Value: started.RepositoryContext.TargetIdentity},
-		{Name: "repository-context", Value: started.RepositoryContext.Handle},
-		{Name: "lens", Value: started.SelectedLenses[0]},
-		{Name: "order", Value: "0"},
+		{Name: "lineage", Value: started.LineageID, Token: "--lineage=" + started.LineageID},
+		{Name: "expected-revision", Value: started.RepositoryContext.Revision, Token: "--expected-revision=" + started.RepositoryContext.Revision},
+		{Name: "target", Value: started.RepositoryContext.TargetIdentity, Token: "--target=" + started.RepositoryContext.TargetIdentity},
+		{Name: "repository-context", Value: started.RepositoryContext.Handle, Token: "--repository-context=" + started.RepositoryContext.Handle},
+		{Name: "lens", Value: started.SelectedLenses[0], Token: "--lens=" + started.SelectedLenses[0]},
+		{Name: "order", Value: "0", Token: "--order=0"},
 	}
 	if input.CaptureOperation != "review.capture-result" || !slices.Equal(input.Arguments, want) {
 		t.Fatalf("capture input = %#v, want %#v", input, want)
