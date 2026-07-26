@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -219,7 +220,19 @@ func appendSessionRecord(logPath string, record SessionRecord) {
 	_, _ = file.Write(append(line, '\n'))
 }
 
-// readSession loads a recorded session in file order.
+// readSession loads a recorded session and puts it in invocation order.
+//
+// The shim cannot number its own records: every invocation is a separate
+// process that would have to read the whole log to learn how many came before
+// it, which is both racy under concurrent appends and wasteful. So the shim
+// writes Sequence as zero and this function assigns it here, once, from the
+// timestamps it already recorded. Leaving the field at zero on every record
+// was worse than not publishing it at all: a reader who trusted it concluded
+// the invocations had been recorded out of order.
+//
+// Ordering comes from TimestampNanos rather than file order, because appends
+// from concurrent invocations can interleave in the file even when the clock
+// ordering is unambiguous. Sequence is 1-based so it reads as a count.
 func readSession(path string) ([]SessionRecord, error) {
 	content, err := os.ReadFile(path)
 	if err != nil {
@@ -239,6 +252,12 @@ func readSession(path string) ([]SessionRecord, error) {
 	}
 	if len(records) == 0 {
 		return nil, errors.New("session contains no recorded invocations")
+	}
+	sort.SliceStable(records, func(i, j int) bool {
+		return records[i].TimestampNanos < records[j].TimestampNanos
+	})
+	for index := range records {
+		records[index].Sequence = index + 1
 	}
 	return records, nil
 }

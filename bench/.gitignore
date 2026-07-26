@@ -4,3 +4,6 @@ results-*.json
 comparison.json
 session*.jsonl
 session*.jsonl.shim/
+
+# Build output: the package directory name, produced by `go build ./...`.
+bench

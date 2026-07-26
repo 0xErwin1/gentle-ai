@@ -191,6 +191,7 @@ func commandAnalyze(args []string) int {
 		"model_runs is a PROXY here, not a measurement: the agent's model calls never cross the process boundary.",
 		"human_prompts counts the consent-skipped notice, i.e. times the tool WOULD have asked; an agent session has no TTY.",
 		"blocks and recovery_round_trips are exact: the invocation sequence is what happened.",
+		"out_of_band counts every block whose output named no runnable command, including ones that are correct behaviour: a refusal while reviews are switched off, and the disabled/unmanaged delivery report that exits 0. Read each block's message before treating the count as a defect count.",
 	}
 
 	if err := writeJSON(*out, results); err != nil {

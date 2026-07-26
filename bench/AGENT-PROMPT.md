@@ -75,6 +75,11 @@ Also write down the exact version under test:
 
   CI=1 PATH=/tmp/session-guide.jsonl.shim:$PATH gentle-ai --version
 
+Expected while recording: `gentle-ai doctor` reports two copies of gentle-ai on
+PATH and recommends removing one. That is the shim, it is correct that doctor
+notices it, and it is NOT a finding — do not remove the shim and do not report
+it as a defect. Every other doctor finding is still worth reporting.
+
 ## Step 2 — Run the guide
 
 Guide: <GUIDE-PATH>
@@ -94,6 +99,13 @@ Two measurement traps that ruined earlier reports:
   one, mark that flow N/A. If you want to try it: on Linux you can use `expect`
   over a pseudo-terminal, on Windows ConPTY. Do not simulate it with redirected
   stdin: it is not the same thing and the result does not count.
+- **Answer the consent prompt with a trailing newline.** The answer is read as
+  one whole line. Writing the bare character `2` to the pseudo-terminal gets
+  echoed after `Choose 1 or 2 [1]:` but never completes the read, so the command
+  waits until your harness kills it and the flow looks like a hang. Send `2\n`.
+  There is no timeout on this prompt, so "no newline" and "product hung" are
+  indistinguishable from the outside. Verified: `2\n` returns
+  `"consent": "declined_this_candidate"`; a bare `2` blocks indefinitely.
 
 ## Step 3 — Close the recording
 
