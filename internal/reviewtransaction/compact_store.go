@@ -171,8 +171,11 @@ func BuildReleaseScopeSnapshot(ctx context.Context, repo string) (Snapshot, erro
 		return Snapshot{}, err
 	}
 	commit := strings.TrimSpace(string(commitOutput))
-	if _, err := runGit(ctx, root, nil, nil, "rev-parse", "--verify", commit+"^2^{commit}"); err != nil {
-		return Snapshot{}, errors.New("release-scope recovery requires HEAD to be a merge commit")
+	// An ordinary one-parent delivery commit (squash or rebase merge) is an
+	// accepted release-scope HEAD, not only a two-parent merge commit
+	// (issue-1816); a root commit (zero parents) is still refused.
+	if _, err := runGit(ctx, root, nil, nil, "rev-parse", "--verify", commit+"^1^{commit}"); err != nil {
+		return Snapshot{}, errors.New("release-scope recovery requires HEAD to have at least one parent commit")
 	}
 	snapshot, err := (SnapshotBuilder{Repo: root}).Build(ctx, Target{Kind: TargetExactRevision, Revision: commit})
 	if err != nil {
@@ -558,6 +561,15 @@ func CompactAuthorityLeaves(ctx context.Context, repo string) ([]CompactStore, e
 	for _, store := range stores {
 		record, loadErr := store.Load()
 		if loadErr != nil {
+			// A TERMINAL lineage that fails semantic validation is quarantined
+			// out of this selector-free enumeration alone (issue-1813): it does
+			// not poison discovery for every other healthy lineage. The
+			// diagnostic surface for the excluded lineage lives in
+			// InventoryAuthority (status.go); an explicit selector naming this
+			// lineage directly still fails closed (loadCompactTargetStatusCandidates).
+			if _, quarantinable := compactLineageQuarantinable(loadErr); quarantinable {
+				continue
+			}
 			return nil, fmt.Errorf("invalid compact authority graph: %w", loadErr)
 		}
 		records[record.State.LineageID], storeByLineage[record.State.LineageID] = record, store
@@ -752,6 +764,13 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 	for _, store := range stores {
 		record, loadErr := store.Load()
 		if loadErr != nil {
+			// A TERMINAL lineage that fails semantic validation is quarantined
+			// out of this bulk discovery scan alone (issue-1813): review start
+			// for every other healthy lineage remains operable instead of
+			// failing store-wide on one corrupted, unrelated lineage.
+			if _, quarantinable := compactLineageQuarantinable(loadErr); quarantinable {
+				continue
+			}
 			return CompactStartResult{}, fmt.Errorf("load compact start authority: %w", loadErr)
 		}
 		records[record.State.LineageID], storeByLineage[record.State.LineageID] = record, store
@@ -1631,7 +1650,7 @@ func parseCompactRecord(payload []byte, lineageID string) (CompactRecord, error)
 		return CompactRecord{}, errors.New("invalid compact review state record")
 	}
 	if err := record.State.Validate(); err != nil {
-		return CompactRecord{}, err
+		return CompactRecord{}, &CompactSemanticStateError{LineageID: record.State.LineageID, State: record.State.State, Problem: err.Error()}
 	}
 	if lineageID != "" && record.State.LineageID != lineageID {
 		return CompactRecord{}, errors.New("compact state lineage does not match its directory")

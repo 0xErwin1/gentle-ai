@@ -28,6 +28,44 @@ const (
 
 var ErrCompactCorrectionConsumed = errors.New("ordinary compact correction already consumed")
 
+// CompactSemanticStateError identifies a CompactState.Validate() failure with
+// its lineage and state, distinguishing a semantic-validation failure from a
+// structural one (JSON decode, schema mismatch, or checksum error). Only
+// parseCompactRecord's call to Validate() (compact_store.go) constructs this
+// type, so errors.As matching it is exact: never a checksum/IO/parse failure
+// (issue-1813).
+type CompactSemanticStateError struct {
+	LineageID string
+	State     State
+	Problem   string
+}
+
+func (err *CompactSemanticStateError) Error() string {
+	return fmt.Sprintf("compact lineage %q semantic state %q is invalid: %s", err.LineageID, err.State, err.Problem)
+}
+
+// compactLineageQuarantinable reports whether a store-discovery load failure
+// is eligible to exclude ONE TERMINAL-for-lineage lineage from enumeration
+// (issue-1813) instead of poisoning the entire store. It is true only when
+// errors.As matches *CompactSemanticStateError (never a checksum/IO/parse
+// failure) AND the failed state is one of {Approved, Escalated, Invalidated}
+// — the terminal-for-lineage set. This deliberately differs from
+// facadeTerminalState (review_facade.go), which excludes Invalidated: 1813's
+// reachable shape is exactly an Invalidated lineage failing semantic
+// validation.
+func compactLineageQuarantinable(err error) (*CompactSemanticStateError, bool) {
+	var semantic *CompactSemanticStateError
+	if !errors.As(err, &semantic) {
+		return nil, false
+	}
+	switch semantic.State {
+	case StateApproved, StateEscalated, StateInvalidated:
+		return semantic, true
+	default:
+		return nil, false
+	}
+}
+
 type CompactState struct {
 	Schema                    string                       `json:"schema"`
 	LineageID                 string                       `json:"lineage_id"`
