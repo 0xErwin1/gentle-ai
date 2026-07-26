@@ -1,167 +1,169 @@
-# La aventura de arreglar RDD
+# The story of fixing RDD
 
-> Cómo dos días sin dormir, una comunidad entera y tres resets mensuales terminaron en una release. Para el detalle técnico, ver [organic-rdd.md](organic-rdd.md).
+> How two sleepless days, an entire community and three monthly resets turned into a release. For the technical detail, see [organic-rdd.md](organic-rdd.md).
 
-## Qué es RDD, en una frase
+## What RDD is, in one sentence
 
-Cuando cambiás algo importante, alguien lo revisa antes de que salga. Eso es todo.
+When you change something important, someone reviews it before it ships. That is all.
 
-Lo difícil no es la idea, es que **no moleste**. Un sistema que te obliga a hacer ceremonia para cambiar una coma se desinstala en tres días. Uno que no te dice nada cuando tocás autenticación no sirve para nada.
+The hard part is not the idea, it is that it **must not get in the way**. A system that forces ceremony to change a comma gets uninstalled in three days. One that says nothing when you touch authentication is worth nothing.
 
-## Cómo funciona ahora
+## How it works now
 
-Cambiás algo. La herramienta mira **qué** cambiaste, no cuánto.
+You change something. The tool looks at **what** you changed, not how much.
 
-- **Editaste un README** → no te pregunta nada. Cero ceremonia.
-- **Escribiste mil líneas de documentación** → tampoco. El tamaño no importa.
-- **Tocaste dos líneas de login** → ahí sí, cuatro revisores.
+- **Edited a README** → it asks nothing. Zero ceremony.
+- **Wrote a thousand lines of documentation** → still nothing. Size does not matter.
+- **Touched two lines of login code** → four reviewers.
 
-Y si no querés nada de esto:
+And if you want none of it:
 
 ```
 gentle-ai review mode disable
 ```
 
-Listo. Se apagó. **No es "apagado pero igual te molesto"** — es apagado. Hacés lo que quieras, y si lo prendés de nuevo te avisa que va a revalidar lo que quedó sin revisar.
+Done. It is off. **Not "off but still in your way"** — off. Do whatever you want, and if you turn it back on it tells you it is going to re-validate whatever was never reviewed.
 
 ---
 
-## La parte que nadie cuenta
+## The part nobody tells
 
-### Empezó mal
+### It started badly
 
-La primera versión de esto no la escribí sola. La hice con Codex GPT 5.6 en modo ultra, y salió una cosa enorme.
+The first version of this was not written by hand. It was built with Codex GPT 5.6 in ultra mode, and what came out was enormous.
 
-Había una auditoría que mencionaba requisitos de nivel empresa. El modelo **infirió** que hacía falta soportar HTTP, ejecución remota, toda una infraestructura para equipos grandes. Y la construyó. Completa. Coherente. Bien hecha.
+There was an audit that mentioned enterprise-level requirements. The model **inferred** that HTTP support, remote execution and a whole infrastructure for large teams were needed. And it built all of it. Complete. Coherent. Well made.
 
-Y no era lo que había que hacer.
+And it was not what needed doing.
 
-Nadie la había pedido. Salió de deducir una necesidad a partir de un documento que hablaba de otra cosa. Después hubo que sacar todo, y sacar algo grande y bien hecho es más difícil que sacar algo roto, porque **parece que funciona**.
+Nobody had asked for it. It came from deducing a need out of a document that was about something else. Then all of it had to come out, and removing something large and well-built is harder than removing something broken, because **it looks like it works**.
 
-Eso me consumió **tres resets mensuales de Codex**.
+That consumed **three monthly Codex resets**.
 
-### Y hubo que aprender a pedir
+### And we had to learn how to ask
 
-Lo que cambió no fue el modelo, fue cómo lo dirigía.
+What changed was not the model. It was how it was directed.
 
-Con gentle-ai y las prácticas que veníamos armando: **fases con contratos claros, un solo escritor por carril, verificar antes de afirmar, y la regla de que si un test existente falla no se toca — se para y se reporta.**
+With gentle-ai and the practices we had been assembling: **phases with explicit contracts, one writer per lane, verify before asserting, and the rule that a failing existing test is never edited — you stop and report.**
 
-Esa última regla sola frenó **nueve premisas equivocadas**. Nueve veces un agente iba a arreglar algo, un test viejo se puso en rojo, y resultó que el test tenía razón y el diagnóstico no.
+That last rule alone caught **nine wrong premises**. Nine times an agent was about to fix something, an old test went red, and it turned out the test was right and the diagnosis was not.
 
-Después de dos días trabajando como locos, todavía estamos al **66% del límite semanal**. La diferencia no fue el modelo. Fue el método.
-
----
-
-## Lo que la comunidad encontró
-
-Esta es la parte que más me gusta.
-
-Sacamos una pre-release y la gente la rompió. En el buen sentido.
-
-**@Wladimirfn, @Denver2828, @MarsSall y @Freedom2828** reportaron el mismo error desde cuatro ángulos. Parecía un bug de Windows. No lo era: pasaba cuando el commit revisado ya estaba publicado. Denver2828 llegó al mismo diagnóstico por su cuenta, compilando la rama con prints, y **su parche era idéntico al nuestro, línea por línea**.
-
-**@ElCaaarnal** tipeó un flag a mano y chocó con algo que nosotros habíamos anunciado como arreglado. Tenía razón: habíamos arreglado que la herramienta dejara de *imprimirlo* mal, no que el parser lo aceptara. **El changelog prometió de más y él perdió tiempo por eso.**
-
-**@ardelperal** reportó que un comando salía con código de éxito cuando debía fallar. Lo investigamos: era una trampa de medición. En bash, `$?` te da el estado del *último comando del pipe*, no del binario. Su reporte no era un bug, pero documentó una trampa que a cualquier otro le hubiera costado una tarde.
-
-**@Blue-XL** encontró que una autorización deliberadamente falsa se aceptaba y se guardaba en el registro de auditoría como si fuera legítima. Peor que no tener el campo: una autorización ausente es honestamente ausente, **una equivocada miente**.
-
-**@AlbertGC13** encontró dos cosas en Windows con una prolijidad que da gusto: separó explícitamente lo que había probado de lo que solo había leído en el código, y **aclaró qué no estaba afirmando**. Encontró que un rechazo de permisos de Git se convertía en un consejo imposible de seguir.
-
-**@edwinsaavedran** mostró que cuatro defectos de macOS se habían escapado porque CI no corre en Darwin, y armó el caso con links a cada uno.
-
-**@MarcosArispe, @dnlrsls, @GinoL221, @orlo-dragomir, @lu149e, @salema97, @diegofercho21323, @blickcbot, @Deco** y varios más siguieron probando refresh tras refresh.
-
-Ninguno de esos hallazgos salió de una auditoría interna. **Salieron de gente usando la herramienta.**
+After two days of working flat out, we are still at **66% of the weekly limit**. The difference was not the model. It was the method.
 
 ---
 
-## Las auditorías: las que sirvieron y las que no
+## What the community found
 
-### Las que sirvieron
+This is the part I like most.
 
-Las mecánicas. Las que se derivan del código y no de una lista que alguien tiene que acordarse de actualizar.
+We shipped a pre-release and people broke it. In the good way.
 
-Una recorre el árbol de sintaxis buscando mensajes de error que nombren un comando, y verifica que ese comando y esos flags **existan de verdad**. Encontró errores que apuntaban a cosas inexistentes.
+**@Wladimirfn, @Denver2828, @MarsSall and @Freedom2828** reported the same failure from four angles. It looked like a Windows bug. It was not: it happened when the reviewed commit had already been published. Denver2828 reached the same diagnosis independently, building the branch with print statements, and **his patch was identical to ours, line for line**.
 
-Otra rechaza funciones nuevas que nadie llama. Cuando sacamos la limpieza de Codex, nos dijo que **quince funciones** quedaban muertas — todo un parser que existía solo para eso. Las borramos siguiendo esa evidencia.
+**@ElCaaarnal** typed a flag by hand and hit something we had announced as fixed. He was right: we had fixed the tool so it stopped *printing* the broken form, not the parser so it would accept it. **The changelog overclaimed and he lost time to it.**
 
-Esa guarda tenía ocho horas de vida cuando encontró su primer hallazgo real.
+**@ardelperal** reported a command exiting successfully when it should have failed. We investigated: it was a measurement trap. In bash, `$?` gives the status of the *last command in the pipeline*, not the binary. His report was not a bug, but it documented a trap that would have cost the next person an afternoon.
 
-### Las que no
+**@Blue-XL** found that a deliberately forged authorization was accepted and stored in the audit record as though genuine. Worse than having no field: an absent authorization is honestly absent, **a wrong one lies**.
 
-Las que verificaban que algo **se emitiera**, nunca que sirviera.
+**@AlbertGC13** found two things on Windows with a rigour worth copying: he separated explicitly what he had tested from what he had only read in the code, and **stated what he was not claiming**. He found a Git permissions refusal being turned into advice that could not possibly be followed.
 
-El caso perfecto: había un mensaje que te decía "para salir de acá corré este comando". Había tests. Verificaban que el mensaje saliera, con el texto exacto. Todo verde.
+**@edwinsaavedran** showed that four macOS defects had escaped because CI never runs on Darwin, and built the case with a link to each one.
 
-**Nadie había corrido nunca el comando que el mensaje nombraba.**
+**@Matere413** found that a reviewer result our own agents produce is rejected by our own admission, because two of our documents disagree about the required shape.
 
-Cuando lo corrimos, no funcionaba. Estábamos mandando gente a un callejón sin salida, con cobertura de tests en verde, durante meses.
+**@MarcosArispe, @dnlrsls, @GinoL221, @orlo-dragomir, @lu149e, @salema97, @diegofercho21323, @blickcbot, @Deco** and several more kept testing refresh after refresh.
 
-Ahí nació la regla que gobierna todo el resto:
-
-> **Un mensaje puede nombrar un comando solo si corriéndolo se resuelve el bloqueo.**
-
-Nombrar un callejón es peor que no nombrar nada.
+None of those findings came from an internal audit. **They came from people using the tool.**
 
 ---
 
-## El benchmark
+## The audits: the ones that worked and the ones that did not
 
-En algún momento dejamos de discutir si estaba mejor y lo medimos.
+### The ones that worked
 
-La herramienta cuenta cuántas veces te trabás y, sobre todo, **cómo te trabás**:
+The mechanical ones. The ones derived from the code rather than from a list someone has to remember to update.
 
-- **En banda** — te frena y te dice qué correr para seguir
-- **Fuera de banda** — te frena y no te dice nada
-- **Sin salida** — te frena y no hay nada que puedas hacer
+One walks the syntax tree looking for error messages that name a command, and checks that the command and its flags **actually exist**. It found messages pointing at things that were not there.
 
-No mide velocidad. La velocidad depende del proveedor y del día; la fricción es tuya.
+Another rejects new functions nobody calls. When we removed the Codex cleanup, it told us **fifteen functions** had gone dead — an entire parser that existed only for that. We deleted them following that evidence.
 
-La primera medición: **seis bloqueos, todos fuera de banda.**
+That guard was eight hours old when it found its first real defect.
 
-La última: **cero sin salida, y el único fuera de banda que queda sale con código de éxito** — o sea, ni siquiera es un bloqueo, es un informe que el analizador cuenta de más.
+### The ones that did not
 
-Un tester lo dijo mejor que nuestra propia herramienta: *"comunica correctamente el estado, pero no propone comando de continuación"*.
+The ones that verified something was **emitted**, never that it was usable.
 
----
+The perfect case: there was a message telling you "to get out of this, run this command". There were tests. They verified the message was emitted, with its exact text. All green.
 
-## Los errores que cometí yo
+**Nobody had ever run the command the message named.**
 
-Porque si esto va a ser honesto, va completo.
+When we ran it, it did not work. We had been sending people into a dead end, with green test coverage, for months.
 
-**Escribí pasos de la guía sin correrlos.** Tres veces. Un tester los siguió, no funcionaban, y reportó el fallo. De ahí salió una regla nueva: antes de nombrar una continuación, ejecutala.
+That is where the rule governing everything else came from:
 
-**Convertí un hallazgo en un parche de documentación.** Tres testers distintos no pudieron completar un flujo. En vez de tomar eso como el dato que era, escribí la receta en la guía. El maintainer me lo marcó: al hacer eso **destruí la medición** y escondí el defecto. Lo revertí. El defecto real era que la herramienta tenía un comando que emitía justo lo que hacía falta, y ninguna ruta te llevaba a él.
+> **A message may name a command only if running that command resolves the block.**
 
-**Stageé un archivo sin mirar el diff** mientras un agente escribía en él. Me llevé 154 líneas de trabajo ajeno a medio hacer y pusheé una rama que no compilaba. Tengo trinquetes, guardas y tests que exigen que los comandos funcionen. **Nada de eso te protege de un `git add` apurado.**
-
-**Perseguí un defecto que era mi propio error de medición.** Escribí la salida de un comando dentro del repositorio que estaba midiendo, eso agregó un archivo, cambió el estado, y el sistema me rechazó con razón. Perdí una hora. Pero salió algo bueno: ese rechazo tampoco explicaba nada, así que lo arreglamos y ahora está documentado como trampa en la guía.
+Naming a dead end is worse than naming nothing.
 
 ---
 
-## Dónde quedó
+## The benchmark
 
-Los cuatro defectos de macOS: cerrados y verificados en hardware real, no en un perfil sintético.
+At some point we stopped arguing about whether it was better and measured it.
 
-Windows se actualiza solo por primera vez.
+The tool counts how often you get stuck and, above all, **how** you get stuck:
 
-Codex arrancaba roto después de sincronizar y ahora **ni siquiera tocamos su archivo de configuración** — verificado con el mismo número de inodo antes y después, o sea que no lo abrimos para escribir, no es que escribimos lo mismo.
+- **In band** — it stops you and tells you what to run
+- **Out of band** — it stops you and tells you nothing
+- **Dead end** — it stops you and there is nothing you can do
 
-El kill switch es un kill switch.
+It does not measure speed. Speed depends on the provider and the day; friction is yours.
 
-Y quedan cosas abiertas, escritas en el documento técnico, porque una lista honesta de lo que falta vale más que una release que dice que está todo.
+First measurement: **six blocks, every one of them out of band.**
+
+Latest: **zero dead ends, and the single remaining out-of-band block exits successfully** — meaning it is not even a block, it is a report the analyzer over-counts.
+
+A tester said it better than our own tool: *"it communicates the state correctly, but proposes no continuation command"*.
 
 ---
 
-## Lo que aprendimos
+## The mistakes I made
 
-**Un test que verifica que algo se emitió no verifica que sirva.** Esa distinción explica casi todos los defectos de esta rama.
+Because if this is going to be honest, it goes in whole.
 
-**El código muerto que igual se documenta es mentira.** Había una función que instalaba dependencias. No la llamaba nadie. Los docs decían que la herramienta instalaba dependencias. Un usuario de Linux leyó eso y esperó que funcionara.
+**I wrote guide steps without running them.** Three times. A tester followed them, they did not work, and reported the failure. A new rule came out of that: before naming a continuation, execute it.
 
-**Sobre-ingeniería es más difícil de sacar que un bug.** Un bug se ve. Una arquitectura entera que nadie pidió, bien construida y coherente, se defiende sola.
+**I turned a finding into a documentation patch.** Three different testers could not complete a flow. Instead of taking that as the data it was, I wrote the recipe into the guide. The maintainer called it out: doing that **destroyed the measurement** and hid the defect. I reverted it. The real defect was that the tool had a command emitting exactly what was needed, and no path led to it.
 
-**La comunidad encuentra lo que las auditorías no.** Los cuatro reportes más valiosos de estos días salieron de gente usando la herramienta en su máquina, con su repo, con su configuración rara. Ninguna auditoría interna los hubiera encontrado, porque una auditoría busca lo que ya sabés buscar.
+**I staged a file without reading its diff** while an agent was writing in it. I swept up 154 lines of someone else's half-finished work and pushed a branch that did not compile. I have ratchets, guards, and tests that demand commands work. **None of that protects you from a hasty `git add`.**
 
-**Y la regla que se llevó todo por delante:** si le decís a alguien qué hacer, asegurate de que eso funcione.
+**I chased a defect that was my own measurement error.** I wrote a command's output inside the repository I was measuring, which added a file, changed the state, and the system correctly refused. I lost an hour. But something good came out: that refusal explained nothing either, so we fixed it, and it is now documented as a trap in the guide.
+
+---
+
+## Where it landed
+
+The four macOS defects: closed and verified on real hardware, not on a synthetic profile.
+
+Windows updates itself for the first time.
+
+Codex used to start up broken after syncing, and now we **do not touch its configuration file at all** — verified with the same inode number before and after, meaning we did not open it for writing, not merely that we wrote the same bytes.
+
+The kill switch is a kill switch.
+
+And things remain open, written down in the technical document, because an honest list of what is missing is worth more than a release claiming everything is done.
+
+---
+
+## What we learned
+
+**A test that verifies something was emitted does not verify it is usable.** That distinction explains nearly every defect in this branch.
+
+**Dead code that is still documented is a lie.** There was a function that installed dependencies. Nothing called it. The docs said the tool installed dependencies. A Linux user read that and expected it to work.
+
+**Over-engineering is harder to remove than a bug.** A bug is visible. An entire architecture nobody asked for, well built and coherent, defends itself.
+
+**The community finds what audits do not.** The four most valuable reports of these days came from people using the tool on their machine, with their repository, with their odd configuration. No internal audit would have found them, because an audit looks for what you already know to look for.
+
+**And the rule that ran over everything else:** if you tell someone what to do, make sure it works.
