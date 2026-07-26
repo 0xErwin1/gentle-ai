@@ -24,7 +24,14 @@ type ReviewNextTransition struct {
 }
 
 type ReviewTransitionExecution struct {
-	Operation         string                      `json:"operation"`
+	Operation string `json:"operation"`
+	// Command is the complete, literally runnable command line for this
+	// transition, e.g. "gentle-ai review start --contract=... --target=...".
+	// Operation alone is a dotted logical name, so a caller had to already know
+	// that "review.start" means "gentle-ai review start" before it could run
+	// anything. Operation, Arguments and their Tokens stay byte-identical, so
+	// existing consumers never move.
+	Command           string                      `json:"command,omitempty"`
 	Arguments         []ReviewTransitionArgument  `json:"arguments"`
 	SelectorArguments *[]ReviewTransitionArgument `json:"selector_arguments,omitempty"`
 	Preconditions     []ReviewTransitionArgument  `json:"preconditions"`
@@ -540,13 +547,100 @@ func reviewTransitionBinding(authority *ReviewTargetStatusAuthority, target stri
 	return ReviewTransitionBinding{LineageID: authority.LineageID, Revision: authority.Revision, TargetIdentity: target, RepositoryContext: contextHandle}
 }
 
-func reviewExecuteTransition(reason, operation string, arguments, preconditions []ReviewTransitionArgument, binding ReviewTransitionBinding, artifacts []ReviewTransitionArtifact) ReviewNextTransition {
+// reviewTokenizedTransitionArguments renders the literal argv token for every
+// argument of one transition. It is the single tokenizer: the execute form and
+// the native-capture collect form both call it, so a caller can never be handed
+// two different renderings of the same flag.
+func reviewTokenizedTransitionArguments(arguments []ReviewTransitionArgument) []ReviewTransitionArgument {
 	tokenized := make([]ReviewTransitionArgument, len(arguments))
 	for index, argument := range arguments {
 		argument.Token = reviewTransitionArgumentToken(argument)
 		tokenized[index] = argument
 	}
-	return ReviewNextTransition{Kind: reviewNextTransitionExecute, ReasonCode: reason, Execute: &ReviewTransitionExecution{Operation: operation, Arguments: tokenized, Preconditions: preconditions, Binding: binding, Artifacts: artifacts}}
+	return tokenized
+}
+
+func reviewExecuteTransition(reason, operation string, arguments, preconditions []ReviewTransitionArgument, binding ReviewTransitionBinding, artifacts []ReviewTransitionArtifact) ReviewNextTransition {
+	tokenized := reviewTokenizedTransitionArguments(arguments)
+	return ReviewNextTransition{Kind: reviewNextTransitionExecute, ReasonCode: reason, Execute: &ReviewTransitionExecution{
+		Operation: operation, Command: reviewTransitionCommandLine(operation, tokenized),
+		Arguments: tokenized, Preconditions: preconditions, Binding: binding, Artifacts: artifacts,
+	}}
+}
+
+// reviewTransitionCommandTool is the canonical published tool name used to
+// assemble every emitted command line. It is deliberately NOT os.Args[0]: the
+// binary is routinely invoked through a shim, a wrapper, or an absolute path
+// (benchmarking runs do exactly that), and echoing that path back would emit a
+// command that only runs on the machine that generated the payload. The
+// canonical name is the one every caller already has on PATH.
+const reviewTransitionCommandTool = "gentle-ai"
+
+// reviewTransitionCommandVerb resolves the runnable CLI verb for one
+// transition operation. reviewIntegrationOperationRegistry -- the single
+// policy source for negotiated routing, safe flag extraction, capability
+// publication, and operation-specific diagnostics -- owns the answer through
+// its Command field, so the verb a caller is told to run can never diverge
+// from the verb negotiated routing recognises.
+func reviewTransitionCommandVerb(operation string) (string, bool) {
+	if metadata, known := reviewIntegrationOperationByName(operation); known {
+		return metadata.Command, true
+	}
+	return "", false
+}
+
+// reviewTransitionCommandLine assembles the complete, literally runnable
+// command line for one execute transition. The argument portion is exactly the
+// tokens already present on the payload, in the order they already appear:
+// nothing is invented, added, or reordered, and every argument therefore
+// carries the --flag=value form parseReviewFlags requires (its recorded
+// DECISION keeps detached boolean values refused across the review command
+// family). An operation with no resolvable verb yields no command at all
+// rather than a half-assembled one.
+func reviewTransitionCommandLine(operation string, arguments []ReviewTransitionArgument) string {
+	verb, resolved := reviewTransitionCommandVerb(operation)
+	if !resolved {
+		return ""
+	}
+	parts := make([]string, 0, len(arguments)+3)
+	parts = append(parts, reviewTransitionCommandTool, "review", verb)
+	for _, argument := range arguments {
+		if argument.Token == "" {
+			return ""
+		}
+		parts = append(parts, reviewTransitionShellWord(argument.Token))
+	}
+	return strings.Join(parts, " ")
+}
+
+// reviewTransitionShellWord renders one already-assembled --flag=value token
+// as a single POSIX shell word. Most tokens (hashes, lineages, enum values,
+// booleans) are already shell-safe and are emitted verbatim, so the common
+// command reads exactly like the token list. Operator-supplied free text --
+// review.repair carries --reason and --actor straight from `review status
+// --repair-reason` / `--repair-actor` -- can contain spaces and quotes; joined
+// raw, the shell would split those into stray positional arguments that every
+// review verb refuses with "unexpected review <verb> argument". Quoting keeps
+// the promise that the printed command runs exactly as printed, and the quotes
+// are shell syntax only: the argv entry the shell delivers stays byte-
+// identical to the payload's own Token.
+func reviewTransitionShellWord(token string) string {
+	if token != "" && !strings.ContainsFunc(token, reviewTransitionShellUnsafe) {
+		return token
+	}
+	return "'" + strings.ReplaceAll(token, "'", `'\''`) + "'"
+}
+
+// reviewTransitionShellUnsafe reports whether a rune needs quoting. It is an
+// allowlist on purpose: anything not proven inert to every POSIX shell (word
+// splitting, globbing, expansion, tilde, history) is quoted rather than
+// guessed at.
+func reviewTransitionShellUnsafe(char rune) bool {
+	switch {
+	case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z', char >= '0' && char <= '9':
+		return false
+	}
+	return !strings.ContainsRune("-_=./:,+@", char)
 }
 
 // reviewTransitionArgumentToken renders the literal, executable argv token
@@ -557,8 +651,29 @@ func reviewTransitionArgumentToken(argument ReviewTransitionArgument) string {
 	return "--" + strings.ReplaceAll(argument.Name, "_", "-") + "=" + argument.Value
 }
 
+// reviewCollectTransition assembles one collect transition.
+//
+// No `command` is emitted, deliberately. `review capture-result` requires
+// --input pointing at a reviewer-result artifact that does not exist yet,
+// because no model has run the lens; a printed command carrying a placeholder
+// for it would break the rule that a named command runs exactly as printed.
+//
+// KNOWN GAP: unlike Execute.Arguments, these arguments carry no Token, so a
+// caller still assembles "--lineage=" + value by hand even though the
+// capture_operation of a native "review.<verb>" input is a real command whose
+// flags are exactly these arguments. Tokenizing them is correct and was
+// deliberately deferred: it makes contracts/review-integration/v1 fixtures
+// stale (one of them digest-pinned) and trips a status-contract test whose
+// provider-private field list rejects any JSON key named "token", which
+// collides by name with the published argv token rather than describing a
+// leak. Those are contract decisions to take deliberately, not alongside a
+// release.
 func reviewCollectTransition(reason string, inputs ...ReviewTransitionInput) ReviewNextTransition {
-	return ReviewNextTransition{Kind: reviewNextTransitionCollect, ReasonCode: reason, Collect: &ReviewTransitionCollection{Inputs: inputs}}
+	collected := make([]ReviewTransitionInput, len(inputs))
+	for index, input := range inputs {
+		collected[index] = input
+	}
+	return ReviewNextTransition{Kind: reviewNextTransitionCollect, ReasonCode: reason, Collect: &ReviewTransitionCollection{Inputs: collected}}
 }
 
 func reviewStopTransition(reason string) ReviewNextTransition {

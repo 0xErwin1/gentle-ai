@@ -23,7 +23,7 @@ func TestReviewProviderArtifactV1ContractsRemainByteIdentical(t *testing.T) {
 		"fixtures/status-unrelated.fixture.json": "deab36c877ced3c9b480ca33724c10d88f75c761d6426fa14be850345122891d",
 		"schemas/result-artifact.schema.json":    "91296bd2c261fd2fe03bffd63efe58badd4927e0d0d8480cd4213f651ecacdf6",
 		"schemas/start.schema.json":              "4296aebbd4128ce51945a2f6d3228aa77ac7215c802978d559bff5279ec56229",
-		"schemas/status.schema.json":             "9cd718e1ba63b59bf4d03f5a4edf66ee65a021d71379528d62854aa98db411eb",
+		"schemas/status.schema.json":             "f76f54a9c570ad4cfa7c983f15930e2e9e1239db7817326755d0ce248da976d8",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))

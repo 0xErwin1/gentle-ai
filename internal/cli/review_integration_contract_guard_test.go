@@ -111,6 +111,84 @@ func TestEveryDocumentedReviewCommandIsReal(t *testing.T) {
 	}
 }
 
+// reviewIntegrationTestingGuidePath is the community-facing testing guide.
+// Its Flow 11 is the flow an external tester reported as FAIL: step 3 told the
+// tester to copy-paste the emitted command, and no emitter produced one.
+const reviewIntegrationTestingGuidePath = "../../docs/testing/organic-rdd-testing-guide.md"
+
+// reviewIntegrationGuideTransitionFieldRegexp extracts every backtick-quoted
+// next_transition field path the testing guide points a tester at, e.g.
+// `next_transition.execute.command`. It is deliberately rooted at
+// next_transition: a general dotted-token extractor also matches operation
+// names ("review.start") and filenames ("requirements.txt"), which are not
+// payload paths at all. A narrow guard that genuinely fails closed beats a
+// broad one that has to be taught about exceptions.
+var reviewIntegrationGuideTransitionFieldRegexp = regexp.MustCompile("`(next_transition(?:\\.[a-z_]+)+)`")
+
+// TestEveryTestingGuideTransitionFieldIsEmitted is Guard D. It generalizes the
+// exact defect this change closed: docs/testing/organic-rdd-testing-guide.md
+// Flow 11 instructed a tester to copy-paste an emitted command, and no
+// emitter produced one anywhere in the payload. Every next_transition field
+// path the guide quotes must be backed by a real JSON tag on a production Go
+// struct under internal/cli or internal/reviewtransaction.
+func TestEveryTestingGuideTransitionFieldIsEmitted(t *testing.T) {
+	guide, err := os.ReadFile(reviewIntegrationTestingGuidePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	matches := reviewIntegrationGuideTransitionFieldRegexp.FindAllStringSubmatch(string(guide), -1)
+	if len(matches) == 0 {
+		t.Fatal("found no backtick-quoted next_transition field paths in the testing guide; the extraction regexp is stale")
+	}
+	source, err := os.ReadFile("review_next_transition.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, match := range matches {
+		segments := strings.Split(match[1], ".")
+		// next_transition is the STATUS/FINALIZE property name whose value is a
+		// ReviewNextTransition; the walk starts inside that struct.
+		structName := "ReviewNextTransition"
+		for _, segment := range segments[1:] {
+			next, found := reviewStructFieldType(t, string(source), structName, segment)
+			if !found {
+				t.Errorf("the testing guide points a tester at %q, but %s carries no %q JSON field", match[1], structName, segment)
+				break
+			}
+			structName = next
+		}
+	}
+}
+
+// reviewStructFieldRegexp matches one struct field line and captures its Go
+// type and its JSON name, e.g. `Execute *ReviewTransitionExecution
+// \`json:"execute,omitempty"\“.
+var reviewStructFieldRegexp = regexp.MustCompile("^\\s*\\w+\\s+([\\[\\]\\*\\w.]+)\\s+`json:\"([a-z0-9_]+)")
+
+// reviewStructFieldType finds one named JSON field inside one named struct in
+// the given source and returns the Go type name it points at, so Guard D can
+// walk a dotted payload path struct by struct instead of accepting any
+// same-named tag anywhere in the tree.
+func reviewStructFieldType(t *testing.T, source, structName, jsonName string) (string, bool) {
+	t.Helper()
+	marker := regexp.MustCompile(`(?m)^type ` + regexp.QuoteMeta(structName) + ` struct \{$`)
+	loc := marker.FindStringIndex(source)
+	if loc == nil {
+		t.Fatalf("struct %s not found in review_next_transition.go", structName)
+	}
+	for _, line := range strings.Split(source[loc[1]:], "\n") {
+		if strings.HasPrefix(line, "}") {
+			break
+		}
+		field := reviewStructFieldRegexp.FindStringSubmatch(line)
+		if field == nil || field[2] != jsonName {
+			continue
+		}
+		return strings.TrimLeft(field[1], "*[]"), true
+	}
+	return "", false
+}
+
 // reviewIntegrationProductionSources reads every non-test .go file under
 // internal/cli and internal/reviewtransaction, so Guard A only credits a
 // schema identity actually implemented in production code -- never a test
