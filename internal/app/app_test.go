@@ -1629,7 +1629,7 @@ func TestTuiSyncMigratesLegacyCodexCarrilDefaults(t *testing.T) {
 	wantProfiles := map[string][]string{
 		"sdd-strong.config.toml": {`model = "gpt-5.6-sol"`, `model_reasoning_effort = "medium"`},
 		"sdd-mid.config.toml":    {`model = "gpt-5.6-terra"`, `model_reasoning_effort = "medium"`},
-		"sdd-cheap.config.toml":  {`model = "gpt-5.6-luna"`, `model_reasoning_effort = "low"`},
+		"sdd-cheap.config.toml":  {`model = "gpt-5.6-luna"`, `model_reasoning_effort = "high"`},
 	}
 	for name, wantContent := range wantProfiles {
 		path := filepath.Join(home, ".codex", name)

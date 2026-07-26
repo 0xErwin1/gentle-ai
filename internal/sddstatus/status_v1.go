@@ -95,9 +95,15 @@ type remediationStateV1 struct {
 	Reason                 string `json:"reason"`
 }
 
+// reviewGateStateV1 grows one omitempty field over the frozen v1 shape.
+// Delivery is empty on every path that could already produce a review gate, so
+// the bytes a legacy Gentle Pi client receives for those paths are unchanged;
+// it appears only for the disabled/unmanaged disposition, which no legacy path
+// could reach.
 type reviewGateStateV1 struct {
-	Result reviewtransaction.GateResult `json:"result"`
-	Reason string                       `json:"reason"`
+	Result   reviewtransaction.GateResult  `json:"result"`
+	Reason   string                        `json:"reason"`
+	Delivery reviewtransaction.RDDDelivery `json:"delivery,omitempty"`
 }
 
 type phaseInstructionsV1 struct {
@@ -157,7 +163,11 @@ func ProjectStatusV1(status Status) (StatusV1Projection, error) {
 		BlockedReasons:    status.BlockedReasons,
 	}
 	if status.ReviewGate != nil {
-		projected.ReviewGate = &reviewGateStateV1{Result: status.ReviewGate.Result, Reason: status.ReviewGate.Reason}
+		projected.ReviewGate = &reviewGateStateV1{
+			Result:   status.ReviewGate.Result,
+			Reason:   status.ReviewGate.Reason,
+			Delivery: status.ReviewGate.Delivery,
+		}
 	}
 	if status.PhaseInstructions != nil {
 		projected.PhaseInstructions = &phaseInstructionsV1{

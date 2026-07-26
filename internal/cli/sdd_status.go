@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,11 @@ import (
 )
 
 // RunSDDStatus is the CLI entry point for `gentle-ai sdd-status [change]`.
+//
+// The kill switch reaches SDD status here, at the one layer that owns the
+// single source of truth for both of its sources. An unreadable switch is not a
+// disabled switch: reviewDrivenDevelopmentDisabled fails closed to "enabled",
+// so a broken or tampered mode record can never relax the archive gate.
 func RunSDDStatus(args []string, stdout io.Writer) error {
 	parsed, err := sddstatus.ParseCommandArgs(args)
 	if err != nil {
@@ -19,6 +25,7 @@ func RunSDDStatus(args []string, stdout io.Writer) error {
 		CWD:                 parsed.CWD,
 		ChangeName:          parsed.ChangeName,
 		IncludeInstructions: parsed.IncludeInstructions,
+		ReviewDisabled:      reviewDrivenDevelopmentDisabled(context.Background(), parsed.CWD),
 	})
 	if err != nil {
 		return fmt.Errorf("resolve sdd status: %w", err)
@@ -49,6 +56,7 @@ func RunSDDContinue(args []string, stdout io.Writer) error {
 		CWD:                 parsed.CWD,
 		ChangeName:          parsed.ChangeName,
 		IncludeInstructions: true,
+		ReviewDisabled:      reviewDrivenDevelopmentDisabled(context.Background(), parsed.CWD),
 	})
 	if err != nil {
 		return fmt.Errorf("resolve sdd status: %w", err)

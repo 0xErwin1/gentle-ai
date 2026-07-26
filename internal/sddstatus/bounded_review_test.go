@@ -289,7 +289,7 @@ func TestResolveEngramArchiveRecoversRetainedPolicyWithoutSourceArtifacts(t *tes
 	restore := stubEngramExport(t, observations)
 	defer restore()
 
-	status, ok, err := resolveEngramStatus(root, "thin", false)
+	status, ok, err := resolveEngramStatus(root, "thin", false, false)
 	if err != nil {
 		t.Fatalf("resolveEngramStatus() error = %v", err)
 	}
@@ -321,7 +321,7 @@ func TestResolveEngramArchiveIgnoresNonAuthoritativeRetainedPolicy(t *testing.T)
 	restore := stubEngramExport(t, observations)
 	defer restore()
 
-	status, ok, err := resolveEngramStatus(root, "thin", false)
+	status, ok, err := resolveEngramStatus(root, "thin", false, false)
 	if err != nil {
 		t.Fatalf("resolveEngramStatus() error = %v", err)
 	}
@@ -422,7 +422,7 @@ func TestResolveEngramBridgesCompactAuthorityOverIncompatibleTransactionArtifact
 	restore := stubEngramExport(t, observations)
 	defer restore()
 
-	status, ok, err := resolveEngramStatus(root, "thin", false)
+	status, ok, err := resolveEngramStatus(root, "thin", false, false)
 	if err != nil {
 		t.Fatalf("resolveEngramStatus() error = %v", err)
 	}
@@ -465,7 +465,7 @@ func TestResolveEngramDoesNotBridgeCompactAuthorityOverMalformedJSONTransaction(
 	restore := stubEngramExport(t, observations)
 	defer restore()
 
-	status, ok, err := resolveEngramStatus(root, "thin", false)
+	status, ok, err := resolveEngramStatus(root, "thin", false, false)
 	if err != nil {
 		t.Fatalf("resolveEngramStatus() error = %v", err)
 	}
@@ -481,7 +481,7 @@ func TestResolveEngramDoesNotBridgeCompactAuthorityOverMalformedJSONTransaction(
 	}
 	for _, payload := range []string{`[]`, `null`, `"legacy"`} {
 		observations[len(observations)-1].Content = payload
-		status, _, err = resolveEngramStatus(root, "thin", false)
+		status, _, err = resolveEngramStatus(root, "thin", false, false)
 		if err != nil {
 			t.Fatalf("resolveEngramStatus(%s) error = %v", payload, err)
 		}
@@ -506,7 +506,7 @@ func TestResolveEngramFailsClosedOnIncompatibleTransactionWithoutNativeAuthority
 	restore := stubEngramExport(t, observations)
 	defer restore()
 
-	status, ok, err := resolveEngramStatus(root, "thin", false)
+	status, ok, err := resolveEngramStatus(root, "thin", false, false)
 	if err != nil {
 		t.Fatalf("resolveEngramStatus() error = %v", err)
 	}
@@ -951,7 +951,7 @@ func TestResolveEngramRoutesStaleVerifyEvidenceToVerifyUnderApprovedCompactAutho
 	})
 	defer restore()
 
-	status, ok, err := resolveEngramStatus(root, "thin", false)
+	status, ok, err := resolveEngramStatus(root, "thin", false, false)
 	if err != nil {
 		t.Fatalf("resolveEngramStatus() error = %v", err)
 	}
@@ -993,7 +993,7 @@ func TestResolveEngramRejectsForeignCompactAuthorityForStaleVerifyEvidence(t *te
 	})
 	defer restore()
 
-	status, ok, err := resolveEngramStatus(root, "thin", false)
+	status, ok, err := resolveEngramStatus(root, "thin", false, false)
 	if err != nil || !ok {
 		t.Fatalf("resolveEngramStatus() = ok %v, error %v", ok, err)
 	}
@@ -1597,7 +1597,7 @@ func TestApplyReviewGateDiscoversCompactStateAndReceiptWithoutMirrors(t *testing
 		t.Fatal(err)
 	}
 	status := Status{Dependencies: Dependencies{Verify: DependencyAllDone, Archive: DependencyReady}, TaskProgress: TaskProgress{AllComplete: true}}
-	applyReviewGate(&status, repo, "", "")
+	applyReviewGate(&status, repo, "", "", false)
 	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateAllow || status.Dependencies.Archive != DependencyReady {
 		t.Fatalf("compact SDD gate = %#v", status)
 	}

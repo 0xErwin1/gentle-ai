@@ -286,6 +286,12 @@ type reviewAuthorityEvaluation struct {
 	Result       reviewtransaction.GateResult
 	Reason       string
 	CompactState *reviewtransaction.CompactState
+	// Absent reports that the change supplied no review artifact and discovery
+	// found no terminal native receipt either: there is nothing to validate,
+	// only the implicit demand that a review should have happened. Every other
+	// non-allow result means an explicit review artifact was found and failed
+	// validation, which stays a blocker whatever the kill switch says.
+	Absent bool
 }
 
 func resolveCompactRemediationAuthority(ctx context.Context, repo, change string, bindingPresent, required bool, receiptPath, receiptContent string) *reviewtransaction.CompactState {
@@ -314,20 +320,46 @@ func resolveCompactRemediationAuthority(ctx context.Context, repo, change string
 	return evaluation.CompactState
 }
 
+// errTerminalReceiptMissing is the one discovery outcome that means "no review
+// authority exists", as opposed to "a review authority exists and does not
+// govern these bytes". Only the first is the implicit demand the kill switch
+// removes, so it is a sentinel rather than a message to match on.
+var errTerminalReceiptMissing = errors.New("terminal review receipt is missing")
+
+// reviewGateDisabledUnmanagedReason names the situation before the mechanism:
+// what governs this change comes first, and the reason the gate could not
+// govern stays appended behind it so no information is destroyed.
+const reviewGateDisabledUnmanagedReason = "review-driven development is disabled, so no review governs this change; it closes under ordinary repository policy rather than under a review receipt"
+
 func applyReviewGate(
 	status *Status,
 	repo string,
 	receiptPath, receiptContent string,
+	reviewDisabled bool,
 ) {
 	if status.Dependencies.Verify != DependencyAllDone || !status.TaskProgress.AllComplete {
 		return
 	}
-	applyReviewGateEvaluation(status, resolveReviewAuthority(context.Background(), repo, receiptPath, receiptContent, ""))
+	applyReviewGateEvaluation(status, resolveReviewAuthority(context.Background(), repo, receiptPath, receiptContent, ""), reviewDisabled)
 }
 
-func applyReviewGateEvaluation(status *Status, evaluation reviewAuthorityEvaluation) {
+func applyReviewGateEvaluation(status *Status, evaluation reviewAuthorityEvaluation, reviewDisabled bool) {
 	if evaluation.Result == reviewtransaction.GateAllow {
 		status.ReviewGate = &ReviewGateState{Result: evaluation.Result, Reason: evaluation.Reason}
+		return
+	}
+	// With the kill switch off the archive gate has no say in whether this
+	// change may close: it would demand a terminal receipt that review/start is
+	// refused from producing, which is a deadlock, not a safeguard. Only the
+	// implicit demand goes away — an explicit review artifact that failed
+	// validation still blocks below. Re-enabling re-validates from the current
+	// state, because the next enforcement point rediscovers it on its own.
+	if reviewDisabled && evaluation.Absent {
+		status.ReviewGate = &ReviewGateState{
+			Result:   evaluation.Result,
+			Reason:   fmt.Sprintf("%s: %s", reviewGateDisabledUnmanagedReason, evaluation.Reason),
+			Delivery: reviewtransaction.RDDDeliveryDisabledUnmanaged,
+		}
 		return
 	}
 	blockReviewGate(status, evaluation.Result, evaluation.Reason)
@@ -339,7 +371,11 @@ func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptConte
 		var err error
 		receiptPayload, err = discoverNativeReceipt(ctx, repo)
 		if err != nil {
-			return reviewAuthorityEvaluation{Result: reviewtransaction.GateInvalidated, Reason: err.Error()}
+			return reviewAuthorityEvaluation{
+				Result: reviewtransaction.GateInvalidated,
+				Reason: err.Error(),
+				Absent: errors.Is(err, errTerminalReceiptMissing),
+			}
 		}
 	}
 	var evaluation reviewtransaction.NativeGateEvaluation
@@ -444,7 +480,7 @@ func discoverNativeReceipt(ctx context.Context, repo string) ([]byte, error) {
 		matches = append(matches, payload)
 	}
 	if len(matches) == 0 {
-		return nil, errors.New("terminal review receipt is missing")
+		return nil, errTerminalReceiptMissing
 	}
 	if len(matches) != 1 {
 		return nil, errors.New("multiple terminal native review receipts found; restore the change-local reviews/receipt.json mirror or remove stale terminal authority")

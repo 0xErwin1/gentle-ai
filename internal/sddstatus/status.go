@@ -176,6 +176,21 @@ type RemediationState struct {
 type ReviewGateState struct {
 	Result reviewtransaction.GateResult `json:"result"`
 	Reason string                       `json:"reason"`
+	// Delivery names what governs the change when the review gate itself
+	// cannot, mirroring the delivery gate's own disposition field
+	// (internal/cli.reviewDeliveryDisposition). It is set only while the
+	// review-driven-development kill switch is off and the change has no
+	// review authority of its own, where it reports
+	// RDDDeliveryDisabledUnmanaged: no review governs this change and it
+	// closes under ordinary repository policy rather than under a receipt.
+	//
+	// It is deliberately a separate field rather than a fifth
+	// reviewtransaction.GateResult. Result keeps reporting only the four
+	// documented gate results, so every consumer that archives on
+	// `reviewGate.result: allow` keeps refusing to read this as an approval,
+	// and every enabled path leaves Delivery empty, which `omitempty` keeps
+	// off the wire exactly as before.
+	Delivery reviewtransaction.RDDDelivery `json:"delivery,omitempty"`
 }
 
 type Status struct {
@@ -207,6 +222,24 @@ type ResolveOptions struct {
 	WorkspaceRoot       string
 	ChangeName          string
 	IncludeInstructions bool
+	// ReviewDisabled records that the user's review-driven-development kill
+	// switch is off for this clone. While it is off review-driven development
+	// does not exist, so it must have no implications: the archive gate never
+	// demands a terminal review receipt the operator could not obtain anyway
+	// (review/start is refused while the switch is off), which would otherwise
+	// loop an orchestrator forever on `nextRecommended: "resolve-review"`.
+	//
+	// It removes only the IMPLICIT demand. A change that carries an explicit
+	// review receipt asked for review-driven development to act, so that
+	// receipt is still validated in full: an approved one still governs and a
+	// scope-changed, escalated, or invalidated one still blocks. Nothing here
+	// approves, advances, or invents review authority.
+	//
+	// The zero value enforces, so any caller that does not resolve the switch
+	// keeps today's behavior. The switch itself is read in the CLI layer, which
+	// owns the single source of truth for both of its sources; an unreadable
+	// switch is not a disabled switch and resolves to false.
+	ReviewDisabled bool
 }
 
 type CommandArgs struct {
@@ -317,7 +350,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if changeName == "" {
 		switch len(activeChanges) {
 		case 0:
-			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions); ok || err != nil {
+			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, options.ReviewDisabled); ok || err != nil {
 				return status, err
 			}
 			return blockedStatus(workspaceRoot, nil, nil, "sdd-new", []string{"No active OpenSpec changes found under openspec/changes."}, options.IncludeInstructions), nil
@@ -329,7 +362,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	}
 
 	if !contains(activeChanges, changeName) {
-		if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions); ok || err != nil {
+		if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, options.ReviewDisabled); ok || err != nil {
 			return status, err
 		}
 		return blockedStatus(workspaceRoot, &changeName, nil, "sdd-new", []string{fmt.Sprintf("Active OpenSpec change not found: %s.", changeName)}, options.IncludeInstructions), nil
@@ -472,6 +505,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 				workspaceRoot,
 				firstPath(artifactPaths.ReviewReceipt),
 				"",
+				options.ReviewDisabled,
 			)
 		}
 	}
@@ -610,7 +644,7 @@ func authorityFailureFields(report string) (map[string]string, bool) {
 	return parsed.Fields, true
 }
 
-func resolveEngramStatus(workspaceRoot string, requestedChange string, includeInstructions bool) (Status, bool, error) {
+func resolveEngramStatus(workspaceRoot string, requestedChange string, includeInstructions, reviewDisabled bool) (Status, bool, error) {
 	if !shouldTryEngram(workspaceRoot) {
 		return Status{}, false, nil
 	}
@@ -759,6 +793,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 				workspaceRoot,
 				"",
 				artifactsByType["review/receipt"].Content,
+				reviewDisabled,
 			)
 		}
 	}

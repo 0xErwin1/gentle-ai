@@ -995,8 +995,8 @@ func TestInjectCodexWritesProfiles(t *testing.T) {
 		reasoningEffort string
 	}{
 		{"sdd-strong.config.toml", "medium"},
-		{"sdd-mid.config.toml", "medium"},
-		{"sdd-cheap.config.toml", "low"},
+		{"sdd-mid.config.toml", "high"},
+		{"sdd-cheap.config.toml", "high"},
 	}
 
 	for _, p := range profiles {
@@ -1065,8 +1065,8 @@ func TestProfileFallbackAgreesWithRenderFallback(t *testing.T) {
 		wantEffort string
 	}{
 		{"sdd-strong", "medium"},
-		{"sdd-mid", "medium"},
-		{"sdd-cheap", "low"},
+		{"sdd-mid", "high"},
+		{"sdd-cheap", "high"},
 	}
 	for _, tc := range cases {
 		got := profileEffort[tc.carril]
