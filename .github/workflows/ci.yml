@@ -28,6 +28,14 @@ jobs:
       - name: Check Go formatting
         run: go run ./internal/gofmtcheck
 
+      # Ratchet, not a clean gate: the repository already carries 230 functions
+      # nothing reaches from main, most of them legitimate. This fails only when
+      # a NEW one appears. It exists because InstallCommandsForDep survived with
+      # no callers while the install docs described the dependency remediation
+      # it would have performed.
+      - name: Check for new unreachable functions
+        run: ./scripts/deadcode-ratchet.sh
+
   unit-tests:
     name: Unit Tests
     needs: go-format
