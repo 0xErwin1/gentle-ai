@@ -21,6 +21,13 @@
 #   scripts/deadcode-ratchet.sh --update
 set -euo pipefail
 
+# comm(1) requires both inputs sorted under the SAME collation, and silently
+# produces nonsense when they are not. A baseline sorted under en_US.UTF-8 and
+# compared under C (the usual CI locale) reports every baselined entry as new.
+# Pinning the collation here and regenerating the baseline under it is what
+# makes this reproducible off the author's machine.
+export LC_ALL=C
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 baseline="${repo_root}/.deadcode-baseline.txt"
 target="${DEADCODE_TARGET:-./cmd/gentle-ai}"
