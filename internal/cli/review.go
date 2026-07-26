@@ -201,6 +201,22 @@ func (err ReviewGateDeniedError) Error() string {
 	if err.Result == reviewtransaction.GateScopeChanged && err.Context.ScopeChange != nil && err.Context.ScopeChange.RecoveryOperation != "" {
 		scope := err.Context.ScopeChange
 		operation := scope.RecoveryOperation
+		// Name the situation before the mechanism. "scope-changed" plus a
+		// recovery command is accurate and says nothing about what happened,
+		// which is that this candidate carries work no receipt covers. That is
+		// the shape an operator meets after switching reviews off, doing work,
+		// and switching them back on: the re-validation is correct, but reading
+		// it as a state mismatch rather than as accumulated unreviewed work
+		// leaves them guessing. The count is already derived and frozen here,
+		// so this costs no extra derivation; when it is absent nothing is said,
+		// because a fabricated "0 paths" would be worse than silence.
+		if scope.DifferingPathCount > 0 {
+			noun := "paths"
+			if scope.DifferingPathCount == 1 {
+				noun = "path"
+			}
+			message = fmt.Sprintf("%s: %d %s in this candidate that no terminal receipt covers", message, scope.DifferingPathCount, noun)
+		}
 		// The gate-conditional half. A bare recovery freezes a current-changes
 		// successor over the live workspace; at pre-push over an already
 		// committed delivery that successor is empty and re-trips the same
