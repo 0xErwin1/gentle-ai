@@ -46,7 +46,14 @@ The binaries are on the pre-release page: **https://github.com/Gentleman-Program
 1. [ ] `gentle-ai review mode status --cwd $HOME/demo --json` → **Expected**: effective `on`, with the source that decides it.
 2. [ ] `gentle-ai review mode disable --cwd $HOME/demo` → **Expected**: it confirms reviews are off.
 3. [ ] `status` again → **Expected**: effective `off`, source `global`.
-4. [ ] `gentle-ai review start --cwd $HOME/demo` → **Expected**: refused, naming that reviews are turned off. It does NOT hang, it does NOT review.
+4. [ ] `gentle-ai review start --cwd $HOME/demo` → **Expected**: refused, naming that reviews are turned off **and naming the command that turns them back on**, scoped to the source that actually decided:
+
+```
+review-driven development is disabled: start is rejected because the global mode source
+keeps it off; turn it back on with gentle-ai review mode enable --scope=global
+```
+
+It does NOT hang, it does NOT review. A refusal that exits non-zero and names no command is the defect. If you turned it off at clone scope, the scope in the message must say `clone`, not `global`.
 5. [ ] `enable` and `status` → **Expected**: `on` again.
 6. [ ] `disable --scope clone`, clone (`git clone $HOME/demo $HOME/demo2`) and `status` in `demo2` → **Expected**: `demo2` gives **on** — turning a clone off is NOT inherited.
 7. [ ] **Before moving on**: `enable --scope clone` in `demo` → **Expected**: `on`.
@@ -111,7 +118,20 @@ You need the remote from Flow 6.
 3. [ ] **Push**: `git push origin HEAD`.
 4. [ ] Turn reviews off and make ANOTHER docs commit.
 5. [ ] `review validate --gate pre-push` → **Expected**: `"delivery": "disabled/unmanaged"`, **exit 0**. **NEVER** `authority_corrupted`.
-6. [ ] Turn reviews on and repeat the gate → **Expected**: `result: "scope-changed"` with a readable reason naming the delivery base. No corruption either.
+6. [ ] Turn reviews on and repeat the gate → **Expected**: `result: "scope-changed"` naming a **runnable** recovery, not just a reason:
+
+```
+review lifecycle gate denied: scope-changed: recover via review.recover
+  --base-ref <commit> --committed-only (requires: predecessor_lineage_id, ...)
+```
+
+No corruption either.
+
+7. [ ] **Now run exactly what it named**, filling in the required inputs, then `review finalize` on the successor, then repeat the gate → **Expected**: `allow`, exit 0.
+
+Step 7 is the one that matters most in this whole guide. Until this refresh the message named a recovery that, followed literally, landed you right back at the same denial. The tests proved the message was **emitted** and never that following it **worked**. If you follow it and stay blocked, that is the most valuable report you can send us.
+
+8. [ ] One case still ends without a one-step recovery **on purpose**: when the committed content is byte-identical to what was approved and only the commit topology changed. There the message stays at "requires explicit maintainer action" rather than naming a command that would not resolve it. That is intended, not a defect.
 
 ### Flow 10: First commit in a repo with no history
 
@@ -260,9 +280,69 @@ Only reproducible on a Mac under an MDM or corporate configuration profile, whic
 
 ---
 
+## Flows 24 to 26: things nobody has tested yet
+
+These cover behaviour that did not exist until this refresh. Flow 24 is verified and reproducible; **flows 25 and 26 have never run on a real machine of the platform they describe**, only against synthetic test profiles. That is exactly why they are here.
+
+### Flow 24: A stale target names its own way out
+
+The review target comes from the workspace snapshot, so anything that writes a file between asking for a transition and running it invalidates that transition. A linter, a build, a watcher, or your own shell redirect all do this. It used to produce an opaque refusal.
+
+Run everything below with output going **outside** the repo.
+
+1. [ ] Ask for the next transition and keep the `command` it prints:
+
+```
+gentle-ai review status --next-transition --contract gentle-ai.review-integration/v1 --cwd . > /tmp/rdd-out/nt.json
+```
+
+2. [ ] Now change the workspace, exactly as a linter would: `echo "lint output" > lint-report.txt` **inside the repo**.
+3. [ ] Run the command you kept, unchanged → **Expected**: it refuses with
+
+```
+code:        stale_target_identity
+next_action: review.status
+cause:       review start target does not match the freshly built snapshot
+```
+
+The `cause` naming the real reason is the point. A bare `invalid_request` with an empty `required_inputs` is the defect.
+
+4. [ ] **Follow the continuation it named**: ask for the transition again → **Expected**: a **different** target identity.
+5. [ ] Run that new command → **Expected**: exit 0, review starts. If following the named continuation does not unblock you, that is the report.
+
+### Flow 25: Windows updates itself (**never tested on real Windows**)
+
+Windows never auto-updated: it detected a new version and handed you a command to run yourself. With Go on PATH it now upgrades through a pinned `go install`. All the evidence we have is synthetic — this flow is the first real execution.
+
+1. [ ] On Windows with Go 1.25.10+ on PATH, run a command that triggers the update check with an older gentle-ai installed → **Expected**: it upgrades itself. It does **not** print "requires manual update", and it does **not** send you to a releases page.
+2. [ ] `gentle-ai --version` afterwards → **Expected**: the new version.
+3. [ ] **Report the full output even when it works.** This path has never run outside a test double.
+4. [ ] On Windows **without** Go → **Expected**: it still refuses, and the refusal names the exact `go install github.com/...@vX.Y.Z` command plus the Go version needed. A releases URL as the only guidance is the defect.
+
+### Flow 26: The upgrade tells you if it landed somewhere else
+
+`go install` writes to `GOBIN`, or `GOPATH/bin` when that is unset, which is not necessarily the directory holding the binary you run. Previously an upgrade could report success while you kept executing the old one.
+
+1. [ ] Arrange the mismatch on purpose: `export GOBIN=$HOME/go-elsewhere` (a directory that is **not** on your PATH), then trigger the upgrade.
+2. [ ] → **Expected**: the upgrade still reports success, **and** warns naming **both absolute paths** — where it wrote and what your shell runs.
+3. [ ] → **Expected**: it never silently reports a clean success. If it does, you would keep running the old binary believing you updated, which is the defect this replaced.
+4. [ ] If your `gentle-ai` is a symlink into the go-install directory → **Expected**: treated as a match, no warning. A spurious warning there is also a defect.
+
+---
+
 ## How to measure properly (read this before reporting)
 
-Three things that made earlier reports measure the wrong thing. They are not bugs, they are environment traps:
+Four things that made earlier reports measure the wrong thing. They are not bugs, they are environment traps:
+
+**Never write command output inside the repository under test.** The review target is derived from the workspace snapshot, so `gentle-ai ... > out.txt` run from inside the repo adds an untracked file and changes the very thing being measured. A transition proposed before the redirect no longer matches after it, and you get a refusal that has nothing to do with what you were testing. Keep a separate directory:
+
+```
+mkdir -p /tmp/rdd-out
+cd $HOME/demo
+gentle-ai review start --cwd . > /tmp/rdd-out/o.txt 2> /tmp/rdd-out/e.txt
+```
+
+This one cost the maintainer an hour of chasing a defect that was his own redirect. Flow 24 turns it into a deliberate test instead.
 
 **If an agent runs it, set `CI=1`.** The consent question only shows up when there is a real terminal. Many agent harnesses allocate a pseudo-terminal, so the tool asks… and nobody answers: the shell hangs until it is killed, and the flow ends up as PARTIAL for a reason that is not the product's.
 
