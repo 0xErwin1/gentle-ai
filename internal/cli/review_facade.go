@@ -228,7 +228,17 @@ func (err *ReviewReceiptDiscoveryError) Error() string {
 				message += "; review it directly with gentle-ai review start, or optionally recover a prior lineage instead: " + strings.Join(err.Candidates, ", ")
 			}
 		} else {
+			// More than one receipt genuinely governs, so the gate must not
+			// pick for the caller. That refusal is correct; naming no way to
+			// pick was not. A tester driving this from a pre-commit hook with
+			// reviews switched OFF had to delete the hook to commit at all,
+			// because the message named neither the flag that selects a target
+			// nor the lineages it was choosing between -- both of which the
+			// error already carries.
 			message = "multiple terminal review receipts require explicit target selection"
+			if len(err.Candidates) > 0 {
+				message += "; select one with gentle-ai review validate --lineage <id>, from: " + strings.Join(err.Candidates, ", ")
+			}
 		}
 	case ReviewAuthorityCorrupted:
 		message = "complete review authority inventory is unavailable or corrupted"
