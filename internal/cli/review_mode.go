@@ -125,6 +125,22 @@ func reviewDeliveryDisposition(ctx context.Context, repo string, receiptPresent 
 	return reviewtransaction.RDDDeliveryDisposition(status, receiptPresent)
 }
 
+// reviewDrivenDevelopmentDisabled reports whether the user's kill switch is off
+// for this clone. It is the reach the switch needs outside the review gate:
+// every enforcement point that can refuse work on review grounds must be able
+// to ask this cheaply, because a switched-off system has no implications.
+//
+// An unreadable switch is not a disabled switch. It fails closed to "enabled"
+// for the same reason reviewDeliveryDisposition does: a broken or tampered mode
+// record must never be able to relax an enforcement point.
+func reviewDrivenDevelopmentDisabled(ctx context.Context, repo string) bool {
+	status, err := reviewModeStatus(ctx, repo)
+	if err != nil {
+		return false
+	}
+	return !status.Enabled()
+}
+
 func applyReviewMode(
 	ctx context.Context,
 	repo string,

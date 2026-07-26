@@ -241,7 +241,23 @@ type RuntimeStore struct {
 	Repo      string
 	Workspace string
 	Change    string
-	commonDir string
+	// ReviewDisabled records that the user's review-driven-development kill
+	// switch is off for this clone. While it is set, the runtime ledger imposes
+	// no review obligation of its own: a switched-off system has no
+	// implications, so closing an attempt never demands an approved recovery
+	// successor the operator could not obtain anyway (review/start is refused
+	// while the switch is off).
+	//
+	// It removes only the IMPLICIT demand. An explicit remediation request is a
+	// deliberate review operation and is still validated in full, and nothing
+	// here approves, advances, or invents review authority.
+	//
+	// The zero value enforces, so any caller that does not resolve the switch
+	// keeps today's behavior. The switch itself is read in the CLI layer, which
+	// owns the single source of truth for both of its sources; an unreadable
+	// switch is not a disabled switch and resolves to false.
+	ReviewDisabled bool
+	commonDir      string
 }
 
 type runtimeRecord struct {
@@ -455,7 +471,13 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("measure native SDD runtime line charge: %w", err)
 		}
-		if request.Outcome == AttemptPassed && currentBinding != nil && !remediation {
+		// While the kill switch is off the bound review has no say in whether
+		// this attempt may close: it would demand an approved recovery successor
+		// that review/start is refused from producing, which is a deadlock, not
+		// a safeguard. Re-enabling re-validates from the current state, because
+		// the binding still refers to the candidate it was approved for and the
+		// next enforcement point rediscovers that on its own.
+		if request.Outcome == AttemptPassed && currentBinding != nil && !remediation && !store.ReviewDisabled {
 			if snapshot.CandidateTree != active.BeginCandidateTree {
 				return runtimeRecord{}, ErrRuntimeRemediationSuccessorRequired
 			}

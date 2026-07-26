@@ -393,12 +393,17 @@ func TestReviewValidateDeniesDeliveredWorkspaceReceiptPrePushAsScopeMismatchWhil
 	}
 }
 
-// TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileDisabledAtPrePush
-// holds the line for the reclassified pre-push path: the delivery-shape
-// mismatch moves only when the authority inventory is provably healthy. The
-// same Wladimirfn shape over a genuinely damaged store keeps failing closed as
-// `authority_corrupted` even while disabled.
-func TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileDisabledAtPrePush(t *testing.T) {
+// TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthorityAtPrePush
+// is the pre-push half of the corrupted-authority decision. This test used to
+// assert the opposite (`...KeepsFailingClosedOnCorruptedAuthorityWhileDisabledAtPrePush`)
+// on the reasoning that damage is not "unmanaged by choice". The maintainer's
+// rule supersedes that: with reviews off, review-driven development does not
+// exist, so damage to its own private store cannot stop an ordinary push. The
+// damage is reported, not hidden — the denial code stays `authority_corrupted`
+// and the reason names it — and it is deferred, not forgiven, because
+// re-enabling rediscovers it and blocks again (see
+// TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileEnabled).
+func TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthorityAtPrePush(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
@@ -430,66 +435,10 @@ func TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileDisabledAtPreP
 	}
 
 	var output bytes.Buffer
-	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePrePush)}, &output)
-	var denied ReviewGateDeniedError
-	if !errors.As(err, &denied) {
-		t.Fatalf("corrupted authority while disabled did not fail closed at pre-push: %T %v\n%s", err, err, output.String())
-	}
-	var result ReviewValidateResult
-	decodeStrictReviewJSON(t, output.Bytes(), &result)
-	if result.Delivery == reviewtransaction.RDDDeliveryDisabledUnmanaged {
-		t.Fatalf("corrupted authority was reported as unmanaged by choice: %#v", result)
-	}
-	if result.Allowed || result.Context.Denial == nil || result.Context.Denial.Code != string(ReviewAuthorityCorrupted) {
-		t.Fatalf("corrupted-authority denial while disabled = %#v", result)
-	}
-}
-
-// TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileDisabled holds
-// the line the disposition must never cross: corrupted review authority is
-// genuine damage, not "unmanaged by choice", so it keeps failing closed with
-// the kill switch off exactly as it does with the switch on.
-func TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileDisabled(t *testing.T) {
-	reviewModeHome(t)
-	repo := initReviewCLIRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate behavior\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	finalizeFacadeReviewForRepo(t, repo)
-	runReviewCLIGit(t, repo, "add", "tracked.txt")
-	runReviewCLIGit(t, repo, "commit", "-qm", "reviewed candidate")
-
-	disableReviewForClone(t, repo)
-
-	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("work authored while disabled\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runReviewCLIGit(t, repo, "add", "tracked.txt")
-	runReviewCLIGit(t, repo, "commit", "-qm", "authored while disabled")
-
-	// Damage the authority inventory: a truncated compact record is corruption,
-	// not a stale-but-healthy receipt.
-	broken := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "v2", "corrupt-while-disabled")
-	if err := os.MkdirAll(broken, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(broken, "review-state.json"), []byte("{\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	var output bytes.Buffer
-	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &output)
-	var denied ReviewGateDeniedError
-	if !errors.As(err, &denied) {
-		t.Fatalf("corrupted authority while disabled did not fail closed: %T %v\n%s", err, err, output.String())
-	}
-	var result ReviewValidateResult
-	decodeStrictReviewJSON(t, output.Bytes(), &result)
-	if result.Delivery == reviewtransaction.RDDDeliveryDisabledUnmanaged {
-		t.Fatalf("corrupted authority was reported as unmanaged by choice: %#v", result)
-	}
-	if result.Allowed || result.Context.Denial == nil || result.Context.Denial.Code != string(ReviewAuthorityCorrupted) {
-		t.Fatalf("corrupted-authority denial while disabled = %#v", result)
+	runErr := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePrePush)}, &output)
+	result := assertDisabledUnmanagedGate(t, runErr, output.Bytes(), string(ReviewAuthorityCorrupted))
+	if !strings.Contains(result.Reason, "unavailable or corrupted") {
+		t.Fatalf("disabled corrupted-authority reason hid the damage at pre-push: %q", result.Reason)
 	}
 }
 
@@ -600,11 +549,13 @@ func TestReviewValidateDeniesNoUpstreamTargetResolutionWhileEnabled(t *testing.T
 	}
 }
 
-// TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileDisabledNoUpstream
-// holds the line for issue-1832's own fix site: a genuinely corrupted
-// authority store with no upstream configured and the switch off still fails
-// closed as authority_corrupted, never reported as unmanaged by choice.
-func TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileDisabledNoUpstream(t *testing.T) {
+// TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthorityNoUpstream
+// covers issue-1832's own fix site under the maintainer's rule. It previously
+// asserted the opposite (`...KeepsFailingClosedOnCorruptedAuthorityWhileDisabledNoUpstream`).
+// A damaged store with no upstream and the switch off still names
+// `authority_corrupted` — the damage is never hidden — but it no longer stops a
+// push, because a switched-off system has no implications.
+func TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthorityNoUpstream(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 
@@ -634,18 +585,10 @@ func TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileDisabledNoUpst
 	}
 
 	var output bytes.Buffer
-	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePrePush)}, &output)
-	var denied ReviewGateDeniedError
-	if !errors.As(err, &denied) {
-		t.Fatalf("corrupted authority with no upstream while disabled did not fail closed: %T %v\n%s", err, err, output.String())
-	}
-	var result ReviewValidateResult
-	decodeStrictReviewJSON(t, output.Bytes(), &result)
-	if result.Delivery == reviewtransaction.RDDDeliveryDisabledUnmanaged {
-		t.Fatalf("corrupted authority with no upstream was reported as unmanaged by choice: %#v", result)
-	}
-	if result.Allowed || result.Context.Denial == nil || result.Context.Denial.Code != string(ReviewAuthorityCorrupted) {
-		t.Fatalf("corrupted-authority denial with no upstream while disabled = %#v", result)
+	runErr := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePrePush)}, &output)
+	result := assertDisabledUnmanagedGate(t, runErr, output.Bytes(), string(ReviewAuthorityCorrupted))
+	if !strings.Contains(result.Reason, "unavailable or corrupted") {
+		t.Fatalf("disabled corrupted-authority reason with no upstream hid the damage: %q", result.Reason)
 	}
 }
 
@@ -735,128 +678,52 @@ func TestReviewValidatePluralStaleReceiptsReportDisabledUnmanagedDelivery(t *tes
 	}
 }
 
-// TestReviewValidateKeepsFailingClosedOnMultipleExactReceiptsWhileDisabled is
-// the non-negotiable negative proof (organic-dx Phase 3c task 3c.3): two
-// receipts each EXACTLY governing the same candidate is genuine present-tense
-// authority damage -- the gate genuinely cannot pick between two live
-// approvals -- and must keep failing closed even with reviews off. This
-// composition never sets DeterministicallyStaleOnly, so it is unaffected by
-// the plural-stale reclassification above; the single-exact-receipt
-// counterpart (one governing receipt stays authoritative while disabled) is
-// already covered by TestReviewValidateKeepsGoverningReceiptAuthoritativeWhileDisabled
-// above.
-func TestReviewValidateKeepsFailingClosedOnMultipleExactReceiptsWhileDisabled(t *testing.T) {
-	reviewModeHome(t)
-	repo := initReviewCLIRepo(t)
-	lineageA := "review-disabled-exact-ambiguous-a"
-	_, storeA := approveDiscoveryMarkdownProjection(t, repo, lineageA, "docs/exact.md", "exact\n", reviewtransaction.ProjectionWorkspace)
-
-	// A second lineage approved over the exact same candidate bytes: both
-	// exactly govern.
-	recordA, err := storeA.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := recordA.State.OriginalChangedLines
-	lineageB := "review-disabled-exact-ambiguous-b"
-	clone, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
-		LineageID: lineageB, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: recordA.State.Generation,
-		Snapshot: recordA.State.InitialSnapshot, PolicyHash: recordA.State.PolicyHash, RiskLevel: recordA.State.RiskLevel,
-		SelectedLenses: []string{}, OriginalChangedLines: &lines,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	cloneStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, clone.LineageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	revision, err := cloneStore.Replace("", "review/start", clone)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := clone.CompleteReview(reviewtransaction.CompactReviewInput{LensResults: []reviewtransaction.LensResult{}}); err != nil {
-		t.Fatal(err)
-	}
-	revision, err = cloneStore.Replace(revision, "review/complete-review", clone)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := clone.CompleteVerification([]byte("independent duplicate fixture evidence"), true); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := cloneStore.Replace(revision, "review/complete-verification", clone); err != nil {
-		t.Fatal(err)
-	}
-	cloneReceipt, err := clone.Receipt()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := reviewtransaction.WriteCompactReceiptAtomic(cloneStore.ReceiptPath(), cloneReceipt); err != nil {
-		t.Fatal(err)
-	}
-
-	disableReviewForClone(t, repo)
-
-	gateInput := reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply}
-	_, _, discoveryErr := discoverCompactFacadeGateReview(context.Background(), repo, "", gateInput)
-	var discovery *ReviewReceiptDiscoveryError
-	if !errors.As(discoveryErr, &discovery) || discovery.Kind != ReviewReceiptAmbiguous || discovery.DeterministicallyStaleOnly {
-		t.Fatalf("multiple exact receipts discovery while disabled = %#v, %v, want ambiguous and NOT deterministically stale", discovery, discoveryErr)
-	}
-
-	var output bytes.Buffer
-	runErr := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePostApply)}, &output)
-	var denied ReviewGateDeniedError
-	if !errors.As(runErr, &denied) {
-		t.Fatalf("multiple exact receipts while disabled did not fail closed: %T %v\n%s", runErr, runErr, output.String())
-	}
-	var result ReviewValidateResult
-	decodeStrictReviewJSON(t, output.Bytes(), &result)
-	if result.Delivery == reviewtransaction.RDDDeliveryDisabledUnmanaged {
-		t.Fatalf("multiple exact receipts while disabled was reported as unmanaged by choice: %#v", result)
-	}
-	if result.Allowed || result.Context.Denial == nil || result.Context.Denial.Code != string(ReviewReceiptAmbiguous) {
-		t.Fatalf("multiple exact receipts denial while disabled = %#v", result)
-	}
-}
-
-// TestReviewReceiptDiscoveryIsUnmanagedWhileDisabledRejectsUndecidableAmbiguousCompositions
-// is the second non-negotiable negative proof (organic-dx Phase 3c task
-// 3c.3): a composition containing assessmentUnknown or scopeWithoutContext is
-// undecidable -- the assessment for that lineage could not even be completed
-// -- so it must never reclassify as unmanaged-while-disabled, regardless of
-// how many other lineages in the same composition are deterministically
-// stale. Fabricating a live assessmentUnknown/scopeWithoutContext fixture
-// through the full discovery pipeline requires forcing an untyped
-// AssessCompactGateTarget error or a CompactScopeChangeDiagnostics failure;
-// both are unit-tested at their own layer in internal/reviewtransaction, so
-// this proves the classifier's decision directly against the exact
-// composition boundary discoverCompactFacadeGateReview computes (see the
-// staleOnly computation immediately above the ReviewReceiptAmbiguous return
-// in discoverCompactFacadeGateReview): DeterministicallyStaleOnly is set only
-// when both scopeWithoutContext and assessmentUnknown are empty.
-func TestReviewReceiptDiscoveryIsUnmanagedWhileDisabledRejectsUndecidableAmbiguousCompositions(t *testing.T) {
-	// The zero value already proves the fail-closed default: a discovery
-	// error built the way discoverCompactFacadeGateReview builds one for any
-	// composition containing an undecidable lineage (assessmentUnknown or
-	// scopeWithoutContext) never sets DeterministicallyStaleOnly.
+// TestReviewDiscoveryLeftTheGateUndecidedNamesTheUndecidableCompositions
+// replaces the former
+// `TestReviewReceiptDiscoveryIsUnmanagedWhileDisabledRejectsUndecidableAmbiguousCompositions`,
+// which asserted that these compositions keep BLOCKING while disabled. Under
+// the maintainer's rule nothing blocks while the switch is off, so the same
+// distinction now decides something else: whether the reported result must
+// additionally SAY the gate could not decide which authority applies. It is
+// still load-bearing — it is what keeps "not blocking" from collapsing into
+// "pretending nothing was ambiguous".
+//
+// The two live producers of an undecidable composition (assessmentUnknown and
+// scopeWithoutContext) require forcing an untyped AssessCompactGateTarget error
+// or a CompactScopeChangeDiagnostics failure, both unit-tested at their own
+// layer in internal/reviewtransaction, so this proves the classifier directly
+// against the exact composition boundary discoverCompactFacadeGateReview
+// computes: DeterministicallyStaleOnly is set only when both scopeWithoutContext
+// and assessmentUnknown are empty.
+func TestReviewDiscoveryLeftTheGateUndecidedNamesTheUndecidableCompositions(t *testing.T) {
+	// An undecidable mixture, or two receipts each exactly governing: the gate
+	// could not decide, so the disabled report must say so.
 	undecidable := &ReviewReceiptDiscoveryError{Kind: ReviewReceiptAmbiguous, Candidates: []string{"a", "b"}}
-	if reviewReceiptDiscoveryIsUnmanagedWhileDisabled(undecidable) {
-		t.Fatalf("undecidable ambiguous composition reclassified as unmanaged-while-disabled: %#v", undecidable)
+	if !reviewDiscoveryLeftTheGateUndecided(undecidable) {
+		t.Fatalf("undecidable ambiguous composition was not reported as undecided: %#v", undecidable)
 	}
-	// The positive control: the same Kind with the composition flag proven
-	// true (every contributing lineage deterministically stale) does
-	// reclassify -- proving the assertion above is discriminating on the
-	// field, not vacuously true for every ReviewReceiptAmbiguous value.
+	// Proven stale-only: discovery DID decide — nothing governs — so the
+	// disposition sentence stands alone, byte-identical to what already shipped.
 	staleOnly := &ReviewReceiptDiscoveryError{Kind: ReviewReceiptAmbiguous, Candidates: []string{"a", "b"}, DeterministicallyStaleOnly: true}
-	if !reviewReceiptDiscoveryIsUnmanagedWhileDisabled(staleOnly) {
-		t.Fatalf("deterministically-stale-only ambiguous composition did not reclassify as unmanaged-while-disabled: %#v", staleOnly)
+	if reviewDiscoveryLeftTheGateUndecided(staleOnly) {
+		t.Fatalf("deterministically-stale-only composition was reported as undecided: %#v", staleOnly)
 	}
-	// authority_corrupted stays untouched regardless of the field.
+	// Damaged authority is always undecided, whatever the field says.
 	corrupted := &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted}
-	if reviewReceiptDiscoveryIsUnmanagedWhileDisabled(corrupted) {
-		t.Fatalf("corrupted authority reclassified as unmanaged-while-disabled: %#v", corrupted)
+	if !reviewDiscoveryLeftTheGateUndecided(corrupted) {
+		t.Fatalf("corrupted authority was not reported as undecided: %#v", corrupted)
+	}
+	// Outcomes that prove non-governance keep the plain disposition sentence.
+	for _, kind := range []ReviewReceiptDiscoveryKind{
+		ReviewReceiptMissing, ReviewReceiptUnrelated, ReviewReceiptScopeChanged, ReviewReceiptTargetUnresolvable,
+	} {
+		decided := &ReviewReceiptDiscoveryError{Kind: kind}
+		if reviewDiscoveryLeftTheGateUndecided(decided) {
+			t.Fatalf("%q was reported as undecided", kind)
+		}
+		if got := reviewDisabledUnmanagedDeliveryReason(decided); got != reviewDisabledUnmanagedReason {
+			t.Fatalf("%q disabled reason = %q, want the shipped sentence unchanged", kind, got)
+		}
 	}
 }
 

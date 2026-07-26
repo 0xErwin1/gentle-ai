@@ -191,9 +191,16 @@ type ReviewReceiptDiscoveryError struct {
 	// governs, so the residual ambiguity is only about which stale lineage to
 	// name in diagnostics -- it never has a delivery consequence, in either
 	// mode. A false value (the default) means the gate genuinely cannot pick
-	// -- present-tense authority damage, or an assessment that could not even
-	// be completed -- and must keep failing closed regardless of the kill
-	// switch.
+	// -- present-tense competing authority, or an assessment that could not
+	// even be completed.
+	//
+	// That false value keeps failing closed while reviews are ON, where
+	// answering requires naming one governing receipt. It no longer decides
+	// whether the gate BLOCKS while reviews are off: a switched-off system has
+	// no implications, and declining to govern requires choosing nothing. What
+	// it decides there is whether the reported disabled/unmanaged result must
+	// additionally SAY the gate could not decide -- see
+	// reviewDiscoveryLeftTheGateUndecided.
 	//
 	// A bool field was chosen over a distinct ReviewReceiptDiscoveryKind
 	// because Kind is wire-facing (JSON "code", docs continuation table,
@@ -260,34 +267,32 @@ func (err *ReviewReceiptDiscoveryError) Error() string {
 // who reviewed with gentle-ai before compact v2 shipped and has since
 // reviewed the same target again post-upgrade).
 //
-// It is typed here (so a caller can match it with errors.Is) but
-// deliberately left OUTSIDE the ReviewReceiptDiscoveryError /
-// reviewReceiptDiscoveryIsUnmanagedWhileDisabled machinery the other
-// discovery errors in this file flow through, and is NOT reclassified as
-// unmanaged-while-disabled:
+// It is typed here (so a caller can match it with errors.Is) and stays OUTSIDE
+// the ReviewReceiptDiscoveryError classification the other discovery errors in
+// this file flow through, because it is not a discovery outcome: it is computed
+// after discovery already proved the compact receipt EXACTLY governs
+// (compactErr == nil in the unqualified path is reached ONLY from
+// discoverCompactFacadeGateReview's single len(exact) == 1 return).
 //
-//  1. Different shape. discoverCompactFacadeGateReview already proved the
-//     compact receipt EXACTLY governs -- compactErr == nil in the unqualified
-//     (no --lineage) discovery path is reached ONLY from that function's
-//     single len(exact) == 1 return. A stale receipt never governs anything
-//     and is safe to ignore while reviews are off; here a receipt that DOES
-//     govern is contested by a second, independent authority system that
-//     ALSO exactly matches. That is present-tense competing authority -- the
-//     same shape task 3c.3 keeps failing closed for len(exact) > 1 within a
-//     single store, just spanning two stores instead of one. Reclassifying it
-//     would mean silently picking one authority system over the other.
-//  2. Computed unconditionally, before this function even branches on
-//     --contract negotiation or consults the disabled/enabled disposition, by
-//     design: whichever store would be picked, that choice needs the user
-//     deliberate about it. Routing it through the typed-discovery machinery
-//     would require restructuring this control flow for a case that must
-//     keep failing closed anyway regardless of the kill switch -- not
-//     proportionate for this scoped fix.
+// It keeps failing closed while reviews are ON, and the reason is exact:
+// answering the gate at all means naming one governing receipt, and here two
+// independent authority systems each claim to be it. Picking would be silent
+// and wrong.
 //
-// No fixture in this package exercised this branch at all (in either mode)
-// before this task -- confirmed by search. Covered now by
-// TestUnqualifiedGateDiscoveryFailsClosedOnMixedCompactAndLegacyAuthority in
-// review_receipt_discovery_test.go, proving both modes still fail closed.
+// It no longer fails closed while reviews are OFF. The earlier argument for
+// that -- "reclassifying would mean silently picking one authority system over
+// the other" -- protects a choice the disabled path never makes:
+// emitDisabledUnmanagedDelivery names no lineage, binds no receipt, reads no
+// authority, and reports allowed:false. Declining to govern requires choosing
+// nothing, so the contest simply has no delivery consequence until the operator
+// switches reviews back on, at which point it is rediscovered and blocks again.
+// The contest is still named in the reported reason rather than dropped.
+//
+// Covered by
+// TestUnqualifiedGateDiscoveryOnMixedCompactAndLegacyAuthorityHonorsTheKillSwitch
+// in review_receipt_discovery_test.go (negotiated, both modes) and
+// TestReviewValidateReportsDisabledUnmanagedDeliveryOverMixedCompactAndLegacyAuthority
+// in review_disabled_reach_test.go.
 var errReviewMixedCompactLegacyAuthority = errors.New("review authority is ambiguous across compact v2 and legacy v1 stores; specify and clean up the intended lineage")
 
 // ReviewFacadeReceiptPublicationError reports the only safe interpretation of

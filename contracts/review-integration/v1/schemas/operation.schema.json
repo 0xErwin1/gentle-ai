@@ -54,7 +54,8 @@
         "allowed": {"type": "boolean"},
         "action": {"type": "string", "minLength": 1},
         "reason": {"type": "string", "minLength": 1},
-        "context": {"type": "object"}
+        "context": {"type": "object"},
+        "delivery": {"const": "disabled/unmanaged"}
       }
     },
     "bind_sdd": {

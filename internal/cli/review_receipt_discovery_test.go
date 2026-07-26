@@ -603,17 +603,20 @@ func TestUnqualifiedGateDiscoveryRequiresSelectionForMultipleScopeChangedReceipt
 	}
 }
 
-// TestUnqualifiedGateDiscoveryFailsClosedOnMixedCompactAndLegacyAuthority
-// covers organic-dx Phase 3c task 3c.6 (the "same-pass candidate"): a compact
-// v2 receipt that exactly governs the live candidate, contested by an
-// independent terminal legacy v1 chain that ALSO exactly governs it. This
-// untyped error (errReviewMixedCompactLegacyAuthority) had zero test coverage
-// before this task, in either mode. It stays failing closed in BOTH modes --
-// unlike a stale receipt, a receipt that DOES govern being contested by a
-// second authority system is present-tense competing authority, not proven
-// non-governance, so it is never a candidate for the disabled-mode
-// reclassification 3c.1-3c.5 add.
-func TestUnqualifiedGateDiscoveryFailsClosedOnMixedCompactAndLegacyAuthority(t *testing.T) {
+// TestUnqualifiedGateDiscoveryOnMixedCompactAndLegacyAuthorityHonorsTheKillSwitch
+// covers the "same-pass candidate": a compact v2 receipt that exactly governs
+// the live candidate, contested by an independent terminal legacy v1 chain that
+// ALSO exactly governs it.
+//
+// This test previously asserted that the contest fails closed in BOTH modes
+// (`TestUnqualifiedGateDiscoveryFailsClosedOnMixedCompactAndLegacyAuthority`),
+// on the reasoning that reclassifying would mean silently picking one authority
+// system over the other. That reasoning holds only while reviews are ON, where
+// answering requires naming a governing receipt — and it still does. While
+// reviews are OFF nothing is picked: the gate names neither store, invents no
+// receipt, and defers to ordinary repository policy, so the contest has no
+// delivery consequence until the operator turns reviews back on.
+func TestUnqualifiedGateDiscoveryOnMixedCompactAndLegacyAuthorityHonorsTheKillSwitch(t *testing.T) {
 	fixture := newLegacyCLIFixture(t, "review-discovery-mixed-legacy")
 	// Reviews the identical, still-dirty candidate a second time under an
 	// independent compact v2 lineage: nothing changed on disk between the two
@@ -636,11 +639,14 @@ func TestUnqualifiedGateDiscoveryFailsClosedOnMixedCompactAndLegacyAuthority(t *
 		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", fixture.repo,
 		"--gate", string(reviewtransaction.GatePostApply),
 	}, &disabled)
-	if err == nil {
-		t.Fatal("mixed compact/legacy authority reported success instead of failing closed while disabled")
+	if err != nil {
+		t.Fatalf("mixed compact/legacy authority vetoed delivery while disabled: %v\n%s", err, disabled.String())
 	}
-	if bytes.Contains(disabled.Bytes(), []byte(string(reviewtransaction.RDDDeliveryDisabledUnmanaged))) {
-		t.Fatalf("mixed compact/legacy authority was reported as unmanaged by choice while disabled: %s", disabled.String())
+	if !bytes.Contains(disabled.Bytes(), []byte(string(reviewtransaction.RDDDeliveryDisabledUnmanaged))) {
+		t.Fatalf("mixed compact/legacy authority while disabled did not report the disposition: %s", disabled.String())
+	}
+	if bytes.Contains(disabled.Bytes(), []byte(`"allowed":true`)) {
+		t.Fatalf("mixed compact/legacy authority while disabled fabricated an approval: %s", disabled.String())
 	}
 }
 

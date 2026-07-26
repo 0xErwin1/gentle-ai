@@ -68,6 +68,11 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("open native SDD runtime authority: %w", err)
 	}
+	// The kill switch reaches the runtime ledger here, at the one place that
+	// knows how to read both of its sources. With reviews off, closing an
+	// attempt must not demand a review obligation the operator has no way to
+	// satisfy.
+	store.ReviewDisabled = reviewDrivenDevelopmentDisabled(ctx, *cwd)
 	var status sddstatus.RuntimeStatus
 	switch operation {
 	case "status":
