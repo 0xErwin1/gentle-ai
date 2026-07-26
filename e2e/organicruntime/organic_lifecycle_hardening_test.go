@@ -37,12 +37,38 @@ func currentChangesTargetIdentity(t *testing.T, repo string) string {
 	return snapshot.Identity
 }
 
+// organicLargeWorkspaceE2EEnvironment gates the deliberately heavy
+// large-workspace review/start proof below. Building a several-thousand-file
+// candidate launches one Git subprocess per intended-untracked path
+// (untrackedProof) plus per-changed-path diff work, twice over (once for
+// this test's own target-identity precompute, once inside review/start
+// itself): that is what reliably pushes real candidate construction past
+// the shared 25s facade deadline without an artificial delay hook, but Git
+// subprocess-spawn throughput is wildly platform-dependent. At 5,000 files
+// it blew the Windows CI job budget even though the behavior it proved was
+// correct (community report on issue 1778's Windows CI leg). Keep it out of
+// the default CI path; opt in locally or from a dedicated job with
+// GENTLE_AI_LARGE_WORKSPACE_E2E=1. The always-on, deterministic proof of the
+// same deadline-selection wiring is TestReviewFacadeOperationDeadlineSelector
+// in internal/cli/review_facade_test.go: it asserts review.start resolves to
+// reviewFacadeStartOperationTimeout while every other operation keeps
+// reviewFacadeOperationTimeout, with no dependency on real elapsed time or
+// process-spawn throughput. That unit test alone catches a regression to the
+// deadline-selection wiring (e.g. review.start silently falling back to the
+// shared deadline); only this gated end-to-end test catches the original
+// 1778 symptom itself — a valid large candidate actually being cut off
+// mid-sweep — and only when it is run.
+const organicLargeWorkspaceE2EEnvironment = "GENTLE_AI_LARGE_WORKSPACE_E2E"
+
 // TestOrganicReviewStartDeadlineHeadroom proves Group E (1778): review/start
 // uses its own start-scoped deadline instead of the shared 25s facade
 // deadline, so a valid candidate whose construction takes longer than 25s
 // still completes instead of being cut off mid-sweep.
 func TestOrganicReviewStartDeadlineHeadroom(t *testing.T) {
 	t.Run("issue-1778", func(t *testing.T) {
+		if os.Getenv(organicLargeWorkspaceE2EEnvironment) != "1" {
+			t.Skip("set GENTLE_AI_LARGE_WORKSPACE_E2E=1 to run the large-workspace review/start deadline-headroom proof; see TestReviewFacadeOperationDeadlineSelector in internal/cli for the always-on deterministic proof of the same deadline-selection wiring")
+		}
 		harness := newOrganicHarness(t)
 		lineage := "organic-start-deadline-headroom"
 
@@ -73,16 +99,25 @@ func TestOrganicReviewStartDeadlineHeadroom(t *testing.T) {
 			"--projection", "workspace",
 		)
 		elapsed := time.Since(started)
+		// If review/start had regressed to the shared 25s facade deadline, a
+		// candidate this size would be cut off mid-sweep and the call above
+		// would return a non-nil err: that failure, not an elapsed-time
+		// floor, is what proves the 1778 regression didn't come back.
 		if err != nil {
 			t.Fatalf("negotiated review start on a large valid workspace failed after %s: %v\nstdout:\n%s\nstderr:\n%s", elapsed, err, stdout, stderr)
-		}
-		if elapsed <= 25*time.Second {
-			t.Fatalf("negotiated review start completed in %s, want more than 25s so this proves start-scoped deadline headroom over the shared facade deadline (increase headroomFiles if candidate construction got faster)", elapsed)
 		}
 		if elapsed >= organicLocalTimeout {
 			t.Fatalf("negotiated review start took %s, want less than the harness local timeout %s", elapsed, organicLocalTimeout)
 		}
-		t.Logf("negotiated review start on a %d-file candidate completed in %s, past the shared 25s facade deadline and under the start-scoped deadline", headroomFiles, elapsed)
+		// No lower-bound elapsed assertion: this must never fail just because
+		// candidate construction got faster. Log instead, so a maintainer can
+		// tell whether headroomFiles still needs bumping to keep exercising
+		// the past-25s window this test exists to cover.
+		if elapsed <= 25*time.Second {
+			t.Logf("negotiated review start on a %d-file candidate completed in %s, at or under the shared 25s facade deadline: candidate construction got faster, so this run no longer proves start-scoped deadline headroom (consider raising headroomFiles)", headroomFiles, elapsed)
+		} else {
+			t.Logf("negotiated review start on a %d-file candidate completed in %s, past the shared 25s facade deadline and under the start-scoped deadline", headroomFiles, elapsed)
+		}
 
 		harness.assertSingleReviewLineage(lineage)
 		harness.assertNoSDDArtifacts()
@@ -823,7 +858,7 @@ func TestOrganicReviewTargetShapeRefusals(t *testing.T) {
 		harness.git("config", "branch.main.remote", "origin")
 		harness.git("config", "branch.main.merge", "refs/heads/main")
 
-		want := "commit an authorized empty root, then run committed base-diff review"
+		want := "commit an authorized empty root, then run gentle-ai review start --committed-only with --base-ref set to that commit's SHA"
 		for _, gate := range []string{"pre-push", "pre-pr"} {
 			result := harness.gateAllowFailure(gate, "--lineage", lineage, "--base-ref", "origin/main")
 			if result.Allowed || !strings.Contains(result.Reason, want) {
@@ -1170,5 +1205,224 @@ func TestOrganicReviewStoreRobustness(t *testing.T) {
 			t.Fatalf("explicit status selector on the quarantined lineage did not fail closed: %#v", explicitResult)
 		}
 		harness.assertNoSDDArtifacts()
+	})
+}
+
+// TestOrganicReviewNarrationPairedRecoverableVersusTerminal proves spec
+// "Three-Tier Narration Contract"'s paired scenario for organic-dx Phase 4:
+// one underlying machinery condition -- no existing review record matches
+// this target (reviewtransaction.TargetApplicabilityUnrelated) -- with two
+// caller-selector shapes. The ordinary shape reaches an executable next step
+// with uninterrupted Tier-A behavior (stdout carries the machine envelope,
+// stderr carries zero Tier-B/Tier-C output). The same missing-record
+// condition, requested through the one selector combination that is
+// recovery-only for a fresh target (--workspace-overlay --projection
+// staged), is genuinely terminal here and produces exactly one Tier C
+// statement on stderr, naming the decision
+// (internal/cli/review_narration.go's registered
+// staged_workspace_overlay_recovery_unavailable statement) -- never on
+// stdout, which stays byte-for-byte the same JSON envelope contract either way.
+func TestOrganicReviewNarrationPairedRecoverableVersusTerminal(t *testing.T) {
+	t.Run("issue-organic-dx-phase4-paired-narration", func(t *testing.T) {
+		harness := newOrganicHarness(t)
+		harness.writeFiles(map[string]string{"tracked.txt": "narration paired scenario\n"})
+		harness.git("add", "-A")
+		harness.git("commit", "-qm", "narration paired scenario base")
+		harness.writeFiles(map[string]string{"tracked.txt": "narration paired scenario, uncommitted\n"})
+
+		t.Run("recoverable", func(t *testing.T) {
+			stdout, stderr, err := harness.gentleAllowFailure(
+				"review", "status", "--cwd", harness.repo.worktree, "--contract", "gentle-ai.review-integration/v1", "--next-transition",
+			)
+			if err != nil {
+				t.Fatalf("ordinary next-transition on a fresh target failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+			}
+			var status organicStatusResult
+			if err := json.Unmarshal([]byte(stdout), &status); err != nil {
+				t.Fatalf("decode status: %v\n%s", err, stdout)
+			}
+			if status.NextTransition == nil || status.NextTransition.Kind != "execute" || status.NextTransition.ReasonCode != "fresh_target_ready" {
+				t.Fatalf("ordinary next-transition on a fresh target = %#v, want an executable fresh_target_ready transition", status.NextTransition)
+			}
+			if strings.TrimSpace(stderr) != "" {
+				t.Fatalf("recoverable shape leaked output on the human surface, want zero Tier-B/Tier-C output: stderr=%q", stderr)
+			}
+		})
+
+		t.Run("terminal", func(t *testing.T) {
+			stdout, stderr, err := harness.gentleAllowFailure(
+				"review", "status", "--cwd", harness.repo.worktree, "--contract", "gentle-ai.review-integration/v1", "--next-transition",
+				"--workspace-overlay", "--projection", "staged", "--base-ref", "HEAD",
+			)
+			if err != nil {
+				t.Fatalf("terminal next-transition on the same fresh target failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+			}
+			var status organicStatusResult
+			if err := json.Unmarshal([]byte(stdout), &status); err != nil {
+				t.Fatalf("decode status: %v\n%s", err, stdout)
+			}
+			if status.NextTransition == nil || status.NextTransition.Kind != "stop" || status.NextTransition.ReasonCode != "staged_workspace_overlay_recovery_unavailable" {
+				t.Fatalf("terminal next-transition on the same fresh target = %#v, want the staged_workspace_overlay_recovery_unavailable stop", status.NextTransition)
+			}
+			lines := strings.Split(strings.TrimRight(stderr, "\n"), "\n")
+			if len(lines) != 1 || strings.TrimSpace(lines[0]) == "" {
+				t.Fatalf("terminal shape did not emit exactly one Tier C statement on stderr: %q", stderr)
+			}
+			const wantStatement = "Pass `--lineage <id>` to continue the review you already started, " +
+				"or drop `--workspace-overlay` and run `gentle-ai review start --projection staged` to start fresh."
+			if lines[0] != wantStatement {
+				t.Fatalf("terminal Tier C statement = %q, want %q", lines[0], wantStatement)
+			}
+		})
+	})
+}
+
+// reviewDefectReportDirEntries lists the files under this repository's
+// <GitCommonDir>/gentle-ai/defect-reports/, or nil if the directory does not
+// exist yet -- exactly the storage location organic-dx tasks.md Phase 5
+// documents (never inside the working tree, never committed).
+func reviewDefectReportDirEntries(t *testing.T, harness *organicHarness) []string {
+	t.Helper()
+	dir := filepath.Join(harness.commonDir(), "gentle-ai", "defect-reports")
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+	return names
+}
+
+// TestOrganicReviewDefectReportToolFaultVersusUserDecision proves organic-dx
+// Phase 5: a genuine tool-fault terminal (the confirmed captured-final-
+// EVIDENCE byte conflict, tasks.md 3b.9) generates a template-shaped,
+// privacy-clean defect report named by its Tier C statement, while a
+// legitimate user-decision terminal (the reviewer-result byte conflict,
+// tasks.md 3b.7 -- a human must choose `review dispose-result` or `review
+// preserve-result`) generates none.
+func TestOrganicReviewDefectReportToolFaultVersusUserDecision(t *testing.T) {
+	t.Run("issue-organic-dx-phase5-tool-fault-report", func(t *testing.T) {
+		harness := newOrganicHarness(t)
+		lineage := "organic-defect-report-tool-fault"
+		harness.writeFiles(map[string]string{"tracked.txt": organicLines("defect report tool-fault candidate", 6)})
+		started, _ := harness.startReview(lineage)
+		if len(started.SelectedLenses) == 0 {
+			t.Fatal("expected at least one selected lens")
+		}
+		harnessCaptureCleanResults(t, harness, lineage, started.TargetIdentity, started.SelectedLenses)
+		finalized := harness.finalize(lineage, "--captured-results")
+		if finalized.State != organicStateValidating {
+			t.Fatalf("fixture did not reach validating: %#v", finalized)
+		}
+		status := harnessStatus(t, harness, lineage)
+
+		if len(reviewDefectReportDirEntries(t, harness)) != 0 {
+			t.Fatal("defect-reports directory is not empty before the fault is triggered")
+		}
+
+		firstEvidence := filepath.Join(t.TempDir(), "evidence-one.txt")
+		if err := os.WriteFile(firstEvidence, []byte("first captured evidence\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		harness.gentle(
+			"review", "capture-evidence", "--cwd", harness.repo.worktree, "--lineage", lineage,
+			"--target", status.TargetIdentity, "--expected-revision", status.Authority.Revision, "--input", firstEvidence,
+		)
+
+		secondEvidence := filepath.Join(t.TempDir(), "evidence-two.txt")
+		if err := os.WriteFile(secondEvidence, []byte("second captured evidence, different bytes\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, stderr, err := harness.gentleAllowFailure(
+			"review", "capture-evidence", "--cwd", harness.repo.worktree, "--lineage", lineage,
+			"--target", status.TargetIdentity, "--expected-revision", status.Authority.Revision, "--input", secondEvidence,
+		)
+		if err == nil {
+			t.Fatal("conflicting captured final evidence unexpectedly succeeded")
+		}
+
+		entries := reviewDefectReportDirEntries(t, harness)
+		if len(entries) != 1 {
+			t.Fatalf("defect-reports directory = %v, want exactly one report", entries)
+		}
+		reportPath := filepath.Join(harness.commonDir(), "gentle-ai", "defect-reports", entries[0])
+		if !strings.Contains(stderr, reportPath) {
+			t.Fatalf("stderr did not name the report path %q: %q", reportPath, stderr)
+		}
+		if !strings.Contains(stderr, "https://github.com/Gentleman-Programming/gentle-ai/issues/new/choose") {
+			t.Fatalf("stderr did not name the issues URL: %q", stderr)
+		}
+
+		reportBytes, err := os.ReadFile(reportPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		report := string(reportBytes)
+		for _, header := range []string{
+			"# Bug Description", "## Steps to Reproduce", "## Expected Behavior", "## Actual Behavior",
+			"## Gentle AI Version", "## Operating System", "## AI Agent / Client", "## Affected Area", "## Logs / Error Output",
+		} {
+			if !strings.Contains(report, header) {
+				t.Fatalf("generated report missing template-shaped header %q:\n%s", header, report)
+			}
+		}
+		// Privacy: the report must never carry the local absolute path
+		// (under the isolated HOME this harness sets), the worktree path, or
+		// any raw evidence file content.
+		for _, poison := range []string{harness.home, harness.repo.worktree, "first captured evidence", "second captured evidence, different bytes"} {
+			if strings.Contains(report, poison) {
+				t.Fatalf("generated report leaked poisoned content %q:\n%s", poison, report)
+			}
+		}
+	})
+
+	t.Run("issue-organic-dx-phase5-user-decision-no-report", func(t *testing.T) {
+		harness := newOrganicHarness(t)
+		lineage := "organic-defect-report-user-decision"
+		harness.writeFiles(map[string]string{"tracked.txt": organicLines("defect report user-decision candidate", 6)})
+		started, _ := harness.startReview(lineage)
+		if len(started.SelectedLenses) == 0 {
+			t.Fatal("expected at least one selected lens")
+		}
+		lens := started.SelectedLenses[0]
+		subjectHash := harnessCaptureResultSubjectHash(t, harness, lineage, started.TargetIdentity, lens, 0)
+
+		reviewerResult := struct {
+			SubjectHash string                   `json:"subject_hash"`
+			Inspection  organicCaptureInspection `json:"inspection"`
+			Findings    []organicFinding         `json:"findings"`
+			Evidence    []string                 `json:"evidence"`
+		}{
+			SubjectHash: subjectHash,
+			Inspection:  organicCaptureInspection{Status: "completed", Paths: []string{"tracked.txt"}},
+			Findings:    []organicFinding{},
+		}
+		reviewerResult.Evidence = []string{"first pass"}
+		firstResult := harness.writeJSON("first-result.json", reviewerResult)
+		harness.gentle(
+			"review", "capture-result", "--cwd", harness.repo.worktree, "--lineage", lineage,
+			"--target", started.TargetIdentity, "--lens", lens, "--order", "0", "--input", firstResult,
+		)
+
+		reviewerResult.Evidence = []string{"second pass, different content"}
+		secondResult := harness.writeJSON("second-result.json", reviewerResult)
+		_, stderr, err := harness.gentleAllowFailure(
+			"review", "capture-result", "--cwd", harness.repo.worktree, "--lineage", lineage,
+			"--target", started.TargetIdentity, "--lens", lens, "--order", "0", "--input", secondResult,
+		)
+		if err == nil {
+			t.Fatal("conflicting reviewer result capture unexpectedly succeeded")
+		}
+		if !strings.Contains(stderr, "review dispose-result") || !strings.Contains(stderr, "review preserve-result") {
+			t.Fatalf("user-decision terminal did not name the deciding operations: %q", stderr)
+		}
+		if entries := reviewDefectReportDirEntries(t, harness); len(entries) != 0 {
+			t.Fatalf("user-decision terminal wrote a defect report, want none: %v", entries)
+		}
 	})
 }
