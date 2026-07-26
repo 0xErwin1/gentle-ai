@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -63,7 +64,10 @@ func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 		want string
 	}{
 		{name: "missing operation", args: nil, want: "requires status, begin, finish, or reset"},
-		{name: "unknown operation", args: []string{"again"}, want: "unknown sdd-attempt operation"},
+		// The no-args refusal already enumerates every valid operation; the
+		// unknown-operation refusal must do the same instead of naming only
+		// the bad value with no route to the valid set.
+		{name: "unknown operation", args: []string{"begn"}, want: `unknown sdd-attempt operation "begn"; want one of status, begin, finish, or reset`},
 		{name: "missing change", args: []string{"status", "--cwd", repo}, want: "--change"},
 		{name: "unknown flag", args: []string{"status", "--cwd", repo, "--change", "thin", "--mystery"}, want: "flag provided but not defined"},
 		{name: "irrelevant flag", args: []string{"status", "--cwd", repo, "--change", "thin", "--outcome", "failed"}, want: "flag provided but not defined"},
@@ -80,6 +84,30 @@ func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 				t.Fatalf("RunSDDAttempt(%v) = output %q, err %v, want %q", tt.args, output.String(), err, tt.want)
 			}
 		})
+	}
+}
+
+// TestSDDAttemptOperationsCanonicalSourceEnumeratesConsistently proves the
+// no-args refusal and the unknown-operation refusal both derive from the
+// same ordered source, so they cannot drift apart the way they did before
+// (unknown-operation named only the bad value; the empty case enumerated
+// all four). Mirrors the reviewIntegrationGatesInOrder /
+// reviewIntegrationGateNames pattern in review_operation_contract.go.
+func TestSDDAttemptOperationsCanonicalSourceEnumeratesConsistently(t *testing.T) {
+	want := []string{"status", "begin", "finish", "reset"}
+	if !reflect.DeepEqual(sddAttemptOperationsInOrder, want) {
+		t.Fatalf("sddAttemptOperationsInOrder = %v, want %v", sddAttemptOperationsInOrder, want)
+	}
+	for _, operation := range want {
+		if !validSDDAttemptOperation(operation) {
+			t.Fatalf("validSDDAttemptOperation(%q) = false, want true", operation)
+		}
+	}
+	if validSDDAttemptOperation("begn") {
+		t.Fatal(`validSDDAttemptOperation("begn") = true, want false`)
+	}
+	if got := joinSDDAttemptOperations(); got != "status, begin, finish, or reset" {
+		t.Fatalf("joinSDDAttemptOperations() = %q, want %q", got, "status, begin, finish, or reset")
 	}
 }
 

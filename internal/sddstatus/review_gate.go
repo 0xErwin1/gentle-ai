@@ -179,6 +179,12 @@ func readReviewTransaction(path, content string) (*reviewtransaction.Transaction
 	return &transaction, ""
 }
 
+// EscalationAccountingReasonTemplate is the single source of truth for the
+// escalation accounting sentence: both this production call site and the
+// organic-dx Tier A narration registry (internal/cli/review_narration.go)
+// render from this exact template, so the two surfaces cannot drift.
+const EscalationAccountingReasonTemplate = "compact review authority is escalated (%s): spent %d, remaining %d, total %d correction lines"
+
 func resolveBoundedRemediation(required bool, verify verifyResultEvaluation, transaction *reviewtransaction.Transaction, compact *reviewtransaction.CompactState, transactionReason, applyProgress string) RemediationState {
 	if !required {
 		return RemediationState{}
@@ -187,6 +193,13 @@ func resolveBoundedRemediation(required bool, verify verifyResultEvaluation, tra
 		return RemediationState{Reason: fmt.Sprintf("verify evidence cannot enter remediation: %s", verify.Reason)}
 	}
 	if transaction == nil && compact != nil {
+		if compact.State == reviewtransaction.StateEscalated {
+			accounting := compact.EscalationAccounting()
+			return RemediationState{Reason: fmt.Sprintf(
+				EscalationAccountingReasonTemplate,
+				accounting.Cause, accounting.Spent, accounting.Remaining, accounting.Total,
+			)}
+		}
 		remainingBudget := compact.CorrectionBudget - compact.CumulativeCorrectionLines
 		if remainingBudget <= 0 {
 			return RemediationState{Reason: "compact review authority has no correction budget remaining"}
@@ -195,13 +208,14 @@ func resolveBoundedRemediation(required bool, verify verifyResultEvaluation, tra
 			return RemediationState{Reason: "compact review authority has exhausted its correction attempts"}
 		}
 		state := RemediationState{
-			Required:               true,
-			FailedEvidenceRevision: verify.EvidenceRevision,
-			LineageID:              compact.LineageID,
-			Generation:             compact.Generation,
-			FixBatch:               len(compact.CorrectionAttempts) + 1,
-			CorrectionBudget:       remainingBudget,
-			Reason:                 fmt.Sprintf("verify evidence requires bounded compact remediation for %s: %s", verify.EvidenceRevision, verify.Reason),
+			Required:                  true,
+			FailedEvidenceRevision:    verify.EvidenceRevision,
+			LineageID:                 compact.LineageID,
+			Generation:                compact.Generation,
+			FixBatch:                  len(compact.CorrectionAttempts) + 1,
+			CorrectionBudgetRemaining: remainingBudget,
+			CorrectionBudgetTotal:     compact.CorrectionBudget,
+			Reason:                    fmt.Sprintf("verify evidence requires bounded compact remediation for %s: %s", verify.EvidenceRevision, verify.Reason),
 		}
 		binding := RemediationBinding{LineageID: state.LineageID, Generation: state.Generation, FixBatch: state.FixBatch}
 		evaluation := parseRemediationResult(applyProgress, verify.EvidenceRevision, binding)

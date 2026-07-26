@@ -913,6 +913,18 @@ func TestResolveRejectsForeignCompactAuthorityForStaleVerifyEvidence(t *testing.
 	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), `compact review authority is not bound to selected change "thin"`) {
 		t.Fatalf("BlockedReasons = %v, want foreign-authority rejection", status.BlockedReasons)
 	}
+
+	// next_recommended == "resolve-review" is a routing state, not a Phase, so
+	// nextRecommendedPhase() does not recognize it. Without an explicit
+	// continuation the dispatcher would render the blocked reason with no way
+	// out. Reuse the same review continuation already proven for
+	// next_recommended == "review" (TestResolveStartsBoundedReviewBeforeFinalVerification).
+	dispatcher := RenderDispatcherMarkdown(status)
+	for _, want := range []string{"### Next Review Operation", "gentle-ai review start", "gentle-ai review validate --gate post-apply"} {
+		if !strings.Contains(dispatcher, want) {
+			t.Fatalf("dispatcher missing %q for resolve-review:\n%s", want, dispatcher)
+		}
+	}
 }
 
 func TestResolveEngramRoutesStaleVerifyEvidenceToVerifyUnderApprovedCompactAuthority(t *testing.T) {
@@ -1016,8 +1028,11 @@ func TestResolveGrantsCompactRemediationBudgetForFailedVerdictWithIncompleteScen
 		t.Fatalf("verify=%q next=%q, want blocked/remediate for failed verdict", status.Dependencies.Verify, status.NextRecommended)
 	}
 	wantBudget := before.State.CorrectionBudget - before.State.CumulativeCorrectionLines
-	if !status.RemediationState.Required || status.RemediationState.CorrectionBudget != wantBudget || wantBudget <= 0 || status.RemediationState.LineageID != "compact-thin" || status.RemediationState.FailedEvidenceRevision != shaID("d") {
+	if !status.RemediationState.Required || status.RemediationState.CorrectionBudgetRemaining != wantBudget || wantBudget <= 0 || status.RemediationState.LineageID != "compact-thin" || status.RemediationState.FailedEvidenceRevision != shaID("d") {
 		t.Fatalf("RemediationState = %#v, want transaction-bound nonzero compact budget", status.RemediationState)
+	}
+	if status.RemediationState.CorrectionBudgetTotal != before.State.CorrectionBudget {
+		t.Fatalf("CorrectionBudgetTotal = %d, want frozen total %d", status.RemediationState.CorrectionBudgetTotal, before.State.CorrectionBudget)
 	}
 	after, err := store.Load()
 	if err != nil || after.Revision != before.Revision {
@@ -1051,6 +1066,143 @@ func TestResolveRejectsCompactRemediationAfterSingleConsumedAttempt(t *testing.T
 
 	if state.Required || state.Reason != "compact review authority has exhausted its correction attempts" {
 		t.Fatalf("RemediationState = %#v, want exhausted attempts with remaining line budget", state)
+	}
+}
+
+func TestResolveBoundedRemediationExposesUnambiguousRemainingAndTotalBudget(t *testing.T) {
+	compact := reviewtransaction.CompactState{
+		LineageID: "compact-thin", Generation: 1, State: reviewtransaction.StateApproved,
+		CorrectionBudget: 10, CumulativeCorrectionLines: 3,
+	}
+	state := resolveBoundedRemediation(true, verifyResultEvaluation{
+		EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
+	}, nil, &compact, "bounded review transaction is missing", "")
+
+	if !state.Required {
+		t.Fatalf("RemediationState = %#v, want required", state)
+	}
+	if state.CorrectionBudgetRemaining != 7 {
+		t.Fatalf("CorrectionBudgetRemaining = %d, want 7", state.CorrectionBudgetRemaining)
+	}
+	if state.CorrectionBudgetTotal != 10 {
+		t.Fatalf("CorrectionBudgetTotal = %d, want 10", state.CorrectionBudgetTotal)
+	}
+	if state.CorrectionBudgetRemaining == state.CorrectionBudgetTotal {
+		t.Fatalf("remaining and total must diverge once a correction is already charged, got both %d", state.CorrectionBudgetRemaining)
+	}
+
+	payload, err := json.Marshal(state)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &document); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if _, exists := document["correctionBudget"]; exists {
+		t.Fatal("RemediationState JSON still emits the ambiguous shared correctionBudget label")
+	}
+	var remaining int
+	if err := json.Unmarshal(document["correctionBudgetRemaining"], &remaining); err != nil || remaining != 7 {
+		t.Fatalf("correctionBudgetRemaining JSON = %s (err=%v), want 7", document["correctionBudgetRemaining"], err)
+	}
+	var total int
+	if err := json.Unmarshal(document["correctionBudgetTotal"], &total); err != nil || total != 10 {
+		t.Fatalf("correctionBudgetTotal JSON = %s (err=%v), want 10", document["correctionBudgetTotal"], err)
+	}
+}
+
+// TestResolveBoundedRemediationSurfacesEscalationAccountingForAlreadyEscalatedCompactAuthority
+// pins that a compact authority already in StateEscalated never offers a
+// fresh remediation attempt, and that its Reason names spent, remaining, and
+// total as distinct labeled values instead of silently stopping (design
+// Duty 6: the compact.go:1171 escalation seam records none of its own by
+// default).
+func TestResolveBoundedRemediationSurfacesEscalationAccountingForAlreadyEscalatedCompactAuthority(t *testing.T) {
+	t.Run("budget exceeded", func(t *testing.T) {
+		compact := reviewtransaction.CompactState{
+			LineageID: "compact-thin", Generation: 1, State: reviewtransaction.StateEscalated,
+			CorrectionBudget: 10, CumulativeCorrectionLines: 12,
+		}
+		state := resolveBoundedRemediation(true, verifyResultEvaluation{
+			EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
+		}, nil, &compact, "bounded review transaction is missing", "")
+
+		if state.Required {
+			t.Fatalf("RemediationState = %#v, want no remediation offered for an already-escalated authority", state)
+		}
+		for _, want := range []string{"spent 12", "remaining 0", "total 10"} {
+			if !strings.Contains(state.Reason, want) {
+				t.Fatalf("Reason = %q, want it to contain %q", state.Reason, want)
+			}
+		}
+	})
+
+	t.Run("original criteria failed within budget", func(t *testing.T) {
+		originalFailed := reviewtransaction.ValidationCheck{Passed: false}
+		regressionPassed := reviewtransaction.ValidationCheck{Passed: true}
+		compact := reviewtransaction.CompactState{
+			LineageID: "compact-thin", Generation: 1, State: reviewtransaction.StateEscalated,
+			CorrectionBudget: 10, CumulativeCorrectionLines: 3,
+			OriginalCriteria: &originalFailed, CorrectionRegression: &regressionPassed,
+		}
+		state := resolveBoundedRemediation(true, verifyResultEvaluation{
+			EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
+		}, nil, &compact, "bounded review transaction is missing", "")
+
+		if state.Required {
+			t.Fatalf("RemediationState = %#v, want no remediation offered for an already-escalated authority", state)
+		}
+		for _, want := range []string{"original_criteria_failed", "spent 3", "remaining 7", "total 10"} {
+			if !strings.Contains(state.Reason, want) {
+				t.Fatalf("Reason = %q, want it to contain %q", state.Reason, want)
+			}
+		}
+	})
+}
+
+// TestResolveBoundedRemediationNoCorrectionBudgetGuardNeverPopulatesRemaining
+// pins the `remainingBudget <= 0` early-return guard in
+// resolveBoundedRemediation: it fires for every `spent >= total` shape
+// (exactly exhausted and over-exhausted) and returns before
+// RemediationState.CorrectionBudgetRemaining/CorrectionBudgetTotal are ever
+// populated, so those fields stay their int zero value on this path.
+//
+// Refuted claim: a prior report alleged sddstatus/review_gate.go could emit
+// a negative CorrectionBudgetRemaining. Verified false for this call site —
+// the guard above returns RemediationState{Reason: ...} strictly before the
+// struct literal that sets CorrectionBudgetRemaining is reached, so a
+// negative value can never leave resolveBoundedRemediation through this
+// path. This test pins that guard; it changes no production code.
+func TestResolveBoundedRemediationNoCorrectionBudgetGuardNeverPopulatesRemaining(t *testing.T) {
+	tests := []struct {
+		name                      string
+		correctionBudget          int
+		cumulativeCorrectionLines int
+	}{
+		{name: "spent exactly equals total", correctionBudget: 10, cumulativeCorrectionLines: 10},
+		{name: "spent exceeds total", correctionBudget: 10, cumulativeCorrectionLines: 11},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			compact := reviewtransaction.CompactState{
+				LineageID: "compact-thin", Generation: 1, State: reviewtransaction.StateApproved,
+				CorrectionBudget: test.correctionBudget, CumulativeCorrectionLines: test.cumulativeCorrectionLines,
+			}
+			state := resolveBoundedRemediation(true, verifyResultEvaluation{
+				EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
+			}, nil, &compact, "bounded review transaction is missing", "")
+
+			if state.Required {
+				t.Fatalf("RemediationState = %#v, want the exhausted-budget guard to refuse remediation", state)
+			}
+			if state.Reason != "compact review authority has no correction budget remaining" {
+				t.Fatalf("Reason = %q, want the exhausted-budget guard reason", state.Reason)
+			}
+			if state.CorrectionBudgetRemaining != 0 || state.CorrectionBudgetTotal != 0 {
+				t.Fatalf("RemediationState = %#v, want CorrectionBudgetRemaining/Total to stay unset (zero value) on the early-return path", state)
+			}
+		})
 	}
 }
 

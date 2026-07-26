@@ -364,6 +364,12 @@ func TestRuntimeLedgerRejectsStaleCASBeforePublicationAndCorruptChain(t *testing
 	if countRuntimeRecords(t, store.Dir) != before {
 		t.Fatal("stale CAS published an immutable record")
 	}
+	// The error already prints the current revision; it must also say how to
+	// use it, or a caller who only sees the string has no route back in.
+	wantRetry := fmt.Sprintf("--expected-revision %q", first.Revision)
+	if !strings.Contains(conflict.Error(), wantRetry) {
+		t.Fatalf("revision conflict error = %q, want it to name %q", conflict.Error(), wantRetry)
+	}
 
 	recordPath := filepath.Join(store.Dir, "records", strings.TrimPrefix(first.Revision, "sha256:")+".json")
 	payload, err := os.ReadFile(recordPath)

@@ -37,18 +37,28 @@ const (
 	runtimeOperationFinishRemediation = "attempt/finish-remediation"
 	runtimeOperationReset             = "objective/reset"
 	runtimeOperationBind              = "binding/set"
+
+	// runtimeLedgerStatusPointer suffixes every ledger refusal an ordinary
+	// caller can hit (budget exhausted, active attempt, no active attempt,
+	// objective already complete, no objective to reset) so the error text
+	// alone — without prior knowledge of the negotiated envelope — names the
+	// one command that already derives the correct continuation. The command
+	// includes --cwd/--change placeholders because the bare form is rejected
+	// by the CLI for missing required flags (internal/cli/sdd_attempt.go); a
+	// continuation that fails when pasted is worse than none.
+	runtimeLedgerStatusPointer = "run `gentle-ai sdd-attempt status --cwd <repo> --change <change>` — its next_action names the continuation"
 )
 
 var (
 	ErrRuntimeRevisionConflict             = errors.New("SDD runtime ledger revision conflict")
 	ErrRuntimeConcurrentUpdate             = errors.New("SDD runtime ledger is concurrently updated")
 	ErrRuntimeRequestConflict              = errors.New("SDD runtime request identifier was reused with different inputs")
-	ErrRuntimeBudgetExhausted              = errors.New("SDD runtime objective budget is exhausted")
-	ErrRuntimeAttemptActive                = errors.New("SDD runtime objective already has an active attempt")
-	ErrRuntimeNoActiveAttempt              = errors.New("SDD runtime objective has no active attempt")
+	ErrRuntimeBudgetExhausted              = errors.New("SDD runtime objective budget is exhausted; " + runtimeLedgerStatusPointer)
+	ErrRuntimeAttemptActive                = errors.New("SDD runtime objective already has an active attempt; " + runtimeLedgerStatusPointer)
+	ErrRuntimeNoActiveAttempt              = errors.New("SDD runtime objective has no active attempt; " + runtimeLedgerStatusPointer)
 	ErrRuntimeObjectiveChange              = errors.New("SDD runtime objective changed without an explicit reset")
-	ErrRuntimeObjectiveDone                = errors.New("SDD runtime objective is complete")
-	ErrRuntimeNoObjective                  = errors.New("SDD runtime ledger has no objective to reset")
+	ErrRuntimeObjectiveDone                = errors.New("SDD runtime objective is complete; " + runtimeLedgerStatusPointer)
+	ErrRuntimeNoObjective                  = errors.New("SDD runtime ledger has no objective to reset; " + runtimeLedgerStatusPointer)
 	ErrRuntimeResetNotAllowed              = errors.New("SDD runtime objective reset requires decision-required or complete state")
 	ErrRuntimeRemediationSuccessorRequired = errors.New("a bound passing SDD runtime attempt requires an atomic approved recovery successor")
 	ErrBindingRevisionConflict             = errors.New("SDD review binding revision conflict")
@@ -70,7 +80,7 @@ type RuntimeRevisionConflictError struct {
 }
 
 func (err *RuntimeRevisionConflictError) Error() string {
-	return fmt.Sprintf("%v: expected %q, current %q", ErrRuntimeRevisionConflict, err.Expected, err.Current)
+	return fmt.Sprintf("%v: expected %q, current %q; retry with --expected-revision %q", ErrRuntimeRevisionConflict, err.Expected, err.Current, err.Current)
 }
 
 func (err *RuntimeRevisionConflictError) Unwrap() error { return ErrRuntimeRevisionConflict }
@@ -85,7 +95,7 @@ type BindingRevisionConflictError struct {
 }
 
 func (err *BindingRevisionConflictError) Error() string {
-	return fmt.Sprintf("%v: expected %q, current %q", ErrBindingRevisionConflict, err.Expected, err.Current)
+	return fmt.Sprintf("%v: expected %q, current %q; retry with --expected-binding-revision %q", ErrBindingRevisionConflict, err.Expected, err.Current, err.Current)
 }
 
 func (err *BindingRevisionConflictError) Unwrap() error { return ErrBindingRevisionConflict }
@@ -370,14 +380,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 				last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
 				return runtimeRecord{}, errors.New("SDD runtime objective has invalid terminal candidate provenance")
 			}
-			intended, discoverErr := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).DiscoverIntendedUntracked(ctx)
-			if discoverErr != nil {
-				return runtimeRecord{}, fmt.Errorf("discover SDD runtime intended-untracked paths before launch: %w", discoverErr)
-			}
-			snapshot, err = (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).Build(ctx, reviewtransaction.Target{
-				Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: last.BeginCandidateTree,
-				Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: intended,
-			})
+			snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
 			if err == nil && (snapshot.Identity != last.FinishCandidateIdentity || snapshot.CandidateTree != last.FinishCandidateTree) {
 				return runtimeRecord{}, ErrRuntimeObjectiveChange
 			}
@@ -540,8 +543,24 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 		if status.Objective == nil {
 			return runtimeRecord{}, ErrRuntimeNoObjective
 		}
-		if !status.DecisionRequired && !status.Complete {
+		if !runtimeResetStructurallyPermitted(status) {
 			return runtimeRecord{}, ErrRuntimeResetNotAllowed
+		}
+		if !status.DecisionRequired && !status.Complete {
+			// The only remaining structurally-permitted scope is a terminal
+			// failed/interrupted attempt with budget still available: begin
+			// is the ordinary continuation here, so admit reset only when
+			// begin is actually blocked by candidate drift. Otherwise an
+			// elective early reset would launder the per-objective budget
+			// (CumulativeAttempts resets to zero on every reset).
+			last := status.Attempts[len(status.Attempts)-1]
+			candidate, driftErr := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
+			if driftErr != nil {
+				return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate to check reset drift eligibility: %w", driftErr)
+			}
+			if candidate.Identity == last.FinishCandidateIdentity && candidate.CandidateTree == last.FinishCandidateTree {
+				return runtimeRecord{}, ErrRuntimeResetNotAllowed
+			}
 		}
 		snapshot, err := captureRuntimeCandidate(ctx, store.Repo)
 		if err != nil {
@@ -897,7 +916,7 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 	case runtimeOperationReset:
 		event := record.Reset
 		objective := replay.Status.Objective
-		if replay.Status.ActiveAttempt != nil || objective == nil || !replay.Status.DecisionRequired && !replay.Status.Complete {
+		if replay.Status.ActiveAttempt != nil || objective == nil || !runtimeResetStructurallyPermitted(replay.Status) {
 			return errors.New("objective reset is not a valid successor")
 		}
 		if event.PreviousObjectiveID != objective.ID || event.PreviousGeneration != objective.Generation ||
@@ -1298,6 +1317,41 @@ func captureRuntimeCandidate(ctx context.Context, repo string) (reviewtransactio
 		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace,
 		IntendedUntracked: intended,
 	})
+}
+
+// captureRuntimeTerminalCandidate rebuilds the current workspace candidate
+// overlaid on the attempt's begin candidate tree, the same computation Begin
+// and Reset both use to detect whether the candidate drifted out from under
+// a terminal (no active attempt) objective scope.
+func captureRuntimeTerminalCandidate(ctx context.Context, store RuntimeStore, beginCandidateTree string) (reviewtransaction.Snapshot, error) {
+	builder := reviewtransaction.SnapshotBuilder{Repo: store.Repo}
+	intended, err := builder.DiscoverIntendedUntracked(ctx)
+	if err != nil {
+		return reviewtransaction.Snapshot{}, fmt.Errorf("discover SDD runtime intended-untracked paths: %w", err)
+	}
+	return builder.Build(ctx, reviewtransaction.Target{
+		Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: beginCandidateTree,
+		Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: intended,
+	})
+}
+
+// runtimeResetStructurallyPermitted reports whether the ledger's terminal
+// scope (no active attempt, which callers must verify separately) is one
+// from which a reset record is a structurally valid successor: the
+// objective already requires a decision, is complete, or its last recorded
+// attempt is a terminal failure/interruption. This exact predicate is
+// evaluated both when writing a reset (RuntimeStore.Reset) and when
+// replaying one from the immutable chain (applyRuntimeRecord), so a
+// committed reset always replays deterministically.
+func runtimeResetStructurallyPermitted(status RuntimeStatus) bool {
+	if status.DecisionRequired || status.Complete {
+		return true
+	}
+	if len(status.Attempts) == 0 {
+		return false
+	}
+	last := status.Attempts[len(status.Attempts)-1]
+	return last.Outcome == AttemptFailed || last.Outcome == AttemptInterrupted
 }
 
 func runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity string, generation int) string {

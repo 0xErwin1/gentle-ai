@@ -9,7 +9,8 @@ import (
 func TestProjectStatusV1FreezesExactLegacyShape(t *testing.T) {
 	status := baseStatus("/repo", nil, nil, "apply", nil)
 	status.RuntimeStatus = &RuntimeStatus{Schema: RuntimeStatusSchema, Change: "internal-only"}
-	status.RemediationState.CorrectionBudget = 7
+	status.RemediationState.CorrectionBudgetRemaining = 7
+	status.RemediationState.CorrectionBudgetTotal = 10
 	status.Artifacts["futureArtifact"] = ArtifactDone
 
 	projected, err := ProjectStatusV1(status)
@@ -93,7 +94,8 @@ func TestProjectStatusV1RejectsNonLegacyValues(t *testing.T) {
 func TestStatusRenderersEmbedOnlyStatusV1Projection(t *testing.T) {
 	status := baseStatus("/repo", nil, nil, "apply", nil)
 	status.RuntimeStatus = &RuntimeStatus{Schema: RuntimeStatusSchema, Change: "internal-only"}
-	status.RemediationState.CorrectionBudget = 7
+	status.RemediationState.CorrectionBudgetRemaining = 7
+	status.RemediationState.CorrectionBudgetTotal = 10
 
 	rendered := map[string]string{
 		"markdown":     RenderMarkdown(status),

@@ -144,6 +144,14 @@ type PhaseInstructions struct {
 	Archive   []string `json:"archive"`
 }
 
+// RemediationState describes bounded correction eligibility for a failed
+// verification verdict. CorrectionBudgetRemaining and CorrectionBudgetTotal
+// are deliberately named to be unambiguous with the review-integration
+// contracts' unrelated `correction_budget` field (the frozen total assigned
+// at review start, see internal/cli/review_start_contract.go and
+// review_status_contract.go): neither sddstatus field is ever named plain
+// "correctionBudget" on the wire, so a consumer reading both surfaces cannot
+// mistake a remaining-budget value for a frozen-total value or vice versa.
 type RemediationState struct {
 	Required               bool   `json:"required"`
 	Complete               bool   `json:"complete"`
@@ -151,8 +159,18 @@ type RemediationState struct {
 	LineageID              string `json:"lineageId"`
 	Generation             int    `json:"generation"`
 	FixBatch               int    `json:"fixBatch"`
-	CorrectionBudget       int    `json:"correctionBudget,omitempty"`
-	Reason                 string `json:"reason"`
+	// CorrectionBudgetRemaining is CorrectionBudgetTotal minus the compact
+	// review authority's CumulativeCorrectionLines already charged against
+	// it: the correction-line budget still available for this remediation
+	// attempt. Zero when remediation is not compact-bound or not required.
+	CorrectionBudgetRemaining int `json:"correctionBudgetRemaining,omitempty"`
+	// CorrectionBudgetTotal is the frozen total correction-line budget
+	// assigned to the compact review authority at review start
+	// (reviewtransaction.CompactState.CorrectionBudget), unaffected by lines
+	// already spent. Zero when remediation is not compact-bound or not
+	// required.
+	CorrectionBudgetTotal int    `json:"correctionBudgetTotal,omitempty"`
+	Reason                string `json:"reason"`
 }
 
 type ReviewGateState struct {
@@ -1076,17 +1094,9 @@ func RenderDispatcherMarkdown(status Status) string {
 			lines = append(lines, fmt.Sprintf("- %s", reason))
 		}
 	}
-	if status.NextRecommended == "review" {
-		lines = append(lines,
-			"",
-			"### Next Review Operation",
-			fmt.Sprintf("- Run `gentle-ai review start --cwd %q`; the facade derives intended untracked scope, lineage, tier, lenses, and correction budget from live Git.", status.ActionContext.WorkspaceRoot),
-			"- Pass reviewer result and verification evidence to `gentle-ai review finalize`; do not hand-author lifecycle operation JSON.",
-			"- Continue discovered authority instead of starting another budget, and reconcile existing terminal mirrors only after `gentle-ai review validate --gate post-apply` allows.",
-		)
-	}
-
-	if phase, ok := nextRecommendedPhase(status.NextRecommended); ok {
+	if extra, ok := nonPhaseRoutingInstructions(status); ok {
+		lines = append(lines, extra...)
+	} else if phase, ok := nextRecommendedPhase(status.NextRecommended); ok {
 		lines = append(lines, "", fmt.Sprintf("### Next Phase Instructions: %s", phase))
 		for _, instruction := range instructionsForPhase(status, phase) {
 			lines = append(lines, fmt.Sprintf("- %s", instruction))
@@ -1630,6 +1640,34 @@ func nativeRuntimeInstructions(status Status, change string) []string {
 		fmt.Sprintf("When next_action is begin, consume the ordinal before launch with `gentle-ai sdd-attempt begin --cwd %q --change %q --expected-revision \"<runtime-revision>\" --request-id \"<unique-request-id>\" --work-unit \"<label>\" --evidence-goal \"<stable-goal>\" --max-attempts <count> --max-changed-lines <count>`.", workspace, change),
 		fmt.Sprintf("After every passed, failed, or interrupted run, persist its evidence with `gentle-ai sdd-attempt finish --cwd %q --change %q --expected-revision \"<runtime-revision>\" --request-id \"<unique-request-id>\" --outcome <passed|failed|interrupted> --evidence-revision <sha256> --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<evidence>\" --process-evidence \"<evidence>\"`.", workspace, change),
 		"Never launch while active_attempt is populated or decision_required is true. `gentle-ai sdd-attempt reset` is an explicit maintainer scope decision, never an automatic counter reset.",
+	}
+}
+
+// nonPhaseRoutingInstructions renders actionable continuations for
+// next_recommended values that are routing states rather than SDD phases.
+// nextRecommendedPhase() only recognizes real phases, so without this every
+// routing-only next value (e.g. "resolve-review", "select-change") would
+// render its blocked reason with no way out — the blocked reason IS the
+// entire guidance. Where a continuation already exists elsewhere in this
+// file (the "review" operation block), it is reused rather than duplicated.
+func nonPhaseRoutingInstructions(status Status) ([]string, bool) {
+	switch status.NextRecommended {
+	case "review", "resolve-review":
+		return []string{
+			"",
+			"### Next Review Operation",
+			fmt.Sprintf("- Run `gentle-ai review start --cwd %q`; the facade derives intended untracked scope, lineage, tier, lenses, and correction budget from live Git.", status.ActionContext.WorkspaceRoot),
+			"- Pass reviewer result and verification evidence to `gentle-ai review finalize`; do not hand-author lifecycle operation JSON.",
+			"- Continue discovered authority instead of starting another budget, and reconcile existing terminal mirrors only after `gentle-ai review validate --gate post-apply` allows.",
+		}, true
+	case "select-change":
+		return []string{
+			"",
+			"### Next Selection Operation",
+			fmt.Sprintf("- Rerun with an explicit change name from Blocked Reasons above: `gentle-ai sdd-status --cwd %q <change-name>` or `gentle-ai sdd-continue --cwd %q <change-name>`.", status.ActionContext.WorkspaceRoot, status.ActionContext.WorkspaceRoot),
+		}, true
+	default:
+		return nil, false
 	}
 }
 

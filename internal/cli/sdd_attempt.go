@@ -20,11 +20,11 @@ func RunSDDAttempt(args []string, stdout io.Writer) error {
 
 func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("sdd-attempt requires status, begin, finish, or reset")
+		return fmt.Errorf("sdd-attempt requires %s", joinSDDAttemptOperations())
 	}
 	operation := args[0]
-	if operation != "status" && operation != "begin" && operation != "finish" && operation != "reset" {
-		return fmt.Errorf("unknown sdd-attempt operation %q", operation)
+	if !validSDDAttemptOperation(operation) {
+		return fmt.Errorf("unknown sdd-attempt operation %q; want one of %s", operation, joinSDDAttemptOperations())
 	}
 	if err := validateSDDAttemptOperationFlags(operation, args[1:]); err != nil {
 		return err
@@ -110,6 +110,40 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	encoder := json.NewEncoder(stdout)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(status)
+}
+
+// sddAttemptOperationsInOrder is the single ordered source of truth for
+// every valid sdd-attempt operation. validSDDAttemptOperation and any
+// refusal that must enumerate the valid set both derive from it, so the
+// accepted values and the values a message names can never drift apart.
+// Mirrors reviewIntegrationGatesInOrder / reviewIntegrationGateNames in
+// review_operation_contract.go.
+var sddAttemptOperationsInOrder = []string{"status", "begin", "finish", "reset"}
+
+func validSDDAttemptOperation(operation string) bool {
+	for _, valid := range sddAttemptOperationsInOrder {
+		if operation == valid {
+			return true
+		}
+	}
+	return false
+}
+
+// joinSDDAttemptOperations renders sddAttemptOperationsInOrder as an
+// English "a, b, c, or d" list for refusal messages that must name the
+// valid operation values.
+func joinSDDAttemptOperations() string {
+	switch len(sddAttemptOperationsInOrder) {
+	case 0:
+		return ""
+	case 1:
+		return sddAttemptOperationsInOrder[0]
+	case 2:
+		return sddAttemptOperationsInOrder[0] + " or " + sddAttemptOperationsInOrder[1]
+	default:
+		last := len(sddAttemptOperationsInOrder) - 1
+		return strings.Join(sddAttemptOperationsInOrder[:last], ", ") + ", or " + sddAttemptOperationsInOrder[last]
+	}
 }
 
 func validateSDDAttemptOperationFlags(operation string, args []string) error {
