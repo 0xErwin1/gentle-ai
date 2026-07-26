@@ -109,6 +109,12 @@ const (
 	ReviewReceiptScopeChanged ReviewReceiptDiscoveryKind = "receipt_scope_changed"
 	ReviewReceiptAmbiguous    ReviewReceiptDiscoveryKind = "receipt_ambiguous"
 	ReviewAuthorityCorrupted  ReviewReceiptDiscoveryKind = "authority_corrupted"
+	// ReviewReceiptTargetUnresolvable names a deterministic target-resolution
+	// failure (issue-1832): the repository has no upstream to derive a
+	// publication boundary from. It is not authority damage, so it shares the
+	// unmanaged-while-disabled classification with a missing, scope-changed,
+	// or unrelated receipt.
+	ReviewReceiptTargetUnresolvable ReviewReceiptDiscoveryKind = "target_unresolvable"
 )
 
 type ReviewReceiptDiscoveryError struct {
@@ -134,6 +140,8 @@ func (err *ReviewReceiptDiscoveryError) Error() string {
 		message = "multiple terminal review receipts require explicit target selection"
 	case ReviewAuthorityCorrupted:
 		message = "complete review authority inventory is unavailable or corrupted"
+	case ReviewReceiptTargetUnresolvable:
+		message = "review gate target could not be resolved"
 	}
 	if err.Detail != "" {
 		return message + ": " + err.Detail
@@ -253,6 +261,26 @@ type facadeArtifacts struct {
 }
 
 var reviewFacadeOperationTimeout = 25 * time.Second
+
+// reviewFacadeStartOperationTimeout is the deadline for review.start only.
+// START performs full candidate construction (snapshot, hashing, frozen
+// context) over the real workspace, which can exceed the shared 25s facade
+// deadline for a valid large candidate. It is a fixed constant, not a
+// configurable timeout framework: every other operation keeps using
+// reviewFacadeOperationTimeout unchanged, including the two existing tests
+// that mutate that var directly.
+const reviewFacadeStartOperationTimeout = 120 * time.Second
+
+// reviewFacadeOperationDeadline selects the operation-scoped deadline.
+// review.start uses its own larger constant; every other operation keeps
+// the shared reviewFacadeOperationTimeout var byte-identical.
+func reviewFacadeOperationDeadline(operation string) time.Duration {
+	if operation == "review.start" {
+		return reviewFacadeStartOperationTimeout
+	}
+	return reviewFacadeOperationTimeout
+}
+
 var reviewFacadeCommandRunner = runReviewCommandContext
 var reviewFacadePlannedTransitionHook = func(context.Context, string, string, string) error { return nil }
 var reviewFacadeCommittedTransitionHook = func(context.Context, string, string, string) error { return nil }
@@ -292,7 +320,7 @@ func RunReview(args []string, stdout io.Writer) error {
 	if !negotiated {
 		return runReviewCommand(args, stdout)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), reviewFacadeOperationTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), reviewFacadeOperationDeadline(operation))
 	defer cancel()
 	var committed atomic.Pointer[reviewFacadeOperationProgressError]
 	ctx = context.WithValue(ctx, reviewFacadeOperationProgressError{}, &committed)
@@ -667,7 +695,7 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 		return errors.New("--workspace-overlay recovery requires a base-diff predecessor, --base-ref, and --projection staged without --committed-only")
 	}
 	if !*releaseScope && !stagedScopeOverlay &&
-		(*committedOnly != (base != "") || baseDiff != *committedOnly) && !explicitOverlayBase {
+		(*committedOnly != (base != "")) && !explicitOverlayBase {
 		return errors.New("base-diff recovery requires matching --base-ref and --committed-only")
 	}
 	projection := predecessorRecord.State.InitialSnapshot.Projection
@@ -937,6 +965,16 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	}
 	if *workspaceOverlay && (strings.TrimSpace(*baseRef) == "" || *committedOnly || selectedProjection != reviewtransaction.ProjectionWorkspace) {
 		return errors.New("--workspace-overlay requires --base-ref with workspace projection and is incompatible with --committed-only")
+	}
+	if selectedProjection == reviewtransaction.ProjectionStaged && strings.TrimSpace(*baseRef) != "" && !*workspaceOverlay {
+		// Combining --projection staged with --base-ref is ambiguous about
+		// intent, and this seam cannot guess it: a caller who wants the real
+		// staged index reviewed needs plain staged projection, and a caller
+		// who wants a base-diff review needs the committed-only escape. Name
+		// both verbatim so the refusal is actionable either way.
+		return fmt.Errorf("review start with --projection staged and --base-ref is refused because intent is ambiguous: for a staged-index review rerun with %q; for a base-diff review rerun with %q",
+			"gentle-ai review start --projection staged",
+			fmt.Sprintf("gentle-ai review start --base-ref %s --committed-only", strings.TrimSpace(*baseRef)))
 	}
 	if strings.TrimSpace(*baseRef) != "" && !*workspaceOverlay {
 		dirtyTracked, dirtyErr := (reviewtransaction.SnapshotBuilder{Repo: root}).HasDirtyTrackedChanges(ctx)
@@ -1493,6 +1531,16 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			return reviewPreflightError(err)
 		}
 	}
+	// A lineage-only finalize call at StateValidating with no request evidence
+	// must not silently ignore canonical evidence a separate `review
+	// capture-evidence` call already bound to this exact authority. Consume it
+	// on the identical bytes path --captured-evidence uses, so the request is
+	// a real transition instead of a no-op (1663).
+	if len(evidence) == 0 && !*capturedEvidence && state.State == reviewtransaction.StateValidating {
+		if captured, captureErr := readCapturedFinalEvidence(store.Dir, state, record.Revision); captureErr == nil {
+			evidence = captured
+		}
+	}
 	if terminalComplete {
 		if err := reviewFacadeSyncDirectory(filepath.Dir(store.FinalizeAttemptJournalPath())); err != nil {
 			return fmt.Errorf("sync completed finalize journal directory: %w", err)
@@ -1546,6 +1594,16 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		}
 	}
 	if !terminalAtEntry && pendingAtEntry == nil && len(plan.Transitions) == 0 {
+		// A `--next-transition` request is a deliberate read-only routing
+		// projection (see the ValidateLiveSnapshot guard above) and must keep
+		// reporting the current state plus what to do next, never an error.
+		// Without it, a StateValidating call that consumed no evidence at all
+		// — neither supplied, captured out of band, nor eligible for native
+		// low-risk auto-verification — is the genuine no-op 1663/1788 exist
+		// for: it must say so instead of silently reporting success.
+		if !*nextTransition && state.State == reviewtransaction.StateValidating && len(plan.Evidence) == 0 {
+			return reviewPreflightError(&ErrReviewFinalizeNoTransition{LineageID: state.LineageID})
+		}
 		return encodeCompactFacadeFinalize(stdout, negotiated, *actionEligibility, *nextTransition, state, record.Revision, store, "continue the current review state", reviewFinalizeOutputContext{Context: ctx, Repo: root})
 	}
 	request := facadeFinalizeAttemptRequestForCandidate(record, plan.Candidate, reviewerResults, validation, refuter, plan.Evidence, *correctionLines, *failed)
@@ -1761,6 +1819,25 @@ func prepareFacadeFinalizePlan(ctx context.Context, repo, revision string, state
 	return plan, nil
 }
 
+// ErrReviewFinalizeNoTransition reports that a StateValidating finalize call
+// had no evidence to consume — neither supplied on the request, captured out
+// of band, nor eligible for native low-risk auto-verification — and
+// therefore produced no transition at all. It replaces the old silent
+// success ("continue the current review state") for exactly this shape,
+// covering both the case where verification evidence was never captured and
+// the case where a prior finalize already consumed it. The message names the
+// concrete two-step escape verbatim rather than a prose description.
+type ErrReviewFinalizeNoTransition struct {
+	LineageID string
+}
+
+func (err *ErrReviewFinalizeNoTransition) Error() string {
+	return fmt.Sprintf(
+		"finalize for lineage %q had no verification evidence to consume and made no transition; capture it first with `gentle-ai review capture-evidence`, then run `gentle-ai review finalize --lineage %s --captured-evidence`",
+		err.LineageID, err.LineageID,
+	)
+}
+
 func facadeNativeLowRiskCandidate(state reviewtransaction.CompactState) bool {
 	return (state.State == reviewtransaction.StateReviewing || state.State == reviewtransaction.StateValidating) &&
 		state.RiskLevel == reviewtransaction.RiskLow && len(state.SelectedLenses) == 0
@@ -1936,6 +2013,18 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 	if !negotiated {
 		var targetResolution *reviewtransaction.GateTargetResolutionError
 		if errors.As(compactErr, &targetResolution) {
+			// issue-1832: a repository with no upstream has no publication
+			// boundary to derive at all. That is not authority damage, and
+			// while reviews are disabled it is not something the gate should
+			// block on — it shares the unmanaged-while-disabled disposition
+			// with a missing, scope-changed, or unrelated receipt. With
+			// reviews enabled, this falls through unchanged to the existing
+			// typed target-resolution denial below.
+			unresolvable := &ReviewReceiptDiscoveryError{Kind: ReviewReceiptTargetUnresolvable, Detail: targetResolution.Error()}
+			if reviewReceiptDiscoveryIsUnmanagedWhileDisabled(unresolvable.Kind) &&
+				reviewDeliveryDisposition(ctx, root, false) == reviewtransaction.RDDDeliveryDisabledUnmanaged {
+				return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, unresolvable)
+			}
 			return emitFacadeGateEvaluationNegotiated(stdout, reviewtransaction.NativeGateEvaluation{
 				Result: reviewtransaction.GateInvalidated, Reason: targetResolution.Error(), Cause: compactErr,
 				Context: reviewtransaction.GateContext{
@@ -2034,6 +2123,7 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 	type deliveryShapeMismatch struct {
 		lineage string
 		context reviewtransaction.GateContext
+		detail  string
 	}
 	deliveryShape := []deliveryShapeMismatch{}
 	type targetResolutionFailure struct {
@@ -2072,20 +2162,38 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 				targetResolution = append(targetResolution, targetResolutionFailure{lineage: record.State.LineageID, err: assessErr})
 				continue
 			}
+			// deliveryContext binds the frozen receipt values — the expected
+			// side of the mismatch — exactly as evidence-bearing denials do,
+			// so the real cause stays discoverable regardless of which
+			// deterministic delivery-shape producer failed.
+			deliveryContext := func(code string) reviewtransaction.GateContext {
+				return reviewtransaction.GateContext{
+					Gate: input.Gate, LineageID: record.State.LineageID, Generation: record.State.Generation,
+					StoreRevision: record.Revision, GenesisRevision: record.Revision, ChainIdentity: record.Revision, BundleDigest: record.Revision,
+					BaseTree: record.State.CurrentSnapshot.BaseTree, CandidateTree: record.State.CurrentSnapshot.CandidateTree, PathsDigest: record.State.CurrentSnapshot.PathsDigest,
+					FixDeltaHash: record.State.FixDeltaHash, PolicyHash: record.State.PolicyHash,
+					LedgerHash: record.State.LedgerHash(), EvidenceHash: record.State.EvidenceHash,
+					Denial: &reviewtransaction.GateDenial{Stage: "delivery-derivation", Code: code},
+				}
+			}
 			if errors.Is(assessErr, reviewtransaction.ErrReviewedDeliveryNotOneCommit) {
-				// The context binds the frozen receipt values — the expected
-				// side of the mismatch — exactly as evidence-bearing denials
-				// do, so the real cause stays discoverable.
 				deliveryShape = append(deliveryShape, deliveryShapeMismatch{
-					lineage: record.State.LineageID,
-					context: reviewtransaction.GateContext{
-						Gate: input.Gate, LineageID: record.State.LineageID, Generation: record.State.Generation,
-						StoreRevision: record.Revision, GenesisRevision: record.Revision, ChainIdentity: record.Revision, BundleDigest: record.Revision,
-						BaseTree: record.State.CurrentSnapshot.BaseTree, CandidateTree: record.State.CurrentSnapshot.CandidateTree, PathsDigest: record.State.CurrentSnapshot.PathsDigest,
-						FixDeltaHash: record.State.FixDeltaHash, PolicyHash: record.State.PolicyHash,
-						LedgerHash: record.State.LedgerHash(), EvidenceHash: record.State.EvidenceHash,
-						Denial: &reviewtransaction.GateDenial{Stage: "delivery-derivation", Code: "delivery-shape-mismatch"},
-					},
+					lineage: record.State.LineageID, context: deliveryContext("delivery-shape-mismatch"),
+					detail: reviewtransaction.ErrReviewedDeliveryNotOneCommit.Error(),
+				})
+				continue
+			}
+			// The published-delivery release blocker: the reviewed candidate's
+			// base commit could not be uniquely located in the publication
+			// range, because it was already published. This is a receipt that
+			// stopped governing a candidate that already moved, not authority
+			// damage, so it routes into the same scope-changed family as the
+			// one-commit delivery-shape mismatch above.
+			var deliveryBaseErr *reviewtransaction.GateDeliveryBaseResolutionError
+			if errors.As(assessErr, &deliveryBaseErr) {
+				deliveryShape = append(deliveryShape, deliveryShapeMismatch{
+					lineage: record.State.LineageID, context: deliveryContext("delivery-base-ambiguous"),
+					detail: deliveryBaseErr.Error(),
 				})
 				continue
 			}
@@ -2154,7 +2262,7 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 	if len(deliveryShape) == 1 && len(scopeChanged) == 0 && len(scopeWithoutContext) == 0 && len(assessmentUnknown) == 0 && len(targetResolution) == 0 {
 		context := deliveryShape[0].context
 		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{
-			Kind: ReviewReceiptScopeChanged, Detail: reviewtransaction.ErrReviewedDeliveryNotOneCommit.Error(),
+			Kind: ReviewReceiptScopeChanged, Detail: deliveryShape[0].detail,
 			Candidates: []string{deliveryShape[0].lineage}, Context: &context,
 		}
 	}
@@ -2766,11 +2874,14 @@ func rejectFacadeCorrectionUntracked(ctx context.Context, repo string, state rev
 // outcome means "no receipt governs this candidate" — the expected state of a
 // clone whose kill switch is off, where no new receipt could have been created.
 // A missing receipt qualifies, and so does a prior receipt that stopped
-// governing: scope-changed or unrelated. Ambiguous and corrupted authority are
-// genuine damage and never qualify.
+// governing: scope-changed or unrelated. A deterministic target-resolution
+// failure (issue-1832: no upstream to derive a publication boundary from)
+// qualifies too — a repository has no receipt to lose here, only a target it
+// cannot compute while off. Ambiguous and corrupted authority are genuine
+// damage and never qualify.
 func reviewReceiptDiscoveryIsUnmanagedWhileDisabled(kind ReviewReceiptDiscoveryKind) bool {
 	switch kind {
-	case ReviewReceiptMissing, ReviewReceiptUnrelated, ReviewReceiptScopeChanged:
+	case ReviewReceiptMissing, ReviewReceiptUnrelated, ReviewReceiptScopeChanged, ReviewReceiptTargetUnresolvable:
 		return true
 	default:
 		return false

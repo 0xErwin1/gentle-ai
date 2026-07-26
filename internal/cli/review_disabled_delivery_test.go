@@ -492,6 +492,162 @@ func TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileDisabled(t *te
 	}
 }
 
+// TestReviewValidateReportsDisabledUnmanagedDeliveryWhenNoUpstreamConfigured
+// proves issue-1832: a disposable repository with no remote and no branch
+// upstream has no publication boundary to derive at all. While
+// review-driven development is disabled, that is not authority damage and
+// not something the gate should be blocking pre-push on — it is exactly the
+// same "no receipt can govern this while off" shape as a missing,
+// scope-changed, or unrelated receipt. Before the fix, the gate resolved the
+// remote target BEFORE honoring the kill switch and failed closed with a
+// typed target-resolution denial instead of reporting disabled/unmanaged.
+func TestReviewValidateReportsDisabledUnmanagedDeliveryWhenNoUpstreamConfigured(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	// Deliberately NO remote and NO branch upstream: initReviewCLIRepo never
+	// configures one, and this test must not call
+	// configureCLIReviewPublicationRemote — that is the entire point of the
+	// reporter's fixture.
+
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate behavior\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	finalizeFacadeReviewForRepo(t, repo)
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "reviewed candidate")
+
+	disableReviewForClone(t, repo)
+
+	var output bytes.Buffer
+	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePrePush)}, &output)
+	// The gate reports; it does not veto. A repository with no upstream simply
+	// has no publication boundary to derive — that is not authority damage,
+	// and while reviews are disabled it is not something the gate should be
+	// blocking on at all.
+	if err != nil {
+		t.Fatalf("disabled delivery with no configured upstream was denied instead of reported: %v\n%s", err, output.String())
+	}
+	var result ReviewValidateResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if result.Schema != ReviewValidateSchema {
+		t.Fatalf("disabled delivery left the typed gate schema = %q", result.Schema)
+	}
+	if result.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
+		t.Fatalf("disabled delivery with no upstream = %q, want %q", result.Delivery, reviewtransaction.RDDDeliveryDisabledUnmanaged)
+	}
+	if result.Allowed || result.Result == reviewtransaction.GateAllow {
+		t.Fatalf("disabled delivery with no upstream fabricated an approval: %#v", result)
+	}
+	var denied ReviewGateDeniedError
+	if errors.As(err, &denied) {
+		t.Fatalf("disabled delivery with no upstream was reported as a denial: %#v", denied)
+	}
+	if result.Context.Denial == nil {
+		t.Fatalf("disabled delivery with no upstream hid why no receipt governs: %#v", result)
+	}
+
+	// The report is an observation, so replaying the same request must return
+	// the same bytes.
+	var replay bytes.Buffer
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePrePush)}, &replay); err != nil {
+		t.Fatalf("replayed disabled delivery gate: %v\n%s", err, replay.String())
+	}
+	if !bytes.Equal(replay.Bytes(), output.Bytes()) {
+		t.Fatalf("disabled delivery report is not replay stable:\nfirst:\n%s\nreplay:\n%s", output.String(), replay.String())
+	}
+}
+
+// TestReviewValidateDeniesNoUpstreamTargetResolutionWhileEnabled pins the
+// unchanged half of issue-1832's fix: with reviews ENABLED, a repository
+// with no upstream must still produce exactly today's typed
+// target-resolution denial (exit 1, Stage "target-resolution", Code
+// "target_resolution_failed"), naming --base-ref <remote>/<branch> as the
+// escape. Only the disabled path changes.
+func TestReviewValidateDeniesNoUpstreamTargetResolutionWhileEnabled(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate behavior\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	finalizeFacadeReviewForRepo(t, repo)
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "reviewed candidate")
+
+	var output bytes.Buffer
+	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePrePush)}, &output)
+	var denied ReviewGateDeniedError
+	if !errors.As(err, &denied) {
+		t.Fatalf("enabled no-upstream pre-push error = %T %v\n%s", err, err, output.String())
+	}
+	if fields := strictReviewJSONFields(t, output.Bytes()); !reflect.DeepEqual(fields, wantEnabledReviewGateFields) {
+		t.Fatalf("enabled gate fields = %v, want %v", fields, wantEnabledReviewGateFields)
+	}
+	var result ReviewValidateResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if result.Delivery != "" {
+		t.Fatalf("an enabled switch reported a delivery disposition: %#v", result)
+	}
+	if result.Allowed {
+		t.Fatalf("enabled no-upstream target resolution fabricated an approval: %#v", result)
+	}
+	if result.Context.Denial == nil || result.Context.Denial.Stage != "target-resolution" || result.Context.Denial.Code != "target_resolution_failed" {
+		t.Fatalf("enabled no-upstream denial = %#v, want stage %q code %q", result.Context.Denial, "target-resolution", "target_resolution_failed")
+	}
+	if !strings.Contains(result.Reason, "--base-ref <remote>/<branch>") {
+		t.Fatalf("enabled no-upstream denial reason = %q, want it to name --base-ref <remote>/<branch>", result.Reason)
+	}
+}
+
+// TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileDisabledNoUpstream
+// holds the line for issue-1832's own fix site: a genuinely corrupted
+// authority store with no upstream configured and the switch off still fails
+// closed as authority_corrupted, never reported as unmanaged by choice.
+func TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileDisabledNoUpstream(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate behavior\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	finalizeFacadeReviewForRepo(t, repo)
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "reviewed candidate")
+
+	disableReviewForClone(t, repo)
+
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("work authored while disabled\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "authored while disabled")
+
+	// Damage the authority inventory: a truncated compact record is
+	// corruption, not a stale-but-healthy receipt or an unresolvable target.
+	broken := filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "v2", "corrupt-while-disabled-no-upstream")
+	if err := os.MkdirAll(broken, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(broken, "review-state.json"), []byte("{\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePrePush)}, &output)
+	var denied ReviewGateDeniedError
+	if !errors.As(err, &denied) {
+		t.Fatalf("corrupted authority with no upstream while disabled did not fail closed: %T %v\n%s", err, err, output.String())
+	}
+	var result ReviewValidateResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if result.Delivery == reviewtransaction.RDDDeliveryDisabledUnmanaged {
+		t.Fatalf("corrupted authority with no upstream was reported as unmanaged by choice: %#v", result)
+	}
+	if result.Allowed || result.Context.Denial == nil || result.Context.Denial.Code != string(ReviewAuthorityCorrupted) {
+		t.Fatalf("corrupted-authority denial with no upstream while disabled = %#v", result)
+	}
+}
+
 // finalizeFacadeReviewForRepo runs one complete reviewed flow over the live
 // candidate: start with the given extra arguments, submit one clean result per
 // selected lens, and finalize to a terminal receipt.

@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/internal/sddstatus"
@@ -61,16 +62,44 @@ func TestReviewFacadeStartStagedProjectionFreezesOnlyIndex(t *testing.T) {
 		t.Fatalf("invalid projection error = %v", err)
 	}
 	runReviewCLIGit(t, repo, "commit", "-qm", "staged candidate")
-	output.Reset()
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "staged", "--base-ref", base, "--committed-only"}, &output); err != nil {
-		t.Fatalf("staged base-diff continuation error = %v", err)
+	// 1812: combining --projection staged with --base-ref is now refused as
+	// ambiguous intent instead of continuing the staged authority as a
+	// base-diff. The escape is one of the two named commands, not this combo.
+	wantStagedEscape := "gentle-ai review start --projection staged"
+	wantBaseDiffEscape := fmt.Sprintf("gentle-ai review start --base-ref %s --committed-only", base)
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "staged", "--base-ref", base, "--committed-only"}, io.Discard); err == nil ||
+		!strings.Contains(err.Error(), wantStagedEscape) || !strings.Contains(err.Error(), wantBaseDiffEscape) {
+		t.Fatalf("staged projection + base-ref start error = %v, want typed refusal naming both %q and %q (1812)", err, wantStagedEscape, wantBaseDiffEscape)
 	}
-	var continued ReviewFacadeStartResult
-	if err := json.Unmarshal(output.Bytes(), &continued); err != nil {
+}
+
+// TestReviewFacadeStagedProjectionBaseRefRefusal proves 1812: combining
+// --projection staged with --base-ref (without --workspace-overlay) is
+// ambiguous about intent, so it is refused rather than silently freezing the
+// index. The refusal cannot guess which of the two real escapes the caller
+// meant, so it names both verbatim: the plain staged-projection escape for a
+// real staged-index review, and the --committed-only base-diff escape for a
+// base-diff review.
+func TestReviewFacadeStagedProjectionBaseRefRefusal(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+
+	leavesBefore, err := reviewtransaction.CompactAuthorityLeaves(context.Background(), repo)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if continued.Action != "resumed" || continued.LineageID != started.LineageID || continued.Projection != reviewtransaction.ProjectionStaged {
-		t.Fatalf("staged base-diff continuation = %#v", continued)
+	callErr := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "staged", "--base-ref", base, "--committed-only"}, io.Discard)
+	wantStagedEscape := "gentle-ai review start --projection staged"
+	wantBaseDiffEscape := fmt.Sprintf("gentle-ai review start --base-ref %s --committed-only", base)
+	if callErr == nil || !strings.Contains(callErr.Error(), wantStagedEscape) || !strings.Contains(callErr.Error(), wantBaseDiffEscape) {
+		t.Fatalf("staged projection + base-ref start error = %v, want it to name both %q and %q verbatim", callErr, wantStagedEscape, wantBaseDiffEscape)
+	}
+	leavesAfter, err := reviewtransaction.CompactAuthorityLeaves(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(leavesAfter) != len(leavesBefore) {
+		t.Fatalf("refused staged projection + base-ref start persisted authority: before=%v after=%v", leavesBefore, leavesAfter)
 	}
 }
 
@@ -106,7 +135,13 @@ func TestReviewFacadeStartEmitsCaptureBindingInputs(t *testing.T) {
 	}
 }
 
-func TestReviewFacadeStartReusesStagedAuthorityForCommittedBaseDiff(t *testing.T) {
+// TestReviewFacadeStartStagedProjectionBaseRefContinuationRefused documents a
+// 1812 behavior change: combining --projection staged with an explicit
+// --base-ref used to continue a prior staged-current-changes authority as a
+// base-diff. That combination is now refused as ambiguous intent (see
+// TestReviewFacadeStagedProjectionBaseRefRefusal), so the refused staged
+// authority stays untouched at its prior revision.
+func TestReviewFacadeStartStagedProjectionBaseRefContinuationRefused(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	base := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("staged candidate\n"), 0o644); err != nil {
@@ -121,21 +156,28 @@ func TestReviewFacadeStartReusesStagedAuthorityForCommittedBaseDiff(t *testing.T
 	if err := json.Unmarshal(output.Bytes(), &staged); err != nil {
 		t.Fatal(err)
 	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, staged.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
 	runReviewCLIGit(t, repo, "commit", "-qm", "staged candidate")
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("unstaged divergence\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	output.Reset()
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "staged", "--base-ref", base, "--committed-only", "--lineage", "staged-base-request"}, &output); err != nil {
-		t.Fatal(err)
+	wantStagedEscape := "gentle-ai review start --projection staged"
+	wantBaseDiffEscape := fmt.Sprintf("gentle-ai review start --base-ref %s --committed-only", base)
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "staged", "--base-ref", base, "--committed-only", "--lineage", "staged-base-request"}, io.Discard); err == nil ||
+		!strings.Contains(err.Error(), wantStagedEscape) || !strings.Contains(err.Error(), wantBaseDiffEscape) {
+		t.Fatalf("staged projection + base-ref continuation error = %v, want typed refusal naming both %q and %q (1812)", err, wantStagedEscape, wantBaseDiffEscape)
 	}
-	var resumed ReviewFacadeStartResult
-	if err := json.Unmarshal(output.Bytes(), &resumed); err != nil {
-		t.Fatal(err)
-	}
-	if resumed.Action != "resumed" || resumed.LineageID != staged.LineageID || resumed.Projection != reviewtransaction.ProjectionStaged {
-		t.Fatalf("staged committed base-diff reuse = %#v", resumed)
+	after, err := store.Load()
+	if err != nil || after.Revision != before.Revision {
+		t.Fatalf("refused staged base-ref continuation changed authority = %#v, %v", after, err)
 	}
 }
 
@@ -2091,6 +2133,108 @@ func prepareFacadeReceiptPending(t *testing.T) facadeReceiptPendingFixture {
 	return facadeReceiptPendingFixture{
 		repo: repo, evidencePath: evidencePath, started: started, store: store, pending: pending, diagnostic: diagnostic,
 	}
+}
+
+func TestReviewFacadeOperationDeadlineSelector(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation string
+		want      time.Duration
+	}{
+		{name: "start uses the start-scoped deadline", operation: "review.start", want: reviewFacadeStartOperationTimeout},
+		{name: "status uses the shared deadline", operation: "review.status", want: reviewFacadeOperationTimeout},
+		{name: "finalize uses the shared deadline", operation: "review.finalize", want: reviewFacadeOperationTimeout},
+		{name: "validate uses the shared deadline", operation: "review.validate", want: reviewFacadeOperationTimeout},
+		{name: "unknown operation uses the shared deadline", operation: "review.unknown", want: reviewFacadeOperationTimeout},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := reviewFacadeOperationDeadline(tt.operation); got != tt.want {
+				t.Fatalf("reviewFacadeOperationDeadline(%q) = %s, want %s", tt.operation, got, tt.want)
+			}
+		})
+	}
+	if reviewFacadeStartOperationTimeout <= reviewFacadeOperationTimeout {
+		t.Fatalf("reviewFacadeStartOperationTimeout = %s, want > shared deadline %s", reviewFacadeStartOperationTimeout, reviewFacadeOperationTimeout)
+	}
+}
+
+// TestReviewFacadeFinalizeStateValidating is the RED-first proof for the
+// shared 1663/1788 fix site: a lineage-only finalize call at StateValidating
+// with no request evidence used to silently return "continue the current
+// review state" without ever consuming canonical captured evidence or telling
+// the caller why nothing happened.
+func TestReviewFacadeFinalizeStateValidating(t *testing.T) {
+	setup := func(t *testing.T) (string, ReviewFacadeStartResult) {
+		t.Helper()
+		repo := initReviewCLIRepo(t)
+		if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte(strings.Repeat("candidate line\n", 40)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		started := startFacadeReview(t, repo)
+		if len(started.SelectedLenses) == 0 {
+			t.Fatal("fixture must select at least one lens to reach StateValidating without native low-risk auto-verification")
+		}
+		finalizeArgs := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, started)...)
+		var output bytes.Buffer
+		if err := RunReviewFacadeFinalize(finalizeArgs, &output); err != nil {
+			t.Fatalf("submit reviewer results: %v\n%s", err, output.String())
+		}
+		result := decodeFacadeFinalize(t, output.Bytes())
+		if result.State != reviewtransaction.StateValidating {
+			t.Fatalf("fixture did not reach validating: %#v", result)
+		}
+		return repo, started
+	}
+
+	t.Run("issue-1663: canonical captured evidence is consumed, not ignored", func(t *testing.T) {
+		repo, started := setup(t)
+		store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		record, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
+		if err := os.WriteFile(evidencePath, []byte("focused tests pass\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := RunReviewCaptureEvidence([]string{
+			"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.CurrentSnapshot.Identity,
+			"--expected-revision", record.Revision, "--input", evidencePath,
+		}, io.Discard); err != nil {
+			t.Fatalf("capture evidence out of band: %v", err)
+		}
+
+		var output bytes.Buffer
+		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID}, &output); err != nil {
+			t.Fatalf("lineage-only finalize with canonical captured evidence failed: %v\n%s", err, output.String())
+		}
+		result := decodeFacadeFinalize(t, output.Bytes())
+		if result.State == reviewtransaction.StateValidating {
+			t.Fatalf("lineage-only finalize did not consume canonical captured evidence, stayed validating: %#v", result)
+		}
+	})
+
+	t.Run("issue-1788: no evidence anywhere is a typed rejection, not a silent success", func(t *testing.T) {
+		repo, started := setup(t)
+		var output bytes.Buffer
+		err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID}, &output)
+		if err == nil {
+			t.Fatalf("lineage-only finalize with no evidence anywhere silently succeeded: %s", output.String())
+		}
+		var noTransition *ErrReviewFinalizeNoTransition
+		if !errors.As(err, &noTransition) {
+			t.Fatalf("no-evidence finalize error = %T %v, want *ErrReviewFinalizeNoTransition", err, err)
+		}
+		for _, want := range []string{"gentle-ai review capture-evidence", "gentle-ai review finalize --lineage " + started.LineageID + " --captured-evidence"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("no-transition error = %q, want it to name %q verbatim", err.Error(), want)
+			}
+		}
+	})
 }
 
 func assertFacadeReceiptReplayRejected(t *testing.T, fixture facadeReceiptPendingFixture, args []string) {
