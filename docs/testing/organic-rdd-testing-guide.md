@@ -165,39 +165,15 @@ The quickest way to land on `execute` is to ask before any review has started, o
 
 ### Flow 12: Finalize without evidence says what to do
 
-**Getting to `validating` — three testers in a row marked this N/A because the guide never said how.** You do not have to invent a reviewer payload: the tool ships the schema and a working example, and the transition tells you every flag. Nothing below is made up; all of it comes out of the product.
+**This flow needs a review in `validating`, and getting there is part of the test.** Do not look it up here and do not read the source: start a review that selects lenses (the Flow 4 auth change works) and find your way to `validating` using only what the tool tells you.
 
-Start a review that selects lenses (the Flow 4 auth change works), then repeat this once per lens until the transition stops asking:
+That is deliberate. Three testers in a row marked this N/A because they could not work out how to produce the reviewer-result payload `capture-result --input` demands. That was not their failure, it was the finding: the product has a command that emits the schema with a working example and nothing pointed at it. It should now point at it from both the flag help and the refusal.
 
-```
-gentle-ai review status --lineage <id> --next-transition \
-  --contract gentle-ai.review-integration/v1 --cwd . > /tmp/rdd-out/nt.json
-```
-
-1. [ ] Build the flags from the payload itself. Every entry of `collect.inputs[0].arguments` is one `--name=value`:
-
-```
-jq -r '[.next_transition.collect.inputs[0].arguments[] | "--\(.name)=\(.value)"] | join(" ")' /tmp/rdd-out/nt.json
-```
-
-2. [ ] Build the reviewer result from the schema's own example, replacing only the two values the payload gives you:
-
-```
-gentle-ai review schema reviewer \
-  | jq --arg s "$SUBJECT_HASH" --argjson p "$PATHS" \
-       '.examples[0] | .subject_hash=$s | .inspection.paths=$p' > /tmp/rdd-out/rev.json
-```
-
-`$SUBJECT_HASH` is `collect.inputs[0].artifact_subject.subject_hash` and `$PATHS` is the list of `changed_path_manifest[].path`, both from the same file.
-
-3. [ ] `gentle-ai review capture-result <those flags> --input /tmp/rdd-out/rev.json` — **without `--cwd`**, because the flags already carry `--repository-context` and passing both is refused.
-4. [ ] When `kind` becomes `execute` instead of `collect`, run `gentle-ai review finalize --lineage <id> --captured-results=true --cwd .` → **Expected**: exit 0 and the state is now `validating`.
-
-**Note what happened while you did that.** Getting the invocation wrong produces refusals that each name the fix: a wrong binding tells you to check lineage/target/lens/order, passing both `--repository-context` and `--cwd` says so outright, and finalizing early names `capture-result` plus the exact status command that prints the bindings. If any of those leaves you guessing, that is the report.
+1. [ ] Work your way to `validating` from the tool's own output → **Expected**: every refusal along the way names what to do next. Write down each one that does not, and what you had to guess. **If you cannot get there without reading source or asking someone, stop and report that** — it is worth more than a PASS on the step below.
 
 **The actual test:**
 
-5. [ ] With that review in `validating` and no captured evidence, run `gentle-ai review finalize --lineage <id> --cwd .` → **Expected**: an error that **names both commands** to get out:
+2. [ ] With that review in `validating` and no captured evidence, run `gentle-ai review finalize --lineage <id> --cwd .` → **Expected**: an error that **names both commands** to get out:
 
 ```
 finalize for lineage "<id>" had no verification evidence to consume and made no

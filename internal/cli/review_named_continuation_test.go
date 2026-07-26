@@ -94,6 +94,15 @@ func TestEveryNamedReviewContinuationIsStructurallyReal(t *testing.T) {
 				site.file, site.line, site.verb, site.literal)
 			continue
 		}
+		// A continuation that names no flag needs no FlagSet. Some verbs
+		// legitimately have none at all -- `review schema` takes a positional
+		// name -- so resolving flags unconditionally would fail the guard on a
+		// perfectly valid refusal. The verb check above still applies to every
+		// site; only flag resolution is skipped, and only when there is nothing
+		// to resolve.
+		if len(site.flags) == 0 {
+			continue
+		}
 		flags, cached := flagCache[site.verb]
 		if !cached {
 			flags = reviewNamedContinuationVerbFlags(t, site.verb)
