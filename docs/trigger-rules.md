@@ -81,8 +81,12 @@ or optional SDD routing without starting, retrying, or re-enabling review on the
 user's behalf. Existing exact governing receipts remain authoritative; otherwise native review delivery gates report `disabled/unmanaged` and
 defer to ordinary repository policy without fabricating approval.
 
-The current unstable RDD line has two known limitations: `sdd-archive` requires `reviewGate.result: allow`; the SDD pre-verify status
-path can still require review while review mode is disabled. See
+The current unstable RDD line has two known limitations, both in SDD while
+review mode is disabled. The pre-verify status path can still require review.
+And the native archive gate now reports `disabled/unmanaged` and lets archive
+proceed, but the `sdd-archive` skill still requires `reviewGate.result: allow`
+in its own contract, so an agent following that skill blocks where the product
+no longer does. See
 [Organic RDD known limitations](architecture/organic-rdd.md#9-known-open).
 
 ## Installation and refresh
