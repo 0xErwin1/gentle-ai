@@ -159,8 +159,33 @@ type RDDDisabledError struct {
 	Source    RDDModeSource
 }
 
+// Error names the exact command that turns reviews back on, scoped to the
+// source that actually decided. Refusing here is correct -- the operator asked
+// for reviews to be off -- but a refusal that exits non-zero and names no
+// runnable continuation is the one shape this project does not ship. The scope
+// is derived rather than generic so the operator does not have to work out
+// which of the two independent sources they need to change.
 func (err *RDDDisabledError) Error() string {
-	return fmt.Sprintf("%v: %s is rejected because the %s mode source keeps it off", ErrRDDDisabled, err.Operation, err.Source)
+	message := fmt.Sprintf("%v: %s is rejected because the %s mode source keeps it off", ErrRDDDisabled, err.Operation, err.Source)
+	if scope := reviewModeScopeForSource(err.Source); scope != "" {
+		return fmt.Sprintf("%s; turn it back on with gentle-ai review mode enable --scope=%s", message, scope)
+	}
+	return message
+}
+
+// reviewModeScopeForSource maps the deciding source onto the --scope value of
+// `gentle-ai review mode enable`. The default source expresses no opinion, so
+// it can never be what keeps reviews off and gets no continuation rather than
+// a guessed one.
+func reviewModeScopeForSource(source RDDModeSource) string {
+	switch source {
+	case RDDModeSourceGlobal:
+		return "global"
+	case RDDModeSourceCloneLocal:
+		return "clone"
+	default:
+		return ""
+	}
 }
 
 func (err *RDDDisabledError) Unwrap() error { return ErrRDDDisabled }
