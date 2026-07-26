@@ -180,6 +180,15 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 				candidate.correctionRecovery = compactEscalatedRecoveryTargetChanged(state.CurrentSnapshot, live)
 				if candidate.correctionRecovery {
 					candidate.recoveryDisposition = RecoveryEscalated
+				} else if compactAccountingOnlyEscalation(state) {
+					// An accounting-only escalation (both original review and
+					// correction regression passed; only the cumulative
+					// correction line count crossed the budget) has a native
+					// evidence-bound RecoveryEscalated edge that does not
+					// require a changed target. Offering it here mirrors that
+					// edge instead of dead-ending the operator at Stop.
+					candidate.correctionRecovery = true
+					candidate.recoveryDisposition = RecoveryEscalated
 				} else if eligibility, ok, inspectErr := InspectCompactFinalVerificationRetrySource(ctx, repo, state.LineageID, candidate.compact.Revision); inspectErr != nil {
 					return targetStatusFailure(base, inspectErr)
 				} else if ok {
@@ -244,9 +253,20 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 		return scopeChangedCandidates[i].lineage < scopeChangedCandidates[j].lineage
 	})
 	if len(candidates) == 0 && len(scopeChangedCandidates) > 1 {
-		base.Applicability = TargetApplicabilityAmbiguous
-		base.Action = TargetStatusActionSelectLineage
-		base.Replayability = ReplayabilityStatusRequired
+		// Two or more stale (scope-changed) lineages never decide anything
+		// by themselves: with no EXACTLY governing candidate, nothing
+		// governs this live target, so the sole continuation is the same
+		// "start fresh" shape the zero-candidate case already reports below
+		// (including its own overlay+staged safety stop, a live-projection
+		// check unrelated to lineage history). The stale lineages stay
+		// listed in CandidateLineageIDs purely so recovering one of them
+		// remains a discoverable OPTION, never a required disambiguation
+		// chore forced by history alone.
+		base.Applicability = TargetApplicabilityUnrelated
+		base.Action, base.Replayability = TargetStatusActionStart, ReplayabilityNotReplayable
+		if live.Kind == TargetBaseWorkspaceOverlay && live.Projection == ProjectionStaged {
+			base.Action, base.Replayability = TargetStatusActionStop, ReplayabilityManualActionRequired
+		}
 		for _, candidate := range scopeChangedCandidates {
 			base.CandidateLineageIDs = append(base.CandidateLineageIDs, candidate.lineage)
 		}

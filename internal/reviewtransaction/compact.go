@@ -1176,6 +1176,58 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 	return state.Validate()
 }
 
+// CompactEscalationAccounting labels are deliberately distinct so no consumer
+// ever confuses a remaining-budget value with the frozen total, mirroring the
+// sddstatus.RemediationState precedent (CorrectionBudgetRemaining/Total).
+const (
+	CompactEscalationCauseBudgetExceeded             = "budget_exceeded"
+	CompactEscalationCauseOriginalCriteriaFailed     = "original_criteria_failed"
+	CompactEscalationCauseCorrectionRegressionFailed = "correction_regression_failed"
+)
+
+// CompactEscalationAccounting derives the spent/remaining/total correction
+// budget bookkeeping for a compact authority, instead of persisting it.
+// Spent and Total are already-persisted fields (CumulativeCorrectionLines,
+// CorrectionBudget); Remaining is their difference, clamped at 0 so an
+// over-budget escalation never renders a negative value on a visible
+// surface.
+type CompactEscalationAccounting struct {
+	// Cause names which of the three compact.go BindCorrection escalation
+	// conditions triggered, in the same precedence the source checks them:
+	// budget exceeded first, then a failed original-criteria check, then a
+	// failed correction-regression check. Empty when the state is not
+	// escalated.
+	Cause     string
+	Spent     int
+	Remaining int
+	Total     int
+}
+
+// EscalationAccounting reports the correction budget bookkeeping behind an
+// escalation, deriving it from already-persisted fields so no new schema or
+// Validate() invariant is required.
+func (state CompactState) EscalationAccounting() CompactEscalationAccounting {
+	remaining := state.CorrectionBudget - state.CumulativeCorrectionLines
+	if remaining < 0 {
+		remaining = 0
+	}
+	accounting := CompactEscalationAccounting{
+		Spent: state.CumulativeCorrectionLines, Remaining: remaining, Total: state.CorrectionBudget,
+	}
+	if state.State != StateEscalated {
+		return accounting
+	}
+	switch {
+	case state.CumulativeCorrectionLines > state.CorrectionBudget:
+		accounting.Cause = CompactEscalationCauseBudgetExceeded
+	case state.OriginalCriteria != nil && !state.OriginalCriteria.Passed:
+		accounting.Cause = CompactEscalationCauseOriginalCriteriaFailed
+	case state.CorrectionRegression != nil && !state.CorrectionRegression.Passed:
+		accounting.Cause = CompactEscalationCauseCorrectionRegressionFailed
+	}
+	return accounting
+}
+
 func (state *CompactState) CompleteVerification(evidence []byte, approved bool) error {
 	if state.State != StateValidating {
 		return fmt.Errorf("cannot complete verification from compact state %q", state.State)

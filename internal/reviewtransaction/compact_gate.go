@@ -193,7 +193,7 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 			return invalid("repository empty tree cannot be derived: "+emptyTreeErr.Error(), emptyTreeErr)
 		}
 		if record.State.InitialSnapshot.UnbornHead && record.State.InitialSnapshot.BaseTree == emptyTree {
-			return invalid("first publication cannot be derived from an empty-base review receipt; commit an authorized empty root, then run committed base-diff review")
+			return invalid("first publication cannot be derived from an empty-base review receipt; commit an authorized empty root, then run gentle-ai review start --committed-only with --base-ref set to that commit's SHA")
 		}
 	}
 	request, nextSliceIntended, err := buildCompactGateRequest(ctx, repo, record.State, input)
