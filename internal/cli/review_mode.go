@@ -388,13 +388,18 @@ func reviewConsentPrompt(assessment reviewtransaction.RiskAssessment) string {
 const reviewConsentMediumReason = "this change is not purely passive documentation, so it gets one consolidated review."
 
 // reviewConsentReason states why this candidate is reviewed, in the user's own
-// terms. Tier 1 is one consolidated review; tier 2 names the evidence that
-// triggered the deeper review, so its extra cost is never unexplained.
+// terms. Both tiers name the evidence that triggered them through the same
+// phrasing helper, so neither review's cost is ever unexplained: tier 1 keeps
+// the consolidated-review sentence and appends what made the candidate
+// non-passive (issue #1827); tier 2 names what triggered the deeper review.
 func reviewConsentReason(assessment reviewtransaction.RiskAssessment) string {
-	if assessment.Level != reviewtransaction.RiskHigh {
-		return reviewConsentMediumReason
-	}
 	evidence := reviewConsentEvidence(assessment.Reasons)
+	if assessment.Level != reviewtransaction.RiskHigh {
+		if evidence == "" {
+			return reviewConsentMediumReason
+		}
+		return reviewConsentMediumReason + " The review starts from " + evidence + "."
+	}
 	if evidence == "" {
 		return "this change touches something sensitive, so it gets a deeper review."
 	}
@@ -419,15 +424,17 @@ func reviewConsentEvidence(reasons []reviewtransaction.RiskReason) string {
 // reviewConsentRiskEvidence projects an already-classified assessment into
 // the risk_evidence phrases a non-interactive START result carries. It is an
 // output-only projection of facts the start already computed: tier 2 names
-// the triggering evidence, tier 1 relays the exact consolidated-review reason
-// the consent prompt speaks, and tier 0 stays nil so the omitempty field is
-// absent rather than empty-string noise.
+// the triggering evidence, tier 1 leads with the exact consolidated-review
+// reason the consent prompt speaks and appends the same evidence phrases so
+// the path that made the candidate non-passive is named (issue #1827), and
+// tier 0 stays nil so the omitempty field is absent rather than empty-string
+// noise.
 func reviewConsentRiskEvidence(assessment reviewtransaction.RiskAssessment) []string {
 	switch assessment.Level {
 	case reviewtransaction.RiskHigh:
 		return reviewConsentEvidencePhrases(assessment.Reasons)
 	case reviewtransaction.RiskMedium:
-		return []string{reviewConsentMediumReason}
+		return append([]string{reviewConsentMediumReason}, reviewConsentEvidencePhrases(assessment.Reasons)...)
 	default:
 		return nil
 	}
@@ -466,6 +473,10 @@ func reviewConsentEvidenceSubject(reason reviewtransaction.RiskReason) string {
 		return "code that starts other processes"
 	case reviewtransaction.RiskReasonExecutableMode:
 		return "an executable permission change"
+	case reviewtransaction.RiskReasonExecutableChange:
+		return "an executable change"
+	case reviewtransaction.RiskReasonConfigurationChange:
+		return "a configuration change"
 	case reviewtransaction.RiskReasonHotPath:
 		return reviewConsentSignalSubject(reason.Signal)
 	default:

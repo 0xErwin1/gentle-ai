@@ -70,6 +70,8 @@ func TestReviewFacadeStartHighRiskCarriesConsentEvidencePhrases(t *testing.T) {
 // relays the same consolidated-review reason the interactive consent prompt
 // speaks, so a headless agent can explain WHY a review is wanted. Issue #1822:
 // the phrase must come from the one shared wording source, never a second copy.
+// Issue #1827: the reason alone is not enough — the start must also name the
+// evidence path that made the candidate non-passive.
 func TestReviewFacadeStartMediumRiskCarriesConsentReason(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "view.go"), []byte("package view\n\nconst label = \"candidate\"\n"), 0o644); err != nil {
@@ -86,11 +88,15 @@ func TestReviewFacadeStartMediumRiskCarriesConsentReason(t *testing.T) {
 	if started.RiskLevel != reviewtransaction.RiskMedium {
 		t.Fatalf("plain-source start risk = %q, want medium", started.RiskLevel)
 	}
-	if len(started.RiskEvidence) != 1 {
-		t.Fatalf("medium start risk_evidence = %#v, want exactly the one consolidated-review reason", started.RiskEvidence)
+	if len(started.RiskEvidence) == 0 || started.RiskEvidence[0] != reviewConsentMediumReason {
+		t.Fatalf("medium start risk_evidence = %#v, want the consolidated-review reason first", started.RiskEvidence)
 	}
-	// Prompt parity: the JSON reason must be byte-identical to the Why line the
-	// interactive consent prompt speaks for the same assessed candidate.
+	want := "an executable change in view.go"
+	if !reflect.DeepEqual(started.RiskEvidence[1:], []string{want}) {
+		t.Fatalf("medium start risk_evidence = %#v, want the evidence phrase %q after the reason", started.RiskEvidence, want)
+	}
+	// Prompt parity: every phrase the START result carries must be spoken by
+	// the interactive consent prompt for the same assessed candidate.
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
 	intended, err := builder.DiscoverIntendedUntracked(context.Background())
 	if err != nil {
@@ -107,8 +113,67 @@ func TestReviewFacadeStartMediumRiskCarriesConsentReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	prompt := reviewConsentPrompt(assessment)
-	if !strings.Contains(prompt, "\nWhy: "+started.RiskEvidence[0]+"\n") {
-		t.Fatalf("interactive consent prompt %q does not speak the start reason %q", prompt, started.RiskEvidence[0])
+	for _, phrase := range started.RiskEvidence {
+		if !strings.Contains(prompt, phrase) {
+			t.Fatalf("interactive consent prompt %q does not speak phrase %q", prompt, phrase)
+		}
+	}
+}
+
+// TestReviewConsentRiskEvidenceMediumNamesEvidencePath pins issue #1827: the
+// medium tier keeps the consolidated-review sentence first and appends the
+// same evidence phrases the high tier already projects, so the START result
+// names WHICH path made the candidate non-passive.
+func TestReviewConsentRiskEvidenceMediumNamesEvidencePath(t *testing.T) {
+	assessment := reviewtransaction.RiskAssessment{
+		Level: reviewtransaction.RiskMedium,
+		Reasons: []reviewtransaction.RiskReason{
+			{Code: reviewtransaction.RiskReasonExecutableChange, Path: "internal/counter/counter.go"},
+		},
+	}
+
+	want := []string{reviewConsentMediumReason, "an executable change in internal/counter/counter.go"}
+	if got := reviewConsentRiskEvidence(assessment); !reflect.DeepEqual(got, want) {
+		t.Fatalf("medium risk_evidence = %#v, want %#v", got, want)
+	}
+
+	// The interactive Why line speaks the same facts from the same helpers.
+	reason := reviewConsentReason(assessment)
+	for _, phrase := range want {
+		if !strings.Contains(reason, phrase) {
+			t.Fatalf("consent reason %q does not speak phrase %q", reason, phrase)
+		}
+	}
+}
+
+// TestReviewConsentRiskEvidenceMediumWithoutSpeakableReasonsStaysSingle proves
+// the fallback shape is untouched: a medium assessment with no speakable
+// evidence still carries exactly the one consolidated-review reason.
+func TestReviewConsentRiskEvidenceMediumWithoutSpeakableReasonsStaysSingle(t *testing.T) {
+	assessment := reviewtransaction.RiskAssessment{Level: reviewtransaction.RiskMedium}
+
+	want := []string{reviewConsentMediumReason}
+	if got := reviewConsentRiskEvidence(assessment); !reflect.DeepEqual(got, want) {
+		t.Fatalf("medium risk_evidence without speakable reasons = %#v, want %#v", got, want)
+	}
+	if reason := reviewConsentReason(assessment); reason != reviewConsentMediumReason {
+		t.Fatalf("consent reason without speakable reasons = %q, want %q", reason, reviewConsentMediumReason)
+	}
+}
+
+// TestReviewConsentRiskEvidenceHighTierUnchanged guards the tier-2 projection:
+// high evidence stays the bare phrases, never the consolidated-review sentence.
+func TestReviewConsentRiskEvidenceHighTierUnchanged(t *testing.T) {
+	assessment := reviewtransaction.RiskAssessment{
+		Level: reviewtransaction.RiskHigh,
+		Reasons: []reviewtransaction.RiskReason{
+			{Code: reviewtransaction.RiskReasonServiceToken, Signal: reviewtransaction.SignalAuth, Path: "service-token.ts"},
+		},
+	}
+
+	want := []string{"service credentials in service-token.ts"}
+	if got := reviewConsentRiskEvidence(assessment); !reflect.DeepEqual(got, want) {
+		t.Fatalf("high risk_evidence = %#v, want %#v", got, want)
 	}
 }
 
