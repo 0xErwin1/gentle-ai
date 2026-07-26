@@ -276,7 +276,15 @@ func ResolveReviewRepositoryContext(ctx context.Context, handle string, binding 
 		return "", errors.New("review repository context identity is invalid")
 	}
 	live, err := reviewRepositoryIdentity(ctx, stored.RepositoryRoot)
-	if err != nil || !sameLocatorDirectory(stored.RepositoryRoot, live.RepositoryRoot) ||
+	if err != nil {
+		// Preserve the exact underlying cause behind the unchanged public
+		// message. A caller cannot distinguish an environmental refusal that
+		// no review action can repair (Git declining the repository outright,
+		// for example for ownership reasons) from a genuine identity change
+		// once the cause has been flattened into prose.
+		return "", &reviewRepositoryContextIdentityError{cause: err}
+	}
+	if !sameLocatorDirectory(stored.RepositoryRoot, live.RepositoryRoot) ||
 		!sameLocatorDirectory(stored.GitCommonDir, live.GitCommonDir) ||
 		!sameLocatorDirectory(stored.GitDir, live.GitDir) || live.RepositoryIdentity != stored.RepositoryIdentity {
 		return "", errors.New("review repository context identity changed")
@@ -286,6 +294,18 @@ func ResolveReviewRepositoryContext(ctx context.Context, handle string, binding 
 	}
 	return live.RepositoryRoot, nil
 }
+
+// reviewRepositoryContextIdentityError reports that the repository bound by a
+// provider-issued context could not be re-identified. Its message is exactly
+// the historical flattened one, so the public failure surface is unchanged,
+// while Unwrap keeps the real cause reachable through errors.As.
+type reviewRepositoryContextIdentityError struct{ cause error }
+
+func (err *reviewRepositoryContextIdentityError) Error() string {
+	return "review repository context identity changed"
+}
+
+func (err *reviewRepositoryContextIdentityError) Unwrap() error { return err.cause }
 
 func validateLiveReviewRepositoryContext(ctx context.Context, repo string, binding ReviewRepositoryContextBinding) error {
 	store, err := CompactAuthoritativeStore(ctx, repo, binding.LineageID)

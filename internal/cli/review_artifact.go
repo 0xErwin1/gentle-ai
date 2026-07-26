@@ -250,11 +250,11 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	var root string
 	var err error
 	if contextHandle != "" {
-		root, err = reviewtransaction.ResolveReviewRepositoryContext(ctx, contextHandle, reviewtransaction.ReviewRepositoryContextBinding{
+		root, err = resolveOpaqueReviewRepositoryRoot(ctx, contextHandle, reviewtransaction.ReviewRepositoryContextBinding{
 			LineageID: *lineage, TargetIdentity: *target, Revision: *revision,
 		})
 		if err != nil {
-			return reviewOpaqueContextFailure("repository_context_unavailable", "refresh the exact native next_transition before retrying")
+			return err
 		}
 	} else {
 		root, err = (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)

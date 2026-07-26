@@ -156,7 +156,9 @@ async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<Re
     const message = errorMessage(cause)
     if (message.includes("flag provided but not defined") && message.includes("-preflight")) return undefined
     const scope = binding.repository_context ? "the provider-issued repository context" : cwd
-    const recovery = binding.repository_context
+    const recovery = gitTrustRefusal(binding, cause)
+      ? GIT_TRUST_REFUSAL_RECOVERY
+      : binding.repository_context
       ? `Refresh the exact native next_transition for lineage ${binding.lineage} before relaunching the lens.`
       : `If lineage ${binding.lineage} was started in a different repository (for example a nested one), ` +
         `set GENTLE_AI_REVIEW_CWD to that repository and relaunch the lens.`
@@ -197,10 +199,37 @@ function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
+// GIT_TRUST_REFUSAL_CODE is the typed, path-free code the native CLI emits
+// when Git itself declines to open the bound repository because it is owned by
+// a different account. It is the one native code an opaque binding surfaces,
+// because the generic message ("refresh the exact native next_transition") is
+// not merely vague for this cause: refreshing a transition cannot change the
+// Git trust context of an already-running host process.
+const GIT_TRUST_REFUSAL_CODE = "git_repository_untrusted"
+
+// GIT_TRUST_REFUSAL_MESSAGE is authored here rather than forwarded from the
+// native stderr, so the opaque path keeps its absolute rule that no native
+// text ever reaches the session transcript. It mirrors the native wording in
+// internal/cli/review_incident.go.
+// It carries its own instruction, so every surface that renders it — including
+// the post-launch capture path, which appends no separate recovery line —
+// tells the caller something they can actually carry out.
+const GIT_TRUST_REFUSAL_MESSAGE =
+  `${GIT_TRUST_REFUSAL_CODE}: Git declined to open the bound repository in this process because it is owned by a ` +
+  `different account; gentle-ai never provisions a safe.directory exception and never bypasses that protection. ` +
+  `Restart the host process under a Git context that already trusts that repository.`
+
+const GIT_TRUST_REFUSAL_RECOVERY =
+  "Relaunch the lens once the host process runs under a Git context that trusts that repository."
+
+function gitTrustRefusal(binding: ReviewBinding, cause: unknown): boolean {
+  return Boolean(binding.repository_context) && new RegExp(`\\b${GIT_TRUST_REFUSAL_CODE}\\b`).test(errorMessage(cause))
+}
+
 function sessionErrorMessage(binding: ReviewBinding, cause: unknown, code: string): string {
-  return binding.repository_context
-    ? `${code}: provider-owned review operation failed; refresh the exact native next_transition or retry the same opaque binding`
-    : errorMessage(cause)
+  if (!binding.repository_context) return errorMessage(cause)
+  if (gitTrustRefusal(binding, cause)) return GIT_TRUST_REFUSAL_MESSAGE
+  return `${code}: provider-owned review operation failed; refresh the exact native next_transition or retry the same opaque binding`
 }
 
 function preservedReference(manifest: string): string {
@@ -236,13 +265,12 @@ async function preservedCaptureFailure(cwd: string, binding: ReviewBinding, raw:
     return new Error(`${captureFailure}; raw reviewer result preserved for recovery as ${preservedReference(manifest)}`)
   } catch (preserveCause) {
     const preserveFailure = sessionErrorMessage(binding, preserveCause, "repository_context_preserve_failed")
-    if (binding.repository_context) {
-      return new Error(
-        `${captureFailure}; ${preserveFailure}; the reviewer task output remains the manual recovery source`,
-      )
-    }
-    // Double failure: durable preservation itself failed, so the transcript
-    // is the only remaining copy — embed the bounded payload in the error.
+    // Double failure: durable preservation itself failed, so the transcript is
+    // the only remaining copy — embed the bounded payload in the error. Both
+    // bindings need this identically: captureResult and preserveResult resolve
+    // the same repository through the same binding path, so one environmental
+    // refusal can fail both, and an opaque binding that omitted the payload
+    // had no equivalent transcript fallback left.
     return new Error(
       `${captureFailure}; raw reviewer result could not be preserved: ${preserveFailure}; ` +
       `raw reviewer result follows for manual recovery:\n${embeddedRawPayload(raw)}`,
