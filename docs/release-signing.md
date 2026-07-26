@@ -73,10 +73,22 @@ If a key may be compromised, stop releases. Do not silently replace a trust anch
 ### Windows distribution restoration gate
 
 Windows source compatibility, CI, and runtime tests remain supported. Official
-Windows executable/archive assets and Scoop publication are temporarily omitted;
-the PowerShell source installer and built-in upgrader fail closed to `go install`
-guidance instead of downloading an unsigned executable or executing a remote
-update script.
+Windows executable/archive assets and Scoop publication are temporarily omitted.
+Because there is no signed Windows asset to download, Windows never downloads an
+unsigned executable and never executes a remote update script. Instead:
+
+- With Go 1.25.10+ on `PATH`, the built-in upgrader runs
+  `go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@vX.Y.Z`,
+  pinned to the exact release tag. This is verified — just against a different
+  trust anchor: the module is checked against the Go checksum database
+  (`sum.golang.org`) rather than our minisign release signature. The upgrader
+  does not disable the checksum database on this path.
+- Without Go on `PATH`, the upgrader fails closed to `go install` guidance and
+  performs no download or execution at all.
+
+Linux and macOS are unaffected by this: they continue to download the signed
+release archive and verify it with minisign, and they never route through
+`go install`.
 
 Restore Windows distribution only after all of these conditions are enforced:
 

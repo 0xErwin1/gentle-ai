@@ -459,10 +459,22 @@ func homebrewFailureAdvice(toolName string, output string, detected ...update.Ho
 }
 
 // goInstallUpgrade runs `go install <importPath>@v<version>`.
+//
+// `go install` writes to GOBIN (or GOPATH/bin), which is not necessarily the
+// directory the user's shell resolves for the tool. After a successful install
+// the destination is compared against the effective binary so a silent no-op
+// upgrade cannot pass as a clean success. A mismatch, or a destination that
+// cannot be resolved, is reported as a warning — never as a failure, because
+// the new binary genuinely was written.
 func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion string) error {
 	if tool.GoImportPath == "" {
 		return fmt.Errorf("upgrade %q: GoImportPath is empty — cannot run go install", tool.Name)
 	}
+
+	// GOBIN/GOPATH are static Go configuration that `go install` does not
+	// change, so they are read up front; the PATH lookup happens afterwards so
+	// a first-time install resolves correctly.
+	destDir, destErr := goInstallDestinationDir()
 
 	// Pin to the exact release version.
 	target := fmt.Sprintf("%s@v%s", tool.GoImportPath, latestVersion)
@@ -471,6 +483,8 @@ func goInstallUpgrade(ctx context.Context, tool update.ToolInfo, latestVersion s
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go install %s: %w (output: %s)", target, err, string(out))
 	}
+
+	warnGoInstallDestination(tool.Name, detectOS(), destDir, destErr)
 	return nil
 }
 
@@ -481,11 +495,18 @@ func isBetaGentleAIUpgrade(r update.UpdateResult) bool {
 		strings.HasPrefix(strings.TrimSpace(r.LatestVersion), "main@")
 }
 
+// goInstallMainUpgrade installs gentle-ai from HEAD on the beta channel. It runs
+// the same `go install` mechanism as goInstallUpgrade and therefore carries the
+// same risk of writing somewhere the shell does not resolve, so it performs the
+// same non-fatal destination verification.
 func goInstallMainUpgrade(tool update.ToolInfo) error {
 	module := strings.ToLower(fmt.Sprintf("github.com/%s/%s", strings.TrimSpace(tool.Owner), strings.TrimSpace(tool.Repo)))
 	if module == "github.com//" {
 		module = "github.com/gentleman-programming/gentle-ai"
 	}
+
+	destDir, destErr := goInstallDestinationDir()
+
 	target := module + "/cmd/gentle-ai@main"
 	cmd := execCommand("go", "install", target)
 	cmd.Stdin = nil
@@ -493,6 +514,8 @@ func goInstallMainUpgrade(tool update.ToolInfo) error {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("go install %s: %w (output: %s)", target, err, strings.TrimSpace(string(out)))
 	}
+
+	warnGoInstallDestination(tool.Name, detectOS(), destDir, destErr)
 	return nil
 }
 
