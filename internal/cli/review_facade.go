@@ -461,10 +461,58 @@ type reviewStartContextError struct {
 }
 
 func (err *reviewStartContextError) Error() string {
+	base := fmt.Sprintf("render frozen context before START authority creation for %q: %v", err.LineageID, err.Cause)
 	if err.AuthoritySelected {
-		return fmt.Sprintf("render frozen context for selected durable START authority %q at revision %s: %v", err.LineageID, err.StoreRevision, err.Cause)
+		base = fmt.Sprintf("render frozen context for selected durable START authority %q at revision %s: %v", err.LineageID, err.StoreRevision, err.Cause)
 	}
-	return fmt.Sprintf("render frozen context before START authority creation for %q: %v", err.LineageID, err.Cause)
+	if remedy := reviewStartContextBoundRemedy(err.Cause); remedy != "" {
+		return base + ". " + remedy
+	}
+	return base
+}
+
+// reviewStartContextFailureMessage joins one typed failure headline with the
+// optional numbered remedy. Causes that carry no remedy keep their existing
+// message byte-for-byte, so only the explainable overflow gains new text.
+func reviewStartContextFailureMessage(headline, remedy string) string {
+	if remedy == "" {
+		return headline
+	}
+	return headline + " " + remedy
+}
+
+// reviewStartContextBoundRemedy explains a frozen-context render that failed
+// because the candidate overflowed a bounded Git capture, and returns the empty
+// string for every other cause so unrelated failures are not decorated with an
+// irrelevant size story.
+//
+// It names the exact bound and the exact rendered size because "too large" is
+// not actionable: only the ratio tells a caller whether one file or half the
+// change has to come out. The named way out is to review the change as smaller
+// candidates, which is an action rather than a command on purpose. No flag,
+// projection, or subcommand makes an oversized candidate renderable -- raising
+// the bound would only move the cliff -- and this branch's rule is that a
+// message may name a command only if running it resolves the block, so naming
+// one here would be a lie.
+//
+// The remedy states the success criterion ("candidates that each render under
+// it") rather than a recipe such as "stage fewer paths", because a recipe would
+// be false for the candidate whose single path is itself oversized. Stating the
+// criterion tells that caller the truth too: this change is not reviewable as
+// one unit until it renders smaller.
+func reviewStartContextBoundRemedy(cause error) string {
+	var overflow *reviewtransaction.GitOutputLimitError
+	if !errors.As(cause, &overflow) {
+		return ""
+	}
+	// The typed negotiated envelope caps a failure message at 240 bytes, and
+	// this text has to fit inside it after the longest headline, so it stays
+	// terse on purpose: both numbers, then the action, and nothing else.
+	measured := fmt.Sprintf("It exceeds the %d-byte", overflow.Limit)
+	if overflow.Actual > 0 {
+		measured = fmt.Sprintf("It renders %d bytes against a %d-byte", overflow.Actual, overflow.Limit)
+	}
+	return measured + " reviewer-context bound; review this change as smaller candidates that each render under it."
 }
 
 func (err *reviewStartContextError) Unwrap() error { return err.Cause }
@@ -1261,7 +1309,18 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	var requestedFrozenContext *reviewtransaction.FrozenCandidateContext
 	var requestedRepositoryContext *ReviewRepositoryContextReference
 	var requestedContextErr error
-	if negotiated && len(state.SelectedLenses) > 0 {
+	// Selecting lenses is a promise that reviewer work can be handed out, and
+	// the frozen candidate context is the whole of what a reviewer is handed.
+	// Rendering it here -- for every START that selects lenses, negotiated or
+	// not -- is what keeps that promise checkable before any authority exists.
+	// Gating this on the negotiated form was the defect: the unnegotiated form
+	// only omits the context from its *response*, it does not stop needing the
+	// context to exist, and it committed authority for candidates whose context
+	// could never be rendered. STATUS then had an active authority and no
+	// executable transition, which is the dead end this product refuses to
+	// produce. The render is the same bounded Git capture STATUS would run
+	// anyway, so a candidate that starts here is a candidate STATUS can answer.
+	if len(state.SelectedLenses) > 0 {
 		contextResult, contextErr := renderReviewStartFrozenCandidateContext(ctx, reviewtransaction.SnapshotBuilder{Repo: root}, state.InitialSnapshot)
 		if contextErr != nil {
 			requestedContextErr = &reviewStartContextError{LineageID: state.LineageID, Cause: contextErr}
@@ -1294,17 +1353,22 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			requestedContextErr = &reviewStartContextError{LineageID: state.LineageID, Cause: previewErr}
 		}
 	}
-	var beforeCreate func() error
-	if negotiated {
-		beforeCreate = func() error {
-			if requestedContextErr != nil {
-				return requestedContextErr
-			}
-			if err := (reviewtransaction.SnapshotBuilder{Repo: root}).ValidateLiveSnapshot(ctx, snapshot); err != nil {
-				return reviewPreflightRefusal(reviewPreflightStaleTargetReason, err)
-			}
+	// BeforeCreate runs under the START lock at the new-authority boundary
+	// only, so refusing from it is the one place a START can fail with nothing
+	// persisted. It is wired for both forms because both create authority; the
+	// live-snapshot recheck stays negotiated-only because only the negotiated
+	// form carries the caller-supplied --target whose freshness it defends.
+	beforeCreate := func() error {
+		if requestedContextErr != nil {
+			return requestedContextErr
+		}
+		if !negotiated {
 			return nil
 		}
+		if err := (reviewtransaction.SnapshotBuilder{Repo: root}).ValidateLiveSnapshot(ctx, snapshot); err != nil {
+			return reviewPreflightRefusal(reviewPreflightStaleTargetReason, err)
+		}
+		return nil
 	}
 	started, err := reviewtransaction.StartCompactAuthority(ctx, root, reviewtransaction.CompactStartRequest{
 		State: state, TracePath: strings.TrimSpace(*tracePath), ExplicitLineage: explicitLineage, BeforeCreate: beforeCreate,

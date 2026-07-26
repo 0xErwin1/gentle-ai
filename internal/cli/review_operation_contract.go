@@ -442,9 +442,13 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.Code = "candidate_context_unavailable"
 		failure.LineageID = startContext.LineageID
 		failure.RequiredInputs = []string{}
+		remedy := reviewStartContextBoundRemedy(startContext.Cause)
 		if !startContext.AuthoritySelected {
 			failure.Phase = "pre_native"
-			failure.Message = "Frozen candidate context could not be rendered before START authority creation."
+			// The machine envelope carries the same numbers and the same way
+			// out as the human error line. A consumer that only reads this
+			// field would otherwise receive a bare code with nothing to act on.
+			failure.Message = reviewStartContextFailureMessage("Frozen candidate context could not be rendered before START authority creation.", remedy)
 			failure.MutationOutcome = ReviewMutationNotStarted
 			failure.AuthorityApplicability = "not_evaluated"
 			failure.RetrySafe = false
@@ -453,7 +457,7 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 			return failure
 		}
 		failure.Phase = "native_committed"
-		failure.Message = "Frozen candidate context could not be rendered for the selected durable START authority."
+		failure.Message = reviewStartContextFailureMessage("Frozen candidate context could not be rendered for the selected durable START authority.", remedy)
 		failure.MutationOutcome = ReviewMutationUnknown
 		failure.AuthorityApplicability = "current_target"
 		failure.RetrySafe = false

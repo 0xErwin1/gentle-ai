@@ -1171,9 +1171,17 @@ var ErrGitOutputLimit = errors.New("git output exceeded deterministic byte limit
 // than the caller permits. The capture retains at most Limit bytes while the
 // child is drained, so oversized output cannot grow process memory without
 // bound.
+//
+// Actual is the total number of bytes the capture observed while draining,
+// which is what makes an overflow explainable rather than merely detectable: a
+// caller told only "you exceeded four mebibytes" cannot tell whether it is over
+// by a kilobyte or by a factor of three, and so cannot judge how much smaller a
+// candidate has to become. It is zero only where the total is genuinely
+// unknown, so a renderer must treat zero as "unmeasured", never as "empty".
 type GitOutputLimitError struct {
-	Args  []string
-	Limit int
+	Args   []string
+	Limit  int
+	Actual int
 }
 
 func (err *GitOutputLimitError) Error() string {
@@ -1305,7 +1313,7 @@ func runGitCaptured(ctx context.Context, repo string, extraEnv []string, stdin [
 		}
 	}
 	if stdout != nil && stdout.exceeded {
-		return nil, &GitOutputLimitError{Args: append([]string{}, args...), Limit: outputLimit}
+		return nil, &GitOutputLimitError{Args: append([]string{}, args...), Limit: outputLimit, Actual: stdout.total}
 	}
 	if rejectStderr && len(diagnostic) != 0 {
 		return nil, fmt.Errorf("git inventory produced diagnostics: %s", strings.TrimSpace(string(diagnostic)))
@@ -1317,10 +1325,16 @@ type boundedGitOutput struct {
 	buffer   bytes.Buffer
 	limit    int
 	exceeded bool
+	// total counts every byte the child produced, including the bytes past
+	// the limit that are deliberately discarded. Counting is free -- the
+	// child is drained regardless -- and it is the only place the true size
+	// is ever visible, because nothing downstream retains the discarded tail.
+	total int
 }
 
 func (output *boundedGitOutput) Write(payload []byte) (int, error) {
 	written := len(payload)
+	output.total += written
 	remaining := output.limit - output.buffer.Len()
 	if remaining > 0 {
 		if remaining > len(payload) {
