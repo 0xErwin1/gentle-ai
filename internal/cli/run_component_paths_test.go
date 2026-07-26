@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -386,49 +385,13 @@ func TestComponentPathsEngramCodexIncludesConfigTOML(t *testing.T) {
 	}
 }
 
-// TestComponentPathsPermissionsCodexExcludesMissingConfigTOML verifies that
-// ComponentPermission + Codex does not report ~/.codex/config.toml when the
-// file does not exist: cleanup never creates it, so post-apply verification
-// must not require it.
-func TestComponentPathsPermissionsCodexExcludesMissingConfigTOML(t *testing.T) {
-	home := t.TempDir()
-	adapters := resolveAdapters([]model.AgentID{model.AgentCodex})
-
-	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentPermission)
-
-	unwanted := filepath.Join(home, ".codex", "config.toml")
-	if containsPath(paths, unwanted) {
-		t.Fatalf("componentPaths(permissions,codex) must not include missing %q\npaths=%v", unwanted, paths)
-	}
-}
-
-// TestComponentPathsPermissionsCodexIncludesConfigTOMLOnUnconfirmedStat pins
-// the fail-toward-backup direction: when Stat fails with an error that does
-// not confirm absence (here ENOTDIR because ~/.codex is a file), the path must
-// still be included so backup coverage is never silently dropped.
-func TestComponentPathsPermissionsCodexIncludesConfigTOMLOnUnconfirmedStat(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Stat under a file path does not yield a non-IsNotExist error on Windows")
-	}
-	home := t.TempDir()
-	if err := os.WriteFile(filepath.Join(home, ".codex"), []byte(""), 0o644); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
-	adapters := resolveAdapters([]model.AgentID{model.AgentCodex})
-
-	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentPermission)
-
-	configPath := filepath.Join(home, ".codex", "config.toml")
-	if !containsPath(paths, configPath) {
-		t.Fatalf("componentPaths(permissions,codex) missing %q on unconfirmed stat\npaths=%v", configPath, paths)
-	}
-}
-
-// TestComponentPathsPermissionsCodexIncludesExistingConfigTOML pins backup and
-// rollback coverage: Codex permission cleanup mutates an existing
-// ~/.codex/config.toml, so a Permission-selected run must snapshot it when it
-// exists.
-func TestComponentPathsPermissionsCodexIncludesExistingConfigTOML(t *testing.T) {
+// TestComponentPathsPermissionsCodexContributesNoPaths pins that the
+// Permission component claims nothing under ~/.codex. gentle-ai does not write
+// Codex's permissions config — not a profile, and not the legacy cleanup that
+// used to strip one — so there is no injection target to verify and nothing to
+// snapshot for rollback. A path reappearing here would mean something started
+// writing that file again (#1794).
+func TestComponentPathsPermissionsCodexContributesNoPaths(t *testing.T) {
 	home := t.TempDir()
 	configPath := filepath.Join(home, ".codex", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
@@ -441,8 +404,8 @@ func TestComponentPathsPermissionsCodexIncludesExistingConfigTOML(t *testing.T) 
 
 	paths := componentPaths(home, model.Selection{}, adapters, model.ComponentPermission)
 
-	if !containsPath(paths, configPath) {
-		t.Fatalf("componentPaths(permissions,codex) missing existing %q\npaths=%v", configPath, paths)
+	if len(paths) != 0 {
+		t.Fatalf("componentPaths(permissions,codex) = %v, want none", paths)
 	}
 }
 
