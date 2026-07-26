@@ -201,6 +201,65 @@ gentle-ai review validate --gate pre-commit --contract gentle-ai.review-integrat
 
 ---
 
+## Flows 20 to 23: macOS only
+
+**Why these exist.** CI runs unit tests on Ubuntu and has a native lane for Windows. It has none for Darwin, and @edwinsaavedran showed in #1853 that four macOS defects reached a release through that hole: `/var` path aliasing (#1773), `EPERM` under managed profiles (#1781), reviewer-result publication on ExFAT (#1804), and first-use store contention (#1850).
+
+Cross-compiling with `GOOS=darwin` proves the code builds. It proves nothing about APFS, temp-directory aliases, Darwin advisory locks, or real `git` path output. Only a Mac can answer these, which is why they are here and not in CI.
+
+**Run these on macOS only.** On Linux or Windows, mark them N/A and move on.
+
+### Flow 20: The `/var` alias (#1773)
+
+macOS puts `$TMPDIR` under `/var/folders/...`, and `/var` is a symlink to `/private/var`. The same repository therefore has two valid absolute paths, and authority bound to one must be found from the other.
+
+1. [ ] `cd "$(mktemp -d)"` and set up a throwaway repo there → note the path `git rev-parse --show-toplevel` prints.
+2. [ ] Run a full cycle in it: `review start`, then `review finalize`, then `review validate --gate pre-commit` → **Expected**: it completes. No "no discoverable review lineage", no path-shaped error.
+3. [ ] Now `cd` into the **other** spelling of the same directory (add or remove the `/private` prefix) and run `review status --cwd "$PWD"` → **Expected**: the same lineage, same state. If it reports no authority, that is the defect: paste both paths.
+
+### Flow 21: Reviewer results on ExFAT (#1804)
+
+macOS lacks the exclusive-rename primitive on ExFAT, so publication falls back to an exclusive-create copy. That fallback only ever runs on a real ExFAT volume.
+
+1. [ ] Make one and mount it:
+
+```bash
+hdiutil create -size 200m -fs ExFAT -volname RDDTEST /tmp/rddtest.dmg
+hdiutil attach /tmp/rddtest.dmg
+```
+
+If `hdiutil` rejects the filesystem name, `hdiutil create -help` lists the ones your macOS version accepts. A real ExFAT USB stick works just as well, and any external volume you already have formatted that way is fine.
+
+2. [ ] Create a throwaway repo **on that volume** (`/Volumes/RDDTEST`), make a change, and run `review start` → `review capture-result` → `review finalize`.
+3. [ ] → **Expected**: the reviewer result publishes and finalize reaches its normal terminal state. A raw `ENOTSUP`, `EINVAL` or `operation not supported` reaching you is the defect.
+4. [ ] Detach with `hdiutil detach /Volumes/RDDTEST` when done.
+
+### Flow 22: First-use store contention (#1850) — **known open, we want the current state**
+
+This one is **not fixed**. @edwinsaavedran reported that concurrent first use of a new runtime store leaks a raw `ENOENT` to the losing writers instead of a typed conflict. It is fail-closed, exactly one writer still commits, and no ledger was corrupted, but a controller cannot classify or retry an untyped errno.
+
+This needs a source checkout rather than the released binary. From the branch under test:
+
+```bash
+TMPDIR=/private/tmp GIT_CONFIG_NOSYSTEM=1 \
+  go test -p=1 ./internal/sddstatus \
+  -run '^TestRuntimeLedgerCASAllowsOnlyOneConcurrentOrdinal$' -count=20
+```
+
+1. [ ] → **Expected today**: it may still fail. The reporter saw 16 of 20 and 9 of 10 iterations fail on two independent runs.
+2. [ ] Report **how many iterations of 20 failed**, and whether the failure is still `review store lock could not be acquired: no such file or directory` or something else.
+
+A clean 20 of 20 is just as valuable as a failure: it tells us whether the rate moved, and we have no Mac in CI to ask.
+
+### Flow 23: Managed profiles (#1781)
+
+Only reproducible on a Mac under an MDM or corporate configuration profile, which cannot be staged on a personal machine.
+
+1. [ ] If your Mac is company-managed, run the ordinary `review start` → `finalize` → `validate` cycle → **Expected**: it completes, or fails with a typed permission error naming what to do.
+2. [ ] A raw `EPERM` or `operation not permitted` with no continuation is the defect. Say which profile restrictions apply if you can.
+
+---
+
 ## How to measure properly (read this before reporting)
 
 Three things that made earlier reports measure the wrong thing. They are not bugs, they are environment traps:
