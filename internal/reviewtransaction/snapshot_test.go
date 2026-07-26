@@ -1011,6 +1011,32 @@ func TestEmptyIndexInventoryHelperProcess(t *testing.T) {
 	os.Exit(23)
 }
 
+// TestResolveCurrentChangesBaseUnbornHeadSelectorFree proves 1771: a
+// selector-free (workspace-projection) status call on an unborn HEAD must
+// resolve to the repository-native empty tree, exactly as the staged
+// projection path already does, instead of surfacing the raw Git command
+// failure from `git rev-parse HEAD`.
+func TestResolveCurrentChangesBaseUnbornHeadSelectorFree(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initUnbornSnapshotRepo(t)
+	builder := SnapshotBuilder{Repo: repo}
+
+	baseTree, unborn, err := builder.resolveCurrentChangesBase(context.Background(), ProjectionWorkspace)
+	if err != nil {
+		var commandErr *GitCommandError
+		if errors.As(err, &commandErr) {
+			t.Fatalf("resolveCurrentChangesBase(workspace, unborn HEAD) surfaced a raw git failure: %v", err)
+		}
+		t.Fatalf("resolveCurrentChangesBase(workspace, unborn HEAD) error = %v, want empty-tree resolution", err)
+	}
+	if !unborn {
+		t.Fatal("resolveCurrentChangesBase(workspace, unborn HEAD) unborn = false, want true")
+	}
+	if want := gitSnapshotEmptyTree(t, repo); baseTree != want {
+		t.Fatalf("baseTree = %q, want repository-native empty tree %q", baseTree, want)
+	}
+}
+
 func TestSnapshotBuilderCurrentChangesSupportsUnbornHeadStagedProjection(t *testing.T) {
 	requireSnapshotGit(t)
 	repo := initUnbornSnapshotRepo(t)
@@ -1078,21 +1104,38 @@ func TestSnapshotBuilderUnbornHeadWithNothingStagedRefusesActionably(t *testing.
 	}
 }
 
+// TestSnapshotBuilderCurrentChangesSupportsUnbornHeadWorkspaceProjection
+// proves 1771 at the full Build() level: a selector-free (workspace
+// projection) current-changes target on an unborn HEAD resolves to the
+// empty-tree base and the staged candidate, exactly like the existing staged
+// projection path, instead of failing with a raw Git command error.
+func TestSnapshotBuilderCurrentChangesSupportsUnbornHeadWorkspaceProjection(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initUnbornSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "candidate.txt", "reviewed\n")
+	gitSnapshot(t, repo, "add", "--", "candidate.txt")
+	expectedCandidate := strings.TrimSpace(gitSnapshot(t, repo, "write-tree"))
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, Projection: ProjectionWorkspace, IntendedUntracked: []string{},
+	})
+	if err != nil {
+		t.Fatalf("Build(unborn workspace) error = %v", err)
+	}
+	if !snapshot.UnbornHead {
+		t.Fatal("Build(unborn workspace) UnbornHead = false, want true")
+	}
+	if want := gitSnapshotEmptyTree(t, repo); snapshot.BaseTree != want {
+		t.Fatalf("BaseTree = %q, want repository-native empty tree %q", snapshot.BaseTree, want)
+	}
+	if snapshot.CandidateTree != expectedCandidate {
+		t.Fatalf("CandidateTree = %q, want staged index tree %q", snapshot.CandidateTree, expectedCandidate)
+	}
+}
+
 func TestSnapshotBuilderRealGitFailuresAreNotTreatedAsUnborn(t *testing.T) {
 	requireSnapshotGit(t)
 	stagedTarget := Target{Kind: TargetCurrentChanges, Projection: ProjectionStaged, IntendedUntracked: []string{}}
-	t.Run("workspace projection", func(t *testing.T) {
-		repo := initUnbornSnapshotRepo(t)
-		writeSnapshotFile(t, repo, "candidate.txt", "reviewed\n")
-		gitSnapshot(t, repo, "add", "--", "candidate.txt")
-		_, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
-			Kind: TargetCurrentChanges, Projection: ProjectionWorkspace, IntendedUntracked: []string{},
-		})
-		var commandErr *GitCommandError
-		if err == nil || !errors.As(err, &commandErr) {
-			t.Fatalf("unborn workspace error = %v, want the raw git failure", err)
-		}
-	})
 	t.Run("detached HEAD at missing object", func(t *testing.T) {
 		repo := initUnbornSnapshotRepo(t)
 		writeSnapshotFile(t, repo, "candidate.txt", "reviewed\n")

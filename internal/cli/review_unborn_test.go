@@ -59,6 +59,44 @@ func finalizeUnbornFacadeReview(t *testing.T, repo string, started ReviewFacadeS
 	}
 }
 
+// TestReviewFacadeUnbornHeadDefaultProjectionStart proves 1771 on the direct
+// `review start` path (default workspace projection, no --projection flag),
+// which is the exact community repro (lu149e): plain `gentle-ai review start
+// --cwd $PWD` on an unborn-HEAD repository with staged candidate files used
+// to fail with "build facade review target: git rev-parse --verify
+// HEAD^{tree} failed with exit code 128: fatal: Needed a single revision"
+// because resolveCurrentChangesBase only resolved the empty tree for staged
+// projection. It is the same fix site as the selector-free `review status`
+// gap, reached through the direct start path instead.
+func TestReviewFacadeUnbornHeadDefaultProjectionStart(t *testing.T) {
+	repo := initUnbornReviewCLIRepo(t)
+	writeUnbornReviewCandidate(t, repo)
+	runReviewCLIGit(t, repo, "add", "--", "candidate.go", "candidate.md")
+
+	var output bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo}, &output); err != nil {
+		t.Fatalf("unborn default-projection review start: %v", err)
+	}
+	var started ReviewFacadeStartResult
+	if err := json.Unmarshal(output.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+	if started.Projection != reviewtransaction.ProjectionWorkspace || started.ChangedFiles != 2 {
+		t.Fatalf("unborn default-projection start = %#v, want workspace projection over 2 files", started)
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := reviewCLIEmptyTree(t, repo); record.State.InitialSnapshot.BaseTree != want || !record.State.InitialSnapshot.UnbornHead {
+		t.Fatalf("frozen base tree = %#v, want unborn-marked repository-native empty tree %q", record.State.InitialSnapshot, want)
+	}
+}
+
 func TestReviewFacadeUnbornHeadStagedLifecycle(t *testing.T) {
 	repo := initUnbornReviewCLIRepo(t)
 	writeUnbornReviewCandidate(t, repo)
@@ -147,6 +185,42 @@ func TestReviewFacadeUnbornReceiptDeniesFirstPublicationGates(t *testing.T) {
 		}
 		if combined := output.String() + err.Error(); !strings.Contains(combined, "first publication") {
 			t.Fatalf("%s denial = %v, want explicit first-publication denial\n%s", gate, err, output.String())
+		}
+	}
+}
+
+// TestFirstPublicationEmptyBaseReceiptRefusal proves 1641: first publication
+// attempted from an empty-base receipt (unborn HEAD, empty base tree) must be
+// refused with a typed error naming the proven in-product escape verbatim —
+// commit an authorized empty root, then run committed base-diff review —
+// instead of the generic "not supported" denial.
+func TestFirstPublicationEmptyBaseReceiptRefusal(t *testing.T) {
+	repo := initUnbornReviewCLIRepo(t)
+	writeUnbornReviewCandidate(t, repo)
+	runReviewCLIGit(t, repo, "add", "--", "candidate.go", "candidate.md")
+
+	var output bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--projection", "staged"}, &output); err != nil {
+		t.Fatalf("unborn staged review start: %v", err)
+	}
+	var started ReviewFacadeStartResult
+	if err := json.Unmarshal(output.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+	finalizeUnbornFacadeReview(t, repo, started)
+	runReviewCLIGit(t, repo, "commit", "-qm", "first commit")
+	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
+	configureCLIReviewPublicationRemote(t, repo, branch)
+
+	want := "commit an authorized empty root, then run committed base-diff review"
+	for _, gate := range []reviewtransaction.GateKind{reviewtransaction.GatePrePush, reviewtransaction.GatePrePR} {
+		output.Reset()
+		err := RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", started.LineageID, "--gate", string(gate), "--base-ref", "origin/" + branch}, &output)
+		if err == nil {
+			t.Fatalf("%s from an empty-base receipt must be denied\n%s", gate, output.String())
+		}
+		if combined := output.String() + err.Error(); !strings.Contains(combined, want) {
+			t.Fatalf("%s denial = %v, want typed refusal naming %q verbatim (1641)\n%s", gate, err, want, output.String())
 		}
 	}
 }

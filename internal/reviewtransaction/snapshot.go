@@ -812,7 +812,7 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 
 func (builder SnapshotBuilder) resolveCurrentChangesBase(ctx context.Context, projection Projection) (string, bool, error) {
 	baseTree, headErr := builder.resolveTree(ctx, "HEAD")
-	if headErr == nil || projection != ProjectionStaged {
+	if headErr == nil {
 		return baseTree, false, headErr
 	}
 
