@@ -185,7 +185,7 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		denialContext.PrePRBoundary = &PrePRBoundarySelection{Source: PrePRBoundaryExplicit, Selector: strings.TrimSpace(input.BaseRef)}
 	}
 	if receipt.TerminalState == TerminalEscalated {
-		return NativeGateEvaluation{Result: GateEscalated, Reason: nativeGateReason(GateEscalated)}
+		return NativeGateEvaluation{Result: GateEscalated, Reason: compactEscalatedGateReason(record.State)}
 	}
 	if (input.Gate == GatePrePush || input.Gate == GatePrePR) && record.State.InitialSnapshot.Kind == TargetCurrentChanges {
 		emptyTree, emptyTreeErr := (SnapshotBuilder{Repo: repo}).emptyTree(ctx)

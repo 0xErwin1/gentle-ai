@@ -146,12 +146,18 @@ func facadeProjection(projection reviewtransaction.Projection) reviewtransaction
 }
 
 type ReviewFacadeFinalizeResult struct {
-	Operation     string                  `json:"operation"`
-	LineageID     string                  `json:"lineage_id"`
-	State         reviewtransaction.State `json:"state"`
-	Action        string                  `json:"action"`
-	StoreRevision string                  `json:"store_revision"`
-	ReceiptPath   string                  `json:"receipt_path,omitempty"`
+	Operation string                  `json:"operation"`
+	LineageID string                  `json:"lineage_id"`
+	State     reviewtransaction.State `json:"state"`
+	Action    string                  `json:"action"`
+	// Escalation names the correction-budget accounting behind a terminal
+	// escalation, rendered from
+	// reviewtransaction.EscalationAccountingReasonTemplate. It is present only
+	// when the authority actually escalated with a derivable cause, so every
+	// other finalize shape keeps its exact existing output.
+	Escalation    string `json:"escalation,omitempty"`
+	StoreRevision string `json:"store_revision"`
+	ReceiptPath   string `json:"receipt_path,omitempty"`
 }
 
 type ReviewReceiptDiscoveryKind string
@@ -3121,10 +3127,14 @@ func encodeCompactFacadeFinalize(stdout io.Writer, negotiated, actionEligibility
 	if state.State == reviewtransaction.StateApproved || state.State == reviewtransaction.StateEscalated {
 		result.ReceiptPath = store.ReceiptPath()
 	}
+	if accounting := state.EscalationAccounting(); accounting.Cause != "" {
+		result.Escalation = fmt.Sprintf(reviewtransaction.EscalationAccountingReasonTemplate,
+			accounting.Cause, accounting.Spent, accounting.Remaining, accounting.Total)
+	}
 	public := ReviewIntegrationFinalizeResult{
 		Operation: result.Operation, LineageID: result.LineageID, State: result.State,
-		Action: result.Action, StoreRevision: result.StoreRevision, Eligibility: eligibility, NextTransition: transition,
-		ValidationRequest: validationRequest,
+		Action: result.Action, Escalation: result.Escalation, StoreRevision: result.StoreRevision,
+		Eligibility: eligibility, NextTransition: transition, ValidationRequest: validationRequest,
 	}
 	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationFinalize, result, public)
 }

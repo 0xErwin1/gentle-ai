@@ -1161,6 +1161,29 @@ func TestResolveBoundedRemediationSurfacesEscalationAccountingForAlreadyEscalate
 	})
 }
 
+// TestEscalationAccountingReasonTemplateKeepsSDDBoundOutputByteIdentical pins
+// the exact bytes the SDD-bound surface emits. Making the organic gate surface
+// render the same accounting moved the template's definition into
+// reviewtransaction so both layers can reach it; this proves the move changed
+// neither the template nor a single byte resolveBoundedRemediation produces.
+func TestEscalationAccountingReasonTemplateKeepsSDDBoundOutputByteIdentical(t *testing.T) {
+	const wantTemplate = "compact review authority is escalated (%s): spent %d, remaining %d, total %d correction lines"
+	if EscalationAccountingReasonTemplate != wantTemplate {
+		t.Fatalf("EscalationAccountingReasonTemplate = %q, want %q", EscalationAccountingReasonTemplate, wantTemplate)
+	}
+	compact := reviewtransaction.CompactState{
+		LineageID: "compact-thin", Generation: 1, State: reviewtransaction.StateEscalated,
+		CorrectionBudget: 10, CumulativeCorrectionLines: 12,
+	}
+	state := resolveBoundedRemediation(true, verifyResultEvaluation{
+		EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
+	}, nil, &compact, "bounded review transaction is missing", "")
+	const want = "compact review authority is escalated (budget_exceeded): spent 12, remaining 0, total 10 correction lines"
+	if state.Reason != want {
+		t.Fatalf("SDD-bound escalation reason = %q, want %q", state.Reason, want)
+	}
+}
+
 // TestResolveBoundedRemediationNoCorrectionBudgetGuardNeverPopulatesRemaining
 // pins the `remainingBudget <= 0` early-return guard in
 // resolveBoundedRemediation: it fires for every `spent >= total` shape

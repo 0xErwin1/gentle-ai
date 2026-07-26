@@ -180,10 +180,15 @@ func readReviewTransaction(path, content string) (*reviewtransaction.Transaction
 }
 
 // EscalationAccountingReasonTemplate is the single source of truth for the
-// escalation accounting sentence: both this production call site and the
-// organic-dx Tier A narration registry (internal/cli/review_narration.go)
-// render from this exact template, so the two surfaces cannot drift.
-const EscalationAccountingReasonTemplate = "compact review authority is escalated (%s): spent %d, remaining %d, total %d correction lines"
+// escalation accounting sentence: this SDD-bound call site, the organic gate
+// surface (reviewtransaction.compactEscalatedGateReason) and the organic-dx
+// Tier A narration registry (internal/cli/review_narration.go) all render from
+// this exact template, so no two surfaces can drift.
+//
+// The definition lives in reviewtransaction because the organic gate is the
+// lower layer and cannot import sddstatus. This alias keeps the existing
+// sddstatus-qualified name working unchanged for both remaining consumers.
+const EscalationAccountingReasonTemplate = reviewtransaction.EscalationAccountingReasonTemplate
 
 func resolveBoundedRemediation(required bool, verify verifyResultEvaluation, transaction *reviewtransaction.Transaction, compact *reviewtransaction.CompactState, transactionReason, applyProgress string) RemediationState {
 	if !required {

@@ -84,6 +84,38 @@ func TestCompactEscalationAccountingCorrectionRegressionFailed(t *testing.T) {
 	}
 }
 
+// TestCompactEscalationAccountingForecastBudgetCrossing pins the escalation
+// shape the testing guide's Flow 17 actually describes and the defect report
+// actually reproduced: a correction forecast pushed past the frozen budget.
+// BeginCorrection escalates on CumulativeCorrectionLines+proposed and leaves
+// ActualCorrectionLines nil, so the lines that crossed the budget live in
+// ProposedCorrectionLines. Reading CumulativeCorrectionLines alone reported
+// "spent 0" with no derivable cause for exactly the escalation the guide
+// promises numbers for.
+func TestCompactEscalationAccountingForecastBudgetCrossing(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "base\none\ntwo\nthree\nwrong\n")
+	state, _, _ := correctionRequiredAuthorityFixture(t, repo, "escalation-accounting-forecast")
+	proposed := state.CorrectionBudget + 1
+	if err := state.BeginCorrection(proposed); err != nil {
+		t.Fatal(err)
+	}
+	if state.State != StateEscalated || state.ActualCorrectionLines != nil || state.CumulativeCorrectionLines != 0 {
+		t.Fatalf("fixture is not a forecast-only budget crossing: %#v", state)
+	}
+
+	accounting := state.EscalationAccounting()
+	if accounting.Cause != CompactEscalationCauseBudgetExceeded {
+		t.Fatalf("Cause = %q, want %q", accounting.Cause, CompactEscalationCauseBudgetExceeded)
+	}
+	if accounting.Spent != proposed {
+		t.Fatalf("Spent = %d, want the %d forecast lines that crossed the budget", accounting.Spent, proposed)
+	}
+	if accounting.Total != state.CorrectionBudget || accounting.Remaining != 0 {
+		t.Fatalf("accounting = %#v, want total %d and remaining clamped to 0", accounting, state.CorrectionBudget)
+	}
+}
+
 // TestCompactEscalationAccountingNotEscalatedHasNoCause pins that a
 // non-escalated compact state (e.g. a fresh pending correction) reports a
 // zero-value Cause while Spent/Remaining/Total still reflect the current

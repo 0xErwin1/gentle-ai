@@ -2082,6 +2082,78 @@ func facadeReviewerResultArgs(t *testing.T, started ReviewFacadeStartResult) []s
 	return args
 }
 
+// TestReviewFacadeFinalizeSurfacesEscalationAccounting closes the testing
+// guide's Flow 17 at the moment it describes: pushing a correction forecast
+// past the frozen budget. finalize used to answer with a bare
+// state=escalated, so the numbers behind the decision were reachable from no
+// organic surface at all. It renders
+// reviewtransaction.EscalationAccountingReasonTemplate, the same template the
+// organic gate and the SDD-bound remediation surface use.
+func TestReviewFacadeFinalizeSurfacesEscalationAccounting(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfour\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := startFacadeReview(t, repo)
+	resultPath := filepath.Join(t.TempDir(), "review.json")
+	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
+		Findings: []facadeFinding{{
+			Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate regression",
+			ProofRefs:     []string{"differential test fails only on candidate"},
+			EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
+		}}, Evidence: []string{"focused differential test failed"},
+	})
+	var output bytes.Buffer
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--result", resultPath, "--correction-lines", "3"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	got := decodeFacadeFinalize(t, output.Bytes())
+	if got.State != reviewtransaction.StateEscalated {
+		t.Fatalf("finalize state = %q, want escalated\n%s", got.State, output.String())
+	}
+	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accounting := record.State.EscalationAccounting()
+	want := fmt.Sprintf(reviewtransaction.EscalationAccountingReasonTemplate,
+		accounting.Cause, accounting.Spent, accounting.Remaining, accounting.Total)
+	if got.Escalation != want {
+		t.Fatalf("finalize escalation = %q, want %q\n%s", got.Escalation, want, output.String())
+	}
+	for _, label := range []string{"spent 3", "remaining 0", "total 2"} {
+		if !strings.Contains(got.Escalation, label) {
+			t.Fatalf("finalize escalation = %q, want it to name %q", got.Escalation, label)
+		}
+	}
+}
+
+// TestReviewFacadeFinalizeOmitsEscalationWhenNotEscalated pins that the field
+// stays absent for every non-escalated finalize, so the approved and
+// correction-required shapes keep their exact existing output.
+func TestReviewFacadeFinalizeOmitsEscalationWhenNotEscalated(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "notes.md"), []byte("a documentation note\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	startFacadeReview(t, repo)
+	var output bytes.Buffer
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo}, &output); err != nil {
+		t.Fatal(err)
+	}
+	got := decodeFacadeFinalize(t, output.Bytes())
+	if got.State != reviewtransaction.StateApproved {
+		t.Fatalf("finalize state = %q, want approved\n%s", got.State, output.String())
+	}
+	if got.Escalation != "" {
+		t.Fatalf("approved finalize escalation = %q, want it absent", got.Escalation)
+	}
+	if strings.Contains(output.String(), "escalation") {
+		t.Fatalf("approved finalize output carries an escalation key:\n%s", output.String())
+	}
+}
+
 func decodeFacadeFinalize(t *testing.T, payload []byte) ReviewFacadeFinalizeResult {
 	t.Helper()
 	var result ReviewFacadeFinalizeResult

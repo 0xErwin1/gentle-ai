@@ -1538,6 +1538,27 @@ func HashLedgerArtifact(path string) (string, error) {
 	return hashLedgerArtifact(path)
 }
 
+// EscalationAccountingReasonTemplate is the single source of truth for the
+// escalation accounting sentence. The organic gate surface renders it through
+// compactEscalatedGateReason, the SDD-bound surface through
+// sddstatus.resolveBoundedRemediation (which aliases this constant), and the
+// organic-dx narration registry samples it, so the surfaces cannot drift.
+const EscalationAccountingReasonTemplate = "compact review authority is escalated (%s): spent %d, remaining %d, total %d correction lines"
+
+// compactEscalatedGateReason names why a compact authority is terminally
+// escalated in the numbers the frozen state already carries, instead of the
+// bare terminal sentence that told an operator nothing about the budget they
+// crossed. A state with no derivable escalation cause keeps that bare sentence
+// rather than reporting accounting this cannot prove.
+func compactEscalatedGateReason(state CompactState) string {
+	accounting := state.EscalationAccounting()
+	if accounting.Cause == "" {
+		return nativeGateReason(GateEscalated)
+	}
+	return fmt.Sprintf(EscalationAccountingReasonTemplate,
+		accounting.Cause, accounting.Spent, accounting.Remaining, accounting.Total)
+}
+
 func nativeGateReason(result GateResult) string {
 	switch result {
 	case GateAllow:

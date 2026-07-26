@@ -1132,10 +1132,14 @@ type ReviewIntegrationOperationResult struct {
 // ReviewIntegrationFinalizeResult preserves the existing finalize semantics
 // while excluding the provider-private receipt path from negotiated output.
 type ReviewIntegrationFinalizeResult struct {
-	Operation         string                                       `json:"operation"`
-	LineageID         string                                       `json:"lineage_id"`
-	State             reviewtransaction.State                      `json:"state"`
-	Action            string                                       `json:"action"`
+	Operation string                  `json:"operation"`
+	LineageID string                  `json:"lineage_id"`
+	State     reviewtransaction.State `json:"state"`
+	Action    string                  `json:"action"`
+	// Escalation carries the same correction-budget accounting sentence as
+	// ReviewFacadeFinalizeResult.Escalation, so the negotiated and legacy
+	// finalize surfaces explain a terminal escalation identically.
+	Escalation        string                                       `json:"escalation,omitempty"`
 	StoreRevision     string                                       `json:"store_revision"`
 	Eligibility       *ReviewActionEligibility                     `json:"eligibility,omitempty"`
 	NextTransition    *ReviewNextTransition                        `json:"next_transition,omitempty"`

@@ -1207,18 +1207,29 @@ type CompactEscalationAccounting struct {
 // escalation, deriving it from already-persisted fields so no new schema or
 // Validate() invariant is required.
 func (state CompactState) EscalationAccounting() CompactEscalationAccounting {
-	remaining := state.CorrectionBudget - state.CumulativeCorrectionLines
+	spent := state.CumulativeCorrectionLines
+	// A correction forecast that never ran still crossed the budget:
+	// BeginCorrection escalates on CumulativeCorrectionLines+proposed and
+	// leaves ActualCorrectionLines nil, so for that shape the lines that
+	// crossed live in ProposedCorrectionLines. Reading the cumulative alone
+	// would report "spent 0" with no derivable cause for precisely the
+	// over-budget escalation every visible surface is expected to explain.
+	if state.State == StateEscalated && state.ActualCorrectionLines == nil && state.ProposedCorrectionLines != nil &&
+		state.CumulativeCorrectionLines+*state.ProposedCorrectionLines > state.CorrectionBudget {
+		spent = state.CumulativeCorrectionLines + *state.ProposedCorrectionLines
+	}
+	remaining := state.CorrectionBudget - spent
 	if remaining < 0 {
 		remaining = 0
 	}
 	accounting := CompactEscalationAccounting{
-		Spent: state.CumulativeCorrectionLines, Remaining: remaining, Total: state.CorrectionBudget,
+		Spent: spent, Remaining: remaining, Total: state.CorrectionBudget,
 	}
 	if state.State != StateEscalated {
 		return accounting
 	}
 	switch {
-	case state.CumulativeCorrectionLines > state.CorrectionBudget:
+	case spent > state.CorrectionBudget:
 		accounting.Cause = CompactEscalationCauseBudgetExceeded
 	case state.OriginalCriteria != nil && !state.OriginalCriteria.Passed:
 		accounting.Cause = CompactEscalationCauseOriginalCriteriaFailed
