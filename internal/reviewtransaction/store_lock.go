@@ -115,6 +115,29 @@ func (err storeLockBusyError) Error() string {
 
 func (err storeLockBusyError) Unwrap() error { return ErrConcurrentUpdate }
 
+// StoreLockPreAcquisitionError reports a failure that happened before the
+// authoritative store lock was acquired: directory creation, the secure
+// open walk, or the advisory lock syscall itself all fail before any review
+// authority mutation, so callers must classify this as not-started rather
+// than an unknown-mutation outcome (1781).
+type StoreLockPreAcquisitionError struct {
+	Err error
+}
+
+func (err *StoreLockPreAcquisitionError) Error() string {
+	if err == nil || err.Err == nil {
+		return "review store lock could not be acquired"
+	}
+	return fmt.Sprintf("review store lock could not be acquired: %v", err.Err)
+}
+
+func (err *StoreLockPreAcquisitionError) Unwrap() error {
+	if err == nil {
+		return nil
+	}
+	return err.Err
+}
+
 func acquireStoreLock(path string) (*storeLock, error) {
 	maintenancePath, err := maintenanceLockPathForStoreLock(path)
 	if err != nil {
@@ -138,16 +161,16 @@ func acquireStoreLock(path string) (*storeLock, error) {
 
 func acquireLocalStoreLock(path string) (*storeLock, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
+		return nil, &StoreLockPreAcquisitionError{Err: err}
 	}
 	file, err := secureOpenLocalStoreLock(path)
 	if err != nil {
-		return nil, err
+		return nil, &StoreLockPreAcquisitionError{Err: err}
 	}
 	locked, err := tryLockFile(file)
 	if err != nil {
 		_ = file.Close()
-		return nil, fmt.Errorf("acquire bounded review store lock: %w", err)
+		return nil, &StoreLockPreAcquisitionError{Err: fmt.Errorf("acquire bounded review store lock: %w", err)}
 	}
 	if !locked {
 		_ = file.Close()
@@ -301,6 +324,34 @@ func (lock *storeLock) release() error {
 		lock.maintenance = nil
 	}
 	return errors.Join(unlockErr, closeErr, maintenanceErr)
+}
+
+// secureLockRoot locates the repository's Git common directory that this
+// store lock path is derived from — the parent of the fixed "gentle-ai"
+// authority marker — so the secure open walk can anchor there instead of at
+// the filesystem root (1781). It mirrors the authority-root walk in
+// maintenanceLockPathForStoreLock, but absence or ambiguity is not an error
+// here: the caller falls back to the root-anchored walk, which is always
+// safe and matches today's behavior verbatim.
+func secureLockRoot(path string) (string, bool) {
+	cleanPath := filepath.Clean(path)
+	var authorityRoot string
+	for current := filepath.Dir(cleanPath); ; current = filepath.Dir(current) {
+		if filepath.Base(current) == "review-transactions" && filepath.Base(filepath.Dir(current)) == "gentle-ai" {
+			if authorityRoot != "" {
+				return "", false
+			}
+			authorityRoot = current
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+	}
+	if authorityRoot == "" {
+		return "", false
+	}
+	return filepath.Dir(filepath.Dir(authorityRoot)), true
 }
 
 func maintenanceLockPathForStoreLock(path string) (string, error) {

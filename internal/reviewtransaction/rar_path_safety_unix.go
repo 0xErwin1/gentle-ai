@@ -83,7 +83,10 @@ func openRARPathNoFollow(path string, directory bool) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	parentFD, err := secureOpenLockParent(filepath.Dir(absolute))
+	// RAR path safety is a distinct security boundary from the store lock
+	// walk; it keeps the unconditional root-anchored walk verbatim by always
+	// passing the filesystem root as the anchor.
+	parentFD, err := secureOpenLockParent(string(filepath.Separator), filepath.Dir(absolute))
 	if err != nil {
 		return nil, err
 	}
