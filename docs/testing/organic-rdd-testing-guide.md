@@ -1,6 +1,17 @@
 # 🧪 How to test — Organic RDD (pre-release 2.2.0-rc.1)
 
-> Community testing guide for the candidate built from PR [#1801](https://github.com/Gentleman-Programming/gentle-ai/pull/1801). Every **Expected** in this guide was validated against real output before it was published. The guide uses a throwaway HOME precisely so it does not touch your real config — do not skip the setup.
+> Community testing guide for the candidate built from PR [#1801](https://github.com/Gentleman-Programming/gentle-ai/pull/1801). Every **Expected** here was validated against real output before publication. The guide uses a throwaway HOME precisely so it does not touch your real config — do not skip the setup.
+
+> [!IMPORTANT]
+> **This guide moves; a published asset does not.** It tracks the PR head and describes behaviour that may have landed *after* the binary you downloaded was built. Running it literally against an older asset produces false regressions — that is the guide's fault, not the product's.
+>
+> Before you start, write down which candidate you are testing:
+>
+> ```
+> gentle-ai --version          # or "$RC_BIN" --version
+> ```
+>
+> **Put that string in your report.** If a step disagrees with what you see, the first question is always whether the guide is describing a newer commit than your binary. Say which one you ran and we can tell the difference; without it we cannot.
 
 ## How to get this binary
 
@@ -11,14 +22,22 @@ The binaries are on the pre-release page: **https://github.com/Gentleman-Program
    ```
    sha256sum -c SHA256SUMS.txt --ignore-missing
    ```
-3. Save your current binary and replace it:
+3. Make it runnable and confirm which build you have. **You do not need gentle-ai installed already** — this works on a clean machine:
    ```
-   cp $(which gentle-ai) ~/gentle-ai.backup
-   chmod +x gentle-ai_2.2.0-rc.1_<os>_<arch>
-   mv gentle-ai_2.2.0-rc.1_<os>_<arch> $(which gentle-ai)
+   RC_BIN="$(pwd)/gentle-ai_2.2.0-rc.1_<os>_<arch>"
+   chmod +x "$RC_BIN"
+   "$RC_BIN" --version
    ```
-4. Confirm: `gentle-ai --version` must say `2.2.0-rc.1`.
-5. To roll back when you are done: `mv ~/gentle-ai.backup $(which gentle-ai)`.
+4. Either invoke `"$RC_BIN"` explicitly for every step, or put it on your PATH under a throwaway directory:
+   ```
+   mkdir -p /tmp/rdd-bin && ln -sf "$RC_BIN" /tmp/rdd-bin/gentle-ai
+   export PATH="/tmp/rdd-bin:$PATH"
+   ```
+5. **Only if you already had gentle-ai installed** and want to replace it, back the old one up first:
+   ```
+   command -v gentle-ai && cp "$(command -v gentle-ai)" ~/gentle-ai.backup
+   ```
+   Roll back with `mv ~/gentle-ai.backup "$(command -v gentle-ai)"` when you are done.
 
 ## Setup (once)
 
@@ -251,7 +270,19 @@ Cross-compiling with `GOOS=darwin` proves the code builds. It proves nothing abo
 macOS puts `$TMPDIR` under `/var/folders/...`, and `/var` is a symlink to `/private/var`. The same repository therefore has two valid absolute paths, and authority bound to one must be found from the other.
 
 1. [ ] `cd "$(mktemp -d)"` and set up a throwaway repo there → note the path `git rev-parse --show-toplevel` prints.
-2. [ ] Run a full cycle in it: `review start`, then `review finalize`, then `review validate --gate pre-commit` → **Expected**: it completes. No "no discoverable review lineage", no path-shaped error.
+2. [ ] Make a change **and stage it**, then run the full cycle:
+
+```
+echo "one more line" >> guide.md
+git add guide.md
+gentle-ai review start --cwd .
+gentle-ai review finalize --cwd .
+gentle-ai review validate --gate pre-commit --cwd .
+```
+
+→ **Expected**: it completes with `allow`. No "no discoverable review lineage", no path-shaped error.
+
+**The `git add` is not optional and it is not tidiness.** START with the default workspace projection freezes your uncommitted change; the pre-commit gate asks about the staged index. Skip the staging and you get `receipt_unrelated` — a correct answer to a different question, which reads exactly like the path bug this flow is looking for. Reported by @edwinsaavedran after it produced precisely that false signal.
 3. [ ] Now `cd` into the **other** spelling of the same directory (add or remove the `/private` prefix) and run `review status --cwd "$PWD"` → **Expected**: the same lineage, same state. If it reports no authority, that is the defect: paste both paths.
 
 ### Flow 21: Reviewer results on ExFAT (#1804)
@@ -271,9 +302,16 @@ If `hdiutil` rejects the filesystem name, `hdiutil create -help` lists the ones 
 3. [ ] → **Expected**: the reviewer result publishes and finalize reaches its normal terminal state. A raw `ENOTSUP`, `EINVAL` or `operation not supported` reaching you is the defect.
 4. [ ] Detach with `hdiutil detach /Volumes/RDDTEST` when done.
 
-### Flow 22: First-use store contention (#1850) — **known open, we want the current state**
+### Flow 22: First-use store contention (#1850) — **fixed on the branch, still broken in the published asset**
 
-This one is **not fixed**. @edwinsaavedran reported that concurrent first use of a new runtime store leaks a raw `ENOENT` to the losing writers instead of a typed conflict. It is fail-closed, exactly one writer still commits, and no ledger was corrupted, but a controller cannot classify or retry an untyped errno.
+@edwinsaavedran reported that concurrent first use of a new runtime store leaked a raw `ENOENT` to the losing writers instead of a typed conflict. It was fail-closed and no ledger was corrupted, but a controller cannot classify or retry an untyped errno.
+
+**The expected result depends on which candidate you run, and this is the clearest example in the guide of why that matters.** Two independent native macOS runs:
+
+| candidate | result |
+|---|---|
+| published Refresh 5 asset (`2551c0a5`) | **FAIL** — 181/200 with the known `ENOENT` |
+| branch after `0bcff694` | **PASS** — 200/200 |
 
 This needs a source checkout rather than the released binary. From the branch under test:
 
@@ -283,10 +321,9 @@ TMPDIR=/private/tmp GIT_CONFIG_NOSYSTEM=1 \
   -run '^TestRuntimeLedgerCASAllowsOnlyOneConcurrentOrdinal$' -count=20
 ```
 
-1. [ ] → **Expected today**: it may still fail. The reporter saw 16 of 20 and 9 of 10 iterations fail on two independent runs.
-2. [ ] Report **how many iterations of 20 failed**, and whether the failure is still `review store lock could not be acquired: no such file or directory` or something else.
-
-A clean 20 of 20 is just as valuable as a failure: it tells us whether the rate moved, and we have no Mac in CI to ask.
+1. [ ] → **Expected on current branch source**: 20 of 20 pass. A failure here is a regression and worth reporting immediately.
+2. [ ] If you are testing the **published asset** instead, expect failures, and report how many of 20 failed and whether the message is still `review store lock could not be acquired: no such file or directory`.
+3. [ ] Either way, run it with `-race -count=3` as well. The original failure produced no Go data-race report, which is the signature of a filesystem race rather than a memory one.
 
 ### Flow 23: Managed profiles (#1781)
 

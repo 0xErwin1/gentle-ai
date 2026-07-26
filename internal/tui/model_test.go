@@ -5125,7 +5125,7 @@ func TestCodexPresetSelection_PopulatesPendingSyncOverrides(t *testing.T) {
 			name:   "low cost",
 			cursor: 0,
 			want: map[string]string{
-				"sdd-strong": "gpt-5.6-terra",
+				"sdd-strong": "gpt-5.6-sol",
 				"sdd-mid":    "gpt-5.6-terra",
 				"sdd-cheap":  "gpt-5.6-luna",
 			},
@@ -5144,7 +5144,7 @@ func TestCodexPresetSelection_PopulatesPendingSyncOverrides(t *testing.T) {
 			cursor: 2,
 			want: map[string]string{
 				"sdd-strong": "gpt-5.6-sol",
-				"sdd-mid":    "gpt-5.6-terra",
+				"sdd-mid":    "gpt-5.6-sol",
 				"sdd-cheap":  "gpt-5.6-luna",
 			},
 		},
