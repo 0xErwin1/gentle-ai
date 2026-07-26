@@ -617,7 +617,7 @@ func (s agentRoutingGuidanceStep) Run() error {
 	if err != nil {
 		return fmt.Errorf("create adapter for %q: %w", s.agent, err)
 	}
-	targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
+	targetDir := routingGuidanceDir(s.homeDir, s.workspaceDir, s.scope, adapter)
 
 	// Strip first: an installation upgraded from an older release still carries
 	// the retired block, and leaving it beside fresh guidance would hand the
@@ -1617,7 +1617,7 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 func routingGuidancePaths(homeDir, workspaceDir string, scope InstallScope, adapters []agents.Adapter) []string {
 	paths := []string{}
 	for _, adapter := range adapters {
-		targetDir := componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)
+		targetDir := routingGuidanceDir(homeDir, workspaceDir, scope, adapter)
 		routing, err := agentguidance.RoutingPaths(targetDir, adapter.Agent())
 		if err != nil {
 			// The guidance step resolves the same delivery and fails loudly when
@@ -1831,6 +1831,21 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 
 func componentInjectionDir(homeDir, workspaceDir string, adapter agents.Adapter) string {
 	return componentInjectionDirScoped(homeDir, workspaceDir, ScopeGlobal, adapter)
+}
+
+// routingGuidanceDir resolves the installation root routing guidance is
+// delivered under. Agents that deliver through the managed orchestrator prompt
+// only ever load the home-level settings document, so a workspace-scoped
+// install must still resolve them against the home directory — a workspace
+// .config tree is a scope those agents never read (issue #1825). Every other
+// agent keeps the ordinary scoped resolution. The guidance step and the backup
+// contract both resolve through here so the snapshot cannot drift from what
+// the injector writes.
+func routingGuidanceDir(homeDir, workspaceDir string, scope InstallScope, adapter agents.Adapter) string {
+	if agentguidance.DeliversThroughOrchestratorPrompt(adapter.Agent()) {
+		return homeDir
+	}
+	return componentInjectionDirScoped(homeDir, workspaceDir, scope, adapter)
 }
 
 // componentInjectionDirScoped returns the directory to inject component files for the given adapter,

@@ -764,6 +764,109 @@ func TestInstallRoutingGuidanceSecondRunIsByteIdentical(t *testing.T) {
 	}
 }
 
+// ─── Workspace scope must not strand orchestrator-prompt guidance ──────────
+//
+// OpenCode and Kilocode only ever load the home-level settings document, so a
+// workspace-scoped install that resolves their guidance against the workspace
+// root writes a file the agent never reads (issue #1825). Guidance for these
+// agents therefore resolves against the home directory in every scope, while
+// every other agent keeps its workspace-scoped delivery.
+
+func TestInstallRoutingGuidanceWorkspaceScopeDeliversOpenCodeToHome(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+
+	// Seed the home settings with the retired section so the strip is proven to
+	// resolve against the same home scope the injector writes.
+	seeded := filemerge.InjectMarkdownSection("", "trigger-rules", "Retired WorkRun ceremony\n")
+	seedOpenCodeOrchestratorPrompt(t, home, seeded)
+
+	step := agentRoutingGuidanceStep{
+		id:           "agent-guidance:" + string(model.AgentOpenCode),
+		agent:        model.AgentOpenCode,
+		homeDir:      home,
+		workspaceDir: workspace,
+		scope:        ScopeWorkspace,
+	}
+	if err := step.Run(); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	prompt := openCodeOrchestratorPrompt(t, home)
+	if !strings.Contains(prompt, routingOpenMarker) || !strings.Contains(prompt, routingCloseMarker) {
+		t.Fatalf("workspace-scoped install left the home OpenCode orchestrator prompt unrouted:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "Retired WorkRun ceremony") {
+		t.Fatalf("legacy trigger-rules content survived the workspace-scoped install:\n%s", prompt)
+	}
+
+	stranded := filepath.Join(workspace, ".config", "opencode")
+	if _, err := os.Stat(stranded); !os.IsNotExist(err) {
+		t.Fatalf("workspace-scoped install created %q, a directory OpenCode never loads (stat err = %v)", stranded, err)
+	}
+
+	first := readTextFile(t, openCodeSettingsPath(home))
+	if err := step.Run(); err != nil {
+		t.Fatalf("second Run() error = %v", err)
+	}
+	if second := readTextFile(t, openCodeSettingsPath(home)); second != first {
+		t.Fatalf("second workspace-scoped run rewrote the home settings; delivery is not idempotent")
+	}
+}
+
+func TestRoutingGuidancePathsWorkspaceScopeReportOrchestratorPromptAgentsAtHome(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	adapters := resolveAdapters([]model.AgentID{model.AgentOpenCode, model.AgentKilocode, model.AgentClaudeCode})
+
+	paths := routingGuidancePaths(home, workspace, ScopeWorkspace, adapters)
+
+	for _, want := range []string{
+		filepath.Join(home, ".config", "opencode", "opencode.json"),
+		filepath.Join(home, ".config", "kilo", "opencode.json"),
+	} {
+		if !containsPath(paths, want) {
+			t.Fatalf("routingGuidancePaths(workspace) missing home settings path %q\npaths=%v", want, paths)
+		}
+	}
+	for _, unwanted := range []string{
+		filepath.Join(workspace, ".config", "opencode", "opencode.json"),
+		filepath.Join(workspace, ".config", "kilo", "opencode.json"),
+	} {
+		if containsPath(paths, unwanted) {
+			t.Fatalf("routingGuidancePaths(workspace) reported %q, a path the agent never loads\npaths=%v", unwanted, paths)
+		}
+	}
+
+	// Every other agent keeps its workspace-scoped delivery.
+	claudePrompt := systemPromptFileFor(t, workspace, model.AgentClaudeCode)
+	if !containsPath(paths, claudePrompt) {
+		t.Fatalf("routingGuidancePaths(workspace) lost the workspace-scoped path %q for prompt-file agents\npaths=%v", claudePrompt, paths)
+	}
+}
+
+// seedOpenCodeOrchestratorPrompt writes a minimal home settings document whose
+// managed orchestrator agent already carries the given prompt.
+func seedOpenCodeOrchestratorPrompt(t *testing.T, home, prompt string) {
+	t.Helper()
+
+	settingsPath := openCodeSettingsPath(home)
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v", filepath.Dir(settingsPath), err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"agent": map[string]any{
+			opencodedefault.ManagedAgent: map[string]any{"prompt": prompt},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal seeded settings error = %v", err)
+	}
+	if err := os.WriteFile(settingsPath, payload, 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v", settingsPath, err)
+	}
+}
+
 // ─── Routing guidance is part of the rollback contract ─────────────────────
 //
 // Routing guidance is installed for every configured agent, independently of

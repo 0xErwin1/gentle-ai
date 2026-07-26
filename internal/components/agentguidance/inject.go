@@ -145,7 +145,7 @@ func resolveRoutingDelivery(targetDir string, agent model.AgentID) (routingDeliv
 	}
 
 	switch {
-	case deliversThroughOrchestratorPrompt(agent):
+	case DeliversThroughOrchestratorPrompt(agent):
 		settingsPath := adapter.SettingsPath(targetDir)
 		if strings.TrimSpace(settingsPath) == "" {
 			return routingDelivery{}, fmt.Errorf("%w: adapter %q exposes no settings path", ErrInvalidTarget, agent)
@@ -177,12 +177,14 @@ func resolveRoutingDelivery(targetDir string, agent model.AgentID) (routingDeliv
 	}
 }
 
-// deliversThroughOrchestratorPrompt reports whether an agent reads its always-on
-// instructions from the managed orchestrator agent definition inside its
-// settings document rather than from a global prompt file. For these adapters
-// the global prompt file is a separate, non-always-loaded scope, so guidance
-// placed there would simply never reach the model.
-func deliversThroughOrchestratorPrompt(agent model.AgentID) bool {
+// DeliversThroughOrchestratorPrompt reports whether an agent reads its
+// always-on instructions from the managed orchestrator agent definition inside
+// its settings document rather than from a global prompt file. For these
+// adapters the global prompt file is a separate, non-always-loaded scope, so
+// guidance placed there would simply never reach the model. It is exported so
+// installers can resolve the delivery root for these agents without keeping a
+// second copy of the agent list that could drift from this dispatch.
+func DeliversThroughOrchestratorPrompt(agent model.AgentID) bool {
 	return agent == model.AgentOpenCode || agent == model.AgentKilocode
 }
 
