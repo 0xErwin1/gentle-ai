@@ -248,6 +248,17 @@ func RecoverCompactAuthority(ctx context.Context, repo string, request CompactRe
 		request.MaintainerAuthorization != compactRecoveryAuthorizationBinding(request.PredecessorLineageID, predecessor.Revision, request.Successor.InitialSnapshot.Identity, request.Actor, request.Reason) {
 		return CompactRecord{}, compactRecoveryAuthorizationError(request.Successor.InitialSnapshot)
 	}
+	// Every shape the three comparisons above do not cover still records the
+	// caller's authorization verbatim in the provenance below, so a supplied
+	// one has to bind here or nothing is written. Absent stays allowed: this
+	// is the only asymmetry, and it is the one that keeps the self-minting
+	// recovery shapes working.
+	if strings.TrimSpace(request.MaintainerAuthorization) != "" &&
+		!compactRecoverySuppliedAuthorizationBinds(request.MaintainerAuthorization, request.PredecessorLineageID,
+			predecessor.Revision, request.Successor.InitialSnapshot.Identity, request.Successor.LineageID,
+			request.Actor, request.Reason) {
+		return CompactRecord{}, compactRecoveryAuthorizationError(request.Successor.InitialSnapshot)
+	}
 	existing, existingErr := successorStore.Load()
 	if existingErr != nil && !os.IsNotExist(existingErr) {
 		return CompactRecord{}, existingErr
@@ -412,6 +423,24 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 	if recovery.PredecessorRevision != predecessor.Revision {
 		return errors.New("recovery predecessor revision mismatch")
 	}
+	// forgedSchemaAuthorization reports a recorded authorization that names
+	// compactRecoveryAuthorizationSchema — thereby asserting a maintainer bound
+	// this exact edge — while binding nothing. Replay must refuse it, or a
+	// forged attestation reads as genuine forever after. Pre-contract free-form
+	// text makes no such claim, so it stays outside this predicate and keeps the
+	// tolerance compact_reconcile.go already classifies it under.
+	//
+	// It is applied per disposition rather than up front on purpose: the
+	// RecoveryEscalated branch already compares the binding exactly, and it does
+	// so only after errCompactRecoveryTargetUnchanged, an ordering
+	// classifyCompactRecoveryEdgeAnomalies depends on to tell an unchanged
+	// target apart from a malformed authorization.
+	forgedSchemaAuthorization := func() bool {
+		return strings.HasPrefix(recovery.MaintainerAuthorization, compactRecoveryAuthorizationSchema) &&
+			!compactRecoverySuppliedAuthorizationBinds(recovery.MaintainerAuthorization, predecessor.State.LineageID,
+				predecessor.Revision, successor.InitialSnapshot.Identity, successor.LineageID,
+				recovery.Actor, recovery.Reason)
+	}
 	if successor.Generation != predecessor.State.Generation+1 {
 		return errors.New("recovery successor generation must follow predecessor")
 	}
@@ -442,9 +471,15 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 			if !releaseScope && !compactRecoveryScopeChanged(previous, next) {
 				return errors.New("approved predecessor scope has not changed")
 			}
+			if forgedSchemaAuthorization() {
+				return compactRecoveryAuthorizationError(next)
+			}
 		case StateCorrectionRequired:
 			if strings.TrimSpace(recovery.MaintainerAuthorization) == "" {
 				return errors.New("correction-required scope recovery requires explicit maintainer authorization")
+			}
+			if forgedSchemaAuthorization() {
+				return compactRecoveryAuthorizationError(successor.InitialSnapshot)
 			}
 			if !compactRecoveryAddsGenesisPath(predecessor.State, successor.InitialSnapshot) &&
 				!compactRecoveryContractsGenesisPaths(predecessor.State, successor.InitialSnapshot) {
@@ -456,6 +491,9 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 	case RecoveryInvalidated:
 		if predecessor.State.State != StateInvalidated {
 			return errors.New("recovery requires an invalidated predecessor")
+		}
+		if forgedSchemaAuthorization() {
+			return compactRecoveryAuthorizationError(successor.InitialSnapshot)
 		}
 	case RecoveryEscalated:
 		if recovery.Evidence != nil {
@@ -502,6 +540,29 @@ func compactRecoveryAuthorizationBinding(lineage, revision, targetIdentity, acto
 	return compactRecoveryAuthorizationSchema + "\npredecessor_lineage=" + lineage +
 		"\npredecessor_revision=" + revision + "\ntarget_identity=" + targetIdentity +
 		"\nactor=" + strings.TrimSpace(actor) + "\nreason=" + strings.TrimSpace(reason)
+}
+
+// compactRecoverySuppliedAuthorizationBinds reports whether a caller-supplied
+// maintainer authorization actually binds to this recovery edge.
+//
+// The asymmetry it enables is deliberate. An absent authorization is honestly
+// absent: several recovery shapes legitimately self-mint actor, reason and
+// binding (RunReviewRecover in internal/cli/review_facade.go), so demanding one
+// unconditionally would refuse a path that is correct today. A supplied one is
+// different, because it is copied verbatim into CompactRecoveryProvenance and
+// read afterwards as a maintainer attestation. It must therefore bind or be
+// refused: a wrong authorization is worse than none, since an absent field
+// cannot lie about who approved what.
+//
+// ReleaseScopeRecoveryAuthorization is a recognized sentinel rather than a
+// binding — RecoverCompactAuthority re-derives the live release scope for it
+// and validateCompactRecoveryEdge proves the expansion — so it is exempt.
+func compactRecoverySuppliedAuthorizationBinds(authorization, lineage, revision, targetIdentity, successor, actor, reason string) bool {
+	if authorization == ReleaseScopeRecoveryAuthorization {
+		return true
+	}
+	return authorization == compactRecoveryAuthorizationBinding(lineage, revision, targetIdentity, actor, reason) ||
+		authorization == compactApprovedStagedScopeRecoveryAuthorizationBinding(lineage, revision, targetIdentity, successor, actor, reason)
 }
 
 func compactApprovedStagedScopeRecoveryAuthorizationBinding(lineage, revision, targetIdentity, successor, actor, reason string) string {
