@@ -223,9 +223,9 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	}
 	newState.SetSelection(input.Selection)
 	if len(flags.Agents) > 0 {
-		merged, ok := mergeExplicitAgentInstallState(homeDir, newState, agentIDs, flags)
-		if !ok {
-			return result, nil
+		merged, err := mergeExplicitAgentInstallState(homeDir, newState, agentIDs, flags)
+		if err != nil {
+			return result, fmt.Errorf("merge explicit agent install state: %w", err)
 		}
 		newState = merged
 	}
@@ -236,13 +236,26 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	return result, nil
 }
 
-func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState, agentIDs []string, flags InstallFlags) (state.InstallState, bool) {
+// mergeExplicitAgentInstallState merges a fresh single-agent install's state
+// into the previously persisted ~/.gentle-ai/state.json (so `install --agent
+// X` preserves other previously installed agents and model assignments).
+//
+// When the existing state file is simply absent (first install, or an agent
+// installed before state persistence existed), there is nothing to merge
+// from — newState is used as-is. Any OTHER read failure (corrupted JSON,
+// unreadable file) returns an error instead of silently falling through: the
+// caller must not report a successful install while never persisting state
+// (install/sync surface audit finding 2). Blindly merging from unreadable
+// data would itself be wrong, so this does not attempt best-effort recovery
+// — it fails loudly instead, matching the original conservative intent of
+// refusing to merge from data that cannot be trusted.
+func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState, agentIDs []string, flags InstallFlags) (state.InstallState, error) {
 	existing, readErr := state.Read(homeDir)
 	if readErr != nil {
 		if errors.Is(readErr, os.ErrNotExist) {
-			return newState, true
+			return newState, nil
 		}
-		return newState, false
+		return state.InstallState{}, fmt.Errorf("read existing install state to merge agents %v: %w", agentIDs, readErr)
 	}
 
 	merged := state.MergeAgents(existing, agentIDs)
@@ -288,16 +301,85 @@ func mergeExplicitAgentInstallState(homeDir string, newState state.InstallState,
 	if flags.Persona != "" || merged.Persona == "" {
 		merged.Persona = newState.Persona
 	}
-	return merged, true
+	return merged, nil
 }
 
 func withPostInstallNotes(report verify.Report, resolved planner.ResolvedPlan) verify.Report {
+	report = withReadyAgentRunNote(report, resolved)
+	report = withFailedVerificationNote(report, resolved)
 	if hasComponent(resolved.OrderedComponents, model.ComponentGGA) && report.Ready {
 		report.FinalNote = report.FinalNote + "\n\nGGA is now installed globally. To enable project hooks, run in each repo:\n- gga init\n- gga install"
 	}
 	report = withGoInstallPathNote(report, resolved)
 	report = withOpenCodeExperimentalNote(report, resolved)
 	return report
+}
+
+// readyAgentRunCommands is the fixed, ordered set of installable agents that
+// have a standalone runnable CLI command a user types to start building, and
+// the exact command name checked by each adapter's own Detect (e.g.
+// claude/adapter.go's lookPath("claude")). Kept intentionally narrow to the
+// two agents the completion line originally named -- fisidj's finding
+// (organic-dx Phase 3f task 3f.4) was specifically about those two, and
+// expanding to every agent with a CLI binary is a separate, unreviewed
+// decision left for a future task.
+var readyAgentRunCommands = []struct {
+	ID      model.AgentID
+	Command string
+}{
+	{model.AgentClaudeCode, "claude"},
+	{model.AgentOpenCode, "opencode"},
+}
+
+// withReadyAgentRunNote replaces the generic verify.ReadyMessage with one
+// naming only the runnable agent commands actually selected this run. It is
+// scoped to exactly that generic text so it never clobbers a FinalNote that
+// was already customized (by a test fixture or an earlier note-builder).
+func withReadyAgentRunNote(report verify.Report, resolved planner.ResolvedPlan) verify.Report {
+	if !report.Ready || report.FinalNote != verify.ReadyMessage {
+		return report
+	}
+	report.FinalNote = verify.ReadyMessageForCommands(runnableAgentCommands(resolved.Agents))
+	return report
+}
+
+// withFailedVerificationNote replaces the generic verify.VerificationIssuesMessage
+// with one naming the concrete command that retries the install for the
+// agents that were actually resolved this run: `gentle-ai install --agent
+// <agent1>,<agent2>`. There is no `repair` case in the CLI dispatcher
+// (internal/app/app.go), so the old generic text named a command that could
+// never succeed -- a false continuation worse than no note at all.
+//
+// It is scoped to exactly the generic failure text so it never clobbers a
+// FinalNote that was already customized (by a test fixture or an earlier
+// note-builder), mirroring withReadyAgentRunNote's ready-path guard.
+func withFailedVerificationNote(report verify.Report, resolved planner.ResolvedPlan) verify.Report {
+	if report.Ready || report.FinalNote != verify.VerificationIssuesMessage {
+		return report
+	}
+	if len(resolved.Agents) == 0 {
+		return report
+	}
+	names := make([]string, len(resolved.Agents))
+	for i, agent := range resolved.Agents {
+		names[i] = string(agent)
+	}
+	report.FinalNote = verify.VerificationIssuesMessageForCommand("gentle-ai install --agent " + strings.Join(names, ","))
+	return report
+}
+
+func runnableAgentCommands(agentIDs []model.AgentID) []string {
+	selected := make(map[model.AgentID]bool, len(agentIDs))
+	for _, id := range agentIDs {
+		selected[id] = true
+	}
+	commands := make([]string, 0, len(readyAgentRunCommands))
+	for _, entry := range readyAgentRunCommands {
+		if selected[entry.ID] {
+			commands = append(commands, entry.Command)
+		}
+	}
+	return commands
 }
 
 // withOpenCodeExperimentalNote appends guidance to enable OpenCode

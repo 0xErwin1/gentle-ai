@@ -85,8 +85,15 @@ type SyncResult struct {
 func ParseSyncFlags(args []string) (SyncFlags, error) {
 	var opts SyncFlags
 
+	// Usage is captured (not discarded) so a mistyped flag error can carry the
+	// FlagSet's own canonical usage text (install/sync surface audit finding
+	// 4): the flag package's failf() calls fs.usage() on every parse error
+	// (undefined flag, bad value, or -h/--help itself), so capturing
+	// fs.Output() gives the exact registered-flag list without hand-listing
+	// it anywhere that could drift.
+	var usage bytes.Buffer
 	fs := flag.NewFlagSet("sync", flag.ContinueOnError)
-	fs.SetOutput(ioDiscard{})
+	fs.SetOutput(&usage)
 	registerListFlag(fs, "agent", &opts.Agents)
 	registerListFlag(fs, "agents", &opts.Agents)
 	registerListFlag(fs, "skill", &opts.Skills)
@@ -101,7 +108,18 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	registerListFlag(fs, "profile-phase", &opts.rawProfilePhases)
 
 	if err := fs.Parse(args); err != nil {
-		return SyncFlags{}, err
+		// The flag package's own failf/usage() may have already printed the
+		// error text once before the "Usage of sync:" block; trim that
+		// duplicate so the wrapped error below does not repeat it.
+		usageText := usage.String()
+		if idx := strings.Index(usageText, "Usage of "); idx >= 0 {
+			usageText = usageText[idx:]
+		}
+		usageText = strings.TrimRight(usageText, "\n")
+		if usageText != "" {
+			return SyncFlags{}, fmt.Errorf("%w — run `gentle-ai sync --help` for the supported flags:\n%s", err, usageText)
+		}
+		return SyncFlags{}, fmt.Errorf("%w — run `gentle-ai sync --help` for the supported flags", err)
 	}
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
@@ -119,7 +137,7 @@ func ParseSyncFlags(args []string) (SyncFlags, error) {
 	})
 
 	if fs.NArg() > 0 {
-		return SyncFlags{}, fmt.Errorf("unexpected sync argument %q", fs.Arg(0))
+		return SyncFlags{}, fmt.Errorf("unexpected sync argument %q — pass agents with the --agent %s flag, not a positional argument", fs.Arg(0), fs.Arg(0))
 	}
 
 	strategy, err := parseProfileSyncStrategy(opts.SDDProfileStrategy)
@@ -1351,6 +1369,7 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 
 	// Post-apply verification reuses the same component paths as install.
 	result.Verify = runPostSyncVerification(homeDir, rt.workspaceDir, selection)
+	result.Verify = withFailedSyncVerificationNote(result.Verify)
 	if !result.Verify.Ready {
 		return result, fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
 	}
@@ -1382,7 +1401,11 @@ func RunSync(args []string) (SyncResult, error) {
 	// Resolve agents: explicit flag takes precedence over auto-discovery.
 	var agentIDs []model.AgentID
 	if len(flags.Agents) > 0 {
-		agentIDs = asAgentIDs(flags.Agents)
+		parsed, err := asAgentIDs(flags.Agents)
+		if err != nil {
+			return SyncResult{}, err
+		}
+		agentIDs = parsed
 	} else {
 		agentIDs = DiscoverAgents(homeDir)
 	}
@@ -1603,6 +1626,23 @@ func RenderSyncReport(result SyncResult) string {
 	}
 
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// withFailedSyncVerificationNote replaces the generic
+// verify.VerificationIssuesMessage with one naming the concrete command that
+// retries a failed sync: `gentle-ai sync`. Unlike the install path, sync has
+// no per-agent retry command -- rerunning `gentle-ai sync` re-applies every
+// discovered/persisted agent, so no agent list is needed.
+//
+// It is scoped to exactly the generic failure text so it never clobbers a
+// FinalNote that was already customized, mirroring
+// withFailedVerificationNote's install-path guard.
+func withFailedSyncVerificationNote(report verify.Report) verify.Report {
+	if report.Ready || report.FinalNote != verify.VerificationIssuesMessage {
+		return report
+	}
+	report.FinalNote = verify.VerificationIssuesMessageForCommand("gentle-ai sync")
+	return report
 }
 
 // runPostSyncVerification verifies that managed files exist after sync.
