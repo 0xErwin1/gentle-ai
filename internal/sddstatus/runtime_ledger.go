@@ -37,6 +37,7 @@ const (
 	runtimeOperationFinishRemediation = "attempt/finish-remediation"
 	runtimeOperationReset             = "objective/reset"
 	runtimeOperationBind              = "binding/set"
+	runtimeLockAcquireAttempts        = 3
 
 	// runtimeLedgerStatusPointer suffixes every ledger refusal an ordinary
 	// caller can hit (budget exhausted, active attempt, no active attempt,
@@ -70,6 +71,7 @@ var (
 	runtimePublishRecord                     = reviewtransaction.PublishFileNoReplace
 	runtimeReplaceHead                       = reviewtransaction.ReplaceFileAtomic
 	runtimeSyncDirectory                     = reviewtransaction.SyncReviewDirectory
+	runtimeAcquireAuthorityFileLock          = reviewtransaction.AcquireAuthorityFileLock
 	runtimeRemediationFinalAuthorizationHook = func() {}
 )
 
@@ -616,11 +618,8 @@ func (store RuntimeStore) bindPreparedReview(
 	if err := store.ensureDirectories(); err != nil {
 		return RuntimeStatus{}, err
 	}
-	lock, err := reviewtransaction.AcquireAuthorityFileLock(filepath.Join(store.Dir, "LOCK"))
+	lock, err := store.acquireLock()
 	if err != nil {
-		if errors.Is(err, reviewtransaction.ErrConcurrentUpdate) {
-			return RuntimeStatus{}, fmt.Errorf("%w: %v", ErrRuntimeConcurrentUpdate, err)
-		}
 		return RuntimeStatus{}, err
 	}
 	defer lock.Release()
@@ -723,7 +722,7 @@ func (store RuntimeStore) mutate(
 	if err := store.ensureDirectories(); err != nil {
 		return RuntimeStatus{}, err
 	}
-	lock, err := reviewtransaction.AcquireAuthorityFileLock(filepath.Join(store.Dir, "LOCK"))
+	lock, err := store.acquireLock()
 	if err != nil {
 		if errors.Is(err, reviewtransaction.ErrConcurrentUpdate) {
 			return RuntimeStatus{}, fmt.Errorf("%w: %v", ErrRuntimeConcurrentUpdate, err)
@@ -761,6 +760,31 @@ func (store RuntimeStore) mutate(
 		return RuntimeStatus{}, err
 	}
 	return store.commitRecordLocked(record)
+}
+
+func (store RuntimeStore) acquireLock() (*reviewtransaction.AuthorityFileLock, error) {
+	lockPath := filepath.Join(store.Dir, "LOCK")
+	var lastErr error
+	for attempt := 0; attempt < runtimeLockAcquireAttempts; attempt++ {
+		lock, err := runtimeAcquireAuthorityFileLock(lockPath)
+		if err == nil {
+			return lock, nil
+		}
+		if errors.Is(err, reviewtransaction.ErrConcurrentUpdate) {
+			return nil, fmt.Errorf("%w: %v", ErrRuntimeConcurrentUpdate, err)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		lastErr = err
+		if attempt == runtimeLockAcquireAttempts-1 {
+			break
+		}
+		if err := store.ensureDirectories(); err != nil {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("acquire SDD runtime ledger lock %q after %d attempts: %w", lockPath, runtimeLockAcquireAttempts, lastErr)
 }
 
 func (store RuntimeStore) commitRecordLocked(record runtimeRecord) (RuntimeStatus, error) {

@@ -12,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 )
 
 func TestRuntimeLedgerConsumesOrdinalBeforeLaunchAndChargesNativeLines(t *testing.T) {
@@ -256,6 +258,99 @@ func TestRuntimeLedgerCASAllowsOnlyOneConcurrentOrdinal(t *testing.T) {
 	}
 	if status.CumulativeAttempts != 1 || status.ActiveAttempt == nil || status.ActiveAttempt.Ordinal != 1 || countRuntimeRecords(t, store.Dir) != 1 {
 		t.Fatalf("concurrent final status = %#v, records=%d", status, countRuntimeRecords(t, store.Dir))
+	}
+}
+
+func TestRuntimeLedgerPersistentMissingLockPathPreservesNotExist(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "missing-lock-path-change")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalAcquire := runtimeAcquireAuthorityFileLock
+	var calls int
+	runtimeAcquireAuthorityFileLock = func(string) (*reviewtransaction.AuthorityFileLock, error) {
+		calls++
+		return nil, fmt.Errorf("review store lock could not be acquired: %w", os.ErrNotExist)
+	}
+	t.Cleanup(func() { runtimeAcquireAuthorityFileLock = originalAcquire })
+
+	_, err = store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "begin-missing-lock-path", WorkUnit: "same-objective",
+		EvidenceGoal: "preserve persistent filesystem failure", MaxAttempts: 2, MaxChangedLines: 10,
+	})
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("persistent missing lock path error = %T %v, want os.ErrNotExist", err, err)
+	}
+	if errors.Is(err, ErrRuntimeConcurrentUpdate) {
+		t.Fatalf("persistent missing lock path error = %T %v, must not be ErrRuntimeConcurrentUpdate", err, err)
+	}
+	if calls != runtimeLockAcquireAttempts {
+		t.Fatalf("persistent missing lock path acquisition calls = %d, want %d", calls, runtimeLockAcquireAttempts)
+	}
+}
+
+func TestRuntimeLedgerTransientMissingLockPathRetriesSuccessfully(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "transient-lock-path-change")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalAcquire := runtimeAcquireAuthorityFileLock
+	var calls int
+	runtimeAcquireAuthorityFileLock = func(path string) (*reviewtransaction.AuthorityFileLock, error) {
+		calls++
+		if calls == 1 {
+			return nil, fmt.Errorf("review store lock could not be acquired: %w", os.ErrNotExist)
+		}
+		return originalAcquire(path)
+	}
+	t.Cleanup(func() { runtimeAcquireAuthorityFileLock = originalAcquire })
+
+	_, err = store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "begin-transient-lock-path", WorkUnit: "same-objective",
+		EvidenceGoal: "recover from transient initialization race", MaxAttempts: 2, MaxChangedLines: 10,
+	})
+	if err != nil {
+		t.Fatalf("begin after transient missing lock path: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("transient missing lock path acquisition calls = %d, want 2", calls)
+	}
+}
+
+func TestRuntimeLedgerMissingLockPathThenHeldLockIsConcurrentUpdate(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "held-lock-after-missing-path-change")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalAcquire := runtimeAcquireAuthorityFileLock
+	var calls int
+	runtimeAcquireAuthorityFileLock = func(string) (*reviewtransaction.AuthorityFileLock, error) {
+		calls++
+		if calls == 1 {
+			return nil, fmt.Errorf("review store lock could not be acquired: %w", os.ErrNotExist)
+		}
+		return nil, reviewtransaction.ErrConcurrentUpdate
+	}
+	t.Cleanup(func() { runtimeAcquireAuthorityFileLock = originalAcquire })
+
+	_, err = store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "begin-held-lock-after-missing-path", WorkUnit: "same-objective",
+		EvidenceGoal: "classify an observed held lock", MaxAttempts: 2, MaxChangedLines: 10,
+	})
+	if !errors.Is(err, ErrRuntimeConcurrentUpdate) {
+		t.Fatalf("held lock after missing path error = %T %v, want ErrRuntimeConcurrentUpdate", err, err)
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("held lock after missing path error = %T %v, must not be os.ErrNotExist", err, err)
+	}
+	if calls != 2 {
+		t.Fatalf("held lock after missing path acquisition calls = %d, want 2", calls)
 	}
 }
 
