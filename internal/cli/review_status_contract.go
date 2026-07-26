@@ -395,7 +395,13 @@ func (result ReviewTargetStatusResult) Validate() error {
 			return errors.New("current-target receipt status is invalid")
 		}
 	case reviewtransaction.TargetApplicabilityUnrelated:
-		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionStart && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired) || len(result.Candidates) != 0 {
+		// Candidates is intentionally NOT constrained to empty here: plural
+		// stale (scope-changed) lineages report this exact
+		// applicability/action/replayability shape (organic-dx Phase 3e —
+		// nothing governs, so nothing decides) while still listing those
+		// stale lineages as optional, discoverable recovery candidates. An
+		// unrelated target with zero candidates remains equally valid.
+		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionStart && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired) {
 			return errors.New("unrelated target status is inconsistent")
 		}
 	case reviewtransaction.TargetApplicabilityAmbiguous:

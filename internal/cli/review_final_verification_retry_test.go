@@ -188,8 +188,11 @@ func TestReviewRetryFinalVerificationNegotiatedDenialIsNoMutation(t *testing.T) 
 	}
 	var failure ReviewIntegrationFailure
 	decodeStrictReviewJSON(t, output.Bytes(), &failure)
+	// organic-dx Phase 3b task 3b.3: STATUS already re-derives retry
+	// eligibility for this lineage, so the denial now names review.status
+	// instead of a bare stop.
 	if failure.Operation != ReviewIntegrationOperationRetryFinalVerification || failure.Code != "final_verification_retry_denied" ||
-		failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe || failure.NextAction != "stop" {
+		failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe || failure.NextAction != "review.status" {
 		t.Fatalf("retry denial failure = %#v", failure)
 	}
 	if after := cliReviewAuthoritySnapshot(t, fixture.repo); !reflect.DeepEqual(after, before) {

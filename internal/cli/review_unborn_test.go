@@ -192,8 +192,9 @@ func TestReviewFacadeUnbornReceiptDeniesFirstPublicationGates(t *testing.T) {
 // TestFirstPublicationEmptyBaseReceiptRefusal proves 1641: first publication
 // attempted from an empty-base receipt (unborn HEAD, empty base tree) must be
 // refused with a typed error naming the proven in-product escape verbatim —
-// commit an authorized empty root, then run committed base-diff review —
-// instead of the generic "not supported" denial.
+// commit an authorized empty root, then run gentle-ai review start
+// --committed-only with --base-ref set to that commit's SHA — instead of the
+// generic "not supported" denial.
 func TestFirstPublicationEmptyBaseReceiptRefusal(t *testing.T) {
 	repo := initUnbornReviewCLIRepo(t)
 	writeUnbornReviewCandidate(t, repo)
@@ -212,7 +213,7 @@ func TestFirstPublicationEmptyBaseReceiptRefusal(t *testing.T) {
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
 	configureCLIReviewPublicationRemote(t, repo, branch)
 
-	want := "commit an authorized empty root, then run committed base-diff review"
+	want := "commit an authorized empty root, then run gentle-ai review start --committed-only with --base-ref set to that commit's SHA"
 	for _, gate := range []reviewtransaction.GateKind{reviewtransaction.GatePrePush, reviewtransaction.GatePrePR} {
 		output.Reset()
 		err := RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", started.LineageID, "--gate", string(gate), "--base-ref", "origin/" + branch}, &output)

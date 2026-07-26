@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -247,22 +248,68 @@ func TestReviewFacadeStartEmptyCandidateHintsBaseRef(t *testing.T) {
 	}
 }
 
-// TestReviewFacadeStartNonEmptyCandidateHasNoHint proves the hint is scoped to
-// the empty-candidate case and never becomes ambient noise.
-func TestReviewFacadeStartNonEmptyCandidateHasNoHint(t *testing.T) {
+// TestReviewFacadeStartNonEmptyCandidateWithoutLensesHasNoHint proves the hint
+// stays scoped to its two typed cases (empty candidate; lenses required on the
+// unnegotiated form) and never becomes ambient noise: a real, non-empty
+// candidate that is low risk and selects zero lenses has nothing to hint
+// about, so no hint field appears. (A non-empty candidate that DOES require
+// lenses now carries the negotiated-contract hint — see
+// TestReviewFacadeStartLensesRequiredHintsNegotiatedContract — which used to
+// be this test's fixture before that gap was fixed.)
+func TestReviewFacadeStartNonEmptyCandidateWithoutLensesHasNoHint(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
+	if err := os.MkdirAll(filepath.Join(repo, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "docs", "guide.md"), []byte("passive documentation\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "evidence-nonempty"}, &output); err != nil {
 		t.Fatal(err)
 	}
+	var started ReviewFacadeStartResult
+	if err := json.Unmarshal(output.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+	if started.RiskLevel != reviewtransaction.RiskLow || started.LensesRequired {
+		t.Fatalf("docs-only start risk/lenses_required = %q/%v, want low/false", started.RiskLevel, started.LensesRequired)
+	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(output.Bytes(), &fields); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := fields["hint"]; ok {
-		t.Fatalf("non-empty start leaked hint: %s", output.String())
+		t.Fatalf("non-empty low-risk start leaked hint: %s", output.String())
+	}
+}
+
+// TestReviewFacadeStartLensesRequiredHintsNegotiatedContract proves the
+// unnegotiated summary is self-describing: when lenses are required, this
+// response cannot itself carry the frozen candidate_diff/changed_path_manifest
+// (that payload only exists on the negotiated form), so the hint must name
+// the exact --contract invocation — reusing this response's own
+// target_identity and projection — that returns it. This closes the reported
+// gap where a caller who obeys the reviewer contract, but invoked the plain
+// form, was blocked by a refusal that never mentioned the negotiated form.
+func TestReviewFacadeStartLensesRequiredHintsNegotiatedContract(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "service-token.ts"), []byte("export const token = 'candidate'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "evidence-hint-contract"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var started ReviewFacadeStartResult
+	if err := json.Unmarshal(output.Bytes(), &started); err != nil {
+		t.Fatal(err)
+	}
+	if !started.LensesRequired || len(started.SelectedLenses) == 0 {
+		t.Fatalf("service-token start lenses_required = %v, selected_lenses = %v, want lenses selected", started.LensesRequired, started.SelectedLenses)
+	}
+	wantCommand := fmt.Sprintf("gentle-ai review start --contract %s --target %s --projection %s", ReviewIntegrationContractV1, started.TargetIdentity, started.Projection)
+	if !strings.Contains(started.Hint, wantCommand) {
+		t.Fatalf("lenses-required start hint = %q, want it to contain %q", started.Hint, wantCommand)
 	}
 }

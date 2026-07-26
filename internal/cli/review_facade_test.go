@@ -73,6 +73,25 @@ func TestReviewFacadeStartStagedProjectionFreezesOnlyIndex(t *testing.T) {
 	}
 }
 
+// TestReviewStatusActionEligibilityWithoutContractNamesContractValue proves
+// the --contract refusal names the exact escape value rather than only
+// describing the flag, for both call sites that emit it (review status and
+// review finalize).
+func TestReviewStatusActionEligibilityWithoutContractNamesContractValue(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	wantContract := "--contract " + ReviewIntegrationContractV1
+
+	statusErr := RunReviewStatus([]string{"--cwd", repo, "--next-transition"}, io.Discard)
+	if statusErr == nil || !strings.Contains(statusErr.Error(), wantContract) {
+		t.Fatalf("review status --next-transition without --contract error = %v, want it to name %q verbatim", statusErr, wantContract)
+	}
+
+	finalizeErr := RunReviewFacadeFinalize([]string{"--cwd", repo, "--action-eligibility"}, io.Discard)
+	if finalizeErr == nil || !strings.Contains(finalizeErr.Error(), wantContract) {
+		t.Fatalf("review finalize --action-eligibility without --contract error = %v, want it to name %q verbatim", finalizeErr, wantContract)
+	}
+}
+
 // TestReviewFacadeStagedProjectionBaseRefRefusal proves 1812: combining
 // --projection staged with --base-ref (without --workspace-overlay) is
 // ambiguous about intent, so it is refused rather than silently freezing the
@@ -603,6 +622,15 @@ func TestReviewFacadeStartProvableShellAndModeRiskSelectsCanonical4R(t *testing.
 	}
 }
 
+// TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible proves the
+// unnegotiated response never gains a negotiated field (candidate_diff,
+// changed_path_manifest, artifact_subjects, ...); it stays a strict compatible
+// subset. It does NOT promise the field set is frozen forever: "hint" is an
+// existing additive field (see reviewStartEmptyCandidateHint) and now also
+// appears here because this fixture's tracked.txt change requires lenses, so
+// the response names the exact negotiated rerun that returns the frozen
+// payload this lens selection needs (see
+// TestReviewFacadeStartLensesRequiredHintsNegotiatedContract).
 func TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
@@ -616,7 +644,7 @@ func TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible(t *testing.T
 	if err := json.Unmarshal(output.Bytes(), &fields); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"action", "changed_files", "changed_lines", "correction_budget", "lens_bindings", "lenses_required", "lineage_id", "operation", "projection", "risk_evidence", "risk_level", "selected_lenses", "state", "target_identity"}
+	want := []string{"action", "changed_files", "changed_lines", "correction_budget", "hint", "lens_bindings", "lenses_required", "lineage_id", "operation", "projection", "risk_evidence", "risk_level", "selected_lenses", "state", "target_identity"}
 	got := make([]string, 0, len(fields))
 	for field := range fields {
 		got = append(got, field)
@@ -624,6 +652,11 @@ func TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible(t *testing.T
 	slices.Sort(got)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("unnegotiated start fields = %v, want %v", got, want)
+	}
+	for _, negotiatedOnly := range []string{"candidate_diff", "changed_path_manifest", "artifact_subjects", "schema", "contract"} {
+		if _, ok := fields[negotiatedOnly]; ok {
+			t.Fatalf("unnegotiated start leaked negotiated-only field %q: %s", negotiatedOnly, output.String())
+		}
 	}
 }
 

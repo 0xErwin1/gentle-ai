@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -648,6 +649,217 @@ func TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileDisabledNoUpst
 	}
 }
 
+// TestReviewValidatePluralStaleReceiptsReportDisabledUnmanagedDelivery closes
+// the community-reported blocker (decode2, PR #1801): plural terminal
+// receipts are the NORM for any active review-driven-development user --
+// nothing prunes them, and overlapping genesis paths classify scope-changed
+// -- so this is the cross-product fixture that was missing from the disabled
+// coverage above (which only ever exercised {none, one governing, one stale,
+// corrupted, no-upstream}, never two). Before the fix: each stale receipt
+// alone reported disabled/unmanaged (exit 0), but two together classified
+// receipt_ambiguous, which was never in the unmanaged-while-disabled set, so
+// the gate failed closed (exit 1) and blocked an ordinary commit with reviews
+// OFF -- exactly the pre-commit-hook shape decode2 reported.
+func TestReviewValidatePluralStaleReceiptsReportDisabledUnmanagedDelivery(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	logicalPath := "docs/plural-stale.md"
+	lineageA := "review-disabled-plural-stale-a"
+	lineageB := "review-disabled-plural-stale-b"
+
+	_, storeA := approveDiscoveryMarkdownProjection(t, repo, lineageA, logicalPath, "reviewed\n", reviewtransaction.ProjectionWorkspace)
+	if err := os.WriteFile(filepath.Join(repo, filepath.FromSlash(logicalPath)), []byte("drifted\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	disableReviewForClone(t, repo)
+
+	// Proof that each receipt alone yields exit 0 / disabled-unmanaged: only
+	// lineage A's now-stale (scope-changed) receipt exists at this point.
+	var alone bytes.Buffer
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePostApply)}, &alone); err != nil {
+		t.Fatalf("one stale receipt while disabled was denied instead of reported: %v\n%s", err, alone.String())
+	}
+	var aloneResult ReviewValidateResult
+	decodeStrictReviewJSON(t, alone.Bytes(), &aloneResult)
+	if aloneResult.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged || aloneResult.Allowed {
+		t.Fatalf("one stale receipt while disabled = %#v, want disabled/unmanaged", aloneResult)
+	}
+	if aloneResult.Context.Denial == nil || aloneResult.Context.Denial.Code != "candidate-or-paths-mismatch" {
+		t.Fatalf("one stale receipt while disabled denial = %#v", aloneResult.Context.Denial)
+	}
+
+	// cloneApprovedDiscoveryAuthority operates directly on the compact store,
+	// bypassing the CLI's own disabled-mode gate on review/start -- exactly
+	// as a second review earned BEFORE the switch was disabled would already
+	// sit on disk, which is the realistic shape of the community report.
+	cloneApprovedDiscoveryAuthority(t, repo, storeA, lineageB)
+
+	gateInput := reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply}
+	_, _, discoveryErr := discoverCompactFacadeGateReview(context.Background(), repo, "", gateInput)
+	var discovery *ReviewReceiptDiscoveryError
+	if !errors.As(discoveryErr, &discovery) || discovery.Kind != ReviewReceiptAmbiguous || !discovery.DeterministicallyStaleOnly ||
+		!reflect.DeepEqual(discovery.Candidates, []string{lineageA, lineageB}) {
+		t.Fatalf("plural stale discovery = %#v, %v", discovery, discoveryErr)
+	}
+
+	var plural bytes.Buffer
+	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePostApply)}, &plural)
+	if err != nil {
+		t.Fatalf("plural stale receipts while disabled were denied instead of reported: %v\n%s", err, plural.String())
+	}
+	var pluralResult ReviewValidateResult
+	decodeStrictReviewJSON(t, plural.Bytes(), &pluralResult)
+	if pluralResult.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
+		t.Fatalf("plural stale receipts while disabled = %q, want %q", pluralResult.Delivery, reviewtransaction.RDDDeliveryDisabledUnmanaged)
+	}
+	if pluralResult.Allowed || pluralResult.Result == reviewtransaction.GateAllow {
+		t.Fatalf("plural stale receipts while disabled fabricated an approval: %#v", pluralResult)
+	}
+	var denied ReviewGateDeniedError
+	if errors.As(err, &denied) {
+		t.Fatalf("plural stale receipts while disabled were reported as a denial: %#v", denied)
+	}
+	if pluralResult.Context.Denial == nil || pluralResult.Context.Denial.Code != string(ReviewReceiptAmbiguous) {
+		t.Fatalf("plural stale receipts while disabled hid why no receipt governs: %#v", pluralResult.Context.Denial)
+	}
+
+	// The report is an observation, so replaying the same request must return
+	// the same bytes.
+	var replay bytes.Buffer
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePostApply)}, &replay); err != nil {
+		t.Fatalf("replayed plural stale receipts while disabled: %v\n%s", err, replay.String())
+	}
+	if !bytes.Equal(replay.Bytes(), plural.Bytes()) {
+		t.Fatalf("plural stale receipts while disabled is not replay stable:\nfirst:\n%s\nreplay:\n%s", plural.String(), replay.String())
+	}
+}
+
+// TestReviewValidateKeepsFailingClosedOnMultipleExactReceiptsWhileDisabled is
+// the non-negotiable negative proof (organic-dx Phase 3c task 3c.3): two
+// receipts each EXACTLY governing the same candidate is genuine present-tense
+// authority damage -- the gate genuinely cannot pick between two live
+// approvals -- and must keep failing closed even with reviews off. This
+// composition never sets DeterministicallyStaleOnly, so it is unaffected by
+// the plural-stale reclassification above; the single-exact-receipt
+// counterpart (one governing receipt stays authoritative while disabled) is
+// already covered by TestReviewValidateKeepsGoverningReceiptAuthoritativeWhileDisabled
+// above.
+func TestReviewValidateKeepsFailingClosedOnMultipleExactReceiptsWhileDisabled(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	lineageA := "review-disabled-exact-ambiguous-a"
+	_, storeA := approveDiscoveryMarkdownProjection(t, repo, lineageA, "docs/exact.md", "exact\n", reviewtransaction.ProjectionWorkspace)
+
+	// A second lineage approved over the exact same candidate bytes: both
+	// exactly govern.
+	recordA, err := storeA.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := recordA.State.OriginalChangedLines
+	lineageB := "review-disabled-exact-ambiguous-b"
+	clone, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
+		LineageID: lineageB, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: recordA.State.Generation,
+		Snapshot: recordA.State.InitialSnapshot, PolicyHash: recordA.State.PolicyHash, RiskLevel: recordA.State.RiskLevel,
+		SelectedLenses: []string{}, OriginalChangedLines: &lines,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cloneStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, clone.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, err := cloneStore.Replace("", "review/start", clone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := clone.CompleteReview(reviewtransaction.CompactReviewInput{LensResults: []reviewtransaction.LensResult{}}); err != nil {
+		t.Fatal(err)
+	}
+	revision, err = cloneStore.Replace(revision, "review/complete-review", clone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := clone.CompleteVerification([]byte("independent duplicate fixture evidence"), true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cloneStore.Replace(revision, "review/complete-verification", clone); err != nil {
+		t.Fatal(err)
+	}
+	cloneReceipt, err := clone.Receipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reviewtransaction.WriteCompactReceiptAtomic(cloneStore.ReceiptPath(), cloneReceipt); err != nil {
+		t.Fatal(err)
+	}
+
+	disableReviewForClone(t, repo)
+
+	gateInput := reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePostApply}
+	_, _, discoveryErr := discoverCompactFacadeGateReview(context.Background(), repo, "", gateInput)
+	var discovery *ReviewReceiptDiscoveryError
+	if !errors.As(discoveryErr, &discovery) || discovery.Kind != ReviewReceiptAmbiguous || discovery.DeterministicallyStaleOnly {
+		t.Fatalf("multiple exact receipts discovery while disabled = %#v, %v, want ambiguous and NOT deterministically stale", discovery, discoveryErr)
+	}
+
+	var output bytes.Buffer
+	runErr := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePostApply)}, &output)
+	var denied ReviewGateDeniedError
+	if !errors.As(runErr, &denied) {
+		t.Fatalf("multiple exact receipts while disabled did not fail closed: %T %v\n%s", runErr, runErr, output.String())
+	}
+	var result ReviewValidateResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if result.Delivery == reviewtransaction.RDDDeliveryDisabledUnmanaged {
+		t.Fatalf("multiple exact receipts while disabled was reported as unmanaged by choice: %#v", result)
+	}
+	if result.Allowed || result.Context.Denial == nil || result.Context.Denial.Code != string(ReviewReceiptAmbiguous) {
+		t.Fatalf("multiple exact receipts denial while disabled = %#v", result)
+	}
+}
+
+// TestReviewReceiptDiscoveryIsUnmanagedWhileDisabledRejectsUndecidableAmbiguousCompositions
+// is the second non-negotiable negative proof (organic-dx Phase 3c task
+// 3c.3): a composition containing assessmentUnknown or scopeWithoutContext is
+// undecidable -- the assessment for that lineage could not even be completed
+// -- so it must never reclassify as unmanaged-while-disabled, regardless of
+// how many other lineages in the same composition are deterministically
+// stale. Fabricating a live assessmentUnknown/scopeWithoutContext fixture
+// through the full discovery pipeline requires forcing an untyped
+// AssessCompactGateTarget error or a CompactScopeChangeDiagnostics failure;
+// both are unit-tested at their own layer in internal/reviewtransaction, so
+// this proves the classifier's decision directly against the exact
+// composition boundary discoverCompactFacadeGateReview computes (see the
+// staleOnly computation immediately above the ReviewReceiptAmbiguous return
+// in discoverCompactFacadeGateReview): DeterministicallyStaleOnly is set only
+// when both scopeWithoutContext and assessmentUnknown are empty.
+func TestReviewReceiptDiscoveryIsUnmanagedWhileDisabledRejectsUndecidableAmbiguousCompositions(t *testing.T) {
+	// The zero value already proves the fail-closed default: a discovery
+	// error built the way discoverCompactFacadeGateReview builds one for any
+	// composition containing an undecidable lineage (assessmentUnknown or
+	// scopeWithoutContext) never sets DeterministicallyStaleOnly.
+	undecidable := &ReviewReceiptDiscoveryError{Kind: ReviewReceiptAmbiguous, Candidates: []string{"a", "b"}}
+	if reviewReceiptDiscoveryIsUnmanagedWhileDisabled(undecidable) {
+		t.Fatalf("undecidable ambiguous composition reclassified as unmanaged-while-disabled: %#v", undecidable)
+	}
+	// The positive control: the same Kind with the composition flag proven
+	// true (every contributing lineage deterministically stale) does
+	// reclassify -- proving the assertion above is discriminating on the
+	// field, not vacuously true for every ReviewReceiptAmbiguous value.
+	staleOnly := &ReviewReceiptDiscoveryError{Kind: ReviewReceiptAmbiguous, Candidates: []string{"a", "b"}, DeterministicallyStaleOnly: true}
+	if !reviewReceiptDiscoveryIsUnmanagedWhileDisabled(staleOnly) {
+		t.Fatalf("deterministically-stale-only ambiguous composition did not reclassify as unmanaged-while-disabled: %#v", staleOnly)
+	}
+	// authority_corrupted stays untouched regardless of the field.
+	corrupted := &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted}
+	if reviewReceiptDiscoveryIsUnmanagedWhileDisabled(corrupted) {
+		t.Fatalf("corrupted authority reclassified as unmanaged-while-disabled: %#v", corrupted)
+	}
+}
+
 // finalizeFacadeReviewForRepo runs one complete reviewed flow over the live
 // candidate: start with the given extra arguments, submit one clean result per
 // selected lens, and finalize to a terminal receipt.
@@ -685,5 +897,81 @@ func disableReviewForClone(t *testing.T, repo string) {
 	}
 	if status := decodeReviewModeResult(t, output.Bytes()).Status; status.Effective != reviewtransaction.RDDModeOff {
 		t.Fatalf("kill switch did not take effect: %#v", status)
+	}
+}
+
+// TestReviewValidateReportsDisabledUnmanagedDeliveryOverThreeStaleReceiptsAtPrePush
+// adopts tester fisidj's exploratory repro (Windows + OpenCode, Refresh 4, PR
+// #1801 comment 2026-07-26T10:58) as an explicit fixture for the Phase 3c fix
+// (organic-dx Phase 3f task 3f.1). Phase 3c's own fixture
+// (TestReviewValidatePluralStaleReceiptsReportDisabledUnmanagedDelivery above)
+// used two receipts built by cloning compact authority directly; fisidj's
+// repro is the cleaner, real-world shape -- three separate reviewed and
+// finalized commits over a real bare remote, the first two actually pushed --
+// and proves the DeterministicallyStaleOnly fix is not count-specific.
+func TestReviewValidateReportsDisabledUnmanagedDeliveryOverThreeStaleReceiptsAtPrePush(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
+	configureCLIReviewPublicationRemote(t, repo, branch)
+
+	if err := os.MkdirAll(filepath.Join(repo, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	docPath := filepath.Join(repo, "docs", "plural-stale-three.md")
+
+	// Docs commit 1: reviewed, finalized, pushed.
+	if err := os.WriteFile(docPath, []byte("first reviewed docs change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	finalizeFacadeReviewForRepo(t, repo)
+	runReviewCLIGit(t, repo, "add", "docs/plural-stale-three.md")
+	runReviewCLIGit(t, repo, "commit", "-qm", "docs commit 1")
+	runReviewCLIGit(t, repo, "push", "origin", branch)
+
+	// Docs commit 2: reviewed, finalized, pushed.
+	if err := os.WriteFile(docPath, []byte("second reviewed docs change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	finalizeFacadeReviewForRepo(t, repo)
+	runReviewCLIGit(t, repo, "add", "docs/plural-stale-three.md")
+	runReviewCLIGit(t, repo, "commit", "-qm", "docs commit 2")
+	runReviewCLIGit(t, repo, "push", "origin", branch)
+
+	// Docs commit 3: reviewed, finalized, NOT pushed -- this is the receipt
+	// that must still classify stale (scope-changed) once the fourth,
+	// unreviewed commit lands below.
+	if err := os.WriteFile(docPath, []byte("third reviewed docs change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	finalizeFacadeReviewForRepo(t, repo)
+	runReviewCLIGit(t, repo, "add", "docs/plural-stale-three.md")
+	runReviewCLIGit(t, repo, "commit", "-qm", "docs commit 3")
+
+	disableReviewForClone(t, repo)
+
+	// One unreviewed docs commit, authored entirely while disabled.
+	if err := os.WriteFile(docPath, []byte("unreviewed docs change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "docs/plural-stale-three.md")
+	runReviewCLIGit(t, repo, "commit", "-qm", "unreviewed docs commit")
+
+	var output bytes.Buffer
+	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePrePush)}, &output)
+	if err != nil {
+		t.Fatalf("three stale receipts while disabled were denied instead of reported: %v\n%s", err, output.String())
+	}
+	var result ReviewValidateResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if result.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
+		t.Fatalf("three stale receipts while disabled = %q, want %q", result.Delivery, reviewtransaction.RDDDeliveryDisabledUnmanaged)
+	}
+	if result.Allowed || result.Result == reviewtransaction.GateAllow {
+		t.Fatalf("three stale receipts while disabled fabricated an approval: %#v", result)
+	}
+	var denied ReviewGateDeniedError
+	if errors.As(err, &denied) {
+		t.Fatalf("three stale receipts while disabled were reported as a denial: %#v", denied)
 	}
 }

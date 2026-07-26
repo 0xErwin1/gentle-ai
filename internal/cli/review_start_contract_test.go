@@ -684,8 +684,13 @@ func TestNegotiatedReviewStartPreservesLegacyPayloadAndAuthorityIdentity(t *test
 		gotFields = append(gotFields, field)
 	}
 	sortStrings(gotFields)
+	// "hint" is present here (see TestReviewFacadeStartLensesRequiredHintsNegotiatedContract
+	// in review_start_evidence_test.go) because this fixture's tracked.txt
+	// change requires lenses: the unnegotiated response cannot itself carry
+	// the frozen candidate_diff/changed_path_manifest/artifact_subjects those
+	// lenses need, so it names the exact negotiated rerun that returns them.
 	wantFields := []string{
-		"action", "changed_files", "changed_lines", "correction_budget", "lens_bindings", "lenses_required",
+		"action", "changed_files", "changed_lines", "correction_budget", "hint", "lens_bindings", "lenses_required",
 		"lineage_id", "operation", "projection", "risk_evidence", "risk_level", "selected_lenses", "state", "target_identity",
 	}
 	if !reflect.DeepEqual(gotFields, wantFields) {

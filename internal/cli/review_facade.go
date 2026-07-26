@@ -21,6 +21,46 @@ import (
 	"github.com/gentleman-programming/gentle-ai/internal/sddstatus"
 )
 
+// reviewContractRequiredForActionEligibilityReason is the single wording
+// source for the refusal when --action-eligibility or --next-transition is
+// requested without --contract. Both runReviewStatus and
+// runReviewFacadeFinalize emit it so the two call sites cannot drift, and it
+// names the exact contract value the caller must pass rather than only
+// describing the requirement.
+const reviewContractRequiredForActionEligibilityReason = "--action-eligibility and --next-transition require --contract " + ReviewIntegrationContractV1
+
+// reviewStatusTargetSelectorsRequireContractReason is the sibling of
+// reviewContractRequiredForActionEligibilityReason above: it names the same
+// exact contract value for the other set of --contract-gated review status
+// flags (target selectors such as --lineage, --base-ref, --base-tree,
+// --workspace-overlay, --projection, --gate, and the recovery selectors).
+const reviewStatusTargetSelectorsRequireContractReason = "review status target selectors require --contract " + ReviewIntegrationContractV1
+
+// reviewStartTargetRequiresContractReason is the sibling of
+// reviewContractRequiredForActionEligibilityReason above, naming the same
+// exact contract value for review start --target used without --contract.
+const reviewStartTargetRequiresContractReason = "review start --target requires --contract " + ReviewIntegrationContractV1
+
+// reviewFacadeReceiptNotAvailableReason is the single wording source for the
+// refusal when a compact (or legacy) facade lineage was discovered but has
+// not been finalized yet, so its receipt does not exist on disk. It names
+// the exact continuation — finalize the already-discovered lineage — instead
+// of only describing the missing artifact. All three call sites in this file
+// (the validate gate path and both terminal-discovery helpers) share it so
+// they cannot drift.
+func reviewFacadeReceiptNotAvailableReason(lineageID string) string {
+	return fmt.Sprintf("facade review receipt is not available; run gentle-ai review finalize --lineage %s to produce one", lineageID)
+}
+
+// reviewCompactFacadeLineageNotDiscoverableReason is the single wording
+// source for the refusal when selector-free compact lineage discovery finds
+// no candidate. This is reached only after every otherwise-loadable leaf has
+// already been ruled out (a genuinely quarantined terminal lineage does not
+// count as discoverable either), so the message must stay honest for both a
+// lineage that was never started here and one started under a different
+// --cwd; it never claims nothing was ever attempted.
+const reviewCompactFacadeLineageNotDiscoverableReason = "no discoverable compact facade review lineage found; run gentle-ai review start to begin one, or pass --cwd if it was started from a different repository path"
+
 const facadeReviewPolicy = `Gentle AI native bounded review policy.
 
 Only candidate-caused BLOCKER or CRITICAL findings may require correction. Pre-existing and base-only findings are follow-ups. One correction is bounded by the frozen original scope, and delivery gates validate the terminal receipt against live Git evidence.
@@ -69,6 +109,19 @@ const ReviewStartConsentDeclinedThisCandidate = "declined_this_candidate"
 // discoverable where it is needed: a clean worktree yields an empty candidate,
 // and the fix is to name the base to compare against, not to redo the work.
 const reviewStartEmptyCandidateHint = "the candidate has no pending changes; already-committed work can be reviewed by rerunning review start with --base-ref <commit> naming the base to compare against"
+
+// reviewStartNegotiateContractHint makes the negotiated contract path
+// discoverable exactly where an unnegotiated caller needs it: this response's
+// selected lenses require the frozen candidate_diff, changed_path_manifest,
+// and artifact_subjects that only the negotiated form returns, so the hint
+// names the exact rerun invocation, reusing this same response's own
+// target_identity and projection instead of only describing the requirement.
+func reviewStartNegotiateContractHint(targetIdentity string, projection reviewtransaction.Projection) string {
+	return fmt.Sprintf(
+		"this response's selected lenses require the frozen candidate diff, changed-path manifest, and artifact subjects, which only the negotiated contract form returns; rerun with `gentle-ai review start --contract %s --target %s --projection %s` to receive them",
+		ReviewIntegrationContractV1, targetIdentity, projection,
+	)
+}
 
 // ReviewFacadeLensBinding pairs one selected lens with its frozen zero-based
 // order so orchestrators build capture bindings exclusively from START output.
@@ -125,6 +178,30 @@ type ReviewReceiptDiscoveryError struct {
 	// Detail preserves the exact typed cause of a deterministic mismatch so
 	// the denial states what is actually true instead of a generic projection.
 	Detail string
+	// DeterministicallyStaleOnly is meaningful only when Kind ==
+	// ReviewReceiptAmbiguous. It records the ambiguity's COMPOSITION: true
+	// only when every lineage contributing to it classified into a
+	// deterministically-typed stale bucket (scope-changed, delivery-shape, or
+	// target-resolution) rather than an undecidable one (assessment-unknown
+	// or scope-diagnostics-unavailable) or a genuinely competing exact match
+	// (len(exact) > 1, which never sets this field). organic-dx Phase 3c: the
+	// gate asks exactly one question -- does an approved receipt cover
+	// exactly these candidate bytes? A stale receipt must INFORM, never
+	// DECIDE. When this field is true, discovery has proven no candidate
+	// governs, so the residual ambiguity is only about which stale lineage to
+	// name in diagnostics -- it never has a delivery consequence, in either
+	// mode. A false value (the default) means the gate genuinely cannot pick
+	// -- present-tense authority damage, or an assessment that could not even
+	// be completed -- and must keep failing closed regardless of the kill
+	// switch.
+	//
+	// A bool field was chosen over a distinct ReviewReceiptDiscoveryKind
+	// because Kind is wire-facing (JSON "code", docs continuation table,
+	// Phase 4's narration registry); splitting it would ripple through all
+	// three surfaces for a distinction that has no separate wire behavior of
+	// its own -- it only feeds one internal classification decision. This
+	// field is package-internal bookkeeping, never serialized.
+	DeterministicallyStaleOnly bool
 }
 
 func (err *ReviewReceiptDiscoveryError) Error() string {
@@ -137,7 +214,22 @@ func (err *ReviewReceiptDiscoveryError) Error() string {
 	case ReviewReceiptScopeChanged:
 		message = "terminal review receipts do not exactly match the live gate target"
 	case ReviewReceiptAmbiguous:
-		message = "multiple terminal review receipts require explicit target selection"
+		if err.DeterministicallyStaleOnly {
+			// organic-dx Phase 3c (community blocker + maintainer scope
+			// extension): every contributing lineage is proven stale, so
+			// nothing governs this candidate. Blocking stays correct where
+			// this message is used to deny (reviews enabled): the candidate
+			// genuinely was never reviewed. But the caller is told the truth
+			// -- review it -- instead of being sent to disambiguate history.
+			// Recovering a listed prior lineage remains available, never
+			// required.
+			message = "no terminal review receipt governs this candidate"
+			if len(err.Candidates) > 0 {
+				message += "; review it directly with gentle-ai review start, or optionally recover a prior lineage instead: " + strings.Join(err.Candidates, ", ")
+			}
+		} else {
+			message = "multiple terminal review receipts require explicit target selection"
+		}
 	case ReviewAuthorityCorrupted:
 		message = "complete review authority inventory is unavailable or corrupted"
 	case ReviewReceiptTargetUnresolvable:
@@ -149,6 +241,45 @@ func (err *ReviewReceiptDiscoveryError) Error() string {
 	return message
 }
 
+// errReviewMixedCompactLegacyAuthority reports that a gate-validate target is
+// claimed as an exact governing candidate by BOTH the compact v2 store and a
+// terminal legacy v1 chain. organic-dx Phase 3c task 3c.6 ("same-pass
+// candidate"): this is the untyped twin of the community-reported
+// plural-stale-receipt blocker (3c.1-3c.5 above) -- it too fails
+// unconditionally, in every mode, hitting the same upgrader cohort (anyone
+// who reviewed with gentle-ai before compact v2 shipped and has since
+// reviewed the same target again post-upgrade).
+//
+// It is typed here (so a caller can match it with errors.Is) but
+// deliberately left OUTSIDE the ReviewReceiptDiscoveryError /
+// reviewReceiptDiscoveryIsUnmanagedWhileDisabled machinery the other
+// discovery errors in this file flow through, and is NOT reclassified as
+// unmanaged-while-disabled:
+//
+//  1. Different shape. discoverCompactFacadeGateReview already proved the
+//     compact receipt EXACTLY governs -- compactErr == nil in the unqualified
+//     (no --lineage) discovery path is reached ONLY from that function's
+//     single len(exact) == 1 return. A stale receipt never governs anything
+//     and is safe to ignore while reviews are off; here a receipt that DOES
+//     govern is contested by a second, independent authority system that
+//     ALSO exactly matches. That is present-tense competing authority -- the
+//     same shape task 3c.3 keeps failing closed for len(exact) > 1 within a
+//     single store, just spanning two stores instead of one. Reclassifying it
+//     would mean silently picking one authority system over the other.
+//  2. Computed unconditionally, before this function even branches on
+//     --contract negotiation or consults the disabled/enabled disposition, by
+//     design: whichever store would be picked, that choice needs the user
+//     deliberate about it. Routing it through the typed-discovery machinery
+//     would require restructuring this control flow for a case that must
+//     keep failing closed anyway regardless of the kill switch -- not
+//     proportionate for this scoped fix.
+//
+// No fixture in this package exercised this branch at all (in either mode)
+// before this task -- confirmed by search. Covered now by
+// TestUnqualifiedGateDiscoveryFailsClosedOnMixedCompactAndLegacyAuthority in
+// review_receipt_discovery_test.go, proving both modes still fail closed.
+var errReviewMixedCompactLegacyAuthority = errors.New("review authority is ambiguous across compact v2 and legacy v1 stores; specify and clean up the intended lineage")
+
 // ReviewFacadeReceiptPublicationError reports the only safe interpretation of
 // a terminal authority whose derived receipt could not be materialized.
 type ReviewFacadeReceiptPublicationError struct {
@@ -157,12 +288,17 @@ type ReviewFacadeReceiptPublicationError struct {
 	LineageID       string `json:"lineage_id"`
 	RequestDigest   string `json:"request_digest"`
 	Cause           error  `json:"-"`
+	// DefectReportClause is the Tier C companion (organic-dx tasks.md 5.6),
+	// set only for the confirmed genuine deadlock (3b.8): an already-
+	// terminal-committed authority whose derived receipt bytes conflict with
+	// an existing immutable receipt.json at the same CAS path.
+	DefectReportClause string `json:"-"`
 }
 
 func (err *ReviewFacadeReceiptPublicationError) Error() string {
 	return fmt.Sprintf(
-		"write compact review receipt: %v (mutation_outcome: %s, replayability: %s, lineage: %s, request_digest: %s)",
-		err.Cause, err.MutationOutcome, err.Replayability, err.LineageID, err.RequestDigest,
+		"write compact review receipt: %v (mutation_outcome: %s, replayability: %s, lineage: %s, request_digest: %s).%s",
+		err.Cause, err.MutationOutcome, err.Replayability, err.LineageID, err.RequestDigest, err.DefectReportClause,
 	)
 }
 
@@ -192,6 +328,14 @@ func (err *reviewFacadeOperationProgressError) record(lineage, revision string) 
 		err.committed.Store(&snapshot)
 	}
 }
+
+// assessCompactGateTargetForDiscovery is the hookable seam
+// discoverCompactFacadeGateReview calls for the expensive, per-leaf,
+// git-subprocess-heavy applicability check. organic-dx Phase 3d tests
+// override it to count how many terminal leaves still need the full
+// assessment after the genesis-path-disjointness fast path (below) has
+// skipped every leaf it can prove cannot govern the live candidate.
+var assessCompactGateTargetForDiscovery = reviewtransaction.AssessCompactGateTarget
 
 var writeCompactFacadeReceipt = func(ctx context.Context, store reviewtransaction.CompactStore, receipt reviewtransaction.CompactReceipt) error {
 	return store.WriteReceipt(ctx, receipt)
@@ -613,6 +757,13 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			}
 			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, evidenceAvailable, artifactErr, reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: strings.TrimSpace(*lineage), RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector})
 			result.NextTransition = &transition
+			// The stdout JSON envelope is the machine surface and stays
+			// byte-for-byte unchanged; this is the additive Tier C human
+			// surface (spec "Three-Tier Narration Contract"), written to
+			// stderr only, never mixed into the parsed stream.
+			if transition.Kind == reviewNextTransitionStop {
+				reviewNarrateStopReason(transition.ReasonCode)
+			}
 		}
 		if err := result.Validate(); err != nil {
 			return fmt.Errorf("validate negotiated review status: %w", err)
@@ -620,10 +771,10 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		return encodeReviewJSON(stdout, result)
 	}
 	if *actionEligibility || *nextTransition {
-		return errors.New("--action-eligibility and --next-transition require --contract")
+		return errors.New(reviewContractRequiredForActionEligibilityReason)
 	}
 	if strings.TrimSpace(*lineage) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" || *repairActor != "" || *repairReason != "" || *repairAuthorization != "" {
-		return errors.New("review status target selectors require --contract")
+		return errors.New(reviewStatusTargetSelectorsRequireContractReason)
 	}
 	report, err := reviewtransaction.InventoryAuthority(ctx, *cwd)
 	if err != nil {
@@ -661,8 +812,18 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected review recover argument %q", flags.Arg(0))
 	}
-	if strings.TrimSpace(*predecessor) == "" || strings.TrimSpace(*expected) == "" || strings.TrimSpace(*successor) == "" || strings.TrimSpace(*reason) == "" || strings.TrimSpace(*actor) == "" || strings.TrimSpace(*disposition) == "" {
-		return errors.New("review recover requires --predecessor-lineage, --expected-predecessor-revision, --successor-lineage, --disposition, --reason, and --actor")
+	if strings.TrimSpace(*predecessor) == "" || strings.TrimSpace(*expected) == "" || strings.TrimSpace(*successor) == "" || strings.TrimSpace(*disposition) == "" {
+		return errors.New("review recover requires --predecessor-lineage, --expected-predecessor-revision, --successor-lineage, and --disposition")
+	}
+	// Self-derived recovery (organic-dx Duty 2): absence of
+	// --maintainer-authorization, not its value, is what triggers
+	// derivation, so an explicitly-supplied wrong binding never reaches
+	// this branch and still refuses downstream exactly as before
+	// self-derivation existed (reviewFlagWasProvided is a flags.Visit
+	// presence check, not an empty-value check).
+	authorizationProvided := reviewFlagWasProvided(flags, "maintainer-authorization")
+	if authorizationProvided && (strings.TrimSpace(*reason) == "" || strings.TrimSpace(*actor) == "") {
+		return errors.New("review recover requires --reason and --actor when --maintainer-authorization is supplied")
 	}
 	builder := reviewtransaction.SnapshotBuilder{Repo: *cwd}
 	root, err := builder.ResolveRepositoryRoot(context.Background())
@@ -760,6 +921,29 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 	})
 	if err != nil {
 		return err
+	}
+	// Self-derived recovery (organic-dx Duty 2): for one of the deterministic
+	// recovery shapes already proven legal, derive actor (from repository
+	// Git identity), reason (a closed machine-generated constant naming the
+	// triggering state), and the maintainer-authorization binding itself, so
+	// no operator argv is required. This mechanism does not widen authority:
+	// reviewtransaction.RecoverCompactAuthority still performs every existing
+	// legality check on the derived values exactly as it does on operator-
+	// supplied ones, so an illegal recovery (an ACTIVE predecessor, a
+	// non-accounting-only escalation over an unchanged target, a no-drift
+	// scope-changed reset, and so on) still refuses.
+	if !authorizationProvided {
+		shape, derivable := reviewSelfRecoveryShapeForRecover(predecessorRecord.State.State, snapshot.Identity != predecessorRecord.State.InitialSnapshot.Identity)
+		if !derivable {
+			return errors.New("review recover requires --reason, --actor, and --maintainer-authorization for this predecessor state")
+		}
+		*actor = reviewAuditActor(context.Background(), root)
+		*reason = reviewSelfRecoveryReason(shape)
+		successorForBinding := ""
+		if stagedScopeOverlay && predecessorRecord.State.State == reviewtransaction.StateApproved {
+			successorForBinding = *successor
+		}
+		*authorization = reviewTransitionRecoveryAuthorization(ReviewTransitionBinding{LineageID: *predecessor, Revision: *expected, TargetIdentity: snapshot.Identity}, successorForBinding, *actor, *reason)
 	}
 	if *releaseScope {
 		*authorization = reviewtransaction.ReleaseScopeRecoveryAuthorization
@@ -1115,8 +1299,11 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		// reporting a different frozen authority keeps the previous shape.
 		if authority.InitialSnapshot.Identity == snapshot.Identity {
 			legacyResult.RiskEvidence = reviewConsentRiskEvidence(assessment)
-			if legacyResult.ChangedFiles == 0 && target.Kind == reviewtransaction.TargetCurrentChanges {
+			switch {
+			case legacyResult.ChangedFiles == 0 && target.Kind == reviewtransaction.TargetCurrentChanges:
 				legacyResult.Hint = reviewStartEmptyCandidateHint
+			case legacyResult.LensesRequired:
+				legacyResult.Hint = reviewStartNegotiateContractHint(legacyResult.TargetIdentity, legacyResult.Projection)
 			}
 		}
 		return encodeReviewJSON(stdout, legacyResult)
@@ -1174,7 +1361,7 @@ func validateReviewStartBinding(args []string, negotiated bool, target, projecti
 	counts := reviewStartBindingFlagCounts(args)
 	if !negotiated {
 		if counts["target"] != 0 {
-			return errors.New("review start --target requires --contract")
+			return errors.New(reviewStartTargetRequiresContractReason)
 		}
 		return nil
 	}
@@ -1387,7 +1574,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		return err
 	}
 	if (*actionEligibility || *nextTransition) && !negotiated {
-		return errors.New("--action-eligibility and --next-transition require --contract")
+		return errors.New(reviewContractRequiredForActionEligibilityReason)
 	}
 	stdinPaths := append(append([]string{}, resultPaths...), resultArtifactFiles...)
 	if countFacadeStdin(stdinPaths, *validationPath, *refuterPath, *evidencePath) > 1 {
@@ -1461,7 +1648,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			if terminalPending != nil {
 				requestDigest = terminalPending.Request.RequestDigest
 			}
-			return newFacadeReceiptPublicationError(state.LineageID, requestDigest, err)
+			return newFacadeReceiptPublicationError(ctx, root, state.LineageID, requestDigest, err)
 		}
 		if terminalReceiptExists {
 			if terminalPending == nil {
@@ -1630,7 +1817,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		if returnErr == nil {
 			completionErr := store.CompleteFinalizeAttempt(requestDigest)
 			if completionErr != nil && facadeTerminalState(state.State) {
-				returnErr = newFacadeReceiptPublicationError(state.LineageID, requestDigest, completionErr)
+				returnErr = newFacadeReceiptPublicationError(ctx, root, state.LineageID, requestDigest, completionErr)
 			} else {
 				returnErr = completionErr
 			}
@@ -1679,14 +1866,14 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		}
 	}
 	if err := writeCompactFacadeReceipt(ctx, store, receipt); err != nil {
-		return newFacadeReceiptPublicationError(state.LineageID, requestDigest, err)
+		return newFacadeReceiptPublicationError(ctx, root, state.LineageID, requestDigest, err)
 	}
 	published, err := inspectCompactFacadeReceipt(store.ReceiptPath(), receipt)
 	if err != nil {
-		return newFacadeReceiptPublicationError(state.LineageID, requestDigest, err)
+		return newFacadeReceiptPublicationError(ctx, root, state.LineageID, requestDigest, err)
 	}
 	if !published {
-		return newFacadeReceiptPublicationError(state.LineageID, requestDigest, errors.New("receipt writer did not materialize the derived receipt"))
+		return newFacadeReceiptPublicationError(ctx, root, state.LineageID, requestDigest, errors.New("receipt writer did not materialize the derived receipt"))
 	}
 	if err := store.MarkFinalizeAttemptReceiptPublished(requestDigest); err != nil {
 		return err
@@ -1899,15 +2086,28 @@ func inspectCompactFacadeReceipt(path string, expected reviewtransaction.Compact
 	return true, nil
 }
 
-func newFacadeReceiptPublicationError(lineage, requestDigest string, cause error) error {
+func newFacadeReceiptPublicationError(ctx context.Context, root, lineage, requestDigest string, cause error) error {
 	replayability := string(reviewtransaction.ReplayabilityExactReplaySafe)
+	clause := ""
 	var conflict *reviewtransaction.ImmutablePublicationConflictError
 	if errors.As(cause, &conflict) {
 		replayability = string(reviewtransaction.ReplayabilityManualActionRequired)
+		// Confirmed genuine deadlock (organic-dx tasks.md 3b.8): none of
+		// reclaim (incomplete entries only), reconcile-authority (invalid
+		// recovery-successor edges only), or repair's AuthorityRepairConflicting
+		// (a different, multi-lineage-alias conflict class) resolves this
+		// shape. A defect report is this fault's designed exit for this release.
+		clause = reviewGenerateToolFaultDefectReport(ctx, root, reviewDefectReportInput{
+			Operation:            "review finalize --lineage",
+			ReasonCode:           "receipt_publication_conflict",
+			ErrorMessage:         cause.Error(),
+			TerminalPrecondition: "an already-terminal-committed review authority's derived receipt differs from an existing immutable receipt at the same storage path; there is no command to reconcile it",
+			StateIdentifiers:     map[string]string{"lineage": lineage, "request_digest": requestDigest},
+		})
 	}
 	return &ReviewFacadeReceiptPublicationError{
 		MutationOutcome: "committed", Replayability: replayability,
-		LineageID: lineage, RequestDigest: requestDigest, Cause: cause,
+		LineageID: lineage, RequestDigest: requestDigest, Cause: cause, DefectReportClause: clause,
 	}
 }
 
@@ -1959,7 +2159,7 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 		return err
 	}
 	if strings.TrimSpace(*gate) == "" {
-		return errors.New("review validate requires --gate")
+		return fmt.Errorf("review validate requires --gate: one of %s", strings.Join(reviewIntegrationGateNames(), ", "))
 	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
 	if err != nil {
@@ -1978,14 +2178,14 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 	if compactErr == nil {
 		if strings.TrimSpace(*lineage) != "" {
 			if _, _, _, legacyErr := discoverFacadeReview(ctx, root, *lineage, true); legacyErr == nil {
-				return errors.New("review authority is ambiguous across compact v2 and legacy v1 stores; specify and clean up the intended lineage")
+				return errReviewMixedCompactLegacyAuthority
 			}
 		} else if legacyExactFacadeGateLineages(ctx, root, gateInput) > 0 {
-			return errors.New("review authority is ambiguous across compact v2 and legacy v1 stores; specify and clean up the intended lineage")
+			return errReviewMixedCompactLegacyAuthority
 		}
 		payload, err := os.ReadFile(compactStore.ReceiptPath())
 		if err != nil {
-			return errors.New("facade review receipt is not available")
+			return errors.New(reviewFacadeReceiptNotAvailableReason(compactRecord.State.LineageID))
 		}
 		receipt, err := reviewtransaction.ParseCompactReceipt(payload)
 		if err != nil {
@@ -2021,7 +2221,7 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 			// reviews enabled, this falls through unchanged to the existing
 			// typed target-resolution denial below.
 			unresolvable := &ReviewReceiptDiscoveryError{Kind: ReviewReceiptTargetUnresolvable, Detail: targetResolution.Error()}
-			if reviewReceiptDiscoveryIsUnmanagedWhileDisabled(unresolvable.Kind) &&
+			if reviewReceiptDiscoveryIsUnmanagedWhileDisabled(unresolvable) &&
 				reviewDeliveryDisposition(ctx, root, false) == reviewtransaction.RDDDeliveryDisabledUnmanaged {
 				return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, unresolvable)
 			}
@@ -2045,7 +2245,7 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 			// authority means something is wrong rather than unmanaged by
 			// choice, and keeps failing closed so the user resolves it
 			// explicitly.
-			if reviewReceiptDiscoveryIsUnmanagedWhileDisabled(discovery.Kind) &&
+			if reviewReceiptDiscoveryIsUnmanagedWhileDisabled(discovery) &&
 				reviewDeliveryDisposition(ctx, root, false) == reviewtransaction.RDDDeliveryDisabledUnmanaged {
 				return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, discovery)
 			}
@@ -2133,6 +2333,23 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 	targetResolution := []targetResolutionFailure{}
 	terminalCount := 0
 	allLineages := []string{}
+	// organic-dx Phase 3d: as terminal lineages accumulate, most of them can
+	// never govern the live candidate again, yet every gate call re-assessed
+	// every one of them with AssessCompactGateTarget's several git
+	// subprocesses. For GatePreCommit only (its staged projection makes the
+	// live resolution provably identical across every ordinary leaf --
+	// see CompactPreCommitDiscoveryBaseline's doc comment), resolve that
+	// live candidate ONCE and use it to skip the expensive per-leaf call for
+	// any leaf whose genesis paths are disjoint from it. A leaf that fails
+	// the cheap, exact eligibility check still gets the full, unmodified
+	// assessment below -- this can only ever SKIP work whose outcome is
+	// already provably CompactGateTargetUnrelated (contributes to no
+	// discovery bucket), never change which bucket a leaf lands in.
+	var (
+		preCommitBaseline      reviewtransaction.CompactPreCommitDiscoveryBaseline
+		preCommitBaselineOK    bool
+		preCommitBaselineTried bool
+	)
 	for _, store := range stores {
 		record, loadErr := store.Load()
 		if loadErr != nil {
@@ -2152,10 +2369,21 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 		}
 		terminalCount++
 		allLineages = append(allLineages, record.State.LineageID)
+		if input.Gate == reviewtransaction.GatePreCommit {
+			if !preCommitBaselineTried {
+				preCommitBaselineTried = true
+				if baseline, baselineErr := reviewtransaction.BuildCompactPreCommitDiscoveryBaseline(ctx, repo); baselineErr == nil {
+					preCommitBaseline, preCommitBaselineOK = baseline, true
+				}
+			}
+			if preCommitBaselineOK && reviewtransaction.CompactLeafProvablyUnrelatedToPreCommitBaseline(record.State, preCommitBaseline) {
+				continue
+			}
+		}
 		candidateInput := input
 		candidateInput.LineageID = record.State.LineageID
 		candidateInput.IntendedUntracked = append([]string(nil), record.State.CurrentSnapshot.IntendedUntracked...)
-		assessment, assessErr := reviewtransaction.AssessCompactGateTarget(ctx, repo, record.State, candidateInput)
+		assessment, assessErr := assessCompactGateTargetForDiscovery(ctx, repo, record.State, candidateInput)
 		if assessErr != nil {
 			var targetErr *reviewtransaction.GateTargetResolutionError
 			if errors.As(assessErr, &targetErr) {
@@ -2251,7 +2479,16 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 			lineages = append(lineages, failure.lineage)
 		}
 		sort.Strings(lineages)
-		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewReceiptAmbiguous, Candidates: lineages}
+		// organic-dx Phase 3c: assessmentUnknown and scopeWithoutContext mean
+		// an assessment could not even be COMPLETED for that lineage -- that
+		// is undecidable, not proven-stale, so their presence keeps the
+		// composition NOT deterministically-stale-only. scopeChanged,
+		// deliveryShape, and targetResolution are all deterministic
+		// statements that the lineage does not govern this candidate.
+		staleOnly := len(scopeWithoutContext) == 0 && len(assessmentUnknown) == 0
+		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{
+			Kind: ReviewReceiptAmbiguous, Candidates: lineages, DeterministicallyStaleOnly: staleOnly,
+		}
 	}
 	if len(scopeChanged) == 1 && len(deliveryShape) == 0 && len(scopeWithoutContext) == 0 && len(assessmentUnknown) == 0 && len(targetResolution) == 0 {
 		context := scopeChanged[0].context
@@ -2466,7 +2703,7 @@ type facadeRepositoryEvidence struct {
 
 func prepareCompactReviewerResults(state reviewtransaction.CompactState, results []facadeReviewerResult, refuter facadeRefuterResult, repository ...facadeRepositoryEvidence) (reviewtransaction.CompactReviewInput, error) {
 	if len(results) != len(state.SelectedLenses) {
-		return reviewtransaction.CompactReviewInput{}, fmt.Errorf("review finalize requires all %d original reviewer result(s)", len(state.SelectedLenses))
+		return reviewtransaction.CompactReviewInput{}, fmt.Errorf("review finalize requires all %d original reviewer result(s); capture each missing one with `%s` (see `%s` for the exact lineage/target/lens/order bindings)", len(state.SelectedLenses), reviewCaptureResultCommandName(), reviewNextTransitionRefreshCommand)
 	}
 	lensResults := make([]reviewtransaction.LensResult, len(results))
 	classifications := make([]reviewtransaction.FindingEvidence, 0)
@@ -2593,7 +2830,7 @@ func discoverCompactFacadeFinalize(ctx context.Context, repo, lineage string) (r
 		candidates = exact
 	}
 	if len(candidates) == 0 {
-		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, errors.New("no discoverable compact facade review lineage found")
+		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, errors.New(reviewCompactFacadeLineageNotDiscoverableReason)
 	}
 	if len(candidates) != 1 {
 		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, errors.New("multiple compact facade review lineages found; specify --lineage")
@@ -2619,7 +2856,7 @@ func discoverCompactFacadeReview(ctx context.Context, repo, lineage string, term
 		}
 		if terminal {
 			if _, err := os.Stat(store.ReceiptPath()); err != nil {
-				return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, errors.New("facade review receipt is not available")
+				return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, errors.New(reviewFacadeReceiptNotAvailableReason(lineage))
 			}
 		}
 		return store, record, nil
@@ -2676,7 +2913,7 @@ func discoverCompactFacadeReview(ctx context.Context, repo, lineage string, term
 		}
 	}
 	if len(candidates) == 0 {
-		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, errors.New("no discoverable compact facade review lineage found")
+		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, errors.New(reviewCompactFacadeLineageNotDiscoverableReason)
 	}
 	if len(candidates) != 1 {
 		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, errors.New("multiple compact facade review lineages found; specify --lineage")
@@ -2697,7 +2934,7 @@ func discoverFacadeReview(ctx context.Context, repo, lineage string, terminal bo
 		artifacts := facadeArtifactPaths(store)
 		if terminal {
 			if _, err := os.Stat(artifacts.receipt); err != nil {
-				return reviewtransaction.Store{}, reviewtransaction.ValidatedChain{}, facadeArtifacts{}, errors.New("facade review receipt is not available")
+				return reviewtransaction.Store{}, reviewtransaction.ValidatedChain{}, facadeArtifacts{}, errors.New(reviewFacadeReceiptNotAvailableReason(lineage))
 			}
 		}
 		return store, chain, artifacts, nil
@@ -2877,12 +3114,25 @@ func rejectFacadeCorrectionUntracked(ctx context.Context, repo string, state rev
 // governing: scope-changed or unrelated. A deterministic target-resolution
 // failure (issue-1832: no upstream to derive a publication boundary from)
 // qualifies too — a repository has no receipt to lose here, only a target it
-// cannot compute while off. Ambiguous and corrupted authority are genuine
-// damage and never qualify.
-func reviewReceiptDiscoveryIsUnmanagedWhileDisabled(kind ReviewReceiptDiscoveryKind) bool {
-	switch kind {
+// cannot compute while off. Corrupted authority is genuine damage and never
+// qualifies.
+//
+// Ambiguous authority qualifies ONLY when discovery.DeterministicallyStaleOnly
+// is true (organic-dx Phase 3c, community-reported blocker: 2+ individually
+// stale terminal receipts — the norm for any active user, since nothing prunes
+// them and overlapping genesis paths classify scope-changed — used to fail
+// closed and block an ordinary commit with reviews OFF, even though each
+// receipt alone already reported disabled/unmanaged). Multiple receipts each
+// EXACTLY governing (len(exact) > 1, DeterministicallyStaleOnly stays false)
+// and any undecidable mixture (assessmentUnknown or scopeWithoutContext) keep
+// failing closed: the gate genuinely cannot pick, or could not even finish
+// assessing every candidate, so reclassifying would risk silently choosing.
+func reviewReceiptDiscoveryIsUnmanagedWhileDisabled(discovery *ReviewReceiptDiscoveryError) bool {
+	switch discovery.Kind {
 	case ReviewReceiptMissing, ReviewReceiptUnrelated, ReviewReceiptScopeChanged, ReviewReceiptTargetUnresolvable:
 		return true
+	case ReviewReceiptAmbiguous:
+		return discovery.DeterministicallyStaleOnly
 	default:
 		return false
 	}

@@ -65,7 +65,56 @@ func parseReviewFlags(flags *flag.FlagSet, args []string) error {
 		}
 		return err
 	}
+	if hint := reviewBooleanFlagSpacedValueHint(flags, args); hint != "" {
+		return errors.New(hint)
+	}
 	return nil
+}
+
+// reviewBooleanFlagSpacedValueHint detects one exact shape: a boolean flag
+// passed with a space-separated value ("--committed-only true") instead of
+// "--committed-only" or "--committed-only=true". The standard library's flag
+// package parses the flag alone (defaulting to true) and stops at the first
+// non-flag token, leaving "true"/"false" as a stray positional argument --
+// every review verb's own "unexpected review <verb> argument" refusal would
+// otherwise report only that bare positional, naming no continuation.
+//
+// DECISION (organic-dx Phase 3f task 3f.3, recorded per its non-negotiable
+// requirement): the parser stays strict. Detached boolean values are not
+// accepted anywhere in the review command family -- silently accepting them
+// would be a parsing behavior change with a wide blast radius across every
+// command, not a wording fix. Only the refusal changes, and only for this one
+// detected shape; every other "unexpected argument" refusal is untouched.
+//
+// This lives in the single site (parseReviewFlags) every review verb's flag
+// parsing already funnels through, so every verb benefits without touching
+// each verb's own unexpected-argument call site.
+func reviewBooleanFlagSpacedValueHint(flags *flag.FlagSet, args []string) string {
+	leftover := flags.Args()
+	if len(leftover) == 0 || (leftover[0] != "true" && leftover[0] != "false") {
+		return ""
+	}
+	stopIndex := len(args) - len(leftover)
+	if stopIndex <= 0 {
+		return ""
+	}
+	previous := args[stopIndex-1]
+	if !strings.HasPrefix(previous, "-") || strings.Contains(previous, "=") {
+		return ""
+	}
+	name := strings.TrimLeft(previous, "-")
+	if name == "" {
+		return ""
+	}
+	entry := flags.Lookup(name)
+	if entry == nil {
+		return ""
+	}
+	boolValue, ok := entry.Value.(interface{ IsBoolFlag() bool })
+	if !ok || !boolValue.IsBoolFlag() {
+		return ""
+	}
+	return fmt.Sprintf("boolean flag --%s takes --%s or --%s=%s, not a separate value; got %q", name, name, name, leftover[0], leftover[0])
 }
 
 func reviewHelpRequested(args []string) bool {
@@ -138,8 +187,34 @@ func RunReviewStep(args []string, stdout io.Writer) error {
 	return fmt.Errorf("%w: review-step cannot mutate shipped v1 authority; use gentle-ai review finalize", reviewtransaction.NewLegacyReadOnlyError(attemptedOperation, *lineage))
 }
 
+// Error renders the human-surface denial. It always names a continuation:
+// every branch below derives it from the SAME source the negotiated
+// gate_scope_changed/gate_escalated/gate_invalidated envelope already uses
+// (reviewGateAction, and for scope-changed the frozen
+// GateScopeChangeDiagnostics.RecoveryOperation/RecoveryRequiredInputs) so the
+// wording can never drift from the routing knowledge the JSON envelope
+// carries. When no derivable continuation exists, it states the terminal
+// precondition ("requires explicit maintainer action") instead of inventing
+// a command.
 func (err ReviewGateDeniedError) Error() string {
-	return fmt.Sprintf("review lifecycle gate denied: %s", err.Result)
+	message := fmt.Sprintf("review lifecycle gate denied: %s", err.Result)
+	if err.Result == reviewtransaction.GateScopeChanged && err.Context.ScopeChange != nil && err.Context.ScopeChange.RecoveryOperation != "" {
+		if len(err.Context.ScopeChange.RecoveryRequiredInputs) > 0 {
+			return fmt.Sprintf("%s: recover via %s (requires: %s)", message, err.Context.ScopeChange.RecoveryOperation, strings.Join(err.Context.ScopeChange.RecoveryRequiredInputs, ", "))
+		}
+		return fmt.Sprintf("%s: recover via %s", message, err.Context.ScopeChange.RecoveryOperation)
+	}
+	switch reviewGateAction(err.Result) {
+	case "continue":
+		return message
+	case "review.status":
+		return fmt.Sprintf("%s: run review.status", message)
+	default:
+		// "explicit-maintainer-action" is a routing token, not a runnable
+		// command; scope-changed without diagnostics and every invalidated
+		// denial land here, honestly, instead of fabricating a fix.
+		return fmt.Sprintf("%s: requires explicit maintainer action", message)
+	}
 }
 
 func (err ReviewGateDeniedError) Unwrap() error { return err.Cause }
@@ -439,7 +514,7 @@ func runReviewValidate(ctx context.Context, args []string, stdout io.Writer) err
 	}
 	if reviewtransaction.CompactReceiptSchemaOf(receiptPayload) == reviewtransaction.CompactReceiptSchema {
 		if strings.TrimSpace(*requestPath) != "" {
-			return errors.New("compact review receipts require native authority flags")
+			return errors.New("compact review receipts require native authority flags --lineage and --gate, not --request")
 		}
 		compactReceipt, err := reviewtransaction.ParseCompactReceipt(receiptPayload)
 		if err != nil {
@@ -571,7 +646,10 @@ func reviewGateAction(result reviewtransaction.GateResult) string {
 	case reviewtransaction.GateScopeChanged:
 		return "explicit-maintainer-action"
 	case reviewtransaction.GateEscalated:
-		return "stop"
+		// STATUS already re-derives escalated-authority recovery eligibility
+		// (accounting-only, changed-target, or final-verification-retry); a
+		// bare stop here told the caller nothing it did not already know.
+		return "review.status"
 	default:
 		return "explicit-maintainer-action"
 	}

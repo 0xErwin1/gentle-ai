@@ -129,7 +129,7 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 		return reviewPreflightError(errors.New("review repair received an unexpected positional argument"))
 	}
 	if *contract != ReviewIntegrationContractV1 {
-		return reviewPreflightError(errors.New("review repair requires the supported review integration contract"))
+		return reviewPreflightError(fmt.Errorf("review repair requires --contract %s", ReviewIntegrationContractV1))
 	}
 	if *lineage != "" && !validReviewIntegrationLineage(*lineage) {
 		return reviewPreflightError(errors.New("review repair lineage is invalid"))

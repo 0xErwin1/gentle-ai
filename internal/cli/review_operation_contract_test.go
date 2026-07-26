@@ -227,9 +227,14 @@ func TestNegotiatedReviewBindSDDRejectsHistoricalLegacyThroughTypedFailureEnvelo
 		t.Fatalf("legacy bind-sdd succeeded: %s", output.String())
 	}
 	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	// organic-dx Phase 3b task 3b.4: the negotiated envelope now carries the
+	// same "choose a new lineage for compact authority" route the
+	// non-negotiated START collision already names, regardless of which
+	// operation hit the legacy-read-only lineage.
 	if failure.Operation != ReviewIntegrationOperationBindSDD || failure.Code != reviewtransaction.LegacyReadOnlyErrorCode ||
 		failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe ||
-		failure.Replayability != reviewtransaction.ReplayabilityNotReplayable || failure.NextAction != "stop" ||
+		failure.Replayability != reviewtransaction.ReplayabilityNotReplayable || failure.NextAction != "review.start" ||
+		!strings.Contains(failure.Message, "choose a new lineage for compact authority") ||
 		strings.Contains(output.String(), fixture.repo) || strings.Contains(output.String(), fixture.store.Dir) {
 		t.Fatalf("legacy bind-sdd failure = %#v\n%s", failure, output.String())
 	}

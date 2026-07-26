@@ -199,15 +199,26 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			Arguments: reviewBindingArguments(binding),
 		})
 	case reviewtransaction.StateEscalated:
-		// Unlike StateInvalidated, escalated recovery is only ever admissible
-		// against a changed target (validateCompactRecoveryEdge requires
-		// compactEscalatedRecoveryTargetChanged). The generic
-		// recovery_scope_unchanged guard inside reviewRecoveryCollection only
-		// fires when a Selector is present, so this check applies
-		// unconditionally before routing there at all.
-		if status.TargetIdentity == reviewAuthorityTargetIdentity(status) {
-			return reviewStopTransition("escalated_recovery_requires_changed_target")
-		}
+		// Escalated recovery is admissible either against a changed target
+		// (validateCompactRecoveryEdge's non-evidence RecoveryEscalated
+		// branch, requiring compactEscalatedRecoveryTargetChanged) or, for
+		// an accounting-only escalation, against the unchanged
+		// already-corrected candidate via the evidence-bound branch that
+		// RecoverCompactAuthority derives automatically
+		// (deriveCompactRecoveredEvidence). Native STATUS
+		// (assessTargetStatusSnapshot, target_status.go:176-199) only ever
+		// sets Action == TargetStatusActionRecover for StateEscalated when
+		// one of those two edges already holds; TargetStatusActionStop is
+		// the sole other outcome and is routed away to native_stop_required
+		// before this switch is reached (see the TargetStatusActionStop
+		// branch above). A target-identity re-check here therefore
+		// duplicated a decision status already made, and did so incorrectly
+		// for the accounting-only edge: it forced a false
+		// "escalated_recovery_requires_changed_target" stop on an
+		// already-eligible recovery. Trust status.Action like every other
+		// case in this switch; when a Selector is present, the generic
+		// recovery_scope_unchanged guard inside reviewRecoveryCollection
+		// still applies unchanged.
 		status.ActionDisposition = reviewtransaction.RecoveryEscalated
 		return reviewRecoveryCollection(status, binding, input)
 	default:
@@ -269,13 +280,27 @@ func reviewMissingCaptureTransition(binding ReviewTransitionBinding, selectedLen
 	return reviewCollectTransition("reviewer_results_required", inputs...)
 }
 
+// reviewCaptureResultCaptureOperation is the single wording source for the
+// reviewer-result capture operation named by the collect transition
+// (reviewCaptureInput below). reviewCaptureResultCommandName derives the
+// human-runnable command name from this same constant so a finalize-time
+// refusal naming the continuation can never drift from what the collect form
+// itself already emits.
+const reviewCaptureResultCaptureOperation = "review.capture-result"
+
+// reviewCaptureResultCommandName renders the exact runnable command name for
+// reviewCaptureResultCaptureOperation, e.g. "gentle-ai review capture-result".
+func reviewCaptureResultCommandName() string {
+	return "gentle-ai " + strings.Replace(reviewCaptureResultCaptureOperation, "review.", "review ", 1)
+}
+
 func reviewCaptureInput(binding ReviewTransitionBinding, lens string, order int, context *reviewCaptureContext) ReviewTransitionInput {
 	arguments := reviewBindingArguments(binding)
 	if binding.RepositoryContext != "" {
 		arguments = append(arguments, ReviewTransitionArgument{Name: "repository-context", Value: binding.RepositoryContext})
 	}
 	input := ReviewTransitionInput{
-		Name: "reviewer_result", Schema: reviewReviewerSchemaID, CaptureOperation: "review.capture-result",
+		Name: "reviewer_result", Schema: reviewReviewerSchemaID, CaptureOperation: reviewCaptureResultCaptureOperation,
 		Arguments: append(arguments, ReviewTransitionArgument{Name: "lens", Value: lens}, ReviewTransitionArgument{Name: "order", Value: fmt.Sprint(order)}),
 	}
 	if context != nil && order >= 0 && order < len(context.ArtifactSubjects) {

@@ -239,6 +239,39 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		Replayability: reviewtransaction.ReplayabilityStatusRequired, RequiredInputs: []string{}, NextAction: "review.status",
 	}
 	failure.LineageID = safeReviewIntegrationLineage(operation, args)
+	// Both branches below refuse inside authorizeReviewStart, strictly before
+	// any review authority is created or mutated (organic-dx Phase 3b task
+	// 3b.6). Falling through to the generic operation_outcome_unknown default
+	// below would report MutationOutcome: unknown — a false safety claim for
+	// an operation that provably never started. Typed here, they get the
+	// stronger, correct not_started classification instead.
+	if errors.Is(runErr, errReviewDeclinedForCandidate) {
+		failure.Phase = "pre_native"
+		failure.Code = "review_declined"
+		failure.Message = "The operator declined the one-time review consent for this candidate; nothing was persisted."
+		failure.MutationOutcome = ReviewMutationNotStarted
+		failure.AuthorityApplicability = "not_evaluated"
+		failure.RetrySafe = true
+		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
+		failure.RequiredInputs = []string{}
+		// The decline is never latched, so re-running review.start for the
+		// same candidate simply asks again.
+		failure.NextAction = "review.start"
+		return failure
+	}
+	var rddDisabled *reviewtransaction.RDDDisabledError
+	if errors.As(runErr, &rddDisabled) {
+		failure.Phase = "pre_native"
+		failure.Code = "rdd_disabled"
+		failure.Message = "Review-driven development is disabled; this operation never started."
+		failure.MutationOutcome = ReviewMutationNotStarted
+		failure.AuthorityApplicability = "not_evaluated"
+		failure.RetrySafe = false
+		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
+		failure.RequiredInputs = []string{}
+		failure.NextAction = "stop"
+		return failure
+	}
 	var retryDenied *reviewtransaction.FinalVerificationRetryDeniedError
 	if errors.As(runErr, &retryDenied) {
 		failure.Phase = "pre_native"
@@ -249,7 +282,9 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.RetrySafe = false
 		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
 		failure.RequiredInputs = []string{}
-		failure.NextAction = "stop"
+		// STATUS already re-derives retry eligibility for this lineage; the
+		// denial itself named nothing to look at next.
+		failure.NextAction = "review.status"
 		return failure
 	}
 	var bindingConflict *sddstatus.BindingRevisionConflictError
@@ -416,9 +451,12 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.Message = "The authoritative review store lock could not be acquired before review authority mutation: " + preLock.Error()
 		failure.MutationOutcome = ReviewMutationNotStarted
 		failure.AuthorityApplicability = "not_evaluated"
-		failure.RetrySafe = false
+		// The lock is advisory contention, not damage — the same wait-and-
+		// retry route authority_lock_timeout already names below, and the
+		// LOCK diagnostics a caller needs live in STATUS.
+		failure.RetrySafe = true
 		failure.Replayability = reviewtransaction.ReplayabilityManualActionRequired
-		failure.NextAction = "stop"
+		failure.NextAction = "retry_with_bounded_backoff"
 		return failure
 	}
 	var gitTimeout *reviewtransaction.GitCommandTimeoutError
@@ -472,11 +510,14 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 	var legacy *reviewtransaction.LegacyReadOnlyError
 	if errors.As(runErr, &legacy) {
 		failure.Code = reviewtransaction.LegacyReadOnlyErrorCode
-		failure.Message = "Legacy v1 review authority is read-only and cannot be mutated."
+		// The non-negotiated START collision (review_facade.go) already names
+		// this exact route; the negotiated envelope now carries the same one
+		// instead of a bare stop.
+		failure.Message = "Legacy v1 review authority is read-only and cannot be mutated: choose a new lineage for compact authority."
 		failure.MutationOutcome = ReviewMutationNotStarted
 		failure.AuthorityApplicability = "current_target"
 		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
-		failure.NextAction = "stop"
+		failure.NextAction = "review.start"
 		return failure
 	}
 	var lockTimeout *reviewtransaction.AuthorityLockTimeoutError
@@ -548,6 +589,15 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		switch discovery.Kind {
 		case ReviewReceiptMissing:
 			failure.AuthorityApplicability = "not_evaluated"
+			// No governing review exists yet for this target; review.start is
+			// the exact way in, and an agent that only sees this failure
+			// should not have to consult documentation to find it.
+			failure.NextAction = "review.start"
+		case ReviewReceiptUnrelated:
+			// Every terminal receipt on file targets something else. STATUS
+			// re-derives the same discovery and can name the candidate
+			// lineages (or confirm none apply) without guessing.
+			failure.NextAction = "review.status"
 		case ReviewReceiptScopeChanged:
 			if discovery.Context != nil {
 				failure.Context = publicReviewScopeChangeContext(discovery.Context.ScopeChange)
@@ -558,9 +608,33 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 			}
 			failure.NextAction = "explicit-maintainer-action"
 		case ReviewReceiptAmbiguous:
-			failure.AuthorityApplicability = "ambiguous"
-			failure.RequiredInputs = []string{"lineage_id"}
-			failure.NextAction = "review.status"
+			if discovery.DeterministicallyStaleOnly {
+				// organic-dx Phase 3c (community blocker + maintainer scope
+				// extension): every contributing lineage is a
+				// deterministically-typed stale receipt -- none of them
+				// govern this candidate. The gate asks exactly one question:
+				// does an approved receipt cover exactly these bytes? Old
+				// lineages exist in that search only to NOT match. Blocking
+				// stays correct (the candidate genuinely was never reviewed),
+				// but the caller is told the truth instead of being sent to
+				// disambiguate history: review the candidate, with a prior
+				// lineage offered as optional recovery, never required.
+				failure.AuthorityApplicability = "not_evaluated"
+				failure.Message = "No terminal review receipt governs this candidate."
+				if len(discovery.Candidates) > 0 {
+					failure.Message += " A prior lineage is available for optional recovery instead of a fresh review: " + strings.Join(discovery.Candidates, ", ") + "."
+				}
+				failure.NextAction = "review.start"
+				failure.RequiredInputs = []string{}
+			} else {
+				// len(exact) > 1, or an undecidable mixture
+				// (assessmentUnknown/scopeWithoutContext): the gate genuinely
+				// cannot pick, or could not even finish assessing every
+				// candidate. Byte-identical to before Phase 3c.
+				failure.AuthorityApplicability = "ambiguous"
+				failure.RequiredInputs = []string{"lineage_id"}
+				failure.NextAction = "review.status"
+			}
 		case ReviewAuthorityCorrupted:
 			failure.AuthorityApplicability = "corrupted"
 			failure.CauseCategory = discovery.Category
@@ -1108,12 +1182,30 @@ func forbiddenReviewIntegrationResultField(value any) string {
 	return ""
 }
 
+// reviewIntegrationGatesInOrder is the single ordered source of truth for
+// every valid --gate value. validReviewIntegrationGate and any refusal that
+// must enumerate the valid set both derive from it, so the accepted values
+// and the values a message names can never drift apart.
+var reviewIntegrationGatesInOrder = []reviewtransaction.GateKind{
+	reviewtransaction.GatePostApply, reviewtransaction.GatePreCommit, reviewtransaction.GatePrePush,
+	reviewtransaction.GatePrePR, reviewtransaction.GateRelease,
+}
+
 func validReviewIntegrationGate(gate reviewtransaction.GateKind) bool {
-	switch gate {
-	case reviewtransaction.GatePostApply, reviewtransaction.GatePreCommit, reviewtransaction.GatePrePush,
-		reviewtransaction.GatePrePR, reviewtransaction.GateRelease:
-		return true
-	default:
-		return false
+	for _, valid := range reviewIntegrationGatesInOrder {
+		if gate == valid {
+			return true
+		}
 	}
+	return false
+}
+
+// reviewIntegrationGateNames renders reviewIntegrationGatesInOrder as plain
+// strings for refusal messages that must name the valid gate values.
+func reviewIntegrationGateNames() []string {
+	names := make([]string, len(reviewIntegrationGatesInOrder))
+	for index, gate := range reviewIntegrationGatesInOrder {
+		names[index] = string(gate)
+	}
+	return names
 }
