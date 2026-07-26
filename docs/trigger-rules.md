@@ -58,44 +58,45 @@ Adapters do not select review lenses, reconstruct recovery policy, or infer
 success from prose. Existing SDD v1 runs continue through their SDD-specific
 status contract; direct and delegated runs do not create or consume an SDD run.
 
-## Fail-closed activation
+## Review mode
 
-`GENTLE_AI_WORK_ROUTING_MODE` is the single operator-owned kill switch:
+Review-driven development is user-owned and independent of the implementation
+route:
 
-| Value | Effect |
+| Command | Effect |
 |---|---|
-| Unset or `read_only` | Keep native outcome start dormant, return existing status without an authorized general mutation, and reject apply. |
-| `enabled` | Permit authenticated capability advertisement, outcome start, status, and owner-authorized transitions through the complete productive composition. |
-| `recovery_only` | Keep capability advertisement dormant and expose only recovery-safe continuation. |
-| `disabled` | Keep capability advertisement dormant and reject common-work use. |
-| Empty or unknown | Resolve to disabled with a typed invalid-mode error. |
+| `gentle-ai review mode status --cwd <repo>` | Report the global source, clone-local source, deciding source, and effective mode without mutation. |
+| `gentle-ai review mode disable --cwd <repo>` | Disable review-driven development globally. |
+| `gentle-ai review mode disable --scope clone --cwd <repo>` | Disable it only for this clone; no other clone inherits the override. |
+| `gentle-ai review mode enable --cwd <repo>` | Enable it globally for future candidates. |
+| `gentle-ai review mode enable --scope clone --cwd <repo>` | Clear this clone's off-only override. |
 
-Enabled mode also requires operator-owned productive connector configuration:
+Any disabled source wins. A clone may opt out but cannot require review for the
+user. Interactive starts ask before reviewer work; non-interactive tier-1/tier-2 starts proceed without prompting and report how to disable review mode. Interactive consent is asked
+once per clone. Accepting records that choice; **not now** applies only to that
+candidate and does not change review mode.
 
-| Setting | Requirement |
-|---|---|
-| `GENTLE_AI_PRODUCTIVE_RUNTIME_AGENT` | One supported canonical agent ID matching the active adapter. |
-| `GENTLE_AI_PRODUCTIVE_RUNTIME_URL` | HTTPS endpoint implementing the exact closed productive-runtime operation set. |
-| `GENTLE_AI_PRODUCTIVE_RUNTIME_TOKEN_FILE` | Private regular bearer-token file; on Unix, group/other permission bits must be clear. |
-| `GENTLE_AI_PRODUCTIVE_RUNTIME_CA_FILE` | Optional bounded PEM trust bundle for a private runtime CA. |
+While review mode is disabled, continue through direct inline, delegated direct,
+or optional SDD routing without starting, retrying, or re-enabling review on the
+user's behalf. Existing exact governing receipts remain authoritative; otherwise native review delivery gates report `disabled/unmanaged` and
+defer to ordinary repository policy without fabricating approval.
 
-Advertisement additionally requires an exact authenticated repository, agent,
-operation-set, and connector-session handshake. Live policy provisioning,
-candidate/Git proof, semantic evaluation, hosting probes, and delivery effects
-all reuse that binding. Missing, changed, disabled, unknown, or read-only
-authority never becomes local adapter policy and never falls back to inferred
-flags, `HEAD`, `origin`, arbitrary shell, or force/bypass behavior.
+The current unstable RDD line has two known limitations: `sdd-archive` requires `reviewGate.result: allow`; the SDD pre-verify status
+path can still require review while review mode is disabled. See
+[Organic RDD known limitations](architecture/organic-rdd.md#9-known-open).
 
 ## Installation and refresh
 
 `gentle-ai install` and `gentle-ai sync` project the same canonical rules into
-every supported adapter:
+every supported adapter, independently of whether the optional SDD component is
+selected:
 
-- Standard adapters receive the managed `trigger-rules` marker in their
+- Standard adapters receive the managed `agent-routing` marker in their
   adapter-owned system-prompt file.
 - OpenCode and Kilocode receive it inside
   `agent.gentle-orchestrator.prompt` in their adapter-owned `opencode.json`.
-- Kimi receives `~/.kimi/trigger-rules.md`, included by `KIMI.md`.
+- Jinja-backed adapters receive an `agent-routing.md` module included by their
+  managed router template.
 
 ```bash
 gentle-ai install   # full install
@@ -107,8 +108,12 @@ Refresh is idempotent: the managed projection is replaced without duplication.
 ## Source of truth
 
 The rendered projection comes from
-[`internal/components/sdd/triggerrules.go`](../internal/components/sdd/triggerrules.go).
+[`internal/components/agentguidance/routing.go`](../internal/components/agentguidance/routing.go),
+and its adapter delivery is owned by
+[`internal/components/agentguidance/inject.go`](../internal/components/agentguidance/inject.go).
 Canonical route facts come from
 [`internal/agents/capabilitymanifest/manifest.go`](../internal/agents/capabilitymanifest/manifest.go).
-The complete authority and recovery rationale is documented in the
-[Organic Recovery implementation plan](audits/2026-07-23-organic-recovery-implementation-plan.md).
+Review mode is implemented in
+[`internal/cli/review_mode.go`](../internal/cli/review_mode.go). The current
+authority and recovery behavior is documented in the
+[Organic RDD architecture](architecture/organic-rdd.md).
