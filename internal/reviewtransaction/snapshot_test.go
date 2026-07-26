@@ -564,6 +564,147 @@ func TestBaseDiffPreservesIntendedAuthorityAfterTrackedTransition(t *testing.T) 
 	}
 }
 
+// TestSnapshotBuilderCurrentChangesStagesLargeIntendedUntrackedWithoutExceedingArgv
+// pins the contract behind issue 1778: a large intended-untracked set must
+// reach `git add` without expanding one ":(literal)<path>" pathspec per file
+// into argv, because Windows caps a process command line at 32767
+// characters. 2000 paths of ~30 literal-pathspec characters each produce
+// ~60000 characters, comfortably over that limit, so any regression back to
+// per-path argv entries fails this test even on Linux.
+func TestSnapshotBuilderCurrentChangesStagesLargeIntendedUntrackedWithoutExceedingArgv(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+
+	const count = 2000
+	intended := make([]string, count)
+	for index := 0; index < count; index++ {
+		name := fmt.Sprintf("bulk/headroom-%05d.txt", index)
+		writeSnapshotFile(t, repo, name, fmt.Sprintf("bulk-%05d\n", index))
+		intended[index] = name
+	}
+
+	var captured []string
+	originalCommand := gitCommandContext
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if slicesContain(args, "--pathspec-from-file=-") {
+			captured = append([]string(nil), args...)
+		}
+		return originalCommand(ctx, name, args...)
+	}
+	t.Cleanup(func() { gitCommandContext = originalCommand })
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: intended,
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	if captured == nil {
+		t.Fatal("git add was never invoked with --pathspec-from-file=-; pathspecs were not transported over stdin")
+	}
+	argvLength := 0
+	for _, arg := range captured {
+		argvLength += len(arg)
+		if strings.Contains(arg, "bulk/") {
+			t.Fatalf("git add argv still contains a literal pathspec %q; pathspecs must travel over stdin", arg)
+		}
+	}
+	if !slicesContain(captured, "add") || !slicesContain(captured, "--pathspec-from-file=-") || !slicesContain(captured, "--pathspec-file-nul") {
+		t.Fatalf("git add argv = %v, want add/--pathspec-from-file=-/--pathspec-file-nul", captured)
+	}
+	if argvLength >= 32767 {
+		t.Fatalf("git add argv length = %d, want well under the Windows 32767-character command-line limit", argvLength)
+	}
+
+	if !reflect.DeepEqual(snapshot.Paths, intended) {
+		t.Fatalf("Paths length = %d, want %d matching entries", len(snapshot.Paths), len(intended))
+	}
+	for _, index := range []int{0, count / 2, count - 1} {
+		path := intended[index]
+		want := fmt.Sprintf("bulk-%05d\n", index)
+		if got := gitSnapshot(t, repo, "show", snapshot.CandidateTree+":"+path); got != want {
+			t.Fatalf("candidate %s = %q, want %q", path, got, want)
+		}
+	}
+}
+
+// TestSnapshotBuilderBaseDiffIntendedUntrackedTreeUnchangedByPathspecTransport
+// is the regression half of the fix: changing how pathspecs reach `git add`
+// (argv vs. stdin) must not change the resulting candidate tree. It exercises
+// buildHeadWithIntended (the base-diff call site) and compares against a
+// manually built tree using the pre-fix argv-based approach.
+func TestSnapshotBuilderBaseDiffIntendedUntrackedTreeUnchangedByPathspecTransport(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "intended.txt", "intended\n")
+
+	expectedTree := buildHeadIntendedCandidateTreeOldStyle(t, repo, []string{"intended.txt"})
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetBaseDiff, BaseRef: "HEAD", IntendedUntracked: []string{"intended.txt"},
+	})
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if snapshot.CandidateTree != expectedTree {
+		t.Fatalf("CandidateTree = %q, want manually built %q", snapshot.CandidateTree, expectedTree)
+	}
+}
+
+// buildHeadIntendedCandidateTreeOldStyle mirrors buildHeadWithIntended's
+// pre-fix argv-based `git add -- :(literal)<path>...` invocation, so the
+// stdin-transport fix can be proven tree-identical to it.
+func buildHeadIntendedCandidateTreeOldStyle(t *testing.T, repo string, intended []string) string {
+	t.Helper()
+	tempIndex := filepath.Join(t.TempDir(), "index")
+	env := []string{"GIT_INDEX_FILE=" + tempIndex}
+	if _, err := runGit(context.Background(), repo, env, nil, "read-tree", "HEAD"); err != nil {
+		t.Fatalf("read-tree HEAD: %v", err)
+	}
+	args := append([]string{"add", "--"}, literalPathspecs(intended)...)
+	if _, err := runGit(context.Background(), repo, env, nil, args...); err != nil {
+		t.Fatalf("add intended paths (old style): %v", err)
+	}
+	tree, err := runGit(context.Background(), repo, env, nil, "write-tree")
+	if err != nil {
+		t.Fatalf("write-tree: %v", err)
+	}
+	return strings.TrimSpace(string(tree))
+}
+
+// TestAddIntendedPathspecsEmptySetIsNoop proves the len(intended) == 0 guard
+// still short-circuits: an empty-set call must never invoke Git at all.
+func TestAddIntendedPathspecsEmptySetIsNoop(t *testing.T) {
+	invoked := false
+	originalCommand := gitCommandContext
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		invoked = true
+		return originalCommand(ctx, name, args...)
+	}
+	t.Cleanup(func() { gitCommandContext = originalCommand })
+
+	if err := addIntendedPathspecs(context.Background(), "unused-repo", nil, nil); err != nil {
+		t.Fatalf("addIntendedPathspecs(empty) error = %v", err)
+	}
+	if invoked {
+		t.Fatal("addIntendedPathspecs invoked git for an empty intended-untracked set")
+	}
+}
+
+// TestNulJoinedPathspecsEmitsNulDelimitedLiteralPathspecs is a focused unit
+// test on the new helper: no existing seam observes runGit's stdin argument
+// directly (gitCommandContext only sees argv, and Stdin is assigned after
+// the hook returns), so the NUL-joined-literal-pathspec contract is pinned
+// here instead.
+func TestNulJoinedPathspecsEmitsNulDelimitedLiteralPathspecs(t *testing.T) {
+	got := nulJoinedPathspecs([]string{"a.txt", "dir/b.txt"})
+	want := []byte(":(literal)a.txt\x00:(literal)dir/b.txt")
+	if !bytes.Equal(got, want) {
+		t.Fatalf("nulJoinedPathspecs() = %q, want %q", got, want)
+	}
+}
+
 func TestSnapshotTempIndexesAreRemovedAfterGitAddErrors(t *testing.T) {
 	requireSnapshotGit(t)
 	for _, kind := range []TargetKind{TargetCurrentChanges, TargetBaseDiff} {

@@ -235,8 +235,7 @@ func (builder SnapshotBuilder) buildHeadWithIntended(ctx context.Context, intend
 		return "", "", err
 	}
 	if len(intended) > 0 && tracked == 0 {
-		args := append([]string{"add", "--"}, literalPathspecs(intended)...)
-		if _, err := runGit(ctx, builder.Repo, env, nil, args...); err != nil {
+		if err := addIntendedPathspecs(ctx, builder.Repo, env, intended); err != nil {
 			return "", "", err
 		}
 	}
@@ -784,8 +783,7 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 			}
 		}
 		if len(intended) > 0 {
-			args := append([]string{"add", "--"}, literalPathspecs(intended)...)
-			if _, err := runGit(ctx, builder.Repo, env, nil, args...); err != nil {
+			if err := addIntendedPathspecs(ctx, builder.Repo, env, intended); err != nil {
 				return "", "", "", err
 			}
 		}
@@ -962,6 +960,38 @@ func literalPathspecs(logicalPaths []string) []string {
 		result[index] = literalPathspec(logicalPath)
 	}
 	return result
+}
+
+// addIntendedPathspecs stages the intended-untracked paths by literal
+// pathspec, feeding them to Git over stdin instead of argv. Expanding one
+// ":(literal)<path>" pathspec per file into argv scales with the size of the
+// intended-untracked set; Windows caps a process command line at 32767
+// characters, so a large set (~1000+ paths) can exceed that limit and fail
+// to launch the process at all (issue 1778). --pathspec-from-file=- with
+// --pathspec-file-nul avoids argv entirely and needs no quoting, since
+// entries are NUL-delimited; pathspec magic such as ":(literal)" is still
+// honored per-entry.
+func addIntendedPathspecs(ctx context.Context, repo string, env []string, intended []string) error {
+	if len(intended) == 0 {
+		return nil
+	}
+	stdin := nulJoinedPathspecs(intended)
+	_, err := runGit(ctx, repo, env, stdin, "add", "--pathspec-from-file=-", "--pathspec-file-nul")
+	return err
+}
+
+// nulJoinedPathspecs renders each intended-untracked path as a NUL-delimited
+// literal pathspec suitable for `git add --pathspec-from-file=- --pathspec-file-nul`.
+func nulJoinedPathspecs(logicalPaths []string) []byte {
+	pathspecs := literalPathspecs(logicalPaths)
+	var buffer bytes.Buffer
+	for index, pathspec := range pathspecs {
+		if index > 0 {
+			buffer.WriteByte(0)
+		}
+		buffer.WriteString(pathspec)
+	}
+	return buffer.Bytes()
 }
 
 func canonicalPaths(values []string) ([]string, error) {

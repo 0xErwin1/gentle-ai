@@ -369,29 +369,104 @@ type treeBlob struct {
 	size int64
 }
 
+// gitPathspecArgvBudget bounds the combined character length of the literal
+// pathspec arguments (":(literal)<path>", one per changed file) that
+// batchLiteralPathspecs packs into a single Git invocation's argv. Windows
+// caps a whole process command line -- argv AND the inherited environment
+// block together -- at 32767 characters (issue 1778), so this budget leaves
+// headroom for: the fixed argv prefix each call site builds ("git",
+// "--no-replace-objects", "-C", the repository path, the subcommand, its
+// flags, and the tree-ish/pattern), the sanitized environment block the
+// child inherits, and general OS bookkeeping. 26000 leaves roughly 6700
+// characters of headroom under the hard limit -- comfortably more than any
+// fixed prefix or realistic environment block this package constructs --
+// while still fitting several hundred literal pathspecs in a single batch
+// for typical path lengths, so an ordinary review never batches at all. It
+// is a var, not a const, so tests can force small batches deterministically
+// without needing tens of thousands of real fixture paths.
+var gitPathspecArgvBudget = 26000
+
+// gitArgvPrefixLength approximates the argv length of the fixed arguments
+// that precede a batch of literal pathspecs in one Git invocation: the
+// repository selector runGit always adds ("--no-replace-objects", "-C",
+// repo) plus the caller's own fixed subcommand arguments (subcommand,
+// flags, tree-ish/pattern, "--"). batchLiteralPathspecs subtracts this from
+// gitPathspecArgvBudget instead of assuming the fixed prefix is negligible.
+func gitArgvPrefixLength(repo string, fixedArgs ...string) int {
+	length := len("--no-replace-objects") + 1 + len("-C") + 1 + len(repo) + 1
+	for _, arg := range fixedArgs {
+		length += len(arg) + 1
+	}
+	return length
+}
+
+// batchLiteralPathspecs splits logicalPaths into ordered batches of literal
+// pathspec arguments (":(literal)<path>") so that a single Git invocation's
+// combined pathspec-argument length, plus prefixLength (the caller's fixed
+// argv that precedes the pathspecs), stays within gitPathspecArgvBudget.
+// Every input path appears in exactly one batch, in its original order,
+// with no duplication and no loss: a small set that already fits produces
+// exactly one batch, and a single pathspec whose own length already exceeds
+// the remaining budget still gets a batch of its own -- passed to Git,
+// which reports its own failure if the platform genuinely cannot accept it
+// -- rather than being silently dropped from a risk scan, which would
+// understate risk (the dangerous direction for this classifier).
+func batchLiteralPathspecs(logicalPaths []string, prefixLength int) [][]string {
+	if len(logicalPaths) == 0 {
+		return nil
+	}
+	budget := gitPathspecArgvBudget - prefixLength
+	if budget < 1 {
+		budget = 1
+	}
+	batches := make([][]string, 0, 1)
+	var current []string
+	currentLength := 0
+	for _, logicalPath := range logicalPaths {
+		pathspec := literalPathspec(logicalPath)
+		length := len(pathspec) + 1
+		if len(current) > 0 && currentLength+length > budget {
+			batches = append(batches, current)
+			current, currentLength = nil, 0
+		}
+		current = append(current, pathspec)
+		currentLength += length
+	}
+	batches = append(batches, current)
+	return batches
+}
+
 // treeBlobSizes lists the blob sizes of the given logical paths inside one
-// immutable tree, so a caller can refuse an oversized scan before reading it.
+// immutable tree, so a caller can refuse an oversized scan before reading
+// it. The pathspec set is batched (see batchLiteralPathspecs) instead of
+// expanded into one argv entry per path, since `git ls-tree` does not
+// support --pathspec-from-file and a large changed-file set can otherwise
+// exceed the Windows process command-line limit (issue 1778).
 func treeBlobSizes(ctx context.Context, repo, tree string, paths []string) ([]treeBlob, error) {
-	args := []string{"ls-tree", "-r", "-l", "-z", tree, "--"}
-	for _, logicalPath := range paths {
-		args = append(args, literalPathspec(logicalPath))
+	if len(paths) == 0 {
+		return nil, nil
 	}
-	entries, err := runGit(ctx, repo, nil, nil, args...)
-	if err != nil {
-		return nil, err
-	}
+	fixedArgs := []string{"ls-tree", "-r", "-l", "-z", tree, "--"}
+	prefixLength := gitArgvPrefixLength(repo, fixedArgs...)
 	blobs := make([]treeBlob, 0, len(paths))
-	for _, entry := range bytes.Split(entries, []byte{0}) {
-		tab := bytes.IndexByte(entry, '\t')
-		fields := strings.Fields(string(entry[:max(tab, 0)]))
-		if tab < 0 || len(fields) != 4 {
-			continue
+	for _, batch := range batchLiteralPathspecs(paths, prefixLength) {
+		args := append(append([]string{}, fixedArgs...), batch...)
+		entries, err := runGit(ctx, repo, nil, nil, args...)
+		if err != nil {
+			return nil, err
 		}
-		size, parseErr := strconv.ParseInt(fields[3], 10, 64)
-		if parseErr != nil {
-			return nil, fmt.Errorf("parse source blob size: %w", parseErr)
+		for _, entry := range bytes.Split(entries, []byte{0}) {
+			tab := bytes.IndexByte(entry, '\t')
+			fields := strings.Fields(string(entry[:max(tab, 0)]))
+			if tab < 0 || len(fields) != 4 {
+				continue
+			}
+			size, parseErr := strconv.ParseInt(fields[3], 10, 64)
+			if parseErr != nil {
+				return nil, fmt.Errorf("parse source blob size: %w", parseErr)
+			}
+			blobs = append(blobs, treeBlob{path: string(entry[tab+1:]), size: size})
 		}
-		blobs = append(blobs, treeBlob{path: string(entry[tab+1:]), size: size})
 	}
 	return blobs, nil
 }
@@ -430,22 +505,26 @@ func (builder SnapshotBuilder) processBoundaryRiskReasons(ctx context.Context, s
 		// An interpreter directive and a spawn construct are both process
 		// boundaries the file's extension can neither promise nor deny, so the
 		// same bounded pass looks for either inside the frozen bytes.
-		args := []string{
+		fixedArgs := []string{
 			"grep", "-I", "-l", "-z", "-i", "-E",
 			`(^#!)|((^|[^[:alnum:]_])(subprocess|execute_process|exec)([^[:alnum:]_]|$))`, tree, "--",
 		}
-		for _, logicalPath := range treePaths {
-			args = append(args, literalPathspec(logicalPath))
-		}
-		matches, err := runGit(ctx, repo, nil, nil, args...)
-		var gitErr *GitCommandError
-		if err != nil && (!errors.As(err, &gitErr) || gitErr.ExitCode != 1) {
-			return nil, err
-		}
-		for _, match := range bytes.Split(bytes.TrimSuffix(matches, []byte{0}), []byte{0}) {
-			logicalPath := strings.TrimPrefix(string(match), tree+":")
-			if logicalPath != "" {
-				reasons = append(reasons, RiskReason{Code: RiskReasonProcessBoundary, Signal: SignalShellProcess, Path: logicalPath})
+		prefixLength := gitArgvPrefixLength(repo, fixedArgs...)
+		for _, batch := range batchLiteralPathspecs(treePaths, prefixLength) {
+			args := append(append([]string{}, fixedArgs...), batch...)
+			matches, err := runGit(ctx, repo, nil, nil, args...)
+			var gitErr *GitCommandError
+			// git grep exits 1 when a batch has no matches; that is not an
+			// error and must not abort the scan or be mistaken for a real
+			// command failure across the remaining batches.
+			if err != nil && (!errors.As(err, &gitErr) || gitErr.ExitCode != 1) {
+				return nil, err
+			}
+			for _, match := range bytes.Split(bytes.TrimSuffix(matches, []byte{0}), []byte{0}) {
+				logicalPath := strings.TrimPrefix(string(match), tree+":")
+				if logicalPath != "" {
+					reasons = append(reasons, RiskReason{Code: RiskReasonProcessBoundary, Signal: SignalShellProcess, Path: logicalPath})
+				}
 			}
 		}
 	}
