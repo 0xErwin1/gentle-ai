@@ -239,14 +239,18 @@ func TestOrganicDirectoryIdentityAcceptsCanonicalAliases(t *testing.T) {
 func TestOrganicConfiguredAgentReceivesRoutingGuidance(t *testing.T) {
 	t.Parallel()
 	// One row per adapter delivery strategy: a markdown section, an always-loaded
-	// orchestrator prompt inside agent settings, and a markdown rules file.
+	// orchestrator prompt inside agent settings, and a markdown rules file. The
+	// orchestrator prompt lives in the home settings document even under
+	// workspace scope, because that is the only settings document the OpenCode
+	// family ever loads (issue #1825).
 	agents := []struct {
 		name    string
 		agentID string
 		path    string
+		inHome  bool
 	}{
 		{name: "markdown section", agentID: "claude-code", path: ".claude/CLAUDE.md"},
-		{name: "orchestrator prompt", agentID: "opencode", path: ".config/opencode/opencode.json"},
+		{name: "orchestrator prompt", agentID: "opencode", path: ".config/opencode/opencode.json", inHome: true},
 		{name: "markdown rules", agentID: "cursor", path: ".cursor/rules/gentle-ai.mdc"},
 	}
 	required := []string{
@@ -273,13 +277,23 @@ func TestOrganicConfiguredAgentReceivesRoutingGuidance(t *testing.T) {
 			if err != nil {
 				t.Fatalf("install %s: %v\nstdout:\n%s\nstderr:\n%s", agent.agentID, err, output, stderr)
 			}
-			rendered, readErr := os.ReadFile(filepath.Join(workspace, filepath.FromSlash(agent.path)))
+			root := workspace
+			if agent.inHome {
+				root = home
+			}
+			rendered, readErr := os.ReadFile(filepath.Join(root, filepath.FromSlash(agent.path)))
 			if readErr != nil {
 				t.Fatalf("configured agent %s received no routing guidance at %s: %v", agent.agentID, agent.path, readErr)
 			}
 			for _, fragment := range required {
 				if !bytes.Contains(rendered, []byte(fragment)) {
 					t.Fatalf("routing guidance for %s omits %q:\n%s", agent.agentID, fragment, rendered)
+				}
+			}
+			if agent.inHome {
+				stranded := filepath.Join(workspace, filepath.FromSlash(agent.path))
+				if _, statErr := os.Stat(stranded); !os.IsNotExist(statErr) {
+					t.Fatalf("workspace-scoped install stranded a settings document the agent never loads at %s (stat err = %v)", stranded, statErr)
 				}
 			}
 		})
@@ -1332,6 +1346,7 @@ type organicStartResult struct {
 	ChangedFiles     int      `json:"changed_files"`
 	ChangedLines     int      `json:"changed_lines"`
 	CorrectionBudget int      `json:"correction_budget"`
+	TargetIdentity   string   `json:"target_identity"`
 }
 
 type organicFinalizeResult struct {
@@ -1392,6 +1407,7 @@ type organicReviewerResult struct {
 }
 
 type organicFinding struct {
+	ID                string   `json:"id,omitempty"`
 	Location          string   `json:"location"`
 	Severity          string   `json:"severity"`
 	Claim             string   `json:"claim"`
