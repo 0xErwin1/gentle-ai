@@ -72,7 +72,16 @@ func runReviewRetryFinalVerification(ctx context.Context, args []string, stdout 
 	if strings.TrimSpace(*predecessor) == "" || strings.TrimSpace(*expected) == "" ||
 		strings.TrimSpace(*successor) == "" || strings.TrimSpace(*incidentPath) == "" ||
 		strings.TrimSpace(*actor) == "" || strings.TrimSpace(*reason) == "" || *authorization == "" {
-		return reviewPreflightError(errors.New("review retry-final-verification requires --predecessor-lineage, --expected-predecessor-revision, --successor-lineage, --incident, --actor, --reason, and --maintainer-authorization"))
+		// Every input this refusal names is expressible in the published
+		// required_inputs enum, so the negotiated caller gets the complete
+		// list rather than a misleading subset.
+		return reviewPreflightRefusal(
+			reviewPreflightMissingInputsReason(
+				"predecessor_lineage_id", "expected_predecessor_revision", "successor_lineage_id",
+				"incident", "actor", "reason", "maintainer_authorization",
+			),
+			errors.New("review retry-final-verification requires --predecessor-lineage, --expected-predecessor-revision, --successor-lineage, --incident, --actor, --reason, and --maintainer-authorization"),
+		)
 	}
 	payload, err := readFinalVerificationIncidentInput(ctx, *incidentPath)
 	if err != nil {

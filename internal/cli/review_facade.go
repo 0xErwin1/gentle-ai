@@ -1189,7 +1189,8 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		return fmt.Errorf("build facade review target: %w", err)
 	}
 	if negotiated && snapshot.Identity != *targetIdentity {
-		return reviewPreflightError(errors.New("review start target does not match the freshly built snapshot"))
+		return reviewPreflightRefusal(reviewPreflightStaleTargetReason,
+			errors.New("review start target does not match the freshly built snapshot"))
 	}
 	assessment, err := (reviewtransaction.SnapshotBuilder{Repo: root}).AssessSnapshotRisk(ctx, snapshot)
 	if err != nil {
@@ -1279,7 +1280,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 				return requestedContextErr
 			}
 			if err := (reviewtransaction.SnapshotBuilder{Repo: root}).ValidateLiveSnapshot(ctx, snapshot); err != nil {
-				return reviewPreflightError(err)
+				return reviewPreflightRefusal(reviewPreflightStaleTargetReason, err)
 			}
 			return nil
 		}
@@ -1766,7 +1767,8 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	if !terminalAtEntry && pendingAtEntry == nil {
 		if err := (reviewtransaction.SnapshotBuilder{Repo: root}).ValidateEvidence(ctx, state.CurrentSnapshot); err != nil {
 			// Keep negotiated Git failures classified as preflight/not_started.
-			return reviewPreflightError(fmt.Errorf("validate FINALIZE current snapshot: %v", err))
+			return reviewPreflightRefusal(reviewPreflightStaleTargetReason,
+				fmt.Errorf("validate FINALIZE current snapshot: %v", err))
 		}
 	}
 	plan, err := prepareFacadeFinalizePlan(ctx, root, record.Revision, state, reviewerResults, refuter, validation, evidence, *correctionLines, *failed)
@@ -1777,7 +1779,8 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	// correction routing may intentionally describe a live target not frozen yet.
 	if !terminalAtEntry && pendingAtEntry == nil && (len(plan.Transitions) > 0 || !*nextTransition) {
 		if err := (reviewtransaction.SnapshotBuilder{Repo: root}).ValidateLiveSnapshot(ctx, plan.Candidate); err != nil {
-			return reviewPreflightError(fmt.Errorf("validate FINALIZE live target: %v", err))
+			return reviewPreflightRefusal(reviewPreflightStaleTargetReason,
+				fmt.Errorf("validate FINALIZE live target: %v", err))
 		}
 	}
 	if !terminalAtEntry && pendingAtEntry == nil && len(plan.Transitions) == 0 {
@@ -2395,7 +2398,7 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 			// so the real cause stays discoverable regardless of which
 			// deterministic delivery-shape producer failed.
 			deliveryContext := func(code string) reviewtransaction.GateContext {
-				return reviewtransaction.GateContext{
+				context := reviewtransaction.GateContext{
 					Gate: input.Gate, LineageID: record.State.LineageID, Generation: record.State.Generation,
 					StoreRevision: record.Revision, GenesisRevision: record.Revision, ChainIdentity: record.Revision, BundleDigest: record.Revision,
 					BaseTree: record.State.CurrentSnapshot.BaseTree, CandidateTree: record.State.CurrentSnapshot.CandidateTree, PathsDigest: record.State.CurrentSnapshot.PathsDigest,
@@ -2403,6 +2406,20 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 					LedgerHash: record.State.LedgerHash(), EvidenceHash: record.State.EvidenceHash,
 					Denial: &reviewtransaction.GateDenial{Stage: "delivery-derivation", Code: code},
 				}
+				// Both producers below fail BEFORE an actual snapshot exists,
+				// so the receipt-binding derivation is not callable here. The
+				// delivery-shape derivation builds its own evidence from the
+				// publication boundary; when it cannot -- an already fully
+				// published delivery, an unresolvable boundary, a receipt that
+				// never armed the one-commit rule -- ScopeChange stays nil and
+				// the denial keeps the honest terminal fallback instead of
+				// naming a recovery that would dead-end.
+				if diagnostics, diagnosticsErr := reviewtransaction.CompactDeliveryShapeScopeChangeDiagnostics(
+					ctx, repo, record.State, record.Revision, input.Gate,
+				); diagnosticsErr == nil {
+					context.ScopeChange = &diagnostics
+				}
+				return context
 			}
 			if errors.Is(assessErr, reviewtransaction.ErrReviewedDeliveryNotOneCommit) {
 				deliveryShape = append(deliveryShape, deliveryShapeMismatch{
@@ -2432,7 +2449,7 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 		case reviewtransaction.CompactGateTargetExact:
 			exact = append(exact, candidate{store: store, record: record, assessment: assessment})
 		case reviewtransaction.CompactGateTargetScopeChanged:
-			diagnostics, diagnosticsErr := reviewtransaction.CompactScopeChangeDiagnostics(ctx, repo, record.State, record.Revision, assessment.Actual)
+			diagnostics, diagnosticsErr := reviewtransaction.CompactScopeChangeDiagnostics(ctx, repo, record.State, record.Revision, assessment.Actual, input.Gate)
 			if diagnosticsErr != nil {
 				scopeWithoutContext = append(scopeWithoutContext, record.State.LineageID)
 				continue
@@ -2825,7 +2842,8 @@ func discoverCompactFacadeFinalize(ctx context.Context, repo, lineage string) (r
 			}
 		}
 		if len(exact) == 0 {
-			return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, reviewPreflightError(errors.New("no compact FINALIZE authority matches the live target"))
+			return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, reviewPreflightRefusal(
+				reviewPreflightStaleTargetReason, errors.New("no compact FINALIZE authority matches the live target"))
 		}
 		candidates = exact
 	}

@@ -155,16 +155,96 @@ func newReviewIntegrationFailureError(failure ReviewIntegrationFailure, cause er
 	return &ReviewIntegrationFailureError{Failure: failure, cause: cause}
 }
 
-type reviewIntegrationPreflightError struct{ cause error }
+const (
+	// reviewIntegrationInvalidRequestCode is the machine-branchable code for a
+	// preflight refusal the caller genuinely can fix by correcting the request
+	// it sent.
+	reviewIntegrationInvalidRequestCode = "invalid_request"
+	// reviewIntegrationGenericPreflightMessage is the stable contract sentence
+	// that accompanies reviewIntegrationInvalidRequestCode. It is deliberately
+	// content-free: the specific reason belongs in the additive `cause` field,
+	// never in this bounded 240-character contract string.
+	reviewIntegrationGenericPreflightMessage = "The negotiated review request is invalid."
+	// reviewPreflightStaleTargetCode names the one preflight class where
+	// "correct_request" is an actively wrong instruction. The target identity
+	// is derived from the live workspace snapshot, so anything that writes a
+	// file between the proposed transition and its execution invalidates it.
+	// No edit to the request text can make a stale snapshot fresh; the caller
+	// must re-derive the exact next transition instead.
+	reviewPreflightStaleTargetCode = "stale_target_identity"
+	// reviewPreflightStaleTargetMessage stays inside the published 240-char
+	// bound and names the runnable continuation, per the standing rule that
+	// every block names one.
+	reviewPreflightStaleTargetMessage = "The negotiated review request no longer matches the live workspace snapshot; re-derive the exact next transition before retrying."
+)
+
+// reviewPreflightReason is the machine-branchable half of a preflight
+// refusal. It carries only fields the published v1 failure schema already
+// defines, so classifying a refusal never changes the wire contract. The
+// human-readable half travels separately in the additive `cause` field.
+type reviewPreflightReason struct {
+	Code           string
+	Message        string
+	RequiredInputs []string
+	NextAction     string
+}
+
+// reviewPreflightStaleTargetReason classifies every refusal whose precondition
+// is "the frozen identity no longer describes the live workspace".
+var reviewPreflightStaleTargetReason = reviewPreflightReason{
+	Code:       reviewPreflightStaleTargetCode,
+	Message:    reviewPreflightStaleTargetMessage,
+	NextAction: "review.status",
+}
+
+// reviewPreflightMissingInputsReason names the contract-level inputs a caller
+// must supply. Callers pass only inputs the published required_inputs enum
+// actually defines; a refusal whose missing inputs are not all expressible
+// there keeps an empty list and names them in prose instead, because a partial
+// list would read as a complete one.
+func reviewPreflightMissingInputsReason(inputs ...string) reviewPreflightReason {
+	return reviewPreflightReason{
+		Code:           reviewIntegrationInvalidRequestCode,
+		Message:        reviewIntegrationGenericPreflightMessage,
+		RequiredInputs: append([]string{}, inputs...),
+		NextAction:     "correct_request",
+	}
+}
+
+type reviewIntegrationPreflightError struct {
+	cause  error
+	reason *reviewPreflightReason
+}
 
 func (err *reviewIntegrationPreflightError) Error() string { return err.cause.Error() }
 func (err *reviewIntegrationPreflightError) Unwrap() error { return err.cause }
+
+// classification returns the machine-branchable reason for this refusal,
+// defaulting to the honest "correct the request you sent" shape.
+func (err *reviewIntegrationPreflightError) classification() reviewPreflightReason {
+	if err.reason != nil {
+		return *err.reason
+	}
+	return reviewPreflightReason{
+		Code: reviewIntegrationInvalidRequestCode, Message: reviewIntegrationGenericPreflightMessage,
+		NextAction: "correct_request",
+	}
+}
 
 func reviewPreflightError(err error) error {
 	if err == nil {
 		return nil
 	}
 	return &reviewIntegrationPreflightError{cause: err}
+}
+
+// reviewPreflightRefusal is reviewPreflightError with an explicit
+// classification, for refusals whose precondition the caller must branch on.
+func reviewPreflightRefusal(reason reviewPreflightReason, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &reviewIntegrationPreflightError{cause: err, reason: &reason}
 }
 
 func reviewIntegrationFailureRoute(args []string) (string, bool, *ReviewIntegrationFailure) {
@@ -503,8 +583,20 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 	}
 	var preflight *reviewIntegrationPreflightError
 	if errors.As(runErr, &preflight) {
-		preflightFailure := newReviewIntegrationPreflightFailure(operation, "invalid_request", "The negotiated review request is invalid.")
+		// The refusal splits in two. `code`, `required_inputs`, and
+		// `next_action` are the stable machine-branchable dimension and come
+		// only from the closed vocabulary the published schema already
+		// defines. The specific native reason is prose, so it travels in the
+		// additive `cause` field -- privacy-gated and bounded, never
+		// concatenated into the contract `message`. Cause is set here rather
+		// than at the 79 refusal sites precisely so a refusal added later
+		// cannot forget to name itself.
+		reason := preflight.classification()
+		preflightFailure := newReviewIntegrationPreflightFailure(operation, reason.Code, reason.Message)
 		preflightFailure.LineageID = failure.LineageID
+		preflightFailure.RequiredInputs = append([]string{}, reason.RequiredInputs...)
+		preflightFailure.NextAction = reason.NextAction
+		preflightFailure.Cause = reviewIntegrationFailureCause(preflight)
 		return preflightFailure
 	}
 	var legacy *reviewtransaction.LegacyReadOnlyError
@@ -656,11 +748,29 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 	// told a safe canned story. Code, Message, and MutationOutcome stay
 	// byte-identical to the struct literal above; only the additive Cause
 	// field carries the real native reason instead of discarding it.
-	if runErr != nil {
-		failure.Cause = runErr.Error()
-	}
+	failure.Cause = reviewIntegrationFailureCause(runErr)
 	return failure
 }
+
+// reviewIntegrationFailureCause renders a native error as the caller-visible
+// `cause` prose. It reuses the same field-level privacy gate every other
+// caller-visible narrative string passes through, so a refusal that wrapped an
+// *os.PathError cannot turn the negotiated envelope into a path leak, and then
+// bounds the result to the published single-line, 4000-character shape.
+func reviewIntegrationFailureCause(err error) string {
+	if err == nil {
+		return ""
+	}
+	text := reviewScrubDefectReportField(strings.ReplaceAll(err.Error(), "\r", "\n"))
+	if runes := []rune(text); len(runes) > reviewIntegrationFailureCauseLimit {
+		text = strings.TrimSpace(string(runes[:reviewIntegrationFailureCauseLimit]))
+	}
+	return text
+}
+
+// reviewIntegrationFailureCauseLimit mirrors the published maxLength for
+// failure.schema.json's `cause`.
+const reviewIntegrationFailureCauseLimit = 4000
 
 func reviewLockOperationLabel(operation string) string {
 	if metadata, ok := reviewIntegrationOperationByName(operation); ok {
@@ -897,6 +1007,10 @@ func (failure ReviewIntegrationFailure) Validate() error {
 	}
 	if failure.RequiredInputs == nil || strings.TrimSpace(failure.NextAction) == "" {
 		return errors.New("negotiated review failure action is incomplete")
+	}
+	if failure.Cause != "" && (strings.ContainsAny(failure.Cause, "\r\n") ||
+		len([]rune(failure.Cause)) > reviewIntegrationFailureCauseLimit) {
+		return errors.New("invalid negotiated review failure cause")
 	}
 	for _, input := range failure.RequiredInputs {
 		if !supportedReviewIntegrationFailureInput(input) {
