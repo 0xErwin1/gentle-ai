@@ -71,6 +71,14 @@ Los binarios están en la página de la pre-release: **https://github.com/Gentle
 
 ### Flujo 6: Entrega con revisiones apagadas
 
+**Ojo con el fixture**: este flujo necesita un upstream configurado. Sin remote, `pre-push` no puede derivar contra qué comparar y falla cerrado con un error tipado — eso es correcto, pero no prueba lo que este flujo quiere probar. Preparen el remote primero:
+
+```
+git init --bare $HOME/demo-remote.git
+cd $HOME/demo && git remote add origin $HOME/demo-remote.git
+git push -u origin HEAD
+```
+
 1. [ ] Apaguen, hagan cambio y commit → **Esperado**: el commit funciona normal.
 2. [ ] `gentle-ai review validate --gate pre-push --cwd $HOME/demo` → **Esperado**: `"delivery": "disabled/unmanaged"`, `"allowed": false`, **exit 0**. Reporta, no bloquea.
 3. [ ] Verifiquen que NO diga `allow` → **Esperado**: nunca un PASS falso.
@@ -83,6 +91,49 @@ Los binarios están en la página de la pre-release: **https://github.com/Gentle
 ### Flujo 8: Sin artefactos SDD fantasma
 
 1. [ ] `git rev-parse --git-common-dir` y revisen → **Esperado**: dentro de `gentle-ai/` solo estado de review; nada de `sdd*`, `trace`, `evaluation`.
+
+---
+
+## Flujos 9 a 13: lo que arreglamos con el feedback de ustedes
+
+Estos flujos son nuevos. Cada uno reproduce un bug que alguien de la comunidad encontró en las rondas anteriores. Necesitan un binario **posterior al Refresh 3** — si su `gentle-ai --version` es el asset del tag `45e53bda`, esperen al refresh nuevo o compilen desde la rama del PR.
+
+### Flujo 9: Pre-push después de haber pusheado (el bug que más nos costó)
+
+Reportado por @Wladimirfn, @Denver2828, @MarsSall y @Freedom2828. Parecía un bug de Windows y no lo era: pasaba cuando el commit revisado **ya estaba publicado**.
+
+Necesitan el remote del Flujo 6.
+
+1. [ ] Cambio de docs, `review start` + `review finalize` → **Esperado**: receipt aprobado.
+2. [ ] `review validate --gate pre-commit`, commit, y `review validate --gate pre-push` → **Esperado**: `allow`, **exit 0**. (Esta es la regresión: antes del push tiene que seguir funcionando igual.)
+3. [ ] **Pusheen**: `git push origin HEAD`.
+4. [ ] Apaguen las revisiones y hagan OTRO commit de docs.
+5. [ ] `review validate --gate pre-push` → **Esperado**: `"delivery": "disabled/unmanaged"`, **exit 0**. **NUNCA** `authority_corrupted`.
+6. [ ] Prendan las revisiones y repitan el gate → **Esperado**: `result: "scope-changed"` con una razón legible que nombra la base de entrega. Tampoco corrupción.
+
+### Flujo 10: Primer commit en un repo sin historia
+
+Reportado por @lu149e, con la causa raíz confirmada por @Denver2828.
+
+1. [ ] `mkdir $HOME/unborn && cd $HOME/unborn && git init -b main`.
+2. [ ] Creen un archivo de código, `gofmt` si aplica, y `git add -A`. **No commiteen todavía.**
+3. [ ] `git rev-parse --verify HEAD` → **Esperado**: falla, porque todavía no hay primer commit. Es correcto.
+4. [ ] `gentle-ai review start --cwd "$PWD"` → **Esperado**: la revisión **arranca**. Antes explotaba con `Needed a single revision`.
+
+### Flujo 11: Las transiciones se ejecutan tal cual las imprime
+
+Este es para quienes usan agentes. El producto imprime el comando siguiente; si no es ejecutable literal, un agente que obedece al pie de la letra se traba.
+
+1. [ ] Con una revisión en curso, pidan la transición siguiente (`review status --next-transition`).
+2. [ ] **Copien y peguen el comando exactamente como salió**, sin arreglar nada → **Esperado**: corre. Antes salía `--captured-results true` (con espacio) y el parser lo rechazaba.
+
+### Flujo 12: Finalize sin evidencia dice qué hacer
+
+1. [ ] Con una revisión en estado `validating` y sin evidencia capturada, corran `review finalize --lineage <id>` → **Esperado**: un error que **nombra los dos comandos** para salir (`review capture-evidence` y después el finalize con `--captured-evidence`). Antes decía "continuá el estado actual" y no pasaba nada nunca.
+
+### Flujo 13: Combinaciones de flags que no soportamos
+
+1. [ ] `review start --projection staged --base-ref HEAD~1` → **Esperado**: rechazo tipado que nombra **los dos escapes**: `--projection staged` solo (para revisar el índice) o `--base-ref <ref> --committed-only` (para revisar base-diff). No adivina cuál querían.
 
 ## Qué reportar
 
