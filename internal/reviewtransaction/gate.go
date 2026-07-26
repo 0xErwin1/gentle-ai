@@ -303,6 +303,28 @@ func EvaluateNativeGate(ctx context.Context, repo string, receipt Receipt, reque
 	if request.Gate == GatePrePR && result != GateAllow {
 		gateContext.Denial = &GateDenial{Stage: "receipt-binding", Code: string(result)}
 	}
+	if result == GateScopeChanged {
+		// validateDerivedGate is a pure receipt-vs-context comparison and
+		// cannot attach diagnostics itself, but this call site already holds
+		// ctx and repo, exactly like the compact gate path does when it
+		// derives GateScopeChangeDiagnostics. Reuse the same exported
+		// derivation — never a second copy of the diff/digest logic — by
+		// shaping the legacy transaction's bound scope as the minimal
+		// CompactState it actually reads (LineageID, CurrentSnapshot). A
+		// derivation failure (for example a transient Git fault) leaves
+		// ScopeChange nil rather than fabricating a recovery continuation.
+		// The shaped CompactState carries no InitialSnapshot, so the
+		// gate-conditional committed base-diff recommendation never arms here:
+		// a legacy-v1 transaction does not record the target kind that binds
+		// the pre-push one-commit delivery rule, and a recommendation this
+		// path cannot prove would be exactly the dead-end this derivation
+		// exists to remove.
+		if diagnostics, diagnosticsErr := CompactScopeChangeDiagnostics(ctx, repo, CompactState{
+			LineageID: record.Transaction.LineageID, CurrentSnapshot: record.Transaction.Snapshot,
+		}, revision, snapshot, request.Gate); diagnosticsErr == nil {
+			gateContext.ScopeChange = &diagnostics
+		}
+	}
 	if result == GateAllow {
 		finalGateAuthorizationHook()
 		finalSnapshot, finalRefs, err := buildLifecycleSnapshot(ctx, repo, request)

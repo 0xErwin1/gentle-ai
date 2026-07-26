@@ -362,7 +362,7 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	}
 	if snapshot.CandidateTree != receipt.FinalCandidateTree || pathsMismatch {
 		gateContext.Denial = &GateDenial{Stage: "receipt-binding", Code: "candidate-or-paths-mismatch"}
-		diagnostics, diagnosticsErr := buildCompactScopeChangeDiagnostics(ctx, repo, record.State, record.Revision, snapshot)
+		diagnostics, diagnosticsErr := CompactScopeChangeDiagnostics(ctx, repo, record.State, record.Revision, snapshot, request.Gate)
 		if diagnosticsErr != nil {
 			gateContext.Denial = &GateDenial{Stage: "receipt-binding", Code: "scope-diagnostics-unavailable"}
 			return NativeGateEvaluation{Result: GateInvalidated, Reason: "exact scope-change diagnostics cannot be derived: " + diagnosticsErr.Error(), Context: gateContext, Cause: diagnosticsErr}
@@ -505,8 +505,108 @@ func buildCompactScopeChangeDiagnostics(ctx context.Context, repo string, state 
 // CompactScopeChangeDiagnostics derives read-only recovery evidence for a
 // previously assessed compact gate target. It never authorizes, locks, or
 // mutates review authority.
-func CompactScopeChangeDiagnostics(ctx context.Context, repo string, state CompactState, revision string, actual Snapshot) (GateScopeChangeDiagnostics, error) {
-	return buildCompactScopeChangeDiagnostics(ctx, repo, state, revision, actual)
+//
+// The gate is part of the derivation because the recovery a denial may name is
+// gate-conditional. A bare `review recover` freezes a current-changes
+// successor over the LIVE workspace, which is the right answer at post-apply
+// and pre-commit, where the drifted work is still dirty. At pre-push over a
+// current-changes receipt it is the wrong answer: the delivery is already
+// committed, the workspace is clean, so the bare successor freezes an empty
+// scope (base_tree == candidate_tree) that re-trips the same one-commit
+// delivery rule the denial came from. For that case, and only that case, the
+// diagnostics additionally name the committed base-diff shape and the derived
+// publication boundary it must be frozen against.
+func CompactScopeChangeDiagnostics(ctx context.Context, repo string, state CompactState, revision string, actual Snapshot, gate GateKind) (GateScopeChangeDiagnostics, error) {
+	diagnostics, err := buildCompactScopeChangeDiagnostics(ctx, repo, state, revision, actual)
+	if err != nil {
+		return GateScopeChangeDiagnostics{}, err
+	}
+	if baseRef, _, ok := compactCommittedDeliveryRecovery(ctx, repo, state, gate); ok {
+		diagnostics.RecoveryScope, diagnostics.RecoveryBaseRef = RecoveryScopeCommittedBaseDiff, baseRef
+	}
+	return diagnostics, nil
+}
+
+// CompactDeliveryShapeScopeChangeDiagnostics derives recovery evidence for the
+// pre-push scope-changed class whose target ASSESSMENT errored -- the
+// deterministic one-commit delivery rule (ErrReviewedDeliveryNotOneCommit) and
+// the ambiguous published delivery base (GateDeliveryBaseResolutionError) both
+// fail before any actual snapshot exists, so buildCompactScopeChangeDiagnostics
+// is not even callable there. It derives the actual side independently, from
+// the publication boundary the pre-push gate itself binds to HEAD, which is
+// simultaneously the evidence and the scope the recommended recovery freezes.
+//
+// It returns an error -- never a fabricated recommendation -- whenever no
+// correct recovery is derivable: a non-current-changes receipt (which never
+// armed the one-commit rule), an unresolvable or bootstrap-empty publication
+// boundary, or a boundary that already equals the candidate, meaning the
+// delivery is fully published and there is nothing left for a successor to
+// freeze. Callers keep the honest terminal fallback in those cases.
+func CompactDeliveryShapeScopeChangeDiagnostics(ctx context.Context, repo string, state CompactState, revision string, gate GateKind) (GateScopeChangeDiagnostics, error) {
+	baseRef, actual, ok := compactCommittedDeliveryRecovery(ctx, repo, state, gate)
+	if !ok {
+		return GateScopeChangeDiagnostics{}, errors.New("no committed base-diff recovery is derivable for this delivery")
+	}
+	diagnostics, err := buildCompactScopeChangeDiagnostics(ctx, repo, state, revision, actual)
+	if err != nil {
+		return GateScopeChangeDiagnostics{}, err
+	}
+	diagnostics.RecoveryScope, diagnostics.RecoveryBaseRef = RecoveryScopeCommittedBaseDiff, baseRef
+	return diagnostics, nil
+}
+
+// compactCommittedDeliveryRecovery derives the committed base-diff recovery a
+// pre-push scope-changed denial can honestly name, together with the successor
+// scope that recovery would freeze.
+//
+// The gate predicate is compactPushDeliveryBaseTree's own: only a
+// current-changes receipt binds a one-commit delivery to its frozen base, so
+// only that receipt shape can be blocked by a delivery the bare recovery
+// cannot express. The returned base ref is the merge base of HEAD and the
+// resolved publication boundary -- an immutable commit id, never a remote ref
+// name that could move between reading this message and running the recovery,
+// and never a hardcoded default branch.
+//
+// It reports false, and therefore no recommendation, on every condition it
+// cannot prove: a non-pre-push gate, a non-current-changes receipt, an
+// unresolvable boundary or HEAD, a non-unique merge base (which the gate
+// itself already refuses), an unbuildable base-diff snapshot, an empty
+// base-diff whose successor would freeze nothing, a predecessor that is not in
+// a state a scope-changed recovery accepts, and -- the load-bearing one -- a
+// derived successor scope the recovery authority itself would refuse. The last
+// check is validateCompactRecoveryEdge's own predicate, evaluated here before
+// anything is named, so a denial can never point at a `review recover` that
+// exits non-zero with "approved predecessor scope has not changed". That case
+// is real: a delivery split across a number of commits other than one, but
+// carrying byte-identical content to the approved candidate, changes only the
+// commit topology, and no single recover invocation expresses it.
+func compactCommittedDeliveryRecovery(ctx context.Context, repo string, state CompactState, gate GateKind) (string, Snapshot, bool) {
+	if gate != GatePrePush || compactPushDeliveryBaseTree(state) == "" || state.State != StateApproved {
+		return "", Snapshot{}, false
+	}
+	selection, err := selectPrePushBoundary(ctx, repo, "")
+	if err != nil || selection.Source == PrePRBoundaryEmptyRemoteBootstrap {
+		// An empty remote has no publication range to diff against, so no
+		// base-diff recovery exists to name.
+		return "", Snapshot{}, false
+	}
+	head, err := resolveCommit(ctx, repo, "HEAD")
+	if err != nil {
+		return "", Snapshot{}, false
+	}
+	output, err := runGit(ctx, repo, nil, nil, "merge-base", "--all", head, selection.Commit)
+	bases := strings.Fields(string(output))
+	if err != nil || len(bases) != 1 {
+		return "", Snapshot{}, false
+	}
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(ctx, Target{Kind: TargetBaseDiff, BaseRef: bases[0], IntendedUntracked: []string{}})
+	if err != nil || snapshot.BaseTree == snapshot.CandidateTree {
+		return "", Snapshot{}, false
+	}
+	if !compactRecoveryScopeChanged(state.CurrentSnapshot, snapshot) {
+		return "", Snapshot{}, false
+	}
+	return bases[0], snapshot, true
 }
 
 func differingPathSet(left, right []string) []string {

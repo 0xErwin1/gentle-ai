@@ -199,10 +199,21 @@ func RunReviewStep(args []string, stdout io.Writer) error {
 func (err ReviewGateDeniedError) Error() string {
 	message := fmt.Sprintf("review lifecycle gate denied: %s", err.Result)
 	if err.Result == reviewtransaction.GateScopeChanged && err.Context.ScopeChange != nil && err.Context.ScopeChange.RecoveryOperation != "" {
-		if len(err.Context.ScopeChange.RecoveryRequiredInputs) > 0 {
-			return fmt.Sprintf("%s: recover via %s (requires: %s)", message, err.Context.ScopeChange.RecoveryOperation, strings.Join(err.Context.ScopeChange.RecoveryRequiredInputs, ", "))
+		scope := err.Context.ScopeChange
+		operation := scope.RecoveryOperation
+		// The gate-conditional half. A bare recovery freezes a current-changes
+		// successor over the live workspace; at pre-push over an already
+		// committed delivery that successor is empty and re-trips the same
+		// rule. When the frozen diagnostics carry the committed base-diff
+		// shape, the named continuation carries the exact selectors that make
+		// it the recovery that actually clears this gate.
+		if scope.RecoveryScope == reviewtransaction.RecoveryScopeCommittedBaseDiff && scope.RecoveryBaseRef != "" {
+			operation = fmt.Sprintf("%s --base-ref %s --committed-only", operation, scope.RecoveryBaseRef)
 		}
-		return fmt.Sprintf("%s: recover via %s", message, err.Context.ScopeChange.RecoveryOperation)
+		if len(scope.RecoveryRequiredInputs) > 0 {
+			return fmt.Sprintf("%s: recover via %s (requires: %s)", message, operation, strings.Join(scope.RecoveryRequiredInputs, ", "))
+		}
+		return fmt.Sprintf("%s: recover via %s", message, operation)
 	}
 	switch reviewGateAction(err.Result) {
 	case "continue":

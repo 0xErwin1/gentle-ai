@@ -183,6 +183,13 @@ type GateTargetEvidence struct {
 	Paths         []string `json:"paths"`
 }
 
+// RecoveryScopeCommittedBaseDiff names the successor scope a recovery must
+// freeze when the blocked delivery is already committed and the gate binds a
+// publication range: `review recover --base-ref <RecoveryBaseRef>
+// --committed-only`. The empty scope means the default current-changes
+// successor a bare `review recover` already freezes.
+const RecoveryScopeCommittedBaseDiff = "committed-base-diff"
+
 type GateScopeChangeDiagnostics struct {
 	Expected               GateTargetEvidence `json:"expected"`
 	Actual                 GateTargetEvidence `json:"actual"`
@@ -193,6 +200,18 @@ type GateScopeChangeDiagnostics struct {
 	PredecessorRevision    string             `json:"predecessor_revision"`
 	RecoveryOperation      string             `json:"recovery_operation"`
 	RecoveryRequiredInputs []string           `json:"recovery_required_inputs"`
+	// RecoveryScope and RecoveryBaseRef carry the gate-conditional half of
+	// the recovery: which successor scope this gate will actually accept,
+	// and the derived publication boundary it must be frozen against. They
+	// are deliberately NOT projected into the negotiated
+	// gentle-ai.review-integration/v1 failure envelope, whose published
+	// failure.schema.json pins `scope_change` to
+	// `additionalProperties: false` and `recovery_required_inputs` to
+	// exactly six items. Both stay empty for every gate whose bare
+	// current-changes recovery already works, so the existing wire bytes are
+	// unchanged wherever the recommendation is unchanged.
+	RecoveryScope   string `json:"recovery_scope,omitempty"`
+	RecoveryBaseRef string `json:"recovery_base_ref,omitempty"`
 }
 
 func validateDerivedGate(receipt Receipt, context GateContext) GateResult {

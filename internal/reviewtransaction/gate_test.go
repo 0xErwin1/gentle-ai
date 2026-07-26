@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -120,6 +121,73 @@ func TestPrePRGateFailsClosedForUnprovenBaseAdvance(t *testing.T) {
 				t.Fatalf("EvaluateNativeGate() = %#v, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestLegacyNativeGateScopeChangedNamesRecoveryDiagnostics is the RED-first
+// proof that a legacy (v1, non-compact) EvaluateNativeGate scope-changed
+// denial carries the same GateScopeChangeDiagnostics as the compact gate
+// path, instead of leaving Context.ScopeChange nil. EvaluateNativeGate holds
+// ctx and repo at the exact point it derives GateScopeChanged from
+// validateDerivedGate, so the diagnostics are derivable there — this test
+// pins that they are actually derived, reusing the same exported
+// CompactScopeChangeDiagnostics the compact path already uses.
+func TestLegacyNativeGateScopeChangedNamesRecoveryDiagnostics(t *testing.T) {
+	fixture := newCompatiblePrePRFixture(t, "delivery.txt", "base-only.txt")
+	writeSnapshotFile(t, fixture.repo, fixture.deliveryPath, "changed delivery\n")
+	gitSnapshot(t, fixture.repo, "add", "--", fixture.deliveryPath)
+	gitSnapshot(t, fixture.repo, "commit", "-m", "change delivery")
+
+	got := EvaluateNativeGate(context.Background(), fixture.repo, fixture.receipt, fixture.request)
+	if got.Result != GateScopeChanged {
+		t.Fatalf("EvaluateNativeGate() = %#v, want scope-changed", got)
+	}
+	if got.Context.ScopeChange == nil {
+		t.Fatalf("EvaluateNativeGate() Context.ScopeChange = nil, want derived recovery diagnostics")
+	}
+	if got.Context.ScopeChange.RecoveryOperation != "review.recover" {
+		t.Fatalf("ScopeChange.RecoveryOperation = %q, want review.recover", got.Context.ScopeChange.RecoveryOperation)
+	}
+	wantInputs := []string{
+		"predecessor_lineage_id", "expected_predecessor_revision", "successor_lineage_id", "disposition", "reason", "actor",
+	}
+	if strings.Join(got.Context.ScopeChange.RecoveryRequiredInputs, ",") != strings.Join(wantInputs, ",") {
+		t.Fatalf("ScopeChange.RecoveryRequiredInputs = %v, want %v", got.Context.ScopeChange.RecoveryRequiredInputs, wantInputs)
+	}
+	if got.Context.ScopeChange.PredecessorLineageID != fixture.receipt.LineageID {
+		t.Fatalf("ScopeChange.PredecessorLineageID = %q, want %q", got.Context.ScopeChange.PredecessorLineageID, fixture.receipt.LineageID)
+	}
+
+	// Byte-identical proof (non-negotiable #3): the only JSON change this fix
+	// introduces to the negotiated envelope is populating the already-defined,
+	// previously-omitted "scope_change" key. Every other field — Result,
+	// Reason, Denial, and every other GateContext field — stays exactly what
+	// it was before diagnostics derivation existed for this call site.
+	withScopeChange, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutScopeChange := got
+	withoutScopeChange.Context.ScopeChange = nil
+	strippedPayload, err := json.Marshal(withoutScopeChange)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var withMap, withoutMap map[string]any
+	if err := json.Unmarshal(withScopeChange, &withMap); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(strippedPayload, &withoutMap); err != nil {
+		t.Fatal(err)
+	}
+	withContext, _ := withMap["Context"].(map[string]any)
+	if withContext == nil {
+		t.Fatalf("marshaled evaluation has no Context object: %s", withScopeChange)
+	}
+	delete(withContext, "scope_change")
+	withoutContext, _ := withoutMap["Context"].(map[string]any)
+	if fmt.Sprint(withContext) != fmt.Sprint(withoutContext) || withMap["Result"] != withoutMap["Result"] || withMap["Reason"] != withoutMap["Reason"] {
+		t.Fatalf("negotiated envelope changed beyond the added scope_change field:\nwith (scope_change stripped) = %#v\nwithout = %#v", withContext, withoutContext)
 	}
 }
 
