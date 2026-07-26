@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/internal/pathidentity"
 )
 
 type TargetKind string
@@ -520,7 +522,10 @@ func (builder SnapshotBuilder) repositoryRoot(ctx context.Context) (string, erro
 	if err != nil {
 		return "", err
 	}
-	if filepath.Clean(root) != filepath.Clean(abs) {
+	// Identity, not string equality. Git reports the toplevel in the spelling
+	// the kernel gave it, which on a case-insensitive volume differs from the
+	// spelling the caller typed even after filepath.EvalSymlinks resolved both.
+	if !pathidentity.SameDirectory(root, abs) {
 		return "", fmt.Errorf("snapshot repo %s is not the repository root %s", abs, root)
 	}
 	return root, nil
@@ -540,8 +545,12 @@ func (builder SnapshotBuilder) ResolveRepositoryRoot(ctx context.Context) (strin
 	if err != nil {
 		return "", err
 	}
-	relative, err := filepath.Rel(root, abs)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+	// 1773 boundary 2: filepath.Rel decided containment by comparing strings,
+	// so on a default case-insensitive APFS volume the requested path and the
+	// toplevel Git reported for it -- same device, same inode, different
+	// spelling -- were reported as different repositories. Containment is a
+	// filesystem question and internal/pathidentity asks the filesystem.
+	if !pathidentity.Contains(root, abs) {
 		return "", errors.New("resolved repository root does not contain the requested path")
 	}
 	return root, nil

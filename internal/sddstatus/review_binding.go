@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/internal/pathidentity"
 	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
 )
 
@@ -496,16 +497,19 @@ func loadEffectiveReviewBinding(ctx context.Context, repo, change string) (Revie
 }
 
 func resolveBindingChangeRoot(ctx context.Context, root, workspace, change string) (string, error) {
-	workspace, err := filepath.Abs(workspace)
+	// Both operands are canonicalized the same way before any containment or
+	// equality decision below. Resolving only the workspace was 1773 boundary
+	// 1: on macOS the same repository spelled through /var and through
+	// /private/var compared unequal, and the planning workspace was reported
+	// outside its own repository.
+	workspace, err := canonicalBindingPath(workspace)
 	if err != nil {
 		return "", err
 	}
-	workspace, err = filepath.EvalSymlinks(workspace)
+	root, err = canonicalBindingPath(root)
 	if err != nil {
 		return "", err
 	}
-	root = filepath.Clean(root)
-	workspace = filepath.Clean(workspace)
 	if !pathWithinBindingRoot(root, workspace) {
 		return "", errors.New("planning workspace is outside selected repository")
 	}
@@ -534,7 +538,7 @@ func resolveBindingChangeRoot(ctx context.Context, root, workspace, change strin
 		} else if !os.IsNotExist(statErr) {
 			return "", statErr
 		}
-		if current == root {
+		if pathidentity.SameDirectory(current, root) {
 			break
 		}
 	}
@@ -612,9 +616,30 @@ func bindingChangeRoots(ctx context.Context, root, change string) ([]string, err
 	return matches, nil
 }
 
+// canonicalBindingPath is the single canonicalization every binding path goes
+// through before it is compared with another. Having one of these, used on
+// both operands, is what keeps a second spelling of one repository from
+// looking like a different repository.
+func canonicalBindingPath(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(resolved), nil
+}
+
+// pathWithinBindingRoot defers containment to the filesystem identity policy
+// in internal/pathidentity, so alternate spellings that the operating system
+// resolves to one directory -- symlinked ancestors, case-insensitive volumes,
+// Unicode-equivalent names -- are one directory here too. Callers still
+// resolve a candidate with filepath.EvalSymlinks before asking, because this
+// answers "is it inside", never "did it get there through a symlink".
 func pathWithinBindingRoot(root, path string) bool {
-	relative, err := filepath.Rel(root, path)
-	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative)
+	return pathidentity.Contains(root, path)
 }
 
 func verifyBindingLedger(changeRoot string, findings []reviewtransaction.Finding) error {
