@@ -888,7 +888,7 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 		return CompactStartResult{}, err
 	}
 	if request.TracePath != "" {
-		_ = appendCompactTrace(request.TracePath, CompactTraceEntry{
+		recordCompactTrace(request.TracePath, CompactTraceEntry{
 			Operation: "review/start", Revision: record.Revision, State: request.State.State,
 			RecordedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		})
@@ -1384,7 +1384,7 @@ func (store CompactStore) replaceContextGuarded(ctx context.Context, expectedRev
 		return "", err
 	}
 	if store.TracePath != "" {
-		_ = appendCompactTrace(store.TracePath, CompactTraceEntry{
+		recordCompactTrace(store.TracePath, CompactTraceEntry{
 			Operation: operation, PreviousRevision: currentRevision, Revision: record.Revision,
 			State: next.State, RecordedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		})
@@ -1773,6 +1773,30 @@ func deleteRetiredCompactField(fields map[string]json.RawMessage, path []string)
 	}
 	fields[name] = updated
 	return true, nil
+}
+
+// compactTraceWarn reports a lost diagnostic-trace write (issue #1854). A
+// caller that supplies TracePath explicitly asked for that observability; the
+// authority mutation has already committed by the time this runs and must
+// never be rolled back or fail because of it, so this is report-only. It
+// follows the same "WARNING: ..." convention run.go already uses at the CLI
+// boundary for other non-fatal, already-succeeded-but-partially-degraded
+// operations (e.g. "could not add %s to PATH"). It is a package-level var, in
+// keeping with this file's existing test-seam convention (see
+// finalCompactInvalidationHook and similar hooks), so tests can observe the
+// report without capturing real stderr.
+var compactTraceWarn = func(operation, path string, err error) {
+	fmt.Fprintf(os.Stderr, "WARNING: review trace for %s was not recorded at %s: %v\n", operation, path, err)
+}
+
+// recordCompactTrace appends a diagnostic trace entry and reports rather than
+// swallows a write failure. The trace is best-effort diagnostics only: it
+// never carries authority, so its failure must never affect an already
+// committed mutation's success/failure outcome.
+func recordCompactTrace(path string, entry CompactTraceEntry) {
+	if err := appendCompactTrace(path, entry); err != nil {
+		compactTraceWarn(entry.Operation, path, err)
+	}
 }
 
 func appendCompactTrace(path string, entry CompactTraceEntry) error {

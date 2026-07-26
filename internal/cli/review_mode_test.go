@@ -430,6 +430,45 @@ func TestNonInteractiveReviewStartNeverBlocksOnConsent(t *testing.T) {
 	}
 }
 
+// TestNonInteractiveReviewStartNoticeShownOnlyOnce covers issue #1848: a
+// tester driving many flows in the same non-interactive clone saw the
+// "no terminal to answer on" notice on every single start. The first
+// occurrence must never be suppressed (it is the only way the user learns
+// the tool reviewed without asking); later occurrences in the same clone
+// carry no new information and must be rate-limited to once. This must not
+// reuse the RDDConsentAsked latch: TestNonInteractiveReviewStartNeverBlocksOnConsent
+// (above) establishes that a non-interactive run must never consume the
+// one-time consent question, so a later interactive session in the same
+// clone can still be asked.
+func TestNonInteractiveReviewStartNoticeShownOnlyOnce(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	console := stubReviewConsole(t, false, "")
+
+	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
+	var first bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-notice-once-a"}, &first); err != nil {
+		t.Fatalf("first non-interactive start: %v\n%s", err, first.String())
+	}
+	if !strings.Contains(console.String(), reviewConsentSkippedNotice) {
+		t.Fatalf("the first non-interactive start must show the notice:\n%s", console.String())
+	}
+
+	console.Reset()
+	writeReviewStartCandidate(t, repo, "scripts/deploy2.sh", "echo deploy2\n", 0o644)
+	var second bytes.Buffer
+	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "review-notice-once-b"}, &second); err != nil {
+		t.Fatalf("second non-interactive start: %v\n%s", err, second.String())
+	}
+	if strings.Contains(console.String(), reviewConsentSkippedNotice) {
+		t.Fatalf("a repeated non-interactive start must not repeat the notice:\n%s", console.String())
+	}
+
+	if asked, err := reviewtransaction.RDDConsentAsked(context.Background(), repo); err != nil || asked {
+		t.Fatalf("notice rate-limiting must not consume the one-time consent question: asked=%v err=%v", asked, err)
+	}
+}
+
 // reviewConsentChoicePattern matches one numbered answer the question offers.
 // The count is asserted, because turning reviews off for good must never be
 // reachable by pressing a number in a hurried moment.
