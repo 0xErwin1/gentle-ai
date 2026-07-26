@@ -181,8 +181,14 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		wantChars     int
 		maxCharacters int
 	}{
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 7_085, maxCharacters: 7_200},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 14_078, maxCharacters: 16_000},
+		// wantChars grew by 110 (7,085 -> 7,195 / 14,078 -> 14,188) when the
+		// review-ledger-contract.md GENTLE_AI_REVIEW_BINDING sentence was
+		// corrected: it previously claimed START emits that field verbatim,
+		// which no emitter does; it now says how to assemble it from START's
+		// own lineage_id/target_identity/lens_bindings fields (issue: docs vs
+		// emitter mismatch reported alongside the review-start hint gap).
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 7_195, maxCharacters: 7_200},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 14_188, maxCharacters: 16_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

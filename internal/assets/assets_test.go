@@ -932,6 +932,55 @@ func TestClaudeSDDWorkflowRequiresSessionPreflight(t *testing.T) {
 	}
 }
 
+// sddOrchestratorAutomaticDefaultRuntimes lists every runtime whose asset
+// carries the flipped "default to Automatic" execution-mode sentence: the 11
+// runtimes with a standalone `sdd-orchestrator.md` plus Claude's separate
+// workflow surface. Deliberately not "all 12 runtime dirs" — Claude ships two
+// files and only its workflow file carries this sentence.
+var sddOrchestratorAutomaticDefaultRuntimes = []string{
+	"antigravity/sdd-orchestrator.md",
+	"hermes/sdd-orchestrator.md",
+	"gemini/sdd-orchestrator.md",
+	"codex/sdd-orchestrator.md",
+	"qwen/sdd-orchestrator.md",
+	"kimi/sdd-orchestrator.md",
+	"kiro/sdd-orchestrator.md",
+	"opencode/sdd-orchestrator.md",
+	"generic/sdd-orchestrator.md",
+	"cursor/sdd-orchestrator.md",
+	"windsurf/sdd-orchestrator.md",
+	"claude/sdd-orchestrator-workflow.md",
+}
+
+const sddOrchestratorAutomaticDefaultSentence = "If the user doesn't specify, default to **Automatic**."
+
+const sddOrchestratorPromptBudgetSentence = "After scope approval, expect zero further prompts on the happy path and at most one actionable prompt per recoverable failure; the gatekeeper summarizes phase progress instead of interrupting except on a second consecutive gate failure or a genuine scope/product decision."
+
+// TestSDDOrchestratorAssetsDefaultToAutomatic pins that every SDD
+// orchestrator asset defaults to Automatic execution mode when unspecified,
+// with a byte-identical default sentence and prompt-budget sentence across
+// all 12 runtimes, and that Interactive stays explicitly selectable (never
+// removed as an option).
+func TestSDDOrchestratorAssetsDefaultToAutomatic(t *testing.T) {
+	for _, path := range sddOrchestratorAutomaticDefaultRuntimes {
+		t.Run(path, func(t *testing.T) {
+			content := MustRead(path)
+			if !strings.Contains(content, sddOrchestratorAutomaticDefaultSentence) {
+				t.Fatalf("%s missing byte-identical default sentence %q", path, sddOrchestratorAutomaticDefaultSentence)
+			}
+			if !strings.Contains(content, sddOrchestratorPromptBudgetSentence) {
+				t.Fatalf("%s missing byte-identical prompt-budget sentence %q", path, sddOrchestratorPromptBudgetSentence)
+			}
+			if strings.Contains(content, "default to **Interactive**") {
+				t.Fatalf("%s still defaults to Interactive", path)
+			}
+			if !strings.Contains(content, "**Interactive**") {
+				t.Fatalf("%s must keep Interactive explicitly selectable", path)
+			}
+		})
+	}
+}
+
 func TestSDDFFCommandsHonorInteractiveMode(t *testing.T) {
 	for _, path := range []string{
 		"opencode/commands/sdd-ff.md",

@@ -207,7 +207,7 @@ In **Interactive** mode, between phases:
 
 Interactive means the orchestrator pauses after each delegation returns before launching the next phase, including `/sdd-ff` planning phases.
 
-If the user doesn't specify, default to **Interactive**.
+If the user doesn't specify, default to **Automatic**. After scope approval, expect zero further prompts on the happy path and at most one actionable prompt per recoverable failure; the gatekeeper summarizes phase progress instead of interrupting except on a second consecutive gate failure or a genuine scope/product decision.
 
 Cache the mode choice for the session - do not ask again unless the user explicitly requests a mode change.
 

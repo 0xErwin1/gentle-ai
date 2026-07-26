@@ -235,7 +235,7 @@ When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` for the first ti
 - **Automatic** (`auto`): Run all phases back-to-back. The orchestrator runs a gatekeeper validation after every phase before launching the next sub-agent — the user only sees an interruption when the gatekeeper catches a problem. Final result only.
 - **Interactive** (`interactive`): After each phase, show the result summary and ask before proceeding.
 
-If the user doesn't specify, default to **Interactive** (safer, gives the user control).
+If the user doesn't specify, default to **Automatic**. After scope approval, expect zero further prompts on the happy path and at most one actionable prompt per recoverable failure; the gatekeeper summarizes phase progress instead of interrupting except on a second consecutive gate failure or a genuine scope/product decision.
 
 In **Interactive** mode, between phases:
 1. Show a concise summary of what the phase produced

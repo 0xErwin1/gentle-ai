@@ -133,7 +133,7 @@ When the user invokes `/sdd-new`, `/sdd-ff`, or `/sdd-continue` (or an equivalen
 - **Automatic** (`auto`): Run all phases back-to-back without pausing. The orchestrator runs a gatekeeper validation after every phase before invoking the next custom-agent — the user only sees an interruption when the gatekeeper catches a real problem. Show the final result only.
 - **Interactive** (`interactive`): After each phase completes, show the result summary and ASK: "Want to adjust anything or continue?" before proceeding to the next phase.
 
-If the user doesn't specify, default to **Interactive**.
+If the user doesn't specify, default to **Automatic**. After scope approval, expect zero further prompts on the happy path and at most one actionable prompt per recoverable failure; the gatekeeper summarizes phase progress instead of interrupting except on a second consecutive gate failure or a genuine scope/product decision.
 
 Interactive approval is phase-scoped. Words like "continue", "dale", or "go on" approve only the immediate next phase, not the rest of the SDD pipeline. Do not treat a generated artifact as approved until the user has had a chance to review or explicitly delegate that review.
 

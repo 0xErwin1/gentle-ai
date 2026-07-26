@@ -14,6 +14,8 @@ var boundedReviewRequiredClauses = []string{
 	"Parent orchestrator and native CLI only",
 	"gentle-ai review start",
 	"selected lens once in the foreground",
+	"assembled from this exact START response as one JSON object",
+	"`lineage` from `lineage_id`, `target` from `target_identity`, `lens`/`order` from `lens_bindings`",
 	"gentle-ai review capture-result",
 	"repeated `--result-artifact-file <path>` arguments",
 	"BOM-less UTF-8 on Windows PowerShell 5.1",
