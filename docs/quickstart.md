@@ -13,6 +13,7 @@
 - `apt-get` available (standard on these distros).
 - `sudo` access for package installs.
 - `git` available.
+- If Node.js is missing, `gentle-ai install` prints this install hint: NodeSource LTS setup + `apt-get install -y nodejs` (npm comes bundled).
 - If using Homebrew on Linux, Bubblewrap may require unprivileged user namespaces; see `docs/usage.md#homebrew-upgrade-troubleshooting`.
 
 ### Arch Linux (and derivatives like Manjaro, EndeavourOS)
@@ -20,23 +21,36 @@
 - `pacman` available (standard on these distros).
 - `sudo` access for package installs.
 - `git` available.
+- If Node.js is missing, `gentle-ai install` prints this install hint: `pacman -S --noconfirm nodejs npm`.
 
 ### Fedora / RHEL family (Fedora, CentOS Stream, Rocky Linux, AlmaLinux)
 
 - `dnf` available (standard on these distros).
 - `sudo` access for package installs.
 - `git` available.
-- Node.js installs use NodeSource LTS setup + `dnf install -y nodejs` during dependency remediation.
+- If Node.js is missing, `gentle-ai install` prints this install hint: NodeSource LTS setup + `dnf install -y nodejs` (npm comes bundled).
 
 ### All platforms
 
 - Go 1.24+ (for building from source).
-- Node.js / npm if installing Claude Code (agent is installed via `npm install -g`).
+- Node.js 18+ and npm: `gentle-ai install` checks these as required prerequisites on every platform and prints a warning with a distro-specific install hint (see above) if either is missing — regardless of which agents/components you select. It does not install them for you. They are strictly required if you select any agent or component installed via `npm install -g` (most agent integrations, plus the CodeGraph community tool).
 - Pi installed and available as `pi` on `PATH` if you select the Pi agent.
 
 ### Windows
 
-- Scoop installed. Gentle AI recommends Scoop as the Windows install path.
+- Go 1.25.10+, because Windows installs and upgrades through `go install`.
+  Official Windows binaries and the Scoop bucket are temporarily unavailable
+  while publicly trusted Authenticode signing is provisioned, so nothing
+  unsigned is ever fetched. With Go on `PATH`, `gentle-ai upgrade` updates
+  itself automatically by running `go install …/cmd/gentle-ai@vX.Y.Z` pinned to
+  the release tag and verified against the Go checksum database; without Go it
+  fails closed and just prints that command. See [platforms.md](platforms.md)
+  and the
+  [restoration gate](release-signing.md#windows-distribution-restoration-gate).
+
+```powershell
+go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.46.0
+```
 
 ## Version Policy
 

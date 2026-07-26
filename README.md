@@ -81,6 +81,9 @@ The workflow guidance directs agents; the native review commands bind receipts a
 
 ### Install (recommended)
 
+> [!NOTE]
+> `gentle-ai install` requires Node.js 18+ and npm on every platform (it warns if either is missing). See [Prerequisites](docs/quickstart.md#prerequisites) for your distro's install hint.
+
 **macOS / Linux**
 
 ```bash

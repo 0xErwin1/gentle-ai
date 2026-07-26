@@ -69,6 +69,8 @@ The binaries are on the pre-release page: **https://github.com/Gentleman-Program
 3. [ ] ANOTHER change and `review start` → **Expected**: it asks again.
 4. [ ] Answer `1` → **Expected**: it reviews, and the next change no longer asks.
 
+**If you are driving this from a script or an agent**: the answer is read as one whole line, so it must end with a newline. Sending the bare character `2` over a pseudo-terminal is echoed but never completes the read, and the command waits until your harness kills it. Send `2\n`. There is no timeout on this prompt, so a missing newline looks exactly like a hang.
+
 ### Flow 6: Delivery with reviews turned off
 
 **Watch out for the fixture**: this flow needs a configured upstream. With no remote, `pre-push` cannot derive what to compare against and fails closed with a typed error — that is correct, but it does not test what this flow wants to test. Set the remote up first:
@@ -130,8 +132,16 @@ This one is for people using agents. The product prints the next command; if it 
 gentle-ai review status --next-transition --contract gentle-ai.review-integration/v1
 ```
 
+**First read `next_transition.kind`. Steps 2 to 4 only apply when it is `execute`.**
+
+If it is `collect`, the tool is waiting for reviewer results that do not exist yet, so there is no command it could print: a model has to run the lens first. That is correct behaviour, not a defect. Skip to step 5. If it is `stop`, there is no transition at all and the same applies.
+
+The quickest way to land on `execute` is to ask before any review has started, or right after `review capture-result`.
+
 2. [ ] Look at the `token` of each argument in the response → **Expected**: each one is a complete flag ready to run (`--target=sha256:...`), not a name and a value sitting apart.
-3. [ ] **Copy and paste the command exactly as it came out**, without fixing anything → **Expected**: it runs. It used to print `--captured-results true` (with a space) and the parser rejected it.
+3. [ ] Read the `next_transition.execute.command` field → **Expected**: one complete line, starting with `gentle-ai review <verb>`, carrying every argument from step 2 in the same order and in `--flag=value` form. You never assemble it yourself: `operation` is a logical name (`review.start`), `command` is the runnable line.
+4. [ ] **Copy and paste that `command` exactly as it came out**, without fixing anything → **Expected**: it runs. It used to print `--captured-results true` (with a space) and the parser rejected it, and before that there was no `command` at all — only `operation`, which an agent had to translate into a verb by guessing.
+5. [ ] If you landed on `collect`, report what its `inputs[].arguments` carry → **Expected today**: `name` and `value`, and **no `token`**. That is a known gap on this side of the payload: `execute` arguments carry their runnable token, `collect` arguments do not, so a caller still assembles those flags by hand. Say so in your report if you hit it, and do not mark the flow FAIL for the missing `command` alone: on `collect` there is genuinely nothing runnable to print yet.
 
 ### Flow 12: Finalize without evidence says what to do
 
