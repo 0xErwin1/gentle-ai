@@ -396,6 +396,151 @@ func TestReviewNextTransitionStateTable(t *testing.T) {
 	}
 }
 
+// TestReviewTransitionArgumentToken is the RED-first proof for 1745: every
+// emitted Execute.Arguments entry must carry the exact, literally executable
+// argv token, and Preconditions (assertions, not argv) must never carry one.
+func TestReviewTransitionArgumentToken(t *testing.T) {
+	status := func(applicability reviewtransaction.TargetApplicability, state reviewtransaction.State, action reviewtransaction.TargetStatusAction, replayability reviewtransaction.Replayability) ReviewTargetStatusResult {
+		return ReviewTargetStatusResult{
+			Applicability: applicability, Action: action, Replayability: replayability,
+			TargetIdentity: "sha256:" + strings.Repeat("b", 64), Candidates: []string{"first", "second"},
+			Authority:  &ReviewTargetStatusAuthority{LineageID: "review-token", Revision: "sha256:" + strings.Repeat("a", 64), State: state},
+			Frozen:     &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium},
+			Projection: ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace, BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40)},
+		}
+	}
+	all := []ReviewTransitionArtifact{{Schema: reviewResultArtifactSchema, Capability: reviewResultArtifactCapability, SHA256: "sha256:" + strings.Repeat("c", 64), LineageID: "review-token", TargetIdentity: "sha256:" + strings.Repeat("b", 64), Lens: reviewtransaction.LensReliability, SelectedOrder: 0}}
+	for _, tt := range []struct {
+		name       string
+		status     ReviewTargetStatusResult
+		lenses     []string
+		artifacts  []ReviewTransitionArtifact
+		input      reviewNextTransitionInput
+		wantTokens map[string]string
+	}{
+		{
+			name:   "captured results uses the real hyphenated flag",
+			status: status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateReviewing, reviewtransaction.TargetStatusActionFinalize, reviewtransaction.ReplayabilityNotReplayable),
+			lenses: []string{reviewtransaction.LensReliability}, artifacts: all,
+			input:      reviewNextTransitionInput{RepositoryContext: "rctx1_" + strings.Repeat("d", 64)},
+			wantTokens: map[string]string{"lineage": "--lineage=review-token", "captured_results": "--captured-results=true"},
+		},
+		{
+			name:       "approved receipt gate token",
+			status:     status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateApproved, reviewtransaction.TargetStatusActionValidate, reviewtransaction.ReplayabilityNotReplayable),
+			wantTokens: map[string]string{"lineage": "--lineage=review-token", "gate": "--gate=pre-commit"},
+		},
+		{
+			name:   "recovery authorized token",
+			status: status(reviewtransaction.TargetApplicabilityCurrent, reviewtransaction.StateInvalidated, reviewtransaction.TargetStatusActionRecover, reviewtransaction.ReplayabilityManualActionRequired),
+			input: reviewNextTransitionInput{
+				Successor: "review-token-successor", Reason: "authorized recovery", Actor: "maintainer",
+				Authorization: "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=review-token\npredecessor_revision=sha256:" + strings.Repeat("a", 64) + "\ntarget_identity=sha256:" + strings.Repeat("b", 64) + "\nactor=maintainer\nreason=authorized recovery",
+			},
+			wantTokens: map[string]string{"predecessor-lineage": "--predecessor-lineage=review-token", "successor-lineage": "--successor-lineage=review-token-successor"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.status.Authority.State == reviewtransaction.StateApproved {
+				tt.status.Receipt.Status = ReviewReceiptPresent
+			}
+			if tt.status.Authority.State == reviewtransaction.StateReviewing {
+				tt.input.CaptureContext = nextTransitionTestCaptureContext(t, tt.status, tt.lenses)
+			}
+			got := newReviewNextTransition(tt.status, tt.lenses, tt.artifacts, false, nil, tt.input)
+			if got.Kind != reviewNextTransitionExecute || got.Execute == nil {
+				t.Fatalf("next transition = %#v, want an execute transition", got)
+			}
+			seen := map[string]bool{}
+			for _, argument := range got.Execute.Arguments {
+				want, checked := tt.wantTokens[argument.Name]
+				if checked {
+					if argument.Token != want {
+						t.Fatalf("argument %q token = %q, want %q", argument.Name, argument.Token, want)
+					}
+					seen[argument.Name] = true
+				}
+				if strings.TrimSpace(argument.Token) == "" {
+					t.Fatalf("execute argument %q carries no literal argv token", argument.Name)
+				}
+			}
+			for name := range tt.wantTokens {
+				if !seen[name] {
+					t.Fatalf("expected argument %q was not present in Execute.Arguments", name)
+				}
+			}
+			for _, precondition := range got.Execute.Preconditions {
+				if precondition.Token != "" {
+					t.Fatalf("precondition %q carries a Token; preconditions are assertions, not argv", precondition.Name)
+				}
+			}
+		})
+	}
+}
+
+// TestNewReviewNextTransitionEscalatedRouting is the RED-first proof for
+// 1800: StateEscalated used to dead-end with Stop("escalated_authority")
+// unconditionally, unlike StateInvalidated which routes to recovery. It must
+// now route to reviewRecoveryCollection with the disposition forced to
+// RecoveryEscalated, and Stop with a new reason naming the changed-target
+// requirement whenever the target is unchanged — regardless of whether a
+// Selector is present, since the generic recovery_scope_unchanged guard only
+// fires when one is.
+func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
+	baseStatus := func(target, authorityTarget string) ReviewTargetStatusResult {
+		return ReviewTargetStatusResult{
+			Applicability: reviewtransaction.TargetApplicabilityCurrent, Action: reviewtransaction.TargetStatusActionRecover,
+			Replayability:           reviewtransaction.ReplayabilityManualActionRequired,
+			TargetIdentity:          target,
+			AuthorityTargetIdentity: authorityTarget,
+			Authority:               &ReviewTargetStatusAuthority{LineageID: "review-escalated", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateEscalated},
+			Frozen:                  &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium},
+			Projection:              ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace, BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40)},
+		}
+	}
+	unchangedTarget := "sha256:" + strings.Repeat("b", 64)
+	changedTarget := "sha256:" + strings.Repeat("e", 64)
+
+	t.Run("changed target routes to recovery with disposition forced to escalated", func(t *testing.T) {
+		status := baseStatus(changedTarget, unchangedTarget)
+		input := reviewNextTransitionInput{
+			Successor: "review-escalated-successor", Reason: "authorized recovery", Actor: "maintainer",
+			Authorization: "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=review-escalated\npredecessor_revision=sha256:" + strings.Repeat("a", 64) + "\ntarget_identity=" + changedTarget + "\nactor=maintainer\nreason=authorized recovery",
+		}
+		got := newReviewNextTransition(status, nil, nil, false, nil, input)
+		if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.recover" {
+			t.Fatalf("escalated changed-target transition = %#v, want an execute review.recover transition", got)
+		}
+		arguments, err := reviewTransitionArgumentMap(got.Execute.Arguments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if arguments["disposition"] != string(reviewtransaction.RecoveryEscalated) {
+			t.Fatalf("escalated recovery disposition = %q, want %q", arguments["disposition"], reviewtransaction.RecoveryEscalated)
+		}
+		if err := got.Validate(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	for _, name := range []string{"without a selector", "with a selector"} {
+		t.Run("unchanged target stops naming the changed-target requirement "+name, func(t *testing.T) {
+			status := baseStatus(unchangedTarget, unchangedTarget)
+			input := reviewNextTransitionInput{}
+			if name == "with a selector" {
+				input.Selector = &reviewTransitionSelector{Kind: reviewtransaction.TargetCurrentChanges, RecoveryRepresentable: true}
+			}
+			got := newReviewNextTransition(status, nil, nil, false, nil, input)
+			if got.Kind != reviewNextTransitionStop || got.Execute != nil || got.Collect != nil {
+				t.Fatalf("escalated unchanged-target transition = %#v, want a bare stop", got)
+			}
+			if got.ReasonCode == "recovery_scope_unchanged" || got.ReasonCode == "" {
+				t.Fatalf("escalated unchanged-target reason = %q, want a new reason naming the changed-target requirement", got.ReasonCode)
+			}
+		})
+	}
+}
+
 func nextTransitionTestCaptureContext(t *testing.T, status ReviewTargetStatusResult, lenses []string) *reviewCaptureContext {
 	t.Helper()
 	diff, err := reviewtransaction.NewFrozenCandidateDiff([]byte("immutable candidate\n"))

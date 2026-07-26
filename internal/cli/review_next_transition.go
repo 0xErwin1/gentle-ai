@@ -55,6 +55,12 @@ type reviewCaptureContext struct {
 type ReviewTransitionArgument struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
+	// Token is the exact, literally executable argv token for this argument
+	// (e.g. "--captured-results=true"). It is populated only on
+	// ReviewTransitionExecution.Arguments, never on Preconditions, which are
+	// assertions rather than argv. Name/Value stay byte-identical so existing
+	// consumers of those two fields never move.
+	Token string `json:"token,omitempty"`
 }
 
 type ReviewTransitionBinding struct {
@@ -193,7 +199,17 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 			Arguments: reviewBindingArguments(binding),
 		})
 	case reviewtransaction.StateEscalated:
-		return reviewStopTransition("escalated_authority")
+		// Unlike StateInvalidated, escalated recovery is only ever admissible
+		// against a changed target (validateCompactRecoveryEdge requires
+		// compactEscalatedRecoveryTargetChanged). The generic
+		// recovery_scope_unchanged guard inside reviewRecoveryCollection only
+		// fires when a Selector is present, so this check applies
+		// unconditionally before routing there at all.
+		if status.TargetIdentity == reviewAuthorityTargetIdentity(status) {
+			return reviewStopTransition("escalated_recovery_requires_changed_target")
+		}
+		status.ActionDisposition = reviewtransaction.RecoveryEscalated
+		return reviewRecoveryCollection(status, binding, input)
 	default:
 		if status.Action == reviewtransaction.TargetStatusActionReconcileFinalize {
 			return reviewStopTransition("original_finalize_request_required")
@@ -500,7 +516,20 @@ func reviewTransitionBinding(authority *ReviewTargetStatusAuthority, target stri
 }
 
 func reviewExecuteTransition(reason, operation string, arguments, preconditions []ReviewTransitionArgument, binding ReviewTransitionBinding, artifacts []ReviewTransitionArtifact) ReviewNextTransition {
-	return ReviewNextTransition{Kind: reviewNextTransitionExecute, ReasonCode: reason, Execute: &ReviewTransitionExecution{Operation: operation, Arguments: arguments, Preconditions: preconditions, Binding: binding, Artifacts: artifacts}}
+	tokenized := make([]ReviewTransitionArgument, len(arguments))
+	for index, argument := range arguments {
+		argument.Token = reviewTransitionArgumentToken(argument)
+		tokenized[index] = argument
+	}
+	return ReviewNextTransition{Kind: reviewNextTransitionExecute, ReasonCode: reason, Execute: &ReviewTransitionExecution{Operation: operation, Arguments: tokenized, Preconditions: preconditions, Binding: binding, Artifacts: artifacts}}
+}
+
+// reviewTransitionArgumentToken renders the literal, executable argv token
+// for one Execute.Arguments entry. The real CLI flag name is the argument's
+// Name with underscores hyphenated (Name itself stays byte-identical for
+// existing consumers, e.g. "captured_results" -> "--captured-results=true").
+func reviewTransitionArgumentToken(argument ReviewTransitionArgument) string {
+	return "--" + strings.ReplaceAll(argument.Name, "_", "-") + "=" + argument.Value
 }
 
 func reviewCollectTransition(reason string, inputs ...ReviewTransitionInput) ReviewNextTransition {

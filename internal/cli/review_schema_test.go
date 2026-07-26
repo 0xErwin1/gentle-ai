@@ -76,6 +76,48 @@ func TestReviewerSchemaMatchesProviderAdmissionEnvelope(t *testing.T) {
 	}
 }
 
+// TestReviewSchemaVerificationEvidenceEntry is the RED-first proof for 1775:
+// review schema must publish the input contract that review capture-evidence
+// actually accepts and readCapturedFinalEvidence actually enforces — raw,
+// non-empty evidence content up to the native artifact bound — not an
+// invented structured shape.
+func TestReviewSchemaVerificationEvidenceEntry(t *testing.T) {
+	var output bytes.Buffer
+	if err := RunReviewSchema([]string{"verification-evidence"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(output.Bytes(), &schema); err != nil {
+		t.Fatal(err)
+	}
+	if schema["$id"] != "https://gentle-ai.dev/schema/review/verification-evidence/v1" || schema["type"] != "string" {
+		t.Fatalf("verification-evidence schema header = %#v", schema)
+	}
+	minLength, ok := schema["minLength"].(float64)
+	if !ok || minLength != 1 {
+		t.Fatalf("verification-evidence schema minLength = %#v, want 1 (matches readCapturedFinalEvidence's non-empty requirement)", schema["minLength"])
+	}
+	maxLength, ok := schema["maxLength"].(float64)
+	if !ok || maxLength != float64(reviewResultArtifactLimit) {
+		t.Fatalf("verification-evidence schema maxLength = %#v, want %d (matches the native artifact bound)", schema["maxLength"], reviewResultArtifactLimit)
+	}
+
+	var usageOutput bytes.Buffer
+	err := RunReviewSchema(nil, &usageOutput)
+	if err == nil || !containsAll(err.Error(), []string{"verification-evidence"}) {
+		t.Fatalf("review schema usage error = %v, want it to name verification-evidence", err)
+	}
+}
+
+func containsAll(value string, substrings []string) bool {
+	for _, substring := range substrings {
+		if !bytes.Contains([]byte(value), []byte(substring)) {
+			return false
+		}
+	}
+	return true
+}
+
 func containsString(values []string, want string) bool {
 	for _, value := range values {
 		if value == want {
