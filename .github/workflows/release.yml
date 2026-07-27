@@ -31,6 +31,13 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           fetch-depth: 0
+          # The preflight requires refs/tags/<tag> to be the annotated tag
+          # object. actions/checkout fetches with --no-tags by default, so
+          # without this the tag ref never exists on the runner and the
+          # annotation check dies on a tag that IS annotated. Never caught
+          # before v2.2.0: no stable tag was cut between this preflight
+          # landing on 2026-07-22 and that release.
+          fetch-tags: true
           persist-credentials: false
 
       - name: Set up Go
@@ -87,6 +94,13 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           fetch-depth: 0
+          # The preflight requires refs/tags/<tag> to be the annotated tag
+          # object. actions/checkout fetches with --no-tags by default, so
+          # without this the tag ref never exists on the runner and the
+          # annotation check dies on a tag that IS annotated. Never caught
+          # before v2.2.0: no stable tag was cut between this preflight
+          # landing on 2026-07-22 and that release.
+          fetch-tags: true
           persist-credentials: false
 
       - name: Set up Go
@@ -167,6 +181,13 @@ jobs:
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
         with:
           fetch-depth: 0
+          # The preflight requires refs/tags/<tag> to be the annotated tag
+          # object. actions/checkout fetches with --no-tags by default, so
+          # without this the tag ref never exists on the runner and the
+          # annotation check dies on a tag that IS annotated. Never caught
+          # before v2.2.0: no stable tag was cut between this preflight
+          # landing on 2026-07-22 and that release.
+          fetch-tags: true
           persist-credentials: false
 
       - name: Install Minisign
