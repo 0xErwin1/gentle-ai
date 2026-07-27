@@ -47,7 +47,13 @@ func TestRequiredChecksFailClosedWhenFormatFails(t *testing.T) {
 
 	jobs := []struct{ id, next string }{
 		{id: "unit-tests", next: "windows-runtime"},
-		{id: "windows-runtime", next: "organic-runtime-e2e"},
+		{id: "windows-runtime", next: "darwin-runtime"},
+		// darwin-runtime is a required check like its siblings, so it owes the
+		// same fail-closed contract. Listing it here is also what keeps the
+		// section slicing honest: a job this list does not know about gets
+		// swallowed into its predecessor's section, and its own guard step
+		// then reads as the predecessor bypassing the format gate.
+		{id: "darwin-runtime", next: "organic-runtime-e2e"},
 		{id: "organic-runtime-e2e", next: "e2e-tests"},
 		{id: "e2e-tests"},
 	}
