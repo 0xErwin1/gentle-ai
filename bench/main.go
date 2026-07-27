@@ -1,9 +1,16 @@
 // Command gentle-ai-bench measures the FRICTION of driving gentle-ai's review
 // lifecycle, so a "before" binary and an "after" binary can be compared.
 //
-// It is a black box: it drives a gentle-ai binary as a subprocess and never
-// instruments the product, so it works against any build including old
-// releases. It is deterministic and offline: no real model call is ever made.
+// Its core corpus is a black box: it drives a gentle-ai binary as a subprocess
+// and never instruments the product, so it works against any build including
+// old releases. It is deterministic and offline: no real model call is ever
+// made.
+//
+// A run may additionally select an opt-in AXIS with --axis. An axis measures
+// states the CLI cannot construct, so it is not black-box and not portable
+// across builds; it declares that itself and the report prints the declaration
+// next to the journeys it contributed. No axis runs unless it is named. See
+// axis.go and README.md.
 //
 // It deliberately does NOT measure wall-clock time or real model tokens, and
 // it deliberately does NOT emit a single composite score. See README.md.
@@ -50,6 +57,7 @@ func usage() {
 
   run      gentle-ai-bench run --binary <path> --out results.json
            Drive the built-in journey corpus against a binary (driven mode).
+           --axis <name>[,<name>] adds an opt-in axis to the black-box core.
 
   record   gentle-ai-bench record --binary <path> --out session.jsonl
            Print the PATH line that records a real agent session (observed mode).
@@ -69,6 +77,9 @@ func commandRun(args []string) int {
 	binary := flags.String("binary", "", "path to the gentle-ai binary to drive")
 	out := flags.String("out", "results.json", "where to write the machine-readable results")
 	only := flags.String("only", "", "comma-separated journey ids to run (default: all)")
+	axisFlag := flags.String("axis", "",
+		"comma-separated opt-in axes to add to the core corpus, or `all` (default: none). Registered: "+
+			strings.Join(append([]string{}, axisNames()...), ", "))
 	_ = flags.Parse(args)
 
 	if strings.TrimSpace(*binary) == "" {
@@ -81,10 +92,27 @@ func commandRun(args []string) int {
 		return 2
 	}
 
+	axes, err := selectAxes(*axisFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 2
+	}
+
 	// The whole corpus is validated before anything runs, --only or not: a
 	// broken author-declared exemption is a corpus error, and the run that
-	// would have quietly reported a number based on it must not start.
-	if err := validateCorpus(Journeys()); err != nil {
+	// would have quietly reported a number based on it must not start. The same
+	// applies to an axis, whose declaration is a claim about how its numbers
+	// were obtained.
+	core := Journeys()
+	planned := append([]Journey{}, core...)
+	for _, axis := range axes {
+		planned = append(planned, axis.Journeys()...)
+	}
+	if err := validateAxes(axes, core); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 2
+	}
+	if err := validateCorpus(planned); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		return 2
 	}
@@ -102,12 +130,34 @@ func commandRun(args []string) int {
 		Binary:        resolved,
 		BinaryVersion: binaryVersion(resolved),
 	}
-	for _, journey := range Journeys() {
+	run := func(journey Journey, axis string) bool {
 		if len(selected) > 0 && !selected[journey.ID] {
-			continue
+			return false
 		}
 		fmt.Fprintf(os.Stderr, "running %s ...\n", journey.ID)
-		results.Journeys = append(results.Journeys, runJourney(resolved, journey))
+		result := runJourney(resolved, journey)
+		result.Axis = axis
+		results.Journeys = append(results.Journeys, result)
+		return true
+	}
+	coreRun := 0
+	for _, journey := range core {
+		if run(journey, "") {
+			coreRun++
+		}
+	}
+	results.CoreJourneys = coreRun
+	// The provenance names the journeys that actually RAN, not the ones the
+	// axis could have contributed: under --only the two differ, and a record
+	// claiming a journey that never ran would be provenance that lies.
+	for _, axis := range axes {
+		contributed := []Journey{}
+		for _, journey := range axis.Journeys() {
+			if run(journey, axis.Name) {
+				contributed = append(contributed, journey)
+			}
+		}
+		results.Axes = append(results.Axes, axisRecord(axis, contributed))
 	}
 	sortJourneys(results.Journeys)
 	results.Totals, results.JourneysCounted, results.JourneysUnsupported, results.JourneysFailed = aggregate(results.Journeys)

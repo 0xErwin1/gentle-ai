@@ -53,13 +53,21 @@ func writeRunReport(out io.Writer, results Results) {
 	if results.BinaryVersion != "" {
 		fmt.Fprintf(out, "version: %s\n", results.BinaryVersion)
 	}
-	fmt.Fprintf(out, "journeys: %d completed, %d unsupported, %d failed\n\n",
+	fmt.Fprintf(out, "journeys: %d completed, %d unsupported, %d failed\n",
 		results.JourneysCounted, results.JourneysUnsupported, results.JourneysFailed)
+	writeCorpusProvenance(out, results)
+	fmt.Fprintln(out)
 
 	rows := dimensionRows()
+	// The axis column appears only when a run selected one, so a core-only
+	// report is byte-for-byte the report it has always been.
+	withAxis := len(results.Axes) > 0
 	headers := []string{"journey", "status"}
 	for _, row := range rows {
 		headers = append(headers, shortLabel(row.Label))
+	}
+	if withAxis {
+		headers = append(headers, "axis")
 	}
 	table := [][]string{headers}
 	for _, journey := range results.Journeys {
@@ -67,12 +75,18 @@ func writeRunReport(out io.Writer, results Results) {
 		for _, row := range rows {
 			line = append(line, cell(journey, row))
 		}
+		if withAxis {
+			line = append(line, axisColumn(journey.Axis))
+		}
 		table = append(table, line)
 	}
 	total := []string{"TOTAL (completed only)", ""}
 	for _, row := range rows {
 		value, present, _ := row.Value(results.Totals)
 		total = append(total, format(value, present))
+	}
+	if withAxis {
+		total = append(total, "")
 	}
 	table = append(table, total)
 	renderTable(out, table)
@@ -111,9 +125,77 @@ func writeRunReport(out io.Writer, results Results) {
 		}
 	}
 	writeByDesignSection(out, results)
+	writeAxisSection(out, results)
 
 	for _, note := range results.Notes {
 		fmt.Fprintf(out, "\nnote: %s\n", note)
+	}
+}
+
+func axisColumn(name string) string {
+	if name == "" {
+		return "core"
+	}
+	return name
+}
+
+// writeCorpusProvenance states, in the first six lines of the report, which
+// populations produced the numbers below it.
+//
+// "43 journeys" and "43 journeys plus a damaged-store axis" are different
+// measurements. They must never render alike, and the difference must be
+// visible without opening the JSON or counting rows — so this prints even when
+// no axis was selected, and says so by name.
+func writeCorpusProvenance(out io.Writer, results Results) {
+	if results.Mode != ModeDriven {
+		return
+	}
+	fmt.Fprintf(out, "corpus  : %d core journeys, black-box (the harness drives the binary and nothing else)\n",
+		results.CoreJourneys)
+	if len(results.Axes) == 0 {
+		available := "none registered in this build"
+		if names := axisNames(); len(names) > 0 {
+			available = "available: " + strings.Join(names, ", ")
+		}
+		fmt.Fprintf(out, "axes    : none selected (%s; add one with --axis)\n", available)
+		return
+	}
+	for _, axis := range results.Axes {
+		property := "black-box"
+		if !axis.BlackBox {
+			property = "NOT black-box"
+		}
+		fmt.Fprintf(out, "axis    : %s — %d journeys, %s\n", axis.Name, len(axis.JourneyIDs), property)
+	}
+}
+
+// writeAxisSection prints each selected axis's own honesty contract next to the
+// journeys it contributed.
+//
+// It is here rather than in the README because a property of the measurement
+// belongs with the measurement. Someone reading a run's output has to be able
+// to see which journeys were black-box, which were not, and what the ones that
+// were not will do when the coupling they depend on moves — without going and
+// finding a document.
+func writeAxisSection(out io.Writer, results Results) {
+	if len(results.Axes) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "\nOpt-in axes in this run\n")
+	fmt.Fprintf(out, "  The core corpus above is black-box: it drives the binary through the process\n")
+	fmt.Fprintf(out, "  boundary and touches nothing else, which is what lets it measure any build.\n")
+	fmt.Fprintf(out, "  An axis is opt-in because it does not. Each one declares what it costs.\n")
+	for _, axis := range results.Axes {
+		property := "black-box"
+		if !axis.BlackBox {
+			property = "NOT black-box"
+		}
+		fmt.Fprintf(out, "\n    %s — %s\n", axis.Name, axis.Title)
+		fmt.Fprintf(out, "      property: %s\n", property)
+		for _, line := range axis.Properties {
+			fmt.Fprintf(out, "      - %s\n", line)
+		}
+		fmt.Fprintf(out, "      journeys: %s\n", strings.Join(axis.JourneyIDs, ", "))
 	}
 }
 

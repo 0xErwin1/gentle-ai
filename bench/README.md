@@ -4,12 +4,19 @@ Measures the **friction** of driving `gentle-ai`'s review lifecycle, so a
 "before" binary and an "after" binary can be compared and the change can be
 shown rather than asserted.
 
-It is a **black box**. It drives a `gentle-ai` binary given by `--binary` as a
-subprocess and never instruments the product, so it works against any build
-including old releases. It is **deterministic and offline**: no model is ever
-called. Every journey runs in a fresh temp directory with its own `HOME`,
-`XDG_*`, a throwaway git repository and, where the flow needs one, a local bare
-remote. It never touches your real config or repositories.
+Its core corpus is a **black box**. It drives a `gentle-ai` binary given by
+`--binary` as a subprocess and never instruments the product, so it works
+against any build including old releases. It is **deterministic and offline**:
+no model is ever called. Every journey runs in a fresh temp directory with its
+own `HOME`, `XDG_*`, a throwaway git repository and, where the flow needs one, a
+local bare remote. It never touches your real config or repositories.
+
+That claim is scoped to the core on purpose. A run can additionally select an
+**opt-in axis** with `--axis`, and an axis measures states the CLI cannot
+construct — so it is not black-box and not portable across builds. No axis runs
+unless you name it, each one declares what it costs, and the report prints that
+declaration next to the journeys it contributed. See
+[Opt-in axes](#opt-in-axes).
 
 ## Its own module, on purpose
 
@@ -50,7 +57,9 @@ gentle-ai-bench compare --before results-before.json --after results-after.json
 ```
 
 `run --only j05-gate-without-any-review,j10-invalid-flag-combination` runs a
-subset.
+subset. `run --axis damaged-store` adds an opt-in axis; `--axis all` adds every
+registered one. An unknown axis name is a hard error, never a quiet fall back to
+the core.
 
 ### Observed
 
@@ -286,9 +295,9 @@ invents a metric is worse than one that admits a gap.
    classifier reads a field other than exit code and denial shape, and widening
    it would let the product talk its way out of a denial.
 
-7. **The corpus is honest, not exhaustive.** Thirty-six journeys that run end
-   to end, weighted toward failure paths because that is where friction lives.
-   Testing-guide flows 1 (install) and 8 (no phantom SDD artifacts) are
+7. **The corpus is honest, not exhaustive.** Forty-three core journeys that run
+   end to end, weighted toward failure paths because that is where friction
+   lives. Testing-guide flows 1 (install) and 8 (no phantom SDD artifacts) are
    inspection steps rather than review-lifecycle friction and are not modelled.
 
 8. **Some edge cases are unreachable from a temp directory and are guide flows
@@ -324,11 +333,13 @@ invents a metric is worse than one that admits a gap.
 10. **The report is not byte-identical between two runs, though every count
     except one is.** Each journey runs under `os.MkdirTemp`, whose random
     suffix varies in length, and several journeys quote that path back in a
-    block message — `j14`, `j17`, `j31`, `j33`, `j34`, `j37`, `j38` and `j39`
-    observed so far, and any journey that drives a refusal naming a repository
-    path can join them. Which of them actually moves between a given pair of
-    runs is chance: the suffix is 9 or 10 digits. So the quoted messages differ
-    run to run and
+    block message — `j14`, `j17`, `j31`, `j33`, `j34`, `j37`, `j38`, `j39` and
+    `j40` observed so far, and any journey that drives a refusal naming a
+    repository path can join them. Which of them actually moves between a given
+    pair of runs is chance: the suffix is 9 or 10 digits. No `damaged-store`
+    axis journey has been observed to move: its refusals name lineages,
+    artifacts and target identities, all of which are fixed by the fixture. So
+    the quoted messages differ run to run and
     `human_surface_bytes` wobbles by one byte per affected journey; every block
     classification, every count and `git_subprocesses` are stable. This is why the "byte-identical" claim under
     *Measured* below is scoped to the 14-journey corpus it describes — no
@@ -337,6 +348,24 @@ invents a metric is worse than one that admits a gap.
     the quoted paths) and a deterministic per-journey path (stabilises both,
     and makes two concurrent runs collide). That is a maintainer's call and it
     has not been made.
+
+11. **An axis is not black-box, and an axis run is not a core run.** The core
+    corpus reaches every state it measures through the process boundary, which
+    is what lets `--binary` point at any build. An axis exists because some
+    states cannot be reached that way, and reaching them means reading or
+    writing something the product owns. So a `--axis` run gives up portability:
+    against a build whose internals have moved, those journeys report `failed`
+    or `unsupported` rather than a number, by design — see the two checks under
+    [Opt-in axes](#opt-in-axes) that make sure a fixture cannot quietly build
+    the wrong state and pass. **This entry is not where that lives.** The
+    property belongs to the axis and travels with the run: it is in
+    `results.json` under `axes[]`, on every journey as `axis`, in the table's
+    `axis` column, and printed in full under *Opt-in axes in this run*. A
+    property a reader has to come and find is a property that gets missed, so
+    the report states it and this entry only points at it. What remains a real
+    gap is that no axis can be portable — that is inherent, not a bug to fix,
+    and the honest response is that the core stays black-box and the axis stays
+    opt-in.
 
 ## Measured: the current build
 
@@ -488,6 +517,91 @@ mode-only change asserts the index really went `100644` → `100755` with a
 the nonsense mode record asserts that it still parses as JSON so the journey
 cannot silently decay into the already-covered corrupt-record case.
 
+## Opt-in axes
+
+Everything above this line is the core corpus, and the core corpus is
+black-box. That property is what lets `--binary` point at any build, including
+a release from before half the surface existed, and get a number rather than a
+crash.
+
+It also has a cost, and the cost took a community report to name: **a black-box
+harness can only visit states the product agrees to construct.** Some states a
+real repository reaches cannot be built by running commands, precisely because
+the product validates on the way in and refuses to build them. Measuring those
+means reading or writing something the product owns, and a journey that does
+that is no longer black-box and no longer portable.
+
+Rather than let that property leak into the whole harness and be explained away
+in a footnote, it is confined to an **axis**: an opt-in extension that carries
+its own declaration.
+
+- **Nothing runs unless you name it.** Default is the core alone. `--axis all`
+  takes everything registered. An unknown name is a hard error, because
+  "43 journeys" and "43 journeys plus an axis" are different measurements and a
+  typo must never silently produce the first.
+- **The core does not depend on any axis.** `rm bench/axis_damaged_store*.go`
+  leaves the corpus compiling, testing and reporting exactly the numbers it
+  reported before. That is the test of whether the seam is real, and it is worth
+  re-running whenever an axis grows.
+- **The declaration is in the run, not in this file.** `results.json` carries an
+  `axes[]` block with each axis's name, `black_box`, properties and journey ids;
+  every `JourneyResult` carries `axis`; the table gains an `axis` column; and
+  the text report prints the properties in full under *Opt-in axes in this run*.
+  Someone reading a run's output can tell which journeys were black-box and
+  which were not without opening this document.
+
+Adding an axis is adding one file with an `init()` that calls `RegisterAxis`.
+The seam in `axis.go` is deliberately small — one registry, one flag, one report
+section — and it does not know what any axis measures.
+
+### `damaged-store` (`axis_damaged_store.go`)
+
+Journeys that start from a compact-v2 review store already damaged on disk.
+
+`validateCompactRecoveryEdge` runs at write time on both `review recover` and
+the compact transport import, so **no sequence of CLI commands produces a store
+holding a recovery edge that does not re-derive**. A community tester reached
+one anyway; reproducing it needed store bytes written directly, and once
+reproduced it turned out to be a dead end. Real repositories reach states like
+that through history — a store written by an older build, an operation
+interrupted between two writes, a revision that drifted while something else
+moved. Ours never do, because ours are minutes old.
+
+| ID | Damage | What it tests |
+|---|---|---|
+| `ds01-two-recovery-edges-neither-admitted` | two edges, both with a correctly-prefixed authorization binding content the record no longer holds | the reported shape: `anomaly_classes: []` on both, and every advertised surface refusing |
+| `ds02-damaged-edge-pristine-successor` | one such edge, successor never captured anything | the exit exists (`review abandon`) and nothing names it |
+| `ds03-damaged-edge-successor-holds-results` | the same edge, successor holds a captured lens result | the pristineness rule refuses; correct guards composing into no way out |
+| `ds04-recovery-edge-with-no-predecessor` | the predecessor entry is gone | a different path: the edge is never classified, only reported as dangling |
+| `ds05-half-written-successor-record` | the record is truncated mid-write | a third path: the entry never parses, and the refusal names a continuation that cannot load it either |
+
+**How each fixture stops lying when the format moves.** Authoring store bytes
+couples these journeys to a persisted format instead of to a CLI, and the
+failure mode is specific: the format moves, the bytes stop producing the state
+the journey claims, and the journey keeps passing while measuring nothing. Two
+checks stand in the way, and both fail the run loudly rather than degrading it.
+
+1. **Every fixture reads its damage back out of the product** — `review
+   inspect-authority` or `review status` — and requires the product to report
+   exactly the damage the journey claims, before a single counted command is
+   spent. This is the same discipline the git fixtures already follow, and here
+   it is doing more work: it is also the drift tripwire.
+2. **Before any edit, the record's own revision is re-derived from the bytes
+   just read** and required to equal the recorded one. The product's revision is
+   a SHA-256 over the canonical marshalling of the state, so reproducing it is
+   proof that this axis can still write bytes the product will accept. When the
+   marshalling moves this fails *first*, naming the reason, instead of a fixture
+   writing a store the product then rejects as a checksum mismatch — a symptom
+   that looks nothing like its cause.
+
+The layout is derived from a store the fixture itself builds through the CLI,
+never from the product's Go structs: what these journeys depend on is the
+persisted format, and depending on it directly is what makes the drift visible.
+
+Setup commands (`review start`, `finalize`, `recover`) run **uncounted**. The
+operator whose friction is being measured did not run them; they opened a
+repository whose store was already in this state.
+
 ## Layout
 
 ```
@@ -499,6 +613,9 @@ journeys.go    the corpus, as data — guide flows and their failure paths
 journeys_edge.go  the edge-case part of the corpus, with self-proving fixtures
 journeys_sdd.go   the SDD remediation successor cycle, the kill switch against
                   SDD, and the recovery guard rails
+axis.go        the opt-in axis seam: registry, --axis selection, provenance
+axis_damaged_store.go  ONE axis, deletable: journeys starting from a store
+                  damaged on disk. Not black-box; declares so itself.
 record.go      the recording shim and session log
 analyze.go     observed-mode metrics, same classifier
 report.go      plain-text tables and the comparison JSON

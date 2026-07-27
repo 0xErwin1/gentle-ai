@@ -127,8 +127,12 @@ const (
 // numbers: an `unsupported` journey reports what it managed to observe, and
 // the comparison renders it as `unsup`, never as 0.
 type JourneyResult struct {
-	ID               string          `json:"id"`
-	Title            string          `json:"title"`
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	// Axis is empty for the black-box core corpus and carries the axis name for
+	// a journey an opt-in axis contributed. It is what lets a reader of either
+	// the table or the JSON tell the two populations apart without counting.
+	Axis             string          `json:"axis,omitempty"`
 	Source           string          `json:"source,omitempty"`
 	Status           string          `json:"status"`
 	UnsupportedSteps []string        `json:"unsupported_steps,omitempty"`
@@ -148,7 +152,12 @@ type Results struct {
 	JourneysCounted     int             `json:"journeys_counted"`
 	JourneysUnsupported int             `json:"journeys_unsupported"`
 	JourneysFailed      int             `json:"journeys_failed"`
-	Notes               []string        `json:"notes,omitempty"`
+	// CoreJourneys and Axes are the run's provenance. A run of the black-box
+	// core and a run of the core plus a coupled axis are different
+	// measurements, and these two fields are what stops them looking alike.
+	CoreJourneys int          `json:"core_journeys,omitempty"`
+	Axes         []AxisRecord `json:"axes,omitempty"`
+	Notes        []string     `json:"notes,omitempty"`
 }
 
 const (
@@ -429,6 +438,15 @@ func addDimension(target *Dimension, source Dimension) {
 }
 
 // sortJourneys keeps output stable regardless of map iteration anywhere.
+// sortJourneys orders the core corpus first and then each axis, alphabetically
+// within both. Interleaving them by id would mix a black-box population and a
+// coupled one into a single unlabelled run of rows, which is the one thing the
+// axis seam exists to prevent.
 func sortJourneys(journeys []JourneyResult) {
-	sort.SliceStable(journeys, func(i, j int) bool { return journeys[i].ID < journeys[j].ID })
+	sort.SliceStable(journeys, func(i, j int) bool {
+		if journeys[i].Axis != journeys[j].Axis {
+			return journeys[i].Axis < journeys[j].Axis
+		}
+		return journeys[i].ID < journeys[j].ID
+	})
 }
