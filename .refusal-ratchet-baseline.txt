@@ -673,7 +673,6 @@ internal/reviewtransaction/compact_abandon.go	"review abandon refused: lineage %
 internal/reviewtransaction/compact_abandon.go	"review abandon refused: lineage %q holds no compact authority state and no committed abandonment record matches the request; if a prior abandonment was interrupted, the prepared reclaim-record.json under %s locates the moved residue for manual reconciliation"
 internal/reviewtransaction/compact_abandon.go	"review abandon refused: lineage %q is superseded by recovery successor %q; superseded history is never abandoned"
 internal/reviewtransaction/compact_abandon.go	"review abandon refused: reviewing lineage %q is not pristine; it carries review or correction data"
-internal/reviewtransaction/compact_abandon.go	"review abandon refused: store entry %q holds authoritative artifact %q beyond its pristine state"
 internal/reviewtransaction/compact_abandon.go	"review abandon requires a non-empty reason and actor"
 internal/reviewtransaction/compact_abandon.go	"review abandon requires an exact maintainer authorization binding (schema %s over lineage %s@%s and snapshot %s)"
 internal/reviewtransaction/compact_abandon.go	"review abandon requires the exact current store revision"

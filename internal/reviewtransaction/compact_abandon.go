@@ -229,7 +229,17 @@ func AbandonPristineCompactStore(ctx context.Context, repo string, request Compa
 	residue := make([]string, 0, len(items))
 	for _, item := range items {
 		if item.Name() != compactStateFileName && compactAuthoritativeArtifact(item.Name()) {
-			return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: store entry %q holds authoritative artifact %q beyond its pristine state", request.LineageID, item.Name())
+			// Refusing is correct: abandoning an entry that holds captured
+			// review work would discard it. But the refusal has to leave the
+			// operator somewhere. `review reclaim` already ends its own
+			// cascade this way, and when reconciliation, reclaim, classified
+			// repair, invalidate and this all refuse in turn, the diagnosis
+			// plus escalation is the only honest exit left.
+			return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: store entry %q holds authoritative artifact %q beyond its pristine state,"+
+				" and abandoning it would discard captured review work."+
+				" Nothing quarantines this shape today; the entry stays exactly as persisted."+
+				" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %q` and escalate that report",
+				request.LineageID, item.Name(), repo)
 		}
 		residue = append(residue, item.Name())
 	}
