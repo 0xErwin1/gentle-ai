@@ -528,6 +528,36 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		}
 		return failure
 	}
+	// Transient advisory contention, proven non-mutating by where it is
+	// produced rather than by how it reads (1861). ErrStoreLockContended is
+	// only ever returned by the non-blocking acquisition syscall refusing an
+	// already-held lock, so the guarded body never ran and this operation
+	// wrote nothing under it. Every branch above already claimed any failure
+	// that followed a committed native transition -- reviewFacadeOperationProgressError
+	// and ClassifiedAuthorityRepairProgressError wrap those -- so a contention
+	// error that reaches here has no durable native transition behind it.
+	//
+	// This is deliberately narrow. `operation_outcome_unknown` exists for
+	// mutations that may or may not have landed, and a caller that retries one
+	// of those can double-apply it; nothing here may widen to cover them.
+	if errors.Is(runErr, reviewtransaction.ErrStoreLockContended) {
+		failure.Phase = "pre_native"
+		failure.Code = "authority_lock_contention"
+		failure.Message = reviewLockOperationLabel(operation) +
+			" lost a transient race for the authority lock; nothing was evaluated or written, so retry."
+		failure.MutationOutcome = ReviewMutationNotStarted
+		failure.AuthorityApplicability = "not_evaluated"
+		failure.RetrySafe = true
+		// Nothing durable exists to replay: `exact_replay_safe` in this
+		// envelope means resuming a committed mutation, and this operation
+		// committed none. The caller simply issues the same request again,
+		// which is what `not_replayable` plus a retry route already means for
+		// the read-only catch-all. Backoff rather than bare retry, because an
+		// immediate re-drive from every loser is what amplifies contention.
+		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
+		failure.NextAction = "retry_with_bounded_backoff"
+		return failure
+	}
 	var preLock *reviewtransaction.StoreLockPreAcquisitionError
 	if errors.As(runErr, &preLock) {
 		failure.Phase = "pre_native"

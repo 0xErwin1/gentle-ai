@@ -387,9 +387,22 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	}
 	gateContext.Release = release
 	if !authorityLockHeld {
-		lock, lockErr := acquireStoreLock(store.lockPath)
+		// This window is a re-derivation, not a mutation: everything below the
+		// lock only reads. Transient contention with a concurrent writer
+		// therefore says nothing about the candidate, and reporting it as
+		// `invalidated` told an operator the receipt was damaged when the
+		// authority was healthy the whole time (1861). Wait it out first; only
+		// a wait that genuinely elapses is reported, and it is reported as a
+		// non-verdict the caller retries rather than as damage.
+		lock, lockErr := acquireStoreLockForReadOnlyEvaluation(ctx, store.lockPath)
 		if lockErr != nil {
-			return invalid("compact authority changed during final authorization")
+			var contended *AuthorityLockTimeoutError
+			if errors.As(lockErr, &contended) {
+				evaluation := invalid("compact authority lock is held by a concurrent review operation", lockErr)
+				evaluation.Contended = true
+				return evaluation
+			}
+			return invalid("compact authority changed during final authorization", lockErr)
 		}
 		defer lock.release()
 	}

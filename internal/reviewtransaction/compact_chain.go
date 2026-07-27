@@ -96,8 +96,18 @@ func EvaluateCompactPrePRChain(ctx context.Context, repo string, input NativeGat
 	if err != nil {
 		return invalid("compact pre-PR receipt composition denied: "+err.Error(), err), true
 	}
-	lock, err := acquireStoreLock(derived.lockPath)
+	// Same read-only final-authorization window as evaluateCompactGate, and
+	// the same 1861 rule: losing a race for the advisory lock decided nothing
+	// about the composed chain, so wait it out and report a retryable
+	// non-verdict rather than composition damage.
+	lock, err := acquireStoreLockForReadOnlyEvaluation(ctx, derived.lockPath)
 	if err != nil {
+		var contended *AuthorityLockTimeoutError
+		if errors.As(err, &contended) {
+			evaluation := invalid("compact authority lock is held by a concurrent review operation", err)
+			evaluation.Contended = true
+			return evaluation, true
+		}
 		return invalid("compact pre-PR receipt composition changed during final authorization", err), true
 	}
 	defer lock.release()

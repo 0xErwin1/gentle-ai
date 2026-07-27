@@ -559,6 +559,9 @@ func runReviewValidate(ctx context.Context, args []string, stdout io.Writer) err
 			ReleaseConfiguration: *releaseConfiguration, ReleaseGenerated: *releaseGenerated, ReleaseProvenance: *releaseProvenance,
 			ReleasePublicationBoundary: *releaseBoundary, ReleaseEvidenceFreshness: *releaseFreshness,
 		})
+		if err := reviewGateContentionError(evaluation); err != nil {
+			return err
+		}
 		result := ReviewValidateResult{
 			Schema: ReviewValidateSchema, Result: evaluation.Result, Allowed: evaluation.Result == reviewtransaction.GateAllow,
 			Action: reviewGateAction(evaluation.Result), Reason: evaluation.Reason, Context: evaluation.Context,
@@ -664,6 +667,30 @@ func readIntendedManifest(path string) ([]string, error) {
 		return nil, fmt.Errorf("read intended-untracked manifest: %w", err)
 	}
 	return paths, nil
+}
+
+// reviewGateContentionError converts a non-verdict into the typed refusal a
+// caller can act on. A delivery gate that lost a race for the advisory
+// authority lock evaluated nothing, so it must publish no gate result at all:
+// emitting `invalidated` would claim the receipt no longer covers the
+// candidate, and route an ordinary controller fan-out into maintainer
+// escalation for a condition that clears itself (1861).
+//
+// The refusal names the only thing that resolves it. There is no command to
+// run — the block is another process holding a lock — so it says retry
+// instead of routing to a command that would add nothing.
+func reviewGateContentionError(evaluation reviewtransaction.NativeGateEvaluation) error {
+	if !evaluation.Contended {
+		return nil
+	}
+	cause := evaluation.Cause
+	if cause == nil {
+		cause = errors.New("authority lock is held by a concurrent review operation")
+	}
+	return fmt.Errorf(
+		"review lifecycle gate reached no verdict: a concurrent review operation holds the authority lock, so nothing was evaluated and nothing changed; retry: %w",
+		cause,
+	)
 }
 
 func reviewGateAction(result reviewtransaction.GateResult) string {

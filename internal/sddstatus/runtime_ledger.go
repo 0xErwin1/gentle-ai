@@ -722,11 +722,11 @@ func (store RuntimeStore) mutate(
 	if err := store.ensureDirectories(); err != nil {
 		return RuntimeStatus{}, err
 	}
+	// acquireLock already maps contention to ErrRuntimeConcurrentUpdate; the
+	// re-wrap that used to live here duplicated the prefix and flattened the
+	// underlying contention proof back out of the chain (1861).
 	lock, err := store.acquireLock()
 	if err != nil {
-		if errors.Is(err, reviewtransaction.ErrConcurrentUpdate) {
-			return RuntimeStatus{}, fmt.Errorf("%w: %v", ErrRuntimeConcurrentUpdate, err)
-		}
 		return RuntimeStatus{}, err
 	}
 	defer lock.Release()
@@ -771,7 +771,13 @@ func (store RuntimeStore) acquireLock() (*reviewtransaction.AuthorityFileLock, e
 			return lock, nil
 		}
 		if errors.Is(err, reviewtransaction.ErrConcurrentUpdate) {
-			return nil, fmt.Errorf("%w: %v", ErrRuntimeConcurrentUpdate, err)
+			// Wrapped rather than flattened so the contention proof survives
+			// (1861). Both callers of acquireLock -- bindPreparedReview and
+			// mutate -- refuse here strictly before commitRecordLocked, so a
+			// refusal at acquisition wrote nothing, and a caller must be told
+			// that instead of being handed an unknown mutation outcome. The
+			// rendered text is identical to the previous %v form.
+			return nil, fmt.Errorf("%w: %w", ErrRuntimeConcurrentUpdate, err)
 		}
 		if !errors.Is(err, os.ErrNotExist) {
 			return nil, err

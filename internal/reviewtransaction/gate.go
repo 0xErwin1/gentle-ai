@@ -111,6 +111,15 @@ type NativeGateEvaluation struct {
 	Reason  string
 	Context GateContext
 	Cause   error `json:"-"`
+	// Contended reports that this evaluation reached no verdict at all: the
+	// read-only final-authorization window could not obtain the advisory
+	// authority lock within its bounded wait, so nothing about the candidate
+	// was decided (1861). A gate that lost a lock has not found damage, so the
+	// caller must surface Cause — an *AuthorityLockTimeoutError — instead of
+	// publishing Result, which stays `invalidated` only so an emitter that has
+	// not been taught about contention degrades to the previous behavior
+	// rather than to an unpublished enum value.
+	Contended bool `json:"-"`
 }
 
 var finalGateAuthorizationHook = func() {}

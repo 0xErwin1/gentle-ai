@@ -3315,6 +3315,9 @@ func emitFacadeGateEvaluation(stdout io.Writer, evaluation reviewtransaction.Nat
 }
 
 func emitFacadeGateEvaluationNegotiated(stdout io.Writer, evaluation reviewtransaction.NativeGateEvaluation, negotiated bool) error {
+	if err := reviewGateContentionError(evaluation); err != nil {
+		return err
+	}
 	result := ReviewValidateResult{
 		Schema: ReviewValidateSchema, Result: evaluation.Result, Allowed: evaluation.Result == reviewtransaction.GateAllow,
 		Action: reviewGateAction(evaluation.Result), Reason: evaluation.Reason, Context: evaluation.Context,
