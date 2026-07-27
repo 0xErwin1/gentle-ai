@@ -1040,6 +1040,12 @@ func removeLegacyOpenCodePlainChatPreflightLines(prompt string) string {
 		"D2 800 líneas",
 		"D3 Otro",
 		"Map answers to canonical values: A1/Interactive",
+		// Retired delivery-strategy vocabulary. These canonical values were
+		// produced by the preflight but matched no consumer branch, so a
+		// preserved prompt must lose the stale mapping rather than keep it
+		// alongside the re-injected corrected one.
+		"Ask me -> `ask-always`",
+		"`auto-forecast`, `ask-always`, `single-pr-default`, or `force-chained`",
 	}
 
 	lines := strings.Split(prompt, "\n")
@@ -1265,7 +1271,7 @@ The single ` + "`question`" + ` tool call must contain these four localized grou
 
 1. Pace: Interactive, Automatic.
 2. Artifacts: OpenSpec, Engram, Both.
-3. PRs: Ask me, Single PR, Chained, Auto.
+3. PRs: Ask me, Single PR, Auto.
 4. Review: 400 lines, 800 lines, Other.
 
 Match the user's current language and active persona for question labels and descriptions. Treat the preflight UI as direct orchestrator conversation, not as a generated technical artifact. Technical artifacts still default to English, but this UI follows the user's conversation language/persona. Do NOT mix languages inside one grouped question.
@@ -1278,7 +1284,9 @@ If Other is selected for review budget, ask one follow-up question for the numer
 
 Only after all four preflight choices are collected, summarize them as the ` + "`SDD Session Preflight`" + ` decision block and continue with the SDD init guard/requested phase.
 
-Map answers to canonical values: Interactive -> ` + "`interactive`" + `; Automatic -> ` + "`auto`" + `; OpenSpec -> ` + "`openspec`" + `; Engram -> ` + "`engram`" + `; Both -> ` + "`both`" + `; Ask me -> ` + "`ask-always`" + `; Single PR -> ` + "`single-pr-default`" + `; Chained -> ` + "`force-chained`" + `; Auto -> ` + "`auto-forecast`" + `; 400 lines -> ` + "`review_budget_lines: 400`" + `; 800 lines -> ` + "`review_budget_lines: 800`" + `; Other -> ask one follow-up for the number.
+Map answers to canonical values: Interactive -> ` + "`interactive`" + `; Automatic -> ` + "`auto`" + `; OpenSpec -> ` + "`openspec`" + `; Engram -> ` + "`engram`" + `; Both -> ` + "`both`" + `; Ask me -> ` + "`ask-on-risk`" + `; Single PR -> ` + "`single-pr`" + `; Auto -> ` + "`auto-chain`" + `; 400 lines -> ` + "`review_budget_lines: 400`" + `; 800 lines -> ` + "`review_budget_lines: 800`" + `; Other -> ask one follow-up for the number.
+
+The PR canonical values are exactly the ` + "`delivery_strategy`" + ` domain ` + "`sdd-tasks`" + ` and ` + "`sdd-apply`" + ` accept (` + "`ask-on-risk | auto-chain | single-pr | exception-ok`" + `); never emit a value outside it. The preflight offers no separate chained option because ` + "`delivery_strategy`" + ` is only consulted once the tasks forecast flags review-budget risk: below that line there is nothing to chain, and above it ` + "`Auto`" + ` already resolves to ` + "`auto-chain`" + `.
 
 Hard gate rules:
 
@@ -1300,6 +1308,19 @@ Hard gate rules:
 		strings.Contains(prompt, "Do NOT run this as a sequential wizard") &&
 		strings.Contains(prompt, "Do NOT mix languages inside one grouped question") &&
 		strings.Contains(prompt, "map the selected human labels to canonical values internally") &&
+		// A preserved prompt written before the delivery-strategy vocabularies
+		// were reconciled still maps the PR options to `ask-always`,
+		// `single-pr-default`, `force-chained`, and `auto-forecast`, none of
+		// which any consumer branch matches. Every other clause here is
+		// satisfied by that stale text, so without this the broken mapping
+		// would survive every future sync.
+		strings.Contains(prompt, "Ask me -> `ask-on-risk`") &&
+		// The retired `Chained` PR option shipped alongside that corrected
+		// mapping, so a prompt still offering it satisfies every clause above,
+		// including the one directly overhead. Without this the four-option menu
+		// would survive every future sync and the asset-only removal would be
+		// reverted on the operator's next install.
+		strings.Contains(prompt, "3. PRs: Ask me, Single PR, Auto.") &&
 		strings.Contains(prompt, "pause after each delegated phase returns") &&
 		strings.Contains(prompt, "ask before launching the next phase via the `question` tool") &&
 		strings.Contains(prompt, "approve only the immediate next phase") &&

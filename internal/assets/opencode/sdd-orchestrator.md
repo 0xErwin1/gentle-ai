@@ -123,7 +123,7 @@ Required preflight choices:
 
 1. **Execution mode**: `interactive` or `auto`.
 2. **Artifact store**: `openspec`, `engram`, or `both` when Engram is callable. If Engram is unavailable, offer only file/inline-safe choices.
-3. **Chained PR strategy**: `auto-forecast`, `ask-always`, `single-pr-default`, or `force-chained`.
+3. **Chained PR strategy**: the canonical `delivery_strategy` — `ask-on-risk`, `auto-chain`, `single-pr`, or `exception-ok`. The preflight menu offers the first three; `exception-ok` is reachable only when the user explicitly accepts `size:exception`.
 4. **Review budget**: maximum changed lines before stopping for reviewer-burden approval.
 
 User-facing preflight question format:
@@ -136,7 +136,7 @@ The single `question` tool call must contain these four localized groups in this
 
 1. Pace: Interactive, Automatic.
 2. Artifacts: OpenSpec, Engram, Both.
-3. PRs: Ask me, Single PR, Chained, Auto.
+3. PRs: Ask me, Single PR, Auto.
 4. Review: 400 lines, 800 lines, Other.
 
 Match the user's current language and active persona for question labels and descriptions. Treat the preflight UI as direct orchestrator conversation, not as a generated technical artifact. Technical artifacts still default to English, but this UI follows the user's conversation language/persona. Do NOT mix languages inside one grouped question.
@@ -153,8 +153,10 @@ Map answers to canonical values:
 
 - Pace: Interactive -> `interactive`; Automatic -> `auto`.
 - Artifacts: OpenSpec -> `openspec`; Engram -> `engram`; Both -> `both`.
-- PRs: Ask me -> `ask-always`; Single PR -> `single-pr-default`; Chained -> `force-chained`; Auto -> `auto-forecast`.
+- PRs: Ask me -> `ask-on-risk`; Single PR -> `single-pr`; Auto -> `auto-chain`.
 - Review: 400 lines -> `review_budget_lines: 400`; 800 lines -> `review_budget_lines: 800`; Other -> ask one follow-up for the number.
+
+The PR canonical values are exactly the `delivery_strategy` domain `sdd-tasks` and `sdd-apply` accept; never emit a value outside it. The preflight offers no separate chained option because `delivery_strategy` is only consulted once the tasks forecast flags review-budget risk: below that line there is nothing to chain, and above it `Auto` already resolves to `auto-chain` without asking again.
 
 Hard gate rules:
 
@@ -266,9 +268,9 @@ This is collected by `SDD Session Preflight` as the chained PR strategy. If miss
 - **`ask-on-risk`** (default): Ask later if `sdd-tasks` forecasts high risk or >400 changed lines.
 - **`auto-chain`**: If forecast is high, continue with chained/stacked PR slices without asking again.
 - **`single-pr`**: Prefer one PR; if forecast exceeds 400 lines, require `size:exception` before apply.
-- **`exception-ok`**: Allow a large PR because the maintainer explicitly accepts `size:exception`.
+- **`exception-ok`**: Allow a large PR because the maintainer explicitly accepts `size:exception`. The preflight menu cannot select this; it is reached only when the user explicitly accepts `size:exception`, either up front or when `ask-on-risk` stops to ask.
 
-Cache the delivery strategy for the session. Pass it as `delivery_strategy` to `sdd-tasks` and `sdd-apply` prompts.
+These four are the whole domain. Cache the delivery strategy for the session. Pass it as `delivery_strategy` to `sdd-tasks` and `sdd-apply` prompts.
 
 ### Chain Strategy
 
@@ -304,6 +306,8 @@ If it says `Chained PRs recommended: Yes`, `400-line budget risk: High`, estimat
 - **`auto-chain`**: Do not ask about splitting. If `chain_strategy` is not yet cached, ask which chain strategy to use through the lossless blocking-prompt route. Then pass to `sdd-apply`: implement only the next autonomous slice using work-unit commits, with clear start, finish, verification, and rollback boundary.
 - **`single-pr`**: STOP and require/record maintainer-approved `size:exception` before `sdd-apply`.
 - **`exception-ok`**: Continue, but pass to `sdd-apply` that this run uses maintainer-approved `size:exception`.
+
+Any other `delivery_strategy` value is invalid. Do NOT pick the nearest branch and do NOT proceed: STOP, report the unrecognised value, and re-collect the delivery strategy through the lossless blocking-prompt route before launching `sdd-apply`.
 
 Do this even in Automatic mode. Automatic mode does not override reviewer burnout protection.
 

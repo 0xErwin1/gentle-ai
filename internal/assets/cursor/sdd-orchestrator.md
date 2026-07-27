@@ -251,6 +251,8 @@ If it says `Chained PRs recommended: Yes`, `400-line budget risk: High`, estimat
 - **`single-pr`**: STOP and require/record `size:exception` before apply.
 - **`exception-ok`**: Continue, but tell `sdd-apply` this run uses `size:exception`.
 
+Any other `delivery_strategy` value is invalid. Do NOT pick the nearest branch and do NOT proceed: STOP, report the unrecognised value, and re-collect the delivery strategy before `sdd-apply` runs.
+
 Automatic mode does not override this guard. Always pass the resolved delivery strategy to `sdd-apply`.
 
 <!-- gentle-ai:sdd-model-assignments -->

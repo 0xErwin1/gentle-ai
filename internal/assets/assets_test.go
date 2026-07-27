@@ -853,7 +853,10 @@ func TestOpenCodeSDDOrchestratorPreflightDoesNotUseVisibleCodesOrCanonicalUIValu
 	}
 	uiBlock := content[start : start+end]
 
-	for _, forbidden := range []string{"A1", "A2", "B1", "C1", "D1", "`interactive`", "`openspec`", "`ask-always`"} {
+	// `ask-always` used to sit here as a canonical value. It was never in the
+	// consumer's domain, so keeping it would have let this guard vouch for a
+	// retired vocabulary; the canonical delivery strategy is `ask-on-risk`.
+	for _, forbidden := range []string{"A1", "A2", "B1", "C1", "D1", "`interactive`", "`openspec`", "`ask-on-risk`"} {
 		if strings.Contains(uiBlock, forbidden) {
 			t.Fatalf("preflight UI instructions should not expose option codes or canonical values; found %q", forbidden)
 		}
@@ -883,7 +886,7 @@ func TestClaudeSDDWorkflowRequiresSessionPreflight(t *testing.T) {
 		"map the selected human labels to canonical values internally",
 		"1. Pace: Interactive, Automatic.",
 		"2. Artifacts: OpenSpec, Engram, Both.",
-		"3. PRs: Ask me, Single PR, Chained, Auto.",
+		"3. PRs: Ask me, Single PR, Auto.",
 		"4. Review: 400 lines, 800 lines, Other.",
 		"### SDD Entry Routing (MANDATORY)",
 		"Never launch `sdd-apply` just because the user asked to implement a feature",

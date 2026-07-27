@@ -46,7 +46,7 @@ Required preflight choices:
 
 1. **Execution mode**: `interactive` or `auto`.
 2. **Artifact store**: `openspec`, `engram`, or `hybrid` when Engram is callable. If Engram is unavailable, offer only file/inline-safe choices.
-3. **Chained PR strategy**: `auto-forecast`, `ask-always`, `single-pr-default`, or `force-chained`.
+3. **Chained PR strategy**: the canonical `delivery_strategy` — `ask-on-risk`, `auto-chain`, `single-pr`, or `exception-ok`. The preflight menu offers the first three; `exception-ok` is reachable only when the user explicitly accepts `size:exception`.
 4. **Review budget**: maximum changed lines before stopping for reviewer-burden approval.
 
 User-facing preflight question format:
@@ -59,7 +59,7 @@ The single `AskUserQuestion` tool call must contain these four localized groups 
 
 1. Pace: Interactive, Automatic.
 2. Artifacts: OpenSpec, Engram, Both.
-3. PRs: Ask me, Single PR, Chained, Auto.
+3. PRs: Ask me, Single PR, Auto.
 4. Review: 400 lines, 800 lines, Other.
 
 Match the user's current language and active persona for question labels and descriptions. Treat the preflight UI as direct orchestrator conversation, not as a generated technical artifact. Technical artifacts still default to English, but this UI follows the user's conversation language/persona. Do NOT mix languages inside one grouped question.
@@ -76,8 +76,10 @@ Map answers to canonical values:
 
 - Pace: Interactive -> `interactive`; Automatic -> `auto`.
 - Artifacts: OpenSpec -> `openspec`; Engram -> `engram`; Both -> `hybrid`.
-- PRs: Ask me -> `ask-always`; Single PR -> `single-pr-default`; Chained -> `force-chained`; Auto -> `auto-forecast`.
+- PRs: Ask me -> `ask-on-risk`; Single PR -> `single-pr`; Auto -> `auto-chain`.
 - Review: 400 lines -> `review_budget_lines: 400`; 800 lines -> `review_budget_lines: 800`; Other -> ask one follow-up for the number.
+
+The PR canonical values are exactly the `delivery_strategy` domain `sdd-tasks` and `sdd-apply` accept; never emit a value outside it. The preflight offers no separate chained option because `delivery_strategy` is only consulted once the tasks forecast flags review-budget risk: below that line there is nothing to chain, and above it `Auto` already resolves to `auto-chain` without asking again.
 
 Hard gate rules:
 
@@ -162,9 +164,9 @@ On the first SDD chain request in a session, ask once for delivery strategy and 
 - `ask-on-risk` — default; ask only when the tasks forecast detects review-budget risk.
 - `auto-chain` — automatically split into chained/stacked PR slices when needed.
 - `single-pr` — proceed as one PR only if the size is within budget.
-- `exception-ok` — user accepts `size:exception` when over budget.
+- `exception-ok` — user accepts `size:exception` when over budget. The preflight menu cannot select this; it is reached only when the user explicitly accepts `size:exception`, either up front or when `ask-on-risk` stops to ask.
 
-Pass `delivery_strategy` to `sdd-tasks` and `sdd-apply`.
+These four are the whole domain. Pass `delivery_strategy` to `sdd-tasks` and `sdd-apply`.
 
 ### Chain Strategy
 
@@ -200,6 +202,8 @@ If it says `Chained PRs recommended: Yes`, `400-line budget risk: High`, estimat
 - `auto-chain`: split automatically; ask for `chain_strategy` only if missing.
 - `single-pr`: stop and require/record `size:exception` before apply.
 - `exception-ok`: continue and tell `sdd-apply` this run uses `size:exception`.
+
+Any other `delivery_strategy` value is invalid. Do NOT pick the nearest branch and do NOT proceed: STOP, report the unrecognised value, and re-collect the delivery strategy before launching `sdd-apply`.
 
 Always pass the resolved `delivery_strategy`, `chain_strategy`, and PR boundary/exception to `sdd-apply`.
 
