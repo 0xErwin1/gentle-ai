@@ -1,8 +1,8 @@
 {
   "schema": "gentle-ai-bench.results/v1",
   "mode": "driven",
-  "binary": "/home/gentleman/.local/bin/gentle-ai",
-  "binary_version": "gentle-ai 2.2.0-rc.1.0.20260727083038-5365200392c4+dirty",
+  "binary": "/tmp/claude-1000/-home-gentleman-work-gentle-ai/d938102f-af94-4eba-9b94-980ae31d79b1/scratchpad/gai-close",
+  "binary_version": "gentle-ai dev",
   "journeys": [
     {
       "id": "j01-docs-happy-path",
@@ -45,7 +45,7 @@
           "derivation": "measured"
         },
         "git_subprocesses": {
-          "value": 302,
+          "value": 311,
           "derivation": "measured",
           "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
         }
@@ -58,7 +58,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j01-docs-happy-path-4289276309/home/demo"
+            "/tmp/gentle-ai-bench-j01-docs-happy-path-1085616105/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -72,7 +72,7 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j01-docs-happy-path-4289276309/home/demo"
+            "/tmp/gentle-ai-bench-j01-docs-happy-path-1085616105/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -88,7 +88,7 @@
             "--gate",
             "post-apply",
             "--cwd",
-            "/tmp/gentle-ai-bench-j01-docs-happy-path-4289276309/home/demo"
+            "/tmp/gentle-ai-bench-j01-docs-happy-path-1085616105/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -104,7 +104,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j01-docs-happy-path-4289276309/home/demo"
+            "/tmp/gentle-ai-bench-j01-docs-happy-path-1085616105/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -120,12 +120,12 @@
             "--gate",
             "pre-push",
             "--cwd",
-            "/tmp/gentle-ai-bench-j01-docs-happy-path-4289276309/home/demo"
+            "/tmp/gentle-ai-bench-j01-docs-happy-path-1085616105/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
           "stdout_bytes": 1355,
-          "git_calls": 134
+          "git_calls": 143
         }
       ]
     },
@@ -183,7 +183,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo"
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 217,
@@ -198,7 +198,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -215,7 +215,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/home/demo",
             "--lineage",
             "review-2c792679b788b673",
             "--target",
@@ -227,7 +227,7 @@
             "--order",
             "0",
             "--input",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/reviewer-0.json"
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/reviewer-0.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -242,7 +242,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -259,7 +259,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/home/demo",
             "--lineage",
             "review-2c792679b788b673",
             "--target",
@@ -271,7 +271,7 @@
             "--order",
             "1",
             "--input",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/reviewer-1.json"
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/reviewer-1.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -286,7 +286,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -303,7 +303,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/home/demo",
             "--lineage",
             "review-2c792679b788b673",
             "--target",
@@ -315,7 +315,7 @@
             "--order",
             "2",
             "--input",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/reviewer-2.json"
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/reviewer-2.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -330,7 +330,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -347,7 +347,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/home/demo",
             "--lineage",
             "review-2c792679b788b673",
             "--target",
@@ -359,7 +359,7 @@
             "--order",
             "3",
             "--input",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/reviewer-3.json"
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/reviewer-3.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -374,7 +374,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -392,7 +392,7 @@
             "finalize",
             "--captured-results=true",
             "--cwd",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo"
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -406,7 +406,7 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo"
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/home/demo"
           ],
           "exit_code": 1,
           "stderr_bytes": 268,
@@ -422,7 +422,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -439,7 +439,7 @@
             "review",
             "capture-evidence",
             "--cwd",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/home/demo",
             "--lineage",
             "review-2c792679b788b673",
             "--target",
@@ -447,7 +447,7 @@
             "--expected-revision",
             "sha256:d51c2118086f0941e6eff420da9a807b3bef38664fa8bfa49337d68964fa69c5",
             "--input",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/final-evidence.txt"
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/final-evidence.txt"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -462,7 +462,7 @@
             "finalize",
             "--captured-evidence=true",
             "--cwd",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo"
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -478,7 +478,7 @@
             "--gate",
             "post-apply",
             "--cwd",
-            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo"
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3280015938/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -543,7 +543,7 @@
             "status",
             "--json",
             "--cwd",
-            "/tmp/gentle-ai-bench-j03-kill-switch-2243123227/home/demo"
+            "/tmp/gentle-ai-bench-j03-kill-switch-3336912385/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -559,7 +559,7 @@
             "disable",
             "--json",
             "--cwd",
-            "/tmp/gentle-ai-bench-j03-kill-switch-2243123227/home/demo"
+            "/tmp/gentle-ai-bench-j03-kill-switch-3336912385/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -575,7 +575,7 @@
             "status",
             "--json",
             "--cwd",
-            "/tmp/gentle-ai-bench-j03-kill-switch-2243123227/home/demo"
+            "/tmp/gentle-ai-bench-j03-kill-switch-3336912385/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -589,7 +589,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j03-kill-switch-2243123227/home/demo"
+            "/tmp/gentle-ai-bench-j03-kill-switch-3336912385/home/demo"
           ],
           "exit_code": 1,
           "stderr_bytes": 174,
@@ -607,7 +607,7 @@
             "enable",
             "--json",
             "--cwd",
-            "/tmp/gentle-ai-bench-j03-kill-switch-2243123227/home/demo"
+            "/tmp/gentle-ai-bench-j03-kill-switch-3336912385/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -621,7 +621,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j03-kill-switch-2243123227/home/demo"
+            "/tmp/gentle-ai-bench-j03-kill-switch-3336912385/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -635,7 +635,7 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j03-kill-switch-2243123227/home/demo"
+            "/tmp/gentle-ai-bench-j03-kill-switch-3336912385/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -698,7 +698,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j04-size-does-not-escalate-9649947/home/demo"
+            "/tmp/gentle-ai-bench-j04-size-does-not-escalate-1967334190/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -712,11 +712,11 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j04-size-does-not-escalate-9649947/home/demo"
+            "/tmp/gentle-ai-bench-j04-size-does-not-escalate-1967334190/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 455,
+          "stdout_bytes": 458,
           "git_calls": 39
         },
         {
@@ -728,7 +728,7 @@
             "--gate",
             "post-apply",
             "--cwd",
-            "/tmp/gentle-ai-bench-j04-size-does-not-escalate-9649947/home/demo"
+            "/tmp/gentle-ai-bench-j04-size-does-not-escalate-1967334190/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -793,7 +793,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j05-gate-without-any-review-3078758249/home/demo"
+            "/tmp/gentle-ai-bench-j05-gate-without-any-review-45895517/home/demo"
           ],
           "exit_code": 1,
           "stderr_bytes": 139,
@@ -827,7 +827,7 @@
         "blocks": {
           "self_recovered": 0,
           "in_band": 0,
-          "out_of_band": 1,
+          "out_of_band": 0,
           "by_design": 0,
           "dead_end": 0
         },
@@ -841,11 +841,11 @@
           "derivation": "measured"
         },
         "human_surface_bytes": {
-          "value": 195,
+          "value": 0,
           "derivation": "measured"
         },
         "git_subprocesses": {
-          "value": 294,
+          "value": 281,
           "derivation": "measured",
           "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
         }
@@ -858,7 +858,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j06-pre-push-after-publication-2717733145/home/demo"
+            "/tmp/gentle-ai-bench-j06-pre-push-after-publication-4165980246/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -872,7 +872,7 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j06-pre-push-after-publication-2717733145/home/demo"
+            "/tmp/gentle-ai-bench-j06-pre-push-after-publication-4165980246/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -888,7 +888,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j06-pre-push-after-publication-2717733145/home/demo"
+            "/tmp/gentle-ai-bench-j06-pre-push-after-publication-4165980246/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -904,12 +904,12 @@
             "--gate",
             "pre-push",
             "--cwd",
-            "/tmp/gentle-ai-bench-j06-pre-push-after-publication-2717733145/home/demo"
+            "/tmp/gentle-ai-bench-j06-pre-push-after-publication-4165980246/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
           "stdout_bytes": 1355,
-          "git_calls": 134
+          "git_calls": 143
         },
         {
           "sequence": 5,
@@ -920,14 +920,12 @@
             "--gate",
             "pre-push",
             "--cwd",
-            "/tmp/gentle-ai-bench-j06-pre-push-after-publication-2717733145/home/demo"
+            "/tmp/gentle-ai-bench-j06-pre-push-after-publication-4165980246/home/demo"
           ],
-          "exit_code": 1,
-          "stderr_bytes": 195,
-          "stdout_bytes": 1539,
-          "block": "out_of_band",
-          "git_calls": 38,
-          "message": "Error: review lifecycle gate denied: scope-changed: terminal review receipts do not exactly match the live gate target: reviewed delivery base commit is missing or ambiguous in publication range"
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 595,
+          "git_calls": 16
         }
       ]
     },
@@ -972,7 +970,7 @@
           "derivation": "measured"
         },
         "git_subprocesses": {
-          "value": 239,
+          "value": 248,
           "derivation": "measured",
           "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
         }
@@ -985,7 +983,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j07-disabled-with-stale-receipts-612548053/home/demo"
+            "/tmp/gentle-ai-bench-j07-disabled-with-stale-receipts-2733467991/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -999,11 +997,11 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j07-disabled-with-stale-receipts-612548053/home/demo"
+            "/tmp/gentle-ai-bench-j07-disabled-with-stale-receipts-2733467991/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 463,
+          "stdout_bytes": 464,
           "git_calls": 36
         },
         {
@@ -1013,7 +1011,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j07-disabled-with-stale-receipts-612548053/home/demo"
+            "/tmp/gentle-ai-bench-j07-disabled-with-stale-receipts-2733467991/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -1027,11 +1025,11 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j07-disabled-with-stale-receipts-612548053/home/demo"
+            "/tmp/gentle-ai-bench-j07-disabled-with-stale-receipts-2733467991/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 463,
+          "stdout_bytes": 464,
           "git_calls": 36
         },
         {
@@ -1043,7 +1041,7 @@
             "disable",
             "--json",
             "--cwd",
-            "/tmp/gentle-ai-bench-j07-disabled-with-stale-receipts-612548053/home/demo"
+            "/tmp/gentle-ai-bench-j07-disabled-with-stale-receipts-2733467991/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -1059,12 +1057,12 @@
             "--gate",
             "pre-push",
             "--cwd",
-            "/tmp/gentle-ai-bench-j07-disabled-with-stale-receipts-612548053/home/demo"
+            "/tmp/gentle-ai-bench-j07-disabled-with-stale-receipts-2733467991/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
           "stdout_bytes": 690,
-          "git_calls": 79
+          "git_calls": 88
         }
       ]
     },
@@ -1122,7 +1120,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j08-finalize-without-reviewer-results-291731058/home/demo"
+            "/tmp/gentle-ai-bench-j08-finalize-without-reviewer-results-3796951444/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 217,
@@ -1137,7 +1135,7 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j08-finalize-without-reviewer-results-291731058/home/demo"
+            "/tmp/gentle-ai-bench-j08-finalize-without-reviewer-results-3796951444/home/demo"
           ],
           "exit_code": 1,
           "stderr_bytes": 286,
@@ -1202,7 +1200,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo"
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-3576261683/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 217,
@@ -1217,7 +1215,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-3576261683/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -1234,7 +1232,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-3576261683/home/demo",
             "--lineage",
             "review-2c792679b788b673",
             "--target",
@@ -1246,7 +1244,7 @@
             "--order",
             "0",
             "--input",
-            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/reviewer-0.json"
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-3576261683/reviewer-0.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -1261,7 +1259,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-3576261683/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -1278,7 +1276,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-3576261683/home/demo",
             "--lineage",
             "review-2c792679b788b673",
             "--target",
@@ -1290,7 +1288,7 @@
             "--order",
             "1",
             "--input",
-            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/reviewer-1.json"
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-3576261683/reviewer-1.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -1305,7 +1303,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-3576261683/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -1322,7 +1320,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-3576261683/home/demo",
             "--lineage",
             "review-2c792679b788b673",
             "--target",
@@ -1334,7 +1332,7 @@
             "--order",
             "2",
             "--input",
-            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/reviewer-2.json"
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-3576261683/reviewer-2.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -1349,7 +1347,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-3576261683/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -1366,7 +1364,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-3576261683/home/demo",
             "--lineage",
             "review-2c792679b788b673",
             "--target",
@@ -1378,7 +1376,7 @@
             "--order",
             "3",
             "--input",
-            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/reviewer-3.json"
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-3576261683/reviewer-3.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -1393,7 +1391,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-3576261683/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -1411,7 +1409,7 @@
             "finalize",
             "--captured-results=true",
             "--cwd",
-            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo"
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-3576261683/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -1425,7 +1423,7 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo"
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-3576261683/home/demo"
           ],
           "exit_code": 1,
           "stderr_bytes": 268,
@@ -1494,7 +1492,7 @@
             "--base-ref",
             "HEAD",
             "--cwd",
-            "/tmp/gentle-ai-bench-j10-invalid-flag-combination-142297873/home/demo"
+            "/tmp/gentle-ai-bench-j10-invalid-flag-combination-3695761972/home/demo"
           ],
           "exit_code": 1,
           "stderr_bytes": 275,
@@ -1559,7 +1557,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/home/unborn"
+            "/tmp/gentle-ai-bench-j11-unborn-head-76164535/home/unborn"
           ],
           "exit_code": 0,
           "stderr_bytes": 217,
@@ -1574,7 +1572,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/home/unborn",
+            "/tmp/gentle-ai-bench-j11-unborn-head-76164535/home/unborn",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -1591,7 +1589,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/home/unborn",
+            "/tmp/gentle-ai-bench-j11-unborn-head-76164535/home/unborn",
             "--lineage",
             "review-f7db5001a6ead6dd",
             "--target",
@@ -1603,11 +1601,11 @@
             "--order",
             "0",
             "--input",
-            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/reviewer-0.json"
+            "/tmp/gentle-ai-bench-j11-unborn-head-76164535/reviewer-0.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 693,
+          "stdout_bytes": 691,
           "model_run": true,
           "git_calls": 15
         },
@@ -1618,7 +1616,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/home/unborn",
+            "/tmp/gentle-ai-bench-j11-unborn-head-76164535/home/unborn",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -1636,7 +1634,7 @@
             "finalize",
             "--captured-results=true",
             "--cwd",
-            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/home/unborn"
+            "/tmp/gentle-ai-bench-j11-unborn-head-76164535/home/unborn"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -1650,7 +1648,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/home/unborn",
+            "/tmp/gentle-ai-bench-j11-unborn-head-76164535/home/unborn",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -1667,7 +1665,7 @@
             "review",
             "capture-evidence",
             "--cwd",
-            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/home/unborn",
+            "/tmp/gentle-ai-bench-j11-unborn-head-76164535/home/unborn",
             "--lineage",
             "review-f7db5001a6ead6dd",
             "--target",
@@ -1675,7 +1673,7 @@
             "--expected-revision",
             "sha256:06c8cb4372c25e344ed181742eeef6979cddf31be2d04bca51a484d666971f20",
             "--input",
-            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/final-evidence.txt"
+            "/tmp/gentle-ai-bench-j11-unborn-head-76164535/final-evidence.txt"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -1690,11 +1688,11 @@
             "finalize",
             "--captured-evidence=true",
             "--cwd",
-            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/home/unborn"
+            "/tmp/gentle-ai-bench-j11-unborn-head-76164535/home/unborn"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 449,
+          "stdout_bytes": 447,
           "git_calls": 19
         }
       ]
@@ -1753,7 +1751,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo"
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1720396023/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 217,
@@ -1768,7 +1766,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1720396023/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -1785,7 +1783,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1720396023/home/demo",
             "--lineage",
             "review-df69a1bfdb395403",
             "--target",
@@ -1797,7 +1795,7 @@
             "--order",
             "0",
             "--input",
-            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/reviewer-rejected.json"
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1720396023/reviewer-rejected.json"
           ],
           "exit_code": 1,
           "stderr_bytes": 393,
@@ -1814,7 +1812,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1720396023/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -1831,7 +1829,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1720396023/home/demo",
             "--lineage",
             "review-df69a1bfdb395403",
             "--target",
@@ -1843,7 +1841,7 @@
             "--order",
             "0",
             "--input",
-            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/reviewer-0.json"
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1720396023/reviewer-0.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -1858,7 +1856,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1720396023/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -1876,7 +1874,7 @@
             "finalize",
             "--captured-results=true",
             "--cwd",
-            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo"
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1720396023/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -1890,7 +1888,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1720396023/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -1907,7 +1905,7 @@
             "review",
             "capture-evidence",
             "--cwd",
-            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1720396023/home/demo",
             "--lineage",
             "review-df69a1bfdb395403",
             "--target",
@@ -1915,7 +1913,7 @@
             "--expected-revision",
             "sha256:1c1ac4c70357403fc1fd88a5b880d76d36726e0a226ec20bea9b09fe9e108a7e",
             "--input",
-            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/final-evidence.txt"
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1720396023/final-evidence.txt"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -1930,7 +1928,7 @@
             "finalize",
             "--captured-evidence=true",
             "--cwd",
-            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo"
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1720396023/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -1993,7 +1991,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo"
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-361031859/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 217,
@@ -2008,7 +2006,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-361031859/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -2025,7 +2023,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-361031859/home/demo",
             "--lineage",
             "review-2c792679b788b673",
             "--target",
@@ -2037,11 +2035,11 @@
             "--order",
             "0",
             "--input",
-            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/reviewer-0.json"
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-361031859/reviewer-0.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 695,
+          "stdout_bytes": 694,
           "model_run": true,
           "git_calls": 15
         },
@@ -2052,7 +2050,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-361031859/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -2069,7 +2067,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-361031859/home/demo",
             "--lineage",
             "review-2c792679b788b673",
             "--target",
@@ -2081,11 +2079,11 @@
             "--order",
             "1",
             "--input",
-            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/reviewer-1.json"
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-361031859/reviewer-1.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 707,
+          "stdout_bytes": 706,
           "model_run": true,
           "git_calls": 15
         },
@@ -2096,7 +2094,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-361031859/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -2113,7 +2111,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-361031859/home/demo",
             "--lineage",
             "review-2c792679b788b673",
             "--target",
@@ -2125,11 +2123,11 @@
             "--order",
             "2",
             "--input",
-            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/reviewer-2.json"
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-361031859/reviewer-2.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 709,
+          "stdout_bytes": 708,
           "model_run": true,
           "git_calls": 15
         },
@@ -2140,7 +2138,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-361031859/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -2157,7 +2155,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-361031859/home/demo",
             "--lineage",
             "review-2c792679b788b673",
             "--target",
@@ -2169,11 +2167,11 @@
             "--order",
             "3",
             "--input",
-            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/reviewer-3.json"
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-361031859/reviewer-3.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 709,
+          "stdout_bytes": 708,
           "model_run": true,
           "git_calls": 15
         },
@@ -2184,7 +2182,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-361031859/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -2201,7 +2199,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-361031859/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -2218,7 +2216,7 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-361031859/home/demo",
             "--lineage=review-2c792679b788b673",
             "--captured-results=true"
           ],
@@ -2251,8 +2249,8 @@
         },
         "blocks": {
           "self_recovered": 0,
-          "in_band": 0,
-          "out_of_band": 1,
+          "in_band": 1,
+          "out_of_band": 0,
           "by_design": 0,
           "dead_end": 0
         },
@@ -2266,7 +2264,7 @@
           "derivation": "measured"
         },
         "human_surface_bytes": {
-          "value": 113,
+          "value": 841,
           "derivation": "measured"
         },
         "git_subprocesses": {
@@ -2283,7 +2281,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j14-abandon-needs-a-hand-built-token-3649055076/home/demo"
+            "/tmp/gentle-ai-bench-j14-abandon-needs-a-hand-built-token-1034662997/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -2297,7 +2295,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j14-abandon-needs-a-hand-built-token-3649055076/home/demo",
+            "/tmp/gentle-ai-bench-j14-abandon-needs-a-hand-built-token-1034662997/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -2314,7 +2312,7 @@
             "review",
             "abandon",
             "--cwd",
-            "/tmp/gentle-ai-bench-j14-abandon-needs-a-hand-built-token-3649055076/home/demo",
+            "/tmp/gentle-ai-bench-j14-abandon-needs-a-hand-built-token-1034662997/home/demo",
             "--lineage",
             "review-3beae9ac2074fec1",
             "--expected-revision",
@@ -2325,11 +2323,11 @@
             "bench"
           ],
           "exit_code": 1,
-          "stderr_bytes": 113,
+          "stderr_bytes": 841,
           "stdout_bytes": 0,
-          "block": "out_of_band",
+          "block": "in_band",
           "git_calls": 0,
-          "message": "Error: review abandon requires --lineage, --expected-revision, --reason, --actor, and --maintainer-authorization"
+          "message": "Error: review abandon requires --lineage, --expected-revision, --reason, --actor, and --maintainer-authorization."
         },
         {
           "sequence": 4,
@@ -2338,7 +2336,7 @@
             "review",
             "abandon",
             "--cwd",
-            "/tmp/gentle-ai-bench-j14-abandon-needs-a-hand-built-token-3649055076/home/demo",
+            "/tmp/gentle-ai-bench-j14-abandon-needs-a-hand-built-token-1034662997/home/demo",
             "--lineage",
             "review-3beae9ac2074fec1",
             "--expected-revision",
@@ -2352,7 +2350,7 @@
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 1012,
+          "stdout_bytes": 1013,
           "manual_token": true,
           "git_calls": 7
         }
@@ -2412,7 +2410,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j15-linked-worktree-3164406197/home/demo-worktree"
+            "/tmp/gentle-ai-bench-j15-linked-worktree-3959431715/home/demo-worktree"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -2426,7 +2424,7 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j15-linked-worktree-3164406197/home/demo-worktree"
+            "/tmp/gentle-ai-bench-j15-linked-worktree-3959431715/home/demo-worktree"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -2442,7 +2440,7 @@
             "--gate",
             "post-apply",
             "--cwd",
-            "/tmp/gentle-ai-bench-j15-linked-worktree-3164406197/home/demo-worktree"
+            "/tmp/gentle-ai-bench-j15-linked-worktree-3959431715/home/demo-worktree"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -2456,7 +2454,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j15-linked-worktree-3164406197/home/demo"
+            "/tmp/gentle-ai-bench-j15-linked-worktree-3959431715/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -2470,7 +2468,7 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j15-linked-worktree-3164406197/home/demo"
+            "/tmp/gentle-ai-bench-j15-linked-worktree-3959431715/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -2486,7 +2484,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j15-linked-worktree-3164406197/home/demo"
+            "/tmp/gentle-ai-bench-j15-linked-worktree-3959431715/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -2502,7 +2500,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j15-linked-worktree-3164406197/home/demo-worktree"
+            "/tmp/gentle-ai-bench-j15-linked-worktree-3959431715/home/demo-worktree"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -2565,7 +2563,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j16-detached-head-2007276319/home/demo"
+            "/tmp/gentle-ai-bench-j16-detached-head-1140991011/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -2579,7 +2577,7 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j16-detached-head-2007276319/home/demo"
+            "/tmp/gentle-ai-bench-j16-detached-head-1140991011/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -2595,7 +2593,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j16-detached-head-2007276319/home/demo"
+            "/tmp/gentle-ai-bench-j16-detached-head-1140991011/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -2641,7 +2639,7 @@
           "derivation": "measured"
         },
         "human_surface_bytes": {
-          "value": 300,
+          "value": 299,
           "derivation": "measured"
         },
         "git_subprocesses": {
@@ -2658,10 +2656,10 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j17-bare-repository-2696620580/home/bare.git"
+            "/tmp/gentle-ai-bench-j17-bare-repository-988790503/home/bare.git"
           ],
           "exit_code": 1,
-          "stderr_bytes": 300,
+          "stderr_bytes": 299,
           "stdout_bytes": 0,
           "block": "by_design",
           "by_design": {
@@ -2670,7 +2668,7 @@
             "applied": true
           },
           "git_calls": 2,
-          "message": "Error: resolve review repository root: review needs a working tree: /tmp/gentle-ai-bench-j17-bare-repository-2696620580/home/bare.git is a bare repository, and a review candidate is a working-tree diff; run the same command again from a che"
+          "message": "Error: resolve review repository root: review needs a working tree: /tmp/gentle-ai-bench-j17-bare-repository-988790503/home/bare.git is a bare repository, and a review candidate is a working-tree diff; run the same command again from a chec"
         }
       ]
     },
@@ -2728,7 +2726,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j18-space-and-non-ascii-path-297783880/home/demo repo ñ 日本 dir"
+            "/tmp/gentle-ai-bench-j18-space-and-non-ascii-path-2460642392/home/demo repo ñ 日本 dir"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -2742,11 +2740,11 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j18-space-and-non-ascii-path-297783880/home/demo repo ñ 日本 dir"
+            "/tmp/gentle-ai-bench-j18-space-and-non-ascii-path-2460642392/home/demo repo ñ 日本 dir"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 478,
+          "stdout_bytes": 479,
           "git_calls": 36
         },
         {
@@ -2758,7 +2756,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j18-space-and-non-ascii-path-297783880/home/demo repo ñ 日本 dir"
+            "/tmp/gentle-ai-bench-j18-space-and-non-ascii-path-2460642392/home/demo repo ñ 日本 dir"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -2821,7 +2819,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/home/demo"
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3403153260/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 217,
@@ -2836,7 +2834,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/home/demo",
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3403153260/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -2853,19 +2851,19 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/home/demo",
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3403153260/home/demo",
             "--lineage",
-            "review-890e9f4e6472ae06",
+            "review-a26b34bf27a2b960",
             "--target",
-            "sha256:890e9f4e6472ae0650cfdb9c11f8c88488afa55642facd05f7cf36f6a828d7d7",
+            "sha256:a26b34bf27a2b9606f4b4156646de59d720757ea449d353ee825a86ce6d141ee",
             "--expected-revision",
-            "sha256:a90fb0a472d3e95deb4679333c71e5cbdf64e3771aa35f85bef9dce41feced93",
+            "sha256:68a2c6f0d68ae5dc77ae7b21559e1ca5fbf427632121b0cce10ed2172ba1c89e",
             "--lens",
             "review-reliability",
             "--order",
             "0",
             "--input",
-            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/reviewer-0.json"
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3403153260/reviewer-0.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -2880,7 +2878,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/home/demo",
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3403153260/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -2898,7 +2896,7 @@
             "finalize",
             "--captured-results=true",
             "--cwd",
-            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/home/demo"
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3403153260/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -2912,7 +2910,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/home/demo",
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3403153260/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -2929,15 +2927,15 @@
             "review",
             "capture-evidence",
             "--cwd",
-            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/home/demo",
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3403153260/home/demo",
             "--lineage",
-            "review-890e9f4e6472ae06",
+            "review-a26b34bf27a2b960",
             "--target",
-            "sha256:890e9f4e6472ae0650cfdb9c11f8c88488afa55642facd05f7cf36f6a828d7d7",
+            "sha256:a26b34bf27a2b9606f4b4156646de59d720757ea449d353ee825a86ce6d141ee",
             "--expected-revision",
-            "sha256:d5928c1c22da1f45aa60464a86671c15942cb6abe3daf934ddd5dd5362e5be16",
+            "sha256:bb44d0a04408ca1a9e8aa213c71073933e45c8a1a9190ce5b0a04c8b2fec4a48",
             "--input",
-            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/final-evidence.txt"
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3403153260/final-evidence.txt"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -2952,7 +2950,7 @@
             "finalize",
             "--captured-evidence=true",
             "--cwd",
-            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/home/demo"
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3403153260/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -2968,7 +2966,7 @@
             "--gate",
             "post-apply",
             "--cwd",
-            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/home/demo"
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3403153260/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3031,7 +3029,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/home/demo"
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-2788484829/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 217,
@@ -3046,7 +3044,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/home/demo",
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-2788484829/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -3063,7 +3061,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/home/demo",
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-2788484829/home/demo",
             "--lineage",
             "review-aef6e3a7df3bd5dd",
             "--target",
@@ -3075,7 +3073,7 @@
             "--order",
             "0",
             "--input",
-            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/reviewer-0.json"
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-2788484829/reviewer-0.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3090,7 +3088,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/home/demo",
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-2788484829/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -3108,7 +3106,7 @@
             "finalize",
             "--captured-results=true",
             "--cwd",
-            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/home/demo"
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-2788484829/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3122,7 +3120,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/home/demo",
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-2788484829/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -3139,7 +3137,7 @@
             "review",
             "capture-evidence",
             "--cwd",
-            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/home/demo",
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-2788484829/home/demo",
             "--lineage",
             "review-aef6e3a7df3bd5dd",
             "--target",
@@ -3147,7 +3145,7 @@
             "--expected-revision",
             "sha256:4569ff9bc1218f7493f6bf633152e0a58a56950fe194c2ca40c687af0c0f1bd1",
             "--input",
-            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/final-evidence.txt"
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-2788484829/final-evidence.txt"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3162,7 +3160,7 @@
             "finalize",
             "--captured-evidence=true",
             "--cwd",
-            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/home/demo"
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-2788484829/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3178,7 +3176,7 @@
             "--gate",
             "post-apply",
             "--cwd",
-            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/home/demo"
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-2788484829/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3241,7 +3239,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo"
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 217,
@@ -3256,7 +3254,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -3273,7 +3271,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/home/demo",
             "--lineage",
             "review-c65a4ce5f831560b",
             "--target",
@@ -3285,7 +3283,7 @@
             "--order",
             "0",
             "--input",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/reviewer-0.json"
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/reviewer-0.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3300,7 +3298,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -3317,7 +3315,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/home/demo",
             "--lineage",
             "review-c65a4ce5f831560b",
             "--target",
@@ -3329,7 +3327,7 @@
             "--order",
             "1",
             "--input",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/reviewer-1.json"
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/reviewer-1.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3344,7 +3342,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -3361,7 +3359,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/home/demo",
             "--lineage",
             "review-c65a4ce5f831560b",
             "--target",
@@ -3373,7 +3371,7 @@
             "--order",
             "2",
             "--input",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/reviewer-2.json"
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/reviewer-2.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3388,7 +3386,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -3405,7 +3403,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/home/demo",
             "--lineage",
             "review-c65a4ce5f831560b",
             "--target",
@@ -3417,7 +3415,7 @@
             "--order",
             "3",
             "--input",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/reviewer-3.json"
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/reviewer-3.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3432,7 +3430,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -3450,7 +3448,7 @@
             "finalize",
             "--captured-results=true",
             "--cwd",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo"
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3464,7 +3462,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -3481,7 +3479,7 @@
             "review",
             "capture-evidence",
             "--cwd",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/home/demo",
             "--lineage",
             "review-c65a4ce5f831560b",
             "--target",
@@ -3489,7 +3487,7 @@
             "--expected-revision",
             "sha256:a2d5022bd41b75a37204fc460348dc9bcab366971370024b0826f71223924ac1",
             "--input",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/final-evidence.txt"
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/final-evidence.txt"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3504,7 +3502,7 @@
             "finalize",
             "--captured-evidence=true",
             "--cwd",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo"
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3520,7 +3518,7 @@
             "--gate",
             "post-apply",
             "--cwd",
-            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo"
+            "/tmp/gentle-ai-bench-j21-mode-only-change-2770514970/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3583,7 +3581,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j22-pure-rename-4101019196/home/demo"
+            "/tmp/gentle-ai-bench-j22-pure-rename-110959392/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3597,11 +3595,11 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j22-pure-rename-4101019196/home/demo"
+            "/tmp/gentle-ai-bench-j22-pure-rename-110959392/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 447,
+          "stdout_bytes": 446,
           "git_calls": 37
         },
         {
@@ -3613,7 +3611,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j22-pure-rename-4101019196/home/demo"
+            "/tmp/gentle-ai-bench-j22-pure-rename-110959392/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3676,7 +3674,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j23-deletion-only-1202886614/home/demo"
+            "/tmp/gentle-ai-bench-j23-deletion-only-3165647886/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3690,7 +3688,7 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j23-deletion-only-1202886614/home/demo"
+            "/tmp/gentle-ai-bench-j23-deletion-only-3165647886/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3706,7 +3704,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j23-deletion-only-1202886614/home/demo"
+            "/tmp/gentle-ai-bench-j23-deletion-only-3165647886/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3769,7 +3767,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/home/demo"
+            "/tmp/gentle-ai-bench-j24-empty-file-2673118507/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 217,
@@ -3784,7 +3782,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/home/demo",
+            "/tmp/gentle-ai-bench-j24-empty-file-2673118507/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -3801,7 +3799,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/home/demo",
+            "/tmp/gentle-ai-bench-j24-empty-file-2673118507/home/demo",
             "--lineage",
             "review-80a627113df945d8",
             "--target",
@@ -3813,7 +3811,7 @@
             "--order",
             "0",
             "--input",
-            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/reviewer-0.json"
+            "/tmp/gentle-ai-bench-j24-empty-file-2673118507/reviewer-0.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3828,7 +3826,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/home/demo",
+            "/tmp/gentle-ai-bench-j24-empty-file-2673118507/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -3846,7 +3844,7 @@
             "finalize",
             "--captured-results=true",
             "--cwd",
-            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/home/demo"
+            "/tmp/gentle-ai-bench-j24-empty-file-2673118507/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3860,7 +3858,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/home/demo",
+            "/tmp/gentle-ai-bench-j24-empty-file-2673118507/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -3877,7 +3875,7 @@
             "review",
             "capture-evidence",
             "--cwd",
-            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/home/demo",
+            "/tmp/gentle-ai-bench-j24-empty-file-2673118507/home/demo",
             "--lineage",
             "review-80a627113df945d8",
             "--target",
@@ -3885,7 +3883,7 @@
             "--expected-revision",
             "sha256:fdca32b3e97def7905d85413c4e9d73ac700c2577f7908f5f2f9dd12fa1949db",
             "--input",
-            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/final-evidence.txt"
+            "/tmp/gentle-ai-bench-j24-empty-file-2673118507/final-evidence.txt"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3900,7 +3898,7 @@
             "finalize",
             "--captured-evidence=true",
             "--cwd",
-            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/home/demo"
+            "/tmp/gentle-ai-bench-j24-empty-file-2673118507/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3916,7 +3914,7 @@
             "--gate",
             "post-apply",
             "--cwd",
-            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/home/demo"
+            "/tmp/gentle-ai-bench-j24-empty-file-2673118507/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3979,7 +3977,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j25-no-trailing-newline-2045551909/home/demo"
+            "/tmp/gentle-ai-bench-j25-no-trailing-newline-4231787966/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -3993,7 +3991,7 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j25-no-trailing-newline-2045551909/home/demo"
+            "/tmp/gentle-ai-bench-j25-no-trailing-newline-4231787966/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4009,7 +4007,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j25-no-trailing-newline-2045551909/home/demo"
+            "/tmp/gentle-ai-bench-j25-no-trailing-newline-4231787966/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4072,7 +4070,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j26-crlf-content-657738184/home/demo"
+            "/tmp/gentle-ai-bench-j26-crlf-content-3554436245/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4086,11 +4084,11 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j26-crlf-content-657738184/home/demo"
+            "/tmp/gentle-ai-bench-j26-crlf-content-3554436245/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 447,
+          "stdout_bytes": 448,
           "git_calls": 36
         },
         {
@@ -4102,7 +4100,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j26-crlf-content-657738184/home/demo"
+            "/tmp/gentle-ai-bench-j26-crlf-content-3554436245/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4165,7 +4163,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j27-merge-in-progress-96899793/home/demo"
+            "/tmp/gentle-ai-bench-j27-merge-in-progress-2731057471/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4179,11 +4177,11 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j27-merge-in-progress-96899793/home/demo"
+            "/tmp/gentle-ai-bench-j27-merge-in-progress-2731057471/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 451,
+          "stdout_bytes": 453,
           "git_calls": 37
         },
         {
@@ -4195,7 +4193,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j27-merge-in-progress-96899793/home/demo"
+            "/tmp/gentle-ai-bench-j27-merge-in-progress-2731057471/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4258,7 +4256,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j28-rebase-in-progress-2964785402/home/demo"
+            "/tmp/gentle-ai-bench-j28-rebase-in-progress-3943824535/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4272,7 +4270,7 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j28-rebase-in-progress-2964785402/home/demo"
+            "/tmp/gentle-ai-bench-j28-rebase-in-progress-3943824535/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4288,7 +4286,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j28-rebase-in-progress-2964785402/home/demo"
+            "/tmp/gentle-ai-bench-j28-rebase-in-progress-3943824535/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4351,7 +4349,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j29-cherry-pick-in-progress-3061830760/home/demo"
+            "/tmp/gentle-ai-bench-j29-cherry-pick-in-progress-665860367/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4365,11 +4363,11 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j29-cherry-pick-in-progress-3061830760/home/demo"
+            "/tmp/gentle-ai-bench-j29-cherry-pick-in-progress-665860367/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 459,
+          "stdout_bytes": 458,
           "git_calls": 37
         },
         {
@@ -4381,7 +4379,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j29-cherry-pick-in-progress-3061830760/home/demo"
+            "/tmp/gentle-ai-bench-j29-cherry-pick-in-progress-665860367/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4444,7 +4442,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j30-kill-switch-flipped-mid-review-2729440721/home/demo"
+            "/tmp/gentle-ai-bench-j30-kill-switch-flipped-mid-review-2594197118/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4460,7 +4458,7 @@
             "disable",
             "--json",
             "--cwd",
-            "/tmp/gentle-ai-bench-j30-kill-switch-flipped-mid-review-2729440721/home/demo"
+            "/tmp/gentle-ai-bench-j30-kill-switch-flipped-mid-review-2594197118/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4476,7 +4474,7 @@
             "status",
             "--json",
             "--cwd",
-            "/tmp/gentle-ai-bench-j30-kill-switch-flipped-mid-review-2729440721/home/demo"
+            "/tmp/gentle-ai-bench-j30-kill-switch-flipped-mid-review-2594197118/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4490,7 +4488,7 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j30-kill-switch-flipped-mid-review-2729440721/home/demo"
+            "/tmp/gentle-ai-bench-j30-kill-switch-flipped-mid-review-2594197118/home/demo"
           ],
           "exit_code": 1,
           "stderr_bytes": 276,
@@ -4506,11 +4504,11 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j30-kill-switch-flipped-mid-review-2729440721/home/demo"
+            "/tmp/gentle-ai-bench-j30-kill-switch-flipped-mid-review-2594197118/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 930,
+          "stdout_bytes": 1032,
           "git_calls": 2
         },
         {
@@ -4522,7 +4520,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j30-kill-switch-flipped-mid-review-2729440721/home/demo"
+            "/tmp/gentle-ai-bench-j30-kill-switch-flipped-mid-review-2594197118/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4587,14 +4585,14 @@
             "status",
             "--json",
             "--cwd",
-            "/tmp/gentle-ai-bench-j31-nonsense-mode-value-3507473489/home/demo"
+            "/tmp/gentle-ai-bench-j31-nonsense-mode-value-1134800456/home/demo"
           ],
           "exit_code": 1,
           "stderr_bytes": 406,
           "stdout_bytes": 240,
           "block": "in_band",
           "git_calls": 2,
-          "message": "Error: the global value in /tmp/gentle-ai-bench-j31-nonsense-mode-value-3507473489/home/.gentle-ai/state.json is not a mode this product can read; an unreadable switch is not a disabled switch, so review-driven development stays managed unt"
+          "message": "Error: the global value in /tmp/gentle-ai-bench-j31-nonsense-mode-value-1134800456/home/.gentle-ai/state.json is not a mode this product can read; an unreadable switch is not a disabled switch, so review-driven development stays managed unt"
         },
         {
           "sequence": 2,
@@ -4603,14 +4601,14 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j31-nonsense-mode-value-3507473489/home/demo"
+            "/tmp/gentle-ai-bench-j31-nonsense-mode-value-1134800456/home/demo"
           ],
           "exit_code": 1,
           "stderr_bytes": 406,
           "stdout_bytes": 0,
           "block": "in_band",
           "git_calls": 23,
-          "message": "Error: the global value in /tmp/gentle-ai-bench-j31-nonsense-mode-value-3507473489/home/.gentle-ai/state.json is not a mode this product can read; an unreadable switch is not a disabled switch, so review-driven development stays managed unt"
+          "message": "Error: the global value in /tmp/gentle-ai-bench-j31-nonsense-mode-value-1134800456/home/.gentle-ai/state.json is not a mode this product can read; an unreadable switch is not a disabled switch, so review-driven development stays managed unt"
         }
       ]
     },
@@ -4668,7 +4666,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-1011664383/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4682,11 +4680,11 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-1011664383/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 457,
+          "stdout_bytes": 458,
           "git_calls": 36
         },
         {
@@ -4698,7 +4696,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-1011664383/home/demo"
           ],
           "exit_code": 1,
           "stderr_bytes": 248,
@@ -4722,7 +4720,7 @@
             "--disposition",
             "scope_changed",
             "--cwd",
-            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-1011664383/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4736,11 +4734,11 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-1011664383/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 451,
+          "stdout_bytes": 452,
           "git_calls": 37
         },
         {
@@ -4752,7 +4750,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-1011664383/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4768,7 +4766,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-1011664383/home/demo"
           ],
           "exit_code": 1,
           "stderr_bytes": 248,
@@ -4786,13 +4784,13 @@
             "--predecessor-lineage",
             "review-successor-one",
             "--expected-predecessor-revision",
-            "sha256:0548150d609b2934346381180f94c3c6cfa8d2539d4231c7a2867f73ef17ddb2",
+            "sha256:5a3e8f86af4c732adea96c6d543a30fa5f3d7b11b133976c176d70cb582462d4",
             "--successor-lineage",
             "review-successor-two",
             "--disposition",
             "scope_changed",
             "--cwd",
-            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-1011664383/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4806,11 +4804,11 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-1011664383/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 451,
+          "stdout_bytes": 452,
           "git_calls": 38
         },
         {
@@ -4822,7 +4820,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-1011664383/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4885,7 +4883,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j33-escalate-then-recover-2396666212/home/demo"
+            "/tmp/gentle-ai-bench-j33-escalate-then-recover-1751893694/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4899,10 +4897,10 @@
             "review",
             "finalize",
             "--evidence",
-            "/tmp/gentle-ai-bench-j33-escalate-then-recover-2396666212/failed-verification.txt",
+            "/tmp/gentle-ai-bench-j33-escalate-then-recover-1751893694/failed-verification.txt",
             "--failed=true",
             "--cwd",
-            "/tmp/gentle-ai-bench-j33-escalate-then-recover-2396666212/home/demo"
+            "/tmp/gentle-ai-bench-j33-escalate-then-recover-1751893694/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4918,7 +4916,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j33-escalate-then-recover-2396666212/home/demo"
+            "/tmp/gentle-ai-bench-j33-escalate-then-recover-1751893694/home/demo"
           ],
           "exit_code": 1,
           "stderr_bytes": 429,
@@ -4939,11 +4937,11 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j33-escalate-then-recover-2396666212/home/demo"
+            "/tmp/gentle-ai-bench-j33-escalate-then-recover-1751893694/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 909,
+          "stdout_bytes": 1011,
           "git_calls": 2
         },
         {
@@ -4961,7 +4959,7 @@
             "--disposition",
             "escalated",
             "--cwd",
-            "/tmp/gentle-ai-bench-j33-escalate-then-recover-2396666212/home/demo"
+            "/tmp/gentle-ai-bench-j33-escalate-then-recover-1751893694/home/demo"
           ],
           "exit_code": 1,
           "stderr_bytes": 683,
@@ -4985,7 +4983,7 @@
             "--disposition",
             "escalated",
             "--cwd",
-            "/tmp/gentle-ai-bench-j33-escalate-then-recover-2396666212/home/demo"
+            "/tmp/gentle-ai-bench-j33-escalate-then-recover-1751893694/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -4999,7 +4997,7 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j33-escalate-then-recover-2396666212/home/demo"
+            "/tmp/gentle-ai-bench-j33-escalate-then-recover-1751893694/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -5015,7 +5013,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j33-escalate-then-recover-2396666212/home/demo"
+            "/tmp/gentle-ai-bench-j33-escalate-then-recover-1751893694/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -5046,8 +5044,8 @@
         },
         "blocks": {
           "self_recovered": 0,
-          "in_band": 0,
-          "out_of_band": 1,
+          "in_band": 1,
+          "out_of_band": 0,
           "by_design": 0,
           "dead_end": 0
         },
@@ -5061,7 +5059,7 @@
           "derivation": "measured"
         },
         "human_surface_bytes": {
-          "value": 113,
+          "value": 832,
           "derivation": "measured"
         },
         "git_subprocesses": {
@@ -5078,7 +5076,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-1316819537/home/demo"
+            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-264586742/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -5092,7 +5090,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-1316819537/home/demo",
+            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-264586742/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -5109,7 +5107,7 @@
             "review",
             "abandon",
             "--cwd",
-            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-1316819537/home/demo",
+            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-264586742/home/demo",
             "--lineage",
             "review-3beae9ac2074fec1",
             "--expected-revision",
@@ -5120,11 +5118,11 @@
             "bench"
           ],
           "exit_code": 1,
-          "stderr_bytes": 113,
+          "stderr_bytes": 832,
           "stdout_bytes": 0,
-          "block": "out_of_band",
+          "block": "in_band",
           "git_calls": 0,
-          "message": "Error: review abandon requires --lineage, --expected-revision, --reason, --actor, and --maintainer-authorization"
+          "message": "Error: review abandon requires --lineage, --expected-revision, --reason, --actor, and --maintainer-authorization."
         },
         {
           "sequence": 4,
@@ -5133,7 +5131,7 @@
             "review",
             "abandon",
             "--cwd",
-            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-1316819537/home/demo",
+            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-264586742/home/demo",
             "--lineage",
             "review-3beae9ac2074fec1",
             "--expected-revision",
@@ -5147,7 +5145,7 @@
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 998,
+          "stdout_bytes": 996,
           "manual_token": true,
           "git_calls": 7
         },
@@ -5158,7 +5156,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-1316819537/home/demo"
+            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-264586742/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -5172,11 +5170,11 @@
             "review",
             "finalize",
             "--cwd",
-            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-1316819537/home/demo"
+            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-264586742/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 460,
+          "stdout_bytes": 459,
           "git_calls": 36
         },
         {
@@ -5188,7 +5186,7 @@
             "--gate",
             "pre-commit",
             "--cwd",
-            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-1316819537/home/demo"
+            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-264586742/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -5251,7 +5249,7 @@
             "review",
             "start",
             "--cwd",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo"
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 217,
@@ -5266,7 +5264,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -5283,7 +5281,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/home/demo",
             "--lineage",
             "review-c65a4ce5f831560b",
             "--target",
@@ -5295,11 +5293,11 @@
             "--order",
             "0",
             "--input",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/reviewer-0.json"
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/reviewer-0.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 696,
+          "stdout_bytes": 695,
           "model_run": true,
           "git_calls": 15
         },
@@ -5310,7 +5308,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -5327,7 +5325,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/home/demo",
             "--lineage",
             "review-c65a4ce5f831560b",
             "--target",
@@ -5339,11 +5337,11 @@
             "--order",
             "1",
             "--input",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/reviewer-1.json"
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/reviewer-1.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 708,
+          "stdout_bytes": 707,
           "model_run": true,
           "git_calls": 15
         },
@@ -5354,7 +5352,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -5371,7 +5369,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/home/demo",
             "--lineage",
             "review-c65a4ce5f831560b",
             "--target",
@@ -5383,11 +5381,11 @@
             "--order",
             "2",
             "--input",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/reviewer-2.json"
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/reviewer-2.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 710,
+          "stdout_bytes": 709,
           "model_run": true,
           "git_calls": 15
         },
@@ -5398,7 +5396,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -5415,7 +5413,7 @@
             "review",
             "capture-result",
             "--cwd",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/home/demo",
             "--lineage",
             "review-c65a4ce5f831560b",
             "--target",
@@ -5427,11 +5425,11 @@
             "--order",
             "3",
             "--input",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/reviewer-3.json"
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/reviewer-3.json"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 710,
+          "stdout_bytes": 709,
           "model_run": true,
           "git_calls": 15
         },
@@ -5442,7 +5440,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -5460,7 +5458,7 @@
             "finalize",
             "--captured-results=true",
             "--cwd",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo"
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -5476,7 +5474,7 @@
             "--correction-lines",
             "1",
             "--cwd",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo"
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/home/demo"
           ],
           "exit_code": 1,
           "stderr_bytes": 268,
@@ -5492,7 +5490,7 @@
             "review",
             "status",
             "--cwd",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/home/demo",
             "--contract",
             "gentle-ai.review-integration/v1",
             "--next-transition"
@@ -5509,7 +5507,7 @@
             "review",
             "capture-evidence",
             "--cwd",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/home/demo",
             "--lineage",
             "review-c65a4ce5f831560b",
             "--target",
@@ -5517,7 +5515,7 @@
             "--expected-revision",
             "sha256:a2d5022bd41b75a37204fc460348dc9bcab366971370024b0826f71223924ac1",
             "--input",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/final-evidence.txt"
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/final-evidence.txt"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
@@ -5532,11 +5530,11 @@
             "finalize",
             "--captured-evidence=true",
             "--cwd",
-            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo"
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-959891377/home/demo"
           ],
           "exit_code": 0,
           "stderr_bytes": 0,
-          "stdout_bytes": 466,
+          "stdout_bytes": 465,
           "git_calls": 16
         }
       ]
@@ -5597,7 +5595,7 @@
             "--contract",
             "gentle-ai.review-integration/v2",
             "--cwd",
-            "/tmp/gentle-ai-bench-j36-contract-right-name-wrong-version-1621219290/home/demo"
+            "/tmp/gentle-ai-bench-j36-contract-right-name-wrong-version-266574495/home/demo"
           ],
           "exit_code": 1,
           "stderr_bytes": 90,
@@ -5605,6 +5603,2024 @@
           "block": "in_band",
           "git_calls": 0,
           "message": "Error: The requested review integration contract is not supported. [unsupported_contract]"
+        }
+      ]
+    },
+    {
+      "id": "j37-sdd-remediation-self-successor",
+      "title": "Bound passing attempt over a corrected candidate: the block, and the exit it names",
+      "source": "shape 4 (a refusal naming something that does not work) + community deadlock report",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 14,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 1,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 1,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 1281,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 482,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "begin, fail, begin again",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j37-sdd-remediation-self-successor-1437189754/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 412,
+          "git_calls": 5
+        },
+        {
+          "sequence": 2,
+          "step": "begin, fail, begin again",
+          "args": [
+            "sdd-attempt",
+            "begin",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j37-sdd-remediation-self-successor-1437189754/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "",
+            "--request-id",
+            "bench-begin-one",
+            "--work-unit",
+            "bench runtime objective",
+            "--evidence-goal",
+            "bench proves the corrected candidate",
+            "--max-attempts",
+            "6",
+            "--max-changed-lines",
+            "600"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1842,
+          "git_calls": 14
+        },
+        {
+          "sequence": 3,
+          "step": "begin, fail, begin again",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j37-sdd-remediation-self-successor-1437189754/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1842,
+          "git_calls": 5
+        },
+        {
+          "sequence": 4,
+          "step": "begin, fail, begin again",
+          "args": [
+            "sdd-attempt",
+            "finish",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j37-sdd-remediation-self-successor-1437189754/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "sha256:3193d7140bfca69c22b0d266980ea021006370423ba322666377769b8a32e227",
+            "--request-id",
+            "bench-finish-one",
+            "--outcome",
+            "failed",
+            "--evidence-revision",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--diagnosis",
+            "the benchmark drove this attempt to a terminal outcome",
+            "--harness-disposition",
+            "reused",
+            "--cleanup-evidence",
+            "workspace clean",
+            "--process-evidence",
+            "no stray processes"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1964,
+          "git_calls": 21
+        },
+        {
+          "sequence": 5,
+          "step": "begin, fail, begin again",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j37-sdd-remediation-self-successor-1437189754/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1964,
+          "git_calls": 5
+        },
+        {
+          "sequence": 6,
+          "step": "begin, fail, begin again",
+          "args": [
+            "sdd-attempt",
+            "begin",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j37-sdd-remediation-self-successor-1437189754/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "sha256:e9ed0c5b8a6167cb36b38db21e7a2302214500af225a8d074017bad5ff462bfa",
+            "--request-id",
+            "bench-begin-two",
+            "--work-unit",
+            "bench runtime objective",
+            "--evidence-goal",
+            "bench proves the corrected candidate",
+            "--max-attempts",
+            "6",
+            "--max-changed-lines",
+            "600"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 2853,
+          "git_calls": 15
+        },
+        {
+          "sequence": 7,
+          "step": "review start on the corrected candidate",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j37-sdd-remediation-self-successor-1437189754/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 8,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j37-sdd-remediation-self-successor-1437189754/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 466,
+          "git_calls": 36
+        },
+        {
+          "sequence": 9,
+          "step": "bind the approved review to the change",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j37-sdd-remediation-self-successor-1437189754/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1035,
+          "git_calls": 2
+        },
+        {
+          "sequence": 10,
+          "step": "bind the approved review to the change",
+          "args": [
+            "review",
+            "bind-sdd",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j37-sdd-remediation-self-successor-1437189754/home/demo",
+            "--change",
+            "bench-change",
+            "--lineage",
+            "review-99a7020c5cfb3948",
+            "--expected-binding-revision",
+            ""
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1544,
+          "git_calls": 75
+        },
+        {
+          "sequence": 11,
+          "step": "plain passing finish over a changed candidate",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j37-sdd-remediation-self-successor-1437189754/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 4530,
+          "git_calls": 5
+        },
+        {
+          "sequence": 12,
+          "step": "plain passing finish over a changed candidate",
+          "args": [
+            "sdd-attempt",
+            "finish",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j37-sdd-remediation-self-successor-1437189754/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "sha256:9523f3a17cfdecf201cc002125e6ad37a14200a585b589377bb4ddb72bd4543a",
+            "--request-id",
+            "bench-finish-blocked",
+            "--outcome",
+            "passed",
+            "--evidence-revision",
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--diagnosis",
+            "the benchmark drove this attempt to a terminal outcome",
+            "--harness-disposition",
+            "reused",
+            "--cleanup-evidence",
+            "workspace clean",
+            "--process-evidence",
+            "no stray processes"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 1281,
+          "stdout_bytes": 0,
+          "block": "in_band",
+          "git_calls": 91,
+          "message": "Error: sdd-attempt finish: a bound passing SDD runtime attempt must also bind the approved review of its corrected candidate: the candidate changed after attempt 2 began, and lineage \"review-99a7020c5cfb3948\" already holds the approved revi"
+        },
+        {
+          "sequence": 13,
+          "step": "the self-successor finish the refusal named",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j37-sdd-remediation-self-successor-1437189754/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 4530,
+          "git_calls": 5
+        },
+        {
+          "sequence": 14,
+          "step": "the self-successor finish the refusal named",
+          "args": [
+            "sdd-attempt",
+            "finish",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j37-sdd-remediation-self-successor-1437189754/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "sha256:9523f3a17cfdecf201cc002125e6ad37a14200a585b589377bb4ddb72bd4543a",
+            "--request-id",
+            "bench-finish-self-successor",
+            "--outcome",
+            "passed",
+            "--evidence-revision",
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--expected-binding-revision",
+            "sha256:e79f417c8ac258e79e310eb46b3ad15459a8c96e8ac4c3453b0eda0f96300b4c",
+            "--successor-lineage",
+            "review-99a7020c5cfb3948",
+            "--remediates-evidence-revision",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--diagnosis",
+            "the benchmark drove this attempt to a terminal outcome",
+            "--harness-disposition",
+            "reused",
+            "--cleanup-evidence",
+            "workspace clean",
+            "--process-evidence",
+            "no stray processes"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 4696,
+          "git_calls": 161
+        }
+      ]
+    },
+    {
+      "id": "j38-sdd-remediation-distinct-successor",
+      "title": "Same block with a real recovery successor in the way: the refusal routes to review, not to a finish",
+      "source": "shape 3 (the same guard with a different precondition underneath) + shape 4",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 18,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 2,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 2,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 1062,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 607,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "begin, fail, begin again",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j38-sdd-remediation-distinct-successor-3456199025/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 412,
+          "git_calls": 5
+        },
+        {
+          "sequence": 2,
+          "step": "begin, fail, begin again",
+          "args": [
+            "sdd-attempt",
+            "begin",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j38-sdd-remediation-distinct-successor-3456199025/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "",
+            "--request-id",
+            "bench-begin-one",
+            "--work-unit",
+            "bench runtime objective",
+            "--evidence-goal",
+            "bench proves the corrected candidate",
+            "--max-attempts",
+            "6",
+            "--max-changed-lines",
+            "600"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1842,
+          "git_calls": 14
+        },
+        {
+          "sequence": 3,
+          "step": "begin, fail, begin again",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j38-sdd-remediation-distinct-successor-3456199025/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1842,
+          "git_calls": 5
+        },
+        {
+          "sequence": 4,
+          "step": "begin, fail, begin again",
+          "args": [
+            "sdd-attempt",
+            "finish",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j38-sdd-remediation-distinct-successor-3456199025/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "sha256:3193d7140bfca69c22b0d266980ea021006370423ba322666377769b8a32e227",
+            "--request-id",
+            "bench-finish-one",
+            "--outcome",
+            "failed",
+            "--evidence-revision",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--diagnosis",
+            "the benchmark drove this attempt to a terminal outcome",
+            "--harness-disposition",
+            "reused",
+            "--cleanup-evidence",
+            "workspace clean",
+            "--process-evidence",
+            "no stray processes"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1964,
+          "git_calls": 21
+        },
+        {
+          "sequence": 5,
+          "step": "begin, fail, begin again",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j38-sdd-remediation-distinct-successor-3456199025/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1964,
+          "git_calls": 5
+        },
+        {
+          "sequence": 6,
+          "step": "begin, fail, begin again",
+          "args": [
+            "sdd-attempt",
+            "begin",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j38-sdd-remediation-distinct-successor-3456199025/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "sha256:e9ed0c5b8a6167cb36b38db21e7a2302214500af225a8d074017bad5ff462bfa",
+            "--request-id",
+            "bench-begin-two",
+            "--work-unit",
+            "bench runtime objective",
+            "--evidence-goal",
+            "bench proves the corrected candidate",
+            "--max-attempts",
+            "6",
+            "--max-changed-lines",
+            "600"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 2853,
+          "git_calls": 15
+        },
+        {
+          "sequence": 7,
+          "step": "review start on the corrected candidate",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j38-sdd-remediation-distinct-successor-3456199025/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 8,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j38-sdd-remediation-distinct-successor-3456199025/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 470,
+          "git_calls": 36
+        },
+        {
+          "sequence": 9,
+          "step": "bind the approved review to the change",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j38-sdd-remediation-distinct-successor-3456199025/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1047,
+          "git_calls": 2
+        },
+        {
+          "sequence": 10,
+          "step": "bind the approved review to the change",
+          "args": [
+            "review",
+            "bind-sdd",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j38-sdd-remediation-distinct-successor-3456199025/home/demo",
+            "--change",
+            "bench-change",
+            "--lineage",
+            "review-99a7020c5cfb3948",
+            "--expected-binding-revision",
+            ""
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1544,
+          "git_calls": 75
+        },
+        {
+          "sequence": 11,
+          "step": "recover the successor the gate names",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "post-apply",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j38-sdd-remediation-distinct-successor-3456199025/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 248,
+          "stdout_bytes": 2859,
+          "block": "in_band",
+          "git_calls": 18,
+          "message": "Error: review lifecycle gate denied: scope-changed: 1 path in this candidate that no terminal receipt covers: recover via gentle-ai review recover (requires: predecessor_lineage_id, expected_predecessor_revision, successor_lineage_id, dispo"
+        },
+        {
+          "sequence": 12,
+          "step": "recover the successor the gate names",
+          "args": [
+            "review",
+            "recover",
+            "--predecessor-lineage",
+            "review-99a7020c5cfb3948",
+            "--expected-predecessor-revision",
+            "sha256:fdd8a7dcdb7aa17317256b23e7205e4bed6a8ee718ea82ccea38a33b2467b672",
+            "--successor-lineage",
+            "review-sdd-successor",
+            "--disposition",
+            "scope_changed",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j38-sdd-remediation-distinct-successor-3456199025/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1144,
+          "git_calls": 50
+        },
+        {
+          "sequence": 13,
+          "step": "plain passing finish with a successor in the way",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j38-sdd-remediation-distinct-successor-3456199025/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 4530,
+          "git_calls": 5
+        },
+        {
+          "sequence": 14,
+          "step": "plain passing finish with a successor in the way",
+          "args": [
+            "sdd-attempt",
+            "finish",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j38-sdd-remediation-distinct-successor-3456199025/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "sha256:9523f3a17cfdecf201cc002125e6ad37a14200a585b589377bb4ddb72bd4543a",
+            "--request-id",
+            "bench-finish-blocked",
+            "--outcome",
+            "passed",
+            "--evidence-revision",
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--diagnosis",
+            "the benchmark drove this attempt to a terminal outcome",
+            "--harness-disposition",
+            "reused",
+            "--cleanup-evidence",
+            "workspace clean",
+            "--process-evidence",
+            "no stray processes"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 814,
+          "stdout_bytes": 0,
+          "block": "in_band",
+          "git_calls": 33,
+          "message": "Error: sdd-attempt finish: a bound passing SDD runtime attempt must also bind the approved review of its corrected candidate: the candidate changed after attempt 2 began, and lineage \"review-99a7020c5cfb3948\" does not currently hold the app"
+        },
+        {
+          "sequence": 15,
+          "step": "run the review transition the refusal routed to",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j38-sdd-remediation-distinct-successor-3456199025/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3243,
+          "git_calls": 40
+        },
+        {
+          "sequence": 16,
+          "step": "run the review transition the refusal routed to",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j38-sdd-remediation-distinct-successor-3456199025/home/demo",
+            "--lineage=review-sdd-successor",
+            "--captured-results=true"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 464,
+          "git_calls": 59
+        },
+        {
+          "sequence": 17,
+          "step": "the distinct-successor finish",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j38-sdd-remediation-distinct-successor-3456199025/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 4530,
+          "git_calls": 5
+        },
+        {
+          "sequence": 18,
+          "step": "the distinct-successor finish",
+          "args": [
+            "sdd-attempt",
+            "finish",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j38-sdd-remediation-distinct-successor-3456199025/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "sha256:9523f3a17cfdecf201cc002125e6ad37a14200a585b589377bb4ddb72bd4543a",
+            "--request-id",
+            "bench-finish-distinct-successor",
+            "--outcome",
+            "passed",
+            "--evidence-revision",
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--expected-binding-revision",
+            "sha256:e79f417c8ac258e79e310eb46b3ad15459a8c96e8ac4c3453b0eda0f96300b4c",
+            "--successor-lineage",
+            "review-sdd-successor",
+            "--remediates-evidence-revision",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--diagnosis",
+            "the benchmark drove this attempt to a terminal outcome",
+            "--harness-disposition",
+            "reused",
+            "--cleanup-evidence",
+            "workspace clean",
+            "--process-evidence",
+            "no stray processes"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 4690,
+          "git_calls": 177
+        }
+      ]
+    },
+    {
+      "id": "j39-sdd-remediation-stranded-successor",
+      "title": "The successor can never be finalized: what the router names, and what actually clears it",
+      "source": "shape 4 (the named continuation runs and changes nothing) + shape 2 (a clearable state read as terminal)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 1,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 22,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 2,
+          "out_of_band": 1,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 3,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 1125,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 586,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "begin, fail, begin again",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 412,
+          "git_calls": 5
+        },
+        {
+          "sequence": 2,
+          "step": "begin, fail, begin again",
+          "args": [
+            "sdd-attempt",
+            "begin",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "",
+            "--request-id",
+            "bench-begin-one",
+            "--work-unit",
+            "bench runtime objective",
+            "--evidence-goal",
+            "bench proves the corrected candidate",
+            "--max-attempts",
+            "6",
+            "--max-changed-lines",
+            "600"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1842,
+          "git_calls": 14
+        },
+        {
+          "sequence": 3,
+          "step": "begin, fail, begin again",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1842,
+          "git_calls": 5
+        },
+        {
+          "sequence": 4,
+          "step": "begin, fail, begin again",
+          "args": [
+            "sdd-attempt",
+            "finish",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "sha256:3193d7140bfca69c22b0d266980ea021006370423ba322666377769b8a32e227",
+            "--request-id",
+            "bench-finish-one",
+            "--outcome",
+            "failed",
+            "--evidence-revision",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--diagnosis",
+            "the benchmark drove this attempt to a terminal outcome",
+            "--harness-disposition",
+            "reused",
+            "--cleanup-evidence",
+            "workspace clean",
+            "--process-evidence",
+            "no stray processes"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1964,
+          "git_calls": 21
+        },
+        {
+          "sequence": 5,
+          "step": "begin, fail, begin again",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1964,
+          "git_calls": 5
+        },
+        {
+          "sequence": 6,
+          "step": "begin, fail, begin again",
+          "args": [
+            "sdd-attempt",
+            "begin",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "sha256:e9ed0c5b8a6167cb36b38db21e7a2302214500af225a8d074017bad5ff462bfa",
+            "--request-id",
+            "bench-begin-two",
+            "--work-unit",
+            "bench runtime objective",
+            "--evidence-goal",
+            "bench proves the corrected candidate",
+            "--max-attempts",
+            "6",
+            "--max-changed-lines",
+            "600"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 2853,
+          "git_calls": 15
+        },
+        {
+          "sequence": 7,
+          "step": "review start on the corrected candidate",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 8,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 469,
+          "git_calls": 36
+        },
+        {
+          "sequence": 9,
+          "step": "bind the approved review to the change",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1044,
+          "git_calls": 2
+        },
+        {
+          "sequence": 10,
+          "step": "bind the approved review to the change",
+          "args": [
+            "review",
+            "bind-sdd",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo",
+            "--change",
+            "bench-change",
+            "--lineage",
+            "review-99a7020c5cfb3948",
+            "--expected-binding-revision",
+            ""
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1544,
+          "git_calls": 75
+        },
+        {
+          "sequence": 11,
+          "step": "recover the successor the gate names",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "post-apply",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 248,
+          "stdout_bytes": 2859,
+          "block": "in_band",
+          "git_calls": 18,
+          "message": "Error: review lifecycle gate denied: scope-changed: 1 path in this candidate that no terminal receipt covers: recover via gentle-ai review recover (requires: predecessor_lineage_id, expected_predecessor_revision, successor_lineage_id, dispo"
+        },
+        {
+          "sequence": 12,
+          "step": "recover the successor the gate names",
+          "args": [
+            "review",
+            "recover",
+            "--predecessor-lineage",
+            "review-99a7020c5cfb3948",
+            "--expected-predecessor-revision",
+            "sha256:fdd8a7dcdb7aa17317256b23e7205e4bed6a8ee718ea82ccea38a33b2467b672",
+            "--successor-lineage",
+            "review-sdd-successor",
+            "--disposition",
+            "scope_changed",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1144,
+          "git_calls": 50
+        },
+        {
+          "sequence": 13,
+          "step": "plain passing finish with a stranded successor in the way",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 4530,
+          "git_calls": 5
+        },
+        {
+          "sequence": 14,
+          "step": "plain passing finish with a stranded successor in the way",
+          "args": [
+            "sdd-attempt",
+            "finish",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "sha256:9523f3a17cfdecf201cc002125e6ad37a14200a585b589377bb4ddb72bd4543a",
+            "--request-id",
+            "bench-finish-blocked",
+            "--outcome",
+            "passed",
+            "--evidence-revision",
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--diagnosis",
+            "the benchmark drove this attempt to a terminal outcome",
+            "--harness-disposition",
+            "reused",
+            "--cleanup-evidence",
+            "workspace clean",
+            "--process-evidence",
+            "no stray processes"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 813,
+          "stdout_bytes": 0,
+          "block": "in_band",
+          "git_calls": 33,
+          "message": "Error: sdd-attempt finish: a bound passing SDD runtime attempt must also bind the approved review of its corrected candidate: the candidate changed after attempt 2 began, and lineage \"review-99a7020c5cfb3948\" does not currently hold the app"
+        },
+        {
+          "sequence": 15,
+          "step": "run the review transition the refusal routed to",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 2965,
+          "git_calls": 14
+        },
+        {
+          "sequence": 16,
+          "step": "run the review transition the refusal routed to",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo",
+            "--contract=gentle-ai.review-integration/v1",
+            "--target=sha256:99a7020c5cfb39488c93045edeb4e06bfccec26dab17b78dfe8c76d55979173d",
+            "--projection=workspace"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 513,
+          "git_calls": 33
+        },
+        {
+          "sequence": 17,
+          "step": "the remediation finish the refusal then asks for",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 4530,
+          "git_calls": 5
+        },
+        {
+          "sequence": 18,
+          "step": "the remediation finish the refusal then asks for",
+          "args": [
+            "sdd-attempt",
+            "finish",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "sha256:9523f3a17cfdecf201cc002125e6ad37a14200a585b589377bb4ddb72bd4543a",
+            "--request-id",
+            "bench-finish-stranded",
+            "--outcome",
+            "passed",
+            "--evidence-revision",
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--expected-binding-revision",
+            "sha256:e79f417c8ac258e79e310eb46b3ad15459a8c96e8ac4c3453b0eda0f96300b4c",
+            "--successor-lineage",
+            "review-99a7020c5cfb3948",
+            "--remediates-evidence-revision",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--diagnosis",
+            "the benchmark drove this attempt to a terminal outcome",
+            "--harness-disposition",
+            "reused",
+            "--cleanup-evidence",
+            "workspace clean",
+            "--process-evidence",
+            "no stray processes"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 64,
+          "stdout_bytes": 0,
+          "block": "out_of_band",
+          "git_calls": 33,
+          "message": "Error: sdd-attempt finish: compact post-apply gate is not allow"
+        },
+        {
+          "sequence": 19,
+          "step": "abandon the stranded successor, which nothing named",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 2421,
+          "git_calls": 2
+        },
+        {
+          "sequence": 20,
+          "step": "abandon the stranded successor, which nothing named",
+          "args": [
+            "review",
+            "abandon",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo",
+            "--lineage",
+            "review-sdd-successor",
+            "--expected-revision",
+            "sha256:e02097952560df112d20553ca5f2c3bc6df65d039d1ed62eb74172bdbb886ac4",
+            "--reason",
+            "the stranded successor can never be finalized",
+            "--actor",
+            "bench",
+            "--maintainer-authorization",
+            "gentle-ai.review-abandon-authorization/v1\nlineage=review-sdd-successor\nrevision=sha256:e02097952560df112d20553ca5f2c3bc6df65d039d1ed62eb74172bdbb886ac4\nsnapshot_identity=sha256:0994802ff30c5fa2a3ab7627f2aae886d662195f358cd108db1250311f16a364\nactor=bench\nreason=the stranded successor can never be finalized"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1012,
+          "manual_token": true,
+          "git_calls": 7
+        },
+        {
+          "sequence": 21,
+          "step": "the self-successor finish, now that the strand is gone",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 4530,
+          "git_calls": 5
+        },
+        {
+          "sequence": 22,
+          "step": "the self-successor finish, now that the strand is gone",
+          "args": [
+            "sdd-attempt",
+            "finish",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j39-sdd-remediation-stranded-successor-463816538/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "sha256:9523f3a17cfdecf201cc002125e6ad37a14200a585b589377bb4ddb72bd4543a",
+            "--request-id",
+            "bench-finish-after-abandon",
+            "--outcome",
+            "passed",
+            "--evidence-revision",
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "--expected-binding-revision",
+            "sha256:e79f417c8ac258e79e310eb46b3ad15459a8c96e8ac4c3453b0eda0f96300b4c",
+            "--successor-lineage",
+            "review-99a7020c5cfb3948",
+            "--remediates-evidence-revision",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--diagnosis",
+            "the benchmark drove this attempt to a terminal outcome",
+            "--harness-disposition",
+            "reused",
+            "--cleanup-evidence",
+            "workspace clean",
+            "--process-evidence",
+            "no stray processes"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 4696,
+          "git_calls": 161
+        }
+      ]
+    },
+    {
+      "id": "j40-sdd-attempt-reset-after-drift",
+      "title": "Terminal attempt, drifted candidate: begin refuses and reset is the only way on",
+      "source": "shape 2 (a recoverable objective read as terminal) + shape 4",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 10,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 1,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 1,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 82,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 113,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "begin, then close the attempt as interrupted",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j40-sdd-attempt-reset-after-drift-3258206444/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 412,
+          "git_calls": 5
+        },
+        {
+          "sequence": 2,
+          "step": "begin, then close the attempt as interrupted",
+          "args": [
+            "sdd-attempt",
+            "begin",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j40-sdd-attempt-reset-after-drift-3258206444/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "",
+            "--request-id",
+            "bench-begin-one",
+            "--work-unit",
+            "bench runtime objective",
+            "--evidence-goal",
+            "bench proves the corrected candidate",
+            "--max-attempts",
+            "6",
+            "--max-changed-lines",
+            "600"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1842,
+          "git_calls": 14
+        },
+        {
+          "sequence": 3,
+          "step": "begin, then close the attempt as interrupted",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j40-sdd-attempt-reset-after-drift-3258206444/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1842,
+          "git_calls": 5
+        },
+        {
+          "sequence": 4,
+          "step": "begin, then close the attempt as interrupted",
+          "args": [
+            "sdd-attempt",
+            "finish",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j40-sdd-attempt-reset-after-drift-3258206444/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "sha256:3193d7140bfca69c22b0d266980ea021006370423ba322666377769b8a32e227",
+            "--request-id",
+            "bench-finish-one",
+            "--outcome",
+            "interrupted",
+            "--evidence-revision",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--diagnosis",
+            "the benchmark drove this attempt to a terminal outcome",
+            "--harness-disposition",
+            "reused",
+            "--cleanup-evidence",
+            "workspace clean",
+            "--process-evidence",
+            "no stray processes"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1969,
+          "git_calls": 21
+        },
+        {
+          "sequence": 5,
+          "step": "begin against the drifted candidate",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j40-sdd-attempt-reset-after-drift-3258206444/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1969,
+          "git_calls": 5
+        },
+        {
+          "sequence": 6,
+          "step": "begin against the drifted candidate",
+          "args": [
+            "sdd-attempt",
+            "begin",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j40-sdd-attempt-reset-after-drift-3258206444/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "sha256:438253ba7f53110546c852ff994d91d91997c0454d8dbac7eee5d2d45efb1d91",
+            "--request-id",
+            "bench-begin-drifted",
+            "--work-unit",
+            "bench runtime objective",
+            "--evidence-goal",
+            "bench proves the corrected candidate",
+            "--max-attempts",
+            "6",
+            "--max-changed-lines",
+            "600"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 82,
+          "stdout_bytes": 0,
+          "block": "out_of_band",
+          "git_calls": 15,
+          "message": "Error: sdd-attempt begin: SDD runtime objective changed without an explicit reset"
+        },
+        {
+          "sequence": 7,
+          "step": "reset the objective, then begin again",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j40-sdd-attempt-reset-after-drift-3258206444/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1969,
+          "git_calls": 5
+        },
+        {
+          "sequence": 8,
+          "step": "reset the objective, then begin again",
+          "args": [
+            "sdd-attempt",
+            "reset",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j40-sdd-attempt-reset-after-drift-3258206444/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "sha256:438253ba7f53110546c852ff994d91d91997c0454d8dbac7eee5d2d45efb1d91",
+            "--request-id",
+            "bench-reset-one",
+            "--reason",
+            "the candidate drifted after the interrupted attempt",
+            "--actor",
+            "bench"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1947,
+          "git_calls": 24
+        },
+        {
+          "sequence": 9,
+          "step": "reset the objective, then begin again",
+          "args": [
+            "sdd-attempt",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j40-sdd-attempt-reset-after-drift-3258206444/home/demo",
+            "--change",
+            "bench-change"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1947,
+          "git_calls": 5
+        },
+        {
+          "sequence": 10,
+          "step": "reset the objective, then begin again",
+          "args": [
+            "sdd-attempt",
+            "begin",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j40-sdd-attempt-reset-after-drift-3258206444/home/demo",
+            "--change",
+            "bench-change",
+            "--expected-revision",
+            "sha256:3deb551d8ceffa14e46aa8564893f2ab1ef82fdf2d2f45dc42a8d5b7b924331a",
+            "--request-id",
+            "bench-begin-three",
+            "--work-unit",
+            "bench runtime objective",
+            "--evidence-goal",
+            "bench proves the corrected candidate",
+            "--max-attempts",
+            "6",
+            "--max-changed-lines",
+            "600"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3304,
+          "git_calls": 14
+        }
+      ]
+    },
+    {
+      "id": "j41-kill-switch-versus-sdd-pre-verify",
+      "title": "Reviews off: SDD still routes to review before verification, and only re-enabling gets past it",
+      "source": "shape 5 (the kill switch and the pre-verify router disagreeing) + documented known-open limitation",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 5,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 1,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 1,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 174,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 71,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "mode disable",
+          "args": [
+            "review",
+            "mode",
+            "disable",
+            "--json",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j41-kill-switch-versus-sdd-pre-verify-2227029612/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 246,
+          "git_calls": 2
+        },
+        {
+          "sequence": 2,
+          "step": "sdd-status with reviews off",
+          "args": [
+            "sdd-status",
+            "bench-change",
+            "--json",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j41-kill-switch-versus-sdd-pre-verify-2227029612/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3553,
+          "git_calls": 12
+        },
+        {
+          "sequence": 3,
+          "step": "review start, which is what the status just named",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j41-kill-switch-versus-sdd-pre-verify-2227029612/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 174,
+          "stdout_bytes": 0,
+          "block": "in_band",
+          "git_calls": 21,
+          "message": "Error: review-driven development is disabled: start is rejected because the global mode source keeps it off; turn it back on with gentle-ai review mode enable --scope=global"
+        },
+        {
+          "sequence": 4,
+          "step": "mode enable, the only exit the refusal names",
+          "args": [
+            "review",
+            "mode",
+            "enable",
+            "--json",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j41-kill-switch-versus-sdd-pre-verify-2227029612/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 243,
+          "git_calls": 2
+        },
+        {
+          "sequence": 5,
+          "step": "review start with reviews back on",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j41-kill-switch-versus-sdd-pre-verify-2227029612/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 604,
+          "git_calls": 34
+        }
+      ]
+    },
+    {
+      "id": "j42-kill-switch-versus-sdd-archive",
+      "title": "Reviews off at the archive decision: the product defers and never fabricates an approval",
+      "source": "shape 5 (a shipped agent contract and the product disagreeing about the same fact)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 3,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 30,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "sdd-status with reviews on",
+          "args": [
+            "sdd-status",
+            "bench-change",
+            "--json",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j42-kill-switch-versus-sdd-archive-2010750795/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3796,
+          "git_calls": 14
+        },
+        {
+          "sequence": 2,
+          "step": "mode disable",
+          "args": [
+            "review",
+            "mode",
+            "disable",
+            "--json",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j42-kill-switch-versus-sdd-archive-2010750795/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 246,
+          "git_calls": 2
+        },
+        {
+          "sequence": 3,
+          "step": "sdd-status with reviews off",
+          "args": [
+            "sdd-status",
+            "bench-change",
+            "--json",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j42-kill-switch-versus-sdd-archive-2010750795/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3933,
+          "git_calls": 14
+        }
+      ]
+    },
+    {
+      "id": "j43-recovery-guard-rails-as-an-operator-meets-them",
+      "title": "Three correct refusals around healthy approved authority, and the one exit that works",
+      "source": "shape 4 (a correct refusal that names nothing runnable) + community deadlock report",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 10,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 1,
+          "out_of_band": 3,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 4,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 437,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 343,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j43-recovery-guard-rails-as-an-operator-meets-them-64471225/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 2,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j43-recovery-guard-rails-as-an-operator-meets-them-64471225/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 480,
+          "git_calls": 36
+        },
+        {
+          "sequence": 3,
+          "step": "walk into the recovery guard rails",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j43-recovery-guard-rails-as-an-operator-meets-them-64471225/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1077,
+          "git_calls": 2
+        },
+        {
+          "sequence": 4,
+          "step": "walk into the recovery guard rails",
+          "args": [
+            "review",
+            "recover",
+            "--predecessor-lineage",
+            "review-93b64e4b876f5478",
+            "--expected-predecessor-revision",
+            "sha256:cca33fa851d42f5eb530c5e58edaf3cfeb39962628ae4e953ea1439a6815a6d4",
+            "--successor-lineage",
+            "review-unwanted-successor",
+            "--disposition",
+            "scope_changed",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j43-recovery-guard-rails-as-an-operator-meets-them-64471225/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 50,
+          "stdout_bytes": 0,
+          "block": "out_of_band",
+          "git_calls": 35,
+          "message": "Error: approved predecessor scope has not changed"
+        },
+        {
+          "sequence": 5,
+          "step": "walk into the recovery guard rails",
+          "args": [
+            "review",
+            "recover",
+            "--predecessor-lineage",
+            "review-93b64e4b876f5478",
+            "--expected-predecessor-revision",
+            "sha256:cca33fa851d42f5eb530c5e58edaf3cfeb39962628ae4e953ea1439a6815a6d4",
+            "--successor-lineage",
+            "review-unwanted-successor",
+            "--disposition",
+            "invalidated",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j43-recovery-guard-rails-as-an-operator-meets-them-64471225/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 52,
+          "stdout_bytes": 0,
+          "block": "out_of_band",
+          "git_calls": 35,
+          "message": "Error: recovery requires an invalidated predecessor"
+        },
+        {
+          "sequence": 6,
+          "step": "walk into the recovery guard rails",
+          "args": [
+            "review",
+            "invalidate",
+            "--lineage",
+            "review-93b64e4b876f5478",
+            "--expected-revision",
+            "sha256:cca33fa851d42f5eb530c5e58edaf3cfeb39962628ae4e953ea1439a6815a6d4",
+            "--gate",
+            "post-apply",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j43-recovery-guard-rails-as-an-operator-meets-them-64471225/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 87,
+          "stdout_bytes": 0,
+          "block": "out_of_band",
+          "git_calls": 38,
+          "message": "Error: healthy approved authority cannot be invalidated: native gate result is \"allow\""
+        },
+        {
+          "sequence": 7,
+          "step": "recover, following exactly what the gate then names",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j43-recovery-guard-rails-as-an-operator-meets-them-64471225/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 248,
+          "stdout_bytes": 2859,
+          "block": "in_band",
+          "git_calls": 22,
+          "message": "Error: review lifecycle gate denied: scope-changed: 1 path in this candidate that no terminal receipt covers: recover via gentle-ai review recover (requires: predecessor_lineage_id, expected_predecessor_revision, successor_lineage_id, dispo"
+        },
+        {
+          "sequence": 8,
+          "step": "recover, following exactly what the gate then names",
+          "args": [
+            "review",
+            "recover",
+            "--predecessor-lineage",
+            "review-93b64e4b876f5478",
+            "--expected-predecessor-revision",
+            "sha256:cca33fa851d42f5eb530c5e58edaf3cfeb39962628ae4e953ea1439a6815a6d4",
+            "--successor-lineage",
+            "review-guardrail-successor",
+            "--disposition",
+            "scope_changed",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j43-recovery-guard-rails-as-an-operator-meets-them-64471225/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1150,
+          "git_calls": 50
+        },
+        {
+          "sequence": 9,
+          "step": "recover, following exactly what the gate then names",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j43-recovery-guard-rails-as-an-operator-meets-them-64471225/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 486,
+          "git_calls": 37
+        },
+        {
+          "sequence": 10,
+          "step": "recover, following exactly what the gate then names",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j43-recovery-guard-rails-as-an-operator-meets-them-64471225/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1360,
+          "git_calls": 46
         }
       ]
     }
@@ -5615,23 +7631,23 @@
       "derivation": "measured"
     },
     "manual_tokens": {
-      "value": 2,
+      "value": 3,
       "derivation": "measured"
     },
     "commands_to_completion": {
-      "value": 218,
+      "value": 300,
       "derivation": "measured"
     },
     "blocks": {
       "self_recovered": 0,
-      "in_band": 15,
-      "out_of_band": 3,
+      "in_band": 24,
+      "out_of_band": 5,
       "by_design": 2,
       "dead_end": 0
     },
     "blocks_derivation": "measured",
     "recovery_round_trips": {
-      "value": 11,
+      "value": 23,
       "derivation": "measured"
     },
     "model_runs": {
@@ -5639,15 +7655,15 @@
       "derivation": "measured"
     },
     "human_surface_bytes": {
-      "value": 7965,
+      "value": 13377,
       "derivation": "measured"
     },
     "git_subprocesses": {
-      "value": 7025,
+      "value": 9262,
       "derivation": "measured"
     }
   },
-  "journeys_counted": 36,
+  "journeys_counted": 43,
   "journeys_unsupported": 0,
   "journeys_failed": 0,
   "notes": [

@@ -207,6 +207,15 @@ alone: `flag provided but not defined`, `unknown … command "…"`,
 ordinary state failures, and counting a missing surface as a state failure
 would make an old binary look capable.
 
+**When `--help` is not a help surface.** The `sdd-attempt` operations parse
+their own flags and reject `--help` with `flag provided but not defined:
+-help` — the same words a genuinely missing flag produces. The default probe
+would therefore report a build that fully supports the verb as lacking it. Such
+a capability declares `Probe` instead: a complete argv that carries the flag
+under test and can only fail on *state*. A build with the flag answers
+`sdd-attempt requires --cwd`; a build without it answers `flag provided but not
+defined`. Probe invocations are uncounted like every other probe.
+
 ## Comparing two binaries
 
 `compare` computes the dimension totals over the **comparable subset**:
@@ -314,11 +323,14 @@ invents a metric is worse than one that admits a gap.
 
 10. **The report is not byte-identical between two runs, though every count
     except one is.** Each journey runs under `os.MkdirTemp`, whose random
-    suffix varies in length, and two journeys quote that path back in their
-    block message (`j17-bare-repository`, `j31-nonsense-mode-value`). So the
-    quoted messages differ run to run and `human_surface_bytes` wobbles by a
-    byte or two; every block classification, every count and
-    `git_subprocesses` are stable. This is why the "byte-identical" claim under
+    suffix varies in length, and several journeys quote that path back in a
+    block message — `j14`, `j17`, `j31`, `j33`, `j34`, `j37`, `j38` and `j39`
+    observed so far, and any journey that drives a refusal naming a repository
+    path can join them. Which of them actually moves between a given pair of
+    runs is chance: the suffix is 9 or 10 digits. So the quoted messages differ
+    run to run and
+    `human_surface_bytes` wobbles by one byte per affected journey; every block
+    classification, every count and `git_subprocesses` are stable. This is why the "byte-identical" claim under
     *Measured* below is scoped to the 14-journey corpus it describes — no
     journey in that corpus echoed a sandbox path. Making it hold again means
     choosing between a fixed-width random suffix (stabilises the numbers, not
@@ -351,7 +363,7 @@ completed; nothing was unsupported. Re-running produces byte-identical numbers,
 
 Those numbers are the **14-journey** corpus against the binary named above,
 kept as-is because they belong to that named build. The corpus has since grown
-to 36 journeys; re-run `run` against your own binary rather than reading the
+to 43 journeys; re-run `run` against your own binary rather than reading the
 block above as current totals. The row labels moved too: `by_design` did not
 exist when this was recorded and is now printed as `4d`, next to the number it
 carves out of, with `dead_end` at `4e`.
@@ -391,7 +403,8 @@ appending to that slice.
 Journeys 1 to 14 came from the community testing guide and the failure paths it
 collected. Journeys 15 to 36 are the edge cases those flows never reached. Each
 one is tied to one of the five shapes a night of real defects clustered into,
-and the shape is named in the journey's `Source`:
+and the shape is named in the journey's `Source`. Journeys 37 to 43 in
+`journeys_sdd.go` reuse the same vocabulary:
 
 | shape | what it is |
 |---|---|
@@ -429,6 +442,41 @@ number look covered.
 | `j35-correction-budget-exactly-zero` | forecasting a correction against a budget of 0 | 3 + 4 |
 | `j36-contract-right-name-wrong-version` | `--contract` with the right name and a version this build lacks | 2 + 4 |
 
+### The SDD remediation successor cycle (`journeys_sdd.go`)
+
+Journeys 37 to 43 close the corpus's largest blind spot. A community tester
+found a hard deadlock on this path that no internal audit had caught, and two
+of its blocks were fixed by hand with nothing in a loop pinning either one. Up
+to journey 36 the benchmark reported zero `out_of_band` blocks and zero dead
+ends for a surface it had simply never driven.
+
+| ID | Flow | Shape |
+|---|---|---|
+| `j37-sdd-remediation-self-successor` | a bound passing attempt over a corrected candidate is refused, and the refusal names the finish that IS accepted | 4 |
+| `j38-sdd-remediation-distinct-successor` | with a real recovery successor in the way, the same refusal must route to review and must NOT name a finish | 3 + 4 |
+| `j39-sdd-remediation-stranded-successor` | a successor that can never be finalized: the named route runs and changes nothing | 4 + 2 |
+| `j40-sdd-attempt-reset-after-drift` | terminal attempt plus candidate drift: begin refuses, reset is the only way on | 2 + 4 |
+| `j41-kill-switch-versus-sdd-pre-verify` | reviews off, and SDD still routes to a review the operator may not start | 5 |
+| `j42-kill-switch-versus-sdd-archive` | reviews off at the archive decision: the product defers and never fabricates an approval | 5 |
+| `j43-recovery-guard-rails-as-an-operator-meets-them` | three correct refusals around healthy approved authority, and the exit that is not a command | 4 |
+
+Two of them measure something no test could: `j41` and `j42` each take one item
+off the documented known-open list and let the number say whether it is still
+open. `j42` is deliberately a journey with **no blocks at all** — the product
+half of that limitation is closed, and the pin is an assertion on the envelope
+rather than a block count, so a regression fails the journey loudly instead of
+passing quietly.
+
+The state these journeys need cannot be built with git alone: an attempt
+ordinal, a populated review binding and the leaf/non-leaf topology of a lineage
+all live inside the product. Every fixture and composite here therefore reads
+them back out of the product (`Sandbox.readBack`, uncounted, `GIT_TRACE`
+blanked so its git calls are never charged to the next counted invocation) and
+fails the journey when the state is not what it claims — including the two
+premises that matter most: that the plain passing finish really does block, and
+that the topology really is the leaf or the non-leaf shape the journey says it
+is.
+
 **Every fixture proves its own edge case before the journey trusts the result.**
 A fixture that sets its edge case up wrongly and then passes is the failure mode
 these journeys exist to avoid, so each one reads the state back out of git and
@@ -448,7 +496,9 @@ classify.go    Observation, IsBlock, IsUnsupported, Classify   <- the contract
 metrics.go     Dimension, BlockCounts, accumulator, aggregate
 runner.go      Sandbox, capability probe, journey engine
 journeys.go    the corpus, as data — guide flows and their failure paths
-journeys_edge.go  the edge-case half of the corpus, with self-proving fixtures
+journeys_edge.go  the edge-case part of the corpus, with self-proving fixtures
+journeys_sdd.go   the SDD remediation successor cycle, the kill switch against
+                  SDD, and the recovery guard rails
 record.go      the recording shim and session log
 analyze.go     observed-mode metrics, same classifier
 report.go      plain-text tables and the comparison JSON

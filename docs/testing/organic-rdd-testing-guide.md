@@ -140,7 +140,7 @@ You need the remote from Flow 6.
 6. [ ] Turn reviews on and repeat the gate → **Expected**: `result: "scope-changed"` naming a **runnable** recovery, not just a reason:
 
 ```
-review lifecycle gate denied: scope-changed: recover via review.recover
+review lifecycle gate denied: scope-changed: recover via gentle-ai review recover
   --base-ref <commit> --committed-only (requires: predecessor_lineage_id, ...)
 ```
 
@@ -150,7 +150,7 @@ No corruption either.
 
 Step 7 is the one that matters most in this whole guide. Until this refresh the message named a recovery that, followed literally, landed you right back at the same denial. The tests proved the message was **emitted** and never that following it **worked**. If you follow it and stay blocked, that is the most valuable report you can send us.
 
-8. [ ] One case still ends without a one-step recovery **on purpose**: when the committed content is byte-identical to what was approved and only the commit topology changed. There the message stays at "requires explicit maintainer action" rather than naming a command that would not resolve it. That is intended, not a defect.
+8. [ ] One case still ends without a one-step recovery **on purpose**: when the committed content is byte-identical to what was approved and only the commit topology changed. No command resolves it, so the message names none — it states the exact reason instead (`reviewed delivery is not exactly one commit from its reviewed base`). The same is true once the reviewed commit is fully published: the message names the reason (`reviewed delivery base commit is missing or ambiguous in publication range`), not a maintainer. That is intended, not a defect.
 
 ### Flow 10: First commit in a repo with no history
 
@@ -407,9 +407,11 @@ Windows never auto-updated: it detected a new version and handed you a command t
 linked worktree, a detached HEAD, a bare repository, a path full of spaces and
 kanji, a submodule, a symlink, a mode-only change, a merge or rebase or
 cherry-pick in progress, the kill switch flipped mid-review, a recovery of a
-recovery — now runs on every loop iteration on Linux. These seven cannot be
-built in a temp directory on a normal machine, so they are the ones only you can
-answer.
+recovery, and now the whole SDD remediation successor cycle — now runs on every
+loop iteration on Linux. These seven cannot be built in a temp directory on a
+normal machine, so they are the ones only you can answer. Flow 34 below is a
+different kind of gap: reachable everywhere, but written in a document the
+harness cannot execute.
 
 **Each flow names the platform or condition it needs.** If you cannot reach it,
 mark it **N/A** and move on. Do not guess and do not simulate it with a mock: a
@@ -659,6 +661,36 @@ sudo date -s "-1 hour"        # or restore a VM snapshot taken an hour ago
    still a rule about the clock.
 7. [ ] **Report the result even when everything passes**, with how you moved the
    clock and by how much. A confirmed absence is the whole point of this flow.
+
+---
+
+## Flow 34: a shipped contract the harness cannot execute
+
+**Why this exists.** The friction harness drives the binary. It cannot drive a
+document — and one of the two documented known-open limitations lives entirely
+in one. `j42-kill-switch-versus-sdd-archive` proves the **product** half is
+closed: with reviews off, `gentle-ai sdd-status <change> --json` reports the
+archive dependency `ready` and a `reviewGate` carrying
+`delivery: "disabled/unmanaged"` whose `result` is never `allow`, because
+declining to manage is not approval. What no journey can check is what an
+**agent** does when it reads the shipped `sdd-archive` skill, whose own contract
+requires structured status with `reviewGate.result: allow` — a value a disabled
+run is right never to produce.
+
+1. [ ] `gentle-ai install` (or `gentle-ai sync`) into a throwaway HOME, then
+   read the installed `sdd-archive` skill and the shared review-ledger contract
+   → **Expected today**: both still require `reviewGate.result: allow`.
+2. [ ] In a repository with a complete, verified SDD change, run
+   `gentle-ai review mode disable` and then
+   `gentle-ai sdd-status <change> --json` → **Expected**: `archive` is not
+   blocked, `reviewGate.delivery` is `disabled/unmanaged`, `reviewGate.result`
+   is **not** `allow`.
+3. [ ] Ask your agent to archive that change → **Report what it does.** An agent
+   following the skill literally stops here, on a value the product is correct
+   to withhold, which is a rule blocking where the product no longer does.
+4. [ ] **Report the result even if the agent archives anyway**, and say which
+   sentence it followed. An agent that ignores its own contract is a different
+   finding, not a passing one.
 
 ---
 

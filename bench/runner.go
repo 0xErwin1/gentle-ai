@@ -177,11 +177,66 @@ func (s *Sandbox) invoke(args []string) Observation {
 	}
 }
 
+// readBack runs the product for a fixture proof, a capability probe or an
+// assertion. It is benchmark instrumentation, not operator work, so it is never
+// counted — and it runs with GIT_TRACE blanked, exactly like Sandbox.git, so the
+// git subprocesses it spawns are never charged to the next counted invocation.
+//
+// It exists because an SDD fixture cannot prove its own state from git alone:
+// the attempt ordinal, the review binding and the leaf/non-leaf topology live
+// inside the product, and a fixture that assumed them instead of reading them
+// back is the failure this corpus refuses to ship.
+func (s *Sandbox) readBack(args ...string) Observation {
+	cmd := exec.Command(s.Binary, args...)
+	cmd.Dir = s.Repo
+	env := s.env()
+	for index, entry := range env {
+		if strings.HasPrefix(entry, "GIT_TRACE=") {
+			env[index] = "GIT_TRACE="
+		}
+	}
+	cmd.Env = env
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.Stdin = strings.NewReader("")
+	err := cmd.Run()
+	exitCode := 0
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		exitCode = exitErr.ExitCode()
+	} else if err != nil {
+		exitCode = -1
+		stderr.WriteString("\nbench: " + err.Error())
+	}
+	return Observation{
+		Args:           args,
+		ExitCode:       exitCode,
+		Stdout:         stdout.String(),
+		Stderr:         stderr.String(),
+		StdoutCaptured: true,
+		StderrCaptured: true,
+	}
+}
+
 // Capability is the CLI surface a step needs. It is probed before the step
 // runs so a build without that surface records `unsupported` and never a pass.
+//
+// The default probe is `<verb> --help`, read for the flag names. That works for
+// every verb whose `--help` really is a help surface. Some are not: the
+// `sdd-attempt` operations parse `--help` as an ordinary flag and reject it with
+// `flag provided but not defined: -help`, which the unsupported patterns match —
+// so the default probe would report a build that fully supports the verb as
+// lacking it. Probe exists for exactly that case.
 type Capability struct {
 	Verb  []string
 	Flags []string
+	// Probe is a complete argv run INSTEAD of `<verb> --help`. The surface is
+	// supported when the binary does not reject the SHAPE of that argv. Pick an
+	// argv that names the flags under test and fails on state rather than on
+	// shape, so a build that has them answers with a state error and a build
+	// that does not answers `flag provided but not defined`.
+	Probe []string
 }
 
 type capabilityProbe struct {
@@ -200,6 +255,9 @@ func (p *capabilityProbe) supported(capability *Capability) (bool, string) {
 	if capability == nil {
 		return true, ""
 	}
+	if len(capability.Probe) != 0 {
+		return p.probed(capability.Probe)
+	}
 	key := strings.Join(capability.Verb, " ")
 	help, cached := p.cache[key]
 	if !cached {
@@ -217,6 +275,25 @@ func (p *capabilityProbe) supported(capability *Capability) (bool, string) {
 		if !strings.Contains(help, flag) {
 			return false, "flag not present: " + key + " " + flag
 		}
+	}
+	return true, ""
+}
+
+// probed answers a Capability that carries its own argv. The single question is
+// whether the binary rejected the SHAPE of the command; anything else — a
+// missing --cwd, a repository in the wrong state — means the surface is there.
+func (p *capabilityProbe) probed(argv []string) (bool, string) {
+	key := "\x01" + strings.Join(argv, " ")
+	answer, cached := p.cache[key]
+	if !cached {
+		answer = ""
+		if IsUnsupported(p.sandbox.readBack(argv...)) {
+			answer = "\x00unsupported"
+		}
+		p.cache[key] = answer
+	}
+	if answer == "\x00unsupported" {
+		return false, "surface not present: " + strings.Join(argv, " ")
 	}
 	return true, ""
 }

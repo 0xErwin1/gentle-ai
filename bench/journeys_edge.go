@@ -782,10 +782,22 @@ func finalizeAsFailedVerification(r *journeyRun) error {
 type authorityHead struct {
 	Status  string `json:"status"`
 	Entries []struct {
-		LineageID string `json:"lineage_id"`
-		State     string `json:"state"`
-		Revision  string `json:"revision"`
+		LineageID        string `json:"lineage_id"`
+		State            string `json:"state"`
+		Revision         string `json:"revision"`
+		SnapshotIdentity string `json:"snapshot_identity"`
 	} `json:"entries"`
+}
+
+// entry finds one lineage by name. Journeys that hold more than one authority
+// must select by identity, never by position.
+func (h authorityHead) entry(lineage string) (string, string, bool) {
+	for _, candidate := range h.Entries {
+		if candidate.LineageID == lineage {
+			return candidate.Revision, candidate.SnapshotIdentity, true
+		}
+	}
+	return "", "", false
 }
 
 // recoverEscalated tries the recovery twice on purpose. The first attempt is
