@@ -1981,6 +1981,13 @@ func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 		"expected-binding-revision",
 		"successor-lineage",
 		"remediates-evidence-revision",
+		// Naming the trio without naming where its values come from, or
+		// without naming the bound lineage as an acceptable successor, is what
+		// routed the first reporter of this block (decode2, PR #1801) into
+		// `review recover` — a door that is correctly refused for an unchanged
+		// approved scope, and therefore the first step of a cycle with no exit.
+		"binding_revision`, `binding.lineage`, and `evidence_revision",
+		"the lineage the binding already names is itself the successor",
 	}
 	for _, path := range paths {
 		content := MustRead(path)

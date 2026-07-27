@@ -315,6 +315,25 @@ func validateRuntimeRemediationSelfSuccessor(ctx context.Context, repo string, c
 	return errors.New("approved SDD self-remediation authority is not the current compact recovery leaf")
 }
 
+// runtimeSelfSuccessorAvailable answers exactly one question: would the
+// self-successor finish be ACCEPTED right now? It runs the same preparation
+// and the same validator the finish itself would run, against the same
+// candidate tree the finish already charged, so a refusal that consults it
+// can only name the self-successor exit when running that exit works.
+//
+// It is deliberately read-only and fail-closed: any preparation error, any
+// gate that is not allow, an approved authority that binds different bytes, or
+// a lineage that is no longer the compact recovery leaf all answer false, and
+// the caller then names the review router instead of a command that would be
+// refused one layer deeper.
+func runtimeSelfSuccessorAvailable(ctx context.Context, repo, workspace, change string, binding ReviewBinding, candidateTree string) bool {
+	prepared, err := prepareApprovedRuntimeSuccessorBinding(ctx, repo, workspace, change, binding.Lineage)
+	if err != nil || prepared.Lineage != binding.Lineage || prepared.GateContext.CandidateTree != candidateTree {
+		return false
+	}
+	return validateRuntimeRemediationSelfSuccessor(ctx, repo, binding, prepared) == nil
+}
+
 // loadRuntimeBoundCompactArtifacts validates immutable authority and receipt
 // identity without evaluating the live post-apply gate. The old binding is
 // expected to be live-stale after remediation; its exact approved bytes remain

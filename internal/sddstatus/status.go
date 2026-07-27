@@ -609,9 +609,10 @@ func applyNativeRuntimeRouting(status *Status) {
 		)
 	case runtimeStatus.ActiveAttempt != nil:
 		reason = fmt.Sprintf(
-			"native SDD runtime attempt %d is active at revision %s; do not launch another continuation and finish the charged attempt with `gentle-ai sdd-attempt finish --cwd %q --change %q --expected-revision %q` plus the required outcome, evidence, diagnosis, harness, cleanup, and process fields",
+			"native SDD runtime attempt %d is active at revision %s; do not launch another continuation and finish the charged attempt with `gentle-ai sdd-attempt finish --cwd %q --change %q --expected-revision %q` plus the required outcome, evidence, diagnosis, harness, cleanup, and process fields%s",
 			runtimeStatus.ActiveAttempt.Ordinal, runtimeStatus.Revision,
 			status.ActionContext.WorkspaceRoot, change, runtimeStatus.Revision,
+			nativeRuntimeRemediationFlagAdvice(runtimeStatus),
 		)
 	default:
 		return
@@ -623,6 +624,32 @@ func applyNativeRuntimeRouting(status *Status) {
 	if !contains(status.BlockedReasons, reason) {
 		status.BlockedReasons = append(status.BlockedReasons, reason)
 	}
+}
+
+// nativeRuntimeRemediationFlagAdvice completes the flag set the active-attempt
+// blocker advertises. The six ordinary finish fields close an UNBOUND attempt;
+// a bound attempt whose candidate moved during the attempt is refused until it
+// also carries the remediation trio, so advertising the short set routes the
+// caller straight into that refusal. The values are the ones the ledger
+// already holds, and the unobvious part — that the bound lineage is itself an
+// acceptable --successor-lineage — is stated rather than left to be guessed.
+//
+// It stays silent for an unbound attempt: the trio does not apply there, and a
+// flag set that names an inapplicable route is its own kind of dead end.
+func nativeRuntimeRemediationFlagAdvice(runtimeStatus *RuntimeStatus) string {
+	if runtimeStatus == nil || runtimeStatus.Binding == nil {
+		return ""
+	}
+	// Only the caller knows which evidence a correction repairs when the
+	// objective has not recorded a failed revision yet.
+	remediates := runtimeStatus.EvidenceRevision
+	if remediates == "" {
+		remediates = "<repaired-evidence-sha256>"
+	}
+	return fmt.Sprintf(
+		"; a bound attempt that changed the candidate cannot close as passed on those alone and must also pass --expected-binding-revision %q --successor-lineage %q --remediates-evidence-revision %s, where the bound lineage is itself the successor once the corrected candidate is approved on it",
+		runtimeStatus.Binding.Revision, runtimeStatus.Binding.Lineage, runtimeRemediatesArgument(remediates),
+	)
 }
 
 func authorityOnlyFailedReport(report string) bool {

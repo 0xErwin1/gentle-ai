@@ -48,20 +48,34 @@ const (
 	// by the CLI for missing required flags (internal/cli/sdd_attempt.go); a
 	// continuation that fails when pasted is worse than none.
 	runtimeLedgerStatusPointer = "run `gentle-ai sdd-attempt status --cwd <repo> --change <change>` — its next_action names the continuation"
+
+	// runtimeReviewIntegrationContract mirrors cli.ReviewIntegrationContractV1,
+	// which owns the value. internal/cli imports this package, so the constant
+	// cannot be imported back; it is duplicated only to keep a refusal from
+	// naming a `review status` invocation the CLI would reject for a missing
+	// contract selector.
+	runtimeReviewIntegrationContract = "gentle-ai.review-integration/v1"
 )
 
 var (
-	ErrRuntimeRevisionConflict             = errors.New("SDD runtime ledger revision conflict")
-	ErrRuntimeConcurrentUpdate             = errors.New("SDD runtime ledger is concurrently updated")
-	ErrRuntimeRequestConflict              = errors.New("SDD runtime request identifier was reused with different inputs")
-	ErrRuntimeBudgetExhausted              = errors.New("SDD runtime objective budget is exhausted; " + runtimeLedgerStatusPointer)
-	ErrRuntimeAttemptActive                = errors.New("SDD runtime objective already has an active attempt; " + runtimeLedgerStatusPointer)
-	ErrRuntimeNoActiveAttempt              = errors.New("SDD runtime objective has no active attempt; " + runtimeLedgerStatusPointer)
-	ErrRuntimeObjectiveChange              = errors.New("SDD runtime objective changed without an explicit reset")
-	ErrRuntimeObjectiveDone                = errors.New("SDD runtime objective is complete; " + runtimeLedgerStatusPointer)
-	ErrRuntimeNoObjective                  = errors.New("SDD runtime ledger has no objective to reset; " + runtimeLedgerStatusPointer)
-	ErrRuntimeResetNotAllowed              = errors.New("SDD runtime objective reset requires decision-required or complete state")
-	ErrRuntimeRemediationSuccessorRequired = errors.New("a bound passing SDD runtime attempt requires an atomic approved recovery successor")
+	ErrRuntimeRevisionConflict = errors.New("SDD runtime ledger revision conflict")
+	ErrRuntimeConcurrentUpdate = errors.New("SDD runtime ledger is concurrently updated")
+	ErrRuntimeRequestConflict  = errors.New("SDD runtime request identifier was reused with different inputs")
+	ErrRuntimeBudgetExhausted  = errors.New("SDD runtime objective budget is exhausted; " + runtimeLedgerStatusPointer)
+	ErrRuntimeAttemptActive    = errors.New("SDD runtime objective already has an active attempt; " + runtimeLedgerStatusPointer)
+	ErrRuntimeNoActiveAttempt  = errors.New("SDD runtime objective has no active attempt; " + runtimeLedgerStatusPointer)
+	ErrRuntimeObjectiveChange  = errors.New("SDD runtime objective changed without an explicit reset")
+	ErrRuntimeObjectiveDone    = errors.New("SDD runtime objective is complete; " + runtimeLedgerStatusPointer)
+	ErrRuntimeNoObjective      = errors.New("SDD runtime ledger has no objective to reset; " + runtimeLedgerStatusPointer)
+	ErrRuntimeResetNotAllowed  = errors.New("SDD runtime objective reset requires decision-required or complete state")
+	// ErrRuntimeRemediationSuccessorRequired never travels alone. Every return
+	// site wraps it with runtimeRemediationExitRefusal, which names the exact
+	// runnable continuation for the state the caller is actually in. The
+	// sentinel text deliberately avoids the word "recovery": it sent the first
+	// reporter of this block to `review recover`, which refuses a same-lineage
+	// successor and refuses an unchanged approved scope, and is therefore the
+	// first step of a cycle with no exit.
+	ErrRuntimeRemediationSuccessorRequired = errors.New("a bound passing SDD runtime attempt must also bind the approved review of its corrected candidate")
 	ErrBindingRevisionConflict             = errors.New("SDD review binding revision conflict")
 
 	runtimeRequestIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
@@ -481,7 +495,7 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		// next enforcement point rediscovers that on its own.
 		if request.Outcome == AttemptPassed && currentBinding != nil && !remediation && !store.ReviewDisabled {
 			if snapshot.CandidateTree != active.BeginCandidateTree {
-				return runtimeRecord{}, ErrRuntimeRemediationSuccessorRequired
+				return runtimeRecord{}, store.runtimeRemediationExitRefusal(ctx, status, *currentBinding, active.Ordinal, snapshot.CandidateTree)
 			}
 			if currentBinding.Change != store.Change {
 				return runtimeRecord{}, errors.New("bound SDD review change does not match the runtime objective")
@@ -548,6 +562,61 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		}
 		return runtimeRecord{Operation: runtimeOperationFinish, Finish: event}, nil
 	})
+}
+
+// runtimeRemediationExitRefusal turns the bound-passing-finish demand into a
+// refusal that names the continuation that actually clears it.
+//
+// The demand itself is correct: the candidate moved after the attempt began,
+// so closing the attempt as passed while keeping a binding approved for the
+// OLD bytes would launder unreviewed content into a passing runtime record.
+// What was missing is the exit. Since b37aa8e4 the bound lineage itself is a
+// legal --successor-lineage once the corrected candidate is approved on it, so
+// the ordinary way out is one re-run of this same finish with the remediation
+// trio — no `review recover`, no invalidation of healthy approved authority,
+// and no distinct recovery lineage that could never legally exist.
+//
+// The two states are distinguished rather than merged, because a message may
+// name a command only when running it resolves the block. When the bound
+// lineage does not currently hold the approved review of this candidate — it
+// was superseded by a real recovery successor, the live post-apply gate no
+// longer allows, or the approved bytes are not these bytes — the trio naming
+// that lineage is refused further in, so the refusal names the review router
+// instead and says which lineage the trio must eventually name.
+func (store RuntimeStore) runtimeRemediationExitRefusal(
+	ctx context.Context, status RuntimeStatus, binding ReviewBinding, ordinal int, candidateTree string,
+) error {
+	// The sentinel stays in the %w position in both branches: callers that
+	// route on errors.Is must keep working no matter which exit is named.
+	const provenance = "`sdd-attempt status` publishes those three as binding_revision, binding.lineage, and evidence_revision"
+	if !runtimeSelfSuccessorAvailable(ctx, store.Repo, store.Workspace, store.Change, binding, candidateTree) {
+		return fmt.Errorf(
+			"%w: the candidate changed after attempt %d began, and lineage %q does not currently hold the approved review of this candidate, so it cannot be its own successor: get this candidate approved first with `gentle-ai review status --cwd %q --contract %s --next-transition`, which names the next review action, then re-run this finish adding --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision for the lineage that then holds it; %s",
+			ErrRuntimeRemediationSuccessorRequired, ordinal, binding.Lineage,
+			store.Workspace, runtimeReviewIntegrationContract, provenance,
+		)
+	}
+	// An objective with no recorded failed evidence still needs a repaired
+	// revision, and only the caller knows which one that is.
+	remediates := status.EvidenceRevision
+	if remediates == "" {
+		remediates = "<repaired-evidence-sha256>"
+	}
+	return fmt.Errorf(
+		"%w: the candidate changed after attempt %d began, and lineage %q already holds the approved review of the corrected candidate, so that same lineage IS the successor — re-run this finish with the remediation trio: `gentle-ai sdd-attempt finish --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --outcome passed --evidence-revision \"<corrected-evidence-sha256>\" --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<cleanup-evidence>\" --process-evidence \"<process-evidence>\" --expected-binding-revision %q --successor-lineage %q --remediates-evidence-revision %s`; %s, and --evidence-revision must differ from --remediates-evidence-revision",
+		ErrRuntimeRemediationSuccessorRequired, ordinal, binding.Lineage,
+		store.Workspace, store.Change, status.Revision,
+		binding.Revision, binding.Lineage, runtimeRemediatesArgument(remediates), provenance,
+	)
+}
+
+// runtimeRemediatesArgument quotes a concrete revision and leaves an operator
+// placeholder bare, so the printed command tokenizes the same way either way.
+func runtimeRemediatesArgument(remediates string) string {
+	if strings.HasPrefix(remediates, "<") {
+		return remediates
+	}
+	return fmt.Sprintf("%q", remediates)
 }
 
 // Reset closes a terminal objective scope without deleting its immutable
