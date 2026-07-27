@@ -174,6 +174,35 @@ func commandRun(args []string) int {
 	}
 	writeRunReport(os.Stdout, results)
 	fmt.Fprintf(os.Stderr, "\nwrote %s\n", *out)
+	if exit := runExitCode(results); exit != 0 {
+		fmt.Fprintf(os.Stderr,
+			"%d journey(s) FAILED: the run measured nothing for those rows, so it exits nonzero rather than letting a gate read it as success. The results file above still holds everything that was observed.\n",
+			results.JourneysFailed)
+		return exit
+	}
+	return 0
+}
+
+// runExitCode is the fail-closed rule for `run`, pinned because community
+// issue #1883 found the opposite: a corpus run with failed journeys exited 0,
+// and a CI gate reading that exit saw success in a run that measured nothing
+// for the failed rows.
+//
+// `failed` fails the run: a failed journey is the harness unable to build or
+// prove its fixture, or an assertion (a secret echoed, a state that stopped
+// being what it claims) firing — either way the row's numbers do not exist and
+// an exit 0 would launder that into "measured clean".
+//
+// `unsupported` deliberately does NOT fail the run. Driving an older binary is
+// a designed use of this tool, and "this build lacks that CLI surface" is a
+// real measurement, honestly labelled, excluded from totals, and rendered as
+// `unsup` in every table. Failing on it would make the cross-version
+// comparison — the tool's whole reason to exist — impossible to script. The
+// summary line and the per-journey table keep the two impossible to conflate.
+func runExitCode(results Results) int {
+	if results.JourneysFailed > 0 {
+		return 1
+	}
 	return 0
 }
 

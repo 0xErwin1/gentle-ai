@@ -61,6 +61,17 @@ subset. `run --axis damaged-store` adds an opt-in axis; `--axis all` adds every
 registered one. An unknown axis name is a hard error, never a quiet fall back to
 the core.
 
+**`run` fails closed on failed journeys.** A journey that reports `failed`
+produced no numbers — the harness could not build or prove its fixture, or an
+assertion fired — and community issue #1883 found that such a run still exited
+0, so a CI gate reading the exit saw success in a run that measured nothing
+for those rows. `run` now exits nonzero when any journey failed; the results
+file is still written first, so the evidence survives the failure. Journeys
+that report `unsupported` do **not** fail the run: driving an older binary is
+a designed use, "this build lacks that surface" is a real measurement, and
+the summary line plus the `unsup` cells keep it impossible to read as either
+a pass or a failure. Both rules are pinned in `main_test.go`.
+
 ### Observed
 
 ```
@@ -338,7 +349,10 @@ invents a metric is worse than one that admits a gap.
     repository path can join them. Which of them actually moves between a given
     pair of runs is chance: the suffix is 9 or 10 digits. No `damaged-store`
     axis journey has been observed to move: its refusals name lineages,
-    artifacts and target identities, all of which are fixed by the fixture. So
+    artifacts and target identities, all of which are fixed by the fixture.
+    No `real-world` axis journey has been observed to move either — its one
+    refusal that quotes a path quotes the repository-relative `".wt/test/"`,
+    not the sandbox prefix. So
     the quoted messages differ run to run and
     `human_surface_bytes` wobbles by one byte per affected journey; every block
     classification, every count and `git_subprocesses` are stable. This is why the "byte-identical" claim under
@@ -366,6 +380,23 @@ invents a metric is worse than one that admits a gap.
     gap is that no axis can be portable — that is inherent, not a bug to fix,
     and the honest response is that the core stays black-box and the axis stays
     opt-in.
+
+12. **The `real-world` axis is black-box and is still not the core, and its
+    strongest assertions prove less than they might seem to.** Nothing in that
+    axis touches product-owned state, so entry 11's portability cost does not
+    apply to it — but it remains opt-in because it is a different population
+    (cluttered repositories, interleaved lifecycles) governed by a different
+    growth rule: community-reported shapes become journeys, so its size tracks
+    community reports, not releases, and folding it into the core would make
+    "43 journeys" a moving claim. Two of its numbers need careful reading.
+    `rw01` pins issue #1881 while a product fix is in flight: a block there is
+    the truth about today's build, not a permanent verdict, and the journey is
+    kept precisely so the fix has a permanent pin. And the no-echo assertions
+    in `rw03`/`rw09` prove absence of the sentinel **from the emitted bytes of
+    counted commands only** — a black-box harness cannot see whether the
+    product ever *read* the secret file or the ignored binary, only whether it
+    quoted them. "The journey passed" means "nothing counted echoed it",
+    nothing stronger.
 
 ## Measured: the current build
 
@@ -602,6 +633,125 @@ Setup commands (`review start`, `finalize`, `recover`) run **uncounted**. The
 operator whose friction is being measured did not run them; they opened a
 repository whose store was already in this state.
 
+### `real-world` (`axis_real_world.go`)
+
+Journeys through repositories that are not sterile, and review lifecycles that
+are not contiguous.
+
+The detection-gap audit named the corpus's first two blind spots — unvisited
+paths, unconstructable states. This axis exists because a community tester
+named the third by hitting it: they ran the RC on a real production repository
+and `review start` was walled by a nested git worktree, not gitignored, inside
+the tree (`logical path is not canonical: ".wt/test/"`, exit 1, empty stdout —
+issue #1881). No fixture had that shape, because **every repository in the
+corpus is minutes old** — minimal, historyless, and touched by nothing except
+the fixture that built it. Real repositories carry tool residue, and real
+operators interleave git life with the review lifecycle instead of running it
+back to back. Two families follow, and every journey names its family:
+
+- **Family A — ecosystem clutter**: shapes produced by tools and by
+  accumulated sessions, not by the git operations the corpus runs.
+- **Family B — life between commands**: the lifecycle interleaved with
+  ordinary git operations.
+
+**This axis is black-box**, unlike `damaged-store`: every fixture is built
+with git, the filesystem and the product's own CLI; every state is proven
+through git or the product before a counted command runs; nothing
+product-owned is read or written; the journeys are portable across builds the
+way the core is. It is an axis anyway, for two reasons. First, a core run and
+a core-plus-axis run are different measurements and must never look alike.
+Second, it carries a standing rule the core does not:
+
+> **Community-reported shapes become journeys: the reporter's fixture is the
+> finding.** This axis exists because a tester's production repository was the
+> fixture nobody wrote, and its job is to keep absorbing those — it grows at
+> the pace of community reports, not at the pace of releases.
+
+`rw01` is #1881 verbatim, measured honestly: a product fix is in flight, so
+the journey may block today and clear tomorrow, and the axis records the truth
+either way — once fixed it is the permanent pin. `rw08` and `rw09` rebuild the
+two elements of the same reporter's published production composite that the
+corpus could never have built from a fresh fixture: review state accumulated
+across days of sessions, and a large gitignored binary inside the tree.
+
+| ID | Shape | Family |
+|---|---|---|
+| `rw01-nested-worktree-not-ignored` | linked worktree at `.wt/test` INSIDE the tree, untracked, not ignored — #1881 verbatim | A |
+| `rw02-node-modules-scale-untracked-tree` | 3,000 untracked files beside a docs candidate; discovery's cost is the measurement | A |
+| `rw03-untracked-env-with-secrets` | untracked `.env` holding a sentinel secret; no counted command may quote the value | A |
+| `rw04-mutating-pre-commit-hook` | husky-style hook rewrites a tracked file during commit; bytes proven moved between review and commit | A |
+| `rw05-dirty-submodule-gitlink-bump` | staged gitlink bump while the submodule's working tree holds uncommitted edits | A |
+| `rw06-shallow-clone-depth-1` | `--depth 1` clone proven to hold 1 of 3 commits; pre-push derivation against missing history | A |
+| `rw07-fork-topology-tracks-upstream` | `origin` + `upstream`, branch proven tracking upstream; cross-remote publication derivation | A |
+| `rw08-three-stale-reviewing-lineages` | three lineages left in `reviewing` by prior sessions, proven inventoried, then a fresh fourth review | A |
+| `rw09-ignored-15mb-binary` | 15MB gitignored binary proven invisible to git; ignored content must cost nothing and be cited nowhere | A |
+| `rw10-rebase-onto-moved-main` | approve, commit, rebase onto moved main (id AND tree proven changed), then pre-push | B |
+| `rw11-amend-identical-tree` | approve, commit, `--amend` (id proven changed, tree proven identical), then pre-push | B |
+| `rw12-pull-into-reviewed-branch` | approve, commit, `git pull` proven to wrap the reviewed commit in a merge, then pre-push | B |
+
+The fixture-proof discipline is unchanged and did real work here: `rw12`'s
+first draft cloned the shared remote without naming a branch, the colleague's
+commit landed on a different branch, and the pull under test was a no-op —
+the ancestry proof caught it before the journey could pass while measuring
+nothing. `rw03` and `rw09` add an assertion no other journey has: every
+counted observation is scanned for a planted sentinel (the `.env`'s secret
+value, the ignored binary's path), and the journey **fails naming the echo**
+if it ever appears. The firing half of that detector is pinned in
+`axis_real_world_test.go`, because a detector that could never fire would
+make the passing half a tautology. `rw08`'s three stale lineages are built
+through the product's own CLI, uncounted, for the same reason damaged-store's
+setup is: the operator being measured did not run them — they opened a
+repository that already held the residue.
+
+**Rejected candidates**, because a journey that stresses no distinct product
+path only makes the number look covered:
+
+- **Start → `git stash` → pop → resume.** `stash pop --index` restores the
+  candidate byte-for-byte (provably: same `write-tree`), so every product
+  invocation after the detour meets a state indistinguishable from no detour.
+  The one distinct surface — a read-only `review status` against an absent
+  candidate — did not carry a journey once the production composite arrived.
+- **Start → switch branch → switch back → resume.** Staged bytes carry across
+  the switch, j16 proves review identity needs no branch at all, and j15
+  proves two branches; every counted invocation would meet byte-identical
+  state.
+- **`core.autocrlf=true` with CRLF working-tree content** (j26's ON case).
+  A config variant whose candidate is still the staged blob the receipt
+  already binds; the divergent working-tree operand only meets the product at
+  delivery staging, which `rw04` stresses harder with bytes that actually
+  moved. Displaced by the production composite.
+- **A nested gitignored worktree** (also in the reporter's composite).
+  Ignored-path exclusion is pinned by `rw09`, and the worktree-ness of an
+  ignored path adds no operand the un-ignored `rw01` does not already pin.
+- **Two remotes without upstream tracking.** A subset of `rw07`: the tracking
+  half is exactly what makes cross-remote derivation have to answer.
+
+**What this axis still cannot reach.** Platform-specific clutter: Windows
+Defender holding a file mid-write, macOS `.DS_Store` semantics and
+Unicode-normalizing or case-insensitive volumes, Windows long paths. Same
+verdict as honesty-contract entry 8 — they need a machine this harness cannot
+build in a Linux temp directory, and naming them is honest where implying
+coverage would not be.
+
+**Measured against commit `745b6064`** (a build with the #1881 fix still in
+flight): all 12 journeys complete, nothing unsupported, nothing failed. The
+axis adds 6 blocks to the corpus — five `in_band` and one `out_of_band`,
+which is `rw01` recording #1881 exactly (`discover intended untracked files:
+logical path is not canonical: ".wt/test/"`, exit 1, nothing runnable named).
+Against the 43-journey core alone, the axis adds +60 commands, +3 model runs,
++3 human prompts, +2,739 stderr bytes — and **+98,512 git subprocesses,
+96,294 of them in `rw02`**, whose `review start` alone spends 15,089 walking
+3,000 untracked files. The honest reading of the block pattern: untracked
+not-ignored content beside a tier-0 docs change escalates it into a lens
+review and then draws a `scope-changed` pre-commit denial for the untracked
+paths themselves (`rw02`, `rw03`), while the same content gitignored costs
+almost nothing and is cited nowhere (`rw09`, 122 git subprocesses, receipt
+and gate clean); the hook, the rebase and the pull all end at a
+`scope-changed` denial naming a runnable, filled-in `review recover` command
+(`in_band`); and the amend passes pre-push — tree-not-commit identity holds
+where a human actually trips it. Re-run against your own binary rather than
+reading these as current totals; `rw01` in particular exists to change.
+
 ## Layout
 
 ```
@@ -616,6 +766,9 @@ journeys_sdd.go   the SDD remediation successor cycle, the kill switch against
 axis.go        the opt-in axis seam: registry, --axis selection, provenance
 axis_damaged_store.go  ONE axis, deletable: journeys starting from a store
                   damaged on disk. Not black-box; declares so itself.
+axis_real_world.go  ONE axis, deletable: cluttered repositories and
+                  interleaved lifecycles. Black-box, and opt-in anyway;
+                  community-reported shapes become its journeys.
 record.go      the recording shim and session log
 analyze.go     observed-mode metrics, same classifier
 report.go      plain-text tables and the comparison JSON
