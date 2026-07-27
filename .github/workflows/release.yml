@@ -24,6 +24,10 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      # Reading the CI conclusion for this exact commit. Release and CI are
+      # independent workflows on the same commit, so without this the release
+      # path never learns that CI was red on the bytes it is about to sign.
+      actions: read
     env:
       MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}
     steps:
@@ -39,6 +43,11 @@ jobs:
           # landing on 2026-07-22 and that release.
           fetch-tags: true
           persist-credentials: false
+
+      - name: Require successful CI for release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/require-ci-success.sh
 
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
