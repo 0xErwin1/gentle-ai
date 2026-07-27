@@ -4,6 +4,7 @@ package reviewtransaction
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -96,5 +97,39 @@ func TestAcquireLocalStoreLockRefusesARawAliasedDirectory(t *testing.T) {
 	}
 	if err := lock.release(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestStoreLockEnvironmentalRefusalIsNotContention pins the classification
+// boundary that TestConcurrentStoreLockRecoverersCannotBothWin leans on: a
+// contender may only ever see victory or ErrConcurrentUpdate, so an
+// environmental failure of the secure walk — here the by-design refusal of a
+// symlinked ancestor, the shape the first Darwin CI run surfaced under
+// $TMPDIR — must surface as the typed pre-acquisition error and must never
+// enter the contention chain. A caller that misread this as contention would
+// retry a lock that can never be acquired instead of reporting a not-started
+// environmental refusal (1781).
+func TestStoreLockEnvironmentalRefusalIsNotContention(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(base, "real", "store"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(base, "real"), filepath.Join(base, "alias")); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = acquireStoreLock(filepath.Join(base, "alias", "store", "LOCK"))
+	if err == nil {
+		t.Fatal("a lock path with a symlinked ancestor was accepted")
+	}
+	var preAcquisition *StoreLockPreAcquisitionError
+	if !errors.As(err, &preAcquisition) {
+		t.Fatalf("environmental refusal = %T %v, want StoreLockPreAcquisitionError", err, err)
+	}
+	if errors.Is(err, ErrConcurrentUpdate) || errors.Is(err, ErrStoreLockContended) {
+		t.Fatalf("environmental refusal claims contention: %v", err)
 	}
 }

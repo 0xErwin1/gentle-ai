@@ -91,15 +91,6 @@ func TestSecureOpenLockParentAnchor(t *testing.T) {
 	})
 }
 
-func canonicalTempDir(t *testing.T) string {
-	t.Helper()
-	root, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return root
-}
-
 func TestAcquireLocalStoreLockRejectsSymlinkAndPreservesTarget(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "external-target")
 	want := []byte("external data must not be lock metadata\n")
