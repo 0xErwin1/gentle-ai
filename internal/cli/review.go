@@ -237,6 +237,9 @@ func (err ReviewGateDeniedError) Error() string {
 		}
 		return fmt.Sprintf("%s: recover via %s", message, operation)
 	}
+	if continuation := reviewDiscoveryDenialContinuation(err.Context.Denial); continuation != "" {
+		return fmt.Sprintf("%s: %s", message, continuation)
+	}
 	switch reviewGateAction(err.Result) {
 	case "continue":
 		return message
@@ -251,6 +254,45 @@ func (err ReviewGateDeniedError) Error() string {
 }
 
 func (err ReviewGateDeniedError) Unwrap() error { return err.Cause }
+
+// reviewDiscoveryDenialContinuation names the operator-runnable continuation
+// for a receipt-discovery denial whose kind is a COMPLETED proof that no
+// terminal receipt governs this candidate.
+//
+// The routing knowledge is not restated here: the denial's Stage/Code pair is
+// the same value the negotiated envelope publishes, written at the single site
+// that classifies a ReviewReceiptDiscoveryError into a gate evaluation, so this
+// cannot drift from what the JSON says. Only the two kinds below are answered,
+// and both mean the same thing -- discovery ran to completion and found nothing
+// governing -- which is a block the operator clears by reviewing the candidate,
+// exactly as the all-stale ambiguous discovery message already words it. That
+// was the whole defect: "invalidated: requires explicit maintainer action" sent
+// an operator with no receipt at all to a maintainer, while the envelope beside
+// it already said "no terminal review receipt exists for gate validation".
+//
+// Everything else keeps the terminal fallback, deliberately:
+//
+//   - authority_corrupted is damage to the authority inventory, not an absent
+//     receipt. Reviewing again neither repairs nor supersedes it, so naming
+//     review start there would be a dead end.
+//   - receipt_ambiguous carries two different situations under ONE wire code
+//     (proven-stale-only, which wants review start, and genuinely competing
+//     exact receipts, which want an operator-chosen --lineage). The code alone
+//     cannot tell them apart, and guessing would name the wrong command half
+//     the time.
+//   - Every non-discovery stage -- receipt-binding, delivery-derivation,
+//     target-resolution -- is untouched. Their recovery, when one exists, is
+//     already derived from frozen GateScopeChangeDiagnostics above.
+func reviewDiscoveryDenialContinuation(denial *reviewtransaction.GateDenial) string {
+	if denial == nil || denial.Stage != "receipt-discovery" {
+		return ""
+	}
+	switch ReviewReceiptDiscoveryKind(denial.Code) {
+	case ReviewReceiptMissing, ReviewReceiptUnrelated:
+		return "no terminal review receipt governs this candidate; review it with gentle-ai review start"
+	}
+	return ""
+}
 
 // reviewRecoveryDemandedInputs narrows the frozen recovery input set to the
 // inputs an operator must supply, by removing the ones the recovery command

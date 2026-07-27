@@ -92,6 +92,17 @@ func (admission ArtifactAdmission) Validate(subject ArtifactSubject) error {
 	return ValidateArtifactSubject(subject)
 }
 
+// artifactRecaptureContinuation is the continuation shared by the two subject
+// echo rejections. Both are raised before AdmitArtifact returns any canonical
+// lens result, and the capture command appends to the store only after
+// admission succeeds, so a rejected admission leaves the immutable lens slot
+// unconsumed and the store revision unmoved. Stating that once, in one place,
+// is what keeps the two messages from drifting into promising different
+// recoveries for the same recoverable state.
+const artifactRecaptureContinuation = "the rejected admission did not consume the lens slot, " +
+	"so re-run the lens and invoke gentle-ai review capture-result again on the same lineage " +
+	"with a result that echoes the binding's top-level subject_hash"
+
 // AdmitArtifact performs the single provider-owned admission decision. It
 // validates subject echo, completed full-manifest inspection, result shape,
 // and candidate scope before returning a canonical lens result.
@@ -117,13 +128,22 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 		// (community report, PR #1801). The decision stays "incomplete" so the
 		// machine-readable shape is extended, never reshaped.
 		return fail(ArtifactAdmissionIncomplete,
-			"reviewer result omitted the provider-owned artifact subject: "+
-				"the rejected admission did not consume the lens slot, so re-run the lens "+
-				"and invoke review capture-result again on the same lineage with a result "+
-				"that echoes the binding's top-level subject_hash and a completed inspection envelope")
+			"reviewer result omitted the provider-owned artifact subject: "+artifactRecaptureContinuation+
+				" and a completed inspection envelope")
 	}
 	if request.EchoedSubjectHash != request.ExpectedSubject.SubjectHash {
-		return fail(ArtifactAdmissionBindingMismatch, "reviewer result echoed a different artifact subject")
+		// The omitted-subject sibling immediately above is the SAME block with
+		// the same way out. Both are raised here, before any store append, so
+		// neither consumes the immutable slot -- yet only the omission said so,
+		// leaving an echoed-but-wrong subject naming the fault and no way
+		// forward. The expected subject hash is handed back because it is the
+		// one value the reviewer cannot derive from the failure alone; every
+		// other binding_mismatch below is a frozen-context or finding-shape
+		// fault whose fix is not "echo this hash", so none of them borrows this
+		// wording.
+		return fail(ArtifactAdmissionBindingMismatch,
+			"reviewer result echoed a different artifact subject: "+artifactRecaptureContinuation+
+				", which is "+request.ExpectedSubject.SubjectHash)
 	}
 	if _, err := request.FrozenContext.CandidateDiff.Bytes(); err != nil || request.FrozenContext.CandidateDiff.SHA256 != request.ExpectedSubject.CandidateDiffSHA256 {
 		return fail(ArtifactAdmissionBindingMismatch, "frozen candidate diff does not match the artifact subject")
