@@ -100,13 +100,16 @@ func TestEveryDocumentedReviewCommandIsReal(t *testing.T) {
 		documented[match[1]] = true
 	}
 
-	dispatched := reviewCommandDispatchVerbs(t)
-	if len(dispatched) == 0 {
-		t.Fatal("found no dispatched review command verbs in review_facade.go; the extraction is stale")
-	}
+	// reviewDispatchableReviewVerbs, not reviewCommandDispatchVerbs: the app
+	// layer routes `review mode` BEFORE the facade so the kill switch stays
+	// reachable when review authority itself is unreadable, and a guard that
+	// only reads the facade's switch calls that real command undocumented.
+	// The sibling continuation guard learned this first; both now share the
+	// one extractor that owns the complete answer.
+	dispatched := reviewDispatchableReviewVerbs(t)
 	for verb := range documented {
 		if !dispatched[verb] {
-			t.Errorf("docs/review-integration.md requires `gentle-ai review %s`, but no case %q exists in runReviewCommandContext/runReviewCommand", verb, verb)
+			t.Errorf("docs/review-integration.md requires `gentle-ai review %s`, but no dispatch reaches it from the facade switches or the app pre-dispatch", verb)
 		}
 	}
 }
