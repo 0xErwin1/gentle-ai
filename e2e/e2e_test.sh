@@ -606,8 +606,11 @@ test_cc_persona_custom_does_nothing() {
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component persona --persona custom 2>&1; then
-        # Custom persona should NOT create CLAUDE.md (persona does nothing).
-        assert_file_not_exists "$HOME/.claude/CLAUDE.md" "CLAUDE.md not created by custom persona"
+        # CLAUDE.md may exist: routing guidance is scheduled per agent and
+        # deliberately outside the component loop, so every configured agent
+        # receives it. What `--persona custom` promises is that no personality
+        # is imposed, so assert that instead of the file's absence.
+        assert_file_not_contains "$HOME/.claude/CLAUDE.md" "Senior Architect\|Rioplatense\|voseo" "CLAUDE.md carries no tone content under custom"
         # No output-style file either.
         assert_file_not_exists "$HOME/.claude/output-styles/gentleman.md" "No output-style for custom"
     else
