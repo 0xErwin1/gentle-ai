@@ -1383,10 +1383,13 @@ func damagedStoreJourneys() []Journey {
 			// what makes the shape worth measuring: correct guards composing
 			// into no way out is not visible from any one of them.
 			//
-			// If the in-flight work on this surface lands, the declaration
-			// stops applying by itself — a refusal that names a runnable
-			// command outranks it mechanically, and the report prints the
-			// declaration as stale rather than honouring it.
+			// That composition is now closed. `review abandon` names the same
+			// exit `review reclaim` already named — capture the machine-readable
+			// diagnosis with `review inspect-authority` and escalate it — so the
+			// last refusal in the chain leaves the operator somewhere and this
+			// journey no longer declares a dead end. The steps stay exactly as
+			// they were: they still drive every advertised repair surface, and
+			// they are what would catch the exit going away again.
 			Steps: []Step{
 				{Name: "fixture: one damaged recovery edge, successor holds a captured result", Fixture: damagedEdgeWithResults},
 				{Name: "inspect the authority", Requires: inspectAuthorityCapability,
@@ -1404,8 +1407,7 @@ func damagedStoreJourneys() []Journey {
 					Args: invalidateArgs(scratchSuccessor, scratchSuccessorRevision, "the recovery edge cannot be admitted")},
 				{Name: "the invalidation ran and changed nothing about the damage", Composite: proveStoreStillDamaged},
 				{Name: "abandon the successor, which cleared the pristine one", Requires: abandonAxisCapability,
-					Args:    abandonLiveArgs(scratchSuccessor, "the recovery edge cannot be admitted"),
-					DeadEnd: true},
+					Args: abandonLiveArgs(scratchSuccessor, "the recovery edge cannot be admitted")},
 				{Name: "the store is still not in charge", Composite: proveStoreStillDamaged},
 			},
 		},
