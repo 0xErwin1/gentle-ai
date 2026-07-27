@@ -63,6 +63,16 @@ func TestClassifyRecordedObservations(t *testing.T) {
 		{"status_collect", NotABlock, "read-only status, exit 0"},
 		{"mode_disable", NotABlock, "the kill switch turning off is not a block"},
 		{"high_risk_start", NotABlock, "the consent-skipped notice is a prompt, not a block"},
+		// These two are one letter apart in the envelope and opposite in
+		// meaning, which is exactly why both are pinned. The first hands
+		// delivery to ordinary repository policy and stops nothing; counting
+		// it would have reported the kill switch working as friction it
+		// caused. The second is the switch ON with no receipt, where the
+		// operator really is stopped.
+		{"gate_disabled_unmanaged", NotABlock,
+			"delivery is disabled/unmanaged and action is repository-policy, so the commit proceeds"},
+		{"gate_unmanaged_switch_on", BlockInBand,
+			"exit 1 with no delivery disposition, and stderr names `gentle-ai review start`"},
 
 		{"finalize_without_evidence", BlockInBand,
 			"stderr names `gentle-ai review capture-evidence` and the follow-up finalize"},

@@ -175,6 +175,12 @@ var denialResults = map[string]bool{
 	"corrupted":     true,
 }
 
+// deliveryDisabledUnmanaged is what a lifecycle gate reports when the kill
+// switch is off and no receipt governs the candidate. It is the one delivery
+// disposition that is not an opinion about the work: ordinary repository policy
+// governs and the commit or push proceeds.
+const deliveryDisabledUnmanaged = "disabled/unmanaged"
+
 // IsBlock reports whether an invocation stopped the flow: a non-zero exit, or
 // an envelope that denies.
 func IsBlock(o Observation) bool {
@@ -188,6 +194,20 @@ func IsBlock(o Observation) bool {
 	}
 	var envelope map[string]any
 	if err := json.Unmarshal([]byte(strings.TrimSpace(o.Stdout)), &envelope); err != nil {
+		return false
+	}
+	// A gate that hands delivery back to ordinary repository policy stopped
+	// nothing, so it is not a block, and counting it as one would report the
+	// kill switch working as friction it caused. It carries `allowed: false`
+	// and `result: invalidated` because review-driven development is refusing
+	// to express an opinion, not refusing the delivery -- and refusing to
+	// fabricate an approval it did not earn is the whole point.
+	//
+	// This is exempted by the typed delivery disposition alone. The sibling
+	// `unmanaged`, which is the switch ON with no receipt yet, stays a block:
+	// there the operator really is stopped, and the gate names `review start`.
+	if delivery, ok := envelope["delivery"].(string); ok &&
+		strings.EqualFold(strings.TrimSpace(delivery), deliveryDisabledUnmanaged) {
 		return false
 	}
 	if allowed, ok := envelope["allowed"].(bool); ok && !allowed {

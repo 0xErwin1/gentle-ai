@@ -245,5 +245,37 @@
     "exit_code": 1,
     "stdout_captured": true,
     "stderr_captured": true
+  },
+  {
+    "name": "gate_disabled_unmanaged",
+    "args": [
+      "review",
+      "validate",
+      "--cwd",
+      "/SANDBOX/demo",
+      "--gate",
+      "pre-commit"
+    ],
+    "stdout": "{\n  \"schema\": \"gentle-ai.review-gate-result/v1\",\n  \"result\": \"invalidated\",\n  \"allowed\": false,\n  \"action\": \"repository-policy\",\n  \"reason\": \"review-driven development is disabled and no receipt governs this candidate, so delivery follows ordinary repository policy\",\n  \"context\": {\n    \"gate\": \"pre-commit\",\n    \"lineage_id\": \"\",\n    \"generation\": 0,\n    \"base_tree\": \"\",\n    \"candidate_tree\": \"\",\n    \"paths_digest\": \"\",\n    \"fix_delta_hash\": \"\",\n    \"policy_hash\": \"\",\n    \"ledger_hash\": \"\",\n    \"evidence_hash\": \"\",\n    \"base_relationship_valid\": false,\n    \"denial\": {\n      \"stage\": \"receipt-discovery\",\n      \"code\": \"receipt_missing\"\n    }\n  },\n  \"delivery\": \"disabled/unmanaged\"\n}",
+    "stderr": "",
+    "exit_code": 0,
+    "stdout_captured": true,
+    "stderr_captured": true
+  },
+  {
+    "name": "gate_unmanaged_switch_on",
+    "args": [
+      "review",
+      "validate",
+      "--cwd",
+      "/SANDBOX/demo",
+      "--gate",
+      "pre-commit"
+    ],
+    "stdout": "{\n  \"schema\": \"gentle-ai.review-gate-result/v1\",\n  \"result\": \"invalidated\",\n  \"allowed\": false,\n  \"action\": \"explicit-maintainer-action\",\n  \"reason\": \"no terminal review receipt exists for gate validation\",\n  \"context\": {\n    \"gate\": \"pre-commit\",\n    \"lineage_id\": \"\",\n    \"generation\": 0,\n    \"base_tree\": \"\",\n    \"candidate_tree\": \"\",\n    \"paths_digest\": \"\",\n    \"fix_delta_hash\": \"\",\n    \"policy_hash\": \"\",\n    \"ledger_hash\": \"\",\n    \"evidence_hash\": \"\",\n    \"base_relationship_valid\": false,\n    \"denial\": {\n      \"stage\": \"receipt-discovery\",\n      \"code\": \"receipt_missing\"\n    }\n  }\n}",
+    "stderr": "Error: review lifecycle gate denied: invalidated: no terminal review receipt governs this candidate; review it with gentle-ai review start",
+    "exit_code": 1,
+    "stdout_captured": true,
+    "stderr_captured": true
   }
 ]
