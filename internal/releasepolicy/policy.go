@@ -580,6 +580,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      actions: read
     env:
       MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}
     steps:
@@ -589,6 +590,10 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: false
+      - name: Require successful CI for release commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/require-ci-success.sh
       - name: Set up Go
         uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
         with:
