@@ -1534,9 +1534,19 @@ test_edge_theme_not_in_presets() {
     if $BINARY install --agent claude-code --component theme --persona neutral 2>&1; then
         assert_file_exists "$HOME/.claude/settings.json" "Theme creates settings.json"
         assert_file_contains "$HOME/.claude/settings.json" '"theme"' "Theme key present"
-        # No other components should be created
+        # No other component should be created. CLAUDE.md itself is not proof
+        # of one: routing guidance is scheduled per agent, outside the
+        # component loop, so every configured agent gets it. What proves no
+        # component ran is that agent-routing is the ONLY managed section in
+        # the file.
         if [ -f "$HOME/.claude/CLAUDE.md" ]; then
-            log_fail "Theme-only install should NOT create CLAUDE.md"
+            local sections
+            sections=$(grep -o '<!-- gentle-ai:[a-z-]* -->' "$HOME/.claude/CLAUDE.md" | sort -u | tr '\n' ' ')
+            if [ "$(printf '%s' "$sections" | xargs)" = "<!-- gentle-ai:agent-routing -->" ]; then
+                log_pass "Theme-only: CLAUDE.md carries routing guidance and no component section"
+            else
+                log_fail "Theme-only install wrote component sections: $sections"
+            fi
         else
             log_pass "Theme-only: no CLAUDE.md (correct)"
         fi
