@@ -959,7 +959,7 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 	}
 	leaves, err := compactAuthorityLeaves(records, storeByLineage)
 	if err != nil {
-		return CompactStartResult{}, err
+		return CompactStartResult{}, compactStartInvalidGraphRefusal(ctx, requestedStore.repo, records, err)
 	}
 	claimants := make([]CompactStore, 0, len(leaves))
 	recoveryCandidates := make([]CompactStore, 0, 1)

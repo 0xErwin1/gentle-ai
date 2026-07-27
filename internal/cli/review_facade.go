@@ -2684,11 +2684,17 @@ func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, 
 	}
 	report, err := reviewtransaction.InventoryAuthority(ctx, repo)
 	if (err != nil || !report.Complete || !report.Authoritative) && !reviewAuthorityCorruptionConfinedToLegacyEntries(report, err) {
-		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted, Category: reviewAuthorityCauseCategory(report, err)}
+		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{
+			Kind: ReviewAuthorityCorrupted, Category: reviewAuthorityCauseCategory(report, err),
+			Detail: reviewAuthorityCorruptionDetail(ctx, repo),
+		}
 	}
 	stores, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
 	if err != nil {
-		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted, Category: "record_or_graph_invalid"}
+		return reviewtransaction.CompactStore{}, reviewtransaction.CompactRecord{}, &ReviewReceiptDiscoveryError{
+			Kind: ReviewAuthorityCorrupted, Category: "record_or_graph_invalid",
+			Detail: reviewAuthorityCorruptionDetail(ctx, repo),
+		}
 	}
 	type candidate struct {
 		store      reviewtransaction.CompactStore

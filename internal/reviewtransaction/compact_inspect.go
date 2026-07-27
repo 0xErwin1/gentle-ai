@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 )
 
 const (
@@ -171,6 +172,98 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 		exits = append(exits, exit)
 	}
 	return exits, nil
+}
+
+// CompactAuthorityDamageKinds names, one clause per damaged lineage, the KIND
+// of damage one inspection found: an unreadable entry, a dangling predecessor,
+// a forged authorization binding, a reconcilable anomaly class. A denial that
+// collapses all of them into one generic sentence leaves the operator unable
+// to distinguish a truncated file from a missing entry from a forged binding
+// while the product holds the exact diagnosis; this is that diagnosis, in the
+// same words the inspection publishes machine-readably.
+func CompactAuthorityDamageKinds(report CompactRecoveryInspectionReport) []string {
+	kinds := []string{}
+	for _, diagnostic := range report.EntryDiagnostics {
+		switch diagnostic.Problem {
+		case compactInspectionEntryMalformed:
+			kinds = append(kinds, fmt.Sprintf("store entry %q holds a record that does not parse (%s), which an interrupted write leaves behind", diagnostic.LineageID, diagnostic.Problem))
+		case compactInspectionEntryMissing:
+			kinds = append(kinds, fmt.Sprintf("store entry %q holds no compact state (%s)", diagnostic.LineageID, diagnostic.Problem))
+		case compactInspectionEntryUnreadable:
+			kinds = append(kinds, fmt.Sprintf("store entry %q cannot be read (%s)", diagnostic.LineageID, diagnostic.Problem))
+		default:
+			kinds = append(kinds, fmt.Sprintf("authority root entry %q does not belong there (%s)", diagnostic.LineageID, diagnostic.Problem))
+		}
+	}
+	for _, edge := range report.Edges {
+		if edge.Valid {
+			continue
+		}
+		switch {
+		case len(edge.AnomalyClasses) > 0:
+			kinds = append(kinds, fmt.Sprintf("the recovery edge onto successor %q classifies as %s, which review reconcile-authority admits", edge.SuccessorLineageID, strings.Join(edge.AnomalyClasses, ",")))
+		case edge.NonReconcilableReason != "":
+			kinds = append(kinds, edge.NonReconcilableReason)
+		case anyCompactProblemContains(edge.Problems, "missing predecessor"):
+			kinds = append(kinds, fmt.Sprintf("recovery successor %q names predecessor %q, which is missing from the store", edge.SuccessorLineageID, edge.PredecessorLineageID))
+		default:
+			kinds = append(kinds, fmt.Sprintf("the recovery edge onto successor %q does not re-derive: %s", edge.SuccessorLineageID, strings.Join(edge.Problems, "; ")))
+		}
+	}
+	return kinds
+}
+
+func anyCompactProblemContains(problems []string, fragment string) bool {
+	for _, problem := range problems {
+		if strings.Contains(problem, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+// compactStartInvalidGraphRefusal turns the bare invalid-graph refusal REVIEW
+// START used to emit into one that names the sanctioned exit the read-only
+// inspection proves, following the same rule the reconcile refusal follows: a
+// specific operation is named only when the operation's own prediction accepts
+// it, so the command printed never turns around and refuses. When no edge has
+// a sanctioned exit, only the diagnosis is named — naming a dead end is worse
+// than naming nothing.
+func compactStartInvalidGraphRefusal(ctx context.Context, repo string, records map[string]CompactRecord, cause error) error {
+	report, inspectErr := inspectCompactRecoveryRecordSet(ctx, records, CompactRecoveryInspectionReport{
+		Complete: true, Valid: true, Edges: []CompactRecoveryEdgeInspection{}, EntryDiagnostics: []CompactRecoveryEntryDiagnostic{},
+	})
+	if inspectErr != nil {
+		return cause
+	}
+	exits, exitsErr := SanctionedCompactRecoveryExits(ctx, repo, report)
+	if exitsErr != nil {
+		return cause
+	}
+	var continuation strings.Builder
+	for _, exit := range exits {
+		switch exit.Operation {
+		case CompactRecoveryEdgeExitAbandon:
+			eligibility, eligibilityErr := InspectCompactPristineAbandonment(ctx, repo, exit.SuccessorLineageID)
+			if eligibilityErr != nil || !eligibility.Eligible {
+				continue
+			}
+			fmt.Fprintf(&continuation, " Successor %q is pristine, so quarantining it whole clears its graph defect: %s",
+				exit.SuccessorLineageID, compactAbandonCommandText(repo, exit.SuccessorLineageID, eligibility))
+		case CompactRecoveryEdgeExitReconcile:
+			for _, edge := range report.Edges {
+				if edge.SuccessorLineageID != exit.SuccessorLineageID || len(edge.AnomalyClasses) == 0 {
+					continue
+				}
+				fmt.Fprintf(&continuation, " The recovery edge onto successor %q classifies as %s, which reconciliation admits: %s",
+					edge.SuccessorLineageID, strings.Join(edge.AnomalyClasses, ","),
+					compactReconcileCommandText(repo, edge.PredecessorLineageID, edge.ObservedPredecessorRevision, edge.SuccessorLineageID, edge.SuccessorRevision, edge.AnomalyClasses))
+				break
+			}
+		}
+	}
+	return fmt.Errorf("%v.%s Capture the complete machine-readable diagnosis for every affected lineage with `gentle-ai review inspect-authority --cwd %q`",
+		cause, continuation.String(), repo)
 }
 
 // inspectCompactRecoveryRecordSet applies the canonical all-edge inspection to
