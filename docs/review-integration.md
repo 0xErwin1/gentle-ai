@@ -45,6 +45,12 @@ gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 
 
 Append a target selector only when its type is already known: `--projection staged`, `--base-ref <ref>`, `--workspace-overlay --base-ref <ref>`, or `--workspace-overlay --base-tree <tree>`. If the feature is unavailable, query exactly once `gentle-ai review capabilities --contract gentle-ai.review-integration/v1` and stop with `unsupported-capability`; do not explore commands or consult help. After bootstrap, only the parent executes the exact native `next_transition`. Reviewers, validators, executors, and refuters receive role inputs and return artifacts; they never invoke review lifecycle commands.
 
+### Per-candidate consent relay
+
+A session that can relay a blocking question to a human declares it on negotiated START with `--consent relay`. When the frozen candidate's tier would ask the per-candidate consent question (any non-low tier whose one-time question is still unanswered), START then responds with the typed `gentle-ai.review-integration.consent/v1` envelope instead of proceeding: why input is required (the same headline, reason, and risk-evidence phrases the interactive terminal question speaks), the complete choice set, and one runnable follow-up invocation per choice, scoped to the exact `--target` identity. Nothing is persisted while the question is outstanding, and no console notice is printed.
+
+The orchestrator relays the complete envelope losslessly and answers with exactly one named invocation. `--consent granted` runs the review and records the one-time question as answered; it is replay-safe and a rerun resumes the same authority. `--consent declined` reports the existing typed declined START outcome (`consent: declined_this_candidate`): scoped to that one candidate, nothing persisted, the next candidate asks again. A decline is deliberately not the kill switch; the permanent disable remains `gentle-ai review mode disable`, documented in the envelope's `off_path` and never offered as a choice. Without the declaration, START behavior is unchanged: low risk asks nothing, a resolved question asks nothing, and a headless undeclared session keeps the skip-and-notice fallback.
+
 ## Keep provider and consumer ownership separate
 
 | Gentle AI provider owns | Consumer owns |

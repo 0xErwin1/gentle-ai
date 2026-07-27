@@ -41,6 +41,17 @@ const reviewStatusTargetSelectorsRequireContractReason = "review status target s
 // exact contract value for review start --target used without --contract.
 const reviewStartTargetRequiresContractReason = "review start --target requires --contract " + ReviewIntegrationContractV1
 
+// reviewStartConsentRequiresContractReason keeps the consent declaration a
+// strictly negotiated-form surface: the typed question exists for callers
+// that relay envelopes, and the unnegotiated form keeps today's console
+// behavior byte for byte. The refusal names the exact runnable rerun.
+const reviewStartConsentRequiresContractReason = "review start --consent requires the negotiated form; rerun as gentle-ai review start --contract " +
+	ReviewIntegrationContractV1 + " with the bound --target and --projection"
+
+// reviewStartConsentValueReason names the exact allowed-answer domain for the
+// consent declaration, mirroring the choice tokens the typed question emits.
+const reviewStartConsentValueReason = "review start --consent accepts exactly relay, granted, or declined; rerun gentle-ai review start with one of those values"
+
 // reviewFacadeReceiptNotAvailableReason is the single wording source for the
 // refusal when a compact (or legacy) facade lineage was discovered but has
 // not been finalized yet, so its receipt does not exist on disk. It names
@@ -1328,6 +1339,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	committedOnly := flags.Bool("committed-only", false, "acknowledge that --base-ref excludes dirty tracked changes")
 	workspaceOverlay := flags.Bool("workspace-overlay", false, "include branch commits and the live workspace over --base-ref")
 	tracePath := flags.String("trace", "", "optional diagnostic operation metadata trace path")
+	consent := flags.String("consent", "", "negotiated consent declaration: relay to receive the typed blocking consent question, granted or declined to answer it for the exact frozen candidate")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -1341,9 +1353,10 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	if err != nil {
 		return err
 	}
-	if err := validateReviewStartBinding(args, negotiated, *targetIdentity, *projection, *baseRef, *lineage, *committedOnly, *workspaceOverlay); err != nil {
+	if err := validateReviewStartBinding(args, negotiated, *targetIdentity, *projection, *baseRef, *lineage, *committedOnly, *workspaceOverlay, *consent); err != nil {
 		return reviewPreflightError(err)
 	}
+	consentMode := reviewStartConsentMode(strings.TrimSpace(*consent))
 	builder := reviewtransaction.SnapshotBuilder{Repo: *cwd}
 	root, err := builder.ResolveRepositoryRoot(ctx)
 	if err != nil {
@@ -1411,12 +1424,29 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	// point where the kill switch can stop a start and the one-time question can
 	// name the real reason. Nothing has been persisted yet, so refusing here
 	// leaves no authority behind.
-	if err := authorizeReviewStart(ctx, root, assessment); err != nil {
-		if !negotiated && errors.Is(err, errReviewDeclinedForCandidate) {
+	if err := authorizeReviewStart(ctx, root, assessment, consentMode); err != nil {
+		if errors.Is(err, errReviewConsentQuestionRequired) {
+			// The caller declared it can relay a blocking question, so the
+			// typed question IS this start's response. Nothing has been
+			// persisted; the named follow-up invocations answer for exactly
+			// this frozen candidate and nothing else.
+			question, questionErr := newReviewIntegrationConsentResult(snapshot, assessment,
+				reviewConsentFollowUpBase(*cwd, snapshot.Identity, selectedProjection, strings.TrimSpace(*lineage),
+					strings.TrimSpace(*baseRef), strings.TrimSpace(*policySource), strings.TrimSpace(*focus),
+					strings.TrimSpace(*tracePath), *committedOnly, *workspaceOverlay))
+			if questionErr != nil {
+				return questionErr
+			}
+			return encodeReviewJSON(stdout, question)
+		}
+		if errors.Is(err, errReviewDeclinedForCandidate) && (!negotiated || consentMode == reviewConsentModeDeclined) {
 			// A decline is a reported user choice, not a failure. Nothing has
 			// been persisted and no latch was recorded, so the next candidate
 			// simply asks again; the typed consent token lets an agent tell
 			// "user declined this work unit" apart from every other outcome.
+			// The relayed --consent declined answer reuses exactly this typed
+			// outcome; an interactive decline inside an undeclared negotiated
+			// start keeps its existing failure-envelope projection.
 			return encodeReviewJSON(stdout, reviewFacadeStartDeclinedResult(snapshot, assessment))
 		}
 		return err
@@ -1580,15 +1610,23 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	return encodeReviewJSON(stdout, negotiatedResult)
 }
 
-func validateReviewStartBinding(args []string, negotiated bool, target, projection, baseRef, lineage string, committedOnly, workspaceOverlay bool) error {
+func validateReviewStartBinding(args []string, negotiated bool, target, projection, baseRef, lineage string, committedOnly, workspaceOverlay bool, consent string) error {
 	counts := reviewStartBindingFlagCounts(args)
+	switch reviewStartConsentMode(strings.TrimSpace(consent)) {
+	case reviewConsentModeNone, reviewConsentModeRelay, reviewConsentModeGranted, reviewConsentModeDeclined:
+	default:
+		return errors.New(reviewStartConsentValueReason)
+	}
 	if !negotiated {
 		if counts["target"] != 0 {
 			return errors.New(reviewStartTargetRequiresContractReason)
 		}
+		if counts["consent"] != 0 {
+			return errors.New(reviewStartConsentRequiresContractReason)
+		}
 		return nil
 	}
-	for _, name := range []string{"contract", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay"} {
+	for _, name := range []string{"contract", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent"} {
 		if counts[name] > 1 {
 			return fmt.Errorf("review start repeats --%s", name)
 		}
@@ -1641,7 +1679,7 @@ func reviewStartBindingFlagCounts(args []string) map[string]int {
 			continue
 		}
 		switch name {
-		case "contract", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay":
+		case "contract", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent":
 			counts[name]++
 		}
 		if kind != reviewIntegrationBoolFlag && !hasValue {
@@ -1709,6 +1747,51 @@ func validateReviewTransitionSelectorFlagCounts(args []string, operation string)
 		}
 	}
 	return nil
+}
+
+// reviewConsentFollowUpBase reassembles the caller's own START invocation as
+// the runnable answer stem of the typed consent question. Every selector the
+// caller bound is reproduced, and --target pins the exact frozen candidate, so
+// the follow-up answers for this candidate and nothing else: if the workspace
+// moves, the negotiated freshness check refuses the stale target instead of
+// silently consenting to different bytes.
+func reviewConsentFollowUpBase(
+	cwd, target string,
+	projection reviewtransaction.Projection,
+	lineage, baseRef, policy, focus, trace string,
+	committedOnly, workspaceOverlay bool,
+) string {
+	parts := []string{
+		"gentle-ai review start",
+		"--contract " + ReviewIntegrationContractV1,
+		"--cwd " + cwd,
+		"--target " + target,
+		"--projection " + string(projection),
+	}
+	if lineage != "" {
+		parts = append(parts, "--lineage "+lineage)
+	}
+	if baseRef != "" {
+		parts = append(parts, "--base-ref "+baseRef)
+	}
+	if committedOnly {
+		parts = append(parts, "--committed-only")
+	}
+	if workspaceOverlay {
+		parts = append(parts, "--workspace-overlay")
+	}
+	if policy != "" {
+		parts = append(parts, "--policy "+policy)
+	}
+	// The focus default never needs restating; only an explicit non-default
+	// focus changes what the answered start would select.
+	if focus != "" && focus != "reliability" {
+		parts = append(parts, "--focus "+focus)
+	}
+	if trace != "" {
+		parts = append(parts, "--trace "+trace)
+	}
+	return strings.Join(parts, " ")
 }
 
 // reviewFacadeStartDeclinedResult projects a consent decline as a typed START

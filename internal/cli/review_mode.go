@@ -373,6 +373,34 @@ func reviewModeLabel(mode reviewtransaction.RDDMode) string {
 // reported disposition rather than a veto.
 var errReviewDeclinedForCandidate = errors.New("review declined for this candidate")
 
+// reviewStartConsentMode is the caller's --consent declaration on a negotiated
+// START. Empty means undeclared: today's behavior, byte for byte.
+type reviewStartConsentMode string
+
+const (
+	reviewConsentModeNone reviewStartConsentMode = ""
+	// reviewConsentModeRelay declares that the caller can relay a blocking
+	// question to a human. Only under this declaration does START answer with
+	// the typed consent question instead of the console prompt or the silent
+	// skip-and-notice.
+	reviewConsentModeRelay reviewStartConsentMode = "relay"
+	// reviewConsentModeGranted and reviewConsentModeDeclined carry the relayed
+	// human answer back for the exact frozen candidate. They are the two
+	// runnable follow-up invocations the consent question names.
+	reviewConsentModeGranted  reviewStartConsentMode = "granted"
+	reviewConsentModeDeclined reviewStartConsentMode = "declined"
+)
+
+// errReviewConsentQuestionRequired signals internally that a relay-declared
+// START stopped at the consent moment: the typed question is the response, and
+// nothing has been persisted.
+var errReviewConsentQuestionRequired = errors.New("the review consent question awaits a relayed answer; rerun gentle-ai review start with --consent granted or --consent declined for the exact frozen candidate")
+
+// errReviewConsentDeclineWithoutQuestion refuses a decline for a candidate
+// that asks no question: tier 0 is silent structural readback, so there is no
+// consent moment to answer.
+var errReviewConsentDeclineWithoutQuestion = errors.New("this low-risk candidate asks no consent question, so there is nothing to decline; rerun gentle-ai review start without --consent")
+
 const (
 	reviewConsentAnswerRun    = "1"
 	reviewConsentAnswerNotNow = "2"
@@ -381,18 +409,36 @@ const (
 const (
 	reviewConsentHeadline = "Gentle AI can review this change before you call it done."
 	reviewConsentValue    = "Reviewing takes a bit longer, and it makes the result substantially safer."
-	reviewConsentAnswers  = "  1) Run the review now\n  2) Not now, just this once\n"
+
+	// reviewConsentAnswerRunLabel and reviewConsentAnswerNotNowLabel are the
+	// single wording source for the two offered answers: the interactive
+	// prompt and the relayed consent envelope both speak them, so the two
+	// surfaces cannot drift.
+	reviewConsentAnswerRunLabel    = "Run the review now"
+	reviewConsentAnswerNotNowLabel = "Not now, just this once"
+	reviewConsentAnswers           = "  1) " + reviewConsentAnswerRunLabel + "\n  2) " + reviewConsentAnswerNotNowLabel + "\n"
 
 	// reviewConsentOffPath keeps the permanent disable reachable but deliberate.
 	// It is a trailing line rather than a numbered answer because turning a
 	// safety net off for good must cost more than pressing a number in a hurry.
-	reviewConsentOffPath  = "To turn reviews off for good, run 'gentle-ai review mode disable'.\n"
-	reviewConsentQuestion = "Choose 1 or 2 [1]: "
+	// The relayed consent envelope carries the same note as a documented off
+	// path outside the choice set, for exactly the same reason.
+	reviewConsentOffPathCommand = "gentle-ai review mode disable"
+	reviewConsentOffPathNote    = "To turn reviews off for good, run '" + reviewConsentOffPathCommand + "'."
+	reviewConsentOffPath        = reviewConsentOffPathNote + "\n"
+	reviewConsentQuestion       = "Choose 1 or 2 [1]: "
 
 	// reviewConsentSkippedNotice keeps the fail-safe default discoverable: an
 	// unanswerable question must never look like a silent yes.
 	reviewConsentSkippedNotice = "Gentle AI reviewed this change without asking, because this session has no terminal to answer on. " +
 		"Run 'gentle-ai review mode disable' to turn reviews off, or 'gentle-ai review mode status' to see the current setting."
+
+	// reviewConsentSkippedDefaultProvenance rides with the skip notice only
+	// when the resolved mode source is `default`: reviews are on because
+	// nobody chose anything, and the operator deserves to know the switch was
+	// never explicitly set, with both commands that make it a real choice.
+	reviewConsentSkippedDefaultProvenance = "Reviews are on by default; this was never explicitly chosen. " +
+		"Run 'gentle-ai review mode enable' to make reviews an explicit choice, or 'gentle-ai review mode disable' to turn them off."
 	reviewConsentUnreadableNotice = "Gentle AI could not read an answer, so it reviewed this change and will ask again next time."
 	reviewConsentUnknownNotice    = "Gentle AI did not recognize that answer, so it reviewed this change and will ask again next time."
 
@@ -486,19 +532,41 @@ func reviewConsoleTerminal(file *os.File) bool {
 // the user. The kill switch decides whether a start may run at all, and the
 // one-time question is asked here — after the candidate is frozen and the tier
 // is classified — so it can state the real reason instead of a generic warning.
-func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment) error {
+//
+// The consent declaration changes only who the question is asked through: a
+// relay-declared caller receives the typed question instead of the console
+// prompt or the silent skip, and the granted/declined answers reuse exactly
+// the machinery the interactive answers use — granting latches the one-time
+// question, declining persists nothing and stays scoped to this candidate.
+func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment, consent reviewStartConsentMode) error {
 	global, err := readGlobalRDDMode()
 	if err != nil {
 		return err
 	}
-	if _, err := reviewtransaction.AuthorizeRDDOperation(
-		ctx, repo, global, reviewtransaction.RDDOperationStart); err != nil {
+	status, err := reviewtransaction.AuthorizeRDDOperation(
+		ctx, repo, global, reviewtransaction.RDDOperationStart)
+	if err != nil {
 		return reviewModeUnreadable(ctx, repo, global, err)
 	}
 	if assessment.Level == reviewtransaction.RiskLow {
 		// Tier 0 is silent structural readback. Asking here would reintroduce
-		// exactly the ceremony the silent readback exists to remove.
+		// exactly the ceremony the silent readback exists to remove, and a
+		// relayed decline has no question to answer.
+		if consent == reviewConsentModeDeclined {
+			return errReviewConsentDeclineWithoutQuestion
+		}
 		return nil
+	}
+	switch consent {
+	case reviewConsentModeDeclined:
+		// An explicit relayed "no" is honored exactly like the interactive
+		// answer 2: this candidate only, nothing persisted, never latched.
+		return fmt.Errorf("%w: the next candidate is asked again", errReviewDeclinedForCandidate)
+	case reviewConsentModeGranted:
+		// The relayed "yes" mirrors the interactive answer 1: latch the
+		// one-time question so future candidates review without asking. The
+		// latch write is idempotent, which keeps this follow-up replay-safe.
+		return recordReviewConsentAsked(ctx, repo)
 	}
 	console := reviewConsole()
 	asked, err := reviewtransaction.RDDConsentAsked(ctx, repo)
@@ -511,6 +579,12 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 	if asked {
 		return nil
 	}
+	if consent == reviewConsentModeRelay {
+		// The caller declared it can relay a blocking question, so the typed
+		// envelope is the question. Nothing is persisted and no notice is
+		// printed: the envelope replaces the console, it does not add to it.
+		return errReviewConsentQuestionRequired
+	}
 	if !console.Interactive {
 		// The notice carries the same information every time (issue #1848), so
 		// a clone that already saw it once does not need it again. This is
@@ -522,6 +596,13 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 		// occurrence must never be silently suppressed.
 		if shown, shownErr := reviewConsentNoticeAlreadyShown(ctx, repo); shownErr != nil || !shown {
 			_, _ = fmt.Fprintln(console.Output, reviewConsentSkippedNotice)
+			if status.Source == reviewtransaction.RDDModeSourceDefault {
+				// The status already knows this provenance: reviews are on
+				// because no source expressed an opinion, and the operator
+				// working headless deserves to learn the switch was never
+				// explicitly chosen.
+				_, _ = fmt.Fprintln(console.Output, reviewConsentSkippedDefaultProvenance)
+			}
 			_ = recordReviewConsentNoticeShown(ctx, repo)
 		}
 		return nil

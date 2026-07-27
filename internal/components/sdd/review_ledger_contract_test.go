@@ -200,6 +200,17 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// manifest arrive in the prompt, and states that there are no
 		// execution tools. This is a deliberate contract change, not drift.
 		//
+		// wantChars then grew by 871 (7,932 -> 8,803 / 17,136 -> 18,007) when
+		// review-ledger-contract.md gained the per-candidate consent relay
+		// paragraph (the negotiated `--consent relay` question is a Lossless
+		// Blocking Prompt the orchestrator must relay losslessly, and a
+		// decline is not the kill switch) and the 4R cost-forecast rule (a
+		// canonical four-lens selection is long work: one forecast — four
+		// reviewer model runs, the frozen correction budget, the bounded
+		// correction — before the first lens). Both close field gaps where an
+		// agent launched a 4R review with no consent relayed and no cost
+		// warning. This is a deliberate contract change, not drift.
+		//
 		// maxCharacters is NOT a second copy of wantChars. wantChars catches
 		// every byte of change and must be updated by hand with a reason; the
 		// ceiling exists only to catch the rendering silently giving up on
@@ -209,8 +220,8 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// un-rendered protocol). The ceilings below sit ~15% above the pins so
 		// an ordinary wording fix never touches them, and 4-5x below the
 		// un-rendered sizes so a renderer regression still fails loudly.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 7_932, maxCharacters: 9_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 17_136, maxCharacters: 20_000},
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 8_803, maxCharacters: 10_000},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 18_007, maxCharacters: 20_500},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
