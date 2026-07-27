@@ -6910,3 +6910,54 @@ func TestRefreshInstalledOpenCodePluginsSkipsSymlinksAndDirectories(t *testing.T
 		}
 	}
 }
+
+// TestInjectRefreshesStaleArchiveSkillWithFinalStateAuthority proves the
+// freshness path for the sdd-archive instruction fix end to end: an installed
+// config carrying pre-Final-State-Authority skill text must actually receive
+// the new contract on the next inject (community issue #1882 was reported from
+// a mixed install whose managed skills lagged the binary).
+func TestInjectRefreshesStaleArchiveSkillWithFinalStateAuthority(t *testing.T) {
+	home := t.TempDir()
+
+	skillPath := filepath.Join(home, ".claude", "skills", "sdd-archive", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	stale := "---\nname: sdd-archive\n---\n\n## Purpose\n\nOld archive skill text without the snapshot contract.\n"
+	if err := os.WriteFile(skillPath, []byte(stale), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	result, err := Inject(home, claudeAdapter(), "")
+	if err != nil {
+		t.Fatalf("Inject() error = %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("Inject() over a stale archive skill reported no change")
+	}
+
+	content, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", skillPath, err)
+	}
+	text := string(content)
+	for _, want := range []string{
+		"## Final-State Authority",
+		"`apply-progress` and `verify-report` are intermediate snapshots",
+		"outranks intermediate snapshots",
+		"Do NOT echo the stale claim",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("installed sdd-archive skill still stale — missing %q", want)
+		}
+	}
+
+	workflowPath := filepath.Join(home, ".claude", "skills", "_shared", "sdd-orchestrator-workflow.md")
+	workflowContent, err := os.ReadFile(workflowPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", workflowPath, err)
+	}
+	if !strings.Contains(string(workflowContent), "### Archive Final-State Handoff (MANDATORY)") {
+		t.Fatal("installed lazy SDD workflow missing archive final-state handoff section")
+	}
+}

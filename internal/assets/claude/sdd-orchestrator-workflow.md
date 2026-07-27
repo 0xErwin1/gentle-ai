@@ -281,6 +281,10 @@ When launching `sdd-apply` or `sdd-verify`, search for testing capabilities (`sd
 
 When launching `sdd-apply` after prior batches, search for `sdd/{change-name}/apply-progress`. If it exists, tell the sub-agent to read it first, merge new progress into it, and save the combined result. Do not overwrite.
 
+### Archive Final-State Handoff (MANDATORY)
+
+When launching `sdd-archive`, forward explicit final-state facts for any work completed after `apply-progress` or `verify-report` were persisted — verify warnings fixed in later commits, blockers resolved, tasks finished, updated test or issue counts — with commit or evidence references where available. Those two artifacts are intermediate snapshots, valid at the time they were written; the archive report records the state at close, and explicit final-state facts in the `sdd-archive` launch prompt outrank stale snapshot claims.
+
 ### Topic Keys
 
 | Artifact        | Topic Key                          |

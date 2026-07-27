@@ -365,6 +365,10 @@ SDD phases run in dynamically defined phase subagents. The orchestrator provides
 
 For phases with required dependencies, retrieve artifact references from Engram using topic keys before invoking the phase. Pass artifact references (topic keys), NOT full content. The phase subagent retrieves full content only when actively working on that phase — do not inline entire specs or designs into the orchestrator conversation. Do NOT rely on conversation history alone — conversation context is lossy across sessions.
 
+#### Archive Final-State Handoff (MANDATORY)
+
+When launching `sdd-archive`, forward explicit final-state facts for any work completed after `apply-progress` or `verify-report` were persisted — verify warnings fixed in later commits, blockers resolved, tasks finished, updated test or issue counts — with commit or evidence references where available. Those two artifacts are intermediate snapshots, valid at the time they were written; the archive report records the state at close, and explicit final-state facts in the `sdd-archive` launch prompt outrank stale snapshot claims.
+
 #### Strict TDD Forwarding (MANDATORY)
 
 When invoking `sdd-apply` or `sdd-verify` phases, the orchestrator MUST:

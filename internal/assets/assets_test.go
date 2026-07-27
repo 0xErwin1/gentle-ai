@@ -2130,3 +2130,89 @@ func TestSDDOrchestratorAssetsScopedToDedicatedAgent(t *testing.T) {
 		})
 	}
 }
+
+// TestSDDArchiveFinalStateAuthorityContract pins the instruction-layer fix for
+// the community report that sdd-archive summarized intermediate artifacts
+// (verify-report, apply-progress) instead of the final state of the work. The
+// text must carry an explicit authority hierarchy, the intermediate-vs-final
+// snapshot rule, and the contradiction-recording rule. This pins the words
+// only — whether the model obeys them can be verified solely by community
+// runtime behavior.
+func TestSDDArchiveFinalStateAuthorityContract(t *testing.T) {
+	skill := MustRead("skills/sdd-archive/SKILL.md")
+	for _, required := range []string{
+		"## Final-State Authority",
+		"state of the change AT CLOSE",
+		"`apply-progress` and `verify-report` are intermediate snapshots",
+		"at the time it was written",
+		"**Native review authority**",
+		"**The persisted tasks artifact**",
+		"**Explicit final-state facts in the orchestrator's launch prompt**",
+		"outranks intermediate snapshots",
+		"never evidence of final state",
+		"Do NOT echo the stale claim",
+		"record the contradiction in the archive report explicitly",
+		"Never resolve it silently",
+		"at verification time",
+		"record the failure as undiagnosed",
+		"It does not weaken gates",
+		"requires re-running `sdd-verify`",
+	} {
+		if !strings.Contains(skill, required) {
+			t.Fatalf("skills/sdd-archive/SKILL.md missing final-state authority wording %q", required)
+		}
+	}
+
+	// Every orchestrator surface that launches sdd-archive must instruct the
+	// launcher to hand over final-state facts. Claude's always-on bootstrap is
+	// intentionally thin; its lazy workflow document carries the launch
+	// protocol, so it stands in for claude/sdd-orchestrator.md here.
+	orchestratorSurfaces := []string{
+		"antigravity/sdd-orchestrator.md",
+		"claude/sdd-orchestrator-workflow.md",
+		"codex/sdd-orchestrator.md",
+		"cursor/sdd-orchestrator.md",
+		"gemini/sdd-orchestrator.md",
+		"generic/sdd-orchestrator.md",
+		"hermes/sdd-orchestrator.md",
+		"kimi/sdd-orchestrator.md",
+		"kiro/sdd-orchestrator.md",
+		"opencode/sdd-orchestrator.md",
+		"qwen/sdd-orchestrator.md",
+		"windsurf/sdd-orchestrator.md",
+	}
+	for _, path := range orchestratorSurfaces {
+		content := MustRead(path)
+		for _, required := range []string{
+			"Archive Final-State Handoff (MANDATORY)",
+			"forward explicit final-state facts",
+			"intermediate snapshots, valid at the time they were written",
+			"outrank stale snapshot claims",
+		} {
+			if !strings.Contains(content, required) {
+				t.Fatalf("%s missing archive final-state handoff wording %q", path, required)
+			}
+		}
+	}
+
+	// Executor stubs and archive commands reinforce the snapshot rule at the
+	// point where the archive report is actually composed.
+	for _, path := range []string{
+		"claude/agents/sdd-archive.md",
+		"cursor/agents/sdd-archive.md",
+		"kiro/agents/sdd-archive.md",
+		"kimi/agents/sdd-archive.md",
+		"claude/commands/sdd-archive.md",
+		"opencode/commands/sdd-archive.md",
+	} {
+		content := MustRead(path)
+		for _, required := range []string{
+			"intermediate snapshots",
+			"outrank stale snapshot claims",
+		} {
+			if !strings.Contains(content, required) {
+				t.Fatalf("%s missing final-state snapshot rule %q", path, required)
+			}
+		}
+	}
+}
