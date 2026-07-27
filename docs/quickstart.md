@@ -49,14 +49,32 @@
   [restoration gate](release-signing.md#windows-distribution-restoration-gate).
 
 ```powershell
+# Latest released RDD build (v2 line)
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
+
+# Stable, pre-RDD pin (v1 line)
 go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.46.0
 ```
+
+The two commands use different import paths on purpose. Go requires the `/vN`
+suffix in the module path for major version 2 and above, so every `v2.x` release
+is installed as `.../gentle-ai/v2/cmd/gentle-ai`. The `v1.46.0` pin predates that
+rule and must keep the unsuffixed path; adding `/v2` to it would make Go refuse
+the tag.
 
 ## Version Policy
 
 Receipt-Driven Development (RDD) started in `gentle-ai` `v1.47.0` on 2026-07-10, when the first bounded native review transactions were added. Every release from `v1.47.0` onward is part of the unstable RDD development line. New releases will continue improving RDD until the project declares the line stable. The stable version for normal use without RDD is the immediately preceding release, `v1.46.0`.
 
 Use `@latest` to install the latest released RDD build for testing. The negotiated public review contract was published in `v2.1.6`. Builds from `main` may contain changes after the latest release and are intended for unreleased RDD development testing.
+
+### Import paths differ between the v1 and v2 lines
+
+Go requires the module path of a major version 2 or higher to end in `/vN`.
+Every `v2.x` install therefore uses `github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai`,
+and the pre-RDD `v1.46.0` pin keeps the unsuffixed
+`github.com/gentleman-programming/gentle-ai/cmd/gentle-ai`. Each path resolves
+only its own major line; swapping them makes Go refuse the version.
 
 ### Install the stable version
 
@@ -70,7 +88,7 @@ gentle-ai version
 ### Install the latest released RDD build for testing
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 gentle-ai version
 ```
 
@@ -79,7 +97,7 @@ gentle-ai version
 Only use `main` when testing changes that are not part of a release yet:
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@main
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
 gentle-ai version
 ```
 

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/doctor"
 )
 
 // --- checkOneTool ---

@@ -9,7 +9,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/sddstatus"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
 // RunSDDAttempt exposes the artifact-store-agnostic native runtime authority.

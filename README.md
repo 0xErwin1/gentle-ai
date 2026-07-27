@@ -25,6 +25,8 @@
 > go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.46.0
 > ```
 > To test the latest released RDD build, use `@latest`. Use `@main` only for unreleased development changes. See the [full RDD version policy](docs/quickstart.md#version-policy).
+>
+> The `v1.46.0` pin above uses the unsuffixed import path; every `v2.x` install uses `github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai`, because Go requires the `/vN` suffix for major version 2 and above.
 
 ## What It Does
 
@@ -92,7 +94,7 @@ curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/mai
 **Windows (PowerShell)**
 
 ```powershell
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 ```
 
 > [!WARNING]
@@ -128,6 +130,10 @@ brew install gentle-ai
 go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.46.0
 ```
 
+The stable pin keeps the unsuffixed import path because `v1.46.0` predates the
+`/v2` module path. Releases on the `v2.x` line install from
+`github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai`.
+
 **Scoop (Windows)** — temporarily unavailable while official Windows binary distribution is held for public-trust Authenticode signing. Use the Windows `go install` command above.
 
 By default, `gentle-ai install` writes agent-scoped files to each selected agent's global config directory. To keep the Gentleman stack isolated to one project, run:
@@ -145,7 +151,7 @@ Workspace scope applies to selected agents for agent-scoped files such as system
 curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta
 
 # Windows (PowerShell)
-$env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@main
+$env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
 ```
 
 ### RDD version policy
@@ -164,14 +170,14 @@ gentle-ai version
 **Latest released RDD build (unstable)**
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 gentle-ai version
 ```
 
 **Unreleased RDD development build (`main`)**
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@main
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
 gentle-ai version
 ```
 

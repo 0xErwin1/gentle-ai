@@ -21,7 +21,7 @@ Release archives are currently produced for macOS and Linux only. Windows source
 ## Windows Notes
 
 - **Install from source** with Go 1.25.10+:
-  `go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest`.
+  `go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest`.
 - **`gentle-ai upgrade` updates itself automatically when Go 1.25.10+ is on `PATH`.** It runs `go install …/cmd/gentle-ai@vX.Y.Z` pinned to the exact release tag. The module is verified against the Go checksum database (`sum.golang.org`) — a different trust anchor than the minisign signature used for the Linux/macOS release binaries, not a missing one.
   Because `go install` writes to `GOBIN` (or `GOPATH\bin`), which is not necessarily the directory your shell resolves, the upgrade checks the destination afterwards and warns — naming both full paths — if a different `gentle-ai.exe` earlier on `PATH` would keep running.
 - **Without Go on `PATH`, the upgrader fails closed.** It downloads and executes nothing, and prints the runnable `go install` command instead.

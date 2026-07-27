@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 // compactAuthorityLockPath returns the one exclusive advisory lock every

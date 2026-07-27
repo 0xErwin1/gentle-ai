@@ -15,10 +15,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/cli"
-	"github.com/gentleman-programming/gentle-ai/internal/components/engram"
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/cli"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
 
 // engramDownloadFn is the function used to download the engram binary on the stable channel.
@@ -500,10 +500,15 @@ func isBetaGentleAIUpgrade(r update.UpdateResult) bool {
 // same risk of writing somewhere the shell does not resolve, so it performs the
 // same non-fatal destination verification.
 func goInstallMainUpgrade(tool update.ToolInfo) error {
-	module := strings.ToLower(fmt.Sprintf("github.com/%s/%s", strings.TrimSpace(tool.Owner), strings.TrimSpace(tool.Repo)))
-	if module == "github.com//" {
-		module = "github.com/gentleman-programming/gentle-ai"
+	repository := strings.ToLower(fmt.Sprintf("github.com/%s/%s", strings.TrimSpace(tool.Owner), strings.TrimSpace(tool.Repo)))
+	if repository == "github.com//" {
+		repository = "github.com/gentleman-programming/gentle-ai"
 	}
+	// Go derives the module path from the repository plus the major-version
+	// suffix: for major 2 and above the module path must end in /vN or the
+	// toolchain refuses every resolution of that repository, including the
+	// branch pseudo-versions this beta path installs.
+	module := repository + "/v2"
 
 	destDir, destErr := goInstallDestinationDir()
 

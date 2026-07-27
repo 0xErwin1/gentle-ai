@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/pathidentity"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathidentity"
 )
 
 // aliasedRepository builds a repository that is reachable under two different

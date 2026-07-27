@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 const ReviewReconcileAuthorityBatchPreparationInputSchema = "gentle-ai.review-batch-reconcile-preparation-input/v1"
