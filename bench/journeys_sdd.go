@@ -673,6 +673,83 @@ func sddBlockedNonLeafFinish(r *journeyRun) error {
 	return nil
 }
 
+// sddTransitionCreatesALineage runs the transition the negotiated status
+// publishes and requires it to have actually created something.
+//
+// This step exists because of a bug that is easy to reintroduce and almost
+// impossible to notice. The default lineage name is a pure function of the
+// target, so a superseded lineage permanently occupies the name its own target
+// derives. Status was right that no leaf governed the live candidate and right
+// to route to a start, but the command it printed carried no lineage, so the
+// start collided with the superseded record and answered "blocked" at exit 0.
+//
+// The product named the next thing to run, the operator ran it exactly as
+// printed, it succeeded, and nothing happened. `executeNextTransitionVerbatim`
+// would not have caught it: running verbatim was never the problem.
+func sddTransitionCreatesALineage(r *journeyRun) error {
+	observation, err := runNextTransitionVerbatim(r)
+	if err != nil {
+		return err
+	}
+	var envelope struct {
+		Action    string `json:"action"`
+		LineageID string `json:"lineage_id"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &envelope); err != nil {
+		return fmt.Errorf("the transition's own output is not readable: %w", err)
+	}
+	if envelope.LineageID == "" {
+		return fmt.Errorf("the transition ran and created no lineage: action %q", envelope.Action)
+	}
+	return nil
+}
+
+// sddNamesAbandonExit reports whether a refusal named the abandonment. The
+// backtick is part of the match for the same reason the two helpers above carry
+// one: prose mentioning a verb is not a named command, and this branch exists
+// precisely because prose was what the operator got.
+func sddNamesAbandonExit(observation Observation) bool {
+	return strings.Contains(observation.Stdout+observation.Stderr, "`gentle-ai review abandon ")
+}
+
+// sddBlockedStrandedFinish holds the contract for the third topology, and it is
+// deliberately NOT the non-leaf one.
+//
+// A stranded successor is also non-leaf, so this journey used to assert the
+// non-leaf promise: name the review router, name no finish. That promise turned
+// out to be wrong here, and wrong in the most expensive way. The router's
+// transition ran, exited 0 and changed nothing, and the finish it then asked
+// for was refused naming nothing at all. Routing to a dead end is worse than
+// routing nowhere, because the operator spends their trust on it.
+//
+// So the branch is split at the source now, and the contract splits with it.
+// A stranded successor is pristine by construction: it froze a target the
+// candidate no longer has, so it never captured a result, a finding or a
+// correction. Abandoning it is not discarding the operator's work, it restores
+// it, because the approved predecessor it superseded is the authority holding
+// the corrected candidate and becomes the leaf again.
+//
+// Naming the router here would now be the defect. So would naming a finish.
+func sddBlockedStrandedFinish(r *journeyRun) error {
+	if err := proveNonLeafTopology(r.sandbox, r.sandbox.Scratch["bound"], sddSuccessorLineage); err != nil {
+		return err
+	}
+	observation, err := sddPassingFinish(r, "bench-finish-blocked")
+	if err != nil {
+		return err
+	}
+	if !sddNamesAbandonExit(observation) {
+		return fmt.Errorf("the stranded refusal named no abandonment: %s", firstLine(observation.Stderr))
+	}
+	if sddNamesReviewRouter(observation) {
+		return fmt.Errorf("the stranded refusal named the review router, which runs and changes nothing here: %s", firstLine(observation.Stderr))
+	}
+	if sddNamesFinishExit(observation) {
+		return fmt.Errorf("the stranded refusal named a finish that is refused one layer deeper: %s", firstLine(observation.Stderr))
+	}
+	return nil
+}
+
 // sddRemediationFinish re-runs the finish with the remediation trio, taking all
 // three values from where the refusal said they are published — binding_revision,
 // binding.lineage and evidence_revision on `sdd-attempt status` — and nothing
@@ -824,6 +901,35 @@ func sddResetThenBegin(r *journeyRun) error {
 // All three refusals are CORRECT. What has never been measured is what they cost
 // the person who walks into them, which is the path that produced the original
 // deadlock report.
+// sddInvalidateHealthyApproved is the third guard rail, split out of the
+// composite above so its declaration reaches the classifier.
+//
+// The selectors come from the sandbox rather than from a fresh status read,
+// because the finalize step already recorded them. That keeps the step to one
+// invocation, which is what the declaration is attached to.
+func sddInvalidateHealthyApproved(sandbox *Sandbox) ([]string, error) {
+	if strings.TrimSpace(sandbox.Lineage) == "" || strings.TrimSpace(sandbox.Revision) == "" {
+		return nil, fmt.Errorf("no lineage recorded to invalidate: lineage %q revision %q", sandbox.Lineage, sandbox.Revision)
+	}
+	return []string{
+		"review", "invalidate",
+		"--lineage", sandbox.Lineage,
+		"--expected-revision", sandbox.Revision,
+		"--gate", "post-apply",
+		"--cwd", sandbox.Repo,
+	}, nil
+}
+
+// sddProveApprovalSurvived re-checks that the refused invalidation changed
+// nothing. A guard rail that refuses and mutates anyway would be worse than one
+// that allows, because the operator would believe their approval was intact.
+func sddProveApprovalSurvived(r *journeyRun) error {
+	if !provePostApplyAllows(r.sandbox) {
+		return errors.New("a refused invalidation left the approved authority no longer allowing")
+	}
+	return nil
+}
+
 func sddWalkIntoRecoveryGuardRails(r *journeyRun) error {
 	observation := r.run([]string{"review", "status", "--cwd", r.sandbox.Repo}, false)
 	var head authorityHead
@@ -854,16 +960,16 @@ func sddWalkIntoRecoveryGuardRails(r *journeyRun) error {
 		"--successor-lineage", "review-unwanted-successor",
 		"--disposition", "invalidated"), false)
 
-	// Three: invalidate it directly.
-	r.run(productArgsFor(r, "review", "invalidate",
-		"--lineage", lineage,
-		"--expected-revision", revision,
-		"--gate", "post-apply"), false)
+	// Three, invalidating it directly, is deliberately NOT here. It is the one
+	// of the three whose honest exit is a world action rather than a command,
+	// so it carries a by_design declaration, and a declaration on a composite
+	// never reaches the classifier: the runner rejects one on a step that
+	// issues no invocation of its own. It is its own step below.
 
-	// The authority must survive all three untouched. A guard rail that refuses
-	// and mutates anyway would be the worst outcome available here.
+	// The authority must survive both refusals untouched. A guard rail that
+	// refuses and mutates anyway would be the worst outcome available here.
 	if !provePostApplyAllows(r.sandbox) {
-		return errors.New("three refused operations left the approved authority no longer allowing")
+		return errors.New("two refused operations left the approved authority no longer allowing")
 	}
 	return nil
 }
@@ -1003,19 +1109,23 @@ func sddJourneys() []Journey {
 			ID:     "j39-sdd-remediation-stranded-successor",
 			Title:  "The successor can never be finalized: what the router names, and what actually clears it",
 			Source: "shape 4 (the named continuation runs and changes nothing) + shape 2 (a clearable state read as terminal)",
-			// Expected, and this is the journey that reports a real gap: the
-			// successor's candidate is reverted below its own frozen target, so it
-			// can never be finalized. The refusal still routes to the review
-			// router; the router's printed transition still RUNS, exits 0 and
-			// changes nothing; and the finish the refusal then asks for is refused
-			// with `compact post-apply gate is not allow`, which names nothing
-			// runnable at all.
+			// The successor's candidate is reverted below its own frozen target,
+			// so it can never be finalized. This journey was added while that
+			// state routed to the review router, whose printed transition RAN,
+			// exited 0 and changed nothing, after which the finish it asked for
+			// was refused naming nothing at all. It reported the gap for exactly
+			// one measurement before the gap was closed.
 			//
-			// The exit that does work — abandoning the stranded successor with a
-			// hand-assembled authorization — is named by no message on this path.
-			// It is driven here so the journey ends somewhere real rather than
-			// asserting a dead end the operator could in fact escape, and its cost
-			// shows up honestly in manual_tokens.
+			// Expected now: the refusal names the abandonment that clears it,
+			// complete except for the reason and actor the operator supplies, and
+			// names neither the router nor a finish, because both are dead ends
+			// on this shape. Following it restores the approved predecessor as
+			// the leaf, and the finish then succeeds through the self-successor
+			// exit.
+			//
+			// The authorization still has to be assembled by hand, so the cost
+			// shows up honestly in manual_tokens rather than being hidden by the
+			// block having a name now.
 			Steps: []Step{
 				{Name: "fixture: repository with a committed OpenSpec change", Fixture: sddRuntimeRepo},
 				{Name: "begin, fail, begin again", Requires: sddAttemptBeginCapability, Composite: sddBeginFailBegin},
@@ -1026,11 +1136,9 @@ func sddJourneys() []Journey {
 				{Name: "fixture: the scope widens after the binding", Fixture: sddWidenScope},
 				{Name: "recover the successor the gate names", Requires: recoverCapability, Composite: sddRecoverSuccessor},
 				{Name: "fixture: strand the successor below its own frozen target", Fixture: sddStrandSuccessor},
-				{Name: "plain passing finish with a stranded successor in the way", Requires: sddAttemptFinishCapability, Composite: sddBlockedNonLeafFinish},
-				{Name: "run the review transition the refusal routed to", Requires: statusCapability, Composite: executeNextTransitionVerbatim},
-				{Name: "the remediation finish the refusal then asks for", Requires: sddAttemptRemediationCapability,
-					Composite: sddRemediationFinish("", "bench-finish-stranded")},
-				{Name: "abandon the stranded successor, which nothing named", Requires: abandonCapability, Composite: sddAbandonStrandedSuccessor},
+				{Name: "plain passing finish with a stranded successor in the way", Requires: sddAttemptFinishCapability, Composite: sddBlockedStrandedFinish},
+				{Name: "the review transition still creates a real lineage here", Requires: statusCapability, Composite: sddTransitionCreatesALineage},
+				{Name: "abandon the stranded successor, as the refusal named", Requires: abandonCapability, Composite: sddAbandonStrandedSuccessor},
 				{Name: "the self-successor finish, now that the strand is gone", Requires: sddAttemptRemediationCapability,
 					Composite: sddRemediationFinish("", "bench-finish-after-abandon")},
 				{Name: "prove the objective closed", Composite: sddProveObjectiveComplete},
@@ -1181,7 +1289,21 @@ func sddJourneys() []Journey {
 				{Name: "fixture: stage docs", Fixture: stageProse("", "healthy")},
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
 				{Name: "review finalize", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: rememberLineage},
-				{Name: "walk into the recovery guard rails", Requires: invalidateCapability, Composite: sddWalkIntoRecoveryGuardRails},
+				{Name: "walk into the recovery guard rails", Requires: recoverCapability, Composite: sddWalkIntoRecoveryGuardRails},
+				// The third rail is the one whose honest exit is not a command.
+				// The approval covers exactly the candidate in the working tree,
+				// so nothing the operator can run makes it stale; the bytes have
+				// to change first. The product cannot print a complete command
+				// either, because the successor's name is the operator's to
+				// choose. The declaration is what says that out loud, and it is
+				// verified against the words the product actually printed.
+				{Name: "invalidate the healthy approved authority", Requires: invalidateCapability,
+					Args: sddInvalidateHealthyApproved,
+					ByDesign: &ByDesignDeclaration{
+						Shape:      ByDesignWorldAction,
+						NextAction: "change the candidate first",
+					}},
+				{Name: "the refused invalidation changed nothing", Composite: sddProveApprovalSurvived},
 				{Name: "fixture: change the candidate, which is what all three asked for", Fixture: stageProse("", "changed")},
 				{Name: "recover, following exactly what the gate then names",
 					Requires: recoverCapability, Composite: recoverScopeChangeRoundTrip("review-guardrail-successor")},

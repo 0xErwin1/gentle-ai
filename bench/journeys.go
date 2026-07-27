@@ -232,26 +232,34 @@ func rejectedThenRecapture(r *journeyRun) error {
 // product prints and run them exactly, with no repair. If a token is not a
 // complete flag, this step fails and the friction is visible.
 func executeNextTransitionVerbatim(r *journeyRun) error {
+	_, err := runNextTransitionVerbatim(r)
+	return err
+}
+
+// runNextTransitionVerbatim is the same drive, returning what the transition
+// answered. Steps that only need it to have run use the wrapper above; a step
+// that has to prove the transition CHANGED something needs the observation,
+// because running verbatim and succeeding is not the same as arriving anywhere.
+func runNextTransitionVerbatim(r *journeyRun) (Observation, error) {
 	envelope, err := readStatus(r)
 	if err != nil {
-		return err
+		return Observation{}, err
 	}
 	if envelope.NextTransition.Kind != "execute" {
-		return fmt.Errorf("expected an execute transition, got %q", envelope.NextTransition.Kind)
+		return Observation{}, fmt.Errorf("expected an execute transition, got %q", envelope.NextTransition.Kind)
 	}
 	verb := strings.SplitN(envelope.NextTransition.Execute.Operation, ".", 2)
 	if len(verb) != 2 {
-		return fmt.Errorf("execute operation %q is not <verb>.<subcommand>", envelope.NextTransition.Execute.Operation)
+		return Observation{}, fmt.Errorf("execute operation %q is not <verb>.<subcommand>", envelope.NextTransition.Execute.Operation)
 	}
 	args := []string{verb[0], verb[1], "--cwd", r.sandbox.Repo}
 	for _, argument := range envelope.NextTransition.Execute.Arguments {
 		if argument.Token == "" {
-			return fmt.Errorf("argument %q carried no runnable token", argument.Name)
+			return Observation{}, fmt.Errorf("argument %q carried no runnable token", argument.Name)
 		}
 		args = append(args, argument.Token)
 	}
-	r.run(args, false)
-	return nil
+	return r.run(args, false), nil
 }
 
 // ---------------------------------------------------------------------------
