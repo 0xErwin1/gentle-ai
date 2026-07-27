@@ -81,6 +81,42 @@ func TestPrePushScopeChangeNamedRecoveryReachesAllow(t *testing.T) {
 			},
 		},
 		{
+			// The community Flow 9 sequence (Refresh 7, embedded revision
+			// 1b1a8676): the reviewed delivery is FULLY PUBLISHED before the
+			// next change exists. The publication boundary then already
+			// contains the delivery, so no commit in the range carries the
+			// reviewed base tree and the assessment errors with the ambiguous
+			// published delivery base; the denial names the committed
+			// base-diff recovery frozen against the derived merge-base.
+			//
+			// This is the sequence whose follow-through regressed: every
+			// earlier case in this table leaves the predecessor delivery
+			// unpushed, so the composed recovery chain base still equals the
+			// live publication base and the whole-chain delivery verification
+			// under the final-authorization lock stayed satisfiable. With the
+			// predecessor's segment published, that check (then gated on
+			// recoveryBound -- chain composes -- instead of on the rebind the
+			// evaluation actually relied on) became unsatisfiable, and the
+			// gate answered the recovery it had itself named with
+			// "compact recovery delivery changed during final authorization".
+			// The boundary here is DERIVED, exactly as the testing guide runs
+			// it -- no explicit --base-ref anywhere.
+			name:       "published predecessor delivery then unreviewed commit",
+			wantDenial: reviewtransaction.GateDenial{Stage: "delivery-derivation", Code: "delivery-base-ambiguous"},
+			stage: func(t *testing.T, repo string) {
+				writeScopeRecoveryFile(t, repo, "alpha.txt", "alpha\n")
+				runReviewCLIGit(t, repo, "add", "-N", "alpha.txt")
+				finalizeFacadeReviewForRepo(t, repo)
+				runReviewCLIGit(t, repo, "add", "alpha.txt")
+				runReviewCLIGit(t, repo, "commit", "-qm", "feat: alpha")
+				branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
+				runReviewCLIGit(t, repo, "push", "-q", "origin", "HEAD:refs/heads/"+branch)
+				writeScopeRecoveryFile(t, repo, "beta.txt", "beta\n")
+				runReviewCLIGit(t, repo, "add", "beta.txt")
+				runReviewCLIGit(t, repo, "commit", "-qm", "feat: beta unreviewed")
+			},
+		},
+		{
 			// Exactly one commit past the reviewed base, but carrying
 			// different bytes: the assessment COMPLETES and reports a
 			// candidate mismatch, so discovery buckets this as scopeChanged
@@ -125,6 +161,68 @@ func TestPrePushScopeChangeNamedRecoveryReachesAllow(t *testing.T) {
 			}
 			assertReviewGateResult(t, validated.Bytes(), reviewtransaction.GateAllow)
 		})
+	}
+}
+
+// TestPrePushRecoveredPublishedDeliveryDriftStaysRefused is the negative
+// direction of the published-predecessor case above. Narrowing the
+// final-authorization chain re-verification to the rebind must never admit a
+// delivery that actually drifted: after the named recovery reaches allow, the
+// delivered bytes are rewritten so the push would publish content the
+// successor's receipt never bound. The gate must refuse again -- an allow here
+// would mean the recovery receipt authorized bytes nobody reviewed.
+func TestPrePushRecoveredPublishedDeliveryDriftStaysRefused(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
+	configureCLIReviewPublicationRemote(t, repo, branch)
+
+	writeScopeRecoveryFile(t, repo, "alpha.txt", "alpha\n")
+	runReviewCLIGit(t, repo, "add", "-N", "alpha.txt")
+	finalizeFacadeReviewForRepo(t, repo)
+	runReviewCLIGit(t, repo, "add", "alpha.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "feat: alpha")
+	runReviewCLIGit(t, repo, "push", "-q", "origin", "HEAD:refs/heads/"+branch)
+	writeScopeRecoveryFile(t, repo, "beta.txt", "beta\n")
+	runReviewCLIGit(t, repo, "add", "beta.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "feat: beta unreviewed")
+
+	_, scope := prePushScopeChangeDenial(t, repo)
+	if scope == nil {
+		t.Fatal("published-delivery denial carries no recovery diagnostics")
+	}
+	runNamedScopeChangeRecovery(t, repo, *scope, "drift-successor")
+	var validated bytes.Buffer
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-push"}, &validated); err != nil {
+		t.Fatalf("gate denied the recovery it named: %v\n%s", err, validated.String())
+	}
+	assertReviewGateResult(t, validated.Bytes(), reviewtransaction.GateAllow)
+
+	// Rewrite the delivered commit: same topology, different bytes. The
+	// successor's receipt binds the pre-drift candidate tree, so this is a
+	// genuine drift between authorization and publication.
+	writeScopeRecoveryFile(t, repo, "beta.txt", "beta drifted after approval\n")
+	runReviewCLIGit(t, repo, "add", "beta.txt")
+	runReviewCLIGit(t, repo, "commit", "-q", "--amend", "-m", "feat: beta drifted")
+
+	var denied bytes.Buffer
+	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-push"}, &denied)
+	if err == nil {
+		t.Fatalf("pre-push allowed a drifted delivery the receipt never bound: %s", denied.String())
+	}
+	var gateErr ReviewGateDeniedError
+	if !errors.As(err, &gateErr) {
+		t.Fatalf("drifted delivery denial = %T %v, want ReviewGateDeniedError", err, err)
+	}
+	if gateErr.Result == reviewtransaction.GateAllow {
+		t.Fatalf("drifted delivery reported allow: %s", denied.String())
+	}
+	var result ReviewValidateResult
+	if decodeErr := json.Unmarshal(denied.Bytes(), &result); decodeErr != nil {
+		t.Fatalf("decode drifted-delivery denial envelope: %v\n%s", decodeErr, denied.String())
+	}
+	if result.Allowed {
+		t.Fatalf("drifted-delivery denial envelope reports allowed: %s", denied.String())
 	}
 }
 
