@@ -115,6 +115,102 @@ func TestRARPlanAuthorityConcurrentExactReplayConverges(t *testing.T) {
 	}
 }
 
+// TestRARPlanAuthorityConvergesOnExhaustedLockOverIdenticalPublishedAuthority
+// is the deterministic reproduction of the Darwin-only 1872 failure shape: an
+// equivalent publisher exhausts the bounded lock wait while the identical
+// content-addressed authority already exists on disk. The lock is the real
+// advisory primitive held on the real LOCK path; only the timing is scripted.
+// The honest outcome is convergence on the published authority, not a timeout
+// for work that already succeeded.
+func TestRARPlanAuthorityConvergesOnExhaustedLockOverIdenticalPublishedAuthority(t *testing.T) {
+	t.Parallel()
+	fixture := newRARPlanFixture(t, "plan-lock-converge")
+	published, err := fixture.repository.PublishPlan(context.Background(), fixture.publication)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := acquireRARAuthorityLock(context.Background(), filepath.Join(fixture.repository.root, "LOCK"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.release() }()
+
+	converged, err := fixture.repository.PublishPlan(context.Background(), fixture.publication)
+	if err != nil {
+		t.Fatalf("PublishPlan() behind a continuously-held lock with the identical published authority = %v, want convergence", err)
+	}
+	if !rarPlanAuthoritiesEqual(published, converged) {
+		t.Fatalf("converged plan authority diverged:\npublished=%#v\nconverged=%#v", published, converged)
+	}
+}
+
+// TestRARPlanAuthorityLockExhaustionWithoutConvergentAuthorityStaysTyped is
+// the guard on the convergence above: exhaustion with genuinely divergent
+// state — no published object, or foreign bytes occupying the content address
+// — must keep failing with the typed *AuthorityLockTimeoutError and must not
+// mutate the store. Do not relax this test to make contention disappear.
+func TestRARPlanAuthorityLockExhaustionWithoutConvergentAuthorityStaysTyped(t *testing.T) {
+	t.Parallel()
+	t.Run("no published authority", func(t *testing.T) {
+		t.Parallel()
+		fixture := newRARPlanFixture(t, "plan-lock-exhausted")
+		if err := ensureRARRepositoryRoot(fixture.repository.identity.GitCommonDir, fixture.repository.root, true); err != nil {
+			t.Fatal(err)
+		}
+		if err := ensurePrivateRARDirectoryTree(fixture.repository.root, fixture.repository.planObjectsRoot(), true); err != nil {
+			t.Fatal(err)
+		}
+		held, err := acquireRARAuthorityLock(context.Background(), filepath.Join(fixture.repository.root, "LOCK"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = fixture.repository.PublishPlan(context.Background(), fixture.publication)
+		var timeout *AuthorityLockTimeoutError
+		if !errors.As(err, &timeout) || !errors.Is(err, ErrAuthorityLockTimeout) {
+			t.Fatalf("PublishPlan() with no published authority behind a held lock error = %v, want *AuthorityLockTimeoutError", err)
+		}
+		objectPath := fixture.repository.planObjectPath(fixture.planAuthority(t).AuthorityRef)
+		if _, err := os.Lstat(objectPath); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("exhausted publisher mutated the plan store: %v", err)
+		}
+
+		if err := held.release(); err != nil {
+			t.Fatal(err)
+		}
+		authority, err := fixture.repository.PublishPlan(context.Background(), fixture.publication)
+		if err != nil {
+			t.Fatalf("PublishPlan() after the obstruction cleared = %v", err)
+		}
+		if _, err := fixture.repository.ResolvePlan(context.Background(), authority.AuthorityRef); err != nil {
+			t.Fatalf("ResolvePlan() after the obstruction cleared = %v", err)
+		}
+	})
+	t.Run("foreign bytes occupy the content address", func(t *testing.T) {
+		t.Parallel()
+		fixture := newRARPlanFixture(t, "plan-lock-foreign")
+		if err := ensureRARRepositoryRoot(fixture.repository.identity.GitCommonDir, fixture.repository.root, true); err != nil {
+			t.Fatal(err)
+		}
+		if err := ensurePrivateRARDirectoryTree(fixture.repository.root, fixture.repository.planObjectsRoot(), true); err != nil {
+			t.Fatal(err)
+		}
+		objectPath := fixture.repository.planObjectPath(fixture.planAuthority(t).AuthorityRef)
+		if err := os.WriteFile(objectPath, []byte("{}\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		held, err := acquireRARAuthorityLock(context.Background(), filepath.Join(fixture.repository.root, "LOCK"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = held.release() }()
+
+		if _, err := fixture.repository.PublishPlan(context.Background(), fixture.publication); !errors.Is(err, ErrAuthorityLockTimeout) {
+			t.Fatalf("PublishPlan() over foreign occupied bytes behind a held lock error = %v, want ErrAuthorityLockTimeout", err)
+		}
+	})
+}
+
 func TestRARAuthorityRepositoryRejectsReplacedGitIdentityWithoutPublishing(
 	t *testing.T,
 ) {

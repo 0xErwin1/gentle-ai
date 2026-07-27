@@ -395,6 +395,29 @@ func (repository *RARAuthorityRepository) PublishPlan(
 	}
 	lock, err := acquireRARAuthorityLock(ctx, filepath.Join(repository.root, "LOCK"))
 	if err != nil {
+		// One lock-exhaustion shape is not a failure: equivalent publishers
+		// serialized behind the exclusive RAR lock, the bounded wait elapsed,
+		// and the winner already published this exact content-addressed
+		// authority. The plan object is immutable and published by atomic
+		// no-replace rename, so a byte-identical read-back proves this
+		// caller's publication already happened; it then passes the same
+		// identity-and-liveness gate the winner passes after publishing, and
+		// returns the identical authority instead of a timeout for work that
+		// succeeded (1872).
+		//
+		// Everything else keeps the typed error: cancellation, a missing
+		// object, different bytes at the address, a replaced repository
+		// identity, or a snapshot that is no longer live all mean there is
+		// nothing proven to converge on.
+		if errors.Is(err, ErrAuthorityLockTimeout) {
+			existing, readErr := readPrivateRARFile(repository.planObjectPath(authority.AuthorityRef))
+			if readErr == nil && bytes.Equal(existing, payload) &&
+				repository.validateIdentity(ctx) == nil &&
+				repository.validateLivePlanSnapshot(ctx, request.Snapshot) == nil &&
+				repository.validateIdentity(ctx) == nil {
+				return authority, nil
+			}
+		}
 		return RARPlanAuthority{}, err
 	}
 	defer lock.release()
