@@ -4,6 +4,7 @@ package reviewtransaction
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -76,6 +77,21 @@ func rarRepositoryDirectorySafe(_ string, info fs.FileInfo) bool {
 
 func rarRepositoryOpenDirectorySafe(_ *os.File, info fs.FileInfo) bool {
 	return rarRepositoryDirectorySafe("", info)
+}
+
+// rarRepositoryOwnerDescription renders the refused directory's owner for
+// operator-facing refusal messages. It is diagnostic only and never
+// participates in the trust decision itself.
+func rarRepositoryOwnerDescription(path string) string {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "an unreadable owner"
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "an unreadable owner"
+	}
+	return fmt.Sprintf("uid %d (current euid %d)", stat.Uid, os.Geteuid())
 }
 
 func openRARPathNoFollow(path string, directory bool) (*os.File, error) {

@@ -295,7 +295,79 @@ func rarSharedSecurityDescriptorOwnedByCurrentProcess(
 		return true
 	}
 	tokenOwner, err := currentRARWindowsTokenOwnerSID()
-	return err == nil && owner.Equals(tokenOwner)
+	if err == nil && owner.Equals(tokenOwner) {
+		return true
+	}
+	return rarTrustedWindowsAdministrativeOwner(owner)
+}
+
+// rarTrustedWindowsAdministrativeOwner reports whether a shared repository
+// directory owner is a higher-privilege administrative principal that cannot
+// be forged by a standard user.
+//
+// This check exists so an attacker-writable directory can never host review
+// authority. Two well-known owners clear that bar without being the current
+// token user:
+//
+//   - BUILTIN\Administrators (S-1-5-32-544): elevated shells, corporate
+//     provisioning, and managed installs create directories owned by this
+//     group rather than the individual user, because it is the default owner
+//     of every elevated token. Assigning it as an owner requires a token
+//     that already holds administrative rights (the SID must be
+//     owner-eligible in the assigning token, or the caller must hold
+//     SeRestorePrivilege/SeTakeOwnershipPrivilege), so it is at least as
+//     trustworthy as the current user's own ownership. Note the token-owner
+//     comparison above already accepts this exact owner whenever the current
+//     process runs elevated; refusing the same owner from a non-elevated
+//     token of the same user protected nothing and walled every repository
+//     whose .git ancestry was ever touched from an elevated shell.
+//   - NT AUTHORITY\SYSTEM (S-1-5-18): services, scheduled tasks, and CI
+//     runners executing as LocalSystem own the directories they create.
+//     Forging this owner requires SYSTEM itself.
+//
+// Deliberately NOT accepted: Everyone (S-1-1-0), Authenticated Users
+// (S-1-5-11), or any other arbitrary owner. Any standard user can hold or
+// squat such an owner, which is exactly the attacker-controlled
+// authority-host threat this check refuses. The reparse-point rejection in
+// rarPathUnsafe/openWindowsRARFileUnsafe is orthogonal and stays fully
+// intact: a trusted owner never excuses a reparse point.
+//
+// Only the shared repository-parent checks consult this set. Private RAR
+// authority state (privateRARSecurityDescriptorSafe) remains strictly
+// current-token-user-only because gentle-ai creates it itself with an
+// explicit owner-only descriptor.
+func rarTrustedWindowsAdministrativeOwner(owner *windows.SID) bool {
+	if owner == nil || !owner.IsValid() {
+		return false
+	}
+	return owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) ||
+		owner.IsWellKnown(windows.WinLocalSystemSid)
+}
+
+// rarRepositoryOwnerDescription renders the refused directory's owner for
+// operator-facing refusal messages. It is diagnostic only and never
+// participates in the trust decision itself.
+func rarRepositoryOwnerDescription(path string) string {
+	descriptor, err := windows.GetNamedSecurityInfo(
+		path,
+		windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION,
+	)
+	if err != nil {
+		return "an unreadable owner"
+	}
+	owner, _, err := descriptor.Owner()
+	if err != nil || owner == nil || !owner.IsValid() {
+		return "an unreadable owner"
+	}
+	description := owner.String()
+	if account, domain, _, lookupErr := owner.LookupAccount(""); lookupErr == nil {
+		if domain != "" {
+			account = domain + `\` + account
+		}
+		description = account + " (" + description + ")"
+	}
+	return description
 }
 
 func ownerOnlyRARSecurityDescriptor(directory bool) (*windows.SECURITY_DESCRIPTOR, error) {

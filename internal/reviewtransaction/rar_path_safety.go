@@ -15,7 +15,12 @@ import (
 )
 
 var (
-	errUnsafeRARAuthorityPath   = errors.New("unsafe RAR authority path")
+	// refusal:by-design world-action: the exit is a filesystem repair (chown, takeown, icacls /setowner, or deleting the offending link) that only the operator can perform; no gentle-ai command may rewrite ownership of paths it refuses to trust
+	errUnsafeRARAuthorityPath = errors.New(
+		"unsafe RAR authority path; restore trusted ownership of the reported " +
+			"path (chown on POSIX; takeown or icacls /setowner on Windows) or " +
+			"remove the symlink/reparse point, then rerun the command",
+	)
 	errRARAuthorityPathReplaced = errors.New("RAR authority path changed during access")
 )
 
@@ -145,9 +150,17 @@ func validateRARRepositoryParent(path string) error {
 	if err != nil {
 		return err
 	}
-	if rarPathUnsafe(path, before) || !before.IsDir() ||
-		!rarRepositoryDirectorySafe(path, before) {
+	if rarPathUnsafe(path, before) || !before.IsDir() {
 		return errUnsafeRARAuthorityPath
+	}
+	if !rarRepositoryDirectorySafe(path, before) {
+		// Name the exact directory and the owner that was refused so the
+		// operator can repair ownership instead of guessing which ancestor
+		// tripped the check.
+		return fmt.Errorf(
+			"RAR authority parent %q is owned by %s, which is neither the current user nor a trusted administrative authority: %w",
+			path, rarRepositoryOwnerDescription(path), errUnsafeRARAuthorityPath,
+		)
 	}
 	file, err := openRARPathNoFollow(path, true)
 	if err != nil {
