@@ -720,7 +720,10 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 	if errors.As(runErr, &targetResolution) {
 		failure.Phase = "pre_native"
 		failure.Code = "target_resolution_failed"
-		failure.Message = "The pre-push target cannot be resolved; configure an upstream or pass --base-ref <remote>/<branch>."
+		// The same typed failure now reaches this branch from the pre-PR
+		// publication boundary as well as the pre-push upstream, so the
+		// sentence names the input both gates need instead of one gate's name.
+		failure.Message = "The publication target cannot be resolved; configure an upstream or pass --base-ref <remote>/<branch>."
 		failure.MutationOutcome = ReviewMutationNotStarted
 		failure.AuthorityApplicability = "not_evaluated"
 		failure.RetrySafe = true

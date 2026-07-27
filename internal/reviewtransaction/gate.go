@@ -505,7 +505,13 @@ func selectPrePRBoundary(ctx context.Context, repo, selector string) (PrePRBound
 	}
 	bases, mergeErr := runGit(ctx, repo, nil, nil, "merge-base", "--all", head, selection.Commit)
 	if mergeBases := strings.Fields(string(bases)); mergeErr != nil || len(mergeBases) != 1 {
-		return PrePRBoundarySelection{}, fmt.Errorf("publication base has %d merge bases; pass --base-ref <remote>/<branch>", len(mergeBases))
+		message := fmt.Sprintf("publication base has %d merge bases; pass --base-ref <remote>/<branch>", len(mergeBases))
+		if mergeErr != nil {
+			// A Git fault says nothing about the selector, so it keeps failing
+			// closed instead of promising that a flag resolves it.
+			return PrePRBoundarySelection{}, errors.New(message)
+		}
+		return PrePRBoundarySelection{}, baseRefTargetResolutionError(message)
 	}
 	return selection, nil
 }
@@ -537,7 +543,7 @@ func publicationRemoteConfigured(ctx context.Context, repo string) (bool, error)
 func resolveAuthoritativePublicationBase(ctx context.Context, repo string) (string, string, string, error) {
 	remote, configured, err := publicationRemote(ctx, repo)
 	if err != nil || !configured {
-		return "", "", "", errors.New("publication target remote is not configured; pass --base-ref <remote>/<branch>")
+		return "", "", "", baseRefTargetResolutionError("publication target remote is not configured; pass --base-ref <remote>/<branch>")
 	}
 	output, err := runGit(ctx, repo, nil, nil, "ls-remote", "--symref", remote, "HEAD")
 	if err != nil {
@@ -551,7 +557,7 @@ func resolveAuthoritativePublicationBase(ctx context.Context, repo string) (stri
 		}
 	}
 	if ref == "" {
-		return "", "", "", errors.New("publication target default branch is unavailable; pass --base-ref <remote>/<branch>")
+		return "", "", "", baseRefTargetResolutionError("publication target default branch is unavailable; pass --base-ref <remote>/<branch>")
 	}
 	selection, err := advertisedRemoteRef(ctx, repo, remote, ref, remote+"/"+strings.TrimPrefix(ref, "refs/heads/"), PrePRBoundaryPublicationDefault)
 	if err != nil {
@@ -582,7 +588,13 @@ func (err *GateTargetResolutionError) Unwrap() error {
 	return err.Err
 }
 
-func prePushTargetResolutionError(message string) error {
+// baseRefTargetResolutionError types a publication-boundary failure the caller
+// resolves by supplying --base-ref <remote>/<branch>. Every producer of that
+// sentence types itself here: an untyped one is classified downstream as an
+// unexplained assessment failure and reported as a damaged authority store,
+// which is a repair instruction for a repository that needs a flag (#1861
+// sibling).
+func baseRefTargetResolutionError(message string) error {
 	return &GateTargetResolutionError{RequiredInput: "base_ref", Err: errors.New(message)}
 }
 
@@ -591,20 +603,20 @@ func resolveTrackingUpstreamBase(ctx context.Context, repo string) (string, stri
 	if err != nil {
 		var commandErr *GitCommandError
 		if errors.As(err, &commandErr) && commandErr.ExitCode == 1 {
-			return "", "", "", prePushTargetResolutionError("configured upstream is unavailable on detached HEAD; pass --base-ref <remote>/<branch>")
+			return "", "", "", baseRefTargetResolutionError("configured upstream is unavailable on detached HEAD; pass --base-ref <remote>/<branch>")
 		}
 		return "", "", "", fmt.Errorf("resolve configured tracking branch: %w", err)
 	}
 	branch := strings.TrimSpace(string(branchOutput))
 	if branch == "" {
-		return "", "", "", prePushTargetResolutionError("configured upstream is unavailable on detached HEAD; pass --base-ref <remote>/<branch>")
+		return "", "", "", baseRefTargetResolutionError("configured upstream is unavailable on detached HEAD; pass --base-ref <remote>/<branch>")
 	}
 	remote, ref, ok, err := configuredUpstreamRef(ctx, repo, branch)
 	if err != nil {
 		return "", "", "", fmt.Errorf("resolve configured tracking ref: %w", err)
 	}
 	if !ok {
-		return "", "", "", prePushTargetResolutionError("configured upstream is missing or ambiguous; pass --base-ref <remote>/<branch>")
+		return "", "", "", baseRefTargetResolutionError("configured upstream is missing or ambiguous; pass --base-ref <remote>/<branch>")
 	}
 	selection, err := advertisedRemoteRef(ctx, repo, remote, ref, remote+"/"+strings.TrimPrefix(ref, "refs/heads/"), PrePRBoundaryPublicationDefault)
 	if err != nil {
@@ -649,7 +661,7 @@ func resolveAdvertisedSelector(ctx context.Context, repo, selector string, sourc
 		}
 	}
 	if len(matches) != 1 {
-		return PrePRBoundarySelection{}, fmt.Errorf("explicit pre-PR base %q is missing or ambiguous on advertised remote branches; pass --base-ref <remote>/<branch>", selector)
+		return PrePRBoundarySelection{}, baseRefTargetResolutionError(fmt.Sprintf("explicit pre-PR base %q is missing or ambiguous on advertised remote branches; pass --base-ref <remote>/<branch>", selector))
 	}
 	local, err := resolveCommit(ctx, repo, matches[0].Commit)
 	if err != nil || local != matches[0].Commit {
@@ -669,7 +681,7 @@ func advertisedRemoteRef(ctx context.Context, repo, remote, ref, selector string
 	}
 	fields := strings.Fields(string(output))
 	if len(fields) != 2 || fields[1] != ref || !validGitTree(fields[0]) {
-		return PrePRBoundarySelection{}, fmt.Errorf("base selector %q is not a current advertised remote branch; pass --base-ref <remote>/<branch>", selector)
+		return PrePRBoundarySelection{}, baseRefTargetResolutionError(fmt.Sprintf("base selector %q is not a current advertised remote branch; pass --base-ref <remote>/<branch>", selector))
 	}
 	local, err := resolveCommit(ctx, repo, fields[0])
 	if err != nil || local != fields[0] {
@@ -839,14 +851,14 @@ func PrePushDeliversNothing(ctx context.Context, repo, selector string) (bool, e
 	bases, err := runGit(ctx, repo, nil, nil, "merge-base", "--all", head, selection.Commit)
 	mergeBases := strings.Fields(string(bases))
 	if err != nil || len(mergeBases) != 1 {
-		return false, prePushTargetResolutionError(fmt.Sprintf("publication base has %d merge bases; pass --base-ref <remote>/<branch>", len(mergeBases)))
+		return false, baseRefTargetResolutionError(fmt.Sprintf("publication base has %d merge bases; pass --base-ref <remote>/<branch>", len(mergeBases)))
 	}
 	if mergeBases[0] != head {
 		return false, nil
 	}
 	pushRemote, configured, err := publicationRemote(ctx, repo)
 	if err != nil || !configured {
-		return false, prePushTargetResolutionError("push destination remote is not configured; pass --base-ref <remote>/<branch>")
+		return false, baseRefTargetResolutionError("push destination remote is not configured; pass --base-ref <remote>/<branch>")
 	}
 	pushIdentity, err := pushRepositoryIdentity(ctx, repo, pushRemote)
 	if err != nil {
@@ -870,11 +882,11 @@ func buildPushTarget(ctx context.Context, repo, selector, deliveryBaseTree, revi
 	bases, err := runGit(ctx, repo, nil, nil, "merge-base", "--all", head, selection.Commit)
 	mergeBases := strings.Fields(string(bases))
 	if err != nil || len(mergeBases) != 1 {
-		return Target{}, nil, prePushTargetResolutionError(fmt.Sprintf("publication base has %d merge bases; pass --base-ref <remote>/<branch>", len(mergeBases)))
+		return Target{}, nil, baseRefTargetResolutionError(fmt.Sprintf("publication base has %d merge bases; pass --base-ref <remote>/<branch>", len(mergeBases)))
 	}
 	pushRemote, configured, err := publicationRemote(ctx, repo)
 	if err != nil || !configured {
-		return Target{}, nil, prePushTargetResolutionError("push destination remote is not configured; pass --base-ref <remote>/<branch>")
+		return Target{}, nil, baseRefTargetResolutionError("push destination remote is not configured; pass --base-ref <remote>/<branch>")
 	}
 	pushIdentity, err := pushRepositoryIdentity(ctx, repo, pushRemote)
 	if err != nil {

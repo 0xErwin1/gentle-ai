@@ -162,11 +162,42 @@ type GateContext struct {
 	EvidenceHash          string                      `json:"evidence_hash"`
 	BaseRelationshipValid bool                        `json:"base_relationship_valid"`
 	ExternalEvidence      ExternalEvidenceDisposition `json:"external_evidence,omitempty"`
-	BaseAdvance           *BaseAdvanceCompatibility   `json:"base_advanced_compatible,omitempty"`
-	Release               *ReleaseEvidence            `json:"release,omitempty"`
-	PrePRBoundary         *PrePRBoundarySelection     `json:"pre_pr_boundary,omitempty"`
-	Denial                *GateDenial                 `json:"denial,omitempty"`
-	ScopeChange           *GateScopeChangeDiagnostics `json:"scope_change,omitempty"`
+	// ReceiptBaseTree names the tree the review was actually performed
+	// against, and is emitted only when BaseTree above is not that tree.
+	//
+	// BaseTree is the base of the target this gate derived and compared. For
+	// an ordinary receipt the two are the same value and this field stays
+	// absent, so absence is the statement "base_tree IS the reviewed base".
+	// After a correction they diverge: the derived target is a fix diff whose
+	// base is the pre-correction candidate, so a successful pre-commit
+	// publishes a base_tree that is not the receipt's base_tree. Both values
+	// are legitimate and both are called a base tree, which is exactly how an
+	// operator takes "the base" from a successful gate, builds a publication
+	// there, and meets a refusal that echoes their own value back. Naming the
+	// reviewed base beside the derived one removes the ambiguity at the point
+	// where it is read, without changing what base_tree means or what any
+	// gate permits.
+	ReceiptBaseTree string                      `json:"receipt_base_tree,omitempty"`
+	BaseAdvance     *BaseAdvanceCompatibility   `json:"base_advanced_compatible,omitempty"`
+	Release         *ReleaseEvidence            `json:"release,omitempty"`
+	PrePRBoundary   *PrePRBoundarySelection     `json:"pre_pr_boundary,omitempty"`
+	Denial          *GateDenial                 `json:"denial,omitempty"`
+	ScopeChange     *GateScopeChangeDiagnostics `json:"scope_change,omitempty"`
+	// BaseMismatch carries the expected/actual pair for a `base-mismatch`
+	// denial, the way ScopeChange already does for its sibling
+	// `candidate-or-paths-mismatch`. Expected is the exact comparand this
+	// gate used — the receipt's reviewed base at pre-PR, the bound current
+	// snapshot's base at the strict gates — never a value the gate did not
+	// require. A denial that publishes only what it found leaves the operator
+	// no way to tell what it wanted.
+	BaseMismatch *GateBaseMismatchDiagnostics `json:"base_mismatch,omitempty"`
+}
+
+// GateBaseMismatchDiagnostics states both sides of a base-tree comparison that
+// failed. Its presence never changes the gate result.
+type GateBaseMismatchDiagnostics struct {
+	Expected string `json:"expected"`
+	Actual   string `json:"actual"`
 }
 
 // GateDenial identifies the non-authorizing validation stage that rejected a
@@ -328,6 +359,19 @@ func ParseGateContext(payload []byte) (GateContext, error) {
 	}
 	if context.Denial != nil && (strings.TrimSpace(context.Denial.Stage) == "" || strings.TrimSpace(context.Denial.Code) == "") {
 		return GateContext{}, errors.New("gate context denial requires stage and code")
+	}
+	if context.ReceiptBaseTree != "" && (!validGitTree(context.ReceiptBaseTree) || context.ReceiptBaseTree == context.BaseTree) {
+		// Repeating base_tree under a second name would turn the field from a
+		// signal into noise, so the "absent means identical" contract is
+		// enforced here rather than only documented.
+		return GateContext{}, errors.New("gate context reviewed base tree must be a distinct tree identity")
+	}
+	if context.BaseMismatch != nil {
+		mismatch := context.BaseMismatch
+		if context.Denial == nil || context.Denial.Code != "base-mismatch" ||
+			!validGitTree(mismatch.Expected) || mismatch.Actual != context.BaseTree || mismatch.Expected == mismatch.Actual {
+			return GateContext{}, errors.New("gate context contains invalid base mismatch evidence")
+		}
 	}
 	switch context.ExternalEvidence {
 	case ExternalEvidenceNone, ExternalEvidenceInvalidating, ExternalEvidenceEscalating:

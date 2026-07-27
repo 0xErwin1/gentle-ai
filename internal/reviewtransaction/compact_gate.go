@@ -330,6 +330,14 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		LedgerHash: ledgerHash, EvidenceHash: record.State.EvidenceHash,
 		BaseRelationshipValid: baseRelationshipValid, BaseAdvance: compatibility,
 	}
+	if snapshot.BaseTree != receipt.BaseTree {
+		// The base_tree emitted above is the derived target's base. When that
+		// is not the tree the review was performed against -- the fix-diff
+		// base a correction receipt derives is the case that reached the
+		// community -- name the reviewed base too, instead of leaving one
+		// field name covering two different values.
+		gateContext.ReceiptBaseTree = receipt.BaseTree
+	}
 	if request.Gate == GatePrePR && resolvedPrePR != nil {
 		boundary := resolvedPrePR.Selection
 		gateContext.PrePRBoundary = &boundary
@@ -338,9 +346,19 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	if strictBinding {
 		pathsMismatch = snapshot.PathsDigest != binding.PathsDigest && !squashedFixDelivery
 	}
-	baseMismatch := snapshot.BaseTree != receipt.BaseTree && request.Target.Kind != TargetFixDiff && !compatibleAdvance
+	// expectedBaseTree is the single comparand the base check below uses, so
+	// the value published in the denial is by construction the value the gate
+	// required. Deriving the expectation separately would let the two drift,
+	// and a denial that names an expectation it did not enforce is worse than
+	// one that names none. The two branches are exactly the previous
+	// receipt/binding split -- this selects nothing new.
+	expectedBaseTree := receipt.BaseTree
 	if strictBinding {
-		baseMismatch = snapshot.BaseTree != binding.BaseTree && !squashedFixDelivery
+		expectedBaseTree = binding.BaseTree
+	}
+	baseMismatch := snapshot.BaseTree != expectedBaseTree && request.Target.Kind != TargetFixDiff && !compatibleAdvance
+	if strictBinding {
+		baseMismatch = snapshot.BaseTree != expectedBaseTree && !squashedFixDelivery
 	}
 	// A scope_changed recovery successor freezes only its own pristine scope,
 	// so a delivery already covered by its receipt-bound predecessors would be
@@ -377,6 +395,11 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	}
 	if baseMismatch && recoveryRebind == nil {
 		gateContext.Denial = &GateDenial{Stage: "receipt-binding", Code: "base-mismatch"}
+		// Publish both sides, exactly as the sibling candidate-or-paths
+		// denial already does. Without the expectation the envelope repeats
+		// the base the operator supplied and says nothing about the one it
+		// wanted, which reads as the gate contradicting itself.
+		gateContext.BaseMismatch = &GateBaseMismatchDiagnostics{Expected: expectedBaseTree, Actual: snapshot.BaseTree}
 		return NativeGateEvaluation{Result: GateInvalidated, Reason: "current repository base no longer matches compact authority", Context: gateContext}
 	}
 	var release *ReleaseEvidence

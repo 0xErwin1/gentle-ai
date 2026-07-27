@@ -255,6 +255,18 @@ func (err ReviewGateDeniedError) Error() string {
 	if reviewGateAction(err.Result) == "continue" {
 		return message
 	}
+	// A base mismatch is the one denial whose published reason is a complete
+	// sentence and still leaves the operator with nothing to act on: it says
+	// the base no longer matches and the envelope beside it repeats the base
+	// the operator supplied. When the gate froze both sides of the comparison,
+	// the terminal states both. No command is named because none is derivable
+	// here -- what unblocks this is rebuilding the publication on the reviewed
+	// base, and that is a fact about the repository, not a gentle-ai
+	// invocation.
+	if mismatch := err.Context.BaseMismatch; mismatch != nil && strings.TrimSpace(err.Reason) != "" {
+		return fmt.Sprintf("%s: %s: the reviewed base is %s, but this target was derived from %s",
+			message, strings.TrimSpace(err.Reason), mismatch.Expected, mismatch.Actual)
+	}
 	// No recovery is derivable here, so no command is named. What IS available
 	// is the exact reason the JSON gate-result envelope publishes beside this
 	// error, and throwing it away was the whole defect: an operator whose
