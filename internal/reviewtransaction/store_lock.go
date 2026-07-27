@@ -244,6 +244,26 @@ var readOnlyStoreLockPollInterval = 25 * time.Millisecond
 // error, so the caller reports a bounded wait that genuinely elapsed instead
 // of an instantaneous refusal.
 func acquireStoreLockForReadOnlyEvaluation(ctx context.Context, path string) (*storeLock, error) {
+	return acquireStoreLockWithBoundedWait(ctx, path)
+}
+
+// acquireStoreLockForConvergentCompletion admits the second caller class that
+// may wait out transient contention instead of refusing: idempotent
+// post-terminal completion. Once authority is terminal, the receipt bytes are
+// derived deterministically from that authority, publication accepts an
+// identical existing receipt, and the finalize-journal completion flags are
+// monotonic — so every completer converges on the same bytes and flags, and
+// waiting cannot double-apply anything. Refusing instantly here turned a
+// competitor's milliseconds-long critical section into a reported publication
+// failure for an operation whose outcome had already committed.
+//
+// The pre-commit mutation paths keep the instant refusal: there, waiting
+// cannot make a second writer legitimate, it can only delay its refusal.
+func acquireStoreLockForConvergentCompletion(ctx context.Context, path string) (*storeLock, error) {
+	return acquireStoreLockWithBoundedWait(ctx, path)
+}
+
+func acquireStoreLockWithBoundedWait(ctx context.Context, path string) (*storeLock, error) {
 	deadline := time.NewTimer(readOnlyStoreLockTimeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(readOnlyStoreLockPollInterval)

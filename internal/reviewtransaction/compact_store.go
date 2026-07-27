@@ -2154,7 +2154,11 @@ func (store CompactStore) installTransportRecordLocked(ctx context.Context, reco
 // WriteReceipt validates the receipt against authoritative compact state while
 // holding maintenance shared access before the compact version lock.
 func (store CompactStore) WriteReceipt(ctx context.Context, receipt CompactReceipt) error {
-	lock, err := acquireStoreLock(store.lockPath)
+	// Bounded wait, not instant refusal: the receipt is derived from
+	// already-terminal authority and publication is idempotent, so a
+	// briefly-held advisory lock is a competitor completing the same
+	// publication, not a second writer to refuse.
+	lock, err := acquireStoreLockForConvergentCompletion(ctx, store.lockPath)
 	if err != nil {
 		return err
 	}
