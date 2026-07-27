@@ -125,6 +125,7 @@ func writeRunReport(out io.Writer, results Results) {
 		}
 	}
 	writeByDesignSection(out, results)
+	writeDeadEndSection(out, results)
 	writeAxisSection(out, results)
 
 	for _, note := range results.Notes {
@@ -256,6 +257,48 @@ func writeByDesignSection(out io.Writer, results Results) {
 			fmt.Fprintf(out, "        counted as: %s\n", class)
 			fmt.Fprintf(out, "        reason: %s\n", item.command.ByDesign.Reason)
 		}
+	}
+}
+
+// writeDeadEndSection reports declared dead ends the same way by-design
+// exemptions are reported. An applied one is the corpus saying no continuation
+// exists; a stale one is the corpus still saying that after the product grew
+// an exit, and leaving it unsaid would let a closed gap keep advertising
+// itself as open.
+func writeDeadEndSection(out io.Writer, results Results) {
+	type entry struct {
+		journey string
+		command CommandRecord
+	}
+	applied, stale := []entry{}, []entry{}
+	for _, journey := range results.Journeys {
+		for _, command := range journey.Commands {
+			if command.DeadEnd == nil {
+				continue
+			}
+			if command.DeadEnd.Applied {
+				applied = append(applied, entry{journey.ID, command})
+				continue
+			}
+			stale = append(stale, entry{journey.ID, command})
+		}
+	}
+	if len(applied)+len(stale) == 0 {
+		return
+	}
+	fmt.Fprintf(out, "\nDead-end declarations\n")
+	for _, item := range applied {
+		fmt.Fprintf(out, "    %s  %s\n", item.journey, item.command.Step)
+		fmt.Fprintf(out, "        applied: no advertised operation admits this shape\n")
+	}
+	for _, item := range stale {
+		class := item.command.Block
+		if class == NotABlock {
+			class = "not a block"
+		}
+		fmt.Fprintf(out, "    %s  %s\n", item.journey, item.command.Step)
+		fmt.Fprintf(out, "        STALE, counted as: %s\n", class)
+		fmt.Fprintf(out, "        reason: %s\n", item.command.DeadEnd.Reason)
 	}
 }
 
