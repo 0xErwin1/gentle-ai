@@ -135,8 +135,9 @@ func reviewNamedContinuationFileCount(sites []reviewNamedContinuationSite) int {
 // named `gentle-ai review <verb>` continuation found in a string literal,
 // carrying the flags that continuation names.
 //
-// Attribution is positional: a literal is split at each explicit invocation,
-// and the flags inside one slice belong to the verb that opened it. The slice
+// Attribution is positional and line-scoped: a literal is split at each
+// explicit invocation, and the flags inside one slice belong to the verb that
+// opened it, up to the end of that invocation's own line. The slice
 // BEFORE the first invocation is attributed only to a self-referential opener
 // ("review start with ... rerun with --committed-only"); otherwise its flags
 // are left unattributed rather than guessed at, because a flag with no
@@ -220,11 +221,33 @@ func reviewNamedContinuationsInLiteral(value string) ([]reviewNamedContinuationS
 		}
 		sites = append(sites, reviewNamedContinuationSite{
 			verb:    value[match[2]:match[3]],
-			flags:   reviewNamedContinuationFlags(value[match[1]:end]),
+			flags:   reviewNamedContinuationFlags(reviewNamedContinuationArgv(value[match[1]:end])),
 			literal: value,
 		})
 	}
 	return sites, unattributed
+}
+
+// reviewNamedContinuationArgv narrows one invocation's segment to the argv that
+// really belongs to it. A command line ends at its newline -- unless that line
+// ends in a backslash continuation -- so a multi-line message that names a
+// command on one line and then explains, on later lines, which flags of the
+// REFUSING verb the caller must fill in never has that prose mistaken for argv
+// of the command named above it. Without this, a refusal is structurally
+// forbidden from naming a lookup command and describing its own inputs in the
+// same message, which is exactly the shape an actionable refusal needs.
+func reviewNamedContinuationArgv(segment string) string {
+	for offset := 0; ; {
+		index := strings.IndexByte(segment[offset:], '\n')
+		if index < 0 {
+			return segment
+		}
+		line := segment[:offset+index]
+		if !strings.HasSuffix(strings.TrimRight(line, " \t"), "\\") {
+			return line
+		}
+		offset += index + 1
+	}
 }
 
 func reviewNamedContinuationRerunsItself(value string) bool {

@@ -57,16 +57,24 @@ const (
 )
 
 type AuthorityInventoryEntry struct {
-	Version       AuthorityVersion           `json:"version"`
-	LineageID     string                     `json:"lineage_id,omitempty"`
-	Path          string                     `json:"path"`
-	Status        AuthorityStatus            `json:"status"`
-	State         State                      `json:"state,omitempty"`
-	Revision      string                     `json:"revision,omitempty"`
-	ChainIdentity string                     `json:"chain_identity,omitempty"`
-	Recovery      *CompactRecoveryProvenance `json:"recovery,omitempty"`
-	Problems      []string                   `json:"problems"`
-	compact       *CompactRecord
+	Version   AuthorityVersion `json:"version"`
+	LineageID string           `json:"lineage_id,omitempty"`
+	Path      string           `json:"path"`
+	Status    AuthorityStatus  `json:"status"`
+	State     State            `json:"state,omitempty"`
+	Revision  string           `json:"revision,omitempty"`
+	// SnapshotIdentity is the frozen initial snapshot identity of a compact
+	// entry, read from the persisted state alone. Maintainer authorization
+	// bindings are bound over exactly this value, and the live worktree is
+	// never consulted to produce it, so a stale lineage still publishes the
+	// identity its own authority was frozen at. The negotiated target status
+	// cannot serve that role: it recomputes the identity from the worktree
+	// and withholds the authority block entirely once the target drifts.
+	SnapshotIdentity string                     `json:"snapshot_identity,omitempty"`
+	ChainIdentity    string                     `json:"chain_identity,omitempty"`
+	Recovery         *CompactRecoveryProvenance `json:"recovery,omitempty"`
+	Problems         []string                   `json:"problems"`
+	compact          *CompactRecord
 }
 
 type AuthorityLockEvidence struct {
@@ -268,6 +276,7 @@ func inventoryLineage(ctx context.Context, repo string, version AuthorityVersion
 			return entry, locks, nil
 		}
 		entry.Revision, entry.State, entry.Recovery = record.Revision, record.State.State, record.State.Recovery
+		entry.SnapshotIdentity = record.State.InitialSnapshot.Identity
 		entry.compact = &record
 		entry.Status = authorityStatusForState(record.State.State)
 		if payload, err := os.ReadFile(store.ReceiptPath()); err == nil {

@@ -41,6 +41,15 @@ type CompactPristineAbandonmentProof struct {
 	InvalidationReason string `json:"invalidation_reason,omitempty"` // when pre-invalidated
 }
 
+// RenderCompactAbandonAuthorization renders the abandonment authorization
+// binding over the supplied values. The refusal path renders it with
+// placeholder tokens to print an operator-facing template, and the verifier
+// below binds over this same function, so the template a maintainer is told
+// to fill in and the bytes the gate accepts can never drift apart.
+func RenderCompactAbandonAuthorization(lineage, revision, snapshotIdentity, actor, reason string) string {
+	return compactAbandonAuthorizationBinding(lineage, revision, snapshotIdentity, actor, reason)
+}
+
 func compactAbandonAuthorizationBinding(lineage, revision, snapshotIdentity, actor, reason string) string {
 	return compactAbandonAuthorizationSchema + "\nlineage=" + lineage + "\nrevision=" + revision +
 		"\nsnapshot_identity=" + snapshotIdentity +
