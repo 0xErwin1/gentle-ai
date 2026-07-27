@@ -1664,7 +1664,7 @@ func validateCompactRepositoryEvidence(ctx context.Context, repo string, current
 			Reason:           reopen.Reason,
 			Actor:            reopen.Actor,
 		}
-		if reopen.MaintainerAuthorization != CompactResultReopenAuthorization(repo, request, reopen.Quarantined, reopen.Retained) {
+		if reopen.MaintainerAuthorization != CompactResultReopenAuthorization(repo, request, reopen.Quarantined, reopen.Retained, reopen.AuthorizedLenses) {
 			return errors.New("reviewer result reopen does not carry the exact maintainer authorization")
 		}
 	}
@@ -1741,10 +1741,16 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 			return fmt.Errorf("%w: reviewer result disposition changed unrelated state", ErrInvalidSuccessor)
 		}
 	case CompactResultReopenOperation:
-		if previous.State != StateValidating || next.State != StateReviewing ||
+		// Validating keeps its historical eligibility; correction-required is
+		// additionally eligible only while uncorrected — a completed
+		// correction attempt or actual correction accounting closes this door
+		// for good, because those prove candidate bytes moved under review.
+		reopenablePredecessor := previous.State == StateValidating ||
+			previous.State == StateCorrectionRequired && len(previous.CorrectionAttempts) == 0 && previous.ActualCorrectionLines == nil
+		if !reopenablePredecessor || next.State != StateReviewing ||
 			len(next.ResultReopens) != len(previous.ResultReopens)+1 ||
 			len(previous.ResultReopens) > 0 && !reflect.DeepEqual(previous.ResultReopens, next.ResultReopens[:len(previous.ResultReopens)]) {
-			return fmt.Errorf("%w: reviewer result reopen must append one validating-to-reviewing audit record", ErrInvalidSuccessor)
+			return fmt.Errorf("%w: reviewer result reopen must append one audit record returning an uncorrected authority to reviewing", ErrInvalidSuccessor)
 		}
 		reopen := next.ResultReopens[len(next.ResultReopens)-1]
 		if reopen.PreviousRevision != previousRevision || reopen.TargetIdentity != previous.InitialSnapshot.Identity {

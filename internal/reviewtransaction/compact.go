@@ -114,13 +114,20 @@ type CompactResultReopenSlot struct {
 }
 
 // CompactResultReopen is the durable audit record for one exact-revision
-// validating -> reviewing repair. It preserves all original scope and budget
-// inputs while identifying the unusable slots and every admitted slot retained.
+// same-lineage reviewer-result repair back to reviewing. It preserves all
+// original scope and budget inputs while identifying the unusable slots and
+// every admitted slot retained. AuthorizedLenses names the admitted slots the
+// maintainer explicitly overrode: those results were structurally valid and
+// provider-admitted, and only this recorded authorization — never native
+// detection — moved them into quarantine. An observer therefore always sees
+// which quarantined results a maintainer discarded by decision rather than
+// which ones the store proved unusable.
 type CompactResultReopen struct {
 	PreviousRevision        string                    `json:"previous_revision"`
 	TargetIdentity          string                    `json:"target_identity"`
 	Quarantined             []CompactResultReopenSlot `json:"quarantined"`
 	Retained                []CompactResultReopenSlot `json:"retained"`
+	AuthorizedLenses        []string                  `json:"authorized_lenses,omitempty"`
 	Reason                  string                    `json:"reason"`
 	Actor                   string                    `json:"actor"`
 	ReopenedAt              time.Time                 `json:"reopened_at"`
@@ -1091,6 +1098,23 @@ func validateCompactResultReopens(state CompactState) error {
 		}
 		if len(seen) != len(state.SelectedLenses) {
 			return errors.New("reviewer result reopen audit record must classify every selected lens artifact")
+		}
+		authorized := make(map[string]struct{}, len(reopen.AuthorizedLenses))
+		for _, lens := range reopen.AuthorizedLenses {
+			if stringIndex(state.SelectedLenses, lens) < 0 {
+				return errors.New("reviewer result reopen authorization names a lens outside the frozen selection")
+			}
+			if _, duplicate := authorized[lens]; duplicate {
+				return errors.New("reviewer result reopen authorization names a lens twice")
+			}
+			authorized[lens] = struct{}{}
+			quarantinedLens := false
+			for _, slot := range reopen.Quarantined {
+				quarantinedLens = quarantinedLens || slot.Lens == lens
+			}
+			if !quarantinedLens {
+				return errors.New("reviewer result reopen authorization names a lens whose result was not quarantined")
+			}
 		}
 	}
 	return nil

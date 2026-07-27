@@ -102,7 +102,11 @@ var reviewStopReasonNarration = map[string]string{
 	"captured_result_selection_unavailable": "This run reached a state that should never happen: every review result it expected was already present. " +
 		"This is a defect; there is nothing more to do from here.",
 	"corrected_candidate_unavailable": "Change the candidate content so it differs from the frozen original, then re-run " +
-		"`gentle-ai review status --next-transition` (or `review finalize`).",
+		"`gentle-ai review status --next-transition` (or `review finalize`). " +
+		"That is the right path when the review found real defects. If instead the reviewers were given the wrong input " +
+		"and their findings describe content that was never the candidate, a maintainer can quarantine those results and " +
+		"reopen their lenses over the same frozen content: run `gentle-ai review reopen-results --prepare --quarantine-lens <lens>` " +
+		"(repeat `--quarantine-lens` per affected lens) and follow its output.",
 	"corrupted_or_unverifiable_authority": "This review's stored record cannot be trusted as-is, and it cannot be repaired automatically. " +
 		"Ask a maintainer to inspect it directly.",
 	"final_verification_retry_unavailable": "This run reached a state that should never happen: it was routed to retry a final verification it was not eligible to retry. " +
