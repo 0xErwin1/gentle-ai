@@ -119,7 +119,34 @@ Four mechanical guards now cover that class, all derived from source rather than
 
 The ratchet is a ratchet on purpose. Demanding zero before it could exist would have meant it never existed.
 
-## 8. Contract surface
+## 8. The friction benchmark
+
+`bench/` is a separate Go module that drives a real `gentle-ai` binary through 36 end-to-end journeys and reports where the operator gets stuck. It is the evidence behind every friction claim in this branch, and it ships so the claims are reproducible rather than asserted.
+
+```
+cd bench && go run . run --binary $(command -v gentle-ai)
+```
+
+It classifies every block into exactly one class, and the split is the measurement, not the total:
+
+| Class | Meaning |
+|---|---|
+| `in_band` | the refusal names a command that runs and clears it |
+| `out_of_band` | the operator is stopped with nothing runnable named |
+| `by_design` | a correct refusal for which no command can honestly exist |
+| `dead_end` | nothing resolves it, anywhere |
+| `self_recovered` | the flow continued with no extra command |
+
+Two rules keep it from grading itself generously. Mechanical evidence outranks corpus annotation: a named runnable command classifies as `in_band` regardless of what the journey declared. And a `by_design` declaration costs a shape from a closed vocabulary plus the exact substring of the product's own next-action text, which is **verified present in the emitted bytes** before the exemption applies. A refusal with nothing to quote cannot be exempted, so an invalid declaration can only make a block look worse.
+
+Two harness defects found by pointing it at itself are worth knowing about, because both produced plausible numbers:
+
+- A lifecycle gate answering `disabled/unmanaged` at exit 0 was counted as an out-of-band block. It carries `allowed: false` because RDD is declining to express an opinion, not declining the delivery. The kill switch working was being reported as friction the product caused.
+- A missing `GIT_TRACE` file was read as unobservable rather than zero, so one journey that legitimately spawns no git erased the subprocess total for the whole corpus.
+
+`bench/README.md` carries the honesty contract: ten entries naming what the instrument does not measure, cannot measure, or measures with a known bias. Current known gap: `human_surface_bytes` varies by a byte or two across runs because `os.MkdirTemp` suffixes vary in length and two journeys quote that path back. Every classification and every count is stable.
+
+## 9. Contract surface
 
 `contracts/review-integration/v1` is published and digest-pinned. Three digests moved in this branch, each deliberately:
 
@@ -131,7 +158,7 @@ The ratchet is a ratchet on purpose. Demanding zero before it could exist would 
 
 `recovery_required_inputs` remains pinned at exactly six entries, which is why the gate-conditional recovery selectors are rendered in the human message and deliberately not projected into the negotiated envelope.
 
-## 9. Known open
+## 10. Known open
 
 - **SDD `verify` still blocks with reviews off.** The archive gate honors the switch; `applyPreVerifyReviewRouting` blocks verify one phase earlier with `next: "review"`, and `review start` refuses. Unblocking it decides whether verify may run with no review at all.
 - **The `sdd-archive` assets still require `reviewGate.result: allow`** in prose, so the agent-facing contract blocks where the native projection now allows.
