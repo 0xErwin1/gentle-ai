@@ -274,6 +274,15 @@ func assertNegotiatedReviewPreflightParity(t *testing.T, site, human string, fai
 // privacy gate and the published `cause` length bound remove, and no negotiated
 // field is permitted to carry that.
 func reviewPreflightParityDistinguishingTokens(human string) (candidate, required []string) {
+	// Issue #1881 follow-up: the unanticipated-residue treatment appends the
+	// defect-report clause to the HUMAN error line only. The clause is a
+	// decoration around a local report path and the issues URL — both of which
+	// the published privacy gate removes from any envelope field — so its
+	// framing words carry no refusal information for parity to demand. The
+	// refusal text being compared is everything before the clause.
+	if index := strings.Index(human, reviewToolFaultDefectClausePrefix); index >= 0 {
+		human = human[:index]
+	}
 	visible := reviewScrubDefectReportField(strings.ReplaceAll(human, "\r", "\n"))
 	if runes := []rune(visible); len(runes) > reviewPreflightParityCauseRuneLimit {
 		visible = string(runes[:reviewPreflightParityCauseRuneLimit])

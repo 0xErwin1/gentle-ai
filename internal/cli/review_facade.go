@@ -460,6 +460,14 @@ func reviewFacadeOperationDeadline(operation string) time.Duration {
 var reviewFacadeCommandRunner = runReviewCommandContext
 var reviewFacadePlannedTransitionHook = func(context.Context, string, string, string) error { return nil }
 var reviewFacadeCommittedTransitionHook = func(context.Context, string, string, string) error { return nil }
+
+// reviewFacadeDiscoverIntendedUntracked is the injectable seam over START's
+// untracked-scope discovery, so tests can force an unanticipated internal
+// fault at the exact choke point issue #1881 crashed through and prove the
+// failure envelope and defect-report treatment both fire.
+var reviewFacadeDiscoverIntendedUntracked = func(ctx context.Context, builder reviewtransaction.SnapshotBuilder) ([]string, error) {
+	return builder.DiscoverIntendedUntracked(ctx)
+}
 var renderReviewStartFrozenCandidateContext = func(ctx context.Context, builder reviewtransaction.SnapshotBuilder, snapshot reviewtransaction.Snapshot) (reviewtransaction.FrozenCandidateContext, error) {
 	return builder.FrozenCandidateContext(ctx, snapshot)
 }
@@ -542,7 +550,14 @@ func RunReview(args []string, stdout io.Writer) error {
 		return newReviewIntegrationFailureError(*preflightFailure, nil)
 	}
 	if !negotiated {
-		return runReviewCommand(args, stdout)
+		if err := runReviewCommand(args, stdout); err != nil {
+			// The plain form has no envelope contract, but an unanticipated
+			// internal fault on a mutating operation is the same product defect
+			// there (issue #1881 crashed exactly this way): attach the saved
+			// defect report to the error the operator is about to read.
+			return reviewAppendUnexpectedFaultDefectClause(context.Background(), operation, args[1:], err)
+		}
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), reviewFacadeOperationDeadline(operation))
 	defer cancel()
@@ -577,10 +592,16 @@ func RunReview(args []string, stdout io.Writer) error {
 		return err
 	}
 	failure := newReviewIntegrationFailure(operation, args[1:], runErr)
+	// Generate the defect report before emitting the envelope so a stdout
+	// write failure cannot suppress the artifact; the clause rides only on the
+	// operator-facing error, never inside the schema-bounded envelope.
+	clause := reviewUnexpectedFaultDefectReportClause(ctx, operation, args[1:], failure)
 	if err := emitReviewIntegrationFailure(stdout, failure); err != nil {
 		return err
 	}
-	return newReviewIntegrationFailureError(failure, runErr)
+	typedFailure := newReviewIntegrationFailureError(failure, runErr)
+	typedFailure.defectReportClause = clause
+	return typedFailure
 }
 
 func runReviewCommandContext(ctx context.Context, args []string, stdout io.Writer) error {
@@ -1390,9 +1411,20 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	}
 	intended := []string{}
 	if selectedProjection != reviewtransaction.ProjectionStaged {
-		intended, err = builder.DiscoverIntendedUntracked(ctx)
+		intended, err = reviewFacadeDiscoverIntendedUntracked(ctx, builder)
 		if err != nil {
-			return fmt.Errorf("discover intended untracked files: %w", err)
+			wrapped := fmt.Errorf("discover intended untracked files: %w", err)
+			// Discovery runs before Build and before any authority mutation, so
+			// its NAMED refusals classify as a not_started preflight in the
+			// negotiated envelope. Typed Git subprocess failures keep their own
+			// stronger git_command_* classification through this wrapper's
+			// chain, and anything else is unanticipated residue that must stay
+			// untyped so the defect-report treatment can see it for what it is.
+			var refusal *reviewtransaction.UntrackedScopeRefusalError
+			if errors.As(err, &refusal) {
+				return reviewPreflightRefusal(reviewPreflightUntrackedScopeReason, wrapped)
+			}
+			return wrapped
 		}
 	}
 	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: selectedProjection, IntendedUntracked: intended}

@@ -149,10 +149,14 @@ type ReviewIntegrationScopeTarget struct {
 type ReviewIntegrationFailureError struct {
 	Failure ReviewIntegrationFailure
 	cause   error
+	// defectReportClause is the optional " A defect report was saved at ..."
+	// tail for the unanticipated-residue class. It decorates only the
+	// operator-facing error line; the schema-bounded envelope never carries it.
+	defectReportClause string
 }
 
 func (err *ReviewIntegrationFailureError) Error() string {
-	return fmt.Sprintf("%s [%s]", err.Failure.Message, err.Failure.Code)
+	return fmt.Sprintf("%s [%s]%s", err.Failure.Message, err.Failure.Code, err.defectReportClause)
 }
 
 func (err *ReviewIntegrationFailureError) Unwrap() error { return err.cause }
@@ -201,6 +205,22 @@ var reviewPreflightStaleTargetReason = reviewPreflightReason{
 	Code:       reviewPreflightStaleTargetCode,
 	Message:    reviewPreflightStaleTargetMessage,
 	NextAction: "review.status",
+}
+
+// reviewPreflightUntrackedScopeReason classifies a START whose untracked scope
+// discovery refused the repository's working-tree shape (issue #1881: an
+// embedded foreign repository, or a hostile untracked path Git reported).
+// Discovery runs strictly before any snapshot is built or any authority is
+// created, so the honest classification is a not_started preflight refusal —
+// the operation_outcome_unknown default it previously fell into claimed an
+// unknown mutation and sent the caller to STATUS, both false for a failure
+// that provably wrote nothing. `next_action` is "stop" because the exit is a
+// repository-layout change, not a request edit; the specific blocking path and
+// the way out travel in the additive `cause` field.
+var reviewPreflightUntrackedScopeReason = reviewPreflightReason{
+	Code:       "untracked_scope_undiscoverable",
+	Message:    "The untracked review scope could not be discovered from the repository working tree; the cause names the blocking path and the way out.",
+	NextAction: "stop",
 }
 
 // reviewPreflightMissingInputsReason names the contract-level inputs a caller

@@ -569,12 +569,109 @@ func (builder SnapshotBuilder) DiscoverIntendedUntracked(ctx context.Context) ([
 	}
 	parts := bytes.Split(output, []byte{0})
 	paths := make([]string, 0, len(parts))
+	var nestedRepositories []string
 	for _, item := range parts {
-		if len(item) > 0 {
-			paths = append(paths, string(item))
+		if len(item) == 0 {
+			continue
+		}
+		value := string(item)
+		if strings.HasSuffix(value, "/") {
+			// Without --directory, `git ls-files --others` recurses into every
+			// ordinary untracked directory and lists its files one by one. The
+			// only entries it reports as a bare directory with a trailing slash
+			// are directories it refuses to look inside because they hold
+			// another Git repository: a nested linked worktree's checkout or an
+			// embedded foreign clone (issue #1881, reported as ".wt/test/").
+			nestedRepositories = append(nestedRepositories, value)
+			continue
+		}
+		paths = append(paths, value)
+	}
+	if len(nestedRepositories) != 0 {
+		if err := excludeRegisteredNestedWorktrees(ctx, root, nestedRepositories); err != nil {
+			return nil, err
 		}
 	}
-	return canonicalPaths(paths)
+	canonical, err := canonicalPaths(paths)
+	if err != nil {
+		return nil, &UntrackedScopeRefusalError{Cause: err}
+	}
+	return canonical, nil
+}
+
+// UntrackedScopeRefusalError marks a working-tree shape that untracked-scope
+// discovery refuses as a NAMED, anticipated condition: an embedded foreign
+// repository, or an untracked path Git reported that cannot be addressed as
+// canonical review scope. Callers use the type to tell a policy refusal (the
+// operator changes the repository layout) apart from an unanticipated internal
+// fault (a product defect worth a defect report); the message is unchanged.
+type UntrackedScopeRefusalError struct{ Cause error }
+
+func (err *UntrackedScopeRefusalError) Error() string { return err.Cause.Error() }
+func (err *UntrackedScopeRefusalError) Unwrap() error { return err.Cause }
+
+// excludeRegisteredNestedWorktrees decides what happens to the opaque
+// nested-repository directories `git ls-files --others` reported inside root.
+//
+// A directory that `git worktree list --porcelain` names as a linked worktree
+// of this repository is excluded from the candidate the same way `.git` itself
+// is: it is another checkout's working tree, not reviewable content of this
+// one. The alternative — admitting it as ordinary untracked content — was
+// considered and rejected: Git reports only the bare directory and refuses to
+// enumerate the files inside it, so the snapshot could never hash or diff
+// those bytes, and freezing a directory entry as if it were a reviewable file
+// would produce a manifest the delivery gates can never re-verify. Exclusion
+// is principled rather than pattern-based because the worktree list is Git's
+// own authoritative registry of which directories are its linked checkouts.
+//
+// An opaque nested repository that is NOT a registered worktree (an embedded
+// foreign clone) stays refused: silently dropping it would hide from the user
+// that a directory they may believe is under review can never be, and Git
+// itself warns rather than recurses when asked to add one. The refusal names
+// the path and every honest way out.
+func excludeRegisteredNestedWorktrees(ctx context.Context, root string, nestedRepositories []string) error {
+	registered, err := linkedWorktreeDirectories(ctx, root)
+	if err != nil {
+		return err
+	}
+	for _, value := range nestedRepositories {
+		logicalPath, err := normalizeLogicalPath(strings.TrimSuffix(value, "/"))
+		if err != nil {
+			return &UntrackedScopeRefusalError{Cause: fmt.Errorf("untracked nested repository directory %q is not addressable as review scope: %w; add it to .gitignore or move it outside this repository", value, err)}
+		}
+		absolute := filepath.Join(root, filepath.FromSlash(logicalPath))
+		excluded := false
+		for _, worktree := range registered {
+			if pathidentity.SameDirectory(absolute, worktree) {
+				excluded = true
+				break
+			}
+		}
+		if !excluded {
+			return &UntrackedScopeRefusalError{Cause: fmt.Errorf("untracked directory %q holds another Git repository that is not a linked worktree of this one, so it cannot enter the review candidate: add it to .gitignore, move it outside this repository, or register it as a linked worktree", logicalPath)} // refusal:by-design world-action: the exit is a repository-layout change (gitignore, move, or register the nested checkout), which no command of this product can decide or perform
+		}
+	}
+	return nil
+}
+
+// linkedWorktreeDirectories returns the absolute working-tree directories Git
+// registers for this repository, including the main one. Plain --porcelain
+// (not -z) keeps the git floor low; a hypothetical registered path containing
+// a newline would mis-parse into lines that match no opaque directory, which
+// fails closed into the embedded-repository refusal instead of silently
+// excluding content.
+func linkedWorktreeDirectories(ctx context.Context, root string) ([]string, error) {
+	output, err := runGit(ctx, root, nil, nil, "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	var directories []string
+	for _, line := range strings.Split(string(output), "\n") {
+		if directory, ok := strings.CutPrefix(line, "worktree "); ok && directory != "" {
+			directories = append(directories, directory)
+		}
+	}
+	return directories, nil
 }
 
 // DiscoverTrackedAndUnignoredPaths returns the canonical Git-owned workspace

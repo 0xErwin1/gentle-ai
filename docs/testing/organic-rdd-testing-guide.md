@@ -696,7 +696,7 @@ run is right never to produce.
 
 ## How to measure properly (read this before reporting)
 
-Four things that made earlier reports measure the wrong thing. They are not bugs, they are environment traps:
+Six things that made earlier reports measure the wrong thing. They are not bugs, they are environment traps:
 
 **Never write command output inside the repository under test.** The review target is derived from the workspace snapshot, so `gentle-ai ... > out.txt` run from inside the repo adds an untracked file and changes the very thing being measured. A transition proposed before the redirect no longer matches after it, and you get a refusal that has nothing to do with what you were testing. Keep a separate directory:
 
@@ -724,6 +724,10 @@ echo "exit=$?"
 ```
 
 **`--next-transition` needs the explicit contract.** This is not a bug: passing `--contract` is the opt-in to the negotiated envelope, and leaving it out has its own meaning.
+
+**Before reporting, reproduce in the clean setup repo, not your own.** A tester nearly filed a bug that does not exist because their own repository — with its history, its hooks, its accumulated state — produced a failure that six commands in a fresh `mktemp -d` repo could not. Your repo is full of variables you stopped seeing months ago; the setup repo at the top of this guide has none. Run the same steps there first. If the failure survives the clean repo, report it with those steps — that is a reproduction we can run. **If it only reproduces in your repo, that is still a report worth filing** — say so explicitly, because then the shape of your repository IS the finding, and what we need from you is which shape: the worktree layout, the hook, the config that a clean repo does not have.
+
+**"2.2.0-rc.1" does not identify a binary.** Release assets get replaced in place, so an asset downloaded two days ago and one downloaded today both call themselves `2.2.0-rc.1` — and a tester reported against the old one without any way to know, because nothing in the binary's own output could tell the two refreshes apart. Refresh 8 binaries solve this at the root: they embed `-pr1801-<shortsha>` in the version string. So paste the **complete `--version` output** in any report, not the release version; they are different things and only one is actionable.
 
 ## What to report
 

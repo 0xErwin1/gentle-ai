@@ -197,6 +197,7 @@ func (report reviewDefectReport) render() string {
 		fmt.Fprintf(&body, "%s: %s\n", key, report.Input.StateIdentifiers[key])
 	}
 	fmt.Fprintf(&body, "generated_at: %s\n```\n", report.Generated.Format(time.RFC3339))
+	fmt.Fprintf(&body, "\nFile this report at %s.\n", reviewDefectReportIssuesURL)
 	return body.String()
 }
 
@@ -244,11 +245,16 @@ func writeReviewDefectReport(ctx context.Context, root string, report reviewDefe
 	return path, nil
 }
 
+// reviewToolFaultDefectClausePrefix is the stable marker every defect clause
+// starts with. The preflight parity guard uses it to recognize the clause as a
+// human-only decoration rather than refusal information.
+const reviewToolFaultDefectClausePrefix = " A defect report was saved at "
+
 // reviewToolFaultDefectClause is the "at most one clause" Tier C extension
 // task 5.6 requires: the report path plus the issues URL, appended to the
 // base fault message so the whole thing stays one statement, one action.
 func reviewToolFaultDefectClause(reportPath string) string {
-	return fmt.Sprintf(" A defect report was saved at %s -- file it at %s.", reportPath, reviewDefectReportIssuesURL)
+	return fmt.Sprintf("%s%s -- file it at %s.", reviewToolFaultDefectClausePrefix, reportPath, reviewDefectReportIssuesURL)
 }
 
 // reviewGenerateToolFaultDefectReport is the one call every tool-fault site
@@ -264,4 +270,85 @@ func reviewGenerateToolFaultDefectReport(ctx context.Context, root string, input
 		return ""
 	}
 	return reviewToolFaultDefectClause(path)
+}
+
+// reviewUnexpectedFaultDefectReportClause extends the defect-report treatment
+// from the two hand-picked tool-fault sites to the whole unanticipated-residue
+// class at the negotiated failure choke point (issue #1881 follow-up). The
+// class boundary is enforced by the classifier itself, not by a list of call
+// sites: every anticipated condition carries its own typed failure code, so
+// only a failure that still reads operation_outcome_unknown after the full
+// typed cascade is the "this should not happen" residue. Two explicit fences
+// keep the boundary honest:
+//
+//   - a typed refusal is NOT a defect: policy denials, validation errors, and
+//     correct refusals all leave the residue code behind and never report;
+//   - read-only operations never write, the same rule that keeps gates and
+//     STATUS report-free — only operations the registry declares mutating
+//     qualify.
+//
+// Persistence failure degrades to an empty clause inside
+// reviewGenerateToolFaultDefectReport, so the reporter can never mask or
+// replace the original error path.
+func reviewUnexpectedFaultDefectReportClause(ctx context.Context, operation string, args []string, failure ReviewIntegrationFailure) string {
+	if failure.Code != "operation_outcome_unknown" {
+		return ""
+	}
+	metadata, known := reviewIntegrationOperationByName(operation)
+	if !known || !reviewIntegrationOperationMutates(metadata, args) {
+		return ""
+	}
+	values, _ := safeReviewIntegrationArguments(operation, args)
+	root := strings.TrimSpace(values["cwd"])
+	if root == "" {
+		root = "."
+	}
+	message := failure.Cause
+	if message == "" {
+		message = failure.Message
+	}
+	identifiers := map[string]string{"operation": operation, "phase": failure.Phase}
+	if failure.LineageID != "" {
+		identifiers["lineage"] = failure.LineageID
+	}
+	return reviewGenerateToolFaultDefectReport(ctx, root, reviewDefectReportInput{
+		Operation:            reviewDefectReportOperationShape(metadata.Command, operation, args),
+		ReasonCode:           failure.Code,
+		ErrorMessage:         message,
+		TerminalPrecondition: "a mutating review operation failed in a way no typed classification anticipated, so its true outcome is unknown to the tool",
+		StateIdentifiers:     identifiers,
+	})
+}
+
+// reviewDefectReportOperationShape renders "review <command>" plus the sorted
+// flag NAMES the caller provided — the command's shape, never raw argv, so no
+// flag value can ride into a report destined for a public issue tracker.
+func reviewDefectReportOperationShape(command, operation string, args []string) string {
+	shape := []string{"review", command}
+	if values, valid := safeReviewIntegrationArguments(operation, args); valid {
+		names := make([]string, 0, len(values))
+		for name := range values {
+			names = append(names, "--"+name)
+		}
+		sort.Strings(names)
+		shape = append(shape, names...)
+	}
+	return strings.Join(shape, " ")
+}
+
+// reviewAppendUnexpectedFaultDefectClause gives the plain (non-negotiated)
+// form the same residue treatment: it classifies the failure with the exact
+// negotiated cascade — purely, nothing is emitted — and, when the result is
+// unanticipated residue on a mutating operation, appends the saved-report
+// clause to the error the operator is about to read. Named refusals and
+// read-only operations fall out of the same two fences above.
+func reviewAppendUnexpectedFaultDefectClause(ctx context.Context, operation string, args []string, err error) error {
+	if err == nil || operation == "" {
+		return err
+	}
+	clause := reviewUnexpectedFaultDefectReportClause(ctx, operation, args, newReviewIntegrationFailure(operation, args, err))
+	if clause == "" {
+		return err
+	}
+	return fmt.Errorf("%w%s", err, clause)
 }
