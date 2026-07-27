@@ -257,8 +257,15 @@ func prepareBinaryCorrection(t *testing.T, binary string) (string, string, Revie
 		Location: "tracked.txt:5", Severity: "CRITICAL", Claim: "candidate returns the wrong terminal value",
 		ProofRefs: []string{"differential test fails only on candidate"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 	}}, Evidence: []string{"focused differential test failed"}})
+	// `--result` is retired: it admitted nothing, so the fixture now admits
+	// its reviewer result through the real capture path and finalizes via the
+	// binary on the native route. The binary is still what drives finalize --
+	// only the admission moved to where production admission lives.
+	if err := captureReviewCLIResultFiles(t, repo, started.LineageID, []string{reviewer}); err != nil {
+		t.Fatalf("capture reviewer result: %v", err)
+	}
 	var correction ReviewFacadeFinalizeResult
-	decodeBinaryJSON(t, runReviewBinary(t, binary, true, "finalize", "--cwd", repo, "--result", reviewer), &correction)
+	decodeBinaryJSON(t, runReviewBinary(t, binary, true, "finalize", "--cwd", repo, "--captured-results=true"), &correction)
 	if correction.State != reviewtransaction.StateCorrectionRequired {
 		t.Fatalf("review state = %q", correction.State)
 	}
