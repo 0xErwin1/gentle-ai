@@ -78,6 +78,12 @@ const (
 	RiskReasonNonExecutableOnly   RiskReasonCode = "non_executable_only"
 	RiskReasonConfigurationChange RiskReasonCode = "configuration_change"
 	RiskReasonExecutableChange    RiskReasonCode = "executable_change"
+	// RiskReasonEmptyContent reports a candidate that carries no bytes at all
+	// on either side. It fails closed exactly like RiskReasonExecutableChange
+	// -- a file whose type cannot be determined is never proven passive -- but
+	// it is a separate code because the two state different facts. Reporting an
+	// empty file as an executable change describes content that is not there.
+	RiskReasonEmptyContent RiskReasonCode = "empty_content"
 )
 
 // RiskReason records only evidence derivable from the immutable snapshot.
@@ -535,7 +541,7 @@ func removeFallbackRiskReasons(reasons []RiskReason) []RiskReason {
 	filtered := make([]RiskReason, 0, len(reasons))
 	for _, reason := range reasons {
 		switch reason.Code {
-		case RiskReasonNonExecutableOnly, RiskReasonConfigurationChange, RiskReasonExecutableChange:
+		case RiskReasonNonExecutableOnly, RiskReasonConfigurationChange, RiskReasonExecutableChange, RiskReasonEmptyContent:
 			continue
 		default:
 			filtered = append(filtered, reason)
@@ -627,10 +633,26 @@ func fallbackRiskReason(stats []DiffStat, activeContent map[string]struct{}) Ris
 			return RiskReason{Code: RiskReasonConfigurationChange, Path: stat.Path}
 		}
 		if _, contradicted := activeContent[stat.Path]; contradicted || !isPassiveContentCandidateStat(stat) {
+			if isEmptyContentStat(stat) {
+				return RiskReason{Code: RiskReasonEmptyContent, Path: stat.Path}
+			}
 			return RiskReason{Code: RiskReasonExecutableChange, Path: stat.Path}
 		}
 	}
 	return RiskReason{Code: RiskReasonNonExecutableOnly}
+}
+
+// isEmptyContentStat reports a candidate with no bytes on either side: a
+// zero-byte file added or removed. Diff stats are collected with --no-renames,
+// so a non-binary entry that is not mode-only and counts no added or deleted
+// line can only be an empty blob opposite an absent side.
+//
+// Such an entry is unclassifiable because there is nothing to classify, which
+// is why it stays in the fail-closed branch. It gets its own reason so the
+// evidence can say what is true -- the file is empty -- instead of asserting
+// something about content it does not have.
+func isEmptyContentStat(stat DiffStat) bool {
+	return !stat.Binary && !stat.ModeOnly && stat.Additions+stat.Deletions == 0
 }
 
 func canonicalRiskReasons(reasons []RiskReason) []RiskReason {

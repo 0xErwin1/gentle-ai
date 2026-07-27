@@ -639,9 +639,58 @@ func resolveGitDirectory(ctx context.Context, repo, selector string) (string, er
 	}
 	output, err := runGit(ctx, repo, nil, nil, "rev-parse", selector)
 	if err != nil {
+		// Only --show-toplevel can fail for want of a working tree;
+		// --git-dir and --git-common-dir answer normally in a bare repository.
+		if selector == "--show-toplevel" {
+			return "", bareRepositoryFailure(ctx, repo, err)
+		}
 		return "", err
 	}
 	return canonicalGitDirectory(repo, output)
+}
+
+// ErrBareRepositoryHasNoWorkingTree reports that the requested repository is
+// bare. Refusing is correct: a review candidate is a working-tree diff, and a
+// bare repository has no working tree for one to exist in.
+var ErrBareRepositoryHasNoWorkingTree = errors.New("review needs a working tree")
+
+// BareRepositoryError states that refusal in the product's own voice and names
+// what the operator can run, which is normally what they wanted: they are in a
+// bare clone or a server-side hook and the work they mean to review lives in a
+// checkout somewhere else.
+//
+// It deliberately names no subcommand. This boundary serves every review verb,
+// so naming one verb would hand a caller of a different verb a command that
+// does not clear their block -- worse than naming nothing. The flag it names is
+// the one every review verb accepts.
+type BareRepositoryError struct {
+	Path string
+}
+
+func (err *BareRepositoryError) Error() string {
+	return fmt.Sprintf(
+		"%v: %s is a bare repository, and a review candidate is a working-tree diff; "+
+			"run the same command again from a checkout, or point it at one with `--cwd <path-to-a-checkout>`",
+		ErrBareRepositoryHasNoWorkingTree, err.Path,
+	)
+}
+
+func (err *BareRepositoryError) Unwrap() error { return ErrBareRepositoryHasNoWorkingTree }
+
+// bareRepositoryFailure classifies a rev-parse failure by asking Git the single
+// question that separates "this repository has no working tree" from every
+// other cause. A probe that cannot answer, or that answers no, returns the
+// original error untouched: an unexpected failure must keep the cause it came
+// with, because destroying diagnostic information is its own defect.
+func bareRepositoryFailure(ctx context.Context, repo string, err error) error {
+	if err == nil {
+		return nil
+	}
+	output, probeErr := runGit(ctx, repo, nil, nil, "rev-parse", "--is-bare-repository")
+	if probeErr != nil || string(bytes.TrimSpace(output)) != "true" {
+		return err
+	}
+	return &BareRepositoryError{Path: repo}
 }
 
 func canonicalGitDirectory(repo string, output []byte) (string, error) {

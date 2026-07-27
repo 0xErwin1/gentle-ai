@@ -272,7 +272,8 @@ func validateReviewStartRiskReasons(reasons []reviewtransaction.RiskReason) erro
 			if reason.Signal != "" || reason.Path != "" || reason.OldMode != "" || reason.NewMode != "" {
 				return fmt.Errorf("invalid non-executable-only risk reason %#v", reason)
 			}
-		case reviewtransaction.RiskReasonConfigurationChange, reviewtransaction.RiskReasonExecutableChange:
+		case reviewtransaction.RiskReasonConfigurationChange, reviewtransaction.RiskReasonExecutableChange,
+			reviewtransaction.RiskReasonEmptyContent:
 			if reason.Signal != "" || reason.Path == "" || reason.OldMode != "" || reason.NewMode != "" {
 				return fmt.Errorf("invalid fallback risk reason %#v", reason)
 			}

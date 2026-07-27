@@ -672,7 +672,9 @@ func resolveReviewRepositoryDirectory(ctx context.Context, root, selector string
 func resolveReviewRepositoryDirectories(ctx context.Context, root string) ([]reviewRepositoryDirectoryIdentity, error) {
 	output, err := runGit(ctx, root, nil, nil, "rev-parse", "--show-toplevel", "--git-common-dir", "--git-dir")
 	if err != nil {
-		return nil, err
+		// This combined selection includes --show-toplevel, so it is the other
+		// boundary a bare repository reaches first.
+		return nil, bareRepositoryFailure(ctx, root, err)
 	}
 	records := bytes.Split(bytes.TrimSuffix(output, []byte{'\n'}), []byte{'\n'})
 	if len(records) != 3 {

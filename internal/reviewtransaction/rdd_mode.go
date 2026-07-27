@@ -238,7 +238,24 @@ func SetCloneLocalRDDMode(
 
 	head, present, err := readCloneLocalRDDOverrideHead(dir)
 	if err != nil {
-		return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
+		// An unreadable head is precisely what this command exists to replace,
+		// so it must not be able to block its own repair -- that left the
+		// operator with a refusal and no runnable way out of it. It expresses
+		// no readable opinion and therefore carries no compare-and-set token,
+		// which is the same position as holding no record at all.
+		//
+		// Nothing is weakened. The lock still serialises writers, and the
+		// immutable no-replace publish still refuses to overwrite the
+		// unreadable generation: the repair writes the generation that
+		// supersedes it, so a lost race still cannot corrupt the head.
+		if !errors.Is(err, ErrRDDModeCorrupt) {
+			return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), err
+		}
+		generation, generationErr := cloneLocalRDDOverrideHeadGeneration(dir)
+		if generationErr != nil {
+			return failedClosedRDDModeStatus(RDDModeSourceCloneLocal), generationErr
+		}
+		head, present = rddModeOverrideRecord{Generation: generation}, false
 	}
 	current := ""
 	if present {
@@ -447,6 +464,15 @@ func normalizeRDDMode(value string) (RDDMode, error) {
 	}
 }
 
+// RDDModeValueUnintelligible reports whether a persisted global mode value is
+// neither a mode this product understands nor the absence of an opinion. It
+// exists so a refusal can name the file holding such a value without
+// re-implementing this package's own vocabulary at the boundary.
+func RDDModeValueUnintelligible(value string) bool {
+	_, err := normalizeRDDMode(value)
+	return err != nil
+}
+
 func cloneLocalRDDOverrideValue(mode RDDMode) (string, error) {
 	switch mode {
 	case RDDModeOff:
@@ -467,6 +493,13 @@ func cloneLocalRDDOverrideValue(mode RDDMode) (string, error) {
 func cloneLocalRDDModeRoot(ctx context.Context, repo string, create bool) (string, error) {
 	lease, err := OpenRepositoryIdentityLease(ctx, repo)
 	if err != nil {
+		// A bare repository already states its own refusal and names its own
+		// recovery. Wrapping it in this internal concern would misattribute the
+		// failure to a kill switch the operator never touched.
+		var bare *BareRepositoryError
+		if errors.As(err, &bare) {
+			return "", err
+		}
 		return "", fmt.Errorf("resolve review mode repository identity: %w", err)
 	}
 	identity := reviewRepositoryIdentityRecordFromLease(lease)
@@ -498,13 +531,37 @@ func readCloneLocalRDDOverride(ctx context.Context, repo string) (rddModeOverrid
 	return readCloneLocalRDDOverrideHead(dir)
 }
 
-func readCloneLocalRDDOverrideHead(dir string) (rddModeOverrideRecord, bool, error) {
+// CloneLocalRDDModeRecordPath reports the clone-local override file that
+// currently decides this clone's mode, so a refusal can name the exact file
+// holding an unreadable value instead of merely describing it. It is strictly
+// read-only, never creates state, and reports "" when this clone holds no
+// override at all.
+func CloneLocalRDDModeRecordPath(ctx context.Context, repo string) (string, error) {
+	dir, err := cloneLocalRDDModeRoot(ctx, repo, false)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", nil
+		}
+		return "", err
+	}
+	head, err := cloneLocalRDDOverrideHeadGeneration(dir)
+	if err != nil || head == 0 {
+		return "", err
+	}
+	return filepath.Join(dir, rddModeGenerationName(head)), nil
+}
+
+// cloneLocalRDDOverrideHeadGeneration reports the highest published generation
+// without reading or parsing it. Naming and repairing an unreadable head need
+// the slot number and nothing else, and a record that cannot be parsed must not
+// be able to hide the slot that supersedes it.
+func cloneLocalRDDOverrideHeadGeneration(dir string) (int, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return rddModeOverrideRecord{}, false, nil
+			return 0, nil
 		}
-		return rddModeOverrideRecord{}, false, err
+		return 0, err
 	}
 	head := 0
 	for _, entry := range entries {
@@ -515,6 +572,14 @@ func readCloneLocalRDDOverrideHead(dir string) (rddModeOverrideRecord, bool, err
 		if ok && generation > head {
 			head = generation
 		}
+	}
+	return head, nil
+}
+
+func readCloneLocalRDDOverrideHead(dir string) (rddModeOverrideRecord, bool, error) {
+	head, err := cloneLocalRDDOverrideHeadGeneration(dir)
+	if err != nil {
+		return rddModeOverrideRecord{}, false, err
 	}
 	if head == 0 {
 		return rddModeOverrideRecord{}, false, nil

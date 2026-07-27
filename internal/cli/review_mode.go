@@ -101,7 +101,117 @@ func reviewModeStatus(ctx context.Context, repo string) (reviewtransaction.RDDMo
 	if err != nil {
 		return reviewtransaction.RDDModeStatus{Schema: reviewtransaction.RDDModeStatusSchema, Effective: reviewtransaction.RDDModeOff}, err
 	}
-	return reviewtransaction.ResolveRDDMode(ctx, repo, global)
+	status, err := reviewtransaction.ResolveRDDMode(ctx, repo, global)
+	return status, reviewModeUnreadable(ctx, repo, global, err)
+}
+
+// ReviewModeUnreadableScope names one kill-switch source whose persisted value
+// cannot be read as a mode, the file that holds it, and the repository that
+// file belongs to.
+type ReviewModeUnreadableScope struct {
+	Scope string
+	Path  string
+	Repo  string
+}
+
+func (scope ReviewModeUnreadableScope) label() string {
+	if scope.Scope == reviewModeScopeClone {
+		return "clone-local"
+	}
+	return "global"
+}
+
+// commands names the two invocations that overwrite this scope. Both are
+// complete as printed: the clone-local scope carries the repository it belongs
+// to, because a clone-local record is only reachable through its own clone.
+func (scope ReviewModeUnreadableScope) commands() []string {
+	suffix := " --scope=" + scope.Scope
+	if scope.Scope == reviewModeScopeClone {
+		suffix += " --cwd " + scope.Repo
+	}
+	return []string{
+		"`gentle-ai review mode enable" + suffix + "`",
+		"`gentle-ai review mode disable" + suffix + "`",
+	}
+}
+
+// ReviewModeUnreadableError reports a kill-switch record that exists but cannot
+// be read as a mode. Failing closed is deliberate and stays exactly as it was:
+// an unintelligible switch is not a disabled switch, so it resolves to managed
+// and every start and mutation still refuses. What the refusal has to carry is
+// the file holding the value and the command that overwrites it, both of which
+// the product already knows and neither of which it used to say.
+type ReviewModeUnreadableError struct {
+	Scopes []ReviewModeUnreadableScope
+	Cause  error
+}
+
+func (err *ReviewModeUnreadableError) Unwrap() error { return err.Cause }
+
+func (err *ReviewModeUnreadableError) Error() string {
+	places := make([]string, 0, len(err.Scopes))
+	commands := make([]string, 0, 2*len(err.Scopes))
+	for _, scope := range err.Scopes {
+		places = append(places, fmt.Sprintf("the %s value in %s", scope.label(), scope.Path))
+		commands = append(commands, scope.commands()...)
+	}
+	subject := strings.Join(places, " and ")
+	if len(places) > 1 {
+		subject = "both review mode sources hold a value this product cannot read as a mode: " + subject
+	} else {
+		subject += " is not a mode this product can read"
+	}
+	return fmt.Sprintf(
+		"%s; an unreadable switch is not a disabled switch, so review-driven development stays managed until the value is overwritten: run %s to turn reviews on, or %s to turn them off",
+		subject,
+		strings.Join(reviewModeCommandsByVerb(commands, "enable"), " and "),
+		strings.Join(reviewModeCommandsByVerb(commands, "disable"), " and "),
+	)
+}
+
+func reviewModeCommandsByVerb(commands []string, verb string) []string {
+	selected := make([]string, 0, len(commands))
+	for _, command := range commands {
+		if strings.HasPrefix(command, "`gentle-ai review mode "+verb+" ") {
+			selected = append(selected, command)
+		}
+	}
+	return selected
+}
+
+// reviewModeUnreadable turns a kill-switch resolution failure into a refusal
+// that names the file holding the value and the command that overwrites it.
+//
+// Both sources are probed rather than only the one that failed, because
+// ResolveRDDMode stops at the first source it cannot read. Naming that one
+// alone would send the operator round the loop: they overwrite what the message
+// named, rerun, and hit the same wall from the other source.
+func reviewModeUnreadable(
+	ctx context.Context,
+	repo string,
+	global reviewtransaction.RDDGlobalMode,
+	err error,
+) error {
+	if err == nil {
+		return nil
+	}
+	scopes := make([]ReviewModeUnreadableScope, 0, 2)
+	if reviewtransaction.RDDModeValueUnintelligible(global.Value) {
+		if home, homeErr := os.UserHomeDir(); homeErr == nil {
+			scopes = append(scopes, ReviewModeUnreadableScope{Scope: reviewModeScopeGlobal, Path: state.Path(home), Repo: repo})
+		}
+	}
+	// An unset global can never fail, so this isolates the clone-local source
+	// even when the global one already failed ahead of it.
+	if _, cloneErr := reviewtransaction.ResolveRDDMode(ctx, repo, reviewtransaction.RDDGlobalMode{}); cloneErr != nil {
+		if path, pathErr := reviewtransaction.CloneLocalRDDModeRecordPath(ctx, repo); pathErr == nil && path != "" {
+			scopes = append(scopes, ReviewModeUnreadableScope{Scope: reviewModeScopeClone, Path: path, Repo: repo})
+		}
+	}
+	if len(scopes) == 0 {
+		return err
+	}
+	return &ReviewModeUnreadableError{Scopes: scopes, Cause: err}
 }
 
 // reviewDeliveryDisposition reports what governs delivery for the candidate
@@ -167,13 +277,24 @@ func applyReviewMode(
 		mode = reviewtransaction.RDDModeUnset
 	}
 	if !revisionProvided {
-		current, resolveErr := reviewtransaction.ResolveRDDMode(ctx, repo, global)
-		if resolveErr != nil {
-			return disabled, resolveErr
+		// The compare-and-set token belongs to the clone-local source alone, so
+		// it is read with an unset global. Repairing this clone must not depend
+		// on the other source being readable, or a switch whose two records are
+		// both unreadable would have no repair command at all.
+		current, resolveErr := reviewtransaction.ResolveRDDMode(ctx, repo, reviewtransaction.RDDGlobalMode{})
+		switch {
+		case resolveErr == nil:
+			expectedRevision = current.Revision
+		case errors.Is(resolveErr, reviewtransaction.ErrRDDModeCorrupt):
+			// An unreadable head carries no revision to compare against, and
+			// replacing it is the whole point of this command.
+			expectedRevision = ""
+		default:
+			return disabled, reviewModeUnreadable(ctx, repo, global, resolveErr)
 		}
-		expectedRevision = current.Revision
 	}
-	return reviewtransaction.SetCloneLocalRDDMode(ctx, repo, mode, expectedRevision, global)
+	status, err := reviewtransaction.SetCloneLocalRDDMode(ctx, repo, mode, expectedRevision, global)
+	return status, reviewModeUnreadable(ctx, repo, global, err)
 }
 
 func readGlobalRDDMode() (reviewtransaction.RDDGlobalMode, error) {
@@ -372,7 +493,7 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 	}
 	if _, err := reviewtransaction.AuthorizeRDDOperation(
 		ctx, repo, global, reviewtransaction.RDDOperationStart); err != nil {
-		return err
+		return reviewModeUnreadable(ctx, repo, global, err)
 	}
 	if assessment.Level == reviewtransaction.RiskLow {
 		// Tier 0 is silent structural readback. Asking here would reintroduce
@@ -533,6 +654,15 @@ func reviewConsentEvidencePhrases(reasons []reviewtransaction.RiskReason) []stri
 }
 
 func reviewConsentEvidencePhrase(reason reviewtransaction.RiskReason) string {
+	// An empty file is named first and described second. Every other subject
+	// reads "<what changed> in <path>", which for a file with no bytes would
+	// assert something about content that is not there.
+	if reason.Code == reviewtransaction.RiskReasonEmptyContent {
+		if strings.TrimSpace(reason.Path) == "" {
+			return ""
+		}
+		return fmt.Sprintf("%s, an empty file whose type cannot be determined from its content", reason.Path)
+	}
 	subject := reviewConsentEvidenceSubject(reason)
 	if subject == "" || strings.TrimSpace(reason.Path) == "" {
 		return subject
