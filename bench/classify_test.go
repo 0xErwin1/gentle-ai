@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -93,6 +94,13 @@ func TestClassifyRecordedObservations(t *testing.T) {
 			"[fixed] does not name `gentle-ai review mode enable`"},
 		{"abandon_without_token", BlockOutOfBand,
 			"lists required flags but no runnable command that produces the token"},
+
+		// The bytes alone are out_of_band: the refusal names an action but no
+		// runnable command. Only a by-design declaration whose quoted text is
+		// verified present in these bytes moves it, and the corpus -- not this
+		// fixture -- carries that declaration.
+		{"bare_repository_start", BlockOutOfBand,
+			"names what to do but no runnable command; the exemption lives in the corpus, not in the bytes"},
 	}
 
 	for _, testCase := range cases {
@@ -207,6 +215,101 @@ func TestDeclaredDeadEndOnlyAppliesWhenNothingIsNamed(t *testing.T) {
 	}
 }
 
+// TestByDesignNeedsItsQuotedNextActionInTheEmittedBytes is the load-bearing
+// guard on the second author-declared input. A declaration is a claim about
+// what the product printed, and the claim is CHECKED: if the quoted text is
+// not in the emitted bytes, the exemption does not apply and the block stays
+// a defect. This is what stops `Error: no.` from being labelled by-design.
+func TestByDesignNeedsItsQuotedNextActionInTheEmittedBytes(t *testing.T) {
+	declaration := &ByDesignDeclaration{
+		Shape:      ByDesignOperatorKnowledge,
+		NextAction: "run the same command again from a checkout",
+	}
+
+	silent := Observation{
+		ExitCode:         1,
+		Stderr:           "Error: no.",
+		StdoutCaptured:   true,
+		StderrCaptured:   true,
+		DeclaredByDesign: declaration,
+	}
+	if got := Classify(silent); got != BlockOutOfBand {
+		t.Fatalf("Classify(a refusal that names nothing) = %q, want %q: a declaration cannot excuse a message that says nothing", got, BlockOutOfBand)
+	}
+
+	// And the stale declaration must be visible rather than silently dropped.
+	outcome := byDesignOutcome(silent, BlockOutOfBand)
+	if outcome == nil || outcome.Applied {
+		t.Fatalf("outcome = %+v, want a recorded, non-applied declaration", outcome)
+	}
+	if outcome.Reason == "" {
+		t.Fatal("a declaration that did not apply must say why")
+	}
+
+	// The same declaration against the bytes the product really emits.
+	speaking := loadFixtures(t)["bare_repository_start"]
+	speaking.DeclaredByDesign = declaration
+	if got := Classify(speaking); got != BlockByDesign {
+		t.Fatalf("Classify(the recorded bare-repository refusal) = %q, want %q\nstderr: %s", got, BlockByDesign, speaking.Stderr)
+	}
+	if outcome := byDesignOutcome(speaking, BlockByDesign); outcome == nil || !outcome.Applied || outcome.Shape != ByDesignOperatorKnowledge {
+		t.Fatalf("outcome = %+v, want an applied operator-knowledge exemption", outcome)
+	}
+}
+
+// TestByDesignLosesToANamedRunnableCommand is the same discipline
+// TestDeclaredDeadEndOnlyAppliesWhenNothingIsNamed pins for dead_end:
+// mechanical evidence outranks the author's annotation. A block whose output
+// names a command that runs is in_band whatever the corpus declared, and the
+// stale declaration is recorded rather than swallowed.
+func TestByDesignLosesToANamedRunnableCommand(t *testing.T) {
+	observation := Observation{
+		ExitCode:       1,
+		Stderr:         "Error: nothing to review; run the same command again from a checkout, or rerun gentle-ai review start --projection staged",
+		StdoutCaptured: true,
+		StderrCaptured: true,
+		DeclaredByDesign: &ByDesignDeclaration{
+			Shape:      ByDesignOperatorKnowledge,
+			NextAction: "run the same command again from a checkout",
+		},
+	}
+	if got := Classify(observation); got != BlockInBand {
+		t.Fatalf("Classify = %q, want %q: a named runnable command outranks the declaration", got, BlockInBand)
+	}
+	outcome := byDesignOutcome(observation, BlockInBand)
+	if outcome == nil || outcome.Applied || outcome.Reason == "" {
+		t.Fatalf("outcome = %+v, want the stale declaration recorded with a reason", outcome)
+	}
+}
+
+// TestByDesignShapeVocabularyIsClosed proves the shape is not free text.
+func TestByDesignShapeVocabularyIsClosed(t *testing.T) {
+	for _, shape := range []string{ByDesignOperatorKnowledge, ByDesignWorldAction, ByDesignHumanAuthority} {
+		declaration := &ByDesignDeclaration{Shape: shape, NextAction: "do the thing"}
+		if err := declaration.Validate(); err != nil {
+			t.Fatalf("%s: Validate = %v, want nil", shape, err)
+		}
+	}
+	unrecognised := &ByDesignDeclaration{Shape: "because-i-said-so", NextAction: "do the thing"}
+	if err := unrecognised.Validate(); err == nil {
+		t.Fatal("an unrecognised shape must be rejected, not accepted as free text")
+	}
+	quoteless := &ByDesignDeclaration{Shape: ByDesignWorldAction}
+	if err := quoteless.Validate(); err == nil {
+		t.Fatal("a declaration with no next-action text to verify must be rejected")
+	}
+
+	// An unrecognised shape never buys the exemption either, so a corpus error
+	// can only ever make a block look WORSE than it is, never better.
+	observation := Observation{
+		ExitCode: 1, Stderr: "Error: do the thing", StdoutCaptured: true, StderrCaptured: true,
+		DeclaredByDesign: unrecognised,
+	}
+	if got := Classify(observation); got != BlockOutOfBand {
+		t.Fatalf("Classify = %q, want %q", got, BlockOutOfBand)
+	}
+}
+
 func TestSelfRecoveredWinsOverEverything(t *testing.T) {
 	observation := Observation{
 		ExitCode:      1,
@@ -215,6 +318,59 @@ func TestSelfRecoveredWinsOverEverything(t *testing.T) {
 	}
 	if got := Classify(observation); got != BlockSelfRecovered {
 		t.Fatalf("Classify = %q, want %q", got, BlockSelfRecovered)
+	}
+}
+
+// TestCorpusDeclarationsAreValid runs the shipped corpus through the same
+// check `run` performs before it drives anything. A shape typo in a journey is
+// a corpus error, and it fails here rather than quietly costing an exemption.
+func TestCorpusDeclarationsAreValid(t *testing.T) {
+	if err := validateCorpus(Journeys()); err != nil {
+		t.Fatalf("shipped corpus is invalid: %v", err)
+	}
+}
+
+// TestValidateCorpusFailsLoudly proves each way a declaration can be unusable
+// stops the run instead of passing silently.
+func TestValidateCorpusFailsLoudly(t *testing.T) {
+	step := func(mutate func(*Step)) Journey {
+		base := Step{Name: "s", Args: productArgs("review", "start")}
+		mutate(&base)
+		return Journey{ID: "jXX", Steps: []Step{base}}
+	}
+	cases := []struct {
+		name    string
+		journey Journey
+		want    string
+	}{
+		{"unrecognised shape", step(func(s *Step) {
+			s.ByDesign = &ByDesignDeclaration{Shape: "because-i-said-so", NextAction: "do the thing"}
+		}), "not one of"},
+		{"no quoted next action", step(func(s *Step) {
+			s.ByDesign = &ByDesignDeclaration{Shape: ByDesignWorldAction}
+		}), "next-action"},
+		{"both dead_end and by_design", step(func(s *Step) {
+			s.DeadEnd = true
+			s.ByDesign = &ByDesignDeclaration{Shape: ByDesignWorldAction, NextAction: "free some disk space"}
+		}), "opposite"},
+		{"declared on a step that never invokes", func() Journey {
+			journey := step(func(s *Step) {
+				s.ByDesign = &ByDesignDeclaration{Shape: ByDesignWorldAction, NextAction: "free some disk space"}
+			})
+			journey.Steps[0].Args = nil
+			return journey
+		}(), "never reaches the classifier"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := validateCorpus([]Journey{testCase.journey})
+			if err == nil {
+				t.Fatal("want a corpus error, got nil")
+			}
+			if !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("error %q does not explain the problem (want it to mention %q)", err, testCase.want)
+			}
+		})
 	}
 }
 

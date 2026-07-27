@@ -8,9 +8,10 @@ import (
 	"strings"
 )
 
-// dimensionRow describes one printable dimension. Blocks are printed as four
-// separate rows because collapsing them would hide the one thing that must
-// never be hidden: dead ends going up while everything else goes down.
+// dimensionRow describes one printable dimension. Blocks are printed as five
+// separate rows because collapsing them would hide the two things that must
+// never be hidden: dead ends going up while everything else goes down, and
+// out_of_band going down because blocks moved into by_design.
 type dimensionRow struct {
 	Label string
 	Value func(MetricSet) (int, bool, string) // value, present, derivation
@@ -37,7 +38,8 @@ func dimensionRows() []dimensionRow {
 		{"4a   self_recovered", blocks(func(b BlockCounts) int { return b.SelfRecovered })},
 		{"4b   in_band", blocks(func(b BlockCounts) int { return b.InBand })},
 		{"4c   out_of_band", blocks(func(b BlockCounts) int { return b.OutOfBand })},
-		{"4d   dead_end", blocks(func(b BlockCounts) int { return b.DeadEnd })},
+		{"4d   by_design", blocks(func(b BlockCounts) int { return b.ByDesign })},
+		{"4e   dead_end", blocks(func(b BlockCounts) int { return b.DeadEnd })},
 		{"5 recovery_round_trips", pick(func(s MetricSet) Dimension { return s.RecoveryRoundTrips })},
 		{"6 model_runs", pick(func(s MetricSet) Dimension { return s.ModelRuns })},
 		{"7 human_surface_bytes", pick(func(s MetricSet) Dimension { return s.HumanSurfaceBytes })},
@@ -108,9 +110,80 @@ func writeRunReport(out io.Writer, results Results) {
 			}
 		}
 	}
+	writeByDesignSection(out, results)
+
 	for _, note := range results.Notes {
 		fmt.Fprintf(out, "\nnote: %s\n", note)
 	}
+}
+
+// writeByDesignSection prints every by-design declaration in the run and what
+// became of it. It exists because `4c out_of_band` getting smaller is only
+// honest if the reader can see, in the same output, which blocks moved and on
+// what grounds — and because a declaration the classifier REFUSED is the first
+// sign the product's message changed under the corpus, so it is printed too.
+//
+// The section is omitted entirely when the corpus declared nothing, which
+// keeps the ordinary report unchanged.
+func writeByDesignSection(out io.Writer, results Results) {
+	type entry struct {
+		journey string
+		command CommandRecord
+	}
+	applied, stale := []entry{}, []entry{}
+	for _, journey := range results.Journeys {
+		for _, command := range journey.Commands {
+			if command.ByDesign == nil {
+				continue
+			}
+			if command.ByDesign.Applied {
+				applied = append(applied, entry{journey.ID, command})
+				continue
+			}
+			stale = append(stale, entry{journey.ID, command})
+		}
+	}
+	if len(applied)+len(stale) == 0 {
+		return
+	}
+
+	fmt.Fprintf(out, "\nBy-design blocks (declared exemptions from out_of_band)\n")
+	fmt.Fprintf(out, "  Each one is a block the corpus declares CORRECT: a refusal for which no\n")
+	fmt.Fprintf(out, "  runnable command can honestly exist, because naming one would name a dead\n")
+	fmt.Fprintf(out, "  end. They are counted in `4d by_design` instead of `4c out_of_band`; they\n")
+	fmt.Fprintf(out, "  are still blocks and still inside the block total. The exemption costs a\n")
+	fmt.Fprintf(out, "  shape from a closed vocabulary and an exact quote of the product's own\n")
+	fmt.Fprintf(out, "  next-action text, verified present in the bytes it emitted. Read the quote:\n")
+	fmt.Fprintf(out, "  if it no longer tells the operator what to do, this is a defect wearing an\n")
+	fmt.Fprintf(out, "  exemption, and that is the failure mode this class introduces.\n")
+	for _, item := range applied {
+		fmt.Fprintf(out, "    %s  %s\n", item.journey, item.command.Step)
+		fmt.Fprintf(out, "        shape: %s (%s)\n", item.command.ByDesign.Shape, shapeMeaning(item.command.ByDesign.Shape))
+		fmt.Fprintf(out, "        verified next action: %q\n", item.command.ByDesign.NextAction)
+	}
+	if len(stale) > 0 {
+		fmt.Fprintf(out, "  Declared but NOT applied — stale declarations, counted as the class they\n")
+		fmt.Fprintf(out, "  really are. A declaration is a claim about what the product prints, and\n")
+		fmt.Fprintf(out, "  these claims failed:\n")
+		for _, item := range stale {
+			class := item.command.Block
+			if class == NotABlock {
+				class = "not a block"
+			}
+			fmt.Fprintf(out, "    %s  %s\n", item.journey, item.command.Step)
+			fmt.Fprintf(out, "        counted as: %s\n", class)
+			fmt.Fprintf(out, "        reason: %s\n", item.command.ByDesign.Reason)
+		}
+	}
+}
+
+func shapeMeaning(name string) string {
+	for _, shape := range byDesignShapes {
+		if shape.Name == name {
+			return shape.Meaning
+		}
+	}
+	return "unrecognised shape"
 }
 
 func cell(journey JourneyResult, row dimensionRow) string {
@@ -153,6 +226,8 @@ func shortLabel(label string) string {
 		return "in"
 	case "out_of_band":
 		return "out"
+	case "by_design":
+		return "design"
 	case "dead_end":
 		return "dead"
 	case "recovery_round_trips":

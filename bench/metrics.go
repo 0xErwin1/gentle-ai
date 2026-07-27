@@ -39,15 +39,22 @@ func unobservable(note string) Dimension {
 }
 
 // BlockCounts is dimension 4. Every block lands in exactly one bucket.
+//
+// ByDesign is a carve-out from OutOfBand, and it is a RECLASSIFICATION, never
+// a subtraction: an exempted block is still a block and still in Total(). It
+// sits next to OutOfBand in every table for one reason — when out_of_band gets
+// smaller, the reader must be able to see where the difference went without
+// leaving the row.
 type BlockCounts struct {
 	SelfRecovered int `json:"self_recovered"`
 	InBand        int `json:"in_band"`
 	OutOfBand     int `json:"out_of_band"`
+	ByDesign      int `json:"by_design"`
 	DeadEnd       int `json:"dead_end"`
 }
 
 func (b BlockCounts) Total() int {
-	return b.SelfRecovered + b.InBand + b.OutOfBand + b.DeadEnd
+	return b.SelfRecovered + b.InBand + b.OutOfBand + b.ByDesign + b.DeadEnd
 }
 
 func (b *BlockCounts) add(class string) {
@@ -58,6 +65,8 @@ func (b *BlockCounts) add(class string) {
 		b.InBand++
 	case BlockOutOfBand:
 		b.OutOfBand++
+	case BlockByDesign:
+		b.ByDesign++
 	case BlockDeadEnd:
 		b.DeadEnd++
 	}
@@ -67,6 +76,7 @@ func (b *BlockCounts) addAll(other BlockCounts) {
 	b.SelfRecovered += other.SelfRecovered
 	b.InBand += other.InBand
 	b.OutOfBand += other.OutOfBand
+	b.ByDesign += other.ByDesign
 	b.DeadEnd += other.DeadEnd
 }
 
@@ -94,12 +104,16 @@ type CommandRecord struct {
 	StderrBytes int      `json:"stderr_bytes"`
 	StdoutBytes int      `json:"stdout_bytes"`
 	Block       string   `json:"block,omitempty"`
-	Unsupported bool     `json:"unsupported,omitempty"`
-	ModelRun    bool     `json:"model_run,omitempty"`
-	ManualToken bool     `json:"manual_token,omitempty"`
-	Prompts     int      `json:"prompts,omitempty"`
-	GitCalls    *int     `json:"git_calls,omitempty"`
-	Message     string   `json:"message,omitempty"`
+	// ByDesign is present whenever the corpus declared a by-design exemption
+	// here, whether or not it applied. A declaration the classifier refused is
+	// reported, not dropped.
+	ByDesign    *ByDesignOutcome `json:"by_design,omitempty"`
+	Unsupported bool             `json:"unsupported,omitempty"`
+	ModelRun    bool             `json:"model_run,omitempty"`
+	ManualToken bool             `json:"manual_token,omitempty"`
+	Prompts     int              `json:"prompts,omitempty"`
+	GitCalls    *int             `json:"git_calls,omitempty"`
+	Message     string           `json:"message,omitempty"`
 }
 
 // Journey statuses.
@@ -211,11 +225,16 @@ func (a *accumulator) observe(step string, o Observation, gitCalls *int, modelRu
 	if IsUnsupported(o) {
 		record.Unsupported = true
 		record.Message = blockMessage(o)
+		if outcome := byDesignOutcome(o, NotABlock); outcome != nil {
+			outcome.Reason = "this build lacks that CLI surface, so the step recorded `unsupported` rather than a block"
+			record.ByDesign = outcome
+		}
 		return record
 	}
 
 	class := Classify(o)
 	record.Block = class
+	record.ByDesign = byDesignOutcome(o, class)
 	if class != NotABlock {
 		record.Message = blockMessage(o)
 		a.blocks.add(class)

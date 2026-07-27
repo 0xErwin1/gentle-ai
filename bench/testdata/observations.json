@@ -277,5 +277,19 @@
     "exit_code": 1,
     "stdout_captured": true,
     "stderr_captured": true
+  },
+  {
+    "name": "bare_repository_start",
+    "args": [
+      "review",
+      "start",
+      "--cwd",
+      "/SANDBOX/bare.git"
+    ],
+    "stdout": "",
+    "stderr": "Error: resolve review repository root: review needs a working tree: /SANDBOX/bare.git is a bare repository, and a review candidate is a working-tree diff; run the same command again from a checkout, or point it at one with `--cwd <path-to-a-checkout>`\n",
+    "exit_code": 1,
+    "stdout_captured": true,
+    "stderr_captured": true
   }
 ]

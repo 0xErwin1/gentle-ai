@@ -232,9 +232,18 @@ type Step struct {
 	// capture and its recapture). It reports its own invocations.
 	Composite func(*journeyRun) error
 	After     func(*Sandbox, Observation) error
-	// DeadEnd declares that no continuation exists for a block here. It is
-	// the ONE author-declared classifier input; see README.
+	// DeadEnd declares that no continuation exists for a block here: the flow
+	// is over. It is the first of two author-declared classifier inputs; see
+	// README.
 	DeadEnd bool
+	// ByDesign declares the opposite: a block here is a CORRECT refusal that
+	// already told the operator what to do, in words no `gentle-ai` command
+	// could express. It is the second author-declared input, and the more
+	// expensive one — a shape from a closed vocabulary plus a quote of the
+	// product's own next-action text, verified against the emitted bytes.
+	// validateCorpus rejects it alongside DeadEnd, and rejects it on a step
+	// that issues no invocation of its own.
+	ByDesign *ByDesignDeclaration
 	// ModelRun marks a step that stands in for a reviewer/lens invocation
 	// even though the argv is not a capture-result.
 	ModelRun bool
@@ -249,6 +258,56 @@ type Journey struct {
 	Title  string
 	Source string
 	Steps  []Step
+}
+
+// validateCorpus checks every author-declared classifier input in the corpus
+// and fails the WHOLE run before a single journey is driven. A declaration is
+// the only thing in this benchmark that can make a number look better, so a
+// broken one must never be able to do so quietly: an unrecognised shape, a
+// declaration with nothing to verify, a step claiming both "no next action"
+// and "here is the next action", or a declaration attached where it can never
+// reach the classifier are all corpus errors, not degraded passes.
+//
+// Note the direction of the safety net. Classify already refuses to honour an
+// invalid declaration, so a corpus error can only ever make a block look worse
+// than it is. This turns that silent worsening into a loud stop.
+func validateCorpus(journeys []Journey) error {
+	problems := []string{}
+	for _, journey := range journeys {
+		for _, step := range journey.Steps {
+			for _, problem := range stepDeclarationProblems(step) {
+				problems = append(problems, journey.ID+" / "+step.Name+": "+problem)
+			}
+		}
+	}
+	if len(problems) == 0 {
+		return nil
+	}
+	return errors.New("corpus declaration errors:\n  " + strings.Join(problems, "\n  "))
+}
+
+func stepDeclarationProblems(step Step) []string {
+	problems := []string{}
+	if err := step.ByDesign.Validate(); err != nil {
+		problems = append(problems, err.Error())
+	}
+	if step.ByDesign != nil && step.DeadEnd {
+		problems = append(problems,
+			"declares both by_design and dead_end, which are opposite claims: dead_end says there is no next action, by_design says the product already named one")
+	}
+	// Only a step with its own Args reaches the classifier carrying the
+	// declaration; a composite step reports its invocations through
+	// journeyRun.run, which never sees Step. A declaration there would be a
+	// silent no-op, which is exactly the failure mode this class must not have.
+	if step.Args == nil {
+		if step.ByDesign != nil {
+			problems = append(problems, "declares by_design on a step that issues no invocation of its own, where the declaration never reaches the classifier")
+		}
+		if step.DeadEnd {
+			problems = append(problems, "declares dead_end on a step that issues no invocation of its own, where the declaration never reaches the classifier")
+		}
+	}
+	return problems
 }
 
 type journeyRun struct {
@@ -332,6 +391,7 @@ func runJourney(binary string, journey Journey) JourneyResult {
 
 		observation := sandbox.invoke(args)
 		observation.DeclaredDeadEnd = step.DeadEnd
+		observation.DeclaredByDesign = step.ByDesign
 		record := accumulator.observe(step.Name, observation, sandbox.gitCallsSince(), step.ModelRun)
 		accumulator.records = append(accumulator.records, record)
 

@@ -1,0 +1,5659 @@
+{
+  "schema": "gentle-ai-bench.results/v1",
+  "mode": "driven",
+  "binary": "/home/gentleman/.local/bin/gentle-ai",
+  "binary_version": "gentle-ai 2.2.0-rc.1.0.20260727083038-5365200392c4+dirty",
+  "journeys": [
+    {
+      "id": "j01-docs-happy-path",
+      "title": "Documentation change: review, approve, commit, push gate",
+      "source": "guide flow 3 + flow 9 step 2",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 5,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 302,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j01-docs-happy-path-4289276309/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 2,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j01-docs-happy-path-4289276309/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 451,
+          "git_calls": 36
+        },
+        {
+          "sequence": 3,
+          "step": "gate post-apply",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "post-apply",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j01-docs-happy-path-4289276309/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 46
+        },
+        {
+          "sequence": 4,
+          "step": "gate pre-commit",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j01-docs-happy-path-4289276309/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 44
+        },
+        {
+          "sequence": 5,
+          "step": "gate pre-push",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-push",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j01-docs-happy-path-4289276309/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1355,
+          "git_calls": 134
+        }
+      ]
+    },
+    {
+      "id": "j02-high-risk-four-lens",
+      "title": "High-risk code change: four lenses, evidence, approval",
+      "source": "guide flow 4 + the full native bounded review contract",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 1,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 16,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 1,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 1,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 4,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 485,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 461,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 217,
+          "stdout_bytes": 1223,
+          "prompts": 1,
+          "git_calls": 56
+        },
+        {
+          "sequence": 2,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 15787,
+          "git_calls": 40
+        },
+        {
+          "sequence": 3,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "--lineage",
+            "review-2c792679b788b673",
+            "--target",
+            "sha256:2c792679b788b67307c492b5bffc9d169fdc5d850536cb60b5cfc41891a3a692",
+            "--expected-revision",
+            "sha256:40fca37c48a00cc04b14a49a833124f97b88f1722686eb1e7c30800634e0498d",
+            "--lens",
+            "review-risk",
+            "--order",
+            "0",
+            "--input",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/reviewer-0.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 685,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 4,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 12415,
+          "git_calls": 40
+        },
+        {
+          "sequence": 5,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "--lineage",
+            "review-2c792679b788b673",
+            "--target",
+            "sha256:2c792679b788b67307c492b5bffc9d169fdc5d850536cb60b5cfc41891a3a692",
+            "--expected-revision",
+            "sha256:40fca37c48a00cc04b14a49a833124f97b88f1722686eb1e7c30800634e0498d",
+            "--lens",
+            "review-resilience",
+            "--order",
+            "1",
+            "--input",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/reviewer-1.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 697,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 6,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 9025,
+          "git_calls": 40
+        },
+        {
+          "sequence": 7,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "--lineage",
+            "review-2c792679b788b673",
+            "--target",
+            "sha256:2c792679b788b67307c492b5bffc9d169fdc5d850536cb60b5cfc41891a3a692",
+            "--expected-revision",
+            "sha256:40fca37c48a00cc04b14a49a833124f97b88f1722686eb1e7c30800634e0498d",
+            "--lens",
+            "review-readability",
+            "--order",
+            "2",
+            "--input",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/reviewer-2.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 699,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 8,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 5632,
+          "git_calls": 40
+        },
+        {
+          "sequence": 9,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "--lineage",
+            "review-2c792679b788b673",
+            "--target",
+            "sha256:2c792679b788b67307c492b5bffc9d169fdc5d850536cb60b5cfc41891a3a692",
+            "--expected-revision",
+            "sha256:40fca37c48a00cc04b14a49a833124f97b88f1722686eb1e7c30800634e0498d",
+            "--lens",
+            "review-reliability",
+            "--order",
+            "3",
+            "--input",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/reviewer-3.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 699,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 10,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 5676,
+          "git_calls": 40
+        },
+        {
+          "sequence": 11,
+          "step": "finalize with captured results",
+          "args": [
+            "review",
+            "finalize",
+            "--captured-results=true",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 249,
+          "git_calls": 36
+        },
+        {
+          "sequence": 12,
+          "step": "finalize without evidence",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 268,
+          "stdout_bytes": 0,
+          "block": "in_band",
+          "git_calls": 16,
+          "message": "Error: finalize for lineage \"review-2c792679b788b673\" had no verification evidence to consume and made no transition; capture it first with `gentle-ai review capture-evidence`, then run `gentle-ai review finalize --lineage review-2c792679b7"
+        },
+        {
+          "sequence": 13,
+          "step": "capture final evidence",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3178,
+          "git_calls": 26
+        },
+        {
+          "sequence": 14,
+          "step": "capture final evidence",
+          "args": [
+            "review",
+            "capture-evidence",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo",
+            "--lineage",
+            "review-2c792679b788b673",
+            "--target",
+            "sha256:2c792679b788b67307c492b5bffc9d169fdc5d850536cb60b5cfc41891a3a692",
+            "--expected-revision",
+            "sha256:d51c2118086f0941e6eff420da9a807b3bef38664fa8bfa49337d68964fa69c5",
+            "--input",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/final-evidence.txt"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 423,
+          "git_calls": 5
+        },
+        {
+          "sequence": 15,
+          "step": "finalize with captured evidence",
+          "args": [
+            "review",
+            "finalize",
+            "--captured-evidence=true",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 455,
+          "git_calls": 16
+        },
+        {
+          "sequence": 16,
+          "step": "gate post-apply",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "post-apply",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j02-high-risk-four-lens-3915638135/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 46
+        }
+      ]
+    },
+    {
+      "id": "j03-kill-switch",
+      "title": "Kill switch: disable, start refused, re-enable, review",
+      "source": "guide flow 2",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 7,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 1,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 1,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 174,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 111,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "mode status",
+          "args": [
+            "review",
+            "mode",
+            "status",
+            "--json",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j03-kill-switch-2243123227/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 240,
+          "git_calls": 2
+        },
+        {
+          "sequence": 2,
+          "step": "mode disable",
+          "args": [
+            "review",
+            "mode",
+            "disable",
+            "--json",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j03-kill-switch-2243123227/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 246,
+          "git_calls": 2
+        },
+        {
+          "sequence": 3,
+          "step": "mode status after disable",
+          "args": [
+            "review",
+            "mode",
+            "status",
+            "--json",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j03-kill-switch-2243123227/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 243,
+          "git_calls": 2
+        },
+        {
+          "sequence": 4,
+          "step": "review start while disabled",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j03-kill-switch-2243123227/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 174,
+          "stdout_bytes": 0,
+          "block": "in_band",
+          "git_calls": 25,
+          "message": "Error: review-driven development is disabled: start is rejected because the global mode source keeps it off; turn it back on with gentle-ai review mode enable --scope=global"
+        },
+        {
+          "sequence": 5,
+          "step": "mode enable",
+          "args": [
+            "review",
+            "mode",
+            "enable",
+            "--json",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j03-kill-switch-2243123227/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 243,
+          "git_calls": 2
+        },
+        {
+          "sequence": 6,
+          "step": "review start after enable",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j03-kill-switch-2243123227/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 7,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j03-kill-switch-2243123227/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 447,
+          "git_calls": 36
+        }
+      ]
+    },
+    {
+      "id": "j04-size-does-not-escalate",
+      "title": "1200 lines of prose still reviews as low risk",
+      "source": "guide flow 4 step 3",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 3,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 133,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j04-size-does-not-escalate-9649947/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 423,
+          "git_calls": 48
+        },
+        {
+          "sequence": 2,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j04-size-does-not-escalate-9649947/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 455,
+          "git_calls": 39
+        },
+        {
+          "sequence": 3,
+          "step": "gate post-apply",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "post-apply",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j04-size-does-not-escalate-9649947/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 46
+        }
+      ]
+    },
+    {
+      "id": "j05-gate-without-any-review",
+      "title": "Failure path: lifecycle gate before any review exists",
+      "source": "community failure path: receipt missing",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 1,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 1,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 139,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 7,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "gate pre-commit with no receipt",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j05-gate-without-any-review-3078758249/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 139,
+          "stdout_bytes": 593,
+          "block": "in_band",
+          "git_calls": 7,
+          "message": "Error: review lifecycle gate denied: invalidated: no terminal review receipt governs this candidate; review it with gentle-ai review start"
+        }
+      ]
+    },
+    {
+      "id": "j06-pre-push-after-publication",
+      "title": "Failure path: pre-push after the reviewed commit was already pushed",
+      "source": "guide flow 9",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 5,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 1,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 195,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 294,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j06-pre-push-after-publication-2717733145/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 2,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j06-pre-push-after-publication-2717733145/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 462,
+          "git_calls": 36
+        },
+        {
+          "sequence": 3,
+          "step": "gate pre-commit",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j06-pre-push-after-publication-2717733145/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 44
+        },
+        {
+          "sequence": 4,
+          "step": "gate pre-push before publishing",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-push",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j06-pre-push-after-publication-2717733145/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1355,
+          "git_calls": 134
+        },
+        {
+          "sequence": 5,
+          "step": "gate pre-push after publishing",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-push",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j06-pre-push-after-publication-2717733145/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 195,
+          "stdout_bytes": 1539,
+          "block": "out_of_band",
+          "git_calls": 38,
+          "message": "Error: review lifecycle gate denied: scope-changed: terminal review receipts do not exactly match the live gate target: reviewed delivery base commit is missing or ambiguous in publication range"
+        }
+      ]
+    },
+    {
+      "id": "j07-disabled-with-stale-receipts",
+      "title": "Failure path: reviews disabled with two stale receipts present",
+      "source": "guide flow 6 + flow 9 step 5",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 6,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 239,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start (first)",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j07-disabled-with-stale-receipts-612548053/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 2,
+          "step": "review finalize (first)",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j07-disabled-with-stale-receipts-612548053/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 463,
+          "git_calls": 36
+        },
+        {
+          "sequence": 3,
+          "step": "review start (second)",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j07-disabled-with-stale-receipts-612548053/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 44
+        },
+        {
+          "sequence": 4,
+          "step": "review finalize (second)",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j07-disabled-with-stale-receipts-612548053/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 463,
+          "git_calls": 36
+        },
+        {
+          "sequence": 5,
+          "step": "mode disable",
+          "args": [
+            "review",
+            "mode",
+            "disable",
+            "--json",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j07-disabled-with-stale-receipts-612548053/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 246,
+          "git_calls": 2
+        },
+        {
+          "sequence": 6,
+          "step": "gate pre-push while disabled",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-push",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j07-disabled-with-stale-receipts-612548053/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 690,
+          "git_calls": 79
+        }
+      ]
+    },
+    {
+      "id": "j08-finalize-without-reviewer-results",
+      "title": "Failure path: finalize a high-risk review with no reviewer results",
+      "source": "community failure path",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 1,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 2,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 1,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 503,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 63,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j08-finalize-without-reviewer-results-291731058/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 217,
+          "stdout_bytes": 1223,
+          "prompts": 1,
+          "git_calls": 56
+        },
+        {
+          "sequence": 2,
+          "step": "finalize with no results",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j08-finalize-without-reviewer-results-291731058/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 286,
+          "stdout_bytes": 0,
+          "block": "in_band",
+          "git_calls": 7,
+          "message": "Error: review finalize requires all 4 original reviewer result(s); capture each missing one with `gentle-ai review capture-result` (see `gentle-ai review status --cwd \u003crepo\u003e --contract gentle-ai.review-integration/v1 --next-transition` for "
+        }
+      ]
+    },
+    {
+      "id": "j09-finalize-without-evidence",
+      "title": "Failure path: finalize with results but no captured evidence",
+      "source": "guide flow 12",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 1,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 12,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 1,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 4,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 485,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 368,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 217,
+          "stdout_bytes": 1223,
+          "prompts": 1,
+          "git_calls": 56
+        },
+        {
+          "sequence": 2,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 15787,
+          "git_calls": 40
+        },
+        {
+          "sequence": 3,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo",
+            "--lineage",
+            "review-2c792679b788b673",
+            "--target",
+            "sha256:2c792679b788b67307c492b5bffc9d169fdc5d850536cb60b5cfc41891a3a692",
+            "--expected-revision",
+            "sha256:40fca37c48a00cc04b14a49a833124f97b88f1722686eb1e7c30800634e0498d",
+            "--lens",
+            "review-risk",
+            "--order",
+            "0",
+            "--input",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/reviewer-0.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 691,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 4,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 12415,
+          "git_calls": 40
+        },
+        {
+          "sequence": 5,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo",
+            "--lineage",
+            "review-2c792679b788b673",
+            "--target",
+            "sha256:2c792679b788b67307c492b5bffc9d169fdc5d850536cb60b5cfc41891a3a692",
+            "--expected-revision",
+            "sha256:40fca37c48a00cc04b14a49a833124f97b88f1722686eb1e7c30800634e0498d",
+            "--lens",
+            "review-resilience",
+            "--order",
+            "1",
+            "--input",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/reviewer-1.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 703,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 6,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 9025,
+          "git_calls": 40
+        },
+        {
+          "sequence": 7,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo",
+            "--lineage",
+            "review-2c792679b788b673",
+            "--target",
+            "sha256:2c792679b788b67307c492b5bffc9d169fdc5d850536cb60b5cfc41891a3a692",
+            "--expected-revision",
+            "sha256:40fca37c48a00cc04b14a49a833124f97b88f1722686eb1e7c30800634e0498d",
+            "--lens",
+            "review-readability",
+            "--order",
+            "2",
+            "--input",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/reviewer-2.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 705,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 8,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 5632,
+          "git_calls": 40
+        },
+        {
+          "sequence": 9,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo",
+            "--lineage",
+            "review-2c792679b788b673",
+            "--target",
+            "sha256:2c792679b788b67307c492b5bffc9d169fdc5d850536cb60b5cfc41891a3a692",
+            "--expected-revision",
+            "sha256:40fca37c48a00cc04b14a49a833124f97b88f1722686eb1e7c30800634e0498d",
+            "--lens",
+            "review-reliability",
+            "--order",
+            "3",
+            "--input",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/reviewer-3.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 705,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 10,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 5676,
+          "git_calls": 40
+        },
+        {
+          "sequence": 11,
+          "step": "finalize with captured results",
+          "args": [
+            "review",
+            "finalize",
+            "--captured-results=true",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 249,
+          "git_calls": 36
+        },
+        {
+          "sequence": 12,
+          "step": "finalize without evidence",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j09-finalize-without-evidence-2410067190/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 268,
+          "stdout_bytes": 0,
+          "block": "in_band",
+          "git_calls": 16,
+          "message": "Error: finalize for lineage \"review-2c792679b788b673\" had no verification evidence to consume and made no transition; capture it first with `gentle-ai review capture-evidence`, then run `gentle-ai review finalize --lineage review-2c792679b7"
+        }
+      ]
+    },
+    {
+      "id": "j10-invalid-flag-combination",
+      "title": "Failure path: staged projection combined with a base ref",
+      "source": "guide flow 13",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 1,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 1,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 275,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 1,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "start with staged projection and base ref",
+          "args": [
+            "review",
+            "start",
+            "--projection",
+            "staged",
+            "--base-ref",
+            "HEAD",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j10-invalid-flag-combination-142297873/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 275,
+          "stdout_bytes": 0,
+          "block": "in_band",
+          "git_calls": 1,
+          "message": "Error: review start with --projection staged and --base-ref is refused because intent is ambiguous: for a staged-index review rerun with \"gentle-ai review start --projection staged\"; for a base-diff review rerun with \"gentle-ai review start"
+        }
+      ]
+    },
+    {
+      "id": "j11-unborn-head",
+      "title": "Failure path: first commit in a repository with no history",
+      "source": "guide flow 10",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 1,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 8,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 1,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 217,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 252,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start on unborn HEAD",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/home/unborn"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 217,
+          "stdout_bytes": 1049,
+          "prompts": 1,
+          "git_calls": 59
+        },
+        {
+          "sequence": 2,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/home/unborn",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 6039,
+          "git_calls": 43
+        },
+        {
+          "sequence": 3,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/home/unborn",
+            "--lineage",
+            "review-f7db5001a6ead6dd",
+            "--target",
+            "sha256:f7db5001a6ead6dd21d214340be7cdcb9e77421e5054f3bdee019eca100f9cd4",
+            "--expected-revision",
+            "sha256:706514bbaece96c16eef71be68dca37764afcf0690d0820a2be0b2d2af0df472",
+            "--lens",
+            "review-reliability",
+            "--order",
+            "0",
+            "--input",
+            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/reviewer-0.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 693,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 4,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/home/unborn",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3880,
+          "git_calls": 43
+        },
+        {
+          "sequence": 5,
+          "step": "finalize with captured results",
+          "args": [
+            "review",
+            "finalize",
+            "--captured-results=true",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/home/unborn"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 249,
+          "git_calls": 39
+        },
+        {
+          "sequence": 6,
+          "step": "capture final evidence",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/home/unborn",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3183,
+          "git_calls": 29
+        },
+        {
+          "sequence": 7,
+          "step": "capture final evidence",
+          "args": [
+            "review",
+            "capture-evidence",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/home/unborn",
+            "--lineage",
+            "review-f7db5001a6ead6dd",
+            "--target",
+            "sha256:f7db5001a6ead6dd21d214340be7cdcb9e77421e5054f3bdee019eca100f9cd4",
+            "--expected-revision",
+            "sha256:06c8cb4372c25e344ed181742eeef6979cddf31be2d04bca51a484d666971f20",
+            "--input",
+            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/final-evidence.txt"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 423,
+          "git_calls": 5
+        },
+        {
+          "sequence": 8,
+          "step": "finalize with captured evidence",
+          "args": [
+            "review",
+            "finalize",
+            "--captured-evidence=true",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j11-unborn-head-2531987885/home/unborn"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 449,
+          "git_calls": 19
+        }
+      ]
+    },
+    {
+      "id": "j12-rejected-capture-then-recapture",
+      "title": "Failure path: a reviewer result the product rejects, then a recapture",
+      "source": "community failure path: binding mismatch",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 1,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 10,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 1,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 1,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 2,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 610,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 289,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 217,
+          "stdout_bytes": 1062,
+          "prompts": 1,
+          "git_calls": 56
+        },
+        {
+          "sequence": 2,
+          "step": "rejected capture then recapture",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 5700,
+          "git_calls": 40
+        },
+        {
+          "sequence": 3,
+          "step": "rejected capture then recapture",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo",
+            "--lineage",
+            "review-df69a1bfdb395403",
+            "--target",
+            "sha256:df69a1bfdb3954036cd484911873bb832f6e3a573f865f8df3d31519f325a62b",
+            "--expected-revision",
+            "sha256:f9190f66d4eee95d9952b6135ebec88a6d4b3e2074db6076f3d5851fc2ef0b46",
+            "--lens",
+            "review-reliability",
+            "--order",
+            "0",
+            "--input",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/reviewer-rejected.json"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 393,
+          "stdout_bytes": 0,
+          "block": "in_band",
+          "model_run": true,
+          "git_calls": 15,
+          "message": "Error: reviewer artifact admission binding_mismatch: reviewer result echoed a different artifact subject: the rejected admission did not consume the lens slot, so re-run the lens and invoke gentle-ai review capture-result again on the same "
+        },
+        {
+          "sequence": 4,
+          "step": "rejected capture then recapture",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 5700,
+          "git_calls": 40
+        },
+        {
+          "sequence": 5,
+          "step": "rejected capture then recapture",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo",
+            "--lineage",
+            "review-df69a1bfdb395403",
+            "--target",
+            "sha256:df69a1bfdb3954036cd484911873bb832f6e3a573f865f8df3d31519f325a62b",
+            "--expected-revision",
+            "sha256:f9190f66d4eee95d9952b6135ebec88a6d4b3e2074db6076f3d5851fc2ef0b46",
+            "--lens",
+            "review-reliability",
+            "--order",
+            "0",
+            "--input",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/reviewer-0.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 711,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 6,
+          "step": "rejected capture then recapture",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3876,
+          "git_calls": 40
+        },
+        {
+          "sequence": 7,
+          "step": "finalize with captured results",
+          "args": [
+            "review",
+            "finalize",
+            "--captured-results=true",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 249,
+          "git_calls": 36
+        },
+        {
+          "sequence": 8,
+          "step": "capture final evidence",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3179,
+          "git_calls": 26
+        },
+        {
+          "sequence": 9,
+          "step": "capture final evidence",
+          "args": [
+            "review",
+            "capture-evidence",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo",
+            "--lineage",
+            "review-df69a1bfdb395403",
+            "--target",
+            "sha256:df69a1bfdb3954036cd484911873bb832f6e3a573f865f8df3d31519f325a62b",
+            "--expected-revision",
+            "sha256:1c1ac4c70357403fc1fd88a5b880d76d36726e0a226ec20bea9b09fe9e108a7e",
+            "--input",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/final-evidence.txt"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 423,
+          "git_calls": 5
+        },
+        {
+          "sequence": 10,
+          "step": "finalize with captured evidence",
+          "args": [
+            "review",
+            "finalize",
+            "--captured-evidence=true",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j12-rejected-capture-then-recapture-1155341505/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 467,
+          "git_calls": 16
+        }
+      ]
+    },
+    {
+      "id": "j13-next-transition-runs-verbatim",
+      "title": "Agent path: the printed transition executes exactly as printed",
+      "source": "guide flow 11",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 1,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 12,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 4,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 217,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 394,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 217,
+          "stdout_bytes": 1223,
+          "prompts": 1,
+          "git_calls": 56
+        },
+        {
+          "sequence": 2,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 15787,
+          "git_calls": 40
+        },
+        {
+          "sequence": 3,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "--lineage",
+            "review-2c792679b788b673",
+            "--target",
+            "sha256:2c792679b788b67307c492b5bffc9d169fdc5d850536cb60b5cfc41891a3a692",
+            "--expected-revision",
+            "sha256:40fca37c48a00cc04b14a49a833124f97b88f1722686eb1e7c30800634e0498d",
+            "--lens",
+            "review-risk",
+            "--order",
+            "0",
+            "--input",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/reviewer-0.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 695,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 4,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 12415,
+          "git_calls": 40
+        },
+        {
+          "sequence": 5,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "--lineage",
+            "review-2c792679b788b673",
+            "--target",
+            "sha256:2c792679b788b67307c492b5bffc9d169fdc5d850536cb60b5cfc41891a3a692",
+            "--expected-revision",
+            "sha256:40fca37c48a00cc04b14a49a833124f97b88f1722686eb1e7c30800634e0498d",
+            "--lens",
+            "review-resilience",
+            "--order",
+            "1",
+            "--input",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/reviewer-1.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 707,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 6,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 9025,
+          "git_calls": 40
+        },
+        {
+          "sequence": 7,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "--lineage",
+            "review-2c792679b788b673",
+            "--target",
+            "sha256:2c792679b788b67307c492b5bffc9d169fdc5d850536cb60b5cfc41891a3a692",
+            "--expected-revision",
+            "sha256:40fca37c48a00cc04b14a49a833124f97b88f1722686eb1e7c30800634e0498d",
+            "--lens",
+            "review-readability",
+            "--order",
+            "2",
+            "--input",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/reviewer-2.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 709,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 8,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 5632,
+          "git_calls": 40
+        },
+        {
+          "sequence": 9,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "--lineage",
+            "review-2c792679b788b673",
+            "--target",
+            "sha256:2c792679b788b67307c492b5bffc9d169fdc5d850536cb60b5cfc41891a3a692",
+            "--expected-revision",
+            "sha256:40fca37c48a00cc04b14a49a833124f97b88f1722686eb1e7c30800634e0498d",
+            "--lens",
+            "review-reliability",
+            "--order",
+            "3",
+            "--input",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/reviewer-3.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 709,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 10,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 5676,
+          "git_calls": 40
+        },
+        {
+          "sequence": 11,
+          "step": "run the printed transition verbatim",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 5676,
+          "git_calls": 40
+        },
+        {
+          "sequence": 12,
+          "step": "run the printed transition verbatim",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j13-next-transition-runs-verbatim-1276239131/home/demo",
+            "--lineage=review-2c792679b788b673",
+            "--captured-results=true"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 249,
+          "git_calls": 38
+        }
+      ]
+    },
+    {
+      "id": "j14-abandon-needs-a-hand-built-token",
+      "title": "Maintainer path: abandoning a pristine lineage needs an assembled authorization",
+      "source": "review abandon contract",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 1,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 4,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 1,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 1,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 113,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 89,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j14-abandon-needs-a-hand-built-token-3649055076/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 2,
+          "step": "abandon a pristine lineage",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j14-abandon-needs-a-hand-built-token-3649055076/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3235,
+          "git_calls": 40
+        },
+        {
+          "sequence": 3,
+          "step": "abandon a pristine lineage",
+          "args": [
+            "review",
+            "abandon",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j14-abandon-needs-a-hand-built-token-3649055076/home/demo",
+            "--lineage",
+            "review-3beae9ac2074fec1",
+            "--expected-revision",
+            "sha256:ad08b7bc0295227ccc02d3a28eefc21f7a8895c2805f036053062b59cf492e82",
+            "--reason",
+            "benchmark abandons a pristine lineage",
+            "--actor",
+            "bench"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 113,
+          "stdout_bytes": 0,
+          "block": "out_of_band",
+          "git_calls": 0,
+          "message": "Error: review abandon requires --lineage, --expected-revision, --reason, --actor, and --maintainer-authorization"
+        },
+        {
+          "sequence": 4,
+          "step": "abandon a pristine lineage",
+          "args": [
+            "review",
+            "abandon",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j14-abandon-needs-a-hand-built-token-3649055076/home/demo",
+            "--lineage",
+            "review-3beae9ac2074fec1",
+            "--expected-revision",
+            "sha256:ad08b7bc0295227ccc02d3a28eefc21f7a8895c2805f036053062b59cf492e82",
+            "--reason",
+            "benchmark abandons a pristine lineage",
+            "--actor",
+            "bench",
+            "--maintainer-authorization",
+            "gentle-ai.review-abandon-authorization/v1\nlineage=review-3beae9ac2074fec1\nrevision=sha256:ad08b7bc0295227ccc02d3a28eefc21f7a8895c2805f036053062b59cf492e82\nsnapshot_identity=sha256:3beae9ac2074fec14bb6ddbac9108f33b280adefbaa6fab42d452bd92f521859\nactor=bench\nreason=benchmark abandons a pristine lineage"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1012,
+          "manual_token": true,
+          "git_calls": 7
+        }
+      ]
+    },
+    {
+      "id": "j15-linked-worktree",
+      "title": "Linked worktree shares the review store: both trees review, approve and gate independently",
+      "source": "shape 1 (asymmetric comparison) + shape 5 (two sources of truth about repository identity)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 7,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 292,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start in the linked worktree",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j15-linked-worktree-3164406197/home/demo-worktree"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 2,
+          "step": "review finalize in the linked worktree",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j15-linked-worktree-3164406197/home/demo-worktree"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 451,
+          "git_calls": 36
+        },
+        {
+          "sequence": 3,
+          "step": "gate post-apply in the linked worktree",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "post-apply",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j15-linked-worktree-3164406197/home/demo-worktree"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 46
+        },
+        {
+          "sequence": 4,
+          "step": "review start in the main worktree",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j15-linked-worktree-3164406197/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 44
+        },
+        {
+          "sequence": 5,
+          "step": "review finalize in the main worktree",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j15-linked-worktree-3164406197/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 451,
+          "git_calls": 36
+        },
+        {
+          "sequence": 6,
+          "step": "gate pre-commit in the main worktree",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j15-linked-worktree-3164406197/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 44
+        },
+        {
+          "sequence": 7,
+          "step": "gate pre-commit in the linked worktree again",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j15-linked-worktree-3164406197/home/demo-worktree"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 44
+        }
+      ]
+    },
+    {
+      "id": "j16-detached-head",
+      "title": "Detached HEAD: the whole cycle works with no branch at all",
+      "source": "shape 3 (a guard gated on HEAD being a branch, which is not its own precondition)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 3,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 122,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j16-detached-head-2007276319/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 2,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j16-detached-head-2007276319/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 449,
+          "git_calls": 36
+        },
+        {
+          "sequence": 3,
+          "step": "gate pre-commit",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j16-detached-head-2007276319/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 44
+        }
+      ]
+    },
+    {
+      "id": "j17-bare-repository",
+      "title": "Bare repository: a refusal that must name what to do instead",
+      "source": "shape 4 (a refusal naming nothing runnable) + shape 2 (a shape error read as a state error)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 1,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 1,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 300,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 2,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start in a bare repository",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j17-bare-repository-2696620580/home/bare.git"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 300,
+          "stdout_bytes": 0,
+          "block": "by_design",
+          "by_design": {
+            "shape": "operator-knowledge",
+            "next_action": "run the same command again from a checkout",
+            "applied": true
+          },
+          "git_calls": 2,
+          "message": "Error: resolve review repository root: review needs a working tree: /tmp/gentle-ai-bench-j17-bare-repository-2696620580/home/bare.git is a bare repository, and a review candidate is a working-tree diff; run the same command again from a che"
+        }
+      ]
+    },
+    {
+      "id": "j18-space-and-non-ascii-path",
+      "title": "Repository path with spaces and non-ASCII: the whole cycle works",
+      "source": "shape 1 (one operand path-canonicalized, the other not)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 3,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 122,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j18-space-and-non-ascii-path-297783880/home/demo repo ñ 日本 dir"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 2,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j18-space-and-non-ascii-path-297783880/home/demo repo ñ 日本 dir"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 478,
+          "git_calls": 36
+        },
+        {
+          "sequence": 3,
+          "step": "gate pre-commit",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j18-space-and-non-ascii-path-297783880/home/demo repo ñ 日本 dir"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 44
+        }
+      ]
+    },
+    {
+      "id": "j19-submodule-gitlink",
+      "title": "Gitlink in the candidate: a tree entry with no blob behind it",
+      "source": "shape 1 (comparing a 160000 entry as if it had content)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 1,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 9,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 1,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 217,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 283,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 217,
+          "stdout_bytes": 1050,
+          "prompts": 1,
+          "git_calls": 51
+        },
+        {
+          "sequence": 2,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 6195,
+          "git_calls": 41
+        },
+        {
+          "sequence": 3,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/home/demo",
+            "--lineage",
+            "review-890e9f4e6472ae06",
+            "--target",
+            "sha256:890e9f4e6472ae0650cfdb9c11f8c88488afa55642facd05f7cf36f6a828d7d7",
+            "--expected-revision",
+            "sha256:a90fb0a472d3e95deb4679333c71e5cbdf64e3771aa35f85bef9dce41feced93",
+            "--lens",
+            "review-reliability",
+            "--order",
+            "0",
+            "--input",
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/reviewer-0.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 697,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 4,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3884,
+          "git_calls": 41
+        },
+        {
+          "sequence": 5,
+          "step": "finalize with captured results",
+          "args": [
+            "review",
+            "finalize",
+            "--captured-results=true",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 249,
+          "git_calls": 37
+        },
+        {
+          "sequence": 6,
+          "step": "capture final evidence",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3187,
+          "git_calls": 27
+        },
+        {
+          "sequence": 7,
+          "step": "capture final evidence",
+          "args": [
+            "review",
+            "capture-evidence",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/home/demo",
+            "--lineage",
+            "review-890e9f4e6472ae06",
+            "--target",
+            "sha256:890e9f4e6472ae0650cfdb9c11f8c88488afa55642facd05f7cf36f6a828d7d7",
+            "--expected-revision",
+            "sha256:d5928c1c22da1f45aa60464a86671c15942cb6abe3daf934ddd5dd5362e5be16",
+            "--input",
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/final-evidence.txt"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 423,
+          "git_calls": 5
+        },
+        {
+          "sequence": 8,
+          "step": "finalize with captured evidence",
+          "args": [
+            "review",
+            "finalize",
+            "--captured-evidence=true",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 453,
+          "git_calls": 17
+        },
+        {
+          "sequence": 9,
+          "step": "gate post-apply",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "post-apply",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j19-submodule-gitlink-3181149942/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 49
+        }
+      ]
+    },
+    {
+      "id": "j20-symlink-candidate",
+      "title": "Symlink in the candidate: mode 120000 whose blob is a path",
+      "source": "shape 1 (link target read as file content on one side only)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 1,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 9,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 1,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 217,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 274,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 217,
+          "stdout_bytes": 1046,
+          "prompts": 1,
+          "git_calls": 50
+        },
+        {
+          "sequence": 2,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 5396,
+          "git_calls": 40
+        },
+        {
+          "sequence": 3,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/home/demo",
+            "--lineage",
+            "review-aef6e3a7df3bd5dd",
+            "--target",
+            "sha256:aef6e3a7df3bd5dda77731f3cdaeeeca0dd3ac1a14345656761e40e51189b5b1",
+            "--expected-revision",
+            "sha256:bd766d6085167eb54c8c3ddf7ad61b135063a5d6242ffc1a8ac7cbb3eab58712",
+            "--lens",
+            "review-reliability",
+            "--order",
+            "0",
+            "--input",
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/reviewer-0.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 697,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 4,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3860,
+          "git_calls": 40
+        },
+        {
+          "sequence": 5,
+          "step": "finalize with captured results",
+          "args": [
+            "review",
+            "finalize",
+            "--captured-results=true",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 249,
+          "git_calls": 36
+        },
+        {
+          "sequence": 6,
+          "step": "capture final evidence",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3163,
+          "git_calls": 26
+        },
+        {
+          "sequence": 7,
+          "step": "capture final evidence",
+          "args": [
+            "review",
+            "capture-evidence",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/home/demo",
+            "--lineage",
+            "review-aef6e3a7df3bd5dd",
+            "--target",
+            "sha256:aef6e3a7df3bd5dda77731f3cdaeeeca0dd3ac1a14345656761e40e51189b5b1",
+            "--expected-revision",
+            "sha256:4569ff9bc1218f7493f6bf633152e0a58a56950fe194c2ca40c687af0c0f1bd1",
+            "--input",
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/final-evidence.txt"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 423,
+          "git_calls": 5
+        },
+        {
+          "sequence": 8,
+          "step": "finalize with captured evidence",
+          "args": [
+            "review",
+            "finalize",
+            "--captured-evidence=true",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 453,
+          "git_calls": 16
+        },
+        {
+          "sequence": 9,
+          "step": "gate post-apply",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "post-apply",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j20-symlink-candidate-4022644899/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 46
+        }
+      ]
+    },
+    {
+      "id": "j21-mode-only-change",
+      "title": "Mode-only change 100644 to 100755: identical blob on both sides",
+      "source": "shape 1 (a content-only comparison sees no change at all)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 1,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 15,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 4,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 217,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 439,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 217,
+          "stdout_bytes": 1223,
+          "prompts": 1,
+          "git_calls": 50
+        },
+        {
+          "sequence": 2,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 14030,
+          "git_calls": 40
+        },
+        {
+          "sequence": 3,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "--lineage",
+            "review-c65a4ce5f831560b",
+            "--target",
+            "sha256:c65a4ce5f831560b0d0f77412c21dc452a69feefbe15c3a2bb215a800eb46324",
+            "--expected-revision",
+            "sha256:8dffc9ae882f635f767d5c49aeda9d2f2bf7b983bd083d13bc0869e94d64e99f",
+            "--lens",
+            "review-risk",
+            "--order",
+            "0",
+            "--input",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/reviewer-0.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 682,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 4,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 11093,
+          "git_calls": 40
+        },
+        {
+          "sequence": 5,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "--lineage",
+            "review-c65a4ce5f831560b",
+            "--target",
+            "sha256:c65a4ce5f831560b0d0f77412c21dc452a69feefbe15c3a2bb215a800eb46324",
+            "--expected-revision",
+            "sha256:8dffc9ae882f635f767d5c49aeda9d2f2bf7b983bd083d13bc0869e94d64e99f",
+            "--lens",
+            "review-resilience",
+            "--order",
+            "1",
+            "--input",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/reviewer-1.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 694,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 6,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 8138,
+          "git_calls": 40
+        },
+        {
+          "sequence": 7,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "--lineage",
+            "review-c65a4ce5f831560b",
+            "--target",
+            "sha256:c65a4ce5f831560b0d0f77412c21dc452a69feefbe15c3a2bb215a800eb46324",
+            "--expected-revision",
+            "sha256:8dffc9ae882f635f767d5c49aeda9d2f2bf7b983bd083d13bc0869e94d64e99f",
+            "--lens",
+            "review-readability",
+            "--order",
+            "2",
+            "--input",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/reviewer-2.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 696,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 8,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 5180,
+          "git_calls": 40
+        },
+        {
+          "sequence": 9,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "--lineage",
+            "review-c65a4ce5f831560b",
+            "--target",
+            "sha256:c65a4ce5f831560b0d0f77412c21dc452a69feefbe15c3a2bb215a800eb46324",
+            "--expected-revision",
+            "sha256:8dffc9ae882f635f767d5c49aeda9d2f2bf7b983bd083d13bc0869e94d64e99f",
+            "--lens",
+            "review-reliability",
+            "--order",
+            "3",
+            "--input",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/reviewer-3.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 696,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 10,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 5659,
+          "git_calls": 40
+        },
+        {
+          "sequence": 11,
+          "step": "finalize with captured results",
+          "args": [
+            "review",
+            "finalize",
+            "--captured-results=true",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 249,
+          "git_calls": 36
+        },
+        {
+          "sequence": 12,
+          "step": "capture final evidence",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3161,
+          "git_calls": 26
+        },
+        {
+          "sequence": 13,
+          "step": "capture final evidence",
+          "args": [
+            "review",
+            "capture-evidence",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo",
+            "--lineage",
+            "review-c65a4ce5f831560b",
+            "--target",
+            "sha256:c65a4ce5f831560b0d0f77412c21dc452a69feefbe15c3a2bb215a800eb46324",
+            "--expected-revision",
+            "sha256:a2d5022bd41b75a37204fc460348dc9bcab366971370024b0826f71223924ac1",
+            "--input",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/final-evidence.txt"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 423,
+          "git_calls": 5
+        },
+        {
+          "sequence": 14,
+          "step": "finalize with captured evidence",
+          "args": [
+            "review",
+            "finalize",
+            "--captured-evidence=true",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 452,
+          "git_calls": 16
+        },
+        {
+          "sequence": 15,
+          "step": "gate post-apply",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "post-apply",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j21-mode-only-change-4276937582/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 46
+        }
+      ]
+    },
+    {
+      "id": "j22-pure-rename",
+      "title": "Pure rename: every byte identical, only the path moved",
+      "source": "shape 1 (a rename read as one deletion plus one creation)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 3,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 125,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j22-pure-rename-4101019196/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 44
+        },
+        {
+          "sequence": 2,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j22-pure-rename-4101019196/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 447,
+          "git_calls": 37
+        },
+        {
+          "sequence": 3,
+          "step": "gate pre-commit",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j22-pure-rename-4101019196/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 44
+        }
+      ]
+    },
+    {
+      "id": "j23-deletion-only",
+      "title": "Deletion-only candidate: nothing added anywhere",
+      "source": "shape 1 (a candidate whose new side is empty)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 3,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 122,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j23-deletion-only-1202886614/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 2,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j23-deletion-only-1202886614/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 449,
+          "git_calls": 36
+        },
+        {
+          "sequence": 3,
+          "step": "gate pre-commit",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j23-deletion-only-1202886614/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 44
+        }
+      ]
+    },
+    {
+      "id": "j24-empty-file",
+      "title": "Empty file: zero bytes, zero changed lines",
+      "source": "shape 4 (a message describing content that is not there)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 1,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 9,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 1,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 217,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 274,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 217,
+          "stdout_bytes": 1084,
+          "prompts": 1,
+          "git_calls": 50
+        },
+        {
+          "sequence": 2,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 5280,
+          "git_calls": 40
+        },
+        {
+          "sequence": 3,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/home/demo",
+            "--lineage",
+            "review-80a627113df945d8",
+            "--target",
+            "sha256:80a627113df945d8d7ee4cd693b2a8457e30876e58ac88540118b62f99f114d9",
+            "--expected-revision",
+            "sha256:26a5a4ba604a9cd71a3a244c03d0f8153cc41f45d6aa700f118b2162fb984f95",
+            "--lens",
+            "review-reliability",
+            "--order",
+            "0",
+            "--input",
+            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/reviewer-0.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 690,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 4,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3858,
+          "git_calls": 40
+        },
+        {
+          "sequence": 5,
+          "step": "finalize with captured results",
+          "args": [
+            "review",
+            "finalize",
+            "--captured-results=true",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 249,
+          "git_calls": 36
+        },
+        {
+          "sequence": 6,
+          "step": "capture final evidence",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3161,
+          "git_calls": 26
+        },
+        {
+          "sequence": 7,
+          "step": "capture final evidence",
+          "args": [
+            "review",
+            "capture-evidence",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/home/demo",
+            "--lineage",
+            "review-80a627113df945d8",
+            "--target",
+            "sha256:80a627113df945d8d7ee4cd693b2a8457e30876e58ac88540118b62f99f114d9",
+            "--expected-revision",
+            "sha256:fdca32b3e97def7905d85413c4e9d73ac700c2577f7908f5f2f9dd12fa1949db",
+            "--input",
+            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/final-evidence.txt"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 423,
+          "git_calls": 5
+        },
+        {
+          "sequence": 8,
+          "step": "finalize with captured evidence",
+          "args": [
+            "review",
+            "finalize",
+            "--captured-evidence=true",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 446,
+          "git_calls": 16
+        },
+        {
+          "sequence": 9,
+          "step": "gate post-apply",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "post-apply",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j24-empty-file-1187829037/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 46
+        }
+      ]
+    },
+    {
+      "id": "j25-no-trailing-newline",
+      "title": "File with no trailing newline: the last line has no terminator",
+      "source": "shape 1 (one side line-terminated, the other not)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 3,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 122,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j25-no-trailing-newline-2045551909/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 2,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j25-no-trailing-newline-2045551909/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 455,
+          "git_calls": 36
+        },
+        {
+          "sequence": 3,
+          "step": "gate pre-commit",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j25-no-trailing-newline-2045551909/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 44
+        }
+      ]
+    },
+    {
+      "id": "j26-crlf-content",
+      "title": "CRLF content: carriage returns survive into the staged blob",
+      "source": "shape 1 (line endings normalized on one operand only)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 3,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 122,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j26-crlf-content-657738184/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 2,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j26-crlf-content-657738184/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 447,
+          "git_calls": 36
+        },
+        {
+          "sequence": 3,
+          "step": "gate pre-commit",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j26-crlf-content-657738184/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 44
+        }
+      ]
+    },
+    {
+      "id": "j27-merge-in-progress",
+      "title": "Merge in progress: review a conflict resolution before the merge commit exists",
+      "source": "shape 3 (a guard gated on a clean git state rather than on its own precondition)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 3,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 125,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j27-merge-in-progress-96899793/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 44
+        },
+        {
+          "sequence": 2,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j27-merge-in-progress-96899793/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 451,
+          "git_calls": 37
+        },
+        {
+          "sequence": 3,
+          "step": "gate pre-commit",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j27-merge-in-progress-96899793/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 44
+        }
+      ]
+    },
+    {
+      "id": "j28-rebase-in-progress",
+      "title": "Rebase in progress: detached HEAD plus a rebase state directory",
+      "source": "shape 3 (a guard gated on a clean git state)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 3,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 125,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j28-rebase-in-progress-2964785402/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 44
+        },
+        {
+          "sequence": 2,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j28-rebase-in-progress-2964785402/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 454,
+          "git_calls": 37
+        },
+        {
+          "sequence": 3,
+          "step": "gate pre-commit",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j28-rebase-in-progress-2964785402/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 44
+        }
+      ]
+    },
+    {
+      "id": "j29-cherry-pick-in-progress",
+      "title": "Cherry-pick in progress: CHERRY_PICK_HEAD present throughout",
+      "source": "shape 3 (a guard gated on a clean git state)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 3,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 125,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j29-cherry-pick-in-progress-3061830760/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 44
+        },
+        {
+          "sequence": 2,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j29-cherry-pick-in-progress-3061830760/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 459,
+          "git_calls": 37
+        },
+        {
+          "sequence": 3,
+          "step": "gate pre-commit",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j29-cherry-pick-in-progress-3061830760/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 44
+        }
+      ]
+    },
+    {
+      "id": "j30-kill-switch-flipped-mid-review",
+      "title": "Kill switch flipped between START and FINALIZE: the documented answer is that FINALIZE is refused",
+      "source": "shape 3 (the mutate guard sits behind the start path) + shape 5 (rdd_mode.go documents a rejection the code never issues)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 6,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 1,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 1,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 276,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 62,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start with reviews on",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j30-kill-switch-flipped-mid-review-2729440721/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 2,
+          "step": "mode disable mid-review",
+          "args": [
+            "review",
+            "mode",
+            "disable",
+            "--json",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j30-kill-switch-flipped-mid-review-2729440721/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 246,
+          "git_calls": 2
+        },
+        {
+          "sequence": 3,
+          "step": "mode status confirms off",
+          "args": [
+            "review",
+            "mode",
+            "status",
+            "--json",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j30-kill-switch-flipped-mid-review-2729440721/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 243,
+          "git_calls": 2
+        },
+        {
+          "sequence": 4,
+          "step": "review finalize while reviews are off",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j30-kill-switch-flipped-mid-review-2729440721/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 276,
+          "stdout_bytes": 0,
+          "block": "in_band",
+          "git_calls": 7,
+          "message": "Error: review-driven development is disabled: advancing an existing review is rejected because the global mode source keeps it off; the review is frozen, not discarded; turn reviews back on with gentle-ai review mode enable --scope=global t"
+        },
+        {
+          "sequence": 5,
+          "step": "review status while reviews are off",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j30-kill-switch-flipped-mid-review-2729440721/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 930,
+          "git_calls": 2
+        },
+        {
+          "sequence": 6,
+          "step": "gate pre-commit while reviews are off",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j30-kill-switch-flipped-mid-review-2729440721/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 690,
+          "git_calls": 7
+        }
+      ]
+    },
+    {
+      "id": "j31-nonsense-mode-value",
+      "title": "Kill-switch record readable but holding a value that is not on/off",
+      "source": "shape 2 (a correctable input read as terminal) + shape 4 (a refusal naming nothing runnable)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 2,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 2,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 812,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 25,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "mode status with a nonsense value",
+          "args": [
+            "review",
+            "mode",
+            "status",
+            "--json",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j31-nonsense-mode-value-3507473489/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 406,
+          "stdout_bytes": 240,
+          "block": "in_band",
+          "git_calls": 2,
+          "message": "Error: the global value in /tmp/gentle-ai-bench-j31-nonsense-mode-value-3507473489/home/.gentle-ai/state.json is not a mode this product can read; an unreadable switch is not a disabled switch, so review-driven development stays managed unt"
+        },
+        {
+          "sequence": 2,
+          "step": "review start with a nonsense value",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j31-nonsense-mode-value-3507473489/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 406,
+          "stdout_bytes": 0,
+          "block": "in_band",
+          "git_calls": 23,
+          "message": "Error: the global value in /tmp/gentle-ai-bench-j31-nonsense-mode-value-3507473489/home/.gentle-ai/state.json is not a mode this product can read; an unreadable switch is not a disabled switch, so review-driven development stays managed unt"
+        }
+      ]
+    },
+    {
+      "id": "j32-recovery-of-a-recovery",
+      "title": "Recovery of a recovery: the named continuation has to work twice",
+      "source": "shape 4 (guide flow 9 step 7 — the message named a recovery that landed you back at the same denial)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 10,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 2,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 2,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 496,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 391,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 2,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 457,
+          "git_calls": 36
+        },
+        {
+          "sequence": 3,
+          "step": "first recovery, following exactly what the gate named",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 248,
+          "stdout_bytes": 2843,
+          "block": "in_band",
+          "git_calls": 22,
+          "message": "Error: review lifecycle gate denied: scope-changed: 1 path in this candidate that no terminal receipt covers: recover via gentle-ai review recover (requires: predecessor_lineage_id, expected_predecessor_revision, successor_lineage_id, dispo"
+        },
+        {
+          "sequence": 4,
+          "step": "first recovery, following exactly what the gate named",
+          "args": [
+            "review",
+            "recover",
+            "--predecessor-lineage",
+            "review-a43c89773e594091",
+            "--expected-predecessor-revision",
+            "sha256:02d85456adf7605557cd348fda779c9078c47db4c9042c8660329b183be520e6",
+            "--successor-lineage",
+            "review-successor-one",
+            "--disposition",
+            "scope_changed",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1144,
+          "git_calls": 50
+        },
+        {
+          "sequence": 5,
+          "step": "first recovery, following exactly what the gate named",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 451,
+          "git_calls": 37
+        },
+        {
+          "sequence": 6,
+          "step": "first recovery, following exactly what the gate named",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1354,
+          "git_calls": 46
+        },
+        {
+          "sequence": 7,
+          "step": "second recovery, of the successor the first one created",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 248,
+          "stdout_bytes": 2891,
+          "block": "in_band",
+          "git_calls": 22,
+          "message": "Error: review lifecycle gate denied: scope-changed: 1 path in this candidate that no terminal receipt covers: recover via gentle-ai review recover (requires: predecessor_lineage_id, expected_predecessor_revision, successor_lineage_id, dispo"
+        },
+        {
+          "sequence": 8,
+          "step": "second recovery, of the successor the first one created",
+          "args": [
+            "review",
+            "recover",
+            "--predecessor-lineage",
+            "review-successor-one",
+            "--expected-predecessor-revision",
+            "sha256:0548150d609b2934346381180f94c3c6cfa8d2539d4231c7a2867f73ef17ddb2",
+            "--successor-lineage",
+            "review-successor-two",
+            "--disposition",
+            "scope_changed",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1138,
+          "git_calls": 52
+        },
+        {
+          "sequence": 9,
+          "step": "second recovery, of the successor the first one created",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 451,
+          "git_calls": 38
+        },
+        {
+          "sequence": 10,
+          "step": "second recovery, of the successor the first one created",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j32-recovery-of-a-recovery-903897352/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1354,
+          "git_calls": 46
+        }
+      ]
+    },
+    {
+      "id": "j33-escalate-then-recover",
+      "title": "Escalate on a failed verification, then recover once the candidate is fixed",
+      "source": "shape 2 (an escalation is recoverable, not terminal) + shape 4 (the refusal must say the candidate has to change)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 8,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 1,
+          "out_of_band": 0,
+          "by_design": 1,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 2,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 1112,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 250,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j33-escalate-then-recover-2396666212/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 2,
+          "step": "finalize binding a FAILED verification",
+          "args": [
+            "review",
+            "finalize",
+            "--evidence",
+            "/tmp/gentle-ai-bench-j33-escalate-then-recover-2396666212/failed-verification.txt",
+            "--failed=true",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j33-escalate-then-recover-2396666212/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 458,
+          "git_calls": 16
+        },
+        {
+          "sequence": 3,
+          "step": "gate pre-commit on an escalated lineage",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j33-escalate-then-recover-2396666212/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 429,
+          "stdout_bytes": 1337,
+          "block": "by_design",
+          "by_design": {
+            "shape": "operator-knowledge",
+            "next_action": "change the candidate and review the fix as a successor",
+            "applied": true
+          },
+          "git_calls": 27,
+          "message": "Error: review lifecycle gate denied: escalated: transaction or external evidence is terminally escalated; this lineage is terminal, so change the candidate and review the fix as a successor: gentle-ai review recover --predecessor-lineage re"
+        },
+        {
+          "sequence": 4,
+          "step": "recover before and after fixing the candidate",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j33-escalate-then-recover-2396666212/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 909,
+          "git_calls": 2
+        },
+        {
+          "sequence": 5,
+          "step": "recover before and after fixing the candidate",
+          "args": [
+            "review",
+            "recover",
+            "--predecessor-lineage",
+            "review-d6bd76251f1f4ed3",
+            "--expected-predecessor-revision",
+            "sha256:b8468fa058edd71a29e2184d902a01e04739f6c386a9905a02beab3b4a01b3e3",
+            "--successor-lineage",
+            "review-after-escalation",
+            "--disposition",
+            "escalated",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j33-escalate-then-recover-2396666212/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 683,
+          "stdout_bytes": 0,
+          "block": "in_band",
+          "git_calls": 35,
+          "message": "Error: escalated recovery successor target has not changed: the candidate is byte-identical to the escalated predecessor, so this successor would carry the exact content whose verification failed and there is nothing to re-review; change th"
+        },
+        {
+          "sequence": 6,
+          "step": "recover before and after fixing the candidate",
+          "args": [
+            "review",
+            "recover",
+            "--predecessor-lineage",
+            "review-d6bd76251f1f4ed3",
+            "--expected-predecessor-revision",
+            "sha256:b8468fa058edd71a29e2184d902a01e04739f6c386a9905a02beab3b4a01b3e3",
+            "--successor-lineage",
+            "review-after-escalation",
+            "--disposition",
+            "escalated",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j33-escalate-then-recover-2396666212/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1125,
+          "git_calls": 48
+        },
+        {
+          "sequence": 7,
+          "step": "recover before and after fixing the candidate",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j33-escalate-then-recover-2396666212/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 457,
+          "git_calls": 36
+        },
+        {
+          "sequence": 8,
+          "step": "recover before and after fixing the candidate",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j33-escalate-then-recover-2396666212/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 44
+        }
+      ]
+    },
+    {
+      "id": "j34-abandon-then-start-again",
+      "title": "Abandon a lineage, then start a fresh review of the same candidate",
+      "source": "shape 2 (an abandoned lineage must not poison the repository permanently)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 1,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 7,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 0,
+          "out_of_band": 1,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 1,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 113,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 211,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-1316819537/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 2,
+          "step": "abandon a pristine lineage",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-1316819537/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3235,
+          "git_calls": 40
+        },
+        {
+          "sequence": 3,
+          "step": "abandon a pristine lineage",
+          "args": [
+            "review",
+            "abandon",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-1316819537/home/demo",
+            "--lineage",
+            "review-3beae9ac2074fec1",
+            "--expected-revision",
+            "sha256:ad08b7bc0295227ccc02d3a28eefc21f7a8895c2805f036053062b59cf492e82",
+            "--reason",
+            "benchmark abandons a pristine lineage",
+            "--actor",
+            "bench"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 113,
+          "stdout_bytes": 0,
+          "block": "out_of_band",
+          "git_calls": 0,
+          "message": "Error: review abandon requires --lineage, --expected-revision, --reason, --actor, and --maintainer-authorization"
+        },
+        {
+          "sequence": 4,
+          "step": "abandon a pristine lineage",
+          "args": [
+            "review",
+            "abandon",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-1316819537/home/demo",
+            "--lineage",
+            "review-3beae9ac2074fec1",
+            "--expected-revision",
+            "sha256:ad08b7bc0295227ccc02d3a28eefc21f7a8895c2805f036053062b59cf492e82",
+            "--reason",
+            "benchmark abandons a pristine lineage",
+            "--actor",
+            "bench",
+            "--maintainer-authorization",
+            "gentle-ai.review-abandon-authorization/v1\nlineage=review-3beae9ac2074fec1\nrevision=sha256:ad08b7bc0295227ccc02d3a28eefc21f7a8895c2805f036053062b59cf492e82\nsnapshot_identity=sha256:3beae9ac2074fec14bb6ddbac9108f33b280adefbaa6fab42d452bd92f521859\nactor=bench\nreason=benchmark abandons a pristine lineage"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 998,
+          "manual_token": true,
+          "git_calls": 7
+        },
+        {
+          "sequence": 5,
+          "step": "review start again after the abandonment",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-1316819537/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 418,
+          "git_calls": 42
+        },
+        {
+          "sequence": 6,
+          "step": "review finalize",
+          "args": [
+            "review",
+            "finalize",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-1316819537/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 460,
+          "git_calls": 36
+        },
+        {
+          "sequence": 7,
+          "step": "gate pre-commit",
+          "args": [
+            "review",
+            "validate",
+            "--gate",
+            "pre-commit",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j34-abandon-then-start-again-1316819537/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 1357,
+          "git_calls": 44
+        }
+      ]
+    },
+    {
+      "id": "j35-correction-budget-exactly-zero",
+      "title": "Correction budget of exactly zero: forecasting a correction against it",
+      "source": "shape 3 (the budget check sitting behind a different precondition) + shape 4 (guide flow 17 promises spent/remaining/total)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 1,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 15,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 1,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 1,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 4,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 485,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 409,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start reporting correction_budget 0",
+          "args": [
+            "review",
+            "start",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 217,
+          "stdout_bytes": 1223,
+          "prompts": 1,
+          "git_calls": 50
+        },
+        {
+          "sequence": 2,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 14030,
+          "git_calls": 40
+        },
+        {
+          "sequence": 3,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "--lineage",
+            "review-c65a4ce5f831560b",
+            "--target",
+            "sha256:c65a4ce5f831560b0d0f77412c21dc452a69feefbe15c3a2bb215a800eb46324",
+            "--expected-revision",
+            "sha256:8dffc9ae882f635f767d5c49aeda9d2f2bf7b983bd083d13bc0869e94d64e99f",
+            "--lens",
+            "review-risk",
+            "--order",
+            "0",
+            "--input",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/reviewer-0.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 696,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 4,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 11093,
+          "git_calls": 40
+        },
+        {
+          "sequence": 5,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "--lineage",
+            "review-c65a4ce5f831560b",
+            "--target",
+            "sha256:c65a4ce5f831560b0d0f77412c21dc452a69feefbe15c3a2bb215a800eb46324",
+            "--expected-revision",
+            "sha256:8dffc9ae882f635f767d5c49aeda9d2f2bf7b983bd083d13bc0869e94d64e99f",
+            "--lens",
+            "review-resilience",
+            "--order",
+            "1",
+            "--input",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/reviewer-1.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 708,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 6,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 8138,
+          "git_calls": 40
+        },
+        {
+          "sequence": 7,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "--lineage",
+            "review-c65a4ce5f831560b",
+            "--target",
+            "sha256:c65a4ce5f831560b0d0f77412c21dc452a69feefbe15c3a2bb215a800eb46324",
+            "--expected-revision",
+            "sha256:8dffc9ae882f635f767d5c49aeda9d2f2bf7b983bd083d13bc0869e94d64e99f",
+            "--lens",
+            "review-readability",
+            "--order",
+            "2",
+            "--input",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/reviewer-2.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 710,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 8,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 5180,
+          "git_calls": 40
+        },
+        {
+          "sequence": 9,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "capture-result",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "--lineage",
+            "review-c65a4ce5f831560b",
+            "--target",
+            "sha256:c65a4ce5f831560b0d0f77412c21dc452a69feefbe15c3a2bb215a800eb46324",
+            "--expected-revision",
+            "sha256:8dffc9ae882f635f767d5c49aeda9d2f2bf7b983bd083d13bc0869e94d64e99f",
+            "--lens",
+            "review-reliability",
+            "--order",
+            "3",
+            "--input",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/reviewer-3.json"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 710,
+          "model_run": true,
+          "git_calls": 15
+        },
+        {
+          "sequence": 10,
+          "step": "capture every lens",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 5659,
+          "git_calls": 40
+        },
+        {
+          "sequence": 11,
+          "step": "finalize with captured results",
+          "args": [
+            "review",
+            "finalize",
+            "--captured-results=true",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 249,
+          "git_calls": 36
+        },
+        {
+          "sequence": 12,
+          "step": "forecast one correction line against a budget of zero",
+          "args": [
+            "review",
+            "finalize",
+            "--correction-lines",
+            "1",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 268,
+          "stdout_bytes": 0,
+          "block": "in_band",
+          "git_calls": 16,
+          "message": "Error: finalize for lineage \"review-c65a4ce5f831560b\" had no verification evidence to consume and made no transition; capture it first with `gentle-ai review capture-evidence`, then run `gentle-ai review finalize --lineage review-c65a4ce5f8"
+        },
+        {
+          "sequence": 13,
+          "step": "capture final evidence",
+          "args": [
+            "review",
+            "status",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "--contract",
+            "gentle-ai.review-integration/v1",
+            "--next-transition"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 3161,
+          "git_calls": 26
+        },
+        {
+          "sequence": 14,
+          "step": "capture final evidence",
+          "args": [
+            "review",
+            "capture-evidence",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo",
+            "--lineage",
+            "review-c65a4ce5f831560b",
+            "--target",
+            "sha256:c65a4ce5f831560b0d0f77412c21dc452a69feefbe15c3a2bb215a800eb46324",
+            "--expected-revision",
+            "sha256:a2d5022bd41b75a37204fc460348dc9bcab366971370024b0826f71223924ac1",
+            "--input",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/final-evidence.txt"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 423,
+          "git_calls": 5
+        },
+        {
+          "sequence": 15,
+          "step": "finalize with captured evidence",
+          "args": [
+            "review",
+            "finalize",
+            "--captured-evidence=true",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j35-correction-budget-exactly-zero-2715384972/home/demo"
+          ],
+          "exit_code": 0,
+          "stderr_bytes": 0,
+          "stdout_bytes": 466,
+          "git_calls": 16
+        }
+      ]
+    },
+    {
+      "id": "j36-contract-right-name-wrong-version",
+      "title": "Negotiated contract with the right name and a version this build does not have",
+      "source": "shape 2 (a correctable request read as terminal) + shape 4 (the continuation must be runnable, not a category)",
+      "status": "completed",
+      "metrics": {
+        "human_prompts": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "non-TTY run: counts the consent-skipped stderr notice, i.e. times the flow WOULD have asked a human"
+        },
+        "manual_tokens": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "invocations carrying a hand-assembled --maintainer-authorization value"
+        },
+        "commands_to_completion": {
+          "value": 1,
+          "derivation": "measured"
+        },
+        "blocks": {
+          "self_recovered": 0,
+          "in_band": 1,
+          "out_of_band": 0,
+          "by_design": 0,
+          "dead_end": 0
+        },
+        "blocks_derivation": "measured",
+        "recovery_round_trips": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "model_runs": {
+          "value": 0,
+          "derivation": "measured"
+        },
+        "human_surface_bytes": {
+          "value": 90,
+          "derivation": "measured"
+        },
+        "git_subprocesses": {
+          "value": 0,
+          "derivation": "measured",
+          "note": "informational, not one of the seven dimensions: GIT_TRACE built-in lines; a lower bound if the build ever uses an in-process git"
+        }
+      },
+      "commands": [
+        {
+          "sequence": 1,
+          "step": "review start with contract version v2",
+          "args": [
+            "review",
+            "start",
+            "--contract",
+            "gentle-ai.review-integration/v2",
+            "--cwd",
+            "/tmp/gentle-ai-bench-j36-contract-right-name-wrong-version-1621219290/home/demo"
+          ],
+          "exit_code": 1,
+          "stderr_bytes": 90,
+          "stdout_bytes": 475,
+          "block": "in_band",
+          "git_calls": 0,
+          "message": "Error: The requested review integration contract is not supported. [unsupported_contract]"
+        }
+      ]
+    }
+  ],
+  "totals": {
+    "human_prompts": {
+      "value": 11,
+      "derivation": "measured"
+    },
+    "manual_tokens": {
+      "value": 2,
+      "derivation": "measured"
+    },
+    "commands_to_completion": {
+      "value": 218,
+      "derivation": "measured"
+    },
+    "blocks": {
+      "self_recovered": 0,
+      "in_band": 15,
+      "out_of_band": 3,
+      "by_design": 2,
+      "dead_end": 0
+    },
+    "blocks_derivation": "measured",
+    "recovery_round_trips": {
+      "value": 11,
+      "derivation": "measured"
+    },
+    "model_runs": {
+      "value": 26,
+      "derivation": "measured"
+    },
+    "human_surface_bytes": {
+      "value": 7965,
+      "derivation": "measured"
+    },
+    "git_subprocesses": {
+      "value": 7025,
+      "derivation": "measured"
+    }
+  },
+  "journeys_counted": 36,
+  "journeys_unsupported": 0,
+  "journeys_failed": 0,
+  "notes": [
+    "Driven mode: every journey ran in a fresh temp dir with its own HOME, XDG_*, throwaway git repo and local bare remote.",
+    "Reviewer results were synthesized from the binary's own collect envelope. No model was called.",
+    "No wall-clock timing is measured or reported.",
+    "by_design is a carve-out from out_of_band, not a subtraction from it: those blocks are still blocks and still in the total. Every one is listed with its declared shape and the verified quote of the product's own next-action text."
+  ]
+}

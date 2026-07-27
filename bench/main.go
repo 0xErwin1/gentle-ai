@@ -81,6 +81,14 @@ func commandRun(args []string) int {
 		return 2
 	}
 
+	// The whole corpus is validated before anything runs, --only or not: a
+	// broken author-declared exemption is a corpus error, and the run that
+	// would have quietly reported a number based on it must not start.
+	if err := validateCorpus(Journeys()); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		return 2
+	}
+
 	selected := map[string]bool{}
 	for _, id := range strings.Split(*only, ",") {
 		if id = strings.TrimSpace(id); id != "" {
@@ -107,6 +115,7 @@ func commandRun(args []string) int {
 		"Driven mode: every journey ran in a fresh temp dir with its own HOME, XDG_*, throwaway git repo and local bare remote.",
 		"Reviewer results were synthesized from the binary's own collect envelope. No model was called.",
 		"No wall-clock timing is measured or reported.",
+		"by_design is a carve-out from out_of_band, not a subtraction from it: those blocks are still blocks and still in the total. Every one is listed with its declared shape and the verified quote of the product's own next-action text.",
 	}
 
 	if err := writeJSON(*out, results); err != nil {

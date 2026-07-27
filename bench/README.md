@@ -89,7 +89,7 @@ depend on them become `null` rather than a guess.
 | 1 | `human_prompts` | Times the flow would stop to ask a human | Runs non-TTY. `gentle-ai` prints a consent-skipped notice on **stderr** when it would have asked; the benchmark counts occurrences of that exact string. |
 | 2 | `manual_tokens` | Steps needing a hand-assembled authorization | Invocations whose argv carries a non-empty `--maintainer-authorization`. Both `--flag value` and `--flag=value`. |
 | 3 | `commands_to_completion` | Binary invocations from start to terminal state | Every product invocation the journey issues. Benchmark instrumentation (capability probes) is **not** counted. |
-| 4 | `blocks` | Every non-zero exit or denial, in four buckets | See the classifier below. |
+| 4 | `blocks` | Every non-zero exit or denial, in five buckets | See the classifier below. |
 | 5 | `recovery_round_trips` | Commands spent between a block and the flow resuming | From the blocking command up to and including the first subsequent command that is not itself a block. |
 | 6 | `model_runs` | Reviewer/lens invocations the flow required, re-runs included | Driven mode: measured — the benchmark issues them. Observed mode: **proxy**, see below. |
 | 7 | `human_surface_bytes` | Human-facing narration volume | Total stderr bytes. |
@@ -125,8 +125,10 @@ counts: the flow cannot proceed.
    `collect.capture_operation` (and its execute-shaped sibling
    `next_transition.execute.operation`) naming an operation that is not
    `stop`/`none`/empty → `in_band`.
-4. The journey corpus declares that no continuation exists → `dead_end`.
-5. Otherwise → `out_of_band`: blocked, and the output named no runnable
+4. The corpus declares the refusal correct **and** the exact next-action text
+   it quotes is verified present in the emitted bytes → `by_design`.
+5. The journey corpus declares that no continuation exists → `dead_end`.
+6. Otherwise → `out_of_band`: blocked, and the output named no runnable
    continuation, so the user had to go and look it up.
 
 Two precise sub-rules:
@@ -139,12 +141,55 @@ Two precise sub-rules:
   `action: "explicit-maintainer-action"` names a posture, not an operation you
   can run.
 
-`dead_end` is the one class that is **author-declared** rather than derived:
-"no continuation exists anywhere in the product" is not decidable from outside
-the binary. It is set per step in the corpus (`Step.DeadEnd`) and a
-mechanically detected continuation always overrides it. The current corpus
-declares none, so `dead_end` is 0 everywhere — an honest 0, not a measured
-absence of dead ends in the product as a whole.
+Two classes are **author-declared** rather than derived, because neither
+"nothing exists to run next" nor "nothing *could* honestly exist to run next"
+is decidable from outside the binary. Both are set per step in the corpus, and
+a mechanically detected continuation always overrides either one.
+
+- `dead_end` (`Step.DeadEnd`) says there is **no next action**. The flow is
+  over. The current corpus declares none, so `dead_end` is 0 everywhere — an
+  honest 0, not a measured absence of dead ends in the product as a whole.
+- `by_design` (`Step.ByDesign`) says there **is** a next action, the product
+  already stated it, and it is not expressible as a `gentle-ai` command.
+
+They are opposite answers to "is there anything to do next?", so a step
+declaring both is contradicting itself and the run refuses to start.
+
+`by_design` is deliberately the most expensive thing to declare in this
+benchmark, because it is the only annotation that can make `out_of_band`
+smaller. It costs two things:
+
+- **A shape, from a closed vocabulary.** `operator-knowledge` — the product
+  cannot know a value only the operator has. `world-action` — the exit is an
+  action, not a command: edit the code, free some disk space, plug the mount
+  back in. `human-authority` — the block *is* a human decision, and if a
+  command could produce the authorization the gate would be theatre. Not free
+  text: an unrecognised shape is a corpus error and `run` exits before driving
+  anything.
+- **A quote of the product's own next-action text**, which the classifier
+  verifies is really in the bytes the product emitted. This is the load-bearing
+  half. "No command can exist" never excuses "the message says nothing", so
+  `Error: no.` cannot be declared by-design: there is nothing to quote, and a
+  quote that is not in the output is not a quote — the declaration does not
+  apply and the block stays `out_of_band`.
+
+An exemption is a **reclassification, never a subtraction**: the block is still
+a block and still inside `4 blocks (total)`. Every declaration in the run is
+printed under *By-design blocks* with its shape and its verified quote,
+including the ones that did **not** apply — a declaration the classifier
+refused is the first sign the product's message changed under the corpus, so it
+is reported rather than dropped.
+
+The corpus declares one, in `j17-bare-repository`
+(`operator-knowledge`): `review start` in a bare repository can only offer
+`--cwd <path-to-a-checkout>`, an unfillable template, because it cannot know
+where the operator's checkout is. What it prints instead is the action —
+*"run the same command again from a checkout"* — and that is the string the
+classifier checks for.
+
+Observed mode has no corpus, so nothing there can declare an exemption and
+`by_design` is 0 by construction, not by measurement. A recorded session's
+correct refusals are counted as `out_of_band` exactly as before.
 
 ## `unsupported` is never `0`
 
@@ -242,6 +287,40 @@ invents a metric is worse than one that admits a gap.
    journey inside a loop is worse than no journey, because it gets blamed on
    whatever changed last.
 
+9. **`by_design` is an author-declared exemption, and it is the one number in
+   here that can be gamed.** It exists because `out_of_band` was counting two
+   different things: a defect — the product blocked the operator and gave them
+   nothing runnable when a runnable continuation could exist — and a correct
+   refusal for which naming a command would mean naming a dead end. Only the
+   first is what the release criterion cares about. Splitting them makes the
+   defect count mean something; it also opens a channel for laundering real
+   defects into a clean bucket. What it costs to declare one is described
+   above: a shape from a closed vocabulary, and a quote of the product's own
+   next-action text that the classifier verifies against the emitted bytes.
+   **The failure mode it introduces:** a declaration is a claim about a message
+   the corpus does not own. The quote can keep matching while the sentence
+   around it stops being useful, and the harness cannot tell the difference —
+   it checks that the words are there, not that they still help. So the
+   exemption is never a subtraction (the block stays in the total, in its own
+   column, in its own section, quote included) and the honest way to read the
+   section is to read the quote, not the count. A declaration that no longer
+   applies is printed as stale rather than silently ignored, which catches the
+   message disappearing but not the message rotting.
+
+10. **The report is not byte-identical between two runs, though every count
+    except one is.** Each journey runs under `os.MkdirTemp`, whose random
+    suffix varies in length, and two journeys quote that path back in their
+    block message (`j17-bare-repository`, `j31-nonsense-mode-value`). So the
+    quoted messages differ run to run and `human_surface_bytes` wobbles by a
+    byte or two; every block classification, every count and
+    `git_subprocesses` are stable. This is why the "byte-identical" claim under
+    *Measured* below is scoped to the 14-journey corpus it describes — no
+    journey in that corpus echoed a sandbox path. Making it hold again means
+    choosing between a fixed-width random suffix (stabilises the numbers, not
+    the quoted paths) and a deterministic per-journey path (stabilises both,
+    and makes two concurrent runs collide). That is a maintainer's call and it
+    has not been made.
+
 ## Measured: the current build
 
 `results-after.json` in this directory is a real run of the whole corpus
@@ -268,7 +347,9 @@ completed; nothing was unsupported. Re-running produces byte-identical numbers,
 Those numbers are the **14-journey** corpus against the binary named above,
 kept as-is because they belong to that named build. The corpus has since grown
 to 36 journeys; re-run `run` against your own binary rather than reading the
-block above as current totals.
+block above as current totals. The row labels moved too: `by_design` did not
+exist when this was recorded and is now printed as `4d`, next to the number it
+carves out of, with `dead_end` at `4e`.
 
 `results-before.json` is the same corpus against `v2.1.2`, kept as a worked
 example of the cross-version path: 5 journeys completed and 9 recorded

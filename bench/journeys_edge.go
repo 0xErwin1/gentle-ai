@@ -899,10 +899,22 @@ func edgeJourneys() []Journey {
 			// Expected: start is refused — a bare repository legitimately has
 			// no candidate. What is measured is whether the refusal names a
 			// continuation or leaks raw git plumbing.
+			//
+			// It names one, and it is by design that the name is not a
+			// command. The product cannot know where the operator's checkout
+			// is, so the only command it could print is
+			// `--cwd <path-to-a-checkout>`, an unfillable template — naming a
+			// dead end, which is worse than naming nothing. What it prints
+			// instead is the action itself, quoted below and verified against
+			// the bytes before the exemption applies.
 			Steps: []Step{
 				{Name: "fixture: bare repository proven bare", Fixture: bareRepository},
 				{Name: "review start in a bare repository", Requires: startCapability,
-					Args: productArgs("review", "start"), AbortOnBlock: true},
+					Args: productArgs("review", "start"), AbortOnBlock: true,
+					ByDesign: &ByDesignDeclaration{
+						Shape:      ByDesignOperatorKnowledge,
+						NextAction: "run the same command again from a checkout",
+					}},
 			},
 		},
 		{
@@ -1150,7 +1162,19 @@ func edgeJourneys() []Journey {
 				{Name: "fixture: stage docs", Fixture: stageProse("", "escalated")},
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
 				{Name: "finalize binding a FAILED verification", Requires: finalizeFailedCapability, Composite: finalizeAsFailedVerification},
-				{Name: "gate pre-commit on an escalated lineage", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit")},
+				// The denial names the recover command with both derivable
+				// selectors already filled in, and leaves exactly one hole:
+				// the successor's name. That is the operator's to choose --
+				// the CLI help says so in as many words -- so the product
+				// cannot print a command that runs as typed without inventing
+				// a name on their behalf. The command is unrunnable by one
+				// value, and it is the one value only the operator has.
+				{Name: "gate pre-commit on an escalated lineage", Requires: validateCapability,
+					Args: productArgs("review", "validate", "--gate", "pre-commit"),
+					ByDesign: &ByDesignDeclaration{
+						Shape:      ByDesignOperatorKnowledge,
+						NextAction: "change the candidate and review the fix as a successor",
+					}},
 				{Name: "recover before and after fixing the candidate", Requires: recoverCapability, Composite: recoverEscalated},
 			},
 		},
