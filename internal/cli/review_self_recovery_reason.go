@@ -64,6 +64,14 @@ func reviewSelfRecoveryReason(shape reviewSelfRecoveryShape) string {
 // --reason, and --maintainer-authorization, exactly as before self-derivation
 // existed.
 func reviewSelfRecoveryShapeForRecover(predecessor reviewtransaction.State, targetChanged bool) (reviewSelfRecoveryShape, bool) {
+	// The closed set of self-deriving predecessor states is owned by
+	// reviewtransaction.RecoverySelfDerivedInputs, which denial diagnostics
+	// also consult when they decide what to ask an operator for. Consulting it
+	// here keeps the promise and the demand from drifting apart: a denial can
+	// never omit an input this command then insists on.
+	if len(reviewtransaction.RecoverySelfDerivedInputs(predecessor)) == 0 {
+		return "", false
+	}
 	switch predecessor {
 	case reviewtransaction.StateInvalidated:
 		return reviewSelfRecoveryShapeRecoverInvalidated, true

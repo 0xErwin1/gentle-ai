@@ -226,8 +226,14 @@ func (err ReviewGateDeniedError) Error() string {
 		if scope.RecoveryScope == reviewtransaction.RecoveryScopeCommittedBaseDiff && scope.RecoveryBaseRef != "" {
 			operation = fmt.Sprintf("%s --base-ref %s --committed-only", operation, scope.RecoveryBaseRef)
 		}
-		if len(scope.RecoveryRequiredInputs) > 0 {
-			return fmt.Sprintf("%s: recover via %s (requires: %s)", message, operation, strings.Join(scope.RecoveryRequiredInputs, ", "))
+		// List only what the operator must actually supply. The frozen
+		// diagnostics carry the operation's complete input set (the negotiated
+		// envelope keeps naming all of it, pinned by the published v1 schema)
+		// plus the subset the recovery mints for itself from this predecessor
+		// shape. Naming a derived input here would be a false instruction: it
+		// sends an operator hunting for a value the command already knows.
+		if demanded := reviewRecoveryDemandedInputs(scope); len(demanded) > 0 {
+			return fmt.Sprintf("%s: recover via %s (requires: %s)", message, operation, strings.Join(demanded, ", "))
 		}
 		return fmt.Sprintf("%s: recover via %s", message, operation)
 	}
@@ -245,6 +251,29 @@ func (err ReviewGateDeniedError) Error() string {
 }
 
 func (err ReviewGateDeniedError) Unwrap() error { return err.Cause }
+
+// reviewRecoveryDemandedInputs narrows the frozen recovery input set to the
+// inputs an operator must supply, by removing the ones the recovery command
+// self-mints for the predecessor shape the diagnostics named. Order is
+// preserved. When nothing is marked derived -- a legacy transaction that
+// records no predecessor state, or a state outside the self-deriving set --
+// the complete set is demanded, exactly as before.
+func reviewRecoveryDemandedInputs(scope *reviewtransaction.GateScopeChangeDiagnostics) []string {
+	if len(scope.RecoveryDerivedInputs) == 0 {
+		return scope.RecoveryRequiredInputs
+	}
+	derived := make(map[string]struct{}, len(scope.RecoveryDerivedInputs))
+	for _, input := range scope.RecoveryDerivedInputs {
+		derived[input] = struct{}{}
+	}
+	demanded := make([]string, 0, len(scope.RecoveryRequiredInputs))
+	for _, input := range scope.RecoveryRequiredInputs {
+		if _, self := derived[input]; !self {
+			demanded = append(demanded, input)
+		}
+	}
+	return demanded
+}
 
 type repeatedString []string
 

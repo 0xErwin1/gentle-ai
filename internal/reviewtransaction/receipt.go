@@ -212,6 +212,37 @@ type GateScopeChangeDiagnostics struct {
 	// unchanged wherever the recommendation is unchanged.
 	RecoveryScope   string `json:"recovery_scope,omitempty"`
 	RecoveryBaseRef string `json:"recovery_base_ref,omitempty"`
+	// RecoveryDerivedInputs names the subset of RecoveryRequiredInputs the
+	// recovery command self-mints for this predecessor shape, so a human
+	// surface can list only what an operator must actually supply. Listing an
+	// input the command derives is a false instruction: it sends an operator
+	// hunting for a value that does not exist. Like RecoveryScope and
+	// RecoveryBaseRef this stays out of the negotiated
+	// gentle-ai.review-integration/v1 failure envelope, whose published
+	// failure.schema.json pins recovery_required_inputs to exactly six items;
+	// the complete operation input set keeps travelling on the wire unscoped.
+	RecoveryDerivedInputs []string `json:"recovery_derived_inputs,omitempty"`
+}
+
+// RecoverySelfDerivedInputs names the recovery inputs the review recovery
+// command mints for itself when they are omitted, for a predecessor in the
+// given state. It is the single source of truth for that closed set: the
+// command consults it to decide whether it may self-derive, and denial
+// diagnostics consult it to decide what to ask an operator for, so the two can
+// never drift into promising or demanding different things.
+//
+// Absence, not value, is what triggers self-minting, and self-minting never
+// widens authority: RecoverCompactAuthority still applies every legality check
+// to derived values exactly as it does to supplied ones. A state outside this
+// set (an ACTIVE reviewing attempt, or the zero state a legacy transaction
+// projects) derives nothing and must supply all of them explicitly.
+func RecoverySelfDerivedInputs(predecessor State) []string {
+	switch predecessor {
+	case StateInvalidated, StateCorrectionRequired, StateApproved, StateEscalated:
+		return []string{"reason", "actor"}
+	default:
+		return nil
+	}
 }
 
 func validateDerivedGate(receipt Receipt, context GateContext) GateResult {

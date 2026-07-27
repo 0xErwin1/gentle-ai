@@ -245,9 +245,26 @@ gentle-ai review validate --gate pre-commit --contract gentle-ai.review-integrat
 
 ### Flow 18: Defect report ready to paste
 
-1. [ ] If you hit a terminal block **caused by us** (not by a decision of yours), → **Expected**: a single sentence naming the report file and the link to open the issue.
-2. [ ] Open that file → **Expected**: it carries version, commit, OS, the operation and the error. It does **NOT** carry the contents of your files, or absolute paths with your username, or environment variables. It is meant to be pasted into a public issue.
-3. [ ] A block that is **your decision** (abandon vs recover) → **Expected**: NO report is generated. There is no bug to report.
+**What a report is for.** A defect report is written for a *stored-state deadlock*: an operation that tried to write, could not, and has no command that resolves it. That is a narrow class on purpose. Most blocks are not in it — a policy denial, a scope change, an exhausted correction budget and an escalated lineage are all the tool working correctly, and none of them generates a report. Reads never generate one either: `review status` is read-only and stays read-only, so a state it merely *reports* as unrecognised writes nothing to your repository.
+
+Earlier rounds asked you to report this flow "if you hit a terminal block caused by us", with no way to produce one. Following the guide never reaches the class above, so the step was always marked failed. Here is a procedure that actually reaches it.
+
+1. [ ] Docs change, `review start` + `review finalize` → **Expected**: approved receipt. Note the `receipt_path` it prints.
+2. [ ] Break the stored receipt on purpose so it no longer matches the authority that produced it — edit that file and change `"generation"` to a different number:
+
+```
+$EDITOR "$(git rev-parse --git-common-dir)"/gentle-ai/review-transactions/v2/<lineage>/review-receipt.json
+```
+
+3. [ ] Run `review finalize --lineage <lineage>` again → **Expected**: it fails with **exit 1**, and the last sentence names the report file and the link:
+
+```
+... A defect report was saved at <...>/gentle-ai/defect-reports/receipt-publication-conflict-<hash>.md
+-- file it at https://github.com/Gentleman-Programming/gentle-ai/issues/new/choose.
+```
+
+4. [ ] Open that file → **Expected**: it carries version, commit, OS, the operation and the error. It does **NOT** carry the contents of your files, or absolute paths with your username, or environment variables. It is meant to be pasted into a public issue.
+5. [ ] A block that is **your decision** (abandon vs recover), and any ordinary denial or escalation → **Expected**: NO report is generated, and none is promised. There is no bug to report.
 
 ### Flow 19: First-run hygiene
 

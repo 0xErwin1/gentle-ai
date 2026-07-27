@@ -454,15 +454,29 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 			recoveryCompatibility = &finalCompatibility
 		}
 	}
-	if recoveryBound {
-		if finalRefs != nil && (request.Gate == GatePrePush || request.Gate == GatePrePR) {
-			baseCommit := finalRefs.BaseCommit
-			if request.Gate == GatePrePush {
-				baseCommit = request.Target.BaseRef
-			}
-			if verifyCompactRecoveryRelationDelivery(ctx, repo, finalRecoveryBinding, finalSnapshot, receipt.FinalCandidateTree, baseCommit, finalRefs.HeadCommit, recoveryCompatibility) != nil {
-				return invalid("compact recovery delivery changed during final authorization")
-			}
+	// Re-verify the composed chain under the lock exactly when the evaluation
+	// above rested on it. `recoveryBound` only says a chain composes; it does
+	// not say this delivery is authorized by one. A successor whose own frozen
+	// receipt already binds the delivery exactly (candidate, base, and paths
+	// all match) is authorized by that receipt alone, and whole-chain delivery
+	// verification is unsatisfiable for it once the predecessor's segment has
+	// been published: the composed chain base is an ancestor of the live
+	// publication base, so `verifyCompactRecoveryDelivery` can never find it.
+	// Gating on `recoveryBound` therefore blocked precisely the recovery the
+	// scope-change denial had just told the operator to run — a named
+	// continuation that walks into a second wall. Gating on the rebind keeps
+	// the check wherever the allow actually depends on the chain: any delivery
+	// spanning a predecessor segment mismatches the leaf's frozen base, which
+	// is what sets `recoveryRebind` in the first place.
+	if recoveryRebind != nil && finalRefs != nil && (request.Gate == GatePrePush || request.Gate == GatePrePR) {
+		baseCommit := finalRefs.BaseCommit
+		if request.Gate == GatePrePush {
+			baseCommit = request.Target.BaseRef
+		}
+		// A refusal that discards its cause is a defect even when the refusal
+		// is right: keep the verifier's specific reason on the evaluation.
+		if deliveryErr := verifyCompactRecoveryRelationDelivery(ctx, repo, finalRecoveryBinding, finalSnapshot, receipt.FinalCandidateTree, baseCommit, finalRefs.HeadCommit, recoveryCompatibility); deliveryErr != nil {
+			return invalid("compact recovery delivery changed during final authorization: "+deliveryErr.Error(), deliveryErr)
 		}
 	}
 	if request.Gate == GateRelease {
@@ -512,6 +526,10 @@ func buildCompactScopeChangeDiagnostics(ctx context.Context, repo string, state 
 		DifferingPaths: append([]string{}, differing...), DifferingPathCount: len(differing), DifferingPathsDigest: digestPaths(differing),
 		PredecessorLineageID: state.LineageID, PredecessorRevision: revision,
 		RecoveryOperation: "review.recover", RecoveryRequiredInputs: required,
+		// `required` is the operation's complete input set and stays that way
+		// on the wire. Which of those the recovery mints for itself depends on
+		// the predecessor state, so it is derived here rather than assumed.
+		RecoveryDerivedInputs: RecoverySelfDerivedInputs(state.State),
 	}, nil
 }
 
