@@ -334,6 +334,83 @@ func runtimeSelfSuccessorAvailable(ctx context.Context, repo, workspace, change 
 	return validateRuntimeRemediationSelfSuccessor(ctx, repo, binding, prepared) == nil
 }
 
+// RuntimeStrandedSuccessor identifies the one recovery successor that stands
+// between a bound lineage and its own approved review, together with the two
+// persisted values `review abandon` demands in its authorization binding.
+type RuntimeStrandedSuccessor struct {
+	Lineage          string
+	Revision         string
+	SnapshotIdentity string
+}
+
+// runtimeStrandedSuccessor answers exactly one question: is the ONLY thing
+// standing between the bound lineage and the self-successor finish a recovery
+// successor that can never be finalized?
+//
+// A recovery successor freezes its own review target when it is minted. If the
+// candidate then moves away from that frozen target — the widened scope is
+// taken back out, the corrected file is reverted — the successor's live
+// projection will never match its own authority again, so it can never be
+// reviewed, never be approved, and never become a legal --successor-lineage.
+// While it exists the bound lineage is not the compact recovery leaf and its
+// post-apply gate does not allow, so every exit through the review router leads
+// to a review the runtime then refuses to accept. Quarantining the stranded
+// successor is the one operation that resolves it, and it destroys nothing the
+// operator still wants: a stranded successor is by definition pristine, and the
+// approved predecessor it superseded — which holds the operator's corrected
+// work — is exactly what quarantining it restores.
+//
+// It is deliberately read-only and fail-closed. The bound authority must be
+// approved for the very bytes this finish charged, the successor must be the
+// bound lineage's own direct recovery successor, it must be the current leaf,
+// its frozen candidate must NOT be the charged candidate, and `review abandon`
+// must already accept it. Anything else answers false and the caller names the
+// review router instead of an abandonment that would be refused one layer in —
+// most importantly a successor that DOES govern the charged candidate, which is
+// a live review the operator still wants and must never be sent to quarantine.
+func runtimeStrandedSuccessor(ctx context.Context, repo string, binding ReviewBinding, candidateTree string) (RuntimeStrandedSuccessor, bool) {
+	bound, err := loadRuntimeBoundCompactArtifacts(ctx, repo, binding)
+	if err != nil || bound.State.CurrentSnapshot.CandidateTree != candidateTree {
+		return RuntimeStrandedSuccessor{}, false
+	}
+	leaves, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
+	if err != nil {
+		return RuntimeStrandedSuccessor{}, false
+	}
+	found := RuntimeStrandedSuccessor{}
+	for _, store := range leaves {
+		record, loadErr := store.Load()
+		if loadErr != nil {
+			return RuntimeStrandedSuccessor{}, false
+		}
+		recovery := record.State.Recovery
+		if recovery == nil || recovery.PredecessorLineageID != binding.Lineage ||
+			recovery.PredecessorRevision != binding.AuthorityRevision {
+			continue
+		}
+		if found.Lineage != "" {
+			// A fork is structurally refused elsewhere; seeing one here means
+			// the graph is not what this probe can reason about.
+			return RuntimeStrandedSuccessor{}, false
+		}
+		if record.State.InitialSnapshot.CandidateTree == candidateTree {
+			// Not stranded: this successor governs the charged candidate and
+			// can still be reviewed, approved and named as the successor.
+			return RuntimeStrandedSuccessor{}, false
+		}
+		found.Lineage = record.State.LineageID
+	}
+	if found.Lineage == "" {
+		return RuntimeStrandedSuccessor{}, false
+	}
+	eligibility, err := reviewtransaction.InspectCompactPristineAbandonment(ctx, repo, found.Lineage)
+	if err != nil || !eligibility.Eligible {
+		return RuntimeStrandedSuccessor{}, false
+	}
+	found.Revision, found.SnapshotIdentity = eligibility.Revision, eligibility.SnapshotIdentity
+	return found, true
+}
+
 // loadRuntimeBoundCompactArtifacts validates immutable authority and receipt
 // identity without evaluating the live post-apply gate. The old binding is
 // expected to be live-stale after remediation; its exact approved bytes remain

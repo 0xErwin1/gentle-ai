@@ -824,7 +824,15 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 					}
 				}
 			}
-			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, evidenceAvailable, artifactErr, reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: strings.TrimSpace(*lineage), RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector})
+			// A start transition must name a lineage the store will accept. The
+			// derived name is a function of the target identity alone, so a
+			// superseded lineage still occupies the name this target derives, and
+			// a start naming nothing would answer blocked-scope-action at exit 0.
+			startLineage := strings.TrimSpace(*lineage)
+			if startLineage == "" && native.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
+				startLineage = reviewAvailableStartLineage(ctx, root, native.TargetIdentity)
+			}
+			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, evidenceAvailable, artifactErr, reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector})
 			result.NextTransition = &transition
 			// The stdout JSON envelope is the machine surface and stays
 			// byte-for-byte unchanged; this is the additive Tier C human
@@ -1025,12 +1033,17 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 		Disposition: reviewtransaction.RecoveryDisposition(*disposition), Reason: *reason, Actor: *actor, MaintainerAuthorization: *authorization,
 	})
 	if err != nil {
-		if reviewtransaction.RecoveryTargetUnchanged(err) {
-			explicitCwd := ""
-			if reviewFlagWasProvided(flags, "cwd") {
-				explicitCwd = strings.TrimSpace(*cwd)
-			}
+		explicitCwd := ""
+		if reviewFlagWasProvided(flags, "cwd") {
+			explicitCwd = strings.TrimSpace(*cwd)
+		}
+		switch {
+		case reviewtransaction.RecoveryTargetUnchanged(err):
 			return reviewUnchangedRecoveryRefusal(err, explicitCwd, *predecessor, *expected, *successor, *disposition)
+		case reviewtransaction.ApprovedRecoveryScopeUnchanged(err):
+			return reviewUnchangedApprovedScopeRefusal(err, explicitCwd, *predecessor, *expected, *successor)
+		case reviewtransaction.RecoveryPredecessorNotInvalidated(err):
+			return reviewNotInvalidatedPredecessorRefusal(err, explicitCwd, *predecessor, *expected, *successor, predecessorRecord.State.State)
 		}
 		return err
 	}
@@ -1051,13 +1064,70 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 // untouched. So the continuation is not a different command, it is this one,
 // printed back with the selectors already in hand and nothing left to guess.
 func reviewUnchangedRecoveryRefusal(cause error, cwd, predecessor, expected, successor, disposition string) error {
+	return fmt.Errorf("%w: the candidate is byte-identical to the escalated predecessor, so this successor would carry the exact content whose verification failed and there is nothing to re-review; change the candidate first (apply the fix that verification asked for, and stage it if you review the staged projection), then re-run: %s",
+		cause, reviewRecoverCommand(cwd, predecessor, expected, successor, disposition))
+}
+
+// reviewRecoverCommand renders one literal `gentle-ai review recover`
+// invocation. Every value is one the caller already holds, so nothing here is
+// ever a guess printed at the operator.
+func reviewRecoverCommand(cwd, predecessor, expected, successor, disposition string) string {
 	command := fmt.Sprintf("%s --predecessor-lineage %s --expected-predecessor-revision %s --successor-lineage %s --disposition %s",
 		reviewRunnableCommand("review.recover"), predecessor, expected, successor, disposition)
 	if cwd != "" {
 		command += " --cwd " + cwd
 	}
-	return fmt.Errorf("%w: the candidate is byte-identical to the escalated predecessor, so this successor would carry the exact content whose verification failed and there is nothing to re-review; change the candidate first (apply the fix that verification asked for, and stage it if you review the staged projection), then re-run: %s",
-		cause, command)
+	return command
+}
+
+// reviewChangeTheCandidate is the world action all three healthy-approved
+// guard rails ask for, worded once so they cannot drift apart.
+const reviewChangeTheCandidate = "change the candidate first (edit the files you want reviewed, and stage them if you review the staged projection)"
+
+// reviewUnchangedApprovedScopeRefusal explains why a scope-changed recovery of
+// an approved predecessor whose scope did not move is refused, and names what
+// runs once it has.
+//
+// The refusal stays exactly as strict. A successor here would freeze the very
+// bytes the predecessor already approved, minting a second, fresher authority
+// over content that was already reviewed — which is the forgery the recovery
+// edge exists to prevent, and no flag may buy past it.
+//
+// What it never said is that this is not a command problem at all: with the
+// candidate unchanged there is nothing to review, so the exit is an edit to the
+// working tree. Once that edit lands, the invocation the operator just ran is
+// the one that works — a refused recovery leaves the predecessor record, and
+// therefore its revision, untouched — so the continuation is printed back with
+// every selector already in hand.
+func reviewUnchangedApprovedScopeRefusal(cause error, cwd, predecessor, expected, successor string) error {
+	return fmt.Errorf("%w: lineage %s already approved exactly the candidate in your working tree, so this successor would re-freeze bytes that are already approved and there is nothing to re-review; %s, then re-run: %s",
+		cause, predecessor, reviewChangeTheCandidate,
+		reviewRecoverCommand(cwd, predecessor, expected, successor, string(reviewtransaction.RecoveryScopeChanged)))
+}
+
+// reviewNotInvalidatedPredecessorRefusal explains the invalidated-disposition
+// refusal in terms of the predecessor's real state.
+//
+// This is the leg that closed the reported deadlock (community decode2 report):
+// told that recovery needs an invalidated predecessor, the reader reasonably
+// went to invalidate the predecessor, and `review invalidate` correctly refused
+// a healthy approved authority. Both refusals were right and neither said that
+// invalidation was never the way round — so the message must name the state the
+// lineage is actually in and route to the disposition that state accepts, and
+// it must never point back at `review invalidate`.
+//
+// Only an approved predecessor gets a printed continuation, because that is the
+// state whose exit is proven end to end. Every other state is named honestly
+// and nothing is invented for it: naming a command that does not clear the
+// block is worse than naming none.
+func reviewNotInvalidatedPredecessorRefusal(cause error, cwd, predecessor, expected, successor string, state reviewtransaction.State) error {
+	if state != reviewtransaction.StateApproved {
+		return fmt.Errorf("%w: --disposition invalidated is only for a lineage that is already invalidated, and lineage %s is %s",
+			cause, predecessor, state)
+	}
+	return fmt.Errorf("%w: --disposition invalidated is only for a lineage that is already invalidated, and lineage %s is %s; it cannot be invalidated on the way either, because its approval still covers the candidate in your working tree, so %s, then re-run with the disposition an approved predecessor accepts: %s",
+		cause, predecessor, state, reviewChangeTheCandidate,
+		reviewRecoverCommand(cwd, predecessor, expected, successor, string(reviewtransaction.RecoveryScopeChanged)))
 }
 
 func RunReviewBindSDD(args []string, stdout io.Writer) error {
@@ -1166,6 +1236,10 @@ func RunReviewInvalidate(args []string, stdout io.Writer) error {
 				LineageID: *lineage, ExpectedRevision: *expected, Gate: input,
 			})
 			if err != nil {
+				var healthy *reviewtransaction.HealthyApprovedInvalidationError
+				if errors.As(err, &healthy) {
+					return reviewHealthyInvalidationRefusal(err, strings.TrimSpace(*cwd), *lineage, *expected, healthy.Result)
+				}
 				return err
 			}
 			return encodeReviewJSON(stdout, ReviewInvalidateResult{Operation: "review/invalidate", LineageID: invalidated.State.LineageID, State: invalidated.State.State, StoreRevision: invalidated.Revision})
@@ -1204,6 +1278,37 @@ func RunReviewInvalidate(args []string, stdout io.Writer) error {
 		return err
 	}
 	return encodeReviewJSON(stdout, ReviewInvalidateResult{Operation: "review/invalidate", LineageID: *lineage, State: reviewtransaction.StateInvalidated, StoreRevision: revision})
+}
+
+// reviewSuccessorLineagePlaceholder is the one value a recovery continuation
+// cannot fill in for an operator who has not chosen it yet: the successor's
+// name. `review recover --successor-lineage` says as much in its own help, and
+// inventing a name on their behalf would be printing a command they never asked
+// for under an identifier they now have to live with.
+const reviewSuccessorLineagePlaceholder = "<successor-lineage>"
+
+// reviewHealthyInvalidationRefusal adds the continuation to a refusal to
+// destroy an approved authority the repository has not made stale.
+//
+// The refusal is correct and stays: the approval was earned over specific
+// bytes, and a command that revoked it on demand would make every approval
+// provisional. The situation sentence comes from the authority layer, which
+// states it without internal vocabulary; what is added here is what to do.
+//
+// The two answers are genuinely different, so this branches on the same
+// re-derived result the refusal reports rather than printing one continuation
+// for both. When the candidate already moved, recovery is available right now.
+// When the approval still covers the candidate exactly, there is nothing to
+// review and no command can change that — the exit is an edit to the working
+// tree, and only then the same recovery.
+func reviewHealthyInvalidationRefusal(cause error, cwd, lineage, expected string, result reviewtransaction.GateResult) error {
+	command := reviewRecoverCommand(cwd, lineage, expected, reviewSuccessorLineagePlaceholder, string(reviewtransaction.RecoveryScopeChanged))
+	if result == reviewtransaction.GateScopeChanged {
+		return fmt.Errorf("%w; review the candidate you have now as a successor instead, choosing any name for it that no existing lineage uses: %s",
+			cause, command)
+	}
+	return fmt.Errorf("%w; if you want this candidate reviewed again, %s, then review it as a successor, choosing any name for it that no existing lineage uses: %s",
+		cause, reviewChangeTheCandidate, command)
 }
 
 func RunReviewFacadeStart(args []string, stdout io.Writer) error {
@@ -1318,7 +1423,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	}
 	explicitLineage := strings.TrimSpace(*lineage) != ""
 	if !explicitLineage {
-		*lineage = "review-" + strings.TrimPrefix(snapshot.Identity, "sha256:")[:16]
+		*lineage = reviewDerivedStartLineage(snapshot.Identity)
 	}
 	legacy, err := reviewtransaction.AuthoritativeStore(ctx, root, *lineage)
 	if err == nil {

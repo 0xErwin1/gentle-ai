@@ -64,10 +64,22 @@ var (
 	ErrRuntimeBudgetExhausted  = errors.New("SDD runtime objective budget is exhausted; " + runtimeLedgerStatusPointer)
 	ErrRuntimeAttemptActive    = errors.New("SDD runtime objective already has an active attempt; " + runtimeLedgerStatusPointer)
 	ErrRuntimeNoActiveAttempt  = errors.New("SDD runtime objective has no active attempt; " + runtimeLedgerStatusPointer)
-	ErrRuntimeObjectiveChange  = errors.New("SDD runtime objective changed without an explicit reset")
-	ErrRuntimeObjectiveDone    = errors.New("SDD runtime objective is complete; " + runtimeLedgerStatusPointer)
-	ErrRuntimeNoObjective      = errors.New("SDD runtime ledger has no objective to reset; " + runtimeLedgerStatusPointer)
-	ErrRuntimeResetNotAllowed  = errors.New("SDD runtime objective reset requires decision-required or complete state")
+	// ErrRuntimeObjectiveChange never travels alone either. Every return site
+	// wraps it with runtimeObjectiveChangeRefusal, which names the exact
+	// runnable continuation for the state the caller is actually in. The
+	// sentinel text names the reset in PROSE only, and prose is not a
+	// continuation: the reset it refers to needs six flags the message never
+	// listed, and it is itself refused when the candidate has not drifted.
+	ErrRuntimeObjectiveChange = errors.New("SDD runtime objective changed without an explicit reset")
+	ErrRuntimeObjectiveDone   = errors.New("SDD runtime objective is complete; " + runtimeLedgerStatusPointer)
+	ErrRuntimeNoObjective     = errors.New("SDD runtime ledger has no objective to reset; " + runtimeLedgerStatusPointer)
+	// ErrRuntimeResetNotAllowed named a STATE and no continuation, which is the
+	// same defect class as the sentinels above: an operator holding it knows
+	// what is refused and not one command that moves. The state it named was
+	// also already incomplete — a terminal failed or interrupted attempt whose
+	// candidate has drifted is admitted too — so it now says which shapes are
+	// admitted and routes to the ledger's own derived next action.
+	ErrRuntimeResetNotAllowed = errors.New("SDD runtime objective reset requires decision-required or complete state, or a terminal attempt whose candidate has drifted; " + runtimeLedgerStatusPointer)
 	// ErrRuntimeRemediationSuccessorRequired never travels alone. Every return
 	// site wraps it with runtimeRemediationExitRefusal, which names the exact
 	// runnable continuation for the state the caller is actually in. The
@@ -402,7 +414,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			if request.WorkUnit != status.Objective.WorkUnit || request.EvidenceGoal != status.Objective.EvidenceGoal ||
 				request.MaxAttempts != status.Objective.MaxAttempts ||
 				request.MaxChangedLines != status.Objective.MaxChangedLines {
-				return runtimeRecord{}, ErrRuntimeObjectiveChange
+				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 			}
 			if len(status.Attempts) == 0 {
 				return runtimeRecord{}, errors.New("SDD runtime objective has no terminal candidate provenance")
@@ -414,7 +426,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			}
 			snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
 			if err == nil && (snapshot.Identity != last.FinishCandidateIdentity || snapshot.CandidateTree != last.FinishCandidateTree) {
-				return runtimeRecord{}, ErrRuntimeObjectiveChange
+				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 			}
 		} else {
 			snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
@@ -590,6 +602,9 @@ func (store RuntimeStore) runtimeRemediationExitRefusal(
 	// route on errors.Is must keep working no matter which exit is named.
 	const provenance = "`sdd-attempt status` publishes those three as binding_revision, binding.lineage, and evidence_revision"
 	if !runtimeSelfSuccessorAvailable(ctx, store.Repo, store.Workspace, store.Change, binding, candidateTree) {
+		if stranded, ok := runtimeStrandedSuccessor(ctx, store.Repo, binding, candidateTree); ok {
+			return store.runtimeStrandedSuccessorRefusal(binding, stranded, ordinal)
+		}
 		return fmt.Errorf(
 			"%w: the candidate changed after attempt %d began, and lineage %q does not currently hold the approved review of this candidate, so it cannot be its own successor: get this candidate approved first with `gentle-ai review status --cwd %q --contract %s --next-transition`, which names the next review action, then re-run this finish adding --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision for the lineage that then holds it; %s",
 			ErrRuntimeRemediationSuccessorRequired, ordinal, binding.Lineage,
@@ -610,6 +625,34 @@ func (store RuntimeStore) runtimeRemediationExitRefusal(
 	)
 }
 
+// runtimeStrandedSuccessorRefusal names the one operation that clears a
+// stranded recovery successor, and prints the maintainer authorization that
+// operation demands as a filled-in template.
+//
+// The review router is deliberately NOT named here. For this state its printed
+// transition is `review start` on a target no leaf governs, which runs, exits
+// zero and changes nothing; and even a fresh review started under a free
+// lineage is refused by the runtime one layer deeper, because a lineage that is
+// not a scope-changed recovery descendant of the populated binding can never be
+// its successor. Naming a command that runs and leaves the block in place is
+// the most expensive refusal this product can emit, because the operator then
+// trusts it.
+//
+// The authorization template is rendered by the same function the abandon gate
+// verifies against (reviewtransaction.RenderCompactAbandonAuthorization), with
+// only the two values the operator chooses left as placeholders, so the bytes a
+// reader assembles from this message are the bytes that gate accepts.
+func (store RuntimeStore) runtimeStrandedSuccessorRefusal(binding ReviewBinding, stranded RuntimeStrandedSuccessor, ordinal int) error {
+	// The sentinel stays in the %w position in every branch: callers that
+	// route on errors.Is must keep working no matter which exit is named.
+	return fmt.Errorf(
+		"%w: the candidate changed after attempt %d began, and lineage %q cannot hold the approved review of this candidate because recovery successor %q supersedes it and froze a target this candidate no longer has, so that successor can never be finalized — quarantine it, then re-run this finish: `gentle-ai review abandon --cwd %q --lineage %q --expected-revision %q --reason \"<why-it-is-abandoned>\" --actor \"<actor>\" --maintainer-authorization \"<maintainer-authorization>\"`; the abandonment quarantines the pristine successor and destroys nothing, because %q keeps the approved review of the corrected candidate. --maintainer-authorization is exactly these six lines, joined by LF, with no trailing newline, using the same --actor and --reason with surrounding whitespace trimmed:\n%s",
+		ErrRuntimeRemediationSuccessorRequired, ordinal, binding.Lineage, stranded.Lineage,
+		store.Workspace, stranded.Lineage, stranded.Revision, binding.Lineage,
+		reviewtransaction.RenderCompactAbandonAuthorization(
+			stranded.Lineage, stranded.Revision, stranded.SnapshotIdentity, "<--actor>", "<--reason>"))
+}
+
 // runtimeRemediatesArgument quotes a concrete revision and leaves an operator
 // placeholder bare, so the printed command tokenizes the same way either way.
 func runtimeRemediatesArgument(remediates string) string {
@@ -617,6 +660,68 @@ func runtimeRemediatesArgument(remediates string) string {
 		return remediates
 	}
 	return fmt.Sprintf("%q", remediates)
+}
+
+// runtimeObjectiveChangeRefusal turns the changed-objective begin demand into
+// a refusal that names the continuation that actually clears it.
+//
+// The demand itself is correct: an objective is an immutable scope, so a begin
+// whose parameters or whose terminal candidate no longer match the recorded
+// one would silently reopen a different piece of work under the old budget.
+// What was missing is the exit. The sentinel says "without an explicit reset",
+// which names an operation and never a command — the reset needs --cwd,
+// --change, --expected-revision, --request-id, --reason and --actor, and a
+// caller who has only the sentinel has none of them.
+//
+// The two states are distinguished rather than merged, because a message may
+// name a command only when running it resolves the block. `reset` is refused
+// one layer deeper for an unchanged candidate whose budget is intact
+// (runtimeResetStructurallyPermitted plus the drift check in Reset), because an
+// elective early reset would launder the per-objective budget. Naming it there
+// would be the same defect in a new place, so that branch names the begin the
+// ledger does accept, printing the objective parameters it already holds.
+func (store RuntimeStore) runtimeObjectiveChangeRefusal(ctx context.Context, status RuntimeStatus) error {
+	// The sentinel stays in the %w position in every branch: callers that
+	// route on errors.Is must keep working no matter which exit is named.
+	if store.runtimeObjectiveResetAdmissible(ctx, status) {
+		return fmt.Errorf(
+			"%w: reset the objective, then begin again — `gentle-ai sdd-attempt reset --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --reason \"<why-the-objective-changed>\" --actor \"<actor>\"`; the reset publishes a new ledger revision, so take the begin's --expected-revision from `gentle-ai sdd-attempt status --cwd %q --change %q` after it commits",
+			ErrRuntimeObjectiveChange, store.Workspace, store.Change, status.Revision, store.Workspace, store.Change)
+	}
+	objective := status.Objective
+	if objective == nil {
+		// Unreachable from Begin, which only reaches this refusal with a
+		// populated objective, and fail-closed if that ever stops holding:
+		// inventing an objective to print would be worse than the sentinel.
+		return ErrRuntimeObjectiveChange
+	}
+	return fmt.Errorf(
+		"%w: this objective is still open on its recorded scope and its candidate has not moved, so resetting it is refused as an elective budget reset; begin against the scope the ledger holds — `gentle-ai sdd-attempt begin --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --work-unit %q --evidence-goal %q --max-attempts %d --max-changed-lines %d`; `sdd-attempt status` publishes those four as objective.work_unit, objective.evidence_goal, objective.max_attempts, and objective.max_changed_lines",
+		ErrRuntimeObjectiveChange, store.Workspace, store.Change, status.Revision,
+		objective.WorkUnit, objective.EvidenceGoal, objective.MaxAttempts, objective.MaxChangedLines)
+}
+
+// runtimeObjectiveResetAdmissible answers exactly one question: would `reset`
+// be ACCEPTED right now? It re-runs the same structural rule and the same
+// drift check Reset itself applies, against the same terminal candidate
+// provenance, so a refusal that consults it can only name the reset when
+// running that reset works. It is deliberately read-only and fail-closed: an
+// active attempt, a missing objective, a non-terminal last attempt, or a
+// candidate capture that fails all answer false, and the caller then names the
+// begin the ledger already accepts instead of a command refused one layer in.
+func (store RuntimeStore) runtimeObjectiveResetAdmissible(ctx context.Context, status RuntimeStatus) bool {
+	if status.ActiveAttempt != nil || status.Objective == nil || !runtimeResetStructurallyPermitted(status) {
+		return false
+	}
+	if status.DecisionRequired || status.Complete {
+		return true
+	}
+	last := status.Attempts[len(status.Attempts)-1]
+	candidate, err := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
+	if err != nil {
+		return false
+	}
+	return candidate.Identity != last.FinishCandidateIdentity || candidate.CandidateTree != last.FinishCandidateTree
 }
 
 // Reset closes a terminal objective scope without deleting its immutable

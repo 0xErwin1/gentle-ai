@@ -53,6 +53,33 @@ func RecoveryTargetUnchanged(err error) bool {
 	return errors.Is(err, errCompactRecoveryTargetUnchanged)
 }
 
+// errCompactApprovedRecoveryScopeUnchanged identifies the unchanged-scope
+// approved recovery refusal, and errCompactRecoveryPredecessorNotInvalidated
+// the invalidated-disposition refusal over a predecessor that is not
+// invalidated. Both sentences stay exactly as they are: like
+// errCompactRecoveryTargetUnchanged above, they are authority-layer statements
+// of fact, and an authority artifact must not carry operator instructions. The
+// predicates below let the command surface recognize each refusal and add the
+// continuation there, where the selectors the operator just supplied and the
+// predecessor's real state are still in hand.
+var errCompactApprovedRecoveryScopeUnchanged = errors.New("approved predecessor scope has not changed")
+
+var errCompactRecoveryPredecessorNotInvalidated = errors.New("recovery requires an invalidated predecessor")
+
+// ApprovedRecoveryScopeUnchanged reports whether err is the refusal of a
+// scope-changed recovery whose approved predecessor already approved exactly
+// the candidate the successor would freeze.
+func ApprovedRecoveryScopeUnchanged(err error) bool {
+	return errors.Is(err, errCompactApprovedRecoveryScopeUnchanged)
+}
+
+// RecoveryPredecessorNotInvalidated reports whether err is the refusal of an
+// `--disposition invalidated` recovery whose predecessor is in some other
+// state.
+func RecoveryPredecessorNotInvalidated(err error) bool {
+	return errors.Is(err, errCompactRecoveryPredecessorNotInvalidated)
+}
+
 // errCompactRecoveryAuthorizationInexact identifies the escalated-recovery
 // authorization-binding anomaly so reconcile-authority can gate quarantine of
 // historical pre-contract free-form authorizations to exactly this class.
@@ -481,7 +508,7 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 				return errors.New("approved recovery target-kind transition is not a complete release scope expansion")
 			}
 			if !releaseScope && !compactRecoveryScopeChanged(previous, next) {
-				return errors.New("approved predecessor scope has not changed")
+				return errCompactApprovedRecoveryScopeUnchanged
 			}
 			if forgedSchemaAuthorization() {
 				return compactRecoveryAuthorizationError(next)
@@ -502,7 +529,7 @@ func validateCompactRecoveryEdge(predecessor CompactRecord, successor CompactSta
 		}
 	case RecoveryInvalidated:
 		if predecessor.State.State != StateInvalidated {
-			return errors.New("recovery requires an invalidated predecessor")
+			return errCompactRecoveryPredecessorNotInvalidated
 		}
 		if forgedSchemaAuthorization() {
 			return compactRecoveryAuthorizationError(successor.InitialSnapshot)
