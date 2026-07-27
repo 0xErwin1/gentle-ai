@@ -442,3 +442,35 @@ func TestCaptureResultDetectionExcludesPreflight(t *testing.T) {
 		t.Fatal("evidence capture is not a reviewer run")
 	}
 }
+
+// A declared dead end that the product has since outgrown must be reported,
+// not silently outranked. `dead_end` is the most expensive claim the corpus
+// allows, so a stale one left unsaid keeps advertising a closed gap as open.
+func TestStaleDeadEndDeclarationIsReportedNotDropped(t *testing.T) {
+	observation := Observation{
+		DeclaredDeadEnd: true,
+		ExitCode:        1,
+		Stderr:          "review abandon refused: capture the diagnosis with `gentle-ai review inspect-authority --cwd \"/repo\"` and escalate that report",
+	}
+	class := Classify(observation)
+	if class != BlockInBand {
+		t.Fatalf("a refusal naming a runnable command must classify in_band, got %q", class)
+	}
+	outcome := deadEndOutcome(observation, class)
+	if outcome == nil {
+		t.Fatal("a declaration the classifier refused must still be recorded")
+	}
+	if outcome.Applied {
+		t.Fatal("the declaration must not be reported as applied")
+	}
+	if !strings.Contains(outcome.Reason, "stale") {
+		t.Fatalf("the reason must say the declaration is stale, got %q", outcome.Reason)
+	}
+}
+
+// The ordinary case: no declaration means no accounting entry at all.
+func TestUndeclaredStepsCarryNoDeadEndOutcome(t *testing.T) {
+	if outcome := deadEndOutcome(Observation{ExitCode: 1}, BlockOutOfBand); outcome != nil {
+		t.Fatalf("undeclared step produced %#v", outcome)
+	}
+}

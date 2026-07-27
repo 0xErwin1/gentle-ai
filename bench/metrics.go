@@ -107,13 +107,17 @@ type CommandRecord struct {
 	// ByDesign is present whenever the corpus declared a by-design exemption
 	// here, whether or not it applied. A declaration the classifier refused is
 	// reported, not dropped.
-	ByDesign    *ByDesignOutcome `json:"by_design,omitempty"`
-	Unsupported bool             `json:"unsupported,omitempty"`
-	ModelRun    bool             `json:"model_run,omitempty"`
-	ManualToken bool             `json:"manual_token,omitempty"`
-	Prompts     int              `json:"prompts,omitempty"`
-	GitCalls    *int             `json:"git_calls,omitempty"`
-	Message     string           `json:"message,omitempty"`
+	ByDesign *ByDesignOutcome `json:"by_design,omitempty"`
+	// DeadEnd is present whenever the corpus declared a dead end here, whether
+	// or not it applied. Same rule as ByDesign: a declaration the classifier
+	// refused is reported, not dropped.
+	DeadEnd     *DeadEndOutcome `json:"dead_end,omitempty"`
+	Unsupported bool            `json:"unsupported,omitempty"`
+	ModelRun    bool            `json:"model_run,omitempty"`
+	ManualToken bool            `json:"manual_token,omitempty"`
+	Prompts     int             `json:"prompts,omitempty"`
+	GitCalls    *int            `json:"git_calls,omitempty"`
+	Message     string          `json:"message,omitempty"`
 }
 
 // Journey statuses.
@@ -238,12 +242,17 @@ func (a *accumulator) observe(step string, o Observation, gitCalls *int, modelRu
 			outcome.Reason = "this build lacks that CLI surface, so the step recorded `unsupported` rather than a block"
 			record.ByDesign = outcome
 		}
+		if outcome := deadEndOutcome(o, NotABlock); outcome != nil {
+			outcome.Reason = "this build lacks that CLI surface, so the step recorded `unsupported` rather than a block"
+			record.DeadEnd = outcome
+		}
 		return record
 	}
 
 	class := Classify(o)
 	record.Block = class
 	record.ByDesign = byDesignOutcome(o, class)
+	record.DeadEnd = deadEndOutcome(o, class)
 	if class != NotABlock {
 		record.Message = blockMessage(o)
 		a.blocks.add(class)

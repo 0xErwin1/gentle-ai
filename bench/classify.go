@@ -145,6 +145,36 @@ type ByDesignOutcome struct {
 	Reason     string `json:"reason,omitempty"`
 }
 
+// DeadEndOutcome is the same accounting for the other author declaration.
+// `dead_end` is the most expensive claim the corpus allows — it says no
+// continuation exists at all — so a declaration the product has since outgrown
+// must be visible rather than quietly outranked. Silently ignoring it lets a
+// closed gap keep advertising itself as open.
+type DeadEndOutcome struct {
+	Applied bool   `json:"applied"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// deadEndOutcome explains what became of a declared dead end. It returns nil
+// when the corpus declared nothing, which is the ordinary case.
+func deadEndOutcome(o Observation, class string) *DeadEndOutcome {
+	if !o.DeclaredDeadEnd {
+		return nil
+	}
+	switch {
+	case class == BlockDeadEnd:
+		return &DeadEndOutcome{Applied: true}
+	case class == NotABlock:
+		return &DeadEndOutcome{Reason: "the invocation did not block, so there was no dead end to declare"}
+	case class == BlockInBand:
+		return &DeadEndOutcome{Reason: "the product named a runnable continuation, so the declaration is stale and should be removed"}
+	case class == BlockSelfRecovered:
+		return &DeadEndOutcome{Reason: "the flow continued with no extra command"}
+	default:
+		return &DeadEndOutcome{Reason: "the block was classified " + class}
+	}
+}
+
 // byDesignOutcome explains, for one already-classified observation, what
 // became of its by-design declaration. It returns nil when the corpus
 // declared nothing, which is the ordinary case.
