@@ -113,6 +113,83 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 	}
 }
 
+// admittedCandidateCausalArtifactFixture builds a request whose single
+// finding is severe and candidate-causal, so AdmitArtifact populates
+// wantCandidateCausalIDs and the request.CandidateCausalFindingIDs
+// comparison in AdmitArtifact actually exercises the 1699 canonicalization
+// seam instead of comparing two empty slices.
+func admittedCandidateCausalArtifactFixture(t *testing.T) ArtifactAdmissionRequest {
+	t.Helper()
+	_, _, request := admittedArtifactFixture(t)
+	request.Result.Findings[0].Severity = "BLOCKER"
+	request.Result.Findings[0].EvidenceClass = EvidenceDeterministic
+	request.Result.Findings[0].CausalDisposition = CausalIntroduced
+	return request
+}
+
+// TestArtifactAdmissionCandidateCausalCanonicalization is the RED-first proof
+// for 1699: the predicate used to compare canonicalized verifiedIDs against
+// the raw submitted CandidateCausalFindingIDs, so a semantically identical but
+// differently formatted submission was misclassified out_of_scope.
+func TestArtifactAdmissionCandidateCausalCanonicalization(t *testing.T) {
+	t.Run("non-canonical submitted order still admits", func(t *testing.T) {
+		request := admittedCandidateCausalArtifactFixture(t)
+		request.CandidateCausalFindingIDs = []string{" R3-001 "}
+		_, admission, err := AdmitArtifact(request)
+		if err != nil || admission.Decision != ArtifactAdmissionCompleted {
+			t.Fatalf("AdmitArtifact() = %q, %v; want completed", admission.Decision, err)
+		}
+		if len(admission.CandidateCausalFindingIDs) != 1 || admission.CandidateCausalFindingIDs[0] != "R3-001" {
+			t.Fatalf("admission.CandidateCausalFindingIDs = %v, want canonical [R3-001]", admission.CandidateCausalFindingIDs)
+		}
+	})
+	t.Run("canonicalization error becomes incomplete and names the offending id", func(t *testing.T) {
+		request := admittedCandidateCausalArtifactFixture(t)
+		request.CandidateCausalFindingIDs = []string{"R3-001", "R3-001"}
+		_, admission, err := AdmitArtifact(request)
+		if err == nil || admission.Decision != ArtifactAdmissionIncomplete {
+			t.Fatalf("AdmitArtifact() = %q, %v; want incomplete", admission.Decision, err)
+		}
+		if !strings.Contains(admission.Diagnostic, "R3-001") {
+			t.Fatalf("admission.Diagnostic = %q, want the offending id named", admission.Diagnostic)
+		}
+	})
+	t.Run("real set mismatch stays out of scope byte-identical", func(t *testing.T) {
+		request := admittedCandidateCausalArtifactFixture(t)
+		request.CandidateCausalFindingIDs = []string{"R3-999"}
+		_, admission, err := AdmitArtifact(request)
+		wantMessage := "candidate-causal findings are not proven by repository-derived changed-line evidence"
+		if err == nil || admission.Decision != ArtifactAdmissionOutOfScope || admission.Diagnostic != wantMessage {
+			t.Fatalf("AdmitArtifact() = %q, %q, %v; want out-of-scope %q", admission.Decision, admission.Diagnostic, err, wantMessage)
+		}
+	})
+}
+
+// TestAdmitArtifactOmittedSubjectDiagnosticNamesContinuation pins the
+// discoverability contract for the community-reported dead end (PR #1801): a
+// rejected admission never consumes the lens slot, so the incomplete
+// diagnostic must tell the operator that the lens can be re-run and captured
+// again with the required top-level subject_hash and inspection envelope. The
+// machine-readable decision stays "incomplete"; only the prose is extended.
+func TestAdmitArtifactOmittedSubjectDiagnosticNamesContinuation(t *testing.T) {
+	_, _, request := admittedArtifactFixture(t)
+	request.EchoedSubjectHash = ""
+	_, admission, err := AdmitArtifact(request)
+	if err == nil || admission.Decision != ArtifactAdmissionIncomplete {
+		t.Fatalf("AdmitArtifact() decision = %q, error = %v; want incomplete", admission.Decision, err)
+	}
+	for _, want := range []string{
+		"omitted the provider-owned artifact subject",
+		"subject_hash",
+		"inspection",
+		"re-run",
+	} {
+		if !strings.Contains(admission.Diagnostic, want) {
+			t.Fatalf("incomplete diagnostic %q does not name %q", admission.Diagnostic, want)
+		}
+	}
+}
+
 func TestReferenceOutsideScopeRecognizesOnlyStructuredRepositoryPaths(t *testing.T) {
 	allowed := map[string]struct{}{
 		"docs/naïve guide.md": {},

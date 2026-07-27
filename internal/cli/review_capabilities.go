@@ -13,7 +13,7 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 const ReviewIntegrationContractV1 = "gentle-ai.review-integration/v1"
@@ -33,6 +33,14 @@ const (
 	reviewReviewerSchemaID  = "https://gentle-ai.dev/schema/review/reviewer/v1"
 	reviewValidatorSchemaID = "https://gentle-ai.dev/schema/review/validator/v1"
 )
+
+// reviewNextTransitionRefreshCommand is the single wording source for the
+// exact command that refreshes the canonical native next transition. The
+// capabilities bootstrap advertisement below and the opaque
+// repository-context capture-binding mismatch refusal in review_artifact.go
+// both name this same runnable command instead of only describing the
+// concept, so they cannot drift from each other.
+const reviewNextTransitionRefreshCommand = "gentle-ai review status --cwd <repo> --contract " + ReviewIntegrationContractV1 + " --next-transition"
 
 var reviewCapabilitiesBuildInfoReader = debug.ReadBuildInfo
 var reviewCapabilitiesExecutablePath = os.Executable
@@ -244,7 +252,7 @@ func reviewCapabilitiesStaticSurface() ReviewCapabilitiesResult {
 			},
 		},
 		Bootstrap: &ReviewCapabilitiesBootstrap{
-			Command: "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition",
+			Command: reviewNextTransitionRefreshCommand,
 			TargetSelectorVariants: []ReviewCapabilitiesTargetSelector{
 				{TargetType: "staged", Arguments: []string{"--projection", "staged"}},
 				{TargetType: "base_ref", Arguments: []string{"--base-ref", "<ref>"}},

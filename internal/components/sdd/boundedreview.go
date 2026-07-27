@@ -4,11 +4,18 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 const boundedReviewContractAsset = "skills/_shared/review-ledger-contract.md"
+
+// reviewerBindingEnvironmentVariable is the prefix the orchestrator contract
+// tells the parent to assemble before running a lens. Naming it inside the lens
+// prompt is what lets a reviewer resolve subject_hash from its own instructions
+// instead of depending on whatever context the orchestrator happened to carry.
+const reviewerBindingEnvironmentVariable = "GENTLE_AI_REVIEW_BINDING"
 
 const nativeReviewerResultSchema = `{"findings":[{"location":"path:line","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
 const providerReviewerResultSchema = `{"subject_hash":"<artifact_subject.subject_hash>","inspection":{"status":"completed","paths":["<every changed_path_manifest.path in exact order>"]},"findings":[{"location":"path:line","severity":"CRITICAL","claim":"observable incorrect behavior","evidence_class":"deterministic","causal_disposition":"introduced","proof_refs":["concrete proof"]}],"evidence":["what was inspected"]}`
@@ -41,6 +48,7 @@ const (
 	authorityFirstProcedurePlaceholder = "{{GENTLE_AI_AUTHORITY_FIRST_TERMINAL_PROCEDURE}}"
 	authorityFirstProcedureStart       = "<!-- authority-first-terminal-procedure:start -->"
 	authorityFirstProcedureEnd         = "<!-- authority-first-terminal-procedure:end -->"
+	runtimeAgentIDPlaceholder          = "{{GENTLE_AI_RUNTIME_AGENT_ID}}"
 )
 
 func boundedReviewContract() string {
@@ -48,7 +56,8 @@ func boundedReviewContract() string {
 }
 
 func renderSDDOrchestratorAsset(agent model.AgentID) string {
-	return renderBoundedReviewAsset(sddOrchestratorAsset(agent))
+	content := renderBoundedReviewAsset(sddOrchestratorAsset(agent))
+	return strings.ReplaceAll(content, runtimeAgentIDPlaceholder, string(agent))
 }
 
 func renderBoundedReviewAsset(path string) string {
@@ -119,9 +128,18 @@ func reviewerPrompt(name string) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	// The envelope is read from the published schema that sits beside
+	// AdmitArtifact, never restated here: a lens agent that learns a shape this
+	// file invented is exactly how a reviewer result arrives with no
+	// subject_hash and no inspection (community report, PR #1801).
+	envelope := reviewtransaction.NewReviewerResultEnvelope()
 	prompt := fmt.Sprintf(`# %s Review
 
 You are a read-only reviewer. Inspect the immutable candidate diff once, return one result, and stop. Do not edit, delegate, or inspect unrelated scope.
+
+## Input
+
+The immutable candidate diff and the changed-path manifest arrive in this prompt. Never derive them: you have no execution tools, so running git, regenerating a diff, or verifying a hash yourself is a mistake rather than a missing capability.
 
 ## Scope
 
@@ -148,9 +166,16 @@ Return one JSON object and no prose. Use exactly this native result shape:
 
 %s
 
-Echo the bound subject hash. Complete inspection only after reading every manifest path, in exact order. The only allowed top-level fields are subject_hash, inspection, findings, and evidence; finding fields are location, severity, claim, evidence_class, causal_disposition, and proof_refs. Never emit summary, skill_resolution, or any other unknown field. Keep orchestration metadata outside the native result JSON; evidence contains only genuine inspection evidence.
+subject_hash is not yours to compute: copy it verbatim from the %s object your task carries, field artifact_subject.subject_hash. Never invent, recompute, or omit it — a result that does not echo the binding is refused, not repaired. Without a binding, stop and say so.
 
-Return the same subject_hash and inspection with {"findings":[],"evidence":["what was inspected"]} when clean.`, role.title, role.focus, providerReviewerResultSchema)
+Inspection is complete only when status is %q and paths lists every changed_path_manifest path in exact order — the only status this shape defines. If you cannot read what you were handed, say so in your reply and stop rather than inventing another one.
+
+The required top-level fields are %s; a result missing any of them is refused. Finding fields are location, severity, claim, evidence_class, causal_disposition, and proof_refs. Never emit summary, skill_resolution, or any other unknown field. Keep orchestration metadata outside the native result JSON; evidence contains only genuine inspection evidence.
+
+When clean, return the same subject_hash and completed inspection with "findings":[] and one evidence entry.`,
+		role.title, role.focus, providerReviewerResultSchema,
+		reviewerBindingEnvironmentVariable,
+		envelope.CompletedInspectionStatus, strings.Join(envelope.RequiredTopLevelFields, ", "))
 	return prompt, true
 }
 
@@ -165,7 +190,7 @@ Return one JSON object and no prose. Use exactly this native result shape:
 
 %s
 
-The only allowed top-level fields are findings and evidence, and the only allowed finding fields are location, severity, claim, evidence_class, causal_disposition, and proof_refs. Never emit summary, skill_resolution, or any other unknown field. Keep orchestration metadata outside the native result JSON; evidence contains only genuine inspection evidence.
+This is a judgment-day judge result, not a `+"`gentle-ai review capture-result`"+` lens artifact. Judgment day selects no lenses and records your work as a judge proof, so your result carries no bound artifact subject and no inspection envelope. The only allowed top-level fields are findings and evidence, and the only allowed finding fields are location, severity, claim, evidence_class, causal_disposition, and proof_refs. Never emit summary, skill_resolution, or any other unknown field. Keep orchestration metadata outside the native result JSON; evidence contains only genuine inspection evidence.
 
 Return {"findings":[],"evidence":["what was inspected"]} when clean.`, nativeReviewerResultSchema)
 }

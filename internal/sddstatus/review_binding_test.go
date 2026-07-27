@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestBindApprovedReviewRejectsInvalidChangeBeforePublishing(t *testing.T) {
@@ -591,7 +591,7 @@ func TestBoundReviewGrantsCompactRemediationBudgetForFailedVerdictWithIncomplete
 	if status.Dependencies.Verify != DependencyBlocked || status.NextRecommended != "remediate" {
 		t.Fatalf("verify=%q next=%q, want blocked/remediate for failed verdict", status.Dependencies.Verify, status.NextRecommended)
 	}
-	if !status.RemediationState.Required || status.RemediationState.CorrectionBudget <= 0 || status.RemediationState.LineageID != "approved-thin" || status.RemediationState.FailedEvidenceRevision != shaID("a") {
+	if !status.RemediationState.Required || status.RemediationState.CorrectionBudgetRemaining <= 0 || status.RemediationState.LineageID != "approved-thin" || status.RemediationState.FailedEvidenceRevision != shaID("a") {
 		t.Fatalf("RemediationState = %#v, want transaction-bound nonzero compact budget", status.RemediationState)
 	}
 }

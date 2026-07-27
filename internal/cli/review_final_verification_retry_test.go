@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
@@ -188,8 +188,11 @@ func TestReviewRetryFinalVerificationNegotiatedDenialIsNoMutation(t *testing.T) 
 	}
 	var failure ReviewIntegrationFailure
 	decodeStrictReviewJSON(t, output.Bytes(), &failure)
+	// organic-dx Phase 3b task 3b.3: STATUS already re-derives retry
+	// eligibility for this lineage, so the denial now names review.status
+	// instead of a bare stop.
 	if failure.Operation != ReviewIntegrationOperationRetryFinalVerification || failure.Code != "final_verification_retry_denied" ||
-		failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe || failure.NextAction != "stop" {
+		failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe || failure.NextAction != "review.status" {
 		t.Fatalf("retry denial failure = %#v", failure)
 	}
 	if after := cliReviewAuthoritySnapshot(t, fixture.repo); !reflect.DeepEqual(after, before) {
@@ -458,7 +461,7 @@ func failedCorrectedFinalVerificationCLIFixture(t *testing.T) failedFinalVerific
 			CausalDisposition: reviewtransaction.CausalIntroduced,
 		}}, Evidence: []string{"inspected corrected candidate"},
 	})
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, &bytes.Buffer{}); err != nil {
+	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "2"}, &bytes.Buffer{}); err != nil {

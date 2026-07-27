@@ -17,7 +17,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestReviewCaptureResultStrictBindingReplayAndFinalize(t *testing.T) {
@@ -144,6 +144,42 @@ func TestReviewCaptureResultRejectsSemanticAdmissionBeforePublication(t *testing
 			}
 			assertArtifactRevision(t, store, record.Revision)
 		})
+	}
+}
+
+// TestReviewCaptureResultIDLessCandidateCausalFinding proves issue-1699 is not
+// actually fixed by the Group A canonicalization change: a severe
+// introduced/behavior-activated/worsened finding submitted with no "id" field
+// must still admit once verifiedCandidateCausalFindingIDs and AdmitArtifact's
+// canonical fallback-ID assignment agree on the same (canonicalized) finding
+// IDs. Before the ordering fix, review_artifact.go:309 called
+// verifiedCandidateCausalFindingIDs with the RAW, pre-canonicalization
+// nativeResult, so the omitted ID produced a verified-ID slice that could
+// never match the canonical fallback ID (`R#-001`) that AdmitArtifact assigns
+// internally.
+func TestReviewCaptureResultIDLessCandidateCausalFinding(t *testing.T) {
+	repo, started, _, record := newArtifactReview(t, false)
+	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
+	result.Findings = []facadeFinding{{
+		// ID intentionally omitted (empty): the reachable shape ftorga proved.
+		Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "the candidate introduces an unreviewed causal defect",
+		ProofRefs: []string{"tracked.txt:1 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+		CausalDisposition: reviewtransaction.CausalIntroduced,
+	}}
+	input := filepath.Join(t.TempDir(), "result.json")
+	writeReviewCLIJSON(t, input, result)
+	var captured bytes.Buffer
+	err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+	}, &captured)
+	if err != nil {
+		t.Fatalf("id-less candidate-causal finding capture-result failed: %v", err)
+	}
+	var artifact reviewResultArtifact
+	decodeStrictReviewJSON(t, captured.Bytes(), &artifact)
+	if artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted {
+		t.Fatalf("id-less candidate-causal admission = %q, want completed", artifact.AdmissionDecision)
 	}
 }
 

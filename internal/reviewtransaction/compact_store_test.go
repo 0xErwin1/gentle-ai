@@ -127,7 +127,11 @@ func TestCompactStoreReloadsLegacyV2ReceiptWithoutRewritingItsIdentity(t *testin
 	}
 }
 
-func TestCompactStartResumesPrePolicyLargeDocumentationAuthority(t *testing.T) {
+// TestCompactStartNeverNarrowsAPrePolicyLargeDocumentationAuthority pins the
+// evidence-driven tier for a large documentation candidate: it is structural
+// readback with zero reviewers, and an authority frozen under the old size rule
+// with the full 4R set is blocked rather than silently narrowed to it.
+func TestCompactStartNeverNarrowsAPrePolicyLargeDocumentationAuthority(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "docs/guide.md", strings.Repeat("line\n", 401))
 	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
@@ -140,10 +144,14 @@ func TestCompactStartResumesPrePolicyLargeDocumentationAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	lenses, err := SelectReviewLenses(assessment, "risk")
+	if err != nil || assessment.Level != RiskLow || len(lenses) != 0 {
+		t.Fatalf("large documentation assessment = %q with lenses %v, %v; want low with zero reviewers", assessment.Level, lenses, err)
+	}
 	requested, err := NewCompactState(Start{
 		LineageID: "pre-policy-large-doc", Mode: ModeOrdinaryBounded, Generation: 1,
 		Snapshot: snapshot, PolicyHash: hash("d"), RiskLevel: assessment.Level,
-		SelectedLenses: []string{assessment.DominantLens}, OriginalChangedLines: &assessment.ChangedLines,
+		SelectedLenses: lenses, OriginalChangedLines: &assessment.ChangedLines,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -170,7 +178,7 @@ func TestCompactStartResumesPrePolicyLargeDocumentationAuthority(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Action != CompactStartResumed || result.Record.State.RiskLevel != RiskHigh ||
+	if result.Action != CompactStartBlocked || result.Record.State.RiskLevel != RiskHigh ||
 		!equalStrings(result.Record.State.SelectedLenses, existing.SelectedLenses) {
 		t.Fatalf("pre-policy resume = action %q, risk %q, lenses %v", result.Action, result.Record.State.RiskLevel, result.Record.State.SelectedLenses)
 	}
@@ -2370,6 +2378,93 @@ func TestCompactDiagnosticTraceContainsMetadataOnly(t *testing.T) {
 	}
 	if strings.Contains(string(payload), "initial_snapshot") || strings.Contains(string(payload), "findings") || !strings.Contains(string(payload), `"operation":"review/start"`) {
 		t.Fatalf("diagnostic trace contains authority snapshot or lacks metadata: %s", payload)
+	}
+}
+
+// TestReplaceContextGuardedReportsTraceWriteFailureInsteadOfSwallowingIt
+// covers issue #1854: a caller supplying TracePath asked for observability,
+// so a failed trace write must be reported even though the mutation itself
+// has already committed and must not be rolled back or fail.
+func TestReplaceContextGuardedReportsTraceWriteFailureInsteadOfSwallowingIt(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state := newCompactTestState(t, repo, "compact-trace-replace-fail")
+	store, err := CompactAuthoritativeStore(context.Background(), repo, state.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// TracePath's parent directory is a regular file, so appendCompactTrace's
+	// os.MkdirAll must fail deterministically.
+	store.TracePath = filepath.Join(blocker, "trace.jsonl")
+
+	var gotOperation, gotPath string
+	var gotErr error
+	original := compactTraceWarn
+	t.Cleanup(func() { compactTraceWarn = original })
+	compactTraceWarn = func(operation, path string, err error) {
+		gotOperation, gotPath, gotErr = operation, path, err
+	}
+
+	revision, err := store.Replace("", "review/start", state)
+	if err != nil {
+		t.Fatalf("a lost review trace must not fail the mutation: %v", err)
+	}
+	if revision == "" {
+		t.Fatal("expected a committed revision despite the trace write failure")
+	}
+	if gotErr == nil {
+		t.Fatal("expected the trace write failure to be reported instead of swallowed")
+	}
+	if gotOperation != "review/start" {
+		t.Fatalf("wrong operation reported for the lost trace: %q", gotOperation)
+	}
+	if gotPath != store.TracePath {
+		t.Fatalf("wrong path reported for the lost trace: %q", gotPath)
+	}
+}
+
+// TestStartCompactAuthorityReportsTraceWriteFailureInsteadOfSwallowingIt
+// covers the same defect (issue #1854) at the StartCompactAuthority call
+// site, which appends its diagnostic trace directly rather than through
+// replaceContextGuarded.
+func TestStartCompactAuthorityReportsTraceWriteFailureInsteadOfSwallowingIt(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	state := newCompactTestState(t, repo, "compact-trace-start-fail")
+
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tracePath := filepath.Join(blocker, "trace.jsonl")
+
+	var gotOperation, gotPath string
+	var gotErr error
+	original := compactTraceWarn
+	t.Cleanup(func() { compactTraceWarn = original })
+	compactTraceWarn = func(operation, path string, err error) {
+		gotOperation, gotPath, gotErr = operation, path, err
+	}
+
+	result, err := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: state, TracePath: tracePath})
+	if err != nil {
+		t.Fatalf("a lost review trace must not fail compact start: %v", err)
+	}
+	if result.Action != CompactStartCreated {
+		t.Fatalf("expected the start to still commit despite the trace failure, got action %q", result.Action)
+	}
+	if gotErr == nil {
+		t.Fatal("expected the trace write failure to be reported instead of swallowed")
+	}
+	if gotOperation != "review/start" {
+		t.Fatalf("wrong operation reported for the lost trace: %q", gotOperation)
+	}
+	if gotPath != tracePath {
+		t.Fatalf("wrong path reported for the lost trace: %q", gotPath)
 	}
 }
 

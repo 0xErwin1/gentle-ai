@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/system"
-	"github.com/gentleman-programming/gentle-ai/internal/update"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 )
 
 func TestMain(m *testing.M) {
@@ -135,14 +135,14 @@ func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 	if gotName != "go" {
 		t.Fatalf("exec name = %q, want %q", gotName, "go")
 	}
-	wantArgs := []string{"install", "github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@main"}
+	wantArgs := []string{"install", "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main"}
 	if len(gotArgs) != len(wantArgs) || gotArgs[0] != wantArgs[0] || gotArgs[1] != wantArgs[1] {
 		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
 	}
 	for _, want := range []string{
-		"GONOSUMDB=github.com/gentleman-programming/gentle-ai",
-		"GOPRIVATE=github.com/gentleman-programming/gentle-ai",
-		"GONOPROXY=github.com/gentleman-programming/gentle-ai",
+		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v2",
+		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v2",
+		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v2",
 	} {
 		if !envContains(gotCmd.Env, want) {
 			t.Fatalf("go install env missing %q in %v", want, gotCmd.Env)
@@ -160,19 +160,19 @@ func envContains(env []string, want string) bool {
 }
 
 func TestGoProxyBypassEnvPreservesExistingPatterns(t *testing.T) {
-	module := "github.com/gentleman-programming/gentle-ai"
+	module := "github.com/gentleman-programming/gentle-ai/v2"
 	env := goProxyBypassEnv([]string{
 		"PATH=/usr/bin",
 		"GONOSUMDB=example.com/private",
 		"GOPRIVATE=github.com/acme/*",
-		"GONOPROXY=github.com/gentleman-programming/gentle-ai",
+		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v2",
 	}, module)
 
 	for _, want := range []string{
 		"PATH=/usr/bin",
-		"GONOSUMDB=github.com/gentleman-programming/gentle-ai,example.com/private",
-		"GOPRIVATE=github.com/gentleman-programming/gentle-ai,github.com/acme/*",
-		"GONOPROXY=github.com/gentleman-programming/gentle-ai",
+		"GONOSUMDB=github.com/gentleman-programming/gentle-ai/v2,example.com/private",
+		"GOPRIVATE=github.com/gentleman-programming/gentle-ai/v2,github.com/acme/*",
+		"GONOPROXY=github.com/gentleman-programming/gentle-ai/v2",
 	} {
 		if !envContains(env, want) {
 			t.Fatalf("env missing %q in %v", want, env)
@@ -270,8 +270,10 @@ func TestRunStrategy_GoInstallFailure(t *testing.T) {
 }
 
 // TestEffectiveMethodGentleAIOnWindowsUsesFailClosedBinaryPolicy verifies that
-// Windows never routes gentle-ai through a remote installer or an automatic
-// go-install path that may target a different binary location.
+// Windows never routes gentle-ai through a remote installer, and that when no
+// usable `go install` target is declared it falls back to the binary strategy —
+// which on Windows is an explicit refusal naming a runnable source-install
+// command, not a download.
 func TestEffectiveMethodGentleAIOnWindowsUsesFailClosedBinaryPolicy(t *testing.T) {
 	tests := []struct {
 		name string
@@ -285,10 +287,6 @@ func TestEffectiveMethodGentleAIOnWindowsUsesFailClosedBinaryPolicy(t *testing.T
 			name: "legacy script declaration is disabled",
 			tool: update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallScript},
 		},
-		{
-			name: "Go availability still requires an explicit source install",
-			tool: update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary, GoImportPath: "github.com/Gentleman-Programming/gentle-ai/cmd/gentle-ai"},
-		},
 	}
 
 	for _, tc := range tests {
@@ -300,6 +298,22 @@ func TestEffectiveMethodGentleAIOnWindowsUsesFailClosedBinaryPolicy(t *testing.T
 			}
 		})
 	}
+
+	// Renamed from "Go availability still requires an explicit source install",
+	// which encoded the previous policy: Windows refused to self-upgrade even
+	// with Go on PATH. That policy has been changed deliberately. No signed
+	// Windows binary is published, so there is no asset to download and verify
+	// with minisign; a pinned `go install <importPath>@vX.Y.Z` — still checked
+	// against the Go checksum database, since goInstallUpgrade does not touch
+	// cmd.Env — is the only automatic upgrade path Windows has.
+	t.Run("Go availability upgrades through a pinned go install", func(t *testing.T) {
+		tool := update.ToolInfo{Name: "gentle-ai", InstallMethod: update.InstallBinary, GoImportPath: "github.com/Gentleman-Programming/gentle-ai/v2/cmd/gentle-ai"}
+		profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", GoAvailable: true}
+		method := effectiveMethod(tool, profile)
+		if method != update.InstallGoInstall {
+			t.Errorf("effectiveMethod(%q) = %q, want %q", tool.Name, method, update.InstallGoInstall)
+		}
+	})
 }
 
 // --- TestEffectiveMethod_NonGentleAIToolsOnWindowsUseBinary ---

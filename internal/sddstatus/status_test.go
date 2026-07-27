@@ -133,6 +133,31 @@ func TestResolveSelectionStates(t *testing.T) {
 	}
 }
 
+func TestDispatcherMarkdownRendersSelectChangeInstructions(t *testing.T) {
+	root := t.TempDir()
+	mkdir(t, filepath.Join(root, "openspec", "changes", "first"))
+	mkdir(t, filepath.Join(root, "openspec", "changes", "second"))
+
+	status, err := Resolve(ResolveOptions{CWD: root})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.NextRecommended != "select-change" {
+		t.Fatalf("NextRecommended = %q, want select-change", status.NextRecommended)
+	}
+
+	// next_recommended == "select-change" is a routing state, not a Phase, so
+	// nextRecommendedPhase() does not recognize it. Without an explicit
+	// continuation, the blocked reason ("Change selection is ambiguous: ...")
+	// is the entire guidance and names no way out.
+	dispatcher := RenderDispatcherMarkdown(status)
+	for _, want := range []string{"### Next Selection Operation", "gentle-ai sdd-status --cwd", "gentle-ai sdd-continue --cwd", "<change-name>"} {
+		if !strings.Contains(dispatcher, want) {
+			t.Fatalf("dispatcher missing %q for select-change:\n%s", want, dispatcher)
+		}
+	}
+}
+
 func TestResolveBlockedStatusJSONUsesEmptyArraysForPathFields(t *testing.T) {
 	root := t.TempDir()
 	mkdir(t, filepath.Join(root, "openspec", "changes"))
