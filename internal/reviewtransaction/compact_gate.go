@@ -185,7 +185,12 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 		denialContext.PrePRBoundary = &PrePRBoundarySelection{Source: PrePRBoundaryExplicit, Selector: strings.TrimSpace(input.BaseRef)}
 	}
 	if receipt.TerminalState == TerminalEscalated {
-		return NativeGateEvaluation{Result: GateEscalated, Reason: compactEscalatedGateReason(record.State)}
+		// The denial context is already derived above, and an escalated denial
+		// needs it more than most: the only continuation out of a terminal
+		// escalation is a successor authority, and its two selectors are this
+		// lineage and this store revision. Dropping the context published an
+		// all-zero envelope and left the human surface with nothing to name.
+		return NativeGateEvaluation{Result: GateEscalated, Reason: compactEscalatedGateReason(record.State), Context: denialContext}
 	}
 	if (input.Gate == GatePrePush || input.Gate == GatePrePR) && record.State.InitialSnapshot.Kind == TargetCurrentChanges {
 		emptyTree, emptyTreeErr := (SnapshotBuilder{Repo: repo}).emptyTree(ctx)

@@ -1025,10 +1025,39 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 		Disposition: reviewtransaction.RecoveryDisposition(*disposition), Reason: *reason, Actor: *actor, MaintainerAuthorization: *authorization,
 	})
 	if err != nil {
+		if reviewtransaction.RecoveryTargetUnchanged(err) {
+			explicitCwd := ""
+			if reviewFlagWasProvided(flags, "cwd") {
+				explicitCwd = strings.TrimSpace(*cwd)
+			}
+			return reviewUnchangedRecoveryRefusal(err, explicitCwd, *predecessor, *expected, *successor, *disposition)
+		}
 		return err
 	}
 	return encodeReviewJSON(stdout, ReviewRecoverResult{Operation: "review/recover", LineageID: record.State.LineageID, State: record.State.State,
 		StoreRevision: record.Revision, Projection: facadeProjection(snapshot.Projection), TargetIdentity: snapshot.Identity, Recovery: *record.State.Recovery})
+}
+
+// reviewUnchangedRecoveryRefusal explains the unchanged-target escalated
+// recovery refusal and names what to run once it stops applying.
+//
+// The refusal itself is correct and stays exactly as strict: a successor whose
+// target is byte-identical to the escalated predecessor's would mint fresh
+// authority over the very content whose verification failed, which is the
+// forgery this authority model exists to prevent. What it never said is that
+// the operator has to change the candidate first -- and once they do, the exact
+// invocation they just ran becomes the one that works, because a refused
+// recovery leaves the predecessor record (and therefore its revision)
+// untouched. So the continuation is not a different command, it is this one,
+// printed back with the selectors already in hand and nothing left to guess.
+func reviewUnchangedRecoveryRefusal(cause error, cwd, predecessor, expected, successor, disposition string) error {
+	command := fmt.Sprintf("%s --predecessor-lineage %s --expected-predecessor-revision %s --successor-lineage %s --disposition %s",
+		reviewRunnableCommand("review.recover"), predecessor, expected, successor, disposition)
+	if cwd != "" {
+		command += " --cwd " + cwd
+	}
+	return fmt.Errorf("%w: the candidate is byte-identical to the escalated predecessor, so this successor would carry the exact content whose verification failed and there is nothing to re-review; change the candidate first (apply the fix that verification asked for, and stage it if you review the staged projection), then re-run: %s",
+		cause, command)
 }
 
 func RunReviewBindSDD(args []string, stdout io.Writer) error {
@@ -3339,7 +3368,7 @@ func emitFacadeGateEvaluationNegotiated(stdout io.Writer, evaluation reviewtrans
 		return err
 	}
 	if !result.Allowed {
-		return ReviewGateDeniedError{Result: result.Result, Context: result.Context, Cause: evaluation.Cause}
+		return ReviewGateDeniedError{Result: result.Result, Reason: result.Reason, Context: result.Context, Cause: evaluation.Cause}
 	}
 	return nil
 }

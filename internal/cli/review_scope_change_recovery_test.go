@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -202,9 +203,64 @@ func TestPrePushIdenticalContentDeliveryKeepsHonestFallback(t *testing.T) {
 	if scope != nil {
 		t.Fatalf("named a recovery for a delivery whose scope is unchanged: %#v", scope)
 	}
-	const want = "review lifecycle gate denied: scope-changed: requires explicit maintainer action"
+	// No recovery exists, so no command is named. What the operator gets
+	// instead is the exact reason the JSON envelope already carried, rather
+	// than a maintainer hand-off that tells them nothing.
+	const want = "review lifecycle gate denied: scope-changed: terminal review receipts do not exactly match the live gate target: reviewed delivery is not exactly one commit from its reviewed base"
 	if denial.Error() != want {
 		t.Fatalf("denial message = %q, want %q", denial.Error(), want)
+	}
+	assertNamesNoDottedOperation(t, denial.Error())
+}
+
+// TestPrePushAfterFullPublicationStatesTheDeliveryBaseReason is the j06 block.
+// Once the reviewed commit is already published there is no publication range
+// left for the receipt to bind to, so no `review` command clears the gate and
+// naming one would be a lie. The refusal is therefore correct.
+//
+// What was not correct is that the human surface answered "requires explicit
+// maintainer action" while the JSON envelope beside it already carried the
+// exact reason. This pins that the two now say the same thing.
+func TestPrePushAfterFullPublicationStatesTheDeliveryBaseReason(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
+	configureCLIReviewPublicationRemote(t, repo, branch)
+
+	writeScopeRecoveryFile(t, repo, "alpha.txt", "alpha\n")
+	runReviewCLIGit(t, repo, "add", "-N", "alpha.txt")
+	finalizeFacadeReviewForRepo(t, repo)
+	runReviewCLIGit(t, repo, "add", "alpha.txt")
+	runReviewCLIGit(t, repo, "commit", "-qm", "feat: alpha")
+	// Publish the reviewed delivery in full, exactly as the journey does.
+	runReviewCLIGit(t, repo, "push", "-q", "origin", "HEAD:refs/heads/"+branch)
+
+	var denied bytes.Buffer
+	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-push"}, &denied)
+	if err == nil {
+		t.Fatalf("pre-push allowed an already published delivery: %s", denied.String())
+	}
+	var gateErr ReviewGateDeniedError
+	if !errors.As(err, &gateErr) {
+		t.Fatalf("pre-push denial = %T %v, want ReviewGateDeniedError", err, err)
+	}
+	var published ReviewValidateResult
+	if decodeErr := json.Unmarshal(denied.Bytes(), &published); decodeErr != nil {
+		t.Fatalf("decode denied gate envelope: %v\n%s", decodeErr, denied.String())
+	}
+	if published.Context.Denial == nil || published.Context.Denial.Code != "delivery-base-ambiguous" {
+		t.Fatalf("published denial = %#v, want the delivery-base-ambiguous shape\n%s", published.Context.Denial, denied.String())
+	}
+	if published.Reason == "" {
+		t.Fatalf("published gate envelope carries no reason to surface: %s", denied.String())
+	}
+	assertNamesNoDottedOperation(t, gateErr.Error())
+	if !strings.Contains(gateErr.Error(), published.Reason) {
+		t.Fatalf("human denial = %q discards the reason %q the JSON envelope already published",
+			gateErr.Error(), published.Reason)
+	}
+	if strings.Contains(gateErr.Error(), "explicit maintainer action") {
+		t.Fatalf("human denial = %q defers to a maintainer who has no option this operator lacks", gateErr.Error())
 	}
 }
 

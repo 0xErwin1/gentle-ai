@@ -149,7 +149,12 @@ type ReviewBundleResult struct {
 }
 
 type ReviewGateDeniedError struct {
-	Result  reviewtransaction.GateResult
+	Result reviewtransaction.GateResult
+	// Reason is the exact reason the JSON gate-result envelope publishes for
+	// this denial. It is carried here so the human surface renders the same
+	// specific statement the machine surface already had, instead of throwing
+	// it away and substituting a placeholder.
+	Reason  string
 	Context reviewtransaction.GateContext
 	Cause   error
 }
@@ -193,14 +198,21 @@ func RunReviewStep(args []string, stdout io.Writer) error {
 // (reviewGateAction, and for scope-changed the frozen
 // GateScopeChangeDiagnostics.RecoveryOperation/RecoveryRequiredInputs) so the
 // wording can never drift from the routing knowledge the JSON envelope
-// carries. When no derivable continuation exists, it states the terminal
-// precondition ("requires explicit maintainer action") instead of inventing
-// a command.
+// carries. When no derivable continuation exists, it states the exact Reason
+// the same envelope publishes instead of inventing a command -- and only when
+// there is no reason either does it fall back to the terminal precondition.
+//
+// Nothing rendered here may be a dotted operation identifier. Those are wire
+// tokens for the negotiated contract; an operator who types one gets nothing,
+// so every command named here goes through reviewRunnableCommand.
 func (err ReviewGateDeniedError) Error() string {
 	message := fmt.Sprintf("review lifecycle gate denied: %s", err.Result)
+	if err.Result == reviewtransaction.GateEscalated {
+		return fmt.Sprintf("%s: %s", message, reviewEscalatedContinuation(err))
+	}
 	if err.Result == reviewtransaction.GateScopeChanged && err.Context.ScopeChange != nil && err.Context.ScopeChange.RecoveryOperation != "" {
 		scope := err.Context.ScopeChange
-		operation := scope.RecoveryOperation
+		operation := reviewRunnableCommand(scope.RecoveryOperation)
 		// Name the situation before the mechanism. "scope-changed" plus a
 		// recovery command is accurate and says nothing about what happened,
 		// which is that this candidate carries work no receipt covers. That is
@@ -240,17 +252,81 @@ func (err ReviewGateDeniedError) Error() string {
 	if continuation := reviewDiscoveryDenialContinuation(err.Context.Denial); continuation != "" {
 		return fmt.Sprintf("%s: %s", message, continuation)
 	}
-	switch reviewGateAction(err.Result) {
-	case "continue":
+	if reviewGateAction(err.Result) == "continue" {
 		return message
-	case "review.status":
-		return fmt.Sprintf("%s: run review.status", message)
-	default:
-		// "explicit-maintainer-action" is a routing token, not a runnable
-		// command; scope-changed without diagnostics and every invalidated
-		// denial land here, honestly, instead of fabricating a fix.
-		return fmt.Sprintf("%s: requires explicit maintainer action", message)
 	}
+	// No recovery is derivable here, so no command is named. What IS available
+	// is the exact reason the JSON gate-result envelope publishes beside this
+	// error, and throwing it away was the whole defect: an operator whose
+	// already-published delivery no longer binds to its receipt read
+	// "requires explicit maintainer action" while the envelope one line above
+	// said "reviewed delivery base commit is missing or ambiguous in
+	// publication range". Some of those reasons carry their own runnable
+	// continuation (the empty-base first publication, the plural-receipt
+	// --lineage selection); the ones that do not state a situation, which is
+	// still incomparably more than a maintainer hand-off.
+	if reason := strings.TrimSpace(err.Reason); reason != "" {
+		return fmt.Sprintf("%s: %s", message, reason)
+	}
+	// "explicit-maintainer-action" is a routing token, not a runnable command.
+	// A denial that carries no reason at all lands here, honestly, instead of
+	// fabricating a fix.
+	return fmt.Sprintf("%s: requires explicit maintainer action", message)
+}
+
+// reviewEscalatedSuccessorPlaceholder marks the one recovery input an operator
+// genuinely has to choose. Every other input is derived from the denial itself,
+// and naming a derived one would send them hunting for a value the command
+// already knows.
+const reviewEscalatedSuccessorPlaceholder = "<new-lineage-name>"
+
+// reviewEscalatedContinuation renders what an operator does about a terminally
+// escalated lineage.
+//
+// It deliberately does NOT name `review status`. Status re-derives escalated
+// recovery eligibility, which is genuine routing knowledge for an integrator
+// polling the negotiated contract -- reviewGateAction still publishes
+// "review.status" as the wire next_action for exactly that reason. But for a
+// human it resolves nothing: with the candidate unchanged (which is the only
+// shape that reaches this gate, since any change re-routes the gate to
+// scope-changed) status reports action "stop", so printing it named a dead end
+// twice over -- an identifier that is not a command, pointing at a read that
+// does not unblock.
+//
+// The one continuation that exists is the one the corpus proves: change the
+// candidate, then create a successor authority over the fix. Its actor, reason
+// and maintainer authorization are self-derived for this predecessor shape, so
+// the four selectors below are the complete input set.
+func reviewEscalatedContinuation(err ReviewGateDeniedError) string {
+	statement := strings.TrimSpace(err.Reason)
+	if statement == "" {
+		statement = "this authority is terminally escalated"
+	}
+	command := reviewRunnableCommand("review.recover")
+	lineage, revision := strings.TrimSpace(err.Context.LineageID), strings.TrimSpace(err.Context.StoreRevision)
+	if lineage == "" || revision == "" {
+		return fmt.Sprintf("%s; this lineage is terminal, so change the candidate and review the fix as a successor, reading the predecessor lineage and revision from %s: %s --predecessor-lineage <lineage-id> --expected-predecessor-revision <store-revision> --successor-lineage %s --disposition escalated",
+			statement, reviewRunnableCommand("review.status"), command, reviewEscalatedSuccessorPlaceholder)
+	}
+	return fmt.Sprintf("%s; this lineage is terminal, so change the candidate and review the fix as a successor: %s --predecessor-lineage %s --expected-predecessor-revision %s --successor-lineage %s --disposition escalated",
+		statement, command, lineage, revision, reviewEscalatedSuccessorPlaceholder)
+}
+
+// reviewRunnableCommand renders a dotted operation identifier ("review.recover")
+// as the command an operator can actually type.
+//
+// The dotted form is the wire token the negotiated review-integration contract
+// publishes, and it stays exactly as it is on that surface. It is not a shell
+// command though, so a human-facing refusal that prints it is naming a dead
+// end: this is the single boundary where the two representations are
+// translated, so the mapping cannot drift into per-message copies.
+func reviewRunnableCommand(operation string) string {
+	trimmed := strings.TrimSpace(operation)
+	verb, dotted := strings.CutPrefix(trimmed, "review.")
+	if !dotted {
+		return trimmed
+	}
+	return "gentle-ai review " + strings.ReplaceAll(verb, "_", "-")
 }
 
 func (err ReviewGateDeniedError) Unwrap() error { return err.Cause }
@@ -641,7 +717,7 @@ func runReviewValidate(ctx context.Context, args []string, stdout io.Writer) err
 			return err
 		}
 		if !result.Allowed {
-			return ReviewGateDeniedError{Result: result.Result, Context: result.Context}
+			return ReviewGateDeniedError{Result: result.Result, Reason: result.Reason, Context: result.Context}
 		}
 		return nil
 	}
@@ -704,7 +780,7 @@ func runReviewValidate(ctx context.Context, args []string, stdout io.Writer) err
 		return err
 	}
 	if !result.Allowed {
-		return ReviewGateDeniedError{Result: result.Result, Context: result.Context}
+		return ReviewGateDeniedError{Result: result.Result, Reason: result.Reason, Context: result.Context}
 	}
 	return nil
 }

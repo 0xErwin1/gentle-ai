@@ -41,6 +41,18 @@ var ErrLegacyReadOnly = errors.New("legacy v1 review lineage is read-only")
 // anomaly so reconcile-authority can gate quarantine to exactly this class.
 var errCompactRecoveryTargetUnchanged = errors.New("escalated recovery successor target has not changed")
 
+// RecoveryTargetUnchanged reports whether err is the unchanged-target escalated
+// recovery refusal.
+//
+// The sentence itself stays here, unchanged, because it is persisted verbatim
+// into reconcile records as InvalidRecoveryEdge.ValidationError -- an authority
+// artifact must not carry operator instructions. This predicate lets the command
+// surface recognize the refusal and add the continuation there, where the exact
+// selectors the operator just supplied are still in hand.
+func RecoveryTargetUnchanged(err error) bool {
+	return errors.Is(err, errCompactRecoveryTargetUnchanged)
+}
+
 // errCompactRecoveryAuthorizationInexact identifies the escalated-recovery
 // authorization-binding anomaly so reconcile-authority can gate quarantine of
 // historical pre-contract free-form authorizations to exactly this class.
