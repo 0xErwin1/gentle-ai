@@ -286,11 +286,15 @@ type reviewAuthorityEvaluation struct {
 	Result       reviewtransaction.GateResult
 	Reason       string
 	CompactState *reviewtransaction.CompactState
-	// Absent reports that the change supplied no review artifact and discovery
-	// found no terminal native receipt either: there is nothing to validate,
-	// only the implicit demand that a review should have happened. Every other
-	// non-allow result means an explicit review artifact was found and failed
-	// validation, which stays a blocker whatever the kill switch says.
+	// Absent reports that no review authority GOVERNS this change: the change
+	// supplied no review artifact, and discovery found either no terminal
+	// native receipt at all or only receipts that verifiably stopped covering
+	// the current repository state. That is the implicit demand the kill
+	// switch removes — issue #1877's disabled window delivers under ordinary
+	// repository policy and is recorded as unmanaged, never blocked on a
+	// review the switch refuses to run. An explicit change-bound artifact that
+	// failed validation keeps Absent false and stays a blocker whatever the
+	// kill switch says.
 	Absent bool
 }
 
@@ -365,25 +369,106 @@ func applyReviewGateEvaluation(status *Status, evaluation reviewAuthorityEvaluat
 	blockReviewGate(status, evaluation.Result, evaluation.Reason)
 }
 
+// reviewGateFreshReviewContinuation is the runnable exit every archive stop
+// over unreviewed content names (issue #1877): the fresh full review of the
+// current state. It stays LAST in each reason so the operator's read and the
+// mechanical continuation extraction see the same command.
+const reviewGateFreshReviewContinuation = "run the fresh full review of the current state with gentle-ai review start"
+
+// reviewGateEmptyReceiptReason refuses the one laundering shape a clean tree
+// permits: an approved receipt that froze no content cannot count as coverage
+// of delivered history, so the continuation it names carries the base-ref
+// selector whose commit value only the operator knows.
+const reviewGateEmptyReceiptReason = "the terminal review receipt froze an empty candidate and covers no delivered content; " +
+	reviewGateFreshReviewContinuation + " --base-ref <commit>"
+
+// reviewGateAmbiguousGovernanceReason is the one multi-receipt shape that
+// still blocks: several terminal receipts each exactly govern the identical
+// current state, so the archive cannot know which one to record. Binding one
+// to the change resolves it without opening any review.
+const reviewGateAmbiguousGovernanceReason = "multiple terminal native review receipts govern the current repository state; " +
+	"bind the governing one to the change with gentle-ai review bind-sdd"
+
 func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptContent, changeName string) reviewAuthorityEvaluation {
-	receiptPayload, ok := readReviewArtifact(receiptPath, receiptContent)
-	if !ok {
+	receiptPayload, explicit := readReviewArtifact(receiptPath, receiptContent)
+	payloads := [][]byte{receiptPayload}
+	if !explicit {
 		var err error
-		receiptPayload, err = discoverNativeReceipt(ctx, repo)
+		payloads, err = discoverNativeReceipts(ctx, repo)
 		if err != nil {
+			reason := err.Error()
+			absent := errors.Is(err, errTerminalReceiptMissing)
+			if absent {
+				reason += "; " + reviewGateFreshReviewContinuation
+			}
 			return reviewAuthorityEvaluation{
 				Result: reviewtransaction.GateInvalidated,
-				Reason: err.Error(),
-				Absent: errors.Is(err, errTerminalReceiptMissing),
+				Reason: reason,
+				Absent: absent,
 			}
 		}
 	}
+	var allows, blockers, stale []reviewAuthorityEvaluation
+	for _, payload := range payloads {
+		evaluation := evaluateReceiptPayload(ctx, repo, payload, changeName)
+		switch {
+		case evaluation.Result == reviewtransaction.GateAllow:
+			allows = append(allows, evaluation)
+		case evaluation.Result == reviewtransaction.GateScopeChanged:
+			stale = append(stale, evaluation)
+		default:
+			blockers = append(blockers, evaluation)
+		}
+	}
+	// Exactly one receipt governing the current repository state governs the
+	// archive; stale terminal receipts left behind by earlier deliveries are
+	// history, not blockers, so they never smother a live governing receipt.
+	if len(allows) == 1 {
+		return allows[0]
+	}
+	if len(allows) > 1 {
+		return reviewAuthorityEvaluation{
+			Result: reviewtransaction.GateInvalidated,
+			Reason: reviewGateAmbiguousGovernanceReason,
+			Absent: !explicit,
+		}
+	}
+	// Escalations and validation failures block regardless of provenance: an
+	// artifact that asked review-driven development to act is validated in
+	// full even while the switch is off.
+	if len(blockers) > 0 {
+		return blockers[0]
+	}
+	selected := stale[0]
+	// An empty-candidate receipt means the operator already ran the plain
+	// start on a clean tree; naming it again would loop, so the base-ref
+	// continuation it carries wins over any generic scope-changed reason,
+	// independent of discovery order.
+	for _, evaluation := range stale {
+		if evaluation.Reason == reviewGateEmptyReceiptReason {
+			selected = evaluation
+			break
+		}
+	}
+	// A receipt whose scope verifiably moved on governs nothing. Unless the
+	// change explicitly bound it, that is absent governance: while the switch
+	// is off the change closes unmanaged under ordinary repository policy, and
+	// once re-enabled the stop names the fresh full review that subsumes the
+	// unmanaged history (issue #1877 — no retroactive reconciliation).
+	selected.Absent = !explicit
+	return selected
+}
+
+func evaluateReceiptPayload(ctx context.Context, repo string, receiptPayload []byte, changeName string) reviewAuthorityEvaluation {
 	var evaluation reviewtransaction.NativeGateEvaluation
 	var compactState *reviewtransaction.CompactState
 	if reviewtransaction.CompactReceiptSchemaOf(receiptPayload) == reviewtransaction.CompactReceiptSchema {
 		receipt, err := reviewtransaction.ParseCompactReceipt(receiptPayload)
 		if err != nil {
 			return reviewAuthorityEvaluation{Result: reviewtransaction.GateInvalidated, Reason: fmt.Sprintf("compact review receipt is invalid or non-terminal: %v", err)}
+		}
+		if receipt.BaseTree == receipt.FinalCandidateTree {
+			return reviewAuthorityEvaluation{Result: reviewtransaction.GateScopeChanged, Reason: reviewGateEmptyReceiptReason}
 		}
 		if changeName != "" {
 			store, storeErr := reviewtransaction.CompactAuthoritativeStore(ctx, repo, receipt.LineageID)
@@ -411,6 +496,9 @@ func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptConte
 		if err != nil {
 			return reviewAuthorityEvaluation{Result: reviewtransaction.GateInvalidated, Reason: fmt.Sprintf("review receipt is invalid or non-terminal: %v", err)}
 		}
+		if receipt.BaseTree == receipt.FinalCandidateTree {
+			return reviewAuthorityEvaluation{Result: reviewtransaction.GateScopeChanged, Reason: reviewGateEmptyReceiptReason}
+		}
 		request, err := reviewtransaction.BuildNativeGateRequest(ctx, repo, reviewtransaction.NativeGateRequestInput{
 			Gate: reviewtransaction.GatePostApply, LineageID: receipt.LineageID,
 		})
@@ -423,7 +511,7 @@ func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptConte
 	case reviewtransaction.GateAllow:
 		return reviewAuthorityEvaluation{Result: evaluation.Result, Reason: "approved receipt exactly matches authoritative native state and the current repository", CompactState: compactState}
 	case reviewtransaction.GateScopeChanged:
-		return reviewAuthorityEvaluation{Result: evaluation.Result, Reason: "review scope changed; maintainer must create an explicit new lineage without reusing this budget"}
+		return reviewAuthorityEvaluation{Result: evaluation.Result, Reason: "review scope changed; maintainer must create an explicit new lineage without reusing this budget: " + reviewGateFreshReviewContinuation}
 	case reviewtransaction.GateEscalated:
 		return reviewAuthorityEvaluation{Result: evaluation.Result, Reason: "new external evidence or terminal transaction state escalated the receipt without reopening review"}
 	default:
@@ -433,7 +521,12 @@ func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptConte
 
 var evaluateNativeReviewGate = reviewtransaction.EvaluateNativeGate
 
-func discoverNativeReceipt(ctx context.Context, repo string) ([]byte, error) {
+// discoverNativeReceipts returns every valid terminal native receipt in
+// discovery order. Multiplicity is not an error here: normal reviewed use
+// leaves one terminal receipt per delivered candidate behind, so the caller
+// selects the receipt that governs the current repository state and treats the
+// rest as history.
+func discoverNativeReceipts(ctx context.Context, repo string) ([][]byte, error) {
 	var matches [][]byte
 	compactStores, err := reviewtransaction.CompactAuthorityLeaves(ctx, repo)
 	if err != nil {
@@ -482,10 +575,7 @@ func discoverNativeReceipt(ctx context.Context, repo string) ([]byte, error) {
 	if len(matches) == 0 {
 		return nil, errTerminalReceiptMissing
 	}
-	if len(matches) != 1 {
-		return nil, errors.New("multiple terminal native review receipts found; restore the change-local reviews/receipt.json mirror or remove stale terminal authority")
-	}
-	return matches[0], nil
+	return matches, nil
 }
 
 func readReviewArtifact(path, content string) ([]byte, bool) {

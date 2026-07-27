@@ -188,7 +188,16 @@ func TestNativeReceiptDiscoveryDefersChangedScopeToOneNativeGateEvaluation(t *te
 	}
 }
 
-func TestNativeReceiptDiscoveryRejectsMultipleTerminalLineagesAsAmbiguous(t *testing.T) {
+// TestNativeReceiptDiscoveryRejectsMultipleGoverningLineagesAsAmbiguous holds
+// the one multi-receipt shape that still blocks after issue #1877: several
+// terminal receipts each exactly governing the identical current state. The
+// archive cannot know which one to record, so it refuses instead of picking
+// arbitrarily — and it names the binding command that resolves the ambiguity
+// without opening any review. Discovery now evaluates every terminal receipt,
+// because telling a governing receipt from stale history is exactly what the
+// re-enable sequence needs; stale-noise selection is pinned by the
+// internal/cli re-enable sequence tests.
+func TestNativeReceiptDiscoveryRejectsMultipleGoverningLineagesAsAmbiguous(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedBoundedReadyChange(t, root)
 	writeApprovedReviewArtifacts(t, changeRoot)
@@ -208,8 +217,14 @@ func TestNativeReceiptDiscoveryRejectsMultipleTerminalLineagesAsAmbiguous(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 0 || status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateInvalidated || !strings.Contains(status.ReviewGate.Reason, "restore the change-local reviews/receipt.json mirror") {
-		t.Fatalf("native evaluations=%d gate=%#v, want ambiguous discovery before evaluation", count, status.ReviewGate)
+	if count != 2 || status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateInvalidated {
+		t.Fatalf("native evaluations=%d gate=%#v, want both receipts evaluated and the ambiguity refused", count, status.ReviewGate)
+	}
+	if !strings.Contains(status.ReviewGate.Reason, "gentle-ai review bind-sdd") {
+		t.Fatalf("ambiguous governance names no runnable resolution: %q", status.ReviewGate.Reason)
+	}
+	if status.Dependencies.Archive != DependencyBlocked {
+		t.Fatalf("archive = %q over ambiguous governing receipts, want blocked", status.Dependencies.Archive)
 	}
 }
 

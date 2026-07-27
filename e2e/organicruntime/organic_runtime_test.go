@@ -832,6 +832,149 @@ func TestOrganicKillSwitchReportsUnmanagedDeliveryOverWorkspaceReceipt(t *testin
 	harness.assertNoSDDArtifacts()
 }
 
+// TestOrganicKillSwitchReEnableLandsOnTheFreshFullReview drives issue #1877's
+// sequence end to end through the real binary: reviewed baseline, kill switch
+// off, work delivered under `disabled/unmanaged` (recorded as unmanaged, never
+// blocked), switch back on — and from there the journey runs ONLY what the
+// product's own messages name, until the archive stop clears through one fresh
+// full review of the current state. The maintainer's rule is that this fresh
+// review subsumes the unmanaged history: no retroactive reconciliation, no
+// blessing of past unmanaged deliveries, no durable per-delivery ledger — and
+// no zero-byte review may ever read as coverage.
+func TestOrganicKillSwitchReEnableLandsOnTheFreshFullReview(t *testing.T) {
+	t.Parallel()
+	harness := newOrganicHarness(t)
+	const change = "reenable-change"
+	harness.seedOrganicSDDChange(change)
+
+	// Baseline: reviews on, one unit reviewed and delivered normally.
+	harness.writeFiles(map[string]string{"docs/baseline.md": organicLines("baseline line", 6)})
+	harness.git("add", "--", "docs/baseline.md")
+	baselineStarted, _ := harness.startReview("organic-reenable-baseline")
+	if approved := harness.approveReview("organic-reenable-baseline", baselineStarted); approved.State != organicStateApproved {
+		t.Fatalf("the baseline reviewed flow did not approve its candidate: %#v", approved)
+	}
+	if gate := harness.gate("pre-commit"); gate.Result != organicGateAllow {
+		t.Fatalf("baseline delivery gate = %#v, want allow", gate)
+	}
+	harness.git("commit", "-q", "-m", "docs: baseline reviewed delivery")
+	baselineCommit := harness.git("rev-parse", "HEAD")
+
+	if mode := harness.disableReview(); mode.Status.Effective != organicModeOff {
+		t.Fatalf("kill switch produced no typed outcome: %#v", mode)
+	}
+
+	// Two units delivered under the disabled policy. The gate reports at exit
+	// 0 with the pinned disposition — that behavior is load-bearing.
+	for _, unit := range []string{"one", "two"} {
+		harness.writeFiles(map[string]string{"docs/unmanaged-" + unit + ".md": organicLines("unmanaged "+unit, 6)})
+		harness.git("add", "--", "docs/unmanaged-"+unit+".md")
+		gate := harness.gate("pre-commit")
+		if gate.Allowed || gate.Result == organicGateAllow || gate.Delivery != "disabled/unmanaged" {
+			t.Fatalf("disabled delivery gate for unit %s = %#v, want the unmanaged disposition", unit, gate)
+		}
+		harness.git("commit", "-q", "-m", "docs: unmanaged delivery "+unit)
+	}
+
+	// The disabled window records the change as unmanaged even though the
+	// stale baseline receipt is still in history: declining to manage is not a
+	// blocker demanding a review the switch refuses to run.
+	disabled := harness.sddStatus(change)
+	if disabled.Dependencies.Archive == "blocked" {
+		t.Fatalf("disabled archive over a stale receipt = blocked; reasons = %v", disabled.BlockedReasons)
+	}
+	if disabled.ReviewGate == nil || disabled.ReviewGate.Delivery != "disabled/unmanaged" {
+		t.Fatalf("disabled window did not record the unmanaged disposition: %#v", disabled.ReviewGate)
+	}
+	if disabled.ReviewGate.Result == organicGateAllow {
+		t.Fatalf("disabled window fabricated an approval: %#v", disabled.ReviewGate)
+	}
+
+	if mode := harness.enableReview(); mode.Status.Effective != "on" {
+		t.Fatalf("re-enable produced no typed outcome: %#v", mode)
+	}
+
+	// The archive stop is back and names the fresh full review runnably.
+	blocked := harness.sddStatus(change)
+	if blocked.Dependencies.Archive != "blocked" || blocked.ReviewGate == nil {
+		t.Fatalf("re-enabled archive over unmanaged history = %#v, want blocked", blocked)
+	}
+	if blocked.ReviewGate.Result == organicGateAllow {
+		t.Fatalf("re-enabling silently passed over unmanaged history: %#v", blocked.ReviewGate)
+	}
+	tokens := organicNamedContinuation(t, blocked.ReviewGate.Reason)
+
+	// Run exactly what it names. The tree is clean, so the start freezes an
+	// empty candidate and its hint names the --base-ref rerun.
+	emptyStart := harness.runNamedReviewStart(tokens)
+	if emptyStart.ChangedFiles != 0 {
+		t.Fatalf("clean-tree start froze %d files, fixture is wrong", emptyStart.ChangedFiles)
+	}
+	if !strings.Contains(emptyStart.Hint, "--base-ref") {
+		t.Fatalf("empty start hint does not name the committed-work rerun: %q", emptyStart.Hint)
+	}
+	if finalized := harness.finalize(emptyStart.LineageID); finalized.State != organicStateApproved {
+		t.Fatalf("empty-candidate finalize = %#v, want approved", finalized)
+	}
+
+	// The approved zero-byte receipt is not coverage: the stop stays blocked
+	// and keeps naming the fresh review with its base-ref selector.
+	stillBlocked := harness.sddStatus(change)
+	if stillBlocked.Dependencies.Archive != "blocked" || stillBlocked.ReviewGate == nil ||
+		stillBlocked.ReviewGate.Result == organicGateAllow {
+		t.Fatalf("a review of zero bytes was recorded as coverage: %#v", stillBlocked)
+	}
+	tokens = organicNamedContinuation(t, stillBlocked.ReviewGate.Reason)
+	if !strings.Contains(stillBlocked.ReviewGate.Reason, "--base-ref") {
+		t.Fatalf("empty-receipt stop does not name the base-ref rerun: %q", stillBlocked.ReviewGate.Reason)
+	}
+
+	// The operator supplies the one placeholder value — the boundary to
+	// re-govern from — and the fresh full review freezes the delivered range.
+	if tokens[len(tokens)-1] != "--base-ref" {
+		t.Fatalf("empty-receipt continuation = %v, want it to end at the operator's --base-ref value", tokens)
+	}
+	freshStart := harness.runNamedReviewStart(tokens, baselineCommit)
+	if freshStart.ChangedFiles == 0 {
+		t.Fatalf("the fresh full review froze no content: %#v", freshStart)
+	}
+	if approved := harness.approveReview(freshStart.LineageID, freshStart); approved.State != organicStateApproved {
+		t.Fatalf("the fresh full review did not approve: %#v", approved)
+	}
+
+	// Completing the named review clears the stop: the fresh receipt governs
+	// the current state and the stale terminal receipts remain mere history.
+	cleared := harness.sddStatus(change)
+	if cleared.ReviewGate == nil || cleared.ReviewGate.Result != organicGateAllow {
+		t.Fatalf("completing the named fresh review did not clear the stop: %#v", cleared)
+	}
+	if cleared.Dependencies.Archive == "blocked" || cleared.NextRecommended != "archive" {
+		t.Fatalf("archive routing after the fresh full review = %#v, want ready/archive", cleared)
+	}
+
+	// The next unit after re-enable is ordinary managed work again: the
+	// lifecycle gate denies, names the fresh review, and running what it names
+	// clears the gate.
+	harness.writeFiles(map[string]string{"docs/next.md": organicLines("next line", 6)})
+	harness.git("add", "--", "docs/next.md")
+	_, stderr, err := harness.gentleAllowFailure("review", "validate", "--cwd", harness.repo.worktree, "--gate", "pre-commit")
+	if err == nil {
+		t.Fatal("the gate allowed unreviewed new work after re-enable")
+	}
+	tokens = organicNamedContinuation(t, stderr)
+	nextStart := harness.runNamedReviewStart(tokens)
+	if nextStart.ChangedFiles == 0 {
+		t.Fatalf("the named review start froze no candidate: %#v", nextStart)
+	}
+	if approved := harness.approveReview(nextStart.LineageID, nextStart); approved.State != organicStateApproved {
+		t.Fatalf("the next unit's review did not approve: %#v", approved)
+	}
+	if gate := harness.gate("pre-commit"); gate.Result != organicGateAllow {
+		t.Fatalf("gate after the named review = %#v, want allow", gate)
+	}
+	harness.git("commit", "-q", "-m", "docs: managed unit after re-enable")
+}
+
 // TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect keeps the
 // expiry-stable terminal state. The authorization that permitted the review is
 // withdrawn afterwards, and the terminal receipt still validates, replays
@@ -1116,6 +1259,127 @@ func (harness *organicHarness) disableReview() organicModeResult {
 	return mode
 }
 
+// enableReview flips the clone-local kill switch back on: the other half of
+// the disable journeys, and the point where issue #1877's re-enable sequence
+// begins.
+func (harness *organicHarness) enableReview() organicModeResult {
+	harness.t.Helper()
+	payload := harness.gentle("review", "mode", "enable", "--cwd", harness.repo.worktree, "--scope", "clone", "--json")
+	var mode organicModeResult
+	if err := json.Unmarshal(payload, &mode); err != nil {
+		harness.t.Fatalf("decode review mode: %v\n%s", err, payload)
+	}
+	return mode
+}
+
+// organicSDDStatus is the slice of `sdd-status --json` the archive journeys
+// consume: the archive dependency, the review gate record, and the routing.
+type organicSDDStatus struct {
+	Dependencies struct {
+		Archive string `json:"archive"`
+	} `json:"dependencies"`
+	ReviewGate *struct {
+		Result   string `json:"result"`
+		Reason   string `json:"reason"`
+		Delivery string `json:"delivery"`
+	} `json:"reviewGate"`
+	NextRecommended string   `json:"nextRecommended"`
+	BlockedReasons  []string `json:"blockedReasons"`
+}
+
+func (harness *organicHarness) sddStatus(change string) organicSDDStatus {
+	harness.t.Helper()
+	payload := harness.gentle("sdd-status", change, "--cwd", harness.repo.worktree, "--json")
+	var status organicSDDStatus
+	if err := json.Unmarshal(payload, &status); err != nil {
+		harness.t.Fatalf("decode sdd-status: %v\n%s", err, payload)
+	}
+	return status
+}
+
+// organicNamedContinuation returns the argument tokens of the first
+// `gentle-ai ...` command a product message names, read exactly as an operator
+// would: to the end of the line, stopping at the first `<placeholder>` whose
+// value the operator supplies.
+func organicNamedContinuation(t *testing.T, message string) []string {
+	t.Helper()
+	const product = "gentle-ai "
+	index := strings.Index(message, product)
+	if index < 0 {
+		t.Fatalf("message names no runnable gentle-ai command: %q", message)
+	}
+	tail := message[index+len(product):]
+	if cut := strings.IndexAny(tail, "\n"); cut >= 0 {
+		tail = tail[:cut]
+	}
+	tokens := []string{}
+	for _, token := range strings.Fields(tail) {
+		token = strings.Trim(token, ",.;:'\"`)]")
+		if token == "" || strings.HasPrefix(token, "<") {
+			break
+		}
+		tokens = append(tokens, token)
+	}
+	if len(tokens) == 0 {
+		t.Fatalf("message names no runnable gentle-ai command: %q", message)
+	}
+	return tokens
+}
+
+// runNamedReviewStart dispatches a `gentle-ai review start ...` continuation
+// read out of a product message, with the working directory already at the
+// repository so the invocation runs exactly as printed. extra carries only an
+// operator-supplied placeholder value the message asked for.
+func (harness *organicHarness) runNamedReviewStart(tokens []string, extra ...string) organicStartResult {
+	harness.t.Helper()
+	if len(tokens) < 2 || tokens[0] != "review" || tokens[1] != "start" {
+		harness.t.Fatalf("named continuation is %v, want gentle-ai review start", tokens)
+	}
+	payload := harness.gentle(append(append([]string{}, tokens...), extra...)...)
+	var started organicStartResult
+	if err := json.Unmarshal(payload, &started); err != nil {
+		harness.t.Fatalf("decode named review start: %v\n%s", err, payload)
+	}
+	return started
+}
+
+// organicSDDVerifyReport is the fenced envelope a completed independent
+// verification writes. Its exact shape matters: a report the product cannot
+// parse routes as "verification is missing", which is a different journey.
+const organicSDDVerifyReport = "```yaml\n" +
+	"schema: gentle-ai.verify-result/v1\n" +
+	"evidence_revision: sha256:1111111111111111111111111111111111111111111111111111111111111111\n" +
+	"verdict: pass\n" +
+	"blockers: 0\n" +
+	"critical_findings: 0\n" +
+	"requirements: 1/1\n" +
+	"scenarios: 1/1\n" +
+	"test_command: go test ./internal/example\n" +
+	"test_exit_code: 0\n" +
+	"test_output_hash: sha256:2222222222222222222222222222222222222222222222222222222222222222\n" +
+	"build_command: go test ./cmd/gentle-ai\n" +
+	"build_exit_code: 0\n" +
+	"build_output_hash: sha256:3333333333333333333333333333333333333333333333333333333333333333\n" +
+	"```\n"
+
+// seedOrganicSDDChange commits a complete OpenSpec change at its archive
+// decision: planning done, every task checked, and a parseable passing
+// verification report — so `sdd-status` routes on the review gate alone.
+func (harness *organicHarness) seedOrganicSDDChange(change string) {
+	harness.t.Helper()
+	root := "openspec/changes/" + change + "/"
+	harness.writeFiles(map[string]string{
+		root + "proposal.md": "# " + change + "\n\n## Why\n\nthe journey drives a delivery cycle.\n",
+		root + "design.md":   "# design\n\n## Approach\n\nplain prose, no executable content.\n",
+		root + "tasks.md":    "# tasks\n\n- [x] 1.1 write the prose\n",
+		root + "specs/prose/spec.md": "### Requirement: prose exists\n" +
+			"#### Scenario: prose is present\n\n- **WHEN** the reader opens the docs\n- **THEN** the prose is there\n",
+		root + "verify-report.md": organicSDDVerifyReport,
+	})
+	harness.git("add", "--", "openspec")
+	harness.git("commit", "-q", "-m", "test: seed the SDD change")
+}
+
 // reviewModeGenerations lists the clone-local kill-switch compare-and-swap
 // records. Their count is how a rejected operation proves it wrote nothing.
 func (harness *organicHarness) reviewModeGenerations() []string {
@@ -1396,6 +1660,9 @@ type organicStartResult struct {
 	ChangedLines     int      `json:"changed_lines"`
 	CorrectionBudget int      `json:"correction_budget"`
 	TargetIdentity   string   `json:"target_identity"`
+	// Hint is the informational recovery pointer an empty-candidate start
+	// carries; the re-enable journey follows it verbatim.
+	Hint string `json:"hint"`
 }
 
 type organicFinalizeResult struct {
