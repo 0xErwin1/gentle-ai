@@ -138,6 +138,13 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 	if err != nil {
 		return &reviewRepairOperationError{message: "review repair could not resolve repository authority", cause: err}
 	}
+	// --preflight only assesses and reports; execution is what repairs durable
+	// authority, so only execution is refused while reviews are off.
+	if !*preflight {
+		if err := authorizeReviewAuthorityMutation(ctx, root); err != nil {
+			return err
+		}
+	}
 	assessment, err := reviewtransaction.AssessAuthorityRepairAtRepositoryRoot(ctx, root)
 	if err != nil {
 		return &reviewRepairOperationError{message: "review repair assessment failed safely", cause: err}

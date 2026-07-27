@@ -166,11 +166,33 @@ type RDDDisabledError struct {
 // is derived rather than generic so the operator does not have to work out
 // which of the two independent sources they need to change.
 func (err *RDDDisabledError) Error() string {
-	message := fmt.Sprintf("%v: %s is rejected because the %s mode source keeps it off", ErrRDDDisabled, err.Operation, err.Source)
-	if scope := reviewModeScopeForSource(err.Source); scope != "" {
-		return fmt.Sprintf("%s; turn it back on with gentle-ai review mode enable --scope=%s", message, scope)
+	message := fmt.Sprintf("%v: %s is rejected because the %s mode source keeps it off",
+		ErrRDDDisabled, rddOperationSubject(err.Operation), err.Source)
+	// A mutation refuses against authority that already exists, so the operator
+	// needs one fact a start never has to carry: their in-flight review survived
+	// the refusal. It is stated before the continuation because it is true even
+	// when no source can be named and no command may be offered.
+	if err.Operation == RDDOperationMutate {
+		message += "; the review is frozen, not discarded"
 	}
-	return message
+	scope := reviewModeScopeForSource(err.Source)
+	if scope == "" {
+		return message
+	}
+	if err.Operation == RDDOperationMutate {
+		return fmt.Sprintf("%s; turn reviews back on with gentle-ai review mode enable --scope=%s to continue it from where it stopped", message, scope)
+	}
+	return fmt.Sprintf("%s; turn it back on with gentle-ai review mode enable --scope=%s", message, scope)
+}
+
+// rddOperationSubject names the refused operation the way an operator would say
+// it. "mutate" is an internal classification, not something anybody typed; the
+// operator ran a verb that advances a review they already started.
+func rddOperationSubject(operation RDDOperation) string {
+	if operation == RDDOperationMutate {
+		return "advancing an existing review"
+	}
+	return string(operation)
 }
 
 // reviewModeScopeForSource maps the deciding source onto the --scope value of

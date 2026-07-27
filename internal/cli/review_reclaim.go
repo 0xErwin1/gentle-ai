@@ -33,7 +33,7 @@ func RunReviewReclaim(args []string, stdout io.Writer) error {
 	if strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*reason) == "" || strings.TrimSpace(*actor) == "" {
 		return errors.New("review reclaim requires --lineage, --reason, and --actor")
 	}
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(context.Background())
+	root, err := resolveReviewMutationRoot(context.Background(), *cwd)
 	if err != nil {
 		return fmt.Errorf("resolve review repository root: %w", err)
 	}

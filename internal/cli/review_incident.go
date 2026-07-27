@@ -223,6 +223,9 @@ func RunReviewPreserveResult(args []string, stdout io.Writer) error {
 		}
 		repo = resolved
 	}
+	if err := authorizeReviewAuthorityMutation(ctx, repo); err != nil {
+		return err
+	}
 	_, record, err := discoverCompactFacadeReview(ctx, repo, *lineage, false)
 	if err != nil {
 		if contextHandle != "" {

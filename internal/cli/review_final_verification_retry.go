@@ -97,7 +97,7 @@ func runReviewRetryFinalVerification(ctx context.Context, args []string, stdout 
 	if err != nil {
 		return reviewPreflightError(fmt.Errorf("parse final-verification incident: %w", err))
 	}
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
+	root, err := resolveReviewMutationRoot(ctx, *cwd)
 	if err != nil {
 		return fmt.Errorf("resolve review repository root: %w", err)
 	}

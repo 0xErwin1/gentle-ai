@@ -39,7 +39,7 @@ func RunReviewLegacyAliasRepair(args []string, stdout io.Writer) error {
 			return errors.New("review repair-legacy-alias requires --lineage, --expected-revision, --diagnostic, --disposition, --reason, --actor, and --maintainer-authorization")
 		}
 	}
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(context.Background())
+	root, err := resolveReviewMutationRoot(context.Background(), *cwd)
 	if err != nil {
 		return fmt.Errorf("resolve review repository root: %w", err)
 	}

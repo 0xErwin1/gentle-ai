@@ -54,6 +54,9 @@ func RunReviewReopenResults(args []string, stdout io.Writer) error {
 		Reason: *reason, Actor: *actor, MaintainerAuthorization: *authorization,
 	}
 	ctx := context.Background()
+	if _, err := resolveReviewMutationRoot(ctx, *cwd); err != nil {
+		return err
+	}
 	if *prepare {
 		plan, err := reviewtransaction.PrepareCompactResultReopen(ctx, *cwd, request)
 		if err != nil {

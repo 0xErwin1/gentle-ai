@@ -895,9 +895,9 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 		return errors.New("review recover requires --reason and --actor when --maintainer-authorization is supplied")
 	}
 	builder := reviewtransaction.SnapshotBuilder{Repo: *cwd}
-	root, err := builder.ResolveRepositoryRoot(context.Background())
+	root, err := resolveReviewMutationRoot(context.Background(), *cwd)
 	if err != nil {
-		return fmt.Errorf("resolve review repository root: %w", err)
+		return err
 	}
 	predecessorStore, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, *predecessor)
 	if err != nil {
@@ -1065,6 +1065,9 @@ func runReviewBindSDD(ctx context.Context, args []string, stdout io.Writer) erro
 	if *expected != "" && !validReviewCapabilitySHA256(*expected) {
 		return reviewPreflightError(errors.New("review bind-sdd expected-binding-revision must be empty or sha256"))
 	}
+	if _, err := resolveReviewMutationRoot(ctx, *cwd); err != nil {
+		return err
+	}
 	binding, err := sddstatus.BindApprovedReview(ctx, *cwd, *change, *lineage, *expected)
 	if err != nil {
 		return err
@@ -1099,9 +1102,9 @@ func RunReviewInvalidate(args []string, stdout io.Writer) error {
 	if strings.TrimSpace(*cwd) == "" || strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*expected) == "" {
 		return errors.New("review invalidate requires --cwd, --lineage, and --expected-revision")
 	}
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(context.Background())
+	root, err := resolveReviewMutationRoot(context.Background(), *cwd)
 	if err != nil {
-		return fmt.Errorf("resolve review repository root: %w", err)
+		return err
 	}
 	compact, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), root, *lineage)
 	if err != nil {
@@ -1703,6 +1706,16 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		}
 	}
 	terminalAtEntry := facadeTerminalState(state.State)
+	// The kill switch reaches FINALIZE here rather than at the router, because
+	// only now is it known which FINALIZE this is. A terminal lineage replays
+	// its frozen receipt exactly and writes nothing, and reading frozen
+	// authority is precisely what freezing it must keep possible. Anything else
+	// advances the review and is refused while reviews are off.
+	if !terminalAtEntry {
+		if err := authorizeReviewAuthorityMutation(ctx, root); err != nil {
+			return err
+		}
+	}
 	if terminalAtEntry && !facadeFinalizeReplayInputsEmpty(resultPaths, resultArtifacts, resultArtifactFiles, *capturedResults, *capturedEvidence, *validationPath, *refuterPath, *evidencePath, *correctionLines, *failed, *tracePath) {
 		return errors.New("terminal review finalize accepts no review inputs; exact replay requires only --lineage")
 	}

@@ -349,7 +349,15 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.RetrySafe = false
 		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
 		failure.RequiredInputs = []string{}
+		// `next_action` is a closed vocabulary and none of its members is
+		// "re-enable the kill switch", so it stays "stop": the operation really
+		// must not be retried as issued. The runnable way out is not thrown away
+		// for it -- the typed error already names the exact scoped
+		// `review mode enable` command, and the additive `cause` field is where
+		// that prose belongs, so a machine caller reading only this envelope is
+		// not left with a terminal stop and nothing to run.
 		failure.NextAction = "stop"
+		failure.Cause = reviewIntegrationFailureCause(rddDisabled)
 		return failure
 	}
 	var retryDenied *reviewtransaction.FinalVerificationRetryDeniedError

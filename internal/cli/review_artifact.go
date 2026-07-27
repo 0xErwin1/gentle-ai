@@ -53,7 +53,7 @@ func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 		return reviewPreflightError(errors.New("review capture-evidence requires exact --cwd, --lineage, --target, --expected-revision, and --input"))
 	}
 	ctx := context.Background()
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
+	root, err := resolveReviewMutationRoot(ctx, *cwd)
 	if err != nil {
 		return err
 	}
@@ -260,6 +260,14 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 		root, err = (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
 		if err != nil {
 			return fmt.Errorf("resolve review repository root: %w", err)
+		}
+	}
+	// --preflight verifies the capture binding without reading or persisting
+	// any result, so it stays reachable under a frozen switch. Everything else
+	// here publishes a reviewer result into the store.
+	if !*preflight {
+		if err := authorizeReviewAuthorityMutation(ctx, root); err != nil {
+			return err
 		}
 	}
 	store, record, err := discoverCompactFacadeReview(ctx, root, *lineage, false)
