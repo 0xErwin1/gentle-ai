@@ -566,6 +566,47 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		failure.NextAction = "retry_with_bounded_backoff"
 		return failure
 	}
+	// The other half of the same race, and the reason a concurrent FINALIZE can
+	// lose without ever touching the lock contention above. The expected compact
+	// revision is read before the authority lock is taken, so a writer that wins
+	// the lock can still find that another writer advanced the authority in the
+	// meantime. That window is intended -- the lock serializes the commit, the
+	// compare-and-set detects the lost update -- but its refusal is not an
+	// unknown outcome. CompactRevisionConflictError is produced only by the
+	// compare-and-set standing in front of the guarded write, so this operation
+	// provably published no successor, and the caller is owed that fact instead
+	// of a trip to STATUS to rediscover it.
+	//
+	// Narrow for the same reason as the branch above: every failure that
+	// followed a committed native transition was already claimed by the progress
+	// branches, and the untyped ErrConcurrentUpdate sentinel -- which non-write
+	// preconditions across the transaction package also report -- deliberately
+	// still falls through to `operation_outcome_unknown`.
+	var revisionConflict *reviewtransaction.CompactRevisionConflictError
+	if errors.As(runErr, &revisionConflict) {
+		failure.Phase = "pre_native"
+		failure.Code = "authority_revision_conflict"
+		failure.Message = reviewLockOperationLabel(operation) +
+			" lost the authority revision to a concurrent writer; this operation published nothing, so retry."
+		failure.MutationOutcome = ReviewMutationNotStarted
+		// Unlike advisory contention, this operation did load and evaluate the
+		// authority governing its target; what moved is that target's revision.
+		failure.AuthorityApplicability = "current_target"
+		failure.RetrySafe = true
+		// Nothing durable exists to replay, exactly as for advisory contention:
+		// the caller re-issues the same request, which re-reads the authority
+		// the winner advanced. Backoff, because an immediate re-drive from every
+		// loser is what amplifies the race.
+		failure.Replayability = reviewtransaction.ReplayabilityNotReplayable
+		failure.NextAction = "retry_with_bounded_backoff"
+		if failure.LineageID == "" && validReviewIntegrationLineage(revisionConflict.LineageID) {
+			failure.LineageID = revisionConflict.LineageID
+		}
+		// Both revisions are information the refusal holds; the unknown default
+		// used to be the only branch that preserved them.
+		failure.Cause = reviewIntegrationFailureCause(revisionConflict)
+		return failure
+	}
 	var preLock *reviewtransaction.StoreLockPreAcquisitionError
 	if errors.As(runErr, &preLock) {
 		failure.Phase = "pre_native"

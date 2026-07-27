@@ -254,8 +254,17 @@ func TestConcurrentFinalizeElectsExactlyOneWriter(t *testing.T) {
 			t.Fatalf("concurrent FINALIZE loser %d emitted no negotiated envelope; error: %v", index, failures[index])
 		}
 		failure := decodeReviewIntegrationFailure(t, outputs[index].Bytes())
+		// A loser can be refused at either of the two serialization points, and
+		// which one it hits is pure scheduling: a loser that reaches the lock
+		// while the winner holds it is refused by the lock, and a loser that
+		// arrives after the winner released it wins the lock and is refused by
+		// the compare-and-set on the revision it read beforehand. CI reached the
+		// second one where this machine reaches the first. Both provably
+		// published nothing, so both must carry the not-started retryable shape
+		// asserted below; see TestFinalizeRevisionConflictIsRetryableNotUnknown
+		// for the deterministic reproduction of the revision-conflict loser.
 		switch failure.Code {
-		case "authority_lock_contention", "authority_lock_timeout":
+		case "authority_lock_contention", "authority_lock_timeout", "authority_revision_conflict":
 		default:
 			t.Fatalf("concurrent FINALIZE loser %d = %#v (error: %v)", index, failure, failures[index])
 		}

@@ -1455,7 +1455,13 @@ func (store CompactStore) replaceContextGuarded(ctx context.Context, expectedRev
 		currentRevision = current.Revision
 	}
 	if currentRevision != expectedRevision {
-		return "", fmt.Errorf("%w: expected compact revision %q, current %q", ErrConcurrentUpdate, expectedRevision, currentRevision)
+		// Typed rather than anonymous: this is the compare-and-set that gates
+		// the write below, so losing it proves this call mutated nothing. A
+		// caller cannot recover that proof from an untyped ErrConcurrentUpdate,
+		// which several non-write preconditions in this package also report.
+		return "", &CompactRevisionConflictError{
+			LineageID: store.lineageID, Expected: expectedRevision, Current: currentRevision,
+		}
 	}
 	if current == nil {
 		if operation != "review/start" || next.State != StateReviewing {
