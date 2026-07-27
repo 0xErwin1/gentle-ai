@@ -363,6 +363,51 @@ func TestCompactStartAndStatusAdvertiseRecoverForPureGenesisContraction(t *testi
 	}
 }
 
+// TestCompactStartAndStatusAgreeOnApprovedScopeChangedCandidate pins the
+// convergence issue #1826's confirmation fixture exposed: an APPROVED
+// predecessor whose exact frozen delivery scope is re-staged with a changed
+// candidate tree. START already refuses a fresh lineage here and answers
+// recover, so STATUS must classify the same predecessor as the governing
+// recovery candidate — with and without explicit lineage selection — instead
+// of unrelated. Otherwise negotiated status emits a START the store refuses:
+// a closed loop with no executable recovery transition.
+func TestCompactStartAndStatusAgreeOnApprovedScopeChangedCandidate(t *testing.T) {
+	repo, predecessor, _, _ := approvedCurrentChangesScopeRecoveryFixture(t, "approved-scope-loop-predecessor")
+	writeSnapshotFile(t, repo, "tracked.txt", "approved candidate, revised\n")
+	requested := newCompactTestState(t, repo, "approved-scope-loop-probe")
+	if !equalStrings(requested.InitialSnapshot.Paths, predecessor.GenesisPaths) ||
+		requested.InitialSnapshot.CandidateTree == predecessor.CurrentSnapshot.CandidateTree {
+		t.Fatalf("fixture is not the same-scope changed-candidate shape: live=%v genesis=%v",
+			requested.InitialSnapshot.Paths, predecessor.GenesisPaths)
+	}
+
+	started, startErr := StartCompactAuthority(context.Background(), repo, CompactStartRequest{State: requested})
+	status, statusErr := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
+		Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}},
+	})
+	if startErr != nil || statusErr != nil {
+		t.Fatalf("start error = %v, status error = %v", startErr, statusErr)
+	}
+	if started.Action != CompactStartRecover || started.Record.State.LineageID != predecessor.LineageID {
+		t.Fatalf("start = %q against %q, want %q against the approved predecessor",
+			started.Action, started.Record.State.LineageID, CompactStartRecover)
+	}
+	if status.Applicability != TargetApplicabilityCurrent || status.LineageID != predecessor.LineageID ||
+		status.Action != TargetStatusActionRecover || status.ActionDisposition != RecoveryScopeChanged ||
+		status.Replayability != ReplayabilityManualActionRequired {
+		t.Fatalf("status routed %q/%q disposition %q lineage %q while START answers %q: the issue #1826 closed loop",
+			status.Applicability, status.Action, status.ActionDisposition, status.LineageID, started.Action)
+	}
+	selected, selectedErr := AssessTargetStatus(context.Background(), repo, TargetStatusRequest{
+		Target: Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}}, LineageID: predecessor.LineageID,
+	})
+	if selectedErr != nil || selected.Action != TargetStatusActionRecover ||
+		selected.ActionDisposition != RecoveryScopeChanged || selected.LineageID != predecessor.LineageID {
+		t.Fatalf("explicit selection erased the scope_changed relationship: action=%q disposition=%q error=%v",
+			selected.Action, selected.ActionDisposition, selectedErr)
+	}
+}
+
 func TestCorrectionRequiredScopeRecoveryContractionGuards(t *testing.T) {
 	t.Run("missing authorization", func(t *testing.T) {
 		repo, predecessor, _, record := correctionContractionRecoveryFixture(t, "contraction-noauth-predecessor")

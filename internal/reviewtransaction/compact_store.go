@@ -991,8 +991,7 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 			}
 			continue
 		}
-		if existing.State == StateApproved && compactStartDeliveryScopeMatches(existing, request.State) &&
-			existing.CurrentSnapshot.CandidateTree != request.State.InitialSnapshot.CandidateTree {
+		if compactApprovedScopeChangedRecovery(existing, request.State.InitialSnapshot) {
 			recoveryCandidates = append(recoveryCandidates, store)
 			continue
 		}
@@ -1194,6 +1193,22 @@ func compactStartClaimsTarget(ctx context.Context, repo string, existing, reques
 	}
 	candidate := requested.InitialSnapshot.CandidateTree
 	return candidate == existing.InitialSnapshot.CandidateTree || candidate == existing.CurrentSnapshot.CandidateTree
+}
+
+// compactApprovedScopeChangedRecovery reports the approved-predecessor shape
+// START routes to recovery instead of a fresh lineage: the live candidate
+// keeps the exact frozen delivery scope while its candidate tree changed.
+// Target STATUS classifies with this same predicate on purpose — when the two
+// surfaces used different rules, negotiated status emitted a START the store
+// then refused, the closed loop confirmed on issue #1826.
+func compactApprovedScopeChangedRecovery(existing CompactState, live Snapshot) bool {
+	if existing.State != StateApproved {
+		return false
+	}
+	requested := existing
+	requested.InitialSnapshot = live
+	return compactStartDeliveryScopeMatches(existing, requested) &&
+		existing.CurrentSnapshot.CandidateTree != live.CandidateTree
 }
 
 // compactStartDeliveryScopeMatches compares the immutable delivery boundary

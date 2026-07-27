@@ -147,6 +147,7 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 
 	candidates := []targetStatusCandidate{}
 	scopeChangedCandidates := []targetStatusCandidate{}
+	approvedScopeRecovery := []targetStatusCandidate{}
 	for lineage, candidate := range view.compact {
 		if request.LineageID != "" && request.LineageID != lineage {
 			continue
@@ -172,6 +173,23 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 				candidates = append(candidates, candidate)
 				continue
 			}
+		}
+		// The exact predicate START uses to refuse a fresh lineage against an
+		// approved predecessor: same frozen delivery scope, changed candidate
+		// tree. Classifying it as anything weaker made negotiated status emit
+		// a START the store then refused — the closed loop of issue #1826 —
+		// while the recovery-authorization collection stayed unreachable.
+		// Like the staged scope-expansion edge above, only a published
+		// canonical receipt may bind an approved predecessor for recovery; a
+		// receiptless approved authority keeps its publication-repair routing.
+		// Collection stays separate from governing candidates: the sole such
+		// predecessor mirrors START's single-recovery-candidate answer below,
+		// while plural matches keep the Phase 3e "nothing governs" listing.
+		if candidate.receiptPublished && candidate.receiptCanonical && compactApprovedScopeChangedRecovery(state, live) {
+			recovery := candidate
+			recovery.correctionRecovery = true
+			recovery.recoveryDisposition = RecoveryScopeChanged
+			approvedScopeRecovery = append(approvedScopeRecovery, recovery)
 		}
 		if state.State == StateEscalated {
 			requested := state
@@ -242,6 +260,13 @@ func assessTargetStatusSnapshot(ctx context.Context, repo string, request Target
 			}
 			candidates = append(candidates, candidate)
 		}
+	}
+	if len(candidates) == 0 && len(approvedScopeRecovery) == 1 {
+		// START answers recover for exactly one approved delivery-scope
+		// predecessor with no other claimant, so status must bind that same
+		// predecessor for recovery instead of routing to a START the store
+		// refuses (issue #1826). Plural matches stay stale listings below.
+		candidates = approvedScopeRecovery
 	}
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].lineage != candidates[j].lineage {

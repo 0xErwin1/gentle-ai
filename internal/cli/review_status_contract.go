@@ -460,11 +460,21 @@ func (result ReviewTargetStatusResult) Validate() error {
 		return errors.New("unsupported review status recovery disposition")
 	}
 	if result.Applicability == reviewtransaction.TargetApplicabilityCurrent && result.Authority != nil &&
-		result.Authority.State == reviewtransaction.StateApproved && result.Action == reviewtransaction.TargetStatusActionRecover &&
-		(result.Receipt.Status != ReviewReceiptPresent || result.ActionDisposition != reviewtransaction.RecoveryScopeChanged ||
-			result.Projection.Kind != reviewtransaction.TargetBaseWorkspaceOverlay ||
-			result.Projection.Projection != reviewtransaction.ProjectionStaged) {
-		return errors.New("approved recovery status requires a published staged scope-expansion target")
+		result.Authority.State == reviewtransaction.StateApproved && result.Action == reviewtransaction.TargetStatusActionRecover {
+		if result.Receipt.Status != ReviewReceiptPresent || result.ActionDisposition != reviewtransaction.RecoveryScopeChanged {
+			return errors.New("approved recovery status requires a published scope-changed target") // refusal:by-design world-action: this envelope is built and validated by the same product; the exit is a code fix, not a command
+		}
+		stagedScopeExpansion := result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay &&
+			result.Projection.Projection == reviewtransaction.ProjectionStaged
+		// The second approved recovery shape (issue #1826): the live target
+		// keeps the approved delivery scope kind while its candidate tree
+		// changed, so START refuses a fresh lineage and only recovery of this
+		// exact predecessor continues.
+		sameScopeChangedCandidate := result.Projection.Kind == reviewtransaction.TargetCurrentChanges ||
+			result.Projection.Kind == reviewtransaction.TargetBaseDiff
+		if !stagedScopeExpansion && !sameScopeChangedCandidate {
+			return errors.New("approved recovery status requires a published staged scope-expansion or scope-changed target") // refusal:by-design world-action: this envelope is built and validated by the same product; the exit is a code fix, not a command
+		}
 	}
 	return nil
 }
