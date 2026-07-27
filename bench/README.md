@@ -264,13 +264,18 @@ invents a metric is worse than one that admits a gap.
 
 5. **`dead_end` is author-declared.** See above.
 
-6. **A correct "report, do not block" result still counts as a block.** The
-   disabled-reviews gate returns `allowed: false` with exit 0 and
-   `action: "repository-policy"` — intended behaviour, and the testing guide
-   lists it under "what is not a bug". The classifier counts it as a denial
-   because the rule is mechanical and a denial is a denial. Journey
-   `j07-disabled-with-stale-receipts` exists to make that visible; read its
-   block message before reading its `out_of_band` count as a defect.
+6. **The disabled-reviews gate is exempted by its delivery disposition, and
+   that exemption is narrow on purpose.** It answers at exit 0 with
+   `allowed: false`, `action: "repository-policy"` and
+   `delivery: "disabled/unmanaged"`, and its reason says delivery follows
+   ordinary repository policy. Nothing is stopped. Counting it reported the one
+   guarantee the kill switch exists to provide as two blocks the product
+   inflicted, so `IsBlock` returns false on that disposition alone. The sibling
+   `unmanaged`, the switch ON with no receipt yet, stays a block, because there
+   the operator really is stopped. Both are pinned from recordings of a real
+   binary so they cannot be conflated again. This is the one place the
+   classifier reads a field other than exit code and denial shape, and widening
+   it would let the product talk its way out of a denial.
 
 7. **The corpus is honest, not exhaustive.** Thirty-six journeys that run end
    to end, weighted toward failure paths because that is where friction lives.
