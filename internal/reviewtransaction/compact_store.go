@@ -677,36 +677,118 @@ func CompactAuthorityLeaves(ctx context.Context, repo string) ([]CompactStore, e
 	return compactAuthorityLeaves(records, storeByLineage)
 }
 
-func compactAuthorityLeaves(records map[string]CompactRecord, storeByLineage map[string]CompactStore) ([]CompactStore, error) {
+// compactAuthorityGraphViolations enumerates EVERY graph defect in one record
+// set, keyed by the lineage that carries it, together with the child count of
+// each predecessor. It is the set form of the first-error check
+// compactAuthorityLeaves reports, and it exists so a repair operation can prove
+// what it removes instead of being handed a graph that is already healthy.
+//
+// Attribution matters: a defect is recorded against the successor whose edge
+// carries it, so removing that successor provably removes that defect and
+// nothing else. Forks are attributed to every sibling and counted only over
+// edges that already validate, exactly as the leaf selector does, so the two
+// surfaces can never disagree about which graph is valid.
+func compactAuthorityGraphViolations(records map[string]CompactRecord) (map[string]error, map[string]int) {
+	violations := make(map[string]error)
 	children := make(map[string]int)
+	siblings := make(map[string][]string)
 	for lineage, record := range records {
 		if record.State.Recovery == nil {
 			continue
 		}
 		predecessor, ok := records[record.State.Recovery.PredecessorLineageID]
 		if !ok {
-			return nil, fmt.Errorf("invalid compact authority graph: dangling predecessor for %q", lineage)
+			violations[lineage] = fmt.Errorf("dangling predecessor for %q", lineage)
+			continue
 		}
 		if predecessor.Revision != record.State.Recovery.PredecessorRevision {
-			return nil, fmt.Errorf("invalid compact authority graph: predecessor revision mismatch for %q", lineage)
+			violations[lineage] = fmt.Errorf("predecessor revision mismatch for %q", lineage)
+			continue
 		}
 		if err := validateCompactRecoveryEdge(predecessor, record.State); err != nil {
-			return nil, fmt.Errorf("invalid compact authority graph: %w", err)
+			violations[lineage] = err
+			continue
 		}
 		children[predecessor.State.LineageID]++
-		if children[predecessor.State.LineageID] > 1 {
-			return nil, fmt.Errorf("invalid compact authority graph: fork at %q", predecessor.State.LineageID)
-		}
+		siblings[predecessor.State.LineageID] = append(siblings[predecessor.State.LineageID], lineage)
 		seen := map[string]bool{lineage: true}
 		cursor := record
 		for cursor.State.Recovery != nil {
 			parent := cursor.State.Recovery.PredecessorLineageID
 			if seen[parent] {
-				return nil, errors.New("invalid compact authority graph: recovery cycle")
+				violations[lineage] = errors.New("recovery cycle")
+				break
 			}
 			seen[parent] = true
 			cursor = records[parent]
 		}
+	}
+	for predecessor, forked := range siblings {
+		if len(forked) < 2 {
+			continue
+		}
+		for _, lineage := range forked {
+			if _, carried := violations[lineage]; !carried {
+				violations[lineage] = fmt.Errorf("fork at %q", predecessor)
+			}
+		}
+	}
+	return violations, children
+}
+
+// compactAuthorityRemovalRegression reports whether removing entries from an
+// authority graph would make it WORSE, which is the invariant a repair
+// operation can actually satisfy. Requiring the whole remaining graph to
+// validate is a stronger post-condition that no repair can ever establish on a
+// graph carrying two independent defects: each removal refuses citing the
+// other and neither can go first, so the store stays unrecoverable forever.
+//
+// This is not a relaxation into permissiveness. Removal can only drop
+// constraints, so anything it introduces — a successor left dangling behind a
+// removed predecessor, a defect that changes class — is a real regression and
+// is still refused. What it stops refusing is a defect the operation did not
+// cause and does not touch.
+func compactAuthorityRemovalRegression(before, after map[string]CompactRecord) error {
+	prior, _ := compactAuthorityGraphViolations(before)
+	remaining, _ := compactAuthorityGraphViolations(after)
+	lineages := make([]string, 0, len(remaining))
+	for lineage := range remaining {
+		lineages = append(lineages, lineage)
+	}
+	sort.Strings(lineages)
+	for _, lineage := range lineages {
+		carried, existed := prior[lineage]
+		if existed && carried.Error() == remaining[lineage].Error() {
+			continue
+		}
+		return fmt.Errorf("it would introduce a new authority graph defect at %q: %w", lineage, remaining[lineage])
+	}
+	return nil
+}
+
+// compactRecordsWithout copies a record set without one lineage, so a caller
+// can hand compactAuthorityRemovalRegression both the graph it observed and
+// the graph its operation would leave behind without mutating either.
+func compactRecordsWithout(records map[string]CompactRecord, lineage string) map[string]CompactRecord {
+	remaining := make(map[string]CompactRecord, len(records))
+	for candidate, record := range records {
+		if candidate == lineage {
+			continue
+		}
+		remaining[candidate] = record
+	}
+	return remaining
+}
+
+func compactAuthorityLeaves(records map[string]CompactRecord, storeByLineage map[string]CompactStore) ([]CompactStore, error) {
+	violations, children := compactAuthorityGraphViolations(records)
+	if len(violations) > 0 {
+		lineages := make([]string, 0, len(violations))
+		for lineage := range violations {
+			lineages = append(lineages, lineage)
+		}
+		sort.Strings(lineages)
+		return nil, fmt.Errorf("invalid compact authority graph: %w", violations[lineages[0]])
 	}
 	leaves := []CompactStore{}
 	for lineage, store := range storeByLineage {

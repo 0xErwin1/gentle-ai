@@ -142,22 +142,19 @@ func InspectCompactPristineAbandonment(ctx context.Context, repo, lineage string
 		return CompactAbandonEligibility{}, err
 	}
 	records := make(map[string]CompactRecord, len(stores))
-	storeByLineage := make(map[string]CompactStore, len(stores))
 	for _, related := range stores {
 		relatedRecord, loadErr := related.Load()
 		if loadErr != nil {
 			return CompactAbandonEligibility{}, nil
 		}
-		records[relatedRecord.State.LineageID], storeByLineage[relatedRecord.State.LineageID] = relatedRecord, related
+		records[relatedRecord.State.LineageID] = relatedRecord
 	}
 	for _, related := range records {
 		if related.State.Recovery != nil && related.State.Recovery.PredecessorLineageID == lineage {
 			return CompactAbandonEligibility{}, nil
 		}
 	}
-	delete(records, lineage)
-	delete(storeByLineage, lineage)
-	if _, graphErr := compactAuthorityLeaves(records, storeByLineage); graphErr != nil {
+	if graphErr := compactAuthorityRemovalRegression(records, compactRecordsWithout(records, lineage)); graphErr != nil {
 		return CompactAbandonEligibility{}, nil
 	}
 	return CompactAbandonEligibility{
@@ -248,23 +245,20 @@ func AbandonPristineCompactStore(ctx context.Context, repo string, request Compa
 		return CompactReclaimRecord{}, err
 	}
 	records := make(map[string]CompactRecord, len(stores))
-	storeByLineage := make(map[string]CompactStore, len(stores))
 	for _, related := range stores {
 		relatedRecord, loadErr := related.Load()
 		if loadErr != nil {
 			return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: related compact authority %q does not load: %w", related.lineageID, loadErr)
 		}
-		records[relatedRecord.State.LineageID], storeByLineage[relatedRecord.State.LineageID] = relatedRecord, related
+		records[relatedRecord.State.LineageID] = relatedRecord
 	}
 	for lineage, related := range records {
 		if related.State.Recovery != nil && related.State.Recovery.PredecessorLineageID == request.LineageID {
 			return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: lineage %q is superseded by recovery successor %q; superseded history is never abandoned", request.LineageID, lineage)
 		}
 	}
-	delete(records, request.LineageID)
-	delete(storeByLineage, request.LineageID)
-	if _, err := compactAuthorityLeaves(records, storeByLineage); err != nil {
-		return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: remaining authority graph is invalid: %w", err)
+	if err := compactAuthorityRemovalRegression(records, compactRecordsWithout(records, request.LineageID)); err != nil {
+		return CompactReclaimRecord{}, fmt.Errorf("review abandon refused: %w", err)
 	}
 	sort.Strings(residue)
 	if request.AbandonedAt.IsZero() {

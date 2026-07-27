@@ -136,6 +136,39 @@ func classifyCompactRecoveryEdgeAnomalies(predecessor, successor CompactRecord) 
 	}
 }
 
+// compactNonReconcilableContinuation renders what an operator can actually run
+// after reconciliation declines an edge. Reconciliation is right to refuse a
+// forged binding — admitting it would let a corrupt attestation be rewritten
+// into a reconcilable class — but a refusal that names nothing leaves the
+// store unrecoverable, so the refusal resolves the one exit that does exist.
+//
+// `review abandon` is named only when the abandonment gate's own read-only
+// prediction accepts the successor, and it is rendered with the exact
+// persisted values and the exact authorization template that gate verifies, so
+// the command printed here is the command that runs. When the successor is not
+// abandonable the refusal says which rule blocks it and names the diagnostic
+// instead of inventing a continuation.
+func compactNonReconcilableContinuation(ctx context.Context, repo string, successor CompactRecord) string {
+	lineage := successor.State.LineageID
+	eligibility, err := InspectCompactPristineAbandonment(ctx, repo, lineage)
+	if err == nil && eligibility.Eligible {
+		return fmt.Sprintf(" The edge cannot be reconciled, but successor %q is pristine, so it can be quarantined whole:"+
+			" `gentle-ai review abandon --cwd %q --lineage %q --expected-revision %q --reason \"<why-it-is-abandoned>\" --actor \"<actor>\" --maintainer-authorization \"<maintainer-authorization>\"`;"+
+			" the abandonment moves the entry into the audited quarantine and rewrites nothing, so the recorded authorization bytes survive exactly as persisted."+
+			" --maintainer-authorization is exactly these six lines, joined by LF, with no trailing newline, using the same --actor and --reason with surrounding whitespace trimmed:\n%s",
+			lineage, repo, lineage, eligibility.Revision,
+			RenderCompactAbandonAuthorization(lineage, eligibility.Revision, eligibility.SnapshotIdentity, "<actor>", "<why-it-is-abandoned>"))
+	}
+	blocker := "the abandonment gate does not accept it: a same-lineage legacy-v1 entry, an authoritative artifact beside its state, a successor of its own, or a removal that would break the remaining graph"
+	if !compactAbandonablePristineState(successor.State) {
+		blocker = fmt.Sprintf("it holds %q authority carrying captured review or correction data, and review results are never discarded to clear an edge", successor.State.State)
+	}
+	return fmt.Sprintf(" No advertised operation admits this edge: reconciliation refuses it as corruption, and `review abandon` refuses successor %q because %s."+
+		" Nothing quarantines this shape today, so no command here will clear it; the entry and its recorded authorization stay exactly as persisted."+
+		" Capture the complete machine-readable diagnosis for every affected lineage with `gentle-ai review inspect-authority --cwd %q` and escalate that report — it is the artifact a maintainer needs to decide whether this corruption class becomes admissible.",
+		lineage, blocker, repo)
+}
+
 // ReconcileInvalidRecoveryEdge quarantines one compact-v2 recovery successor
 // whose recovery edge natively re-derives as invalid for either or both of two
 // supported classes: the unchanged-target class, and the pre-contract malformed-
@@ -164,7 +197,7 @@ func ReconcileInvalidRecoveryEdge(ctx context.Context, repo string, request Comp
 	if strings.TrimSpace(request.Reason) == "" || strings.TrimSpace(request.Actor) == "" {
 		return CompactReclaimRecord{}, errors.New("review reconcile-authority requires a non-empty reason and actor")
 	}
-	base, _, err := reviewAuthorityRoot(ctx, repo)
+	base, root, err := reviewAuthorityRoot(ctx, repo)
 	if err != nil {
 		return CompactReclaimRecord{}, err
 	}
@@ -206,7 +239,8 @@ func ReconcileInvalidRecoveryEdge(ctx context.Context, repo string, request Comp
 		return CompactReclaimRecord{}, fmt.Errorf("review reconcile-authority refused: recovery edge for %q validates; the successor remains authoritative", request.SuccessorLineageID)
 	}
 	if classification.NonReconcilableError != nil {
-		return CompactReclaimRecord{}, fmt.Errorf("review reconcile-authority refused: %v", classification.NonReconcilableError)
+		return CompactReclaimRecord{}, fmt.Errorf("review reconcile-authority refused: %v.%s",
+			classification.NonReconcilableError, compactNonReconcilableContinuation(ctx, root, successor))
 	}
 	expectedReconcileAuthorization := compactReconcileAuthorizationBinding(
 		request.PredecessorLineageID, predecessor.Revision, request.SuccessorLineageID, successor.Revision,
@@ -243,13 +277,12 @@ func ReconcileInvalidRecoveryEdge(ctx context.Context, repo string, request Comp
 		return CompactReclaimRecord{}, err
 	}
 	records := make(map[string]CompactRecord, len(stores))
-	storeByLineage := make(map[string]CompactStore, len(stores))
 	for _, store := range stores {
 		record, loadErr := store.Load()
 		if loadErr != nil {
 			return CompactReclaimRecord{}, fmt.Errorf("review reconcile-authority refused: related compact authority %q does not load: %w", store.lineageID, loadErr)
 		}
-		records[record.State.LineageID], storeByLineage[record.State.LineageID] = record, store
+		records[record.State.LineageID] = record
 	}
 	for lineage, record := range records {
 		related := record.State.Recovery
@@ -263,10 +296,8 @@ func ReconcileInvalidRecoveryEdge(ctx context.Context, repo string, request Comp
 			return CompactReclaimRecord{}, fmt.Errorf("review reconcile-authority refused: successor %q has its own successor %q", request.SuccessorLineageID, lineage)
 		}
 	}
-	delete(records, request.SuccessorLineageID)
-	delete(storeByLineage, request.SuccessorLineageID)
-	if _, err := compactAuthorityLeaves(records, storeByLineage); err != nil {
-		return CompactReclaimRecord{}, fmt.Errorf("review reconcile-authority refused: remaining authority graph is invalid: %w", err)
+	if err := compactAuthorityRemovalRegression(records, compactRecordsWithout(records, request.SuccessorLineageID)); err != nil {
+		return CompactReclaimRecord{}, fmt.Errorf("review reconcile-authority refused: %w", err)
 	}
 	items, err := os.ReadDir(dir)
 	if err != nil {

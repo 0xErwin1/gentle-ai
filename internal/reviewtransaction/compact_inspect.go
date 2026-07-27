@@ -32,6 +32,30 @@ type CompactRecoveryInspectionTotals struct {
 	InvalidEdges     int `json:"invalid_edges"`
 	EntryDiagnostics int `json:"entry_diagnostics"`
 }
+
+// The closed vocabulary of operations that admit one invalid recovery edge.
+// An empty operation means no advertised surface accepts the edge, and the
+// exit then carries Blocked instead.
+const (
+	CompactRecoveryEdgeExitReconcile = "review reconcile-authority"
+	CompactRecoveryEdgeExitAbandon   = "review abandon"
+)
+
+// CompactRecoverySanctionedExit names, for one invalid recovery edge, the
+// operation an operator can actually run right now.
+//
+// It is deliberately NOT a field of CompactRecoveryEdgeInspection. That struct
+// is a binding identity: batch reconciliation re-derives it from the exact
+// records under lock and compares it byte-for-byte against the inspection a
+// planner declared, so any value that depends on the live store rather than on
+// the records alone would make an honest plan look stale. This carries the
+// live, operator-facing half separately.
+type CompactRecoverySanctionedExit struct {
+	SuccessorLineageID string `json:"successor_lineage_id"`
+	Operation          string `json:"operation,omitempty"`
+	Blocked            string `json:"blocked,omitempty"`
+}
+
 type CompactRecoveryEdgeInspection struct {
 	PredecessorLineageID        string   `json:"predecessor_lineage_id"`
 	RecordedPredecessorRevision string   `json:"recorded_predecessor_revision"`
@@ -41,6 +65,12 @@ type CompactRecoveryEdgeInspection struct {
 	Valid                       bool     `json:"valid"`
 	AnomalyClasses              []string `json:"anomaly_classes"`
 	Problems                    []string `json:"problems"`
+	// NonReconcilableReason carries the diagnosis reconciliation already
+	// derived when it declined to classify the edge into a reconcilable
+	// anomaly class. Without it an operator reads anomaly_classes: [] and is
+	// told nothing, while the product holds the exact reason internally and
+	// `review reconcile-authority` prints it verbatim on refusal.
+	NonReconcilableReason string `json:"non_reconcilable_reason,omitempty"`
 }
 type CompactRecoveryEntryDiagnostic struct {
 	LineageID string `json:"lineage_id"`
@@ -96,6 +126,53 @@ func InspectCompactRecoveryEdges(ctx context.Context, repo string) (CompactRecov
 	return inspectCompactRecoveryRecordSet(ctx, records, report)
 }
 
+// SanctionedCompactRecoveryExits resolves, for every invalid edge in one
+// inspection, which advertised operation would accept it right now. It is
+// read-only, takes no lock, and is the operator-facing companion to the
+// inspection rather than part of its binding identity.
+//
+// An edge reconciliation already classified into an anomaly class is
+// reconcilable by construction. Everything else — corrupt authorizations,
+// forks, cycles, dangling predecessors — is offered `review abandon` only when
+// the abandonment gate's own read-only prediction accepts the successor, so
+// this surface can never advertise a continuation that would then refuse.
+// When neither answers, the exit says so and names the diagnostic instead of a
+// command that would not resolve the block.
+func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report CompactRecoveryInspectionReport) ([]CompactRecoverySanctionedExit, error) {
+	exits := []CompactRecoverySanctionedExit{}
+	root, err := (SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, edge := range report.Edges {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if edge.Valid {
+			continue
+		}
+		exit := CompactRecoverySanctionedExit{SuccessorLineageID: edge.SuccessorLineageID}
+		switch {
+		case len(edge.AnomalyClasses) > 0:
+			exit.Operation = CompactRecoveryEdgeExitReconcile
+		default:
+			eligibility, err := InspectCompactPristineAbandonment(ctx, root, edge.SuccessorLineageID)
+			if err != nil {
+				return nil, err
+			}
+			if eligibility.Eligible {
+				exit.Operation = CompactRecoveryEdgeExitAbandon
+			} else {
+				exit.Blocked = "no advertised operation admits this edge: reconciliation does not classify it into a supported anomaly class, and `review abandon` does not accept the successor. " +
+					"Nothing quarantines this shape today, so no command clears it and the entry stays exactly as persisted. " +
+					"This report, with non_reconcilable_reason, is the artifact to escalate"
+			}
+		}
+		exits = append(exits, exit)
+	}
+	return exits, nil
+}
+
 // inspectCompactRecoveryRecordSet applies the canonical all-edge inspection to
 // an already loaded record set. Read-only consumers use it to prove that an
 // inspection still describes the exact records they hold.
@@ -124,6 +201,9 @@ func inspectCompactRecoveryRecordSet(ctx context.Context, records map[string]Com
 			edge.AnomalyClasses = append(edge.AnomalyClasses, classification.Anomalies...)
 			if classification.ValidationError != nil {
 				edge.Problems = append(edge.Problems, classification.ValidationError.Error())
+			}
+			if classification.NonReconcilableError != nil {
+				edge.NonReconcilableReason = classification.NonReconcilableError.Error()
 			}
 		}
 		report.Edges = append(report.Edges, edge)
