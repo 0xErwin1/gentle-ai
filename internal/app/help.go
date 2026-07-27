@@ -27,7 +27,9 @@ COMMANDS
   sdd-verify-validate --input <path|-> --requirements <n> --scenarios <n>
                Validate exact verification-report bytes without persistence
   review start [--cwd <repo>] [--base-ref <ref>] [--focus <risk|resilience|readability|reliability>]
-  review finalize [--cwd <repo>] [--result <review.json> ...] [--evidence <path>]
+  review capture-result --lineage <id> --target <id> --lens <lens> --order <n> --input <review.json>
+               Admit one reviewer result; every selected lens needs one
+  review finalize [--cwd <repo>] [--captured-results] [--evidence <path>]
   review validate --gate <gate> [--cwd <repo>]
                Normal review path; ordinary authority is compact state plus receipt
   review status [--cwd <repo>]

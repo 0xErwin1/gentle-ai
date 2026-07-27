@@ -274,7 +274,7 @@ func TestNegotiatedFinalizeReturnsProviderOwnedTargetedValidationRequest(t *test
 		}},
 		Evidence: []string{"inspected frozen candidate"},
 	})
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, io.Discard); err != nil {
+	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "2"}, io.Discard); err != nil {
@@ -405,7 +405,7 @@ func TestNegotiatedStatusAcceptsCorrectionSubsetDigest(t *testing.T) {
 		}},
 		Evidence: []string{"inspected exact two-path candidate"},
 	})
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, io.Discard); err != nil {
+	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "1"}, io.Discard); err != nil {

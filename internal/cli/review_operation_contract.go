@@ -47,7 +47,13 @@ type reviewIntegrationOperationMetadata struct {
 var reviewIntegrationOperationRegistry = []reviewIntegrationOperationMetadata{
 	{Command: "bind-sdd", Operation: ReviewIntegrationOperationBindSDD, Label: "Review BIND-SDD", ValueFlags: []string{"cwd", "change", "lineage", "expected-binding-revision"}, MutatesAuthority: true, JoinOnTimeout: true, TimeoutRetryable: true},
 	{Command: "capabilities", Operation: "review.capabilities", Label: "Review CAPABILITIES"},
-	{Command: "finalize", Operation: ReviewIntegrationOperationFinalize, Label: "Review FINALIZE", ValueFlags: []string{"cwd", "lineage", "validation", "refuter", "evidence", "trace", "result"}, BoolFlags: []string{"failed"}, IntFlags: []string{"correction-lines"}, MutatesAuthority: true},
+	// The reviewer-result and evidence routes are all declared here, including
+	// the retired "result": an undeclared flag makes safeReviewIntegrationArguments
+	// treat the whole invocation as unparseable, which silently drops lineage_id
+	// from the failure envelope. Only "result" was ever listed, so every
+	// negotiated finalize failure on the admitted routes reported less than the
+	// unsafe one did.
+	{Command: "finalize", Operation: ReviewIntegrationOperationFinalize, Label: "Review FINALIZE", ValueFlags: []string{"cwd", "lineage", "validation", "refuter", "evidence", "trace", "result", "result-artifact", "result-artifact-file"}, BoolFlags: []string{"failed", "captured-results", "captured-evidence"}, IntFlags: []string{"correction-lines"}, MutatesAuthority: true},
 	{Command: "repair", Operation: "review.repair", Label: "Review REPAIR", ValueFlags: []string{"cwd", "class", "lineage", "expected-revision", "cause", "disposition", "repository-binding", "actor", "reason", "maintainer-authorization"}, BoolFlags: []string{"preflight"}, MutatesAuthority: true, JoinOnTimeout: true, ReadOnlyFlag: "preflight"},
 	{Command: "retry-final-verification", Operation: ReviewIntegrationOperationRetryFinalVerification, Label: "Review RETRY-FINAL-VERIFICATION", ValueFlags: []string{"cwd", "predecessor-lineage", "expected-predecessor-revision", "successor-lineage", "incident", "actor", "reason", "maintainer-authorization"}, MutatesAuthority: true, JoinOnTimeout: true},
 	{Command: "start", Operation: "review.start", Label: "Review START", ValueFlags: []string{"cwd", "target", "lineage", "policy", "focus", "base-ref", "projection", "trace"}, BoolFlags: []string{"committed-only", "workspace-overlay"}, MutatesAuthority: true},

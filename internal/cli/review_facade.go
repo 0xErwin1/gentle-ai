@@ -1744,6 +1744,32 @@ func reviewFacadeStartResultFor(action reviewtransaction.CompactStartAction, len
 	return result
 }
 
+// reviewUnadmittedResultRefusal retires --result as a reviewer-result source.
+//
+// The flag read a reviewer result straight off disk and required only that
+// findings and evidence were non-nil arrays. facadeReviewerResult already
+// carries subject_hash and inspection, but nothing on this path ever checked
+// them, so four hand-written files drove a high-risk lineage to an approved
+// terminal receipt the delivery gates honoured -- with no lens run and an empty
+// reviewer-results directory. That is a fabricated approval: silent, durable,
+// and governing delivery.
+//
+// It is refused rather than admitted in place. Admitting here would need a
+// second copy of the subject derivation, causality verification, and
+// canonicalization that capture-result already performs -- a second source of
+// truth about what admission means -- and it would still publish a receipt with
+// nothing persisted to prove which results the approval rested on. Refusing
+// makes the stronger invariant hold instead: an approved receipt implies
+// admitted artifacts on disk. No workflow is lost, because the subject hash a
+// conforming result must echo is only obtainable from the native binding, whose
+// documented next step is capture-result and which takes the identical file.
+// The capture command name is read from the same helper the collect transition
+// uses, so the refusal can never name a command the product does not publish.
+var reviewUnadmittedResultRefusal = "review finalize no longer accepts --result: a reviewer result supplied this way carries no provider-owned admission, " +
+	"so it cannot prove the lens inspected the frozen candidate. " +
+	"Capture each selected lens with `" + reviewCaptureResultCommandName() + "` (see `" + reviewNextTransitionRefreshCommand + "` for the exact lineage/target/lens/order bindings), " +
+	"then run `gentle-ai review finalize --captured-results=true`"
+
 func RunReviewFacadeFinalize(args []string, stdout io.Writer) error {
 	return runReviewFacadeFinalize(context.Background(), args, stdout)
 }
@@ -1778,7 +1804,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	failed := flags.Bool("failed", false, "bind supplied final evidence as a failed verification")
 	tracePath := flags.String("trace", "", "optional diagnostic operation metadata trace path")
 	var resultPaths repeatedString
-	flags.Var(&resultPaths, "result", "reviewer result JSON file or - for stdin; repeat in selected-lens order")
+	flags.Var(&resultPaths, "result", "retired and always refused: unadmitted reviewer results cannot bind an approval; capture each lens with `"+reviewCaptureResultCommandName()+"` and finalize with --captured-results")
 	var resultArtifacts repeatedString
 	flags.Var(&resultArtifacts, "result-artifact", "native reviewer artifact manifest JSON; repeat in selected-lens order")
 	var resultArtifactFiles repeatedString
@@ -1811,6 +1837,12 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	}
 	if reviewerResultSources > 1 || (*capturedEvidence && strings.TrimSpace(*evidencePath) != "") {
 		return reviewPreflightError(errors.New("review finalize accepts exactly one reviewer-result source and one final-evidence source"))
+	}
+	// Refused before any repository or authority work, so the rejection cannot
+	// advance the lineage or consume a lens slot. reviewUnadmittedResultRefusal
+	// records why this route is refused outright rather than admitted in place.
+	if len(resultPaths) != 0 {
+		return reviewPreflightError(errors.New(reviewUnadmittedResultRefusal))
 	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
 	if err != nil {
@@ -1853,6 +1885,11 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	if terminalAtEntry && !facadeFinalizeReplayInputsEmpty(resultPaths, resultArtifacts, resultArtifactFiles, *capturedResults, *capturedEvidence, *validationPath, *refuterPath, *evidencePath, *correctionLines, *failed, *tracePath) {
 		return errors.New("terminal review finalize accepts no review inputs; exact replay requires only --lineage")
 	}
+	// --captured-results is deliberately absent from this guard. The artifact
+	// routes carry results in from outside the lineage, so applying them after
+	// reviewing has ended would be new input; --captured-results can only name
+	// results this lineage already admitted, which makes repeating it an
+	// idempotent no-progress replay rather than a late submission.
 	if state.State != reviewtransaction.StateReviewing && (len(resultArtifacts) != 0 || len(resultArtifactFiles) != 0 || len(resultPaths) != 0) {
 		pending, pendingErr := store.PendingFinalizeAttempt()
 		if pendingErr != nil {

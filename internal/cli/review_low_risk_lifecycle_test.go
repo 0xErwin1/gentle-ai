@@ -299,7 +299,7 @@ func TestMediumReviewCannotApproveWithoutExternalEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := RunReviewFacadeFinalize([]string{
+	if err := finalizeReviewCLIArgs(t, repo, []string{
 		"--cwd", repo, "--lineage", started.LineageID, "--result", result,
 	}, &output); err != nil {
 		t.Fatal(err)

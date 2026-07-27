@@ -415,7 +415,7 @@ func runNamedScopeChangeRecovery(t *testing.T, repo string, scope reviewtransact
 		t.Fatalf("load recovered successor: %v", err)
 	}
 	started := ReviewFacadeStartResult{SelectedLenses: record.State.SelectedLenses}
-	finalizeArgs := append([]string{"--cwd", repo, "--lineage", successor}, facadeReviewerResultArgs(t, started)...)
+	finalizeArgs := append([]string{"--cwd", repo, "--lineage", successor}, facadeReviewerResultArgs(t, repo, started)...)
 	if len(started.SelectedLenses) > 0 {
 		evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
 		if err := os.WriteFile(evidencePath, []byte("focused tests pass\n"), 0o644); err != nil {

@@ -133,7 +133,7 @@ func TestReviewRecoverBaseDiffPredecessorStillBindsFrozenBaseTree(t *testing.T) 
 	if err := os.WriteFile(evidencePath, []byte("tests pass\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath, "--evidence", evidencePath}, io.Discard); err != nil {
+	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath, "--evidence", evidencePath}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	predecessorStore, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
@@ -220,7 +220,7 @@ func escalatedCurrentChangesRecoveryFixture(t *testing.T, lineage string) (strin
 			EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced,
 		}}, Evidence: []string{"focused differential test failed"},
 	})
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--result", resultPath, "--correction-lines", "1000"}, io.Discard); err != nil {
+	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", lineage, "--result", resultPath, "--correction-lines", "1000"}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, lineage)

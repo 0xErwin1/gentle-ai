@@ -92,7 +92,7 @@ func TestReviewValidateKeepsGoverningReceiptAuthoritativeWhileDisabled(t *testin
 	if err := os.WriteFile(evidencePath, []byte("focused tests pass\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	finalizeArgs := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, started)...)
+	finalizeArgs := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, repo, started)...)
 	if err := RunReviewFacadeFinalize(append(finalizeArgs, "--evidence", evidencePath), io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -750,7 +750,7 @@ func finalizeFacadeReviewForRepo(t *testing.T, repo string, startExtra ...string
 	if err := os.WriteFile(evidencePath, []byte("focused tests pass\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	finalizeArgs := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, started)...)
+	finalizeArgs := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, repo, started)...)
 	if err := RunReviewFacadeFinalize(append(finalizeArgs, "--evidence", evidencePath), io.Discard); err != nil {
 		t.Fatal(err)
 	}

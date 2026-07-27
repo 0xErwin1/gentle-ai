@@ -348,15 +348,19 @@ func finalizeNegotiatedOperationFixture(t *testing.T, repo, lineage string, nego
 		t.Fatal(err)
 	}
 	args := []string{"--cwd", repo, "--lineage", started.LineageID}
+	resultPaths := make([]string, 0, len(started.SelectedLenses))
 	for index, lens := range started.SelectedLenses {
 		result := filepath.Join(t.TempDir(), fmt.Sprintf("reviewer-%d.json", index))
 		payload := fmt.Sprintf(`{"lens":%q,"findings":[],"evidence":["reviewed exact candidate tree"]}`, lens)
 		if err := os.WriteFile(result, []byte(payload), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		args = append(args, "--result", result)
+		resultPaths = append(resultPaths, result)
 	}
-	args = append(args, "--evidence", evidence)
+	if err := captureReviewCLIResultFiles(t, repo, started.LineageID, resultPaths); err != nil {
+		t.Fatal(err)
+	}
+	args = append(args, "--captured-results=true", "--evidence", evidence)
 	if negotiated {
 		args = append([]string{"--contract", ReviewIntegrationContractV1}, args...)
 	}

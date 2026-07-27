@@ -52,7 +52,7 @@ func finalizeUnbornFacadeReview(t *testing.T, repo string, started ReviewFacadeS
 	if err := os.WriteFile(evidencePath, []byte("tests pass\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	args := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, started)...)
+	args := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, repo, started)...)
 	args = append(args, "--evidence", evidencePath)
 	if err := RunReviewFacadeFinalize(args, io.Discard); err != nil {
 		t.Fatalf("finalize unborn review: %v", err)

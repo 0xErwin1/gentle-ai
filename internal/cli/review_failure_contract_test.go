@@ -702,9 +702,12 @@ func TestNegotiatedFinalizePostTransitionGitTimeoutRequiresStatus(t *testing.T) 
 	t.Cleanup(func() { reviewFacadeCommittedTransitionHook = oldTransitionHook })
 
 	tracePath := filepath.Join(t.TempDir(), "finalize-trace.jsonl")
+	if err := captureReviewCLIResultFiles(t, repo, started.LineageID, []string{resultPath}); err != nil {
+		t.Fatalf("capture reviewer result: %v", err)
+	}
 	args := []string{
 		"finalize", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", started.LineageID,
-		"--result", resultPath, "--correction-lines", "2", "--validation", validationPath, "--trace", tracePath,
+		"--captured-results=true", "--correction-lines", "2", "--validation", validationPath, "--trace", tracePath,
 	}
 	var output bytes.Buffer
 	if err := RunReview(args, &output); err == nil {
@@ -904,7 +907,7 @@ func TestNegotiatedReceiptPublicationFailureIsSanitizedAndExactlyReplayable(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	finalizeArgs := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, started)...)
+	finalizeArgs := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, repo, started)...)
 	if err := RunReviewFacadeFinalize(finalizeArgs, io.Discard); err != nil {
 		t.Fatal(err)
 	}

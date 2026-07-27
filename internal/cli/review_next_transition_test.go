@@ -156,7 +156,7 @@ func TestCorrectionNextTransitionAgreesBetweenFinalizeAndRestartStatus(t *testin
 					CausalDisposition: reviewtransaction.CausalIntroduced,
 				}}, Evidence: []string{"inspected exact candidate"},
 			})
-			if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, &bytes.Buffer{}); err != nil {
+			if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, &bytes.Buffer{}); err != nil {
 				t.Fatal(err)
 			}
 			if tt.forecast {
@@ -247,7 +247,7 @@ func historicalConsumedCorrectionRoutingFixture(t *testing.T, proposed *int) (st
 	started := runNegotiatedReviewStart(t, repo, "historical-consumed-routing")
 	result := filepath.Join(t.TempDir(), "blocking-result.json")
 	writeReviewCLIJSON(t, result, facadeReviewerResult{Lens: started.SelectedLenses[0], Findings: []facadeFinding{{Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate value is wrong", ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic, CausalDisposition: reviewtransaction.CausalIntroduced}}, Evidence: []string{"reviewed exact candidate"}})
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result", result, "--correction-lines", "2"}, &bytes.Buffer{}); err != nil {
+	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", result, "--correction-lines", "2"}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	writeReviewStartCandidate(t, repo, "candidate.go", historicalRoutingCandidate(2), 0o644)

@@ -699,7 +699,12 @@ func TestOrganicReviewExecutableTransitionContract(t *testing.T) {
 		harness.writeFiles(map[string]string{"tracked.txt": organicLines("genuine candidate content", 4)})
 
 		started, _ := harness.startReview(lineage)
-		resultPath := harness.writeJSON("false-introduced.json", organicReviewerResult{
+		// The claim is refused at admission now, by the repository-derived
+		// changed-line evidence finalize used to consult after the fact. Refusing
+		// an unprovable candidate-causal claim before it enters authority is the
+		// stronger outcome, so this asserts the refusal rather than the escalation
+		// that route no longer reaches.
+		_, stderr, err := harness.captureReviewerResult(lineage, started, 0, organicReviewerResult{
 			Lens: started.SelectedLenses[0],
 			Findings: []organicFinding{{
 				Location: "legacy.txt:1", Severity: "CRITICAL", Claim: "an unreviewed defect in the unchanged production path",
@@ -708,9 +713,27 @@ func TestOrganicReviewExecutableTransitionContract(t *testing.T) {
 			}},
 			Evidence: []string{"reproduced the defect without candidate-causality evidence"},
 		})
-		escalated := harness.finalize(lineage, "--result", resultPath)
-		if escalated.State != "escalated" {
-			t.Fatalf("false-introduced finding did not escalate: %#v", escalated)
+		if err == nil {
+			t.Fatal("a false-introduced finding on an unchanged path was admitted")
+		}
+		if !strings.Contains(stderr, "out_of_scope") {
+			t.Fatalf("false-introduced admission refusal was not typed out of scope: %s", stderr)
+		}
+
+		// A refused admission leaves the lens slot unconsumed, so the same lineage
+		// still admits a provable blocker. Escalation is then reached the way it
+		// remains reachable: a correction forecast past the frozen budget.
+		harness.captureReviewerResultOrFail(lineage, started, 0, organicReviewerResult{
+			Lens: started.SelectedLenses[0],
+			Findings: []organicFinding{{
+				Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "the candidate content is wrong",
+				ProofRefs:     []string{"a differential test passes on base and fails on the candidate"},
+				EvidenceClass: "deterministic", CausalDisposition: "introduced",
+			}},
+			Evidence: []string{"the focused differential test failed on the candidate"},
+		})
+		if escalated := harness.finalize(lineage, "--captured-results=true", "--correction-lines", "1000"); escalated.State != "escalated" {
+			t.Fatalf("over-budget correction forecast did not escalate: %#v", escalated)
 		}
 
 		// Change the live target so escalated recovery has a real changed
@@ -960,7 +983,7 @@ func TestOrganicReviewRecoveryGraph(t *testing.T) {
 			t.Fatalf("expected a current-changes candidate with at least one selected lens: %#v", started)
 		}
 		lens := started.SelectedLenses[0]
-		resultPath := harness.writeJSON("escalating-result.json", organicReviewerResult{
+		harness.captureReviewerResultOrFail(lineage, started, 0, organicReviewerResult{
 			Lens: lens,
 			Findings: []organicFinding{{
 				Location: "tracked.txt:1", Severity: "CRITICAL", Claim: "candidate regression",
@@ -968,7 +991,7 @@ func TestOrganicReviewRecoveryGraph(t *testing.T) {
 			}},
 			Evidence: []string{"focused differential test failed"},
 		})
-		finalized := harness.finalize(lineage, "--result", resultPath, "--correction-lines", "1000")
+		finalized := harness.finalize(lineage, "--captured-results=true", "--correction-lines", "1000")
 		if finalized.State != "escalated" {
 			t.Fatalf("over-budget forecast did not escalate the current-changes predecessor: %#v", finalized)
 		}

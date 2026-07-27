@@ -461,7 +461,7 @@ func failedCorrectedFinalVerificationCLIFixture(t *testing.T) failedFinalVerific
 			CausalDisposition: reviewtransaction.CausalIntroduced,
 		}}, Evidence: []string{"inspected corrected candidate"},
 	})
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, &bytes.Buffer{}); err != nil {
+	if err := finalizeReviewCLIArgs(t, repo, []string{"--cwd", repo, "--lineage", started.LineageID, "--result", resultPath}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--correction-lines", "2"}, &bytes.Buffer{}); err != nil {

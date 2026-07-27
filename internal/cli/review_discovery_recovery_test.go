@@ -131,7 +131,7 @@ func runNamedReviewContinuation(t *testing.T, repo, message string) {
 	if err := json.Unmarshal(output.Bytes(), &started); err != nil {
 		t.Fatalf("continuation output is not a review start envelope: %v\n%s", err, output.String())
 	}
-	finalizeArgs := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, started)...)
+	finalizeArgs := append([]string{"--cwd", repo, "--lineage", started.LineageID}, facadeReviewerResultArgs(t, repo, started)...)
 	if len(started.SelectedLenses) > 0 {
 		evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
 		if err := os.WriteFile(evidencePath, []byte("focused tests pass\n"), 0o644); err != nil {

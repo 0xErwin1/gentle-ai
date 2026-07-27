@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -538,7 +539,7 @@ func TestOrganicBoundedCorrectionAllowsExactlyOne(t *testing.T) {
 		t.Fatalf("correction journey needs one consolidated review with a budget: %#v", started)
 	}
 
-	blocker := harness.writeJSON("blocker.json", organicReviewerResult{
+	harness.captureReviewerResultOrFail(lineage, started, 0, organicReviewerResult{
 		Lens: started.SelectedLenses[0],
 		Findings: []organicFinding{{
 			Location:          path + ":5",
@@ -550,7 +551,7 @@ func TestOrganicBoundedCorrectionAllowsExactlyOne(t *testing.T) {
 		}},
 		Evidence: []string{"the focused differential test failed on the candidate"},
 	})
-	required := harness.finalize(lineage, "--result", blocker)
+	required := harness.finalize(lineage, "--captured-results=true")
 	if required.State != organicStateCorrectionRequired {
 		t.Fatalf("candidate-caused blocker did not require a correction: %#v", required)
 	}
@@ -577,7 +578,7 @@ func TestOrganicBoundedCorrectionAllowsExactlyOne(t *testing.T) {
 	}
 
 	before := harness.lineageDigest(lineage)
-	_, stderr, err := harness.gentleAllowFailure("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage, "--result", blocker)
+	_, stderr, err := harness.gentleAllowFailure("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage, "--captured-results=true")
 	if err == nil {
 		t.Fatal("a second correction was accepted after the bounded one was consumed")
 	}
@@ -1000,21 +1001,69 @@ func (harness *organicHarness) approveReview(lineage string, started organicStar
 	if len(started.SelectedLenses) == 0 {
 		return harness.finalize(lineage)
 	}
-	arguments := make([]string, 0, len(started.SelectedLenses)*2)
 	for index, lens := range started.SelectedLenses {
-		arguments = append(arguments, "--result", harness.writeJSON(
-			fmt.Sprintf("reviewer-%d.json", index),
-			organicReviewerResult{
-				Lens:     lens,
-				Findings: []organicFinding{},
-				Evidence: []string{"inspected every frozen candidate path for " + lens},
-			},
-		))
+		harness.captureReviewerResult(lineage, started, index, organicReviewerResult{
+			Lens:     lens,
+			Findings: []organicFinding{},
+			Evidence: []string{"inspected every frozen candidate path for " + lens},
+		})
 	}
-	if result := harness.finalize(lineage, arguments...); result.State != organicStateValidating {
+	if result := harness.finalize(lineage, "--captured-results=true"); result.State != organicStateValidating {
 		harness.t.Fatalf("reviewer results did not reach validation: %#v", result)
 	}
 	return harness.finalize(lineage, "--evidence", harness.writeEvidence())
+}
+
+// captureReviewerResult admits one reviewer result through the native route.
+//
+// finalize takes no unadmitted reviewer results, so the suite asks the binary
+// for the lens's frozen binding, echoes the provider-issued subject hash and the
+// inspected path manifest back into the caller's payload, and captures it. Only
+// the binding is supplied here; the findings and evidence stay exactly as the
+// caller wrote them, so a test that means to submit a rejectable result still
+// submits one.
+func (harness *organicHarness) captureReviewerResult(lineage string, started organicStartResult, order int, result organicReviewerResult) (string, string, error) {
+	harness.t.Helper()
+	lens := started.SelectedLenses[order]
+	binding := []string{
+		"review", "capture-result", "--cwd", harness.repo.worktree, "--lineage", lineage,
+		"--target", started.TargetIdentity, "--lens", lens, "--order", strconv.Itoa(order),
+	}
+	var preflight organicCapturePreflight
+	if err := json.Unmarshal(harness.gentle(append(binding, "--preflight")...), &preflight); err != nil {
+		harness.t.Fatalf("decode capture-result preflight for %s: %v", lens, err)
+	}
+	paths := make([]string, len(preflight.ChangedPathManifest))
+	for index, entry := range preflight.ChangedPathManifest {
+		paths[index] = entry.Path
+	}
+	result.SubjectHash = preflight.ArtifactSubject.SubjectHash
+	result.Inspection = &organicInspection{Status: "completed", Paths: paths}
+	input := harness.writeJSON(fmt.Sprintf("reviewer-%d.json", order), result)
+	return harness.gentleAllowFailure(append(binding, "--input", input)...)
+}
+
+// captureReviewerResultOrFail is captureReviewerResult for the callers that
+// require admission to succeed.
+func (harness *organicHarness) captureReviewerResultOrFail(lineage string, started organicStartResult, order int, result organicReviewerResult) {
+	harness.t.Helper()
+	if _, stderr, err := harness.captureReviewerResult(lineage, started, order, result); err != nil {
+		harness.t.Fatalf("capture reviewer result for %s: %v\n%s", started.SelectedLenses[order], err, stderr)
+	}
+}
+
+type organicCapturePreflight struct {
+	ArtifactSubject struct {
+		SubjectHash string `json:"subject_hash"`
+	} `json:"artifact_subject"`
+	ChangedPathManifest []struct {
+		Path string `json:"path"`
+	} `json:"changed_path_manifest"`
+}
+
+type organicInspection struct {
+	Status string   `json:"status"`
+	Paths  []string `json:"paths"`
 }
 
 func (harness *organicHarness) finalize(lineage string, extra ...string) organicFinalizeResult {
@@ -1401,9 +1450,11 @@ type organicModeResult struct {
 }
 
 type organicReviewerResult struct {
-	Lens     string           `json:"lens"`
-	Findings []organicFinding `json:"findings"`
-	Evidence []string         `json:"evidence"`
+	SubjectHash string             `json:"subject_hash,omitempty"`
+	Inspection  *organicInspection `json:"inspection,omitempty"`
+	Lens        string             `json:"lens"`
+	Findings    []organicFinding   `json:"findings"`
+	Evidence    []string           `json:"evidence"`
 }
 
 type organicFinding struct {

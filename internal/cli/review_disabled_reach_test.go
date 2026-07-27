@@ -491,7 +491,7 @@ func finalizeApprovedFacadeReview(t *testing.T, repo, lineage string) {
 		if err := os.WriteFile(evidencePath, []byte("focused tests pass\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		args = append(args, facadeReviewerResultArgs(t, started)...)
+		args = append(args, facadeReviewerResultArgs(t, repo, started)...)
 		args = append(args, "--evidence", evidencePath)
 	}
 	if err := RunReviewFacadeFinalize(args, io.Discard); err != nil {
