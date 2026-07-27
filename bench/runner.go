@@ -118,8 +118,18 @@ func (s *Sandbox) write(path, content string) error {
 
 // gitCallsSince returns how many git subprocesses the last invocation spawned,
 // read from the GIT_TRACE log. It returns nil when the trace is unavailable.
+//
+// A trace file that does not exist yet is zero, not unknown: every invocation
+// runs with GIT_TRACE pointed at this path, so git would have created it had it
+// run at all. Reporting that as unobservable would erase the whole corpus total
+// the moment one journey legitimately spawns no git — a contract rejected at
+// preflight, for instance.
 func (s *Sandbox) gitCallsSince() *int {
 	info, err := os.Stat(s.TracePath)
+	if errors.Is(err, os.ErrNotExist) {
+		zero := 0
+		return &zero
+	}
 	if err != nil {
 		return nil
 	}

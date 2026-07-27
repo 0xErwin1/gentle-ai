@@ -227,11 +227,20 @@ invents a metric is worse than one that admits a gap.
    `j07-disabled-with-stale-receipts` exists to make that visible; read its
    block message before reading its `out_of_band` count as a defect.
 
-7. **The corpus is small and honest, not exhaustive.** Fourteen journeys that
-   pass end to end, weighted toward failure paths because that is where
-   friction lives. Testing-guide flows 1 (install) and 8 (no phantom SDD
-   artifacts) are inspection steps rather than review-lifecycle friction and
-   are not modelled.
+7. **The corpus is honest, not exhaustive.** Thirty-six journeys that run end
+   to end, weighted toward failure paths because that is where friction lives.
+   Testing-guide flows 1 (install) and 8 (no phantom SDD artifacts) are
+   inspection steps rather than review-lifecycle friction and are not modelled.
+
+8. **Some edge cases are unreachable from a temp directory and are guide flows
+   instead.** A network mount where advisory locks fail in ways that are
+   neither "busy" nor "missing", a read-only filesystem, a disk that fills
+   during a receipt write, a case-insensitive or Unicode-normalizing volume,
+   Windows antivirus holding a file mid-write, Windows long paths, and a system
+   clock moving backwards all need a machine this harness cannot build. They
+   are flows 27 to 33 of `docs/testing/organic-rdd-testing-guide.md`. A flaky
+   journey inside a loop is worse than no journey, because it gets blamed on
+   whatever changed last.
 
 ## Measured: the current build
 
@@ -255,6 +264,11 @@ completed; nothing was unsupported. Re-running produces byte-identical numbers,
 7 human_surface_bytes    2605
 - git_subprocesses       2787      (informational)
 ```
+
+Those numbers are the **14-journey** corpus against the binary named above,
+kept as-is because they belong to that named build. The corpus has since grown
+to 36 journeys; re-run `run` against your own binary rather than reading the
+block above as current totals.
 
 `results-before.json` is the same corpus against `v2.1.2`, kept as a worked
 example of the cross-version path: 5 journeys completed and 9 recorded
@@ -286,6 +300,60 @@ appending to that slice.
 | `j13-next-transition-runs-verbatim` | the printed transition executes as printed | guide flow 11 |
 | `j14-abandon-needs-a-hand-built-token` | abandoning a lineage needs an assembled authorization | `review abandon` contract |
 
+### Edge cases (`journeys_edge.go`)
+
+Journeys 1 to 14 came from the community testing guide and the failure paths it
+collected. Journeys 15 to 36 are the edge cases those flows never reached. Each
+one is tied to one of the five shapes a night of real defects clustered into,
+and the shape is named in the journey's `Source`:
+
+| shape | what it is |
+|---|---|
+| 1 | **asymmetric comparison** — one operand canonicalized, the other not |
+| 2 | **transient read as permanent** — a retryable condition surfacing as terminal or ambiguous |
+| 3 | **a guard behind the wrong condition** — a check gated on something that is not its own precondition |
+| 4 | **a message naming something that does not work** |
+| 5 | **two sources of truth** — a document and the code disagreeing about the same fact |
+
+A journey that stresses none of them is not added: it would only make the
+number look covered.
+
+| ID | Flow | Shape |
+|---|---|---|
+| `j15-linked-worktree` | one repository, two absolute paths, two HEADs, one shared review store | 1 + 5 |
+| `j16-detached-head` | the whole cycle with no branch at all | 3 |
+| `j17-bare-repository` | a repository with no working tree | 4 + 2 |
+| `j18-space-and-non-ascii-path` | repository path with spaces and non-ASCII characters | 1 |
+| `j19-submodule-gitlink` | a 160000 index entry with no blob behind it | 1 |
+| `j20-symlink-candidate` | mode 120000 whose blob is a path | 1 |
+| `j21-mode-only-change` | `100644` → `100755`, identical blob on both sides | 1 |
+| `j22-pure-rename` | every byte identical, only the path moved | 1 |
+| `j23-deletion-only` | a candidate whose new side is empty | 1 |
+| `j24-empty-file` | zero bytes, zero changed lines | 4 |
+| `j25-no-trailing-newline` | the last line has no terminator | 1 |
+| `j26-crlf-content` | carriage returns survive into the staged blob | 1 |
+| `j27-merge-in-progress` | review a conflict resolution before the merge commit exists | 3 |
+| `j28-rebase-in-progress` | detached HEAD plus a rebase state directory | 3 |
+| `j29-cherry-pick-in-progress` | `CHERRY_PICK_HEAD` present throughout | 3 |
+| `j30-kill-switch-flipped-mid-review` | reviews turned off between START and FINALIZE | 3 + 5 |
+| `j31-nonsense-mode-value` | a switch record that is readable and holds a value that is not `on`/`off` | 2 + 4 |
+| `j32-recovery-of-a-recovery` | the named continuation has to work twice | 4 |
+| `j33-escalate-then-recover` | escalate on a failed verification, then recover after fixing it | 2 + 4 |
+| `j34-abandon-then-start-again` | an abandoned lineage must not poison the repository | 2 |
+| `j35-correction-budget-exactly-zero` | forecasting a correction against a budget of 0 | 3 + 4 |
+| `j36-contract-right-name-wrong-version` | `--contract` with the right name and a version this build lacks | 2 + 4 |
+
+**Every fixture proves its own edge case before the journey trusts the result.**
+A fixture that sets its edge case up wrongly and then passes is the failure mode
+these journeys exist to avoid, so each one reads the state back out of git and
+fails the journey when it is not what it claims: the linked worktree asserts
+that `.git` is a file and that its git dir differs from the common dir, the
+mode-only change asserts the index really went `100644` → `100755` with a
+`0\t0` numstat, the mid-operation fixtures assert `MERGE_HEAD` /
+`rebase-merge` / `CHERRY_PICK_HEAD` exist *after* the conflict is resolved, and
+the nonsense mode record asserts that it still parses as JSON so the journey
+cannot silently decay into the already-covered corrupt-record case.
+
 ## Layout
 
 ```
@@ -293,7 +361,8 @@ main.go        run / record / analyze / compare / __shim dispatch
 classify.go    Observation, IsBlock, IsUnsupported, Classify   <- the contract
 metrics.go     Dimension, BlockCounts, accumulator, aggregate
 runner.go      Sandbox, capability probe, journey engine
-journeys.go    the corpus, as data
+journeys.go    the corpus, as data — guide flows and their failure paths
+journeys_edge.go  the edge-case half of the corpus, with self-proving fixtures
 record.go      the recording shim and session log
 analyze.go     observed-mode metrics, same classifier
 report.go      plain-text tables and the comparison JSON

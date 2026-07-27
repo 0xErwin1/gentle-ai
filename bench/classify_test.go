@@ -35,10 +35,20 @@ func loadFixtures(t *testing.T) map[string]Observation {
 	return index
 }
 
-// TestClassifyRecordedObservations pins the in_band / out_of_band split to
-// recorded output. If a future gentle-ai stops naming a runnable continuation,
-// this test changes and the benchmark reports the regression instead of
-// quietly absorbing it.
+// TestClassifyRecordedObservations pins the classifier to output the product
+// really emitted, so the in_band / out_of_band split is decided by bytes rather
+// than by what a test author imagines a refusal looks like.
+//
+// It guards the classifier, NOT the product. The fixtures are frozen, so this
+// test cannot notice a gentle-ai that stops naming a runnable continuation; it
+// would keep passing against the recording. Several fixtures below already
+// describe blocks the product no longer has, and they are kept on purpose: the
+// classifier still has to recognise that shape if it ever returns. What guards
+// the product is the bench run itself, plus the CLI tests that take a command
+// out of an emitted message, dispatch it, and require the block to clear.
+//
+// So when a refusal is fixed, do not update these fixtures to match. Add the
+// fixed shape as a new case if it is a shape the classifier has not seen.
 func TestClassifyRecordedObservations(t *testing.T) {
 	fixtures := loadFixtures(t)
 
@@ -59,14 +69,18 @@ func TestClassifyRecordedObservations(t *testing.T) {
 		{"invalid_flag_combination", BlockInBand,
 			"stderr names both runnable escapes verbatim"},
 
+		// The three marked [fixed] recorded a block the product has since
+		// stopped producing. They stay because the classifier must still
+		// recognise the shape, and because a recording is the only honest
+		// evidence of what the shape looked like.
 		{"gate_without_receipt", BlockOutOfBand,
-			"exit 1, action is explicit-maintainer-action, nothing runnable is named"},
+			"[fixed] exit 1, action is explicit-maintainer-action, nothing runnable is named"},
 		{"finalize_without_results", BlockOutOfBand,
 			"names the requirement but no command that satisfies it"},
 		{"rejected_capture", BlockOutOfBand,
-			"binding_mismatch names no recapture command"},
+			"[fixed] binding_mismatch names no recapture command"},
 		{"start_while_disabled", BlockOutOfBand,
-			"does not name `gentle-ai review mode enable`"},
+			"[fixed] does not name `gentle-ai review mode enable`"},
 		{"abandon_without_token", BlockOutOfBand,
 			"lists required flags but no runnable command that produces the token"},
 	}

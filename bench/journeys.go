@@ -395,7 +395,15 @@ var abandonCapability = &Capability{Verb: []string{"review", "abandon"}, Flags: 
 //
 // It is deliberately weighted toward failure paths: the happy path is where a
 // product looks good, and friction lives everywhere else.
+//
+// coreJourneys below are the flows drawn from the community testing guide and
+// the failure paths it collected; edgeJourneys in journeys_edge.go are the edge
+// cases those flows never reached.
 func Journeys() []Journey {
+	return append(coreJourneys(), edgeJourneys()...)
+}
+
+func coreJourneys() []Journey {
 	return []Journey{
 		{
 			ID:     "j01-docs-happy-path",

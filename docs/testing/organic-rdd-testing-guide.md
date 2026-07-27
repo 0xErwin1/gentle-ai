@@ -401,6 +401,267 @@ Windows never auto-updated: it detected a new version and handed you a command t
 
 ---
 
+## Flows 27 to 33: environments we cannot reach
+
+**Why these exist.** Everything the friction harness in `bench/` can build — a
+linked worktree, a detached HEAD, a bare repository, a path full of spaces and
+kanji, a submodule, a symlink, a mode-only change, a merge or rebase or
+cherry-pick in progress, the kill switch flipped mid-review, a recovery of a
+recovery — now runs on every loop iteration on Linux. These seven cannot be
+built in a temp directory on a normal machine, so they are the ones only you can
+answer.
+
+**Each flow names the platform or condition it needs.** If you cannot reach it,
+mark it **N/A** and move on. Do not guess and do not simulate it with a mock: a
+guessed PASS here is worse than a blank, because it closes a hole that is still
+open.
+
+Run everything below with output going **outside** the repository under test.
+
+### Flow 27: A repository on a network mount — **needs NFS or SMB**
+
+The review store lives under the Git common directory and takes an advisory
+lock (`LOCK`) before it writes. On a local filesystem a lock is held, busy, or
+absent. On NFS and SMB there is a fourth answer: the lock manager can be down,
+the lease can expire under you, or `flock` can return `ENOLCK`/`EOPNOTSUPP`
+because the mount does not support it at all. None of those is "busy" and none
+is "missing", and code written against a local filesystem tends to fold them
+into whichever of the two it happens to reach first.
+
+1. [ ] Put a throwaway repo on a real network mount — an NFS export or an SMB
+   share, not a loopback image. Note the mount options (`mount | grep <path>`)
+   in your report; `nolock` and `local_lock=` change the answer.
+2. [ ] Run the ordinary cycle there:
+
+```
+gentle-ai review start --cwd .
+gentle-ai review finalize --cwd .
+gentle-ai review validate --gate pre-commit --cwd .
+```
+
+→ **Expected**: it completes with `allow`, exactly as on a local disk.
+
+3. [ ] Now run two reviews at once against the same repo from two machines (or
+   two shells on two mounts of the same export), started within a second of each
+   other → **Expected**: one wins and the other gets a **typed conflict** naming
+   what to do. A raw `ENOLCK`, `EOPNOTSUPP`, `Stale file handle` or
+   `no locks available` reaching you is the defect — a controller cannot
+   classify or retry an untyped errno.
+4. [ ] Mount the same export with `-o nolock` and repeat step 2 →
+   **Expected**: either it works, or it refuses with a message that says
+   locking is unavailable on this mount. Silently proceeding without the lock
+   is the worst outcome and the one worth reporting loudest.
+5. [ ] **Report the mount type and options either way, including a PASS.** This
+   path has never run on a network filesystem.
+
+### Flow 28: A read-only filesystem — **needs a read-only mount**
+
+Reviews write. A read-only repository is a legitimate state (a checked-out
+artifact, a mounted snapshot, a container image layer), and the answer must be
+a typed refusal, not a stack of failed writes.
+
+1. [ ] Make a repo, then remount it read-only:
+
+```
+sudo mount -o remount,ro <mountpoint>     # or: sudo mount -o ro,bind /src /ro-copy
+```
+
+2. [ ] `gentle-ai review status --cwd .` → **Expected**: it works. Status is
+   read-only by contract and must not need to write anything, not even a lock
+   file.
+3. [ ] `gentle-ai review start --cwd .` → **Expected**: a typed refusal naming
+   that the store is not writable. A raw `EROFS` or
+   `read-only file system` with no continuation is the defect.
+4. [ ] → **Expected**: nothing was half-created. After the refusal,
+   `git status` shows no new untracked files and the common dir holds no partial
+   `gentle-ai/` tree.
+
+### Flow 29: The disk fills during a receipt write — **needs a small filesystem you can fill**
+
+`ENOSPC` in the middle of publishing a receipt is the one failure that can
+leave authority and receipt disagreeing. The store publishes immutably
+(no-replace) precisely so a losing writer cannot corrupt a published
+generation, and this is the flow that tests whether that holds when the failure
+is the disk rather than a competing writer.
+
+1. [ ] Build a tiny filesystem and put the repo on it:
+
+```
+truncate -s 8M /tmp/tiny.img && mkfs.ext4 -q /tmp/tiny.img
+mkdir -p /tmp/tiny && sudo mount -o loop /tmp/tiny.img /tmp/tiny
+sudo chown "$USER" /tmp/tiny
+```
+
+2. [ ] Set up a repo there, stage a docs change, run `review start` →
+   **Expected**: it works.
+3. [ ] Fill the remaining space (`fallocate -l <n> /tmp/tiny/ballast` until
+   `df` reports 100%), then run `review finalize` → **Expected**: a typed
+   failure naming the disk. Not a partial receipt, and not an approval.
+4. [ ] Delete the ballast and run `review finalize` again → **Expected**: it
+   either completes cleanly or refuses with a runnable continuation. **A state
+   that no command can leave is the defect**, and that is exactly the
+   stored-state deadlock flow 18 describes — check whether a defect report was
+   written, and paste it.
+5. [ ] `review validate --gate pre-commit` after step 3 and before step 4 →
+   **Expected**: never `allow`. A half-written receipt must never gate as
+   approved.
+
+### Flow 30: A case-insensitive, Unicode-normalizing volume — **needs APFS, HFS+, exFAT or NTFS**
+
+The identity policy defers to the volume: paths are compared as the filesystem
+presents them. On a case-insensitive volume `Docs/Guide.md` and `docs/guide.md`
+are one file; on macOS HFS+ a file name is normalized to NFD, so a name you
+typed as NFC comes back decomposed. **That branch has never executed anywhere.**
+Linux CI is case-sensitive and normalization-neutral, so nothing in the test
+suite has ever taken it.
+
+1. [ ] Get such a volume. On macOS the boot volume already is one (`diskutil
+   info / | grep -i "Case-Sensitive"`); otherwise create one:
+
+```bash
+# macOS
+hdiutil create -size 200m -fs APFS -volname RDDCASE /tmp/rddcase.dmg
+hdiutil attach /tmp/rddcase.dmg
+# Linux, to reach exFAT/NTFS instead
+truncate -s 200M /tmp/rddcase.img && mkfs.exfat /tmp/rddcase.img
+```
+
+2. [ ] Repo on that volume. Stage `docs/guide.md`, run `review start` +
+   `review finalize` → **Expected**: an approved receipt.
+3. [ ] Now `cd` in with a **differently cased** path
+   (`cd /volumes/rddcase/...` instead of `/Volumes/RDDCASE/...`) and run
+   `review validate --gate pre-commit --cwd "$PWD"` → **Expected**: the same
+   lineage, `allow`. If it reports no authority, paste **both** spellings — that
+   is the identity policy failing to defer to the volume.
+4. [ ] Create a file whose name has a composed accent (NFC), for example
+   `printf 'x\n' > "docs/café.md"` typed with a single é, stage it and run the
+   full cycle → **Expected**: it completes. On HFS+ the volume stores it
+   decomposed (NFD), so the name git reports back differs byte-for-byte from
+   the one you typed. A `path not found` or a scope mismatch on a file that is
+   plainly there is the defect. Report the output of
+   `git ls-files | xxd | head` alongside it, because the bytes are the finding.
+5. [ ] With the receipt approved, rename `docs/guide.md` to `docs/Guide.md` and
+   re-run the gate → **Expected**: on a case-insensitive volume this is not a
+   scope change, because it is the same file. Whatever the answer, say which it
+   gave: this is the case where "correct" depends entirely on the volume and we
+   want the real one, not the assumed one.
+
+### Flow 31: Antivirus holding a file mid-write — **needs Windows with real-time scanning on**
+
+On Windows a file can be opened by a scanner between the moment we create it
+and the moment we rename or read it back. The failure is `ERROR_SHARING_VIOLATION`
+(32) or `ERROR_ACCESS_DENIED` (5) on a file that unquestionably exists — a
+**transient** condition, and the single most common way a transient gets
+reported as a permanent corruption.
+
+1. [ ] On Windows with Defender (or your corporate AV) real-time protection
+   **on** and the test directory **not** excluded, run the full cycle several
+   times in a row:
+
+```powershell
+1..20 | ForEach-Object {
+  gentle-ai review start --cwd .
+  gentle-ai review finalize --cwd .
+  gentle-ai review validate --gate pre-commit --cwd .
+}
+```
+
+→ **Expected**: 20 of 20 reach `allow`. Report how many did.
+
+2. [ ] Any failure → **Expected**: a typed, retryable message. If you see
+   `authority_corrupted`, `receipt_missing` or a defect report for what is
+   really a scanner holding a handle for 40 ms, that is the defect: a transient
+   was classified as permanent. Paste the whole message.
+3. [ ] Repeat with the directory **excluded** from scanning → **Expected**: if
+   the failures disappear, that confirms the cause. Say so in the report; it is
+   the difference between "our locking is wrong" and "we do not retry a
+   sharing violation".
+4. [ ] Use `$LASTEXITCODE`, not `$?`, and do not pipe through `tee` — see
+   "How to measure properly" below.
+
+### Flow 32: Long paths — **needs Windows**
+
+The Git common directory sits under `.git/`, the review store adds
+`gentle-ai/review-transactions/v2/<lineage>/`, and the lineage identifier is
+long. Start from a deep checkout and the full path to a receipt passes 260
+characters, which is the classic Win32 `MAX_PATH` wall.
+
+1. [ ] On Windows, clone or create the repo under a deliberately deep path so
+   that the receipt path exceeds 260 characters. Check it:
+
+```powershell
+$p = "$(git rev-parse --git-common-dir)\gentle-ai\review-transactions\v2"
+$p.Length
+```
+
+2. [ ] Run the full cycle → **Expected**: it completes. A raw
+   `The system cannot find the path specified`, `path too long`, or a
+   truncated path in the error is the defect.
+3. [ ] Try it **both** with long-path support on and off, and say which you
+   ran:
+
+```powershell
+Get-ItemProperty HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem LongPathsEnabled
+git config --get core.longpaths
+```
+
+→ **Expected**: with support **off**, a refusal that names the length problem
+and what to enable — not a generic file error. Failing is acceptable there;
+failing without saying why is not.
+
+### Flow 33: The system clock moves backwards — **needs a VM snapshot or a settable clock**
+
+**Read this one carefully, because it is testing a claim rather than a
+behaviour.** The design states explicitly that approval is bound to candidate
+**content**, never to a wall-clock moment, and that a recorded timestamp is
+never used as an approval cutoff. That is written down in the source and it is
+true where it was written down. This flow asks whether it holds *everywhere* —
+including the places nobody thought about when they wrote the comment.
+
+A clock goes backwards for ordinary reasons: an NTP correction after a bad RTC
+read, a restored VM snapshot, a laptop resuming with a dead battery, a container
+starting with a host clock behind the one that wrote the state.
+
+1. [ ] First, establish the baseline the claim rests on. Approve a review, then
+   look at the receipt:
+
+```
+gentle-ai review start --cwd . && gentle-ai review finalize --cwd .
+cat "$(git rev-parse --git-common-dir)"/gentle-ai/review-transactions/v2/<lineage>/review-receipt.json
+```
+
+→ **Expected**: the receipt carries **no timestamp of any kind** — only
+content bindings (`base_tree`, `initial_review_tree`, `final_candidate_tree`,
+`paths_digest`, `fix_delta_hash`, `policy_hash`, `evidence_hash`,
+`terminal_state`). If you find a time field in there, stop and report it: the
+claim is already false and the rest of this flow is academic.
+
+2. [ ] Now move the clock backwards by an hour, **after** the approval:
+
+```
+sudo date -s "-1 hour"        # or restore a VM snapshot taken an hour ago
+```
+
+3. [ ] `gentle-ai review validate --gate pre-commit --cwd .` → **Expected**:
+   `allow`, unchanged. The approval is bound to bytes that did not move.
+4. [ ] `gentle-ai review status --cwd .` → **Expected**: the same lineage and
+   state. No "receipt from the future", no `authority_corrupted`.
+5. [ ] The kill switch keeps a timestamp that the design says is provenance
+   only. Test that directly: `gentle-ai review mode disable`, then
+   `gentle-ai review mode enable`, then move the clock back past
+   `rdd_mode_recorded_at` in `$HOME/.gentle-ai/state.json`, then
+   `gentle-ai review mode status --json` → **Expected**: `effective: on`, and
+   the source that decided it. A candidate refused because it is "older than
+   the mode record" would be exactly the time-based approximation the design
+   says it deliberately does not implement.
+6. [ ] Finally, move the clock **forwards** by a day and repeat steps 3 to 5 →
+   **Expected**: identical answers. A rule that only holds in one direction is
+   still a rule about the clock.
+7. [ ] **Report the result even when everything passes**, with how you moved the
+   clock and by how much. A confirmed absence is the whole point of this flow.
+
+---
+
 ## How to measure properly (read this before reporting)
 
 Four things that made earlier reports measure the wrong thing. They are not bugs, they are environment traps:
