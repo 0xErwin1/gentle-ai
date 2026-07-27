@@ -2304,6 +2304,24 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 	if strings.TrimSpace(*ciAttestation) != "" {
 		gateInput.PolicyArtifact = *policy
 	}
+	// A pre-push event that transfers no commit is evaluated BEFORE receipt
+	// discovery, because "nothing is being delivered" is a fact about the
+	// repository and the push destination, not about any receipt. Deriving it
+	// first is also what keeps the allow honest: no receipt is read, so none can
+	// be reported as governing, and the emitted context binds no lineage, no
+	// trees and no artifact hashes. Only the complete derivation in
+	// PrePushDeliversNothing can produce it; every failure keeps the ordinary
+	// path and its denials.
+	if gateInput.Gate == reviewtransaction.GatePrePush {
+		nothingDelivered, deliveryErr := reviewtransaction.PrePushDeliversNothing(ctx, root, *baseRef)
+		if deliveryErr == nil && nothingDelivered {
+			return emitFacadeGateEvaluationNegotiated(stdout, reviewtransaction.NativeGateEvaluation{
+				Result:  reviewtransaction.GateAllow,
+				Reason:  reviewEmptyPublicationRangeReason,
+				Context: reviewtransaction.GateContext{Gate: gateInput.Gate},
+			}, negotiated)
+		}
+	}
 	compactStore, compactRecord, compactErr := discoverCompactFacadeGateReview(ctx, root, *lineage, gateInput)
 	if compactErr == nil {
 		contested := false
@@ -3272,6 +3290,11 @@ func rejectFacadeCorrectionUntracked(ctx context.Context, repo string, state rev
 // reviewDisabledUnmanagedReason is the shipped disposition sentence, unchanged
 // for every discovery outcome that already reported disabled/unmanaged.
 const reviewDisabledUnmanagedReason = "review-driven development is disabled and no receipt governs this candidate, so delivery follows ordinary repository policy"
+
+// reviewEmptyPublicationRangeReason states what the empty-range allow does and
+// does not mean. It is an allow because there is no delivery to gate, never
+// because anything was reviewed, so it says so in the same sentence.
+const reviewEmptyPublicationRangeReason = "the publication range is empty: every commit reachable from HEAD is already published on the push destination, so this push delivers nothing and no review receipt governs it"
 
 // reviewDiscoveryLeftTheGateUndecided reports whether discovery ended without
 // being able to say which authority applies, as opposed to proving that none

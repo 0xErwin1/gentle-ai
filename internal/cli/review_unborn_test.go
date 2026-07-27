@@ -175,17 +175,31 @@ func TestReviewFacadeUnbornReceiptDeniesFirstPublicationGates(t *testing.T) {
 	finalizeUnbornFacadeReview(t, repo, started)
 	runReviewCLIGit(t, repo, "commit", "-qm", "first commit")
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
-	configureCLIReviewPublicationRemote(t, repo, branch)
 
-	for _, gate := range []reviewtransaction.GateKind{reviewtransaction.GatePrePush, reviewtransaction.GatePrePR} {
-		output.Reset()
-		err := RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", started.LineageID, "--gate", string(gate), "--base-ref", "origin/" + branch}, &output)
-		if err == nil {
-			t.Fatalf("%s from an empty-base receipt must be denied\n%s", gate, output.String())
-		}
-		if combined := output.String() + err.Error(); !strings.Contains(combined, "first publication") {
-			t.Fatalf("%s denial = %v, want explicit first-publication denial\n%s", gate, err, output.String())
-		}
+	// pre-push is asked about a publication that really happens, so the remote
+	// must not already carry the delivery: an empty remote is the first
+	// publication itself, and it advertises no branch to pass as --base-ref.
+	firstPublication := filepath.Join(t.TempDir(), "first-publication.git")
+	runReviewCLIGit(t, repo, "init", "--bare", "-q", firstPublication)
+	runReviewCLIGit(t, repo, "remote", "add", "origin", firstPublication)
+	runReviewCLIGit(t, repo, "config", "branch."+branch+".remote", "origin")
+	runReviewCLIGit(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+	output.Reset()
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", started.LineageID, "--gate", "pre-push"}, &output); err == nil {
+		t.Fatalf("pre-push from an empty-base receipt must be denied\n%s", output.String())
+	} else if combined := output.String() + err.Error(); !strings.Contains(combined, "first publication") {
+		t.Fatalf("pre-push denial = %v, want explicit first-publication denial\n%s", err, output.String())
+	}
+
+	// pre-PR asks whether this receipt may open a pull request against an
+	// advertised boundary, which is a question about the receipt rather than
+	// about whether a commit moves, so it keeps refusing after publication.
+	runReviewCLIGit(t, repo, "push", "-q", "origin", "HEAD:refs/heads/"+branch)
+	output.Reset()
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", started.LineageID, "--gate", "pre-pr", "--base-ref", "origin/" + branch}, &output); err == nil {
+		t.Fatalf("pre-pr from an empty-base receipt must be denied\n%s", output.String())
+	} else if combined := output.String() + err.Error(); !strings.Contains(combined, "first publication") {
+		t.Fatalf("pre-pr denial = %v, want explicit first-publication denial\n%s", err, output.String())
 	}
 }
 
@@ -211,18 +225,46 @@ func TestFirstPublicationEmptyBaseReceiptRefusal(t *testing.T) {
 	finalizeUnbornFacadeReview(t, repo, started)
 	runReviewCLIGit(t, repo, "commit", "-qm", "first commit")
 	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
-	configureCLIReviewPublicationRemote(t, repo, branch)
 
 	want := "commit an authorized empty root, then run gentle-ai review start --committed-only with --base-ref set to that commit's SHA"
-	for _, gate := range []reviewtransaction.GateKind{reviewtransaction.GatePrePush, reviewtransaction.GatePrePR} {
-		output.Reset()
-		err := RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", started.LineageID, "--gate", string(gate), "--base-ref", "origin/" + branch}, &output)
-		if err == nil {
-			t.Fatalf("%s from an empty-base receipt must be denied\n%s", gate, output.String())
-		}
-		if combined := output.String() + err.Error(); !strings.Contains(combined, want) {
-			t.Fatalf("%s denial = %v, want typed refusal naming %q verbatim (1641)\n%s", gate, err, want, output.String())
-		}
+
+	// The publication that 1641 is actually about: a remote that has none of
+	// this work, so the push really does transfer the first publication. The
+	// empty-base receipt cannot govern it and the refusal must name the escape.
+	// An empty remote advertises no branch, so there is no --base-ref to pass;
+	// the gate derives the bootstrap boundary itself.
+	firstPublication := filepath.Join(t.TempDir(), "first-publication.git")
+	runReviewCLIGit(t, repo, "init", "--bare", "-q", firstPublication)
+	runReviewCLIGit(t, repo, "remote", "add", "origin", firstPublication)
+	runReviewCLIGit(t, repo, "config", "branch."+branch+".remote", "origin")
+	runReviewCLIGit(t, repo, "config", "branch."+branch+".merge", "refs/heads/"+branch)
+	output.Reset()
+	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", started.LineageID, "--gate", "pre-push"}, &output)
+	if err == nil {
+		t.Fatalf("pre-push published a first publication from an empty-base receipt\n%s", output.String())
+	}
+	if combined := output.String() + err.Error(); !strings.Contains(combined, want) {
+		t.Fatalf("pre-push denial = %v, want typed refusal naming %q verbatim (1641)\n%s", err, want, output.String())
+	}
+
+	// Once that same delivery is published, pre-push has nothing left to
+	// transfer. The gate stops answering for the receipt at all and reports the
+	// empty publication range, while pre-PR -- which asks whether this receipt
+	// may open a pull request, not whether a commit moves -- keeps refusing.
+	runReviewCLIGit(t, repo, "push", "-q", "origin", "HEAD:refs/heads/"+branch)
+	output.Reset()
+	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", started.LineageID, "--gate", "pre-push"}, &output); err != nil {
+		t.Fatalf("pre-push denied a push that delivers nothing: %v\n%s", err, output.String())
+	}
+	assertReviewGateResult(t, output.Bytes(), reviewtransaction.GateAllow)
+
+	output.Reset()
+	err = RunReviewFacadeValidate([]string{"--cwd", repo, "--lineage", started.LineageID, "--gate", "pre-pr", "--base-ref", "origin/" + branch}, &output)
+	if err == nil {
+		t.Fatalf("pre-pr from an empty-base receipt must be denied\n%s", output.String())
+	}
+	if combined := output.String() + err.Error(); !strings.Contains(combined, want) {
+		t.Fatalf("pre-pr denial = %v, want typed refusal naming %q verbatim (1641)\n%s", err, want, output.String())
 	}
 }
 

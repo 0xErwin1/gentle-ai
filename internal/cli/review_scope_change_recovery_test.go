@@ -213,55 +213,153 @@ func TestPrePushIdenticalContentDeliveryKeepsHonestFallback(t *testing.T) {
 	assertNamesNoDottedOperation(t, denial.Error())
 }
 
-// TestPrePushAfterFullPublicationStatesTheDeliveryBaseReason is the j06 block.
-// Once the reviewed commit is already published there is no publication range
-// left for the receipt to bind to, so no `review` command clears the gate and
-// naming one would be a lie. The refusal is therefore correct.
+// TestPrePushEmptyPublicationRangeAllowsOnlyWhenNothingIsDelivered is the j06
+// block, inverted. It used to pin a denial: once the reviewed commit was
+// already published, no commit in the publication range could carry the
+// reviewed base tree, so the gate answered scope-changed/delivery-base-ambiguous
+// and exited 1. That denial was a false positive. An empty publication range
+// means this push transfers nothing, and a push that delivers nothing has
+// nothing to approve and nothing to refuse -- Git itself answers "Everything
+// up-to-date" in the same state.
 //
-// What was not correct is that the human surface answered "requires explicit
-// maintainer action" while the JSON envelope beside it already carried the
-// exact reason. This pins that the two now say the same thing.
-func TestPrePushAfterFullPublicationStatesTheDeliveryBaseReason(t *testing.T) {
-	reviewModeHome(t)
-	repo := initReviewCLIRepo(t)
-	branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
-	configureCLIReviewPublicationRemote(t, repo, branch)
+// The allow is deliberately NOT a statement that anything was reviewed. It is
+// derived before receipt discovery runs, it names no lineage, binds no trees,
+// and carries no receipt, so nothing downstream can mistake it for an approval.
+//
+// "Empty publication range" is only a safe proxy for "nothing is delivered"
+// when the push destination is the same repository the boundary was read from.
+// The two are derived from independent configuration -- the boundary from the
+// branch's tracking upstream, the destination from pushRemote/pushDefault -- so
+// the last subtest pins the narrowing that keeps a cross-remote push denied.
+func TestPrePushEmptyPublicationRangeAllowsOnlyWhenNothingIsDelivered(t *testing.T) {
+	// deliverReviewedCommit drives a real review to a terminal receipt and
+	// commits it, leaving the delivery unpublished.
+	deliverReviewedCommit := func(t *testing.T, repo string) {
+		t.Helper()
+		writeScopeRecoveryFile(t, repo, "alpha.txt", "alpha\n")
+		runReviewCLIGit(t, repo, "add", "-N", "alpha.txt")
+		finalizeFacadeReviewForRepo(t, repo)
+		runReviewCLIGit(t, repo, "add", "alpha.txt")
+		runReviewCLIGit(t, repo, "commit", "-qm", "feat: alpha")
+	}
 
-	writeScopeRecoveryFile(t, repo, "alpha.txt", "alpha\n")
-	runReviewCLIGit(t, repo, "add", "-N", "alpha.txt")
-	finalizeFacadeReviewForRepo(t, repo)
-	runReviewCLIGit(t, repo, "add", "alpha.txt")
-	runReviewCLIGit(t, repo, "commit", "-qm", "feat: alpha")
-	// Publish the reviewed delivery in full, exactly as the journey does.
-	runReviewCLIGit(t, repo, "push", "-q", "origin", "HEAD:refs/heads/"+branch)
+	t.Run("fully published delivery allows and approves nothing", func(t *testing.T) {
+		reviewModeHome(t)
+		repo := initReviewCLIRepo(t)
+		branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
+		configureCLIReviewPublicationRemote(t, repo, branch)
+		deliverReviewedCommit(t, repo)
+		// Publish the reviewed delivery in full, exactly as the journey does.
+		runReviewCLIGit(t, repo, "push", "-q", "origin", "HEAD:refs/heads/"+branch)
 
-	var denied bytes.Buffer
-	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-push"}, &denied)
-	if err == nil {
-		t.Fatalf("pre-push allowed an already published delivery: %s", denied.String())
-	}
-	var gateErr ReviewGateDeniedError
-	if !errors.As(err, &gateErr) {
-		t.Fatalf("pre-push denial = %T %v, want ReviewGateDeniedError", err, err)
-	}
-	var published ReviewValidateResult
-	if decodeErr := json.Unmarshal(denied.Bytes(), &published); decodeErr != nil {
-		t.Fatalf("decode denied gate envelope: %v\n%s", decodeErr, denied.String())
-	}
-	if published.Context.Denial == nil || published.Context.Denial.Code != "delivery-base-ambiguous" {
-		t.Fatalf("published denial = %#v, want the delivery-base-ambiguous shape\n%s", published.Context.Denial, denied.String())
-	}
-	if published.Reason == "" {
-		t.Fatalf("published gate envelope carries no reason to surface: %s", denied.String())
-	}
-	assertNamesNoDottedOperation(t, gateErr.Error())
-	if !strings.Contains(gateErr.Error(), published.Reason) {
-		t.Fatalf("human denial = %q discards the reason %q the JSON envelope already published",
-			gateErr.Error(), published.Reason)
-	}
-	if strings.Contains(gateErr.Error(), "explicit maintainer action") {
-		t.Fatalf("human denial = %q defers to a maintainer who has no option this operator lacks", gateErr.Error())
-	}
+		var allowed bytes.Buffer
+		if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-push"}, &allowed); err != nil {
+			t.Fatalf("pre-push denied a push that delivers nothing: %v\n%s", err, allowed.String())
+		}
+		assertReviewGateResult(t, allowed.Bytes(), reviewtransaction.GateAllow)
+
+		var result ReviewValidateResult
+		if err := json.Unmarshal(allowed.Bytes(), &result); err != nil {
+			t.Fatalf("decode allowed gate envelope: %v\n%s", err, allowed.String())
+		}
+		if !strings.Contains(result.Reason, "publication range is empty") {
+			t.Fatalf("allow reason = %q, want it to state that the publication range is empty\n%s",
+				result.Reason, allowed.String())
+		}
+		if !strings.Contains(result.Reason, "delivers nothing") {
+			t.Fatalf("allow reason = %q, want it to state that the push delivers nothing\n%s",
+				result.Reason, allowed.String())
+		}
+		// The allow must never read as a review approval: no lineage, no bound
+		// trees, no receipt hashes, and no claim about a base relationship.
+		if result.Context.LineageID != "" || result.Context.Generation != 0 {
+			t.Fatalf("allow names review authority (%q gen %d) it did not evaluate\n%s",
+				result.Context.LineageID, result.Context.Generation, allowed.String())
+		}
+		if result.Context.BaseTree != "" || result.Context.CandidateTree != "" || result.Context.PathsDigest != "" {
+			t.Fatalf("allow binds review scope it never checked: %#v\n%s", result.Context, allowed.String())
+		}
+		if result.Context.EvidenceHash != "" || result.Context.LedgerHash != "" || result.Context.PolicyHash != "" {
+			t.Fatalf("allow binds receipt artifacts it never read: %#v\n%s", result.Context, allowed.String())
+		}
+		if result.Context.BaseRelationshipValid {
+			t.Fatalf("allow claims a validated base relationship it never derived\n%s", allowed.String())
+		}
+	})
+
+	t.Run("unpublished commit past the publication boundary still denies", func(t *testing.T) {
+		reviewModeHome(t)
+		repo := initReviewCLIRepo(t)
+		branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
+		configureCLIReviewPublicationRemote(t, repo, branch)
+		deliverReviewedCommit(t, repo)
+		runReviewCLIGit(t, repo, "push", "-q", "origin", "HEAD:refs/heads/"+branch)
+		// One unreviewed commit on top of the fully published delivery: the
+		// range is no longer empty, so the empty-range allow must not apply and
+		// the pre-existing denial must survive byte for byte.
+		writeScopeRecoveryFile(t, repo, "beta.txt", "beta\n")
+		runReviewCLIGit(t, repo, "add", "beta.txt")
+		runReviewCLIGit(t, repo, "commit", "-qm", "feat: beta unreviewed")
+
+		var denied bytes.Buffer
+		err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-push"}, &denied)
+		if err == nil {
+			t.Fatalf("pre-push allowed an unpublished unreviewed commit: %s", denied.String())
+		}
+		var gateErr ReviewGateDeniedError
+		if !errors.As(err, &gateErr) {
+			t.Fatalf("pre-push denial = %T %v, want ReviewGateDeniedError", err, err)
+		}
+		var result ReviewValidateResult
+		if decodeErr := json.Unmarshal(denied.Bytes(), &result); decodeErr != nil {
+			t.Fatalf("decode denied gate envelope: %v\n%s", decodeErr, denied.String())
+		}
+		if result.Allowed {
+			t.Fatalf("denied gate envelope reports allowed: %s", denied.String())
+		}
+		if result.Context.Denial == nil {
+			t.Fatalf("denial names no stage or code: %s", denied.String())
+		}
+		assertNamesNoDottedOperation(t, gateErr.Error())
+	})
+
+	t.Run("empty range against a different push destination still denies", func(t *testing.T) {
+		reviewModeHome(t)
+		repo := initReviewCLIRepo(t)
+		branch := strings.TrimSpace(runReviewCLIGit(t, repo, "symbolic-ref", "--short", "HEAD"))
+		configureCLIReviewPublicationRemote(t, repo, branch)
+		// A second real remote that already carries the base commit but none of
+		// the delivery, so it is an ordinary publication target rather than the
+		// empty-remote bootstrap case.
+		fork := filepath.Join(t.TempDir(), "fork.git")
+		runReviewCLIGit(t, repo, "clone", "--bare", repo, fork)
+		runReviewCLIGit(t, repo, "remote", "add", "fork", fork)
+
+		deliverReviewedCommit(t, repo)
+		// The tracked upstream now contains every commit reachable from HEAD,
+		// so the publication range against it is empty...
+		runReviewCLIGit(t, repo, "push", "-q", "origin", "HEAD:refs/heads/"+branch)
+		// ...but `git push` would send the delivery to the fork, which has none
+		// of it. Emptiness against the boundary is not emptiness of delivery.
+		runReviewCLIGit(t, repo, "config", "branch."+branch+".pushRemote", "fork")
+
+		var denied bytes.Buffer
+		err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", "pre-push"}, &denied)
+		if err == nil {
+			t.Fatalf("pre-push allowed a delivery to a remote that has none of it: %s", denied.String())
+		}
+		var gateErr ReviewGateDeniedError
+		if !errors.As(err, &gateErr) {
+			t.Fatalf("pre-push denial = %T %v, want ReviewGateDeniedError", err, err)
+		}
+		var result ReviewValidateResult
+		if decodeErr := json.Unmarshal(denied.Bytes(), &result); decodeErr != nil {
+			t.Fatalf("decode denied gate envelope: %v\n%s", decodeErr, denied.String())
+		}
+		if result.Allowed {
+			t.Fatalf("denied gate envelope reports allowed: %s", denied.String())
+		}
+	})
 }
 
 // prePushScopeChangeDenial runs the pre-push gate, requires a scope-changed

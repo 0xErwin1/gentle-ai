@@ -852,18 +852,30 @@ func TestOrganicReviewTargetShapeRefusals(t *testing.T) {
 		}
 		harness.git("commit", "-qm", "deliver empty-base candidate")
 
+		// The remote must not already carry the delivery, or the push under
+		// test transfers nothing and there is no first publication to refuse.
+		// An empty remote is that first publication, and it advertises no
+		// branch, so pre-push derives its bootstrap boundary without a
+		// --base-ref.
 		bare := filepath.Join(t.TempDir(), "origin.git")
-		harness.git("clone", "--bare", "--quiet", harness.repo.worktree, bare)
+		harness.git("init", "--bare", "--quiet", bare)
 		harness.git("remote", "add", "origin", bare)
 		harness.git("config", "branch.main.remote", "origin")
 		harness.git("config", "branch.main.merge", "refs/heads/main")
 
 		want := "commit an authorized empty root, then run gentle-ai review start --committed-only with --base-ref set to that commit's SHA"
-		for _, gate := range []string{"pre-push", "pre-pr"} {
-			result := harness.gateAllowFailure(gate, "--lineage", lineage, "--base-ref", "origin/main")
-			if result.Allowed || !strings.Contains(result.Reason, want) {
-				t.Fatalf("%s from an empty-base receipt = %#v, want typed refusal naming %q verbatim (1641)", gate, result, want)
-			}
+		result := harness.gateAllowFailure("pre-push", "--lineage", lineage)
+		if result.Allowed || !strings.Contains(result.Reason, want) {
+			t.Fatalf("pre-push from an empty-base receipt = %#v, want typed refusal naming %q verbatim (1641)", result, want)
+		}
+
+		// pre-PR asks whether the receipt may open a pull request against an
+		// advertised boundary, not whether a commit moves, so publishing the
+		// delivery does not retire its refusal.
+		harness.git("push", "--quiet", "origin", "HEAD:refs/heads/main")
+		result = harness.gateAllowFailure("pre-pr", "--lineage", lineage, "--base-ref", "origin/main")
+		if result.Allowed || !strings.Contains(result.Reason, want) {
+			t.Fatalf("pre-pr from an empty-base receipt = %#v, want typed refusal naming %q verbatim (1641)", result, want)
 		}
 	})
 }
