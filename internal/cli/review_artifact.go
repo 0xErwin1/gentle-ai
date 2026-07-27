@@ -15,7 +15,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 const (
@@ -25,6 +25,16 @@ const (
 	reviewResultReferencePrefix    = "rart1_"
 	reviewResultArtifactLimit      = 4 << 20
 )
+
+// reviewerResultSlotConflictError is the deliberately unwrapped identity for
+// the byte-literal-conflict guard inside captureReviewerArtifact: the exact
+// same SHA-256 already read back matches artifact.SHA256 yet its bytes
+// differ (a hash-collision-only branch in practice, since
+// readVerifiedReviewerArtifact already rejects a mismatched SHA-256 before
+// this point is ever reached). Keeping it as a named sentinel rather than an
+// inline errors.New lets the discoverability guidance below wrap it with
+// %w instead of duplicating the base message.
+var reviewerResultSlotConflictError = errors.New("captured reviewer result already exists with different canonical bytes")
 
 func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review capture-evidence", stdout, "Capture final verification evidence bound to one validating compact authority.")
@@ -43,7 +53,7 @@ func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 		return reviewPreflightError(errors.New("review capture-evidence requires exact --cwd, --lineage, --target, --expected-revision, and --input"))
 	}
 	ctx := context.Background()
-	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
+	root, err := resolveReviewMutationRoot(ctx, *cwd)
 	if err != nil {
 		return err
 	}
@@ -66,7 +76,20 @@ func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 	path := filepath.Join(dir, reviewtransaction.CompactFinalEvidenceFile)
 	if existing, readErr := os.ReadFile(path); readErr == nil {
 		if !bytes.Equal(existing, payload) {
-			return reviewPreflightError(errors.New("captured final evidence already exists with different bytes"))
+			// Confirmed genuine deadlock (organic-dx tasks.md 3b.9): no
+			// dispose-evidence-shaped command exists for "I captured the
+			// wrong final evidence and want to submit different bytes for
+			// this exact target/revision." A defect report is this fault's
+			// designed exit for this release; the Tier C clause names it.
+			baseMessage := "captured final evidence already exists with different bytes"
+			clause := reviewGenerateToolFaultDefectReport(ctx, root, reviewDefectReportInput{
+				Operation:            "review capture-evidence --lineage --target --expected-revision --input",
+				ReasonCode:           "captured_final_evidence_conflict",
+				ErrorMessage:         baseMessage,
+				TerminalPrecondition: "final verification evidence was already captured for this validating target and revision with different bytes; there is no command to replace it",
+				StateIdentifiers:     map[string]string{"state": string(state.State), "target": *target, "revision": *revision},
+			})
+			return reviewPreflightError(fmt.Errorf("%s.%s", baseMessage, clause))
 		}
 	} else if !os.IsNotExist(readErr) {
 		return readErr
@@ -195,13 +218,13 @@ var syncReviewerArtifactDirectory = func(path string) error {
 func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review capture-result", stdout, "Capture one strict reviewer result in native authority and emit its bound manifest.")
 	cwd := flags.String("cwd", ".", "repository path")
-	repositoryContext := flags.String("repository-context", "", "opaque provider-issued repository context")
+	repositoryContext := flags.String("repository-context", "", "opaque provider-issued repository context; supplied by the collect transition and mutually exclusive with --cwd, pass one or the other and not both")
 	lineage := flags.String("lineage", "", "exact review lineage identifier")
 	target := flags.String("target", "", "exact frozen target identity")
 	lens := flags.String("lens", "", "exact selected lens")
 	order := flags.Int("order", -1, "zero-based selected lens order")
 	revision := flags.String("expected-revision", "", "exact reviewing authority revision")
-	input := flags.String("input", "", "raw reviewer result JSON file or - for stdin")
+	input := flags.String("input", "", "raw reviewer result JSON file or - for stdin; `gentle-ai review schema reviewer` emits the schema and a working example")
 	preflight := flags.Bool("preflight", false, "verify the capture binding against the current reviewing authority without reading or persisting any result")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
@@ -211,7 +234,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	}
 	if flags.NArg() != 0 || strings.TrimSpace(*lineage) == "" || strings.TrimSpace(*target) == "" ||
 		strings.TrimSpace(*lens) == "" || *order < 0 || (!*preflight && strings.TrimSpace(*input) == "") {
-		return reviewPreflightError(errors.New("review capture-result requires an exact repository context, --lineage, --target, --lens, --order, and --input (or --preflight)"))
+		return reviewPreflightError(errors.New("review capture-result requires an exact repository context, --lineage, --target, --lens, --order, and --input (or --preflight); `gentle-ai review status --contract gentle-ai.review-integration/v1 --next-transition` prints the exact bindings and `gentle-ai review schema reviewer` emits the result schema with a working example"))
 	}
 	if *preflight && strings.TrimSpace(*input) != "" {
 		return reviewPreflightError(errors.New("review capture-result --preflight verifies the binding only and does not accept --input"))
@@ -227,16 +250,24 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	var root string
 	var err error
 	if contextHandle != "" {
-		root, err = reviewtransaction.ResolveReviewRepositoryContext(ctx, contextHandle, reviewtransaction.ReviewRepositoryContextBinding{
+		root, err = resolveOpaqueReviewRepositoryRoot(ctx, contextHandle, reviewtransaction.ReviewRepositoryContextBinding{
 			LineageID: *lineage, TargetIdentity: *target, Revision: *revision,
 		})
 		if err != nil {
-			return reviewOpaqueContextFailure("repository_context_unavailable", "refresh the exact native next_transition before retrying")
+			return err
 		}
 	} else {
 		root, err = (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
 		if err != nil {
 			return fmt.Errorf("resolve review repository root: %w", err)
+		}
+	}
+	// --preflight verifies the capture binding without reading or persisting
+	// any result, so it stays reachable under a frozen switch. Everything else
+	// here publishes a reviewer result into the store.
+	if !*preflight {
+		if err := authorizeReviewAuthorityMutation(ctx, root); err != nil {
+			return err
 		}
 	}
 	store, record, err := discoverCompactFacadeReview(ctx, root, *lineage, false)
@@ -254,7 +285,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if state.State != reviewtransaction.StateReviewing || state.LineageID != *lineage || state.InitialSnapshot.Identity != *target ||
 		(strings.TrimSpace(*revision) != "" && record.Revision != *revision) || *order >= len(state.SelectedLenses) || state.SelectedLenses[*order] != *lens {
 		if contextHandle != "" {
-			return reviewPreflightError(errors.New("capture binding does not match the current reviewing authority under the provider-issued repository context; refresh the exact native next transition"))
+			return reviewPreflightError(fmt.Errorf("capture binding does not match the current reviewing authority under the provider-issued repository context; ask the parent orchestrator to refresh the exact native next transition by running %s", reviewNextTransitionRefreshCommand))
 		}
 		return reviewPreflightError(fmt.Errorf("capture binding does not match the current reviewing authority under repository %q; verify the frozen lineage, target, lens, and order for that repository, or re-run with --cwd set to the repository where the review was started", root))
 	}
@@ -306,7 +337,19 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	canonicalResult = append(canonicalResult, '\n')
 	nativeResult := result.nativeLensResult()
 	nativeResult.Lens = *lens
-	candidateCausalIDs, err := verifiedCandidateCausalFindingIDs(ctx, root, state.InitialSnapshot, nativeResult)
+	// Derive verified candidate-causal IDs from the CANONICALIZED result, not
+	// the raw one: CanonicalCompactLensResult assigns a fallback ID
+	// (`<prefix>-NNN`) to any severe finding submitted without an explicit
+	// "id", and AdmitArtifact below canonicalizes independently before
+	// comparing against this set. Verifying against the raw result left a
+	// severe candidate-causal finding with no "id" permanently unmatchable
+	// against admission's canonicalized fallback ID (community report,
+	// issue-1699, confirmed unresolved by the earlier Group A fix).
+	canonicalForCausality, err := reviewtransaction.CanonicalCompactLensResult(nativeResult)
+	if err != nil {
+		return reviewPreflightError(fmt.Errorf("canonicalize reviewer result: %w", err))
+	}
+	candidateCausalIDs, err := verifiedCandidateCausalFindingIDs(ctx, root, state.InitialSnapshot, canonicalForCausality)
 	if err != nil {
 		return reviewPreflightError(err)
 	}
@@ -378,11 +421,11 @@ func captureReviewerArtifact(storeDir string, state reviewtransaction.CompactSta
 	}
 	if existing, err := readVerifiedReviewerArtifact(artifact, storeDir, state); err == nil {
 		if !bytes.Equal(existing, payload) {
-			return reviewResultArtifact{}, errors.New("captured reviewer result already exists with different canonical bytes")
+			return reviewResultArtifact{}, fmt.Errorf("%w; a different reviewer result already occupies this slot — decide with `review dispose-result` (discard it) or `review preserve-result` (keep it and quarantine this new submission)", reviewerResultSlotConflictError)
 		}
 		return artifact, persistReviewerArtifactDigest(path, artifact.SHA256)
 	} else if !os.IsNotExist(err) {
-		return reviewResultArtifact{}, err
+		return reviewResultArtifact{}, fmt.Errorf("%w; a different reviewer result already occupies this slot — decide with `review dispose-result` (discard it) or `review preserve-result` (keep it and quarantine this new submission)", err)
 	}
 	temp, err := os.CreateTemp(dir, ".capture-*")
 	if err != nil {
@@ -555,7 +598,7 @@ func persistReviewerArtifactDigest(path, digest string) error {
 		if strings.TrimSpace(string(existing)) == digest {
 			return nil
 		}
-		return errors.New("captured reviewer result digest already exists with different bytes")
+		return errors.New("captured reviewer result digest already exists with different bytes; decide with `review dispose-result` (discard it) or `review preserve-result` (keep it and quarantine this new submission)")
 	} else if !os.IsNotExist(err) {
 		return err
 	}
@@ -605,7 +648,7 @@ func ensureReviewerArtifactDir(path string) error {
 }
 func readFacadeReviewerArtifacts(ctx context.Context, repo string, raw []string, storeDir string, state reviewtransaction.CompactState, revision string) ([]facadeReviewerResult, error) {
 	if len(raw) != len(state.SelectedLenses) {
-		return nil, fmt.Errorf("review finalize requires all %d original reviewer artifact(s)", len(state.SelectedLenses))
+		return nil, fmt.Errorf("review finalize requires all %d original reviewer artifact(s); capture each missing one with `%s` (see `%s` for the exact lineage/target/lens/order bindings)", len(state.SelectedLenses), reviewCaptureResultCommandName(), reviewNextTransitionRefreshCommand)
 	}
 	frozen, err := reviewerArtifactFrozenContext(ctx, repo, state)
 	if err != nil {
@@ -687,7 +730,7 @@ func readCapturedReviewerResults(ctx context.Context, repo, storeDir string, sta
 		return nil, err
 	}
 	if len(artifacts) != len(state.SelectedLenses) {
-		return nil, fmt.Errorf("review finalize requires all %d captured reviewer result(s)", len(state.SelectedLenses))
+		return nil, fmt.Errorf("review finalize requires all %d captured reviewer result(s); capture each missing one with `%s` (see `%s` for the exact lineage/target/lens/order bindings)", len(state.SelectedLenses), reviewCaptureResultCommandName(), reviewNextTransitionRefreshCommand)
 	}
 	results := make([]facadeReviewerResult, len(artifacts))
 	frozen, err := reviewerArtifactFrozenContext(ctx, repo, state)

@@ -90,7 +90,11 @@ func validateRunMarker(root, markerPath, runID string) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, fmt.Errorf("resolve snapshot marker: %w", err)
 	}
-	if isWithin(resolvedMarker, filepath.Join(root, "dist")) {
+	// Both operands go through the same filesystem-identity question. Asking
+	// filepath.Rel here compared a resolved marker against an unresolved
+	// dist, so a dist that was itself a symlink made a marker inside the
+	// snapshot directory look like a marker outside it.
+	if directoryContains(filepath.Join(root, "dist"), resolvedMarker) {
 		return time.Time{}, errors.New("snapshot marker must remain outside the clean snapshot directory")
 	}
 	info, err := os.Lstat(markerPath)
@@ -110,9 +114,39 @@ func validateRunMarker(root, markerPath, runID string) (time.Time, error) {
 	return info.ModTime(), nil
 }
 
-func isWithin(candidate, directory string) bool {
-	rel, err := filepath.Rel(directory, candidate)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+// directoryContains reports whether path is directory itself or lies beneath
+// it, deciding identity by device and inode rather than by comparing strings.
+// Two spellings the operating system resolves to one directory -- a symlinked
+// ancestor, a case-insensitive volume, a Unicode-equivalent name -- are one
+// directory here.
+//
+// This repeats internal/pathidentity.Contains on purpose, and it is the only
+// copy that is allowed to exist. This package is compiled in isolation by the
+// release-policy verifier, which copies policy.go and releasepolicycmd/main.go
+// into a bare module so the thing that validates a release cannot depend on
+// the tree it is validating (see TestReleaseDistributionPolicyAssertionFails-
+// Closed in internal/update). An import would break that isolation, so the
+// rule is duplicated rather than the policy being changed. Keep the two in
+// step: internal/pathidentity states the policy and its limits in full.
+func directoryContains(directory, path string) bool {
+	directoryInfo, err := os.Stat(directory)
+	if err != nil || !directoryInfo.IsDir() {
+		return false
+	}
+	current, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	for {
+		if info, statErr := os.Stat(current); statErr == nil && info.IsDir() && os.SameFile(directoryInfo, info) {
+			return true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return false
+		}
+		current = parent
+	}
 }
 
 func readRegularFile(filename string) ([]byte, error) {
@@ -478,7 +512,7 @@ builds:
       - >-
         -s -w
         -X main.version={{ .Version }}
-        -X github.com/gentleman-programming/gentle-ai/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}
+        -X github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}
 archives:
   - formats:
       - tar.gz
@@ -534,6 +568,7 @@ on:
   push:
     tags:
       - "v*"
+      - "!v*-*"
 permissions:
   contents: read
 concurrency:

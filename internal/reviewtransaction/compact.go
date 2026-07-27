@@ -28,6 +28,44 @@ const (
 
 var ErrCompactCorrectionConsumed = errors.New("ordinary compact correction already consumed")
 
+// CompactSemanticStateError identifies a CompactState.Validate() failure with
+// its lineage and state, distinguishing a semantic-validation failure from a
+// structural one (JSON decode, schema mismatch, or checksum error). Only
+// parseCompactRecord's call to Validate() (compact_store.go) constructs this
+// type, so errors.As matching it is exact: never a checksum/IO/parse failure
+// (issue-1813).
+type CompactSemanticStateError struct {
+	LineageID string
+	State     State
+	Problem   string
+}
+
+func (err *CompactSemanticStateError) Error() string {
+	return fmt.Sprintf("compact lineage %q semantic state %q is invalid: %s", err.LineageID, err.State, err.Problem)
+}
+
+// compactLineageQuarantinable reports whether a store-discovery load failure
+// is eligible to exclude ONE TERMINAL-for-lineage lineage from enumeration
+// (issue-1813) instead of poisoning the entire store. It is true only when
+// errors.As matches *CompactSemanticStateError (never a checksum/IO/parse
+// failure) AND the failed state is one of {Approved, Escalated, Invalidated}
+// — the terminal-for-lineage set. This deliberately differs from
+// facadeTerminalState (review_facade.go), which excludes Invalidated: 1813's
+// reachable shape is exactly an Invalidated lineage failing semantic
+// validation.
+func compactLineageQuarantinable(err error) (*CompactSemanticStateError, bool) {
+	var semantic *CompactSemanticStateError
+	if !errors.As(err, &semantic) {
+		return nil, false
+	}
+	switch semantic.State {
+	case StateApproved, StateEscalated, StateInvalidated:
+		return semantic, true
+	default:
+		return nil, false
+	}
+}
+
 type CompactState struct {
 	Schema                    string                       `json:"schema"`
 	LineageID                 string                       `json:"lineage_id"`
@@ -76,13 +114,20 @@ type CompactResultReopenSlot struct {
 }
 
 // CompactResultReopen is the durable audit record for one exact-revision
-// validating -> reviewing repair. It preserves all original scope and budget
-// inputs while identifying the unusable slots and every admitted slot retained.
+// same-lineage reviewer-result repair back to reviewing. It preserves all
+// original scope and budget inputs while identifying the unusable slots and
+// every admitted slot retained. AuthorizedLenses names the admitted slots the
+// maintainer explicitly overrode: those results were structurally valid and
+// provider-admitted, and only this recorded authorization — never native
+// detection — moved them into quarantine. An observer therefore always sees
+// which quarantined results a maintainer discarded by decision rather than
+// which ones the store proved unusable.
 type CompactResultReopen struct {
 	PreviousRevision        string                    `json:"previous_revision"`
 	TargetIdentity          string                    `json:"target_identity"`
 	Quarantined             []CompactResultReopenSlot `json:"quarantined"`
 	Retained                []CompactResultReopenSlot `json:"retained"`
+	AuthorizedLenses        []string                  `json:"authorized_lenses,omitempty"`
 	Reason                  string                    `json:"reason"`
 	Actor                   string                    `json:"actor"`
 	ReopenedAt              time.Time                 `json:"reopened_at"`
@@ -1054,6 +1099,23 @@ func validateCompactResultReopens(state CompactState) error {
 		if len(seen) != len(state.SelectedLenses) {
 			return errors.New("reviewer result reopen audit record must classify every selected lens artifact")
 		}
+		authorized := make(map[string]struct{}, len(reopen.AuthorizedLenses))
+		for _, lens := range reopen.AuthorizedLenses {
+			if stringIndex(state.SelectedLenses, lens) < 0 {
+				return errors.New("reviewer result reopen authorization names a lens outside the frozen selection")
+			}
+			if _, duplicate := authorized[lens]; duplicate {
+				return errors.New("reviewer result reopen authorization names a lens twice")
+			}
+			authorized[lens] = struct{}{}
+			quarantinedLens := false
+			for _, slot := range reopen.Quarantined {
+				quarantinedLens = quarantinedLens || slot.Lens == lens
+			}
+			if !quarantinedLens {
+				return errors.New("reviewer result reopen authorization names a lens whose result was not quarantined")
+			}
+		}
 	}
 	return nil
 }
@@ -1136,6 +1198,69 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 		state.State = StateValidating
 	}
 	return state.Validate()
+}
+
+// CompactEscalationAccounting labels are deliberately distinct so no consumer
+// ever confuses a remaining-budget value with the frozen total, mirroring the
+// sddstatus.RemediationState precedent (CorrectionBudgetRemaining/Total).
+const (
+	CompactEscalationCauseBudgetExceeded             = "budget_exceeded"
+	CompactEscalationCauseOriginalCriteriaFailed     = "original_criteria_failed"
+	CompactEscalationCauseCorrectionRegressionFailed = "correction_regression_failed"
+)
+
+// CompactEscalationAccounting derives the spent/remaining/total correction
+// budget bookkeeping for a compact authority, instead of persisting it.
+// Spent and Total are already-persisted fields (CumulativeCorrectionLines,
+// CorrectionBudget); Remaining is their difference, clamped at 0 so an
+// over-budget escalation never renders a negative value on a visible
+// surface.
+type CompactEscalationAccounting struct {
+	// Cause names which of the three compact.go BindCorrection escalation
+	// conditions triggered, in the same precedence the source checks them:
+	// budget exceeded first, then a failed original-criteria check, then a
+	// failed correction-regression check. Empty when the state is not
+	// escalated.
+	Cause     string
+	Spent     int
+	Remaining int
+	Total     int
+}
+
+// EscalationAccounting reports the correction budget bookkeeping behind an
+// escalation, deriving it from already-persisted fields so no new schema or
+// Validate() invariant is required.
+func (state CompactState) EscalationAccounting() CompactEscalationAccounting {
+	spent := state.CumulativeCorrectionLines
+	// A correction forecast that never ran still crossed the budget:
+	// BeginCorrection escalates on CumulativeCorrectionLines+proposed and
+	// leaves ActualCorrectionLines nil, so for that shape the lines that
+	// crossed live in ProposedCorrectionLines. Reading the cumulative alone
+	// would report "spent 0" with no derivable cause for precisely the
+	// over-budget escalation every visible surface is expected to explain.
+	if state.State == StateEscalated && state.ActualCorrectionLines == nil && state.ProposedCorrectionLines != nil &&
+		state.CumulativeCorrectionLines+*state.ProposedCorrectionLines > state.CorrectionBudget {
+		spent = state.CumulativeCorrectionLines + *state.ProposedCorrectionLines
+	}
+	remaining := state.CorrectionBudget - spent
+	if remaining < 0 {
+		remaining = 0
+	}
+	accounting := CompactEscalationAccounting{
+		Spent: spent, Remaining: remaining, Total: state.CorrectionBudget,
+	}
+	if state.State != StateEscalated {
+		return accounting
+	}
+	switch {
+	case spent > state.CorrectionBudget:
+		accounting.Cause = CompactEscalationCauseBudgetExceeded
+	case state.OriginalCriteria != nil && !state.OriginalCriteria.Passed:
+		accounting.Cause = CompactEscalationCauseOriginalCriteriaFailed
+	case state.CorrectionRegression != nil && !state.CorrectionRegression.Passed:
+		accounting.Cause = CompactEscalationCauseCorrectionRegressionFailed
+	}
+	return accounting
 }
 
 func (state *CompactState) CompleteVerification(evidence []byte, approved bool) error {

@@ -446,6 +446,37 @@ func TestCompactPrePRChainRejectsMultipleViableChains(t *testing.T) {
 	}
 }
 
+// TestSelectCompactPrePRChainRootIncomingExemption proves issue-1782:
+// selectCompactPrePRChain must not report a chain convergence when a
+// historical approved receipt merely ends exactly at the currently selected
+// publication base. Fixture inspection (addCompactChainConvergence,
+// compact_chain_test.go:919) confirmed it injects its extra receipt
+// MID-CHAIN (base = fixture.commits[0], the tree after the first segment,
+// not fixture.base) rather than at the chain root, so it already exercises
+// the correct negative regression (TestCompactPrePRChainRejectsForkConvergenceAndCycle/convergence,
+// unmodified) and is not the 1782 repro itself.
+//
+// This test reproduces 1782 directly: receipts X->A, A->B, B->C are a
+// genuinely linear chain (no fork, no real convergence anywhere), but moving
+// the publication tracker to land exactly on A selects A->B->C as the
+// winning chain while the historical X->A receipt (not on the selected
+// path) still has an edge landing on A. Before the fix, the incoming-degree
+// check demanded zero incoming edges at the selected chain's own root and
+// misreported that historical predecessor edge as a convergence.
+func TestSelectCompactPrePRChainRootIncomingExemption(t *testing.T) {
+	fixture := newCompactPrePRChainFixture(t, 3)
+	gitSnapshot(t, fixture.repo, "push", "--force", fixture.remote, fixture.commits[0]+":refs/heads/"+fixture.branch)
+	gitSnapshot(t, fixture.repo, "fetch", "origin", fixture.branch+":refs/remotes/origin/"+fixture.branch)
+
+	got, attempted := EvaluateCompactPrePRChain(context.Background(), fixture.repo, fixture.input())
+	if !attempted || got.Result != GateAllow {
+		t.Fatalf("linear chain with the publication tracker at its own mid-chain root = %#v, attempted %t", got, attempted)
+	}
+	if got.Context.BaseTree != fixture.receipts[0].FinalCandidateTree || got.Context.CandidateTree != fixture.receipts[2].FinalCandidateTree {
+		t.Fatalf("composed proof context = %#v, want base %s candidate %s", got.Context, fixture.receipts[0].FinalCandidateTree, fixture.receipts[2].FinalCandidateTree)
+	}
+}
+
 func TestCompactPrePRChainRejectsIncompatibleSelectedBase(t *testing.T) {
 	fixture := newCompactPrePRChainFixture(t, 3)
 	advanceCompactChainRemote(t, fixture, "segment-a.txt")

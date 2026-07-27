@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 const ReviewIntegrationStatusSchemaV1 = "gentle-ai.review-integration.status/v1"
@@ -395,7 +395,13 @@ func (result ReviewTargetStatusResult) Validate() error {
 			return errors.New("current-target receipt status is invalid")
 		}
 	case reviewtransaction.TargetApplicabilityUnrelated:
-		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionStart && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired) || len(result.Candidates) != 0 {
+		// Candidates is intentionally NOT constrained to empty here: plural
+		// stale (scope-changed) lineages report this exact
+		// applicability/action/replayability shape (organic-dx Phase 3e —
+		// nothing governs, so nothing decides) while still listing those
+		// stale lineages as optional, discoverable recovery candidates. An
+		// unrelated target with zero candidates remains equally valid.
+		if result.Authority != nil || result.Frozen != nil || result.AuthorityTargetIdentity != "" || result.Receipt.Status != ReviewReceiptNotApplicable || result.Action != reviewtransaction.TargetStatusActionStart && !(result.Action == reviewtransaction.TargetStatusActionStop && result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay && result.Projection.Projection == reviewtransaction.ProjectionStaged && result.Replayability == reviewtransaction.ReplayabilityManualActionRequired) {
 			return errors.New("unrelated target status is inconsistent")
 		}
 	case reviewtransaction.TargetApplicabilityAmbiguous:
@@ -454,11 +460,21 @@ func (result ReviewTargetStatusResult) Validate() error {
 		return errors.New("unsupported review status recovery disposition")
 	}
 	if result.Applicability == reviewtransaction.TargetApplicabilityCurrent && result.Authority != nil &&
-		result.Authority.State == reviewtransaction.StateApproved && result.Action == reviewtransaction.TargetStatusActionRecover &&
-		(result.Receipt.Status != ReviewReceiptPresent || result.ActionDisposition != reviewtransaction.RecoveryScopeChanged ||
-			result.Projection.Kind != reviewtransaction.TargetBaseWorkspaceOverlay ||
-			result.Projection.Projection != reviewtransaction.ProjectionStaged) {
-		return errors.New("approved recovery status requires a published staged scope-expansion target")
+		result.Authority.State == reviewtransaction.StateApproved && result.Action == reviewtransaction.TargetStatusActionRecover {
+		if result.Receipt.Status != ReviewReceiptPresent || result.ActionDisposition != reviewtransaction.RecoveryScopeChanged {
+			return errors.New("approved recovery status requires a published scope-changed target") // refusal:by-design world-action: this envelope is built and validated by the same product; the exit is a code fix, not a command
+		}
+		stagedScopeExpansion := result.Projection.Kind == reviewtransaction.TargetBaseWorkspaceOverlay &&
+			result.Projection.Projection == reviewtransaction.ProjectionStaged
+		// The second approved recovery shape (issue #1826): the live target
+		// keeps the approved delivery scope kind while its candidate tree
+		// changed, so START refuses a fresh lineage and only recovery of this
+		// exact predecessor continues.
+		sameScopeChangedCandidate := result.Projection.Kind == reviewtransaction.TargetCurrentChanges ||
+			result.Projection.Kind == reviewtransaction.TargetBaseDiff
+		if !stagedScopeExpansion && !sameScopeChangedCandidate {
+			return errors.New("approved recovery status requires a published staged scope-expansion or scope-changed target") // refusal:by-design world-action: this envelope is built and validated by the same product; the exit is a code fix, not a command
+		}
 	}
 	return nil
 }
@@ -605,6 +621,10 @@ func (result ReviewTargetStatusResult) validateStartNextTransition() error {
 		return errors.New("fresh target START lineage is not canonical")
 	}
 	wantArguments := reviewStartArguments(result, lineage)
+	for index, argument := range wantArguments {
+		argument.Token = reviewTransitionArgumentToken(argument)
+		wantArguments[index] = argument
+	}
 	wantPreconditions := []ReviewTransitionArgument{{Name: "target_identity", Value: result.TargetIdentity}}
 	wantBinding := ReviewTransitionBinding{LineageID: lineage, TargetIdentity: result.TargetIdentity}
 	if !reflect.DeepEqual(transition.Execute.Arguments, wantArguments) ||

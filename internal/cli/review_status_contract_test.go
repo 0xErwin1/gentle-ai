@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/reviewtransaction"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *testing.T) {
@@ -96,7 +96,12 @@ func TestNegotiatedReviewStatusReportsFreshStartAndPreservesGlobalStatus(t *test
 	forbidden := map[string]struct{}{
 		"repository": {}, "store_path": {}, "authority_path": {}, "receipt_path": {}, "lock": {}, "locks": {}, "token": {}, "tokens": {}, "directory": {},
 	}
-	if field := findCapabilityForbiddenField(document, forbidden); field != "" || strings.Contains(first.String(), repo) {
+	// "token" stays forbidden by name; it is checked by position rather than
+	// by name alone because the status schemas publish a token property on
+	// transition arguments holding the literal argv a caller pastes. See
+	// negotiatedPrivateFieldPath: everywhere the contract does not declare it,
+	// the key is still a violation.
+	if field := negotiatedPrivateFieldPath(document, forbidden, publishedNegotiatedTransitionTokens()); field != "" || strings.Contains(first.String(), repo) {
 		t.Fatalf("negotiated status exposed provider-private field %q: %s", field, first.String())
 	}
 
@@ -572,9 +577,12 @@ func TestNegotiatedRuntimeReplaysPublishedV149AuthorityReadOnly(t *testing.T) {
 		t.Fatalf("published v1.49 bind-sdd succeeded: %s", bind.String())
 	}
 	failure := decodeReviewIntegrationFailure(t, bind.Bytes())
+	// organic-dx Phase 3b task 3b.4: negotiated legacy_read_only now names
+	// the same "choose a new lineage for compact authority" route the
+	// non-negotiated START collision already names.
 	if failure.Operation != ReviewIntegrationOperationBindSDD || failure.Code != reviewtransaction.LegacyReadOnlyErrorCode ||
 		failure.MutationOutcome != ReviewMutationNotStarted || failure.RetrySafe ||
-		failure.Replayability != reviewtransaction.ReplayabilityNotReplayable || failure.NextAction != "stop" {
+		failure.Replayability != reviewtransaction.ReplayabilityNotReplayable || failure.NextAction != "review.start" {
 		t.Fatalf("published v1.49 bind-sdd failure = %#v\n%s", failure, bind.String())
 	}
 	var typed *reviewtransaction.LegacyReadOnlyError
@@ -721,6 +729,40 @@ func TestReviewActionEligibilityFailsClosedForEscalatedAuthority(t *testing.T) {
 	}
 }
 
+// TestNegotiatedStatusOffersRecoveryForAccountingOnlyEscalatedUnchangedTarget
+// pins the routing fix for the accounting-only-escalation dead end: native
+// STATUS now names Recover/RecoveryEscalated for an escalated authority whose
+// target has not changed (the shape reviewtransaction.AssessTargetStatus
+// produces once compactAccountingOnlyEscalation matches), and the negotiated
+// contract must classify it as an ordinary eligible recovery, never as
+// forbidden_terminal_escalated_authority (which keys on action == stop).
+func TestNegotiatedStatusOffersRecoveryForAccountingOnlyEscalatedUnchangedTarget(t *testing.T) {
+	native := reviewtransaction.TargetStatusResult{
+		Applicability: reviewtransaction.TargetApplicabilityCurrent, AuthorityVersion: reviewtransaction.AuthorityVersionCompact,
+		LineageID: "accounting-only-escalated", State: reviewtransaction.StateEscalated, Generation: 1,
+		Revision: "sha256:" + strings.Repeat("a", 64), OriginalChangedLines: 2, Tier: reviewtransaction.RiskMedium, CorrectionBudget: 1,
+		Action: reviewtransaction.TargetStatusActionRecover, ActionDisposition: reviewtransaction.RecoveryEscalated,
+		Replayability: reviewtransaction.ReplayabilityManualActionRequired,
+	}
+	status := newReviewTargetStatusResult(native)
+	status.Projection = publishedStatusFixtureProjection(t)
+	status.TargetIdentity = status.Projection.CurrentSnapshotIdentity
+	status.Eligibility = newReviewActionEligibility(status)
+	if err := status.Validate(); err != nil {
+		t.Fatalf("accounting-only escalated recovery status rejected: %v", err)
+	}
+	allowed := status.Eligibility.AllowedActions
+	if len(allowed) != 1 || allowed[0].Action != "review.recover" || allowed[0].ReasonCode != reviewActionEligibleEscalatedRecovery ||
+		allowed[0].Disposition != reviewtransaction.RecoveryEscalated {
+		t.Fatalf("accounting-only escalated recovery allowed action = %#v", allowed)
+	}
+	for _, forbidden := range status.Eligibility.ForbiddenActions {
+		if forbidden.ReasonCode == reviewActionForbiddenTerminalEscalated {
+			t.Fatalf("accounting-only escalated recovery still reads terminal_escalated: %#v", forbidden)
+		}
+	}
+}
+
 func TestReviewFinalizeEligibilityCannotPublishRecoveryBinding(t *testing.T) {
 	eligibility := ReviewActionEligibility{
 		AllowedActions:   []ReviewEligibleAction{{Action: "review.recover", ReasonCode: reviewActionEligibleEscalatedRecovery, RequiredInputs: []string{}, Disposition: reviewtransaction.RecoveryEscalated, Binding: &ReviewActionBinding{}}},
@@ -825,6 +867,45 @@ func newPublishedV149CLIRepo(t *testing.T) (string, string, string) {
 	return repo, authorityRoot, filepath.Join(destination, "artifacts", "receipt.json")
 }
 
+// TestNegotiatedReviewStatusValidateAcceptsOptionalCandidatesForUnrelatedTarget
+// is organic-dx Phase 3e's downstream-consumer proof for
+// ReviewTargetStatusResult.Validate(): plural stale lineages now reuse the
+// TargetApplicabilityUnrelated shape while still listing the stale lineages
+// in Candidates as optional recovery, so Validate() must no longer force
+// Candidates empty for an unrelated target. This is a real production
+// consumer (internal/cli/review_facade.go calls result.Validate() before
+// emitting the negotiated `review status --contract` JSON), not test-only
+// scaffolding — see TestNegotiatedReviewStatusCompletesWithOneHundredHistoricalLeaves
+// below for the end-to-end proof through that exact call site.
+func TestNegotiatedReviewStatusValidateAcceptsOptionalCandidatesForUnrelatedTarget(t *testing.T) {
+	root := filepath.Join("..", "..", "contracts", "review-integration", "v1")
+	payload, err := os.ReadFile(filepath.Join(root, "fixtures", "status-v2-unrelated.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status ReviewTargetStatusResult
+	if err := json.Unmarshal(payload, &status); err != nil {
+		t.Fatal(err)
+	}
+	if err := status.Validate(); err != nil {
+		t.Fatalf("baseline unrelated fixture failed validation: %v", err)
+	}
+	status.Candidates = []string{"stale-status-first", "stale-status-second"}
+	if err := status.Validate(); err != nil {
+		t.Fatalf("unrelated status with optional recovery candidates failed validation: %v", err)
+	}
+}
+
+// TestNegotiatedReviewStatusCompletesWithOneHundredHistoricalLeaves previously
+// asserted status.Applicability == TargetApplicabilityAmbiguous with
+// status.Action == TargetStatusActionSelectLineage for 100 STALE
+// (scope-changed) lineages and zero exactly-governing candidates — that WAS
+// the exact stale-history-decides framing organic-dx Phase 3e corrects (see
+// internal/reviewtransaction/target_status.go), so the expectation is
+// deliberately updated here rather than preserved. 100 stale lineages must
+// never force disambiguation by themselves; they now report the identical
+// "nothing governs, start fresh" shape a zero-candidate target already
+// reports, while still listing all 100 as optional recovery candidates.
 func TestNegotiatedReviewStatusCompletesWithOneHundredHistoricalLeaves(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("reviewed candidate\n"), 0o644); err != nil {
@@ -854,9 +935,13 @@ func TestNegotiatedReviewStatusCompletesWithOneHundredHistoricalLeaves(t *testin
 	if err := json.Unmarshal(output.Bytes(), &status); err != nil {
 		t.Fatal(err)
 	}
-	if status.Applicability != reviewtransaction.TargetApplicabilityAmbiguous ||
-		status.Action != reviewtransaction.TargetStatusActionSelectLineage || len(status.Candidates) != 100 {
+	if status.Applicability != reviewtransaction.TargetApplicabilityUnrelated ||
+		status.Action != reviewtransaction.TargetStatusActionStart ||
+		status.Replayability != reviewtransaction.ReplayabilityNotReplayable || len(status.Candidates) != 100 {
 		t.Fatalf("negotiated 100-leaf status = %#v", status)
+	}
+	if err := status.Validate(); err != nil {
+		t.Fatalf("negotiated 100-leaf status failed contract validation: %v", err)
 	}
 	t.Logf("negotiated status completed 100 terminal histories in %s within the %s contract deadline", elapsed, reviewFacadeOperationTimeout)
 }

@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathidentity"
 )
 
 type TargetKind string
@@ -235,8 +237,7 @@ func (builder SnapshotBuilder) buildHeadWithIntended(ctx context.Context, intend
 		return "", "", err
 	}
 	if len(intended) > 0 && tracked == 0 {
-		args := append([]string{"add", "--"}, literalPathspecs(intended)...)
-		if _, err := runGit(ctx, builder.Repo, env, nil, args...); err != nil {
+		if err := addIntendedPathspecs(ctx, builder.Repo, env, intended); err != nil {
 			return "", "", err
 		}
 	}
@@ -521,7 +522,10 @@ func (builder SnapshotBuilder) repositoryRoot(ctx context.Context) (string, erro
 	if err != nil {
 		return "", err
 	}
-	if filepath.Clean(root) != filepath.Clean(abs) {
+	// Identity, not string equality. Git reports the toplevel in the spelling
+	// the kernel gave it, which on a case-insensitive volume differs from the
+	// spelling the caller typed even after filepath.EvalSymlinks resolved both.
+	if !pathidentity.SameDirectory(root, abs) {
 		return "", fmt.Errorf("snapshot repo %s is not the repository root %s", abs, root)
 	}
 	return root, nil
@@ -541,8 +545,12 @@ func (builder SnapshotBuilder) ResolveRepositoryRoot(ctx context.Context) (strin
 	if err != nil {
 		return "", err
 	}
-	relative, err := filepath.Rel(root, abs)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+	// 1773 boundary 2: filepath.Rel decided containment by comparing strings,
+	// so on a default case-insensitive APFS volume the requested path and the
+	// toplevel Git reported for it -- same device, same inode, different
+	// spelling -- were reported as different repositories. Containment is a
+	// filesystem question and internal/pathidentity asks the filesystem.
+	if !pathidentity.Contains(root, abs) {
 		return "", errors.New("resolved repository root does not contain the requested path")
 	}
 	return root, nil
@@ -561,12 +569,109 @@ func (builder SnapshotBuilder) DiscoverIntendedUntracked(ctx context.Context) ([
 	}
 	parts := bytes.Split(output, []byte{0})
 	paths := make([]string, 0, len(parts))
+	var nestedRepositories []string
 	for _, item := range parts {
-		if len(item) > 0 {
-			paths = append(paths, string(item))
+		if len(item) == 0 {
+			continue
+		}
+		value := string(item)
+		if strings.HasSuffix(value, "/") {
+			// Without --directory, `git ls-files --others` recurses into every
+			// ordinary untracked directory and lists its files one by one. The
+			// only entries it reports as a bare directory with a trailing slash
+			// are directories it refuses to look inside because they hold
+			// another Git repository: a nested linked worktree's checkout or an
+			// embedded foreign clone (issue #1881, reported as ".wt/test/").
+			nestedRepositories = append(nestedRepositories, value)
+			continue
+		}
+		paths = append(paths, value)
+	}
+	if len(nestedRepositories) != 0 {
+		if err := excludeRegisteredNestedWorktrees(ctx, root, nestedRepositories); err != nil {
+			return nil, err
 		}
 	}
-	return canonicalPaths(paths)
+	canonical, err := canonicalPaths(paths)
+	if err != nil {
+		return nil, &UntrackedScopeRefusalError{Cause: err}
+	}
+	return canonical, nil
+}
+
+// UntrackedScopeRefusalError marks a working-tree shape that untracked-scope
+// discovery refuses as a NAMED, anticipated condition: an embedded foreign
+// repository, or an untracked path Git reported that cannot be addressed as
+// canonical review scope. Callers use the type to tell a policy refusal (the
+// operator changes the repository layout) apart from an unanticipated internal
+// fault (a product defect worth a defect report); the message is unchanged.
+type UntrackedScopeRefusalError struct{ Cause error }
+
+func (err *UntrackedScopeRefusalError) Error() string { return err.Cause.Error() }
+func (err *UntrackedScopeRefusalError) Unwrap() error { return err.Cause }
+
+// excludeRegisteredNestedWorktrees decides what happens to the opaque
+// nested-repository directories `git ls-files --others` reported inside root.
+//
+// A directory that `git worktree list --porcelain` names as a linked worktree
+// of this repository is excluded from the candidate the same way `.git` itself
+// is: it is another checkout's working tree, not reviewable content of this
+// one. The alternative — admitting it as ordinary untracked content — was
+// considered and rejected: Git reports only the bare directory and refuses to
+// enumerate the files inside it, so the snapshot could never hash or diff
+// those bytes, and freezing a directory entry as if it were a reviewable file
+// would produce a manifest the delivery gates can never re-verify. Exclusion
+// is principled rather than pattern-based because the worktree list is Git's
+// own authoritative registry of which directories are its linked checkouts.
+//
+// An opaque nested repository that is NOT a registered worktree (an embedded
+// foreign clone) stays refused: silently dropping it would hide from the user
+// that a directory they may believe is under review can never be, and Git
+// itself warns rather than recurses when asked to add one. The refusal names
+// the path and every honest way out.
+func excludeRegisteredNestedWorktrees(ctx context.Context, root string, nestedRepositories []string) error {
+	registered, err := linkedWorktreeDirectories(ctx, root)
+	if err != nil {
+		return err
+	}
+	for _, value := range nestedRepositories {
+		logicalPath, err := normalizeLogicalPath(strings.TrimSuffix(value, "/"))
+		if err != nil {
+			return &UntrackedScopeRefusalError{Cause: fmt.Errorf("untracked nested repository directory %q is not addressable as review scope: %w; add it to .gitignore or move it outside this repository", value, err)}
+		}
+		absolute := filepath.Join(root, filepath.FromSlash(logicalPath))
+		excluded := false
+		for _, worktree := range registered {
+			if pathidentity.SameDirectory(absolute, worktree) {
+				excluded = true
+				break
+			}
+		}
+		if !excluded {
+			return &UntrackedScopeRefusalError{Cause: fmt.Errorf("untracked directory %q holds another Git repository that is not a linked worktree of this one, so it cannot enter the review candidate: add it to .gitignore, move it outside this repository, or register it as a linked worktree", logicalPath)} // refusal:by-design world-action: the exit is a repository-layout change (gitignore, move, or register the nested checkout), which no command of this product can decide or perform
+		}
+	}
+	return nil
+}
+
+// linkedWorktreeDirectories returns the absolute working-tree directories Git
+// registers for this repository, including the main one. Plain --porcelain
+// (not -z) keeps the git floor low; a hypothetical registered path containing
+// a newline would mis-parse into lines that match no opaque directory, which
+// fails closed into the embedded-repository refusal instead of silently
+// excluding content.
+func linkedWorktreeDirectories(ctx context.Context, root string) ([]string, error) {
+	output, err := runGit(ctx, root, nil, nil, "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil, err
+	}
+	var directories []string
+	for _, line := range strings.Split(string(output), "\n") {
+		if directory, ok := strings.CutPrefix(line, "worktree "); ok && directory != "" {
+			directories = append(directories, directory)
+		}
+	}
+	return directories, nil
 }
 
 // DiscoverTrackedAndUnignoredPaths returns the canonical Git-owned workspace
@@ -631,9 +736,58 @@ func resolveGitDirectory(ctx context.Context, repo, selector string) (string, er
 	}
 	output, err := runGit(ctx, repo, nil, nil, "rev-parse", selector)
 	if err != nil {
+		// Only --show-toplevel can fail for want of a working tree;
+		// --git-dir and --git-common-dir answer normally in a bare repository.
+		if selector == "--show-toplevel" {
+			return "", bareRepositoryFailure(ctx, repo, err)
+		}
 		return "", err
 	}
 	return canonicalGitDirectory(repo, output)
+}
+
+// ErrBareRepositoryHasNoWorkingTree reports that the requested repository is
+// bare. Refusing is correct: a review candidate is a working-tree diff, and a
+// bare repository has no working tree for one to exist in.
+var ErrBareRepositoryHasNoWorkingTree = errors.New("review needs a working tree")
+
+// BareRepositoryError states that refusal in the product's own voice and names
+// what the operator can run, which is normally what they wanted: they are in a
+// bare clone or a server-side hook and the work they mean to review lives in a
+// checkout somewhere else.
+//
+// It deliberately names no subcommand. This boundary serves every review verb,
+// so naming one verb would hand a caller of a different verb a command that
+// does not clear their block -- worse than naming nothing. The flag it names is
+// the one every review verb accepts.
+type BareRepositoryError struct {
+	Path string
+}
+
+func (err *BareRepositoryError) Error() string {
+	return fmt.Sprintf(
+		"%v: %s is a bare repository, and a review candidate is a working-tree diff; "+
+			"run the same command again from a checkout, or point it at one with `--cwd <path-to-a-checkout>`",
+		ErrBareRepositoryHasNoWorkingTree, err.Path,
+	)
+}
+
+func (err *BareRepositoryError) Unwrap() error { return ErrBareRepositoryHasNoWorkingTree }
+
+// bareRepositoryFailure classifies a rev-parse failure by asking Git the single
+// question that separates "this repository has no working tree" from every
+// other cause. A probe that cannot answer, or that answers no, returns the
+// original error untouched: an unexpected failure must keep the cause it came
+// with, because destroying diagnostic information is its own defect.
+func bareRepositoryFailure(ctx context.Context, repo string, err error) error {
+	if err == nil {
+		return nil
+	}
+	output, probeErr := runGit(ctx, repo, nil, nil, "rev-parse", "--is-bare-repository")
+	if probeErr != nil || string(bytes.TrimSpace(output)) != "true" {
+		return err
+	}
+	return &BareRepositoryError{Path: repo}
 }
 
 func canonicalGitDirectory(repo string, output []byte) (string, error) {
@@ -784,8 +938,7 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 			}
 		}
 		if len(intended) > 0 {
-			args := append([]string{"add", "--"}, literalPathspecs(intended)...)
-			if _, err := runGit(ctx, builder.Repo, env, nil, args...); err != nil {
+			if err := addIntendedPathspecs(ctx, builder.Repo, env, intended); err != nil {
 				return "", "", "", err
 			}
 		}
@@ -812,7 +965,7 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 
 func (builder SnapshotBuilder) resolveCurrentChangesBase(ctx context.Context, projection Projection) (string, bool, error) {
 	baseTree, headErr := builder.resolveTree(ctx, "HEAD")
-	if headErr == nil || projection != ProjectionStaged {
+	if headErr == nil {
 		return baseTree, false, headErr
 	}
 
@@ -962,6 +1115,38 @@ func literalPathspecs(logicalPaths []string) []string {
 		result[index] = literalPathspec(logicalPath)
 	}
 	return result
+}
+
+// addIntendedPathspecs stages the intended-untracked paths by literal
+// pathspec, feeding them to Git over stdin instead of argv. Expanding one
+// ":(literal)<path>" pathspec per file into argv scales with the size of the
+// intended-untracked set; Windows caps a process command line at 32767
+// characters, so a large set (~1000+ paths) can exceed that limit and fail
+// to launch the process at all (issue 1778). --pathspec-from-file=- with
+// --pathspec-file-nul avoids argv entirely and needs no quoting, since
+// entries are NUL-delimited; pathspec magic such as ":(literal)" is still
+// honored per-entry.
+func addIntendedPathspecs(ctx context.Context, repo string, env []string, intended []string) error {
+	if len(intended) == 0 {
+		return nil
+	}
+	stdin := nulJoinedPathspecs(intended)
+	_, err := runGit(ctx, repo, env, stdin, "add", "--pathspec-from-file=-", "--pathspec-file-nul")
+	return err
+}
+
+// nulJoinedPathspecs renders each intended-untracked path as a NUL-delimited
+// literal pathspec suitable for `git add --pathspec-from-file=- --pathspec-file-nul`.
+func nulJoinedPathspecs(logicalPaths []string) []byte {
+	pathspecs := literalPathspecs(logicalPaths)
+	var buffer bytes.Buffer
+	for index, pathspec := range pathspecs {
+		if index > 0 {
+			buffer.WriteByte(0)
+		}
+		buffer.WriteString(pathspec)
+	}
+	return buffer.Bytes()
 }
 
 func canonicalPaths(values []string) ([]string, error) {
@@ -1141,9 +1326,17 @@ var ErrGitOutputLimit = errors.New("git output exceeded deterministic byte limit
 // than the caller permits. The capture retains at most Limit bytes while the
 // child is drained, so oversized output cannot grow process memory without
 // bound.
+//
+// Actual is the total number of bytes the capture observed while draining,
+// which is what makes an overflow explainable rather than merely detectable: a
+// caller told only "you exceeded four mebibytes" cannot tell whether it is over
+// by a kilobyte or by a factor of three, and so cannot judge how much smaller a
+// candidate has to become. It is zero only where the total is genuinely
+// unknown, so a renderer must treat zero as "unmeasured", never as "empty".
 type GitOutputLimitError struct {
-	Args  []string
-	Limit int
+	Args   []string
+	Limit  int
+	Actual int
 }
 
 func (err *GitOutputLimitError) Error() string {
@@ -1275,7 +1468,7 @@ func runGitCaptured(ctx context.Context, repo string, extraEnv []string, stdin [
 		}
 	}
 	if stdout != nil && stdout.exceeded {
-		return nil, &GitOutputLimitError{Args: append([]string{}, args...), Limit: outputLimit}
+		return nil, &GitOutputLimitError{Args: append([]string{}, args...), Limit: outputLimit, Actual: stdout.total}
 	}
 	if rejectStderr && len(diagnostic) != 0 {
 		return nil, fmt.Errorf("git inventory produced diagnostics: %s", strings.TrimSpace(string(diagnostic)))
@@ -1287,10 +1480,16 @@ type boundedGitOutput struct {
 	buffer   bytes.Buffer
 	limit    int
 	exceeded bool
+	// total counts every byte the child produced, including the bytes past
+	// the limit that are deliberately discarded. Counting is free -- the
+	// child is drained regardless -- and it is the only place the true size
+	// is ever visible, because nothing downstream retains the discarded tail.
+	total int
 }
 
 func (output *boundedGitOutput) Write(payload []byte) (int, error) {
 	written := len(payload)
+	output.total += written
 	remaining := output.limit - output.buffer.Len()
 	if remaining > 0 {
 		if remaining > len(payload) {

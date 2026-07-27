@@ -37,7 +37,9 @@ type FrozenCandidateDiff struct {
 // NewFrozenCandidateDiff builds the canonical exact-byte transport object.
 func NewFrozenCandidateDiff(payload []byte) (FrozenCandidateDiff, error) {
 	if len(payload) > MaxFrozenCandidateDiffBytes {
-		return FrozenCandidateDiff{}, &GitOutputLimitError{Args: []string{"diff"}, Limit: MaxFrozenCandidateDiffBytes}
+		return FrozenCandidateDiff{}, &GitOutputLimitError{
+			Args: []string{"diff"}, Limit: MaxFrozenCandidateDiffBytes, Actual: len(payload),
+		}
 	}
 	digest := sha256.Sum256(payload)
 	return FrozenCandidateDiff{

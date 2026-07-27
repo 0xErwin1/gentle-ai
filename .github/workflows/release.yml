@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - "v*"
+      # Pre-release tags (v2.2.0-rc.1, v3.0.0-beta.2, ...) are for community
+      # testing, never for publication: preflight only accepts exact stable
+      # semver, so triggering on them can only ever turn the repo red.
+      - "!v*-*"
 
 # Read-only is the workflow default. Only the publication job receives the one
 # write capability GoReleaser needs.

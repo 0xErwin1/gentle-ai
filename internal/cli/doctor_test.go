@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/doctor"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/doctor"
 )
 
 // --- checkOneTool ---
@@ -451,12 +451,14 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
 	origHTTP := httpGetFn
 	origPathDirs := pathDirsFn
 	origHomeDir := osUserHomeDirDoctor
+	origExecutable := osExecutableDoctor
 	defer func() {
 		lookPathFn = origLookPath
 		availableBytesFn = origAvail
 		httpGetFn = origHTTP
 		pathDirsFn = origPathDirs
 		osUserHomeDirDoctor = origHomeDir
+		osExecutableDoctor = origExecutable
 	}()
 
 	homeDir := t.TempDir()
@@ -481,6 +483,13 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
 	pathSnapshots := 0
 	pathDirsFn = func() []string { pathSnapshots++; return []string{"/usr/local/bin"} }
 	osUserHomeDirDoctor = func() (string, error) { return homeDir, nil }
+	// organic-dx Phase 3f task 3f.5 added an invoked-executable clause to the
+	// gentle-ai tool check; this integration test is about RunDoctor's overall
+	// rendering shape, not that feature, so it mocks the invoked executable to
+	// match the PATH-resolved copy exactly (the common case) to keep the
+	// expected output byte-identical to before that feature landed. The new
+	// feature has its own dedicated tests in doctor_invoked_binary_test.go.
+	osExecutableDoctor = func() (string, error) { return "/usr/local/bin/gentle-ai", nil }
 
 	var buf bytes.Buffer
 	if err := RunDoctor(context.Background(), &buf); err != nil {
@@ -490,7 +499,7 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
 	want := fmt.Sprintf(`gentle-ai doctor — system health check
 =======================================
 
-  [ok]  tool:gentle-ai                 gentle-ai found at /usr/local/bin/gentle-ai
+  [ok]  tool:gentle-ai                 gentle-ai found at /usr/local/bin/gentle-ai; invoked executable: /usr/local/bin/gentle-ai (version dev)
   [ok]  tool:gga                       gga found at /usr/local/bin/gga
   [ok]  tool:engram                    engram found at /usr/local/bin/engram
   [ok]  tool:claude                    claude found at /usr/local/bin/claude

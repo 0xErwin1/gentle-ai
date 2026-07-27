@@ -25,6 +25,8 @@
 > go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.46.0
 > ```
 > To test the latest released RDD build, use `@latest`. Use `@main` only for unreleased development changes. See the [full RDD version policy](docs/quickstart.md#version-policy).
+>
+> The `v1.46.0` pin above uses the unsuffixed import path; every `v2.x` install uses `github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai`, because Go requires the `/vN` suffix for major version 2 and above.
 
 ## What It Does
 
@@ -59,27 +61,29 @@ Gentle-AI is NOT an AI agent installer. Most agents are easy to install. It is a
 
 > **Note**: This project supersedes [Agent Teams Lite](https://github.com/Gentleman-Programming/agent-teams-lite) (now archived). Everything ATL provided is included here with better installation, automatic updates, and persistent memory.
 
-### Delegation and Review Boundaries
+### Organic Routing and Review Boundaries
 
-Gentle-AI's workflow guidance keeps the parent/orchestrator thread thin. Once a task stops being small, delegation or an explicit SDD phase boundary is expected rather than optional.
+Every configured agent receives the same outcome-first routing, even when the optional SDD component is not selected. Ask for the outcome; the agent uses exactly one implementation route and reviews the candidate only after implementation.
 
-| Trigger | Expected behavior |
+| Situation | Expected behavior |
 | --- | --- |
-| Reading 4+ files to understand a flow | Delegate exploration or run an exploration phase. |
-| Touching 2+ non-trivial files | Use one focused writer and validate the result. |
-| Implementation ready for review | Start one bounded native review that freezes the candidate and creates a content-bound receipt. |
-| Commit, push, or PR | Validate that **same** receipt against the live Git candidate; never silently reopen review or create a new budget. |
-| Release | Validate native authority/receipt, or use protected-main only with an exact tag/current `origin/main` SHA, exact-SHA CI, remote-head recheck, and no fresh risk. |
-| Wrong cwd, worktree/git accident, merge recovery, or confusing test/env issue | Stop, preserve the review scope, and investigate or validate the existing receipt before proceeding. |
-| Long monolithic session with accumulating complexity | Pause and delegate, re-plan, or justify why not. |
+| Understanding needs 1-3 files, or one mechanical file change is already understood | Keep the bounded action direct and inline. |
+| Understanding needs 4+ files, reading prepares a write, broad research is needed, or a writer changes 2+ non-trivial files | Delegate the narrow exploration or one focused writer without creating SDD state. |
+| Durable proposal, spec, design, and task artifacts would materially reduce substantial ambiguity | Offer optional SDD; select it only after an explicit request or an accepted proposal. |
+| A candidate is ready for review | Freeze the exact bytes and derive review effort from evidence, never size alone. Interactive starts ask once per clone before reviewer work; non-interactive tier-1/tier-2 starts proceed without prompting and report how to disable review mode. |
+| Commit, push, PR, or release | Validate the same content-bound receipt at the applicable delivery gate; never silently reopen review or create another budget. |
+| Scope changes or an operation is interrupted | Use provider-owned status, recovery, and reconciliation; do not infer authority or replay safety from narration. |
 
-The workflow guidance directs agents; the native review commands bind receipts and lifecycle gates to the Git candidate they inspect. They protect against accidental scope or identity drift, not a malicious local actor. See the [review authority threat model](docs/review-authority-threat-model.md) for boundaries and assumptions.
+Implementation routing does not decide review strength, and per-action test, build, install, or review workers do not change the selected route. Native commands own repository identity, candidate scope, lifecycle transitions, receipts, and safe continuations. See [Organic Implementation Routing](docs/trigger-rules.md), the [Organic RDD architecture](docs/architecture/organic-rdd.md), and the [review authority threat model](docs/review-authority-threat-model.md).
 
 ---
 
 ## Quick Start
 
 ### Install (recommended)
+
+> [!NOTE]
+> `gentle-ai install` requires Node.js 18+ and npm on every platform (it warns if either is missing). See [Prerequisites](docs/quickstart.md#prerequisites) for your distro's install hint.
 
 **macOS / Linux**
 
@@ -90,7 +94,7 @@ curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/mai
 **Windows (PowerShell)**
 
 ```powershell
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 ```
 
 > [!WARNING]
@@ -126,6 +130,10 @@ brew install gentle-ai
 go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.46.0
 ```
 
+The stable pin keeps the unsuffixed import path because `v1.46.0` predates the
+`/v2` module path. Releases on the `v2.x` line install from
+`github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai`.
+
 **Scoop (Windows)** — temporarily unavailable while official Windows binary distribution is held for public-trust Authenticode signing. Use the Windows `go install` command above.
 
 By default, `gentle-ai install` writes agent-scoped files to each selected agent's global config directory. To keep the Gentleman stack isolated to one project, run:
@@ -143,7 +151,7 @@ Workspace scope applies to selected agents for agent-scoped files such as system
 curl -fsSL https://raw.githubusercontent.com/Gentleman-Programming/gentle-ai/main/scripts/install.sh | bash -s -- --channel beta
 
 # Windows (PowerShell)
-$env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@main
+$env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
 ```
 
 ### RDD version policy
@@ -162,14 +170,14 @@ gentle-ai version
 **Latest released RDD build (unstable)**
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@latest
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 gentle-ai version
 ```
 
 **Unreleased RDD development build (`main`)**
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@main
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
 gentle-ai version
 ```
 
@@ -182,7 +190,7 @@ The managed installer tracks the channel's latest version and does not accept an
 ## Core Workflow
 
 1. **Install and configure.** Run the installer, select the agents and components you want, then open your agent in a project.
-2. **Plan when it helps.** SDD is optional for substantial work. Its artifacts can live in **Engram** for cross-session memory, **OpenSpec** for versioned files, or **hybrid** for both.
+2. **Use the smallest implementation route.** Keep bounded work direct, delegate actions that need fresh context, and use SDD only after an explicit request or an accepted proposal. SDD artifacts can live in **Engram** for cross-session memory, **OpenSpec** for versioned files, or **hybrid** for both.
 3. **Build with discipline.** `/sdd-init` detects project testing capabilities; when Strict TDD is active, SDD apply works test-first. SDD verify audits RED/GREEN evidence and runs verification. Agents that support delegation use focused subagents instead of one growing conversation.
 4. **Review one candidate.** After implementation, bounded native review freezes the candidate and issues one content-bound receipt. Commit, push, and PR validate that same receipt. Releases validate native authority and its receipt, unless the protected-main fast path has the exact tag/current `origin/main` SHA, exact-SHA successful CI, a remote-head recheck, and no fresh risk.
 
@@ -194,6 +202,20 @@ The managed installer tracks the channel's latest version and does not accept an
    gentle-ai upgrade
    gentle-ai sync
    ```
+
+### Control review-driven development
+
+Review mode is user-owned and available independently of the review lifecycle:
+
+```bash
+gentle-ai review mode status --cwd .
+gentle-ai review mode disable --cwd .
+gentle-ai review mode enable --cwd .
+```
+
+`status` is read-only. Any global or clone-local disabled source wins; a clone can opt out with `--scope clone` but cannot force review on. Re-enabling applies only to future candidates, while declining a one-candidate review prompt does not change the mode. When review is disabled, existing exact governing receipts remain authoritative; otherwise native review gates report `disabled/unmanaged` and defer delivery to ordinary repository policy without fabricating approval.
+
+The current unstable RDD line still has two limitations, both about SDD while review mode is disabled. The SDD pre-verify status path can still require review. And the native archive gate now defers correctly, but the `sdd-archive` skill's own contract still requires `reviewGate.result: allow`, so the agent-facing rule blocks where the product no longer does. See [Organic RDD known limitations](docs/architecture/organic-rdd.md#9-known-open).
 
 ### Release verification
 
@@ -275,6 +297,7 @@ engram tui                    # Visual memory browser
 | Your task | Start here |
 | --- | --- |
 | Understand the Gentle-AI mental model | [Intended Usage](docs/intended-usage.md) |
+| Choose direct, delegated, or optional SDD routing | [Organic Implementation Routing](docs/trigger-rules.md) |
 | Plan substantial work with SDD | [Intended Usage](docs/intended-usage.md) and [OpenSpec Config](docs/openspec-config.md) |
 | Configure a supported agent | [Agents](docs/agents.md) for the feature matrix and per-agent notes |
 | Use the Pi package harness | [Pi Agent](docs/pi.md) for packages, Pi-native commands, models, and troubleshooting |
@@ -282,7 +305,7 @@ engram tui                    # Visual memory browser
 | Review or deliver a change safely | [Review Integration Contract](docs/review-integration.md) for provider consumers; [Review Authority Threat Model](docs/review-authority-threat-model.md) for technical boundaries; [Chapter 21 — Verifiable Trust](https://the-amazing-gentleman-programming-book.vercel.app/en/book/Chapter21_Verifiable-Trust) for the mental model |
 | Find or share persistent context | [Engram Commands](docs/engram.md) |
 | Refresh or troubleshoot an installation | [Usage](docs/usage.md), [Backup & Rollback](docs/rollback.md), and [Platforms](docs/platforms.md) |
-| Extend or contribute to Gentle AI | [Components, Skills & Presets](docs/components.md), [Skill Registry](docs/skill-registry.md), and [Architecture & Development](docs/architecture.md) |
+| Extend or contribute to Gentle AI | [Codebase Guide](docs/CODEBASE-GUIDE.md), [Components, Skills & Presets](docs/components.md), [Skill Registry](docs/skill-registry.md), and [Architecture & Development](docs/architecture.md) |
 | Understand how agent behavior is tested | [Testing Agents Deterministically](docs/testing-agents-deterministically.md) for the real-agent E2E and its model fixture |
 
 ---
@@ -311,8 +334,9 @@ This project exists because of the community. See [CONTRIBUTORS.md](CONTRIBUTORS
 ## Next Steps
 
 - **Just installed?** Read [Intended Usage](docs/intended-usage.md) for the mental model, then run `gentle-ai doctor` if anything looks wrong.
-- **Planning substantial work?** Learn the SDD and OpenSpec conventions in [Intended Usage](docs/intended-usage.md) and [OpenSpec Config](docs/openspec-config.md).
-- **Reviewing a focused change?** Start with the [review authority threat model](docs/review-authority-threat-model.md), including staged-index boundaries.
+- **Starting work?** Read [Organic Implementation Routing](docs/trigger-rules.md) to understand direct, delegated, and optional SDD behavior.
+- **Reviewing a focused change?** Start with the [Organic RDD architecture](docs/architecture/organic-rdd.md) and [review authority threat model](docs/review-authority-threat-model.md).
+- **Maintaining Gentle AI?** Use the [Codebase Guide](docs/CODEBASE-GUIDE.md) to find package ownership and review boundaries.
 - **Using Pi?** Read [Pi Agent](docs/pi.md) for the `gentle-pi` harness, Pi commands, persona, and model assignments.
 - **Ready to contribute?** Check [CONTRIBUTING.md](CONTRIBUTING.md) and the [open issues](https://github.com/Gentleman-Programming/gentle-ai/issues?q=is%3Aissue+is%3Aopen+label%3A%22status%3Aapproved%22).
 
