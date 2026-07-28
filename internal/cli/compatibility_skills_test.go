@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
@@ -159,6 +160,87 @@ func TestCompatibilitySkillsRefreshRequiresPhysicalDirectory(t *testing.T) {
 				t.Fatalf("external target was mutated: entries=%v, err=%v", entries, err)
 			}
 		})
+	}
+}
+
+func TestCompatibilityTraversalErrorsReachBackupPreparation(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".agents", "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	walkErr := errors.New("injected compatibility traversal failure")
+	originalWalk := walkCompatibilitySkills
+	walkCompatibilitySkills = func(string, filepath.WalkFunc) error { return walkErr }
+	t.Cleanup(func() { walkCompatibilitySkills = originalWalk })
+
+	selection := model.Selection{
+		Components: []model.ComponentID{model.ComponentSkills},
+		Skills:     []model.SkillID{model.SkillGoTesting},
+	}
+	resolved := planner.ResolvedPlan{OrderedComponents: selection.Components}
+	backupRoot := filepath.Join(home, "backups")
+	tests := []struct {
+		name string
+		plan pipeline.StagePlan
+	}{
+		{
+			name: "install",
+			plan: (&installRuntime{homeDir: home, selection: selection, resolved: resolved, backupRoot: backupRoot, state: &runtimeState{}}).stagePlan(),
+		},
+		{
+			name: "sync",
+			plan: (&syncRuntime{homeDir: home, selection: selection, backupRoot: backupRoot, state: &runtimeState{}}).stagePlan(),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var backupStep pipeline.Step
+			for _, step := range tt.plan.Prepare {
+				if step.ID() == "prepare:backup-snapshot" {
+					backupStep = step
+					break
+				}
+			}
+			if backupStep == nil {
+				t.Fatal("prepare backup step not found")
+			}
+			err := backupStep.Run()
+			if !errors.Is(err, walkErr) || !strings.Contains(err.Error(), "resolve backup targets") {
+				t.Fatalf("backup preparation error = %v, want propagated traversal failure", err)
+			}
+			if _, statErr := os.Stat(backupRoot); !os.IsNotExist(statErr) {
+				t.Fatalf("backup preparation mutated the filesystem after traversal failure: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestCompatibilityRefreshRejectsNonRegularFinalDestinationWithoutMutation(t *testing.T) {
+	home := t.TempDir()
+	skillsDir := filepath.Join(home, ".agents", "skills")
+	destination := filepath.Join(skillsDir, "go-testing", "SKILL.md")
+	if err := os.MkdirAll(destination, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(destination, "marker")
+	staleReference := filepath.Join(skillsDir, "go-testing", "references", "examples.md")
+	writeStale(t, marker)
+	writeStale(t, staleReference)
+
+	step := compatibilitySkillsRefreshStep{
+		homeDir:    home,
+		components: []model.ComponentID{model.ComponentSkills},
+		selection:  model.Selection{Skills: []model.SkillID{model.SkillGoTesting}},
+	}
+	err := step.Run()
+	if err == nil || !strings.Contains(err.Error(), "must be a regular file") {
+		t.Fatalf("Run() error = %v, want non-regular destination refusal", err)
+	}
+	for _, path := range []string{marker, staleReference} {
+		content, readErr := os.ReadFile(path)
+		if readErr != nil || string(content) != "stale" {
+			t.Fatalf("compatibility refusal mutated %q: content=%q error=%v", path, content, readErr)
+		}
 	}
 }
 
