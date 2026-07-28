@@ -163,15 +163,21 @@ func TestCompatibilitySkillsRefreshRequiresPhysicalDirectory(t *testing.T) {
 	}
 }
 
-func TestCompatibilityTraversalErrorsReachBackupPreparation(t *testing.T) {
+func TestCompatibilityManagedPathErrorsReachBackupPreparation(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, ".agents", "skills"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	walkErr := errors.New("injected compatibility traversal failure")
-	originalWalk := walkCompatibilitySkills
-	walkCompatibilitySkills = func(string, filepath.WalkFunc) error { return walkErr }
-	t.Cleanup(func() { walkCompatibilitySkills = originalWalk })
+	managedPath := filepath.Join(home, ".agents", "skills", "go-testing", "SKILL.md")
+	pathErr := errors.New("injected managed destination failure")
+	originalLstat := lstatCompatibilityDestination
+	lstatCompatibilityDestination = func(path string) (os.FileInfo, error) {
+		if path == managedPath {
+			return nil, pathErr
+		}
+		return originalLstat(path)
+	}
+	t.Cleanup(func() { lstatCompatibilityDestination = originalLstat })
 
 	selection := model.Selection{
 		Components: []model.ComponentID{model.ComponentSkills},
@@ -205,13 +211,36 @@ func TestCompatibilityTraversalErrorsReachBackupPreparation(t *testing.T) {
 				t.Fatal("prepare backup step not found")
 			}
 			err := backupStep.Run()
-			if !errors.Is(err, walkErr) || !strings.Contains(err.Error(), "resolve backup targets") {
-				t.Fatalf("backup preparation error = %v, want propagated traversal failure", err)
+			if !errors.Is(err, pathErr) || !strings.Contains(err.Error(), "resolve backup targets") {
+				t.Fatalf("backup preparation error = %v, want propagated managed-path failure", err)
 			}
 			if _, statErr := os.Stat(backupRoot); !os.IsNotExist(statErr) {
-				t.Fatalf("backup preparation mutated the filesystem after traversal failure: %v", statErr)
+				t.Fatalf("backup preparation mutated the filesystem after managed-path failure: %v", statErr)
 			}
 		})
+	}
+}
+
+func TestCompatibilityRefreshIgnoresUnrelatedCustomSkillErrors(t *testing.T) {
+	home := t.TempDir()
+	customPath := filepath.Join(home, ".agents", "skills", "custom-private", "SKILL.md")
+	writeStale(t, customPath)
+	originalLstat := lstatCompatibilityDestination
+	lstatCompatibilityDestination = func(path string) (os.FileInfo, error) {
+		if strings.Contains(path, "custom-private") {
+			return nil, errors.New("injected unrelated custom-skill failure")
+		}
+		return originalLstat(path)
+	}
+	t.Cleanup(func() { lstatCompatibilityDestination = originalLstat })
+
+	step := compatibilitySkillsRefreshStep{homeDir: home, components: []model.ComponentID{model.ComponentSkills}, selection: model.Selection{Skills: []model.SkillID{model.SkillGoTesting}}}
+	if err := step.Run(); err != nil {
+		t.Fatalf("Run() error = %v, want unrelated custom skill ignored", err)
+	}
+	content, err := os.ReadFile(customPath)
+	if err != nil || string(content) != "stale" {
+		t.Fatalf("unrelated custom skill mutated: content=%q error=%v", content, err)
 	}
 }
 

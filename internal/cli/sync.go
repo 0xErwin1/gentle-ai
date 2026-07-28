@@ -601,7 +601,11 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 			paths[filepath.Join(pluginsDir, name)] = struct{}{}
 		}
 	}
-	adapterSkillPaths, err := adapterSkillBackupTargets(homeDir, workspaceDir, ScopeGlobal, selection, adapters)
+	scope := ScopeGlobal
+	if strings.TrimSpace(workspaceDir) != "" {
+		scope = ScopeWorkspace
+	}
+	adapterSkillPaths, err := adapterSkillBackupTargets(homeDir, workspaceDir, scope, selection, adapters)
 	if err != nil {
 		return nil, err
 	}

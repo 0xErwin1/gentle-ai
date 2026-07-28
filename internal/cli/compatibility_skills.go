@@ -24,7 +24,7 @@ type compatibilitySkillsRefreshStep struct {
 	changedFiles *[]string
 }
 
-var walkCompatibilitySkills = filepath.Walk
+var lstatCompatibilityDestination = os.Lstat
 
 func (s compatibilitySkillsRefreshStep) ID() string {
 	if s.id != "" {
@@ -62,17 +62,6 @@ func compatibilitySkillFiles(homeDir string, components []model.ComponentID, sel
 		return nil, nil
 	}
 	paths := map[string]struct{}{}
-	if err := walkCompatibilitySkills(skillDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if info.Mode().IsRegular() {
-			paths[path] = struct{}{}
-		}
-		return nil
-	}); err != nil {
-		return nil, fmt.Errorf("walk compatibility skills directory: %w", err)
-	}
 	if slices.Contains(components, model.ComponentSkills) {
 		prospective, err := skills.DirectoryPaths(skillDir, selectedSkillIDs(selection), "")
 		if err != nil {
@@ -114,7 +103,7 @@ func validateCompatibilityDestinations(root string, destinations []string) error
 				continue
 			}
 			current = filepath.Join(current, part)
-			info, err := os.Lstat(current)
+			info, err := lstatCompatibilityDestination(current)
 			if os.IsNotExist(err) {
 				break
 			}
@@ -125,7 +114,7 @@ func validateCompatibilityDestinations(root string, destinations []string) error
 				return fmt.Errorf("compatibility destination ancestor %q must be a physical directory; replace it with a physical directory, then rerun gentle-ai install or gentle-ai sync", current)
 			}
 		}
-		info, err := os.Lstat(destination)
+		info, err := lstatCompatibilityDestination(destination)
 		if err == nil && (info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular()) {
 			return fmt.Errorf("compatibility destination %q must be a regular file; replace it with a regular file or remove it, then rerun gentle-ai install or gentle-ai sync", destination)
 		}

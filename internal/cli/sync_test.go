@@ -1127,6 +1127,38 @@ func TestRunSyncRollbackRestoresClaudeEngramMigrationSource(t *testing.T) {
 	}
 }
 
+func TestSyncWorkspaceSkillBackupRestoresExistingAndRemovesCreatedFiles(t *testing.T) {
+	home := temporaryUserHome(t)
+	workspace := filepath.Join(home, "workspace")
+	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}, Components: []model.ComponentID{model.ComponentSkills}, Skills: []model.SkillID{model.SkillGoTesting}}
+	targets, err := syncBackupTargets(home, workspace, selection, resolveAdapters(selection.Agents))
+	if err != nil {
+		t.Fatal(err)
+	}
+	skillDir := filepath.Join(workspace, ".claude", "skills")
+	existing, created := filepath.Join(skillDir, "go-testing", "SKILL.md"), filepath.Join(skillDir, "go-testing", "references", "examples.md")
+	writeStale(t, existing)
+	manifest, err := backup.NewSnapshotter().Create(filepath.Join(home, "snapshot"), targets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(existing, []byte("fresh"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeStale(t, created)
+	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(pipeline.StagePlan{Apply: []pipeline.Step{rollbackRestoreStep{state: &runtimeState{manifest: manifest}}, failingCompatibilityStep{}}})
+	if result.Err == nil {
+		t.Fatal("injected failure did not trigger workspace rollback")
+	}
+	content, readErr := os.ReadFile(existing)
+	if readErr != nil || string(content) != "stale" {
+		t.Fatalf("workspace rollback did not restore existing skill: content=%q error=%v", content, readErr)
+	}
+	if _, err := os.Stat(created); !os.IsNotExist(err) {
+		t.Fatalf("workspace rollback left newly created skill file: %v", err)
+	}
+}
+
 func TestCodeGraphGuidanceSyncStepRefreshesOldMarkerWhenConfigured(t *testing.T) {
 	home := t.TempDir()
 	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
