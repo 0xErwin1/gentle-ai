@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -2192,5 +2193,80 @@ func TestCustomClearRoundTripLeavesFutureSyncInPreserveMode(t *testing.T) {
 	loadPersistedAssignments(home, &future)
 	if future.CodexOrchestratorAssignment != nil || future.ClearCodexOrchestratorAssignment {
 		t.Fatalf("future sync did not return to preserve mode: assignment=%#v clear=%v", future.CodexOrchestratorAssignment, future.ClearCodexOrchestratorAssignment)
+	}
+}
+
+// ─── Issue #535: upgrade argument validation pre-effect gate ───────────────
+
+// installUpgradeSentinels replaces every effect that the upgrade preflight
+// MUST NOT reach, with stubs that fail the test if invoked. It restores the
+// originals on cleanup. HOME is isolated to a temp dir so the parser cannot
+// accidentally trigger real home-directory effects.
+func installUpgradeSentinels(t *testing.T, home string) {
+	t.Helper()
+	setupMockHome(t, home)
+
+	origEnsure := ensureCurrentOSSupported
+	origDetect := detectSystem
+	origSelfUpdate := selfUpdateFn
+	origCheckFiltered := updateCheckFiltered
+	origCheckAll := updateCheckAll
+	origUpgradeExecute := upgradeExecute
+	origUpgradeExecuteWithOptions := upgradeExecuteWithOptions
+	t.Cleanup(func() {
+		ensureCurrentOSSupported = origEnsure
+		detectSystem = origDetect
+		selfUpdateFn = origSelfUpdate
+		updateCheckFiltered = origCheckFiltered
+		updateCheckAll = origCheckAll
+		upgradeExecute = origUpgradeExecute
+		upgradeExecuteWithOptions = origUpgradeExecuteWithOptions
+	})
+
+	ensureCurrentOSSupported = func() error {
+		return fmt.Errorf("ensureCurrentOSSupported must not run for this upgrade invocation")
+	}
+	detectSystem = func(context.Context) (system.DetectionResult, error) {
+		return system.DetectionResult{}, fmt.Errorf("detectSystem must not run for this upgrade invocation")
+	}
+	selfUpdateFn = func(context.Context, string, system.PlatformProfile, io.Writer) error {
+		return fmt.Errorf("selfUpdate must not run for this upgrade invocation")
+	}
+	updateCheckFiltered = func(context.Context, string, system.PlatformProfile, []string) []update.UpdateResult {
+		t.Fatalf("updateCheckFiltered must not run for this upgrade invocation")
+		return nil
+	}
+	updateCheckAll = func(context.Context, string, system.PlatformProfile) []update.UpdateResult {
+		t.Fatalf("updateCheckAll must not run for this upgrade invocation")
+		return nil
+	}
+	upgradeExecute = func(context.Context, []update.UpdateResult, system.PlatformProfile, string, bool, ...io.Writer) upgrade.UpgradeReport {
+		t.Fatalf("upgradeExecute must not run for this upgrade invocation")
+		return upgrade.UpgradeReport{}
+	}
+	upgradeExecuteWithOptions = func(context.Context, []update.UpdateResult, system.PlatformProfile, string, bool, upgrade.ExecuteOptions) upgrade.UpgradeReport {
+		t.Fatalf("upgradeExecuteWithOptions must not run for this upgrade invocation")
+		return upgrade.UpgradeReport{}
+	}
+}
+
+// TestRunArgs_UpgradeUnsupportedOptionStopsBeforeAnyEffect proves an unsupported
+// dash-prefixed argument (before the delimiter) is rejected with an
+// identifiable token and zero effects — no platform/system/self-update/check/
+// backup/execution effect runs (spec scenario: unsupported option rejected
+// early).
+func TestRunArgs_UpgradeUnsupportedOptionStopsBeforeAnyEffect(t *testing.T) {
+	installUpgradeSentinels(t, t.TempDir())
+
+	var buf bytes.Buffer
+	err := RunArgs([]string{"upgrade", "--verbose"}, &buf)
+	if err == nil {
+		t.Fatalf("RunArgs(upgrade --verbose) error = nil, want unsupported-argument error")
+	}
+	if !strings.Contains(err.Error(), `unsupported upgrade argument: "--verbose"`) {
+		t.Fatalf("RunArgs(upgrade --verbose) error = %v, want error containing the exact token", err)
+	}
+	if !errors.Is(err, errUnsupportedUpgradeArgument) {
+		t.Fatalf("RunArgs(upgrade --verbose) error is not identifiable: %v", err)
 	}
 }

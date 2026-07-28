@@ -125,6 +125,21 @@ func RunArgs(args []string, stdout io.Writer) error {
 		}
 	}
 
+	// Issue #535: parse the upgrade command's arguments exactly once, before
+	// any platform validation, system detection, self-update, update check,
+	// backup, or execution effect. Unsupported pre-delimiter dash arguments
+	// are rejected here with zero effects. The parsed value is forwarded to
+	// runUpgrade below so the executor never reparses raw CLI args. The
+	// help selection branch is added in the follow-up help-behavior change.
+	var parsedUpgrade *upgradeArgs
+	if len(args) > 0 && args[0] == "upgrade" {
+		parsed, err := parseUpgradeArgs(args[1:])
+		if err != nil {
+			return err
+		}
+		parsedUpgrade = &parsed
+	}
+
 	if err := ensureCurrentOSSupported(); err != nil {
 		return err
 	}
@@ -230,7 +245,7 @@ func RunArgs(args []string, stdout io.Writer) error {
 	case "update":
 		return runUpdate(context.Background(), Version, resolveProfile(), stdout)
 	case "upgrade":
-		return runUpgrade(context.Background(), args[1:], result, stdout)
+		return runUpgrade(context.Background(), *parsedUpgrade, result, stdout)
 	case "install":
 		installResult, err := cli.RunInstall(args[1:], result)
 		if err != nil {
@@ -442,21 +457,14 @@ func runUpdate(ctx context.Context, currentVersion string, profile system.Platfo
 //   - Executes binary-only upgrades; does NOT invoke install or sync pipelines
 //   - Skips gentle-ai itself when running as a dev build (version="dev")
 //   - Falls back to source-install guidance where official binaries are unavailable
-func runUpgrade(ctx context.Context, args []string, detection system.DetectionResult, stdout io.Writer) error {
-	dryRun := false
-	noBackup := false
-	var toolFilter []string
-
-	for _, arg := range args {
-		switch {
-		case arg == "--dry-run" || arg == "-n":
-			dryRun = true
-		case arg == "--no-backup":
-			noBackup = true
-		case !strings.HasPrefix(arg, "-"):
-			toolFilter = append(toolFilter, arg)
-		}
-	}
+//
+// Issue #535: runUpgrade consumes a structured upgradeArgs value parsed once
+// in RunArgs. It forwards the parsed flags and tool filters to the update
+// check and executor exactly once and never reparses raw CLI arguments.
+func runUpgrade(ctx context.Context, args upgradeArgs, detection system.DetectionResult, stdout io.Writer) error {
+	dryRun := args.dryRun
+	noBackup := args.noBackup
+	toolFilter := args.toolFilter
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
