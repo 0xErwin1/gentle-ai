@@ -36,6 +36,11 @@ const (
 // %w instead of duplicating the base message.
 var reviewerResultSlotConflictError = errors.New("captured reviewer result already exists with different canonical bytes")
 
+// errCapturedFinalEvidenceMissing has the historical explicit-selector error
+// text, but a distinct identity so lineage-only discovery can distinguish an
+// absent capture from an unsafe or invalid persisted capture.
+var errCapturedFinalEvidenceMissing = errors.New("captured final evidence is unavailable or unsafe")
+
 func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 	flags := newReviewFlagSet("review capture-evidence", stdout, "Capture final verification evidence bound to one validating compact authority.")
 	cwd := flags.String("cwd", ".", "repository path")
@@ -127,6 +132,9 @@ func RunReviewCaptureEvidence(args []string, stdout io.Writer) error {
 func readCapturedFinalEvidence(storeDir string, state reviewtransaction.CompactState, revision string) ([]byte, error) {
 	path := filepath.Join(storeDir, reviewtransaction.CompactFinalEvidenceDir, reviewtransaction.CompactFinalEvidenceFile)
 	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, errCapturedFinalEvidenceMissing
+	}
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || !reviewArtifactModeSafe(info.Mode(), false) {
 		return nil, errors.New("captured final evidence is unavailable or unsafe")
 	}

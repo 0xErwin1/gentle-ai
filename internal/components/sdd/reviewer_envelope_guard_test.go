@@ -207,10 +207,11 @@ func declaredLensTools(t *testing.T, path string) (tools []string, readOnlyAsser
 func TestLensAgentPromptsStateWhereTheirInputComesFrom(t *testing.T) {
 	envelope := reviewtransaction.NewReviewerResultEnvelope()
 
-	// The orchestrator contract is the source for what it promises to append.
+	// The orchestrator contract is the source for what it promises the provider
+	// will inject after native preflight.
 	contract := assets.MustRead(boundedReviewContractAsset)
-	if !strings.Contains(contract, "append the exact immutable candidate diff and changed-path manifest") {
-		t.Fatalf("%s no longer promises to append the diff and manifest; update the guard's derivation", boundedReviewContractAsset)
+	if !strings.Contains(contract, "plugin appends the artifact subject, exact candidate diff, and changed-path manifest only after native preflight succeeds") {
+		t.Fatalf("%s no longer requires native injection of the diff and manifest; update the guard's derivation", boundedReviewContractAsset)
 	}
 
 	for _, paths := range lensAgentAssetPaths(t, envelope.LensAgentNames) {

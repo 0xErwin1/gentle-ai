@@ -23,7 +23,7 @@ func TestBoundedReviewContractLeavesCanonicalizationToNativeGo(t *testing.T) {
 		"Native Go validates, canonicalizes, persists, hashes, reopens, and binds results",
 		"models never construct canonical bytes or hashes",
 		"Freeze merged findings",
-		"append the exact immutable candidate diff and changed-path manifest",
+		"plugin appends the artifact subject, exact candidate diff, and changed-path manifest only after native preflight succeeds",
 	} {
 		if !strings.Contains(content, want) {
 			t.Errorf("orchestrator contract missing %q", want)
@@ -211,6 +211,13 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// agent launched a 4R review with no consent relayed and no cost
 		// warning. This is a deliberate contract change, not drift.
 		//
+		// wantChars then grew by 518 (8,803 -> 9,321 / 18,007 -> 18,525)
+		// when reviewer context transport was hardened after an orchestrator
+		// passed frozen input through /tmp and another supplied the provider-owned
+		// frozen-context token itself. The contract now pins the exact leading
+		// binding prefix, rejects equals-delimited bindings and path handoffs, and
+		// leaves frozen context injection to native preflight plus the plugin.
+		//
 		// maxCharacters is NOT a second copy of wantChars. wantChars catches
 		// every byte of change and must be updated by hand with a reason; the
 		// ceiling exists only to catch the rendering silently giving up on
@@ -220,8 +227,8 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// un-rendered protocol). The ceilings below sit ~15% above the pins so
 		// an ordinary wording fix never touches them, and 4-5x below the
 		// un-rendered sizes so a renderer regression still fails loudly.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 8_803, maxCharacters: 10_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 18_007, maxCharacters: 20_500},
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 9_321, maxCharacters: 10_750},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 18_525, maxCharacters: 21_300},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
