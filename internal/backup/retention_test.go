@@ -189,13 +189,13 @@ func TestDuplicateManifest_ReturnsExactMostRecentManifest(t *testing.T) {
 	backupDir := t.TempDir()
 	createdAt := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 	makeTestBackup(t, backupDir, Manifest{
-		ID:        "backup-old",
+		ID:        "backup-z",
 		CreatedAt: createdAt.Add(-time.Hour),
 		Checksum:  "abc123",
 		Entries:   []ManifestEntry{{OriginalPath: "/old"}},
 	})
 	makeTestBackup(t, backupDir, Manifest{
-		ID:        "backup-new",
+		ID:        "backup-a",
 		CreatedAt: createdAt,
 		Checksum:  "abc123",
 		Entries:   []ManifestEntry{{OriginalPath: "/new"}},
@@ -208,7 +208,7 @@ func TestDuplicateManifest_ReturnsExactMostRecentManifest(t *testing.T) {
 	if !duplicate {
 		t.Fatal("DuplicateManifest() duplicate = false, want true")
 	}
-	if manifest.ID != "backup-new" || len(manifest.Entries) != 1 || manifest.Entries[0].OriginalPath != "/new" {
+	if manifest.ID != "backup-a" || len(manifest.Entries) != 1 || manifest.Entries[0].OriginalPath != "/new" {
 		t.Fatalf("DuplicateManifest() = %+v, want exact most recent matching manifest", manifest)
 	}
 }

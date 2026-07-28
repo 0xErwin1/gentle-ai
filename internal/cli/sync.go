@@ -1369,9 +1369,15 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	// No-op path: no agents were discovered or provided.
 	// Per spec: "No managed assets to sync — system completes without modifying
 	// unrelated files and reports that no managed sync actions were needed."
-	if len(agentIDs) == 0 && !compatibilitySkillsRefreshable(homeDir, selection) {
-		result.NoOp = true
-		return result, nil
+	if len(agentIDs) == 0 {
+		refreshable, err := compatibilitySkillsRefreshable(homeDir, selection)
+		if err != nil {
+			return result, err
+		}
+		if !refreshable {
+			result.NoOp = true
+			return result, nil
+		}
 	}
 
 	rt, err := newSyncRuntime(homeDir, selection)
@@ -1544,9 +1550,15 @@ func RunSync(args []string) (SyncResult, error) {
 			Selection: selection,
 			DryRun:    true,
 		}
-		if len(agentIDs) == 0 && !compatibilitySkillsRefreshable(homeDir, selection) {
-			result.NoOp = true
-			return result, nil
+		if len(agentIDs) == 0 {
+			refreshable, err := compatibilitySkillsRefreshable(homeDir, selection)
+			if err != nil {
+				return result, err
+			}
+			if !refreshable {
+				result.NoOp = true
+				return result, nil
+			}
 		}
 		rt, err := newSyncRuntime(homeDir, selection)
 		if err != nil {

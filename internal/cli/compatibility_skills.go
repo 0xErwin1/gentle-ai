@@ -37,27 +37,40 @@ func needsCompatibilitySkillsRefresh(components []model.ComponentID) bool {
 	return slices.Contains(components, model.ComponentSkills) || slices.Contains(components, model.ComponentSDD)
 }
 
-func existingCompatibilitySkillsDir(homeDir string) (string, bool) {
+func compatibilitySkillsDir(homeDir string) (string, bool, error) {
 	agentsDir := filepath.Join(homeDir, ".agents")
-	parent, err := os.Lstat(agentsDir)
-	if err != nil || !parent.IsDir() {
-		return filepath.Join(agentsDir, "skills"), false
-	}
 	skillDir := filepath.Join(agentsDir, "skills")
-	info, err := os.Lstat(skillDir)
-	return skillDir, err == nil && info.IsDir()
+	parent, err := lstatCompatibilityDestination(agentsDir)
+	if os.IsNotExist(err) || err == nil && !parent.IsDir() {
+		return skillDir, false, nil
+	}
+	if err != nil {
+		return skillDir, false, fmt.Errorf("stat compatibility skills parent directory %q: %w", agentsDir, err)
+	}
+	info, err := lstatCompatibilityDestination(skillDir)
+	if os.IsNotExist(err) || err == nil && !info.IsDir() {
+		return skillDir, false, nil
+	}
+	if err != nil {
+		return skillDir, false, fmt.Errorf("stat compatibility skills directory %q: %w", skillDir, err)
+	}
+	return skillDir, true, nil
 }
 
-func compatibilitySkillsRefreshable(homeDir string, selection model.Selection) bool {
-	if _, ok := existingCompatibilitySkillsDir(homeDir); !ok {
-		return false
+func compatibilitySkillsRefreshable(homeDir string, selection model.Selection) (bool, error) {
+	_, ok, err := compatibilitySkillsDir(homeDir)
+	if err != nil || !ok {
+		return false, err
 	}
 	return slices.Contains(selection.Components, model.ComponentSDD) ||
-		slices.Contains(selection.Components, model.ComponentSkills) && len(selectedSkillIDs(selection)) > 0
+		slices.Contains(selection.Components, model.ComponentSkills) && len(selectedSkillIDs(selection)) > 0, nil
 }
 
 func compatibilitySkillFiles(homeDir string, components []model.ComponentID, selection model.Selection) ([]string, error) {
-	skillDir, ok := existingCompatibilitySkillsDir(homeDir)
+	skillDir, ok, err := compatibilitySkillsDir(homeDir)
+	if err != nil {
+		return nil, err
+	}
 	if !ok {
 		return nil, nil
 	}
@@ -126,23 +139,11 @@ func validateCompatibilityDestinations(root string, destinations []string) error
 }
 
 func (s compatibilitySkillsRefreshStep) Run() error {
-	agentsDir := filepath.Join(s.homeDir, ".agents")
-	parent, err := os.Lstat(agentsDir)
-	if os.IsNotExist(err) || err == nil && !parent.IsDir() {
-		return nil
-	}
+	skillDir, ok, err := compatibilitySkillsDir(s.homeDir)
 	if err != nil {
-		return fmt.Errorf("stat compatibility skills parent directory: %w", err)
+		return err
 	}
-	skillDir := filepath.Join(agentsDir, "skills")
-	info, err := os.Lstat(skillDir)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("stat compatibility skills directory: %w", err)
-	}
-	if !info.IsDir() {
+	if !ok {
 		return nil
 	}
 

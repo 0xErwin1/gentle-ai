@@ -221,6 +221,92 @@ func TestCompatibilityManagedPathErrorsReachBackupPreparation(t *testing.T) {
 	}
 }
 
+func TestCompatibilityDirectoryStatErrorsReachBackupPreparation(t *testing.T) {
+	for _, statTarget := range []string{".agents", filepath.Join(".agents", "skills")} {
+		t.Run(statTarget, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(home, ".agents"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			failedPath := filepath.Join(home, statTarget)
+			pathErr := errors.New("injected compatibility directory failure")
+			originalLstat := lstatCompatibilityDestination
+			lstatCompatibilityDestination = func(path string) (os.FileInfo, error) {
+				if path == failedPath {
+					return nil, pathErr
+				}
+				return originalLstat(path)
+			}
+			t.Cleanup(func() { lstatCompatibilityDestination = originalLstat })
+
+			selection := model.Selection{Components: []model.ComponentID{model.ComponentSkills}, Skills: []model.SkillID{model.SkillGoTesting}}
+			resolved := planner.ResolvedPlan{OrderedComponents: selection.Components}
+			backupRoot := filepath.Join(home, "backups")
+			plans := []struct {
+				name string
+				plan pipeline.StagePlan
+			}{
+				{name: "install", plan: (&installRuntime{homeDir: home, selection: selection, resolved: resolved, backupRoot: backupRoot, state: &runtimeState{}}).stagePlan()},
+				{name: "sync", plan: (&syncRuntime{homeDir: home, selection: selection, backupRoot: backupRoot, state: &runtimeState{}}).stagePlan()},
+			}
+			for _, tt := range plans {
+				t.Run(tt.name, func(t *testing.T) {
+					var backupStep pipeline.Step
+					for _, step := range tt.plan.Prepare {
+						if step.ID() == "prepare:backup-snapshot" {
+							backupStep = step
+							break
+						}
+					}
+					if backupStep == nil {
+						t.Fatal("prepare backup step not found")
+					}
+					err := backupStep.Run()
+					if !errors.Is(err, pathErr) || !strings.Contains(err.Error(), "resolve backup targets") {
+						t.Fatalf("backup preparation error = %v, want propagated directory stat failure", err)
+					}
+					if _, statErr := os.Stat(backupRoot); !os.IsNotExist(statErr) {
+						t.Fatalf("backup preparation mutated the filesystem after directory stat failure: %v", statErr)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestCompatibilityDirectoryStatErrorsPreventZeroAgentSyncNoOp(t *testing.T) {
+	for _, statTarget := range []string{".agents", filepath.Join(".agents", "skills")} {
+		t.Run(statTarget, func(t *testing.T) {
+			home := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(home, ".agents"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			failedPath := filepath.Join(home, statTarget)
+			pathErr := errors.New("injected compatibility directory failure")
+			originalLstat := lstatCompatibilityDestination
+			lstatCompatibilityDestination = func(path string) (os.FileInfo, error) {
+				if path == failedPath {
+					return nil, pathErr
+				}
+				return originalLstat(path)
+			}
+			t.Cleanup(func() { lstatCompatibilityDestination = originalLstat })
+
+			selection := model.Selection{Components: []model.ComponentID{model.ComponentSkills}, Skills: []model.SkillID{model.SkillGoTesting}}
+			result, err := RunSyncWithSelection(home, selection)
+			if !errors.Is(err, pathErr) || result.NoOp {
+				t.Fatalf("RunSyncWithSelection() no-op = %t, error = %v; want propagated directory stat failure", result.NoOp, err)
+			}
+
+			setSyncTestHome(t, home)
+			result, err = RunSync([]string{"--dry-run"})
+			if !errors.Is(err, pathErr) || result.NoOp {
+				t.Fatalf("RunSync(--dry-run) no-op = %t, error = %v; want propagated directory stat failure", result.NoOp, err)
+			}
+		})
+	}
+}
+
 func TestCompatibilityRefreshIgnoresUnrelatedCustomSkillErrors(t *testing.T) {
 	home := t.TempDir()
 	customPath := filepath.Join(home, ".agents", "skills", "custom-private", "SKILL.md")
