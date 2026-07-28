@@ -301,18 +301,17 @@ func TestPresetLowCost_ModelEffortPerCarril(t *testing.T) {
 	if m["sdd-propose"] != model.CodexEffortMedium {
 		t.Errorf("Low-cost preset sdd-propose = %q, want medium", m["sdd-propose"])
 	}
-	// explore reasons over delivered context, so it rides Razonamiento/sdd-strong.
-	if m["sdd-explore"] != model.CodexEffortMedium {
-		t.Errorf("Low-cost preset sdd-explore = %q, want medium", m["sdd-explore"])
+	// explore is in sdd-cheap (Liviano) which is high effort in Low-cost preset
+	if m["sdd-explore"] != model.CodexEffortHigh {
+		t.Errorf("Low-cost preset sdd-explore = %q, want high", m["sdd-explore"])
 	}
 	// apply (Código/sdd-mid) is medium
 	if m["sdd-apply"] != model.CodexEffortMedium {
 		t.Errorf("Low-cost preset sdd-apply = %q, want medium", m["sdd-apply"])
 	}
-	// spec (Liviano/sdd-cheap) is high: transcription is cheap per token, so
-	// effort buys accuracy without buying an expensive model.
-	if m["sdd-spec"] != model.CodexEffortHigh {
-		t.Errorf("Low-cost preset sdd-spec = %q, want high", m["sdd-spec"])
+	// spec is in sdd-spec carril (medium in Low-cost preset)
+	if m["sdd-spec"] != model.CodexEffortMedium {
+		t.Errorf("Low-cost preset sdd-spec = %q, want medium", m["sdd-spec"])
 	}
 
 	// Verify Low-cost preset carril models
@@ -619,7 +618,7 @@ func TestRenderCodexPhaseEffortsByPhase_UnassignedUsesProvidedCarrilModel(t *tes
 		"| `sdd-propose` | `gpt-5.4` | `medium` |",
 		"| `sdd-design` | `gpt-5.4-mini` | `medium` |",
 		"| `sdd-apply` | `gpt-5.5` | `high` |",
-		"| `sdd-explore` | `gpt-5.4-mini` | `medium` |",
+		"| `sdd-explore` | `gpt-5.3-codex` | `high` |",
 	}
 	for _, wantRow := range wantRows {
 		if !strings.Contains(out, wantRow) {
