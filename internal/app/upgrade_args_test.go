@@ -9,11 +9,8 @@ import (
 // TestParseUpgradeArgs is the RED table-driven matrix for the single-pass,
 // delimiter-aware upgrade argument parser introduced by issue #535.
 //
-// PR 1 covers supported flags, preserved positional filters, and early
-// rejection of unsupported dash-prefixed tokens with the exact offending
-// token (errors.Is errUnsupportedUpgradeArgument). The help-selection and
-// standalone "--" delimiter-positional cases are added by the follow-up
-// help-behavior change, which also owns printUpgradeHelp.
+// PR 1 covers supported flags, filters, delimiter handling, and early rejection.
+// The follow-up help-behavior change owns help selection and printUpgradeHelp.
 func TestParseUpgradeArgs(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -56,6 +53,10 @@ func TestParseUpgradeArgs(t *testing.T) {
 			name:     "supported flags and filters preserved together (spec scenario)",
 			args:     []string{"--dry-run", "-n", "--no-backup", "tool-a", "tool-b"},
 			wantArgs: upgradeArgs{dryRun: true, noBackup: true, toolFilter: []string{"tool-a", "tool-b"}},
+		},
+		{
+			name: "delimiter preserves trailing dash-prefixed filters", args: []string{"--dry-run", "--", "--not-a-flag"},
+			wantArgs: upgradeArgs{dryRun: true, toolFilter: []string{"--not-a-flag"}},
 		},
 		{
 			name:      "unsupported long option rejected with exact token",
