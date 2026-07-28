@@ -12,13 +12,16 @@ import (
 
 var boundedReviewRequiredClauses = []string{
 	"Parent orchestrator and native CLI only",
-	"gentle-ai review start",
-	"selected lens once in the foreground",
+	"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition",
+	"route only from the returned `next_transition`",
+	"exact operation and ordered argument tokens unchanged",
+	"exact `review.capture-result` collection input once in the foreground",
 	"exact literal prefix `GENTLE_AI_REVIEW_BINDING `",
 	"including the trailing space and never `=`",
 	"prefix and JSON are the first bytes of the prompt",
-	"one-line bound JSON assembled from this exact START response",
-	"`lineage` from `lineage_id`, `target` from `target_identity`, `lens`/`order` from `lens_bindings`",
+	"one-line bound JSON assembled only from that input's arguments and `artifact_subject`",
+	"`revision` from `expected-revision`",
+	"`subject_hash` from `artifact_subject.subject_hash`",
 	"gentle-ai review capture-result",
 	"repeated `--result-artifact-file <path>` arguments",
 	"BOM-less UTF-8 on Windows PowerShell 5.1",
@@ -29,18 +32,18 @@ var boundedReviewRequiredClauses = []string{
 	"canonical four-lens selection is long work",
 	"one cost/side-effect forecast",
 	"four reviewer model runs",
-	"--consent relay",
+	"typed `gentle-ai.review-integration.consent/v1` envelope",
 	"Lossless Blocking Prompt",
 	"not the kill switch",
 	"one correction transaction",
-	"positive `--correction-lines` forecast before editing",
+	"positive forecast before editing",
 	"one read-only scoped fix validator",
 	"one independent requirements/runtime verification",
 	"### Authority-First Terminal Procedure",
-	"rerun the same facade operation",
+	"query STATUS again",
 	"Repository Git common-dir CAS remains authoritative",
 	"Existing transaction, policy, ledger, receipt, bundle, and gate-context schemas",
-	"gentle-ai review validate --gate <gate>",
+	"exact returned `review.validate`",
 	"Model/provider/profile selection remains user-owned",
 }
 
@@ -62,6 +65,36 @@ func TestBoundedReviewContractRequiresProviderOwnedReviewerContext(t *testing.T)
 	}
 	if strings.Contains(content, "`GENTLE_AI_REVIEW_BINDING=") {
 		t.Fatal("orchestrator contract permits equals-delimited reviewer bindings")
+	}
+}
+
+func TestGeneratedOpenCodeReviewControllersUseNegotiatedStatusRouting(t *testing.T) {
+	controllers := map[string]string{
+		"orchestrator": renderSDDOrchestratorAsset(model.AgentOpenCode),
+		"post-apply":   renderBoundedReviewAsset("opencode/commands/sdd-apply.md"),
+	}
+	for name, content := range controllers {
+		t.Run(name, func(t *testing.T) {
+			for _, required := range []string{
+				"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition",
+				"route only from the returned `next_transition`",
+				"exact operation and ordered argument tokens unchanged",
+				"`execute`", "`collect`", "`stop`",
+			} {
+				if !strings.Contains(content, required) {
+					t.Errorf("generated OpenCode %s controller missing negotiated routing clause %q", name, required)
+				}
+			}
+			for _, stale := range []string{
+				"Call `gentle-ai review start` once.",
+				"runs `gentle-ai review start --cwd <repo>`",
+				"| 01 | `gentle-ai review start`",
+			} {
+				if strings.Contains(content, stale) {
+					t.Errorf("generated OpenCode %s controller retains direct START route %q", name, stale)
+				}
+			}
+		})
 	}
 }
 
@@ -213,8 +246,8 @@ func TestBoundedReviewContractListsOnlySupportedLifecycleGates(t *testing.T) {
 func TestAuthorityFirstTerminalProcedureIsStructuredAndMirrorEligibilityIsClosed(t *testing.T) {
 	rows := parseAuthorityFirstRows(t, authorityFirstTerminalProcedure())
 	wantOperations := []string{
-		"gentle-ai review start", "gentle-ai review finalize",
-		"gentle-ai review validate --gate <gate> --cwd <repo>", "reconcile-terminal-mirrors",
+		"gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition",
+		"provider-returned transition", "repeat 01–02", "reconcile-terminal-mirrors",
 	}
 	if len(rows) != len(wantOperations) {
 		t.Fatalf("authority-first rows = %d, want %d", len(rows), len(wantOperations))
@@ -256,6 +289,12 @@ func TestOpenCodeAndClaudeApplyCommandsRequireAuthorityBeforeMirrors(t *testing.
 			content := renderBoundedReviewAsset(path)
 			if strings.Contains(content, authorityFirstProcedurePlaceholder) || strings.Count(content, authorityFirstTerminalProcedure()) != 1 {
 				t.Fatalf("%s did not render the centralized terminal procedure", path)
+			}
+			if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition") {
+				t.Fatalf("%s does not begin negotiated review routing with STATUS", path)
+			}
+			if strings.Contains(content, "runs `gentle-ai review start --cwd <repo>`") {
+				t.Fatalf("%s retains direct post-apply START routing", path)
 			}
 		})
 	}
