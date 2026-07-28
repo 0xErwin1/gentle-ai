@@ -758,6 +758,7 @@ func compactAuthorityRemovalRegression(before, after map[string]CompactRecord) e
 	sort.Strings(lineages)
 	for _, lineage := range lineages {
 		carried, existed := prior[lineage]
+		// guard:population authority-repair-removal too-tight: legitimate repair removals may leave pre-existing unchanged graph defects but must not introduce or alter a defect
 		if existed && carried.Error() == remaining[lineage].Error() {
 			continue
 		}

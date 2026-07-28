@@ -260,6 +260,7 @@ func acquireStoreLockForReadOnlyEvaluation(ctx context.Context, path string) (*s
 // The pre-commit mutation paths keep the instant refusal: there, waiting
 // cannot make a second writer legitimate, it can only delay its refusal.
 func acquireStoreLockForConvergentCompletion(ctx context.Context, path string) (*storeLock, error) {
+	// guard:population convergent-lock-contention too-tight: legitimate lock contenders include idempotent post-terminal completers that can safely wait for identical publication
 	return acquireStoreLockWithBoundedWait(ctx, path)
 }
 

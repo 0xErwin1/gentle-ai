@@ -340,6 +340,7 @@ func rarTrustedWindowsAdministrativeOwner(owner *windows.SID) bool {
 	if owner == nil || !owner.IsValid() {
 		return false
 	}
+	// guard:population shared-rar-owner too-tight: legitimate shared RAR owners are the current user, token owner, BUILTIN Administrators, or LocalSystem; arbitrary owners remain excluded
 	return owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) ||
 		owner.IsWellKnown(windows.WinLocalSystemSid)
 }

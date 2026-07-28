@@ -261,6 +261,7 @@ func compactResultReopenStateEligible(state CompactState) bool {
 		state.OriginalCriteria != nil || state.CorrectionRegression != nil || state.EvidenceHash != "" {
 		return false
 	}
+	// guard:population result-reopen-state too-tight: legitimate reopen authorities are uncorrected validating or correction-required states on the frozen candidate
 	switch state.State {
 	case StateValidating:
 		return len(state.FixFindingIDs) == 0 && state.ProposedCorrectionLines == nil

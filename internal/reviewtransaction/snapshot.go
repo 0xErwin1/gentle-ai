@@ -647,6 +647,7 @@ func excludeRegisteredNestedWorktrees(ctx context.Context, root string, nestedRe
 				break
 			}
 		}
+		// guard:population nested-worktree-scope too-tight: legitimate opaque nested repositories are Git-registered linked worktrees; unregistered embedded repositories remain excluded
 		if !excluded {
 			return &UntrackedScopeRefusalError{Cause: fmt.Errorf("untracked directory %q holds another Git repository that is not a linked worktree of this one, so it cannot enter the review candidate: add it to .gitignore, move it outside this repository, or register it as a linked worktree", logicalPath)} // refusal:by-design world-action: the exit is a repository-layout change (gitignore, move, or register the nested checkout), which no command of this product can decide or perform
 		}
