@@ -1956,6 +1956,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	// Refused before any repository or authority work, so the rejection cannot
 	// advance the lineage or consume a lens slot. reviewUnadmittedResultRefusal
 	// records why this route is refused outright rather than admitted in place.
+	// guard:population finalize-result-admission too-loose: legitimate finalize results are provider-admitted artifacts or captured results; raw --result files are excluded
 	if len(resultPaths) != 0 {
 		return reviewPreflightError(errors.New(reviewUnadmittedResultRefusal))
 	}

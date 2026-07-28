@@ -33,5 +33,6 @@ const darwinOSearch = 0x40000000 | unix.O_DIRECTORY
 //   - Lstat-then-open per component leaves a TOCTOU window between the
 //     check and the traversal; the atomic no-follow openat stays.
 func secureDirectoryOpenFlags() int {
+	// guard:population darwin-search-ancestor too-tight: legitimate ancestry includes search-only directories; opening must require execute permission without read permission
 	return darwinOSearch | unix.O_CLOEXEC
 }
