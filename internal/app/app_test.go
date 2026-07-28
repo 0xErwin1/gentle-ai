@@ -2250,23 +2250,25 @@ func installUpgradeSentinels(t *testing.T, home string) {
 	}
 }
 
-// TestRunArgs_UpgradeUnsupportedOptionStopsBeforeAnyEffect proves an unsupported
-// dash-prefixed argument (before the delimiter) is rejected with an
-// identifiable token and zero effects — no platform/system/self-update/check/
-// backup/execution effect runs (spec scenario: unsupported option rejected
-// early).
+// TestRunArgs_UpgradeUnsupportedOptionStopsBeforeAnyEffect proves unsupported
+// dash args (--verbose) and the #535 remediation (--help, -h) are rejected
+// before every effect: identifiable token, errors.Is, zero effects.
 func TestRunArgs_UpgradeUnsupportedOptionStopsBeforeAnyEffect(t *testing.T) {
-	installUpgradeSentinels(t, t.TempDir())
-
-	var buf bytes.Buffer
-	err := RunArgs([]string{"upgrade", "--verbose"}, &buf)
-	if err == nil {
-		t.Fatalf("RunArgs(upgrade --verbose) error = nil, want unsupported-argument error")
-	}
-	if !strings.Contains(err.Error(), `unsupported upgrade argument: "--verbose"`) {
-		t.Fatalf("RunArgs(upgrade --verbose) error = %v, want error containing the exact token", err)
-	}
-	if !errors.Is(err, errUnsupportedUpgradeArgument) {
-		t.Fatalf("RunArgs(upgrade --verbose) error is not identifiable: %v", err)
+	for _, token := range []string{"--verbose", "--help", "-h"} {
+		t.Run(token, func(t *testing.T) {
+			installUpgradeSentinels(t, t.TempDir())
+			var buf bytes.Buffer
+			err := RunArgs([]string{"upgrade", token}, &buf)
+			if err == nil {
+				t.Fatalf("RunArgs(upgrade %s) error = nil, want error", token)
+			}
+			want := fmt.Sprintf(`unsupported upgrade argument: %q`, token)
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("RunArgs(upgrade %s) error = %v, want %q", token, err, want)
+			}
+			if !errors.Is(err, errUnsupportedUpgradeArgument) {
+				t.Fatalf("RunArgs(upgrade %s) error not identifiable: %v", token, err)
+			}
+		})
 	}
 }
