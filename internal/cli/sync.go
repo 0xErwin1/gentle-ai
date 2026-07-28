@@ -613,12 +613,18 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 		paths[path] = struct{}{}
 	}
 	if needsCompatibilitySkillsRefresh(selection.Components) {
-		compatibilityPaths, err := compatibilitySkillFiles(homeDir, selection.Components, selection)
+		skillDir, ok, err := compatibilitySkillsDir(homeDir)
 		if err != nil {
 			return nil, err
 		}
-		for _, path := range compatibilityPaths {
-			paths[path] = struct{}{}
+		if ok {
+			compatibilityPaths, err := compatibilitySkillFiles(skillDir, selection.Components, selection)
+			if err != nil {
+				return nil, err
+			}
+			for _, path := range compatibilityPaths {
+				paths[path] = struct{}{}
+			}
 		}
 	}
 	if selection.HasCommunityTool(model.CommunityToolCodeGraph) {
@@ -1565,6 +1571,11 @@ func RunSync(args []string) (SyncResult, error) {
 			return result, err
 		}
 		result.Plan = rt.stagePlan()
+		for _, step := range result.Plan.Prepare {
+			if prepare, ok := step.(prepareBackupStep); ok && prepare.targetErr != nil {
+				return result, fmt.Errorf("resolve backup targets: %w", prepare.targetErr)
+			}
+		}
 		return result, nil
 	}
 

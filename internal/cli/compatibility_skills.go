@@ -66,14 +66,7 @@ func compatibilitySkillsRefreshable(homeDir string, selection model.Selection) (
 		slices.Contains(selection.Components, model.ComponentSkills) && len(selectedSkillIDs(selection)) > 0, nil
 }
 
-func compatibilitySkillFiles(homeDir string, components []model.ComponentID, selection model.Selection) ([]string, error) {
-	skillDir, ok, err := compatibilitySkillsDir(homeDir)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, nil
-	}
+func compatibilitySkillFiles(skillDir string, components []model.ComponentID, selection model.Selection) ([]string, error) {
 	paths := map[string]struct{}{}
 	if slices.Contains(components, model.ComponentSkills) {
 		prospective, err := skills.DirectoryPaths(skillDir, selectedSkillIDs(selection), "")
@@ -147,11 +140,8 @@ func (s compatibilitySkillsRefreshStep) Run() error {
 		return nil
 	}
 
-	destinations, err := compatibilitySkillFiles(s.homeDir, s.components, s.selection)
+	_, err = compatibilitySkillFiles(skillDir, s.components, s.selection)
 	if err != nil {
-		return err
-	}
-	if err := validateCompatibilityDestinations(skillDir, destinations); err != nil {
 		return err
 	}
 

@@ -82,6 +82,29 @@ func TestRunSyncDryRunMatchesZeroAgentCompatibilityRefresh(t *testing.T) {
 	}
 }
 
+func TestRunSyncDryRunPropagatesCompatibilityManagedPathError(t *testing.T) {
+	home := t.TempDir()
+	setSyncTestHome(t, home)
+	managedPath := filepath.Join(home, ".agents", "skills", "go-testing", "SKILL.md")
+	if err := os.MkdirAll(filepath.Join(home, ".agents", "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pathErr := errors.New("injected managed destination failure")
+	originalLstat := lstatCompatibilityDestination
+	lstatCompatibilityDestination = func(path string) (os.FileInfo, error) {
+		if path == managedPath {
+			return nil, pathErr
+		}
+		return originalLstat(path)
+	}
+	t.Cleanup(func() { lstatCompatibilityDestination = originalLstat })
+
+	result, err := RunSync([]string{"--dry-run", "--skill", "go-testing"})
+	if !errors.Is(err, pathErr) || result.NoOp {
+		t.Fatalf("RunSync(--dry-run) no-op = %t, error = %v; want propagated managed-path failure", result.NoOp, err)
+	}
+}
+
 func TestCompatibilitySkillsRefreshRequiresPhysicalDirectory(t *testing.T) {
 	selection := model.Selection{Skills: []model.SkillID{model.SkillGoTesting}}
 	t.Run("absent", func(t *testing.T) {

@@ -1825,12 +1825,18 @@ func backupTargets(homeDir, workspaceDir string, scope InstallScope, selection m
 		paths[path] = struct{}{}
 	}
 	if needsCompatibilitySkillsRefresh(resolved.OrderedComponents) {
-		compatibilityPaths, err := compatibilitySkillFiles(homeDir, resolved.OrderedComponents, selection)
+		skillDir, ok, err := compatibilitySkillsDir(homeDir)
 		if err != nil {
 			return nil, err
 		}
-		for _, path := range compatibilityPaths {
-			paths[path] = struct{}{}
+		if ok {
+			compatibilityPaths, err := compatibilitySkillFiles(skillDir, resolved.OrderedComponents, selection)
+			if err != nil {
+				return nil, err
+			}
+			for _, path := range compatibilityPaths {
+				paths[path] = struct{}{}
+			}
 		}
 	}
 	if containsAgent(resolved.Agents, model.AgentPi) {
