@@ -121,7 +121,7 @@ function captureResult(cwd: string, binding: ReviewBinding, result: string): Pro
   ], result)
 }
 
-async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<ReviewCapturePreflight | undefined> {
+async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<ReviewCapturePreflight> {
   try {
     const response = await runNative(cwd, [
       "review", "capture-result", ...repositoryBindingArgs(cwd, binding),
@@ -149,12 +149,6 @@ async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<Re
     }
     return value as unknown as ReviewCapturePreflight
   } catch (cause) {
-    // An older installed gentle-ai binary rejects the flag itself ("flag
-    // provided but not defined: -preflight"). That is version skew, not a
-    // binding problem: degrade gracefully and let the real capture path
-    // behave exactly as it did before preflight existed.
-    const message = errorMessage(cause)
-    if (message.includes("flag provided but not defined") && message.includes("-preflight")) return undefined
     const scope = binding.repository_context ? "the provider-issued repository context" : cwd
     const recovery = gitTrustRefusal(binding, cause)
       ? GIT_TRUST_REFUSAL_RECOVERY
@@ -172,9 +166,11 @@ async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<Re
 }
 
 async function injectReviewerContext(prompt: string, lens: string, cwd: string): Promise<string> {
+  if (prompt.includes(FROZEN_CONTEXT)) {
+    throw new Error("review task must not supply GENTLE_AI_FROZEN_CANDIDATE_CONTEXT")
+  }
   const binding = parseBinding(prompt, lens)
   const preflight = await preflightCapture(cwd, binding)
-  if (!preflight) return prompt
   const injectedBinding = { ...binding, subject_hash: preflight.artifact_subject.subject_hash }
   const boundPrompt = prompt.replace(BINDING, `GENTLE_AI_REVIEW_BINDING ${JSON.stringify(injectedBinding)}\n`)
   const frozen = JSON.stringify({
@@ -281,7 +277,10 @@ async function preservedCaptureFailure(cwd: string, binding: ReviewBinding, raw:
 const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => ({
   "tool.execute.before": async (input, output) => {
     if (input.tool !== "task" || typeof output.args?.subagent_type !== "string" ||
-        !REVIEW_AGENTS.has(output.args.subagent_type) || !BINDING.test(output.args.prompt)) return
+        !REVIEW_AGENTS.has(output.args.subagent_type)) return
+    if (typeof output.args.prompt !== "string") {
+      throw new Error("review task is missing GENTLE_AI_REVIEW_BINDING")
+    }
     if (output.args.background === true) {
       throw new Error("bound review tasks must run in the foreground for native result capture")
     }

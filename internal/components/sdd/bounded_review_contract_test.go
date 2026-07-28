@@ -14,7 +14,10 @@ var boundedReviewRequiredClauses = []string{
 	"Parent orchestrator and native CLI only",
 	"gentle-ai review start",
 	"selected lens once in the foreground",
-	"assembled from this exact START response as one JSON object",
+	"exact literal prefix `GENTLE_AI_REVIEW_BINDING `",
+	"including the trailing space and never `=`",
+	"prefix and JSON are the first bytes of the prompt",
+	"one-line bound JSON assembled from this exact START response",
 	"`lineage` from `lineage_id`, `target` from `target_identity`, `lens`/`order` from `lens_bindings`",
 	"gentle-ai review capture-result",
 	"repeated `--result-artifact-file <path>` arguments",
@@ -39,6 +42,27 @@ var boundedReviewRequiredClauses = []string{
 	"Existing transaction, policy, ledger, receipt, bundle, and gate-context schemas",
 	"gentle-ai review validate --gate <gate>",
 	"Model/provider/profile selection remains user-owned",
+}
+
+func TestBoundedReviewContractRequiresProviderOwnedReviewerContext(t *testing.T) {
+	content := boundedReviewContract()
+	for _, want := range []string{
+		"Never hand a reviewer input through `/tmp`",
+		"another external file",
+		"a repository scratch file",
+		"or any path reference",
+		"Never supply `GENTLE_AI_FROZEN_CANDIDATE_CONTEXT`",
+		"rely on native/plugin injection",
+		"only after native preflight succeeds",
+		"stop without launching the reviewer",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("orchestrator contract missing reviewer context rule %q", want)
+		}
+	}
+	if strings.Contains(content, "`GENTLE_AI_REVIEW_BINDING=") {
+		t.Fatal("orchestrator contract permits equals-delimited reviewer bindings")
+	}
 }
 
 func TestBoundedReviewContractRendersForEverySupportedAgent(t *testing.T) {

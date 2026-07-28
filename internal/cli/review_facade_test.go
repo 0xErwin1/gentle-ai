@@ -2347,8 +2347,9 @@ func TestReviewFacadeFinalizeStateValidating(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		evidence := []byte("focused tests pass\n")
 		evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
-		if err := os.WriteFile(evidencePath, []byte("focused tests pass\n"), 0o644); err != nil {
+		if err := os.WriteFile(evidencePath, evidence, 0o644); err != nil {
 			t.Fatal(err)
 		}
 		if err := RunReviewCaptureEvidence([]string{
@@ -2363,8 +2364,84 @@ func TestReviewFacadeFinalizeStateValidating(t *testing.T) {
 			t.Fatalf("lineage-only finalize with canonical captured evidence failed: %v\n%s", err, output.String())
 		}
 		result := decodeFacadeFinalize(t, output.Bytes())
-		if result.State == reviewtransaction.StateValidating {
-			t.Fatalf("lineage-only finalize did not consume canonical captured evidence, stayed validating: %#v", result)
+		if result.State != reviewtransaction.StateApproved || result.ReceiptPath != store.ReceiptPath() {
+			t.Fatalf("lineage-only finalize result = %#v, want approved with the canonical receipt", result)
+		}
+		approved, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantState := record.State
+		wantState.State = reviewtransaction.StateApproved
+		wantState.EvidenceHash = facadePayloadHash(evidence)
+		if !reflect.DeepEqual(approved.State, wantState) {
+			t.Fatalf("lineage-only finalize changed more than verification state and evidence\ngot:  %#v\nwant: %#v", approved.State, wantState)
+		}
+		receiptBefore, err := os.ReadFile(store.ReceiptPath())
+		if err != nil {
+			t.Fatalf("read published receipt: %v", err)
+		}
+		parsedReceipt, err := reviewtransaction.ParseCompactReceipt(receiptBefore)
+		if err != nil {
+			t.Fatalf("parse published receipt: %v", err)
+		}
+		wantReceipt, err := approved.State.Receipt()
+		if err != nil || !reflect.DeepEqual(parsedReceipt, wantReceipt) {
+			t.Fatalf("published receipt = %#v, %v, want %#v", parsedReceipt, err, wantReceipt)
+		}
+
+		var replay bytes.Buffer
+		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID}, &replay); err != nil {
+			t.Fatalf("repeat lineage-only finalize: %v\n%s", err, replay.String())
+		}
+		after, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		receiptAfter, err := os.ReadFile(store.ReceiptPath())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(replay.Bytes(), output.Bytes()) || !reflect.DeepEqual(after, approved) || !bytes.Equal(receiptAfter, receiptBefore) {
+			t.Fatal("repeat lineage-only finalize changed its result, authority, or immutable receipt")
+		}
+	})
+
+	t.Run("invalid canonical evidence fails closed instead of becoming a no-evidence continuation", func(t *testing.T) {
+		repo, started := setup(t)
+		store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before, err := store.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
+		if err := os.WriteFile(evidencePath, []byte("focused tests pass\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := RunReviewCaptureEvidence([]string{
+			"--cwd", repo, "--lineage", started.LineageID, "--target", before.State.CurrentSnapshot.Identity,
+			"--expected-revision", before.Revision, "--input", evidencePath,
+		}, io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		canonical := filepath.Join(store.Dir, reviewtransaction.CompactFinalEvidenceDir, reviewtransaction.CompactFinalEvidenceFile)
+		if err := os.WriteFile(canonical, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		err = RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID}, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "captured final evidence is invalid") {
+			t.Fatalf("invalid canonical evidence error = %v", err)
+		}
+		after, loadErr := store.Load()
+		if loadErr != nil || !reflect.DeepEqual(after, before) {
+			t.Fatalf("invalid canonical evidence mutated authority: before %#v after %#v, error %v", before, after, loadErr)
+		}
+		if _, statErr := os.Stat(store.ReceiptPath()); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("invalid canonical evidence published a receipt: %v", statErr)
 		}
 	})
 

@@ -484,6 +484,8 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`artifact_subject`,
 		`candidate_diff`,
 		`changed_path_manifest`,
+		`prompt.includes(FROZEN_CONTEXT)`,
+		`review task must not supply GENTLE_AI_FROZEN_CANDIDATE_CONTEXT`,
 		`output.args.prompt = await injectReviewerContext(`,
 		`"--lineage", binding.lineage`,
 		`"--target", binding.target`,
@@ -524,9 +526,9 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		// bounded raw payload in the thrown error so the transcript retains it.
 		`raw reviewer result follows for manual recovery`,
 		`PRESERVE_EMBED_LIMIT`,
-		// An older installed gentle-ai without --preflight must degrade
-		// gracefully instead of hard-blocking every bound lens launch.
-		`flag provided but not defined`,
+		// Missing native preflight support must fail closed before a bound
+		// reviewer launches without provider-owned frozen context.
+		`The reviewer was not launched`,
 		`export default ReviewResultArtifactsPlugin`,
 	} {
 		if !strings.Contains(source, want) {
