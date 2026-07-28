@@ -14,7 +14,6 @@ import (
 type upgradeArgs struct {
 	dryRun     bool
 	noBackup   bool
-	help       bool
 	toolFilter []string
 }
 
@@ -26,12 +25,12 @@ var errUnsupportedUpgradeArgument = errors.New("unsupported upgrade argument")
 
 // parseUpgradeArgs parses the upgrade command's argument list in a single
 // pass, honouring the standalone "--" delimiter. Before the delimiter it
-// recognises --dry-run/-n, --no-backup, and --help/-h; every other
-// dash-prefixed token is rejected with an error that wraps
-// errUnsupportedUpgradeArgument and names the exact offending token. After
-// the delimiter, every token (including --help or -x) is preserved as a
-// positional tool filter. Positional tool names are NOT validated by this
-// gate.
+// recognises --dry-run/-n and --no-backup; --help and -h are intentionally
+// NOT recognised here so the unsupported-option path rejects them (help
+// output is deferred to the follow-up help-behavior change). Every other
+// dash-prefixed token is rejected with an error wrapping
+// errUnsupportedUpgradeArgument and naming the exact offending token. After
+// the delimiter, every token is a positional tool filter (not validated).
 func parseUpgradeArgs(args []string) (upgradeArgs, error) {
 	var parsed upgradeArgs
 	pastDelimiter := false
@@ -49,14 +48,12 @@ func parseUpgradeArgs(args []string) (upgradeArgs, error) {
 			continue
 		}
 
-		// Before the delimiter, only recognised options and help are allowed.
+		// Before the delimiter, only recognised options are allowed.
 		switch arg {
 		case "--dry-run", "-n":
 			parsed.dryRun = true
 		case "--no-backup":
 			parsed.noBackup = true
-		case "--help", "-h":
-			parsed.help = true
 		default:
 			// Positional tokens (no leading dash) are tool filters; unknown
 			// dash-prefixed options are rejected with the exact token so the

@@ -81,6 +81,15 @@ func TestParseUpgradeArgs(t *testing.T) {
 			wantErr:   true,
 			wantToken: `unsupported upgrade argument: "--no-such-flag"`,
 		},
+		{
+			// #535 remediation: --help/-h rejected as unsupported until PR2.
+			name: "help long flag rejected as unsupported with exact token", args: []string{"--help"},
+			wantErr: true, wantToken: `unsupported upgrade argument: "--help"`,
+		},
+		{
+			name: "help short flag rejected as unsupported with exact token", args: []string{"-h"},
+			wantErr: true, wantToken: `unsupported upgrade argument: "-h"`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -113,7 +122,7 @@ func TestParseUpgradeArgs(t *testing.T) {
 // equalUpgradeArgs compares two upgradeArgs field-by-field, treating nil and
 // empty toolFilter slices as equivalent so the table stays readable.
 func equalUpgradeArgs(a, b upgradeArgs) bool {
-	if a.dryRun != b.dryRun || a.noBackup != b.noBackup || a.help != b.help {
+	if a.dryRun != b.dryRun || a.noBackup != b.noBackup {
 		return false
 	}
 	if len(a.toolFilter) == 0 && len(b.toolFilter) == 0 {
