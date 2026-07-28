@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -2682,6 +2683,40 @@ func TestRunSyncWithSelection_WritesExpectedFiles(t *testing.T) {
 		}
 		if _, err := os.Stat(want); err != nil {
 			t.Errorf("expected SDD sync to create %q: %v", want, err)
+		}
+	}
+
+	settingsPayload, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "opencode.json"))
+	if err != nil {
+		t.Fatalf("read synced OpenCode settings: %v", err)
+	}
+	var settings struct {
+		Agent map[string]struct {
+			Prompt string `json:"prompt"`
+		} `json:"agent"`
+	}
+	if err := json.Unmarshal(settingsPayload, &settings); err != nil {
+		t.Fatalf("decode synced OpenCode settings: %v", err)
+	}
+	applyPayload, err := os.ReadFile(filepath.Join(home, ".config", "opencode", "commands", "sdd-apply.md"))
+	if err != nil {
+		t.Fatalf("read synced OpenCode apply command: %v", err)
+	}
+	for name, content := range map[string]string{
+		"orchestrator": settings.Agent["gentle-orchestrator"].Prompt,
+		"post-apply":   string(applyPayload),
+	} {
+		if !strings.Contains(content, "gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition") {
+			t.Errorf("synced OpenCode %s controller does not use negotiated STATUS routing", name)
+		}
+		for _, stale := range []string{
+			"Call `gentle-ai review start` once.",
+			"runs `gentle-ai review start --cwd <repo>`",
+			"| 01 | `gentle-ai review start`",
+		} {
+			if strings.Contains(content, stale) {
+				t.Errorf("synced OpenCode %s controller restored direct START route %q", name, stale)
+			}
 		}
 	}
 }
