@@ -350,16 +350,6 @@ func RenderCodexPhaseEfforts(assignments map[string]CodexEffort, carrilModels ma
 		carrilModels = DefaultCarrilModels()
 	}
 
-<<<<<<< HEAD
-=======
-	tierPhaseLabels := map[string]string{
-		"sdd-strong": "propose, design, verify, judge",
-		"sdd-spec":   "spec",
-		"sdd-mid":    "apply, tasks, fix-agent",
-		"sdd-cheap":  "explore, archive, onboard",
-	}
-
->>>>>>> d520cad2 (feat(codex): establish dedicated sdd-spec profile and move sdd-tasks to sdd-mid (#1820))
 	var sb strings.Builder
 	sb.WriteString("| Profile (CLI) | Model | `reasoning_effort` (spawn_agent) | SDD phases |\n")
 	sb.WriteString("|---------------|-------|----------------------------------|------------|\n")
