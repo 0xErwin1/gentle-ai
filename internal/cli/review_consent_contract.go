@@ -68,7 +68,7 @@ type ReviewIntegrationConsentOffPath struct {
 const reviewConsentActionRequired = "consent_required"
 
 const (
-	reviewConsentGrantedEffect  = "Reviews this candidate now and records the one-time question as answered, so future candidates are reviewed without asking again."
+	reviewConsentGrantedEffect  = "Reviews this exact frozen candidate now; nothing is granted for later candidates, so each later medium- or high-risk candidate asks again."
 	reviewConsentDeclinedEffect = "Skips the review for this candidate only; nothing is persisted and the next candidate is asked again. " +
 		"This is not the kill switch."
 )

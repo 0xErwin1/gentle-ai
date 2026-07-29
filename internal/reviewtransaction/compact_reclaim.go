@@ -80,6 +80,10 @@ type CompactReclaimRecord struct {
 	// it is set only for review-abandon quarantines of pristine reviewing or
 	// pristine invalidated lineages.
 	PristineAbandonment *CompactPristineAbandonmentProof `json:"pristine_abandonment,omitempty"`
+	// IncompleteAbandonment carries the natively re-derived captured/uncaptured
+	// lens partition; it is set only for review-abandon quarantines of a
+	// reviewing lineage whose selected plan never finished reporting.
+	IncompleteAbandonment *CompactIncompleteAbandonmentProof `json:"incomplete_abandonment,omitempty"`
 	// MalformedLegacyFreeze carries the natively re-derived semantic replay
 	// failure for a shipped legacy-v1 findings-freeze event.
 	MalformedLegacyFreeze *LegacyMalformedFreezeProof `json:"malformed_legacy_freeze,omitempty"`

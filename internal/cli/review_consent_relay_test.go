@@ -77,8 +77,8 @@ func TestNegotiatedHighRiskStartWithRelayDeclarationEmitsBlockingConsentQuestion
 	if !strings.HasPrefix(question.TargetIdentity, "sha256:") {
 		t.Fatalf("consent question carries no exact target identity: %#v", question)
 	}
-	// The envelope must speak the same human phrases the interactive question
-	// uses, so the orchestrator can relay WHY without translating.
+	// The envelope must carry the same semantic phrases the interactive question
+	// uses, so the orchestrator can localize the complete decision faithfully.
 	if question.Headline != reviewConsentHeadline || question.Value != reviewConsentValue {
 		t.Fatalf("consent question dropped the interactive framing: %#v", question)
 	}
@@ -114,6 +114,9 @@ func TestNegotiatedHighRiskStartWithRelayDeclarationEmitsBlockingConsentQuestion
 	if !strings.Contains(declined.Effect, "not the kill switch") {
 		t.Fatalf("decline effect must say it is not the kill switch: %q", declined.Effect)
 	}
+	if !strings.Contains(granted.Effect, "exact frozen candidate") || !strings.Contains(granted.Effect, "asks again") {
+		t.Fatalf("grant effect must remain candidate-scoped: %q", granted.Effect)
+	}
 	if question.OffPath.Command != reviewConsentOffPathCommand || !strings.Contains(question.OffPath.Note, "for good") {
 		t.Fatalf("consent off path = %#v", question.OffPath)
 	}
@@ -139,10 +142,13 @@ func TestRelayedConsentGrantRunsTheReviewAndIsReplaySafe(t *testing.T) {
 	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
 
 	output := runConsentRelayStart(t, boundNegotiatedStartArgs(t, []string{
-		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo,
 		"--lineage", "review-consent-grant", "--consent", "relay",
 	}))
 	question := decodeConsentQuestion(t, output.Bytes())
+	if question.Contract != ReviewIntegrationContractV2 || question.Schema != ReviewIntegrationConsentSchemaV2 {
+		t.Fatalf("v2 relay question identity = %#v", question)
+	}
 
 	grantArgs := invocationArgs(t, question.Choices[0].Invocation)
 	started := decodeNegotiatedReviewStart(t, runConsentRelayStart(t, grantArgs).Bytes())
@@ -150,8 +156,8 @@ func TestRelayedConsentGrantRunsTheReviewAndIsReplaySafe(t *testing.T) {
 		started.RiskLevel != reviewtransaction.RiskHigh || len(started.SelectedLenses) != 4 {
 		t.Fatalf("granted consent did not reach the lens plan: %#v", started)
 	}
-	if asked, err := reviewtransaction.RDDConsentAsked(context.Background(), repo); err != nil || !asked {
-		t.Fatalf("granting must record the one-time question as answered: asked=%v err=%v", asked, err)
+	if asked, err := reviewtransaction.RDDConsentAsked(context.Background(), repo); err != nil || asked {
+		t.Fatalf("a negotiated grant must not touch the legacy latch: asked=%v err=%v", asked, err)
 	}
 
 	// The grant leg replays: the same invocation resumes the same authority.
@@ -160,15 +166,71 @@ func TestRelayedConsentGrantRunsTheReviewAndIsReplaySafe(t *testing.T) {
 		t.Fatalf("replayed grant = %#v", replayed)
 	}
 
-	// With the latch recorded, a later relay declaration has nothing to relay
-	// and proceeds exactly like an undeclared start.
+	// Candidate A's grant authorizes only A. Candidate B receives a fresh
+	// question even though global review mode still permits review.
 	writeReviewStartCandidate(t, repo, "scripts/second.sh", "echo second\n", 0o644)
-	next := decodeNegotiatedReviewStart(t, runConsentRelayStart(t, boundNegotiatedStartArgs(t, []string{
-		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
+	next := decodeConsentQuestion(t, runConsentRelayStart(t, boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo,
 		"--lineage", "review-consent-grant-next", "--consent", "relay",
 	})).Bytes())
-	if next.Action != string(reviewtransaction.CompactStartCreated) || next.LineageID != "review-consent-grant-next" {
-		t.Fatalf("relay after the latch must proceed without a question: %#v", next)
+	if next.Action != reviewConsentActionRequired || next.TargetIdentity == question.TargetIdentity {
+		t.Fatalf("candidate B did not receive its own consent question: %#v", next)
+	}
+}
+
+func TestPriorCloneLatchCannotSuppressNegotiatedRelay(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	stubReviewConsole(t, false, "")
+	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
+	if err := reviewtransaction.RecordRDDConsentAsked(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
+
+	question := decodeConsentQuestion(t, runConsentRelayStart(t, boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo,
+		"--lineage", "review-consent-prior-latch", "--consent", "relay",
+	})).Bytes())
+	if question.Action != reviewConsentActionRequired || question.Contract != ReviewIntegrationContractV2 {
+		t.Fatalf("legacy latch suppressed v2 relay: %#v", question)
+	}
+}
+
+func TestGlobalReviewModeEnabledPermitsButDoesNotGrantV2Consent(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	stubReviewConsole(t, false, "")
+	var modeOutput bytes.Buffer
+	if err := RunReviewMode([]string{"enable", "--cwd", repo, "--json"}, &modeOutput); err != nil {
+		t.Fatal(err)
+	}
+	if mode := decodeReviewModeResult(t, modeOutput.Bytes()).Status; mode.Effective != reviewtransaction.RDDModeOn {
+		t.Fatalf("global review mode = %#v", mode)
+	}
+	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
+
+	status := negotiatedStartStatusForContract(t, repo, ReviewIntegrationContractV2, "--lineage", "review-consent-global-enabled")
+	question := decodeConsentQuestion(t, runConsentRelayStart(t, transitionStartArgs(repo, status)).Bytes())
+	if question.Action != reviewConsentActionRequired || !question.Blocking {
+		t.Fatalf("global enabled was treated as automatic candidate consent: %#v", question)
+	}
+}
+
+func TestGlobalReviewModeOffRefusesBeforeV2Consent(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	stubReviewConsole(t, false, "")
+	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
+	status := negotiatedStartStatusForContract(t, repo, ReviewIntegrationContractV2, "--lineage", "review-consent-global-off")
+	var modeOutput bytes.Buffer
+	if err := RunReviewMode([]string{"disable", "--cwd", repo, "--json"}, &modeOutput); err != nil {
+		t.Fatal(err)
+	}
+
+	var output bytes.Buffer
+	err := RunReview(transitionStartArgs(repo, status), &output)
+	if err == nil || strings.Contains(output.String(), reviewConsentActionRequired) {
+		t.Fatalf("global off did not refuse before consent: err=%v\n%s", err, output.String())
 	}
 }
 
@@ -249,10 +311,8 @@ func TestLowRiskStartWithRelayDeclarationProceedsWithoutQuestion(t *testing.T) {
 	console := stubReviewConsole(t, false, "")
 	writeReviewStartCandidate(t, repo, "docs/notes.md", "notes\n", 0o644)
 
-	output := runConsentRelayStart(t, boundNegotiatedStartArgs(t, []string{
-		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
-		"--lineage", "review-consent-low", "--consent", "relay",
-	}))
+	status := negotiatedStartStatusForContract(t, repo, ReviewIntegrationContractV2, "--lineage", "review-consent-low")
+	output := runConsentRelayStart(t, transitionStartArgs(repo, status))
 	started := decodeNegotiatedReviewStart(t, output.Bytes())
 	if started.RiskLevel != reviewtransaction.RiskLow || len(started.SelectedLenses) != 0 ||
 		started.Action != string(reviewtransaction.CompactStartCreated) {
@@ -355,60 +415,69 @@ func TestHeadlessSkipNoticeNamesDefaultProvenance(t *testing.T) {
 // invocations is the one caller-relative value, normalized to the fixture's
 // /repo placeholder.
 func TestConsentQuestionMatchesVersionedFixture(t *testing.T) {
-	reviewModeHome(t)
-	repo := initReviewCLIRepo(t)
-	stubReviewConsole(t, false, "")
-	writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
+	for _, tt := range []struct {
+		name, contract, version, schemaID string
+	}{
+		{name: "v1", contract: ReviewIntegrationContractV1, version: "v1", schemaID: ReviewIntegrationConsentSchemaID},
+		{name: "v2", contract: ReviewIntegrationContractV2, version: "v2", schemaID: ReviewIntegrationConsentSchemaIDV2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reviewModeHome(t)
+			repo := initReviewCLIRepo(t)
+			stubReviewConsole(t, false, "")
+			writeReviewStartCandidate(t, repo, "scripts/deploy.sh", "echo deploy\n", 0o644)
 
-	output := runConsentRelayStart(t, boundNegotiatedStartArgs(t, []string{
-		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
-		"--lineage", "review-consent-fixture", "--consent", "relay",
-	}))
-	question := decodeConsentQuestion(t, output.Bytes())
-	if err := question.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	normalized := bytes.ReplaceAll(output.Bytes(), []byte(repo), []byte("/repo"))
-	fixturePath := filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "consent.fixture.json")
-	if os.Getenv("GENTLE_AI_CONSENT_FIXTURE_UPDATE") == "1" {
-		if err := os.WriteFile(fixturePath, normalized, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	fixture, err := os.ReadFile(fixturePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(normalized, fixture) {
-		t.Fatalf("consent fixture mismatch:\ngot=%s\nwant=%s", normalized, fixture)
-	}
+			output := runConsentRelayStart(t, boundNegotiatedStartArgs(t, []string{
+				"start", "--contract", tt.contract, "--cwd", repo,
+				"--lineage", "review-consent-fixture", "--consent", "relay",
+			}))
+			question := decodeConsentQuestion(t, output.Bytes())
+			if err := question.Validate(); err != nil {
+				t.Fatal(err)
+			}
+			normalized := bytes.ReplaceAll(output.Bytes(), []byte(repo), []byte("/repo"))
+			fixturePath := filepath.Join("..", "..", "contracts", "review-integration", tt.version, "fixtures", "consent.fixture.json")
+			if os.Getenv("GENTLE_AI_CONSENT_FIXTURE_UPDATE") == "1" {
+				if err := os.WriteFile(fixturePath, normalized, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fixture, err := os.ReadFile(fixturePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(normalized, fixture) {
+				t.Fatalf("consent fixture mismatch:\ngot=%s\nwant=%s", normalized, fixture)
+			}
 
-	schemaPayload, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas", "consent.schema.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var schema map[string]any
-	if err := json.Unmarshal(schemaPayload, &schema); err != nil {
-		t.Fatal(err)
-	}
-	if schema["$id"] != ReviewIntegrationConsentSchemaID || schema["additionalProperties"] != false {
-		t.Fatalf("consent schema identity = %v additionalProperties = %v", schema["$id"], schema["additionalProperties"])
-	}
-	var fixtureFields map[string]any
-	if err := json.Unmarshal(fixture, &fixtureFields); err != nil {
-		t.Fatal(err)
-	}
-	required, _ := schema["required"].([]any)
-	requiredNames := make(map[string]bool, len(required))
-	for _, name := range required {
-		requiredNames[fmt.Sprint(name)] = true
-	}
-	for field := range fixtureFields {
-		if !requiredNames[field] {
-			t.Fatalf("consent fixture field %q is not required by the schema", field)
-		}
-	}
-	if len(requiredNames) != len(fixtureFields) {
-		t.Fatalf("consent schema requires %d fields, fixture carries %d", len(requiredNames), len(fixtureFields))
+			schemaPayload, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", tt.version, "schemas", "consent.schema.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var schema map[string]any
+			if err := json.Unmarshal(schemaPayload, &schema); err != nil {
+				t.Fatal(err)
+			}
+			if schema["$id"] != tt.schemaID || schema["additionalProperties"] != false {
+				t.Fatalf("consent schema identity = %v additionalProperties = %v", schema["$id"], schema["additionalProperties"])
+			}
+			var fixtureFields map[string]any
+			if err := json.Unmarshal(fixture, &fixtureFields); err != nil {
+				t.Fatal(err)
+			}
+			required, _ := schema["required"].([]any)
+			requiredNames := make(map[string]bool, len(required))
+			for _, name := range required {
+				requiredNames[fmt.Sprint(name)] = true
+			}
+			for field := range fixtureFields {
+				if !requiredNames[field] {
+					t.Fatalf("consent fixture field %q is not required by the schema", field)
+				}
+			}
+			if len(requiredNames) != len(fixtureFields) {
+				t.Fatalf("consent schema requires %d fields, fixture carries %d", len(requiredNames), len(fixtureFields))
+			}
+		})
 	}
 }

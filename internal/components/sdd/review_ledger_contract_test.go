@@ -308,7 +308,14 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// that inconclusive answer was submitted as a failed check, escalating
 		// the lineage irreversibly.
 		//
-		// The ceilings move with it (14,000 -> 15,700 / 29,500 -> 33,600) to
+		// Candidate-scoped consent and faithful conversation-language projection
+		// added 1,151 shared-contract characters to both rows (13,536 -> 14,687 /
+		// 28,956 -> 30,107). The paragraph now distinguishes global permission
+		// from per-candidate consent, requires explicit benefit/consequence
+		// projection, and preserves machine tokens while native UI labels are
+		// localized. This is a deliberate contract change, not drift.
+		//
+		// The ceilings move with it (15,700 -> 17,000 / 33,600 -> 35,000) to
 		// restore the ~15% margin below. This is not slackening the guard: a
 		// ceiling left fixed while the pin legitimately grows converges on the
 		// pin and becomes the second copy the paragraph below forbids. Both new
@@ -328,8 +335,8 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// Provider-bound preflight and the immutable Git recipe initially pushed
 		// the pins too close to those ceilings. Removing repeated prose restores
 		// more than 15% headroom without weakening either contract.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 13_536, maxCharacters: 15_700},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 28_956, maxCharacters: 33_600},
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_687, maxCharacters: 17_000},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_107, maxCharacters: 35_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
