@@ -56,6 +56,33 @@ func TestReviewNextTransitionExecuteEmitsRunnableCommand(t *testing.T) {
 	}
 }
 
+func TestReviewNextTransitionV2StartCommandCarriesConsentRelay(t *testing.T) {
+	status := ReviewTargetStatusResult{
+		Contract:       ReviewIntegrationContractV2,
+		Applicability:  reviewtransaction.TargetApplicabilityUnrelated,
+		TargetIdentity: "sha256:" + strings.Repeat("b", 64),
+		Projection: ReviewTargetStatusProjection{
+			Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace,
+			BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40),
+		},
+	}
+	got := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{StartLineage: "review-v2-consent-command"})
+	want := "gentle-ai review start" +
+		" --contract=gentle-ai.review-integration/v2" +
+		" --target=sha256:" + strings.Repeat("b", 64) +
+		" --projection=workspace" +
+		" --lineage=review-v2-consent-command" +
+		" --consent=relay"
+	if got.Execute == nil || got.Execute.Command != want {
+		t.Fatalf("v2 execute command = %#v, want %q", got.Execute, want)
+	}
+	for _, argument := range got.Execute.Arguments {
+		if !strings.Contains(got.Execute.Command, argument.Token) {
+			t.Fatalf("v2 execute command dropped token %q: %s", argument.Token, got.Execute.Command)
+		}
+	}
+}
+
 // TestReviewNextTransitionExecuteCommandUsesEveryArgumentToken proves the
 // command's argument portion is exactly the payload's own tokens, in the
 // payload's own order -- never invented, reordered, or dropped.

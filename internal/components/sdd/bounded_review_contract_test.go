@@ -34,6 +34,14 @@ var boundedReviewRequiredClauses = []string{
 	"four reviewer model runs",
 	"typed `gentle-ai.review-integration.consent/v2` envelope",
 	"Lossless Blocking Prompt",
+	"Global RDD enabled permits reviews; it never grants consent for this candidate",
+	"Low-risk structural readback remains silent and asks no consent question",
+	"active conversation language",
+	"one narrow localization exception to the no-relabeling rule",
+	"original groups/order, selection mode, exact allowed-answer domain, and answer tokens",
+	"Project `value` as explicit benefits and every `effect` as explicit consequences",
+	"Never translate or alter machine answer tokens (`granted`, `declined`), commands, target IDs, or invocations",
+	"map the selected label back exactly once to the corresponding original answer token and exact invocation",
 	"not the kill switch",
 	"one correction transaction",
 	"positive forecast before editing",
@@ -53,6 +61,20 @@ var boundedReviewRequiredClauses = []string{
 	"Existing transaction, policy, ledger, receipt, bundle, and gate-context schemas",
 	"exact returned `review.validate`",
 	"Model/provider/profile selection remains user-owned",
+}
+
+func TestBoundedReviewConsentLocalizationPreservesMachineDomain(t *testing.T) {
+	content := boundedReviewContract()
+	for _, want := range []string{
+		"faithfully translate the headline, reason, `value`, risk evidence, choice labels, every choice `effect`, and the off-path note",
+		"Project `value` as explicit benefits and every `effect` as explicit consequences; labels alone are forbidden",
+		"Never translate or alter machine answer tokens (`granted`, `declined`), commands, target IDs, or invocations",
+		"map the selected label back exactly once to the corresponding original answer token and exact invocation",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("orchestrator contract missing localized consent rule %q", want)
+		}
+	}
 }
 
 func TestBoundedReviewContractRequiresProviderOwnedReviewerContext(t *testing.T) {

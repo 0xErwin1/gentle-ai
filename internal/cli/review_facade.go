@@ -1494,9 +1494,9 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		return err
 	}
 	// The candidate is frozen and the tier is classified, so this is the one
-	// point where the kill switch can stop a start and the one-time question can
-	// name the real reason. Nothing has been persisted yet, so refusing here
-	// leaves no authority behind.
+	// point where the kill switch can stop a start and consent can name the real
+	// reason. Nothing has been persisted yet, so refusing here leaves no
+	// authority behind.
 	if err := authorizeReviewStart(ctx, root, assessment, consentMode); err != nil {
 		if errors.Is(err, errReviewConsentQuestionRequired) {
 			// The caller declared it can relay a blocking question, so the

@@ -533,11 +533,10 @@ func reviewConsoleTerminal(file *os.File) bool {
 // one-time question is asked here — after the candidate is frozen and the tier
 // is classified — so it can state the real reason instead of a generic warning.
 //
-// The consent declaration changes only who the question is asked through: a
-// relay-declared caller receives the typed question instead of the console
-// prompt or the silent skip, and the granted/declined answers reuse exactly
-// the machinery the interactive answers use — granting latches the one-time
-// question, declining persists nothing and stays scoped to this candidate.
+// A consent declaration selects candidate-scoped negotiated semantics: relay
+// always returns the typed question, while granted and declined apply only to
+// the exact frozen candidate and never touch the legacy clone-wide latch. An
+// undeclared START keeps the one-time console behavior unchanged.
 func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtransaction.RiskAssessment, consent reviewStartConsentMode) error {
 	global, err := readGlobalRDDMode()
 	if err != nil {
@@ -558,15 +557,19 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 		return nil
 	}
 	switch consent {
+	case reviewConsentModeRelay:
+		// The caller declared it can relay a blocking question, so the typed
+		// envelope is the question. Candidate-scoped consent must not be
+		// suppressed by the legacy clone-wide console latch.
+		return errReviewConsentQuestionRequired
 	case reviewConsentModeDeclined:
 		// An explicit relayed "no" is honored exactly like the interactive
 		// answer 2: this candidate only, nothing persisted, never latched.
 		return fmt.Errorf("%w: the next candidate is asked again", errReviewDeclinedForCandidate)
 	case reviewConsentModeGranted:
-		// The relayed "yes" mirrors the interactive answer 1: latch the
-		// one-time question so future candidates review without asking. The
-		// latch write is idempotent, which keeps this follow-up replay-safe.
-		return recordReviewConsentAsked(ctx, repo)
+		// The exact target binding was revalidated before this call. Authorize
+		// only that candidate; later candidates must receive their own question.
+		return nil
 	}
 	console := reviewConsole()
 	asked, err := reviewtransaction.RDDConsentAsked(ctx, repo)
@@ -578,12 +581,6 @@ func authorizeReviewStart(ctx context.Context, repo string, assessment reviewtra
 	}
 	if asked {
 		return nil
-	}
-	if consent == reviewConsentModeRelay {
-		// The caller declared it can relay a blocking question, so the typed
-		// envelope is the question. Nothing is persisted and no notice is
-		// printed: the envelope replaces the console, it does not add to it.
-		return errReviewConsentQuestionRequired
 	}
 	if !console.Interactive {
 		// The notice carries the same information every time (issue #1848), so

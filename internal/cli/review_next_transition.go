@@ -448,6 +448,9 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string) []Rev
 	if strings.TrimSpace(lineage) != "" {
 		arguments = append(arguments, ReviewTransitionArgument{Name: "lineage", Value: lineage})
 	}
+	if contract == ReviewIntegrationContractV2 {
+		arguments = append(arguments, ReviewTransitionArgument{Name: "consent", Value: string(reviewConsentModeRelay)})
+	}
 	return arguments
 }
 

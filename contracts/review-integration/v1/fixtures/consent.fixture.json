@@ -19,7 +19,7 @@
     {
       "answer": "granted",
       "label": "Run the review now",
-      "effect": "Reviews this candidate now and records the one-time question as answered, so future candidates are reviewed without asking again.",
+      "effect": "Reviews this exact frozen candidate now; nothing is granted for later candidates, so each later medium- or high-risk candidate asks again.",
       "invocation": "gentle-ai review start --contract gentle-ai.review-integration/v1 --cwd /repo --target sha256:136dc6556e3bac8c2e7f7af7cc5ec361f449e383a997638128729059fefa06a5 --projection workspace --lineage review-consent-fixture --consent granted"
     },
     {
