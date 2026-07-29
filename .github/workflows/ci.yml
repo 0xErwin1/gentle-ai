@@ -154,13 +154,37 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Ranges are contiguous and disjoint over A-Z, which is what keeps
+        # sharding honest: internal/assets asserts that, so a shard cannot be
+        # edited into leaving a letter uncovered and silently skipping tests
+        # while the lane still reports green. Every Go test name begins with
+        # "Test" plus an uppercase letter, so A-Z is the whole space.
+        #
+        # internal/cli is split four ways because it alone exceeded the 30m
+        # go-test timeout on Windows; TestR* is 453 of its 960 tests and keeps
+        # a shard to itself.
         shard:
-          - name: cli
+          - name: cli-a-c
             packages: ./internal/cli
-          - name: reviewtransaction
+            run: ^Test[A-C]
+          - name: cli-d-q
+            packages: ./internal/cli
+            run: ^Test[D-Q]
+          - name: cli-r
+            packages: ./internal/cli
+            run: ^Test[R-R]
+          - name: cli-s-z
+            packages: ./internal/cli
+            run: ^Test[S-Z]
+          - name: reviewtransaction-a-k
             packages: ./internal/reviewtransaction
+            run: ^Test[A-K]
+          - name: reviewtransaction-l-z
+            packages: ./internal/reviewtransaction
+            run: ^Test[L-Z]
           - name: rest
             packages: ""
+            run: ""
     steps:
       - name: Require successful Go format
         if: needs.go-format.result != 'success'
@@ -206,8 +230,20 @@ jobs:
             }
           }
           if (-not $packages) { throw 'shard resolved to no packages' }
-          Write-Host "shard ${{ matrix.shard.name }}: $($packages.Count) package(s)"
-          go test @packages -count=1 -timeout=30m
+          $selector = '${{ matrix.shard.run }}'
+          $arguments = @('test') + $packages + @('-count=1', '-timeout=30m')
+          if ($selector -ne '') { $arguments += @('-run', $selector) }
+          # A range shard that matches nothing is a silent hole: the shard
+          # passes, the letters it owned never ran, and the lane is green.
+          # Count first and fail loudly instead.
+          if ($selector -ne '') {
+            $selected = (go test $packages[0] -list $selector | Where-Object { $_ -match '^Test' }).Count
+            Write-Host "shard ${{ matrix.shard.name }}: $selected test(s) match $selector"
+            if ($selected -eq 0) { throw "shard selector $selector matched no test" }
+          } else {
+            Write-Host "shard ${{ matrix.shard.name }}: $($packages.Count) package(s)"
+          }
+          go @arguments
           exit $LASTEXITCODE
 
   # Native Darwin release blockers (#1853). Four macOS defects (#1773, #1781,

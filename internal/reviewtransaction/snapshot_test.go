@@ -1600,7 +1600,13 @@ func initSnapshotRepo(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("snapshot repo template: %v", err)
 	}
-	repo := t.TempDir()
+	// canonicalTempDir, not t.TempDir: every production resolver answers with
+	// the resolved spelling, so a fixture that keeps the raw one compares
+	// unequal to its own repository. On a Windows runner TEMP is reached
+	// through an 8.3 short name and the raw path says RUNNER~1 where the
+	// resolver correctly says runneradmin; on Darwin the same gap appears as
+	// /var versus /private/var.
+	repo := canonicalTempDir(t)
 	if err := os.CopyFS(repo, os.DirFS(template)); err != nil {
 		t.Fatalf("CopyFS(snapshot repo template): %v", err)
 	}
