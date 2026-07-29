@@ -22,7 +22,7 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_GENTLE_AI_RELEASES_WEBHOOK }}
         run: |
           set -euo pipefail
-          webhook_pattern='^https://discord\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+(/github)?$'
+          webhook_pattern='^https://discord\.com/api/webhooks/[0-9]+/[^/?#]+(/github)?$'
           if [[ ! "$DISCORD_WEBHOOK_URL" =~ $webhook_pattern ]]; then
             printf 'Discord webhook endpoint is invalid\n' >&2
             exit 1
@@ -45,7 +45,7 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_GENTLE_AI_BETA_WEBHOOK }}
         run: |
           set -euo pipefail
-          webhook_pattern='^https://discord\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+(/github)?$'
+          webhook_pattern='^https://discord\.com/api/webhooks/[0-9]+/[^/?#]+(/github)?$'
           if [[ ! "$DISCORD_WEBHOOK_URL" =~ $webhook_pattern ]]; then
             printf 'Discord webhook endpoint is invalid\n' >&2
             exit 1
@@ -73,7 +73,7 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_GENTLE_AI_ISSUES_WEBHOOK }}
         run: |
           set -euo pipefail
-          webhook_pattern='^https://discord\.com/api/webhooks/[0-9]+/[A-Za-z0-9_-]+(/github)?$'
+          webhook_pattern='^https://discord\.com/api/webhooks/[0-9]+/[^/?#]+(/github)?$'
           if [[ ! "$DISCORD_WEBHOOK_URL" =~ $webhook_pattern ]]; then
             printf 'Discord webhook endpoint is invalid\n' >&2
             exit 1
