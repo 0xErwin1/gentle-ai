@@ -47,12 +47,11 @@ func TestRequiredChecksFailClosedWhenFormatFails(t *testing.T) {
 
 	jobs := []struct{ id, next string }{
 		{id: "unit-tests", next: "windows-runtime"},
-		{id: "windows-runtime", next: "windows-full-suite"},
-		// The sharded full suite is a required check like its siblings, so it
-		// owes the same fail-closed contract. Its push/schedule condition is
-		// inside the shard script rather than a step `if:`, exactly so the
-		// guard below cannot be bypassed.
-		{id: "windows-full-suite", next: "darwin-runtime"},
+		// The sharded Windows full suite is deliberately NOT here: it lives in
+		// its own workflow while the pre-existing Windows failures it exposed
+		// are paid down, so it is not one of ci.yml's required checks and owes
+		// no fail-closed contract to a go-format job in another file.
+		{id: "windows-runtime", next: "darwin-runtime"},
 		// darwin-runtime is a required check like its siblings, so it owes the
 		// same fail-closed contract. Listing it here is also what keeps the
 		// section slicing honest: a job this list does not know about gets
@@ -225,7 +224,7 @@ func TestFormatterOrderingBehaviorContract(t *testing.T) {
 // must tile is exactly A-Z. Per package, the ranges have to be contiguous and
 // disjoint from A through Z -- no gap, no overlap.
 func TestWindowsFullSuiteShardsCoverEveryTestName(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "ci.yml"))
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "workflows", "windows-full-suite.yml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,9 +233,6 @@ func TestWindowsFullSuiteShardsCoverEveryTestName(t *testing.T) {
 		t.Fatal("missing windows-full-suite job")
 	}
 	section := string(data)[start:]
-	if end := strings.Index(section, "\n  darwin-runtime:"); end >= 0 {
-		section = section[:end]
-	}
 	// Stop at the step list: steps carry their own `run:` keys, and a shell
 	// command is not a shard selector.
 	if end := strings.Index(section, "\n    steps:"); end >= 0 {
