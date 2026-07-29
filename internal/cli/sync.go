@@ -1372,18 +1372,9 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 		Selection: selection,
 	}
 
-	// No-op path: no agents were discovered or provided.
-	// Per spec: "No managed assets to sync — system completes without modifying
-	// unrelated files and reports that no managed sync actions were needed."
-	if len(agentIDs) == 0 {
-		refreshable, err := compatibilitySkillsRefreshable(homeDir, selection)
-		if err != nil {
-			return result, err
-		}
-		if !refreshable {
-			result.NoOp = true
-			return result, nil
-		}
+	result, noOp, err := zeroAgentSyncNoOp(homeDir, selection, result)
+	if err != nil || noOp {
+		return result, err
 	}
 
 	rt, err := newSyncRuntime(homeDir, selection)
@@ -1556,15 +1547,9 @@ func RunSync(args []string) (SyncResult, error) {
 			Selection: selection,
 			DryRun:    true,
 		}
-		if len(agentIDs) == 0 {
-			refreshable, err := compatibilitySkillsRefreshable(homeDir, selection)
-			if err != nil {
-				return result, err
-			}
-			if !refreshable {
-				result.NoOp = true
-				return result, nil
-			}
+		result, noOp, err := zeroAgentSyncNoOp(homeDir, selection, result)
+		if err != nil || noOp {
+			return result, err
 		}
 		rt, err := newSyncRuntime(homeDir, selection)
 		if err != nil {
@@ -1585,6 +1570,23 @@ func RunSync(args []string) (SyncResult, error) {
 	}
 	result.DryRun = false
 	return result, nil
+}
+
+// zeroAgentSyncNoOp reports whether a sync without agents has no compatible
+// shared-skill work to perform.
+func zeroAgentSyncNoOp(homeDir string, selection model.Selection, result SyncResult) (SyncResult, bool, error) {
+	if len(result.Agents) != 0 {
+		return result, false, nil
+	}
+	refreshable, err := compatibilitySkillsRefreshable(homeDir, selection)
+	if err != nil {
+		return result, false, err
+	}
+	if refreshable {
+		return result, false, nil
+	}
+	result.NoOp = true
+	return result, true, nil
 }
 
 func restorePersistedCommunityTools(homeDir string, selection *model.Selection, persisted state.InstallState) {
