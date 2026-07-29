@@ -1980,29 +1980,24 @@ func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 	}
 	required := []string{
 		"Native Runtime Attempt Authority",
-		"gentle-ai sdd-attempt status",
-		"gentle-ai sdd-attempt begin",
-		"gentle-ai sdd-attempt finish",
-		"gentle-ai sdd-attempt reset",
-		"decision_required",
-		"expected-binding-revision",
+		"gentle-ai sdd-attempt acquire",
+		"gentle-ai sdd-attempt settle",
+		"state: proceed",
+		"opaque `token`",
 		"successor-lineage",
-		"remediates-evidence-revision",
-		// Naming the trio without naming where its values come from, or
-		// without naming the bound lineage as an acceptable successor, is what
-		// routed the first reporter of this block (decode2, PR #1801) into
-		// `review recover` — a door that is correctly refused for an unchanged
-		// approved scope, and therefore the first step of a cycle with no exit.
-		"binding_revision`, `binding.lineage`, and `evidence_revision",
-		"the lineage the binding already names is itself the successor",
+		"the bound lineage remains its own successor",
+		"--request-id <settle-id>", "distinct from the acquire operation's request ID", "idempotent replay",
+		"status|begin|finish|reset",
+		"never automatic",
 	}
 	for _, path := range paths {
 		content := MustRead(path)
 		if path == "claude/sdd-orchestrator.md" {
 			content += "\n" + MustRead("claude/sdd-orchestrator-workflow.md")
 		}
+		section := markdownSection(content, "### Native Runtime Attempt Authority")
 		for _, want := range required {
-			if !strings.Contains(content, want) {
+			if !strings.Contains(section, want) {
 				t.Fatalf("%s missing native runtime-attempt authority wording %q", path, want)
 			}
 		}
@@ -2010,8 +2005,12 @@ func TestSDDOrchestratorsUseNativeRuntimeAttemptAuthority(t *testing.T) {
 			"gentle-ai.sdd-attempt-ledger/v1",
 			"attempt-ledger-{work-unit}.json",
 			"sdd/{change-name}/attempt-ledger",
+			"gentle-ai sdd-attempt status",
+			"gentle-ai sdd-attempt begin",
+			"gentle-ai sdd-attempt finish",
+			"gentle-ai sdd-attempt reset",
 		} {
-			if strings.Contains(content, forbidden) {
+			if strings.Contains(section, forbidden) {
 				t.Fatalf("%s still delegates native authority to mutable artifact %q", path, forbidden)
 			}
 		}
