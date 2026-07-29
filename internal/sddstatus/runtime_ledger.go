@@ -269,7 +269,7 @@ type RuntimeStore struct {
 	Repo      string
 	Workspace string
 	Change    string
-	// ReviewDisabled records that the user's review-driven-development kill
+	// ReviewDisabled records that the user's receipt-driven-development kill
 	// switch is off for this clone. While it is set, the runtime ledger imposes
 	// no review obligation of its own: a switched-off system has no
 	// implications, so closing an attempt never demands an approved recovery

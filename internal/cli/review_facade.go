@@ -2743,7 +2743,7 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 		}
 	}
 	// The kill switch is consulted BEFORE the negotiation branch and for every
-	// discovery outcome. While reviews are off, review-driven development does
+	// discovery outcome. While reviews are off, receipt-driven development does
 	// not exist, so nothing it discovered — a missing receipt, a stale one, an
 	// unresolvable target, competing authority, or a damaged inventory — governs
 	// this candidate, and the gate reports rather than vetoes. It never
@@ -3696,7 +3696,7 @@ func rejectFacadeCorrectionUntracked(ctx context.Context, repo string, state rev
 
 // reviewDisabledUnmanagedReason is the shipped disposition sentence, unchanged
 // for every discovery outcome that already reported disabled/unmanaged.
-const reviewDisabledUnmanagedReason = "review-driven development is disabled and no receipt governs this candidate, so delivery follows ordinary repository policy"
+const reviewDisabledUnmanagedReason = "receipt-driven development is disabled and no receipt governs this candidate, so delivery follows ordinary repository policy"
 
 // reviewEmptyPublicationRangeReason states what the empty-range allow does and
 // does not mean. It is an allow because there is no delivery to gate, never

@@ -179,7 +179,7 @@ type ReviewGateState struct {
 	// Delivery names what governs the change when the review gate itself
 	// cannot, mirroring the delivery gate's own disposition field
 	// (internal/cli.reviewDeliveryDisposition). It is set only while the
-	// review-driven-development kill switch is off and the change has no
+	// receipt-driven-development kill switch is off and the change has no
 	// review authority of its own, where it reports
 	// RDDDeliveryDisabledUnmanaged: no review governs this change and it
 	// closes under ordinary repository policy rather than under a receipt.
@@ -222,15 +222,15 @@ type ResolveOptions struct {
 	WorkspaceRoot       string
 	ChangeName          string
 	IncludeInstructions bool
-	// ReviewDisabled records that the user's review-driven-development kill
-	// switch is off for this clone. While it is off review-driven development
+	// ReviewDisabled records that the user's receipt-driven-development kill
+	// switch is off for this clone. While it is off receipt-driven development
 	// does not exist, so it must have no implications: the archive gate never
 	// demands a terminal review receipt the operator could not obtain anyway
 	// (review/start is refused while the switch is off), which would otherwise
 	// loop an orchestrator forever on `nextRecommended: "resolve-review"`.
 	//
 	// It removes only the IMPLICIT demand. A change that carries an explicit
-	// review receipt asked for review-driven development to act, so that
+	// review receipt asked for receipt-driven development to act, so that
 	// receipt is still validated in full: an approved one still governs and a
 	// scope-changed, escalated, or invalidated one still blocks. Nothing here
 	// approves, advances, or invents review authority.
