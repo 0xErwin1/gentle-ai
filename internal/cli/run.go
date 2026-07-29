@@ -914,7 +914,7 @@ type prepareBackupStep struct {
 	state       *runtimeState
 
 	// backupRoot is the parent directory of all backup snapshots.
-	// When set, deduplication (IsDuplicate) and retention pruning (Prune) are
+	// When set, deduplication (DuplicateManifest) and retention pruning (Prune) are
 	// enabled. When empty, both are skipped (backward-compatible default).
 	backupRoot string
 
@@ -963,9 +963,9 @@ func (s prepareBackupStep) Run() error {
 		if err == nil && checksum != "" {
 			if manifest, duplicate, dupErr := backup.DuplicateManifest(s.backupRoot, checksum); dupErr != nil {
 				log.Printf("backup: check duplicate: %v", dupErr)
-				} else if dup {
-					rollbackDir, err := os.MkdirTemp("", "gentle-ai-rollback-*")
-					if err != nil {
+			} else if duplicate && manifestTargetsMatch(manifest, s.targets) {
+				rollbackDir, err := os.MkdirTemp("", "gentle-ai-rollback-*")
+				if err != nil {
 					return fmt.Errorf("create transaction snapshot directory: %w", err)
 				}
 				manifest, err := s.snapshotter.Create(rollbackDir, s.targets)
@@ -973,10 +973,10 @@ func (s prepareBackupStep) Run() error {
 					_ = os.RemoveAll(rollbackDir)
 					return fmt.Errorf("create transaction snapshot: %w", err)
 				}
-					s.state.manifest = manifest
-					s.state.rollbackSnapshotDir = rollbackDir
-					return nil
-				}
+				s.state.manifest = manifest
+				s.state.rollbackSnapshotDir = rollbackDir
+				return nil
+			}
 		}
 	}
 

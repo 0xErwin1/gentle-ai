@@ -107,21 +107,6 @@ func DuplicateManifest(backupDir string, newChecksum string) (Manifest, bool, er
 	return latest, true, nil
 }
 
-// IsDuplicate reports whether newChecksum matches the checksum of the most
-// recent backup found in backupDir.
-//
-// Returns false (never skips) when:
-//   - newChecksum is empty
-//   - no prior backups exist in backupDir
-//   - the most recent backup has an empty Checksum (old manifest without dedup)
-//
-// Directories inside backupDir that do not contain a manifest.json are
-// silently skipped.
-func IsDuplicate(backupDir string, newChecksum string) (bool, error) {
-	_, duplicate, err := DuplicateManifest(backupDir, newChecksum)
-	return duplicate, err
-}
-
 // Prune deletes the oldest unpinned backups in backupDir, keeping at most
 // retentionCount unpinned backups. Pinned backups are never deleted.
 //
