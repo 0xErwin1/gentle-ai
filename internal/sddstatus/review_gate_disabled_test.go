@@ -10,7 +10,7 @@ import (
 
 // The maintainer's rule for this file is the same one RuntimeStore.ReviewDisabled
 // already applies to the runtime ledger: while the kill switch is off,
-// review-driven development does not exist, so it must have no implications.
+// receipt-driven development does not exist, so it must have no implications.
 //
 // The deadlock it removes is real and closed. An SDD cycle reaches its archive
 // decision, the archive gate demands a terminal review receipt, and `review
@@ -87,7 +87,7 @@ func TestArchiveGateEnforcesForACallerThatNeverResolvesTheSwitch(t *testing.T) {
 }
 
 // TestArchiveGateDoesNotBlockArchiveWhileReviewIsDisabled is the fix: the same
-// fixture, with the switch off, carries on as if review-driven development had
+// fixture, with the switch off, carries on as if receipt-driven development had
 // never been part of the cycle.
 func TestArchiveGateDoesNotBlockArchiveWhileReviewIsDisabled(t *testing.T) {
 	root := t.TempDir()
@@ -128,7 +128,7 @@ func TestDisabledArchiveGateStillRecordsThatNoReviewGovernedTheChange(t *testing
 	if status.ReviewGate.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
 		t.Fatalf("disabled ReviewGate.Delivery = %q, want %q", status.ReviewGate.Delivery, reviewtransaction.RDDDeliveryDisabledUnmanaged)
 	}
-	if !strings.Contains(status.ReviewGate.Reason, "review-driven development is disabled") {
+	if !strings.Contains(status.ReviewGate.Reason, "receipt-driven development is disabled") {
 		t.Fatalf("disabled ReviewGate.Reason = %q, want it to name the situation", status.ReviewGate.Reason)
 	}
 	// The mechanism that could not govern stays discoverable behind the
@@ -177,7 +177,7 @@ func TestDisabledArchiveGateNeverReadsAsAnApproval(t *testing.T) {
 // TestDisabledArchiveGateStillValidatesAnExplicitReviewReceipt holds the line
 // the RuntimeStore.ReviewDisabled doc comment draws: the switch removes the
 // IMPLICIT demand, never the checks on an explicit request. A change that
-// carries a review receipt asked for review-driven development to act, so its
+// carries a review receipt asked for receipt-driven development to act, so its
 // receipt is still validated in full and a broken one still blocks.
 func TestDisabledArchiveGateStillValidatesAnExplicitReviewReceipt(t *testing.T) {
 	root := t.TempDir()
@@ -230,7 +230,7 @@ func TestDisabledArchiveGateStillHonoursAnApprovedReceipt(t *testing.T) {
 
 // TestDisabledSwitchDoesNotUnblockArchiveForNonReviewReasons keeps the scope
 // honest. Blocking archive because the tasks are unfinished has nothing to do
-// with review-driven development, so the kill switch must not touch it.
+// with receipt-driven development, so the kill switch must not touch it.
 func TestDisabledSwitchDoesNotUnblockArchiveForNonReviewReasons(t *testing.T) {
 	root := t.TempDir()
 	seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n- [ ] 1.2 Unfinished\n")

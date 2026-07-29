@@ -376,7 +376,7 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 	if errors.As(runErr, &rddDisabled) {
 		failure.Phase = "pre_native"
 		failure.Code = "rdd_disabled"
-		failure.Message = "Review-driven development is disabled; this operation never started."
+		failure.Message = "Receipt-driven development is disabled; this operation never started."
 		failure.MutationOutcome = ReviewMutationNotStarted
 		failure.AuthorityApplicability = "not_evaluated"
 		failure.RetrySafe = false

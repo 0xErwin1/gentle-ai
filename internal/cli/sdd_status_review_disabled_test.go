@@ -103,7 +103,7 @@ func TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled(t *testing.T) {
 	seedArchiveGatedSDDChange(t, root)
 
 	if reviewDrivenDevelopmentDisabled(context.Background(), root) {
-		t.Fatal("fixture is wrong: review-driven development is not enabled")
+		t.Fatal("fixture is wrong: receipt-driven development is not enabled")
 	}
 	status := resolveSDDStatusJSON(t, root)
 	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateInvalidated {

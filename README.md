@@ -18,15 +18,15 @@
 ---
 
 > [!IMPORTANT]
-> **RDD is unstable.** Receipt-Driven Development started in `gentle-ai` `v1.47.0`. Every release from `v1.47.0` onward is part of the RDD development line and may change while remaining issues are fixed.
+> **Receipt-Driven Development (RDD) is the supported stable path** as of `v2.2.0`. It started in `v1.47.0` and became stable once the outcome-first workflow was restored: small work stays direct, broader implementation is delegated, SDD stays optional, and every route converges on structural proof, bounded review, an exact receipt, and delivery authorization.
 >
-> For a stable installation without RDD, use the last version before RDD, `v1.46.0`:
+> Install the latest release:
 > ```bash
-> go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.46.0
+> go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 > ```
-> To test the latest released RDD build, use `@latest`. Use `@main` only for unreleased development changes. See the [full RDD version policy](docs/quickstart.md#version-policy).
+> Use `@main` only for unreleased development changes. See the [full RDD version policy](docs/quickstart.md#version-policy).
 >
-> The `v1.46.0` pin above uses the unsuffixed import path; every `v2.x` install uses `github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai`, because Go requires the `/vN` suffix for major version 2 and above.
+> Note the `/v2` suffix: Go requires it for major version 2 and above. Releases before `v2.0.0` use the unsuffixed import path.
 
 ## What It Does
 
@@ -156,21 +156,21 @@ $env:GENTLE_AI_CHANNEL="beta"; go install github.com/gentleman-programming/gentl
 
 ### RDD version policy
 
-Receipt-Driven Development (RDD) started in `gentle-ai` `v1.47.0` on 2026-07-10, with the first bounded native review transactions. Every release from `v1.47.0` onward is part of the unstable RDD development line. New releases will continue improving RDD until the project declares the line stable. The stable version for normal use without RDD is the last release before RDD, `v1.46.0`.
+Receipt-Driven Development (RDD) started in `gentle-ai` `v1.47.0` on 2026-07-10, with the first bounded native review transactions, and became the supported stable path in `v2.2.0`. The negotiated public review contract was published in `v2.1.6`.
 
-Use `@latest` when you want to try the latest released RDD build. Use `@main` only when you explicitly want unreleased RDD development changes. The negotiated public review contract was published in `v2.1.6`.
+Use `@latest` for the current release. Use `@main` only when you explicitly want unreleased development changes.
 
-**Stable version (`v1.46.0`)**
-
-```bash
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.46.0
-gentle-ai version
-```
-
-**Latest released RDD build (unstable)**
+**Latest release**
 
 ```bash
 go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
+gentle-ai version
+```
+
+**Unreleased `main`**
+
+```bash
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main
 gentle-ai version
 ```
 
@@ -203,7 +203,7 @@ The managed installer tracks the channel's latest version and does not accept an
    gentle-ai sync
    ```
 
-### Control review-driven development
+### Control receipt-driven development
 
 Review mode is user-owned and available independently of the review lifecycle:
 
@@ -215,7 +215,7 @@ gentle-ai review mode enable --cwd .
 
 `status` is read-only. Any global or clone-local disabled source wins; a clone can opt out with `--scope clone` but cannot force review on. Re-enabling applies only to future candidates, while declining a one-candidate review prompt does not change the mode. When review is disabled, existing exact governing receipts remain authoritative; otherwise native review gates report `disabled/unmanaged` and defer delivery to ordinary repository policy without fabricating approval.
 
-The current unstable RDD line still has two limitations, both about SDD while review mode is disabled. The SDD pre-verify status path can still require review. And the native archive gate now defers correctly, but the `sdd-archive` skill's own contract still requires `reviewGate.result: allow`, so the agent-facing rule blocks where the product no longer does. See [Organic RDD known limitations](docs/architecture/organic-rdd.md#9-known-open).
+Two known limitations remain, both about SDD while review mode is disabled. The SDD pre-verify status path can still require review ([#1932](https://github.com/Gentleman-Programming/gentle-ai/issues/1932)). And the native archive gate now defers correctly, but the `sdd-archive` skill's own contract still requires `reviewGate.result: allow`, so the agent-facing rule blocks where the product no longer does. See [Organic RDD known limitations](docs/architecture/organic-rdd.md#9-known-open).
 
 ### Release verification
 

@@ -4,7 +4,7 @@
 
 ## 1. What changed at the top
 
-Review-Driven Development used to be a control plane. A change was routed into a work-run, the run carried capabilities, and the capabilities decided ceremony. That plane was deleted (`feat!: delete the retired work-routing control plane`) and replaced by three ideas that fit in a paragraph each.
+Receipt-Driven Development used to be a control plane. A change was routed into a work-run, the run carried capabilities, and the capabilities decided ceremony. That plane was deleted (`feat!: delete the retired work-routing control plane`) and replaced by three ideas that fit in a paragraph each.
 
 **Review happens after the candidate, not before the work.** There is no plan to approve, no run to open. You change something, and if it is worth reviewing, a review is offered on the exact bytes you produced.
 
