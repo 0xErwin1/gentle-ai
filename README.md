@@ -215,7 +215,7 @@ gentle-ai review mode enable --cwd .
 
 `status` is read-only. Any global or clone-local disabled source wins; a clone can opt out with `--scope clone` but cannot force review on. Re-enabling applies only to future candidates, while declining a one-candidate review prompt does not change the mode. When review is disabled, existing exact governing receipts remain authoritative; otherwise native review gates report `disabled/unmanaged` and defer delivery to ordinary repository policy without fabricating approval.
 
-Two known limitations remain, both about SDD while review mode is disabled. The SDD pre-verify status path can still require review ([#1932](https://github.com/Gentleman-Programming/gentle-ai/issues/1932)). And the native archive gate now defers correctly, but the `sdd-archive` skill's own contract still requires `reviewGate.result: allow`, so the agent-facing rule blocks where the product no longer does. See [Organic RDD known limitations](docs/architecture/organic-rdd.md#9-known-open).
+One known limitation remains, about SDD while review mode is disabled. The native archive gate defers correctly, but the `sdd-archive` skill's own contract still requires `reviewGate.result: allow`, so the agent-facing rule blocks where the product no longer does. See [Organic RDD known limitations](docs/architecture/organic-rdd.md#9-known-open).
 
 ### Release verification
 

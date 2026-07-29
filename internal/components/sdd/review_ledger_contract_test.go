@@ -335,8 +335,14 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// Provider-bound preflight and the immutable Git recipe initially pushed
 		// the pins too close to those ceilings. Removing repeated prose restores
 		// more than 15% headroom without weakening either contract.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_687, maxCharacters: 17_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_107, maxCharacters: 35_000},
+		// +75 over the previous pin: the archive rule now names the
+		// disabled/unmanaged path, without which the agent blocks archive where
+		// the native gate already defers — a deadlock the operator cannot exit.
+		// Deliberately one clause: the standard tier sits close to its 15%
+		// headroom rule, so the reasoning lives in sdd-archive/SKILL.md, which
+		// is loaded per phase rather than always-on.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_762, maxCharacters: 17_000},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_182, maxCharacters: 35_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
