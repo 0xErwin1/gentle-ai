@@ -5,6 +5,11 @@ on:
   push:
     branches:
       - main
+  # Manual re-run. `gh run rerun` refuses a run whose workflow file has changed
+  # since, which is exactly when a re-run is needed most: a known-flaky failure
+  # on a commit that is otherwise ready to tag, right after the workflow moved.
+  # Without this the only way to re-run CI on main is to push another commit.
+  workflow_dispatch:
   schedule:
     # 03:00 UTC daily — full Tier 1+2+3 across all platforms as a safety net
     - cron: "0 3 * * *"
