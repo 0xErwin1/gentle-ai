@@ -124,15 +124,14 @@ brew trust --formula gentleman-programming/tap/gentle-ai  # one-time, for Homebr
 brew install gentle-ai
 ```
 
-**Go install, stable pin (any platform with Go 1.25.10+)**
+**Go install (any platform with Go 1.25.10+)**
 
 ```bash
-go install github.com/gentleman-programming/gentle-ai/cmd/gentle-ai@v1.46.0
+go install github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@latest
 ```
 
-The stable pin keeps the unsuffixed import path because `v1.46.0` predates the
-`/v2` module path. Releases on the `v2.x` line install from
-`github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai`.
+Note the `/v2` in the module path: Go requires it for major version 2 and
+above. Releases before `v2.0.0` use the unsuffixed path.
 
 **Scoop (Windows)** — temporarily unavailable while official Windows binary distribution is held for public-trust Authenticode signing. Use the Windows `go install` command above.
 
@@ -215,7 +214,7 @@ gentle-ai review mode enable --cwd .
 
 `status` is read-only. Any global or clone-local disabled source wins; a clone can opt out with `--scope clone` but cannot force review on. Re-enabling applies only to future candidates, while declining a one-candidate review prompt does not change the mode. When review is disabled, existing exact governing receipts remain authoritative; otherwise native review gates report `disabled/unmanaged` and defer delivery to ordinary repository policy without fabricating approval.
 
-One known limitation remains, about SDD while review mode is disabled. The native archive gate defers correctly, but the `sdd-archive` skill's own contract still requires `reviewGate.result: allow`, so the agent-facing rule blocks where the product no longer does. See [Organic RDD known limitations](docs/architecture/organic-rdd.md#9-known-open).
+SDD closes cleanly under a disabled switch as of `v2.2.2`: pre-verify no longer routes to a review that `review start` would refuse, and archive accepts `reviewGate.delivery: disabled/unmanaged` instead of demanding a receipt that cannot be produced.
 
 ### Release verification
 
