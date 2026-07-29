@@ -516,16 +516,23 @@ ends for a surface it had simply never driven.
 | `j38-sdd-remediation-distinct-successor` | with a real recovery successor in the way, the same refusal must route to review and must NOT name a finish | 3 + 4 |
 | `j39-sdd-remediation-stranded-successor` | a successor that can never be finalized: the named route runs and changes nothing | 4 + 2 |
 | `j40-sdd-attempt-reset-after-drift` | terminal attempt plus candidate drift: begin refuses, reset is the only way on | 2 + 4 |
-| `j41-kill-switch-versus-sdd-pre-verify` | reviews off, and SDD still routes to a review the operator may not start | 5 |
+| `j41-kill-switch-versus-sdd-pre-verify` | reviews off at the pre-verify decision: the router steps aside instead of naming a review the operator may not start | 5 |
 | `j42-kill-switch-versus-sdd-archive` | reviews off at the archive decision: the product defers and never fabricates an approval | 5 |
 | `j43-recovery-guard-rails-as-an-operator-meets-them` | three correct refusals around healthy approved authority, and the exit that is not a command | 4 |
 
 Two of them measure something no test could: `j41` and `j42` each take one item
 off the documented known-open list and let the number say whether it is still
-open. `j42` is deliberately a journey with **no blocks at all** — the product
-half of that limitation is closed, and the pin is an assertion on the envelope
-rather than a block count, so a regression fails the journey loudly instead of
-passing quietly.
+open. Both came back **closed**, and both are therefore journeys with **no
+blocks at all** — the pin is an assertion on the envelope rather than a block
+count, so a regression fails the journey loudly instead of passing quietly.
+
+`j41` is the clearest example of the corpus working as intended: it was written
+to measure a believed-open dead end where the SDD pre-verify router demanded a
+review the kill switch forbade, and it FAILED its own assertions on the run that
+found the behavior fixed. The failure was the finding. It now pins both
+positions of the switch — off routes to `verify` with no blocked reasons, on
+routes to `review` with a reason that says why — because either half alone would
+pass while the other regressed.
 
 The state these journeys need cannot be built with git alone: an attempt
 ordinal, a populated review binding and the leaf/non-leaf topology of a lineage
