@@ -47,7 +47,12 @@ func TestRequiredChecksFailClosedWhenFormatFails(t *testing.T) {
 
 	jobs := []struct{ id, next string }{
 		{id: "unit-tests", next: "windows-runtime"},
-		{id: "windows-runtime", next: "darwin-runtime"},
+		{id: "windows-runtime", next: "windows-full-suite"},
+		// The sharded full suite is a required check like its siblings, so it
+		// owes the same fail-closed contract. Its push/schedule condition is
+		// inside the shard script rather than a step `if:`, exactly so the
+		// guard below cannot be bypassed.
+		{id: "windows-full-suite", next: "darwin-runtime"},
 		// darwin-runtime is a required check like its siblings, so it owes the
 		// same fail-closed contract. Listing it here is also what keeps the
 		// section slicing honest: a job this list does not know about gets
