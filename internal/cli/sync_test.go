@@ -1127,35 +1127,62 @@ func TestRunSyncRollbackRestoresClaudeEngramMigrationSource(t *testing.T) {
 	}
 }
 
-func TestSyncWorkspaceSkillBackupRestoresExistingAndRemovesCreatedFiles(t *testing.T) {
+func TestSyncSkillBackupRollsBackGlobalWritersAndOpenClawWorkspace(t *testing.T) {
 	home := temporaryUserHome(t)
 	workspace := filepath.Join(home, "workspace")
-	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}, Components: []model.ComponentID{model.ComponentSkills}, Skills: []model.SkillID{model.SkillGoTesting}}
-	targets, err := syncBackupTargets(home, workspace, selection, resolveAdapters(selection.Agents))
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(workspace)
+	selection := model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode, model.AgentOpenClaw},
+		Components: []model.ComponentID{model.ComponentSkills, model.ComponentSDD},
+		Skills:     []model.SkillID{model.SkillGoTesting},
+		SDDMode:    model.SDDModeSingle,
+	}
+
+	claudeSkills := filepath.Join(home, ".claude", "skills")
+	openClawGlobalSkills := filepath.Join(home, ".openclaw", "skills")
+	openClawWorkspaceSkills := filepath.Join(workspace, ".openclaw", "skills")
+	existing := []string{
+		filepath.Join(claudeSkills, "go-testing", "references", "examples.md"),
+		filepath.Join(claudeSkills, "sdd-apply", "strict-tdd.md"),
+		filepath.Join(claudeSkills, "judgment-day", "SKILL.md"),
+		filepath.Join(claudeSkills, "_shared", "SKILL.md"),
+		filepath.Join(openClawGlobalSkills, "go-testing", "SKILL.md"),
+		filepath.Join(openClawWorkspaceSkills, "judgment-day", "SKILL.md"),
+	}
+	for _, path := range existing {
+		writeStale(t, path)
+	}
+	created := []string{
+		filepath.Join(claudeSkills, "judgment-day", "references", "prompts-and-formats.md"),
+		filepath.Join(claudeSkills, "_shared", "review-ledger-contract.md"),
+		filepath.Join(openClawGlobalSkills, "go-testing", "references", "examples.md"),
+		filepath.Join(openClawWorkspaceSkills, "sdd-apply", "strict-tdd.md"),
+		filepath.Join(openClawWorkspaceSkills, "_shared", "SKILL.md"),
+	}
+
+	runtime, err := newSyncRuntime(home, selection)
 	if err != nil {
 		t.Fatal(err)
 	}
-	skillDir := filepath.Join(workspace, ".claude", "skills")
-	existing, created := filepath.Join(skillDir, "go-testing", "SKILL.md"), filepath.Join(skillDir, "go-testing", "references", "examples.md")
-	writeStale(t, existing)
-	manifest, err := backup.NewSnapshotter().Create(filepath.Join(home, "snapshot"), targets)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(existing, []byte("fresh"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	writeStale(t, created)
-	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(pipeline.StagePlan{Apply: []pipeline.Step{rollbackRestoreStep{state: &runtimeState{manifest: manifest}}, failingCompatibilityStep{}}})
+	plan := runtime.stagePlan()
+	plan.Apply = append(plan.Apply, failingCompatibilityStep{})
+	result := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy()).Execute(plan)
 	if result.Err == nil {
-		t.Fatal("injected failure did not trigger workspace rollback")
+		t.Fatal("injected later failure did not trigger sync rollback")
 	}
-	content, readErr := os.ReadFile(existing)
-	if readErr != nil || string(content) != "stale" {
-		t.Fatalf("workspace rollback did not restore existing skill: content=%q error=%v", content, readErr)
+	for _, path := range existing {
+		content, readErr := os.ReadFile(path)
+		if readErr != nil || string(content) != "stale" {
+			t.Errorf("sync rollback did not restore %q: content=%q error=%v", path, content, readErr)
+		}
 	}
-	if _, err := os.Stat(created); !os.IsNotExist(err) {
-		t.Fatalf("workspace rollback left newly created skill file: %v", err)
+	for _, path := range created {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Errorf("sync rollback left newly created skill file %q: %v", path, statErr)
+		}
 	}
 }
 

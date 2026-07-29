@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -456,10 +457,6 @@ type syncRuntime struct {
 
 func newSyncRuntime(homeDir string, selection model.Selection) (*syncRuntime, error) {
 	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
-	if err := os.MkdirAll(backupRoot, 0o755); err != nil {
-		return nil, fmt.Errorf("create backup root directory %q: %w", backupRoot, err)
-	}
-
 	workspaceDir, _ := os.Getwd()
 	workspaceDir = resolveOpenClawWorkspaceDir(homeDir, workspaceDir, selection.Agents)
 
@@ -601,11 +598,7 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 			paths[filepath.Join(pluginsDir, name)] = struct{}{}
 		}
 	}
-	scope := ScopeGlobal
-	if strings.TrimSpace(workspaceDir) != "" {
-		scope = ScopeWorkspace
-	}
-	adapterSkillPaths, err := adapterSkillBackupTargets(homeDir, workspaceDir, scope, selection, adapters)
+	adapterSkillPaths, err := syncAdapterSkillBackupTargets(homeDir, workspaceDir, selection, adapters)
 	if err != nil {
 		return nil, err
 	}
@@ -642,6 +635,38 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 	}
 	sort.Strings(targets)
 	return targets, nil
+}
+
+func syncAdapterSkillBackupTargets(homeDir, workspaceDir string, selection model.Selection, adapters []agents.Adapter) ([]string, error) {
+	var paths []string
+	for _, adapter := range adapters {
+		if !adapter.SupportsSkills() {
+			continue
+		}
+		if slices.Contains(selection.Components, model.ComponentSkills) {
+			skillDir := adapter.SkillsDir(homeDir)
+			if skillDir == "" {
+				continue
+			}
+			ordinary, err := skills.DirectoryPaths(skillDir, selectedSkillIDs(selection), "")
+			if err != nil {
+				return nil, fmt.Errorf("enumerate %s skill backup targets: %w", adapter.Agent(), err)
+			}
+			paths = append(paths, ordinary...)
+		}
+		if slices.Contains(selection.Components, model.ComponentSDD) {
+			skillDir := adapter.SkillsDir(componentInjectionDir(homeDir, workspaceDir, adapter))
+			if skillDir == "" {
+				continue
+			}
+			sddPaths, err := sdd.SkillDirectoryPaths(skillDir, "")
+			if err != nil {
+				return nil, fmt.Errorf("enumerate %s SDD backup targets: %w", adapter.Agent(), err)
+			}
+			paths = append(paths, sddPaths...)
+		}
+	}
+	return paths, nil
 }
 
 // syncComponentPaths declares the file paths sync writes for a given component.

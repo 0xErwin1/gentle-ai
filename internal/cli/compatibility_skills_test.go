@@ -75,6 +75,10 @@ func TestRunSyncDryRunMatchesZeroAgentCompatibilityRefresh(t *testing.T) {
 	if err != nil || dryRun.NoOp || !slices.ContainsFunc(dryRun.Plan.Apply, func(step pipeline.Step) bool { return step.ID() == "sync:compatibility-skills-refresh" }) {
 		t.Fatalf("compatibility refresh plan missing without agents: no-op=%t, err=%v", dryRun.NoOp, err)
 	}
+	backupRoot := filepath.Join(home, ".gentle-ai", "backups")
+	if _, statErr := os.Stat(backupRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("agentless compatibility dry-run created backup root %q: %v", backupRoot, statErr)
+	}
 	result, err := RunSyncWithSelection(home, model.Selection{Components: []model.ComponentID{model.ComponentSkills}, Skills: []model.SkillID{model.SkillGoTesting}})
 	content, readErr := os.ReadFile(path)
 	if err != nil || readErr != nil || string(content) == "stale" || result.NoOp {
