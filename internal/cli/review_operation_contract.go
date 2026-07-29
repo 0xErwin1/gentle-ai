@@ -1328,8 +1328,11 @@ func (result ReviewIntegrationOperationResult) Validate() error {
 				return fmt.Errorf("negotiated finalize result next transition: %w", err)
 			}
 			transitionRequest := reviewTransitionValidationRequest(finalized.NextTransition)
-			if (transitionRequest == nil) != (finalized.ValidationRequest == nil) ||
-				transitionRequest != nil && !reflect.DeepEqual(*transitionRequest, *finalized.ValidationRequest) {
+			correctionEvidenceFirst := transitionRequest == nil && finalized.ValidationRequest != nil &&
+				(finalized.NextTransition.ReasonCode == "correction_repository_verification_required" ||
+					finalized.NextTransition.ReasonCode == "correction_repository_tooling_failed")
+			if !correctionEvidenceFirst && ((transitionRequest == nil) != (finalized.ValidationRequest == nil) ||
+				transitionRequest != nil && !reflect.DeepEqual(*transitionRequest, *finalized.ValidationRequest)) {
 				return errors.New("negotiated finalize validation request copies differ")
 			}
 		}

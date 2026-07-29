@@ -97,6 +97,8 @@ const reviewtransactionEscalationCauseSample = "budget_exceeded"
 // staged_workspace_overlay_recovery_unavailable carry the exact content
 // organic-dx tasks.md 3b.10 already recorded as Phase 4 registry input.
 var reviewStopReasonNarration = map[string]string{
+	"captured_verification_evidence_invalid": "The captured verification record or its immutable bytes failed integrity checks. " +
+		"Ask a maintainer to inspect the review record before trusting that evidence.",
 	"captured_artifacts_unverifiable": "A previously captured review result failed verification, so this review cannot continue on its own. " +
 		"Ask a maintainer to inspect the review record directly.",
 	"captured_result_selection_unavailable": "This run reached a state that should never happen: every review result it expected was already present. " +
@@ -107,6 +109,8 @@ var reviewStopReasonNarration = map[string]string{
 		"and their findings describe content that was never the candidate, a maintainer can quarantine those results and " +
 		"reopen their lenses over the same frozen content: run `gentle-ai review reopen-results --prepare --quarantine-lens <lens>` " +
 		"(repeat `--quarantine-lens` per affected lens) and follow its output.",
+	"correction_repository_verification_failed": "Repository verification failed for this correction candidate. Change the candidate within the open correction, then re-run " +
+		"`gentle-ai review status --next-transition` to capture evidence for the new candidate.",
 	"corrupted_or_unverifiable_authority": "This review's stored record cannot be trusted as-is, and it cannot be repaired automatically. " +
 		"Ask a maintainer to inspect it directly.",
 	"final_verification_retry_unavailable": "This run reached a state that should never happen: it was routed to retry a final verification it was not eligible to retry. " +

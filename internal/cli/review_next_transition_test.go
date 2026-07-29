@@ -48,7 +48,7 @@ func TestValidatingEvidenceCollectionUnblocksFinalizeAndPreCommit(t *testing.T) 
 	if err := os.WriteFile(evidence, []byte("verification passed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReview([]string{"capture-evidence", "--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--expected-revision", status.Authority.Revision, "--input", evidence}, &bytes.Buffer{}); err != nil {
+	if err := RunReview([]string{"capture-evidence", "--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity, "--expected-revision", status.Authority.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidence}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	var ready bytes.Buffer
@@ -132,14 +132,16 @@ func TestNegotiatedNextTransitionDiscoversCapturedArtifactsAndAdvances(t *testin
 
 func TestCorrectionNextTransitionAgreesBetweenFinalizeAndRestartStatus(t *testing.T) {
 	for _, tt := range []struct {
-		name, reason string
-		forecast     bool
-		change       bool
-		kind         string
+		name, reason          string
+		forecast              bool
+		change                bool
+		capturePassedEvidence bool
+		kind                  string
 	}{
 		{name: "forecast absent", reason: "correction_plan_required", kind: reviewNextTransitionCollect},
 		{name: "forecast present candidate unchanged", reason: "corrected_candidate_unavailable", forecast: true, kind: reviewNextTransitionStop},
-		{name: "forecast present candidate changed", reason: "targeted_validation_required", forecast: true, change: true, kind: reviewNextTransitionCollect},
+		{name: "forecast present candidate changed", reason: "correction_repository_verification_required", forecast: true, change: true, kind: reviewNextTransitionCollect},
+		{name: "forecast present candidate changed evidence passed", reason: "targeted_validation_required", forecast: true, change: true, capturePassedEvidence: true, kind: reviewNextTransitionCollect},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
@@ -169,6 +171,17 @@ func TestCorrectionNextTransitionAgreesBetweenFinalizeAndRestartStatus(t *testin
 					t.Fatal(err)
 				}
 			}
+			if tt.capturePassedEvidence {
+				capturePassedCorrectionEvidenceForTest(t, repo, started.LineageID)
+			}
+			store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(store.StatePath())
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			var directOutput bytes.Buffer
 			if err := RunReviewFacadeFinalize([]string{
@@ -187,10 +200,18 @@ func TestCorrectionNextTransitionAgreesBetweenFinalizeAndRestartStatus(t *testin
 			}
 			var status ReviewTargetStatusResult
 			decodeStrictReviewJSON(t, statusOutput.Bytes(), &status)
+			directTransition, _ := json.Marshal(direct.NextTransition)
+			statusTransition, _ := json.Marshal(status.NextTransition)
+			directRequest, _ := json.Marshal(direct.ValidationRequest)
+			statusRequest, _ := json.Marshal(status.ValidationRequest)
 			if direct.NextTransition == nil || status.NextTransition == nil || direct.NextTransition.Kind != tt.kind ||
-				direct.NextTransition.ReasonCode != tt.reason || !reflect.DeepEqual(direct.NextTransition, status.NextTransition) ||
-				!reflect.DeepEqual(direct.ValidationRequest, status.ValidationRequest) {
-				t.Fatalf("FINALIZE/STATUS routing mismatch:\ndirect=%#v request=%#v\nstatus=%#v request=%#v", direct.NextTransition, direct.ValidationRequest, status.NextTransition, status.ValidationRequest)
+				direct.NextTransition.ReasonCode != tt.reason || !bytes.Equal(directTransition, statusTransition) ||
+				!bytes.Equal(directRequest, statusRequest) {
+				t.Fatalf("FINALIZE/STATUS routing mismatch:\ndirect=%s request=%#v\nstatus=%s request=%#v", directTransition, direct.ValidationRequest, statusTransition, status.ValidationRequest)
+			}
+			after, err := os.ReadFile(store.StatePath())
+			if err != nil || !bytes.Equal(before, after) {
+				t.Fatalf("read-only FINALIZE/STATUS routing mutated authority: %v", err)
 			}
 		})
 	}
@@ -251,15 +272,27 @@ func historicalConsumedCorrectionRoutingFixture(t *testing.T, proposed *int) (st
 		t.Fatal(err)
 	}
 	writeReviewStartCandidate(t, repo, "candidate.go", historicalRoutingCandidate(2), 0o644)
+	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	request := capturePassedCorrectionEvidenceForTest(t, repo, started.LineageID)
 	validation := filepath.Join(t.TempDir(), "validation.json")
-	writeReviewCLIJSON(t, validation, facadeValidationResult{OriginalCriteria: facadeValidationCheck{Evidence: []string{"acceptance still fails"}}, CorrectionRegression: facadeValidationCheck{Evidence: []string{"regression still fails"}}, FollowUps: []reviewtransaction.FollowUp{}})
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--validation", validation}, &bytes.Buffer{}); err != nil {
+	writeReviewCLIJSON(t, validation, facadeValidationResult{
+		TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
+		OriginalCriteria:     facadeValidationCheck{Passed: true, Evidence: []string{"acceptance passed"}},
+		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"regression passed"}},
+		FollowUps:            []reviewtransaction.FollowUp{},
+	})
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--validation", validation, "--captured-evidence"}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	record, _ := store.Load()
 	record.State.State, record.State.ProposedCorrectionLines, record.State.ActualCorrectionLines = reviewtransaction.StateCorrectionRequired, proposed, nil
 	record.State.FixDeltaHash, record.State.OriginalCriteria, record.State.CorrectionRegression = reviewtransaction.EmptyFixDeltaHash, nil, nil
+	record.State.EvidenceHash, record.State.EvidenceRecordDigest = "", ""
+	record.State.EvidenceOutcome, record.State.EvidenceTargetIdentity, record.State.EvidenceAuthorityRevision = "", "", ""
+	record.State.CorrectionVerificationTarget = nil
+	lastAttempt := len(record.State.CorrectionAttempts) - 1
+	record.State.CorrectionAttempts[lastAttempt].OriginalCriteria.Passed = false
+	record.State.CorrectionAttempts[lastAttempt].CorrectionRegression.Passed = false
 	if err := record.State.Validate(); err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +417,7 @@ func TestReviewNextTransitionStateTable(t *testing.T) {
 				input = reviewNextTransitionInput{Successor: "review-next-successor", Reason: "authorized recovery", Actor: "maintainer"}
 				input.Authorization = "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=" + tt.status.Authority.LineageID + "\npredecessor_revision=" + tt.status.Authority.Revision + "\ntarget_identity=" + tt.status.TargetIdentity + "\nactor=" + input.Actor + "\nreason=" + input.Reason
 			}
-			got := newReviewNextTransition(tt.status, tt.lenses, tt.artifacts, false, nil, input)
+			got := newReviewNextTransition(tt.status, tt.lenses, tt.artifacts, nil, nil, input)
 			if got.Kind != tt.wantKind || got.Execute != nil && got.Execute.Operation != tt.wantOperation {
 				t.Fatalf("next transition = %#v", got)
 			}
@@ -449,7 +482,7 @@ func TestReviewTransitionArgumentToken(t *testing.T) {
 			if tt.status.Authority.State == reviewtransaction.StateReviewing {
 				tt.input.CaptureContext = nextTransitionTestCaptureContext(t, tt.status, tt.lenses)
 			}
-			got := newReviewNextTransition(tt.status, tt.lenses, tt.artifacts, false, nil, tt.input)
+			got := newReviewNextTransition(tt.status, tt.lenses, tt.artifacts, nil, nil, tt.input)
 			if got.Kind != reviewNextTransitionExecute || got.Execute == nil {
 				t.Fatalf("next transition = %#v, want an execute transition", got)
 			}
@@ -520,7 +553,7 @@ func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
 			Successor: "review-escalated-successor", Reason: "authorized recovery", Actor: "maintainer",
 			Authorization: "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=review-escalated\npredecessor_revision=sha256:" + strings.Repeat("a", 64) + "\ntarget_identity=" + changedTarget + "\nactor=maintainer\nreason=authorized recovery",
 		}
-		got := newReviewNextTransition(status, nil, nil, false, nil, input)
+		got := newReviewNextTransition(status, nil, nil, nil, nil, input)
 		if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.recover" {
 			t.Fatalf("escalated changed-target transition = %#v, want an execute review.recover transition", got)
 		}
@@ -542,7 +575,7 @@ func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
 			Successor: "review-escalated-successor", Reason: "authorized recovery", Actor: "maintainer",
 			Authorization: "gentle-ai.review-recovery-authorization/v1\npredecessor_lineage=review-escalated\npredecessor_revision=sha256:" + strings.Repeat("a", 64) + "\ntarget_identity=" + unchangedTarget + "\nactor=maintainer\nreason=authorized recovery",
 		}
-		got := newReviewNextTransition(status, nil, nil, false, nil, input)
+		got := newReviewNextTransition(status, nil, nil, nil, nil, input)
 		if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.recover" {
 			t.Fatalf("escalated unchanged-target transition (no selector) = %#v, want an execute review.recover transition — status.Action already vetted this as legal (accounting-only escalation), so this switch must not re-derive a target-changed requirement", got)
 		}
@@ -558,7 +591,7 @@ func TestNewReviewNextTransitionEscalatedRouting(t *testing.T) {
 	t.Run("unchanged target with a selector still stops via the generic recovery_scope_unchanged guard", func(t *testing.T) {
 		status := baseStatus(unchangedTarget, unchangedTarget)
 		input := reviewNextTransitionInput{Selector: &reviewTransitionSelector{Kind: reviewtransaction.TargetCurrentChanges, RecoveryRepresentable: true}}
-		got := newReviewNextTransition(status, nil, nil, false, nil, input)
+		got := newReviewNextTransition(status, nil, nil, nil, nil, input)
 		if got.Kind != reviewNextTransitionStop || got.Execute != nil || got.Collect != nil {
 			t.Fatalf("escalated unchanged-target transition (selector) = %#v, want a bare stop", got)
 		}
@@ -586,7 +619,7 @@ func TestReviewNextTransitionExecuteArgumentValidatesAgainstPublishedSchema(t *t
 		Frozen:         &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium},
 		Projection:     ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace, BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40)},
 	}
-	got := newReviewNextTransition(status, nil, nil, false, nil, reviewNextTransitionInput{})
+	got := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{})
 	if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.finalize" {
 		t.Fatalf("next transition = %#v, want an execute review.finalize transition", got)
 	}
@@ -634,7 +667,7 @@ func TestReviewNextTransitionExecuteArtifactsValidateAgainstPublishedSchema(t *t
 		TargetIdentity: status.TargetIdentity, Lens: reviewtransaction.LensReliability, SelectedOrder: 0,
 		SubjectHash: "sha256:" + strings.Repeat("f", 64), AdmissionDecision: reviewtransaction.ArtifactAdmissionCompleted,
 	}}
-	got := newReviewNextTransition(status, []string{reviewtransaction.LensReliability}, artifacts, false, nil, reviewNextTransitionInput{})
+	got := newReviewNextTransition(status, []string{reviewtransaction.LensReliability}, artifacts, nil, nil, reviewNextTransitionInput{})
 	if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.finalize" || len(got.Execute.Artifacts) != 1 {
 		t.Fatalf("next transition = %#v, want an execute review.finalize transition carrying one artifact", got)
 	}
@@ -667,7 +700,7 @@ func TestReviewNextTransitionExecuteSelectorArgumentsValidateAgainstPublishedSch
 		Gate:     reviewtransaction.GatePrePR,
 		Selector: &reviewTransitionSelector{Kind: reviewtransaction.TargetBaseDiff, BaseRef: "main", PrePRRepresentable: true},
 	}
-	got := newReviewNextTransition(status, nil, nil, false, nil, input)
+	got := newReviewNextTransition(status, nil, nil, nil, nil, input)
 	if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.SelectorArguments == nil {
 		t.Fatalf("next transition = %#v, want an execute transition carrying selector arguments", got)
 	}
@@ -694,7 +727,7 @@ func TestReviewNextTransitionExecuteArgumentValidatesAgainstPublishedV2Schema(t 
 		Frozen:         &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskMedium},
 		Projection:     ReviewTargetStatusProjection{Projection: reviewtransaction.ProjectionWorkspace, BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40)},
 	}
-	got := newReviewNextTransition(status, nil, nil, false, nil, reviewNextTransitionInput{})
+	got := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{})
 	if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.finalize" {
 		t.Fatalf("next transition = %#v, want an execute review.finalize transition", got)
 	}
@@ -841,7 +874,7 @@ func TestReviewNextTransitionRefusesTargetDriftAndUnverifiableCaptures(t *testin
 		Authority:      &ReviewTargetStatusAuthority{LineageID: "target-drift", Revision: "sha256:" + strings.Repeat("a", 64), State: reviewtransaction.StateReviewing},
 		TargetIdentity: "sha256:" + strings.Repeat("b", 64), Frozen: &ReviewTargetStatusFrozen{Tier: reviewtransaction.RiskHigh},
 	}
-	got := newReviewNextTransition(status, []string{reviewtransaction.LensRisk}, nil, false, errors.New("tampered capture"), reviewNextTransitionInput{})
+	got := newReviewNextTransition(status, []string{reviewtransaction.LensRisk}, nil, nil, errors.New("tampered capture"), reviewNextTransitionInput{})
 	if got.Kind != reviewNextTransitionStop || got.ReasonCode != "captured_artifacts_unverifiable" || got.Execute != nil || got.Collect != nil {
 		t.Fatalf("target drift transition = %#v", got)
 	}

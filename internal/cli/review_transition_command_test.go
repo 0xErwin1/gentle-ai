@@ -32,7 +32,7 @@ func reviewStartTransitionForCommand(t *testing.T, lineage string, kind reviewtr
 			BaseTree: strings.Repeat("c", 40), CurrentCandidateTree: strings.Repeat("d", 40),
 		},
 	}
-	got := newReviewNextTransition(status, nil, nil, false, nil, reviewNextTransitionInput{StartLineage: lineage})
+	got := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{StartLineage: lineage})
 	if got.Kind != reviewNextTransitionExecute || got.Execute == nil || got.Execute.Operation != "review.start" {
 		t.Fatalf("next transition = %#v, want an execute review.start transition", got)
 	}
@@ -165,7 +165,7 @@ func reviewTransitionExecutionOperationEnum(t *testing.T, schemaFile string) []s
 // TestReviewCapabilitiesSchemaAndFixtureAreStrict,
 // TestReviewCapabilitiesVersionsKeepV1ReadableAndFailClosedAcrossSchemas and
 // TestReviewIntegrationOperationRegistryOwnsPublishedAndFailurePolicy), plus
-// the v1.1-v1.4 capability fixtures external consumers read. That is a
+// the v1.1-v1.5 capability fixtures external consumers read. That is a
 // published-contract change and a maintainer decision, not a derivation.
 //
 // This map fails closed in BOTH directions below, so it can never rot: a new

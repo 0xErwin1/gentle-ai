@@ -36,7 +36,10 @@ var finalVerificationRetryAfterRepositoryIdentity = func() {}
 // FinalVerificationIncident is the only admitted reason for reopening final
 // verification. It describes a procedural/tooling failure after candidate
 // review and correction were already complete; reviewer, validator, and code
-// failures cannot be represented by this closed shape.
+// failures cannot be represented by this closed shape. The shipped v1 incident
+// intentionally omits the evidence-record digest: retry derives it from compact
+// state and independently matches it against the FINALIZE journal and immutable
+// captured record before this incident can authorize a successor.
 type FinalVerificationIncident struct {
 	Schema                string `json:"schema"`
 	Class                 string `json:"class"`
@@ -53,15 +56,17 @@ type FinalVerificationIncident struct {
 // predecessor's provider-owned artifact; this proof binds their hash, the
 // exact journal attempt, and the canonical incident.
 type CompactFinalVerificationRetryProof struct {
-	Schema                string                    `json:"schema"`
-	TerminalRevision      string                    `json:"terminal_revision"`
-	ValidatingRevision    string                    `json:"validating_revision"`
-	TargetIdentity        string                    `json:"target_identity"`
-	FailedEvidenceHash    string                    `json:"failed_evidence_hash"`
-	FinalizeRequestDigest string                    `json:"finalize_request_digest"`
-	Incident              FinalVerificationIncident `json:"incident"`
-	IncidentDigest        string                    `json:"incident_digest"`
-	SourceFinalizeAttempt FinalizeAttempt           `json:"source_finalize_attempt"`
+	Schema                     string                    `json:"schema"`
+	TerminalRevision           string                    `json:"terminal_revision"`
+	ValidatingRevision         string                    `json:"validating_revision"`
+	TargetIdentity             string                    `json:"target_identity"`
+	FailedEvidenceHash         string                    `json:"failed_evidence_hash"`
+	FailedEvidenceRecordDigest string                    `json:"failed_evidence_record_digest"`
+	FailureOutcome             VerificationOutcome       `json:"failure_outcome"`
+	FinalizeRequestDigest      string                    `json:"finalize_request_digest"`
+	Incident                   FinalVerificationIncident `json:"incident"`
+	IncidentDigest             string                    `json:"incident_digest"`
+	SourceFinalizeAttempt      FinalizeAttempt           `json:"source_finalize_attempt"`
 }
 
 // FinalVerificationRetryRequest is the complete content-bound admission
@@ -81,12 +86,13 @@ type FinalVerificationRetryRequest struct {
 // FinalVerificationRetryEligibility is safe status metadata for the one
 // eligible failed FINALIZE attempt. It contains no local artifact path.
 type FinalVerificationRetryEligibility struct {
-	IncidentSchema        string `json:"incident_schema"`
-	IncidentClass         string `json:"incident_class"`
-	ValidatingRevision    string `json:"validating_revision"`
-	TargetIdentity        string `json:"target_identity"`
-	FailedEvidenceHash    string `json:"failed_evidence_hash"`
-	FinalizeRequestDigest string `json:"finalize_request_digest"`
+	IncidentSchema             string `json:"incident_schema"`
+	IncidentClass              string `json:"incident_class"`
+	ValidatingRevision         string `json:"validating_revision"`
+	TargetIdentity             string `json:"target_identity"`
+	FailedEvidenceHash         string `json:"failed_evidence_hash"`
+	FailedEvidenceRecordDigest string `json:"failed_evidence_record_digest"`
+	FinalizeRequestDigest      string `json:"finalize_request_digest"`
 }
 
 var ErrFinalVerificationRetryDenied = errors.New("final-verification retry denied")
@@ -329,7 +335,11 @@ type finalVerificationRetrySource struct {
 }
 
 func deriveFinalVerificationRetrySourceLocked(ctx context.Context, store CompactStore, predecessor CompactRecord) (finalVerificationRetrySource, error) {
-	if predecessor.HistoricalCompat || predecessor.State.Schema != CompactStateSchema || predecessor.State.State != StateEscalated || !validSHA256(predecessor.State.EvidenceHash) {
+	if predecessor.HistoricalCompat || predecessor.State.Schema != CompactStateSchema || predecessor.State.State != StateEscalated ||
+		!validSHA256(predecessor.State.EvidenceHash) || !validSHA256(predecessor.State.EvidenceRecordDigest) ||
+		predecessor.State.EvidenceOutcome != VerificationOutcomeProceduralFailure ||
+		predecessor.State.EvidenceTargetIdentity != predecessor.State.CurrentSnapshot.Identity ||
+		!validSHA256(predecessor.State.EvidenceAuthorityRevision) {
 		return finalVerificationRetrySource{}, denyFinalVerificationRetry("ineligible_predecessor", "predecessor is not an exact compact-v2 failed final-verification terminal")
 	}
 	if !compactRecoveryReceiptBound(store, predecessor) {
@@ -356,15 +366,20 @@ func deriveFinalVerificationRetrySourceLocked(ctx context.Context, store Compact
 	last := attempt.Transitions[len(attempt.Transitions)-1]
 	if !attempt.Completed || !attempt.ReceiptPublished || !validSHA256(last.ExpectedRevision) || !finalVerificationAttemptHasRevisionContinuity(attempt) ||
 		attempt.Request.CandidateDigest != FinalizeAttemptValueDigest("candidate", predecessor.State.CurrentSnapshot) ||
-		attempt.Request.FailedDigest != FinalizeAttemptValueDigest("failed", true) {
+		attempt.Request.FailedDigest != FinalizeAttemptValueDigest("failed", true) ||
+		attempt.Request.EvidenceRecordDigest != predecessor.State.EvidenceRecordDigest ||
+		attempt.Request.VerificationOutcome != VerificationOutcomeProceduralFailure ||
+		last.ExpectedRevision != predecessor.State.EvidenceAuthorityRevision {
 		return finalVerificationRetrySource{}, denyFinalVerificationRetry("journal_mismatch", "FINALIZE attempt does not prove a completed failed verification of CurrentSnapshot")
 	}
-	evidence, err := readCompactFailedFinalEvidence(store)
+	captured, err := ReadCapturedVerificationEvidence(store.Dir, predecessor.State.LineageID, predecessor.State.EvidenceAuthorityRevision, predecessor.State.CurrentSnapshot)
 	if err != nil {
 		return finalVerificationRetrySource{}, denyFinalVerificationRetry("evidence_mismatch", err.Error())
 	}
+	evidence := captured.Payload
 	evidenceHash := finalVerificationPayloadDigest(evidence)
-	if evidenceHash != predecessor.State.EvidenceHash || attempt.Request.EvidenceDigest != FinalizeAttemptValueDigest("evidence", evidence) {
+	if evidenceHash != predecessor.State.EvidenceHash || captured.Record.RecordDigest != predecessor.State.EvidenceRecordDigest ||
+		captured.Record.Outcome != VerificationOutcomeProceduralFailure || attempt.Request.EvidenceDigest != FinalizeAttemptValueDigest("evidence", evidence) {
 		return finalVerificationRetrySource{}, denyFinalVerificationRetry("evidence_mismatch", "captured evidence bytes do not bind the terminal state and FINALIZE journal")
 	}
 	if _, err := buildLiveFinalVerificationSnapshot(ctx, store.repo, predecessor.State.CurrentSnapshot); err != nil {
@@ -373,7 +388,8 @@ func deriveFinalVerificationRetrySourceLocked(ctx context.Context, store Compact
 	return finalVerificationRetrySource{attempt: attempt, evidence: evidence, eligibility: FinalVerificationRetryEligibility{
 		IncidentSchema: FinalVerificationIncidentSchema, IncidentClass: FinalVerificationIncidentProceduralToolingFailure,
 		ValidatingRevision: last.ExpectedRevision, TargetIdentity: predecessor.State.CurrentSnapshot.Identity,
-		FailedEvidenceHash: evidenceHash, FinalizeRequestDigest: attempt.Request.RequestDigest,
+		FailedEvidenceHash: evidenceHash, FailedEvidenceRecordDigest: captured.Record.RecordDigest,
+		FinalizeRequestDigest: attempt.Request.RequestDigest,
 	}}, nil
 }
 
@@ -408,13 +424,18 @@ func finalVerificationRetrySuccessor(predecessor CompactRecord, request FinalVer
 	proof := &CompactFinalVerificationRetryProof{
 		Schema: CompactFinalVerificationRetryProofSchema, TerminalRevision: predecessor.Revision,
 		ValidatingRevision: source.eligibility.ValidatingRevision, TargetIdentity: predecessor.State.CurrentSnapshot.Identity,
-		FailedEvidenceHash: predecessor.State.EvidenceHash, FinalizeRequestDigest: source.attempt.Request.RequestDigest,
+		FailedEvidenceHash: predecessor.State.EvidenceHash, FailedEvidenceRecordDigest: predecessor.State.EvidenceRecordDigest,
+		FailureOutcome: predecessor.State.EvidenceOutcome, FinalizeRequestDigest: source.attempt.Request.RequestDigest,
 		Incident: request.Incident, IncidentDigest: FinalVerificationIncidentDigest(request.Incident), SourceFinalizeAttempt: source.attempt,
 	}
 	successor.LineageID = request.SuccessorLineageID
 	successor.Generation = predecessor.State.Generation + 1
 	successor.State = StateValidating
 	successor.EvidenceHash = ""
+	successor.EvidenceRecordDigest = ""
+	successor.EvidenceOutcome = ""
+	successor.EvidenceTargetIdentity = ""
+	successor.EvidenceAuthorityRevision = ""
 	successor.Recovery = &CompactRecoveryProvenance{
 		PredecessorLineageID: predecessor.State.LineageID, PredecessorRevision: predecessor.Revision,
 		Disposition: RecoveryFinalVerificationRetry, Reason: request.Reason, Actor: request.Actor,
@@ -428,7 +449,8 @@ func validateCompactFinalVerificationRetryProofShape(successor CompactState, rec
 	proof := recovery.FinalVerificationRetry
 	if proof == nil || proof.Schema != CompactFinalVerificationRetryProofSchema || recovery.Evidence != nil ||
 		proof.TerminalRevision != recovery.PredecessorRevision || proof.TargetIdentity != successor.CurrentSnapshot.Identity ||
-		proof.FailedEvidenceHash == "" || proof.IncidentDigest != FinalVerificationIncidentDigest(proof.Incident) ||
+		proof.FailedEvidenceHash == "" || !validSHA256(proof.FailedEvidenceRecordDigest) || proof.FailureOutcome != VerificationOutcomeProceduralFailure ||
+		proof.IncidentDigest != FinalVerificationIncidentDigest(proof.Incident) ||
 		proof.FinalizeRequestDigest != proof.SourceFinalizeAttempt.Request.RequestDigest {
 		return errors.New("final-verification retry source proof is incomplete or invalid")
 	}
@@ -447,7 +469,9 @@ func validateCompactFinalVerificationRetryProofShape(successor CompactState, rec
 	last := attempt.Transitions[len(attempt.Transitions)-1]
 	if last.Operation != "review/complete-verification" || last.ExpectedRevision != proof.ValidatingRevision || last.Revision != proof.TerminalRevision ||
 		attempt.Request.CandidateDigest != FinalizeAttemptValueDigest("candidate", successor.CurrentSnapshot) ||
-		attempt.Request.FailedDigest != FinalizeAttemptValueDigest("failed", true) {
+		attempt.Request.FailedDigest != FinalizeAttemptValueDigest("failed", true) ||
+		attempt.Request.EvidenceRecordDigest != proof.FailedEvidenceRecordDigest ||
+		attempt.Request.VerificationOutcome != VerificationOutcomeProceduralFailure {
 		return errors.New("final-verification retry source FINALIZE attempt does not prove failed CurrentSnapshot verification")
 	}
 	authorization, err := FinalVerificationRetryAuthorization(FinalVerificationRetryRequest{
@@ -463,14 +487,16 @@ func validateCompactFinalVerificationRetryProofShape(successor CompactState, rec
 func validateCompactFinalVerificationRetryEdge(predecessor CompactRecord, successor CompactState) error {
 	recovery := successor.Recovery
 	if recovery == nil || recovery.Disposition != RecoveryFinalVerificationRetry || recovery.FinalVerificationRetry == nil ||
-		predecessor.State.State != StateEscalated || predecessor.State.EvidenceHash == "" {
+		predecessor.State.State != StateEscalated || predecessor.State.EvidenceHash == "" ||
+		predecessor.State.EvidenceOutcome != VerificationOutcomeProceduralFailure {
 		return errors.New("final-verification retry requires an escalated failed-verification predecessor")
 	}
 	if err := validateCompactFinalVerificationRetryProofShape(successor, *recovery); err != nil {
 		return err
 	}
 	proof := recovery.FinalVerificationRetry
-	if proof.FailedEvidenceHash != predecessor.State.EvidenceHash || proof.TargetIdentity != predecessor.State.CurrentSnapshot.Identity ||
+	if proof.FailedEvidenceHash != predecessor.State.EvidenceHash || proof.FailedEvidenceRecordDigest != predecessor.State.EvidenceRecordDigest ||
+		proof.FailureOutcome != predecessor.State.EvidenceOutcome || proof.TargetIdentity != predecessor.State.CurrentSnapshot.Identity ||
 		proof.TerminalRevision != predecessor.Revision {
 		return errors.New("final-verification retry proof does not bind its predecessor")
 	}
@@ -479,6 +505,7 @@ func validateCompactFinalVerificationRetryEdge(predecessor CompactRecord, succes
 		return err
 	}
 	want.LineageID, want.Generation, want.State, want.EvidenceHash, want.Recovery = successor.LineageID, successor.Generation, StateValidating, "", successor.Recovery
+	want.EvidenceRecordDigest, want.EvidenceOutcome, want.EvidenceTargetIdentity, want.EvidenceAuthorityRevision = "", "", "", ""
 	if !compactStateEqual(want, successor) {
 		return errors.New("final-verification retry successor changed frozen authority or budget state")
 	}

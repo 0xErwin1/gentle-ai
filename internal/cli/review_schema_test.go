@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 func TestFinalVerificationIncidentSchemaIsClosedToProceduralToolingFailure(t *testing.T) {
@@ -106,6 +108,37 @@ func TestReviewSchemaVerificationEvidenceEntry(t *testing.T) {
 	err := RunReviewSchema(nil, &usageOutput)
 	if err == nil || !containsAll(err.Error(), []string{"verification-evidence"}) {
 		t.Fatalf("review schema usage error = %v, want it to name verification-evidence", err)
+	}
+}
+
+func TestReviewSchemaVerificationEvidenceRecordMatchesContractFixture(t *testing.T) {
+	var output bytes.Buffer
+	if err := RunReviewSchema([]string{"verification-evidence-record"}, &output); err != nil {
+		t.Fatal(err)
+	}
+	contractPath := filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas", "verification-evidence.schema.json")
+	contract, err := os.ReadFile(contractPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var emitted, published any
+	if err := json.Unmarshal(output.Bytes(), &emitted); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(contract, &published); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(emitted, published) {
+		t.Fatalf("verification evidence record schema differs from published contract\nemitted=%#v\npublished=%#v", emitted, published)
+	}
+	fixturePath := filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "verification-evidence.fixture.json")
+	fixture, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := reviewtransaction.ParseVerificationEvidenceRecord(fixture)
+	if err != nil || record.Outcome != reviewtransaction.VerificationOutcomePassed {
+		t.Fatalf("verification evidence fixture = %#v, %v", record, err)
 	}
 }
 

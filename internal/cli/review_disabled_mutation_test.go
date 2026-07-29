@@ -147,7 +147,7 @@ func TestDisabledReviewRefusesEveryAuthorityMutatingVerb(t *testing.T) {
 		{verb: "start"},
 		{verb: "finalize"},
 		{verb: "capture-result", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--lens", "review-risk", "--order", "0", "--input", input}},
-		{verb: "capture-evidence", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--input", input}},
+		{verb: "capture-evidence", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--expected-revision", digest, "--outcome", "passed", "--input", input}},
 		{verb: "preserve-result", args: []string{"--lineage", "review-disabled-sweep", "--target", digest, "--lens", "review-risk", "--order", "0", "--input", input}},
 		{verb: "repair", args: []string{"--contract", ReviewIntegrationContractV1}},
 		{verb: "invalidate", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest}},

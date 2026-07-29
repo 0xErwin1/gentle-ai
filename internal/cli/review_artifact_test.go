@@ -110,6 +110,9 @@ func TestReviewCaptureResultRejectsSemanticAdmissionBeforePublication(t *testing
 			result.Inspection.Status = "blocked"
 			result.Evidence = []string{"Access denied; candidate was not inspected."}
 		}},
+		{name: "out of scope inspection path", mutate: func(result *facadeReviewerResult) {
+			result.Inspection.Paths = append(result.Inspection.Paths, "unrelated/old.go")
+		}},
 		{name: "out of scope finding", mutate: func(result *facadeReviewerResult) {
 			result.Findings = []facadeFinding{{
 				ID: "R3-001", Location: "unrelated/old.go:3", Severity: "CRITICAL", Claim: "unrelated defect",
@@ -144,6 +147,75 @@ func TestReviewCaptureResultRejectsSemanticAdmissionBeforePublication(t *testing
 			}
 			assertArtifactRevision(t, store, record.Revision)
 		})
+	}
+}
+
+func TestReviewCaptureResultPublishesExternalRepositoryProofExactlyOnce(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "support.go"), []byte("package support\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "--", "support.go")
+	runReviewCLIGit(t, repo, "commit", "-m", "add supporting implementation")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	started := startFacadeReview(t, repo)
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := admittedReviewerResultForTest(t, repo, record, record.State.SelectedLenses[0], 0)
+	result.Evidence = []string{"supporting proof: support.go:1"}
+	result.Findings = []facadeFinding{{
+		ID: "R3-001", Location: "tracked.txt:1", Severity: "WARNING", Claim: "candidate behavior depends on supporting code",
+		ProofRefs: []string{"repository proof: support.go:1"},
+	}}
+	input := filepath.Join(t.TempDir(), "result.json")
+	writeReviewCLIJSON(t, input, result)
+	args := []string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.InitialSnapshot.Identity,
+		"--lens", record.State.SelectedLenses[0], "--order", "0", "--input", input,
+	}
+	var first bytes.Buffer
+	if err := RunReviewCaptureResult(args, &first); err != nil {
+		t.Fatalf("capture external repository proof: %v", err)
+	}
+	var artifact reviewResultArtifact
+	decodeStrictReviewJSON(t, first.Bytes(), &artifact)
+	if artifact.AdmissionDecision != reviewtransaction.ArtifactAdmissionCompleted {
+		t.Fatalf("external proof admission = %q", artifact.AdmissionDecision)
+	}
+	payload, err := os.ReadFile(artifact.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published admittedReviewerResult
+	decodeStrictReviewJSON(t, payload, &published)
+	if strings.Count(strings.Join(published.Result.Evidence, "\n"), "support.go:1") != 1 ||
+		strings.Count(strings.Join(published.Result.Findings[0].ProofRefs, "\n"), "support.go:1") != 1 {
+		t.Fatalf("external repository proof was not published exactly once: %#v", published.Result)
+	}
+	var replay bytes.Buffer
+	if err := RunReviewCaptureResult(args, &replay); err != nil || replay.String() != first.String() {
+		t.Fatalf("exact external-proof replay changed: %v\nfirst=%s\nreplay=%s", err, first.String(), replay.String())
+	}
+	entries, err := os.ReadDir(filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jsonFiles := 0
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".json") {
+			jsonFiles++
+		}
+	}
+	if jsonFiles != 1 {
+		t.Fatalf("captured reviewer JSON files = %d, want exactly one", jsonFiles)
 	}
 }
 

@@ -385,6 +385,7 @@ func evidenceCheckingEchoes(r *journeyRun) error {
 		"--lineage", envelope.argument("lineage"),
 		"--target", envelope.argument("target"),
 		"--expected-revision", envelope.argument("expected-revision"),
+		"--outcome", "passed",
 		"--input", path,
 	}, false)
 	return secretMustNotEcho(r.sandbox, captured)

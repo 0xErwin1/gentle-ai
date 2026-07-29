@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -141,5 +142,105 @@ func TestNegotiatedStatusRoutesApprovedScopeChangeToBoundRecovery(t *testing.T) 
 		successor.Recovery.PredecessorLineageID != startResult.LineageID ||
 		successor.Recovery.Disposition != reviewtransaction.RecoveryScopeChanged {
 		t.Fatalf("recovery successor = %s", recovered.String())
+	}
+}
+
+func TestNegotiatedStatusRecoversApprovedFeatureOntoCurrentBase(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	featureBranch := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "--abbrev-ref", "HEAD"))
+	originalBase := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	attempt := filepath.Join(repo, "docs", "attempt.md")
+	writeCLIAttemptFile(t, attempt, "# approved feature\n")
+	runReviewCLIGit(t, repo, "add", "--", "docs/attempt.md")
+	var startedOut bytes.Buffer
+	if err := RunReview([]string{"start", "--cwd", repo, "--projection", "staged"}, &startedOut); err != nil {
+		t.Fatalf("review start: %v\n%s", err, startedOut.String())
+	}
+	var started ReviewFacadeStartResult
+	decodeStrictReviewJSON(t, startedOut.Bytes(), &started)
+	if err := RunReview([]string{"finalize", "--cwd", repo, "--lineage", started.LineageID}, &bytes.Buffer{}); err != nil {
+		t.Fatalf("review finalize: %v", err)
+	}
+	runReviewCLIGit(t, repo, "commit", "-m", "approved feature")
+
+	runReviewCLIGit(t, repo, "branch", "advanced-base", originalBase)
+	runReviewCLIGit(t, repo, "checkout", "advanced-base")
+	writeCLIAttemptFile(t, filepath.Join(repo, "base-advance.txt"), "unrelated base advance\n")
+	runReviewCLIGit(t, repo, "add", "--", "base-advance.txt")
+	runReviewCLIGit(t, repo, "commit", "-m", "advance base")
+	currentBase := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD"))
+	currentBaseTree := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", currentBase+"^{tree}"))
+	runReviewCLIGit(t, repo, "checkout", featureBranch)
+	runReviewCLIGit(t, repo, "rebase", "advanced-base")
+	headTree := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "HEAD^{tree}"))
+
+	statusArgs := []string{
+		"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition",
+		"--lineage", started.LineageID, "--base-ref", currentBase, "--projection", "staged",
+	}
+	var statusOut bytes.Buffer
+	if err := RunReview(statusArgs, &statusOut); err != nil {
+		t.Fatalf("rebased review status: %v\n%s", err, statusOut.String())
+	}
+	var status ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, statusOut.Bytes(), &status)
+	if status.Applicability != reviewtransaction.TargetApplicabilityCurrent ||
+		status.Action != reviewtransaction.TargetStatusActionRecover ||
+		status.ActionDisposition != reviewtransaction.RecoveryScopeChanged || status.Authority == nil ||
+		status.Authority.LineageID != started.LineageID || status.NextTransition == nil ||
+		status.NextTransition.Kind != reviewNextTransitionCollect || status.NextTransition.Collect == nil {
+		t.Fatalf("rebased status did not select scope recovery:\n%s", statusOut.String())
+	}
+	input := status.NextTransition.Collect.Inputs[0]
+	bound := map[string]string{}
+	for _, argument := range input.Arguments {
+		bound[argument.Name] = argument.Value
+	}
+	authorization := strings.Join([]string{
+		"gentle-ai.review-recovery-authorization/v1",
+		"predecessor_lineage=" + bound["lineage"],
+		"predecessor_revision=" + bound["expected-revision"],
+		"target_identity=" + bound["target"],
+		"successor_lineage=approved-rebase-successor",
+		"actor=maintainer",
+		"reason=recover approved feature onto current base",
+	}, "\n")
+	authorizedArgs := append(append([]string{}, statusArgs...),
+		"--recovery-successor-lineage", "approved-rebase-successor",
+		"--recovery-reason", "recover approved feature onto current base",
+		"--recovery-actor", "maintainer", "--recovery-authorization", authorization)
+	statusOut.Reset()
+	if err := RunReview(authorizedArgs, &statusOut); err != nil {
+		t.Fatalf("authorized rebased status: %v\n%s", err, statusOut.String())
+	}
+	var authorized ReviewTargetStatusResult
+	decodeStrictReviewJSON(t, statusOut.Bytes(), &authorized)
+	execute := authorized.NextTransition
+	if execute == nil || execute.Kind != reviewNextTransitionExecute || execute.Execute == nil ||
+		execute.Execute.Operation != "review.recover" {
+		t.Fatalf("authorized status did not emit recovery:\n%s", statusOut.String())
+	}
+	recoverArgs := []string{"recover", "--cwd", repo}
+	for _, argument := range execute.Execute.Arguments {
+		recoverArgs = append(recoverArgs, argument.Token)
+	}
+	var recoveredOut bytes.Buffer
+	if err := RunReview(recoverArgs, &recoveredOut); err != nil {
+		t.Fatalf("emitted rebased recovery failed: %v\n%s", err, recoveredOut.String())
+	}
+	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, "approved-rebase-successor")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.State.InitialSnapshot.BaseTree != currentBaseTree || recovered.State.InitialSnapshot.CandidateTree != headTree ||
+		recovered.State.InitialSnapshot.Projection != reviewtransaction.ProjectionStaged ||
+		len(recovered.State.InitialSnapshot.Paths) != 1 || recovered.State.InitialSnapshot.Paths[0] != "docs/attempt.md" ||
+		recovered.State.Recovery == nil || recovered.State.Recovery.PredecessorLineageID != started.LineageID {
+		t.Fatalf("successor did not bind only the rebased feature on the current base: %#v", recovered.State)
 	}
 }

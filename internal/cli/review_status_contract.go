@@ -332,7 +332,9 @@ func (result ReviewTargetStatusResult) Validate() error {
 			retry.IncidentSchema != reviewtransaction.FinalVerificationIncidentSchema ||
 			retry.IncidentClass != reviewtransaction.FinalVerificationIncidentProceduralToolingFailure ||
 			retry.TargetIdentity != reviewAuthorityTargetIdentity(result) || !validReviewCapabilitySHA256(retry.ValidatingRevision) ||
-			!validReviewCapabilitySHA256(retry.FailedEvidenceHash) || !validReviewCapabilitySHA256(retry.FinalizeRequestDigest) {
+			!validReviewCapabilitySHA256(retry.FailedEvidenceHash) ||
+			retry.FailedEvidenceRecordDigest != "" && !validReviewCapabilitySHA256(retry.FailedEvidenceRecordDigest) ||
+			!validReviewCapabilitySHA256(retry.FinalizeRequestDigest) {
 			return errors.New("final-verification retry status metadata is invalid")
 		}
 	} else if result.Action == reviewtransaction.TargetStatusActionRetryFinalVerification {
@@ -351,8 +353,11 @@ func (result ReviewTargetStatusResult) Validate() error {
 			return err
 		}
 		transitionRequest := reviewTransitionValidationRequest(result.NextTransition)
-		if (transitionRequest == nil) != (result.ValidationRequest == nil) ||
-			transitionRequest != nil && !reflect.DeepEqual(*transitionRequest, *result.ValidationRequest) {
+		correctionEvidenceFirst := transitionRequest == nil && result.ValidationRequest != nil &&
+			(result.NextTransition.ReasonCode == "correction_repository_verification_required" ||
+				result.NextTransition.ReasonCode == "correction_repository_tooling_failed")
+		if !correctionEvidenceFirst && ((transitionRequest == nil) != (result.ValidationRequest == nil) ||
+			transitionRequest != nil && !reflect.DeepEqual(*transitionRequest, *result.ValidationRequest)) {
 			return errors.New("negotiated status validation request copies differ")
 		}
 	}
@@ -495,6 +500,9 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 	expectedExecutionTarget := result.TargetIdentity
 	if result.Authority != nil && result.Authority.State == reviewtransaction.StateValidating {
 		expectedExecutionTarget = reviewAuthorityTargetIdentity(result)
+	} else if result.Authority != nil && result.Authority.State == reviewtransaction.StateCorrectionRequired &&
+		result.ValidationRequest != nil && result.NextTransition.ReasonCode == "correction_repository_tooling_failed" {
+		expectedExecutionTarget = result.ValidationRequest.CorrectionTargetIdentity
 	}
 	if result.NextTransition.Execute != nil && result.NextTransition.Execute.Binding.TargetIdentity != expectedExecutionTarget {
 		return errors.New("negotiated status execution target differs from the current target identity")
@@ -517,8 +525,12 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 	}
 	for _, input := range result.NextTransition.Collect.Inputs {
 		if input.CaptureOperation == "review.capture-evidence" {
+			expectedTarget := reviewAuthorityTargetIdentity(result)
+			if result.Authority != nil && result.Authority.State == reviewtransaction.StateCorrectionRequired && result.ValidationRequest != nil {
+				expectedTarget = result.ValidationRequest.CorrectionTargetIdentity
+			}
 			arguments, err := reviewTransitionArgumentMap(input.Arguments)
-			if err != nil || arguments["target"] != reviewAuthorityTargetIdentity(result) {
+			if err != nil || arguments["target"] != expectedTarget {
 				return errors.New("negotiated status evidence target differs from the frozen authority target identity")
 			}
 			continue
@@ -660,6 +672,9 @@ func (result ReviewTargetStatusResult) validateFinalVerificationRetryNextTransit
 		"incident-schema":               retry.IncidentSchema,
 		"incident-class":                retry.IncidentClass,
 	}
+	if retry.FailedEvidenceRecordDigest != "" {
+		want["failed-evidence-record-digest"] = retry.FailedEvidenceRecordDigest
+	}
 	if err != nil || input.Name != "final_verification_retry_authorization" ||
 		input.Schema != reviewtransaction.FinalVerificationRetryAuthorizationSchema ||
 		input.CaptureOperation != "external.authorize_final_verification_retry" || !reflect.DeepEqual(arguments, want) {
@@ -796,6 +811,12 @@ func (transition ReviewNextTransition) Validate() error {
 				}
 			} else if input.ArtifactSubject != nil || input.CandidateDiff != nil || input.ChangedPathManifest != nil {
 				return errors.New("non-reviewer collection transition contains frozen reviewer context")
+			}
+			if input.CaptureOperation == "review.capture-evidence" &&
+				(input.Schema != reviewtransaction.VerificationEvidenceRecordSchema || len(arguments) != 3 ||
+					strings.TrimSpace(arguments["lineage"]) == "" || !validReviewCapabilitySHA256(arguments["expected-revision"]) ||
+					!validReviewCapabilitySHA256(arguments["target"])) {
+				return errors.New("verification evidence capture transition lacks an exact authority and candidate binding") // refusal:by-design world-action: only a producer-code repair can make a malformed machine transition trustworthy
 			}
 			if input.CaptureOperation == "external.run_targeted_validation" && input.ValidationRequest == nil {
 				return errors.New("targeted validation transition lacks its provider-owned request")
