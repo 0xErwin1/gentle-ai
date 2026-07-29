@@ -145,9 +145,26 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 			"reviewer result echoed a different artifact subject: "+artifactRecaptureContinuation+
 				", which is "+request.ExpectedSubject.SubjectHash)
 	}
-	if request.FrozenContext.BaseTree != request.ExpectedSubject.BaseTree ||
-		request.FrozenContext.CandidateTree != request.ExpectedSubject.CandidateTree {
-		return fail(ArtifactAdmissionBindingMismatch, "frozen candidate trees do not match the artifact subject")
+	// Bind the candidate the way the negotiated subject schema binds it.
+	// ValidateArtifactSubject above already rejected every other schema, and it
+	// enforces the two shapes as mutually exclusive: a v1 subject carries a
+	// candidate diff digest and blank trees, a v2 subject carries trees and no
+	// digest. Comparing trees unconditionally therefore failed EVERY v1 capture,
+	// because NewLegacyArtifactSubject blanks those fields on purpose to keep the
+	// published v1 preimage stable. The rejection lands before any store append,
+	// so the lens slot was never consumed and the collect loop re-offered the
+	// same slot until it gave up.
+	switch request.ExpectedSubject.Schema {
+	case ArtifactSubjectSchemaV1:
+		if request.FrozenContext.LegacyCandidateDiff == nil ||
+			request.FrozenContext.LegacyCandidateDiff.SHA256 != request.ExpectedSubject.CandidateDiffSHA256 {
+			return fail(ArtifactAdmissionBindingMismatch, "frozen candidate diff does not match the artifact subject")
+		}
+	default:
+		if request.FrozenContext.BaseTree != request.ExpectedSubject.BaseTree ||
+			request.FrozenContext.CandidateTree != request.ExpectedSubject.CandidateTree {
+			return fail(ArtifactAdmissionBindingMismatch, "frozen candidate trees do not match the artifact subject")
+		}
 	}
 	manifestDigest, err := ChangedPathManifestDigest(request.FrozenContext.ChangedPathManifest)
 	if err != nil || manifestDigest != request.ExpectedSubject.ChangedPathManifestSHA256 {

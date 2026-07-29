@@ -113,6 +113,72 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 	}
 }
 
+// legacyAdmittedArtifactFixture rebinds the shared admission fixture onto a
+// negotiated review-integration/v1 subject, whose identity is the rendered
+// candidate diff rather than the frozen Git trees.
+func legacyAdmittedArtifactFixture(t *testing.T) ArtifactAdmissionRequest {
+	t.Helper()
+	state, revision, frozen := artifactSubjectFixture(t)
+	diff, err := NewFrozenCandidateDiff([]byte("diff --git a/internal/a.go b/internal/a.go\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	frozen.LegacyCandidateDiff = &diff
+	subject, err := NewLegacyArtifactSubject(state, revision, frozen, LensReliability, 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, request := admittedArtifactFixture(t)
+	request.ExpectedSubject, request.FrozenContext = subject, frozen
+	request.EchoedSubjectHash = subject.SubjectHash
+	return request
+}
+
+// A v1 subject carries no trees by construction, so admission has to bind it
+// through the candidate diff digest. Comparing the blanked trees against the
+// frozen context rejected every legacy capture before it could consume its lens
+// slot, leaving the collect loop to re-offer the same slot forever.
+func TestAdmitArtifactBindsLegacySubjectByCandidateDiff(t *testing.T) {
+	request := legacyAdmittedArtifactFixture(t)
+	canonical, admission, err := AdmitArtifact(request)
+	if err != nil {
+		t.Fatalf("AdmitArtifact() error = %v (decision %q, diagnostic %q)", err, admission.Decision, admission.Diagnostic)
+	}
+	if admission.Decision != ArtifactAdmissionCompleted || admission.ResultHash != canonical.ResultHash {
+		t.Fatalf("admission = %#v, canonical = %#v", admission, canonical)
+	}
+	if err := admission.Validate(request.ExpectedSubject); err != nil {
+		t.Fatalf("admission.Validate() error = %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*ArtifactAdmissionRequest)
+	}{
+		{name: "legacy transport absent", mutate: func(r *ArtifactAdmissionRequest) {
+			r.FrozenContext.LegacyCandidateDiff = nil
+		}},
+		{name: "legacy transport rerendered", mutate: func(r *ArtifactAdmissionRequest) {
+			other, err := NewFrozenCandidateDiff([]byte("diff --git a/internal/b.go b/internal/b.go\n"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.FrozenContext.LegacyCandidateDiff = &other
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := legacyAdmittedArtifactFixture(t)
+			tc.mutate(&candidate)
+			_, admission, err := AdmitArtifact(candidate)
+			if err == nil || admission.Decision != ArtifactAdmissionBindingMismatch {
+				t.Fatalf("AdmitArtifact() decision = %q, error = %v; want %q",
+					admission.Decision, err, ArtifactAdmissionBindingMismatch)
+			}
+		})
+	}
+}
+
 func TestAdmitArtifactAllowsSupportingProofOutsideChangedManifest(t *testing.T) {
 	_, _, request := admittedArtifactFixture(t)
 	request.Result.Evidence = append(request.Result.Evidence, "supporting implementation: internal/secret.go:7")
