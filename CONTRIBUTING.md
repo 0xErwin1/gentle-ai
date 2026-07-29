@@ -34,6 +34,14 @@ PRs that are not linked to an approved issue will be **automatically rejected** 
 
 ---
 
+## Looking for something to work on?
+
+Start at the **[Community Roadmap](docs/community-roadmap.md)**.
+
+Everything labelled [`up-for-grabs`](https://github.com/Gentleman-Programming/gentle-ai/issues?q=is%3Aissue+is%3Aopen+label%3Aup-for-grabs) is scoped, carries `status:approved` so a PR can be opened, and is unclaimed. Comment that you are taking it and go.
+
+An issue **without** that label is usually waiting on information (`status:needs-info`) or on an architectural decision (`status:needs-design`). Those want discussion first — implementing before the decision lands means the work gets thrown away.
+
 ## Label System
 
 ### Type Labels (applied to PRs)
