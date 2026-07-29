@@ -328,10 +328,20 @@ func TestNegotiatedFinalizeReturnsProviderOwnedTargetedValidationRequest(t *test
 	if err := statusWithoutAnyRequest.Validate(); err == nil {
 		t.Fatal("status accepted a targeted-validation transition without its provider-owned request")
 	}
+	evidencePath := filepath.Join(t.TempDir(), "correction-evidence.txt")
+	if err := os.WriteFile(evidencePath, []byte("targeted and full repository verification passed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewCaptureEvidence([]string{
+		"--cwd", repo, "--lineage", started.LineageID, "--target", status.ValidationRequest.CorrectionTargetIdentity,
+		"--expected-revision", status.Authority.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidencePath,
+	}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
 
 	var output bytes.Buffer
 	if err := RunReviewFacadeFinalize([]string{
-		"--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition", "--lineage", started.LineageID,
+		"--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition", "--lineage", started.LineageID, "--captured-evidence",
 	}, &output); err != nil {
 		t.Fatal(err)
 	}

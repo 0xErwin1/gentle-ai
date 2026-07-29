@@ -84,6 +84,7 @@
         "validating_revision": { "$ref": "#/$defs/sha256" },
         "target_identity": { "$ref": "#/$defs/sha256" },
         "failed_evidence_hash": { "$ref": "#/$defs/sha256" },
+        "failed_evidence_record_digest": { "$ref": "#/$defs/sha256" },
         "finalize_request_digest": { "$ref": "#/$defs/sha256" }
       }
     }

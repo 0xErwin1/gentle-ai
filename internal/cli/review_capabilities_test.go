@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -18,7 +19,7 @@ import (
 const capabilityFixtureExecutable = "gentle-ai capability fixture\n"
 
 func TestReviewCapabilitiesMatchesConformanceFixtureOutsideRepository(t *testing.T) {
-	fixturePath, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "capabilities-v1.4.fixture.json"))
+	fixturePath, err := filepath.Abs(filepath.Join("..", "..", "contracts", "review-integration", "v1", "fixtures", "capabilities-v1.5.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +69,7 @@ func TestReviewCapabilitiesMatchesConformanceFixtureOutsideRepository(t *testing
 	if err := result.Validate(); err != nil {
 		t.Fatalf("capabilities validation: %v", err)
 	}
-	if result.Protocol != (ReviewCapabilitiesProtocol{Major: 1, Minor: 4}) ||
+	if result.Protocol != (ReviewCapabilitiesProtocol{Major: 1, Minor: 5}) ||
 		!slices.ContainsFunc(result.Features.Optional, func(feature ReviewCapabilityFeature) bool {
 			return feature.Name == "native_frozen_candidate_context" && feature.Supported && slices.Equal(feature.Requires, []string{"immutable_snapshot"})
 		}) || !slices.ContainsFunc(result.Features.Optional, func(feature ReviewCapabilityFeature) bool {
@@ -164,7 +165,7 @@ func TestReviewCapabilitiesAdvertisesOnlyNativeSurface(t *testing.T) {
 
 func TestReviewCapabilitiesSchemaAndFixtureAreStrict(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1")
-	schemaPayload, err := os.ReadFile(filepath.Join(root, "schemas", "capabilities-v1.4.schema.json"))
+	schemaPayload, err := os.ReadFile(filepath.Join(root, "schemas", "capabilities-v1.5.schema.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,10 +176,11 @@ func TestReviewCapabilitiesSchemaAndFixtureAreStrict(t *testing.T) {
 	if schema["$schema"] != "https://json-schema.org/draft/2020-12/schema" || schema["$id"] != ReviewIntegrationCapabilitiesSchemaID || schema["additionalProperties"] != false {
 		t.Fatalf("capabilities schema header = %#v", schema)
 	}
-	fixture, err := os.ReadFile(filepath.Join(root, "fixtures", "capabilities-v1.4.fixture.json"))
+	fixture, err := os.ReadFile(filepath.Join(root, "fixtures", "capabilities-v1.5.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	validateFinalVerificationContractSchema(t, "capabilities-v1.5.schema.json", fixture)
 	decoder := json.NewDecoder(bytes.NewReader(fixture))
 	decoder.DisallowUnknownFields()
 	var result ReviewCapabilitiesResult
@@ -267,6 +269,17 @@ func TestReviewCapabilitiesVersionsKeepV1ReadableAndFailClosedAcrossSchemas(t *t
 	if v13Schema["$id"] != ReviewIntegrationCapabilitiesSchemaIDV13 {
 		t.Fatalf("v1.3 capabilities schema identity = %#v", v13Schema["$id"])
 	}
+	v14SchemaPayload, err := os.ReadFile(filepath.Join(root, "schemas", "capabilities-v1.4.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v14Schema map[string]any
+	if err := json.Unmarshal(v14SchemaPayload, &v14Schema); err != nil {
+		t.Fatal(err)
+	}
+	if v14Schema["$id"] != ReviewIntegrationCapabilitiesSchemaIDV14 {
+		t.Fatalf("v1.4 capabilities schema identity = %#v", v14Schema["$id"])
+	}
 	legacyFixture, err := os.ReadFile(filepath.Join(root, "fixtures", "capabilities.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -283,7 +296,11 @@ func TestReviewCapabilitiesVersionsKeepV1ReadableAndFailClosedAcrossSchemas(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	currentFixture, err := os.ReadFile(filepath.Join(root, "fixtures", "capabilities-v1.4.fixture.json"))
+	v14Fixture, err := os.ReadFile(filepath.Join(root, "fixtures", "capabilities-v1.4.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentFixture, err := os.ReadFile(filepath.Join(root, "fixtures", "capabilities-v1.5.fixture.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,8 +330,11 @@ func TestReviewCapabilitiesVersionsKeepV1ReadableAndFailClosedAcrossSchemas(t *t
 	if err := validateLegacy(v13Fixture); err == nil {
 		t.Fatal("legacy consumer accepted unknown v1.3 capabilities schema")
 	}
-	if err := validateLegacy(currentFixture); err == nil {
+	if err := validateLegacy(v14Fixture); err == nil {
 		t.Fatal("legacy consumer accepted unknown v1.4 capabilities schema")
+	}
+	if err := validateLegacy(currentFixture); err == nil {
+		t.Fatal("legacy consumer accepted unknown v1.5 capabilities schema")
 	}
 	validateV11 := func(payload []byte) error {
 		var value identity
@@ -335,8 +355,11 @@ func TestReviewCapabilitiesVersionsKeepV1ReadableAndFailClosedAcrossSchemas(t *t
 	if err := validateV11(v13Fixture); err == nil {
 		t.Fatal("v1.1 consumer accepted unknown v1.3 capabilities schema")
 	}
-	if err := validateV11(currentFixture); err == nil {
+	if err := validateV11(v14Fixture); err == nil {
 		t.Fatal("v1.1 consumer accepted unknown v1.4 capabilities schema")
+	}
+	if err := validateV11(currentFixture); err == nil {
+		t.Fatal("v1.1 consumer accepted unknown v1.5 capabilities schema")
 	}
 	validateV12 := func(payload []byte) error {
 		var value identity
@@ -354,8 +377,11 @@ func TestReviewCapabilitiesVersionsKeepV1ReadableAndFailClosedAcrossSchemas(t *t
 	if err := validateV12(v13Fixture); err == nil {
 		t.Fatal("v1.2 consumer accepted unknown v1.3 capabilities schema")
 	}
-	if err := validateV12(currentFixture); err == nil {
+	if err := validateV12(v14Fixture); err == nil {
 		t.Fatal("v1.2 consumer accepted unknown v1.4 capabilities schema")
+	}
+	if err := validateV12(currentFixture); err == nil {
+		t.Fatal("v1.2 consumer accepted unknown v1.5 capabilities schema")
 	}
 	validateV13 := func(payload []byte) error {
 		var value identity
@@ -370,23 +396,42 @@ func TestReviewCapabilitiesVersionsKeepV1ReadableAndFailClosedAcrossSchemas(t *t
 	if err := validateV13(v13Fixture); err != nil {
 		t.Fatalf("v1.3 consumer rejected v1.3 artifact: %v", err)
 	}
-	if err := validateV13(currentFixture); err == nil {
+	if err := validateV13(v14Fixture); err == nil {
 		t.Fatal("v1.3 consumer accepted unknown v1.4 capabilities schema")
+	}
+	if err := validateV13(currentFixture); err == nil {
+		t.Fatal("v1.3 consumer accepted unknown v1.5 capabilities schema")
+	}
+	validateV14 := func(payload []byte) error {
+		var value identity
+		if err := json.Unmarshal(payload, &value); err != nil {
+			return err
+		}
+		if value.Schema != ReviewIntegrationCapabilitiesSchemaV14 || value.Protocol != (ReviewCapabilitiesProtocol{Major: 1, Minor: 4}) {
+			return errors.New("unknown v1.4 capabilities schema")
+		}
+		return nil
+	}
+	if err := validateV14(v14Fixture); err != nil {
+		t.Fatalf("v1.4 consumer rejected v1.4 artifact: %v", err)
+	}
+	if err := validateV14(currentFixture); err == nil {
+		t.Fatal("v1.4 consumer accepted unknown v1.5 capabilities schema")
 	}
 	var current ReviewCapabilitiesResult
 	if err := json.Unmarshal(currentFixture, &current); err != nil {
 		t.Fatal(err)
 	}
 	if err := current.Validate(); err != nil {
-		t.Fatalf("v1.4 consumer rejected negotiated artifact: %v", err)
+		t.Fatalf("v1.5 consumer rejected negotiated artifact: %v", err)
 	}
-	for name, payload := range map[string][]byte{"v1.0": legacyFixture, "v1.1": v11Fixture, "v1.2": v12Fixture, "v1.3": v13Fixture} {
+	for name, payload := range map[string][]byte{"v1.0": legacyFixture, "v1.1": v11Fixture, "v1.2": v12Fixture, "v1.3": v13Fixture, "v1.4": v14Fixture} {
 		var previous ReviewCapabilitiesResult
 		if err := json.Unmarshal(payload, &previous); err != nil {
 			t.Fatal(err)
 		}
 		if err := previous.Validate(); err == nil {
-			t.Fatalf("v1.4 consumer accepted %s artifact without explicit negotiation", name)
+			t.Fatalf("v1.5 consumer accepted %s artifact without explicit negotiation", name)
 		}
 	}
 }
@@ -471,6 +516,7 @@ func TestReviewCapabilitiesFeatureRequirementsAreExplicit(t *testing.T) {
 		{Name: "native_next_transition", Supported: true, Requires: []string{"target_scoped_status"}},
 		{Name: "one_shot_final_verification_retry", Supported: true, Requires: []string{"compact_v2_authority", "exact_receipt_replay", "native_next_transition"}},
 		{Name: "opaque_repository_context", Supported: true, Requires: []string{"compact_v2_authority", "native_next_transition"}},
+		{Name: "outcome_bound_verification_evidence", Supported: true, Requires: []string{"compact_v2_authority", "native_next_transition"}},
 		{Name: "provider_artifact_admission", Supported: true, Requires: []string{"compact_v2_authority", "native_frozen_candidate_context", "opaque_repository_context"}},
 		{Name: "provider_targeted_validation_request", Supported: true, Requires: []string{"compact_v2_authority", "native_next_transition"}},
 		{Name: "recovered_correction_evidence", Supported: true, Requires: []string{"compact_v2_authority", "provider_targeted_validation_request"}},
@@ -515,13 +561,12 @@ func TestReviewIntegrationDocumentationMatchesRuntimeContract(t *testing.T) {
 	document := string(payload)
 	for _, required := range []string{
 		"`stop`", "`legacy_v1_read_only`", "`mutation_outcome`", "`not_started`", "`unknown`", "`committed`",
-		"twenty strict JSON Schemas", "twenty-four deterministic conformance fixtures",
 		"Legacy-v1 never reports `publication_pending`", "retry and replay disabled",
 		"Historical `ordinary_4r` legacy status omits `frozen`", "START, finalize, BIND-SDD, invalidation, and direct append",
 		"`native_frozen_candidate_context`", "`candidate_diff`", "`changed_path_manifest`",
 		"`opaque_repository_context`", "`provider_targeted_validation_request`",
 		"`provider_artifact_admission`", "`validating_result_reopen`", "`recovered_correction_evidence`",
-		"`one_shot_final_verification_retry`", "`review.retry_final_verification`", "`procedural_tooling_failure`",
+		"`one_shot_final_verification_retry`", "`outcome_bound_verification_evidence`", "`review.retry_final_verification`", "`procedural_tooling_failure`",
 		"`artifact_subjects`", "`subject_hash`", "`admission_decision: completed`",
 		"`native_low_risk_verification`", "`selected_lenses: []`", "`receipt_scope_changed`",
 		"25-second aggregate budget", "15-second budget", "20-second budget", "one-second wait delay",
@@ -531,9 +576,37 @@ func TestReviewIntegrationDocumentationMatchesRuntimeContract(t *testing.T) {
 			t.Fatalf("review integration documentation is missing %q", required)
 		}
 	}
-	for _, stale := range []string{"five strict JSON Schemas", "nine strict JSON Schemas", "ten strict JSON Schemas", "sixteen strict JSON Schemas", "eighteen strict JSON Schemas", "eleven deterministic conformance fixtures", "eighteen deterministic conformance fixtures", "nineteen deterministic conformance fixtures", "twenty-one deterministic conformance fixtures"} {
+	for _, stale := range []string{"five strict JSON Schemas", "nine strict JSON Schemas", "ten strict JSON Schemas", "sixteen strict JSON Schemas", "eighteen strict JSON Schemas", "twenty strict JSON Schemas", "twenty-two strict JSON Schemas", "eleven deterministic conformance fixtures", "eighteen deterministic conformance fixtures", "nineteen deterministic conformance fixtures", "twenty-one deterministic conformance fixtures", "twenty-four deterministic conformance fixtures", "twenty-six deterministic conformance fixtures"} {
 		if strings.Contains(document, stale) {
 			t.Fatalf("review integration documentation retains stale claim %q", stale)
+		}
+	}
+}
+
+func TestReviewIntegrationDocumentationMatchesPublishedArtifactInventory(t *testing.T) {
+	document := readReviewIntegrationDoc(t)
+	for _, inventory := range []struct {
+		directory string
+		claim     string
+	}{
+		{directory: "schemas", claim: "strict JSON Schemas"},
+		{directory: "fixtures", claim: "deterministic conformance fixtures"},
+	} {
+		path := filepath.Join("..", "..", "contracts", "review-integration", "v1", inventory.directory)
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for _, entry := range entries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+				t.Fatalf("published %s inventory contains unexpected entry %q", inventory.directory, entry.Name())
+			}
+			count++
+		}
+		want := fmt.Sprintf("%d %s", count, inventory.claim)
+		if !strings.Contains(document, want) {
+			t.Fatalf("review integration documentation is missing published inventory claim %q", want)
 		}
 	}
 }

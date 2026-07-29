@@ -659,7 +659,7 @@ func TestOrganicReviewExecutableTransitionContract(t *testing.T) {
 			}
 			harness.gentle(
 				"review", "capture-evidence", "--cwd", harness.repo.worktree, "--lineage", lineage,
-				"--target", status.TargetIdentity, "--expected-revision", status.Authority.Revision, "--input", evidencePath,
+				"--target", status.TargetIdentity, "--expected-revision", status.Authority.Revision, "--outcome", "passed", "--input", evidencePath,
 			)
 			stdout, stderr, err := harness.gentleAllowFailure("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage)
 			if err != nil {
@@ -1366,7 +1366,7 @@ func TestOrganicReviewDefectReportToolFaultVersusUserDecision(t *testing.T) {
 		}
 		harness.gentle(
 			"review", "capture-evidence", "--cwd", harness.repo.worktree, "--lineage", lineage,
-			"--target", status.TargetIdentity, "--expected-revision", status.Authority.Revision, "--input", firstEvidence,
+			"--target", status.TargetIdentity, "--expected-revision", status.Authority.Revision, "--outcome", "passed", "--input", firstEvidence,
 		)
 
 		secondEvidence := filepath.Join(t.TempDir(), "evidence-two.txt")
@@ -1375,7 +1375,7 @@ func TestOrganicReviewDefectReportToolFaultVersusUserDecision(t *testing.T) {
 		}
 		_, stderr, err := harness.gentleAllowFailure(
 			"review", "capture-evidence", "--cwd", harness.repo.worktree, "--lineage", lineage,
-			"--target", status.TargetIdentity, "--expected-revision", status.Authority.Revision, "--input", secondEvidence,
+			"--target", status.TargetIdentity, "--expected-revision", status.Authority.Revision, "--outcome", "passed", "--input", secondEvidence,
 		)
 		if err == nil {
 			t.Fatal("conflicting captured final evidence unexpectedly succeeded")

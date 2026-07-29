@@ -992,6 +992,20 @@ func StartCompactAuthority(ctx context.Context, repo string, request CompactStar
 			}
 			continue
 		}
+		rebasedRecovery, rebasedErr := compactApprovedRebasedScopeRecovery(ctx, requestedStore.repo, existing, request.State.InitialSnapshot)
+		if rebasedErr != nil {
+			return CompactStartResult{}, fmt.Errorf("classify approved rebased scope recovery: %w", rebasedErr)
+		}
+		if rebasedRecovery {
+			receipt, receiptErr := inspectCompactTargetReceipt(store, existing)
+			if receiptErr != nil {
+				return CompactStartResult{}, fmt.Errorf("inspect approved rebased scope recovery receipt: %w", receiptErr)
+			}
+			if receipt.published && bytes.Equal(receipt.artifact.content, receipt.artifact.canonical) {
+				recoveryCandidates = append(recoveryCandidates, store)
+				continue
+			}
+		}
 		if compactApprovedScopeChangedRecovery(existing, request.State.InitialSnapshot) {
 			recoveryCandidates = append(recoveryCandidates, store)
 			continue
@@ -1210,6 +1224,57 @@ func compactApprovedScopeChangedRecovery(existing CompactState, live Snapshot) b
 	requested.InitialSnapshot = live
 	return compactStartDeliveryScopeMatches(existing, requested) &&
 		existing.CurrentSnapshot.CandidateTree != live.CandidateTree
+}
+
+// compactApprovedRebasedScopeRecovery recognizes one narrow committed-delivery
+// transition: an approved current-changes patch was committed, its base advanced
+// on disjoint paths, and the feature was rebased without changing its patch.
+func compactApprovedRebasedScopeRecovery(ctx context.Context, repo string, existing CompactState, live Snapshot) (bool, error) {
+	original, approved := existing.InitialSnapshot, existing.CurrentSnapshot
+	if existing.State != StateApproved || original.Kind != TargetCurrentChanges || approved.Kind != TargetCurrentChanges ||
+		live.Kind != TargetBaseDiff || !sameRecoveryProjection(original.Projection, live.Projection) ||
+		original.BaseTree != approved.BaseTree || original.BaseTree == live.BaseTree ||
+		approved.CandidateTree == live.CandidateTree || approved.Identity == live.Identity ||
+		len(existing.GenesisPaths) == 0 || !equalStrings(approved.Paths, existing.GenesisPaths) ||
+		!equalStrings(live.Paths, existing.GenesisPaths) ||
+		!equalStrings(original.IntendedUntracked, approved.IntendedUntracked) ||
+		original.IntendedUntrackedProof != approved.IntendedUntrackedProof || len(live.IntendedUntracked) != 0 ||
+		len(original.LedgerIDs) != 0 || len(approved.LedgerIDs) != 0 || len(live.LedgerIDs) != 0 {
+		return false, nil
+	}
+	for _, path := range original.IntendedUntracked {
+		if stringIndex(existing.GenesisPaths, path) < 0 {
+			return false, nil
+		}
+	}
+	builder := SnapshotBuilder{Repo: repo}
+	baseAdvancePaths, err := builder.changedPaths(ctx, original.BaseTree, live.BaseTree)
+	if err != nil {
+		return false, fmt.Errorf("derive rebased predecessor base-advance paths: %w", err)
+	}
+	if !disjointPaths(baseAdvancePaths, existing.GenesisPaths) {
+		return false, nil
+	}
+	originalPatch, err := patchIdentity(ctx, repo, original.BaseTree, approved.CandidateTree)
+	if err != nil {
+		candidateType, inspectErr := runGit(ctx, repo, nil, []byte(approved.CandidateTree+"\n"), "cat-file", "--batch-check=%(objectname) %(objecttype)")
+		if inspectErr != nil {
+			return false, fmt.Errorf("inspect approved predecessor candidate tree: %w", inspectErr)
+		}
+		candidateFields := strings.Fields(string(candidateType))
+		if len(candidateFields) == 2 && candidateFields[0] == approved.CandidateTree && candidateFields[1] == "missing" {
+			return false, nil
+		}
+		if len(candidateFields) != 2 || candidateFields[0] != approved.CandidateTree || candidateFields[1] != "tree" {
+			return false, fmt.Errorf("inspect approved predecessor candidate tree: unexpected git cat-file response %q", strings.TrimSpace(string(candidateType))) // refusal:by-design world-action: Git returned an unrecognized plumbing response, so only a code or Git-environment repair can define a trustworthy continuation
+		}
+		return false, fmt.Errorf("derive approved predecessor patch identity: %w", err)
+	}
+	livePatch, err := patchIdentity(ctx, repo, live.BaseTree, live.CandidateTree)
+	if err != nil {
+		return false, fmt.Errorf("derive live rebased patch identity: %w", err)
+	}
+	return originalPatch == livePatch, nil
 }
 
 // compactStartDeliveryScopeMatches compares the immutable delivery boundary
@@ -1739,6 +1804,39 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 		if !reflectCompactReviewData(previous, next) || previous.EvidenceHash != next.EvidenceHash {
 			return fmt.Errorf("%w: compact correction changed frozen review evidence", ErrInvalidSuccessor)
 		}
+	case "review/complete-correction-verification":
+		if previous.CorrectionAttemptConsumed() {
+			return fmt.Errorf("%w: %w", ErrInvalidSuccessor, ErrCompactCorrectionConsumed)
+		}
+		if previous.State != StateCorrectionRequired || previous.ProposedCorrectionLines == nil || next.State != StateApproved ||
+			len(next.CorrectionAttempts) != len(previous.CorrectionAttempts)+1 || next.EvidenceOutcome != VerificationOutcomePassed ||
+			next.EvidenceAuthorityRevision != previousRevision || next.EvidenceTargetIdentity != next.CurrentSnapshot.Identity {
+			return fmt.Errorf("%w: invalid atomic compact correction verification", ErrInvalidSuccessor)
+		}
+		if len(previous.CorrectionAttempts) > 0 && !reflect.DeepEqual(previous.CorrectionAttempts, next.CorrectionAttempts[:len(previous.CorrectionAttempts)]) {
+			return fmt.Errorf("%w: compact correction attempt history is immutable", ErrInvalidSuccessor)
+		}
+		if !reflectCompactReviewData(previous, next) {
+			return fmt.Errorf("%w: atomic compact correction verification changed frozen review evidence", ErrInvalidSuccessor)
+		}
+	case "review/escalate-correction-verification":
+		if previous.State != StateCorrectionRequired || previous.ProposedCorrectionLines == nil || next.State != StateEscalated ||
+			next.CorrectionVerificationTarget == nil || next.EvidenceOutcome != VerificationOutcomeProceduralFailure ||
+			next.EvidenceAuthorityRevision != previousRevision || len(next.CorrectionAttempts) != len(previous.CorrectionAttempts) ||
+			next.CumulativeCorrectionLines != previous.CumulativeCorrectionLines {
+			return fmt.Errorf("%w: invalid procedural correction verification escalation", ErrInvalidSuccessor)
+		}
+		expected := previous
+		expected.State = StateEscalated
+		expected.CorrectionVerificationTarget = next.CorrectionVerificationTarget
+		expected.EvidenceHash = next.EvidenceHash
+		expected.EvidenceRecordDigest = next.EvidenceRecordDigest
+		expected.EvidenceOutcome = next.EvidenceOutcome
+		expected.EvidenceTargetIdentity = next.EvidenceTargetIdentity
+		expected.EvidenceAuthorityRevision = next.EvidenceAuthorityRevision
+		if !compactStateEqual(expected, next) {
+			return fmt.Errorf("%w: procedural correction verification escalation changed unrelated state", ErrInvalidSuccessor)
+		}
 	case CompactResultDispositionOperation:
 		// reviewing -> escalated. The disposition may only append its own audit
 		// record and flip the terminal state; freezing every other field here is
@@ -1791,12 +1889,17 @@ func validateCompactSuccessor(previousRevision string, previous, next CompactSta
 			return fmt.Errorf("%w: reviewer result reopen changed frozen scope, budget, or unrelated authority", ErrInvalidSuccessor)
 		}
 	case "review/complete-verification":
-		if previous.State != StateValidating || next.State != StateApproved && next.State != StateEscalated || !validSHA256(next.EvidenceHash) {
+		if previous.State != StateValidating || next.State != StateApproved && next.State != StateEscalated || !validSHA256(next.EvidenceHash) ||
+			next.EvidenceRecordDigest != "" && next.EvidenceAuthorityRevision != previousRevision {
 			return fmt.Errorf("%w: invalid compact verification completion", ErrInvalidSuccessor)
 		}
 		expected := previous
 		expected.State = next.State
 		expected.EvidenceHash = next.EvidenceHash
+		expected.EvidenceRecordDigest = next.EvidenceRecordDigest
+		expected.EvidenceOutcome = next.EvidenceOutcome
+		expected.EvidenceTargetIdentity = next.EvidenceTargetIdentity
+		expected.EvidenceAuthorityRevision = next.EvidenceAuthorityRevision
 		if !compactStateEqual(expected, next) {
 			return fmt.Errorf("%w: compact verification changed unrelated state", ErrInvalidSuccessor)
 		}

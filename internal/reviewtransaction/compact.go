@@ -67,37 +67,42 @@ func compactLineageQuarantinable(err error) (*CompactSemanticStateError, bool) {
 }
 
 type CompactState struct {
-	Schema                    string                       `json:"schema"`
-	LineageID                 string                       `json:"lineage_id"`
-	Generation                int                          `json:"generation"`
-	State                     State                        `json:"state"`
-	InitialSnapshot           Snapshot                     `json:"initial_snapshot"`
-	CurrentSnapshot           Snapshot                     `json:"current_snapshot"`
-	GenesisPaths              []string                     `json:"genesis_paths"`
-	PolicyHash                string                       `json:"policy_hash"`
-	RiskLevel                 RiskLevel                    `json:"risk_level"`
-	SelectedLenses            []string                     `json:"selected_lenses"`
-	OriginalChangedLines      int                          `json:"original_changed_lines"`
-	CorrectionBudget          int                          `json:"correction_budget"`
-	LensResults               []LensResult                 `json:"lens_results"`
-	Findings                  []Finding                    `json:"findings"`
-	Classifications           map[string]FindingEvidence   `json:"classifications"`
-	Outcomes                  map[string]EvidenceOutcome   `json:"outcomes"`
-	FixFindingIDs             []string                     `json:"fix_finding_ids"`
-	FollowUps                 []FollowUp                   `json:"follow_ups"`
-	ProposedCorrectionLines   *int                         `json:"proposed_correction_lines,omitempty"`
-	ActualCorrectionLines     *int                         `json:"actual_correction_lines,omitempty"`
-	FixDeltaHash              string                       `json:"fix_delta_hash"`
-	OriginalCriteria          *ValidationCheck             `json:"original_criteria,omitempty"`
-	CorrectionRegression      *ValidationCheck             `json:"correction_regression,omitempty"`
-	EvidenceHash              string                       `json:"evidence_hash,omitempty"`
-	InvalidationReason        string                       `json:"invalidation_reason,omitempty"`
-	InvalidationEvidence      *CompactInvalidationEvidence `json:"invalidation_evidence,omitempty"`
-	Recovery                  *CompactRecoveryProvenance   `json:"recovery,omitempty"`
-	CorrectionAttempts        []CompactCorrectionAttempt   `json:"correction_attempts,omitempty"`
-	CumulativeCorrectionLines int                          `json:"cumulative_correction_lines,omitempty"`
-	ResultDispositions        []CompactResultDisposition   `json:"result_dispositions,omitempty"`
-	ResultReopens             []CompactResultReopen        `json:"result_reopens,omitempty"`
+	Schema                       string                       `json:"schema"`
+	LineageID                    string                       `json:"lineage_id"`
+	Generation                   int                          `json:"generation"`
+	State                        State                        `json:"state"`
+	InitialSnapshot              Snapshot                     `json:"initial_snapshot"`
+	CurrentSnapshot              Snapshot                     `json:"current_snapshot"`
+	GenesisPaths                 []string                     `json:"genesis_paths"`
+	PolicyHash                   string                       `json:"policy_hash"`
+	RiskLevel                    RiskLevel                    `json:"risk_level"`
+	SelectedLenses               []string                     `json:"selected_lenses"`
+	OriginalChangedLines         int                          `json:"original_changed_lines"`
+	CorrectionBudget             int                          `json:"correction_budget"`
+	LensResults                  []LensResult                 `json:"lens_results"`
+	Findings                     []Finding                    `json:"findings"`
+	Classifications              map[string]FindingEvidence   `json:"classifications"`
+	Outcomes                     map[string]EvidenceOutcome   `json:"outcomes"`
+	FixFindingIDs                []string                     `json:"fix_finding_ids"`
+	FollowUps                    []FollowUp                   `json:"follow_ups"`
+	ProposedCorrectionLines      *int                         `json:"proposed_correction_lines,omitempty"`
+	ActualCorrectionLines        *int                         `json:"actual_correction_lines,omitempty"`
+	FixDeltaHash                 string                       `json:"fix_delta_hash"`
+	OriginalCriteria             *ValidationCheck             `json:"original_criteria,omitempty"`
+	CorrectionRegression         *ValidationCheck             `json:"correction_regression,omitempty"`
+	EvidenceHash                 string                       `json:"evidence_hash,omitempty"`
+	EvidenceRecordDigest         string                       `json:"evidence_record_digest,omitempty"`
+	EvidenceOutcome              VerificationOutcome          `json:"evidence_outcome,omitempty"`
+	EvidenceTargetIdentity       string                       `json:"evidence_target_identity,omitempty"`
+	EvidenceAuthorityRevision    string                       `json:"evidence_authority_revision,omitempty"`
+	CorrectionVerificationTarget *Snapshot                    `json:"correction_verification_target,omitempty"`
+	InvalidationReason           string                       `json:"invalidation_reason,omitempty"`
+	InvalidationEvidence         *CompactInvalidationEvidence `json:"invalidation_evidence,omitempty"`
+	Recovery                     *CompactRecoveryProvenance   `json:"recovery,omitempty"`
+	CorrectionAttempts           []CompactCorrectionAttempt   `json:"correction_attempts,omitempty"`
+	CumulativeCorrectionLines    int                          `json:"cumulative_correction_lines,omitempty"`
+	ResultDispositions           []CompactResultDisposition   `json:"result_dispositions,omitempty"`
+	ResultReopens                []CompactResultReopen        `json:"result_reopens,omitempty"`
 }
 
 // CompactResultReopenSlot binds one selected lens artifact at the exact
@@ -252,21 +257,25 @@ type CompactRecoveredEvidence struct {
 }
 
 type CompactReceipt struct {
-	Schema             string        `json:"schema"`
-	LineageID          string        `json:"lineage_id"`
-	Projection         Projection    `json:"projection,omitempty"`
-	Generation         int           `json:"generation"`
-	BaseTree           string        `json:"base_tree"`
-	InitialReviewTree  string        `json:"initial_review_tree"`
-	FinalCandidateTree string        `json:"final_candidate_tree"`
-	PathsDigest        string        `json:"paths_digest"`
-	FixDeltaHash       string        `json:"fix_delta_hash"`
-	PolicyHash         string        `json:"policy_hash"`
-	EvidenceHash       string        `json:"evidence_hash"`
-	RiskLevel          RiskLevel     `json:"risk_level"`
-	SelectedLenses     []string      `json:"selected_lenses"`
-	ResolvedFindingIDs []string      `json:"resolved_finding_ids"`
-	TerminalState      TerminalState `json:"terminal_state"`
+	Schema                    string              `json:"schema"`
+	LineageID                 string              `json:"lineage_id"`
+	Projection                Projection          `json:"projection,omitempty"`
+	Generation                int                 `json:"generation"`
+	BaseTree                  string              `json:"base_tree"`
+	InitialReviewTree         string              `json:"initial_review_tree"`
+	FinalCandidateTree        string              `json:"final_candidate_tree"`
+	PathsDigest               string              `json:"paths_digest"`
+	FixDeltaHash              string              `json:"fix_delta_hash"`
+	PolicyHash                string              `json:"policy_hash"`
+	EvidenceHash              string              `json:"evidence_hash"`
+	EvidenceRecordDigest      string              `json:"evidence_record_digest,omitempty"`
+	EvidenceOutcome           VerificationOutcome `json:"evidence_outcome,omitempty"`
+	EvidenceTargetIdentity    string              `json:"evidence_target_identity,omitempty"`
+	EvidenceAuthorityRevision string              `json:"evidence_authority_revision,omitempty"`
+	RiskLevel                 RiskLevel           `json:"risk_level"`
+	SelectedLenses            []string            `json:"selected_lenses"`
+	ResolvedFindingIDs        []string            `json:"resolved_finding_ids"`
+	TerminalState             TerminalState       `json:"terminal_state"`
 }
 
 type CompactReviewInput struct {
@@ -441,6 +450,9 @@ func (state CompactState) Validate() error {
 	if err := validateCompactCorrection(state); err != nil {
 		return err
 	}
+	if err := validateCompactVerificationEvidence(state); err != nil {
+		return err
+	}
 	switch state.State {
 	case StateReviewing:
 		if len(state.Findings) != 0 || len(state.Classifications) != 0 || len(state.Outcomes) != 0 || len(state.FixFindingIDs) != 0 || state.ProposedCorrectionLines != nil || state.ActualCorrectionLines != nil || state.EvidenceHash != "" {
@@ -470,6 +482,34 @@ func (state CompactState) Validate() error {
 	case StateEscalated:
 	default:
 		return fmt.Errorf("invalid compact review state %q", state.State)
+	}
+	return nil
+}
+
+func validateCompactVerificationEvidence(state CompactState) error {
+	hasRecordBinding := state.EvidenceRecordDigest != "" || state.EvidenceOutcome != "" ||
+		state.EvidenceTargetIdentity != "" || state.EvidenceAuthorityRevision != ""
+	if !hasRecordBinding {
+		return nil
+	}
+	expectedTarget := state.CurrentSnapshot.Identity
+	if state.CorrectionVerificationTarget != nil {
+		expectedTarget = state.CorrectionVerificationTarget.Identity
+	}
+	if !validSHA256(state.EvidenceHash) || !validSHA256(state.EvidenceRecordDigest) ||
+		!validSHA256(state.EvidenceTargetIdentity) || !validSHA256(state.EvidenceAuthorityRevision) ||
+		state.EvidenceTargetIdentity != expectedTarget || !validVerificationOutcome(state.EvidenceOutcome) {
+		return errors.New("compact verification evidence record binding is incomplete or invalid") // refusal:by-design world-action: persisted authority metadata is corrupt and cannot be reconstructed from an untrusted partial binding
+	}
+	switch state.EvidenceOutcome {
+	case VerificationOutcomePassed:
+		if state.State != StateApproved {
+			return errors.New("passed compact verification evidence requires approved authority") // refusal:by-design world-action: persisted outcome and lifecycle state contradict each other and require code or storage repair
+		}
+	case VerificationOutcomeFailed, VerificationOutcomeProceduralFailure:
+		if state.State != StateEscalated {
+			return errors.New("failed compact verification evidence requires escalated authority") // refusal:by-design world-action: persisted outcome and lifecycle state contradict each other and require code or storage repair
+		}
 	}
 	return nil
 }
@@ -697,6 +737,22 @@ func validateCompactCorrection(state CompactState) error {
 			state.OriginalCriteria == nil && state.CorrectionRegression == nil && state.EvidenceHash == "" {
 			return nil
 		}
+	}
+	if state.CorrectionVerificationTarget != nil {
+		target := state.CorrectionVerificationTarget
+		if state.State != StateEscalated || state.EvidenceOutcome != VerificationOutcomeProceduralFailure ||
+			len(state.CorrectionAttempts) != 0 || state.CumulativeCorrectionLines != 0 || state.ProposedCorrectionLines == nil ||
+			*state.ProposedCorrectionLines > state.CorrectionBudget || state.ActualCorrectionLines != nil ||
+			state.OriginalCriteria != nil || state.CorrectionRegression != nil || state.FixDeltaHash != EmptyFixDeltaHash ||
+			target.Kind != TargetFixDiff || target.Projection != state.InitialSnapshot.Projection ||
+			target.BaseTree != state.CurrentSnapshot.CandidateTree || !equalStrings(target.LedgerIDs, state.FixFindingIDs) ||
+			pathsAreSubset(target.Paths, state.GenesisPaths) != nil {
+			return errors.New("procedural correction verification target is invalid") // refusal:by-design world-action: persisted terminal evidence targets an invalid correction snapshot and cannot authorize continuation
+		}
+		if err := validateCompactSnapshot(*target); err != nil {
+			return err
+		}
+		return nil
 	}
 	corrected := !snapshotsEqual(state.CurrentSnapshot, state.InitialSnapshot) || state.FixDeltaHash != EmptyFixDeltaHash || state.ActualCorrectionLines != nil || state.OriginalCriteria != nil || state.CorrectionRegression != nil
 	if !corrected {
@@ -1124,7 +1180,8 @@ func compactPristineReviewing(state CompactState) bool {
 	return state.State == StateReviewing && len(state.ResultDispositions) == 0 && snapshotsEqual(state.CurrentSnapshot, state.InitialSnapshot) &&
 		len(state.LensResults) == 0 && len(state.Findings) == 0 && len(state.Classifications) == 0 && len(state.Outcomes) == 0 &&
 		len(state.FixFindingIDs) == 0 && len(state.FollowUps) == 0 && state.ProposedCorrectionLines == nil && state.ActualCorrectionLines == nil &&
-		state.FixDeltaHash == EmptyFixDeltaHash && state.OriginalCriteria == nil && state.CorrectionRegression == nil && state.EvidenceHash == "" && state.InvalidationReason == "" &&
+		state.FixDeltaHash == EmptyFixDeltaHash && state.OriginalCriteria == nil && state.CorrectionRegression == nil && state.EvidenceHash == "" &&
+		state.EvidenceRecordDigest == "" && state.EvidenceOutcome == "" && state.EvidenceTargetIdentity == "" && state.EvidenceAuthorityRevision == "" && state.CorrectionVerificationTarget == nil && state.InvalidationReason == "" &&
 		len(state.CorrectionAttempts) == 0 && state.CumulativeCorrectionLines == 0
 }
 
@@ -1198,6 +1255,70 @@ func (state *CompactState) CompleteCorrection(snapshot Snapshot, actual int, val
 		state.State = StateValidating
 	}
 	return state.Validate()
+}
+
+// CompleteCorrectionVerification crosses the correction and repository
+// verification boundary in one state value. No correction accounting becomes
+// authoritative unless both candidate-bound checks pass.
+func (state *CompactState) CompleteCorrectionVerification(snapshot Snapshot, actual int, validation ScopedValidationResult, record VerificationEvidenceRecord, payload []byte) error {
+	if record.Outcome != VerificationOutcomePassed {
+		return errors.New("compact correction repository verification must pass before acceptance") // refusal:by-design operator-knowledge: the caller must retain the open correction and submit only a passed candidate-bound verification bundle
+	}
+	if err := record.ValidatePayload(payload); err != nil {
+		return err
+	}
+	if err := record.ValidateBinding(state.LineageID, record.AuthorityRevision, snapshot); err != nil {
+		return err
+	}
+	next, err := cloneCompactStateValue(*state)
+	if err != nil {
+		return err
+	}
+	if err := next.CompleteCorrection(snapshot, actual, validation); err != nil {
+		return err
+	}
+	if next.State != StateValidating {
+		return errors.New("compact correction checks and budget must pass before repository verification acceptance") // refusal:by-design operator-knowledge: the atomic caller must adjust the candidate or validation result without consuming the open correction
+	}
+	if err := next.CompleteVerificationRecord(record, payload); err != nil {
+		return err
+	}
+	*state = next
+	return nil
+}
+
+func (state *CompactState) EscalateCorrectionVerification(snapshot Snapshot, record VerificationEvidenceRecord, payload []byte) error {
+	if state.State != StateCorrectionRequired || state.ProposedCorrectionLines == nil || record.Outcome != VerificationOutcomeProceduralFailure {
+		return errors.New("procedural correction verification escalation requires one open correction transaction") // refusal:by-design operator-knowledge: this edge accepts only tooling-failure evidence for the current forecasted correction
+	}
+	if snapshot.Kind != TargetFixDiff || snapshot.Projection != state.InitialSnapshot.Projection ||
+		snapshot.BaseTree != state.CurrentSnapshot.CandidateTree || !equalStrings(snapshot.LedgerIDs, state.FixFindingIDs) ||
+		pathsAreSubset(snapshot.Paths, state.GenesisPaths) != nil {
+		return errors.New("procedural correction verification target is outside the open correction transaction") // refusal:by-design world-action: candidate mutation invalidated the captured correction target and requires a fresh stable evidence capture
+	}
+	if err := record.ValidatePayload(payload); err != nil {
+		return err
+	}
+	if err := record.ValidateBinding(state.LineageID, record.AuthorityRevision, snapshot); err != nil {
+		return err
+	}
+	next, err := cloneCompactStateValue(*state)
+	if err != nil {
+		return err
+	}
+	target := snapshot
+	next.State = StateEscalated
+	next.CorrectionVerificationTarget = &target
+	next.EvidenceHash = record.RawPayloadSHA256
+	next.EvidenceRecordDigest = record.RecordDigest
+	next.EvidenceOutcome = record.Outcome
+	next.EvidenceTargetIdentity = record.TargetIdentity
+	next.EvidenceAuthorityRevision = record.AuthorityRevision
+	if err := next.Validate(); err != nil {
+		return err
+	}
+	*state = next
+	return nil
 }
 
 // CompactEscalationAccounting labels are deliberately distinct so no consumer
@@ -1280,6 +1401,29 @@ func (state *CompactState) CompleteVerification(evidence []byte, approved bool) 
 	return state.Validate()
 }
 
+func (state *CompactState) CompleteVerificationRecord(record VerificationEvidenceRecord, payload []byte) error {
+	if state.State != StateValidating {
+		return fmt.Errorf("cannot complete verification from compact state %q", state.State)
+	}
+	if err := record.ValidatePayload(payload); err != nil {
+		return err
+	}
+	if err := record.ValidateBinding(state.LineageID, record.AuthorityRevision, state.CurrentSnapshot); err != nil {
+		return err
+	}
+	state.EvidenceHash = record.RawPayloadSHA256
+	state.EvidenceRecordDigest = record.RecordDigest
+	state.EvidenceOutcome = record.Outcome
+	state.EvidenceTargetIdentity = record.TargetIdentity
+	state.EvidenceAuthorityRevision = record.AuthorityRevision
+	if record.Outcome == VerificationOutcomePassed {
+		state.State = StateApproved
+	} else {
+		state.State = StateEscalated
+	}
+	return state.Validate()
+}
+
 func (state CompactState) Receipt() (CompactReceipt, error) {
 	var terminal TerminalState
 	switch state.State {
@@ -1300,6 +1444,8 @@ func (state CompactState) Receipt() (CompactReceipt, error) {
 		BaseTree:   state.InitialSnapshot.BaseTree, InitialReviewTree: state.InitialSnapshot.CandidateTree,
 		FinalCandidateTree: state.CurrentSnapshot.CandidateTree, PathsDigest: state.InitialSnapshot.PathsDigest,
 		FixDeltaHash: state.FixDeltaHash, PolicyHash: state.PolicyHash, EvidenceHash: evidence,
+		EvidenceRecordDigest: state.EvidenceRecordDigest, EvidenceOutcome: state.EvidenceOutcome,
+		EvidenceTargetIdentity: state.EvidenceTargetIdentity, EvidenceAuthorityRevision: state.EvidenceAuthorityRevision,
 		RiskLevel: state.RiskLevel, SelectedLenses: append([]string{}, state.SelectedLenses...),
 		ResolvedFindingIDs: append([]string(nil), state.FixFindingIDs...), TerminalState: terminal,
 	}
@@ -1382,6 +1528,16 @@ func (receipt CompactReceipt) Validate() error {
 	}
 	if receipt.TerminalState != TerminalApproved && receipt.TerminalState != TerminalEscalated {
 		return errors.New("compact receipt terminal state is invalid")
+	}
+	hasRecordBinding := receipt.EvidenceRecordDigest != "" || receipt.EvidenceOutcome != "" ||
+		receipt.EvidenceTargetIdentity != "" || receipt.EvidenceAuthorityRevision != ""
+	if hasRecordBinding {
+		if !validSHA256(receipt.EvidenceRecordDigest) || !validSHA256(receipt.EvidenceTargetIdentity) ||
+			!validSHA256(receipt.EvidenceAuthorityRevision) || !validVerificationOutcome(receipt.EvidenceOutcome) ||
+			receipt.EvidenceOutcome == VerificationOutcomePassed && receipt.TerminalState != TerminalApproved ||
+			receipt.EvidenceOutcome != VerificationOutcomePassed && receipt.TerminalState != TerminalEscalated {
+			return errors.New("compact receipt verification evidence binding is invalid") // refusal:by-design world-action: a contradictory persisted receipt cannot safely authorize delivery and requires code or storage repair
+		}
 	}
 	return nil
 }

@@ -28,6 +28,9 @@ func TestFinalVerificationIncidentIsStrictAndCanonical(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(parsed, incident) || FinalVerificationIncidentDigest(parsed) != finalVerificationPayloadDigest(payload) {
 		t.Fatalf("canonical incident = %#v, digest %q, err %v", parsed, FinalVerificationIncidentDigest(parsed), err)
 	}
+	if bytes.Contains(payload, []byte("failed_evidence_record_digest")) {
+		t.Fatal("shipped incident v1 unexpectedly broadened to duplicate the provider-derived evidence record digest")
+	}
 	for name, mutate := range map[string]func([]byte) []byte{
 		"crlf":                    func(value []byte) []byte { return bytes.ReplaceAll(value, []byte("\n"), []byte("\r\n")) },
 		"noncanonical whitespace": func(value []byte) []byte { return append([]byte(" "), value...) },
@@ -341,6 +344,12 @@ func TestRetryCompactFinalVerificationDenialsNeverMutateAuthority(t *testing.T) 
 				a.Request.RequestDigest = FinalizeAttemptRequestDigest(a.Request)
 			})
 		}},
+		{name: "journal evidence record digest mismatch", mutate: func(t *testing.T, f *finalVerificationRetryFixture) {
+			mutateFinalRetryAttempt(t, f, func(a *FinalizeAttempt) {
+				a.Request.EvidenceRecordDigest = hash("8")
+				a.Request.RequestDigest = FinalizeAttemptRequestDigest(a.Request)
+			})
+		}},
 		{name: "journal failed false", mutate: func(t *testing.T, f *finalVerificationRetryFixture) {
 			mutateFinalRetryAttempt(t, f, func(a *FinalizeAttempt) {
 				a.Request.FailedDigest = FinalizeAttemptValueDigest("failed", false)
@@ -450,12 +459,20 @@ func TestRetryCompactFinalVerificationIsPermanentlyOneShotAcrossAncestry(t *test
 		t.Fatal(err)
 	}
 	evidence := []byte("retry also failed\n")
-	request := finalVerificationAttemptRequest(first, evidence, true)
+	record, err := NewVerificationEvidenceRecord(first.State.LineageID, first.Revision, first.State.CurrentSnapshot, evidence, VerificationOutcomeProceduralFailure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PublishCapturedVerificationEvidence(CaptureVerificationEvidenceRequest{StoreDir: store.Dir, LineageID: first.State.LineageID,
+		AuthorityRevision: first.Revision, Target: first.State.CurrentSnapshot, Payload: evidence, Outcome: VerificationOutcomeProceduralFailure}); err != nil {
+		t.Fatal(err)
+	}
+	request := finalVerificationAttemptRequest(first, evidence, true, record)
 	if _, _, err := store.BeginFinalizeAttempt(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
 	terminal := first.State
-	if err := terminal.CompleteVerification(evidence, false); err != nil {
+	if err := terminal.CompleteVerificationRecord(record, evidence); err != nil {
 		t.Fatal(err)
 	}
 	planned, err := store.PlanFinalizeAttemptTransition(request.RequestDigest, "review/complete-verification", first.Revision, terminal)
@@ -475,7 +492,6 @@ func TestRetryCompactFinalVerificationIsPermanentlyOneShotAcrossAncestry(t *test
 	if err := store.CompleteFinalizeAttempt(request.RequestDigest); err != nil {
 		t.Fatal(err)
 	}
-	writeFinalVerificationEvidence(t, store, evidence)
 	secondIncident := FinalVerificationIncident{Schema: FinalVerificationIncidentSchema, Class: FinalVerificationIncidentProceduralToolingFailure,
 		LineageID: terminal.LineageID, TerminalRevision: revision, ValidatingRevision: first.Revision, TargetIdentity: terminal.CurrentSnapshot.Identity,
 		FailedEvidenceHash: payloadDigest(evidence), FinalizeRequestDigest: request.RequestDigest}
@@ -529,12 +545,20 @@ func newFinalVerificationRetryFixture(t *testing.T, predecessorLineage, successo
 	}
 	evidence := []byte("failed final verification evidence\n")
 	validating := CompactRecord{Schema: compactRecordSchema, Revision: validatingRevision, State: state}
-	request := finalVerificationAttemptRequest(validating, evidence, true)
+	evidenceRecord, err := NewVerificationEvidenceRecord(state.LineageID, validatingRevision, state.CurrentSnapshot, evidence, VerificationOutcomeProceduralFailure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PublishCapturedVerificationEvidence(CaptureVerificationEvidenceRequest{StoreDir: store.Dir, LineageID: state.LineageID,
+		AuthorityRevision: validatingRevision, Target: state.CurrentSnapshot, Payload: evidence, Outcome: VerificationOutcomeProceduralFailure}); err != nil {
+		t.Fatal(err)
+	}
+	request := finalVerificationAttemptRequest(validating, evidence, true, evidenceRecord)
 	if _, _, err := store.BeginFinalizeAttempt(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
 	terminal := state
-	if err := terminal.CompleteVerification(evidence, false); err != nil {
+	if err := terminal.CompleteVerificationRecord(evidenceRecord, evidence); err != nil {
 		t.Fatal(err)
 	}
 	planned, err := store.PlanFinalizeAttemptTransition(request.RequestDigest, "review/complete-verification", validatingRevision, terminal)
@@ -554,7 +578,6 @@ func newFinalVerificationRetryFixture(t *testing.T, predecessorLineage, successo
 	if err := store.CompleteFinalizeAttempt(request.RequestDigest); err != nil {
 		t.Fatal(err)
 	}
-	writeFinalVerificationEvidence(t, store, evidence)
 	predecessor := mustLoadCompactRecord(t, store)
 	incident := FinalVerificationIncident{Schema: FinalVerificationIncidentSchema, Class: FinalVerificationIncidentProceduralToolingFailure,
 		LineageID: predecessorLineage, TerminalRevision: predecessor.Revision, ValidatingRevision: validatingRevision,
@@ -612,12 +635,20 @@ func newCorrectedFinalVerificationRetryFixture(t *testing.T, predecessorLineage,
 	}
 	evidence := []byte("corrected candidate final verification failed procedurally\n")
 	validating := CompactRecord{Schema: compactRecordSchema, Revision: validatingRevision, State: state}
-	request := finalVerificationAttemptRequest(validating, evidence, true)
+	evidenceRecord, err := NewVerificationEvidenceRecord(state.LineageID, validatingRevision, state.CurrentSnapshot, evidence, VerificationOutcomeProceduralFailure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PublishCapturedVerificationEvidence(CaptureVerificationEvidenceRequest{StoreDir: store.Dir, LineageID: state.LineageID,
+		AuthorityRevision: validatingRevision, Target: state.CurrentSnapshot, Payload: evidence, Outcome: VerificationOutcomeProceduralFailure}); err != nil {
+		t.Fatal(err)
+	}
+	request := finalVerificationAttemptRequest(validating, evidence, true, evidenceRecord)
 	if _, _, err := store.BeginFinalizeAttempt(context.Background(), request); err != nil {
 		t.Fatal(err)
 	}
 	terminal := state
-	if err := terminal.CompleteVerification(evidence, false); err != nil {
+	if err := terminal.CompleteVerificationRecord(evidenceRecord, evidence); err != nil {
 		t.Fatal(err)
 	}
 	planned, err := store.PlanFinalizeAttemptTransition(request.RequestDigest, "review/complete-verification", validatingRevision, terminal)
@@ -637,7 +668,6 @@ func newCorrectedFinalVerificationRetryFixture(t *testing.T, predecessorLineage,
 	if err := store.CompleteFinalizeAttempt(request.RequestDigest); err != nil {
 		t.Fatal(err)
 	}
-	writeFinalVerificationEvidence(t, store, evidence)
 	predecessor := mustLoadCompactRecord(t, store)
 	incident := FinalVerificationIncident{Schema: FinalVerificationIncidentSchema, Class: FinalVerificationIncidentProceduralToolingFailure,
 		LineageID: predecessorLineage, TerminalRevision: predecessor.Revision, ValidatingRevision: validatingRevision, TargetIdentity: terminal.CurrentSnapshot.Identity,
@@ -651,11 +681,15 @@ func newCorrectedFinalVerificationRetryFixture(t *testing.T, predecessorLineage,
 	return finalVerificationRetryFixture{repo: repo, store: store, predecessor: predecessor, request: retry, evidence: evidence, before: compactAuthorityFileSnapshot(t, repo)}
 }
 
-func finalVerificationAttemptRequest(record CompactRecord, evidence []byte, failed bool) FinalizeAttemptRequest {
+func finalVerificationAttemptRequest(record CompactRecord, evidence []byte, failed bool, captured ...VerificationEvidenceRecord) FinalizeAttemptRequest {
 	request := FinalizeAttemptRequest{LineageID: record.State.LineageID, ExpectedRevision: record.Revision,
 		CandidateDigest: FinalizeAttemptValueDigest("candidate", record.State.CurrentSnapshot), ReviewerResultsDigest: FinalizeAttemptValueDigest("reviewer-results", []string{}),
 		CorrectionForecastDigest: FinalizeAttemptValueDigest("correction-forecast", 0), ValidationDigest: FinalizeAttemptValueDigest("validation", nil),
 		RefuterDigest: FinalizeAttemptValueDigest("refuter", nil), EvidenceDigest: FinalizeAttemptValueDigest("evidence", evidence), FailedDigest: FinalizeAttemptValueDigest("failed", failed)}
+	if len(captured) > 0 {
+		request.EvidenceRecordDigest = captured[0].RecordDigest
+		request.VerificationOutcome = captured[0].Outcome
+	}
 	request.RequestDigest = FinalizeAttemptRequestDigest(request)
 	return request
 }
@@ -675,7 +709,15 @@ func writeFinalVerificationEvidence(t *testing.T, store CompactStore, evidence [
 }
 
 func finalVerificationEvidencePath(store CompactStore) string {
-	return filepath.Join(store.Dir, CompactFinalEvidenceDir, CompactFinalEvidenceFile)
+	record, err := store.Load()
+	if err != nil || !validSHA256(record.State.CurrentSnapshot.Identity) {
+		return filepath.Join(store.Dir, CompactFinalEvidenceDir, CompactFinalEvidenceFile)
+	}
+	dir, err := compactFinalEvidenceCandidateDir(store.Dir, record.State.CurrentSnapshot.Identity)
+	if err != nil {
+		return filepath.Join(store.Dir, CompactFinalEvidenceDir, CompactFinalEvidenceFile)
+	}
+	return filepath.Join(dir, CompactFinalEvidenceFile)
 }
 
 func payloadDigest(payload []byte) string {
@@ -721,11 +763,13 @@ func assertFinalVerificationRetrySuccessor(t *testing.T, fixture finalVerificati
 	}
 	want := predecessor
 	want.LineageID, want.Generation, want.State, want.EvidenceHash, want.Recovery = state.LineageID, state.Generation, StateValidating, "", state.Recovery
+	want.EvidenceRecordDigest, want.EvidenceOutcome, want.EvidenceTargetIdentity, want.EvidenceAuthorityRevision = "", "", "", ""
 	if !compactStateEqual(state, want) {
 		t.Fatalf("retry successor changed frozen authority\ngot=%#v\nwant=%#v", state, want)
 	}
 	proof := state.Recovery.FinalVerificationRetry
-	if proof.FailedEvidenceHash != predecessor.EvidenceHash || proof.FinalizeRequestDigest != fixture.request.Incident.FinalizeRequestDigest || proof.IncidentDigest != FinalVerificationIncidentDigest(fixture.request.Incident) ||
+	if proof.FailedEvidenceHash != predecessor.EvidenceHash || proof.FailedEvidenceRecordDigest != predecessor.EvidenceRecordDigest || proof.FailureOutcome != VerificationOutcomeProceduralFailure ||
+		proof.FinalizeRequestDigest != fixture.request.Incident.FinalizeRequestDigest || proof.IncidentDigest != FinalVerificationIncidentDigest(fixture.request.Incident) ||
 		!reflect.DeepEqual(proof.Incident, fixture.request.Incident) || proof.SourceFinalizeAttempt.Request.RequestDigest != fixture.request.Incident.FinalizeRequestDigest {
 		t.Fatalf("retry source proof = %#v", proof)
 	}

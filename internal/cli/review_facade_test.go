@@ -1033,18 +1033,37 @@ func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *te
 	if resumed.Action != "resumed" || resumed.LensesRequired || resumed.LineageID != started.LineageID || resumed.State != reviewtransaction.StateCorrectionRequired {
 		t.Fatalf("corrected in-scope start did not resume correction authority: %#v", resumed)
 	}
+	correction, _ := store.Load()
+	fix, err := facadeVerificationEvidenceTarget(context.Background(), repo, correction.State, correction.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := reviewtransaction.BuildTargetedValidationRequest(context.Background(), repo, correction.State, correction.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
+	if err := os.WriteFile(evidencePath, []byte("focused and full tests: pass\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RunReviewCaptureEvidence([]string{"--cwd", repo, "--lineage", started.LineageID,
+		"--target", fix.Identity, "--expected-revision", correction.Revision,
+		"--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidencePath}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
 	validationPath := filepath.Join(t.TempDir(), "validation.json")
 	writeReviewCLIJSON(t, validationPath, facadeValidationResult{
+		TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
 		OriginalCriteria:     facadeValidationCheck{Passed: true, Evidence: []string{"original acceptance test passed"}},
 		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"targeted regression test passed"}},
 		FollowUps:            []reviewtransaction.FollowUp{},
 	})
 	output.Reset()
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validationPath}, &output); err != nil {
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validationPath, "--captured-evidence"}, &output); err != nil {
 		t.Fatal(err)
 	}
-	if got := decodeFacadeFinalize(t, output.Bytes()); got.State != reviewtransaction.StateValidating {
-		t.Fatalf("corrected validating result = %#v", got)
+	if got := decodeFacadeFinalize(t, output.Bytes()); got.State != reviewtransaction.StateApproved {
+		t.Fatalf("corrected approved result = %#v", got)
 	}
 	validating, _ := store.Load()
 	if validating.State.ActualCorrectionLines == nil || *validating.State.ActualCorrectionLines != 2 || validating.State.FixDeltaHash == reviewtransaction.EmptyFixDeltaHash ||
@@ -1053,20 +1072,7 @@ func TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState(t *te
 		validating.State.OriginalCriteria.FixDeltaHash != validating.State.FixDeltaHash || validating.State.CorrectionRegression.FixDeltaHash != validating.State.FixDeltaHash {
 		t.Fatalf("corrected compact authority = %#v", validating.State)
 	}
-	assertCompactLineageFiles(t, store, []string{"finalize-attempt-journal.json", "review-state.json", "reviewer-results"})
-
-	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
-	if err := os.WriteFile(evidencePath, []byte("focused and full tests: pass\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	output.Reset()
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--evidence", evidencePath}, &output); err != nil {
-		t.Fatal(err)
-	}
-	if got := decodeFacadeFinalize(t, output.Bytes()); got.State != reviewtransaction.StateApproved {
-		t.Fatalf("corrected approved result = %#v", got)
-	}
-	assertCompactLineageFiles(t, store, []string{"finalize-attempt-journal.json", "review-receipt.json", "review-state.json", "reviewer-results"})
+	assertCompactLineageFiles(t, store, []string{"final-evidence", "finalize-attempt-journal.json", "review-receipt.json", "review-state.json", "reviewer-results"})
 	reused := startFacadeReview(t, repo)
 	if reused.Action != "reuse-receipt" || reused.LensesRequired || reused.LineageID != started.LineageID || reused.State != reviewtransaction.StateApproved {
 		t.Fatalf("corrected approved target did not reuse receipt: %#v", reused)
@@ -1289,11 +1295,18 @@ func TestReviewFacadeFinalizeRejectsCorrectionCreatedUntrackedPath(t *testing.T)
 	if err := os.Remove(filepath.Join(repo, "correction-evidence.json")); err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validationPath}, io.Discard); err != nil {
+	request := capturePassedCorrectionEvidenceForTest(t, repo, started.LineageID)
+	writeReviewCLIJSON(t, validationPath, facadeValidationResult{
+		TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
+		OriginalCriteria:     facadeValidationCheck{Passed: true, Evidence: []string{"original acceptance test passed for tracked.txt"}},
+		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"targeted regression passed for tracked.txt"}},
+		FollowUps:            []reviewtransaction.FollowUp{},
+	})
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validationPath, "--captured-evidence"}, io.Discard); err != nil {
 		t.Fatalf("exact tracked correction: %v", err)
 	}
 	record, loadErr = store.Load()
-	if loadErr != nil || record.State.State != reviewtransaction.StateValidating {
+	if loadErr != nil || record.State.State != reviewtransaction.StateApproved {
 		t.Fatalf("exact correction authority = %#v, %v", record.State, loadErr)
 	}
 }
@@ -1353,30 +1366,44 @@ func TestReviewFacadePersistsOverBudgetForecastAndActual(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\nfixed-one\nfixed-two\nthree\nfour\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		request := capturePassedCorrectionEvidenceForTest(t, repo, started.LineageID)
 		validationPath := filepath.Join(t.TempDir(), "validation.json")
 		writeReviewCLIJSON(t, validationPath, facadeValidationResult{
+			TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
 			OriginalCriteria:     facadeValidationCheck{Passed: true, Evidence: []string{"acceptance passes"}},
 			CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"regression passes"}},
 			FollowUps:            []reviewtransaction.FollowUp{},
 		})
-		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validationPath}, io.Discard); err != nil {
+		store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+		before, err := store.Load()
+		if err != nil {
 			t.Fatal(err)
 		}
-		store, _ := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
+		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validationPath, "--captured-evidence"}, io.Discard); err == nil || !strings.Contains(err.Error(), "budget") {
+			t.Fatalf("over-budget actual error = %v", err)
+		}
 		record, loadErr := store.Load()
-		if loadErr != nil || record.State.State != reviewtransaction.StateEscalated || record.State.CumulativeCorrectionLines <= record.State.CorrectionBudget || len(record.State.CorrectionAttempts) != 1 {
+		if loadErr != nil || record.Revision != before.Revision || record.State.State != reviewtransaction.StateCorrectionRequired ||
+			record.State.CumulativeCorrectionLines != 0 || len(record.State.CorrectionAttempts) != 0 || record.State.ActualCorrectionLines != nil {
 			t.Fatalf("over-budget actual authority = %#v, %v", record.State, loadErr)
 		}
-		before := record.Revision
 		if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("base\none\ntwo\nthree\nfixed\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID}, io.Discard); err != nil {
+		request = capturePassedCorrectionEvidenceForTest(t, repo, started.LineageID)
+		writeReviewCLIJSON(t, validationPath, facadeValidationResult{
+			TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
+			OriginalCriteria:     facadeValidationCheck{Passed: true, Evidence: []string{"adjusted acceptance passes"}},
+			CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"adjusted regression passes"}},
+			FollowUps:            []reviewtransaction.FollowUp{},
+		})
+		if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--validation", validationPath, "--captured-evidence"}, io.Discard); err != nil {
 			t.Fatal(err)
 		}
 		after, _ := store.Load()
-		if after.Revision != before || after.State.State != reviewtransaction.StateEscalated {
-			t.Fatalf("overflow authority resumed = %#v", after)
+		if after.State.State != reviewtransaction.StateApproved || len(after.State.CorrectionAttempts) != 1 ||
+			after.State.CumulativeCorrectionLines > after.State.CorrectionBudget {
+			t.Fatalf("adjusted correction authority = %#v", after)
 		}
 	})
 }
@@ -1511,7 +1538,7 @@ func TestReviewSchemaExamplesMatchStrictFacadeContracts(t *testing.T) {
 					t.Fatal(err)
 				}
 				if _, err := value.compact(reviewtransaction.EmptyFixDeltaHash, []string{}, reviewtransaction.TargetedValidationRequest{
-					RequestHash: reviewtransaction.EmptyFixDeltaHash, CorrectionTargetIdentity: reviewtransaction.EmptyFixDeltaHash,
+					RequestHash: value.TargetedValidationRequestHash, CorrectionTargetIdentity: value.CorrectionTargetIdentity,
 				}); err != nil {
 					t.Fatal(err)
 				}
@@ -1647,29 +1674,33 @@ func TestReviewFacadeRejectsMalformedInputsWithoutConsumingTerminalValidator(t *
 	}
 	record, _ = store.Load()
 	assertUnchanged(record.Revision, RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", malformed}, io.Discard))
+	request := capturePassedCorrectionEvidenceForTest(t, repo, started.LineageID)
 	validator := filepath.Join(t.TempDir(), "validator.json")
-	writeReviewCLIJSON(t, validator, facadeValidationResult{OriginalCriteria: facadeValidationCheck{Passed: false, Evidence: []string{"acceptance still fails"}}, CorrectionRegression: facadeValidationCheck{Passed: false, Evidence: []string{"regression still fails"}}, FollowUps: []reviewtransaction.FollowUp{}})
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validator}, io.Discard); err != nil {
-		t.Fatal(err)
+	writeReviewCLIJSON(t, validator, facadeValidationResult{
+		TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
+		OriginalCriteria:     facadeValidationCheck{Passed: false, Evidence: []string{"acceptance still fails"}},
+		CorrectionRegression: facadeValidationCheck{Passed: false, Evidence: []string{"regression still fails"}},
+		FollowUps:            []reviewtransaction.FollowUp{},
+	})
+	beforeFailed, _ := store.Load()
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--validation", validator, "--captured-evidence"}, io.Discard); err == nil {
+		t.Fatal("failed targeted validation consumed the correction")
 	}
 	failed, _ := store.Load()
-	if failed.State.State != reviewtransaction.StateEscalated || failed.State.CumulativeCorrectionLines <= 0 || len(failed.State.LensResults) != 1 || failed.State.OriginalCriteria == nil || failed.State.CorrectionRegression == nil {
+	if failed.Revision != beforeFailed.Revision || failed.State.State != reviewtransaction.StateCorrectionRequired ||
+		failed.State.CumulativeCorrectionLines != 0 || len(failed.State.CorrectionAttempts) != 0 ||
+		failed.State.OriginalCriteria != nil || failed.State.CorrectionRegression != nil {
 		t.Fatalf("failed validation state = %#v", failed.State)
 	}
-	receiptPayload, err := os.ReadFile(store.ReceiptPath())
-	if err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(store.ReceiptPath()); !os.IsNotExist(err) {
+		t.Fatalf("failed validation materialized receipt: %v", err)
 	}
-	receipt, err := reviewtransaction.ParseCompactReceipt(receiptPayload)
-	if err != nil || receipt.TerminalState != reviewtransaction.TerminalEscalated || receipt.FixDeltaHash != failed.State.FixDeltaHash {
-		t.Fatalf("failed validation receipt = %#v, %v", receipt, err)
-	}
-	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID}, io.Discard); err != nil {
-		t.Fatal(err)
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID, "--validation", validator, "--captured-evidence"}, io.Discard); err == nil {
+		t.Fatal("failed targeted validation replay consumed the correction")
 	}
 	replayed, _ := store.Load()
-	if replayed.Revision != failed.Revision || replayed.State.State != reviewtransaction.StateEscalated || len(replayed.State.CorrectionAttempts) != 1 {
-		t.Fatalf("terminal failed validator replay = %#v", replayed)
+	if replayed.Revision != failed.Revision || replayed.State.State != reviewtransaction.StateCorrectionRequired || len(replayed.State.CorrectionAttempts) != 0 {
+		t.Fatalf("failed validator replay = %#v", replayed)
 	}
 }
 
@@ -1975,17 +2006,15 @@ func TestCompactTransportAllowsCorrectedPrePushWithoutTransientBaseObject(t *tes
 	if err := os.WriteFile(filepath.Join(source, "tracked.txt"), []byte("base\none\ntwo\nthree\nfixed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	request := capturePassedCorrectionEvidenceForTest(t, source, started.LineageID)
 	validationPath := filepath.Join(t.TempDir(), "validation.json")
-	evidencePath := filepath.Join(t.TempDir(), "evidence.txt")
 	writeReviewCLIJSON(t, validationPath, facadeValidationResult{
+		TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
 		OriginalCriteria:     facadeValidationCheck{Passed: true, Evidence: []string{"original acceptance test passed"}},
 		CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"targeted regression test passed"}},
 		FollowUps:            []reviewtransaction.FollowUp{},
 	})
-	if err := os.WriteFile(evidencePath, []byte("focused and full tests pass\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := RunReviewFacadeFinalize([]string{"--cwd", source, "--validation", validationPath, "--evidence", evidencePath}, io.Discard); err != nil {
+	if err := RunReviewFacadeFinalize([]string{"--cwd", source, "--validation", validationPath, "--captured-evidence"}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	runReviewCLIGit(t, source, "add", "tracked.txt")
@@ -2256,7 +2285,7 @@ func prepareFacadeReceiptPending(t *testing.T) facadeReceiptPendingFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := RunReview([]string{"capture-evidence", "--cwd", repo, "--lineage", started.LineageID, "--target", validating.State.InitialSnapshot.Identity, "--expected-revision", validating.Revision, "--input", evidencePath}, io.Discard); err != nil {
+	if err := RunReview([]string{"capture-evidence", "--cwd", repo, "--lineage", started.LineageID, "--target", validating.State.InitialSnapshot.Identity, "--expected-revision", validating.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidencePath}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	sentinel := errors.New("injected receipt publication interruption")
@@ -2354,7 +2383,7 @@ func TestReviewFacadeFinalizeStateValidating(t *testing.T) {
 		}
 		if err := RunReviewCaptureEvidence([]string{
 			"--cwd", repo, "--lineage", started.LineageID, "--target", record.State.CurrentSnapshot.Identity,
-			"--expected-revision", record.Revision, "--input", evidencePath,
+			"--expected-revision", record.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidencePath,
 		}, io.Discard); err != nil {
 			t.Fatalf("capture evidence out of band: %v", err)
 		}
@@ -2374,6 +2403,14 @@ func TestReviewFacadeFinalizeStateValidating(t *testing.T) {
 		wantState := record.State
 		wantState.State = reviewtransaction.StateApproved
 		wantState.EvidenceHash = facadePayloadHash(evidence)
+		captured, err := reviewtransaction.ReadCapturedVerificationEvidence(store.Dir, record.State.LineageID, record.Revision, record.State.CurrentSnapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantState.EvidenceRecordDigest = captured.Record.RecordDigest
+		wantState.EvidenceOutcome = captured.Record.Outcome
+		wantState.EvidenceTargetIdentity = captured.Record.TargetIdentity
+		wantState.EvidenceAuthorityRevision = captured.Record.AuthorityRevision
 		if !reflect.DeepEqual(approved.State, wantState) {
 			t.Fatalf("lineage-only finalize changed more than verification state and evidence\ngot:  %#v\nwant: %#v", approved.State, wantState)
 		}
@@ -2423,17 +2460,18 @@ func TestReviewFacadeFinalizeStateValidating(t *testing.T) {
 		}
 		if err := RunReviewCaptureEvidence([]string{
 			"--cwd", repo, "--lineage", started.LineageID, "--target", before.State.CurrentSnapshot.Identity,
-			"--expected-revision", before.Revision, "--input", evidencePath,
+			"--expected-revision", before.Revision, "--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidencePath,
 		}, io.Discard); err != nil {
 			t.Fatal(err)
 		}
-		canonical := filepath.Join(store.Dir, reviewtransaction.CompactFinalEvidenceDir, reviewtransaction.CompactFinalEvidenceFile)
+		canonical := filepath.Join(store.Dir, reviewtransaction.CompactFinalEvidenceDir,
+			strings.TrimPrefix(before.State.CurrentSnapshot.Identity, "sha256:"), reviewtransaction.CompactFinalEvidenceFile)
 		if err := os.WriteFile(canonical, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 
 		err = RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", started.LineageID}, io.Discard)
-		if err == nil || !strings.Contains(err.Error(), "captured final evidence is invalid") {
+		if err == nil || !strings.Contains(err.Error(), "captured verification evidence is invalid") {
 			t.Fatalf("invalid canonical evidence error = %v", err)
 		}
 		after, loadErr := store.Load()

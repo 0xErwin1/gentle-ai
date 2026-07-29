@@ -197,8 +197,8 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 		if evidenceReportsUnavailableInspection(evidence) {
 			return fail(ArtifactAdmissionIncomplete, "reviewer evidence reports that candidate inspection was unavailable")
 		}
-		if referenceOutsideScope(evidence, allowed, repository) {
-			return fail(ArtifactAdmissionOutOfScope, "reviewer evidence references a path outside the frozen candidate")
+		if referenceOutsideRepository(evidence, repository) {
+			return fail(ArtifactAdmissionOutOfScope, "reviewer evidence references a path outside the frozen repository")
 		}
 	}
 	for _, finding := range canonical.Findings {
@@ -216,8 +216,8 @@ func AdmitArtifact(request ArtifactAdmissionRequest) (LensResult, ArtifactAdmiss
 			return fail(ArtifactAdmissionOutOfScope, "reviewer finding location is outside the frozen candidate")
 		}
 		for _, proof := range finding.ProofRefs {
-			if referenceOutsideScope(proof, allowed, repository) {
-				return fail(ArtifactAdmissionOutOfScope, "reviewer proof references a path outside the frozen candidate")
+			if referenceOutsideRepository(proof, repository) {
+				return fail(ArtifactAdmissionOutOfScope, "reviewer proof references a path outside the frozen repository")
 			}
 		}
 		if !isSevereSeverity(finding.Severity) {
@@ -321,21 +321,18 @@ type artifactReferenceToken struct {
 	quoted bool
 }
 
-// referenceOutsideScope recognizes only canonical path:positive-line tokens
-// that name an immutable base/candidate repository path. Bare root names need
-// a dot; extensionless root paths remain available through quoting. This keeps
-// status:500 and digest/timestamp labels out of the path grammar while still
-// supporting nested, Unicode, and quoted-space Git paths.
-func referenceOutsideScope(value string, allowed, repository map[string]struct{}) bool {
+// referenceOutsideRepository recognizes canonical path:positive-line tokens
+// and requires each one to exist in the immutable base/candidate repository
+// universe. Bare root names need a dot; extensionless root paths remain
+// available through quoting. This keeps status:500 and digest/timestamp labels
+// out of the path grammar while rejecting malformed or unknown path claims.
+func referenceOutsideRepository(value string, repository map[string]struct{}) bool {
 	for _, token := range artifactReferenceTokens(value) {
 		path, known, malformed := artifactRepositoryPathReference(token, repository)
 		if malformed {
 			return true
 		}
-		if !known {
-			continue
-		}
-		if _, ok := allowed[path]; !ok {
+		if path != "" && !known {
 			return true
 		}
 	}

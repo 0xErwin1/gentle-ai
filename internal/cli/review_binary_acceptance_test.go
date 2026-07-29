@@ -154,28 +154,20 @@ func TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree(t *testing.T) {
 	t.Run("approves corrected linked worktree", func(t *testing.T) {
 		_, corrected, started := prepareBinaryCorrection(t, binary)
 		writeBinaryCandidate(t, corrected, "fixed")
+		request := capturePassedBinaryCorrectionEvidence(t, binary, corrected, started.LineageID)
 		validation := filepath.Join(t.TempDir(), "validation.json")
 		writeReviewCLIJSON(t, validation, facadeValidationResult{
+			TargetedValidationRequestHash: request.RequestHash, CorrectionTargetIdentity: request.CorrectionTargetIdentity,
 			OriginalCriteria:     facadeValidationCheck{Passed: true, Evidence: []string{"original acceptance passed"}},
 			CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"targeted regression passed"}},
 			FollowUps:            []reviewtransaction.FollowUp{},
 		})
-		var validating ReviewFacadeFinalizeResult
-		decodeBinaryJSON(t, runReviewBinary(t, binary, true, "finalize", "--cwd", corrected, "--validation", validation), &validating)
-		if validating.State != reviewtransaction.StateValidating {
-			t.Fatalf("validation state = %q", validating.State)
-		}
+		var approved ReviewFacadeFinalizeResult
+		decodeBinaryJSON(t, runReviewBinary(t, binary, true, "finalize", "--cwd", corrected, "--validation", validation, "--captured-evidence"), &approved)
 		status := binaryReviewStatus(t, binary, corrected, started.LineageID)
 		if status.Projection.InitialReviewTree == status.Projection.CurrentCandidateTree {
 			t.Fatal("corrected candidate tree remained unchanged")
 		}
-		evidence := filepath.Join(t.TempDir(), "evidence.txt")
-		if err := os.WriteFile(evidence, []byte("focused and full tests pass\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		var approved ReviewFacadeFinalizeResult
-		decodeBinaryJSON(t, runReviewBinary(t, binary, true, "finalize", "--cwd", corrected, "--evidence", evidence), &approved)
-		status = binaryReviewStatus(t, binary, corrected, started.LineageID)
 		if approved.State != reviewtransaction.StateApproved || status.Authority == nil || status.Authority.State != reviewtransaction.StateApproved || status.Receipt.Status != ReviewReceiptPresent || status.Receipt.Identity == "" {
 			t.Fatalf("approved status = %#v, finalize = %#v", status, approved)
 		}
@@ -194,10 +186,11 @@ func TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree(t *testing.T) {
 	})
 
 	for _, test := range []struct {
-		name   string
-		mutate func(*testing.T, string)
+		name              string
+		mutate            func(*testing.T, string)
+		wantUnchangedStop bool
 	}{
-		{name: "rejects unchanged candidate", mutate: func(t *testing.T, repo string) { writeBinaryCandidate(t, repo, "wrong") }},
+		{name: "rejects unchanged candidate", wantUnchangedStop: true, mutate: func(t *testing.T, repo string) { writeBinaryCandidate(t, repo, "wrong") }},
 		{name: "rejects path expansion", mutate: func(t *testing.T, repo string) {
 			writeBinaryCandidate(t, repo, "fixed")
 			if err := os.WriteFile(filepath.Join(repo, "expanded.txt"), []byte("outside frozen scope\n"), 0o644); err != nil {
@@ -208,13 +201,27 @@ func TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			repo, corrected, started := prepareBinaryCorrection(t, binary)
 			test.mutate(t, corrected)
+			if test.wantUnchangedStop {
+				status := binaryReviewStatus(t, binary, corrected, started.LineageID, "--next-transition")
+				if status.Action != reviewtransaction.TargetStatusActionFinalize || status.NextTransition == nil ||
+					status.NextTransition.Kind != reviewNextTransitionStop || status.NextTransition.ReasonCode != "corrected_candidate_unavailable" ||
+					status.NextTransition.Collect != nil || status.ValidationRequest != nil {
+					t.Fatalf("unchanged candidate status = %#v", status)
+				}
+				if status.Authority == nil || status.Authority.State != reviewtransaction.StateCorrectionRequired || status.Receipt.Status != ReviewReceiptExpectedMissing {
+					t.Fatalf("unchanged candidate mutated public authority: %#v", status)
+				}
+				return
+			}
 			validation := filepath.Join(t.TempDir(), "validation.json")
-			writeReviewCLIJSON(t, validation, facadeValidationResult{
+			result := facadeValidationResult{
 				OriginalCriteria:     facadeValidationCheck{Passed: true, Evidence: []string{"original acceptance passed"}},
 				CorrectionRegression: facadeValidationCheck{Passed: true, Evidence: []string{"targeted regression passed"}},
 				FollowUps:            []reviewtransaction.FollowUp{},
-			})
-			runReviewBinary(t, binary, false, "finalize", "--cwd", corrected, "--validation", validation)
+			}
+			args := []string{"finalize", "--cwd", corrected, "--validation", validation}
+			writeReviewCLIJSON(t, validation, result)
+			runReviewBinary(t, binary, false, args...)
 			status := binaryReviewStatus(t, binary, repo, started.LineageID)
 			if status.Authority == nil || status.Authority.State != reviewtransaction.StateCorrectionRequired || status.Receipt.Status != ReviewReceiptExpectedMissing {
 				t.Fatalf("rejected correction mutated public authority: %#v", status)
@@ -312,9 +319,34 @@ func decodeBinaryJSON(t *testing.T, payload []byte, target any) {
 	}
 }
 
-func binaryReviewStatus(t *testing.T, binary, repo, lineage string) ReviewTargetStatusResult {
+func binaryReviewStatus(t *testing.T, binary, repo, lineage string, extra ...string) ReviewTargetStatusResult {
 	t.Helper()
+	arguments := []string{"status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage}
+	arguments = append(arguments, extra...)
 	var status ReviewTargetStatusResult
-	decodeBinaryJSON(t, runReviewBinary(t, binary, true, "status", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage), &status)
+	decodeBinaryJSON(t, runReviewBinary(t, binary, true, arguments...), &status)
 	return status
+}
+
+func capturePassedBinaryCorrectionEvidence(t *testing.T, binary, repo, lineage string) reviewtransaction.TargetedValidationRequest {
+	t.Helper()
+	var waiting ReviewTargetStatusResult
+	decodeBinaryJSON(t, runReviewBinary(t, binary, true, "status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", lineage), &waiting)
+	if waiting.Authority == nil || waiting.NextTransition == nil || waiting.NextTransition.Kind != reviewNextTransitionCollect {
+		t.Fatalf("correction evidence status = %#v", waiting)
+	}
+	target := transitionArgumentValue(t, waiting.NextTransition, "target")
+	evidence := filepath.Join(t.TempDir(), "passed-correction-evidence.txt")
+	if err := os.WriteFile(evidence, []byte("targeted and full repository verification passed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runReviewBinary(t, binary, true, "capture-evidence", "--cwd", repo, "--lineage", lineage,
+		"--target", target, "--expected-revision", waiting.Authority.Revision,
+		"--outcome", string(reviewtransaction.VerificationOutcomePassed), "--input", evidence)
+	var ready ReviewTargetStatusResult
+	decodeBinaryJSON(t, runReviewBinary(t, binary, true, "status", "--contract", ReviewIntegrationContractV1, "--next-transition", "--cwd", repo, "--lineage", lineage), &ready)
+	if ready.ValidationRequest == nil || ready.ValidationRequest.CorrectionTargetIdentity != target {
+		t.Fatalf("captured correction evidence status = %#v", ready)
+	}
+	return *ready.ValidationRequest
 }

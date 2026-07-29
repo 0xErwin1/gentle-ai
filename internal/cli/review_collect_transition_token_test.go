@@ -68,7 +68,7 @@ func TestExternalCaptureCollectArgumentsStayUntokenized(t *testing.T) {
 		TargetIdentity: "sha256:" + strings.Repeat("a", 64),
 		Candidates:     []string{"review-one", "review-two"},
 	}
-	transition := newReviewNextTransition(status, nil, nil, false, nil, reviewNextTransitionInput{})
+	transition := newReviewNextTransition(status, nil, nil, nil, nil, reviewNextTransitionInput{})
 	if transition.Kind != reviewNextTransitionCollect || transition.Collect == nil || len(transition.Collect.Inputs) != 1 {
 		t.Fatalf("ambiguous transition = %#v", transition)
 	}
@@ -141,7 +141,7 @@ func TestTokenizedCollectTransitionValidatesAgainstPublishedSchemas(t *testing.T
 		TargetIdentity: "sha256:" + strings.Repeat("b", 64),
 	}
 	transition := reviewCollectTransition("verification_evidence_required", ReviewTransitionInput{
-		Name: "evidence", Schema: "gentle-ai.review-verification-evidence/v1",
+		Name: "evidence", Schema: reviewtransaction.VerificationEvidenceRecordSchema,
 		CaptureOperation: "review.capture-evidence", Arguments: reviewBindingArguments(binding),
 	})
 	if transition.Collect.Inputs[0].Arguments[0].Token == "" {
