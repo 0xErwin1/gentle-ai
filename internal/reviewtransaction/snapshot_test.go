@@ -3,6 +3,8 @@ package reviewtransaction
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -1098,7 +1100,7 @@ func TestBaseWorkspaceOverlayPropagatesTemporaryIndexInventoryErrors(t *testing.
 
 	originalCommand := gitCommandContext
 	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		if slicesContain(args, "ls-files") && slicesContain(args, "--cached") && slicesContain(args, "-z") {
+		if slicesContain(args, "ls-files") && slicesContain(args, "--cached") && slicesContain(args, "-z") && !slicesContain(args, "--") {
 			return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestEmptyIndexInventoryHelperProcess$")
 		}
 		return originalCommand(ctx, name, args...)
@@ -1436,6 +1438,159 @@ func TestSnapshotRepoTemplateInitializesOnceConcurrently(t *testing.T) {
 	}
 	if template == "" {
 		t.Fatal("snapshotRepoTemplate() returned an empty path")
+	}
+}
+
+func TestUntrackedProofBatchedListingMatchesPerPathReference(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	intended := []string{"bulk/a.txt", "deep/nested/b.txt"}
+	for index := range 48 {
+		intended = append(intended, fmt.Sprintf("bulk/reference-%02d.txt", index))
+	}
+	for _, logicalPath := range intended {
+		writeSnapshotFile(t, repo, logicalPath, "reference content for "+logicalPath+"\n")
+	}
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: intended})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.New()
+	hash.Write([]byte("gentle-ai.intended-untracked/v1\x00"))
+	for _, logicalPath := range snapshot.IntendedUntracked {
+		entry, err := runGit(context.Background(), repo, nil, nil, "ls-tree", "-z", snapshot.CandidateTree, "--", literalPathspec(logicalPath))
+		if err != nil || len(entry) == 0 {
+			t.Fatalf("per-path reference for %q = %q, %v", logicalPath, entry, err)
+		}
+		writeLengthPrefixed(hash, []byte(logicalPath))
+		writeLengthPrefixed(hash, entry)
+	}
+	want := "sha256:" + hex.EncodeToString(hash.Sum(nil))
+	if snapshot.IntendedUntrackedProof != want {
+		t.Fatalf("batched proof = %s, want per-path reference %s", snapshot.IntendedUntrackedProof, want)
+	}
+}
+
+func TestSnapshotIntendedQueriesUseConstantGitInvocations(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	intended := make([]string, 128)
+	for index := range intended {
+		intended[index] = fmt.Sprintf("bulk/file-%03d.txt", index)
+		writeSnapshotFile(t, repo, intended[index], "candidate\n")
+	}
+
+	counts := map[string]int{}
+	originalCommand := gitCommandContext
+	gitCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if len(args) > 3 {
+			counts[args[3]]++
+		}
+		return originalCommand(ctx, name, args...)
+	}
+	t.Cleanup(func() { gitCommandContext = originalCommand })
+
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: intended})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["ls-tree"] != 1 || counts["check-ignore"] != 1 || counts["ls-files"] != 2 {
+		t.Fatalf("128-path Build git queries = ls-tree:%d check-ignore:%d ls-files:%d, want 1/1/2", counts["ls-tree"], counts["check-ignore"], counts["ls-files"])
+	}
+	counts = map[string]int{}
+	if err := (SnapshotBuilder{Repo: repo}).ValidateEvidence(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if counts["ls-tree"] != 1 {
+		t.Fatalf("128-path ValidateEvidence ls-tree invocations = %d, want 1", counts["ls-tree"])
+	}
+}
+
+func TestNulSeparatedGitParsersPreserveUnusualPaths(t *testing.T) {
+	oid := strings.Repeat("a", 40)
+	paths := []string{"space name.txt", "line\nbreak.txt", "tab\tname.txt", "--leading-dash.txt"}
+	var treeOutput, pathOutput []byte
+	for _, logicalPath := range paths {
+		record := []byte("100644 blob " + oid + "\t" + logicalPath)
+		treeOutput = append(treeOutput, record...)
+		treeOutput = append(treeOutput, 0)
+		pathOutput = append(pathOutput, logicalPath...)
+		pathOutput = append(pathOutput, 0)
+	}
+	entries, err := parseTreeEntries(treeOutput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pathSet := nulSeparatedPathSet(pathOutput)
+	for _, logicalPath := range paths {
+		want := []byte("100644 blob " + oid + "\t" + logicalPath + "\x00")
+		if !bytes.Equal(entries[logicalPath], want) {
+			t.Fatalf("tree entry for %q = %q, want %q", logicalPath, entries[logicalPath], want)
+		}
+		if _, present := pathSet[logicalPath]; !present {
+			t.Fatalf("NUL path set lost %q", logicalPath)
+		}
+	}
+	if _, err := parseTreeEntries([]byte("malformed\x00")); err == nil {
+		t.Fatal("malformed ls-tree record was accepted")
+	}
+	unterminated := []byte("100644 blob " + oid + "\tunterminated.txt")
+	if _, err := parseTreeEntries(unterminated); err == nil {
+		t.Fatal("unterminated ls-tree record was accepted")
+	}
+}
+
+func TestBatchGitProtocolReadersRejectDiagnostics(t *testing.T) {
+	t.Setenv("GENTLE_AI_TEST_GIT_PROTOCOL_DIAGNOSTIC", "1")
+	originalCommand := gitCommandContext
+	gitCommandContext = func(ctx context.Context, _ string, _ ...string) *exec.Cmd {
+		return exec.CommandContext(ctx, os.Args[0], "-test.run=^TestBatchGitProtocolDiagnosticHelperProcess$")
+	}
+	t.Cleanup(func() { gitCommandContext = originalCommand })
+
+	repo := t.TempDir()
+	tests := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "ls-tree", run: func() error {
+			_, err := listTreeEntries(context.Background(), repo, "HEAD")
+			return err
+		}},
+		{name: "cat-file-batch", run: func() error {
+			_, err := batchBlobContents(context.Background(), repo, []string{strings.Repeat("a", 40)})
+			return err
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.run()
+			if err == nil || !strings.Contains(err.Error(), "git inventory produced diagnostics: protocol diagnostic") {
+				t.Fatalf("protocol reader error = %v, want explicit stderr diagnostic", err)
+			}
+		})
+	}
+}
+
+func TestBatchGitProtocolDiagnosticHelperProcess(t *testing.T) {
+	if os.Getenv("GENTLE_AI_TEST_GIT_PROTOCOL_DIAGNOSTIC") != "1" {
+		return
+	}
+	_, _ = fmt.Fprint(os.Stderr, "protocol diagnostic")
+}
+
+func TestSnapshotBuilderRejectsFirstIgnoredIntendedPathInCanonicalOrder(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, ".gitignore", "ignored/\n")
+	writeSnapshotFile(t, repo, "ignored/a.txt", "a\n")
+	writeSnapshotFile(t, repo, "ignored/b.txt", "b\n")
+	_, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{"ignored/b.txt", "ignored/a.txt"},
+	})
+	if err == nil || !strings.Contains(err.Error(), `intended-untracked path "ignored/a.txt" is ignored`) {
+		t.Fatalf("ignored intended error = %v, want first canonical path", err)
 	}
 }
 
