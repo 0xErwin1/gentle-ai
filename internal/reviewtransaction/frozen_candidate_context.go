@@ -85,6 +85,7 @@ type ChangedPathManifestEntry struct {
 
 // FrozenCandidateContext is the deterministic reviewer input derived only
 // from the immutable Git trees and metadata persisted in a Snapshot.
+// Its repositoryRoot is provider-only local state, not reviewer-visible input.
 type FrozenCandidateContext struct {
 	BaseTree            string
 	CandidateTree       string
