@@ -374,20 +374,28 @@ func (lookup *frozenRepositoryPathLookup) contains(logicalPath string) (bool, er
 	}
 	want := []byte(logicalPath + "\x00")
 	for _, tree := range lookup.trees {
-		output, err := runGitLimited(lookup.ctx, lookup.repo, lookup.isolation, nil, len(want),
-			"ls-tree", "-r", "-z", "--name-only", "--full-tree", tree, "--", ":(literal)"+logicalPath)
+		output, err := runGitLimited(lookup.ctx, lookup.repo, lookup.isolation, nil, len(logicalPath)+len("160000 commit ")+64+2,
+			"ls-tree", "-z", "--full-tree", tree, "--", ":(literal)"+logicalPath)
 		if err != nil {
 			return false, err
 		}
-		switch {
-		case len(output) == 0:
+		if len(output) == 0 {
 			continue
-		case bytes.Equal(output, want):
-			lookup.cache[logicalPath] = true
-			return true, nil
-		default:
+		}
+		header, path, found := bytes.Cut(output, []byte{'\t'})
+		fields := bytes.Split(header, []byte{' '})
+		if !found || !bytes.Equal(path, want) || len(fields) != 3 || !validGitTree(string(fields[2])) {
 			return false, errors.New("literal repository path lookup returned a non-exact result") // refusal:by-design world-action: contradictory Git plumbing output cannot establish immutable path authority
 		}
+		kind := string(fields[0]) + " " + string(fields[1])
+		if kind == "040000 tree" {
+			continue
+		}
+		if kind != "100644 blob" && kind != "100755 blob" && kind != "120000 blob" && kind != "160000 commit" {
+			return false, errors.New("literal repository path lookup returned an invalid file entry") // refusal:by-design world-action: contradictory Git mode and type cannot establish immutable path authority
+		}
+		lookup.cache[logicalPath] = true
+		return true, nil
 	}
 	lookup.cache[logicalPath] = false
 	return false, nil

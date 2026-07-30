@@ -1,8 +1,6 @@
 package reviewtransaction
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -11,21 +9,16 @@ func admittedArtifactFixture(t *testing.T) (ArtifactSubject, FrozenCandidateCont
 	t.Helper()
 	requireSnapshotGit(t)
 	repo := initSnapshotRepo(t)
-	for path, contents := range map[string]string{
-		"internal/a.go":      "package internal\n\nconst value = 1\n",
-		"internal/secret.go": "package internal\n",
-		"secret.go":          "package secret\n",
-	} {
-		writeSnapshotFile(t, repo, path, contents)
-	}
+	writeSnapshotFile(t, repo, "internal/a.go", "package internal\n\nconst value = 1\n")
+	writeSnapshotFile(t, repo, "internal/secret.go", "package internal\n")
+	writeSnapshotFile(t, repo, "secret.go", "package secret\n")
 	gitSnapshot(t, repo, "add", "-A", "--")
 	gitSnapshot(t, repo, "commit", "-m", "add admission fixtures")
 	writeSnapshotFile(t, repo, "internal/a.go", "package internal\n\nconst value = 2\n")
 	writeSnapshotFile(t, repo, "internal/b.go", "package internal\n")
 	gitSnapshot(t, repo, "add", "-A", "--")
 	gitSnapshot(t, repo, "commit", "-m", "candidate")
-	candidate := strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))
-	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(t.Context(), Target{Kind: TargetExactRevision, Revision: candidate})
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(t.Context(), Target{Kind: TargetExactRevision, Revision: strings.TrimSpace(gitSnapshot(t, repo, "rev-parse", "HEAD"))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,11 +26,8 @@ func admittedArtifactFixture(t *testing.T) (ArtifactSubject, FrozenCandidateCont
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := CompactState{
-		LineageID: "review-artifact-subject", SelectedLenses: []string{LensReliability, LensReadability}, InitialSnapshot: snapshot,
-	}
-	revision := "sha256:" + strings.Repeat("2", 64)
-	subject, err := NewArtifactSubject(state, revision, context, LensReliability, 0, "")
+	state := CompactState{LineageID: "review-artifact-subject", SelectedLenses: []string{LensReliability, LensReadability}, InitialSnapshot: snapshot}
+	subject, err := NewArtifactSubject(state, "sha256:"+strings.Repeat("2", 64), context, LensReliability, 0, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,6 +106,9 @@ func TestAdmitArtifactRequiresCompletedBoundInScopeInspection(t *testing.T) {
 		}, decision: ArtifactAdmissionOutOfScope},
 		{name: "unknown repository evidence", mutate: func(r *ArtifactAdmissionRequest) {
 			r.Result.Evidence = append(r.Result.Evidence, "diff: missing.go:42")
+		}, decision: ArtifactAdmissionOutOfScope},
+		{name: "directory repository evidence does not recurse", mutate: func(r *ArtifactAdmissionRequest) {
+			r.Result.Evidence = append(r.Result.Evidence, "directory: `internal:1`")
 		}, decision: ArtifactAdmissionOutOfScope},
 		{name: "non-canonical repository proof", mutate: func(r *ArtifactAdmissionRequest) {
 			r.Result.Findings[0].ProofRefs = []string{"diff: ./secret.go:42"}
@@ -210,12 +203,8 @@ func TestAdmitArtifactBindsLegacySubjectByCandidateDiff(t *testing.T) {
 
 func TestAdmitArtifactAllowsSupportingProofOutsideChangedManifest(t *testing.T) {
 	_, _, request := admittedArtifactFixture(t)
-	if err := os.Remove(filepath.Join(request.FrozenContext.repositoryRoot, "secret.go")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(request.FrozenContext.repositoryRoot, "live-only.go"), []byte("package liveonly\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	gitSnapshot(t, request.FrozenContext.repositoryRoot, "rm", "--", "secret.go")
+	writeSnapshotFile(t, request.FrozenContext.repositoryRoot, "live-only.go", "package liveonly\n")
 	request.Result.Evidence = append(request.Result.Evidence, "supporting implementation: internal/secret.go:7")
 	request.Result.Findings[0].ProofRefs = []string{"repository proof: secret.go:42"}
 
