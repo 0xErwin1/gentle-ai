@@ -784,16 +784,19 @@ test_cc_custom_sdd_plus_skills() {
 }
 
 test_cc_context7_injection() {
-    log_test "Claude Code: context7 injection (settings.json MCP servers)"
+    log_test "Claude Code: context7 injection (~/.claude.json user MCP registry)"
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component context7 --persona neutral 2>&1; then
-        local settings="$HOME/.claude/settings.json"
-        assert_file_exists "$settings" "Claude settings.json"
-        assert_file_contains "$settings" '"mcpServers"' "settings.json has mcpServers key"
-        assert_file_contains "$settings" '"context7"' "settings.json has context7 server"
-        assert_file_contains "$settings" 'context7-mcp' "settings.json points to context7-mcp"
-        assert_valid_json "$settings" "settings.json is valid JSON"
+        # Claude Code only reads user-scope MCP servers from ~/.claude.json;
+        # the settings.json mcpServers block earlier versions wrote is inert
+        # and no longer written (issue #1868, PR #1909).
+        local registry="$HOME/.claude.json"
+        assert_file_exists "$registry" "Claude user MCP registry (~/.claude.json)"
+        assert_file_contains "$registry" '"mcpServers"' "user registry has mcpServers key"
+        assert_file_contains "$registry" '"context7"' "user registry has context7 server"
+        assert_file_contains "$registry" 'context7-mcp' "user registry points to context7-mcp"
+        assert_valid_json "$registry" "user registry is valid JSON"
         assert_file_not_exists "$HOME/.claude/mcp/context7.json" "legacy context7 MCP file is not written"
     else
         log_fail "context7 install command failed"
@@ -1071,10 +1074,14 @@ test_full_preset_claude_code() {
         assert_file_contains "$settings" '"theme"' "Has theme"
         assert_valid_json "$settings" "settings.json is valid JSON"
 
-        # MCP config is merged into Claude settings.json.
-        assert_file_contains "$settings" '"mcpServers"' "Has MCP servers"
-        assert_file_contains "$settings" '"context7"' "Has context7 MCP"
-        assert_file_contains "$settings" 'context7-mcp' "Context7 MCP uses pinned package"
+        # MCP registration lives in the ~/.claude.json user registry, the only
+        # user-scope file Claude Code reads MCP servers from (issue #1868).
+        local registry="$HOME/.claude.json"
+        assert_file_exists "$registry" "Claude user MCP registry (~/.claude.json)"
+        assert_file_contains "$registry" '"mcpServers"' "Has MCP servers"
+        assert_file_contains "$registry" '"context7"' "Has context7 MCP"
+        assert_file_contains "$registry" 'context7-mcp' "Context7 MCP uses pinned package"
+        assert_valid_json "$registry" "user registry is valid JSON"
 
         # Skills
         assert_file_count_min "$HOME/.claude/skills" "SKILL.md" 11 "At least 11 skill files"
