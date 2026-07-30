@@ -453,6 +453,7 @@ func (result facadeValidationResult) conclusive() error {
 		{name: "correction_regression", evidence: result.CorrectionRegression.Evidence},
 	} {
 		if reviewtransaction.InconclusiveValidationEvidence(check.evidence) {
+			// refusal:by-design world-action: validator access to the frozen trees must be restored before the same evidence can be captured again
 			return fmt.Errorf("targeted validation is inconclusive: %s evidence reports the immutable candidate could not be inspected, so no verdict was produced and the correction attempt was not consumed; restore validator access to the frozen trees and capture the same validation again", check.name)
 		}
 	}
@@ -1552,7 +1553,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			if _, recordErr := reviewtransaction.RecordCandidateDecline(ctx, root, snapshot); recordErr != nil {
 				return fmt.Errorf("record candidate review decline: %w", recordErr)
 			}
-			if !negotiated && consentMode != reviewConsentModeDeclined {
+			if negotiated && consentMode != reviewConsentModeDeclined {
 				return err
 			}
 			// The relayed --consent declined answer reports a typed choice, but
@@ -1743,6 +1744,7 @@ func validateReviewStartBinding(args []string, negotiated bool, target, projecti
 			return errors.New(reviewStartConsentRequiresContractReason)
 		}
 		if counts["locale"] != 0 {
+			// refusal:by-design operator-knowledge: only the caller can supply the complete candidate-bound negotiated START invocation
 			return errors.New("review start --locale requires a negotiated --contract")
 		}
 		return nil
@@ -3844,6 +3846,7 @@ func emitCandidateDeclinedUnmanagedDelivery(stdout io.Writer, gate reviewtransac
 	// Keep the derived authorization live in this boundary: this guards against a
 	// future emitter accidentally accepting a zero-value resolver result.
 	if decline.AuthorizationRef == "" || decline.Snapshot.Identity == "" {
+		// refusal:by-design world-action: an internal incomplete authorization cannot safely govern delivery and requires a code correction
 		return errors.New("candidate decline delivery authorization is incomplete")
 	}
 	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationValidate, result, result, contract)

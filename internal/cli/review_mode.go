@@ -422,6 +422,7 @@ func normalizeReviewConsentLocale(value string) (reviewConsentLocale, error) {
 	case string(reviewConsentLocaleSpanish):
 		return reviewConsentLocaleSpanish, nil
 	default:
+		// refusal:by-design operator-knowledge: only the caller knows which supported locale matches the active conversation
 		return "", errors.New("review consent locale must be en or es")
 	}
 }
