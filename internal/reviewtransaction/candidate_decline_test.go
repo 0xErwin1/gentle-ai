@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -36,10 +37,11 @@ func TestCandidateDeclineAuthorizationIsReplayableAndFailsClosed(t *testing.T) {
 		t.Fatalf("exact staged delivery decline = %#v, found=%v, err=%v", resolved, found, err)
 	}
 
-	path, err := CandidateDeclineAuthorizationPath(ctx, repo, snapshot.Identity)
+	root, _, err := candidateDeclineRoot(ctx, repo, false)
 	if err != nil {
-		t.Fatalf("candidate decline path: %v", err)
+		t.Fatalf("candidate decline root: %v", err)
 	}
+	path := filepath.Join(root, candidateDeclineRecordName(snapshot.Identity))
 	if err := os.WriteFile(path, []byte("{\n"), 0o600); err != nil {
 		t.Fatalf("corrupt candidate decline: %v", err)
 	}
