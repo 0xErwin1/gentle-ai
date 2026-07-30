@@ -45,7 +45,10 @@ func TestRestoreRestoresExistingAndRemovesCreated(t *testing.T) {
 	manifest := Manifest{
 		Entries: []ManifestEntry{
 			{OriginalPath: originalPath, SnapshotPath: snapshotPath, Existed: true, Mode: 0o600},
-			{OriginalPath: removedPath, Existed: false},
+			// Kind="" (legacy unknown) with Existed=false now preserves by default.
+			// Set Kind=regular explicitly to test the deletion semantics for
+			// explicit regular-file removals.
+			{OriginalPath: removedPath, Existed: false, Kind: PathKindRegularFile},
 		},
 	}
 
@@ -311,6 +314,9 @@ func TestRestoreCompressedRemovesCreatedFiles(t *testing.T) {
 
 	// Add an entry that was NOT in the original snapshot (Existed=false).
 	// This simulates a file created AFTER backup — restore should remove it.
+	// Legacy manifests without Kind default to "safe" (preserve). Set
+	// Kind=regular explicitly to test the deletion semantics for explicit
+	// regular-file removals.
 	createdFile := filepath.Join(home, "config", "extra.json")
 	if err := os.WriteFile(createdFile, []byte("should be removed\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile() created file error = %v", err)
@@ -318,6 +324,7 @@ func TestRestoreCompressedRemovesCreatedFiles(t *testing.T) {
 	manifest.Entries = append(manifest.Entries, ManifestEntry{
 		OriginalPath: createdFile,
 		Existed:      false,
+		Kind:         PathKindRegularFile,
 	})
 
 	service := RestoreService{}
