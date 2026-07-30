@@ -136,6 +136,26 @@ Reviewer results must echo the exact `subject_hash` and report structured `inspe
 
 The managed OpenCode result-artifact plugin replaces caller-authored task prose with the provider-issued binding and preflight context. It validates the subject, trees, lens slot, and canonical ordered manifest before launching the reviewer; it never transports a patch or candidate bytes. OpenCode reviewers receive only the narrow read-only Git allowlist above. Managed runtimes that cannot enforce that per-command boundary receive no shell and must report incomplete inspection rather than substitute live files or receive an inline patch fallback.
 
+### Restart OpenCode after a readonly task-argument failure
+
+If OpenCode reports `Attempted to assign to readonly property` while launching a Gentle AI reviewer, fully quit OpenCode and restart it with the parent experimental flag disabled:
+
+```bash
+OPENCODE_EXPERIMENTAL=false opencode
+```
+
+You may reopen the same persisted OpenCode session. Then refresh native review authority:
+
+```bash
+gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition
+```
+
+Follow only the refreshed `next_transition` and relaunch only the exact pending slot it reoffers. With `OPENCODE_EXPERIMENTAL=true`, OpenCode's v2 event system can freeze task arguments before Gentle AI's `tool.execute.before` hook injects the reviewer prompt. The launch then produces no reviewer result, so the native slot remains pending.
+
+Setting only `OPENCODE_EXPERIMENTAL_EVENT_SYSTEM=false` is insufficient while the parent `OPENCODE_EXPERIMENTAL` flag remains true. Do not use `OPENCODE_PURE=1` for this recovery: it disables the Gentle AI plugin required for reviewer capture.
+
+The behavior is tracked in [upstream issue #25873](https://github.com/anomalyco/opencode/issues/25873). [Proposed fix PR #25867](https://github.com/anomalyco/opencode/pull/25867) closed without merge, so it does not establish that OpenCode has fixed the issue.
+
 Durable controllers capture each result with exact lineage, target, lens, selected order, authority revision, and provider-issued repository context. Current captures emit pathless manifests with opaque references; the provider can discover every canonical result with `--captured-results`, or controllers can write each emitted manifest to its own file and pass those files to FINALIZE in selected-lens order with repeatable `--result-artifact-file <path>` flags. A `--result-artifact-file -` occurrence reads exactly one manifest from stdin; because FINALIZE has one shared stdin, `-` may appear only once across reviewer results, artifact manifests, validation, refuter outcomes, and evidence.
 
 Windows PowerShell 5.1 should use file transport because native argument reconstruction does not preserve dynamic inline JSON reliably. Write BOM-less UTF-8 so the strict JSON decoder receives the manifest bytes directly:
