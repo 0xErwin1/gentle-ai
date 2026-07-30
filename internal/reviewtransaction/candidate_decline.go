@@ -28,13 +28,16 @@ const (
 var (
 	// ErrCandidateDeclineCorrupt rejects a candidate-scoped decline whose durable
 	// bytes cannot prove the exact snapshot the operator declined to review.
+	// refusal:by-design world-action: corrupted private authority bytes must be repaired or removed before they can govern delivery
 	ErrCandidateDeclineCorrupt = errors.New("candidate decline authorization is corrupt")
 	// ErrCandidateDeclineAmbiguous rejects more than one candidate-scoped decline
 	// that would authorize a lifecycle target. The gate must not choose between
 	// independent durable authorizations.
+	// refusal:by-design human-authority: only the operator can decide which independent candidate choice remains authoritative
 	ErrCandidateDeclineAmbiguous = errors.New("candidate decline authorization is ambiguous")
 	// ErrCandidateDeclineStale rejects a target or publication boundary that moved
 	// while a candidate-scoped decline was being evaluated.
+	// refusal:by-design human-authority: a changed candidate requires a fresh explicit review choice
 	ErrCandidateDeclineStale = errors.New("candidate decline authorization no longer matches the live lifecycle target")
 )
 
@@ -112,6 +115,7 @@ func RecordCandidateDecline(ctx context.Context, repo string, snapshot Snapshot)
 // existing candidate authorization. It never creates storage.
 func CandidateDeclineAuthorizationPath(ctx context.Context, repo, targetIdentity string) (string, error) {
 	if !validSHA256(targetIdentity) {
+		// refusal:by-design world-action: an invalid identity cannot address an exact candidate authorization
 		return "", errors.New("candidate decline authorization requires an exact target identity")
 	}
 	root, _, err := candidateDeclineRoot(ctx, repo, false)
@@ -280,6 +284,7 @@ func readCandidateDeclineAuthorizations(root string) ([]CandidateDeclineAuthoriz
 		authorization, err := parseCandidateDeclineAuthorization(payload)
 		if err != nil || authorization.Snapshot.Identity != identity {
 			if err == nil {
+				// refusal:by-design world-action: mismatched private authority bytes must be repaired or removed before delivery
 				err = errors.New("candidate decline filename does not match the frozen target")
 			}
 			return nil, fmt.Errorf("%w: %v", ErrCandidateDeclineCorrupt, err)
@@ -304,12 +309,14 @@ func candidateDeclineRecordIdentity(name string) (string, bool) {
 
 func (authorization CandidateDeclineAuthorization) validate() error {
 	if authorization.Schema != CandidateDeclineAuthorizationSchema {
+		// refusal:by-design world-action: an unknown durable schema cannot safely authorize delivery
 		return errors.New("invalid candidate decline authorization schema")
 	}
 	if err := validateCompactSnapshot(authorization.Snapshot); err != nil {
 		return fmt.Errorf("invalid candidate decline snapshot: %w", err)
 	}
 	if !validSHA256(authorization.AuthorizationRef) {
+		// refusal:by-design world-action: an invalid content address cannot bind durable authorization bytes
 		return errors.New("invalid candidate decline authorization ref")
 	}
 	want, err := candidateDeclineDigest(authorization)
@@ -317,6 +324,7 @@ func (authorization CandidateDeclineAuthorization) validate() error {
 		return err
 	}
 	if authorization.AuthorizationRef != want {
+		// refusal:by-design world-action: modified durable bytes cannot retain authority from their previous content address
 		return errors.New("candidate decline authorization ref does not match canonical content")
 	}
 	return nil
@@ -356,6 +364,7 @@ func parseCandidateDeclineAuthorization(payload []byte) (CandidateDeclineAuthori
 	}
 	canonical, err := canonicalCandidateDeclinePayload(authorization)
 	if err != nil || !bytes.Equal(payload, canonical) {
+		// refusal:by-design world-action: non-canonical durable bytes must be repaired or removed before delivery
 		return CandidateDeclineAuthorization{}, errors.New("candidate decline authorization is not canonical")
 	}
 	return authorization, nil
