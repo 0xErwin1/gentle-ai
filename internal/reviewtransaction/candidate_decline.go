@@ -111,20 +111,6 @@ func RecordCandidateDecline(ctx context.Context, repo string, snapshot Snapshot)
 	return authorization, nil
 }
 
-// CandidateDeclineAuthorizationPath returns the canonical private path for an
-// existing candidate authorization. It never creates storage.
-func CandidateDeclineAuthorizationPath(ctx context.Context, repo, targetIdentity string) (string, error) {
-	if !validSHA256(targetIdentity) {
-		// refusal:by-design world-action: an invalid identity cannot address an exact candidate authorization
-		return "", errors.New("candidate decline authorization requires an exact target identity")
-	}
-	root, _, err := candidateDeclineRoot(ctx, repo, false)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(root, candidateDeclineRecordName(targetIdentity)), nil
-}
-
 // ResolveCandidateDeclineForGate re-derives a supported lifecycle target with
 // the compact gate's own target builder, then accepts exactly one decline whose
 // frozen bytes and paths still match. It never authorizes release or post-apply.
