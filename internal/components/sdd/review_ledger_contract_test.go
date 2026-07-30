@@ -341,8 +341,9 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// Deliberately one clause: the standard tier sits close to its 15%
 		// headroom rule, so the reasoning lives in sdd-archive/SKILL.md, which
 		// is loaded per phase rather than always-on.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_762, maxCharacters: 17_000},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_182, maxCharacters: 35_000},
+		// +457 defines STATUS-mediated recollection without adding retry state.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_219, maxCharacters: 18_000},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_639, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
