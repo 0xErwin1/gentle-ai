@@ -1192,7 +1192,7 @@ test_ecosystem_both_agents() {
         # Claude Code
         assert_file_exists "$HOME/.claude/CLAUDE.md" "Claude CLAUDE.md"
         assert_file_contains "$HOME/.claude/CLAUDE.md" "gentle-ai:sdd-orchestrator" "Claude has SDD"
-        assert_file_contains "$HOME/.claude/settings.json" '"context7"' "Claude context7 MCP"
+        assert_file_contains "$HOME/.claude.json" '"context7"' "Claude context7 MCP"
         assert_file_count_min "$HOME/.claude/skills" "SKILL.md" 11 "Claude skills"
 
         # OpenCode
@@ -1568,7 +1568,7 @@ test_edge_multiple_agents_same_component() {
 
     if $BINARY install --agent claude-code --agent opencode --component context7 --persona neutral 2>&1; then
         # Both agents should have context7
-        assert_file_contains "$HOME/.claude/settings.json" '"context7"' "Claude context7"
+        assert_file_contains "$HOME/.claude.json" '"context7"' "Claude context7"
         assert_file_contains "$HOME/.config/opencode/opencode.json" '"context7"' "OpenCode context7"
     else
         log_fail "Multiple agents + context7 install command failed"
