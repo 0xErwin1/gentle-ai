@@ -438,6 +438,27 @@ type facadeValidationResult struct {
 	FollowUps                     []reviewtransaction.FollowUp `json:"follow_ups"`
 }
 
+// conclusive rejects validation checks whose evidence reports the immutable
+// candidate could not be inspected. Such a check is not a verdict: admitted as
+// failed it consumes the single correction attempt on a non-observation
+// (issue #1309 follow-up), and admitted as passed it approves uninspected
+// bytes. No state transitions, so the same validation can be captured again
+// once the validator regains access to the frozen trees.
+func (result facadeValidationResult) conclusive() error {
+	for _, check := range []struct {
+		name     string
+		evidence []string
+	}{
+		{name: "original_criteria", evidence: result.OriginalCriteria.Evidence},
+		{name: "correction_regression", evidence: result.CorrectionRegression.Evidence},
+	} {
+		if reviewtransaction.InconclusiveValidationEvidence(check.evidence) {
+			return fmt.Errorf("targeted validation is inconclusive: %s evidence reports the immutable candidate could not be inspected, so no verdict was produced and the correction attempt was not consumed; restore validator access to the frozen trees and capture the same validation again", check.name)
+		}
+	}
+	return nil
+}
+
 type facadeRefuterResult struct {
 	Results []facadeRefuterOutcome `json:"results"`
 }
@@ -3209,6 +3230,9 @@ func (result facadeValidationResult) native(tx reviewtransaction.Transaction) (r
 	if len(result.OriginalCriteria.Evidence) == 0 || len(result.CorrectionRegression.Evidence) == 0 {
 		return reviewtransaction.ScopedValidationResult{}, errors.New("targeted validation requires original_criteria and correction_regression evidence")
 	}
+	if err := result.conclusive(); err != nil {
+		return reviewtransaction.ScopedValidationResult{}, err
+	}
 	if result.FollowUps == nil {
 		result.FollowUps = []reviewtransaction.FollowUp{}
 	}
@@ -3226,6 +3250,9 @@ func (result facadeValidationResult) native(tx reviewtransaction.Transaction) (r
 func (result facadeValidationResult) compact(fixDeltaHash string, findingIDs []string, request reviewtransaction.TargetedValidationRequest) (reviewtransaction.ScopedValidationResult, error) {
 	if len(result.OriginalCriteria.Evidence) == 0 || len(result.CorrectionRegression.Evidence) == 0 {
 		return reviewtransaction.ScopedValidationResult{}, errors.New("targeted validation requires original_criteria and correction_regression evidence")
+	}
+	if err := result.conclusive(); err != nil {
+		return reviewtransaction.ScopedValidationResult{}, err
 	}
 	if result.TargetedValidationRequestHash != request.RequestHash || result.CorrectionTargetIdentity != request.CorrectionTargetIdentity {
 		return reviewtransaction.ScopedValidationResult{}, errors.New("targeted validation result does not bind the provider-owned correction request") // refusal:by-design operator-knowledge: the external validator must echo both bindings from the provider-owned request

@@ -437,6 +437,20 @@ func artifactReferenceTokens(value string) []artifactReferenceToken {
 	return tokens
 }
 
+// InconclusiveValidationEvidence reports whether a scoped-fix validation
+// check's evidence claims the immutable candidate could not be inspected.
+// Such a check carries no verdict in either direction: admitting it as
+// failed would consume the single correction attempt on a non-observation,
+// and admitting it as passed would approve without inspection.
+func InconclusiveValidationEvidence(evidence []string) bool {
+	for _, line := range evidence {
+		if evidenceReportsUnavailableInspection(line) {
+			return true
+		}
+	}
+	return false
+}
+
 func evidenceReportsUnavailableInspection(value string) bool {
 	value = strings.ToLower(strings.Join(strings.Fields(value), " "))
 	for _, phrase := range []string{
