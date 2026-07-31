@@ -26,14 +26,8 @@ const (
 	reviewResultArtifactLimit      = 4 << 20
 )
 
-// reviewerResultSlotConflictError is the deliberately unwrapped identity for
-// the byte-literal-conflict guard inside captureReviewerArtifact: the exact
-// same SHA-256 already read back matches artifact.SHA256 yet its bytes
-// differ (a hash-collision-only branch in practice, since
-// readVerifiedReviewerArtifact already rejects a mismatched SHA-256 before
-// this point is ever reached). Keeping it as a named sentinel rather than an
-// inline errors.New lets the discoverability guidance below wrap it with
-// %w instead of duplicating the base message.
+// reviewerResultSlotConflictError gives immutable publication conflicts a
+// stable identity so discoverability guidance can wrap them with %w.
 var reviewerResultSlotConflictError = errors.New("captured reviewer result already exists with different canonical bytes")
 
 // errCapturedFinalEvidenceMissing has the historical explicit-selector error
@@ -163,11 +157,6 @@ type admittedReviewerResult struct {
 	Subject   reviewtransaction.ArtifactSubject   `json:"subject"`
 	Admission reviewtransaction.ArtifactAdmission `json:"admission"`
 	Result    facadeReviewerResult                `json:"result"`
-}
-
-type capturedArtifactBinding struct {
-	Subject   reviewtransaction.ArtifactSubject
-	Admission reviewtransaction.ArtifactAdmission
 }
 
 // ReviewerResultPayloadError is returned when a raw reviewer result payload is
@@ -438,66 +427,6 @@ func reviewResultReference(artifact reviewResultArtifact) string {
 	payload, _ := json.Marshal(preimage)
 	return reviewResultReferencePrefix + strings.TrimPrefix(facadePayloadHash(payload), "sha256:")
 }
-func captureReviewerArtifact(storeDir string, state reviewtransaction.CompactState, order int, payload []byte, bindings ...capturedArtifactBinding) (reviewResultArtifact, error) {
-	dir := filepath.Join(storeDir, reviewtransaction.CompactReviewerResultsDir)
-	if err := ensureReviewerArtifactDir(dir); err != nil {
-		return reviewResultArtifact{}, err
-	}
-	path := filepath.Join(dir, fmt.Sprintf("%02d-%s.json", order, state.SelectedLenses[order]))
-	if err := archiveQuarantinedReviewerArtifact(storeDir, state, order, path); err != nil {
-		return reviewResultArtifact{}, err
-	}
-	artifact := reviewResultArtifact{
-		Schema: reviewResultArtifactSchema, Capability: reviewResultArtifactCapability, Path: path,
-		SHA256: facadePayloadHash(payload), LineageID: state.LineageID,
-		TargetIdentity: state.InitialSnapshot.Identity, Lens: state.SelectedLenses[order], SelectedOrder: order,
-	}
-	if len(bindings) > 0 {
-		artifact.SubjectHash = bindings[0].Subject.SubjectHash
-		artifact.AdmissionDecision = bindings[0].Admission.Decision
-	}
-	if existing, err := readVerifiedReviewerArtifact(artifact, storeDir, state); err == nil {
-		if !bytes.Equal(existing, payload) {
-			return reviewResultArtifact{}, fmt.Errorf("%w; a different reviewer result already occupies this slot — decide with `review dispose-result` (discard it) or `review preserve-result` (keep it and quarantine this new submission)", reviewerResultSlotConflictError)
-		}
-		return artifact, persistReviewerArtifactDigest(path, artifact.SHA256)
-	} else if !os.IsNotExist(err) {
-		return reviewResultArtifact{}, fmt.Errorf("%w; a different reviewer result already occupies this slot — decide with `review dispose-result` (discard it) or `review preserve-result` (keep it and quarantine this new submission)", err)
-	}
-	temp, err := os.CreateTemp(dir, ".capture-*")
-	if err != nil {
-		return reviewResultArtifact{}, fmt.Errorf("create reviewer result temporary file: %w", err)
-	}
-	owned, _ := temp.Stat()
-	defer removeOwnedArtifact(temp.Name(), owned)
-	if err := temp.Chmod(0o600); err != nil {
-		return reviewResultArtifact{}, err
-	}
-	if _, err := temp.Write(payload); err != nil {
-		return reviewResultArtifact{}, err
-	}
-	if err := temp.Sync(); err != nil {
-		return reviewResultArtifact{}, err
-	}
-	if err := temp.Close(); err != nil {
-		return reviewResultArtifact{}, err
-	}
-	if err := reviewtransaction.PublishFileNoReplace(temp.Name(), path); err != nil {
-		if existing, readErr := readVerifiedReviewerArtifact(artifact, storeDir, state); readErr == nil && bytes.Equal(existing, payload) {
-			return artifact, persistReviewerArtifactDigest(path, artifact.SHA256)
-		}
-		return reviewResultArtifact{}, fmt.Errorf("publish reviewer result atomically: %w", err)
-	}
-	if err := syncReviewerArtifactDirectoryCompatible(dir); err != nil {
-		removeOwnedArtifact(path, owned)
-		return reviewResultArtifact{}, fmt.Errorf("sync reviewer result directory: %w", err)
-	}
-	if _, err := readVerifiedReviewerArtifact(artifact, storeDir, state); err != nil {
-		removeOwnedArtifact(path, owned)
-		return reviewResultArtifact{}, fmt.Errorf("read back reviewer result: %w", err)
-	}
-	return artifact, persistReviewerArtifactDigest(path, artifact.SHA256)
-}
 
 // archiveQuarantinedReviewerArtifact removes only an artifact digest that the
 // native reopen transition already classified and bound in authority. It
@@ -625,43 +554,6 @@ func publishImmutableReviewerFile(path string, payload []byte) error {
 		if readErr != nil || !bytes.Equal(existing, payload) {
 			return err
 		}
-	}
-	return syncReviewerArtifactDirectoryCompatible(dir)
-}
-
-func persistReviewerArtifactDigest(path, digest string) error {
-	digestPath := path + ".sha256"
-	if existing, err := os.ReadFile(digestPath); err == nil {
-		if strings.TrimSpace(string(existing)) == digest {
-			return nil
-		}
-		return errors.New("captured reviewer result digest already exists with different bytes; decide with `review dispose-result` (discard it) or `review preserve-result` (keep it and quarantine this new submission)")
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	dir := filepath.Dir(path)
-	temp, err := os.CreateTemp(dir, ".capture-digest-*")
-	if err != nil {
-		return err
-	}
-	defer temp.Close()
-	if err := temp.Chmod(0o600); err != nil {
-		return err
-	}
-	if _, err := temp.WriteString(digest + "\n"); err != nil {
-		return err
-	}
-	if err := temp.Sync(); err != nil {
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	if err := reviewtransaction.PublishFileNoReplace(temp.Name(), digestPath); err != nil {
-		if existing, readErr := os.ReadFile(digestPath); readErr == nil && strings.TrimSpace(string(existing)) == digest {
-			return nil
-		}
-		return err
 	}
 	return syncReviewerArtifactDirectoryCompatible(dir)
 }
