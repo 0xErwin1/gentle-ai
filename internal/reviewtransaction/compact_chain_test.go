@@ -116,8 +116,9 @@ func TestCompactPrePRChainNormalizesDegenerateRecoveryInsideChain(t *testing.T) 
 // successor, it is never on the selected path, and it must not deny composition
 // for every other lineage in the repository (issue-1563 follow-up).
 func TestCompactPrePRChainIgnoresUnrelatedNoOpSelfLoopAuthority(t *testing.T) {
+	const noOpLineage = "compact-chain-noop"
 	fixture := newCompactPrePRChainFixture(t, 2)
-	addCompactChainNoOpSelfLoop(t, fixture, "compact-chain-noop")
+	addCompactChainNoOpSelfLoop(t, fixture, noOpLineage)
 
 	got, attempted := EvaluateCompactPrePRChain(context.Background(), fixture.repo, fixture.input())
 
@@ -126,6 +127,34 @@ func TestCompactPrePRChainIgnoresUnrelatedNoOpSelfLoopAuthority(t *testing.T) {
 	}
 	if got.Context.BaseTree != fixture.receipts[0].BaseTree || got.Context.CandidateTree != fixture.receipts[1].FinalCandidateTree {
 		t.Fatalf("composed proof context = %#v", got.Context)
+	}
+
+	// Excluding the no-op from the delivery graph must not unbind it: it stays
+	// enumerated in proof.Authority with its state and receipt hashes, so any
+	// later mutation of that authority still changes the composed chain
+	// identity. Without this, a regression that dropped the filtered authority
+	// from proof composition would keep passing the assertions above.
+	derived, derivedAttempted, err := deriveCompactPrePRChain(context.Background(), fixture.repo, fixture.input())
+	if err != nil || !derivedAttempted {
+		t.Fatalf("derive composed proof: %v, attempted %t", err, derivedAttempted)
+	}
+	bound := false
+	for _, authority := range derived.proof.Authority {
+		if authority.LineageID != noOpLineage {
+			continue
+		}
+		if authority.StateHash == "" || authority.ReceiptHash == "" {
+			t.Fatalf("filtered no-op authority is unbound in composed proof: %#v", authority)
+		}
+		bound = true
+	}
+	if !bound {
+		t.Fatalf("filtered no-op authority %q is absent from composed proof authority: %#v", noOpLineage, derived.proof.Authority)
+	}
+	for _, member := range derived.proof.Members {
+		if member.LineageID == noOpLineage {
+			t.Fatalf("filtered no-op authority %q reached the delivery members: %#v", noOpLineage, derived.proof.Members)
+		}
 	}
 }
 
