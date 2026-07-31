@@ -408,11 +408,12 @@ var abandonCapability = &Capability{Verb: []string{"review", "abandon"}, Flags: 
 // coreJourneys below are the flows drawn from the community testing guide and
 // the failure paths it collected; edgeJourneys in journeys_edge.go are the edge
 // cases those flows never reached; sddJourneys in journeys_sdd.go is the SDD
-// remediation successor cycle and the two surfaces that meet it, which nothing
-// in the first two parts had ever driven.
+// remediation successor cycle and the two surfaces that meet it; and
+// waveOneJourneys pins integrated community fixes at their real CLI boundary.
 func Journeys() []Journey {
 	journeys := append(coreJourneys(), edgeJourneys()...)
-	return append(journeys, sddJourneys()...)
+	journeys = append(journeys, sddJourneys()...)
+	return append(journeys, waveOneJourneys()...)
 }
 
 func coreJourneys() []Journey {
