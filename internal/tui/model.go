@@ -1629,10 +1629,7 @@ func (m Model) shouldSkipModelPickerSeparator() bool {
 }
 
 func (m Model) isModelPickerSeparatorCursor() bool {
-	rows := screens.ModelPickerRows()
-	if m.ModelPicker.ForProfile {
-		rows = screens.ModelPickerRowsForProfile()
-	}
+	rows := screens.ModelPickerRowsForState(m.ModelPicker)
 	return m.Cursor >= 0 && m.Cursor < len(rows) && screens.IsModelPickerSeparatorRow(rows[m.Cursor])
 }
 
@@ -2192,7 +2189,7 @@ func (m Model) confirmSelection() (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
-		rows := screens.ModelPickerRows()
+		rows := screens.ModelPickerRowsForState(m.ModelPicker)
 		if m.Cursor < len(rows) {
 			// Skip separator row — it is not actionable.
 			if screens.IsModelPickerSeparatorRow(rows[m.Cursor]) {
@@ -3588,7 +3585,7 @@ func (m Model) optionCount() int {
 		if len(m.ModelPicker.AvailableIDs) == 0 {
 			return 2 // Continue with defaults + Back
 		}
-		return len(screens.ModelPickerRows()) + 2 // rows + Continue + Back
+		return len(screens.ModelPickerRowsForState(m.ModelPicker)) + 2 // rows + Continue + Back
 	case ScreenDependencyTree:
 		if m.Selection.Preset == model.PresetCustom {
 			return len(screens.AllComponents()) + len(screens.DependencyTreeOptions())

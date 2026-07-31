@@ -2,6 +2,7 @@ package sdd
 
 import (
 	"os"
+	"sort"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -32,15 +33,13 @@ func ReadCurrentProfiles(settingsPath string) ([]model.Profile, error) {
 }
 
 // ReadCurrentModelAssignments reads the agent definitions from opencode.json
-// at settingsPath and extracts the "model" field for each configurable agent.
+// at settingsPath and extracts the "model" field for each configurable or custom agent.
 //
-// Only agents whose names match a configurable agent phase (SDD phases, JD agents
-// via opencode.ConfigurableAgentPhases()) or "gentle-orchestrator" are included.
 // Agents without a "model" field, or with a malformed model value, are silently
 // skipped.
 //
 // Returns an empty map (no error) when the file does not exist, contains no
-// "agent" key, or has no matching phase agents with a valid model field.
+// "agent" key, or has no phase/custom agents with a valid model field.
 func ReadCurrentModelAssignments(settingsPath string) (map[string]model.ModelAssignment, error) {
 	data, err := os.ReadFile(settingsPath)
 	if err != nil {
@@ -67,9 +66,6 @@ func ReadCurrentModelAssignments(settingsPath string) (map[string]model.ModelAss
 
 	result := make(map[string]model.ModelAssignment)
 	for name, defRaw := range agentMap {
-		if !configurableAgentSet[name] {
-			continue
-		}
 		defMap, ok := defRaw.(map[string]any)
 		if !ok {
 			continue
@@ -98,4 +94,43 @@ func ReadCurrentModelAssignments(settingsPath string) (map[string]model.ModelAss
 	}
 
 	return result, nil
+}
+
+// DiscoverCustomAgents inspects opencode.json at settingsPath and returns a sorted
+// slice of custom agent keys defined under "agent" that are not part of the standard
+// configurable agent set.
+func DiscoverCustomAgents(settingsPath string) ([]string, error) {
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	root, err := filemerge.UnmarshalJSONObject(data)
+	if err != nil {
+		return nil, nil
+	}
+
+	agentRaw, ok := root["agent"]
+	if !ok {
+		return nil, nil
+	}
+	agentMap, ok := agentRaw.(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+
+	var custom []string
+	for name := range agentMap {
+		if !configurableAgentSet[name] && name != "sdd-orchestrator" && name != "gentle-orchestrator" {
+			custom = append(custom, name)
+		}
+	}
+
+	sort.Slice(custom, func(i, j int) bool {
+		return custom[i] < custom[j]
+	})
+	return custom, nil
 }

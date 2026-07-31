@@ -1391,3 +1391,81 @@ func TestModelPickerRowsForProfile(t *testing.T) {
 		}
 	}
 }
+
+func TestModelPickerRowsForState_WithCustomAgents(t *testing.T) {
+	state := ModelPickerState{
+		CustomAgents: []string{"my-custom-agent-1", "my-custom-agent-2"},
+	}
+	rows := ModelPickerRowsForState(state)
+
+	var hasCustomSep, hasSetAllCustom, hasAgent1, hasAgent2 bool
+	for _, r := range rows {
+		if r == "--- Custom / Native agents ---" {
+			hasCustomSep = true
+		}
+		if r == "Set all custom agents" {
+			hasSetAllCustom = true
+		}
+		if r == "my-custom-agent-1" {
+			hasAgent1 = true
+		}
+		if r == "my-custom-agent-2" {
+			hasAgent2 = true
+		}
+	}
+
+	if !hasCustomSep || !hasSetAllCustom || !hasAgent1 || !hasAgent2 {
+		t.Fatalf("ModelPickerRowsForState() missing custom agent rows: got %v", rows)
+	}
+}
+
+func TestNewModelPickerState_DiscoversCustomAgents(t *testing.T) {
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "opencode.json")
+	cachePath := filepath.Join(dir, "models.json")
+
+	settings := `{
+  "agent": {
+    "gentle-orchestrator": { "model": "anthropic/claude-sonnet-4" },
+    "custom-coder-v1": { "model": "openai/gpt-4o-mini" }
+  }
+}`
+	if err := os.WriteFile(settingsPath, []byte(settings), 0o644); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	if err := os.WriteFile(cachePath, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write cache: %v", err)
+	}
+
+	state := NewModelPickerState(cachePath, settingsPath)
+	if len(state.CustomAgents) != 1 || state.CustomAgents[0] != "custom-coder-v1" {
+		t.Fatalf("NewModelPickerState CustomAgents = %v, want [custom-coder-v1]", state.CustomAgents)
+	}
+}
+
+func TestApplyAssignment_SetAllCustomAgents(t *testing.T) {
+	state := ModelPickerState{
+		CustomAgents:     []string{"custom-1", "custom-2"},
+		SelectedPhaseIdx: 0,
+	}
+	rows := ModelPickerRowsForState(state)
+	setAllIdx := -1
+	for i, r := range rows {
+		if r == "Set all custom agents" {
+			setAllIdx = i
+			break
+		}
+	}
+	if setAllIdx < 0 {
+		t.Fatalf("Set all custom agents row not found in %v", rows)
+	}
+
+	state.SelectedPhaseIdx = setAllIdx
+	assignments := make(map[string]model.ModelAssignment)
+	assigned := model.ModelAssignment{ProviderID: "anthropic", ModelID: "claude-3-5-haiku"}
+
+	res := applyAssignment(state, assignments, assigned)
+	if res["custom-1"] != assigned || res["custom-2"] != assigned {
+		t.Fatalf("applyAssignment Set all custom agents = %v, want assigned %v for custom-1 and custom-2", res, assigned)
+	}
+}

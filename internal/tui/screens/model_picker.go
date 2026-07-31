@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
@@ -70,6 +71,12 @@ type ModelPickerState struct {
 	// Issue #146.
 	AllPhasesModel model.ModelAssignment
 
+	// AllCustomAgentsModel tracks the assignment last set via the "Set all custom agents" row.
+	AllCustomAgentsModel model.ModelAssignment
+
+	// CustomAgents holds discovered custom native agents defined in opencode.json.
+	CustomAgents []string
+
 	// EffortCursor and EffortScroll manage navigation in ModeEffortSelect.
 	EffortCursor int
 	EffortScroll int
@@ -128,10 +135,16 @@ func NewModelPickerState(cachePath string, settingsPath string) ModelPickerState
 		configWarning = appendConfigWarning(configWarning, fmt.Sprintf("Could not load custom providers from opencode.json: %v", configErr))
 	}
 
+	var customAgents []string
+	if agents, err := sdd.DiscoverCustomAgents(settingsPath); err == nil && len(agents) > 0 {
+		customAgents = agents
+	}
+
 	state := ModelPickerState{
 		Providers:         providers,
 		ConfigWarning:     configWarning,
 		Mode:              ModePhaseList,
+		CustomAgents:      customAgents,
 		lmStudioURL:       lmStudioURL,
 		lmStudioConfig:    lmStudioConfig,
 		lmStudioCatalog:   lmStudioCatalog,
@@ -221,11 +234,11 @@ const SDDOrchestratorPhase = "gentle-orchestrator"
 // Row 0 is "gentle-orchestrator" (coordinator), row 1 is "Set all phases",
 // rows 2-11 are the 10 SDD sub-agent phases, followed by workflow agent sections.
 func ModelPickerRows() []string {
-	return modelPickerRows(true)
+	return modelPickerRowsWithCustom(true, nil)
 }
 
-func modelPickerRows(includeReview bool) []string {
-	rows := make([]string, 0, 2+len(opencode.SDDPhases())+1+len(opencode.JDPhases())+1+len(opencode.ReviewPhases()))
+func modelPickerRowsWithCustom(includeReview bool, customAgents []string) []string {
+	rows := make([]string, 0, 2+len(opencode.SDDPhases())+1+len(opencode.JDPhases())+1+len(opencode.ReviewPhases())+len(customAgents)+2)
 	rows = append(rows, SDDOrchestratorPhase)
 	rows = append(rows, "Set all SDD phases")
 	rows = append(rows, opencode.SDDPhases()...)
@@ -237,6 +250,11 @@ func modelPickerRows(includeReview bool) []string {
 		rows = append(rows, "--- Review agents ---")
 		rows = append(rows, opencode.ReviewPhases()...)
 	}
+	if len(customAgents) > 0 {
+		rows = append(rows, "--- Custom / Native agents ---")
+		rows = append(rows, "Set all custom agents")
+		rows = append(rows, customAgents...)
+	}
 	return rows
 }
 
@@ -244,7 +262,13 @@ func modelPickerRows(includeReview bool) []string {
 // Profiles support both SDD phase assignments and optional Judgment Day agent
 // assignments. Native review agents remain unsuffixed global runtime agents.
 func ModelPickerRowsForProfile() []string {
-	return modelPickerRows(false)
+	return modelPickerRowsWithCustom(false, nil)
+}
+
+// ModelPickerRowsForState returns model picker rows for a given ModelPickerState,
+// incorporating discovered custom agents and profile settings.
+func ModelPickerRowsForState(state ModelPickerState) []string {
+	return modelPickerRowsWithCustom(!state.ForProfile, state.CustomAgents)
 }
 
 func IsModelPickerSeparatorRow(row string) bool {
@@ -582,14 +606,22 @@ func formatAssignmentLabel(row, provName, modelName, effort string) string {
 // the currently selected phase index in state. When SelectedPhaseIdx is 1 ("Set
 // all phases"), the assignment is applied to all 10 SDD sub-agent phases and
 // callers should mirror the assignment into state.AllPhasesModel if needed.
-// When SelectedPhaseIdx is 0, only the orchestrator phase is set. Otherwise,
-// the single sub-agent phase matching the index is set.
+// When SelectedPhaseIdx points to "Set all custom agents", the assignment is
+// applied to all discovered custom agents.
 func applyAssignment(state ModelPickerState, assignments map[string]model.ModelAssignment, assignment model.ModelAssignment) map[string]model.ModelAssignment {
-	phases := opencode.SDDPhases()
+	rows := ModelPickerRowsForState(state)
+	if state.SelectedPhaseIdx < 0 || state.SelectedPhaseIdx >= len(rows) {
+		return assignments
+	}
+	row := rows[state.SelectedPhaseIdx]
 	switch {
 	case state.SelectedPhaseIdx == 1:
-		for _, phase := range phases {
+		for _, phase := range opencode.SDDPhases() {
 			assignments[phase] = assignment
+		}
+	case row == "Set all custom agents":
+		for _, customAgent := range state.CustomAgents {
+			assignments[customAgent] = assignment
 		}
 	default:
 		if key := selectedModelPickerAgent(state); key != "" {
@@ -600,15 +632,12 @@ func applyAssignment(state ModelPickerState, assignments map[string]model.ModelA
 }
 
 func selectedModelPickerAgent(state ModelPickerState) string {
-	rows := ModelPickerRows()
-	if state.ForProfile {
-		rows = ModelPickerRowsForProfile()
-	}
+	rows := ModelPickerRowsForState(state)
 	if state.SelectedPhaseIdx < 0 || state.SelectedPhaseIdx >= len(rows) {
 		return ""
 	}
 	row := rows[state.SelectedPhaseIdx]
-	if state.SelectedPhaseIdx == 1 || IsModelPickerSeparatorRow(row) {
+	if state.SelectedPhaseIdx == 1 || row == "Set all custom agents" || IsModelPickerSeparatorRow(row) {
 		return ""
 	}
 	return row
@@ -663,9 +692,11 @@ func handleEffortNav(
 		assignment := state.PendingAssignment
 		assignment.Effort = effort
 		assignments = applyAssignment(state, assignments, assignment)
-		// Mirror the AllPhasesModel update when "Set all phases" row.
+		// Mirror the AllPhasesModel or AllCustomAgentsModel update.
 		if state.SelectedPhaseIdx == 1 {
 			state.AllPhasesModel = assignment
+		} else if rows := ModelPickerRowsForState(state); state.SelectedPhaseIdx < len(rows) && rows[state.SelectedPhaseIdx] == "Set all custom agents" {
+			state.AllCustomAgentsModel = assignment
 		}
 		state.Mode = ModePhaseList
 		state.EffortCursor = 0
@@ -780,12 +811,7 @@ func renderPhaseList(
 	b.WriteString(styles.SubtextStyle.Render("Current assignments:"))
 	b.WriteString("\n\n")
 
-	var rows []string
-	if state.ForProfile {
-		rows = ModelPickerRowsForProfile()
-	} else {
-		rows = ModelPickerRows()
-	}
+	rows := ModelPickerRowsForState(state)
 	start, end := 0, len(rows)
 	if len(rows) > maxVisiblePhaseRows {
 		start = max(0, min(cursor-maxVisiblePhaseRows+1, len(rows)-maxVisiblePhaseRows))
@@ -816,6 +842,13 @@ func renderPhaseList(
 			if state.AllPhasesModel.ProviderID != "" {
 				provName, modelName := resolveNames(state.AllPhasesModel, state)
 				label = formatAssignmentLabel(row, provName, modelName, state.AllPhasesModel.Effort)
+			} else {
+				label = fmt.Sprintf("%-20s (not set)", row)
+			}
+		case row == "Set all custom agents":
+			if state.AllCustomAgentsModel.ProviderID != "" {
+				provName, modelName := resolveNames(state.AllCustomAgentsModel, state)
+				label = formatAssignmentLabel(row, provName, modelName, state.AllCustomAgentsModel.Effort)
 			} else {
 				label = fmt.Sprintf("%-20s (not set)", row)
 			}
