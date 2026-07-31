@@ -185,40 +185,6 @@ func ensurePrivateRARDirectoryTree(base, dir string, create bool) error {
 	return nil
 }
 
-func validateRARRepositoryParent(path string) error {
-	before, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if rarPathUnsafe(path, before) || !before.IsDir() {
-		return errUnsafeRARAuthorityPath
-	}
-	if !rarRepositoryDirectorySafe(path, before) {
-		// Name the exact directory and the owner that was refused so the
-		// operator can repair ownership instead of guessing which ancestor
-		// tripped the check.
-		return formatWindowsRARAuthorityRefusal(path)
-	}
-	file, err := openRARPathNoFollow(path, true)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	opened, err := file.Stat()
-	if err != nil {
-		return err
-	}
-	current, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if !os.SameFile(before, opened) || !os.SameFile(opened, current) ||
-		!rarRepositoryOpenDirectorySafe(file, opened) {
-		return errRARAuthorityPathReplaced
-	}
-	return nil
-}
-
 func validatePrivateRARDirectory(path string) error {
 	return validatePrivateRARPath(path, true)
 }

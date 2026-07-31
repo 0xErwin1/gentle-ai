@@ -82,6 +82,16 @@ func rarRepositoryOpenDirectorySafe(_ *os.File, info fs.FileInfo) bool {
 // rarRepositoryOwnerDescription renders the refused directory's owner for
 // operator-facing refusal messages. It is diagnostic only and never
 // participates in the trust decision itself.
+// formatRARAuthorityRefusal is the Unix implementation of the RAR authority refusal
+// formatter. On Unix the filesystem is never ACL-capable in the Windows sense, so this
+// always returns a simple refusal naming the directory owner.
+func formatRARAuthorityRefusal(path string) error {
+	return fmt.Errorf(
+		"RAR authority parent %q is owned by %s, which is neither the current user nor a trusted administrative authority: %w",
+		path, rarRepositoryOwnerDescription(path), errUnsafeRARAuthorityPath,
+	)
+}
+
 func rarRepositoryOwnerDescription(path string) string {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -116,4 +126,37 @@ func openRARPathNoFollow(path string, directory bool) (*os.File, error) {
 		return nil, err
 	}
 	return os.NewFile(uintptr(fd), path), nil
+}
+
+// validateRARRepositoryParent is the Unix implementation. On Unix, there is no
+// filesystem classification — all volumes are treated uniformly.
+func validateRARRepositoryParent(path string) error {
+	before, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if rarPathUnsafe(path, before) || !before.IsDir() {
+		return errUnsafeRARAuthorityPath
+	}
+	if !rarRepositoryDirectorySafe(path, before) {
+		return formatRARAuthorityRefusal(path)
+	}
+	file, err := openRARPathNoFollow(path, true)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	current, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(before, opened) || !os.SameFile(opened, current) ||
+		!rarRepositoryOpenDirectorySafe(file, opened) {
+		return errRARAuthorityPathReplaced
+	}
+	return nil
 }
