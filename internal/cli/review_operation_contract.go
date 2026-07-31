@@ -1351,6 +1351,12 @@ func (result ReviewIntegrationOperationResult) Validate() error {
 				transitionRequest != nil && !reflect.DeepEqual(*transitionRequest, *finalized.ValidationRequest)) {
 				return errors.New("negotiated finalize validation request copies differ")
 			}
+			if request := finalized.NextTransition.CorrectionRequest; request != nil {
+				if finalized.State != reviewtransaction.StateCorrectionRequired || request.LineageID != finalized.LineageID ||
+					request.ExpectedRevision != finalized.StoreRevision {
+					return errors.New("negotiated finalize correction request binding is invalid") // refusal:by-design world-action: provider-generated finalize output requires a code fix when its bindings disagree
+				}
+			}
 		}
 		if finalized.ValidationRequest != nil {
 			if finalized.State != reviewtransaction.StateCorrectionRequired ||
