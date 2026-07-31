@@ -1,6 +1,7 @@
 package uninstall
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -450,6 +451,64 @@ func TestComponentOperationsClaudeNeverDeleteUserRegistry(t *testing.T) {
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("registry mode widened to %v, want 0600", info.Mode().Perm())
+	}
+}
+
+func TestComponentOperationsEngramClaudePreservesUserRegistry(t *testing.T) {
+	homeDir := t.TempDir()
+	svc, err := NewService(homeDir, t.TempDir(), "dev")
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	adapter, ok := svc.registry.Get(model.AgentClaudeCode)
+	if !ok {
+		t.Fatal("Claude adapter not found in registry")
+	}
+
+	registryPath := claude.UserConfigPath(homeDir)
+	registry := []byte(`{"oauthAccount":{"emailAddress":"user@example.com"},"mcpServers":{"codegraph":{"command":"codegraph"},"engram":{"command":"/usr/local/bin/engram","args":["mcp","--tools=agent"]}}}`)
+	if err := os.WriteFile(registryPath, registry, 0o600); err != nil {
+		t.Fatalf("WriteFile(user registry) error = %v", err)
+	}
+	legacyPath := adapter.MCPConfigPath(homeDir, "engram")
+	legacy := []byte(`{"command":"/usr/local/bin/engram","args":["mcp","--tools=agent"]}`)
+	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(legacy dir) error = %v", err)
+	}
+	if err := os.WriteFile(legacyPath, legacy, 0o644); err != nil {
+		t.Fatalf("WriteFile(legacy config) error = %v", err)
+	}
+	ops, targets, err := svc.componentOperations(adapter, model.ComponentEngram)
+	if err != nil {
+		t.Fatalf("componentOperations(engram) error = %v", err)
+	}
+	if !slices.Contains(targets, registryPath) {
+		t.Fatalf("uninstall targets missing %q: %v", registryPath, targets)
+	}
+	if slices.Contains(targets, legacyPath) {
+		t.Fatalf("registry bridge must not claim legacy source %q: %v", legacyPath, targets)
+	}
+	for _, op := range ops {
+		if _, _, err := op.apply(op.path); err != nil {
+			t.Fatalf("operation %v on %q error = %v", op.typeID, op.path, err)
+		}
+	}
+
+	remaining := readJSONFileForTest(t, registryPath)
+	servers, _ := remaining["mcpServers"].(map[string]any)
+	if _, exists := servers["engram"]; exists {
+		t.Fatalf("user registry still contains mcpServers.engram: %#v", remaining)
+	}
+	if got := remaining["oauthAccount"].(map[string]any)["emailAddress"]; got != "user@example.com" {
+		t.Fatalf("OAuth data changed during uninstall: %#v", remaining)
+	}
+	if got, err := os.ReadFile(legacyPath); err != nil || !bytes.Equal(got, legacy) {
+		t.Fatalf("legacy source changed during registry uninstall: got=%q error=%v", got, err)
+	}
+	if info, statErr := os.Stat(registryPath); statErr != nil {
+		t.Fatalf("Stat(user registry) error = %v", statErr)
+	} else if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("user registry mode = %o; want 0600", info.Mode().Perm())
 	}
 }
 

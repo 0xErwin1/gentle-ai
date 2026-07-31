@@ -1340,7 +1340,11 @@ func (s componentApplyStep) Run() error {
 				_, err = engram.InjectWithPromptDir(s.homeDir, s.workspaceDir, adapter)
 			} else {
 				targetDir := componentInjectionDirScoped(s.homeDir, s.workspaceDir, s.scope, adapter)
-				_, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
+				if s.scope == ScopeWorkspace {
+					_, err = engram.InjectWorkspaceWithOptions(targetDir, adapter, engramOpts)
+				} else {
+					_, err = engram.InjectWithOptions(targetDir, adapter, engramOpts)
+				}
 			}
 			if err != nil {
 				return fmt.Errorf("inject engram for %q: %w", adapter.Agent(), err)
@@ -1730,7 +1734,11 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 		case model.ComponentEngram:
 			switch adapter.MCPStrategy() {
 			case model.StrategySeparateMCPFiles:
-				paths = append(paths, adapter.MCPConfigPath(targetDir, "engram"))
+				if adapter.Agent() == model.AgentClaudeCode && scope == ScopeGlobal {
+					paths = append(paths, claude.UserConfigPath(homeDir))
+				} else {
+					paths = append(paths, adapter.MCPConfigPath(targetDir, "engram"))
+				}
 			case model.StrategyMergeIntoSettings:
 				// MCP settings are always merged into the global config file, not the
 				// workspace-scoped directory. For OpenClaw, SettingsPath(targetDir)

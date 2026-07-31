@@ -493,11 +493,13 @@ test_cc_engram_injection() {
     cleanup_test_env
 
     if $BINARY install --agent claude-code --component engram --persona neutral 2>&1; then
-        # MCP config
-        assert_file_exists "$HOME/.claude/mcp/engram.json" "engram.json MCP config"
-        assert_file_contains "$HOME/.claude/mcp/engram.json" '"command"' "engram.json has 'command' key"
-        assert_file_contains "$HOME/.claude/mcp/engram.json" 'engram' "engram.json command points to engram binary (absolute or relative)"
-        assert_valid_json "$HOME/.claude/mcp/engram.json" "engram.json is valid JSON"
+        # User-scope MCP registry
+        local registry="$HOME/.claude.json"
+        assert_file_exists "$registry" "Claude user MCP registry"
+        assert_file_contains "$registry" '"mcpServers"' "Registry has mcpServers"
+        assert_file_contains "$registry" '"engram"' "Registry has Engram server"
+        assert_valid_json "$registry" "Claude user MCP registry is valid JSON"
+        assert_file_not_exists "$HOME/.claude/mcp/engram.json" "legacy Engram MCP file is not written"
 
         # CLAUDE.md section
         assert_file_exists "$HOME/.claude/CLAUDE.md" "CLAUDE.md exists"
@@ -1383,10 +1385,10 @@ test_idempotent_engram_claude() {
     if [ -f "$claude_md" ]; then
         assert_no_duplicate_section "$claude_md" "engram-protocol" "No duplicate engram section after 2 runs"
 
-        # Also check MCP JSON is identical
-        local mcp_file="$HOME/.claude/mcp/engram.json"
+        # Also check the user registry remains valid.
+        local mcp_file="$HOME/.claude.json"
         if [ -f "$mcp_file" ]; then
-            assert_valid_json "$mcp_file" "engram.json still valid after 2 runs"
+            assert_valid_json "$mcp_file" "Claude user MCP registry still valid after 2 runs"
         fi
     else
         log_fail "CLAUDE.md not found"
