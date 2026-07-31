@@ -79,12 +79,6 @@ func rarRepositoryOpenDirectorySafe(_ *os.File, info fs.FileInfo) bool {
 	return rarRepositoryDirectorySafe("", info)
 }
 
-// rarRepositoryOwnerDescription renders the refused directory's owner for
-// operator-facing refusal messages. It is diagnostic only and never
-// participates in the trust decision itself.
-// formatRARAuthorityRefusal is the Unix implementation of the RAR authority refusal
-// formatter. On Unix the filesystem is never ACL-capable in the Windows sense, so this
-// always returns a simple refusal naming the directory owner.
 func formatRARAuthorityRefusal(path string) error {
 	return fmt.Errorf(
 		"RAR authority parent %q is owned by %s, which is neither the current user nor a trusted administrative authority: %w",
@@ -109,9 +103,6 @@ func openRARPathNoFollow(path string, directory bool) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	// RAR path safety is a distinct security boundary from the store lock
-	// walk; it keeps the unconditional root-anchored walk verbatim by always
-	// passing the filesystem root as the anchor.
 	parentFD, err := secureOpenLockParent(string(filepath.Separator), filepath.Dir(absolute))
 	if err != nil {
 		return nil, err
@@ -128,8 +119,6 @@ func openRARPathNoFollow(path string, directory bool) (*os.File, error) {
 	return os.NewFile(uintptr(fd), path), nil
 }
 
-// validateRARRepositoryParent is the Unix implementation. On Unix, there is no
-// filesystem classification — all volumes are treated uniformly.
 func validateRARRepositoryParent(path string) error {
 	before, err := os.Lstat(path)
 	if err != nil {
