@@ -1590,14 +1590,24 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	result.Verify = runPostSyncVerification(homeDir, rt.workspaceDir, selection)
 	result.Verify = withFailedSyncVerificationNote(result.Verify)
 	if !result.Verify.Ready {
-		return result, fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
+		verificationErr := fmt.Errorf("post-sync verification failed:\n%s", verify.RenderReport(result.Verify))
+		rollback := orchestrator.Rollback(result.Execution)
+		if rollback.Err != nil {
+			verificationErr = errors.Join(verificationErr, rollback.Err)
+		}
+		return result, verificationErr
 	}
 	writer, err := managedAssetDigest()
 	if err != nil {
 		return result, fmt.Errorf("derive managed asset writer identity: %w", err)
 	}
 	if err := persistSyncManagedAssetState(homeDir, selection, writer, rt.openCodeRuntime); err != nil {
-		return result, err
+		persistErr := fmt.Errorf("persist sync managed asset state: %w", err)
+		rollback := orchestrator.Rollback(result.Execution)
+		if rollback.Err != nil {
+			persistErr = errors.Join(persistErr, rollback.Err)
+		}
+		return result, persistErr
 	}
 
 	return result, nil
@@ -1639,7 +1649,7 @@ func persistSyncManagedAssetState(homeDir string, selection model.Selection, wri
 		if !shouldWrite {
 			return nil
 		}
-		if err := state.Write(homeDir, latest); err != nil {
+		if err := state.WriteReconciled(homeDir, latest); err != nil {
 			return fmt.Errorf("persist managed asset provenance: %w", err)
 		}
 		return nil
