@@ -1469,3 +1469,38 @@ func TestApplyAssignment_SetAllCustomAgents(t *testing.T) {
 		t.Fatalf("applyAssignment Set all custom agents = %v, want assigned %v for custom-1 and custom-2", res, assigned)
 	}
 }
+
+func TestClearModelPickerAssignment_SetAllCustomAgents(t *testing.T) {
+	state := ModelPickerState{
+		CustomAgents:         []string{"custom-1", "custom-2"},
+		AllCustomAgentsModel: model.ModelAssignment{ProviderID: "openai", ModelID: "gpt-4o-mini"},
+	}
+	rows := ModelPickerRowsForState(state)
+	setAllIdx := -1
+	for i, r := range rows {
+		if r == "Set all custom agents" {
+			setAllIdx = i
+			break
+		}
+	}
+	if setAllIdx < 0 {
+		t.Fatalf("Set all custom agents row not found in %v", rows)
+	}
+
+	state.SelectedPhaseIdx = setAllIdx
+	assignments := map[string]model.ModelAssignment{
+		"custom-1": {ProviderID: "openai", ModelID: "gpt-4o-mini"},
+		"custom-2": {ProviderID: "openai", ModelID: "gpt-4o-mini"},
+	}
+
+	res := ClearModelPickerAssignment(&state, assignments)
+	if _, ok := res["custom-1"]; ok {
+		t.Error("custom-1 should be cleared")
+	}
+	if _, ok := res["custom-2"]; ok {
+		t.Error("custom-2 should be cleared")
+	}
+	if state.AllCustomAgentsModel.ProviderID != "" {
+		t.Errorf("AllCustomAgentsModel = %v, want empty after clear", state.AllCustomAgentsModel)
+	}
+}
