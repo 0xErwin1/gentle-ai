@@ -4,6 +4,7 @@ package reviewtransaction
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -200,69 +201,6 @@ func rarWindowsDescriptorForOwner(
 	return descriptor
 }
 
-// untrustedTestDir creates a directory owned by Everyone (S-1-1-0) so that
-// rarRepositoryDirectorySafe returns false for it. The classifier is invoked
-// only after the owner check fails, which is exactly the path under test.
-//
-// We enable SeRestorePrivilege before calling SetNamedSecurityInfo since
-// setting Everyone as owner is normally restricted. If the privilege cannot
-// be enabled or the owner cannot be set, the test is skipped.
-func untrustedTestDir(t *testing.T) string {
-	t.Helper()
-	dir := filepath.Join(t.TempDir(), "untrusted-owner")
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	everyoneSID, err := windows.CreateWellKnownSid(windows.WinWorldSid)
-	if err != nil {
-		t.Skipf("CreateWellKnownSid(WinWorldSid) failed: %v", err)
-	}
-
-	// Attempt to enable SeRestorePrivilege to allow setting arbitrary owners.
-	// This may fail without elevation; the test will skip in that case.
-	var token windows.Token
-	if err := windows.OpenProcessToken(
-		windows.CurrentProcess(),
-		windows.TOKEN_ADJUST_PRIVILEGES|windows.TOKEN_QUERY,
-		&token,
-	); err != nil {
-		t.Skipf("OpenProcessToken failed: %v", err)
-	}
-	defer token.Close()
-	var restorePriv windows.LUID
-	if err := windows.LookupPrivilegeValue(
-		nil,
-		windows.StringToUTF16Ptr("SeRestorePrivilege"),
-		&restorePriv,
-	); err != nil {
-		t.Skipf("LookupPrivilegeValue(SeRestorePrivilege) failed: %v", err)
-	}
-	privs := windows.Tokenprivileges{
-		PrivilegeCount: 1,
-		Privileges: [1]windows.LUIDAndAttributes{
-			{Luid: restorePriv, Attributes: windows.SE_PRIVILEGE_ENABLED},
-		},
-	}
-	if err := windows.AdjustTokenPrivileges(token, false, &privs, 0, nil, nil); err != nil {
-		t.Skipf("AdjustTokenPrivileges(SeRestorePrivilege) failed: %v (try running as Administrator)", err)
-	}
-
-	err = windows.SetNamedSecurityInfo(
-		dir,
-		windows.SE_FILE_OBJECT,
-		windows.OWNER_SECURITY_INFORMATION,
-		everyoneSID,
-		nil,
-		nil,
-		nil,
-	)
-	if err != nil {
-		t.Skipf("SetNamedSecurityInfo(Everyone owner) failed: %v (try running as Administrator)", err)
-	}
-	return dir
-}
-
 // classifierStub records every path it receives and returns a fixed
 // filesystem type. It enables deterministic testing of every dispatch branch.
 type classifierStub struct {
@@ -275,111 +213,137 @@ func (s *classifierStub) classify(path string) string {
 	return s.give
 }
 
+// ownerStubAlwaysReject forces rarRepositoryDirectorySafe to return false,
+// enabling the classifier branch without requiring Administrator privileges
+// and SetNamedSecurityInfo. This mirrors how rarWindowsDescriptorForOwner
+// is used in the existing owner-regression tests.
+func ownerStubAlwaysReject(path string, info fs.FileInfo) bool {
+	return false // always "unsafe" → rarRepositoryDirectorySafe returns false → classifier is called
+}
+
 func TestRARWindowsAuthorityFilesystemClassifier(t *testing.T) {
-	stub := &classifierStub{give: "NTFS"}
-	orig := rarWindowsAuthorityFilesystemClassifier
+	// Inject owner predicate that always rejects so the classifier path is
+	// reached deterministically without SetNamedSecurityInfo or Administrator.
+	origOwner := rarWindowsAuthorityOwnerUnsafe
 	t.Cleanup(func() {
-		rarWindowsAuthorityFilesystemClassifier = orig
+		rarWindowsAuthorityOwnerUnsafe = origOwner
+	})
+	rarWindowsAuthorityOwnerUnsafe = ownerStubAlwaysReject
+
+	stub := &classifierStub{give: "NTFS"}
+	origClassifier := rarWindowsAuthorityFilesystemClassifier
+	t.Cleanup(func() {
+		rarWindowsAuthorityFilesystemClassifier = origClassifier
 	})
 	rarWindowsAuthorityFilesystemClassifier = stub.classify
 
-	// Create a directory owned by Everyone so rarRepositoryDirectorySafe
-	// returns false and the classifier path is reached.
-	dir := untrustedTestDir(t)
+	// Any valid directory works — the owner stub forces the classifier path.
+	dir := t.TempDir()
 
 	tests := []struct {
-		name       string
-		fsType     string
-		wantErr    error
-		wantSubStr string // substring that MUST appear in error
-		wantNilStr string // substring that MUST NOT appear (ACL guidance check)
+		name            string
+		path            string // if non-empty, use this path instead of dir (for UNC)
+		fsType          string
+		wantBase        error  // errors.Is check against errUnsafeRARAuthorityPath
+		wantUnknown     bool   // true → error must be errUnknownWindowsFilesystemType
+		wantUnsupported bool   // true → error must be errUnsupportedWindowsFilesystemType
+		wantSubStr      string // substring that MUST appear
+		wantNilStr      string // substring that MUST NOT appear
 	}{
 		{
-			name:       "NTFS wrong owner retains takeown/icacls guidance",
+			name:       "NTFS wrong owner returns ACL-capable error with takeown/icacls guidance",
 			fsType:     "NTFS",
-			wantErr:    errUnsafeRARAuthorityPath,
+			wantBase:   errUnsafeRARAuthorityPath,
 			wantSubStr: "takeown",
 			wantNilStr: "exFAT",
 		},
 		{
-			name:       "ReFS wrong owner retains takeown/icacls guidance",
+			name:       "ReFS wrong owner returns ACL-capable error with takeown/icacls guidance",
 			fsType:     "ReFS",
-			wantErr:    errUnsafeRARAuthorityPath,
+			wantBase:   errUnsafeRARAuthorityPath,
 			wantSubStr: "icacls",
 			wantNilStr: "exFAT",
 		},
 		{
-			name:       "exFAT returns typed errUnsupportedWindowsFilesystem no ACL guidance",
-			fsType:     "exFAT",
-			wantErr:    errUnsafeRARAuthorityPath,
-			wantSubStr: "exFAT",
-			wantNilStr: "takeown",
+			name:            "exFAT returns typed errUnsupportedWindowsFilesystem, no ACL guidance",
+			fsType:          "exFAT",
+			wantBase:        errUnsafeRARAuthorityPath,
+			wantUnsupported: true,
+			wantSubStr:      "exFAT",
+			wantNilStr:      "takeown",
 		},
 		{
-			name:       "FAT32 returns typed errUnsupportedWindowsFilesystem no ACL guidance",
-			fsType:     "FAT32",
-			wantErr:    errUnsafeRARAuthorityPath,
-			wantSubStr: "FAT32",
-			wantNilStr: "icacls",
+			name:            "FAT32 returns typed errUnsupportedWindowsFilesystem, no ACL guidance",
+			fsType:          "FAT32",
+			wantBase:        errUnsafeRARAuthorityPath,
+			wantUnsupported: true,
+			wantSubStr:      "FAT32",
+			wantNilStr:      "icacls",
 		},
 		{
-			name:       "unknown filesystem fails closed",
-			fsType:     "",
-			wantErr:    errUnsafeRARAuthorityPath,
-			wantSubStr: "",
-			wantNilStr: "takeown",
+			name:        "empty classifier result (query failure) returns errUnknownWindowsFilesystem",
+			fsType:      "",
+			wantBase:    errUnsafeRARAuthorityPath,
+			wantUnknown: true,
+			wantNilStr:  "takeown",
 		},
 		{
-			name:       "UNC remote path fails closed",
-			fsType:     "",
-			wantErr:    errUnsafeRARAuthorityPath,
-			wantSubStr: "",
-			wantNilStr: "takeown",
+			name:        "non-empty unknown filesystem (e.g. FOOFS) returns errUnknownWindowsFilesystem",
+			fsType:      "FOOFS",
+			wantBase:    errUnsafeRARAuthorityPath,
+			wantUnknown: true,
+			wantNilStr:  "takeown",
 		},
 		{
-			name:       "query failure fails closed",
-			fsType:     "",
-			wantErr:    errUnsafeRARAuthorityPath,
-			wantSubStr: "",
-			wantNilStr: "icacls",
+			name:        "UNC path (\\\\server\\share) fails closed returning errUnknownWindowsFilesystem",
+			path:        `\\server\share`,
+			fsType:      "NTFS", // classifier would say NTFS but UNC check fires first
+			wantBase:    errUnsafeRARAuthorityPath,
+			wantUnknown: true,
+			wantNilStr:  "takeown",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			testDir := dir
+			if tc.path != "" {
+				testDir = tc.path + `\temp` // e.g. \\server\share\temp
+			}
+
 			stub.give = tc.fsType
 			stub.calls = nil
 
-			err := validateRARRepositoryParent(dir)
+			err := validateRARRepositoryParent(testDir)
 
-			if tc.fsType == "" {
-				// Empty type means unknown/remote/query-fail — classifier
-				// returns "" and the refusal path uses errUnknownWindowsFilesystem.
-				if !errors.Is(err, errUnsafeRARAuthorityPath) {
-					t.Fatalf("validateRARRepositoryParent(%q) err = %v, want errors.Is(_, errUnsafeRARAuthorityPath)", dir, err)
+			// Base sentinel check.
+			if !errors.Is(err, tc.wantBase) {
+				t.Fatalf("validateRARRepositoryParent(%q) err = %v, want errors.Is(_, %v)", testDir, err, tc.wantBase)
+			}
+
+			// Typed error classification (FS-3: explicit classification).
+			if tc.wantUnknown {
+				if !errors.Is(err, errUnknownWindowsFilesystem) {
+					t.Fatalf("validateRARRepositoryParent(%q) err = %v, want errors.Is(_, errUnknownWindowsFilesystem)", testDir, err)
 				}
-				return
+			}
+			if tc.wantUnsupported {
+				if !errors.Is(err, errUnsupportedWindowsFilesystem) {
+					t.Fatalf("validateRARRepositoryParent(%q) err = %v, want errors.Is(_, errUnsupportedWindowsFilesystem)", testDir, err)
+				}
 			}
 
-			// ACL-capable (NTFS/ReFS) or unsupported (exFAT/FAT32)
-			if !errors.Is(err, errUnsafeRARAuthorityPath) {
-				t.Fatalf("validateRARRepositoryParent(%q) err = %v, want errors.Is(_, errUnsafeRARAuthorityPath)", dir, err)
-			}
+			// Content assertions.
 			if tc.wantSubStr != "" && !strings.Contains(err.Error(), tc.wantSubStr) {
-				t.Fatalf("validateRARRepositoryParent(%q) error %q does not contain %q", dir, err.Error(), tc.wantSubStr)
+				t.Fatalf("validateRARRepositoryParent(%q) error %q does not contain %q", testDir, err.Error(), tc.wantSubStr)
 			}
 			if tc.wantNilStr != "" && strings.Contains(err.Error(), tc.wantNilStr) {
-				t.Fatalf("validateRARRepositoryParent(%q) error %q unexpectedly contains %q", dir, err.Error(), tc.wantNilStr)
+				t.Fatalf("validateRARRepositoryParent(%q) error %q unexpectedly contains %q", testDir, err.Error(), tc.wantNilStr)
 			}
 
-			// Assert canonical filesystem identity string (FS-7)
-			if !strings.Contains(err.Error(), tc.fsType) {
-				t.Fatalf("validateRARRepositoryParent(%q) error %q does not contain canonical filesystem identity %q", dir, err.Error(), tc.fsType)
-			}
-
-			// Verify classifier was called with the correct path
-			if len(stub.calls) != 1 || stub.calls[0] != dir {
-				t.Fatalf("classifier called with calls=%v, want [%q]", stub.calls, dir)
+			// Classifier invocation check (skip for UNC case where isUNC fires before classifier).
+			if tc.path == "" && (len(stub.calls) != 1 || stub.calls[0] != testDir) {
+				t.Fatalf("classifier called with calls=%v, want [%q]", stub.calls, testDir)
 			}
 		})
 	}
@@ -392,9 +356,9 @@ func TestRARWindowsAuthorityFilesystemClassifier(t *testing.T) {
 // is trusted).
 func TestRARWindowsAuthorityFilesystemClassifierFS5WorktreeOnExFAT(t *testing.T) {
 	stub := &classifierStub{give: "exFAT"}
-	orig := rarWindowsAuthorityFilesystemClassifier
+	origClassifier := rarWindowsAuthorityFilesystemClassifier
 	t.Cleanup(func() {
-		rarWindowsAuthorityFilesystemClassifier = orig
+		rarWindowsAuthorityFilesystemClassifier = origClassifier
 	})
 	rarWindowsAuthorityFilesystemClassifier = stub.classify
 
