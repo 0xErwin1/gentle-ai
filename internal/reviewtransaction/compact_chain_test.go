@@ -111,6 +111,24 @@ func TestCompactPrePRChainNormalizesDegenerateRecoveryInsideChain(t *testing.T) 
 	}
 }
 
+// A no-op approved review reviews a candidate identical to its own base, so its
+// receipt edge is a self-loop that delivers nothing. It is not a recovery
+// successor, it is never on the selected path, and it must not deny composition
+// for every other lineage in the repository (issue-1563 follow-up).
+func TestCompactPrePRChainIgnoresUnrelatedNoOpSelfLoopAuthority(t *testing.T) {
+	fixture := newCompactPrePRChainFixture(t, 2)
+	addCompactChainNoOpSelfLoop(t, fixture, "compact-chain-noop")
+
+	got, attempted := EvaluateCompactPrePRChain(context.Background(), fixture.repo, fixture.input())
+
+	if !attempted || got.Result != GateAllow {
+		t.Fatalf("unrelated no-op self-loop authority = %#v, attempted %t", got, attempted)
+	}
+	if got.Context.BaseTree != fixture.receipts[0].BaseTree || got.Context.CandidateTree != fixture.receipts[1].FinalCandidateTree {
+		t.Fatalf("composed proof context = %#v", got.Context)
+	}
+}
+
 func TestCompactPrePRChainLeavesExactSingleReceiptToDirectEvaluation(t *testing.T) {
 	fixture := newCompactPrePRChainFixture(t, 1)
 	input := fixture.input()
@@ -967,6 +985,20 @@ func addCompactChainCycle(t *testing.T, fixture *compactPrePRChainFixture) {
 	})
 	persistApprovedCompactState(t, fixture.repo, state)
 	gitSnapshot(t, fixture.repo, "reset", "--hard", "HEAD")
+}
+
+// addCompactChainNoOpSelfLoop approves a review whose candidate equals its own
+// base: no changed paths, no delivered commit, receipt base tree == final
+// candidate tree.
+func addCompactChainNoOpSelfLoop(t *testing.T, fixture *compactPrePRChainFixture, lineage string) {
+	t.Helper()
+	state := newCompactStartStateForTarget(t, fixture.repo, lineage, Target{
+		Kind: TargetCurrentChanges, IntendedUntracked: []string{},
+	})
+	if state.InitialSnapshot.BaseTree != state.InitialSnapshot.CandidateTree {
+		t.Fatalf("no-op fixture is not a self-loop: %#v", state.InitialSnapshot)
+	}
+	persistApprovedCompactState(t, fixture.repo, state)
 }
 
 func advanceCompactChainRemote(t *testing.T, fixture *compactPrePRChainFixture, path string) string {
