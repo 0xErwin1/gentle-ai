@@ -1516,11 +1516,21 @@ func setupMockHome(t *testing.T, home string) {
 	os.Setenv("USERPROFILE", home)
 }
 
+// TestTUIExecuteReturnsStatePersistenceFailure verifies that the TUI applies
+// the same asset compensation as the CLI when state persistence fails.
 func TestTUIExecuteReturnsStatePersistenceFailure(t *testing.T) {
 	home := t.TempDir()
 	setupMockHome(t, home)
 	if err := state.Write(home, state.InstallState{}); err != nil {
 		t.Fatal(err)
+	}
+	originalState, err := os.ReadFile(state.Path(home))
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if _, err := os.ReadFile(configPath); !os.IsNotExist(err) {
+		t.Fatalf("pre-install config read error = %v, want absent", err)
 	}
 	statePath := state.Path(home)
 	target := filepath.Join(home, ".gentle-ai", "persisted-state.json")
@@ -1534,6 +1544,16 @@ func TestTUIExecuteReturnsStatePersistenceFailure(t *testing.T) {
 	result := tuiExecute(model.Selection{CommunityTools: []model.CommunityToolID{}}, planner.ResolvedPlan{}, system.DetectionResult{}, nil)
 	if result.Err == nil || !strings.Contains(result.Err.Error(), "persist install state") {
 		t.Fatalf("tuiExecute() error = %v, want state persistence failure", result.Err)
+	}
+	if _, readErr := os.ReadFile(configPath); !os.IsNotExist(readErr) {
+		t.Fatalf("config after failed TUI install read error = %v, want absent", readErr)
+	}
+	finalState, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if string(finalState) != string(originalState) {
+		t.Fatalf("state after failed TUI install changed:\n got %s\nwant %s", finalState, originalState)
 	}
 }
 
