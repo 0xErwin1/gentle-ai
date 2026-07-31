@@ -458,10 +458,16 @@ func validateCompactFinalVerificationRetryEdge(predecessor CompactRecord, succes
 	}
 	want.LineageID, want.Generation, want.State, want.EvidenceHash, want.Recovery = successor.LineageID, successor.Generation, StateValidating, "", successor.Recovery
 	want.EvidenceRecordDigest, want.EvidenceOutcome, want.EvidenceTargetIdentity, want.EvidenceAuthorityRevision = "", "", "", ""
-	validLifecycle := successor.State == StateValidating && successor.EvidenceHash == "" ||
-		(successor.State == StateApproved || successor.State == StateEscalated) && validSHA256(successor.EvidenceHash)
+	validLifecycle := successor.Validate() == nil && (successor.State == StateValidating && successor.EvidenceHash == "" ||
+		(successor.State == StateApproved || successor.State == StateEscalated) && validSHA256(successor.EvidenceHash))
+	if successor.EvidenceRecordDigest != "" {
+		validatingRevision, revisionErr := CompactRevisionForState(want)
+		validLifecycle = validLifecycle && revisionErr == nil && successor.EvidenceAuthorityRevision == validatingRevision
+	}
 	normalized := successor
 	normalized.State, normalized.EvidenceHash = StateValidating, ""
+	normalized.EvidenceRecordDigest, normalized.EvidenceOutcome = "", ""
+	normalized.EvidenceTargetIdentity, normalized.EvidenceAuthorityRevision = "", ""
 	if !validLifecycle || !compactStateEqual(want, normalized) {
 		return errors.New("final-verification retry successor changed frozen authority or budget state")
 	}
