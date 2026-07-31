@@ -197,10 +197,7 @@ func validateRARRepositoryParent(path string) error {
 		// Name the exact directory and the owner that was refused so the
 		// operator can repair ownership instead of guessing which ancestor
 		// tripped the check.
-		return fmt.Errorf(
-			"RAR authority parent %q is owned by %s, which is neither the current user nor a trusted administrative authority: %w",
-			path, rarRepositoryOwnerDescription(path), errUnsafeRARAuthorityPath,
-		)
+		return formatWindowsRARAuthorityRefusal(path)
 	}
 	file, err := openRARPathNoFollow(path, true)
 	if err != nil {
