@@ -1661,9 +1661,9 @@ func (store CompactStore) replaceContextGuarded(ctx context.Context, expectedRev
 	return record.Revision, nil
 }
 
-// CaptureReviewerResult revalidates the reviewing binding while holding shared
+// captureReviewerResult revalidates the reviewing binding while holding shared
 // maintenance access and the compact version lock before publishing an artifact.
-func (store CompactStore) CaptureReviewerResult(expectedRevision, target, lens string, order int, publish func(CompactState) error) error {
+func (store CompactStore) captureReviewerResult(expectedRevision, target, lens string, order int, publish func(CompactState) error) error {
 	deadline := time.NewTimer(maintenanceLockTimeout)
 	defer deadline.Stop()
 	var lock *storeLock

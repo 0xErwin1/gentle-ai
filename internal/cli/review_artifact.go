@@ -386,28 +386,36 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	if err != nil {
 		return reviewPreflightError(err)
 	}
-	envelopeSchema := reviewAdmittedResultSchema
-	if subject.Schema == reviewtransaction.ArtifactSubjectSchemaV1 {
-		envelopeSchema = reviewtransaction.AdmittedReviewerResultSchemaV1
-	}
-	envelope, err := json.Marshal(admittedReviewerResult{
-		Schema: envelopeSchema, Subject: subject, Admission: admission, Result: result,
+	path := filepath.Join(store.Dir, reviewtransaction.CompactReviewerResultsDir, fmt.Sprintf("%02d-%s.json", *order, *lens))
+	_, err = store.CaptureAdmittedReviewerResult(ctx, reviewtransaction.CompactAdmittedReviewerResultRequest{
+		ExpectedRevision: record.Revision, TargetIdentity: *target, FrozenContext: frozen,
+		ArtifactSubject: subject, Inspection: result.Inspection, Result: nativeResult,
+		CandidateCausalFindingIDs: candidateCausalIDs, RawPayload: rawPayload,
+		PreparePublication: func(current reviewtransaction.CompactState) error {
+			return archiveQuarantinedReviewerArtifact(store.Dir, current, *order, path)
+		},
 	})
 	if err != nil {
-		return err
-	}
-	envelope = append(envelope, '\n')
-	var artifact reviewResultArtifact
-	err = store.CaptureReviewerResult(record.Revision, *target, *lens, *order, func(current reviewtransaction.CompactState) error {
-		var captureErr error
-		artifact, captureErr = captureReviewerArtifact(store.Dir, current, *order, envelope, capturedArtifactBinding{Subject: subject, Admission: admission})
-		return captureErr
-	})
-	if err != nil {
+		if strings.Contains(err.Error(), "different canonical bytes") {
+			err = fmt.Errorf("%w; a different reviewer result already occupies this slot — decide with `review dispose-result` (discard it) or `review preserve-result` (keep it and quarantine this new submission)", reviewerResultSlotConflictError)
+		}
 		if contextHandle != "" {
 			return reviewOpaqueContextFailure("repository_context_capture_failed", "retry capture-result with the same exact binding or refresh status")
 		}
 		return reviewPreflightError(err)
+	}
+	published, _, err := readPrivateReviewerFile(path, reviewResultArtifactLimit)
+	if err != nil {
+		if contextHandle != "" {
+			return reviewOpaqueContextFailure("repository_context_capture_failed", "retry capture-result with the same exact binding or refresh status")
+		}
+		return reviewPreflightError(fmt.Errorf("read published reviewer result: %w", err))
+	}
+	artifact := reviewResultArtifact{
+		Schema: reviewResultArtifactSchema, Capability: reviewResultArtifactCapability, Path: path,
+		SHA256: facadePayloadHash(published), LineageID: state.LineageID,
+		TargetIdentity: state.InitialSnapshot.Identity, Lens: *lens, SelectedOrder: *order,
+		SubjectHash: subject.SubjectHash, AdmissionDecision: admission.Decision,
 	}
 	if contextHandle != "" {
 		artifact.Reference = reviewResultReference(artifact)
