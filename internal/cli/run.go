@@ -66,9 +66,10 @@ var (
 	pathEnvEntries               = func(profile system.PlatformProfile) []string {
 		return splitPathForOS(os.Getenv("PATH"), profile.OS)
 	}
-	addUserPath         = system.AddToUserPath
-	ensureUserPathFirst = system.PrioritizeUserPath
-	userPathEntries     = system.UserPathEntries
+	addUserPath          = system.AddToUserPath
+	ensureUserPathFirst  = system.PrioritizeUserPath
+	userPathEntries      = system.UserPathEntries
+	cleanupGGAInstallDir = gga.CleanupInstallDir
 
 	// ggaAvailableCheck is an optional override for ggaAvailable behavior.
 	// When set, it is called instead of the default filesystem check.
@@ -1432,6 +1433,11 @@ func (s componentApplyStep) Run() error {
 	case model.ComponentGGA:
 		if !ggaAvailable(s.profile) {
 			// GGA not found on any known PATH — install it.
+			if s.profile.OS == "windows" {
+				if err := cleanupGGAInstallDir(); err != nil {
+					return err
+				}
+			}
 			commands, err := gga.InstallCommand(s.profile)
 			if err != nil {
 				return fmt.Errorf("resolve install command for component %q: %w", s.component, err)
