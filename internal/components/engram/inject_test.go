@@ -89,6 +89,26 @@ func TestInjectClaudeWritesUserRegistryPreservingUnrelatedData(t *testing.T) {
 	}
 }
 
+func TestInjectClaudeRefusesCorruptUserRegistryWithoutMutation(t *testing.T) {
+	home := t.TempDir()
+	registryPath := claude.UserConfigPath(home)
+	corrupt := []byte("{ not json")
+	if err := os.WriteFile(registryPath, corrupt, 0o600); err != nil {
+		t.Fatalf("WriteFile(corrupt registry) error = %v", err)
+	}
+
+	if _, err := Inject(home, claudeAdapter()); err == nil {
+		t.Fatal("Inject() error = nil; want corrupt registry refusal")
+	}
+	after, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(corrupt registry) error = %v", err)
+	}
+	if !bytes.Equal(after, corrupt) {
+		t.Fatalf("corrupt registry mutated: got %q, want %q", after, corrupt)
+	}
+}
+
 func TestInjectClaudeWritesProtocolSection(t *testing.T) {
 	home := t.TempDir()
 
@@ -129,6 +149,11 @@ func TestInjectClaudeIsIdempotent(t *testing.T) {
 	if !first.Changed {
 		t.Fatalf("Inject() first changed = false")
 	}
+	registryPath := claude.UserConfigPath(home)
+	afterFirst, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(user registry after first injection) error = %v", err)
+	}
 
 	second, err := Inject(home, claudeAdapter())
 	if err != nil {
@@ -136,6 +161,13 @@ func TestInjectClaudeIsIdempotent(t *testing.T) {
 	}
 	if second.Changed {
 		t.Fatalf("Inject() second changed = true")
+	}
+	afterSecond, err := os.ReadFile(registryPath)
+	if err != nil {
+		t.Fatalf("ReadFile(user registry after second injection) error = %v", err)
+	}
+	if !bytes.Equal(afterFirst, afterSecond) {
+		t.Fatal("second injection must leave the user registry byte-identical")
 	}
 }
 
@@ -775,8 +807,7 @@ func TestInjectCodexInjectsTOMLKeys(t *testing.T) {
 
 // TestInjectClaudePreservesAbsoluteCommandFromEngramSetup verifies that when
 // `engram setup claude-code` has already written an absolute-path command to
-// the managed legacy file, Inject() bridges it into Claude's user registry
-// without deleting the source.
+// the managed legacy file, Inject() migrates it into Claude's user registry.
 func TestInjectClaudePreservesAbsoluteCommandFromEngramSetup(t *testing.T) {
 	home := t.TempDir()
 
@@ -813,9 +844,56 @@ func TestInjectClaudePreservesAbsoluteCommandFromEngramSetup(t *testing.T) {
 		t.Fatalf("Inject() overwrote absolute command path; want %q preserved, got:\n%s", absPath, text)
 	}
 	assertArgsHaveToolsAgent(t, registryPath)
-	legacy, err := os.ReadFile(mcpPath)
-	if err != nil || !bytes.Equal(legacy, setupContent) {
-		t.Fatalf("managed legacy source changed: got=%q error=%v", legacy, err)
+	if _, statErr := os.Stat(mcpPath); !os.IsNotExist(statErr) {
+		t.Fatalf("managed legacy file must be removed after migration; stat error = %v", statErr)
+	}
+	if _, statErr := os.Lstat(filepath.Dir(mcpPath)); !os.IsNotExist(statErr) {
+		t.Fatalf("empty managed legacy directory must be removed; stat error = %v", statErr)
+	}
+}
+
+func TestInjectClaudePreservesManagedLegacyParentLayouts(t *testing.T) {
+	for _, symlinkParent := range []bool{true, false} {
+		name := "non-empty real parent"
+		if symlinkParent {
+			name = "symlink parent"
+		}
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			parent := filepath.Join(home, ".claude", "mcp")
+			actualParent := parent
+			if symlinkParent {
+				actualParent = t.TempDir()
+				if err := os.MkdirAll(filepath.Dir(parent), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(actualParent, parent); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.MkdirAll(parent, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			legacy := filepath.Join(actualParent, "engram.json")
+			custom := filepath.Join(actualParent, "custom.json")
+			customBytes := []byte(`{"command":"custom"}`)
+			if err := os.WriteFile(legacy, []byte(`{"command":"/usr/local/bin/engram","args":["mcp","--tools=agent"]}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(custom, customBytes, 0o640); err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := Inject(home, claudeAdapter()); err != nil {
+				t.Fatalf("Inject() error = %v", err)
+			}
+			info, err := os.Lstat(parent)
+			if err != nil || symlinkParent != (info.Mode()&os.ModeSymlink != 0) {
+				t.Fatalf("legacy parent changed unsafely: info=%v error=%v", info, err)
+			}
+			if got, err := os.ReadFile(custom); err != nil || !bytes.Equal(got, customBytes) {
+				t.Fatalf("custom sibling changed: got=%q error=%v", got, err)
+			}
+		})
 	}
 }
 

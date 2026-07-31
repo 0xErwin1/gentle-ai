@@ -1,7 +1,6 @@
 package uninstall
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -454,7 +453,7 @@ func TestComponentOperationsClaudeNeverDeleteUserRegistry(t *testing.T) {
 	}
 }
 
-func TestComponentOperationsEngramClaudePreservesUserRegistry(t *testing.T) {
+func TestComponentOperationsEngramClaudePreservesRegistryAndRemovesManagedLegacy(t *testing.T) {
 	homeDir := t.TempDir()
 	svc, err := NewService(homeDir, t.TempDir(), "dev")
 	if err != nil {
@@ -471,22 +470,21 @@ func TestComponentOperationsEngramClaudePreservesUserRegistry(t *testing.T) {
 		t.Fatalf("WriteFile(user registry) error = %v", err)
 	}
 	legacyPath := adapter.MCPConfigPath(homeDir, "engram")
-	legacy := []byte(`{"command":"/usr/local/bin/engram","args":["mcp","--tools=agent"]}`)
 	if err := os.MkdirAll(filepath.Dir(legacyPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll(legacy dir) error = %v", err)
 	}
-	if err := os.WriteFile(legacyPath, legacy, 0o644); err != nil {
+	if err := os.WriteFile(legacyPath, []byte(`{"command":"/usr/local/bin/engram","args":["mcp","--tools=agent"]}`), 0o644); err != nil {
 		t.Fatalf("WriteFile(legacy config) error = %v", err)
 	}
+
 	ops, targets, err := svc.componentOperations(adapter, model.ComponentEngram)
 	if err != nil {
 		t.Fatalf("componentOperations(engram) error = %v", err)
 	}
-	if !slices.Contains(targets, registryPath) {
-		t.Fatalf("uninstall targets missing %q: %v", registryPath, targets)
-	}
-	if slices.Contains(targets, legacyPath) {
-		t.Fatalf("registry bridge must not claim legacy source %q: %v", legacyPath, targets)
+	for _, want := range []string{registryPath, legacyPath} {
+		if !slices.Contains(targets, want) {
+			t.Fatalf("uninstall targets missing %q: %v", want, targets)
+		}
 	}
 	for _, op := range ops {
 		if _, _, err := op.apply(op.path); err != nil {
@@ -502,8 +500,8 @@ func TestComponentOperationsEngramClaudePreservesUserRegistry(t *testing.T) {
 	if got := remaining["oauthAccount"].(map[string]any)["emailAddress"]; got != "user@example.com" {
 		t.Fatalf("OAuth data changed during uninstall: %#v", remaining)
 	}
-	if got, err := os.ReadFile(legacyPath); err != nil || !bytes.Equal(got, legacy) {
-		t.Fatalf("legacy source changed during registry uninstall: got=%q error=%v", got, err)
+	if _, statErr := os.Stat(legacyPath); !os.IsNotExist(statErr) {
+		t.Fatalf("managed legacy config must be removed; stat error = %v", statErr)
 	}
 	if info, statErr := os.Stat(registryPath); statErr != nil {
 		t.Fatalf("Stat(user registry) error = %v", statErr)

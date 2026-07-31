@@ -568,9 +568,11 @@ func injectWithOptions(configHomeDir, promptDir string, adapter agents.Adapter, 
 func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionResult, error) {
 	legacyPath := adapter.MCPConfigPath(homeDir, "engram")
 	command := stableEngramCommandForMergedConfig(claude.UserConfigPath(homeDir), model.AgentClaudeCode)
+	legacyManaged := false
 	if raw, err := os.ReadFile(legacyPath); err == nil {
 		if legacyCommand, ok := managedLegacyClaudeEngramCommand(raw); ok {
 			command = stableEngramCommandForExisting(legacyCommand, model.AgentClaudeCode)
+			legacyManaged = true
 		}
 	} else if !os.IsNotExist(err) {
 		return InjectionResult{}, fmt.Errorf("read legacy Claude Engram config %q: %w", legacyPath, err)
@@ -580,7 +582,20 @@ func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionRe
 	if err != nil {
 		return InjectionResult{}, err
 	}
-	return InjectionResult{Changed: writeResult.Changed, Files: []string{registryPath}}, nil
+	result := InjectionResult{Changed: writeResult.Changed, Files: []string{registryPath}}
+	if !legacyManaged {
+		return result, nil
+	}
+	removed, err := RemoveManagedLegacyClaudeConfig(legacyPath)
+	if err != nil {
+		return InjectionResult{}, err
+	}
+	if !removed {
+		return result, nil
+	}
+	result.Changed = true
+	result.Files = append(result.Files, legacyPath)
+	return result, nil
 }
 
 func validateOpenClawWorkspacePath(workspaceDir string, adapter agents.Adapter) error {
@@ -876,6 +891,80 @@ func managedLegacyClaudeEngramCommand(content []byte) (string, bool) {
 		return "", false
 	}
 	return command, true
+}
+
+// IsManagedLegacyClaudeConfig reports whether content has the exact legacy
+// standalone Engram server shape emitted by Gentle AI.
+func IsManagedLegacyClaudeConfig(content []byte) bool {
+	_, ok := managedLegacyClaudeEngramCommand(content)
+	return ok
+}
+
+// RemoveManagedLegacyClaudeConfig removes only the exact standalone shape
+// emitted by Gentle AI. Its parent is removed only when the same real directory
+// remains empty after that managed file is deleted; symlinks are never unlinked.
+func RemoveManagedLegacyClaudeConfig(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect managed legacy Claude Engram config %q: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return false, nil
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read managed legacy Claude Engram config %q: %w", path, err)
+	}
+	if !IsManagedLegacyClaudeConfig(content) {
+		return false, nil
+	}
+	if err := os.Remove(path); err != nil {
+		return false, fmt.Errorf("remove managed legacy Claude Engram config %q: %w", path, err)
+	}
+	if err := removeManagedLegacyClaudeParent(filepath.Dir(path)); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+func removeManagedLegacyClaudeParent(parent string) error {
+	info, err := os.Lstat(parent)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("inspect managed legacy Claude directory %q: %w", parent, err)
+	}
+	if !info.IsDir() {
+		return nil
+	}
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return fmt.Errorf("read managed legacy Claude directory %q: %w", parent, err)
+	}
+	if len(entries) != 0 {
+		return nil
+	}
+	current, err := os.Lstat(parent)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("reinspect managed legacy Claude directory %q: %w", parent, err)
+	}
+	if !current.IsDir() || !os.SameFile(info, current) {
+		return nil
+	}
+	if err := os.Remove(parent); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove empty managed legacy Claude directory %q: %w", parent, err)
+	}
+	return nil
 }
 
 // isEngramCommand reports whether cmd is either a relative "engram" command
