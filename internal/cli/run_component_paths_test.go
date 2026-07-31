@@ -901,15 +901,19 @@ func TestBackupTargetsIncludeRoutingGuidancePathsWithoutAnyComponent(t *testing.
 	}
 }
 
-func TestBackupTargetsEngramClaudeIncludeUserRegistry(t *testing.T) {
+func TestBackupTargetsEngramClaudeIncludeRegistryAndLegacyMigrationSource(t *testing.T) {
 	home := t.TempDir()
 	selection := model.Selection{Agents: []model.AgentID{model.AgentClaudeCode}, Components: []model.ComponentID{model.ComponentEngram}}
 	resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
 
 	targets := backupTargets(home, "", ScopeGlobal, selection, resolved)
-	want := filepath.Join(home, ".claude.json")
-	if !containsPath(targets, want) {
-		t.Fatalf("backupTargets missing Claude Engram path %q; targets=%v", want, targets)
+	for _, want := range []string{
+		filepath.Join(home, ".claude.json"),
+		filepath.Join(home, ".claude", "mcp", "engram.json"),
+	} {
+		if !containsPath(targets, want) {
+			t.Fatalf("backupTargets missing Claude Engram path %q; targets=%v", want, targets)
+		}
 	}
 }
 

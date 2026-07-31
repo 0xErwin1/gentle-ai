@@ -15,6 +15,7 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
@@ -768,7 +769,7 @@ func engramTargets(adapter agents.Adapter, homeDir string) []string {
 	switch adapter.MCPStrategy() {
 	case model.StrategySeparateMCPFiles:
 		if adapter.Agent() == model.AgentClaudeCode {
-			return []string{claude.UserConfigPath(homeDir)}
+			return []string{claude.UserConfigPath(homeDir), adapter.MCPConfigPath(homeDir, "engram")}
 		}
 		targets = append(targets, adapter.MCPConfigPath(homeDir, "engram"))
 	case model.StrategyMergeIntoSettings:
@@ -790,7 +791,7 @@ func engramOperations(adapter agents.Adapter, homeDir string) []operation {
 	case model.StrategySeparateMCPFiles:
 		path := adapter.MCPConfigPath(homeDir, "engram")
 		if adapter.Agent() == model.AgentClaudeCode {
-			return []operation{rewriteClaudeUserConfig(homeDir, jsonPath{"mcpServers", "engram"})}
+			return []operation{rewriteClaudeUserConfig(homeDir, jsonPath{"mcpServers", "engram"}), removeManagedEngramFile(path)}
 		}
 		return []operation{removeFile(path), removeDirIfEmpty(filepath.Dir(path))}
 	case model.StrategyMergeIntoSettings:
@@ -1131,6 +1132,17 @@ func removeManagedContext7File(path string) operation {
 				return false, false, err
 			}
 			return true, true, nil
+		},
+	}
+}
+
+func removeManagedEngramFile(path string) operation {
+	return operation{
+		typeID: opRemoveFile,
+		path:   path,
+		apply: func(path string) (bool, bool, error) {
+			removed, err := engram.RemoveManagedLegacyClaudeConfig(path)
+			return removed, removed, err
 		},
 	}
 }
