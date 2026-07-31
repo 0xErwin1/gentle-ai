@@ -1280,21 +1280,15 @@ test_content_mcp_json_valid() {
     $BINARY install --agent claude-code --component context7 --persona neutral 2>&1 || true
     $BINARY install --agent claude-code --component engram --persona neutral 2>&1 || true
 
-    # Validate all JSON files in MCP directory
-    if [ -d "$HOME/.claude/mcp" ]; then
-        local all_ok=true
-        while IFS= read -r json_file; do
-            if ! assert_valid_json "$json_file" "$(basename "$json_file") is valid JSON"; then
-                all_ok=false
-            fi
-        done < <(find "$HOME/.claude/mcp" -name "*.json" -type f)
-
-        if $all_ok; then
-            log_pass "All MCP JSON files are valid"
-        fi
-    else
-        log_fail "MCP directory not created"
-    fi
+    # Claude Code reads user-scoped MCP servers from ~/.claude.json. The legacy
+    # ~/.claude/mcp directory is intentionally no longer created.
+    local registry="$HOME/.claude.json"
+    assert_file_exists "$registry" "Claude user MCP registry"
+    assert_valid_json "$registry" "Claude user MCP registry is valid JSON"
+    assert_file_contains "$registry" '"context7"' "Registry has Context7 server"
+    assert_file_contains "$registry" '"engram"' "Registry has Engram server"
+    assert_file_not_exists "$HOME/.claude/mcp/context7.json" "legacy Context7 MCP file is not written"
+    assert_file_not_exists "$HOME/.claude/mcp/engram.json" "legacy Engram MCP file is not written"
 }
 
 test_content_opencode_commands_valid_markdown() {
