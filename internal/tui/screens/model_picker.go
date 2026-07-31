@@ -416,9 +416,11 @@ func handleModelNav(
 		// not support effort and must clear any stale value.
 		preserveEffort := selected.Reasoning
 		assignments = applyAssignmentPreservingMatchingEffort(*state, assignments, assignment, preserveEffort)
-		// Mirror the AllPhasesModel update on the pointer when "Set all phases" row.
+		// Mirror the AllPhasesModel or AllCustomAgentsModel update when "Set all" rows.
 		if state.SelectedPhaseIdx == 1 {
 			state.AllPhasesModel = preserveMatchingEffort(state.AllPhasesModel, assignment, preserveEffort)
+		} else if rows := ModelPickerRowsForState(*state); state.SelectedPhaseIdx < len(rows) && rows[state.SelectedPhaseIdx] == "Set all custom agents" {
+			state.AllCustomAgentsModel = preserveMatchingEffort(state.AllCustomAgentsModel, assignment, preserveEffort)
 		}
 
 		// Return to phase list
@@ -573,6 +575,7 @@ func ClearModelPickerAssignment(state *ModelPickerState, assignments map[string]
 		return assignments
 	}
 
+	rows := ModelPickerRowsForState(*state)
 	phases := opencode.SDDPhases()
 	switch {
 	case state.SelectedPhaseIdx == 1:
@@ -580,6 +583,13 @@ func ClearModelPickerAssignment(state *ModelPickerState, assignments map[string]
 			delete(assignments, phase)
 		}
 		state.AllPhasesModel = model.ModelAssignment{}
+	case state.SelectedPhaseIdx >= 0 &&
+		state.SelectedPhaseIdx < len(rows) &&
+		rows[state.SelectedPhaseIdx] == "Set all custom agents":
+		for _, agent := range state.CustomAgents {
+			delete(assignments, agent)
+		}
+		state.AllCustomAgentsModel = model.ModelAssignment{}
 	default:
 		if key := selectedModelPickerAgent(*state); key != "" {
 			delete(assignments, key)
