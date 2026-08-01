@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-// This opt-in axis drives provider-owned OpenCode transport, not the native CLI.
 const sddTaskResultAxis = "sdd-task-result"
 
 func init() {
