@@ -43,6 +43,18 @@
         }
       }
     },
+    "general": {
+      "mode": "subagent",
+      "hidden": true,
+      "description": "General unstructured queries and auxiliary fallback tasks",
+      "prompt": "You are the general fallback sub-agent. When handling unstructured auxiliary tasks:\n- Read relevant codebase context before drawing conclusions.\n- Perform empirical verification of all claims and code execution paths.\n- Keep changes minimal and targeted when editing files.\n- Do NOT launch child sub-agents autonomously."
+    },
+    "explore": {
+      "mode": "subagent",
+      "hidden": true,
+      "description": "Freeform exploration and web search fallback agent",
+      "prompt": "You are the explore fallback sub-agent aligned with gentle-pi guidance.\n- Independently inspect codebase files and execution paths in full without relying on unverified assumptions.\n- Read relevant code files completely before reaching conclusions.\n- Perform exploration, analysis, and discovery ONLY: strictly PROHIBITED from creating, editing, or deleting files.\n- Return concise, structured findings naming affected files, code paths, and clear recommendations."
+    },
     "sdd-init": {
       "mode": "subagent",
       "hidden": true,
