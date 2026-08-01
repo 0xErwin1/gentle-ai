@@ -63,7 +63,7 @@ func TestReceiptDistinguishesReviewedAndFinalTreesAndValidatesExactGateInputs(t 
 func TestReceiptParserIsStrictAndTerminalVocabularyIsClosed(t *testing.T) {
 	tx := newTestTransaction(t, ModeOrdinary4R)
 	_ = tx.StartReview()
-	_ = tx.FreezeFindings(nil, hash("1"))
+	_ = freezeTestFindings(tx, []Finding{})
 	_, _ = tx.ClassifyEvidence(nil)
 	_ = tx.BeginFinalVerification()
 	_ = tx.CompleteFinalVerification(hash("2"), true)
@@ -85,6 +85,31 @@ func TestReceiptParserIsStrictAndTerminalVocabularyIsClosed(t *testing.T) {
 	}
 }
 
+func TestReceiptRemainsCompatibleWithoutCausalRoutingFields(t *testing.T) {
+	tx := newTestTransaction(t, ModeOrdinary4R)
+	_ = tx.StartReview()
+	_ = freezeTestFindings(tx, []Finding{{ID: "R1-PRE", Severity: "CRITICAL", Claim: "pre-existing defect"}})
+	_, _ = tx.ClassifyEvidence([]FindingEvidence{{
+		FindingID: "R1-PRE", Class: EvidenceDeterministic, Causality: CausalPreExisting, Proof: "same failure on base and candidate",
+	}})
+	_ = tx.BeginFinalVerification()
+	_ = tx.CompleteFinalVerification(hash("2"), true)
+	receipt, err := tx.Receipt()
+	if err != nil {
+		t.Fatalf("Receipt() error = %v", err)
+	}
+	payload, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(payload), "causal_disposition") || strings.Contains(string(payload), "follow_ups") {
+		t.Fatalf("causal routing expanded receipt schema: %s", payload)
+	}
+	if _, err := ParseReceipt(payload); err != nil {
+		t.Fatalf("ParseReceipt() error = %v", err)
+	}
+}
+
 func TestNewLineageRequiresExplicitDifferentIdentity(t *testing.T) {
 	start := Start{LineageID: "lineage-1", Mode: ModeOrdinary4R, Generation: 1, Snapshot: newTestTransaction(t, ModeOrdinary4R).Snapshot, PolicyHash: hash("d")}
 	if _, err := NewLineage("lineage-1", start); err == nil {
@@ -99,7 +124,7 @@ func TestNewLineageRequiresExplicitDifferentIdentity(t *testing.T) {
 func TestReleaseGateRequiresCompleteImmutablePublicationBoundary(t *testing.T) {
 	tx := newTestTransaction(t, ModeOrdinary4R)
 	_ = tx.StartReview()
-	_ = tx.FreezeFindings([]Finding{}, hash("1"))
+	_ = freezeTestFindings(tx, []Finding{})
 	_, _ = tx.ClassifyEvidence([]FindingEvidence{})
 	release := ReleaseEvidence{
 		ReleaseTree:             tx.FinalCandidateTree,
@@ -162,7 +187,7 @@ func TestJudgmentDayReceiptCarriesTwoJudgeProof(t *testing.T) {
 	}, hash("5")); err != nil {
 		t.Fatal(err)
 	}
-	_ = tx.FreezeFindings([]Finding{}, hash("6"))
+	_ = freezeTestFindings(tx, []Finding{})
 	_, _ = tx.ClassifyEvidence([]FindingEvidence{})
 	_ = tx.BeginFinalVerification()
 	_ = tx.CompleteFinalVerification(hash("7"), true)

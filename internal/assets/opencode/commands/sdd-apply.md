@@ -37,4 +37,8 @@ If all gates pass, launch the hidden `sdd-apply` sub-agent with:
 Return a structured orchestration result with: status, executive_summary, artifacts, next_recommended, risks, and skill_resolution.
 
 POST-APPLY REVIEW ROUTING:
-After apply returns, rerun native status. If `nextRecommended: review`, the parent orchestrator builds the explicit intended-untracked manifest and runs `gentle-ai review-start ... --cwd <repo> --lineage <id> --machine-transaction-out <changeRoot>/reviews/transaction.json`. The repository Git common directory plus canonical lineage ID determines the authoritative CAS store; `transaction.json` is non-authoritative machine output. The apply executor never launches review. Reuse a valid receipt; later commit/push/PR/release events only validate it.
+After apply returns, rerun native SDD status. If `nextRecommended: review`, the parent orchestrator begins negotiated review routing with `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v1 --next-transition`. Read only `next_transition` and route only from the returned `next_transition`: for `execute`, invoke its exact operation and ordered argument tokens unchanged; for `collect`, satisfy only its exact named inputs and capture operations, then query STATUS again; for `stop`, stop without running a lifecycle operation. The parent never substitutes direct START, and the apply executor never launches review.
+
+{{GENTLE_AI_AUTHORITY_FIRST_TERMINAL_PROCEDURE}}
+
+Reuse a valid receipt; later commit/push/PR/release events only validate it.

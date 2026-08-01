@@ -178,7 +178,7 @@ func validateChainBundle(bundle ChainBundle) (ValidatedChain, error) {
 		if records[index].PreviousRevision != revisions[index-1] {
 			return ValidatedChain{}, errors.New("review chain bundle predecessor is incomplete or reordered")
 		}
-		if err := validateSuccessor(records[index-1].Transaction, records[index].Transaction, records[index].Operation); err != nil {
+		if err := validatePersistedV1Successor(records[index-1].Transaction, records[index].Transaction, records[index].Operation, index); err != nil {
 			return ValidatedChain{}, fmt.Errorf("review chain bundle successor[%d]: %w", index, err)
 		}
 	}
@@ -203,10 +203,16 @@ func validateBundleExpectation(ctx context.Context, repo string, bundle ChainBun
 	if expected.LineageID != bundle.LineageID || expected.GenesisRevision != bundle.GenesisRevision || expected.HeadRevision != bundle.HeadRevision || expected.ChainIdentity != bundle.ChainIdentity || expected.BundleDigest != bundle.BundleDigest {
 		return errors.New("review chain bundle does not match the expected chain identity")
 	}
+	if genesis := chain.Records[0].Transaction; genesis.Mode == ModeOrdinaryBounded && !genesis.hasCorrectionBudget() {
+		return errors.New("portable ordinary_bounded bundle requires correction budget fields")
+	}
 	if err := validateSnapshot(expected.Snapshot); err != nil {
 		return fmt.Errorf("expected current snapshot: %w", err)
 	}
 	terminal := chain.Records[len(chain.Records)-1].Transaction
+	if err := validateRepositoryBudgetEvidence(ctx, repo, chain.Records); err != nil {
+		return fmt.Errorf("review chain bundle: %w", err)
+	}
 	if bundle.TerminalReceipt != nil {
 		if err := validateReceiptStructure(expected.Receipt); err != nil {
 			return fmt.Errorf("expected receipt: %w", err)
@@ -236,10 +242,17 @@ func (store Store) installBundle(chain ValidatedChain, events []ChainBundleEvent
 	if strings.TrimSpace(store.Dir) == "" || len(events) != len(chain.Revisions) {
 		return ValidatedChain{}, errors.New("review bundle destination is invalid")
 	}
+	if store.maintenanceLockPath != "" {
+		maintenance, err := acquireMaintenanceLock(context.Background(), store.maintenanceLockPath, maintenanceShared)
+		if err != nil {
+			return ValidatedChain{}, err
+		}
+		defer maintenance.Release()
+	}
 	if err := os.MkdirAll(filepath.Join(store.Dir, "events"), 0o755); err != nil {
 		return ValidatedChain{}, err
 	}
-	lock, err := acquireStoreLock(filepath.Join(store.Dir, "LOCK"))
+	lock, err := acquireLocalStoreLock(filepath.Join(store.Dir, "LOCK"))
 	if err != nil {
 		return ValidatedChain{}, err
 	}
@@ -288,7 +301,7 @@ func installContentAddressedFile(path string, payload []byte) error {
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	if err := os.Link(tempPath, path); err != nil {
+	if err := publishNoReplace(tempPath, path); err != nil {
 		if !os.IsExist(err) {
 			return err
 		}

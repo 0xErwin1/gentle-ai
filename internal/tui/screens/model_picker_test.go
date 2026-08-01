@@ -1,13 +1,17 @@
 package screens
 
 import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
 // makeTestState builds a minimal ModelPickerState with one provider and models
@@ -31,10 +35,34 @@ func makeTestState(phaseIdx int) *ModelPickerState {
 
 func TestModelPickerRows_Count(t *testing.T) {
 	rows := ModelPickerRows()
-	// 1 orchestrator + 1 "Set all" + 10 sub-agents + 1 separator + 3 JD agents = 16
-	want := 16
+	want := 2 + len(opencode.SDDPhases()) + 1 + len(opencode.JDPhases()) + 1 + len(opencode.ReviewPhases())
 	if len(rows) != want {
 		t.Fatalf("ModelPickerRows() len = %d, want %d; rows = %v", len(rows), want, rows)
+	}
+}
+
+func TestModelPickerRows_ReviewAgentsFollowJudgmentDay(t *testing.T) {
+	rows := ModelPickerRows()
+	wantSuffix := append([]string{"--- Review agents ---"}, opencode.ReviewPhases()...)
+	got := rows[len(rows)-len(wantSuffix):]
+	for i := range wantSuffix {
+		if got[i] != wantSuffix[i] {
+			t.Fatalf("review row %d = %q, want %q; rows = %v", i, got[i], wantSuffix[i], rows)
+		}
+	}
+}
+
+func TestRenderModelPickerScrollsToReviewAgents(t *testing.T) {
+	rows := ModelPickerRows()
+	cursor := len(rows) - 1
+	state := ModelPickerState{AvailableIDs: []string{"openai"}}
+
+	output := RenderModelPicker(nil, state, cursor)
+	if !strings.Contains(output, "review-refuter") || !strings.Contains(output, "↑ more assignments") {
+		t.Fatalf("review rows are not visible at cursor %d:\n%s", cursor, output)
+	}
+	if strings.Contains(output, "gentle-orchestrator") {
+		t.Fatalf("picker did not window rows around review cursor:\n%s", output)
 	}
 }
 
@@ -1085,6 +1113,13 @@ func TestNewModelPickerState(t *testing.T) {
 	}
 }
 
+func TestNewModelPickerStateCacheErrorStillDiscovers(t *testing.T) {
+	state := NewModelPickerState(writeTempFile(t, "models.json", `{`), writeTempFile(t, "opencode.json", `{"provider":{"lmstudio":{"url":"http://gateway:1234/v1","models":{"model":{"tool_call":true}}}}}`))
+	if state.Providers == nil || state.lmStudioURL != "http://gateway:1234/v1" || len(state.AvailableIDs) != 1 || !strings.Contains(state.ConfigWarning, "model cache") || state.DiscoverLMStudioCmd() == nil {
+		t.Fatalf("cache fallback state = %+v", state)
+	}
+}
+
 // TestNewModelPickerStateCollisionCustomWins verifies that when a model ID exists
 // in both the catalog cache and opencode.json, the custom entry takes precedence.
 func TestNewModelPickerStateCollisionCustomWins(t *testing.T) {
@@ -1112,6 +1147,62 @@ func TestNewModelPickerStateCollisionCustomWins(t *testing.T) {
 	}
 	if m.Name != "Custom Override Name" {
 		t.Errorf("model name = %q, want %q (custom should win on collision)", m.Name, "Custom Override Name")
+	}
+}
+
+func lmStudioState(t *testing.T, catalog, settings string) ModelPickerState {
+	t.Helper()
+	return NewModelPickerState(writeTempFile(t, "models.json", catalog), writeTempFile(t, "opencode.json", settings))
+}
+
+func TestLMStudioDiscovery(t *testing.T) {
+	for name, tt := range map[string]struct{ settings, url string }{
+		"default URL":    {`{}`, "http://127.0.0.1:1234/v1"},
+		"configured URL": {`{"provider":{"lmstudio":{"url":"http://gateway:1234/v1"}}}`, "http://gateway:1234/v1"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			calls, gotURL, original := 0, "", fetchDynamicModels
+			fetchDynamicModels = func(ctx context.Context, url string) ([]opencode.ConfigModel, error) {
+				calls++
+				gotURL = url
+				return nil, nil
+			}
+			t.Cleanup(func() { fetchDynamicModels = original })
+			state := lmStudioState(t, catalogJSON, tt.settings)
+			if calls != 0 {
+				t.Fatalf("NewModelPickerState made %d discovery calls", calls)
+			}
+			msg := state.DiscoverLMStudioCmd()().(LMStudioDiscoveryMsg)
+			if calls != 1 || gotURL != tt.url || msg.BaseURL != tt.url {
+				t.Fatalf("discovery = calls:%d URL:%q message:%q", calls, gotURL, msg.BaseURL)
+			}
+		})
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"data":[{"id":"model"}]}`)) }))
+	defer server.Close()
+	fetched := lmStudioState(t, `{}`, `{"provider":{"lmstudio":{"url":"`+server.URL+`"}}}`).DiscoverLMStudioCmd()().(LMStudioDiscoveryMsg)
+	if len(fetched.Models) != 1 || fetched.Models[0].Name != "model" || fetched.Models[0].ToolCall {
+		t.Fatalf("unexpected fetched models: %+v", fetched.Models)
+	}
+	state := lmStudioState(t, `{"lmstudio":{"models":{"unloaded":{"id":"unloaded","tool_call":true},"static":{"id":"static","name":"Static","tool_call":true},"configured":{"id":"configured"}}}}`, `{"provider":{"lmstudio":{"models":{"configured":{"name":"User","tool_call":true}}}}}`)
+	state = state.Update(LMStudioDiscoveryMsg{BaseURL: state.lmStudioURL, Models: []opencode.ConfigModel{{Name: "configured"}, {Name: "static"}, {Name: "unknown"}}})
+	lm := state.Providers["lmstudio"]
+	if _, ok := lm.Models["unloaded"]; ok || lm.Models["configured"].Name != "User" || !lm.Models["configured"].ToolCall || lm.Models["static"].Name != "Static" || lm.Models["unknown"].ToolCall || len(state.SDDModels["lmstudio"]) != 2 {
+		t.Fatalf("unexpected models: %+v", lm.Models)
+	}
+	state = lmStudioState(t, `{}`, `{}`).Update(LMStudioDiscoveryMsg{BaseURL: "http://127.0.0.1:1234/v1", Models: []opencode.ConfigModel{{Name: "unknown"}}})
+	if len(state.AvailableIDs) != 0 || !strings.Contains(state.ConfigWarning, "tool_call: true") {
+		t.Fatalf("unsafe unknown model state: %+v", state)
+	}
+	state = lmStudioState(t, `{"lmstudio":{"models":{"catalog":{"id":"catalog","tool_call":true}}}}`, `{"provider":{"lmstudio":{"models":{"configured":{"tool_call":true}}}}}`)
+	state = state.Update(LMStudioDiscoveryMsg{BaseURL: state.lmStudioURL, Err: errors.New("connection refused")})
+	if _, ok := state.Providers["lmstudio"].Models["catalog"]; !ok || !state.Providers["lmstudio"].Models["configured"].ToolCall || !strings.Contains(state.ConfigWarning, "discovery failed") {
+		t.Fatalf("fallback lost: %+v", state)
+	}
+	state = lmStudioState(t, `{}`, `{"provider":{"lmstudio":{"url":"http://gateway:1234/v1"}}}`)
+	state = state.Update(LMStudioDiscoveryMsg{BaseURL: "http://127.0.0.1:1234/v1", Models: []opencode.ConfigModel{{Name: "stale"}}})
+	if _, ok := state.Providers["lmstudio"].Models["stale"]; ok || state.ConfigWarning != "" {
+		t.Fatalf("stale response changed state: %+v", state)
 	}
 }
 
@@ -1243,6 +1334,26 @@ func TestHandleModelNav_JDLastRow(t *testing.T) {
 	}
 }
 
+func TestHandleModelNav_ReviewAgentRowsAssignCorrectly(t *testing.T) {
+	rows := ModelPickerRows()
+	for _, agent := range opencode.ReviewPhases() {
+		t.Run(agent, func(t *testing.T) {
+			rowIdx := -1
+			for i, row := range rows {
+				if row == agent {
+					rowIdx = i
+					break
+				}
+			}
+			state := makeTestState(rowIdx)
+			_, updated := handleModelNav("enter", state, map[string]model.ModelAssignment{})
+			if got := updated[agent]; got.ProviderID != "test-provider" || got.ModelID != "model-alpha" {
+				t.Fatalf("%s assignment = %+v, want test-provider/model-alpha", agent, got)
+			}
+		})
+	}
+}
+
 // ─── ModelPickerRowsForProfile ──────────────────────────────────────────
 
 func TestModelPickerRowsForProfile(t *testing.T) {
@@ -1270,6 +1381,13 @@ func TestModelPickerRowsForProfile(t *testing.T) {
 		}
 		if !found {
 			t.Fatalf("ModelPickerRowsForProfile() missing JD agent %q; got: %v", jd, rows)
+		}
+	}
+	for _, reviewAgent := range opencode.ReviewPhases() {
+		for _, row := range rows {
+			if row == reviewAgent {
+				t.Fatalf("profile rows must use global reviewer %q, got: %v", reviewAgent, rows)
+			}
 		}
 	}
 }

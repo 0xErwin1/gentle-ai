@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
 )
 
 func TestReviewFoundationSkillsCarryThreatAndWorkUnitEvidence(t *testing.T) {
@@ -45,5 +45,22 @@ func TestReviewFoundationSkillsCarryThreatAndWorkUnitEvidence(t *testing.T) {
 		if !strings.Contains(statusContract, want) {
 			t.Errorf("status contract missing %q", want)
 		}
+	}
+}
+
+func TestSDDVerifyConsumesPreterminalInputsWithoutCircularTerminalArtifacts(t *testing.T) {
+	content := assets.MustRead("skills/sdd-verify/SKILL.md")
+	for _, want := range []string{
+		"authoritative preterminal transaction plus the preserved policy and canonical ledger preimages",
+		"Do not require `receipt.json`, `chain-bundle.json`, `gate-context.json`",
+		"exact canonical verification-evidence bytes, not only their hash",
+		"hashes cannot reconstruct artifact content",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("sdd-verify missing non-circular final-verification clause %q", want)
+		}
+	}
+	if strings.Contains(content, "(`reviews/transaction.json`, `ledger.json`, `receipt.json`, `gate-context.json`") {
+		t.Fatal("sdd-verify still requires terminal receipt and gate context before final verification")
 	}
 }

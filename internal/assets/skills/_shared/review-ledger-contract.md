@@ -1,94 +1,42 @@
-# Bounded Review Execution and Ledger Contract
+# Native Bounded Review Orchestration
 
-This is the canonical reusable contract for orchestrators, 4R lens reviewers, refuters, scoped validators, and Judgment Day. Generated adapter prompts expand this file; role-specific prompts add only their lens or tool boundary.
+Parent orchestrator and native CLI only. Never pass this contract to a reviewer, refuter, judge, correction actor, or validator. Those roles receive only scope, candidate-causal admission, severity, evidence requirements, and output shape.
 
-## Operation Boundary
+## Route
 
-Review is explicit `review/start(target)`. The operation receives one complete immutable snapshot, is detached, read-only, and terminal after one result. A reviewer never edits code, launches a correction, starts another reviewer, or owns lifecycle routing. Return one result and terminate.
+Begin every generated negotiated lifecycle route with `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition`. Read only the returned `next_transition`: route only from the returned `next_transition`, never from status prose, lifecycle state, or eligibility. For `execute`, invoke its exact operation and ordered argument tokens unchanged. For `collect`, satisfy only its named inputs with their exact capture operations and arguments, then query STATUS again. For `stop`, stop and surface its `reason_code` without running a lifecycle operation. Never hardcode or substitute START: invoke `review.start` only when the returned `execute.operation` names it. Direct `gentle-ai review start` remains compatibility-supported for explicit/manual non-negotiated callers. The native facade discovers repository scope, derives the immutable target, selects zero lenses for low risk, one focus lens for standard risk, or canonical 4R for high risk, and freezes the original line count, tier, and correction budget `min(200, ceil(original_changed_lines / 2))`. Goldens stay in snapshot identity but not that count. Correction and compatible base advance never recalculate risk or open review.
 
-The parent orchestrator selects zero, one, or four initial lenses from deterministic risk classification. Each selected lens runs exactly one exhaustive sweep. Full 4R means four initial lens sweeps, not extra sweeps or three refuter tasks.
+If the exact provider-returned START answers with the typed `gentle-ai.review-integration.consent/v2` envelope, treat it as a Lossless Blocking Prompt under the orchestrator contract. Global RDD enabled permits reviews; it never grants consent for this candidate. Low-risk structural readback remains silent and asks no consent question. For medium/high candidates, present the complete semantic envelope once in the active conversation language. This is the one narrow localization exception to the no-relabeling rule: faithfully translate the headline, reason, `value`, risk evidence, choice labels, every choice `effect`, and the off-path note, while preserving the original groups/order, selection mode, exact allowed-answer domain, and answer tokens. Project `value` as explicit benefits and every `effect` as explicit consequences; labels alone are forbidden. Never translate or alter machine answer tokens (`granted`, `declined`), commands, target IDs, or invocations. Never summarize, reshape, reorder, merge, or omit any part. Native `question` UI may use the translated labels only when it can represent the complete envelope in one interaction and map the selected label back exactly once to the corresponding original answer token and exact invocation; otherwise use the complete plain-language fallback and stop. Then run exactly the one named follow-up invocation for the human's answer, never answering on their behalf. Do not append `--consent relay` or any other argument to a returned transition. Granted and declined are both scoped to that exact candidate, persist no consent decision, and do not suppress the question for a later medium/high candidate; a decline is not the kill switch.
 
-## Frozen Findings Ledger
+A canonical four-lens selection is long work: before the first lens runs, give the one cost/side-effect forecast — four reviewer model runs over the frozen candidate, the frozen correction budget, and the at-most-one bounded correction it implies — once per candidate, never per lens.
 
-Findings freeze after the initial selected-lens review. Each lens emits neutral structured claims and proof references rather than persuasive narrative:
+Run each exact `review.capture-result` collection input once per provider-returned collection attempt, in the foreground. Begin its reviewer task prompt with the exact literal prefix `GENTLE_AI_REVIEW_BINDING `, including the trailing space and never `=`, followed by one-line JSON assembled only from that input: `lineage`, `target`, `lens`, `order`, `revision` from `expected-revision`, `repository_context`, and `subject_hash` from `artifact_subject.subject_hash`; omit only provider-omitted fields. These are the prompt's first bytes. OpenCode never adds `candidate_diff` or candidate bytes; its provider owns context injection. Return one JSON object echoing `subject_hash`, with completed inspection, every manifest path in order, findings/evidence, and severe evidence class/causality; access failure is not completion. After empty, malformed, schema-invalid, access/provider failure, or incomplete inspection, query negotiated STATUS again. Relaunch only if its fresh `next_transition` reoffers the exact same bound slot (`lineage`, `target`, `expected-revision`, `artifact_subject`, `lens`, and `order`). If STATUS discovers a committed capture, continue without relaunching. Never infer a retry from transcript or error text alone. Capture follows the native transition; opaque handles are cwd-independent and legacy bindings need `--cwd`. Finalize with manifests in lens order via repeated `--result-artifact-file <path>` (BOM-less UTF-8 on Windows PowerShell 5.1); POSIX inline `--result-artifact '<manifest-json>'` and provider-owned `--captured-results` remain compatible; never pass raw `--result`. Native Go owns validation, canonicalization, persistence, hashing, reopening, and binding. Only candidate-caused severe findings block; pre-existing/base-only become follow-ups, unknown escalates, WARNING/SUGGESTION remain info. Deterministic blockers need no refuter; inferential blockers share one read-only refuter batch. Judgment Day uses two judges.
 
-| Field | Values |
-|---|---|
-| `id` | `{LENS}-{NNN}` |
-| `lens` | `risk | readability | reliability | resilience | judgment-day | scoped-fix-validator` |
-| `location` | `path/to/file.ext:line` or range |
-| `severity` | `BLOCKER | CRITICAL | WARNING | SUGGESTION` |
-| `claim` | Neutral statement of observable incorrect behavior |
-| `evidence_class` | `deterministic | inferential | insufficient` |
-| `proof_refs` | Concrete command, output hash, or `file:line` references |
-| `status` | `open | corroborated | refuted | inconclusive | fixed | verified | info` |
+Claude Code carries immutable candidate evidence directly in the reviewer task prompt because it has no provider injection boundary. Immediately after the binding line, add one `GENTLE_AI_CLAUDE_REVIEW_CONTEXT` block containing the exact collection input's `artifact_subject`, `base_tree`, `candidate_tree`, and ordered `changed_path_manifest`; exact `name-status` and `numstat` output; and path evidence for every manifest index in exact order. Every evidence read uses `gentle-ai review inspect-candidate --repository-context <repository_context> --expected-revision <revision> --lineage <lineage> --target <target> --lens <lens> --order <order> --operation <operation>` with exact binding values: run `name-status` and `numstat`, then add `--path-index <path_index>` and run `patch` once for every index. Copy each native output verbatim with its index and literal manifest path, close with `GENTLE_AI_CLAUDE_REVIEW_CONTEXT_END`, and launch the shell-less Claude lens. If any command fails, exceeds its bound, or cannot be carried verbatim, provide no partial completion claim; the lens returns incomplete.
 
-Persist an explicit empty ledger when no findings exist. WARNING/SUGGESTION rows are `info`; they never drive correction or block approval.
+Never hand candidate bytes through `/tmp`, another external file, a repository scratch file, or `GENTLE_AI_FROZEN_CANDIDATE_CONTEXT`. OpenCode preflights the opaque binding, discards the caller-authored task body, and injects only the provider's `artifact_subject`, `base_tree`, `candidate_tree`, and ordered manifest. Its lens agents enable Bash only behind OpenCode permissions whose broad deny precedes narrow allows for the generated discovery, selective-diff, and exact-object Git shapes; edit/write stay denied. Claude lens agents expose no shell and inspect only their prompt-carried context. Other runtimes that cannot enforce either transport expose no shell and stop incomplete rather than claim backend enforcement.
 
-## Evidence Routing
+Reviewers inspect through read-only native Git commands against those exact immutable trees. The allowed recipe runs in the session cwd and clears inherited environment before Git. It fixes locale, disables system/global Git config and attributes, replacement objects, external diff and textconv, forces `--text`, Myers/no-indent deterministic hunks, literal pathspecs, and exact `cat-file` reads. Run compact `--name-status`/`--numstat` discovery, then only selective tree-to-tree stat/diff/cat-file commands. Never pass `--binary`, read live worktree/index/HEAD, change checkout, pipe candidate bytes through another command, or write temporary files. The frozen trees resolve through the shared object store; unreachable trees produce incomplete inspection.
 
-- Deterministic severe findings become `corroborated` with proof and never invoke a refuter.
-- Inferential severe findings from every selected lens are merged into exactly ONE detached refuter operation for the transaction. The refuter receives the immutable target plus all neutral claims/proof references and returns one `corroborated | refuted | inconclusive` result per finding.
-- Insufficient findings become `inconclusive` and are never auto-fixed.
-- Missing, malformed, or incomplete refuter output is `inconclusive`, never implied corroboration.
-- Judgment Day's two-judge agreement is its corroboration mechanism; it never launches `review-refuter`. Native state records two distinct blind execution hashes, two distinct result hashes, a confirmation/agreement hash, and exactly two judge executions before findings can freeze.
+Ordinary review permits one correction transaction. When `next_transition.collect` requests `correction_lines`, provide a positive forecast before editing and continue only through the next provider-returned transition. After the bounded edit, run one read-only scoped fix validator only when the exact collection input requests it, then return its targeted result and final test/verification evidence through the exact named capture operations and arguments. That validator must hold read-only Git execution against the immutable trees; never route it to the refuter or any other actor that cannot run Git. A validator that could not inspect those trees produced no verdict: surface one blocked human decision and submit nothing, because an inconclusive check recorded as a failed one consumes the single correction attempt irreversibly. The facade maps correction only to corroborated frozen IDs and genesis paths, rejects over-budget repository evidence, and creates or discovers the terminal receipt. Later observations are follow-ups, not another correction. Judgment Day alone keeps its existing two-round rule. SDD then runs one independent requirements/runtime verification. Failure escalates and never starts another reviewer, refuter, correction, or validator.
 
-The refuter is read-only, cannot add findings or change scope, returns one complete result, and terminates. One candidate or twenty candidates consume the same single refuter-batch budget.
+<!-- authority-first-terminal-procedure:start -->
+### Authority-First Terminal Procedure
 
-## Correction and Scoped Validation
+Use only the compact facade; it appends and reads back native authority before materializing existing compatibility artifacts.
 
-Only the parent orchestrator may launch a correction actor or scoped validator, and only within native transaction counters.
+| Order | Operation | Required result | Terminal mirrors |
+|---|---|---|---|
+| 01 | `gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition` | one provider-owned `next_transition` returned | blocked |
+| 02 | `provider-returned transition` | exact `execute` operation/arguments or `collect` inputs completed; `stop` halts | blocked |
+| 03 | repeat 01–02 | exact returned `review.validate` allows the terminal gate | blocked |
+| 04 | `reconcile-terminal-mirrors` | existing mirrors reconciled | allowed |
 
-Ordinary review permits at most one correction transaction composed of atomic work units. Each work unit records focused-test evidence, runtime evidence or justified `N/A`, and an independent rollback boundary. Work-unit count never creates another correction budget.
+After ambiguous output, query STATUS again; native discovery reports the committed authority and its next transition without another budget. Malformed or ambiguous lineage remains invalid.
+<!-- authority-first-terminal-procedure:end -->
 
-If correction occurred, ordinary review runs exactly one scoped fix-delta validator. It is detached and read-only, receives only the frozen ledger plus immutable fix delta, verifies fix-touched lines, may append fix-caused defects with proof, and can return only `approve` or `escalate`. It never reopens the original diff, launches another correction, or iterates.
+## Delivery
 
-Judgment Day replaces ordinary 4R for an explicitly selected target. It alone may run at most two fix rounds and two scoped re-judgments; it does not inherit or extend an ordinary budget.
+Repository Git common-dir CAS remains authoritative. Existing transaction, policy, ledger, receipt, bundle, and gate-context schemas, prerequisites, and compatibility behavior remain unchanged in this work unit. Reconcile mirrors only after native allow. Supported lifecycle CLI gates are `post-apply`, `pre-commit`, `pre-push`, `pre-pr`, and `release`; they discover and validate the same receipt and never launch reviewers or create a budget. Archive still requires structured status with `reviewGate.result: allow` and its approved receipt, or `reviewGate.delivery: disabled/unmanaged` while the kill switch is off. Model/provider/profile selection remains user-owned.
 
-## Independent Final Verification
-
-Final verification is independent requirements/runtime verification. It checks actual requirements/scenarios, task completion, current test/build evidence, frozen-ledger resolution, snapshot identity, and counter coherence. A contradiction or newly failing deterministic check escalates; it cannot start another 4R, refuter, correction, or scoped-validation loop.
-
-Only `approved | escalated` are terminal transaction states. `scope-changed | invalidated` are lifecycle validation outcomes requiring explicit action.
-
-## Persistence and Lifecycle Gates
-
-OpenSpec mode persists exact machine-readable artifacts:
-
-- `openspec/changes/{change-name}/reviews/transaction.json`
-- `openspec/changes/{change-name}/reviews/policy.md`
-- `openspec/changes/{change-name}/reviews/ledger.json`
-- `openspec/changes/{change-name}/reviews/receipt.json`
-- `openspec/changes/{change-name}/reviews/chain-bundle.json`
-- `openspec/changes/{change-name}/reviews/gate-context.json`
-
-The sole authoritative append-only CAS state is `<git-common-dir>/gentle-ai/review-transactions/v1/{lineage-id}/`, derived from the canonical validated repository root and a canonical lowercase kebab-case lineage ID. Every Git subprocess uses explicit `git -C <canonical-repo>` and strips inherited repository/worktree/common-dir/index/object/alternate/namespace/shallow/graft/replacement/discovery overrides while preserving ordinary credentials and safe configuration. Linked worktrees retain shared common-dir behavior.
-
-`transaction.json`, chain bundles, and every OpenSpec or Engram artifact are explicitly non-authoritative mirrors. Dispatchers and lifecycle gates load exact HEAD and validate every content-addressed predecessor to one legal `review/start` genesis plus semantic state invariants. Frozen severe findings cannot disappear or lose classification/outcome; pending refuter IDs require one consumed complete batch; corroborated IDs equal correction IDs; corrected candidates require scoped validation; ready/final/approved states have coherent mode counters and no pending severe work. WARNING/SUGGESTION rows remain non-blocking `info`. Missing, cyclic, reordered, regressive, hash-mismatched, semantically incomplete, or standalone terminal chains fail closed.
-
-Writers use a non-blocking cross-platform OS lock with token/PID/host/timestamp observability and crash release. Exact retries repair a linked event or return an already-committed exact HEAD without changing budget; stale predecessors or different content remain rejected. Use `review-resume` after machine-output failure rather than rerunning review work.
-
-Engram mode upserts the equivalent exact topics:
-
-- `sdd/{change-name}/review/transaction`
-- `sdd/{change-name}/review/policy`
-- `sdd/{change-name}/review/ledger`
-- `sdd/{change-name}/review/receipt`
-- `sdd/{change-name}/review/chain-bundle`
-- `sdd/{change-name}/review/gate-context`
-
-Ad-hoc review uses `review/{target-slug}/{transaction|policy|ledger|receipt|chain-bundle|gate-context}`. If no artifact store exists, keep all artifacts inline for the current session and never claim durable receipt reuse.
-
-Post-implementation/post-apply starts ordinary review only when no valid receipt exists. Pre-commit, pre-push, pre-PR, and SDD archive call the native receipt validator for the same content-bound receipt; they never create a budget or silently launch Judgment Day. Gate context binds expected HEAD, genesis, ordered chain identity, and bundle digest. The validator derives the authoritative store root, validates the complete semantic chain, derives the current repository target, and hashes policy, ledger, fix delta, verify evidence, and release artifacts from persisted inputs; caller-authored store paths, transactions, trees, or hash assertions are never authoritative. Missing, `scope-changed`, `invalidated`, and `escalated` results emit machine-readable denial and return non-success.
-
-For clean-clone/workstation recovery, persist the full ordered content-addressed chain bundle. Explicit `review-bundle-import` MUST validate bundle digest, every event hash/predecessor/semantic transition, lineage/generation/mode, initial/final snapshot identities, terminal fix-diff semantics, and expected gate chain identity before CAS installation into the repository-derived destination. Recovery is delivered-content equivalence, not snapshot-structure equivalence: the current derived candidate and delivered path digest MUST match `final_candidate_tree` and the receipt/lineage path scope; the authoritative intended-untracked proof MUST reproduce from that candidate; and policy, ledger, evidence, fix delta, receipt, and chain bindings MUST match exactly. The terminal fix-diff kind, base, ledger IDs, and identity remain preserved for audit, but the recovery snapshot need not share its kind, base, or identity. `review-validate` never auto-imports. Tampered content, wrong path scope/artifacts, truncated or tampered chains, different lineages, arbitrary alternate stores, or unbound bundles remain untrusted and fail closed.
-
-Release from protected `main` has a narrow fast path and does not require a reusable review receipt when all of these are proven: the tag target is the current immutable `origin/main` SHA, required CI for that exact SHA is successful, the remote has not advanced before tag push, and no new vulnerability, policy, provenance, signing, generated-artifact, or release evidence requires escalation. Local branch position and worktree dirtiness are irrelevant because they are not publication inputs. Tag the verified remote SHA explicitly; never infer it from local `HEAD`. Any failed or unprovable condition falls back to native receipt validation and fails closed on missing, changed, invalidated, or escalated state. Major releases and releases following an operational or security incident always require explicit extraordinary review even when the fast-path checks pass.
-
-Outside that protected-`main` fast path, release validation additionally requires an immutable release tree plus content hashes for configuration, generated artifacts, provenance/signing, publication boundary, and evidence freshness. Publication boundary state must be sealed and evidence freshness state must be current; a generic base-relationship context cannot authorize publication.
-
-New CI, vulnerability, base, policy, provenance, or release evidence may invalidate or escalate without reopening unchanged code review. Operational incident separation remains valid only while code, configuration, generated-artifact, and provenance targets are immutable.
-
-## User-Owned Runtime Selection
-
-Model, provider, profile, and effort selection remain optional user choices. This review contract never enforces or silently changes those settings.
+Before commit, stage all reviewed paths without content/mode changes, then validate pre-commit. Frozen intended-untracked paths must remain all untracked or all move to an index whose complete tree and paths match the receipt.

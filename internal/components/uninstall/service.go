@@ -10,15 +10,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gentleman-programming/gentle-ai/internal/agents"
-	"github.com/gentleman-programming/gentle-ai/internal/assets"
-	"github.com/gentleman-programming/gentle-ai/internal/backup"
-	"github.com/gentleman-programming/gentle-ai/internal/components/communitytool"
-	"github.com/gentleman-programming/gentle-ai/internal/components/filemerge"
-	"github.com/gentleman-programming/gentle-ai/internal/components/gga"
-	"github.com/gentleman-programming/gentle-ai/internal/components/sdd"
-	"github.com/gentleman-programming/gentle-ai/internal/model"
-	"github.com/gentleman-programming/gentle-ai/internal/state"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/claude"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/assets"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/backup"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/communitytool"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/gga"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/opencodedefault"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 )
 
 type Manager interface {
@@ -610,7 +613,11 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 			ops = append(ops, rewriteSkillRegistryHook(path))
 		}
 		if path := adapter.SettingsPath(homeDir); path != "" && adapter.Agent() == model.AgentOpenCode {
-			targets = append(targets, path)
+			defaultPlan, err := opencodedefault.PrepareUninstall(path)
+			if err != nil {
+				return nil, nil, err
+			}
+			targets = append(targets, path, opencodedefault.OwnershipPath(path))
 			paths := make([]jsonPath, 0, len(configuredAgents))
 			for _, agentKey := range configuredAgents {
 				paths = append(paths, jsonPath{"agent", agentKey})
@@ -633,7 +640,7 @@ func (s *Service) componentOperations(adapter agents.Adapter, componentID model.
 				}
 			}
 
-			ops = append(ops, rewriteJSONFile(path, paths...))
+			ops = append(ops, rewriteOpenCodeSDDSettings(path, defaultPlan, paths...))
 
 			pluginDir := filepath.Join(homeDir, ".config", "opencode", "plugins")
 			for _, pluginPath := range []string{
@@ -717,7 +724,7 @@ func context7Targets(adapter agents.Adapter, homeDir string) []string {
 	switch adapter.MCPStrategy() {
 	case model.StrategySeparateMCPFiles:
 		if adapter.Agent() == model.AgentClaudeCode {
-			return []string{adapter.SettingsPath(homeDir), adapter.MCPConfigPath(homeDir, "context7")}
+			return []string{claude.UserConfigPath(homeDir), adapter.SettingsPath(homeDir), adapter.MCPConfigPath(homeDir, "context7")}
 		}
 		return []string{adapter.MCPConfigPath(homeDir, "context7")}
 	case model.StrategyMergeIntoSettings, model.StrategyMCPConfigFile:
@@ -732,7 +739,7 @@ func context7Operations(adapter agents.Adapter, homeDir string) []operation {
 	case model.StrategySeparateMCPFiles:
 		if adapter.Agent() == model.AgentClaudeCode {
 			legacyPath := adapter.MCPConfigPath(homeDir, "context7")
-			return []operation{rewriteJSONFile(adapter.SettingsPath(homeDir), jsonPath{"mcpServers", "context7"}), removeManagedContext7File(legacyPath), removeDirIfEmpty(filepath.Dir(legacyPath))}
+			return []operation{rewriteClaudeUserConfig(homeDir, jsonPath{"mcpServers", "context7"}), rewriteJSONFile(adapter.SettingsPath(homeDir), jsonPath{"mcpServers", "context7"}), removeManagedContext7File(legacyPath), removeDirIfEmpty(filepath.Dir(legacyPath))}
 		}
 		path := adapter.MCPConfigPath(homeDir, "context7")
 		return []operation{removeFile(path), removeDirIfEmpty(filepath.Dir(path))}
@@ -761,6 +768,9 @@ func engramTargets(adapter agents.Adapter, homeDir string) []string {
 	targets := make([]string, 0, 3)
 	switch adapter.MCPStrategy() {
 	case model.StrategySeparateMCPFiles:
+		if adapter.Agent() == model.AgentClaudeCode {
+			return []string{claude.UserConfigPath(homeDir), adapter.MCPConfigPath(homeDir, "engram")}
+		}
 		targets = append(targets, adapter.MCPConfigPath(homeDir, "engram"))
 	case model.StrategyMergeIntoSettings:
 		targets = append(targets, adapter.SettingsPath(homeDir))
@@ -780,6 +790,9 @@ func engramOperations(adapter agents.Adapter, homeDir string) []operation {
 	switch adapter.MCPStrategy() {
 	case model.StrategySeparateMCPFiles:
 		path := adapter.MCPConfigPath(homeDir, "engram")
+		if adapter.Agent() == model.AgentClaudeCode {
+			return []operation{rewriteClaudeUserConfig(homeDir, jsonPath{"mcpServers", "engram"}), removeManagedEngramFile(path)}
+		}
 		return []operation{removeFile(path), removeDirIfEmpty(filepath.Dir(path))}
 	case model.StrategyMergeIntoSettings:
 		path := adapter.SettingsPath(homeDir)
@@ -863,13 +876,74 @@ func rewriteJSONFile(path string, jsonPaths ...jsonPath) operation {
 				}
 				return true, true, nil
 			}
-			_, err = filemerge.WriteFileAtomic(path, updated, 0o644)
+			// Preserve the file's existing mode: ~/.claude.json is injected
+			// with 0600 because it holds the OAuth session, and an uninstall
+			// rewrite must not widen it.
+			perm := os.FileMode(0o644)
+			if info, statErr := os.Lstat(path); statErr == nil {
+				perm = info.Mode().Perm()
+			}
+			_, err = filemerge.WriteFileAtomic(path, updated, perm)
 			if err != nil {
 				return false, false, err
 			}
 			return true, false, nil
 		},
 	}
+}
+
+// rewriteClaudeUserConfig removes managed entries from ~/.claude.json. Unlike
+// rewriteJSONFile it never deletes the file when the result is empty: the
+// registry belongs to Claude Code, so uninstall only ever writes the emptied
+// object back with the file's mode preserved.
+func rewriteClaudeUserConfig(homeDir string, jsonPaths ...jsonPath) operation {
+	path := claude.UserConfigPath(homeDir)
+	return operation{
+		typeID: opRewriteFile,
+		path:   path,
+		apply: func(path string) (bool, bool, error) {
+			raw, err := readManagedFile(path)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return false, false, nil
+				}
+				return false, false, fmt.Errorf("read json file %q: %w", path, err)
+			}
+			updated, changed, err := removeJSONPaths(raw, jsonPaths...)
+			if err != nil {
+				return false, false, fmt.Errorf("clean json file %q: %w", path, err)
+			}
+			if !changed {
+				return false, false, nil
+			}
+			perm := os.FileMode(0o600)
+			if info, statErr := os.Lstat(path); statErr == nil {
+				perm = info.Mode().Perm()
+			}
+			if _, err := filemerge.WriteFileAtomic(path, updated, perm); err != nil {
+				return false, false, err
+			}
+			return true, false, nil
+		},
+	}
+}
+
+func rewriteOpenCodeSDDSettings(path string, plan *opencodedefault.UninstallPlan, jsonPaths ...jsonPath) operation {
+	return operation{typeID: opRewriteFile, path: path, apply: func(path string) (bool, bool, error) {
+		raw, err := readManagedFile(path)
+		exists := err == nil
+		if err != nil && !os.IsNotExist(err) {
+			return false, false, err
+		}
+		updated := raw
+		if exists {
+			updated, _, err = removeJSONPaths(raw, jsonPaths...)
+			if err != nil {
+				return false, false, err
+			}
+		}
+		return plan.Apply(updated, exists)
+	}}
 }
 
 func rewriteSkillRegistryHook(path string) operation {
@@ -1058,6 +1132,17 @@ func removeManagedContext7File(path string) operation {
 				return false, false, err
 			}
 			return true, true, nil
+		},
+	}
+}
+
+func removeManagedEngramFile(path string) operation {
+	return operation{
+		typeID: opRemoveFile,
+		path:   path,
+		apply: func(path string) (bool, bool, error) {
+			removed, err := engram.RemoveManagedLegacyClaudeConfig(path)
+			return removed, removed, err
 		},
 	}
 }

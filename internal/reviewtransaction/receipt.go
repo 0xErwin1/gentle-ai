@@ -42,6 +42,9 @@ type Receipt struct {
 	JudgeProofHash     string           `json:"judge_proof_hash,omitempty"`
 	Release            *ReleaseEvidence `json:"release,omitempty"`
 	Counters           Counters         `json:"counters"`
+	RiskLevel          RiskLevel        `json:"risk_level,omitempty"`
+	SelectedLenses     []string         `json:"selected_lenses,omitempty"`
+	LensResults        []LensResult     `json:"lens_results,omitempty"`
 	TerminalState      TerminalState    `json:"terminal_state"`
 }
 
@@ -89,7 +92,8 @@ func (transaction *Transaction) Receipt() (Receipt, error) {
 		PathsDigest: transaction.PathsDigest, FixDeltaHash: transaction.FixDeltaHash,
 		PolicyHash: transaction.PolicyHash, LedgerHash: ledgerHash, EvidenceHash: evidenceHash,
 		JudgeProofHash: transaction.JudgeProofHash, Release: cloneReleaseEvidence(transaction.Release),
-		Counters: transaction.Counters, TerminalState: terminal,
+		Counters: transaction.Counters, RiskLevel: transaction.RiskLevel, SelectedLenses: append([]string(nil), transaction.SelectedLenses...),
+		LensResults: append([]LensResult(nil), transaction.LensResults...), TerminalState: terminal,
 	}
 	if err := validateReceiptStructure(receipt); err != nil {
 		return Receipt{}, err
@@ -158,7 +162,118 @@ type GateContext struct {
 	EvidenceHash          string                      `json:"evidence_hash"`
 	BaseRelationshipValid bool                        `json:"base_relationship_valid"`
 	ExternalEvidence      ExternalEvidenceDisposition `json:"external_evidence,omitempty"`
-	Release               *ReleaseEvidence            `json:"release,omitempty"`
+	// ReceiptBaseTree names the tree the review was actually performed
+	// against, and is emitted only when BaseTree above is not that tree.
+	//
+	// BaseTree is the base of the target this gate derived and compared. For
+	// an ordinary receipt the two are the same value and this field stays
+	// absent, so absence is the statement "base_tree IS the reviewed base".
+	// After a correction they diverge: the derived target is a fix diff whose
+	// base is the pre-correction candidate, so a successful pre-commit
+	// publishes a base_tree that is not the receipt's base_tree. Both values
+	// are legitimate and both are called a base tree, which is exactly how an
+	// operator takes "the base" from a successful gate, builds a publication
+	// there, and meets a refusal that echoes their own value back. Naming the
+	// reviewed base beside the derived one removes the ambiguity at the point
+	// where it is read, without changing what base_tree means or what any
+	// gate permits.
+	ReceiptBaseTree string                      `json:"receipt_base_tree,omitempty"`
+	BaseAdvance     *BaseAdvanceCompatibility   `json:"base_advanced_compatible,omitempty"`
+	Release         *ReleaseEvidence            `json:"release,omitempty"`
+	PrePRBoundary   *PrePRBoundarySelection     `json:"pre_pr_boundary,omitempty"`
+	Denial          *GateDenial                 `json:"denial,omitempty"`
+	ScopeChange     *GateScopeChangeDiagnostics `json:"scope_change,omitempty"`
+	// BaseMismatch carries the expected/actual pair for a `base-mismatch`
+	// denial, the way ScopeChange already does for its sibling
+	// `candidate-or-paths-mismatch`. Expected is the exact comparand this
+	// gate used — the receipt's reviewed base at pre-PR, the bound current
+	// snapshot's base at the strict gates — never a value the gate did not
+	// require. A denial that publishes only what it found leaves the operator
+	// no way to tell what it wanted.
+	BaseMismatch *GateBaseMismatchDiagnostics `json:"base_mismatch,omitempty"`
+}
+
+// GateBaseMismatchDiagnostics states both sides of a base-tree comparison that
+// failed. Its presence never changes the gate result.
+type GateBaseMismatchDiagnostics struct {
+	Expected string `json:"expected"`
+	Actual   string `json:"actual"`
+}
+
+// GateDenial identifies the non-authorizing validation stage that rejected a
+// gate request. Its presence never changes the gate result.
+type GateDenial struct {
+	Stage string `json:"stage"`
+	Code  string `json:"code"`
+}
+
+type GateTargetEvidence struct {
+	BaseTree      string   `json:"base_tree"`
+	CandidateTree string   `json:"candidate_tree"`
+	PathsDigest   string   `json:"paths_digest"`
+	Paths         []string `json:"paths"`
+}
+
+// RecoveryScopeCommittedBaseDiff names the successor scope a recovery must
+// freeze when the blocked delivery is already committed and the gate binds a
+// publication range: `review recover --base-ref <RecoveryBaseRef>
+// --committed-only`. The empty scope means the default current-changes
+// successor a bare `review recover` already freezes.
+const RecoveryScopeCommittedBaseDiff = "committed-base-diff"
+
+type GateScopeChangeDiagnostics struct {
+	Expected               GateTargetEvidence `json:"expected"`
+	Actual                 GateTargetEvidence `json:"actual"`
+	DifferingPaths         []string           `json:"differing_paths"`
+	DifferingPathCount     int                `json:"differing_path_count"`
+	DifferingPathsDigest   string             `json:"differing_paths_digest"`
+	PredecessorLineageID   string             `json:"predecessor_lineage_id"`
+	PredecessorRevision    string             `json:"predecessor_revision"`
+	RecoveryOperation      string             `json:"recovery_operation"`
+	RecoveryRequiredInputs []string           `json:"recovery_required_inputs"`
+	// RecoveryScope and RecoveryBaseRef carry the gate-conditional half of
+	// the recovery: which successor scope this gate will actually accept,
+	// and the derived publication boundary it must be frozen against. They
+	// are deliberately NOT projected into the negotiated
+	// gentle-ai.review-integration/v1 failure envelope, whose published
+	// failure.schema.json pins `scope_change` to
+	// `additionalProperties: false` and `recovery_required_inputs` to
+	// exactly six items. Both stay empty for every gate whose bare
+	// current-changes recovery already works, so the existing wire bytes are
+	// unchanged wherever the recommendation is unchanged.
+	RecoveryScope   string `json:"recovery_scope,omitempty"`
+	RecoveryBaseRef string `json:"recovery_base_ref,omitempty"`
+	// RecoveryDerivedInputs names the subset of RecoveryRequiredInputs the
+	// recovery command self-mints for this predecessor shape, so a human
+	// surface can list only what an operator must actually supply. Listing an
+	// input the command derives is a false instruction: it sends an operator
+	// hunting for a value that does not exist. Like RecoveryScope and
+	// RecoveryBaseRef this stays out of the negotiated
+	// gentle-ai.review-integration/v1 failure envelope, whose published
+	// failure.schema.json pins recovery_required_inputs to exactly six items;
+	// the complete operation input set keeps travelling on the wire unscoped.
+	RecoveryDerivedInputs []string `json:"recovery_derived_inputs,omitempty"`
+}
+
+// RecoverySelfDerivedInputs names the recovery inputs the review recovery
+// command mints for itself when they are omitted, for a predecessor in the
+// given state. It is the single source of truth for that closed set: the
+// command consults it to decide whether it may self-derive, and denial
+// diagnostics consult it to decide what to ask an operator for, so the two can
+// never drift into promising or demanding different things.
+//
+// Absence, not value, is what triggers self-minting, and self-minting never
+// widens authority: RecoverCompactAuthority still applies every legality check
+// to derived values exactly as it does to supplied ones. A state outside this
+// set (an ACTIVE reviewing attempt, or the zero state a legacy transaction
+// projects) derives nothing and must supply all of them explicitly.
+func RecoverySelfDerivedInputs(predecessor State) []string {
+	switch predecessor {
+	case StateInvalidated, StateCorrectionRequired, StateApproved, StateEscalated:
+		return []string{"reason", "actor"}
+	default:
+		return nil
+	}
 }
 
 func validateDerivedGate(receipt Receipt, context GateContext) GateResult {
@@ -171,19 +286,22 @@ func validateDerivedGate(receipt Receipt, context GateContext) GateResult {
 	if receipt.TerminalState != TerminalApproved {
 		return GateInvalidated
 	}
-	if receipt.LineageID != context.LineageID || receipt.Generation != context.Generation ||
-		receipt.FinalCandidateTree != context.CandidateTree || receipt.PathsDigest != context.PathsDigest {
+	compatibleAdvance := context.Gate == GatePrePR && context.BaseAdvance != nil && context.BaseAdvance.Compatible
+	if receipt.LineageID != context.LineageID || receipt.Generation != context.Generation {
+		return GateScopeChanged
+	}
+	if (receipt.FinalCandidateTree != context.CandidateTree || receipt.PathsDigest != context.PathsDigest) && !compatibleAdvance {
 		return GateScopeChanged
 	}
 	if context.ExternalEvidence == ExternalEvidenceInvalidating {
 		return GateInvalidated
 	}
-	if receipt.BaseTree != context.BaseTree || receipt.FixDeltaHash != context.FixDeltaHash ||
+	if (receipt.BaseTree != context.BaseTree && !compatibleAdvance) || receipt.FixDeltaHash != context.FixDeltaHash ||
 		receipt.PolicyHash != context.PolicyHash || receipt.LedgerHash != context.LedgerHash ||
 		receipt.EvidenceHash != context.EvidenceHash {
 		return GateInvalidated
 	}
-	if (context.Gate == GatePrePR || context.Gate == GateRelease) && !context.BaseRelationshipValid {
+	if (context.Gate == GatePrePR || context.Gate == GateRelease) && !context.BaseRelationshipValid && !compatibleAdvance {
 		return GateInvalidated
 	}
 	if context.Gate == GateRelease {
@@ -226,6 +344,35 @@ func ParseGateContext(payload []byte) (GateContext, error) {
 			return GateContext{}, err
 		}
 	}
+	if context.BaseAdvance != nil {
+		if context.Gate != GatePrePR || !context.BaseAdvance.valid() {
+			return GateContext{}, errors.New("gate context contains invalid compatible base advance evidence")
+		}
+	}
+	if context.PrePRBoundary != nil {
+		boundary := context.PrePRBoundary
+		unavailable := boundary.Commit == "" && context.Denial != nil && context.Denial.Stage == "boundary-selection" && context.Denial.Code == "unavailable"
+		if context.Gate != GatePrePR || (!validGitTree(boundary.Commit) && !unavailable) || strings.TrimSpace(boundary.Selector) == "" ||
+			(boundary.Source != PrePRBoundaryExplicit && boundary.Source != PrePRBoundaryPublicationDefault) {
+			return GateContext{}, errors.New("gate context contains invalid pre-PR boundary evidence")
+		}
+	}
+	if context.Denial != nil && (strings.TrimSpace(context.Denial.Stage) == "" || strings.TrimSpace(context.Denial.Code) == "") {
+		return GateContext{}, errors.New("gate context denial requires stage and code")
+	}
+	if context.ReceiptBaseTree != "" && (!validGitTree(context.ReceiptBaseTree) || context.ReceiptBaseTree == context.BaseTree) {
+		// Repeating base_tree under a second name would turn the field from a
+		// signal into noise, so the "absent means identical" contract is
+		// enforced here rather than only documented.
+		return GateContext{}, errors.New("gate context reviewed base tree must be a distinct tree identity")
+	}
+	if context.BaseMismatch != nil {
+		mismatch := context.BaseMismatch
+		if context.Denial == nil || context.Denial.Code != "base-mismatch" ||
+			!validGitTree(mismatch.Expected) || mismatch.Actual != context.BaseTree || mismatch.Expected == mismatch.Actual {
+			return GateContext{}, errors.New("gate context contains invalid base mismatch evidence")
+		}
+	}
 	switch context.ExternalEvidence {
 	case ExternalEvidenceNone, ExternalEvidenceInvalidating, ExternalEvidenceEscalating:
 	default:
@@ -246,7 +393,7 @@ func validateReceiptStructure(receipt Receipt) error {
 	if receipt.Generation < 1 {
 		return errors.New("receipt requires a positive generation")
 	}
-	if receipt.Mode != ModeOrdinary4R && receipt.Mode != ModeJudgmentDay {
+	if receipt.Mode != ModeOrdinary4R && receipt.Mode != ModeOrdinaryBounded && receipt.Mode != ModeJudgmentDay {
 		return fmt.Errorf("invalid receipt mode %q", receipt.Mode)
 	}
 	for _, tree := range []string{receipt.BaseTree, receipt.InitialReviewTree, receipt.FinalCandidateTree} {
@@ -262,6 +409,10 @@ func validateReceiptStructure(receipt Receipt) error {
 	if err := validateCounters(receipt.Mode, receipt.Counters); err != nil {
 		return err
 	}
+	lensState := Transaction{Mode: receipt.Mode, State: StateApproved, RiskLevel: receipt.RiskLevel, SelectedLenses: receipt.SelectedLenses, LensResults: receipt.LensResults, Counters: receipt.Counters, Findings: mergedLensFindings(receipt.LensResults)}
+	if err := lensState.validateLensState(); err != nil {
+		return err
+	}
 	switch receipt.TerminalState {
 	case TerminalApproved:
 		if receipt.Counters.FinalVerifications != 1 {
@@ -271,6 +422,10 @@ func validateReceiptStructure(receipt Receipt) error {
 		case ModeOrdinary4R:
 			if receipt.Counters.FullReviews != 1 || receipt.Counters.FixBatches != receipt.Counters.ScopedFixValidations {
 				return errors.New("approved ordinary receipt has incoherent review/fix counters")
+			}
+		case ModeOrdinaryBounded:
+			if len(receipt.LensResults) != len(receipt.SelectedLenses) || receipt.Counters.FixBatches != receipt.Counters.ScopedFixValidations {
+				return errors.New("approved ordinary bounded receipt has incomplete lenses or incoherent fix counters")
 			}
 		case ModeJudgmentDay:
 			if receipt.Counters.FixRounds != receipt.Counters.ScopedRejudgments {
@@ -284,7 +439,7 @@ func validateReceiptStructure(receipt Receipt) error {
 	default:
 		return fmt.Errorf("invalid terminal_state %q", receipt.TerminalState)
 	}
-	if receipt.Mode == ModeOrdinary4R && receipt.JudgeProofHash != "" {
+	if isOrdinaryMode(receipt.Mode) && receipt.JudgeProofHash != "" {
 		return errors.New("ordinary receipt cannot contain Judgment Day proof")
 	}
 	if receipt.Release != nil {
@@ -296,6 +451,14 @@ func validateReceiptStructure(receipt Receipt) error {
 		}
 	}
 	return nil
+}
+
+func mergedLensFindings(results []LensResult) []Finding {
+	findings := make([]Finding, 0)
+	for _, result := range results {
+		findings = append(findings, result.Findings...)
+	}
+	return findings
 }
 
 func validateReleaseEvidence(release ReleaseEvidence) error {
@@ -339,5 +502,7 @@ func validSHA256(value string) bool {
 }
 
 func validGitTree(value string) bool {
-	return gitTreePattern.MatchString(value)
+	// Git reserves the all-zero OID as the null object; it never names a real
+	// tree or commit, so it is rejected even though it is syntactically hex.
+	return gitTreePattern.MatchString(value) && strings.Trim(value, "0") != ""
 }
