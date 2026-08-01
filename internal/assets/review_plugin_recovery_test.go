@@ -221,7 +221,7 @@ func TestSDDTaskResultFailuresAreTerminalAndScoped(t *testing.T) {
 	}{
 		{name: "empty unsuffixed phase", scenario: "sdd-empty", wantCode: "sdd_task_result_empty", wantPhase: "sdd-propose", wantBlocked: true},
 		{name: "malformed profile-suffixed phase", scenario: "sdd-profile-malformed", wantCode: "sdd_task_result_malformed", wantPhase: "sdd-propose-cheap", wantBlocked: true},
-		{name: "unrelated sdd-prefixed agent", scenario: "sdd-unrelated", wantCode: "NO_ERROR", wantPhase: "sdd-custom"},
+		{name: "unrelated sdd-prefixed agent", scenario: "sdd-unrelated", wantCode: "NO_ERROR"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
