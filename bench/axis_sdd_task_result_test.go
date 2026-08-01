@@ -13,11 +13,9 @@ func TestSDDTaskResultAxisRegistration(t *testing.T) {
 		if axis.Name != sddTaskResultAxis {
 			continue
 		}
-		if axis.BlackBox || len(axis.Journeys()) != 1 || axis.Journeys()[0].ID != "tr01-sdd-empty-task-result" {
-			t.Fatalf("SDD task-result axis = %+v", axis)
-		}
-		if !strings.Contains(axis.Properties[1], "GENTLE_AI_BENCH_SDD_PLUGIN") || !strings.Contains(axis.Properties[1], "type stripping") {
-			t.Fatalf("axis does not document its skippable runtime dependency: %v", axis.Properties)
+		if axis.BlackBox || len(axis.Journeys()) != 1 || axis.Journeys()[0].ID != "tr01-sdd-empty-task-result" ||
+			!strings.Contains(axis.Properties[1], "GENTLE_AI_BENCH_SDD_PLUGIN") || !strings.Contains(axis.Properties[1], "type stripping") {
+			t.Fatalf("SDD task-result axis contract = %+v", axis)
 		}
 		t.Setenv("GENTLE_AI_BENCH_SDD_PLUGIN", "")
 		if reason := sddTaskResultUnavailable(nil); reason == "" {

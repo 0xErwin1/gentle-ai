@@ -11,8 +11,7 @@ import (
 	"time"
 )
 
-// This opt-in axis drives the installed OpenCode plugin, not the native CLI.
-// The core corpus cannot manufacture provider-owned transport honestly.
+// This opt-in axis drives provider-owned OpenCode transport, not the native CLI.
 const sddTaskResultAxis = "sdd-task-result"
 
 func init() {
@@ -56,8 +55,6 @@ func sddTaskResultUnavailable(*Sandbox) string {
 	return sddTaskResultNodeUnavailable(node)
 }
 
-const sddTaskResultNodeCapability = `const marker: string = "gentle-ai-sdd-task-result"`
-
 func sddTaskResultNodeUnavailable(node string) string {
 	dir, err := os.MkdirTemp("", "gentle-ai-sdd-task-result-node-*")
 	if err != nil {
@@ -65,14 +62,19 @@ func sddTaskResultNodeUnavailable(node string) string {
 	}
 	defer os.RemoveAll(dir)
 	capability := filepath.Join(dir, "capability.mts")
-	if err := os.WriteFile(capability, []byte(sddTaskResultNodeCapability), 0o600); err != nil {
+	if err := os.WriteFile(capability, []byte(`const marker: string = "gentle-ai-sdd-task-result"`), 0o600); err != nil {
 		return "node TypeScript capability check could not write a temporary .mts file"
 	}
-	output, err := exec.Command(node, capability).CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), sddTaskResultHarnessTimeout)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, node, capability).CombinedOutput()
 	if err == nil {
 		return ""
 	}
 	detail := strings.TrimSpace(string(output))
+	if detail == "" && ctx.Err() != nil {
+		detail = ctx.Err().Error()
+	}
 	if detail == "" {
 		detail = err.Error()
 	}
