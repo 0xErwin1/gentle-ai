@@ -2234,6 +2234,7 @@ func TestInstalledSDDApplyExecutorProofRejectsOrchestratorSpoof(t *testing.T) {
 	fixture := &openCodeFixtureServer{
 		requireInstalledSDDApplyExecutor: true,
 		executorNonce:                    nonce,
+		executorCompletionPrefix:         "SDD_APPLY_EXECUTOR_COMPLETED:",
 		executorSubagentResult:           executorComplete,
 	}
 	recorder := httptest.NewRecorder()
@@ -2247,6 +2248,66 @@ func TestInstalledSDDApplyExecutorProofRejectsOrchestratorSpoof(t *testing.T) {
 	}
 	if !strings.Contains(fixture.failure, "without executor bash result") {
 		t.Fatalf("spoof refusal = %q, want missing executor bash result", fixture.failure)
+	}
+}
+
+func TestInstalledSDDApplyExecutorRoundTripRejectsMissingCredentials(t *testing.T) {
+	tests := []struct {
+		name   string
+		nonce  string
+		prefix string
+	}{
+		{name: "empty nonce", prefix: "SDD_APPLY_EXECUTOR_COMPLETED:"},
+		{name: "empty completion prefix", nonce: "sdd-apply-executor-nonce-missing-prefix"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const executorResult = "SDD_APPLY_EXECUTOR_COMPLETED:fixture-result"
+			fixture := &openCodeFixtureServer{
+				executorNonce:            tt.nonce,
+				executorCompletionPrefix: tt.prefix,
+				executorBashResult:       tt.nonce,
+				executorSubagentResult:   executorResult,
+			}
+			recorder := httptest.NewRecorder()
+			input := openAIRequest{Messages: []openAIMessage{{Role: "tool", Content: executorResult}}}
+
+			if fixture.acceptInstalledSDDApplyExecutorRoundTrip(recorder, input) {
+				t.Fatal("round trip accepted missing executor proof credentials")
+			}
+			if recorder.Code != http.StatusInternalServerError {
+				t.Fatalf("response status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+			}
+			if !strings.Contains(fixture.failure, "missing nonce or completion marker") {
+				t.Fatalf("refusal = %q, want missing credentials", fixture.failure)
+			}
+		})
+	}
+}
+
+func TestInstalledSDDApplyExecutorRoundTripRejectsUnrelatedBashOutput(t *testing.T) {
+	const (
+		nonce            = "sdd-apply-executor-nonce-unrelated-output"
+		executorComplete = "SDD_APPLY_EXECUTOR_COMPLETED:" + nonce
+	)
+	fixture := &openCodeFixtureServer{
+		executorNonce:            nonce,
+		executorCompletionPrefix: "SDD_APPLY_EXECUTOR_COMPLETED:",
+		executorBashResult:       "completed a different command successfully",
+		executorSubagentResult:   executorComplete,
+	}
+	recorder := httptest.NewRecorder()
+	input := openAIRequest{Messages: []openAIMessage{{Role: "tool", Content: executorComplete}}}
+
+	if fixture.acceptInstalledSDDApplyExecutorRoundTrip(recorder, input) {
+		t.Fatal("round trip accepted non-empty bash output without the executor nonce")
+	}
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("response status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+	if !strings.Contains(fixture.failure, "without executor bash result") {
+		t.Fatalf("refusal = %q, want nonce-bound executor bash result", fixture.failure)
 	}
 }
 
@@ -2471,9 +2532,14 @@ func (fixture *openCodeFixtureServer) captureInstalledSDDApplyExecutorBashResult
 func (fixture *openCodeFixtureServer) acceptInstalledSDDApplyExecutorRoundTrip(writer http.ResponseWriter, input openAIRequest) bool {
 	fixture.mu.Lock()
 	nonce := fixture.executorNonce
+	prefix := fixture.executorCompletionPrefix
 	bashResult := fixture.executorBashResult
 	executorResult := fixture.executorSubagentResult
 	fixture.mu.Unlock()
+	if nonce == "" || prefix == "" {
+		fixture.fail(writer, "installed sdd-apply executor proof is missing nonce or completion marker")
+		return false
+	}
 	if !strings.Contains(bashResult, nonce) {
 		fixture.fail(writer, "orchestrator cannot complete the executor proof without executor bash result")
 		return false
@@ -2503,14 +2569,19 @@ func (fixture *openCodeFixtureServer) assertInstalledSDDApplyExecutorProof(t *te
 	t.Helper()
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
-	executorResult := fixture.executorCompletionPrefix + fixture.executorNonce
+	nonce := fixture.executorNonce
+	prefix := fixture.executorCompletionPrefix
+	if nonce == "" || prefix == "" {
+		t.Fatal("installed sdd-apply executor proof is missing nonce or completion marker")
+	}
+	executorResult := prefix + nonce
 	if fixture.completion == executorResult {
 		t.Fatal("orchestrator and executor completion markers must be distinct")
 	}
-	if !strings.Contains(fixture.actorCommand, fixture.executorNonce) {
+	if !strings.Contains(fixture.actorCommand, nonce) {
 		t.Fatal("the installed sdd-apply executor did not receive its nonce-bearing bash command")
 	}
-	if !strings.Contains(fixture.executorBashResult, fixture.executorNonce) {
+	if !strings.Contains(fixture.executorBashResult, nonce) {
 		t.Fatal("the installed sdd-apply executor did not return its bash-produced nonce")
 	}
 	if fixture.executorSubagentResult != executorResult {
