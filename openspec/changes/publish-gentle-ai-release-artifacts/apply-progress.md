@@ -191,3 +191,144 @@ None.
 ## Status (cumulative)
 
 10/10 Phase A1a tasks complete. 11/11 Phase A1b tasks complete. 21/36 total tasks complete. Ready for `sdd-verify` on Phase A1b, then PR 2 of the feature-branch chain (base: `feat/release-artifact-contract`, PR 1's branch).
+
+---
+
+## Phase A2 — Archive Assembly, Policy Amendment, Verify Script, Docs
+
+**Branch**: `feat/release-assets-archive` (base: `feat/release-artifact-snapshot`)
+
+### Completed Tasks
+
+- [x] A2.1 EMPIRICAL GATE — measured both candidate configs; chose branch A (`meta: true`)
+- [x] A2.2 RED `internal/releasepolicy/policy_test.go`
+- [x] A2.3 GREEN `.goreleaser.yaml` (branch A)
+- [x] A2.4 GREEN `internal/releasepolicy/policy.go` (D6 ID-keyed split), same commit as A2.3
+- [x] A2.5 RED/GREEN `internal/releasepolicy/assets_archive_id_test.go` (cross-package literal-equality guard)
+- [x] A2.6 GREEN re-ran `TestReleaseDistributionPolicyAssertionFailsClosed` (`internal/update`) against the copied `policy.go`; fixed the fixture drift it found
+- [x] A2.7 RED / A2.8 GREEN `scripts/verify-release-assets.sh` admits the assets archive
+- [x] A2.9 Evidence record — this section
+- [x] A2.10 `docs/release-artifact.md` extended with publication + verification sections
+
+All ten A2 tasks complete. Phase A3 is out of scope for this batch and remains `[ ]` in `tasks.md`.
+
+### A2.1 — Empirical gate (verbatim measurements)
+
+Environment: `goreleaser` v2.15.2 at `$(go env GOPATH)/bin/goreleaser` (not on `PATH`), `MINISIGN_PUBLIC_KEYS_CANONICAL=dummy`, `release --snapshot --clean --skip=sign,publish`, repository at `feat/release-assets-archive` (working tree clean before each run). Confirmed the given baseline first: an unmodified snapshot on this branch reproduced the exact stated shape — 4 `Archive` + 4 `Binary` + 1 each `Metadata`/`Checksum`/`Homebrew Formula`, and `dist/homebrew/Formula/gentle-ai.rb` sha256 `93a9c41a52d7b7fa22db750048cd1b5d34ebd79f7625c6b00312629d29f4ddbc` — matched byte-for-byte on the first run.
+
+**Critical discovery before either branch could be measured meaningfully**: `before.hooks` run *after* `--clean` wipes `dist/`, but *before* GoReleaser's own "ensuring distribution directory" step, which requires `dist/` to not already exist/be non-empty. A hook that stages into any path under `dist/` (e.g. `dist/release-assets/`) makes that step fail with `dist is not empty, remove it before running goreleaser or use the --clean flag`. **Resolution, applying to both branches**: the generator must stage outside `dist/` — `.release-assets-staging/` at the repository root (added to `.gitignore`).
+
+**Second discovery (branch A only)**: `internal/releaseassetscmd`'s own staged root contains two files at depth 0 (`artifact-manifest.json`, `LICENSE`); a GoReleaser archive `files:` glob of `.release-assets-staging/**/*` silently dropped both from the resulting tar (doublestar `**/*` requires at least one directory level of nesting to match). Fixed by using `.release-assets-staging/**` (no trailing `/*`), which matched every staged file including the two at depth 0. Confirmed with `tar -tf` diffed against `find .release-assets-staging -type f`: `IDENTICAL` only after this fix.
+
+**Third discovery, affecting the D5 gate-4 measurement methodology itself**: two consecutive snapshot runs of the **completely unmodified baseline config** (zero config change) produced two different `dist/homebrew/Formula/gentle-ai.rb` sha256 values (`76e2d8e84e4be87d3b9ea646da62c0edbc2fb302845c15be203c915cfd97a14d` then `0bff55722ff28f4f3860f74c82691b64747d5552ca6f2acccb91cd7cc99b7931` — neither equals the given baseline `93a9c41a...` either, which was itself one specific run's output). The compiled Go binary was confirmed byte-identical across runs (`sha256sum` match) — Go's build is reproducible here. The variance is in the **tar archive member timestamps** GoReleaser stamps at build time (`tar -tvf` showed every member, including static repo files like `LICENSE`/`README.md`, carrying the *current wall-clock build time*, not the source file's real mtime), which changes the compiled archive's bytes — and therefore its sha256, and therefore every embedded sha256 in the generated Homebrew formula — on every single invocation, independent of any config change. **A literal byte-for-byte sha256 match is therefore not achievable by either branch, including a no-op re-run.** Diffing the two baseline-vs-baseline runs with sha256 lines stripped showed **zero** structural difference (identical URLs, identical `on_macos`/`on_linux` branching, identical install steps) — only the four sha256 values changed. D5 gate 4 ("Homebrew formula sha256 is unchanged") was therefore evaluated as **structural equivalence with sha256 lines normalized out** — the only form of "unchanged" that is actually measurable — and is documented here as a deviation from a literal reading, not a silent reinterpretation.
+
+**Fourth discovery (branch B, independent of the 5-point checklist, and disqualifying on its own)**: with `--skip=publish` (mandatory in snapshot mode), GoReleaser's `release.extra_files`/`checksum.extra_files` mechanism (branch B) never produces an entry in `dist/artifacts.json` at all — `dist/artifacts.json`'s type counts stayed exactly `{"Metadata":1,"Binary":4,"Archive":4,"Checksum":1,"Homebrew Formula":1}`, unchanged from the zero-assets baseline, even though `checksums.txt` did gain a line for the assets tar (the checksum pipe itself does run under `--skip=publish`; only the release/upload pipe, which is where `artifacts.json`'s extra-file bookkeeping happens, is skipped). Since `internal/releasepolicy.Validate()` is the CI preflight gate and reads only `dist/artifacts.json`, **branch B's assets archive would be structurally invisible to the pre-publish policy check that is the entire point of this design** — the "Exact-Plus-One Release Shape" requirement could not be enforced before a live publish under branch B. This is a disqualifying flaw independent of D5's five points.
+
+#### Branch A (`meta: true` archive, `id: default`/`id: assets`, `brews[0].ids: [default]`) — final measurement
+
+`dist/artifacts.json` counts: `{"Metadata":1,"Binary":4,"Archive":5,"Checksum":1,"Homebrew Formula":1}`. The assets `Archive` entry (raw):
+
+```json
+{
+  "name": "gentle-ai_2.2.4-SNAPSHOT-6af7642d_assets.tar.gz",
+  "path": "dist/gentle-ai_2.2.4-SNAPSHOT-6af7642d_assets.tar.gz",
+  "internal_type": 1,
+  "type": "Archive",
+  "extra": {
+    "Binaries": [],
+    "Checksum": "sha256:c8cb21287cf093366c0c1aa89bf442663c72c4626684d53d2c1f87bfa0b45477",
+    "Files": ["LICENSE", "artifact-manifest.json", "capabilities/review-integration-v2.semantic.json", "contracts/release-artifact/v1/fixtures/artifact-manifest-unsupported-major.fixture.json", "contracts/release-artifact/v1/fixtures/artifact-manifest.fixture.json", "contracts/release-artifact/v1/schemas/artifact-manifest.schema.json", "... (60 contracts/review-integration v1+v2 fixture/schema paths) ...", "docs/release-artifact.md"],
+    "Format": "tar.gz",
+    "ID": "assets",
+    "WrappedIn": ""
+  }
+}
+```
+
+No `goos`/`goarch`/`target` keys present at all (empty platform axis, D5 point 1: PASS).
+
+`tar -tf dist/gentle-ai_2.2.4-SNAPSHOT-6af7642d_assets.tar.gz | sort` diffed against `(cd .release-assets-staging && find . -type f | sed 's#^\./##' | sort)`: **`IDENTICAL`** (D5 point 2, the hard gate: PASS).
+
+`checksums.txt` (5 lines, exactly one for the assets archive — D5 point 3: PASS):
+
+```
+c8cb21287cf093366c0c1aa89bf442663c72c4626684d53d2c1f87bfa0b45477  gentle-ai_2.2.4-SNAPSHOT-6af7642d_assets.tar.gz
+32958c7ffcebc368d87d6f0b79f50bfb722542ccacc3eff616b69c58f565ad1b  gentle-ai_2.2.4-SNAPSHOT-6af7642d_darwin_amd64.tar.gz
+e3e9fc23292f32db8e9052cbb0b7063f00a076b13b42c2de70cd3de8fd6793b9  gentle-ai_2.2.4-SNAPSHOT-6af7642d_darwin_arm64.tar.gz
+1924287fc9b823a2d946f579ce29ffa956d258e7cb0888865520699e398ab0e3  gentle-ai_2.2.4-SNAPSHOT-6af7642d_linux_amd64.tar.gz
+cc06ef8493fae29be1fa0a40a63c3dcfb5c713dd5e6506d8d728229a10723d86  gentle-ai_2.2.4-SNAPSHOT-6af7642d_linux_arm64.tar.gz
+```
+
+Homebrew formula sha256 (branch A, with `brews[0].ids: [default]`): `6c09ab09628a8fa0f65ba26d442c443d8d5298c0a4594fe9ad5ce9fa3db72665`. Diffed against a fresh baseline run with sha256 lines stripped: **`STRUCTURALLY IDENTICAL`** — same 4 `on_macos`/`on_linux` URL blocks, same install steps, no assets-archive reference. Without `brews[0].ids: [default]` (i.e. leaving `brews:` unfiltered while a second archive exists), the formula's sha256-normalized structure was **still** identical in this run (GoReleaser evidently still resolved to the 4 platform archives by binary-count heuristic in this particular version/config), but `brews[0].ids: [default]` was kept anyway per D7 — it is the explicit, non-heuristic-dependent statement of intent and is required by design regardless of what one snapshot run happened to resolve to. D5 point 4 (formula unchanged): **PASS under structural-equivalence interpretation** (see the third discovery above for why literal byte-identity is unattainable in either branch).
+
+D5 point 5 (policy.go change is a new ID-keyed branch plus `Archive: 5`, four-platform loop body textually unchanged): satisfied by construction in A2.4 below — verified the platform-loop body is byte-identical to the pre-amendment version except iterating `platformArchives` instead of `byType["Archive"]`.
+
+**All five D5 points hold for branch A.**
+
+#### Branch B (`before.hooks` tar + `checksum.extra_files` + `release.extra_files`, archives unmodified) — measurement
+
+`dist/artifacts.json` counts: `{"Metadata":1,"Binary":4,"Archive":4,"Checksum":1,"Homebrew Formula":1}` — **unchanged from the zero-assets baseline**; the assets file produces no entry in `artifacts.json` at all under `--skip=publish` (fourth discovery above). No `type` key or count exists to extend `expectedCounts` with — there is nothing in `dist/artifacts.json` for `policy.go` to check.
+
+`tar -tf .release-assets-out/gentle-ai_..._assets.tar.gz` initially (naive `tar -C dir -czf out .`) emitted directory-node entries (`./`, `capabilities/`, `contracts/`, …) in addition to the file entries — violating D3 ("directories are implicit, the writer emits no directory members") and the D5 point-2 hard gate. Fixed with an explicit file list (`find -type f | tar -T -`, no `.` source, no directory recursion flag) — after the fix, `tar -tf` member paths were `IDENTICAL` to the staged file list.
+
+`checksums.txt` (5 lines, assets line present — the checksum pipe runs even under `--skip=publish`):
+
+```
+93a2f8ec708aec8f450a043dc761d0b2eaffbbcce1e538e475fa43b60d850fe9  gentle-ai_2.2.4-SNAPSHOT-6af7642d_assets.tar.gz
+3b8ca3a05f78e553561b61f48820ce6bcca6e94a2f83c31d717217208c45ddd0  gentle-ai_2.2.4-SNAPSHOT-6af7642d_darwin_amd64.tar.gz
+0b4e76508982af89796574f8343714ecf9054f35ec04c3255b831a46619de783  gentle-ai_2.2.4-SNAPSHOT-6af7642d_darwin_arm64.tar.gz
+d5ae3a47bfbd96fb14a119354eaac497183692512db999467c0e3444d5725f0d  gentle-ai_2.2.4-SNAPSHOT-6af7642d_linux_amd64.tar.gz
+79c4fea8a150dd5519e68fcda10b26686fdb0d3783591a88e2a682c42cd1213b  gentle-ai_2.2.4-SNAPSHOT-6af7642d_linux_arm64.tar.gz
+```
+
+Formula sha256 (branch B): `a362e5a1764d515f5a7ee90695bda286a017f69fcb8ac916837cd0595e4cc16c` — structurally identical to baseline with sha256 lines stripped (expected: branch B changes nothing about `archives:`/`brews:`).
+
+**Branch B is disqualified**: not by a D5 checklist failure (D5 points 1-4 are effectively moot since the artifact never appears in `artifacts.json` to evaluate against points 1-3, and point 4 passes trivially since nothing about the Homebrew-relevant config changed), but by the independent, more severe finding above — the pre-publish CI preflight (`internal/releasepolicy.Validate()`, driven by `dist/artifacts.json`) cannot see or enforce the assets archive's presence/identity at all under `--skip=publish`, defeating the design's core purpose (the exact-plus-one release shape must be assertable *before* a live publish, not just after).
+
+### Decision: **Branch A** (`meta: true` archive)
+
+Chosen per D5's rule (all five points hold) and reinforced by branch B's independent, disqualifying policy-visibility gap. Implementation: `.goreleaser.yaml` gains `before.hooks` (staging via `internal/releaseassetscmd` into `.release-assets-staging/`, outside `dist/`), an explicit `id: default` on the existing archive, a new `id: assets, meta: true` archive with `files: [{src: .release-assets-staging/**, dst: .}]`, and `brews[0].ids: [default]`.
+
+### TDD Cycle Evidence
+
+| Task | RED (test written first, run, failed for the right reason) | GREEN (implementation, run, passed) | REFACTOR |
+|---|---|---|---|
+| A2.2/3/4 policy exact-plus-one split | `go vet ./internal/releasepolicy/...` → `undefined: assetsArchiveID` (compile failure — `policy_test.go` written against the not-yet-existing D6 amendment) | `go test ./internal/releasepolicy/... -v` → all PASS: happy path (4 platform + 1 assets → nil); 3 newly-RED count/axis/identity rejection rows (one required rewriting — see Deviations); 6 regression-lock rows (missing/wrong/mislabeled platform archive, missing binary, Windows binary present) all still reject | None. |
+| A2.5 cross-package literal guard | N/A (literal already matched by construction from A2.4) — proved the guard is not vacuously true by temporarily mutating `assetsArchiveID` to `"assets-drifted"`: `go test -run TestAssetsArchiveIDMatchesReleaseArtifactContract` → FAIL with the exact drift message, then reverted → PASS | `go test ./internal/releasepolicy/... -run TestAssetsArchiveIDMatchesReleaseArtifactContract -v` → PASS | None. |
+| A2.6 `internal/update` fixture drift | `go test ./internal/update/... -run TestReleaseDistributionPolicyAssertionFailsClosed -v` → FAIL: `resolved GoReleaser artifact types changed: map[Archive:4 ...]` (the fixture's "approved release plan" baseline still had 4 archives against the amended `expectedCounts["Archive"]==5`) | Added the assets archive to `releasePolicyArtifactsFixture` → `go test ./internal/update/... -run TestReleaseDistributionPolicyAssertionFailsClosed -v` → all 23 subtests PASS (happy path + 22 bypass-rejection rows) | None. |
+| A2.7/8 `verify-release-assets.sh` | Added a fixed-expectation test (fake `gh` returning a 5-asset live release) → `go test ./internal/update/... -run TestReleaseAssetVerifierAdmitsTheAssetsArchive -v` → FAIL: `remote asset set is incomplete or unexpected` (script's `archives=()` still had only 4 entries, so the 5th remote asset was unrecognized) | Added the 5th entry to `archives=()` → same test PASS. Folded the fixture into the pre-existing `TestReleaseAssetVerifierPreservesReadOnlyRotationVerification` (which now represents the correct 5-archive live-release shape) and removed the standalone RED-proof test file to avoid a near-duplicate permanent fixture; the RED-then-GREEN transcript above is the retained record of that cycle | Deleted the transitional standalone test file after folding its fixture into the existing, broader test (which also asserts the read-only `gh` command surface — a property the transitional test didn't check). |
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `go test ./internal/releasepolicy/... && go test ./internal/update/... -run TestReleaseDistributionPolicyAssertionFailsClosed` → both `ok` (matches the Suggested Work Units table's A2 focused command) |
+| Runtime harness command/scenario and exact result | `MINISIGN_PUBLIC_KEYS_CANONICAL=dummy $(go env GOPATH)/bin/goreleaser release --snapshot --clean --skip=sign,publish` against the real repository (branch-A config) → succeeded, 5 archives, `tar -tf dist/gentle-ai_2.2.4-SNAPSHOT-6af7642d_assets.tar.gz` matched staged paths exactly. Then ran the real CI preflight gate end-to-end: wrote a run marker, reran the snapshot, executed `RELEASE_POLICY_SNAPSHOT_MARKER=... RELEASE_POLICY_SNAPSHOT_RUN_ID=... bash scripts/verify-release-distribution-policy.sh` → `release distribution policy: exact current Linux/macOS snapshot and sole Homebrew publisher verified`. Note: `scripts/verify-release-assets.sh` itself talks only to a live GitHub release (`gh api`/`gh release download`), not a local `dist/`, so it cannot be run against a snapshot; it is exercised by the Go-level fake-`gh` harness test above instead, which is the existing pattern in this repository (`internal/update/release_security_test.go`). |
+| Full package result | `go test ./internal/releasepolicy/... ./internal/update/... ./internal/update/upgrade/... -v` → 100% PASS; `gofmt -l` clean (after one `gofmt -w` pass on `policy_test.go`); `go vet ./...` clean |
+| Whole-repository regression check | `go test ./...` (full repo) → all `ok`, zero failures, zero build errors (`internal/cli` 162.2s, remainder cached/fast) |
+| Rollback boundary | Revert `.goreleaser.yaml`, `.gitignore` (drop `.release-assets-staging/`), `internal/releasepolicy/policy.go` (both the archive-split logic and `expectedGoReleaserYAML`), `internal/releasepolicy/policy_test.go`, `internal/releasepolicy/assets_archive_id_test.go`, `internal/update/windows_distribution_policy_test.go` (fixture), `internal/update/release_security_test.go` (fixture), `scripts/verify-release-assets.sh`, and `docs/release-artifact.md`'s A2 sections together — restores the exact four-archive release with its original policy assertions. `internal/releaseartifact` and `internal/releaseassetscmd` (A1a/A1b) are untouched and remain independently valid; only the wiring added in this phase is removed. |
+
+### Commits (work-unit-commits skill)
+
+1. `feat(releasepolicy): admit a platform-independent assets archive in the release shape` — `.goreleaser.yaml`, `.gitignore`, `internal/releasepolicy/policy.go`, `internal/releasepolicy/policy_test.go`, `internal/releasepolicy/assets_archive_id_test.go`, `internal/update/windows_distribution_policy_test.go`
+2. `fix(release): verify the assets archive in remote release verification` — `scripts/verify-release-assets.sh`, `internal/update/release_security_test.go`
+3. `docs(release-artifact): document assets archive publication and verification` — `docs/release-artifact.md`
+4. `docs(sdd): record Phase A2 apply-progress evidence` — `tasks.md`, `apply-progress.md`
+
+### Deviations from Design
+
+- **D5 gate 4 ("Homebrew formula sha256 unchanged") evaluated as structural equivalence, not literal byte identity.** Empirically proven unattainable literally: two runs of the fully unmodified baseline config produce different formula sha256 values (GoReleaser stamps build-time timestamps into tar member metadata regardless of config). Documented in full under A2.1's third discovery above. The measurable, intent-matching form — same URL/sha256-pair count, same `on_macos`/`on_linux` branching, same install steps, with sha256 lines normalized out — holds in every comparison performed.
+- **A2.2's "assets archive absent"/"assets archive duplicated" rows** were originally written expecting a dedicated "assets archive count" error message; empirically they are caught one layer earlier by the pre-existing `expectedCounts` type-level check (since removing/duplicating the assets archive changes the total `Archive` count away from the fixed `5`). Rewrote the test rows' expected substring to `"artifact types changed"` and added one additional row — an `Extra.ID` reassignment that keeps the total count at `5` — to reach and prove the dedicated `len(assetsArchives) != 1` check design's D6 snippet describes. No behavior was loosened; this is a test-expectation correction, not a scope change.
+- **A2.7's standalone RED-proof test file was folded into and then removed in favor of the pre-existing `TestReleaseAssetVerifierPreservesReadOnlyRotationVerification`**, whose fixture now represents the correct (post-A2) 5-archive live-release shape and additionally asserts the read-only `gh` command surface. The RED-then-GREEN transcript is preserved in this record rather than as a permanent duplicate test.
+
+### Issues Found
+
+None beyond the four empirical discoveries recorded under A2.1, all resolved within this phase.
+
+## Remaining Tasks (out of scope for Phase A2)
+
+- [ ] Phase A3: Downstream Notification (A3.1-A3.5)
+
+## Status (cumulative)
+
+10/10 Phase A1a tasks complete. 11/11 Phase A1b tasks complete. 10/10 Phase A2 tasks complete. 31/36 total tasks complete. Ready for `sdd-verify` on Phase A2, then PR 3 of the feature-branch chain (base: `feat/release-artifact-snapshot`, PR 2's branch).
