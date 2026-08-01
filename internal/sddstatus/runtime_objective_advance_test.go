@@ -21,6 +21,11 @@ const (
 	advanceVerifyGoal       = "independently verify implementation against spec tasks"
 	advanceApplyMaxAttempts = 3
 	advanceApplyMaxLines    = 20
+	// The successor budget deliberately differs from the apply budget in both
+	// dimensions, so an assertion on it cannot pass while the predecessor's
+	// budget is carried over.
+	advanceVerifyMaxAttempts = 2
+	advanceVerifyMaxLines    = 30
 )
 
 func newRuntimeAdvanceFixture(t *testing.T, change string) runtimeAdvanceFixture {
@@ -56,7 +61,7 @@ func newRuntimeAdvanceFixture(t *testing.T, change string) runtimeAdvanceFixture
 func (fixture runtimeAdvanceFixture) verifyRequest(requestID string) BeginAttemptRequest {
 	return BeginAttemptRequest{
 		ExpectedRevision: fixture.passed.Revision, RequestID: requestID, WorkUnit: advanceVerifyWorkUnit,
-		EvidenceGoal: advanceVerifyGoal, MaxAttempts: 2, MaxChangedLines: advanceApplyMaxLines,
+		EvidenceGoal: advanceVerifyGoal, MaxAttempts: advanceVerifyMaxAttempts, MaxChangedLines: advanceVerifyMaxLines,
 	}
 }
 
@@ -80,6 +85,13 @@ func TestRuntimeLedgerAdvancesDistinctWorkUnitAfterPassedObjective(t *testing.T)
 		advanced.Objective.EvidenceGoal != advanceVerifyGoal || advanced.Objective.Generation != 2 ||
 		advanced.Objective.ID == fixture.passed.Objective.ID || advanced.ObjectiveGeneration != 2 {
 		t.Fatalf("advanced objective = %#v", advanced.Objective)
+	}
+	// The successor must hold the budget IT requested, not the one the passed
+	// predecessor was bound to.
+	if advanced.Objective.MaxAttempts != advanceVerifyMaxAttempts || advanced.Objective.MaxChangedLines != advanceVerifyMaxLines ||
+		advanced.Objective.MaxAttempts == fixture.passed.Objective.MaxAttempts ||
+		advanced.Objective.MaxChangedLines == fixture.passed.Objective.MaxChangedLines {
+		t.Fatalf("successor inherited the predecessor budget: %#v", advanced.Objective)
 	}
 	if advanced.CumulativeAttempts != 1 || advanced.CumulativeChangedLines != 0 ||
 		advanced.LifetimeAttempts != 2 || advanced.LifetimeChangedLines != fixture.passed.LifetimeChangedLines {
@@ -181,7 +193,7 @@ func TestRuntimeLedgerRefusesAdvanceWhenDecisionIsRequired(t *testing.T) {
 
 	_, err = store.Begin(context.Background(), BeginAttemptRequest{
 		ExpectedRevision: exhausted.Revision, RequestID: "exhausted-advance", WorkUnit: advanceVerifyWorkUnit,
-		EvidenceGoal: advanceVerifyGoal, MaxAttempts: 2, MaxChangedLines: advanceApplyMaxLines,
+		EvidenceGoal: advanceVerifyGoal, MaxAttempts: advanceVerifyMaxAttempts, MaxChangedLines: advanceVerifyMaxLines,
 	})
 	if !errors.Is(err, ErrRuntimeBudgetExhausted) {
 		t.Fatalf("advance past decision_required error = %T %v, want ErrRuntimeBudgetExhausted", err, err)
@@ -198,7 +210,7 @@ func TestCompactAcquireProceedsForDistinctWorkUnitAfterPassedObjective(t *testin
 	before := countRuntimeRecords(t, fixture.store.Dir)
 	request := CompactAcquireRequest{
 		RequestID: "compact-advance-verify", WorkUnit: advanceVerifyWorkUnit, EvidenceGoal: advanceVerifyGoal,
-		MaxAttempts: 2, MaxChangedLines: advanceApplyMaxLines,
+		MaxAttempts: advanceVerifyMaxAttempts, MaxChangedLines: advanceVerifyMaxLines,
 	}
 
 	result, err := fixture.store.Acquire(context.Background(), request)
