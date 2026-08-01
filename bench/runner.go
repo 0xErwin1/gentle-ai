@@ -301,8 +301,11 @@ func (p *capabilityProbe) probed(argv []string) (bool, string) {
 // Step is one unit of a journey. Journeys are data: adding one is adding a
 // Step to a slice.
 type Step struct {
-	Name     string
-	Fixture  func(*Sandbox) error
+	Name    string
+	Fixture func(*Sandbox) error
+	// Skip reports why an externally-backed step cannot run in this environment.
+	// The runner records the journey as unsupported rather than a false pass.
+	Skip     func(*Sandbox) string
 	Requires *Capability
 	Args     func(*Sandbox) ([]string, error)
 	// Composite drives a multi-command sub-flow (a lens loop, a rejected
@@ -434,6 +437,13 @@ func runJourney(binary string, journey Journey) JourneyResult {
 
 	for _, step := range journey.Steps {
 		run.step = step.Name
+		if step.Skip != nil {
+			if reason := step.Skip(run.sandbox); reason != "" {
+				result.Status = StatusUnsupported
+				result.UnsupportedSteps = append(result.UnsupportedSteps, step.Name+" ("+reason+")")
+				break
+			}
+		}
 
 		if step.Fixture != nil {
 			if err := step.Fixture(sandbox); err != nil {

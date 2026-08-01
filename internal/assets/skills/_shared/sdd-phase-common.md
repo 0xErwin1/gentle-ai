@@ -82,6 +82,8 @@ Every phase MUST return a structured envelope to the orchestrator:
 - `risks`: risks discovered, or "None"
 - `skill_resolution`: how skills were loaded — `paths-injected` (received exact skill paths from orchestrator), `fallback-registry` (self-loaded paths from registry), `fallback-path` (loaded via SKILL: Load path), or `none` (no skills loaded)
 
+If the task transport reports `sdd_task_result_empty` or `sdd_task_result_malformed`, do not assume this envelope was delivered. Do not retry automatically or initiate another phase; report the typed failure to the user and wait for an explicit decision.
+
 Example:
 
 ```markdown

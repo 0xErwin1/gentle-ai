@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -388,6 +389,9 @@ func writeJSON(path string, value any) error {
 
 func executable(path string) bool {
 	info, err := os.Stat(path)
+	if runtime.GOOS == "windows" {
+		return err == nil && !info.IsDir() && strings.EqualFold(filepath.Ext(path), ".exe")
+	}
 	return err == nil && !info.IsDir() && info.Mode()&0o111 != 0
 }
 
