@@ -49,7 +49,7 @@ const capture = async (activeHooks: typeof hooks, sessionID: string, marker: str
 
 try {
   if (scenario.startsWith("sdd-")) {
-    const phase = scenario === "sdd-profile-empty" ? "sdd-propose-cheap" : scenario === "sdd-unrelated" ? "sdd-custom" : "sdd-propose"
+    const phase = scenario.startsWith("sdd-profile-") ? "sdd-propose-cheap" : scenario === "sdd-unrelated" ? "sdd-custom" : "sdd-propose"
     const result = scenario.includes("malformed") ? "<task_result>broken" : scenario.includes("empty") ? "<task id=\"phase\" state=\"completed\">\n<task_result>\n\n</task_result>\n</task>" : ""
     const artifact = cwd + "/proposal.md"
     await writeFile(artifact, "existing artifact")
@@ -57,11 +57,20 @@ try {
     const output = { title: "", output: result, metadata: {} }
     let failure = "NO_ERROR"
     try { await hooks["tool.execute.after"](input, output) } catch (cause: unknown) { failure = cause instanceof Error ? cause.message : String(cause) }
-    let downstream = "NOT_ATTEMPTED"
-    if (scenario !== "sdd-unrelated") {
-      try { await hooks["tool.execute.before"]({ ...input, callID: "call-next", args: { subagent_type: "sdd-apply", prompt: "downstream" } }, { args: { subagent_type: "sdd-apply", prompt: "downstream" } }) } catch (cause: unknown) { downstream = cause instanceof Error ? cause.message : String(cause) }
+    if (scenario === "sdd-lifecycle") {
+      let beforeDispose = "NO_ERROR"
+      try { await hooks["tool.execute.before"]({ ...input, callID: "call-before-dispose" }, { args: { subagent_type: phase, prompt: "retry" } }) } catch (cause: unknown) { beforeDispose = cause instanceof Error ? cause.message : String(cause) }
+      await hooks.dispose?.()
+      let afterDispose = "NO_ERROR"
+      try { await hooks["tool.execute.before"]({ ...input, callID: "call-after-dispose" }, { args: { subagent_type: phase, prompt: "reuse" } }) } catch (cause: unknown) { afterDispose = cause instanceof Error ? cause.message : String(cause) }
+      console.log([failure, beforeDispose, afterDispose, await readFile(artifact, "utf8")].join("\n---\n"))
+    } else {
+      let downstream = "NOT_ATTEMPTED"
+      if (scenario !== "sdd-unrelated") {
+        try { await hooks["tool.execute.before"]({ ...input, callID: "call-next", args: { subagent_type: "sdd-apply", prompt: "downstream" } }, { args: { subagent_type: "sdd-apply", prompt: "downstream" } }) } catch (cause: unknown) { downstream = cause instanceof Error ? cause.message : String(cause) }
+      }
+      console.log([failure, downstream, await readFile(artifact, "utf8")].join("\n---\n"))
     }
-    console.log([failure, downstream, await readFile(artifact, "utf8")].join("\n---\n"))
   } else if (scenario.startsWith("before")) {
     const output = { args: { subagent_type: "review-risk", prompt } }
     await hooks["tool.execute.before"]({ tool: "task", sessionID: "session-a", callID: "call-before" }, output)
@@ -207,11 +216,12 @@ func TestSDDTaskResultFailuresAreTerminalAndScoped(t *testing.T) {
 		name        string
 		scenario    string
 		wantCode    string
+		wantPhase   string
 		wantBlocked bool
 	}{
-		{name: "empty unsuffixed phase", scenario: "sdd-empty", wantCode: "sdd_task_result_empty", wantBlocked: true},
-		{name: "malformed profile phase", scenario: "sdd-profile-malformed", wantCode: "sdd_task_result_malformed", wantBlocked: true},
-		{name: "unrelated sdd-prefixed agent", scenario: "sdd-unrelated", wantCode: "NO_ERROR"},
+		{name: "empty unsuffixed phase", scenario: "sdd-empty", wantCode: "sdd_task_result_empty", wantPhase: "sdd-propose", wantBlocked: true},
+		{name: "malformed profile-suffixed phase", scenario: "sdd-profile-malformed", wantCode: "sdd_task_result_malformed", wantPhase: "sdd-propose-cheap", wantBlocked: true},
+		{name: "unrelated sdd-prefixed agent", scenario: "sdd-unrelated", wantCode: "NO_ERROR", wantPhase: "sdd-custom"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -221,6 +231,9 @@ func TestSDDTaskResultFailuresAreTerminalAndScoped(t *testing.T) {
 			}
 			if !strings.Contains(parts[0], tt.wantCode) {
 				t.Fatalf("failure = %q, want typed code %q", parts[0], tt.wantCode)
+			}
+			if tt.wantPhase != "" && !strings.Contains(parts[0], tt.wantPhase) {
+				t.Fatalf("failure = %q, want phase %q", parts[0], tt.wantPhase)
 			}
 			if tt.wantBlocked && (!strings.Contains(parts[1], tt.wantCode) || !strings.Contains(parts[1], "Do not retry or advance SDD")) {
 				t.Fatalf("downstream SDD launch was not terminally blocked: %q", parts[1])
@@ -232,6 +245,22 @@ func TestSDDTaskResultFailuresAreTerminalAndScoped(t *testing.T) {
 				t.Fatalf("task-result handling mutated the existing artifact: %q", parts[2])
 			}
 		})
+	}
+}
+
+func TestReviewPluginDisposeClearsSDDSessionFailure(t *testing.T) {
+	parts := strings.Split(runReviewPluginScenario(t, "sdd-lifecycle", "unused"), "\n---\n")
+	if len(parts) != 4 {
+		t.Fatalf("SDD lifecycle outcomes = %q", parts)
+	}
+	if !strings.Contains(parts[0], "sdd_task_result_empty") || !strings.Contains(parts[1], "sdd_task_result_empty") {
+		t.Fatalf("SDD failure was not retained before dispose: %q", parts[:2])
+	}
+	if parts[2] != "NO_ERROR" {
+		t.Fatalf("dispose retained a failed SDD session for its reused ID: %q", parts[2])
+	}
+	if parts[3] != "existing artifact" {
+		t.Fatalf("SDD lifecycle handling mutated the existing artifact: %q", parts[3])
 	}
 }
 

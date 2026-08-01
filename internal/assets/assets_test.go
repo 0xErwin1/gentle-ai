@@ -510,7 +510,7 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`return JSON.stringify([binding.lineage, binding.target, binding.revision, binding.repository_context, binding.lens, binding.order, binding.subject_hash])`,
 		`const recovery = { sessionID: input.sessionID, store: admissionRecoveries }`,
 		`event.type === "session.deleted"`,
-		`dispose: async () => { admissionRecoveries.clear() }`,
+		"dispose: async () => {\n    admissionRecoveries.clear()\n    failedSDDSessions.clear()\n  }",
 		`MAX_ADMISSION_RECOVERY_SESSIONS`,
 		`MAX_ADMISSION_RECOVERIES_PER_SESSION`,
 		`sessionErrorMessage(binding, cause, "repository_context_preflight_failed")`,
