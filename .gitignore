@@ -27,6 +27,7 @@ Thumbs.db
 cmd/gentle-ai/main
 cmd/gentle-ai/gentle-ai
 dist/
+.release-assets-staging/
 
 # Agent tooling metadata (generated per-user, not product code)
 .atl/

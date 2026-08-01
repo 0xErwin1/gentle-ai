@@ -21,8 +21,13 @@ builds:
         -X main.version={{ .Version }}
         -X github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}
 
+before:
+  hooks:
+    - go run ./internal/releaseassetscmd --repository Gentleman-Programming/gentle-ai --tag {{ .Tag }} --version {{ .Version }} --commit {{ .Commit }} --staging-dir .release-assets-staging
+
 archives:
-  - formats:
+  - id: default
+    formats:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
@@ -31,6 +36,14 @@ archives:
       - docs/review-integration.md
       - contracts/review-integration/v1/schemas/*.schema.json
       - contracts/review-integration/v1/fixtures/*.fixture.json
+  - id: assets
+    meta: true
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_assets"
+    files:
+      - src: .release-assets-staging/**
+        dst: .
 
 checksum:
   name_template: "checksums.txt"
@@ -66,7 +79,9 @@ changelog:
       - "^ci:"
 
 brews:
-  - repository:
+  - ids:
+      - default
+    repository:
       owner: Gentleman-Programming
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"

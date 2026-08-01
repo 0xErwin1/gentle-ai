@@ -274,6 +274,14 @@ func yamlMapping(node *yaml.Node, location, label string) (map[string]yamlEntry,
 	return entries, nil
 }
 
+// assetsArchiveID is the GoReleaser `id:` bound to the platform-independent
+// release artifact assets archive (design D1, D6). This package is compiled
+// in isolation by the release-policy verifier (see the doc comment on
+// directoryContains), so it stays a duplicated string literal rather than an
+// import of internal/releaseartifact.AssetsArchiveID. Their agreement is
+// guarded by a cross-package equality test, not by sharing this constant.
+const assetsArchiveID = "assets"
+
 type artifact struct {
 	Name   string         `json:"name"`
 	Path   string         `json:"path"`
@@ -293,7 +301,7 @@ func validateArtifacts(root string, payload []byte, markerTime time.Time) error 
 	if err := requireJSONEOF(decoder); err != nil {
 		return err
 	}
-	expectedCounts := map[string]int{"Metadata": 1, "Binary": 4, "Archive": 4, "Checksum": 1, "Homebrew Formula": 1}
+	expectedCounts := map[string]int{"Metadata": 1, "Binary": 4, "Archive": 5, "Checksum": 1, "Homebrew Formula": 1}
 	byType := make(map[string][]artifact)
 	counts := make(map[string]int)
 	paths := make(map[string]struct{})
@@ -338,9 +346,27 @@ func validateArtifacts(root string, payload []byte, markerTime time.Time) error 
 		return errors.New("resolved binary matrix is incomplete")
 	}
 
+	// The assets archive is platform-independent and carries its own ID-keyed
+	// identity, so it is split out of byType["Archive"] before the existing
+	// four-platform loop runs. The platform loop body below is otherwise
+	// unchanged: every assertion it made before this amendment it still makes
+	// (design D6 note).
+	platformArchives := make([]artifact, 0, len(expectedTargets))
+	var assetsArchives []artifact
+	for _, item := range byType["Archive"] {
+		if extraString(item.Extra, "ID") == assetsArchiveID {
+			assetsArchives = append(assetsArchives, item)
+			continue
+		}
+		platformArchives = append(platformArchives, item)
+	}
+	if len(assetsArchives) != 1 {
+		return fmt.Errorf("resolved assets archive count changed: %d", len(assetsArchives))
+	}
+
 	seenArchives := make(map[string]struct{})
 	snapshotVersion := ""
-	for _, item := range byType["Archive"] {
+	for _, item := range platformArchives {
 		platform := item.GOOS + "/" + item.GOARCH
 		target, ok := expectedTargets[platform]
 		if !ok || item.Target != target {
@@ -366,6 +392,20 @@ func validateArtifacts(root string, payload []byte, markerTime time.Time) error 
 	}
 	if len(seenArchives) != len(expectedTargets) {
 		return errors.New("resolved archive matrix is incomplete")
+	}
+
+	// The assets archive must have no platform axis, must carry no binaries,
+	// and its name must bind the same snapshotVersion the platform archives
+	// just agreed on -- strictly additive to the platform assertions above.
+	assets := assetsArchives[0]
+	if assets.GOOS != "" || assets.GOARCH != "" || assets.Target != "" {
+		return errors.New("resolved assets archive must not carry a platform axis")
+	}
+	expectedAssetsName := "gentle-ai_" + snapshotVersion + "_assets.tar.gz"
+	if assets.Name != expectedAssetsName || assets.Path != "dist/"+expectedAssetsName ||
+		extraString(assets.Extra, "Format") != "tar.gz" ||
+		len(extraStrings(assets.Extra, "Binaries")) != 0 {
+		return errors.New("resolved assets archive identity changed")
 	}
 
 	if item := byType["Checksum"][0]; item.Name != "checksums.txt" || item.Path != "dist/checksums.txt" {
@@ -513,8 +553,12 @@ builds:
         -s -w
         -X main.version={{ .Version }}
         -X github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}
+before:
+  hooks:
+    - go run ./internal/releaseassetscmd --repository Gentleman-Programming/gentle-ai --tag {{ .Tag }} --version {{ .Version }} --commit {{ .Commit }} --staging-dir .release-assets-staging
 archives:
-  - formats:
+  - id: default
+    formats:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
@@ -523,6 +567,14 @@ archives:
       - docs/review-integration.md
       - contracts/review-integration/v1/schemas/*.schema.json
       - contracts/review-integration/v1/fixtures/*.fixture.json
+  - id: assets
+    meta: true
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_assets"
+    files:
+      - src: .release-assets-staging/**
+        dst: .
 checksum:
   name_template: "checksums.txt"
   algorithm: sha256
@@ -551,7 +603,9 @@ changelog:
       - "^test:"
       - "^ci:"
 brews:
-  - repository:
+  - ids:
+      - default
+    repository:
       owner: Gentleman-Programming
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
