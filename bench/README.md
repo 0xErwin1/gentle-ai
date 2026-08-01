@@ -306,7 +306,7 @@ invents a metric is worse than one that admits a gap.
    classifier reads a field other than exit code and denial shape, and widening
    it would let the product talk its way out of a denial.
 
-7. **The corpus is honest, not exhaustive.** Fifty core journeys that run
+7. **The corpus is honest, not exhaustive.** Fifty-one core journeys that run
    end to end, weighted toward failure paths because that is where friction
    lives. Testing-guide flows 1 (install) and 8 (no phantom SDD artifacts) are
    inspection steps rather than review-lifecycle friction and are not modelled.
