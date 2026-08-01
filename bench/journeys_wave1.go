@@ -936,6 +936,28 @@ func proveCompletedRetryInventory(_ *Sandbox, observation Observation) error {
 	return nil
 }
 
+func requireFreshNegotiatedStart(_ *Sandbox, observation Observation) error {
+	var status struct {
+		Applicability  string `json:"applicability"`
+		Action         string `json:"action"`
+		NextTransition *struct {
+			Kind    string `json:"kind"`
+			Execute *struct {
+				Operation string `json:"operation"`
+			} `json:"execute"`
+		} `json:"next_transition"`
+	}
+	if err := decodeWaveObservation(observation, &status, "fresh negotiated review status"); err != nil {
+		return err
+	}
+	if status.Applicability != "unrelated" || status.Action != "start" || status.NextTransition == nil ||
+		status.NextTransition.Kind != "execute" || status.NextTransition.Execute == nil ||
+		status.NextTransition.Execute.Operation != "review.start" {
+		return fmt.Errorf("fresh negotiated status did not offer review.start: %+v", status)
+	}
+	return nil
+}
+
 func rememberArchiveAuthority(sandbox *Sandbox, observation Observation) error {
 	if err := rememberLineage(sandbox, observation); err != nil {
 		return err
@@ -1355,6 +1377,29 @@ func waveOneJourneys() []Journey {
 					Args: productArgs("review", "mode", "disable", "--scope", "clone", "--json")},
 				{Name: "reviews off: the identical declined candidate reaches ordinary unmanaged delivery", Requires: validateCapability,
 					Args: productArgs("review", "validate", "--gate", "pre-commit"), After: requireDisabledUnmanagedGate},
+			},
+		},
+		{
+			ID:     "j51-negotiated-status-correction-continuation",
+			Title:  "Negotiated status: fresh candidate starts, corrected candidate continues",
+			Source: "issue #2044: selector-free fresh status and post-correction continuation",
+			Steps: []Step{
+				{Name: "fixture: repo", Fixture: baseRepo},
+				{Name: "fixture: one exact code candidate proven staged", Fixture: stageWaveCandidate},
+				{Name: "fixture: product process temp is unavailable", Fixture: unavailableProcessTemp},
+				{Name: "fresh negotiated status offers review start without authority history", Requires: statusCapability,
+					Args: productArgs("review", "status", "--contract", reviewContract, "--next-transition"), After: requireFreshNegotiatedStart},
+				{Name: "review start", Requires: startNamedCapability,
+					Args: productArgs("review", "start", "--lineage", correctedDeliveryLineage), After: rememberLineage},
+				{Name: "capture one blocking finding and finish the lens set", Requires: captureResultCapability, Composite: captureCorrectableFinding},
+				{Name: "finalize reviewer results into correction-required", Requires: finalizeResultsCapability,
+					Args:  productArgs("review", "finalize", "--lineage", correctedDeliveryLineage, "--captured-results=true"),
+					After: requireReviewState("correction_required", correctedDeliveryLineage)},
+				{Name: "forecast the bounded correction", Requires: finalizeCorrectionCapability,
+					Args: productArgs("review", "finalize", "--lineage", correctedDeliveryLineage, "--correction-lines", "2")},
+				{Name: "fixture: corrected candidate proven to change only the reviewed path", Fixture: writeCorrectedCandidate},
+				{Name: "post-correction status requests repository evidence", Requires: captureOutcomeEvidenceCapability, Composite: capturePassedCorrectionEvidence},
+				{Name: "post-correction status requests targeted validation", Requires: finalizeValidationCapability, Composite: completeCorrectedReview},
 			},
 		},
 	}

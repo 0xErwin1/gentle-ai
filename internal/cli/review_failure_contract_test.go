@@ -629,7 +629,6 @@ func TestNegotiatedReadOnlyCatchAllStaysContentFreeAndNeverAbsorbsProcessControl
 	if failure.Message != "The negotiated read-only review operation failed safely." {
 		t.Fatalf("read-only catch-all message is not content-free: %q", failure.Message)
 	}
-
 	control := fmt.Errorf("inventory review authority: %w", &reviewtransaction.GitProcessControlError{
 		Args: []string{"status", "--porcelain=v2"}, Cause: errors.New("NtResumeProcess status 0xC0000022"),
 	})

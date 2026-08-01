@@ -225,7 +225,13 @@ func (builder SnapshotBuilder) buildHeadWithIntended(ctx context.Context, intend
 		}
 	}
 
-	temp, err := os.CreateTemp("", "gentle-ai-review-index-*")
+	gitDir, err := resolveGitDirectory(ctx, builder.Repo, "--git-dir")
+	if err != nil {
+		return "", "", err
+	}
+	// Keep the private index beside Git's writable control files. A restricted
+	// integration environment may not provide an accessible process temp dir.
+	temp, err := os.CreateTemp(gitDir, ".gentle-ai-review-index-*")
 	if err != nil {
 		return "", "", err
 	}
@@ -945,7 +951,9 @@ func (builder *SnapshotBuilder) buildCurrentChanges(ctx context.Context, intende
 			return "", "", "", fmt.Errorf("intended-untracked path %q must name a file or symlink, not a directory", logicalPath)
 		}
 	}
-	temp, err := os.CreateTemp("", "gentle-ai-review-index-*")
+	// Keep the private index beside Git's writable control files. A restricted
+	// integration environment may not provide an accessible process temp dir.
+	temp, err := os.CreateTemp(filepath.Dir(indexPath), ".gentle-ai-review-index-*")
 	if err != nil {
 		return "", "", "", err
 	}

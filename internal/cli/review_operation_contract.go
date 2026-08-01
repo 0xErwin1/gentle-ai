@@ -116,10 +116,8 @@ type ReviewIntegrationFailure struct {
 	RequiredInputs         []string                        `json:"required_inputs"`
 	NextAction             string                          `json:"next_action"`
 	CauseCategory          string                          `json:"cause_category,omitempty"`
-	// Cause is additive: the wrapped real native cause for the
-	// operation_outcome_unknown default envelope, so a caller is never left
-	// with only a fixed placeholder message. It is never populated on the
-	// read-only catch-all, which stays deliberately content-free.
+	// Cause is additive: the scrubbed, bounded native cause for a typed failure
+	// branch that has a safe diagnostic to publish.
 	Cause   string                           `json:"cause,omitempty"`
 	Context *ReviewIntegrationFailureContext `json:"context,omitempty"`
 }
