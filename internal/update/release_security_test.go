@@ -104,7 +104,7 @@ set -euo pipefail
 printf '%s\n' "$*" >>"$GH_CALL_LOG"
 if [[ "$1" == api && "$2" == "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" ]]; then
   cat <<JSON
-{"tag_name":"$GITHUB_REF_NAME","draft":false,"prerelease":false,"assets":[{"name":"gentle-ai_1.2.3_darwin_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_darwin_arm64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_arm64.tar.gz"},{"name":"checksums.txt"},{"name":"checksums.txt.minisig"}]}
+{"tag_name":"$GITHUB_REF_NAME","draft":false,"prerelease":false,"assets":[{"name":"gentle-ai_1.2.3_darwin_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_darwin_arm64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_arm64.tar.gz"},{"name":"gentle-ai_1.2.3_assets.tar.gz"},{"name":"checksums.txt"},{"name":"checksums.txt.minisig"}]}
 JSON
   exit 0
 fi
@@ -122,6 +122,7 @@ if [[ "$1" == release && "$2" == download && "$3" == "$GITHUB_REF_NAME" ]]; then
   for platform in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
     printf 'archive %s\n' "$platform" >"$directory/gentle-ai_1.2.3_${platform}.tar.gz"
   done
+  printf 'assets archive\n' >"$directory/gentle-ai_1.2.3_assets.tar.gz"
   (cd "$directory" && sha256sum gentle-ai_1.2.3_*.tar.gz >checksums.txt)
   printf 'test signature\n' >"$directory/checksums.txt.minisig"
   exit 0

@@ -25,6 +25,7 @@ archives=(
   "gentle-ai_${version}_darwin_arm64.tar.gz"
   "gentle-ai_${version}_linux_amd64.tar.gz"
   "gentle-ai_${version}_linux_arm64.tar.gz"
+  "gentle-ai_${version}_assets.tar.gz"
 )
 expected_assets=("${archives[@]}" checksums.txt checksums.txt.minisig)
 
