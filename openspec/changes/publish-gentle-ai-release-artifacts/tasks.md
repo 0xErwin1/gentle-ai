@@ -29,16 +29,16 @@ Chain strategy: feature-branch-chain
 
 ## Phase A1a: Contract Namespace, Canonical Encoder, Entry/Path/Mode/Tree, Manifest
 
-- [ ] A1a.1 RED: `internal/releaseartifact/canonical_test.go` — byte assertion on a small fixed struct: 2-space indent, `SetEscapeHTML(false)`, `[]` not `null`, single trailing LF, no BOM, struct-declaration field order.
-- [ ] A1a.2 GREEN: `internal/releaseartifact/canonical.go` — `EncodeCanonical(v any) ([]byte, error)` per D3.
-- [ ] A1a.3 RED: `internal/releaseartifact/entry_test.go` — table rows: path rejection (absolute, `..`, backslash, NUL/control byte, empty segment, >1024/255-byte, duplicate); type rejection (symlink, hardlink, device, FIFO, socket, unknown); mode rejection (non-`0644`, exec/setuid/setgid/sticky); `SortEntries` ascending raw-UTF8-byte order.
-- [ ] A1a.4 GREEN: `internal/releaseartifact/entry.go` — `Entry` struct; `EntryTypeFile`, `EntryMode`, `AssetsArchiveID` constants; `ValidateEntryPath`; `SortEntries`.
-- [ ] A1a.5 RED: `internal/releaseartifact/tree_test.go` — checked-in expected hex over the known-vector preimage `"gentle-ai.release-artifact-tree/v1\x00"` + sorted `path\x00type\x00mode\x00size\x00digest\n`; input-order independence; `manifest_included: true` rejected.
-- [ ] A1a.6 GREEN: `internal/releaseartifact/tree.go` — `TreeDigest(entries []Entry) (string, error)`, `TreeCanonicalization` constant.
-- [ ] A1a.7 Create `contracts/release-artifact/v1/schemas/artifact-manifest.schema.json` (`$id`, `additionalProperties:false` throughout, mandatory field groups) and both fixtures — `artifact-manifest.fixture.json` and `artifact-manifest-unsupported-major.fixture.json` (byte-identical except `schema`/`contract.major`/`schema_id`/`schema_path`, per Worked Example).
-- [ ] A1a.8 RED: `internal/releaseartifact/manifest_test.go` mirroring `TestReviewCapabilitiesSchemaAndFixtureAreStrict` — schema header assertions; valid fixture decodes with `DisallowUnknownFields` and validates; unsupported-major fixture rejected naming the major (before layout inference); missing mandatory field group rejected; tampered digest / unresolved reference rejected.
-- [ ] A1a.9 GREEN: `internal/releaseartifact/manifest.go` — `Manifest` type; `ContractID`, `ContractMajor`, `ContractMinor`, schema constants; `(m Manifest) Validate() error` (groups present, references resolve into entries, tree recompute, `unknown_mandatory: reject`).
-- [ ] A1a.10 `docs/release-artifact.md` — create, contract section only (namespace, schema, fixtures, rolling-changelog header), `docs/review-integration.md` style.
+- [x] A1a.1 RED: `internal/releaseartifact/canonical_test.go` — byte assertion on a small fixed struct: 2-space indent, `SetEscapeHTML(false)`, `[]` not `null`, single trailing LF, no BOM, struct-declaration field order.
+- [x] A1a.2 GREEN: `internal/releaseartifact/canonical.go` — `EncodeCanonical(v any) ([]byte, error)` per D3.
+- [x] A1a.3 RED: `internal/releaseartifact/entry_test.go` — table rows: path rejection (absolute, `..`, backslash, NUL/control byte, empty segment, >1024/255-byte, duplicate); type rejection (symlink, hardlink, device, FIFO, socket, unknown); mode rejection (non-`0644`, exec/setuid/setgid/sticky); `SortEntries` ascending raw-UTF8-byte order.
+- [x] A1a.4 GREEN: `internal/releaseartifact/entry.go` — `Entry` struct; `EntryTypeFile`, `EntryMode`, `AssetsArchiveID` constants; `ValidateEntryPath`; `SortEntries`.
+- [x] A1a.5 RED: `internal/releaseartifact/tree_test.go` — checked-in expected hex over the known-vector preimage `"gentle-ai.release-artifact-tree/v1\x00"` + sorted `path\x00type\x00mode\x00size\x00digest\n`; input-order independence; `manifest_included: true` rejected.
+- [x] A1a.6 GREEN: `internal/releaseartifact/tree.go` — `TreeDigest(entries []Entry) (string, error)`, `TreeCanonicalization` constant.
+- [x] A1a.7 Create `contracts/release-artifact/v1/schemas/artifact-manifest.schema.json` (`$id`, `additionalProperties:false` throughout, mandatory field groups) and both fixtures — `artifact-manifest.fixture.json` and `artifact-manifest-unsupported-major.fixture.json` (byte-identical except `schema`/`contract.major`/`schema_id`/`schema_path`, per Worked Example).
+- [x] A1a.8 RED: `internal/releaseartifact/manifest_test.go` mirroring `TestReviewCapabilitiesSchemaAndFixtureAreStrict` — schema header assertions; valid fixture decodes with `DisallowUnknownFields` and validates; unsupported-major fixture rejected naming the major (before layout inference); missing mandatory field group rejected; tampered digest / unresolved reference rejected.
+- [x] A1a.9 GREEN: `internal/releaseartifact/manifest.go` — `Manifest` type; `ContractID`, `ContractMajor`, `ContractMinor`, schema constants; `(m Manifest) Validate() error` (groups present, references resolve into entries, tree recompute, `unknown_mandatory: reject`).
+- [x] A1a.10 `docs/release-artifact.md` — create, contract section only (namespace, schema, fixtures, rolling-changelog header), `docs/review-integration.md` style.
 
 ## Phase A1b: Snapshot Projection, Generator Command, Golden
 
