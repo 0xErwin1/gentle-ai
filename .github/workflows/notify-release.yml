@@ -1,0 +1,41 @@
+name: Replay Downstream Release Notification
+
+# Manual-only replay path for a notify job that failed or needs re-sending
+# for an already-published, already-verified release. This workflow gains no
+# trigger other than workflow_dispatch: adding workflow_dispatch to
+# release.yml itself would make the publishing workflow manually
+# triggerable, which is rejected by design (D8). It re-runs only the
+# dispatch attempt, never publish or verification, and internal/releasepolicy
+# pins no constant for this file -- policy.go pins .goreleaser.yaml and
+# release.yml only.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Published release tag to replay the notification for (e.g. v2.3.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact tag
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Notify downstream consumer of published release
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          DOWNSTREAM_DISPATCH_TOKEN: ${{ secrets.DOWNSTREAM_DISPATCH_TOKEN }}
+        run: ./scripts/notify-downstream-release.sh
