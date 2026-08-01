@@ -5,6 +5,7 @@ const REVIEW_AGENTS = new Set(["review-risk", "review-resilience", "review-reada
 const BINDING = /^GENTLE_AI_REVIEW_BINDING (\{[^\n]+\})(?:\n|$)/
 const TASK_RESULT = /^<task id="[^"\r\n]+" state="completed">\n<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/
 const TASK_TAG = /<\/?task(?:\s|>)|<\/?task_result>/
+const SDD_PHASES = ["sdd-init", "sdd-explore", "sdd-propose", "sdd-spec", "sdd-design", "sdd-tasks", "sdd-apply", "sdd-verify", "sdd-archive", "sdd-onboard"]
 
 type ReviewBinding = {
   lineage: string
@@ -84,26 +85,66 @@ function parseBinding(prompt: unknown, lens: string): ReviewBinding {
   return value as ReviewBinding
 }
 
-function reviewerResult(output: unknown): string {
-  if (typeof output !== "string" || output.trim() === "") throw new Error("reviewer output must not be empty")
+function taskResult(output: unknown, subject: string, classification: string, classifyEmptyOutput = true): string {
+  const fail = (message: string, taskResultClass: string): never => {
+    throw Object.assign(new Error(message), { [classification]: taskResultClass })
+  }
+  if (typeof output !== "string" || output.trim() === "") {
+    if (classifyEmptyOutput) fail(`${subject} output must not be empty`, "empty_result")
+    throw new Error(`${subject} output must not be empty`)
+  }
   const trimmed = output.trim()
   const envelope = TASK_RESULT.exec(trimmed)
   if (!envelope) {
-    if (TASK_TAG.test(trimmed)) throw new Error("reviewer output contains a malformed task result envelope")
+    if (TASK_TAG.test(trimmed)) fail(`${subject} output contains a malformed task result envelope`, "malformed_result")
     return trimmed
   }
   if (envelope[1].trim() === "") {
-    throw Object.assign(new Error("reviewer task result is empty"), { reviewClass: "empty_result" })
+    fail(`${subject} task result is empty`, "empty_result")
   }
   if (TASK_TAG.test(envelope[1])) {
-    throw Object.assign(new Error("reviewer task result contains a nested task envelope"), { reviewClass: "nested_envelope" })
+    fail(`${subject} task result contains a nested task envelope`, "nested_envelope")
   }
   return envelope[1]
 }
 
-function extractionClass(cause: unknown): string | undefined {
-  const value = (cause as { reviewClass?: unknown } | null)?.reviewClass
+function reviewerResult(output: unknown): string {
+  if (typeof output !== "string" || output.trim() === "") throw new Error("reviewer output must not be empty")
+  try {
+    return taskResult(output, "reviewer", "reviewClass", false)
+  } catch (cause) {
+    switch (extractionClass(cause)) {
+      case "empty_result":
+        throw Object.assign(new Error("reviewer task result is empty"), { reviewClass: "empty_result" })
+      case "nested_envelope":
+        throw Object.assign(new Error("reviewer task result contains a nested task envelope"), { reviewClass: "nested_envelope" })
+      case "malformed_result":
+        throw new Error("reviewer output contains a malformed task result envelope")
+      default:
+        throw cause
+    }
+  }
+}
+
+function extractionClass(cause: unknown, property = "reviewClass"): string | undefined {
+  const value = (cause as Record<string, unknown> | null)?.[property]
   return typeof value === "string" ? value : undefined
+}
+
+function isSDDPhase(agent: string): boolean {
+  return SDD_PHASES.some((phase) => agent === phase || agent.startsWith(phase + "-"))
+}
+
+type SDDTaskFailure = { phase: string, code: string }
+type SDDTaskFailureError = Error & { sddFailure: SDDTaskFailure }
+
+function sddTaskFailure(phase: string, cause: unknown): SDDTaskFailureError {
+  const classification = extractionClass(cause, "sddClass")
+  const code = classification === "empty_result" ? "sdd_task_result_empty" : "sdd_task_result_malformed"
+  return Object.assign(
+    new Error(`${code}: ${phase} returned no valid task result. Do not retry this phase automatically or launch a downstream SDD phase; inspect the artifact state and surface this terminal failure to the user.`),
+    { sddFailure: { phase, code } },
+  ) as SDDTaskFailureError
 }
 
 function captureCwd(worktree: string | undefined, directory: string): string {
@@ -452,14 +493,26 @@ async function preservedCaptureFailure(
 
 const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
   const admissionRecoveries: AdmissionRecoveryStore = new Map()
+  const failedSDDSessions = new Map<string, SDDTaskFailure>()
   return {
   dispose: async () => { admissionRecoveries.clear() },
   event: async ({ event }) => {
-    if (event.type === "session.deleted") admissionRecoveries.delete(event.properties.info.id)
+    if (event.type === "session.deleted") {
+      admissionRecoveries.delete(event.properties.info.id)
+      failedSDDSessions.delete(event.properties.info.id)
+    }
   },
   "tool.execute.before": async (input, output) => {
-    if (input.tool !== "task" || typeof output.args?.subagent_type !== "string" ||
-        !REVIEW_AGENTS.has(output.args.subagent_type)) return
+    if (input.tool !== "task" || typeof output.args?.subagent_type !== "string") return
+    const subagent = output.args.subagent_type
+    if (isSDDPhase(subagent)) {
+      const failure = failedSDDSessions.get(input.sessionID)
+      if (failure) {
+        throw new Error(`${failure.code}: ${failure.phase} already failed in this session. Do not retry or advance SDD; inspect the artifact state and surface the terminal failure to the user.`)
+      }
+      return
+    }
+    if (!REVIEW_AGENTS.has(subagent)) return
     if (typeof output.args.prompt !== "string") {
       throw new Error("review task is missing GENTLE_AI_REVIEW_BINDING")
     }
@@ -473,7 +526,19 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
     )
   },
   "tool.execute.after": async (input, output) => {
-    if (input.tool !== "task" || typeof input.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(input.args.subagent_type)) return
+    if (input.tool !== "task" || typeof input.args?.subagent_type !== "string") return
+    const subagent = input.args.subagent_type
+    if (isSDDPhase(subagent)) {
+      try {
+        taskResult(output.output, "SDD phase", "sddClass")
+      } catch (cause) {
+        const failure = sddTaskFailure(subagent, cause)
+        failedSDDSessions.set(input.sessionID, failure.sddFailure)
+        throw failure
+      }
+      return
+    }
+    if (!REVIEW_AGENTS.has(subagent)) return
     if (typeof input.args.prompt !== "string" || !BINDING.test(input.args.prompt)) return
     const lens = input.args.subagent_type
     const binding = parseBinding(input.args.prompt, lens)

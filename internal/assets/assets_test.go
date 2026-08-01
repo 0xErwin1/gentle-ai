@@ -522,6 +522,10 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		// message, and the plugin must thread that class into --class.
 		`"reviewer task result is empty"`,
 		`"reviewer task result contains a nested task envelope"`,
+		`const SDD_PHASES`,
+		`"sdd_task_result_empty"`,
+		`"sdd_task_result_malformed"`,
+		`failedSDDSessions`,
 		`reviewClass`,
 		`extractionClass(cause)`,
 		`"--class"`,
