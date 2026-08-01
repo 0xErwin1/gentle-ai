@@ -69,8 +69,9 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 				"Only after explicit consent and that final privacy scan",
 				"search open and closed issues",
 				"confirms a newly-created issue identity/URL",
-				"You MUST NOT apply `gentle-report` to any issue",
-				"do not add, remove, or change any labels on that issue",
+				"Only a completed duplicate lookup with a definitive result may branch to a write",
+				"Do not create, comment, update, or label any issue",
+				"do not add, remove, or change any labels on it",
 				"label application fails or has an ambiguous outcome",
 				"re-resolve that exact created issue identity",
 			} {
