@@ -74,11 +74,12 @@ func TestOpenRuntimeStoreRejectionNamesValueAndShape(t *testing.T) {
 	}
 }
 
-// The encoded suffix is the only thing keeping two identities with the same
-// lowercased form apart. Truncating it far enough to make a birthday search
-// practical would let crafted case variants share one ledger directory, so the
-// width is pinned here rather than left to a future edit.
-func TestOpenRuntimeStoreEncodedSuffixKeepsCollisionResistantWidth(t *testing.T) {
+// The encoded suffix is squeezed from both sides, so the width is pinned here
+// rather than left to a future edit. Narrower and a birthday search over
+// crafted case variants becomes practical, letting two identities share one
+// ledger directory. Wider and the leaf stops being addressable on Windows,
+// where an identity at the length limit already crowds the path ceiling.
+func TestOpenRuntimeStoreEncodedSuffixKeepsItsPinnedWidth(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
 	store, err := OpenRuntimeStore(context.Background(), repo, "DEC-EXAMPLE-CHANGE")
 	if err != nil {
@@ -86,8 +87,8 @@ func TestOpenRuntimeStoreEncodedSuffixKeepsCollisionResistantWidth(t *testing.T)
 	}
 	leaf := filepath.Base(store.Dir)
 	suffix := leaf[strings.LastIndex(leaf, "-")+1:]
-	if len(suffix) < 32 {
-		t.Fatalf("encoded suffix %q is %d hex characters, want at least 32 (128 bits)", suffix, len(suffix))
+	if len(suffix) != 32 {
+		t.Fatalf("encoded suffix %q is %d hex characters, want exactly 32 (128 bits)", suffix, len(suffix))
 	}
 	if strings.Trim(suffix, "0123456789abcdef") != "" {
 		t.Fatalf("encoded suffix %q is not lowercase hex", suffix)
