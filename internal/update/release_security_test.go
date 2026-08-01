@@ -40,6 +40,10 @@ func TestReleaseWorkflowUsesFailClosedLeastPrivilegeGates(t *testing.T) {
 		"id: trust-anchors",
 		"./scripts/release-signing-preflight.sh",
 		"./scripts/verify-release-assets.sh",
+		"notify:",
+		"needs: verify",
+		"./scripts/notify-downstream-release.sh",
+		"DOWNSTREAM_DISPATCH_TOKEN: ${{ secrets.DOWNSTREAM_DISPATCH_TOKEN }}",
 		"MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}",
 		"MINISIGN_PUBLIC_KEYS_CANONICAL: ${{ steps.trust-anchors.outputs.canonical }}",
 		"MINISIGN_SECRET_KEY_FILE:",
@@ -52,8 +56,8 @@ func TestReleaseWorkflowUsesFailClosedLeastPrivilegeGates(t *testing.T) {
 	if count := strings.Count(workflow, "MINISIGN_SECRET_KEY_BASE64"); count != 1 {
 		t.Errorf("MINISIGN_SECRET_KEY_BASE64 occurs %d times, want exactly once in the isolated materialization step", count)
 	}
-	if count := strings.Count(workflow, "persist-credentials: false"); count != 3 {
-		t.Errorf("persist-credentials: false occurs %d times, want all three checkouts to avoid retaining repository credentials", count)
+	if count := strings.Count(workflow, "persist-credentials: false"); count != 4 {
+		t.Errorf("persist-credentials: false occurs %d times, want all four checkouts to avoid retaining repository credentials", count)
 	}
 	if strings.Contains(workflow, "version: \"~> v2\"") {
 		t.Error("release workflow uses a floating GoReleaser version")

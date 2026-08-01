@@ -773,4 +773,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}
         run: ./scripts/verify-release-assets.sh
+  notify:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact tag
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Notify downstream consumer of published release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          DOWNSTREAM_DISPATCH_TOKEN: ${{ secrets.DOWNSTREAM_DISPATCH_TOKEN }}
+        run: ./scripts/notify-downstream-release.sh
 `

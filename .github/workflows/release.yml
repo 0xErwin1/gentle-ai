@@ -209,3 +209,34 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MINISIGN_PUBLIC_KEYS: ${{ vars.MINISIGN_PUBLIC_KEYS }}
         run: ./scripts/verify-release-assets.sh
+
+  notify:
+    # needs: verify makes this job structurally unable to run before the
+    # release has published AND passed remote asset verification -- not a
+    # convention, a job-graph guarantee. A notification failure here never
+    # touches the release/verify jobs above: it is its own job, so a red
+    # notify status never unpublishes or unverifies what already succeeded,
+    # and re-running (or replaying via notify-release.yml) retries only the
+    # dispatch, not publish or verification.
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact tag
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Notify downstream consumer of published release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          # Absent on this repository until the consumer's receiver workflow
+          # exists on its default branch: the dispatch step stays inert by
+          # absence of this secret, not by failing, and starts dispatching
+          # the moment it is configured -- no further code change needed.
+          DOWNSTREAM_DISPATCH_TOKEN: ${{ secrets.DOWNSTREAM_DISPATCH_TOKEN }}
+        run: ./scripts/notify-downstream-release.sh
