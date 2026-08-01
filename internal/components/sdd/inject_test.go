@@ -68,8 +68,11 @@ func TestSDDOrchestratorAssetSelectionCoversSupportedAgents(t *testing.T) {
 			for _, required := range []string{
 				"Only after explicit consent and that final privacy scan",
 				"search open and closed issues",
-				"apply the `gentle-report` label",
+				"confirms a newly-created issue identity/URL",
+				"You MUST NOT apply `gentle-report` to any issue",
 				"do not add, remove, or change any labels on that issue",
+				"label application fails or has an ambiguous outcome",
+				"re-resolve that exact created issue identity",
 			} {
 				if !strings.Contains(renderSDDOrchestratorAsset(tc.agent), required) {
 					t.Fatalf("rendered %s orchestrator missing provider-defect handoff clause %q", tc.agent, required)

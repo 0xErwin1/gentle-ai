@@ -153,10 +153,18 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "fixed repository", text: "`Gentleman-Programming/gentle-ai`"},
 		{name: "open and closed duplicate search", text: "search open and closed issues"},
 		{name: "create new automated report", text: "create a new automated provider-defect report"},
-		{name: "new report label", text: "apply the `gentle-report` label"},
+		{name: "confirmed creation label precondition", text: "Confirmed creation is a HARD precondition for labeling: apply `gentle-report` only when the GitHub create operation confirms a newly-created issue identity/URL."},
+		{name: "no output-only creation inference", text: "Never infer creation from output text alone."},
+		{name: "no label after unsafe outcomes", text: "You MUST NOT apply `gentle-report` to any issue after a failed or ambiguous creation, dry run, lookup or search failure, permission failure, timeout or unknown outcome, duplicate/equivalent existing issue, or comment-only/update-existing path."},
 		{name: "comment duplicate", text: "add one new occurrence comment with the observed evidence only"},
 		{name: "duplicate labels unchanged", text: "do not add, remove, or change any labels on that issue"},
-		{name: "label scope exclusions", text: "Do not apply `gentle-report` to manual issues, #2211, historical issues, pull requests, or reports created by unrelated workflows."},
+		{name: "partial success disclosure", text: "If creation is confirmed but label application fails or has an ambiguous outcome, surface the confirmed created issue identity/URL and the label failure separately."},
+		{name: "partial success honesty", text: "Be honest that report creation succeeded even when label application failed."},
+		{name: "partial success stop", text: "STOP with all consumer state preserved; do not create or comment again automatically."},
+		{name: "exact identity retry", text: "On retry, perform a fresh final privacy scan first, then re-resolve that exact created issue identity, inspect whether `gentle-report` is already present, and apply only a missing label idempotently."},
+		{name: "no arbitrary retry labeling", text: "Never search and label an arbitrary equivalent/pre-existing issue."},
+		{name: "unproven identity stop", text: "If the exact created issue identity cannot be proven, STOP and require a human decision, with no label or duplicate issue/comment."},
+		{name: "label scope exclusions", text: "This prohibition also covers manual issues, #2211, historical issues, pull requests, and reports created by unrelated workflows."},
 		{name: "reported path preserves state", text: "Then STOP with all consumer state preserved"},
 		{name: "stop choice", text: "**Stop here**: Create no GitHub issue or comment, preserve all consumer state, and STOP"},
 		{name: "observed evidence", text: "Report observed evidence, not an unconfirmed root cause"},
@@ -201,6 +209,46 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 					}
 				})
 			}
+			for _, invariant := range []struct {
+				name   string
+				prefix string
+				must   []string
+			}{
+				{
+					name:   "confirmed creation is the label precondition",
+					prefix: "Confirmed creation is a HARD precondition for labeling",
+					must:   []string{"apply `gentle-report` only when", "GitHub create operation confirms", "newly-created issue identity/URL", "Never infer creation from output text alone"},
+				},
+				{
+					name:   "unsafe paths cannot label any issue",
+					prefix: "You MUST NOT apply `gentle-report`",
+					must:   []string{"to any issue", "failed or ambiguous creation", "dry run", "lookup or search failure", "permission failure", "timeout or unknown outcome", "duplicate/equivalent existing issue", "comment-only/update-existing path", "manual issues", "#2211", "historical issues", "pull requests", "reports created by unrelated workflows"},
+				},
+				{
+					name:   "partial success is reported and stopped separately",
+					prefix: "If creation is confirmed but label application fails",
+					must:   []string{"confirmed created issue identity/URL", "label failure separately", "Be honest that report creation succeeded", "STOP with all consumer state preserved", "do not create or comment again automatically"},
+				},
+				{
+					name:   "retry is exact-identity and idempotent",
+					prefix: "On retry, perform a fresh final privacy scan first",
+					must:   []string{"re-resolve that exact created issue identity", "inspect whether `gentle-report` is already present", "apply only a missing label idempotently", "Never search and label an arbitrary equivalent/pre-existing issue"},
+				},
+				{
+					name:   "unproven identity stops without a duplicate",
+					prefix: "If the exact created issue identity cannot be proven",
+					must:   []string{"STOP and require a human decision", "no label or duplicate issue/comment"},
+				},
+			} {
+				t.Run(invariant.name, func(t *testing.T) {
+					line := providerDefectHandoffLine(t, contract, invariant.prefix)
+					for _, required := range invariant.must {
+						if !strings.Contains(line, required) {
+							t.Errorf("provider-defect handoff invariant %q omits %q from %q", invariant.name, required, line)
+						}
+					}
+				})
+			}
 			for _, ordering := range []struct {
 				name   string
 				before string
@@ -210,6 +258,10 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 				{name: "privacy scan before duplicate search", before: "Immediately before the first GitHub operation, perform a final privacy scan", after: "search open and closed issues"},
 				{name: "privacy scan before report creation", before: "Immediately before the first GitHub operation, perform a final privacy scan", after: "create a new automated provider-defect report"},
 				{name: "privacy scan before occurrence comment", before: "Immediately before the first GitHub operation, perform a final privacy scan", after: "add one new occurrence comment"},
+				{name: "report creation before label precondition", before: "create a new automated provider-defect report", after: "Confirmed creation is a HARD precondition for labeling"},
+				{name: "label precondition before partial-success handling", before: "Confirmed creation is a HARD precondition for labeling", after: "If creation is confirmed but label application fails"},
+				{name: "partial-success handling before retry", before: "If creation is confirmed but label application fails", after: "On retry, perform a fresh final privacy scan first"},
+				{name: "retry before unproven-identity stop", before: "On retry, perform a fresh final privacy scan first", after: "If the exact created issue identity cannot be proven"},
 			} {
 				t.Run(ordering.name, func(t *testing.T) {
 					beforeIndex := strings.Index(contract, ordering.before)
@@ -221,6 +273,19 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 			}
 		})
 	}
+}
+
+func providerDefectHandoffLine(t *testing.T, contract, prefix string) string {
+	t.Helper()
+	start := strings.Index(contract, prefix)
+	if start < 0 {
+		t.Fatalf("provider-defect handoff missing invariant line starting %q", prefix)
+	}
+	end := strings.Index(contract[start:], "\n")
+	if end < 0 {
+		return contract[start:]
+	}
+	return contract[start : start+end]
 }
 
 func providerDefectHandoffSection(t *testing.T, path string) string {
