@@ -399,12 +399,22 @@ const encodedRuntimeChangeNamespace = "_encoded"
 // silently merge two unrelated attempt chains. Lowercasing makes the path
 // stable across those filesystems and the digest of the verbatim identity keeps
 // the case variants apart.
+//
+// The suffix keeps 128 bits rather than the whole digest. Every identity that
+// shares a lowercased form differs only in case, so a name with k letters has
+// 2^k variants to search: at 64 bits a birthday collision costs about 2^32
+// candidates, which is reachable, while 128 bits puts it at 2^64. The remaining
+// half is dropped because the leaf must stay addressable on Windows, where an
+// identity at the 96-character limit plus a full 64-character digest crowds the
+// 260-character path ceiling that this issue's original reporter was hitting.
+const encodedRuntimeChangeDigestWidth = 32
+
 func runtimeChangeLedgerDir(base, change string) string {
 	if legacyRuntimeChangeDir(change) {
 		return filepath.Join(base, "v1", change)
 	}
 	digest := strings.TrimPrefix(runtimeValueHash("gentle-ai.sdd-runtime-change-identity/v1", change), "sha256:")
-	return filepath.Join(base, "v1", encodedRuntimeChangeNamespace, strings.ToLower(change)+"-"+digest[:16])
+	return filepath.Join(base, "v1", encodedRuntimeChangeNamespace, strings.ToLower(change)+"-"+digest[:encodedRuntimeChangeDigestWidth])
 }
 
 func (store RuntimeStore) Status() (RuntimeStatus, error) {

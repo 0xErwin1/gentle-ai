@@ -69,6 +69,29 @@ func TestOpenRuntimeStoreRejectionNamesValueAndShape(t *testing.T) {
 	if !strings.Contains(message, "letters, digits") {
 		t.Fatalf("error %q does not state the expected shape", message)
 	}
+	if !strings.Contains(message, "gentle-ai sdd-status") {
+		t.Fatalf("error %q does not name the command that reveals the resolved identity", message)
+	}
+}
+
+// The encoded suffix is the only thing keeping two identities with the same
+// lowercased form apart. Truncating it far enough to make a birthday search
+// practical would let crafted case variants share one ledger directory, so the
+// width is pinned here rather than left to a future edit.
+func TestOpenRuntimeStoreEncodedSuffixKeepsCollisionResistantWidth(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store, err := OpenRuntimeStore(context.Background(), repo, "DEC-EXAMPLE-CHANGE")
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := filepath.Base(store.Dir)
+	suffix := leaf[strings.LastIndex(leaf, "-")+1:]
+	if len(suffix) < 32 {
+		t.Fatalf("encoded suffix %q is %d hex characters, want at least 32 (128 bits)", suffix, len(suffix))
+	}
+	if strings.Trim(suffix, "0123456789abcdef") != "" {
+		t.Fatalf("encoded suffix %q is not lowercase hex", suffix)
+	}
 }
 
 // Ledgers already on disk live at v1/<change>. A kebab-case identity must keep
