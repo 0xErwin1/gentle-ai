@@ -329,6 +329,99 @@ None beyond the four empirical discoveries recorded under A2.1, all resolved wit
 
 - [ ] Phase A3: Downstream Notification (A3.1-A3.5)
 
-## Status (cumulative)
+## Status (cumulative, superseded by Phase A3 below)
 
 10/10 Phase A1a tasks complete. 11/11 Phase A1b tasks complete. 10/10 Phase A2 tasks complete. 31/36 total tasks complete. Ready for `sdd-verify` on Phase A2, then PR 3 of the feature-branch chain (base: `feat/release-artifact-snapshot`, PR 2's branch).
+
+---
+
+## Phase A3 — Downstream Notification
+
+**Branch**: `feat/release-downstream-notify` (base: `feat/release-assets-archive`)
+
+### Completed Tasks
+
+- [x] A3.1 RED `internal/releasepolicy/release_workflow_yaml_test.go`
+- [x] A3.2 RED `scripts/test-notify-downstream-release-credential-absent.sh`
+- [x] A3.3 GREEN `.github/workflows/release.yml` (`notify` job)
+- [x] A3.4 GREEN `internal/releasepolicy/policy.go` (`expectedReleaseWorkflowYAML`), same commit as A3.3
+- [x] A3.5 `.github/workflows/notify-release.yml`
+
+All five A3 tasks complete. This is the final phase of the tracker (A1a → A1b → A2 → A3).
+
+### MAINTAINER SUPERSESSION — task text vs. what was implemented (A3.3)
+
+`tasks.md`'s A3.3 line, as originally written, described the dispatch payload as
+"repository, tag, version, commit, assets archive name, contract major."
+That predates a maintainer decision that supersedes it: **the payload is the
+tag only.** Rationale recorded by the maintainer: the consumer must download
+and verify `checksums.txt`, its minisign signature, and the assets archive
+against the authoritative published release regardless of what the dispatch
+payload says. Every other field in the original list is either (a) redundant
+with what the consumer fetches anyway once it has the tag, or (b) a second
+source of truth (version, commit, archive name, contract major) that would
+have to be kept in sync with the actual release by hand — a drift risk with
+no corresponding benefit, since nothing trusts the dispatch payload itself.
+
+Implemented: `scripts/notify-downstream-release.sh` sends
+`{"event_type":"gentle-ai-release","client_payload":{"tag":"<tag>"}}` only.
+No digest field either — unchanged from the original design (D8): the
+consumer re-derives every digest from the signed `checksums.txt`, so a
+compromised dispatch can never pin a false one. `tasks.md`'s A3.3 line has
+been updated in place to record this supersession rather than leave the
+stale payload description looking like an implementation gap.
+
+### TDD Cycle Evidence
+
+| Task | RED (test/script written first, run, failed for the right reason) | GREEN (implementation, run, passed) | REFACTOR |
+|---|---|---|---|
+| A3.1 `notify` job structure | `go test ./internal/releasepolicy/... -run ReleaseWorkflowYAML -v` → `TestReleaseWorkflowYAMLNotifyJobStructure` FAIL: `expectedReleaseWorkflowYAML has no notify job` (parse succeeded, job genuinely absent — not a compile/type failure) | Added the `notify` job to `.github/workflows/release.yml` (A3.3) and mirrored it into `expectedReleaseWorkflowYAML` (A3.4) in the same commit → `go test ./internal/releasepolicy/... -run ReleaseWorkflowYAML -v` → both `TestReleaseWorkflowYAMLNotifyJobStructure` and `TestReleaseWorkflowYAMLMatchesLiveFile` PASS | None. Added `TestReleaseWorkflowYAMLMatchesLiveFile` alongside the required assertion — not itself an A3.1 requirement, but it directly exercises the byte-exact-YAML constraint (`compareYAML`) locally, so a future edit to one of the two files without the other is caught by `go test` instead of only failing closed in CI. |
+| A3.2 credential-absent path | `./scripts/test-notify-downstream-release-credential-absent.sh` → FAIL, exit 127: `.../scripts/notify-downstream-release.sh: No such file or directory` (RED for the right reason — the script under test did not exist yet) | Created `scripts/notify-downstream-release.sh` (A3.3) → `./scripts/test-notify-downstream-release-credential-absent.sh` → `notify-downstream-release credential-absent path: PASS` (exit 0, skip line printed, fake `curl` on `PATH` never invoked — proven via a marker file the fake `curl` would have created) | None. |
+
+### Design decisions carried into implementation
+
+- **No checkout dropped, no inline-only shell.** The `notify` job gets its own `Checkout exact tag` step (same SHA-pinned `actions/checkout`, same `fetch-tags: true` / `persist-credentials: false` shape as `preflight`/`release`/`verify`) so it can invoke `./scripts/notify-downstream-release.sh` as a real, independently testable file rather than duplicating inline `run: |` shell in both `release.yml` and `notify-release.yml`. Design D8's "single shell step" is satisfied at the level of "the one step that does the dispatch work is a shell step" — consistent with every other job in this workflow, all of which also open with a checkout step before their business-logic step(s).
+- **`needs: verify`** (not `needs: release`) — makes the job structurally unable to run before the release has published AND remote asset verification has passed, per spec "Notification Runs Only After Publish AND Verification." A verification failure or in-flight verification leaves `notify` un-scheduled; GitHub Actions' `needs:` gate is a hard dependency, not a convention.
+- **`permissions: contents: read`** only — the dispatch step needs no write access to this repository; it only calls out to the downstream repository's API using a scoped secret.
+- **Credential-gated, inert by absence**: `scripts/notify-downstream-release.sh` checks `DOWNSTREAM_DISPATCH_TOKEN` before doing anything else. Empty/unset → prints `downstream release notification: skipped, no dispatch credential configured` and exits 0. No `curl` invocation happens on that path (proven by A3.2's fake-`curl` harness). The consumer repository's receiver workflow does not exist yet, so `DOWNSTREAM_DISPATCH_TOKEN` is correctly absent from this repository's secrets today — the job ships inert by construction, and activating it later requires configuring the one secret, not a second code change.
+- **Non-invalidating, visible, retryable failure**: `notify` is its own job in the DAG, downstream of (not overlapping with) `release`/`verify`. A `curl --fail` non-zero exit fails only the `notify` job (visible red status); it cannot mark `release`/`verify` as failed retroactively, and re-running the job (or running `.github/workflows/notify-release.yml` with the same `tag` input) replays only the dispatch attempt.
+- **Separate replay workflow, no new trigger on `release.yml`**: `.github/workflows/notify-release.yml` is `workflow_dispatch`-only with a required `tag` string input; it checks out `ref: ${{ inputs.tag }}` and calls the same `scripts/notify-downstream-release.sh` with `RELEASE_TAG: ${{ inputs.tag }}`. `release.yml` gained no `workflow_dispatch` trigger — verified by inspection (its `on:` block still lists only `push.tags`). `internal/releasepolicy/policy.go` pins exactly two files (`.goreleaser.yaml`, `.github/workflows/release.yml`); `notify-release.yml` has no corresponding embedded constant, confirmed by `rg -n "notify-release" internal/releasepolicy/policy.go` returning nothing.
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `go test ./internal/releasepolicy/... -run ReleaseWorkflowYAML -v` → both subtests PASS (matches the Suggested Work Units table's A3 focused command); `./scripts/test-notify-downstream-release-credential-absent.sh` → PASS |
+| Full package result | `go test ./internal/releasepolicy/... -v` → 100% PASS; `gofmt -l` clean on every changed/new `.go` file; `go vet ./...` clean; `go run ./internal/gofmtcheck` clean; `shellcheck scripts/notify-downstream-release.sh scripts/test-notify-downstream-release-credential-absent.sh` clean |
+| Runtime harness command/scenario and exact result | N/A per the Suggested Work Units table — `needs: verify` job-graph gating and the credential-gated dispatch's "present" branch are only exercisable in a live GitHub Actions run against a real downstream repository secret, neither of which exists in this environment. The credential-**absent** branch (the only branch reachable without live infrastructure) is fully exercised by the A3.2 shell harness above. Both `.github/workflows/release.yml` and the new `.github/workflows/notify-release.yml` were additionally parsed with `gopkg.in/yaml.v3` (the same library `internal/releasepolicy` uses) to confirm they are well-formed YAML documents. |
+| Whole-repository regression check | `go test ./...` (full repo, ~65 packages) → all `ok`, zero failures, zero build errors. One pre-existing regression-lock test required an intentional, documented update (see below); no other package needed a change. |
+| Rollback boundary | Remove the `notify:` job from `.github/workflows/release.yml`; revert the corresponding block from `expectedReleaseWorkflowYAML` in `internal/releasepolicy/policy.go`; delete `.github/workflows/notify-release.yml`, `scripts/notify-downstream-release.sh`, `scripts/test-notify-downstream-release-credential-absent.sh`, and `internal/releasepolicy/release_workflow_yaml_test.go`; revert the `persist-credentials: false` count and the four added required-substring lines in `internal/update/release_security_test.go` (`3 → 4` back to `3`, drop the four `notify`-related strings). The `preflight`/`release`/`verify` jobs, `.goreleaser.yaml`, and every A1a/A1b/A2 file are untouched — publish and remote verification are unaffected by removing this unit. |
+
+### One pre-existing regression-lock test required an intentional update
+
+`internal/update/release_security_test.go`'s `TestReleaseWorkflowUsesFailClosedLeastPrivilegeGates` asserted `persist-credentials: false` occurs **exactly 3** times in `release.yml` (one per existing job's checkout). Adding the `notify` job's own checkout step — using the identical fail-closed pattern as the other three jobs, per design — legitimately raises that count to 4. Ran the test before the workflow edit to confirm it was passing at 3, then updated the assertion to `4` (and its message from "all three checkouts" to "all four checkouts") together with the workflow change, and added four more required-substring checks (`"notify:"`, `"needs: verify"`, `"./scripts/notify-downstream-release.sh"`, `"DOWNSTREAM_DISPATCH_TOKEN: ${{ secrets.DOWNSTREAM_DISPATCH_TOKEN }}"`) so the test keeps asserting the new job's fail-closed shape rather than only its count. This is not a loosened assertion — every prior required substring, the SHA-pinning scan, and the `MINISIGN_SECRET_KEY_BASE64`-occurs-once check are untouched and still pass.
+
+### Commits (work-unit-commits skill)
+
+1. `feat(release): notify downstream consumer after publish and verification` — `.github/workflows/release.yml`, `internal/releasepolicy/policy.go`, `internal/releasepolicy/release_workflow_yaml_test.go`, `scripts/notify-downstream-release.sh`, `scripts/test-notify-downstream-release-credential-absent.sh`, `internal/update/release_security_test.go`
+2. `feat(release): add manual replay workflow for downstream notification` — `.github/workflows/notify-release.yml`
+3. `docs(sdd): record Phase A3 apply-progress evidence` — `tasks.md`, `apply-progress.md`
+
+Diff vs. tracker base (`feat/release-assets-archive..HEAD`, authored files only, excluding `tasks.md`/`apply-progress.md`): 7 files changed, 258 insertions(+), 2 deletions(-) — well inside the Review Workload Forecast's "Low" risk rating for A3 and its ~120-180 authored-line estimate range (comment-heavy rationale on a security-adjacent workflow file accounts for the difference; no unplanned scope was added).
+
+### Deviations from Design
+
+- **Payload is tag-only**, superseding `tasks.md`'s A3.3 line — see the MAINTAINER SUPERSESSION section above. This is an explicit maintainer decision recorded before implementation, not a discovered-during-apply deviation.
+- **`notify` job includes a checkout step** that design D8's "single shell step" phrasing does not explicitly spell out. Read as "the one step that does the actual work is a shell step" (matching every other job in this file, all of which open with checkout before their business-logic steps) rather than "the job has exactly one step total" — the latter reading would require either inlining duplicate shell into two workflow files or fetching the dispatch script over the network, both worse than one shared, independently-tested script file. No other design decision (D1-D7, or D8's ordering/credential-gating/failure-semantics/payload-shape requirements) was reinterpreted.
+
+### Issues Found
+
+None.
+
+## Remaining Tasks
+
+None. All 36 tasks across A1a, A1b, A2, and A3 are complete.
+
+## Status (final)
+
+10/10 Phase A1a tasks complete. 11/11 Phase A1b tasks complete. 10/10 Phase A2 tasks complete. 5/5 Phase A3 tasks complete. **36/36 total tasks complete.** Ready for `sdd-verify` on Phase A3, then PR 4 of the feature-branch chain (base: `feat/release-assets-archive`, PR 3's branch) — the tracker's final child PR.

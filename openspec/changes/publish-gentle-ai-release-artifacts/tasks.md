@@ -69,8 +69,8 @@ Chain strategy: feature-branch-chain
 
 ## Phase A3: Downstream Notification
 
-- [ ] A3.1 RED: `internal/releasepolicy/policy_test.go` — workflow-structure assertion (mirrored into `expectedReleaseWorkflowYAML`) proving the `notify` job declares `needs: verify` and `permissions: contents: read`.
-- [ ] A3.2 RED: shell-level test for the credential-absent path — prints the skip line, exits 0, attempts no dispatch.
-- [ ] A3.3 GREEN: modify `.github/workflows/release.yml` — add `notify` job (`needs: verify`, `permissions: contents: read`, credential-gated dispatch step; payload = repository, tag, version, commit, assets archive name, contract major; no digest field).
-- [ ] A3.4 GREEN: update `expectedReleaseWorkflowYAML` in `internal/releasepolicy/policy.go` to match A3.3's live `release.yml`. Same commit as A3.3.
-- [ ] A3.5 Create `.github/workflows/notify-release.yml` — `workflow_dispatch` only, required `tag` input, replay path. `release.yml` itself gains no `workflow_dispatch` trigger; `policy.go` pins no third file.
+- [x] A3.1 RED: `internal/releasepolicy/policy_test.go` — workflow-structure assertion (mirrored into `expectedReleaseWorkflowYAML`) proving the `notify` job declares `needs: verify` and `permissions: contents: read`.
+- [x] A3.2 RED: shell-level test for the credential-absent path — prints the skip line, exits 0, attempts no dispatch.
+- [x] A3.3 GREEN: modify `.github/workflows/release.yml` — add `notify` job (`needs: verify`, `permissions: contents: read`, credential-gated dispatch step; payload = tag only — see apply-progress supersession note; superseded task text listed repository/version/commit/assets-archive-name/contract-major; no digest field).
+- [x] A3.4 GREEN: update `expectedReleaseWorkflowYAML` in `internal/releasepolicy/policy.go` to match A3.3's live `release.yml`. Same commit as A3.3.
+- [x] A3.5 Create `.github/workflows/notify-release.yml` — `workflow_dispatch` only, required `tag` input, replay path. `release.yml` itself gains no `workflow_dispatch` trigger; `policy.go` pins no third file.
