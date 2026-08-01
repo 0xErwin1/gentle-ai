@@ -1,6 +1,7 @@
 package reviewtransaction
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,6 +13,84 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestChainBundleRoundTripsFrozenCorrectionBudgetInputs(t *testing.T) {
+	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	tx, err := NewTransaction(boundedStart(t, []string{LensReliability}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Append("", Record{Operation: "review/start", Transaction: *tx}); err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := store.ExportBundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseChainBundle(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := parseRecordPayload(parsed.Events[0].Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Transaction.OriginalChangedLines == nil || *record.Transaction.OriginalChangedLines != 2 || record.Transaction.CorrectionBudget == nil || *record.Transaction.CorrectionBudget != 1 {
+		t.Fatalf("round-tripped bundle budget inputs = %#v", record.Transaction)
+	}
+}
+
+func TestBundleImportRejectsLegacyShapedBoundedGenesis(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
+	snapshot, err := (SnapshotBuilder{Repo: repo}).Build(context.Background(), Target{Kind: TargetCurrentChanges, IntendedUntracked: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	risk, originalChangedLines, err := (SnapshotBuilder{Repo: repo}).ClassifySnapshotRisk(context.Background(), snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := NewTransaction(Start{
+		LineageID: "legacy-portable", Mode: ModeOrdinaryBounded, Generation: 1, Snapshot: snapshot,
+		PolicyHash: hash("d"), RiskLevel: risk, SelectedLenses: []string{LensReliability}, OriginalChangedLines: &originalChangedLines,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	legacy := withoutCorrectionBudgetFields(t, *tx)
+	local := Store{Dir: filepath.Join(t.TempDir(), "legacy-store")}
+	writeStoreEvent(t, local, Record{Operation: "review/start", Transaction: legacy})
+	bundle, err := local.ExportBundle()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = ImportBundle(context.Background(), repo, bundle, BundleImportExpectation{
+		LineageID: tx.LineageID, Snapshot: snapshot, PolicyHash: tx.PolicyHash,
+		GenesisRevision: bundle.GenesisRevision, HeadRevision: bundle.HeadRevision,
+		ChainIdentity: bundle.ChainIdentity, BundleDigest: bundle.BundleDigest,
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires correction budget fields") {
+		t.Fatalf("ImportBundle(legacy-shaped bounded chain) error = %v", err)
+	}
+	store, storeErr := AuthoritativeStore(context.Background(), repo, tx.LineageID)
+	if storeErr != nil {
+		t.Fatal(storeErr)
+	}
+	if _, _, loadErr := store.Load(); !errors.Is(loadErr, os.ErrNotExist) {
+		t.Fatalf("rejected legacy bundle installed authority: %v", loadErr)
+	}
+}
 
 func TestChainBundleRoundTripBootstrapsRepositoryDerivedStore(t *testing.T) {
 	source := initSnapshotRepo(t)
@@ -337,6 +416,69 @@ type correctedBundleTestFixture struct {
 	Store       Store
 }
 
+func TestLegacyClassificationBundleRemainsReadable(t *testing.T) {
+	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	tx := newTestTransaction(t, ModeOrdinary4R)
+	_ = tx.StartReview()
+	genesis := writeStoreEvent(t, store, Record{Operation: "review/start", Transaction: *tx})
+	_ = freezeTestFindings(tx, []Finding{{ID: "R1-001", Severity: "CRITICAL"}})
+	frozen := writeStoreEvent(t, store, Record{Operation: "review/freeze-findings", PreviousRevision: genesis, Transaction: *tx})
+	_, _ = tx.ClassifyEvidence([]FindingEvidence{{
+		FindingID: "R1-001", Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "legacy concrete proof",
+	}})
+	classification := tx.Classifications["R1-001"]
+	classification.Causality = ""
+	tx.Classifications["R1-001"] = classification
+	writeStoreEvent(t, store, Record{Operation: "review/classify-evidence", PreviousRevision: frozen, Transaction: *tx})
+
+	bundle, err := store.ExportBundle()
+	if err != nil {
+		t.Fatalf("ExportBundle(legacy) error = %v", err)
+	}
+	payload, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseChainBundle(payload)
+	if err != nil {
+		t.Fatalf("ParseChainBundle(legacy) error = %v", err)
+	}
+	if parsed.HeadRevision != bundle.HeadRevision || len(parsed.Events) != 3 {
+		t.Fatalf("legacy bundle round trip = %#v", parsed)
+	}
+}
+
+func TestChainBundlePreservesHistoricalJudgmentDayFreezeBytes(t *testing.T) {
+	store := Store{Dir: filepath.Join(t.TempDir(), "review-store")}
+	tx := newTestTransaction(t, ModeJudgmentDay)
+	if err := tx.StartReview(); err != nil {
+		t.Fatal(err)
+	}
+	head := writeStoreEvent(t, store, Record{Operation: "review/start", Transaction: *tx})
+	if err := tx.RecordJudgeProofs([]JudgeProof{{JudgeID: "judge-a", ExecutionHash: hash("a"), ResultHash: hash("b"), Blind: true, Confirmed: true}, {JudgeID: "judge-b", ExecutionHash: hash("c"), ResultHash: hash("d"), Blind: true, Confirmed: true}}, hash("e")); err != nil {
+		t.Fatal(err)
+	}
+	head = writeStoreEvent(t, store, Record{Operation: "review/record-judge-proofs", PreviousRevision: head, Transaction: *tx})
+	legacy := historicalFreezeTransition(t, *tx)
+	head = writeStoreEvent(t, store, Record{Operation: "review/freeze-findings", PreviousRevision: head, Transaction: legacy})
+	payload, err := os.ReadFile(filepath.Join(store.Dir, "events", strings.TrimPrefix(head, "sha256:")+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bundle, err := store.ExportBundle()
+	if err != nil {
+		t.Fatalf("ExportBundle() error = %v", err)
+	}
+	last := bundle.Events[len(bundle.Events)-1]
+	if last.Revision != head || !bytes.Equal(last.Payload, payload) {
+		t.Fatalf("bundle changed historical event: %#v", last)
+	}
+	if _, err := ParseChainBundle(mustJSON(t, bundle)); err != nil {
+		t.Fatalf("ParseChainBundle() error = %v", err)
+	}
+}
+
 func correctedBundleFixture(t *testing.T, repo, lineage string) correctedBundleTestFixture {
 	t.Helper()
 	artifacts := t.TempDir()
@@ -346,7 +488,7 @@ func correctedBundleFixture(t *testing.T, repo, lineage string) correctedBundleT
 	evidencePath := filepath.Join(artifacts, "evidence.md")
 	for path, content := range map[string]string{
 		policyPath:   "bounded policy\n",
-		ledgerPath:   "{\"schema\":\"gentle-ai.review-ledger/v1\",\"findings\":[{\"id\":\"BRT1-005\",\"lens\":\"resilience\",\"location\":\"internal/reviewtransaction/bundle.go\",\"severity\":\"CRITICAL\",\"claim\":\"corrected lineages cannot recover authority\",\"proof_refs\":[\"bundle.go:209\"]}]}\n",
+		ledgerPath:   "{\"schema\":\"gentle-ai.review-ledger/v1\",\"findings\":[{\"id\":\"BRT1-005\",\"lens\":\"resilience\",\"location\":\"internal/reviewtransaction/bundle.go\",\"severity\":\"CRITICAL\",\"claim\":\"corrected lineages cannot recover authority\",\"proof_refs\":[\"bundle.go:209\"]}]}",
 		fixDeltaPath: "portable recovery correction\n",
 		evidencePath: "verified corrected delivery\n",
 	} {
@@ -394,12 +536,16 @@ func correctedBundleFixture(t *testing.T, repo, lineage string) correctedBundleT
 		ID: "BRT1-005", Lens: "resilience", Location: "internal/reviewtransaction/bundle.go",
 		Severity: "CRITICAL", Claim: "corrected lineages cannot recover authority", ProofRefs: []string{"bundle.go:209"},
 	}
-	if err := transaction.FreezeFindings([]Finding{finding}, ledgerHash); err != nil {
+	ledger, err := CanonicalLedger([]Finding{finding})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.FreezeFindings([]Finding{finding}, ledger, ledgerHash); err != nil {
 		t.Fatal(err)
 	}
 	appendState("review/freeze-findings")
 	if _, err := transaction.ClassifyEvidence([]FindingEvidence{{
-		FindingID: "BRT1-005", Class: EvidenceDeterministic, Proof: "corrected clean-clone import was rejected",
+		FindingID: "BRT1-005", Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "corrected clean-clone import was rejected",
 	}}); err != nil {
 		t.Fatal(err)
 	}
