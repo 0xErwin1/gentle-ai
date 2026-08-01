@@ -4,7 +4,7 @@
 
 Gentle AI publishes a platform-independent assets archive with every release, described by a versioned, self-describing manifest. This is the synchronization artifact a consumer decodes to trust bundled contracts, schemas, and snapshots instead of hand-transcribing provider internals. The contract lives in its own namespace, independent of the runtime-negotiated `review-integration` contract, so a bootstrap-time archive trust decision and a live CLI negotiation can version on separate timelines.
 
-> This document covers the manifest contract, the semantic capability snapshot it bundles, and the staging generator that assembles a payload and emits the manifest. The archive is not yet wired into the GoReleaser release build or published — that wiring, the release-policy amendment, and downstream notification are tracked separately and will extend this document as they land.
+> This document covers the manifest contract, the semantic capability snapshot it bundles, the staging generator that assembles a payload and emits the manifest, and how the resulting archive is built, published, and verified. Downstream notification is tracked separately and will extend this document as it lands.
 
 ## Contract identity
 
@@ -109,7 +109,44 @@ go run ./internal/releaseassetscmd \
 
 It stages the entire `contracts/` namespace, this document, `LICENSE`, and the generated semantic snapshot (`capabilities/review-integration-v2.semantic.json`), sorts every entry by ascending raw path bytes, computes the tree digest, and writes `artifact-manifest.json` at the staging directory root — validating the manifest it just built before exiting.
 
-> **Not yet wired into `.goreleaser.yaml`.** This command is deliberately standalone in this contract revision so it can be tested independently of the release pipeline. Wiring it into the GoReleaser build (`before.hooks` or an equivalent) is tracked separately.
+## Publication (`.goreleaser.yaml`)
+
+`.goreleaser.yaml` invokes the generator as a `before.hooks` entry, staging into `.release-assets-staging/` at the repository root — **not** under `dist/`. GoReleaser's `--clean` flag removes `dist/` before hooks run, but hooks themselves run before GoReleaser re-creates and locks `dist/`; a hook that writes into `dist/` collides with that step and fails the build. Staging outside `dist/` avoids the collision entirely:
+
+```yaml
+before:
+  hooks:
+    - go run ./internal/releaseassetscmd --repository Gentleman-Programming/gentle-ai --tag {{ .Tag }} --version {{ .Version }} --commit {{ .Commit }} --staging-dir .release-assets-staging
+```
+
+The archive itself is a GoReleaser **meta archive** (`meta: true`): it carries no builds, no per-platform axis, and produces exactly one archive regardless of the build matrix. Its `files:` glob is the one empirically load-bearing detail — `src: .release-assets-staging/**` (not `.release-assets-staging/**/*`) is required so every staged file, including the ones directly at the staging root (`artifact-manifest.json`, `LICENSE`), is admitted. The trailing-`/*` form silently drops zero-depth files, which would ship an archive missing its own manifest:
+
+```yaml
+archives:
+  - id: default          # explicit ID, semantically identical to today's implicit default
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: [ ... ]        # unchanged platform archive payload
+  - id: assets
+    meta: true
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_assets"
+    files:
+      - src: .release-assets-staging/**
+        dst: .
+```
+
+`brews[0].ids: [default]` pins the Homebrew formula to the four platform archives only, so the formula's structural shape — its four `on_macos`/`on_linux` URL/sha256 blocks, install steps, and metadata — is unaffected by the new archive. (Per-run sha256 values are not byte-comparable across separate `goreleaser` invocations even with zero config change: GoReleaser stamps the current build time into tar member metadata, so the compiled archive's bytes, and therefore its checksum, differ between any two runs. The verification signal is the formula's *structure*: URL/sha256 pair count, `on_macos`/`on_linux` branching, and install steps stay identical with and without the assets archive present, which was confirmed by a byte diff with only the four sha256 lines differing.)
+
+## `internal/releasepolicy` amendment (exact-plus-one)
+
+`policy.go` gains a duplicated string constant `assetsArchiveID = "assets"` (it cannot import `internal/releaseartifact.AssetsArchiveID` — the release-policy verifier compiles `policy.go` in isolation, stdlib-and-`yaml.v3`-only, in a bare module). `internal/releasepolicy` carries a same-package test that imports `internal/releaseartifact` and asserts the two literals agree; that test file is not part of the isolated bare-module copy, so it does not break the isolation it guards.
+
+The artifact-shape check splits `dist/artifacts.json`'s `Archive` entries by `Extra.ID`: entries with `ID == "assets"` go into a one-element `assetsArchives` bucket, everything else stays in `platformArchives` and is validated by the **unchanged** four-platform loop body. The assets archive then gets its own, strictly additive checks: no `GOOS`/`GOARCH`/`Target`, no `Binaries`, and a name that binds the exact `snapshotVersion` the platform archives agreed on. `expectedCounts["Archive"]` becomes `5`.
+
+## Remote verification (`scripts/verify-release-assets.sh`)
+
+`archives=(...)` admits `gentle-ai_${version}_assets.tar.gz` alongside the four platform archives, so both the remote asset-set diff (against the live GitHub release) and the signed-checksums-manifest diff enforce its presence — a live release missing the assets archive, or carrying an assets archive without a matching checksum entry, fails closed with a named error.
 
 ## Regenerating the semantic snapshot golden
 
@@ -135,4 +172,6 @@ It stages the entire `contracts/` namespace, this document, `LICENSE`, and the g
 
 Initial publish of the `gentle-ai.release-artifact` namespace: contract identity, the canonical JSON encoder, entry path/type/mode admission, the non-self-referential tree digest, and the manifest shape with its schema and fixtures.
 
-Added the deterministic semantic capability snapshot (`internal/cli.ReleaseSemanticSnapshot`, `internal/releaseartifact.SemanticSnapshot`), the frozen required-floor compatibility check (`internal/releaseartifact.RequiredFloor` / `VerifyRequiredFloor`), the `internal/releaseassetscmd` staging generator, and its checked-in golden. The generator is not yet wired into the GoReleaser release build.
+Added the deterministic semantic capability snapshot (`internal/cli.ReleaseSemanticSnapshot`, `internal/releaseartifact.SemanticSnapshot`), the frozen required-floor compatibility check (`internal/releaseartifact.RequiredFloor` / `VerifyRequiredFloor`), the `internal/releaseassetscmd` staging generator, and its checked-in golden.
+
+Wired the generator into `.goreleaser.yaml` as a `before.hooks` staging step and a GoReleaser meta archive (`id: assets`), pinned Homebrew to the platform archives only (`brews[0].ids: [default]`), amended `internal/releasepolicy` with an ID-keyed exact-plus-one split (`expectedCounts["Archive"] == 5`), and admitted the assets archive into `scripts/verify-release-assets.sh`'s remote verification.
