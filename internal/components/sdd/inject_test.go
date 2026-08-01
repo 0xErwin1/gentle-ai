@@ -2658,39 +2658,51 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 }
 
 func TestInjectOpenCodeNativeFallbackAgentsPromptsAlignedWithGentlePi(t *testing.T) {
-	home := t.TempDir()
-	result, err := Inject(home, opencodeAdapter(), "multi")
-	if err != nil {
-		t.Fatalf("Inject failed: %v", err)
-	}
-	if !result.Changed {
-		t.Fatal("expected injection to change configuration")
-	}
+	mockNoPackageManager(t)
 
-	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
-	data, err := os.ReadFile(settingsPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	for _, sddMode := range []string{"multi", ""} {
+		t.Run("sddMode="+sddMode, func(t *testing.T) {
+			home := t.TempDir()
+			result, err := Inject(home, opencodeAdapter(), model.SDDModeID(sddMode))
+			if err != nil {
+				t.Fatalf("Inject failed: %v", err)
+			}
+			if !result.Changed {
+				t.Fatal("expected injection to change configuration")
+			}
 
-	var root map[string]any
-	if err := json.Unmarshal(data, &root); err != nil {
-		t.Fatal(err)
-	}
+			settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+			data, err := os.ReadFile(settingsPath)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	agentMap := root["agent"].(map[string]any)
-	for _, fallbackAgent := range []string{"general", "explore"} {
-		agent, ok := agentMap[fallbackAgent].(map[string]any)
-		if !ok {
-			t.Fatalf("agent %q missing from overlay", fallbackAgent)
-		}
-		prompt, ok := agent["prompt"].(string)
-		if !ok || strings.TrimSpace(prompt) == "" {
-			t.Fatalf("agent %q missing non-empty prompt", fallbackAgent)
-		}
-		if fallbackAgent == "explore" && !strings.Contains(prompt, "gentle-pi") {
-			t.Fatalf("explore fallback agent prompt missing gentle-pi alignment guidance: %s", prompt)
-		}
+			var root map[string]any
+			if err := json.Unmarshal(data, &root); err != nil {
+				t.Fatal(err)
+			}
+
+			agentMap := root["agent"].(map[string]any)
+			for _, fallbackAgent := range []string{"general", "explore"} {
+				agent, ok := agentMap[fallbackAgent].(map[string]any)
+				if !ok {
+					t.Fatalf("agent %q missing from overlay for mode %q", fallbackAgent, sddMode)
+				}
+				if mode, _ := agent["mode"].(string); mode != "subagent" {
+					t.Errorf("agent %q mode = %q, want subagent", fallbackAgent, mode)
+				}
+				if hidden, _ := agent["hidden"].(bool); !hidden {
+					t.Errorf("agent %q hidden = %v, want true", fallbackAgent, hidden)
+				}
+				prompt, ok := agent["prompt"].(string)
+				if !ok || strings.TrimSpace(prompt) == "" {
+					t.Fatalf("agent %q missing non-empty prompt for mode %q", fallbackAgent, sddMode)
+				}
+				if fallbackAgent == "explore" && !strings.Contains(prompt, "gentle-pi") {
+					t.Fatalf("explore fallback agent prompt missing gentle-pi alignment guidance: %s", prompt)
+				}
+			}
+		})
 	}
 }
 
