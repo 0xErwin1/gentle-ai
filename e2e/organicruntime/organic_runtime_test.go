@@ -2160,7 +2160,12 @@ func TestRealAgentInstalledSDDApplyExecutorDoesNotDelegate(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("XDG_CONFIG_HOME", configRoot)
 
-	const executorPrompt = "Execute the assigned SDD apply phase without delegation."
+	const (
+		executorPrompt               = "Execute the assigned SDD apply phase without delegation."
+		executorCompletionPrefix     = "SDD_APPLY_EXECUTOR_COMPLETED:"
+		orchestratorCompletionMarker = "SDD_APPLY_ORCHESTRATOR_COMPLETED"
+	)
+	executorNonce := fmt.Sprintf("sdd-apply-executor-nonce-%d", time.Now().UnixNano())
 	fixture := newOpenCodeFixtureServer(t, []openCodeTurn{
 		{tool: "task", arguments: map[string]any{
 			"description":   "Run the installed SDD apply executor",
@@ -2170,9 +2175,10 @@ func TestRealAgentInstalledSDDApplyExecutorDoesNotDelegate(t *testing.T) {
 	}, executorPrompt)
 	defer fixture.Close()
 	fixture.requireInstalledSDDApplyExecutor = true
-	fixture.completion = "SDD_APPLY_EXECUTOR_PROCEEDED"
-	fixture.actorCommand = "printf SDD_APPLY_EXECUTOR_PROCEEDED"
-	fixture.subagentCompletion = "SDD_APPLY_EXECUTOR_PROCEEDED"
+	fixture.executorNonce = executorNonce
+	fixture.executorCompletionPrefix = executorCompletionPrefix
+	fixture.completion = orchestratorCompletionMarker
+	fixture.actorCommand = "echo " + executorNonce
 
 	settingsPath := filepath.Join(configRoot, "opencode", "opencode.json")
 	if err := os.WriteFile(settingsPath, []byte(organicOpenCodeConfig(t, fixture.URL)), 0o600); err != nil {
@@ -2214,8 +2220,33 @@ func TestRealAgentInstalledSDDApplyExecutorDoesNotDelegate(t *testing.T) {
 		t.Fatalf("run installed sdd-apply executor: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
 	}
 	fixture.assertComplete(t, true)
-	if !strings.Contains(stdout.String(), "SDD_APPLY_EXECUTOR_PROCEEDED") {
-		t.Fatalf("installed sdd-apply executor did not complete the phase:\n%s", stdout.String())
+	fixture.assertInstalledSDDApplyExecutorProof(t)
+	if !strings.Contains(stdout.String(), orchestratorCompletionMarker) {
+		t.Fatalf("orchestrator did not complete after the executor result round trip:\n%s", stdout.String())
+	}
+}
+
+func TestInstalledSDDApplyExecutorProofRejectsOrchestratorSpoof(t *testing.T) {
+	const (
+		nonce            = "sdd-apply-executor-nonce-spoof-control"
+		executorComplete = "SDD_APPLY_EXECUTOR_COMPLETED:" + nonce
+	)
+	fixture := &openCodeFixtureServer{
+		requireInstalledSDDApplyExecutor: true,
+		executorNonce:                    nonce,
+		executorSubagentResult:           executorComplete,
+	}
+	recorder := httptest.NewRecorder()
+	input := openAIRequest{Messages: []openAIMessage{{Role: "tool", Content: executorComplete}}}
+
+	if fixture.acceptInstalledSDDApplyExecutorRoundTrip(recorder, input) {
+		t.Fatal("an orchestrator-spoofed executor completion was accepted without an executor bash result")
+	}
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("spoof response status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+	}
+	if !strings.Contains(fixture.failure, "without executor bash result") {
+		t.Fatalf("spoof refusal = %q, want missing executor bash result", fixture.failure)
 	}
 }
 
@@ -2286,6 +2317,11 @@ type openCodeFixtureServer struct {
 	subagentCompletion               string
 	requireInstalledSDDApplyExecutor bool
 	sawInstalledSDDApplyExecutor     bool
+	executorNonce                    string
+	executorCompletionPrefix         string
+	executorBashResult               string
+	executorSubagentResult           string
+	executorRoundTripResult          string
 	mainCalls                        int
 	subagentStarts                   int
 	failure                          string
@@ -2337,7 +2373,15 @@ func (fixture *openCodeFixtureServer) serveHTTP(writer http.ResponseWriter, requ
 		fixture.mu.Unlock()
 		last := input.Messages[len(input.Messages)-1]
 		if last.Role == "tool" {
+			if fixture.requireInstalledSDDApplyExecutor && !fixture.captureInstalledSDDApplyExecutorBashResult(writer, messageText(last.Content)) {
+				return
+			}
 			completion := fixture.subagentCompletion
+			if fixture.requireInstalledSDDApplyExecutor {
+				fixture.mu.Lock()
+				completion = fixture.executorSubagentResult
+				fixture.mu.Unlock()
+			}
 			if completion == "" {
 				completion = organicDelegatedActorMarker
 			}
@@ -2353,6 +2397,9 @@ func (fixture *openCodeFixtureServer) serveHTTP(writer http.ResponseWriter, requ
 	call := fixture.mainCalls
 	fixture.mu.Unlock()
 	if call > len(fixture.script) {
+		if fixture.requireInstalledSDDApplyExecutor && !fixture.acceptInstalledSDDApplyExecutorRoundTrip(writer, input) {
+			return
+		}
 		completion := fixture.completion
 		if completion == "" {
 			completion = "Organic journey complete."
@@ -2399,6 +2446,79 @@ func (fixture *openCodeFixtureServer) acceptInstalledSDDApplyExecutor(writer htt
 	fixture.sawInstalledSDDApplyExecutor = true
 	fixture.mu.Unlock()
 	return true
+}
+
+func (fixture *openCodeFixtureServer) captureInstalledSDDApplyExecutorBashResult(writer http.ResponseWriter, result string) bool {
+	fixture.mu.Lock()
+	nonce := fixture.executorNonce
+	prefix := fixture.executorCompletionPrefix
+	fixture.mu.Unlock()
+	if nonce == "" || prefix == "" {
+		fixture.fail(writer, "installed sdd-apply executor proof is missing its nonce or completion marker")
+		return false
+	}
+	if !strings.Contains(result, nonce) {
+		fixture.fail(writer, "installed sdd-apply executor bash result does not contain its nonce")
+		return false
+	}
+	fixture.mu.Lock()
+	fixture.executorBashResult = result
+	fixture.executorSubagentResult = prefix + nonce
+	fixture.mu.Unlock()
+	return true
+}
+
+func (fixture *openCodeFixtureServer) acceptInstalledSDDApplyExecutorRoundTrip(writer http.ResponseWriter, input openAIRequest) bool {
+	fixture.mu.Lock()
+	nonce := fixture.executorNonce
+	bashResult := fixture.executorBashResult
+	executorResult := fixture.executorSubagentResult
+	fixture.mu.Unlock()
+	if !strings.Contains(bashResult, nonce) {
+		fixture.fail(writer, "orchestrator cannot complete the executor proof without executor bash result")
+		return false
+	}
+	if executorResult == "" {
+		fixture.fail(writer, "installed sdd-apply executor did not return a nonce-bound subagent result")
+		return false
+	}
+	for index := len(input.Messages) - 1; index >= 0; index-- {
+		message := input.Messages[index]
+		if message.Role != "tool" {
+			continue
+		}
+		result := messageText(message.Content)
+		if strings.Contains(result, executorResult) && strings.Contains(result, nonce) {
+			fixture.mu.Lock()
+			fixture.executorRoundTripResult = result
+			fixture.mu.Unlock()
+			return true
+		}
+	}
+	fixture.fail(writer, "orchestrator did not receive the nonce-bound executor subagent result")
+	return false
+}
+
+func (fixture *openCodeFixtureServer) assertInstalledSDDApplyExecutorProof(t *testing.T) {
+	t.Helper()
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	executorResult := fixture.executorCompletionPrefix + fixture.executorNonce
+	if fixture.completion == executorResult {
+		t.Fatal("orchestrator and executor completion markers must be distinct")
+	}
+	if !strings.Contains(fixture.actorCommand, fixture.executorNonce) {
+		t.Fatal("the installed sdd-apply executor did not receive its nonce-bearing bash command")
+	}
+	if !strings.Contains(fixture.executorBashResult, fixture.executorNonce) {
+		t.Fatal("the installed sdd-apply executor did not return its bash-produced nonce")
+	}
+	if fixture.executorSubagentResult != executorResult {
+		t.Fatalf("executor subagent result = %q, want %q", fixture.executorSubagentResult, executorResult)
+	}
+	if !strings.Contains(fixture.executorRoundTripResult, executorResult) {
+		t.Fatal("orchestrator did not receive the executor result through its task round trip")
+	}
 }
 
 // isSubagent recognises the delegated worker session. OpenCode gives the
