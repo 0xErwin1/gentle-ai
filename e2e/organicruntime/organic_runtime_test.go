@@ -28,6 +28,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/opencode"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
@@ -2145,6 +2148,77 @@ func TestRealAgentOrganicJourneys(t *testing.T) {
 	}
 }
 
+func TestRealAgentInstalledSDDApplyExecutorDoesNotDelegate(t *testing.T) {
+	if os.Getenv(realAgentE2EEnvironment) != "1" {
+		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the pinned real-agent journeys")
+	}
+	requireOrganicExecutableVersion(t, "opencode", pinnedOpenCodeVersion)
+
+	configRoot := prepareOpenCodeConfig(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", configRoot)
+
+	const executorPrompt = "Execute the assigned SDD apply phase without delegation."
+	fixture := newOpenCodeFixtureServer(t, []openCodeTurn{
+		{tool: "task", arguments: map[string]any{
+			"description":   "Run the installed SDD apply executor",
+			"prompt":        executorPrompt,
+			"subagent_type": "sdd-apply",
+		}},
+	}, executorPrompt)
+	defer fixture.Close()
+	fixture.requireInstalledSDDApplyExecutor = true
+	fixture.completion = "SDD_APPLY_EXECUTOR_PROCEEDED"
+	fixture.actorCommand = "printf SDD_APPLY_EXECUTOR_PROCEEDED"
+	fixture.subagentCompletion = "SDD_APPLY_EXECUTOR_PROCEEDED"
+
+	settingsPath := filepath.Join(configRoot, "opencode", "opencode.json")
+	if err := os.WriteFile(settingsPath, []byte(organicOpenCodeConfig(t, fixture.URL)), 0o600); err != nil {
+		t.Fatalf("write OpenCode fixture config: %v", err)
+	}
+	if _, err := sdd.Inject(home, opencode.NewAdapter(), model.SDDModeMulti); err != nil {
+		t.Fatalf("install SDD OpenCode assets: %v", err)
+	}
+
+	workdir := t.TempDir()
+	environment := append(os.Environ(),
+		"OPENCODE_CONFIG_DIR="+filepath.Join(configRoot, "opencode"),
+		"OPENCODE_TEST_HOME="+filepath.Join(home, "opencode"),
+		"OPENCODE_AUTH_CONTENT={}",
+		"OPENCODE_DISABLE_PROJECT_CONFIG=1",
+		"OPENCODE_DISABLE_AUTOUPDATE=1",
+		"OPENCODE_DISABLE_AUTOCOMPACT=1",
+		"OPENCODE_DISABLE_CLAUDE_CODE=1",
+		"OPENCODE_DISABLE_DEFAULT_PLUGINS=1",
+		"OPENCODE_DISABLE_EXTERNAL_SKILLS=1",
+		"OPENCODE_DISABLE_LSP_DOWNLOAD=1",
+		"OPENCODE_DISABLE_MODELS_FETCH=1",
+		"OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER=1",
+		"OPENCODE_FAST_BOOT=1",
+		"OPENCODE_PURE=1",
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), organicAgentTimeout)
+	defer cancel()
+	command := organicCommandContext(ctx, "opencode", "run", "--pure",
+		"--format", "json", "--agent", "gentle-orchestrator", "--model", "fixture/fixture",
+		"--dir", workdir, "Delegate the assigned phase to the installed sdd-apply executor.",
+	)
+	command.Dir = workdir
+	command.Env = environment
+	var stdout, stderr bytes.Buffer
+	command.Stdout = &stdout
+	command.Stderr = &stderr
+	if err := command.Run(); err != nil {
+		t.Fatalf("run installed sdd-apply executor: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+	fixture.assertComplete(t, true)
+	if !strings.Contains(stdout.String(), "SDD_APPLY_EXECUTOR_PROCEEDED") {
+		t.Fatalf("installed sdd-apply executor did not complete the phase:\n%s", stdout.String())
+	}
+}
+
 // organicActorToolCommand runs the compiled actor process from the agent's own
 // bash tool, so the implementation step is a real child process of a real agent.
 func organicActorToolCommand(t *testing.T) string {
@@ -2204,13 +2278,17 @@ type openCodeTurn struct {
 
 type openCodeFixtureServer struct {
 	*httptest.Server
-	mu             sync.Mutex
-	script         []openCodeTurn
-	actorPrompt    string
-	actorCommand   string
-	mainCalls      int
-	subagentStarts int
-	failure        string
+	mu                               sync.Mutex
+	script                           []openCodeTurn
+	actorPrompt                      string
+	actorCommand                     string
+	completion                       string
+	subagentCompletion               string
+	requireInstalledSDDApplyExecutor bool
+	sawInstalledSDDApplyExecutor     bool
+	mainCalls                        int
+	subagentStarts                   int
+	failure                          string
 }
 
 func newOpenCodeFixtureServer(t *testing.T, script []openCodeTurn, actorPrompt string) *openCodeFixtureServer {
@@ -2251,12 +2329,19 @@ func (fixture *openCodeFixtureServer) serveHTTP(writer http.ResponseWriter, requ
 		return
 	}
 	if fixture.isSubagent(input) {
+		if fixture.requireInstalledSDDApplyExecutor && !fixture.acceptInstalledSDDApplyExecutor(writer, input) {
+			return
+		}
 		fixture.mu.Lock()
 		fixture.subagentStarts++
 		fixture.mu.Unlock()
 		last := input.Messages[len(input.Messages)-1]
 		if last.Role == "tool" {
-			fixture.writeText(writer, organicDelegatedActorMarker, "stop")
+			completion := fixture.subagentCompletion
+			if completion == "" {
+				completion = organicDelegatedActorMarker
+			}
+			fixture.writeText(writer, completion, "stop")
 			return
 		}
 		fixture.writeTool(writer, "delegated-actor", "bash", map[string]any{"command": fixture.actorCommand})
@@ -2268,11 +2353,52 @@ func (fixture *openCodeFixtureServer) serveHTTP(writer http.ResponseWriter, requ
 	call := fixture.mainCalls
 	fixture.mu.Unlock()
 	if call > len(fixture.script) {
-		fixture.writeText(writer, "Organic journey complete.", "stop")
+		completion := fixture.completion
+		if completion == "" {
+			completion = "Organic journey complete."
+		}
+		fixture.writeText(writer, completion, "stop")
 		return
 	}
 	turn := fixture.script[call-1]
 	fixture.writeTool(writer, fmt.Sprintf("turn-%d", call), turn.tool, turn.arguments)
+}
+
+func (fixture *openCodeFixtureServer) acceptInstalledSDDApplyExecutor(writer http.ResponseWriter, input openAIRequest) bool {
+	var transcript strings.Builder
+	for _, message := range input.Messages {
+		transcript.WriteString(messageText(message.Content))
+	}
+	content := transcript.String()
+	override := strings.Index(content, "## Executor Override")
+	gate := strings.Index(content, "**ORCHESTRATOR GATE**")
+	if override < 0 || gate < 0 || override > gate {
+		fixture.fail(writer, "installed sdd-apply executor did not load the override before the orchestrator gate")
+		return false
+	}
+	if !strings.Contains(content, "Continue with the phase work below. Do NOT delegate.") {
+		fixture.fail(writer, "installed sdd-apply executor is missing its non-delegating continuation instruction")
+		return false
+	}
+	for _, rawTool := range input.Tools {
+		var tool struct {
+			Function struct {
+				Name string `json:"name"`
+			} `json:"function"`
+		}
+		if err := json.Unmarshal(rawTool, &tool); err != nil {
+			fixture.fail(writer, "decode installed sdd-apply tool definition: %v", err)
+			return false
+		}
+		if tool.Function.Name == "task" {
+			fixture.fail(writer, "installed sdd-apply executor was offered the task delegation tool")
+			return false
+		}
+	}
+	fixture.mu.Lock()
+	fixture.sawInstalledSDDApplyExecutor = true
+	fixture.mu.Unlock()
+	return true
 }
 
 // isSubagent recognises the delegated worker session. OpenCode gives the
@@ -2365,6 +2491,9 @@ func (fixture *openCodeFixtureServer) assertComplete(t *testing.T, wantSubagent 
 	}
 	if hadSubagent := fixture.subagentStarts > 0; hadSubagent != wantSubagent {
 		t.Fatalf("real sub-agent used = %t, want %t", hadSubagent, wantSubagent)
+	}
+	if fixture.requireInstalledSDDApplyExecutor && !fixture.sawInstalledSDDApplyExecutor {
+		t.Fatal("the installed sdd-apply executor never loaded its runtime prompt")
 	}
 }
 
