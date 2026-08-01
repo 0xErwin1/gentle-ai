@@ -2657,6 +2657,43 @@ func TestInjectOpenCodeEmptySDDModeDefaultsSingle(t *testing.T) {
 	assertOpenCodeRefuterToolsReadOnly(t, "rendered single-mode OpenCode config", refuterTools)
 }
 
+func TestInjectOpenCodeNativeFallbackAgentsPromptsAlignedWithGentlePi(t *testing.T) {
+	home := t.TempDir()
+	result, err := Inject(home, opencodeAdapter(), "multi")
+	if err != nil {
+		t.Fatalf("Inject failed: %v", err)
+	}
+	if !result.Changed {
+		t.Fatal("expected injection to change configuration")
+	}
+
+	settingsPath := filepath.Join(home, ".config", "opencode", "opencode.json")
+	data, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var root map[string]any
+	if err := json.Unmarshal(data, &root); err != nil {
+		t.Fatal(err)
+	}
+
+	agentMap := root["agent"].(map[string]any)
+	for _, fallbackAgent := range []string{"general", "explore"} {
+		agent, ok := agentMap[fallbackAgent].(map[string]any)
+		if !ok {
+			t.Fatalf("agent %q missing from overlay", fallbackAgent)
+		}
+		prompt, ok := agent["prompt"].(string)
+		if !ok || strings.TrimSpace(prompt) == "" {
+			t.Fatalf("agent %q missing non-empty prompt", fallbackAgent)
+		}
+		if fallbackAgent == "explore" && !strings.Contains(prompt, "gentle-pi") {
+			t.Fatalf("explore fallback agent prompt missing gentle-pi alignment guidance: %s", prompt)
+		}
+	}
+}
+
 func TestInjectClaudeIgnoresSDDMode(t *testing.T) {
 	home := t.TempDir()
 
