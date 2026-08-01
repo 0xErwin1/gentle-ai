@@ -495,7 +495,10 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
   const admissionRecoveries: AdmissionRecoveryStore = new Map()
   const failedSDDSessions = new Map<string, SDDTaskFailure>()
   return {
-  dispose: async () => { admissionRecoveries.clear() },
+  dispose: async () => {
+    admissionRecoveries.clear()
+    failedSDDSessions.clear()
+  },
   event: async ({ event }) => {
     if (event.type === "session.deleted") {
       admissionRecoveries.delete(event.properties.info.id)

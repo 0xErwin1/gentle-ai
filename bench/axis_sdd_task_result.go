@@ -2,16 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
-// This opt-in axis drives the installed OpenCode plugin rather than the native
-// CLI. A task result is provider-owned transport, so the core offline corpus
-// cannot manufacture this boundary without misrepresenting what it measures.
+// This opt-in axis drives the installed OpenCode plugin, not the native CLI.
+// The core corpus cannot manufacture provider-owned transport honestly.
 const sddTaskResultAxis = "sdd-task-result"
 
 func init() {
@@ -21,7 +22,7 @@ func init() {
 		BlackBox: false,
 		Properties: []string{
 			"Runs the installed OpenCode plugin through Node with a provider-shaped empty task_result; it does not drive the gentle-ai CLI alone.",
-			"Requires GENTLE_AI_BENCH_SDD_PLUGIN to name the installed review-result-artifacts.ts and skips honestly when Node or that plugin is unavailable.",
+			"Requires GENTLE_AI_BENCH_SDD_PLUGIN and a Node runtime that executes .mts files with built-in TypeScript type stripping; skips honestly when the plugin or runtime capability is unavailable.",
 		},
 		Journeys: sddTaskResultJourneys,
 	})
@@ -40,22 +41,42 @@ func sddTaskResultJourneys() []Journey {
 	}}
 }
 
-func sddTaskResultPluginPath() string {
-	return os.Getenv("GENTLE_AI_BENCH_SDD_PLUGIN")
-}
-
 func sddTaskResultUnavailable(*Sandbox) string {
-	path := sddTaskResultPluginPath()
+	path := os.Getenv("GENTLE_AI_BENCH_SDD_PLUGIN")
 	if path == "" {
 		return "GENTLE_AI_BENCH_SDD_PLUGIN is not set"
 	}
 	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
 		return "GENTLE_AI_BENCH_SDD_PLUGIN does not name an installed plugin"
 	}
-	if _, err := exec.LookPath("node"); err != nil {
+	node, err := exec.LookPath("node")
+	if err != nil {
 		return "node is unavailable"
 	}
-	return ""
+	return sddTaskResultNodeUnavailable(node)
+}
+
+const sddTaskResultNodeCapability = `const marker: string = "gentle-ai-sdd-task-result"`
+
+func sddTaskResultNodeUnavailable(node string) string {
+	dir, err := os.MkdirTemp("", "gentle-ai-sdd-task-result-node-*")
+	if err != nil {
+		return "node TypeScript capability check could not create a temporary directory"
+	}
+	defer os.RemoveAll(dir)
+	capability := filepath.Join(dir, "capability.mts")
+	if err := os.WriteFile(capability, []byte(sddTaskResultNodeCapability), 0o600); err != nil {
+		return "node TypeScript capability check could not write a temporary .mts file"
+	}
+	output, err := exec.Command(node, capability).CombinedOutput()
+	if err == nil {
+		return ""
+	}
+	detail := strings.TrimSpace(string(output))
+	if detail == "" {
+		detail = err.Error()
+	}
+	return fmt.Sprintf("node cannot execute .mts TypeScript with type stripping required by the installed plugin/harness: %s", detail)
 }
 
 const sddTaskResultHarness = `import { readFile, writeFile } from "node:fs/promises"
@@ -82,19 +103,20 @@ try {
 console.log([failure, downstream, await readFile(artifact, "utf8")].join("\n---\n"))
 `
 
+const sddTaskResultHarnessTimeout = 30 * time.Second
+
 func sddEmptyTaskResult(r *journeyRun) error {
 	root := filepath.Join(r.sandbox.Root, "sdd-task-result")
-	if err := os.MkdirAll(root, 0o755); err != nil {
+	work := filepath.Join(root, "work")
+	if err := os.MkdirAll(work, 0o755); err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(root, "harness.mts"), []byte(sddTaskResultHarness), 0o600); err != nil {
 		return err
 	}
-	work := filepath.Join(root, "work")
-	if err := os.MkdirAll(work, 0o755); err != nil {
-		return err
-	}
-	cmd := exec.Command("node", "harness.mts", sddTaskResultPluginPath(), work)
+	ctx, cancel := context.WithTimeout(context.Background(), sddTaskResultHarnessTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "node", "harness.mts", os.Getenv("GENTLE_AI_BENCH_SDD_PLUGIN"), work)
 	cmd.Dir = root
 	cmd.Env = r.sandbox.env()
 	var output bytes.Buffer
