@@ -11,6 +11,9 @@ type blockingPromptRoute struct {
 	nativeTool string
 }
 
+// generic is the provider-neutral source that every agent-specific handoff must project.
+const providerDefectHandoffCanonicalPath = "generic/sdd-orchestrator.md"
+
 var blockingPromptRoutes = map[string]blockingPromptRoute{
 	"antigravity/sdd-orchestrator.md": {},
 	"claude/sdd-orchestrator.md":      {nativeTool: "`AskUserQuestion`"},
@@ -142,14 +145,18 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "direct repair prohibition", text: "never offer to switch to, inspect, modify, or directly repair the Gentle AI repository"},
 		{name: "invalid upstream envelope", text: "reject it as semantically inadmissible and issue this separate orchestrator-owned handoff envelope"},
 		{name: "localized consent", text: "Ask the user first, in the active orchestrator conversation language"},
+		{name: "explicit consent", text: "for explicit consent to report the apparent defect"},
 		{name: "exact choice shape", text: "one single-select blocking envelope with exactly two semantic choices"},
 		{name: "localized labels", text: "Localize their labels and descriptions without changing these semantics"},
 		{name: "no internal labels", text: "do not expose machine or internal codes in user-facing labels"},
-		{name: "report choice", text: "**Report the Gentle AI defect**: Only after explicit consent"},
+		{name: "report choice", text: "**Report the Gentle AI defect**: Only after explicit consent and that final privacy scan"},
 		{name: "fixed repository", text: "`Gentleman-Programming/gentle-ai`"},
 		{name: "open and closed duplicate search", text: "search open and closed issues"},
-		{name: "comment duplicate", text: "comment on an equivalent issue with the new occurrence and evidence"},
-		{name: "create only without duplicate", text: "create a new bug report only if no duplicate exists"},
+		{name: "create new automated report", text: "create a new automated provider-defect report"},
+		{name: "new report label", text: "apply the `gentle-report` label"},
+		{name: "comment duplicate", text: "add one new occurrence comment with the observed evidence only"},
+		{name: "duplicate labels unchanged", text: "do not add, remove, or change any labels on that issue"},
+		{name: "label scope exclusions", text: "Do not apply `gentle-report` to manual issues, #2211, historical issues, pull requests, or reports created by unrelated workflows."},
 		{name: "reported path preserves state", text: "Then STOP with all consumer state preserved"},
 		{name: "stop choice", text: "**Stop here**: Create no GitHub issue or comment, preserve all consumer state, and STOP"},
 		{name: "observed evidence", text: "Report observed evidence, not an unconfirmed root cause"},
@@ -157,7 +164,8 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "bounded evidence", text: "bounded attempts and outcomes, failure envelopes, mutation outcome"},
 		{name: "reproduction evidence", text: "expected and actual behavior, a minimal reproduction"},
 		{name: "opaque identifiers", text: "safe opaque reason/revision identifiers, and preserved-state evidence"},
-		{name: "final privacy scan", text: "perform a final privacy scan"},
+		{name: "final privacy scan", text: "Immediately before the first GitHub operation, perform a final privacy scan"},
+		{name: "privacy ordering", text: "This scan precedes the duplicate search, report creation, and occurrence comment"},
 		{name: "privacy exclusions", text: "raw argv, absolute paths, private project names, usernames, hostnames, credentials, diffs, source contents, and environment values"},
 		{name: "released fix only", text: "Resume only after an installed released fix"},
 		{name: "native status re-entry", text: "re-enter through native status"},
@@ -165,7 +173,17 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 	}
 
 	allPaths := allSDDOrchestratorAssetPaths(t)
-	canonical := providerDefectHandoffSection(t, allPaths[0])
+	canonicalFound := false
+	for _, path := range allPaths {
+		if path == providerDefectHandoffCanonicalPath {
+			canonicalFound = true
+			break
+		}
+	}
+	if !canonicalFound {
+		t.Fatalf("canonical provider-defect handoff source %q is not an orchestrator asset", providerDefectHandoffCanonicalPath)
+	}
+	canonical := providerDefectHandoffSection(t, providerDefectHandoffCanonicalPath)
 	semanticChoicePattern := regexp.MustCompile(`(?m)^[ \t]+[0-9]+\. \*\*[^*]+\*\*:`)
 	for _, path := range allPaths {
 		t.Run(path, func(t *testing.T) {
@@ -180,6 +198,24 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 				t.Run(requirement.name, func(t *testing.T) {
 					if !strings.Contains(contract, requirement.text) {
 						t.Errorf("provider-defect handoff missing %q", requirement.text)
+					}
+				})
+			}
+			for _, ordering := range []struct {
+				name   string
+				before string
+				after  string
+			}{
+				{name: "consent before privacy scan", before: "for explicit consent to report the apparent defect", after: "Immediately before the first GitHub operation, perform a final privacy scan"},
+				{name: "privacy scan before duplicate search", before: "Immediately before the first GitHub operation, perform a final privacy scan", after: "search open and closed issues"},
+				{name: "privacy scan before report creation", before: "Immediately before the first GitHub operation, perform a final privacy scan", after: "create a new automated provider-defect report"},
+				{name: "privacy scan before occurrence comment", before: "Immediately before the first GitHub operation, perform a final privacy scan", after: "add one new occurrence comment"},
+			} {
+				t.Run(ordering.name, func(t *testing.T) {
+					beforeIndex := strings.Index(contract, ordering.before)
+					afterIndex := strings.Index(contract, ordering.after)
+					if beforeIndex < 0 || afterIndex < 0 || beforeIndex >= afterIndex {
+						t.Errorf("provider-defect handoff must place %q before %q", ordering.before, ordering.after)
 					}
 				})
 			}
