@@ -1022,3 +1022,12 @@ func repairAuthorityDispositionAtRepo(ctx context.Context, repo, actor, reason, 
 	plan.Authorization = authorization
 	return executeAuthorityDisposition(ctx, repo, plan)
 }
+
+// RepairAuthorityDisposition is the exported form of
+// repairAuthorityDispositionAtRepo — the one public entrypoint Slice S3's
+// `review repair` CLI wiring calls to execute a leaf authority disposition
+// plan (rdd-authority-disposition-plan / "No New Public Repair Verb": an
+// exported Go seam behind the existing verb, not a new CLI command).
+func RepairAuthorityDisposition(ctx context.Context, repo, actor, reason, authorization string) (CompactReclaimRecord, error) {
+	return repairAuthorityDispositionAtRepo(ctx, repo, actor, reason, authorization)
+}
