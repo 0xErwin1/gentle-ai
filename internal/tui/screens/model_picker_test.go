@@ -1010,7 +1010,9 @@ func TestNewModelPickerState(t *testing.T) {
 		settingsContent   string   // non-empty means write settings file; empty means use missing path
 		wantProviderIDs   []string // provider IDs that must appear in Providers map
 		wantAvailable     int      // minimum number of AvailableIDs (custom providers always count)
+		wantUnavailable   []string // provider IDs that must not appear in AvailableIDs
 		wantConfigWarning bool     // whether ConfigWarning must be non-empty
+		wantWarningText   string   // substring expected in ConfigWarning and rendered output
 	}{
 		{
 			name:              "missing opencode.json falls back to catalog only",
@@ -1046,6 +1048,23 @@ func TestNewModelPickerState(t *testing.T) {
 			wantProviderIDs:   []string{"built-in", "custom-a", "custom-b"},
 			wantAvailable:     2, // custom-a and custom-b are always available as custom providers
 			wantConfigWarning: false,
+		},
+		{
+			name:         "custom provider without tool_call warns without becoming available",
+			cacheContent: catalogJSON,
+			settingsContent: `{
+				"provider": {
+					"custom-no-tools": {
+						"name": "Custom No Tools",
+						"models": {"model-a": {"name": "Model A"}}
+					}
+				}
+			}`,
+			wantProviderIDs:   []string{"built-in", "custom-no-tools"},
+			wantAvailable:     0,
+			wantUnavailable:   []string{"custom-no-tools"},
+			wantConfigWarning: true,
+			wantWarningText:   "provider.custom-no-tools.models",
 		},
 		{
 			name:         "name collision: custom provider wins over catalog",
@@ -1101,6 +1120,13 @@ func TestNewModelPickerState(t *testing.T) {
 				t.Errorf("AvailableIDs = %v (count %d), want at least %d",
 					state.AvailableIDs, len(state.AvailableIDs), tt.wantAvailable)
 			}
+			for _, unavailableID := range tt.wantUnavailable {
+				for _, availableID := range state.AvailableIDs {
+					if availableID == unavailableID {
+						t.Errorf("AvailableIDs = %v, must not include %q", state.AvailableIDs, unavailableID)
+					}
+				}
+			}
 
 			// ConfigWarning check.
 			if tt.wantConfigWarning && state.ConfigWarning == "" {
@@ -1108,6 +1134,14 @@ func TestNewModelPickerState(t *testing.T) {
 			}
 			if !tt.wantConfigWarning && state.ConfigWarning != "" {
 				t.Errorf("expected no ConfigWarning, got %q", state.ConfigWarning)
+			}
+			if tt.wantWarningText != "" {
+				if !strings.Contains(state.ConfigWarning, tt.wantWarningText) {
+					t.Errorf("ConfigWarning = %q, want substring %q", state.ConfigWarning, tt.wantWarningText)
+				}
+				if rendered := RenderModelPicker(nil, state, 0); !strings.Contains(rendered, tt.wantWarningText) {
+					t.Errorf("rendered picker missing warning substring %q:\n%s", tt.wantWarningText, rendered)
+				}
 			}
 		})
 	}
