@@ -316,7 +316,7 @@ func TestNegotiatedRestartStatusSuppliesFrozenContextForEveryMissingReviewer(t *
 	repo, started, _, record := newArtifactReview(t, true)
 	var output bytes.Buffer
 	if err := RunReview([]string{
-		"status", "--contract", ReviewIntegrationContractV2, "--next-transition",
+		"status", "--contract", ReviewIntegrationContractV2, "--agent", "opencode", "--next-transition",
 		"--cwd", repo, "--lineage", started.LineageID,
 	}, &output); err != nil {
 		t.Fatal(err)

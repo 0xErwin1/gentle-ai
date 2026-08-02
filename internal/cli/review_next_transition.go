@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -109,7 +110,7 @@ func newReviewNextTransition(status ReviewTargetStatusResult, selectedLenses []s
 				input.Selector.Projection == reviewtransaction.ProjectionStaged {
 				return reviewStopTransition("staged_workspace_overlay_recovery_unavailable")
 			}
-			return reviewExecuteTransition("fresh_target_ready", "review.start", reviewStartArguments(status, input.StartLineage), []ReviewTransitionArgument{{Name: "target_identity", Value: status.TargetIdentity}}, ReviewTransitionBinding{LineageID: input.StartLineage, TargetIdentity: status.TargetIdentity}, nil)
+			return reviewExecuteTransition("fresh_target_ready", "review.start", reviewStartArguments(status, input.StartLineage, input.RuntimeAgent), []ReviewTransitionArgument{{Name: "target_identity", Value: status.TargetIdentity}}, ReviewTransitionBinding{LineageID: input.StartLineage, TargetIdentity: status.TargetIdentity}, nil)
 		case reviewtransaction.TargetApplicabilityAmbiguous:
 			return reviewCollectTransition("lineage_selection_required", ReviewTransitionInput{
 				Name: "lineage_selection", Schema: "gentle-ai.review-lineage-selection/v1", CaptureOperation: "external.select_lineage",
@@ -430,6 +431,7 @@ type reviewNextTransitionInput struct {
 	Successor, Reason, Actor, Authorization        string
 	RepairActor, RepairReason, RepairAuthorization string
 	StartLineage                                   string
+	RuntimeAgent                                   model.AgentID
 	RepositoryContext                              string
 	ValidationRequest                              *reviewtransaction.TargetedValidationRequest
 	CorrectionRequest                              *reviewtransaction.CorrectionPlanRequest
@@ -449,7 +451,7 @@ type reviewTransitionSelector struct {
 	PrePRRepresentable    bool
 }
 
-func reviewStartArguments(status ReviewTargetStatusResult, lineage string) []ReviewTransitionArgument {
+func reviewStartArguments(status ReviewTargetStatusResult, lineage string, runtime model.AgentID) []ReviewTransitionArgument {
 	contract := status.Contract
 	if contract == "" {
 		contract = ReviewIntegrationContractV1
@@ -467,6 +469,9 @@ func reviewStartArguments(status ReviewTargetStatusResult, lineage string) []Rev
 	}
 	if strings.TrimSpace(lineage) != "" {
 		arguments = append(arguments, ReviewTransitionArgument{Name: "lineage", Value: lineage})
+	}
+	if runtime != "" {
+		arguments = append(arguments, ReviewTransitionArgument{Name: "agent", Value: string(runtime)})
 	}
 	if contract == ReviewIntegrationContractV2 {
 		arguments = append(arguments, ReviewTransitionArgument{Name: "consent", Value: string(reviewConsentModeRelay)})

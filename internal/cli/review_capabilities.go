@@ -13,6 +13,7 @@ import (
 	"runtime/debug"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -46,7 +47,7 @@ const (
 // both name this same runnable command instead of only describing the
 // concept, so they cannot drift from each other.
 const reviewNextTransitionRefreshCommand = "gentle-ai review status --cwd <repo> --contract " + ReviewIntegrationContractV1 + " --next-transition"
-const reviewNextTransitionRefreshCommandV2 = "gentle-ai review status --cwd <repo> --contract " + ReviewIntegrationContractV2 + " --next-transition"
+const reviewNextTransitionRefreshCommandV2 = "gentle-ai review status --cwd <repo> --contract " + ReviewIntegrationContractV2 + " --agent " + string(model.AgentOpenCode) + " --next-transition"
 
 var reviewCapabilitiesBuildInfoReader = debug.ReadBuildInfo
 var reviewCapabilitiesExecutablePath = os.Executable

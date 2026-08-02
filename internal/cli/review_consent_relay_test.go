@@ -228,7 +228,11 @@ func TestGlobalReviewModeOffRefusesBeforeV2Consent(t *testing.T) {
 	}
 
 	var output bytes.Buffer
-	err := RunReview(transitionStartArgs(repo, status), &output)
+	startArgs := transitionStartArgs(repo, status)
+	if !strings.Contains(strings.Join(startArgs, " "), "--agent=opencode") {
+		t.Fatalf("v2 disabled START lost its runtime identity: %v", startArgs)
+	}
+	err := RunReview(startArgs, &output)
 	if err == nil || strings.Contains(output.String(), reviewConsentActionRequired) {
 		t.Fatalf("global off did not refuse before consent: err=%v\n%s", err, output.String())
 	}
