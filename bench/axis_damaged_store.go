@@ -1237,34 +1237,16 @@ func repairOffersNothing(_ *Sandbox, observation Observation) error {
 // authorityRepairRoot (internal/reviewtransaction/authority_repair.go)
 // derives from the resolved git common directory.
 //
-// CRITICAL DISCOVERY (Slice S4): plan_digest is NOT reusable from --preflight
-// output. deriveAuthorityDispositionPlanAtRepo folds actor and reason into
-// the nine-field plan_digest pre-image (authority_disposition_plan.go), and
-// --preflight always derives with actor="" reason="" (review_repair.go: `.
-// DeriveAuthorityDispositionPlanAtRepo(ctx, root, "", "")`), while execution
-// REQUIRES non-empty --actor/--reason and re-derives with THOSE values. The
-// two digests can never be equal for any non-empty actor/reason, so the
-// documented two-step CLI flow — run --preflight, then execute with exactly
-// the --plan-digest/--inventory-revision it just published — always refuses
-// with "review repair leaf authority disposition inputs do not match the
-// current provider-derived plan", regardless of authorization or repository
-// binding correctness. Confirmed empirically: TestReviewRepairDispositionExecutionQuarantinesEligibleLeaf
-// (internal/cli/review_repair_test.go) never actually drives --preflight into
-// its own execution call either — it derives its own plan directly through
-// the Go API with the real actor/reason, bypassing the CLI preflight surface
-// entirely. This axis follows the same shape rather than pretending the
-// documented flow works: it re-derives plan_digest itself, the same way
-// deriveRevision above re-derives the store's own revision, using only
-// authority_inventory_revision from --preflight (which IS actor/reason-
-// independent and does match) plus values this axis already has from
-// building the damage. A wrong re-derivation does not silently pass: it
-// makes the rendered authorization or plan digest mismatch what the executor
-// itself re-derives, and the repair step refuses loudly instead of producing
-// the wrong measurement. Flagging this gap for a maintainer: the refusal
-// text `review repair --preflight` emits ("run `gentle-ai review repair
-// --preflight` first to obtain --plan-digest and --inventory-revision")
-// is misleading as written — the published --plan-digest can never be the
-// one a real execution needs.
+// plan_digest is directly reusable from --preflight output: the digest's
+// pre-image excludes actor and reason (execution-time provenance, not plan
+// identity — authority_disposition_plan.go), so --preflight's published
+// plan_digest (always derived with actor="" reason="") is exactly the digest
+// execution re-derives with the real --actor/--reason. This axis drives the
+// documented two-step CLI flow for real: run --preflight, remember its
+// plan_digest and authority_inventory_revision, then execute with exactly
+// those values (fixed by the disposition-plan-digest pre-image narrowing;
+// previously this axis had to re-derive plan_digest itself because the two
+// values could never match — see git history for the prior workaround).
 
 // dispositionRepairResult is the subset of review repair's JSON envelope
 // Slice S3 added for the plan-bound leaf authority disposition surface
@@ -1301,7 +1283,6 @@ const (
 	scratchDispositionInventoryRevision         = "damaged-store/disposition-inventory-revision"
 	scratchDispositionWitnessLineage            = "damaged-store/disposition-witness-lineage"
 	scratchDispositionWitnessBytes              = "damaged-store/disposition-witness-bytes"
-	scratchDispositionExecutedPlanDigest        = "damaged-store/disposition-executed-plan-digest"
 )
 
 // validDispositionSHA256 is this axis's own check for the shape
@@ -1343,46 +1324,6 @@ func dispositionAuthorization(binding, planDigest, inventoryRevision, actor, rea
 		"actor=" + actor,
 		"reason=" + reason,
 	}, "\n")
-}
-
-// authorityDispositionPlanDigestDomain mirrors the domain separator
-// authorityDispositionPlanDigest (authority_disposition_plan.go) hashes the
-// nine-field canonical plan under.
-const authorityDispositionPlanDigestDomain = "gentle-ai.review-disposition-plan-digest/v1"
-
-// computeDispositionPlanDigest re-derives plan_digest for the ONE shape this
-// axis's fixtures ever build: a single-edge, cardinality-one leaf closure
-// (seed == closure[0], one entry in expected_revisions). It reproduces
-// authorityDispositionPlanDigest's exact canonical struct — same field
-// order, same json tags, same domain-separated sha256 idiom deriveRevision
-// above already uses for the store's own revision — so it is byte-for-byte
-// what deriveAuthorityDispositionPlanAtRepo(ctx, root, actor, reason) itself
-// computes at execution time. See this file's "CRITICAL DISCOVERY" comment
-// above for why this axis cannot instead reuse --preflight's own published
-// plan_digest.
-func computeDispositionPlanDigest(binding, inventoryRevision, seed, expectedRevision, actor, reason string) (string, error) {
-	canonical := struct {
-		Schema                     string            `json:"schema"`
-		RepositoryBinding          string            `json:"repository_id"`
-		AuthorityInventoryRevision string            `json:"authority_inventory_revision"`
-		AnomalyClass               string            `json:"anomaly_class"`
-		SeedSet                    []string          `json:"ordered_seed_set"`
-		Closure                    []string          `json:"ordered_closure"`
-		ExpectedRevisions          map[string]string `json:"expected_revisions"`
-		Actor                      string            `json:"actor"`
-		Reason                     string            `json:"reason"`
-	}{
-		Schema: authorityDispositionPlanSchema, RepositoryBinding: binding,
-		AuthorityInventoryRevision: inventoryRevision, AnomalyClass: contentMismatchedRecoveryAuthorizationClass,
-		SeedSet: []string{seed}, Closure: []string{seed}, ExpectedRevisions: map[string]string{seed: expectedRevision},
-		Actor: actor, Reason: reason,
-	}
-	payload, err := json.Marshal(canonical)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(append([]byte(authorityDispositionPlanDigestDomain+"\x00"), payload...))
-	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 // approvedUnrelatedDispositionWitness builds one approved review with no
@@ -1477,20 +1418,17 @@ func requireNoDispositionPlanSurfaced(_ *Sandbox, observation Observation) error
 }
 
 // dispositionRepairExecutionInputs gathers everything both
-// dispositionRepairArgs and forgedDispositionRepairArgs need: the
-// actor/reason-independent authority_inventory_revision --preflight
-// published, the leaf's lineage and current (damaged) revision this axis's
-// own fixture already proved, and the independently re-derived repository
-// binding — everything computeDispositionPlanDigest needs to reproduce what
-// execution itself re-derives.
-func dispositionRepairExecutionInputs(sandbox *Sandbox) (inventoryRevision, seed, expectedRevision, binding string, err error) {
+// dispositionRepairArgs and forgedDispositionRepairArgs need: the plan_digest
+// and authority_inventory_revision --preflight published (both reusable
+// as-is: plan_digest's pre-image excludes actor/reason, so the value
+// --preflight surfaces is exactly the digest execution validates against),
+// plus the independently re-derived repository binding needed to render the
+// authorization text (--preflight never publishes it).
+func dispositionRepairExecutionInputs(sandbox *Sandbox) (planDigest, inventoryRevision, binding string, err error) {
+	if planDigest, err = scratchValue(sandbox, scratchDispositionPlanDigest); err != nil {
+		return
+	}
 	if inventoryRevision, err = scratchValue(sandbox, scratchDispositionInventoryRevision); err != nil {
-		return
-	}
-	if seed, err = scratchValue(sandbox, scratchSuccessor); err != nil {
-		return
-	}
-	if expectedRevision, err = scratchValue(sandbox, scratchSuccessorRevision); err != nil {
 		return
 	}
 	binding, err = dispositionRepositoryBinding(sandbox)
@@ -1498,29 +1436,17 @@ func dispositionRepairExecutionInputs(sandbox *Sandbox) (inventoryRevision, seed
 }
 
 // dispositionRepairArgs assembles the leaf authority disposition execution
-// review repair asks for: --plan-digest and --inventory-revision, plus an
-// authorization this axis renders by hand. Unlike the sibling arg builders
-// above (reconcileArgs, abandonArgs), plan_digest cannot be copied from
-// --preflight's own output — see this file's "CRITICAL DISCOVERY" comment —
-// so it is re-derived here the same way this axis already re-derives the
-// store's own revision.
+// review repair asks for: --plan-digest and --inventory-revision copied
+// directly from requireDispositionPlanEligible's --preflight scratch values,
+// plus an authorization this axis renders by hand (the repository binding
+// and anomaly class --preflight never publishes).
 func dispositionRepairArgs(reason string) func(*Sandbox) ([]string, error) {
 	return func(sandbox *Sandbox) ([]string, error) {
-		inventoryRevision, seed, expectedRevision, binding, err := dispositionRepairExecutionInputs(sandbox)
+		planDigest, inventoryRevision, binding, err := dispositionRepairExecutionInputs(sandbox)
 		if err != nil {
 			return nil, err
 		}
 		const actor = "bench"
-		planDigest, err := computeDispositionPlanDigest(binding, inventoryRevision, seed, expectedRevision, actor, reason)
-		if err != nil {
-			return nil, err
-		}
-		// requireDispositionQuarantineCommitted (the After hook this step
-		// pairs with) needs the EXACT digest this call supplied to prove the
-		// committed proof binds it — not --preflight's own actor/reason-empty
-		// digest, which is architecturally never the one an execution needs
-		// (this file's "CRITICAL DISCOVERY" comment above).
-		sandbox.Scratch[scratchDispositionExecutedPlanDigest] = planDigest
 		authorization := dispositionAuthorization(binding, planDigest, inventoryRevision, actor, reason)
 		return []string{
 			"review", "repair", "--cwd", sandbox.Repo,
@@ -1538,15 +1464,11 @@ func dispositionRepairArgs(reason string) func(*Sandbox) ([]string, error) {
 // both match exactly.
 func forgedDispositionRepairArgs(reason string) func(*Sandbox) ([]string, error) {
 	return func(sandbox *Sandbox) ([]string, error) {
-		inventoryRevision, seed, expectedRevision, binding, err := dispositionRepairExecutionInputs(sandbox)
+		planDigest, inventoryRevision, _, err := dispositionRepairExecutionInputs(sandbox)
 		if err != nil {
 			return nil, err
 		}
 		const actor = "bench"
-		planDigest, err := computeDispositionPlanDigest(binding, inventoryRevision, seed, expectedRevision, actor, reason)
-		if err != nil {
-			return nil, err
-		}
 		forgedBinding := "sha256:" + strings.Repeat("f", 64)
 		forgedAuthorization := dispositionAuthorization(forgedBinding, planDigest, inventoryRevision, actor, reason)
 		return []string{
@@ -1559,14 +1481,14 @@ func forgedDispositionRepairArgs(reason string) func(*Sandbox) ([]string, error)
 
 // requireDispositionQuarantineCommitted is the After hook for the disposition
 // execution step: the committed quarantine proof binds the exact plan digest
-// dispositionRepairArgs supplied, and the response never repeats the
-// repository path or the authorization text it was given.
+// --preflight published, and the response never repeats the repository path
+// or the authorization text it was given.
 func requireDispositionQuarantineCommitted(sandbox *Sandbox, observation Observation) error {
 	var result dispositionRepairResult
 	if err := decodeWaveObservation(observation, &result, "review repair leaf authority disposition execution"); err != nil {
 		return err
 	}
-	planDigest, err := scratchValue(sandbox, scratchDispositionExecutedPlanDigest)
+	planDigest, err := scratchValue(sandbox, scratchDispositionPlanDigest)
 	if err != nil {
 		return err
 	}
