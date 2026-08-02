@@ -123,11 +123,10 @@ const ReviewStartConsentDeclinedThisCandidate = "declined_this_candidate"
 const reviewStartEmptyCandidateHint = "the candidate has no pending changes; already-committed work can be reviewed by rerunning review start with --base-ref <commit> naming the base to compare against"
 
 // reviewStartNegotiateContractHint makes the negotiated contract path
-// discoverable from the plain START response. Manual callers lack a generated
-// runtime identity, so their compatibility route stays on v1.
+// discoverable from the plain START response.
 func reviewStartNegotiateContractHint(snapshot reviewtransaction.Snapshot) string {
-	command := fmt.Sprintf("gentle-ai review start --contract %s --target %s --projection %s",
-		ReviewIntegrationContractV1, snapshot.Identity, facadeProjection(snapshot.Projection))
+	command := fmt.Sprintf("gentle-ai review start --contract %s --agent %s --target %s --projection %s",
+		ReviewIntegrationContractV2, model.AgentClaudeCode, snapshot.Identity, facadeProjection(snapshot.Projection))
 	switch snapshot.Kind {
 	case reviewtransaction.TargetBaseDiff:
 		command += " --base-ref " + snapshot.BaseTree + " --committed-only"

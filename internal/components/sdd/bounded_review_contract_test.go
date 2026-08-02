@@ -96,7 +96,7 @@ func TestBoundedReviewContractRequiresRuntimeBoundReviewerContext(t *testing.T) 
 		"Claude Code is the only supported immutable receipt-review runtime",
 		"OpenCode and Codex are eligible but transport-disabled",
 		"Pi, Kilo, and unknown identities are ineligible",
-		"before repository, target, authority, or process work",
+		"before repository, target, authority, collection, or process work",
 		"read-only native Git commands against those exact immutable trees",
 		"compact `--name-status`/`--numstat` discovery",
 		"replacement objects, external diff and textconv, forces `--text`",
