@@ -44,13 +44,19 @@ Plan derivation MUST refuse (produce no plan) when `anomaly_class` is unknown, m
 
 ### Requirement: Plan Digest Binds Exact Content
 
-`plan_digest` MUST be computed over the full `ordered_closure`, `expected_revisions`, and `anomaly_class`. Any change to that content MUST invalidate the digest.
+`plan_digest` MUST be computed over the full `ordered_closure`, `expected_revisions`, and `anomaly_class`. Any change to that content MUST invalidate the digest. `plan_digest` MUST NOT be computed over `actor` or `reason`: those are execution-time provenance a maintainer supplies (and that a read-only preflight cannot yet know), not plan identity — the same treatment `authorization` already receives. A plan derived read-only with no `actor`/`reason` MUST publish the exact same `plan_digest` a later execution re-derives with the real `actor`/`reason`, for the same graph state.
 
 #### Scenario: Content change invalidates the digest
 
 - GIVEN a derived plan and its `plan_digest`
 - WHEN any entry in `ordered_closure` or `expected_revisions` changes
 - THEN re-deriving the digest over the changed content produces a different value than the original
+
+#### Scenario: Actor and reason do not affect plan_digest
+
+- GIVEN a plan derived read-only with empty `actor` and `reason` (e.g. `review repair --preflight`)
+- WHEN the identical graph state is re-derived at execution time with a real, non-empty `actor` and `reason`
+- THEN both derivations produce the identical `plan_digest`
 
 ### Requirement: Authorization Binds to Digest and Revision, No Wall-Clock Expiry
 

@@ -109,7 +109,9 @@ func TestAuthorityDispositionPlanRequiresClosedClassification(t *testing.T) {
 // the "Plan Digest Binds Exact Content" requirement: same records derive the
 // same plan_digest; any change to ordered_closure, expected_revisions, or
 // anomaly_class changes the digest; Authorization is excluded from the
-// pre-image (nine-field digest, ten-field struct).
+// pre-image (seven-field digest, ten-field struct). See
+// TestAuthorityDispositionPlanDigestExcludesActorAndReason for the
+// actor/reason exclusion this same requirement mandates.
 func TestAuthorityDispositionPlanDigestDeterminism(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	forgedRecoveryPair(t, repo, "digest", "digest target\n")
@@ -160,6 +162,46 @@ func TestAuthorityDispositionPlanDigestDeterminism(t *testing.T) {
 	}
 	if authorizedDigest != plan.PlanDigest {
 		t.Fatal("authorization leaked into the plan_digest pre-image")
+	}
+}
+
+// TestAuthorityDispositionPlanDigestExcludesActorAndReason satisfies the
+// "Plan Digest Binds Exact Content" requirement's actor/reason exclusion:
+// Actor and Reason are execution-time provenance, not plan identity, so a
+// plan derived read-only with no actor/reason (e.g. `review repair
+// --preflight`) MUST publish the exact same plan_digest a later execution
+// re-derives with the real actor/reason for the same graph state. This is
+// the regression test for the S3/S4 defect where the preflight-published
+// digest could never equal what any real execution re-derived.
+func TestAuthorityDispositionPlanDigestExcludesActorAndReason(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	forgedRecoveryPair(t, repo, "digest-actor-reason", "digest actor reason target\n")
+
+	preflight := derivePlanFixture(t, repo, "", "")
+	executed := derivePlanFixture(t, repo, "maintainer@example.com", "quarantine forged recovery authorization")
+
+	if preflight.PlanDigest != executed.PlanDigest {
+		t.Fatalf("preflight-published plan_digest %q does not match execution's re-derived plan_digest %q — actor/reason leaked into plan identity", preflight.PlanDigest, executed.PlanDigest)
+	}
+
+	mutatedActor := executed
+	mutatedActor.Actor = "someone-else@example.com"
+	mutatedActorDigest, err := authorityDispositionPlanDigest(mutatedActor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mutatedActorDigest != executed.PlanDigest {
+		t.Fatal("changing actor changed plan_digest — actor must stay excluded from the pre-image")
+	}
+
+	mutatedReason := executed
+	mutatedReason.Reason = "a completely different reason"
+	mutatedReasonDigest, err := authorityDispositionPlanDigest(mutatedReason)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mutatedReasonDigest != executed.PlanDigest {
+		t.Fatal("changing reason changed plan_digest — reason must stay excluded from the pre-image")
 	}
 }
 

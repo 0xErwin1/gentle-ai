@@ -92,8 +92,8 @@ Satisfies `rdd-authority-disposition-plan` "No New Public Repair Verb" (wiring) 
 
 Satisfies exit-evidence families: black-box repair, replay, crash, concurrency, retained-graph (bench layer, complementing S2's integration-layer proofs).
 
-- [ ] 4.1 RED: `bench/axis_damaged_store.go` — `damagedStoreJourneys` fixture proves the damage via `review inspect-authority` first, then repairs black-box through `review repair`.
-- [ ] 4.2 RED: bench refusal journey — multi-node, ambiguous, and unauthorized cases each refuse with named diagnosis, no bytes mutated.
-- [ ] 4.3 RED: bench retained-graph journey — post-repair inspection is `Complete && Valid`, unrelated lineages byte-unchanged.
-- [ ] 4.4 GREEN: implement fixtures; wire into existing bench harness.
-- [ ] 4.5 Ratchet: `scripts/deadcode-ratchet.sh --update` if bench fixtures introduce any unwired helper.
+- [x] 4.1 RED: `bench/axis_damaged_store.go` — `damagedStoreJourneys` fixture proves the damage via `review inspect-authority` first, then repairs black-box through `review repair`.
+- [x] 4.2 RED: bench refusal journey — multi-node, ambiguous, and unauthorized cases each refuse with named diagnosis, no bytes mutated.
+- [x] 4.3 RED: bench retained-graph journey — post-repair inspection is `Complete && Valid`, unrelated lineages byte-unchanged.
+- [x] 4.4 GREEN: implement fixtures; wire into existing bench harness.
+- [x] 4.5 Ratchet: `scripts/deadcode-ratchet.sh --update` if bench fixtures introduce any unwired helper — no new unwired functions this slice, ratchet unchanged (exit 0, "no new unreachable functions").

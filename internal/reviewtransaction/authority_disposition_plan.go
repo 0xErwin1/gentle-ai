@@ -27,7 +27,14 @@ const AuthorityDispositionPlanSchema = "gentle-ai.review-authority-disposition-p
 // from the plan_digest pre-image, so plan_digest is derivable pre-
 // authorization; the executor validates the populated Authorization against
 // the digest-bound plan at execution time (mandatory obligation (b), Wave 2
-// Slice S2).
+// Slice S2). Actor and Reason are likewise EXCLUDED from the plan_digest
+// pre-image: they are execution-time provenance a maintainer supplies (or,
+// for `review repair --preflight`, cannot yet know), not plan identity —
+// mirroring Authorization's treatment. This makes plan_digest fully
+// derivable read-only, before any actor/reason/authorization exists, and
+// actor/reason-independent, so the digest a read-only preflight publishes is
+// exactly the digest a later execution (with the real actor/reason) validates
+// against, for the same graph state.
 type AuthorityDispositionPlan struct {
 	Schema                     string            `json:"schema"`
 	RepositoryBinding          string            `json:"repository_id"`
@@ -194,14 +201,20 @@ func authorityInventoryRevision(records map[string]CompactRecord) (string, error
 	return classifiedAuthorityRepairDigest("gentle-ai.review-authority-inventory-revision/v1", revisions)
 }
 
-// authorityDispositionPlanDigest computes plan_digest over the nine derived
-// fields only (schema, repository_id, authority_inventory_revision,
-// anomaly_class, ordered_seed_set, ordered_closure, expected_revisions,
-// actor, reason) — never plan_digest itself and never authorization, so the
-// digest is derivable before a maintainer authorizes anything and the
-// executor can validate a populated Authorization against it afterward
-// (design decision 1; rdd-authority-disposition-plan / "Plan Digest Binds
-// Exact Content").
+// authorityDispositionPlanDigest computes plan_digest over the seven derived
+// IDENTITY fields only (schema, repository_id, authority_inventory_revision,
+// anomaly_class, ordered_seed_set, ordered_closure, expected_revisions) —
+// never plan_digest itself, never authorization, and never actor/reason. Actor
+// and Reason are execution-time PROVENANCE, not plan identity: they are
+// carried on the plan (Plan Field Set, spec's ten-field carry requirement) and
+// still required non-empty at execution time, but they do not participate in
+// what makes two plans "the same plan". Excluding them means plan_digest is
+// derivable before a maintainer authorizes anything AND before actor/reason
+// are known at all (e.g. `review repair --preflight`, which always derives
+// with empty actor/reason) — the executor validates the populated
+// Authorization against the digest-bound plan at execution time (design
+// decision 1; rdd-authority-disposition-plan / "Plan Digest Binds Exact
+// Content").
 func authorityDispositionPlanDigest(plan AuthorityDispositionPlan) (string, error) {
 	canonical := struct {
 		Schema                     string            `json:"schema"`
@@ -211,13 +224,10 @@ func authorityDispositionPlanDigest(plan AuthorityDispositionPlan) (string, erro
 		SeedSet                    []string          `json:"ordered_seed_set"`
 		Closure                    []string          `json:"ordered_closure"`
 		ExpectedRevisions          map[string]string `json:"expected_revisions"`
-		Actor                      string            `json:"actor"`
-		Reason                     string            `json:"reason"`
 	}{
 		Schema: plan.Schema, RepositoryBinding: plan.RepositoryBinding,
 		AuthorityInventoryRevision: plan.AuthorityInventoryRevision, AnomalyClass: plan.AnomalyClass,
 		SeedSet: plan.SeedSet, Closure: plan.Closure, ExpectedRevisions: plan.ExpectedRevisions,
-		Actor: plan.Actor, Reason: plan.Reason,
 	}
 	return classifiedAuthorityRepairDigest("gentle-ai.review-disposition-plan-digest/v1", canonical)
 }
@@ -261,6 +271,30 @@ func validateAuthorityDispositionAuthorization(plan AuthorityDispositionPlan, cu
 		return errors.New("authority disposition plan refused: authorization does not bind to plan_digest and authority_inventory_revision")
 	}
 	return nil
+}
+
+// compactRepairCommandText renders the exact runnable `review repair`
+// invocation for one leaf authority disposition plan a caller already
+// confirmed derives and admits (deriveAuthorityDispositionPlanAtRepo +
+// admitLeafDisposition — the same read-only prediction `review repair
+// --preflight` runs), with the persisted plan_digest and
+// authority_inventory_revision preflight would publish and the authorization
+// template execution verifies. plan_digest is actor/reason-independent
+// (authorityDispositionPlanDigest excludes both from its pre-image), so the
+// value rendered here is exactly the value execution re-derives and compares
+// against, for whichever actor/reason a maintainer later supplies — the
+// command printed is the command that runs. Only a caller whose own
+// read-only prediction accepted the plan may render this, mirroring
+// compactAbandonCommandText and compactReconcileCommandText
+// (compact_reconcile.go).
+func compactRepairCommandText(repo string, plan AuthorityDispositionPlan) string {
+	template := plan
+	template.Actor, template.Reason = "<actor>", "<why-it-is-repaired>"
+	return fmt.Sprintf("`gentle-ai review repair --cwd %q --plan-digest %q --inventory-revision %q --actor \"<actor>\" --reason \"<why-it-is-repaired>\" --authorization \"<maintainer-authorization>\"`"+
+		" (`gentle-ai review repair --preflight --cwd %q` re-confirms these are still current);"+
+		" the repair quarantines the entry whole and rewrites nothing, so the recorded authorization bytes survive exactly as persisted."+
+		" --authorization is exactly these seven lines, joined by LF, with no trailing newline, using the same --actor and --reason with surrounding whitespace trimmed:\n%s",
+		repo, plan.PlanDigest, plan.AuthorityInventoryRevision, repo, authorityDispositionAuthorizationBinding(template))
 }
 
 // DeriveAuthorityDispositionPlanAtRepo is the exported form of
