@@ -300,9 +300,6 @@ func TestShadowIdentityUnresolvableSelectorFailsClosed(t *testing.T) {
 	if failure.RepositoryID == "" {
 		t.Fatalf("failure = %#v, want RepositoryID evidence gathered before the failure", failure)
 	}
-	if (CandidateIdentity{}) != (CandidateIdentity{}) {
-		t.Fatalf("sanity: zero value must compare equal to itself")
-	}
 
 	// A selector missing every field a live target needs is also
 	// unresolvable, not a silently-guessed default.
@@ -311,5 +308,30 @@ func TestShadowIdentityUnresolvableSelectorFailsClosed(t *testing.T) {
 	})
 	if !errors.As(err, &failure) {
 		t.Fatalf("error = %T %v, want *shadowIdentityFailure for an empty committed-range selector", err, err)
+	}
+}
+
+// TestShadowIdentityPiOverlaySelectorIsOutOfWave1Scope proves the resolver
+// never claims to resolve a gentle-pi protocol-1.1 overlay selector as a
+// supported Wave 1 selector (spec.md "Wave 1 Selector Scope" -> "Pi overlay
+// selector is explicitly out of scope"). shadowSelectorKind is a closed
+// 4-value enum; an unrecognized kind falls through shadowSelectorTarget's
+// default case and fails closed, never fabricating a CandidateIdentity.
+func TestShadowIdentityPiOverlaySelectorIsOutOfWave1Scope(t *testing.T) {
+	requireSnapshotGit(t)
+	repo := initSnapshotRepo(t)
+
+	identity, err := shadowCandidateIdentity(context.Background(), shadowSelector{
+		Kind: shadowSelectorKind("gentle-pi-protocol-1.1-overlay"), Repo: repo, BaseRef: "HEAD",
+	})
+	var failure *shadowIdentityFailure
+	if !errors.As(err, &failure) {
+		t.Fatalf("error = %T %v, want *shadowIdentityFailure for an out-of-scope pi-overlay selector", err, err)
+	}
+	if !strings.Contains(failure.Reason, "unsupported shadow selector kind") {
+		t.Fatalf("failure.Reason = %q, want it to name the selector kind as unsupported", failure.Reason)
+	}
+	if identity != (CandidateIdentity{}) {
+		t.Fatalf("identity = %#v, want zero value: resolver must not fabricate a tuple for an out-of-scope selector", identity)
 	}
 }
