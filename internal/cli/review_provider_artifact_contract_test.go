@@ -45,6 +45,28 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 	}
 }
 
+func TestReviewProviderArtifactV20ContractsArePinned(t *testing.T) {
+	root := filepath.Join("..", "..", "contracts", "review-integration", "v2")
+	want := map[string]string{
+		"fixtures/capabilities.fixture.json": "17c150d851c15b3f0c20d18c2e2741eb2232ffa24f35aa71d6d30e90a85e42b7",
+		"fixtures/consent.fixture.json":      "203cc96d5c29ba0f27b5c4db04c2e88566e0a923d3a0cdb317f78d9065349075",
+		"fixtures/status.fixture.json":       "d5438578f2969f17635fecea94c7ef46d14c78fa668e50df48c4254254d5e935",
+		"schemas/capabilities.schema.json":   "7ab061ed27bd3b929d6033cc20f56097e851f4454ca14a815255748b50191248",
+		"schemas/consent.schema.json":        "b2b4465338497f11927de91cb2e5da12b6cb4a1039afe05aebe1abbf53b21858",
+		"schemas/status.schema.json":         "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
+	}
+	for name, expected := range want {
+		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256(payload)
+		if actual := hex.EncodeToString(digest[:]); actual != expected {
+			t.Fatalf("%s digest = %s, want %s", name, actual, expected)
+		}
+	}
+}
+
 func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1", "schemas")
 	tests := []struct {
@@ -144,7 +166,9 @@ func TestReviewProviderArtifactSchemasAreStrictAndBound(t *testing.T) {
 		{name: "start.schema.json", id: ReviewIntegrationStartSchemaID},
 		{name: "status.schema.json", id: ReviewIntegrationStatusSchemaID},
 		{name: "capabilities.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV2},
+		{name: "capabilities-v2.1.schema.json", id: ReviewIntegrationCapabilitiesSchemaIDV21},
 		{name: "consent.schema.json", id: ReviewIntegrationConsentSchemaIDV2},
+		{name: "consent-v3.schema.json", id: ReviewIntegrationConsentSchemaIDV3},
 		{name: "failure.schema.json", id: ReviewIntegrationFailureSchemaIDV2},
 		{name: "operation.schema.json", id: ReviewIntegrationOperationSchemaIDV2},
 		{name: "repair.schema.json", id: ReviewIntegrationRepairSchemaIDV2},
@@ -211,6 +235,17 @@ func TestReviewProviderArtifactV2FixturesValidate(t *testing.T) {
 	}
 	if err := consent.Validate(); err != nil {
 		t.Fatalf("v2 consent fixture: %v", err)
+	}
+	consentV3Payload, err := os.ReadFile(filepath.Join(root, "consent-v3.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var consentV3 ReviewIntegrationConsentResult
+	if err := json.Unmarshal(consentV3Payload, &consentV3); err != nil {
+		t.Fatal(err)
+	}
+	if err := consentV3.Validate(); err != nil || consentV3.Agent != "claude-code" {
+		t.Fatalf("v2.1 consent fixture: %#v, %v", consentV3, err)
 	}
 }
 
