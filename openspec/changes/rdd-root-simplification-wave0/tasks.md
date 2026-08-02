@@ -73,16 +73,16 @@ Chain strategy: feature-branch-chain
 
 ## Phase 4: PR 3 — Freeze Policy + Backlog Disposition (base: PR 2 branch)
 
-- [ ] 4.1 **[RED]** Author the structural assertion recipe for both documents before content (freeze policy: 7 sections + 4-criterion test present; disposition: every seeded number classified exactly once). Confirm failure against the current nonexistent files. Record ad hoc, not committed.
-- [ ] 4.2 Write `docs/architecture/rdd-freeze-expansion-policy.md`: `Decision` → `Quick path` (4 steps) → `Scope` (frozen rows/globs by inventory row ID; explicit non-frozen: docs, behavior-pinning tests, tracker wave work) → `Proven security defect` → `Required evidence` → `Escalation path` → `Status and expiry`. Req: Policy Scope, Criteria, Evidence, and Escalation.
-- [ ] 4.3 Encode the four-criterion conjunctive exemption test: (1) concrete confidentiality/integrity/authorization impact on a named non-negotiable-invariant row, (2) reproduction on current `main` per `skills/rdd-defect-workflow`, (3) minimal fix inside the frozen surface — no new state/verb/reason-code/contract-version/artifact, (4) declared rollback boundary. Three-of-four escalates, never exempts. Req: Security-Defect Reproduction Criterion.
-- [ ] 4.4 State maintainer-internal, non-CI-binding scope explicitly; no CI enforcement introduced; policy expires at Wave 7 completion or tracker abandonment. Req: Maintainer-Internal, Non-CI-Binding Scope.
-- [ ] 4.5 Seed `docs/architecture/rdd-backlog-disposition.md` from the union of the amended design's `Issue and PR coverage map` (including `#1379`) and the audit's issue map, deduplicated by number; one read-only `gh` pass records title/state for seeded numbers only. Req: Coverage-Map-Bound Baseline Completeness.
-- [ ] 4.6 Classify each seeded item into exactly one of `superseded-by-design` / `absorbed-into-wave-N` / `still-valid-fix-now` / `orthogonal` / `unclassified — needs triage` (equal support for two classes → `unclassified`). No closure/relabel proposals. Req: Fixed Classification Vocabulary, Classification-Only, No Closure Proposals.
-- [ ] 4.7 Record header `snapshot: ece470da` + `github state read at: <ISO-8601 UTC>`; per-row state @ read; first-paragraph advisory/non-closing statement.
-- [ ] 4.8 Write the closure audit protocol section (5 steps, ending in: verify obsoleted issues/PRs closed as outdated, each with a wave-PR + design-section comment and a recorded closure date).
-- [ ] 4.9 **[GREEN]** Re-run the 4.1 recipe; confirm both documents pass; record output.
-- [ ] 4.10 Verify diff scope: only the two Phase 4 files changed in this PR.
+- [x] 4.1 **[RED]** Author the structural assertion recipe for both documents before content (freeze policy: 7 sections + 4-criterion test present; disposition: every seeded number classified exactly once). Confirm failure against the current nonexistent files. Record ad hoc, not committed.
+- [x] 4.2 Write `docs/architecture/rdd-freeze-expansion-policy.md`: `Decision` → `Quick path` (4 steps) → `Scope` (frozen rows/globs by inventory row ID; explicit non-frozen: docs, behavior-pinning tests, tracker wave work) → `Proven security defect` → `Required evidence` → `Escalation path` → `Status and expiry`. Req: Policy Scope, Criteria, Evidence, and Escalation.
+- [x] 4.3 Encode the four-criterion conjunctive exemption test: (1) concrete confidentiality/integrity/authorization impact on a named non-negotiable-invariant row, (2) reproduction on current `main` per `skills/rdd-defect-workflow`, (3) minimal fix inside the frozen surface — no new state/verb/reason-code/contract-version/artifact, (4) declared rollback boundary. Three-of-four escalates, never exempts. Req: Security-Defect Reproduction Criterion.
+- [x] 4.4 State maintainer-internal, non-CI-binding scope explicitly; no CI enforcement introduced; policy expires at Wave 7 completion or tracker abandonment. Req: Maintainer-Internal, Non-CI-Binding Scope.
+- [x] 4.5 Seed `docs/architecture/rdd-backlog-disposition.md` from the union of the amended design's `Issue and PR coverage map` (including `#1379`) and the audit's issue map, deduplicated by number; one read-only `gh` pass records title/state for seeded numbers only. Req: Coverage-Map-Bound Baseline Completeness.
+- [x] 4.6 Classify each seeded item into exactly one of `superseded-by-design` / `absorbed-into-wave-N` / `still-valid-fix-now` / `orthogonal` / `unclassified — needs triage` (equal support for two classes → `unclassified`). No closure/relabel proposals. Req: Fixed Classification Vocabulary, Classification-Only, No Closure Proposals.
+- [x] 4.7 Record header `snapshot: ece470da` + `github state read at: <ISO-8601 UTC>`; per-row state @ read; first-paragraph advisory/non-closing statement.
+- [x] 4.8 Write the closure audit protocol section (5 steps, ending in: verify obsoleted issues/PRs closed as outdated, each with a wave-PR + design-section comment and a recorded closure date).
+- [x] 4.9 **[GREEN]** Re-run the 4.1 recipe; confirm both documents pass; record output.
+- [x] 4.10 Verify diff scope: only the two Phase 4 files changed in this PR.
 
 ## Phase 5: Verification handoff (sdd-verify — not a PR of its own)
 
