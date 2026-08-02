@@ -313,6 +313,19 @@ func compactStartInvalidGraphRefusal(ctx context.Context, repo string, records m
 					compactReconcileCommandText(repo, edge.PredecessorLineageID, edge.ObservedPredecessorRevision, edge.SuccessorLineageID, edge.SuccessorRevision, edge.AnomalyClasses))
 				break
 			}
+		case CompactRecoveryEdgeExitRepair:
+			// Re-derive with the same empty actor/reason `review repair
+			// --preflight` always uses (SanctionedCompactRecoveryExits'
+			// dispositionSeed check above), and re-confirm admission before
+			// naming the command — the same rule the abandon/reconcile cases
+			// above already follow, so this never advertises a plan whose own
+			// re-derivation would then refuse.
+			plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", "")
+			if planErr != nil || admitLeafDisposition(plan) != nil || len(plan.SeedSet) != 1 || plan.SeedSet[0] != exit.SuccessorLineageID {
+				continue
+			}
+			fmt.Fprintf(&continuation, " Successor %q closes the content-mismatched-recovery-authorization class, so `review repair` quarantines it whole without discarding its captured review data: %s",
+				exit.SuccessorLineageID, compactRepairCommandText(repo, plan))
 		}
 	}
 	return fmt.Errorf("%v.%s Capture the complete machine-readable diagnosis for every affected lineage with `gentle-ai review inspect-authority --cwd %q`",
