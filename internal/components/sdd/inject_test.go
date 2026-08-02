@@ -4138,7 +4138,7 @@ func TestInjectOpenCodeRemovesLegacyBackgroundAgentsPlugin(t *testing.T) {
 	}
 }
 
-func TestInjectKilocodeKeepsLegacyBackgroundAgentsPlugin(t *testing.T) {
+func TestInjectKilocodeKeepsLegacyBackgroundAgentsPluginAndRemovesOpenCodeReviewPlugin(t *testing.T) {
 	home := t.TempDir()
 	mockNoPackageManager(t)
 
@@ -4150,6 +4150,10 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPlugin(t *testing.T) {
 	legacyContent := []byte("legacy kilo background agent plugin")
 	if err := os.WriteFile(legacyPluginPath, legacyContent, 0o644); err != nil {
 		t.Fatalf("WriteFile(background-agents.ts) error = %v", err)
+	}
+	reviewPluginPath := filepath.Join(pluginsDir, "review-result-artifacts.ts")
+	if err := os.WriteFile(reviewPluginPath, []byte("stale OpenCode-only review plugin"), 0o644); err != nil {
+		t.Fatalf("WriteFile(review-result-artifacts.ts) error = %v", err)
 	}
 
 	result, err := Inject(home, kilocodeAdapter(), "multi")
@@ -4175,6 +4179,9 @@ func TestInjectKilocodeKeepsLegacyBackgroundAgentsPlugin(t *testing.T) {
 		if _, err := os.Stat(pluginPath); err != nil {
 			t.Fatalf("%s plugin should still be installed for Kilo: %v", plugin, err)
 		}
+	}
+	if _, err := os.Stat(reviewPluginPath); !os.IsNotExist(err) {
+		t.Fatalf("OpenCode-only review plugin remains installed for Kilo: %v", err)
 	}
 }
 

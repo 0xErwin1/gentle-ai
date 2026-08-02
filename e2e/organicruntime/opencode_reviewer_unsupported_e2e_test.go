@@ -34,6 +34,10 @@ func TestRealOpenCodeRejectsUnsupportedImmutableReviewerBash(t *testing.T) {
 	if _, err := sdd.Inject(home, opencode.NewAdapter(), ""); err != nil {
 		t.Fatalf("generate OpenCode reviewer: %v", err)
 	}
+	pluginPath := filepath.Join(configRoot, "opencode", "plugins", "review-result-artifacts.ts")
+	if _, err := os.Stat(pluginPath); err != nil {
+		t.Fatalf("generated OpenCode review plugin is unavailable: %v", err)
+	}
 
 	marker := filepath.Join(harness.repo.worktree, "reviewer-bash-ran")
 	prompt := "Attempt this immutable Bash inspection exactly once: gentle-ai review inspect-candidate " +
@@ -70,12 +74,11 @@ func TestRealOpenCodeRejectsUnsupportedImmutableReviewerBash(t *testing.T) {
 		"OPENCODE_DISABLE_MODELS_FETCH":             "1",
 		"OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER": "1",
 		"OPENCODE_FAST_BOOT":                        "1",
-		"OPENCODE_PURE":                             "1",
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), organicAgentTimeout)
 	defer cancel()
-	command := organicCommandContext(ctx, "opencode", "run", "--pure", "--format", "json", "--agent", "review-driver", "--model", "fixture/fixture", "--dir", harness.repo.worktree, "Delegate the immutable review inspection.")
+	command := organicCommandContext(ctx, "opencode", "run", "--format", "json", "--agent", "review-driver", "--model", "fixture/fixture", "--dir", harness.repo.worktree, "Delegate the immutable review inspection.")
 	command.Dir = harness.repo.worktree
 	command.Env = environment
 	var stdout, stderr bytes.Buffer
@@ -106,10 +109,9 @@ func TestRealOpenCodeRejectsUnsupportedImmutableReviewerBash(t *testing.T) {
 }
 
 func reviewerRejectedBeforeLaunch(output string, launches int) (bool, error) {
-	if launches != 0 {
-		return false, nil
-	}
 	decoder := json.NewDecoder(strings.NewReader(output))
+	qualifying := 0
+	invalid := false
 	for {
 		var event struct {
 			Type string `json:"type"`
@@ -123,15 +125,19 @@ func reviewerRejectedBeforeLaunch(output string, launches int) (bool, error) {
 			} `json:"part"`
 		}
 		if err := decoder.Decode(&event); errors.Is(err, io.EOF) {
-			return false, nil
+			return launches == 0 && !invalid && qualifying == 1, nil
 		} else if err != nil {
 			return false, err
 		}
-		if event.Type == "tool_use" && event.Part != nil && event.Part.Type == "tool" &&
-			event.Part.Tool == "task" && event.Part.State.Status == "error" &&
-			event.Part.State.Error == "unsupported-capability" {
-			return true, nil
+		if event.Type != "tool_use" {
+			continue
 		}
+		if event.Part == nil || event.Part.Type != "tool" || event.Part.Tool != "task" ||
+			event.Part.State.Status != "error" || event.Part.State.Error != "unsupported-capability" {
+			invalid = true
+			continue
+		}
+		qualifying++
 	}
 }
 
@@ -151,6 +157,9 @@ func TestReviewerRejectedBeforeLaunch(t *testing.T) {
 		{name: "wrong status", output: strings.Replace(valid, `"status":"error"`, `"status":"completed"`, 1)},
 		{name: "unrelated substring", output: strings.Replace(valid, "unsupported-capability", "unrelated unsupported-capability diagnostic", 1)},
 		{name: "rejection after launch", output: valid, launches: 1},
+		{name: "duplicate rejection", output: valid + "\n" + valid},
+		{name: "unrelated event before rejection", output: strings.Replace(valid, `"tool":"task"`, `"tool":"bash"`, 1) + "\n" + valid},
+		{name: "malformed trailing event", output: valid + "\n{", wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
