@@ -82,11 +82,11 @@ Satisfies `rdd-leaf-disposition-execution` (all 11 requirements).
 
 Satisfies `rdd-authority-disposition-plan` "No New Public Repair Verb" (wiring) + sanctioned exit surfacing.
 
-- [ ] 3.1 RED: `review repair --preflight` emits plan digest + inventory revision only, no bytes mutated, no new command added to the CLI surface.
-- [ ] 3.2 RED: `review repair` execution requires `--plan-digest --inventory-revision --actor --reason --authorization`; missing any flag refuses before lock acquisition.
-- [ ] 3.3 RED: `SanctionedCompactRecoveryExits` emits `CompactRecoveryEdgeExitRepair = "review repair"` only when derivation AND leaf admission both accept the edge; otherwise existing `Blocked` prose stands unchanged.
-- [ ] 3.4 GREEN: `internal/cli/review_repair.go`, `review_next_transition.go` — plan-bound preflight/execution inputs on the existing verb.
-- [ ] 3.5 Ratchet: `scripts/deadcode-ratchet.sh --update` — this slice WIRES S1/S2's previously-unwired functions; confirm baseline entries drop.
+- [x] 3.1 RED: `review repair --preflight` emits plan digest + inventory revision only, no bytes mutated, no new command added to the CLI surface.
+- [x] 3.2 RED: `review repair` execution requires `--plan-digest --inventory-revision --actor --reason --authorization`; missing any flag refuses before lock acquisition.
+- [x] 3.3 RED: `SanctionedCompactRecoveryExits` emits `CompactRecoveryEdgeExitRepair = "review repair"` only when derivation AND leaf admission both accept the edge; otherwise existing `Blocked` prose stands unchanged.
+- [x] 3.4 GREEN: `internal/cli/review_repair.go`, `review_next_transition.go` — plan-bound preflight/execution inputs on the existing verb.
+- [x] 3.5 Ratchet: `scripts/deadcode-ratchet.sh --update` — this slice WIRES S1/S2's previously-unwired functions; confirm baseline entries drop.
 
 ## Phase 4 (Slice S4 / PR4): Bench Damaged-Store Journeys, Crash + Concurrency Evidence
 
