@@ -78,6 +78,27 @@ func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateIn
 	case reviewtransaction.GoverningAuthorityKindLegacy:
 		return false, reviewtransaction.NativeGateEvaluation{}, nil
 	default: // reviewtransaction.GoverningAuthorityKindNew
+		// Adjudication (b) pinning fix: `escalated` is a terminal
+		// NON-approval (design decision 7's own "ambiguous/unknown/unrelated
+		// -> escalate" mapping, and ReviewCore.finalize issues a receipt for
+		// escalated exactly like approved — see review_core.go's finalize).
+		// Nothing in ReviewCore.validate's relation-based switch ever
+		// consults the persisted authority state, so an escalated lineage
+		// whose live candidate still relates exactly to the frozen one would
+		// otherwise reach CoreTransitionContinue -> GateAllow, silently
+		// authorizing delivery from a lineage that was never approved. This
+		// short-circuit denies unconditionally before any live evidence is
+		// even resolved, matching decision 5's zero-cost-by-default spirit
+		// for the one state where live evidence can never change the answer.
+		if record.Authority.State == reviewtransaction.NewLineageStateEscalated {
+			context := reviewtransaction.GateContext{
+				Gate: gateInput.Gate, LineageID: record.Authority.LineageID, StoreRevision: record.Revision,
+				BaseTree: record.Authority.CandidateIdentity.BaseTree, CandidateTree: record.Authority.CandidateIdentity.CandidateTree,
+				PolicyHash: record.Authority.CandidateIdentity.PolicyHash,
+				Denial:     &reviewtransaction.GateDenial{Stage: "new-lineage-validate", Code: string(reviewtransaction.NewLineageStateEscalated)},
+			}
+			return true, reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateEscalated, Reason: "authority already escalated: escalated is a terminal non-approval", Context: context}, nil
+		}
 		transition, err := (reviewtransaction.ReviewCore{}).Next(ctx, record.Authority, reviewtransaction.CoreRequest{
 			Kind: reviewtransaction.CoreRequestValidate, LiveCandidateIdentity: live, Evidence: evidence,
 		})
