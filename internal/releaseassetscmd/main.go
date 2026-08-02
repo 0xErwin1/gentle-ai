@@ -82,6 +82,12 @@ func stageAndEmitManifest(cfg runConfig) (string, error) {
 		strings.TrimSpace(cfg.Version) == "" || strings.TrimSpace(cfg.Commit) == "" {
 		return "", errors.New("releaseassetscmd: --repository, --tag, --version, and --commit are all required")
 	}
+	// A stale staged file would be swept into the archive by the glob while
+	// staying absent from the manifest, breaking the consumer's tree-digest
+	// recompute — start from an empty staging directory every run.
+	if err := os.RemoveAll(cfg.StagingDir); err != nil {
+		return "", fmt.Errorf("clean staging directory: %w", err)
+	}
 	if err := os.MkdirAll(cfg.StagingDir, 0o755); err != nil {
 		return "", fmt.Errorf("create staging directory: %w", err)
 	}
@@ -107,6 +113,9 @@ func stageAndEmitManifest(cfg runConfig) (string, error) {
 	entries = append(entries, licenseEntry)
 
 	snapshot := cli.ReleaseSemanticSnapshot(cli.ReviewIntegrationContractV2)
+	if err := releaseartifact.VerifyRequiredFloor(snapshot); err != nil {
+		return "", fmt.Errorf("verify required floor: %w", err)
+	}
 	snapshotBytes, err := releaseartifact.EncodeCanonical(snapshot)
 	if err != nil {
 		return "", fmt.Errorf("encode semantic snapshot: %w", err)
