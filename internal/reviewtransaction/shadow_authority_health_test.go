@@ -189,6 +189,42 @@ func TestShadowAuthorityHealthNoMutationOrExecution(t *testing.T) {
 	}
 }
 
+// TestShadowAuthorityHealthClassificationRegressionAfterDispositionPlanDerivation
+// satisfies Wave 2 tasks.md 1.10 and the rdd-authority-graph-classification
+// MODIFIED "No Mutation or Execution" scenario "Repairable result feeds a
+// separate plan derivation, not the classifier itself": deriving an
+// AuthorityDispositionPlan from a classified edge's evidence is a wholly
+// separate consumer (authority_disposition_plan.go). Re-running the
+// classifier alone, before or after that derivation, still returns exactly
+// the same result and produces no plan and no mutation of its own.
+func TestShadowAuthorityHealthClassificationRegressionAfterDispositionPlanDerivation(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	_, _, successorStore := forgedRecoveryPair(t, repo, "regression", "regression target\n")
+	before := inspectReadState(t, successorStore.StatePath())
+
+	beforeHealth, err := shadowAuthorityHealthAtRepo(context.Background(), repo)
+	inspectNoError(t, err)
+	if beforeHealth != shadowAuthorityBlocked {
+		t.Fatalf("classification before plan derivation = %q, want %q (classification vocabulary is unchanged by Wave 2)", beforeHealth, shadowAuthorityBlocked)
+	}
+
+	// A separate consumer derives a plan from the SAME evidence. The
+	// classifier itself is never called by this derivation.
+	if _, err := deriveAuthorityDispositionPlanAtRepo(context.Background(), repo, "maintainer@example.com", "quarantine forged recovery authorization"); err != nil {
+		t.Fatalf("deriveAuthorityDispositionPlanAtRepo: %v", err)
+	}
+
+	afterHealth, err := shadowAuthorityHealthAtRepo(context.Background(), repo)
+	inspectNoError(t, err)
+	if afterHealth != beforeHealth {
+		t.Fatalf("re-running the classifier alone after plan derivation changed the result: %q -> %q", beforeHealth, afterHealth)
+	}
+	after := inspectReadState(t, successorStore.StatePath())
+	if before != after {
+		t.Fatal("classifier or plan derivation mutated authority state bytes")
+	}
+}
+
 // TestShadowAuthorityHealthDeterministicEvidenceBacked satisfies tasks.md 4.4
 // and the "Deterministic, Evidence-Backed Classification" requirement: the
 // same graph state, inspected twice with no state change between
