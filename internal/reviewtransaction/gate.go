@@ -342,6 +342,15 @@ func EvaluateNativeGate(ctx context.Context, repo string, receipt Receipt, reque
 			return invalid("authority or repository target changed during final authorization")
 		}
 	}
+	// Wave 1 shadow observation (rdd-shadow-evaluation): outcome-neutral,
+	// advisory-only, and a true no-op unless GENTLE_AI_RDD_SHADOW is set —
+	// see shadow_observer.go. shadowDeriveBaseAdvance is called here (rather
+	// than reusing gateContext.BaseAdvance) specifically to exercise
+	// Amendment A's delegation seam from a live call site.
+	shadowAdvance := shadowDeriveBaseAdvance(ctx, repo, receipt, request, snapshot, resolvedPrePR, preimages)
+	ObserveShadowRelation(ctx, repo, request.Gate,
+		receipt.BaseTree, receipt.FinalCandidateTree, receipt.PathsDigest, receipt.PolicyHash,
+		snapshot, policyHash, result, resolvedPrePR, shadowAdvance)
 	return NativeGateEvaluation{Result: result, Reason: nativeGateReason(result), Context: gateContext}
 }
 
