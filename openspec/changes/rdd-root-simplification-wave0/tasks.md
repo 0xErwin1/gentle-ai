@@ -86,5 +86,5 @@ Chain strategy: feature-branch-chain
 
 ## Phase 5: Verification handoff (sdd-verify — not a PR of its own)
 
-- [ ] 5.1 Compile the ad hoc RED/GREEN outputs from 2.1/2.13, 3.1/3.13, 4.1/4.9 into `verify-report.md`; do not commit the recipes themselves.
-- [ ] 5.2 Run non-regression checks: `git diff --name-only` restricted to `docs/` + `openspec/`; `go build ./...`, `go vet ./...`, `go test ./...` unchanged.
+- [x] 5.1 Compile the ad hoc RED/GREEN outputs from 2.1/2.13, 3.1/3.13, 4.1/4.9 into `verify-report.md`; do not commit the recipes themselves.
+- [x] 5.2 Run non-regression checks: `git diff --name-only` restricted to `docs/` + `openspec/`; `go build ./...`, `go vet ./...`, `go test ./...` unchanged.
