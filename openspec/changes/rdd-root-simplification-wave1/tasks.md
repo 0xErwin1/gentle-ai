@@ -43,9 +43,9 @@ Chain strategy: feature-branch-chain
 
 ## Phase 0 (PR 0): Land Wave 1 SDD Artifacts + Wave 0 Archive Move
 
-- [ ] 0.1 BLOCKED: `diff -r` found `openspec/changes/archive/2026-08-02-rdd-root-simplification-wave0/verify-report.md` (17 lines, Engram-pointer stub) is NOT byte-identical to `openspec/changes/rdd-root-simplification-wave0/verify-report.md` (263 lines, full report), even though the archive dir's own `archive-report.md` claims "verify-report.md | ✓ | 263 lines". All other files (proposal.md, design.md, tasks.md, 4 spec.md files) ARE byte-identical. Tracked source dir independently confirmed byte-identical to the scratchpad backup. Gate does not pass — do not remove the source until this discrepancy is resolved by the orchestrator/maintainer.
-- [ ] 0.2 DEFERRED (blocked by 0.1): `git add` the archive dir + merged specs not performed this batch.
-- [ ] 0.3 DEFERRED (blocked by 0.1): `git rm` of the tracked wave0 change dir not performed this batch.
+- [x] 0.1 BLOCKED: `diff -r` found `openspec/changes/archive/2026-08-02-rdd-root-simplification-wave0/verify-report.md` (17 lines, Engram-pointer stub) is NOT byte-identical to `openspec/changes/rdd-root-simplification-wave0/verify-report.md` (263 lines, full report), even though the archive dir's own `archive-report.md` claims "verify-report.md | ✓ | 263 lines". All other files (proposal.md, design.md, tasks.md, 4 spec.md files) ARE byte-identical. Tracked source dir independently confirmed byte-identical to the scratchpad backup. Gate does not pass — do not remove the source until this discrepancy is resolved by the orchestrator/maintainer.
+- [x] 0.2 DEFERRED (blocked by 0.1): `git add` the archive dir + merged specs not performed this batch.
+- [x] 0.3 DEFERRED (blocked by 0.1): `git rm` of the tracked wave0 change dir not performed this batch.
 - [x] 0.4 `git add openspec/changes/rdd-root-simplification-wave1/{proposal.md,specs/*,design.md,tasks.md}` — done on branch `docs/rdd-wave1-sdd-artifacts` (off fast-forwarded tracker `feature/rdd-root-simplification`).
 - [x] 0.5 (partial) Commit `docs(sdd): land Wave 1 SDD artifacts` — Wave 1 artifacts only; the Wave 0 archive-move half of this task's original scope is deferred to a follow-up commit pending 0.1 resolution.
 
