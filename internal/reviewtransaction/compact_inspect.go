@@ -40,6 +40,15 @@ type CompactRecoveryInspectionTotals struct {
 const (
 	CompactRecoveryEdgeExitReconcile = "review reconcile-authority"
 	CompactRecoveryEdgeExitAbandon   = "review abandon"
+	// CompactRecoveryEdgeExitRepair names the existing `review repair` verb
+	// (Wave 2 Slice S3, rdd-authority-disposition-plan) as the sanctioned exit
+	// for a closed content_mismatched_recovery_authorization leaf: derivation
+	// (deriveAuthorityDispositionPlanAtRepo) and leaf admission
+	// (admitLeafDisposition) both accept the edge, so the operation this names
+	// will actually run. Unlike CompactRecoveryEdgeExitAbandon, this is never
+	// gated on the successor's pristine state — quarantine byte-preserves the
+	// whole entry, so nothing captured is discarded.
+	CompactRecoveryEdgeExitRepair = "review repair"
 )
 
 // CompactRecoverySanctionedExit names, for one invalid recovery edge, the
@@ -165,6 +174,17 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 	if err != nil {
 		return nil, err
 	}
+	// dispositionSeed names the one leaf successor (if any) whose closed
+	// content-mismatch classification both derives an AuthorityDispositionPlan
+	// and admits as a cardinality-one leaf. A derivation refusal (no eligible
+	// edge, more than one, or an incomplete inspection) is not propagated —
+	// it just means no edge advertises review repair this round, exactly like
+	// InspectCompactPristineAbandonment's per-edge eligibility below never
+	// aborts the whole exit computation.
+	dispositionSeed := ""
+	if plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", ""); planErr == nil && admitLeafDisposition(plan) == nil {
+		dispositionSeed = plan.SeedSet[0]
+	}
 	for _, edge := range report.Edges {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -181,9 +201,22 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 			if err != nil {
 				return nil, err
 			}
-			if eligibility.Eligible {
+			switch {
+			case eligibility.Eligible:
+				// A pristine successor already has a sanctioned exit today —
+				// review repair's disposition-plan quarantine is byte-preserving
+				// like abandon, so this ordering does not change what a pristine
+				// forged edge advertises (`otherwise existing Blocked prose
+				// stands unchanged`; abandon is not Blocked prose).
 				exit.Operation = CompactRecoveryEdgeExitAbandon
-			} else {
+			case dispositionSeed != "" && edge.SuccessorLineageID == dispositionSeed:
+				// Only reached once abandon's own prediction refuses — a
+				// non-pristine (captured review or correction data) successor
+				// whose recovery edge closes on the content-mismatch class.
+				// This is #2014's "nothing applies" gap: neither reconcile nor
+				// abandon accepted the edge before Wave 2's disposition plan.
+				exit.Operation = CompactRecoveryEdgeExitRepair
+			default:
 				exit.Blocked = "no advertised operation admits this edge: reconciliation does not classify it into a supported anomaly class, and `review abandon` does not accept the successor. " +
 					"Nothing quarantines this shape today, so no command clears it and the entry stays exactly as persisted. " +
 					"This report, with non_reconcilable_reason, is the artifact to escalate"

@@ -39,6 +39,15 @@ func admitLeafDisposition(plan AuthorityDispositionPlan) error {
 	return nil
 }
 
+// AdmitAuthorityDispositionLeaf is the exported form of admitLeafDisposition
+// for Slice S3's `review repair` CLI wiring and SanctionedCompactRecoveryExits
+// (compact_inspect.go) — both need the identical, unrelaxed cardinality-one
+// admission predicate the executor itself enforces, so neither ever
+// advertises or accepts a plan the executor would then refuse.
+func AdmitAuthorityDispositionLeaf(plan AuthorityDispositionPlan) error {
+	return admitLeafDisposition(plan)
+}
+
 // AuthorityDispositionProof carries the natively re-derived
 // AuthorityDispositionPlan binding inside the quarantine audit record; it is
 // set only for disposition-plan-bound quarantines this file executes. The

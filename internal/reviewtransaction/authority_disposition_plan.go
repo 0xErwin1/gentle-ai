@@ -262,3 +262,12 @@ func validateAuthorityDispositionAuthorization(plan AuthorityDispositionPlan, cu
 	}
 	return nil
 }
+
+// DeriveAuthorityDispositionPlanAtRepo is the exported form of
+// deriveAuthorityDispositionPlanAtRepo for Slice S3's `review repair` CLI
+// wiring — a read-only plan derivation with no CLI entrypoint of its own
+// (rdd-authority-disposition-plan / "No New Public Repair Verb": this is a Go
+// API surface behind the existing verb, not a new command).
+func DeriveAuthorityDispositionPlanAtRepo(ctx context.Context, repo, actor, reason string) (AuthorityDispositionPlan, error) {
+	return deriveAuthorityDispositionPlanAtRepo(ctx, repo, actor, reason)
+}
