@@ -291,7 +291,7 @@ func validateReviewConsentInvocations(result ReviewIntegrationConsentResult, fol
 	for _, choice := range result.Choices {
 		expected := followUpBase + " --consent " + choice.Answer
 		if choice.Invocation != expected {
-			return fmt.Errorf("consent choice %q invocation does not match the provider-owned request", choice.Answer)
+			return fmt.Errorf("consent choice %q invocation does not match the provider-owned request", choice.Answer) // refusal:by-design world-action: provider-owned bytes are an internal invariant; the exit is a code fix, not a command
 		}
 	}
 	return nil
