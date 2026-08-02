@@ -22,8 +22,6 @@ func TestBoundedReviewContractLeavesCanonicalizationToNativeGo(t *testing.T) {
 	for _, want := range []string{
 		"Native Go owns validation, canonicalization, persistence, hashing, reopening, and binding",
 		"Only candidate-caused severe findings block",
-		"OpenCode preflights the opaque binding",
-		"injects only the provider's `artifact_subject`, `base_tree`, `candidate_tree`, and ordered manifest",
 		"Claude Code carries immutable candidate evidence directly in the reviewer task prompt",
 		"read-only native Git commands",
 	} {
@@ -386,8 +384,10 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// Reviewer prompts no longer expose native Git flags owned by that capability.
 		// +1,190 gives Claude's shell-less reviewer a complete prompt-carried
 		// immutable transport while OpenCode keeps provider-owned injection (#2003).
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 16_064, maxCharacters: 18_500},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_449, maxCharacters: 36_000},
+		// v2.1 removes the retired OpenCode transport claim and pins Claude Code
+		// as the explicit runtime, reducing each rendered controller by 138 bytes.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_926, maxCharacters: 18_500},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_311, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
