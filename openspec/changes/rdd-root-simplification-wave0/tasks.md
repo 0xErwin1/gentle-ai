@@ -56,20 +56,20 @@ Chain strategy: feature-branch-chain
 
 ## Phase 3: PR 2 — Ownership Inventory (base: PR 1 branch)
 
-- [ ] 3.1 **[RED]** Author the rg-based set-difference completeness recipe before content (each enumeration point below vs. inventory rows); confirm it fails against the current nonexistent `docs/architecture/rdd-ownership-inventory.md`. Record ad hoc, not committed. Req: Inventory Row Completeness and Single Ownership.
-- [ ] 3.2 Enumerate lifecycle transitions (`TRN-nn`) from `internal/reviewtransaction/transaction.go` state vocabulary + `internal/cli/review_next_transition.go` `next_transition` producer via CodeGraph read-only tracing.
-- [ ] 3.3 Enumerate public operation forms (`TRN-nn`) from `internal/app/app.go` dispatch (`review`, `review-resume`, `review-step`, bundle/validate legacy forms), cross-checked against `internal/app/help_test.go`. Record the confirmed discrepancy as inventory evidence: `internal/app/app.go:111` dispatches `case "review-step"`, but `internal/app/help_test.go:14`'s `commands` list omits `review-step`. Do not modify `help_test.go` — fixing it is out of docs-only scope.
-- [ ] 3.4 Enumerate persisted artifacts (`ART-nn`) from `internal/reviewtransaction` store writers (authority record, receipt, journal, bundle, sidecar, quarantine residue).
-- [ ] 3.5 Enumerate contract surfaces (`CTR-nn`) from `contracts/review-integration/v1/**` and `v2/**` schema+fixtures, cross-checked against schema-ID constants in `internal/cli/review_*.go`.
-- [ ] 3.6 Enumerate delivery gates (`CON-nn`) from the `GateKind` constants at `internal/reviewtransaction/receipt.go:133-137` (`GatePostApply`, `GatePreCommit`, `GatePrePush`, `GatePrePR`, `GateRelease`) and `reviewIntegrationGatesInOrder` at `internal/cli/review_operation_contract.go:1440-1444`.
-- [ ] 3.7 Enumerate consumers (`CON-nn`) from `internal/sddstatus/review_gate.go`, `internal/sddstatus/review_binding.go`, adapter/plugin assets, CI hook definitions; record out-of-repo consumers (OpenCode, Pi, Claude plugin assets) as `CON-nn` rows with `evidence: out-of-repo`, flagged in `Inventory gaps`.
-- [ ] 3.8 Assign observed `current owner(s)` and exactly one `target owner` (closed set: `ReviewCore`/`AuthorityStore`/`CandidateResolver`/`ReviewAdapter`/`DeliveryGate`/`SDD`) per row; classify row status (clean / `unowned` / `split-ownership` / `undesignated-target`).
-- [ ] 3.9 Write `Findings` section listing unowned/split-ownership/undesignated-target rows by ID; leave unresolved. Req: Inventory Row Completeness and Single Ownership.
-- [ ] 3.10 Write `Inventory gaps` section for unanchored rows and out-of-repo consumers.
-- [ ] 3.11 Record the SDD attempt-ledger ownership row per decision 9's conditional default (SDD-owned only with durable cumulative CAS-like properties; else native authority) — not an unconditional single owner. Req: SDD Attempt-Ledger Ownership Default.
-- [ ] 3.12 State the snapshot pin `ece470dacd0041f394e7f6f3877a6a9fcb3482af` explicitly in the header/preamble; state the document is not live authority. Req: Snapshot-Pinned, Non-Live Enumeration.
-- [ ] 3.13 **[GREEN]** Re-run the 3.1 recipe; confirm every enumerated point appears exactly once; record pass output.
-- [ ] 3.14 Verify diff scope: only `docs/architecture/rdd-ownership-inventory.md` changed in this PR.
+- [x] 3.1 **[RED]** Author the rg-based set-difference completeness recipe before content (each enumeration point below vs. inventory rows); confirm it fails against the current nonexistent `docs/architecture/rdd-ownership-inventory.md`. Record ad hoc, not committed. Req: Inventory Row Completeness and Single Ownership.
+- [x] 3.2 Enumerate lifecycle transitions (`TRN-nn`) from `internal/reviewtransaction/transaction.go` state vocabulary + `internal/cli/review_next_transition.go` `next_transition` producer via CodeGraph read-only tracing.
+- [x] 3.3 Enumerate public operation forms (`TRN-nn`) from `internal/app/app.go` dispatch (`review`, `review-resume`, `review-step`, bundle/validate legacy forms), cross-checked against `internal/app/help_test.go`. Record the confirmed discrepancy as inventory evidence: `internal/app/app.go:111` dispatches `case "review-step"`, but `internal/app/help_test.go:14`'s `commands` list omits `review-step`. Do not modify `help_test.go` — fixing it is out of docs-only scope.
+- [x] 3.4 Enumerate persisted artifacts (`ART-nn`) from `internal/reviewtransaction` store writers (authority record, receipt, journal, bundle, sidecar, quarantine residue).
+- [x] 3.5 Enumerate contract surfaces (`CTR-nn`) from `contracts/review-integration/v1/**` and `v2/**` schema+fixtures, cross-checked against schema-ID constants in `internal/cli/review_*.go`.
+- [x] 3.6 Enumerate delivery gates (`CON-nn`) from the `GateKind` constants at `internal/reviewtransaction/receipt.go:133-137` (`GatePostApply`, `GatePreCommit`, `GatePrePush`, `GatePrePR`, `GateRelease`) and `reviewIntegrationGatesInOrder` at `internal/cli/review_operation_contract.go:1440-1444`.
+- [x] 3.7 Enumerate consumers (`CON-nn`) from `internal/sddstatus/review_gate.go`, `internal/sddstatus/review_binding.go`, adapter/plugin assets, CI hook definitions; record out-of-repo consumers (OpenCode, Pi, Claude plugin assets) as `CON-nn` rows with `evidence: out-of-repo`, flagged in `Inventory gaps`.
+- [x] 3.8 Assign observed `current owner(s)` and exactly one `target owner` (closed set: `ReviewCore`/`AuthorityStore`/`CandidateResolver`/`ReviewAdapter`/`DeliveryGate`/`SDD`) per row; classify row status (clean / `unowned` / `split-ownership` / `undesignated-target`).
+- [x] 3.9 Write `Findings` section listing unowned/split-ownership/undesignated-target rows by ID; leave unresolved. Req: Inventory Row Completeness and Single Ownership.
+- [x] 3.10 Write `Inventory gaps` section for unanchored rows and out-of-repo consumers.
+- [x] 3.11 Record the SDD attempt-ledger ownership row per decision 9's conditional default (SDD-owned only with durable cumulative CAS-like properties; else native authority) — not an unconditional single owner. Req: SDD Attempt-Ledger Ownership Default.
+- [x] 3.12 State the snapshot pin `ece470dacd0041f394e7f6f3877a6a9fcb3482af` explicitly in the header/preamble; state the document is not live authority. Req: Snapshot-Pinned, Non-Live Enumeration.
+- [x] 3.13 **[GREEN]** Re-run the 3.1 recipe; confirm every enumerated point appears exactly once; record pass output.
+- [x] 3.14 Verify diff scope: only `docs/architecture/rdd-ownership-inventory.md` changed in this PR.
 
 ## Phase 4: PR 3 — Freeze Policy + Backlog Disposition (base: PR 2 branch)
 
