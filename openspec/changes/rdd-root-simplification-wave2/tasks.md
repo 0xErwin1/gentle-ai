@@ -63,20 +63,20 @@ Satisfies `rdd-authority-disposition-plan` (all 7 requirements) + `rdd-authority
 
 Satisfies `rdd-leaf-disposition-execution` (all 11 requirements).
 
-- [ ] 2.1 RED: Cardinality-One Admission — single-node closure admitted; multi-node (#2014/#1656 shape) refuses, names cardinality + Wave 6 as escalation (not a promise).
-- [ ] 2.2 RED: No Predecessor Pointer Rewritten — every predecessor pointer byte-identical pre/post execution.
-- [ ] 2.3 RED: Lock and CAS Reinspection — revision drift under lock (revision R→R+1) refuses on CAS mismatch, zero bytes mutated.
-- [ ] 2.4 RED: **mandatory obligation (b)** — executor validates the populated `Authorization` against the digest-bound plan at execution time; forged/mismatched `Authorization` (bound to a different `plan_digest`) refuses even when cardinality and CAS both pass.
-- [ ] 2.5 RED: Byte-Preserving Quarantine With Forensic Residue — quarantined bytes byte-identical to original; residue records original location+content.
-- [ ] 2.6 RED: Retained-Graph Revalidation Before Success — success reported only if post-quarantine re-classification is `Complete && Valid`, no dangling reference.
-- [ ] 2.7 RED: Exact Replay Converges Without Double-Move — replaying an already-succeeded plan detects existing quarantine, converges, does not move the entry twice.
-- [ ] 2.8 RED: Crash Mid-Execution Leaves a Valid Retained Graph — via `compactReclaimPhaseHook` at `prepared`/`renamed`/`committed`; post-restart inspection classifies cleanly, no corrupted intermediate state.
-- [ ] 2.9 RED: Concurrent Execution Refuses Duplicate Mutation — two concurrent invocations against the same target under the same lock: exactly one proceeds, the other refuses without mutating.
-- [ ] 2.10 RED: Unknown/Mixed/Ambiguous Shapes Block, No Generic Fallback — non-admitted shape refuses, never quarantines.
-- [ ] 2.11 RED: Refusal Names Diagnosis + Escalation Artifact, Not a Roadmap Promise — #1656 multi-lineage refusal names the diagnosis and #1656, no delivery-date commitment.
-- [ ] 2.12 RED: Refusal Requires Explicit Authorization, Never Blocks Elsewhere — unauthorized refusal on one candidate does not affect an unrelated `review start` in another worktree (blocking budget compliance).
-- [ ] 2.13 GREEN: `internal/reviewtransaction/authority_disposition_execute.go` — `admitLeafDisposition`, lock+CAS, quarantine call-through, replay detection, readback; `AuthorityDispositionProof` on `CompactReclaimRecord` (`compact_reclaim.go`); `authority_repair.go` routes classified execution through the plan.
-- [ ] 2.14 Ratchet: new unwired functions this slice — `scripts/deadcode-ratchet.sh --update`.
+- [x] 2.1 RED: Cardinality-One Admission — single-node closure admitted; multi-node (#2014/#1656 shape) refuses, names cardinality + Wave 6 as escalation (not a promise).
+- [x] 2.2 RED: No Predecessor Pointer Rewritten — every predecessor pointer byte-identical pre/post execution.
+- [x] 2.3 RED: Lock and CAS Reinspection — revision drift under lock (revision R→R+1) refuses on CAS mismatch, zero bytes mutated.
+- [x] 2.4 RED: **mandatory obligation (b)** — executor validates the populated `Authorization` against the digest-bound plan at execution time; forged/mismatched `Authorization` (bound to a different `plan_digest`) refuses even when cardinality and CAS both pass.
+- [x] 2.5 RED: Byte-Preserving Quarantine With Forensic Residue — quarantined bytes byte-identical to original; residue records original location+content.
+- [x] 2.6 RED: Retained-Graph Revalidation Before Success — success reported only if post-quarantine re-classification is `Complete && Valid`, no dangling reference.
+- [x] 2.7 RED: Exact Replay Converges Without Double-Move — replaying an already-succeeded plan detects existing quarantine, converges, does not move the entry twice.
+- [x] 2.8 RED: Crash Mid-Execution Leaves a Valid Retained Graph — via `compactReclaimPhaseHook` at `prepared`/`renamed`/`committed`; post-restart inspection classifies cleanly, no corrupted intermediate state.
+- [x] 2.9 RED: Concurrent Execution Refuses Duplicate Mutation — two concurrent invocations against the same target under the same lock: exactly one proceeds, the other refuses without mutating.
+- [x] 2.10 RED: Unknown/Mixed/Ambiguous Shapes Block, No Generic Fallback — non-admitted shape refuses, never quarantines.
+- [x] 2.11 RED: Refusal Names Diagnosis + Escalation Artifact, Not a Roadmap Promise — #1656 multi-lineage refusal names the diagnosis and #1656, no delivery-date commitment.
+- [x] 2.12 RED: Refusal Requires Explicit Authorization, Never Blocks Elsewhere — unauthorized refusal on one candidate does not affect an unrelated `review start` in another worktree (blocking budget compliance).
+- [x] 2.13 GREEN: `internal/reviewtransaction/authority_disposition_execute.go` — `admitLeafDisposition`, lock+CAS, quarantine call-through, replay detection, readback; `AuthorityDispositionProof` on `CompactReclaimRecord` (`compact_reclaim.go`); `authority_repair.go` routes classified execution through the plan.
+- [x] 2.14 Ratchet: new unwired functions this slice — `scripts/deadcode-ratchet.sh --update`.
 
 ## Phase 3 (Slice S3 / PR3): `review repair` Plan-Bound Preflight/Execution
 

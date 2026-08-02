@@ -59,7 +59,7 @@ const compactContentMismatchedRecoveryAuthorizationClass = "content_mismatched_r
 // specific cause, whenever derivation refuses to produce a plan: an
 // unclassifiable shape, a mixed/ambiguous set of eligible edges, or an
 // incomplete inspection. There is never a generic fallback plan.
-var errAuthorityDispositionPlanNotDerivable = errors.New("authority disposition plan refused: anomaly classification is not closed")
+var errAuthorityDispositionPlanNotDerivable = errors.New("authority disposition plan refused: anomaly classification is not closed") // refusal:by-design human-authority: an unclassifiable or ambiguous graph shape needs a maintainer's diagnosis before any plan can be derived, not a command this refusal can name
 
 // deriveAuthorityDispositionPlan derives a generic AuthorityDispositionPlan
 // deterministically from report and records — both of which MUST come from
@@ -257,6 +257,7 @@ func validateAuthorityDispositionAuthorization(plan AuthorityDispositionPlan, cu
 		return fmt.Errorf("%w: authority inventory revision drifted from %q to %q", ErrConcurrentUpdate, plan.AuthorityInventoryRevision, currentAuthorityInventoryRevision)
 	}
 	if plan.Authorization != authorityDispositionAuthorizationBinding(plan) {
+		// refusal:by-design human-authority: only a maintainer can supply a correct authorization binding; there is no command that fixes a forged one
 		return errors.New("authority disposition plan refused: authorization does not bind to plan_digest and authority_inventory_revision")
 	}
 	return nil
