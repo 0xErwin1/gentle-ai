@@ -52,7 +52,7 @@ The design MUST state decisions 1–5 from the proposal's unresolved-decisions t
 
 ### Requirement: Amendment A — compatible_base_advance Normative Citation
 
-The design's `compatible_base_advance` definition MUST cite the existing proof in `internal/reviewtransaction/prepr.go` (`deriveBaseAdvanceCompatibility`, line 73 — merge-base tree preservation, path digest identity, patch identity, path disjointness, conflict-free `merge-tree --write-tree`, issuer-bound CI attestation, trust root) as normative semantics, instead of re-deriving them.
+The design's `compatible_base_advance` definition MUST cite the existing proof in `internal/reviewtransaction/prepr.go` (`deriveBaseAdvanceCompatibility`, line 73 — merge-base tree preservation, path digest identity, patch identity, path disjointness, conflict-free `merge-tree --write-tree`, issuer-bound CI attestation including the trust root, and base/HEAD non-advance revalidation) as normative semantics, instead of re-deriving them.
 
 #### Scenario: compatible_base_advance references prepr.go
 
