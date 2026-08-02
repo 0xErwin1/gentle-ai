@@ -202,6 +202,51 @@ func TestReviewFacadeFinalizeNewLineageFollowUpFindingsDoNotBlock(t *testing.T) 
 	}
 }
 
+// TestReviewFacadeFinalizeNewLineageCorrectingStateReachesReceipt is W14's
+// RED/GREEN evidence: a lineage in `correcting` — previously refused
+// outright by this command with no path forward — now finalizes through the
+// identical AdvanceRequest path as `reviewing`, reaching a genuine terminal
+// receipt. This is the product-surface proof for spec scenario "In-flight
+// new lineage still finalizes after rollback", whose GIVEN is literally a
+// `correcting` lineage.
+func TestReviewFacadeFinalizeNewLineageCorrectingStateReachesReceipt(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	const lineage = "finalize-correcting-lineage"
+	startNewLineageForFinalizeTest(t, repo, lineage)
+
+	store, err := reviewtransaction.NewLineageAuthorityStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Mutate(context.Background(), record.Revision, func(next *reviewtransaction.NewLineageAuthority) error {
+		next.State = reviewtransaction.NewLineageStateCorrecting
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var out bytes.Buffer
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage}, &out); err != nil {
+		t.Fatalf("new-lineage finalize on a correcting lineage must now reach a receipt, got error: %v\n%s", err, out.String())
+	}
+	var result ReviewFacadeFinalizeNewLineageResult
+	decodeStrictReviewJSON(t, out.Bytes(), &result)
+	if result.State != reviewtransaction.NewLineageStateApproved {
+		t.Fatalf("finalize(correcting, no blocker) state = %q, want approved", result.State)
+	}
+	if result.Receipt == nil || result.Receipt.LineageID != lineage {
+		t.Fatalf("finalize(correcting) receipt = %#v", result.Receipt)
+	}
+	if _, statErr := os.Stat(store.ReceiptPath()); statErr != nil {
+		t.Fatalf("terminal receipt not published on disk: %v", statErr)
+	}
+}
+
 // TestReviewFacadeFinalizeNewLineageMarkerCorruptedDeniesNeverLegacy proves
 // finalize reuses S4/S5's own discovery-integrity denial (DiscoverNewLineage)
 // rather than falling through to legacy discovery when a v3 marker exists
@@ -246,20 +291,25 @@ func TestReviewFacadeFinalizeNewLineageMarkerCorruptedDeniesNeverLegacy(t *testi
 }
 
 // TestReviewFacadeFinalizeNewLineageEscalatedReceiptDeniesEveryGate is the
-// pinning test from the accepted adjudication (b): once a lineage's authority
-// reaches `escalated`, it is a terminal non-approval — every gate must deny
-// on it regardless of whether the live candidate still relates exactly to
-// the frozen one. Before this fix, resolveGoverningAuthority never consulted
-// record.Authority.State at all, so an escalated-but-unchanged candidate
-// would have reached CoreTransitionContinue → GateAllow.
+// pinning test from the accepted adjudication (b), now doubling as C5's own
+// pinning regression: once a lineage's authority reaches `escalated`, it is
+// a terminal non-approval — every gate must deny on it regardless of
+// whether the live candidate still relates exactly to the frozen one.
+// Before the adjudication (b) fix, resolveGoverningAuthority never
+// consulted record.Authority.State at all, so an escalated-but-unchanged
+// candidate would have reached CoreTransitionContinue → GateAllow.
 //
 // The frozen authority is built directly from governingAuthorityLiveEvidence
 // (the same live-resolution function resolveGoverningAuthority itself calls
 // at every gate), rather than through a full `review start`, so the fixture
-// is provably an EXACT relation — proven by the sanity check below, which
-// asserts allow BEFORE escalation. Without that sanity check this test could
-// pass vacuously (e.g. an incidental "unknown" relation would also deny,
-// proving nothing about the state-based short-circuit this fix adds).
+// is provably an EXACT relation. C5 inversion (verify-report CRITICAL,
+// "default-deny at gates"): the sanity check below used to assert ALLOW for
+// the plain `reviewing` state before escalation — that assertion WAS the
+// C5 bug pinned as expected behavior (a never-approved, receipt-less
+// authority reaching GateAllow at an exact relation). It now asserts the
+// opposite: `reviewing` must ALSO deny, proving default-deny closes that
+// gap for exactly this fixture, before the escalated-specific short-circuit
+// is exercised by the loop below.
 func TestReviewFacadeFinalizeNewLineageEscalatedReceiptDeniesEveryGate(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
@@ -287,10 +337,14 @@ func TestReviewFacadeFinalizeNewLineageEscalatedReceiptDeniesEveryGate(t *testin
 		t.Fatal(err)
 	}
 
-	// Sanity: before escalation, the identical live candidate must ALLOW at
-	// pre-commit — proves the fixture genuinely relates exactly.
-	if governs, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit}); !governs || discoveryErr != nil || evaluation.Result != reviewtransaction.GateAllow {
-		t.Fatalf("fixture sanity check failed: exact live candidate before escalation must allow, got governs=%v evaluation=%#v discoveryErr=%v", governs, evaluation, discoveryErr)
+	// C5 inversion: a plain `reviewing` authority — never approved, no
+	// receipt — must DENY here, not allow, even though its live candidate
+	// relates exactly to the frozen one. This is the exact shape the
+	// verify report's C5 repro used (`review start`, never finalized).
+	if governs, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit}); !governs {
+		t.Fatalf("fixture sanity check failed: an in-flight v3 record must still govern (deny), got governs=false")
+	} else if discoveryErr == nil && evaluation.Result == reviewtransaction.GateAllow {
+		t.Fatalf("fixture sanity check failed: a never-approved, receipt-less reviewing authority must never allow, got evaluation=%#v", evaluation)
 	}
 
 	if _, err = store.Mutate(context.Background(), revision, func(next *reviewtransaction.NewLineageAuthority) error {

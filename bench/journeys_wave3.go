@@ -11,15 +11,15 @@ import (
 // Journey.NewLineageActivation (bench/runner.go) — every wave1/wave2/edge/sdd
 // journey stays on the byte-identical legacy `review start` path.
 //
-// Scope note (documented, not silent): `review finalize` is not yet
-// CLI-wired for new lineages (Wave 3 Slice 4's own apply-progress note), so a
-// genuine tier 0/1/4 FULL flow through to receipt issuance is not reachable
-// through the product's CLI surface in this wave regardless of bench harness
-// capability. These two journeys instead exercise the complete lifecycle
-// slice that IS CLI-reachable today: tier-0 `review start` freezing a v3
-// authority, then `review validate` across the gates task 6.7's own fix
-// (governingAuthorityLiveEvidence's per-gate-accurate projection, this same
-// slice) makes correct — an exact match allowing at both post-apply and
+// Wave 3 remediation (verify-report CRITICAL C1, then CRITICAL C5): `review
+// finalize` is now CLI-wired for new lineages, and default-deny (C5) means a
+// `review start`-only lineage — never finalized — correctly DENIES at every
+// gate rather than allowing. These two journeys now drive the complete
+// product-reachable lifecycle S3's own SUGGESTION named as missing:
+// tier-0 `review start` freezing a v3 authority, `review finalize` reaching
+// a genuine approved receipt, then `review validate` across the gates task
+// 6.7's own fix (governingAuthorityLiveEvidence's per-gate-accurate
+// projection) makes correct — an exact match allowing at both post-apply and
 // pre-commit, and an unstaged-only drift correctly denying scope-changed at
 // post-apply while still allowing at pre-commit, exactly the distinction
 // review_new_lineage_gate_selector_test.go proves at the Go integration
@@ -70,6 +70,29 @@ func requireNewLineageScopeChangedDenied(lineage string) func(*Sandbox, Observat
 	}
 }
 
+type newLineageFinalizeResult struct {
+	Operation string `json:"operation"`
+	LineageID string `json:"lineage_id"`
+	State     string `json:"state"`
+}
+
+// requireNewLineageFinalized proves the v3-specific finalize response shape
+// (ReviewFacadeFinalizeNewLineageResult, internal/cli/review_facade_finalize_new_lineage.go)
+// reaches a genuine approved terminal state and receipt through the built
+// binary — the C1/C5 remediation's own product-surface evidence.
+func requireNewLineageFinalized(lineage string) func(*Sandbox, Observation) error {
+	return func(_ *Sandbox, observation Observation) error {
+		var result newLineageFinalizeResult
+		if err := decodeWaveObservation(observation, &result, "new-lineage finalize"); err != nil {
+			return err
+		}
+		if result.Operation != "review/finalize" || result.LineageID != lineage || result.State != "approved" {
+			return fmt.Errorf("new-lineage finalize = %+v, want operation=review/finalize lineage_id=%q state=approved", result, lineage)
+		}
+		return nil
+	}
+}
+
 // dirtyTrackedFileWithoutStaging edits stageOrdinaryCode's own tracked file
 // again, without staging the edit — the exact unstaged-drift fixture
 // review_new_lineage_gate_selector_test.go proves at the Go layer.
@@ -91,6 +114,8 @@ func waveThreeJourneys() []Journey {
 				{Name: "fixture: one exact ordinary code candidate staged", Fixture: stageOrdinaryCode},
 				{Name: "new-lineage review start", Requires: startNamedCapability,
 					Args: productArgs("review", "start", "--lineage", newLineageExactLineage), After: requireNewLineageStarted(newLineageExactLineage)},
+				{Name: "new-lineage review finalize", Requires: finalizeCapability,
+					Args: productArgs("review", "finalize", "--lineage", newLineageExactLineage), After: requireNewLineageFinalized(newLineageExactLineage)},
 				{Name: "unchanged candidate allows at post-apply", Requires: validateCapability,
 					Args: productArgs("review", "validate", "--lineage", newLineageExactLineage, "--gate", "post-apply"),
 					After: func(_ *Sandbox, observation Observation) error {
@@ -113,6 +138,8 @@ func waveThreeJourneys() []Journey {
 				{Name: "fixture: one exact ordinary code candidate staged", Fixture: stageOrdinaryCode},
 				{Name: "new-lineage review start", Requires: startNamedCapability,
 					Args: productArgs("review", "start", "--lineage", newLineageSelectorLineage), After: requireNewLineageStarted(newLineageSelectorLineage)},
+				{Name: "new-lineage review finalize", Requires: finalizeCapability,
+					Args: productArgs("review", "finalize", "--lineage", newLineageSelectorLineage), After: requireNewLineageFinalized(newLineageSelectorLineage)},
 				{Name: "fixture: same tracked file edited again, never staged", Fixture: dirtyTrackedFileWithoutStaging},
 				{Name: "unstaged drift denies scope-changed at post-apply", Requires: validateCapability,
 					Args:  productArgs("review", "validate", "--lineage", newLineageSelectorLineage, "--gate", "post-apply"),

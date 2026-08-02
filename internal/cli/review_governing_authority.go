@@ -78,19 +78,46 @@ func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateIn
 	case reviewtransaction.GoverningAuthorityKindLegacy:
 		return false, reviewtransaction.NativeGateEvaluation{}, nil
 	default: // reviewtransaction.GoverningAuthorityKindNew
-		// Adjudication (b) pinning fix: `escalated` is a terminal
-		// NON-approval (design decision 7's own "ambiguous/unknown/unrelated
-		// -> escalate" mapping, and ReviewCore.finalize issues a receipt for
-		// escalated exactly like approved — see review_core.go's finalize).
-		// Nothing in ReviewCore.validate's relation-based switch ever
-		// consults the persisted authority state, so an escalated lineage
-		// whose live candidate still relates exactly to the frozen one would
-		// otherwise reach CoreTransitionContinue -> GateAllow, silently
-		// authorizing delivery from a lineage that was never approved. This
-		// short-circuit denies unconditionally before any live evidence is
-		// even resolved, matching decision 5's zero-cost-by-default spirit
-		// for the one state where live evidence can never change the answer.
-		if record.Authority.State == reviewtransaction.NewLineageStateEscalated {
+		// C5 remediation (verify-report CRITICAL, "default-deny at gates"):
+		// the prior implementation special-cased only `escalated`, so every
+		// other non-approved state (reviewing, correcting, validating) fell
+		// through to ReviewCore.Next(validate) below, whose relation-based
+		// switch returns CoreTransitionContinue -> GateAllow for an exact
+		// relation regardless of whether the authority was ever approved —
+		// silently authorizing delivery from an in-flight, unfinalized
+		// lineage at every one of the five gates, including release. The
+		// switch below is exhaustive over the five persisted states and is
+		// the ONLY place this function may return early with an ALLOW-
+		// eligible outcome: `approved`, and only after LoadReceipt proves a
+		// structurally valid, exactly-matching receipt actually exists —
+		// the persisted state field alone is never trusted. Every other arm
+		// denies unconditionally, before any relation is even evaluated,
+		// with an executable next step mirroring legacy's own
+		// receipt-missing denial (reviewFacadeReceiptNotAvailableReason).
+		switch record.Authority.State {
+		case reviewtransaction.NewLineageStateApproved:
+			authorityStore, storeErr := reviewtransaction.NewLineageAuthorityStore(ctx, root, lineage)
+			if storeErr != nil {
+				return true, reviewtransaction.NativeGateEvaluation{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted, Detail: storeErr.Error()}
+			}
+			receipt, receiptErr := authorityStore.LoadReceipt()
+			if receiptErr != nil || receipt.LineageID != record.Authority.LineageID ||
+				receipt.AuthorityRevision != record.Revision || receipt.TerminalState != record.Authority.State {
+				return true, reviewtransaction.NativeGateEvaluation{
+					Result: reviewtransaction.GateInvalidated, Reason: reviewFacadeReceiptNotAvailableReason(record.Authority.LineageID),
+					Context: reviewtransaction.GateContext{
+						Gate: gateInput.Gate, LineageID: record.Authority.LineageID, StoreRevision: record.Revision,
+						BaseTree: record.Authority.CandidateIdentity.BaseTree, CandidateTree: record.Authority.CandidateIdentity.CandidateTree,
+						PolicyHash: record.Authority.CandidateIdentity.PolicyHash,
+						Denial:     &reviewtransaction.GateDenial{Stage: "new-lineage-validate", Code: "approved_without_receipt"},
+					},
+				}, nil
+			}
+		case reviewtransaction.NewLineageStateEscalated:
+			// Adjudication (b) pinning fix: `escalated` is a terminal
+			// NON-approval (design decision 7's own "ambiguous/unknown/unrelated
+			// -> escalate" mapping, and ReviewCore.finalize issues a receipt for
+			// escalated exactly like approved — see review_core.go's finalize).
 			context := reviewtransaction.GateContext{
 				Gate: gateInput.Gate, LineageID: record.Authority.LineageID, StoreRevision: record.Revision,
 				BaseTree: record.Authority.CandidateIdentity.BaseTree, CandidateTree: record.Authority.CandidateIdentity.CandidateTree,
@@ -98,6 +125,16 @@ func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateIn
 				Denial:     &reviewtransaction.GateDenial{Stage: "new-lineage-validate", Code: string(reviewtransaction.NewLineageStateEscalated)},
 			}
 			return true, reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateEscalated, Reason: "authority already escalated: escalated is a terminal non-approval", Context: context}, nil
+		default: // reviewing, correcting, validating — and any future non-approved value
+			return true, reviewtransaction.NativeGateEvaluation{
+				Result: reviewtransaction.GateInvalidated, Reason: reviewFacadeReceiptNotAvailableReason(record.Authority.LineageID),
+				Context: reviewtransaction.GateContext{
+					Gate: gateInput.Gate, LineageID: record.Authority.LineageID, StoreRevision: record.Revision,
+					BaseTree: record.Authority.CandidateIdentity.BaseTree, CandidateTree: record.Authority.CandidateIdentity.CandidateTree,
+					PolicyHash: record.Authority.CandidateIdentity.PolicyHash,
+					Denial:     &reviewtransaction.GateDenial{Stage: "new-lineage-validate", Code: string(record.Authority.State)},
+				},
+			}, nil
 		}
 		transition, err := (reviewtransaction.ReviewCore{}).Next(ctx, record.Authority, reviewtransaction.CoreRequest{
 			Kind: reviewtransaction.CoreRequestValidate, LiveCandidateIdentity: live, Evidence: evidence,
