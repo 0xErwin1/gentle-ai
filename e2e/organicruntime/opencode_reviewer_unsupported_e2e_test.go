@@ -41,14 +41,16 @@ func TestRealOpenCodeRejectsUnsupportedImmutableReviewerBash(t *testing.T) {
 		" --expected-revision sha256:" + strings.Repeat("b", 64) +
 		" --lineage reviewer-e2e --target sha256:" + strings.Repeat("d", 64) +
 		" --lens review-risk --order 0 --operation name-status > " + marker
+	reviewerPrompt := "GENTLE_AI_REVIEWER_LAUNCH_PROBE\n" + prompt
 	fixture := newOpenCodeFixtureServer(t, []openCodeTurn{{tool: "task", arguments: map[string]any{
 		"description":   "Attempt immutable reviewer inspection",
 		"subagent_type": "review-risk",
 		"prompt": "GENTLE_AI_REVIEW_BINDING {\"lineage\":\"reviewer-e2e\",\"target\":\"sha256:" + strings.Repeat("d", 64) +
 			"\",\"lens\":\"review-risk\",\"order\":0,\"repository_context\":\"rctx1_" + strings.Repeat("a", 64) +
-			"\",\"revision\":\"sha256:" + strings.Repeat("b", 64) + "\",\"subject_hash\":\"sha256:" + strings.Repeat("c", 64) + "\"}\n" + prompt,
-	}}}, "")
+			"\",\"revision\":\"sha256:" + strings.Repeat("b", 64) + "\",\"subject_hash\":\"sha256:" + strings.Repeat("c", 64) + "\"}\n" + reviewerPrompt,
+	}}}, reviewerPrompt)
 	defer fixture.Close()
+	assertFixtureRecognizesReviewerRequest(t, fixture, reviewerPrompt)
 
 	config := generatedOpenCodeReviewConfig(t, filepath.Join(configRoot, "opencode", "opencode.json"), fixture.URL)
 	environment := replaceOrganicEnvironment(organicEnvironment(home), map[string]string{
@@ -81,7 +83,19 @@ func TestRealOpenCodeRejectsUnsupportedImmutableReviewerBash(t *testing.T) {
 	if err := command.Run(); err != nil {
 		t.Fatalf("opencode run: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
 	}
-	assertOpenCodeUnsupportedCapability(t, stdout.String())
+	fixture.mu.Lock()
+	launches := fixture.subagentStarts
+	fixture.mu.Unlock()
+	accepted, err := reviewerRejectedBeforeLaunch(stdout.String(), launches)
+	if err != nil {
+		t.Fatalf("decode OpenCode JSON event: %v\n%s", err, stdout.String())
+	}
+	if !accepted {
+		t.Fatalf("OpenCode did not emit the exact unsupported-capability task rejection before reviewer launch:\n%s", stdout.String())
+	}
+	if launches != 0 {
+		t.Fatalf("rejected reviewer Bash launched %d reviewer subagents", launches)
+	}
 	fixture.assertComplete(t, false)
 	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("rejected reviewer Bash changed the worktree: %v", err)
@@ -91,8 +105,10 @@ func TestRealOpenCodeRejectsUnsupportedImmutableReviewerBash(t *testing.T) {
 	}
 }
 
-func assertOpenCodeUnsupportedCapability(t *testing.T, output string) {
-	t.Helper()
+func reviewerRejectedBeforeLaunch(output string, launches int) (bool, error) {
+	if launches != 0 {
+		return false, nil
+	}
 	decoder := json.NewDecoder(strings.NewReader(output))
 	for {
 		var event struct {
@@ -107,17 +123,56 @@ func assertOpenCodeUnsupportedCapability(t *testing.T, output string) {
 			} `json:"part"`
 		}
 		if err := decoder.Decode(&event); errors.Is(err, io.EOF) {
-			break
+			return false, nil
 		} else if err != nil {
-			t.Fatalf("decode OpenCode JSON event: %v\n%s", err, output)
+			return false, err
 		}
 		if event.Type == "tool_use" && event.Part != nil && event.Part.Type == "tool" &&
 			event.Part.Tool == "task" && event.Part.State.Status == "error" &&
-			strings.Contains(event.Part.State.Error, "unsupported-capability") {
-			return
+			event.Part.State.Error == "unsupported-capability" {
+			return true, nil
 		}
 	}
-	t.Fatalf("OpenCode did not emit unsupported-capability in the rejected task event:\n%s", output)
+}
+
+func TestReviewerRejectedBeforeLaunch(t *testing.T) {
+	const valid = `{"type":"tool_use","part":{"type":"tool","tool":"task","state":{"status":"error","error":"unsupported-capability"}}}`
+	tests := []struct {
+		name     string
+		output   string
+		launches int
+		want     bool
+		wantErr  bool
+	}{
+		{name: "exact task rejection", output: valid, want: true},
+		{name: "malformed JSON", output: `{`, wantErr: true},
+		{name: "missing event", output: `{"type":"text"}`},
+		{name: "wrong tool", output: strings.Replace(valid, `"tool":"task"`, `"tool":"bash"`, 1)},
+		{name: "wrong status", output: strings.Replace(valid, `"status":"error"`, `"status":"completed"`, 1)},
+		{name: "unrelated substring", output: strings.Replace(valid, "unsupported-capability", "unrelated unsupported-capability diagnostic", 1)},
+		{name: "rejection after launch", output: valid, launches: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := reviewerRejectedBeforeLaunch(test.output, test.launches)
+			if (err != nil) != test.wantErr || got != test.want {
+				t.Fatalf("reviewerRejectedBeforeLaunch() = (%t, %v), want (%t, error=%t)", got, err, test.want, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestOpenCodeFixtureRecognizesReviewerRequest(t *testing.T) {
+	fixture := newOpenCodeFixtureServer(t, nil, "GENTLE_AI_REVIEWER_LAUNCH_PROBE")
+	defer fixture.Close()
+	assertFixtureRecognizesReviewerRequest(t, fixture, "GENTLE_AI_REVIEWER_LAUNCH_PROBE")
+}
+
+func assertFixtureRecognizesReviewerRequest(t *testing.T, fixture *openCodeFixtureServer, prompt string) {
+	t.Helper()
+	if !fixture.isSubagent(openAIRequest{Messages: []openAIMessage{{Role: "user", Content: prompt}}}) {
+		t.Fatal("reviewer launch detector does not recognize a representative child request")
+	}
 }
 
 func generatedOpenCodeReviewConfig(t *testing.T, settingsPath, serverURL string) string {

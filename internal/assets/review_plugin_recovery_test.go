@@ -189,7 +189,7 @@ func TestReviewPluginRejectsInvalidBindingBeforeReviewerLaunch(t *testing.T) {
 
 func TestReviewPluginRejectsUnsupportedInspectionBeforeReviewerLaunch(t *testing.T) {
 	message := runReviewPluginScenario(t, "before-valid", "NATIVE-PROCESS-MUST-NOT-RUN")
-	if !strings.Contains(message, "unsupported-capability") || !strings.Contains(message, "The reviewer was not launched") {
+	if message != "unsupported-capability" {
 		t.Fatalf("unsupported inspection did not stop before reviewer launch: %s", message)
 	}
 	if strings.Contains(message, "NATIVE-PROCESS-MUST-NOT-RUN") {
@@ -239,7 +239,7 @@ func TestReviewPluginPostLaunchTrustRefusalStaysActionable(t *testing.T) {
 
 func TestReviewPluginStopsBeforeNativeGitTrustPreflight(t *testing.T) {
 	message := runReviewPluginScenario(t, "before-opaque", reviewPluginNativeTrustFailure)
-	if !strings.Contains(message, "unsupported-capability") || !strings.Contains(message, "The reviewer was not launched") {
+	if message != "unsupported-capability" {
 		t.Fatalf("plugin did not stop before native trust preflight: %s", message)
 	}
 	if strings.Contains(message, "git_repository_untrusted") {
@@ -412,10 +412,7 @@ func TestReviewPluginStopsBeforeOpaquePreflight(t *testing.T) {
 	leak := "repository_context_unavailable: provider-issued review repository context operation failed; " +
 		"failed under /home/someone/private/repo"
 	message := runReviewPluginScenario(t, "before-opaque", leak)
-	if strings.Contains(message, "/home/someone/private/repo") {
-		t.Fatalf("plugin forwarded an unreachable native failure: %s", message)
-	}
-	if !strings.Contains(message, "unsupported-capability") {
+	if message != "unsupported-capability" {
 		t.Fatalf("plugin did not stop before opaque preflight: %s", message)
 	}
 }

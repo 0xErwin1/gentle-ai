@@ -468,10 +468,7 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
       throw new Error("bound review tasks must run in the foreground for native result capture")
     }
     parseBinding(output.args.prompt, output.args.subagent_type)
-    throw new Error(
-      `${REVIEW_OUTCOME.UNSUPPORTED_CAPABILITY}: OpenCode cannot securely bind immutable candidate inspection ` +
-      `to this reviewer session. The reviewer was not launched; stop without a shell, another provider, a live worktree, or a synthetic completion.`,
-    )
+    throw new Error(REVIEW_OUTCOME.UNSUPPORTED_CAPABILITY)
   },
   "tool.execute.after": async (input, output) => {
     if (input.tool !== "task" || typeof input.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(input.args.subagent_type)) return
