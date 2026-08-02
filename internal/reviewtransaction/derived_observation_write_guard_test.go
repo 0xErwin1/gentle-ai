@@ -41,13 +41,24 @@ var derivedObservationGuardFiles = []string{
 	"new_lineage_discovery.go", "candidate_relation.go", "candidate_identity.go",
 }
 
-// derivedObservationWritePrimitives are exact "pkg.Func" write/marshal
-// calls the guard forbids a DeriveObservation-derived value from reaching.
+// derivedObservationWritePrimitives are the exact write/marshal calls the
+// guard forbids a DeriveObservation-derived value from reaching: "pkg.Func"
+// for a package-qualified call (json.Marshal, os.WriteFile), or the bare
+// function name for a same-package call. writeAtomic and publishImmutable
+// (W11 remediation) are exactly HOW authority_store.go persists
+// review-state.json and review-receipt.json — the doc comment above always
+// claimed them in scope, but the scanner's original callee resolution
+// (shadowCallExprName, selector-only) could never match a bare identifier
+// call, so neither was ever actually checked. Proven by mutation: adding
+// `writeAtomic(path, []byte(observation.Relation), 0o644)` to
+// authority_store.go left the pre-fix guard green.
 var derivedObservationWritePrimitives = map[string]bool{
 	"json.Marshal":       true,
 	"json.MarshalIndent": true,
 	"os.WriteFile":       true,
 	"ioutil.WriteFile":   true,
+	"writeAtomic":        true,
+	"publishImmutable":   true,
 }
 
 // TestDerivedObservationWriteGuardCatchesMarshalShapes unit-tests the
@@ -105,6 +116,31 @@ import "os"
 func derivedWritesToFile(authority NewLineageAuthority, live CandidateIdentity, evidence CoreValidateEvidence) error {
 	observation := DeriveObservation(authority, live, evidence)
 	return os.WriteFile("path", []byte(observation.Relation), 0o644)
+}
+`,
+			wantViolation: true,
+		},
+		{
+			// W11: writeAtomic and publishImmutable are same-package bare
+			// calls, not "pkg.Func" selector calls — the exact shape the
+			// original guard's callee resolution could never match.
+			name: "writes a DeriveObservation result via writeAtomic",
+			src: `package reviewtransaction
+
+func derivedWritesAtomicDirectly(authority NewLineageAuthority, live CandidateIdentity, evidence CoreValidateEvidence) error {
+	observation := DeriveObservation(authority, live, evidence)
+	return writeAtomic("path", []byte(observation.Relation), 0o644)
+}
+`,
+			wantViolation: true,
+		},
+		{
+			name: "publishes a DeriveObservation result via publishImmutable",
+			src: `package reviewtransaction
+
+func derivedPublishesImmutableDirectly(authority NewLineageAuthority, live CandidateIdentity, evidence CoreValidateEvidence) error {
+	observation := DeriveObservation(authority, live, evidence)
+	return publishImmutable("path", []byte(observation.Relation), 0o644)
 }
 `,
 			wantViolation: true,
@@ -190,7 +226,7 @@ func scanDerivedObservationWriteTree(fileSet *token.FileSet, tree *ast.File) []s
 					}
 				}
 			case *ast.CallExpr:
-				callee := shadowCallExprName(stmt)
+				callee := derivedObservationCallExprName(stmt)
 				if callee == "" || !derivedObservationWritePrimitives[callee] {
 					return true
 				}
@@ -205,6 +241,24 @@ func scanDerivedObservationWriteTree(fileSet *token.FileSet, tree *ast.File) []s
 		return true
 	})
 	return violations
+}
+
+// derivedObservationCallExprName returns the callee name to match against
+// derivedObservationWritePrimitives: "pkg.Func" for a package-qualified call
+// (delegating to shadowCallExprName, the shadow guard's own selector-only
+// resolution — json.Marshal, os.WriteFile), or the bare identifier itself
+// for a same-package call (W11: writeAtomic, publishImmutable — exactly the
+// two authority_store.go actually uses, and exactly what
+// shadowCallExprName's selector-only lookup could never see). Anything else
+// (method calls on a value, etc.) returns "".
+func derivedObservationCallExprName(call *ast.CallExpr) string {
+	if callee := shadowCallExprName(call); callee != "" {
+		return callee
+	}
+	if ident, ok := call.Fun.(*ast.Ident); ok {
+		return ident.Name
+	}
+	return ""
 }
 
 // derivedObservationCallExpr reports whether expr is a call to

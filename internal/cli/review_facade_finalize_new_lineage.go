@@ -44,10 +44,24 @@ type ReviewFacadeFinalizeNewLineageResult struct {
 // drives directly against the Go API — this function is the CLI wiring that
 // test's own comment noted was still missing.
 //
-// A lineage already `correcting` is refused rather than silently folded into
-// the terminal decision: resolving an in-flight bounded correction is
-// `review validate`'s job (ReviewCore.validate's ErrOneCorrectionOnly
-// boundary) — finalize must never race ahead of that open question.
+// A lineage already `correcting` now finalizes through the identical
+// AdvanceRequest path as reviewing/validating (W14 remediation): the one
+// bounded correction it already spent (ReviewCore.validate's
+// ErrOneCorrectionOnly boundary, enforced at validate time, not here) is
+// consumed by this finalize the same way a plain reviewing lineage's review
+// is — refusing it outright, as this function previously did, left
+// `correcting` unreachable and unfinalizable through the product, breaking
+// spec scenario "In-flight new lineage still finalizes after rollback"
+// (whose GIVEN is literally a `correcting` lineage) at the product surface.
+//
+// C6 remediation (verify-report CRITICAL, "ReviewCore-owned transitions in
+// finalize"): this function no longer sets NewLineageState itself. It
+// classifies findings (AdmitCandidateCausalFindings — pure, not a state
+// decision) and hands the result to ReviewCore.Next(finalize) via
+// CoreRequest.AdvanceRequest; ReviewCore alone decides the resulting
+// authority, and the ONE Mutate call below stores it verbatim
+// (`*next = *transition.Authority`), mirroring runReviewFacadeStartNewLineage's
+// own precedent (review_facade_new_lineage.go:73-78) exactly.
 func runReviewFacadeFinalizeNewLineage(
 	ctx context.Context, stdout io.Writer, root, lineage string, record reviewtransaction.NewLineageRecord,
 	findings []reviewtransaction.FindingEvidence, failed bool,
@@ -59,51 +73,29 @@ func runReviewFacadeFinalizeNewLineage(
 	authority := record.Authority
 	revision := record.Revision
 
-	if authority.State == reviewtransaction.NewLineageStateCorrecting {
-		return fmt.Errorf("new-lineage finalize requires the in-flight bounded correction to resolve through review validate first: lineage %q is correcting", lineage) // refusal:by-design world-action: resolving a bounded correction is review validate's job (ReviewCore.validate's changed/correcting boundary and AuthorityStore's ErrOneCorrectionOnly); finalize is never the place to force one, so the fix is calling review validate again, not this command
-	}
-
-	if authority.State != reviewtransaction.NewLineageStateApproved && authority.State != reviewtransaction.NewLineageStateEscalated {
-		admitted, _ := reviewtransaction.AdmitCandidateCausalFindings(findings)
-		terminalState := reviewtransaction.NewLineageStateApproved
-		if failed || len(admitted) > 0 {
-			terminalState = reviewtransaction.NewLineageStateEscalated
-		}
-		// design's own finalize data flow ("no-blocker -> validating ->
-		// approved"): advance through validating explicitly rather than
-		// jumping reviewing -> terminal directly, so review-state.json's
-		// state field genuinely visits the intermediate persisted state
-		// (task C4's five-persisted-states lifecycle evidence) instead of
-		// only ever proving the two endpoints.
-		revision, err = store.Mutate(ctx, revision, func(next *reviewtransaction.NewLineageAuthority) error {
-			next.State = reviewtransaction.NewLineageStateValidating
-			return nil
-		})
-		if err != nil {
-			return fmt.Errorf("advance new-lineage authority to validating: %w", err)
-		}
-		revision, err = store.Mutate(ctx, revision, func(next *reviewtransaction.NewLineageAuthority) error {
-			next.State = terminalState
-			if len(admitted) > 0 {
-				next.AdmittedFindingIDs = append(append([]string{}, next.AdmittedFindingIDs...), admitted...)
-			}
-			return nil
-		})
-		if err != nil {
-			return fmt.Errorf("advance new-lineage authority to %s: %w", terminalState, err)
-		}
-	}
-
-	record, err = store.Load()
-	if err != nil {
-		return err
-	}
-	transition, err := (reviewtransaction.ReviewCore{}).Next(ctx, record.Authority, reviewtransaction.CoreRequest{Kind: reviewtransaction.CoreRequestFinalize})
+	admitted, _ := reviewtransaction.AdmitCandidateCausalFindings(findings)
+	transition, err := (reviewtransaction.ReviewCore{}).Next(ctx, authority, reviewtransaction.CoreRequest{
+		Kind:           reviewtransaction.CoreRequestFinalize,
+		AdvanceRequest: &reviewtransaction.FinalizeAdvanceRequest{Failed: failed, AdmittedFindingIDs: admitted},
+	})
 	if err != nil {
 		return fmt.Errorf("review core finalize: %w", err)
 	}
+	if transition.Authority != nil {
+		revision, err = store.Mutate(ctx, revision, func(next *reviewtransaction.NewLineageAuthority) error {
+			*next = *transition.Authority
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("advance new-lineage authority to %s: %w", transition.Authority.State, err)
+		}
+	}
 	if transition.Receipt == nil {
-		return fmt.Errorf("review core finalize returned no receipt for terminal state %q", record.Authority.State) // refusal:by-design world-action: ReviewCore.finalize always returns a non-nil Receipt for an approved/escalated authority (review_core.go); anything else reaching here is a bug in that code, fixed by editing it, not an operator command
+		return fmt.Errorf("review core finalize returned no receipt for terminal state %q", authority.State) // refusal:by-design world-action: ReviewCore.finalize always returns a non-nil Receipt for an approved/escalated authority or an explicit AdvanceRequest (review_core.go); anything else reaching here is a bug in that code, fixed by editing it, not an operator command
+	}
+	record, err = store.Load()
+	if err != nil {
+		return err
 	}
 	if err := store.WriteReceipt(ctx, reviewtransaction.NewLineageReceipt{
 		Schema: reviewtransaction.NewLineageReceiptSchema, LineageID: record.Authority.LineageID,
