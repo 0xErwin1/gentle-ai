@@ -94,29 +94,58 @@ func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateIn
 // one of its five gate call sites (shadow_observer.go) rather than
 // rebuilding a gate-specific target a second time.
 //
-// Scope note (S4/task 5.4): this is a workspace-only resolution, not the
-// gate-target-accurate selector each of the five gates' own legacy discovery
-// already composes (staged for pre-commit, committed-range for pre-push/
-// pre-pr/release). Wave 3 Slice 5's bench journeys (task 6.7) are the
-// declared place to widen this to per-gate accuracy; S4's own task list
-// requires only the governance decision itself (Amendment C) and the
-// continue/escalate shapes the switch-off-equivalence goldens exercise
-// without ever reaching this function (no explicit --lineage marker means
-// resolveGoverningAuthority returns before this is ever called).
+// Task 6.7 widens S4's own documented scope cut one step: pre-commit reads
+// the STAGED (index) projection, exactly matching
+// buildCompactGateRequestWithPushBase's own `if input.Gate == GatePreCommit {
+// projection = ProjectionStaged }` branch (compact_gate.go) — pre-commit
+// commits the index, not the live working tree, so a dirty unstaged edit made
+// after start must never be read as a scope change here.
+//
+// The remaining three gates (post-apply, pre-push, pre-pr, release) still
+// resolve the full live workspace target, not each gate's own
+// committed-range/push-boundary/pre-PR-boundary composition
+// (buildPushTarget, buildPrePRTarget) — those selectors additionally depend
+// on recovery-chain rebinding and squashed-delivery detection that has no
+// v3 analogue yet (new-lineage authority carries no recovery chain concept
+// in this wave). Widening them without that supporting machinery would
+// silently misclassify a legitimately-delivered push/PR candidate rather
+// than correctly defer, which is worse than the current workspace-only
+// approximation. This narrower scope is documented here rather than
+// silently left as S4's original blanket note.
 func governingAuthorityLiveEvidence(ctx context.Context, repo string, gateInput reviewtransaction.NativeGateRequestInput) (reviewtransaction.CandidateIdentity, reviewtransaction.CoreValidateEvidence, error) {
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
 	intendedUntracked := gateInput.IntendedUntracked
 	if intendedUntracked == nil {
 		intendedUntracked = []string{}
 	}
+	projection := reviewtransaction.ProjectionWorkspace
+	if gateInput.Gate == reviewtransaction.GatePreCommit {
+		projection = reviewtransaction.ProjectionStaged
+	}
 	snapshot, err := builder.Build(ctx, reviewtransaction.Target{
-		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace,
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: projection,
 		IntendedUntracked: intendedUntracked,
 	})
 	if err != nil {
 		return reviewtransaction.CandidateIdentity{}, reviewtransaction.CoreValidateEvidence{}, err
 	}
-	live, err := reviewtransaction.FreezeCandidateIdentity(ctx, repo, snapshot, "")
+	// Task 6.7 fix: an empty policyHash here defaulted to the sentinel
+	// "unknown" inside FreezeCandidateIdentity, which never equals the real
+	// default-policy digest runReviewFacadeStartNewLineage froze at start
+	// (facadePayloadHash(facadePolicyBytes(""))). That made every ordinary
+	// gate call — including a genuinely unchanged candidate — report
+	// "changed" instead of "exact", because CandidateIdentity's equality
+	// check (relateCandidates, candidate_relation.go) includes PolicyHash.
+	// This had never been exercised before this slice: S4's own tests never
+	// drove an explicit --lineage marker through to this function at all.
+	// Resolving the identical policy source ordinary START uses — the
+	// caller-supplied policy artifact when present, the built-in default
+	// otherwise — is what makes an unchanged candidate compare equal again.
+	policy, err := facadePolicyBytes(gateInput.PolicyArtifact)
+	if err != nil {
+		return reviewtransaction.CandidateIdentity{}, reviewtransaction.CoreValidateEvidence{}, err
+	}
+	live, err := reviewtransaction.FreezeCandidateIdentity(ctx, repo, snapshot, facadePayloadHash(policy))
 	if err != nil {
 		return reviewtransaction.CandidateIdentity{}, reviewtransaction.CoreValidateEvidence{}, err
 	}
@@ -124,12 +153,32 @@ func governingAuthorityLiveEvidence(ctx context.Context, repo string, gateInput 
 }
 
 // newLineageGateEvaluation translates a ReviewCore validate CoreTransition
-// into gate JSON. It covers exactly the two shapes reachable from S4's own
-// task list: continue (allow) and escalate. Every other CoreTransitionKind
-// (collect/approve/repair/stop) is denied with its transition kind named as
-// the reason code rather than silently mapped to allow — the full
-// CoreTransition-to-reason-taxonomy mapping for those kinds is Wave 3 Slice
-// 5's task 6.2, reused rather than duplicated here (design decision 7).
+// into gate JSON (design decision 7, task 6.2 — folds in and replaces S4's
+// generic default branch). Every one of CoreTransitionKind's six values has
+// its own explicit case below — the trailing default exists only as a
+// fail-closed guard against a hypothetical future seventh value, never to
+// silently absorb one of the six that already exist:
+//
+//   - continue (exact/compatible_base_advance/provable_contraction) allows —
+//     the legacy analogue of a receipt that still governs exactly.
+//   - collect (changed) reports scope-changed, not invalidated: this is the
+//     new-lineage equivalent of legacy's receipt_scope_changed, which
+//     resolveGoverningAuthorityLiveEvidence-driven relateCandidates reaches
+//     the same way legacy's own scope-changed detection does. A bounded
+//     correction is what a scope-changed candidate asks for, not a bare
+//     denial.
+//   - escalate (ambiguous/unknown/unrelated) escalates. This is a
+//     deliberate STRENGTHENING over legacy: legacy's receipt_ambiguous and
+//     receipt_unrelated both collapse into a generic invalidated denial,
+//     while the new model's relation algebra can tell an operator the
+//     specific reason an escalation-worthy relation was reached. Both are
+//     still non-allow refusals; nothing here is silently permissive.
+//   - approve/repair/stop are UNREACHABLE from ReviewCore's validate() (only
+//     its finalize() ever returns approve, and repair/stop are not returned
+//     by any Next() path this gate reaches) — they get their own explicit
+//     denial cases rather than sharing a default, so a future change to
+//     validate()'s own switch that starts returning one of them fails loud
+//     here instead of silently reusing a catch-all.
 func newLineageGateEvaluation(gate reviewtransaction.GateKind, record reviewtransaction.NewLineageRecord, transition reviewtransaction.CoreTransition) reviewtransaction.NativeGateEvaluation {
 	context := reviewtransaction.GateContext{
 		Gate: gate, LineageID: record.Authority.LineageID, StoreRevision: record.Revision,
@@ -139,9 +188,15 @@ func newLineageGateEvaluation(gate reviewtransaction.GateKind, record reviewtran
 	switch transition.Kind {
 	case reviewtransaction.CoreTransitionContinue:
 		return reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateAllow, Reason: transition.ReasonCode, Context: context}
+	case reviewtransaction.CoreTransitionCollect:
+		context.Denial = &reviewtransaction.GateDenial{Stage: "new-lineage-validate", Code: transition.ReasonCode}
+		return reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateScopeChanged, Reason: transition.ReasonCode, Context: context}
 	case reviewtransaction.CoreTransitionEscalate:
 		context.Denial = &reviewtransaction.GateDenial{Stage: "new-lineage-validate", Code: transition.ReasonCode}
 		return reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateEscalated, Reason: transition.ReasonCode, Context: context}
+	case reviewtransaction.CoreTransitionApprove, reviewtransaction.CoreTransitionRepair, reviewtransaction.CoreTransitionStop:
+		context.Denial = &reviewtransaction.GateDenial{Stage: "new-lineage-validate", Code: string(transition.Kind)}
+		return reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateInvalidated, Reason: transition.ReasonCode, Context: context}
 	default:
 		context.Denial = &reviewtransaction.GateDenial{Stage: "new-lineage-validate", Code: string(transition.Kind)}
 		return reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateInvalidated, Reason: transition.ReasonCode, Context: context}
