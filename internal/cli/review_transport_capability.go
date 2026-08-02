@@ -18,9 +18,8 @@ var reviewImmutableTransportUnsupportedReason = reviewPreflightReason{
 type reviewImmutableTransport string
 
 const (
-	reviewImmutableTransportUnsupported           reviewImmutableTransport = "unsupported"
-	reviewImmutableTransportClaudePromptCarried   reviewImmutableTransport = "claude_prompt_carried"
-	reviewImmutableTransportManagedOpenCodePlugin reviewImmutableTransport = "managed_opencode_plugin"
+	reviewImmutableTransportUnsupported         reviewImmutableTransport = "unsupported"
+	reviewImmutableTransportClaudePromptCarried reviewImmutableTransport = "claude_prompt_carried"
 )
 
 type reviewImmutableRuntimePolicy struct {
@@ -37,15 +36,15 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 	case model.AgentCodex:
 		return reviewImmutableRuntimePolicy{Eligible: true, Transport: reviewImmutableTransportUnsupported}
 	case model.AgentOpenCode:
-		return reviewImmutableRuntimePolicy{Eligible: true, Transport: reviewImmutableTransportManagedOpenCodePlugin}
+		// #2076 owns a future documented exact child-session binding.
+		return reviewImmutableRuntimePolicy{Eligible: true, Transport: reviewImmutableTransportUnsupported}
 	default:
 		return reviewImmutableRuntimePolicy{Transport: reviewImmutableTransportUnsupported}
 	}
 }
 
 func (capability reviewImmutableRuntimePolicy) supportsImmutableReceiptReview() bool {
-	return capability.Transport == reviewImmutableTransportClaudePromptCarried ||
-		capability.Transport == reviewImmutableTransportManagedOpenCodePlugin
+	return capability.Transport == reviewImmutableTransportClaudePromptCarried
 }
 
 // reviewRuntimeWithImmutableTransport accepts only the exact compiled runtime

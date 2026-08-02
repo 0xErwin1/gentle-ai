@@ -922,7 +922,7 @@ func boundNegotiatedStartArgs(t *testing.T, args []string) []string {
 		}
 	}
 	if hasV2Contract && !hasAgent {
-		bound = append(bound, "--agent", "opencode")
+		bound = append(bound, "--agent", "claude-code")
 	}
 	cwd, projection, baseRef := ".", reviewtransaction.ProjectionWorkspace, ""
 	overlay, projectionProvided := false, false

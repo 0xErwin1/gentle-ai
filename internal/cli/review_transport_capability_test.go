@@ -18,8 +18,8 @@ func TestImmutableReviewRuntimeMatrix(t *testing.T) {
 		transport reviewImmutableTransport
 		supported bool
 	}{
-		{name: "OpenCode managed plugin", runtime: string(model.AgentOpenCode), eligible: true, transport: reviewImmutableTransportManagedOpenCodePlugin, supported: true},
 		{name: "Claude prompt carried", runtime: string(model.AgentClaudeCode), eligible: true, transport: reviewImmutableTransportClaudePromptCarried, supported: true},
+		{name: "OpenCode is pending #2076", runtime: string(model.AgentOpenCode), eligible: true, transport: reviewImmutableTransportUnsupported},
 		{name: "Codex is pending #2208", runtime: string(model.AgentCodex), eligible: true, transport: reviewImmutableTransportUnsupported},
 		{name: "Pi", runtime: string(model.AgentPi), transport: reviewImmutableTransportUnsupported},
 		{name: "Kilo", runtime: string(model.AgentKilocode), transport: reviewImmutableTransportUnsupported},
@@ -54,6 +54,7 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 		name    string
 		runtime string
 	}{
+		{name: "OpenCode", runtime: string(model.AgentOpenCode)},
 		{name: "Codex", runtime: string(model.AgentCodex)},
 		{name: "Pi", runtime: string(model.AgentPi)},
 		{name: "Kilo", runtime: string(model.AgentKilocode)},
@@ -96,7 +97,7 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 
 	repo := initReviewCLIRepo(t)
 	for _, args := range [][]string{
-		{"status", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentPi), "--next-transition", "--cwd", repo},
+		{"status", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentOpenCode), "--next-transition", "--cwd", repo},
 		{"start", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentCodex), "--target", target, "--projection", "workspace", "--cwd", repo},
 	} {
 		if err := RunReview(args, &bytes.Buffer{}); err == nil {
@@ -113,7 +114,7 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 }
 
 func TestSupportedImmutableReviewRuntimeIsCarriedIntoV2Start(t *testing.T) {
-	for _, runtime := range []string{string(model.AgentOpenCode), string(model.AgentClaudeCode)} {
+	for _, runtime := range []string{string(model.AgentClaudeCode)} {
 		t.Run(runtime, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
 			writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n", 0o644)

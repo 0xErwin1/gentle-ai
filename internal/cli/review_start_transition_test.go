@@ -86,7 +86,7 @@ func TestNegotiatedV2FreshStatusIncludesExactConsentRelay(t *testing.T) {
 		" --target=" + status.TargetIdentity +
 		" --projection=workspace" +
 		" --lineage=status-v2-consent-relay" +
-		" --agent=opencode" +
+		" --agent=claude-code" +
 		" --consent=relay"
 	if status.NextTransition.Execute.Command != wantCommand {
 		t.Fatalf("v2 START command = %q, want %q", status.NextTransition.Execute.Command, wantCommand)
@@ -248,7 +248,7 @@ func negotiatedStartStatusForContract(t *testing.T, repo, contract string, selec
 	t.Helper()
 	args := []string{"status", "--contract", contract, "--next-transition", "--action-eligibility", "--cwd", repo}
 	if contract == ReviewIntegrationContractV2 {
-		args = append(args, "--agent", "opencode")
+		args = append(args, "--agent", "claude-code")
 	}
 	args = append(args, selectors...)
 	var output bytes.Buffer
