@@ -94,6 +94,54 @@ func TestInspectCompactRecoveryEdges(t *testing.T) {
 		}
 	})
 }
+
+// TestLoadCompactRecoveryRecordsIsTheSingleSeam satisfies tasks.md 1.1
+// (mandatory obligation (a)): InspectCompactRecoveryEdges and
+// deriveAuthorityDispositionPlanAtRepo (authority_disposition_plan.go) MUST
+// both call loadCompactRecoveryRecords for their report/records inputs, and
+// no independent second record-loading path may feed either one. It proves
+// this the same way review_inspect_authority_test.go proves a single-call
+// domain: swap the package-level seam var for an instrumented wrapper and
+// count calls plus compare the exact report/record content each caller saw.
+func TestLoadCompactRecoveryRecordsIsTheSingleSeam(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	forgedRecoveryPair(t, repo, "seam", "seam target\n")
+
+	original := loadCompactRecoveryRecords
+	t.Cleanup(func() { loadCompactRecoveryRecords = original })
+	calls := 0
+	var seenReports []CompactRecoveryInspectionReport
+	var seenRecordCounts []int
+	loadCompactRecoveryRecords = func(ctx context.Context, gotRepo string) (CompactRecoveryInspectionReport, map[string]CompactRecord, error) {
+		calls++
+		report, records, err := original(ctx, gotRepo)
+		seenReports = append(seenReports, report)
+		seenRecordCounts = append(seenRecordCounts, len(records))
+		return report, records, err
+	}
+
+	ctx := context.Background()
+	if _, err := InspectCompactRecoveryEdges(ctx, repo); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "maintainer@example.com", "quarantine forged recovery authorization"); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("loadCompactRecoveryRecords calls = %d, want 2 (one per caller, no independent second load path)", calls)
+	}
+	firstJSON, err := json.Marshal(seenReports[0])
+	inspectNoError(t, err)
+	secondJSON, err := json.Marshal(seenReports[1])
+	inspectNoError(t, err)
+	if string(firstJSON) != string(secondJSON) {
+		t.Fatalf("InspectCompactRecoveryEdges and deriveAuthorityDispositionPlanAtRepo saw different report content through the seam:\n%s\n%s", firstJSON, secondJSON)
+	}
+	if seenRecordCounts[0] != seenRecordCounts[1] {
+		t.Fatalf("InspectCompactRecoveryEdges and deriveAuthorityDispositionPlanAtRepo saw different record counts through the seam: %d vs %d", seenRecordCounts[0], seenRecordCounts[1])
+	}
+}
+
 func TestCompactRecoveryInspectionCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

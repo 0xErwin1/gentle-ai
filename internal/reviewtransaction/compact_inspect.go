@@ -82,26 +82,45 @@ type CompactRecoveryEntryDiagnostic struct {
 // against authority maintenance. Complete covers the initial directory pass,
 // not an atomic snapshot, so mutating consumers must re-read under lock/CAS.
 func InspectCompactRecoveryEdges(ctx context.Context, repo string) (CompactRecoveryInspectionReport, error) {
+	report, _, err := loadCompactRecoveryRecords(ctx, repo)
+	return report, err
+}
+
+// loadCompactRecoveryRecords is the ONE read-only pass that loads every
+// compact-v2 record from repo's authority root AND classifies every recovery
+// edge over that exact record set, returning the fully inspected report
+// alongside the loaded records. It is a package-level var, not a plain func,
+// so a test can prove — by counting calls through a swapped implementation —
+// that it is the ONLY function InspectCompactRecoveryEdges and
+// deriveAuthorityDispositionPlanAtRepo (authority_disposition_plan.go) call
+// for their report/records inputs: no second, independent record-loading
+// path ever feeds graph inspection or plan derivation with a different view
+// of the store (Wave 2 tasks.md mandatory obligation (a)).
+//
+// This is InspectCompactRecoveryEdges's former body verbatim, only moved
+// down one level with InspectCompactRecoveryEdges left as a thin wrapper: no
+// inspection semantics or JSON output changed by this extraction.
+var loadCompactRecoveryRecords = func(ctx context.Context, repo string) (CompactRecoveryInspectionReport, map[string]CompactRecord, error) {
 	report := CompactRecoveryInspectionReport{Complete: true, Valid: true, Edges: []CompactRecoveryEdgeInspection{}, EntryDiagnostics: []CompactRecoveryEntryDiagnostic{}}
 	base, root, err := reviewAuthorityRoot(ctx, repo)
 	if err != nil {
-		return report, err
+		return report, nil, err
 	}
 	if err := ensureNoPreparedCompactBatchReconciliation(base); err != nil {
-		return report, err
+		return report, nil, err
 	}
 	versionRoot := filepath.Join(base, "v2")
 	entries, err := os.ReadDir(versionRoot)
 	if os.IsNotExist(err) {
-		return report, nil
+		return report, map[string]CompactRecord{}, nil
 	}
 	if err != nil {
-		return report, fmt.Errorf("inspect compact authority v2 root: %w", err)
+		return report, nil, fmt.Errorf("inspect compact authority v2 root: %w", err)
 	}
 	records := make(map[string]CompactRecord, len(entries))
 	for _, entry := range entries {
 		if err := ctx.Err(); err != nil {
-			return report, err
+			return report, nil, err
 		}
 		if !entry.IsDir() {
 			if entry.Name() != "LOCK" {
@@ -124,7 +143,8 @@ func InspectCompactRecoveryEdges(ctx context.Context, repo string) (CompactRecov
 		report.Totals.LoadedEntries++
 		records[record.State.LineageID] = record
 	}
-	return inspectCompactRecoveryRecordSet(ctx, records, report)
+	report, err = inspectCompactRecoveryRecordSet(ctx, records, report)
+	return report, records, err
 }
 
 // SanctionedCompactRecoveryExits resolves, for every invalid edge in one
