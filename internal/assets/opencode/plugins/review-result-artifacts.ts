@@ -5,6 +5,7 @@ const REVIEW_AGENTS = new Set(["review-risk", "review-resilience", "review-reada
 const BINDING = /^GENTLE_AI_REVIEW_BINDING (\{[^\n]+\})(?:\n|$)/
 const TASK_RESULT = /^<task id="[^"\r\n]+" state="completed">\n<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/
 const TASK_TAG = /<\/?task(?:\s|>)|<\/?task_result>/
+const REVIEW_OUTCOME = { UNSUPPORTED_CAPABILITY: "unsupported-capability" } as const
 
 type ReviewBinding = {
   lineage: string
@@ -466,10 +467,10 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
     if (output.args.background === true) {
       throw new Error("bound review tasks must run in the foreground for native result capture")
     }
-    output.args.prompt = await injectReviewerContext(
-      output.args.prompt,
-      output.args.subagent_type,
-      captureCwd(worktree, directory),
+    parseBinding(output.args.prompt, output.args.subagent_type)
+    throw new Error(
+      `${REVIEW_OUTCOME.UNSUPPORTED_CAPABILITY}: OpenCode cannot securely bind immutable candidate inspection ` +
+      `to this reviewer session. The reviewer was not launched; stop without a shell, another provider, a live worktree, or a synthetic completion.`,
     )
   },
   "tool.execute.after": async (input, output) => {

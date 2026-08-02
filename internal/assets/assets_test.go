@@ -484,7 +484,7 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`artifact_subject`,
 		`GENTLE_AI_REVIEW_CONTEXT`,
 		`validManifest(manifest)`,
-		`output.args.prompt = await injectReviewerContext(`,
+		`REVIEW_OUTCOME.UNSUPPORTED_CAPABILITY`,
 		`"--lineage", binding.lineage`,
 		`"--target", binding.target`,
 		`"--lens", binding.lens`,

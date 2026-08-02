@@ -795,7 +795,7 @@ func inlineOpenCodeSDDPrompts(overlayBytes []byte, homeDir, settingsPath string,
 	if !ok {
 		return overlayBytes, nil
 	}
-	expandOpenCodeBoundedReviewAgents(agentsMap)
+	expandOpenCodeBoundedReviewAgents(agentsMap, agent)
 
 	// Inline the orchestrator prompt (always inlined, not a file reference),
 	// unless an external strategy requested preserving the existing prompt.
@@ -935,10 +935,17 @@ func extractManagedSection(content, sectionID string) string {
 	return strings.Trim(content[start+len(open):end], "\n")
 }
 
-func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any) {
+func expandOpenCodeBoundedReviewAgents(agentsMap map[string]any, agentID model.AgentID) {
 	for _, name := range opencode.ReviewLensPhases() {
 		agent, ok := agentsMap[name].(map[string]any)
 		if !ok {
+			continue
+		}
+		if agentID == model.AgentOpenCode {
+			prompt, _ := openCodeUnsupportedReviewerPrompt(name)
+			agent["prompt"] = prompt
+			agent["tools"] = map[string]any{"*": false, "read": true, "write": false, "edit": false, "bash": false, "task": false}
+			agent["permission"] = map[string]any{"edit": "deny", "bash": "deny"}
 			continue
 		}
 		prompt, _ := reviewerPrompt(name)
