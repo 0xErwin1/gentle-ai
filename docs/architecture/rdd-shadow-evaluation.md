@@ -16,7 +16,7 @@ Shadow evaluation runs the target seven-value relation model (`internal/reviewtr
 | Does | Resolves a live `CandidateIdentity`, computes a `ShadowRelation`, classifies authority graph health, and records the result — in memory, for that process only. |
 | Never does | Blocks, delays, or alters a live consent prompt, gate result, receipt, or authority mutation. An internal shadow failure is always swallowed and recorded as advisory evidence; it can never surface as a live-path error. |
 
-The disable switch is Wave 1's rollback boundary: unsetting `GENTLE_AI_RDD_SHADOW` makes every live decision byte-identical to a build with no shadow code at all (proven by `TestShadowObservationSwitchIsRollbackBoundaryGateByteIdentical`).
+The disable switch is Wave 1's rollback boundary: unsetting `GENTLE_AI_RDD_SHADOW` makes every live decision byte-identical to a build with no shadow code at all (proven by `TestShadowObservationSwitchIsRollbackBoundaryGateByteIdentical` for the post-apply/pre-commit/release call sites and `TestNativePrePRGateShadowOnOffByteIdenticalForCompatibleBaseAdvance` for the pre-PR/pre-push gate kind, the only family where shadow evaluation performs additional Git work). Zero shadow Git cost by default is separately proven by `TestNativePrePRGateWithShadowDisabledDerivesBaseAdvanceZeroTimes`.
 
 ## The stderr line format
 
