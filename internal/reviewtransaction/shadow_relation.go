@@ -11,7 +11,10 @@
 // unexported until the observer (Slice 5) needs it.
 package reviewtransaction
 
-import "context"
+import (
+	"context"
+	"sync"
+)
 
 // ShadowRelation is the exact seven-value relation vocabulary
 // (Requirement: Seven-Value Relation Output,
@@ -102,12 +105,19 @@ func shadowRelate(input shadowRelationInput) ShadowRelation {
 // to this exact Frozen/Live pair. Binding the proof to the identity tuple
 // (rather than trusting proof.valid() alone) mirrors the live classifier's
 // own pattern in classifyCompactTargetRelation (compact_target_relation.go)
-// — a stale proof for a different base pair must never be accepted.
+// — a stale proof for a different base pair must never be accepted. The
+// CandidateTree preservation check below was a discovered gap (Wave 1
+// exit-bar finding, TestShadowMatrixUnexplainedDivergenceOnCoreRelationBlocksWave2):
+// classifyCompactTargetRelation's own compatible-advance branch additionally
+// requires frozen.CandidateTree == live.CandidateTree, so a proof valid on
+// its own terms and matching the base pair but paired with a changed
+// CandidateTree must fall through, never be accepted here.
 func shadowBaseAdvanceApplies(input shadowRelationInput) bool {
 	proof := input.BaseAdvance
 	return proof != nil && proof.valid() &&
 		proof.OriginalMergeBaseTree == input.Frozen.BaseTree &&
-		proof.NewBaseTree == input.Live.BaseTree
+		proof.NewBaseTree == input.Live.BaseTree &&
+		input.Frozen.CandidateTree == input.Live.CandidateTree
 }
 
 // shadowDeriveBaseAdvance is Amendment A's delegation seam
@@ -127,11 +137,39 @@ func shadowDeriveBaseAdvance(
 	refs *resolvedPrePRRefs,
 	preimages gateArtifactPreimages,
 ) *BaseAdvanceCompatibility {
+	shadowDeriveBaseAdvanceMu.Lock()
+	shadowDeriveBaseAdvanceCallCount++
+	shadowDeriveBaseAdvanceMu.Unlock()
+
 	proof, err := deriveBaseAdvanceCompatibility(ctx, repo, receipt, request, snapshot, refs, preimages)
 	if err != nil {
 		return nil
 	}
 	return &proof
+}
+
+var (
+	shadowDeriveBaseAdvanceMu        sync.Mutex
+	shadowDeriveBaseAdvanceCallCount int
+)
+
+// shadowDeriveBaseAdvanceCallCountForTest and
+// shadowResetDeriveBaseAdvanceCallCountForTest exist only for this package's
+// own tests. They mirror shadow_observer.go's shadowObserverCallCountForTest
+// idiom: the cheapest possible proof that the live gate path (gate.go) pays
+// zero shadow-side merge-base/changedPaths/patchIdentity/merge-tree cost
+// when GENTLE_AI_RDD_SHADOW is unset — "Off by Default in Live Paths"
+// (spec.md).
+func shadowDeriveBaseAdvanceCallCountForTest() int {
+	shadowDeriveBaseAdvanceMu.Lock()
+	defer shadowDeriveBaseAdvanceMu.Unlock()
+	return shadowDeriveBaseAdvanceCallCount
+}
+
+func shadowResetDeriveBaseAdvanceCallCountForTest() {
+	shadowDeriveBaseAdvanceMu.Lock()
+	defer shadowDeriveBaseAdvanceMu.Unlock()
+	shadowDeriveBaseAdvanceCallCount = 0
 }
 
 // shadowFindingReferencesExcludedPath reports whether any admitted finding
