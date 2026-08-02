@@ -132,12 +132,8 @@ internal/reviewtransaction/rar_plan_authority.go	verificationFrozenPlanConsentDi
 internal/reviewtransaction/rdd_mode.go	AuthorizeRDDCandidate
 internal/reviewtransaction/receipt_ref.go	strictDecodeSDDReceiptRef
 internal/reviewtransaction/repository_locator.go	RepositoryIdentityLease.StorageKey
-internal/reviewtransaction/repository_locator.go	RepositoryIdentityLease.Validate
-internal/reviewtransaction/repository_locator.go	RepositoryIdentityLease.validateCapturedIdentity
 internal/reviewtransaction/repository_locator.go	locatorPathStrictlyWithin
-internal/reviewtransaction/repository_locator.go	repositoryIdentityChanged
 internal/reviewtransaction/repository_locator.go	resolveReviewRepositoryDirectory
-internal/reviewtransaction/repository_locator.go	validRepositoryIdentityLease
 internal/reviewtransaction/risk.go	deriveSemanticRiskSignals
 internal/reviewtransaction/snapshot.go	sanitizedGitEnvironment
 internal/reviewtransaction/snapshot.go	snapshotIdentity
@@ -233,6 +229,7 @@ internal/tui/router.go	NextScreen
 internal/tui/screens/claude_model_picker.go	NewClaudeModelPickerStateFromAssignments
 internal/tui/screens/codex_model_picker.go	CodexPresetDescription
 internal/tui/screens/codex_model_picker.go	HandleCodexCustomNav
+internal/tui/screens/model_picker.go	ModelPickerRows
 internal/tui/screens/model_picker.go	SeparatorRowIdx
 internal/tui/screens/upgrade.go	RenderUpgrade
 internal/tui/screens/upgrade_sync.go	RenderUpgradeSync
