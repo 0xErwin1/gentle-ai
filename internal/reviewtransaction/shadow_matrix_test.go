@@ -523,55 +523,53 @@ func TestShadowMatrixCoveringArrayGolden(t *testing.T) {
 }
 
 // TestShadowMatrixUnexplainedDivergenceOnCoreRelationBlocksWave2 is 6.4: it
-// injects one genuine unexplained divergence and asserts the exit bar reports
-// it as blocking. The scenario is a real algebraic corner, not an artificial
-// forced mismatch: shadowBaseAdvanceApplies (shadow_relation.go) binds a
-// BaseAdvanceCompatibility proof to the Frozen/Live BaseTree pair only, while
-// classifyCompactTargetRelation's own compatible-advance branch additionally
-// requires the CandidateTree to be preserved. A proof that validates on its
-// own terms and matches the base pair, but whose CandidateTree changed too,
-// makes shadow report compatible_base_advance while live reports
-// changed-scope -- an unexplained divergence on a core exit-bar relation.
-// This is a discovered finding for the maintainer (documented here, not
-// silently patched into shadow_relation.go, which Slice 3 already froze).
+// injects one unexplained divergence and asserts the exit bar reports it as
+// blocking.
+//
+// This row used to exercise a REAL algebraic corner: shadowBaseAdvanceApplies
+// (shadow_relation.go) bound a BaseAdvanceCompatibility proof to the
+// Frozen/Live BaseTree pair only, while classifyCompactTargetRelation's own
+// compatible-advance branch additionally requires the CandidateTree to be
+// preserved -- a discovered gap now FIXED in shadow_relation.go (see
+// TestShadowRelateBaseAdvanceProofBindsToCandidateTree, which pins the
+// regression). With the fix in place the real corpus (shadowMatrixCorpus,
+// exercised by TestShadowMatrixCoveringArrayGolden) has zero unexplained
+// divergences on any exit-bar relation, so this test now injects a purely
+// SYNTHETIC row instead: a live-side "frozen" snapshot deliberately built
+// with a different BaseTree than the shadow-side identity it is paired
+// with -- a shape no real gate call site could ever produce, since both
+// sides always originate from the same resolved receipt. It exists solely
+// to keep shadowMatrixExitBarBlockers proven end-to-end, not to model any
+// real caller input.
 func TestShadowMatrixUnexplainedDivergenceOnCoreRelationBlocksWave2(t *testing.T) {
-	const name = "injected/unexplained-compatible-base-advance-vs-changed-scope"
-	oldBase, newBase := shadowMatrixTree(name+"/old-base"), shadowMatrixTree(name+"/new-base")
-	frozenCandidate, liveCandidate := shadowMatrixTree(name+"/frozen-candidate"), shadowMatrixTree(name+"/live-candidate")
+	const name = "synthetic/exit-bar-mechanism-proof"
+	base, candidate := shadowMatrixTree(name+"/base"), shadowMatrixTree(name+"/candidate")
+	// mismatchedBase deliberately differs from base -- the synthetic part of
+	// this row. A real caller's LiveFrozen always shares the same BaseTree
+	// resolution as the shadow-side Frozen identity.
+	mismatchedBase := shadowMatrixTree(name + "/synthetic-mismatched-base")
 	paths := []string{"pkg/" + name + "/file.go"}
 	pathsDigest := digestPaths(paths)
 
-	frozenSnapshot := Snapshot{Kind: TargetCurrentChanges, Projection: ProjectionWorkspace, BaseTree: oldBase, CandidateTree: frozenCandidate, Paths: paths, PathsDigest: pathsDigest}
-	liveSnapshot := Snapshot{Kind: TargetCurrentChanges, Projection: ProjectionWorkspace, BaseTree: newBase, CandidateTree: liveCandidate, Paths: paths, PathsDigest: pathsDigest}
-
-	// A structurally valid proof (BaseAdvanceCompatibility.valid() passes)
-	// bound to the base pair -- but the candidate tree also changed, which
-	// shadowBaseAdvanceApplies never checks.
-	proof := &BaseAdvanceCompatibility{
-		Status: currentChangesBoundaryCompatibleStatus, Compatible: true,
-		OriginalMergeBaseTree: oldBase, NewBaseTree: newBase,
-		OriginalPatchIdentity: shadowMatrixDigest(name + "/patch"), DeliveredPatchIdentity: shadowMatrixDigest(name + "/patch"),
-		DeliveredPathsDigest: pathsDigest, BaseAdvancePathsDigest: shadowMatrixDigest(name + "/base-advance-paths"),
-		PathsDisjoint: true, MergedResultTree: shadowMatrixTree(name + "/merged"), CIStatus: currentChangesBoundaryCIStatus,
-	}
+	identity := shadowMatrixIdentity(name, base, candidate)
+	liveSnapshot := Snapshot{Kind: TargetCurrentChanges, Projection: ProjectionWorkspace, BaseTree: base, CandidateTree: candidate, Paths: paths, PathsDigest: pathsDigest}
+	syntheticLiveFrozen := Snapshot{Kind: TargetCurrentChanges, Projection: ProjectionWorkspace, BaseTree: mismatchedBase, CandidateTree: candidate, Paths: paths, PathsDigest: pathsDigest}
 
 	c := shadowMatrixCase{
 		Name: name, Selector: shadowSelectorWorkspace,
 		ShadowInput: shadowRelationInput{
-			Frozen: shadowMatrixIdentity(name+"/frozen", oldBase, frozenCandidate), Live: shadowMatrixIdentity(name+"/live", newBase, liveCandidate),
-			LiveSnapshot: liveSnapshot, BaseAdvance: proof, ApplicableAuthorities: 1,
+			Frozen: identity, Live: identity, LiveSnapshot: liveSnapshot, ApplicableAuthorities: 1,
 		},
-		LiveFrozen: frozenSnapshot, LiveGenesisPaths: paths,
-		LiveEvidence: compactTargetRelationEvidence{CompatibleAdvance: proof},
+		LiveFrozen: syntheticLiveFrozen, LiveGenesisPaths: paths,
 		// No ExplainedReason: this divergence is deliberately left unexplained.
 	}
 
 	row := evaluateShadowMatrixCase(c)
-	if row.ShadowRelation != ShadowRelationCompatibleBaseAdvance {
-		t.Fatalf("shadow relation = %s, want compatible_base_advance (the proof must be accepted by shadowBaseAdvanceApplies)", row.ShadowRelation)
+	if row.ShadowRelation != ShadowRelationExact {
+		t.Fatalf("shadow relation = %s, want exact (the identical Frozen/Live shadow identity)", row.ShadowRelation)
 	}
-	if row.LiveRelation == compactTargetCompatibleAdvance {
-		t.Fatalf("live relation = %s, want anything but compatible-advance (live's stricter CandidateTree check must reject the same proof)", row.LiveRelation)
+	if row.LiveRelation == compactTargetSame {
+		t.Fatalf("live relation = %s, want anything but same (the synthetic mismatched-BaseTree live-side input must not agree)", row.LiveRelation)
 	}
 	if row.Verdict != shadowMatrixDivergence || row.Explained {
 		t.Fatalf("row = %#v, want an unexplained divergence", row)
@@ -580,5 +578,23 @@ func TestShadowMatrixUnexplainedDivergenceOnCoreRelationBlocksWave2(t *testing.T
 	blockers := shadowMatrixExitBarBlockers([]shadowMatrixRow{row})
 	if len(blockers) != 1 || blockers[0].Name != name {
 		t.Fatalf("shadowMatrixExitBarBlockers = %#v, want exactly this row reported as blocking Wave 2 (spec.md \"Unexplained Divergence Blocks Wave 2\")", blockers)
+	}
+}
+
+// TestShadowMatrixRealCorpusHasZeroUnexplainedDivergences is the explicit
+// counterpart to the synthetic exit-bar proof above: it asserts the REAL
+// corpus (shadowMatrixCorpus, the same rows TestShadowMatrixCoveringArrayGolden
+// checks against the golden file) has exactly zero exit-bar blockers now that
+// shadowBaseAdvanceApplies's CandidateTree binding gap is fixed. This is
+// asserted as its own standalone test (rather than only inline inside the
+// golden test) so a future regression fails with an unambiguous name.
+func TestShadowMatrixRealCorpusHasZeroUnexplainedDivergences(t *testing.T) {
+	corpus := shadowMatrixCorpus()
+	rows := make([]shadowMatrixRow, len(corpus))
+	for i, c := range corpus {
+		rows[i] = evaluateShadowMatrixCase(c)
+	}
+	if blockers := shadowMatrixExitBarBlockers(rows); len(blockers) != 0 {
+		t.Fatalf("real corpus has %d exit-bar blockers, want 0: %#v", len(blockers), blockers)
 	}
 }

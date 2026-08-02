@@ -173,6 +173,37 @@ func TestShadowRelateOrderedFailClosedPrecedence(t *testing.T) {
 	}
 }
 
+// TestShadowRelateBaseAdvanceProofBindsToCandidateTree is a regression test
+// for a discovered algebra gap surfaced by the differential matrix exit-bar
+// (TestShadowMatrixUnexplainedDivergenceOnCoreRelationBlocksWave2,
+// shadow_matrix_test.go): shadowBaseAdvanceApplies bound a
+// BaseAdvanceCompatibility proof only to the Frozen/Live BaseTree pair,
+// while classifyCompactTargetRelation's own compatible-advance branch
+// (compact_target_relation.go) additionally requires
+// frozen.CandidateTree == live.CandidateTree. A proof that validates on its
+// own terms and matches the base pair, but whose CandidateTree also
+// changed, must NOT be accepted as compatible_base_advance — shadow must
+// bind identically to live, never less strictly.
+func TestShadowRelateBaseAdvanceProofBindsToCandidateTree(t *testing.T) {
+	frozenBase := strings.Repeat("1", 40)
+	liveBase := strings.Repeat("2", 40)
+	frozenCandidate := strings.Repeat("3", 40)
+	liveCandidate := strings.Repeat("4", 40)
+
+	input := shadowRelationInput{
+		Frozen:       fixtureCandidateIdentity(frozenBase, frozenCandidate, "a", "b"),
+		Live:         fixtureCandidateIdentity(liveBase, liveCandidate, "e", "b"),
+		LiveSnapshot: Snapshot{Paths: []string{"a.txt"}},
+		GenesisPaths: []string{"a.txt"},
+		BaseAdvance:  fixtureValidBaseAdvance(frozenBase, liveBase),
+	}
+	if got := shadowRelate(input); got == ShadowRelationCompatibleBaseAdvance {
+		t.Fatalf("shadowRelate() = %q, want anything but compatible_base_advance when CandidateTree changed (proof must bind to CandidateTree like live's classifyCompactTargetRelation)", got)
+	} else if got != ShadowRelationChanged {
+		t.Fatalf("shadowRelate() = %q, want %q", got, ShadowRelationChanged)
+	}
+}
+
 // TestShadowRelateAmendmentBDegradesContractionOnExcludedFinding covers
 // spec.md's two "provable_contraction Soundness Degradation" scenarios plus
 // design.md's explicit no-input degradation note: absent admitted-finding
