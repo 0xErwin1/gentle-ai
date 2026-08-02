@@ -760,8 +760,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			return err
 		}
 		var runtime model.AgentID
-		runtimeRequested := reviewRuntimeAgentCount(args) > 0
-		if *nextTransition && (*contract == ReviewIntegrationContractV2 || runtimeRequested) {
+		if *contract == ReviewIntegrationContractV2 {
 			if reviewRuntimeAgentCount(args) != 1 {
 				// refusal:by-design world-action: a lifecycle route without one generated runtime identity cannot safely select a review transport
 				return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, errors.New("negotiated lifecycle STATUS requires exactly one generated runtime identity"))
@@ -1466,9 +1465,6 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	if err != nil {
 		return err
 	}
-	if err := validateReviewStartBinding(args, negotiated, *targetIdentity, *projection, *baseRef, *lineage, *committedOnly, *workspaceOverlay, *consent, *locale); err != nil {
-		return reviewPreflightError(err)
-	}
 	runtimeRequested := reviewRuntimeAgentCount(args) > 0
 	if negotiated && (*contract == ReviewIntegrationContractV2 || runtimeRequested) {
 		if reviewRuntimeAgentCount(args) != 1 {
@@ -1478,6 +1474,9 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		if _, err := reviewRuntimeWithImmutableTransport(*runtimeAgent); err != nil {
 			return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, err)
 		}
+	}
+	if err := validateReviewStartBinding(args, negotiated, *targetIdentity, *projection, *baseRef, *lineage, *committedOnly, *workspaceOverlay, *consent, *locale); err != nil {
+		return reviewPreflightError(err)
 	}
 	consentMode := reviewStartConsentMode(strings.TrimSpace(*consent))
 	consentLocale, err := normalizeReviewConsentLocale(*locale)

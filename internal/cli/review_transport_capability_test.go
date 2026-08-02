@@ -67,7 +67,9 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 				operation string
 				args      []string
 			}{
+				{name: "status without transition", operation: "review.status", args: []string{"status", "--contract", ReviewIntegrationContractV2, "--cwd", missingRepository}},
 				{name: "status", operation: "review.status", args: []string{"status", "--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", missingRepository}},
+				{name: "start before target", operation: "review.start", args: []string{"start", "--contract", ReviewIntegrationContractV2, "--projection", "workspace", "--cwd", missingRepository}},
 				{name: "start", operation: "review.start", args: []string{"start", "--contract", ReviewIntegrationContractV2, "--target", target, "--projection", "workspace", "--cwd", missingRepository}},
 			} {
 				t.Run(invocation.name, func(t *testing.T) {
@@ -110,6 +112,22 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 	}
 	if len(stores) != 0 {
 		t.Fatalf("unsupported runtime created review authority: %#v", stores)
+	}
+}
+
+func TestV21RejectsDuplicateRuntimeAgentsBeforeRepositoryAccess(t *testing.T) {
+	var output bytes.Buffer
+	err := RunReview([]string{
+		"status", "--contract", ReviewIntegrationContractV2, "--cwd", t.TempDir() + "/missing",
+		"--agent", string(model.AgentClaudeCode), "--agent", string(model.AgentClaudeCode),
+	}, &output)
+	if err == nil {
+		t.Fatal("v2.1 STATUS accepted multiple runtime identities")
+	}
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Code != reviewImmutableTransportUnsupportedCode || failure.Operation != "review.status" ||
+		failure.MutationOutcome != ReviewMutationNotStarted || failure.AuthorityApplicability != "not_evaluated" {
+		t.Fatalf("duplicate runtime failure = %#v", failure)
 	}
 }
 

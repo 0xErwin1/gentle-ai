@@ -12,6 +12,8 @@ const ReviewIntegrationConsentSchema = "gentle-ai.review-integration.consent/v1"
 const ReviewIntegrationConsentSchemaID = "https://gentle-ai.dev/contracts/review-integration/v1/schemas/consent.schema.json"
 const ReviewIntegrationConsentSchemaV2 = "gentle-ai.review-integration.consent/v2"
 const ReviewIntegrationConsentSchemaIDV2 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/consent.schema.json"
+const ReviewIntegrationConsentSchemaV3 = "gentle-ai.review-integration.consent/v3"
+const ReviewIntegrationConsentSchemaIDV3 = "https://gentle-ai.dev/contracts/review-integration/v2/schemas/consent-v3.schema.json"
 
 // ReviewIntegrationConsentResult is the typed per-candidate consent question a
 // relay-declared negotiated START answers with instead of proceeding. It is a
@@ -28,6 +30,7 @@ type ReviewIntegrationConsentResult struct {
 	Contract  string `json:"contract"`
 	Operation string `json:"operation"`
 	Action    string `json:"action"`
+	Agent     string `json:"agent,omitempty"`
 	// Blocking marks this envelope as a decision the caller must relay before
 	// any review work starts; nothing has been persisted.
 	Blocking       bool                             `json:"blocking"`
@@ -270,7 +273,7 @@ func newReviewIntegrationConsentResult(
 		},
 	}
 	if contract == ReviewIntegrationContractV2 {
-		result.Schema, result.Contract = ReviewIntegrationConsentSchemaV2, ReviewIntegrationContractV2
+		result.Schema, result.Contract, result.Agent = ReviewIntegrationConsentSchemaV3, ReviewIntegrationContractV2, "claude-code"
 	}
 	if err := result.Validate(); err != nil {
 		return ReviewIntegrationConsentResult{}, fmt.Errorf("validate consent question: %w", err)
@@ -280,8 +283,9 @@ func newReviewIntegrationConsentResult(
 
 func (result ReviewIntegrationConsentResult) Validate() error {
 	legacyContract := result.Schema == ReviewIntegrationConsentSchema && result.Contract == ReviewIntegrationContractV1
-	nativeGitContract := result.Schema == ReviewIntegrationConsentSchemaV2 && result.Contract == ReviewIntegrationContractV2
-	if (!legacyContract && !nativeGitContract) ||
+	historicalNativeGitContract := result.Schema == ReviewIntegrationConsentSchemaV2 && result.Contract == ReviewIntegrationContractV2 && result.Agent == ""
+	currentNativeGitContract := result.Schema == ReviewIntegrationConsentSchemaV3 && result.Contract == ReviewIntegrationContractV2 && result.Agent == "claude-code"
+	if (!legacyContract && !historicalNativeGitContract && !currentNativeGitContract) ||
 		result.Operation != "review.start" || result.Action != reviewConsentActionRequired || !result.Blocking {
 		return errors.New("invalid consent question identity") // refusal:by-design world-action: this envelope is built and validated by the same file; the exit is a code fix, not a command
 	}
@@ -313,6 +317,10 @@ func (result ReviewIntegrationConsentResult) Validate() error {
 			!strings.Contains(choice.Invocation, " --target "+result.TargetIdentity) ||
 			!strings.Contains(choice.Invocation, " --consent "+choice.Answer) {
 			return fmt.Errorf("consent choice %q does not name a runnable candidate-scoped invocation", choice.Answer) // refusal:by-design world-action: this envelope is built and validated by the same file; the exit is a code fix, not a command
+		}
+		if currentNativeGitContract && !strings.Contains(choice.Invocation, " --agent claude-code ") {
+			// refusal:by-design world-action: the current consent route cannot change its immutable runtime binding
+			return fmt.Errorf("consent choice %q does not select the supported review runtime", choice.Answer)
 		}
 	}
 	if result.OffPath.Note == "" || result.OffPath.Command != reviewConsentOffPathCommand {
