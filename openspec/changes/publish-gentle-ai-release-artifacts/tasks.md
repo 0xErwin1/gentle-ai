@@ -42,17 +42,17 @@ Chain strategy: feature-branch-chain
 
 ## Phase A1b: Snapshot Projection, Generator Command, Golden
 
-- [ ] A1b.1 RED: `internal/cli/review_capabilities_snapshot_test.go` — drift test (projected field set == `ReviewCapabilitiesResult` fields minus exactly `{Package, Build, Executable}`); parity test (`reflect.DeepEqual` per field vs `reviewCapabilitiesStaticSurface(contract)` for v1 and v2); exclusion test (canonical bytes contain none of `package/build/executable/sha256/vcs/go_version/module_version/release_channel`).
-- [ ] A1b.2 GREEN: `internal/cli/review_capabilities_snapshot.go` — `ReleaseSemanticSnapshot(contract string) releaseartifact.SemanticSnapshot`, one-directional `cli → releaseartifact` import; live `review capabilities` response untouched.
-- [ ] A1b.3 RED: `internal/releaseartifact/snapshot_test.go` — `SemanticSnapshot` encode/decode round-trip via `EncodeCanonical`.
-- [ ] A1b.4 GREEN: `internal/releaseartifact/snapshot.go` — `SemanticSnapshot` type (contract identity, protocol, operations, gates, projections, schemas, features, bootstrap, compatibility).
-- [ ] A1b.5 RED: `internal/releaseartifact/floor_test.go` — the frozen `RequiredFloor` is a subset of the live projection for operations/gates/projections/schemas; a removal fails, an addition does not.
-- [ ] A1b.6 GREEN: `internal/releaseartifact/floor.go` — hand-declared frozen `RequiredFloor` constant (never generation-time computed).
-- [ ] A1b.7 RED: `internal/releaseassetscmd/main_test.go` — builds a staging tree + manifest in `t.TempDir()`; recomputes the tree digest from staged files and compares.
-- [ ] A1b.8 GREEN: `internal/releaseassetscmd/main.go` (`go run ./internal/releaseassetscmd`, `internal/gofmtcheck` precedent) — stages `contracts/**`, docs, LICENSE, schema, generated snapshot; sorts entries; emits `artifact-manifest.json`. Unwired from `.goreleaser.yaml` in this unit.
-- [ ] A1b.9 RED: golden test asserting canonical snapshot bytes vs `internal/releaseartifact/testdata/review-integration-v2.semantic.json`; checked-in sha256 constant guards an accidental `-update`.
-- [ ] A1b.10 GREEN: generate the golden via `-update`, inspect diff, rerun without `-update`; record the sha256 constant.
-- [ ] A1b.11 `docs/release-artifact.md` — extend with generator command + golden-regeneration section.
+- [x] A1b.1 RED: `internal/cli/review_capabilities_snapshot_test.go` — drift test (projected field set == `ReviewCapabilitiesResult` fields minus exactly `{Package, Build, Executable}`); parity test (`reflect.DeepEqual` per field vs `reviewCapabilitiesStaticSurface(contract)` for v1 and v2); exclusion test (canonical bytes contain none of `package/build/executable/sha256/vcs/go_version/module_version/release_channel`).
+- [x] A1b.2 GREEN: `internal/cli/review_capabilities_snapshot.go` — `ReleaseSemanticSnapshot(contract string) releaseartifact.SemanticSnapshot`, one-directional `cli → releaseartifact` import; live `review capabilities` response untouched.
+- [x] A1b.3 RED: `internal/releaseartifact/snapshot_test.go` — `SemanticSnapshot` encode/decode round-trip via `EncodeCanonical`.
+- [x] A1b.4 GREEN: `internal/releaseartifact/snapshot.go` — `SemanticSnapshot` type (contract identity, protocol, operations, gates, projections, schemas, features, bootstrap, compatibility).
+- [x] A1b.5 RED: `internal/releaseartifact/floor_test.go` — the frozen `RequiredFloor` is a subset of the live projection for operations/gates/projections/schemas; a removal fails, an addition does not.
+- [x] A1b.6 GREEN: `internal/releaseartifact/floor.go` — hand-declared frozen `RequiredFloor` constant (never generation-time computed).
+- [x] A1b.7 RED: `internal/releaseassetscmd/main_test.go` — builds a staging tree + manifest in `t.TempDir()`; recomputes the tree digest from staged files and compares.
+- [x] A1b.8 GREEN: `internal/releaseassetscmd/main.go` (`go run ./internal/releaseassetscmd`, `internal/gofmtcheck` precedent) — stages `contracts/**`, docs, LICENSE, schema, generated snapshot; sorts entries; emits `artifact-manifest.json`. Unwired from `.goreleaser.yaml` in this unit.
+- [x] A1b.9 RED: golden test asserting canonical snapshot bytes vs `internal/releaseartifact/testdata/review-integration-v2.semantic.json`; checked-in sha256 constant guards an accidental `-update`.
+- [x] A1b.10 GREEN: generate the golden via `-update`, inspect diff, rerun without `-update`; record the sha256 constant.
+- [x] A1b.11 `docs/release-artifact.md` — extend with generator command + golden-regeneration section.
 
 ## Phase A2: Archive Assembly, Policy Amendment, Verify Script, Docs
 

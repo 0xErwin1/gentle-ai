@@ -4,7 +4,7 @@
 
 Gentle AI publishes a platform-independent assets archive with every release, described by a versioned, self-describing manifest. This is the synchronization artifact a consumer decodes to trust bundled contracts, schemas, and snapshots instead of hand-transcribing provider internals. The contract lives in its own namespace, independent of the runtime-negotiated `review-integration` contract, so a bootstrap-time archive trust decision and a live CLI negotiation can version on separate timelines.
 
-> This document currently covers only the manifest contract itself: its namespace, schema, fixtures, and canonicalization rules. The archive is not yet assembled or published — the staging generator, GoReleaser wiring, and downstream notification are tracked separately and will extend this document as they land.
+> This document covers the manifest contract, the semantic capability snapshot it bundles, and the staging generator that assembles a payload and emits the manifest. The archive is not yet wired into the GoReleaser release build or published — that wiring, the release-policy amendment, and downstream notification are tracked separately and will extend this document as they land.
 
 ## Contract identity
 
@@ -74,6 +74,52 @@ Every canonical document in this contract — the manifest and the semantic snap
 - Unknown fields are rejected everywhere: the schema declares `additionalProperties: false` at every level, and the Go decoder uses `DisallowUnknownFields`.
 - The minor-version policy is additive-fields-only; a new required field or a changed meaning is a major bump.
 
+## Semantic capability snapshot
+
+The archive bundles a deterministic, platform-independent snapshot of Gentle AI's declared review-integration capability surface — contract identity, protocol version, operations, gates, projections, schemas, features, bootstrap, and compatibility policy. It is **generated**, never hand-authored: `internal/cli.ReleaseSemanticSnapshot(contract)` projects the same pure static surface function (`reviewCapabilitiesStaticSurface`) that the live `review capabilities` command already uses, so the snapshot can never drift from what the provider actually declares.
+
+| Excluded (never present) | Why |
+| --- | --- |
+| `package`, `build`, `executable` field groups | Package/release, Go build/VCS, and executable-hash identity depend on which platform's binary produced the snapshot. |
+| `sha256`, `vcs`, `go_version`, `module_version`, `release_channel` | Sub-fields of the excluded groups above; a golden byte-comparison test and a substring-exclusion test both guard this. |
+
+Because every excluded field is host-dependent, the snapshot built on Linux and the snapshot built on macOS for the same revision are **byte-for-byte identical** — the entire point of shipping it inside a platform-independent archive.
+
+The live `review capabilities` CLI response is completely unaffected: `reviewCapabilitiesStaticSurface` is unexported and pure (no `os`, `runtime`, `time`, or filesystem call), and `ReleaseSemanticSnapshot` only reads from it — it never mutates or wraps it.
+
+## Required floor (compatibility)
+
+`internal/releaseartifact.RequiredFloor` is a **hand-declared, frozen** minimum subset of operations, gates, projections, and schemas — never recomputed from the live surface at generation time. A floor computed from "whatever exists right now" would move with every release and a removal would go silently unnoticed; a frozen floor catches that removal instead.
+
+- `VerifyRequiredFloor(snapshot)` fails the moment any frozen floor element is missing from a live snapshot.
+- Adding a new operation, gate, projection, or schema beyond the floor is never an error — only a **removal** is.
+- Widening the floor to include a newly-important element is a deliberate, reviewed source edit, not something a generator run ever does automatically.
+
+## Generating the release assets payload (`internal/releaseassetscmd`)
+
+Run the generator against a scratch staging directory:
+
+```bash
+go run ./internal/releaseassetscmd \
+  --root . \
+  --staging-dir dist/release-assets \
+  --repository Gentleman-Programming/gentle-ai \
+  --tag v2.3.0 --version 2.3.0 --commit <commit-sha>
+```
+
+It stages the entire `contracts/` namespace, this document, `LICENSE`, and the generated semantic snapshot (`capabilities/review-integration-v2.semantic.json`), sorts every entry by ascending raw path bytes, computes the tree digest, and writes `artifact-manifest.json` at the staging directory root — validating the manifest it just built before exiting.
+
+> **Not yet wired into `.goreleaser.yaml`.** This command is deliberately standalone in this contract revision so it can be tested independently of the release pipeline. Wiring it into the GoReleaser build (`before.hooks` or an equivalent) is tracked separately.
+
+## Regenerating the semantic snapshot golden
+
+`internal/releaseartifact/testdata/review-integration-v2.semantic.json` is a checked-in golden asserted byte-for-byte against the live generated snapshot, with its sha256 also pinned in a Go constant so an accidental regeneration cannot pass unnoticed:
+
+1. Run `go test ./internal/releaseartifact/... -run TestSemanticSnapshotGolden -update`.
+2. **Read the diff.** Confirm every change is an intentional capability-surface change (a new operation, schema, gate, feature, and so on) — never a stray formatting or host-identity change.
+3. Rerun `go test ./internal/releaseartifact/... -run TestSemanticSnapshotGolden` **without** `-update` to confirm it now passes.
+4. Update the `goldenSemanticSnapshotSHA256` constant in `snapshot_golden_test.go` to the value the failing run reported, in the same commit as the golden file.
+
 ## Checklist for a consumer
 
 - [ ] Reject an unsupported contract major before inferring any layout.
@@ -81,9 +127,12 @@ Every canonical document in this contract — the manifest and the semantic snap
 - [ ] Confirm every mandatory field group is present and every reference resolves into `entries`.
 - [ ] Recompute the tree digest from the archive's non-manifest entries and compare it to `tree.digest`.
 - [ ] Establish archive authenticity only from the signed `checksums.txt` envelope, never from a manifest-internal field.
+- [ ] Verify the frozen required floor is present in the semantic snapshot before treating additions beyond it as unsupported.
 
 ## Rolling changelog
 
 ### Contract v1.0 (unreleased)
 
-Initial publish of the `gentle-ai.release-artifact` namespace: contract identity, the canonical JSON encoder, entry path/type/mode admission, the non-self-referential tree digest, and the manifest shape with its schema and fixtures. Nothing yet assembles or publishes the archive itself.
+Initial publish of the `gentle-ai.release-artifact` namespace: contract identity, the canonical JSON encoder, entry path/type/mode admission, the non-self-referential tree digest, and the manifest shape with its schema and fixtures.
+
+Added the deterministic semantic capability snapshot (`internal/cli.ReleaseSemanticSnapshot`, `internal/releaseartifact.SemanticSnapshot`), the frozen required-floor compatibility check (`internal/releaseartifact.RequiredFloor` / `VerifyRequiredFloor`), the `internal/releaseassetscmd` staging generator, and its checked-in golden. The generator is not yet wired into the GoReleaser release build.
