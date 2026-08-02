@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -80,6 +81,7 @@ func TestRealOpenCodeRejectsUnsupportedImmutableReviewerBash(t *testing.T) {
 	if err := command.Run(); err != nil {
 		t.Fatalf("opencode run: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
 	}
+	assertOpenCodeUnsupportedCapability(t, stdout.String())
 	fixture.assertComplete(t, false)
 	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("rejected reviewer Bash changed the worktree: %v", err)
@@ -87,6 +89,35 @@ func TestRealOpenCodeRejectsUnsupportedImmutableReviewerBash(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(harness.commonDir(), "gentle-ai", "review-transactions", "v2")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("rejected reviewer Bash created review authority: %v", err)
 	}
+}
+
+func assertOpenCodeUnsupportedCapability(t *testing.T, output string) {
+	t.Helper()
+	decoder := json.NewDecoder(strings.NewReader(output))
+	for {
+		var event struct {
+			Type string `json:"type"`
+			Part *struct {
+				Type  string `json:"type"`
+				Tool  string `json:"tool"`
+				State struct {
+					Status string `json:"status"`
+					Error  string `json:"error"`
+				} `json:"state"`
+			} `json:"part"`
+		}
+		if err := decoder.Decode(&event); errors.Is(err, io.EOF) {
+			break
+		} else if err != nil {
+			t.Fatalf("decode OpenCode JSON event: %v\n%s", err, output)
+		}
+		if event.Type == "tool_use" && event.Part != nil && event.Part.Type == "tool" &&
+			event.Part.Tool == "task" && event.Part.State.Status == "error" &&
+			strings.Contains(event.Part.State.Error, "unsupported-capability") {
+			return
+		}
+	}
+	t.Fatalf("OpenCode did not emit unsupported-capability in the rejected task event:\n%s", output)
 }
 
 func generatedOpenCodeReviewConfig(t *testing.T, settingsPath, serverURL string) string {
