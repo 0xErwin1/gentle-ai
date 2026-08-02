@@ -138,6 +138,7 @@ func NewModelPickerState(cachePath string, settingsPath string) ModelPickerState
 		customProviderIDs: customIDs,
 	}
 	state.refreshAvailableModels()
+	state.ConfigWarning = appendCustomProviderToolCallWarnings(state.ConfigWarning, providers, configProviders)
 	return state
 }
 
@@ -205,6 +206,42 @@ func (state *ModelPickerState) refreshAvailableModels() {
 	for _, id := range state.AvailableIDs {
 		state.SDDModels[id] = opencode.FilterModelsForSDD(state.Providers[id])
 	}
+}
+
+func appendCustomProviderToolCallWarnings(
+	existing string,
+	providers map[string]opencode.Provider,
+	configProviders map[string]opencode.ConfigProvider,
+) string {
+	ids := make([]string, 0, len(configProviders))
+	for id := range configProviders {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	for _, id := range ids {
+		configProvider := configProviders[id]
+		if len(configProvider.Models) == 0 {
+			continue
+		}
+
+		provider, ok := providers[id]
+		if !ok || len(opencode.FilterModelsForSDD(provider)) > 0 {
+			continue
+		}
+
+		name := provider.Name
+		if name == "" {
+			name = id
+		}
+		existing = appendConfigWarning(existing, fmt.Sprintf(
+			`Custom provider %q has models, but none declare tool_call: true. Add tool_call: true to at least one model in provider.%s.models.`,
+			name,
+			id,
+		))
+	}
+
+	return existing
 }
 
 func appendConfigWarning(existing, warning string) string {
