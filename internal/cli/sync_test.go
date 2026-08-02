@@ -4130,6 +4130,47 @@ func TestRunSyncWithSelection_UnknownPersistedPersonaFailsClosed(t *testing.T) {
 	}
 }
 
+func TestRunSyncWithSelection_WhitespaceOnlyPersistedPersonaFailsClosed(t *testing.T) {
+	home := t.TempDir()
+	setSyncTestHome(t, home)
+
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	originalPersona := "<!-- gentle-ai:persona -->\nexisting valid persona\n<!-- /gentle-ai:persona -->\n"
+	personaPath := filepath.Join(home, ".claude", "CLAUDE.md")
+	if err := os.WriteFile(personaPath, []byte(originalPersona), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(state.Path(home)), 0o755); err != nil {
+		t.Fatalf("MkdirAll state: %v", err)
+	}
+	if err := os.WriteFile(state.Path(home), []byte(`{"installed_agents":["claude-code"],"persona":" \t "}`), 0o644); err != nil {
+		t.Fatalf("WriteFile state: %v", err)
+	}
+
+	result, err := RunSyncWithSelection(home, model.Selection{
+		Agents:     []model.AgentID{model.AgentClaudeCode},
+		Components: []model.ComponentID{model.ComponentPersona},
+	})
+	if err == nil {
+		t.Fatal("RunSyncWithSelection() error = nil, want whitespace-only persisted persona error")
+	}
+	if !strings.Contains(err.Error(), "whitespace-only persona") {
+		t.Fatalf("RunSyncWithSelection() error = %q, want whitespace-only persona context", err)
+	}
+	if result.Selection.Persona != "" {
+		t.Fatalf("result.Selection.Persona = %q, want unchanged empty persona", result.Selection.Persona)
+	}
+	gotPersona, readErr := os.ReadFile(personaPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile persona: %v", readErr)
+	}
+	if string(gotPersona) != originalPersona {
+		t.Fatalf("persona config changed after rejected sync: got %q, want %q", gotPersona, originalPersona)
+	}
+}
+
 func TestRunSyncWithSelection_UnreadablePersistedStateFailsClosed(t *testing.T) {
 	tests := []struct {
 		name  string
