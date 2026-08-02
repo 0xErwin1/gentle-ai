@@ -640,6 +640,60 @@ func TestReviewRepairDispositionExecutionQuarantinesEligibleLeaf(t *testing.T) {
 	}
 }
 
+// TestReviewRepairDispositionExecutionAcceptsPreflightPublishedDigest proves
+// the documented two-step CLI flow actually works: run `review repair
+// --preflight` to obtain --plan-digest/--inventory-revision, then execute
+// with exactly those values. plan_digest's pre-image excludes Actor and
+// Reason (execution-time provenance, not plan identity — mirrors
+// Authorization's treatment), so the digest --preflight publishes (derived
+// with empty actor/reason) MUST equal the digest execution re-derives (with
+// the real actor/reason) for the same graph state.
+func TestReviewRepairDispositionExecutionAcceptsPreflightPublishedDigest(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	writeInspectCLIRecoveryPair(t, repo, "leaf-preflight-digest", false, dispositionForgedAuthorization)
+
+	var preflightOutput bytes.Buffer
+	if err := RunReview([]string{"repair", "--preflight", "--cwd", repo}, &preflightOutput); err != nil {
+		t.Fatal(err)
+	}
+	var preflight ReviewRepairResult
+	decodeStrictReviewJSON(t, preflightOutput.Bytes(), &preflight)
+	if preflight.DispositionProviderInputs == nil {
+		t.Fatalf("preflight surfaced no disposition plan: %s", preflightOutput.String())
+	}
+
+	actor, reason := "maintainer@example.com", "quarantine content-mismatched leaf"
+	plan, err := reviewtransaction.DeriveAuthorityDispositionPlanAtRepo(context.Background(), repo, actor, reason)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.PlanDigest != preflight.DispositionProviderInputs.PlanDigest {
+		t.Fatalf("execution-time digest %q does not match preflight-published digest %q — actor/reason leaked into plan identity", plan.PlanDigest, preflight.DispositionProviderInputs.PlanDigest)
+	}
+	authorization := authorityDispositionAuthorization(plan)
+
+	executeArgs := []string{
+		"repair", "--cwd", repo,
+		"--plan-digest", preflight.DispositionProviderInputs.PlanDigest,
+		"--inventory-revision", preflight.DispositionProviderInputs.AuthorityInventoryRevision,
+		"--actor", actor, "--reason", reason, "--authorization", authorization,
+	}
+	var executed bytes.Buffer
+	if err := RunReview(executeArgs, &executed); err != nil {
+		t.Fatalf("disposition execution refused the exact preflight-published plan_digest/inventory_revision: %v\n%s", err, executed.String())
+	}
+	var result ReviewRepairResult
+	decodeStrictReviewJSON(t, executed.Bytes(), &result)
+	if err := result.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if result.Mode != ReviewRepairModeExecute || result.DispositionExecution == nil ||
+		result.DispositionExecution.Status != string(reviewtransaction.CompactReclaimCommitted) ||
+		result.DispositionExecution.PlanDigest != preflight.DispositionProviderInputs.PlanDigest {
+		t.Fatalf("disposition execution = %#v\n%s", result, executed.String())
+	}
+}
+
 func TestReviewRepairContractAndPreflightFixtureAreStrict(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1")
 	for _, item := range []struct {
