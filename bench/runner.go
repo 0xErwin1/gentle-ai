@@ -23,6 +23,14 @@ type Sandbox struct {
 	TracePath                string
 	BenchReceiptMutationPath string
 
+	// NewLineageActivation opts this sandbox's whole isolated process
+	// environment into GENTLE_AI_RDD_NEW_LINEAGE (Wave 3 Slice 5, task 6.7).
+	// It is off by default, matching the product's own default-off
+	// activation switch (design decision 5): every wave1/wave2/edge/sdd
+	// journey that never sets this stays on the legacy `review start` path,
+	// byte-identical to before this field existed.
+	NewLineageActivation bool
+
 	// Journey state carried between steps.
 	Lineage  string
 	Target   string
@@ -73,6 +81,9 @@ func (s *Sandbox) env() []string {
 	}
 	if s.BenchReceiptMutationPath != "" {
 		env = append(env, "GENTLE_AI_BENCH_MUTATE_RECEIPT="+s.BenchReceiptMutationPath)
+	}
+	if s.NewLineageActivation {
+		env = append(env, "GENTLE_AI_RDD_NEW_LINEAGE=1")
 	}
 	return env
 }
@@ -348,6 +359,10 @@ type Journey struct {
 	Title  string
 	Source string
 	Steps  []Step
+	// NewLineageActivation propagates to the journey's own Sandbox (task
+	// 6.7): a journey exercising the new-lineage lifecycle sets this true;
+	// every other journey leaves it false and is unaffected.
+	NewLineageActivation bool
 }
 
 // validateCorpus checks every author-declared classifier input in the corpus
@@ -445,6 +460,7 @@ func runJourney(binary string, journey Journey) JourneyResult {
 		result.FailureReason = err.Error()
 		return result
 	}
+	sandbox.NewLineageActivation = journey.NewLineageActivation
 	accumulator := newAccumulator()
 	probe := newCapabilityProbe(sandbox)
 	run := &journeyRun{sandbox: sandbox, probe: probe, accumulator: accumulator}

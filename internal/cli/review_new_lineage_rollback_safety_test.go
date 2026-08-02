@@ -28,6 +28,13 @@ func TestNewLineageRollbackSafetyStaysReadableAndFinalizableWhileSwitchIsOff(t *
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("rollback-safety candidate\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Task 6.7 widened governingAuthorityLiveEvidence to read the STAGED
+	// projection specifically at pre-commit (matching legacy's own
+	// buildCompactGateRequestWithPushBase convention), so constructing a
+	// live candidate identity for this gate now requires the modification
+	// to actually be staged first — an unstaged-only change would resolve
+	// to no changed paths at all under GatePreCommit.
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
 
 	t.Setenv("GENTLE_AI_RDD_NEW_LINEAGE", "1")
 	live, _, err := governingAuthorityLiveEvidence(context.Background(), repo, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
