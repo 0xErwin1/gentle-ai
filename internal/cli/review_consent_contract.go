@@ -278,7 +278,23 @@ func newReviewIntegrationConsentResult(
 	if err := result.Validate(); err != nil {
 		return ReviewIntegrationConsentResult{}, fmt.Errorf("validate consent question: %w", err)
 	}
+	if err := validateReviewConsentInvocations(result, followUpBase); err != nil {
+		return ReviewIntegrationConsentResult{}, fmt.Errorf("validate consent invocations: %w", err)
+	}
 	return result, nil
+}
+
+// validateReviewConsentInvocations compares provider-owned command bytes with
+// the same renderer that created the consent request. It never parses a command
+// supplied by a caller, so duplicate or substituted runtime flags cannot pass.
+func validateReviewConsentInvocations(result ReviewIntegrationConsentResult, followUpBase string) error {
+	for _, choice := range result.Choices {
+		expected := followUpBase + " --consent " + choice.Answer
+		if choice.Invocation != expected {
+			return fmt.Errorf("consent choice %q invocation does not match the provider-owned request", choice.Answer)
+		}
+	}
+	return nil
 }
 
 func (result ReviewIntegrationConsentResult) Validate() error {
@@ -317,10 +333,6 @@ func (result ReviewIntegrationConsentResult) Validate() error {
 			!strings.Contains(choice.Invocation, " --target "+result.TargetIdentity) ||
 			!strings.Contains(choice.Invocation, " --consent "+choice.Answer) {
 			return fmt.Errorf("consent choice %q does not name a runnable candidate-scoped invocation", choice.Answer) // refusal:by-design world-action: this envelope is built and validated by the same file; the exit is a code fix, not a command
-		}
-		if currentNativeGitContract && !strings.Contains(choice.Invocation, " --agent claude-code ") {
-			// refusal:by-design world-action: the current consent route cannot change its immutable runtime binding
-			return fmt.Errorf("consent choice %q does not select the supported review runtime", choice.Answer)
 		}
 	}
 	if result.OffPath.Note == "" || result.OffPath.Command != reviewConsentOffPathCommand {

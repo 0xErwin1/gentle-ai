@@ -497,3 +497,37 @@ func TestConsentQuestionMatchesVersionedFixture(t *testing.T) {
 		})
 	}
 }
+
+func TestV21ConsentInvocationMustMatchProviderOwnedRequest(t *testing.T) {
+	fixture, err := os.ReadFile(filepath.Join("..", "..", "contracts", "review-integration", "v2", "fixtures", "consent-v3.fixture.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var question ReviewIntegrationConsentResult
+	if err := json.Unmarshal(fixture, &question); err != nil {
+		t.Fatal(err)
+	}
+	base := reviewConsentFollowUpBase("/repo", question.TargetIdentity, question.Projection, "review-consent-fixture", "", "", "reliability", "", false, false, ReviewIntegrationContractV2, "claude-code", "")
+	if err := validateReviewConsentInvocations(question, base); err != nil {
+		t.Fatalf("canonical v2.1 consent invocation: %v", err)
+	}
+
+	for _, test := range []struct {
+		name       string
+		invocation string
+	}{
+		{name: "missing agent", invocation: strings.Replace(question.Choices[0].Invocation, " --agent claude-code", "", 1)},
+		{name: "alternate agent", invocation: strings.Replace(question.Choices[0].Invocation, "--agent claude-code", "--agent opencode", 1)},
+		{name: "duplicate supported agent", invocation: strings.Replace(question.Choices[0].Invocation, "--agent claude-code", "--agent claude-code --agent claude-code", 1)},
+		{name: "duplicate alternate agent", invocation: strings.Replace(question.Choices[0].Invocation, "--agent claude-code", "--agent claude-code --agent opencode", 1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := question
+			mutated.Choices = append([]ReviewIntegrationConsentChoice(nil), question.Choices...)
+			mutated.Choices[0].Invocation = test.invocation
+			if err := validateReviewConsentInvocations(mutated, base); err == nil {
+				t.Fatalf("accepted non-canonical invocation %q", test.invocation)
+			}
+		})
+	}
+}
