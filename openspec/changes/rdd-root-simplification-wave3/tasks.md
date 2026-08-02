@@ -55,13 +55,13 @@ Chain strategy: feature-branch-chain
 
 ## Phase 4 (S3): ReviewCore
 
-- [ ] 4.1 RED: consent-before-authority-freeze ordering test — tier 1/4 freeze blocked until v2 consent envelope granted; tier 0 carve-out proceeds without a consent question straight to freeze.
-- [ ] 4.2 Create `internal/reviewtransaction/review_core.go`, `review_core_transition.go`: `Next(ctx, authority, CoreRequest) (CoreTransition, error)`.
-- [ ] 4.3 Reuse `authorizeReviewStart`, `AssessSnapshotRisk`→`ClassifyRisk`, `SelectReviewLenses`, `CorrectionBudget` — no re-derivation.
-- [ ] 4.4 GREEN: 4.1 passes for all three tiers.
-- [ ] 4.5 Modify `review_facade.go`:1618 start branch: `GENTLE_AI_RDD_NEW_LINEAGE` OFF (default) → legacy `NewCompactState`; ON → `ReviewCore.Next`/`AuthorityStore.Create`.
-- [ ] 4.6 Kill-switch-off structural-unfailure test: OFF creates zero `v3/` entries.
-- [ ] 4.7 `scripts/deadcode-ratchet.sh --update` for `review_core*.go` exports.
+- [x] 4.1 RED: consent-before-authority-freeze ordering test — tier 1/4 freeze blocked until v2 consent envelope granted; tier 0 carve-out proceeds without a consent question straight to freeze.
+- [x] 4.2 Create `internal/reviewtransaction/review_core.go`, `review_core_transition.go`: `Next(ctx, authority, CoreRequest) (CoreTransition, error)`.
+- [x] 4.3 Reuse `authorizeReviewStart`, `AssessSnapshotRisk`→`ClassifyRisk`, `SelectReviewLenses`, `CorrectionBudget` — no re-derivation.
+- [x] 4.4 GREEN: 4.1 passes for all three tiers.
+- [x] 4.5 Modify `review_facade.go`:1618 start branch: `GENTLE_AI_RDD_NEW_LINEAGE` OFF (default) → legacy `NewCompactState`; ON → `ReviewCore.Next`/`AuthorityStore.Create`.
+- [x] 4.6 Kill-switch-off structural-unfailure test: OFF creates zero `v3/` entries.
+- [x] 4.7 `scripts/deadcode-ratchet.sh --update` for `review_core*.go` exports.
 
 ## Phase 5 (S4): Amendment C + Switch-Off Equivalence
 
