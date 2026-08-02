@@ -273,6 +273,30 @@ func validateAuthorityDispositionAuthorization(plan AuthorityDispositionPlan, cu
 	return nil
 }
 
+// compactRepairCommandText renders the exact runnable `review repair`
+// invocation for one leaf authority disposition plan a caller already
+// confirmed derives and admits (deriveAuthorityDispositionPlanAtRepo +
+// admitLeafDisposition — the same read-only prediction `review repair
+// --preflight` runs), with the persisted plan_digest and
+// authority_inventory_revision preflight would publish and the authorization
+// template execution verifies. plan_digest is actor/reason-independent
+// (authorityDispositionPlanDigest excludes both from its pre-image), so the
+// value rendered here is exactly the value execution re-derives and compares
+// against, for whichever actor/reason a maintainer later supplies — the
+// command printed is the command that runs. Only a caller whose own
+// read-only prediction accepted the plan may render this, mirroring
+// compactAbandonCommandText and compactReconcileCommandText
+// (compact_reconcile.go).
+func compactRepairCommandText(repo string, plan AuthorityDispositionPlan) string {
+	template := plan
+	template.Actor, template.Reason = "<actor>", "<why-it-is-repaired>"
+	return fmt.Sprintf("`gentle-ai review repair --cwd %q --plan-digest %q --inventory-revision %q --actor \"<actor>\" --reason \"<why-it-is-repaired>\" --authorization \"<maintainer-authorization>\"`"+
+		" (`gentle-ai review repair --preflight --cwd %q` re-confirms these are still current);"+
+		" the repair quarantines the entry whole and rewrites nothing, so the recorded authorization bytes survive exactly as persisted."+
+		" --authorization is exactly these seven lines, joined by LF, with no trailing newline, using the same --actor and --reason with surrounding whitespace trimmed:\n%s",
+		repo, plan.PlanDigest, plan.AuthorityInventoryRevision, repo, authorityDispositionAuthorizationBinding(template))
+}
+
 // DeriveAuthorityDispositionPlanAtRepo is the exported form of
 // deriveAuthorityDispositionPlanAtRepo for Slice S3's `review repair` CLI
 // wiring — a read-only plan derivation with no CLI entrypoint of its own

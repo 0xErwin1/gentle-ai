@@ -142,6 +142,61 @@ func TestLoadCompactRecoveryRecordsIsTheSingleSeam(t *testing.T) {
 	}
 }
 
+// TestLoadCompactRecoveryRecordsUnderMaintenanceHoldAgreesWithOrdinarySeam
+// pins the agreement loadCompactRecoveryRecordsUnderMaintenanceHold's own doc
+// comment (authority_disposition_execute.go) asserts but nothing tested
+// directly before this: it mirrors loadCompactRecoveryRecords's exact
+// read-and-classify body for a caller that already holds base's exclusive
+// maintenance lock, differing only in the per-entry file read
+// (loadCompactRecordLocked vs Load), never the classification algorithm. The
+// under-lock CAS comparison executeAuthorityDisposition runs
+// (lockedAuthorityDispositionMutation comparing currentPlan.PlanDigest
+// against plan.PlanDigest) rests entirely on this agreement holding: if the
+// two seams ever classified the same authority state differently, a
+// re-derivation under lock could silently diverge from what the read-only
+// plan preview promised.
+func TestLoadCompactRecoveryRecordsUnderMaintenanceHoldAgreesWithOrdinarySeam(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	forgedRecoveryPair(t, repo, "agreement", "agreement target\n")
+	inspectRecoveryPair(t, repo, "agreement-pristine", false, "")
+
+	ctx := context.Background()
+	root, err := (SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
+	inspectNoError(t, err)
+
+	ordinaryReport, ordinaryRecords, err := loadCompactRecoveryRecords(ctx, root)
+	inspectNoError(t, err)
+	lockedReport, lockedRecords, err := loadCompactRecoveryRecordsUnderMaintenanceHold(ctx, root)
+	inspectNoError(t, err)
+
+	ordinaryJSON, err := json.Marshal(ordinaryReport)
+	inspectNoError(t, err)
+	lockedJSON, err := json.Marshal(lockedReport)
+	inspectNoError(t, err)
+	if string(ordinaryJSON) != string(lockedJSON) {
+		t.Fatalf("loadCompactRecoveryRecordsUnderMaintenanceHold disagrees with loadCompactRecoveryRecords on inspection:\n%s\n%s", ordinaryJSON, lockedJSON)
+	}
+	if len(ordinaryReport.Edges) == 0 {
+		t.Fatal("fixture produced no recovery edges; the agreement this test proves is vacuous")
+	}
+	if len(ordinaryRecords) != len(lockedRecords) {
+		t.Fatalf("record counts disagree: ordinary=%d locked=%d", len(ordinaryRecords), len(lockedRecords))
+	}
+	for lineage, ordinaryRecord := range ordinaryRecords {
+		lockedRecord, found := lockedRecords[lineage]
+		if !found {
+			t.Fatalf("locked-hold read is missing lineage %q the ordinary seam loaded", lineage)
+		}
+		ordinaryRecordJSON, err := json.Marshal(ordinaryRecord)
+		inspectNoError(t, err)
+		lockedRecordJSON, err := json.Marshal(lockedRecord)
+		inspectNoError(t, err)
+		if string(ordinaryRecordJSON) != string(lockedRecordJSON) {
+			t.Fatalf("record %q disagrees between seams:\n%s\n%s", lineage, ordinaryRecordJSON, lockedRecordJSON)
+		}
+	}
+}
+
 func TestCompactRecoveryInspectionCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
