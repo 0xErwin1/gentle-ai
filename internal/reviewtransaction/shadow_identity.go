@@ -227,11 +227,11 @@ func shadowSelectorTarget(selector shadowSelector) (Target, error) {
 		case hasBaseRef && hasLedger:
 			// shadowSelectorAmbiguityReason already routes this shape through
 			// the ambiguity path before this function is ever called.
-			return Target{}, errors.New("staged selector is ambiguous")
+			return Target{}, errors.New("staged selector is ambiguous") // refusal:by-design world-action: unreachable in practice -- shadowSelectorAmbiguityReason diverts this exact input shape to the ambiguity path before shadowSelectorTarget runs; reaching here is a caller-order invariant break inside the shadow-only observation path, swallowed by ObserveShadowRelation and never a live block
 		case hasBaseRef:
 			return Target{Kind: TargetBaseDiff, Projection: ProjectionStaged, BaseRef: selector.BaseRef}, nil
 		case hasLedger:
-			return Target{}, errors.New("staged fix-diff selector requires base_ref")
+			return Target{}, errors.New("staged fix-diff selector requires base_ref") // refusal:by-design world-action: defensive selector-construction invariant on the shadow-only observation path; the error is swallowed by ObserveShadowRelation's recover and surfaces only as an advisory stderr diagnostic, never a live gate block
 		default:
 			return Target{
 				Kind: TargetCurrentChanges, Projection: ProjectionStaged,
@@ -244,18 +244,18 @@ func shadowSelectorTarget(selector shadowSelector) (Target, error) {
 		hasBaseRef := strings.TrimSpace(selector.BaseRef) != ""
 		switch {
 		case hasRevision && hasBaseRef:
-			return Target{}, errors.New("committed-range selector is ambiguous")
+			return Target{}, errors.New("committed-range selector is ambiguous") // refusal:by-design world-action: unreachable in practice -- shadowSelectorAmbiguityReason diverts this exact input shape to the ambiguity path before shadowSelectorTarget runs; reaching here is a caller-order invariant break inside the shadow-only observation path, swallowed by ObserveShadowRelation and never a live block
 		case hasRevision:
 			return Target{Kind: TargetExactRevision, Revision: selector.Revision}, nil
 		case hasBaseRef:
 			return Target{Kind: TargetBaseDiff, BaseRef: selector.BaseRef}, nil
 		default:
-			return Target{}, errors.New("committed-range selector requires revision or base_ref")
+			return Target{}, errors.New("committed-range selector requires revision or base_ref") // refusal:by-design world-action: defensive selector-construction invariant on the shadow-only observation path; the error is swallowed by ObserveShadowRelation's recover and surfaces only as an advisory stderr diagnostic, never a live gate block
 		}
 
 	case shadowSelectorWorkspaceOverlay:
 		if strings.TrimSpace(selector.BaseRef) == "" {
-			return Target{}, errors.New("workspace-overlay selector requires base_ref")
+			return Target{}, errors.New("workspace-overlay selector requires base_ref") // refusal:by-design world-action: defensive selector-construction invariant on the shadow-only observation path; the error is swallowed by ObserveShadowRelation's recover and surfaces only as an advisory stderr diagnostic, never a live gate block
 		}
 		return Target{
 			Kind: TargetBaseWorkspaceOverlay, Projection: ProjectionWorkspace, BaseRef: selector.BaseRef,
@@ -263,7 +263,7 @@ func shadowSelectorTarget(selector shadowSelector) (Target, error) {
 		}, nil
 
 	default:
-		return Target{}, fmt.Errorf("unsupported shadow selector kind %q", selector.Kind)
+		return Target{}, fmt.Errorf("unsupported shadow selector kind %q", selector.Kind) // refusal:by-design world-action: shadowSelectorKind is a closed 4-value enum declared in this file; an unrecognized value can only reach here through a future caller bug, and the error is swallowed by ObserveShadowRelation, never blocking a live decision
 	}
 }
 
@@ -318,7 +318,7 @@ func shadowChangedPathsModesDigest(ctx context.Context, repo string, paths []str
 	for _, path := range paths {
 		modes, ok := modesByPath[path]
 		if !ok {
-			return "", fmt.Errorf("shadow candidate identity: path %q missing from raw tree diff", path)
+			return "", fmt.Errorf("shadow candidate identity: path %q missing from raw tree diff", path) // refusal:by-design world-action: a Git raw-diff parsing data-consistency invariant on the shadow-only path; the error is swallowed by ObserveShadowRelation and surfaces only as an advisory stderr diagnostic, never a live gate block
 		}
 		writeLengthPrefixed(hash, []byte(path))
 		writeLengthPrefixed(hash, []byte(modes.status))
