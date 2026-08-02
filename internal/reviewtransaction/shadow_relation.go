@@ -102,12 +102,19 @@ func shadowRelate(input shadowRelationInput) ShadowRelation {
 // to this exact Frozen/Live pair. Binding the proof to the identity tuple
 // (rather than trusting proof.valid() alone) mirrors the live classifier's
 // own pattern in classifyCompactTargetRelation (compact_target_relation.go)
-// — a stale proof for a different base pair must never be accepted.
+// — a stale proof for a different base pair must never be accepted. The
+// CandidateTree preservation check below was a discovered gap (Wave 1
+// exit-bar finding, TestShadowMatrixUnexplainedDivergenceOnCoreRelationBlocksWave2):
+// classifyCompactTargetRelation's own compatible-advance branch additionally
+// requires frozen.CandidateTree == live.CandidateTree, so a proof valid on
+// its own terms and matching the base pair but paired with a changed
+// CandidateTree must fall through, never be accepted here.
 func shadowBaseAdvanceApplies(input shadowRelationInput) bool {
 	proof := input.BaseAdvance
 	return proof != nil && proof.valid() &&
 		proof.OriginalMergeBaseTree == input.Frozen.BaseTree &&
-		proof.NewBaseTree == input.Live.BaseTree
+		proof.NewBaseTree == input.Live.BaseTree &&
+		input.Frozen.CandidateTree == input.Live.CandidateTree
 }
 
 // shadowDeriveBaseAdvance is Amendment A's delegation seam
