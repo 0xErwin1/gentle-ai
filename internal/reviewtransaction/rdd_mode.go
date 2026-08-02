@@ -119,13 +119,9 @@ const (
 type RDDDelivery string
 
 const (
-	// RDDDeliveryReceiptGoverned means an existing receipt governs delivery.
-	RDDDeliveryReceiptGoverned RDDDelivery = "receipt_governed"
 	// RDDDeliveryDisabledUnmanaged is delivery of work produced with the kill
 	// switch off and no receipt.
 	RDDDeliveryDisabledUnmanaged RDDDelivery = "disabled/unmanaged"
-	// RDDDeliveryUnmanaged is delivery with the switch on but no receipt yet.
-	RDDDeliveryUnmanaged RDDDelivery = "unmanaged"
 	// RDDDeliveryCandidateDeclinedUnmanaged is delivery the operator explicitly
 	// chose to leave outside RDD for one exact candidate. It is not a receipt,
 	// approval, or global mode change.
@@ -422,21 +418,6 @@ func RecordRDDConsentAsked(ctx context.Context, repo string) error {
 		return err
 	}
 	return publishPrivateRARImmutable(filepath.Join(dir, rddConsentName), rddConsentPayload)
-}
-
-// RDDDeliveryDisposition reports delivery under ordinary repository policy. An
-// existing receipt still governs delivery because disabling freezes authority
-// read-only; without one, disabled work stays explicitly unmanaged. No value
-// here fabricates an approval or a PASS.
-func RDDDeliveryDisposition(status RDDModeStatus, receiptPresent bool) RDDDelivery {
-	switch {
-	case receiptPresent:
-		return RDDDeliveryReceiptGoverned
-	case status.Enabled():
-		return RDDDeliveryUnmanaged
-	default:
-		return RDDDeliveryDisabledUnmanaged
-	}
 }
 
 func rddModeStatus(

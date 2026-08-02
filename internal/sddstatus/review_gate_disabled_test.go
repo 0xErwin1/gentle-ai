@@ -162,9 +162,6 @@ func TestDisabledArchiveGateNeverReadsAsAnApproval(t *testing.T) {
 	if status.ReviewGate == nil || status.ReviewGate.Result == reviewtransaction.GateAllow {
 		t.Fatalf("disabled gate fabricated an approval: %#v", status.ReviewGate)
 	}
-	if status.ReviewGate.Delivery == reviewtransaction.RDDDeliveryReceiptGoverned {
-		t.Fatalf("disabled gate claimed a receipt governs: %#v", status.ReviewGate)
-	}
 	lowered := strings.ToLower(status.ReviewGate.Reason)
 	for _, forbidden := range []string{"approved", "allow", "pass"} {
 		if strings.Contains(lowered, forbidden) {

@@ -177,9 +177,8 @@ type ReviewGateState struct {
 	Result reviewtransaction.GateResult `json:"result"`
 	Reason string                       `json:"reason"`
 	// Delivery names what governs the change when the review gate itself
-	// cannot, mirroring the delivery gate's own disposition field
-	// (internal/cli.reviewDeliveryDisposition). It is set only while the
-	// receipt-driven-development kill switch is off and the change has no
+	// cannot, mirroring review validate's delivery disposition. It is set only
+	// while the receipt-driven-development kill switch is off and the change has no
 	// review authority of its own, where it reports
 	// RDDDeliveryDisabledUnmanaged: no review governs this change and it
 	// closes under ordinary repository policy rather than under a receipt.

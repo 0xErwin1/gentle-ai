@@ -718,7 +718,7 @@ func TestOrganicKillSwitchStopsAtTheDeliveryBoundary(t *testing.T) {
 
 	// The delivery boundary reports only the disabled mode instead of inspecting
 	// the candidate or inventing an approval.
-	gate := harness.gateAllowFailure("pre-push")
+	gate := harness.gate("pre-push")
 	assertOrganicNeutralDisabledGate(t, gate)
 
 	// Zero effects: no review authority, no additional compare-and-swap

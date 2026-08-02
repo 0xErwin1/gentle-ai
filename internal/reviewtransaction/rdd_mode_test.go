@@ -381,22 +381,3 @@ func TestUnknownRDDModeFailsClosedAsDisabled(t *testing.T) {
 		t.Fatalf("corrupt override did not fail closed: %#v", status)
 	}
 }
-
-func TestRDDDeliveryDispositionNeverFabricatesApproval(t *testing.T) {
-	disabled := RDDModeStatus{Effective: RDDModeOff}
-	if got := RDDDeliveryDisposition(disabled, false); got != RDDDeliveryDisabledUnmanaged {
-		t.Fatalf("disabled delivery = %q, want %q", got, RDDDeliveryDisabledUnmanaged)
-	}
-	// A receipt issued before the kill switch remains real authority: disabling
-	// freezes it read-only, it does not retroactively unmake it.
-	if got := RDDDeliveryDisposition(disabled, true); got != RDDDeliveryReceiptGoverned {
-		t.Fatalf("disabled delivery with an existing receipt = %q, want %q", got, RDDDeliveryReceiptGoverned)
-	}
-	enabled := RDDModeStatus{Effective: RDDModeOn}
-	if got := RDDDeliveryDisposition(enabled, false); got != RDDDeliveryUnmanaged {
-		t.Fatalf("enabled delivery without a receipt = %q, want %q", got, RDDDeliveryUnmanaged)
-	}
-	if got := RDDDeliveryDisposition(enabled, true); got != RDDDeliveryReceiptGoverned {
-		t.Fatalf("enabled delivery with a receipt = %q, want %q", got, RDDDeliveryReceiptGoverned)
-	}
-}

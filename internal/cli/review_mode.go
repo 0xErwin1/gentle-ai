@@ -214,35 +214,13 @@ func reviewModeUnreadable(
 	return &ReviewModeUnreadableError{Scopes: scopes, Cause: err}
 }
 
-// reviewDeliveryDisposition reports what governs delivery for the candidate
-// currently under a lifecycle gate. The kill switch alone never decides: an
-// existing receipt keeps governing because disabling freezes authority
-// read-only rather than unmaking an approval that is content-bound to exactly
-// these bytes.
-//
-// An unreadable switch is not a disabled switch. When the mode cannot be
-// resolved this fails closed to the managed disposition, so a broken or
-// tampered mode file can never relax a gate into reporting work as unmanaged by
-// choice.
-func reviewDeliveryDisposition(ctx context.Context, repo string, receiptPresent bool) reviewtransaction.RDDDelivery {
-	status, err := reviewModeStatus(ctx, repo)
-	if err != nil {
-		if receiptPresent {
-			return reviewtransaction.RDDDeliveryReceiptGoverned
-		}
-		return reviewtransaction.RDDDeliveryUnmanaged
-	}
-	return reviewtransaction.RDDDeliveryDisposition(status, receiptPresent)
-}
-
 // reviewDrivenDevelopmentDisabled reports whether the user's kill switch is off
 // for this clone. It is the reach the switch needs outside the review gate:
 // every enforcement point that can refuse work on review grounds must be able
 // to ask this cheaply, because a switched-off system has no implications.
 //
 // An unreadable switch is not a disabled switch. It fails closed to "enabled"
-// for the same reason reviewDeliveryDisposition does: a broken or tampered mode
-// record must never be able to relax an enforcement point.
+// so a broken or tampered mode record can never relax an enforcement point.
 func reviewDrivenDevelopmentDisabled(ctx context.Context, repo string) bool {
 	status, err := reviewModeStatus(ctx, repo)
 	if err != nil {
