@@ -1,19 +1,22 @@
 // Package reviewtransaction — shadow observer seam (Wave 1, Slice 5). This
 // file is part of the read-only shadow of the target RDD relation model
 // (docs/architecture/rdd-root-simplification-design.md). It is the ONLY
-// production entry point that calls the shadow identity resolver
-// (shadow_identity.go), the relation algebra (shadow_relation.go), and the
-// authority graph health classifier (shadow_authority_health.go) from a
-// live call site — see shadow_readonly_guard_test.go for the AST guard that
-// keeps this whole package free of mutation.
+// production entry point that calls the candidate identity resolver
+// (candidate_identity.go, promoted from shadow_identity.go in Wave 3 Slice
+// 1), the relation algebra (candidate_relation.go, promoted from
+// shadow_relation.go), and the authority graph health classifier
+// (shadow_authority_health.go) from a live call site — see
+// candidate_readonly_guard_test.go and shadow_readonly_guard_test.go for
+// the AST guards that keep this whole package free of mutation.
 //
 // ObserveShadowRelation is the third and final symbol design decision 1
 // exports for the whole wave (after Slice 2's CandidateIdentity and Slice
-// 3's ShadowRelation). It satisfies spec.md's "Advisory-Only, Never
-// Blocking" and "Disable Switch Is the Rollback Boundary" requirements: it
-// returns nothing, its own error and panic paths are always swallowed, and
-// GENTLE_AI_RDD_SHADOW unset or empty makes it a true no-op before any
-// repository read, Git command, or in-memory record (design decision 2).
+// 3's ShadowRelation, now a type alias for CandidateRelation — Wave 3 Slice
+// 1). It satisfies spec.md's "Advisory-Only, Never Blocking" and "Disable
+// Switch Is the Rollback Boundary" requirements: it returns nothing, its
+// own error and panic paths are always swallowed, and GENTLE_AI_RDD_SHADOW
+// unset or empty makes it a true no-op before any repository read, Git
+// command, or in-memory record (design decision 2).
 package reviewtransaction
 
 import (
@@ -185,7 +188,7 @@ func ObserveShadowRelation(
 			if gate == GatePrePush || gate == GatePrePR {
 				unresolvable = shadowPushBoundaryUnresolvable(pushRefs, nil)
 			}
-			row.Relation = shadowRelate(shadowRelationInput{
+			row.Relation = relateCandidates(shadowRelationInput{
 				Frozen: frozen, Live: live, LiveSnapshot: liveSnapshot,
 				BaseAdvance: baseAdvance, ApplicableAuthorities: 1, LiveUnresolvable: unresolvable,
 			})
