@@ -14,6 +14,8 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
+var wantEnabledReviewGateFields = []string{"action", "allowed", "context", "reason", "result", "schema"}
+
 // The maintainer's rule for this file: while the kill switch is off,
 // receipt-driven development does not exist, so it has no implications. The gate
 // never blocks, never vetoes, and never gates; ordinary repository policy —
@@ -64,10 +66,9 @@ func corruptReviewAuthorityInventory(t *testing.T, repo string) {
 	}
 }
 
-// assertDisabledUnmanagedGate is the single shape every reclassified discovery
-// outcome must produce while disabled: exit 0, no denial error, no approval, no
-// invented receipt, and the reason the gate could not govern still discoverable.
-func assertDisabledUnmanagedGate(t *testing.T, runErr error, payload []byte, wantCode string) ReviewValidateResult {
+// assertDisabledUnmanagedGate is the single neutral result public validation
+// returns before inspecting any review state while the switch is off.
+func assertDisabledUnmanagedGate(t *testing.T, runErr error, payload []byte, _ string) ReviewValidateResult {
 	t.Helper()
 	if runErr != nil {
 		t.Fatalf("disabled gate vetoed delivery instead of reporting it: %v\n%s", runErr, string(payload))
@@ -84,8 +85,8 @@ func assertDisabledUnmanagedGate(t *testing.T, runErr error, payload []byte, wan
 	if result.Allowed || result.Result == reviewtransaction.GateAllow {
 		t.Fatalf("disabled gate fabricated an approval: %#v", result)
 	}
-	if result.Context.Denial == nil || result.Context.Denial.Code != wantCode {
-		t.Fatalf("disabled gate denial = %#v, want code %q", result.Context.Denial, wantCode)
+	if result.Context.Denial == nil || result.Context.Denial.Stage != "rdd-mode" || result.Context.Denial.Code != "rdd_disabled" {
+		t.Fatalf("disabled gate denial = %#v, want rdd-mode/rdd_disabled", result.Context.Denial)
 	}
 	return result
 }
@@ -99,7 +100,7 @@ func assertDisabledUnmanagedGate(t *testing.T, runErr error, payload []byte, wan
 func TestReviewValidateReportsDisabledUnmanagedDeliveryOverMultipleExactReceipts(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
-	lineages := approveTwoExactlyGoverningReceipts(t, repo)
+	approveTwoExactlyGoverningReceipts(t, repo)
 
 	disableReviewForClone(t, repo)
 
@@ -112,15 +113,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverMultipleExactReceipts
 
 	var output bytes.Buffer
 	runErr := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePostApply)}, &output)
-	result := assertDisabledUnmanagedGate(t, runErr, output.Bytes(), string(ReviewReceiptAmbiguous))
-
-	// Information must not be destroyed: not blocking is not the same as
-	// pretending nothing was ambiguous, so the competing lineages stay named.
-	for _, lineage := range lineages {
-		if !strings.Contains(result.Reason, lineage) {
-			t.Fatalf("disabled gate dropped the competing lineage %q from its reason: %q", lineage, result.Reason)
-		}
-	}
+	assertDisabledUnmanagedGate(t, runErr, output.Bytes(), string(ReviewReceiptAmbiguous))
 
 	var replay bytes.Buffer
 	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePostApply)}, &replay); err != nil {
@@ -196,11 +189,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthority(t 
 
 	var output bytes.Buffer
 	runErr := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &output)
-	result := assertDisabledUnmanagedGate(t, runErr, output.Bytes(), string(ReviewAuthorityCorrupted))
-	// Visible, not silent: the damage is named in the reported reason.
-	if !strings.Contains(result.Reason, "unavailable or corrupted") {
-		t.Fatalf("disabled corrupted-authority reason hid the damage: %q", result.Reason)
-	}
+	assertDisabledUnmanagedGate(t, runErr, output.Bytes(), string(ReviewAuthorityCorrupted))
 }
 
 // TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileEnabled is the
@@ -322,10 +311,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverMixedCompactAndLegacy
 	runErr := RunReviewFacadeValidate([]string{
 		"--cwd", fixture.repo, "--gate", string(reviewtransaction.GatePostApply),
 	}, &output)
-	result := assertDisabledUnmanagedGate(t, runErr, output.Bytes(), string(ReviewReceiptAmbiguous))
-	if !strings.Contains(result.Reason, "compact v2 and legacy v1") {
-		t.Fatalf("disabled mixed-authority reason hid the competing stores: %q", result.Reason)
-	}
+	assertDisabledUnmanagedGate(t, runErr, output.Bytes(), string(ReviewReceiptAmbiguous))
 }
 
 // TestReviewValidateReValidatesFromScratchAfterReEnabling proves the second

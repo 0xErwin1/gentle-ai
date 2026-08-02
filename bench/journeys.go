@@ -405,6 +405,44 @@ func rememberLineage(sandbox *Sandbox, observation Observation) error {
 	return nil
 }
 
+func requireNeutralDisabledGate(_ *Sandbox, observation Observation) error {
+	if observation.ExitCode != 0 {
+		return fmt.Errorf("disabled gate exited %d: %s", observation.ExitCode, firstLine(observation.Stderr))
+	}
+	var gate struct {
+		Result   string                     `json:"result"`
+		Allowed  bool                       `json:"allowed"`
+		Action   string                     `json:"action"`
+		Delivery string                     `json:"delivery"`
+		Context  map[string]json.RawMessage `json:"context"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &gate); err != nil {
+		return fmt.Errorf("parse disabled gate: %w", err)
+	}
+	if gate.Result != "invalidated" || gate.Allowed || gate.Action != "repository-policy" || gate.Delivery != "disabled/unmanaged" ||
+		len(gate.Context) != 2 || gate.Context["gate"] == nil || gate.Context["denial"] == nil {
+		return fmt.Errorf("disabled gate leaked review context or changed disposition: %s", observation.Stdout)
+	}
+	var denial struct {
+		Stage string `json:"stage"`
+		Code  string `json:"code"`
+	}
+	if err := json.Unmarshal(gate.Context["denial"], &denial); err != nil || denial.Stage != "rdd-mode" || denial.Code != "rdd_disabled" {
+		return fmt.Errorf("disabled gate denial = %s", gate.Context["denial"])
+	}
+	return nil
+}
+
+func requireFreshReviewAfterReenable(_ *Sandbox, observation Observation) error {
+	if observation.ExitCode == 0 {
+		return errors.New("re-enabled stale delivery bypassed fresh review validation")
+	}
+	if delivery, ok := envelopeString(observation.Stdout, "delivery"); ok && delivery != "" {
+		return fmt.Errorf("re-enabled stale delivery retained disabled disposition %q", delivery)
+	}
+	return nil
+}
+
 var startCapability = &Capability{Verb: []string{"review", "start"}, Flags: []string{"--cwd"}}
 
 // Capabilities declare only the flags the step actually uses. Over-declaring
@@ -471,18 +509,28 @@ func coreJourneys() []Journey {
 		},
 		{
 			ID:     "j03-kill-switch",
-			Title:  "Kill switch: disable, start refused, re-enable, review",
+			Title:  "Kill switch: terminal receipt bypass, stale bypass, re-enable",
 			Source: "guide flow 2",
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
 				{Name: "mode status", Requires: modeCapability, Args: productArgs("review", "mode", "status", "--json")},
-				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
-				{Name: "mode status after disable", Requires: modeCapability, Args: productArgs("review", "mode", "status", "--json")},
 				{Name: "fixture: stage docs", Fixture: stageDocs("switch")},
-				{Name: "review start while disabled", Requires: startCapability, Args: productArgs("review", "start")},
+				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
+				{Name: "review finalize exact receipt", Requires: finalizeCapability, Args: productArgs("review", "finalize")},
+				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
+				{Name: "disabled exact post-apply", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "post-apply"), After: requireNeutralDisabledGate},
+				{Name: "disabled exact pre-commit", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit"), After: requireNeutralDisabledGate},
+				{Name: "disabled exact pre-push", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-push"), After: requireNeutralDisabledGate},
+				{Name: "disabled exact pre-pr", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-pr"), After: requireNeutralDisabledGate},
+				{Name: "disabled exact release", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "release"), After: requireNeutralDisabledGate},
+				{Name: "fixture: stage stale docs", Fixture: stageDocs("switch-stale")},
+				{Name: "disabled stale post-apply", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "post-apply"), After: requireNeutralDisabledGate},
+				{Name: "disabled stale pre-commit", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit"), After: requireNeutralDisabledGate},
+				{Name: "disabled stale pre-push", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-push"), After: requireNeutralDisabledGate},
+				{Name: "disabled stale pre-pr", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-pr"), After: requireNeutralDisabledGate},
+				{Name: "disabled stale release", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "release"), After: requireNeutralDisabledGate},
 				{Name: "mode enable", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--json")},
-				{Name: "review start after enable", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
-				{Name: "review finalize", Requires: finalizeCapability, Args: productArgs("review", "finalize")},
+				{Name: "re-enabled stale pre-commit requires fresh review", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit"), After: requireFreshReviewAfterReenable, AbortOnBlock: true},
 			},
 		},
 		{

@@ -716,21 +716,10 @@ func TestOrganicKillSwitchStopsAtTheDeliveryBoundary(t *testing.T) {
 		t.Fatalf("disabled start was refused without naming the deciding source: %s", stderr)
 	}
 
-	// The delivery boundary reports an unmanaged, receiptless candidate instead of
-	// inventing an approval.
+	// The delivery boundary reports only the disabled mode instead of inspecting
+	// the candidate or inventing an approval.
 	gate := harness.gateAllowFailure("pre-push")
-	if gate.Schema != organicGateSchema || gate.Allowed || gate.Result == organicGateAllow {
-		t.Fatalf("disabled delivery gate did not fail closed: %#v", gate)
-	}
-	if gate.Context.Denial == nil || gate.Context.Denial.Stage != "receipt-discovery" {
-		t.Fatalf("disabled delivery gate denial is not discoverable: %#v", gate.Context.Denial)
-	}
-	// The guidance installed on all 16 adapters promises this exact token under a
-	// disabled switch. Asserting it here is what keeps that promise honest, and
-	// distinguishes "unmanaged by choice" from "blocked because something broke".
-	if gate.Delivery != "disabled/unmanaged" {
-		t.Fatalf("disabled delivery gate did not report the promised disposition: %q", gate.Delivery)
-	}
+	assertOrganicNeutralDisabledGate(t, gate)
 
 	// Zero effects: no review authority, no additional compare-and-swap
 	// generation, and a remote that never moved.
@@ -784,15 +773,7 @@ func TestOrganicKillSwitchReportsUnmanagedDeliveryOverPriorReceipts(t *testing.T
 	// harness.gate fails the test on a non-zero exit, so this also proves the
 	// gate reports instead of vetoing.
 	gate := harness.gate("pre-push")
-	if gate.Schema != organicGateSchema || gate.Allowed || gate.Result == organicGateAllow {
-		t.Fatalf("disabled delivery over a prior receipt fabricated an approval: %#v", gate)
-	}
-	if gate.Delivery != "disabled/unmanaged" {
-		t.Fatalf("disabled delivery over a prior receipt did not report the promised disposition: %q", gate.Delivery)
-	}
-	if gate.Context.Denial == nil {
-		t.Fatalf("disabled delivery hid why the prior receipt does not govern: %#v", gate.Context)
-	}
+	assertOrganicNeutralDisabledGate(t, gate)
 
 	// Reporting moved nothing: the remote is untouched and no branch appeared.
 	if remote := harness.bareGit("rev-parse", "refs/heads/main"); remote != harness.repo.baseRevision {
@@ -838,17 +819,7 @@ func TestOrganicKillSwitchReportsUnmanagedDeliveryOverWorkspaceReceipt(t *testin
 	// harness.gate fails the test on a non-zero exit, so this also proves the
 	// gate reports instead of vetoing with a fabricated corruption verdict.
 	gate := harness.gate("pre-push")
-	if gate.Schema != organicGateSchema || gate.Allowed || gate.Result == organicGateAllow {
-		t.Fatalf("disabled delivery over a workspace receipt fabricated an approval: %#v", gate)
-	}
-	if gate.Delivery != "disabled/unmanaged" {
-		t.Fatalf("disabled delivery over a workspace receipt did not report the promised disposition: %q", gate.Delivery)
-	}
-	// The healthy receipt's real relation to the candidate stays discoverable:
-	// the delivery shape moved past it, and the store was never corrupted.
-	if gate.Context.Denial == nil || gate.Context.Denial.Code != "delivery-shape-mismatch" {
-		t.Fatalf("disabled delivery hid why the workspace receipt does not govern: %#v", gate.Context.Denial)
-	}
+	assertOrganicNeutralDisabledGate(t, gate)
 
 	// Reporting moved nothing: the remote is untouched and no branch appeared.
 	if remote := harness.bareGit("rev-parse", "refs/heads/main"); remote != harness.repo.baseRevision {
@@ -1019,7 +990,7 @@ func TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect(t *te
 		t.Fatalf("withdrawal journey did not approve its candidate: %#v", approved)
 	}
 
-	firstGate := harness.gentle("review", "validate", "--cwd", harness.repo.worktree, "--gate", "post-apply")
+	harness.gentle("review", "validate", "--cwd", harness.repo.worktree, "--gate", "post-apply")
 	firstFinalize := harness.gentle("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage)
 	beforeWithdrawal := harness.lineageDigest(lineage)
 
@@ -1036,9 +1007,11 @@ func TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect(t *te
 	}
 
 	replayedGate := harness.gentle("review", "validate", "--cwd", harness.repo.worktree, "--gate", "post-apply")
-	if !bytes.Equal(replayedGate, firstGate) {
-		t.Fatalf("the terminal gate result changed after withdrawal:\nfirst:\n%s\nreplay:\n%s", firstGate, replayedGate)
+	var disabledGate organicGateResult
+	if err := json.Unmarshal(replayedGate, &disabledGate); err != nil {
+		t.Fatalf("decode disabled terminal gate: %v\n%s", err, replayedGate)
 	}
+	assertOrganicNeutralDisabledGate(t, disabledGate)
 	replayedFinalize := harness.gentle("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage)
 	if !bytes.Equal(replayedFinalize, firstFinalize) {
 		t.Fatalf("the terminal finalize replay changed bytes:\nfirst:\n%s\nreplay:\n%s", firstFinalize, replayedFinalize)
@@ -1742,6 +1715,15 @@ type organicGateContext struct {
 type organicGateDenial struct {
 	Stage string `json:"stage"`
 	Code  string `json:"code"`
+}
+
+func assertOrganicNeutralDisabledGate(t *testing.T, gate organicGateResult) {
+	t.Helper()
+	if gate.Schema != organicGateSchema || gate.Allowed || gate.Result != "invalidated" || gate.Action != "repository-policy" ||
+		gate.Delivery != "disabled/unmanaged" || gate.Context.Denial == nil || gate.Context.Denial.Stage != "rdd-mode" || gate.Context.Denial.Code != "rdd_disabled" ||
+		gate.Context.LineageID != "" || gate.Context.StoreRevision != "" || gate.Context.BundleDigest != "" || gate.Context.BaseTree != "" || gate.Context.CandidateTree != "" {
+		t.Fatalf("disabled delivery gate was not neutral: %#v", gate)
+	}
 }
 
 type organicModeResult struct {
