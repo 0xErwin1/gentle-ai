@@ -44,20 +44,20 @@ Chain strategy: feature-branch-chain on tracker `feature/rdd-root-simplification
 
 Satisfies `rdd-authority-disposition-plan` (all 7 requirements) + `rdd-authority-graph-classification` MODIFIED "No Mutation or Execution".
 
-- [ ] 1.1 RED: `compact_inspect_test.go` — extract `loadCompactRecoveryRecords(repo) (report, records)`; assert it is the ONLY function both `InspectCompactRecoveryEdges` and `deriveAuthorityDispositionPlan` call for their `report`/`records` inputs (**mandatory obligation (a)**: single-seam test, no independent second record-loading path).
-- [ ] 1.2 GREEN: extract seam in `compact_inspect.go`; no inspection-semantics or JSON change.
-- [ ] 1.3 RED: `authority_disposition_plan_test.go` — Plan Field Set: derived plan carries all ten spec fields (`repository_id`…`authorization`) plus permitted `Schema` per the spec-field→Go-field mapping table.
-- [ ] 1.4 RED: Deterministic Closure Derivation — same graph inspected twice ⇒ identical `SeedSet`/`Closure`; derivation reads only via 1.1's seam, no cache/inferred view.
-- [ ] 1.5 RED: Closed Anomaly Classification Required — unknown/mixed/ambiguous (blocked classification, e.g. #1656 multi-lineage) ⇒ no plan, typed refusal, no generic fallback.
-- [ ] 1.6 RED: Plan digest determinism family — same records ⇒ same `plan_digest`; any `Closure`/`ExpectedRevisions`/`AnomalyClass` change ⇒ different digest; `Authorization` excluded from the digest pre-image (nine-field digest, ten-field struct).
-- [ ] 1.7 RED: Authorization Binds to Digest+Revision, No Expiry — stale `authority_inventory_revision` refuses regardless of elapsed time; valid revision proceeds with no expiry check (pending-confirmation assumption 1 — implement exactly as specified, no expiry code path).
-- [ ] 1.8 RED: Cardinality Is Executor Policy — plan shape has no leaf-specific field; cardinality-one and cardinality-N closures use the identical struct.
-- [ ] 1.9 RED: No New Public Repair Verb — CLI command-set fixture asserts plan derivation is reachable only through pre-existing `review repair` (pending-confirmation assumption 2).
-- [ ] 1.10 RED: classification regression — re-running the classifier alone (no plan derivation call) still produces no plan/mutation (`rdd-authority-graph-classification` delta scenario).
-- [ ] 1.11 RED: `DispositionClass` on the two content-mismatch branches in `classifyCompactRecoveryEdgeAnomalies`; `CompactRecoveryEdgeInspection` JSON stays byte-identical.
-- [ ] 1.12 RED: #2111 supersession probe — its fixture re-derives with non-empty `DispositionClass` and leaf cardinality, or the test documents withdrawal (design Open Question 1).
-- [ ] 1.13 GREEN: `internal/reviewtransaction/authority_disposition_plan.go` — struct, `deriveAuthorityDispositionPlan`, digests via `classifiedAuthorityRepairDigest`; `compact_reconcile.go` `DispositionClass` field.
-- [ ] 1.14 Ratchet: new unwired functions this slice — `scripts/deadcode-ratchet.sh --update`.
+- [x] 1.1 RED: `compact_inspect_test.go` — extract `loadCompactRecoveryRecords(repo) (report, records)`; assert it is the ONLY function both `InspectCompactRecoveryEdges` and `deriveAuthorityDispositionPlan` call for their `report`/`records` inputs (**mandatory obligation (a)**: single-seam test, no independent second record-loading path).
+- [x] 1.2 GREEN: extract seam in `compact_inspect.go`; no inspection-semantics or JSON change.
+- [x] 1.3 RED: `authority_disposition_plan_test.go` — Plan Field Set: derived plan carries all ten spec fields (`repository_id`…`authorization`) plus permitted `Schema` per the spec-field→Go-field mapping table.
+- [x] 1.4 RED: Deterministic Closure Derivation — same graph inspected twice ⇒ identical `SeedSet`/`Closure`; derivation reads only via 1.1's seam, no cache/inferred view.
+- [x] 1.5 RED: Closed Anomaly Classification Required — unknown/mixed/ambiguous (blocked classification, e.g. #1656 multi-lineage) ⇒ no plan, typed refusal, no generic fallback.
+- [x] 1.6 RED: Plan digest determinism family — same records ⇒ same `plan_digest`; any `Closure`/`ExpectedRevisions`/`AnomalyClass` change ⇒ different digest; `Authorization` excluded from the digest pre-image (nine-field digest, ten-field struct).
+- [x] 1.7 RED: Authorization Binds to Digest+Revision, No Expiry — stale `authority_inventory_revision` refuses regardless of elapsed time; valid revision proceeds with no expiry check (pending-confirmation assumption 1 — implement exactly as specified, no expiry code path).
+- [x] 1.8 RED: Cardinality Is Executor Policy — plan shape has no leaf-specific field; cardinality-one and cardinality-N closures use the identical struct.
+- [x] 1.9 RED: No New Public Repair Verb — CLI command-set fixture asserts plan derivation is reachable only through pre-existing `review repair` (pending-confirmation assumption 2).
+- [x] 1.10 RED: classification regression — re-running the classifier alone (no plan derivation call) still produces no plan/mutation (`rdd-authority-graph-classification` delta scenario).
+- [x] 1.11 RED: `DispositionClass` on the two content-mismatch branches in `classifyCompactRecoveryEdgeAnomalies`; `CompactRecoveryEdgeInspection` JSON stays byte-identical.
+- [x] 1.12 RED: #2111 supersession probe — its fixture re-derives with non-empty `DispositionClass` and leaf cardinality, or the test documents withdrawal (design Open Question 1).
+- [x] 1.13 GREEN: `internal/reviewtransaction/authority_disposition_plan.go` — struct, `deriveAuthorityDispositionPlan`, digests via `classifiedAuthorityRepairDigest`; `compact_reconcile.go` `DispositionClass` field.
+- [x] 1.14 Ratchet: new unwired functions this slice — `scripts/deadcode-ratchet.sh --update`.
 
 ## Phase 2 (Slice S2 / PR2): Leaf Admission, Lock+CAS, Quarantine, Replay, Readback
 
