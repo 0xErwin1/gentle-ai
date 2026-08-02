@@ -194,7 +194,7 @@ func (state ModelPickerState) Update(msg tea.Msg) ModelPickerState {
 	state.customProviderIDs = append(state.customProviderIDs, "lmstudio")
 	state.refreshAvailableModels()
 	if len(discovery.Models) > 0 && len(opencode.FilterModelsForSDD(provider)) == 0 {
-		state.ConfigWarning = appendConfigWarning(state.ConfigWarning, "LM Studio models need tool_call: true in provider.lmstudio.models for SDD.")
+		state.ConfigWarning = appendConfigWarning(state.ConfigWarning, "LM Studio models need \"tool_call\": true in provider.lmstudio.models for SDD.")
 	}
 	return state
 }
@@ -235,7 +235,7 @@ func appendCustomProviderToolCallWarnings(
 			name = id
 		}
 		existing = appendConfigWarning(existing, fmt.Sprintf(
-			`Custom provider %q has models, but none declare tool_call: true. Add tool_call: true to at least one model in provider.%s.models.`,
+			`Custom provider %q has models, but none declare "tool_call": true. Add "tool_call": true to at least one model in provider.%s.models.`,
 			name,
 			id,
 		))
