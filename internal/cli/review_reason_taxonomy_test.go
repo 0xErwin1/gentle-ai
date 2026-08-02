@@ -36,6 +36,25 @@ func legacyReasonTaxonomyGateResult(kind ReviewReceiptDiscoveryKind) reviewtrans
 	}
 }
 
+// wantLegacyReasonTaxonomyGateResult is a HARDCODED literal expectation
+// table (task C3 fix), deliberately NOT derived by calling
+// legacyReasonTaxonomyGateResult a second time. The original matrix test
+// computed both sides of its comparison from the identical pure call
+// (want := legacyReasonTaxonomyGateResult(kind); got :=
+// legacyReasonTaxonomyGateResult(kind) == result), which meant every one of
+// its 24 cells always agreed with itself — proven by mutation: flipping
+// ReviewReceiptScopeChanged's case to return GateAllow left the matrix green
+// across all 24 cells. This table is the independent, hand-authored
+// expectation the mutation must now disagree with.
+var wantLegacyReasonTaxonomyGateResult = map[ReviewReceiptDiscoveryKind]reviewtransaction.GateResult{
+	ReviewReceiptMissing:            reviewtransaction.GateInvalidated,
+	ReviewReceiptUnrelated:          reviewtransaction.GateInvalidated,
+	ReviewReceiptScopeChanged:       reviewtransaction.GateScopeChanged,
+	ReviewReceiptAmbiguous:          reviewtransaction.GateInvalidated,
+	ReviewAuthorityCorrupted:        reviewtransaction.GateInvalidated,
+	ReviewReceiptTargetUnresolvable: reviewtransaction.GateInvalidated,
+}
+
 // TestNewLineageReasonTaxonomyCoversLegacyRefusalsClosedMatrix is task 6.1's
 // closed 6x4 vocabulary test (design decision 7): the six
 // ReviewReceiptDiscoveryKind values against the four GateResult values, no
@@ -52,7 +71,10 @@ func TestNewLineageReasonTaxonomyCoversLegacyRefusalsClosedMatrix(t *testing.T) 
 		reviewtransaction.GateInvalidated, reviewtransaction.GateEscalated,
 	}
 	for _, kind := range kinds {
-		want := legacyReasonTaxonomyGateResult(kind)
+		want, tabulated := wantLegacyReasonTaxonomyGateResult[kind]
+		if !tabulated {
+			t.Fatalf("kind %q has no hardcoded expectation in wantLegacyReasonTaxonomyGateResult", kind)
+		}
 		for _, result := range results {
 			reachable := result == want
 			t.Run(string(kind)+"/"+string(result), func(t *testing.T) {
