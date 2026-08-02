@@ -229,7 +229,7 @@ func TestGlobalReviewModeOffRefusesBeforeV2Consent(t *testing.T) {
 
 	var output bytes.Buffer
 	startArgs := transitionStartArgs(repo, status)
-	if !strings.Contains(strings.Join(startArgs, " "), "--agent=opencode") {
+	if !strings.Contains(strings.Join(startArgs, " "), "--agent=claude-code") {
 		t.Fatalf("v2 disabled START lost its runtime identity: %v", startArgs)
 	}
 	err := RunReview(startArgs, &output)
