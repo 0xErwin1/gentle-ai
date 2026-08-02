@@ -16,8 +16,8 @@ func TestCompactAcquireCASClaimsOneAttempt(t *testing.T) {
 	}
 	failNextCompactStoreSync(t, store)
 	requests := []CompactAcquireRequest{
-		{RequestID: "compact-cas-one", WorkUnit: "cas-unit", EvidenceGoal: "prove one compact claimant", MaxAttempts: 2, MaxChangedLines: 20},
-		{RequestID: "compact-cas-two", WorkUnit: "cas-unit", EvidenceGoal: "prove one compact claimant", MaxAttempts: 2, MaxChangedLines: 20},
+		{BeginAttemptRequest: BeginAttemptRequest{RequestID: "compact-cas-one", WorkUnit: "cas-unit", EvidenceGoal: "prove one compact claimant", MaxAttempts: 2, MaxChangedLines: 20}},
+		{BeginAttemptRequest: BeginAttemptRequest{RequestID: "compact-cas-two", WorkUnit: "cas-unit", EvidenceGoal: "prove one compact claimant", MaxAttempts: 2, MaxChangedLines: 20}},
 	}
 	type outcome struct {
 		result CompactAttemptResult

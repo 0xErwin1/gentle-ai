@@ -52,11 +52,11 @@ Chain strategy: feature-branch-chain
 
 ## Phase 3 (S2): Decision-9 Single Owner
 
-- [ ] 3.1 RED: work-unit-owner uniqueness test — `RuntimeObjective` is the sole scope owner; no parallel struct exists.
-- [ ] 3.2 Collapse `CompactAcquireRequest`'s `WorkUnit`/`EvidenceGoal`/`MaxAttempts`/`MaxChangedLines` into `BeginAttemptRequest` fields (`runtime_ledger.go`); `runtime_compact.go` becomes projection-only through `normalizeBeginAttemptRequest`.
-- [ ] 3.3 GREEN: 3.1 passes; advance-vs-reset distinction (#2133/#2151) defined once at the objective.
-- [ ] 3.4 Rewrite the conditional CON-08 owner row at `docs/architecture/rdd-ownership-inventory.md:93` to name `RuntimeObjective` unconditionally (drop "only if" wording) per maintainer-confirmed decision 9.
-- [ ] 3.5 `scripts/deadcode-ratchet.sh --update` for removed `CompactAcquireRequest` fields.
+- [x] 3.1 RED: work-unit-owner uniqueness test — `RuntimeObjective` is the sole scope owner; no parallel struct exists. `TestRuntimeObjectiveIsSoleWorkUnitScopeOwner` (reflect-based) — genuine RED captured against the pre-collapse struct (5 fields, want 1).
+- [x] 3.2 Collapse `CompactAcquireRequest`'s `WorkUnit`/`EvidenceGoal`/`MaxAttempts`/`MaxChangedLines` into `BeginAttemptRequest` fields (`runtime_ledger.go`); `runtime_compact.go` becomes projection-only through `normalizeBeginAttemptRequest`. Implemented via anonymous embedding (`CompactAcquireRequest struct { BeginAttemptRequest }`); updated 3 call sites (internal/cli/sdd_attempt.go, internal/sddstatus/runtime_compact_test.go, internal/sddstatus/runtime_objective_advance_test.go x2).
+- [x] 3.3 GREEN: 3.1 passes; advance-vs-reset distinction (#2133/#2151) defined once at the objective. Confirmed via `rg`: `runtimeObjectiveAdvanceAdmissible` (runtime_ledger.go:782) and `runtimeResetStructurallyPermitted` (runtime_ledger.go:1720) each have exactly one definition in the package — no duplicate logic. Full `internal/sddstatus` Compact/Acquire/Objective-scoped suite: 17 tests PASS.
+- [x] 3.4 Rewrite the conditional CON-08 owner row at `docs/architecture/rdd-ownership-inventory.md` to name `RuntimeObjective` unconditionally (drop "only if" wording) per maintainer-confirmed decision 9.
+- [x] 3.5 `scripts/deadcode-ratchet.sh --update` for removed `CompactAcquireRequest` fields. Net-zero: 233/233 entries.
 
 ## Phase 4 (S3): Offer Call Site + Absence Guard (FIRST per spec sequencing)
 

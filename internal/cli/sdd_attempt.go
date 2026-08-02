@@ -115,8 +115,10 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			return fmt.Errorf("sdd-attempt acquire requires %s; rerun `gentle-ai sdd-attempt acquire` with those missing flags", strings.Join(missing, ", "))
 		}
 		result, err = store.Acquire(ctx, sddstatus.CompactAcquireRequest{
-			RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
-			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines,
+			BeginAttemptRequest: sddstatus.BeginAttemptRequest{
+				RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
+				MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines,
+			},
 		})
 	case "settle":
 		if missing := missingSDDAttemptFlags(args[1:], "token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence"); len(missing) != 0 {
