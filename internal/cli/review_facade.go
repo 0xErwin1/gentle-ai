@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
@@ -122,12 +123,11 @@ const ReviewStartConsentDeclinedThisCandidate = "declined_this_candidate"
 const reviewStartEmptyCandidateHint = "the candidate has no pending changes; already-committed work can be reviewed by rerunning review start with --base-ref <commit> naming the base to compare against"
 
 // reviewStartNegotiateContractHint makes the negotiated contract path
-// discoverable from the plain START response. It transports the immutable Git
-// trees and preserves the frozen target selector so the rerun rebuilds the same
-// authority.
+// discoverable from the plain START response. Manual callers lack a generated
+// runtime identity, so their compatibility route stays on v1.
 func reviewStartNegotiateContractHint(snapshot reviewtransaction.Snapshot) string {
 	command := fmt.Sprintf("gentle-ai review start --contract %s --target %s --projection %s",
-		ReviewIntegrationContractV2, snapshot.Identity, facadeProjection(snapshot.Projection))
+		ReviewIntegrationContractV1, snapshot.Identity, facadeProjection(snapshot.Projection))
 	switch snapshot.Kind {
 	case reviewtransaction.TargetBaseDiff:
 		command += " --base-ref " + snapshot.BaseTree + " --committed-only"
@@ -730,6 +730,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	flags := newReviewFlagSet("review status", stdout, "Read every compact-v2 and shipped legacy-v1 authority from the shared Git common directory without mutation.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", "", "optional negotiated review integration contract")
+	runtimeAgent := flags.String("agent", "", "generated active runtime identity for negotiated lifecycle routing")
 	actionEligibility := flags.Bool("action-eligibility", false, "include optional machine-readable review action eligibility in negotiated output")
 	nextTransition := flags.Bool("next-transition", false, "include the optional canonical native next transition in negotiated output")
 	lineage := flags.String("lineage", "", "optional explicit lineage selector for negotiated target status")
@@ -757,6 +758,19 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	if *contract != "" {
 		if err := validateReviewIntegrationContract(*contract); err != nil {
 			return err
+		}
+		var runtime model.AgentID
+		runtimeRequested := reviewRuntimeAgentCount(args) > 0
+		if *nextTransition && (*contract == ReviewIntegrationContractV2 || runtimeRequested) {
+			if reviewRuntimeAgentCount(args) != 1 {
+				// refusal:by-design world-action: a lifecycle route without one generated runtime identity cannot safely select a review transport
+				return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, errors.New("negotiated lifecycle STATUS requires exactly one generated runtime identity"))
+			}
+			var runtimeErr error
+			runtime, runtimeErr = reviewRuntimeWithImmutableTransport(*runtimeAgent)
+			if runtimeErr != nil {
+				return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, runtimeErr)
+			}
 		}
 		if !validReviewIntegrationGate(reviewtransaction.GateKind(*gate)) {
 			return fmt.Errorf("unsupported review lifecycle gate %q", *gate)
@@ -932,7 +946,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			if startLineage == "" && native.Applicability == reviewtransaction.TargetApplicabilityUnrelated {
 				startLineage = reviewAvailableStartLineage(ctx, root, native.TargetIdentity)
 			}
-			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector})
+			transition := newReviewNextTransition(result, native.SelectedLenses, artifacts, capturedEvidence, artifactErr, reviewNextTransitionInput{Gate: reviewtransaction.GateKind(*gate), Successor: *recoverySuccessor, Reason: *recoveryReason, Actor: *recoveryActor, Authorization: *recoveryAuthorization, RepairActor: *repairActor, RepairReason: *repairReason, RepairAuthorization: *repairAuthorization, StartLineage: startLineage, RuntimeAgent: runtime, RepositoryContext: repositoryContext, ValidationRequest: validationRequest, CorrectionRequest: correctionRequest, EvidenceErr: evidenceErr, CorrectionForecasted: correctionForecasted, CaptureContext: captureContext, Selector: selector})
 			result.NextTransition = &transition
 			if reviewTransitionValidationRequest(&transition) == nil && transition.ReasonCode != "correction_repository_verification_required" &&
 				transition.ReasonCode != "correction_repository_tooling_failed" {
@@ -954,7 +968,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 	if *actionEligibility || *nextTransition {
 		return errors.New(reviewContractRequiredForActionEligibilityReason)
 	}
-	if strings.TrimSpace(*lineage) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" || *repairActor != "" || *repairReason != "" || *repairAuthorization != "" {
+	if strings.TrimSpace(*runtimeAgent) != "" || strings.TrimSpace(*lineage) != "" || strings.TrimSpace(*baseRef) != "" || strings.TrimSpace(*baseTree) != "" || *workspaceOverlay || *projection != string(reviewtransaction.ProjectionWorkspace) || *gate != string(reviewtransaction.GatePreCommit) || *recoverySuccessor != "" || *recoveryReason != "" || *recoveryActor != "" || *recoveryAuthorization != "" || *repairActor != "" || *repairReason != "" || *repairAuthorization != "" {
 		return errors.New(reviewStatusTargetSelectorsRequireContractReason)
 	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
@@ -1427,6 +1441,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	flags := newReviewFlagSet("review start", stdout, "Freeze live Git scope and derive the bounded review tier, lenses, and correction budget.")
 	cwd := flags.String("cwd", ".", "repository path")
 	contract := flags.String("contract", "", "optional negotiated review integration contract")
+	runtimeAgent := flags.String("agent", "", "generated active runtime identity for negotiated lifecycle routing")
 	targetIdentity := flags.String("target", "", "exact frozen target identity for negotiated START")
 	lineage := flags.String("lineage", "", "optional explicit review lineage identifier")
 	policySource := flags.String("policy", "", "optional review policy file; the native bounded policy is used by default")
@@ -1453,6 +1468,16 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	}
 	if err := validateReviewStartBinding(args, negotiated, *targetIdentity, *projection, *baseRef, *lineage, *committedOnly, *workspaceOverlay, *consent, *locale); err != nil {
 		return reviewPreflightError(err)
+	}
+	runtimeRequested := reviewRuntimeAgentCount(args) > 0
+	if negotiated && (*contract == ReviewIntegrationContractV2 || runtimeRequested) {
+		if reviewRuntimeAgentCount(args) != 1 {
+			// refusal:by-design world-action: a START without one generated runtime identity cannot safely create review authority
+			return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, errors.New("negotiated START requires exactly one generated runtime identity"))
+		}
+		if _, err := reviewRuntimeWithImmutableTransport(*runtimeAgent); err != nil {
+			return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, err)
+		}
 	}
 	consentMode := reviewStartConsentMode(strings.TrimSpace(*consent))
 	consentLocale, err := normalizeReviewConsentLocale(*locale)
@@ -1546,7 +1571,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			question, questionErr := newReviewIntegrationConsentResult(snapshot, assessment,
 				reviewConsentFollowUpBase(*cwd, snapshot.Identity, selectedProjection, strings.TrimSpace(*lineage),
 					strings.TrimSpace(*baseRef), strings.TrimSpace(*policySource), strings.TrimSpace(*focus),
-					strings.TrimSpace(*tracePath), *committedOnly, *workspaceOverlay, *contract, strings.TrimSpace(*locale)), *contract, consentLocale)
+					strings.TrimSpace(*tracePath), *committedOnly, *workspaceOverlay, *contract, *runtimeAgent, strings.TrimSpace(*locale)), *contract, consentLocale)
 			if questionErr != nil {
 				return questionErr
 			}
@@ -1744,6 +1769,10 @@ func validateReviewStartBinding(args []string, negotiated bool, target, projecti
 		return errors.New(reviewStartConsentValueReason)
 	}
 	if !negotiated {
+		if counts["agent"] != 0 {
+			// refusal:by-design operator-knowledge: only the generated negotiated route owns an active runtime identity
+			return errors.New("review start --agent requires a negotiated --contract")
+		}
 		if counts["target"] != 0 {
 			return errors.New(reviewStartTargetRequiresContractReason)
 		}
@@ -1756,7 +1785,7 @@ func validateReviewStartBinding(args []string, negotiated bool, target, projecti
 		}
 		return nil
 	}
-	for _, name := range []string{"contract", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent", "locale"} {
+	for _, name := range []string{"contract", "agent", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent", "locale"} {
 		if counts[name] > 1 {
 			return fmt.Errorf("review start repeats --%s", name)
 		}
@@ -1812,7 +1841,7 @@ func reviewStartBindingFlagCounts(args []string) map[string]int {
 			continue
 		}
 		switch name {
-		case "contract", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent", "locale":
+		case "contract", "agent", "target", "projection", "lineage", "base-ref", "committed-only", "workspace-overlay", "consent", "locale":
 			counts[name]++
 		}
 		if kind != reviewIntegrationBoolFlag && !hasValue {
@@ -1893,7 +1922,7 @@ func reviewConsentFollowUpBase(
 	projection reviewtransaction.Projection,
 	lineage, baseRef, policy, focus, trace string,
 	committedOnly, workspaceOverlay bool,
-	contract string,
+	contract, runtimeAgent string,
 	locale string,
 ) string {
 	parts := []string{
@@ -1902,6 +1931,9 @@ func reviewConsentFollowUpBase(
 		"--cwd " + cwd,
 		"--target " + target,
 		"--projection " + string(projection),
+	}
+	if runtimeAgent != "" {
+		parts = append(parts, "--agent "+runtimeAgent)
 	}
 	if lineage != "" {
 		parts = append(parts, "--lineage "+lineage)

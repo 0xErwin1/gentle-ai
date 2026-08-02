@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -652,7 +653,14 @@ func (result ReviewTargetStatusResult) validateStartNextTransition() error {
 	if lineage != "" && !validReviewIntegrationLineage(lineage) {
 		return errors.New("fresh target START lineage is not canonical")
 	}
-	wantArguments := reviewStartArguments(result, lineage)
+	runtime := model.AgentID(arguments["agent"])
+	if runtime != "" {
+		if _, err := reviewRuntimeWithImmutableTransport(string(runtime)); err != nil {
+			// refusal:by-design world-action: a START transition with an unproven runtime transport cannot be safely executed
+			return errors.New("fresh target START runtime lacks immutable review transport")
+		}
+	}
+	wantArguments := reviewStartArguments(result, lineage, runtime)
 	for index, argument := range wantArguments {
 		argument.Token = reviewTransitionArgumentToken(argument)
 		wantArguments[index] = argument

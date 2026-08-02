@@ -1015,7 +1015,7 @@ func prepareDeclinedCandidate(sandbox *Sandbox) error {
 
 func declineCandidateFromStatus(r *journeyRun) error {
 	statusObservation := r.run(productArgsFor(r, "review", "status", "--contract", reviewContractV2,
-		"--next-transition", "--lineage", declineCandidateLineage), false)
+		"--agent", "opencode", "--next-transition", "--lineage", declineCandidateLineage), false)
 	var status statusEnvelope
 	if err := decodeWaveObservation(statusObservation, &status, "candidate decline status"); err != nil {
 		return err
