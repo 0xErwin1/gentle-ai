@@ -53,10 +53,10 @@ Chain strategy: feature-branch-chain
 
 Satisfies `rdd-candidate-relation-algebra` — "Characterization Tests Precede Delegation-Seam Changes" (Wave 0 SUGGESTION-5: 4 callers, 0 covering tests). Test-only, no production code.
 
-- [ ] 1.1 RED: `internal/reviewtransaction/prepr_base_advance_characterization_test.go` — table-driven, `t.TempDir()` + real `git`, success case covering all 7 conditions (merge-base preservation, path digest identity, patch identity, path disjointness, conflict-free merge-tree, issuer-bound CI attestation, base/HEAD non-advance revalidation).
-- [ ] 1.2 RED: one failure sub-test per of the 7 conditions — each returns a distinct error.
-- [ ] 1.3 GREEN: `go test ./internal/reviewtransaction/... -run TestDeriveBaseAdvanceCompatibility`; prod code (`prepr.go`) does NOT change — this characterizes existing behavior.
-- [ ] 1.4 Ratchet: no new unwired functions; confirm `scripts/deadcode-ratchet.sh` reports no diff.
+- [x] 1.1 RED: `internal/reviewtransaction/prepr_base_advance_characterization_test.go` — table-driven, `t.TempDir()` + real `git`, success case covering all 7 conditions (merge-base preservation, path digest identity, patch identity, path disjointness, conflict-free merge-tree, issuer-bound CI attestation, base/HEAD non-advance revalidation).
+- [x] 1.2 RED: one failure sub-test per of the 7 conditions — each returns a distinct error.
+- [x] 1.3 GREEN: `go test ./internal/reviewtransaction/... -run TestDeriveBaseAdvanceCompatibility`; prod code (`prepr.go`) does NOT change — this characterizes existing behavior. All 8 sub-tests pass on the first run against unmodified `prepr.go` — no surprising behavior found.
+- [x] 1.4 Ratchet: no new unwired functions; confirm `scripts/deadcode-ratchet.sh` reports no diff. `scripts/deadcode-ratchet.sh` exits 0 with "no new unreachable functions" (a pre-existing, unrelated note about 4 baselined entries becoming reachable/gone was already present before this slice and is not addressed here).
 
 ## Phase 2 (Slice 2 / PR 2): `CandidateIdentity` Resolver
 
