@@ -401,3 +401,80 @@ func TestDisabledReviewModeDoesNotBlockPreVerifyRouting(t *testing.T) {
 		}
 	}
 }
+
+// The tests below close corrective verify cycle 3's CRITICAL-B (residual
+// C1): three sibling paths inside Resolve()/resolveEngramStatus() --
+// staleAllowAuthority's discovery walk, resolveCompactRemediationAuthority's
+// fallback into the same discovery path, and the governingRef!=nil
+// validation/blocking branch -- were still ungated by reviewDisabled, so a
+// stale-verify-totals fixture (evidence report claims more requirements
+// than the spec actually has) reached resolveReviewAuthority's discovery
+// walk and appended a blocked reason naming `gentle-ai review start`, a
+// command the kill switch itself refuses, while the switch was OFF.
+
+// staleTotalsVerifyEnvelope claims one more requirement/scenario than
+// seedBoundedReadyChange's single-spec fixture actually has, reproducing the
+// exact "stale evidence" shape (internally complete, non-failing report,
+// totals mismatch against the current spec) the report's repro used.
+func staleTotalsVerifyEnvelope(revision string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(boundedVerifyEnvelope(revision, "pass"), "requirements: 1/1", "requirements: 2/2"), "scenarios: 1/1", "scenarios: 2/2")
+}
+
+func seedStaleEvidenceReadyChange(t *testing.T, root string) string {
+	t.Helper()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
+	write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "### Requirement: Auth\n#### Scenario: Valid login\n")
+	write(t, filepath.Join(changeRoot, "verify-report.md"), staleTotalsVerifyEnvelope(shaID("1")))
+	runSDDStatusGit(t, root, "init", "-q")
+	runSDDStatusGit(t, root, "config", "user.email", "status@example.com")
+	runSDDStatusGit(t, root, "config", "user.name", "Status Test")
+	runSDDStatusGit(t, root, "add", ".")
+	runSDDStatusGit(t, root, "commit", "-qm", "base")
+	return changeRoot
+}
+
+// TestEnabledStaleEvidenceWithNoReceiptNamesReviewStart pins today's enabled
+// behaviour for the exact fixture the disabled test below relaxes: with no
+// governing receipt anywhere, the discovery walk finds nothing, and the
+// change is blocked pending a fresh review.
+func TestEnabledStaleEvidenceWithNoReceiptNamesReviewStart(t *testing.T) {
+	root := t.TempDir()
+	seedStaleEvidenceReadyChange(t, root)
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "resolve-review" {
+		t.Fatalf("enabled stale-evidence archive=%q next=%q, want blocked/resolve-review", status.Dependencies.Archive, status.NextRecommended)
+	}
+	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), "gentle-ai review start") {
+		t.Fatalf("enabled stale-evidence BlockedReasons = %v, want it to name the fresh review", status.BlockedReasons)
+	}
+}
+
+// TestDisabledStaleEvidenceNeverConsultsReviewAuthority is the fix: the same
+// fixture, with the switch off, grants the same "please re-verify" leniency
+// with zero review consultation and zero blocked reasons -- never naming
+// gentle-ai review start, a command the switch itself refuses to run.
+func TestDisabledStaleEvidenceNeverConsultsReviewAuthority(t *testing.T) {
+	root := t.TempDir()
+	seedStaleEvidenceReadyChange(t, root)
+
+	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", ReviewDisabled: true})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if status.ReviewGate != nil {
+		t.Fatalf("disabled stale-evidence reviewGate = %#v, want structural absence", status.ReviewGate)
+	}
+	if len(status.BlockedReasons) != 0 {
+		t.Fatalf("disabled stale-evidence BlockedReasons = %v, want none", status.BlockedReasons)
+	}
+	if status.Dependencies.Verify != DependencyReady {
+		t.Fatalf("disabled stale-evidence Verify = %q, want ready (please re-verify)", status.Dependencies.Verify)
+	}
+	if status.NextRecommended != "verify" {
+		t.Fatalf("disabled stale-evidence NextRecommended = %q, want verify (not resolve-review)", status.NextRecommended)
+	}
+}
