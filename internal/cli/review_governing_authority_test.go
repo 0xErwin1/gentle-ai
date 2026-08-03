@@ -106,3 +106,123 @@ func TestReviewValidateDiscoveryIntegrityMarkerCorruptedDeniesNeverLegacy(t *tes
 		t.Fatalf("discovery-integrity corruption denial is not replay-stable:\nfirst:\n%s\nreplay:\n%s", output.String(), replay.String())
 	}
 }
+
+// TestResolveGoverningAuthorityInFlightDeniesEveryGate is CRITICAL C5's
+// primary RED/GREEN evidence: the verify report's exact repro
+// (`GENTLE_AI_RDD_NEW_LINEAGE=1 gentle-ai review start --lineage inflight`,
+// nothing else — no reviewer, no finalize, no review-receipt.json) reached
+// GateAllow at all five gates including release. A lineage that was started
+// but never finalized is `reviewing`, never `approved`, and has no receipt —
+// default-deny requires every one of the five gates to deny it.
+func TestResolveGoverningAuthorityInFlightDeniesEveryGate(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	const lineage = "inflight-default-deny-lineage"
+	startNewLineageForFinalizeTest(t, repo, lineage)
+
+	for _, gate := range []reviewtransaction.GateKind{
+		reviewtransaction.GatePostApply, reviewtransaction.GatePreCommit, reviewtransaction.GatePrePush,
+		reviewtransaction.GatePrePR, reviewtransaction.GateRelease,
+	} {
+		t.Run(string(gate), func(t *testing.T) {
+			governs, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: gate})
+			if !governs {
+				t.Fatalf("gate %q: an in-flight (reviewing) v3 record must still govern (deny), got governs=false", gate)
+			}
+			if discoveryErr != nil {
+				return
+			}
+			if evaluation.Result == reviewtransaction.GateAllow {
+				t.Fatalf("gate %q: an unapproved, receipt-less new-lineage authority must never allow, got %#v", gate, evaluation)
+			}
+		})
+	}
+}
+
+// TestResolveGoverningAuthorityApprovedWithoutReceiptDenies proves
+// default-deny's "AND a validated receipt" half: a persisted state of
+// `approved` alone is not sufficient — an integrity gap between
+// review-state.json and a never-published review-receipt.json must never be
+// trusted as authorization.
+func TestResolveGoverningAuthorityApprovedWithoutReceiptDenies(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	const lineage = "approved-without-receipt-denies-lineage"
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("approved-without-receipt fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+
+	live, _, err := governingAuthorityLiveEvidence(context.Background(), repo, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := reviewtransaction.NewLineageAuthorityStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Mutate(context.Background(), "", func(next *reviewtransaction.NewLineageAuthority) error {
+		next.State = reviewtransaction.NewLineageStateApproved
+		next.CandidateIdentity = live
+		next.Tier = reviewtransaction.RiskLow
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	governs, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
+	if !governs {
+		t.Fatal("an approved-without-receipt authority must still govern (deny), got governs=false")
+	}
+	if discoveryErr != nil {
+		return
+	}
+	if evaluation.Result == reviewtransaction.GateAllow {
+		t.Fatalf("approved state without a published receipt must never allow, got %#v", evaluation)
+	}
+}
+
+// TestResolveGoverningAuthorityApprovedWithValidReceiptAllowsExactCandidate
+// is default-deny's positive control: an authority that genuinely reached
+// `approved` with a matching, structurally valid receipt on disk still
+// allows an exact live candidate — default-deny narrows WHICH state
+// authorizes, it does not turn v3 lineages into a universal denial.
+func TestResolveGoverningAuthorityApprovedWithValidReceiptAllowsExactCandidate(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	const lineage = "approved-with-receipt-allows-lineage"
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("approved-with-receipt fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+
+	live, _, err := governingAuthorityLiveEvidence(context.Background(), repo, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := reviewtransaction.NewLineageAuthorityStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, err := store.Mutate(context.Background(), "", func(next *reviewtransaction.NewLineageAuthority) error {
+		next.State = reviewtransaction.NewLineageStateApproved
+		next.CandidateIdentity = live
+		next.Tier = reviewtransaction.RiskLow
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteReceipt(context.Background(), reviewtransaction.NewLineageReceipt{
+		Schema: reviewtransaction.NewLineageReceiptSchema, LineageID: lineage,
+		TerminalState: reviewtransaction.NewLineageStateApproved, AuthorityRevision: revision,
+		CandidateIdentity: live,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	governs, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
+	if !governs || discoveryErr != nil || evaluation.Result != reviewtransaction.GateAllow {
+		t.Fatalf("approved authority with a valid receipt and exact live candidate must allow, got governs=%v evaluation=%#v discoveryErr=%v", governs, evaluation, discoveryErr)
+	}
+}

@@ -69,7 +69,7 @@ func (core ReviewCore) Next(ctx context.Context, authority NewLineageAuthority, 
 	case CoreRequestStart:
 		return core.start(request)
 	case CoreRequestFinalize:
-		return core.finalize(authority)
+		return core.finalize(authority, request)
 	case CoreRequestValidate:
 		return core.validate(authority, request)
 	default:
@@ -117,24 +117,59 @@ func (core ReviewCore) start(request CoreRequest) (CoreTransition, error) {
 // itself is enforced by AuthorityStore.WriteReceipt's immutable publication
 // (Wave 3 Slice 2), reused rather than re-derived here — finalize only binds
 // the ReceiptRef to the exact authority revision reaching that state.
-func (core ReviewCore) finalize(authority NewLineageAuthority) (CoreTransition, error) {
+//
+// C6 remediation: a non-terminal authority (reviewing, correcting,
+// validating) with an explicit request.AdvanceRequest is finalize's OWN
+// decision to advance, not a refusal — this is what makes ReviewCore the
+// sole transition owner for the whole reviewing/correcting -> approved|
+// escalated advance (design decision 1), rather than a caller mutating
+// NewLineageState directly before ever calling finalize. A nil
+// AdvanceRequest (every pre-existing caller, and this method's own original
+// contract) still refuses with ErrFinalizeRequiresTerminalState — the
+// pinned TestReviewCoreFinalizeRequiresTerminalState invariant is preserved
+// exactly, since a zero-value CoreRequest leaves AdvanceRequest nil.
+func (core ReviewCore) finalize(authority NewLineageAuthority, request CoreRequest) (CoreTransition, error) {
 	switch authority.State {
 	case NewLineageStateApproved, NewLineageStateEscalated:
+		revision, err := NewLineageRevisionForState(authority)
+		if err != nil {
+			return CoreTransition{}, err
+		}
+		kind := CoreTransitionApprove
+		if authority.State == NewLineageStateEscalated {
+			kind = CoreTransitionEscalate
+		}
+		return CoreTransition{
+			Kind: kind, ReasonCode: string(authority.State),
+			Receipt: &ReceiptRef{LineageID: authority.LineageID, AuthorityRevision: revision},
+		}, nil
+	case NewLineageStateReviewing, NewLineageStateCorrecting, NewLineageStateValidating:
+		if request.AdvanceRequest == nil {
+			return CoreTransition{}, fmt.Errorf("%w: got %q", ErrFinalizeRequiresTerminalState, authority.State)
+		}
+		next := authority
+		next.State = NewLineageStateApproved
+		if request.AdvanceRequest.Failed || len(request.AdvanceRequest.AdmittedFindingIDs) > 0 {
+			next.State = NewLineageStateEscalated
+		}
+		if len(request.AdvanceRequest.AdmittedFindingIDs) > 0 {
+			next.AdmittedFindingIDs = append(append([]string{}, next.AdmittedFindingIDs...), request.AdvanceRequest.AdmittedFindingIDs...)
+		}
+		revision, err := NewLineageRevisionForState(next)
+		if err != nil {
+			return CoreTransition{}, err
+		}
+		kind := CoreTransitionApprove
+		if next.State == NewLineageStateEscalated {
+			kind = CoreTransitionEscalate
+		}
+		return CoreTransition{
+			Kind: kind, ReasonCode: string(next.State), Authority: &next,
+			Receipt: &ReceiptRef{LineageID: next.LineageID, AuthorityRevision: revision},
+		}, nil
 	default:
 		return CoreTransition{}, fmt.Errorf("%w: got %q", ErrFinalizeRequiresTerminalState, authority.State)
 	}
-	revision, err := NewLineageRevisionForState(authority)
-	if err != nil {
-		return CoreTransition{}, err
-	}
-	kind := CoreTransitionApprove
-	if authority.State == NewLineageStateEscalated {
-		kind = CoreTransitionEscalate
-	}
-	return CoreTransition{
-		Kind: kind, ReasonCode: string(authority.State),
-		Receipt: &ReceiptRef{LineageID: authority.LineageID, AuthorityRevision: revision},
-	}, nil
 }
 
 // validate compares the frozen authority against a live candidate (spec

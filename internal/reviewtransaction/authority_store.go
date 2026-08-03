@@ -490,3 +490,26 @@ func (store AuthorityStore) WriteReceipt(ctx context.Context, receipt NewLineage
 	}
 	return publishImmutable(store.ReceiptPath(), append(receiptPayload, '\n'), 0o644)
 }
+
+// LoadReceipt reads and structurally validates the immutable terminal
+// receipt this store may have published (WriteReceipt). C5 remediation
+// (verify-report CRITICAL, "default-deny at gates"): gate authorization for
+// an `approved` authority MUST NOT trust the persisted state field alone —
+// it must confirm a receipt was genuinely published for it. Any read,
+// parse, or structural-validation failure here is reported as an error; the
+// caller (resolveGoverningAuthority) treats that identically to "no receipt
+// exists", never as "trust the state field instead".
+func (store AuthorityStore) LoadReceipt() (NewLineageReceipt, error) {
+	payload, err := os.ReadFile(store.ReceiptPath())
+	if err != nil {
+		return NewLineageReceipt{}, err
+	}
+	var receipt NewLineageReceipt
+	if err := json.Unmarshal(payload, &receipt); err != nil {
+		return NewLineageReceipt{}, err
+	}
+	if err := receipt.Validate(); err != nil {
+		return NewLineageReceipt{}, err
+	}
+	return receipt, nil
+}

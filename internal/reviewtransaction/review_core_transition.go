@@ -88,6 +88,43 @@ type CoreRequest struct {
 	// context relateCandidates needs beyond the two identities themselves.
 	LiveCandidateIdentity CandidateIdentity
 	Evidence              CoreValidateEvidence
+
+	// AdvanceRequest is finalize-only, and deliberately opt-in (nil by
+	// default). C6 remediation (verify-report CRITICAL, "ReviewCore-owned
+	// transitions in finalize"): design's own finalize data flow ("admitted
+	// candidate_causal? -> correcting -> one bounded correction -> validating
+	// -> approved (receipt)") is finalize's decision to make, not its
+	// caller's -- a caller that directly set NewLineageState on a Mutate
+	// apply closure (the bug this field fixes) was deciding the transition
+	// itself, contradicting "Sole Transition Owner for New Lineages". A nil
+	// AdvanceRequest preserves finalize's original, still-pinned invariant
+	// (TestReviewCoreFinalizeRequiresTerminalState: a bare finalize request
+	// against a non-terminal authority refuses with
+	// ErrFinalizeRequiresTerminalState) for every existing caller that never
+	// opts in. A caller that DOES have a decision to make (currently only
+	// runReviewFacadeFinalizeNewLineage) supplies it here; finalize alone
+	// decides which terminal state it produces and returns the resulting
+	// NewLineageAuthority as CoreTransition.Authority, mirroring start's own
+	// "Next decides, Mutate's apply stores *transition.Authority verbatim"
+	// contract (review_facade_new_lineage.go:73-78) -- zero state decisions
+	// left in the CLI layer.
+	AdvanceRequest *FinalizeAdvanceRequest
+}
+
+// FinalizeAdvanceRequest is finalize's decision context for a non-terminal
+// authority (reviewing, correcting, or validating): Failed and
+// AdmittedFindingIDs are the caller's already-computed classification
+// (AdmitCandidateCausalFindings) -- finalize decides WHICH terminal state
+// they produce (escalated when either is non-empty/true, approved
+// otherwise) and whether AdmittedFindingIDs get appended to the resulting
+// authority; it never re-derives the classification itself. Supplying this
+// also reopens a `correcting` lineage's own finalize path (spec
+// rdd-review-core-transitions' "In-flight new lineage still finalizes after
+// rollback" scenario, whose GIVEN is literally a `correcting` lineage) --
+// finalize previously refused `correcting` outright with no path forward.
+type FinalizeAdvanceRequest struct {
+	Failed             bool
+	AdmittedFindingIDs []string
 }
 
 // CoreValidateEvidence carries every already-resolved input relateCandidates
