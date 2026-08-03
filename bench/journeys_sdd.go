@@ -1629,9 +1629,12 @@ func sddJourneys() []Journey {
 			//
 			// Expected: with reviews ON the archive dependency is blocked and the
 			// gate result is not allow. With reviews OFF the archive dependency
-			// becomes ready, the gate reports the `disabled/unmanaged` delivery
-			// disposition — and the result is still NOT `allow`, because declining
-			// to manage is not approval.
+			// becomes ready and the reviewGate field is structurally ABSENT
+			// (corrective verify cycle CRITICAL-1, rdd-post-verify-review-offer's
+			// "Kill-Switch-Off Is Structural Absence" requirement: "archive
+			// consults no reviewGate structured status ... archive cannot fail or
+			// block for review reasons" — no populated disabled/unmanaged
+			// disposition is emitted at all, not even a non-allow one).
 			//
 			// So the product is already correct and nothing here blocks. The
 			// remaining half of the limitation is a shipped document: the
@@ -1660,14 +1663,8 @@ func sddJourneys() []Journey {
 							return fmt.Errorf("dependencies.archive = %q, want unblocked; blocked reasons = %v",
 								status.Dependencies.Archive, status.BlockedReasons)
 						}
-						if status.ReviewGate == nil {
-							return errors.New("reviewGate is absent, so the disabled disposition is not on the wire")
-						}
-						if status.ReviewGate.Delivery != deliveryDisabledUnmanaged {
-							return fmt.Errorf("reviewGate.delivery = %q, want %q", status.ReviewGate.Delivery, deliveryDisabledUnmanaged)
-						}
-						if status.ReviewGate.Result == "allow" {
-							return errors.New("a disabled run fabricated the approval the archive contract asks for")
+						if status.ReviewGate != nil {
+							return fmt.Errorf("reviewGate = %+v, want structural absence while the kill switch is off", status.ReviewGate)
 						}
 						return nil
 					})},
