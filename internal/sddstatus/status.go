@@ -219,7 +219,15 @@ type Status struct {
 	// keeps it off the wire entirely; it is never an Available:false
 	// placeholder or a status call that happened anyway. See
 	// applyReviewOfferRouting and review_door.go's reviewOfferForVerify.
-	ReviewOffer       *ReviewOfferBlock  `json:"reviewOffer,omitempty"`
+	ReviewOffer *ReviewOfferBlock `json:"reviewOffer,omitempty"`
+	// ReVerify is Wave 4 S6's targeted re-verify routing decision
+	// (design.md's "Amendment (coordinator-resolved): targeted re-verify
+	// call site"), present exactly when the change's governing receipt
+	// records an applied review correction and RDD is enabled — never
+	// otherwise. Structural absence (nil, omitempty) is the same guard
+	// pattern ReviewOffer already established. See
+	// applyTargetedReVerifyRouting in review_reverify.go.
+	ReVerify          *ReVerifyBlock     `json:"reVerify,omitempty"`
 	PhaseInstructions *PhaseInstructions `json:"phaseInstructions,omitempty"`
 	NextRecommended   string             `json:"nextRecommended"`
 	BlockedReasons    []string           `json:"blockedReasons"`
@@ -559,6 +567,9 @@ func Resolve(options ResolveOptions) (Status, error) {
 		status.ReviewGate = boundGate
 	}
 	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, changeName, reviewDisabled)
+	if governingRef != nil {
+		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, governingRef, reviewDisabled)
+	}
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
 	} else {
@@ -838,6 +849,9 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		status.ReviewGate = boundGate
 	}
 	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, changeName, reviewDisabled)
+	if governingRef != nil {
+		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, governingRef, reviewDisabled)
+	}
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
 	} else {
