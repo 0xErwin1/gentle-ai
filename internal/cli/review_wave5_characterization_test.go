@@ -1,22 +1,30 @@
 package cli
 
-// Wave 5 (Gate Cutover), Slice 1: characterization corpus. These tests pin
-// the CURRENT observable behavior of two facade-level surfaces Wave 5 will
+// Wave 5 (Gate Cutover), Slice 1: characterization corpus. These tests pinned
+// the CURRENT observable behavior of two facade-level surfaces Wave 5 would
 // remove or downgrade — the invalidation verb's approved-invalidation branch
 // (design decision 2; review_facade.go's `review invalidate --gate` branch,
 // which calls reviewtransaction.InvalidateApprovedCompactAuthority) and the
 // candidate-decline gate authorization branch (design decision 6;
 // runReviewFacadeValidate's ResolveCandidateDeclineForGate branch) — before
-// either is deleted/downgraded in later slices (S7 and S6 respectively).
+// either was deleted/downgraded in later slices (S7 and S6 respectively).
 //
-// Both surfaces already have coverage of their underlying reviewtransaction
+// Slice 6 downgraded the decline branch: its own before-picture pin
+// (TestCandidateDeclineCharacterization_ResolveCandidateDeclineForGate) is
+// superseded by TestCandidateDeclineDowngrade_DeniesLikeAnyNeverReviewedCandidate
+// below, which pins the permanent after-picture. The invalidation-verb pin
+// (TestInvalidationVerbCharacterization_InvalidateApprovedCompactAuthority)
+// remains the live before-picture until Slice 7 lands.
+//
+// Both surfaces already had coverage of their underlying reviewtransaction
 // package functions (compact_approved_invalidation_test.go,
-// candidate_decline_test.go), but neither had a test driving the actual CLI
-// entry point / funnel branch end to end (verified: no existing test calls
-// RunReviewInvalidate with --gate, and no existing test drives a declined
-// candidate through RunReviewFacadeValidate). These tests close exactly that
-// gap and are safety nets: a first-run pass is valid and expected — they pin
-// behavior that already exists, not a bugfix.
+// candidate_decline_test.go — the latter deleted in Slice 6), but neither had
+// a test driving the actual CLI entry point / funnel branch end to end
+// (verified: no existing test calls RunReviewInvalidate with --gate, and no
+// existing test drove a declined candidate through RunReviewFacadeValidate).
+// These tests closed exactly that gap and were safety nets: a first-run pass
+// was valid and expected — they pinned behavior that already existed, not a
+// bugfix.
 
 import (
 	"bytes"
@@ -94,18 +102,29 @@ func TestInvalidationVerbCharacterization_InvalidateApprovedCompactAuthority(t *
 	}
 }
 
-// TestCandidateDeclineCharacterization_ResolveCandidateDeclineForGate pins
-// the full facade round trip Wave 5 Slice 6 will delete: a relayed consent
-// decline persists a CandidateDeclineAuthorization (RecordCandidateDecline,
-// review_facade.go's `errReviewDeclinedForCandidate` branch), and a
-// subsequent `review validate --gate pre-commit` for the identical staged
-// candidate resolves it via ResolveCandidateDeclineForGate and reaches
-// ordinary unmanaged delivery (emitCandidateDeclinedUnmanagedDelivery) —
-// never review authority, never a receipt-like record. Existing coverage
-// (review_consent_relay_test.go's TestRelayedConsentDeclineIsScopedToTheCandidate)
-// only proves the decline record is written and scoped; it never drives a
-// gate through the decline. This test closes that gap.
-func TestCandidateDeclineCharacterization_ResolveCandidateDeclineForGate(t *testing.T) {
+// TestCandidateDeclineCharacterization_ResolveCandidateDeclineForGate pinned
+// the full facade round trip through Wave 5 Slice 5 (before Slice 6 deleted
+// it): a relayed consent decline persisted a CandidateDeclineAuthorization
+// (RecordCandidateDecline, review_facade.go's `errReviewDeclinedForCandidate`
+// branch), and a subsequent `review validate --gate pre-commit` for the
+// identical staged candidate resolved it via ResolveCandidateDeclineForGate
+// and reached ordinary unmanaged delivery
+// (emitCandidateDeclinedUnmanagedDelivery, Delivery:
+// RDDDeliveryCandidateDeclinedUnmanaged) — never review authority, never a
+// receipt-like record.
+//
+// TestCandidateDeclineDowngrade_DeniesLikeAnyNeverReviewedCandidate below
+// supersedes it (Wave 5 Slice 6, design decision 6): decline is no longer
+// durably recorded at all (RecordCandidateDecline is deleted;
+// TestCandidateDecline_ZeroCallers, review_candidate_decline_downgrade_test.go,
+// proves it by call-absence), so the identical fixture now reaches the SAME
+// generic receipt_missing denial ANY never-reviewed candidate reaches — the
+// gate has no decline-specific detail left anywhere to read. Consistent
+// with Wave 4 decision 4 ("decline = unmanaged proceed: nothing recorded").
+// The decline's only remaining observable effect is the ONE `review start`
+// call itself reporting `Action: "declined"` — it creates no lasting
+// delivery-gate authorization for any later gate call.
+func TestCandidateDeclineDowngrade_DeniesLikeAnyNeverReviewedCandidate(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
@@ -121,28 +140,27 @@ func TestCandidateDeclineCharacterization_ResolveCandidateDeclineForGate(t *test
 	var declinedResult ReviewFacadeStartResult
 	decodeStrictReviewJSON(t, declined.Bytes(), &declinedResult)
 	if declinedResult.Action != "declined" {
-		t.Fatalf("decline did not record: %#v", declinedResult)
+		t.Fatalf("decline did not report: %#v", declinedResult)
 	}
 
-	// Turn the identical declined candidate into a supported pre-commit
-	// target: ResolveCandidateDeclineForGate only matches pre-commit,
-	// pre-push, and pre-pr (candidate_decline.go), never post-apply/release.
+	// The identical declined candidate is now a supported pre-commit
+	// target: the (now-deleted) decline-gate matcher only ever covered
+	// pre-commit, pre-push, and pre-pr, never post-apply/release.
 	runReviewCLIGit(t, repo, "add", "scripts/deploy.sh")
 
 	var output bytes.Buffer
 	err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &output)
-	if err != nil {
-		t.Fatalf("declined candidate validate: %v\n%s", err, output.String())
+	if err == nil {
+		t.Fatalf("declined candidate validate unexpectedly allowed:\n%s", output.String())
 	}
 	var result ReviewValidateResult
 	decodeStrictReviewJSON(t, output.Bytes(), &result)
-	if result.Result != reviewtransaction.GateInvalidated || result.Allowed ||
-		result.Delivery != reviewtransaction.RDDDeliveryCandidateDeclinedUnmanaged {
-		t.Fatalf("declined candidate gate verdict = %#v", result)
+	if result.Result != reviewtransaction.GateInvalidated || result.Allowed || result.Delivery != "" {
+		t.Fatalf("declined candidate gate verdict = %#v, want a plain (non-unmanaged) denial", result)
 	}
-	if result.Context.Denial == nil || result.Context.Denial.Stage != "candidate-decline" ||
-		result.Context.Denial.Code != "exact_candidate" {
-		t.Fatalf("declined candidate context = %#v", result.Context)
+	if result.Context.Denial == nil || result.Context.Denial.Stage != "receipt-discovery" ||
+		result.Context.Denial.Code != "receipt_missing" {
+		t.Fatalf("declined candidate context = %#v, want the same receipt-discovery/receipt_missing denial any never-reviewed candidate reaches", result.Context)
 	}
 
 	// The decline never created review authority for this lineage.
