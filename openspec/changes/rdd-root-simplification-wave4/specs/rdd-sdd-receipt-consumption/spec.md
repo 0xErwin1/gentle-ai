@@ -62,19 +62,27 @@ Decision 9 is RATIFIED (maintainer-confirmed, 2026-08-02): SDD retains ownership
 
 ### Requirement: Legacy `reviewGate` v1 Field Compatibility
 
-`status_v1.go`'s legacy `reviewGate` structured field MUST remain readable for unmigrated Pi clients while the kill switch is enabled, and MUST be absent from the wire when the kill switch is OFF. Removal is deferred to Wave 7.
+`status_v1.go`'s legacy `reviewGate` structured field MUST remain readable for unmigrated Pi clients when a review was actually discovered for the candidate, and MUST be structurally absent from the wire (not merely `null` — the key itself omitted) in every other case, including when the kill switch is ON with no receipt at all. Removal is deferred to Wave 7.
 
-#### Scenario: Legacy field present when enabled
+**Amendment (corrective verify cycle 5, 2026-08-03, CRITICAL-E): "kill switch ON" alone no longer implies population.** Cycle 4's own amendment to `rdd-post-verify-review-offer`'s "Decline Proceeds to Unmanaged Ordinary Archive" requirement (BLOCKER-1) ratified that the switch being ON, verify having passed, and no receipt existing is decline-by-absence-of-action: `reviewGate` stays structurally absent in that state, in the SAME status output that carries the present `reviewOffer` invitation. The original text of this requirement predates that amendment and still said the field is populated whenever the switch is ON, which the measured behavior contradicts (switch ON + genuinely missing receipt -> `reviewGate` absent). Same amendment rationale as BLOCKER-1: the offer is an invitation, never a gate, so "the switch is on" is not by itself a reason to fabricate or expect a populated disposition — only an actually DISCOVERED review artifact (governing or broken) populates the field. This keeps `rdd-sdd-receipt-consumption` and `rdd-post-verify-review-offer` consistent with each other, closing the same W2-class drift the wave already had to fix once in cycle 2.
 
-- GIVEN the kill switch is ON and an unmigrated Pi client requests status v1
+#### Scenario: Legacy field present when a review is discovered
+
+- GIVEN an unmigrated Pi client requests status v1 and a review was actually discovered for the candidate (a governing receipt that validates, or one that was discovered and failed validation)
 - WHEN status is serialized
-- THEN the legacy `reviewGate` field is populated for compatibility
+- THEN the legacy `reviewGate` field is populated for compatibility, carrying that receipt's own result
 
 #### Scenario: Legacy field absent when disabled
 
 - GIVEN the kill switch is OFF
 - WHEN status v1 is serialized
 - THEN the legacy `reviewGate` field is omitted from the response
+
+#### Scenario: Legacy field absent when enabled with no receipt (decline)
+
+- GIVEN the kill switch is ON, verify has passed, and no receipt exists for the candidate
+- WHEN status v1 is serialized
+- THEN the legacy `reviewGate` field is omitted from the response, in the same output that carries a populated `reviewOffer`
 
 ### Requirement: ReceiptRef Lives in SDD's Runtime Ledger, Not a New Artifact
 
