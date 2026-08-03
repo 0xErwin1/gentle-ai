@@ -5763,13 +5763,16 @@ func TestWelcomeView_WindowResizeFitsMeasuredViewport(t *testing.T) {
 		height       int
 		withOptional bool
 		minimum      bool
+		wantPrimary  string
+		wantControl  string
 	}{
 		{name: "startup viewport", width: 120, height: 30},
 		{name: "narrow resize", width: 80, height: 24},
 		{name: "short viewport", width: 120, height: 19},
 		{name: "below compact height", width: 120, height: 2, minimum: true},
 		{name: "below compact width", width: 18, height: 20, minimum: true},
-		{name: "below frame border width", width: 2, height: 20, minimum: true},
+		{name: "below frame border width", width: 2, height: 20, minimum: true, wantPrimary: "Go"},
+		{name: "tiny viewport uses atomic labels", width: 2, height: 2, minimum: true, wantPrimary: "Go", wantControl: "q"},
 		{name: "compact viewport with optional content", width: 120, height: 17, withOptional: true},
 		{name: "wide resize", width: 160, height: 50},
 	}
@@ -5804,11 +5807,19 @@ func TestWelcomeView_WindowResizeFitsMeasuredViewport(t *testing.T) {
 			if tc.minimum {
 				content = strings.ReplaceAll(view, "\n", "")
 			}
-			if !strings.Contains(content, "Start installation") {
-				t.Fatalf("welcome lost primary action after resize\nview:\n%s", view)
+			primary := tc.wantPrimary
+			if primary == "" {
+				primary = "Start installation"
+			}
+			if !strings.Contains(content, primary) {
+				t.Fatalf("welcome lost primary action %q after resize\nview:\n%s", primary, view)
 			}
 			if tc.minimum {
-				for _, want := range []string{"Start installation", "j/k"} {
+				control := tc.wantControl
+				if control == "" {
+					control = "j/k"
+				}
+				for _, want := range []string{primary, control} {
 					if !strings.Contains(content, want) {
 						t.Fatalf("minimum welcome state lost %q\nview:\n%s", want, view)
 					}
