@@ -95,7 +95,16 @@ func ProjectLegacyAuthority(ctx context.Context, root string, chain ValidatedCha
 // the projected identity's own PolicyHash before relating -- policy content
 // legacy never asked to be live-compared can never manufacture a false
 // "changed" relation.
-func EvaluateLegacyGate(ctx context.Context, root string, chain ValidatedChain, receiptPath string, live CandidateIdentity, livePolicyOverridden bool, evidence CoreValidateEvidence, gate GateKind) NativeGateEvaluation {
+// EvaluateLegacyGate's gate parameter was a bare GateKind before CRITICAL-B
+// (Wave 5 fix cycle 1, verify-report #10186): a bare GateKind carries no
+// release-boundary artifact locations, so the pre-pr/release preconditions
+// gateVerdict enforces (BaseRelationshipValid, Release) could never be
+// populated -- a byte-identical legacy candidate denied FOREVER at those two
+// gates. NativeGateRequestInput is the same caller-supplied artifact-location
+// carrier EvaluateNativeGate/evaluateCompactGate already take (native_request.go);
+// its Gate field replaces the old bare parameter one-for-one.
+func EvaluateLegacyGate(ctx context.Context, root string, chain ValidatedChain, receiptPath string, live CandidateIdentity, livePolicyOverridden bool, evidence CoreValidateEvidence, gateInput NativeGateRequestInput) NativeGateEvaluation {
+	gate := gateInput.Gate
 	identity, receiptRef, err := ProjectLegacyAuthority(ctx, root, chain, receiptPath)
 	if err != nil {
 		return NativeGateEvaluation{
@@ -110,6 +119,22 @@ func EvaluateLegacyGate(ctx context.Context, root string, chain ValidatedChain, 
 	context := GateContext{
 		Gate: gate, LineageID: receiptRef.LineageID, StoreRevision: receiptRef.AuthorityRevision,
 		BaseTree: identity.BaseTree, CandidateTree: identity.CandidateTree, PolicyHash: identity.PolicyHash,
+		// CRITICAL-B fix: derived faithfully from the legacy chain's real live
+		// state, mirroring EvaluateNativeGate's own derivation
+		// (gate.go:289 -- BaseRelationshipValid: snapshot.BaseTree == receipt.BaseTree)
+		// instead of leaving the zero value (false) that denied every legacy
+		// candidate, even an unchanged one, at pre-pr/release.
+		BaseRelationshipValid: live.BaseTree == identity.BaseTree,
+	}
+	if gate == GateRelease {
+		release, releaseErr := deriveLegacyReleaseEvidence(ctx, root, gateInput)
+		if releaseErr != nil {
+			return NativeGateEvaluation{
+				Result: GateInvalidated, Reason: "release boundary cannot be derived: " + releaseErr.Error(),
+				Context: context, Cause: releaseErr,
+			}
+		}
+		context.Release = &release
 	}
 	result, next := gateVerdict(gate, observation.Relation, context)
 	if result != GateAllow {
@@ -119,4 +144,29 @@ func EvaluateLegacyGate(ctx context.Context, root string, chain ValidatedChain, 
 		Result: result, Reason: string(observation.Relation), Context: context,
 		Relation: observation.Relation, Next: &next,
 	}
+}
+
+// deriveLegacyReleaseEvidence derives release evidence for a legacy gate
+// evaluation from the same caller-supplied artifact locations
+// BuildNativeGateRequest already uses to build a ReleaseRequest for the
+// native v1 path (native_request.go:94-107) -- reused verbatim rather than
+// re-derived, so a legacy release boundary is held to the identical
+// PublicationStateSealed/EvidenceFreshnessCurrent contract.
+func deriveLegacyReleaseEvidence(ctx context.Context, root string, gateInput NativeGateRequestInput) (ReleaseEvidence, error) {
+	head, err := resolveCommit(ctx, root, "HEAD")
+	if err != nil {
+		return ReleaseEvidence{}, err
+	}
+	request := &ReleaseRequest{
+		Revision: head, ConfigurationArtifact: gateInput.ReleaseConfiguration,
+		GeneratedArtifact: gateInput.ReleaseGenerated, ProvenanceArtifact: gateInput.ReleaseProvenance,
+		PublicationBoundaryArtifact: gateInput.ReleasePublicationBoundary,
+		EvidenceFreshnessArtifact:   gateInput.ReleaseEvidenceFreshness,
+		PublicationState:            PublicationStateSealed, EvidenceFreshnessState: EvidenceFreshnessCurrent,
+	}
+	preimages, err := readGateArtifactPreimages(GateRequest{Release: request})
+	if err != nil {
+		return ReleaseEvidence{}, err
+	}
+	return deriveReleaseEvidence(ctx, root, request, preimages)
 }
