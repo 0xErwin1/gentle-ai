@@ -110,6 +110,11 @@ type sddStatusV1 struct {
 		Reason   string `json:"reason"`
 		Delivery string `json:"delivery"`
 	} `json:"reviewGate"`
+	ReviewOffer *struct {
+		Available  bool   `json:"available"`
+		LineageID  string `json:"lineageId"`
+		Invocation string `json:"invocation"`
+	} `json:"reviewOffer"`
 	BlockedReasons []string `json:"blockedReasons"`
 	TaskProgress   struct {
 		Total       int  `json:"total"`
@@ -1340,14 +1345,33 @@ func sddStatusAssertion(name string, check func(sddStatusV1) error) func(*Sandbo
 	}
 }
 
-func sddStatusFailsClosed(reason string) func(*Sandbox, Observation) error {
-	return sddStatusAssertion("fail-closed SDD authority discovery", func(status sddStatusV1) error {
-		if status.Dependencies.Verify != "blocked" || status.NextRecommended != "resolve-review" {
-			return fmt.Errorf("verify=%q nextRecommended=%q, want blocked/resolve-review; blocked reasons=%v",
+// sddStatusIgnoresCorruptCompactAuthorityPreVerify (formerly
+// sddStatusFailsClosed) pinned `applyPreVerifyCompactBridgeRouting`, deleted
+// by Wave 4 commit 21dfc0fe ("remove pre-verify review supervision, add
+// offer absence guard", S3) along with `applyPreVerifyReviewRouting` (the
+// mechanism j41 pinned). `discoverCompactPreVerifyAuthority`
+// (internal/sddstatus/review_gate.go) still computes the exact `Relevant`/
+// `Reason` values these fixtures are named for (ambiguous authorities,
+// missing/mismatched receipt, non-allow gate, foreign OpenSpec path), but
+// nothing in production reads them anymore -- only the still-alive
+// `Eligible` field feeds the unrelated stale-report-recovery bridge. This is
+// spec-ratified, not an oversight: `rdd-post-verify-review-offer`'s "Offer
+// Occurs Strictly Post-Verify, Pre-Archive" requirement is unconditional
+// ("SDD MUST NOT consult, block on, or offer RDD review before or during
+// apply"), and these fixtures never reach a passing SDD verify-report, so
+// under Wave 4 the corrupted compact authority is correctly never even
+// looked at. Corrective verify cycle 3 (CRITICAL-C) rewrites the assertion
+// to pin that absence directly, the same "ready/verify, zero blocked
+// reasons, regardless of what garbage exists in the review store" shape
+// j41 already established for the sibling pre-verify-routing case.
+func sddStatusIgnoresCorruptCompactAuthorityPreVerify(_ string) func(*Sandbox, Observation) error {
+	return sddStatusAssertion("corrupt compact authority is not consulted pre-verify", func(status sddStatusV1) error {
+		if status.Dependencies.Verify != "ready" || status.NextRecommended != "verify" {
+			return fmt.Errorf("verify=%q nextRecommended=%q, want ready/verify (pre-verify review consultation was removed in Wave 4); blocked reasons=%v",
 				status.Dependencies.Verify, status.NextRecommended, status.BlockedReasons)
 		}
-		if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), reason) {
-			return fmt.Errorf("blocked reasons %v do not contain %q", status.BlockedReasons, reason)
+		if len(status.BlockedReasons) != 0 {
+			return fmt.Errorf("pre-verify status reports blocked reasons despite no review consultation: %v", status.BlockedReasons)
 		}
 		return nil
 	})
@@ -1546,46 +1570,43 @@ func sddJourneys() []Journey {
 		// -------------------------------------------------- kill switch and SDD
 		{
 			ID:     "j41-kill-switch-versus-sdd-pre-verify",
-			Title:  "Reviews off at the pre-verify decision: the router steps aside instead of naming a command the operator cannot run",
-			Source: "shape 5 (the kill switch and the pre-verify router disagreeing) + a limitation this corpus measured closed",
-			// This journey was written to turn a believed-open limitation into a
-			// measured one: the claim was that the SDD pre-verify router still
-			// demanded a bounded review while reviews were switched off, which
-			// would name `review start` as the next action and then refuse it — a
-			// dead end whose only exit is undoing the operator's own decision.
+			Title:  "Pre-verify: RDD supervises nothing, on or off, before verify runs",
+			Source: "shape 5 (the kill switch and the pre-verify router) + Wave 4's own removal of pre-verify review supervision",
+			// Corrective verify cycle 3 (CRITICAL-C): this journey pinned a
+			// PRE-Wave-4 shape -- a pre-verify review gate that blocked
+			// Dependencies.Verify and routed nextRecommended to "review" while
+			// reviews were on, stepping aside only when the switch was off. Wave
+			// 4 commit 21dfc0fe ("remove pre-verify review supervision, add offer
+			// absence guard", S3) deliberately removed that gate entirely --
+			// ratified by rdd-post-verify-review-offer's "Offer Occurs Strictly
+			// Post-Verify, Pre-Archive" requirement: SDD MUST NOT consult, block
+			// on, or offer RDD review before or during apply, full stop, on
+			// either side of the switch. This journey was never updated when
+			// that landed, so it pinned dead behavior and could never again
+			// observe a real regression in the code path it named.
 			//
-			// The claim is FALSE as of the run that failed this journey's old
-			// assertions, and the failure is how the corpus found out. The
-			// assertions below now pin the behavior that replaced it, in both
-			// positions, because one half alone proves nothing:
-			//
-			//   reviews ON  — nextRecommended `review`, verify blocked, and a
-			//                 blocked reason that says why. The gate is real.
-			//   reviews OFF — nextRecommended `verify`, verify ready, and NO
-			//                 blocked reasons at all. The router steps aside
-			//                 rather than pointing at a refusal.
-			//
-			// Then the switch goes back on and the gate returns, because a kill
-			// switch that cannot be un-flipped would be a different defect wearing
-			// this journey's pass. Nothing here blocks: the product is correct on
-			// this shape, and the row's zeros are the finding.
-			//
-			// `review start` while off is deliberately NOT run here. With the
-			// switch off the router never names it, so running it would measure an
-			// off-path refusal — and j03 already owns that measurement.
+			// Rewritten to pin the CURRENT, ratified shape: with planning
+			// complete and no verify report yet, nextRecommended is "verify" and
+			// Dependencies.Verify is "ready" -- identically, byte-for-byte in
+			// the fields that matter -- whether the switch is on or off, because
+			// there is no pre-verify review supervision left to differ. The
+			// switch toggling is kept in the journey (rather than deleted
+			// outright) specifically to prove that absence: on, off, and back on
+			// all produce the same pre-verify routing.
 			Steps: []Step{
 				{Name: "fixture: change with planning complete and no verification yet", Fixture: sddPlanningArtifacts("")},
 				{Name: "sdd-status with reviews on", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),
 					After: sddStatusAssertion("pre-verify routing with reviews on", func(status sddStatusV1) error {
-						if status.NextRecommended != "review" {
-							return fmt.Errorf("nextRecommended = %q, want review", status.NextRecommended)
+						if status.NextRecommended != "verify" {
+							return fmt.Errorf("nextRecommended = %q, want verify: pre-verify review supervision was removed in Wave 4", status.NextRecommended)
 						}
-						if status.Dependencies.Verify != "blocked" {
-							return fmt.Errorf("dependencies.verify = %q, want blocked", status.Dependencies.Verify)
+						if status.Dependencies.Verify != "ready" {
+							return fmt.Errorf("dependencies.verify = %q, want ready; blocked reasons = %v",
+								status.Dependencies.Verify, status.BlockedReasons)
 						}
-						if len(status.BlockedReasons) == 0 {
-							return errors.New("verify is blocked and no blocked reason says why")
+						if len(status.BlockedReasons) != 0 {
+							return fmt.Errorf("enabled pre-verify routing reports blocked reasons: %v", status.BlockedReasons)
 						}
 						return nil
 					})},
@@ -1594,7 +1615,7 @@ func sddJourneys() []Journey {
 					Args: productArgs("sdd-status", sddChange, "--json"),
 					After: sddStatusAssertion("pre-verify routing with reviews off", func(status sddStatusV1) error {
 						if status.NextRecommended != "verify" {
-							return fmt.Errorf("nextRecommended = %q, want verify: the router still steers at a review the operator is not allowed to start", status.NextRecommended)
+							return fmt.Errorf("nextRecommended = %q, want verify", status.NextRecommended)
 						}
 						if status.Dependencies.Verify != "ready" {
 							return fmt.Errorf("dependencies.verify = %q, want ready; blocked reasons = %v",
@@ -1608,12 +1629,12 @@ func sddJourneys() []Journey {
 				{Name: "mode enable", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--json")},
 				{Name: "sdd-status with reviews back on", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),
-					After: sddStatusAssertion("the gate returns when the switch does", func(status sddStatusV1) error {
-						if status.NextRecommended != "review" {
-							return fmt.Errorf("nextRecommended = %q, want review: the switch went back on and the gate did not return", status.NextRecommended)
+					After: sddStatusAssertion("pre-verify routing is unchanged once the switch returns", func(status sddStatusV1) error {
+						if status.NextRecommended != "verify" {
+							return fmt.Errorf("nextRecommended = %q, want verify: re-enabling must not resurrect pre-verify supervision", status.NextRecommended)
 						}
-						if status.Dependencies.Verify != "blocked" {
-							return fmt.Errorf("dependencies.verify = %q, want blocked", status.Dependencies.Verify)
+						if status.Dependencies.Verify != "ready" {
+							return fmt.Errorf("dependencies.verify = %q, want ready", status.Dependencies.Verify)
 						}
 						return nil
 					})},
@@ -1621,34 +1642,46 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j42-kill-switch-versus-sdd-archive",
-			Title:  "Reviews off at the archive decision: the product defers and never fabricates an approval",
-			Source: "shape 5 (a shipped agent contract and the product disagreeing about the same fact)",
-			// The second believed-open item is that `sdd-archive` still requires
-			// `reviewGate.result: allow`. This journey measures the product half of
-			// that pair, which is the half a black-box benchmark can see.
+			Title:  "The offer is an invitation, never a gate: archive proceeds with reviews on or off",
+			Source: "shape 5 (a shipped agent contract and the product disagreeing about the same fact) + corrective verify cycle 4 BLOCKER-1",
+			// Corrective verify cycle 4, BLOCKER-1 (rdd-post-verify-review-offer's
+			// "Decline Proceeds to Unmanaged Ordinary Archive"): a genuinely
+			// missing receipt is decline-by-absence-of-action, not a blocker, on
+			// EITHER side of the switch. Superseded expectation (documented, not
+			// silently dropped): this journey previously required
+			// dependencies.archive = "blocked" with reviews on, treating an
+			// unacted-on offer as a hard gate.
 			//
-			// Expected: with reviews ON the archive dependency is blocked and the
-			// gate result is not allow. With reviews OFF the archive dependency
-			// becomes ready, the gate reports the `disabled/unmanaged` delivery
-			// disposition — and the result is still NOT `allow`, because declining
-			// to manage is not approval.
+			// Rewritten to pin the ratified "invitation, never a gate" shape: with
+			// reviews on, verify passed, and no receipt, archive is READY and
+			// reviewOffer is present (the invitation the user may act on or not --
+			// declining simply means archiving). With reviews off, archive is
+			// READY and reviewOffer is structurally ABSENT (corrective verify
+			// cycle CRITICAL-1/CRITICAL-3, rdd-post-verify-review-offer's
+			// "Kill-Switch-Off Is Structural Absence" requirement — no offer, no
+			// reviewGate, no ceremony of any kind). Both sides never fabricate an
+			// approval (reviewGate stays absent throughout), and the one thing
+			// that still distinguishes them is exactly the offer itself, not
+			// whether archive proceeds.
 			//
-			// So the product is already correct and nothing here blocks. The
-			// remaining half of the limitation is a shipped document: the
-			// sdd-archive skill contract requires the literal `allow` that a
-			// disabled run is right never to produce. That is a text this
-			// benchmark cannot execute, so it is asserted here as the value the
-			// product will never hand that contract, and reported as such.
+			// The shipped sdd-archive skill contract's residual reference to
+			// `reviewGate.result: allow` is a stale document this benchmark cannot
+			// execute; not re-asserted here since the product's own correct
+			// behavior no longer produces a `reviewGate` field at all in the
+			// no-receipt shape either path takes.
 			Steps: []Step{
 				{Name: "fixture: change complete with an independent verification", Fixture: sddPlanningArtifacts(sddVerifyReport)},
 				{Name: "sdd-status with reviews on", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),
 					After: sddStatusAssertion("archive routing with reviews on", func(status sddStatusV1) error {
-						if status.Dependencies.Archive != "blocked" {
-							return fmt.Errorf("dependencies.archive = %q, want blocked", status.Dependencies.Archive)
+						if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
+							return fmt.Errorf("dependencies.archive = %q next = %q, want ready/archive", status.Dependencies.Archive, status.NextRecommended)
 						}
-						if status.ReviewGate == nil || status.ReviewGate.Result == "allow" {
-							return fmt.Errorf("reviewGate = %+v, want a present result that is not allow", status.ReviewGate)
+						if status.ReviewGate != nil {
+							return fmt.Errorf("reviewGate = %+v, want structural absence (decline, no review ever started)", status.ReviewGate)
+						}
+						if status.ReviewOffer == nil || !status.ReviewOffer.Available {
+							return fmt.Errorf("reviewOffer = %+v, want an available invitation", status.ReviewOffer)
 						}
 						return nil
 					})},
@@ -1660,14 +1693,11 @@ func sddJourneys() []Journey {
 							return fmt.Errorf("dependencies.archive = %q, want unblocked; blocked reasons = %v",
 								status.Dependencies.Archive, status.BlockedReasons)
 						}
-						if status.ReviewGate == nil {
-							return errors.New("reviewGate is absent, so the disabled disposition is not on the wire")
+						if status.ReviewGate != nil {
+							return fmt.Errorf("reviewGate = %+v, want structural absence while the kill switch is off", status.ReviewGate)
 						}
-						if status.ReviewGate.Delivery != deliveryDisabledUnmanaged {
-							return fmt.Errorf("reviewGate.delivery = %q, want %q", status.ReviewGate.Delivery, deliveryDisabledUnmanaged)
-						}
-						if status.ReviewGate.Result == "allow" {
-							return errors.New("a disabled run fabricated the approval the archive contract asks for")
+						if status.ReviewOffer != nil {
+							return fmt.Errorf("reviewOffer = %+v, want structural absence while the kill switch is off", status.ReviewOffer)
 						}
 						return nil
 					})},
@@ -1701,51 +1731,51 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j53-sdd-ambiguous-authorities-fail-closed",
-			Title:  "Two approved candidates for the same OpenSpec change: SDD refuses to choose one",
-			Source: "compact authority discovery contract: ambiguous governing candidates block",
+			Title:  "Two approved candidates for the same OpenSpec change: not consulted before verify",
+			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddAmbiguousAuthorityFixture),
 				Step{Name: "fixture: duplicate its terminal authority", Fixture: sddDuplicateSelectedAuthority},
-				Step{Name: "sdd-status refuses ambiguous authorities", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusFailsClosed("multiple eligible path-bound compact authorities found")},
+				Step{Name: "sdd-status ignores the ambiguous authorities pre-verify", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusIgnoresCorruptCompactAuthorityPreVerify("multiple eligible path-bound compact authorities found")},
 			),
 		},
 		{
 			ID:     "j54-sdd-missing-authority-receipt-fails-closed",
-			Title:  "Approved compact authority without its receipt: SDD fails closed",
-			Source: "compact authority discovery contract: a missing receipt is not approval",
+			Title:  "Approved compact authority without its receipt: not consulted before verify",
+			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
 				Step{Name: "fixture: remove the published authority receipt", Fixture: sddRemoveReceipt},
-				Step{Name: "sdd-status refuses the missing receipt", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusFailsClosed("path-bound compact authority receipt is missing")},
+				Step{Name: "sdd-status ignores the missing receipt pre-verify", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusIgnoresCorruptCompactAuthorityPreVerify("path-bound compact authority receipt is missing")},
 			),
 		},
 		{
 			ID:     "j55-sdd-mismatched-authority-receipt-fails-closed",
-			Title:  "Approved compact authority with a mismatched receipt: SDD fails closed",
-			Source: "compact authority discovery contract: receipt bytes must equal approved state",
+			Title:  "Approved compact authority with a mismatched receipt: not consulted before verify",
+			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
 				Step{Name: "fixture: replace the published authority receipt", Fixture: sddMismatchReceipt},
-				Step{Name: "sdd-status refuses the mismatched receipt", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusFailsClosed("path-bound compact authority receipt does not equal approved state")},
+				Step{Name: "sdd-status ignores the mismatched receipt pre-verify", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusIgnoresCorruptCompactAuthorityPreVerify("path-bound compact authority receipt does not equal approved state")},
 			),
 		},
 		{
 			ID:     "j56-sdd-non-allow-post-apply-gate-fails-closed",
-			Title:  "Valid approved authority over changed bytes: SDD fails closed on a non-allow post-apply gate",
-			Source: "compact authority discovery contract: a valid receipt still needs an allow gate",
+			Title:  "Valid approved authority over changed bytes: not consulted before verify",
+			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddSingleAuthorityFixture),
 				Step{Name: "fixture: change the candidate after approval", Fixture: sddDenyPostApply},
-				Step{Name: "sdd-status refuses the non-allow gate", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusFailsClosed("path-bound compact authority post-apply gate is not allow")},
+				Step{Name: "sdd-status ignores the non-allow gate pre-verify", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusIgnoresCorruptCompactAuthorityPreVerify("path-bound compact authority post-apply gate is not allow")},
 			),
 		},
 		{
 			ID:     "j58-sdd-foreign-openspec-path-fails-closed",
-			Title:  "Mixed OpenSpec authority path set: SDD refuses the selected change",
-			Source: "compact authority discovery contract: mixed foreign OpenSpec paths are not change-bound authority",
+			Title:  "Mixed OpenSpec authority path set: not consulted before verify",
+			Source: "compact authority discovery contract (superseded pre-verify half, corrective verify cycle 3 CRITICAL-C) + Wave 4's post-verify-only review consultation",
 			Steps: append(sddApprovedAuthoritySteps(sddForeignAuthorityFixture),
-				Step{Name: "sdd-status refuses the foreign OpenSpec path", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusFailsClosed("path-bound compact authority contains a foreign OpenSpec path")},
+				Step{Name: "sdd-status ignores the foreign OpenSpec path pre-verify", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusIgnoresCorruptCompactAuthorityPreVerify("path-bound compact authority contains a foreign OpenSpec path")},
 			),
 		},
 
