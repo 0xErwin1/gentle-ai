@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents"
@@ -22,7 +23,10 @@ type InjectionResult struct {
 // scoped injection root (the home directory for user scope, the workspace for
 // workspace scope). Claude Code user-scope registration goes to ~/.claude.json,
 // the only user-scope file Claude Code reads MCP servers from (issue #1868);
-// workspace scope keeps the scoped settings merge.
+// workspace scope writes project-scoped servers to <project-root>/.mcp.json,
+// the file Claude Code loads project MCP servers from, then removes the inert
+// mcpServers block the legacy workspace path wrote into .claude/settings.json
+// (issue #2213).
 func Inject(homeDir, targetDir string, adapter agents.Adapter) (InjectionResult, error) {
 	if !adapter.SupportsMCP() {
 		return InjectionResult{}, nil
@@ -34,7 +38,7 @@ func Inject(homeDir, targetDir string, adapter agents.Adapter) (InjectionResult,
 			if targetDir == homeDir {
 				return injectClaudeUserConfig(homeDir, adapter)
 			}
-			return injectMergeIntoSettings(targetDir, adapter)
+			return injectClaudeWorkspaceMCPJSON(homeDir, targetDir, adapter)
 		}
 		return injectSeparateFile(targetDir, adapter)
 	case model.StrategyMergeIntoSettings:
@@ -279,7 +283,35 @@ func injectClaudeUserConfig(homeDir string, adapter agents.Adapter) (InjectionRe
 	return InjectionResult{Changed: changed, Files: files}, nil
 }
 
-// removeInertSettingsMCPServers deletes the inert top-level mcpServers key
+// injectClaudeWorkspaceMCPJSON registers Context7 in <project-root>/.mcp.json,
+// the file Claude Code loads project-scoped MCP servers from. The merge
+// preserves unrelated servers and any other top-level config the user authored,
+// and a backup is already snapshotted by the installer before this step runs.
+// It also removes the inert mcpServers block the legacy workspace path wrote
+// into <project-root>/.claude/settings.json, which Claude Code ignores for MCP
+// discovery (issue #2213).
+func injectClaudeWorkspaceMCPJSON(homeDir, workspaceDir string, adapter agents.Adapter) (InjectionResult, error) {
+	mcpPath := filepath.Join(workspaceDir, ".mcp.json")
+	mcpWrite, err := mergeJSONFile(mcpPath, DefaultContext7OverlayJSON())
+	if err != nil {
+		return InjectionResult{}, fmt.Errorf("merge context7 into %q: %w", mcpPath, err)
+	}
+
+	changed := mcpWrite.Changed
+	files := []string{mcpPath}
+	// Best-effort cleanup of the inert settings.json block the legacy path wrote.
+	// homeDir is passed so a workspace that coincides with the user's home still
+	// cleans the same settings file the user-scope path would have cleaned.
+	settingsPath := adapter.SettingsPath(workspaceDir)
+	if settingsChanged, cleanupErr := removeInertSettingsMCPServers(settingsPath); cleanupErr == nil && settingsChanged {
+		changed = true
+		files = append(files, settingsPath)
+	}
+	_ = homeDir // homeDir kept in the signature for symmetry with injectClaudeUserConfig.
+
+	return InjectionResult{Changed: changed, Files: files}, nil
+}
+
 // from settings.json once the real registration lives in ~/.claude.json —
 // but only when the block holds nothing beyond the managed context7 entry.
 // An unparsable settings file is left untouched.

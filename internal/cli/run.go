@@ -2076,9 +2076,14 @@ func componentPathsWithWorkspaceScoped(homeDir, workspaceDir string, scope Insta
 					if targetDir == homeDir {
 						// Context7 injection writes ~/.claude.json (issue #1868).
 						paths = append(paths, claude.UserConfigPath(homeDir))
-					} else if p := adapter.SettingsPath(targetDir); p != "" {
-						// Workspace scope keeps the scoped settings merge.
-						paths = append(paths, p)
+					} else {
+						// Workspace scope writes <project-root>/.mcp.json, the file
+						// Claude Code loads project-scoped MCP servers from (issue #2213).
+						// The legacy .claude/settings.json block is a best-effort
+						// cleanup, not a guaranteed write, so it is not declared as a
+						// verification target (declaring it would force a false-negative
+						// when the file never existed).
+						paths = append(paths, filepath.Join(targetDir, ".mcp.json"))
 					}
 					break
 				}
