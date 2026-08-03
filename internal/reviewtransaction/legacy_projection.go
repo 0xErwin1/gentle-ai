@@ -127,7 +127,7 @@ func EvaluateLegacyGate(ctx context.Context, root string, chain ValidatedChain, 
 		BaseRelationshipValid: live.BaseTree == identity.BaseTree,
 	}
 	if gate == GateRelease {
-		release, releaseErr := deriveLegacyReleaseEvidence(ctx, root, gateInput)
+		release, releaseErr := deriveGateReleaseEvidenceFromInput(ctx, root, gateInput)
 		if releaseErr != nil {
 			return NativeGateEvaluation{
 				Result: GateInvalidated, Reason: "release boundary cannot be derived: " + releaseErr.Error(),
@@ -146,13 +146,15 @@ func EvaluateLegacyGate(ctx context.Context, root string, chain ValidatedChain, 
 	}
 }
 
-// deriveLegacyReleaseEvidence derives release evidence for a legacy gate
-// evaluation from the same caller-supplied artifact locations
-// BuildNativeGateRequest already uses to build a ReleaseRequest for the
-// native v1 path (native_request.go:94-107) -- reused verbatim rather than
-// re-derived, so a legacy release boundary is held to the identical
-// PublicationStateSealed/EvidenceFreshnessCurrent contract.
-func deriveLegacyReleaseEvidence(ctx context.Context, root string, gateInput NativeGateRequestInput) (ReleaseEvidence, error) {
+// deriveGateReleaseEvidenceFromInput derives release evidence from the same
+// caller-supplied artifact locations BuildNativeGateRequest already uses to
+// build a ReleaseRequest for the native v1 path (native_request.go:94-107)
+// -- reused verbatim rather than re-derived, and shared by both
+// EvaluateLegacyGate (CRITICAL-B) and EvaluateNewLineageGate (CRITICAL-C, in
+// new_lineage_gate.go): a release boundary is held to the identical
+// PublicationStateSealed/EvidenceFreshnessCurrent contract regardless of
+// which lineage kind it governs.
+func deriveGateReleaseEvidenceFromInput(ctx context.Context, root string, gateInput NativeGateRequestInput) (ReleaseEvidence, error) {
 	head, err := resolveCommit(ctx, root, "HEAD")
 	if err != nil {
 		return ReleaseEvidence{}, err

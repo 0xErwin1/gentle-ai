@@ -181,7 +181,7 @@ func TestNewLineageReasonTaxonomyCoversLegacyRefusals(t *testing.T) {
 		// receipt_scope_changed reaches. Calling the real production
 		// function, not a duplicated table.
 		transition := reviewtransaction.CoreTransition{Kind: reviewtransaction.CoreTransitionCollect, ReasonCode: string(reviewtransaction.ShadowRelationChanged)}
-		got := newLineageGateEvaluation(reviewtransaction.GatePreCommit, fixtureRecord, transition).Result
+		got := reviewtransaction.EvaluateNewLineageGate(context.Background(), "", fixtureRecord, transition, reviewtransaction.CandidateIdentity{}, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit}).Result
 		want := legacyReasonTaxonomyGateResult(ReviewReceiptScopeChanged)
 		if got != want {
 			t.Fatalf("new-lineage collect(changed) reaches %q, want the legacy-reachable %q", got, want)
@@ -196,7 +196,7 @@ func TestNewLineageReasonTaxonomyCoversLegacyRefusals(t *testing.T) {
 		// the assertion below is exactly that: never allow, and reachable
 		// through the real production function.
 		transition := reviewtransaction.CoreTransition{Kind: reviewtransaction.CoreTransitionEscalate, ReasonCode: string(reviewtransaction.ShadowRelationAmbiguous)}
-		got := newLineageGateEvaluation(reviewtransaction.GatePreCommit, fixtureRecord, transition).Result
+		got := reviewtransaction.EvaluateNewLineageGate(context.Background(), "", fixtureRecord, transition, reviewtransaction.CandidateIdentity{}, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit}).Result
 		if got == reviewtransaction.GateAllow {
 			t.Fatalf("new-lineage ambiguous relation must never allow, got %q", got)
 		}
@@ -218,7 +218,7 @@ func TestNewLineageGateEvaluationClosedSwitchNeverAllowsUnreachableKinds(t *test
 		reviewtransaction.CoreTransitionApprove, reviewtransaction.CoreTransitionRepair, reviewtransaction.CoreTransitionStop,
 	} {
 		t.Run(string(kind), func(t *testing.T) {
-			evaluation := newLineageGateEvaluation(reviewtransaction.GatePreCommit, fixtureRecord, reviewtransaction.CoreTransition{Kind: kind})
+			evaluation := reviewtransaction.EvaluateNewLineageGate(context.Background(), "", fixtureRecord, reviewtransaction.CoreTransition{Kind: kind}, reviewtransaction.CandidateIdentity{}, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
 			if evaluation.Result == reviewtransaction.GateAllow {
 				t.Fatalf("unreachable transition kind %q must never allow, got %#v", kind, evaluation)
 			}
