@@ -1442,6 +1442,7 @@ func (err *GitCommandError) Unwrap() error { return err.Cause }
 
 var ErrGitOutputLimit = errors.New("git output exceeded deterministic byte limit")
 
+// refusal:by-design world-action: unexpected Git diagnostics require repairing the repository or its environment; no Gentle AI command can safely infer that repair.
 var ErrGitInventoryDiagnostics = errors.New("git inventory produced diagnostics")
 
 // GitInventoryDiagnosticsError reports unexpected diagnostics from a Git
