@@ -72,17 +72,24 @@ func resolveSDDStatusJSON(t *testing.T, root string) sddstatus.Status {
 	return runSDDCommandJSON(t, RunSDDStatus, "thin", "--cwd", root, "--json")
 }
 
+// requireDisabledUnmanagedSDDStatus asserts the corrective verify cycle's
+// CRITICAL-1 fix (rdd-post-verify-review-offer's "Kill-Switch-Off Is
+// Structural Absence" requirement): while the switch is off, archive is
+// never review-blocked AND the reviewGate field itself is structurally
+// absent — not populated with a disabled/unmanaged disposition, which is
+// the ceremony the ratified requirement forbids ("no disabled/unmanaged
+// ceremony capable of failing or blocking").
 func requireDisabledUnmanagedSDDStatus(t *testing.T, status sddstatus.Status) {
 	t.Helper()
 	if status.Dependencies.Archive == sddstatus.DependencyBlocked || status.NextRecommended == "resolve-review" {
 		t.Fatalf("disabled archive=%q next=%q blocked=%v, want an unmanaged route to archive",
 			status.Dependencies.Archive, status.NextRecommended, status.BlockedReasons)
 	}
-	if status.ReviewGate == nil || status.ReviewGate.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
-		t.Fatalf("disabled reviewGate = %#v, want disabled/unmanaged", status.ReviewGate)
+	if status.ReviewGate != nil {
+		t.Fatalf("disabled reviewGate = %#v, want structural absence", status.ReviewGate)
 	}
-	if status.ReviewGate.Result == reviewtransaction.GateAllow || status.ReviewTransaction != nil {
-		t.Fatalf("disabled status fabricated review authority: gate=%#v transaction=%#v", status.ReviewGate, status.ReviewTransaction)
+	if status.ReviewTransaction != nil {
+		t.Fatalf("disabled status fabricated a review transaction: %#v", status.ReviewTransaction)
 	}
 }
 

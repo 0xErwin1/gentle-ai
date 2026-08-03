@@ -2,6 +2,7 @@ package sddstatus
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,11 +113,18 @@ func TestArchiveGateDoesNotBlockArchiveWhileReviewIsDisabled(t *testing.T) {
 	}
 }
 
-// TestDisabledArchiveGateStillRecordsThatNoReviewGovernedTheChange is the other
-// half of the rule. Not blocking is not the same as pretending nothing
-// happened: whoever reads this archive later must be able to tell it closed
-// under ordinary repository policy rather than under a receipt.
-func TestDisabledArchiveGateStillRecordsThatNoReviewGovernedTheChange(t *testing.T) {
+// TestDisabledArchiveGateProducesStructuralAbsenceNotADisposition is the
+// corrective verify cycle's CRITICAL-1 fix (rdd-post-verify-review-offer's
+// "Kill-Switch-Off Is Structural Absence" requirement, ratified text: "zero
+// review code MUST execute on any SDD path: no offer, no status
+// consultation, no disabled/unmanaged ceremony capable of failing or
+// blocking" and "archive consults no reviewGate structured status"). This
+// supersedes the disabled/unmanaged DISPOSITION this file previously
+// required (a populated ReviewGate naming why nothing governed): the
+// ratified requirement demands the field itself be absent, not populated
+// with a reason. applyReviewGate now returns before any authority read while
+// disabled, so status.ReviewGate stays nil and never reaches the wire.
+func TestDisabledArchiveGateProducesStructuralAbsenceNotADisposition(t *testing.T) {
 	root := t.TempDir()
 	seedReviewlessArchiveReadyChange(t, root)
 
@@ -124,34 +132,33 @@ func TestDisabledArchiveGateStillRecordsThatNoReviewGovernedTheChange(t *testing
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if status.ReviewGate == nil {
-		t.Fatal("disabled archive erased the review gate instead of recording that no review governed the change")
+	if status.ReviewGate != nil {
+		t.Fatalf("disabled archive produced a review gate disposition instead of structural absence: %#v", status.ReviewGate)
 	}
-	if status.ReviewGate.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
-		t.Fatalf("disabled ReviewGate.Delivery = %q, want %q", status.ReviewGate.Delivery, reviewtransaction.RDDDeliveryDisabledUnmanaged)
-	}
-	if !strings.Contains(status.ReviewGate.Reason, "receipt-driven development is disabled") {
-		t.Fatalf("disabled ReviewGate.Reason = %q, want it to name the situation", status.ReviewGate.Reason)
-	}
-	// The mechanism that could not govern stays discoverable behind the
-	// situation, exactly as the delivery gate keeps its denial reason.
-	if !strings.Contains(status.ReviewGate.Reason, "terminal review receipt is missing") {
-		t.Fatalf("disabled ReviewGate.Reason = %q, want the underlying reason preserved", status.ReviewGate.Reason)
+	if status.Dependencies.Archive == DependencyBlocked {
+		t.Fatalf("disabled archive = %q, want unblocked", status.Dependencies.Archive)
 	}
 
 	projected, err := ProjectStatusV1(status)
 	if err != nil {
 		t.Fatalf("ProjectStatusV1() error = %v", err)
 	}
-	if projected.ReviewGate == nil || projected.ReviewGate.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
-		t.Fatalf("v1 projection lost the unmanaged disposition: %#v", projected.ReviewGate)
+	if projected.ReviewGate != nil {
+		t.Fatalf("v1 projection carried a reviewGate the internal status never set: %#v", projected.ReviewGate)
+	}
+	payload, err := json.Marshal(projected)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if strings.Contains(string(payload), "reviewGate") {
+		t.Fatalf("disabled v1 wire payload leaked a reviewGate key: %s", payload)
 	}
 }
 
-// TestDisabledArchiveGateNeverReadsAsAnApproval is the invariant that must hold
-// no matter how the disposition is shaped: a disabled switch may decline to
-// manage, never approve.
-func TestDisabledArchiveGateNeverReadsAsAnApproval(t *testing.T) {
+// TestDisabledArchiveGateNeverFabricatesReviewAuthority is the invariant that
+// must hold no matter how absence is shaped: a disabled switch never
+// approves, and it never invents a review transaction either.
+func TestDisabledArchiveGateNeverFabricatesReviewAuthority(t *testing.T) {
 	root := t.TempDir()
 	seedReviewlessArchiveReadyChange(t, root)
 
@@ -159,57 +166,50 @@ func TestDisabledArchiveGateNeverReadsAsAnApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if status.ReviewGate == nil || status.ReviewGate.Result == reviewtransaction.GateAllow {
+	if status.ReviewGate != nil && status.ReviewGate.Result == reviewtransaction.GateAllow {
 		t.Fatalf("disabled gate fabricated an approval: %#v", status.ReviewGate)
-	}
-	if status.ReviewGate.Delivery == reviewtransaction.RDDDeliveryReceiptGoverned {
-		t.Fatalf("disabled gate claimed a receipt governs: %#v", status.ReviewGate)
-	}
-	lowered := strings.ToLower(status.ReviewGate.Reason)
-	for _, forbidden := range []string{"approved", "allow", "pass"} {
-		if strings.Contains(lowered, forbidden) {
-			t.Fatalf("disabled ReviewGate.Reason %q reads as an approval (contains %q)", status.ReviewGate.Reason, forbidden)
-		}
 	}
 	if status.ReviewTransaction != nil {
 		t.Fatalf("disabled gate invented a review transaction: %#v", status.ReviewTransaction)
 	}
 }
 
-// TestDisabledArchiveGateStillValidatesAnExplicitReviewReceipt holds the line
-// the RuntimeStore.ReviewDisabled doc comment draws: the switch removes the
-// IMPLICIT demand, never the checks on an explicit request. A change that
-// carries a review receipt asked for receipt-driven development to act, so its
-// receipt is still validated in full and a broken one still blocks.
-func TestDisabledArchiveGateStillValidatesAnExplicitReviewReceipt(t *testing.T) {
+// TestDisabledArchiveGateIgnoresAnExplicitReviewReceiptToo holds the
+// corrective verify cycle's stricter line: the ratified "zero review code"
+// requirement carries no carve-out for an explicit review artifact. This
+// supersedes the earlier RuntimeStore.ReviewDisabled doc comment, which drew
+// the line at only the IMPLICIT demand — that narrower contract predates
+// this wave's ratified requirement and no longer holds. An explicit receipt
+// on disk, even one whose scope has since changed, is never read while the
+// switch is off.
+func TestDisabledArchiveGateIgnoresAnExplicitReviewReceiptToo(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedBoundedReadyChange(t, root)
 	writeApprovedReviewArtifacts(t, changeRoot)
-	// The candidate moves after approval: the explicit receipt no longer
-	// governs these bytes.
+	// The candidate moves after approval: an enabled run would see this as
+	// GateScopeChanged, but the disabled run must never read the receipt at
+	// all, so this move is irrelevant to what it observes.
 	write(t, filepath.Join(changeRoot, "tasks.md"), "- [x] 1.1 Work\n- [x] scope changed\n")
 
 	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", ReviewDisabled: true})
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateScopeChanged {
-		t.Fatalf("explicit receipt while disabled = %#v, want scope-changed", status.ReviewGate)
+	if status.ReviewGate != nil {
+		t.Fatalf("explicit receipt while disabled = %#v, want structural absence", status.ReviewGate)
 	}
-	if status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "resolve-review" {
-		t.Fatalf("explicit receipt while disabled archive=%q next=%q, want blocked/resolve-review",
-			status.Dependencies.Archive, status.NextRecommended)
+	if status.Dependencies.Archive == DependencyBlocked {
+		t.Fatalf("explicit receipt while disabled archive = %q, want unblocked", status.Dependencies.Archive)
 	}
 }
 
 func TestDiscoveredTerminalBlockerRespectsReviewModeProvenance(t *testing.T) {
 	tests := []struct {
-		name       string
-		result     reviewtransaction.GateResult
-		wantReason string
+		name   string
+		result reviewtransaction.GateResult
 	}{
-		{name: "invalidated", result: reviewtransaction.GateInvalidated, wantReason: "review receipt was invalidated"},
-		{name: "escalated", result: reviewtransaction.GateEscalated, wantReason: "escalated the receipt"},
+		{name: "invalidated", result: reviewtransaction.GateInvalidated},
+		{name: "escalated", result: reviewtransaction.GateEscalated},
 	}
 
 	original := evaluateNativeReviewGate
@@ -255,18 +255,19 @@ func TestDiscoveredTerminalBlockerRespectsReviewModeProvenance(t *testing.T) {
 			}
 			assertBlocked("enabled discovered", enabled)
 
+			// Corrective verify cycle CRITICAL-1: while disabled, applyReviewGate
+			// never runs at all, so the discovered blocker is structurally
+			// absent rather than surfaced as a disabled/unmanaged disposition —
+			// this supersedes the disposition this sub-test previously required.
 			disabled, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", ReviewDisabled: true})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if disabled.ReviewGate == nil || disabled.ReviewGate.Result != tt.result || disabled.ReviewGate.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
-				t.Fatalf("disabled discovered gate = %#v, want %q disabled/unmanaged", disabled.ReviewGate, tt.result)
+			if disabled.ReviewGate != nil {
+				t.Fatalf("disabled discovered gate = %#v, want structural absence", disabled.ReviewGate)
 			}
 			if disabled.Dependencies.Archive == DependencyBlocked || disabled.NextRecommended == "resolve-review" {
 				t.Fatalf("disabled discovered archive=%q next=%q, want unmanaged archive route", disabled.Dependencies.Archive, disabled.NextRecommended)
-			}
-			if !strings.Contains(disabled.ReviewGate.Reason, tt.wantReason) {
-				t.Fatalf("disabled discovered reason = %q, want underlying %q", disabled.ReviewGate.Reason, tt.wantReason)
 			}
 
 			reenabled, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
@@ -275,6 +276,9 @@ func TestDiscoveredTerminalBlockerRespectsReviewModeProvenance(t *testing.T) {
 			}
 			assertBlocked("re-enabled discovered", reenabled)
 
+			// The ratified "zero review code" requirement carries no carve-out
+			// for an explicit receipt either: even with it restored on disk,
+			// the disabled run never reads it.
 			if err := os.WriteFile(receiptPath, receipt, 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -282,7 +286,12 @@ func TestDiscoveredTerminalBlockerRespectsReviewModeProvenance(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			assertBlocked("disabled explicit", explicit)
+			if explicit.ReviewGate != nil {
+				t.Fatalf("disabled explicit gate = %#v, want structural absence", explicit.ReviewGate)
+			}
+			if explicit.Dependencies.Archive == DependencyBlocked {
+				t.Fatalf("disabled explicit archive = %q, want unblocked", explicit.Dependencies.Archive)
+			}
 
 			after, err := store.LoadChain()
 			if err != nil {
@@ -295,10 +304,16 @@ func TestDiscoveredTerminalBlockerRespectsReviewModeProvenance(t *testing.T) {
 	}
 }
 
-// TestDisabledArchiveGateStillHonoursAnApprovedReceipt keeps the enabled path
-// byte-identical where a receipt does govern: disabling freezes authority
-// read-only, it does not unmake an approval bound to exactly these bytes.
-func TestDisabledArchiveGateStillHonoursAnApprovedReceipt(t *testing.T) {
+// TestDisabledArchiveGateNeverConsultsAnApprovedReceiptEither is the last
+// corner the corrective verify cycle's CRITICAL-1 fix closes: even a receipt
+// that WOULD approve while enabled is never consulted while the switch is
+// off. Superseded expectation (documented, not silently dropped): this file
+// previously required the disabled run to stay byte-identical to the enabled
+// approved gate ("disabling freezes authority read-only"). The ratified
+// "zero review code MUST execute on any SDD path" requirement is
+// unconditional and leaves no such carve-out — while off, archive proceeds
+// unmanaged regardless of what any receipt on disk would have said.
+func TestDisabledArchiveGateNeverConsultsAnApprovedReceiptEither(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedBoundedReadyChange(t, root)
 	writeApprovedReviewArtifacts(t, changeRoot)
@@ -314,12 +329,11 @@ func TestDisabledArchiveGateStillHonoursAnApprovedReceipt(t *testing.T) {
 	if enabled.ReviewGate == nil || enabled.ReviewGate.Result != reviewtransaction.GateAllow {
 		t.Fatalf("enabled approved gate = %#v, want allow", enabled.ReviewGate)
 	}
-	if *disabled.ReviewGate != *enabled.ReviewGate {
-		t.Fatalf("disabled approved gate = %#v, want byte-identical to enabled %#v", disabled.ReviewGate, enabled.ReviewGate)
+	if disabled.ReviewGate != nil {
+		t.Fatalf("disabled approved gate = %#v, want structural absence even though an approving receipt exists", disabled.ReviewGate)
 	}
-	if disabled.Dependencies != enabled.Dependencies || disabled.NextRecommended != enabled.NextRecommended {
-		t.Fatalf("disabled approved routing = %#v/%q, want %#v/%q",
-			disabled.Dependencies, disabled.NextRecommended, enabled.Dependencies, enabled.NextRecommended)
+	if disabled.Dependencies.Archive == DependencyBlocked {
+		t.Fatalf("disabled approved archive = %q, want unblocked", disabled.Dependencies.Archive)
 	}
 }
 

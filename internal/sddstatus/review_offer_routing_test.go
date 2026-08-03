@@ -184,11 +184,22 @@ func TestReviewOfferDeclineLeavesNoStateAndDoesNotSuppressLaterOffer(t *testing.
 // kill-switch toggle changed — internal/cli/review_new_lineage_switch_off_
 // golden_test.go and the pre-existing archive-gate byte-equivalence tests
 // use the same discipline). A decline — the switch on, the offer present,
-// nothing ever acted on — must leave the rest of the status output
-// byte-identical to the switch-off case for the identical underlying
-// repository state: decline records nothing that OFF would not also
-// produce.
-func TestReviewOfferDeclineStatusByteIdenticalToOffOutsideOfferBlock(t *testing.T) {
+// nothing ever acted on — must never block archive on review grounds, the
+// same operational property the switch-off case provides. This asserts at
+// the PROJECTION level (ProjectStatusV1, the exact bytes a caller like
+// RunSDDStatus emits), the verify cycle's own key learning: asserting on
+// json.Marshal(Status) directly is how CRITICAL-2 (ReviewOffer/ReVerify
+// unreachable at the wire) survived a fully green suite.
+//
+// Corrective verify cycle note: this test previously asserted the declined
+// and switch-off projections were byte-identical outside the offer block.
+// That assumption no longer holds and is not restored here: CRITICAL-1's
+// fix makes switch-off a genuine structural absence (ReviewGate nil), while
+// the declined fixture below still carries an approving legacy receipt that
+// legitimately governs while the switch is ON (ReviewGate present, Allow) —
+// two different, both-correct dispositions that happen to agree on the one
+// property that matters for delivery: neither blocks archive.
+func TestReviewOfferDeclineNeverBlocksArchiveAtTheProjectionLevel(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
 	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("a"), "pass"))
@@ -201,6 +212,18 @@ func TestReviewOfferDeclineStatusByteIdenticalToOffOutsideOfferBlock(t *testing.
 	if declined.ReviewOffer == nil {
 		t.Fatal("declined.ReviewOffer = nil, want present before the decline is applied to this comparison")
 	}
+	declinedProjection, err := ProjectStatusV1(declined)
+	if err != nil {
+		t.Fatalf("ProjectStatusV1(declined) error = %v", err)
+	}
+	if declinedProjection.ReviewOffer == nil || !declinedProjection.ReviewOffer.Available {
+		t.Fatalf("declined projection reviewOffer = %#v, want an available offer on the wire", declinedProjection.ReviewOffer)
+	}
+	if declinedProjection.Dependencies.Archive == DependencyBlocked || declinedProjection.NextRecommended == "resolve-review" {
+		t.Fatalf("declined (offer ignored) projection archive=%q next=%q, want unblocked",
+			declinedProjection.Dependencies.Archive, declinedProjection.NextRecommended)
+	}
+
 	off, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", ReviewDisabled: true})
 	if err != nil {
 		t.Fatal(err)
@@ -208,19 +231,18 @@ func TestReviewOfferDeclineStatusByteIdenticalToOffOutsideOfferBlock(t *testing.
 	if off.ReviewOffer != nil {
 		t.Fatalf("off.ReviewOffer = %#v, want nil", off.ReviewOffer)
 	}
-
-	// The offer block is the one and only expected divergence; strip it from
-	// the declined side before the byte comparison.
-	declined.ReviewOffer = nil
-	declinedJSON, err := json.MarshalIndent(declined, "", "  ")
+	offProjection, err := ProjectStatusV1(off)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("ProjectStatusV1(off) error = %v", err)
 	}
-	offJSON, err := json.MarshalIndent(off, "", "  ")
-	if err != nil {
-		t.Fatal(err)
+	if offProjection.ReviewOffer != nil {
+		t.Fatalf("off projection reviewOffer = %#v, want absent from the wire", offProjection.ReviewOffer)
 	}
-	if string(declinedJSON) != string(offJSON) {
-		t.Fatalf("declined status (offer block stripped) diverges from the switch-off status for the same fixture:\ndeclined:\n%s\noff:\n%s", declinedJSON, offJSON)
+	if offProjection.ReviewGate != nil {
+		t.Fatalf("off projection reviewGate = %#v, want structural absence", offProjection.ReviewGate)
+	}
+	if offProjection.Dependencies.Archive == DependencyBlocked || offProjection.NextRecommended == "resolve-review" {
+		t.Fatalf("switch-off projection archive=%q next=%q, want unblocked",
+			offProjection.Dependencies.Archive, offProjection.NextRecommended)
 	}
 }

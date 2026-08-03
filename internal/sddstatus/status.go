@@ -176,20 +176,19 @@ type RemediationState struct {
 type ReviewGateState struct {
 	Result reviewtransaction.GateResult `json:"result"`
 	Reason string                       `json:"reason"`
-	// Delivery names what governs the change when the review gate itself
-	// cannot, mirroring the delivery gate's own disposition field
-	// (internal/cli.reviewDeliveryDisposition). It is set only while the
-	// receipt-driven-development kill switch is off and the change has no
-	// review authority of its own, where it reports
-	// RDDDeliveryDisabledUnmanaged: no review governs this change and it
-	// closes under ordinary repository policy rather than under a receipt.
-	//
-	// It is deliberately a separate field rather than a fifth
-	// reviewtransaction.GateResult. Result keeps reporting only the four
-	// documented gate results, so every consumer that archives on
-	// `reviewGate.result: allow` keeps refusing to read this as an approval,
-	// and every enabled path leaves Delivery empty, which `omitempty` keeps
-	// off the wire exactly as before.
+	// Delivery historically named what governs the change when the review
+	// gate itself could not (RDDDeliveryDisabledUnmanaged, while the kill
+	// switch was off and no review authority existed). Corrective verify
+	// cycle CRITICAL-1 (rdd-post-verify-review-offer's "Kill-Switch-Off Is
+	// Structural Absence" requirement) removed the production path that
+	// populated it: applyReviewGate now returns before status.ReviewGate is
+	// ever set while disabled, so ReviewGate is nil (structural absence)
+	// rather than a populated disabled/unmanaged disposition. Delivery is
+	// therefore never non-empty in production today. The field itself is
+	// kept, unpopulated, for legacy Gentle Pi wire-shape stability
+	// (rdd-sdd-receipt-consumption's "Legacy reviewGate v1 Field
+	// Compatibility" assumption 5); its removal is deferred to Wave 7 along
+	// with the rest of that requirement's legacy-field retirement.
 	Delivery reviewtransaction.RDDDelivery `json:"delivery,omitempty"`
 }
 
@@ -282,11 +281,15 @@ type ResolveOptions struct {
 	// (review/start is refused while the switch is off), which would otherwise
 	// loop an orchestrator forever on `nextRecommended: "resolve-review"`.
 	//
-	// It removes only the IMPLICIT demand. A change that carries an explicit
-	// review receipt asked for receipt-driven development to act, so that
-	// receipt is still validated in full: an approved one still governs and a
-	// scope-changed, escalated, or invalidated one still blocks. Nothing here
-	// approves, advances, or invents review authority.
+	// Corrective verify cycle CRITICAL-1 (rdd-post-verify-review-offer's
+	// "Kill-Switch-Off Is Structural Absence" requirement, ratified text:
+	// "zero review code MUST execute on any SDD path ... archive consults no
+	// reviewGate structured status") tightened this: while the switch is off,
+	// applyReviewGate does not run at all — not even to validate an explicit
+	// review receipt artifact. That narrower "implicit demand only" carve-out
+	// predates this wave's ratified requirement and no longer holds: nothing
+	// here approves, advances, or invents review authority, but nothing here
+	// blocks on review grounds either.
 	//
 	// The zero value enforces, so any caller that does not resolve the switch
 	// keeps today's behavior. The switch itself is read in the CLI layer, which
