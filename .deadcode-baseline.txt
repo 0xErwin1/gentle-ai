@@ -135,6 +135,7 @@ internal/reviewtransaction/snapshot.go	snapshotIdentity
 internal/reviewtransaction/store.go	SnapshotsEqualExact
 internal/reviewtransaction/store.go	WriteReceiptAtomic
 internal/reviewtransaction/store_lock.go	AcquireReviewMaintenanceExclusive
+internal/reviewtransaction/target_status.go	AssessTargetStatus
 internal/reviewtransaction/target_status.go	compactLiveTargetMatchesSnapshot
 internal/reviewtransaction/target_status.go	legacyLiveTargetMatchesSnapshot
 internal/reviewtransaction/transaction.go	CanonicalLensResult

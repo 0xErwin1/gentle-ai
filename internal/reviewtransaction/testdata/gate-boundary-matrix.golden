@@ -161,7 +161,7 @@
     "relation": "compatible_base_advance",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "pre-pr's compatible_base_advance cell legitimately diverges from the other four gates by design (decision 7): compact_gate.go:91-102 forces baseMatches = true and admits a current-changes boundary proof for pre-PR specifically, so a pre-PR candidate can reach compatible_base_advance under conditions the other gates' identical relation never admits. This is a named, explained architectural divergence, not an un-investigated gap -- unlike the generic 'not wired yet' reason, which the other 26 remaining skip cells still carry."
   },
   {
     "gate": "pre-pr",
@@ -173,9 +173,9 @@
   {
     "gate": "pre-pr",
     "relation": "changed",
-    "verdict": "",
-    "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "verdict": "invalidated",
+    "explained": false,
+    "reason": "driven via the real gentle-ai binary: three lineages reviewing the same path in sequence, each individually approved and committed; lineage-free validate --gate pre-pr denies base-mismatch -- composition-free for the first time since Wave 5 Slice 5's deletion"
   },
   {
     "gate": "pre-pr",

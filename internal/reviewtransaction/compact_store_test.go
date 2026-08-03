@@ -2146,6 +2146,34 @@ func TestCompactStateRejectsChecksumValidImpossibleSemantics(t *testing.T) {
 	}
 }
 
+// TestCompactStoresShareRepositoryWriteLock re-homed from
+// compact_chain_test.go (Wave 5 Slice 5, pre-PR chain composition deletion):
+// the invariant itself — every compact store in one repository shares ONE
+// physical write lock file, regardless of lineage — is general-purpose, not
+// composition-specific; only the deleted file's elaborate multi-segment
+// pre-PR chain fixture was. Rebuilt here with the minimal fixture this
+// invariant actually needs: two independent lineages' own
+// CompactAuthoritativeStore values in the same repository.
+func TestCompactStoresShareRepositoryWriteLock(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	first, err := CompactAuthoritativeStore(context.Background(), repo, "shared-lock-first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := CompactAuthoritativeStore(context.Background(), repo, "shared-lock-second")
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := acquireStoreLock(first.lockPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.release()
+	if _, err := acquireStoreLock(second.lockPath); !errors.Is(err, ErrConcurrentUpdate) {
+		t.Fatalf("second compact store lock error = %v, want concurrent update", err)
+	}
+}
+
 func TestCompactStoreRejectsConcurrentLockedWriter(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "candidate\n")
