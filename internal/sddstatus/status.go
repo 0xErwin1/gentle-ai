@@ -483,13 +483,6 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if remediationState.Reason != "" {
 		blockedReasons.genuine = append(blockedReasons.genuine, remediationState.Reason)
 	}
-	if !bindingPresent {
-		applyPreVerifyCompactBridgeRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, bridge)
-	}
-	if !bindingPresent && !bridge.Eligible && !bridge.Relevant {
-		applyPreVerifyReviewRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, reviewStateReason, reviewDisabled)
-	}
-
 	status := baseStatus(workspaceRoot, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
 	status.ArtifactPaths = artifactPaths
 	status.ContextFiles = artifactPaths
@@ -740,7 +733,6 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		nextRecommended = "verify"
 	}
 	var boundGate *ReviewGateState
-	bridge := compactPreVerifyBridge{}
 	if bindingPresent {
 		binding, bindingErr := loadEffectiveReviewBinding(context.Background(), workspaceRoot, changeName)
 		if bindingErr == nil {
@@ -762,14 +754,6 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 			dependencies.Archive = DependencyBlocked
 			nextRecommended = "resolve-review"
 			blockedReasons.genuine = append(blockedReasons.genuine, bindingErr.Error())
-		}
-	} else {
-		if applyState == ApplyAllDone && artifacts["verifyReport"] != ArtifactDone && compactBridgeableReviewArtifact(artifacts["reviewState"], reviewStateReason) {
-			bridge = discoverCompactPreVerifyAuthority(context.Background(), workspaceRoot, changeName, "")
-		}
-		applyPreVerifyCompactBridgeRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, bridge)
-		if !bridge.Eligible && !bridge.Relevant {
-			applyPreVerifyReviewRouting(&dependencies, &nextRecommended, &blockedReasons, applyState, artifacts["verifyReport"] == ArtifactDone, reviewState, reviewStateReason, reviewDisabled)
 		}
 	}
 
@@ -826,51 +810,17 @@ func blockedEngramStatus(workspaceRoot string, changeName *string, next string, 
 	return status
 }
 
-func applyPreVerifyReviewRouting(dependencies *Dependencies, next *string, blockedReasons *blockerReasons, applyState ApplyState, verifyReportDone bool, transaction *reviewtransaction.Transaction, transactionReason string, reviewDisabled bool) {
-	if applyState != ApplyAllDone || verifyReportDone {
-		return
-	}
-	if transaction == nil {
-		if reviewDisabled {
-			return
-		}
-		dependencies.Verify = DependencyBlocked
-		*next = "review"
-		blockedReasons.genuine = append(blockedReasons.genuine, "explicit bounded review/start(target) is required after apply before independent final verification: "+transactionReason)
-		return
-	}
-	switch transaction.State {
-	case reviewtransaction.StateReadyFinalVerification, reviewtransaction.StateFinalVerifying:
-		dependencies.Verify = DependencyReady
-		*next = "verify"
-	case reviewtransaction.StateEscalated, reviewtransaction.StateApproved:
-		dependencies.Verify = DependencyBlocked
-		*next = "resolve-review"
-		blockedReasons.genuine = append(blockedReasons.genuine, fmt.Sprintf("review transaction state %q cannot start missing final verification evidence", transaction.State))
-	default:
-		dependencies.Verify = DependencyBlocked
-		*next = "review"
-		blockedReasons.genuine = append(blockedReasons.genuine, fmt.Sprintf("bounded review transaction is %q; continue it without creating a new budget before final verification", transaction.State))
-	}
-}
-
-func applyPreVerifyCompactBridgeRouting(dependencies *Dependencies, next *string, blockedReasons *blockerReasons, applyState ApplyState, verifyReportDone bool, transaction *reviewtransaction.Transaction, bridge compactPreVerifyBridge) {
-	if applyState != ApplyAllDone || verifyReportDone || transaction != nil {
-		return
-	}
-	if bridge.Eligible {
-		dependencies.Verify = DependencyReady
-		dependencies.Archive = DependencyBlocked
-		*next = "verify"
-		return
-	}
-	if bridge.Relevant {
-		dependencies.Verify = DependencyBlocked
-		dependencies.Archive = DependencyBlocked
-		*next = "resolve-review"
-		blockedReasons.genuine = append(blockedReasons.genuine, bridge.Reason)
-	}
-}
+// applyPreVerifyReviewRouting and applyPreVerifyCompactBridgeRouting were
+// removed in Wave 4 S3 (design.md decision 3, proposal.md's #1 success
+// criterion, maintainer directive Engram #10123): RDD no longer supervises
+// SDD from before verify. Once apply is complete, resolveDependencies'
+// own default (coreReady && applyState == ApplyAllDone && !verifyReportDone
+// => Verify: DependencyReady) is the only rule that governs verify
+// readiness — nothing here overrides it back to blocked pending a review
+// transaction or compact-authority bridge. The post-verify offer point
+// (reviewtransaction.OfferReviewAfterVerify, wired from internal/cli's
+// verify-success exit) is the sole remaining review touchpoint in the
+// apply -> verify -> offer -> archive sequence.
 
 func shouldTryEngram(workspaceRoot string) bool {
 	if os.Getenv("GENTLE_AI_SDD_STATUS_ENGRAM") != "" {
