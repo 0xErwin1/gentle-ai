@@ -173,10 +173,13 @@ func TestReleaseGate_Deny_ChangedRelationCarriesNextStep(t *testing.T) {
 // reached because GatePrePR is not strictBinding and this fixture's
 // snapshot.BaseTree diverges from the receipt's own BaseTree. Called
 // directly against EvaluateCompactGate -- not through
-// runReviewFacadeValidate's funnel, which still tries
-// EvaluateCompactPrePRChain composition as a Slice 5 concern -- so "without
-// composition" is proven by construction: this function never calls
-// EvaluateCompactPrePRChain at all.
+// runReviewFacadeValidate's funnel. Wave 5 Slice 5 deleted
+// EvaluateCompactPrePRChain and its two funnel call sites entirely
+// (TestPrePRComposition_ZeroCallers, internal/cli, proves it by
+// call-absence), so "without composition" now holds for every pre-PR call
+// path, not just this direct one -- this test's own construction (calling
+// EvaluateCompactGate directly) simply predates that deletion and stays
+// correct unchanged.
 func TestPrePRGate_Deny_BaseMismatchDeniesWithoutComposition(t *testing.T) {
 	repo := initSnapshotRepo(t)
 	writeSnapshotFile(t, repo, "tracked.txt", "approved candidate\n")

@@ -53,6 +53,24 @@ const gateBoundaryMatrixNotWiredReason = "gateVerdict(gate, relation) does not e
 	"Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real " +
 	"code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
 
+// gateBoundaryMatrixPrePRCompatibleBaseAdvanceReason is task 6.3's named,
+// specific explained-divergence reason for pre-pr's compatible_base_advance
+// cell (design decision 7): unlike the other 26 remaining unwired cells,
+// this one is not "just not gotten to it yet" -- compact_gate.go:91-102
+// deliberately forces baseMatches = true and admits a current-changes
+// boundary proof for pre-PR specifically, so this cell's own verdict
+// legitimately differs from every other gate's compatible_base_advance
+// column by design, not by omission. A real binary-driven recipe for it is
+// still not built this slice (unlike its "changed" sibling above, which
+// Slice 5's composition deletion made reachable); when one is built, this
+// reason retires in favor of a driven row exactly as "changed" just did.
+const gateBoundaryMatrixPrePRCompatibleBaseAdvanceReason = "pre-pr's compatible_base_advance cell legitimately " +
+	"diverges from the other four gates by design (decision 7): compact_gate.go:91-102 forces baseMatches = true " +
+	"and admits a current-changes boundary proof for pre-PR specifically, so a pre-PR candidate can reach " +
+	"compatible_base_advance under conditions the other gates' identical relation never admits. This is a named, " +
+	"explained architectural divergence, not an un-investigated gap -- unlike the generic 'not wired yet' reason, " +
+	"which the other 26 remaining skip cells still carry."
+
 type gateBoundaryMatrixRow struct {
 	Gate      string `json:"gate"`
 	Relation  string `json:"relation"`
@@ -160,13 +178,17 @@ func decodeGateBoundaryMatrixResult(t *testing.T, payload string) gateBoundaryMa
 // TestGateBoundaryMatrix_35Cells builds and checks
 // testdata/gate-boundary-matrix.golden: 35 rows (5 gates x 7 relations).
 //
-// Wired cells: 7 as of Slice 3 (up from 4 after Slice 1) -- the "exact"
-// relation at post-apply/pre-commit/pre-push/pre-pr (Slice 1), plus the
-// "changed" relation at post-apply/pre-commit/pre-push (Slice 3, new:
-// gateVerdict + attachGateVerdictRelation now populate Relation/Next on a
-// real denial, observable through the CLI's ReviewValidateResult.Relation/Next
-// wire fields Slice 3 also adds). Every other cell -- including release's
-// "exact" cell and pre-pr's "changed" cell -- is an explicit, reasoned SKIP;
+// Wired cells: 8 as of Slice 5 (up from 7 after Slice 3, up from 4 after
+// Slice 1) -- the "exact" relation at post-apply/pre-commit/pre-push/pre-pr
+// (Slice 1), the "changed" relation at post-apply/pre-commit/pre-push
+// (Slice 3, new: gateVerdict + attachGateVerdictRelation now populate
+// Relation/Next on a real denial, observable through the CLI's
+// ReviewValidateResult.Relation/Next wire fields Slice 3 also adds), and now
+// pre-pr's own "changed" cell (Slice 5: deleting EvaluateCompactPrePRChain
+// made a real, composition-free CLI recipe honestly reachable for the first
+// time -- see this cell's own wiring comment below for the full history).
+// Every other cell -- including release's "exact" cell -- is an explicit,
+// reasoned SKIP;
 // see each SKIP's own comment above for why it is not wired yet.
 func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 	binary := gateBoundaryMatrixBinary(t)
@@ -359,17 +381,68 @@ func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 		wired[[2]string{string(GatePrePush), "changed"}] = assertChanged(t, string(GatePrePush), out, err, "review start", "candidate_changed")
 	}
 
-	// pre-pr / changed (base-mismatch variant) is NOT wired through this
-	// binary-driven harness this slice: reaching it needs a `review start`
-	// CLI recipe this slice has not verified reproduces
-	// gate_verdict_deny_golden_test.go's TestPrePRGate_Deny_BaseMismatchDeniesWithoutComposition
-	// Go-level fixture (TargetExactRevision via approvedCompactRevisionFixture)
-	// byte-for-byte -- the CLI's `review start` defaults to a different
-	// target kind (TargetCurrentChanges). The property itself IS already
-	// proven through EvaluateCompactGate directly (the identical function
-	// `review validate` calls) by that Go-level test; rather than risk a
-	// subtly wrong CLI fixture pinned into the committed golden, this cell
-	// stays an explained skip pending a verified CLI recipe.
+	// pre-pr / changed: Wave 5 Slice 5 wires this cell for the first time,
+	// via the composition-free recipe its own deletion made honestly
+	// reachable. Before this slice, EvaluateCompactPrePRChain composed
+	// sequential same-path receipts into an allow, so a plain `review
+	// start`-driven CLI recipe could never reliably reach the denial (the
+	// prior blocker: verifying review start's TargetCurrentChanges shape
+	// byte-for-byte matched the Go-level TargetExactRevision fixture that
+	// DID prove it, gate_verdict_deny_golden_test.go's
+	// TestPrePRGate_Deny_BaseMismatchDeniesWithoutComposition). Three
+	// lineages review the SAME path in sequence, each individually approved
+	// and delivered as its own commit: lineage-free discovery resolves the
+	// LAST lineage uniquely (the shared path narrows what would otherwise be
+	// ambiguous -- TestPrePRChainCompositionDeletionSupersedesRemovalDelta
+	// above proves the 3-DISTINCT-path sibling denies via ambiguity
+	// instead), but that lineage's own receipt only covers its own segment,
+	// so EvaluateCompactGate denies it base-mismatch against the live
+	// candidate three commits ahead of the reviewed base.
+	// TestUnqualifiedPrePRDiscoveryDeniesSequentialReceiptsForSamePathWithoutComposition
+	// (internal/cli) is this cell's funnel-level sibling proof, through the
+	// negotiated envelope rather than this raw-CLI-JSON shape.
+	//
+	// Unlike the other 3 "changed" cells (S3), this denial's precondition
+	// fires BEFORE the relation table (absorbed N2, gate.go:1745,
+	// "BaseRelationshipValid is gated to pre-pr/release only") with NO
+	// Next.Transition: a base-relationship-invalid denial has no
+	// review-start-shaped fix by design -- restarting review of the same
+	// candidate cannot repair a stale reviewed base. This is a genuine,
+	// deliberate gap in gateVerdict's next-step vocabulary (task 6.7's own
+	// "every denial names a runnable next step" goal is not yet met here),
+	// not a Slice 5 regression; recorded, not silently accepted.
+	{
+		repo := initSnapshotRepo(t)
+		branch := currentBranch(context.Background(), repo)
+		configurePublicationRemote(t, repo, branch)
+		lineages := []string{"matrix-pre-pr-changed-first", "matrix-pre-pr-changed-second", "matrix-pre-pr-changed-third"}
+		for index, lineage := range lineages {
+			writeSnapshotFile(t, repo, "docs/shared.md", "reviewed segment "+string(rune('a'+index))+"\n")
+			if out, err := runGateBoundaryMatrixReview(binary, repo, "start", "--lineage", lineage); err != nil {
+				t.Fatalf("pre-pr/changed review start (%s): %v\n%s", lineage, err, out)
+			}
+			if out, err := runGateBoundaryMatrixReview(binary, repo, "finalize", "--lineage", lineage); err != nil {
+				t.Fatalf("pre-pr/changed review finalize (%s): %v\n%s", lineage, err, out)
+			}
+			gitSnapshot(t, repo, "add", "-A")
+			gitSnapshot(t, repo, "commit", "-m", "deliver "+lineage)
+		}
+		out, err := runGateBoundaryMatrixReview(binary, repo, "validate", "--gate", string(GatePrePR), "--base-ref", "origin/"+branch)
+		if err == nil {
+			t.Fatalf("pre-pr/changed same-path sequential delivery unexpectedly allowed:\n%s", out)
+		}
+		result := decodeGateBoundaryMatrixResult(t, out)
+		if result.Relation != "changed" {
+			t.Fatalf("pre-pr/changed relation = %q, want %q:\n%s", result.Relation, "changed", out)
+		}
+		if result.Next == nil || result.Next.Transition != "" || result.Next.ReasonCode != "base_relationship_invalid" {
+			t.Fatalf("pre-pr/changed next = %#v, want empty transition, reason_code base_relationship_invalid", result.Next)
+		}
+		wired[[2]string{string(GatePrePR), "changed"}] = gateBoundaryMatrixRow{
+			Gate: string(GatePrePR), Relation: "changed", Verdict: result.Result, Explained: false,
+			Reason: "driven via the real gentle-ai binary: three lineages reviewing the same path in sequence, each individually approved and committed; lineage-free validate --gate pre-pr denies base-mismatch -- composition-free for the first time since Wave 5 Slice 5's deletion",
+		}
+	}
 
 	rows := make([]gateBoundaryMatrixRow, 0, len(gateBoundaryMatrixGates)*len(gateBoundaryMatrixRelations))
 	for _, gate := range gateBoundaryMatrixGates {
@@ -378,16 +451,20 @@ func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 				rows = append(rows, row)
 				continue
 			}
+			reason := gateBoundaryMatrixNotWiredReason
+			if gate == string(GatePrePR) && relation == "compatible_base_advance" {
+				reason = gateBoundaryMatrixPrePRCompatibleBaseAdvanceReason
+			}
 			rows = append(rows, gateBoundaryMatrixRow{
-				Gate: gate, Relation: relation, Explained: true, Reason: gateBoundaryMatrixNotWiredReason,
+				Gate: gate, Relation: relation, Explained: true, Reason: reason,
 			})
 		}
 	}
 	if len(rows) != 35 {
 		t.Fatalf("gate boundary matrix has %d rows, want 35 (5 gates x 7 relations)", len(rows))
 	}
-	if len(wired) != 7 {
-		t.Fatalf("gate boundary matrix wired %d cells, want exactly 7 this slice (4 from S1: post-apply/pre-commit/pre-push/pre-pr exact; 3 new from S3: post-apply/pre-commit/pre-push changed)", len(wired))
+	if len(wired) != 8 {
+		t.Fatalf("gate boundary matrix wired %d cells, want exactly 8 this slice (4 from S1: post-apply/pre-commit/pre-push/pre-pr exact; 3 from S3: post-apply/pre-commit/pre-push changed; 1 new from S5: pre-pr changed)", len(wired))
 	}
 
 	actual, err := json.MarshalIndent(rows, "", "  ")
@@ -410,5 +487,65 @@ func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 	}
 	if string(want) != string(actual) {
 		t.Fatalf("golden mismatch for %s -- rerun with -update after inspecting the diff\nwant:\n%s\ngot:\n%s", goldenPath, want, actual)
+	}
+}
+
+// gateBoundaryMatrixGoldenRow re-reads the committed golden and returns the
+// exact row for (gate, relation) -- task 6.3's two named tests assert
+// against the persisted golden directly (not a freshly-driven binary run),
+// so they fail loudly on ANY accidental regression to the generic
+// "not wired yet" reason or an unexplained divergence, independent of
+// whether TestGateBoundaryMatrix_35Cells itself is also run.
+func gateBoundaryMatrixGoldenRow(t *testing.T, gate, relation string) gateBoundaryMatrixRow {
+	t.Helper()
+	payload, err := os.ReadFile(filepath.Join("testdata", "gate-boundary-matrix.golden"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []gateBoundaryMatrixRow
+	if err := json.Unmarshal(payload, &rows); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.Gate == gate && row.Relation == relation {
+			return row
+		}
+	}
+	t.Fatalf("gate boundary matrix golden has no row for gate=%q relation=%q", gate, relation)
+	return gateBoundaryMatrixRow{}
+}
+
+// TestPrePRDivergence_CompatibleBaseAdvanceExplained is task 6.3: pre-PR's
+// compatible_base_advance cell must carry explained: true with the specific
+// boundary-proof reason (design decision 7) -- never the generic
+// "not wired yet" reason every un-investigated skip cell carries, and never
+// a silent, unexplained divergence.
+func TestPrePRDivergence_CompatibleBaseAdvanceExplained(t *testing.T) {
+	row := gateBoundaryMatrixGoldenRow(t, string(GatePrePR), "compatible_base_advance")
+	if !row.Explained {
+		t.Fatalf("pre-pr/compatible_base_advance = %#v, want explained: true", row)
+	}
+	if row.Reason != gateBoundaryMatrixPrePRCompatibleBaseAdvanceReason {
+		t.Fatalf("pre-pr/compatible_base_advance reason = %q, want the specific boundary-proof reason, got the generic one: %v",
+			row.Reason, row.Reason == gateBoundaryMatrixNotWiredReason)
+	}
+}
+
+// TestPrePRDivergence_ChangedExplained is task 6.3's sibling: pre-PR's
+// changed cell is no longer a skip at all (Slice 5 made it honestly
+// reachable through a real, composition-free binary-driven recipe) -- its
+// divergence from the other four gates' own changed cells (no
+// Next.Transition, a precondition-stage denial rather than a relation-table
+// one) is proven, not merely explained in prose.
+func TestPrePRDivergence_ChangedExplained(t *testing.T) {
+	row := gateBoundaryMatrixGoldenRow(t, string(GatePrePR), "changed")
+	if row.Explained {
+		t.Fatalf("pre-pr/changed = %#v, want explained: false -- it is a driven, proven cell as of Slice 5, not a skip", row)
+	}
+	if row.Verdict != string(GateInvalidated) {
+		t.Fatalf("pre-pr/changed verdict = %q, want %q", row.Verdict, GateInvalidated)
+	}
+	if row.NextStep != "" {
+		t.Fatalf("pre-pr/changed next step = %q, want empty -- a base-relationship-invalid denial names no review-start-shaped fix by design", row.NextStep)
 	}
 }
