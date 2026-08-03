@@ -43,12 +43,12 @@ Chain strategy: feature-branch-chain
 
 ## Phase 2 (S1): Adapter Trace + Guard + Pin Fix
 
-- [ ] 2.1 Run the Wave-0 CON-09/10/11 trace per adapter: `codegraph_explore` blast radius, grep Go package + bundled asset tree for the four forbidden constructions (CLI flag literals, revision/`expected-revision`, target/lineage identity, binding JSON).
-- [ ] 2.2 Record verdicts in `docs/architecture/rdd-ownership-inventory.md`: amend CON-09/10/11 evidence columns, delete the "behavioral depth" gap bullet at line 87.
-- [ ] 2.3 RED: forbidden-construction guard test encoding the CON-09/10/11 grep set so the trace cannot silently rot.
-- [ ] 2.4 GREEN: 2.3 passes against current adapters (`internal/agents/opencode/adapter.go`, `pi/adapter.go`, `claude/adapter.go` — all clean; violations live in the bundled assets, tracked by S3/S7).
-- [ ] 2.5 Cross-slice fix (rides S1 per CI-exact-head rule): correct `gentle-ai.review-integration/v1` → `/v2` pin in `internal/assets/claude/commands/sdd-apply.md` and `internal/assets/opencode/commands/sdd-apply.md`; resolves design's open pin-placement question.
-- [ ] 2.6 `scripts/deadcode-ratchet.sh --update` for inventory/guard changes.
+- [x] 2.1 Run the Wave-0 CON-09/10/11 trace per adapter: `codegraph_explore` blast radius, grep Go package + bundled asset tree for the four forbidden constructions (CLI flag literals, revision/`expected-revision`, target/lineage identity, binding JSON). Confirmed via `rg`: zero review references in `internal/agents/{opencode,pi,claude}` (one unrelated comment hit in `capabilitymanifest/manifest.go`); violations found in `internal/assets/opencode/plugins/review-result-artifacts.ts` (ReviewBinding/admissionRecoveryKey/recovery budget) and in the `sdd-apply.md` contract pin (see 2.5).
+- [x] 2.2 Record verdicts in `docs/architecture/rdd-ownership-inventory.md`: amended CON-09/10/11 evidence columns with the traced verdicts, deleted the "behavioral depth" gap bullet.
+- [x] 2.3 RED: forbidden-construction guard test encoding the CON-09/10/11 grep set so the trace cannot silently rot. Genuine compile-fail RED captured (`undefined: scanAdapterForbiddenConstructions`, `undefined: scanAdapterForbiddenConstructionsFile`).
+- [x] 2.4 GREEN: 2.3 passes against current adapters (`internal/agents/opencode/adapter.go`, `pi/adapter.go`, `claude/adapter.go` — all clean; violations live in the bundled assets, tracked by S3/S7). `go test ./internal/agents/... -run ForbiddenConstruction` — PASS, 5 production files scanned across opencode/pi/claude.
+- [x] 2.5 Cross-slice fix (rides S1 per CI-exact-head rule): corrected `gentle-ai.review-integration/v1` → `/v2` pin in `internal/assets/claude/commands/sdd-apply.md` and `internal/assets/opencode/commands/sdd-apply.md`; resolves design's open pin-placement question. Golden regeneration (`go test ./internal/components/ -run Golden -update`) confirmed byte-diff limited to the pin change; rerun without `-update` is GREEN.
+- [x] 2.6 `scripts/deadcode-ratchet.sh --update` for inventory/guard changes. Net-zero delta: 233 entries before and after (no new unreachable functions).
 
 ## Phase 3 (S2): Decision-9 Single Owner
 
