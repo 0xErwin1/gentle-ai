@@ -396,8 +396,11 @@ func TestOrganicReviewLifecycleErrorTyping(t *testing.T) {
 		if result.Allowed || result.Result == string(reviewtransaction.GateAllow) {
 			t.Fatalf("disabled pre-push with no upstream fabricated an approval: %#v", result)
 		}
-		if result.Context.Denial == nil {
-			t.Fatalf("disabled pre-push with no upstream hid why no receipt governs: %#v", result)
+		// Wave 5 Slice 2 (design decision 4): the switch is consulted before
+		// any authority read, so the no-upstream boundary is never even
+		// derived while disabled -- no discovery-kind detail leaks.
+		if result.Context.Denial != nil {
+			t.Fatalf("disabled pre-push with no upstream leaked discovery-kind detail: %#v", result.Context.Denial)
 		}
 	})
 

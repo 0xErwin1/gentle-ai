@@ -64,10 +64,17 @@ func corruptReviewAuthorityInventory(t *testing.T, repo string) {
 	}
 }
 
-// assertDisabledUnmanagedGate is the single shape every reclassified discovery
-// outcome must produce while disabled: exit 0, no denial error, no approval, no
-// invented receipt, and the reason the gate could not govern still discoverable.
-func assertDisabledUnmanagedGate(t *testing.T, runErr error, payload []byte, wantCode string) ReviewValidateResult {
+// assertDisabledUnmanagedGate is the single shape EVERY reclassified discovery
+// outcome must produce while disabled (Wave 5 Slice 2, design decision 4):
+// exit 0, no denial error, no approval, no invented receipt, the fixed
+// generic disabled reason (reviewDisabledUnmanagedReason, byte-identical
+// regardless of what authority-store damage or ambiguity exists — discovery
+// never runs while disabled, so there is nothing scenario-specific to carry),
+// and no Denial/discovery-kind detail at all. The discovery-kind-specific
+// visibility this helper used to assert (a `wantCode` parameter) moved to
+// each scenario's "...WhileEnabled" sibling test, where discovery genuinely
+// still runs and the property is still true.
+func assertDisabledUnmanagedGate(t *testing.T, runErr error, payload []byte) ReviewValidateResult {
 	t.Helper()
 	if runErr != nil {
 		t.Fatalf("disabled gate vetoed delivery instead of reporting it: %v\n%s", runErr, string(payload))
@@ -84,8 +91,11 @@ func assertDisabledUnmanagedGate(t *testing.T, runErr error, payload []byte, wan
 	if result.Allowed || result.Result == reviewtransaction.GateAllow {
 		t.Fatalf("disabled gate fabricated an approval: %#v", result)
 	}
-	if result.Context.Denial == nil || result.Context.Denial.Code != wantCode {
-		t.Fatalf("disabled gate denial = %#v, want code %q", result.Context.Denial, wantCode)
+	if result.Context.Denial != nil {
+		t.Fatalf("disabled gate leaked discovery-kind detail: %#v (design decision 4: no discovery kind while disabled)", result.Context.Denial)
+	}
+	if result.Reason != reviewDisabledUnmanagedReason {
+		t.Fatalf("disabled gate reason = %q, want the fixed generic sentence %q", result.Reason, reviewDisabledUnmanagedReason)
 	}
 	return result
 }
@@ -99,7 +109,7 @@ func assertDisabledUnmanagedGate(t *testing.T, runErr error, payload []byte, wan
 func TestReviewValidateReportsDisabledUnmanagedDeliveryOverMultipleExactReceipts(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
-	lineages := approveTwoExactlyGoverningReceipts(t, repo)
+	_ = approveTwoExactlyGoverningReceipts(t, repo)
 
 	disableReviewForClone(t, repo)
 
@@ -112,15 +122,12 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverMultipleExactReceipts
 
 	var output bytes.Buffer
 	runErr := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePostApply)}, &output)
-	result := assertDisabledUnmanagedGate(t, runErr, output.Bytes(), string(ReviewReceiptAmbiguous))
-
-	// Information must not be destroyed: not blocking is not the same as
-	// pretending nothing was ambiguous, so the competing lineages stay named.
-	for _, lineage := range lineages {
-		if !strings.Contains(result.Reason, lineage) {
-			t.Fatalf("disabled gate dropped the competing lineage %q from its reason: %q", lineage, result.Reason)
-		}
-	}
+	// Wave 5 Slice 2 (design decision 4): the competing-lineage detail this
+	// disabled report used to carry moved to the enabled-mode sibling
+	// TestReviewValidateKeepsFailingClosedOnMultipleExactReceiptsWhileEnabled
+	// below, where discovery genuinely still runs. While disabled, discovery
+	// never runs at all, so there is nothing scenario-specific left to name.
+	assertDisabledUnmanagedGate(t, runErr, output.Bytes())
 
 	var replay bytes.Buffer
 	if err := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePostApply)}, &replay); err != nil {
@@ -135,6 +142,14 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverMultipleExactReceipts
 // the regression that matters most: with reviews ON, two exactly-governing
 // receipts still block, byte-for-byte as before, and the gate still refuses to
 // pick for the caller.
+//
+// Wave 5 Slice 2 supersession: this is also now the sole home of the
+// competing-lineage-names-visible property that
+// TestReviewValidateReportsDisabledUnmanagedDeliveryOverMultipleExactReceipts
+// above used to assert on the DISABLED half too (removed there — design
+// decision 4's "no discovery kind while disabled" means that half no longer
+// runs discovery at all, so it has nothing to name). The property survives
+// here because discovery genuinely still runs while reviews are ON.
 func TestReviewValidateKeepsFailingClosedOnMultipleExactReceiptsWhileEnabled(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
@@ -170,11 +185,15 @@ func TestReviewValidateKeepsFailingClosedOnMultipleExactReceiptsWhileEnabled(t *
 // TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthority is
 // the deliberate decision on damaged authority. Corrupted review authority is
 // damage to a system the operator switched off; blocking an ordinary commit on
-// it is exactly the implication the rule removes. So the gate defers — and says
-// so loudly rather than silently: the denial code stays `authority_corrupted`
-// and the reason names the damage, so the user is told without being stopped.
-// Re-enabling rediscovers the same damage and blocks again, so nothing is
-// forgiven, only deferred.
+// it is exactly the implication the rule removes. So the gate defers.
+//
+// Wave 5 Slice 2 supersession (design decision 4): the switch is now
+// consulted BEFORE any authority read, so this disabled report no longer even
+// discovers the corruption — "visible, not silent: the damage is named" moved
+// to TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileEnabled
+// below, where discovery genuinely still runs. Re-enabling still rediscovers
+// the same damage and blocks, so nothing is forgiven, only deferred; while
+// disabled, the damage simply never gets read in the first place.
 func TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthority(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
@@ -196,16 +215,14 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverCorruptedAuthority(t 
 
 	var output bytes.Buffer
 	runErr := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePreCommit)}, &output)
-	result := assertDisabledUnmanagedGate(t, runErr, output.Bytes(), string(ReviewAuthorityCorrupted))
-	// Visible, not silent: the damage is named in the reported reason.
-	if !strings.Contains(result.Reason, "unavailable or corrupted") {
-		t.Fatalf("disabled corrupted-authority reason hid the damage: %q", result.Reason)
-	}
+	assertDisabledUnmanagedGate(t, runErr, output.Bytes())
 }
 
 // TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileEnabled is the
 // enabled half: with reviews on, damaged authority still fails closed exactly
-// as before.
+// as before, and still names the damage in the reason -- visible, not silent
+// (Wave 5 Slice 2: this is now the sole home of that visibility property; the
+// disabled half above no longer discovers the corruption at all).
 func TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileEnabled(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
@@ -235,6 +252,10 @@ func TestReviewValidateKeepsFailingClosedOnCorruptedAuthorityWhileEnabled(t *tes
 	}
 	if result.Allowed || result.Context.Denial == nil || result.Context.Denial.Code != string(ReviewAuthorityCorrupted) {
 		t.Fatalf("enabled corrupted-authority denial = %#v", result)
+	}
+	// Visible, not silent: the damage is named in the reported reason.
+	if !strings.Contains(result.Reason, "unavailable or corrupted") {
+		t.Fatalf("enabled corrupted-authority reason hid the damage: %q", result.Reason)
 	}
 }
 
@@ -312,6 +333,14 @@ func TestReviewValidateNegotiatedContractKeepsFailingClosedWhileEnabled(t *testi
 // outside the disposition machinery on the argument that reclassifying would
 // mean "silently picking one authority system over the other". While disabled
 // neither is picked — the gate reports that it is not governing at all.
+//
+// Wave 5 Slice 2 supersession (design decision 4): the switch is consulted
+// BEFORE any authority read, so this disabled report no longer discovers the
+// contest at all, and the "compact v2 and legacy v1" detail it used to name
+// moved to review_receipt_discovery_test.go's
+// TestUnqualifiedGateDiscoveryOnMixedCompactAndLegacyAuthorityHonorsTheKillSwitch,
+// whose enabled half asserts the same message (errReviewMixedCompactLegacyAuthority
+// is returned directly while enabled, since discovery genuinely still runs).
 func TestReviewValidateReportsDisabledUnmanagedDeliveryOverMixedCompactAndLegacyAuthority(t *testing.T) {
 	fixture := newLegacyCLIFixture(t, "review-disabled-reach-mixed-legacy")
 	finalizeFacadeReviewForRepo(t, fixture.repo)
@@ -322,10 +351,7 @@ func TestReviewValidateReportsDisabledUnmanagedDeliveryOverMixedCompactAndLegacy
 	runErr := RunReviewFacadeValidate([]string{
 		"--cwd", fixture.repo, "--gate", string(reviewtransaction.GatePostApply),
 	}, &output)
-	result := assertDisabledUnmanagedGate(t, runErr, output.Bytes(), string(ReviewReceiptAmbiguous))
-	if !strings.Contains(result.Reason, "compact v2 and legacy v1") {
-		t.Fatalf("disabled mixed-authority reason hid the competing stores: %q", result.Reason)
-	}
+	assertDisabledUnmanagedGate(t, runErr, output.Bytes())
 }
 
 // TestReviewValidateReValidatesFromScratchAfterReEnabling proves the second
@@ -502,16 +528,26 @@ func finalizeApprovedFacadeReview(t *testing.T, repo, lineage string) {
 // TestDisabledGateNeverEmitsAllowOrCreatesReceipt sweeps every reclassified
 // discovery outcome and holds the non-negotiable boundary: `disabled/unmanaged`
 // exits 0 because it defers, never because it approved.
+//
+// Wave 5 Slice 2 (design decision 4): also the decoy-store zero-reads proof.
+// These three cases stage wildly different, even damaged, authority-store
+// content -- an ambiguous multi-receipt composition, a genuinely corrupted
+// (truncated) compact record, and no receipt at all -- behind the SAME gate.
+// Under the pre-Slice-2 contract these produced three DIFFERENT disabled
+// reasons (each naming its own discovery kind). Under the new contract the
+// switch is consulted before any of that content is ever read, so all three
+// must produce BYTE-IDENTICAL disabled output: the store's content
+// contributes nothing to what is reported, which is the portable,
+// CI-safe equivalent of Wave 4's own strace-based "zero authority-store
+// opens while disabled" verifier proof.
 func TestDisabledGateNeverEmitsAllowOrCreatesReceipt(t *testing.T) {
 	cases := []struct {
 		name  string
 		stage func(t *testing.T, repo string)
-		code  string
 	}{
 		{
 			name:  "multiple exactly governing receipts",
 			stage: func(t *testing.T, repo string) { approveTwoExactlyGoverningReceipts(t, repo) },
-			code:  string(ReviewReceiptAmbiguous),
 		},
 		{
 			name: "corrupted authority",
@@ -519,14 +555,13 @@ func TestDisabledGateNeverEmitsAllowOrCreatesReceipt(t *testing.T) {
 				approveDiscoveryMarkdownProjection(t, repo, "review-disabled-sweep-corrupt", "docs/sweep.md", "reviewed\n", reviewtransaction.ProjectionWorkspace)
 				corruptReviewAuthorityInventory(t, repo)
 			},
-			code: string(ReviewAuthorityCorrupted),
 		},
 		{
 			name:  "no receipt at all",
 			stage: func(t *testing.T, repo string) {},
-			code:  string(ReviewReceiptMissing),
 		},
 	}
+	outputs := make(map[string][]byte, len(cases))
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			reviewModeHome(t)
@@ -537,14 +572,22 @@ func TestDisabledGateNeverEmitsAllowOrCreatesReceipt(t *testing.T) {
 
 			var output bytes.Buffer
 			runErr := RunReviewFacadeValidate([]string{"--cwd", repo, "--gate", string(reviewtransaction.GatePostApply)}, &output)
-			assertDisabledUnmanagedGate(t, runErr, output.Bytes(), testCase.code)
+			assertDisabledUnmanagedGate(t, runErr, output.Bytes())
 			if bytes.Contains(output.Bytes(), []byte(`"allow"`)) {
 				t.Fatalf("disabled gate emitted an allow: %s", output.String())
 			}
 			if after := reviewAuthorityFingerprint(t, repo); after != before {
 				t.Fatalf("disabled gate mutated review authority:\nbefore: %s\nafter:  %s", before, after)
 			}
+			outputs[testCase.name] = append([]byte(nil), output.Bytes()...)
 		})
+	}
+	first := outputs[cases[0].name]
+	for _, testCase := range cases[1:] {
+		if !bytes.Equal(outputs[testCase.name], first) {
+			t.Fatalf("decoy-store zero-reads proof failed: disabled output differs by store content\n%s:\n%s\n%s:\n%s",
+				cases[0].name, first, testCase.name, outputs[testCase.name])
+		}
 	}
 }
 

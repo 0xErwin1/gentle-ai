@@ -6,6 +6,8 @@ The proposal claims "a gate mutates authority". Verified against `d591f4cf`, tha
 
 **Routing gate (hard block).** `resolveGoverningAuthority`, `CandidateIdentity` promotion, `ReceiptRef`, and capability admission do not exist at `d591f4cf` — they are Wave 3/4 deliverables. Wave 5 is HARD-GATED on Waves 3 and 4 landing; no Wave 5 slice may start before both merge.
 
+**Amendment (Slice 2 implementation, documented per the PR0 precedent):** the "two late kill-switch reads (`:2905`, `:2967`)" and "Removes `:2905` and `:2967`" references below describe the funnel's shape at `d591f4cf`, before Wave 3's Amendment C landed. By Slice 2's implementation the funnel actually had **three** `reviewDeliveryDisposition` call sites, not two: Amendment C's own `resolveGoverningAuthority` discoveryErr branch (a new site Wave 3 introduced), the contested compact+legacy branch, and the `disabledDiscovery` branch. Decision 4's own rationale column already anticipated this ("Three reads of one switch is the #2222/#2239 bug"); only the exit-count prose and line numbers were stale. All three collapsed into the single early consultation Decision 4 specifies; substance unchanged.
+
 ## Technical Approach
 
 Invert the gate from actor to reporter and collapse the funnel. `runReviewFacadeValidate` (`review_facade.go:2822`) today has four exits — compact receipt (`:2921`), pre-PR chain composition (`:2924`, `:2933`), decline authorization (`:2941`), legacy subprocess re-entry (`:3000-3023`) — plus two late kill-switch reads (`:2905`, `:2967`). Wave 5 replaces all of it with one ordered contract:
