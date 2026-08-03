@@ -192,12 +192,26 @@ mkdir -p openspec/changes/archive
 if git mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then
   :
 else
-  mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}
+  if mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then
+    :
+  else
+    move_status=$?
+    exit "$move_status"
+  fi
+fi
+
+# The source must be gone before comparing the archived tree with its snapshot.
+if [ -e "openspec/changes/{change-name}" ] || [ -L "openspec/changes/{change-name}" ]; then
+  printf 'archive move left the source directory in place\n' >&2
+  exit 1
 fi
 
 # MANDATORY readback: only empty diff output passes.
-diff -r "$snapshot_root/source" "openspec/changes/archive/YYYY-MM-DD-{change-name}"
-diff_status=$?
+if diff -r "$snapshot_root/source" "openspec/changes/archive/YYYY-MM-DD-{change-name}"; then
+  diff_status=0
+else
+  diff_status=$?
+fi
 if [ "$diff_status" -ne 0 ]; then
   exit "$diff_status"
 fi
