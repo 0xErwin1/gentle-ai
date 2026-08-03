@@ -24,8 +24,10 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/screens"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/tui/styles"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade"
+	"github.com/muesli/termenv"
 )
 
 func TestNavigationWelcomeToDetection(t *testing.T) {
@@ -5814,6 +5816,40 @@ func TestWelcomeView_WindowResizeFitsMeasuredViewport(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestWelcomeView_MinimumResizePreservesNonzeroCursor(t *testing.T) {
+	previousProfile := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	t.Cleanup(func() { lipgloss.SetColorProfile(previousProfile) })
+
+	const (
+		cursor = 1
+		width  = 18
+		height = 20
+	)
+	m := NewModel(system.DetectionResult{}, "dev")
+	m.Cursor = cursor
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: height})
+	state := updated.(Model)
+	view := state.View()
+
+	if state.Cursor != cursor {
+		t.Fatalf("cursor after resize = %d, want %d", state.Cursor, cursor)
+	}
+	if got := lipgloss.Width(view); got > width {
+		t.Fatalf("welcome width = %d, want <= %d\nview:\n%s", got, width, view)
+	}
+	if got := lipgloss.Height(view); got > height {
+		t.Fatalf("welcome height = %d, want <= %d\nview:\n%s", got, height, view)
+	}
+	if !strings.Contains(view, styles.UnselectedStyle.Render("Start installation")) {
+		t.Fatalf("minimum welcome state did not preserve the non-selected style\nview:\n%s", view)
+	}
+	if strings.Contains(view, styles.SelectedStyle.Render("Start installation")) {
+		t.Fatalf("minimum welcome state marked Start installation selected for cursor %d\nview:\n%s", cursor, view)
 	}
 }
 
