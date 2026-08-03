@@ -60,10 +60,13 @@ func TestRenderWelcome_StaysWithinViewport(t *testing.T) {
 		height       int
 		updateBanner string
 		advisory     WelcomeAdvisory
+		minimum      bool
 	}{
 		{name: "Windows Terminal startup", width: 120, height: 30},
 		{name: "narrow resize", width: 80, height: 24},
 		{name: "short viewport", width: 120, height: 19},
+		{name: "below compact height", width: 120, height: 2, minimum: true},
+		{name: "below compact width", width: 18, height: 20, minimum: true},
 		{
 			name:         "short viewport with optional content",
 			width:        120,
@@ -94,9 +97,17 @@ func TestRenderWelcome_StaysWithinViewport(t *testing.T) {
 			if !strings.Contains(view, "Start installation") {
 				t.Fatalf("welcome lost primary action after fitting viewport\nview:\n%s", view)
 			}
-			for _, want := range []string{"Quit", "j/k: navigate • enter: select • q: quit"} {
-				if !strings.Contains(view, want) {
-					t.Fatalf("welcome lost %q after fitting viewport\nview:\n%s", want, view)
+			if tc.minimum {
+				for _, want := range []string{"Start installation", "j/k"} {
+					if !strings.Contains(view, want) {
+						t.Fatalf("minimum welcome state lost %q\nview:\n%s", want, view)
+					}
+				}
+			} else {
+				for _, want := range []string{"Quit", "j/k: navigate • enter: select • q: quit"} {
+					if !strings.Contains(view, want) {
+						t.Fatalf("welcome lost %q after fitting viewport\nview:\n%s", want, view)
+					}
 				}
 			}
 		})

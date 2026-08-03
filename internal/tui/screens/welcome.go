@@ -13,6 +13,7 @@ import (
 const (
 	welcomeAdvisoryMaxRegionHeight = 7
 	welcomePrimaryContentHeight    = 44
+	welcomeHelpText                = "j/k: navigate • enter: select • q: quit"
 )
 
 type WelcomeAdvisory struct {
@@ -106,39 +107,122 @@ func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, 
 		if !compact && includeLogo {
 			b.WriteString("\n")
 		}
-		b.WriteString(styles.HeadingStyle.Render("Menu"))
+		if compact {
+			b.WriteString(renderWelcomeText(styles.HeadingStyle, "Menu", width))
+		} else {
+			b.WriteString(styles.HeadingStyle.Render("Menu"))
+		}
 		if compact || !includeLogo {
 			b.WriteString("\n")
 		} else {
 			b.WriteString("\n\n")
 		}
-		b.WriteString(renderOptions(WelcomeOptions(updateResults, updateCheckDone, showProfiles, profileCount, hasEngines), cursor))
+		options := WelcomeOptions(updateResults, updateCheckDone, showProfiles, profileCount, hasEngines)
+		if compact {
+			b.WriteString(renderWelcomeOptions(options, cursor, width))
+		} else {
+			b.WriteString(renderOptions(options, cursor))
+		}
 		if !compact && includeLogo {
 			b.WriteString("\n")
 		}
-		b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • q: quit"))
+		if compact {
+			b.WriteString(renderWelcomeText(styles.HelpStyle, welcomeHelpText, width))
+		} else {
+			b.WriteString(styles.HelpStyle.Render(welcomeHelpText))
+		}
 
 		if compact {
 			return b.String()
 		}
 		return welcomeFrameStyle(width).Render(b.String())
 	}
-	fitsHeight := func(view string) bool {
-		return height <= 0 || lipgloss.Height(view) <= height
+	fitsViewport := func(view string) bool {
+		return (width <= 0 || lipgloss.Width(view) <= width) &&
+			(height <= 0 || lipgloss.Height(view) <= height)
 	}
 
 	view := render(true, true, false)
-	if !fitsHeight(view) {
+	if !fitsViewport(view) {
 		// The logo is optional chrome; keep the menu and controls visible when
 		// the measured terminal viewport cannot hold the full welcome screen.
 		view = render(false, true, false)
 	}
-	if !fitsHeight(view) {
+	if !fitsViewport(view) {
 		// Drop optional chrome and the frame only after measuring the logo-free view.
 		// The complete menu, primary action, and help line remain visible.
 		view = render(false, false, true)
 	}
+	if !fitsViewport(view) {
+		// A viewport shorter than the compact menu still needs a safe, actionable
+		// state instead of allowing the terminal to clip the rendered content.
+		view = renderWelcomeMinimum(width, height)
+	}
 	return view
+}
+
+func renderWelcomeText(style lipgloss.Style, text string, width int) string {
+	if width <= 0 {
+		return style.Render(text)
+	}
+	return style.Render(strings.Join(wrapPlainLine(text, width), "\n"))
+}
+
+func renderWelcomeOptions(options []string, cursor int, width int) string {
+	if width <= 0 {
+		return renderOptions(options, cursor)
+	}
+
+	var b strings.Builder
+	for idx, option := range options {
+		prefix := "  "
+		style := styles.UnselectedStyle
+		if idx == cursor {
+			prefix = styles.Cursor
+			style = styles.SelectedStyle
+		}
+		for _, line := range wrapPlainLine(prefix+option, width) {
+			b.WriteString(style.Render(line))
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
+}
+
+func renderWelcomeMinimum(width int, height int) string {
+	const primaryAction = "Start installation"
+	const compactHelp = "j/k, enter, q"
+
+	primaryLines := wrapWelcomeLine(primaryAction, width)
+	helpLines := wrapWelcomeLine(welcomeHelpText, width)
+	if height > 0 && len(primaryLines)+len(helpLines) > height {
+		helpLines = wrapWelcomeLine(compactHelp, width)
+	}
+
+	lines := append(primaryLines, helpLines...)
+	if height > 0 && len(lines) > height {
+		lines = lines[:height]
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+
+	primaryLineCount := len(primaryLines)
+	if primaryLineCount > len(lines) {
+		primaryLineCount = len(lines)
+	}
+	rendered := styles.SelectedStyle.Render(strings.Join(lines[:primaryLineCount], "\n"))
+	if primaryLineCount == len(lines) {
+		return rendered
+	}
+	return rendered + "\n" + styles.HelpStyle.Render(strings.Join(lines[primaryLineCount:], "\n"))
+}
+
+func wrapWelcomeLine(text string, width int) []string {
+	if width <= 0 {
+		return []string{text}
+	}
+	return wrapPlainLine(text, width)
 }
 
 func WelcomeAdvisoryScrollBounds(message string, releaseURL string, width int, height int) (int, int) {
