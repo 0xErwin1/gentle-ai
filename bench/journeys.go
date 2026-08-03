@@ -434,7 +434,8 @@ func Journeys() []Journey {
 	journeys := append(coreJourneys(), edgeJourneys()...)
 	journeys = append(journeys, sddJourneys()...)
 	journeys = append(journeys, waveOneJourneys()...)
-	return append(journeys, waveThreeJourneys()...)
+	journeys = append(journeys, waveThreeJourneys()...)
+	return append(journeys, waveFiveJourneys()...)
 }
 
 func coreJourneys() []Journey {
