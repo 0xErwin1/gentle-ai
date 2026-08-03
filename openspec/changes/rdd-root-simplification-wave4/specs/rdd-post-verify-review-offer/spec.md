@@ -57,6 +57,8 @@ WHEN the offer is declined, SDD MUST proceed to unmanaged ordinary archive under
 
 A bounded correction issued after the offer MUST invalidate prior verify evidence for the paths it touches. SDD MUST run a targeted re-verify scoped to the correction's changed paths before archive proceeds; SDD MUST fall back to a full re-verify only when path-level scoping cannot be proven.
 
+**Amendment (corrective verify cycle 3, 2026-08-03): archive-gating enforcement deferred to Wave 5.** Wave 4 delivers the routing/classification half of this requirement in full: `Status.ReVerify` (Mode/Scope/Reason) is computed and reaches the wire whenever a post-verify correction is recorded, using the three-branch taxonomy the scenarios below describe. It does **not** yet enforce "archive does not proceed until that re-verify passes" — a second corrective cycle attempted that enforcement and found it unsatisfiable and livelocking: the demanded evidence revision was re-derived from the live verify-report on every status read, so a compliant re-verify re-labeled the demand instead of clearing it, and the only existing write path capable of recording satisfaction (`gentle-ai sdd-attempt finish --remediates-evidence-revision <rev>`) requires `--expected-binding-revision` and `--successor-lineage` together — a full review round trip, which defeats the "run a cheap targeted re-verify" scenario entirely. A compliant Wave 5 implementation needs: (1) a demanded-revision anchor derived from the correction's own append-only data (e.g. its `FixDeltaHash`), not the live verify-report, so satisfaction is stable once granted; and (2) either a new, decoupled write path for recording "this re-verify demand was satisfied" that does not require an approved review successor, or an explicit product decision that satisfying a targeted re-verify legitimately requires one. Until Wave 5 lands this, the scenario below's "archive does not proceed" clause is aspirational, not enforced, and archive is never blocked by an outstanding `Status.ReVerify` block.
+
 #### Scenario: Targeted re-verify for a scoped correction
 
 - GIVEN a post-verify correction that touches a known, provable subset of paths
@@ -69,7 +71,7 @@ A bounded correction issued after the offer MUST invalidate prior verify evidenc
 - GIVEN a post-verify correction whose changed-path set cannot be reliably derived
 - WHEN SDD re-runs verify before archive
 - THEN SDD runs a full re-verify covering the objective's entire evidence goal
-- AND archive does not proceed until that full re-verify passes
+- AND archive does not proceed until that full re-verify passes (DEFERRED to Wave 5 — see amendment above; not enforced in Wave 4)
 
 ### Requirement: Intra-Wave Rollout Sequencing
 
