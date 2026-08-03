@@ -32,7 +32,7 @@ const runtimeOperationReceipt = "receipt/set"
 type runtimeReceiptEvent struct {
 	ExpectedRevision string                          `json:"expected_revision"`
 	Current          reviewtransaction.SDDReceiptRef `json:"current"`
-	LegacyImport     *runtimeLegacyReceiptImport      `json:"legacy_import,omitempty"`
+	LegacyImport     *runtimeLegacyReceiptImport     `json:"legacy_import,omitempty"`
 }
 
 type runtimeLegacyReceiptImport struct {
