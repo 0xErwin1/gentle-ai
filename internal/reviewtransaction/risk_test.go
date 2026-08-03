@@ -744,6 +744,19 @@ func TestPassiveContentReadbackStaysBounded(t *testing.T) {
 	}
 }
 
+func TestPassiveContentReadbackReservesCatFileBatchFraming(t *testing.T) {
+	requireSnapshotGit(t)
+	content := "Ordinary prose.\n"
+	original := processBoundaryScanByteLimit
+	processBoundaryScanByteLimit = int64(len(content) + 1)
+	t.Cleanup(func() { processBoundaryScanByteLimit = original })
+
+	assessment := assessUntrackedCandidate(t, candidateFile{path: "docs/guide.md", content: content})
+	if assessment.Level == RiskLow {
+		t.Fatalf("candidate with %d content bytes under a %d-byte cap = %#v, want an escalated tier because cat-file framing exceeds the cap", len(content), processBoundaryScanByteLimit, assessment)
+	}
+}
+
 // TestTierTwoAlwaysNamesItsEvidence proves every escalation carries a reason a
 // human can read, because the consent prompt has to explain the cost.
 func TestTierTwoAlwaysNamesItsEvidence(t *testing.T) {
