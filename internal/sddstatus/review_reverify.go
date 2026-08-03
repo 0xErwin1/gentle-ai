@@ -2,6 +2,7 @@ package sddstatus
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -78,6 +79,16 @@ type ReVerifyBlock struct {
 	Mode   string   `json:"mode"`
 	Scope  []string `json:"scope,omitempty"`
 	Reason string   `json:"reason"`
+	// EvidenceRevision links this re-verify demand to the exact evidence
+	// revision it supersedes (corrective verify cycle task 5, closing task
+	// 7.4's spec-MUST sub-clause: design decision 3's "recorded as a new
+	// RuntimeAttempt using the existing RemediatesEvidenceRevision field").
+	// It is the change's current verify-report evidence revision at the
+	// moment the correction was discovered -- the evidence a fresh attempt
+	// must name via `gentle-ai sdd-attempt finish
+	// --remediates-evidence-revision` to satisfy this demand. See
+	// blockArchiveForUnsatisfiedReVerify.
+	EvidenceRevision string `json:"evidenceRevision,omitempty"`
 }
 
 // correctionEvidence is the intermediate shape deriveCorrectionEvidence
@@ -180,11 +191,14 @@ func verifyEvidenceScope(genesisPaths []string, changeName string) []string {
 // applyTargetedReVerifyRouting is the one call site (design.md's
 // amendment): Resolve() and resolveEngramStatus() both call it
 // symmetrically, exactly mirroring applyReviewOfferRouting's own shape. It
-// is purely additive: it never mutates Dependencies or NextRecommended,
-// only Status.ReVerify. It only fires in the same window the offer already
-// requires -- SDD's own verify already passed -- since a correction with
-// no completed SDD verify to potentially invalidate has nothing to route.
-func applyTargetedReVerifyRouting(ctx context.Context, status *Status, repo, changeName string, governingRef *reviewtransaction.SDDReceiptRef, reviewDisabled bool) {
+// only mutates Status.ReVerify itself -- Dependencies/NextRecommended gating
+// on an unsatisfied demand is the caller's separate, subsequent step
+// (blockArchiveForUnsatisfiedReVerify), keeping this function's own
+// responsibility to routing/classification only. It only fires in the same
+// window the offer already requires -- SDD's own verify already passed --
+// since a correction with no completed SDD verify to potentially invalidate
+// has nothing to route.
+func applyTargetedReVerifyRouting(ctx context.Context, status *Status, repo, changeName, verifyEvidenceRevision string, governingRef *reviewtransaction.SDDReceiptRef, reviewDisabled bool) {
 	if reviewDisabled || governingRef == nil || status.Dependencies.Verify != DependencyAllDone {
 		return
 	}
@@ -202,5 +216,48 @@ func applyTargetedReVerifyRouting(ctx context.Context, status *Status, repo, cha
 	if !emit {
 		return
 	}
+	block.EvidenceRevision = verifyEvidenceRevision
 	status.ReVerify = &block
+}
+
+// nativeRuntimeAttemptRemediates mirrors nativeRuntimeCompletesRemediation's
+// attempt-matching shape (status.go): the last recorded RuntimeAttempt is a
+// passing, budget-respecting attempt whose RemediatesEvidenceRevision names
+// exactly the evidence revision being satisfied. It is kept as a distinct,
+// smaller function rather than a shared refactor of
+// nativeRuntimeCompletesRemediation to avoid touching that function's own
+// tested behavior (its extra runtimeStatus.Binding/EvidenceRevision checks
+// answer a different question: "is the CURRENT verify-report's evidence now
+// current", not "did the demanded evidence revision get satisfied at all").
+func nativeRuntimeAttemptRemediates(runtimeStatus *RuntimeStatus, evidenceRevision string) bool {
+	if runtimeStatus == nil || !runtimeStatus.Complete || runtimeStatus.DecisionRequired || runtimeStatus.ActiveAttempt != nil ||
+		evidenceRevision == "" || len(runtimeStatus.Attempts) == 0 {
+		return false
+	}
+	last := runtimeStatus.Attempts[len(runtimeStatus.Attempts)-1]
+	return last.Outcome == AttemptPassed && !last.ChangedLineBudgetExceeded && last.RemediatesEvidenceRevision == evidenceRevision
+}
+
+// blockArchiveForUnsatisfiedReVerify closes corrective verify cycle task 5
+// (task 7.4's spec-MUST sub-clause, design decision 3): "archive does not
+// proceed until that re-verify passes" now has an actual enforcement point.
+// No new RuntimeAttempt writer is introduced -- the existing `gentle-ai
+// sdd-attempt finish --remediates-evidence-revision <rev>` path already
+// records attempts against an arbitrary evidence revision; this only reads
+// that ledger to decide whether the outstanding demand was met. Returns the
+// blocked reason to record, or "" when there is nothing outstanding to gate
+// (no ReVerify block, or its demand is already satisfied).
+func blockArchiveForUnsatisfiedReVerify(status *Status) string {
+	if status.ReVerify == nil || nativeRuntimeAttemptRemediates(status.RuntimeStatus, status.ReVerify.EvidenceRevision) {
+		return ""
+	}
+	status.Dependencies.Archive = DependencyBlocked
+	if status.NextRecommended != "resolve-blockers" {
+		status.NextRecommended = "verify"
+	}
+	return fmt.Sprintf(
+		"a review correction was applied after verify last ran; a %s re-verify is required before archive (%s); "+
+			"record its outcome with gentle-ai sdd-attempt finish --remediates-evidence-revision %s",
+		status.ReVerify.Mode, status.ReVerify.Reason, status.ReVerify.EvidenceRevision,
+	)
 }

@@ -571,7 +571,10 @@ func Resolve(options ResolveOptions) (Status, error) {
 	}
 	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, changeName, reviewDisabled)
 	if governingRef != nil {
-		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, governingRef, reviewDisabled)
+		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, verifyResult.EvidenceRevision, governingRef, reviewDisabled)
+		if reason := blockArchiveForUnsatisfiedReVerify(&status); reason != "" {
+			status.BlockedReasons = append(status.BlockedReasons, reason)
+		}
 	}
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
@@ -853,7 +856,10 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	}
 	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, changeName, reviewDisabled)
 	if governingRef != nil {
-		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, governingRef, reviewDisabled)
+		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, verifyResult.EvidenceRevision, governingRef, reviewDisabled)
+		if reason := blockArchiveForUnsatisfiedReVerify(&status); reason != "" {
+			status.BlockedReasons = append(status.BlockedReasons, reason)
+		}
 	}
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
