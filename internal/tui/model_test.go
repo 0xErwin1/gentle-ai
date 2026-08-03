@@ -5762,6 +5762,7 @@ func TestWelcomeView_WindowResizeFitsMeasuredViewport(t *testing.T) {
 	}{
 		{name: "startup viewport", width: 120, height: 30},
 		{name: "narrow resize", width: 80, height: 24},
+		{name: "short viewport", width: 120, height: 19},
 		{name: "wide resize", width: 160, height: 50},
 	}
 
@@ -5783,6 +5784,11 @@ func TestWelcomeView_WindowResizeFitsMeasuredViewport(t *testing.T) {
 			}
 			if !strings.Contains(view, "Start installation") {
 				t.Fatalf("welcome lost primary action after resize\nview:\n%s", view)
+			}
+			for _, want := range []string{"Quit", "j/k: navigate • enter: select • q: quit"} {
+				if !strings.Contains(view, want) {
+					t.Fatalf("welcome lost %q after resize\nview:\n%s", want, view)
+				}
 			}
 		})
 	}

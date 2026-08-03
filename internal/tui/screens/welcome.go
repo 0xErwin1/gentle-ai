@@ -80,13 +80,13 @@ func RenderWelcomeWithWidth(cursor int, version string, updateBanner string, upd
 }
 
 func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, width int, height int, advisory WelcomeAdvisory) string {
-	render := func(includeLogo bool, maxHeight int) string {
+	render := func(includeLogo bool) string {
 		var b strings.Builder
 
 		if includeLogo {
 			b.WriteString(styles.RenderLogo())
+			b.WriteString("\n\n")
 		}
-		b.WriteString("\n\n")
 		b.WriteString(styles.SubtextStyle.Render(styles.Tagline(version)))
 		b.WriteString("\n")
 
@@ -99,28 +99,29 @@ func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, 
 			b.WriteString("\n")
 		}
 
-		b.WriteString("\n")
+		if includeLogo {
+			b.WriteString("\n")
+		}
 		b.WriteString(styles.HeadingStyle.Render("Menu"))
-		b.WriteString("\n\n")
+		if includeLogo {
+			b.WriteString("\n\n")
+		} else {
+			b.WriteString("\n")
+		}
 		b.WriteString(renderOptions(WelcomeOptions(updateResults, updateCheckDone, showProfiles, profileCount, hasEngines), cursor))
-		b.WriteString("\n")
+		if includeLogo {
+			b.WriteString("\n")
+		}
 		b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • q: quit"))
 
-		frame := welcomeFrameStyle(width)
-		if maxHeight > 0 {
-			frame = frame.MaxHeight(maxHeight)
-		}
-		return frame.Render(b.String())
+		return welcomeFrameStyle(width).Render(b.String())
 	}
 
-	view := render(true, 0)
+	view := render(true)
 	if height > 0 && lipgloss.Height(view) > height {
 		// The logo is optional chrome; keep the menu and controls visible when
 		// the measured terminal viewport cannot hold the full welcome screen.
-		view = render(false, 0)
-	}
-	if height > 0 && lipgloss.Height(view) > height {
-		view = render(false, height)
+		view = render(false)
 	}
 	return view
 }
