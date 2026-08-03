@@ -184,11 +184,22 @@ func TestReviewOfferDeclineLeavesNoStateAndDoesNotSuppressLaterOffer(t *testing.
 // kill-switch toggle changed — internal/cli/review_new_lineage_switch_off_
 // golden_test.go and the pre-existing archive-gate byte-equivalence tests
 // use the same discipline). A decline — the switch on, the offer present,
-// nothing ever acted on — must leave the rest of the status output
-// byte-identical to the switch-off case for the identical underlying
-// repository state: decline records nothing that OFF would not also
-// produce.
-func TestReviewOfferDeclineStatusByteIdenticalToOffOutsideOfferBlock(t *testing.T) {
+// nothing ever acted on — must never block archive on review grounds, the
+// same operational property the switch-off case provides. This asserts at
+// the PROJECTION level (ProjectStatusV1, the exact bytes a caller like
+// RunSDDStatus emits), the verify cycle's own key learning: asserting on
+// json.Marshal(Status) directly is how CRITICAL-2 (ReviewOffer/ReVerify
+// unreachable at the wire) survived a fully green suite.
+//
+// Corrective verify cycle note: this test previously asserted the declined
+// and switch-off projections were byte-identical outside the offer block.
+// That assumption no longer holds and is not restored here: CRITICAL-1's
+// fix makes switch-off a genuine structural absence (ReviewGate nil), while
+// the declined fixture below still carries an approving legacy receipt that
+// legitimately governs while the switch is ON (ReviewGate present, Allow) —
+// two different, both-correct dispositions that happen to agree on the one
+// property that matters for delivery: neither blocks archive.
+func TestReviewOfferDeclineNeverBlocksArchiveAtTheProjectionLevel(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
 	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(shaID("a"), "pass"))
@@ -201,6 +212,18 @@ func TestReviewOfferDeclineStatusByteIdenticalToOffOutsideOfferBlock(t *testing.
 	if declined.ReviewOffer == nil {
 		t.Fatal("declined.ReviewOffer = nil, want present before the decline is applied to this comparison")
 	}
+	declinedProjection, err := ProjectStatusV1(declined)
+	if err != nil {
+		t.Fatalf("ProjectStatusV1(declined) error = %v", err)
+	}
+	if declinedProjection.ReviewOffer == nil || !declinedProjection.ReviewOffer.Available {
+		t.Fatalf("declined projection reviewOffer = %#v, want an available offer on the wire", declinedProjection.ReviewOffer)
+	}
+	if declinedProjection.Dependencies.Archive == DependencyBlocked || declinedProjection.NextRecommended == "resolve-review" {
+		t.Fatalf("declined (offer ignored) projection archive=%q next=%q, want unblocked",
+			declinedProjection.Dependencies.Archive, declinedProjection.NextRecommended)
+	}
+
 	off, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", ReviewDisabled: true})
 	if err != nil {
 		t.Fatal(err)
@@ -208,19 +231,64 @@ func TestReviewOfferDeclineStatusByteIdenticalToOffOutsideOfferBlock(t *testing.
 	if off.ReviewOffer != nil {
 		t.Fatalf("off.ReviewOffer = %#v, want nil", off.ReviewOffer)
 	}
+	offProjection, err := ProjectStatusV1(off)
+	if err != nil {
+		t.Fatalf("ProjectStatusV1(off) error = %v", err)
+	}
+	if offProjection.ReviewOffer != nil {
+		t.Fatalf("off projection reviewOffer = %#v, want absent from the wire", offProjection.ReviewOffer)
+	}
+	if offProjection.ReviewGate != nil {
+		t.Fatalf("off projection reviewGate = %#v, want structural absence", offProjection.ReviewGate)
+	}
+	if offProjection.Dependencies.Archive == DependencyBlocked || offProjection.NextRecommended == "resolve-review" {
+		t.Fatalf("switch-off projection archive=%q next=%q, want unblocked",
+			offProjection.Dependencies.Archive, offProjection.NextRecommended)
+	}
+}
 
-	// The offer block is the one and only expected divergence; strip it from
-	// the declined side before the byte comparison.
-	declined.ReviewOffer = nil
-	declinedJSON, err := json.MarshalIndent(declined, "", "  ")
+// TestReviewOfferPresentAndArchiveReadyForAGenuinelyMissingReceipt is
+// corrective verify cycle 4's BLOCKER-1 (rdd-post-verify-review-offer's
+// "Decline Proceeds to Unmanaged Ordinary Archive"): the exact repro shape
+// the cycle-2/3 verify reports used (switch on, verify passed, no receipt
+// anywhere) must show the offer AND archive readiness in the SAME status
+// output -- the offer is an invitation, never a gate -- and a second read of
+// the same still-unarchived candidate must produce an identical fresh
+// offer, proving nothing about a "decline" is persisted or suppressed
+// (there is no `--consent declined` verb and no decline state to record;
+// the user declines simply by proceeding to archive without acting).
+func TestReviewOfferPresentAndArchiveReadyForAGenuinelyMissingReceipt(t *testing.T) {
+	root := t.TempDir()
+	seedVerifiedReadyChangeForOffer(t, root)
+
+	first, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	offJSON, err := json.MarshalIndent(off, "", "  ")
+	if first.ReviewGate != nil {
+		t.Fatalf("ReviewGate = %#v, want structural absence for a genuinely missing receipt", first.ReviewGate)
+	}
+	if first.ReviewOffer == nil || !first.ReviewOffer.Available {
+		t.Fatalf("ReviewOffer = %#v, want an available invitation in the SAME status output as archive readiness", first.ReviewOffer)
+	}
+	if first.Dependencies.Archive != DependencyReady || first.NextRecommended != "archive" {
+		t.Fatalf("archive=%q next=%q, want ready/archive alongside the present offer", first.Dependencies.Archive, first.NextRecommended)
+	}
+	if len(first.BlockedReasons) != 0 {
+		t.Fatalf("BlockedReasons = %v, want none", first.BlockedReasons)
+	}
+
+	// A hypothetical archive: nothing was written for the decline, so the
+	// next status read of the same still-unarchived candidate gets a fresh,
+	// unsuppressed offer -- identical to the first, proving no persistence.
+	second, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(declinedJSON) != string(offJSON) {
-		t.Fatalf("declined status (offer block stripped) diverges from the switch-off status for the same fixture:\ndeclined:\n%s\noff:\n%s", declinedJSON, offJSON)
+	if second.ReviewOffer == nil || !second.ReviewOffer.Available {
+		t.Fatalf("second ReviewOffer = %#v, want a fresh available offer — no suppression", second.ReviewOffer)
+	}
+	if second.Dependencies.Archive != DependencyReady {
+		t.Fatalf("second Dependencies.Archive = %q, want ready — unchanged, nothing persisted", second.Dependencies.Archive)
 	}
 }

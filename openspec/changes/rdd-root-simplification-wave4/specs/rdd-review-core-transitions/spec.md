@@ -40,7 +40,7 @@
 - GIVEN Wave 4 has landed
 - WHEN SDD reaches the post-verify, pre-archive point
 - THEN it calls `ReviewCore`'s offer transition through `OfferReviewAfterVerify`
-- AND the offer transition has at least one live, non-test caller at SDD's verify-success exit in `internal/cli`, with `sddstatus.Resolve` remaining a pure read
+- AND the offer transition has at least one live, non-test caller: `internal/sddstatus`'s `Resolve()`/`resolveEngramStatus()`, through `applyReviewOfferRouting` and `review_door.go`'s `reviewOfferForVerify` (call-site amendment, 2026-08-03, superseding the originally-named `internal/cli` verify-success exit — see design.md's "Amendment (orchestrator-resolved): decision 3 call site"); `RunSDDVerifyValidate` stays context-free and is not the caller
 
 #### Scenario: Offer transition is absent from pre-verify code paths
 

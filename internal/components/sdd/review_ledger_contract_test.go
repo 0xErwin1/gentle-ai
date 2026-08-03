@@ -239,7 +239,12 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := fmt.Sprintf("%x", sha256.Sum256(settings))
-	const want = "7de1c9318bd3acfe763c2705bb3f03a918c1b2944cfef4984615eb0e1838877c"
+	// Corrective verify cycle 5, CRITICAL-D: review-ledger-contract.md's
+	// Delivery section archive-gate sentence was corrected (see
+	// TestOpenCodeRenderedReviewProtocolCost's changelog comment above for
+	// the full reason); Kilocode embeds the same shared contract, so its
+	// rendered settings hash moved too. Deliberate, not drift.
+	const want = "0562ea542ac63f0ef45a1f8ecfd53a90bf454f03925767b6da789896d5c3a143"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -388,8 +393,19 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// #2221 removes OpenCode reviewer transport while v2.1 pins Claude Code
 		// as the sole explicit runtime. The combined generated sizes are derived
 		// from the canonical rendered assets below.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 13_729, maxCharacters: 18_500},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 21_487, maxCharacters: 36_000},
+		// +285 (13,729 -> 14,014 / 21,487 -> 21,772): corrective verify cycle 5,
+		// CRITICAL-D. The Delivery section's archive-gate sentence still said
+		// "reviewGate.result: allow ... or reviewGate.delivery: disabled/unmanaged
+		// while the kill switch is off", the pre-Wave-4 contract the wave's own
+		// runtime fixes (cycles 2-4) superseded three times over: the kill switch
+		// off now yields reviewGate structurally ABSENT (never a populated
+		// disabled/unmanaged value), and the switch on with no receipt is now also
+		// decline-by-absence-of-action with reviewGate absent (BLOCKER-1). Both
+		// the archive skill and this shared contract would have refused exactly
+		// the states sdd-status now reports as archive-ready. This is a deliberate
+		// contract correction, not drift.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_014, maxCharacters: 18_500},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 21_772, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
