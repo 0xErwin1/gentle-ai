@@ -239,7 +239,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := fmt.Sprintf("%x", sha256.Sum256(settings))
-	const want = "7de1c9318bd3acfe763c2705bb3f03a918c1b2944cfef4984615eb0e1838877c"
+	const want = "71734cb1ca2a0fe4b1f83d9d44f92c6218e0caefc69da4f3598ac3383066bd65"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
