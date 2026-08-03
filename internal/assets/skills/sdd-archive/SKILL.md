@@ -117,6 +117,15 @@ OpenSpec permits archiving with incomplete artifacts or tasks after a user confi
 - If structured status reports `actionContext.mode: workspace-planning`, STOP. Do not move workspace changes into repo-local archives or edit linked repos.
 - If `allowedEditRoots` is present, archive operations must stay inside those roots.
 
+## Mechanical Copy Contract (MANDATORY)
+
+Archival is a mechanical filesystem operation. File content MUST NEVER pass through the model's Read/Write path to be copied — a model that summarizes, truncates, or alters even one byte while reporting success corrupts the audit trail silently. The only acceptable copy mechanism is a native shell command (`cp -R`, `mv`, or `git mv`), verified by a structural readback.
+
+- Copy artifacts with the shell only: `cp -R`, `mv`, or `git mv`. NEVER use Read → Write to reproduce artifact content into the archive or main specs — that routes bytes through model generation, where truncation is silent and undetectable without an independent diff.
+- After every copy or move, run `diff -r` (source vs. destination) as a MANDATORY readback. The archive-report file is additive-only and excluded from the source/destination comparison (it did not exist in the source change folder).
+- The verbatim `diff -r` output MUST appear in the phase result. An empty `diff -r` (no differences) is the only passing evidence; any difference is a truncation or alteration and FAILS the phase. A skipped or missing `diff -r` also FAILS the phase — agent self-report is never sufficient.
+- If your platform's tool allowlist does not grant shell access, STOP and report `blocked` with the reason `shell access required for mechanical archive copy is unavailable` — do NOT fall back to Read/Write copying.
+
 ## What to Do
 
 ### Step 1: Load Skills
@@ -153,12 +162,14 @@ FOR EACH SECTION in delta spec:
 
 #### If Main Spec Does NOT Exist
 
-The delta spec IS a full spec (not a delta). Copy it directly:
+The delta spec IS a full spec (not a delta). Copy it mechanically with the shell — do NOT Read the file and Write its content back, which routes bytes through the model and can truncate silently:
 
 ```bash
-# Copy new spec to main specs
-openspec/changes/{change-name}/specs/{domain}/spec.md
-  → openspec/specs/{domain}/spec.md
+# Mechanical copy (MANDATORY): never Read → Write artifact content
+mkdir -p openspec/specs/{domain}
+cp openspec/changes/{change-name}/specs/{domain}/spec.md openspec/specs/{domain}/spec.md
+diff -r openspec/changes/{change-name}/specs/{domain}/spec.md openspec/specs/{domain}/spec.md
+# Empty diff above is the only passing evidence; include verbatim output in the result.
 ```
 
 ### Step 3: Move to Archive
@@ -167,23 +178,37 @@ openspec/changes/{change-name}/specs/{domain}/spec.md
 
 **IF mode is `none`:** Skip — no filesystem operations.
 
-**IF mode is `openspec` or `hybrid`:** Move the entire change folder to archive with date prefix:
+**IF mode is `openspec` or `hybrid`:** Move the entire change folder to archive with date prefix, using a mechanical shell move. NEVER Read each artifact and Write it into the archive — that routes file content through the model and can truncate or alter bytes silently:
 
-```
-openspec/changes/{change-name}/
-  → openspec/changes/archive/YYYY-MM-DD-{change-name}/
+```bash
+# Mechanical move (MANDATORY): git mv when tracked, mv otherwise
+mkdir -p openspec/changes/archive
+git mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name} \
+  || mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}
 ```
 
 Use today's date in ISO format (e.g., `2026-02-16`).
 
+After the move, run the mandatory structural readback and record its verbatim output:
+
+```bash
+# MANDATORY readback: empty diff is the only passing evidence
+diff -r openspec/changes/archive/YYYY-MM-DD-{change-name} {expected-source-snapshot}
+```
+
+Compare the archived folder against the source it was moved from. When the source no longer exists (it was moved, not copied), compare against the staged/tracked equivalent (`git show :openspec/changes/archive/YYYY-MM-DD-{change-name}` per file, or a pre-move snapshot you captured with `cp -R` to a temporary location before the `git mv`/`mv`). The `archive-report` you write in Step 5 is additive and excluded from the comparison. Any non-empty diff is truncation or alteration and FAILS the phase; a missing `diff -r` also FAILS the phase.
+
 ### Step 4: Verify Archive
 
-**IF mode is `openspec` or `hybrid`:** Confirm:
+**IF mode is `openspec` or `hybrid`:** The Mechanical Copy Contract above is the verification: the verbatim `diff -r` output from Steps 2 and 3 MUST appear in the phase result, and an empty diff is the only passing evidence. In addition, confirm:
 - [ ] Main specs updated correctly
 - [ ] Change folder moved to archive
 - [ ] Archive contains all artifacts (proposal, specs, design, tasks)
 - [ ] Archived `tasks.md` has no unchecked implementation tasks, unless the orchestrator explicitly approved archive-time stale-checkbox reconciliation backed by apply-progress/verify-report proof
 - [ ] Active changes directory no longer has this change
+- [ ] Verbatim `diff -r` readback output is included in the result and is empty (no differences)
+
+A failed or skipped `diff -r` FAILS the phase regardless of the checkboxes above — agent self-report is never sufficient evidence of byte-identity.
 
 **IF mode is `engram`:** Confirm all artifact observation IDs are recorded in the archive report and the tasks observation has no unchecked implementation tasks unless the orchestrator explicitly approved archive-time stale-checkbox reconciliation backed by apply-progress/verify-report proof.
 
@@ -230,6 +255,9 @@ Ready for the next change.
 
 ## Rules
 
+- Archival is a MECHANICAL filesystem operation: copy/move artifacts with `cp -R`/`mv`/`git mv` via the shell only, NEVER via model Read/Write — a model can truncate or alter bytes silently while reporting success, and only an independent `diff -r` catches it
+- After every archive copy or move, run `diff -r` (source vs. destination, archive-report additive-only) and include its verbatim output in the phase result; an empty diff is the only passing evidence, and a skipped/missing `diff -r` FAILS the phase
+- If shell access is unavailable for mechanical copy, STOP and report `blocked` — do NOT fall back to Read/Write copying
 - The archive report reflects FINAL state per the Final-State Authority hierarchy: never echo stale `verify-report`/`apply-progress` claims as current facts, and record unrankable contradictions explicitly instead of resolving them silently
 - NEVER archive a change that has CRITICAL issues in its verification report
 - If the user explicitly approves a non-critical partial archive or stale-checkbox reconciliation, record the exact reason in the archive report and mark the archive as intentional-with-warnings
