@@ -39,13 +39,19 @@ type Offer struct {
 // evidence exists, this asks whether receipt-driven development should now
 // offer a review for it.
 //
-// The kill switch, when recorded off at the GLOBAL scope, returns
-// Offer{Available: false}, nil BEFORE any repository read. That ordering is
-// provable here specifically because the clone-local override is off-only
-// (SetCloneLocalRDDMode's own ErrRDDModeRepositoryForcedOn invariant) — a
-// clone can never override a global-off switch back to on — so a
-// global-only reading is on its own a complete, honest answer for the
-// disabled case, with nothing left for a repository read to add.
+// The kill switch is evaluated at its EFFECTIVE scope — global mode combined
+// with this clone's off-only local override, through the exact same
+// ResolveRDDMode path every other gate uses (internal/cli's review-validate
+// gates, AuthorizeRDDCandidate, AuthorizeRDDOperation) — never the global
+// scope alone. A clone can disable reviews locally without touching the
+// global switch (`gentle-ai review mode disable --scope clone`), and that
+// clone-local disable must be just as invisible to the offer as a global
+// disable: reading only the global scope missed exactly this case (a
+// reproduced regression, CRITICAL-3 of the corrective verify cycle).
+// Resolving the effective mode necessarily reads the clone-local override
+// file under the repository's Git common directory, but that read has no
+// side effect — it never writes, so the "zero side effects while disabled"
+// property this function must uphold is unaffected.
 //
 // Wave 4 S5b closes the loop design decision 8 left open: when the switch is
 // on, the real decision is receipt discovery, not a fabricated fixed
@@ -60,13 +66,15 @@ func OfferReviewAfterVerify(ctx context.Context, repo string, request OfferReque
 	if err := ctx.Err(); err != nil {
 		return Offer{}, err
 	}
-	// repo is deliberately unread on the disabled path: that ordering proof
-	// stays intact regardless of the widened on-path below.
 	global, err := readGlobalRDDModeForOffer()
 	if err != nil {
 		return Offer{}, err
 	}
-	if mode, modeErr := normalizeRDDMode(global.Value); modeErr == nil && mode == RDDModeOff {
+	status, resolveErr := ResolveRDDMode(ctx, repo, global)
+	if resolveErr != nil {
+		return Offer{}, resolveErr
+	}
+	if !status.Enabled() {
 		return Offer{Available: false, LineageID: request.LineageID}, nil
 	}
 	available := true
