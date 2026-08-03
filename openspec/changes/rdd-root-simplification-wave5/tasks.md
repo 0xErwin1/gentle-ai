@@ -157,14 +157,28 @@ added at that phase so the debt is not silently lost.
 
 **Phase 2 (S1) is COMPLETE.**
 
-## Phase 3 (S2): Kill Switch Consulted Once + Per-Gate Disabled Goldens
+## Phase 3 (S2): Kill Switch Consulted Once + Per-Gate Disabled Goldens — COMPLETE
 
-- [ ] 3.1 RED: `TestKillSwitchOrdering_SingleCallBeforeAuthorityRead` — one `reviewDeliveryDisposition(ctx, root, false)` call immediately after flag/contract resolution, before `discoverCompactFacadeGateReview` or any authority read; fails against current two-late-reads shape (`review_facade.go:2905`, `:2967`).
-- [ ] 3.2 RED per-gate disabled branch (5 named tests, #2222 evidence — see index above): kill switch off + ambiguous/corrupted authority-store fixture ⇒ ordinary unmanaged delivery, `reason_code: reviews_disabled`, no discovery kind, underlying authority error never surfaces.
-- [ ] 3.3 RED switch-off byte-equivalence via same-fixture double-eval (5 named tests, see index above): evaluate the same fixture twice while switch is OFF, assert byte-identical serialized `NativeGateEvaluation` output across both evaluations (idempotence proof, zero mutation on repeat).
-- [ ] 3.4 Implement single-call kill-switch ordering; remove the two late reads (`review_facade.go:2905`, `:2967`); wire `emitDisabledUnmanagedDelivery`.
-- [ ] 3.5 GREEN: 3.1–3.3 pass (11 named tests this slice).
-- [ ] 3.6 Full verification: `go test ./... -count=1`; bench module; `scripts/deadcode-ratchet.sh --update` for removed late-read call sites; refusal-resolution notes (none pending).
+Branch `feat/rdd-wave5-s2-kill-switch-first` (chained off S1). Real scope
+exceeded the ~350-line forecast (funnel actually had THREE kill-switch
+consultation points at implementation time, not the two the design doc's
+stale `d591f4cf`-era line references named — see the design.md amendment
+landed alongside this slice — and reconciling ~20 existing assertions across
+`review_disabled_reach_test.go`/`review_disabled_delivery_test.go`/e2e
+`organic_runtime_test.go` that pinned the OLD "discovery detail visible while
+disabled" contract was inseparable from the funnel reorder itself). Landed as
+one slice per the coordinator's explicit decision to accept the real ~850-line
+scope rather than split.
+
+- [x] 3.1 RED/GREEN: `TestKillSwitchOrdering_SingleCallBeforeAuthorityRead` — AST guard (not a behavioral fixture) proving `runReviewFacadeValidate` calls `reviewDeliveryDisposition` exactly once, lexically before its first authority-read call (`resolveGoverningAuthority`/`discoverCompactFacadeGateReview`/`ResolveCandidateDeclineForGate`/`discoverFacadeReview`). Genuine-wiring proven by reintroducing a second call site — guard failed ("calls reviewDeliveryDisposition 2 times, want exactly 1"); reverted byte-identically.
+- [x] 3.2 RED/GREEN per-gate disabled branch (5 named tests, exact names from the index above, `internal/cli/review_wave5_kill_switch_ordering_test.go`): corrupted-decoy-store fixture ⇒ ordinary unmanaged delivery, fixed generic reason, no discovery kind, underlying corruption never surfaces (proven directly by `assertDisabledUnmanagedGate`'s `Denial == nil` check).
+- [x] 3.3 RED/GREEN switch-off double-eval byte-equivalence (5 named tests, same file): identical fixture evaluated twice while off, byte-identical output.
+- [x] Additional (not in the original 11, added for rigor): `TestDisabledOutputIsByteIdenticalRegardlessOfAuthorityStoreContent` — the decoy-store zero-reads proof across all 5 gates (clean repo vs corrupted-decoy repo produce byte-identical disabled output — the portable, CI-safe equivalent of Wave 4's strace-based verifier proof).
+- [x] 3.4 Implemented: single-call kill-switch ordering placed immediately before `resolveGoverningAuthority` (after the pre-existing `GatePrePush`/`PrePushDeliversNothing` git-fact shortcut, a deliberate scoping choice — that shortcut reads repository state, not review authority, so it is unaffected); removed all three prior consultation points; `emitDisabledUnmanagedDelivery` simplified to a fixed-shape emitter (dropped its `discovery` parameter; deleted now-dead `reviewDiscoveryLeftTheGateUndecided` and `reviewDisabledUnmanagedDeliveryReason`). Mutation-proven by disabling the single check entirely — all 5 per-gate tests + the byte-identity test failed; reverted byte-identically.
+- [x] **Behavior reversal absorbed (found during reconciliation, not pre-planned)**: a governing receipt is no longer authoritative while disabled — `TestReviewValidateKeepsGoverningReceiptAuthoritativeWhileDisabled` (asserted the opposite) replaced with `TestReviewValidateReportsDisabledUnmanagedDeliveryEvenOverAGoverningReceipt`, and e2e's `TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect` updated to match — both now prove the receipt is unmutated and regoverns identically after re-enabling, but is never consulted while off. This is the literal reading of the spec-ratified (untagged, not a pending assumption) "before ANY receipt or authority read" scenario.
+- [x] **~20 discovery-visibility assertions reconciled** (guidance point 1): `assertDisabledUnmanagedGate` updated to the new contract first (reconciled ~10 sites in one move); remaining direct sites handled scenario-by-scenario — where the "damage/ambiguity is named" property still holds ENABLED, it moved to (or was added to) the enabled-mode sibling with a documented supersession comment; the `TestReviewDiscoveryLeftTheGateUndecided...` unit test (whose entire subject — how much detail to add — no longer applies) was deleted, not just edited.
+- [x] 3.5 GREEN: all named tests pass (16 in the dedicated kill-switch files + the AST guard), plus the full existing `internal/cli` and `e2e/organicruntime` suites green after reconciliation.
+- [x] 3.6 Full verification: `go test ./... -count=1` root module all green (including `e2e/organicruntime`, 6 tests reconciled to the new contract); bench module green; `scripts/deadcode-ratchet.sh` reports "no new unreachable functions" (2 functions deleted were reachable, not baseline entries, so no `--update` needed); bench journey corpus run against a fresh `go build ./cmd/gentle-ai` binary: 59/59 completed, 0 unsupported, 0 failed, exit 0; `gofmt -l .` / `go vet ./...` clean repo-wide. Rebase contract re-checked before this run: `feat/rdd-wave4-s7b-plugin-investigation-and-asset-prose` unchanged (`7598eda4`); tracker gained Wave 4's S2 merge since batch 3 (individual PR heads did not move) — no rebase triggered. Refusal-resolution notes: none pending (no new `errors.New`/non-wrap `fmt.Errorf` sites added this slice).
 
 ## Phase 4 (S3): NativeGateEvaluation Additive Relation/Next + Executable Next Step Per Denial
 
