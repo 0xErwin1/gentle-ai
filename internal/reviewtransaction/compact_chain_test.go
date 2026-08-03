@@ -174,6 +174,58 @@ func TestCompactPrePRChainLeavesExactSingleReceiptToDirectEvaluation(t *testing.
 	}
 }
 
+// TestPrePRChainCompositionRemovalDelta is Wave 5 Slice 1's DELTA row (design
+// decision 5): the complement of TestCompactPrePRChainLeavesExactSingleReceiptToDirectEvaluation
+// above. Where that test shows a single receipt spanning the whole delivered
+// range needs no composition, this test isolates the exact package-level
+// divergence Wave 5 Slice 5 deletes: for a 3-segment fixture, the last
+// segment's OWN receipt only covers base=segment-b's post-commit tree, so
+// the ordinary single-receipt path (EvaluateCompactGate) denies it
+// scope-changed against the live 3-commits-ahead candidate, while
+// EvaluateCompactPrePRChain composes all three segment receipts today and
+// reaches GateAllow for the IDENTICAL live repository state and receipt.
+// (At the facade funnel layer, review_facade.go's two composition-retry
+// conditions key on Denial.Code == "base-mismatch" specifically; this
+// fixture's own divergent code is "candidate-or-paths-mismatch" — still a
+// receipt-binding stage-denial rescued by composition today, but the
+// funnel's own base-mismatch-specific retry wiring is exercised by
+// TestPrePRGate_Deny_BaseMismatchDeniesWithoutComposition in Slice 4/5, not
+// here. This row's scope is deliberately narrower: prove the divergence
+// exists at the algebra/package level before any deletion, so Slice 5's own
+// after-picture test has a same-shape before-picture to compare against.)
+// This is the "before" picture; after Slice 5 deletes compact_chain.go, the
+// same live candidate must deny without ever attempting composition.
+func TestPrePRChainCompositionRemovalDelta(t *testing.T) {
+	fixture := newCompactPrePRChainFixture(t, 3)
+	lastSegment := fixture.states[2]
+	lastReceipt := fixture.receipts[2]
+
+	directInput := fixture.input()
+	directInput.LineageID = lastSegment.LineageID
+	direct := EvaluateCompactGate(context.Background(), fixture.repo, lastReceipt, directInput)
+	if direct.Result != GateScopeChanged {
+		t.Fatalf("expected the ordinary single-receipt path to deny scope-changed before composition rescues it, got %#v", direct)
+	}
+	if direct.Context.Denial == nil || direct.Context.Denial.Stage != "receipt-binding" || direct.Context.Denial.Code != "candidate-or-paths-mismatch" {
+		t.Fatalf("expected the bound receipt-binding/candidate-or-paths-mismatch denial pinning what Slice 5 deletes, got %#v", direct.Context.Denial)
+	}
+
+	composed, attempted := EvaluateCompactPrePRChain(context.Background(), fixture.repo, fixture.input())
+	if !attempted || composed.Result != GateAllow {
+		t.Fatalf("expected composition to allow the identical candidate today (pre-cutover), got %#v attempted=%t", composed, attempted)
+	}
+	if composed.Context.BaseTree != fixture.receipts[0].BaseTree || composed.Context.CandidateTree != lastReceipt.FinalCandidateTree {
+		t.Fatalf("composed proof did not span the full delivered range: %#v", composed.Context)
+	}
+	// The delta: identical live repository state, identical last-segment
+	// receipt, two different verdicts depending only on whether composition
+	// runs. This divergence is exactly what Slice 5 makes permanently a
+	// denial by deleting the composition path.
+	if direct.Result == composed.Result {
+		t.Fatalf("expected the direct and composed verdicts to diverge (that divergence IS the row Slice 5 deletes): both were %q", direct.Result)
+	}
+}
+
 func TestCompactPrePRChainRejectsInvalidMembersAndBindings(t *testing.T) {
 	tests := []struct {
 		name   string
