@@ -301,3 +301,66 @@ This amendment supersedes the Threat Matrix's "Commit state" row only to the
 extent of naming the owning package (`internal/sddstatus`, not a bare
 "targeted re-verify" with no home); the three-branch semantics themselves
 are unchanged from the original design text.
+
+## Amendment (corrective verify cycle 3): re-verify archive-gating deferred to Wave 5 (2026-08-03)
+
+A second corrective cycle (commit `03c07581`) implemented task 7.4's
+remaining sub-clause — "record a new `RuntimeAttempt` using the existing
+`RemediatesEvidenceRevision` field" and "archive does not proceed until that
+re-verify passes" — by adding `ReVerifyBlock.EvidenceRevision` (stamped from
+the live verify-report's evidence revision on every `Resolve()`) and
+`blockArchiveForUnsatisfiedReVerify` (blocking `Dependencies.Archive` until a
+`RuntimeAttempt` named that exact revision).
+
+**Found defective (cycle 3, CRITICAL-A) and reverted:**
+
+1. **Livelock.** `CompactState.CorrectionAttempts` is append-only, but the
+   demanded `EvidenceRevision` was re-derived from the CURRENT verify-report
+   on every status read, not frozen at correction-record time. A compliant
+   operator who re-verified and recorded a passing attempt naming the
+   demanded revision would see the demand simply re-label itself to the
+   verify-report's new revision on the next status read — the gate could
+   never be satisfied by doing the thing it demanded. Proven with a
+   throwaway in-package probe (created, run, deleted; worktree restored
+   byte-identically): cycle 1 blocked naming `sha256:R1`; after a compliant
+   re-verify recording `--remediates-evidence-revision sha256:R1`, cycle 2
+   blocked again naming `sha256:R2`.
+2. **Unrunnable continuation.** The blocked reason named
+   `gentle-ai sdd-attempt finish --remediates-evidence-revision <rev>`, but
+   `sdd-attempt finish` refuses that flag unless `--expected-binding-revision`
+   and `--successor-lineage` are ALSO given, together
+   (`internal/cli/sdd_attempt.go:94-96`) — and `--successor-lineage` requires
+   an approved compact review successor, i.e. a full review round trip. The
+   cycle-2 apply-progress claim "no new writer needed — the existing
+   `sdd-attempt finish --remediates-evidence-revision <rev>` already exists"
+   was incorrect as stated: that exact invocation does not exist standalone.
+
+**Resolution**: `blockArchiveForUnsatisfiedReVerify` and its call sites were
+removed. `internal/sddstatus/review_reverify.go` is restored to S6's
+original shape — `applyTargetedReVerifyRouting` is purely additive again,
+only ever setting `Status.ReVerify`, never `Dependencies` or
+`NextRecommended`. `ReVerifyBlock.EvidenceRevision` was removed with it (it
+existed only to feed the now-removed gate).
+
+**What a compliant Wave 5 (or later) implementation needs**, recorded here
+so the next attempt does not repeat the same defects:
+
+1. **A frozen demand anchor.** The demanded revision must be derived from
+   the correction's own append-only data at record time — e.g. the
+   correction attempt's `FixDeltaHash` (already computed, already
+   content-addressed and immutable once recorded) — never from the live
+   verify-report, which changes precisely when the demand is satisfied.
+2. **A genuinely runnable satisfaction path.** Either extend
+   `sdd-attempt finish`/`internal/sddstatus/runtime_ledger.go`'s `Finish()`
+   validation to accept `--remediates-evidence-revision` decoupled from the
+   binding/successor-lineage triple (a new, narrower write shape, with its
+   own CAS-safety review — `runtime_ledger.go`'s `Finish()` is a
+   security-sensitive path and any new shape needs the same rigor the
+   existing one has), or make an explicit, ratified product decision that a
+   targeted re-verify legitimately requires a full review round trip (in
+   which case the spec's "cheap targeted re-verify" framing itself needs
+   revisiting, not just the implementation).
+3. Both of the above are materially larger than a single corrective-cycle
+   slice; this is why they are deferred rather than rushed, per the
+   coordinator's own standing guidance that a deferred-but-honest spec beats
+   a livelocking gate.
