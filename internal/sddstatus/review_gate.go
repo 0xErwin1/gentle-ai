@@ -330,6 +330,19 @@ type reviewAuthorityEvaluation struct {
 	// failed validation keeps Absent false and stays a blocker whatever the
 	// kill switch says.
 	Absent bool
+	// Missing is the narrower "genuinely zero receipts exist anywhere"
+	// signal (corrective verify cycle 4, BLOCKER-1: rdd-post-verify-review-
+	// offer's "Decline Proceeds to Unmanaged Ordinary Archive" requirement).
+	// Unlike Absent -- which is also true for a discovered-but-ambiguous or
+	// discovered-but-stale receipt, cases where SOME review artifact exists
+	// and is broken -- Missing is set ONLY when discovery's own terminal
+	// inventory is empty (errTerminalReceiptMissing): no review was ever
+	// started for this candidate at all. That is exactly "the offer was
+	// never acted on", the decline case the ratified requirement's
+	// "invitation, never a gate" reading describes. Ambiguous/stale/invalid
+	// discovered receipts are real review activity gone wrong, not a
+	// decline, and keep blocking regardless of this field.
+	Missing bool
 }
 
 // resolveCompactRemediationAuthority collapses the change's explicit
@@ -437,6 +450,19 @@ func applyReviewGateEvaluation(status *Status, evaluation reviewAuthorityEvaluat
 		status.ReviewGate = &ReviewGateState{Result: evaluation.Result, Reason: evaluation.Reason}
 		return
 	}
+	// Corrective verify cycle 4, BLOCKER-1 (rdd-post-verify-review-offer's
+	// "Decline Proceeds to Unmanaged Ordinary Archive"): the offer is an
+	// invitation, never a gate. When no review was ever started for this
+	// candidate (evaluation.Missing), that is decline-by-absence-of-action,
+	// not a blocker -- status.ReviewGate stays nil (structural absence,
+	// mirroring the kill-switch-off shape), Dependencies.Archive is left at
+	// whatever resolveDependencies already computed (Ready, since this path
+	// only runs once Verify is AllDone), and no resolve-review demand is
+	// raised. A discovered-but-broken receipt (ambiguous, stale, invalid)
+	// is real review activity gone wrong, not a decline, and still blocks.
+	if evaluation.Missing {
+		return
+	}
 	blockReviewGate(status, evaluation.Result, evaluation.Reason)
 }
 
@@ -473,9 +499,10 @@ func resolveReviewAuthority(ctx context.Context, repo, receiptPath, receiptConte
 				reason += "; " + reviewGateFreshReviewContinuation
 			}
 			return reviewAuthorityEvaluation{
-				Result: reviewtransaction.GateInvalidated,
-				Reason: reason,
-				Absent: absent,
+				Result:  reviewtransaction.GateInvalidated,
+				Reason:  reason,
+				Absent:  absent,
+				Missing: absent,
 			}
 		}
 	}

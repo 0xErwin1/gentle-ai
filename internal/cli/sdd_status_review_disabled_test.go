@@ -122,19 +122,44 @@ func corruptCloneLocalReviewMode(t *testing.T, repo string) {
 	}
 }
 
-// TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled pins today's behaviour for
-// the exact fixture the disabled test relaxes. The enabled path must not move.
+// seedScopeChangedApprovedSDDChange stages an archive-gated SDD change,
+// approves a review over its current content, then changes the candidate
+// afterward. Real review activity happened here and then went stale --
+// unlike a genuinely missing receipt (corrective verify cycle 4's decline
+// case), this still blocks archive while reviews are enabled and is the
+// fixture that lets "enabled enforces" and "disabled does not" keep visibly
+// differing after BLOCKER-1.
+func seedScopeChangedApprovedSDDChange(t *testing.T, root string) {
+	t.Helper()
+	seedArchiveGatedSDDChange(t, root)
+	writeSDDStatusFile(t, root+"/docs/baseline.md", "# baseline\n\nplain prose, no executable content.\n")
+	runReviewCLIGit(t, root, "add", "-A")
+	started := startFacadeReviewResult(t, root, "scope-changed-baseline")
+	finalizeFacadeLineage(t, root, started.LineageID)
+	commitAllSDDStatus(t, root, "baseline reviewed delivery")
+	writeSDDStatusFile(t, root+"/docs/scope-changed.md", "# scope changed\n\nplain prose, delivered after approval.\n")
+	commitAllSDDStatus(t, root, "scope changed after approval")
+}
+
+// TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled pins today's behaviour
+// for a fixture where real review activity happened and then went stale.
+// Corrective verify cycle 4, BLOCKER-1: superseded from its original
+// "genuinely missing receipt" fixture, which is now decline-by-absence-of-
+// action on both sides of the switch (see
+// TestSDDStatusArchiveGateCarriesOnWhileReviewIsDisabled's sibling in
+// internal/sddstatus for that case) and so could no longer distinguish
+// enabled enforcement from disabled leniency.
 func TestSDDStatusArchiveGateBlocksWhileReviewIsEnabled(t *testing.T) {
 	reviewModeHome(t)
 	root := t.TempDir()
-	seedArchiveGatedSDDChange(t, root)
+	seedScopeChangedApprovedSDDChange(t, root)
 
 	if reviewDrivenDevelopmentDisabled(context.Background(), root) {
 		t.Fatal("fixture is wrong: receipt-driven development is not enabled")
 	}
 	status := resolveSDDStatusJSON(t, root)
-	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateInvalidated {
-		t.Fatalf("enabled reviewGate = %#v, want invalidated", status.ReviewGate)
+	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateScopeChanged {
+		t.Fatalf("enabled reviewGate = %#v, want scope-changed", status.ReviewGate)
 	}
 	if status.ReviewGate.Delivery != "" {
 		t.Fatalf("enabled reviewGate.delivery = %q, want absent from the enabled wire shape", status.ReviewGate.Delivery)
@@ -200,10 +225,15 @@ func TestSDDStatusWithoutCWDUsesLinkedWorktreeCommonDirMode(t *testing.T) {
 // TestSDDStatusArchiveGateEnforcesWhenTheSwitchIsUnreadable holds the last
 // property: a broken or tampered mode record must never be able to relax the
 // archive gate, so an unreadable switch behaves exactly like an enabled one.
+// Corrective verify cycle 4, BLOCKER-1: uses the scope-changed fixture (real
+// review activity gone stale), not the original "genuinely missing receipt"
+// fixture -- the latter is decline-by-absence-of-action on both sides of the
+// switch now, so it could no longer distinguish "correctly fails closed to
+// enabled" from "incorrectly resolved to disabled".
 func TestSDDStatusArchiveGateEnforcesWhenTheSwitchIsUnreadable(t *testing.T) {
 	reviewModeHome(t)
 	root := t.TempDir()
-	seedArchiveGatedSDDChange(t, root)
+	seedScopeChangedApprovedSDDChange(t, root)
 	disableReviewForClone(t, root)
 	corruptCloneLocalReviewMode(t, root)
 

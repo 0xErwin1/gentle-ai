@@ -246,3 +246,49 @@ func TestReviewOfferDeclineNeverBlocksArchiveAtTheProjectionLevel(t *testing.T) 
 			offProjection.Dependencies.Archive, offProjection.NextRecommended)
 	}
 }
+
+// TestReviewOfferPresentAndArchiveReadyForAGenuinelyMissingReceipt is
+// corrective verify cycle 4's BLOCKER-1 (rdd-post-verify-review-offer's
+// "Decline Proceeds to Unmanaged Ordinary Archive"): the exact repro shape
+// the cycle-2/3 verify reports used (switch on, verify passed, no receipt
+// anywhere) must show the offer AND archive readiness in the SAME status
+// output -- the offer is an invitation, never a gate -- and a second read of
+// the same still-unarchived candidate must produce an identical fresh
+// offer, proving nothing about a "decline" is persisted or suppressed
+// (there is no `--consent declined` verb and no decline state to record;
+// the user declines simply by proceeding to archive without acting).
+func TestReviewOfferPresentAndArchiveReadyForAGenuinelyMissingReceipt(t *testing.T) {
+	root := t.TempDir()
+	seedVerifiedReadyChangeForOffer(t, root)
+
+	first, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ReviewGate != nil {
+		t.Fatalf("ReviewGate = %#v, want structural absence for a genuinely missing receipt", first.ReviewGate)
+	}
+	if first.ReviewOffer == nil || !first.ReviewOffer.Available {
+		t.Fatalf("ReviewOffer = %#v, want an available invitation in the SAME status output as archive readiness", first.ReviewOffer)
+	}
+	if first.Dependencies.Archive != DependencyReady || first.NextRecommended != "archive" {
+		t.Fatalf("archive=%q next=%q, want ready/archive alongside the present offer", first.Dependencies.Archive, first.NextRecommended)
+	}
+	if len(first.BlockedReasons) != 0 {
+		t.Fatalf("BlockedReasons = %v, want none", first.BlockedReasons)
+	}
+
+	// A hypothetical archive: nothing was written for the decline, so the
+	// next status read of the same still-unarchived candidate gets a fresh,
+	// unsuppressed offer -- identical to the first, proving no persistence.
+	second, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ReviewOffer == nil || !second.ReviewOffer.Available {
+		t.Fatalf("second ReviewOffer = %#v, want a fresh available offer — no suppression", second.ReviewOffer)
+	}
+	if second.Dependencies.Archive != DependencyReady {
+		t.Fatalf("second Dependencies.Archive = %q, want ready — unchanged, nothing persisted", second.Dependencies.Archive)
+	}
+}
