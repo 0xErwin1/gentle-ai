@@ -110,6 +110,11 @@ type sddStatusV1 struct {
 		Reason   string `json:"reason"`
 		Delivery string `json:"delivery"`
 	} `json:"reviewGate"`
+	ReviewOffer *struct {
+		Available  bool   `json:"available"`
+		LineageID  string `json:"lineageId"`
+		Invocation string `json:"invocation"`
+	} `json:"reviewOffer"`
 	BlockedReasons []string `json:"blockedReasons"`
 	TaskProgress   struct {
 		Total       int  `json:"total"`
@@ -1637,37 +1642,46 @@ func sddJourneys() []Journey {
 		},
 		{
 			ID:     "j42-kill-switch-versus-sdd-archive",
-			Title:  "Reviews off at the archive decision: the product defers and never fabricates an approval",
-			Source: "shape 5 (a shipped agent contract and the product disagreeing about the same fact)",
-			// The second believed-open item is that `sdd-archive` still requires
-			// `reviewGate.result: allow`. This journey measures the product half of
-			// that pair, which is the half a black-box benchmark can see.
+			Title:  "The offer is an invitation, never a gate: archive proceeds with reviews on or off",
+			Source: "shape 5 (a shipped agent contract and the product disagreeing about the same fact) + corrective verify cycle 4 BLOCKER-1",
+			// Corrective verify cycle 4, BLOCKER-1 (rdd-post-verify-review-offer's
+			// "Decline Proceeds to Unmanaged Ordinary Archive"): a genuinely
+			// missing receipt is decline-by-absence-of-action, not a blocker, on
+			// EITHER side of the switch. Superseded expectation (documented, not
+			// silently dropped): this journey previously required
+			// dependencies.archive = "blocked" with reviews on, treating an
+			// unacted-on offer as a hard gate.
 			//
-			// Expected: with reviews ON the archive dependency is blocked and the
-			// gate result is not allow. With reviews OFF the archive dependency
-			// becomes ready and the reviewGate field is structurally ABSENT
-			// (corrective verify cycle CRITICAL-1, rdd-post-verify-review-offer's
-			// "Kill-Switch-Off Is Structural Absence" requirement: "archive
-			// consults no reviewGate structured status ... archive cannot fail or
-			// block for review reasons" — no populated disabled/unmanaged
-			// disposition is emitted at all, not even a non-allow one).
+			// Rewritten to pin the ratified "invitation, never a gate" shape: with
+			// reviews on, verify passed, and no receipt, archive is READY and
+			// reviewOffer is present (the invitation the user may act on or not --
+			// declining simply means archiving). With reviews off, archive is
+			// READY and reviewOffer is structurally ABSENT (corrective verify
+			// cycle CRITICAL-1/CRITICAL-3, rdd-post-verify-review-offer's
+			// "Kill-Switch-Off Is Structural Absence" requirement — no offer, no
+			// reviewGate, no ceremony of any kind). Both sides never fabricate an
+			// approval (reviewGate stays absent throughout), and the one thing
+			// that still distinguishes them is exactly the offer itself, not
+			// whether archive proceeds.
 			//
-			// So the product is already correct and nothing here blocks. The
-			// remaining half of the limitation is a shipped document: the
-			// sdd-archive skill contract requires the literal `allow` that a
-			// disabled run is right never to produce. That is a text this
-			// benchmark cannot execute, so it is asserted here as the value the
-			// product will never hand that contract, and reported as such.
+			// The shipped sdd-archive skill contract's residual reference to
+			// `reviewGate.result: allow` is a stale document this benchmark cannot
+			// execute; not re-asserted here since the product's own correct
+			// behavior no longer produces a `reviewGate` field at all in the
+			// no-receipt shape either path takes.
 			Steps: []Step{
 				{Name: "fixture: change complete with an independent verification", Fixture: sddPlanningArtifacts(sddVerifyReport)},
 				{Name: "sdd-status with reviews on", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"),
 					After: sddStatusAssertion("archive routing with reviews on", func(status sddStatusV1) error {
-						if status.Dependencies.Archive != "blocked" {
-							return fmt.Errorf("dependencies.archive = %q, want blocked", status.Dependencies.Archive)
+						if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
+							return fmt.Errorf("dependencies.archive = %q next = %q, want ready/archive", status.Dependencies.Archive, status.NextRecommended)
 						}
-						if status.ReviewGate == nil || status.ReviewGate.Result == "allow" {
-							return fmt.Errorf("reviewGate = %+v, want a present result that is not allow", status.ReviewGate)
+						if status.ReviewGate != nil {
+							return fmt.Errorf("reviewGate = %+v, want structural absence (decline, no review ever started)", status.ReviewGate)
+						}
+						if status.ReviewOffer == nil || !status.ReviewOffer.Available {
+							return fmt.Errorf("reviewOffer = %+v, want an available invitation", status.ReviewOffer)
 						}
 						return nil
 					})},
@@ -1681,6 +1695,9 @@ func sddJourneys() []Journey {
 						}
 						if status.ReviewGate != nil {
 							return fmt.Errorf("reviewGate = %+v, want structural absence while the kill switch is off", status.ReviewGate)
+						}
+						if status.ReviewOffer != nil {
+							return fmt.Errorf("reviewOffer = %+v, want structural absence while the kill switch is off", status.ReviewOffer)
 						}
 						return nil
 					})},

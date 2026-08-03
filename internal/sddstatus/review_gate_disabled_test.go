@@ -40,11 +40,22 @@ func seedReviewlessArchiveReadyChange(t *testing.T, root string) string {
 	return changeRoot
 }
 
-// TestArchiveGateStillDemandsAReviewWhileReviewIsEnabled is the regression that
-// matters most, and it is deliberately the first test in this file: the
-// enabled path must not move one byte. It pins today's behaviour for the exact
-// fixture the disabled tests below relax.
-func TestArchiveGateStillDemandsAReviewWhileReviewIsEnabled(t *testing.T) {
+// TestArchiveGateOffersButDoesNotBlockWhileReviewIsEnabled is the regression
+// that matters most, and it is deliberately the first test in this file: the
+// enabled path pins today's behaviour for the exact fixture (no review ever
+// started for this candidate) the disabled tests below relax further.
+//
+// Corrective verify cycle 4, BLOCKER-1 (rdd-post-verify-review-offer's
+// "Decline Proceeds to Unmanaged Ordinary Archive"): a genuinely missing
+// receipt is decline-by-absence-of-action, not a blocker, on EITHER side of
+// the switch. Superseded expectation (documented, not silently dropped):
+// this test previously required GateInvalidated / blocked / resolve-review
+// naming "terminal review receipt is missing" while enabled -- treating the
+// unacted-on offer as a hard gate. The ratified "invitation, never a gate"
+// reading supersedes that: the enabled path still surfaces the offer
+// (proven at the wire level in review_offer_routing_test.go), but archive
+// proceeds regardless.
+func TestArchiveGateOffersButDoesNotBlockWhileReviewIsEnabled(t *testing.T) {
 	root := t.TempDir()
 	seedReviewlessArchiveReadyChange(t, root)
 
@@ -52,27 +63,32 @@ func TestArchiveGateStillDemandsAReviewWhileReviewIsEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateInvalidated {
-		t.Fatalf("enabled ReviewGate = %#v, want invalidated", status.ReviewGate)
+	if status.ReviewGate != nil {
+		t.Fatalf("enabled ReviewGate = %#v, want structural absence (decline, no review ever started)", status.ReviewGate)
 	}
-	if status.ReviewGate.Delivery != "" {
-		t.Fatalf("enabled ReviewGate.Delivery = %q, want empty so the enabled wire shape is unchanged", status.ReviewGate.Delivery)
+	if status.Dependencies.Archive != DependencyReady || status.NextRecommended != "archive" {
+		t.Fatalf("enabled archive=%q next=%q, want ready/archive", status.Dependencies.Archive, status.NextRecommended)
 	}
-	if status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "resolve-review" {
-		t.Fatalf("enabled archive=%q next=%q, want blocked/resolve-review", status.Dependencies.Archive, status.NextRecommended)
-	}
-	if !strings.Contains(strings.Join(status.BlockedReasons, "\n"), "terminal review receipt is missing") {
-		t.Fatalf("enabled BlockedReasons = %v, want the missing-receipt reason", status.BlockedReasons)
+	if len(status.BlockedReasons) != 0 {
+		t.Fatalf("enabled BlockedReasons = %v, want none", status.BlockedReasons)
 	}
 }
 
 // TestArchiveGateEnforcesForACallerThatNeverResolvesTheSwitch holds the zero
-// value. Any call site that forgets to resolve the switch keeps today's
-// behaviour, so a missed seam fails safe instead of silently dropping review
-// obligations.
+// value against a fixture where enabled and disabled still visibly differ
+// after BLOCKER-1 (a scope-changed EXPLICIT receipt -- real review activity
+// gone wrong, not a decline, so it still blocks while enabled and only stops
+// blocking when the switch is truly off). Any call site that forgets to
+// resolve the switch keeps today's (enabled) behaviour, so a missed seam
+// fails safe instead of silently dropping review obligations. Superseded:
+// this test previously reused the "no review ever started" fixture, which
+// BLOCKER-1 makes a decline on both sides of the switch and so can no longer
+// distinguish "enforces" from "forgot to resolve".
 func TestArchiveGateEnforcesForACallerThatNeverResolvesTheSwitch(t *testing.T) {
 	root := t.TempDir()
-	seedReviewlessArchiveReadyChange(t, root)
+	changeRoot := seedBoundedReadyChange(t, root)
+	writeApprovedReviewArtifacts(t, changeRoot)
+	write(t, filepath.Join(changeRoot, "tasks.md"), "- [x] 1.1 Work\n- [x] scope changed\n")
 
 	options := ResolveOptions{CWD: root, ChangeName: "thin"}
 	if options.ReviewDisabled {
@@ -82,7 +98,7 @@ func TestArchiveGateEnforcesForACallerThatNeverResolvesTheSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
-	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateInvalidated ||
+	if status.ReviewGate == nil || status.ReviewGate.Result != reviewtransaction.GateScopeChanged ||
 		status.Dependencies.Archive != DependencyBlocked || status.NextRecommended != "resolve-review" {
 		t.Fatalf("zero-value gate=%#v archive=%q next=%q, want the enforcing shape",
 			status.ReviewGate, status.Dependencies.Archive, status.NextRecommended)

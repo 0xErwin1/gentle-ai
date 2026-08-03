@@ -22,6 +22,12 @@ func TestResolveArchiveRequiresApprovedExactReviewReceipt(t *testing.T) {
 		wantArchive DependencyState
 		wantNext    string
 		wantReason  string
+		// wantNilGate is corrective verify cycle 4's BLOCKER-1 exception to
+		// this table's otherwise-uniform "ReviewGate is always present"
+		// assumption: a genuinely missing receipt (no review ever started)
+		// is decline-by-absence-of-action, not a blocker -- ReviewGate
+		// stays structurally absent. See "missing every receipt" below.
+		wantNilGate bool
 	}{
 		{
 			name: "missing receipt mirror discovers native receipt",
@@ -33,7 +39,16 @@ func TestResolveArchiveRequiresApprovedExactReviewReceipt(t *testing.T) {
 			wantGate: reviewtransaction.GateAllow, wantArchive: DependencyReady, wantNext: "archive",
 		},
 		{
-			name: "missing every receipt invalidates archive",
+			// Corrective verify cycle 4, BLOCKER-1: a genuinely missing
+			// receipt (no review governs, and none was ever discovered) is
+			// the decline case -- "the offer was never acted on", not a
+			// blocker. Superseded expectation (documented, not silently
+			// dropped): this row previously required GateInvalidated /
+			// blocked / resolve-review naming "terminal review receipt is
+			// missing"; the ratified "invitation, never a gate" reading of
+			// rdd-post-verify-review-offer's "Decline Proceeds to Unmanaged
+			// Ordinary Archive" requirement supersedes that.
+			name: "missing every receipt is decline, archive proceeds unmanaged",
 			mutate: func(t *testing.T, changeRoot string, _ reviewtransaction.Receipt, _ reviewtransaction.GateRequest) {
 				if err := os.Remove(filepath.Join(changeRoot, "reviews", "receipt.json")); err != nil {
 					t.Fatal(err)
@@ -47,8 +62,7 @@ func TestResolveArchiveRequiresApprovedExactReviewReceipt(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			wantGate: reviewtransaction.GateInvalidated, wantArchive: DependencyBlocked,
-			wantNext: "resolve-review", wantReason: "terminal review receipt is missing",
+			wantNilGate: true, wantArchive: DependencyReady, wantNext: "archive",
 		},
 		{
 			name:     "exact authoritative artifacts allow archive",
@@ -147,11 +161,17 @@ func TestResolveArchiveRequiresApprovedExactReviewReceipt(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Resolve() error = %v", err)
 			}
-			if status.ReviewGate == nil {
-				t.Fatal("ReviewGate is nil for final archive decision")
-			}
-			if status.ReviewGate.Result != tt.wantGate {
-				t.Fatalf("ReviewGate.Result = %q, want %q (%s)", status.ReviewGate.Result, tt.wantGate, status.ReviewGate.Reason)
+			if tt.wantNilGate {
+				if status.ReviewGate != nil {
+					t.Fatalf("ReviewGate = %#v, want structural absence (decline)", status.ReviewGate)
+				}
+			} else {
+				if status.ReviewGate == nil {
+					t.Fatal("ReviewGate is nil for final archive decision")
+				}
+				if status.ReviewGate.Result != tt.wantGate {
+					t.Fatalf("ReviewGate.Result = %q, want %q (%s)", status.ReviewGate.Result, tt.wantGate, status.ReviewGate.Reason)
+				}
 			}
 			if status.Dependencies.Archive != tt.wantArchive || status.NextRecommended != tt.wantNext {
 				t.Fatalf("archive=%q next=%q, want %q/%q", status.Dependencies.Archive, status.NextRecommended, tt.wantArchive, tt.wantNext)

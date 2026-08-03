@@ -46,11 +46,17 @@ When the RDD kill switch is OFF, zero review code MUST execute on any SDD path: 
 
 WHEN the offer is declined, SDD MUST proceed to unmanaged ordinary archive under existing repository policy. SDD MUST NOT block archive on a decline and MUST NOT create a receipt-like record for a declined offer.
 
+**Amendment (corrective verify cycle 4, 2026-08-03): the offer is an invitation, never a gate — implementation and the "disabled/unmanaged policy" phrase clarified.** This is the maintainer-ratified reading (cited by the coordinator's cycle-4 fix scope) and closes what was an openly-reported, uncovered spec-MUST since cycle 1 (W3), carried forward through cycles 2-3 as W-b and flagged blocking in cycle 3's own pass/fail budget policy. Decline is realized as the absence of action, not a verb: there is no `--consent declined` form of `review start` and no persisted decline state (consent stays scoped to one candidate and is never recorded) — with the switch ON, verify passed, and no review ever started for the candidate (`reviewtransaction.discoverNativeReceipts` reports its terminal inventory genuinely empty, not merely ambiguous or stale), `dependencies.archive` stays `ready` and `reviewGate` is structurally absent (nil, `omitempty`) in the SAME status output that carries the present `reviewOffer` block. A later status read of the same still-unarchived candidate gets an identical, unsuppressed offer — nothing about the decline is remembered.
+
+This scoping is intentionally narrower than "any non-allow discovery result": a receipt that WAS created and is ambiguous, stale, or otherwise invalid represents real review activity that went wrong, not an unacted-on invitation, and continues to block archive with `reviewGate` populated exactly as before — that is not a decline, and relaxing it would let a genuinely broken review artifact launder itself through this requirement.
+
+"Archive completes under ordinary `disabled/unmanaged` policy" in the scenario below is satisfied by CRITICAL-1's already-ratified structural-absence shape (no populated disposition marker at all, not even `delivery: disabled/unmanaged`) rather than by emitting that literal disposition string on the decline path: emitting a marker here would be the same "disabled/unmanaged ceremony" CRITICAL-1 removed from the kill-switch-off path, applied to decline instead of to the switch. Structural absence is the more consistent reading of "zero review code MUST execute" once no receipt exists at all.
+
 #### Scenario: Decline does not block archive
 
 - GIVEN the post-verify offer is presented and declined
 - WHEN SDD proceeds to archive
-- THEN archive completes under ordinary `disabled/unmanaged` policy
+- THEN archive completes under ordinary `disabled/unmanaged` policy (realized as `reviewGate` structural absence, per the amendment above — not a populated disposition marker)
 - AND no receipt or receipt-like artifact is created for the declined offer
 
 ### Requirement: Post-Offer Correction Triggers Targeted Re-Verify Before Archive
