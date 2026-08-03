@@ -722,8 +722,12 @@ func TestOrganicKillSwitchStopsAtTheDeliveryBoundary(t *testing.T) {
 	if gate.Schema != organicGateSchema || gate.Allowed || gate.Result == organicGateAllow {
 		t.Fatalf("disabled delivery gate did not fail closed: %#v", gate)
 	}
-	if gate.Context.Denial == nil || gate.Context.Denial.Stage != "receipt-discovery" {
-		t.Fatalf("disabled delivery gate denial is not discoverable: %#v", gate.Context.Denial)
+	// Wave 5 Slice 2 (design decision 4): the kill switch is consulted
+	// before any authority read, so this report carries no discovery-kind
+	// detail at all -- there is no receipt-discovery outcome to describe,
+	// because discovery never runs.
+	if gate.Context.Denial != nil {
+		t.Fatalf("disabled delivery gate leaked discovery-kind detail: %#v", gate.Context.Denial)
 	}
 	// The guidance installed on all 16 adapters promises this exact token under a
 	// disabled switch. Asserting it here is what keeps that promise honest, and
@@ -790,8 +794,11 @@ func TestOrganicKillSwitchReportsUnmanagedDeliveryOverPriorReceipts(t *testing.T
 	if gate.Delivery != "disabled/unmanaged" {
 		t.Fatalf("disabled delivery over a prior receipt did not report the promised disposition: %q", gate.Delivery)
 	}
-	if gate.Context.Denial == nil {
-		t.Fatalf("disabled delivery hid why the prior receipt does not govern: %#v", gate.Context)
+	// Wave 5 Slice 2 (design decision 4): the switch is consulted before any
+	// authority read, so the prior receipt is never even discovered while
+	// disabled -- no discovery-kind detail leaks.
+	if gate.Context.Denial != nil {
+		t.Fatalf("disabled delivery over a prior receipt leaked discovery-kind detail: %#v", gate.Context.Denial)
 	}
 
 	// Reporting moved nothing: the remote is untouched and no branch appeared.
@@ -844,10 +851,12 @@ func TestOrganicKillSwitchReportsUnmanagedDeliveryOverWorkspaceReceipt(t *testin
 	if gate.Delivery != "disabled/unmanaged" {
 		t.Fatalf("disabled delivery over a workspace receipt did not report the promised disposition: %q", gate.Delivery)
 	}
-	// The healthy receipt's real relation to the candidate stays discoverable:
-	// the delivery shape moved past it, and the store was never corrupted.
-	if gate.Context.Denial == nil || gate.Context.Denial.Code != "delivery-shape-mismatch" {
-		t.Fatalf("disabled delivery hid why the workspace receipt does not govern: %#v", gate.Context.Denial)
+	// Wave 5 Slice 2 (design decision 4): the switch is consulted before any
+	// authority read, so the healthy receipt is never even discovered while
+	// disabled -- no discovery-kind detail (not even "delivery-shape-mismatch")
+	// leaks.
+	if gate.Context.Denial != nil {
+		t.Fatalf("disabled delivery over a workspace receipt leaked discovery-kind detail: %#v", gate.Context.Denial)
 	}
 
 	// Reporting moved nothing: the remote is untouched and no branch appeared.
@@ -1006,6 +1015,17 @@ func TestOrganicKillSwitchReEnableLandsOnTheFreshFullReview(t *testing.T) {
 // expiry-stable terminal state. The authorization that permitted the review is
 // withdrawn afterwards, and the terminal receipt still validates, replays
 // byte-identically, and produces no additional effect.
+// TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect is
+// Wave 5 Slice 2's most consequential black-box behavior reversal (design
+// decision 4; rdd-receipt-only-gates/spec.md's "Kill switch off
+// short-circuits before authority discovery" scenario, a firm requirement,
+// not a tagged pending assumption): the kill switch is now consulted before
+// ANY receipt or authority read, so even the terminal receipt this journey
+// just earned is never consulted while disabled -- the gate reports the
+// generic disabled/unmanaged shape instead of replaying the same allow. The
+// name and behavior this test asserts changed accordingly: the terminal
+// AUTHORITY survives withdrawal unmutated (proven by re-enabling and
+// replaying below), but it no longer GOVERNS DELIVERY while withdrawn.
 func TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect(t *testing.T) {
 	t.Parallel()
 	deadline := time.Now().Add(organicWithdrawalDeadline)
@@ -1036,9 +1056,18 @@ func TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect(t *te
 		t.Fatal("a new review started after the authorization was withdrawn")
 	}
 
-	replayedGate := harness.gentle("review", "validate", "--cwd", harness.repo.worktree, "--gate", "post-apply")
-	if !bytes.Equal(replayedGate, firstGate) {
-		t.Fatalf("the terminal gate result changed after withdrawal:\nfirst:\n%s\nreplay:\n%s", firstGate, replayedGate)
+	// While withdrawn: the terminal receipt just earned is never consulted --
+	// the gate reports the generic disabled/unmanaged shape, not a replay of
+	// the pre-withdrawal allow.
+	withdrawnGate := harness.gentle("review", "validate", "--cwd", harness.repo.worktree, "--gate", "post-apply")
+	if bytes.Equal(withdrawnGate, firstGate) {
+		t.Fatal("the terminal gate result did not change after withdrawal -- the receipt was consulted while disabled")
+	}
+	if !bytes.Contains(withdrawnGate, []byte(`"disabled/unmanaged"`)) {
+		t.Fatalf("withdrawn gate did not report disabled/unmanaged: %s", withdrawnGate)
+	}
+	if bytes.Contains(withdrawnGate, []byte(`"allowed":true`)) {
+		t.Fatalf("withdrawn gate fabricated an approval: %s", withdrawnGate)
 	}
 	replayedFinalize := harness.gentle("review", "finalize", "--cwd", harness.repo.worktree, "--lineage", lineage)
 	if !bytes.Equal(replayedFinalize, firstFinalize) {
@@ -1055,6 +1084,17 @@ func TestOrganicTerminalAuthoritySurvivesWithdrawalAndReplaysWithoutEffect(t *te
 		t.Fatalf("replay moved the remote: %s != %s", remote, harness.repo.baseRevision)
 	}
 	harness.assertOnlyMainRef()
+
+	// Re-enabling rediscovers the SAME unmutated receipt, and it governs
+	// again exactly as before withdrawal -- proving the switch never touched
+	// the authority itself, only whether it is consulted.
+	if mode := harness.enableReview(); mode.Status.Effective != "on" {
+		t.Fatalf("re-enabling did not take effect: %#v", mode)
+	}
+	reEnabledGate := harness.gentle("review", "validate", "--cwd", harness.repo.worktree, "--gate", "post-apply")
+	if !bytes.Equal(reEnabledGate, firstGate) {
+		t.Fatalf("the terminal gate result changed across a withdraw/re-enable cycle:\nbefore:\n%s\nafter:\n%s", firstGate, reEnabledGate)
+	}
 
 	if time.Now().After(deadline) {
 		t.Fatalf("the withdrawal journey exceeded its %s CI budget", organicWithdrawalDeadline)
