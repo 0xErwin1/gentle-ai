@@ -194,12 +194,26 @@ func renderWelcomeOptions(options []string, cursor int, width int) string {
 
 func renderWelcomeMinimum(width int, height int, cursor int) string {
 	const primaryAction = "Start installation"
+	const compactPrimaryAction = "Go"
+	const narrowPrimaryAction = ">"
 	const compactHelp = "j/k, enter, q"
+	const narrowHelp = "q"
 
-	primaryLines := wrapWelcomeLine(primaryAction, width)
+	primaryLabel := primaryAction
+	if width > 0 && lipgloss.Width(primaryLabel) > width {
+		primaryLabel = compactPrimaryAction
+		if lipgloss.Width(primaryLabel) > width {
+			primaryLabel = narrowPrimaryAction
+		}
+	}
+	primaryLines := wrapWelcomeLine(primaryLabel, width)
 	helpLines := wrapWelcomeLine(welcomeHelpText, width)
 	if height > 0 && len(primaryLines)+len(helpLines) > height {
-		helpLines = wrapWelcomeLine(compactHelp, width)
+		helpLabel := compactHelp
+		if width > 0 && lipgloss.Width(helpLabel) > width {
+			helpLabel = narrowHelp
+		}
+		helpLines = wrapWelcomeLine(helpLabel, width)
 	}
 
 	lines := append(primaryLines, helpLines...)
