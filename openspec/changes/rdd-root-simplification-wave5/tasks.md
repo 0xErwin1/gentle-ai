@@ -265,20 +265,71 @@ touches `internal/sddstatus` and `internal/cli/sdd_attempt.go` only and shares n
 land on its own base after S7 without reopening the gate-cutover evidence. See absorbed-debt item 4 above for
 the full W4 CRITICAL-A citation.
 
-- [ ] 9.1 RED: `TestBlockArchiveForUnsatisfiedReVerify_FrozenAnchorDoesNotRelabel` — reproduces the W4
-      livelock probe (cycle 1 blocked → compliant remediation → cycle 2 must NOT re-demand a new revision);
-      fails against the current live-revision-chasing demand.
-- [ ] 9.2 RED: `TestBlockArchiveForUnsatisfiedReVerify_NamedContinuationIsRunnable` — asserts the blocked-reason
-      text names a complete, literally-runnable `gentle-ai sdd-attempt finish` invocation: all 8 base flags
-      (`--expected-revision`, `--request-id`, `--outcome`, `--evidence-revision`, `--diagnosis`,
-      `--harness-disposition`, `--cleanup-evidence`, `--process-evidence`) plus the 3 remediation flags
-      together (`--expected-binding-revision`, `--successor-lineage`, `--remediates-evidence-revision`), per
-      `sdd_attempt.go`'s `missingSDDAttemptFlags`/`validateSDDAttemptOperationFlags` "finish" case; fails
-      against the current `--remediates-evidence-revision <rev>`-only text.
-- [ ] 9.3 Implement: replace `blockArchiveForUnsatisfiedReVerify`'s demand anchor with the correction's own
-      `FixDeltaHash` (frozen at correction open, never re-derived live) instead of
-      `status.ReVerify.EvidenceRevision` (re-stamped on every `Resolve()`); update the blocked-reason
-      template to print the complete runnable invocation from 9.2.
-- [ ] 9.4 GREEN: 9.1-9.2 pass.
-- [ ] 9.5 Full verification: `go test ./... -count=1`; bench module; `scripts/deadcode-ratchet.sh --update`;
-      refusal-resolution notes (none pending).
+- [x] 9.1 RED: `TestBlockArchiveForUnsatisfiedReVerify_FrozenAnchorDoesNotRelabel` — reproduces the W4
+      livelock probe (cycle 1 blocked → compliant remediation → cycle 2 must NOT re-demand a new anchor).
+      **Disclosed deviation**: no pre-existing `blockArchiveForUnsatisfiedReVerify` or live-revision-chasing
+      demand exists on this base (Wave 4 cycle 3 removed it entirely, restoring `applyTargetedReVerifyRouting`
+      to purely-additive — confirmed by reading `review_reverify.go`/`status.go` before writing anything).
+      RED is therefore a genuine compile-fail against brand-new pure functions
+      (`archiveReVerifyDemanded`, `archiveReVerifySatisfied`), not a red-to-green fix of a livelocking
+      implementation. Commit `31799ec2`.
+- [x] 9.2 RED: `TestBlockArchiveForUnsatisfiedReVerify_NamedContinuationIsRunnable` — asserts the blocked-reason
+      text names a complete, literally-runnable `gentle-ai sdd-attempt finish` invocation with all 8 base
+      flags. **Disclosed deviation from this task's own pre-plan**: does NOT name the 3-flag remediation trio.
+      Investigated first, per the coordinator's explicit "read the CLI validation source first" instruction
+      (`sdd_attempt.go` read in full): the trio's own validation (`validateRuntimeRemediationSuccessor`,
+      `runtime_ledger.go`) demands an approved review successor lineage bound via
+      `prepareApprovedRuntimeSuccessorBinding` — a full review round trip. That is a heavier, semantically
+      distinct axis ("this FAILED runtime attempt's evidence is repaired by an approved successor binding")
+      than "re-verify the corrected candidate," and reusing it would have repeated Wave 4's
+      unrunnable-continuation defect at one remove — exactly option (a)'s stated risk in the coordinator's own
+      preference ordering. The plain, already-existing 8-base-flag `finish` shape is both fully runnable as
+      printed (no operator-unknowable values beyond the same `<placeholder>` convention
+      `runtimeRemediationExitRefusal` already established) and correct: an ordinary passing finish after the
+      correction naturally captures `FinishCandidateTree` equal to the corrected tree, since that is simply
+      the operator's current working tree at finish time. This resolves the coordinator's option ordering at
+      option (a), using the lighter of two possible "(a)" shapes rather than falling through to (b) — no CLI
+      flag, sub-operation, or verb was added at all. Commit `31799ec2`.
+- [x] 9.3 Implement: `blockArchiveForUnsatisfiedReVerify` anchors to `CompactCorrectionAttempt`'s own
+      `FixDeltaHash`/`Snapshot.CandidateTree` (both written once, at `CompleteCorrection` time in
+      `compact.go`, into the append-only `CorrectionAttempts` slice — confirmed by reading `compact.go`
+      directly, not assumed). `correctionEvidence` gained `fixDeltaHash`/`candidateTree` fields, populated by
+      `deriveCorrectionEvidence` whenever `applied && !failClosed` (S6's existing classification seams,
+      reused exactly as the coordinator suggested). `archiveReVerifyContinuation` builds the runnable
+      `sdd-attempt begin`-then-`finish` (or `finish` alone when an attempt is already active) text. Wired into
+      the ONE existing `applyTargetedReVerifyRouting` call site (both `Resolve()` and `resolveEngramStatus()`
+      pass their already-loaded `*RuntimeStatus` through, no new call site). Blocks
+      `Status.Dependencies.Archive` only; never Apply, Verify, or any of the five delivery gates
+      (`internal/reviewtransaction`'s `gate.go`/`compact_gate.go`, S1-S7's domain, untouched by this phase —
+      confirmed zero file overlap). `internal/cli/sdd_attempt.go` ended up untouched: no CLI surface change
+      was needed given 9.2's resolution. Commit `31799ec2`.
+- [x] 9.4 GREEN: 9.1-9.2 pass, plus 3 additional tests written alongside them for full branch coverage
+      (`TestBlockArchiveForUnsatisfiedReVerify_StructuralAbsence`,
+      `TestBlockArchiveForUnsatisfiedReVerify_MutatesOnlyArchive` — 5 subtests covering satisfied/nil-runtime/
+      no-correction/demanded-and-unsatisfied/blocked-reason-content). Two pre-existing
+      `TestDeriveCorrectionEvidenceBranches` fixtures needed updating for the new struct fields (disclosed:
+      the "no path data" fixture sets a real `CandidateTree`, so its `want` gained `candidateTree: "deadbeef"`
+      — the additive field is not zero-valued there). Mutation proofs (temporarily broken, confirmed caught,
+      reverted byte-identically): (1) `archiveReVerifySatisfied`'s tree comparison dropped — NOT caught by the
+      original test (its only passed attempt happened to already match the tree), so the test itself was
+      strengthened first with a passed-attempt-on-an-unrelated-tree negative case, then the mutation was
+      re-proven caught; (2) `blockArchiveForUnsatisfiedReVerify`'s `archiveReVerifyDemanded` guard dropped —
+      caught (added a "no correction applied" subtest first, since none existed); (3) the wiring call inside
+      `applyTargetedReVerifyRouting` commented out — no unit test exercises the wiring itself (building a full
+      protocol-valid on-disk correction round trip was investigated and not pursued, matching this same file's
+      own pre-existing "Investigated and NOT pursued" precedent for `TestResolveOmitsReVerifyBlockWithoutAnyCorrection`
+      — `CompleteCorrection`'s cross-validation makes a hand-built fixture substantially more machinery than
+      this slice's budget); caught instead by `scripts/deadcode-ratchet.sh`, which correctly reported all 4 new
+      functions as newly unreachable with the wiring removed. Commit `31799ec2`.
+- [x] 9.5 Full verification: `go test ./... -count=1` all 63 packages green; `internal/sddstatus` full package
+      green (26s); bench module green; bench journey corpus vs a freshly built binary
+      (`go build -trimpath ./cmd/gentle-ai`): 59 journeys completed, 0 failed, 0 unsupported, exit 0 (one
+      pre-existing stale-declaration note for j43, dated to S7's invalidate-message change, not this phase —
+      informational only, does not fail the run); `bench/results.json` reverted after the local run; gofmt/vet
+      clean on all touched files; deadcode ratchet clean with zero new entries (no `--update` needed — the new
+      functions are genuinely wired to the one production call site, proven by mutation proof 3 above);
+      refusal-resolution notes: none — no `refusal:by-design` marker used anywhere in this phase's new code,
+      since the blocked reason always names a runnable continuation; rebase-contract clean (root `7598eda4`
+      still an ancestor of `origin/main`, confirmed via `git merge-base --is-ancestor`). This closes Wave 5's
+      apply: Phases 1-9 (S1-S7 plus this phase) are all complete. Commit `31799ec2` (code) plus this docs
+      commit.
