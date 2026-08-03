@@ -2893,6 +2893,25 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 			}, negotiated, *contract)
 		}
 	}
+	// Amendment C's single shared branch (design decision 4, Wave 3 Slice
+	// 4): resolved BEFORE discoverCompactFacadeGateReview so every gate call
+	// that supplies no explicit --lineage marker for a v3 lineage stays
+	// byte-identical to legacy discovery below. A non-nil discoveryErr here
+	// is always a deny that must never fall through to legacy authorization.
+	if governs, evaluation, discoveryErr := resolveGoverningAuthority(ctx, root, *lineage, gateInput); discoveryErr != nil {
+		if reviewDeliveryDisposition(ctx, root, false) == reviewtransaction.RDDDeliveryDisabledUnmanaged {
+			return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, discoveryErr, negotiated, *contract)
+		}
+		return emitFacadeGateEvaluationNegotiated(stdout, reviewtransaction.NativeGateEvaluation{
+			Result: reviewtransaction.GateInvalidated, Reason: discoveryErr.Error(),
+			Context: reviewtransaction.GateContext{
+				Gate: gateInput.Gate, Denial: &reviewtransaction.GateDenial{Stage: "receipt-discovery", Code: string(discoveryErr.Kind)},
+			},
+		}, negotiated, *contract)
+	} else if governs {
+		return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
+	}
+
 	compactStore, compactRecord, compactErr := discoverCompactFacadeGateReview(ctx, root, *lineage, gateInput)
 	if compactErr == nil {
 		contested := false

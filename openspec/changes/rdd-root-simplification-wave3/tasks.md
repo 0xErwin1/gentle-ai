@@ -65,18 +65,18 @@ Chain strategy: feature-branch-chain
 
 ## Phase 5 (S4): Amendment C + Switch-Off Equivalence
 
-- [ ] 5.1 RED: full 2×2 matrix table test — new{related|unrelated|absent} × legacy{present|absent}.
-- [ ] 5.2 RED (mandatory): new-lineage marker present, v3 record removed, legacy receipt present ⇒ **deny** (discovery-integrity corruption path, never falls through to legacy).
-- [ ] 5.3 Decision task: confirm discovery-integrity denial routes to existing `authority_corrupted` constant, or document why a new reason constant is required — no silent default.
-- [ ] 5.4 Implement `resolveGoverningAuthority(new, legacy)` in `runReviewFacadeValidate`, single shared path for all five gates.
-- [ ] 5.5 GREEN: 5.1, 5.2 pass.
-- [ ] 5.6 Switch-off byte-equivalence golden — post-apply: capture, diff against pre-change golden, byte-identical.
-- [ ] 5.7 Switch-off byte-equivalence golden — pre-commit: same.
-- [ ] 5.8 Switch-off byte-equivalence golden — pre-push: same.
-- [ ] 5.9 Switch-off byte-equivalence golden — pre-pr: same.
-- [ ] 5.10 Switch-off byte-equivalence golden — release: same.
-- [ ] 5.11 Rollback-safety test: switch OFF after in-flight new lineage exists — lineage stays readable and finalizable.
-- [ ] 5.12 `scripts/deadcode-ratchet.sh --update` for `resolveGoverningAuthority` and golden fixtures.
+- [x] 5.1 RED: full 2×2 matrix table test — new{related|unrelated|absent} × legacy{present|absent}.
+- [x] 5.2 RED (mandatory): new-lineage marker present, v3 record removed, legacy receipt present ⇒ **deny** (discovery-integrity corruption path, never falls through to legacy).
+- [x] 5.3 Decision task: confirm discovery-integrity denial routes to existing `authority_corrupted` constant, or document why a new reason constant is required — no silent default.
+- [x] 5.4 Implement `resolveGoverningAuthority(new, legacy)` in `runReviewFacadeValidate`, single shared path for all five gates.
+- [x] 5.5 GREEN: 5.1, 5.2 pass.
+- [x] 5.6 Switch-off byte-equivalence golden — post-apply: capture, diff against pre-change golden, byte-identical.
+- [x] 5.7 Switch-off byte-equivalence golden — pre-commit: same.
+- [x] 5.8 Switch-off byte-equivalence golden — pre-push: same.
+- [x] 5.9 Switch-off byte-equivalence golden — pre-pr: same.
+- [x] 5.10 Switch-off byte-equivalence golden — release: same.
+- [x] 5.11 Rollback-safety test: switch OFF after in-flight new lineage exists — lineage stays readable and finalizable.
+- [x] 5.12 `scripts/deadcode-ratchet.sh --update` for `resolveGoverningAuthority` and golden fixtures.
 
 ## Phase 6 (S5): Reason Taxonomy, Offer API, Bench
 
