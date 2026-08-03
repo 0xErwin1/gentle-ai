@@ -46,12 +46,12 @@ Chain strategy: feature-branch-chain
 
 ## Phase 3 (S2): AuthorityStore
 
-- [ ] 3.1 RED: two-artifact-only test — inspect `v3/<lineage>/` dir, assert exactly `review-state.json` + `review-receipt.json`, no sidecar.
-- [ ] 3.2 RED: CAS stale-revision refuse test; replay-identity equal ⇒ return stored transition, consume nothing; different in `correcting` ⇒ refuse.
-- [ ] 3.3 Create `internal/reviewtransaction/authority_store.go`: `v3/LOCK` store-scoped lock, `acquireStoreLock` + `.atomic-`/rename publish reuse, `Mutate(ctx, expectedRevision, apply)`.
-- [ ] 3.4 GREEN: 3.1, 3.2 pass. Crash/replay integration test with `t.TempDir()`.
-- [ ] 3.5 Receipt immutability test: mutate after issuance refuses.
-- [ ] 3.6 `scripts/deadcode-ratchet.sh --update` for `authority_store.go` exports.
+- [x] 3.1 RED: two-artifact-only test — inspect `v3/<lineage>/` dir, assert exactly `review-state.json` + `review-receipt.json`, no sidecar.
+- [x] 3.2 RED: CAS stale-revision refuse test; replay-identity equal ⇒ return stored transition, consume nothing; different in `correcting` ⇒ refuse.
+- [x] 3.3 Create `internal/reviewtransaction/authority_store.go`: `v3/LOCK` store-scoped lock, `acquireStoreLock` + `.atomic-`/rename publish reuse, `Mutate(ctx, expectedRevision, apply)`.
+- [x] 3.4 GREEN: 3.1, 3.2 pass. Crash/replay integration test with `t.TempDir()`.
+- [x] 3.5 Receipt immutability test: mutate after issuance refuses.
+- [x] 3.6 `scripts/deadcode-ratchet.sh --update` for `authority_store.go` exports.
 
 ## Phase 4 (S3): ReviewCore
 
