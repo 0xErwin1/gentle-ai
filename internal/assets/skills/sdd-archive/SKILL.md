@@ -69,16 +69,22 @@ This hierarchy governs how the archive REPORTS facts. It does not weaken gates: 
 
 > Follow **Section B** (retrieval) and **Section C** (persistence) from `skills/_shared/sdd-phase-common.md`.
 
-- **engram**: Read `sdd/{change-name}/proposal`, `sdd/{change-name}/spec`, `sdd/{change-name}/design`, `sdd/{change-name}/tasks`, `sdd/{change-name}/verify-report`, and exact `sdd/{change-name}/review/{transaction,ledger,receipt,gate-context}` topics (all required). Record all observation IDs in the archive report for traceability. Save as `sdd/{change-name}/archive-report`.
+- **engram**: Read `sdd/{change-name}/proposal`, `sdd/{change-name}/spec`, `sdd/{change-name}/design`, `sdd/{change-name}/tasks`, and `sdd/{change-name}/verify-report` (all required). Read the exact `sdd/{change-name}/review/{transaction,ledger,receipt,gate-context}` topics only when the Native Review Receipt Gate below finds `reviewGate` present (a review was actually discovered) — when `reviewGate` is structurally absent, no review ever happened for this candidate and none of those topics exist to read. Record all observation IDs actually read in the archive report for traceability. Save as `sdd/{change-name}/archive-report`.
 - **openspec**: Read and follow `skills/_shared/openspec-convention.md`. Perform merge and archive folder moves.
 - **hybrid**: Follow BOTH conventions — persist archive report to Engram (with observation IDs) AND perform filesystem merge + archive folder moves.
 - **none**: Return closure summary only. Do not perform archive file operations.
 
 ### Native Review Receipt Gate
 
-Before any task reconciliation, spec sync, or archive move, require structured status with `reviewGate.result: allow`, or with `reviewGate.delivery: disabled/unmanaged` when the kill switch is off and no review governs this change. Read the exact transaction, frozen ledger, approved terminal receipt, and post-apply gate context referenced by status. Missing, pending, malformed, `scope-changed`, `invalidated`, or `escalated` review state blocks archive with no override and no automatic reviewer launch. The receipt must match final candidate tree, paths digest, policy, ledger, fix delta, current independent verification evidence, mode counters, and base relationship.
+Before any task reconciliation, spec sync, or archive move, require structured status. `reviewGate` is a structurally ABSENT key — not a populated value — in every case except a genuine, discovered review artifact for this candidate:
 
-`disabled/unmanaged` is the only relaxation, and the native gate is what decides it: while the kill switch is off, demanding a terminal receipt would demand one `review start` is refused from producing, which is a deadlock rather than a safeguard. It removes only the implicit demand. An explicit review artifact that failed validation still blocks, the gate never manufactures `allow`, and re-enabling revalidates from the current state.
+- **`reviewGate` absent, archive proceeds under ordinary repository policy** in both of these cases; there is no `disabled/unmanaged` value to check for, and no explicit-artifact carve-out either:
+  - **the kill switch is off**: receipt-driven development does not exist for this candidate, so zero review code ran and there is nothing to read or block on.
+  - **the kill switch is on, verify has passed, and no review was ever started for this candidate**: the post-verify offer (`reviewOffer`) is present in the SAME status output — an invitation, never a gate. Declining is proceeding to archive without acting on it, not a verb; nothing about the decline is recorded, and `dependencies.archive: ready` here means proceed, not "investigate why the gate is missing".
+- **`reviewGate` present with `result: allow`** (a discovered receipt that governs this candidate and validates): proceed. Read the exact transaction, frozen ledger, approved terminal receipt, and post-apply gate context referenced by status; the receipt must match final candidate tree, paths digest, policy, ledger, fix delta, current independent verification evidence, mode counters, and base relationship.
+- **`reviewGate` present with any other result** (pending, malformed, `scope-changed`, `invalidated`, or `escalated` — a review was actually discovered and failed validation): blocks archive with no override and no automatic reviewer launch. The gate never manufactures `allow`, and re-enabling a disabled switch revalidates from the current state.
+
+Do not treat `reviewGate`'s absence itself as a defect to investigate or as grounds to demand a receipt — only a present, non-`allow` value blocks.
 
 ### Task Completion Gate
 

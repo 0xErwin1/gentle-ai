@@ -74,6 +74,21 @@ const (
 // ReVerifyBlock is the orchestrator-facing routing decision task 8.6's
 // prose instructs acting on: run sdd-verify with the stated Scope before
 // archive.
+//
+// Corrective verify cycle 3 (CRITICAL-A) removed a short-lived
+// EvidenceRevision field and its archive-blocking enforcement
+// (blockArchiveForUnsatisfiedReVerify, cycle 3's own task 5 addition): the
+// demanded revision was re-derived from the LIVE verify-report on every
+// Resolve(), so a compliant re-verify re-labeled the demand instead of
+// clearing it (a livelock), and the only existing write path capable of
+// recording satisfaction (`sdd-attempt finish
+// --remediates-evidence-revision`) requires `--expected-binding-revision`
+// and `--successor-lineage` together -- a full review round trip, which
+// defeats the "run a cheap targeted re-verify" scenario this block exists
+// for. See design.md's "Amendment (corrective verify cycle 3): re-verify
+// archive-gating deferred to Wave 5" and the matching spec amendment. This
+// type is purely additive/informational again, the shape S6 originally
+// shipped and cycle 3 restores.
 type ReVerifyBlock struct {
 	Mode   string   `json:"mode"`
 	Scope  []string `json:"scope,omitempty"`
@@ -181,9 +196,13 @@ func verifyEvidenceScope(genesisPaths []string, changeName string) []string {
 // amendment): Resolve() and resolveEngramStatus() both call it
 // symmetrically, exactly mirroring applyReviewOfferRouting's own shape. It
 // is purely additive: it never mutates Dependencies or NextRecommended,
-// only Status.ReVerify. It only fires in the same window the offer already
-// requires -- SDD's own verify already passed -- since a correction with
-// no completed SDD verify to potentially invalidate has nothing to route.
+// only Status.ReVerify (corrective verify cycle 3, CRITICAL-A: this is
+// deliberately restored to S6's original non-invasive shape after cycle 3
+// removed the livelocking archive-gating enforcement added in between --
+// see ReVerifyBlock's doc comment). It only fires in the same window the
+// offer already requires -- SDD's own verify already passed -- since a
+// correction with no completed SDD verify to potentially invalidate has
+// nothing to route.
 func applyTargetedReVerifyRouting(ctx context.Context, status *Status, repo, changeName string, governingRef *reviewtransaction.SDDReceiptRef, reviewDisabled bool) {
 	if reviewDisabled || governingRef == nil || status.Dependencies.Verify != DependencyAllDone {
 		return

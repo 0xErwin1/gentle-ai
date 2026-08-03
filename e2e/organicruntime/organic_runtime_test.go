@@ -902,18 +902,19 @@ func TestOrganicKillSwitchReEnableLandsOnTheFreshFullReview(t *testing.T) {
 		harness.git("commit", "-q", "-m", "docs: unmanaged delivery "+unit)
 	}
 
-	// The disabled window records the change as unmanaged even though the
-	// stale baseline receipt is still in history: declining to manage is not a
-	// blocker demanding a review the switch refuses to run.
+	// The disabled window proceeds unmanaged even though the stale baseline
+	// receipt is still in history: corrective verify cycle CRITICAL-1 makes
+	// this structural absence (sdd-status's own reviewGate, distinct from the
+	// pre-commit delivery gate checked above, which correctly keeps its own
+	// "disabled/unmanaged" disposition) -- not a populated disposition.
+	// Declining to manage is not a blocker demanding a review the switch
+	// refuses to run.
 	disabled := harness.sddStatus(change)
 	if disabled.Dependencies.Archive == "blocked" {
 		t.Fatalf("disabled archive over a stale receipt = blocked; reasons = %v", disabled.BlockedReasons)
 	}
-	if disabled.ReviewGate == nil || disabled.ReviewGate.Delivery != "disabled/unmanaged" {
-		t.Fatalf("disabled window did not record the unmanaged disposition: %#v", disabled.ReviewGate)
-	}
-	if disabled.ReviewGate.Result == organicGateAllow {
-		t.Fatalf("disabled window fabricated an approval: %#v", disabled.ReviewGate)
+	if disabled.ReviewGate != nil {
+		t.Fatalf("disabled window produced a review gate instead of structural absence: %#v", disabled.ReviewGate)
 	}
 
 	if mode := harness.enableReview(); mode.Status.Effective != "on" {
