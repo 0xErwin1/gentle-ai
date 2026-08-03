@@ -31,12 +31,16 @@ type CompactAttemptResult struct {
 	Token  string              `json:"token,omitempty"`
 }
 
+// CompactAcquireRequest is the bounded orchestration projection of
+// BeginAttemptRequest. Work-unit scope (WorkUnit, EvidenceGoal, MaxAttempts,
+// MaxChangedLines) is owned exactly once, by the embedded BeginAttemptRequest
+// (decision 9 / CON-08: RuntimeObjective's BeginAttemptRequest is the single
+// work-unit-scope owner). ExpectedRevision is inert here — Acquire always
+// derives it from ledger replay state before use — but embedding rather than
+// re-declaring keeps the projection from drifting out of sync with its one
+// source of truth the way the pre-Wave-4 parallel struct did (#2133/#2151).
 type CompactAcquireRequest struct {
-	RequestID       string
-	WorkUnit        string
-	EvidenceGoal    string
-	MaxAttempts     int
-	MaxChangedLines int
+	BeginAttemptRequest
 }
 
 type CompactSettleRequest struct {
@@ -56,10 +60,7 @@ type CompactSettleRequest struct {
 // Acquire claims one native attempt without exposing the growing runtime
 // history. The returned token identifies that exact begin record for Settle.
 func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireRequest) (CompactAttemptResult, error) {
-	begin, err := normalizeBeginAttemptRequest(BeginAttemptRequest{
-		RequestID: request.RequestID, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
-		MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
-	})
+	begin, err := normalizeBeginAttemptRequest(request.BeginAttemptRequest)
 	if err != nil {
 		return CompactAttemptResult{}, err
 	}
