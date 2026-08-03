@@ -203,23 +203,39 @@ func waveReviewInvocationArgs(invocation string) ([]string, error) {
 	return fields[1:], nil
 }
 
-func requireCandidateDeclinedGate(sandbox *Sandbox, observation Observation) error {
+// requireCandidateDeclineGateDeniesGenerically is Wave 5 Slice 6's
+// downgrade (design decision 6): a declined candidate no longer resolves
+// to a decline-specific unmanaged delivery at the gate at all -- nothing is
+// ever recorded (RecordCandidateDecline is deleted), so a later gate call
+// reaches the SAME generic denial any never-reviewed candidate reaches.
+// Supersedes requireCandidateDeclinedGate (deleted along with j50), which
+// asserted the OLD decline-specific unmanaged shape
+// (Delivery: "candidate_declined/unmanaged", Denial.Stage:
+// "candidate-decline") this function's own name would now contradict.
+func requireCandidateDeclineGateDeniesGenerically(_ *Sandbox, observation Observation) error {
 	var gate waveGateResult
-	if err := decodeWaveObservation(observation, &gate, "candidate-declined gate"); err != nil {
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &gate); err != nil {
+		return fmt.Errorf("parse candidate-declined gate denial: %w (stderr: %s)", err, firstLine(observation.Stderr))
+	}
+	if observation.ExitCode == 0 || gate.Allowed || gate.Result != "invalidated" || gate.Delivery != "" {
+		return fmt.Errorf("candidate-declined gate = exit=%d gate=%+v, want a plain (non-unmanaged) denial", observation.ExitCode, gate)
+	}
+	if gate.Context.Denial == nil || gate.Context.Denial.Stage != "receipt-discovery" || gate.Context.Denial.Code != "receipt_missing" {
+		return fmt.Errorf("candidate-declined gate denial = %+v, want the generic receipt-discovery/receipt_missing denial any never-reviewed candidate reaches", gate.Context.Denial)
+	}
+	return nil
+}
+
+// requireDisabledUnmanagedGate asserts the kill-switch-off gate shape:
+// exits 0, reports Delivery "disabled/unmanaged", never an allow. Mirrors
+// internal/cli's assertDisabledUnmanagedGate at the bench black-box layer.
+func requireDisabledUnmanagedGate(_ *Sandbox, observation Observation) error {
+	var gate waveGateResult
+	if err := decodeWaveObservation(observation, &gate, "disabled-unmanaged gate"); err != nil {
 		return err
 	}
-	context := gate.Context
-	if gate.Result != "invalidated" || gate.Allowed || gate.Action != "repository-policy" || gate.Delivery != "candidate_declined/unmanaged" ||
-		context.BaseTree == "" || context.BaseTree != sandbox.Scratch["decline-base"] ||
-		context.CandidateTree == "" || context.CandidateTree != sandbox.Scratch["decline-tree"] ||
-		context.PathsDigest == "" || context.PathsDigest != sandbox.Scratch["decline-paths"] ||
-		context.Denial == nil || context.Denial.Stage != "candidate-decline" || context.Denial.Code != "exact_candidate" {
-		return fmt.Errorf("candidate decline did not preserve exact unmanaged identity: %+v", gate)
-	}
-	if context.LineageID != "" || context.Generation != 0 || context.StoreRevision != "" || context.GenesisRevision != "" ||
-		context.ChainIdentity != "" || context.BundleDigest != "" || context.FixDeltaHash != "" || context.PolicyHash != "" ||
-		context.LedgerHash != "" || context.EvidenceHash != "" || context.ReceiptBaseTree != "" {
-		return fmt.Errorf("candidate decline fabricated review authority: %+v", context)
+	if gate.Allowed || gate.Result == "allow" || gate.Delivery != "disabled/unmanaged" {
+		return fmt.Errorf("disabled-unmanaged gate = %+v, want Delivery disabled/unmanaged, never an allow", gate)
 	}
 	return nil
 }
@@ -1116,37 +1132,6 @@ func stageDeclinedCandidate(sandbox *Sandbox) error {
 	return nil
 }
 
-func driftDeclinedCandidate(sandbox *Sandbox) error {
-	if err := sandbox.write(filepath.Join(sandbox.Repo, declineCandidatePath), "#!/bin/sh\necho drift\n"); err != nil {
-		return err
-	}
-	return sandbox.git(sandbox.Repo, "add", declineCandidatePath)
-}
-
-func addDeclinedPathDrift(sandbox *Sandbox) error {
-	if err := sandbox.write(filepath.Join(sandbox.Repo, declineCandidatePath), declineCandidateContents); err != nil {
-		return err
-	}
-	if err := sandbox.write(filepath.Join(sandbox.Repo, "scripts/extra.sh"), "#!/bin/sh\necho extra\n"); err != nil {
-		return err
-	}
-	return sandbox.git(sandbox.Repo, "add", declineCandidatePath, "scripts/extra.sh")
-}
-
-func requireCandidateDeclineRejected(name string) func(*Sandbox, Observation) error {
-	return func(_ *Sandbox, observation Observation) error {
-		var gate waveGateResult
-		if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &gate); err != nil {
-			return fmt.Errorf("parse %s denial: %w", name, err)
-		}
-		if observation.ExitCode == 0 || gate.Allowed || gate.Result == "allow" || gate.Delivery != "" || gate.Action == "repository-policy" ||
-			gate.Context.Denial != nil && gate.Context.Denial.Stage == "candidate-decline" {
-			return fmt.Errorf("%s inherited candidate decline: exit=%d gate=%+v", name, observation.ExitCode, gate)
-		}
-		return nil
-	}
-}
-
 func waveOneJourneys() []Journey {
 	return []Journey{
 		{
@@ -1314,24 +1299,37 @@ func waveOneJourneys() []Journey {
 			},
 		},
 		{
-			ID:     "j50-candidate-decline-preserves-frozen-delivery-identity",
-			Title:  "Candidate decline: exact frozen identity reaches delivery without creating review authority",
-			Source: "issue #2045",
+			// j50-candidate-decline-preserves-frozen-delivery-identity
+			// (issue #2045) is RENAMED and its Steps rewritten, not deleted
+			// (Wave 5 Slice 6, design decision 6): decline no longer
+			// preserves ANY frozen delivery identity at the gate --
+			// RecordCandidateDecline is deleted, so nothing is left to
+			// compare a later gate call against. The exact-candidate and
+			// drifted-candidate scenarios that USED to diverge (one
+			// unmanaged, the others rejected) now converge on the SAME
+			// generic denial, so the drift-specific fixtures
+			// (driftDeclinedCandidate, addDeclinedPathDrift,
+			// requireCandidateDeclineRejected) added no remaining
+			// differentiating value and are deleted along with them.
+			// prepareDeclinedCandidate, declineCandidateFromStatus, and
+			// stageDeclinedCandidate survive unchanged: their own
+			// assertions (empty post-decline authority inventory, staged
+			// tree matches the frozen target) were never gate-side and
+			// stay exactly as true as before.
+			ID:     "j50-candidate-decline-denies-generically-then-disabled",
+			Title:  "Candidate decline creates no review authority; a later gate denies generically, or reaches ordinary unmanaged delivery once reviews are disabled",
+			Source: "issue #2045 (Wave 5 Slice 6 downgrade)",
 			Steps: []Step{
 				{Name: "fixture: repository", Fixture: baseRepo},
 				{Name: "fixture: high-risk candidate remains untracked", Fixture: prepareDeclinedCandidate},
 				{Name: "derive v2 START and execute emitted relay and decline", Requires: statusCapability, Composite: declineCandidateFromStatus},
 				{Name: "fixture: stage the exact unchanged declined candidate", Fixture: stageDeclinedCandidate},
-				{Name: "separate process preserves exact unmanaged identity", Requires: validateCapability,
-					Args: productArgs("review", "validate", "--gate", "pre-commit"), After: requireCandidateDeclinedGate},
-				{Name: "release cannot inherit candidate decline", Requires: validateCapability,
-					Args: productArgs("review", "validate", "--gate", "release"), After: requireCandidateDeclineRejected("release")},
-				{Name: "fixture: candidate bytes drift", Fixture: driftDeclinedCandidate},
-				{Name: "byte drift cannot inherit candidate decline", Requires: validateCapability,
-					Args: productArgs("review", "validate", "--gate", "pre-commit"), After: requireCandidateDeclineRejected("byte drift")},
-				{Name: "fixture: restore bytes and add path drift", Fixture: addDeclinedPathDrift},
-				{Name: "path drift cannot inherit candidate decline", Requires: validateCapability,
-					Args: productArgs("review", "validate", "--gate", "pre-commit"), After: requireCandidateDeclineRejected("path drift")},
+				{Name: "reviews still on: the declined candidate denies exactly like any never-reviewed candidate", Requires: validateCapability,
+					Args: productArgs("review", "validate", "--gate", "pre-commit"), After: requireCandidateDeclineGateDeniesGenerically},
+				{Name: "disable reviews for the clone", Requires: modeCapability,
+					Args: productArgs("review", "mode", "disable", "--scope", "clone", "--json")},
+				{Name: "reviews off: the identical declined candidate reaches ordinary unmanaged delivery", Requires: validateCapability,
+					Args: productArgs("review", "validate", "--gate", "pre-commit"), After: requireDisabledUnmanagedGate},
 			},
 		},
 	}
