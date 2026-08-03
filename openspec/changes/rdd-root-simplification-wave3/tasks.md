@@ -38,11 +38,11 @@ Chain strategy: feature-branch-chain
 
 ## Phase 2 (S1): Promotion Rename
 
-- [ ] 2.1 RED: `candidate_readonly_guard_test.go` reusing `scanShadowReadOnlyTree` verbatim over `candidate_*.go` glob — fails (files don't exist yet).
-- [ ] 2.2 Rename `shadow_relation.go`→`candidate_relation.go` (`shadowRelate`→`relateCandidates`, `ShadowRelation`→`CandidateRelation`); rename `shadow_identity.go`→`candidate_identity.go`.
-- [ ] 2.3 Add `type ShadowRelation = CandidateRelation` alias so `shadow_observer.go` compiles unchanged.
-- [ ] 2.4 GREEN: 2.1 passes; existing `shadow_readonly_guard_test.go` still covers `shadow_observer.go`/`shadow_authority_health.go`.
-- [ ] 2.5 `scripts/deadcode-ratchet.sh --update` for renamed symbols.
+- [x] 2.1 RED: `candidate_readonly_guard_test.go` reusing `scanShadowReadOnlyTree` verbatim over the promoted files — fails (files don't exist yet). Targets the exact two promoted files by name rather than a `candidate_*.go` glob, since this package already has an unrelated `candidate_decline.go` (Wave 2) that a glob would silently sweep in and mask the RED state.
+- [x] 2.2 Rename `shadow_relation.go`→`candidate_relation.go` (`shadowRelate`→`relateCandidates`, `ShadowRelation`→`CandidateRelation`); rename `shadow_identity.go`→`candidate_identity.go`.
+- [x] 2.3 Add `type ShadowRelation = CandidateRelation` alias so `shadow_observer.go` compiles unchanged.
+- [x] 2.4 GREEN: 2.1 passes; existing `shadow_readonly_guard_test.go` still covers `shadow_observer.go`/`shadow_authority_health.go`; full `go test ./internal/reviewtransaction/...` passes.
+- [x] 2.5 `scripts/deadcode-ratchet.sh --update` for renamed symbols — 2 pre-existing baselined test-helper entries moved from `shadow_relation.go` to `candidate_relation.go` (reachability-neutral file-path rename only, no new dead code).
 
 ## Phase 3 (S2): AuthorityStore
 
