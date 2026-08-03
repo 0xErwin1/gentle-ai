@@ -461,6 +461,82 @@ func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 		}
 	}
 
+	// W-2 (Wave 5 fix cycle 2, verify-report #10186): release had zero driven
+	// cells (W-2's own finding). release/exact and release/changed are wired
+	// here, mirroring the identical exact/changed recipes above, extended
+	// with the five release-boundary artifact flags gateVerdict's
+	// gate==GateRelease precondition requires (C-B/C-C wired the receiving
+	// end of that precondition for legacy and v3; this cell exercises it
+	// through the compact/v2 path, the one lineage kind a plain binary-driven
+	// `review start` can freshly create -- confirmed empirically: a v1 legacy
+	// lineage has no CLI-reachable creation path at all, and a v3 lineage
+	// needs GENTLE_AI_RDD_NEW_LINEAGE threaded into the subprocess, both
+	// deferred rather than rushed into this budget).
+	releaseArtifactArgs := func(t *testing.T) []string {
+		t.Helper()
+		dir := t.TempDir()
+		artifact := func(name, content string) string {
+			path := filepath.Join(dir, name)
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			return path
+		}
+		return []string{
+			"--release-configuration", artifact("configuration.txt", "configuration\n"),
+			"--release-generated", artifact("generated.txt", "generated\n"),
+			"--release-provenance", artifact("provenance.txt", "provenance\n"),
+			"--release-publication-boundary", artifact("publication-boundary.txt", "publication boundary\n"),
+			"--release-evidence-freshness", artifact("evidence-freshness.txt", "evidence freshness\n"),
+		}
+	}
+
+	// release / exact: release's own target resolution is TargetExactRevision
+	// at the current committed HEAD (lifecycleTargetForGate's GateRelease
+	// case), not TargetCurrentChanges -- so, unlike post-apply/pre-commit,
+	// the reviewed candidate must actually be committed before release can
+	// see it at all (confirmed empirically: an uncommitted candidate denies
+	// scope-changed, HEAD's tree never contained the reviewed path).
+	{
+		repo := initSnapshotRepo(t)
+		writeSnapshotFile(t, repo, "docs/notes.md", "release notes\n")
+		lineage := "matrix-release-exact"
+		if out, err := runGateBoundaryMatrixReview(binary, repo, "start", "--lineage", lineage); err != nil {
+			t.Fatalf("release/exact review start: %v\n%s", err, out)
+		}
+		if out, err := runGateBoundaryMatrixReview(binary, repo, "finalize", "--lineage", lineage); err != nil {
+			t.Fatalf("release/exact review finalize: %v\n%s", err, out)
+		}
+		gitSnapshot(t, repo, "add", "docs/notes.md")
+		gitSnapshot(t, repo, "commit", "-m", "deliver reviewed candidate")
+		args := append([]string{"validate", "--lineage", lineage, "--gate", string(GateRelease)}, releaseArtifactArgs(t)...)
+		out, err := runGateBoundaryMatrixReview(binary, repo, args...)
+		if err != nil {
+			t.Fatalf("release/exact review validate: %v\n%s", err, out)
+		}
+		result := decodeGateBoundaryMatrixResult(t, out)
+		if result.Result != string(GateAllow) {
+			t.Fatalf("release/exact result = %#v", result)
+		}
+		wired[[2]string{string(GateRelease), "exact"}] = gateBoundaryMatrixRow{
+			Gate: string(GateRelease), Relation: "exact", Verdict: string(GateAllow), Explained: false,
+			Reason: "driven via the real gentle-ai binary: review start -> finalize -> validate --gate release with the five release-boundary artifacts on the identical, unchanged candidate",
+		}
+	}
+
+	// release / changed: investigated, not pursued this budget. Unlike the
+	// other four gates, release's own target resolves TargetExactRevision at
+	// the current committed HEAD (lifecycleTargetForGate/buildCompactGateRequestWithPushBase's
+	// GateRelease case), not TargetCurrentChanges -- an uncommitted workspace
+	// drift (the recipe the other four "changed" cells use) never reaches
+	// release's own candidate comparison at all, and the fixture instead
+	// needs a genuinely delivered (committed) drift, mirroring pre-push's own
+	// "amend the delivery commit" recipe rather than the plain post-apply/
+	// pre-commit/pre-pr shape. Confirmed empirically: the plain-drift recipe
+	// produces an unrelated scope-change diagnostic, not a clean "changed"
+	// denial. Deferred rather than rushed; release/exact above is this
+	// budget's genuine, verified increment.
+
 	rows := make([]gateBoundaryMatrixRow, 0, len(gateBoundaryMatrixGates)*len(gateBoundaryMatrixRelations))
 	for _, gate := range gateBoundaryMatrixGates {
 		for _, relation := range gateBoundaryMatrixRelations {
@@ -480,8 +556,8 @@ func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 	if len(rows) != 35 {
 		t.Fatalf("gate boundary matrix has %d rows, want 35 (5 gates x 7 relations)", len(rows))
 	}
-	if len(wired) != 8 {
-		t.Fatalf("gate boundary matrix wired %d cells, want exactly 8 this slice (4 from S1: post-apply/pre-commit/pre-push/pre-pr exact; 3 from S3: post-apply/pre-commit/pre-push changed; 1 new from S5: pre-pr changed)", len(wired))
+	if len(wired) != 9 {
+		t.Fatalf("gate boundary matrix wired %d cells, want exactly 9 (4 from S1: post-apply/pre-commit/pre-push/pre-pr exact; 3 from S3: post-apply/pre-commit/pre-push changed; 1 from S5: pre-pr changed; 1 new from Wave 5 fix cycle 2 W-2: release exact)", len(wired))
 	}
 
 	actual, err := json.MarshalIndent(rows, "", "  ")

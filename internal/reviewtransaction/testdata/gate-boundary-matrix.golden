@@ -201,9 +201,9 @@
   {
     "gate": "release",
     "relation": "exact",
-    "verdict": "",
-    "explained": true,
-    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
+    "verdict": "allow",
+    "explained": false,
+    "reason": "driven via the real gentle-ai binary: review start -\u003e finalize -\u003e validate --gate release with the five release-boundary artifacts on the identical, unchanged candidate"
   },
   {
     "gate": "release",
