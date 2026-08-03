@@ -192,9 +192,7 @@ internal/reviewtransaction/verification_convergence.go	ResnapshotVerificationSub
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Error
 internal/reviewtransaction/verification_convergence.go	VerificationSubjectMutationError.Unwrap
 internal/sddstatus/legacy_binding_read.go	parseLegacyBinding
-internal/sddstatus/review_binding.go	bindingExists
 internal/sddstatus/review_binding.go	bindingPath
-internal/sddstatus/review_binding.go	validateBoundReview
 internal/sddstatus/review_door.go	resetReviewEntryHookCallCountForTest
 internal/sddstatus/review_door.go	reviewEntryHookCallCountForTest
 internal/sddstatus/runtime_receipt.go	ReceiptRevisionConflictError.Error

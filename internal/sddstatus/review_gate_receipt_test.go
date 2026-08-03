@@ -20,6 +20,39 @@ import (
 // untouched (Wave 7 territory) — only the archive-gate's SOURCE of validity
 // changes, not who populates the underlying binding data.
 
+// TestResolveGoverningReceiptRefRequiresAParsedNativeBinding ports
+// TestBindingExistsRequiresAParsedNativeBinding (deleted in S7's re-scoped
+// 8.1 alongside bindingExists itself, now genuinely orphaned by this
+// slice's rerouting) onto resolveGoverningReceiptRef, which reuses the same
+// underlying native-store read and must preserve the same two properties:
+// an attempt-only runtime HEAD (no binding at all) is not treated as
+// governance, and a corrupt native runtime HEAD fails closed with an error
+// rather than silently reporting absence.
+func TestResolveGoverningReceiptRefRequiresAParsedNativeBinding(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	store := mustRuntimeStore(t, repo, "attempts-only")
+	if _, err := store.Begin(context.Background(), BeginAttemptRequest{
+		ExpectedRevision: "", RequestID: "begin-attempts-only", WorkUnit: "apply",
+		EvidenceGoal: "prove attempts do not imply review authority", MaxAttempts: 2, MaxChangedLines: 20,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ref, err := resolveGoverningReceiptRef(context.Background(), repo, "attempts-only")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ref != nil {
+		t.Fatalf("attempt-only runtime HEAD was treated as an explicit review binding: %#v", ref)
+	}
+
+	if err := os.WriteFile(filepath.Join(store.Dir, "HEAD"), []byte("corrupt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveGoverningReceiptRef(context.Background(), repo, "attempts-only"); err == nil {
+		t.Fatal("corrupt native runtime HEAD was accepted as a review binding")
+	}
+}
+
 func TestResolveGoverningReceiptRefPresenceAndAbsence(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
