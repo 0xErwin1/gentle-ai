@@ -181,22 +181,31 @@ diff -r openspec/changes/{change-name}/specs/{domain}/spec.md openspec/specs/{do
 **IF mode is `openspec` or `hybrid`:** Move the entire change folder to archive with date prefix, using a mechanical shell move. NEVER Read each artifact and Write it into the archive — that routes file content through the model and can truncate or alter bytes silently:
 
 ```bash
+# Run this block as one shell transaction so the EXIT trap remains active.
+# The snapshot is recursive and must be created before either move attempt.
+snapshot_root="$(mktemp -d "${TMPDIR:-/tmp}/sdd-archive.XXXXXX")"
+trap 'rm -rf -- "$snapshot_root"' EXIT
+cp -R "openspec/changes/{change-name}" "$snapshot_root/source"
+
 # Mechanical move (MANDATORY): git mv when tracked, mv otherwise
 mkdir -p openspec/changes/archive
-git mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name} \
-  || mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}
+if git mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then
+  :
+else
+  mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}
+fi
+
+# MANDATORY readback: only empty diff output passes.
+diff -r "$snapshot_root/source" "openspec/changes/archive/YYYY-MM-DD-{change-name}"
+diff_status=$?
+if [ "$diff_status" -ne 0 ]; then
+  exit "$diff_status"
+fi
 ```
 
 Use today's date in ISO format (e.g., `2026-02-16`).
 
-After the move, run the mandatory structural readback and record its verbatim output:
-
-```bash
-# MANDATORY readback: empty diff is the only passing evidence
-diff -r openspec/changes/archive/YYYY-MM-DD-{change-name} {expected-source-snapshot}
-```
-
-Compare the archived folder against the source it was moved from. When the source no longer exists (it was moved, not copied), compare against the staged/tracked equivalent (`git show :openspec/changes/archive/YYYY-MM-DD-{change-name}` per file, or a pre-move snapshot you captured with `cp -R` to a temporary location before the `git mv`/`mv`). The `archive-report` you write in Step 5 is additive and excluded from the comparison. Any non-empty diff is truncation or alteration and FAILS the phase; a missing `diff -r` also FAILS the phase.
+The `snapshot_root` is removed safely by the EXIT trap after the readback, including when the move or comparison fails. Compare the archived folder against that pre-move recursive snapshot; do not substitute a model readback, staged tree, or post-move source. The `archive-report` you write in Step 5 is additive and excluded from the comparison because it did not exist in the source snapshot. Any non-empty `diff -r` output or non-zero status is truncation, alteration, or an operational failure and FAILS the phase; a missing `diff -r` also FAILS the phase.
 
 ### Step 4: Verify Archive
 
