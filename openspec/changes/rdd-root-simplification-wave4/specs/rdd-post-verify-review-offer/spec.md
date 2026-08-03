@@ -13,7 +13,7 @@ SDD MUST offer RDD review only after verify completes and before archive begins.
 #### Scenario: Offer fires only after verify completes
 
 - GIVEN apply and verify have both completed for a change
-- WHEN SDD reaches its verify-success exit in `internal/cli` — not `sddstatus.Resolve`, which remains a pure read, because an offer inside `Resolve` would re-create RDD as a supervisor of every status read
+- WHEN SDD reaches its post-verify, pre-archive status resolution — `internal/sddstatus`'s `Resolve()`/`resolveEngramStatus()`, through `applyReviewOfferRouting` and `review_door.go`'s `reviewOfferForVerify` (call-site amendment, 2026-08-03: the originally-named `internal/cli` verify-success exit was found genuinely underspecified — repo/context-free by `RunSDDVerifyValidate`'s own doc comment — and the routing surface that already owns integration was chosen instead; `RunSDDVerifyValidate` itself stays context-free)
 - THEN it calls `OfferReviewAfterVerify` as the sole review entry point
 - AND no code path offers or consults RDD before verify completes
 
@@ -46,16 +46,24 @@ When the RDD kill switch is OFF, zero review code MUST execute on any SDD path: 
 
 WHEN the offer is declined, SDD MUST proceed to unmanaged ordinary archive under existing repository policy. SDD MUST NOT block archive on a decline and MUST NOT create a receipt-like record for a declined offer.
 
+**Amendment (corrective verify cycle 4, 2026-08-03): the offer is an invitation, never a gate — implementation and the "disabled/unmanaged policy" phrase clarified.** This is the maintainer-ratified reading (cited by the coordinator's cycle-4 fix scope) and closes what was an openly-reported, uncovered spec-MUST since cycle 1 (W3), carried forward through cycles 2-3 as W-b and flagged blocking in cycle 3's own pass/fail budget policy. Decline is realized as the absence of action, not a verb: there is no `--consent declined` form of `review start` and no persisted decline state (consent stays scoped to one candidate and is never recorded) — with the switch ON, verify passed, and no review ever started for the candidate (`reviewtransaction.discoverNativeReceipts` reports its terminal inventory genuinely empty, not merely ambiguous or stale), `dependencies.archive` stays `ready` and `reviewGate` is structurally absent (nil, `omitempty`) in the SAME status output that carries the present `reviewOffer` block. A later status read of the same still-unarchived candidate gets an identical, unsuppressed offer — nothing about the decline is remembered.
+
+This scoping is intentionally narrower than "any non-allow discovery result": a receipt that WAS created and is ambiguous, stale, or otherwise invalid represents real review activity that went wrong, not an unacted-on invitation, and continues to block archive with `reviewGate` populated exactly as before — that is not a decline, and relaxing it would let a genuinely broken review artifact launder itself through this requirement.
+
+"Archive completes under ordinary `disabled/unmanaged` policy" in the scenario below is satisfied by CRITICAL-1's already-ratified structural-absence shape (no populated disposition marker at all, not even `delivery: disabled/unmanaged`) rather than by emitting that literal disposition string on the decline path: emitting a marker here would be the same "disabled/unmanaged ceremony" CRITICAL-1 removed from the kill-switch-off path, applied to decline instead of to the switch. Structural absence is the more consistent reading of "zero review code MUST execute" once no receipt exists at all.
+
 #### Scenario: Decline does not block archive
 
 - GIVEN the post-verify offer is presented and declined
 - WHEN SDD proceeds to archive
-- THEN archive completes under ordinary `disabled/unmanaged` policy
+- THEN archive completes under ordinary `disabled/unmanaged` policy (realized as `reviewGate` structural absence, per the amendment above — not a populated disposition marker)
 - AND no receipt or receipt-like artifact is created for the declined offer
 
 ### Requirement: Post-Offer Correction Triggers Targeted Re-Verify Before Archive
 
 A bounded correction issued after the offer MUST invalidate prior verify evidence for the paths it touches. SDD MUST run a targeted re-verify scoped to the correction's changed paths before archive proceeds; SDD MUST fall back to a full re-verify only when path-level scoping cannot be proven.
+
+**Amendment (corrective verify cycle 3, 2026-08-03): archive-gating enforcement deferred to Wave 5.** Wave 4 delivers the routing/classification half of this requirement in full: `Status.ReVerify` (Mode/Scope/Reason) is computed and reaches the wire whenever a post-verify correction is recorded, using the three-branch taxonomy the scenarios below describe. It does **not** yet enforce "archive does not proceed until that re-verify passes" — a second corrective cycle attempted that enforcement and found it unsatisfiable and livelocking: the demanded evidence revision was re-derived from the live verify-report on every status read, so a compliant re-verify re-labeled the demand instead of clearing it, and the only existing write path capable of recording satisfaction (`gentle-ai sdd-attempt finish --remediates-evidence-revision <rev>`) requires `--expected-binding-revision` and `--successor-lineage` together — a full review round trip, which defeats the "run a cheap targeted re-verify" scenario entirely. A compliant Wave 5 implementation needs: (1) a demanded-revision anchor derived from the correction's own append-only data (e.g. its `FixDeltaHash`), not the live verify-report, so satisfaction is stable once granted; and (2) either a new, decoupled write path for recording "this re-verify demand was satisfied" that does not require an approved review successor, or an explicit product decision that satisfying a targeted re-verify legitimately requires one. Until Wave 5 lands this, the scenario below's "archive does not proceed" clause is aspirational, not enforced, and archive is never blocked by an outstanding `Status.ReVerify` block.
 
 #### Scenario: Targeted re-verify for a scoped correction
 
@@ -69,7 +77,7 @@ A bounded correction issued after the offer MUST invalidate prior verify evidenc
 - GIVEN a post-verify correction whose changed-path set cannot be reliably derived
 - WHEN SDD re-runs verify before archive
 - THEN SDD runs a full re-verify covering the objective's entire evidence goal
-- AND archive does not proceed until that full re-verify passes
+- AND archive does not proceed until that full re-verify passes (DEFERRED to Wave 5 — see amendment above; not enforced in Wave 4)
 
 ### Requirement: Intra-Wave Rollout Sequencing
 
