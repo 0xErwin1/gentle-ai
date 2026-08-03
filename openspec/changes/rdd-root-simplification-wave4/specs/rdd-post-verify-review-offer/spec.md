@@ -13,7 +13,7 @@ SDD MUST offer RDD review only after verify completes and before archive begins.
 #### Scenario: Offer fires only after verify completes
 
 - GIVEN apply and verify have both completed for a change
-- WHEN SDD reaches its verify-success exit in `internal/cli` — not `sddstatus.Resolve`, which remains a pure read, because an offer inside `Resolve` would re-create RDD as a supervisor of every status read
+- WHEN SDD reaches its post-verify, pre-archive status resolution — `internal/sddstatus`'s `Resolve()`/`resolveEngramStatus()`, through `applyReviewOfferRouting` and `review_door.go`'s `reviewOfferForVerify` (call-site amendment, 2026-08-03: the originally-named `internal/cli` verify-success exit was found genuinely underspecified — repo/context-free by `RunSDDVerifyValidate`'s own doc comment — and the routing surface that already owns integration was chosen instead; `RunSDDVerifyValidate` itself stays context-free)
 - THEN it calls `OfferReviewAfterVerify` as the sole review entry point
 - AND no code path offers or consults RDD before verify completes
 
