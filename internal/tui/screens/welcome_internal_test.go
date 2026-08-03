@@ -61,6 +61,7 @@ func TestRenderWelcome_StaysWithinViewport(t *testing.T) {
 	}{
 		{name: "Windows Terminal startup", width: 120, height: 30},
 		{name: "narrow resize", width: 80, height: 24},
+		{name: "short viewport", width: 120, height: 19},
 		{name: "wide resize", width: 160, height: 50},
 	}
 
@@ -76,6 +77,11 @@ func TestRenderWelcome_StaysWithinViewport(t *testing.T) {
 			}
 			if !strings.Contains(view, "Start installation") {
 				t.Fatalf("welcome lost primary action after fitting viewport\nview:\n%s", view)
+			}
+			for _, want := range []string{"Quit", "j/k: navigate • enter: select • q: quit"} {
+				if !strings.Contains(view, want) {
+					t.Fatalf("welcome lost %q after fitting viewport\nview:\n%s", want, view)
+				}
 			}
 		})
 	}
