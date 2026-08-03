@@ -9,8 +9,19 @@ package reviewtransaction
 // makes ReviewCore.finalize's ErrFinalizeRequiresLensResults refusal
 // satisfiable: persist captured lens results onto the v3 authority, bound
 // to a provider-owned subject hash, through the existing Mutate/CAS path --
-// no reopen, no separate artifact store, no findings/evidence admission
-// pipeline (that stays a v2-only concept).
+// no reopen, no separate artifact store, no findings/evidence ADMISSION
+// pipeline (ArtifactSubject/FrozenCandidateContext/reopen stay v2-only).
+//
+// Fix cycle 3, CRITICAL-E closure (verify-report #10186 cycle 2, coordinator
+// decision "option 2, the channel does what it appears to do"): the capture
+// primitive DOES persist the reviewer's validated findings (not just
+// SubjectHash) -- cycle 2's own capture-result already required and
+// validated `findings`/`evidence` were present before this fix, so silently
+// discarding them was a channel that looked like it carried findings and
+// did not, a fail-open in an authorization system. Persisted findings feed
+// the EXISTING AdmitCandidateCausalFindings at finalize (review_facade.go)
+// -- the same admission decision function the --admission-findings channel
+// already uses, reused rather than duplicated.
 
 import (
 	"context"
@@ -18,6 +29,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"reflect"
 	"strconv"
 )
 
@@ -73,15 +85,18 @@ var (
 )
 
 // CaptureLensResult persists one captured reviewer result onto a v3
-// authority through the existing Mutate/CAS path. Semantics (C-A):
+// authority through the existing Mutate/CAS path. Semantics (C-A, extended
+// by C-E):
 //   - only a reviewing or validating authority may capture;
 //   - lens/order must match the frozen SelectedLenses set exactly;
 //   - subjectHash must match NewLineageArtifactSubjectHash's own derivation;
+//   - findings ARE persisted verbatim (C-E) -- fed into
+//     AdmitCandidateCausalFindings at finalize, never discarded;
 //   - one-shot per lens: capturing the SAME lens again with the IDENTICAL
-//     subject hash is an idempotent replace (Mutate's own byte-identical
-//     no-op path); a DIFFERENT subject hash for an already-captured lens is
-//     refused (ErrNewLineageCaptureConflict) -- there is no reopen.
-func (store AuthorityStore) CaptureLensResult(ctx context.Context, expectedRevision, lens string, order int, subjectHash string) (NewLineageRecord, error) {
+//     subject hash AND identical findings is an idempotent replace (Mutate's
+//     own byte-identical no-op path); anything else for an already-captured
+//     lens is refused (ErrNewLineageCaptureConflict) -- there is no reopen.
+func (store AuthorityStore) CaptureLensResult(ctx context.Context, expectedRevision, lens string, order int, subjectHash string, findings []FindingEvidence) (NewLineageRecord, error) {
 	if _, err := store.Mutate(ctx, expectedRevision, func(next *NewLineageAuthority) error {
 		if next.State != NewLineageStateReviewing && next.State != NewLineageStateValidating {
 			return fmt.Errorf("%w: lineage %q is %q", ErrNewLineageCaptureNotReviewable, next.LineageID, next.State)
@@ -93,16 +108,19 @@ func (store AuthorityStore) CaptureLensResult(ctx context.Context, expectedRevis
 		if subjectHash != want {
 			return fmt.Errorf("%w: lineage %q lens %q", ErrNewLineageCaptureSubjectMismatch, next.LineageID, lens)
 		}
+		normalizedFindings := append([]FindingEvidence(nil), findings...)
 		for _, existing := range next.CapturedResults {
 			if existing.Lens != lens {
 				continue
 			}
-			if existing.SubjectHash == subjectHash {
+			if existing.SubjectHash == subjectHash && reflect.DeepEqual(existing.Findings, normalizedFindings) {
 				return nil // identical binding already captured: idempotent no-op
 			}
 			return fmt.Errorf("%w: lineage %q lens %q", ErrNewLineageCaptureConflict, next.LineageID, lens)
 		}
-		next.CapturedResults = append(append([]NewLineageCapturedResult(nil), next.CapturedResults...), NewLineageCapturedResult{Lens: lens, Order: order, SubjectHash: subjectHash})
+		next.CapturedResults = append(append([]NewLineageCapturedResult(nil), next.CapturedResults...), NewLineageCapturedResult{
+			Lens: lens, Order: order, SubjectHash: subjectHash, Findings: normalizedFindings,
+		})
 		return nil
 	}); err != nil {
 		return NewLineageRecord{}, err

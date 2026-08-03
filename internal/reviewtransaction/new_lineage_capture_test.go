@@ -50,7 +50,7 @@ func TestCaptureLensResult_HappyPathThenFinalizeSatisfiesLensResults(t *testing.
 	store, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
 	subject := NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 0)
 
-	updated, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, subject)
+	updated, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, subject, nil)
 	if err != nil {
 		t.Fatalf("CaptureLensResult happy path: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestCaptureLensResult_RejectsLensNotInFrozenSelection(t *testing.T) {
 	store, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
 	subject := NewLineageArtifactSubjectHash(record.Authority, "review-risk", 0)
 
-	if _, err := store.CaptureLensResult(context.Background(), record.Revision, "review-risk", 0, subject); err == nil {
+	if _, err := store.CaptureLensResult(context.Background(), record.Revision, "review-risk", 0, subject, nil); err == nil {
 		t.Fatal("captured a lens that was never in the frozen SelectedLenses set")
 	}
 }
@@ -80,7 +80,7 @@ func TestCaptureLensResult_RejectsWrongOrder(t *testing.T) {
 	store, record := newLineageCaptureFixtureStore(t, []string{"review-reliability", "review-risk"})
 	subject := NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 1)
 
-	if _, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 1, subject); err == nil {
+	if _, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 1, subject, nil); err == nil {
 		t.Fatal("captured a real lens at the wrong frozen order index")
 	}
 }
@@ -91,7 +91,7 @@ func TestCaptureLensResult_RejectsWrongOrder(t *testing.T) {
 func TestCaptureLensResult_RejectsSubjectHashMismatch(t *testing.T) {
 	store, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
 
-	if _, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, "sha256:fabricated"); err == nil {
+	if _, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, "sha256:fabricated", nil); err == nil {
 		t.Fatal("captured a result whose subject hash does not match the provider-owned derivation")
 	}
 }
@@ -105,13 +105,13 @@ func TestCaptureLensResult_OneShotNoReopen(t *testing.T) {
 	store, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
 	subject := NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 0)
 
-	first, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, subject)
+	first, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, subject, nil)
 	if err != nil {
 		t.Fatalf("first capture: %v", err)
 	}
 
 	t.Run("identical resubmission is an idempotent no-op", func(t *testing.T) {
-		again, err := store.CaptureLensResult(context.Background(), first.Revision, "review-reliability", 0, subject)
+		again, err := store.CaptureLensResult(context.Background(), first.Revision, "review-reliability", 0, subject, nil)
 		if err != nil {
 			t.Fatalf("identical resubmission: %v", err)
 		}
@@ -122,7 +122,7 @@ func TestCaptureLensResult_OneShotNoReopen(t *testing.T) {
 
 	t.Run("different subject hash for an already-captured lens is refused, not reopened", func(t *testing.T) {
 		differentSubject := NewLineageArtifactSubjectHash(first.Authority, "review-reliability-different-domain", 0)
-		if _, err := store.CaptureLensResult(context.Background(), first.Revision, "review-reliability", 0, differentSubject); err == nil {
+		if _, err := store.CaptureLensResult(context.Background(), first.Revision, "review-reliability", 0, differentSubject, nil); err == nil {
 			t.Fatal("recaptured an already-captured lens under a different subject hash; capture must be one-shot, no reopen")
 		}
 	})
@@ -147,9 +147,54 @@ func TestCaptureLensResult_RejectsNonReviewableStates(t *testing.T) {
 				t.Fatal(err)
 			}
 			subject := NewLineageArtifactSubjectHash(authority.Authority, "review-reliability", 0)
-			if _, err := store.CaptureLensResult(context.Background(), revision, "review-reliability", 0, subject); err == nil {
+			if _, err := store.CaptureLensResult(context.Background(), revision, "review-reliability", 0, subject, nil); err == nil {
 				t.Fatalf("captured against a %q authority, want refused", state)
 			}
 		})
+	}
+}
+
+// TestCaptureLensResult_PersistsFindingsForAdmission is C-E's unit-level
+// proof (Wave 5 fix cycle 3, verify-report #10186 cycle 2): findings
+// submitted with a capture are PERSISTED, not discarded, and
+// CapturedFindingEvidence flattens them into the exact shape
+// AdmitCandidateCausalFindings consumes -- reused, not duplicated.
+func TestCaptureLensResult_PersistsFindingsForAdmission(t *testing.T) {
+	store, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
+	subject := NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 0)
+	findings := []FindingEvidence{
+		{FindingID: "R3-boom-div-zero", Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "lib/boom.go:1"},
+	}
+
+	updated, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, subject, findings)
+	if err != nil {
+		t.Fatalf("CaptureLensResult with findings: %v", err)
+	}
+	if len(updated.Authority.CapturedResults) != 1 || len(updated.Authority.CapturedResults[0].Findings) != 1 ||
+		updated.Authority.CapturedResults[0].Findings[0].FindingID != "R3-boom-div-zero" {
+		t.Fatalf("captured findings = %#v, want the submitted finding persisted verbatim", updated.Authority.CapturedResults)
+	}
+	admitted, followUp := AdmitCandidateCausalFindings(updated.Authority.CapturedFindingEvidence())
+	if len(admitted) != 1 || admitted[0] != "R3-boom-div-zero" || len(followUp) != 0 {
+		t.Fatalf("AdmitCandidateCausalFindings(CapturedFindingEvidence()) = admitted=%v followUp=%v, want admitted=[R3-boom-div-zero] followUp=[]", admitted, followUp)
+	}
+}
+
+// TestCaptureLensResult_DifferentFindingsForSameLensIsConflictNotReopen
+// extends the one-shot guard (C-A) to findings (C-E): an already-captured
+// lens resubmitted with the SAME subject hash but DIFFERENT findings must
+// still refuse -- one-shot means the whole captured result is immutable,
+// not just the subject hash.
+func TestCaptureLensResult_DifferentFindingsForSameLensIsConflictNotReopen(t *testing.T) {
+	store, record := newLineageCaptureFixtureStore(t, []string{"review-reliability"})
+	subject := NewLineageArtifactSubjectHash(record.Authority, "review-reliability", 0)
+
+	first, err := store.CaptureLensResult(context.Background(), record.Revision, "review-reliability", 0, subject, nil)
+	if err != nil {
+		t.Fatalf("first capture (zero findings): %v", err)
+	}
+	differentFindings := []FindingEvidence{{FindingID: "late-finding", Class: EvidenceDeterministic, Causality: CausalIntroduced, Proof: "proof"}}
+	if _, err := store.CaptureLensResult(context.Background(), first.Revision, "review-reliability", 0, subject, differentFindings); err == nil {
+		t.Fatal("recaptured the same lens/subject-hash with different findings; capture must be one-shot for the whole result, not just the subject hash")
 	}
 }

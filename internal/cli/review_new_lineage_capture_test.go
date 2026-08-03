@@ -162,6 +162,140 @@ func TestReviewFacadeCaptureResultNewLineage_MediumTierFinalizeAllowsAllFiveGate
 	}
 }
 
+// TestReviewFacadeCaptureResultNewLineage_CandidateCausalBlockerEscalates is
+// CRITICAL-E's exact A/B repro, inverted (Wave 5 fix cycle 3, verify-report
+// #10186 cycle 2): `review capture-result` on a v3 lineage validated a
+// reviewer result's findings/evidence and then discarded the findings --
+// CaptureLensResult persisted only {Lens, Order, SubjectHash}, so a
+// reviewer-reported, deterministic, candidate-introduced BLOCKER never
+// reached AdmitCandidateCausalFindings, and finalize --captured-results
+// issued `approved` where the identical input escalates on the
+// --admission-findings channel. This test submits the identical BLOCKER
+// shape the verify report used (severity BLOCKER, evidence_class
+// deterministic, causal_disposition introduced) through the real capture
+// CLI and asserts finalize now escalates with the finding admitted -- the
+// SAME outcome (blocks) the v2/compact path reaches as correction_required
+// and the v3 --admission-findings channel already reached as escalated.
+func TestReviewFacadeCaptureResultNewLineage_CandidateCausalBlockerEscalates(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	const lineage = "candidate-causal-blocker-lineage"
+	started := startMediumTierNewLineage(t, repo, lineage)
+	lens := started.SelectedLenses[0]
+
+	var preflightOut bytes.Buffer
+	if err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", lineage, "--target", "unused-for-new-lineage",
+		"--lens", lens, "--order", "0", "--preflight",
+	}, &preflightOut); err != nil {
+		t.Fatalf("capture-result preflight: %v\n%s", err, preflightOut.String())
+	}
+	var preflight ReviewFacadeCaptureResultNewLineageResult
+	decodeStrictReviewJSON(t, preflightOut.Bytes(), &preflight)
+
+	inputPath := filepath.Join(t.TempDir(), "blocker.json")
+	payload := `{
+		"subject_hash": "` + preflight.SubjectHash + `",
+		"findings": [{
+			"id": "R3-boom-div-zero",
+			"lens": "` + lens + `",
+			"location": "lib/boom.go:1",
+			"severity": "BLOCKER",
+			"claim": "candidate introduces a division by zero",
+			"proof_refs": ["lib/boom.go:1"],
+			"evidence_class": "deterministic",
+			"causal_disposition": "introduced"
+		}],
+		"evidence": ["reviewed lib/boom.go and confirmed the divide-by-zero"]
+	}`
+	if err := os.WriteFile(inputPath, []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var captureOut bytes.Buffer
+	if err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", lineage, "--target", "unused-for-new-lineage",
+		"--lens", lens, "--order", "0", "--input", inputPath,
+	}, &captureOut); err != nil {
+		t.Fatalf("capture-result with a candidate-causal BLOCKER: %v\n%s", err, captureOut.String())
+	}
+
+	var finalizeOut bytes.Buffer
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--captured-results=true"}, &finalizeOut); err != nil {
+		t.Fatalf("finalize after capturing a candidate-causal BLOCKER: %v\n%s", err, finalizeOut.String())
+	}
+	var finalized ReviewFacadeFinalizeNewLineageResult
+	decodeStrictReviewJSON(t, finalizeOut.Bytes(), &finalized)
+	if finalized.State != reviewtransaction.NewLineageStateEscalated {
+		t.Fatalf("finalize after a captured candidate-causal BLOCKER = %q, want escalated (CRITICAL-E: a captured BLOCKER must not silently approve)", finalized.State)
+	}
+	if len(finalized.AdmittedFindingIDs) != 1 || finalized.AdmittedFindingIDs[0] != "R3-boom-div-zero" {
+		t.Fatalf("admitted_finding_ids = %v, want exactly [R3-boom-div-zero]", finalized.AdmittedFindingIDs)
+	}
+}
+
+// TestReviewFacadeCaptureResultNewLineage_NonCausalFindingDoesNotBlock is the
+// companion scenario: a captured finding whose causal_disposition is NOT
+// introduced/behavior-activated/worsened (matching --admission-findings'
+// own AdmitCandidateCausalFindings rules exactly, reused rather than
+// duplicated) is a follow-up, never a blocker -- captured findings must not
+// become MORE aggressive than the existing admission machinery already is.
+func TestReviewFacadeCaptureResultNewLineage_NonCausalFindingDoesNotBlock(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	const lineage = "non-causal-finding-lineage"
+	started := startMediumTierNewLineage(t, repo, lineage)
+	lens := started.SelectedLenses[0]
+
+	var preflightOut bytes.Buffer
+	if err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", lineage, "--target", "unused-for-new-lineage",
+		"--lens", lens, "--order", "0", "--preflight",
+	}, &preflightOut); err != nil {
+		t.Fatalf("capture-result preflight: %v\n%s", err, preflightOut.String())
+	}
+	var preflight ReviewFacadeCaptureResultNewLineageResult
+	decodeStrictReviewJSON(t, preflightOut.Bytes(), &preflight)
+
+	inputPath := filepath.Join(t.TempDir(), "pre-existing.json")
+	payload := `{
+		"subject_hash": "` + preflight.SubjectHash + `",
+		"findings": [{
+			"id": "pre-existing-finding",
+			"lens": "` + lens + `",
+			"location": "lib/legacy.go:1",
+			"severity": "WARNING",
+			"claim": "pre-existing issue, not introduced by this candidate",
+			"proof_refs": ["lib/legacy.go:1"],
+			"evidence_class": "deterministic",
+			"causal_disposition": "pre_existing"
+		}],
+		"evidence": ["reviewed lib/legacy.go"]
+	}`
+	if err := os.WriteFile(inputPath, []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var captureOut bytes.Buffer
+	if err := RunReviewCaptureResult([]string{
+		"--cwd", repo, "--lineage", lineage, "--target", "unused-for-new-lineage",
+		"--lens", lens, "--order", "0", "--input", inputPath,
+	}, &captureOut); err != nil {
+		t.Fatalf("capture-result with a pre-existing finding: %v\n%s", err, captureOut.String())
+	}
+
+	var finalizeOut bytes.Buffer
+	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--captured-results=true"}, &finalizeOut); err != nil {
+		t.Fatalf("finalize after capturing a pre-existing finding: %v\n%s", err, finalizeOut.String())
+	}
+	var finalized ReviewFacadeFinalizeNewLineageResult
+	decodeStrictReviewJSON(t, finalizeOut.Bytes(), &finalized)
+	if finalized.State != reviewtransaction.NewLineageStateApproved {
+		t.Fatalf("finalize after a captured pre-existing (non-causal) finding = %q, want approved (a follow-up must never block)", finalized.State)
+	}
+	if len(finalized.AdmittedFindingIDs) != 0 {
+		t.Fatalf("admitted_finding_ids = %v, want empty", finalized.AdmittedFindingIDs)
+	}
+}
+
 // TestReviewFacadeCaptureResultNewLineage_TierLowZeroResultsStillWorks pins
 // the non-regression: a tier-low v3 lineage (SelectedLenses is empty) still
 // finalizes with zero captured results -- the C-A fix must not require a
