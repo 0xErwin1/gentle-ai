@@ -20,6 +20,14 @@ type ContractID string
 
 const ContractWorkRoutingV1 ContractID = "gentle-ai.work-routing/v1"
 
+// ContractReviewTransportV1 is Wave 4 S4's transport capability claim
+// (design.md decision 5): the adapter self-declares whether it can carry
+// the receipt-driven-development review protocol at all, checked before any
+// review authority, tier, lens, budget, or collection slot exists. The
+// provider never probes a live runtime for this — an absent or unrecognised
+// claim fails closed.
+const ContractReviewTransportV1 ContractID = "gentle-ai.review-transport/v1"
+
 type ContractExposure string
 
 const (
@@ -90,7 +98,8 @@ type SDDProposalFacts struct {
 }
 
 type ContractClaims struct {
-	WorkRoutingV1 ContractClaim `json:"workRoutingV1"`
+	WorkRoutingV1     ContractClaim `json:"workRoutingV1"`
+	ReviewTransportV1 ContractClaim `json:"reviewTransportV1"`
 }
 
 type ContractClaim struct {
@@ -115,9 +124,31 @@ func ForAgent(agent model.AgentID) (AgentCapabilityManifest, error) {
 				ID:       ContractWorkRoutingV1,
 				Exposure: ContractExposureDormant,
 			},
+			ReviewTransportV1: ContractClaim{
+				ID:       ContractReviewTransportV1,
+				Exposure: reviewTransportExposureByAgent[agent],
+			},
 		},
 	}, nil
 }
+
+// reviewTransportExposureByAgent is the adapter's own self-declared
+// capability to carry the review protocol at all (design.md decision 5's
+// Wave-0 trace citation: "Pi declares only AutoInstall|SystemPrompt|MCP
+// today (no FileSubAgents, no Skills), so its lens transport is genuinely
+// unavailable"). Every other in-repo adapter advertises it; a map miss
+// (an agent with no entry) defaults to the Go zero value of
+// ContractExposure (""), which Advertises treats as not advertised —
+// the same fail-closed default the map's absence of a Pi override would
+// otherwise silently paper over.
+var reviewTransportExposureByAgent = func() map[model.AgentID]ContractExposure {
+	exposure := make(map[model.AgentID]ContractExposure, len(featureClaimsByAgent))
+	for agent := range featureClaimsByAgent {
+		exposure[agent] = ContractExposureAdvertised
+	}
+	exposure[model.AgentPi] = ContractExposureDormant
+	return exposure
+}()
 
 // MustForAgent is for compile-time registered adapters. A panic means the
 // factory and the canonical ACI registry have drifted.
@@ -171,6 +202,9 @@ func (m AgentCapabilityManifest) Advertises(contract ContractID) bool {
 	case ContractWorkRoutingV1:
 		return m.Contracts.WorkRoutingV1.ID == contract &&
 			m.Contracts.WorkRoutingV1.Exposure == ContractExposureAdvertised
+	case ContractReviewTransportV1:
+		return m.Contracts.ReviewTransportV1.ID == contract &&
+			m.Contracts.ReviewTransportV1.Exposure == ContractExposureAdvertised
 	default:
 		return false
 	}
