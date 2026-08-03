@@ -189,3 +189,54 @@ now makes one conditional call through its own door), and `internal/cli`'s
 remains a dormant, correctly-guarded boundary — not this wave's active call
 site, but still valid coverage for the `internal/cli` SDD surface's
 continued absence of direct offer/`ReviewCore` references.
+
+## Amendment (coordinator-resolved): decision 1 scope — Binding/BindingRevision retirement moves to Wave 7 (2026-08-03)
+
+S5c's `sdd-apply` batch traced every non-test caller of
+`RuntimeStatus.Binding`/`BindingRevision` (not just the symbol names decision
+1 and decision 2 already list) and found the literal "replace
+`BindingRevision`/`Binding *ReviewBinding`" line in decision 1 is not
+compile-safe as an atomic field removal, for two reasons neither decision 1
+nor decision 2 accounted for:
+
+1. `internal/cli/review_facade.go` calls `sddstatus.BindApprovedReview` as the
+   live `gentle-ai review bind-sdd` command — a production surface, not
+   scheduled for retirement by any Wave 4 task — which reads
+   `RuntimeStatus.Binding` through `bindPreparedReview`'s return value.
+2. `runtime_ledger.go`'s `Finish()` remediation-successor CAS and
+   `runtime_compact.go`'s `Settle()` form one coupled subsystem that both
+   reads `RuntimeStatus.Binding` (`validateRuntimeBoundCandidate`,
+   `runtimeSelfSuccessorAvailable`, `runtimeStrandedSuccessor`) **and**
+   writes a new one in the same compare-and-swap
+   (`ExpectedBindingRevision`/`SuccessorLineageID` as CAS inputs to
+   `applyRuntimeBindingEvent`). `SDDReceiptRef`'s deliberately two-field
+   shape (decision 1) has no analogue for "the successor lineage a
+   remediation attempt just bound" — inventing one here would be a
+   unilateral design decision, not an implementation detail.
+
+**Resolution**: receipt-based evaluation governs the archive-gate path in
+Wave 4. `RuntimeStatus.Binding`/`BindingRevision` remain the carrier for (a)
+the live `review bind-sdd` command and (b) the remediation-successor CAS
+subsystem (`runtime_ledger.go`'s `Finish()` + `runtime_compact.go`'s
+`Settle()`), whose `ExpectedBindingRevision`/`SuccessorLineageID` inputs have
+no `SDDReceiptRef` analogue by design. Their retirement belongs to Wave 7's
+consumer-first legacy deletion (its proposal's D4 already classifies
+ambiguous-vintage verbs, `bind-sdd` among them); Wave 4 records them in the
+Wave 7 deletion inventory instead of removing them.
+
+Concretely, this re-scopes decision 1/2/task 6.6-6.7/task 8.1 for Wave 4:
+
+- **6.6/6.7 (S5c', this batch)**: reroute only the archive-gate evaluation
+  path — `status.go`'s two `bindingPresent` branches plus
+  `applyReviewGateEvaluation` — onto `RuntimeStatus.Receipt`/
+  `ValidateSDDReceiptRef` (re-derivation, not a stored `GateContext`
+  comparison). `RuntimeStatus.Binding`/`BindingRevision`, `BindApprovedReview`
+  /`bind-sdd`, and the remediation-successor CAS subsystem stay untouched and
+  keep their existing tests.
+- **8.1 (S7)**: the deadcode ratchet is the arbiter — delete only the
+  `review_binding.go`/`runtime_ledger.go` entries S5c' actually orphans (no
+  caller left anywhere in the archive-gate path); anything `bindPreparedReview`
+  /`BindApprovedReview`/the remediation CAS still needs is kept and recorded,
+  one line each, in the Wave 7 deletion inventory
+  (Engram topic `sdd/rdd-root-simplification-wave7/deletion-inventory-w4-contributions`)
+  instead of deleted here.

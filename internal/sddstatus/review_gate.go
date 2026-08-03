@@ -332,21 +332,29 @@ type reviewAuthorityEvaluation struct {
 	Absent bool
 }
 
-func resolveCompactRemediationAuthority(ctx context.Context, repo, change string, bindingPresent, required bool, receiptPath, receiptContent string) *reviewtransaction.CompactState {
+// resolveCompactRemediationAuthority collapses the change's explicit
+// governing receipt (Wave 4 S5c') and the receipt-discovery fallback into
+// one CompactState resolution. When ref is non-nil, validity is a single
+// reviewtransaction.ValidateSDDReceiptRef re-derivation (no stored
+// AuthorityRevision pinning or GateContext comparison — the ref's own
+// receipt-hash identity plus a fresh gate evaluation is the whole check);
+// otherwise it falls back to resolveReviewAuthority's unrelated
+// discovery-based evaluation, unchanged.
+func resolveCompactRemediationAuthority(ctx context.Context, repo, change string, ref *reviewtransaction.SDDReceiptRef, required bool, receiptPath, receiptContent string) *reviewtransaction.CompactState {
 	if !required {
 		return nil
 	}
-	if bindingPresent {
-		binding, _, err := validateBoundReview(ctx, repo, change)
-		if err != nil {
+	if ref != nil {
+		result, _, err := reviewtransaction.ValidateSDDReceiptRef(ctx, repo, *ref)
+		if err != nil || result != reviewtransaction.GateAllow {
 			return nil
 		}
-		store, err := reviewtransaction.CompactAuthoritativeStore(ctx, repo, binding.Lineage)
+		store, err := reviewtransaction.CompactAuthoritativeStore(ctx, repo, ref.Lineage)
 		if err != nil {
 			return nil
 		}
 		record, err := store.Load()
-		if err != nil || record.Revision != binding.AuthorityRevision || record.State.State != reviewtransaction.StateApproved {
+		if err != nil || record.State.State != reviewtransaction.StateApproved {
 			return nil
 		}
 		return &record.State
@@ -356,6 +364,38 @@ func resolveCompactRemediationAuthority(ctx context.Context, repo, change string
 		return nil
 	}
 	return evaluation.CompactState
+}
+
+// resolveGoverningReceiptRef resolves the change's explicit governing
+// receipt reference for the archive-gate evaluation path (Wave 4 S5c',
+// design.md's decision-1 amendment, 2026-08-03). It reuses
+// loadEffectiveReviewBinding's existing native-then-legacy resolution
+// (RuntimeStatus.Binding, still populated only by the unchanged `review
+// bind-sdd` writer path, or the read-only legacy binding.json projection)
+// and derives the two-field SDDReceiptRef shape from it. It performs no new
+// I/O of its own and never writes anything; the underlying data source is
+// unchanged from before this slice, only the archive-gate's validity check
+// against it is rerouted (see resolveReviewAuthority/
+// resolveCompactRemediationAuthority's callers in status.go).
+//
+// It mirrors bindingExists's own resilience: a repository that cannot be
+// Git-resolved at all (pure planning/OpenSpec fixtures with no `.git`) has
+// structurally no native runtime authority to read, so that case answers
+// "no governing ref" rather than surfacing a resolution error — exactly
+// what bindingExists already did for the equivalent case.
+func resolveGoverningReceiptRef(ctx context.Context, repo, change string) (*reviewtransaction.SDDReceiptRef, error) {
+	if _, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx); err != nil {
+		return nil, nil
+	}
+	binding, err := loadEffectiveReviewBinding(ctx, repo, change)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	ref := reviewtransaction.SDDReceiptRef{Lineage: binding.Lineage, ReceiptHash: binding.ReceiptHash}
+	return &ref, nil
 }
 
 // errTerminalReceiptMissing distinguishes an empty terminal inventory from
