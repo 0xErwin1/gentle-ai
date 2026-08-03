@@ -1,0 +1,112 @@
+package reviewtransaction
+
+// Wave 5 (Gate Cutover), Slice 3: gateVerdict totality (task 4.1) and the
+// absorbed N2 per-gate precondition contract (task 4.7, PR0's "Absorbed
+// from Wave 3/4 Verification" section). Both are pure, unwired unit tests
+// against gateVerdict directly -- the function's own totality is a property
+// of the function, independent of which live call sites route through it
+// yet (design decision 1: legacy-through-algebra projection is a Slice 4
+// deliverable, so gateVerdict cannot be the sole source of truth for every
+// outcome until then).
+
+import "testing"
+
+var gateVerdictAllGates = []GateKind{GatePostApply, GatePreCommit, GatePrePush, GatePrePR, GateRelease}
+
+var gateVerdictAllRelations = []CandidateRelation{
+	ShadowRelationExact, ShadowRelationCompatibleBaseAdvance, ShadowRelationProvableContraction,
+	ShadowRelationChanged, ShadowRelationAmbiguous, ShadowRelationUnknown, ShadowRelationUnrelated,
+}
+
+// TestGateVerdict_TotalFunction_35Cells is task 4.1: every one of the
+// 5 gates x 7 relations = 35 pairings must resolve to a defined
+// (GateResult, GateNextStep), and every denial (non-allow) must name either
+// an executable Transition or a ReasonCode -- never a bare denial with
+// neither.
+func TestGateVerdict_TotalFunction_35Cells(t *testing.T) {
+	// A "healthy" context: BaseRelationshipValid true and Release populated,
+	// so the totality sweep exercises the relation table itself, not the
+	// absorbed N2 preconditions (those get their own dedicated test below).
+	healthy := GateContext{BaseRelationshipValid: true, Release: &ReleaseEvidence{
+		ReleaseTree: "tree", ConfigurationHash: hash("1"), GeneratedArtifactHash: hash("2"),
+		ProvenanceHash: hash("3"), PublicationBoundaryHash: hash("4"), PublicationState: PublicationStateSealed,
+		EvidenceFreshnessHash: hash("5"), EvidenceFreshnessState: EvidenceFreshnessCurrent,
+	}}
+	cells := 0
+	for _, gate := range gateVerdictAllGates {
+		for _, relation := range gateVerdictAllRelations {
+			cells++
+			context := healthy
+			context.Gate = gate
+			result, next := gateVerdict(gate, relation, context)
+			switch result {
+			case GateAllow, GateScopeChanged, GateInvalidated, GateEscalated:
+			default:
+				t.Fatalf("gate %q relation %q resolved to unrecognized GateResult %q", gate, relation, result)
+			}
+			if result != GateAllow && next.Transition == "" && next.ReasonCode == "" {
+				t.Fatalf("gate %q relation %q denial carries neither a Transition nor a ReasonCode (bare denial)", gate, relation)
+			}
+		}
+	}
+	if cells != 35 {
+		t.Fatalf("swept %d cells, want 35 (5 gates x 7 relations)", cells)
+	}
+}
+
+// TestGateVerdict_PerGatePreconditions_MatchLegacyValidateDerivedGate is the
+// absorbed N2 debt (task 4.7, PR0): gateVerdict must reproduce
+// validateDerivedGate's (receipt.go:279-321) per-gate precondition shape --
+// BaseRelationshipValid gated to pre-pr/release only, release evidence
+// gated to release only -- instead of newLineageGateEvaluation's uniform
+// continue->allow for every gate (review_governing_authority.go:240-261,
+// the exact gap N2 identified).
+func TestGateVerdict_PerGatePreconditions_MatchLegacyValidateDerivedGate(t *testing.T) {
+	completeRelease := &ReleaseEvidence{
+		ReleaseTree: "tree", ConfigurationHash: hash("1"), GeneratedArtifactHash: hash("2"),
+		ProvenanceHash: hash("3"), PublicationBoundaryHash: hash("4"), PublicationState: PublicationStateSealed,
+		EvidenceFreshnessHash: hash("5"), EvidenceFreshnessState: EvidenceFreshnessCurrent,
+	}
+
+	t.Run("BaseRelationshipValid=false denies at pre-pr and release, not the other three gates", func(t *testing.T) {
+		for _, gate := range gateVerdictAllGates {
+			context := GateContext{Gate: gate, BaseRelationshipValid: false, Release: completeRelease}
+			result, next := gateVerdict(gate, ShadowRelationExact, context)
+			wantDeny := gate == GatePrePR || gate == GateRelease
+			if wantDeny && result == GateAllow {
+				t.Fatalf("gate %q allowed an exact relation despite BaseRelationshipValid=false, want deny (validateDerivedGate parity)", gate)
+			}
+			if !wantDeny && result != GateAllow {
+				t.Fatalf("gate %q denied an exact relation solely because BaseRelationshipValid=false, want allow (only pre-pr/release gate on it) -- next=%#v", gate, next)
+			}
+		}
+	})
+
+	t.Run("compatible_base_advance relation exempts the BaseRelationshipValid precondition", func(t *testing.T) {
+		// Mirrors validateDerivedGate's own !compatibleAdvance exemption
+		// (receipt.go:304): a proven compatible base advance is exactly the
+		// case BaseRelationshipValid=false is EXPECTED to report, so the
+		// relation itself must still allow.
+		for _, gate := range []GateKind{GatePrePR, GateRelease} {
+			context := GateContext{Gate: gate, BaseRelationshipValid: false, Release: completeRelease}
+			result, _ := gateVerdict(gate, ShadowRelationCompatibleBaseAdvance, context)
+			if result != GateAllow {
+				t.Fatalf("gate %q denied a compatible_base_advance relation despite the exemption: %q", gate, result)
+			}
+		}
+	})
+
+	t.Run("release evidence absent or mismatched denies only at release", func(t *testing.T) {
+		for _, gate := range gateVerdictAllGates {
+			context := GateContext{Gate: gate, BaseRelationshipValid: true, Release: nil}
+			result, next := gateVerdict(gate, ShadowRelationExact, context)
+			wantDeny := gate == GateRelease
+			if wantDeny && result == GateAllow {
+				t.Fatalf("release gate allowed an exact relation with no release evidence, want deny")
+			}
+			if !wantDeny && result != GateAllow {
+				t.Fatalf("gate %q denied an exact relation solely because Release is nil, want allow (release evidence is release-only) -- next=%#v", gate, next)
+			}
+		}
+	})
+}
