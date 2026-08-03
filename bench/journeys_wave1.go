@@ -1022,20 +1022,29 @@ func requireDiscoveredArchivePremise(_ *Sandbox, observation Observation) error 
 	})(nil, observation)
 }
 
+// requireDiscoveredArchiveStatus asserts the enabled or disabled shape of a
+// discovered-and-invalidated archive authority. Corrective verify cycle
+// CRITICAL-1 (rdd-post-verify-review-offer's "Kill-Switch-Off Is Structural
+// Absence" requirement): the disabled branch previously required a populated
+// "disabled/unmanaged" disposition; it now requires reviewGate's structural
+// ABSENCE instead -- no field, no ceremony, archive unfailable on review
+// grounds. The enabled branch is untouched.
 func requireDiscoveredArchiveStatus(disabled bool) func(*Sandbox, Observation) error {
 	return sddStatusAssertion("discovered invalidated archive authority", func(status sddStatusV1) error {
+		if disabled {
+			if status.ReviewGate != nil {
+				return fmt.Errorf("disabled reviewGate = %+v, want structural absence", status.ReviewGate)
+			}
+			if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
+				return fmt.Errorf("disabled archive=%q next=%q, want ready/archive", status.Dependencies.Archive, status.NextRecommended)
+			}
+			return nil
+		}
 		if status.ReviewGate == nil || status.ReviewGate.Result != "invalidated" {
 			return fmt.Errorf("reviewGate = %+v, want invalidated", status.ReviewGate)
 		}
 		if !strings.Contains(status.ReviewGate.Reason, "review receipt was invalidated") {
 			return fmt.Errorf("reviewGate.reason = %q, want the discovered authority reason", status.ReviewGate.Reason)
-		}
-		if disabled {
-			if status.ReviewGate.Delivery != deliveryDisabledUnmanaged || status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
-				return fmt.Errorf("disabled gate=%+v archive=%q next=%q, want invalidated disabled/unmanaged ready/archive",
-					status.ReviewGate, status.Dependencies.Archive, status.NextRecommended)
-			}
-			return nil
 		}
 		if status.ReviewGate.Delivery != "" || status.Dependencies.Archive != "blocked" || status.NextRecommended != "resolve-review" {
 			return fmt.Errorf("enabled gate=%+v archive=%q next=%q, want invalidated blocked/resolve-review",
@@ -1053,23 +1062,35 @@ func writeExplicitInvalidArchiveReceipt(sandbox *Sandbox) error {
 	return sandbox.write(filepath.Join(sddChangeRoot(sandbox), "reviews", "receipt.json"), "{\n")
 }
 
-func requireExplicitInvalidArchiveStatus(_ *Sandbox, observation Observation) error {
-	return sddStatusAssertion("explicit invalid archive authority", func(status sddStatusV1) error {
-		if status.ReviewGate == nil || status.ReviewGate.Result != "invalidated" || status.ReviewGate.Delivery != "" {
-			return fmt.Errorf("reviewGate = %+v, want explicit invalidated without disabled delivery", status.ReviewGate)
+// requireDisabledExplicitInvalidReceiptIsIgnored asserts the corrective
+// verify cycle's CRITICAL-1 line: the ratified "zero review code MUST
+// execute on any SDD path" requirement carries no carve-out for an explicit
+// review artifact either. Superseded expectation (documented, not silently
+// dropped): this journey previously required an explicit invalid receipt to
+// still fail closed while disabled ("declining is not the same as blessing
+// content it never validated"); that narrower contract predates this wave's
+// ratified requirement, which is unconditional -- while off, the explicit
+// receipt is never even read, so its invalidity has no bearing.
+func requireDisabledExplicitInvalidReceiptIsIgnored(_ *Sandbox, observation Observation) error {
+	return sddStatusAssertion("disabled explicit invalid archive authority is never read", func(status sddStatusV1) error {
+		if status.ReviewGate != nil {
+			return fmt.Errorf("reviewGate = %+v, want structural absence while the kill switch is off", status.ReviewGate)
 		}
-		if !strings.Contains(status.ReviewGate.Reason, "invalid or non-terminal") || status.Dependencies.Archive != "blocked" || status.NextRecommended != "resolve-review" {
-			return fmt.Errorf("explicit gate=%+v archive=%q next=%q, want fail-closed blocked/resolve-review",
-				status.ReviewGate, status.Dependencies.Archive, status.NextRecommended)
+		if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" {
+			return fmt.Errorf("disabled explicit-invalid-receipt archive=%q next=%q, want ready/archive",
+				status.Dependencies.Archive, status.NextRecommended)
 		}
 		return nil
 	})(nil, observation)
 }
 
+// requireDisabledUnmanagedArchiveStatus asserts the kill-switch-off shape at
+// sdd-status. Corrective verify cycle CRITICAL-1: reviewGate is now
+// structurally absent, not a populated non-authorizing disposition.
 func requireDisabledUnmanagedArchiveStatus(name string) func(*Sandbox, Observation) error {
 	return sddStatusAssertion(name, func(status sddStatusV1) error {
-		if status.ReviewGate == nil || status.ReviewGate.Delivery != deliveryDisabledUnmanaged || status.ReviewGate.Result == "allow" {
-			return fmt.Errorf("reviewGate = %+v, want non-authorizing disabled/unmanaged delivery", status.ReviewGate)
+		if status.ReviewGate != nil {
+			return fmt.Errorf("reviewGate = %+v, want structural absence while the kill switch is off", status.ReviewGate)
 		}
 		if status.Dependencies.Archive != "ready" || status.NextRecommended != "archive" || len(status.BlockedReasons) != 0 {
 			return fmt.Errorf("archive=%q next=%q blocked=%v, want ready/archive with no blockers",
@@ -1316,8 +1337,8 @@ func waveOneJourneys() []Journey {
 					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDiscoveredArchiveStatus(false)},
 				{Name: "fixture: write an explicit invalid receipt", Fixture: writeExplicitInvalidArchiveReceipt},
 				{Name: "mode disable with explicit receipt", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
-				{Name: "disabled explicit invalid receipt still blocks", Requires: sddStatusCapability,
-					Args: productArgs("sdd-status", sddChange, "--json"), After: requireExplicitInvalidArchiveStatus},
+				{Name: "disabled explicit invalid receipt is never read", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDisabledExplicitInvalidReceiptIsIgnored},
 				{Name: "authority remained approved at its original revision", Fixture: proveArchiveAuthorityUnchanged},
 			},
 		},
