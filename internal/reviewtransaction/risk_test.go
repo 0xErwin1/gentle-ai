@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -110,6 +111,47 @@ func TestNativeReviewAuthorityPathsEmitCanonicalAuthHotPath(t *testing.T) {
 			got, err := ClassifyRisk(RiskInput{Stats: []DiffStat{{Path: tt.path, Additions: 1}}})
 			if err != nil || got != want {
 				t.Fatalf("ClassifyRisk(%q) = %q, %v; want %q", tt.path, got, err, want)
+			}
+		})
+	}
+}
+
+// TestWebhookPathsEmitSecurityHotPath proves a webhook path is security
+// evidence: webhook handlers own signature verification, credential handling,
+// and authorization boundaries, so they must reach focused 4R.
+func TestWebhookPathsEmitSecurityHotPath(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		path     string
+		security bool
+	}{
+		{path: "backend/app/api/routes/meta_webhook.py", security: true},
+		{path: "internal/webhook/handler.go", security: true},
+		{path: "src/webhook-dispatcher.ts", security: true},
+		{path: "internal/ui/view.go"},
+		{path: "docs/guide.md"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			t.Parallel()
+			signals := hotPathRiskSignals(tt.path)
+			if got := slices.Contains(signals, SignalSecurity); got != tt.security {
+				t.Fatalf("hotPathRiskSignals(%q) = %v, security = %t", tt.path, signals, tt.security)
+			}
+			if !tt.security {
+				return
+			}
+			want := []RiskReason{{Code: RiskReasonHotPath, Signal: SignalSecurity, Path: tt.path}}
+			if got := deriveSnapshotRiskReasons([]DiffStat{{Path: tt.path, Additions: 1}}, nil); !reflect.DeepEqual(got, want) {
+				t.Fatalf("deriveSnapshotRiskReasons(%q) = %#v, want %#v", tt.path, got, want)
+			}
+			level, err := ClassifyRisk(RiskInput{Stats: []DiffStat{{Path: tt.path, Additions: 1}}})
+			if err != nil || level != RiskHigh {
+				t.Fatalf("ClassifyRisk(%q) = %q, %v; want %q", tt.path, level, err, RiskHigh)
+			}
+			lenses, err := SelectReviewLenses(RiskAssessment{Level: level}, "risk")
+			if err != nil || !reflect.DeepEqual(lenses, supportedLenses) {
+				t.Fatalf("SelectReviewLenses(%q) = %v, %v; want canonical 4R %v", tt.path, lenses, err, supportedLenses)
 			}
 		})
 	}
