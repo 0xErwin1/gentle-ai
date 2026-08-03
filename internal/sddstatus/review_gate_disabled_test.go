@@ -494,3 +494,89 @@ func TestDisabledStaleEvidenceNeverConsultsReviewAuthority(t *testing.T) {
 		t.Fatalf("disabled stale-evidence NextRecommended = %q, want verify (not resolve-review)", status.NextRecommended)
 	}
 }
+
+// The two tests below close corrective verify cycle 4's W-a: cycle 3's
+// CRITICAL-B fix gated three sibling review-authority paths behind
+// !reviewDisabled, but only gate 1 (staleAllowAuthority) had a covering
+// test -- stripping gate 2 (resolveCompactRemediationAuthority) or gate 3
+// (the governingRef!=nil ValidateSDDReceiptRef branch) left the whole
+// suite green. Both now have a dedicated regression test whose failure
+// mode is observable behavior, not a mock call count.
+
+// failingCompactVerifyEnvelope is boundedVerifyEnvelope's shape with one
+// blocker, so verifyResult.Passing is false (remediationRequired's own
+// precondition) without disturbing anything else parseVerifyResult checks.
+func failingCompactVerifyEnvelope(revision string) string {
+	return strings.Replace(boundedVerifyEnvelope(revision, "fail"), "blockers: 0", "blockers: 1", 1)
+}
+
+// TestDisabledRemediationNeverConsultsCompactAuthority closes gate 2. The
+// fixture has NO governingRef (no bind-sdd) and a FAILING verify report, so
+// remediationRequired is true; resolveCompactRemediationAuthority's own
+// discovery fallback (ref == nil) would find the approved, change-bound
+// compact authority and hand resolveBoundedRemediation a non-nil
+// CompactState -- observable as Required=true, a populated LineageID, and a
+// reason naming "bounded compact remediation". With the switch off, gate 2
+// must never call resolveReviewAuthority/discoverNativeReceipts at all, so
+// remediation falls through to the generic "no transaction, no compact
+// authority" reason instead, with no LineageID.
+func TestDisabledRemediationNeverConsultsCompactAuthority(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	write(t, filepath.Join(changeRoot, "specs", "auth", "spec.md"), "### Requirement: Auth\n#### Scenario: Valid login\n")
+	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "approved-thin")
+	write(t, filepath.Join(changeRoot, "verify-report.md"), failingCompactVerifyEnvelope(shaID("f")))
+
+	enabled, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if !enabled.RemediationState.Required || enabled.RemediationState.LineageID != "approved-thin" {
+		t.Fatalf("fixture is wrong: enabled RemediationState = %#v, want required with LineageID approved-thin (the discoverable compact authority)", enabled.RemediationState)
+	}
+	if !strings.Contains(enabled.RemediationState.Reason, "bounded compact remediation") {
+		t.Fatalf("fixture is wrong: enabled RemediationState.Reason = %q, want it to name compact remediation", enabled.RemediationState.Reason)
+	}
+
+	disabled, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", ReviewDisabled: true})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if disabled.RemediationState.LineageID != "" {
+		t.Fatalf("disabled RemediationState.LineageID = %q, want empty -- the compact authority was never consulted", disabled.RemediationState.LineageID)
+	}
+	if strings.Contains(disabled.RemediationState.Reason, "bounded compact remediation") {
+		t.Fatalf("disabled RemediationState.Reason = %q, wrongly names compact remediation despite the switch being off", disabled.RemediationState.Reason)
+	}
+}
+
+// TestDisabledArchiveGateNeverValidatesAnExplicitGoverningReceipt closes
+// gate 3. The fixture has a genuine governingRef (an explicit `review
+// bind-sdd` binding) that validates GateAllow when consulted -- with the
+// switch off, gate 3 must never call ValidateSDDReceiptRef at all, so
+// status.ReviewGate stays structurally absent instead of becoming a
+// populated Allow disposition.
+func TestDisabledArchiveGateNeverValidatesAnExplicitGoverningReceipt(t *testing.T) {
+	root := t.TempDir()
+	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "approved-thin")
+	if _, err := BindApprovedReview(context.Background(), root, "thin", "approved-thin", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	enabled, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if enabled.ReviewGate == nil || enabled.ReviewGate.Result != reviewtransaction.GateAllow {
+		t.Fatalf("fixture is wrong: enabled ReviewGate = %#v, want a bound allow", enabled.ReviewGate)
+	}
+
+	disabled, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin", ReviewDisabled: true})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if disabled.ReviewGate != nil {
+		t.Fatalf("disabled ReviewGate = %#v, want structural absence -- the bound governing receipt was never validated", disabled.ReviewGate)
+	}
+}
