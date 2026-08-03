@@ -934,6 +934,56 @@ func TestBackupTargetsEngramClaudeIncludeRegistryAndLegacyMigrationSource(t *tes
 	}
 }
 
+func TestBackupTargetsClaudeContext7IncludeCleanupWithoutVerificationRequirement(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		scope         InstallScope
+		sameWorkspace bool
+		wantRoot      string
+	}{
+		{name: "user scope", scope: ScopeGlobal, wantRoot: "home"},
+		{name: "workspace scope", scope: ScopeWorkspace, wantRoot: "workspace"},
+		{name: "workspace is home", scope: ScopeWorkspace, sameWorkspace: true, wantRoot: "home"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			workspace := t.TempDir()
+			if tc.sameWorkspace {
+				workspace = home
+			}
+			selection := model.Selection{
+				Agents:     []model.AgentID{model.AgentClaudeCode},
+				Components: []model.ComponentID{model.ComponentContext7},
+			}
+			resolved := planner.ResolvedPlan{Agents: selection.Agents, OrderedComponents: selection.Components}
+			adapters := resolveAdapters(selection.Agents)
+
+			targets := backupTargets(home, workspace, tc.scope, selection, resolved)
+			root := home
+			if tc.wantRoot == "workspace" {
+				root = workspace
+			}
+			wantSettings := adapters[0].SettingsPath(root)
+			if !containsPath(targets, wantSettings) {
+				t.Fatalf("backupTargets missing cleanup path %q; targets=%v", wantSettings, targets)
+			}
+
+			verificationPaths := componentPathsWithWorkspaceScoped(home, workspace, tc.scope, selection, adapters, model.ComponentContext7)
+			if containsPath(verificationPaths, wantSettings) {
+				t.Fatalf("component verification must not require best-effort cleanup path %q; paths=%v", wantSettings, verificationPaths)
+			}
+
+			otherRoot := workspace
+			if root == workspace {
+				otherRoot = home
+			}
+			if !tc.sameWorkspace && containsPath(targets, adapters[0].SettingsPath(otherRoot)) {
+				t.Fatalf("backupTargets selected the wrong scope's cleanup path; targets=%v", targets)
+			}
+		})
+	}
+}
+
 func TestBackupTargetsContainNoDuplicatePaths(t *testing.T) {
 	home := t.TempDir()
 	agentIDs := []model.AgentID{model.AgentClaudeCode, model.AgentOpenCode, model.AgentKimi}

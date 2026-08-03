@@ -565,6 +565,7 @@ func TestInjectClaudeSettingsInertBlockCleanup(t *testing.T) {
 		{"managed-only block is removed", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]}}}`, true},
 		{"foreign block is left alone", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]},"stranded":{"command":"stranded-server"}}}`, false},
 		{"user-authored context7 is left alone", `{"theme":"dark","mcpServers":{"context7":{"command":"my-own-proxy"}}}`, false},
+		{"empty block is left alone", `{"theme":"dark","mcpServers":{}}`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -650,6 +651,23 @@ func TestInjectClaudeWorkspaceWritesMCPJSONAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestInjectClaudeWorkspacePreservesMCPReadErrors(t *testing.T) {
+	home := t.TempDir()
+	workspace := t.TempDir()
+	mcpPath := filepath.Join(workspace, ".mcp.json")
+	if err := os.Mkdir(mcpPath, 0o755); err != nil {
+		t.Fatalf("Mkdir(.mcp.json) error = %v", err)
+	}
+
+	_, err := Inject(home, workspace, claudeAdapter())
+	if err == nil {
+		t.Fatal("Inject() error = nil; want non-not-exist read error")
+	}
+	if !strings.Contains(err.Error(), mcpPath) {
+		t.Fatalf("Inject() error = %v; want path %q", err, mcpPath)
+	}
+}
+
 // TestInjectClaudeWorkspacePreservesUnrelatedServersAndConfig verifies that
 // merging context7 into <project-root>/.mcp.json preserves user-authored
 // servers and top-level config outside the managed entry (issue #2213).
@@ -710,6 +728,7 @@ func TestInjectClaudeWorkspaceCleansInertSettingsBlock(t *testing.T) {
 	}{
 		{"managed-only block is removed", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]}}}`, true},
 		{"foreign block is left alone", `{"theme":"dark","mcpServers":{"context7":{"command":"npx","args":["--","context7-mcp"]},"stranded":{"command":"stranded-server"}}}`, false},
+		{"empty block is left alone", `{"theme":"dark","mcpServers":{}}`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

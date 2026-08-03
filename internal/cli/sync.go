@@ -579,6 +579,11 @@ func syncBackupTargets(homeDir, workspaceDir string, selection model.Selection, 
 		for _, path := range syncComponentPathsWithWorkspace(homeDir, workspaceDir, selection, adapters, component) {
 			paths[path] = struct{}{}
 		}
+		if component == model.ComponentContext7 {
+			for _, path := range claudeMCPSettingsCleanupPaths(homeDir, workspaceDir, ScopeGlobal, adapters) {
+				paths[path] = struct{}{}
+			}
+		}
 		if component == model.ComponentEngram {
 			for _, adapter := range adapters {
 				if adapter.Agent() == model.AgentClaudeCode {
