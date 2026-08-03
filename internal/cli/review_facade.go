@@ -1615,6 +1615,16 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		}
 		return err
 	}
+	// Wave 3 Slice 3 activation branch (design decision 5): every input this
+	// call needs — snapshot, risk assessment, tier, lenses, and the fact that
+	// authorizeReviewStart already returned nil (consent granted, or tier 0's
+	// carve-out) — was already computed by the exact same reused code the
+	// legacy branch below still uses unchanged. GENTLE_AI_RDD_NEW_LINEAGE
+	// unset or empty (the default) never reaches this branch at all, so the
+	// legacy start path stays byte-identical.
+	if reviewtransaction.NewLineageActivationEnabled() {
+		return runReviewFacadeStartNewLineage(ctx, stdout, root, strings.TrimSpace(*lineage), strings.TrimSpace(*policySource), snapshot, assessment, changedLines, lenses)
+	}
 	explicitLineage := strings.TrimSpace(*lineage) != ""
 	if !explicitLineage {
 		*lineage = reviewDerivedStartLineage(snapshot.Identity)
