@@ -79,18 +79,17 @@ func TestSDDStatusReEnableSequenceLandsOnTheFreshFullReview(t *testing.T) {
 	writeSDDStatusFile(t, root+"/docs/unmanaged-two.md", "# two\n\nplain prose, delivered while disabled.\n")
 	commitAllSDDStatus(t, root, "unmanaged delivery two")
 
-	// The disabled window records the change as unmanaged: the stale baseline
-	// receipt no longer governs anything, and declining to manage is not a
-	// blocker demanding a review the switch refuses to run.
+	// The disabled window proceeds unmanaged: the stale baseline receipt is
+	// never even consulted (corrective verify cycle CRITICAL-1 — structural
+	// absence, not a populated disabled/unmanaged disposition), and
+	// declining to manage is not a blocker demanding a review the switch
+	// refuses to run.
 	disabled := resolveSDDStatusJSON(t, root)
 	if disabled.Dependencies.Archive == sddstatus.DependencyBlocked {
 		t.Fatalf("disabled archive over a stale receipt = blocked; reasons = %v", disabled.BlockedReasons)
 	}
-	if disabled.ReviewGate == nil || disabled.ReviewGate.Delivery != reviewtransaction.RDDDeliveryDisabledUnmanaged {
-		t.Fatalf("disabled window did not record the unmanaged disposition: %#v", disabled.ReviewGate)
-	}
-	if disabled.ReviewGate.Result == reviewtransaction.GateAllow {
-		t.Fatalf("disabled window fabricated an approval: %#v", disabled.ReviewGate)
+	if disabled.ReviewGate != nil {
+		t.Fatalf("disabled window produced a review gate instead of structural absence: %#v", disabled.ReviewGate)
 	}
 
 	// Re-enable. The archive stop must come back, and it must name the fresh

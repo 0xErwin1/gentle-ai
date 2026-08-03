@@ -403,40 +403,38 @@ func resolveGoverningReceiptRef(ctx context.Context, repo, change string) (*revi
 // a message to match on so the empty-inventory reason can name a fresh review.
 var errTerminalReceiptMissing = errors.New("terminal review receipt is missing")
 
-// reviewGateDisabledUnmanagedReason names the situation before the mechanism:
-// what governs this change comes first, and the reason the gate could not
-// govern stays appended behind it so no information is destroyed.
-const reviewGateDisabledUnmanagedReason = "receipt-driven development is disabled, so no review governs this change; it closes under ordinary repository policy rather than under a review receipt"
-
+// applyReviewGate is SDD's one entry point into review authority discovery.
+// Corrective verify cycle CRITICAL-1 (rdd-post-verify-review-offer's "Kill-
+// Switch-Off Is Structural Absence" requirement, ratified text: "When the RDD
+// kill switch is OFF, zero review code MUST execute on any SDD path: no
+// offer, no status consultation, no disabled/unmanaged ceremony capable of
+// failing or blocking" and "archive consults no reviewGate structured status
+// ... archive cannot fail or block for review reasons"): the kill-switch
+// check happens ONCE, here, before any authority read — mirroring
+// applyReviewOfferRouting's and applyTargetedReVerifyRouting's own early-
+// return shape. While disabled, resolveReviewAuthority/discoverNativeReceipts
+// never run (no repository walk), status.ReviewGate stays nil (structural
+// absence, no disabled/unmanaged ceremony), and Dependencies.Archive is never
+// touched here, so it can never be review-blocked while the switch is off.
+// This removes the previous behavior of still validating an explicit review
+// artifact while disabled: the ratified requirement carries no such
+// carve-out ("zero review code" is unconditional), superseding the earlier,
+// narrower ReviewDisabled contract.
 func applyReviewGate(
 	status *Status,
 	repo string,
 	receiptPath, receiptContent string,
 	reviewDisabled bool,
 ) {
-	if status.Dependencies.Verify != DependencyAllDone || !status.TaskProgress.AllComplete {
+	if reviewDisabled || status.Dependencies.Verify != DependencyAllDone || !status.TaskProgress.AllComplete {
 		return
 	}
-	applyReviewGateEvaluation(status, resolveReviewAuthority(context.Background(), repo, receiptPath, receiptContent, ""), reviewDisabled)
+	applyReviewGateEvaluation(status, resolveReviewAuthority(context.Background(), repo, receiptPath, receiptContent, ""))
 }
 
-func applyReviewGateEvaluation(status *Status, evaluation reviewAuthorityEvaluation, reviewDisabled bool) {
+func applyReviewGateEvaluation(status *Status, evaluation reviewAuthorityEvaluation) {
 	if evaluation.Result == reviewtransaction.GateAllow {
 		status.ReviewGate = &ReviewGateState{Result: evaluation.Result, Reason: evaluation.Reason}
-		return
-	}
-	// With the kill switch off the archive gate has no say in whether this
-	// change may close: it would demand a terminal receipt that review/start is
-	// refused from producing, which is a deadlock, not a safeguard. Only the
-	// implicit demand goes away — an explicit review artifact that failed
-	// validation still blocks below. Re-enabling re-validates from the current
-	// state, because the next enforcement point rediscovers it on its own.
-	if reviewDisabled && evaluation.Absent {
-		status.ReviewGate = &ReviewGateState{
-			Result:   evaluation.Result,
-			Reason:   fmt.Sprintf("%s: %s", reviewGateDisabledUnmanagedReason, evaluation.Reason),
-			Delivery: reviewtransaction.RDDDeliveryDisabledUnmanaged,
-		}
 		return
 	}
 	blockReviewGate(status, evaluation.Result, evaluation.Reason)
