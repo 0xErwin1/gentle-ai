@@ -71,6 +71,8 @@ func projectLegacyAuthority(chain ValidatedChain, artifacts facadeArtifacts) (Ca
 func gateVerdict(gate GateKind, relation CandidateRelation) (GateResult, GateNextStep) // total function
 ```
 
+**Amendment (Slice 3 implementation, documented per the PR0/Slice 2 precedent):** `gateVerdict`'s shipped signature is `gateVerdict(gate GateKind, relation CandidateRelation, context GateContext) (GateResult, GateNextStep)` — a disclosed, additive extension of the two-argument sketch above. The literal two-argument signature cannot express a per-gate boundary precondition at all, and the absorbed N2 debt (task 4.7, closed this slice) specifically requires `gateVerdict` to consult `BaseRelationshipValid`/`Release` — fields that live on `GateContext`, not on `gate`/`relation` alone. `Result`/`Next` stay the same two return values; only one additional input parameter was added, and only to carry information the function already needed to be total and correct.
+
 ## Testing Strategy
 
 | Layer | What to Test | Approach |
