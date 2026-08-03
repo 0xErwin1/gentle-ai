@@ -121,8 +121,9 @@ Chained on the Wave 3 branch (`auto-chain`, feature-branch chain); ≤1000 autho
 ## Open Questions
 
 - [ ] Wave 3 is **not yet on `main`** — `internal/reviewtransaction/review_offer.go`, `review_core.go`, and `authority_store.go` do not exist at `d591f4cf`. Wave 4 cannot start until Wave 3's branch lands; confirm the chain base before `sdd-tasks` forecasts.
-- [ ] The OpenCode plugin's session-scoped admission-recovery budget (CON-09) is consumer-owned recovery state. Confirm the provider absorbs it in this wave rather than Wave 5, since removing it without a provider-side replacement loses a real relaunch bound.
+- [x] The OpenCode plugin's session-scoped admission-recovery budget (CON-09) is consumer-owned recovery state. **Resolved (coordinator ruling, 2026-08-03, task 8.5)**: the provider-side replacement is DEFERRED, not built this wave — either to Wave 5's entry (the gates-cutover work owns the admission flow) or to Wave 7 (if the plugin's whole legacy consumption retires there instead). Recorded explicitly rather than silently dropped; see the Wave 7 deletion-inventory Engram note for the exact loss being deferred.
 - [x] `internal/assets/*/commands/sdd-apply.md` pins contract `gentle-ai.review-integration/v1` while the orchestrator contract is `/v2`. Resolved: corrected in S1 (cross-slice fix, CI-exact-head rule), not S7.
+- [ ] Whether `SDDReceiptRef`/the compact receipt schema should carry correction-path data, so targeted re-verify's branch 7.2 ("not reliably derivable") stops being the general case, is left open for Wave 5 or Wave 7 — explicitly out of scope for this amendment (see "Amendment (coordinator-resolved): targeted re-verify call site").
 
 ## Amendment (orchestrator-resolved): decision 3 call site (2026-08-03)
 
@@ -240,3 +241,63 @@ Concretely, this re-scopes decision 1/2/task 6.6-6.7/task 8.1 for Wave 4:
   one line each, in the Wave 7 deletion inventory
   (Engram topic `sdd/rdd-root-simplification-wave7/deletion-inventory-w4-contributions`)
   instead of deleted here.
+
+## Amendment (coordinator-resolved): targeted re-verify call site (2026-08-03)
+
+S6's `sdd-apply` batch found tasks 7.1-7.4's call site genuinely
+underspecified in the same way decision 3's originally-named call site was:
+design.md's own "correction changed paths ∩ verify evidence scope" language
+names no owner, and no existing code bridges a review's own bounded
+correction to SDD's runtime-attempt tracking. Escalated rather than invented.
+The coordinator resolved it consistently with the decision-3 amendment's own
+precedent:
+
+**Targeted re-verify is a routing decision owned by `internal/sddstatus`'s
+`Resolve()` (and `resolveEngramStatus()` symmetrically) — the routing
+surface owns integration, the orchestrator consumes it,
+`RunSDDVerifyValidate` stays context-free**, exactly mirroring decision 3's
+"the offer routes through the native SDD status/dispatcher surface instead"
+resolution.
+
+1. When the change's governing receipt (S5c''s `resolveGoverningReceiptRef`
+   path) records an applied correction, `Resolve()` computes
+   correction-changed-paths against the runtime objective's verify evidence
+   scope and emits a re-verify routing block —
+   `Status.ReVerify *ReVerifyBlock{Mode: "targeted"|"full", Scope []string,
+   Reason string}` — following the same `omitempty`/structural-absence
+   pattern `Status.ReviewOffer` already established (S3b).
+2. Branch semantics exactly per tasks 7.1-7.3, the three distinct cases the
+   Threat Matrix's "Commit state" row already names and Wave 4's own design
+   text forbids conflating:
+   - Empty intersection (correction paths ∩ verify evidence scope is empty)
+     ⇒ `Mode: "targeted"`, re-run only the objective's evidence goal.
+   - Changed-path set not reliably derivable — including a governing receipt
+     that carries no correction-path data at all, which is the common case
+     until a future wave extends the receipt schema (see Open Questions
+     below) ⇒ `Mode: "full"`, re-verify the objective's entire evidence goal.
+     Never conflated with the empty-intersection branch: the reason string
+     names which of the two applies.
+   - Empty index / unborn HEAD (the commit state itself cannot be read) ⇒
+     fail closed — no routing block emitted, the pre-existing native runtime
+     error routing governs instead (mirrors `applyNativeRuntimeErrorRouting`'s
+     existing fail-closed shape for corrupt/unreadable authority).
+3. No correction recorded ⇒ no block emitted at all — structural absence,
+   the same guard pattern the offer block (`Status.ReviewOffer`) already
+   proved (Go-value nil, `omitempty` keeps the key off the wire).
+4. The orchestrator-facing prose (task 8.6) instructs running `sdd-verify`
+   with the block's stated scope before archive, mirroring how the offer
+   block's `Invocation` field already names the exact follow-up command.
+
+**Explicitly out of scope for this amendment**: extending `SDDReceiptRef` or
+the compact receipt schema to carry correction-path data. If the governing
+receipt genuinely cannot carry correction paths today — which S6's own
+investigation expects to be the general case — that is exactly what branch
+7.2 ("not reliably derivable") is for, not a reason to widen the receipt
+shape mid-wave. Carrying correction-path data on the receipt (or elsewhere)
+is noted here as an open question for Wave 5 or Wave 7 to pick up, not
+resolved now.
+
+This amendment supersedes the Threat Matrix's "Commit state" row only to the
+extent of naming the owning package (`internal/sddstatus`, not a bare
+"targeted re-verify" with no home); the three-branch semantics themselves
+are unchanged from the original design text.
