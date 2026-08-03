@@ -1,6 +1,6 @@
 // Package reviewtransaction — differential matrix (Wave 1, Slice 6). This is
 // Wave 1's exit evidence (spec.md "Differential Matrix Exit Evidence"): it
-// compares the shadow relation algebra (shadowRelate, seven values,
+// compares the shadow relation algebra (relateCandidates, seven values,
 // shadow_relation.go) against the live classifier (classifyCompactTargetRelation,
 // five values, compact_target_relation.go) over a covering-array corpus
 // spanning all four selectors, all seven shadow relations, base movement,
@@ -65,7 +65,7 @@ type shadowMatrixCase struct {
 	// ShadowUnavailable simulates a resolver-level failure that produces no
 	// ShadowRelation at all (the "no-shadow-decision" bucket): the shadow
 	// identity resolver could not even produce a candidate to feed
-	// shadowRelate, unlike a legitimate ambiguous/unknown output.
+	// relateCandidates, unlike a legitimate ambiguous/unknown output.
 	ShadowUnavailable bool
 	ShadowInput       shadowRelationInput
 
@@ -104,7 +104,7 @@ func evaluateShadowMatrixCase(c shadowMatrixCase) shadowMatrixRow {
 		return row
 	}
 
-	shadowResult := shadowRelate(c.ShadowInput)
+	shadowResult := relateCandidates(c.ShadowInput)
 	row.ShadowRelation = shadowResult
 
 	if shadowRelationHasNoLiveCounterpart(shadowResult) {
@@ -394,7 +394,7 @@ func shadowMatrixUnrelatedCase(selector shadowSelectorKind, liveUnsafe bool) sha
 
 // shadowMatrixNoShadowDecisionCase simulates a resolver-level failure: the
 // shadow identity resolver could not produce ANY candidate (an ambiguous or
-// unresolvable selector, shadow_identity.go), so shadowRelate never runs at
+// unresolvable selector, candidate_identity.go), so relateCandidates never runs at
 // all. Live still reaches a real decision from its own snapshot pair —
 // design.md Decision 6's "dangerous class": live decided, shadow did not.
 func shadowMatrixNoShadowDecisionCase(selector shadowSelectorKind, reason string) shadowMatrixCase {

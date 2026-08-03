@@ -1,14 +1,21 @@
-// Package reviewtransaction — shadow relation algebra (Wave 1, Slice 3). This
-// file is part of the read-only shadow of the target RDD relation model
-// (docs/architecture/rdd-root-simplification-design.md). It compares a
+// Package reviewtransaction — candidate relation algebra (Wave 1 Slice 3;
+// promoted out of the shadow gate in Wave 3 Slice 1, design decision 2).
+// This file used to be shadow_relation.go, part of the read-only shadow of
+// the target RDD relation model
+// (docs/architecture/rdd-root-simplification-design.md). Promotion means it
+// now serves both the shadow observer (shadow_observer.go, still gated by
+// GENTLE_AI_RDD_SHADOW) and the live ReviewCore (Wave 3 Slice 3+) — one
+// implementation, not two names for the same function. It compares a
 // frozen CandidateIdentity with a live one and returns exactly one of seven
 // target-architecture relations, in a fixed fail-closed order (design
-// decision 5). See shadow_readonly_guard_test.go for the AST guard that
-// enforces this file never mutates authority state.
+// decision 5). It must still never mutate authority state, a Store, or a
+// CompactState — see candidate_readonly_guard_test.go (promoted files) and
+// shadow_readonly_guard_test.go (remaining shadow_*.go files) for the AST
+// guards that enforce this.
 //
-// ShadowRelation is the second symbol this slice exports (design decision
-// 1, after Slice 2's CandidateIdentity); everything else here stays
-// unexported until the observer (Slice 5) needs it.
+// CandidateRelation is the second symbol this slice exports (design
+// decision 1, after Slice 2's CandidateIdentity); everything else here
+// stays unexported until the observer (Slice 5) or ReviewCore need it.
 package reviewtransaction
 
 import (
@@ -16,20 +23,26 @@ import (
 	"sync"
 )
 
-// ShadowRelation is the exact seven-value relation vocabulary
+// CandidateRelation is the exact seven-value relation vocabulary
 // (Requirement: Seven-Value Relation Output,
 // openspec/changes/rdd-root-simplification-wave1/specs/rdd-candidate-relation-algebra/spec.md:9-11).
 // No eighth value is ever produced.
-type ShadowRelation string
+//
+// ShadowRelation is a type alias (Wave 3 Slice 1, design decision 2) kept
+// so shadow_observer.go and Wave 1's tests keep compiling unchanged after
+// the promotion rename — it is the exact same type, not a distinct one.
+type CandidateRelation string
+
+type ShadowRelation = CandidateRelation
 
 const (
-	ShadowRelationExact                 ShadowRelation = "exact"
-	ShadowRelationCompatibleBaseAdvance ShadowRelation = "compatible_base_advance"
-	ShadowRelationProvableContraction   ShadowRelation = "provable_contraction"
-	ShadowRelationChanged               ShadowRelation = "changed"
-	ShadowRelationUnrelated             ShadowRelation = "unrelated"
-	ShadowRelationAmbiguous             ShadowRelation = "ambiguous"
-	ShadowRelationUnknown               ShadowRelation = "unknown"
+	ShadowRelationExact                 CandidateRelation = "exact"
+	ShadowRelationCompatibleBaseAdvance CandidateRelation = "compatible_base_advance"
+	ShadowRelationProvableContraction   CandidateRelation = "provable_contraction"
+	ShadowRelationChanged               CandidateRelation = "changed"
+	ShadowRelationUnrelated             CandidateRelation = "unrelated"
+	ShadowRelationAmbiguous             CandidateRelation = "ambiguous"
+	ShadowRelationUnknown               CandidateRelation = "unknown"
 )
 
 // shadowRelationInput is the pure evaluation input (design.md "Interfaces /
@@ -41,7 +54,7 @@ const (
 // push/pre-pr boundary (Threat Matrix rows "Commit state" / "Push state").
 // Handoff note carried in tasks.md 3.5/3.6: "unknown is a relation-function
 // outcome, not an identity-resolver outcome" — this field is how that
-// outcome reaches the pure ordered function without shadowRelate itself
+// outcome reaches the pure ordered function without relateCandidates itself
 // needing to know *why* resolution failed.
 type shadowRelationInput struct {
 	Frozen, Live                 CandidateIdentity
@@ -54,14 +67,18 @@ type shadowRelationInput struct {
 	LiveUnresolvable             bool
 }
 
-// shadowRelate is the ordered, fail-closed relation function (design
+// relateCandidates is the ordered, fail-closed relation function (design
 // decision 5): ambiguity -> unknown -> exact -> compatible_base_advance
 // (delegated) -> provable_contraction -> changed -> unrelated. It is pure:
 // no Git call, no mutation, no I/O. Every input needed to derive an earlier
 // relation in the order has already been resolved by the caller (identity
-// resolution in shadow_identity.go, base-advance delegation via
+// resolution in candidate_identity.go, base-advance delegation via
 // shadowDeriveBaseAdvance below).
-func shadowRelate(input shadowRelationInput) ShadowRelation {
+//
+// This was shadowRelate before Wave 3 Slice 1's promotion (design decision
+// 2): renamed, not wrapped, so the shadow observer and the live ReviewCore
+// call the exact same function instead of two names for one algorithm.
+func relateCandidates(input shadowRelationInput) CandidateRelation {
 	if input.ApplicableAuthorities > 1 {
 		return ShadowRelationAmbiguous
 	}

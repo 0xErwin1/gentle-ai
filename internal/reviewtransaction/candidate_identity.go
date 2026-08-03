@@ -1,14 +1,22 @@
-// Package reviewtransaction — shadow candidate identity resolver (Wave 1,
-// Slice 2). This file is part of the read-only shadow of the target RDD
-// relation model (docs/architecture/rdd-root-simplification-design.md). It
+// Package reviewtransaction — candidate identity resolver (Wave 1 Slice 2;
+// promoted out of the shadow gate in Wave 3 Slice 1, design decision 2).
+// This file used to be shadow_identity.go, part of the read-only shadow of
+// the target RDD relation model
+// (docs/architecture/rdd-root-simplification-design.md). Promotion means it
+// now serves both the shadow observer (shadow_observer.go, still gated by
+// GENTLE_AI_RDD_SHADOW) and the live ReviewCore (Wave 3 Slice 3+). It
 // reuses live production primitives (OpenRepositoryIdentityLease,
-// SnapshotBuilder) rather than restating their logic, and never mutates
-// authority state, a Store, or a CompactState. See
-// shadow_readonly_guard_test.go for the AST guard that enforces this.
+// SnapshotBuilder) rather than restating their logic, and must still never
+// mutate authority state, a Store, or a CompactState — see
+// candidate_readonly_guard_test.go (promoted files) and
+// shadow_readonly_guard_test.go (remaining shadow_*.go files) for the AST
+// guards that enforce this.
 //
 // CandidateIdentity is the only symbol this slice exports (design decision
 // 1); everything else here stays unexported until the relation algebra
-// (Slice 3) and observer (Slice 5) need it.
+// (Slice 3) and observer (Slice 5) need it. Its unexported helper names
+// (shadowSelector, shadowCandidateIdentity, etc.) are unchanged by this
+// promotion — design decision 2 renames only shadowRelate/ShadowRelation.
 package reviewtransaction
 
 import (
