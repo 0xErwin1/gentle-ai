@@ -1119,22 +1119,6 @@ func (state *CompactState) Invalidate(reason string) error {
 	return nil
 }
 
-func (state *CompactState) invalidateApproved(evaluation NativeGateEvaluation) error {
-	reason := strings.TrimSpace(evaluation.Reason)
-	if reason == "" {
-		return errors.New("approved invalidation reason is required")
-	}
-	if evaluation.Result != GateInvalidated {
-		return fmt.Errorf("approved invalidation requires an invalidated gate result, got %q", evaluation.Result)
-	}
-	if state.State != StateApproved {
-		return fmt.Errorf("cannot invalidate approved authority from compact state %q", state.State)
-	}
-	state.State, state.InvalidationReason = StateInvalidated, reason
-	state.InvalidationEvidence = &CompactInvalidationEvidence{Gate: evaluation.Context.Gate, Reason: reason, Context: evaluation.Context}
-	return state.Validate()
-}
-
 // validateCompactResultDispositions enforces the persisted shape of audited
 // reviewer-result dispositions. Only a terminally escalated authority may
 // carry them, each binds a distinct selected lens/order pair on the frozen

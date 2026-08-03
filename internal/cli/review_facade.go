@@ -1311,20 +1311,12 @@ func runReviewBindSDD(ctx context.Context, args []string, stdout io.Writer) erro
 }
 
 func RunReviewInvalidate(args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review invalidate", stdout, "Terminally invalidate one explicit pristine reviewing authority, or an approved compact authority whose lifecycle gate natively re-derives invalidated under LOCK.")
+	flags := newReviewFlagSet("review invalidate", stdout, "Terminally invalidate one explicit pristine reviewing authority. An approved compact authority is no longer invalidated by this verb -- invalidated is a derived verdict `review validate --gate <gate>` reports directly, never a write.")
 	cwd := flags.String("cwd", "", "repository path")
 	lineage := flags.String("lineage", "", "explicit review lineage identifier")
 	expected := flags.String("expected-revision", "", "exact current authority revision")
 	reason := flags.String("reason", "", "non-empty terminal invalidation reason for a pristine reviewing authority")
-	gate := flags.String("gate", "", "approved-authority lifecycle gate: post-apply, pre-commit, pre-push, pre-pr, or release")
-	baseRef := flags.String("base-ref", "", "optional expected remote publication base for pre-push or pre-pr")
-	ciAttestation := flags.String("pre-pr-ci-attestation", "", "signed exact-merged-tree CI attestation for a compatible base advance")
-	policy := flags.String("policy", "", "explicit custom policy containing compatible-base CI trust")
-	releaseConfiguration := flags.String("release-configuration", "", "release configuration artifact")
-	releaseGenerated := flags.String("release-generated", "", "generated artifact manifest")
-	releaseProvenance := flags.String("release-provenance", "", "release provenance artifact")
-	releaseBoundary := flags.String("release-publication-boundary", "", "sealed publication boundary artifact")
-	releaseFreshness := flags.String("release-evidence-freshness", "", "current release evidence freshness artifact")
+	gate := flags.String("gate", "", "retained only to name the runnable `review validate --gate <gate>` alternative for an approved compact authority; performs no gate-derived invalidation")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -1356,29 +1348,21 @@ func RunReviewInvalidate(args []string, stdout io.Writer) error {
 		approvedInvalidation := record.State.State == reviewtransaction.StateApproved ||
 			record.State.State == reviewtransaction.StateInvalidated && record.State.InvalidationEvidence != nil
 		if approvedInvalidation {
-			if strings.TrimSpace(*gate) == "" {
-				return errors.New("approved review invalidation requires --gate")
+			// Wave 5 (Gate Cutover) Slice 7, design decision 2: `invalidated`
+			// is now a derived verdict (relation in {changed, unrelated} =>
+			// GateInvalidated), not a write this verb performs.
+			// InvalidateApprovedCompactAuthority is deleted
+			// (TestNoGateWritesAuthority_CallAbsenceGuard,
+			// internal/reviewtransaction, proves it by call-absence): a
+			// drifted approved candidate already denies at `review validate
+			// --gate <gate>` through the SAME gate evaluation this verb used
+			// to re-derive and then persist, and the receipt is never
+			// removed.
+			gateName := strings.TrimSpace(*gate)
+			if gateName == "" {
+				gateName = "<gate>"
 			}
-			input := reviewtransaction.NativeGateRequestInput{
-				Gate: reviewtransaction.GateKind(*gate), LineageID: *lineage, BaseRef: *baseRef,
-				PrePRCIAttestation: *ciAttestation, ReleaseConfiguration: *releaseConfiguration,
-				ReleaseGenerated: *releaseGenerated, ReleaseProvenance: *releaseProvenance,
-				ReleasePublicationBoundary: *releaseBoundary, ReleaseEvidenceFreshness: *releaseFreshness,
-			}
-			if strings.TrimSpace(*ciAttestation) != "" {
-				input.PolicyArtifact = *policy
-			}
-			invalidated, _, err := reviewtransaction.InvalidateApprovedCompactAuthority(context.Background(), root, reviewtransaction.CompactApprovedInvalidationRequest{
-				LineageID: *lineage, ExpectedRevision: *expected, Gate: input,
-			})
-			if err != nil {
-				var healthy *reviewtransaction.HealthyApprovedInvalidationError
-				if errors.As(err, &healthy) {
-					return reviewHealthyInvalidationRefusal(err, strings.TrimSpace(*cwd), *lineage, *expected, healthy.Result)
-				}
-				return err
-			}
-			return encodeReviewJSON(stdout, ReviewInvalidateResult{Operation: "review/invalidate", LineageID: invalidated.State.LineageID, State: invalidated.State.State, StoreRevision: invalidated.Revision})
+			return fmt.Errorf("review invalidate no longer performs gate-derived invalidation for lineage %q; invalidated is now a derived verdict, never a write; see it instead: gentle-ai review validate --cwd %s --lineage %s --gate %s", *lineage, strings.TrimSpace(*cwd), *lineage, gateName)
 		}
 		if strings.TrimSpace(*reason) == "" {
 			return errors.New("pristine review invalidation requires --reason")
@@ -1414,37 +1398,6 @@ func RunReviewInvalidate(args []string, stdout io.Writer) error {
 		return err
 	}
 	return encodeReviewJSON(stdout, ReviewInvalidateResult{Operation: "review/invalidate", LineageID: *lineage, State: reviewtransaction.StateInvalidated, StoreRevision: revision})
-}
-
-// reviewSuccessorLineagePlaceholder is the one value a recovery continuation
-// cannot fill in for an operator who has not chosen it yet: the successor's
-// name. `review recover --successor-lineage` says as much in its own help, and
-// inventing a name on their behalf would be printing a command they never asked
-// for under an identifier they now have to live with.
-const reviewSuccessorLineagePlaceholder = "<successor-lineage>"
-
-// reviewHealthyInvalidationRefusal adds the continuation to a refusal to
-// destroy an approved authority the repository has not made stale.
-//
-// The refusal is correct and stays: the approval was earned over specific
-// bytes, and a command that revoked it on demand would make every approval
-// provisional. The situation sentence comes from the authority layer, which
-// states it without internal vocabulary; what is added here is what to do.
-//
-// The two answers are genuinely different, so this branches on the same
-// re-derived result the refusal reports rather than printing one continuation
-// for both. When the candidate already moved, recovery is available right now.
-// When the approval still covers the candidate exactly, there is nothing to
-// review and no command can change that — the exit is an edit to the working
-// tree, and only then the same recovery.
-func reviewHealthyInvalidationRefusal(cause error, cwd, lineage, expected string, result reviewtransaction.GateResult) error {
-	command := reviewRecoverCommand(cwd, lineage, expected, reviewSuccessorLineagePlaceholder, string(reviewtransaction.RecoveryScopeChanged))
-	if result == reviewtransaction.GateScopeChanged {
-		return fmt.Errorf("%w; review the candidate you have now as a successor instead, choosing any name for it that no existing lineage uses: %s",
-			cause, command)
-	}
-	return fmt.Errorf("%w; if you want this candidate reviewed again, %s, then review it as a successor, choosing any name for it that no existing lineage uses: %s",
-		cause, reviewChangeTheCandidate, command)
 }
 
 func RunReviewFacadeStart(args []string, stdout io.Writer) error {

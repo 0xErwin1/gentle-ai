@@ -12,9 +12,11 @@ package cli
 // Slice 6 downgraded the decline branch: its own before-picture pin
 // (TestCandidateDeclineCharacterization_ResolveCandidateDeclineForGate) is
 // superseded by TestCandidateDeclineDowngrade_DeniesLikeAnyNeverReviewedCandidate
-// below, which pins the permanent after-picture. The invalidation-verb pin
-// (TestInvalidationVerbCharacterization_InvalidateApprovedCompactAuthority)
-// remains the live before-picture until Slice 7 lands.
+// below, which pins the permanent after-picture. Slice 7 deleted the
+// invalidation verb's approved-invalidation branch: its own before-picture
+// pin (TestInvalidationVerbCharacterization_InvalidateApprovedCompactAuthority)
+// is superseded by TestInvalidationVerbDowngrade_RefusesInsteadOfDeriving
+// below.
 //
 // Both surfaces already had coverage of their underlying reviewtransaction
 // package functions (compact_approved_invalidation_test.go,
@@ -32,19 +34,32 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
 // TestInvalidationVerbCharacterization_InvalidateApprovedCompactAuthority
-// pins `review invalidate --gate`'s approved-invalidation branch
-// (review_facade.go, RunReviewInvalidate): it takes the compact store's
-// writer lock (via reviewtransaction.InvalidateApprovedCompactAuthority),
-// rewrites persisted state to invalidated with bound InvalidationEvidence,
-// and removes the receipt file — before Wave 5 Slice 7 deletes this branch
-// and makes `invalidated` a fully derived verdict instead.
-func TestInvalidationVerbCharacterization_InvalidateApprovedCompactAuthority(t *testing.T) {
+// pinned `review invalidate --gate`'s approved-invalidation branch
+// (review_facade.go, RunReviewInvalidate) through Wave 5 Slice 6: it took
+// the compact store's writer lock (via
+// reviewtransaction.InvalidateApprovedCompactAuthority), rewrote persisted
+// state to invalidated with bound InvalidationEvidence, and removed the
+// receipt file.
+//
+// TestInvalidationVerbDowngrade_RefusesInsteadOfDeriving below supersedes
+// it (Wave 5 Slice 7, design decision 2): `invalidated` is now a derived
+// verdict `review validate --gate <gate>` reports directly
+// (TestReceiptFilePersistsAfterDerivedInvalidation_AllFiveGates,
+// review_invalidation_verb_deletion_test.go, proves this for all five
+// gates), never a write this verb performs — `review invalidate` refuses
+// unconditionally for an approved lineage instead, touching no authority
+// bytes, and the receipt is never removed
+// (TestNoGateWritesAuthority_CallAbsenceGuard,
+// internal/reviewtransaction/gate_write_guard_test.go, proves it by
+// call-absence).
+func TestInvalidationVerbDowngrade_RefusesInsteadOfDeriving(t *testing.T) {
 	reviewModeHome(t)
 	repo := initReviewCLIRepo(t)
 	stubReviewConsole(t, false, "")
@@ -63,42 +78,43 @@ func TestInvalidationVerbCharacterization_InvalidateApprovedCompactAuthority(t *
 	if before.State.State != reviewtransaction.StateApproved {
 		t.Fatalf("fixture did not reach approved: %#v", before.State)
 	}
-	if _, err := os.Stat(store.ReceiptPath()); err != nil {
+	receiptBefore, err := os.ReadFile(store.ReceiptPath())
+	if err != nil {
 		t.Fatalf("approved fixture carries no receipt: %v", err)
 	}
 
-	// Introduce an out-of-scope addition so the native gate re-derives
-	// invalidated (mirrors compact_approved_invalidation_test.go's
-	// TestInvalidateApprovedCompactAuthorityPersistsBoundSemanticDenial at
-	// the CLI/facade layer instead of calling the package function directly).
+	// The identical out-of-scope drift the old branch used to re-derive
+	// invalidated from: no longer relevant to the outcome
+	// (review invalidate refuses unconditionally for any approved lineage
+	// now, regardless of drift), kept only so this fixture stays a faithful
+	// "before" shape.
 	writeReviewStartCandidate(t, repo, "outside.txt", "outside frozen scope\n", 0o644)
 
 	var output bytes.Buffer
-	if err := RunReviewInvalidate([]string{
+	err = RunReviewInvalidate([]string{
 		"--cwd", repo, "--lineage", lineage, "--expected-revision", before.Revision,
 		"--gate", string(reviewtransaction.GatePostApply),
-	}, &output); err != nil {
-		t.Fatalf("review invalidate --gate: %v\n%s", err, output.String())
+	}, &output)
+	if err == nil {
+		t.Fatalf("review invalidate --gate unexpectedly succeeded for an approved lineage:\n%s", output.String())
 	}
-	var result ReviewInvalidateResult
-	decodeStrictReviewJSON(t, output.Bytes(), &result)
-	if result.Operation != "review/invalidate" || result.LineageID != lineage ||
-		result.State != reviewtransaction.StateInvalidated || result.StoreRevision == before.Revision {
-		t.Fatalf("review invalidate --gate result = %#v", result)
+	if !strings.Contains(err.Error(), "no longer performs gate-derived invalidation") || !strings.Contains(err.Error(), "review validate") {
+		t.Fatalf("review invalidate --gate refusal = %v, want it to name review validate as the alternative", err)
 	}
 
 	after, err := store.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if after.State.State != reviewtransaction.StateInvalidated || after.Revision != result.StoreRevision {
-		t.Fatalf("persisted state after review invalidate --gate = %#v", after)
+	if after.State.State != reviewtransaction.StateApproved || after.Revision != before.Revision {
+		t.Fatalf("review invalidate --gate mutated persisted authority: before=%#v after=%#v", before.State, after.State)
 	}
-	if after.State.InvalidationEvidence == nil || after.State.InvalidationEvidence.Gate != reviewtransaction.GatePostApply {
-		t.Fatalf("persisted invalidation evidence = %#v", after.State.InvalidationEvidence)
+	receiptAfter, err := os.ReadFile(store.ReceiptPath())
+	if err != nil {
+		t.Fatalf("review invalidate --gate removed the receipt: %v", err)
 	}
-	if _, err := os.Stat(store.ReceiptPath()); !os.IsNotExist(err) {
-		t.Fatalf("review invalidate --gate did not remove the receipt: %v", err)
+	if !bytes.Equal(receiptBefore, receiptAfter) {
+		t.Fatal("review invalidate --gate changed receipt bytes")
 	}
 }
 
