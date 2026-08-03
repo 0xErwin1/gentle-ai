@@ -558,7 +558,18 @@ func Resolve(options ResolveOptions) (Status, error) {
 				blockedReasons.genuine = append(blockedReasons.genuine, failureReason)
 			}
 		}
-	} else if applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || recoverable) && compactBridgeableReviewArtifact(artifacts["reviewState"], reviewStateReason) {
+	} else if !reviewDisabled && applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || recoverable) && compactBridgeableReviewArtifact(artifacts["reviewState"], reviewStateReason) {
+		// Corrective verify cycle 4, W-b: discoverCompactPreVerifyAuthority
+		// walks CompactAuthorityLeaves (a full review-store sweep) reached
+		// in the common "apply done, no verify report yet" state. It could
+		// not fail or block on its own (bridge.Relevant/Reason are dead --
+		// see sddStatusIgnoresCorruptCompactAuthorityPreVerify's doc
+		// comment in bench/journeys_sdd.go -- only the unrelated Eligible
+		// field is read, behind `recoverable`), so this was a WARNING, not
+		// a CRITICAL. Gated anyway: the ratified "zero review code MUST
+		// execute on any SDD path ... no status consultation" prose
+		// sentence is unconditional, and this walk was one edit away from
+		// becoming load-bearing again.
 		fields, _ := authorityFailureFields(readText(firstPath(artifactPaths.VerifyReport)))
 		bridge = discoverCompactPreVerifyAuthority(context.Background(), workspaceRoot, changeName, fields["observed_authority_revision"])
 	}
