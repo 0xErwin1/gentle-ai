@@ -35,11 +35,11 @@ func TestGoverningAuthorityLiveEvidenceUsesStagedProjectionAtPreCommit(t *testin
 	repo := initReviewCLIRepo(t)
 	t.Setenv("GENTLE_AI_RDD_NEW_LINEAGE", "1")
 
-	trackedPath := filepath.Join(repo, "tracked.txt")
+	trackedPath := filepath.Join(repo, "tracked.md")
 	if err := os.WriteFile(trackedPath, []byte("frozen staged content\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "add", "tracked.md")
 
 	var start bytes.Buffer
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "gate-selector-lineage"}, &start); err != nil {
@@ -75,11 +75,11 @@ func TestGoverningAuthorityLiveEvidenceUsesWorkspaceProjectionAtPostApply(t *tes
 	repo := initReviewCLIRepo(t)
 	t.Setenv("GENTLE_AI_RDD_NEW_LINEAGE", "1")
 
-	trackedPath := filepath.Join(repo, "tracked.txt")
+	trackedPath := filepath.Join(repo, "tracked.md")
 	if err := os.WriteFile(trackedPath, []byte("frozen staged content\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runReviewCLIGit(t, repo, "add", "tracked.txt")
+	runReviewCLIGit(t, repo, "add", "tracked.md")
 
 	var start bytes.Buffer
 	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "gate-selector-post-apply-lineage"}, &start); err != nil {
