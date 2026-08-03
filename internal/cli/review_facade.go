@@ -1615,6 +1615,16 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		}
 		return err
 	}
+	// Wave 3 Slice 3 activation branch (design decision 5): every input this
+	// call needs — snapshot, risk assessment, tier, lenses, and the fact that
+	// authorizeReviewStart already returned nil (consent granted, or tier 0's
+	// carve-out) — was already computed by the exact same reused code the
+	// legacy branch below still uses unchanged. GENTLE_AI_RDD_NEW_LINEAGE
+	// unset or empty (the default) never reaches this branch at all, so the
+	// legacy start path stays byte-identical.
+	if reviewtransaction.NewLineageActivationEnabled() {
+		return runReviewFacadeStartNewLineage(ctx, stdout, root, strings.TrimSpace(*lineage), strings.TrimSpace(*policySource), snapshot, assessment, changedLines, lenses)
+	}
 	explicitLineage := strings.TrimSpace(*lineage) != ""
 	if !explicitLineage {
 		*lineage = reviewDerivedStartLineage(snapshot.Identity)
@@ -2091,6 +2101,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	correctionLines := flags.Int("correction-lines", 0, "positive predicted correction changed lines before editing")
 	failed := flags.Bool("failed", false, "bind supplied final evidence as a failed verification")
 	tracePath := flags.String("trace", "", "optional diagnostic operation metadata trace path")
+	admissionFindingsPath := flags.String("admission-findings", "", "new-lineage authorities only: candidate-causal admission findings JSON array file or - for stdin")
 	var resultPaths repeatedString
 	flags.Var(&resultPaths, "result", "retired and always refused: unadmitted reviewer results cannot bind an approval; capture each lens with `"+reviewCaptureResultCommandName()+"` and finalize with --captured-results")
 	var resultArtifacts repeatedString
@@ -2156,6 +2167,47 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 	}
 	if err != nil {
 		return err
+	}
+	// Task C1 (verify-report CRITICAL): finalize must route on discovered
+	// lineage kind, mirroring the start (:1618) and validate
+	// (resolveGoverningAuthority) branches. DiscoverNewLineage is the exact
+	// discovery S4/S5 already built and tested for validate — reused
+	// verbatim here, including its discovery-integrity corruption denial
+	// (NewLineageMarkerCorruptedError), which must never fall through to
+	// legacy discovery below.
+	if strings.TrimSpace(*lineage) != "" {
+		newRecord, newFound, newDiscErr := reviewtransaction.DiscoverNewLineage(ctx, root, *lineage)
+		if newDiscErr != nil {
+			var corrupted *reviewtransaction.NewLineageMarkerCorruptedError
+			if errors.As(newDiscErr, &corrupted) {
+				return reviewPreflightError(fmt.Errorf("new-lineage authority marker is present but its record could not be read; finalize refused: %w", corrupted))
+			}
+			return newDiscErr
+		}
+		if newFound {
+			// The legacy reviewer-result ingestion pipeline (readFacadeReviewerArtifacts,
+			// readCapturedReviewerResults) is bound to CompactState/CompactStore and has
+			// no v3 equivalent yet (Wave 4+ territory) — refuse explicitly rather than
+			// silently ignore a caller's reviewer-result flags for a new-lineage authority.
+			for _, unsupported := range []string{"result", "result-artifact", "result-artifact-file", "captured-results", "captured-evidence", "validation", "refuter", "evidence"} {
+				if reviewFinalizeFlagProvided(args, unsupported) {
+					return reviewPreflightError(fmt.Errorf("new-lineage finalize does not yet support --%s; retry with `gentle-ai review finalize --lineage %s` and, if needed, --failed or --admission-findings", unsupported, *lineage))
+				}
+			}
+			var findings []reviewtransaction.FindingEvidence
+			if trimmed := strings.TrimSpace(*admissionFindingsPath); trimmed != "" {
+				if err := readFacadeJSON(trimmed, &findings); err != nil {
+					return reviewPreflightError(fmt.Errorf("read new-lineage admission findings: %w", err))
+				}
+			}
+			newTerminalAtEntry := newRecord.Authority.State == reviewtransaction.NewLineageStateApproved || newRecord.Authority.State == reviewtransaction.NewLineageStateEscalated
+			if !newTerminalAtEntry {
+				if err := authorizeReviewAuthorityMutation(ctx, root); err != nil {
+					return err
+				}
+			}
+			return runReviewFacadeFinalizeNewLineage(ctx, stdout, root, *lineage, newRecord, findings, *failed)
+		}
 	}
 	store, record, err := discoverCompactFacadeFinalize(ctx, root, *lineage)
 	if err != nil {
@@ -2883,6 +2935,25 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 			}, negotiated, *contract)
 		}
 	}
+	// Amendment C's single shared branch (design decision 4, Wave 3 Slice
+	// 4): resolved BEFORE discoverCompactFacadeGateReview so every gate call
+	// that supplies no explicit --lineage marker for a v3 lineage stays
+	// byte-identical to legacy discovery below. A non-nil discoveryErr here
+	// is always a deny that must never fall through to legacy authorization.
+	if governs, evaluation, discoveryErr := resolveGoverningAuthority(ctx, root, *lineage, gateInput); discoveryErr != nil {
+		if reviewDeliveryDisposition(ctx, root, false) == reviewtransaction.RDDDeliveryDisabledUnmanaged {
+			return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, discoveryErr, negotiated, *contract)
+		}
+		return emitFacadeGateEvaluationNegotiated(stdout, reviewtransaction.NativeGateEvaluation{
+			Result: reviewtransaction.GateInvalidated, Reason: discoveryErr.Error(),
+			Context: reviewtransaction.GateContext{
+				Gate: gateInput.Gate, Denial: &reviewtransaction.GateDenial{Stage: "receipt-discovery", Code: string(discoveryErr.Kind)},
+			},
+		}, negotiated, *contract)
+	} else if governs {
+		return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
+	}
+
 	compactStore, compactRecord, compactErr := discoverCompactFacadeGateReview(ctx, root, *lineage, gateInput)
 	if compactErr == nil {
 		contested := false
