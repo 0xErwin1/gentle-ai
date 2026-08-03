@@ -123,8 +123,6 @@ internal/reviewtransaction/rar_plan_authority.go	validatePlanEffectBinding
 internal/reviewtransaction/rar_plan_authority.go	verificationEffectAuthorizationDigest
 internal/reviewtransaction/rar_plan_authority.go	verificationFrozenPlanConsentDigest
 internal/reviewtransaction/rdd_mode.go	AuthorizeRDDCandidate
-internal/reviewtransaction/receipt_ref.go	ValidateSDDReceiptRef
-internal/reviewtransaction/receipt_ref.go	receiptRefHash
 internal/reviewtransaction/receipt_ref.go	strictDecodeSDDReceiptRef
 internal/reviewtransaction/repository_locator.go	RepositoryIdentityLease.StorageKey
 internal/reviewtransaction/repository_locator.go	locatorPathStrictlyWithin
@@ -197,6 +195,10 @@ internal/sddstatus/legacy_binding_read.go	parseLegacyBinding
 internal/sddstatus/review_binding.go	bindingPath
 internal/sddstatus/review_door.go	resetReviewEntryHookCallCountForTest
 internal/sddstatus/review_door.go	reviewEntryHookCallCountForTest
+internal/sddstatus/runtime_receipt.go	ReceiptRevisionConflictError.Error
+internal/sddstatus/runtime_receipt.go	RuntimeStore.readLegacyReceiptRef
+internal/sddstatus/runtime_receipt.go	RuntimeStore.recordPreparedReceipt
+internal/sddstatus/runtime_receipt.go	normalizeRecordReceiptRequest
 internal/sddstatus/status.go	RenderNativePhasePrompt
 internal/sddstatus/status.go	blockerReasons.forRoute
 internal/sddstatus/status.go	dependencyForPhase
