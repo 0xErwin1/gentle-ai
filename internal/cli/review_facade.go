@@ -1481,6 +1481,17 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		return err
 	}
 	runtimeRequested := reviewRuntimeAgentCount(args) > 0
+	// Wave 4 S4 (design.md decision 5): transport capability admission is
+	// the broadest precondition — "can this runtime participate in review
+	// at all" — so it runs before the narrower immutable-receipt-transport
+	// eligibility check below, and before any authority, tier, lens,
+	// budget, or collection slot exists. An absent agent identity is the
+	// manual/non-agent compatibility path and is not gated.
+	if runtimeRequested && reviewRuntimeAgentCount(args) == 1 {
+		if err := authorizeReviewTransportCapability(*runtimeAgent); err != nil {
+			return reviewPreflightRefusal(reviewTransportCapabilityUnsupportedReason, err)
+		}
+	}
 	if negotiated && (*contract == ReviewIntegrationContractV2 || runtimeRequested) {
 		if reviewRuntimeAgentCount(args) != 1 {
 			// refusal:by-design world-action: a START without one generated runtime identity cannot safely create review authority
