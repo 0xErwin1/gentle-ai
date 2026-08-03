@@ -5769,6 +5769,7 @@ func TestWelcomeView_WindowResizeFitsMeasuredViewport(t *testing.T) {
 		{name: "short viewport", width: 120, height: 19},
 		{name: "below compact height", width: 120, height: 2, minimum: true},
 		{name: "below compact width", width: 18, height: 20, minimum: true},
+		{name: "below frame border width", width: 2, height: 20, minimum: true},
 		{name: "compact viewport with optional content", width: 120, height: 17, withOptional: true},
 		{name: "wide resize", width: 160, height: 50},
 	}
@@ -5799,12 +5800,16 @@ func TestWelcomeView_WindowResizeFitsMeasuredViewport(t *testing.T) {
 			if got := lipgloss.Height(view); got > tc.height {
 				t.Fatalf("welcome height = %d, want <= %d\nview:\n%s", got, tc.height, view)
 			}
-			if !strings.Contains(view, "Start installation") {
+			content := view
+			if tc.minimum {
+				content = strings.ReplaceAll(view, "\n", "")
+			}
+			if !strings.Contains(content, "Start installation") {
 				t.Fatalf("welcome lost primary action after resize\nview:\n%s", view)
 			}
 			if tc.minimum {
 				for _, want := range []string{"Start installation", "j/k"} {
-					if !strings.Contains(view, want) {
+					if !strings.Contains(content, want) {
 						t.Fatalf("minimum welcome state lost %q\nview:\n%s", want, view)
 					}
 				}

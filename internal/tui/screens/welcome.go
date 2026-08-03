@@ -137,6 +137,9 @@ func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, 
 		}
 		return welcomeFrameStyle(width).Render(b.String())
 	}
+	if width > 0 && width <= styles.FrameStyle.GetHorizontalBorderSize() {
+		return renderWelcomeMinimum(width, height, cursor)
+	}
 	fitsViewport := func(view string) bool {
 		return (width <= 0 || lipgloss.Width(view) <= width) &&
 			(height <= 0 || lipgloss.Height(view) <= height)
