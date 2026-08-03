@@ -79,22 +79,23 @@ Only candidate-caused BLOCKER or CRITICAL findings may require correction. Pre-e
 `
 
 type ReviewFacadeStartResult struct {
-	Operation        string                       `json:"operation"`
-	Action           string                       `json:"action"`
-	LensesRequired   bool                         `json:"lenses_required"`
-	LineageID        string                       `json:"lineage_id"`
-	State            reviewtransaction.State      `json:"state"`
-	RiskLevel        reviewtransaction.RiskLevel  `json:"risk_level"`
-	SelectedLenses   []string                     `json:"selected_lenses"`
-	LensBindings     []ReviewFacadeLensBinding    `json:"lens_bindings"`
-	Projection       reviewtransaction.Projection `json:"projection"`
-	TargetMode       reviewtransaction.TargetKind `json:"target_mode,omitempty"`
-	TargetIdentity   string                       `json:"target_identity,omitempty"`
-	BaseTree         string                       `json:"base_tree,omitempty"`
-	CandidateTree    string                       `json:"candidate_tree,omitempty"`
-	ChangedFiles     int                          `json:"changed_files"`
-	ChangedLines     int                          `json:"changed_lines"`
-	CorrectionBudget int                          `json:"correction_budget"`
+	Operation              string                       `json:"operation"`
+	Action                 string                       `json:"action"`
+	LensesRequired         bool                         `json:"lenses_required"`
+	LineageID              string                       `json:"lineage_id"`
+	State                  reviewtransaction.State      `json:"state"`
+	RiskLevel              reviewtransaction.RiskLevel  `json:"risk_level"`
+	SelectedLenses         []string                     `json:"selected_lenses"`
+	LensBindings           []ReviewFacadeLensBinding    `json:"lens_bindings"`
+	Projection             reviewtransaction.Projection `json:"projection"`
+	TargetMode             reviewtransaction.TargetKind `json:"target_mode,omitempty"`
+	TargetIdentity         string                       `json:"target_identity,omitempty"`
+	BaseTree               string                       `json:"base_tree,omitempty"`
+	CandidateTree          string                       `json:"candidate_tree,omitempty"`
+	ChangedFiles           int                          `json:"changed_files"`
+	ChangedLines           int                          `json:"changed_lines"`
+	CorrectionBudget       int                          `json:"correction_budget"`
+	CorrectionBudgetPolicy string                       `json:"correction_budget_policy,omitempty"`
 	// RiskEvidence carries the same human phrases the interactive consent
 	// prompt speaks for the frozen candidate, so a headless consumer can relay
 	// WHY the tier escalated. Absent when no evidence drove an escalation.
@@ -2030,6 +2031,7 @@ func reviewFacadeStartResultFor(action reviewtransaction.CompactStartAction, len
 		Projection:   facadeProjection(authority.InitialSnapshot.Projection),
 		ChangedFiles: len(authority.InitialSnapshot.Paths), TargetIdentity: authority.InitialSnapshot.Identity,
 		ChangedLines: authority.OriginalChangedLines, CorrectionBudget: authority.CorrectionBudget,
+		CorrectionBudgetPolicy: authority.CorrectionBudgetPolicy,
 	}
 	if authority.InitialSnapshot.Kind == reviewtransaction.TargetBaseWorkspaceOverlay {
 		result.TargetMode = authority.InitialSnapshot.Kind
