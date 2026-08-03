@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -93,12 +94,32 @@ func requireNewLineageFinalized(lineage string) func(*Sandbox, Observation) erro
 	}
 }
 
-// dirtyTrackedFileWithoutStaging edits stageOrdinaryCode's own tracked file
-// again, without staging the edit — the exact unstaged-drift fixture
+// stagePassiveTierZeroDoc stages one genuinely tier-0 (RiskLow) candidate:
+// ClassifyRisk's OnlyPassiveContentChanges carve-out (risk.go) requires
+// every authored path to be passive prose content (.md/.mdx/.rst/.adoc/
+// images) — ordinary code never qualifies, landing in RiskMedium instead,
+// whose non-empty SelectedLenses now requires captured lens results before
+// finalize approves (absorbed N1, Wave 5 Slice 4). j59/j60 test the gate
+// selector's staged-vs-workspace projection distinction, which is orthogonal
+// to file type, so a passive doc keeps them genuinely tier-0 (their own
+// stated title) with a product-reachable finalize path, rather than
+// (before N1) silently self-approving a RiskMedium candidate with zero
+// captured lens results.
+func stagePassiveTierZeroDoc(sandbox *Sandbox) error {
+	path := filepath.Join(sandbox.Repo, "docs", "gate-selector-notes.md")
+	content := "# gate selector notes\n\nOrdinary prose with no executable content.\n"
+	if err := sandbox.write(path, content); err != nil {
+		return err
+	}
+	return sandbox.git(sandbox.Repo, "add", "-A")
+}
+
+// dirtyTrackedFileWithoutStaging edits stagePassiveTierZeroDoc's own tracked
+// file again, without staging the edit — the exact unstaged-drift fixture
 // review_new_lineage_gate_selector_test.go proves at the Go layer.
 func dirtyTrackedFileWithoutStaging(sandbox *Sandbox) error {
-	path := sandbox.Repo + "/internal/format/text.go"
-	content := "package format\n\n// Title upper-cases the first rune of a label.\n// Unstaged drift: never committed, never staged.\nfunc Title(label string) string {\n\tif label == \"\" {\n\t\treturn label\n\t}\n\treturn strings.ToUpper(label[:1]) + label[1:]\n}\n"
+	path := sandbox.Repo + "/docs/gate-selector-notes.md"
+	content := "# gate selector notes\n\nOrdinary prose with no executable content.\nUnstaged drift: never committed, never staged.\n"
 	return sandbox.write(path, content)
 }
 
@@ -111,7 +132,7 @@ func waveThreeJourneys() []Journey {
 			NewLineageActivation: true,
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
-				{Name: "fixture: one exact ordinary code candidate staged", Fixture: stageOrdinaryCode},
+				{Name: "fixture: one exact passive tier-0 doc candidate staged", Fixture: stagePassiveTierZeroDoc},
 				{Name: "new-lineage review start", Requires: startNamedCapability,
 					Args: productArgs("review", "start", "--lineage", newLineageExactLineage), After: requireNewLineageStarted(newLineageExactLineage)},
 				{Name: "new-lineage review finalize", Requires: finalizeCapability,
@@ -135,7 +156,7 @@ func waveThreeJourneys() []Journey {
 			NewLineageActivation: true,
 			Steps: []Step{
 				{Name: "fixture: repo", Fixture: baseRepo},
-				{Name: "fixture: one exact ordinary code candidate staged", Fixture: stageOrdinaryCode},
+				{Name: "fixture: one exact passive tier-0 doc candidate staged", Fixture: stagePassiveTierZeroDoc},
 				{Name: "new-lineage review start", Requires: startNamedCapability,
 					Args: productArgs("review", "start", "--lineage", newLineageSelectorLineage), After: requireNewLineageStarted(newLineageSelectorLineage)},
 				{Name: "new-lineage review finalize", Requires: finalizeCapability,

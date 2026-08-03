@@ -3076,30 +3076,27 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 		}
 	}
 
+	// Wave 5 (Gate Cutover) Slice 4, design decision 1: the legacy subprocess
+	// re-entry (runFacadeLegacyValidateNegotiated -> runReviewValidate ->
+	// EvaluateNativeGate) is deleted. A terminal legacy chain now projects
+	// read-only into the same CandidateIdentity/relateCandidates/gateVerdict
+	// algebra every other lineage kind evaluates through
+	// (reviewtransaction.EvaluateLegacyGate) -- "ALL five gates evaluate
+	// legacy through gateVerdict, one meaning, no re-derived gate semantics".
+	// Zero legacy bytes are rewritten: ProjectLegacyAuthority only reads
+	// chain.Records and receipt.json.
 	_, chain, artifacts, legacyErr := discoverFacadeReview(ctx, root, *lineage, true)
 	if legacyErr != nil {
 		return compactErr
 	}
-	tx := chain.Records[len(chain.Records)-1].Transaction
-	validateArgs := []string{"--cwd", root, "--receipt", artifacts.receipt, "--lineage", tx.LineageID, "--gate", *gate}
-	if strings.TrimSpace(*baseRef) != "" {
-		validateArgs = append(validateArgs, "--base-ref", *baseRef)
+	live, evidence, liveErr := governingAuthorityLiveEvidence(ctx, root, gateInput)
+	if liveErr != nil {
+		return compactErr
 	}
-	if strings.TrimSpace(*ciAttestation) != "" {
-		validateArgs = append(validateArgs, "--pre-pr-ci-attestation", *ciAttestation)
-		if _, err := os.Stat(artifacts.policy); err == nil {
-			validateArgs = append(validateArgs, "--policy", artifacts.policy)
-		}
-	}
-	for _, item := range [][2]string{{"--release-configuration", *releaseConfiguration}, {"--release-generated", *releaseGenerated}, {"--release-provenance", *releaseProvenance}, {"--release-publication-boundary", *releaseBoundary}, {"--release-evidence-freshness", *releaseFreshness}} {
-		if strings.TrimSpace(item[1]) != "" {
-			validateArgs = append(validateArgs, item[0], item[1])
-		}
-	}
-	for _, path := range tx.Snapshot.IntendedUntracked {
-		validateArgs = append(validateArgs, "--intended-untracked", path)
-	}
-	return runFacadeLegacyValidateNegotiated(ctx, validateArgs, stdout, negotiated, *contract)
+	evaluation := reviewtransaction.EvaluateLegacyGate(
+		ctx, root, chain, artifacts.receipt, live, strings.TrimSpace(gateInput.PolicyArtifact) != "", evidence, gateInput.Gate,
+	)
+	return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
 }
 
 func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, input reviewtransaction.NativeGateRequestInput) (reviewtransaction.CompactStore, reviewtransaction.CompactRecord, error) {
@@ -4082,25 +4079,6 @@ func emitFacadeGateEvaluationNegotiated(stdout io.Writer, evaluation reviewtrans
 		return ReviewGateDeniedError{Result: result.Result, Reason: result.Reason, Context: result.Context, Cause: evaluation.Cause}
 	}
 	return nil
-}
-
-func runFacadeLegacyValidateNegotiated(ctx context.Context, args []string, stdout io.Writer, negotiated bool, contract string) error {
-	if !negotiated {
-		return runReviewValidate(ctx, args, stdout)
-	}
-	var output bytes.Buffer
-	runErr := runReviewValidate(ctx, args, &output)
-	if output.Len() == 0 {
-		return runErr
-	}
-	var result ReviewValidateResult
-	if err := decodeStrictReviewIntegrationResult(output.Bytes(), &result); err != nil {
-		return err
-	}
-	if err := encodeReviewIntegrationOperation(stdout, true, ReviewIntegrationOperationValidate, result, result, contract); err != nil {
-		return err
-	}
-	return runErr
 }
 
 func facadePolicyBytes(path string) ([]byte, error) {

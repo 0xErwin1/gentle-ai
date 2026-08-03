@@ -102,7 +102,8 @@ func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateIn
 			}
 			receipt, receiptErr := authorityStore.LoadReceipt()
 			if receiptErr != nil || receipt.LineageID != record.Authority.LineageID ||
-				receipt.AuthorityRevision != record.Revision || receipt.TerminalState != record.Authority.State {
+				receipt.AuthorityRevision != record.Revision || receipt.TerminalState != record.Authority.State ||
+				receipt.CandidateIdentity != record.Authority.CandidateIdentity {
 				return true, reviewtransaction.NativeGateEvaluation{
 					Result: reviewtransaction.GateInvalidated, Reason: reviewFacadeReceiptNotAvailableReason(record.Authority.LineageID),
 					Context: reviewtransaction.GateContext{
