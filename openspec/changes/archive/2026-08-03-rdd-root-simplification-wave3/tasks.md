@@ -34,7 +34,7 @@ Chain strategy: feature-branch-chain
 ## Phase 1: PR0 — SDD Artifacts
 
 - [x] 1.1 Land `openspec/changes/rdd-root-simplification-wave3/{proposal,specs,design,tasks}.md` (already written).
-- [ ] 1.2 Archive Wave 2 (`openspec/changes/rdd-root-simplification-wave2/**` → `openspec/specs/`) when its turn comes, mirroring prior wave pattern.
+- [x] 1.2 Archive Wave 2 (`openspec/changes/rdd-root-simplification-wave2/**` → `openspec/specs/`) when its turn comes, mirroring prior wave pattern. **Completed out-of-band**: Wave 2 was archived to `openspec/changes/archive/2026-08-02-rdd-root-simplification-wave2/` with its own `archive-report.md` before this Wave 3 archive ran; the checkbox in this file was never updated to reflect it. See this archive's own report for the filesystem proof and reconciliation record.
 
 ## Phase 2 (S1): Promotion Rename
 
