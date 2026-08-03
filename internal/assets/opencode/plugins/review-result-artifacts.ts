@@ -135,10 +135,8 @@ function extractionClass(cause: unknown, property = "reviewClass"): string | und
 function isSDDPhase(agent: string): boolean {
   return SDD_PHASES.some((phase) => agent === phase || agent.startsWith(phase + "-"))
 }
-
 type SDDTaskFailure = { phase: string, code: string }
 type SDDTaskFailureError = Error & { sddFailure: SDDTaskFailure }
-
 function sddTaskFailure(phase: string, cause: unknown): SDDTaskFailureError {
   const classification = extractionClass(cause, "sddClass")
   const code = classification === "empty_result" ? "sdd_task_result_empty" : "sdd_task_result_malformed"
