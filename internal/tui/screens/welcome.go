@@ -156,7 +156,7 @@ func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, 
 	if !fitsViewport(view) {
 		// A viewport shorter than the compact menu still needs a safe, actionable
 		// state instead of allowing the terminal to clip the rendered content.
-		view = renderWelcomeMinimum(width, height)
+		view = renderWelcomeMinimum(width, height, cursor)
 	}
 	return view
 }
@@ -189,7 +189,7 @@ func renderWelcomeOptions(options []string, cursor int, width int) string {
 	return b.String()
 }
 
-func renderWelcomeMinimum(width int, height int) string {
+func renderWelcomeMinimum(width int, height int, cursor int) string {
 	const primaryAction = "Start installation"
 	const compactHelp = "j/k, enter, q"
 
@@ -211,7 +211,11 @@ func renderWelcomeMinimum(width int, height int) string {
 	if primaryLineCount > len(lines) {
 		primaryLineCount = len(lines)
 	}
-	rendered := styles.SelectedStyle.Render(strings.Join(lines[:primaryLineCount], "\n"))
+	primaryStyle := styles.UnselectedStyle
+	if cursor == 0 {
+		primaryStyle = styles.SelectedStyle
+	}
+	rendered := primaryStyle.Render(strings.Join(lines[:primaryLineCount], "\n"))
 	if primaryLineCount == len(lines) {
 		return rendered
 	}
