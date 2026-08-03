@@ -166,9 +166,41 @@ The delta spec IS a full spec (not a delta). Copy it mechanically with the shell
 
 ```bash
 # Mechanical copy (MANDATORY): never Read → Write artifact content
-mkdir -p openspec/specs/{domain}
-cp openspec/changes/{change-name}/specs/{domain}/spec.md openspec/specs/{domain}/spec.md
-diff -r openspec/changes/{change-name}/specs/{domain}/spec.md openspec/specs/{domain}/spec.md
+target_dir="openspec/specs/{domain}"
+target_path="$target_dir/spec.md"
+mkdir -p "$target_dir"
+
+temp_path=
+cleanup_temp() {
+  if [ -n "$temp_path" ]; then
+    rm -f "$temp_path" || :
+  fi
+}
+trap cleanup_temp EXIT
+temp_path="$(mktemp "$target_dir/.spec.md.XXXXXX")"
+
+if cp "openspec/changes/{change-name}/specs/{domain}/spec.md" "$temp_path"; then
+  :
+else
+  copy_status=$?
+  exit "$copy_status"
+fi
+
+if diff -r "openspec/changes/{change-name}/specs/{domain}/spec.md" "$temp_path"; then
+  diff_status=0
+else
+  diff_status=$?
+fi
+if [ "$diff_status" -ne 0 ]; then
+  exit "$diff_status"
+fi
+
+if mv "$temp_path" "$target_path"; then
+  temp_path=
+else
+  move_status=$?
+  exit "$move_status"
+fi
 # Empty diff above is the only passing evidence; include verbatim output in the result.
 ```
 
