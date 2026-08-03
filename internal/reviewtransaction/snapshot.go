@@ -1442,6 +1442,20 @@ func (err *GitCommandError) Unwrap() error { return err.Cause }
 
 var ErrGitOutputLimit = errors.New("git output exceeded deterministic byte limit")
 
+var ErrGitInventoryDiagnostics = errors.New("git inventory produced diagnostics")
+
+// GitInventoryDiagnosticsError reports unexpected diagnostics from a Git
+// inventory command that otherwise completed successfully.
+type GitInventoryDiagnosticsError struct {
+	Diagnostics string
+}
+
+func (err *GitInventoryDiagnosticsError) Error() string {
+	return fmt.Sprintf("%s: %s", ErrGitInventoryDiagnostics, err.Diagnostics)
+}
+
+func (err *GitInventoryDiagnosticsError) Unwrap() error { return ErrGitInventoryDiagnostics }
+
 // GitOutputLimitError reports that a bounded Git capture produced more bytes
 // than the caller permits. The capture retains at most Limit bytes while the
 // child is drained, so oversized output cannot grow process memory without
@@ -1592,7 +1606,7 @@ func runGitCapturedRange(ctx context.Context, repo string, extraEnv []string, st
 		return nil, 0, overflow
 	}
 	if rejectStderr && len(diagnostic) != 0 {
-		return nil, 0, fmt.Errorf("git inventory produced diagnostics: %s", strings.TrimSpace(string(diagnostic)))
+		return nil, 0, &GitInventoryDiagnosticsError{Diagnostics: strings.TrimSpace(string(diagnostic))}
 	}
 	return output, stdout.total, nil
 }
@@ -1607,7 +1621,7 @@ func gitOutputOverflow(args []string, outputLimit int, stdout, stderr *boundedGi
 		overflows = append(overflows, &GitOutputLimitError{Args: append([]string{}, args...), Limit: outputLimit, Actual: stdout.total})
 	}
 	if stderr.exceeded {
-		overflows = append(overflows, &GitOutputLimitError{Args: append([]string{}, args...), Limit: defaultGitStderrLimit, Actual: stderr.total})
+		overflows = append(overflows, &GitOutputLimitError{Args: append([]string{}, args...), Limit: stderr.limit, Actual: stderr.total})
 	}
 	if len(overflows) == 1 {
 		return overflows[0]
