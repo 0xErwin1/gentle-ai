@@ -2150,11 +2150,15 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			return newDiscErr
 		}
 		if newFound {
-			// The legacy reviewer-result ingestion pipeline (readFacadeReviewerArtifacts,
-			// readCapturedReviewerResults) is bound to CompactState/CompactStore and has
-			// no v3 equivalent yet (Wave 4+ territory) — refuse explicitly rather than
-			// silently ignore a caller's reviewer-result flags for a new-lineage authority.
-			for _, unsupported := range []string{"result", "result-artifact", "result-artifact-file", "captured-results", "captured-evidence", "validation", "refuter", "evidence"} {
+			// The legacy reviewer-result ARTIFACT ingestion pipeline
+			// (readFacadeReviewerArtifacts, readCapturedReviewerResults) is bound to
+			// CompactState/CompactStore and has no v3 equivalent — refuse explicitly
+			// rather than silently ignore a caller's reviewer-result flags for a
+			// new-lineage authority. --captured-results is excluded from this list
+			// (C-A, Wave 5 fix cycle 2): it now names the minimal v3 capture
+			// primitive's own persisted CapturedResults, not the legacy artifact
+			// pipeline these other flags name.
+			for _, unsupported := range []string{"result", "result-artifact", "result-artifact-file", "captured-evidence", "validation", "refuter", "evidence"} {
 				if reviewFinalizeFlagProvided(args, unsupported) {
 					return reviewPreflightError(fmt.Errorf("new-lineage finalize does not yet support --%s; retry with `gentle-ai review finalize --lineage %s` and, if needed, --failed or --admission-findings", unsupported, *lineage))
 				}
@@ -2171,7 +2175,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 					return err
 				}
 			}
-			return runReviewFacadeFinalizeNewLineage(ctx, stdout, root, *lineage, newRecord, findings, *failed)
+			return runReviewFacadeFinalizeNewLineage(ctx, stdout, root, *lineage, newRecord, findings, *failed, *capturedResults)
 		}
 	}
 	store, record, err := discoverCompactFacadeFinalize(ctx, root, *lineage)

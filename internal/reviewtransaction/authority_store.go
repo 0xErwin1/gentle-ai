@@ -96,6 +96,36 @@ type NewLineageAuthority struct {
 	AdmittedFindingIDs    []string          `json:"admitted_finding_ids,omitempty"`
 	ReplayIdentity        string            `json:"replay_identity,omitempty"`
 	LastTransition        json.RawMessage   `json:"last_transition,omitempty"`
+	// CapturedResults is C-A's minimal capture primitive (Wave 5 fix cycle 2,
+	// coordinator decision: not a rebuilt v2-shaped admission pipeline --
+	// ArtifactSubject/FrozenCandidateContext/reopen machinery is Wave 7
+	// deletion scope). Written only through AuthorityStore.CaptureLensResult
+	// (new_lineage_capture.go), never directly: one entry per captured lens,
+	// one-shot (no reopen), each bound to its own provider-owned subject hash.
+	CapturedResults []NewLineageCapturedResult `json:"captured_results,omitempty"`
+}
+
+// NewLineageCapturedResult is one captured reviewer result's minimal
+// persisted binding: which lens, at which frozen selected-lens order, under
+// which provider-owned subject hash (NewLineageArtifactSubjectHash). It
+// deliberately carries no findings/evidence/admission-decision richness --
+// those stay v2's ArtifactSubject-admission concern, not rebuilt for v3.
+type NewLineageCapturedResult struct {
+	Lens        string `json:"lens"`
+	Order       int    `json:"order"`
+	SubjectHash string `json:"subject_hash"`
+}
+
+// CapturedLensNames returns the plain lens-name list
+// FinalizeAdvanceRequest.CapturedLensResults (and hasCapturedAllSelectedLenses)
+// need, derived from the richer CapturedResults slice rather than storing
+// the same names twice.
+func (authority NewLineageAuthority) CapturedLensNames() []string {
+	names := make([]string, len(authority.CapturedResults))
+	for index, captured := range authority.CapturedResults {
+		names[index] = captured.Lens
+	}
+	return names
 }
 
 // Validate enforces the structural half of the two-artifact contract this
@@ -136,6 +166,16 @@ func (authority NewLineageAuthority) Validate() error {
 		if strings.TrimSpace(id) != id || id == "" {
 			return errors.New("new-lineage authority admitted finding ids must be canonical non-empty strings") // refusal:by-design world-action: AdmittedFindingIDs is set by ReviewCore's causal-admission logic; malformed entries are a caller bug, not an operator-fixable state
 		}
+	}
+	seenCapturedLenses := make(map[string]bool, len(authority.CapturedResults))
+	for _, captured := range authority.CapturedResults {
+		if strings.TrimSpace(captured.Lens) == "" || captured.Order < 0 || !validSHA256(captured.SubjectHash) {
+			return errors.New("new-lineage authority captured results must carry a non-empty lens, a non-negative order, and a canonical subject hash") // refusal:by-design world-action: captured results are only ever written by AuthorityStore.CaptureLensResult after validating them; malformed entries here mean in-process corruption, not something an operator command repairs
+		}
+		if seenCapturedLenses[captured.Lens] {
+			return errors.New("new-lineage authority captured results must name each lens at most once") // refusal:by-design world-action: CaptureLensResult enforces one-shot-per-lens before ever appending; a duplicate here means in-process corruption, not something an operator command repairs
+		}
+		seenCapturedLenses[captured.Lens] = true
 	}
 	if authority.ReplayIdentity != "" && !validSHA256(authority.ReplayIdentity) {
 		return errors.New("new-lineage authority replay identity must be a canonical digest") // refusal:by-design world-action: the replay identity is only ever set by RecordTransition's own digest computation; a malformed value means in-process corruption, not something an operator command repairs
