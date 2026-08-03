@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
@@ -91,6 +93,21 @@ func runReviewFacadeFinalizeNewLineage(
 		},
 	})
 	if err != nil {
+		// W-8 (Wave 5 fix cycle 3, verify-report #10186 cycle 2): a partial
+		// capture (some, not all, frozen selected lenses captured) is an
+		// ORDINARY incomplete state, not a tool-internal fault -- an
+		// unclassified fmt.Errorf wrap left it falling through to the outer
+		// dispatcher's unexpected-fault/defect-report path. Classified here as
+		// an ordinary preflight refusal (matching every other operator-
+		// actionable refusal in this package) that names exactly which
+		// lens(es) are still missing and the runnable continuation.
+		if errors.Is(err, reviewtransaction.ErrFinalizeRequiresLensResults) {
+			missing := authority.MissingCapturedLensNames()
+			return reviewPreflightError(fmt.Errorf(
+				"new-lineage finalize requires captured results for every frozen selected lens before approving: missing %s; capture each with `gentle-ai review capture-result --cwd <repo> --lineage %s --target <target> --lens <lens> --order <order> --input <result.json>` (run with --preflight first to discover the exact subject hash to echo back), then retry `gentle-ai review finalize --cwd <repo> --lineage %s --captured-results=true`",
+				strings.Join(missing, ", "), lineage, lineage,
+			))
+		}
 		return fmt.Errorf("review core finalize: %w", err)
 	}
 	if transition.Authority != nil {
