@@ -11,14 +11,14 @@
     "relation": "compatible_base_advance",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "post-apply",
     "relation": "provable_contraction",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "post-apply",
@@ -33,21 +33,21 @@
     "relation": "ambiguous",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "post-apply",
     "relation": "unknown",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "post-apply",
     "relation": "unrelated",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "pre-commit",
@@ -61,14 +61,14 @@
     "relation": "compatible_base_advance",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "pre-commit",
     "relation": "provable_contraction",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "pre-commit",
@@ -83,21 +83,21 @@
     "relation": "ambiguous",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "pre-commit",
     "relation": "unknown",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "pre-commit",
     "relation": "unrelated",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "pre-push",
@@ -111,14 +111,14 @@
     "relation": "compatible_base_advance",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "pre-push",
     "relation": "provable_contraction",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "pre-push",
@@ -133,21 +133,21 @@
     "relation": "ambiguous",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "pre-push",
     "relation": "unknown",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "pre-push",
     "relation": "unrelated",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "pre-pr",
@@ -168,7 +168,7 @@
     "relation": "provable_contraction",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "pre-pr",
@@ -182,69 +182,69 @@
     "relation": "ambiguous",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "pre-pr",
     "relation": "unknown",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "pre-pr",
     "relation": "unrelated",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "release",
     "relation": "exact",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "release",
     "relation": "compatible_base_advance",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "release",
     "relation": "provable_contraction",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "release",
     "relation": "changed",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "release",
     "relation": "ambiguous",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "release",
     "relation": "unknown",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   },
   {
     "gate": "release",
     "relation": "unrelated",
     "verdict": "",
     "explained": true,
-    "reason": "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+    "reason": "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report #10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a fabricated pass."
   }
 ]

@@ -48,10 +48,27 @@ var gateBoundaryMatrixRelations = []string{
 	"exact", "compatible_base_advance", "provable_contraction", "changed", "ambiguous", "unknown", "unrelated",
 }
 
-const gateBoundaryMatrixNotWiredReason = "gateVerdict(gate, relation) does not exist yet (Wave 5 Slice 3 deliverable); " +
-	"NativeGateEvaluation carries no Relation field until Slice 3, and legacy-through-algebra projection lands in " +
-	"Slice 4, so no real production code path can be driven to prove this cell yet. This harness must drive real " +
-	"code, not reimplement the algebra by hand, so the cell is an explicit SKIP, not a fabricated pass."
+// gateBoundaryMatrixNotWiredReason (W-1, Wave 5 fix cycle 1, verify-report
+// #10186): the ORIGINAL text below claimed gateVerdict, NativeGateEvaluation's
+// Relation field, and legacy-through-algebra projection did not exist yet --
+// all three landed in S3/S4 and every one of gateVerdict/EvaluateLegacyGate/
+// EvaluateNewLineageGate is now real, wired production code (this fix
+// cycle's C-B/C-C). The honest remaining reason for every cell still marked
+// here is narrower and true today: this harness only counts a cell as
+// wired once it drives that real code end-to-end through the compiled
+// binary with a genuinely constructed fixture (this file's own top-level
+// doc comment, "a REAL, ALREADY-SHIPPED production code path can be
+// driven"), and building that fixture -- particularly for release, whose
+// boundary needs five additional artifact files and (for a v3 lineage)
+// GENTLE_AI_RDD_NEW_LINEAGE plus a tier that can actually reach approved
+// (C-A) -- has not been done for every remaining cell yet. This is a
+// disclosed scope/time gap, not a missing mechanism.
+const gateBoundaryMatrixNotWiredReason = "gateVerdict, NativeGateEvaluation.Relation, EvaluateLegacyGate, and " +
+	"EvaluateNewLineageGate all exist and are wired production code as of Wave 5 fix cycle 1 (verify-report " +
+	"#10186's C-B/C-C) -- this cell's own binary-driven fixture (start/finalize/validate through the compiled " +
+	"gentle-ai binary) has not been built yet, not because the underlying mechanism is missing. This harness must " +
+	"drive real code, not reimplement the algebra by hand, so an unbuilt fixture is an explicit SKIP, not a " +
+	"fabricated pass."
 
 // gateBoundaryMatrixPrePRCompatibleBaseAdvanceReason is task 6.3's named,
 // specific explained-divergence reason for pre-pr's compatible_base_advance
