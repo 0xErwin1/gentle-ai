@@ -631,6 +631,21 @@ func TestUnqualifiedGateDiscoveryOnMixedCompactAndLegacyAuthorityHonorsTheKillSw
 	if err == nil {
 		t.Fatal("mixed compact/legacy authority was silently resolved while enabled")
 	}
+	// Wave 5 Slice 2 supersession: this is now the sole home of the
+	// competing-stores-named-in-the-message property that
+	// review_disabled_reach_test.go's
+	// TestReviewValidateReportsDisabledUnmanagedDeliveryOverMixedCompactAndLegacyAuthority
+	// used to assert on its DISABLED half too (removed there -- design
+	// decision 4 means that half no longer discovers the contest at all).
+	// The negotiated envelope wraps the raw error behind a fixed catch-all
+	// message with no Cause populated for this unclassified error type, so
+	// the raw (non-negotiated) call is what still carries
+	// errReviewMixedCompactLegacyAuthority's own text verbatim.
+	var rawEnabled bytes.Buffer
+	rawErr := RunReviewFacadeValidate([]string{"--cwd", fixture.repo, "--gate", string(reviewtransaction.GatePostApply)}, &rawEnabled)
+	if rawErr == nil || !strings.Contains(rawErr.Error(), "compact v2 and legacy v1") {
+		t.Fatalf("enabled mixed-authority error hid the competing stores: %v", rawErr)
+	}
 
 	disableReviewForClone(t, fixture.repo)
 
