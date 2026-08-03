@@ -476,15 +476,19 @@ func TestResolveApplyVerifyArchiveGates(t *testing.T) {
 			wantNext:    "apply",
 		},
 		{
-			name: "apply all done requires explicit review before verify",
+			// Wave 4 S3 (design.md decision 3, proposal.md's #1 success
+			// criterion): RDD no longer supervises SDD before verify. Apply
+			// done, no verify report yet => verify is immediately ready, no
+			// review transaction required. The offer point is post-verify.
+			name: "apply all done makes verify ready immediately with no pre-verify review supervision",
 			seed: func(t *testing.T, root string) {
 				seedReadyChange(t, root, "thin", "- [x] 1.1 Work\n")
 			},
 			wantApply:   ApplyAllDone,
 			wantApplyD:  DependencyAllDone,
-			wantVerify:  DependencyBlocked,
+			wantVerify:  DependencyReady,
 			wantArchive: DependencyBlocked,
-			wantNext:    "review",
+			wantNext:    "verify",
 		},
 		{
 			name: "apply progress does not make final verify ready before all tasks complete",
