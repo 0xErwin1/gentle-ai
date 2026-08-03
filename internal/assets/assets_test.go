@@ -2223,3 +2223,32 @@ func TestSDDArchiveFinalStateAuthorityContract(t *testing.T) {
 		}
 	}
 }
+
+func TestSDDArchiveStoreSpecificFilesystemContract(t *testing.T) {
+	command := MustRead("opencode/commands/sdd-archive.md")
+	for _, required := range []string{
+		"For `openspec` or `hybrid` stores only",
+		"For `engram`, do not perform filesystem synchronization or archive moves",
+		"persist the final archive report to `sdd/{change-name}/archive-report`",
+		"For `none`, do not perform filesystem operations or Engram persistence",
+	} {
+		if !strings.Contains(command, required) {
+			t.Fatalf("opencode/commands/sdd-archive.md missing store-specific archive wording %q", required)
+		}
+	}
+
+	skill := MustRead("skills/sdd-archive/SKILL.md")
+	for _, required := range []string{
+		"snapshot_root=\"$(mktemp -d \"${TMPDIR:-/tmp}/sdd-archive.XXXXXX\")\"",
+		"trap 'rm -rf -- \"$snapshot_root\"' EXIT",
+		"cp -R \"openspec/changes/{change-name}\" \"$snapshot_root/source\"",
+		"diff -r \"$snapshot_root/source\" \"openspec/changes/archive/YYYY-MM-DD-{change-name}\"",
+		"diff_status=$?",
+		"only empty diff output passes",
+		"The `snapshot_root` is removed safely by the EXIT trap",
+	} {
+		if !strings.Contains(skill, required) {
+			t.Fatalf("skills/sdd-archive/SKILL.md missing pre-move snapshot wording %q", required)
+		}
+	}
+}
