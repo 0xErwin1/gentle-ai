@@ -80,33 +80,49 @@ func RenderWelcomeWithWidth(cursor int, version string, updateBanner string, upd
 }
 
 func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, width int, height int, advisory WelcomeAdvisory) string {
-	var b strings.Builder
+	render := func(includeLogo bool, maxHeight int) string {
+		var b strings.Builder
 
-	b.WriteString(styles.RenderLogo())
-	b.WriteString("\n\n")
-	b.WriteString(styles.SubtextStyle.Render(styles.Tagline(version)))
-	b.WriteString("\n")
-
-	if updateBanner != "" {
-		b.WriteString(styles.WarningStyle.Render(wrapWelcomeBanner(updateBanner, welcomeContentWidth(width))))
+		if includeLogo {
+			b.WriteString(styles.RenderLogo())
+		}
+		b.WriteString("\n\n")
+		b.WriteString(styles.SubtextStyle.Render(styles.Tagline(version)))
 		b.WriteString("\n")
-	}
-	if rendered := renderWelcomeAdvisory(advisory, width, height); rendered != "" {
-		b.WriteString(rendered)
+
+		if updateBanner != "" {
+			b.WriteString(styles.WarningStyle.Render(wrapWelcomeBanner(updateBanner, welcomeContentWidth(width))))
+			b.WriteString("\n")
+		}
+		if rendered := renderWelcomeAdvisory(advisory, width, height); rendered != "" {
+			b.WriteString(rendered)
+			b.WriteString("\n")
+		}
+
 		b.WriteString("\n")
+		b.WriteString(styles.HeadingStyle.Render("Menu"))
+		b.WriteString("\n\n")
+		b.WriteString(renderOptions(WelcomeOptions(updateResults, updateCheckDone, showProfiles, profileCount, hasEngines), cursor))
+		b.WriteString("\n")
+		b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • q: quit"))
+
+		frame := welcomeFrameStyle(width)
+		if maxHeight > 0 {
+			frame = frame.MaxHeight(maxHeight)
+		}
+		return frame.Render(b.String())
 	}
 
-	b.WriteString("\n")
-	b.WriteString(styles.HeadingStyle.Render("Menu"))
-	b.WriteString("\n\n")
-	b.WriteString(renderOptions(WelcomeOptions(updateResults, updateCheckDone, showProfiles, profileCount, hasEngines), cursor))
-	b.WriteString("\n")
-	b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • q: quit"))
-
-	if width > 0 {
-		return styles.FrameStyle.Width(width - 4).Render(b.String())
+	view := render(true, 0)
+	if height > 0 && lipgloss.Height(view) > height {
+		// The logo is optional chrome; keep the menu and controls visible when
+		// the measured terminal viewport cannot hold the full welcome screen.
+		view = render(false, 0)
 	}
-	return styles.FrameStyle.Render(b.String())
+	if height > 0 && lipgloss.Height(view) > height {
+		view = render(false, height)
+	}
+	return view
 }
 
 func WelcomeAdvisoryScrollBounds(message string, releaseURL string, width int, height int) (int, int) {
@@ -168,11 +184,21 @@ func welcomeAdvisoryRegionHeight(height int) int {
 }
 
 func welcomeContentWidth(width int) int {
-	const frameHorizontalSize = 10 // double borders plus left/right padding from FrameStyle.
-	if width <= frameHorizontalSize {
+	if width <= 0 {
 		return 0
 	}
-	return width - frameHorizontalSize
+	return max(0, width-styles.FrameStyle.GetHorizontalFrameSize())
+}
+
+func welcomeFrameStyle(width int) lipgloss.Style {
+	if width <= 0 {
+		return styles.FrameStyle
+	}
+	borderWidth := styles.FrameStyle.GetHorizontalBorderSize()
+	if width <= borderWidth {
+		return styles.FrameStyle.MaxWidth(width)
+	}
+	return styles.FrameStyle.Width(width - borderWidth)
 }
 
 func wrapWelcomeBanner(text string, width int) string {

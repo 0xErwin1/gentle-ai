@@ -52,3 +52,31 @@ func TestWrapWelcomeBanner_PreservesPlainTextAdvisory(t *testing.T) {
 		t.Fatalf("wrapWelcomeBanner() = %q, want %q", got, text)
 	}
 }
+
+func TestRenderWelcome_StaysWithinViewport(t *testing.T) {
+	cases := []struct {
+		name   string
+		width  int
+		height int
+	}{
+		{name: "Windows Terminal startup", width: 120, height: 30},
+		{name: "narrow resize", width: 80, height: 24},
+		{name: "wide resize", width: 160, height: 50},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			view := RenderWelcomeWithAdvisory(0, "dev", "", nil, true, false, 0, true, tc.width, tc.height, WelcomeAdvisory{})
+
+			if got := lipgloss.Width(view); got > tc.width {
+				t.Fatalf("welcome width = %d, want <= %d\nview:\n%s", got, tc.width, view)
+			}
+			if got := lipgloss.Height(view); got > tc.height {
+				t.Fatalf("welcome height = %d, want <= %d\nview:\n%s", got, tc.height, view)
+			}
+			if !strings.Contains(view, "Start installation") {
+				t.Fatalf("welcome lost primary action after fitting viewport\nview:\n%s", view)
+			}
+		})
+	}
+}
