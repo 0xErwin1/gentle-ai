@@ -74,13 +74,13 @@ Chain strategy: feature-branch-chain
 
 ## Phase 5 (S4): Transport Capability Admission (second per spec sequencing)
 
-- [ ] 5.1 RED: unsupported-transport denial before any authority/tier/lens/budget/collection state exists (store inspection asserting empty authority root).
-- [ ] 5.2 RED (threat matrix — Process integration/adapters): absent claim, unrecognised claim, advertised-but-failing transport — three distinct table cases.
-- [ ] 5.3 Add `ContractReviewTransportV1` to `ContractClaims` in `internal/agents/capabilitymanifest/manifest.go`, reusing `dormant|advertised` vocabulary, canonical registry, `Validate()`, digest.
-- [ ] 5.4 Wire capability admission in `internal/cli/review_facade.go`'s `review start`, BEFORE risk/tier/lens/budget/consent/freeze.
-- [ ] 5.5 Per-adapter unavailable mode: Pi adapter (declares only `AutoInstall|SystemPrompt|MCP`) enters unavailable, never a self-constructed transition.
-- [ ] 5.6 GREEN: 5.1, 5.2 pass.
-- [ ] 5.7 `scripts/deadcode-ratchet.sh --update` for the new claim.
+- [x] 5.1 RED: unsupported-transport denial before any authority/tier/lens/budget/collection state exists (store inspection asserting empty authority root). `TestUnsupportedReviewTransportCapabilityStopsBeforeAnyAuthority` — genuine compile-fail RED captured before `authorizeReviewTransportCapability`/`reviewTransportCapabilityUnsupportedReason`/`ContractReviewTransportV1` existed; GREEN asserts `reviewtransaction.DiscoverCompactStores` finds zero stores after a Pi-agent `review start` refusal.
+- [x] 5.2 RED (threat matrix — Process integration/adapters): absent claim (Pi), unrecognised claim (`unknown-runtime`), advertised-but-failing transport (self-inconsistent manifest via the `reviewTransportCapabilityForAgent` test seam) — three distinct table cases in `TestAuthorizeReviewTransportCapabilityMatrix`.
+- [x] 5.3 Add `ContractReviewTransportV1` to `ContractClaims` in `internal/agents/capabilitymanifest/manifest.go`, reusing `dormant|advertised` vocabulary, canonical registry, `Validate()`, digest. Every in-repo adapter advertises it except Pi (Dormant — "declares only `AutoInstall|SystemPrompt|MCP`"). `Advertises()` extended; `wantManifestDigests` in `manifest_test.go` deliberately updated (new field content legitimately changes every agent's canonical digest).
+- [x] 5.4 Wire capability admission in `internal/cli/review_facade.go`'s `review start`, BEFORE risk/tier/lens/budget/consent/freeze — positioned before the pre-existing (narrower) immutable-receipt-transport check too, since it is the broader "can this runtime participate in review at all" precondition. Gated on an agent identity actually being supplied (`--agent`); the manual/non-agent compatibility path is not gated at all.
+- [x] 5.5 Per-adapter unavailable mode: Pi adapter (declares only `AutoInstall|SystemPrompt|MCP`) enters unavailable, never a self-constructed transition — proven by 5.1's empty-authority-root assertion (nothing is constructed before the refusal).
+- [x] 5.6 GREEN: 5.1, 5.2 pass. Updated the pre-existing `TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority` precedent test: Pi/unknown's `review start` sub-cases now correctly expect the new, broader `review_transport_capability_unsupported` code (caught earlier than the old narrower check); `review status` sub-cases unaffected (the new gate only runs in `review start`). Full `internal/cli` suite (180.5s) green, including `TestEveryProductionRefusalNamesResolutionOrDeclaresByDesign` (removed two invalid `refusal:by-design` markers on `%w`-wrap propagation sites — wraps are already exempt, the marker exempts nothing).
+- [x] 5.7 `scripts/deadcode-ratchet.sh --update` for the new claim. No new unreachable functions.
 
 ## Phase 6 (S5): ReceiptRef Record
 

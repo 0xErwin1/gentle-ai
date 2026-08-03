@@ -723,7 +723,7 @@ func newReviewIntegrationFailure(operation string, args []string, runErr error) 
 		preflightFailure.LineageID = failure.LineageID
 		preflightFailure.RequiredInputs = append([]string{}, reason.RequiredInputs...)
 		preflightFailure.NextAction = reason.NextAction
-		if reason.Code == reviewImmutableTransportUnsupportedCode {
+		if reason.Code == reviewImmutableTransportUnsupportedCode || reason.Code == reviewTransportCapabilityUnsupportedCode {
 			preflightFailure.RetrySafe = false
 		}
 		preflightFailure.Cause = reviewIntegrationFailureCause(preflight)
