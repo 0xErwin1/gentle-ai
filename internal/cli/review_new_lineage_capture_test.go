@@ -2,9 +2,11 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -293,6 +295,53 @@ func TestReviewFacadeCaptureResultNewLineage_NonCausalFindingDoesNotBlock(t *tes
 	}
 	if len(finalized.AdmittedFindingIDs) != 0 {
 		t.Fatalf("admitted_finding_ids = %v, want empty", finalized.AdmittedFindingIDs)
+	}
+}
+
+// TestReviewFacadeFinalizeNewLineage_PartialCaptureIsOrdinaryNotAFault is
+// W-8 (Wave 5 fix cycle 3, verify-report #10186 cycle 2): a partial capture
+// (some, not all, frozen selected lenses captured) at finalize used to
+// surface as an UNEXPECTED FAULT -- `review core finalize: %w` wrapping
+// ErrFinalizeRequiresLensResults, unclassified, which the outer dispatcher
+// treated as a tool-internal fault and wrote a defect report for. This is an
+// ORDINARY, entirely expected incomplete state (the same category
+// reviewIntegrationPreflightError names throughout this package), and the
+// message must name exactly which lens is still missing plus the runnable
+// capture-result continuation -- never a bare "capture more" or a fault
+// report.
+func TestReviewFacadeFinalizeNewLineage_PartialCaptureIsOrdinaryNotAFault(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	const lineage = "partial-capture-lineage"
+	started := startMediumTierNewLineage(t, repo, lineage)
+	if len(started.SelectedLenses) == 0 {
+		t.Fatal("fixture sanity check failed: need at least one selected lens to leave uncaptured")
+	}
+	// Deliberately capture NOTHING, leaving every selected lens missing --
+	// the simplest genuine partial-capture shape (0 of N captured is still
+	// "some lenses missing", the same code path a partial N-1-of-N capture
+	// reaches).
+	var out bytes.Buffer
+	err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage, "--captured-results=true"}, &out)
+	if err == nil {
+		t.Fatal("finalize with zero captured lenses against a medium-tier lineage unexpectedly succeeded")
+	}
+
+	var progress *reviewFacadeOperationProgressError
+	if errors.As(err, &progress) {
+		err = progress.Cause
+	}
+	var preflight *reviewIntegrationPreflightError
+	if !errors.As(err, &preflight) {
+		t.Fatalf("finalize with an incomplete capture must classify as an ordinary preflight refusal, not fall through to the unclassified/fault path: %v (%T)", err, err)
+	}
+	for _, lens := range started.SelectedLenses {
+		if !strings.Contains(err.Error(), lens) {
+			t.Fatalf("refusal = %q, must name the missing lens %q", err.Error(), lens)
+		}
+	}
+	if !strings.Contains(err.Error(), "gentle-ai review capture-result") {
+		t.Fatalf("refusal = %q, must name the runnable capture-result continuation", err.Error())
 	}
 }
 

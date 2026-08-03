@@ -137,6 +137,25 @@ func (authority NewLineageAuthority) CapturedLensNames() []string {
 	return names
 }
 
+// MissingCapturedLensNames returns the frozen SelectedLenses not yet present
+// in CapturedLensNames, in SelectedLenses' own order (W-8, Wave 5 fix cycle
+// 3, verify-report #10186 cycle 2): a partial capture is an ORDINARY
+// incomplete state, not a fault, and naming exactly which lenses remain is
+// what makes the continuation runnable rather than a bare "capture more".
+func (authority NewLineageAuthority) MissingCapturedLensNames() []string {
+	captured := make(map[string]bool, len(authority.CapturedResults))
+	for _, result := range authority.CapturedResults {
+		captured[result.Lens] = true
+	}
+	var missing []string
+	for _, lens := range authority.SelectedLenses {
+		if !captured[lens] {
+			missing = append(missing, lens)
+		}
+	}
+	return missing
+}
+
 // CapturedFindingEvidence flattens every captured lens's own Findings into
 // the single []FindingEvidence AdmitCandidateCausalFindings consumes (C-E) --
 // the exact shape --admission-findings already reads from a caller-supplied
