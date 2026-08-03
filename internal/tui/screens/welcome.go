@@ -80,48 +80,63 @@ func RenderWelcomeWithWidth(cursor int, version string, updateBanner string, upd
 }
 
 func RenderWelcomeWithAdvisory(cursor int, version string, updateBanner string, updateResults []update.UpdateResult, updateCheckDone bool, showProfiles bool, profileCount int, hasEngines bool, width int, height int, advisory WelcomeAdvisory) string {
-	render := func(includeLogo bool) string {
+	render := func(includeLogo, includeOptional, compact bool) string {
 		var b strings.Builder
 
 		if includeLogo {
 			b.WriteString(styles.RenderLogo())
 			b.WriteString("\n\n")
 		}
-		b.WriteString(styles.SubtextStyle.Render(styles.Tagline(version)))
-		b.WriteString("\n")
-
-		if updateBanner != "" {
-			b.WriteString(styles.WarningStyle.Render(wrapWelcomeBanner(updateBanner, welcomeContentWidth(width))))
+		if !compact {
+			b.WriteString(styles.SubtextStyle.Render(styles.Tagline(version)))
 			b.WriteString("\n")
-		}
-		if rendered := renderWelcomeAdvisory(advisory, width, height); rendered != "" {
-			b.WriteString(rendered)
-			b.WriteString("\n")
+
+			if includeOptional {
+				if updateBanner != "" {
+					b.WriteString(styles.WarningStyle.Render(wrapWelcomeBanner(updateBanner, welcomeContentWidth(width))))
+					b.WriteString("\n")
+				}
+				if rendered := renderWelcomeAdvisory(advisory, width, height); rendered != "" {
+					b.WriteString(rendered)
+					b.WriteString("\n")
+				}
+			}
 		}
 
-		if includeLogo {
+		if !compact && includeLogo {
 			b.WriteString("\n")
 		}
 		b.WriteString(styles.HeadingStyle.Render("Menu"))
-		if includeLogo {
-			b.WriteString("\n\n")
-		} else {
+		if compact || !includeLogo {
 			b.WriteString("\n")
+		} else {
+			b.WriteString("\n\n")
 		}
 		b.WriteString(renderOptions(WelcomeOptions(updateResults, updateCheckDone, showProfiles, profileCount, hasEngines), cursor))
-		if includeLogo {
+		if !compact && includeLogo {
 			b.WriteString("\n")
 		}
 		b.WriteString(styles.HelpStyle.Render("j/k: navigate • enter: select • q: quit"))
 
+		if compact {
+			return b.String()
+		}
 		return welcomeFrameStyle(width).Render(b.String())
 	}
+	fitsHeight := func(view string) bool {
+		return height <= 0 || lipgloss.Height(view) <= height
+	}
 
-	view := render(true)
-	if height > 0 && lipgloss.Height(view) > height {
+	view := render(true, true, false)
+	if !fitsHeight(view) {
 		// The logo is optional chrome; keep the menu and controls visible when
 		// the measured terminal viewport cannot hold the full welcome screen.
-		view = render(false)
+		view = render(false, true, false)
+	}
+	if !fitsHeight(view) {
+		// Drop optional chrome and the frame only after measuring the logo-free view.
+		// The complete menu, primary action, and help line remain visible.
+		view = render(false, false, true)
 	}
 	return view
 }

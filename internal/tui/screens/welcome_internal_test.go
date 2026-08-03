@@ -55,19 +55,35 @@ func TestWrapWelcomeBanner_PreservesPlainTextAdvisory(t *testing.T) {
 
 func TestRenderWelcome_StaysWithinViewport(t *testing.T) {
 	cases := []struct {
-		name   string
-		width  int
-		height int
+		name         string
+		width        int
+		height       int
+		updateBanner string
+		advisory     WelcomeAdvisory
 	}{
 		{name: "Windows Terminal startup", width: 120, height: 30},
 		{name: "narrow resize", width: 80, height: 24},
 		{name: "short viewport", width: 120, height: 19},
+		{
+			name:         "short viewport with optional content",
+			width:        120,
+			height:       19,
+			updateBanner: strings.Repeat("Updates available with more detail ", 20),
+			advisory:     WelcomeAdvisory{Message: "Optional advisory content"},
+		},
+		{
+			name:         "compact viewport with optional content",
+			width:        120,
+			height:       17,
+			updateBanner: "Updates available",
+			advisory:     WelcomeAdvisory{Message: "Optional advisory content"},
+		},
 		{name: "wide resize", width: 160, height: 50},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			view := RenderWelcomeWithAdvisory(0, "dev", "", nil, true, false, 0, true, tc.width, tc.height, WelcomeAdvisory{})
+			view := RenderWelcomeWithAdvisory(0, "dev", tc.updateBanner, nil, true, false, 0, true, tc.width, tc.height, tc.advisory)
 
 			if got := lipgloss.Width(view); got > tc.width {
 				t.Fatalf("welcome width = %d, want <= %d\nview:\n%s", got, tc.width, view)
