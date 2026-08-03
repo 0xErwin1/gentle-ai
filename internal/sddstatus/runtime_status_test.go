@@ -246,31 +246,6 @@ func TestMissingEvidenceRevisionPreservesStrictParserReasonBeforeLegacyTransacti
 	}
 }
 
-func TestBindingExistsRequiresAParsedNativeBinding(t *testing.T) {
-	repo := initRuntimeLedgerRepo(t)
-	store := mustRuntimeStore(t, repo, "attempts-only")
-	if _, err := store.Begin(context.Background(), BeginAttemptRequest{
-		ExpectedRevision: "", RequestID: "begin-attempts-only", WorkUnit: "apply",
-		EvidenceGoal: "prove attempts do not imply review authority", MaxAttempts: 2, MaxChangedLines: 20,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	exists, err := bindingExists(context.Background(), repo, "attempts-only")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if exists {
-		t.Fatal("attempt-only runtime HEAD was treated as an explicit review binding")
-	}
-
-	if err := os.WriteFile(filepath.Join(store.Dir, "HEAD"), []byte("corrupt\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := bindingExists(context.Background(), repo, "attempts-only"); err == nil {
-		t.Fatal("corrupt native runtime HEAD was accepted as a review binding")
-	}
-}
-
 func TestResolveFailsClosedOnCorruptNativeRuntimeAuthority(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
 	seedReadyChange(t, repo, "corrupt-runtime", "- [ ] 1.1 Work\n")

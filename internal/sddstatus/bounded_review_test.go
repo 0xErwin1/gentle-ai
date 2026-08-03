@@ -22,6 +22,12 @@ func TestResolveArchiveRequiresApprovedExactReviewReceipt(t *testing.T) {
 		wantArchive DependencyState
 		wantNext    string
 		wantReason  string
+		// wantNilGate is corrective verify cycle 4's BLOCKER-1 exception to
+		// this table's otherwise-uniform "ReviewGate is always present"
+		// assumption: a genuinely missing receipt (no review ever started)
+		// is decline-by-absence-of-action, not a blocker -- ReviewGate
+		// stays structurally absent. See "missing every receipt" below.
+		wantNilGate bool
 	}{
 		{
 			name: "missing receipt mirror discovers native receipt",
@@ -33,7 +39,16 @@ func TestResolveArchiveRequiresApprovedExactReviewReceipt(t *testing.T) {
 			wantGate: reviewtransaction.GateAllow, wantArchive: DependencyReady, wantNext: "archive",
 		},
 		{
-			name: "missing every receipt invalidates archive",
+			// Corrective verify cycle 4, BLOCKER-1: a genuinely missing
+			// receipt (no review governs, and none was ever discovered) is
+			// the decline case -- "the offer was never acted on", not a
+			// blocker. Superseded expectation (documented, not silently
+			// dropped): this row previously required GateInvalidated /
+			// blocked / resolve-review naming "terminal review receipt is
+			// missing"; the ratified "invitation, never a gate" reading of
+			// rdd-post-verify-review-offer's "Decline Proceeds to Unmanaged
+			// Ordinary Archive" requirement supersedes that.
+			name: "missing every receipt is decline, archive proceeds unmanaged",
 			mutate: func(t *testing.T, changeRoot string, _ reviewtransaction.Receipt, _ reviewtransaction.GateRequest) {
 				if err := os.Remove(filepath.Join(changeRoot, "reviews", "receipt.json")); err != nil {
 					t.Fatal(err)
@@ -47,8 +62,7 @@ func TestResolveArchiveRequiresApprovedExactReviewReceipt(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			wantGate: reviewtransaction.GateInvalidated, wantArchive: DependencyBlocked,
-			wantNext: "resolve-review", wantReason: "terminal review receipt is missing",
+			wantNilGate: true, wantArchive: DependencyReady, wantNext: "archive",
 		},
 		{
 			name:     "exact authoritative artifacts allow archive",
@@ -147,11 +161,17 @@ func TestResolveArchiveRequiresApprovedExactReviewReceipt(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Resolve() error = %v", err)
 			}
-			if status.ReviewGate == nil {
-				t.Fatal("ReviewGate is nil for final archive decision")
-			}
-			if status.ReviewGate.Result != tt.wantGate {
-				t.Fatalf("ReviewGate.Result = %q, want %q (%s)", status.ReviewGate.Result, tt.wantGate, status.ReviewGate.Reason)
+			if tt.wantNilGate {
+				if status.ReviewGate != nil {
+					t.Fatalf("ReviewGate = %#v, want structural absence (decline)", status.ReviewGate)
+				}
+			} else {
+				if status.ReviewGate == nil {
+					t.Fatal("ReviewGate is nil for final archive decision")
+				}
+				if status.ReviewGate.Result != tt.wantGate {
+					t.Fatalf("ReviewGate.Result = %q, want %q (%s)", status.ReviewGate.Result, tt.wantGate, status.ReviewGate.Reason)
+				}
 			}
 			if status.Dependencies.Archive != tt.wantArchive || status.NextRecommended != tt.wantNext {
 				t.Fatalf("archive=%q next=%q, want %q/%q", status.Dependencies.Archive, status.NextRecommended, tt.wantArchive, tt.wantNext)
@@ -456,7 +476,7 @@ func TestResolveEngramBridgesCompactAuthorityOverIncompatibleTransactionArtifact
 	}
 }
 
-func TestResolveEngramDoesNotBridgeCompactAuthorityOverMalformedJSONTransaction(t *testing.T) {
+func TestResolveEngramSkipsPreVerifyCompactBridgeRegardlessOfTransactionValidity(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
 	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-thin")
@@ -480,6 +500,14 @@ func TestResolveEngramDoesNotBridgeCompactAuthorityOverMalformedJSONTransaction(
 	restore := stubEngramExport(t, observations)
 	defer restore()
 
+	// Wave 4 S3: resolveEngramStatus no longer discovers or bridges compact
+	// authority pre-verify at all (applyPreVerifyCompactBridgeRouting and its
+	// discoverCompactPreVerifyAuthority call were removed with the pre-verify
+	// routing appliers). A malformed review/transaction artifact is no longer
+	// read for pre-verify gating purposes either way, so verify is ready
+	// regardless of the transaction payload's validity — there is no more
+	// "block on malformed" or "bridge on approved compact authority" branch
+	// to distinguish between.
 	status, ok, err := resolveEngramStatus(root, "thin", false, false)
 	if err != nil {
 		t.Fatalf("resolveEngramStatus() error = %v", err)
@@ -487,12 +515,8 @@ func TestResolveEngramDoesNotBridgeCompactAuthorityOverMalformedJSONTransaction(
 	if !ok {
 		t.Fatal("resolveEngramStatus() did not retain the Engram change")
 	}
-	reasons := strings.Join(status.BlockedReasons, "\n")
-	if status.Dependencies.Verify != DependencyBlocked || status.NextRecommended != "review" {
-		t.Fatalf("verify=%q next=%q reasons=%v, want malformed JSON to remain blocked on review", status.Dependencies.Verify, status.NextRecommended, status.BlockedReasons)
-	}
-	if !strings.Contains(reasons, "bounded review transaction is invalid") {
-		t.Fatalf("BlockedReasons = %v, want malformed JSON reason", status.BlockedReasons)
+	if status.Dependencies.Verify != DependencyReady || status.NextRecommended != "verify" {
+		t.Fatalf("verify=%q next=%q reasons=%v, want ready/verify with no pre-verify review consultation", status.Dependencies.Verify, status.NextRecommended, status.BlockedReasons)
 	}
 	for _, payload := range []string{`[]`, `null`, `"legacy"`} {
 		observations[len(observations)-1].Content = payload
@@ -500,13 +524,13 @@ func TestResolveEngramDoesNotBridgeCompactAuthorityOverMalformedJSONTransaction(
 		if err != nil {
 			t.Fatalf("resolveEngramStatus(%s) error = %v", payload, err)
 		}
-		if status.Dependencies.Verify != DependencyBlocked || status.NextRecommended != "review" {
-			t.Fatalf("payload=%s verify=%q next=%q, want blocked/review", payload, status.Dependencies.Verify, status.NextRecommended)
+		if status.Dependencies.Verify != DependencyReady || status.NextRecommended != "verify" {
+			t.Fatalf("payload=%s verify=%q next=%q, want ready/verify", payload, status.Dependencies.Verify, status.NextRecommended)
 		}
 	}
 }
 
-func TestResolveEngramFailsClosedOnIncompatibleTransactionWithoutNativeAuthority(t *testing.T) {
+func TestResolveEngramSkipsPreVerifyConsultationForIncompatibleTransaction(t *testing.T) {
 	root := t.TempDir()
 	mkdir(t, filepath.Join(root, ".engram"))
 	project := strings.ToLower(filepath.Base(root))
@@ -521,6 +545,11 @@ func TestResolveEngramFailsClosedOnIncompatibleTransactionWithoutNativeAuthority
 	restore := stubEngramExport(t, observations)
 	defer restore()
 
+	// Wave 4 S3: an incompatible/legacy review/transaction artifact is no
+	// longer consulted for pre-verify gating (the pre-verify routing appliers
+	// that read it for that purpose were removed), so verify is ready
+	// regardless. readReviewTransaction's own parse-failure handling must
+	// still not leak a raw JSON error into BlockedReasons.
 	status, ok, err := resolveEngramStatus(root, "thin", false, false)
 	if err != nil {
 		t.Fatalf("resolveEngramStatus() error = %v", err)
@@ -532,8 +561,8 @@ func TestResolveEngramFailsClosedOnIncompatibleTransactionWithoutNativeAuthority
 	if strings.Contains(reasons, "invalid character") {
 		t.Fatalf("BlockedReasons = %v, want no raw JSON parse error", status.BlockedReasons)
 	}
-	if status.Dependencies.Verify != DependencyBlocked || !strings.Contains(reasons, "not a native JSON review transaction") {
-		t.Fatalf("verify=%q reasons=%v, want fail-closed compatibility reason", status.Dependencies.Verify, status.BlockedReasons)
+	if status.Dependencies.Verify != DependencyReady || status.NextRecommended != "verify" {
+		t.Fatalf("verify=%q next=%q reasons=%v, want ready/verify with no pre-verify review consultation", status.Dependencies.Verify, status.NextRecommended, status.BlockedReasons)
 	}
 }
 
@@ -550,56 +579,36 @@ func TestResolveFinalVerifyWaitsForAllTasks(t *testing.T) {
 	}
 }
 
-func TestResolveStartsBoundedReviewBeforeFinalVerification(t *testing.T) {
+// TestResolveMakesVerifyReadyWithNoPreVerifyReviewSupervision is Wave 4 S3's
+// characterization of the new sequence (design.md decision 3, proposal.md's
+// #1 success criterion, maintainer directive Engram #10123): apply -> verify
+// -> offer RDD -> archive, with no pre-verify review control. Before this
+// wave (see git history), the equivalent test —
+// TestResolveStartsBoundedReviewBeforeFinalVerification — asserted the
+// opposite: verify stayed blocked and next was "review" until an explicit
+// bounded review transaction existed. That routing (applyPreVerifyReview
+// Routing/applyPreVerifyCompactBridgeRouting) is removed in this slice, so
+// this test proves its replacement: verify becomes ready immediately once
+// apply is done, with or without any review transaction ever having
+// existed, and the dispatcher no longer renders "Next Review Operation"
+// guidance for this case (that guidance is now reachable only from
+// resolve-review's binding-error paths, exercised elsewhere).
+func TestResolveMakesVerifyReadyWithNoPreVerifyReviewSupervision(t *testing.T) {
 	root := t.TempDir()
-	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
+	seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
 	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Dependencies.Verify != DependencyBlocked || status.NextRecommended != "review" {
-		t.Fatalf("without transaction verify=%q next=%q, want blocked/review", status.Dependencies.Verify, status.NextRecommended)
+	if status.Dependencies.Verify != DependencyReady || status.NextRecommended != "verify" {
+		t.Fatalf("without any review transaction verify=%q next=%q, want ready/verify", status.Dependencies.Verify, status.NextRecommended)
+	}
+	if status.ReviewTransaction != nil {
+		t.Fatalf("status.ReviewTransaction = %#v, want nil — no review transaction was ever created", status.ReviewTransaction)
 	}
 	dispatcher := RenderDispatcherMarkdown(status)
-	for _, want := range []string{"### Next Review Operation", "gentle-ai review start", "gentle-ai review finalize", "gentle-ai review validate --gate post-apply", "reconcile existing terminal mirrors"} {
-		if !strings.Contains(dispatcher, want) {
-			t.Fatalf("dispatcher missing %q:\n%s", want, dispatcher)
-		}
-	}
-	for _, forbidden := range []string{"review-start", "review-step", "review-resume", "review-validate", "review-bundle-export", "--machine-transaction-out", "--intended-untracked-manifest"} {
-		if strings.Contains(dispatcher, forbidden) {
-			t.Fatalf("dispatcher exposes lower-level review command %q:\n%s", forbidden, dispatcher)
-		}
-	}
-
-	tx, err := reviewtransaction.NewTransaction(reviewtransaction.Start{
-		LineageID: "thin-lineage", Mode: reviewtransaction.ModeOrdinary4R, Generation: 1,
-		Snapshot: reviewtransaction.Snapshot{
-			Kind: reviewtransaction.TargetCurrentChanges, BaseTree: strings.Repeat("a", 40), CandidateTree: strings.Repeat("b", 40),
-			PathsDigest: shaID("2"), IntendedUntracked: []string{}, IntendedUntrackedProof: shaID("3"), Paths: []string{"internal/example.go"}, Identity: shaID("4"),
-		},
-		PolicyHash: shaID("5"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.StartReview(); err != nil {
-		t.Fatal(err)
-	}
-	if err := freezeStatusFindings(tx, []reviewtransaction.Finding{}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.ClassifyEvidence([]reviewtransaction.FindingEvidence{}); err != nil {
-		t.Fatal(err)
-	}
-	writeJSON(t, filepath.Join(changeRoot, "reviews", "transaction.json"), tx)
-
-	status, err = Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status.Dependencies.Verify != DependencyReady || status.NextRecommended != "verify" {
-		t.Fatalf("ready transaction verify=%q next=%q, want ready/verify", status.Dependencies.Verify, status.NextRecommended)
+	if strings.Contains(dispatcher, "### Next Review Operation") {
+		t.Fatalf("dispatcher rendered pre-verify review-operation guidance with no pre-verify gate to guide toward:\n%s", dispatcher)
 	}
 }
 
@@ -935,7 +944,7 @@ func TestDiscoverCompactPreVerifyAuthorityIgnoresForeignChangeAuthority(t *testi
 	}
 }
 
-func TestResolveBlocksAmbiguousPathBoundCompactAuthorities(t *testing.T) {
+func TestResolveIgnoresAmbiguousPathBoundCompactAuthoritiesPreVerify(t *testing.T) {
 	root := t.TempDir()
 	changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
 	writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-one")
@@ -988,16 +997,25 @@ func TestResolveBlocksAmbiguousPathBoundCompactAuthorities(t *testing.T) {
 	if err := reviewtransaction.WriteCompactReceiptAtomic(second.ReceiptPath(), receipt); err != nil {
 		t.Fatal(err)
 	}
+	// Wave 4 S3: applyPreVerifyCompactBridgeRouting — the only reader of
+	// bridge.Relevant pre-verify — was removed with the pre-verify routing
+	// appliers. discoverCompactPreVerifyAuthority still runs and still
+	// classifies this as Relevant (proven directly by
+	// TestDiscoverCompactPreVerifyAuthorityFailsClosedWithoutExactlyOneEligibleStore
+	// below), but nothing blocks verify on it anymore: only bridge.Eligible
+	// still matters, for the distinct post-verify-failure recovery path
+	// (TestResolveRoutesStaleVerifyEvidenceToVerifyUnderApprovedCompactAuthority).
+	// Verify becomes ready regardless of an ambiguous path-bound authority.
 	status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Dependencies.Verify != DependencyBlocked || status.NextRecommended != "resolve-review" || !strings.Contains(strings.Join(status.BlockedReasons, "\n"), "multiple eligible") {
-		t.Fatalf("ambiguous compact bridge status = %#v", status)
+	if status.Dependencies.Verify != DependencyReady || status.NextRecommended != "verify" {
+		t.Fatalf("ambiguous compact bridge status = %#v, want ready/verify with no pre-verify bridge consultation", status)
 	}
 }
 
-func TestResolveRejectsReceiptMismatchAndNonAllowCompactBridge(t *testing.T) {
+func TestResolveIgnoresReceiptMismatchAndNonAllowCompactBridgePreVerify(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
 		mutate func(t *testing.T, root string)
@@ -1018,12 +1036,17 @@ func TestResolveRejectsReceiptMismatchAndNonAllowCompactBridge(t *testing.T) {
 			changeRoot := seedReadyChange(t, root, "thin", "- [x] 1.1 Done\n")
 			writeApprovedCompactAuthorityForChange(t, root, changeRoot, "compact-thin")
 			tt.mutate(t, root)
+			// Wave 4 S3: same rationale as
+			// TestResolveIgnoresAmbiguousPathBoundCompactAuthoritiesPreVerify
+			// — bridge.Relevant no longer gates verify pre-verify, so a
+			// receipt mismatch or a post-apply-gate denial no longer blocks
+			// here either. Verify is ready regardless.
 			status, err := Resolve(ResolveOptions{CWD: root, ChangeName: "thin"})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if status.Dependencies.Verify != DependencyBlocked || status.NextRecommended != "resolve-review" || status.Dependencies.Archive != DependencyBlocked {
-				t.Fatalf("%s status = %#v", tt.name, status)
+			if status.Dependencies.Verify != DependencyReady || status.NextRecommended != "verify" {
+				t.Fatalf("%s status = %#v, want ready/verify with no pre-verify bridge consultation", tt.name, status)
 			}
 		})
 	}
