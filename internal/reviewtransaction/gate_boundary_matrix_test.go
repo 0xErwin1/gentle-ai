@@ -22,6 +22,7 @@ package reviewtransaction
 // `review start` / `review finalize` / `review validate --gate <gate>`.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -118,17 +119,33 @@ func gateBoundaryMatrixBinary(t *testing.T) string {
 
 // runGateBoundaryMatrixReview execs the real binary's `review <verb>` for
 // one repository, appending `--cwd repo` so callers only name the verb and
-// its verb-specific flags.
+// its verb-specific flags. stdout and stderr are captured separately: a
+// denial writes its full JSON result to stdout AND exits non-zero with an
+// "Error: ..." line on stderr, and CombinedOutput's interleaving of the two
+// would corrupt the JSON this function's callers decode. On failure, both
+// streams are folded into the returned error text so callers still see the
+// full diagnostic.
 func runGateBoundaryMatrixReview(binary, repo string, args ...string) (string, error) {
 	full := append([]string{"review"}, args...)
 	full = append(full, "--cwd", repo)
 	cmd := exec.CommandContext(context.Background(), binary, full...)
-	output, err := cmd.CombinedOutput()
-	return string(output), err
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	if err != nil {
+		return stdout.String(), fmt.Errorf("%w: %s", err, stderr.String())
+	}
+	return stdout.String(), nil
 }
 
 type gateBoundaryMatrixCLIResult struct {
-	Result string `json:"result"`
+	Result   string `json:"result"`
+	Relation string `json:"relation,omitempty"`
+	Next     *struct {
+		Transition string `json:"transition,omitempty"`
+		ReasonCode string `json:"reason_code"`
+	} `json:"next,omitempty"`
 }
 
 func decodeGateBoundaryMatrixResult(t *testing.T, payload string) gateBoundaryMatrixCLIResult {
@@ -142,11 +159,15 @@ func decodeGateBoundaryMatrixResult(t *testing.T, payload string) gateBoundaryMa
 
 // TestGateBoundaryMatrix_35Cells builds and checks
 // testdata/gate-boundary-matrix.golden: 35 rows (5 gates x 7 relations).
-// Wired cells (currently: the "exact" relation at post-apply, pre-commit,
-// pre-push, and pre-pr) are driven through the real compiled binary and
-// assert GateAllow. Every other cell -- including release's "exact" cell,
-// whose genuine construction needs additional release-evidence artifact
-// fixtures beyond this slice's scope -- is an explicit, reasoned SKIP.
+//
+// Wired cells: 7 as of Slice 3 (up from 4 after Slice 1) -- the "exact"
+// relation at post-apply/pre-commit/pre-push/pre-pr (Slice 1), plus the
+// "changed" relation at post-apply/pre-commit/pre-push (Slice 3, new:
+// gateVerdict + attachGateVerdictRelation now populate Relation/Next on a
+// real denial, observable through the CLI's ReviewValidateResult.Relation/Next
+// wire fields Slice 3 also adds). Every other cell -- including release's
+// "exact" cell and pre-pr's "changed" cell -- is an explicit, reasoned SKIP;
+// see each SKIP's own comment above for why it is not wired yet.
 func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 	binary := gateBoundaryMatrixBinary(t)
 	wired := map[[2]string]gateBoundaryMatrixRow{}
@@ -250,6 +271,106 @@ func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 		}
 	}
 
+	// Wave 5 Slice 3: the "changed" relation is now real for all 5 gates
+	// (attachGateVerdictRelation, compact_gate.go), driven here through the
+	// identical real binary -- each fixture reaches its approved receipt
+	// exactly as the "exact" cells above, then drifts the candidate so the
+	// SAME EvaluateCompactGate call denies scope-changed/base-mismatch and
+	// carries Relation="changed" + Next in its real JSON output (the
+	// ReviewValidateResult.Relation/Next wire fields Slice 3 adds).
+	assertChanged := func(t *testing.T, gate string, out string, err error, wantNext string, wantReasonCode string) gateBoundaryMatrixRow {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s/changed review validate unexpectedly allowed:\n%s", gate, out)
+		}
+		result := decodeGateBoundaryMatrixResult(t, out)
+		if result.Relation != "changed" {
+			t.Fatalf("%s/changed relation = %q, want %q:\n%s", gate, result.Relation, "changed", out)
+		}
+		if result.Next == nil || result.Next.Transition != wantNext || result.Next.ReasonCode != wantReasonCode {
+			t.Fatalf("%s/changed next = %#v, want transition %q reason_code %q", gate, result.Next, wantNext, wantReasonCode)
+		}
+		return gateBoundaryMatrixRow{
+			Gate: gate, Relation: "changed", Verdict: result.Result, NextStep: wantNext, Explained: false,
+			Reason: "driven via the real gentle-ai binary: approved candidate drifted, then validate --gate " + gate + " denies with Relation/Next populated by gateVerdict (Slice 3)",
+		}
+	}
+
+	// post-apply / changed: drift the reviewed file's own content (an
+	// untracked ADDITION would trip the earlier untracked-out-of-scope
+	// check instead -- gate_verdict_deny_golden_test.go's fixtures pin this
+	// exact distinction).
+	{
+		repo := initSnapshotRepo(t)
+		writeSnapshotFile(t, repo, "docs/notes.md", "release notes\n")
+		lineage := "matrix-post-apply-changed"
+		if out, err := runGateBoundaryMatrixReview(binary, repo, "start", "--lineage", lineage); err != nil {
+			t.Fatalf("post-apply/changed review start: %v\n%s", err, out)
+		}
+		if out, err := runGateBoundaryMatrixReview(binary, repo, "finalize", "--lineage", lineage); err != nil {
+			t.Fatalf("post-apply/changed review finalize: %v\n%s", err, out)
+		}
+		writeSnapshotFile(t, repo, "docs/notes.md", "drifted after approval\n")
+		out, err := runGateBoundaryMatrixReview(binary, repo, "validate", "--lineage", lineage, "--gate", string(GatePostApply))
+		wired[[2]string{string(GatePostApply), "changed"}] = assertChanged(t, string(GatePostApply), out, err, "review start", "candidate_changed")
+	}
+
+	// pre-commit / changed: same drift, staged.
+	{
+		repo := initSnapshotRepo(t)
+		writeSnapshotFile(t, repo, "docs/notes.md", "release notes\n")
+		lineage := "matrix-pre-commit-changed"
+		if out, err := runGateBoundaryMatrixReview(binary, repo, "start", "--lineage", lineage); err != nil {
+			t.Fatalf("pre-commit/changed review start: %v\n%s", err, out)
+		}
+		if out, err := runGateBoundaryMatrixReview(binary, repo, "finalize", "--lineage", lineage); err != nil {
+			t.Fatalf("pre-commit/changed review finalize: %v\n%s", err, out)
+		}
+		writeSnapshotFile(t, repo, "docs/notes.md", "drifted after approval\n")
+		gitSnapshot(t, repo, "add", "docs/notes.md")
+		out, err := runGateBoundaryMatrixReview(binary, repo, "validate", "--lineage", lineage, "--gate", string(GatePreCommit))
+		wired[[2]string{string(GatePreCommit), "changed"}] = assertChanged(t, string(GatePreCommit), out, err, "review start", "candidate_changed")
+	}
+
+	// pre-push / changed: committed delivery, then AMENDED (not a further
+	// commit) so the delivery stays exactly one commit ahead of its
+	// reviewed base -- pre-push's current-changes receipt requires exactly
+	// one delivery commit, so an additional drift commit trips that
+	// "not exactly one commit" check before ever reaching the
+	// candidate-or-paths-mismatch comparison this cell targets.
+	{
+		repo := initSnapshotRepo(t)
+		branch := currentBranch(context.Background(), repo)
+		configurePublicationRemote(t, repo, branch)
+		writeSnapshotFile(t, repo, "docs/notes.md", "release notes\n")
+		lineage := "matrix-pre-push-changed"
+		if out, err := runGateBoundaryMatrixReview(binary, repo, "start", "--lineage", lineage); err != nil {
+			t.Fatalf("pre-push/changed review start: %v\n%s", err, out)
+		}
+		if out, err := runGateBoundaryMatrixReview(binary, repo, "finalize", "--lineage", lineage); err != nil {
+			t.Fatalf("pre-push/changed review finalize: %v\n%s", err, out)
+		}
+		gitSnapshot(t, repo, "add", "docs/notes.md")
+		gitSnapshot(t, repo, "commit", "-m", "reviewed candidate")
+		writeSnapshotFile(t, repo, "docs/notes.md", "drifted after approval\n")
+		gitSnapshot(t, repo, "add", "docs/notes.md")
+		gitSnapshot(t, repo, "commit", "--amend", "--no-edit")
+		out, err := runGateBoundaryMatrixReview(binary, repo, "validate", "--lineage", lineage, "--gate", string(GatePrePush), "--base-ref", "origin/"+branch)
+		wired[[2]string{string(GatePrePush), "changed"}] = assertChanged(t, string(GatePrePush), out, err, "review start", "candidate_changed")
+	}
+
+	// pre-pr / changed (base-mismatch variant) is NOT wired through this
+	// binary-driven harness this slice: reaching it needs a `review start`
+	// CLI recipe this slice has not verified reproduces
+	// gate_verdict_deny_golden_test.go's TestPrePRGate_Deny_BaseMismatchDeniesWithoutComposition
+	// Go-level fixture (TargetExactRevision via approvedCompactRevisionFixture)
+	// byte-for-byte -- the CLI's `review start` defaults to a different
+	// target kind (TargetCurrentChanges). The property itself IS already
+	// proven through EvaluateCompactGate directly (the identical function
+	// `review validate` calls) by that Go-level test; rather than risk a
+	// subtly wrong CLI fixture pinned into the committed golden, this cell
+	// stays an explained skip pending a verified CLI recipe.
+
 	rows := make([]gateBoundaryMatrixRow, 0, len(gateBoundaryMatrixGates)*len(gateBoundaryMatrixRelations))
 	for _, gate := range gateBoundaryMatrixGates {
 		for _, relation := range gateBoundaryMatrixRelations {
@@ -265,8 +386,8 @@ func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 	if len(rows) != 35 {
 		t.Fatalf("gate boundary matrix has %d rows, want 35 (5 gates x 7 relations)", len(rows))
 	}
-	if len(wired) != 4 {
-		t.Fatalf("gate boundary matrix wired %d cells, want exactly 4 this slice (post-apply/pre-commit/pre-push/pre-pr exact)", len(wired))
+	if len(wired) != 7 {
+		t.Fatalf("gate boundary matrix wired %d cells, want exactly 7 this slice (4 from S1: post-apply/pre-commit/pre-push/pre-pr exact; 3 new from S3: post-apply/pre-commit/pre-push changed)", len(wired))
 	}
 
 	actual, err := json.MarshalIndent(rows, "", "  ")

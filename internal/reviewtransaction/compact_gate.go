@@ -136,7 +136,38 @@ func compactSquashedFixDelivery(gate GateKind, state CompactState, snapshot Snap
 }
 
 func EvaluateCompactGate(ctx context.Context, repo string, receipt CompactReceipt, input NativeGateRequestInput) NativeGateEvaluation {
-	return evaluateCompactGate(ctx, repo, receipt, input, false)
+	return attachGateVerdictRelation(evaluateCompactGate(ctx, repo, receipt, input, false))
+}
+
+// attachGateVerdictRelation is Wave 5 Slice 3's additive wiring point
+// (design decision 3, task 4.2): it populates the new Relation/Next fields
+// for the denial shapes gateVerdict already covers this slice -- the
+// "changed" relation (candidate-or-paths-mismatch and base-mismatch
+// denials, the exact two the 5 named per-gate deny goldens exercise). It
+// NEVER changes Result, Reason, or Context -- only adds the two new
+// fields -- so every existing composite literal and test stays
+// byte-identical. Full relation classification for every other outcome
+// (exact, compatible_base_advance, ambiguous, unknown, etc.) is
+// deliberately NOT wired here yet: see NativeGateEvaluation's own doc
+// comment (gate.go) for why guessing those classifications now would
+// violate the matrix harness's "never a fabricated pass" rule.
+func attachGateVerdictRelation(evaluation NativeGateEvaluation) NativeGateEvaluation {
+	if evaluation.Context.Denial == nil {
+		return evaluation
+	}
+	var relation CandidateRelation
+	switch {
+	case evaluation.Result == GateScopeChanged && evaluation.Context.Denial.Code == "candidate-or-paths-mismatch":
+		relation = ShadowRelationChanged
+	case evaluation.Result == GateInvalidated && evaluation.Context.Denial.Code == "base-mismatch":
+		relation = ShadowRelationChanged
+	default:
+		return evaluation
+	}
+	_, next := gateVerdict(evaluation.Context.Gate, relation, evaluation.Context)
+	evaluation.Relation = relation
+	evaluation.Next = &next
+	return evaluation
 }
 
 func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceipt, input NativeGateRequestInput, authorityLockHeld bool) NativeGateEvaluation {
