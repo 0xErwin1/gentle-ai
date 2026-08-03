@@ -2264,6 +2264,8 @@ func TestSDDArchiveStoreSpecificFilesystemContract(t *testing.T) {
 		"diff -r \"$snapshot_root/source\" \"openspec/changes/archive/YYYY-MM-DD-{change-name}\"",
 		"if diff -r \"$snapshot_root/source\" \"openspec/changes/archive/YYYY-MM-DD-{change-name}\"; then",
 		"only empty diff output passes",
+		"verbatim `diff -r` output from Steps 2 and 3 MUST appear in the phase result",
+		"A failed or skipped `diff -r` FAILS the phase",
 		"The `snapshot_root` is removed safely by the EXIT trap",
 	} {
 		if !strings.Contains(skill, required) {
