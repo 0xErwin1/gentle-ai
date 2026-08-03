@@ -208,7 +208,7 @@ func TestEvaluateLegacyGateAllowsExactAndDeniesChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	evidence := CoreValidateEvidence{LiveSnapshot: tx.Snapshot, ApplicableAuthorities: 1}
-	exact := EvaluateLegacyGate(context.Background(), repo, chain, receiptPath, live, true, evidence, GatePreCommit)
+	exact := EvaluateLegacyGate(context.Background(), repo, chain, receiptPath, live, true, evidence, NativeGateRequestInput{Gate: GatePreCommit})
 	if exact.Result != GateAllow {
 		t.Fatalf("exact live candidate = %#v, want allow", exact)
 	}
@@ -228,9 +228,56 @@ func TestEvaluateLegacyGateAllowsExactAndDeniesChanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	changedEvidence := CoreValidateEvidence{LiveSnapshot: changedSnapshot, ApplicableAuthorities: 1}
-	changed := EvaluateLegacyGate(context.Background(), repo, chain, receiptPath, changedLive, true, changedEvidence, GatePreCommit)
+	changed := EvaluateLegacyGate(context.Background(), repo, chain, receiptPath, changedLive, true, changedEvidence, NativeGateRequestInput{Gate: GatePreCommit})
 	if changed.Result == GateAllow {
 		t.Fatalf("out-of-scope candidate = %#v, want deny", changed)
+	}
+}
+
+// TestEvaluateLegacyGateAllowsExactAtAllFiveGates reproduces the verify
+// report's CRITICAL-B probe directly: an unchanged, byte-identical legacy
+// candidate must allow at every one of the five gates, not just the three
+// EvaluateLegacyGateAllowsExactAndDeniesChanged already covered. Before the
+// fix, pre-pr and release denied permanently with reason_code
+// base_relationship_invalid / release_evidence_missing because
+// EvaluateLegacyGate never populated GateContext.BaseRelationshipValid or
+// Release at all (base-relationship precondition regression, W3
+// EvaluateNativeGate's own gate.go:326/301-310 precedent).
+func TestEvaluateLegacyGateAllowsExactAtAllFiveGates(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	_, chain, receiptPath := legacyApprovedChainFixture(t, repo, "legacy-gate-all-five-exact")
+	tx := chain.Records[len(chain.Records)-1].Transaction
+
+	live, err := FreezeCandidateIdentity(context.Background(), repo, tx.Snapshot, tx.PolicyHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence := CoreValidateEvidence{LiveSnapshot: tx.Snapshot, ApplicableAuthorities: 1}
+
+	dir := t.TempDir()
+	releaseArtifact := func(name, content string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	releaseInput := NativeGateRequestInput{
+		Gate:                       GateRelease,
+		ReleaseConfiguration:       releaseArtifact("configuration.txt", "release configuration\n"),
+		ReleaseGenerated:           releaseArtifact("generated.txt", "release generated artifact\n"),
+		ReleaseProvenance:          releaseArtifact("provenance.txt", "release provenance\n"),
+		ReleasePublicationBoundary: releaseArtifact("publication-boundary.txt", "release publication boundary\n"),
+		ReleaseEvidenceFreshness:   releaseArtifact("evidence-freshness.txt", "release evidence freshness\n"),
+	}
+
+	for _, gateInput := range []NativeGateRequestInput{
+		{Gate: GatePostApply}, {Gate: GatePreCommit}, {Gate: GatePrePush}, {Gate: GatePrePR}, releaseInput,
+	} {
+		evaluation := EvaluateLegacyGate(context.Background(), repo, chain, receiptPath, live, true, evidence, gateInput)
+		if evaluation.Result != GateAllow {
+			t.Fatalf("gate %q on an unchanged legacy candidate = %#v, want allow", gateInput.Gate, evaluation)
+		}
 	}
 }
 
@@ -398,7 +445,7 @@ func TestEvaluateLegacyGateValidatesReceiptFromAnInFlightCorrection(t *testing.T
 		t.Fatal(err)
 	}
 	evidence := CoreValidateEvidence{LiveSnapshot: liveSnapshot, ApplicableAuthorities: 1}
-	evaluation := EvaluateLegacyGate(context.Background(), repo, chain, receiptPath, live, true, evidence, GatePreCommit)
+	evaluation := EvaluateLegacyGate(context.Background(), repo, chain, receiptPath, live, true, evidence, NativeGateRequestInput{Gate: GatePreCommit})
 	if evaluation.Result != GateAllow {
 		t.Fatalf("in-flight-correction receipt validation = %#v, want allow", evaluation)
 	}
