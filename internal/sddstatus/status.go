@@ -474,8 +474,31 @@ func Resolve(options ResolveOptions) (Status, error) {
 	}
 	// Stale evidence under a live allow authority needs a fresh verification,
 	// not legacy remediation classification against a missing transaction.
+	// Corrective verify cycle 3, CRITICAL-B: this whole review-authority
+	// consultation (discovery walk, compact remediation lookup, and explicit
+	// governingRef validation/blocking) is gated behind !reviewDisabled,
+	// consulted once here, mirroring applyReviewGate's own fix. Without this,
+	// a stale-verify-totals fixture reached resolveReviewAuthority's
+	// discovery walk and appended "... run the fresh full review ... with
+	// gentle-ai review start" as a blocked reason while the switch was OFF —
+	// a command the switch itself refuses to run, and archive blocking on
+	// review grounds while OFF at all, both violations of the ratified
+	// "archive consults no reviewGate structured status ... archive cannot
+	// fail or block for review reasons" requirement.
+	staleEvidenceCandidate := governingRef == nil && reviewState == nil && applyState == ApplyAllDone && artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale
 	var staleAllowAuthority *reviewAuthorityEvaluation
-	if governingRef == nil && reviewState == nil && applyState == ApplyAllDone && artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale {
+	// staleEvidenceUnmanaged is the disabled-mode analogue of
+	// staleAllowAuthority: internally-complete, non-failing evidence whose
+	// only defect is a totals mismatch needs a fresh verification either
+	// way, but while the switch is off there is no review authority left to
+	// consult to justify that leniency -- so it is granted unconditionally,
+	// the same "please re-verify" outcome, with zero review consultation and
+	// zero blocked reasons. Without this, a disabled run fell through to the
+	// ordinary "no transaction, no compact authority" remediation reason,
+	// which named nextRecommended "resolve-review" for a fixture that has
+	// nothing to do with review governance.
+	staleEvidenceUnmanaged := reviewDisabled && staleEvidenceCandidate
+	if !reviewDisabled && staleEvidenceCandidate {
 		evaluation := resolveReviewAuthority(context.Background(), workspaceRoot, firstPath(artifactPaths.ReviewReceipt), "", changeName)
 		if evaluation.Result == reviewtransaction.GateAllow {
 			staleAllowAuthority = &evaluation
@@ -484,11 +507,14 @@ func Resolve(options ResolveOptions) (Status, error) {
 		}
 	}
 	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, verifyResult)
-	remediationRequired := staleAllowAuthority == nil && !runtimeRemediationComplete && artifacts["verifyReport"] == ArtifactDone && !verifyResult.Passing && applyState == ApplyAllDone
-	compactRemediation := resolveCompactRemediationAuthority(
-		context.Background(), workspaceRoot, changeName, governingRef, remediationRequired && reviewState == nil,
-		firstPath(artifactPaths.ReviewReceipt), "",
-	)
+	remediationRequired := staleAllowAuthority == nil && !staleEvidenceUnmanaged && !runtimeRemediationComplete && artifacts["verifyReport"] == ArtifactDone && !verifyResult.Passing && applyState == ApplyAllDone
+	var compactRemediation *reviewtransaction.CompactState
+	if !reviewDisabled {
+		compactRemediation = resolveCompactRemediationAuthority(
+			context.Background(), workspaceRoot, changeName, governingRef, remediationRequired && reviewState == nil,
+			firstPath(artifactPaths.ReviewReceipt), "",
+		)
+	}
 	remediationState := resolveBoundedRemediation(
 		remediationRequired,
 		verifyResult,
@@ -499,7 +525,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	)
 	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyResult.Passing, remediationState.Complete)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, artifacts["verifyReport"] == ArtifactDone, remediationState)
-	if staleAllowAuthority != nil {
+	if staleAllowAuthority != nil || staleEvidenceUnmanaged {
 		dependencies.Verify = DependencyReady
 		dependencies.Archive = DependencyBlocked
 		nextRecommended = "verify"
@@ -508,27 +534,29 @@ func Resolve(options ResolveOptions) (Status, error) {
 	bridge := compactPreVerifyBridge{}
 	recoverable := authorityOnlyFailedReport(readText(firstPath(artifactPaths.VerifyReport)))
 	if governingRef != nil {
-		result, reason, err := reviewtransaction.ValidateSDDReceiptRef(context.Background(), workspaceRoot, *governingRef)
-		if err == nil && result == reviewtransaction.GateAllow {
-			staleEvidence := artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale && reviewState == nil
-			if applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || staleEvidence || runtimeRemediationComplete) {
-				dependencies.Verify = DependencyReady
-				dependencies.Archive = DependencyBlocked
-				nextRecommended = "verify"
-				if staleEvidence || runtimeRemediationComplete {
-					remediationState = RemediationState{}
+		if !reviewDisabled {
+			result, reason, err := reviewtransaction.ValidateSDDReceiptRef(context.Background(), workspaceRoot, *governingRef)
+			if err == nil && result == reviewtransaction.GateAllow {
+				staleEvidence := artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale && reviewState == nil
+				if applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || staleEvidence || runtimeRemediationComplete) {
+					dependencies.Verify = DependencyReady
+					dependencies.Archive = DependencyBlocked
+					nextRecommended = "verify"
+					if staleEvidence || runtimeRemediationComplete {
+						remediationState = RemediationState{}
+					}
 				}
+				boundGate = &ReviewGateState{Result: result, Reason: "explicit bound compact authority exactly matches the current repository"}
+			} else {
+				dependencies.Verify = DependencyBlocked
+				dependencies.Archive = DependencyBlocked
+				nextRecommended = "resolve-review"
+				failureReason := reason
+				if err != nil {
+					failureReason = err.Error()
+				}
+				blockedReasons.genuine = append(blockedReasons.genuine, failureReason)
 			}
-			boundGate = &ReviewGateState{Result: result, Reason: "explicit bound compact authority exactly matches the current repository"}
-		} else {
-			dependencies.Verify = DependencyBlocked
-			dependencies.Archive = DependencyBlocked
-			nextRecommended = "resolve-review"
-			failureReason := reason
-			if err != nil {
-				failureReason = err.Error()
-			}
-			blockedReasons.genuine = append(blockedReasons.genuine, failureReason)
 		}
 	} else if applyState == ApplyAllDone && (artifacts["verifyReport"] != ArtifactDone || recoverable) && compactBridgeableReviewArtifact(artifacts["reviewState"], reviewStateReason) {
 		fields, _ := authorityFailureFields(readText(firstPath(artifactPaths.VerifyReport)))
@@ -766,8 +794,14 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	}
 	// Stale evidence under a live allow authority needs a fresh verification,
 	// not legacy remediation classification against a missing transaction.
+	// Corrective verify cycle 3, CRITICAL-B (symmetric with Resolve() above,
+	// including staleEvidenceUnmanaged: the disabled-mode analogue of
+	// staleAllowAuthority granting the same "please re-verify" leniency with
+	// zero review consultation and zero blocked reasons).
+	staleEvidenceCandidate := governingRef == nil && reviewState == nil && applyState == ApplyAllDone && artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale
 	var staleAllowAuthority *reviewAuthorityEvaluation
-	if governingRef == nil && reviewState == nil && applyState == ApplyAllDone && artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale {
+	staleEvidenceUnmanaged := reviewDisabled && staleEvidenceCandidate
+	if !reviewDisabled && staleEvidenceCandidate {
 		evaluation := resolveReviewAuthority(context.Background(), workspaceRoot, "", artifactsByType["review/receipt"].Content, changeName)
 		if evaluation.Result == reviewtransaction.GateAllow {
 			staleAllowAuthority = &evaluation
@@ -776,11 +810,14 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 		}
 	}
 	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, verifyResult)
-	remediationRequired := staleAllowAuthority == nil && !runtimeRemediationComplete && artifacts["verifyReport"] == ArtifactDone && !verifyResult.Passing && applyState == ApplyAllDone
-	compactRemediation := resolveCompactRemediationAuthority(
-		context.Background(), workspaceRoot, changeName, governingRef, remediationRequired && reviewState == nil,
-		"", artifactsByType["review/receipt"].Content,
-	)
+	remediationRequired := staleAllowAuthority == nil && !staleEvidenceUnmanaged && !runtimeRemediationComplete && artifacts["verifyReport"] == ArtifactDone && !verifyResult.Passing && applyState == ApplyAllDone
+	var compactRemediation *reviewtransaction.CompactState
+	if !reviewDisabled {
+		compactRemediation = resolveCompactRemediationAuthority(
+			context.Background(), workspaceRoot, changeName, governingRef, remediationRequired && reviewState == nil,
+			"", artifactsByType["review/receipt"].Content,
+		)
+	}
 	remediationState := resolveBoundedRemediation(
 		remediationRequired,
 		verifyResult,
@@ -794,13 +831,13 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	}
 	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyResult.Passing, remediationState.Complete)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, artifacts["verifyReport"] == ArtifactDone, remediationState)
-	if staleAllowAuthority != nil {
+	if staleAllowAuthority != nil || staleEvidenceUnmanaged {
 		dependencies.Verify = DependencyReady
 		dependencies.Archive = DependencyBlocked
 		nextRecommended = "verify"
 	}
 	var boundGate *ReviewGateState
-	if governingRef != nil {
+	if !reviewDisabled && governingRef != nil {
 		result, reason, err := reviewtransaction.ValidateSDDReceiptRef(context.Background(), workspaceRoot, *governingRef)
 		if err == nil && result == reviewtransaction.GateAllow {
 			staleEvidence := artifacts["verifyReport"] == ArtifactDone && verifyResult.Stale && reviewState == nil
