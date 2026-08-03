@@ -19,28 +19,29 @@ const ReviewIntegrationStartSchemaID = "https://gentle-ai.dev/contracts/review-i
 // ReviewIntegrationStartResult is the explicitly negotiated START response.
 // The legacy ReviewFacadeStartResult remains byte- and schema-compatible.
 type ReviewIntegrationStartResult struct {
-	Schema              string                                        `json:"schema"`
-	Contract            string                                        `json:"contract"`
-	Operation           string                                        `json:"operation"`
-	Action              string                                        `json:"action"`
-	LensesRequired      bool                                          `json:"lenses_required"`
-	LineageID           string                                        `json:"lineage_id"`
-	State               reviewtransaction.State                       `json:"state"`
-	RiskLevel           reviewtransaction.RiskLevel                   `json:"risk_level"`
-	SelectedLenses      []string                                      `json:"selected_lenses"`
-	Projection          reviewtransaction.Projection                  `json:"projection"`
-	TargetMode          reviewtransaction.TargetKind                  `json:"target_mode,omitempty"`
-	TargetIdentity      string                                        `json:"target_identity,omitempty"`
-	BaseTree            string                                        `json:"base_tree,omitempty"`
-	CandidateTree       string                                        `json:"candidate_tree,omitempty"`
-	ChangedFiles        int                                           `json:"changed_files"`
-	ChangedLines        int                                           `json:"changed_lines"`
-	CorrectionBudget    int                                           `json:"correction_budget"`
-	RiskReasons         []reviewtransaction.RiskReason                `json:"risk_reasons"`
-	ArtifactSubjects    []reviewtransaction.ArtifactSubject           `json:"artifact_subjects"`
-	CandidateDiff       *reviewtransaction.FrozenCandidateDiff        `json:"candidate_diff,omitempty"`
-	ChangedPathManifest *[]reviewtransaction.ChangedPathManifestEntry `json:"changed_path_manifest,omitempty"`
-	RepositoryContext   *ReviewRepositoryContextReference             `json:"repository_context,omitempty"`
+	Schema                 string                                        `json:"schema"`
+	Contract               string                                        `json:"contract"`
+	Operation              string                                        `json:"operation"`
+	Action                 string                                        `json:"action"`
+	LensesRequired         bool                                          `json:"lenses_required"`
+	LineageID              string                                        `json:"lineage_id"`
+	State                  reviewtransaction.State                       `json:"state"`
+	RiskLevel              reviewtransaction.RiskLevel                   `json:"risk_level"`
+	SelectedLenses         []string                                      `json:"selected_lenses"`
+	Projection             reviewtransaction.Projection                  `json:"projection"`
+	TargetMode             reviewtransaction.TargetKind                  `json:"target_mode,omitempty"`
+	TargetIdentity         string                                        `json:"target_identity,omitempty"`
+	BaseTree               string                                        `json:"base_tree,omitempty"`
+	CandidateTree          string                                        `json:"candidate_tree,omitempty"`
+	ChangedFiles           int                                           `json:"changed_files"`
+	ChangedLines           int                                           `json:"changed_lines"`
+	CorrectionBudget       int                                           `json:"correction_budget"`
+	CorrectionBudgetPolicy string                                        `json:"correction_budget_policy,omitempty"`
+	RiskReasons            []reviewtransaction.RiskReason                `json:"risk_reasons"`
+	ArtifactSubjects       []reviewtransaction.ArtifactSubject           `json:"artifact_subjects"`
+	CandidateDiff          *reviewtransaction.FrozenCandidateDiff        `json:"candidate_diff,omitempty"`
+	ChangedPathManifest    *[]reviewtransaction.ChangedPathManifestEntry `json:"changed_path_manifest,omitempty"`
+	RepositoryContext      *ReviewRepositoryContextReference             `json:"repository_context,omitempty"`
 }
 
 // ReviewRepositoryContextReference is the path-free provider context that a
@@ -73,7 +74,7 @@ func newReviewIntegrationStartResult(legacy ReviewFacadeStartResult, assessment 
 		Action: legacy.Action, LensesRequired: legacy.LensesRequired, LineageID: legacy.LineageID,
 		State: legacy.State, RiskLevel: legacy.RiskLevel, SelectedLenses: append([]string{}, legacy.SelectedLenses...),
 		Projection: legacy.Projection, ChangedFiles: legacy.ChangedFiles, ChangedLines: legacy.ChangedLines,
-		CorrectionBudget: legacy.CorrectionBudget, RiskReasons: append([]reviewtransaction.RiskReason{}, assessment.Reasons...),
+		CorrectionBudget: legacy.CorrectionBudget, CorrectionBudgetPolicy: legacy.CorrectionBudgetPolicy, RiskReasons: append([]reviewtransaction.RiskReason{}, assessment.Reasons...),
 		ArtifactSubjects: []reviewtransaction.ArtifactSubject{}, RepositoryContext: repositoryContext,
 	}
 	if targetMode == reviewtransaction.TargetBaseWorkspaceOverlay {
@@ -189,7 +190,7 @@ func (result ReviewIntegrationStartResult) Validate() error {
 	if result.ChangedFiles < 0 || result.ChangedLines < 0 {
 		return errors.New("negotiated START change counts cannot be negative")
 	}
-	budget, err := reviewtransaction.CorrectionBudget(result.ChangedLines)
+	budget, err := reviewtransaction.CompactExpectedBudget(result.ChangedLines, result.CorrectionBudgetPolicy)
 	if err != nil || budget != result.CorrectionBudget {
 		return errors.New("negotiated START correction budget is inconsistent")
 	}

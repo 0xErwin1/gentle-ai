@@ -152,9 +152,10 @@ type ReviewTargetStatusReceipt struct {
 }
 
 type ReviewTargetStatusFrozen struct {
-	Tier                 reviewtransaction.RiskLevel `json:"tier"`
-	OriginalChangedLines int                         `json:"original_changed_lines"`
-	CorrectionBudget     int                         `json:"correction_budget"`
+	Tier                   reviewtransaction.RiskLevel `json:"tier"`
+	OriginalChangedLines   int                         `json:"original_changed_lines"`
+	CorrectionBudget       int                         `json:"correction_budget"`
+	CorrectionBudgetPolicy string                      `json:"correction_budget_policy,omitempty"`
 }
 
 type ReviewTargetStatusProjection struct {
@@ -215,6 +216,7 @@ func newReviewTargetStatusResultForContract(native reviewtransaction.TargetStatu
 	if native.AuthorityVersion == reviewtransaction.AuthorityVersionCompact {
 		result.Frozen = &ReviewTargetStatusFrozen{
 			Tier: native.Tier, OriginalChangedLines: native.OriginalChangedLines, CorrectionBudget: native.CorrectionBudget,
+			CorrectionBudgetPolicy: native.CorrectionBudgetPolicy,
 		}
 	}
 	if native.ReceiptIdentity != "" {
@@ -397,7 +399,7 @@ func (result ReviewTargetStatusResult) Validate() error {
 			if result.Frozen.Tier != reviewtransaction.RiskLow && result.Frozen.Tier != reviewtransaction.RiskMedium && result.Frozen.Tier != reviewtransaction.RiskHigh {
 				return errors.New("current-target frozen tier is invalid")
 			}
-			budget, err := reviewtransaction.CorrectionBudget(result.Frozen.OriginalChangedLines)
+			budget, err := reviewtransaction.CompactExpectedBudget(result.Frozen.OriginalChangedLines, result.Frozen.CorrectionBudgetPolicy)
 			if err != nil || budget != result.Frozen.CorrectionBudget {
 				return errors.New("current-target frozen budget is invalid")
 			}

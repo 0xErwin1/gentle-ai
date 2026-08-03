@@ -52,7 +52,8 @@
       "properties": {
         "tier": { "enum": ["low", "medium", "high"] },
         "original_changed_lines": { "type": "integer", "minimum": 0 },
-        "correction_budget": { "type": "integer", "minimum": 0, "maximum": 200 }
+        "correction_budget": { "type": "integer", "minimum": 0, "maximum": 200 },
+        "correction_budget_policy": { "type": "string", "enum": ["floor_two"] }
       }
     },
     "target_identity": { "$ref": "#/$defs/sha256" },

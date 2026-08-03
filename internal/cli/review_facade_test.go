@@ -644,7 +644,7 @@ func TestReviewFacadeStartUnnegotiatedJSONFieldSetRemainsCompatible(t *testing.T
 	if err := json.Unmarshal(output.Bytes(), &fields); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"action", "changed_files", "changed_lines", "correction_budget", "hint", "lens_bindings", "lenses_required", "lineage_id", "operation", "projection", "risk_evidence", "risk_level", "selected_lenses", "state", "target_identity"}
+	want := []string{"action", "changed_files", "changed_lines", "correction_budget", "correction_budget_policy", "hint", "lens_bindings", "lenses_required", "lineage_id", "operation", "projection", "risk_evidence", "risk_level", "selected_lenses", "state", "target_identity"}
 	got := make([]string, 0, len(fields))
 	for field := range fields {
 		got = append(got, field)

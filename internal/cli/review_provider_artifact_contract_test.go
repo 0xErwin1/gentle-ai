@@ -16,22 +16,22 @@ func TestReviewProviderArtifactV1ContractsArePinned(t *testing.T) {
 	root := filepath.Join("..", "..", "contracts", "review-integration", "v1")
 	want := map[string]string{
 		"fixtures/capabilities-v1.4.fixture.json": "84e0db457b76b97b35c2be772dfc647f9eab66810ea98f64fed85645c3c266ba",
-		"fixtures/start.fixture.json":             "f369160ac26eb3427b57de2dd01c9d8c81e51c8a2bd546446780129d31b1945b",
-		"fixtures/start-v2.fixture.json":          "388c7c21374b89afe2d42d64bd1987d17ec0e2c7151cab1c56a08969ffb2ea0e",
-		"fixtures/status.fixture.json":            "555054d8046a896162995dcb117752f9cd1ef903fb9ebaad29af1b7e7f319bb3",
-		"fixtures/status-v2.fixture.json":         "5410d8bbae1b7152a43b3a5c4c880e9e98a5e47b76d910456f5ef13f19836f3a",
+		"fixtures/start.fixture.json":             "334c8f94d4e1e6b8abed986f404cd48c76439c8379609fd50d0b015a0d6c9423",
+		"fixtures/start-v2.fixture.json":          "27945b7eff8321d46610d448fabb0698d5f13d4b4c549a5b7e6abf58d576d0c5",
+		"fixtures/status.fixture.json":            "f3325ee044cca46e7cdd3d440c2deafecf98db2d0076e150be51c07bc1e1a7ae",
+		"fixtures/status-v2.fixture.json":         "e7fe69c3152e048e04600bd73c2018b62b37d9325fcb68ff2ad57bf230832553",
 		"fixtures/status-ambiguous.fixture.json":  "ee695fd58ba72adfb3b51dfd16432a177498173a45bfcb594d6bdc53bfa32e6e",
 		"fixtures/status-corrupted.fixture.json":  "4cfc0048c28a39cec8a32fecfaad66e56e5c1248263ceb4ce66b6717981880b2",
-		"fixtures/status-recover.fixture.json":    "714f762f72380ce93d567626cafbaa536ab3aae02af73d3d40ca123f1f30d8b0",
+		"fixtures/status-recover.fixture.json":    "42c440738eeaf1b37a4487d057890f4e01dd2ff96e84c9e52261601047b1b9b6",
 		"fixtures/status-unrelated.fixture.json":  "deab36c877ced3c9b480ca33724c10d88f75c761d6426fa14be850345122891d",
 		"schemas/admitted-result.schema.json":     "7796e8dbba331434594108c902dfab7ec46f691fa447a9259a78f2448111b0de",
 		"schemas/artifact-subject.schema.json":    "f7dcd934e27e8f3735a37f3d0ec8048dd8ccc1811b9df61124a1dcbf8a03f40e",
 		"schemas/capabilities-v1.4.schema.json":   "926b61c8ac0f870f09214f6bd8af1b035c5b72f14f0b83c0d4a7bdbb277f5447",
 		"schemas/result-artifact.schema.json":     "91296bd2c261fd2fe03bffd63efe58badd4927e0d0d8480cd4213f651ecacdf6",
-		"schemas/start.schema.json":               "4296aebbd4128ce51945a2f6d3228aa77ac7215c802978d559bff5279ec56229",
-		"schemas/start-v2.schema.json":            "ec8550cd93bbe84af1ce87dfd7abfa9e24692f42b20f8f0bf9cac1d4b88ea46c",
-		"schemas/status.schema.json":              "250d2c646b8822b38eaefafd2bfdefa1134cc23a00e553a7201f33257573149a",
-		"schemas/status-v2.schema.json":           "dd9914b647a1d9edc4ecdcbed4f0c800b39ec290912d5c2a4cc6ba3098d5f21e",
+		"schemas/start.schema.json":               "e30ee141c4f743cc9c4aa567f8f01416df1103105046aab67ebe168440892df6",
+		"schemas/start-v2.schema.json":            "7ee4b9f06a6c935b5920e98a96e90007782bedd807770cb8dd9b3ae875fd40e7",
+		"schemas/status.schema.json":              "a0a7de7a4f18f84cff1df8d392c0e19fd1a0e23160bc79cdcff3caf260d0231f",
+		"schemas/status-v2.schema.json":           "74b7c07c78b089d796e10195074152ee4c77da04406d150cbc7be14d623fe49c",
 	}
 	for name, expected := range want {
 		payload, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
@@ -50,7 +50,7 @@ func TestReviewProviderArtifactV20ContractsArePinned(t *testing.T) {
 	want := map[string]string{
 		"fixtures/capabilities.fixture.json": "17c150d851c15b3f0c20d18c2e2741eb2232ffa24f35aa71d6d30e90a85e42b7",
 		"fixtures/consent.fixture.json":      "203cc96d5c29ba0f27b5c4db04c2e88566e0a923d3a0cdb317f78d9065349075",
-		"fixtures/status.fixture.json":       "d5438578f2969f17635fecea94c7ef46d14c78fa668e50df48c4254254d5e935",
+		"fixtures/status.fixture.json":       "d5eea0200090ef0a6b2f54d774418c3cb700d03d74473ff04dddbed7a02c6977",
 		"schemas/capabilities.schema.json":   "7ab061ed27bd3b929d6033cc20f56097e851f4454ca14a815255748b50191248",
 		"schemas/consent.schema.json":        "b2b4465338497f11927de91cb2e5da12b6cb4a1039afe05aebe1abbf53b21858",
 		"schemas/status.schema.json":         "c4dcc736cfc6300560a3c4262d2d982368529d5c49d58d499552a3b0beef9212",
