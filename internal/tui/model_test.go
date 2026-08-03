@@ -5756,19 +5756,31 @@ func TestWelcomeAdvisory_ResizeAndContentChangesClampScroll(t *testing.T) {
 
 func TestWelcomeView_WindowResizeFitsMeasuredViewport(t *testing.T) {
 	cases := []struct {
-		name   string
-		width  int
-		height int
+		name         string
+		width        int
+		height       int
+		withOptional bool
 	}{
 		{name: "startup viewport", width: 120, height: 30},
 		{name: "narrow resize", width: 80, height: 24},
 		{name: "short viewport", width: 120, height: 19},
+		{name: "compact viewport with optional content", width: 120, height: 17, withOptional: true},
 		{name: "wide resize", width: 160, height: 50},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := NewModel(system.DetectionResult{}, "dev")
+			if tc.withOptional {
+				m.UpdateCheckDone = true
+				m.UpdateResults = []update.UpdateResult{{
+					Tool:             update.ToolInfo{Name: "engram"},
+					InstalledVersion: "1.0.0",
+					LatestVersion:    "1.1.0",
+					Status:           update.UpdateAvailable,
+				}}
+				m.AdvisoryMessage = "Optional advisory content"
+			}
 			updated, _ := m.Update(tea.WindowSizeMsg{Width: tc.width, Height: tc.height})
 			state := updated.(Model)
 			view := state.View()
