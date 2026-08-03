@@ -52,11 +52,98 @@ composition-specific corroboration (S5):
 - Allow (S4): `TestPostApplyGate_Allow_ExactReceiptGovernsDelivery`, `TestPreCommitGate_Allow_ExactReceiptGovernsDelivery`, `TestPrePushGate_Allow_ExactReceiptGovernsDelivery`, `TestPrePRGate_Allow_ExactReceiptGovernsDelivery`, `TestReleaseGate_Allow_ExactReceiptGovernsDelivery`
 - #2239 (S5): `TestPrePRGate_KillSwitchBeforeComposition_TriviallyPreserved`
 
+## Absorbed from Wave 3/4 Verification (PR0)
+
+Five debts were formally deferred by Wave 3's and Wave 4's verify-reports and
+are absorbed here rather than dropped. PR0 itself stays docs-only (per the
+work-unit table below); this section documents each debt's closure criterion
+and names the slice/phase whose scope it belongs to, with new checklist items
+added at that phase so the debt is not silently lost.
+
+1. **N1 (Wave 3 verify) — new-lineage `finalize` self-approval.**
+   `ReviewCore.finalize` (`internal/reviewtransaction/review_core.go:131`)
+   issues an `approved`/`escalated` `ReceiptRef` purely from
+   `authority.State` / `request.AdvanceRequest.{Failed,AdmittedFindingIDs}` —
+   it never inspects `LensResults`, so a frozen tier can reach `approved`
+   with zero captured lens results at any tier (self-approval). Closure:
+   `finalize` must require the frozen tier's lens results before returning
+   `CoreTransitionApprove` — tier-0/low MAY legitimately require none, per
+   the tier semantics already encoded by `CorrectionBudget`/tier freeze in
+   `start`. Absorbed into **Phase 5 (S4)** as task 5.10 below (S4 is where
+   receipt precedence/projection work already touches `ReviewCore` output).
+
+2. **N2 (Wave 3 verify) — `newLineageGateEvaluation` has no per-gate
+   preconditions.** `newLineageGateEvaluation`
+   (`internal/cli/review_governing_authority.go:240-261`) maps
+   `CoreTransitionContinue → GateAllow` identically for all five gates, with
+   no release-evidence, `BaseRelationshipValid`, or `Generation`
+   precondition for pre-pr/release. This is the exact gap `gateVerdict`
+   (Phase 4/S3) is designed to close. Reference implementation: the legacy
+   `validateDerivedGate` (`internal/reviewtransaction/receipt.go:279-321`)
+   already differentiates by gate — `BaseRelationshipValid` gated to
+   `GatePrePR`/`GateRelease` only (line 304), `Release` evidence gated to
+   `GateRelease` only (lines 307-314). Closure: `gateVerdict(gate, relation)`
+   must reproduce this per-gate precondition shape, not a uniform
+   continue→allow. Absorbed into **Phase 4 (S3)** as task 4.7 below.
+
+3. **N3 (Wave 3 suggestion, one-liner) — gate receipt cross-check omits
+   `CandidateIdentity`.** The `approved`-state receipt cross-check at
+   `internal/cli/review_governing_authority.go:104-105` compares only
+   `LineageID`, `AuthorityRevision`, and `TerminalState` — it never compares
+   `CandidateIdentity` (`BaseTree`/`CandidateTree`/`PolicyHash`), even though
+   receipt issuance is expected to bind identity at write time. Closure: add
+   the `CandidateIdentity` comparison to that cross-check. Absorbed into
+   **Phase 5 (S4)** as task 5.11 below (same file/area as byte-identity
+   proof work).
+
+4. **7.4 archive-gating livelock (Wave 4 deferral, SDD-status domain — NOT
+   part of the S1-S7 gate-cutover chain).** Wave 4's verify-report CRITICAL-A
+   (cycle 3) proved `blockArchiveForUnsatisfiedReVerify` livelocks:
+   `applyTargetedReVerifyRouting` re-stamps `status.ReVerify.EvidenceRevision`
+   with the *current* verify-report revision on every `Resolve()`, so a
+   compliant re-verify only relabels the demand instead of satisfying it
+   (cycle-1 demands `sha256:R1`; after a compliant remediation, cycle-2
+   demands `sha256:R2`). The named continuation was also unrunnable as
+   printed: `gentle-ai sdd-attempt finish --remediates-evidence-revision
+   <rev>` alone fails `internal/cli/sdd_attempt.go`'s flag validation — the
+   `finish` operation requires the eight base flags
+   (`validateSDDAttemptOperationFlags`/`missingSDDAttemptFlags`, `finish`
+   case) AND, if any of `--expected-binding-revision`,
+   `--successor-lineage`, `--remediates-evidence-revision` is given, all
+   three must be given together (`sdd_attempt.go:94-96`). Closure: replace
+   the live-revision-chasing demand with a **frozen** anchor — the
+   correction's own `FixDeltaHash` (never a live re-derivable value, per the
+   W4 livelock finding's own diagnosis of what not to do) — and name the
+   full, runnable `sdd-attempt finish` invocation (all 8 base flags + the 3
+   remediation flags together) in the blocked reason text. This is the
+   SDD-status/CLI domain (`internal/sddstatus`, `internal/cli/sdd_attempt.go`),
+   distinct from the five delivery gates' domain
+   (`internal/reviewtransaction/{gate,compact_gate}.go`) that S1-S7 rewrite —
+   do not conflate them. Absorbed into a new **Phase 9** below, sequenced
+   independently of S1-S7 (no shared files), landing after S7 so the gate
+   cutover's own destructive step is not entangled with this fix.
+
+5. **8.5 (Wave 4 deferral) — OpenCode plugin relaunch-bound-loss
+   replacement.** DECISION (this apply batch): re-deferred to **Wave 7**,
+   explicitly, with rationale — the OpenCode plugin surface is adapter
+   territory (`Out of scope: adapter changes (W4)` in
+   `proposal.md`'s Scope section), and Wave 5's own File Changes list
+   (`design.md`) touches no adapter/plugin file; the five gates' cutover
+   (`compact_gate.go`, `gate.go`, `review_facade.go`,
+   `compact_approved_invalidation.go`, `compact_chain.go`,
+   `candidate_decline.go`, `transaction.go`, `legacy_projection.go`) has zero
+   overlap with the OpenCode plugin's relaunch-bound-loss surface. Forcing it
+   into W5 would mix gate-cutover evidence with unrelated adapter evidence in
+   the same PR chain, which design.md decision 8's own rationale rejects
+   ("every removal slice depends on evidence a prior slice produced"). Not
+   dropped — tracked for Wave 7 planning.
+
 ## Phase 1 (PR0): SDD Artifacts
 
-- [ ] 1.1 Land `openspec/changes/rdd-root-simplification-wave5/{proposal,specs,design,tasks}.md` (already written).
-- [ ] 1.2 Confirm Gate: verify Wave 3 AND Wave 4 have landed on `feature/rdd-root-simplification` before opening any Wave 5 slice PR.
-- [ ] 1.3 Archive Wave 4 (`openspec/changes/rdd-root-simplification-wave4/**` → `openspec/specs/`) when its turn comes, mirroring prior wave pattern.
+- [x] 1.1 Land `openspec/changes/rdd-root-simplification-wave5/{proposal,specs,design,tasks}.md` (already written).
+- [x] 1.2 Confirm Gate: verify Wave 3 AND Wave 4 have landed on `feature/rdd-root-simplification` before opening any Wave 5 slice PR. **Confirmed with a documented exception**: Wave 3 is fully merged on `origin/feature/rdd-root-simplification` (tip `f188be85`, PRs #2309-#2314). Wave 4 has NOT yet merged onto that tracker branch at apply time — its 12-PR chain is queued/merging (per orchestrator's rebase contract). This worktree's base branch `feat/rdd-wave5-base` @ `7598eda4` sits directly on the verified Wave 4 chain tip (`feat/rdd-wave4-s7b-plugin-investigation-and-asset-prose`, confirmed identical SHA, ancestor check passed), which the orchestrator states already passed its own envelope (16/16, 31/31). Wave 5 slices therefore build on Wave 4's verified content even though the tracker-merge event itself is still in flight; the rebase contract requires re-checking the Wave 4 chain tip before each slice's final full-test run and rebasing if it moved.
+- [x] 1.3 Fix stale SHA token (Wave-4 verify-report W-e): `openspec/changes/rdd-root-simplification-wave4/specs/rdd-transport-capability/spec.md` cited pre-rebase SHA `ead610f6`; corrected to the patch-id-equal delivered commit `acb3c7c1`.
+- [ ] 1.4 Archive Wave 4 (`openspec/changes/rdd-root-simplification-wave4/**` → `openspec/specs/`) when its turn comes, mirroring prior wave pattern (deferred — Wave 4 has not yet landed on the tracker at apply time; do not archive prematurely).
 
 ## Phase 2 (S1): Characterization Corpus + Gate-Boundary Matrix Harness (zero behavior change)
 
@@ -85,6 +172,7 @@ composition-specific corroboration (S5):
 - [ ] 4.4 Implement `gateVerdict(gate GateKind, relation CandidateRelation) (GateResult, GateNextStep)` total function.
 - [ ] 4.5 GREEN: 4.1, 4.2 pass (6 named tests this slice).
 - [ ] 4.6 Full verification: `go test ./... -count=1`; bench module; `scripts/deadcode-ratchet.sh --update` for `gateVerdict`/`GateNextStep` exports; refusal-resolution notes (none pending).
+- [ ] 4.7 ABSORBED N2 (W3 verify, see "Absorbed from Wave 3/4 Verification" above): RED `TestGateVerdict_PerGatePreconditions_MatchLegacyValidateDerivedGate` — table-driven, asserts `gateVerdict` denies `GatePrePR`/`GateRelease` when the boundary descriptor's `BaseRelationshipValid` is false and denies `GateRelease` when release evidence is absent/mismatched, mirroring `validateDerivedGate` (`receipt.go:279-321`); GREEN by having `gateVerdict` consult these preconditions per gate instead of a uniform `continue→allow`.
 
 ## Phase 5 (S4): projectLegacyAuthority + Legacy Evaluated Through Algebra + Byte-Identity
 
@@ -97,6 +185,8 @@ composition-specific corroboration (S5):
 - [ ] 5.7 Wire `resolveGoverningAuthority`'s "new absent, legacy present" cell to `projectLegacyAuthority` + `relateCandidates` (replacing the byte-identical legacy path).
 - [ ] 5.8 GREEN: 5.1–5.5 pass (8 named tests this slice).
 - [ ] 5.9 Full verification: `go test ./... -count=1`; bench module; `scripts/deadcode-ratchet.sh --update` for `legacy_projection.go` exports (remove `runFacadeLegacyValidateNegotiated` baseline entry if now unreachable); refusal-resolution notes (none pending).
+- [ ] 5.10 ABSORBED N1 (W3 verify, see "Absorbed from Wave 3/4 Verification" above): RED `TestReviewCoreFinalize_RequiresFrozenTierLensResults` — asserts `ReviewCore.finalize` refuses `CoreTransitionApprove` when the frozen tier requires lens results and none were captured (tier-medium/high with empty `LensResults`), and still allows tier-low with zero lens results per tier semantics; GREEN by adding the check to `finalize` (`review_core.go:131`).
+- [ ] 5.11 ABSORBED N3 (W3 suggestion, see "Absorbed from Wave 3/4 Verification" above): RED `TestApprovedReceiptCrossCheck_IncludesCandidateIdentity` — asserts the `approved`-state receipt cross-check at `review_governing_authority.go:104-105` denies (`GateInvalidated`) when `CandidateIdentity` (`BaseTree`/`CandidateTree`/`PolicyHash`) mismatches even though `LineageID`/`AuthorityRevision`/`TerminalState` match; GREEN by adding the comparison (one-liner per the original suggestion).
 
 ## Phase 6 (S5): Pre-PR Chain Composition Deletion
 
@@ -130,3 +220,28 @@ composition-specific corroboration (S5):
 - [ ] 8.8 `ReceiptPath()` reader audit (audit-gated ratification): sweep in-repo + bundled Pi assets for readers depending on file-absence as the invalidation signal; migrate findings to `review validate`; add an rc release-notes line about receipt-file persistence under derived invalidation.
 - [ ] 8.9 Close #2222/#2239 as superseded: cross-reference the 15 named per-gate tests (S2 disabled + S3 deny + S4 allow) plus S5's `TestPrePRGate_KillSwitchBeforeComposition_TriviallyPreserved` as supersession evidence in the PR description / issue comments.
 - [ ] 8.10 Full verification: `go test ./... -count=1`; bench module; `scripts/deadcode-ratchet.sh --update` for deleted `compact_approved_invalidation.go` symbols; refusal-resolution notes (all four ratified assumptions + the audit-gated item confirmed resolved, none pending).
+
+## Phase 9: SDD-Attempt Archive Gate Fix (Absorbed W4 Deferral — SDD-Status Domain, Independent of S1-S7)
+
+Not part of the gate-cutover chain (`internal/reviewtransaction`/`internal/cli/review_facade.go`); this phase
+touches `internal/sddstatus` and `internal/cli/sdd_attempt.go` only and shares no files with S1-S7, so it may
+land on its own base after S7 without reopening the gate-cutover evidence. See absorbed-debt item 4 above for
+the full W4 CRITICAL-A citation.
+
+- [ ] 9.1 RED: `TestBlockArchiveForUnsatisfiedReVerify_FrozenAnchorDoesNotRelabel` — reproduces the W4
+      livelock probe (cycle 1 blocked → compliant remediation → cycle 2 must NOT re-demand a new revision);
+      fails against the current live-revision-chasing demand.
+- [ ] 9.2 RED: `TestBlockArchiveForUnsatisfiedReVerify_NamedContinuationIsRunnable` — asserts the blocked-reason
+      text names a complete, literally-runnable `gentle-ai sdd-attempt finish` invocation: all 8 base flags
+      (`--expected-revision`, `--request-id`, `--outcome`, `--evidence-revision`, `--diagnosis`,
+      `--harness-disposition`, `--cleanup-evidence`, `--process-evidence`) plus the 3 remediation flags
+      together (`--expected-binding-revision`, `--successor-lineage`, `--remediates-evidence-revision`), per
+      `sdd_attempt.go`'s `missingSDDAttemptFlags`/`validateSDDAttemptOperationFlags` "finish" case; fails
+      against the current `--remediates-evidence-revision <rev>`-only text.
+- [ ] 9.3 Implement: replace `blockArchiveForUnsatisfiedReVerify`'s demand anchor with the correction's own
+      `FixDeltaHash` (frozen at correction open, never re-derived live) instead of
+      `status.ReVerify.EvidenceRevision` (re-stamped on every `Resolve()`); update the blocked-reason
+      template to print the complete runnable invocation from 9.2.
+- [ ] 9.4 GREEN: 9.1-9.2 pass.
+- [ ] 9.5 Full verification: `go test ./... -count=1`; bench module; `scripts/deadcode-ratchet.sh --update`;
+      refusal-resolution notes (none pending).
