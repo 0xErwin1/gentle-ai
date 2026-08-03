@@ -433,7 +433,8 @@ var abandonCapability = &Capability{Verb: []string{"review", "abandon"}, Flags: 
 func Journeys() []Journey {
 	journeys := append(coreJourneys(), edgeJourneys()...)
 	journeys = append(journeys, sddJourneys()...)
-	return append(journeys, waveOneJourneys()...)
+	journeys = append(journeys, waveOneJourneys()...)
+	return append(journeys, waveThreeJourneys()...)
 }
 
 func coreJourneys() []Journey {

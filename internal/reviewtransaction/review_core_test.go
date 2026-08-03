@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -172,5 +173,92 @@ func TestReviewCoreFinalizeApprovedIssuesReceiptRef(t *testing.T) {
 	}
 	if transition.Receipt.AuthorityRevision != wantRevision {
 		t.Fatalf("finalize(approved) receipt revision = %q, want %q", transition.Receipt.AuthorityRevision, wantRevision)
+	}
+}
+
+// TestReviewCoreFinalizeAdvancesNonTerminalWithAdvanceRequest is C6's own
+// RED/GREEN evidence (verify-report CRITICAL, "ReviewCore-owned transitions
+// in finalize"): given an explicit AdvanceRequest, finalize itself decides
+// the terminal state for a non-terminal authority and hands back the
+// resulting NewLineageAuthority as CoreTransition.Authority — the caller's
+// only remaining job is to Mutate it verbatim, mirroring start's own
+// contract. This also doubles as W14's evidence: `correcting` now finalizes
+// through the identical path as `reviewing`, closing the one bounded
+// correction it already spent rather than being refused outright.
+func TestReviewCoreFinalizeAdvancesNonTerminalWithAdvanceRequest(t *testing.T) {
+	core := ReviewCore{}
+	for _, state := range []NewLineageState{NewLineageStateReviewing, NewLineageStateCorrecting, NewLineageStateValidating} {
+		t.Run(string(state), func(t *testing.T) {
+			authority := fixtureNewLineageAuthority("finalize-advance-"+string(state)+"-lineage", state)
+			transition, err := core.Next(context.Background(), authority, CoreRequest{
+				Kind: CoreRequestFinalize, AdvanceRequest: &FinalizeAdvanceRequest{},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if transition.Kind != CoreTransitionApprove || transition.Authority == nil || transition.Authority.State != NewLineageStateApproved {
+				t.Fatalf("finalize(%s, advance, no blocker) = %#v, want approve with an advanced authority", state, transition)
+			}
+			if transition.Receipt == nil || transition.Receipt.LineageID != authority.LineageID {
+				t.Fatalf("finalize(%s, advance) receipt = %#v", state, transition.Receipt)
+			}
+			wantRevision, err := NewLineageRevisionForState(*transition.Authority)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if transition.Receipt.AuthorityRevision != wantRevision {
+				t.Fatalf("finalize(%s, advance) receipt revision = %q, want %q", state, transition.Receipt.AuthorityRevision, wantRevision)
+			}
+		})
+	}
+}
+
+// TestReviewCoreFinalizeAdvanceEscalatesOnFailedOrAdmittedFindings proves
+// finalize's own decision, not the caller's: a failed evidence flag or any
+// admitted candidate-causal finding ID routes the advance to `escalated`
+// instead of `approved`, and admitted finding IDs are appended to the
+// resulting authority.
+func TestReviewCoreFinalizeAdvanceEscalatesOnFailedOrAdmittedFindings(t *testing.T) {
+	core := ReviewCore{}
+	cases := []struct {
+		name    string
+		request FinalizeAdvanceRequest
+	}{
+		{"failed evidence", FinalizeAdvanceRequest{Failed: true}},
+		{"admitted candidate-causal finding", FinalizeAdvanceRequest{AdmittedFindingIDs: []string{"F-CAUSAL"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			authority := fixtureNewLineageAuthority("finalize-advance-escalate-lineage", NewLineageStateReviewing)
+			transition, err := core.Next(context.Background(), authority, CoreRequest{Kind: CoreRequestFinalize, AdvanceRequest: &tc.request})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if transition.Kind != CoreTransitionEscalate || transition.Authority == nil || transition.Authority.State != NewLineageStateEscalated {
+				t.Fatalf("finalize(reviewing, %s) = %#v, want escalate with an escalated authority", tc.name, transition)
+			}
+			if len(tc.request.AdmittedFindingIDs) > 0 && !reflect.DeepEqual(transition.Authority.AdmittedFindingIDs, tc.request.AdmittedFindingIDs) {
+				t.Fatalf("finalize(reviewing, %s) admitted finding ids = %v, want %v", tc.name, transition.Authority.AdmittedFindingIDs, tc.request.AdmittedFindingIDs)
+			}
+		})
+	}
+}
+
+// TestReviewCoreFinalizeRefusesNonTerminalWithoutAdvanceRequest proves the
+// opt-in boundary the pinned TestReviewCoreFinalizeRequiresTerminalState
+// depends on: a bare CoreRequestFinalize (nil AdvanceRequest) against ANY
+// non-terminal state — including `correcting`, which previously had no
+// finalize path at all — still refuses. Finalize never silently closes out
+// an in-flight lineage on a caller's behalf.
+func TestReviewCoreFinalizeRefusesNonTerminalWithoutAdvanceRequest(t *testing.T) {
+	core := ReviewCore{}
+	for _, state := range []NewLineageState{NewLineageStateReviewing, NewLineageStateCorrecting, NewLineageStateValidating} {
+		t.Run(string(state), func(t *testing.T) {
+			authority := fixtureNewLineageAuthority("finalize-refuse-"+string(state)+"-lineage", state)
+			_, err := core.Next(context.Background(), authority, CoreRequest{Kind: CoreRequestFinalize})
+			if !errors.Is(err, ErrFinalizeRequiresTerminalState) {
+				t.Fatalf("finalize(%s, no advance) error = %v, want ErrFinalizeRequiresTerminalState", state, err)
+			}
+		})
 	}
 }
