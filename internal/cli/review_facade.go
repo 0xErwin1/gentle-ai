@@ -1610,13 +1610,14 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			return encodeReviewJSON(stdout, question)
 		}
 		if errors.Is(err, errReviewDeclinedForCandidate) {
-			// A candidate decline is durable enough to govern only this exact
-			// delivery, never a review lineage or receipt. Record it under the
-			// native RAR root only after its live snapshot is revalidated; an
-			// exact replay converges on the same canonical authorization.
-			if _, recordErr := reviewtransaction.RecordCandidateDecline(ctx, root, snapshot); recordErr != nil {
-				return fmt.Errorf("record candidate review decline: %w", recordErr)
-			}
+			// Wave 5 (Gate Cutover) Slice 6, design decision 6: a candidate
+			// decline is no longer durably recorded at all -- consistent with
+			// Wave 4 decision 4 ("decline = unmanaged proceed: nothing
+			// recorded"), an inert authority-shaped file is exactly the mirror
+			// pattern that decision removed on the SDD side. Declining here
+			// governs only this exact `review start` call: it never creates a
+			// review lineage, a receipt, or any durable authorization a later
+			// gate could read.
 			if negotiated && consentMode != reviewConsentModeDeclined {
 				return err
 			}
@@ -3015,15 +3016,11 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 		evaluation := reviewtransaction.EvaluateCompactGate(ctx, root, receipt, input)
 		return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
 	}
-	// A candidate decline can govern ordinary delivery only when no terminal
-	// receipt was discovered. It is deliberately checked after compact discovery:
-	// a real exact receipt remains stronger native authority, while a corrupted or
-	// ambiguous review store still fails closed rather than being bypassed.
-	if decline, found, declineErr := reviewtransaction.ResolveCandidateDeclineForGate(ctx, root, gateInput); declineErr != nil {
-		return fmt.Errorf("resolve candidate decline delivery authorization: %w", declineErr)
-	} else if found {
-		return emitCandidateDeclinedUnmanagedDelivery(stdout, gateInput.Gate, decline, negotiated, *contract)
-	}
+	// Wave 5 (Gate Cutover) Slice 6, design decision 6: a candidate decline no
+	// longer governs delivery at the gate at all. Nothing is ever recorded
+	// (RecordCandidateDecline is deleted), so there is nothing here to
+	// resolve -- a declined candidate is evaluated exactly like any other
+	// candidate no review authority governs.
 	// Reviews are ON for everything below — the single early kill-switch
 	// consultation above already returned before any authority read when
 	// disabled, so every remaining branch is a genuine denial, never a
@@ -3981,33 +3978,6 @@ const reviewDisabledUnmanagedReason = "receipt-driven development is disabled an
 // does not mean. It is an allow because there is no delivery to gate, never
 // because anything was reviewed, so it says so in the same sentence.
 const reviewEmptyPublicationRangeReason = "the publication range is empty: every commit reachable from HEAD is already published on the push destination, so this push delivers nothing and no review receipt governs it"
-
-// emitCandidateDeclinedUnmanagedDelivery reports that RDD remains enabled but
-// the operator declined review for this exact candidate. It exits successfully
-// so ordinary repository policy can decide delivery, while explicitly refusing to
-// project an approval, receipt, lineage, or release authorization.
-func emitCandidateDeclinedUnmanagedDelivery(stdout io.Writer, gate reviewtransaction.GateKind, decline reviewtransaction.CandidateDeclineGateAuthorization, negotiated bool, contract string) error {
-	result := ReviewValidateResult{
-		Schema: ReviewValidateSchema, Result: reviewtransaction.GateInvalidated, Allowed: false,
-		Action:   reviewDeliveryPolicyAction,
-		Reason:   "review is unmanaged by candidate choice; ordinary repository policy governs this exact declined candidate",
-		Delivery: reviewtransaction.RDDDeliveryCandidateDeclinedUnmanaged,
-		Context: reviewtransaction.GateContext{
-			Gate:          gate,
-			BaseTree:      decline.Snapshot.BaseTree,
-			CandidateTree: decline.Snapshot.CandidateTree,
-			PathsDigest:   decline.Snapshot.PathsDigest,
-			Denial:        &reviewtransaction.GateDenial{Stage: "candidate-decline", Code: "exact_candidate"},
-		},
-	}
-	// Keep the derived authorization live in this boundary: this guards against a
-	// future emitter accidentally accepting a zero-value resolver result.
-	if decline.AuthorizationRef == "" || decline.Snapshot.Identity == "" {
-		// refusal:by-design world-action: an internal incomplete authorization cannot safely govern delivery and requires a code correction
-		return errors.New("candidate decline delivery authorization is incomplete")
-	}
-	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationValidate, result, result, contract)
-}
 
 // emitDisabledUnmanagedDelivery reports a candidate no receipt governs under a
 // user-disabled kill switch.
