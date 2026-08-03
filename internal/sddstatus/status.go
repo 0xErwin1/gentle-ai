@@ -610,7 +610,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	}
 	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, changeName, reviewDisabled)
 	if governingRef != nil {
-		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, governingRef, reviewDisabled)
+		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, governingRef, runtimeStatus, reviewDisabled)
 	}
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
@@ -901,7 +901,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	}
 	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, changeName, reviewDisabled)
 	if governingRef != nil {
-		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, governingRef, reviewDisabled)
+		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, governingRef, runtimeStatus, reviewDisabled)
 	}
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
