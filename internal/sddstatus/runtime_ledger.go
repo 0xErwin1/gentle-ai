@@ -236,6 +236,10 @@ type RuntimeStatus struct {
 	LastAdvance            *RuntimeAdvance   `json:"last_advance,omitempty"`
 	BindingRevision        string            `json:"binding_revision"`
 	Binding                *ReviewBinding    `json:"binding,omitempty"`
+	// Receipt is Wave 4 S5's terminal pointer (design.md decision 1),
+	// recorded additively alongside Binding/BindingRevision — see
+	// runtime_receipt.go.
+	Receipt *reviewtransaction.SDDReceiptRef `json:"receipt,omitempty"`
 }
 
 type BeginAttemptRequest struct {
@@ -316,6 +320,7 @@ type runtimeRecord struct {
 	Reset            *runtimeResetEvent   `json:"reset,omitempty"`
 	Advance          *runtimeAdvanceEvent `json:"advance,omitempty"`
 	Binding          *runtimeBindingEvent `json:"binding,omitempty"`
+	Receipt          *runtimeReceiptEvent `json:"receipt,omitempty"`
 }
 
 // runtimeAdvanceEvent accompanies the successor's begin event in one atomic
@@ -1189,6 +1194,10 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 		if err := applyRuntimeBindingEvent(replay, record.Binding); err != nil {
 			return err
 		}
+	case runtimeOperationReceipt:
+		if err := applyRuntimeReceiptEvent(replay, record.Receipt); err != nil {
+			return err
+		}
 	default:
 		return errors.New("unsupported SDD runtime record operation")
 	}
@@ -1385,14 +1394,14 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 	}
 	switch record.Operation {
 	case runtimeOperationBegin:
-		if record.Begin == nil || record.Finish != nil || record.Reset != nil || record.Advance != nil || record.Binding != nil {
+		if record.Begin == nil || record.Finish != nil || record.Reset != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil {
 			return errors.New("invalid SDD runtime begin record shape")
 		}
 		if err := validateRuntimeBeginEvent(record); err != nil {
 			return err
 		}
 	case runtimeOperationAdvance:
-		if record.Begin == nil || record.Advance == nil || record.Finish != nil || record.Reset != nil || record.Binding != nil {
+		if record.Begin == nil || record.Advance == nil || record.Finish != nil || record.Reset != nil || record.Binding != nil || record.Receipt != nil {
 			return errors.New("invalid SDD runtime objective advance record shape") // refusal:by-design world-action: this shape is constructed by the authority itself, so a violation is a mutated record and the exit is restoring the store
 		}
 		advance := record.Advance
@@ -1406,7 +1415,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return err
 		}
 	case runtimeOperationFinish:
-		if record.Finish == nil || record.Begin != nil || record.Reset != nil || record.Advance != nil || record.Binding != nil {
+		if record.Finish == nil || record.Begin != nil || record.Reset != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil {
 			return errors.New("invalid SDD runtime finish record shape")
 		}
 		event := record.Finish
@@ -1427,7 +1436,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime finish request digest does not match record")
 		}
 	case runtimeOperationFinishRemediation:
-		if record.Finish == nil || record.Binding == nil || record.Begin != nil || record.Reset != nil || record.Advance != nil {
+		if record.Finish == nil || record.Binding == nil || record.Begin != nil || record.Reset != nil || record.Advance != nil || record.Receipt != nil {
 			return errors.New("invalid atomic SDD runtime remediation record shape")
 		}
 		finish, binding := record.Finish, record.Binding
@@ -1466,7 +1475,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("atomic SDD runtime remediation request digest does not match record")
 		}
 	case runtimeOperationReset:
-		if record.Reset == nil || record.Begin != nil || record.Finish != nil || record.Advance != nil || record.Binding != nil {
+		if record.Reset == nil || record.Begin != nil || record.Finish != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil {
 			return errors.New("invalid SDD runtime reset record shape")
 		}
 		event := record.Reset
@@ -1482,7 +1491,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime reset request digest does not match record")
 		}
 	case runtimeOperationBind:
-		if record.Binding == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Advance != nil {
+		if record.Binding == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Advance != nil || record.Receipt != nil {
 			return errors.New("invalid SDD runtime binding record shape")
 		}
 		event := record.Binding
@@ -1507,6 +1516,34 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		}
 		if runtimeValueHash("gentle-ai.sdd-runtime-bind-request/v1", request) != record.RequestDigest {
 			return errors.New("SDD runtime binding request digest does not match record")
+		}
+	case runtimeOperationReceipt:
+		if record.Receipt == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Advance != nil || record.Binding != nil {
+			return errors.New("invalid SDD runtime receipt record shape") // refusal:by-design world-action: this shape is constructed by the authority itself, so a violation is a mutated record and the exit is restoring the store
+		}
+		event := record.Receipt
+		if event.ExpectedRevision != "" && !runtimeRevisionPattern.MatchString(event.ExpectedRevision) {
+			return errors.New("invalid expected SDD runtime receipt revision") // refusal:by-design world-action: this field is written only by commitRecordLocked itself, so a violation is a mutated record and the exit is restoring the store
+		}
+		if event.Current.Lineage != record.Change && event.Current.Lineage == "" {
+			return errors.New("invalid current SDD runtime receipt lineage") // refusal:by-design world-action: the lineage is frozen at request normalization, so a violation is a mutated record and the exit is restoring the store
+		}
+		if !validReviewBindingLineage(event.Current.Lineage) || !reviewBindingHash.MatchString(event.Current.ReceiptHash) {
+			return errors.New("invalid current SDD runtime receipt") // refusal:by-design world-action: the receipt shape is validated before every commit, so a violation is a mutated record and the exit is restoring the store
+		}
+		if event.LegacyImport != nil {
+			if !validReviewBindingLineage(event.LegacyImport.Receipt.Lineage) || !reviewBindingHash.MatchString(event.LegacyImport.Receipt.ReceiptHash) {
+				return errors.New("invalid imported legacy SDD runtime receipt") // refusal:by-design world-action: the legacy import is projected once at commit time, so a violation is a mutated record and the exit is restoring the store
+			}
+			if event.LegacyImport.SourceDigest == "" || event.ExpectedRevision != receiptRefDigest(event.LegacyImport.Receipt) {
+				return errors.New("legacy SDD runtime receipt import does not match its source or expected revision") // refusal:by-design world-action: the import binding is derived from the legacy artifact at commit time, so a mismatch is a mutated record and the exit is restoring the store
+			}
+		}
+		request := RecordReceiptRequest{
+			ExpectedReceiptRevision: event.ExpectedRevision, RequestID: record.RequestID, Lineage: event.Current.Lineage,
+		}
+		if runtimeValueHash("gentle-ai.sdd-runtime-receipt-request/v1", request) != record.RequestDigest {
+			return errors.New("SDD runtime receipt request digest does not match record") // refusal:by-design world-action: the digest is computed from the same request at write time, so a mismatch is a mutated record and the exit is restoring the store
 		}
 	default:
 		return errors.New("invalid SDD runtime record operation")
