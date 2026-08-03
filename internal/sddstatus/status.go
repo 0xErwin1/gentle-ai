@@ -212,9 +212,54 @@ type Status struct {
 	RuntimeStatus     *RuntimeStatus                 `json:"runtimeStatus,omitempty"`
 	ReviewGate        *ReviewGateState               `json:"reviewGate,omitempty"`
 	ReviewTransaction *reviewtransaction.Transaction `json:"reviewTransaction,omitempty"`
-	PhaseInstructions *PhaseInstructions             `json:"phaseInstructions,omitempty"`
-	NextRecommended   string                         `json:"nextRecommended"`
-	BlockedReasons    []string                       `json:"blockedReasons"`
+	// ReviewOffer is Wave 4 S3's post-verify offer point (design.md decision
+	// 3, amended 2026-08-03): present exactly when verify has passed and the
+	// receipt-driven-development kill switch is on, never otherwise. Kill
+	// switch off is structural absence — this field is nil and `omitempty`
+	// keeps it off the wire entirely; it is never an Available:false
+	// placeholder or a status call that happened anyway. See
+	// applyReviewOfferRouting and review_door.go's reviewOfferForVerify.
+	ReviewOffer       *ReviewOfferBlock  `json:"reviewOffer,omitempty"`
+	PhaseInstructions *PhaseInstructions `json:"phaseInstructions,omitempty"`
+	NextRecommended   string             `json:"nextRecommended"`
+	BlockedReasons    []string           `json:"blockedReasons"`
+}
+
+// ReviewOfferBlock carries what an orchestrator needs to present the
+// post-verify review offer: whether OfferReviewAfterVerify's own composed
+// decision considers this a genuine, actionable offer yet (Wave 4 S4/S5
+// compose the receipt/lens/tier evidence that decision needs; until then
+// Available conservatively reports false, matching review_offer.go's own
+// documented Wave 3 shape), the lineage identifier the offer was made for,
+// and the exact command to run to act on it.
+type ReviewOfferBlock struct {
+	Available  bool   `json:"available"`
+	LineageID  string `json:"lineageId"`
+	Invocation string `json:"invocation"`
+}
+
+// applyReviewOfferRouting is the one call site into review_door.go's
+// reviewOfferForVerify. It fires only in the exact window design.md's
+// amendment names: verify has passed (Dependencies.Verify ==
+// DependencyAllDone — Resolve/resolveEngramStatus never report on an
+// already-archived change, so this alone is "not yet archived" too) and the
+// kill switch is on. With the switch off it returns before doing anything
+// at all — no repository read, no call into reviewOfferForVerify, no call
+// into reviewEntryHook — which is what makes the absence structural rather
+// than a value the door happens to report as unavailable.
+func applyReviewOfferRouting(ctx context.Context, status *Status, workspaceRoot, changeName string, reviewDisabled bool) {
+	if reviewDisabled || status.Dependencies.Verify != DependencyAllDone {
+		return
+	}
+	offer, err := reviewOfferForVerify(ctx, workspaceRoot, changeName)
+	if err != nil {
+		return
+	}
+	status.ReviewOffer = &ReviewOfferBlock{
+		Available:  offer.Available,
+		LineageID:  offer.LineageID,
+		Invocation: fmt.Sprintf("gentle-ai review start --cwd %q", workspaceRoot),
+	}
 }
 
 type ResolveOptions struct {
@@ -509,6 +554,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if boundGate != nil {
 		status.ReviewGate = boundGate
 	}
+	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, changeName, reviewDisabled)
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
 	} else {
@@ -786,6 +832,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	if boundGate != nil {
 		status.ReviewGate = boundGate
 	}
+	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, changeName, reviewDisabled)
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
 	} else {

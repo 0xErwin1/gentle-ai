@@ -122,4 +122,70 @@ Chained on the Wave 3 branch (`auto-chain`, feature-branch chain); ≤1000 autho
 
 - [ ] Wave 3 is **not yet on `main`** — `internal/reviewtransaction/review_offer.go`, `review_core.go`, and `authority_store.go` do not exist at `d591f4cf`. Wave 4 cannot start until Wave 3's branch lands; confirm the chain base before `sdd-tasks` forecasts.
 - [ ] The OpenCode plugin's session-scoped admission-recovery budget (CON-09) is consumer-owned recovery state. Confirm the provider absorbs it in this wave rather than Wave 5, since removing it without a provider-side replacement loses a real relaunch bound.
-- [ ] `internal/assets/*/commands/sdd-apply.md` pins contract `gentle-ai.review-integration/v1` while the orchestrator contract is `/v2`. Confirm correcting the pin belongs in S7 rather than as an independent defect fix.
+- [x] `internal/assets/*/commands/sdd-apply.md` pins contract `gentle-ai.review-integration/v1` while the orchestrator contract is `/v2`. Resolved: corrected in S1 (cross-slice fix, CI-exact-head rule), not S7.
+
+## Amendment (orchestrator-resolved): decision 3 call site (2026-08-03)
+
+S3's `sdd-apply` batch found decision 3's originally-named call site —
+`internal/cli`'s SDD verify success exit, concretely `RunSDDVerifyValidate`
+(`sdd_verify_validate.go`) — genuinely underspecified: that command is
+deliberately repo/context-free by its own doc comment ("validates a
+complete report without touching an artifact store") and carries no
+`--cwd`/`--change`/`--lineage` `OfferReviewAfterVerify` needs. Escalated as
+a blocking design question rather than resolved by inventing an unreviewed
+CLI flag contract. The orchestrator resolved it within the wave's ratified
+directive (post-verify offer; structural absence when the kill switch is
+off):
+
+**The offer call site is NOT `RunSDDVerifyValidate`; it stays deliberately
+repo-context-free — no flags were added to it.** The offer instead routes
+through the native SDD status/dispatcher surface, which already carries
+repo and change context on every call:
+
+1. `internal/sddstatus`'s `Resolve()` (and `resolveEngramStatus()`
+   symmetrically) emits a `reviewOffer` block in `Status` in the exact
+   post-verify-passed, not-yet-archived window (`Dependencies.Verify ==
+   DependencyAllDone`) — if and only if the kill switch is on — resolved
+   through the same door (`review_door.go`'s `reviewEntryHook`, now wired to
+   a real call, `reviewOfferForVerify`) S3 already added. The block carries
+   what an orchestrator needs to present the offer: whether
+   `OfferReviewAfterVerify`'s own composed decision is available yet
+   (conservatively `false` until S4/S5 compose the receipt/lens/tier
+   evidence it needs — matching `review_offer.go`'s own documented Wave 3
+   shape), the lineage identifier, and the exact `gentle-ai review start`
+   invocation to run. This is `OfferReviewAfterVerify`'s first real caller.
+2. Switch off is structural absence at BOTH the Go-value level (`Status.
+   ReviewOffer` stays `nil`) and the serialized-output level (`omitempty`
+   keeps the `reviewOffer` key off the wire entirely) — proven by a JSON
+   marshal assertion, not only the AST guard. `applyReviewOfferRouting`
+   returns before calling `reviewOfferForVerify`/`reviewEntryHook` at all
+   when the switch is off, so the door's own call counter proves zero calls
+   across a full simulated apply → verify → archive-pending flow.
+3. Decline (task 4.5) is consistent with the consent contract: scoped to
+   one candidate, persists no decision, and does not suppress the offer for
+   a later read of the same still-unarchived candidate. Archive proceeds
+   under whatever the pre-existing (unrelated to this amendment) post-verify
+   archive gate already decides — the offer never blocks it and never
+   changes its verdict. No new state, no new persistence: a decline is
+   simply the orchestrator not acting on a block that keeps reappearing.
+4. The OFF-mode absence counter (task 4.7) is realized as an in-process Go
+   test rather than a `bench/` black-box journey: `reviewEntryHook` is a
+   Go-internal instrumentation point a separate bench subprocess cannot
+   observe. Same zero-cost-by-default proof shape as Wave 1's
+   `shadowObserverCallCountForTest`, applied to this door.
+5. Asset prose is in scope as an addition to the File Changes table above:
+   `internal/assets/{claude,opencode}/commands/sdd-verify.md`'s pre-verify
+   gate language ("Continue only when the native bounded transaction is
+   `ready_final_verification` or `final_verifying`") is deleted and replaced
+   with post-verify offer prose keyed off the `reviewOffer` block's
+   presence/absence in native status output.
+
+This amendment supersedes decision 3's "one call site: `internal/cli`'s SDD
+verify success exit" line; the call site is `internal/sddstatus`'s
+`Resolve()`/`resolveEngramStatus()` instead, `sddstatus.Resolve` is no
+longer "a pure read" in the narrow sense decision 3 originally stated (it
+now makes one conditional call through its own door), and `internal/cli`'s
+`review_offer_door.go`/`offerEntryHook` (created in S3's first increment)
+remains a dormant, correctly-guarded boundary — not this wave's active call
+site, but still valid coverage for the `internal/cli` SDD surface's
+continued absence of direct offer/`ReviewCore` references.
