@@ -98,9 +98,11 @@ const reviewtransactionEscalationCauseSample = "budget_exceeded"
 // organic-dx tasks.md 3b.10 already recorded as Phase 4 registry input.
 var reviewStopReasonNarration = map[string]string{
 	"captured_verification_evidence_invalid": "The captured verification record or its immutable bytes failed integrity checks. " +
-		"Ask a maintainer to inspect the review record before trusting that evidence.",
+		"Ask a maintainer to inspect the review record before trusting that evidence, or run `" + reviewConsentOffPathCommand + "` " +
+		"to deliver under ordinary repository policy instead.",
 	"captured_artifacts_unverifiable": "A previously captured review result failed verification, so this review cannot continue on its own. " +
-		"Ask a maintainer to inspect the review record directly.",
+		"Ask a maintainer to inspect the review record directly, or run `" + reviewConsentOffPathCommand + "` " +
+		"to deliver under ordinary repository policy instead.",
 	"captured_result_selection_unavailable": "This run reached a state that should never happen: every review result it expected was already present. " +
 		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewConsentOffPathCommand + "` " +
 		"so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
@@ -113,7 +115,7 @@ var reviewStopReasonNarration = map[string]string{
 	"correction_repository_verification_failed": "Repository verification failed for this correction candidate. Change the candidate within the open correction, then re-run " +
 		"`gentle-ai review status --next-transition` to capture evidence for the new candidate.",
 	"corrupted_or_unverifiable_authority": "This review's stored record cannot be trusted as-is, and it cannot be repaired automatically. " +
-		"Ask a maintainer to inspect it directly.",
+		"Ask a maintainer to inspect it directly, or run `" + reviewConsentOffPathCommand + "` to deliver under ordinary repository policy instead.",
 	"final_verification_retry_unavailable": "This run reached a state that should never happen: it was routed to retry a final verification it was not eligible to retry. " +
 		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewConsentOffPathCommand + "` " +
 		"so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
@@ -124,15 +126,17 @@ var reviewStopReasonNarration = map[string]string{
 		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewConsentOffPathCommand + "` " +
 		"so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
 	"native_stop_required": "This review is stuck at an escalated state that is not yet eligible to continue. " +
-		"Ask a maintainer to review it before doing anything else.",
+		"Ask a maintainer to review it before doing anything else, or run `" + reviewConsentOffPathCommand + "` " +
+		"to deliver under ordinary repository policy instead.",
 	"original_finalize_request_required": "Re-run `gentle-ai review finalize` with the exact same results or evidence you submitted before.",
 	"pre_pr_selector_unrepresentable":    "Pass a branch or tag name to `--base-ref` instead of a raw commit id when selecting the pre-pr gate.",
-	"recovery_scope_unchanged":           "Change the candidate so it targets something different from what is already on record, then retry the recovery.",
+	"recovery_scope_unchanged": "Change the candidate so it targets something different from what is already on record, then retry the recovery, " +
+		"or run `" + reviewConsentOffPathCommand + "` to deliver under ordinary repository policy instead.",
 	"recovery_target_unrepresentable": "Use one of the supported ways to select what to recover: no base selector for current changes, " +
 		"`--base-ref <ref> --committed-only` for a base diff, or `--workspace-overlay --base-ref <ref>` for a workspace overlay.",
 	"staged_workspace_overlay_recovery_unavailable": "Pass `--lineage <id>` to continue the review you already started, " +
 		"or drop `--workspace-overlay` and run `gentle-ai review start --projection staged` to start fresh.",
-	"unchanged_or_unverified_authority": "This review already used its one correction attempt without a verified change. Start a new review to continue.",
+	"unchanged_or_unverified_authority": "This review already used its one correction attempt without a verified change. Start a new review to continue: run `gentle-ai review start`.",
 }
 
 // reviewConsentPromptNarration registers the one-time RDD consent prompt's

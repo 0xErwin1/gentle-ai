@@ -2,6 +2,7 @@ package cli
 
 import (
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -70,6 +71,29 @@ func TestReviewNarrationNeverClaimsNothingMoreToDo(t *testing.T) {
 		lowered := strings.ToLower(statement)
 		if strings.Contains(lowered, bannedClaim) {
 			t.Errorf("stop reason %q narration still claims %q, which is false: `gentle-ai review mode disable` is always reachable: %q", code, bannedClaim, statement)
+		}
+	}
+}
+
+// TestReviewNarrationNamesAUniversalOrBetterExit is the narration-surface
+// sibling of the shipped asset's stop-reason table guard
+// (TestEveryReviewStopReasonCodeHasAShippedContinuation in
+// review_next_transition_docs_test.go) and of TestCompactBlockedNamesExitForEveryReachableReason
+// in internal/sddstatus: every registered Tier C stop statement must either
+// name a real `gentle-ai` command / `--flag` of its own, or fall back to the
+// universal self-service exit `gentle-ai review mode disable`
+// (blocking-budget rule 2: every blocking gate offers a documented
+// self-service exit that requires no source-code archaeology). A statement
+// naming neither is a dead end on the one human-facing surface stop reason
+// codes render to.
+func TestReviewNarrationNamesAUniversalOrBetterExit(t *testing.T) {
+	namesOtherContinuation := regexp.MustCompile("`gentle-ai [a-z][a-z-]*|`--[a-z][a-z-]*")
+	for code, statement := range reviewStopReasonNarration {
+		if strings.Contains(statement, reviewConsentOffPathCommand) {
+			continue
+		}
+		if !namesOtherContinuation.MatchString(statement) {
+			t.Errorf("stop reason %q narration names no runnable `gentle-ai` command, no `--flag`, and no %q fallback, so this stop reads as a dead end: %q", code, reviewConsentOffPathCommand, statement)
 		}
 	}
 }
