@@ -688,6 +688,8 @@ func runReviewCommand(args []string, stdout io.Writer) error {
 		return RunReviewCaptureResult(args[1:], stdout)
 	case "inspect-candidate":
 		return RunReviewInspectCandidate(args[1:], stdout)
+	case "lens-context":
+		return RunReviewLensContext(args[1:], stdout)
 	case "capture-evidence":
 		return RunReviewCaptureEvidence(args[1:], stdout)
 	case "preserve-result":
@@ -2450,6 +2452,12 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 		reviewerResults, err = readCapturedReviewerResults(ctx, root, store.Dir, state, record.Revision)
 		if err != nil {
 			return reviewPreflightError(err)
+		}
+		// Observed here, at the one moment the captured artifacts and the
+		// frozen authority are both in hand, and carried onto the receipt by
+		// the review completion below. Record only: nothing reads it back.
+		if state.State == reviewtransaction.StateReviewing {
+			state.ReviewerContextLevel = discoverReviewerContextLevel(ctx, root, store.Dir, state, record.Revision)
 		}
 	}
 	var validation *facadeValidationResult
