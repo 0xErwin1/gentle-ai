@@ -197,26 +197,13 @@ func compactAbandonBlockerText(state CompactState) string {
 	return "the abandonment gate does not accept it: a same-lineage legacy-v1 entry, an authoritative artifact beside its state, a successor of its own, or a removal that would break the remaining graph"
 }
 
-// compactReconcileCommandText renders the exact runnable reconciliation for
-// one recovery edge already classified into a reconcilable anomaly class,
-// with the persisted revisions the operation compare-and-swaps against and
-// the authorization template it verifies. Only a caller that classified the
-// edge (classifyCompactRecoveryEdgeAnomalies admitted it) may render this, so
-// the command printed is the command that runs.
-func compactReconcileCommandText(repo, predecessorLineage, predecessorRevision, successorLineage, successorRevision string, anomalies []string) string {
-	binding := compactReconcileAuthorizationBinding(
-		predecessorLineage, predecessorRevision, successorLineage, successorRevision, "<actor>", "<why-it-is-reconciled>")
-	lineCount := "seven"
-	if strings.Join(anomalies, ",") == compactCombinedRecoveryAnomalies {
-		binding = compactCombinedReconcileAuthorizationBinding(
-			predecessorLineage, predecessorRevision, successorLineage, successorRevision, "<actor>", "<why-it-is-reconciled>")
-		lineCount = "eight"
-	}
-	return fmt.Sprintf("`gentle-ai review reconcile-authority --cwd %q --predecessor-lineage %q --expected-predecessor-revision %q --successor-lineage %q --expected-successor-revision %q --reason \"<why-it-is-reconciled>\" --actor \"<actor>\" --maintainer-authorization \"<maintainer-authorization>\"`;"+
-		" the reconciliation moves the successor whole — never deleted — into the audited quarantine together with the natively re-derived proof."+
-		" --maintainer-authorization is exactly these %s lines, joined by LF, with no trailing newline, using the same --actor and --reason with surrounding whitespace trimmed:\n%s",
-		repo, predecessorLineage, predecessorRevision, successorLineage, successorRevision, lineCount, binding)
-}
+// compactReconcileCommandText rendered the exact runnable reconciliation
+// invocation for a caller that classified an edge into a reconcilable
+// anomaly class. Retired in Wave 7 S3a: its last two callers
+// (compact_inspect.go's compactStartInvalidGraphRefusal,
+// compact_reclaim.go's compactReclaimAuthorityRefusal) no longer name
+// reconciliation as a runnable continuation, since the `review
+// reconcile-authority` verb it rendered is gone.
 
 // ReconcileInvalidRecoveryEdge quarantines one compact-v2 recovery successor
 // whose recovery edge natively re-derives as invalid for either or both of two

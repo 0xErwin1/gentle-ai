@@ -161,26 +161,30 @@ func TestReclaimRefusalNamesTheOperationThatAdmitsTheShape(t *testing.T) {
 		return err.Error()
 	}
 
-	t.Run("reconcilable pre-contract edge names reconcile with the persisted values", func(t *testing.T) {
+	// Wave 7 S3a: `review reconcile-authority` retired with no replacement,
+	// so a reconcilable pre-contract edge's fate now depends only on
+	// whether the successor is pristine -- this fixture's is, so reclaim
+	// names `review abandon`, the same as any other pristine forged
+	// successor (the subtest below). The renamed subtest documents that
+	// the reconcile-specific continuation this test used to pin is gone.
+	t.Run("reconcilable pre-contract edge names abandon, reconciliation retired", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
-		predecessor, _, successor, _ := preContractRecoveryFixture(t, repo, preContractFixtureAuthorization, nil)
+		_, _, successor, _ := preContractRecoveryFixture(t, repo, preContractFixtureAuthorization, nil)
 		refusal := reclaim(t, repo, successor.State.LineageID)
 		for _, want := range []string{
-			"gentle-ai review reconcile-authority",
-			"--predecessor-lineage \"" + predecessor.State.LineageID + "\"",
-			"--expected-predecessor-revision \"" + predecessor.Revision + "\"",
-			"--successor-lineage \"" + successor.State.LineageID + "\"",
-			"--expected-successor-revision \"" + successor.Revision + "\"",
-			compactReconcileAuthorizationSchema,
+			"gentle-ai review abandon",
+			"--lineage \"" + successor.State.LineageID + "\"",
+			"--expected-revision \"" + successor.Revision + "\"",
+			CompactAbandonAuthorizationSchema,
 		} {
 			if !strings.Contains(refusal, want) {
 				t.Fatalf("reclaim refusal does not name %q:\n%s", want, refusal)
 			}
 		}
-		// Drive exactly the operation the refusal named; the block clears.
-		if _, err := ReconcileInvalidRecoveryEdge(ctx, repo, preContractReconcileRequest(predecessor, successor)); err != nil {
-			t.Fatalf("the named reconcile does not run: %v", err)
+		if strings.Contains(refusal, "gentle-ai review reconcile-authority") {
+			t.Fatalf("reclaim named the retired reconcile-authority verb:\n%s", refusal)
 		}
+		abandonPerEligibility(t, repo, successor.State.LineageID, "clear the damaged entry")
 		requireAuthoritativeInventory(t, repo)
 	})
 
@@ -299,9 +303,14 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 		}
 	})
 
-	t.Run("pre-contract edge names the reconcile that clears it", func(t *testing.T) {
+	// Wave 7 S3a: `review reconcile-authority` retired with no replacement
+	// (see the sibling reclaim test above); this fixture's successor is
+	// pristine, so `review start`'s sanctioned-exit refusal now names
+	// `review abandon` instead, the same as the forged-pristine subtest
+	// below.
+	t.Run("pre-contract edge names abandon, reconciliation retired", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
-		predecessor, _, successor, _ := preContractRecoveryFixture(t, repo, preContractFixtureAuthorization, nil)
+		_, _, successor, _ := preContractRecoveryFixture(t, repo, preContractFixtureAuthorization, nil)
 		err := freshStart(t, repo, "start-over-pre-contract")
 		if err == nil {
 			t.Fatal("start succeeded over an invalid recovery edge")
@@ -309,18 +318,18 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 		refusal := err.Error()
 		for _, want := range []string{
 			"exact maintainer authorization binding",
-			"gentle-ai review reconcile-authority",
-			"--expected-predecessor-revision \"" + predecessor.Revision + "\"",
-			"--expected-successor-revision \"" + successor.Revision + "\"",
-			compactReconcileAuthorizationSchema,
+			"gentle-ai review abandon",
+			"--expected-revision \"" + successor.Revision + "\"",
+			CompactAbandonAuthorizationSchema,
 		} {
 			if !strings.Contains(refusal, want) {
 				t.Fatalf("start refusal does not name %q:\n%s", want, refusal)
 			}
 		}
-		if _, err := ReconcileInvalidRecoveryEdge(ctx, repo, preContractReconcileRequest(predecessor, successor)); err != nil {
-			t.Fatalf("the named reconcile does not run: %v", err)
+		if strings.Contains(refusal, "gentle-ai review reconcile-authority") {
+			t.Fatalf("start named the retired reconcile-authority verb:\n%s", refusal)
 		}
+		abandonPerEligibility(t, repo, successor.State.LineageID, "the recovery edge cannot be admitted")
 		if err := freshStart(t, repo, "start-over-pre-contract"); err != nil {
 			t.Fatalf("start still refuses after the named exit ran: %v", err)
 		}
