@@ -62,11 +62,28 @@ func boundedReviewContract() string {
 }
 
 func renderSDDOrchestratorAsset(agent model.AgentID) string {
-	content := renderBoundedReviewAsset(sddOrchestratorAsset(agent))
+	return renderBoundedReviewAsset(agent, sddOrchestratorAsset(agent))
+}
+
+// renderBoundedReviewAsset resolves one embedded asset into the exact bytes a
+// single runtime installs. The agent is required, not optional: the shared
+// review ledger contract states the runtime identity every negotiated STATUS
+// invocation must carry, and only the renderer knows which runtime is about to
+// receive these bytes. Baking a constant into the shared prose instead would
+// hand every runtime the same false identity and walk it straight through the
+// review transport admission check (issue #2440).
+func renderBoundedReviewAsset(agent model.AgentID, path string) string {
+	return bindRuntimeAgentIdentity(renderBoundedReviewAssetBody(path), agent)
+}
+
+// bindRuntimeAgentIdentity is the single substitution point every rendered
+// asset passes through, so no branch added to renderBoundedReviewAssetBody can
+// leak an unbound placeholder or an unspecialized identity.
+func bindRuntimeAgentIdentity(content string, agent model.AgentID) string {
 	return strings.ReplaceAll(content, runtimeAgentIDPlaceholder, string(agent))
 }
 
-func renderBoundedReviewAsset(path string) string {
+func renderBoundedReviewAssetBody(path string) string {
 	content := assets.MustRead(path)
 	content = strings.ReplaceAll(content, authorityFirstProcedurePlaceholder, authorityFirstTerminalProcedure())
 	if strings.HasSuffix(path, "/sdd-orchestrator.md") {

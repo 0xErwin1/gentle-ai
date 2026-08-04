@@ -16,7 +16,9 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
-var requiredLedgerClauses = boundedReviewRequiredClauses
+// requiredLedgerClauses is the OpenCode binding of the shared clause set: the
+// only consumer is the preserved OpenCode orchestrator prompt.
+var requiredLedgerClauses = boundedReviewRequiredClausesFor(model.AgentOpenCode)
 
 const requiredOrchestratorMergeModeClause = "Parent orchestrator and native CLI only"
 
@@ -63,7 +65,7 @@ func TestDedicatedReviewAndJudgmentAssetsRenderRoleContracts(t *testing.T) {
 	for family, paths := range assetsByFamily {
 		for _, path := range paths {
 			t.Run(family+"/"+path, func(t *testing.T) {
-				content := renderBoundedReviewAsset(path)
+				content := renderBoundedReviewAsset(agentForAssetPath(t, path), path)
 				assertTextContainsClauses(t, path, content, []string{"candidate", "BLOCKER", "CRITICAL", "causal", "proof"})
 				if !strings.Contains(content, "read-only") && !strings.Contains(content, "Never edit") {
 					t.Errorf("%s does not state its non-mutating role", path)
@@ -118,7 +120,7 @@ func TestDedicatedReviewersAndRefutersAreStructurallyReadOnly(t *testing.T) {
 		"claude/agents/review-refuter.md", "cursor/agents/review-refuter.md",
 		"kimi/agents/review-refuter.md", "kiro/agents/review-refuter.md",
 	} {
-		assertNoReviewerLifecycleInstructions(t, path, renderBoundedReviewAsset(path))
+		assertNoReviewerLifecycleInstructions(t, path, renderBoundedReviewAsset(agentForAssetPath(t, path), path))
 	}
 	for _, path := range []string{
 		"kimi/agents/review-risk.yaml", "kimi/agents/review-readability.yaml",
@@ -267,7 +269,14 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// contract in `agent.gentle-orchestrator.prompt`, and that key is the only
 	// difference in the rendered settings, so the hash moved a fourth time.
 	// Deliberate, not drift.
-	const want = "54c3a5c7b112864a4b3d042b766549000ed482f3acd6c3b1eaebacb65d293da8"
+	//
+	// Issue #2440 moved it a fifth time: the shared contract's five hardcoded
+	// `claude-code` identities became the runtime substitution placeholder, so
+	// Kilocode's rendered settings now name `kilocode` on its own negotiated
+	// STATUS route instead of claiming to be Claude Code. Deliberate, and the
+	// whole point of the fix: the previous bytes told every non-Claude runtime
+	// to present a false identity to the review transport gate.
+	const want = "14de19def3dcb83c4211a4ad357741b70dee07d9e5f664bb9bf7eef3557f3ea3"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -456,12 +465,22 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// required flags (also verified by execution). The standard ceiling
 		// moves with it (21,200 -> 22,200) to restore the ~15% margin below;
 		// full-4R still has headroom and is unchanged.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_276, maxCharacters: 22_200},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 27_034, maxCharacters: 36_000},
+		// wantChars shrank by 15 per row (19,276 -> 19,261 / 27,034 -> 27,019)
+		// fixing issue #2440: the contract's five hardcoded `claude-code`
+		// identities became the runtime substitution placeholder, and this row
+		// now measures the OpenCode-bound rendering an OpenCode user actually
+		// installs. `opencode` is three characters shorter than `claude-code`,
+		// five times over. Ceilings are unchanged.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_261, maxCharacters: 22_200},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 27_019, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			chars, _ := measurePromptCost(boundedReviewContract())
+			// Measure what an OpenCode user actually installs, not the
+			// shared source: the contract now carries the runtime-identity
+			// substitution placeholder, and only the bound form is ever
+			// written to disk (issue #2440).
+			chars, _ := measurePromptCost(bindRuntimeAgentIdentity(boundedReviewContract(), model.AgentOpenCode))
 			for _, agent := range tt.agents {
 				promptChars, _ := measurePromptCost(settings.Agent[agent].Prompt)
 				chars += promptChars

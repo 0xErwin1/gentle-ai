@@ -135,8 +135,13 @@ func TestReviewNarrationNamedCommandsAreAlwaysComplete(t *testing.T) {
 	reopenRe := regexp.MustCompile("`gentle-ai review reopen-results[^`]*`")
 	for code, statement := range reviewStopReasonNarration {
 		for _, invocation := range statusRe.FindAllString(statement, -1) {
-			if !strings.Contains(invocation, "--contract gentle-ai.review-integration/v2") || !strings.Contains(invocation, "--agent claude-code") {
-				t.Errorf("stop reason %q: %s is incomplete -- the real CLI refuses --next-transition without --contract gentle-ai.review-integration/v2 --agent claude-code", code, invocation)
+			// --agent must be BOUND, not fixed. Narration is read by every
+			// runtime, so it carries the caller-identity slot that
+			// bindNarrationRuntimeIdentity fills with whoever declared
+			// itself on this invocation; naming claude-code here is what
+			// let issue #2440 through.
+			if !strings.Contains(invocation, "--contract gentle-ai.review-integration/v2") || !reviewAgentBindingRegexp.MatchString(invocation) {
+				t.Errorf("stop reason %q: %s is incomplete -- the real CLI refuses --next-transition without --contract gentle-ai.review-integration/v2 and a bound --agent", code, invocation)
 			}
 		}
 		for _, invocation := range reopenRe.FindAllString(statement, -1) {

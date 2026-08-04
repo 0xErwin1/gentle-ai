@@ -142,14 +142,35 @@ const ReviewStartConsentDeclinedThisCandidate = "declined_this_candidate"
 // and the fix is to name the base to compare against, not to redo the work.
 const reviewStartEmptyCandidateHint = "the candidate has no pending changes; already-committed work can be reviewed by rerunning review start with --base-ref <commit> naming the base to compare against"
 
+// reviewUndeclaredRuntimeIdentitySlot is what the printed continuation carries
+// when no runtime declared itself. The direct route refuses `--agent` outright
+// ("review start --agent requires a negotiated --contract"), so on that path
+// the caller's identity is genuinely unknown, and a slot is the only honest
+// thing to print: naming a concrete runtime there would be this CLI asserting
+// an identity on the caller's behalf.
+const reviewUndeclaredRuntimeIdentitySlot = "<your-runtime-identity>"
+
 // reviewNegotiatedStartCommand builds the exact negotiated `review start`
 // invocation for a frozen snapshot. It is the single source of the runnable
 // continuation the direct route names when it refuses (issue #2447): every
 // direct-route refusal must name a command that actually runs, so the
 // command shape lives here once instead of being reconstructed per call site.
-func reviewNegotiatedStartCommand(snapshot reviewtransaction.Snapshot) string {
+//
+// runtimeAgent is the identity the caller itself declared, never a constant.
+// This message is printed at the exact moment a reader is most likely to copy
+// it verbatim, so a baked-in `claude-code` would invite every other runtime to
+// declare a false identity and pass the transport admission check in
+// review_transport_capability.go under Claude Code's capability profile
+// (issue #2440). Naming the caller's own runtime keeps that check meaningful:
+// a runtime whose transport is unsupported is then refused, which is the
+// correct outcome for this build.
+func reviewNegotiatedStartCommand(snapshot reviewtransaction.Snapshot, runtimeAgent string) string {
+	identity := strings.TrimSpace(runtimeAgent)
+	if identity == "" {
+		identity = reviewUndeclaredRuntimeIdentitySlot
+	}
 	command := fmt.Sprintf("gentle-ai review start --contract %s --agent %s --target %s --projection %s",
-		ReviewIntegrationContractV2, model.AgentClaudeCode, snapshot.Identity, facadeProjection(snapshot.Projection))
+		ReviewIntegrationContractV2, identity, snapshot.Identity, facadeProjection(snapshot.Projection))
 	switch snapshot.Kind {
 	case reviewtransaction.TargetBaseDiff:
 		command += " --base-ref " + snapshot.BaseTree + " --committed-only"
@@ -998,7 +1019,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			// surface (spec "Three-Tier Narration Contract"), written to
 			// stderr only, never mixed into the parsed stream.
 			if transition.Kind == reviewNextTransitionStop {
-				reviewNarrateStopReason(transition.ReasonCode)
+				reviewNarrateStopReason(transition.ReasonCode, runtime)
 			}
 		}
 		if err := result.Validate(); err != nil {
@@ -1586,7 +1607,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	if !negotiated && target.Kind != reviewtransaction.TargetCurrentChanges && len(lenses) > 0 {
 		return reviewPreflightRefusal(reviewPreflightDirectRouteUncompletableReason,
 			fmt.Errorf("review start without --contract cannot produce a completable review because its %d selected lens(es) require repository_context, which only the negotiated contract form publishes; rerun with `gentle-ai review start %s` instead",
-				len(lenses), strings.TrimPrefix(reviewNegotiatedStartCommand(snapshot), "gentle-ai review start ")))
+				len(lenses), strings.TrimPrefix(reviewNegotiatedStartCommand(snapshot, *runtimeAgent), "gentle-ai review start ")))
 	}
 	// The candidate is frozen and the tier is classified, so this is the one
 	// point where the kill switch can stop a start and consent can name the real
@@ -1716,7 +1737,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			legacyResult.Hint = reviewStartEmptyCandidateHint
 		case legacyResult.LensesRequired:
 			legacyResult.Hint = "this response's selected lenses require the frozen Git trees, changed-path manifest, and artifact subjects, which only the negotiated contract form returns; rerun with `" +
-				reviewNegotiatedStartCommand(snapshot) + "` to receive them"
+				reviewNegotiatedStartCommand(snapshot, *runtimeAgent) + "` to receive them"
 		}
 		// Negotiated envelope, new in Wave 7 S7a (WU18a): runReviewFacadeStartNewLineage
 		// never had negotiated-form support before this (it was called
@@ -1885,7 +1906,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 				legacyResult.Hint = reviewStartEmptyCandidateHint
 			case legacyResult.LensesRequired:
 				legacyResult.Hint = "this response's selected lenses require the frozen Git trees, changed-path manifest, and artifact subjects, which only the negotiated contract form returns; rerun with `" +
-					reviewNegotiatedStartCommand(authority.InitialSnapshot) + "` to receive them"
+					reviewNegotiatedStartCommand(authority.InitialSnapshot, *runtimeAgent) + "` to receive them"
 			}
 		}
 		return encodeReviewJSON(stdout, legacyResult)

@@ -212,12 +212,20 @@ var reviewStatusNextTransitionInvocationRegexp = regexp.MustCompile("`gentle-ai 
 func TestNamedReviewStatusNextTransitionIsAlwaysComplete(t *testing.T) {
 	for label, content := range reviewStopReasonDocsCompleteDocuments(t) {
 		for _, invocation := range reviewStatusNextTransitionInvocationRegexp.FindAllString(content, -1) {
-			if !strings.Contains(invocation, "--contract gentle-ai.review-integration/v2") || !strings.Contains(invocation, "--agent claude-code") {
-				t.Errorf("%s: %s is incomplete -- the real CLI refuses --next-transition without --contract gentle-ai.review-integration/v2 --agent claude-code (verified by execution)", label, invocation)
+			if !strings.Contains(invocation, "--contract gentle-ai.review-integration/v2") || !reviewAgentBindingRegexp.MatchString(invocation) {
+				t.Errorf("%s: %s is incomplete -- the real CLI refuses --next-transition without --contract gentle-ai.review-integration/v2 and a bound --agent (verified by execution)", label, invocation)
 			}
 		}
 	}
 }
+
+// reviewAgentBindingRegexp requires a bound `--agent` value without pinning
+// which one. Pinning `claude-code` here is what let issue #2440 through: the
+// shipped asset renders into EVERY runtime's instructions, so it carries the
+// substitution placeholder and the renderer binds the runtime that is actually
+// executing. What must never happen is an --agent flag with nothing behind it,
+// which the real CLI refuses.
+var reviewAgentBindingRegexp = regexp.MustCompile("--agent [^ `]+")
 
 // reviewReopenResultsInvocationRegexp matches any backtick-quoted
 // `gentle-ai review reopen-results ...` invocation.

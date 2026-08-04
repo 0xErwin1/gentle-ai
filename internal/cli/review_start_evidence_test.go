@@ -309,7 +309,10 @@ func TestReviewFacadeStartLensesRequiredHintsNegotiatedContract(t *testing.T) {
 	if !started.LensesRequired || len(started.SelectedLenses) == 0 {
 		t.Fatalf("service-token start lenses_required = %v, selected_lenses = %v, want lenses selected", started.LensesRequired, started.SelectedLenses)
 	}
-	wantCommand := fmt.Sprintf("gentle-ai review start --contract %s --agent %s --target %s --projection %s", ReviewIntegrationContractV2, model.AgentClaudeCode, started.TargetIdentity, started.Projection)
+	// The direct route refuses --agent, so this caller never declared a
+	// runtime and the hint must not declare one for it (issue #2440): it
+	// carries the fill-in slot the reader replaces with their own identity.
+	wantCommand := fmt.Sprintf("gentle-ai review start --contract %s --agent %s --target %s --projection %s", ReviewIntegrationContractV2, reviewUndeclaredRuntimeIdentitySlot, started.TargetIdentity, started.Projection)
 	if !strings.Contains(started.Hint, wantCommand) {
 		t.Fatalf("lenses-required start hint = %q, want it to contain %q", started.Hint, wantCommand)
 	}
@@ -371,7 +374,7 @@ func TestReviewFacadeStartBaseDiffHintReplaysFrozenSelector(t *testing.T) {
 	if len(command) < 4 || !reflect.DeepEqual(command[:3], []string{"gentle-ai", "review", "start"}) {
 		t.Fatalf("hint command = %v", command)
 	}
-	args := append([]string{"start", "--cwd", repo}, command[3:]...)
+	args := append([]string{"start", "--cwd", repo}, substituteReplayRuntimeIdentity(t, command[3:], model.AgentClaudeCode)...)
 	var replay bytes.Buffer
 	if err := RunReview(args, &replay); err != nil {
 		t.Fatalf("hinted negotiated START failed: %v\n%s", err, replay.String())
@@ -453,7 +456,7 @@ func TestReviewFacadeStartBaseDiffRefusalReplaysFrozenSelector(t *testing.T) {
 	if len(command) < 3 || !reflect.DeepEqual(command[:3], []string{"gentle-ai", "review", "start"}) {
 		t.Fatalf("refusal command = %v", command)
 	}
-	args := append([]string{"start", "--cwd", repo}, command[3:]...)
+	args := append([]string{"start", "--cwd", repo}, substituteReplayRuntimeIdentity(t, command[3:], model.AgentClaudeCode)...)
 	var replay bytes.Buffer
 	if err := RunReview(args, &replay); err != nil {
 		t.Fatalf("named negotiated START failed: %v\n%s", err, replay.String())
