@@ -420,11 +420,11 @@ func Resolve(options ResolveOptions) (Status, error) {
 			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, reviewDisabled); ok || err != nil {
 				return status, err
 			}
-			return blockedStatus(workspaceRoot, nil, nil, "sdd-new", []string{"No active OpenSpec changes found under openspec/changes."}, options.IncludeInstructions), nil
+			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "sdd-new", []string{"No active OpenSpec changes found under openspec/changes."}, options.IncludeInstructions), nil
 		case 1:
 			changeName = activeChanges[0]
 		default:
-			return blockedStatus(workspaceRoot, nil, nil, "select-change", []string{fmt.Sprintf("Change selection is ambiguous: %s.", strings.Join(activeChanges, ", "))}, options.IncludeInstructions), nil
+			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "select-change", []string{fmt.Sprintf("Change selection is ambiguous: %s.", strings.Join(activeChanges, ", "))}, options.IncludeInstructions), nil
 		}
 	}
 
@@ -432,7 +432,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 		if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, reviewDisabled); ok || err != nil {
 			return status, err
 		}
-		return blockedStatus(workspaceRoot, &changeName, nil, "sdd-new", []string{fmt.Sprintf("Active OpenSpec change not found: %s.", changeName)}, options.IncludeInstructions), nil
+		return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, &changeName, nil, "sdd-new", []string{fmt.Sprintf("Active OpenSpec change not found: %s.", changeName)}, options.IncludeInstructions), nil
 	}
 
 	changeRoot := filepath.Join(changesDir, changeName)
@@ -440,19 +440,20 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	artifacts := map[string]ArtifactState{
-		"proposal":      singleArtifactState(artifactPaths.Proposal),
-		"specs":         multiArtifactState(artifactPaths.Specs, filepath.Join(changeRoot, "specs")),
-		"design":        singleArtifactState(artifactPaths.Design),
-		"tasks":         singleArtifactState(artifactPaths.Tasks),
-		"applyProgress": singleArtifactState(artifactPaths.ApplyProgress),
-		"verifyReport":  singleArtifactState(artifactPaths.VerifyReport),
-		"reviewLedger":  singleArtifactState(artifactPaths.ReviewLedger),
-		"reviewReceipt": singleArtifactState(artifactPaths.ReviewReceipt),
-		"reviewBundle":  singleArtifactState(artifactPaths.ReviewBundle),
-		"reviewContext": singleArtifactState(artifactPaths.ReviewContext),
-		"reviewState":   singleArtifactState(artifactPaths.ReviewState),
-	}
+	artifacts := artifactStates{
+		Proposal:      singleArtifactState(artifactPaths.Proposal),
+		Specs:         multiArtifactState(artifactPaths.Specs, filepath.Join(changeRoot, "specs")),
+		Design:        singleArtifactState(artifactPaths.Design),
+		Tasks:         singleArtifactState(artifactPaths.Tasks),
+		ApplyProgress: singleArtifactState(artifactPaths.ApplyProgress),
+		VerifyReport:  singleArtifactState(artifactPaths.VerifyReport),
+		ReviewPolicy:  singleArtifactState(artifactPaths.ReviewPolicy),
+		ReviewLedger:  singleArtifactState(artifactPaths.ReviewLedger),
+		ReviewReceipt: singleArtifactState(artifactPaths.ReviewReceipt),
+		ReviewBundle:  singleArtifactState(artifactPaths.ReviewBundle),
+		ReviewContext: singleArtifactState(artifactPaths.ReviewContext),
+		ReviewState:   singleArtifactState(artifactPaths.ReviewState),
+	}.statesFor(ArtifactStoreOpenSpec)
 	taskProgress, err := countTaskProgress(firstPath(artifactPaths.Tasks))
 	if err != nil {
 		return Status{}, err
@@ -590,7 +591,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if remediationState.Reason != "" {
 		blockedReasons.genuine = append(blockedReasons.genuine, remediationState.Reason)
 	}
-	status := baseStatus(workspaceRoot, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
+	status := baseStatus(ArtifactStoreOpenSpec, workspaceRoot, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
 	status.ArtifactPaths = artifactPaths
 	status.ContextFiles = artifactPaths
 	status.Artifacts = artifacts
@@ -797,20 +798,20 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	}
 
 	artifactPaths := engramArtifactPaths(changeName, artifactsByType)
-	artifacts := map[string]ArtifactState{
-		"proposal":      engramArtifactState(artifactsByType["proposal"]),
-		"specs":         engramArtifactState(artifactsByType["spec"]),
-		"design":        engramArtifactState(artifactsByType["design"]),
-		"tasks":         engramArtifactState(artifactsByType["tasks"]),
-		"applyProgress": engramArtifactState(artifactsByType["apply-progress"]),
-		"verifyReport":  engramArtifactState(artifactsByType["verify-report"]),
-		"reviewLedger":  engramArtifactState(artifactsByType["review/ledger"]),
-		"reviewPolicy":  engramArtifactState(artifactsByType["review/policy"]),
-		"reviewReceipt": engramArtifactState(artifactsByType["review/receipt"]),
-		"reviewBundle":  engramArtifactState(artifactsByType["review/chain-bundle"]),
-		"reviewContext": engramArtifactState(artifactsByType["review/gate-context"]),
-		"reviewState":   engramArtifactState(artifactsByType["review/transaction"]),
-	}
+	artifacts := artifactStates{
+		Proposal:      engramArtifactState(artifactsByType["proposal"]),
+		Specs:         engramArtifactState(artifactsByType["spec"]),
+		Design:        engramArtifactState(artifactsByType["design"]),
+		Tasks:         engramArtifactState(artifactsByType["tasks"]),
+		ApplyProgress: engramArtifactState(artifactsByType["apply-progress"]),
+		VerifyReport:  engramArtifactState(artifactsByType["verify-report"]),
+		ReviewPolicy:  engramArtifactState(artifactsByType["review/policy"]),
+		ReviewLedger:  engramArtifactState(artifactsByType["review/ledger"]),
+		ReviewReceipt: engramArtifactState(artifactsByType["review/receipt"]),
+		ReviewBundle:  engramArtifactState(artifactsByType["review/chain-bundle"]),
+		ReviewContext: engramArtifactState(artifactsByType["review/gate-context"]),
+		ReviewState:   engramArtifactState(artifactsByType["review/transaction"]),
+	}.statesFor(ArtifactStoreEngram)
 	taskProgress := countTaskProgressText(artifactsByType["tasks"].Content)
 	specCounts := countSpecRequirementsAndScenarios([]string{artifactsByType["spec"].Content})
 	verifyResult := parseVerifyResult(artifactsByType["verify-report"].Content, specCounts)
@@ -899,8 +900,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	}
 
 	changeRoot := fmt.Sprintf("engram:sdd/%s", changeName)
-	status := baseStatus(workspaceRoot, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
-	status.ArtifactStore = ArtifactStoreEngram
+	status := baseStatus(ArtifactStoreEngram, workspaceRoot, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
 	status.PlanningHome = PlanningHome{Mode: ActionModeRepoLocal, Path: "engram:sdd"}
 	status.ArtifactPaths = artifactPaths
 	status.ContextFiles = artifactPaths
@@ -950,8 +950,7 @@ func compactBridgeableReviewArtifact(state ArtifactState, reason string) bool {
 }
 
 func blockedEngramStatus(workspaceRoot string, changeName *string, next string, reasons []string, includeInstructions bool) Status {
-	status := blockedStatus(workspaceRoot, changeName, nil, next, reasons, includeInstructions)
-	status.ArtifactStore = ArtifactStoreEngram
+	status := blockedStatus(ArtifactStoreEngram, workspaceRoot, changeName, nil, next, reasons, includeInstructions)
 	status.PlanningHome = PlanningHome{Mode: ActionModeRepoLocal, Path: "engram:sdd"}
 	return status
 }
@@ -1311,8 +1310,8 @@ func absOrCWD(path string) (string, error) {
 	return filepath.Abs(path)
 }
 
-func blockedStatus(workspaceRoot string, changeName *string, changeRoot *string, next string, reasons []string, includeInstructions bool) Status {
-	status := baseStatus(workspaceRoot, changeName, changeRoot, next, reasons)
+func blockedStatus(store ArtifactStore, workspaceRoot string, changeName *string, changeRoot *string, next string, reasons []string, includeInstructions bool) Status {
+	status := baseStatus(store, workspaceRoot, changeName, changeRoot, next, reasons)
 	if includeInstructions {
 		instructions := renderPhaseInstructions(status)
 		status.PhaseInstructions = &instructions
@@ -1320,7 +1319,11 @@ func blockedStatus(workspaceRoot string, changeName *string, changeRoot *string,
 	return status
 }
 
-func baseStatus(workspaceRoot string, changeName *string, changeRoot *string, next string, reasons []string) Status {
+// baseStatus takes the artifact store as an input so the artifact map is built
+// for the store the status actually reports. Issue #2346: it used to hardcode
+// ArtifactStoreOpenSpec and leave callers to relabel the store afterwards,
+// which produced an Engram status carrying an OpenSpec-shaped map.
+func baseStatus(store ArtifactStore, workspaceRoot string, changeName *string, changeRoot *string, next string, reasons []string) Status {
 	emptyPaths := emptyArtifactPaths()
 	if reasons == nil {
 		reasons = []string{}
@@ -1329,7 +1332,7 @@ func baseStatus(workspaceRoot string, changeName *string, changeRoot *string, ne
 		SchemaName:    SchemaName,
 		SchemaVersion: SchemaVersion,
 		ChangeName:    changeName,
-		ArtifactStore: ArtifactStoreOpenSpec,
+		ArtifactStore: store,
 		PlanningHome: PlanningHome{
 			Mode: ActionModeRepoLocal,
 			Path: filepath.Join(workspaceRoot, "openspec"),
@@ -1337,20 +1340,8 @@ func baseStatus(workspaceRoot string, changeName *string, changeRoot *string, ne
 		ChangeRoot:    changeRoot,
 		ArtifactPaths: emptyPaths,
 		ContextFiles:  emptyPaths,
-		Artifacts: map[string]ArtifactState{
-			"proposal":      ArtifactMissing,
-			"specs":         ArtifactMissing,
-			"design":        ArtifactMissing,
-			"tasks":         ArtifactMissing,
-			"applyProgress": ArtifactMissing,
-			"verifyReport":  ArtifactMissing,
-			"reviewLedger":  ArtifactMissing,
-			"reviewReceipt": ArtifactMissing,
-			"reviewBundle":  ArtifactMissing,
-			"reviewContext": ArtifactMissing,
-			"reviewState":   ArtifactMissing,
-		},
-		TaskProgress: TaskProgress{},
+		Artifacts:     artifactStates{}.statesFor(store),
+		TaskProgress:  TaskProgress{},
 		Dependencies: Dependencies{
 			Proposal: DependencyBlocked,
 			Specs:    DependencyBlocked,
