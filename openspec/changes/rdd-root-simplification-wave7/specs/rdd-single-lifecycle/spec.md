@@ -16,11 +16,18 @@ byte-identical goldens, envelopes, and receipts, via same-fixture on/off
 double-evaluation across the full journey set. A golden diff during this
 proof MUST be treated as a defect signal, never a golden-update task.
 
-#### Scenario: Double-evaluation proves equivalence before deletion
-
-- GIVEN the same fixture run once with the switch on and once switch-free
-- WHEN goldens, envelopes, and receipts are compared
-- THEN they are byte-identical, and only then does removal proceed
+Wave 7 obeyed this gate correctly (it never deleted the switch without
+evidence, and stopped when the evidence it could gather was incomplete —
+see the Amendment below) and recorded real, byte-identical-confirmed
+evidence for the scoped surface it could reach without a switch-free build
+(unnegotiated start, status, finalize, all 5 gates — tasks.md task 2.1).
+The scenario proving the full-journey-set claim end to end, negotiated
+form included, requires the switch-free build only an actual removal
+attempt produces (verify finding SL-1). That scenario has moved,
+byte-identical, to `rdd-single-lifecycle-cutover`'s `MODIFIED Requirements`
+delta for this same requirement — it belongs there because only the
+change that performs removal can run it, not because this requirement's
+standing obligation changes.
 
 ### Requirement: Preconditions W-9, W-10, W-11 Close Before Removal
 
@@ -59,14 +66,18 @@ and currently open).
 
 **Corrected counts for this change's delta** (three capability specs
 combined: `rdd-legacy-retirement`, `rdd-shadow-evaluation`,
-`rdd-single-lifecycle`), after this move: **14/14 requirements** delivered
-(was 14/15 before the move — the moved requirement is no longer counted
-here at all). Scenarios: **8/9** (was 8/10 — the moved requirement's own
-scenario left with it; one scenario gap remains in this change's own
-delivered requirement below, "Double-evaluation proves equivalence before
-deletion" — narrowed at apply time to the unnegotiated form, disclosed
-honestly rather than claimed complete; see Wave 7 tasks.md task 2.1 and
-verify finding SL-1).
+`rdd-single-lifecycle`), after this move and the follow-up SL-1 scenario
+move immediately above: **14/14 requirements** delivered (unchanged by the
+scenario move — the "Byte-Equivalence Exit Evidence Precedes Switch
+Removal" requirement heading stays in this delta; only its
+full-journey-set scenario relocated). Scenarios: **8/8** — the
+"Double-evaluation proves equivalence before deletion" scenario also moved
+to `rdd-single-lifecycle-cutover` (as a `MODIFIED Requirements` addition to
+the same requirement, since only the change that performs removal can run
+it), so every scenario this change still names, it delivers. Prior counts, for
+the record: requirements 14/15 (relabel-in-place, verify blocker B1) →
+14/14 (B1's physical move, unchanged since); scenarios 8/10 → 8/9 (B1's
+scenario left with its requirement) → 8/8 (this SL-1 scenario move).
 
 ## Amendment (Wave 7 S7, WU18 attempt — deferred, not landed)
 

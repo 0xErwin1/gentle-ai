@@ -72,23 +72,29 @@ Chain strategy: feature-branch-chain
 
 ### WU2 — S6: byte-equivalence evidence, Commit A
 - [x] 2.1 Record goldens/envelopes/receipts with `GENTLE_AI_RDD_NEW_LINEAGE=1` across the full journey set, every entry surface: start (negotiated+unnegotiated), status `--next-transition`, capture-result, finalize, validate, all 5 gates. (Scoped at apply time to the unnegotiated form + status + finalize + all 5 gates; negotiated form and capture-result deferred to unit-level coverage + WU18's `bench --axis all` — see apply-progress.)
-  **verify SL-1, disclosed rather than widened**: the negotiated form was
-  never proven byte-equivalent (switch-ON vs switch-free), and cannot be
-  recorded now without either (a) reconstructing a switch-free build —
-  exactly the WU18 action this wave deferred, and reproducing it here
-  solely to record evidence would reintroduce the same disclosed
-  `repository_context` gap under the same time pressure the deferral
-  exists to avoid, or (b) recording only the switch-ON side with no
-  switch-free counterpart to diff against, which proves nothing. This
-  scenario ("Double-evaluation proves equivalence before deletion") stays
-  honestly unsatisfied in this change (see the corrected counts in
-  `specs/rdd-single-lifecycle/spec.md`: 8/9 scenarios). **What the
-  successor (`rdd-single-lifecycle-cutover`) must capture**: once v3
-  negotiated START gains genuine `repository_context` support, record
-  Commit A's negotiated-form goldens/envelopes/receipts (negotiated start +
-  `capture-result`) with the switch ON, build switch-free, record the same
-  surface again, and diff both for byte-identity — end to end, before
-  switch removal proceeds. See the successor's `proposal.md` step 3.
+  **verify SL-1, disclosed and relocated rather than widened**: the
+  negotiated form was never proven byte-equivalent (switch-ON vs
+  switch-free), and cannot be recorded now without either (a)
+  reconstructing a switch-free build — exactly the WU18 action this wave
+  deferred, and reproducing it here solely to record evidence would
+  reintroduce the same disclosed `repository_context` gap under the same
+  time pressure the deferral exists to avoid, or (b) recording only the
+  switch-ON side with no switch-free counterpart to diff against, which
+  proves nothing. The requirement this evidence proves
+  ("Byte-Equivalence Exit Evidence Precedes Switch Removal") stays in this
+  change's own spec, unweakened, alongside the scoped evidence actually
+  recorded here — but its full-journey-set scenario ("Double-evaluation
+  proves equivalence before deletion") has moved, byte-identical, to
+  `rdd-single-lifecycle-cutover`'s `MODIFIED Requirements` delta (verify
+  finding SL-1's resolution, mirroring how B1's requirement move was
+  handled): only the change that performs the switch-free build can run
+  it. **What the successor must do**: once v3 negotiated START gains
+  genuine `repository_context` support, record Commit A's negotiated-form
+  goldens/envelopes/receipts (negotiated start + `capture-result`) with
+  the switch ON, build switch-free, record the same surface again, and
+  diff both for byte-identity — satisfying the scenario it now owns —
+  before switch removal proceeds. See the successor's `proposal.md` step 3
+  and its `specs/rdd-single-lifecycle/spec.md`.
 - [x] 2.2 Store recorded bytes as the Commit-B comparison baseline.
 - [x] 2.3 Exit Checklist.
 

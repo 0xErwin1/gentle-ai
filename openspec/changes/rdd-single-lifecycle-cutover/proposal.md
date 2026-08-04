@@ -91,6 +91,11 @@ over a known gap.
 - `rdd-single-lifecycle`: adds the "Exactly One Lifecycle After Removal"
   requirement (moved here byte-identical from Wave 7's delta, ownership
   only — text unweakened) now that this change is the one delivering it.
+  Also carries a `MODIFIED Requirements` entry for "Byte-Equivalence Exit
+  Evidence Precedes Switch Removal": the requirement itself stays defined
+  in Wave 7's spec unchanged, but its full-journey-set scenario (the one
+  requiring a switch-free build, negotiated form included) moves here
+  byte-identical — only this change can run it (verify finding SL-1).
 
 ## Grounding
 
