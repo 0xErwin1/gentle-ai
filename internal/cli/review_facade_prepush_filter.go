@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os/exec"
-	"sort"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -145,52 +144,4 @@ func pathsAreDisjoint(genesisPaths, livePaths []string) bool {
 	return true
 }
 
-// pathSetsOverlap is the inverse: true when at least one path appears in both sets.
-func pathSetsOverlap(a, b []string) bool {
-	if len(a) == 0 || len(b) == 0 {
-		return false
-	}
-	// Smaller set first for better cache behavior.
-	if len(a) > len(b) {
-		a, b = b, a
-	}
-	known := make(map[string]struct{}, len(a))
-	for _, p := range a {
-		known[p] = struct{}{}
-	}
-	for _, p := range b {
-		if _, ok := known[p]; ok {
-			return true
-		}
-	}
-	return false
-}
 
-// canonicalPaths returns a sorted copy with empty strings removed.
-func canonicalPaths(paths []string) []string {
-	if len(paths) == 0 {
-		return nil
-	}
-	result := make([]string, 0, len(paths))
-	for _, p := range paths {
-		if p != "" {
-			result = append(result, p)
-		}
-	}
-	sort.Strings(result)
-	return result
-}
-
-// equalStrings reports whether two string slices contain the same elements in the
-// same order. Nil slices are treated as empty.
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
