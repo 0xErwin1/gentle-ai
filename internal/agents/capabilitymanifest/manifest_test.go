@@ -127,10 +127,15 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 	// content the canonical JSON payload — and therefore the digest —
 	// legitimately covers for every agent, whether that agent's AutoInstall
 	// claim used to be true or false.
+	//
+	// Codex's digest changed again in #2418 Slice 0: ReviewTransportV1
+	// exposure flipped from advertised to dormant (no reviewer lens assets
+	// exist to launch), so its canonical payload — and digest — legitimately
+	// changed too. No other agent's digest moves.
 	wantManifestDigests := map[model.AgentID]string{
 		model.AgentAntigravity:   "sha256:6d9ccea52a22a523d90b35d2c9540e2953a0d1dd44b368922546d6e3690180c8",
 		model.AgentClaudeCode:    "sha256:a330f5e7d36a83fe98aea15fbf6d81a445f0073e6b0b7bfebe052466b0539e05",
-		model.AgentCodex:         "sha256:986cdb1c75d26840217634f720093511369e902c14b068a3245e8ebf98c41a5c",
+		model.AgentCodex:         "sha256:3030959213a67cb3633d92a1ae38f51de38da3c3df48ff5be063cbbbc03fb47f",
 		model.AgentCursor:        "sha256:d5be74e67fa7b78c6b8aeee602894395ddb9e9f481b797693f16c348c0274b0a",
 		model.AgentGeminiCLI:     "sha256:3178d298a261cc1bfae1c96201f022f3d5b81135089130e5c747afb2ae39450f",
 		model.AgentHermes:        "sha256:f042913fabdc55ad918cd792dab5566b281fa568d37384bf613a9bef13d00850",
@@ -200,5 +205,23 @@ func TestForAgentRejectsUnknownAgent(t *testing.T) {
 	_, err := ForAgent(model.AgentID("unknown"))
 	if !errors.Is(err, ErrUnsupportedAgent) {
 		t.Fatalf("ForAgent() error = %v, want ErrUnsupportedAgent", err)
+	}
+}
+
+// TestCodexReviewTransportExposureIsDormant is #2418 Slice 0's correctness
+// fix: internal/assets/codex/ ships only sdd-orchestrator.md — no reviewer
+// lens or refuter assets exist for Codex to launch — so the manifest must not
+// advertise a transport Codex cannot honor. This mirrors Pi's existing
+// dormant override; #2418 is the work that flips it once lens assets land.
+func TestCodexReviewTransportExposureIsDormant(t *testing.T) {
+	t.Parallel()
+
+	manifest := MustForAgent(model.AgentCodex)
+	if manifest.Contracts.ReviewTransportV1.Exposure != ContractExposureDormant {
+		t.Fatalf("Codex review-transport exposure = %q, want %q (#2418: no lens assets exist yet)",
+			manifest.Contracts.ReviewTransportV1.Exposure, ContractExposureDormant)
+	}
+	if manifest.Advertises(ContractReviewTransportV1) {
+		t.Fatal("Codex manifest advertises review-transport capability before #2418 ships lens assets")
 	}
 }

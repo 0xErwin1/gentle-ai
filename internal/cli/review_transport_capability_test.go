@@ -62,13 +62,18 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 		// by the broader gate first. `review status` is unaffected — the
 		// new gate only runs in `review start` — so its expected code
 		// stays reviewImmutableTransportUnsupportedCode for every runtime.
+		//
+		// Codex moved from the narrower to the broader gate in #2418 Slice
+		// 0: its manifest no longer advertises ContractReviewTransportV1 (no
+		// reviewer lens assets exist), so the broader gate now denies it
+		// first, same as Pi and unknown runtimes.
 		startCode string
 	}{
 		// OpenCode is no longer in this table: issue #2417 restored genuine
 		// transport, so `--agent opencode` now proceeds past this narrower
 		// immutable-transport check instead of stopping here (see
 		// TestSupportedImmutableReviewRuntimeIsCarriedIntoV2Start).
-		{name: "Codex", runtime: string(model.AgentCodex), startCode: reviewImmutableTransportUnsupportedCode},
+		{name: "Codex", runtime: string(model.AgentCodex), startCode: reviewTransportCapabilityUnsupportedCode},
 		{name: "Pi", runtime: string(model.AgentPi), startCode: reviewTransportCapabilityUnsupportedCode},
 		{name: "Kilo", runtime: string(model.AgentKilocode), startCode: reviewImmutableTransportUnsupportedCode},
 		{name: "unknown", runtime: "unknown-runtime", startCode: reviewTransportCapabilityUnsupportedCode},

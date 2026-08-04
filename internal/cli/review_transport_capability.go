@@ -54,6 +54,12 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 	case model.AgentClaudeCode:
 		return reviewImmutableRuntimePolicy{Eligible: true, Transport: reviewImmutableTransportClaudePromptCarried}
 	case model.AgentCodex:
+		// #2418 owns the Codex lens transport: internal/assets/codex/ ships
+		// only sdd-orchestrator.md, so no reviewer lens or refuter asset
+		// exists yet for a Codex-hosted review to launch. The manifest's
+		// ReviewTransportV1 exposure is dormant for the same reason
+		// (capabilitymanifest.reviewTransportExposureByAgent) — this switch
+		// arm is the compiled floor that gate ultimately relies on.
 		return reviewImmutableRuntimePolicy{Eligible: true, Transport: reviewImmutableTransportUnsupported}
 	case model.AgentOpenCode:
 		// #2417 restored genuine support through the provider-injected

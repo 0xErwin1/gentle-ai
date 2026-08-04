@@ -40,6 +40,14 @@ func TestAuthorizeReviewTransportCapabilityMatrix(t *testing.T) {
 			t.Fatal("authorizeReviewTransportCapability(pi) = nil, want an absent-claim refusal")
 		}
 	})
+	t.Run("absent claim fails closed for Codex (#2418 dormant declaration)", func(t *testing.T) {
+		// Codex has no reviewer lens assets (internal/assets/codex/ ships
+		// only sdd-orchestrator.md), so its manifest no longer advertises
+		// ContractReviewTransportV1 either — the same class of refusal as Pi.
+		if err := authorizeReviewTransportCapability(string(model.AgentCodex)); err == nil {
+			t.Fatal("authorizeReviewTransportCapability(codex) = nil, want an absent-claim refusal")
+		}
+	})
 	t.Run("unrecognised claim fails closed", func(t *testing.T) {
 		if err := authorizeReviewTransportCapability("unknown-runtime"); err == nil {
 			t.Fatal("authorizeReviewTransportCapability(unknown-runtime) = nil, want an unrecognised-claim refusal")

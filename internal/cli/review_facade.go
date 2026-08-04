@@ -1480,8 +1480,13 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	// at all" — so it runs before the narrower immutable-receipt-transport
 	// eligibility check below, and before any authority, tier, lens,
 	// budget, or collection slot exists. An absent agent identity is the
-	// manual/non-agent compatibility path and is not gated.
-	if runtimeRequested && reviewRuntimeAgentCount(args) == 1 {
+	// manual/non-agent compatibility path and is not gated. Only the
+	// negotiated route is gated: the direct route refuses `--agent`
+	// outright in validateReviewStartBinding ("review start --agent
+	// requires a negotiated --contract"), and that structural refusal must
+	// stay the direct route's answer regardless of which runtime was named
+	// (see TestDirectRouteStillRefusesADeclaredRuntime).
+	if negotiated && runtimeRequested && reviewRuntimeAgentCount(args) == 1 {
 		if err := authorizeReviewTransportCapability(*runtimeAgent); err != nil {
 			return reviewPreflightRefusal(reviewTransportCapabilityUnsupportedReason, err)
 		}
