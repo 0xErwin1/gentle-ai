@@ -175,9 +175,30 @@ func InstallWithHome(id model.CommunityToolID, workspaceDir string, homeDir stri
 	}
 
 	targets := detectedCodeGraphTargets(homeDir)
+	// The target ids come from a compatibility table written against
+	// codeGraphUpstreamVersion. Upstream rejects the whole comma-separated
+	// list when it does not recognise a single id, so passing them to an
+	// older CodeGraph takes down the targets it does support along with the
+	// ones it does not. When the installed CLI is provably older, drop the
+	// ids and let CodeGraph select targets itself instead of guessing which
+	// of ours it understands. A CLI that is not installed yet is exempt: the
+	// install command below fetches @latest, which meets the contract.
+	droppedBlindTargets := false
+	if before.CLI == AvailabilityAvailable && len(targets) > 0 {
+		if installed, ok := codeGraphInstalledVersion(before.CLIPath); ok && codeGraphVersionLess(installed, codeGraphUpstreamVersion) {
+			targets = nil
+			droppedBlindTargets = true
+			result.ManualActions = append(result.ManualActions, fmt.Sprintf(
+				"CodeGraph %s is older than the %s target contract Gentle AI is written against, so agent targets were left to CodeGraph's own detection. Run `npm install -g @colbymchenry/codegraph@latest` (or `pnpm add -g @colbymchenry/codegraph@latest`) and rerun Gentle AI to get explicit target selection.",
+				installed, codeGraphUpstreamVersion))
+		}
+	}
 	commands := make([][]string, 0, 2)
-	if len(targets) > 0 {
+	switch {
+	case len(targets) > 0:
 		commands = append(commands, []string{"codegraph", "install", "--target", strings.Join(targets, ","), "--location", "global", "--yes"})
+	case droppedBlindTargets:
+		commands = append(commands, []string{"codegraph", "install", "--yes"})
 	}
 	if before.CLI != AvailabilityAvailable {
 		var err error
