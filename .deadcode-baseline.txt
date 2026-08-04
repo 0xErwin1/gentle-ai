@@ -40,7 +40,6 @@ internal/components/engram/inject.go	ensureAntigravitySettings
 internal/components/engram/inject.go	isAbsoluteEngramPath
 internal/components/engram/verify.go	CountVersionCallsForTest
 internal/components/engram/verify.go	SetVersionForTest
-internal/components/engram/verify.go	VerifyHealth
 internal/components/filemerge/toml.go	RemoveTOMLTableKeys
 internal/components/filemerge/toml.go	UpsertCodexMCPServerBlock
 internal/components/gga/config.go	InjectionResult.FilesWritten
