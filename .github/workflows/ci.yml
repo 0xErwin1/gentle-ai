@@ -290,10 +290,28 @@ jobs:
             throw 'Windows OpenCode reviewer rejection E2E is missing'
           }
 
+      - name: Verify real-agent detection E2E is registered
+        # organic_runtime_real_agent_detection_test.go is gated behind the
+        # real_agent_e2e build tag precisely so `go test ./...` at the repo
+        # root never runs it against whatever agent binaries happen to be on
+        # that machine's PATH (see the file's own comment). That means this
+        # job is its only runner, so a rename or a dropped -tags flag here
+        # must fail loudly rather than let the suite silently stop proving
+        # real Claude Code / OpenCode detection.
+        shell: pwsh
+        run: |
+          $tests = go test -tags real_agent_e2e -list '^TestOrganicConfiguredAgentReceivesRoutingGuidanceRealAgents$' ./e2e/organicruntime
+          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestOrganicConfiguredAgentReceivesRoutingGuidanceRealAgents') {
+            throw 'Real-agent detection E2E is missing'
+          }
+
       - name: Run organic journeys
         # No -run filter: a renamed test must fail this job loudly, never let
         # go test exit 0 having matched nothing. The gated real-agent journey
         # (TestRealAgentOrganicJourneys) is included via its env switch.
+        # -tags real_agent_e2e additionally compiles in
+        # TestOrganicConfiguredAgentReceivesRoutingGuidanceRealAgents, which
+        # `go test ./...` never does — see that file's build-tag comment.
         env:
           GENTLE_AI_REAL_AGENT_E2E: "1"
           # The large-workspace journey spawns one Git subprocess per intended
@@ -301,7 +319,7 @@ jobs:
           # absorbs it; Windows does not, and gating it here keeps the real
           # coverage where it is affordable instead of deleting it outright.
           GENTLE_AI_LARGE_WORKSPACE_E2E: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
-        run: go test -v ./e2e/organicruntime -count=1 -timeout=15m
+        run: go test -tags real_agent_e2e -v ./e2e/organicruntime -count=1 -timeout=15m
 
   e2e-tests:
     name: E2E Tests (${{ matrix.platform.name }})
