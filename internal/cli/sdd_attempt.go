@@ -59,6 +59,17 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected sdd-attempt argument %q", flags.Arg(0))
 	}
+	// Identity/revision-shaped values are trimmed at this CLI boundary so
+	// incidental leading/trailing whitespace from a shell or PowerShell
+	// copy-paste (e.g. `Get-FileHash`/`shasum` output) does not itself cause
+	// the sha256:<64-lowercase-hex> shape rejection this exists to prevent
+	// (#2294). sddstatus stays a pure validator with no normalization of its
+	// own.
+	*expected = strings.TrimSpace(*expected)
+	*token = strings.TrimSpace(*token)
+	*evidenceRevision = strings.TrimSpace(*evidenceRevision)
+	*expectedBindingRevision = strings.TrimSpace(*expectedBindingRevision)
+	*remediatesEvidenceRevision = strings.TrimSpace(*remediatesEvidenceRevision)
 	if strings.TrimSpace(*cwd) == "" {
 		return errors.New("sdd-attempt requires --cwd")
 	}
