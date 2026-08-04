@@ -102,7 +102,8 @@ var reviewStopReasonNarration = map[string]string{
 	"captured_artifacts_unverifiable": "A previously captured review result failed verification, so this review cannot continue on its own. " +
 		"Ask a maintainer to inspect the review record directly.",
 	"captured_result_selection_unavailable": "This run reached a state that should never happen: every review result it expected was already present. " +
-		"This is a defect; there is nothing more to do from here.",
+		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewConsentOffPathCommand + "` " +
+		"so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
 	"corrected_candidate_unavailable": "Change the candidate content so it differs from the frozen original, then re-run " +
 		"`gentle-ai review status --next-transition` (or `review finalize`). " +
 		"That is the right path when the review found real defects. If instead the reviewers were given the wrong input " +
@@ -114,11 +115,14 @@ var reviewStopReasonNarration = map[string]string{
 	"corrupted_or_unverifiable_authority": "This review's stored record cannot be trusted as-is, and it cannot be repaired automatically. " +
 		"Ask a maintainer to inspect it directly.",
 	"final_verification_retry_unavailable": "This run reached a state that should never happen: it was routed to retry a final verification it was not eligible to retry. " +
-		"This is a defect; there is nothing more to do from here.",
+		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewConsentOffPathCommand + "` " +
+		"so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
 	"manual_intervention_required": "This review reached a state Gentle AI does not recognize. " +
-		"This is a defect; there is nothing more to do from here.",
+		"This is a product defect. If you just want your work delivered, run `" + reviewConsentOffPathCommand + "` " +
+		"so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, ask a maintainer to review it and report the defect.",
 	"missing_authority_binding": "This run reached a state that should never happen: it lost track of the record it needs to continue. " +
-		"This is a defect; there is nothing more to do from here.",
+		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewConsentOffPathCommand + "` " +
+		"so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
 	"native_stop_required": "This review is stuck at an escalated state that is not yet eligible to continue. " +
 		"Ask a maintainer to review it before doing anything else.",
 	"original_finalize_request_required": "Re-run `gentle-ai review finalize` with the exact same results or evidence you submitted before.",
