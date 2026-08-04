@@ -196,9 +196,30 @@ release candidate's community testing).
 - [x] 19.4 Exit Checklist: gofmt/vet clean, deadcode ratchet unchanged (zero new/gone entries — no production code touched), refusal ratchet unchanged (test-only slice), full root `go test ./... -count=1` fully GREEN (zero failures across the entire repo, RG.1b's own red finally resolved), bench module tests green, bench corpus vs the WU18a tip: 83/83 comparable journeys unchanged status, zero structural deltas (expected — test-only slice).
 
 ## WU20 — S9b: capability deltas + wave close-out
-- [ ] 20.1 Finalize `rdd-legacy-retirement`/`rdd-single-lifecycle`/`rdd-shadow-evaluation` deltas against actual landed state.
-- [ ] 20.2 Verify every proposal success-criteria box checked.
-- [ ] 20.3 Exit Checklist.
+- [x] 20.1 Finalized all three capability specs against actual landed state:
+  `rdd-legacy-retirement` (unchanged — matches landed state exactly: both
+  reconcile providers, 5 legacy verbs, forensic read retention all landed
+  as specified); `rdd-single-lifecycle` (amended — the WU18 deferral, full
+  rationale, and a new precise re-entry Requirement for the follow-up
+  wave); `rdd-shadow-evaluation` (corrected — the `ShadowRelation` alias
+  rename pass is DEFERRED, not retired outright as originally written;
+  the observer itself is fully retired).
+- [x] 20.2 Every proposal success-criteria box evaluated against actual
+  landed state (proposal.md, not silently checked): 5 of 7 fully met, 1
+  (exactly one lifecycle) explicitly NOT met with the deferral reason and
+  pointer to the spec amendment, 1 (zero behavior change for the new
+  lineage) partially met with WU18a's disclosed, coordinator-approved
+  exception documented inline.
+- [x] 20.3 Exit Checklist: gofmt/vet clean (root + bench), deadcode ratchet
+  244→243 net-negative across the wave (wave-wide +1701/-8968, net -7267
+  lines from the v1-freeze checkpoint), refusal-resolution ratchet
+  1694→1586 net-negative (net -108) from the v1-freeze checkpoint, root
+  `go test ./... -count=1` fully GREEN with zero failures (RG.1b's own
+  long-standing expected-red resolved at WU19), bench module tests green,
+  final verb count: 5 legacy public verbs + 2 reconcile providers retired;
+  6 D4 verbs classified live (not retired) pending switch removal; the
+  switch itself retained. See apply-progress and this file's own per-WU
+  entries for the complete evidence trail.
 
 ## Exit Checklist (every WU)
 - [ ] `go test ./... -count=1` root module green.
