@@ -39,23 +39,15 @@ type reviewerRole struct {
 	focus string
 }
 
-var reviewerRoles = map[string]reviewerRole{
-	"review-risk": {
-		title: "R1 Risk",
-		focus: "Inspect security, authorization, data exposure or loss, unsafe input handling, secrets, and dependency vulnerabilities. Require backend enforcement and concrete exploit or scanner evidence; do not report hypothetical risk without a reachable impact.",
-	},
-	"review-resilience": {
-		title: "R4 Resilience",
-		focus: "Inspect failure handling, rollback or fix-forward behavior, retry safety, graceful degradation, observability, latency, and load. Require a concrete production failure mode or measured impact; do not report generic operational speculation.",
-	},
-	"review-readability": {
-		title: "R2 Readability",
-		focus: "Inspect maintainability defects that obscure behavior: misleading names, duplicated or dead logic, unexplained business constants, unsafe complexity, and missing change context. Report style only when it hides a concrete defect or makes the change unsafe to maintain.",
-	},
-	"review-reliability": {
-		title: "R3 Reliability",
-		focus: "Inspect behavior, tests, boundaries, invalid inputs, failure paths, determinism, and regressions. Require externally observable assertions at the cheapest useful test level; report missing coverage only when it leaves candidate behavior unproved.",
-	},
+// reviewerRole values come from the single canonical source in
+// reviewtransaction, so the lens mandate an installed agent definition carries
+// and the one the provider-owned lens context emits can never drift apart.
+func reviewerRoleFor(lens string) (reviewerRole, bool) {
+	title, focus, found := reviewtransaction.LensMandate(lens)
+	if !found {
+		return reviewerRole{}, false
+	}
+	return reviewerRole{title: title, focus: focus}, true
 }
 
 const (
@@ -178,7 +170,7 @@ Before inspection, require the binding subject_hash to equal artifact_subject.su
 }
 
 func reviewerPromptWithInput(name, input string) (string, bool) {
-	role, ok := reviewerRoles[name]
+	role, ok := reviewerRoleFor(name)
 	if !ok {
 		return "", false
 	}
