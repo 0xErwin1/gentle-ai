@@ -5,7 +5,78 @@ const REVIEW_AGENTS = new Set(["review-risk", "review-resilience", "review-reada
 const BINDING = /^GENTLE_AI_REVIEW_BINDING (\{[^\n]+\})(?:\n|$)/
 const TASK_RESULT = /^<task id="[^"\r\n]+" state="completed">\n<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/
 const TASK_TAG = /<\/?task(?:\s|>)|<\/?task_result>/
-const REVIEW_OUTCOME = { UNSUPPORTED_CAPABILITY: "unsupported-capability" } as const
+
+// REVIEW_CONTEXT_BYTE_BUDGET bounds the immutable candidate evidence this
+// plugin materializes into a reviewer task's `args.prompt` before the task
+// ever launches. Measured empirically against the pinned OpenCode runtime
+// (internal/versions.OpenCode): a plugin-mutated `task` prompt reached the
+// subagent's own model call byte-for-byte, with zero truncation observed, at
+// every tested size from 5 KB up to 16 MiB, including exact runs at 4 MiB and
+// 8 MiB. This budget is set to exactly the native per-command
+// MaxFrozenCandidateDiffBytes cap (internal/reviewtransaction/
+// frozen_candidate_context.go) — the same ceiling every other immutable-diff
+// read in this product already accepts — rather than an arbitrary fraction of
+// it: a smaller budget refuses candidates whose *risk-tier-counted* changed
+// lines are small but whose manifest includes large regenerated/golden files,
+// which this plugin materializes in full for every manifest path exactly like
+// the Claude Code transport does. 4 MiB sits comfortably inside the verified
+// zero-truncation range, not at its edge, and is enforced by outright
+// refusal: exceeding it fails the reviewer launch closed. It never
+// truncates, because a truncated candidate view could fabricate a
+// false-clean result.
+const REVIEW_CONTEXT_BYTE_BUDGET = 4 * 1024 * 1024 // 4 MiB
+
+// REQUIRED_ISOLATION_ENVIRONMENT closes a channel this plugin cannot touch by
+// itself: OpenCode assembles every session's *system* prompt (not the `task`
+// `args.prompt` this plugin controls) by concatenating the agent's base
+// prompt with an environment block, every AGENTS.md/CLAUDE.md/CONTEXT.md
+// found walking up from the worktree root, local `instructions` glob
+// entries, and the live `<available_skills>` catalog -- unconditionally,
+// regardless of the agent's `tools` map. A review-risk session holding no
+// bash and no read tool still received this concatenated content in its
+// system message in a real OpenCode 1.18.10 run: a marker planted in
+// AGENTS.md after the candidate froze appeared verbatim above the injected
+// evidence. These two OpenCode-native environment variables are the only
+// verified way to close it, confirmed by the same measurement: with both
+// set, no project-instruction or skill-catalog content reached the
+// reviewer's system message; with either unset, it did.
+//
+// These two variables do not close every channel: an operator-configured
+// `instructions` entry that is an http(s):// URL is fetched by OpenCode
+// unconditionally and is NOT suppressed by OPENCODE_DISABLE_PROJECT_CONFIG
+// (verified: a poisoned local HTTP endpoint referenced this way still
+// reached the reviewer with both variables set). That gap is closed
+// separately below (remoteInstructionsEntries), by reading the effective
+// config through the plugin's own OpenCode client rather than by a sentence
+// operators could fail to read.
+const REQUIRED_ISOLATION_ENVIRONMENT = ["OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_DISABLE_EXTERNAL_SKILLS"] as const
+
+function isolationFlagSet(value: string | undefined): boolean {
+  return typeof value === "string" && /^(1|true)$/i.test(value.trim())
+}
+
+function missingIsolationEnvironment(): string[] {
+  return REQUIRED_ISOLATION_ENVIRONMENT.filter((name) => !isolationFlagSet(process.env[name]))
+}
+
+// remoteInstructionsEntries closes the one channel REQUIRED_ISOLATION_ENVIRONMENT
+// cannot: OpenCode fetches every http(s):// `instructions` config entry
+// unconditionally, from any layer, regardless of OPENCODE_DISABLE_PROJECT_CONFIG.
+// Verified against real OpenCode 1.18.10 via the plugin's own
+// `client.config.get()` (the same endpoint the OpenCode TUI/CLI itself reads
+// effective config from): a project-level opencode.json's `instructions`
+// entries become invisible here exactly when OPENCODE_DISABLE_PROJECT_CONFIG
+// also stops them from taking effect -- config visibility and config effect
+// move together for that layer, so there is nothing to detect there because
+// there is nothing to refuse. The global config's own `instructions` array,
+// including http(s):// entries, remains visible here regardless of either
+// variable, matching that it remains fetched regardless of either variable.
+// No config layer was found that changes the reviewer's fetched instructions
+// without also changing what this function observes.
+function remoteInstructionsEntries(instructions: unknown): string[] {
+  if (!Array.isArray(instructions)) return []
+  return instructions.filter((entry): entry is string => typeof entry === "string" && /^https?:\/\//i.test(entry))
+}
 
 type ReviewBinding = {
   lineage: string
@@ -229,12 +300,112 @@ function validManifestEntry(entry: unknown): entry is ChangedPathManifestEntry {
     typeof value.mode_only === "boolean" && typeof value.intended_untracked === "boolean"
 }
 
+// inspectionArgs builds one exact `review inspect-candidate` invocation from
+// the injected binding. Global operations (name-status, numstat) take no
+// path index; patch takes the zero-based canonical changed_path_manifest
+// index, matching internal/cli/review_inspect_candidate.go exactly.
+function inspectionArgs(binding: ReviewBinding, operation: string, pathIndex?: number): string[] {
+  const args = [
+    "review", "inspect-candidate",
+    "--repository-context", binding.repository_context as string,
+    "--expected-revision", binding.revision as string,
+    "--lineage", binding.lineage, "--target", binding.target,
+    "--lens", binding.lens, "--order", String(binding.order),
+    "--operation", operation,
+  ]
+  if (pathIndex !== undefined) args.push("--path-index", String(pathIndex))
+  return args
+}
+
+// materializeReviewEvidence runs every discovery and per-path patch command
+// through the shell-less native channel (runNative), never through a tool
+// the reviewer session itself could invoke. The reviewer holds no bash and
+// no read tool: this provider-injected block is its only byte source. Any
+// native failure or budget overflow throws before the reviewer ever
+// launches; there is no partial-evidence or truncated-evidence outcome.
+async function materializeReviewEvidence(cwd: string, binding: ReviewBinding, preflight: ReviewCapturePreflight): Promise<string> {
+  if (!binding.repository_context || !binding.revision) {
+    throw new Error(
+      "immutable OpenCode candidate inspection requires a repository-context binding; " +
+      "the reviewer was not launched, so its exactly-once invocation is preserved",
+    )
+  }
+  try {
+    let budget = REVIEW_CONTEXT_BYTE_BUDGET
+    const sections: string[] = []
+    const consume = (header: string, body: string, footer: string) => {
+      const rendered = `${header}\n${body}\n${footer}\n`
+      budget -= Buffer.byteLength(rendered, "utf8")
+      if (budget < 0) {
+        throw Object.assign(new Error("review context evidence budget exceeded"), { reviewBudgetExceeded: true })
+      }
+      sections.push(rendered)
+    }
+    consume(
+      "GENTLE_AI_REVIEW_NAME_STATUS",
+      await runNative(cwd, inspectionArgs(binding, "name-status"), ""),
+      "GENTLE_AI_REVIEW_NAME_STATUS_END",
+    )
+    consume(
+      "GENTLE_AI_REVIEW_NUMSTAT",
+      await runNative(cwd, inspectionArgs(binding, "numstat"), ""),
+      "GENTLE_AI_REVIEW_NUMSTAT_END",
+    )
+    for (let index = 0; index < preflight.changed_path_manifest.length; index++) {
+      const entry = preflight.changed_path_manifest[index]
+      const patch = await runNative(cwd, inspectionArgs(binding, "patch", index), "")
+      // An empty patch for a path that is neither mode-only nor deleted is
+      // never legitimate: even a newly added empty file still renders a
+      // non-empty `diff --git`/`new file mode`/`index` header with no hunk.
+      // A genuinely empty string here means the native read silently
+      // produced nothing for a content-changing path -- the exact
+      // fabricate-a-clean-review shape this plugin's own contract (no
+      // partial-evidence outcome) forbids.
+      if (patch === "" && !entry.mode_only && !entry.deleted) {
+        throw Object.assign(
+          new Error("review context evidence patch was empty for a content-changing path"),
+          { reviewEmptyPatch: true, path: entry.path },
+        )
+      }
+      consume(`GENTLE_AI_REVIEW_PATCH ${index} ${entry.path}`, patch, "GENTLE_AI_REVIEW_PATCH_END")
+    }
+    return sections.join("")
+  } catch (cause) {
+    if ((cause as { reviewBudgetExceeded?: boolean } | null)?.reviewBudgetExceeded) {
+      throw new Error(
+        `review context exceeds the ${REVIEW_CONTEXT_BYTE_BUDGET}-byte provider injection budget for lens ${binding.lens}; ` +
+        "The reviewer was not launched, so its exactly-once invocation is preserved; " +
+        "immutable candidate evidence is never truncated. " +
+        "Split this candidate into smaller reviewable commits (a chained sequence, each under the budget) " +
+        "and start a new review for the reduced scope; retrying the same candidate cannot succeed.",
+      )
+    }
+    if ((cause as { reviewEmptyPatch?: boolean; path?: string } | null)?.reviewEmptyPatch) {
+      const failedPath = (cause as { path?: string }).path
+      throw new Error(
+        `review context evidence patch was empty for content-changing path ${JSON.stringify(failedPath)} in lens ${binding.lens}; ` +
+        "The reviewer was not launched, so its exactly-once invocation is preserved. " +
+        "Refresh the exact native next_transition for lineage " + binding.lineage + " and relaunch the lens; " +
+        "if the same path keeps returning an empty patch, treat it as a native inspection defect and stop relaunching.",
+      )
+    }
+    throw new Error(
+      `review context evidence materialization failed for lens ${binding.lens}: ` +
+      `${sessionErrorMessage(binding, cause, "repository_context_evidence_failed")}. ` +
+      "The reviewer was not launched, so its exactly-once invocation is preserved.",
+    )
+  }
+}
+
 async function injectReviewerContext(prompt: string, lens: string, cwd: string): Promise<string> {
   const binding = parseBinding(prompt, lens)
   const preflight = await preflightCapture(cwd, binding)
   const injectedBinding = { ...binding, subject_hash: preflight.artifact_subject.subject_hash }
+  const evidence = await materializeReviewEvidence(cwd, injectedBinding, preflight)
   return `GENTLE_AI_REVIEW_BINDING ${JSON.stringify(injectedBinding)}\n` +
-    `GENTLE_AI_REVIEW_CONTEXT ${JSON.stringify(preflight)}\n`
+    `GENTLE_AI_REVIEW_CONTEXT ${JSON.stringify(preflight)}\n` +
+    evidence +
+    `GENTLE_AI_REVIEW_CONTEXT_END\n`
 }
 
 function preserveResult(cwd: string, binding: ReviewBinding, raw: string, cls?: string): Promise<string> {
@@ -451,7 +622,7 @@ async function preservedCaptureFailure(
   }
 }
 
-const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
+const ReviewResultArtifactsPlugin: Plugin = async ({ client, directory, worktree }) => {
   const admissionRecoveries: AdmissionRecoveryStore = new Map()
   return {
   dispose: async () => { admissionRecoveries.clear() },
@@ -467,8 +638,46 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
     if (output.args.background === true) {
       throw new Error("bound review tasks must run in the foreground for native result capture")
     }
-    parseBinding(output.args.prompt, output.args.subagent_type)
-    throw new Error(REVIEW_OUTCOME.UNSUPPORTED_CAPABILITY)
+    const missingIsolation = missingIsolationEnvironment()
+    if (missingIsolation.length > 0) {
+      throw new Error(
+        `immutable OpenCode candidate inspection requires ${missingIsolation.join(" and ")} set to "1" for this OpenCode process; ` +
+        "without them, OpenCode concatenates live project instructions (AGENTS.md/CLAUDE.md/CONTEXT.md, local " +
+        "`instructions` glob entries) and the live skill catalog into every subagent's system prompt regardless " +
+        "of its tools, which can leak post-freeze worktree content into the reviewer. " +
+        "Set the missing variable(s) in the environment this OpenCode process runs under, then relaunch the lens. " +
+        "The reviewer was not launched, so its exactly-once invocation is preserved.",
+      )
+    }
+    let remoteInstructions: string[]
+    try {
+      const configResponse = (await client.config.get({ query: { directory } })) as { data?: { instructions?: unknown }; error?: unknown }
+      if (configResponse?.error) {
+        throw new Error(JSON.stringify(configResponse.error))
+      }
+      remoteInstructions = remoteInstructionsEntries(configResponse?.data?.instructions)
+    } catch (cause) {
+      throw new Error(
+        `immutable OpenCode candidate inspection could not verify the effective configuration for remote ` +
+        `\`instructions\` entries: ${errorMessage(cause)}. OpenCode fetches any http(s):// instructions entry ` +
+        "unconditionally into every session's system prompt, so an unverifiable configuration cannot be ruled safe. " +
+        "Resolve the config read failure, then relaunch the lens. " +
+        "The reviewer was not launched, so its exactly-once invocation is preserved.",
+      )
+    }
+    if (remoteInstructions.length > 0) {
+      throw new Error(
+        `immutable OpenCode candidate inspection refuses a remote \`instructions\` entry: ${remoteInstructions.join(", ")}; ` +
+        "OpenCode fetches this unconditionally into every session's system prompt regardless of tools, which could " +
+        "inject attacker-controlled prose into the reviewer. Remove it from the effective OpenCode configuration, " +
+        "then relaunch the lens. The reviewer was not launched, so its exactly-once invocation is preserved.",
+      )
+    }
+    output.args.prompt = await injectReviewerContext(
+      output.args.prompt,
+      output.args.subagent_type,
+      captureCwd(worktree, directory),
+    )
   },
   "tool.execute.after": async (input, output) => {
     if (input.tool !== "task" || typeof input.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(input.args.subagent_type)) return
