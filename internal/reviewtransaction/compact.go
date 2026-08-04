@@ -347,6 +347,7 @@ func CompactExpectedBudget(originalChangedLines int, policy string) (int, error)
 	case "":
 		return CorrectionBudget(originalChangedLines)
 	default:
+		// refusal:by-design world-action: a persisted policy outside the closed contract cannot be repaired safely without provider-owned authority
 		return 0, errors.New("compact correction budget policy is unrecognized")
 	}
 }
