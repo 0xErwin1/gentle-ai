@@ -1119,6 +1119,10 @@ func hotPathRiskSignals(logicalPath string) []RiskSignal {
 			signals = append(signals, SignalUpdate)
 		case "security":
 			signals = append(signals, SignalSecurity)
+		case "webhook":
+			// Webhook handlers own signature verification, credential handling,
+			// and authorization boundaries, so they are security evidence.
+			signals = append(signals, SignalSecurity)
 		case "payments":
 			signals = append(signals, SignalPayments)
 		}
