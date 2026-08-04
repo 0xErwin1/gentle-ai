@@ -487,6 +487,45 @@ func requireClosureMemberAlreadyQuarantined(sandbox *Sandbox, lineage string) er
 	return nil
 }
 
+// requireForgedResumeMovedNothingFurther is fix cycle 1's CRITICAL-1
+// (security) journey-level mutation proof: a forged-authorization resume
+// attempt against an in-progress closure must refuse through the real
+// `review repair` binary before touching anything beyond the crash
+// fixture's own pre-authored member — the grandchild's single quarantine
+// directory must be unchanged, and child/seed must have none. This is the
+// black-box, N=3, real-binary twin of
+// TestAuthorityDispositionResumeRefusesForgedAuthorization.
+func requireForgedResumeMovedNothingFurther(r *journeyRun) error {
+	base, err := reviewTransactionsBase(r.sandbox)
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(filepath.Join(base, "quarantine"))
+	if err != nil {
+		return err
+	}
+	counts := map[string]int{}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		for _, lineage := range closureMemberLineages {
+			if strings.HasPrefix(entry.Name(), lineage+"-") {
+				counts[lineage]++
+			}
+		}
+	}
+	if counts[closureGrandchildLineage] != 1 {
+		return fmt.Errorf("grandchild quarantine directories after a refused forged-authorization resume = %d, want exactly 1 (unchanged from before the attempt)", counts[closureGrandchildLineage])
+	}
+	for _, lineage := range []string{closureChildLineage, closureSeedLineage} {
+		if counts[lineage] != 0 {
+			return fmt.Errorf("%q has %d quarantine directories after a refused forged-authorization resume, want 0 — the forged authorization moved something it should have refused", lineage, counts[lineage])
+		}
+	}
+	return nil
+}
+
 // requireNoDoubleMoveAcrossClosure is ds11's resume-convergence proof:
 // after the resumed `review repair` run, every closure member has exactly
 // one quarantine directory — the crash-position fixture's pre-authored one
@@ -610,6 +649,21 @@ func closureDispositionJourneys() []Journey {
 						}
 						return requireClosureMemberAlreadyQuarantined(r.sandbox, closureGrandchildLineage)
 					}},
+				// Fix cycle 1 (CRITICAL-1, security): before Wave 6's fix,
+				// validateAuthorityDispositionAuthorization was gated inside
+				// a fresh-execution-only branch, so this exact resume shape —
+				// a real `review repair` call against an in-progress
+				// closure — executed unauthorized regardless of what
+				// --authorization it was given. This step submits the CORRECT
+				// --plan-digest/--inventory-revision (so CAS and plan-match
+				// both pass) but an authorization bound to a repository
+				// identity that can never be the real one, mirroring
+				// ds08's N=1 forged-authorization journey — the N=3,
+				// mid-closure-resume twin.
+				{Name: "attempt to resume with an authorization bound to the wrong repository — refused, nothing moves further", Requires: repairDispositionExecuteCapability,
+					Args: forgedDispositionRepairArgs("quarantine the multi-hop closure")},
+				{Name: "the forged-authorization resume attempt moved nothing beyond the pre-authored member",
+					Composite: requireForgedResumeMovedNothingFurther},
 				{Name: "resume the interrupted closure with the identical plan", Requires: repairDispositionExecuteCapability,
 					Args: dispositionRepairArgs("quarantine the multi-hop closure"), After: requireDispositionQuarantineCommitted},
 				{Name: "the authority graph after resume", Requires: inspectAuthorityCapability,

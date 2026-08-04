@@ -162,7 +162,21 @@ type reviewRepairOperationError struct {
 	cause   error
 }
 
-func (err *reviewRepairOperationError) Error() string { return err.message }
+// Error includes cause, not only message. Fix cycle 1 (CRITICAL-2): dropping
+// the cause here made every leaf authority disposition execution refusal —
+// by-design or not — read identically ("...did not complete"), with the
+// actual reason ("plan_digest does not match", "authorization does not
+// bind", ...) discarded. A caller that provably mutated nothing (see the
+// call site below) is never wrapped in this type at all, so its cause is not
+// merely appended here — it IS the visible error. This wrapping still
+// matters for the rarer partial-mutation case that call site keeps in this
+// type.
+func (err *reviewRepairOperationError) Error() string {
+	if err.cause == nil {
+		return err.message
+	}
+	return err.message + ": " + err.cause.Error()
+}
 func (err *reviewRepairOperationError) Unwrap() error { return err.cause }
 
 func RunReviewRepair(args []string, stdout io.Writer) error {
@@ -273,6 +287,32 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 		// preflight value.
 		record, err := reviewtransaction.RepairAuthorityDisposition(ctx, root, *planDigest, *inventoryRevision, *actor, *reason, *dispositionAuthorization)
 		if err != nil {
+			// Fix cycle 1 (CRITICAL-2): a returned zero-value record proves
+			// this call provably mutated nothing — lockedAuthorityDispositionMutation
+			// only ever returns a non-empty record once it committed at least
+			// one closure member (a NEW quarantine, or a discovered
+			// already-committed one from a prior interrupted attempt), and
+			// every refusal that runs before its per-node loop starts (plan
+			// re-derivation mismatch, admission, digest drift, authorization,
+			// CAS-all-N) — fresh or resumed alike — returns before that ever
+			// happens. Base bb3c22a9 classified this exact "nothing mutated"
+			// shape as a preflight-style refusal (its own CLI-level
+			// plan_digest/inventory_revision pre-check, removed when this
+			// call replaced it): the classification cascade recognizes
+			// reviewPreflightError, propagates the real cause verbatim, and
+			// never appends a saved-defect-report clause for it. Wrapping
+			// every RepairAuthorityDisposition error in the generic,
+			// unrecognized reviewRepairOperationError below regressed that —
+			// a by-design refusal like a stale/forged --plan-digest started
+			// reading as "tool-internal fault state that should never
+			// happen", complete with a saved defect report and an issue URL.
+			// The rarer case — a refusal reached only after at least one
+			// closure member already committed in this call, i.e. a
+			// genuinely unanticipated mid-loop fault — keeps the existing,
+			// now cause-preserving reviewRepairOperationError classification.
+			if record.LineageID == "" {
+				return reviewPreflightError(err)
+			}
 			return &reviewRepairOperationError{message: "review repair leaf authority disposition execution did not complete", cause: err}
 		}
 		result, err := newReviewRepairDispositionExecutionResult(assessment, record, *contract)

@@ -343,6 +343,67 @@ func TestRepairAuthorityDispositionResumesThroughPublicEntrypoint(t *testing.T) 
 	}
 }
 
+// TestAuthorityDispositionResumeRefusesForgedAuthorization is fix cycle 1's
+// CRITICAL-1 (security) mutation proof: a resumed closure execution must
+// validate Authorization on EVERY execution path, not only a fresh one.
+// lockedAuthorityDispositionMutation previously gated
+// validateAuthorityDispositionAuthorization inside the `if freshExecution`
+// block — its ONLY non-test call site — so every resume executed
+// unauthorized: an attacker who knew nothing but an in-progress plan_digest
+// could resume with a garbage Authorization and a different Actor, and it
+// would commit every remaining closure member. This interrupts a real
+// 3-node closure exactly like
+// TestAuthorityDispositionResumeSkipsCommittedAndFinishesPrepared, then
+// resumes with Authorization replaced by garbage and Actor replaced by
+// "attacker" (mirroring the verifier's exact repro): this must refuse, and
+// nothing beyond the grandchild's already-committed member may move. If
+// authorization validation is ever re-gated inside a fresh-only branch
+// again, this test fails immediately (the forged resume would be admitted).
+func TestAuthorityDispositionResumeRefusesForgedAuthorization(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	plan, child, grandchild := threeNodeClosureFixture(t, repo, "forged-resume")
+	seed := plan.Closure[len(plan.Closure)-1]
+
+	base, _, err := reviewAuthorityRoot(context.Background(), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	originalHook := compactReclaimPhaseHook
+	injected := errors.New("injected interruption after grandchild commits")
+	compactReclaimPhaseHook = func(ctx context.Context, current string, record CompactReclaimRecord) error {
+		if current == compactReclaimPhaseCommitted && record.LineageID == grandchild.State.LineageID {
+			return injected
+		}
+		return originalHook(ctx, current, record)
+	}
+	t.Cleanup(func() { compactReclaimPhaseHook = originalHook })
+
+	if _, err := executeAuthorityDisposition(context.Background(), repo, plan); !errors.Is(err, injected) {
+		t.Fatalf("first (interrupted) execution error = %v, want the injected interruption", err)
+	}
+	compactReclaimPhaseHook = originalHook
+
+	forged := plan
+	forged.Actor = "attacker"
+	forged.Authorization = "garbage authorization forged by an attacker"
+
+	if _, err := executeAuthorityDisposition(context.Background(), repo, forged); err == nil {
+		t.Fatal("resumed execution with a forged authorization and a different actor was admitted")
+	} else if !strings.Contains(err.Error(), "authorization does not bind") {
+		t.Fatalf("forged-authorization resume error = %v, want the authorization binding refusal", err)
+	}
+
+	for _, lineage := range []string{child.State.LineageID, seed} {
+		if got := quarantineEntriesForLineage(t, base, lineage); len(got) != 0 {
+			t.Fatalf("forged-authorization resume moved %q despite refusing: %v", lineage, got)
+		}
+	}
+	if got := quarantineEntriesForLineage(t, base, grandchild.State.LineageID); len(got) != 1 {
+		t.Fatalf("grandchild quarantine entries after refused forged resume = %v, want exactly 1 (unchanged)", got)
+	}
+}
+
 // TestAuthorityDispositionResumeCrashPositionMatrix is the load-bearing
 // proof tasks.md 3.5 and the coordinator's batch require: for a 3-node
 // closure, interrupting at EVERY position — after each node's prepared
