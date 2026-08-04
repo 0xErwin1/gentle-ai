@@ -1742,7 +1742,15 @@ func nativeGateReason(result GateResult) string {
 // with the identical compatible_base_advance exemption; release evidence is
 // gated to release only (receipt.go:307-314).
 func gateVerdict(gate GateKind, relation CandidateRelation, context GateContext) (GateResult, GateNextStep) {
-	if (gate == GatePrePR || gate == GateRelease) && !context.BaseRelationshipValid && relation != ShadowRelationCompatibleBaseAdvance {
+	// W-3 (Wave 5 fix cycle 1, verify-report #10186): the compatible_base_advance
+	// exemption is scoped to pre-PR only, matching validateDerivedGate's own
+	// `context.Gate == GatePrePR && ...` scoping (receipt.go:289) exactly --
+	// release is never exempted. Testing `gate == GatePrePR` inside the
+	// exemption clause itself (rather than broadening the OR above) keeps the
+	// precondition's own gate scope (pre-pr AND release) unchanged; only the
+	// exemption narrows.
+	compatibleBaseAdvanceAtPrePR := gate == GatePrePR && relation == ShadowRelationCompatibleBaseAdvance
+	if (gate == GatePrePR || gate == GateRelease) && !context.BaseRelationshipValid && !compatibleBaseAdvanceAtPrePR {
 		return GateInvalidated, GateNextStep{ReasonCode: "base_relationship_invalid"}
 	}
 	if gate == GateRelease && context.Release == nil {

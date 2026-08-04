@@ -333,3 +333,65 @@ the full W4 CRITICAL-A citation.
       still an ancestor of `origin/main`, confirmed via `git merge-base --is-ancestor`). This closes Wave 5's
       apply: Phases 1-9 (S1-S7 plus this phase) are all complete. Commit `31799ec2` (code) plus this docs
       commit.
+
+## Fix Cycle 1 (SDD-Verify FAIL, Engram #10186 — 4 CRITICAL, 7 WARNING)
+
+Branch `feat/rdd-wave5-f1-legacy-preconditions`, chained from Phase 9 @ `1f875015`. sdd-verify found
+the gate-cutover's own headline promises broken at the product surface: a medium/high v3 candidate could
+never obtain an approved receipt, every legacy candidate denied forever at 2 of 5 gates, absorbed N2's
+closure claim was untrue on the shipped v3 path, and default-deny was mutation-unpinned for 4 of 7
+relations. Full detail: Engram `#10187`.
+
+- [x] **C-B** (legacy real preconditions): `EvaluateLegacyGate` never populated `GateContext.BaseRelationshipValid`
+      or `Release`, so legacy denied FOREVER at pre-pr/release even for `exact`. Fixed by deriving
+      `BaseRelationshipValid` from the live-vs-projected base-tree comparison (mirroring `EvaluateNativeGate`'s
+      own `gate.go:289`) and `Release` from the same caller-supplied artifact locations
+      `BuildNativeGateRequest` already uses. `EvaluateLegacyGate`'s signature changes from a bare `GateKind`
+      to `NativeGateRequestInput` to carry the release-artifact locations a bare `GateKind` cannot express.
+      Mutation-proven (both derivations independently reverted, caught, restored). Commit `e2423787`.
+- [x] **W-3** (fold-in, adjacent to C-B): `gateVerdict`'s `compatible_base_advance` exemption from the
+      `BaseRelationshipValid` precondition fired at both pre-PR and release; `validateDerivedGate` (the
+      function it reproduces) scopes it to pre-PR only. Narrowed to match — a latent fail-open that becomes
+      reachable now that C-B routes legacy release evaluations through `gateVerdict` with real precondition
+      data. Genuine RED (existing test encoded the bug as intended behavior, corrected), mutation-proven.
+      Commit `e2423787`.
+- [x] **C-C** (wire `gateVerdict` into the v3 path, the real N2 closure): the v3 gate path
+      (`newLineageGateEvaluation`) never called `gateVerdict` at all — it mapped `CoreTransitionContinue`
+      straight to `GateAllow` uniformly for every gate. Replaced with `reviewtransaction.EvaluateNewLineageGate`
+      (new file `new_lineage_gate.go`), mirroring `EvaluateLegacyGate`'s shape: preconditions populate only
+      inside the Continue branch (Collect/Escalate/Approve/Repair/Stop are already non-allow, unaffected).
+      `newLineageGateEvaluation` removed from `internal/cli`; its 4 test call sites migrated to the new
+      function. Mutation-proven (reverting the `gateVerdict` call to a hardcoded allow is caught by name).
+      Full reviewtransaction/cli/sddstatus/e2e suites green. Commit `92682ed1`.
+- [x] **C-D** (partial — pin deny verdicts by value) + **W-1** (fold-in): `TestGateVerdict_TotalFunction_35Cells`
+      asserted shape only (any of 4 known `GateResult` values, some next step) — flipping
+      `provable_contraction`/`unrelated`/`ambiguous`/`unknown` to allow stayed green. Pinned to the exact
+      expected `(GateResult, ReasonCode)` per relation via two lookup tables; each of the 4 previously-unpinned
+      deny relations independently flipped to `GateAllow` and confirmed caught by name, then reverted. W-1:
+      `gateBoundaryMatrixNotWiredReason` still claimed `gateVerdict`/`NativeGateEvaluation.Relation`/legacy
+      projection didn't exist — all landed in S3/S4 and are now real (C-B/C-C). Rewritten to the honest
+      current reason (fixture not yet built, not mechanism missing); golden regenerated, diff confined to
+      reason text only (still 8/35 wired, no verdict/relation changed). Commit `e0a51de3`.
+- [ ] **C-D remainder / W-2** (deferred, disclosed): un-skip the release-gate matrix cells. Investigated:
+      the existing "exact" cells all drive the COMPACT/v2 lineage path (`approveDiscoveryMarkdown`-style
+      helpers), not legacy v1 or new-lineage v3, so reusing that recipe for "release/exact" would not
+      actually exercise either C-B's or C-C's fix. A genuinely new fixture is needed — a legacy-specific
+      recipe (tractable now) or a v3 recipe (blocked on C-A, since only tier-low can currently finalize).
+      Follow-up slice.
+- [ ] **C-A** (v3 lens-result ingestion — NOT STARTED, largest remaining item): no production code sets
+      `FinalizeAdvanceRequest.CapturedLensResults`; `review capture-result` binds only the v2 compact store,
+      and v3's `NewLineageAuthority`/`AuthorityStore` has no persistence primitive for captured reviewer
+      results at all — `NewArtifactSubject`/the admission pipeline is tightly coupled to `CompactState`.
+      Needs a dedicated design/implementation slice: either a full parallel v3 artifact-capture pipeline, or
+      a minimal v3-specific persistence primitive plus CLI routing (mirroring wave-3's "ln" precedent: route
+      `capture-result` by lineage kind exactly like `finalize` now does). Follow-up slice.
+- [ ] **W-7** (deferred, disclosed): the v3 tamper denial names `review finalize --lineage <id>`, which
+      re-issues rather than repairs an already-approved lineage's receipt. `AuthorityStore.WriteReceipt`'s
+      exact conflict semantics (no-op / refusal / silent overwrite) need investigating before an accurate
+      replacement message can be written. Follow-up slice.
+
+Fix cycle 1 verification (covers C-B/W-3/C-C/C-D-partial/W-1, the 3 commits above): `go test ./... -count=1`
+all 63 packages green; bench module green; bench journey corpus vs a freshly built binary: 59/59 completed,
+0 failed, exit 0; `bench/results.json` reverted; gofmt/vet clean; deadcode ratchet clean; rebase-contract
+clean (root `7598eda4` still an ancestor of `origin/main`). Not archivable yet: C-A and its dependents
+(W-2's v3 half) remain open. Return to sdd-apply fix cycle 2.
