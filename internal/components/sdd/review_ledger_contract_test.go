@@ -284,7 +284,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// so this is dead-but-safe config either way; the point is that it is no
 	// longer the most permissive reviewer config in the product. The hash moved
 	// a fifth time. Deliberate, not drift.
-	const want = "ee287c099a80893d0e01bf7f2c5d78dca4563aa7b4b7cc2fa6be0d589935bf7a"
+	const want = "86f7fb18b7c8599f638f2f68c80417058a015e1405b846be9ff847553bd762b5"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -487,8 +487,8 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// drift. The standard ceiling moves with it (22,200 -> 23,300) to
 		// restore the ~15% margin the guard below requires; full-4R already had
 		// enough headroom and is unchanged.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_202, maxCharacters: 23_300},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_738, maxCharacters: 36_000},
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_157, maxCharacters: 23_300},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_558, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

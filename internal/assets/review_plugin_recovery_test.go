@@ -136,20 +136,15 @@ func runReviewPluginScenarioWithNativeAndPreservation(t *testing.T, scenario, na
 }
 
 // reviewPluginStub configures the fake `gentle-ai` binary the harness runs
-// against. preflight/nameStatus/numstat/patches feed the provider-injected
-// evidence-materialization path (`review inspect-candidate`); stdout/stderr
-// remain the generic fallback used by the capture/preserve-result scenarios
-// that predate evidence materialization.
+// against. lensContext feeds the provider-injected reviewer-context path
+// (`review lens-context`); stdout/stderr remain the generic fallback used by
+// the capture/preserve-result scenarios and by every scenario that needs an
+// always-failing native binary.
 type reviewPluginStub struct {
 	stdout         string
 	stderr         string
 	preserveStdout string
-	preflight      string
-	nameStatus     string
-	numstat        string
-	patches        []string
-	inspectStderr  string
-	patchHugeBytes int
+	lensContext    string
 	// omitProjectConfigIsolation/omitExternalSkillsIsolation deliberately
 	// leave OPENCODE_DISABLE_PROJECT_CONFIG/OPENCODE_DISABLE_EXTERNAL_SKILLS
 	// unset. Every scenario is protected (both set to "1") by default, since
@@ -186,49 +181,17 @@ func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPlugi
 			t.Fatal(err)
 		}
 	}
-	// The stub parses --operation/--path-index itself so `review
-	// inspect-candidate` calls (name-status, numstat, one patch per manifest
-	// index) return distinct, index-addressable evidence, exactly like the
-	// real native command does for the frozen trees. A huge patch is
-	// generated on the fly from /dev/zero so budget-overflow tests never push
-	// megabytes of payload through argv/env (ARG_MAX).
+	// The stub answers `review lens-context` with one finished provider block,
+	// exactly like the real native command does for the frozen trees: the
+	// whole reviewer context is one native call now, so the stub needs no
+	// per-operation or per-path-index dispatch.
 	stubScript := "#!/bin/sh\npayload=$(cat)\n" +
-		"op=\"\"; path_index=\"\"; prev=\"\"\n" +
-		"for arg in \"$@\"; do\n" +
-		"  case \"$prev\" in\n" +
-		"    --operation) op=\"$arg\" ;;\n" +
-		"    --path-index) path_index=\"$arg\" ;;\n" +
-		"  esac\n" +
-		"  prev=\"$arg\"\n" +
-		"done\n" +
-		"if [ \"$2\" = \"inspect-candidate\" ]; then\n" +
-		"  case \"$op\" in\n" +
-		"    name-status) printf '%s\\n' \"$GENTLE_AI_STUB_INSPECT_NAME_STATUS\"; exit 0 ;;\n" +
-		"    numstat) printf '%s\\n' \"$GENTLE_AI_STUB_INSPECT_NUMSTAT\"; exit 0 ;;\n" +
-		"    patch)\n" +
-		// ${VAR+x} tests presence, not truthiness: a path's stub patch may be
-		// deliberately set to the empty string (proving the plugin's
-		// empty-patch guard), which must be distinguished from "no stub
-		// configured for this index, try the huge-payload fallback".
-		"      eval \"has_value=\\${GENTLE_AI_STUB_INSPECT_PATCH_${path_index}+yes}\"\n" +
-		"      if [ \"$has_value\" = \"yes\" ]; then\n" +
-		"        eval \"value=\\$GENTLE_AI_STUB_INSPECT_PATCH_$path_index\"\n" +
-		"        printf '%s\\n' \"$value\"\n" +
-		"        exit 0\n" +
-		"      fi\n" +
-		"      if [ -n \"$GENTLE_AI_STUB_INSPECT_PATCH_HUGE_BYTES\" ]; then\n" +
-		"        head -c \"$GENTLE_AI_STUB_INSPECT_PATCH_HUGE_BYTES\" /dev/zero | tr '\\0' 'A'\n" +
-		"        exit 0\n" +
-		"      fi\n" +
-		"      ;;\n" +
-		"  esac\n" +
-		"  if [ -n \"$GENTLE_AI_STUB_INSPECT_STDERR\" ]; then printf '%s\\n' \"$GENTLE_AI_STUB_INSPECT_STDERR\" >&2; exit 1; fi\n" +
+		"if [ \"$2\" = \"lens-context\" ] && [ -n \"$GENTLE_AI_STUB_LENS_CONTEXT\" ]; then\n" +
+		"  printf '%s\\n' \"$GENTLE_AI_STUB_LENS_CONTEXT\"\n" +
+		"  exit 0\n" +
 		"fi\n" +
 		"if [ \"$2\" = \"capture-result\" ]; then\n" +
 		"  case \"$payload\" in *capture-success*) printf '%s\\n' 'CAPTURED'; exit 0;; esac\n" +
-		"  if [ -n \"$GENTLE_AI_STUB_PREFLIGHT\" ]; then\n" +
-		"    case \"$*\" in *--preflight*) printf '%s\\n' \"$GENTLE_AI_STUB_PREFLIGHT\"; exit 0 ;; esac\n" +
-		"  fi\n" +
 		"fi\n" +
 		"if [ \"$2\" = \"preserve-result\" ] && [ -n \"$GENTLE_AI_STUB_PRESERVE_STDOUT\" ]; then printf '%s\\n' \"$GENTLE_AI_STUB_PRESERVE_STDOUT\"; exit 0; fi\n" +
 		"if [ -n \"$GENTLE_AI_STUB_STDOUT\" ]; then printf '%s\\n' \"$GENTLE_AI_STUB_STDOUT\"; exit 0; fi\n" +
@@ -260,10 +223,7 @@ func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPlugi
 		"GENTLE_AI_STUB_STDOUT="+stub.stdout,
 		"GENTLE_AI_STUB_STDERR="+stub.stderr,
 		"GENTLE_AI_STUB_PRESERVE_STDOUT="+stub.preserveStdout,
-		"GENTLE_AI_STUB_PREFLIGHT="+stub.preflight,
-		"GENTLE_AI_STUB_INSPECT_NAME_STATUS="+stub.nameStatus,
-		"GENTLE_AI_STUB_INSPECT_NUMSTAT="+stub.numstat,
-		"GENTLE_AI_STUB_INSPECT_STDERR="+stub.inspectStderr,
+		"GENTLE_AI_STUB_LENS_CONTEXT="+stub.lensContext,
 		"GENTLE_AI_REVIEW_CWD=",
 	)
 	if !stub.omitProjectConfigIsolation {
@@ -283,12 +243,6 @@ func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPlugi
 	env = append(env, "GENTLE_AI_STUB_CONFIG_INSTRUCTIONS="+string(encodedInstructions))
 	if stub.configError != "" {
 		env = append(env, "GENTLE_AI_STUB_CONFIG_ERROR="+stub.configError)
-	}
-	if stub.patchHugeBytes > 0 {
-		env = append(env, fmt.Sprintf("GENTLE_AI_STUB_INSPECT_PATCH_HUGE_BYTES=%d", stub.patchHugeBytes))
-	}
-	for index, patch := range stub.patches {
-		env = append(env, fmt.Sprintf("GENTLE_AI_STUB_INSPECT_PATCH_%d=%s", index, patch))
 	}
 	command.Env = env
 	output, err := command.CombinedOutput()
@@ -322,54 +276,81 @@ func TestReviewPluginRejectsInvalidBindingBeforeReviewerLaunch(t *testing.T) {
 	}
 }
 
-// reviewPluginPreflight builds a valid single-path preflight response for
-// lineage "trust-check" / target sha256:d...
-func reviewPluginPreflight(baseTree, candidateTree string) string {
-	return reviewPluginPreflightWithPaths(baseTree, candidateTree, []string{"internal/example.go"})
+// reviewPluginLensContextBinding is the exact provider-authored binding the
+// harness's opaque task binding addresses. `gentle-ai review lens-context`
+// emits this as its first line, and every field is provider-derived: the
+// caller relays no machine value into it.
+const reviewPluginLensContextBinding = `{"lineage":"trust-check","target":"sha256:` + reviewPluginTargetSuffix +
+	`","lens":"review-risk","order":0,"revision":"sha256:` + reviewPluginRevisionSuffix +
+	`","repository_context":"rctx1_` + reviewPluginHandleSuffix +
+	`","subject_hash":"sha256:` + reviewPluginSubjectSuffix + `"}`
+
+// These four suffixes are the exact opaque values the Node harness builds its
+// task binding from. The provider block must address the same candidate, or
+// the plugin refuses the injection.
+const (
+	reviewPluginHandleSuffix   = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	reviewPluginRevisionSuffix = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	reviewPluginSubjectSuffix  = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	reviewPluginTargetSuffix   = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+)
+
+func reviewPluginLensContext(baseTree, candidateTree string) string {
+	return reviewPluginLensContextWithPaths(baseTree, candidateTree, []string{"internal/example.go"})
 }
 
-// reviewPluginPreflightWithPaths builds a preflight response whose manifest
-// holds one entry per path, in the given (already-canonical) order.
-func reviewPluginPreflightWithPaths(baseTree, candidateTree string, paths []string) string {
+// reviewPluginLensContextWithPaths builds a block shaped exactly like the one
+// `gentle-ai review lens-context` emits: the provider-authored binding line,
+// the provider-authored capture context, the reviewer's charge and result
+// schema, discovery, one patch section per canonical manifest index, and the
+// terminator. The plugin injects these bytes verbatim; it assembles nothing.
+func reviewPluginLensContextWithPaths(baseTree, candidateTree string, paths []string) string {
 	entries := make([]string, len(paths))
+	patches := make([]string, len(paths))
 	for index, path := range paths {
 		entries[index] = `{"path":"` + path + `","status":"M","old_mode":"100644","new_mode":"100644","deleted":false,"type_changed":false,"mode_only":false,"intended_untracked":false}`
+		patches[index] = fmt.Sprintf("GENTLE_AI_REVIEW_PATCH %d %s\nPATCH-BODY-%d\nGENTLE_AI_REVIEW_PATCH_END", index, path, index)
 	}
-	return `{"schema":"gentle-ai.review-capture-preflight/v1","capability":"review.native_capture_preflight",` +
-		`"lineage_id":"trust-check","target_identity":"sha256:` + strings.Repeat("d", 64) + `","lens":"review-risk","selected_order":0,` +
-		`"artifact_subject":{"schema":"gentle-ai.review-artifact-subject/v2","subject_hash":"sha256:` + strings.Repeat("c", 64) + `",` +
-		`"lineage_id":"trust-check","authority_revision":"sha256:` + strings.Repeat("b", 64) + `","target_identity":"sha256:` + strings.Repeat("d", 64) + `",` +
+	context := `{"schema":"gentle-ai.review-capture-preflight/v1","capability":"review.native_capture_preflight",` +
+		`"lineage_id":"trust-check","target_identity":"sha256:` + reviewPluginTargetSuffix + `","lens":"review-risk","selected_order":0,` +
+		`"artifact_subject":{"schema":"gentle-ai.review-artifact-subject/v2","subject_hash":"sha256:` + reviewPluginSubjectSuffix + `",` +
+		`"lineage_id":"trust-check","authority_revision":"sha256:` + reviewPluginRevisionSuffix + `","target_identity":"sha256:` + reviewPluginTargetSuffix + `",` +
 		`"base_tree":"` + baseTree + `","candidate_tree":"` + candidateTree + `","changed_path_manifest_sha256":"sha256:` + strings.Repeat("e", 64) + `",` +
 		`"lens":"review-risk","selected_order":0},"base_tree":"` + baseTree + `","candidate_tree":"` + candidateTree + `",` +
 		`"changed_path_manifest":[` + strings.Join(entries, ",") + `]}`
+	return strings.Join(append([]string{
+		"GENTLE_AI_REVIEW_BINDING " + reviewPluginLensContextBinding,
+		"GENTLE_AI_REVIEW_CONTEXT " + context,
+		"GENTLE_AI_REVIEW_INSTRUCTION\nYou are the R1 Risk lens of one bounded Gentle AI review.\nGENTLE_AI_REVIEW_INSTRUCTION_END",
+		"GENTLE_AI_REVIEW_RESULT_SCHEMA\n{}\nGENTLE_AI_REVIEW_RESULT_SCHEMA_END",
+		"GENTLE_AI_REVIEW_NAME_STATUS\nM\t" + paths[0] + "\nGENTLE_AI_REVIEW_NAME_STATUS_END",
+		"GENTLE_AI_REVIEW_NUMSTAT\n3\t1\t" + paths[0] + "\nGENTLE_AI_REVIEW_NUMSTAT_END",
+	}, append(patches, "GENTLE_AI_REVIEW_CONTEXT_END")...), "\n")
 }
 
-// TestReviewPluginBindsProviderOwnedCandidateContext pins the restored
-// shell-less transport: the plugin itself materializes name-status, numstat,
-// and one verbatim patch per manifest path through the native channel, and
-// injects all of it into the reviewer's prompt before the reviewer ever
-// launches. No shell and no read tool exist on the reviewer side, so this
-// injected block is provably its only byte source.
-func TestReviewPluginBindsProviderOwnedCandidateContext(t *testing.T) {
+// TestReviewPluginInjectsProviderOwnedLensContext pins the restored
+// shell-less transport: the plugin asks the provider for the one finished
+// reviewer lens context and injects those exact bytes into the reviewer's
+// prompt before the reviewer ever launches. No shell and no read tool exist
+// on the reviewer side, so this injected block is provably the only byte
+// source of the prompt the reviewer's own turn receives.
+func TestReviewPluginInjectsProviderOwnedLensContext(t *testing.T) {
 	baseTree := strings.Repeat("1", 40)
 	candidateTree := strings.Repeat("2", 40)
-	preflight := reviewPluginPreflight(baseTree, candidateTree)
-	prompt := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
-		preflight: preflight, nameStatus: "M\tinternal/example.go", numstat: "3\t1\tinternal/example.go",
-		patches: []string{"--- a/internal/example.go\n+++ b/internal/example.go\n@@ -1,1 +1,1 @@\n-old\n+new\n"},
-	})
+	block := reviewPluginLensContext(baseTree, candidateTree)
+	prompt := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{lensContext: block})
+	if strings.TrimSpace(prompt) != strings.TrimSpace(block) {
+		t.Fatalf("injected prompt is not the provider block verbatim:\ngot:  %q\nwant: %q", prompt, block)
+	}
 	if !strings.HasPrefix(prompt, "GENTLE_AI_REVIEW_BINDING {") {
 		t.Fatalf("injected prompt does not begin with the exact binding prefix: %q", prompt)
 	}
-	if !strings.Contains(prompt, `"subject_hash":"sha256:`+strings.Repeat("c", 64)+`"`) {
-		t.Fatalf("bound prompt is missing the preflight subject hash: %q", prompt)
-	}
 	for _, want := range []string{
 		"GENTLE_AI_REVIEW_CONTEXT ", baseTree, candidateTree, "internal/example.go",
+		`"subject_hash":"sha256:` + reviewPluginSubjectSuffix + `"`,
 		"GENTLE_AI_REVIEW_NAME_STATUS\nM\tinternal/example.go\nGENTLE_AI_REVIEW_NAME_STATUS_END",
 		"GENTLE_AI_REVIEW_NUMSTAT\n3\t1\tinternal/example.go\nGENTLE_AI_REVIEW_NUMSTAT_END",
-		"GENTLE_AI_REVIEW_PATCH 0 internal/example.go\n--- a/internal/example.go",
-		"+new\nGENTLE_AI_REVIEW_PATCH_END",
+		"GENTLE_AI_REVIEW_PATCH 0 internal/example.go\nPATCH-BODY-0\nGENTLE_AI_REVIEW_PATCH_END",
 		"GENTLE_AI_REVIEW_CONTEXT_END",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -381,24 +362,19 @@ func TestReviewPluginBindsProviderOwnedCandidateContext(t *testing.T) {
 	}
 }
 
-// TestReviewPluginOrdersEvidenceByManifestIndex proves multi-path evidence is
-// materialized once per canonical manifest index, in exact order, each
-// carrying its own index and literal path.
+// TestReviewPluginOrdersEvidenceByManifestIndex proves multi-path evidence
+// reaches the reviewer once per canonical manifest index, in exact order,
+// each carrying its own index and literal path. The provider orders it; this
+// test proves the plugin does not reorder, drop, or re-wrap it.
 func TestReviewPluginOrdersEvidenceByManifestIndex(t *testing.T) {
-	baseTree := strings.Repeat("1", 40)
-	candidateTree := strings.Repeat("2", 40)
-	paths := []string{"internal/a.go", "internal/b.go"}
-	preflight := reviewPluginPreflightWithPaths(baseTree, candidateTree, paths)
-	prompt := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
-		preflight: preflight, nameStatus: "M\tinternal/a.go\nM\tinternal/b.go", numstat: "1\t1\tinternal/a.go\n1\t1\tinternal/b.go",
-		patches: []string{"PATCH-CONTENT-A", "PATCH-CONTENT-B"},
-	})
+	block := reviewPluginLensContextWithPaths(strings.Repeat("1", 40), strings.Repeat("2", 40), []string{"internal/a.go", "internal/b.go"})
+	prompt := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{lensContext: block})
 	first := strings.Index(prompt, "GENTLE_AI_REVIEW_PATCH 0 internal/a.go")
 	second := strings.Index(prompt, "GENTLE_AI_REVIEW_PATCH 1 internal/b.go")
 	if first < 0 || second < 0 || first > second {
 		t.Fatalf("path evidence is not in exact manifest order: %q", prompt)
 	}
-	if !strings.Contains(prompt, "PATCH-CONTENT-A") || !strings.Contains(prompt, "PATCH-CONTENT-B") {
+	if !strings.Contains(prompt, "PATCH-BODY-0") || !strings.Contains(prompt, "PATCH-BODY-1") {
 		t.Fatalf("plugin omitted per-path patch content: %q", prompt)
 	}
 }
@@ -411,124 +387,174 @@ func TestReviewPluginReplacesCallerAuthoredCandidateContext(t *testing.T) {
 	baseTree := strings.Repeat("1", 40)
 	candidateTree := strings.Repeat("2", 40)
 	prompt := runReviewPluginScenarioStub(t, "before-substitute", reviewPluginStub{
-		preflight:  reviewPluginPreflight(baseTree, candidateTree),
-		nameStatus: "M\tinternal/example.go", numstat: "1\t1\tinternal/example.go",
-		patches: []string{"REAL-PATCH-CONTENT"},
+		lensContext: reviewPluginLensContext(baseTree, candidateTree),
 	})
 	for _, callerValue := range []string{strings.Repeat("9", 40), strings.Repeat("8", 40), "caller.txt", "review the frozen candidate"} {
 		if strings.Contains(prompt, callerValue) {
 			t.Fatalf("provider injection retained caller-authored context %q: %q", callerValue, prompt)
 		}
 	}
-	for _, providerValue := range []string{baseTree, candidateTree, "internal/example.go", "REAL-PATCH-CONTENT"} {
+	for _, providerValue := range []string{baseTree, candidateTree, "internal/example.go", "PATCH-BODY-0"} {
 		if !strings.Contains(prompt, providerValue) {
-			t.Fatalf("provider injection omitted preflight context %q: %q", providerValue, prompt)
+			t.Fatalf("provider injection omitted provider context %q: %q", providerValue, prompt)
 		}
 	}
 }
 
-// TestReviewPluginFailsClosedWhenEvidenceMaterializationFails is mutation
-// proof (c): if evidence materialization fails partway (here, the numstat
-// call), the reviewer must never launch with the caller-authored prompt as a
-// fallback. A mutant that swallowed the failure and fell through to
+// TestReviewPluginFailsClosedWhenLensContextFails is the mutation proof for
+// the injection path: if the provider refuses or fails to produce the lens
+// context, the reviewer must never launch with the caller-authored prompt as
+// a fallback. A mutant that swallowed the failure and fell through to
 // `output.args.prompt` unchanged would leave the caller's own text in the
 // result; this test fails red against that mutant.
-func TestReviewPluginFailsClosedWhenEvidenceMaterializationFails(t *testing.T) {
-	baseTree := strings.Repeat("1", 40)
-	candidateTree := strings.Repeat("2", 40)
-	message := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
-		preflight:  reviewPluginPreflight(baseTree, candidateTree),
-		nameStatus: "M\tinternal/example.go",
-		// numstat left unset so the stub falls through to inspectStderr.
-		inspectStderr: "NATIVE-INSPECT-FAILED",
-	})
-	if !strings.Contains(message, "review context evidence materialization failed") {
-		t.Fatalf("evidence materialization failure did not stop the reviewer launch closed: %s", message)
+func TestReviewPluginFailsClosedWhenLensContextFails(t *testing.T) {
+	message := runReviewPluginScenario(t, "before-valid", "NATIVE-LENS-CONTEXT-FAILED")
+	if !strings.Contains(message, "review lens context failed") {
+		t.Fatalf("lens-context failure did not stop the reviewer launch closed: %s", message)
 	}
 	if !strings.Contains(message, "The reviewer was not launched") {
-		t.Fatalf("evidence materialization failure lost its exactly-once guarantee: %s", message)
+		t.Fatalf("lens-context failure lost its exactly-once guarantee: %s", message)
 	}
 	if strings.Contains(message, "review the frozen candidate") {
-		t.Fatalf("evidence materialization failure fell back to the caller-authored prompt: %s", message)
+		t.Fatalf("lens-context failure fell back to the caller-authored prompt: %s", message)
+	}
+	if strings.Contains(message, "NATIVE-LENS-CONTEXT-FAILED") {
+		t.Fatalf("opaque binding leaked native prose into the transcript: %s", message)
 	}
 }
 
-// TestReviewPluginFailsClosedOnEvidenceBudgetOverflow is mutation proof (d):
-// evidence that would exceed REVIEW_CONTEXT_BYTE_BUDGET must refuse the
-// reviewer launch outright, never truncate. A mutant that silently truncated
-// the oversized patch instead of refusing would produce a "completed"-shaped
-// result from partial evidence; this test fails red against that mutant,
-// because it demands the refusal message and demands the huge payload never
-// reached the result at all.
-func TestReviewPluginFailsClosedOnEvidenceBudgetOverflow(t *testing.T) {
+// TestReviewPluginForwardsTypedLensContextRefusals pins that a provider
+// refusal keeps its named exit. The native command's refusals are typed and
+// path-free by construction, and the two that a caller cannot recover from by
+// retrying -- an over-budget candidate and an empty patch for a
+// content-changing path -- each name a real continuation. Collapsing them
+// into "retry the same binding" would send the caller into a loop that
+// deterministically fails, which is the whole reason these codes exist.
+//
+// Only the [a-z_]+ code token crosses the boundary; the native prose that
+// carries it never reaches the session transcript.
+func TestReviewPluginForwardsTypedLensContextRefusals(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		native     string
+		wantCode   string
+		wantAction string
+	}{
+		{
+			name:       "budget exceeded",
+			native:     "lens_context_budget_exceeded: provider-owned reviewer lens context was not produced; NATIVE-ACTION-PROSE",
+			wantCode:   "lens_context_budget_exceeded",
+			wantAction: "Split this candidate into smaller reviewable commits",
+		},
+		{
+			name:       "empty patch",
+			native:     "lens_context_empty_patch: provider-owned reviewer lens context was not produced; NATIVE-ACTION-PROSE",
+			wantCode:   "lens_context_empty_patch",
+			wantAction: "stop relaunching",
+		},
+		{
+			name:       "emission conflict",
+			native:     "lens_context_emission_conflict: provider-owned reviewer lens context was not produced; NATIVE-ACTION-PROSE",
+			wantCode:   "lens_context_emission_conflict",
+			wantAction: "audit history is never rewritten",
+		},
+		{
+			name:       "unrecognized code still names an exit",
+			native:     "lens_context_inspection_failed: provider-owned reviewer lens context was not produced; NATIVE-ACTION-PROSE",
+			wantCode:   "lens_context_inspection_failed",
+			wantAction: "Refresh the exact native next_transition",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			message := runReviewPluginScenario(t, "before-valid", test.native)
+			if !strings.Contains(message, test.wantCode) {
+				t.Fatalf("refusal lost its typed code %q: %s", test.wantCode, message)
+			}
+			if !strings.Contains(message, test.wantAction) {
+				t.Fatalf("refusal names no actionable continuation (%q): %s", test.wantAction, message)
+			}
+			if strings.Contains(message, "NATIVE-ACTION-PROSE") {
+				t.Fatalf("refusal forwarded native prose into the transcript: %s", message)
+			}
+			if !strings.Contains(message, "The reviewer was not launched") {
+				t.Fatalf("refusal lost its exactly-once guarantee: %s", message)
+			}
+		})
+	}
+}
+
+// TestReviewPluginRefusesLensContextBoundToAnotherCandidate proves the plugin
+// checks that the opaque handle the caller supplied really addresses the
+// lineage, target, revision, and order the caller also claimed in its own
+// binding. The provider authored both sides of the returned block, so this is
+// not a trust check on the provider: it is what makes a caller that pointed a
+// review at a different candidate fail here, loudly, instead of silently
+// capturing a reviewer result into some other lineage later.
+func TestReviewPluginRefusesLensContextBoundToAnotherCandidate(t *testing.T) {
 	baseTree := strings.Repeat("1", 40)
 	candidateTree := strings.Repeat("2", 40)
-	message := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
-		preflight:      reviewPluginPreflight(baseTree, candidateTree),
-		nameStatus:     "M\tinternal/example.go",
-		numstat:        "1\t1\tinternal/example.go",
-		patchHugeBytes: 5_000_000, // exceeds the 4 MiB (4,194,304-byte) budget
-	})
-	if !strings.Contains(message, "provider injection budget") {
-		t.Fatalf("budget overflow did not refuse the reviewer launch: %s", message)
+	for _, test := range []struct {
+		name string
+		from string
+		to   string
+	}{
+		{name: "lineage", from: `"lineage":"trust-check"`, to: `"lineage":"other-lineage"`},
+		{name: "target", from: `"target":"sha256:` + reviewPluginTargetSuffix + `"`, to: `"target":"sha256:` + strings.Repeat("7", 64) + `"`},
+		{name: "revision", from: `"revision":"sha256:` + reviewPluginRevisionSuffix + `"`, to: `"revision":"sha256:` + strings.Repeat("6", 64) + `"`},
+		{name: "order", from: `"order":0`, to: `"order":3`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			block := reviewPluginLensContext(baseTree, candidateTree)
+			poisoned := strings.Replace(block, "GENTLE_AI_REVIEW_BINDING "+reviewPluginLensContextBinding,
+				"GENTLE_AI_REVIEW_BINDING "+strings.Replace(reviewPluginLensContextBinding, test.from, test.to, 1), 1)
+			if poisoned == block {
+				t.Fatalf("test fixture did not substitute %q", test.from)
+			}
+			message := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{lensContext: poisoned})
+			if !strings.Contains(message, "binds a different candidate than the task claimed") {
+				t.Fatalf("mismatched provider binding was injected anyway: %s", message)
+			}
+			if !strings.Contains(message, "The reviewer was not launched") {
+				t.Fatalf("binding-mismatch refusal lost its exactly-once guarantee: %s", message)
+			}
+		})
 	}
-	if !strings.Contains(message, "never truncated") {
-		t.Fatalf("budget overflow message does not rule out truncation: %s", message)
+}
+
+// TestReviewPluginRefusesUnterminatedLensContext proves a truncated provider
+// block never reaches a reviewer. The provider assembles the whole block in
+// memory before writing a byte precisely so this cannot happen, but a
+// transport that lost the tail would hand the lens a partial candidate view
+// it could still report as clean, which is the one failure this whole surface
+// exists to make impossible.
+func TestReviewPluginRefusesUnterminatedLensContext(t *testing.T) {
+	block := reviewPluginLensContext(strings.Repeat("1", 40), strings.Repeat("2", 40))
+	truncated := strings.TrimSuffix(strings.TrimSpace(block), "\nGENTLE_AI_REVIEW_CONTEXT_END")
+	if truncated == strings.TrimSpace(block) {
+		t.Fatal("test fixture did not remove the terminator")
+	}
+	message := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{lensContext: truncated})
+	if !strings.Contains(message, "GENTLE_AI_REVIEW_CONTEXT_END") || !strings.Contains(message, "partial provider context is never injected") {
+		t.Fatalf("unterminated provider context was injected anyway: %s", message)
 	}
 	if !strings.Contains(message, "The reviewer was not launched") {
-		t.Fatalf("budget overflow lost its exactly-once guarantee: %s", message)
-	}
-	// The refusal must name a real exit, not just stop: split the candidate
-	// and start a new, smaller review, since retrying the identical
-	// oversized candidate can never succeed.
-	if !strings.Contains(message, "Split this candidate into smaller reviewable commits") {
-		t.Fatalf("budget overflow refusal names no actionable continuation: %s", message)
-	}
-	if !strings.Contains(message, "retrying the same candidate cannot succeed") {
-		t.Fatalf("budget overflow refusal does not rule out a blind retry: %s", message)
-	}
-	if len(message) > 4096 || strings.Count(message, "A") > 512 {
-		t.Fatalf("budget overflow leaked the oversized payload into the transcript: %d bytes", len(message))
+		t.Fatalf("terminator refusal lost its exactly-once guarantee: %s", message)
 	}
 }
 
-// TestReviewPluginRequiresRepositoryContextForEvidenceMaterialization proves
-// the evidence-materialization guard: a binding without repository_context
-// and revision (the legacy shape) can never reach `inspect-candidate` at
-// all, even if its preflight response were somehow well-formed, because
-// inspect-candidate has no --cwd fallback.
-func TestReviewPluginRequiresRepositoryContextForEvidenceMaterialization(t *testing.T) {
-	baseTree := strings.Repeat("1", 40)
-	candidateTree := strings.Repeat("2", 40)
+// TestReviewPluginRequiresRepositoryContextForLensContext proves the
+// injection guard: a binding without repository_context (the legacy shape)
+// can never reach `review lens-context` at all, because that command accepts
+// only the opaque provider-issued handle and has no --cwd fallback.
+func TestReviewPluginRequiresRepositoryContextForLensContext(t *testing.T) {
 	message := runReviewPluginScenarioStub(t, "before-legacy", reviewPluginStub{
-		preflight:     reviewPluginPreflight(baseTree, candidateTree),
-		inspectStderr: "NATIVE-INSPECT-MUST-NOT-RUN",
+		stderr: "NATIVE-LENS-CONTEXT-MUST-NOT-RUN",
 	})
 	if !strings.Contains(message, "requires a repository-context binding") {
-		t.Fatalf("legacy binding did not refuse evidence materialization closed: %s", message)
+		t.Fatalf("legacy binding did not refuse the provider injection closed: %s", message)
 	}
-	if strings.Contains(message, "NATIVE-INSPECT-MUST-NOT-RUN") {
-		t.Fatalf("legacy binding attempted native candidate inspection: %s", message)
-	}
-}
-
-func TestReviewPluginRejectsNonCanonicalProviderManifest(t *testing.T) {
-	entry := `{"path":"internal/example.go","status":"M","old_mode":"100644","new_mode":"100644","deleted":false,"type_changed":false,"mode_only":false,"intended_untracked":false}`
-	unsorted := `{"path":"z.go","status":"M","old_mode":"100644","new_mode":"100644","deleted":false,"type_changed":false,"mode_only":false,"intended_untracked":false},` + entry
-	preflight := strings.Replace(reviewPluginPreflight(strings.Repeat("1", 40), strings.Repeat("2", 40)), entry, unsorted, 1)
-	message := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{preflight: preflight})
-	if !strings.Contains(message, "review capture preflight failed") || !strings.Contains(message, "The reviewer was not launched") {
-		t.Fatalf("non-canonical provider manifest was accepted: %s", message)
-	}
-	if strings.Contains(message, "incomplete artifact subject") {
-		t.Fatalf("opaque preflight exposed native validation detail: %s", message)
-	}
-}
-
-func TestReviewPluginRejectsLegacyBinaryWithoutPreflightBeforeReviewerLaunch(t *testing.T) {
-	message := runReviewPluginScenario(t, "before-legacy", "flag provided but not defined: -preflight")
-	if !strings.Contains(message, "review capture preflight failed") || !strings.Contains(message, "The reviewer was not launched") {
-		t.Fatalf("unsupported preflight did not fail closed before reviewer launch: %s", message)
+	if strings.Contains(message, "NATIVE-LENS-CONTEXT-MUST-NOT-RUN") {
+		t.Fatalf("legacy binding attempted a native lens-context call: %s", message)
 	}
 }
 
@@ -767,7 +793,7 @@ func TestReviewPluginKeepsGenericOpaqueFailureOpaque(t *testing.T) {
 	if strings.Contains(message, "/home/someone/private/repo") {
 		t.Fatalf("plugin forwarded a native path through an opaque binding: %s", message)
 	}
-	if !strings.Contains(message, "repository_context_preflight_failed") {
+	if !strings.Contains(message, "repository_context_lens_context_failed") {
 		t.Fatalf("generic opaque failure lost its provider-owned code: %s", message)
 	}
 }
@@ -784,9 +810,7 @@ func TestReviewPluginKeepsGenericOpaqueFailureOpaque(t *testing.T) {
 // close it is OPENCODE_DISABLE_PROJECT_CONFIG and OPENCODE_DISABLE_EXTERNAL_SKILLS,
 // so the plugin refuses to launch the reviewer at all unless both are set.
 func TestReviewPluginRefusesReviewerLaunchWithoutIsolationEnvironment(t *testing.T) {
-	baseTree := strings.Repeat("1", 40)
-	candidateTree := strings.Repeat("2", 40)
-	preflight := reviewPluginPreflight(baseTree, candidateTree)
+	block := reviewPluginLensContext(strings.Repeat("1", 40), strings.Repeat("2", 40))
 	tests := []struct {
 		name                        string
 		omitProjectConfigIsolation  bool
@@ -803,8 +827,7 @@ func TestReviewPluginRefusesReviewerLaunchWithoutIsolationEnvironment(t *testing
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			message := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
-				preflight: preflight, nameStatus: "M\tinternal/example.go", numstat: "1\t1\tinternal/example.go",
-				patches:                     []string{"--- a/internal/example.go\n+++ b/internal/example.go\n"},
+				lensContext:                 block,
 				omitProjectConfigIsolation:  test.omitProjectConfigIsolation,
 				omitExternalSkillsIsolation: test.omitExternalSkillsIsolation,
 			})
@@ -828,70 +851,11 @@ func TestReviewPluginRefusesReviewerLaunchWithoutIsolationEnvironment(t *testing
 // default), the reviewer launches normally. This pins that the gate is
 // exact -- it refuses only when a real gap exists, never unconditionally.
 func TestReviewPluginAllowsReviewerLaunchWithIsolationEnvironment(t *testing.T) {
-	baseTree := strings.Repeat("1", 40)
-	candidateTree := strings.Repeat("2", 40)
 	prompt := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
-		preflight:  reviewPluginPreflight(baseTree, candidateTree),
-		nameStatus: "M\tinternal/example.go", numstat: "1\t1\tinternal/example.go",
-		patches: []string{"--- a/internal/example.go\n+++ b/internal/example.go\n"},
+		lensContext: reviewPluginLensContext(strings.Repeat("1", 40), strings.Repeat("2", 40)),
 	})
 	if !strings.HasPrefix(prompt, "GENTLE_AI_REVIEW_BINDING {") {
 		t.Fatalf("reviewer did not launch with both isolation variables set: %q", prompt)
-	}
-}
-
-// TestReviewPluginRejectsEmptyPatchForContentChangingPath is the MEDIUM
-// fix's mutation proof: a `patch` operation that exits 0 with empty stdout
-// for a path that is neither mode-only nor deleted must refuse the reviewer
-// launch, never inject an empty evidence block silently. Even a newly added
-// empty file still renders a non-empty diff header with no hunk, so a truly
-// empty patch here can only mean the native read failed silently -- the
-// fabricate-a-clean-review shape the plugin's own "no partial evidence"
-// contract forbids.
-func TestReviewPluginRejectsEmptyPatchForContentChangingPath(t *testing.T) {
-	baseTree := strings.Repeat("1", 40)
-	candidateTree := strings.Repeat("2", 40)
-	message := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
-		preflight:  reviewPluginPreflight(baseTree, candidateTree),
-		nameStatus: "M\tinternal/example.go", numstat: "1\t1\tinternal/example.go",
-		patches: []string{""}, // exits 0, genuinely empty stdout
-	})
-	if !strings.Contains(message, "evidence patch was empty") {
-		t.Fatalf("empty patch for a content-changing path was not refused: %s", message)
-	}
-	if !strings.Contains(message, "internal/example.go") {
-		t.Fatalf("empty-patch refusal does not name the failing path: %s", message)
-	}
-	if !strings.Contains(message, "The reviewer was not launched") {
-		t.Fatalf("empty-patch refusal lost its exactly-once guarantee: %s", message)
-	}
-}
-
-// TestReviewPluginAcceptsEmptyPatchForModeOnlyOrDeletedPath proves the guard
-// above has no false positive: a mode-only change (a chmod with no content
-// diff) or a deleted path can legitimately have no patch body, and must not
-// be refused.
-func TestReviewPluginAcceptsEmptyPatchForModeOnlyOrDeletedPath(t *testing.T) {
-	baseTree := strings.Repeat("1", 40)
-	candidateTree := strings.Repeat("2", 40)
-	for _, test := range []struct {
-		name  string
-		entry string
-	}{
-		{name: "mode-only", entry: `{"path":"internal/example.go","status":"M","old_mode":"100644","new_mode":"100755","deleted":false,"type_changed":false,"mode_only":true,"intended_untracked":false}`},
-		{name: "deleted", entry: `{"path":"internal/example.go","status":"D","old_mode":"100644","new_mode":"000000","deleted":true,"type_changed":false,"mode_only":false,"intended_untracked":false}`},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			entry := `{"path":"internal/example.go","status":"M","old_mode":"100644","new_mode":"100644","deleted":false,"type_changed":false,"mode_only":false,"intended_untracked":false}`
-			preflight := strings.Replace(reviewPluginPreflight(baseTree, candidateTree), entry, test.entry, 1)
-			prompt := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
-				preflight: preflight, nameStatus: "M\tinternal/example.go", numstat: "0\t0\tinternal/example.go",
-				patches: []string{""},
-			})
-			if !strings.HasPrefix(prompt, "GENTLE_AI_REVIEW_BINDING {") {
-				t.Fatalf("%s path with an empty patch was refused: %q", test.name, prompt)
-			}
-		})
 	}
 }
 
@@ -917,9 +881,7 @@ func TestReviewPluginRefusesRemoteInstructionsEntry(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			message := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
-				preflight:  reviewPluginPreflight(baseTree, candidateTree),
-				nameStatus: "M\tinternal/example.go", numstat: "1\t1\tinternal/example.go",
-				patches:            []string{"--- a/internal/example.go\n+++ b/internal/example.go\n"},
+				lensContext:        reviewPluginLensContext(baseTree, candidateTree),
 				configInstructions: []string{"docs/local-instructions.md", test.instruction},
 			})
 			if !strings.Contains(message, "refuses a remote `instructions` entry") {
@@ -953,9 +915,7 @@ func TestReviewPluginAllowsLocalOnlyInstructions(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			prompt := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
-				preflight:  reviewPluginPreflight(baseTree, candidateTree),
-				nameStatus: "M\tinternal/example.go", numstat: "1\t1\tinternal/example.go",
-				patches:            []string{"--- a/internal/example.go\n+++ b/internal/example.go\n"},
+				lensContext:        reviewPluginLensContext(baseTree, candidateTree),
 				configInstructions: test.instructions,
 			})
 			if !strings.HasPrefix(prompt, "GENTLE_AI_REVIEW_BINDING {") {
@@ -973,9 +933,7 @@ func TestReviewPluginRefusesWhenEffectiveConfigIsUnverifiable(t *testing.T) {
 	baseTree := strings.Repeat("1", 40)
 	candidateTree := strings.Repeat("2", 40)
 	message := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
-		preflight:  reviewPluginPreflight(baseTree, candidateTree),
-		nameStatus: "M\tinternal/example.go", numstat: "1\t1\tinternal/example.go",
-		patches:     []string{"--- a/internal/example.go\n+++ b/internal/example.go\n"},
+		lensContext: reviewPluginLensContext(baseTree, candidateTree),
 		configError: "NATIVE-CONFIG-ENDPOINT-UNAVAILABLE",
 	})
 	if !strings.Contains(message, "could not verify the effective configuration") {
