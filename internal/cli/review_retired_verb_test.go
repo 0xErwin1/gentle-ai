@@ -28,3 +28,23 @@ func TestReviewRetiredVerbReconcileAuthorityIsUnknownCommand(t *testing.T) {
 		t.Fatalf("retired verb reconcile-authority wrote output before refusing: %q", output.String())
 	}
 }
+
+// TestReviewRetiredVerbReconcileAuthorityBatchIsUnknownCommand is WU9's
+// (S4a) threat-matrix proof. This verb had TWO dispatch cases --
+// runReviewCommandContext's own (which otherwise falls through to
+// runReviewCommand by default) and runReviewCommand's -- both must be gone
+// for the verb to become genuinely unknown rather than merely dropping to
+// the second dispatcher's still-live case.
+func TestReviewRetiredVerbReconcileAuthorityBatchIsUnknownCommand(t *testing.T) {
+	var output bytes.Buffer
+	err := RunReview([]string{"reconcile-authority-batch", "--cwd", "."}, &output)
+	if err == nil {
+		t.Fatal("retired verb reconcile-authority-batch was accepted, want unknown-command refusal")
+	}
+	if want := `unknown review command "reconcile-authority-batch"`; err.Error() != want {
+		t.Fatalf("retired verb reconcile-authority-batch error = %q, want %q", err.Error(), want)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("retired verb reconcile-authority-batch wrote output before refusing: %q", output.String())
+	}
+}
