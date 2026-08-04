@@ -2362,7 +2362,17 @@ func TestRunInstallKimiBootstrapsHub(t *testing.T) {
 	}
 }
 
-func TestRunInstallKimiMissingUVFailsBeforeExecutingInstallCommands(t *testing.T) {
+// TestRunInstallRefusesMissingKimiRegardlessOfUVPresence proves that when
+// Kimi is not detected, gentle-ai refuses and names the exact `uv` command
+// the user would run themselves — it no longer preflights uv presence for
+// Kimi at all (uv is not Pi's dependency, and gentle-ai never runs this
+// command itself), so the refusal fires the same way whether uv is on this
+// machine's PATH or not. Before this behavior existed, this same scenario
+// (Kimi undetected, uv missing) failed earlier and differently — at
+// checkDependenciesStep's preflight, with a "preflight for agent kimi: uv"
+// error — see git history for the prior version of this test,
+// TestRunInstallKimiMissingUVFailsBeforeExecutingInstallCommands.
+func TestRunInstallRefusesMissingKimiRegardlessOfUVPresence(t *testing.T) {
 	home := t.TempDir()
 	restoreHome := osUserHomeDir
 	restoreCommand := runCommand
@@ -2387,20 +2397,30 @@ func TestRunInstallKimiMissingUVFailsBeforeExecutingInstallCommands(t *testing.T
 	})
 	t.Cleanup(restoreInstallcmdLookPath)
 
+	// The refusal makes Apply fail, which triggers rollback of the
+	// pre-install snapshot; rollback validates restored paths are under the
+	// real user home directory, so it needs this test's fake home too (see
+	// TestRunInstallRefusesMissingOpenCodeInsteadOfInstalling for the same
+	// fix and its full explanation).
+	restoreBackupHome := backup.UserHomeDirFn
+	backup.UserHomeDirFn = func() (string, error) { return home, nil }
+	t.Cleanup(func() { backup.UserHomeDirFn = restoreBackupHome })
+
 	_, err := RunInstall(
 		[]string{"--agent", "kimi", "--component", "permissions"},
 		macOSDetectionResult(),
 	)
 	if err == nil {
-		t.Fatal("RunInstall() expected error when Kimi uv preflight fails")
+		t.Fatal("RunInstall() error = nil, want a refusal because Kimi is not installed")
 	}
 
-	if !strings.Contains(err.Error(), "preflight for agent \"kimi\"") || !strings.Contains(err.Error(), "uv") {
-		t.Fatalf("RunInstall() error = %q, expected Kimi uv preflight error", err.Error())
+	const wantCommand = "uv tool install --python 3.13 kimi-cli"
+	if !strings.Contains(err.Error(), wantCommand) {
+		t.Fatalf("RunInstall() error = %q, want it to name %q", err.Error(), wantCommand)
 	}
 
 	if got := recorder.get(); len(got) != 0 {
-		t.Fatalf("expected no install commands to execute before Kimi preflight failure, got: %v", got)
+		t.Fatalf("commands executed = %v, want none — gentle-ai must never run an install command on the user's behalf", got)
 	}
 }
 

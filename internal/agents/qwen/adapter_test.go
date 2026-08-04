@@ -190,7 +190,6 @@ func TestCapabilities(t *testing.T) {
 		got  bool
 		want bool
 	}{
-		{"SupportsAutoInstall", a.SupportsAutoInstall(), true},
 		{"SupportsSkills", a.SupportsSkills(), true},
 		{"SupportsSystemPrompt", a.SupportsSystemPrompt(), true},
 		{"SupportsMCP", a.SupportsMCP(), true},

@@ -2379,13 +2379,20 @@ func (s checkDependenciesStep) Run() error {
 	// failing with real error messages.
 	_ = system.DetectDependencies(context.Background(), s.profile)
 	for _, agent := range s.selection.Agents {
+		// Only Pi still executes anything on the user's behalf (its own
+		// already-present `pi` subcommands, which need npm/pnpm — see
+		// agentInstallStep). Every other agent's "not installed" outcome is
+		// now a printed refusal, which needs no local dependency at all, so
+		// failing this whole pipeline early over an unrelated agent's
+		// missing npm/uv would abort work agentInstallStep would otherwise
+		// complete correctly by just naming the command.
+		if agent != model.AgentPi {
+			continue
+		}
+
 		adapter, err := agents.NewAdapter(agent)
 		if err != nil {
 			return fmt.Errorf("create adapter for %q: %w", agent, err)
-		}
-
-		if !adapter.SupportsAutoInstall() {
-			continue
 		}
 
 		if s.homeDir != "" {

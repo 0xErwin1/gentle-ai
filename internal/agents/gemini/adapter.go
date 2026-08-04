@@ -65,10 +65,6 @@ func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifes
 	return capabilitymanifest.MustForAgent(model.AgentGeminiCLI)
 }
 
-func (a *Adapter) SupportsAutoInstall() bool {
-	return a.CapabilityManifest().Features.AutoInstall
-}
-
 // InstallCommand returns the display-only command shown when Gemini CLI is
 // not detected — gentle-ai never executes this (see agentInstallStep in
 // internal/cli/run.go). Gemini CLI installs via npm on all platforms;

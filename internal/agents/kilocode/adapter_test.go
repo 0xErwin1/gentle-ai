@@ -151,7 +151,6 @@ func TestCapabilities(t *testing.T) {
 		{"SupportsSystemPrompt", a.SupportsSystemPrompt, true},
 		{"SupportsSlashCommands", a.SupportsSlashCommands, true},
 		{"SupportsOutputStyles", a.SupportsOutputStyles, false},
-		{"SupportsAutoInstall", a.SupportsAutoInstall, true},
 	}
 
 	for _, tt := range tests {
