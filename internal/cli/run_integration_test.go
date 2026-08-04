@@ -2389,6 +2389,14 @@ func TestRunInstallRefusesMissingKimiRegardlessOfUVPresence(t *testing.T) {
 	recorder := &commandRecorder{}
 	runCommand = recorder.record
 
+	// Force Kimi absent explicitly rather than relying on it happening to be
+	// missing from the machine running go test — the whole point of this
+	// test is the refusal on genuine absence, so absence must be the tested
+	// condition, not an accident of the environment.
+	restoreKimiLookPath := kimi.LookPathOverride
+	kimi.LookPathOverride = func(string) (string, error) { return "", exec.ErrNotFound }
+	t.Cleanup(func() { kimi.LookPathOverride = restoreKimiLookPath })
+
 	restoreInstallcmdLookPath := installcmd.OverrideLookPath(func(name string) (string, error) {
 		if name == "uv" {
 			return "", exec.ErrNotFound

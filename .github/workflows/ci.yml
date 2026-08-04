@@ -270,6 +270,18 @@ jobs:
       - name: Install pinned OpenCode runtime
         run: npm install --global opencode-ai@1.18.10
 
+      - name: Install Claude Code runtime
+        # This suite drives the real install pipeline end to end, so it needs
+        # the real binary the same way it needs OpenCode above — gentle-ai
+        # itself no longer installs this (agentInstallStep in
+        # internal/cli/run.go refuses instead), so CI installs what it needs
+        # to test, same as any other test dependency. No exact-pin test
+        # applies here the way TestOrganicRuntimeE2EUsesInstalledOpenCodePin
+        # asserts for OpenCode: there is no versions.go constant backing this
+        # one, since gentle-ai's own display-only refusal for Claude Code
+        # advises "latest" too (see internal/installcmd/resolver.go).
+        run: npm install --global @anthropic-ai/claude-code@latest
+
       - name: Verify Windows OpenCode reviewer rejection E2E is registered
         shell: pwsh
         run: |
