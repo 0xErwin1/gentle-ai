@@ -514,7 +514,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 			blockedReasons.genuine = append(blockedReasons.genuine, evaluation.Reason)
 		}
 	}
-	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, runtimeAttemptTokens, verifyResult)
+	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, runtimeAttemptTokens, verifyResult, reviewDisabled)
 	remediationRequired := staleAllowAuthority == nil && !staleEvidenceUnmanaged && !runtimeRemediationComplete && artifacts["verifyReport"] == ArtifactDone && !verifyResult.Passing && applyState == ApplyAllDone
 	var compactRemediation *reviewtransaction.CompactState
 	if !reviewDisabled {
@@ -534,10 +534,13 @@ func Resolve(options ResolveOptions) (Status, error) {
 	)
 	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyResult.Passing, remediationState.Complete)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, artifacts["verifyReport"] == ArtifactDone, remediationState)
-	if staleAllowAuthority != nil || staleEvidenceUnmanaged {
+	if staleAllowAuthority != nil || staleEvidenceUnmanaged || (reviewDisabled && runtimeRemediationComplete) {
 		dependencies.Verify = DependencyReady
 		dependencies.Archive = DependencyBlocked
 		nextRecommended = "verify"
+		if runtimeRemediationComplete {
+			remediationState = RemediationState{}
+		}
 	}
 	var boundGate *ReviewGateState
 	bridge := compactPreVerifyBridge{}
@@ -675,8 +678,9 @@ func workspaceHasGitMetadata(workspaceRoot string) bool {
 	}
 }
 
-func nativeRuntimeCompletesRemediation(runtimeStatus *RuntimeStatus, attemptTokens map[int]string, verify verifyResultEvaluation) bool {
-	if runtimeStatus == nil || runtimeStatus.Binding == nil || verify.EvidenceRevision == "" || len(runtimeStatus.Attempts) == 0 {
+func nativeRuntimeCompletesRemediation(runtimeStatus *RuntimeStatus, attemptTokens map[int]string, verify verifyResultEvaluation, reviewDisabled bool) bool {
+	if runtimeStatus == nil || verify.EvidenceRevision == "" || len(runtimeStatus.Attempts) == 0 ||
+		(reviewDisabled && runtimeStatus.Binding != nil) || (!reviewDisabled && runtimeStatus.Binding == nil) {
 		return false
 	}
 	// "The runtime finished this objective cleanly" is the readiness question,
@@ -845,7 +849,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 			blockedReasons.genuine = append(blockedReasons.genuine, evaluation.Reason)
 		}
 	}
-	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, runtimeAttemptTokens, verifyResult)
+	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, runtimeAttemptTokens, verifyResult, reviewDisabled)
 	remediationRequired := staleAllowAuthority == nil && !staleEvidenceUnmanaged && !runtimeRemediationComplete && artifacts["verifyReport"] == ArtifactDone && !verifyResult.Passing && applyState == ApplyAllDone
 	var compactRemediation *reviewtransaction.CompactState
 	if !reviewDisabled {
@@ -868,10 +872,13 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	}
 	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyResult.Passing, remediationState.Complete)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, artifacts["verifyReport"] == ArtifactDone, remediationState)
-	if staleAllowAuthority != nil || staleEvidenceUnmanaged {
+	if staleAllowAuthority != nil || staleEvidenceUnmanaged || (reviewDisabled && runtimeRemediationComplete) {
 		dependencies.Verify = DependencyReady
 		dependencies.Archive = DependencyBlocked
 		nextRecommended = "verify"
+		if runtimeRemediationComplete {
+			remediationState = RemediationState{}
+		}
 	}
 	var boundGate *ReviewGateState
 	if !reviewDisabled && governingRef != nil {
@@ -1762,12 +1769,20 @@ func renderPhaseInstructions(status Status) PhaseInstructions {
 
 func nativeRuntimeInstructions(status Status, change string) []string {
 	workspace := status.ActionContext.WorkspaceRoot
-	return append([]string{
+	instructions := []string{
 		fmt.Sprintf("Before any runtime-bearing apply, verify, or remediation launch, run `gentle-ai sdd-attempt acquire --cwd %q --change %q --request-id \"<unique-request-id>\" --work-unit \"<label>\" --evidence-goal \"<stable-goal>\" --max-attempts <count> --max-changed-lines <count>`.", workspace, change),
 		"Launch only for state proceed and retain its opaque token. State blocked or complete stops the launch; full runtime status is a diagnostic escape hatch, not normal model context.",
 		fmt.Sprintf("After the external run, call `gentle-ai sdd-attempt settle --cwd %q --change %q --token \"<acquire-token>\" --request-id \"<unique-request-id>\" --outcome <passed|failed|interrupted> --evidence-revision <sha256> --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<evidence>\" --process-evidence \"<evidence>\"`; add --successor-lineage only for a distinct approved remediation successor.", workspace, change),
 		"Treat settle state proceed as permission for another bounded acquire, blocked as a hard stop, and complete as terminal. Reset is exceptional, requires an explicit maintainer scope decision, and is never automatic.",
-	}, liveRuntimeAttemptInstructions(status)...)
+	}
+	if status.RemediationState.Required && status.RemediationState.LineageID == "" && status.RuntimeStatus != nil && status.RuntimeStatus.Objective != nil {
+		objective := status.RuntimeStatus.Objective
+		instructions = append(instructions,
+			fmt.Sprintf("Disabled/unmanaged remediation has one bounded correction attempt: run `gentle-ai sdd-attempt acquire --cwd %q --change %q --request-id \"<unique-request-id>\" --work-unit %q --evidence-goal %q --max-attempts %d --max-changed-lines %d`.", workspace, change, objective.WorkUnit, objective.EvidenceGoal, objective.MaxAttempts, objective.MaxChangedLines),
+			fmt.Sprintf("After the candidate changes, settle that token with `--remediates-evidence-revision %s`; a fresh independent verification is required before archive.", status.RemediationState.FailedEvidenceRevision),
+		)
+	}
+	return append(instructions, liveRuntimeAttemptInstructions(status)...)
 }
 
 // liveRuntimeAttemptInstructions names the continuation for an attempt that is
