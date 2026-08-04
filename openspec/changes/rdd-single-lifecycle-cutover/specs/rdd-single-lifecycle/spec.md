@@ -20,3 +20,26 @@ branch, or legacy mutation path MUST remain reachable.
 - WHEN any `start` is requested, or the codebase is searched for the switch
 - THEN it always proceeds through v3, and zero switch references remain
   outside historical/archived change specs
+
+## MODIFIED Requirements
+
+### Requirement: Byte-Equivalence Exit Evidence Precedes Switch Removal
+
+Before the switch and its legacy start branch are deleted, the wave MUST
+prove a `GENTLE_AI_RDD_NEW_LINEAGE=1` build and a switch-free build produce
+byte-identical goldens, envelopes, and receipts, via same-fixture on/off
+double-evaluation across the full journey set. A golden diff during this
+proof MUST be treated as a defect signal, never a golden-update task.
+
+This requirement itself is unchanged from Wave 7's spec (see that change's
+own copy for the full text and Wave 7's own partial, scoped evidence). Only
+its full-journey-set scenario moves here, byte-identical (verify finding
+SL-1) — it can only be run by whichever change actually performs the
+switch-free build, which Wave 7's deferral means is this change, not Wave
+7 itself.
+
+#### Scenario: Double-evaluation proves equivalence before deletion
+
+- GIVEN the same fixture run once with the switch on and once switch-free
+- WHEN goldens, envelopes, and receipts are compared
+- THEN they are byte-identical, and only then does removal proceed
