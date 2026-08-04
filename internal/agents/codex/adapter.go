@@ -65,10 +65,6 @@ func (a *Adapter) CapabilityManifest() capabilitymanifest.AgentCapabilityManifes
 	return capabilitymanifest.MustForAgent(model.AgentCodex)
 }
 
-func (a *Adapter) SupportsAutoInstall() bool {
-	return a.CapabilityManifest().Features.AutoInstall
-}
-
 // InstallCommand returns the display-only command shown when Codex is not
 // detected — gentle-ai never executes this (see agentInstallStep in
 // internal/cli/run.go). Codex CLI installs via npm on all platforms;

@@ -224,10 +224,6 @@ func TestCapabilities(t *testing.T) {
 		t.Fatal("SupportsSkills() = false, want true")
 	}
 
-	if got := a.SupportsAutoInstall(); !got {
-		t.Fatal("SupportsAutoInstall() = false, want true")
-	}
-
 	if got := a.SupportsSlashCommands(); got {
 		t.Fatal("SupportsSlashCommands() = true, want false")
 	}
