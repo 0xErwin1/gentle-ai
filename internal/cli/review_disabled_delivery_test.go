@@ -718,10 +718,16 @@ func TestReviewValidateStaleAndPluralStaleReceiptsFailClosedWhileEnabled(t *test
 // finalizeFacadeReviewForRepo runs one complete reviewed flow over the live
 // candidate: start with the given extra arguments, submit one clean result per
 // selected lens, and finalize to a terminal receipt.
+//
+// Uses runLegacyFacadeStartForTest (Wave 7 S7/WU18), not RunReviewFacadeStart
+// directly: every caller of this helper needs genuine legacy (compact-v2)
+// authority (proven by pervasive reviewtransaction.CompactAuthoritativeStore/
+// CompactAuthorityLeaves follow-up reads across its 6 call sites), which the
+// CLI's own `review start` can no longer create now that v3 is unconditional.
 func finalizeFacadeReviewForRepo(t *testing.T, repo string, startExtra ...string) {
 	t.Helper()
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart(append([]string{"--cwd", repo}, startExtra...), &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, append([]string{"--cwd", repo}, startExtra...), &output); err != nil {
 		t.Fatalf("start facade review: %v\n%s", err, output.String())
 	}
 	var started ReviewFacadeStartResult
