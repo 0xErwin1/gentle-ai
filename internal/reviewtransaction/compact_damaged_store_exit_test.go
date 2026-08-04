@@ -1,27 +1,26 @@
 package reviewtransaction
 
-// The damaged-store friction benchmark (bench/journeys ds01–ds05) measured
-// four refusals that stop the operator without naming what actually clears the
-// block, plus one continuation that names an operation which then cannot even
-// load its target. These tests pin the honest replacements:
+// The damaged-store friction benchmark (bench/journeys ds01-ds05) measured
+// four refusals that stop the operator without naming what actually clears
+// the block. These tests pin the honest replacements:
 //
 //   - `review reclaim` on an entry holding authority names the operation that
-//     admits THAT entry's shape — reconcile for a reconcilable anomaly class,
-//     abandon for a pristine entry the abandonment gate's own prediction
-//     accepts — and, when nothing admits it, says so precisely and names the
-//     machine-readable diagnosis instead of a command that would then refuse.
-//   - `review reconcile-authority` on a half-written record refuses with the
-//     inspection's own classification (malformed_compact_state) rather than
-//     dying on the JSON decoder's `unexpected EOF`.
+//     admits THAT entry's shape — abandon for a pristine entry the
+//     abandonment gate's own prediction accepts — and, when nothing admits
+//     it, says so precisely and names the machine-readable diagnosis instead
+//     of a command that would then refuse. (Reconciliation used to also be a
+//     possible named continuation here; the `review reconcile-authority`
+//     verb and its provider retired in Wave 7 S3a/S3b, so reclaim's own
+//     refusal for a reconcilable-shaped edge now falls through to the same
+//     abandon-or-Blocked logic every other shape uses.)
 //   - `review start` over an invalid authority graph names the sanctioned exit
-//     the read-only inspection proves, exactly as the reconcile refusal
-//     already does, instead of stopping at the bare graph violation.
+//     the read-only inspection proves, instead of stopping at the bare graph
+//     violation.
 //
 // Every named continuation is then DRIVEN, so a future refusal whose named
 // command dead-ends fails here, not in the field.
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -86,59 +85,16 @@ func requireAuthoritativeInventory(t *testing.T, repo string) {
 	}
 }
 
-// TestReconcileRefusesUnreadableSuccessorWithDiagnosis pins the ds05 shape:
-// the operation the reclaim refusal names for an invalid recovery successor
-// answered `load reconcile successor: unexpected EOF` for a record truncated
-// mid-write — the continuation named for the case could not load the case. A
-// decoder error is never an operator-facing answer. Reconciliation cannot
-// admit an unreadable record — its whole design re-derives proof from readable
-// state, and admitting bytes that prove nothing is a maintainer policy
-// decision — so the refusal must say exactly that, carry the inspection's own
-// classification, and name the diagnosis to capture.
-func TestReconcileRefusesUnreadableSuccessorWithDiagnosis(t *testing.T) {
-	ctx := context.Background()
-	repo := initSnapshotRepo(t)
-	predecessor, successor, successorStore := forgedRecoveryPair(t, repo, "halved", "half-written target\n")
-	truncated := truncateCompactStateFile(t, successorStore)
-
-	_, err := ReconcileInvalidRecoveryEdge(ctx, repo, forgedReconcileRequest(predecessor, successor))
-	if err == nil {
-		t.Fatal("reconcile admitted an unreadable successor record")
-	}
-	refusal := err.Error()
-	if strings.HasPrefix(refusal, "load reconcile successor:") {
-		t.Fatalf("a bare decoder error is not an operator-facing answer: %q", refusal)
-	}
-	for _, want := range []string{
-		"malformed_compact_state",
-		"maintainer policy decision",
-		"gentle-ai review inspect-authority",
-	} {
-		if !strings.Contains(refusal, want) {
-			t.Fatalf("reconcile refusal does not carry %q:\n%s", want, refusal)
-		}
-	}
-
-	// The refusal mutated nothing: the truncated bytes stay exactly as found.
-	after, err := os.ReadFile(successorStore.StatePath())
-	if err != nil || !bytes.Equal(after, truncated) {
-		t.Fatalf("refused reconcile mutated the unreadable record: %v", err)
-	}
-
-	// The named diagnosis answers: inspection classifies the entry exactly as
-	// the refusal claimed.
-	report, err := InspectCompactRecoveryEdges(ctx, repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if report.Complete || report.Totals.EntryDiagnostics != 1 {
-		t.Fatalf("inspection does not report the unreadable entry: %#v", report.Totals)
-	}
-	diagnostic := report.EntryDiagnostics[0]
-	if diagnostic.LineageID != successor.State.LineageID || diagnostic.Problem != "malformed_compact_state" {
-		t.Fatalf("inspection diagnostic = %#v", diagnostic)
-	}
-}
+// TestReconcileRefusesUnreadableSuccessorWithDiagnosis used to pin the ds05
+// shape directly against ReconcileInvalidRecoveryEdge: an unreadable
+// successor record answered a bare decoder error rather than the
+// inspection's own classification. Wave 7 S3b retired that provider (its
+// verb, `review reconcile-authority`, retired one slice earlier in S3a) --
+// the identical shape is already covered, end to end, by
+// TestReclaimRefusalNamesTheOperationThatAdmitsTheShape's own "unreadable
+// record" subtest below, which drives `review reclaim`'s refusal (the
+// retained, live surface) over the same truncated-record fixture and proves
+// the same inspection classification.
 
 // TestReclaimRefusalNamesTheOperationThatAdmitsTheShape pins the reclaim →
 // reconcile circle the benchmark measured. reclaim refused every
