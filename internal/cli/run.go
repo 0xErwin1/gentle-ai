@@ -440,7 +440,9 @@ func goInstallBinDir() string {
 
 func defaultGoEnv(keys ...string) (map[string]string, error) {
 	args := append([]string{"env"}, keys...)
-	out, err := exec.Command("go", args...).Output()
+	cmd := exec.Command("go", args...)
+	system.EnsureCommandDir(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}
@@ -1730,6 +1732,7 @@ func runCommandSequence(commands [][]string) error {
 
 func executeCommand(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
+	system.EnsureCommandDir(cmd)
 
 	if streamCommandOutput {
 		cmd.Stdout = os.Stdout
