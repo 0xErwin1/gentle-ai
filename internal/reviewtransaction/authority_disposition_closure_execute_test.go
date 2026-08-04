@@ -69,6 +69,25 @@ func twoNodeClosureFixture(t *testing.T, repo, suffix string) (AuthorityDisposit
 	return plan, child
 }
 
+// threeNodeClosureFixture builds a real, closed-classified 3-node closure:
+// predecessor -(forged, invalid)-> seed -(valid)-> child -(valid)-> grandchild.
+// Returns the derived, authorized plan and the child/grandchild records for
+// direct store-path assertions. Reused by Slice S3's resume and
+// crash-position-matrix tests, which need >=3 nodes to distinguish "resumed
+// mid-closure" from "resumed at the last non-seed position".
+func threeNodeClosureFixture(t *testing.T, repo, suffix string) (plan AuthorityDispositionPlan, child, grandchild CompactRecord) {
+	t.Helper()
+	_, seed, _ := forgedRecoveryPair(t, repo, suffix, "three-node closure target "+suffix+"\n")
+	child = forgedRecoveryDescendant(t, repo, seed, suffix+"-child")
+	grandchild = forgedRecoveryDescendant(t, repo, child, suffix+"-grandchild")
+	plan = authorizedPlanFixture(t, repo, "maintainer@example.com", "quarantine forged recovery authorization closure")
+	want := []string{grandchild.State.LineageID, child.State.LineageID, seed.State.LineageID}
+	if !reflectStringSliceEqual(plan.Closure, want) {
+		t.Fatalf("fixture did not derive the expected 3-node descendant-first closure: got %v, want %v", plan.Closure, want)
+	}
+	return plan, child, grandchild
+}
+
 // TestAuthorityDispositionExecuteOrderedTransactionFollowsClosureOrder is the
 // order-inversion mutation proof tasks.md 2.2 requires: a 3-node closure
 // (grandchild -> child -> seed) is executed, and the exact sequence of
