@@ -498,7 +498,7 @@ type runtimeReplay struct {
 
 func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, error) {
 	if !validReviewBindingChange(change) {
-		return RuntimeStore{}, errors.New("invalid SDD change name")
+		return RuntimeStore{}, fmt.Errorf("invalid SDD change name %q; want letters, digits, and single hyphens or underscores between them, at most 96 characters; run `gentle-ai sdd-status --cwd <repo> --json` to read the resolved changeName", change)
 	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
 	if err != nil {
@@ -517,8 +517,40 @@ func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, e
 		return RuntimeStore{}, err
 	}
 	commonDir := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(probe.Dir))))
-	dir := filepath.Join(commonDir, "gentle-ai", "sdd-runtime", "v1", change)
+	dir := runtimeChangeLedgerDir(filepath.Join(commonDir, "gentle-ai", "sdd-runtime"), change)
 	return RuntimeStore{Dir: dir, Repo: root, Workspace: workspace, Change: change, commonDir: commonDir}, nil
+}
+
+// encodedRuntimeChangeNamespace holds identities that cannot be a directory
+// name verbatim. A leading underscore is unreachable for a legacy identity, so
+// the namespace can never collide with a kebab-case change's own ledger.
+const encodedRuntimeChangeNamespace = "_encoded"
+
+// runtimeChangeLedgerDir derives the ledger directory for a change identity.
+//
+// A legacy kebab-case identity keeps its exact v1/<change> directory, so every
+// attempt chain written by an earlier version stays reachable. Anything else is
+// encoded, because the directory name alone cannot carry the identity: on a
+// case-insensitive filesystem "DEC-X" and "dec-x" would share one directory and
+// silently merge two unrelated attempt chains. Lowercasing makes the path
+// stable across those filesystems and the digest of the verbatim identity keeps
+// the case variants apart.
+//
+// The suffix keeps 128 bits rather than the whole digest. Every identity that
+// shares a lowercased form differs only in case, so a name with k letters has
+// 2^k variants to search: at 64 bits a birthday collision costs about 2^32
+// candidates, which is reachable, while 128 bits puts it at 2^64. The remaining
+// half is dropped because the leaf must stay addressable on Windows, where an
+// identity at the 96-character limit plus a full 64-character digest crowds the
+// 260-character path ceiling that this issue's original reporter was hitting.
+const encodedRuntimeChangeDigestWidth = 32
+
+func runtimeChangeLedgerDir(base, change string) string {
+	if legacyRuntimeChangeDir(change) {
+		return filepath.Join(base, "v1", change)
+	}
+	digest := strings.TrimPrefix(runtimeValueHash("gentle-ai.sdd-runtime-change-identity/v1", change), "sha256:")
+	return filepath.Join(base, "v1", encodedRuntimeChangeNamespace, strings.ToLower(change)+"-"+digest[:encodedRuntimeChangeDigestWidth])
 }
 
 func (store RuntimeStore) Status() (RuntimeStatus, error) {
