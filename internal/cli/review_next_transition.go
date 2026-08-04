@@ -614,11 +614,16 @@ func reviewDispositionTransition(status ReviewTargetStatusResult, input reviewNe
 			// matrix: emitted tokens carry no authorization bytes).
 			ReviewTransitionArgument{Name: "authorization", Value: "provided"},
 		)
+		// Every other "review.repair" execute transition carries a concrete
+		// lineage_id/revision binding (reviewRepairTransition's own
+		// candidate.LineageID/candidate.Revision) — the disposition plan's
+		// seed is the matching identity here (Wave 6 D7's status.Disposition
+		// carries it for exactly this reason).
 		return reviewExecuteTransition("disposition_authorized", "review.repair", arguments, []ReviewTransitionArgument{
 			{Name: "plan_digest", Value: disposition.PlanDigest},
 			{Name: "authority_inventory_revision", Value: disposition.AuthorityInventoryRevision},
 			{Name: "disposition_authorization", Value: "provided"},
-		}, ReviewTransitionBinding{TargetIdentity: status.TargetIdentity}, nil)
+		}, ReviewTransitionBinding{LineageID: disposition.SeedLineageID, Revision: disposition.SeedExpectedRevision, TargetIdentity: status.TargetIdentity}, nil)
 	}
 	return reviewCollectTransition("disposition_authorization_required", ReviewTransitionInput{
 		Name: "disposition_authorization", Schema: reviewtransaction.AuthorityDispositionAuthorizationSchema, CaptureOperation: "external.authorize_repair",

@@ -34,14 +34,23 @@ type ReviewRepairProviderInputs struct {
 }
 
 // ReviewRepairDispositionProviderInputs is the plan-bound preflight output
-// for Slice S3's leaf authority disposition wiring (tasks.md 3.1): only the
-// plan digest and the authority inventory revision it is bound to — nothing
-// a maintainer could not already derive read-only through
-// reviewtransaction.DeriveAuthorityDispositionPlanAtRepo, and nothing that
-// changes if the maintainer supplies no authorization.
+// for Slice S3's leaf authority disposition wiring (tasks.md 3.1): the plan
+// digest and the authority inventory revision it is bound to, plus (Wave 6)
+// the seed's own lineage_id/expected_revision — nothing a maintainer could
+// not already derive read-only through
+// reviewtransaction.DeriveAuthorityDispositionPlanAtRepo (plan.SeedSet[0] /
+// plan.ExpectedRevisions[plan.SeedSet[0]]), and nothing that changes if the
+// maintainer supplies no authorization. The seed identity is additive here
+// (Wave 6): the negotiated `review status --next-transition` route's
+// execute{review.repair} transition needs a concrete lineage/revision
+// binding, matching every other "review.repair" execute transition's shape
+// (rdd-closure-disposition-execution / "Reachable Through the Negotiated
+// Transition Route").
 type ReviewRepairDispositionProviderInputs struct {
 	PlanDigest                 string `json:"plan_digest"`
 	AuthorityInventoryRevision string `json:"authority_inventory_revision"`
+	SeedLineageID              string `json:"seed_lineage_id,omitempty"`
+	SeedExpectedRevision       string `json:"seed_expected_revision,omitempty"`
 }
 
 // ReviewRepairDispositionExecution is the safe, path-free projection of a
@@ -225,6 +234,17 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 		// "Closed Anomaly Classification Required for Derivation").
 		if plan, planErr := reviewtransaction.DeriveAuthorityDispositionPlanAtRepo(ctx, root, "", ""); planErr == nil {
 			if reviewtransaction.AdmitAuthorityDispositionClosure(plan) == nil {
+				// SeedLineageID/SeedExpectedRevision stay unset here
+				// (omitempty): `review repair --preflight` must never leak the
+				// lineage identity (TestReviewRepairPreflightSurfacesAuthorityDispositionPlanForEligibleLeaf's
+				// own byte-level assertion) — only PlanDigest and
+				// AuthorityInventoryRevision are published, the pre-existing
+				// Slice S3 contract. The negotiated `review status
+				// --next-transition` route below (review_facade.go) is a
+				// different publication surface with a different contract: an
+				// execute{review.repair} transition needs a concrete
+				// lineage_id/revision binding the way every other
+				// "review.repair" execute transition already carries one.
 				result.DispositionProviderInputs = &ReviewRepairDispositionProviderInputs{
 					PlanDigest: plan.PlanDigest, AuthorityInventoryRevision: plan.AuthorityInventoryRevision,
 				}
@@ -244,17 +264,14 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 				return reviewPreflightError(errors.New("review repair leaf authority disposition execution requires --plan-digest --inventory-revision --actor --reason --authorization; run `gentle-ai review repair --preflight` first to obtain --plan-digest and --inventory-revision"))
 			}
 		}
-		plan, err := reviewtransaction.DeriveAuthorityDispositionPlanAtRepo(ctx, root, *actor, *reason)
-		if err != nil {
-			return &reviewRepairOperationError{message: "review repair leaf authority disposition derivation failed safely", cause: err}
-		}
-		if err := reviewtransaction.AdmitAuthorityDispositionClosure(plan); err != nil {
-			return &reviewRepairOperationError{message: "review repair leaf authority disposition execution refused", cause: err}
-		}
-		if plan.PlanDigest != *planDigest || plan.AuthorityInventoryRevision != *inventoryRevision {
-			return reviewPreflightError(errors.New("review repair leaf authority disposition inputs do not match the current provider-derived plan; run `gentle-ai review repair --preflight` again for the current values"))
-		}
-		record, err := reviewtransaction.RepairAuthorityDisposition(ctx, root, *actor, *reason, *dispositionAuthorization)
+		// Wave 6: derivation, admission, and the plan_digest/inventory_revision
+		// match are now all RepairAuthorityDisposition's own decision — it
+		// knows to reconstruct an in-progress closure's original plan from an
+		// already-committed member's own proof (forward-only resume) rather
+		// than attempt a narrowing re-derivation, which a pre-check duplicating
+		// that logic here could not distinguish from a genuinely stale
+		// preflight value.
+		record, err := reviewtransaction.RepairAuthorityDisposition(ctx, root, *planDigest, *inventoryRevision, *actor, *reason, *dispositionAuthorization)
 		if err != nil {
 			return &reviewRepairOperationError{message: "review repair leaf authority disposition execution did not complete", cause: err}
 		}

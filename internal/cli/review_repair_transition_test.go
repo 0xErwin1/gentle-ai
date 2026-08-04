@@ -12,20 +12,31 @@ import (
 )
 
 // corruptedDispositionStatus builds a TargetApplicabilityCorrupted status
-// whose classified repair assessment is NOT eligible (the zero value —
-// Status == "" and Candidate == nil), but whose Disposition provider inputs
-// ARE populated, exactly as review_facade.go's status assembly would leave
-// it for a closed content-mismatched-recovery-authorization anomaly Wave 2's
-// classified vocabulary never covers (rdd-closure-disposition-execution's
-// whole reason for existing).
+// whose classified repair assessment is a real "unsupported" verdict (not
+// eligible — Status == AuthorityRepairUnsupported, Candidate == nil — the
+// actual non-eligible shape AssessAuthorityRepairAtRepositoryRoot returns
+// via UnsupportedAuthorityRepairAssessment(), not an empty zero value
+// review_facade.go never actually produces), but whose Disposition provider
+// inputs ARE populated, exactly as review_facade.go's status assembly would
+// leave it for a closed content-mismatched-recovery-authorization anomaly
+// Wave 2's classified vocabulary never covers (rdd-closure-disposition-
+// execution's whole reason for existing). This fixture feeds
+// newReviewNextTransition directly (this file's tests below never call
+// ReviewTargetStatusResult.Validate() on the surrounding envelope — that
+// full-envelope contract, including the execute transition's Binding.
+// LineageID/Revision requirement discovered while building
+// ds12-negotiated-transition-route, is exercised end-to-end by the real
+// `review status` CLI path and its bench journey instead).
 func corruptedDispositionStatus() ReviewTargetStatusResult {
 	return ReviewTargetStatusResult{
 		Applicability:  reviewtransaction.TargetApplicabilityCorrupted,
 		Action:         reviewtransaction.TargetStatusActionRepairAuthority,
 		Replayability:  reviewtransaction.ReplayabilityManualActionRequired,
 		TargetIdentity: "sha256:" + strings.Repeat("b", 64),
+		Repair:         reviewtransaction.UnsupportedAuthorityRepairAssessment(),
 		Disposition: &ReviewRepairDispositionProviderInputs{
 			PlanDigest: "sha256:" + strings.Repeat("d", 64), AuthorityInventoryRevision: "sha256:" + strings.Repeat("e", 64),
+			SeedLineageID: "review-damaged-closure-seed", SeedExpectedRevision: "sha256:" + strings.Repeat("f", 64),
 		},
 	}
 }
