@@ -3031,7 +3031,7 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 		return compactErr
 	}
 	evaluation := reviewtransaction.EvaluateLegacyGate(
-		ctx, root, chain, artifacts.receipt, live, strings.TrimSpace(gateInput.PolicyArtifact) != "", evidence, gateInput.Gate,
+		ctx, root, chain, artifacts.receipt, live, strings.TrimSpace(gateInput.PolicyArtifact) != "", evidence, gateInput,
 	)
 	return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
 }

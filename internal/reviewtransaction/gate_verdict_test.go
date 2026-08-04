@@ -18,11 +18,41 @@ var gateVerdictAllRelations = []CandidateRelation{
 	ShadowRelationChanged, ShadowRelationAmbiguous, ShadowRelationUnknown, ShadowRelationUnrelated,
 }
 
+// gateVerdictWantResultByRelation and gateVerdictWantReasonCodeByRelation are
+// the EXACT expected (GateResult, ReasonCode) per relation under a healthy
+// precondition context (CRITICAL-D, Wave 5 fix cycle 1, verify-report
+// #10186): before this fix, TestGateVerdict_TotalFunction_35Cells asserted
+// only that the result was one of the four known GateResult values and that
+// a non-allow carried SOME next step -- flipping provable_contraction,
+// unrelated, ambiguous, or unknown to GateAllow left this test (and every
+// other suite) green. These two tables pin gateVerdict's relation switch
+// (gate.go:1751-1774) by VALUE, not merely by shape, so a regression to
+// fail-open on any of the seven relations fails this test by name.
+var gateVerdictWantResultByRelation = map[CandidateRelation]GateResult{
+	ShadowRelationExact:                 GateAllow,
+	ShadowRelationCompatibleBaseAdvance: GateAllow,
+	ShadowRelationProvableContraction:   GateInvalidated,
+	ShadowRelationChanged:               GateInvalidated,
+	ShadowRelationUnrelated:             GateInvalidated,
+	ShadowRelationAmbiguous:             GateInvalidated,
+	ShadowRelationUnknown:               GateInvalidated,
+}
+
+var gateVerdictWantReasonCodeByRelation = map[CandidateRelation]string{
+	ShadowRelationExact:                 "allow",
+	ShadowRelationCompatibleBaseAdvance: "allow",
+	ShadowRelationProvableContraction:   "scope_contracted",
+	ShadowRelationChanged:               "candidate_changed",
+	ShadowRelationUnrelated:             "no_receipt",
+	ShadowRelationAmbiguous:             "authority_ambiguous",
+	ShadowRelationUnknown:               "target_unresolvable",
+}
+
 // TestGateVerdict_TotalFunction_35Cells is task 4.1: every one of the
-// 5 gates x 7 relations = 35 pairings must resolve to a defined
-// (GateResult, GateNextStep), and every denial (non-allow) must name either
-// an executable Transition or a ReasonCode -- never a bare denial with
-// neither.
+// 5 gates x 7 relations = 35 pairings must resolve to the EXACT expected
+// (GateResult, ReasonCode) pinned above -- not merely a defined shape -- and
+// every denial (non-allow) must name either an executable Transition or a
+// ReasonCode -- never a bare denial with neither.
 func TestGateVerdict_TotalFunction_35Cells(t *testing.T) {
 	// A "healthy" context: BaseRelationshipValid true and Release populated,
 	// so the totality sweep exercises the relation table itself, not the
@@ -39,10 +69,16 @@ func TestGateVerdict_TotalFunction_35Cells(t *testing.T) {
 			context := healthy
 			context.Gate = gate
 			result, next := gateVerdict(gate, relation, context)
-			switch result {
-			case GateAllow, GateScopeChanged, GateInvalidated, GateEscalated:
-			default:
-				t.Fatalf("gate %q relation %q resolved to unrecognized GateResult %q", gate, relation, result)
+			wantResult, ok := gateVerdictWantResultByRelation[relation]
+			if !ok {
+				t.Fatalf("relation %q has no pinned expected result; the 7-value CandidateRelation vocabulary and this table have drifted apart", relation)
+			}
+			if result != wantResult {
+				t.Fatalf("gate %q relation %q = %q, want the pinned %q (CRITICAL-D: this is the exact regression a fail-open flip must be caught by)", gate, relation, result, wantResult)
+			}
+			wantReasonCode := gateVerdictWantReasonCodeByRelation[relation]
+			if next.ReasonCode != wantReasonCode {
+				t.Fatalf("gate %q relation %q reason_code = %q, want the pinned %q", gate, relation, next.ReasonCode, wantReasonCode)
 			}
 			if result != GateAllow && next.Transition == "" && next.ReasonCode == "" {
 				t.Fatalf("gate %q relation %q denial carries neither a Transition nor a ReasonCode (bare denial)", gate, relation)
@@ -82,17 +118,26 @@ func TestGateVerdict_PerGatePreconditions_MatchLegacyValidateDerivedGate(t *test
 		}
 	})
 
-	t.Run("compatible_base_advance relation exempts the BaseRelationshipValid precondition", func(t *testing.T) {
+	t.Run("compatible_base_advance relation exempts the BaseRelationshipValid precondition at pre-PR only", func(t *testing.T) {
 		// Mirrors validateDerivedGate's own !compatibleAdvance exemption
-		// (receipt.go:304): a proven compatible base advance is exactly the
-		// case BaseRelationshipValid=false is EXPECTED to report, so the
-		// relation itself must still allow.
-		for _, gate := range []GateKind{GatePrePR, GateRelease} {
-			context := GateContext{Gate: gate, BaseRelationshipValid: false, Release: completeRelease}
-			result, _ := gateVerdict(gate, ShadowRelationCompatibleBaseAdvance, context)
-			if result != GateAllow {
-				t.Fatalf("gate %q denied a compatible_base_advance relation despite the exemption: %q", gate, result)
-			}
+		// (receipt.go:289, receipt.go:304): compatibleAdvance there is
+		// literally scoped `context.Gate == GatePrePR && ...` -- release is
+		// NOT exempted. W-3 (Wave 5 fix cycle 1, verify-report #10186):
+		// gateVerdict's own exemption previously fired for BOTH GatePrePR and
+		// GateRelease (the exemption's condition tested only the relation,
+		// never the gate), a latent fail-open that becomes real the moment
+		// release is evaluated through this function -- exactly what
+		// EvaluateLegacyGate's CRITICAL-B fix now does. A compatible base
+		// advance still allows at pre-PR (where the relation is derived and
+		// the exemption is scoped) and must DENY at release, matching
+		// validateDerivedGate exactly.
+		prePR := GateContext{Gate: GatePrePR, BaseRelationshipValid: false, Release: completeRelease}
+		if result, _ := gateVerdict(GatePrePR, ShadowRelationCompatibleBaseAdvance, prePR); result != GateAllow {
+			t.Fatalf("pre-pr denied a compatible_base_advance relation despite the exemption: %q", result)
+		}
+		release := GateContext{Gate: GateRelease, BaseRelationshipValid: false, Release: completeRelease}
+		if result, _ := gateVerdict(GateRelease, ShadowRelationCompatibleBaseAdvance, release); result == GateAllow {
+			t.Fatal("release allowed a compatible_base_advance relation with BaseRelationshipValid=false; validateDerivedGate scopes this exemption to pre-PR only (receipt.go:289)")
 		}
 	})
 
