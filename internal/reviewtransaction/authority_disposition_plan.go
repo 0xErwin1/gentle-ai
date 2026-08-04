@@ -274,15 +274,30 @@ func authorityDispositionAuthorizationBinding(plan AuthorityDispositionPlan) str
 }
 
 // validateAuthorityDispositionAuthorization proves an authorized plan's
-// Authorization binds to its own plan_digest AND the CURRENT
-// authority_inventory_revision. No elapsed-time expiry check exists anywhere
-// in this function or its caller — CAS on ExpectedRevisions (Slice S2) plus
-// this revision comparison is the entire staleness guard (rdd-authority-
-// disposition-plan / "Authorization Binds to Digest and Revision, No
-// Wall-Clock Expiry", pending-confirmation assumption 1).
-func validateAuthorityDispositionAuthorization(plan AuthorityDispositionPlan, currentAuthorityInventoryRevision string) error {
-	if plan.AuthorityInventoryRevision != currentAuthorityInventoryRevision {
-		return fmt.Errorf("%w: authority inventory revision drifted from %q to %q", ErrConcurrentUpdate, plan.AuthorityInventoryRevision, currentAuthorityInventoryRevision)
+// Authorization binds to its own plan_digest AND the
+// authority_inventory_revision named by callerAuthorityInventoryRevision.
+//
+// Fix cycle 2 (WARNING-2, sdd-verify cycle-2): callerAuthorityInventoryRevision
+// is NOT always the live, freshly re-derived revision — its meaning is
+// caller-supplied and depends on the execution path. On a FRESH execution
+// (lockedAuthorityDispositionMutation, authority_disposition_execute.go) the
+// caller passes the just-re-derived current revision, so this genuinely
+// checks the plan against the live store. On a RESUME the caller passes
+// plan.AuthorityInventoryRevision — the plan's own FROZEN value, compared to
+// itself — which makes the drift half of this check a deliberate no-op
+// (a narrowing re-derivation mid-closure is exactly what forward-only resume
+// forbids); CAS-all-N is the live guard for the members a resume actually
+// disposes. Only the binding half (Authorization matching its own frozen
+// plan_digest/inventory_revision) is unconditional on every path — which is
+// what makes a forged or mismatched Authorization refuse regardless of
+// fresh-vs-resume. No elapsed-time expiry check exists anywhere in this
+// function or its caller — CAS on ExpectedRevisions (Slice S2) plus the
+// drift comparison (on the paths where it is live) is the entire staleness
+// guard (rdd-authority-disposition-plan / "Authorization Binds to Digest and
+// Revision, No Wall-Clock Expiry", pending-confirmation assumption 1).
+func validateAuthorityDispositionAuthorization(plan AuthorityDispositionPlan, callerAuthorityInventoryRevision string) error {
+	if plan.AuthorityInventoryRevision != callerAuthorityInventoryRevision {
+		return fmt.Errorf("%w: authority inventory revision drifted from %q to %q", ErrConcurrentUpdate, plan.AuthorityInventoryRevision, callerAuthorityInventoryRevision)
 	}
 	if plan.Authorization != authorityDispositionAuthorizationBinding(plan) {
 		// refusal:by-design human-authority: only a maintainer can supply a correct authorization binding; there is no command that fixes a forged one

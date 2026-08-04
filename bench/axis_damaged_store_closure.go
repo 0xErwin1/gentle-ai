@@ -3,12 +3,11 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
-	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -337,156 +336,6 @@ func reviewTransactionsBase(sandbox *Sandbox) (string, error) {
 	return filepath.Join(common, "gentle-ai", "review-transactions"), nil
 }
 
-// authorCommittedClosureMemberQuarantine directly authors the on-disk state
-// production's own quarantineCompactStoreEntry leaves behind for one
-// COMMITTED closure member — a real crash-position fixture, matching this
-// axis's established convention for states the CLI cannot reach (no live
-// process can be interrupted from a separate, black-box test binary). It
-// moves lineage's whole v2/ entry into quarantine/<lineage>-crash/residue/
-// and writes a reclaim-record.json byte-structurally identical to
-// reviewtransaction.CompactReclaimRecord/AuthorityDispositionProof's own
-// JSON shape, so discoverAuthorityDispositionRecord (which only compares
-// LineageID and AuthorityDisposition.PlanDigest) accepts it as already
-// committed on the very next `review repair` invocation.
-func authorCommittedClosureMemberQuarantine(sandbox *Sandbox, lineage, planDigest, inventoryRevision, authorization string, closure []string, expectedRevisions map[string]string) error {
-	base, err := reviewTransactionsBase(sandbox)
-	if err != nil {
-		return err
-	}
-	sourceDir := filepath.Join(base, "v2", lineage)
-	items, err := os.ReadDir(sourceDir)
-	if err != nil {
-		return fmt.Errorf("read closure member %q before authoring its crash-position quarantine: %w", lineage, err)
-	}
-	residue := make([]string, 0, len(items))
-	for _, item := range items {
-		residue = append(residue, item.Name())
-	}
-
-	quarantineDir := filepath.Join(base, "quarantine", lineage+"-crash")
-	if err := os.MkdirAll(quarantineDir, 0o755); err != nil {
-		return err
-	}
-	if err := os.Rename(sourceDir, filepath.Join(quarantineDir, "residue")); err != nil {
-		return fmt.Errorf("author crash-position quarantine for %q: %w", lineage, err)
-	}
-
-	sum := sha256.Sum256([]byte(authorization))
-	authorizationSHA256 := "sha256:" + hex.EncodeToString(sum[:])
-
-	record := map[string]any{
-		"schema":          "gentle-ai.review-reclaim-record/v1",
-		"status":          "committed",
-		"lineage_id":      lineage,
-		"reason":          "bench-authored crash-position fixture (ds11)",
-		"actor":           "bench",
-		"reclaimed_at":    time.Now().UTC().Format(time.RFC3339Nano),
-		"source_path":     sourceDir,
-		"quarantine_path": quarantineDir,
-		"residue":         residue,
-		"authority_disposition": map[string]any{
-			"schema":                       "gentle-ai.review-authority-disposition-proof/v1",
-			"plan_digest":                  planDigest,
-			"authority_inventory_revision": inventoryRevision,
-			"anomaly_class":                contentMismatchedRecoveryAuthorizationClass,
-			"ordered_seed_set":             []string{closureSeedLineage},
-			"ordered_closure":              closure,
-			"expected_revisions":           expectedRevisions,
-			"authorization_sha256":         authorizationSHA256,
-		},
-	}
-	payload, err := json.MarshalIndent(record, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(quarantineDir, "reclaim-record.json"), append(payload, '\n'), 0o644)
-}
-
-// closureExpectedRevisions publishes the closure's ExpectedRevisions map —
-// the current revision of every closure member, exactly what a real
-// AuthorityDispositionPlan derivation would bind — which ds11 needs to
-// author a structurally faithful crash-position quarantine record.
-func closureExpectedRevisions(sandbox *Sandbox) (map[string]string, error) {
-	seedRevision, err := scratchValue(sandbox, scratchClosureSeedRevision)
-	if err != nil {
-		return nil, err
-	}
-	childRevision, err := scratchValue(sandbox, scratchClosureChildRevision)
-	if err != nil {
-		return nil, err
-	}
-	grandchildRevision, err := scratchValue(sandbox, scratchClosureGrandchildRevision)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]string{
-		closureSeedLineage:       seedRevision,
-		closureChildLineage:      childRevision,
-		closureGrandchildLineage: grandchildRevision,
-	}, nil
-}
-
-// closureOrderedClosure is the fixture's real closure order: descendant
-// first (deepest — the grandchild), seed last (rdd-authority-disposition-plan
-// / "Deterministic Closure Derivation From the Graph Source of Record").
-var closureOrderedClosure = []string{closureGrandchildLineage, closureChildLineage, closureSeedLineage}
-
-// authorCrashAfterFirstDescendantCommitted is ds11's fixture-extension step:
-// after `review repair --preflight` publishes the real plan digest and
-// inventory revision, it authors the grandchild (the first, deepest closure
-// member in descendant-first order) as already committed — a real
-// interruption right after the first node of a 3-node closure, the exact
-// position internal/reviewtransaction's
-// TestAuthorityDispositionResumeCrashPositionMatrix proves converges at the
-// unit level; this is that proof's journey-level twin, driven through the
-// real binary.
-func authorCrashAfterFirstDescendantCommitted(sandbox *Sandbox) error {
-	planDigest, err := scratchValue(sandbox, scratchDispositionPlanDigest)
-	if err != nil {
-		return err
-	}
-	inventoryRevision, err := scratchValue(sandbox, scratchDispositionInventoryRevision)
-	if err != nil {
-		return err
-	}
-	binding, err := dispositionRepositoryBinding(sandbox)
-	if err != nil {
-		return err
-	}
-	const actor, reason = "bench", "quarantine the multi-hop closure"
-	authorization := dispositionAuthorization(binding, planDigest, inventoryRevision, actor, reason)
-	expectedRevisions, err := closureExpectedRevisions(sandbox)
-	if err != nil {
-		return err
-	}
-	return authorCommittedClosureMemberQuarantine(sandbox, closureGrandchildLineage, planDigest, inventoryRevision, authorization, closureOrderedClosure, expectedRevisions)
-}
-
-// requireClosureMemberAlreadyQuarantined proves the crash-position fixture
-// really did author what it claims: exactly one quarantine directory for
-// the named lineage exists before the resume step runs, so a subsequent
-// double-move (not a skip) would be visible as two.
-func requireClosureMemberAlreadyQuarantined(sandbox *Sandbox, lineage string) error {
-	base, err := reviewTransactionsBase(sandbox)
-	if err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(filepath.Join(base, "quarantine"))
-	if err != nil {
-		return err
-	}
-	count := 0
-	for _, entry := range entries {
-		if entry.IsDir() && strings.HasPrefix(entry.Name(), lineage+"-") {
-			count++
-		}
-	}
-	if count != 1 {
-		return fmt.Errorf("expected exactly one quarantine directory for %q before resume, found %d", lineage, count)
-	}
-	return nil
-}
-
 // requireForgedResumeMovedNothingFurther is fix cycle 1's CRITICAL-1
 // (security) journey-level mutation proof: a forged-authorization resume
 // attempt against an in-progress closure must refuse through the real
@@ -559,10 +408,284 @@ func requireNoDoubleMoveAcrossClosure(r *journeyRun) error {
 	return nil
 }
 
+// ---------------------------------------------------------------------------
+// Wave 6 fix cycle 2: ds11 genuine crash-position coverage
+// ---------------------------------------------------------------------------
+//
+// Fix cycle 1 shipped ds11 as a SINGLE journey that authored the crash state
+// directly on disk (this axis's established "fixtures author
+// review-state.json directly" convention) rather than genuinely interrupting
+// a live process, and covered only one of the six ordered positions
+// internal/reviewtransaction's own TestAuthorityDispositionResumeCrashPositionMatrix
+// proves in-process. sdd-verify's cycle-2 WARNING named this as the wave's
+// last open gap: the spec's "interrupt at each ordered position" is
+// load-bearing at the journey layer specifically because this wave's S5
+// found a real public-entrypoint defect Go-level tests structurally could
+// not see (RepairAuthorityDisposition's own re-derivation, not
+// executeAuthorityDisposition's internal resume logic) — so a journey that
+// only authors state, or only covers one position, cannot rule out the same
+// class of gap recurring at a position it never reaches.
+//
+// This is resolved by reusing the EXACT deterministic phase-hook
+// interruption the Go matrix uses (compactReclaimPhaseHook), made reachable
+// through the real binary via a build-tag-gated product hook
+// (internal/reviewtransaction/bench_fixture.go, `-tags bench_fixture`,
+// mirroring internal/sddstatus/bench_fixture.go's own established pattern
+// for j57): GENTLE_AI_BENCH_CRASH_AT_PHASE names the exact "<phase>:<lineage>"
+// pair to refuse right after, a genuine interruption of the real command
+// with nothing after that point in the SAME process ever executing — not an
+// authored on-disk state. Six journeys are generated, one per (phase,
+// closure member) pair, each proving: the crash-inducing attempt genuinely
+// refuses through the real binary; the resumed attempt then converges with
+// no double move; and every closure member's quarantined residue bytes are
+// byte-identical to that SAME member's own pre-disposition store bytes —
+// the ground truth an uninterrupted run would also have to reproduce, since
+// disposition only ever moves bytes, never rewrites them.
+
+// crashPositionRole names one of the 3-node closure's members a
+// crash-position journey can target.
+type crashPositionRole struct {
+	label   string
+	lineage string
+}
+
+var crashPositionRoles = []crashPositionRole{
+	{"grandchild", closureGrandchildLineage},
+	{"child", closureChildLineage},
+	{"seed", closureSeedLineage},
+}
+
+// crashPositionPhases reproduces, as plain strings, internal/reviewtransaction's
+// own compactReclaimPhasePrepared / compactReclaimPhaseCommitted literals
+// ("prepared" / "committed") — this package cannot import them, and
+// GENTLE_AI_BENCH_CRASH_AT_PHASE's own contract (bench_fixture.go) is
+// exactly these two literal values.
+var crashPositionPhases = []string{"prepared", "committed"}
+
+const benchFixtureCrashMarker = "bench_fixture: deterministic crash injected"
+
+// crashInjectedDispositionRepairArgs sets the sandbox's crash trigger for
+// exactly this one invocation (Sandbox.env reads it fresh per invoke) before
+// delegating to dispositionRepairArgs for the actual argv.
+func crashInjectedDispositionRepairArgs(phase, lineage, reason string) func(*Sandbox) ([]string, error) {
+	inner := dispositionRepairArgs(reason)
+	return func(sandbox *Sandbox) ([]string, error) {
+		sandbox.BenchCrashAtPhase = phase + ":" + lineage
+		return inner(sandbox)
+	}
+}
+
+// clearedCrashDispositionRepairArgs clears any crash trigger left set by a
+// prior step before the resume attempt, which must run to completion.
+func clearedCrashDispositionRepairArgs(reason string) func(*Sandbox) ([]string, error) {
+	inner := dispositionRepairArgs(reason)
+	return func(sandbox *Sandbox) ([]string, error) {
+		sandbox.BenchCrashAtPhase = ""
+		return inner(sandbox)
+	}
+}
+
+// requireGenuineBenchFixtureCrash is the crash-inducing step's After check.
+// A nonzero exit alone is not enough — the executor also refuses for
+// entirely unrelated, real reasons — so this requires the exact
+// bench_fixture.go marker text, proof the interruption is the deterministic
+// one this journey asked for. A binary without the bench_fixture build tag
+// never links that hook, so GENTLE_AI_BENCH_CRASH_AT_PHASE has no effect and
+// the disposition simply completes (exit 0) instead: that specific shape
+// reports the journey unsupported rather than failed, mirroring j57's own
+// graceful degradation when its equivalent build-tag seam is absent
+// (axis_source_coupled.go).
+func requireGenuineBenchFixtureCrash(_ *Sandbox, observation Observation) error {
+	if observation.ExitCode != 0 && strings.Contains(observation.Stderr, benchFixtureCrashMarker) {
+		return nil
+	}
+	if observation.ExitCode == 0 {
+		return errSourceCoupledFixtureUnavailable
+	}
+	return fmt.Errorf("crash-inducing repair attempt exited %d without the expected bench_fixture marker: %s", observation.ExitCode, observation.Stderr)
+}
+
+// canonicalStoreDirectoryDigest hashes every regular file directly under dir
+// (name and content both folded in, sorted by name) into one comparable
+// string — enough to catch any byte difference, anywhere in the directory,
+// without carrying every file's content through Sandbox.Scratch (a
+// map[string]string) by hand.
+func canonicalStoreDirectoryDigest(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Strings(names)
+	hash := sha256.New()
+	for _, name := range names {
+		payload, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			return "", err
+		}
+		hash.Write([]byte(name))
+		hash.Write([]byte{0})
+		hash.Write(payload)
+		hash.Write([]byte{0})
+	}
+	return "sha256:" + hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+const scratchCrashPositionSnapshotPrefix = "crashpos-snapshot/"
+
+// captureCrashPositionSnapshot records each closure member's PRE-disposition
+// store-directory digest — the ground truth its quarantined residue must
+// still equal, byte for byte, after a genuine interrupt-then-resume.
+func captureCrashPositionSnapshot(r *journeyRun) error {
+	for _, lineage := range closureMemberLineages {
+		dir, err := storeLineageDir(r.sandbox, lineage)
+		if err != nil {
+			return err
+		}
+		digest, err := canonicalStoreDirectoryDigest(dir)
+		if err != nil {
+			return fmt.Errorf("snapshot pre-disposition bytes for %q: %w", lineage, err)
+		}
+		r.sandbox.Scratch[scratchCrashPositionSnapshotPrefix+lineage] = digest
+	}
+	return nil
+}
+
+// crashPositionResidueDigest finds lineage's single post-disposition
+// quarantine directory and digests its residue/ subtree exactly like
+// canonicalStoreDirectoryDigest digests a live v2/ entry, so the two are
+// directly comparable.
+func crashPositionResidueDigest(base, lineage string) (string, error) {
+	entries, err := os.ReadDir(filepath.Join(base, "quarantine"))
+	if err != nil {
+		return "", err
+	}
+	var match string
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), lineage+"-") {
+			if match != "" {
+				return "", fmt.Errorf("closure member %q has more than one quarantine directory", lineage)
+			}
+			match = entry.Name()
+		}
+	}
+	if match == "" {
+		return "", fmt.Errorf("closure member %q has no quarantine directory", lineage)
+	}
+	return canonicalStoreDirectoryDigest(filepath.Join(base, "quarantine", match, "residue"))
+}
+
+// requireCrashPositionConvergedByteIdentical is the resumed run's
+// convergence proof: no double move (reusing requireNoDoubleMoveAcrossClosure),
+// every closure member's residue bytes exactly matching its own
+// pre-disposition snapshot, and a cleanly revalidating retained graph.
+func requireCrashPositionConvergedByteIdentical(r *journeyRun) error {
+	if err := requireNoDoubleMoveAcrossClosure(r); err != nil {
+		return err
+	}
+	base, err := reviewTransactionsBase(r.sandbox)
+	if err != nil {
+		return err
+	}
+	for _, lineage := range closureMemberLineages {
+		want, ok := r.sandbox.Scratch[scratchCrashPositionSnapshotPrefix+lineage]
+		if !ok {
+			return fmt.Errorf("no pre-disposition snapshot recorded for %q", lineage)
+		}
+		got, err := crashPositionResidueDigest(base, lineage)
+		if err != nil {
+			return fmt.Errorf("residue digest for %q: %w", lineage, err)
+		}
+		if got != want {
+			return fmt.Errorf("closure member %q residue bytes do not match its own pre-disposition snapshot — resume did not converge byte-identically", lineage)
+		}
+	}
+	inspection, err := proveInspection(r.sandbox)
+	if err != nil {
+		return err
+	}
+	return requireRetainedGraphValid(inspection)
+}
+
+// crashRecoveryPositionJourney builds one genuine-interrupt-then-resume
+// journey for exactly one (phase, role) position. extraSteps, when given,
+// are inserted between the crash attempt and the resume attempt — used only
+// for the committed/grandchild position, which carries forward fix cycle 1's
+// forged-authorization-on-resume mutation proof (the position the
+// hand-authored ds11 originally covered).
+func crashRecoveryPositionJourney(phase string, role crashPositionRole, extraSteps ...Step) Journey {
+	steps := []Step{
+		{Name: "fixture: one damaged seed with a two-hop descendant chain, plus an unrelated witness lineage",
+			Fixture: multiHopClosureFixture},
+		{Name: "ask what review repair would do", Requires: repairPreflightCapability,
+			Args: productArgs("review", "repair", "--preflight=true"), After: requireDispositionPlanEligible},
+		{Name: "snapshot every closure member's pre-disposition store bytes",
+			Composite: captureCrashPositionSnapshot},
+		{Name: "genuinely interrupt right after " + role.label + "'s " + phase + " phase, through the real binary",
+			Requires: repairDispositionExecuteCapability,
+			Args:     crashInjectedDispositionRepairArgs(phase, role.lineage, "quarantine the multi-hop closure"),
+			After:    requireGenuineBenchFixtureCrash},
+	}
+	steps = append(steps, extraSteps...)
+	steps = append(steps,
+		Step{Name: "resume the interrupted closure with the identical plan", Requires: repairDispositionExecuteCapability,
+			Args: clearedCrashDispositionRepairArgs("quarantine the multi-hop closure"), After: requireDispositionQuarantineCommitted},
+		Step{Name: "every closure member converged byte-identically to its own pre-disposition bytes, with no double move, and the retained graph revalidates cleanly",
+			Composite: requireCrashPositionConvergedByteIdentical},
+	)
+	return Journey{
+		ID:     "ds11-crash-recovery-" + phase + "-" + role.label,
+		Title:  "A closure genuinely interrupted right after its " + role.label + "'s " + phase + " phase resumes byte-identically through the real binary",
+		Source: "rdd-root-simplification-wave6 fix cycle 2 (journey-level crash-position coverage, sdd-verify cycle-2 WARNING) — the real-binary twin of TestAuthorityDispositionResumeCrashPositionMatrix's " + phase + "/" + role.label + " case",
+		Steps:  steps,
+	}
+}
+
+// crashRecoveryPositionJourneys generates all 6 ordered positions
+// (prepared/committed x grandchild/child/seed) a 3-node closure has, mirroring
+// TestAuthorityDispositionResumeCrashPositionMatrix's own 2x3 table exactly.
+func crashRecoveryPositionJourneys() []Journey {
+	// Fix cycle 1 (CRITICAL-1, security): before Wave 6's fix,
+	// validateAuthorityDispositionAuthorization was gated inside a
+	// fresh-execution-only branch, so a real `review repair` call against
+	// an in-progress closure executed unauthorized regardless of what
+	// --authorization it was given. This step submits the CORRECT
+	// --plan-digest/--inventory-revision (so CAS and plan-match both pass)
+	// but an authorization bound to a repository identity that can never be
+	// the real one, mirroring ds08's N=1 forged-authorization journey — the
+	// N=3, mid-closure-resume twin. It belongs on the committed/grandchild
+	// position specifically: that is the exact state (grandchild's own
+	// two-phase move fully committed, nothing else touched) the original
+	// single-position ds11 built by hand before this fix cycle replaced it.
+	forgedAuthorizationSteps := []Step{
+		{Name: "attempt to resume with an authorization bound to the wrong repository — refused, nothing moves further", Requires: repairDispositionExecuteCapability,
+			Args: forgedDispositionRepairArgs("quarantine the multi-hop closure")},
+		{Name: "the forged-authorization resume attempt moved nothing beyond the pre-authored member",
+			Composite: requireForgedResumeMovedNothingFurther},
+	}
+
+	journeys := make([]Journey, 0, len(crashPositionPhases)*len(crashPositionRoles))
+	for _, phase := range crashPositionPhases {
+		for _, role := range crashPositionRoles {
+			if phase == "committed" && role.label == "grandchild" {
+				journeys = append(journeys, crashRecoveryPositionJourney(phase, role, forgedAuthorizationSteps...))
+				continue
+			}
+			journeys = append(journeys, crashRecoveryPositionJourney(phase, role))
+		}
+	}
+	return journeys
+}
+
 // closureDispositionJourneys returns Wave 6 Slice S5's exit-evidence
 // journeys (ds09-ds12), appended to the Wave 2 damaged-store corpus above.
 func closureDispositionJourneys() []Journey {
-	return []Journey{
+	journeys := []Journey{
 		{
 			ID:     "ds09-multi-chain-closure",
 			Title:  "A multi-hop closure — one damaged seed with a two-hop descendant chain — derives and disposes end-to-end",
@@ -616,62 +739,6 @@ func closureDispositionJourneys() []Journey {
 				{Name: "every closure member was quarantined, not only the seed", Composite: requireDispositionClosureFullyQuarantined},
 				{Name: "the unrelated witness lineage never moved", Composite: requireDispositionWitnessBytesUnchanged},
 				{Name: "the closure's own predecessor never moved either", Composite: requireUnrelatedPredecessorByteIdentical},
-			},
-		},
-		{
-			ID:     "ds11-crash-recovery-mid-closure",
-			Title:  "A closure interrupted after its first descendant commits resumes forward-only through the real binary — no double move",
-			Source: "rdd-root-simplification-wave6 Slice S3 (forward-only resume) — the journey-level twin of TestAuthorityDispositionResumeCrashPositionMatrix",
-			// internal/reviewtransaction's own crash-position matrix proves
-			// convergence at EVERY ordered position through direct hook
-			// injection (in-process, exhaustive: 6 positions on a 3-node
-			// closure). This axis is black-box and out-of-process, so it
-			// cannot inject a hook mid-transaction — but it CAN author the
-			// exact on-disk state one real interruption leaves behind
-			// (this axis's own established convention: "fixtures author
-			// review-state.json directly" for states the CLI itself never
-			// reaches), and then prove the real `review repair` binary
-			// resumes correctly from it. This journey covers the first
-			// (deepest-descendant) position; the unit-level matrix already
-			// proves every other position converges by the identical
-			// mechanism (the same discoverAuthorityDispositionRecord/
-			// resumeAuthorityDispositionRecord seam, applied uniformly per
-			// node regardless of which node is being resumed).
-			Steps: []Step{
-				{Name: "fixture: one damaged seed with a two-hop descendant chain, plus an unrelated witness lineage",
-					Fixture: multiHopClosureFixture},
-				{Name: "ask what review repair would do", Requires: repairPreflightCapability,
-					Args: productArgs("review", "repair", "--preflight=true"), After: requireDispositionPlanEligible},
-				{Name: "author the crash: the first descendant is already committed, as if a real execution stopped right there",
-					Composite: func(r *journeyRun) error {
-						if err := authorCrashAfterFirstDescendantCommitted(r.sandbox); err != nil {
-							return err
-						}
-						return requireClosureMemberAlreadyQuarantined(r.sandbox, closureGrandchildLineage)
-					}},
-				// Fix cycle 1 (CRITICAL-1, security): before Wave 6's fix,
-				// validateAuthorityDispositionAuthorization was gated inside
-				// a fresh-execution-only branch, so this exact resume shape —
-				// a real `review repair` call against an in-progress
-				// closure — executed unauthorized regardless of what
-				// --authorization it was given. This step submits the CORRECT
-				// --plan-digest/--inventory-revision (so CAS and plan-match
-				// both pass) but an authorization bound to a repository
-				// identity that can never be the real one, mirroring
-				// ds08's N=1 forged-authorization journey — the N=3,
-				// mid-closure-resume twin.
-				{Name: "attempt to resume with an authorization bound to the wrong repository — refused, nothing moves further", Requires: repairDispositionExecuteCapability,
-					Args: forgedDispositionRepairArgs("quarantine the multi-hop closure")},
-				{Name: "the forged-authorization resume attempt moved nothing beyond the pre-authored member",
-					Composite: requireForgedResumeMovedNothingFurther},
-				{Name: "resume the interrupted closure with the identical plan", Requires: repairDispositionExecuteCapability,
-					Args: dispositionRepairArgs("quarantine the multi-hop closure"), After: requireDispositionQuarantineCommitted},
-				{Name: "the authority graph after resume", Requires: inspectAuthorityCapability,
-					Args:  productArgs("review", "inspect-authority"),
-					After: inspectionAssertion("the retained graph after a resumed multi-hop closure repair", requireRetainedGraphValid)},
-				{Name: "every closure member was quarantined exactly once — the pre-authored member was skipped, not re-processed",
-					Composite: requireNoDoubleMoveAcrossClosure},
-				{Name: "the unrelated witness lineage never moved", Composite: requireDispositionWitnessBytesUnchanged},
 			},
 		},
 		{
@@ -750,4 +817,5 @@ func closureDispositionJourneys() []Journey {
 			},
 		},
 	}
+	return append(journeys, crashRecoveryPositionJourneys()...)
 }
