@@ -1202,8 +1202,33 @@ func waveOneJourneys() []Journey {
 			Steps: []Step{
 				{Name: "fixture: linked worktree and remote", Fixture: linkedWorktreeWithRemote},
 				{Name: "fixture: commit base-diff candidate", Fixture: commitStagedRecoveryCandidate},
-				{Name: "start workspace-projected base-diff review", Requires: startNamedCapability, Args: func(s *Sandbox) ([]string, error) {
-					return append([]string{"review", "start", "--lineage", stagedRecoveryLineage, "--base-ref", s.Scratch["staged-recovery-base"], "--committed-only"}, "--cwd", s.Repo), nil
+				// Issue #2447: a direct (non-negotiated) `review start` over a
+				// base-diff candidate that selects a lens now refuses up
+				// front, so this step goes through the negotiated form
+				// instead. `--lineage` on `review status` pins the exact
+				// derived lineage name into the printed execute transition,
+				// so stagedRecoveryLineage still names the review every
+				// later step in this journey references.
+				{Name: "start workspace-projected base-diff review", Requires: statusCapability, Composite: func(r *journeyRun) error {
+					envelope, err := readStatusFor(r, "--lineage", stagedRecoveryLineage, "--base-ref", r.sandbox.Scratch["staged-recovery-base"])
+					if err != nil {
+						return err
+					}
+					if envelope.NextTransition.Kind != "execute" {
+						return fmt.Errorf("expected an execute review.start transition for the staged recovery base-diff candidate, got %q", envelope.NextTransition.Kind)
+					}
+					args := []string{"review", "start", "--cwd", r.sandbox.Repo}
+					for _, argument := range envelope.NextTransition.Execute.Arguments {
+						if argument.Token == "" {
+							return fmt.Errorf("execute argument %q carried no runnable token", argument.Name)
+						}
+						args = append(args, argument.Token)
+					}
+					started := r.run(args, false)
+					if started.ExitCode != 0 {
+						return fmt.Errorf("negotiated staged base-diff start failed: exit=%d stderr=%s", started.ExitCode, started.Stderr)
+					}
+					return nil
 				}},
 				{Name: "capture blocker on predecessor", Requires: captureResultCapability, Composite: func(r *journeyRun) error {
 					return captureCorrectableFindingFor(r, stagedPredecessorSelectors(r.sandbox)...)

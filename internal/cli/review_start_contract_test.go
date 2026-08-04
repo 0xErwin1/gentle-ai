@@ -393,6 +393,11 @@ func approvedWorkspaceOverlayRecoveryPredecessor(t *testing.T, lineage string) (
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("overlay\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// A workspace-overlay candidate large enough to select a lens now refuses
+	// a direct start up front through the CLI (issue #2447); this helper is
+	// SETUP for the recover behavior its callers test, so it constructs legacy
+	// authority directly via runLegacyFacadeStartForTest instead of going
+	// through that dispatch.
 	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--base-ref", base, "--workspace-overlay", "--lineage", lineage}, io.Discard); err != nil {
 		t.Fatal(err)
 	}
