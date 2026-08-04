@@ -56,7 +56,6 @@ type AgentCapabilityManifest struct {
 // means the adapter consumes Gentle AI's file-based subagent projection; it
 // does not infer whether the runtime can perform some other form of delegation.
 type AgentFeatureClaims struct {
-	AutoInstall   bool `json:"autoInstall"`
 	OutputStyles  bool `json:"outputStyles"`
 	SlashCommands bool `json:"slashCommands"`
 	FileSubAgents bool `json:"fileSubAgents"`
@@ -253,26 +252,26 @@ var featureClaimsByAgent = map[model.AgentID]AgentFeatureClaims{
 		Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentClaudeCode: {
-		AutoInstall: true, OutputStyles: true, SlashCommands: true,
+		OutputStyles: true, SlashCommands: true,
 		FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentCodex: {
-		AutoInstall: true, Skills: true, SystemPrompt: true, MCP: true,
+		Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentCursor: {
 		FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentGeminiCLI: {
-		AutoInstall: true, Skills: true, SystemPrompt: true, MCP: true,
+		Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentHermes: {
 		Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentKilocode: {
-		AutoInstall: true, SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
+		SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentKimi: {
-		AutoInstall: true, FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
+		FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentKiroIDE: {
 		FileSubAgents: true, Skills: true, SystemPrompt: true, MCP: true,
@@ -281,13 +280,13 @@ var featureClaimsByAgent = map[model.AgentID]AgentFeatureClaims{
 		Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentOpenCode: {
-		AutoInstall: true, SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
+		SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentPi: {
-		AutoInstall: true, SystemPrompt: true, MCP: true,
+		SystemPrompt: true, MCP: true,
 	},
 	model.AgentQwenCode: {
-		AutoInstall: true, SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
+		SlashCommands: true, Skills: true, SystemPrompt: true, MCP: true,
 	},
 	model.AgentTrae: {
 		Skills: true, SystemPrompt: true, MCP: true,
