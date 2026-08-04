@@ -189,7 +189,12 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	if err != nil {
 		return invalid("compact review authority cannot be loaded: "+err.Error(), err)
 	}
-	if _, err := CompactAuthorityLeaves(ctx, repo); err != nil {
+	// Scoped to the receipt's own lineage: the gate is authorizing exactly
+	// this candidate through exactly this authority chain, so a defect on a
+	// branch that chain never inherits from is not evidence about it. Asking
+	// the whole repository instead is what let one historical entry deny
+	// delivery for every unrelated candidate in every worktree (2086, 2241).
+	if err := CompactAuthorityLineageBlocked(ctx, repo, receipt.LineageID); err != nil {
 		return invalid(err.Error(), err)
 	}
 	superseded, err := CompactLineageSuperseded(ctx, repo, receipt.LineageID)
@@ -470,7 +475,7 @@ func evaluateCompactGate(ctx context.Context, repo string, receipt CompactReceip
 	finalSnapshot, finalRefs, snapshotErr := buildCompactLifecycleSnapshot(ctx, repo, request)
 	finalMirrorErr := validateCompactReceiptMirrorScope(ctx, repo, record.State, request)
 	finalTrackedErr := validateCompactCommittedTrackedScope(ctx, repo, request)
-	_, graphErr := CompactAuthorityLeaves(ctx, repo)
+	graphErr := CompactAuthorityLineageBlocked(ctx, repo, receipt.LineageID)
 	finalSuperseded, supersededErr := CompactLineageSuperseded(ctx, repo, receipt.LineageID)
 	if loadErr != nil || snapshotErr != nil || finalMirrorErr != nil || finalTrackedErr != nil || graphErr != nil || supersededErr != nil || finalSuperseded || finalRecord.Revision != record.Revision || !reflect.DeepEqual(finalSnapshot, snapshot) || !sameResolvedPrePRRefs(finalRefs, resolvedPrePR) {
 		cause := errors.Join(loadErr, snapshotErr, finalMirrorErr, finalTrackedErr, graphErr, supersededErr)
