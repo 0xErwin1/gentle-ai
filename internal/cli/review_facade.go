@@ -877,6 +877,7 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				if plan, planErr := reviewtransaction.DeriveAuthorityDispositionPlanAtRepo(ctx, root, "", ""); planErr == nil && reviewtransaction.AdmitAuthorityDispositionClosure(plan) == nil {
 					result.Disposition = &ReviewRepairDispositionProviderInputs{
 						PlanDigest: plan.PlanDigest, AuthorityInventoryRevision: plan.AuthorityInventoryRevision,
+						SeedLineageID: plan.SeedSet[0], SeedExpectedRevision: plan.ExpectedRevisions[plan.SeedSet[0]],
 					}
 				}
 			}

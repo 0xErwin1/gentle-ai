@@ -401,7 +401,7 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 			t.Fatal(err)
 		}
 		plan.Authorization = authorityDispositionAuthorizationBinding(plan)
-		if _, err := RepairAuthorityDisposition(ctx, repo, plan.Actor, plan.Reason, plan.Authorization); err != nil {
+		if _, err := RepairAuthorityDisposition(ctx, repo, plan.PlanDigest, plan.AuthorityInventoryRevision, plan.Actor, plan.Reason, plan.Authorization); err != nil {
 			t.Fatalf("the named repair does not run: %v", err)
 		}
 		if err := freshStart(t, repo, "start-over-captured"); err != nil {
