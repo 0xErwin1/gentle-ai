@@ -91,9 +91,11 @@ Consumers MUST NOT reconstruct receipts, derive canonical hashes, inspect the Gi
 
 | Invocation | Frozen boundary |
 | --- | --- |
-| `review start` | `HEAD` to the synthetic staged/unstaged/intended-untracked workspace tree. |
+| `review start` | `HEAD` to the synthetic staged/unstaged workspace tree. |
 | `review start --base-ref <ref> --committed-only` | `<ref>` to `HEAD`; workspace changes are excluded. |
-| `review start --base-ref <ref> --workspace-overlay` | `<ref>` to the synthetic workspace tree, including branch commits and staged, unstaged, and intended-untracked bytes. |
+| `review start --base-ref <ref> --workspace-overlay` | `<ref>` to the synthetic workspace tree, including branch commits and staged and unstaged bytes. |
+
+Review scope is declared, never inferred from the worktree. A file Git does not track enters the candidate only once it is in the index, which `git add` is the only way to put it there; an untracked, unignored file that merely exists in the workspace is out of scope and its bytes never reach a reviewer (issue #2394). `intended_untracked` therefore stays empty for every target START freezes, and remains only as an explicit provider input.
 
 Overlay mode requires workspace projection and cannot be combined with `--committed-only`. START returns `target_mode` and `target_identity` only for this mode. Under contract v2, selected-lens START responses also return `base_tree` and `candidate_tree` as reviewer context for every target kind. Restarted consumers select an overlay target with `review status --base-tree <START base_tree> --workspace-overlay`; `--base-ref` remains available for a fresh symbolic selection, but cannot be combined with `--base-tree`. Snapshot construction uses a temporary index and does not mutate the real index or worktree.
 
@@ -128,7 +130,7 @@ Manifest entries stay in persisted path order and expose:
 | `status` | Stable `A`, `D`, `M`, or `T` tree-diff status. |
 | `old_mode` / `new_mode` | Six-digit Git modes, including zero modes for additions/deletions and symlink or gitlink modes where supported. |
 | `deleted` / `type_changed` / `mode_only` | Explicit state that consumers do not need to infer from patch prose. |
-| `intended_untracked` | Whether the frozen snapshot bound the path as intended-untracked provenance. |
+| `intended_untracked` | Whether the frozen snapshot bound the path as intended-untracked provenance. START never sets it: since #2394 declared scope arrives through the index instead. |
 
 Under v2, selected lenses require both valid tree IDs and the manifest. An empty candidate has equal valid tree IDs with `changed_path_manifest: []`; missing context remains invalid. V1 continues to require its candidate diff and manifest. Unnegotiated START retains its legacy response shape and emits no candidate contents.
 

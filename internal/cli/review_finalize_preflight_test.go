@@ -158,8 +158,10 @@ func TestReviewFinalizeCrowdedStoreSelectsOnlyFullLiveSnapshotMatch(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
+	// #2394: both snapshots declare no untracked scope, so their untracked
+	// proofs are equal by construction and can no longer distinguish them.
 	if live.CandidateTree != staleRecord.State.CurrentSnapshot.CandidateTree || live.BaseTree == staleRecord.State.CurrentSnapshot.BaseTree ||
-		reflect.DeepEqual(live.Paths, staleRecord.State.CurrentSnapshot.Paths) || live.IntendedUntrackedProof == staleRecord.State.CurrentSnapshot.IntendedUntrackedProof {
+		reflect.DeepEqual(live.Paths, staleRecord.State.CurrentSnapshot.Paths) {
 		t.Fatalf("fixture does not share only CandidateTree: stale=%#v live=%#v", staleRecord.State.CurrentSnapshot, live)
 	}
 	assertFinalizeLiveTargetDenied(t, repo, staleRecord.State.LineageID, staleResults)

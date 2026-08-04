@@ -168,16 +168,17 @@ func TestNegotiatedStatusUnderUnavailableProcessTempResolvesWorkspaceOverlayBase
 // derives a live snapshot to compare against the frozen target.
 func TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	candidatePath := filepath.Join(repo, "candidate.go")
-	if err := os.WriteFile(candidatePath, []byte("package candidate\n\nfunc value() int { return 1 }\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	const candidatePath = "internal/candidate.go"
+	writeReviewStartCandidate(t, repo, candidatePath, "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
 	started := runNegotiatedReviewStart(t, repo, "restricted-temp-correction-continuation")
+	if len(started.SelectedLenses) == 0 {
+		t.Fatalf("review start selected no lenses: %#v", started)
+	}
 	resultPath := filepath.Join(t.TempDir(), "blocking-result.json")
 	writeReviewCLIJSON(t, resultPath, facadeReviewerResult{
 		Lens: started.SelectedLenses[0], Findings: []facadeFinding{{
-			Location: "candidate.go:3", Severity: "CRITICAL", Claim: "candidate value is wrong",
-			ProofRefs: []string{"candidate.go:3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
+			Location: candidatePath + ":3", Severity: "CRITICAL", Claim: "candidate value is wrong",
+			ProofRefs: []string{candidatePath + ":3 changed hunk"}, EvidenceClass: reviewtransaction.EvidenceDeterministic,
 			CausalDisposition: reviewtransaction.CausalIntroduced,
 		}}, Evidence: []string{"inspected exact candidate"},
 	})
@@ -191,9 +192,7 @@ func TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection(t
 	}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(candidatePath, []byte("package candidate\n\nfunc value() int { return 2 }\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, candidatePath, "package candidate\n\nfunc value() int { return 2 }\n", 0o644)
 
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
