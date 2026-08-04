@@ -90,6 +90,7 @@ internal/cli/review_facade.go	"--workspace-overlay requires exactly one of --bas
 internal/cli/review_facade.go	"artifact exceeds the native result size limit"
 internal/cli/review_facade.go	"artifact manifest input must be a regular file"
 internal/cli/review_facade.go	"base-diff recovery requires matching --base-ref and --committed-only"
+internal/cli/review_facade.go	"compact authority %q already governs this lineage id for a different candidate: recover it into a successor first (fill in --successor-lineage and --disposition): %s ; or retry `review start` with a different --lineage to start independently"
 internal/cli/review_facade.go	"compact finalize transition did not match its planned revision"
 internal/cli/review_facade.go	"correction contains untracked paths outside the frozen review scope: %s"
 internal/cli/review_facade.go	"existing receipt cannot be read"

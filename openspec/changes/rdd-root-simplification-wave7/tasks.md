@@ -129,19 +129,65 @@ journal/dispatch cluster being deleted in WU9-WU11.
 Gate status: WU1-WU17 all landed and fully verified (see apply-progress for
 the full evidence table: ratchets, full suites, bench corpus diff vs the
 WU9-13 parent — 83/83 comparable journeys unchanged status, zero structural
-deltas). WU18 NOT started this batch; see apply-progress for the
-reconnaissance already done (runReviewFacadeStart's exact legacy-branch
-extent, and confirmation that WU18 does not touch the live compact-v2
-store/authority machinery other verbs still use — only the START-time
-branch decision).
+deltas).
 
-### WU18 — S7: switch + legacy start branch, Commit B
-- [ ] 18.1 Delete `newLineageActivationEnvVar` (`review_core.go:31`)+`NewLineageActivationEnabled` (`review_core.go:39-41`)+call site (`review_facade.go:1625`).
-- [ ] 18.2 Delete legacy `review start` branch (`review_facade.go:1628` → end of `runReviewFacadeStart`).
-- [ ] 18.3 Delete switch tests/harness: `new_lineage_switch_identity_test.go`, `review_new_lineage_switch{,_off_golden}_test.go`, `..._rollback_safety_test.go`, `..._kill_switch_test.go:81`, `bench/runner.go:86`, `bench/journeys_wave3.go:11`.
-- [ ] 18.4 Re-run WU2's journey set switch-free; diff against Commit-A bytes — MUST be byte-identical (defect signal if not, never a golden-update task).
-- [ ] 18.5 Confirm `legacy_readonly_guard_test.go` remains RED only for D4-verb scope (S8 still pending).
-- [ ] 18.6 Exit Checklist.
+### WU18 — S7: switch + legacy start branch, Commit B — **DEFERRED, not done**
+
+Coordinator scope decision: switch removal is deferred. The production
+change (switch + legacy branch deletion) landed clean and byte-equivalence-
+proven (Commit A goldens re-verified byte-identical with zero -update
+needed — non-negotiable #2 satisfied at the strongest possible level),
+W-9/W-10/W-11 re-confirmed green immediately before attempting removal
+(non-negotiable #1 satisfied) — but executing the removal surfaced that v3
+negotiated START has never supported `repository_context` (predates this
+wave; previously reachable only at the narrow switch-ON-AND-negotiated
+intersection, universal once the switch is gone). Extending
+`validateLiveReviewRepositoryContext` (a security-sensitive binding
+validator) under time pressure was judged the wrong trade — non-negotiable
+#3 (never remove a switch over a known capability gap). See the spec
+amendment in `specs/rdd-single-lifecycle/spec.md` ("Amendment (Wave 7 S7,
+WU18 attempt — deferred, not landed)") for the full rationale, and
+apply-progress (#10204) for the complete technical finding.
+
+`newLineageActivationEnvVar`/`NewLineageActivationEnabled` and the legacy
+`review start` branch are RESTORED, byte-identical to pre-attempt. The
+switch stays; v3 remains opt-in (also the safer posture for the upcoming
+release candidate's community testing).
+
+- [ ] 18.1-18.6: not done, blocked on v3 negotiated START gaining
+  `repository_context` support (see the spec amendment's own Requirement:
+  "Switch Removal Is Blocked On v3 Negotiated Repository Context"). Not
+  re-attempted this wave.
+
+### WU18a — S7a: additive start-time guards + v3 negotiated frozen context (kept, independent of the switch)
+- [x] Start-time legacy-collision guards added to the switch-ON v3 path in
+  `runReviewFacadeStart` (a real, independent gap the WU18 attempt found:
+  before this, a switch-ON `review start` never checked for EITHER kind of
+  existing legacy authority under the same lineage id at all). v1: reuses
+  the existing shared "choose a new lineage for compact authority" wording.
+  v2 (new refusal): names `review recover` as a genuinely resolving
+  additional option, content-aware (an exact hint-replay over identical
+  existing v2 content is never refused, only a genuine conflict).
+- [x] v3 negotiated START gained frozen-candidate-context support (never
+  had it before — `runReviewFacadeStartNewLineage` was always called
+  unconditionally, ignoring `--contract`). `repository_context` stays nil
+  for v3 (the disclosed, still-open gap WU18 deferred on).
+- [x] Test-suite migration to direct legacy (compact-v2) construction, kept
+  regardless of switch state per the coordinator's own call (better test
+  design): `finalizeApprovedFacadeReview`, `approveDiscoveryMarkdownProjection`,
+  `startFacadeReview`, and a new general-purpose `runLegacyFacadeStartForTest`
+  helper — ~40+ call sites across 7 files.
+- [x] Two new end-to-end regression tests for the guards
+  (`TestReviewFacadeStartRefusesOverExistingV1Authority`,
+  `TestReviewFacadeStartRefusesOverExistingV2AuthorityAndNamesRecover`).
+- [x] Full evidence: gofmt/vet clean, `go test ./internal/cli/... -count=1`
+  fully green (zero failures), root + reviewtransaction suites green except
+  the one expected RG.1b failure (unchanged, 6 verbs), bench module tests
+  green, bench corpus vs the WU16-checkpoint (36399024) binary: 83/83
+  comparable journeys unchanged status, zero structural deltas. Refusal
+  ratchet 1585→1586 (net +1, the new v2-collision refusal). Deadcode
+  ratchet byte-identical to the WU16 checkpoint (243, zero change).
+  Landed at 02ff50ea.
 
 ## WU19 — S8: D4 verbs (row 24, classify at task time)
 - [ ] 19.1 Classify `invalidate`/`abandon`/`recover`/`reclaim`/`dispose-result`/`reopen-results` (`review_facade.go:709-728`) against current tree: zero new-lineage role → delete; residual legacy-READ role → retain per D5, document in the guard.
