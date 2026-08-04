@@ -37,7 +37,18 @@ matching v2) are all closed.
 - WHEN the switch-removal slice is proposed
 - THEN it does not start; it starts only once all three are closed
 
-### Requirement: Exactly One Lifecycle After Removal
+## Requirement Ownership Moved to the Successor Change (verify C1)
+
+This change (Wave 7) does not deliver "Exactly One Lifecycle After
+Removal" — the WU18 attempt was deferred (see the Amendment below), so the
+switch and legacy start branch still ship. Carrying that requirement here
+as a plain, unqualified Requirement of THIS change's delta would claim
+delivery this wave never made. Its ownership therefore moves to whichever
+successor change eventually lands switch removal; its text is preserved
+verbatim, not weakened, so that successor change inherits the exact bar to
+clear:
+
+### Requirement: Exactly One Lifecycle After Removal (owned by the successor change that lands switch removal — NOT delivered by Wave 7)
 
 After removal, no `GENTLE_AI_RDD_NEW_LINEAGE` reference, legacy start
 branch, or legacy mutation path MUST remain reachable.
@@ -48,6 +59,11 @@ branch, or legacy mutation path MUST remain reachable.
 - WHEN any `start` is requested, or the codebase is searched for the switch
 - THEN it always proceeds through v3, and zero switch references remain
   outside historical/archived change specs
+
+Wave 7's own delivered requirement is the re-entry gate immediately below
+("Switch Removal Is Blocked On v3 Negotiated Repository Context") — that
+one Wave 7 both owns and satisfies (the gap it names is real, disclosed,
+and currently open).
 
 ## Amendment (Wave 7 S7, WU18 attempt — deferred, not landed)
 
