@@ -257,7 +257,17 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// Second pass fixing adversarial verification findings F1/F4/F6/F7 (see
 	// TestOpenCodeRenderedReviewProtocolCost's changelog comment above) moved
 	// it a third time. Deliberate, not drift.
-	const want = "d9b91b53542ff13ef3444febbe725c11d613c2f60446602697d351b59eaf3162"
+	//
+	// Prerelease resume fix: the provider-defect handoff's resume clause used
+	// to require a `released` fix, which orchestrators read as stable-only and
+	// used to refuse resuming on an installed release candidate. It now says
+	// "an installed published fix", states that an installed published
+	// prerelease or release candidate satisfies it, and draws the real
+	// boundary at unpublished code. Kilocode embeds the same orchestrator
+	// contract in `agent.gentle-orchestrator.prompt`, and that key is the only
+	// difference in the rendered settings, so the hash moved a fourth time.
+	// Deliberate, not drift.
+	const want = "54c3a5c7b112864a4b3d042b766549000ed482f3acd6c3b1eaebacb65d293da8"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
