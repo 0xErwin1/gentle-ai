@@ -787,16 +787,34 @@ func requireInvalidEdges(sandbox *Sandbox, edges int, problemFragment string) er
 				problemFragment, edge.SuccessorLineageID, edge.Problems)
 		}
 	}
-	return requireStoreNotAuthoritative(sandbox)
+	return requireDamagedStoreReportsItsDamage(sandbox)
 }
 
-func requireStoreNotAuthoritative(sandbox *Sandbox) error {
-	status, err := proveStoreStatus(sandbox)
+// requireDamagedStoreReportsItsDamage is the proof every fixture in this axis
+// runs before spending a counted command.
+//
+// It used to require `review status` to report the whole store
+// non-authoritative, which is how the product described damage when authority
+// validation was repository-global. It is no longer how the product describes
+// damage, and the old assertion was never what these journeys were about: what
+// they measure is whether an operator holding a damaged entry can SEE it and
+// act on it, not whether the entry took the repository down with it. So the
+// proof moved to the surface that owns per-entry truth -- the store must still
+// describe exactly this damage, in its own words, on the entry that carries
+// it.
+func requireDamagedStoreReportsItsDamage(sandbox *Sandbox) error {
+	inspection, err := proveInspection(sandbox)
 	if err != nil {
 		return err
 	}
-	if status.Authoritative {
-		return errors.New("fixture claims a damaged store but review status still reports it authoritative")
+	if inspection.Valid && inspection.Totals.EntryDiagnostics == 0 {
+		return errors.New("fixture claims a damaged store but inspect-authority reports no invalid edge and no entry diagnostic")
+	}
+	// Status must still be answerable. A store that cannot be read at all is a
+	// different fixture from a store holding one damaged entry, and a journey
+	// that confused the two would measure the wrong thing.
+	if _, err := proveStoreStatus(sandbox); err != nil {
+		return fmt.Errorf("review status is unavailable over a store holding one damaged entry: %w", err)
 	}
 	return nil
 }
@@ -977,7 +995,7 @@ func halfWrittenSuccessor(sandbox *Sandbox) error {
 	if inspection.Totals.Edges != 0 {
 		return fmt.Errorf("fixture claims the truncated entry never becomes an edge but inspect-authority reports %d", inspection.Totals.Edges)
 	}
-	return requireStoreNotAuthoritative(sandbox)
+	return requireDamagedStoreReportsItsDamage(sandbox)
 }
 
 // ---------------------------------------------------------------------------
@@ -1133,13 +1151,25 @@ func proveStoreRecovered(r *journeyRun) error {
 		return fmt.Errorf("the exit ran but review status still reports complete=%v authoritative=%v",
 			status.Complete, status.Authoritative)
 	}
+	// The store staying authoritative is no longer evidence on its own: it was
+	// authoritative while the damage was present too, because the damage was
+	// confined to its own entry. What proves the exit worked is that the
+	// damage is gone from the surface that reported it.
+	inspection, err := proveInspection(r.sandbox)
+	if err != nil {
+		return err
+	}
+	if !inspection.Valid || !inspection.Complete || inspection.Totals.InvalidEdges != 0 || inspection.Totals.EntryDiagnostics != 0 {
+		return fmt.Errorf("the exit ran but inspect-authority still reports the damage: valid=%v complete=%v totals=%+v",
+			inspection.Valid, inspection.Complete, inspection.Totals)
+	}
 	return nil
 }
 
 // proveStoreStillDamaged is its mirror, for the steps that claim an operation
 // changed nothing.
 func proveStoreStillDamaged(r *journeyRun) error {
-	return requireStoreNotAuthoritative(r.sandbox)
+	return requireDamagedStoreReportsItsDamage(r.sandbox)
 }
 
 // repairAssessment is the subset of `review repair --preflight` that says
