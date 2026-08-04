@@ -470,7 +470,7 @@ func recoverFacadeReview(t *testing.T, repo, predecessor, successorLineage strin
 		t.Fatal(err)
 	}
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
-	intended, err := builder.DiscoverIntendedUntracked(context.Background())
+	intended, err := builder.DiscoverUnignoredUntracked(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -526,12 +526,8 @@ func liveFacadeSnapshotIdentity(t *testing.T, repo string) string {
 		t.Fatalf("resolve live snapshot repository root: %v", err)
 	}
 	rootBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
-	intended, err := reviewFacadeDiscoverIntendedUntracked(ctx, rootBuilder)
-	if err != nil {
-		t.Fatalf("discover intended untracked files for live snapshot identity: %v", err)
-	}
 	snapshot, err := rootBuilder.Build(ctx, reviewtransaction.Target{
-		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: intended,
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
 	})
 	if err != nil {
 		t.Fatalf("build live snapshot identity: %v", err)
@@ -569,12 +565,8 @@ func finalizeApprovedFacadeReview(t *testing.T, repo, lineage string) {
 		t.Fatalf("resolve legacy facade review repository root: %v", err)
 	}
 	rootBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
-	intended, err := reviewFacadeDiscoverIntendedUntracked(ctx, rootBuilder)
-	if err != nil {
-		t.Fatalf("discover intended untracked files for legacy facade review %q: %v", lineage, err)
-	}
 	snapshot, err := rootBuilder.Build(ctx, reviewtransaction.Target{
-		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: intended,
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
 	})
 	if err != nil {
 		t.Fatalf("build legacy facade review target %q: %v", lineage, err)

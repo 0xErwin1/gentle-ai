@@ -102,9 +102,6 @@ func facadeVerificationEvidenceTarget(ctx context.Context, repo string, state re
 		if state.ProposedCorrectionLines == nil {
 			return reviewtransaction.Snapshot{}, errors.New("verification evidence requires a forecasted correction") // refusal:by-design operator-knowledge: correction planning is an external prerequisite whose exact line forecast must be finalized first
 		}
-		if err := rejectFacadeCorrectionUntracked(ctx, repo, state); err != nil {
-			return reviewtransaction.Snapshot{}, err
-		}
 		projection := state.InitialSnapshot.Projection
 		if projection == "" {
 			projection = reviewtransaction.ProjectionWorkspace
