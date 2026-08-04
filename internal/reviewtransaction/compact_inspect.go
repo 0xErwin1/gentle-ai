@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 )
 
 const (
@@ -330,8 +332,8 @@ func compactStartInvalidGraphRefusal(ctx context.Context, repo string, records m
 				exit.SuccessorLineageID, compactRepairCommandText(repo, plan))
 		}
 	}
-	return fmt.Errorf("%v.%s Capture the complete machine-readable diagnosis for every affected lineage with `gentle-ai review inspect-authority --cwd %q`",
-		cause, continuation.String(), repo)
+	return fmt.Errorf("%v.%s Capture the complete machine-readable diagnosis for every affected lineage with `gentle-ai review inspect-authority --cwd %s`",
+		cause, continuation.String(), pathquote.Quote(repo))
 }
 
 // inspectCompactRecoveryRecordSet applies the canonical all-edge inspection to
