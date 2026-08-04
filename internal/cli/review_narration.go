@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/sddstatus"
 )
 
@@ -124,7 +125,7 @@ var reviewStopReasonNarration = map[string]string{
 		"This is a product defect, not something to retry. If you just want your work delivered, run `" + reviewModeDisableCloneCommand + "` " +
 		reviewModeDisableCloneCaveat + " so ordinary repository policy (hooks, tests, CI) decides instead; nothing is silently approved. To get this review itself fixed, report the defect with this run's details.",
 	"corrected_candidate_unavailable": "Change the candidate content so it differs from the frozen original, then re-run " +
-		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition` " +
+		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition` " +
 		"(or `gentle-ai review finalize --lineage <id>`). " +
 		"That is the right path when the review found real defects. If instead the reviewers were given the wrong input " +
 		"and their findings describe content that was never the candidate, a maintainer can quarantine those results and " +
@@ -132,7 +133,7 @@ var reviewStopReasonNarration = map[string]string{
 		"--expected-revision <revision> --target <target> --reason <reason> --actor <actor> --quarantine-lens <lens>` " +
 		"(repeat `--quarantine-lens` per affected lens) and follow its output.",
 	"correction_repository_verification_failed": "Repository verification failed for this correction candidate. Change the candidate within the open correction, then re-run " +
-		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent claude-code --next-transition` " +
+		"`gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --agent " + reviewUndeclaredRuntimeIdentitySlot + " --next-transition` " +
 		"to capture evidence for the new candidate.",
 	"corrupted_or_unverifiable_authority": "This review's stored record cannot be trusted as-is, and it cannot be repaired automatically. " +
 		"Ask a maintainer to inspect it directly, or run `" + reviewModeDisableCloneCommand + "` " +
@@ -243,10 +244,26 @@ func reviewStopReasonStatement(reason string) (string, bool) {
 // terminal state emits exactly one statement" scenario. A reason with no
 // registry entry prints nothing: TestReviewNarrationRegistryCoversEveryStopReasonCode
 // is the fail-closed proof that should never happen for a code the source emits.
-func reviewNarrateStopReason(reason string) {
+func reviewNarrateStopReason(reason string, runtimeAgent model.AgentID) {
 	statement, ok := reviewStopReasonStatement(reason)
 	if !ok {
 		return
 	}
-	_, _ = fmt.Fprintln(reviewNarrationOutput, statement)
+	_, _ = fmt.Fprintln(reviewNarrationOutput, bindNarrationRuntimeIdentity(statement, runtimeAgent))
+}
+
+// bindNarrationRuntimeIdentity fills the runtime-identity slot in a registered
+// statement with the identity the caller declared on this very invocation. The
+// registry is a package-level map with no caller context, so the statements
+// carry a slot rather than a constant: a narration that told every runtime to
+// rerun as `claude-code` would invite a Codex or OpenCode reader to declare a
+// false identity and pass the transport admission check under Claude Code's
+// capability profile (issue #2440). An undeclared caller keeps the slot, which
+// asks the reader to name themselves instead of naming them wrongly.
+func bindNarrationRuntimeIdentity(statement string, runtimeAgent model.AgentID) string {
+	identity := strings.TrimSpace(string(runtimeAgent))
+	if identity == "" {
+		return statement
+	}
+	return strings.ReplaceAll(statement, reviewUndeclaredRuntimeIdentitySlot, identity)
 }
