@@ -22,9 +22,11 @@ const (
 	reviewImmutableTransportClaudePromptCarried reviewImmutableTransport = "claude_prompt_carried"
 	// reviewImmutableTransportOpenCodeProviderInjected is issue #2417's
 	// restored transport: the OpenCode plugin (review-result-artifacts.ts)
-	// materializes immutable candidate evidence through its shell-less
-	// runNative channel and injects it directly into the reviewer task's
-	// prompt before the reviewer ever launches. The generated lens holds no
+	// asks `review lens-context` for the finished reviewer context through
+	// its shell-less runNative channel and injects those exact bytes into
+	// the reviewer task's prompt before the reviewer ever launches. The
+	// provider materializes the evidence, applies the budget, and resolves
+	// every refusal; the plugin assembles nothing. The generated lens holds no
 	// bash and no read tool. OpenCode itself concatenates live project
 	// instructions (AGENTS.md/CLAUDE.md/CONTEXT.md, local `instructions`
 	// glob entries) and the skill catalog into every session's system

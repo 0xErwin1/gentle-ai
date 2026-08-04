@@ -479,22 +479,22 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`"--expected-revision", binding.revision`,
 		`return ["--cwd", cwd]`,
 		`const current = fields === "lens,lineage,order,repository_context,revision,subject_hash,target"`,
-		`typeof subject.subject_hash !== "string"`,
-		`subject.subject_hash !== binding.subject_hash`,
-		`artifact_subject`,
-		`GENTLE_AI_REVIEW_CONTEXT`,
-		`validManifest(manifest)`,
-		`output.args.prompt = await injectReviewerContext(`,
-		`async function materializeReviewEvidence(`,
-		`REVIEW_CONTEXT_BYTE_BUDGET`,
-		`GENTLE_AI_REVIEW_NAME_STATUS`,
-		`GENTLE_AI_REVIEW_NUMSTAT`,
-		`GENTLE_AI_REVIEW_PATCH`,
 		`GENTLE_AI_REVIEW_CONTEXT_END`,
-		`reviewBudgetExceeded`,
+		`output.args.prompt = await injectReviewerContext(`,
+		// The reviewer context is one provider-owned native call. `--delivery
+		// runtime_interception` is not cosmetic: it is the mechanism the
+		// provider records on the receipt beside the captured results, and it
+		// is what distinguishes a block a runtime adapter substituted for
+		// whatever the caller produced from one a caller merely relayed.
+		// Declaring the relayed level from here would permanently record a
+		// weaker claim than what actually happened.
+		`"review", "lens-context",`,
+		`const LENS_CONTEXT_DELIVERY = "runtime_interception"`,
+		`"--delivery", LENS_CONTEXT_DELIVERY`,
+		`function verifiedLensContext(`,
+		`binds a different candidate than the task claimed`,
+		`partial provider context is never injected`,
 		`Split this candidate into smaller reviewable commits`,
-		`reviewEmptyPatch`,
-		`patch === "" && !entry.mode_only && !entry.deleted`,
 		`function missingIsolationEnvironment(`,
 		`REQUIRED_ISOLATION_ENVIRONMENT`,
 		`function remoteInstructionsEntries(`,
@@ -506,7 +506,6 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`"--lens", binding.lens`,
 		`"--order", String(binding.order)`,
 		`"--input", "-"`,
-		`"--preflight"`,
 		`GENTLE_AI_REVIEW_CWD`,
 		`"tool.execute.before"`,
 		`output.args.background === true`,
@@ -529,7 +528,7 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`dispose: async () => { admissionRecoveries.clear() }`,
 		`MAX_ADMISSION_RECOVERY_SESSIONS`,
 		`MAX_ADMISSION_RECOVERIES_PER_SESSION`,
-		`sessionErrorMessage(binding, cause, "repository_context_preflight_failed")`,
+		`sessionErrorMessage(binding, cause, "repository_context_lens_context_failed")`,
 		`parsed.reference`,
 		`raw reviewer result preserved for recovery`,
 		`raw reviewer result could not be preserved`,
@@ -545,11 +544,22 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		// bounded raw payload in the thrown error so the transcript retains it.
 		`raw reviewer result follows for manual recovery`,
 		`PRESERVE_EMBED_LIMIT`,
-		`function inspectionArgs(`,
 		`export default ReviewResultArtifactsPlugin`,
 	} {
 		if !strings.Contains(source, want) {
 			t.Fatalf("review-result-artifacts.ts missing %q", want)
+		}
+	}
+	// The superseded second mechanism must be gone, not merely unused. `review
+	// lens-context` already materializes discovery and every per-path patch
+	// under its own budget and its own empty-patch refusal, and two code paths
+	// producing the same block is exactly how they drift apart.
+	for _, superseded := range []string{
+		"inspect-candidate", "materializeReviewEvidence", "inspectionArgs",
+		"REVIEW_CONTEXT_BYTE_BUDGET", "preflightCapture", "validManifest", "--preflight",
+	} {
+		if strings.Contains(source, superseded) {
+			t.Fatalf("review-result-artifacts.ts still carries the superseded evidence mechanism %q", superseded)
 		}
 	}
 	if strings.Contains(source, `.slice("review-".length)`) {

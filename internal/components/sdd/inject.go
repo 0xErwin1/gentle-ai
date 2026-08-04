@@ -938,9 +938,9 @@ func extractManagedSection(content, sectionID string) string {
 // expandOpenCodeBoundedReviewAgents renders the OpenCode-shaped review-lens
 // sub-agents shared by the OpenCode and Kilocode overlays. Both identities
 // get the identical shell-less, read-less shape: the OpenCode plugin
-// (review-result-artifacts.ts) materializes all immutable candidate evidence
-// through its provider-owned native channel and injects it directly into
-// each reviewer task's prompt before the reviewer ever launches, so the lens
+// (review-result-artifacts.ts) asks `review lens-context` for all immutable
+// candidate evidence through its provider-owned native channel and injects it
+// into each reviewer task's prompt before the reviewer ever launches, so the lens
 // itself needs no bash and no read tool — this provider-injected block is
 // its only byte source. Kilocode is not RDD-eligible and never receives the
 // capturing plugin, so review never starts there; it gets the identical

@@ -6,25 +6,46 @@ const BINDING = /^GENTLE_AI_REVIEW_BINDING (\{[^\n]+\})(?:\n|$)/
 const TASK_RESULT = /^<task id="[^"\r\n]+" state="completed">\n<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/
 const TASK_TAG = /<\/?task(?:\s|>)|<\/?task_result>/
 
-// REVIEW_CONTEXT_BYTE_BUDGET bounds the immutable candidate evidence this
-// plugin materializes into a reviewer task's `args.prompt` before the task
-// ever launches. Measured empirically against the pinned OpenCode runtime
-// (internal/versions.OpenCode): a plugin-mutated `task` prompt reached the
-// subagent's own model call byte-for-byte, with zero truncation observed, at
-// every tested size from 5 KB up to 16 MiB, including exact runs at 4 MiB and
-// 8 MiB. This budget is set to exactly the native per-command
-// MaxFrozenCandidateDiffBytes cap (internal/reviewtransaction/
-// frozen_candidate_context.go) — the same ceiling every other immutable-diff
-// read in this product already accepts — rather than an arbitrary fraction of
-// it: a smaller budget refuses candidates whose *risk-tier-counted* changed
-// lines are small but whose manifest includes large regenerated/golden files,
-// which this plugin materializes in full for every manifest path exactly like
-// the Claude Code transport does. 4 MiB sits comfortably inside the verified
-// zero-truncation range, not at its edge, and is enforced by outright
-// refusal: exceeding it fails the reviewer launch closed. It never
-// truncates, because a truncated candidate view could fabricate a
-// false-clean result.
-const REVIEW_CONTEXT_BYTE_BUDGET = 4 * 1024 * 1024 // 4 MiB
+// LENS_CONTEXT_DELIVERY declares this plugin's mechanism to the provider, and
+// it is recorded on the receipt beside the captured results. It is the
+// stronger of the two levels the provider accepts: a runtime adapter replaced
+// whatever the caller produced with the provider's own output before the
+// reviewer ran, so relaying is not trusted at all. Declaring the relayed
+// level from here would permanently record a weaker claim than what actually
+// happened.
+const LENS_CONTEXT_DELIVERY = "runtime_interception"
+
+// LENS_CONTEXT_TERMINATOR closes a complete provider block. The provider
+// assembles the whole block in memory before writing a byte, precisely so a
+// partial one cannot exist; this plugin still checks, because a partial block
+// is indistinguishable to a reviewer from a small candidate and would let a
+// truncated view be reported as a clean review.
+const LENS_CONTEXT_TERMINATOR = "GENTLE_AI_REVIEW_CONTEXT_END"
+
+// LENS_CONTEXT_REFUSAL matches the typed, path-free refusal code the native
+// `review lens-context` command emits. Only the [a-z_]+ code token is
+// forwarded -- never the native prose that carries it -- so the opaque path
+// keeps its absolute rule that no native text reaches the session transcript.
+const LENS_CONTEXT_REFUSAL = /\b(lens_context_[a-z_]+):/
+
+// LENS_CONTEXT_REFUSAL_ACTION names a real exit for each refusal a caller
+// cannot recover from by retrying the same binding. Without these, an
+// over-budget candidate or a path that produces no patch bytes collapses into
+// "refresh and retry", advice that deterministically fails and loops.
+const LENS_CONTEXT_REFUSAL_ACTION: Record<string, string> = {
+  lens_context_budget_exceeded:
+    "Immutable candidate evidence is never truncated, and retrying the same candidate cannot succeed. " +
+    "Split this candidate into smaller reviewable commits, each under the budget, then start a review for the reduced scope.",
+  lens_context_empty_patch:
+    "One content-changing path produced no patch bytes at all, which no legitimate candidate does. " +
+    "Refresh the exact native next_transition and relaunch the lens; if the same path keeps producing no patch, " +
+    "treat it as a native inspection defect and stop relaunching.",
+  lens_context_emission_conflict:
+    "This frozen lens slot already recorded a reviewer context produced by a different mechanism, " +
+    "and audit history is never rewritten. Start a review for a fresh candidate.",
+}
+
+const LENS_CONTEXT_DEFAULT_ACTION = "Refresh the exact native next_transition and relaunch the lens."
 
 // REQUIRED_ISOLATION_ENVIRONMENT closes a channel this plugin cannot touch by
 // itself: OpenCode assembles every session's *system* prompt (not the `task`
@@ -86,43 +107,6 @@ type ReviewBinding = {
   revision?: string
   repository_context?: string
   subject_hash?: string
-}
-
-interface ReviewArtifactSubject {
-  schema: string
-  subject_hash: string
-  lineage_id: string
-  authority_revision: string
-  target_identity: string
-  base_tree: string
-  candidate_tree: string
-  changed_path_manifest_sha256: string
-  lens: string
-  selected_order: number
-}
-
-interface ChangedPathManifestEntry {
-  path: string
-  status: string
-  old_mode: string
-  new_mode: string
-  deleted: boolean
-  type_changed: boolean
-  mode_only: boolean
-  intended_untracked: boolean
-}
-
-interface ReviewCapturePreflight {
-  schema: string
-  capability: string
-  lineage_id: string
-  target_identity: string
-  lens: string
-  selected_order: number
-  artifact_subject: ReviewArtifactSubject
-  base_tree: string
-  candidate_tree: string
-  changed_path_manifest: ChangedPathManifestEntry[]
 }
 
 function parseBinding(prompt: unknown, lens: string): ReviewBinding {
@@ -220,192 +204,86 @@ function captureResult(cwd: string, binding: ReviewBinding, result: string): Pro
   ], result)
 }
 
-async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<ReviewCapturePreflight> {
-  try {
-    const subjectArgs = binding.subject_hash ? ["--subject-hash", binding.subject_hash] : []
-    const response = await runNative(cwd, [
-      "review", "capture-result", ...repositoryBindingArgs(cwd, binding),
-      "--lineage", binding.lineage, "--target", binding.target,
-      "--lens", binding.lens, "--order", String(binding.order), ...subjectArgs, "--preflight",
-    ], "")
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(response)
-    } catch {
-      throw new Error("review capture preflight returned malformed artifact-subject JSON")
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("review capture preflight returned malformed artifact-subject JSON")
-    }
-    const value = parsed as Record<string, unknown>
-    const subject = value.artifact_subject as Record<string, unknown> | undefined
-    const manifest = value.changed_path_manifest
-    if (!subject || subject.schema !== "gentle-ai.review-artifact-subject/v2" ||
-        typeof subject.subject_hash !== "string" || !/^sha256:[a-f0-9]{64}$/.test(subject.subject_hash) ||
-        typeof subject.authority_revision !== "string" || !/^sha256:[a-f0-9]{64}$/.test(subject.authority_revision) ||
-        typeof subject.base_tree !== "string" || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(subject.base_tree) ||
-        typeof subject.candidate_tree !== "string" || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(subject.candidate_tree) ||
-        typeof subject.changed_path_manifest_sha256 !== "string" || !/^sha256:[a-f0-9]{64}$/.test(subject.changed_path_manifest_sha256) ||
-        subject.lineage_id !== binding.lineage || subject.target_identity !== binding.target ||
-        (binding.revision !== undefined && subject.authority_revision !== binding.revision) ||
-        subject.lens !== binding.lens || subject.selected_order !== binding.order ||
-        value.schema !== "gentle-ai.review-capture-preflight/v1" || value.capability !== "review.native_capture_preflight" ||
-        value.lineage_id !== binding.lineage || value.target_identity !== binding.target || value.lens !== binding.lens ||
-        value.selected_order !== binding.order || value.base_tree !== subject.base_tree || value.candidate_tree !== subject.candidate_tree ||
-        !validManifest(manifest)) {
-      throw new Error("review capture preflight returned an incomplete artifact subject")
-    }
-    if (binding.subject_hash && subject.subject_hash !== binding.subject_hash) {
-      throw new Error("review capture preflight returned a different artifact subject")
-    }
-    return value as unknown as ReviewCapturePreflight
-  } catch (cause) {
-    const scope = binding.repository_context ? "the provider-issued repository context" : cwd
-    const recovery = gitTrustRefusal(binding, cause)
-      ? GIT_TRUST_REFUSAL_RECOVERY
-      : binding.repository_context
-      ? `Refresh the exact native next_transition for lineage ${binding.lineage} before relaunching the lens.`
-      : `If lineage ${binding.lineage} was started in a different repository (for example a nested one), ` +
-        `set GENTLE_AI_REVIEW_CWD to that repository and relaunch the lens.`
-    throw new Error(
-      `review capture preflight failed for lens ${binding.lens} under ${scope}: ` +
-      `${sessionErrorMessage(binding, cause, "repository_context_preflight_failed")}. ` +
-      `The reviewer was not launched, so its exactly-once invocation is preserved. ` +
-      recovery,
-    )
-  }
-}
-
-function validManifest(value: unknown): value is ChangedPathManifestEntry[] {
-  if (!Array.isArray(value)) return false
-  let previous = ""
-  for (const entry of value) {
-    if (!validManifestEntry(entry) ||
-        (previous !== "" && Buffer.compare(Buffer.from(previous, "utf8"), Buffer.from(entry.path, "utf8")) >= 0)) return false
-    previous = entry.path
-  }
-  return true
-}
-
-function validManifestEntry(entry: unknown): entry is ChangedPathManifestEntry {
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false
-  const value = entry as Record<string, unknown>
-  return Object.keys(value).sort().join(",") ===
-    "deleted,intended_untracked,mode_only,new_mode,old_mode,path,status,type_changed" &&
-    typeof value.path === "string" && value.path !== "" &&
-    typeof value.status === "string" && /^[ADMT]$/.test(value.status) &&
-    typeof value.old_mode === "string" && /^[0-7]{6}$/.test(value.old_mode) &&
-    typeof value.new_mode === "string" && /^[0-7]{6}$/.test(value.new_mode) &&
-    typeof value.deleted === "boolean" && typeof value.type_changed === "boolean" &&
-    typeof value.mode_only === "boolean" && typeof value.intended_untracked === "boolean"
-}
-
-// inspectionArgs builds one exact `review inspect-candidate` invocation from
-// the injected binding. Global operations (name-status, numstat) take no
-// path index; patch takes the zero-based canonical changed_path_manifest
-// index, matching internal/cli/review_inspect_candidate.go exactly.
-function inspectionArgs(binding: ReviewBinding, operation: string, pathIndex?: number): string[] {
-  const args = [
-    "review", "inspect-candidate",
-    "--repository-context", binding.repository_context as string,
-    "--expected-revision", binding.revision as string,
-    "--lineage", binding.lineage, "--target", binding.target,
-    "--lens", binding.lens, "--order", String(binding.order),
-    "--operation", operation,
-  ]
-  if (pathIndex !== undefined) args.push("--path-index", String(pathIndex))
-  return args
-}
-
-// materializeReviewEvidence runs every discovery and per-path patch command
-// through the shell-less native channel (runNative), never through a tool
-// the reviewer session itself could invoke. The reviewer holds no bash and
-// no read tool: this provider-injected block is its only byte source. Any
-// native failure or budget overflow throws before the reviewer ever
-// launches; there is no partial-evidence or truncated-evidence outcome.
-async function materializeReviewEvidence(cwd: string, binding: ReviewBinding, preflight: ReviewCapturePreflight): Promise<string> {
-  if (!binding.repository_context || !binding.revision) {
+// injectReviewerContext replaces a reviewer task's prompt with the provider's
+// own finished lens context. Everything the reviewer sees is produced by one
+// native call through the shell-less runNative channel: the provider-authored
+// binding, the provider-authored capture context, the reviewer's charge and
+// result schema, discovery, and one verbatim immutable patch per canonical
+// manifest index, budget already applied and refusals already resolved.
+//
+// This plugin assembles nothing. It used to materialize the same evidence
+// itself, one native per-path candidate inspection at a time, under its
+// own byte budget and its own empty-patch guard. `review lens-context` now
+// owns all of that natively, so the second implementation is gone rather than
+// kept beside it: two code paths producing the same block is exactly how the
+// two drift apart, and a reviewer reading the drifted one would have no way
+// to tell.
+async function injectReviewerContext(prompt: string, lens: string, cwd: string): Promise<string> {
+  const binding = parseBinding(prompt, lens)
+  if (!binding.repository_context) {
     throw new Error(
       "immutable OpenCode candidate inspection requires a repository-context binding; " +
-      "the reviewer was not launched, so its exactly-once invocation is preserved",
-    )
-  }
-  try {
-    let budget = REVIEW_CONTEXT_BYTE_BUDGET
-    const sections: string[] = []
-    const consume = (header: string, body: string, footer: string) => {
-      const rendered = `${header}\n${body}\n${footer}\n`
-      budget -= Buffer.byteLength(rendered, "utf8")
-      if (budget < 0) {
-        throw Object.assign(new Error("review context evidence budget exceeded"), { reviewBudgetExceeded: true })
-      }
-      sections.push(rendered)
-    }
-    consume(
-      "GENTLE_AI_REVIEW_NAME_STATUS",
-      await runNative(cwd, inspectionArgs(binding, "name-status"), ""),
-      "GENTLE_AI_REVIEW_NAME_STATUS_END",
-    )
-    consume(
-      "GENTLE_AI_REVIEW_NUMSTAT",
-      await runNative(cwd, inspectionArgs(binding, "numstat"), ""),
-      "GENTLE_AI_REVIEW_NUMSTAT_END",
-    )
-    for (let index = 0; index < preflight.changed_path_manifest.length; index++) {
-      const entry = preflight.changed_path_manifest[index]
-      const patch = await runNative(cwd, inspectionArgs(binding, "patch", index), "")
-      // An empty patch for a path that is neither mode-only nor deleted is
-      // never legitimate: even a newly added empty file still renders a
-      // non-empty `diff --git`/`new file mode`/`index` header with no hunk.
-      // A genuinely empty string here means the native read silently
-      // produced nothing for a content-changing path -- the exact
-      // fabricate-a-clean-review shape this plugin's own contract (no
-      // partial-evidence outcome) forbids.
-      if (patch === "" && !entry.mode_only && !entry.deleted) {
-        throw Object.assign(
-          new Error("review context evidence patch was empty for a content-changing path"),
-          { reviewEmptyPatch: true, path: entry.path },
-        )
-      }
-      consume(`GENTLE_AI_REVIEW_PATCH ${index} ${entry.path}`, patch, "GENTLE_AI_REVIEW_PATCH_END")
-    }
-    return sections.join("")
-  } catch (cause) {
-    if ((cause as { reviewBudgetExceeded?: boolean } | null)?.reviewBudgetExceeded) {
-      throw new Error(
-        `review context exceeds the ${REVIEW_CONTEXT_BYTE_BUDGET}-byte provider injection budget for lens ${binding.lens}; ` +
-        "The reviewer was not launched, so its exactly-once invocation is preserved; " +
-        "immutable candidate evidence is never truncated. " +
-        "Split this candidate into smaller reviewable commits (a chained sequence, each under the budget) " +
-        "and start a new review for the reduced scope; retrying the same candidate cannot succeed.",
-      )
-    }
-    if ((cause as { reviewEmptyPatch?: boolean; path?: string } | null)?.reviewEmptyPatch) {
-      const failedPath = (cause as { path?: string }).path
-      throw new Error(
-        `review context evidence patch was empty for content-changing path ${JSON.stringify(failedPath)} in lens ${binding.lens}; ` +
-        "The reviewer was not launched, so its exactly-once invocation is preserved. " +
-        "Refresh the exact native next_transition for lineage " + binding.lineage + " and relaunch the lens; " +
-        "if the same path keeps returning an empty patch, treat it as a native inspection defect and stop relaunching.",
-      )
-    }
-    throw new Error(
-      `review context evidence materialization failed for lens ${binding.lens}: ` +
-      `${sessionErrorMessage(binding, cause, "repository_context_evidence_failed")}. ` +
+      "`review lens-context` accepts only the opaque provider-issued handle and has no --cwd fallback. " +
       "The reviewer was not launched, so its exactly-once invocation is preserved.",
     )
   }
+  let block: string
+  try {
+    block = await runNative(cwd, [
+      "review", "lens-context",
+      "--repository-context", binding.repository_context,
+      "--lens", binding.lens,
+      "--delivery", LENS_CONTEXT_DELIVERY,
+    ], "")
+  } catch (cause) {
+    throw new Error(
+      `review lens context failed for lens ${binding.lens}: ` +
+      `${lensContextRefusal(cause) ?? sessionErrorMessage(binding, cause, "repository_context_lens_context_failed")}. ` +
+      "The reviewer was not launched, so its exactly-once invocation is preserved.",
+    )
+  }
+  return `${verifiedLensContext(block, binding)}\n`
 }
 
-async function injectReviewerContext(prompt: string, lens: string, cwd: string): Promise<string> {
-  const binding = parseBinding(prompt, lens)
-  const preflight = await preflightCapture(cwd, binding)
-  const injectedBinding = { ...binding, subject_hash: preflight.artifact_subject.subject_hash }
-  const evidence = await materializeReviewEvidence(cwd, injectedBinding, preflight)
-  return `GENTLE_AI_REVIEW_BINDING ${JSON.stringify(injectedBinding)}\n` +
-    `GENTLE_AI_REVIEW_CONTEXT ${JSON.stringify(preflight)}\n` +
-    evidence +
-    `GENTLE_AI_REVIEW_CONTEXT_END\n`
+// lensContextRefusal forwards the provider's typed refusal code and this
+// plugin's own recovery text for it, or undefined when the failure is not a
+// typed lens-context refusal at all (a Git trust refusal, a missing binary, a
+// crash) and the caller should classify it the ordinary way.
+function lensContextRefusal(cause: unknown): string | undefined {
+  const match = LENS_CONTEXT_REFUSAL.exec(errorMessage(cause))
+  if (!match) return undefined
+  return `${match[1]}: the provider refused to produce the reviewer lens context. ` +
+    `${LENS_CONTEXT_REFUSAL_ACTION[match[1]] ?? LENS_CONTEXT_DEFAULT_ACTION}`
+}
+
+// verifiedLensContext confirms the block is complete and is the one this task
+// asked for, before it becomes the reviewer's prompt.
+//
+// The provider authored both the block and its binding, so this is not a
+// trust check on the provider. It is what makes a caller that pointed the
+// review at a different candidate -- by relaying a repository context handle
+// for one lineage while claiming another in its own binding -- fail here,
+// loudly, instead of silently capturing a reviewer result into that other
+// lineage after the reviewer has already been spent.
+function verifiedLensContext(block: string, binding: ReviewBinding): string {
+  if (!block.endsWith(LENS_CONTEXT_TERMINATOR)) {
+    throw new Error(
+      `review lens context for lens ${binding.lens} is not terminated by ${LENS_CONTEXT_TERMINATOR}; ` +
+      "partial provider context is never injected. " +
+      "The reviewer was not launched, so its exactly-once invocation is preserved.",
+    )
+  }
+  const provider = parseBinding(block, binding.lens)
+  if (provider.lineage !== binding.lineage || provider.target !== binding.target ||
+      provider.order !== binding.order || provider.repository_context !== binding.repository_context ||
+      (binding.revision !== undefined && provider.revision !== binding.revision) ||
+      typeof provider.subject_hash !== "string") {
+    throw new Error(
+      `review lens context for lens ${binding.lens} binds a different candidate than the task claimed. ` +
+      "The reviewer was not launched, so its exactly-once invocation is preserved.",
+    )
+  }
+  return block
 }
 
 function preserveResult(cwd: string, binding: ReviewBinding, raw: string, cls?: string): Promise<string> {
