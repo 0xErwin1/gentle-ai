@@ -938,7 +938,7 @@ func newLineageCapturedFindings(findings []facadeFinding) []reviewtransaction.Fi
 	converted := make([]reviewtransaction.FindingEvidence, len(findings))
 	for index, finding := range findings {
 		converted[index] = reviewtransaction.FindingEvidence{
-			FindingID: finding.ID, Class: finding.EvidenceClass, Causality: finding.CausalDisposition,
+			FindingID: finding.ID, Severity: finding.Severity, Class: finding.EvidenceClass, Causality: finding.CausalDisposition,
 			Proof: strings.Join(finding.ProofRefs, "; "),
 		}
 	}

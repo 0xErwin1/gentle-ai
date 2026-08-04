@@ -2212,7 +2212,15 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 					return reviewPreflightError(fmt.Errorf("read new-lineage admission findings: %w", err))
 				}
 			} else if *capturedResults {
-				findings = newRecord.Authority.CapturedFindingEvidence()
+				// W-11 (Wave 7 S1, design decision 3b): only SEVERE
+				// (BLOCKER/CRITICAL) captured findings are ever candidates for
+				// candidate-causal admission -- a WARNING finding must stay
+				// non-blocking even if its causal_disposition would otherwise
+				// admit it. Filtering here, before AdmitCandidateCausalFindings,
+				// keeps that function itself byte-identical and never touches
+				// the --admission-findings branch above, whose FindingEvidence
+				// carries no Severity at all.
+				findings = reviewtransaction.SevereFindingEvidence(newRecord.Authority.CapturedFindingEvidence())
 			}
 			newTerminalAtEntry := newRecord.Authority.State == reviewtransaction.NewLineageStateApproved || newRecord.Authority.State == reviewtransaction.NewLineageStateEscalated
 			if !newTerminalAtEntry {

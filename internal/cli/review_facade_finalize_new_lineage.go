@@ -85,11 +85,19 @@ func runReviewFacadeFinalizeNewLineage(
 	if capturedResults {
 		capturedLensResults = authority.CapturedLensNames()
 	}
-	admitted, _ := reviewtransaction.AdmitCandidateCausalFindings(findings)
+	// W-9 (Wave 7 S1, design decision 3c): an unresolved (unknown or unset)
+	// causal_disposition on a severe finding has no confirmed candidate
+	// cause AND no known non-candidate cause either -- it must terminally
+	// escalate, matching v2's own transaction.go validate logic, rather than
+	// silently approve because it happened not to land in admittedIDs.
+	// unresolvedIDs is never merged into AdmittedFindingIDs itself: that
+	// field's contract is "candidate-caused blocker admitted for
+	// correction", and an unresolved cause is not confirmed candidate-caused.
+	admitted, _, unresolved := reviewtransaction.AdmitCandidateCausalFindings(findings)
 	transition, err := (reviewtransaction.ReviewCore{}).Next(ctx, authority, reviewtransaction.CoreRequest{
 		Kind: reviewtransaction.CoreRequestFinalize,
 		AdvanceRequest: &reviewtransaction.FinalizeAdvanceRequest{
-			Failed: failed, AdmittedFindingIDs: admitted, CapturedLensResults: capturedLensResults,
+			Failed: failed || len(unresolved) > 0, AdmittedFindingIDs: admitted, CapturedLensResults: capturedLensResults,
 		},
 	})
 	if err != nil {
