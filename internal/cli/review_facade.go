@@ -64,6 +64,26 @@ func reviewFacadeReceiptNotAvailableReason(lineageID string) string {
 	return fmt.Sprintf("facade review receipt is not available; run gentle-ai review finalize --lineage %s to produce one", lineageID)
 }
 
+// reviewFacadeApprovedReceiptCorruptReason (W-7, Wave 5 fix cycle 2,
+// verify-report #10186) is the honest continuation for an approved v3
+// authority whose receipt file EXISTS but fails to parse/validate or does
+// not match the authority's own frozen state (tampered, corrupted, or
+// otherwise diverged). Deliberately distinct from
+// reviewFacadeReceiptNotAvailableReason: naming `review finalize` here would
+// name a continuation that itself refuses -- WriteReceipt's own
+// publishImmutable never overwrites existing bytes that differ from what it
+// would republish (ImmutablePublicationConflictError), and v3 has no
+// reopen/repair machinery for a corrupted receipt. A fresh lineage is the
+// only continuation that actually clears this denial.
+func reviewFacadeApprovedReceiptCorruptReason(lineageID string) string {
+	return fmt.Sprintf(
+		"approved new-lineage authority %s has a receipt that cannot be trusted (missing valid content, or its recorded identity does not match the frozen authority); "+
+			"a corrupted receipt cannot be repaired -- v3 has no reopen path for it, and re-running finalize would itself refuse (its own immutable-publication check never overwrites differing existing bytes) -- "+
+			"start a fresh review instead: gentle-ai review start --cwd <repo> --lineage <new-lineage-id>",
+		lineageID,
+	)
+}
+
 // reviewCompactFacadeLineageNotDiscoverableReason is the single wording
 // source for the refusal when selector-free compact lineage discovery finds
 // no candidate. This is reached only after every otherwise-loadable leaf has
@@ -2150,11 +2170,15 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			return newDiscErr
 		}
 		if newFound {
-			// The legacy reviewer-result ingestion pipeline (readFacadeReviewerArtifacts,
-			// readCapturedReviewerResults) is bound to CompactState/CompactStore and has
-			// no v3 equivalent yet (Wave 4+ territory) — refuse explicitly rather than
-			// silently ignore a caller's reviewer-result flags for a new-lineage authority.
-			for _, unsupported := range []string{"result", "result-artifact", "result-artifact-file", "captured-results", "captured-evidence", "validation", "refuter", "evidence"} {
+			// The legacy reviewer-result ARTIFACT ingestion pipeline
+			// (readFacadeReviewerArtifacts, readCapturedReviewerResults) is bound to
+			// CompactState/CompactStore and has no v3 equivalent — refuse explicitly
+			// rather than silently ignore a caller's reviewer-result flags for a
+			// new-lineage authority. --captured-results is excluded from this list
+			// (C-A, Wave 5 fix cycle 2): it now names the minimal v3 capture
+			// primitive's own persisted CapturedResults, not the legacy artifact
+			// pipeline these other flags name.
+			for _, unsupported := range []string{"result", "result-artifact", "result-artifact-file", "captured-evidence", "validation", "refuter", "evidence"} {
 				if reviewFinalizeFlagProvided(args, unsupported) {
 					return reviewPreflightError(fmt.Errorf("new-lineage finalize does not yet support --%s; retry with `gentle-ai review finalize --lineage %s` and, if needed, --failed or --admission-findings", unsupported, *lineage))
 				}
@@ -2171,7 +2195,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 					return err
 				}
 			}
-			return runReviewFacadeFinalizeNewLineage(ctx, stdout, root, *lineage, newRecord, findings, *failed)
+			return runReviewFacadeFinalizeNewLineage(ctx, stdout, root, *lineage, newRecord, findings, *failed, *capturedResults)
 		}
 	}
 	store, record, err := discoverCompactFacadeFinalize(ctx, root, *lineage)

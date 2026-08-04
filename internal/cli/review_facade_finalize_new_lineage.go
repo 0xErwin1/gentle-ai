@@ -64,7 +64,7 @@ type ReviewFacadeFinalizeNewLineageResult struct {
 // own precedent (review_facade_new_lineage.go:73-78) exactly.
 func runReviewFacadeFinalizeNewLineage(
 	ctx context.Context, stdout io.Writer, root, lineage string, record reviewtransaction.NewLineageRecord,
-	findings []reviewtransaction.FindingEvidence, failed bool,
+	findings []reviewtransaction.FindingEvidence, failed, capturedResults bool,
 ) error {
 	store, err := reviewtransaction.NewLineageAuthorityStore(ctx, root, lineage)
 	if err != nil {
@@ -73,10 +73,22 @@ func runReviewFacadeFinalizeNewLineage(
 	authority := record.Authority
 	revision := record.Revision
 
+	// C-A (Wave 5 fix cycle 2): --captured-results names the lens results the
+	// minimal v3 capture primitive already persisted onto this authority
+	// (AuthorityStore.CaptureLensResult) -- never a caller-supplied list, the
+	// same "only the caller's own already-admitted results, never new input"
+	// shape v2's --captured-results has. A tier-low authority (SelectedLenses
+	// empty) passes hasCapturedAllSelectedLenses trivially either way.
+	var capturedLensResults []string
+	if capturedResults {
+		capturedLensResults = authority.CapturedLensNames()
+	}
 	admitted, _ := reviewtransaction.AdmitCandidateCausalFindings(findings)
 	transition, err := (reviewtransaction.ReviewCore{}).Next(ctx, authority, reviewtransaction.CoreRequest{
-		Kind:           reviewtransaction.CoreRequestFinalize,
-		AdvanceRequest: &reviewtransaction.FinalizeAdvanceRequest{Failed: failed, AdmittedFindingIDs: admitted},
+		Kind: reviewtransaction.CoreRequestFinalize,
+		AdvanceRequest: &reviewtransaction.FinalizeAdvanceRequest{
+			Failed: failed, AdmittedFindingIDs: admitted, CapturedLensResults: capturedLensResults,
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("review core finalize: %w", err)

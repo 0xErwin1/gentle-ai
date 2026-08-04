@@ -305,6 +305,90 @@ func TestResolveGoverningAuthorityCandidateIdentityMismatchDenies(t *testing.T) 
 	}
 }
 
+// TestResolveGoverningAuthorityCorruptReceiptNamesFreshLineageNotFinalize is
+// W-7 (Wave 5 fix cycle 2, verify-report #10186): a PRESENT but tampered/
+// mismatched receipt used to name the exact same continuation as a genuinely
+// ABSENT one (reviewFacadeReceiptNotAvailableReason, "run gentle-ai review
+// finalize --lineage %s"). Investigated: WriteReceipt's own publishImmutable
+// (authority_store.go, store.go's publishNoReplace path) refuses to
+// overwrite EXISTING content that differs from what it would (re)publish --
+// it returns ImmutablePublicationConflictError rather than repairing the
+// tamper. So for an approved lineage whose receipt exists but does not match
+// the frozen authority, `review finalize --lineage <id>` would itself
+// refuse: the named continuation was a dead end, not a repair. This pins the
+// honest replacement: a distinct denial code (approved_receipt_corrupt, not
+// approved_without_receipt) and a message naming the only continuation that
+// actually clears it -- a fresh lineage; v3 has no reopen/repair machinery
+// for a corrupted receipt (the same "no reopen" boundary
+// AuthorityStore.CaptureLensResult enforces).
+func TestResolveGoverningAuthorityCorruptReceiptNamesFreshLineageNotFinalize(t *testing.T) {
+	reviewModeHome(t)
+	repo := initReviewCLIRepo(t)
+	const lineage = "corrupt-receipt-names-fresh-lineage"
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("corrupt-receipt fixture\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "tracked.txt")
+
+	live, _, err := governingAuthorityLiveEvidence(context.Background(), repo, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := reviewtransaction.NewLineageAuthorityStore(context.Background(), repo, lineage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision, err := store.Mutate(context.Background(), "", func(next *reviewtransaction.NewLineageAuthority) error {
+		next.State = reviewtransaction.NewLineageStateApproved
+		next.CandidateIdentity = live
+		next.Tier = reviewtransaction.RiskLow
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteReceipt(context.Background(), reviewtransaction.NewLineageReceipt{
+		Schema: reviewtransaction.NewLineageReceiptSchema, LineageID: lineage,
+		TerminalState: reviewtransaction.NewLineageStateApproved, AuthorityRevision: revision,
+		CandidateIdentity: live,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tampered := live
+	tampered.BaseTree = strings.Repeat("f", len(live.BaseTree))
+	tamperedPayload, err := json.MarshalIndent(reviewtransaction.NewLineageReceipt{
+		Schema: reviewtransaction.NewLineageReceiptSchema, LineageID: lineage,
+		TerminalState: reviewtransaction.NewLineageStateApproved, AuthorityRevision: revision,
+		CandidateIdentity: tampered,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.ReceiptPath(), append(tamperedPayload, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	governs, evaluation, discoveryErr := resolveGoverningAuthority(context.Background(), repo, lineage, reviewtransaction.NativeGateRequestInput{Gate: reviewtransaction.GatePreCommit})
+	if !governs {
+		t.Fatal("a corrupted receipt must still govern (deny), got governs=false")
+	}
+	if discoveryErr != nil {
+		t.Fatalf("unexpected discovery error: %v", discoveryErr)
+	}
+	if evaluation.Result == reviewtransaction.GateAllow {
+		t.Fatalf("a tampered receipt must never allow, got %#v", evaluation)
+	}
+	if evaluation.Context.Denial == nil || evaluation.Context.Denial.Code != "approved_receipt_corrupt" {
+		t.Fatalf("denial code = %#v, want approved_receipt_corrupt (distinct from the genuinely-absent approved_without_receipt case)", evaluation.Context.Denial)
+	}
+	if strings.Contains(evaluation.Reason, "review finalize --lineage") {
+		t.Fatalf("reason = %q, must not name finalize -- WriteReceipt refuses to overwrite the differing on-disk bytes, so finalize would itself refuse", evaluation.Reason)
+	}
+	if !strings.Contains(evaluation.Reason, "gentle-ai review start") {
+		t.Fatalf("reason = %q, must name the only continuation that actually clears a corrupted receipt: a fresh lineage via review start", evaluation.Reason)
+	}
+}
+
 // TestRunReviewFacadeValidateNewLineageGovernsOverAnAllowingLegacyReceipt is
 // Wave 5 Slice 4's receipt-precedence proof: a v3 record AND a legacy v1
 // chain both exist under the IDENTICAL lineage id and the SAME exact
