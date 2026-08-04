@@ -143,5 +143,3 @@ func pathsAreDisjoint(genesisPaths, livePaths []string) bool {
 	}
 	return true
 }
-
-
