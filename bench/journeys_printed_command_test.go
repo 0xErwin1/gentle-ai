@@ -134,3 +134,55 @@ func TestRunPrintedTransitionRefusesATransitionWithNothingToRun(t *testing.T) {
 		})
 	}
 }
+
+// TestDeadExecuteTransitionsSeesWhatTheClassifierCannot is the structural half
+// of issue #1865.
+//
+// The invocation that shipped the defect exited 0 and denied nothing, so it was
+// not a block, so Classify never ran on it and no bucket could ever have been
+// wrong. A rule that only grades blocks is blind to a broken continuation
+// handed out on a successful call. This one grades every observation.
+func TestDeadExecuteTransitionsSeesWhatTheClassifierCannot(t *testing.T) {
+	// The real shape, reduced: a successful `review status --next-transition`
+	// answering with an execute transition that has nothing to run.
+	const dead = `{"schema":"gentle-ai.review-status/v1","action":"recover",` +
+		`"next_transition":{"kind":"execute","reason_code":"recovery_authorized",` +
+		`"execute":{"operation":"review.recover","arguments":[{"name":"successor-lineage","value":"s"}]}}}`
+
+	observation := Observation{ExitCode: 0, Stdout: dead, StdoutCaptured: true, StderrCaptured: true}
+	if IsBlock(observation) {
+		t.Fatal("fixture must not be a block; the whole point is that the classifier never sees it")
+	}
+	if got := Classify(observation); got != NotABlock {
+		t.Fatalf("Classify = %q, want %q: this defect is invisible to classification by construction", got, NotABlock)
+	}
+	found := DeadExecuteTransitions(dead)
+	if len(found) != 1 || !strings.Contains(found[0], "review.recover") {
+		t.Fatalf("DeadExecuteTransitions = %#v, want one report naming review.recover", found)
+	}
+
+	// And it must fail the journey rather than adjust a number.
+	accumulator := newAccumulator()
+	accumulator.observe("read status", observation, nil, false)
+	if len(accumulator.deadTransitions) != 1 {
+		t.Fatalf("accumulator.deadTransitions = %#v, want the dead transition recorded", accumulator.deadTransitions)
+	}
+}
+
+// TestDeadExecuteTransitionsAcceptsWhatIsGenuinelyRunnable is the other
+// direction: the invariant must not fire on a healthy corpus, or it would be
+// removed as noise rather than trusted as a gate. A collect transition
+// deliberately carries no command and must never be reported.
+func TestDeadExecuteTransitionsAcceptsWhatIsGenuinelyRunnable(t *testing.T) {
+	for _, stdout := range []string{
+		`{"next_transition":{"kind":"execute","execute":{"operation":"review.finalize","command":"gentle-ai review finalize --lineage=review-1"}}}`,
+		`{"next_transition":{"kind":"collect","collect":{"inputs":[{"capture_operation":"review.capture-result"}]}}}`,
+		`{"result":"allow","allowed":true}`,
+		"Error: not JSON at all",
+		"",
+	} {
+		if found := DeadExecuteTransitions(stdout); len(found) != 0 {
+			t.Fatalf("DeadExecuteTransitions(%q) = %#v, want none", stdout, found)
+		}
+	}
+}
