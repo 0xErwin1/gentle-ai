@@ -90,6 +90,14 @@ var (
 	// first step of a cycle with no exit.
 	ErrRuntimeRemediationSuccessorRequired = errors.New("a bound passing SDD runtime attempt must also bind the approved review of its corrected candidate")
 	ErrBindingRevisionConflict             = errors.New("SDD review binding revision conflict")
+	// ErrRuntimeWorktreeMismatch never travels alone either. Every return site
+	// wraps it with runtimeWorktreeMismatchRefusal, which names the exact
+	// --cwd that reproduces the binding Begin actually recorded (#2296 part
+	// 1). Finishing from a different linked worktree than the one Begin ran
+	// under would diff a pinned base tree against an unrelated working tree —
+	// changed_lines: 0 when real work happened, or a wildly inflated delta —
+	// so this refuses before any candidate capture, not after.
+	ErrRuntimeWorktreeMismatch = errors.New("SDD runtime attempt began in a different linked worktree than this finish is running from")
 
 	runtimeRequestIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 	runtimeRevisionPattern  = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -172,12 +180,17 @@ type RuntimeObjective struct {
 }
 
 type RuntimeAttempt struct {
-	Ordinal                    int                `json:"ordinal"`
-	ObjectiveID                string             `json:"objective_id"`
-	ObjectiveGeneration        int                `json:"objective_generation"`
-	WorkUnit                   string             `json:"work_unit"`
-	BeginCandidateIdentity     string             `json:"begin_candidate_identity"`
-	BeginCandidateTree         string             `json:"begin_candidate_tree"`
+	Ordinal                int    `json:"ordinal"`
+	ObjectiveID            string `json:"objective_id"`
+	ObjectiveGeneration    int    `json:"objective_generation"`
+	WorkUnit               string `json:"work_unit"`
+	BeginCandidateIdentity string `json:"begin_candidate_identity"`
+	BeginCandidateTree     string `json:"begin_candidate_tree"`
+	// BeginWorktree is the canonical (absolute, symlink-evaluated) --cwd Begin
+	// ran under (#2296 part 1). It is empty for every chain recorded before
+	// this field existed — that emptiness IS the legacy signal, so replay and
+	// Finish must treat it as "no binding recorded" and enforce nothing.
+	BeginWorktree              string             `json:"begin_worktree,omitempty"`
 	FinishCandidateIdentity    string             `json:"finish_candidate_identity,omitempty"`
 	FinishCandidateTree        string             `json:"finish_candidate_tree,omitempty"`
 	Outcome                    AttemptOutcome     `json:"outcome"`
@@ -342,6 +355,12 @@ type runtimeBeginEvent struct {
 	Ordinal                int    `json:"ordinal"`
 	BeginCandidateIdentity string `json:"begin_candidate_identity"`
 	BeginCandidateTree     string `json:"begin_candidate_tree"`
+	// BeginWorktree records store.Workspace at Begin time (#2296 part 1): the
+	// resolved, symlink-evaluated absolute path of the exact --cwd this begin
+	// ran under. omitempty is load-bearing — every record predating this field
+	// deserializes it as "", which Finish and replay both treat as "no binding
+	// recorded" rather than as a mismatch, so legacy chains replay unchanged.
+	BeginWorktree string `json:"begin_worktree,omitempty"`
 }
 
 type runtimeResetEvent struct {
@@ -488,6 +507,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
 			Ordinal: status.NextOrdinal, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
+			BeginWorktree: store.Workspace,
 		}
 		if advancing {
 			return runtimeRecord{Operation: runtimeOperationAdvance, Begin: event, Advance: &runtimeAdvanceEvent{
@@ -510,6 +530,13 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		active := status.ActiveAttempt
 		if active == nil {
 			return runtimeRecord{}, ErrRuntimeNoActiveAttempt
+		}
+		// Enforce the worktree binding before any candidate capture/diff work
+		// runs (#2296 part 1). An empty recorded value means this attempt's
+		// begin record predates the field: no enforcement, byte-identical
+		// behavior to every chain recorded before this slice.
+		if active.BeginWorktree != "" && active.BeginWorktree != store.Workspace {
+			return runtimeRecord{}, store.runtimeWorktreeMismatchRefusal(active.Ordinal, active.BeginWorktree)
 		}
 		remediation := finishRequestsRemediation(request)
 		currentBinding := status.Binding
@@ -709,6 +736,28 @@ func runtimeRemediatesArgument(remediates string) string {
 		return remediates
 	}
 	return fmt.Sprintf("%q", remediates)
+}
+
+// runtimeWorktreeMismatchRefusal turns a cross-worktree finish into a refusal
+// that names the exact --cwd the ledger's candidate/diff math is pinned to.
+//
+// The demand itself is correct: Begin captured the base candidate tree
+// relative to the exact --cwd it ran under, so a Finish issued from a
+// DIFFERENT linked worktree would build and diff the wrong working tree
+// against that pinned base — a diff between two unrelated trees, not the
+// work this attempt actually did. The shared Git-common-dir ledger makes
+// every linked worktree able to reach and mutate the same chain, which is
+// exactly what makes the wrong --cwd able to slip through silently instead
+// of failing to open the store at all.
+//
+// The exit is unconditional and requires no read-only eligibility probe the
+// way runtimeRemediationExitRefusal's two branches do: the recorded
+// begin-worktree path is itself always the one runnable continuation, so
+// there is only one message to construct.
+func (store RuntimeStore) runtimeWorktreeMismatchRefusal(ordinal int, beginWorktree string) error {
+	return fmt.Errorf(
+		"%w: attempt %d began in %q, and its base candidate tree is pinned to that exact linked worktree, but this finish is running from %q — rerun with --cwd %q so the candidate capture and changed-line measurement use the worktree that actually did the work",
+		ErrRuntimeWorktreeMismatch, ordinal, beginWorktree, store.Workspace, beginWorktree)
 }
 
 // runtimeObjectiveChangeRefusal turns the changed-objective begin demand into
@@ -1257,7 +1306,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 	attempt := RuntimeAttempt{
 		Ordinal: event.Ordinal, ObjectiveID: event.ObjectiveID, ObjectiveGeneration: generation,
 		WorkUnit: event.WorkUnit, BeginCandidateIdentity: event.BeginCandidateIdentity,
-		BeginCandidateTree: event.BeginCandidateTree, Outcome: AttemptRunning,
+		BeginCandidateTree: event.BeginCandidateTree, BeginWorktree: event.BeginWorktree, Outcome: AttemptRunning,
 	}
 	replay.Status.Attempts = append(replay.Status.Attempts, attempt)
 	replay.AttemptTokens[event.Ordinal] = revision
@@ -1373,7 +1422,12 @@ func validateRuntimeBeginEvent(record runtimeRecord) error {
 	if !runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 0 || validateRuntimeText(event.WorkUnit, 160) != nil ||
 		validateRuntimeText(event.EvidenceGoal, 240) != nil || event.MaxAttempts < 1 || event.MaxAttempts > maximumRuntimeAttemptLimit ||
 		event.MaxChangedLines < 1 || event.MaxChangedLines > maximumRuntimeChangedLines || event.Ordinal < 1 ||
-		!runtimeRevisionPattern.MatchString(event.BeginCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.BeginCandidateTree) {
+		!runtimeRevisionPattern.MatchString(event.BeginCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.BeginCandidateTree) ||
+		// BeginWorktree is optional (empty means legacy/pre-field), but a
+		// PRESENT value is still an identity string, not free user input: it
+		// must be a bounded, trimmed, single-line value like every other
+		// recorded text field, not raw garbage.
+		(event.BeginWorktree != "" && validateRuntimeText(event.BeginWorktree, 4096) != nil) {
 		return errors.New("invalid SDD runtime begin event")
 	}
 	request := BeginAttemptRequest{
