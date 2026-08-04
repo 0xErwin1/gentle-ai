@@ -115,6 +115,11 @@ type sddStatusV1 struct {
 		LineageID  string `json:"lineageId"`
 		Invocation string `json:"invocation"`
 	} `json:"reviewOffer"`
+	ReVerify *struct {
+		Mode   string   `json:"mode"`
+		Scope  []string `json:"scope,omitempty"`
+		Reason string   `json:"reason"`
+	} `json:"reVerify"`
 	BlockedReasons []string `json:"blockedReasons"`
 	TaskProgress   struct {
 		Total       int  `json:"total"`

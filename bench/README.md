@@ -33,7 +33,7 @@ go vet ./...
 go test ./...
 ```
 
-The portable core contains 57 journeys. `j57` is deliberately excluded because
+The portable core contains 61 journeys. `j57` is deliberately excluded because
 it requires the product's `bench_fixture` seam; it is an explicit
 `source-coupled` axis, not a portable black-box measurement.
 
@@ -334,10 +334,10 @@ invents a metric is worse than one that admits a gap.
    classifier reads a field other than exit code and denial shape, and widening
    it would let the product talk its way out of a denial.
 
-7. **The corpus is honest, not exhaustive.** Fifty-seven mandatory portable
+7. **The corpus is honest, not exhaustive.** Sixty-one mandatory portable
    black-box journeys run end to end, weighted toward failure paths because that
    is where friction lives. `j57` is one explicit source-coupled journey that
-   requires a `bench_fixture`-tagged product binary, for 58 registered journey
+   requires a `bench_fixture`-tagged product binary, for 62 registered journey
    IDs total. Testing-guide flows 1 (install) and 8 (no phantom SDD artifacts)
    are inspection steps rather than review-lifecycle friction and are not
    modelled.
@@ -462,7 +462,7 @@ completed; nothing was unsupported. Re-running produces byte-identical numbers,
 
 Those numbers are the **14-journey** corpus against the binary named above,
 kept as-is because they belong to that named build. The portable core has since
-grown to 57 journeys; the source-coupled `j57` receipt-drift proof is opt-in.
+grown to 61 journeys; the source-coupled `j57` receipt-drift proof is opt-in.
 Re-run `run` against your own binary rather than reading the block above as
 current totals. The row labels moved too: `by_design` did not exist when this
 was recorded and is now printed as `4d`, next to the number it carves out of,
