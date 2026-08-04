@@ -267,7 +267,15 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// contract in `agent.gentle-orchestrator.prompt`, and that key is the only
 	// difference in the rendered settings, so the hash moved a fourth time.
 	// Deliberate, not drift.
-	const want = "54c3a5c7b112864a4b3d042b766549000ed482f3acd6c3b1eaebacb65d293da8"
+	//
+	// Issue #2485 moved it a fifth time: the Lossless Blocking Prompts
+	// answer-validation bullet now distinguishes a request for information
+	// (a human asking why input is required or what a choice does) from an
+	// invalid answer, telling the orchestrator to answer from the envelope it
+	// already holds and re-present the same envelope instead of rejecting the
+	// question. Kilocode embeds the same orchestrator contract, so the hash
+	// moved. Deliberate, not drift.
+	const want = "66c4ca685e5c5c73ca9ad4384ccc5c53f5b7c9149ea8bb27e66ec5e777f126e3"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
