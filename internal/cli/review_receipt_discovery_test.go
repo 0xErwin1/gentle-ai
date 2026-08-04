@@ -1211,9 +1211,9 @@ func approveDiscoveryMarkdownProjection(t *testing.T, repo, lineage, logicalPath
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if projection == reviewtransaction.ProjectionStaged {
-		runReviewCLIGit(t, repo, "add", "-A")
-	}
+	// #2394: a new file is reviewable only once the user declared it, and the
+	// index is that declaration for both projections.
+	runReviewCLIGit(t, repo, "add", "-A")
 
 	ctx := context.Background()
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
@@ -1222,14 +1222,7 @@ func approveDiscoveryMarkdownProjection(t *testing.T, repo, lineage, logicalPath
 		t.Fatalf("resolve discovery fixture repository root: %v", err)
 	}
 	rootBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
-	intended := []string{}
-	if projection != reviewtransaction.ProjectionStaged {
-		intended, err = reviewFacadeDiscoverIntendedUntracked(ctx, rootBuilder)
-		if err != nil {
-			t.Fatalf("discover intended untracked files for discovery fixture %q: %v", lineage, err)
-		}
-	}
-	snapshot, err := rootBuilder.Build(ctx, reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: intended})
+	snapshot, err := rootBuilder.Build(ctx, reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: []string{}})
 	if err != nil {
 		t.Fatalf("build discovery fixture target %q: %v", lineage, err)
 	}

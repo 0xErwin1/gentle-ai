@@ -521,12 +521,13 @@ var reviewFacadeCommandRunner = runReviewCommandContext
 var reviewFacadePlannedTransitionHook = func(context.Context, string, string, string) error { return nil }
 var reviewFacadeCommittedTransitionHook = func(context.Context, string, string, string) error { return nil }
 
-// reviewFacadeDiscoverIntendedUntracked is the injectable seam over START's
-// untracked-scope discovery, so tests can force an unanticipated internal
-// fault at the exact choke point issue #1881 crashed through and prove the
-// failure envelope and defect-report treatment both fire.
-var reviewFacadeDiscoverIntendedUntracked = func(ctx context.Context, builder reviewtransaction.SnapshotBuilder) ([]string, error) {
-	return builder.DiscoverIntendedUntracked(ctx)
+// reviewFacadeBuildStartSnapshot is the injectable seam over START's candidate
+// freeze, so tests can force an unanticipated internal fault at a real choke
+// point on the mutating path -- before any authority exists -- and prove the
+// failure envelope and defect-report treatment both fire. It replaced the
+// untracked-scope discovery seam that #2394 deleted from START.
+var reviewFacadeBuildStartSnapshot = func(ctx context.Context, builder reviewtransaction.SnapshotBuilder, target reviewtransaction.Target) (reviewtransaction.Snapshot, error) {
+	return builder.Build(ctx, target)
 }
 var renderReviewStartFrozenCandidateContext = func(ctx context.Context, builder reviewtransaction.SnapshotBuilder, snapshot reviewtransaction.Snapshot) (reviewtransaction.FrozenCandidateContext, error) {
 	return builder.FrozenCandidateContext(ctx, snapshot)
@@ -817,14 +818,10 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		if err != nil {
 			return fmt.Errorf("resolve negotiated review repository root: %w", err)
 		}
-		intended := []string{}
-		if selectedProjection != reviewtransaction.ProjectionStaged {
-			intended, err = (reviewtransaction.SnapshotBuilder{Repo: root}).DiscoverIntendedUntracked(ctx)
-			if err != nil {
-				return fmt.Errorf("discover negotiated review target: %w", err)
-			}
-		}
-		target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: selectedProjection, IntendedUntracked: intended}
+		// Issue #2394: review scope is declared, never inferred from the
+		// worktree. STATUS derives the same target START will freeze, so it
+		// declares no untracked scope either.
+		target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: selectedProjection, IntendedUntracked: []string{}}
 		if selectedBaseRef != "" {
 			target.Kind, target.BaseRef = reviewtransaction.TargetBaseDiff, selectedBaseRef
 		}
@@ -1106,13 +1103,9 @@ func RunReviewRecover(args []string, stdout io.Writer) error {
 			return fmt.Errorf("unsupported review recovery projection %q", selected)
 		}
 	}
+	// Issue #2394: a recovery successor declares scope exactly the way a fresh
+	// START does, so it never re-sweeps the worktree either.
 	intended := []string{}
-	if projection != reviewtransaction.ProjectionStaged {
-		intended, err = builder.DiscoverIntendedUntracked(context.Background())
-		if err != nil {
-			return err
-		}
-	}
 	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: intended}
 	if *committedOnly {
 		target.Kind, target.BaseRef = reviewtransaction.TargetBaseDiff, base
@@ -1524,24 +1517,16 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			return errors.New("review start with --base-ref omits dirty tracked changes; rerun with --committed-only to acknowledge committed-only review scope")
 		}
 	}
+	// Issue #2394: START used to sweep every unignored untracked path in the
+	// worktree into the frozen candidate. Existing on disk is not a
+	// declaration, and the sweep handed a reviewer the exact bytes of files
+	// the user never submitted -- two unrelated credential files, in the
+	// reported occurrence. Review scope is now only what the user declared
+	// through Git's own mechanism: tracked modifications, plus new files put
+	// in the index with `git add`, which the candidate is already built from.
+	// Nothing here has to be configured for that to be safe, because there is
+	// no longer anything to configure: the sweep is gone rather than filtered.
 	intended := []string{}
-	if selectedProjection != reviewtransaction.ProjectionStaged {
-		intended, err = reviewFacadeDiscoverIntendedUntracked(ctx, builder)
-		if err != nil {
-			wrapped := fmt.Errorf("discover intended untracked files: %w", err)
-			// Discovery runs before Build and before any authority mutation, so
-			// its NAMED refusals classify as a not_started preflight in the
-			// negotiated envelope. Typed Git subprocess failures keep their own
-			// stronger git_command_* classification through this wrapper's
-			// chain, and anything else is unanticipated residue that must stay
-			// untyped so the defect-report treatment can see it for what it is.
-			var refusal *reviewtransaction.UntrackedScopeRefusalError
-			if errors.As(err, &refusal) {
-				return reviewPreflightRefusal(reviewPreflightUntrackedScopeReason, wrapped)
-			}
-			return wrapped
-		}
-	}
 	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: selectedProjection, IntendedUntracked: intended}
 	if strings.TrimSpace(*baseRef) != "" {
 		target.Kind = reviewtransaction.TargetBaseDiff
@@ -1550,7 +1535,7 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	if *workspaceOverlay {
 		target.Kind = reviewtransaction.TargetBaseWorkspaceOverlay
 	}
-	snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: root}).Build(ctx, target)
+	snapshot, err := reviewFacadeBuildStartSnapshot(ctx, reviewtransaction.SnapshotBuilder{Repo: root}, target)
 	if err != nil {
 		return fmt.Errorf("build facade review target: %w", err)
 	}
@@ -2867,9 +2852,6 @@ func prepareFacadeFinalizePlan(ctx context.Context, repo, revision string, state
 		appendState("review/escalate-correction-verification")
 	}
 	if state.State == reviewtransaction.StateCorrectionRequired && validation != nil && entryState == reviewtransaction.StateCorrectionRequired && entryProposed {
-		if err := rejectFacadeCorrectionUntracked(ctx, repo, state); err != nil {
-			return plan, err
-		}
 		if captured == nil {
 			return plan, errors.New("compact correction acceptance requires captured repository verification evidence") // refusal:by-design operator-knowledge: repository verification is an external prerequisite captured from the current STATUS transition
 		}
@@ -4113,30 +4095,6 @@ func encodeCompactFacadeFinalize(stdout io.Writer, negotiated bool, contract str
 		Eligibility: eligibility, NextTransition: transition, ValidationRequest: validationRequest,
 	}
 	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationFinalize, result, public, contract)
-}
-
-func rejectFacadeCorrectionUntracked(ctx context.Context, repo string, state reviewtransaction.CompactState) error {
-	if state.InitialSnapshot.Projection == reviewtransaction.ProjectionStaged {
-		return nil
-	}
-	live, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).DiscoverIntendedUntracked(ctx)
-	if err != nil {
-		return fmt.Errorf("discover correction untracked paths: %w", err)
-	}
-	allowed := make(map[string]struct{}, len(state.CurrentSnapshot.IntendedUntracked))
-	for _, path := range state.CurrentSnapshot.IntendedUntracked {
-		allowed[path] = struct{}{}
-	}
-	unexpected := make([]string, 0)
-	for _, path := range live {
-		if _, ok := allowed[path]; !ok {
-			unexpected = append(unexpected, path)
-		}
-	}
-	if len(unexpected) != 0 {
-		return fmt.Errorf("correction contains untracked paths outside the frozen review scope: %s", strings.Join(unexpected, ", "))
-	}
-	return nil
 }
 
 // reviewDisabledUnmanagedReason is the shipped disposition sentence, unchanged

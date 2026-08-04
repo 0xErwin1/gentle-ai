@@ -723,13 +723,13 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 				return runtimeRecord{}, fmt.Errorf("failed evidence revision %q does not match native runtime evidence %q", request.RemediatesEvidenceRevision, status.EvidenceRevision)
 			}
 		}
-		intended, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).DiscoverIntendedUntracked(ctx)
-		if err != nil {
-			return runtimeRecord{}, fmt.Errorf("discover SDD runtime intended-untracked paths: %w", err)
-		}
+		// Issue #2394: the runtime candidate is the same declared candidate
+		// review freezes -- tracked changes plus whatever the user put in the
+		// index. Sweeping the worktree here would make drift detection and
+		// review disagree about what the candidate even is.
 		snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).Build(ctx, reviewtransaction.Target{
 			Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: active.BeginCandidateTree,
-			Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: intended,
+			Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
 		})
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate after attempt: %w", err)
@@ -2265,13 +2265,9 @@ func validHarnessDisposition(disposition HarnessDisposition) bool {
 
 func captureRuntimeCandidate(ctx context.Context, repo string) (reviewtransaction.Snapshot, error) {
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
-	intended, err := builder.DiscoverIntendedUntracked(ctx)
-	if err != nil {
-		return reviewtransaction.Snapshot{}, err
-	}
 	return builder.Build(ctx, reviewtransaction.Target{
 		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace,
-		IntendedUntracked: intended,
+		IntendedUntracked: []string{},
 	})
 }
 
@@ -2281,13 +2277,9 @@ func captureRuntimeCandidate(ctx context.Context, repo string) (reviewtransactio
 // a terminal (no active attempt) objective scope.
 func captureRuntimeTerminalCandidate(ctx context.Context, store RuntimeStore, beginCandidateTree string) (reviewtransaction.Snapshot, error) {
 	builder := reviewtransaction.SnapshotBuilder{Repo: store.Repo}
-	intended, err := builder.DiscoverIntendedUntracked(ctx)
-	if err != nil {
-		return reviewtransaction.Snapshot{}, fmt.Errorf("discover SDD runtime intended-untracked paths: %w", err)
-	}
 	return builder.Build(ctx, reviewtransaction.Target{
 		Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: beginCandidateTree,
-		Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: intended,
+		Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
 	})
 }
 

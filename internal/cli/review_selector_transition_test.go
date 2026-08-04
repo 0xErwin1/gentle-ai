@@ -227,7 +227,7 @@ func TestStatusRecoverTransitionExecutesApprovedStagedScopeExpansion(t *testing.
 	writeReviewStartCandidate(t, repo, "docs/extra.md", "# Extra\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "docs/extra.md")
 	writeReviewStartCandidate(t, repo, "tracked.txt", "unstaged divergence\n", 0o644)
-	writeReviewStartCandidate(t, repo, "scratch.txt", "untracked noise\n", 0o644)
+	writeUndeclaredWorkspaceFile(t, repo, "scratch.txt", "untracked noise\n", 0o644)
 	wantTree := strings.TrimSpace(runReviewCLIGit(t, repo, "write-tree"))
 	selectors := []string{"--lineage", predecessor.State.LineageID, "--base-ref", base, "--projection", "staged", "--workspace-overlay"}
 	probe := selectorTransitionStatus(t, repo, selectors...)
@@ -396,7 +396,7 @@ func TestStatusRecoverTransitionExecutesCorrectionRequiredStagedScopeExpansion(t
 	writeReviewStartCandidate(t, repo, "migration.sql", "CREATE TABLE recovered (id INTEGER);\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "candidate.go", "migration.sql")
 	writeReviewStartCandidate(t, repo, "tracked.txt", "unstaged divergence\n", 0o644)
-	writeReviewStartCandidate(t, repo, "scratch.txt", "untracked noise\n", 0o644)
+	writeUndeclaredWorkspaceFile(t, repo, "scratch.txt", "untracked noise\n", 0o644)
 	wantTree := strings.TrimSpace(runReviewCLIGit(t, repo, "write-tree"))
 
 	selectors := []string{
