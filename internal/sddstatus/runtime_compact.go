@@ -21,6 +21,7 @@ const (
 	CompactBlockCorruptAuthority    CompactBlockReason = "corrupt_authority"
 	CompactBlockInvalidContinuation CompactBlockReason = "invalid_continuation"
 	CompactBlockRemediationRequired CompactBlockReason = "remediation_required"
+	CompactBlockWorktreeMismatch    CompactBlockReason = "worktree_mismatch"
 	CompactBlockAuthorityFailure    CompactBlockReason = "authority_failure"
 )
 
@@ -353,6 +354,13 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin B
 	// default authority_failure and lost that exit entirely (#2249).
 	case errors.Is(err, ErrRuntimeRemediationSuccessorRequired):
 		reason = CompactBlockRemediationRequired
+	// ErrRuntimeWorktreeMismatch is the sentinel behind
+	// runtimeWorktreeMismatchRefusal (#2296 part 1): Finish is running from a
+	// different linked worktree than the one Begin recorded. Left
+	// unclassified it would fall through to the opaque default
+	// authority_failure and lose the exact --cwd the refusal names.
+	case errors.Is(err, ErrRuntimeWorktreeMismatch):
+		reason = CompactBlockWorktreeMismatch
 	}
 	return CompactAttemptResult{State: CompactStateBlocked, Reason: reason, Exit: detail, Detail: detail}
 }
