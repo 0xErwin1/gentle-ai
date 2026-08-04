@@ -283,12 +283,12 @@ jobs:
         # advises "latest" too (see internal/installcmd/resolver.go).
         run: npm install --global @anthropic-ai/claude-code@latest
 
-      - name: Verify Windows OpenCode reviewer rejection E2E is registered
+      - name: Verify OpenCode reviewer support E2E is registered
         shell: pwsh
         run: |
-          $tests = go test -list '^TestRealOpenCodeRejectsUnsupportedImmutableReviewerBash$' ./e2e/organicruntime
-          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestRealOpenCodeRejectsUnsupportedImmutableReviewerBash') {
-            throw 'Windows OpenCode reviewer rejection E2E is missing'
+          $tests = go test -list '^TestRealOpenCodeReviewerLensCannotSeeLiveState$' ./e2e/organicruntime
+          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestRealOpenCodeReviewerLensCannotSeeLiveState') {
+            throw 'OpenCode reviewer support E2E is missing'
           }
 
       - name: Verify real-agent detection E2E is registered

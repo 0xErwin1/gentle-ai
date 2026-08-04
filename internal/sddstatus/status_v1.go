@@ -211,13 +211,7 @@ func marshalStatusV1Indent(status Status) ([]byte, error) {
 }
 
 func projectArtifactsV1(store ArtifactStore, source map[string]ArtifactState) (map[string]ArtifactState, error) {
-	keys := []string{
-		"proposal", "specs", "design", "tasks", "applyProgress", "verifyReport",
-		"reviewLedger", "reviewReceipt", "reviewBundle", "reviewContext", "reviewState",
-	}
-	if store == ArtifactStoreEngram {
-		keys = append(keys, "reviewPolicy")
-	}
+	keys := artifactStateKeys(store)
 	projected := make(map[string]ArtifactState, len(keys))
 	for _, key := range keys {
 		state, ok := source[key]

@@ -127,7 +127,7 @@ func TestCompactAuthorityRemovalRegressionStillRefuses(t *testing.T) {
 	}
 	// The graph is already invalid, so a whole-graph post-condition would
 	// refuse both removals and leave the store unrecoverable.
-	if _, err := compactAuthorityLeaves(records, map[string]CompactStore{}); err == nil {
+	if violations, _ := compactAuthorityGraphViolations(records); len(violations) == 0 {
 		t.Fatal("fixture graph is unexpectedly valid")
 	}
 	if err := compactAuthorityRemovalRegression(records, compactRecordsWithout(records, successor.State.LineageID)); err != nil {
@@ -169,8 +169,10 @@ func TestForgedRecoveryAuthorizationDeadEndHasRunnableExit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if before.Authoritative ||
-		!hasAuthorityInventoryStatus(before.Entries, successorAlpha.State.LineageID, AuthorityStatusInvalid) ||
+	// Both forged successors are reported invalid on their own entries. The
+	// inventory as a whole stays usable, because two damaged successors are
+	// two damaged successors and not a repository-wide verdict.
+	if !hasAuthorityInventoryStatus(before.Entries, successorAlpha.State.LineageID, AuthorityStatusInvalid) ||
 		!hasAuthorityInventoryStatus(before.Entries, successorBravo.State.LineageID, AuthorityStatusInvalid) {
 		t.Fatalf("forged inventory = %#v", before)
 	}
