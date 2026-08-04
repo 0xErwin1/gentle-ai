@@ -1777,6 +1777,9 @@ test_antigravity_sdd_skills_path() {
     log_test "Antigravity: SDD skills install to ~/.gemini/antigravity-cli/skills/"
     cleanup_test_env
 
+    # Antigravity is a desktop app — create the config dir to signal it's "installed"
+    mkdir -p "$HOME/.gemini/antigravity"
+
     if $BINARY install --agent antigravity --component sdd --persona neutral 2>&1; then
         local skills_dir="$HOME/.gemini/antigravity-cli/skills"
         assert_dir_exists "$skills_dir" "Antigravity skills directory"
@@ -1801,6 +1804,9 @@ test_antigravity_sdd_skills_path() {
 test_windsurf_persona_and_sdd_content() {
     log_test "Windsurf: persona + SDD inject into global_rules.md"
     cleanup_test_env
+
+    # Windsurf is a desktop app — create the config dir to signal it's "installed"
+    mkdir -p "$HOME/.codeium/windsurf"
 
     if $BINARY install --agent windsurf --component persona --component sdd --persona gentleman 2>&1; then
         local rules="$HOME/.codeium/windsurf/memories/global_rules.md"
