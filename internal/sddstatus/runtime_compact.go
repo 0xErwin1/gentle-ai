@@ -51,6 +51,17 @@ type CompactAttemptResult struct {
 // source of truth the way the pre-Wave-4 parallel struct did (#2133/#2151).
 type CompactAcquireRequest struct {
 	BeginAttemptRequest
+
+	// Token is optional ownership proof (#2291): a distinct call/process
+	// (e.g. an actor launched by a parent that already holds a proceed-state
+	// acquire) presents the token that acquire already returned to prove it
+	// is continuing that SAME attempt rather than colliding with it. A Token
+	// matching the ledger's currently active attempt short-circuits to
+	// proceed with zero mutation — no store.Begin, no ledger chain touched.
+	// A non-matching Token falls through to the ordinary active_attempt
+	// block, naming the REAL active token. An empty Token leaves every
+	// existing acquire/collide path byte-for-byte unchanged.
+	Token string
 }
 
 type CompactSettleRequest struct {
@@ -96,6 +107,19 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 			return compactBlocked(CompactBlockCorruptAuthority, ""), nil
 		}
 		return compactAcquireResult(current, begin, receipt.Revision), nil
+	}
+
+	// Zero-mutation ownership check (#2291): this is a pure read-then-compare
+	// against the already-loaded replay, modeled after the request-ID replay
+	// dedup above — neither branch calls store.Begin or touches the ledger
+	// chain. It only applies when an attempt is actually live; an inert
+	// Token with no active attempt falls through to the normal begin flow.
+	if request.Token != "" && replay.Status.ActiveAttempt != nil {
+		activeToken := replay.AttemptTokens[replay.Status.ActiveAttempt.Ordinal]
+		if request.Token == activeToken {
+			return CompactAttemptResult{State: CompactStateProceed, Token: activeToken}, nil
+		}
+		return compactForeignAcquireToken(activeToken), nil
 	}
 
 	if result, terminal := compactAcquireBlock(replay, begin); terminal {
@@ -335,4 +359,16 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin B
 
 func compactBlocked(reason CompactBlockReason, token string) CompactAttemptResult {
 	return CompactAttemptResult{State: CompactStateBlocked, Reason: reason, Token: token}
+}
+
+// compactForeignAcquireToken names the exact continuation for a losing
+// ownership check (#2291): the caller presented a token, but it is not the
+// ledger's live active attempt. It always carries the REAL active token —
+// never the foreign one the caller supplied — through Token, Exit, and
+// Detail alike, so a legible refusal (slice 1) also names how to proceed.
+func compactForeignAcquireToken(activeToken string) CompactAttemptResult {
+	detail := "a distinct attempt token " + activeToken + " is already active for this work unit; " +
+		"rerun `gentle-ai sdd-attempt acquire --token " + activeToken + "` to continue that exact attempt, " +
+		"or settle it with `gentle-ai sdd-attempt settle --token " + activeToken + "` before acquiring a new one"
+	return CompactAttemptResult{State: CompactStateBlocked, Reason: CompactBlockActiveAttempt, Token: activeToken, Exit: detail, Detail: detail}
 }
