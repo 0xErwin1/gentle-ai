@@ -135,6 +135,9 @@ func collectDocumentedInvocations(t *testing.T) []documentedInvocation {
 var placeholderRegexp = regexp.MustCompile(`<[a-zA-Z][a-zA-Z0-9_ .-]*>`)
 var optionalWordRegexp = regexp.MustCompile(`^\[[a-z-]+\]$`)
 
+const documentedRuntimeAgentIDPlaceholder = "{{GENTLE_AI_RUNTIME_AGENT_ID}}"
+const documentedRuntimeAgentID = "opencode"
+
 func wordNeedsShell(word string) bool {
 	switch word {
 	case ">", ">>", "2>", "<", "|", "||", "&&", ";":
@@ -210,6 +213,11 @@ func classifyWords(words []string, safeVerbs map[string]bool, repo string) ([]st
 		case strings.HasPrefix(word, "--cwd="):
 			rewritten = append(rewritten, "--cwd="+repo)
 			continue
+		case strings.Contains(word, documentedRuntimeAgentIDPlaceholder):
+			// The placeholder appears only in the shared review contract. Its
+			// OpenCode rendering is pinned by TestGoldenSDD_OpenCode_Multi, so
+			// execute the documented command with that rendered runtime identity.
+			word = strings.ReplaceAll(word, documentedRuntimeAgentIDPlaceholder, documentedRuntimeAgentID)
 		}
 		if wordNeedsShell(placeholderRegexp.ReplaceAllString(word, "")) {
 			return nil, tierPresence
