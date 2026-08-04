@@ -251,6 +251,12 @@ func authorityDispositionPlanDigest(plan AuthorityDispositionPlan) (string, erro
 // pending-confirmation assumption 1).
 const authorityDispositionAuthorizationSchema = "gentle-ai.review-disposition-authorization/v1"
 
+// AuthorityDispositionAuthorizationSchema is the exported form of
+// authorityDispositionAuthorizationSchema for Wave 6 Slice S4's negotiated-
+// transition wiring (internal/cli), which needs to publish the disposition
+// collect{}'s schema without duplicating the literal.
+const AuthorityDispositionAuthorizationSchema = authorityDispositionAuthorizationSchema
+
 // authorityDispositionAuthorizationBinding renders the exact authorization
 // text a maintainer must supply for plan to be admitted at execution time,
 // shaped like authorityRepairAuthorizationBinding: schema, repository,
