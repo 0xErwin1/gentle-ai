@@ -938,8 +938,9 @@ func proveCompletedRetryInventory(_ *Sandbox, observation Observation) error {
 
 func requireFreshNegotiatedStart(_ *Sandbox, observation Observation) error {
 	var status struct {
-		Applicability  string `json:"applicability"`
-		Action         string `json:"action"`
+		Applicability  string           `json:"applicability"`
+		Action         string           `json:"action"`
+		Authority      *json.RawMessage `json:"authority"`
 		NextTransition *struct {
 			Kind    string `json:"kind"`
 			Execute *struct {
@@ -954,6 +955,12 @@ func requireFreshNegotiatedStart(_ *Sandbox, observation Observation) error {
 		status.NextTransition.Kind != "execute" || status.NextTransition.Execute == nil ||
 		status.NextTransition.Execute.Operation != "review.start" {
 		return fmt.Errorf("fresh negotiated status did not offer review.start: %+v", status)
+	}
+	// A fresh target has no authority. Publishing one here would mean status
+	// bound the candidate to unrelated review history, so the no-authority
+	// invariant is asserted rather than assumed by the start offer alone.
+	if status.Authority != nil {
+		return fmt.Errorf("fresh negotiated status published an authority: %s", string(*status.Authority))
 	}
 	return nil
 }

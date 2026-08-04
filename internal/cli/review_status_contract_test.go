@@ -984,10 +984,7 @@ func TestNegotiatedReviewStatusFreshLargeDirtyCandidateOffersStart(t *testing.T)
 			t.Fatal(err)
 		}
 	}
-	unavailableTemp := filepath.Join(t.TempDir(), "unavailable-process-temp")
-	for _, name := range []string{"TEMP", "TMP", "TMPDIR"} {
-		t.Setenv(name, unavailableTemp)
-	}
+	unavailableProcessTemp(t)
 
 	var output bytes.Buffer
 	if err := RunReview([]string{
@@ -1003,6 +1000,12 @@ func TestNegotiatedReviewStatusFreshLargeDirtyCandidateOffersStart(t *testing.T)
 		status.NextTransition.Execute.Operation != "review.start" {
 		t.Fatalf("fresh large dirty status = %#v", status)
 	}
+	// A fresh target has no authority. Asserting the start offer alone would
+	// pass even if status had bound this candidate to unrelated history.
+	if status.Authority != nil {
+		t.Fatalf("fresh large dirty status published an authority: %#v", status.Authority)
+	}
+	requireNoReviewProcessTempResidue(t, repo)
 }
 
 func TestNegotiatedReviewStatusReturnsFailureForUnreadableAuthority(t *testing.T) {
