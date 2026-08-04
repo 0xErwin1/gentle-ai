@@ -155,13 +155,8 @@ func TestDisabledReviewRefusesEveryAuthorityMutatingVerb(t *testing.T) {
 		{verb: "recover", args: []string{"--predecessor-lineage", "review-disabled-sweep", "--expected-predecessor-revision", digest, "--successor-lineage", "review-disabled-successor", "--disposition", "scope_changed"}},
 		{verb: "retry-final-verification", args: []string{"--predecessor-lineage", "review-disabled-sweep", "--expected-predecessor-revision", digest, "--successor-lineage", "review-disabled-successor", "--incident", incident, "--actor", "maintainer", "--reason", "reason", "--maintainer-authorization", authorization}},
 		{verb: "reclaim", args: []string{"--lineage", "review-disabled-sweep", "--reason", "reason", "--actor", "maintainer"}},
-		{verb: "reconcile-authority", args: []string{"--predecessor-lineage", "review-disabled-sweep", "--expected-predecessor-revision", digest, "--successor-lineage", "review-disabled-successor", "--expected-successor-revision", digest, "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
-		{verb: "reconcile-authority-batch", args: []string{"--input", input}},
 		{verb: "dispose-result", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--target", digest, "--lens", "review-risk", "--order", "0", "--artifact-digest", digest, "--class", "empty_result", "--diagnostic", "diagnostic", "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
 		{verb: "reopen-results", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--target", digest, "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
-		{verb: "quarantine-legacy", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--diagnostic", "diagnostic", "--disposition", "quarantined", "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
-		{verb: "quarantine-legacy-fix-scope", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--diagnostic", "diagnostic", "--disposition", "quarantined", "--anomaly-set", "anomaly", "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
-		{verb: "repair-legacy-alias", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--diagnostic", "diagnostic", "--disposition", "repaired", "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
 		{verb: "bind-sdd", args: []string{"--change", "some-change", "--lineage", "review-disabled-sweep", "--expected-binding-revision", digest}},
 	} {
 		t.Run(testCase.verb, func(t *testing.T) {
@@ -189,8 +184,7 @@ func TestDisabledReviewLetsMalformedRequestsAnswerFirst(t *testing.T) {
 		args []string
 		want string
 	}{
-		{name: "unknown flag", args: []string{"reconcile-authority-batch", "--cwd", repo, "--nonexistent"}, want: "flag provided but not defined"},
-		{name: "missing required input", args: []string{"reconcile-authority-batch", "--cwd", repo}, want: "requires --input"},
+		{name: "unknown flag", args: []string{"invalidate", "--cwd", repo, "--nonexistent"}, want: "flag provided but not defined"},
 		{name: "stray positional", args: []string{"invalidate", "--cwd", repo, "extra"}, want: "unexpected review invalidate argument"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

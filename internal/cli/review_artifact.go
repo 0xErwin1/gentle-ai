@@ -672,6 +672,30 @@ func discoverCapturedReviewerArtifacts(ctx context.Context, repo, storeDir strin
 	return artifacts, nil
 }
 
+// discoverReviewerContextLevel resolves the mechanism that produced this
+// review's reviewer lens contexts, from what the provider itself recorded when
+// it produced them. It is never declared by whoever finalizes: a caller cannot
+// make a receipt claim a mechanism that never ran.
+//
+// It resolves a level only when every selected lens has a captured artifact and
+// a bound emission naming the same mechanism. Anything else resolves to no
+// level, which the receipt records as absence — "not established" — and never
+// as a mechanism.
+func discoverReviewerContextLevel(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, revision string) reviewtransaction.ReviewerContextLevel {
+	artifacts, err := discoverCapturedReviewerArtifacts(ctx, repo, storeDir, state, revision)
+	if err != nil || len(artifacts) != len(state.SelectedLenses) {
+		return ""
+	}
+	subjects := make([]string, len(artifacts))
+	for index, artifact := range artifacts {
+		if artifact.SelectedOrder != index || artifact.Lens != state.SelectedLenses[index] {
+			return ""
+		}
+		subjects[index] = artifact.SubjectHash
+	}
+	return reviewtransaction.DiscoverReviewerContextLevel(storeDir, state.LineageID, state.InitialSnapshot.Identity, revision, state.SelectedLenses, subjects)
+}
+
 func readCapturedReviewerResults(ctx context.Context, repo, storeDir string, state reviewtransaction.CompactState, revision string) ([]facadeReviewerResult, error) {
 	artifacts, err := discoverCapturedReviewerArtifacts(ctx, repo, storeDir, state, revision)
 	if err != nil {
@@ -938,7 +962,7 @@ func newLineageCapturedFindings(findings []facadeFinding) []reviewtransaction.Fi
 	converted := make([]reviewtransaction.FindingEvidence, len(findings))
 	for index, finding := range findings {
 		converted[index] = reviewtransaction.FindingEvidence{
-			FindingID: finding.ID, Class: finding.EvidenceClass, Causality: finding.CausalDisposition,
+			FindingID: finding.ID, Severity: finding.Severity, Class: finding.EvidenceClass, Causality: finding.CausalDisposition,
 			Proof: strings.Join(finding.ProofRefs, "; "),
 		}
 	}

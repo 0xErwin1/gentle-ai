@@ -244,7 +244,20 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// TestOpenCodeRenderedReviewProtocolCost's changelog comment above for
 	// the full reason); Kilocode embeds the same shared contract, so its
 	// rendered settings hash moved too. Deliberate, not drift.
-	const want = "0562ea542ac63f0ef45a1f8ecfd53a90bf454f03925767b6da789896d5c3a143"
+	//
+	// Exit-naming audit fix #1: review-ledger-contract.md's stop clause
+	// stopped telling the orchestrator to surface a bare `reason_code`
+	// ("never from status prose") and gained the embedded "Continue after a
+	// stop reason code" table (16 rows, one per reviewStopTransition code,
+	// each naming its real continuation and `gentle-ai review mode disable`
+	// as the self-service fallback where no more specific exit exists).
+	// Kilocode embeds the same shared contract, so its rendered settings hash
+	// moved again. Deliberate, not drift.
+	//
+	// Second pass fixing adversarial verification findings F1/F4/F6/F7 (see
+	// TestOpenCodeRenderedReviewProtocolCost's changelog comment above) moved
+	// it a third time. Deliberate, not drift.
+	const want = "d9b91b53542ff13ef3444febbe725c11d613c2f60446602697d351b59eaf3162"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -404,8 +417,37 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// the archive skill and this shared contract would have refused exactly
 		// the states sdd-status now reports as archive-ready. This is a deliberate
 		// contract correction, not drift.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_014, maxCharacters: 18_500},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 21_772, maxCharacters: 36_000},
+		//
+		// wantChars grew by 4,392 per row (14,014 -> 18,406 / 21,772 -> 26,164)
+		// when the Route section gained the "Continue after a stop reason code"
+		// table (exit-naming audit fix #1): the shipped contract previously told
+		// the orchestrator to "surface its reason_code" and explicitly forbade
+		// reading anything else, converting all 16 documented, correct stop
+		// continuations (docs/review-integration.md's own table, which docs/ is
+		// never embedded to ship) into dead ends on the one channel a consuming
+		// orchestrator may route from. The table names every reason code's real
+		// continuation plus `gentle-ai review mode disable` as the self-service
+		// fallback wherever no more specific exit exists. The standard ceiling
+		// moves with it (18,500 -> 21,200) to restore the ~15% margin below; the
+		// full-4R ceiling already had enough headroom and is unchanged.
+		// wantChars grew again by 870 per row (18,406 -> 19,276 / 26,164 ->
+		// 27,034) fixing adversarial verification findings against exit-naming
+		// audit fix #1: F1 completed two abbreviated `review status
+		// --next-transition` invocations to their real required form
+		// (--contract gentle-ai.review-integration/v2 --agent claude-code,
+		// verified by execution -- the bare form is refused), F4 disclosed
+		// that `review start` on an unchanged candidate only resumes the same
+		// review rather than starting a fresh one (also verified by
+		// execution), F6 switched every `review mode disable` mention to the
+		// clone-scoped `--scope clone --cwd <repo>` form plus a one-line
+		// disclosure that omitting --scope disables review machine-wide
+		// (--scope defaults to global; verified by execution), and F7
+		// completed the `review reopen-results` invocation to its six
+		// required flags (also verified by execution). The standard ceiling
+		// moves with it (21,200 -> 22,200) to restore the ~15% margin below;
+		// full-4R still has headroom and is unchanged.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_276, maxCharacters: 22_200},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 27_034, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

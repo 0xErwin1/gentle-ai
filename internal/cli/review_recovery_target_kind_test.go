@@ -119,8 +119,14 @@ func TestReviewRecoverBaseDiffPredecessorStillBindsFrozenBaseTree(t *testing.T) 
 	runReviewCLIGit(t, repo, "add", "--", "tracked.txt")
 	runReviewCLIGit(t, repo, "commit", "-m", "candidate")
 
+	// This is SETUP for the "recover" behavior under test, not the start
+	// refusal itself; the committed candidate selects a lens, so a direct
+	// base-diff start now hits issue #2447's up-front refusal.
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--base-ref", firstBase, "--committed-only"}, &output); err != nil {
+	startArgs := boundNegotiatedStartArgs(t, []string{
+		"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--base-ref", firstBase,
+	})
+	if err := RunReview(startArgs, &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult

@@ -53,25 +53,32 @@ func (profileResolver) ResolveAgentInstall(profile system.PlatformProfile, agent
 	}
 }
 
-// resolveClaudeCodeInstall returns the npm install command sequence for Claude Code.
-// On Linux with system npm, sudo is required. With nvm/fnm/volta, it is not.
-// On Windows and macOS, sudo is never needed.
+// resolveClaudeCodeInstall returns the npm install command sequence gentle-ai
+// shows for Claude Code — display text only, never executed by gentle-ai
+// (see agentInstallStep in internal/cli/run.go). On Linux with system npm,
+// sudo is required. With nvm/fnm/volta, it is not. On Windows and macOS,
+// sudo is never needed.
 //
-// --ignore-scripts blocks postinstall hooks, the primary supply-chain attack vector
-// for npm packages. The version is pinned to avoid pulling a tampered "latest" tag.
+// --ignore-scripts blocks postinstall hooks, the primary supply-chain attack
+// vector for npm packages. The version advises "latest" rather than a pin:
+// a pin only guarded against a tampered "latest" tag when gentle-ai itself
+// ran the command unattended. Now a human reads and runs it, and a stale
+// hardcoded version goes wrong the moment a newer release ships (the same
+// drift this shape fixed for Codex's GPT-5.6 update advice).
 func resolveClaudeCodeInstall(profile system.PlatformProfile) CommandSequence {
-	pkg := "@anthropic-ai/claude-code@" + versions.ClaudeCode
+	const pkg = "@anthropic-ai/claude-code@latest"
 	if profile.OS == "linux" && !profile.NpmWritable {
 		return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}
 	}
 	return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}
 }
 
-// resolveKilocodeInstall returns the npm install command sequence for Kilocode.
-// On Linux with system npm, sudo is required. With nvm/fnm/volta, it is not.
+// resolveKilocodeInstall returns the npm install command sequence gentle-ai
+// shows for Kilocode — display text only, never executed by gentle-ai. On
+// Linux with system npm, sudo is required. With nvm/fnm/volta, it is not.
 // On Windows and macOS, sudo is never needed.
 func resolveKilocodeInstall(profile system.PlatformProfile) CommandSequence {
-	pkg := "@kilocode/cli@" + versions.Kilocode
+	const pkg = "@kilocode/cli@latest"
 	if profile.OS == "linux" && !profile.NpmWritable {
 		return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}
 	}
@@ -223,25 +230,36 @@ func (profileResolver) ResolveDependencyInstall(profile system.PlatformProfile, 
 	}
 }
 
-// resolveOpenCodeInstall returns the correct install command sequence for OpenCode per platform.
+// resolveOpenCodeInstall returns the display-only install command sequence
+// gentle-ai shows for OpenCode per platform — never executed by gentle-ai.
 // - darwin: brew install anomalyco/tap/opencode (official OpenCode tap)
 // - linux: npm install -g opencode-ai (official npm package)
 // See https://opencode.ai/docs for official install methods.
+//
+// This deliberately advises "latest" rather than versions.OpenCode: that
+// constant pins the exact OpenCode build the organic-runtime E2E installs
+// and CI asserts against (TestOrganicRuntimeE2EUsesInstalledOpenCodePin in
+// internal/assets/formatter_ordering_test.go, and organic_runtime_test.go's
+// pinnedOpenCodeVersion) — a real, separate owner that must keep its exact
+// pin. This display string has no such owner, so it is decoupled from that
+// constant for the same reason the other five install commands are: a human
+// reads and runs it, and an old hardcoded version goes stale the moment a
+// newer OpenCode ships.
 func resolveOpenCodeInstall(profile system.PlatformProfile) (CommandSequence, error) {
+	const pkg = "opencode-ai@latest"
 	switch profile.PackageManager {
 	case "brew":
 		return CommandSequence{
 			{"brew", "install", "anomalyco/tap/opencode"},
 		}, nil
 	case "apt", "pacman", "dnf":
-		pkg := "opencode-ai@" + versions.OpenCode
 		if profile.NpmWritable {
 			return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
 		}
 		return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}, nil
 	case "winget":
 		// On Windows, npm global installs do not require sudo.
-		return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}}, nil
+		return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
 	default:
 		return nil, fmt.Errorf(
 			"unsupported platform for opencode: os=%q distro=%q pm=%q",
