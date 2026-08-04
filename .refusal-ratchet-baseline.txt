@@ -219,8 +219,6 @@ internal/cli/review_operation_contract.go	"unsupported negotiated review failure
 internal/cli/review_operation_contract.go	"unsupported negotiated review operation %q"
 internal/cli/review_reclaim.go	"review reclaim requires --lineage, --reason, and --actor"
 internal/cli/review_reclaim.go	"unexpected review reclaim argument %q"
-internal/cli/review_reconcile.go	"review reconcile-authority requires --predecessor-lineage, --expected-predecessor-revision, --successor-lineage, --expected-successor-revision, --reason, --actor, and --maintainer-authorization"
-internal/cli/review_reconcile.go	"unexpected review reconcile-authority argument %q"
 internal/cli/review_reconcile_batch.go	"review reconcile-authority-batch preparation requires declared invalid edges"
 internal/cli/review_reconcile_batch.go	"review reconcile-authority-batch preparation requires the exact input schema"
 internal/cli/review_reconcile_batch.go	"review reconcile-authority-batch requires --input"
