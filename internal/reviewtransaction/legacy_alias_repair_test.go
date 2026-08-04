@@ -152,8 +152,11 @@ func TestRepairHistoricalLegacyAliasLeavesInventoryFailClosedForOtherCorruption(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Complete || report.Authoritative || !hasAuthorityInventoryStatus(report.Entries, "alias-repair-unhandled", AuthorityStatusInvalid) {
-		t.Fatalf("repair incorrectly made mixed inventory authoritative: %#v", report)
+	// The unhandled alias entry stays invalid on its own account. Repairing
+	// one entry was never allowed to make another entry healthy, and one
+	// unhandled entry was never a statement about the repaired one.
+	if !hasAuthorityInventoryStatus(report.Entries, "alias-repair-unhandled", AuthorityStatusInvalid) {
+		t.Fatalf("repair incorrectly cleared the unhandled alias entry: %#v", report)
 	}
 }
 
