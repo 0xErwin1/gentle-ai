@@ -17,35 +17,40 @@ import (
 // AuthorityDispositionProofSchema identifies AuthorityDispositionProof's shape.
 const AuthorityDispositionProofSchema = "gentle-ai.review-authority-disposition-proof/v1"
 
-// errAuthorityDispositionCardinality is returned whenever a plan's closure
-// does not have cardinality exactly one — Wave 2's whole executor scope
-// (#1892's historical exact-binding edge shape). Larger closures (#2014's
-// descendant closure, #1656's multi-lineage shape) escalate to a future wave
-// (Wave 6); this refusal names both without committing to a delivery date
-// (rdd-leaf-disposition-execution / "Cardinality-One Admission", "Refusal
-// Names Diagnosis and Escalation Artifact, Not a Roadmap Promise").
-var errAuthorityDispositionCardinality = errors.New("authority disposition execution refused: closure cardinality is not one") // refusal:by-design human-authority: admitting a larger closure is a future-wave product decision (Wave 6), not a command this slice can run today
+// errAuthorityDispositionShape is returned whenever a plan's closure does
+// not have the one shape this executor admits: exactly one seed, at least
+// one closure member, and the seed last (Wave 6's normative
+// descendant-first, seed-last ordering — rdd-authority-disposition-plan /
+// "Deterministic Closure Derivation From the Graph Source of Record"). N=1
+// is the identity of Wave 2's whole executor scope (#1892's historical
+// exact-binding edge shape); N>=2 is admitted only for closed, evidence-
+// backed anomaly classes (#2014's descendant closure). A closure that does
+// not end with the seed is malformed or ambiguous — the same diagnosis
+// #1656's unclassifiable multi-lineage shape needs a maintainer to resolve,
+// with no delivery-date commitment (rdd-closure-disposition-execution /
+// "N-Node Admission for Closed Anomaly Classes").
+var errAuthorityDispositionShape = errors.New("authority disposition execution refused: closure shape is not admissible") // refusal:by-design human-authority: an unclassifiable or malformed multi-lineage shape (#1656) needs a maintainer's diagnosis, not a command this refusal can name
 
-// admitLeafDisposition requires closure(S) to have cardinality exactly one —
-// the one shape this executor mutates. Any other cardinality refuses before
+// admitClosureDisposition requires exactly one seed and a closure ordered
+// descendant-first with the seed last — the N=1 base case (Wave 2) and every
+// N>=2 closed-class closure Wave 6 admits. Any other shape refuses before
 // any lock acquisition or I/O (design decision 5: cardinality is executor
-// admission policy, not a plan-shape constraint — a future wave relaxes only
-// this function).
-func admitLeafDisposition(plan AuthorityDispositionPlan) error {
-	if len(plan.SeedSet) != 1 || len(plan.Closure) != 1 || plan.Closure[0] != plan.SeedSet[0] {
-		return fmt.Errorf("%w: closure has %d member(s), want exactly 1; multi-lineage shapes (#1656, #2014) escalate to a future wave (Wave 6) with no delivery-date commitment",
-			errAuthorityDispositionCardinality, len(plan.Closure))
+// admission policy, not a plan-shape constraint).
+func admitClosureDisposition(plan AuthorityDispositionPlan) error {
+	if len(plan.SeedSet) != 1 || len(plan.Closure) == 0 || plan.Closure[len(plan.Closure)-1] != plan.SeedSet[0] {
+		return fmt.Errorf("%w: closure has %d member(s) and does not end with the sole seed; an unclassifiable or malformed multi-lineage shape (#1656) needs a maintainer's diagnosis, with no delivery-date commitment",
+			errAuthorityDispositionShape, len(plan.Closure))
 	}
 	return nil
 }
 
-// AdmitAuthorityDispositionLeaf is the exported form of admitLeafDisposition
-// for Slice S3's `review repair` CLI wiring and SanctionedCompactRecoveryExits
-// (compact_inspect.go) — both need the identical, unrelaxed cardinality-one
-// admission predicate the executor itself enforces, so neither ever
-// advertises or accepts a plan the executor would then refuse.
-func AdmitAuthorityDispositionLeaf(plan AuthorityDispositionPlan) error {
-	return admitLeafDisposition(plan)
+// AdmitAuthorityDispositionClosure is the exported form of
+// admitClosureDisposition for Slice S3's `review repair` CLI wiring and
+// SanctionedCompactRecoveryExits (compact_inspect.go) — both need the
+// identical admission predicate the executor itself enforces, so neither
+// ever advertises or accepts a plan the executor would then refuse.
+func AdmitAuthorityDispositionClosure(plan AuthorityDispositionPlan) error {
+	return admitClosureDisposition(plan)
 }
 
 // AuthorityDispositionProof carries the natively re-derived
@@ -67,9 +72,11 @@ type AuthorityDispositionProof struct {
 }
 
 // executeAuthorityDisposition is the one executor that consumes an
-// AuthorityDispositionPlan with a populated Authorization and admits only a
-// cardinality-one leaf closure (rdd-leaf-disposition-execution). It follows
-// design.md's Data Flow exactly: admitLeafDisposition on the submitted plan,
+// AuthorityDispositionPlan with a populated Authorization and admits every
+// closure shape rdd-closure-disposition-execution's N-Node Admission
+// requirement accepts (N=1, the Wave 2 rdd-leaf-disposition-execution base
+// case, through N>=2 for closed anomaly classes). It follows design.md's
+// Data Flow exactly: admitClosureDisposition on the submitted plan,
 // then an exclusive maintenance lock, then a fresh re-derivation under that
 // lock compared by digest (CAS over expected_revisions and every other
 // derived field), then Authorization validated against the digest-bound
@@ -89,7 +96,7 @@ func executeAuthorityDisposition(ctx context.Context, repo string, plan Authorit
 	if err := ctx.Err(); err != nil {
 		return CompactReclaimRecord{}, err
 	}
-	if err := admitLeafDisposition(plan); err != nil {
+	if err := admitClosureDisposition(plan); err != nil {
 		return CompactReclaimRecord{}, err
 	}
 	root, err := (SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
@@ -138,7 +145,7 @@ func lockedAuthorityDispositionMutation(ctx context.Context, maintenance *Mainte
 	if err != nil {
 		return CompactReclaimRecord{}, fmt.Errorf("authority disposition execution refused: re-derivation under lock did not reproduce a closed classification: %w", err)
 	}
-	if err := admitLeafDisposition(currentPlan); err != nil {
+	if err := admitClosureDisposition(currentPlan); err != nil {
 		return CompactReclaimRecord{}, err
 	}
 	if currentPlan.PlanDigest != plan.PlanDigest {
