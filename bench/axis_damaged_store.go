@@ -787,16 +787,34 @@ func requireInvalidEdges(sandbox *Sandbox, edges int, problemFragment string) er
 				problemFragment, edge.SuccessorLineageID, edge.Problems)
 		}
 	}
-	return requireStoreNotAuthoritative(sandbox)
+	return requireDamagedStoreReportsItsDamage(sandbox)
 }
 
-func requireStoreNotAuthoritative(sandbox *Sandbox) error {
-	status, err := proveStoreStatus(sandbox)
+// requireDamagedStoreReportsItsDamage is the proof every fixture in this axis
+// runs before spending a counted command.
+//
+// It used to require `review status` to report the whole store
+// non-authoritative, which is how the product described damage when authority
+// validation was repository-global. It is no longer how the product describes
+// damage, and the old assertion was never what these journeys were about: what
+// they measure is whether an operator holding a damaged entry can SEE it and
+// act on it, not whether the entry took the repository down with it. So the
+// proof moved to the surface that owns per-entry truth -- the store must still
+// describe exactly this damage, in its own words, on the entry that carries
+// it.
+func requireDamagedStoreReportsItsDamage(sandbox *Sandbox) error {
+	inspection, err := proveInspection(sandbox)
 	if err != nil {
 		return err
 	}
-	if status.Authoritative {
-		return errors.New("fixture claims a damaged store but review status still reports it authoritative")
+	if inspection.Valid && inspection.Totals.EntryDiagnostics == 0 {
+		return errors.New("fixture claims a damaged store but inspect-authority reports no invalid edge and no entry diagnostic")
+	}
+	// Status must still be answerable. A store that cannot be read at all is a
+	// different fixture from a store holding one damaged entry, and a journey
+	// that confused the two would measure the wrong thing.
+	if _, err := proveStoreStatus(sandbox); err != nil {
+		return fmt.Errorf("review status is unavailable over a store holding one damaged entry: %w", err)
 	}
 	return nil
 }
@@ -977,7 +995,7 @@ func halfWrittenSuccessor(sandbox *Sandbox) error {
 	if inspection.Totals.Edges != 0 {
 		return fmt.Errorf("fixture claims the truncated entry never becomes an edge but inspect-authority reports %d", inspection.Totals.Edges)
 	}
-	return requireStoreNotAuthoritative(sandbox)
+	return requireDamagedStoreReportsItsDamage(sandbox)
 }
 
 // ---------------------------------------------------------------------------
@@ -1133,13 +1151,25 @@ func proveStoreRecovered(r *journeyRun) error {
 		return fmt.Errorf("the exit ran but review status still reports complete=%v authoritative=%v",
 			status.Complete, status.Authoritative)
 	}
+	// The store staying authoritative is no longer evidence on its own: it was
+	// authoritative while the damage was present too, because the damage was
+	// confined to its own entry. What proves the exit worked is that the
+	// damage is gone from the surface that reported it.
+	inspection, err := proveInspection(r.sandbox)
+	if err != nil {
+		return err
+	}
+	if !inspection.Valid || !inspection.Complete || inspection.Totals.InvalidEdges != 0 || inspection.Totals.EntryDiagnostics != 0 {
+		return fmt.Errorf("the exit ran but inspect-authority still reports the damage: valid=%v complete=%v totals=%+v",
+			inspection.Valid, inspection.Complete, inspection.Totals)
+	}
 	return nil
 }
 
 // proveStoreStillDamaged is its mirror, for the steps that claim an operation
 // changed nothing.
 func proveStoreStillDamaged(r *journeyRun) error {
-	return requireStoreNotAuthoritative(r.sandbox)
+	return requireDamagedStoreReportsItsDamage(r.sandbox)
 }
 
 // repairAssessment is the subset of `review repair --preflight` that says
@@ -1844,5 +1874,57 @@ func damagedStoreJourneys() []Journey {
 				{Name: "the store is still not in charge", Composite: proveStoreStillDamaged},
 			},
 		},
+		{
+			ID:     "ds13-damaged-entry-does-not-govern-unrelated-work",
+			Title:  "One damaged entry, and work that has nothing to do with it: the store still answers about the candidate",
+			Source: "issues 1892, 2014, 2167, 2234, 2270, 2456 (repository-global authority validation)",
+			// Every other journey in this axis measures what an operator can do
+			// ABOUT the damage. This one measures what the damage does to
+			// everybody else, which is the thing the reports were actually
+			// about: worktrees of one repository share a Git common directory
+			// and therefore one review store, so a verdict issued over that
+			// store is a verdict issued to every worktree at once.
+			//
+			// The fixture is ds02's exactly — one damaged recovery edge, a
+			// pristine successor — and then the operator does something with no
+			// relation to it: they write a new file and ask the product what to
+			// do next. The measurement is whether they get an answer about
+			// their candidate or an answer about somebody else's history.
+			//
+			// The damage is deliberately NOT repaired here. A journey that had
+			// to clear the entry first would be measuring the repair, and the
+			// whole claim is that no repair should be needed to keep working.
+			Steps: []Step{
+				{Name: "fixture: one damaged recovery edge", Fixture: damagedEdgePristine},
+				{Name: "the operator writes something unrelated", Fixture: stageProse("", "unrelated")},
+				{Name: "ask the negotiated surface what happens next", Requires: statusCapability,
+					Args:  productArgs("review", "status", "--contract", reviewContract, "--next-transition"),
+					After: requireUnrelatedTargetIsRouted},
+				{Name: "start a review of the unrelated candidate", Requires: startCapability,
+					Args: productArgs("review", "start")},
+				{Name: "the damaged entry is still reported, and still damaged", Requires: inspectAuthorityCapability,
+					Args: productArgs("review", "inspect-authority"),
+					After: inspectionAssertion("the damage survived the unrelated work",
+						invalidEdgesWithNoAnomalyClass(1))},
+			},
+		},
 	}, closureDispositionJourneys()...)
+}
+
+// requireUnrelatedTargetIsRouted is ds13's measurement. The negotiated surface
+// must publish a transition for the live candidate. Stopping over an entry the
+// candidate does not inherit from is the reported defect: it leaves the
+// harness with nothing to run and the operator with a blocked push.
+func requireUnrelatedTargetIsRouted(_ *Sandbox, observation Observation) error {
+	var envelope statusEnvelope
+	if err := decodeWaveObservation(observation, &envelope, "review status --next-transition beside a damaged entry"); err != nil {
+		return err
+	}
+	if envelope.NextTransition.Kind == "" {
+		return errors.New("the negotiated surface published no transition for the live candidate")
+	}
+	if envelope.NextTransition.Kind == "stop" {
+		return errors.New("the negotiated surface stopped an unrelated candidate over a damaged entry")
+	}
+	return nil
 }
