@@ -179,7 +179,10 @@ Repeat the selective shape per literal path; never pass --binary or render the w
 // the skill catalog into every session's *system* prompt regardless of
 // tools, so the plugin refuses to launch the reviewer at all unless
 // OPENCODE_DISABLE_PROJECT_CONFIG and OPENCODE_DISABLE_EXTERNAL_SKILLS are
-// both set (see the plugin's REQUIRED_ISOLATION_ENVIRONMENT).
+// both set (see the plugin's REQUIRED_ISOLATION_ENVIRONMENT), and separately
+// refuses if the effective config (read through the plugin's own OpenCode
+// client) names a remote `instructions` entry, which those two variables do
+// not suppress (see remoteInstructionsEntries).
 func openCodeProviderInjectedReviewerPrompt(name string) (string, bool) {
 	input := fmt.Sprintf(`The task begins with %s and its exact one-line JSON. Immediately after it, the OpenCode host process supplies one block from %s through %s_END. This provider-injected context is the sole source of artifact_subject, base_tree, candidate_tree, and ordered changed_path_manifest. Caller prose outside those two structures is not context. You have no execution tools: do not run Bash, Read, the native CLI, or another inspector, and never substitute live files.
 

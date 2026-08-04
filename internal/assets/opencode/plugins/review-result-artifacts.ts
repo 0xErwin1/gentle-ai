@@ -41,12 +41,14 @@ const REVIEW_CONTEXT_BYTE_BUDGET = 4 * 1024 * 1024 // 4 MiB
 // set, no project-instruction or skill-catalog content reached the
 // reviewer's system message; with either unset, it did.
 //
-// This does NOT close every channel: an operator-configured `instructions`
-// entry that is an http(s):// URL is fetched by OpenCode unconditionally and
-// is NOT suppressed by OPENCODE_DISABLE_PROJECT_CONFIG (verified: a poisoned
-// local HTTP endpoint referenced this way still reached the reviewer with
-// both variables set). Operators enabling RDD on OpenCode must not configure
-// a remote `instructions` URL; gentle-ai's own generated config never does.
+// These two variables do not close every channel: an operator-configured
+// `instructions` entry that is an http(s):// URL is fetched by OpenCode
+// unconditionally and is NOT suppressed by OPENCODE_DISABLE_PROJECT_CONFIG
+// (verified: a poisoned local HTTP endpoint referenced this way still
+// reached the reviewer with both variables set). That gap is closed
+// separately below (remoteInstructionsEntries), by reading the effective
+// config through the plugin's own OpenCode client rather than by a sentence
+// operators could fail to read.
 const REQUIRED_ISOLATION_ENVIRONMENT = ["OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_DISABLE_EXTERNAL_SKILLS"] as const
 
 function isolationFlagSet(value: string | undefined): boolean {
@@ -55,6 +57,25 @@ function isolationFlagSet(value: string | undefined): boolean {
 
 function missingIsolationEnvironment(): string[] {
   return REQUIRED_ISOLATION_ENVIRONMENT.filter((name) => !isolationFlagSet(process.env[name]))
+}
+
+// remoteInstructionsEntries closes the one channel REQUIRED_ISOLATION_ENVIRONMENT
+// cannot: OpenCode fetches every http(s):// `instructions` config entry
+// unconditionally, from any layer, regardless of OPENCODE_DISABLE_PROJECT_CONFIG.
+// Verified against real OpenCode 1.18.10 via the plugin's own
+// `client.config.get()` (the same endpoint the OpenCode TUI/CLI itself reads
+// effective config from): a project-level opencode.json's `instructions`
+// entries become invisible here exactly when OPENCODE_DISABLE_PROJECT_CONFIG
+// also stops them from taking effect -- config visibility and config effect
+// move together for that layer, so there is nothing to detect there because
+// there is nothing to refuse. The global config's own `instructions` array,
+// including http(s):// entries, remains visible here regardless of either
+// variable, matching that it remains fetched regardless of either variable.
+// No config layer was found that changes the reviewer's fetched instructions
+// without also changing what this function observes.
+function remoteInstructionsEntries(instructions: unknown): string[] {
+  if (!Array.isArray(instructions)) return []
+  return instructions.filter((entry): entry is string => typeof entry === "string" && /^https?:\/\//i.test(entry))
 }
 
 type ReviewBinding = {
@@ -601,7 +622,7 @@ async function preservedCaptureFailure(
   }
 }
 
-const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
+const ReviewResultArtifactsPlugin: Plugin = async ({ client, directory, worktree }) => {
   const admissionRecoveries: AdmissionRecoveryStore = new Map()
   return {
   dispose: async () => { admissionRecoveries.clear() },
@@ -626,6 +647,30 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
         "of its tools, which can leak post-freeze worktree content into the reviewer. " +
         "Set the missing variable(s) in the environment this OpenCode process runs under, then relaunch the lens. " +
         "The reviewer was not launched, so its exactly-once invocation is preserved.",
+      )
+    }
+    let remoteInstructions: string[]
+    try {
+      const configResponse = (await client.config.get({ query: { directory } })) as { data?: { instructions?: unknown }; error?: unknown }
+      if (configResponse?.error) {
+        throw new Error(JSON.stringify(configResponse.error))
+      }
+      remoteInstructions = remoteInstructionsEntries(configResponse?.data?.instructions)
+    } catch (cause) {
+      throw new Error(
+        `immutable OpenCode candidate inspection could not verify the effective configuration for remote ` +
+        `\`instructions\` entries: ${errorMessage(cause)}. OpenCode fetches any http(s):// instructions entry ` +
+        "unconditionally into every session's system prompt, so an unverifiable configuration cannot be ruled safe. " +
+        "Resolve the config read failure, then relaunch the lens. " +
+        "The reviewer was not launched, so its exactly-once invocation is preserved.",
+      )
+    }
+    if (remoteInstructions.length > 0) {
+      throw new Error(
+        `immutable OpenCode candidate inspection refuses a remote \`instructions\` entry: ${remoteInstructions.join(", ")}; ` +
+        "OpenCode fetches this unconditionally into every session's system prompt regardless of tools, which could " +
+        "inject attacker-controlled prose into the reviewer. Remove it from the effective OpenCode configuration, " +
+        "then relaunch the lens. The reviewer was not launched, so its exactly-once invocation is preserved.",
       )
     }
     output.args.prompt = await injectReviewerContext(

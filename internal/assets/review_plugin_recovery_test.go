@@ -1,6 +1,7 @@
 package assets
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,7 +19,17 @@ const reviewPluginHarness = `import plugin from "./plugin.mts"
 
 const scenario = process.argv[2]
 const cwd = process.argv[3]
-const hooks = await plugin({ directory: cwd, worktree: cwd })
+const configInstructions = JSON.parse(process.env.GENTLE_AI_STUB_CONFIG_INSTRUCTIONS || "[]")
+const configError = process.env.GENTLE_AI_STUB_CONFIG_ERROR || ""
+const client = {
+  config: {
+    get: async () => {
+      if (configError) throw new Error(configError)
+      return { data: { instructions: configInstructions } }
+    },
+  },
+}
+const hooks = await plugin({ client, directory: cwd, worktree: cwd })
 
 const opaque = {
   lens: "review-risk", lineage: "trust-check", order: 0,
@@ -78,7 +89,7 @@ try {
       lastSession = await capture(hooks, "session-full", "no-lifecycle", variedPrompt)
       if (lastSession.includes("exactly once")) perSessionAllowed++
     }
-    const globalHooks = await plugin({ directory: cwd, worktree: cwd })
+    const globalHooks = await plugin({ client, directory: cwd, worktree: cwd })
     let globalAllowed = 0
     let lastGlobal = ""
     for (let index = 0; index <= 64; index++) {
@@ -146,6 +157,12 @@ type reviewPluginStub struct {
 	// isolation-refusal tests opt out.
 	omitProjectConfigIsolation  bool
 	omitExternalSkillsIsolation bool
+	// configInstructions/configError feed the harness's mock
+	// `client.config.get()`. Every scenario resolves an empty instructions
+	// array (no remote entries) by default; only the dedicated
+	// remote-instructions tests set these.
+	configInstructions []string
+	configError        string
 }
 
 func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPluginStub) string {
@@ -254,6 +271,18 @@ func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPlugi
 	}
 	if !stub.omitExternalSkillsIsolation {
 		env = append(env, "OPENCODE_DISABLE_EXTERNAL_SKILLS=1")
+	}
+	instructions := stub.configInstructions
+	if instructions == nil {
+		instructions = []string{}
+	}
+	encodedInstructions, err := json.Marshal(instructions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env = append(env, "GENTLE_AI_STUB_CONFIG_INSTRUCTIONS="+string(encodedInstructions))
+	if stub.configError != "" {
+		env = append(env, "GENTLE_AI_STUB_CONFIG_ERROR="+stub.configError)
 	}
 	if stub.patchHugeBytes > 0 {
 		env = append(env, fmt.Sprintf("GENTLE_AI_STUB_INSPECT_PATCH_HUGE_BYTES=%d", stub.patchHugeBytes))
@@ -863,5 +892,99 @@ func TestReviewPluginAcceptsEmptyPatchForModeOnlyOrDeletedPath(t *testing.T) {
 				t.Fatalf("%s path with an empty patch was refused: %q", test.name, prompt)
 			}
 		})
+	}
+}
+
+// TestReviewPluginRefusesRemoteInstructionsEntry closes the residual the
+// isolation-environment gate cannot: OpenCode fetches an http(s)://
+// `instructions` config entry unconditionally into every session's system
+// prompt, from any config layer, regardless of OPENCODE_DISABLE_PROJECT_CONFIG.
+// Verified against real OpenCode 1.18.10 via the plugin's own
+// `client.config.get()` (the same endpoint the OpenCode TUI/CLI itself reads
+// effective config from): a poisoned local HTTP endpoint referenced this way
+// still reached the reviewer with both isolation variables set. The plugin
+// now reads the effective config through that same client and refuses
+// outright when a remote instructions entry is present.
+func TestReviewPluginRefusesRemoteInstructionsEntry(t *testing.T) {
+	baseTree := strings.Repeat("1", 40)
+	candidateTree := strings.Repeat("2", 40)
+	for _, test := range []struct {
+		name        string
+		instruction string
+	}{
+		{name: "http", instruction: "http://attacker.invalid/poison.md"},
+		{name: "https", instruction: "https://attacker.invalid/poison.md"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			message := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
+				preflight:  reviewPluginPreflight(baseTree, candidateTree),
+				nameStatus: "M\tinternal/example.go", numstat: "1\t1\tinternal/example.go",
+				patches:            []string{"--- a/internal/example.go\n+++ b/internal/example.go\n"},
+				configInstructions: []string{"docs/local-instructions.md", test.instruction},
+			})
+			if !strings.Contains(message, "refuses a remote `instructions` entry") {
+				t.Fatalf("remote instructions entry was not refused: %s", message)
+			}
+			if !strings.Contains(message, test.instruction) {
+				t.Fatalf("refusal does not name the offending entry %q: %s", test.instruction, message)
+			}
+			if strings.Contains(message, "docs/local-instructions.md") {
+				t.Fatalf("refusal named a local instructions entry, not just the remote one: %s", message)
+			}
+			if !strings.Contains(message, "The reviewer was not launched") {
+				t.Fatalf("remote-instructions refusal lost its exactly-once guarantee: %s", message)
+			}
+		})
+	}
+}
+
+// TestReviewPluginAllowsLocalOnlyInstructions proves the guard above has no
+// false positive: an effective config with only local (non-http) instructions
+// entries, or none at all, must not be refused.
+func TestReviewPluginAllowsLocalOnlyInstructions(t *testing.T) {
+	baseTree := strings.Repeat("1", 40)
+	candidateTree := strings.Repeat("2", 40)
+	for _, test := range []struct {
+		name         string
+		instructions []string
+	}{
+		{name: "no instructions configured", instructions: nil},
+		{name: "local file only", instructions: []string{"docs/local-instructions.md"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prompt := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
+				preflight:  reviewPluginPreflight(baseTree, candidateTree),
+				nameStatus: "M\tinternal/example.go", numstat: "1\t1\tinternal/example.go",
+				patches:            []string{"--- a/internal/example.go\n+++ b/internal/example.go\n"},
+				configInstructions: test.instructions,
+			})
+			if !strings.HasPrefix(prompt, "GENTLE_AI_REVIEW_BINDING {") {
+				t.Fatalf("local-only instructions config was refused: %q", prompt)
+			}
+		})
+	}
+}
+
+// TestReviewPluginRefusesWhenEffectiveConfigIsUnverifiable proves the plugin
+// fails closed, not open, when it cannot read the effective config at all:
+// an unverifiable configuration cannot be ruled safe, so the reviewer must
+// not launch on the strength of an absent error alone.
+func TestReviewPluginRefusesWhenEffectiveConfigIsUnverifiable(t *testing.T) {
+	baseTree := strings.Repeat("1", 40)
+	candidateTree := strings.Repeat("2", 40)
+	message := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
+		preflight:  reviewPluginPreflight(baseTree, candidateTree),
+		nameStatus: "M\tinternal/example.go", numstat: "1\t1\tinternal/example.go",
+		patches:     []string{"--- a/internal/example.go\n+++ b/internal/example.go\n"},
+		configError: "NATIVE-CONFIG-ENDPOINT-UNAVAILABLE",
+	})
+	if !strings.Contains(message, "could not verify the effective configuration") {
+		t.Fatalf("an unreadable effective config did not refuse the reviewer launch: %s", message)
+	}
+	if !strings.Contains(message, "NATIVE-CONFIG-ENDPOINT-UNAVAILABLE") {
+		t.Fatalf("refusal lost the underlying config-read failure: %s", message)
+	}
+	if !strings.Contains(message, "The reviewer was not launched") {
+		t.Fatalf("unverifiable-config refusal lost its exactly-once guarantee: %s", message)
 	}
 }

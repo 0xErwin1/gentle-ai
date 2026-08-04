@@ -321,6 +321,79 @@ func TestRealOpenCodeReviewerRefusesWithoutIsolationEnvironment(t *testing.T) {
 	}
 }
 
+// TestRealOpenCodeReviewerRefusesRemoteInstructionsEntry is the residual
+// fix's own proof: OPENCODE_DISABLE_PROJECT_CONFIG and
+// OPENCODE_DISABLE_EXTERNAL_SKILLS do not close every channel. A remote
+// (http/https) `instructions` config entry is fetched by OpenCode
+// unconditionally into every session's system prompt, from any config
+// layer, regardless of either variable. This journey sets both variables
+// correctly (the exact isolated shape TestRealOpenCodeReviewerLensCannotSeeLiveState
+// uses) and adds only a remote `instructions` entry to the generated global
+// config, proving the plugin's own client.config.get() check is a genuinely
+// separate gate: the reviewer must still refuse to launch.
+func TestRealOpenCodeReviewerRefusesRemoteInstructionsEntry(t *testing.T) {
+	if os.Getenv(realAgentE2EEnvironment) != "1" {
+		t.Skip("set GENTLE_AI_REAL_AGENT_E2E=1 to run the real OpenCode remote-instructions refusal proof")
+	}
+	setup := setupOpenCodePoisonedReview(t, "opencode-poisoned-worktree-remote-instructions")
+
+	instructionsServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/plain")
+		_, _ = writer.Write([]byte(openCodePoisonMarker + "\nremote instructions poison, fetched unconditionally by OpenCode.\n"))
+	}))
+	defer instructionsServer.Close()
+	remoteInstructionsURL := instructionsServer.URL + "/poison.md"
+
+	fixture := newOpenCodeReviewerFixture(t, setup.binding, setup.manifestPaths)
+	defer fixture.Close()
+
+	config := generatedOpenCodeReviewConfig(t, filepath.Join(setup.configRoot, "opencode", "opencode.json"), fixture.URL, remoteInstructionsURL)
+	environment := setup.openCodeReviewEnvironment(t, config)
+	// Both isolation variables ARE set here, unlike
+	// TestRealOpenCodeReviewerRefusesWithoutIsolationEnvironment: this test
+	// proves the remote-instructions gate refuses even when that other gate
+	// is fully satisfied.
+	environment = replaceOrganicEnvironment(environment, map[string]string{
+		"OPENCODE_DISABLE_PROJECT_CONFIG":  "1",
+		"OPENCODE_DISABLE_EXTERNAL_SKILLS": "1",
+	})
+
+	transcript := runOpenCodeReview(t, setup, environment)
+	if strings.Contains(transcript, openCodePoisonMarker) {
+		t.Fatalf("poison marker leaked into the OpenCode transcript even though the reviewer must never launch:\n%s", transcript)
+	}
+	launches, refused := taskLaunchRefusal(t, transcript)
+	if launches != 1 {
+		t.Fatalf("expected exactly one refused reviewer task attempt, got %d:\n%s", launches, transcript)
+	}
+	if !strings.Contains(refused, "refuses a remote `instructions` entry") {
+		t.Fatalf("refusal does not name the remote-instructions gate: %q", refused)
+	}
+	if !strings.Contains(refused, remoteInstructionsURL) {
+		t.Fatalf("refusal does not name the offending entry %q: %q", remoteInstructionsURL, refused)
+	}
+	if !strings.Contains(refused, "The reviewer was not launched") {
+		t.Fatalf("remote-instructions refusal lost its exactly-once guarantee: %q", refused)
+	}
+
+	fixture.mu.Lock()
+	received := fixture.receivedContext
+	fixture.mu.Unlock()
+	if received != "" {
+		t.Fatalf("the reviewer's own model call happened despite the remote instructions entry:\n%s", received)
+	}
+
+	// No capture happened: finalize requires captured_artifacts:complete, so
+	// it must refuse for this lineage's still-unfulfilled review-risk
+	// result. See TestRealOpenCodeReviewerRefusesWithoutIsolationEnvironment
+	// above for why STATUS is not re-queried here instead.
+	if _, _, err := setup.harness.gentleAllowFailure(
+		"review", "finalize", "--cwd", setup.harness.repo.worktree, "--lineage", setup.lineage, "--captured-results=true",
+	); err == nil {
+		t.Fatal("finalize succeeded despite a refused, never-captured reviewer result")
+	}
+}
+
 // organicCommandArguments splits one negotiated transition's literally
 // runnable command string into the argv this test hands to harness.gentle,
 // dropping only the leading "gentle-ai" binary token. Every value in these
@@ -698,7 +771,7 @@ func TestBashOrReadToolUseDetectsRegression(t *testing.T) {
 	}
 }
 
-func generatedOpenCodeReviewConfig(t *testing.T, settingsPath, serverURL string) string {
+func generatedOpenCodeReviewConfig(t *testing.T, settingsPath, serverURL string, instructions ...string) string {
 	t.Helper()
 	payload, err := os.ReadFile(settingsPath)
 	if err != nil {
@@ -717,6 +790,9 @@ func generatedOpenCodeReviewConfig(t *testing.T, settingsPath, serverURL string)
 	agents["review-driver"] = map[string]any{
 		"description": "Attempts the generated immutable reviewer", "mode": "primary", "model": "fixture/fixture",
 		"permission": map[string]any{"bash": "deny", "task": "allow", "edit": "deny"},
+	}
+	if len(instructions) > 0 {
+		config["instructions"] = instructions
 	}
 	encoded, err := json.Marshal(config)
 	if err != nil {
