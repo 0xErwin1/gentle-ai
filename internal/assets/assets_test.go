@@ -2315,6 +2315,8 @@ func TestSDDArchiveStoreSpecificFilesystemContract(t *testing.T) {
 	}
 	moveBlock := skill[moveStart : moveStart+moveEnd]
 	assertOrdered("archive move", moveBlock,
+		"snapshot_root=\"$(mktemp -d \"${TMPDIR:-/tmp}/sdd-archive.XXXXXX\")\"",
+		"cp -R \"openspec/changes/{change-name}\" \"$snapshot_root/source\"",
 		"if git mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then",
 		"if mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then",
 		"else\n    move_status=$?\n    exit \"$move_status\"",
