@@ -98,6 +98,79 @@ func TestReviewNarrationNamesAUniversalOrBetterExit(t *testing.T) {
 	}
 }
 
+// TestReviewNarrationReviewModeDisableIsAlwaysCloneScoped is the
+// execution-based RED-first proof for adversarial finding F6, applied to all
+// nine narration entries: `--scope` defaults to `global`
+// (review_mode.go's own flag default), so any narration naming the bare
+// `gentle-ai review mode disable` would let an orchestrator silently
+// disable receipt-driven development for every repository on the machine.
+// Verified by execution: the bare form writes ~/.gentle-ai/state.json;
+// `--scope clone --cwd <repo>` writes only under that repository's own
+// .git/gentle-ai directory.
+func TestReviewNarrationReviewModeDisableIsAlwaysCloneScoped(t *testing.T) {
+	re := regexp.MustCompile("`gentle-ai review mode disable[^`]*`")
+	found := 0
+	for code, statement := range reviewStopReasonNarration {
+		for _, invocation := range re.FindAllString(statement, -1) {
+			found++
+			if !strings.Contains(invocation, "--scope clone") || !strings.Contains(invocation, "--cwd <repo>") {
+				t.Errorf("stop reason %q: %s defaults to global scope if run as printed (verified by execution: omitting --scope writes ~/.gentle-ai/state.json machine-wide) -- name --scope clone --cwd <repo> instead", code, invocation)
+			}
+		}
+	}
+	if found == 0 {
+		t.Fatal("found no `gentle-ai review mode disable` invocations in reviewStopReasonNarration; the extraction is stale")
+	}
+}
+
+// TestReviewNarrationNamedCommandsAreAlwaysComplete is the execution-based
+// RED-first proof for adversarial findings F1 and F7 applied to
+// review_narration.go: `gentle-ai review status --next-transition` alone is
+// refused by this real CLI without `--contract gentle-ai.review-integration/v2
+// --agent claude-code`, and `gentle-ai review reopen-results` is refused
+// without --cwd/--lineage/--expected-revision/--target/--reason/--actor
+// (both verified by execution against a fresh binary).
+func TestReviewNarrationNamedCommandsAreAlwaysComplete(t *testing.T) {
+	statusRe := regexp.MustCompile("`gentle-ai review status[^`]*--next-transition`")
+	reopenRe := regexp.MustCompile("`gentle-ai review reopen-results[^`]*`")
+	for code, statement := range reviewStopReasonNarration {
+		for _, invocation := range statusRe.FindAllString(statement, -1) {
+			if !strings.Contains(invocation, "--contract gentle-ai.review-integration/v2") || !strings.Contains(invocation, "--agent claude-code") {
+				t.Errorf("stop reason %q: %s is incomplete -- the real CLI refuses --next-transition without --contract gentle-ai.review-integration/v2 --agent claude-code", code, invocation)
+			}
+		}
+		for _, invocation := range reopenRe.FindAllString(statement, -1) {
+			for _, flag := range []string{"--cwd", "--lineage", "--expected-revision", "--target", "--reason", "--actor"} {
+				if !strings.Contains(invocation, flag) {
+					t.Errorf("stop reason %q: %s is missing required %s", code, invocation, flag)
+				}
+			}
+		}
+	}
+}
+
+// TestUnchangedOrUnverifiedAuthorityNamesTheRealPrecondition is the
+// execution-based RED-first proof for adversarial finding F4: `gentle-ai
+// review start` on a candidate whose target is unchanged from the current
+// authority does not start a fresh lineage -- confirmed by execution, it
+// resumes the SAME one (`"action": "resumed"`, identical lineage_id).
+// Naming only `gentle-ai review start` loops the reader back to the same
+// stop; the narration must disclose that the candidate needs to change
+// first.
+func TestUnchangedOrUnverifiedAuthorityNamesTheRealPrecondition(t *testing.T) {
+	statement, ok := reviewStopReasonNarration["unchanged_or_unverified_authority"]
+	if !ok {
+		t.Fatal("no unchanged_or_unverified_authority narration entry")
+	}
+	lowered := strings.ToLower(statement)
+	if !strings.Contains(lowered, "resum") {
+		t.Errorf("unchanged_or_unverified_authority narration never discloses that `review start` on an unchanged candidate only resumes the same lineage: %q", statement)
+	}
+	if !strings.Contains(lowered, "change") {
+		t.Errorf("unchanged_or_unverified_authority narration never states that the candidate must change first: %q", statement)
+	}
+}
+
 // TestNarrationTierAAndCBanInternalVocabulary is the RED-first proof for
 // spec "Three-Tier Narration Contract"'s ban on uncertainty phrasing and
 // internal identifiers leaking onto the human surface. It runs over every
