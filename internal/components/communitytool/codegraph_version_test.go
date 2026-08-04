@@ -194,6 +194,28 @@ func TestInstallSkipsTheVersionProbeWhenTheCLIIsNotYetInstalled(t *testing.T) {
 	}
 }
 
+// TestInstallCarriesTheVersionGapNoteThroughTheRollbackPath keeps the version
+// gap reportable on the path where it matters most. A step that fails still
+// returns the Result, so the reason and the resolving command survive the
+// rollback rather than being replaced by a raw upstream error.
+func TestInstallCarriesTheVersionGapNoteThroughTheRollbackPath(t *testing.T) {
+	home := installHomeWithTwoNativeTargets(t)
+	stubCodeGraphVersion(t, "0.9.3", true)
+
+	result, err := InstallWithHome(model.CommunityToolCodeGraph, "/work/project", home, RunnerFunc(func(string, ...string) error {
+		return errors.New("upstream install rejected the invocation")
+	}), DetectorFunc(func(string) (string, error) { return "/bin/codegraph", nil }))
+	if err == nil {
+		t.Fatal("InstallWithHome() error = nil, want the runner failure surfaced")
+	}
+	if !hasManualActionContaining(result.ManualActions, "0.9.3") {
+		t.Fatalf("ManualActions = %#v, want the version gap reported on the failure path", result.ManualActions)
+	}
+	if !hasManualActionContaining(result.ManualActions, "@colbymchenry/codegraph@latest") {
+		t.Fatalf("ManualActions = %#v, want the resolving command named", result.ManualActions)
+	}
+}
+
 func hasManualActionContaining(actions []string, needle string) bool {
 	for _, action := range actions {
 		if strings.Contains(action, needle) {
