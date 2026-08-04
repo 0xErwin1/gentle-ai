@@ -16,7 +16,9 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
-var requiredLedgerClauses = boundedReviewRequiredClauses
+// requiredLedgerClauses is the OpenCode binding of the shared clause set: the
+// only consumer is the preserved OpenCode orchestrator prompt.
+var requiredLedgerClauses = boundedReviewRequiredClausesFor(model.AgentOpenCode)
 
 const requiredOrchestratorMergeModeClause = "Parent orchestrator and native CLI only"
 
@@ -63,7 +65,7 @@ func TestDedicatedReviewAndJudgmentAssetsRenderRoleContracts(t *testing.T) {
 	for family, paths := range assetsByFamily {
 		for _, path := range paths {
 			t.Run(family+"/"+path, func(t *testing.T) {
-				content := renderBoundedReviewAsset(path)
+				content := renderBoundedReviewAsset(agentForAssetPath(t, path), path)
 				assertTextContainsClauses(t, path, content, []string{"candidate", "BLOCKER", "CRITICAL", "causal", "proof"})
 				if !strings.Contains(content, "read-only") && !strings.Contains(content, "Never edit") {
 					t.Errorf("%s does not state its non-mutating role", path)
@@ -118,7 +120,7 @@ func TestDedicatedReviewersAndRefutersAreStructurallyReadOnly(t *testing.T) {
 		"claude/agents/review-refuter.md", "cursor/agents/review-refuter.md",
 		"kimi/agents/review-refuter.md", "kiro/agents/review-refuter.md",
 	} {
-		assertNoReviewerLifecycleInstructions(t, path, renderBoundedReviewAsset(path))
+		assertNoReviewerLifecycleInstructions(t, path, renderBoundedReviewAsset(agentForAssetPath(t, path), path))
 	}
 	for _, path := range []string{
 		"kimi/agents/review-risk.yaml", "kimi/agents/review-readability.yaml",
@@ -274,9 +276,10 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// difference in the rendered settings, so the hash moved a fourth time.
 	// Deliberate, not drift.
 	//
-	// This baseline combines the #2485 answer-validation contract with #2417's
-	// provider-injected reviewer shape. It is recomputed from the merged tree.
-	const want = "812e5f57a188795f5840a0d73d56104ebefbb0e27ca311b6af2f182bfca6bb0d"
+	// This baseline combines #2485's answer-validation contract, #2417's
+	// provider-injected reviewer shape, and #2440's runtime-bound identity.
+	// It is recomputed from the merged tree.
+	const want = "a946dfda5f9802887043e5a7c88e2ce744cd864da86926dbc92b8396306f641e"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -479,12 +482,18 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// drift. The standard ceiling moves with it (22,200 -> 23,300) to
 		// restore the ~15% margin the guard below requires; full-4R already had
 		// enough headroom and is unchanged.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_157, maxCharacters: 23_300},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_558, maxCharacters: 36_000},
+		// #2440 then replaces five literal claude-code identities with the
+		// executing runtime. The combined pins are recomputed from this merge.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_142, maxCharacters: 23_300},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_543, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			chars, _ := measurePromptCost(boundedReviewContract())
+			// Measure what an OpenCode user actually installs, not the
+			// shared source: the contract now carries the runtime-identity
+			// substitution placeholder, and only the bound form is ever
+			// written to disk (issue #2440).
+			chars, _ := measurePromptCost(bindRuntimeAgentIdentity(boundedReviewContract(), model.AgentOpenCode))
 			for _, agent := range tt.agents {
 				promptChars, _ := measurePromptCost(settings.Agent[agent].Prompt)
 				chars += promptChars
