@@ -297,6 +297,52 @@ func TestAuthorityDispositionResumeStalePlanRefusesNotProceeds(t *testing.T) {
 	}
 }
 
+// TestRepairAuthorityDispositionResumesThroughPublicEntrypoint proves the
+// SAME forward-only resume works through RepairAuthorityDisposition — the
+// public entrypoint internal/cli's `review repair` calls — not only through
+// executeAuthorityDisposition called directly, as every other resume test
+// in this file does. RepairAuthorityDisposition previously always
+// re-derived the plan fresh from actor/reason on every call, discarding the
+// caller-supplied plan_digest/inventory_revision entirely; once ANY closure
+// member is already quarantined, that fresh re-derivation necessarily
+// produces a smaller, mismatched closure (a missing member contributes no
+// report edge), so a genuine crash-then-resume through this public
+// entrypoint always refused, even though executeAuthorityDisposition's own
+// internal resume logic (this file's other tests) was already correct.
+// discovered via bench's ds11-crash-recovery-mid-closure journey (the
+// black-box twin of TestAuthorityDispositionResumeCrashPositionMatrix),
+// which is the only place this exact call path — through
+// RepairAuthorityDisposition, not executeAuthorityDisposition directly —
+// was ever exercised.
+func TestRepairAuthorityDispositionResumesThroughPublicEntrypoint(t *testing.T) {
+	repo := initSnapshotRepo(t)
+	plan, _, grandchild := threeNodeClosureFixture(t, repo, "public-resume")
+
+	originalHook := compactReclaimPhaseHook
+	injected := errors.New("injected interruption after grandchild commits")
+	compactReclaimPhaseHook = func(ctx context.Context, current string, record CompactReclaimRecord) error {
+		if current == compactReclaimPhaseCommitted && record.LineageID == grandchild.State.LineageID {
+			return injected
+		}
+		return originalHook(ctx, current, record)
+	}
+	t.Cleanup(func() { compactReclaimPhaseHook = originalHook })
+
+	_, err := RepairAuthorityDisposition(context.Background(), repo, plan.PlanDigest, plan.AuthorityInventoryRevision, plan.Actor, plan.Reason, plan.Authorization)
+	if !errors.Is(err, injected) {
+		t.Fatalf("first (interrupted) public execution error = %v, want the injected interruption", err)
+	}
+
+	compactReclaimPhaseHook = originalHook
+	record, err := RepairAuthorityDisposition(context.Background(), repo, plan.PlanDigest, plan.AuthorityInventoryRevision, plan.Actor, plan.Reason, plan.Authorization)
+	if err != nil {
+		t.Fatalf("resumed public execution through RepairAuthorityDisposition: %v", err)
+	}
+	if record.Status != CompactReclaimCommitted || record.LineageID != plan.Closure[len(plan.Closure)-1] {
+		t.Fatalf("resumed public execution did not converge on the committed seed: %#v", record)
+	}
+}
+
 // TestAuthorityDispositionResumeCrashPositionMatrix is the load-bearing
 // proof tasks.md 3.5 and the coordinator's batch require: for a 3-node
 // closure, interrupting at EVERY position — after each node's prepared
