@@ -373,6 +373,11 @@ func TestReviewFacadeStartSupportsCommittedBaseDiff(t *testing.T) {
 	runReviewCLIGit(t, repo, "add", "tracked.txt")
 	runReviewCLIGit(t, repo, "commit", "-qm", "candidate")
 
+	// The committed candidate selects a lens, so a direct base-diff start
+	// through the CLI now hits issue #2447's up-front refusal (see
+	// runReviewFacadeStart). This is SETUP for the pre-PR gate behavior under
+	// test, not the refusal itself, so it constructs legacy authority directly
+	// via runLegacyFacadeStartForTest instead of going through that dispatch.
 	var output bytes.Buffer
 	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--base-ref", base}, &output); err != nil {
 		t.Fatal(err)
@@ -443,6 +448,14 @@ func TestReviewFacadeStartRequiresCommittedOnlyAndReusesEquivalentAuthority(t *t
 		t.Fatalf("rejected start persisted authority = %v, %v", stores, err)
 	}
 
+	// The candidate selects a lens (LensesRequired is asserted true below), and
+	// a direct start over --base-ref for a lens-selecting candidate now hits
+	// issue #2447's up-front refusal in production (see runReviewFacadeStart).
+	// This helper is SETUP for the resume/reuse authority behavior under test
+	// (the underlying reviewtransaction.StartCompactAuthority state machine),
+	// not the refusal itself, so it constructs legacy authority directly via
+	// runLegacyFacadeStartForTest, bypassing the CLI dispatch the refusal lives
+	// in entirely.
 	start := func(args ...string) ReviewFacadeStartResult {
 		t.Helper()
 		var output bytes.Buffer
@@ -481,6 +494,9 @@ func TestReviewFacadeStartRequiresCommittedOnlyAndReusesEquivalentAuthority(t *t
 	if err := os.WriteFile(policy, []byte("different policy\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// The candidate still selects a lens up front (the blocked-scope-action
+	// downgrade to zero lenses is decided downstream of the refusal check);
+	// same bypass rationale as above.
 	var blockedOutput bytes.Buffer
 	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--base-ref", base, "--committed-only", "--policy", policy}, &blockedOutput); err != nil {
 		t.Fatal(err)
@@ -1798,6 +1814,9 @@ func TestReviewRecoverRetainsCommittedOnlyBaseDiffAndIgnoresWorkspace(t *testing
 	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("ignored workspace\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// This is SETUP for the "recover" behavior under test, not the start
+	// refusal itself; the committed candidate selects a lens, so a direct
+	// base-diff start now hits issue #2447's up-front refusal.
 	var output bytes.Buffer
 	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--base-ref", baseRef, "--committed-only"}, &output); err != nil {
 		t.Fatal(err)

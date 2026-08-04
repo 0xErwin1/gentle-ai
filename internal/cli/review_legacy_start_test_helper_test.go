@@ -148,7 +148,8 @@ func runLegacyFacadeStartForTest(t *testing.T, args []string, stdout io.Writer) 
 		case result.ChangedFiles == 0 && target.Kind == reviewtransaction.TargetCurrentChanges:
 			result.Hint = reviewStartEmptyCandidateHint
 		case result.LensesRequired:
-			result.Hint = reviewStartNegotiateContractHint(started.Record.State.InitialSnapshot)
+			result.Hint = "this response's selected lenses require the frozen Git trees, changed-path manifest, and artifact subjects, which only the negotiated contract form returns; rerun with `" +
+				reviewNegotiatedStartCommand(started.Record.State.InitialSnapshot) + "` to receive them"
 		}
 	}
 	return encodeReviewJSON(stdout, result)
