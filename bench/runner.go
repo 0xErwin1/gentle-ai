@@ -576,6 +576,15 @@ func runJourney(binary string, journey Journey) JourneyResult {
 		}
 	}
 
+	// A product that emitted an execute transition with nothing to run fails
+	// the journey outright, whatever else the journey managed to do. It is not
+	// a friction number: no honest metric can be reported about a flow whose
+	// stated continuation the reader cannot follow.
+	if len(accumulator.deadTransitions) > 0 && result.Status != StatusFailed {
+		result.Status = StatusFailed
+		result.FailureReason = strings.Join(accumulator.deadTransitions, "; ")
+	}
+
 	result.Metrics = accumulator.metrics("")
 	result.Commands = accumulator.records
 	return result
