@@ -72,6 +72,23 @@ Chain strategy: feature-branch-chain
 
 ### WU2 — S6: byte-equivalence evidence, Commit A
 - [x] 2.1 Record goldens/envelopes/receipts with `GENTLE_AI_RDD_NEW_LINEAGE=1` across the full journey set, every entry surface: start (negotiated+unnegotiated), status `--next-transition`, capture-result, finalize, validate, all 5 gates. (Scoped at apply time to the unnegotiated form + status + finalize + all 5 gates; negotiated form and capture-result deferred to unit-level coverage + WU18's `bench --axis all` — see apply-progress.)
+  **verify SL-1, disclosed rather than widened**: the negotiated form was
+  never proven byte-equivalent (switch-ON vs switch-free), and cannot be
+  recorded now without either (a) reconstructing a switch-free build —
+  exactly the WU18 action this wave deferred, and reproducing it here
+  solely to record evidence would reintroduce the same disclosed
+  `repository_context` gap under the same time pressure the deferral
+  exists to avoid, or (b) recording only the switch-ON side with no
+  switch-free counterpart to diff against, which proves nothing. This
+  scenario ("Double-evaluation proves equivalence before deletion") stays
+  honestly unsatisfied in this change (see the corrected counts in
+  `specs/rdd-single-lifecycle/spec.md`: 8/9 scenarios). **What the
+  successor (`rdd-single-lifecycle-cutover`) must capture**: once v3
+  negotiated START gains genuine `repository_context` support, record
+  Commit A's negotiated-form goldens/envelopes/receipts (negotiated start +
+  `capture-result`) with the switch ON, build switch-free, record the same
+  surface again, and diff both for byte-identity — end to end, before
+  switch removal proceeds. See the successor's `proposal.md` step 3.
 - [x] 2.2 Store recorded bytes as the Commit-B comparison baseline.
 - [x] 2.3 Exit Checklist.
 
@@ -154,10 +171,18 @@ apply-progress (#10204) for the complete technical finding.
 switch stays; v3 remains opt-in (also the safer posture for the upcoming
 release candidate's community testing).
 
-- [ ] 18.1-18.6: not done, blocked on v3 negotiated START gaining
-  `repository_context` support (see the spec amendment's own Requirement:
-  "Switch Removal Is Blocked On v3 Negotiated Repository Context"). Not
-  re-attempted this wave.
+- [x] 18.1-18.6: TRANSFERRED to the successor change
+  `openspec/changes/rdd-single-lifecycle-cutover/` (verify N4 — an
+  unchecked `[ ]` here would claim this is still Wave 7's own outstanding
+  task, while the spec now says the requirement it serves is not Wave 7's
+  to deliver at all; both artifacts must agree). Nothing under 18.1-18.6
+  was executed this wave beyond the reverted WU18 attempt already
+  documented above. Blocked on v3 negotiated START gaining
+  `repository_context` support (see the successor's `proposal.md` for the
+  full re-entry brief, and `specs/rdd-single-lifecycle/spec.md`'s own
+  Requirement: "Switch Removal Is Blocked On v3 Negotiated Repository
+  Context", which stays Wave 7's own delivered requirement). Not
+  re-attempted this wave; the successor change owns re-attempting it.
 
 ### WU18a — S7a: additive start-time guards + v3 negotiated frozen context (kept, independent of the switch)
 - [x] Start-time legacy-collision guards added to the switch-ON v3 path in
@@ -228,9 +253,16 @@ release candidate's community testing).
   `rdd-backlog-disposition.md`'s closure-audit-protocol row for step 4)
   that WU20 never performed, and its stated condition ("zero legacy verbs
   reachable") was invalidated by WU19's finding that all 6 D4 verbs stay
-  live/reachable. Reconciled honestly in both the tracker and
-  `rdd-backlog-disposition.md` rather than silently marking a now-false
-  condition satisfied — see those files for the corrected text.
+  live/reachable. Reconciled honestly IN THE TRACKER ONLY (verify N1
+  correction: `rdd-backlog-disposition.md` itself was intentionally left
+  untouched — its closure-audit step 4 is a protocol instruction, not an
+  outcome claim, and the tracker's own reconciliation paragraph already
+  says so correctly; it needed only a discoverability pointer, see 20.7) —
+  see the tracker for the corrected text.
+- [x] 20.7 verify N2: added a one-line pointer from
+  `rdd-backlog-disposition.md`'s closure audit protocol to
+  `rdd-wave7-deletion-proof-tracker.md`, so the rescoping in 20.5 is
+  discoverable from the backlog side too.
 - [x] 20.6 verify W5: the `reconcile-authority` retirement (WU7) left the
   `unchanged_target` and `malformed_recovery_authorization` anomaly classes
   without their only advertised runnable exit (disclosed inline in
