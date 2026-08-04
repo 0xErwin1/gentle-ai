@@ -46,39 +46,60 @@ Chain strategy: feature-branch-chain
 
 ## Gate
 
-- [ ] G.1 Confirm Waves 3-6 merged to `main` (exit evidence present; `GENTLE_AI_RDD_NEW_LINEAGE` present under `internal/`).
-- [ ] G.2 Confirm W6 fix cycle `bba17974` merged before deriving the Task 0 inventory.
+- [x] G.1 Confirm Waves 3-6 merged to `main` (exit evidence present; `GENTLE_AI_RDD_NEW_LINEAGE` present under `internal/`).
+- [x] G.2 Confirm W6 fix cycle `bba17974` merged before deriving the Task 0 inventory.
 
 ## Task 0: Inventory Re-Validation (no code diff, blocking)
 
-- [ ] 0.1 Re-read all 24 design rows against current tracker tip; confirm file:line accuracy post-`bba17974`.
-- [ ] 0.2 Confirm `ShadowRelation*` constants (`candidate_relation.go:34-45`) are declared independent of row 4's alias (line 36) before any shadow deletion.
-- [ ] 0.3 Confirm row 9's ds01/ds02/ds04 verb hits unaffected/updated by `bba17974`'s ds11 journey change.
-- [ ] 0.4 Record any drift as amended row notes before WU1.
+- [x] 0.1 Re-read all 24 design rows against current tracker tip; confirm file:line accuracy post-`bba17974`.
+- [x] 0.2 Confirm `ShadowRelation*` constants (`candidate_relation.go:34-45`) are declared independent of row 4's alias (line 36) before any shadow deletion.
+- [x] 0.3 Confirm row 9's ds01/ds02/ds04 verb hits unaffected/updated by `bba17974`'s ds11 journey change.
+- [x] 0.4 Record any drift as amended row notes before WU1.
 
 ## Bracket Slices (add-only, land first)
 
 ### WU1 — S1: W-9/W-10/W-11 closure
-- [ ] 1.1 RED: `FindingEvidence.Severity` (omitempty) missing-field test (`transaction.go:146`).
-- [ ] 1.2 GREEN: add `Severity`; carry through `newLineageCapturedFindings` (`review_artifact.go:937-946`, today drops `facadeFinding.Severity`).
-- [ ] 1.3 RED: `new_lineage_capture_test.go` — `CaptureLensResult` refuses severe finding missing `evidence_class`/`causal_disposition` (v2 message, `artifact_admission.go:331`).
-- [ ] 1.4 GREEN: refuse in `AuthorityStore.CaptureLensResult` (`new_lineage_capture.go:99`) reusing `isSevereSeverity`/`isSupportedEvidenceClass`/`isSupportedCausalDisposition` (`transaction.go:1774/1829/1838`).
-- [ ] 1.5 RED: v3 finalize — WARNING-severity candidate-causal findings stay non-blocking (v2 parity).
-- [ ] 1.6 GREEN: v3 finalize filters `CapturedFindingEvidence()` to SEVERE before `AdmitCandidateCausalFindings` call site; function body stays byte-identical.
-- [ ] 1.7 RED: `candidate_causal_admission_test.go` — unknown `causal_disposition` on a severe finding escalates via new `unresolvedIDs` return.
-- [ ] 1.8 GREEN: add third `unresolvedIDs` return to `AdmitCandidateCausalFindings` (`candidate_causal_admission.go:31`); only v3 finalize consumes it; v2 callers byte-identical.
-- [ ] 1.9 RED (RG.1): add `internal/reviewtransaction/legacy_readonly_guard_test.go` asserting D5 retained-symbol list (parseLegacyBinding, parseBinding, bindingBytes/Digest/Path, `candidate_decline.go` parser, StateInvalidated arms, AuthoritativeStore/LoadChain, NewLegacyReadOnlyError) reachable/read-only. Intentionally RED until WU19.
-- [ ] 1.10 Exit Checklist.
+- [x] 1.1 RED: `FindingEvidence.Severity` (omitempty) missing-field test (`transaction.go:146`).
+- [x] 1.2 GREEN: add `Severity`; carry through `newLineageCapturedFindings` (`review_artifact.go:937-946`, today drops `facadeFinding.Severity`).
+- [x] 1.3 RED: `new_lineage_capture_test.go` — `CaptureLensResult` refuses severe finding missing `evidence_class`/`causal_disposition` (v2 message, `artifact_admission.go:331`).
+- [x] 1.4 GREEN: refuse in `AuthorityStore.CaptureLensResult` (`new_lineage_capture.go:99`) reusing `isSevereSeverity`/`isSupportedEvidenceClass`/`isSupportedCausalDisposition` (`transaction.go:1774/1829/1838`).
+- [x] 1.5 RED: v3 finalize — WARNING-severity candidate-causal findings stay non-blocking (v2 parity).
+- [x] 1.6 GREEN: v3 finalize filters `CapturedFindingEvidence()` to SEVERE before `AdmitCandidateCausalFindings` call site; function body stays byte-identical.
+- [x] 1.7 RED: `candidate_causal_admission_test.go` — unknown `causal_disposition` on a severe finding escalates via new `unresolvedIDs` return.
+- [x] 1.8 GREEN: add third `unresolvedIDs` return to `AdmitCandidateCausalFindings` (`candidate_causal_admission.go:31`); only v3 finalize consumes it; v2 callers byte-identical.
+- [x] 1.9 RED (RG.1): add `internal/reviewtransaction/legacy_readonly_guard_test.go` asserting D5 retained-symbol list (parseLegacyBinding, parseBinding, bindingBytes/Digest/Path, `candidate_decline.go` parser, StateInvalidated arms, AuthoritativeStore/LoadChain, NewLegacyReadOnlyError) reachable/read-only. Intentionally RED until WU19.
+- [x] 1.10 Exit Checklist.
 
 ### WU2 — S6: byte-equivalence evidence, Commit A
-- [ ] 2.1 Record goldens/envelopes/receipts with `GENTLE_AI_RDD_NEW_LINEAGE=1` across the full journey set, every entry surface: start (negotiated+unnegotiated), status `--next-transition`, capture-result, finalize, validate, all 5 gates.
-- [ ] 2.2 Store recorded bytes as the Commit-B comparison baseline.
-- [ ] 2.3 Exit Checklist.
+- [x] 2.1 Record goldens/envelopes/receipts with `GENTLE_AI_RDD_NEW_LINEAGE=1` across the full journey set, every entry surface: start (negotiated+unnegotiated), status `--next-transition`, capture-result, finalize, validate, all 5 gates. (Scoped at apply time to the unnegotiated form + status + finalize + all 5 gates; negotiated form and capture-result deferred to unit-level coverage + WU18's `bench --axis all` — see apply-progress.)
+- [x] 2.2 Store recorded bytes as the Commit-B comparison baseline.
+- [x] 2.3 Exit Checklist.
 
 ### WU3 — S9a: v1 freeze + backlog deletion proofs
-- [ ] 3.1 Add read-only freeze marker/doc for `contracts/review-integration/v1/**` (D3), byte-unchanged.
-- [ ] 3.2 Record deletion proof for backlog `#1455`, `#1462`, `#1570`, PRs `#1549`, `#1550` (superseded-by-design).
-- [ ] 3.3 Exit Checklist.
+- [x] 3.1 Add read-only freeze marker/doc for `contracts/review-integration/v1/**` (D3), byte-unchanged.
+- [x] 3.2 Record deletion proof for backlog `#1455`, `#1462`, `#1570`, PRs `#1549`, `#1550` (superseded-by-design).
+- [x] 3.3 Exit Checklist.
+
+## Task 0 Re-Validation Findings (recorded before WU1, at `bba17974`)
+
+All 24 design rows confirmed exact (file:line matches design.md byte-for-byte)
+against `bba17974`, with one documented drift and no row requiring a design
+amendment. W6's fix cycle (`bba17974`) touched `bench/axis_damaged_store_closure.go`,
+`internal/cli/review_repair.go`(+test), `internal/reviewtransaction/authority_disposition_execute.go`(+test) —
+none of these are Wave 7 inventory rows; row 9's `bench/axis_damaged_store.go`
+(the file the design's row 9 actually names) received ZERO changes from `bba17974`.
+Drift: row 9's `axis_damaged_store_closure.go` claim of "2 hits" is now 0 (that
+file currently carries no reconcile-authority/-batch references at all) — the
+retarget-needed references live exclusively in `axis_damaged_store.go` (confirmed
+14 `reconcile` mentions there, unaffected by W6). Task 0.2 confirmed:
+`ShadowRelation*` constants (lines 39-45) and `relateCandidates`/`shadowRelationHasNoLiveCounterpart`
+(lines 81/228) are declared independent of the `ShadowRelation` alias (line 36) —
+deleting only line 36 in WU4 leaves the live v3 governance vocabulary untouched.
+Row 12 pre-confirmed early (S4/WU11 precondition): `PlanCompactBatchReconciliation`/
+`PrepareCompactBatchReconciliation` have exactly one non-test consumer each,
+both inside the S4 cluster itself (`compact_batch_reconcile_guard.go`,
+`internal/cli/review_reconcile_batch.go:76`) — zero consumers outside the
+journal/dispatch cluster being deleted in WU9-WU11.
 
 ## Consumer-First Deletion Slices
 
