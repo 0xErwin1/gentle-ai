@@ -239,7 +239,7 @@ func TestMissingEvidenceRevisionPreservesStrictParserReasonBeforeLegacyTransacti
 	)
 	verify := parseVerifyResult(report, SpecCounts{Requirements: 1, Scenarios: 1})
 	transaction := &reviewtransaction.Transaction{FailedEvidenceRevision: runtimeTestHash('e')}
-	remediation := resolveBoundedRemediation(true, verify, transaction, nil, "", "")
+	remediation := resolveBoundedRemediation(true, false, verify, transaction, nil, "", "")
 	const want = "verify evidence cannot enter remediation: missing evidence_revision in verify result envelope"
 	if remediation.Reason != want {
 		t.Fatalf("missing evidence remediation reason = %q, want %q", remediation.Reason, want)

@@ -524,6 +524,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	}
 	remediationState := resolveBoundedRemediation(
 		remediationRequired,
+		reviewDisabled,
 		verifyResult,
 		reviewState,
 		compactRemediation,
@@ -854,6 +855,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	}
 	remediationState := resolveBoundedRemediation(
 		remediationRequired,
+		reviewDisabled,
 		verifyResult,
 		reviewState,
 		compactRemediation,
