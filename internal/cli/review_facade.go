@@ -848,13 +848,6 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 		if err != nil {
 			return fmt.Errorf("assess negotiated review target: %w", err)
 		}
-		// Wave 1 shadow observation (rdd-shadow-evaluation): outcome-neutral,
-		// advisory-only, and a true no-op unless GENTLE_AI_RDD_SHADOW is set —
-		// see internal/reviewtransaction/shadow_observer.go. status has no
-		// authoritative receipt to freeze against yet, so both frozen tree
-		// arguments are honestly empty rather than fabricated.
-		reviewtransaction.ObserveShadowRelation(ctx, root, reviewtransaction.GateKind(*gate),
-			"", "", "", "", liveSnapshot, "", "", nil, nil)
 		if selectedBaseTree != "" && native.Projection.BaseTree != selectedBaseTree {
 			return errors.New("--base-tree does not identify an exact Git tree object")
 		}
@@ -1558,13 +1551,6 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	if err != nil {
 		return fmt.Errorf("build facade review target: %w", err)
 	}
-	// Wave 1 shadow observation (rdd-shadow-evaluation): outcome-neutral,
-	// advisory-only, and a true no-op unless GENTLE_AI_RDD_SHADOW is set —
-	// see internal/reviewtransaction/shadow_observer.go. start has no prior
-	// authoritative receipt to freeze against, so both frozen tree
-	// arguments are honestly empty rather than fabricated.
-	reviewtransaction.ObserveShadowRelation(ctx, root, "",
-		"", "", "", "", snapshot, "", "", nil, nil)
 	if negotiated && snapshot.Identity != *targetIdentity {
 		return reviewPreflightRefusal(reviewPreflightStaleTargetReason,
 			errors.New("review start target does not match the freshly built snapshot"))

@@ -26,6 +26,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -97,11 +98,14 @@ type gateBoundaryMatrixRow struct {
 	Reason    string `json:"reason"`
 }
 
-// updateGateBoundaryMatrixGolden reuses shadow_matrix_test.go's "-update"
-// flag (same package, same golden-update convention) rather than
+// updateGateBoundaryMatrixGolden used to reuse shadow_matrix_test.go's own
+// "-update" flag (same package, same golden-update convention) rather than
 // registering a second "-update" flag, which would panic at test-binary
-// init.
-var updateGateBoundaryMatrixGolden = updateShadowMatrixGolden
+// init. shadow_matrix_test.go retired in Wave 7 S2b/S2c (its generating
+// test deleted; shadow-differential-matrix.golden itself is retained
+// byte-unchanged as historical evidence) -- this file now owns the "-update"
+// flag registration directly.
+var updateGateBoundaryMatrixGolden = flag.Bool("update", false, "update the gate boundary matrix golden file")
 
 var (
 	gateBoundaryMatrixBinaryOnce sync.Once
