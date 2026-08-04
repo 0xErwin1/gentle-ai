@@ -195,12 +195,20 @@ func decodeWaveObservation(observation Observation, target any, label string) er
 	return nil
 }
 
+// waveReviewInvocationArgs is printedCommandArguments narrowed to the `review`
+// family. It delegates rather than re-splitting on whitespace: an emitted
+// invocation can carry a single-quoted value holding spaces or newlines (a
+// recovery authorization is six LF-joined lines), and strings.Fields shatters
+// exactly those into stray positional arguments the product then refuses.
 func waveReviewInvocationArgs(invocation string) ([]string, error) {
-	fields := strings.Fields(strings.TrimSpace(invocation))
-	if len(fields) < 3 || fields[0] != "gentle-ai" || fields[1] != "review" {
+	args, err := printedCommandArguments(invocation)
+	if err != nil {
+		return nil, fmt.Errorf("invalid emitted review invocation: %w", err)
+	}
+	if len(args) < 2 || args[0] != "review" {
 		return nil, fmt.Errorf("invalid emitted review invocation %q", invocation)
 	}
-	return fields[1:], nil
+	return args, nil
 }
 
 // requireCandidateDeclineGateDeniesGenerically is Wave 5 Slice 6's
@@ -384,11 +392,11 @@ func recoverStagedCorrection(r *journeyRun) error {
 	if err != nil || envelope.NextTransition.Kind != "execute" || envelope.NextTransition.Execute.Operation != "review.recover" {
 		return fmt.Errorf("authorized staged recovery is not executable: %+v, %v", envelope.NextTransition, err)
 	}
-	args := []string{"review", "recover", "--cwd", r.sandbox.Repo}
-	for _, argument := range envelope.NextTransition.Execute.Arguments {
-		args = append(args, argument.Token)
+	recovered, err := runPrintedTransition(r, envelope)
+	if err != nil {
+		return err
 	}
-	result, err := decodeWaveOperation(r.run(args, false), "staged correction recovery")
+	result, err := decodeWaveOperation(recovered, "staged correction recovery")
 	if err != nil || result.LineageID != stagedSuccessorLineage || result.State != "reviewing" {
 		return fmt.Errorf("staged correction successor = %+v, %v", result, err)
 	}
@@ -1217,14 +1225,10 @@ func waveOneJourneys() []Journey {
 					if envelope.NextTransition.Kind != "execute" {
 						return fmt.Errorf("expected an execute review.start transition for the staged recovery base-diff candidate, got %q", envelope.NextTransition.Kind)
 					}
-					args := []string{"review", "start", "--cwd", r.sandbox.Repo}
-					for _, argument := range envelope.NextTransition.Execute.Arguments {
-						if argument.Token == "" {
-							return fmt.Errorf("execute argument %q carried no runnable token", argument.Name)
-						}
-						args = append(args, argument.Token)
+					started, err := runPrintedTransition(r, envelope)
+					if err != nil {
+						return err
 					}
-					started := r.run(args, false)
 					if started.ExitCode != 0 {
 						return fmt.Errorf("negotiated staged base-diff start failed: exit=%d stderr=%s", started.ExitCode, started.Stderr)
 					}
