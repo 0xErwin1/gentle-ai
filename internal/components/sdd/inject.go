@@ -494,14 +494,15 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 	if adapter.SupportsSkills() {
 		skillDir := adapter.SkillsDir(homeDir)
 		if skillDir != "" {
-			sharedFiles := []string{
-				"SKILL.md",
-				"persistence-contract.md",
-				"engram-convention.md",
-				"openspec-convention.md",
-				"sdd-phase-common.md",
-				"sdd-status-contract.md",
-				"skill-resolver.md",
+			// The embedded skills/_shared listing is the single source of
+			// truth for the shared inventory; deriving it here keeps a newly
+			// added shared file from silently missing this deployment path.
+			sharedFiles, sharedErr := assets.SharedSkillFileNames()
+			if sharedErr != nil {
+				return InjectionResult{}, fmt.Errorf("resolve SDD shared files: %w", sharedErr)
+			}
+			if len(sharedFiles) == 0 {
+				return InjectionResult{}, fmt.Errorf("resolve SDD shared files: embedded %s listing is empty", assets.SharedSkillDir)
 			}
 			sddSkillIDs := []model.SkillID{
 				"sdd-init", "sdd-explore", "sdd-propose", "sdd-spec",
@@ -513,7 +514,7 @@ func Inject(homeDir string, adapter agents.Adapter, sddMode model.SDDModeID, opt
 			// These are written directly, not via skills.Inject, since they are
 			// not part of the skills component's injection scope.
 			for _, fileName := range sharedFiles {
-				assetPath := "skills/_shared/" + fileName
+				assetPath := assets.SharedSkillDir + "/" + fileName
 				content, readErr := assets.Read(assetPath)
 				if readErr != nil {
 					return InjectionResult{}, fmt.Errorf("required SDD shared file %q: embedded asset not found: %w", fileName, readErr)

@@ -1809,19 +1809,19 @@ func sddJourneys() []Journey {
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
 				{Name: "review finalize", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: rememberLineage},
 				{Name: "walk into the recovery guard rails", Requires: recoverCapability, Composite: sddWalkIntoRecoveryGuardRails},
-				// The third rail is the one whose honest exit is not a command.
-				// The approval covers exactly the candidate in the working tree,
-				// so nothing the operator can run makes it stale; the bytes have
-				// to change first. The product cannot print a complete command
-				// either, because the successor's name is the operator's to
-				// choose. The declaration is what says that out loud, and it is
-				// verified against the words the product actually printed.
+				// This step used to carry a by-design world-action declaration:
+				// the approval covers exactly the candidate in the working tree,
+				// so nothing the operator runs makes it stale, and the product
+				// was said to be unable to print a complete command because the
+				// successor's name is the operator's to choose.
+				//
+				// The product now prints one, so the declaration was failing as
+				// a stale claim. It is removed rather than restated, because the
+				// runner already counts this in_band from mechanical evidence and
+				// a declaration that disagrees with what the product printed is
+				// worth less than the printed words themselves.
 				{Name: "invalidate the healthy approved authority", Requires: invalidateCapability,
-					Args: sddInvalidateHealthyApproved,
-					ByDesign: &ByDesignDeclaration{
-						Shape:      ByDesignWorldAction,
-						NextAction: "change the candidate first",
-					}},
+					Args: sddInvalidateHealthyApproved},
 				{Name: "the refused invalidation changed nothing", Composite: sddProveApprovalSurvived},
 				{Name: "fixture: change the candidate, which is what all three asked for", Fixture: stageProse("", "changed")},
 				{Name: "recover, following exactly what the gate then names",

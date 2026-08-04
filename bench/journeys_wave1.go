@@ -195,12 +195,20 @@ func decodeWaveObservation(observation Observation, target any, label string) er
 	return nil
 }
 
+// waveReviewInvocationArgs is printedCommandArguments narrowed to the `review`
+// family. It delegates rather than re-splitting on whitespace: an emitted
+// invocation can carry a single-quoted value holding spaces or newlines (a
+// recovery authorization is six LF-joined lines), and strings.Fields shatters
+// exactly those into stray positional arguments the product then refuses.
 func waveReviewInvocationArgs(invocation string) ([]string, error) {
-	fields := strings.Fields(strings.TrimSpace(invocation))
-	if len(fields) < 3 || fields[0] != "gentle-ai" || fields[1] != "review" {
+	args, err := printedCommandArguments(invocation)
+	if err != nil {
+		return nil, fmt.Errorf("invalid emitted review invocation: %w", err)
+	}
+	if len(args) < 2 || args[0] != "review" {
 		return nil, fmt.Errorf("invalid emitted review invocation %q", invocation)
 	}
-	return fields[1:], nil
+	return args, nil
 }
 
 // requireCandidateDeclineGateDeniesGenerically is Wave 5 Slice 6's
@@ -384,11 +392,11 @@ func recoverStagedCorrection(r *journeyRun) error {
 	if err != nil || envelope.NextTransition.Kind != "execute" || envelope.NextTransition.Execute.Operation != "review.recover" {
 		return fmt.Errorf("authorized staged recovery is not executable: %+v, %v", envelope.NextTransition, err)
 	}
-	args := []string{"review", "recover", "--cwd", r.sandbox.Repo}
-	for _, argument := range envelope.NextTransition.Execute.Arguments {
-		args = append(args, argument.Token)
+	recovered, err := runPrintedTransition(r, envelope)
+	if err != nil {
+		return err
 	}
-	result, err := decodeWaveOperation(r.run(args, false), "staged correction recovery")
+	result, err := decodeWaveOperation(recovered, "staged correction recovery")
 	if err != nil || result.LineageID != stagedSuccessorLineage || result.State != "reviewing" {
 		return fmt.Errorf("staged correction successor = %+v, %v", result, err)
 	}
@@ -936,6 +944,35 @@ func proveCompletedRetryInventory(_ *Sandbox, observation Observation) error {
 	return nil
 }
 
+func requireFreshNegotiatedStart(_ *Sandbox, observation Observation) error {
+	var status struct {
+		Applicability  string           `json:"applicability"`
+		Action         string           `json:"action"`
+		Authority      *json.RawMessage `json:"authority"`
+		NextTransition *struct {
+			Kind    string `json:"kind"`
+			Execute *struct {
+				Operation string `json:"operation"`
+			} `json:"execute"`
+		} `json:"next_transition"`
+	}
+	if err := decodeWaveObservation(observation, &status, "fresh negotiated review status"); err != nil {
+		return err
+	}
+	if status.Applicability != "unrelated" || status.Action != "start" || status.NextTransition == nil ||
+		status.NextTransition.Kind != "execute" || status.NextTransition.Execute == nil ||
+		status.NextTransition.Execute.Operation != "review.start" {
+		return fmt.Errorf("fresh negotiated status did not offer review.start: %+v", status)
+	}
+	// A fresh target has no authority. Publishing one here would mean status
+	// bound the candidate to unrelated review history, so the no-authority
+	// invariant is asserted rather than assumed by the start offer alone.
+	if status.Authority != nil {
+		return fmt.Errorf("fresh negotiated status published an authority: %s", string(*status.Authority))
+	}
+	return nil
+}
+
 func rememberArchiveAuthority(sandbox *Sandbox, observation Observation) error {
 	if err := rememberLineage(sandbox, observation); err != nil {
 		return err
@@ -1217,14 +1254,10 @@ func waveOneJourneys() []Journey {
 					if envelope.NextTransition.Kind != "execute" {
 						return fmt.Errorf("expected an execute review.start transition for the staged recovery base-diff candidate, got %q", envelope.NextTransition.Kind)
 					}
-					args := []string{"review", "start", "--cwd", r.sandbox.Repo}
-					for _, argument := range envelope.NextTransition.Execute.Arguments {
-						if argument.Token == "" {
-							return fmt.Errorf("execute argument %q carried no runnable token", argument.Name)
-						}
-						args = append(args, argument.Token)
+					started, err := runPrintedTransition(r, envelope)
+					if err != nil {
+						return err
 					}
-					started := r.run(args, false)
 					if started.ExitCode != 0 {
 						return fmt.Errorf("negotiated staged base-diff start failed: exit=%d stderr=%s", started.ExitCode, started.Stderr)
 					}
@@ -1355,6 +1388,29 @@ func waveOneJourneys() []Journey {
 					Args: productArgs("review", "mode", "disable", "--scope", "clone", "--json")},
 				{Name: "reviews off: the identical declined candidate reaches ordinary unmanaged delivery", Requires: validateCapability,
 					Args: productArgs("review", "validate", "--gate", "pre-commit"), After: requireDisabledUnmanagedGate},
+			},
+		},
+		{
+			ID:     "j51-negotiated-status-correction-continuation",
+			Title:  "Negotiated status: fresh candidate starts, corrected candidate continues",
+			Source: "issue #2044: selector-free fresh status and post-correction continuation",
+			Steps: []Step{
+				{Name: "fixture: repo", Fixture: baseRepo},
+				{Name: "fixture: one exact code candidate proven staged", Fixture: stageWaveCandidate},
+				{Name: "fixture: product process temp is unavailable", Fixture: unavailableProcessTemp},
+				{Name: "fresh negotiated status offers review start without authority history", Requires: statusCapability,
+					Args: productArgs("review", "status", "--contract", reviewContract, "--next-transition"), After: requireFreshNegotiatedStart},
+				{Name: "review start", Requires: startNamedCapability,
+					Args: productArgs("review", "start", "--lineage", correctedDeliveryLineage), After: rememberLineage},
+				{Name: "capture one blocking finding and finish the lens set", Requires: captureResultCapability, Composite: captureCorrectableFinding},
+				{Name: "finalize reviewer results into correction-required", Requires: finalizeResultsCapability,
+					Args:  productArgs("review", "finalize", "--lineage", correctedDeliveryLineage, "--captured-results=true"),
+					After: requireReviewState("correction_required", correctedDeliveryLineage)},
+				{Name: "forecast the bounded correction", Requires: finalizeCorrectionCapability,
+					Args: productArgs("review", "finalize", "--lineage", correctedDeliveryLineage, "--correction-lines", "2")},
+				{Name: "fixture: corrected candidate proven to change only the reviewed path", Fixture: writeCorrectedCandidate},
+				{Name: "post-correction status requests repository evidence", Requires: captureOutcomeEvidenceCapability, Composite: capturePassedCorrectionEvidence},
+				{Name: "post-correction status requests targeted validation", Requires: finalizeValidationCapability, Composite: completeCorrectedReview},
 			},
 		},
 	}

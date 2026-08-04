@@ -123,8 +123,15 @@ func TestInstallCommand(t *testing.T) {
 			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
 		},
 		{
-			name:    "unsupported package manager returns error",
-			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "zypper"},
+			// Issue #2499: the probe (#2493) accepts any Linux package manager
+			// on PATH, so zypper resolves like every other probed manager.
+			name:    "opensuse resolves npm install",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: "opensuse-leap", PackageManager: "zypper"},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+		},
+		{
+			name:    "linux without package manager returns error",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: ""},
 			wantErr: true,
 		},
 	}
