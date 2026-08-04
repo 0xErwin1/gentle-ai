@@ -51,6 +51,14 @@ var ErrConsentRequiredBeforeFreeze = errors.New("new-lineage authority freeze re
 // rdd-review-core-transitions, "Terminal Receipt Issuance Exactly Once").
 var ErrFinalizeRequiresTerminalState = errors.New("new-lineage finalize requires an approved or escalated authority") // refusal:by-design world-action: reaching a terminal state is validate's job; finalize is never the place to force one, so the fix is calling validate/collect first, not an operator command
 
+// ErrFinalizeRequiresLensResults is refused when finalize is about to
+// approve (not escalate) a non-terminal authority whose frozen
+// SelectedLenses is non-empty but request.AdvanceRequest.CapturedLensResults
+// does not cover every selected lens (absorbed N1, W3/W4 verify). A tier
+// with an empty SelectedLenses (tier-low) legitimately needs no captured
+// results at all and never triggers this refusal.
+var ErrFinalizeRequiresLensResults = errors.New("new-lineage finalize requires captured results for every frozen selected lens before approving") // refusal:by-design world-action: the caller must actually capture a result for each selected lens (the v3 reviewer-result ingestion pipeline, not yet wired) before calling finalize without --failed; there is no operator command that approves on the caller's behalf
+
 // ReviewCore is the sole transition owner for new-lineage reviews (spec
 // rdd-review-core-transitions, "Sole Transition Owner for New Lineages"). It
 // holds no state of its own — every decision is a pure function of the
@@ -147,9 +155,13 @@ func (core ReviewCore) finalize(authority NewLineageAuthority, request CoreReque
 		if request.AdvanceRequest == nil {
 			return CoreTransition{}, fmt.Errorf("%w: got %q", ErrFinalizeRequiresTerminalState, authority.State)
 		}
+		escalating := request.AdvanceRequest.Failed || len(request.AdvanceRequest.AdmittedFindingIDs) > 0
+		if !escalating && !hasCapturedAllSelectedLenses(authority.SelectedLenses, request.AdvanceRequest.CapturedLensResults) {
+			return CoreTransition{}, fmt.Errorf("%w: lineage %q", ErrFinalizeRequiresLensResults, authority.LineageID)
+		}
 		next := authority
 		next.State = NewLineageStateApproved
-		if request.AdvanceRequest.Failed || len(request.AdvanceRequest.AdmittedFindingIDs) > 0 {
+		if escalating {
 			next.State = NewLineageStateEscalated
 		}
 		if len(request.AdvanceRequest.AdmittedFindingIDs) > 0 {
@@ -170,6 +182,26 @@ func (core ReviewCore) finalize(authority NewLineageAuthority, request CoreReque
 	default:
 		return CoreTransition{}, fmt.Errorf("%w: got %q", ErrFinalizeRequiresTerminalState, authority.State)
 	}
+}
+
+// hasCapturedAllSelectedLenses reports whether captured covers every lens in
+// selected (absorbed N1). An empty selected always reports true (tier-low
+// legitimately needs no lens results); a non-empty selected requires every
+// entry to be present in captured, regardless of order or duplicates.
+func hasCapturedAllSelectedLenses(selected, captured []string) bool {
+	if len(selected) == 0 {
+		return true
+	}
+	have := make(map[string]bool, len(captured))
+	for _, lens := range captured {
+		have[lens] = true
+	}
+	for _, lens := range selected {
+		if !have[lens] {
+			return false
+		}
+	}
+	return true
 }
 
 // validate compares the frozen authority against a live candidate (spec

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -101,15 +102,38 @@ func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateIn
 				return true, reviewtransaction.NativeGateEvaluation{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted, Detail: storeErr.Error()}
 			}
 			receipt, receiptErr := authorityStore.LoadReceipt()
-			if receiptErr != nil || receipt.LineageID != record.Authority.LineageID ||
-				receipt.AuthorityRevision != record.Revision || receipt.TerminalState != record.Authority.State {
+			// W-7 (Wave 5 fix cycle 2, verify-report #10186): a genuinely ABSENT
+			// receipt (never published, e.g. a crash between Mutate and
+			// WriteReceipt) is repaired by a plain finalize replay --
+			// WriteReceipt's own publishImmutable (authority_store.go) writes
+			// fresh content when none exists yet. A PRESENT receipt that fails to
+			// parse/validate, or does not match the authority's own frozen state,
+			// can NEVER be repaired the same way: publishImmutable refuses to
+			// overwrite differing existing bytes (ImmutablePublicationConflictError,
+			// store.go's publishNoReplace path) rather than repairing them, and v3
+			// has no reopen/repair machinery for that case (the same "no reopen"
+			// boundary AuthorityStore.CaptureLensResult enforces, C-A). Naming
+			// `review finalize` for THIS case named a continuation that would
+			// itself refuse -- the honest continuation is a fresh lineage.
+			receiptAbsent := receiptErr != nil && os.IsNotExist(receiptErr)
+			receiptInvalid := receiptErr == nil && (receipt.LineageID != record.Authority.LineageID ||
+				receipt.AuthorityRevision != record.Revision || receipt.TerminalState != record.Authority.State ||
+				receipt.CandidateIdentity != record.Authority.CandidateIdentity)
+			receiptUnreadable := receiptErr != nil && !receiptAbsent
+			if receiptAbsent || receiptInvalid || receiptUnreadable {
+				reason := reviewFacadeReceiptNotAvailableReason(record.Authority.LineageID)
+				code := "approved_without_receipt"
+				if !receiptAbsent {
+					reason = reviewFacadeApprovedReceiptCorruptReason(record.Authority.LineageID)
+					code = "approved_receipt_corrupt"
+				}
 				return true, reviewtransaction.NativeGateEvaluation{
-					Result: reviewtransaction.GateInvalidated, Reason: reviewFacadeReceiptNotAvailableReason(record.Authority.LineageID),
+					Result: reviewtransaction.GateInvalidated, Reason: reason,
 					Context: reviewtransaction.GateContext{
 						Gate: gateInput.Gate, LineageID: record.Authority.LineageID, StoreRevision: record.Revision,
 						BaseTree: record.Authority.CandidateIdentity.BaseTree, CandidateTree: record.Authority.CandidateIdentity.CandidateTree,
 						PolicyHash: record.Authority.CandidateIdentity.PolicyHash,
-						Denial:     &reviewtransaction.GateDenial{Stage: "new-lineage-validate", Code: "approved_without_receipt"},
+						Denial:     &reviewtransaction.GateDenial{Stage: "new-lineage-validate", Code: code},
 					},
 				}, nil
 			}
@@ -142,7 +166,7 @@ func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateIn
 		if err != nil {
 			return true, reviewtransaction.NativeGateEvaluation{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted, Detail: err.Error()}
 		}
-		return true, newLineageGateEvaluation(gateInput.Gate, record, transition), nil
+		return true, reviewtransaction.EvaluateNewLineageGate(ctx, root, record, transition, live, gateInput), nil
 	}
 }
 
@@ -210,53 +234,13 @@ func governingAuthorityLiveEvidence(ctx context.Context, repo string, gateInput 
 	return live, reviewtransaction.CoreValidateEvidence{LiveSnapshot: snapshot, ApplicableAuthorities: 1}, nil
 }
 
-// newLineageGateEvaluation translates a ReviewCore validate CoreTransition
-// into gate JSON (design decision 7, task 6.2 — folds in and replaces S4's
-// generic default branch). Every one of CoreTransitionKind's six values has
-// its own explicit case below — the trailing default exists only as a
-// fail-closed guard against a hypothetical future seventh value, never to
-// silently absorb one of the six that already exist:
-//
-//   - continue (exact/compatible_base_advance/provable_contraction) allows —
-//     the legacy analogue of a receipt that still governs exactly.
-//   - collect (changed) reports scope-changed, not invalidated: this is the
-//     new-lineage equivalent of legacy's receipt_scope_changed, which
-//     resolveGoverningAuthorityLiveEvidence-driven relateCandidates reaches
-//     the same way legacy's own scope-changed detection does. A bounded
-//     correction is what a scope-changed candidate asks for, not a bare
-//     denial.
-//   - escalate (ambiguous/unknown/unrelated) escalates. This is a
-//     deliberate STRENGTHENING over legacy: legacy's receipt_ambiguous and
-//     receipt_unrelated both collapse into a generic invalidated denial,
-//     while the new model's relation algebra can tell an operator the
-//     specific reason an escalation-worthy relation was reached. Both are
-//     still non-allow refusals; nothing here is silently permissive.
-//   - approve/repair/stop are UNREACHABLE from ReviewCore's validate() (only
-//     its finalize() ever returns approve, and repair/stop are not returned
-//     by any Next() path this gate reaches) — they get their own explicit
-//     denial cases rather than sharing a default, so a future change to
-//     validate()'s own switch that starts returning one of them fails loud
-//     here instead of silently reusing a catch-all.
-func newLineageGateEvaluation(gate reviewtransaction.GateKind, record reviewtransaction.NewLineageRecord, transition reviewtransaction.CoreTransition) reviewtransaction.NativeGateEvaluation {
-	context := reviewtransaction.GateContext{
-		Gate: gate, LineageID: record.Authority.LineageID, StoreRevision: record.Revision,
-		BaseTree: record.Authority.CandidateIdentity.BaseTree, CandidateTree: record.Authority.CandidateIdentity.CandidateTree,
-		PolicyHash: record.Authority.CandidateIdentity.PolicyHash,
-	}
-	switch transition.Kind {
-	case reviewtransaction.CoreTransitionContinue:
-		return reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateAllow, Reason: transition.ReasonCode, Context: context}
-	case reviewtransaction.CoreTransitionCollect:
-		context.Denial = &reviewtransaction.GateDenial{Stage: "new-lineage-validate", Code: transition.ReasonCode}
-		return reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateScopeChanged, Reason: transition.ReasonCode, Context: context}
-	case reviewtransaction.CoreTransitionEscalate:
-		context.Denial = &reviewtransaction.GateDenial{Stage: "new-lineage-validate", Code: transition.ReasonCode}
-		return reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateEscalated, Reason: transition.ReasonCode, Context: context}
-	case reviewtransaction.CoreTransitionApprove, reviewtransaction.CoreTransitionRepair, reviewtransaction.CoreTransitionStop:
-		context.Denial = &reviewtransaction.GateDenial{Stage: "new-lineage-validate", Code: string(transition.Kind)}
-		return reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateInvalidated, Reason: transition.ReasonCode, Context: context}
-	default:
-		context.Denial = &reviewtransaction.GateDenial{Stage: "new-lineage-validate", Code: string(transition.Kind)}
-		return reviewtransaction.NativeGateEvaluation{Result: reviewtransaction.GateInvalidated, Reason: transition.ReasonCode, Context: context}
-	}
-}
+// newLineageGateEvaluation (design decision 7, task 6.2) translated a
+// ReviewCore validate CoreTransition into gate JSON, but mapped Continue
+// straight to GateAllow uniformly for every gate, discarding gateVerdict's
+// per-gate preconditions entirely. Wave 5 fix cycle 1 CRITICAL-C
+// (verify-report #10186, absorbed N2's actual closure) replaces it with
+// reviewtransaction.EvaluateNewLineageGate, which builds the identical gate
+// JSON shape but routes the Continue branch through gateVerdict with real
+// BaseRelationshipValid/Release preconditions -- see that function's own doc
+// comment (internal/reviewtransaction/new_lineage_gate.go) for the full
+// per-transition-kind mapping this function used to own.

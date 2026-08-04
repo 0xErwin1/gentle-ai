@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
@@ -64,7 +66,7 @@ type ReviewFacadeFinalizeNewLineageResult struct {
 // own precedent (review_facade_new_lineage.go:73-78) exactly.
 func runReviewFacadeFinalizeNewLineage(
 	ctx context.Context, stdout io.Writer, root, lineage string, record reviewtransaction.NewLineageRecord,
-	findings []reviewtransaction.FindingEvidence, failed bool,
+	findings []reviewtransaction.FindingEvidence, failed, capturedResults bool,
 ) error {
 	store, err := reviewtransaction.NewLineageAuthorityStore(ctx, root, lineage)
 	if err != nil {
@@ -73,12 +75,39 @@ func runReviewFacadeFinalizeNewLineage(
 	authority := record.Authority
 	revision := record.Revision
 
+	// C-A (Wave 5 fix cycle 2): --captured-results names the lens results the
+	// minimal v3 capture primitive already persisted onto this authority
+	// (AuthorityStore.CaptureLensResult) -- never a caller-supplied list, the
+	// same "only the caller's own already-admitted results, never new input"
+	// shape v2's --captured-results has. A tier-low authority (SelectedLenses
+	// empty) passes hasCapturedAllSelectedLenses trivially either way.
+	var capturedLensResults []string
+	if capturedResults {
+		capturedLensResults = authority.CapturedLensNames()
+	}
 	admitted, _ := reviewtransaction.AdmitCandidateCausalFindings(findings)
 	transition, err := (reviewtransaction.ReviewCore{}).Next(ctx, authority, reviewtransaction.CoreRequest{
-		Kind:           reviewtransaction.CoreRequestFinalize,
-		AdvanceRequest: &reviewtransaction.FinalizeAdvanceRequest{Failed: failed, AdmittedFindingIDs: admitted},
+		Kind: reviewtransaction.CoreRequestFinalize,
+		AdvanceRequest: &reviewtransaction.FinalizeAdvanceRequest{
+			Failed: failed, AdmittedFindingIDs: admitted, CapturedLensResults: capturedLensResults,
+		},
 	})
 	if err != nil {
+		// W-8 (Wave 5 fix cycle 3, verify-report #10186 cycle 2): a partial
+		// capture (some, not all, frozen selected lenses captured) is an
+		// ORDINARY incomplete state, not a tool-internal fault -- an
+		// unclassified fmt.Errorf wrap left it falling through to the outer
+		// dispatcher's unexpected-fault/defect-report path. Classified here as
+		// an ordinary preflight refusal (matching every other operator-
+		// actionable refusal in this package) that names exactly which
+		// lens(es) are still missing and the runnable continuation.
+		if errors.Is(err, reviewtransaction.ErrFinalizeRequiresLensResults) {
+			missing := authority.MissingCapturedLensNames()
+			return reviewPreflightError(fmt.Errorf(
+				"new-lineage finalize requires captured results for every frozen selected lens before approving: missing %s; capture each with `gentle-ai review capture-result --cwd <repo> --lineage %s --target <target> --lens <lens> --order <order> --input <result.json>` (run with --preflight first to discover the exact subject hash to echo back), then retry `gentle-ai review finalize --cwd <repo> --lineage %s --captured-results=true`",
+				strings.Join(missing, ", "), lineage, lineage,
+			))
+		}
 		return fmt.Errorf("review core finalize: %w", err)
 	}
 	if transition.Authority != nil {
