@@ -271,6 +271,16 @@ func TestOrganicConfiguredAgentReceivesRoutingGuidance(t *testing.T) {
 			if _, err := organicGitOutput(context.Background(), workspace, "init", "--quiet", "--initial-branch=main", "."); err != nil {
 				t.Fatal(err)
 			}
+			// This test targets routing-guidance delivery, not agent install
+			// behavior. Cursor's Detect looks for ~/.cursor, which this fake
+			// isolated HOME never has — unlike claude-code/opencode, whose
+			// detection follows the inherited PATH and finds the real
+			// binaries already on this machine. Simulate Cursor as already
+			// installed so gentle-ai does not correctly refuse an undetected
+			// agent here.
+			if err := os.MkdirAll(filepath.Join(home, ".cursor"), 0o755); err != nil {
+				t.Fatal(err)
+			}
 			output, stderr, err := runOrganicCommand(
 				t, organicBinary, workspace, organicEnvironment(home),
 				"install", "--agent", agent.agentID, "--scope", "workspace", "--components", "permissions",
