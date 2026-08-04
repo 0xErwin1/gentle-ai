@@ -2918,6 +2918,9 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 	if strings.TrimSpace(*gate) == "" {
 		return fmt.Errorf("review validate requires --gate: one of %s", strings.Join(reviewIntegrationGateNames(), ", "))
 	}
+	if !validReviewIntegrationGate(reviewtransaction.GateKind(*gate)) {
+		return reviewPreflightError(fmt.Errorf("review validate requires --gate: one of %s", strings.Join(reviewIntegrationGateNames(), ", ")))
+	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
 	if err != nil {
 		return fmt.Errorf("resolve review repository root: %w", err)
