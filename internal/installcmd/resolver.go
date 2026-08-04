@@ -252,15 +252,21 @@ func resolveOpenCodeInstall(profile system.PlatformProfile) (CommandSequence, er
 		return CommandSequence{
 			{"brew", "install", "anomalyco/tap/opencode"},
 		}, nil
-	case "apt", "pacman", "dnf":
-		if profile.NpmWritable {
-			return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
-		}
-		return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}, nil
 	case "winget":
 		// On Windows, npm global installs do not require sudo.
 		return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
 	default:
+		// Any package manager the system probe accepted is enough here: the
+		// install runs through npm, never through the manager itself, so
+		// re-enumerating managers would silently narrow the probe's list
+		// (issue #2499). The gate keeps a probe-rejected Linux profile
+		// (empty PackageManager) on the unsupported arm.
+		if profile.OS == "linux" && profile.PackageManager != "" {
+			if profile.NpmWritable {
+				return CommandSequence{{"npm", "install", "-g", "--ignore-scripts", pkg}}, nil
+			}
+			return CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", pkg}}, nil
+		}
 		return nil, fmt.Errorf(
 			"unsupported platform for opencode: os=%q distro=%q pm=%q",
 			profile.OS, profile.LinuxDistro, profile.PackageManager,
@@ -278,17 +284,6 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 			{"brew", "tap", "Gentleman-Programming/homebrew-tap"},
 			{"brew", "reinstall", "gga"},
 		}, nil
-	case "apt", "pacman", "dnf":
-		const tmpDir = "/tmp/gentleman-guardian-angel"
-		tagRef := "refs/tags/v" + versions.GGAVersion
-		return CommandSequence{
-			{"rm", "-rf", tmpDir},
-			{"mkdir", "-p", tmpDir},
-			{"git", "init", tmpDir},
-			{"git", "-C", tmpDir, "fetch", "--depth=1", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", tagRef + ":" + tagRef},
-			{"git", "-C", tmpDir, "checkout", "-f", tagRef},
-			{"bash", tmpDir + "/install.sh"},
-		}, nil
 	case "winget":
 		// On Windows, use Git Bash explicitly to avoid bare "bash" resolving to
 		// C:\Windows\System32\bash.exe (WSL), which cannot run the script.
@@ -301,6 +296,23 @@ func resolveGGAInstall(profile system.PlatformProfile) (CommandSequence, error) 
 			{bash, bashScriptPath(profile, filepath.Join(cloneDst, "install.sh"))},
 		}, nil
 	default:
+		// Any package manager the system probe accepted is enough here: the
+		// Linux install is git clone + install.sh and never touches the
+		// manager, so re-enumerating managers would silently narrow the
+		// probe's list (issue #2499). The gate keeps a probe-rejected Linux
+		// profile (empty PackageManager) on the unsupported arm.
+		if profile.OS == "linux" && profile.PackageManager != "" {
+			const tmpDir = "/tmp/gentleman-guardian-angel"
+			tagRef := "refs/tags/v" + versions.GGAVersion
+			return CommandSequence{
+				{"rm", "-rf", tmpDir},
+				{"mkdir", "-p", tmpDir},
+				{"git", "init", tmpDir},
+				{"git", "-C", tmpDir, "fetch", "--depth=1", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", tagRef + ":" + tagRef},
+				{"git", "-C", tmpDir, "checkout", "-f", tagRef},
+				{"bash", tmpDir + "/install.sh"},
+			}, nil
+		}
 		return nil, fmt.Errorf(
 			"unsupported platform for gga: os=%q distro=%q pm=%q",
 			profile.OS, profile.LinuxDistro, profile.PackageManager,
