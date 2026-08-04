@@ -44,7 +44,7 @@ const (
 	// (Wave 2 Slice S3, rdd-authority-disposition-plan) as the sanctioned exit
 	// for a closed content_mismatched_recovery_authorization leaf: derivation
 	// (deriveAuthorityDispositionPlanAtRepo) and leaf admission
-	// (admitLeafDisposition) both accept the edge, so the operation this names
+	// (admitClosureDisposition) both accept the edge, so the operation this names
 	// will actually run. Unlike CompactRecoveryEdgeExitAbandon, this is never
 	// gated on the successor's pristine state — quarantine byte-preserves the
 	// whole entry, so nothing captured is discarded.
@@ -174,15 +174,16 @@ func SanctionedCompactRecoveryExits(ctx context.Context, repo string, report Com
 	if err != nil {
 		return nil, err
 	}
-	// dispositionSeed names the one leaf successor (if any) whose closed
+	// dispositionSeed names the one seed successor (if any) whose closed
 	// content-mismatch classification both derives an AuthorityDispositionPlan
-	// and admits as a cardinality-one leaf. A derivation refusal (no eligible
-	// edge, more than one, or an incomplete inspection) is not propagated —
+	// and admits through admitClosureDisposition (N=1 leaf or a Wave 6 N>=2
+	// closure). A derivation refusal (no eligible edge, more than one, or an
+	// incomplete inspection) is not propagated —
 	// it just means no edge advertises review repair this round, exactly like
 	// InspectCompactPristineAbandonment's per-edge eligibility below never
 	// aborts the whole exit computation.
 	dispositionSeed := ""
-	if plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", ""); planErr == nil && admitLeafDisposition(plan) == nil {
+	if plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", ""); planErr == nil && admitClosureDisposition(plan) == nil {
 		dispositionSeed = plan.SeedSet[0]
 	}
 	for _, edge := range report.Edges {
@@ -321,7 +322,7 @@ func compactStartInvalidGraphRefusal(ctx context.Context, repo string, records m
 			// above already follow, so this never advertises a plan whose own
 			// re-derivation would then refuse.
 			plan, planErr := deriveAuthorityDispositionPlanAtRepo(ctx, repo, "", "")
-			if planErr != nil || admitLeafDisposition(plan) != nil || len(plan.SeedSet) != 1 || plan.SeedSet[0] != exit.SuccessorLineageID {
+			if planErr != nil || admitClosureDisposition(plan) != nil || len(plan.SeedSet) != 1 || plan.SeedSet[0] != exit.SuccessorLineageID {
 				continue
 			}
 			fmt.Fprintf(&continuation, " Successor %q closes the content-mismatched-recovery-authorization class, so `review repair` quarantines it whole without discarding its captured review data: %s",

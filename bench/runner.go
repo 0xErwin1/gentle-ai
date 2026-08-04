@@ -23,6 +23,18 @@ type Sandbox struct {
 	TracePath                string
 	BenchReceiptMutationPath string
 
+	// BenchCrashAtPhase, when non-empty, is read by product binaries built
+	// with `-tags bench_fixture` as GENTLE_AI_BENCH_CRASH_AT_PHASE
+	// (format "<phase>:<lineage_id>"): the deterministic phase-hook
+	// interruption internal/reviewtransaction's own crash-position matrix
+	// uses in-process (compactReclaimPhaseHook), reachable here through the
+	// real binary instead. It is read fresh from this field on every
+	// invoke, so a caller sets it before the crash-inducing command and
+	// clears it (empty string) before the resume command; an ordinary
+	// product binary without the bench_fixture tag never reads this
+	// variable at all.
+	BenchCrashAtPhase string
+
 	// NewLineageActivation opts this sandbox's whole isolated process
 	// environment into GENTLE_AI_RDD_NEW_LINEAGE (Wave 3 Slice 5, task 6.7).
 	// It is off by default, matching the product's own default-off
@@ -81,6 +93,9 @@ func (s *Sandbox) env() []string {
 	}
 	if s.BenchReceiptMutationPath != "" {
 		env = append(env, "GENTLE_AI_BENCH_MUTATE_RECEIPT="+s.BenchReceiptMutationPath)
+	}
+	if s.BenchCrashAtPhase != "" {
+		env = append(env, "GENTLE_AI_BENCH_CRASH_AT_PHASE="+s.BenchCrashAtPhase)
 	}
 	if s.NewLineageActivation {
 		env = append(env, "GENTLE_AI_RDD_NEW_LINEAGE=1")
