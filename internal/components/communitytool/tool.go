@@ -11,6 +11,7 @@ import (
 	piagent "github.com/gentleman-programming/gentle-ai/v2/internal/agents/pi"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 type Availability string
@@ -484,7 +485,9 @@ func CodeGraphCommandsForDetectorAndTargets(detector Detector, targets []string)
 }
 
 func defaultPnpmGlobalBin() (string, error) {
-	output, err := exec.Command("pnpm", "bin", "-g").CombinedOutput()
+	command := exec.Command("pnpm", "bin", "-g")
+	system.EnsureCommandDir(command)
+	output, err := command.CombinedOutput()
 	if err != nil {
 		message := strings.TrimSpace(string(output))
 		if message == "" {
