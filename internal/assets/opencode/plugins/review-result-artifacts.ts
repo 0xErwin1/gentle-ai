@@ -54,6 +54,55 @@ interface ReviewCapturePreflight {
   changed_path_manifest: ChangedPathManifestEntry[]
 }
 
+const LINEAGE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
+const SHA256_TOKEN = /^sha256:[a-f0-9]{64}$/
+const REPOSITORY_CONTEXT_HANDLE = /^rctx1_[a-f0-9]{64}$/
+const LENS_TOKEN = /^[a-z][a-z0-9-]{0,63}$/
+
+// BINDING_SHAPES are the four field sets the native transitions emit, mapped to
+// which optional fields that shape then requires. Keeping the shape explicit is
+// what lets a rejection say WHICH set arrived and which ones exist, instead of
+// "does not match the selected lens".
+const BINDING_SHAPES = new Map<string, { revision: boolean, subjectHash: boolean }>([
+  ["lens,lineage,order,target", { revision: false, subjectHash: false }],
+  ["lens,lineage,order,subject_hash,target", { revision: false, subjectHash: true }],
+  ["lens,lineage,order,repository_context,revision,target", { revision: true, subjectHash: false }],
+  ["lens,lineage,order,repository_context,revision,subject_hash,target", { revision: true, subjectHash: true }],
+])
+
+const BINDING_REBUILD =
+  "rebuild the prompt prefix from the exact fields of the provider-returned transition " +
+  "(gentle-ai review status --cwd <repo> --contract gentle-ai.review-integration/v2 --next-transition)"
+
+// observedValue describes what arrived without echoing it. The binding is
+// authored by a model, so its values are untrusted text that must not be
+// pasted into the transcript; the type, and for strings the length, is what
+// distinguishes the reported causes (a quoted number, a truncated digest, an
+// absent field) from each other.
+function observedValue(value: unknown): string {
+  if (value === undefined) return "no value"
+  if (value === null) return "null"
+  if (Array.isArray(value)) return `an array of length ${value.length}`
+  if (typeof value === "string") return `a string of length ${value.length}`
+  if (typeof value === "number") return Number.isSafeInteger(value) ? `the integer ${value}` : `the number ${value}`
+  return `a ${typeof value}`
+}
+
+function bindingRefusal(field: string, requirement: string, value: unknown): Error {
+  return new Error(
+    `review task binding field "${field}" ${requirement}; received ${observedValue(value)}; ${BINDING_REBUILD}`,
+  )
+}
+
+// parseBinding rejects one field at a time and names it.
+//
+// It used to evaluate thirteen conditions in a single boolean OR and throw one
+// sentence, "review task binding does not match the selected lens", for every
+// one of them (#2442). #2461 reported all four lenses rejected with exactly
+// that sentence while the real cause was an unexpected field set. A refusal
+// that forces the reader to open the validator's source is a dead end with
+// extra steps, so each check below states the field, the expected shape, a
+// redacted observation of what arrived, and the executable next step.
 function parseBinding(prompt: unknown, lens: string): ReviewBinding {
   const match = BINDING.exec(typeof prompt === "string" ? prompt : "")
   if (!match) throw new Error("review task is missing GENTLE_AI_REVIEW_BINDING")
@@ -69,18 +118,44 @@ function parseBinding(prompt: unknown, lens: string): ReviewBinding {
   }
   const value = binding as Record<string, unknown>
   const fields = Object.keys(value).sort().join(",")
-  const legacy = fields === "lens,lineage,order,target"
-  const legacyBound = fields === "lens,lineage,order,subject_hash,target"
-  const priorCurrent = fields === "lens,lineage,order,repository_context,revision,target"
-  const current = fields === "lens,lineage,order,repository_context,revision,subject_hash,target"
-  if ((!legacy && !legacyBound && !priorCurrent && !current) ||
-      typeof value.lineage !== "string" || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.lineage) ||
-      typeof value.target !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value.target) ||
-      ((priorCurrent || current) && (typeof value.revision !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value.revision) ||
-        typeof value.repository_context !== "string" || !/^rctx1_[a-f0-9]{64}$/.test(value.repository_context))) ||
-      ((legacyBound || current) && (typeof value.subject_hash !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value.subject_hash))) ||
-      value.lens !== lens || !Number.isSafeInteger(value.order) || (value.order as number) < 0) {
-    throw new Error("review task binding does not match the selected lens")
+  const shape = BINDING_SHAPES.get(fields)
+  if (!shape) {
+    throw new Error(
+      `review task binding has an unexpected field set; received {${scrubText(fields)}}; ` +
+      `expected exactly one of ${[...BINDING_SHAPES.keys()].map((set) => `{${set}}`).join(", ")}; ` +
+      `${BINDING_REBUILD}`,
+    )
+  }
+  if (typeof value.lineage !== "string" || !LINEAGE_ID.test(value.lineage)) {
+    throw bindingRefusal("lineage", "must be a lowercase hyphen-separated identifier", value.lineage)
+  }
+  if (typeof value.target !== "string" || !SHA256_TOKEN.test(value.target)) {
+    throw bindingRefusal("target", "must be sha256: followed by 64 lowercase hex characters", value.target)
+  }
+  if (shape.revision) {
+    if (typeof value.revision !== "string" || !SHA256_TOKEN.test(value.revision)) {
+      throw bindingRefusal("revision", "must be sha256: followed by 64 lowercase hex characters", value.revision)
+    }
+    if (typeof value.repository_context !== "string" || !REPOSITORY_CONTEXT_HANDLE.test(value.repository_context)) {
+      throw bindingRefusal("repository_context", "must be rctx1_ followed by 64 lowercase hex characters", value.repository_context)
+    }
+  }
+  if (shape.subjectHash && (typeof value.subject_hash !== "string" || !SHA256_TOKEN.test(value.subject_hash))) {
+    throw bindingRefusal("subject_hash", "must be sha256: followed by 64 lowercase hex characters", value.subject_hash)
+  }
+  if (value.lens !== lens) {
+    const received = typeof value.lens === "string" && LENS_TOKEN.test(value.lens)
+      ? `"${value.lens}"`
+      : observedValue(value.lens)
+    throw new Error(
+      `review task binding field "lens" must equal the launched lens "${lens}"; received ${received}; ${BINDING_REBUILD}`,
+    )
+  }
+  if (!Number.isSafeInteger(value.order)) {
+    throw bindingRefusal("order", "must be a JSON number, not a quoted string, and a safe integer", value.order)
+  }
+  if ((value.order as number) < 0) {
+    throw bindingRefusal("order", "must be zero or greater", value.order)
   }
   return value as ReviewBinding
 }
@@ -105,12 +180,6 @@ function reviewerResult(output: unknown): string {
 function extractionClass(cause: unknown): string | undefined {
   const value = (cause as { reviewClass?: unknown } | null)?.reviewClass
   return typeof value === "string" ? value : undefined
-}
-
-function captureCwd(worktree: string | undefined, directory: string): string {
-  const override = process.env["GENTLE_AI_REVIEW_CWD"]
-  if (typeof override === "string" && override.trim() !== "") return override.trim()
-  return worktree || directory
 }
 
 function runNative(cwd: string, args: string[], stdin: string): Promise<string> {
@@ -194,8 +263,10 @@ async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<Re
       ? GIT_TRUST_REFUSAL_RECOVERY
       : binding.repository_context
       ? `Refresh the exact native next_transition for lineage ${binding.lineage} before relaunching the lens.`
-      : `If lineage ${binding.lineage} was started in a different repository (for example a nested one), ` +
-        `set GENTLE_AI_REVIEW_CWD to that repository and relaunch the lens.`
+      : `If lineage ${binding.lineage} was started in a different repository (for example a nested one), run ` +
+        `gentle-ai review status --cwd <that repository> --contract gentle-ai.review-integration/v2 --next-transition ` +
+        `and relaunch the lens from the binding it returns: that binding carries a provider-issued repository ` +
+        `context, which resolves independently of this session's working directory.`
     throw new Error(
       `review capture preflight failed for lens ${binding.lens} under ${scope}: ` +
       `${sessionErrorMessage(binding, cause, "repository_context_preflight_failed")}. ` +
@@ -249,6 +320,33 @@ function preserveResult(cwd: string, binding: ReviewBinding, raw: string, cls?: 
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
+}
+
+// The privacy gate a forwarded cause passes through. It mirrors
+// reviewScrubDefectReportField in internal/cli/review_defect_report.go field
+// for field -- same three patterns, same marker, same first-line-only rule --
+// because the plugin cannot call into Go and the two surfaces must redact the
+// same things. The native side scrubs what it forwards; this scrubs what the
+// native side did not author, such as an OS-level spawn failure.
+const REDACTION_MARKER = "<redacted>"
+const ENV_ASSIGNMENT = /\b[A-Z][A-Z0-9_]{2,}=\S+/g
+const EMAIL_ADDRESS = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g
+const ABSOLUTE_PATH = /(?:[A-Za-z]:)?[\\/][^\s"'`]+/g
+// Bounds a cause bound for a session transcript. Native failures can quote
+// reviewer payload fragments, so this is a limit, not a formatting preference.
+const CAUSE_LIMIT = 512
+
+function scrubText(value: string): string {
+  const scrubbed = value.split("\n", 1)[0]
+    .replace(ENV_ASSIGNMENT, REDACTION_MARKER)
+    .replace(EMAIL_ADDRESS, REDACTION_MARKER)
+    .replace(ABSOLUTE_PATH, REDACTION_MARKER)
+    .trim()
+  return scrubbed.length > CAUSE_LIMIT ? `${scrubbed.slice(0, CAUSE_LIMIT)} (truncated)` : scrubbed
+}
+
+function scrubbedCause(cause: unknown): string {
+  return scrubText(errorMessage(cause))
 }
 
 // GIT_TRUST_REFUSAL_CODE is the typed, path-free code the native CLI emits
@@ -373,8 +471,17 @@ function claimAdmissionRecovery(store: AdmissionRecoveryStore, sessionID: string
   return ADMISSION_RECOVERY_STATUS.RELAUNCH
 }
 
+// sessionErrorMessage renders one native failure for the session transcript.
+//
+// It used to answer every opaque-binding failure that was neither a Git trust
+// refusal nor a structured admission rejection with one constant sentence, so a
+// strict-decode rejection (#2227), an unreachable authority (#2461) and a
+// failed durable publish (#2411) all arrived identically. The rule that no
+// unscrubbed native text reaches a transcript stays; what changes is that
+// dropping the cause is no longer how that rule is kept. Everything now takes
+// the same path -- scrub, then report -- so there is no branch left in which a
+// cause can be silently discarded.
 function sessionErrorMessage(binding: ReviewBinding, cause: unknown, code: string, recovery?: AdmissionRecoveryContext): string {
-  if (!binding.repository_context) return errorMessage(cause)
   if (gitTrustRefusal(binding, cause)) return GIT_TRUST_REFUSAL_MESSAGE
   const admission = admissionRejection(cause)
   if (admission) {
@@ -400,7 +507,9 @@ function sessionErrorMessage(binding: ReviewBinding, cause: unknown, code: strin
     return `${code}: native admission rejected the reviewer result as ${admission.decision}${detail}; ` +
       `retrying capture with the same result cannot succeed${correction}; relaunch this lens reviewer exactly once to produce a corrected result`
   }
-  return `${code}: provider-owned review operation failed; refresh the exact native next_transition or retry the same opaque binding`
+  const scrubbed = scrubbedCause(cause)
+  return `${code}: provider-owned review operation failed${scrubbed === "" ? "" : `; cause: ${scrubbed}`}; ` +
+    "refresh the exact native next_transition or retry the same binding"
 }
 
 function preservedReference(manifest: string): string {
@@ -475,7 +584,16 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
     if (typeof input.args.prompt !== "string" || !BINDING.test(input.args.prompt)) return
     const lens = input.args.subagent_type
     const binding = parseBinding(input.args.prompt, lens)
-    const cwd = captureCwd(worktree, directory)
+    // The OpenCode anchor is the only source of the capture working directory.
+    // A GENTLE_AI_REVIEW_CWD override used to win over it with no check that it
+    // named the same repository, so a value left behind by an earlier session
+    // silently redirected every capture into an unrelated checkout and stranded
+    // every lens result as a preserved incident there (#2446). It is deleted
+    // rather than validated: an opaque binding resolves its repository from the
+    // provider-issued handle and never needed it, and a legacy binding is
+    // recovered by refreshing the transition, which the preflight refusal now
+    // names.
+    const cwd = worktree || directory
     const recovery = { sessionID: input.sessionID, store: admissionRecoveries }
     // Extract the replayable payload exactly once, BEFORE capture: recovery
     // re-runs `review capture-result --input <preserved file>`, whose strict
