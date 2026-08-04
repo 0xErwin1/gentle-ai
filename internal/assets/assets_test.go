@@ -478,7 +478,7 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`"--repository-context", binding.repository_context`,
 		`"--expected-revision", binding.revision`,
 		`return ["--cwd", cwd]`,
-		`const current = fields === "lens,lineage,order,repository_context,revision,subject_hash,target"`,
+		`["lens,lineage,order,repository_context,revision,subject_hash,target", { revision: true, subjectHash: true }]`,
 		`typeof subject.subject_hash !== "string"`,
 		`subject.subject_hash !== binding.subject_hash`,
 		`artifact_subject`,
@@ -491,13 +491,15 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`"--order", String(binding.order)`,
 		`"--input", "-"`,
 		`"--preflight"`,
-		`GENTLE_AI_REVIEW_CWD`,
 		`"tool.execute.before"`,
 		`output.args.background === true`,
 		`!BINDING.test(input.args.prompt)`,
 		`const lens = input.args.subagent_type`,
 		`const binding = parseBinding(input.args.prompt, lens)`,
-		`const cwd = captureCwd(worktree, directory)`,
+		// The OpenCode anchor is the sole source of the capture working
+		// directory. The GENTLE_AI_REVIEW_CWD override that used to outrank it,
+		// with no check that it named the same repository, is deleted (#2446).
+		`const cwd = worktree || directory`,
 		// The replayable payload is extracted exactly once before capture, so a
 		// capture failure preserves the extracted strict JSON, never the task
 		// envelope that `review capture-result --input` would reject on replay.
