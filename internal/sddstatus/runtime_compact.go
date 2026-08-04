@@ -365,22 +365,31 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin B
 	return CompactAttemptResult{State: CompactStateBlocked, Reason: reason, Exit: detail, Detail: detail}
 }
 
+// compactBlockedReviewModeDisableExit is the self-service delivery fallback
+// named below where a reason offers no more specific runnable command.
+// Adversarial finding F6: `--scope` defaults to global
+// (review_mode.go's own flag default), so naming the bare command would let
+// an orchestrator silently disable receipt-driven development for every
+// repository on the machine instead of just this one. Always name the
+// clone-scoped form and disclose the default, verified by execution: running
+// `gentle-ai review mode disable` with no --scope writes
+// ~/.gentle-ai/state.json (machine-wide); `--scope clone --cwd <repo>`
+// writes only under that repository's own .git/gentle-ai directory.
+const compactBlockedReviewModeDisableExit = "`gentle-ai review mode disable --scope clone --cwd <repo>` to proceed without receipt-driven review for this repository only " +
+	"(omitting --scope disables it for every repository on the machine)"
+
 // compactBlockedExitText names the runnable continuation for every reason
 // compactBlocked itself is ever called with (exit-naming audit fix #2):
 // before this, all 20 of this file's compactBlocked call sites shipped a
 // bare {"state":"blocked","reason":"<code>"} with nothing behind it — no
 // Exit, no Detail, and (unlike next_transition's stop reason codes) no
-// stderr narration or docs mirror either. `gentle-ai review mode disable` is
-// named as the fallback delivery exit only where the reason itself offers no
-// more specific runnable command, mirroring the same rule the shipped
-// "Continue after a stop reason code" table (review-ledger-contract.md)
-// applies at the wire level.
+// stderr narration or docs mirror either.
 func compactBlockedExitText(reason CompactBlockReason, token string) string {
 	switch reason {
 	case CompactBlockCorruptAuthority:
 		return "the attempt ledger for this work unit cannot be read as valid authority; run " +
 			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` to see what is readable, " +
-			"or run `gentle-ai review mode disable` to proceed without receipt-driven review"
+			"or run " + compactBlockedReviewModeDisableExit
 	case CompactBlockInvalidContinuation:
 		return "this call does not continue the attempt currently on record; run " +
 			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` to see the live attempt and its " +
@@ -388,12 +397,23 @@ func compactBlockedExitText(reason CompactBlockReason, token string) string {
 	case CompactBlockMaintainerDecision:
 		return "this work unit's attempt or changed-line budget needs a maintainer decision; run " +
 			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` for the accounting, then ask a " +
-			"maintainer to rescope or reset the objective, or run `gentle-ai review mode disable` to proceed " +
-			"without receipt-driven review"
+			"maintainer to rescope or reset the objective, or run " + compactBlockedReviewModeDisableExit
 	case CompactBlockActiveAttempt:
-		return "a distinct attempt token " + token + " is already active for this work unit; " +
-			"rerun `gentle-ai sdd-attempt acquire --token " + token + "` to continue that exact attempt, " +
-			"or settle it with `gentle-ai sdd-attempt settle --token " + token + "` before acquiring a new one"
+		// Adversarial finding F2: the bare `sdd-attempt acquire --token <t>`
+		// / `settle --token <t>` forms are not complete commands -- each
+		// needs five more required flags (verified by execution: acquire
+		// additionally requires --cwd, --change, --request-id, --work-unit,
+		// --evidence-goal; settle additionally requires --cwd, --change,
+		// --request-id, --outcome, --evidence-revision, --diagnosis,
+		// --harness-disposition, --cleanup-evidence, --process-evidence).
+		// Only `gentle-ai sdd-attempt status --cwd <repo> --change <change>`
+		// is named as a complete command; the token is described as an
+		// addition to the caller's own already-in-flight acquire/settle
+		// call, never as a standalone invocation.
+		return "a distinct attempt token " + token + " is already active for this work unit; run " +
+			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` to see it, then add `--token " + token +
+			"` to your own `sdd-attempt acquire` call to continue that exact attempt, or to your " +
+			"`sdd-attempt settle` call to close it before starting a new one"
 	default:
 		return ""
 	}
