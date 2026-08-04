@@ -49,7 +49,16 @@ composition-specific corroboration (S5):
 - Disabled (S2, #2222): `TestPostApplyGate_Disabled_ReportsUnmanagedBeforeAuthorityRead`, `TestPreCommitGate_Disabled_ReportsUnmanagedBeforeAuthorityRead`, `TestPrePushGate_Disabled_ReportsUnmanagedBeforeAuthorityRead`, `TestPrePRGate_Disabled_ReportsUnmanagedBeforeAuthorityRead`, `TestReleaseGate_Disabled_ReportsUnmanagedBeforeAuthorityRead`
 - Double-eval byte-equivalence (S2): `TestDisabledGateOutput_DoubleEval_ByteEquivalent_PostApply`, `TestDisabledGateOutput_DoubleEval_ByteEquivalent_PreCommit`, `TestDisabledGateOutput_DoubleEval_ByteEquivalent_PrePush`, `TestDisabledGateOutput_DoubleEval_ByteEquivalent_PrePR`, `TestDisabledGateOutput_DoubleEval_ByteEquivalent_Release`
 - Deny (S3): `TestPostApplyGate_Deny_ChangedRelationCarriesNextStep`, `TestPreCommitGate_Deny_ChangedRelationCarriesNextStep`, `TestPrePushGate_Deny_ChangedRelationCarriesNextStep`, `TestPrePRGate_Deny_BaseMismatchDeniesWithoutComposition`, `TestReleaseGate_Deny_ChangedRelationCarriesNextStep`
-- Allow (S4): `TestPostApplyGate_Allow_ExactReceiptGovernsDelivery`, `TestPreCommitGate_Allow_ExactReceiptGovernsDelivery`, `TestPrePushGate_Allow_ExactReceiptGovernsDelivery`, `TestPrePRGate_Allow_ExactReceiptGovernsDelivery`, `TestReleaseGate_Allow_ExactReceiptGovernsDelivery`
+- Allow — **corrected (W-5, Wave 5 fix cycle 3, verify-report #10186 cycle 2, S7 precedent applied)**: the
+  original "Allow (S4)" row named 5 tests (`Test{PostApply,PreCommit,PrePush,PrePR,Release}Gate_Allow_ExactReceiptGovernsDelivery`)
+  that were never implemented under those names — task 8.9 already disclosed and corrected this once (zero
+  `rg` matches, confirmed again here); this index itself was never fixed to match. What genuinely proves
+  "allow" at all five gates today: the 35-cell gate-boundary-matrix golden's own wired "exact" cells
+  (post-apply/pre-commit/pre-push/pre-pr, S1; release/exact, Fix Cycle 2's W-2, `TestGateBoundaryMatrix_35Cells`)
+  plus `TestReceiptFilePersistsAfterDerivedInvalidation_AllFiveGates`'s drifted-denies-cleanly proof for all 5
+  gates (S7), plus two fix-cycle additions that independently drive real allow at all five gates through
+  production code: `TestEvaluateLegacyGateAllowsExactAtAllFiveGates` (legacy, Fix Cycle 1's C-B) and
+  `TestReviewFacadeCaptureResultNewLineage_MediumTierFinalizeAllowsAllFiveGates` (v3, Fix Cycle 2's C-A).
 - #2239 (S5): `TestPrePRGate_KillSwitchBeforeComposition_TriviallyPreserved`
 
 ## Absorbed from Wave 3/4 Verification (PR0)
@@ -143,7 +152,7 @@ added at that phase so the debt is not silently lost.
 - [x] 1.1 Land `openspec/changes/rdd-root-simplification-wave5/{proposal,specs,design,tasks}.md` (already written).
 - [x] 1.2 Confirm Gate: verify Wave 3 AND Wave 4 have landed on `feature/rdd-root-simplification` before opening any Wave 5 slice PR. **Confirmed with a documented exception**: Wave 3 is fully merged on `origin/feature/rdd-root-simplification` (tip `f188be85`, PRs #2309-#2314). Wave 4 has NOT yet merged onto that tracker branch at apply time — its 12-PR chain is queued/merging (per orchestrator's rebase contract). This worktree's base branch `feat/rdd-wave5-base` @ `7598eda4` sits directly on the verified Wave 4 chain tip (`feat/rdd-wave4-s7b-plugin-investigation-and-asset-prose`, confirmed identical SHA, ancestor check passed), which the orchestrator states already passed its own envelope (16/16, 31/31). Wave 5 slices therefore build on Wave 4's verified content even though the tracker-merge event itself is still in flight; the rebase contract requires re-checking the Wave 4 chain tip before each slice's final full-test run and rebasing if it moved.
 - [x] 1.3 Fix stale SHA token (Wave-4 verify-report W-e): `openspec/changes/rdd-root-simplification-wave4/specs/rdd-transport-capability/spec.md` cited pre-rebase SHA `ead610f6`; corrected to the patch-id-equal delivered commit `acb3c7c1`.
-- [ ] 1.4 Archive Wave 4 (`openspec/changes/rdd-root-simplification-wave4/**` → `openspec/specs/`) when its turn comes, mirroring prior wave pattern (deferred — Wave 4 has not yet landed on the tracker at apply time; do not archive prematurely).
+- [ ] 1.4 Archive Wave 4 (`openspec/changes/rdd-root-simplification-wave4/**` → `openspec/specs/`) when its turn comes, mirroring prior wave pattern. **Still genuinely open FROM THIS BRANCH'S OWN PERSPECTIVE** (W-6, Wave 5 fix cycle 3, verify-report #10186 cycle 2): confirmed via direct directory check that `openspec/changes/archive/2026-08-03-rdd-root-simplification-wave4/` already exists on the `main` checkout — Wave 4 HAS been archived, but by a separate, unrelated commit on `main` this branch's own history does not yet contain (this worktree's `feat/rdd-wave5-*` chain branches from a Wave 4 tip that predates that archival commit). Archiving is therefore not an action this SDD change's own commits perform; the checkbox stays honestly unchecked until this branch is rebased past that point or the archival is otherwise reflected in this branch's own history, rather than being marked done for an action this branch never took.
 
 ## Phase 2 (S1): Characterization Corpus + Gate-Boundary Matrix Harness (zero behavior change)
 
@@ -372,23 +381,25 @@ relations. Full detail: Engram `#10187`.
       projection didn't exist — all landed in S3/S4 and are now real (C-B/C-C). Rewritten to the honest
       current reason (fixture not yet built, not mechanism missing); golden regenerated, diff confined to
       reason text only (still 8/35 wired, no verdict/relation changed). Commit `e0a51de3`.
-- [ ] **C-D remainder / W-2** (deferred, disclosed): un-skip the release-gate matrix cells. Investigated:
-      the existing "exact" cells all drive the COMPACT/v2 lineage path (`approveDiscoveryMarkdown`-style
-      helpers), not legacy v1 or new-lineage v3, so reusing that recipe for "release/exact" would not
-      actually exercise either C-B's or C-C's fix. A genuinely new fixture is needed — a legacy-specific
-      recipe (tractable now) or a v3 recipe (blocked on C-A, since only tier-low can currently finalize).
-      Follow-up slice.
-- [ ] **C-A** (v3 lens-result ingestion — NOT STARTED, largest remaining item): no production code sets
-      `FinalizeAdvanceRequest.CapturedLensResults`; `review capture-result` binds only the v2 compact store,
-      and v3's `NewLineageAuthority`/`AuthorityStore` has no persistence primitive for captured reviewer
-      results at all — `NewArtifactSubject`/the admission pipeline is tightly coupled to `CompactState`.
-      Needs a dedicated design/implementation slice: either a full parallel v3 artifact-capture pipeline, or
-      a minimal v3-specific persistence primitive plus CLI routing (mirroring wave-3's "ln" precedent: route
-      `capture-result` by lineage kind exactly like `finalize` now does). Follow-up slice.
-- [ ] **W-7** (deferred, disclosed): the v3 tamper denial names `review finalize --lineage <id>`, which
-      re-issues rather than repairs an already-approved lineage's receipt. `AuthorityStore.WriteReceipt`'s
-      exact conflict semantics (no-op / refusal / silent overwrite) need investigating before an accurate
-      replacement message can be written. Follow-up slice.
+- [x] **C-D remainder / W-2** (deferred, disclosed, then picked up): un-skip the release-gate matrix cells.
+      Investigated: the existing "exact" cells all drive the COMPACT/v2 lineage path
+      (`approveDiscoveryMarkdown`-style helpers), not legacy v1 or new-lineage v3, so reusing that recipe for
+      "release/exact" would not actually exercise either C-B's or C-C's fix. A genuinely new fixture was
+      needed — a legacy-specific recipe (tractable now) or a v3 recipe (blocked on C-A, since only tier-low
+      could then finalize). Follow-up picked up in Fix Cycle 2's own W-2 entry below (release/exact wired,
+      8→9/35) — **still a disclosed partial overall** (release/changed and the other release relations remain
+      skips), not fully closed; W-2's final disposition is amended by cycle 3, see below.
+- [x] **C-A** (v3 lens-result ingestion — was NOT STARTED, the wave's largest remaining item at this point):
+      no production code set `FinalizeAdvanceRequest.CapturedLensResults`; `review capture-result` bound only
+      the v2 compact store, and v3's `NewLineageAuthority`/`AuthorityStore` had no persistence primitive for
+      captured reviewer results at all — `NewArtifactSubject`/the admission pipeline is tightly coupled to
+      `CompactState`. Closed in Fix Cycle 2 (commit `d43870ef`, minimal capture primitive + CLI routing) and
+      extended in Fix Cycle 3 (commit `ff3b2a72`, C-E: findings admission) — see both sections below.
+- [x] **W-7** (deferred, disclosed, then picked up): the v3 tamper denial named `review finalize --lineage
+      <id>`, which re-issues rather than repairs an already-approved lineage's receipt.
+      `AuthorityStore.WriteReceipt`'s exact conflict semantics (no-op / refusal / silent overwrite) needed
+      investigating before an accurate replacement message could be written. Closed in Fix Cycle 2 (commit
+      `59df5f92`) — see below.
 
 Fix cycle 1 verification (covers C-B/W-3/C-C/C-D-partial/W-1, the 3 commits above): `go test ./... -count=1`
 all 63 packages green; bench module green; bench journey corpus vs a freshly built binary: 59/59 completed,
@@ -459,3 +470,73 @@ rebase-contract clean (root `7598eda4` still an ancestor of `origin/main`). **Th
 every fold-in warning the cycle-1 verify named** (C-A, C-B, C-C, C-D-core, W-1, W-3, W-7 all closed; W-2
 partial and disclosed — the v3/legacy halves of release-cell unskipping remain a genuine, scoped follow-up,
 not a blocking gap in any of the four CRITICALs). Return to sdd-verify for re-verification.
+
+## Fix Cycle 3 (closing pass: C-E, W-8, W-5/W-6, W-2 amendment — the wave's final fix cycle)
+
+Branch `feat/rdd-wave5-f3-findings-admission`, chained from fix cycle 2 @ `8e5f287a`. sdd-verify's cycle-2
+report (Engram `#10186`) found 1 NEW CRITICAL that fix cycle 2's own capture primitive introduced, plus 5
+WARNING (2 new, 3 carried). Full detail: Engram `#10186`/`#10188`.
+
+- [x] **C-E** (the blocker, coordinator decision "option 2, the channel does what it appears to do"): the v3
+      capture channel required and validated a reviewer result's `findings`/`evidence`, then discarded the
+      findings — `CaptureLensResult` persisted only `{Lens, Order, SubjectHash}`. A/B on an identical
+      candidate with an identical BLOCKER (deterministic, candidate-introduced): v2 returned
+      `correction_required`; v3 issued `approved`. `NewLineageCapturedResult` gains a
+      `Findings []FindingEvidence` field, persisted verbatim (one-shot semantics extended: a resubmission is
+      idempotent only when BOTH subject hash AND findings match). New
+      `NewLineageAuthority.CapturedFindingEvidence()` flattens every captured lens's findings into the exact
+      shape the EXISTING `AdmitCandidateCausalFindings` already consumes — reused, not duplicated, the same
+      admission decision `--admission-findings` already drives. `--admission-findings` stays an explicit
+      override: when supplied it is used verbatim exactly as before; captured findings are consulted only
+      when it is absent. Genuine RED = the verify's exact A/B repro, inverted
+      (`TestReviewFacadeCaptureResultNewLineage_CandidateCausalBlockerEscalates`), plus a non-causal-finding
+      companion proving the fix does not over-block
+      (`TestReviewFacadeCaptureResultNewLineage_NonCausalFindingDoesNotBlock`). Mutation-proven: both halves
+      of the fix (findings persistence in `CaptureLensResult`, and the finalize-side
+      `CapturedFindingEvidence()` wiring) were independently reverted and each confirmed to reproduce the
+      ORIGINAL CRITICAL-E fail-open exactly, then restored; a dedicated unit test also proves one-shot now
+      covers findings, not just the subject hash. Commit `ff3b2a72`.
+- [x] **W-8**: a partial capture (some, not all, frozen selected lenses captured) reached finalize's
+      `ReviewCore` error path unclassified (`fmt.Errorf` wrap of `ErrFinalizeRequiresLensResults`), which the
+      outer dispatcher treated as a tool-internal fault and wrote a defect report for — an entirely ordinary,
+      expected incomplete state. New `NewLineageAuthority.MissingCapturedLensNames()` names exactly which
+      frozen selected lenses remain uncaptured; the finalize error path now recognizes
+      `ErrFinalizeRequiresLensResults` specifically and wraps it as an ordinary `reviewPreflightError` (the
+      same classification every other operator-actionable refusal in this package already uses), naming the
+      missing lenses and the runnable `capture-result` continuation. Mutation-proven: disabling the
+      classification branch reproduces the exact unclassified `*fmt.wrapError` shape the verify report found,
+      then restored. Commit `a793e02c`.
+- [x] **W-5**: the Gate Regression Test Index's "Allow (S4)" row named 5 tests
+      (`Test{PostApply,PreCommit,PrePush,PrePR,Release}Gate_Allow_ExactReceiptGovernsDelivery`) that were
+      never implemented under those names. Task 8.9 already disclosed and corrected this once (against the
+      superseded-issue evidence); the index itself was never fixed. Re-verified via direct search (S7
+      precedent: zero `rg` matches across the whole repo) before citing, then replaced the phantom row with
+      what genuinely proves "allow" at all five gates today: the matrix's own wired "exact"/`release/exact`
+      cells, `TestReceiptFilePersistsAfterDerivedInvalidation_AllFiveGates` (S7), and the two fix-cycle
+      additions that independently drive real allow at all five gates through production code —
+      `TestEvaluateLegacyGateAllowsExactAtAllFiveGates` (C-B) and
+      `TestReviewFacadeCaptureResultNewLineage_MediumTierFinalizeAllowsAllFiveGates` (C-A).
+- [x] **W-6**: stale checkboxes reconciled. Fix Cycle 1's own deferral entries for C-A, C-D-remainder/W-2, and
+      W-7 stayed `[ ]` even though Fix Cycle 2 (and this cycle) closed them — flipped to `[x]` above, each
+      pointing at the commit(s) that closed it, with W-2 explicitly still marked as a disclosed partial
+      overall (not falsely closed). Task 1.4 (archive Wave 4) investigated directly: confirmed via directory
+      check that Wave 4 HAS been archived on `main` (`openspec/changes/archive/2026-08-03-rdd-root-simplification-wave4/`
+      exists there), but by a separate commit this branch's own history does not yet contain — the checkbox
+      stays honestly unchecked (archiving is not an action this branch's own commits perform) with a note
+      explaining why, rather than being marked done for an action never taken on this branch.
+- [x] **W-2** (amendment, not code): per the coordinator's explicit decision (fix cycle 3 instruction, item 4,
+      cited in the spec amendment itself), amended
+      `specs/rdd-new-lineage-activation/spec.md`'s "Outcome equivalence proven by matrix, not byte-diff"
+      scenario — the letter (proof via the 35-cell matrix specifically) is not yet satisfied (9/35 wired, all
+      compact/v2), but the INTENT (proven outcome equivalence for a legacy candidate across all five gates)
+      IS satisfied today by `TestEvaluateLegacyGateAllowsExactAtAllFiveGates` and its siblings, which the
+      amendment now cites as the accepted proof while the matrix remains the incremental long-term vehicle,
+      its wired-cell count tracked here (8/35 at Fix Cycle 1 → 9/35 at Fix Cycle 2's W-2 entry).
+
+Fix cycle 3 verification (covers C-E/W-8, the 2 code commits above, plus the W-5/W-6/W-2 docs-only commit):
+`go test ./... -count=1` all 63 packages green; bench module green; bench journey corpus vs a freshly built
+binary: 59/59 completed, 0 failed, exit 0; `bench/results.json` reverted; gofmt/vet clean; deadcode ratchet
+clean; refusal-resolution ratchet clean; rebase-contract clean (root `7598eda4` still an ancestor of
+`origin/main`). **This is the wave's final fix cycle**: every CRITICAL (C-A through C-E) and every WARNING
+the verify cycles named (W-1 through W-8) is either fully closed or an explicitly-accepted, cited amendment
+(W-2). Return to sdd-verify for final re-verification.

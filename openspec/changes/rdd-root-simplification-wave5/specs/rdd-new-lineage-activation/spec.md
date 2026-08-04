@@ -22,6 +22,22 @@ Each of the five gates (`post-apply`, `pre-commit`, `pre-push`, `pre-pr`, `relea
 - WHEN the two verdicts are compared
 - THEN equivalence is proven by the 35-cell gate boundary matrix, not by asserting the executed code path is byte-identical
 
+> **Amendment (Wave 5 fix cycle 3, verify-report #10186 cycle 2, W-2): letter-vs-intent divergence closed by
+> amendment, coordinator-accepted.** The matrix is 9/35 wired and every wired cell drives the compact/v2
+> path — zero cells drive legacy v1 or new-lineage v3 — so the scenario's literal letter ("proven by the
+> 35-cell gate boundary matrix") is not yet satisfied by the matrix alone. The scenario's INTENT — proven
+> outcome equivalence for a legacy candidate across all five gates — IS satisfied today, by
+> `TestEvaluateLegacyGateAllowsExactAtAllFiveGates` (Fix Cycle 1's C-B fix, `internal/reviewtransaction/legacy_projection_test.go`)
+> and its siblings (`TestEvaluateLegacyGateAllowsExactAndDeniesChanged`,
+> `TestEvaluateLegacyGateValidatesReceiptFromAnInFlightCorrection`), which drive the real
+> `EvaluateLegacyGate` production path directly and prove `allow` at post-apply/pre-commit/pre-push/pre-pr/
+> release for an exact legacy candidate, and correct denial for a changed one. The coordinator's own fix
+> cycle 3 instruction (item 4, "amend the matrix-equivalence scenario in the delta spec... cite this
+> message") accepts this named-test proof as satisfying the requirement's intent for now. The matrix
+> remains the incremental, long-term vehicle this requirement still points at — its wired-cell count is
+> tracked explicitly in `tasks.md`'s Fix Cycle 2/3 W-2 entries (8/35 → 9/35 as of Fix Cycle 2, release/exact)
+> — but is not, itself, a blocking gap for this requirement while the named-test proof stands.
+
 ### Requirement: Unconditional Receipt Precedence (Amendment C Generalized)
 
 Authority precedence generalizes to unconditional receipt precedence: an immutable, boundary-validated receipt of the correct lineage kind governs; absence of such a receipt denies regardless of legacy authority. A legacy-only authority record MUST NEVER authorize a new-lineage candidate, and — post-cutover — a legacy authority record is evaluated through the same receipt-precedence rule as new-lineage authority; there is no separate per-gate {legacy, new} x {exists, absent} branch table.
