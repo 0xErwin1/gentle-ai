@@ -25,7 +25,7 @@ func TestReviewFacadeStartHighRiskCarriesConsentEvidencePhrases(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "evidence-high"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", "evidence-high"}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
@@ -80,7 +80,7 @@ func TestReviewFacadeStartMediumRiskCarriesConsentReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "evidence-medium"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", "evidence-medium"}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
@@ -190,7 +190,7 @@ func TestReviewFacadeStartDocsOnlyOmitsRiskEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "evidence-docs"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", "evidence-docs"}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
@@ -234,7 +234,7 @@ func TestReviewFacadeStartResultOmitsAdditiveFieldsWhenAbsent(t *testing.T) {
 func TestReviewFacadeStartEmptyCandidateHintsBaseRef(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "evidence-empty"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", "evidence-empty"}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
@@ -266,7 +266,7 @@ func TestReviewFacadeStartNonEmptyCandidateWithoutLensesHasNoHint(t *testing.T) 
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "evidence-nonempty"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", "evidence-nonempty"}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
@@ -299,7 +299,7 @@ func TestReviewFacadeStartLensesRequiredHintsNegotiatedContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "evidence-hint-contract"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", "evidence-hint-contract"}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
@@ -315,6 +315,20 @@ func TestReviewFacadeStartLensesRequiredHintsNegotiatedContract(t *testing.T) {
 	}
 }
 
+// TestReviewFacadeStartBaseDiffHintReplaysFrozenSelector proves the hint-replay
+// contract for a base-diff START that ALREADY has legacy (compact-v2)
+// authority: replaying the hint's named negotiated command resolves into the
+// SAME frozen lineage rather than creating a second one, and a stale replay
+// (after the candidate moved) is refused with nothing new persisted. This is
+// the "replay this hint verbatim" workflow the Wave 7 v2-collision start
+// guard (runReviewFacadeStart) explicitly carves an exact-content exception
+// for. Since issue #2447 (see the sibling
+// TestReviewFacadeStartBaseDiffRefusalReplaysFrozenSelector below), a direct
+// CLI START can no longer create this authority itself for a lens-selecting
+// base-diff candidate, so this test constructs it directly via
+// runLegacyFacadeStartForTest and starts the replay from an authority that
+// already exists -- the complementary starting condition to the sibling test,
+// which starts with none.
 func TestReviewFacadeStartBaseDiffHintReplaysFrozenSelector(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	if err := os.WriteFile(filepath.Join(repo, "dependency.go"), []byte("package dependency\n"), 0o644); err != nil {
@@ -330,7 +344,7 @@ func TestReviewFacadeStartBaseDiffHintReplaysFrozenSelector(t *testing.T) {
 	runReviewCLIGit(t, repo, "commit", "-m", "feature candidate")
 
 	var plain bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--base-ref", "feature-base", "--committed-only"}, &plain); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--base-ref", "feature-base", "--committed-only"}, &plain); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
@@ -388,5 +402,87 @@ func TestReviewFacadeStartBaseDiffHintReplaysFrozenSelector(t *testing.T) {
 	stores, err = reviewtransaction.DiscoverCompactStores(context.Background(), repo)
 	if err != nil || len(stores) != 1 {
 		t.Fatalf("stale hint created authority: stores=%d error=%v", len(stores), err)
+	}
+}
+
+// TestReviewFacadeStartBaseDiffRefusalReplaysFrozenSelector is the
+// complementary starting condition to
+// TestReviewFacadeStartBaseDiffHintReplaysFrozenSelector above: no legacy
+// authority exists yet, because issue #2447 made a direct (non-negotiated)
+// base-diff START whose candidate selects lenses refuse up front, before
+// anything is persisted (see runReviewFacadeStart), naming the exact
+// negotiated `review start` continuation. This test proves that refusal's
+// named continuation resolves the mutable `feature-base` ref into its
+// immutable tree BEFORE anything is created, that running it verbatim
+// creates exactly one fresh negotiated authority, and that a stale replay
+// (after the candidate moved) is refused with nothing persisted, exactly
+// like any other negotiated START would be.
+func TestReviewFacadeStartBaseDiffRefusalReplaysFrozenSelector(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	if err := os.WriteFile(filepath.Join(repo, "dependency.go"), []byte("package dependency\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "--", "dependency.go")
+	runReviewCLIGit(t, repo, "commit", "-m", "feature dependency")
+	runReviewCLIGit(t, repo, "branch", "feature-base")
+	if err := os.WriteFile(filepath.Join(repo, "service-token.ts"), []byte("export const token = 'candidate'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "--", "service-token.ts")
+	runReviewCLIGit(t, repo, "commit", "-m", "feature candidate")
+	baseTree := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "feature-base^{tree}"))
+
+	var refusedFirst bytes.Buffer
+	err := RunReviewFacadeStart([]string{"--cwd", repo, "--base-ref", "feature-base", "--committed-only"}, &refusedFirst)
+	if err == nil {
+		t.Fatalf("direct base-diff start with lenses required succeeded = %s, want an up-front refusal", refusedFirst.String())
+	}
+	if stores, storesErr := reviewtransaction.DiscoverCompactStores(context.Background(), repo); storesErr != nil || len(stores) != 0 {
+		t.Fatalf("refused direct start persisted authority: stores=%d error=%v", len(stores), storesErr)
+	}
+	if !strings.Contains(err.Error(), "--base-ref "+baseTree+" --committed-only") || strings.Contains(err.Error(), "--base-ref feature-base") {
+		t.Fatalf("refusal did not name the immutable resolved selector: %v", err)
+	}
+
+	opening := strings.IndexByte(err.Error(), '`')
+	closing := strings.IndexByte(err.Error()[opening+1:], '`')
+	if opening < 0 || closing < 0 {
+		t.Fatalf("refusal has no executable command: %v", err)
+	}
+	command := strings.Fields(err.Error()[opening+1 : opening+1+closing])
+	if len(command) < 3 || !reflect.DeepEqual(command[:3], []string{"gentle-ai", "review", "start"}) {
+		t.Fatalf("refusal command = %v", command)
+	}
+	args := append([]string{"start", "--cwd", repo}, command[3:]...)
+	var replay bytes.Buffer
+	if err := RunReview(args, &replay); err != nil {
+		t.Fatalf("named negotiated START failed: %v\n%s", err, replay.String())
+	}
+	var negotiated ReviewIntegrationStartResult
+	decodeStrictReviewJSON(t, replay.Bytes(), &negotiated)
+	if negotiated.RepositoryContext == nil {
+		t.Fatalf("named negotiated START carried no repository_context: %#v", negotiated)
+	}
+	stores, err := reviewtransaction.DiscoverCompactStores(context.Background(), repo)
+	if err != nil || len(stores) != 1 {
+		t.Fatalf("named negotiated START authorities = %d, %v; want exactly one", len(stores), err)
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "service-token.ts"), []byte("export const token = 'mutated'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runReviewCLIGit(t, repo, "add", "--", "service-token.ts")
+	runReviewCLIGit(t, repo, "commit", "-m", "mutate candidate")
+	var refused bytes.Buffer
+	if err := RunReview(args, &refused); err == nil {
+		t.Fatalf("stale named START succeeded: %s", refused.String())
+	}
+	failure := decodeReviewIntegrationFailure(t, refused.Bytes())
+	if failure.Code != reviewPreflightStaleTargetCode {
+		t.Fatalf("mutated named START code = %q, want %q", failure.Code, reviewPreflightStaleTargetCode)
+	}
+	stores, err = reviewtransaction.DiscoverCompactStores(context.Background(), repo)
+	if err != nil || len(stores) != 1 {
+		t.Fatalf("stale replay created authority: stores=%d error=%v", len(stores), err)
 	}
 }

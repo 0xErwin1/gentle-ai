@@ -432,10 +432,18 @@ func TestReviewRepairHelpRecommendsGenericClassifiedFlow(t *testing.T) {
 	if err := RunReview([]string{"repair", "--help"}, &help); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"--preflight", "provider-owned", reviewtransaction.AuthorityRepairAuthorizationSchema, "repair-legacy-alias"} {
+	for _, want := range []string{"--preflight", "provider-owned", reviewtransaction.AuthorityRepairAuthorizationSchema} {
 		if !strings.Contains(help.String(), want) {
 			t.Fatalf("generic repair help missing %q: %s", want, help.String())
 		}
+	}
+	// repair-legacy-alias retired in Wave 7 S5a (WU14): the compatibility CLI
+	// verb is gone, so its own help text must no longer advertise it as an
+	// available continuation. The provider it wrapped (repairHistoricalLegacyAlias)
+	// stays live underneath the classified flow this help text describes --
+	// only the compatibility CLI surface and its exported wrapper retired.
+	if strings.Contains(help.String(), "repair-legacy-alias") {
+		t.Fatalf("generic repair help still advertises the retired repair-legacy-alias verb: %s", help.String())
 	}
 }
 
