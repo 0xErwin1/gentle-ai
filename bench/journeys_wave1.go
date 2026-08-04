@@ -19,9 +19,6 @@ const (
 	stagedSuccessorLineage   = "wave-one-staged-recovery-successor"
 	fullScopeLineage         = "wave-one-full-scope-source"
 	fullScopeSuccessor       = "wave-one-full-scope-successor"
-	noOpFirstSegment         = "wave-one-noop-chain-first-segment"
-	noOpSecondSegment        = "wave-one-noop-chain-second-segment"
-	noOpSelfLoopLineage      = "wave-one-noop-self-loop"
 	declineCandidateLineage  = "wave-one-candidate-decline"
 	declineCandidatePath     = "scripts/deploy.sh"
 	declineCandidateContents = "#!/bin/sh\necho deploy\n"
@@ -137,6 +134,7 @@ type waveGateResult struct {
 	Result   string `json:"result"`
 	Allowed  bool   `json:"allowed"`
 	Action   string `json:"action"`
+	Reason   string `json:"reason"`
 	Delivery string `json:"delivery"`
 	Context  struct {
 		LineageID             string `json:"lineage_id"`
@@ -205,23 +203,39 @@ func waveReviewInvocationArgs(invocation string) ([]string, error) {
 	return fields[1:], nil
 }
 
-func requireCandidateDeclinedGate(sandbox *Sandbox, observation Observation) error {
+// requireCandidateDeclineGateDeniesGenerically is Wave 5 Slice 6's
+// downgrade (design decision 6): a declined candidate no longer resolves
+// to a decline-specific unmanaged delivery at the gate at all -- nothing is
+// ever recorded (RecordCandidateDecline is deleted), so a later gate call
+// reaches the SAME generic denial any never-reviewed candidate reaches.
+// Supersedes requireCandidateDeclinedGate (deleted along with j50), which
+// asserted the OLD decline-specific unmanaged shape
+// (Delivery: "candidate_declined/unmanaged", Denial.Stage:
+// "candidate-decline") this function's own name would now contradict.
+func requireCandidateDeclineGateDeniesGenerically(_ *Sandbox, observation Observation) error {
 	var gate waveGateResult
-	if err := decodeWaveObservation(observation, &gate, "candidate-declined gate"); err != nil {
+	if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &gate); err != nil {
+		return fmt.Errorf("parse candidate-declined gate denial: %w (stderr: %s)", err, firstLine(observation.Stderr))
+	}
+	if observation.ExitCode == 0 || gate.Allowed || gate.Result != "invalidated" || gate.Delivery != "" {
+		return fmt.Errorf("candidate-declined gate = exit=%d gate=%+v, want a plain (non-unmanaged) denial", observation.ExitCode, gate)
+	}
+	if gate.Context.Denial == nil || gate.Context.Denial.Stage != "receipt-discovery" || gate.Context.Denial.Code != "receipt_missing" {
+		return fmt.Errorf("candidate-declined gate denial = %+v, want the generic receipt-discovery/receipt_missing denial any never-reviewed candidate reaches", gate.Context.Denial)
+	}
+	return nil
+}
+
+// requireDisabledUnmanagedGate asserts the kill-switch-off gate shape:
+// exits 0, reports Delivery "disabled/unmanaged", never an allow. Mirrors
+// internal/cli's assertDisabledUnmanagedGate at the bench black-box layer.
+func requireDisabledUnmanagedGate(_ *Sandbox, observation Observation) error {
+	var gate waveGateResult
+	if err := decodeWaveObservation(observation, &gate, "disabled-unmanaged gate"); err != nil {
 		return err
 	}
-	context := gate.Context
-	if gate.Result != "invalidated" || gate.Allowed || gate.Action != "repository-policy" || gate.Delivery != "candidate_declined/unmanaged" ||
-		context.BaseTree == "" || context.BaseTree != sandbox.Scratch["decline-base"] ||
-		context.CandidateTree == "" || context.CandidateTree != sandbox.Scratch["decline-tree"] ||
-		context.PathsDigest == "" || context.PathsDigest != sandbox.Scratch["decline-paths"] ||
-		context.Denial == nil || context.Denial.Stage != "candidate-decline" || context.Denial.Code != "exact_candidate" {
-		return fmt.Errorf("candidate decline did not preserve exact unmanaged identity: %+v", gate)
-	}
-	if context.LineageID != "" || context.Generation != 0 || context.StoreRevision != "" || context.GenesisRevision != "" ||
-		context.ChainIdentity != "" || context.BundleDigest != "" || context.FixDeltaHash != "" || context.PolicyHash != "" ||
-		context.LedgerHash != "" || context.EvidenceHash != "" || context.ReceiptBaseTree != "" {
-		return fmt.Errorf("candidate decline fabricated review authority: %+v", context)
+	if gate.Allowed || gate.Result == "allow" || gate.Delivery != "disabled/unmanaged" {
+		return fmt.Errorf("disabled-unmanaged gate = %+v, want Delivery disabled/unmanaged, never an allow", gate)
 	}
 	return nil
 }
@@ -763,82 +777,6 @@ func requireStagedSuccessorGate(_ *Sandbox, observation Observation) error {
 	return requireGateForLineage(observation, stagedSuccessorLineage, false)
 }
 
-// noOpChainGate is the composed pre-PR envelope reduced to the two facts this
-// journey compares across the no-op: whether delivery was authorized, and which
-// tree transition the composed proof spans. waveGateResult omits the trees.
-type noOpChainGate struct {
-	Result  string `json:"result"`
-	Allowed bool   `json:"allowed"`
-	Context struct {
-		LineageID     string `json:"lineage_id"`
-		BaseTree      string `json:"base_tree"`
-		CandidateTree string `json:"candidate_tree"`
-		Denial        *struct {
-			Stage string `json:"stage"`
-			Code  string `json:"code"`
-		} `json:"denial"`
-	} `json:"context"`
-}
-
-// recordNoOpChainComposition stores the composed two-segment proof span so the
-// same gate can be compared byte for byte after an unrelated no-op authority is
-// approved. Storing the span, not just "allow", is what makes the later
-// assertion meaningful: a fix that authorized delivery while silently narrowing
-// the composed range would still pass an allow-only check.
-func recordNoOpChainComposition(sandbox *Sandbox, observation Observation) error {
-	var gate noOpChainGate
-	if err := decodeWaveObservation(observation, &gate, "composed pre-PR chain"); err != nil {
-		return err
-	}
-	if !gate.Allowed || gate.Result != "allow" || gate.Context.LineageID != noOpSecondSegment {
-		return fmt.Errorf("two-segment delivery was not authorized before the no-op: %+v", gate)
-	}
-	if gate.Context.BaseTree == "" || gate.Context.CandidateTree == "" || gate.Context.BaseTree == gate.Context.CandidateTree {
-		return fmt.Errorf("composed proof does not span a real tree transition: %+v", gate)
-	}
-	sandbox.Scratch["noop-chain-base-tree"] = gate.Context.BaseTree
-	sandbox.Scratch["noop-chain-candidate-tree"] = gate.Context.CandidateTree
-	return nil
-}
-
-// requireNoOpChainCompositionUnchanged is the regression this journey exists
-// for. A clean approved no-op reviewed a candidate identical to its own base, so
-// its receipt edge is a self-loop that delivers nothing. Before the fix it
-// entered the delivery graph, tripped cycle detection, and denied composition
-// for every unrelated lineage in the repository. Delivery must stay authorized
-// over the exact same composed span it had before that authority existed.
-func requireNoOpChainCompositionUnchanged(sandbox *Sandbox, observation Observation) error {
-	var gate noOpChainGate
-	if err := decodeWaveObservation(observation, &gate, "composed pre-PR chain after no-op"); err != nil {
-		return err
-	}
-	if !gate.Allowed || gate.Result != "allow" {
-		return fmt.Errorf("an unrelated clean no-op authority denied two-segment delivery: %+v", gate)
-	}
-	if gate.Context.BaseTree != sandbox.Scratch["noop-chain-base-tree"] ||
-		gate.Context.CandidateTree != sandbox.Scratch["noop-chain-candidate-tree"] {
-		return fmt.Errorf("no-op authority changed the composed delivery span: got base %q candidate %q, want base %q candidate %q",
-			gate.Context.BaseTree, gate.Context.CandidateTree,
-			sandbox.Scratch["noop-chain-base-tree"], sandbox.Scratch["noop-chain-candidate-tree"])
-	}
-	return nil
-}
-
-// proveNoOpSelfLoopApproved fails closed if the fixture stopped producing the
-// shape under test. The journey only proves something if the extra authority is
-// genuinely approved and genuinely a no-op; a refused or non-degenerate start
-// would make the later comparison pass for the wrong reason.
-func proveNoOpSelfLoopApproved(_ *Sandbox, observation Observation) error {
-	var result waveOperationResult
-	if err := decodeWaveObservation(observation, &result, "no-op self-loop finalize"); err != nil {
-		return err
-	}
-	if result.LineageID != noOpSelfLoopLineage || result.State != "approved" {
-		return fmt.Errorf("no-op self-loop authority is not an approved no-op: %+v", result)
-	}
-	return nil
-}
-
 func proveCorrectedPrePush(sandbox *Sandbox, observation Observation) error {
 	if err := requireGateForLineage(observation, correctedDeliveryLineage, true); err != nil {
 		return err
@@ -1194,37 +1132,6 @@ func stageDeclinedCandidate(sandbox *Sandbox) error {
 	return nil
 }
 
-func driftDeclinedCandidate(sandbox *Sandbox) error {
-	if err := sandbox.write(filepath.Join(sandbox.Repo, declineCandidatePath), "#!/bin/sh\necho drift\n"); err != nil {
-		return err
-	}
-	return sandbox.git(sandbox.Repo, "add", declineCandidatePath)
-}
-
-func addDeclinedPathDrift(sandbox *Sandbox) error {
-	if err := sandbox.write(filepath.Join(sandbox.Repo, declineCandidatePath), declineCandidateContents); err != nil {
-		return err
-	}
-	if err := sandbox.write(filepath.Join(sandbox.Repo, "scripts/extra.sh"), "#!/bin/sh\necho extra\n"); err != nil {
-		return err
-	}
-	return sandbox.git(sandbox.Repo, "add", declineCandidatePath, "scripts/extra.sh")
-}
-
-func requireCandidateDeclineRejected(name string) func(*Sandbox, Observation) error {
-	return func(_ *Sandbox, observation Observation) error {
-		var gate waveGateResult
-		if err := json.Unmarshal([]byte(strings.TrimSpace(observation.Stdout)), &gate); err != nil {
-			return fmt.Errorf("parse %s denial: %w", name, err)
-		}
-		if observation.ExitCode == 0 || gate.Allowed || gate.Result == "allow" || gate.Delivery != "" || gate.Action == "repository-policy" ||
-			gate.Context.Denial != nil && gate.Context.Denial.Stage == "candidate-decline" {
-			return fmt.Errorf("%s inherited candidate decline: exit=%d gate=%+v", name, observation.ExitCode, gate)
-		}
-		return nil
-	}
-}
-
 func waveOneJourneys() []Journey {
 	return []Journey{
 		{
@@ -1392,60 +1299,53 @@ func waveOneJourneys() []Journey {
 			},
 		},
 		{
-			ID:     "j50-candidate-decline-preserves-frozen-delivery-identity",
-			Title:  "Candidate decline: exact frozen identity reaches delivery without creating review authority",
-			Source: "issue #2045",
+			// j50-candidate-decline-preserves-frozen-delivery-identity
+			// (issue #2045) is RENAMED and its Steps rewritten, not deleted
+			// (Wave 5 Slice 6, design decision 6): decline no longer
+			// preserves ANY frozen delivery identity at the gate --
+			// RecordCandidateDecline is deleted, so nothing is left to
+			// compare a later gate call against. The exact-candidate and
+			// drifted-candidate scenarios that USED to diverge (one
+			// unmanaged, the others rejected) now converge on the SAME
+			// generic denial, so the drift-specific fixtures
+			// (driftDeclinedCandidate, addDeclinedPathDrift,
+			// requireCandidateDeclineRejected) added no remaining
+			// differentiating value and are deleted along with them.
+			// prepareDeclinedCandidate, declineCandidateFromStatus, and
+			// stageDeclinedCandidate survive unchanged: their own
+			// assertions (empty post-decline authority inventory, staged
+			// tree matches the frozen target) were never gate-side and
+			// stay exactly as true as before.
+			ID:     "j50-candidate-decline-denies-generically-then-disabled",
+			Title:  "Candidate decline creates no review authority; a later gate denies generically, or reaches ordinary unmanaged delivery once reviews are disabled",
+			Source: "issue #2045 (Wave 5 Slice 6 downgrade)",
 			Steps: []Step{
 				{Name: "fixture: repository", Fixture: baseRepo},
 				{Name: "fixture: high-risk candidate remains untracked", Fixture: prepareDeclinedCandidate},
 				{Name: "derive v2 START and execute emitted relay and decline", Requires: statusCapability, Composite: declineCandidateFromStatus},
 				{Name: "fixture: stage the exact unchanged declined candidate", Fixture: stageDeclinedCandidate},
-				{Name: "separate process preserves exact unmanaged identity", Requires: validateCapability,
-					Args: productArgs("review", "validate", "--gate", "pre-commit"), After: requireCandidateDeclinedGate},
-				{Name: "release cannot inherit candidate decline", Requires: validateCapability,
-					Args: productArgs("review", "validate", "--gate", "release"), After: requireCandidateDeclineRejected("release")},
-				{Name: "fixture: candidate bytes drift", Fixture: driftDeclinedCandidate},
-				{Name: "byte drift cannot inherit candidate decline", Requires: validateCapability,
-					Args: productArgs("review", "validate", "--gate", "pre-commit"), After: requireCandidateDeclineRejected("byte drift")},
-				{Name: "fixture: restore bytes and add path drift", Fixture: addDeclinedPathDrift},
-				{Name: "path drift cannot inherit candidate decline", Requires: validateCapability,
-					Args: productArgs("review", "validate", "--gate", "pre-commit"), After: requireCandidateDeclineRejected("path drift")},
-			},
-		},
-		{
-			// The two segments are approved and committed BEFORE the no-op exists,
-			// and the composed span is recorded at that point. The no-op is then
-			// approved on a clean worktree, which is what makes it a self-loop:
-			// its candidate equals its own base, so it delivers no tree
-			// transition. Re-running the identical gate is the whole test.
-			ID:     "j51-unrelated-noop-authority-keeps-composed-delivery",
-			Title:  "Composed pre-PR delivery: an unrelated clean no-op authority never denies a two-segment chain",
-			Source: "issue #2125",
-			Steps: []Step{
-				{Name: "fixture: repo with remote", Fixture: baseRepoWithRemote},
-				{Name: "fixture: stage first segment", Fixture: stageDocs("segment-one")},
-				{Name: "review first segment", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", noOpFirstSegment)},
-				{Name: "approve first segment", Requires: finalizeCapability, Args: productArgs("review", "finalize", "--lineage", noOpFirstSegment)},
-				{Name: "first segment pre-commit allows", Requires: validateCapability, Args: productArgs("review", "validate", "--lineage", noOpFirstSegment, "--gate", "pre-commit"), After: func(_ *Sandbox, observation Observation) error {
-					return requireGateForLineage(observation, noOpFirstSegment, false)
-				}},
-				{Name: "fixture: commit first segment", Fixture: commitStaged("docs: segment one")},
-				{Name: "fixture: stage second segment", Fixture: stageDocs("segment-two")},
-				{Name: "review second segment", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", noOpSecondSegment)},
-				{Name: "approve second segment", Requires: finalizeCapability, Args: productArgs("review", "finalize", "--lineage", noOpSecondSegment)},
-				{Name: "second segment pre-commit allows", Requires: validateCapability, Args: productArgs("review", "validate", "--lineage", noOpSecondSegment, "--gate", "pre-commit"), After: func(_ *Sandbox, observation Observation) error {
-					return requireGateForLineage(observation, noOpSecondSegment, false)
-				}},
-				{Name: "fixture: commit second segment", Fixture: commitStaged("docs: segment two")},
-				// No --lineage: composition is only attempted for a selector-free
-				// pre-PR gate (compact_chain.go rejects the request outright when a
-				// lineage is named), because naming one asks for that single
-				// receipt instead of the composed chain.
-				{Name: "two delivered segments compose before the no-op", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-pr", "--base-ref", "origin/main"), After: recordNoOpChainComposition},
-				{Name: "review the clean worktree as a no-op", Requires: startNamedCapability, Args: productArgs("review", "start", "--lineage", noOpSelfLoopLineage)},
-				{Name: "approve the no-op self-loop", Requires: finalizeCapability, Args: productArgs("review", "finalize", "--lineage", noOpSelfLoopLineage), After: proveNoOpSelfLoopApproved},
-				{Name: "same two segments still compose after the no-op", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-pr", "--base-ref", "origin/main"), After: requireNoOpChainCompositionUnchanged, AbortOnBlock: true},
+				{Name: "reviews still on: the declined candidate denies exactly like any never-reviewed candidate", Requires: validateCapability,
+					Args: productArgs("review", "validate", "--gate", "pre-commit"), After: requireCandidateDeclineGateDeniesGenerically},
+				{Name: "disable reviews for the clone", Requires: modeCapability,
+					Args: productArgs("review", "mode", "disable", "--scope", "clone", "--json")},
+				{Name: "reviews off: the identical declined candidate reaches ordinary unmanaged delivery", Requires: validateCapability,
+					Args: productArgs("review", "validate", "--gate", "pre-commit"), After: requireDisabledUnmanagedGate},
 			},
 		},
 	}
 }
+
+// j51-unrelated-noop-authority-keeps-composed-delivery (issue #2125) is
+// DELETED, not superseded (Wave 5 Slice 5, pre-PR chain composition
+// deletion): its regression was a cycle-detection bug inside
+// EvaluateCompactPrePRChain's own composition graph -- an unrelated clean
+// no-op authority's self-loop receipt edge tripped cycle detection and
+// wrongly denied composition for every unrelated lineage. That composition
+// graph, and everything that could enter a cycle in it, no longer exists
+// (TestPrePRComposition_ZeroCallers, internal/cli, proves it by
+// call-absence); there is no analogous "after" behavior to pin. The
+// replacement bench evidence for this slice -- a multi-segment delivery
+// that composition used to rescue now denying, with a runnable next step
+// -- lives in bench/journeys_wave5.go
+// (j61-pre-pr-multi-segment-delivery-denies-without-composition), per task
+// 6.7.

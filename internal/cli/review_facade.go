@@ -64,6 +64,26 @@ func reviewFacadeReceiptNotAvailableReason(lineageID string) string {
 	return fmt.Sprintf("facade review receipt is not available; run gentle-ai review finalize --lineage %s to produce one", lineageID)
 }
 
+// reviewFacadeApprovedReceiptCorruptReason (W-7, Wave 5 fix cycle 2,
+// verify-report #10186) is the honest continuation for an approved v3
+// authority whose receipt file EXISTS but fails to parse/validate or does
+// not match the authority's own frozen state (tampered, corrupted, or
+// otherwise diverged). Deliberately distinct from
+// reviewFacadeReceiptNotAvailableReason: naming `review finalize` here would
+// name a continuation that itself refuses -- WriteReceipt's own
+// publishImmutable never overwrites existing bytes that differ from what it
+// would republish (ImmutablePublicationConflictError), and v3 has no
+// reopen/repair machinery for a corrupted receipt. A fresh lineage is the
+// only continuation that actually clears this denial.
+func reviewFacadeApprovedReceiptCorruptReason(lineageID string) string {
+	return fmt.Sprintf(
+		"approved new-lineage authority %s has a receipt that cannot be trusted (missing valid content, or its recorded identity does not match the frozen authority); "+
+			"a corrupted receipt cannot be repaired -- v3 has no reopen path for it, and re-running finalize would itself refuse (its own immutable-publication check never overwrites differing existing bytes) -- "+
+			"start a fresh review instead: gentle-ai review start --cwd <repo> --lineage <new-lineage-id>",
+		lineageID,
+	)
+}
+
 // reviewCompactFacadeLineageNotDiscoverableReason is the single wording
 // source for the refusal when selector-free compact lineage discovery finds
 // no candidate. This is reached only after every otherwise-loadable leaf has
@@ -1311,20 +1331,12 @@ func runReviewBindSDD(ctx context.Context, args []string, stdout io.Writer) erro
 }
 
 func RunReviewInvalidate(args []string, stdout io.Writer) error {
-	flags := newReviewFlagSet("review invalidate", stdout, "Terminally invalidate one explicit pristine reviewing authority, or an approved compact authority whose lifecycle gate natively re-derives invalidated under LOCK.")
+	flags := newReviewFlagSet("review invalidate", stdout, "Terminally invalidate one explicit pristine reviewing authority. An approved compact authority is no longer invalidated by this verb -- invalidated is a derived verdict `review validate --gate <gate>` reports directly, never a write.")
 	cwd := flags.String("cwd", "", "repository path")
 	lineage := flags.String("lineage", "", "explicit review lineage identifier")
 	expected := flags.String("expected-revision", "", "exact current authority revision")
 	reason := flags.String("reason", "", "non-empty terminal invalidation reason for a pristine reviewing authority")
-	gate := flags.String("gate", "", "approved-authority lifecycle gate: post-apply, pre-commit, pre-push, pre-pr, or release")
-	baseRef := flags.String("base-ref", "", "optional expected remote publication base for pre-push or pre-pr")
-	ciAttestation := flags.String("pre-pr-ci-attestation", "", "signed exact-merged-tree CI attestation for a compatible base advance")
-	policy := flags.String("policy", "", "explicit custom policy containing compatible-base CI trust")
-	releaseConfiguration := flags.String("release-configuration", "", "release configuration artifact")
-	releaseGenerated := flags.String("release-generated", "", "generated artifact manifest")
-	releaseProvenance := flags.String("release-provenance", "", "release provenance artifact")
-	releaseBoundary := flags.String("release-publication-boundary", "", "sealed publication boundary artifact")
-	releaseFreshness := flags.String("release-evidence-freshness", "", "current release evidence freshness artifact")
+	gate := flags.String("gate", "", "retained only to name the runnable `review validate --gate <gate>` alternative for an approved compact authority; performs no gate-derived invalidation")
 	if err := parseReviewFlags(flags, args); err != nil {
 		return err
 	}
@@ -1356,29 +1368,21 @@ func RunReviewInvalidate(args []string, stdout io.Writer) error {
 		approvedInvalidation := record.State.State == reviewtransaction.StateApproved ||
 			record.State.State == reviewtransaction.StateInvalidated && record.State.InvalidationEvidence != nil
 		if approvedInvalidation {
-			if strings.TrimSpace(*gate) == "" {
-				return errors.New("approved review invalidation requires --gate")
+			// Wave 5 (Gate Cutover) Slice 7, design decision 2: `invalidated`
+			// is now a derived verdict (relation in {changed, unrelated} =>
+			// GateInvalidated), not a write this verb performs.
+			// InvalidateApprovedCompactAuthority is deleted
+			// (TestNoGateWritesAuthority_CallAbsenceGuard,
+			// internal/reviewtransaction, proves it by call-absence): a
+			// drifted approved candidate already denies at `review validate
+			// --gate <gate>` through the SAME gate evaluation this verb used
+			// to re-derive and then persist, and the receipt is never
+			// removed.
+			gateName := strings.TrimSpace(*gate)
+			if gateName == "" {
+				gateName = "<gate>"
 			}
-			input := reviewtransaction.NativeGateRequestInput{
-				Gate: reviewtransaction.GateKind(*gate), LineageID: *lineage, BaseRef: *baseRef,
-				PrePRCIAttestation: *ciAttestation, ReleaseConfiguration: *releaseConfiguration,
-				ReleaseGenerated: *releaseGenerated, ReleaseProvenance: *releaseProvenance,
-				ReleasePublicationBoundary: *releaseBoundary, ReleaseEvidenceFreshness: *releaseFreshness,
-			}
-			if strings.TrimSpace(*ciAttestation) != "" {
-				input.PolicyArtifact = *policy
-			}
-			invalidated, _, err := reviewtransaction.InvalidateApprovedCompactAuthority(context.Background(), root, reviewtransaction.CompactApprovedInvalidationRequest{
-				LineageID: *lineage, ExpectedRevision: *expected, Gate: input,
-			})
-			if err != nil {
-				var healthy *reviewtransaction.HealthyApprovedInvalidationError
-				if errors.As(err, &healthy) {
-					return reviewHealthyInvalidationRefusal(err, strings.TrimSpace(*cwd), *lineage, *expected, healthy.Result)
-				}
-				return err
-			}
-			return encodeReviewJSON(stdout, ReviewInvalidateResult{Operation: "review/invalidate", LineageID: invalidated.State.LineageID, State: invalidated.State.State, StoreRevision: invalidated.Revision})
+			return fmt.Errorf("review invalidate no longer performs gate-derived invalidation for lineage %q; invalidated is now a derived verdict, never a write; see it instead: gentle-ai review validate --cwd %s --lineage %s --gate %s", *lineage, strings.TrimSpace(*cwd), *lineage, gateName)
 		}
 		if strings.TrimSpace(*reason) == "" {
 			return errors.New("pristine review invalidation requires --reason")
@@ -1414,37 +1418,6 @@ func RunReviewInvalidate(args []string, stdout io.Writer) error {
 		return err
 	}
 	return encodeReviewJSON(stdout, ReviewInvalidateResult{Operation: "review/invalidate", LineageID: *lineage, State: reviewtransaction.StateInvalidated, StoreRevision: revision})
-}
-
-// reviewSuccessorLineagePlaceholder is the one value a recovery continuation
-// cannot fill in for an operator who has not chosen it yet: the successor's
-// name. `review recover --successor-lineage` says as much in its own help, and
-// inventing a name on their behalf would be printing a command they never asked
-// for under an identifier they now have to live with.
-const reviewSuccessorLineagePlaceholder = "<successor-lineage>"
-
-// reviewHealthyInvalidationRefusal adds the continuation to a refusal to
-// destroy an approved authority the repository has not made stale.
-//
-// The refusal is correct and stays: the approval was earned over specific
-// bytes, and a command that revoked it on demand would make every approval
-// provisional. The situation sentence comes from the authority layer, which
-// states it without internal vocabulary; what is added here is what to do.
-//
-// The two answers are genuinely different, so this branches on the same
-// re-derived result the refusal reports rather than printing one continuation
-// for both. When the candidate already moved, recovery is available right now.
-// When the approval still covers the candidate exactly, there is nothing to
-// review and no command can change that — the exit is an edit to the working
-// tree, and only then the same recovery.
-func reviewHealthyInvalidationRefusal(cause error, cwd, lineage, expected string, result reviewtransaction.GateResult) error {
-	command := reviewRecoverCommand(cwd, lineage, expected, reviewSuccessorLineagePlaceholder, string(reviewtransaction.RecoveryScopeChanged))
-	if result == reviewtransaction.GateScopeChanged {
-		return fmt.Errorf("%w; review the candidate you have now as a successor instead, choosing any name for it that no existing lineage uses: %s",
-			cause, command)
-	}
-	return fmt.Errorf("%w; if you want this candidate reviewed again, %s, then review it as a successor, choosing any name for it that no existing lineage uses: %s",
-		cause, reviewChangeTheCandidate, command)
 }
 
 func RunReviewFacadeStart(args []string, stdout io.Writer) error {
@@ -1610,13 +1583,14 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			return encodeReviewJSON(stdout, question)
 		}
 		if errors.Is(err, errReviewDeclinedForCandidate) {
-			// A candidate decline is durable enough to govern only this exact
-			// delivery, never a review lineage or receipt. Record it under the
-			// native RAR root only after its live snapshot is revalidated; an
-			// exact replay converges on the same canonical authorization.
-			if _, recordErr := reviewtransaction.RecordCandidateDecline(ctx, root, snapshot); recordErr != nil {
-				return fmt.Errorf("record candidate review decline: %w", recordErr)
-			}
+			// Wave 5 (Gate Cutover) Slice 6, design decision 6: a candidate
+			// decline is no longer durably recorded at all -- consistent with
+			// Wave 4 decision 4 ("decline = unmanaged proceed: nothing
+			// recorded"), an inert authority-shaped file is exactly the mirror
+			// pattern that decision removed on the SDD side. Declining here
+			// governs only this exact `review start` call: it never creates a
+			// review lineage, a receipt, or any durable authorization a later
+			// gate could read.
 			if negotiated && consentMode != reviewConsentModeDeclined {
 				return err
 			}
@@ -2196,20 +2170,34 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 			return newDiscErr
 		}
 		if newFound {
-			// The legacy reviewer-result ingestion pipeline (readFacadeReviewerArtifacts,
-			// readCapturedReviewerResults) is bound to CompactState/CompactStore and has
-			// no v3 equivalent yet (Wave 4+ territory) — refuse explicitly rather than
-			// silently ignore a caller's reviewer-result flags for a new-lineage authority.
-			for _, unsupported := range []string{"result", "result-artifact", "result-artifact-file", "captured-results", "captured-evidence", "validation", "refuter", "evidence"} {
+			// The legacy reviewer-result ARTIFACT ingestion pipeline
+			// (readFacadeReviewerArtifacts, readCapturedReviewerResults) is bound to
+			// CompactState/CompactStore and has no v3 equivalent — refuse explicitly
+			// rather than silently ignore a caller's reviewer-result flags for a
+			// new-lineage authority. --captured-results is excluded from this list
+			// (C-A, Wave 5 fix cycle 2): it now names the minimal v3 capture
+			// primitive's own persisted CapturedResults, not the legacy artifact
+			// pipeline these other flags name.
+			for _, unsupported := range []string{"result", "result-artifact", "result-artifact-file", "captured-evidence", "validation", "refuter", "evidence"} {
 				if reviewFinalizeFlagProvided(args, unsupported) {
 					return reviewPreflightError(fmt.Errorf("new-lineage finalize does not yet support --%s; retry with `gentle-ai review finalize --lineage %s` and, if needed, --failed or --admission-findings", unsupported, *lineage))
 				}
 			}
+			// C-E (Wave 5 fix cycle 3, verify-report #10186 cycle 2): the reviewer
+			// channel's own captured findings feed the identical
+			// AdmitCandidateCausalFindings admission decision --admission-findings
+			// already drives, reused rather than duplicated. --admission-findings
+			// stays an explicit override/compat surface (coordinator decision):
+			// when the caller supplies it, it is used verbatim exactly as before,
+			// UNCONDITIONALLY -- captured findings are consulted only when the
+			// caller did not override.
 			var findings []reviewtransaction.FindingEvidence
 			if trimmed := strings.TrimSpace(*admissionFindingsPath); trimmed != "" {
 				if err := readFacadeJSON(trimmed, &findings); err != nil {
 					return reviewPreflightError(fmt.Errorf("read new-lineage admission findings: %w", err))
 				}
+			} else if *capturedResults {
+				findings = newRecord.Authority.CapturedFindingEvidence()
 			}
 			newTerminalAtEntry := newRecord.Authority.State == reviewtransaction.NewLineageStateApproved || newRecord.Authority.State == reviewtransaction.NewLineageStateEscalated
 			if !newTerminalAtEntry {
@@ -2217,7 +2205,7 @@ func runReviewFacadeFinalize(ctx context.Context, args []string, stdout io.Write
 					return err
 				}
 			}
-			return runReviewFacadeFinalizeNewLineage(ctx, stdout, root, *lineage, newRecord, findings, *failed)
+			return runReviewFacadeFinalizeNewLineage(ctx, stdout, root, *lineage, newRecord, findings, *failed, *capturedResults)
 		}
 	}
 	store, record, err := discoverCompactFacadeFinalize(ctx, root, *lineage)
@@ -2946,15 +2934,34 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 			}, negotiated, *contract)
 		}
 	}
+	// Wave 5 (Gate Cutover) Slice 2, design decision 4: the kill switch is
+	// consulted EXACTLY ONCE, here, before any review-authority read at all —
+	// before Amendment C's resolveGoverningAuthority, before compact
+	// discovery, before candidate-decline resolution, before legacy
+	// discovery. This collapses three prior consultation points
+	// (Amendment C's own discoveryErr branch, the contested compact+legacy
+	// branch, and the disabledDiscovery branch below — all removed) into
+	// one. Disabled ⇒ ordinary unmanaged delivery with a fixed, generic
+	// reason and no discovery-kind detail: while the switch is off,
+	// receipt-driven development does not exist, so nothing an authority
+	// read could have discovered — missing, stale, ambiguous, corrupted, or
+	// mixed compact/legacy — ever governs, or is even read, in the first
+	// place. This is an intentional loss of discovery detail versus the
+	// pre-Slice-2 shape (see review_disabled_reach_test.go /
+	// review_disabled_delivery_test.go for the enabled-mode homes the
+	// removed detail-visibility assertions moved to). Fencing this behind
+	// `!negotiated` used to mean the identical repository exited 0 for a
+	// human and 1 for any agent driving the negotiated contract (#2222).
+	if reviewDeliveryDisposition(ctx, root, false) == reviewtransaction.RDDDeliveryDisabledUnmanaged {
+		return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, negotiated, *contract)
+	}
 	// Amendment C's single shared branch (design decision 4, Wave 3 Slice
 	// 4): resolved BEFORE discoverCompactFacadeGateReview so every gate call
 	// that supplies no explicit --lineage marker for a v3 lineage stays
 	// byte-identical to legacy discovery below. A non-nil discoveryErr here
 	// is always a deny that must never fall through to legacy authorization.
+	// Reviews are ON here — a disabled switch already returned above.
 	if governs, evaluation, discoveryErr := resolveGoverningAuthority(ctx, root, *lineage, gateInput); discoveryErr != nil {
-		if reviewDeliveryDisposition(ctx, root, false) == reviewtransaction.RDDDeliveryDisabledUnmanaged {
-			return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, discoveryErr, negotiated, *contract)
-		}
 		return emitFacadeGateEvaluationNegotiated(stdout, reviewtransaction.NativeGateEvaluation{
 			Result: reviewtransaction.GateInvalidated, Reason: discoveryErr.Error(),
 			Context: reviewtransaction.GateContext{
@@ -2977,16 +2984,9 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 		}
 		if contested {
 			// Two independent authority systems both claim to govern this exact
-			// candidate. With reviews ON that refusal is correct: answering would
-			// mean silently picking one store over the other. With reviews OFF
-			// nothing is picked — the gate names neither store as governing,
-			// emits no lineage and no receipt, and defers to ordinary repository
-			// policy, so the contest has no delivery consequence until the
-			// operator turns reviews back on and resolves it.
-			mixed := &ReviewReceiptDiscoveryError{Kind: ReviewReceiptAmbiguous, Detail: errReviewMixedCompactLegacyAuthority.Error()}
-			if reviewDeliveryDisposition(ctx, root, false) == reviewtransaction.RDDDeliveryDisabledUnmanaged {
-				return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, mixed, negotiated, *contract)
-			}
+			// candidate. Reviews are ON here (a disabled switch already
+			// returned above before this discovery ever ran), so answering
+			// would mean silently picking one store over the other.
 			return errReviewMixedCompactLegacyAuthority
 		}
 		payload, err := os.ReadFile(compactStore.ReceiptPath())
@@ -3001,54 +3001,22 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 		input.LineageID = compactRecord.State.LineageID
 		input.IntendedUntracked = append([]string(nil), compactRecord.State.InitialSnapshot.IntendedUntracked...)
 		evaluation := reviewtransaction.EvaluateCompactGate(ctx, root, receipt, input)
-		if gateInput.Gate == reviewtransaction.GatePrePR && strings.TrimSpace(*lineage) == "" &&
-			evaluation.Context.Denial != nil && evaluation.Context.Denial.Stage == "receipt-binding" && evaluation.Context.Denial.Code == "base-mismatch" {
-			if composed, attempted := reviewtransaction.EvaluateCompactPrePRChain(ctx, root, gateInput); attempted {
-				return emitFacadeGateEvaluationNegotiated(stdout, composed, negotiated, *contract)
-			}
-		}
 		return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
 	}
-	var compactDiscovery *ReviewReceiptDiscoveryError
-	if gateInput.Gate == reviewtransaction.GatePrePR && strings.TrimSpace(*lineage) == "" &&
-		errors.As(compactErr, &compactDiscovery) && compactDiscovery.Kind != ReviewAuthorityCorrupted && compactDiscovery.Kind != ReviewReceiptMissing {
-		if evaluation, attempted := reviewtransaction.EvaluateCompactPrePRChain(ctx, root, gateInput); attempted {
-			return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
-		}
-	}
-	// A candidate decline can govern ordinary delivery only when no terminal
-	// receipt was discovered. It is deliberately checked after compact discovery:
-	// a real exact receipt remains stronger native authority, while a corrupted or
-	// ambiguous review store still fails closed rather than being bypassed.
-	if decline, found, declineErr := reviewtransaction.ResolveCandidateDeclineForGate(ctx, root, gateInput); declineErr != nil {
-		return fmt.Errorf("resolve candidate decline delivery authorization: %w", declineErr)
-	} else if found {
-		return emitCandidateDeclinedUnmanagedDelivery(stdout, gateInput.Gate, decline, negotiated, *contract)
-	}
-	// The kill switch is consulted BEFORE the negotiation branch and for every
-	// discovery outcome. While reviews are off, receipt-driven development does
-	// not exist, so nothing it discovered — a missing receipt, a stale one, an
-	// unresolvable target, competing authority, or a damaged inventory — governs
-	// this candidate, and the gate reports rather than vetoes. It never
-	// approves: `allowed` stays false, no receipt or authority is invented, and
-	// the command exits successfully only because ordinary repository policy —
-	// hooks, tests, CI — decides instead. Fencing this behind `!negotiated` used
-	// to mean the identical repository exited 0 for a human and 1 for any agent
-	// driving the negotiated contract.
+	// Wave 5 (Gate Cutover) Slice 6, design decision 6: a candidate decline no
+	// longer governs delivery at the gate at all. Nothing is ever recorded
+	// (RecordCandidateDecline is deleted), so there is nothing here to
+	// resolve -- a declined candidate is evaluated exactly like any other
+	// candidate no review authority governs.
+	// Reviews are ON for everything below — the single early kill-switch
+	// consultation above already returned before any authority read when
+	// disabled, so every remaining branch is a genuine denial, never a
+	// disabled/unmanaged report (design decision 4; issue-1832's no-upstream
+	// case and every other compactErr shape here reach the SAME early
+	// disabled exit as everything else, before target resolution is even
+	// attempted).
 	var targetResolution *reviewtransaction.GateTargetResolutionError
-	var disabledDiscovery *ReviewReceiptDiscoveryError
-	if errors.As(compactErr, &targetResolution) {
-		// issue-1832: a repository with no upstream has no publication boundary
-		// to derive at all. It has no receipt to lose here, only a target it
-		// cannot compute while off.
-		disabledDiscovery = &ReviewReceiptDiscoveryError{Kind: ReviewReceiptTargetUnresolvable, Detail: targetResolution.Error()}
-	} else {
-		_ = errors.As(compactErr, &disabledDiscovery)
-	}
-	if disabledDiscovery != nil &&
-		reviewDeliveryDisposition(ctx, root, false) == reviewtransaction.RDDDeliveryDisabledUnmanaged {
-		return emitDisabledUnmanagedDelivery(stdout, gateInput.Gate, disabledDiscovery, negotiated, *contract)
-	}
+	_ = errors.As(compactErr, &targetResolution)
 	if !negotiated {
 		if targetResolution != nil {
 			return emitFacadeGateEvaluationNegotiated(stdout, reviewtransaction.NativeGateEvaluation{
@@ -3079,30 +3047,27 @@ func runReviewFacadeValidate(ctx context.Context, args []string, stdout io.Write
 		}
 	}
 
+	// Wave 5 (Gate Cutover) Slice 4, design decision 1: the legacy subprocess
+	// re-entry (runFacadeLegacyValidateNegotiated -> runReviewValidate ->
+	// EvaluateNativeGate) is deleted. A terminal legacy chain now projects
+	// read-only into the same CandidateIdentity/relateCandidates/gateVerdict
+	// algebra every other lineage kind evaluates through
+	// (reviewtransaction.EvaluateLegacyGate) -- "ALL five gates evaluate
+	// legacy through gateVerdict, one meaning, no re-derived gate semantics".
+	// Zero legacy bytes are rewritten: ProjectLegacyAuthority only reads
+	// chain.Records and receipt.json.
 	_, chain, artifacts, legacyErr := discoverFacadeReview(ctx, root, *lineage, true)
 	if legacyErr != nil {
 		return compactErr
 	}
-	tx := chain.Records[len(chain.Records)-1].Transaction
-	validateArgs := []string{"--cwd", root, "--receipt", artifacts.receipt, "--lineage", tx.LineageID, "--gate", *gate}
-	if strings.TrimSpace(*baseRef) != "" {
-		validateArgs = append(validateArgs, "--base-ref", *baseRef)
+	live, evidence, liveErr := governingAuthorityLiveEvidence(ctx, root, gateInput)
+	if liveErr != nil {
+		return compactErr
 	}
-	if strings.TrimSpace(*ciAttestation) != "" {
-		validateArgs = append(validateArgs, "--pre-pr-ci-attestation", *ciAttestation)
-		if _, err := os.Stat(artifacts.policy); err == nil {
-			validateArgs = append(validateArgs, "--policy", artifacts.policy)
-		}
-	}
-	for _, item := range [][2]string{{"--release-configuration", *releaseConfiguration}, {"--release-generated", *releaseGenerated}, {"--release-provenance", *releaseProvenance}, {"--release-publication-boundary", *releaseBoundary}, {"--release-evidence-freshness", *releaseFreshness}} {
-		if strings.TrimSpace(item[1]) != "" {
-			validateArgs = append(validateArgs, item[0], item[1])
-		}
-	}
-	for _, path := range tx.Snapshot.IntendedUntracked {
-		validateArgs = append(validateArgs, "--intended-untracked", path)
-	}
-	return runFacadeLegacyValidateNegotiated(ctx, validateArgs, stdout, negotiated, *contract)
+	evaluation := reviewtransaction.EvaluateLegacyGate(
+		ctx, root, chain, artifacts.receipt, live, strings.TrimSpace(gateInput.PolicyArtifact) != "", evidence, gateInput,
+	)
+	return emitFacadeGateEvaluationNegotiated(stdout, evaluation, negotiated, *contract)
 }
 
 func discoverCompactFacadeGateReview(ctx context.Context, repo, lineage string, input reviewtransaction.NativeGateRequestInput) (reviewtransaction.CompactStore, reviewtransaction.CompactRecord, error) {
@@ -4001,48 +3966,6 @@ const reviewDisabledUnmanagedReason = "receipt-driven development is disabled an
 // because anything was reviewed, so it says so in the same sentence.
 const reviewEmptyPublicationRangeReason = "the publication range is empty: every commit reachable from HEAD is already published on the push destination, so this push delivers nothing and no review receipt governs it"
 
-// reviewDiscoveryLeftTheGateUndecided reports whether discovery ended without
-// being able to say which authority applies, as opposed to proving that none
-// does.
-//
-// This no longer decides whether the gate blocks — while the kill switch is off
-// nothing does — it decides whether the emitted result must additionally SAY
-// that the gate could not decide. Not blocking is not the same as pretending
-// nothing was ambiguous, so these outcomes carry their full typed cause into
-// the reported reason instead of being flattened into the plain disposition
-// sentence.
-//
-// Two outcomes qualify. Ambiguous authority that is not provably stale-only:
-// either several receipts each EXACTLY govern (len(exact) > 1), or the mixture
-// contains a lineage whose assessment could not even be completed
-// (assessmentUnknown or scopeWithoutContext). And corrupted authority: the
-// inventory itself is unreadable.
-func reviewDiscoveryLeftTheGateUndecided(discovery *ReviewReceiptDiscoveryError) bool {
-	switch discovery.Kind {
-	case ReviewAuthorityCorrupted:
-		return true
-	case ReviewReceiptAmbiguous:
-		return !discovery.DeterministicallyStaleOnly
-	default:
-		return false
-	}
-}
-
-// reviewDisabledUnmanagedDeliveryReason states what governs delivery and, when
-// the gate could not decide which authority applies, exactly what it could not
-// decide. The damage or the contest is named rather than dropped, so a user who
-// wants to know still learns about it — they simply are not stopped by it.
-func reviewDisabledUnmanagedDeliveryReason(discovery *ReviewReceiptDiscoveryError) string {
-	if !reviewDiscoveryLeftTheGateUndecided(discovery) {
-		return reviewDisabledUnmanagedReason
-	}
-	detail := discovery.Error()
-	if discovery.Kind == ReviewAuthorityCorrupted && strings.TrimSpace(discovery.Category) != "" {
-		detail += " (" + discovery.Category + ")"
-	}
-	return reviewDisabledUnmanagedReason + "; the gate could not decide which review authority applies: " + detail
-}
-
 // emitDisabledUnmanagedDelivery reports a candidate no receipt governs under a
 // user-disabled kill switch.
 //
@@ -4050,59 +3973,32 @@ func reviewDisabledUnmanagedDeliveryReason(discovery *ReviewReceiptDiscoveryErro
 // receipt, PASS, or authority is invented. It also never vetoes, because a
 // disabled switch defers delivery to ordinary repository policy — hooks, tests,
 // and CI stay active and decide — so the command exits successfully and the
-// typed result names `disabled/unmanaged` as what governs. The discovery
-// context is preserved so the reason no receipt governs stays discoverable —
-// including the full scope-change diagnostics when a stale receipt stopped
-// matching the candidate, and the typed cause when the gate could not decide at
-// all — and the whole result is derived from the same frozen authority so
-// replaying the same request returns the same bytes.
+// typed result names `disabled/unmanaged` as what governs.
 //
-// Damage is deferred, never forgiven: a corrupted inventory reported here is
-// rediscovered and blocks again the moment reviews are switched back on. What
-// still fails closed is an unreadable KILL SWITCH — reviewDeliveryDisposition
-// treats an unresolvable mode as managed — so a tampered or broken mode record
-// can never manufacture this disposition.
-// emitCandidateDeclinedUnmanagedDelivery reports that RDD remains enabled but
-// the operator declined review for this exact candidate. It exits successfully
-// so ordinary repository policy can decide delivery, while explicitly refusing to
-// project an approval, receipt, lineage, or release authorization.
-func emitCandidateDeclinedUnmanagedDelivery(stdout io.Writer, gate reviewtransaction.GateKind, decline reviewtransaction.CandidateDeclineGateAuthorization, negotiated bool, contract string) error {
+// Wave 5 (Gate Cutover) Slice 2, design decision 4: the caller consults the
+// kill switch BEFORE any authority read, so this always reports the same
+// fixed, generic reason and carries no discovery-kind detail (no Denial, no
+// Context beyond the gate) — there is no discovery outcome to describe,
+// because discovery never runs. This is an intentional behavior change from
+// the pre-Slice-2 shape, which read authority first and then decorated the
+// disabled report with what it found (a missing receipt, a stale one, an
+// unresolvable target, competing authority, or a damaged inventory). That
+// detail-visibility property is still true and still tested — while reviews
+// are ON — in review_disabled_reach_test.go / review_disabled_delivery_test.go's
+// "...WhileEnabled" siblings; it never applied while disabled, because while
+// disabled receipt-driven development does not exist at all.
+//
+// The whole result is a fixed constant for a given gate, so replaying the
+// same request always returns the same bytes, and a decoy/corrupted store
+// contributes nothing to it — proven by
+// TestDisabledOutputIsByteIdenticalRegardlessOfAuthorityStoreContent.
+func emitDisabledUnmanagedDelivery(stdout io.Writer, gate reviewtransaction.GateKind, negotiated bool, contract string) error {
 	result := ReviewValidateResult{
 		Schema: ReviewValidateSchema, Result: reviewtransaction.GateInvalidated, Allowed: false,
 		Action:   reviewDeliveryPolicyAction,
-		Reason:   "review is unmanaged by candidate choice; ordinary repository policy governs this exact declined candidate",
-		Delivery: reviewtransaction.RDDDeliveryCandidateDeclinedUnmanaged,
-		Context: reviewtransaction.GateContext{
-			Gate:          gate,
-			BaseTree:      decline.Snapshot.BaseTree,
-			CandidateTree: decline.Snapshot.CandidateTree,
-			PathsDigest:   decline.Snapshot.PathsDigest,
-			Denial:        &reviewtransaction.GateDenial{Stage: "candidate-decline", Code: "exact_candidate"},
-		},
-	}
-	// Keep the derived authorization live in this boundary: this guards against a
-	// future emitter accidentally accepting a zero-value resolver result.
-	if decline.AuthorizationRef == "" || decline.Snapshot.Identity == "" {
-		// refusal:by-design world-action: an internal incomplete authorization cannot safely govern delivery and requires a code correction
-		return errors.New("candidate decline delivery authorization is incomplete")
-	}
-	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationValidate, result, result, contract)
-}
-
-func emitDisabledUnmanagedDelivery(stdout io.Writer, gate reviewtransaction.GateKind, discovery *ReviewReceiptDiscoveryError, negotiated bool, contract string) error {
-	context := reviewtransaction.GateContext{
-		Gate:   gate,
-		Denial: &reviewtransaction.GateDenial{Stage: "receipt-discovery", Code: string(discovery.Kind)},
-	}
-	if discovery.Kind == ReviewReceiptScopeChanged && discovery.Context != nil {
-		context = *discovery.Context
-	}
-	result := ReviewValidateResult{
-		Schema: ReviewValidateSchema, Result: reviewtransaction.GateInvalidated, Allowed: false,
-		Action:   reviewDeliveryPolicyAction,
-		Reason:   reviewDisabledUnmanagedDeliveryReason(discovery),
+		Reason:   reviewDisabledUnmanagedReason,
 		Delivery: reviewtransaction.RDDDeliveryDisabledUnmanaged,
-		Context:  context,
+		Context:  reviewtransaction.GateContext{Gate: gate},
 	}
 	return encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationValidate, result, result, contract)
 }
@@ -4118,6 +4014,7 @@ func emitFacadeGateEvaluationNegotiated(stdout io.Writer, evaluation reviewtrans
 	result := ReviewValidateResult{
 		Schema: ReviewValidateSchema, Result: evaluation.Result, Allowed: evaluation.Result == reviewtransaction.GateAllow,
 		Action: reviewGateAction(evaluation.Result), Reason: evaluation.Reason, Context: evaluation.Context,
+		Relation: evaluation.Relation, Next: evaluation.Next,
 	}
 	if err := encodeReviewIntegrationOperation(stdout, negotiated, ReviewIntegrationOperationValidate, result, result, contract); err != nil {
 		return err
@@ -4126,25 +4023,6 @@ func emitFacadeGateEvaluationNegotiated(stdout io.Writer, evaluation reviewtrans
 		return ReviewGateDeniedError{Result: result.Result, Reason: result.Reason, Context: result.Context, Cause: evaluation.Cause}
 	}
 	return nil
-}
-
-func runFacadeLegacyValidateNegotiated(ctx context.Context, args []string, stdout io.Writer, negotiated bool, contract string) error {
-	if !negotiated {
-		return runReviewValidate(ctx, args, stdout)
-	}
-	var output bytes.Buffer
-	runErr := runReviewValidate(ctx, args, &output)
-	if output.Len() == 0 {
-		return runErr
-	}
-	var result ReviewValidateResult
-	if err := decodeStrictReviewIntegrationResult(output.Bytes(), &result); err != nil {
-		return err
-	}
-	if err := encodeReviewIntegrationOperation(stdout, true, ReviewIntegrationOperationValidate, result, result, contract); err != nil {
-		return err
-	}
-	return runErr
 }
 
 func facadePolicyBytes(path string) ([]byte, error) {
