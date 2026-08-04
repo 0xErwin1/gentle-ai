@@ -127,22 +127,36 @@ func executeAuthorityDisposition(ctx context.Context, repo string, plan Authorit
 // lockedAuthorityDispositionMutation runs every step that must happen while
 // base's exclusive maintenance lock is held: replay discovery, lock+CAS
 // reinspection, Authorization validation, CAS-all-N validation, and the
-// ordered, byte-preserving per-node quarantine over the whole closure. It
-// always releases maintenance before returning.
+// ordered, byte-preserving per-node quarantine over the whole closure,
+// forward-only resuming an interrupted closure in place. It always releases
+// maintenance before returning.
 //
 // Wave 6 (rdd-closure-disposition-execution / "Descendant-First Ordered
-// Disposition", "Atomic Visibility With Forward-Only Convergence"): every
-// closure member's ExpectedRevision is checked (CAS-all-N) before the first
-// move, naming exactly which member drifted; then plan.Closure is quarantined
-// in order (descendants first, seed last — the same order
-// authorityDispositionClosure derives) by calling quarantineCompactStoreEntry
-// once per node, reusing its existing two-phase hooks unchanged; then the
-// forensic-only closure manifest is written once, inside the seed's own
-// quarantine directory, only after every member has committed. Discovery
-// (the top-of-function replay check) and per-node resume across multiple
-// invocations are Slice S3's forward-only resume scope — this slice's
-// crash-safety property is that every interruption prefix leaves a valid
-// retained graph (design.md Data Flow), not yet that a replay converges.
+// Disposition", "Atomic Visibility With Forward-Only Convergence", "Forward-
+// Only Resume via Plan Digest and Residue Discriminator"): every closure
+// member's ExpectedRevision is checked (CAS-all-N) before the first move on
+// a fresh execution, naming exactly which member drifted; then plan.Closure
+// is processed in order (descendants first, seed last — the same order
+// authorityDispositionClosure derives), each member discovered first
+// (committed = skip, prepared = resume via residue/, absent = quarantine
+// fresh) and quarantined via quarantineCompactStoreEntry's existing
+// two-phase hooks, unchanged; then the forensic-only closure manifest is
+// written once, inside the seed's own quarantine directory, only after
+// every member has committed.
+//
+// Slice S3's forward-only resume (this function, replacing S2's
+// always-fresh loop): because disposition always starts with the deepest
+// descendant (plan.Closure[0]), that member's state alone distinguishes a
+// genuinely fresh execution (its v2/ entry still exists, untouched) from any
+// kind of prior progress (already resumed/committed under this exact digest,
+// or a mismatched digest) — no closure member past the first can show
+// progress if the first has none. A fresh execution runs the full
+// re-derive/CAS-all-N/authorize validation exactly as S1/S2 did; any
+// non-fresh state skips straight to the per-node loop, which never attempts
+// a narrowing re-derivation — it trusts the plan_digest binding that already
+// passed authorization the first time this exact digest began, and lets each
+// node's own discovery surface either a clean skip/resume or a named digest-
+// mismatch refusal.
 func lockedAuthorityDispositionMutation(ctx context.Context, maintenance *MaintenanceLock, base, root, binding, seed string, plan AuthorityDispositionPlan) (CompactReclaimRecord, error) {
 	defer maintenance.Release()
 
@@ -152,45 +166,77 @@ func lockedAuthorityDispositionMutation(ctx context.Context, maintenance *Mainte
 		return existing, nil
 	}
 
-	report, records, err := loadCompactRecoveryRecordsUnderMaintenanceHold(ctx, root)
+	freshExecution, err := authorityDispositionClosureIsFresh(ctx, base, plan)
 	if err != nil {
-		return CompactReclaimRecord{}, err
-	}
-	currentPlan, err := deriveAuthorityDispositionPlan(report, records, binding, plan.Actor, plan.Reason)
-	if err != nil {
-		return CompactReclaimRecord{}, fmt.Errorf("authority disposition execution refused: re-derivation under lock did not reproduce a closed classification: %w", err)
-	}
-	if err := admitClosureDisposition(currentPlan); err != nil {
-		return CompactReclaimRecord{}, err
-	}
-	if currentPlan.PlanDigest != plan.PlanDigest {
-		return CompactReclaimRecord{}, fmt.Errorf("%w: plan digest drifted under lock re-derivation (expected_revisions or authority_inventory_revision changed)", ErrConcurrentUpdate)
-	}
-	currentInventoryRevision, err := authorityInventoryRevision(records)
-	if err != nil {
-		return CompactReclaimRecord{}, err
-	}
-	if err := validateAuthorityDispositionAuthorization(plan, currentInventoryRevision); err != nil {
 		return CompactReclaimRecord{}, err
 	}
 
-	// CAS-all-N: every closure member's expected revision is checked before
-	// the first move — drift on ANY member, not only the seed, refuses
-	// pre-move and names exactly which member drifted.
-	for _, lineage := range plan.Closure {
-		targetRecord, found := records[lineage]
-		expectedRevision, expectedFound := plan.ExpectedRevisions[lineage]
-		if !found || !expectedFound || targetRecord.Revision != expectedRevision {
-			return CompactReclaimRecord{}, fmt.Errorf("%w: expected revision for closure member %q drifted", ErrConcurrentUpdate, lineage)
+	if freshExecution {
+		report, records, err := loadCompactRecoveryRecordsUnderMaintenanceHold(ctx, root)
+		if err != nil {
+			return CompactReclaimRecord{}, err
+		}
+		currentPlan, err := deriveAuthorityDispositionPlan(report, records, binding, plan.Actor, plan.Reason)
+		if err != nil {
+			return CompactReclaimRecord{}, fmt.Errorf("authority disposition execution refused: re-derivation under lock did not reproduce a closed classification: %w", err)
+		}
+		if err := admitClosureDisposition(currentPlan); err != nil {
+			return CompactReclaimRecord{}, err
+		}
+		if currentPlan.PlanDigest != plan.PlanDigest {
+			return CompactReclaimRecord{}, fmt.Errorf("%w: plan digest drifted under lock re-derivation (expected_revisions or authority_inventory_revision changed)", ErrConcurrentUpdate)
+		}
+		currentInventoryRevision, err := authorityInventoryRevision(records)
+		if err != nil {
+			return CompactReclaimRecord{}, err
+		}
+		if err := validateAuthorityDispositionAuthorization(plan, currentInventoryRevision); err != nil {
+			return CompactReclaimRecord{}, err
+		}
+
+		// CAS-all-N: every closure member's expected revision is checked
+		// before the first move — drift on ANY member, not only the seed,
+		// refuses pre-move and names exactly which member drifted.
+		for _, lineage := range plan.Closure {
+			targetRecord, found := records[lineage]
+			expectedRevision, expectedFound := plan.ExpectedRevisions[lineage]
+			if !found || !expectedFound || targetRecord.Revision != expectedRevision {
+				return CompactReclaimRecord{}, fmt.Errorf("%w: expected revision for closure member %q drifted", ErrConcurrentUpdate, lineage)
+			}
 		}
 	}
+	// A non-fresh closure (freshExecution == false) skips re-derivation, CAS,
+	// and authorization entirely: this exact plan_digest already passed all
+	// three the one time its per-node loop first began (when plan.Closure[0]
+	// still had a live, untouched v2/ entry). Re-running them now would
+	// compare against a store that has legitimately shrunk as prior members
+	// were quarantined away — a narrowing re-derivation the spec forbids,
+	// not a real staleness signal.
 
 	recordedAuthorization := sha256.Sum256([]byte(plan.Authorization))
 	var lastCommitted CompactReclaimRecord
 	for _, lineage := range plan.Closure {
+		if existing, found, err := discoverAuthorityDispositionRecord(ctx, base, lineage, plan.PlanDigest); err != nil {
+			return lastCommitted, err
+		} else if found {
+			// Committed under this exact digest: skip. Prepared: already
+			// resumed to committed by discoverAuthorityDispositionRecord
+			// itself (the residue/ discriminator) before returning found.
+			lastCommitted = existing
+			continue
+		}
+
 		dir := filepath.Join(base, "v2", lineage)
 		items, err := os.ReadDir(dir)
 		if err != nil {
+			if os.IsNotExist(err) {
+				// Missing, but no record for THIS digest was found either:
+				// some other quarantine (a mismatched/stale digest, or an
+				// unrelated operation) already moved it. Forward-only resume
+				// never attempts a narrowing re-derivation here — it refuses
+				// and names whatever concrete, escalatable path it can find.
+				return lastCommitted, authorityDispositionResumeDigestMismatchRefusal(base, plan.Closure[len(plan.Closure)-1], lineage, plan.PlanDigest)
+			}
 			return lastCommitted, fmt.Errorf("inspect authority disposition target %q: %w", lineage, err)
 		}
 		residue := make([]string, 0, len(items))
@@ -239,6 +285,68 @@ func lockedAuthorityDispositionMutation(ctx context.Context, maintenance *Mainte
 	}
 
 	return lastCommitted, nil
+}
+
+// authorityDispositionClosureIsFresh reports whether NO closure member has
+// any prior disposition progress: disposition always starts with the
+// deepest descendant (plan.Closure[0]) first, so that single member's state
+// is sufficient to decide — no later member can show progress if the first
+// one has none. It is fresh only if plan.Closure[0] has no existing
+// discoverable record under plan.PlanDigest AND its v2/ entry still exists
+// untouched. Any other state (a record under this digest, a record under a
+// different digest, or a missing v2/ entry with no matching record at all)
+// means SOME prior attempt already began, so the caller must resume instead
+// of re-deriving.
+func authorityDispositionClosureIsFresh(ctx context.Context, base string, plan AuthorityDispositionPlan) (bool, error) {
+	firstMember := plan.Closure[0]
+	if _, found, err := discoverAuthorityDispositionRecord(ctx, base, firstMember, plan.PlanDigest); err != nil {
+		return false, err
+	} else if found {
+		return false, nil
+	}
+	if _, statErr := os.Stat(filepath.Join(base, "v2", firstMember)); statErr != nil {
+		if os.IsNotExist(statErr) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect authority disposition target %q: %w", firstMember, statErr)
+	}
+	return true, nil
+}
+
+// authorityDispositionResumeDigestMismatchRefusal is the digest-mismatch
+// refusal rdd-closure-disposition-execution's "Forward-Only Resume via Plan
+// Digest and Residue Discriminator" requires: memberLineage's v2/ entry is
+// gone, but no quarantine record for it matches planDigest. It names the
+// SEED's closure-manifest.json when one already exists (a completed run
+// under a different digest — the most concrete, human-facing artifact), or
+// falling back to memberLineage's own quarantine directory under any digest
+// (a still-incomplete run), or a generic escalation with neither path when
+// even that cannot be found. It never attempts a narrowing re-derivation.
+func authorityDispositionResumeDigestMismatchRefusal(base, seedLineage, memberLineage, planDigest string) error {
+	quarantineRoot := filepath.Join(base, "quarantine")
+	entries, err := os.ReadDir(quarantineRoot)
+	if err != nil {
+		// refusal:by-design human-authority: a closure member missing from the authority store with an unreadable quarantine root needs a maintainer's diagnosis; forward-only resume never attempts a narrowing re-derivation, so there is no command this refusal can name
+		return fmt.Errorf("authority disposition execution refused: closure member %q is missing from the authority store with no matching quarantine record for plan_digest %q; escalate — resume never attempts a narrowing re-derivation", memberLineage, planDigest)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), seedLineage+"-") {
+			continue
+		}
+		manifestPath := filepath.Join(quarantineRoot, entry.Name(), "closure-manifest.json")
+		if _, statErr := os.Stat(manifestPath); statErr == nil {
+			// refusal:by-design human-authority: a digest-mismatched closure that already completed under a different plan_digest needs a maintainer's diagnosis; forward-only resume never attempts a narrowing re-derivation, so there is no command this refusal can name
+			return fmt.Errorf("authority disposition execution refused: closure member %q was already quarantined under a different plan_digest than %q; inspect %s and escalate — resume never attempts a narrowing re-derivation", memberLineage, planDigest, manifestPath)
+		}
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), memberLineage+"-") {
+			// refusal:by-design human-authority: a digest-mismatched or otherwise ambiguous partial closure needs a maintainer's diagnosis before any resume continues; forward-only resume never attempts a narrowing re-derivation, so there is no command this refusal can name
+			return fmt.Errorf("authority disposition execution refused: closure member %q was already quarantined under a different plan_digest than %q; inspect %s and escalate — resume never attempts a narrowing re-derivation", memberLineage, planDigest, filepath.Join(quarantineRoot, entry.Name()))
+		}
+	}
+	// refusal:by-design human-authority: a closure member missing from the authority store with no matching quarantine record under any digest needs a maintainer's diagnosis; forward-only resume never attempts a narrowing re-derivation, so there is no command this refusal can name
+	return fmt.Errorf("authority disposition execution refused: closure member %q is missing from the authority store with no matching quarantine record for plan_digest %q; escalate — resume never attempts a narrowing re-derivation", memberLineage, planDigest)
 }
 
 // loadCompactRecoveryRecordsUnderMaintenanceHold mirrors
