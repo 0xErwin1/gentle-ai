@@ -467,6 +467,9 @@ var unsupportedPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)unknown [a-z-]+ command "`),
 	regexp.MustCompile(`(?i)flag provided but not defined`),
 	regexp.MustCompile(`(?i)unknown (flag|shorthand flag|option)`),
+	// sdd-attempt refuses an operation a build does not have with `unknown
+	// sdd-attempt operation "..."`: a missing surface (j62's settle probe).
+	regexp.MustCompile(`(?i)unknown [a-z-]+ operation "`),
 	regexp.MustCompile(`(?i)unrecognized (flag|option|argument)`),
 	regexp.MustCompile(`(?i)unexpected [a-z ]+ argument "`),
 	regexp.MustCompile(`(?i)unknown [a-z-]+ "--`),
