@@ -33,6 +33,17 @@ if (scenario === "before-substitute") prompt += ` + "`" + `base_tree=${"9".repea
 if (scenario === "before-missing") prompt = "review the frozen candidate\n"
 if (scenario === "before-equals") prompt = ` + "`" + `GENTLE_AI_REVIEW_BINDING=${JSON.stringify(binding)}\nreview the frozen candidate\n` + "`" + `
 if (scenario === "before-malformed") prompt = "GENTLE_AI_REVIEW_BINDING {not-json}\nreview the frozen candidate\n"
+const rebind = (overrides: Record<string, unknown>, drop: string[] = []) => {
+  const next: Record<string, unknown> = { ...opaque, ...overrides }
+  for (const field of drop) delete next[field]
+  return ` + "`" + `GENTLE_AI_REVIEW_BINDING ${JSON.stringify(next)}\nreview the frozen candidate\n` + "`" + `
+}
+if (scenario === "before-quoted-order") prompt = rebind({ order: "0" })
+if (scenario === "before-negative-order") prompt = rebind({ order: -1 })
+if (scenario === "before-unknown-shape") prompt = rebind({}, ["repository_context"])
+if (scenario === "before-short-target") prompt = rebind({ target: "sha256:dead" })
+if (scenario === "before-other-lens") prompt = rebind({ lens: "review-reliability" })
+if (scenario === "before-bad-context") prompt = rebind({ repository_context: "/home/someone/private/repo" })
 
 const capture = async (activeHooks: typeof hooks, sessionID: string, marker: string, boundPrompt: string = prompt) => {
   const input = { tool: "task", sessionID, callID: "call-" + marker, args: { subagent_type: "review-risk", prompt: boundPrompt } }
@@ -119,6 +130,14 @@ func runReviewPluginScenarioWithNative(t *testing.T, scenario, nativeStdout, nat
 
 func runReviewPluginScenarioWithNativeAndPreservation(t *testing.T, scenario, nativeStdout, nativeStderr, preserveStdout string) string {
 	t.Helper()
+	return runReviewPluginScenarioWithEnv(t, scenario, nativeStdout, nativeStderr, preserveStdout)
+}
+
+// runReviewPluginScenarioWithEnv is the same harness with extra environment
+// entries, so a scenario can prove what the plugin does with a hostile ambient
+// environment rather than only with a hostile native binary.
+func runReviewPluginScenarioWithEnv(t *testing.T, scenario, nativeStdout, nativeStderr, preserveStdout string, extraEnv ...string) string {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the stub native binary requires a POSIX shell")
 	}
@@ -139,6 +158,7 @@ func runReviewPluginScenarioWithNativeAndPreservation(t *testing.T, scenario, na
 		}
 	}
 	stub := "#!/bin/sh\npayload=$(cat)\n" +
+		"if [ -n \"$GENTLE_AI_STUB_CWD_LOG\" ]; then printf '%s\\n' \"$PWD\" >> \"$GENTLE_AI_STUB_CWD_LOG\"; fi\n" +
 		"if [ \"$2\" = \"capture-result\" ]; then case \"$payload\" in *capture-success*) printf '%s\\n' 'CAPTURED'; exit 0;; esac; fi\n" +
 		"if [ \"$2\" = \"preserve-result\" ] && [ -n \"$GENTLE_AI_STUB_PRESERVE_STDOUT\" ]; then printf '%s\\n' \"$GENTLE_AI_STUB_PRESERVE_STDOUT\"; exit 0; fi\n" +
 		"if [ -n \"$GENTLE_AI_STUB_STDOUT\" ]; then printf '%s\\n' \"$GENTLE_AI_STUB_STDOUT\"; exit 0; fi\n" +
@@ -154,13 +174,14 @@ func runReviewPluginScenarioWithNativeAndPreservation(t *testing.T, scenario, na
 	}
 	command := exec.Command(node, "harness.mts", scenario, workDir)
 	command.Dir = root
-	command.Env = append(os.Environ(),
+	command.Env = append(append(os.Environ(),
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"GENTLE_AI_STUB_STDOUT="+nativeStdout,
 		"GENTLE_AI_STUB_STDERR="+nativeStderr,
 		"GENTLE_AI_STUB_PRESERVE_STDOUT="+preserveStdout,
 		"GENTLE_AI_REVIEW_CWD=",
-	)
+		"GENTLE_AI_STUB_CWD_LOG=",
+	), extraEnv...)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Skipf("node could not run the TypeScript plugin harness (%v): %s", err, output)
@@ -267,7 +288,7 @@ func TestReviewPluginTerminatesUnstructuredAdmissionRejection(t *testing.T) {
 	if !strings.Contains(message, "reviewer_admission_recovery_unavailable") || !strings.Contains(message, "stop relaunching") {
 		t.Fatalf("unstructured admission rejection was not terminal: %s", message)
 	}
-	if strings.Contains(message, "relaunch this lens reviewer") || strings.Contains(message, "retry the same opaque binding") {
+	if strings.Contains(message, "relaunch this lens reviewer") || strings.Contains(message, "retry the same binding") {
 		t.Fatalf("unstructured admission rejection authorized a blind retry: %s", message)
 	}
 	if strings.Contains(message, "severe findings must anchor") {
