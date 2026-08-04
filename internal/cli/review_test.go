@@ -383,3 +383,42 @@ func writeReviewCLIJSON(t *testing.T, path string, value any) {
 		t.Fatal(err)
 	}
 }
+
+// reviewCLIAuthorityRoot and writeReconcileCLIRecord used to live in
+// review_reconcile_test.go, retired in Wave 7 S3a along with the CLI verb it
+// tested — both helpers are shared, reused across review_repair_test.go,
+// review_abandon_test.go, review_partial_capture_deadend_test.go,
+// review_incident_recapture_test.go, review_inspect_authority_test.go,
+// review_reconcile_batch_test.go, and review_repair_transition_test.go
+// (confirmed by grep before the retiring commit), so they moved here rather
+// than dying with their original home.
+
+func reviewCLIAuthorityRoot(t *testing.T, repo string) string {
+	t.Helper()
+	commonDir := filepath.Clean(strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "--path-format=absolute", "--git-common-dir")))
+	return filepath.Join(commonDir, "gentle-ai", "review-transactions")
+}
+
+// writeReconcileCLIRecord persists one compact-v2 record directly to disk
+// (bypassing the product's own write path) so a fixture can seed an exact,
+// already-known revision for a test to bind against.
+func writeReconcileCLIRecord(t *testing.T, repo string, state reviewtransaction.CompactState) string {
+	t.Helper()
+	revision, err := reviewtransaction.CompactRevisionForState(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := reviewtransaction.CompactRecord{Schema: "gentle-ai.review-state-record/v2", Revision: revision, State: state}
+	payload, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(reviewCLIAuthorityRoot(t, repo), "v2", state.LineageID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "review-state.json"), append(payload, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return revision
+}
