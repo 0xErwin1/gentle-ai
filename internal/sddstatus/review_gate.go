@@ -224,12 +224,35 @@ func readReviewTransaction(path, content string) (*reviewtransaction.Transaction
 // sddstatus-qualified name working unchanged for both remaining consumers.
 const EscalationAccountingReasonTemplate = reviewtransaction.EscalationAccountingReasonTemplate
 
-func resolveBoundedRemediation(required bool, verify verifyResultEvaluation, transaction *reviewtransaction.Transaction, compact *reviewtransaction.CompactState, transactionReason, applyProgress string) RemediationState {
+func resolveBoundedRemediation(required, reviewDisabled bool, verify verifyResultEvaluation, transaction *reviewtransaction.Transaction, compact *reviewtransaction.CompactState, transactionReason, applyProgress string) RemediationState {
 	if !required {
 		return RemediationState{}
 	}
 	if verify.EvidenceRevision == "" && strings.Contains(verify.Reason, "evidence_revision") {
 		return RemediationState{Reason: fmt.Sprintf("verify evidence cannot enter remediation: %s", verify.Reason)}
+	}
+	// #2182: the kill switch already gates the review authority LOOKUP at the
+	// call site; without this it did not gate the classification that consumes
+	// the absence of what that lookup would have found, so an admitted failure
+	// was refused for missing a bounded review transaction that policy itself
+	// prevented from existing. A kill switch a downstream check overrides is not
+	// a kill switch.
+	//
+	// Correction proceeds unmanaged: bound to the failed evidence, and carrying
+	// none of the lineage, generation, fix-batch or budget fields that only a
+	// review authority can issue. Those stay zero rather than fabricated,
+	// because no path may report or imply review approval while review is off.
+	// Completion stays review-independent too: the runtime ledger already
+	// settles it through nativeRuntimeCompletesRemediation.
+	if reviewDisabled {
+		return RemediationState{
+			Required:               true,
+			FailedEvidenceRevision: verify.EvidenceRevision,
+			Reason: fmt.Sprintf(
+				"verify evidence requires unmanaged remediation for %s: %s; receipt-driven review is disabled, so this correction is bounded by the native runtime attempt budget alone",
+				verify.EvidenceRevision, verify.Reason,
+			),
+		}
 	}
 	if transaction == nil && compact != nil {
 		if compact.State == reviewtransaction.StateEscalated {

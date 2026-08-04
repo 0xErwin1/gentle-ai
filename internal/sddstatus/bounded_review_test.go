@@ -1227,7 +1227,7 @@ func TestResolveRejectsCompactRemediationWhenFrozenBudgetIsZero(t *testing.T) {
 		LineageID: "compact-thin", Generation: 1, State: reviewtransaction.StateApproved,
 		CorrectionBudget: 2, CumulativeCorrectionLines: 2,
 	}
-	state := resolveBoundedRemediation(true, verifyResultEvaluation{
+	state := resolveBoundedRemediation(true, false, verifyResultEvaluation{
 		EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
 	}, nil, &compact, "bounded review transaction is missing", "")
 
@@ -1242,7 +1242,7 @@ func TestResolveRejectsCompactRemediationAfterSingleConsumedAttempt(t *testing.T
 		CorrectionBudget: 10, CumulativeCorrectionLines: 1,
 		CorrectionAttempts: []reviewtransaction.CompactCorrectionAttempt{{ActualLines: 1}},
 	}
-	state := resolveBoundedRemediation(true, verifyResultEvaluation{
+	state := resolveBoundedRemediation(true, false, verifyResultEvaluation{
 		EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
 	}, nil, &compact, "bounded review transaction is missing", "")
 
@@ -1256,7 +1256,7 @@ func TestResolveBoundedRemediationExposesUnambiguousRemainingAndTotalBudget(t *t
 		LineageID: "compact-thin", Generation: 1, State: reviewtransaction.StateApproved,
 		CorrectionBudget: 10, CumulativeCorrectionLines: 3,
 	}
-	state := resolveBoundedRemediation(true, verifyResultEvaluation{
+	state := resolveBoundedRemediation(true, false, verifyResultEvaluation{
 		EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
 	}, nil, &compact, "bounded review transaction is missing", "")
 
@@ -1306,7 +1306,7 @@ func TestResolveBoundedRemediationSurfacesEscalationAccountingForAlreadyEscalate
 			LineageID: "compact-thin", Generation: 1, State: reviewtransaction.StateEscalated,
 			CorrectionBudget: 10, CumulativeCorrectionLines: 12,
 		}
-		state := resolveBoundedRemediation(true, verifyResultEvaluation{
+		state := resolveBoundedRemediation(true, false, verifyResultEvaluation{
 			EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
 		}, nil, &compact, "bounded review transaction is missing", "")
 
@@ -1328,7 +1328,7 @@ func TestResolveBoundedRemediationSurfacesEscalationAccountingForAlreadyEscalate
 			CorrectionBudget: 10, CumulativeCorrectionLines: 3,
 			OriginalCriteria: &originalFailed, CorrectionRegression: &regressionPassed,
 		}
-		state := resolveBoundedRemediation(true, verifyResultEvaluation{
+		state := resolveBoundedRemediation(true, false, verifyResultEvaluation{
 			EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
 		}, nil, &compact, "bounded review transaction is missing", "")
 
@@ -1357,7 +1357,7 @@ func TestEscalationAccountingReasonTemplateKeepsSDDBoundOutputByteIdentical(t *t
 		LineageID: "compact-thin", Generation: 1, State: reviewtransaction.StateEscalated,
 		CorrectionBudget: 10, CumulativeCorrectionLines: 12,
 	}
-	state := resolveBoundedRemediation(true, verifyResultEvaluation{
+	state := resolveBoundedRemediation(true, false, verifyResultEvaluation{
 		EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
 	}, nil, &compact, "bounded review transaction is missing", "")
 	const want = "compact review authority is escalated (budget_exceeded): spent 12, remaining 0, total 10 correction lines"
@@ -1394,7 +1394,7 @@ func TestResolveBoundedRemediationNoCorrectionBudgetGuardNeverPopulatesRemaining
 				LineageID: "compact-thin", Generation: 1, State: reviewtransaction.StateApproved,
 				CorrectionBudget: test.correctionBudget, CumulativeCorrectionLines: test.cumulativeCorrectionLines,
 			}
-			state := resolveBoundedRemediation(true, verifyResultEvaluation{
+			state := resolveBoundedRemediation(true, false, verifyResultEvaluation{
 				EvidenceRevision: shaID("d"), Reason: "scenarios are incomplete",
 			}, nil, &compact, "bounded review transaction is missing", "")
 

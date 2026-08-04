@@ -96,9 +96,20 @@ func TestNegotiatedRouteWithoutRuntimeIdentityReachesStart(t *testing.T) {
 }
 
 // The refusal for a genuinely unsupported declared runtime is untouched.
+//
+// OpenCode used to stand here as this test's eligible-but-transport-disabled
+// example. Issue #2417 gave it a genuine immutable transport, so it is no
+// longer an instance of the class this test is about, and asserting it still
+// refuses would assert the defect rather than the property. Kilocode replaces
+// it and keeps this arm's coverage exact: it is eligible, has no transport,
+// and fails with the same reviewImmutableTransportUnsupportedCode, unlike Pi,
+// which fails earlier with reviewTransportCapabilityUnsupportedCode. Codex and
+// the unknown identity are unchanged, so the property this test exists to
+// protect -- a declared identity is validated exactly as before, and every
+// unsupported one still stops -- is still proven by three runtimes.
 func TestDeclaredUnsupportedRuntimeStillRefusesNegotiatedStatus(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	for _, runtime := range []string{string(model.AgentOpenCode), string(model.AgentCodex), "unknown-runtime"} {
+	for _, runtime := range []string{string(model.AgentKilocode), string(model.AgentCodex), "unknown-runtime"} {
 		t.Run(runtime, func(t *testing.T) {
 			var output bytes.Buffer
 			if err := RunReview([]string{
@@ -110,6 +121,34 @@ func TestDeclaredUnsupportedRuntimeStillRefusesNegotiatedStatus(t *testing.T) {
 			if failure.Code != reviewImmutableTransportUnsupportedCode || failure.NextAction != "stop" {
 				t.Fatalf("declared unsupported runtime %q failure = %#v", runtime, failure)
 			}
+		})
+	}
+}
+
+// TestDeclaredSupportedRuntimeIsAnsweredByNegotiatedStatus is the positive
+// twin the arm above lost when OpenCode stopped being an unsupported runtime,
+// and it is what keeps that swap honest. Deleting a row from a refusal matrix
+// proves nothing on its own: the same red would go green if the transport
+// check had simply been relaxed for everyone. This asserts the two halves
+// together on one repository -- every declared supported runtime is answered,
+// and the refusals above still stop -- so a gate that widened for everyone
+// fails the arm above, and a gate that never opened fails this one.
+func TestDeclaredSupportedRuntimeIsAnsweredByNegotiatedStatus(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	for _, runtime := range []string{string(model.AgentClaudeCode), string(model.AgentOpenCode)} {
+		t.Run(runtime, func(t *testing.T) {
+			var output bytes.Buffer
+			err := RunReview([]string{
+				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", runtime, "--next-transition",
+			}, &output)
+			if err == nil {
+				return
+			}
+			failure := decodeReviewIntegrationFailure(t, output.Bytes())
+			if failure.Code == reviewImmutableTransportUnsupportedCode {
+				t.Fatalf("declared supported runtime %q was refused for transport: %#v", runtime, failure)
+			}
+			t.Fatalf("negotiated STATUS failed for %q: %v %#v", runtime, err, failure)
 		})
 	}
 }
