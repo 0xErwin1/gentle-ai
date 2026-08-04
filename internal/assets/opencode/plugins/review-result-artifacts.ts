@@ -5,7 +5,99 @@ const REVIEW_AGENTS = new Set(["review-risk", "review-resilience", "review-reada
 const BINDING = /^GENTLE_AI_REVIEW_BINDING (\{[^\n]+\})(?:\n|$)/
 const TASK_RESULT = /^<task id="[^"\r\n]+" state="completed">\n<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/
 const TASK_TAG = /<\/?task(?:\s|>)|<\/?task_result>/
-const REVIEW_OUTCOME = { UNSUPPORTED_CAPABILITY: "unsupported-capability" } as const
+
+// LENS_CONTEXT_DELIVERY declares this plugin's mechanism to the provider, and
+// it is recorded on the receipt beside the captured results. It is the
+// stronger of the two levels the provider accepts: a runtime adapter replaced
+// whatever the caller produced with the provider's own output before the
+// reviewer ran, so relaying is not trusted at all. Declaring the relayed
+// level from here would permanently record a weaker claim than what actually
+// happened.
+const LENS_CONTEXT_DELIVERY = "runtime_interception"
+
+// LENS_CONTEXT_TERMINATOR closes a complete provider block. The provider
+// assembles the whole block in memory before writing a byte, precisely so a
+// partial one cannot exist; this plugin still checks, because a partial block
+// is indistinguishable to a reviewer from a small candidate and would let a
+// truncated view be reported as a clean review.
+const LENS_CONTEXT_TERMINATOR = "GENTLE_AI_REVIEW_CONTEXT_END"
+
+// LENS_CONTEXT_REFUSAL matches the typed, path-free refusal code the native
+// `review lens-context` command emits. Only the [a-z_]+ code token is
+// forwarded -- never the native prose that carries it -- so the opaque path
+// keeps its absolute rule that no native text reaches the session transcript.
+const LENS_CONTEXT_REFUSAL = /\b(lens_context_[a-z_]+):/
+
+// LENS_CONTEXT_REFUSAL_ACTION names a real exit for each refusal a caller
+// cannot recover from by retrying the same binding. Without these, an
+// over-budget candidate or a path that produces no patch bytes collapses into
+// "refresh and retry", advice that deterministically fails and loops.
+const LENS_CONTEXT_REFUSAL_ACTION: Record<string, string> = {
+  lens_context_budget_exceeded:
+    "Immutable candidate evidence is never truncated, and retrying the same candidate cannot succeed. " +
+    "Split this candidate into smaller reviewable commits, each under the budget, then start a review for the reduced scope.",
+  lens_context_empty_patch:
+    "One content-changing path produced no patch bytes at all, which no legitimate candidate does. " +
+    "Refresh the exact native next_transition and relaunch the lens; if the same path keeps producing no patch, " +
+    "treat it as a native inspection defect and stop relaunching.",
+  lens_context_emission_conflict:
+    "This frozen lens slot already recorded a reviewer context produced by a different mechanism, " +
+    "and audit history is never rewritten. Start a review for a fresh candidate.",
+}
+
+const LENS_CONTEXT_DEFAULT_ACTION = "Refresh the exact native next_transition and relaunch the lens."
+
+// REQUIRED_ISOLATION_ENVIRONMENT closes a channel this plugin cannot touch by
+// itself: OpenCode assembles every session's *system* prompt (not the `task`
+// `args.prompt` this plugin controls) by concatenating the agent's base
+// prompt with an environment block, every AGENTS.md/CLAUDE.md/CONTEXT.md
+// found walking up from the worktree root, local `instructions` glob
+// entries, and the live `<available_skills>` catalog -- unconditionally,
+// regardless of the agent's `tools` map. A review-risk session holding no
+// bash and no read tool still received this concatenated content in its
+// system message in a real OpenCode 1.18.10 run: a marker planted in
+// AGENTS.md after the candidate froze appeared verbatim above the injected
+// evidence. These two OpenCode-native environment variables are the only
+// verified way to close it, confirmed by the same measurement: with both
+// set, no project-instruction or skill-catalog content reached the
+// reviewer's system message; with either unset, it did.
+//
+// These two variables do not close every channel: an operator-configured
+// `instructions` entry that is an http(s):// URL is fetched by OpenCode
+// unconditionally and is NOT suppressed by OPENCODE_DISABLE_PROJECT_CONFIG
+// (verified: a poisoned local HTTP endpoint referenced this way still
+// reached the reviewer with both variables set). That gap is closed
+// separately below (remoteInstructionsEntries), by reading the effective
+// config through the plugin's own OpenCode client rather than by a sentence
+// operators could fail to read.
+const REQUIRED_ISOLATION_ENVIRONMENT = ["OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_DISABLE_EXTERNAL_SKILLS"] as const
+
+function isolationFlagSet(value: string | undefined): boolean {
+  return typeof value === "string" && /^(1|true)$/i.test(value.trim())
+}
+
+function missingIsolationEnvironment(): string[] {
+  return REQUIRED_ISOLATION_ENVIRONMENT.filter((name) => !isolationFlagSet(process.env[name]))
+}
+
+// remoteInstructionsEntries closes the one channel REQUIRED_ISOLATION_ENVIRONMENT
+// cannot: OpenCode fetches every http(s):// `instructions` config entry
+// unconditionally, from any layer, regardless of OPENCODE_DISABLE_PROJECT_CONFIG.
+// Verified against real OpenCode 1.18.10 via the plugin's own
+// `client.config.get()` (the same endpoint the OpenCode TUI/CLI itself reads
+// effective config from): a project-level opencode.json's `instructions`
+// entries become invisible here exactly when OPENCODE_DISABLE_PROJECT_CONFIG
+// also stops them from taking effect -- config visibility and config effect
+// move together for that layer, so there is nothing to detect there because
+// there is nothing to refuse. The global config's own `instructions` array,
+// including http(s):// entries, remains visible here regardless of either
+// variable, matching that it remains fetched regardless of either variable.
+// No config layer was found that changes the reviewer's fetched instructions
+// without also changing what this function observes.
+function remoteInstructionsEntries(instructions: unknown): string[] {
+  if (!Array.isArray(instructions)) return []
+  return instructions.filter((entry): entry is string => typeof entry === "string" && /^https?:\/\//i.test(entry))
+}
 
 type ReviewBinding = {
   lineage: string
@@ -15,43 +107,6 @@ type ReviewBinding = {
   revision?: string
   repository_context?: string
   subject_hash?: string
-}
-
-interface ReviewArtifactSubject {
-  schema: string
-  subject_hash: string
-  lineage_id: string
-  authority_revision: string
-  target_identity: string
-  base_tree: string
-  candidate_tree: string
-  changed_path_manifest_sha256: string
-  lens: string
-  selected_order: number
-}
-
-interface ChangedPathManifestEntry {
-  path: string
-  status: string
-  old_mode: string
-  new_mode: string
-  deleted: boolean
-  type_changed: boolean
-  mode_only: boolean
-  intended_untracked: boolean
-}
-
-interface ReviewCapturePreflight {
-  schema: string
-  capability: string
-  lineage_id: string
-  target_identity: string
-  lens: string
-  selected_order: number
-  artifact_subject: ReviewArtifactSubject
-  base_tree: string
-  candidate_tree: string
-  changed_path_manifest: ChangedPathManifestEntry[]
 }
 
 const LINEAGE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
@@ -182,6 +237,10 @@ function extractionClass(cause: unknown): string | undefined {
   return typeof value === "string" ? value : undefined
 }
 
+function captureCwd(worktree: string | undefined, directory: string): string {
+  return worktree || directory
+}
+
 function runNative(cwd: string, args: string[], stdin: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn("gentle-ai", args, { cwd, stdio: ["pipe", "pipe", "pipe"] })
@@ -218,94 +277,86 @@ function captureResult(cwd: string, binding: ReviewBinding, result: string): Pro
   ], result)
 }
 
-async function preflightCapture(cwd: string, binding: ReviewBinding): Promise<ReviewCapturePreflight> {
-  try {
-    const subjectArgs = binding.subject_hash ? ["--subject-hash", binding.subject_hash] : []
-    const response = await runNative(cwd, [
-      "review", "capture-result", ...repositoryBindingArgs(cwd, binding),
-      "--lineage", binding.lineage, "--target", binding.target,
-      "--lens", binding.lens, "--order", String(binding.order), ...subjectArgs, "--preflight",
-    ], "")
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(response)
-    } catch {
-      throw new Error("review capture preflight returned malformed artifact-subject JSON")
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("review capture preflight returned malformed artifact-subject JSON")
-    }
-    const value = parsed as Record<string, unknown>
-    const subject = value.artifact_subject as Record<string, unknown> | undefined
-    const manifest = value.changed_path_manifest
-    if (!subject || subject.schema !== "gentle-ai.review-artifact-subject/v2" ||
-        typeof subject.subject_hash !== "string" || !/^sha256:[a-f0-9]{64}$/.test(subject.subject_hash) ||
-        typeof subject.authority_revision !== "string" || !/^sha256:[a-f0-9]{64}$/.test(subject.authority_revision) ||
-        typeof subject.base_tree !== "string" || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(subject.base_tree) ||
-        typeof subject.candidate_tree !== "string" || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/.test(subject.candidate_tree) ||
-        typeof subject.changed_path_manifest_sha256 !== "string" || !/^sha256:[a-f0-9]{64}$/.test(subject.changed_path_manifest_sha256) ||
-        subject.lineage_id !== binding.lineage || subject.target_identity !== binding.target ||
-        (binding.revision !== undefined && subject.authority_revision !== binding.revision) ||
-        subject.lens !== binding.lens || subject.selected_order !== binding.order ||
-        value.schema !== "gentle-ai.review-capture-preflight/v1" || value.capability !== "review.native_capture_preflight" ||
-        value.lineage_id !== binding.lineage || value.target_identity !== binding.target || value.lens !== binding.lens ||
-        value.selected_order !== binding.order || value.base_tree !== subject.base_tree || value.candidate_tree !== subject.candidate_tree ||
-        !validManifest(manifest)) {
-      throw new Error("review capture preflight returned an incomplete artifact subject")
-    }
-    if (binding.subject_hash && subject.subject_hash !== binding.subject_hash) {
-      throw new Error("review capture preflight returned a different artifact subject")
-    }
-    return value as unknown as ReviewCapturePreflight
-  } catch (cause) {
-    const scope = binding.repository_context ? "the provider-issued repository context" : cwd
-    const recovery = gitTrustRefusal(binding, cause)
-      ? GIT_TRUST_REFUSAL_RECOVERY
-      : binding.repository_context
-      ? `Refresh the exact native next_transition for lineage ${binding.lineage} before relaunching the lens.`
-      : `If lineage ${binding.lineage} was started in a different repository (for example a nested one), run ` +
-        `gentle-ai review status --cwd <that repository> --contract gentle-ai.review-integration/v2 --next-transition ` +
-        `and relaunch the lens from the binding it returns: that binding carries a provider-issued repository ` +
-        `context, which resolves independently of this session's working directory.`
-    throw new Error(
-      `review capture preflight failed for lens ${binding.lens} under ${scope}: ` +
-      `${sessionErrorMessage(binding, cause, "repository_context_preflight_failed")}. ` +
-      `The reviewer was not launched, so its exactly-once invocation is preserved. ` +
-      recovery,
-    )
-  }
-}
-
-function validManifest(value: unknown): value is ChangedPathManifestEntry[] {
-  if (!Array.isArray(value)) return false
-  let previous = ""
-  for (const entry of value) {
-    if (!validManifestEntry(entry) ||
-        (previous !== "" && Buffer.compare(Buffer.from(previous, "utf8"), Buffer.from(entry.path, "utf8")) >= 0)) return false
-    previous = entry.path
-  }
-  return true
-}
-
-function validManifestEntry(entry: unknown): entry is ChangedPathManifestEntry {
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false
-  const value = entry as Record<string, unknown>
-  return Object.keys(value).sort().join(",") ===
-    "deleted,intended_untracked,mode_only,new_mode,old_mode,path,status,type_changed" &&
-    typeof value.path === "string" && value.path !== "" &&
-    typeof value.status === "string" && /^[ADMT]$/.test(value.status) &&
-    typeof value.old_mode === "string" && /^[0-7]{6}$/.test(value.old_mode) &&
-    typeof value.new_mode === "string" && /^[0-7]{6}$/.test(value.new_mode) &&
-    typeof value.deleted === "boolean" && typeof value.type_changed === "boolean" &&
-    typeof value.mode_only === "boolean" && typeof value.intended_untracked === "boolean"
-}
-
+// injectReviewerContext replaces a reviewer task's prompt with the provider's
+// own finished lens context. Everything the reviewer sees is produced by one
+// native call through the shell-less runNative channel: the provider-authored
+// binding, the provider-authored capture context, the reviewer's charge and
+// result schema, discovery, and one verbatim immutable patch per canonical
+// manifest index, budget already applied and refusals already resolved.
+//
+// This plugin assembles nothing. It used to materialize the same evidence
+// itself, one native per-path candidate inspection at a time, under its
+// own byte budget and its own empty-patch guard. `review lens-context` now
+// owns all of that natively, so the second implementation is gone rather than
+// kept beside it: two code paths producing the same block is exactly how the
+// two drift apart, and a reviewer reading the drifted one would have no way
+// to tell.
 async function injectReviewerContext(prompt: string, lens: string, cwd: string): Promise<string> {
   const binding = parseBinding(prompt, lens)
-  const preflight = await preflightCapture(cwd, binding)
-  const injectedBinding = { ...binding, subject_hash: preflight.artifact_subject.subject_hash }
-  return `GENTLE_AI_REVIEW_BINDING ${JSON.stringify(injectedBinding)}\n` +
-    `GENTLE_AI_REVIEW_CONTEXT ${JSON.stringify(preflight)}\n`
+  if (!binding.repository_context) {
+    throw new Error(
+      "immutable OpenCode candidate inspection requires a repository-context binding; " +
+      "`review lens-context` accepts only the opaque provider-issued handle and has no --cwd fallback. " +
+      "The reviewer was not launched, so its exactly-once invocation is preserved.",
+    )
+  }
+  let block: string
+  try {
+    block = await runNative(cwd, [
+      "review", "lens-context",
+      "--repository-context", binding.repository_context,
+      "--lens", binding.lens,
+      "--delivery", LENS_CONTEXT_DELIVERY,
+    ], "")
+  } catch (cause) {
+    throw new Error(
+      `review lens context failed for lens ${binding.lens}: ` +
+      `${lensContextRefusal(cause) ?? sessionErrorMessage(binding, cause, "repository_context_lens_context_failed")}. ` +
+      "The reviewer was not launched, so its exactly-once invocation is preserved.",
+    )
+  }
+  return `${verifiedLensContext(block, binding)}\n`
+}
+
+// lensContextRefusal forwards the provider's typed refusal code and this
+// plugin's own recovery text for it, or undefined when the failure is not a
+// typed lens-context refusal at all (a Git trust refusal, a missing binary, a
+// crash) and the caller should classify it the ordinary way.
+function lensContextRefusal(cause: unknown): string | undefined {
+  const match = LENS_CONTEXT_REFUSAL.exec(errorMessage(cause))
+  if (!match) return undefined
+  return `${match[1]}: the provider refused to produce the reviewer lens context. ` +
+    `${LENS_CONTEXT_REFUSAL_ACTION[match[1]] ?? LENS_CONTEXT_DEFAULT_ACTION}`
+}
+
+// verifiedLensContext confirms the block is complete and is the one this task
+// asked for, before it becomes the reviewer's prompt.
+//
+// The provider authored both the block and its binding, so this is not a
+// trust check on the provider. It is what makes a caller that pointed the
+// review at a different candidate -- by relaying a repository context handle
+// for one lineage while claiming another in its own binding -- fail here,
+// loudly, instead of silently capturing a reviewer result into that other
+// lineage after the reviewer has already been spent.
+function verifiedLensContext(block: string, binding: ReviewBinding): string {
+  if (!block.endsWith(LENS_CONTEXT_TERMINATOR)) {
+    throw new Error(
+      `review lens context for lens ${binding.lens} is not terminated by ${LENS_CONTEXT_TERMINATOR}; ` +
+      "partial provider context is never injected. " +
+      "The reviewer was not launched, so its exactly-once invocation is preserved.",
+    )
+  }
+  const provider = parseBinding(block, binding.lens)
+  if (provider.lineage !== binding.lineage || provider.target !== binding.target ||
+      provider.order !== binding.order || provider.repository_context !== binding.repository_context ||
+      (binding.revision !== undefined && provider.revision !== binding.revision) ||
+      typeof provider.subject_hash !== "string") {
+    throw new Error(
+      `review lens context for lens ${binding.lens} binds a different candidate than the task claimed. ` +
+      "The reviewer was not launched, so its exactly-once invocation is preserved.",
+    )
+  }
+  return block
 }
 
 function preserveResult(cwd: string, binding: ReviewBinding, raw: string, cls?: string): Promise<string> {
@@ -560,7 +611,7 @@ async function preservedCaptureFailure(
   }
 }
 
-const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
+const ReviewResultArtifactsPlugin: Plugin = async ({ client, directory, worktree }) => {
   const admissionRecoveries: AdmissionRecoveryStore = new Map()
   return {
   dispose: async () => { admissionRecoveries.clear() },
@@ -576,8 +627,46 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
     if (output.args.background === true) {
       throw new Error("bound review tasks must run in the foreground for native result capture")
     }
-    parseBinding(output.args.prompt, output.args.subagent_type)
-    throw new Error(REVIEW_OUTCOME.UNSUPPORTED_CAPABILITY)
+    const missingIsolation = missingIsolationEnvironment()
+    if (missingIsolation.length > 0) {
+      throw new Error(
+        `immutable OpenCode candidate inspection requires ${missingIsolation.join(" and ")} set to "1" for this OpenCode process; ` +
+        "without them, OpenCode concatenates live project instructions (AGENTS.md/CLAUDE.md/CONTEXT.md, local " +
+        "`instructions` glob entries) and the live skill catalog into every subagent's system prompt regardless " +
+        "of its tools, which can leak post-freeze worktree content into the reviewer. " +
+        "Set the missing variable(s) in the environment this OpenCode process runs under, then relaunch the lens. " +
+        "The reviewer was not launched, so its exactly-once invocation is preserved.",
+      )
+    }
+    let remoteInstructions: string[]
+    try {
+      const configResponse = (await client.config.get({ query: { directory } })) as { data?: { instructions?: unknown }; error?: unknown }
+      if (configResponse?.error) {
+        throw new Error(JSON.stringify(configResponse.error))
+      }
+      remoteInstructions = remoteInstructionsEntries(configResponse?.data?.instructions)
+    } catch (cause) {
+      throw new Error(
+        `immutable OpenCode candidate inspection could not verify the effective configuration for remote ` +
+        `\`instructions\` entries: ${errorMessage(cause)}. OpenCode fetches any http(s):// instructions entry ` +
+        "unconditionally into every session's system prompt, so an unverifiable configuration cannot be ruled safe. " +
+        "Resolve the config read failure, then relaunch the lens. " +
+        "The reviewer was not launched, so its exactly-once invocation is preserved.",
+      )
+    }
+    if (remoteInstructions.length > 0) {
+      throw new Error(
+        `immutable OpenCode candidate inspection refuses a remote \`instructions\` entry: ${remoteInstructions.join(", ")}; ` +
+        "OpenCode fetches this unconditionally into every session's system prompt regardless of tools, which could " +
+        "inject attacker-controlled prose into the reviewer. Remove it from the effective OpenCode configuration, " +
+        "then relaunch the lens. The reviewer was not launched, so its exactly-once invocation is preserved.",
+      )
+    }
+    output.args.prompt = await injectReviewerContext(
+      output.args.prompt,
+      output.args.subagent_type,
+      captureCwd(worktree, directory),
+    )
   },
   "tool.execute.after": async (input, output) => {
     if (input.tool !== "task" || typeof input.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(input.args.subagent_type)) return
