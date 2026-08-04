@@ -60,6 +60,9 @@ func TestCoordinatorOrchestratorsCarryLosslessBlockingPromptRule(t *testing.T) {
 				"Do not choose, default, infer, launch dependent work, or continue",
 				"Accept an answer only when each response belongs to the exact allowed-answer domain",
 				"free text or multi-select only when the original prompt allowed it",
+				"request for information, not a candidate answer",
+				"answer it directly from the envelope already held",
+				"re-present the complete choice envelope and keep waiting",
 				"invalid or ambiguous",
 				"same blocked actor exactly once",
 			} {
