@@ -126,8 +126,23 @@ func executeAuthorityDisposition(ctx context.Context, repo string, plan Authorit
 
 // lockedAuthorityDispositionMutation runs every step that must happen while
 // base's exclusive maintenance lock is held: replay discovery, lock+CAS
-// reinspection, Authorization validation, and the byte-preserving
-// quarantine. It always releases maintenance before returning.
+// reinspection, Authorization validation, CAS-all-N validation, and the
+// ordered, byte-preserving per-node quarantine over the whole closure. It
+// always releases maintenance before returning.
+//
+// Wave 6 (rdd-closure-disposition-execution / "Descendant-First Ordered
+// Disposition", "Atomic Visibility With Forward-Only Convergence"): every
+// closure member's ExpectedRevision is checked (CAS-all-N) before the first
+// move, naming exactly which member drifted; then plan.Closure is quarantined
+// in order (descendants first, seed last — the same order
+// authorityDispositionClosure derives) by calling quarantineCompactStoreEntry
+// once per node, reusing its existing two-phase hooks unchanged; then the
+// forensic-only closure manifest is written once, inside the seed's own
+// quarantine directory, only after every member has committed. Discovery
+// (the top-of-function replay check) and per-node resume across multiple
+// invocations are Slice S3's forward-only resume scope — this slice's
+// crash-safety property is that every interruption prefix leaves a valid
+// retained graph (design.md Data Flow), not yet that a replay converges.
 func lockedAuthorityDispositionMutation(ctx context.Context, maintenance *MaintenanceLock, base, root, binding, seed string, plan AuthorityDispositionPlan) (CompactReclaimRecord, error) {
 	defer maintenance.Release()
 
@@ -159,35 +174,71 @@ func lockedAuthorityDispositionMutation(ctx context.Context, maintenance *Mainte
 		return CompactReclaimRecord{}, err
 	}
 
-	targetRecord, found := records[seed]
-	expectedRevision, expectedFound := plan.ExpectedRevisions[seed]
-	if !found || !expectedFound || targetRecord.Revision != expectedRevision {
-		return CompactReclaimRecord{}, fmt.Errorf("%w: expected revision for %q drifted", ErrConcurrentUpdate, seed)
+	// CAS-all-N: every closure member's expected revision is checked before
+	// the first move — drift on ANY member, not only the seed, refuses
+	// pre-move and names exactly which member drifted.
+	for _, lineage := range plan.Closure {
+		targetRecord, found := records[lineage]
+		expectedRevision, expectedFound := plan.ExpectedRevisions[lineage]
+		if !found || !expectedFound || targetRecord.Revision != expectedRevision {
+			return CompactReclaimRecord{}, fmt.Errorf("%w: expected revision for closure member %q drifted", ErrConcurrentUpdate, lineage)
+		}
 	}
-
-	dir := filepath.Join(base, "v2", seed)
-	items, err := os.ReadDir(dir)
-	if err != nil {
-		return CompactReclaimRecord{}, fmt.Errorf("inspect authority disposition target: %w", err)
-	}
-	residue := make([]string, 0, len(items))
-	for _, item := range items {
-		residue = append(residue, item.Name())
-	}
-	sort.Strings(residue)
 
 	recordedAuthorization := sha256.Sum256([]byte(plan.Authorization))
-	return quarantineCompactStoreEntry(ctx, base, dir, CompactReclaimRecord{
-		Schema: CompactReclaimRecordSchema, Status: CompactReclaimPrepared, LineageID: seed,
-		Reason: plan.Reason, Actor: plan.Actor, ReclaimedAt: time.Now().UTC(), SourcePath: dir, Residue: residue,
-		AuthorityDisposition: &AuthorityDispositionProof{
-			Schema: AuthorityDispositionProofSchema, PlanDigest: plan.PlanDigest,
-			AuthorityInventoryRevision: plan.AuthorityInventoryRevision, AnomalyClass: plan.AnomalyClass,
-			SeedSet: append([]string(nil), plan.SeedSet...), Closure: append([]string(nil), plan.Closure...),
-			ExpectedRevisions:   cloneAuthorityDispositionRevisions(plan.ExpectedRevisions),
-			AuthorizationSHA256: "sha256:" + hex.EncodeToString(recordedAuthorization[:]),
-		},
-	})
+	var lastCommitted CompactReclaimRecord
+	for _, lineage := range plan.Closure {
+		dir := filepath.Join(base, "v2", lineage)
+		items, err := os.ReadDir(dir)
+		if err != nil {
+			return lastCommitted, fmt.Errorf("inspect authority disposition target %q: %w", lineage, err)
+		}
+		residue := make([]string, 0, len(items))
+		for _, item := range items {
+			residue = append(residue, item.Name())
+		}
+		sort.Strings(residue)
+
+		committed, err := quarantineCompactStoreEntry(ctx, base, dir, CompactReclaimRecord{
+			Schema: CompactReclaimRecordSchema, Status: CompactReclaimPrepared, LineageID: lineage,
+			Reason: plan.Reason, Actor: plan.Actor, ReclaimedAt: time.Now().UTC(), SourcePath: dir, Residue: residue,
+			AuthorityDisposition: &AuthorityDispositionProof{
+				Schema: AuthorityDispositionProofSchema, PlanDigest: plan.PlanDigest,
+				AuthorityInventoryRevision: plan.AuthorityInventoryRevision, AnomalyClass: plan.AnomalyClass,
+				SeedSet: append([]string(nil), plan.SeedSet...), Closure: append([]string(nil), plan.Closure...),
+				ExpectedRevisions:   cloneAuthorityDispositionRevisions(plan.ExpectedRevisions),
+				AuthorizationSHA256: "sha256:" + hex.EncodeToString(recordedAuthorization[:]),
+			},
+		})
+		if err != nil {
+			// A partial closure never reports success: this returns before
+			// the seed (the last, closure-ending member) ever commits, so
+			// the caller never reaches readBackAuthorityDisposition. Nodes
+			// already committed in earlier loop iterations stay committed —
+			// there is no rollback (design decision D3); the retained graph
+			// at this exact interruption point is still valid because every
+			// closure prefix is (rdd-closure-disposition-execution /
+			// "Descendant-First Ordered Disposition").
+			return committed, err
+		}
+		lastCommitted = committed
+	}
+
+	// The forensic-only closure manifest is written once, only after every
+	// closure member has committed (design.md's Data Flow places this step
+	// after the ordered loop, before readback) — it is never a lifecycle
+	// dependency (design caps RDD at two operational artifacts: the reclaim
+	// record and residue/; this manifest is a third, forensic-only artifact
+	// that recovery never reads).
+	if err := writeAuthorityDispositionClosureManifest(lastCommitted.QuarantinePath, AuthorityDispositionClosureManifest{
+		Schema: AuthorityDispositionClosureManifestSchema, PlanDigest: plan.PlanDigest,
+		AuthorityInventoryRevision: plan.AuthorityInventoryRevision, AnomalyClass: plan.AnomalyClass,
+		OrderedClosure: append([]string(nil), plan.Closure...), Disposed: append([]string(nil), plan.Closure...),
+	}); err != nil {
+		return lastCommitted, err
+	}
+
+	return lastCommitted, nil
 }
 
 // loadCompactRecoveryRecordsUnderMaintenanceHold mirrors
@@ -353,9 +404,15 @@ func resumeAuthorityDispositionRecord(ctx context.Context, record CompactReclaim
 
 // readBackAuthorityDisposition re-runs classification over the retained
 // graph and refuses to report success unless it revalidates as
-// Complete && Valid with no dangling reference to the quarantined entry
-// (rdd-leaf-disposition-execution / "Retained-Graph Revalidation Before
-// Success").
+// Complete && Valid with no dangling reference to ANY closure member — not
+// only record.LineageID (the seed). This is called once, only after
+// executeAuthorityDisposition's ordered loop has committed every closure
+// member (rdd-closure-disposition-execution / "Descendant-First Ordered
+// Disposition"'s readback gate), and its over-collection guard widens
+// rdd-leaf-disposition-execution's "Retained-Graph Revalidation Before
+// Success" (which checked only the single leaf) to the whole closure
+// (design decision D6): a retained edge naming any closure member is still
+// evidence disposition did not fully remove it.
 func readBackAuthorityDisposition(ctx context.Context, root string, record CompactReclaimRecord) (CompactReclaimRecord, error) {
 	if record.Status != CompactReclaimCommitted {
 		return record, fmt.Errorf("authority disposition execution refused: readback observed a non-committed record; run `gentle-ai review inspect-authority --cwd %q` and escalate the report", root)
@@ -367,12 +424,30 @@ func readBackAuthorityDisposition(ctx context.Context, root string, record Compa
 	if !report.Complete || !report.Valid {
 		return record, fmt.Errorf("authority disposition execution refused: retained-graph readback did not revalidate cleanly; run `gentle-ai review inspect-authority --cwd %q` and escalate the report", root)
 	}
+	closureMembers := authorityDispositionClosureMembers(record)
 	for _, edge := range report.Edges {
-		if edge.PredecessorLineageID == record.LineageID || edge.SuccessorLineageID == record.LineageID {
-			return record, fmt.Errorf("authority disposition execution refused: retained graph still references the quarantined entry; run `gentle-ai review inspect-authority --cwd %q` and escalate the report", root)
+		if member := edge.PredecessorLineageID; closureMembers[member] {
+			return record, fmt.Errorf("authority disposition execution refused: retained graph still references quarantined closure member %q; run `gentle-ai review inspect-authority --cwd %q` and escalate the report", member, root)
+		}
+		if member := edge.SuccessorLineageID; closureMembers[member] {
+			return record, fmt.Errorf("authority disposition execution refused: retained graph still references quarantined closure member %q; run `gentle-ai review inspect-authority --cwd %q` and escalate the report", member, root)
 		}
 	}
 	return record, nil
+}
+
+// authorityDispositionClosureMembers is the over-collection guard's
+// membership set: record.LineageID (the seed — every pre-Wave-6 caller and
+// every N=1 execution) unioned with every entry in
+// record.AuthorityDisposition.Closure, when present.
+func authorityDispositionClosureMembers(record CompactReclaimRecord) map[string]bool {
+	members := map[string]bool{record.LineageID: true}
+	if record.AuthorityDisposition != nil {
+		for _, lineage := range record.AuthorityDisposition.Closure {
+			members[lineage] = true
+		}
+	}
+	return members
 }
 
 func cloneAuthorityDispositionRevisions(revisions map[string]string) map[string]string {
