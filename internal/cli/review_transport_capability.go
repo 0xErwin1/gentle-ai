@@ -30,11 +30,13 @@ const (
 	// glob entries) and the skill catalog into every session's system
 	// prompt regardless of tools, so the plugin also refuses to launch the
 	// reviewer unless OPENCODE_DISABLE_PROJECT_CONFIG and
-	// OPENCODE_DISABLE_EXTERNAL_SKILLS are both set; only then is the
-	// injected block provably the reviewer's only byte source. A remote
-	// `instructions` URL is fetched unconditionally and is not suppressed by
-	// either variable — RDD-enabled OpenCode sessions must not configure
-	// one.
+	// OPENCODE_DISABLE_EXTERNAL_SKILLS are both set. OpenCode also fetches
+	// any remote (http/https) `instructions` entry unconditionally, from
+	// any config layer, regardless of either variable, so the plugin
+	// separately reads the effective configuration through its own OpenCode
+	// client (client.config.get) and refuses to launch the reviewer if one
+	// is present, naming the offending entry. Only then is the injected
+	// block provably the reviewer's only byte source.
 	reviewImmutableTransportOpenCodeProviderInjected reviewImmutableTransport = "opencode_provider_injected"
 )
 
