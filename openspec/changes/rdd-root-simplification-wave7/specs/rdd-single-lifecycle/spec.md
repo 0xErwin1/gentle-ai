@@ -37,33 +37,36 @@ matching v2) are all closed.
 - WHEN the switch-removal slice is proposed
 - THEN it does not start; it starts only once all three are closed
 
-## Requirement Ownership Moved to the Successor Change (verify C1)
+## Requirement Physically Moved to the Successor Change (verify B1, closing the C1 gap)
 
 This change (Wave 7) does not deliver "Exactly One Lifecycle After
 Removal" — the WU18 attempt was deferred (see the Amendment below), so the
-switch and legacy start branch still ship. Carrying that requirement here
-as a plain, unqualified Requirement of THIS change's delta would claim
-delivery this wave never made. Its ownership therefore moves to whichever
-successor change eventually lands switch removal; its text is preserved
-verbatim, not weakened, so that successor change inherits the exact bar to
-clear:
-
-### Requirement: Exactly One Lifecycle After Removal (owned by the successor change that lands switch removal — NOT delivered by Wave 7)
-
-After removal, no `GENTLE_AI_RDD_NEW_LINEAGE` reference, legacy start
-branch, or legacy mutation path MUST remain reachable.
-
-#### Scenario: Every start request takes the v3 path
-
-- GIVEN the switch-removal slice has landed
-- WHEN any `start` is requested, or the codebase is searched for the switch
-- THEN it always proceeds through v3, and zero switch references remain
-  outside historical/archived change specs
+switch and legacy start branch still ship. Carrying that requirement in
+this delta, even relabeled, still counted it in Wave 7's own requirement
+inventory as an unmet requirement of THIS change (verify blocker B1:
+relabeling in place fixed the claim but not the arithmetic — 15 headings,
+14 delivered). It has therefore been physically moved, byte-identical and
+unweakened, into `openspec/changes/rdd-single-lifecycle-cutover/specs/rdd-single-lifecycle/spec.md`
+(`### Requirement: Exactly One Lifecycle After Removal`, same body, same
+scenario) — see that change's `proposal.md` for the precise re-entry
+brief. Ownership is now structural, not annotated: the requirement simply
+does not appear here.
 
 Wave 7's own delivered requirement is the re-entry gate immediately below
 ("Switch Removal Is Blocked On v3 Negotiated Repository Context") — that
 one Wave 7 both owns and satisfies (the gap it names is real, disclosed,
 and currently open).
+
+**Corrected counts for this change's delta** (three capability specs
+combined: `rdd-legacy-retirement`, `rdd-shadow-evaluation`,
+`rdd-single-lifecycle`), after this move: **14/14 requirements** delivered
+(was 14/15 before the move — the moved requirement is no longer counted
+here at all). Scenarios: **8/9** (was 8/10 — the moved requirement's own
+scenario left with it; one scenario gap remains in this change's own
+delivered requirement below, "Double-evaluation proves equivalence before
+deletion" — narrowed at apply time to the unnegotiated form, disclosed
+honestly rather than claimed complete; see Wave 7 tasks.md task 2.1 and
+verify finding SL-1).
 
 ## Amendment (Wave 7 S7, WU18 attempt — deferred, not landed)
 
