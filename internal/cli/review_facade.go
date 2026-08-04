@@ -772,9 +772,15 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 			return err
 		}
 		var runtime model.AgentID
-		if *contract == ReviewIntegrationContractV2 {
+		// A declared runtime identity is validated exactly as before, so an
+		// unsupported transport still stops here. An undeclared one is the
+		// manual/non-agent compatibility path runReviewFacadeStart already
+		// names: a read-only STATUS creates no authority, tier, budget, or
+		// collection state, so it has no state to fail closed over, and the
+		// documented route never declares an identity.
+		if *contract == ReviewIntegrationContractV2 && reviewRuntimeAgentCount(args) != 0 {
 			if reviewRuntimeAgentCount(args) != 1 {
-				// refusal:by-design world-action: a lifecycle route without one generated runtime identity cannot safely select a review transport
+				// refusal:by-design world-action: an ambiguous runtime identity cannot safely select a review transport
 				return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, errors.New("negotiated lifecycle STATUS requires exactly one generated runtime identity"))
 			}
 			var runtimeErr error
@@ -1466,9 +1472,13 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 			return reviewPreflightRefusal(reviewTransportCapabilityUnsupportedReason, err)
 		}
 	}
-	if negotiated && (*contract == ReviewIntegrationContractV2 || runtimeRequested) {
+	// The same admission as the capability gate above: an absent agent
+	// identity is the manual/non-agent compatibility path and is not gated,
+	// so the provider-returned START of an undeclared route stays runnable.
+	// Every declared identity is still proven before authority is created.
+	if negotiated && runtimeRequested {
 		if reviewRuntimeAgentCount(args) != 1 {
-			// refusal:by-design world-action: a START without one generated runtime identity cannot safely create review authority
+			// refusal:by-design world-action: an ambiguous runtime identity cannot safely create review authority
 			return reviewPreflightRefusal(reviewImmutableTransportUnsupportedReason, errors.New("negotiated START requires exactly one generated runtime identity"))
 		}
 		if _, err := reviewRuntimeWithImmutableTransport(*runtimeAgent); err != nil {
