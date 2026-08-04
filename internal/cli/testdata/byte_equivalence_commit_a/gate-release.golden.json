@@ -8,7 +8,7 @@
     "gate": "release",
     "lineage_id": "byte-equivalence-commit-a-lineage",
     "generation": 0,
-    "store_revision": "sha256:102ea9785165b4b0f59407f0d8b4ad45544d2aab69ce681e1cc0f801db15c192",
+    "store_revision": "sha256:{{path-dependent-authority-revision}}",
     "base_tree": "3e21a205dd9b55021aeae87965092623807e455f",
     "candidate_tree": "dda629df9960312d5fa455c0757f92502d06fcbc",
     "paths_digest": "",
