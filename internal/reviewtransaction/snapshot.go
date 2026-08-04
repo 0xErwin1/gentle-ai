@@ -601,9 +601,19 @@ func (builder SnapshotBuilder) ResolveRepositoryRoot(ctx context.Context) (strin
 	return root, nil
 }
 
-// DiscoverIntendedUntracked returns canonical untracked paths from the
-// requested repository while ignoring inherited Git repository selectors.
-func (builder SnapshotBuilder) DiscoverIntendedUntracked(ctx context.Context) ([]string, error) {
+// DiscoverUnignoredUntracked returns the canonical unignored untracked paths
+// of the requested repository while ignoring inherited Git repository
+// selectors.
+//
+// Issue #2394: this is a live worktree inventory, NOT a declaration of review
+// scope. It used to be handed straight to Target.IntendedUntracked, which made
+// every unignored file the user happened to have on disk part of the frozen
+// candidate and delivered its exact bytes to a reviewer. Review scope is now
+// declared the way Git has always let a user declare it: `git add` puts a new
+// file in the index, and the index is what the candidate is built from, so
+// callers that mean "what did the user submit" must not call this. The
+// remaining callers ask a different question: what is untracked right now.
+func (builder SnapshotBuilder) DiscoverUnignoredUntracked(ctx context.Context) ([]string, error) {
 	root, err := builder.ResolveRepositoryRoot(ctx)
 	if err != nil {
 		return nil, err

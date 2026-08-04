@@ -248,7 +248,7 @@ func escalatedCurrentChangesRecoveryFixture(t *testing.T, lineage string) (strin
 func reviewRecoverBaseDiffSuccessorIdentity(t *testing.T, repo, baseRef string) string {
 	t.Helper()
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
-	intended, err := builder.DiscoverIntendedUntracked(context.Background())
+	intended, err := builder.DiscoverUnignoredUntracked(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
