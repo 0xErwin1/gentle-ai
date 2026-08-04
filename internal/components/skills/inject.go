@@ -100,6 +100,17 @@ func directoryAssets(skillDir string, skillIDs []model.SkillID, capability strin
 // skills directory. Operation-level compatibility refreshes use this to avoid
 // routing the shared directory through every selected agent adapter.
 func InjectDirectoryWithCapability(skillDir string, skillIDs []model.SkillID, capability string) (InjectionResult, error) {
+	return InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, capability, filemerge.WriteFileAtomic)
+}
+
+// InjectDirectoryWithWriter writes ordinary skills with a caller-selected writer.
+// Compatibility refreshes use this to keep their physical-directory contract.
+func InjectDirectoryWithWriter(skillDir string, skillIDs []model.SkillID, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
+	return InjectDirectoryWithCapabilityWithWriter(skillDir, skillIDs, "", writeFile)
+}
+
+// InjectDirectoryWithCapabilityWithWriter writes skills with a caller-selected writer.
+func InjectDirectoryWithCapabilityWithWriter(skillDir string, skillIDs []model.SkillID, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
 	entries, skipped, err := directoryAssets(skillDir, skillIDs, capability)
 	if err != nil {
 		return InjectionResult{}, err
@@ -116,7 +127,7 @@ func InjectDirectoryWithCapability(skillDir string, skillIDs []model.SkillID, ca
 		if capability != "" {
 			content = extractModelSection(content, capability)
 		}
-		writeResult, err := filemerge.WriteFileAtomic(entry.destination, []byte(content), 0o644)
+		writeResult, err := writeFile(entry.destination, []byte(content), 0o644)
 		if err != nil {
 			return InjectionResult{}, fmt.Errorf("write %q: %w", entry.destination, err)
 		}
@@ -140,11 +151,6 @@ func InjectDirectoryWithCapability(skillDir string, skillIDs []model.SkillID, ca
 // and skipped rather than aborting the entire operation.
 func Inject(homeDir string, adapter agents.Adapter, skillIDs []model.SkillID) (InjectionResult, error) {
 	return InjectWithCapability(homeDir, adapter, skillIDs, "")
-}
-
-// InjectDirectory writes ordinary selected skills directly to skillDir.
-func InjectDirectory(skillDir string, skillIDs []model.SkillID) (InjectionResult, error) {
-	return InjectDirectoryWithCapability(skillDir, skillIDs, "")
 }
 
 // SkillPathForAgent returns the filesystem path where a skill file would be written.

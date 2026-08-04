@@ -248,6 +248,11 @@ func SkillDirectoryPaths(skillDir, capability string) ([]string, error) {
 // an already-selected skills directory. It is separate from adapter injection
 // so compatibility paths can be refreshed once per operation.
 func InjectSkillDirectory(skillDir, capability string) (InjectionResult, error) {
+	return InjectSkillDirectoryWithWriter(skillDir, capability, filemerge.WriteFileAtomic)
+}
+
+// InjectSkillDirectoryWithWriter refreshes SDD skills with a caller-selected writer.
+func InjectSkillDirectoryWithWriter(skillDir, capability string, writeFile func(string, []byte, fs.FileMode) (filemerge.WriteResult, error)) (InjectionResult, error) {
 	sharedFiles, err := assets.SharedSkillFileNames()
 	if err != nil {
 		return InjectionResult{}, fmt.Errorf("resolve SDD shared files: %w", err)
@@ -267,7 +272,7 @@ func InjectSkillDirectory(skillDir, capability string) (InjectionResult, error) 
 		}
 
 		path := filepath.Join(skillDir, "_shared", fileName)
-		writeResult, err := filemerge.WriteFileAtomic(path, []byte(content), 0o644)
+		writeResult, err := writeFile(path, []byte(content), 0o644)
 		if err != nil {
 			return InjectionResult{}, err
 		}
@@ -278,7 +283,7 @@ func InjectSkillDirectory(skillDir, capability string) (InjectionResult, error) 
 	if capability == "" {
 		capability = "capable"
 	}
-	sddResult, err := skills.InjectDirectoryWithCapability(skillDir, compatibilitySDDSkillIDs, capability)
+	sddResult, err := skills.InjectDirectoryWithCapabilityWithWriter(skillDir, compatibilitySDDSkillIDs, capability, writeFile)
 	if err != nil {
 		return InjectionResult{}, fmt.Errorf("inject SDD skills: %w", err)
 	}

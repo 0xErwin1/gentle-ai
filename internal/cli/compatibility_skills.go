@@ -2,12 +2,14 @@ package cli
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/filemerge"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/sdd"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/components/skills"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
@@ -25,6 +27,11 @@ type compatibilitySkillsRefreshStep struct {
 }
 
 var lstatCompatibilityDestination = os.Lstat
+
+type compatibilityDirectoryWriter interface {
+	Write(string, []byte, fs.FileMode) (filemerge.WriteResult, error)
+	Close() error
+}
 
 func (s compatibilitySkillsRefreshStep) ID() string {
 	if s.id != "" {
@@ -140,6 +147,12 @@ func (s compatibilitySkillsRefreshStep) Run() error {
 		return nil
 	}
 
+	writer, err := newCompatibilityDirectoryWriter(s.homeDir, skillDir)
+	if err != nil {
+		return err
+	}
+	defer writer.Close()
+
 	_, err = compatibilitySkillFiles(skillDir, s.components, s.selection)
 	if err != nil {
 		return err
@@ -149,7 +162,7 @@ func (s compatibilitySkillsRefreshStep) Run() error {
 	if slices.Contains(s.components, model.ComponentSkills) {
 		skillIDs := selectedSkillIDs(s.selection)
 		if len(skillIDs) > 0 {
-			result, injectErr := skills.InjectDirectory(skillDir, skillIDs)
+			result, injectErr := skills.InjectDirectoryWithWriter(skillDir, skillIDs, writer.Write)
 			if injectErr != nil {
 				return fmt.Errorf("refresh compatibility skills: %w", injectErr)
 			}
@@ -160,7 +173,7 @@ func (s compatibilitySkillsRefreshStep) Run() error {
 	}
 
 	if slices.Contains(s.components, model.ComponentSDD) {
-		result, injectErr := sdd.InjectSkillDirectory(skillDir, "")
+		result, injectErr := sdd.InjectSkillDirectoryWithWriter(skillDir, "", writer.Write)
 		if injectErr != nil {
 			return fmt.Errorf("refresh compatibility SDD skills: %w", injectErr)
 		}

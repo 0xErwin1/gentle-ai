@@ -190,6 +190,51 @@ func TestCompatibilitySkillsRefreshRequiresPhysicalDirectory(t *testing.T) {
 	}
 }
 
+func TestCompatibilityRefreshDoesNotFollowParentSwappedAfterValidation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation may require elevated privileges")
+	}
+
+	home, outside := t.TempDir(), t.TempDir()
+	skillsDir := filepath.Join(home, ".agents", "skills")
+	inside := filepath.Join(skillsDir, "go-testing")
+	destination := filepath.Join(inside, "references", "examples.md")
+	if err := os.MkdirAll(inside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	originalLstat := lstatCompatibilityDestination
+	swapped := false
+	lstatCompatibilityDestination = func(path string) (os.FileInfo, error) {
+		info, err := originalLstat(path)
+		if path == destination && !swapped {
+			swapped = true
+			if err := os.Rename(inside, inside+"-original"); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, inside); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return info, err
+	}
+	t.Cleanup(func() { lstatCompatibilityDestination = originalLstat })
+
+	step := compatibilitySkillsRefreshStep{
+		homeDir:    home,
+		components: []model.ComponentID{model.ComponentSkills},
+		selection:  model.Selection{Skills: []model.SkillID{model.SkillGoTesting}},
+	}
+	err := step.Run()
+	if !swapped {
+		t.Fatal("test did not reach the validation-to-write swap window")
+	}
+	_, outsideErr := os.Stat(filepath.Join(outside, "SKILL.md"))
+	if err == nil || outsideErr == nil {
+		t.Fatalf("compatibility refresh must reject the swapped parent without external mutation: error=%v external=%v", err, outsideErr)
+	}
+}
+
 func TestCompatibilityManagedPathErrorsReachBackupPreparation(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, ".agents", "skills"), 0o755); err != nil {
@@ -454,7 +499,7 @@ func TestAdapterSkillBackupRollbackRemovesNewFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := componentskills.InjectDirectory(skillDir, selection.Skills); err != nil {
+	if _, err := componentskills.InjectDirectoryWithCapability(skillDir, selection.Skills, ""); err != nil {
 		t.Fatal(err)
 	}
 	created := filepath.Join(skillDir, "go-testing", "references", "examples.md")
