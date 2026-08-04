@@ -211,15 +211,32 @@ release candidate's community testing).
   lineage) partially met with WU18a's disclosed, coordinator-approved
   exception documented inline.
 - [x] 20.3 Exit Checklist: gofmt/vet clean (root + bench), deadcode ratchet
-  244→243 net-negative across the wave (wave-wide +1701/-8968, net -7267
-  lines from the v1-freeze checkpoint), refusal-resolution ratchet
-  1694→1586 net-negative (net -108) from the v1-freeze checkpoint, root
-  `go test ./... -count=1` fully GREEN with zero failures (RG.1b's own
-  long-standing expected-red resolved at WU19), bench module tests green,
-  final verb count: 5 legacy public verbs + 2 reconcile providers retired;
-  6 D4 verbs classified live (not retired) pending switch removal; the
-  switch itself retained. See apply-progress and this file's own per-WU
-  entries for the complete evidence trail.
+  247→243 net-negative across the wave (net -4; wave-wide +1701/-8968, net
+  -7267 lines from the v1-freeze checkpoint `d10d49ab`; 247 is the true
+  wave-wide starting figure — correcting a WU20 misreport that cited 244,
+  WU4's mid-wave value, as the wave's start rather than 247), refusal-
+  resolution ratchet 1694→1586 net-negative (net -108) from the v1-freeze
+  checkpoint, root `go test ./... -count=1` fully GREEN with zero failures
+  (RG.1b's own long-standing expected-red resolved at WU19), bench module
+  tests green, final verb count: 5 legacy public verbs + 2 reconcile
+  providers retired; 6 D4 verbs classified live (not retired) pending
+  switch removal; the switch itself retained. See apply-progress and this
+  file's own per-WU entries for the complete evidence trail.
+- [x] 20.5 verify W4: `docs/architecture/rdd-wave7-deletion-proof-tracker.md`
+  declared a WU20 obligation (re-read the retention table, confirm RG.1b is
+  fully GREEN with zero legacy verbs reachable, then update
+  `rdd-backlog-disposition.md`'s closure-audit-protocol row for step 4)
+  that WU20 never performed, and its stated condition ("zero legacy verbs
+  reachable") was invalidated by WU19's finding that all 6 D4 verbs stay
+  live/reachable. Reconciled honestly in both the tracker and
+  `rdd-backlog-disposition.md` rather than silently marking a now-false
+  condition satisfied — see those files for the corrected text.
+- [x] 20.6 verify W5: the `reconcile-authority` retirement (WU7) left the
+  `unchanged_target` and `malformed_recovery_authorization` anomaly classes
+  without their only advertised runnable exit (disclosed inline in
+  `compact_inspect.go`/`compact_reclaim.go` comments and in WU7's own tasks
+  entry). This loss is now tracked as follow-up issue #2422; see that issue
+  for the two anomaly classes and their lost exit paths.
 
 ## Exit Checklist (every WU)
 - [ ] `go test ./... -count=1` root module green.
