@@ -25,7 +25,7 @@ func TestReviewFacadeStartHighRiskCarriesConsentEvidencePhrases(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "evidence-high"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", "evidence-high"}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
@@ -80,7 +80,7 @@ func TestReviewFacadeStartMediumRiskCarriesConsentReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "evidence-medium"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", "evidence-medium"}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
@@ -190,7 +190,7 @@ func TestReviewFacadeStartDocsOnlyOmitsRiskEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "evidence-docs"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", "evidence-docs"}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
@@ -234,7 +234,7 @@ func TestReviewFacadeStartResultOmitsAdditiveFieldsWhenAbsent(t *testing.T) {
 func TestReviewFacadeStartEmptyCandidateHintsBaseRef(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "evidence-empty"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", "evidence-empty"}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
@@ -266,7 +266,7 @@ func TestReviewFacadeStartNonEmptyCandidateWithoutLensesHasNoHint(t *testing.T) 
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "evidence-nonempty"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", "evidence-nonempty"}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
@@ -299,7 +299,7 @@ func TestReviewFacadeStartLensesRequiredHintsNegotiatedContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", "evidence-hint-contract"}, &output); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", "evidence-hint-contract"}, &output); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
@@ -330,7 +330,7 @@ func TestReviewFacadeStartBaseDiffHintReplaysFrozenSelector(t *testing.T) {
 	runReviewCLIGit(t, repo, "commit", "-m", "feature candidate")
 
 	var plain bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--base-ref", "feature-base", "--committed-only"}, &plain); err != nil {
+	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--base-ref", "feature-base", "--committed-only"}, &plain); err != nil {
 		t.Fatal(err)
 	}
 	var started ReviewFacadeStartResult
