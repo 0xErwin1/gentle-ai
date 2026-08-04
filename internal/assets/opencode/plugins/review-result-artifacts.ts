@@ -5,7 +5,20 @@ const REVIEW_AGENTS = new Set(["review-risk", "review-resilience", "review-reada
 const BINDING = /^GENTLE_AI_REVIEW_BINDING (\{[^\n]+\})(?:\n|$)/
 const TASK_RESULT = /^<task id="[^"\r\n]+" state="completed">\n<task_result>\n([\s\S]*?)\n<\/task_result>\n<\/task>$/
 const TASK_TAG = /<\/?task(?:\s|>)|<\/?task_result>/
-const REVIEW_OUTCOME = { UNSUPPORTED_CAPABILITY: "unsupported-capability" } as const
+
+// REVIEW_CONTEXT_BYTE_BUDGET bounds the immutable candidate evidence this
+// plugin materializes into a reviewer task's `args.prompt` before the task
+// ever launches. Measured empirically against the pinned OpenCode runtime
+// (internal/versions.OpenCode): a plugin-mutated `task` prompt reached the
+// subagent's own model call byte-for-byte, with zero truncation observed, at
+// every tested size from 5 KB up to 16 MiB — far past this budget and past
+// the native per-command MaxFrozenCandidateDiffBytes cap of 4 MiB
+// (internal/reviewtransaction/frozen_candidate_context.go). This budget sits
+// well inside that verified-safe range, not at its edge, and is enforced by
+// outright refusal: exceeding it fails the reviewer launch closed. It never
+// truncates, because a truncated candidate view could fabricate a
+// false-clean result.
+const REVIEW_CONTEXT_BYTE_BUDGET = 1_048_576 // 1 MiB
 
 type ReviewBinding = {
   lineage: string
@@ -229,12 +242,88 @@ function validManifestEntry(entry: unknown): entry is ChangedPathManifestEntry {
     typeof value.mode_only === "boolean" && typeof value.intended_untracked === "boolean"
 }
 
+// inspectionArgs builds one exact `review inspect-candidate` invocation from
+// the injected binding. Global operations (name-status, numstat) take no
+// path index; patch takes the zero-based canonical changed_path_manifest
+// index, matching internal/cli/review_inspect_candidate.go exactly.
+function inspectionArgs(binding: ReviewBinding, operation: string, pathIndex?: number): string[] {
+  const args = [
+    "review", "inspect-candidate",
+    "--repository-context", binding.repository_context as string,
+    "--expected-revision", binding.revision as string,
+    "--lineage", binding.lineage, "--target", binding.target,
+    "--lens", binding.lens, "--order", String(binding.order),
+    "--operation", operation,
+  ]
+  if (pathIndex !== undefined) args.push("--path-index", String(pathIndex))
+  return args
+}
+
+// materializeReviewEvidence runs every discovery and per-path patch command
+// through the shell-less native channel (runNative), never through a tool
+// the reviewer session itself could invoke. The reviewer holds no bash and
+// no read tool: this provider-injected block is its only byte source. Any
+// native failure or budget overflow throws before the reviewer ever
+// launches; there is no partial-evidence or truncated-evidence outcome.
+async function materializeReviewEvidence(cwd: string, binding: ReviewBinding, preflight: ReviewCapturePreflight): Promise<string> {
+  if (!binding.repository_context || !binding.revision) {
+    throw new Error(
+      "immutable OpenCode candidate inspection requires a repository-context binding; " +
+      "the reviewer was not launched, so its exactly-once invocation is preserved",
+    )
+  }
+  try {
+    let budget = REVIEW_CONTEXT_BYTE_BUDGET
+    const sections: string[] = []
+    const consume = (header: string, body: string, footer: string) => {
+      const rendered = `${header}\n${body}\n${footer}\n`
+      budget -= Buffer.byteLength(rendered, "utf8")
+      if (budget < 0) {
+        throw Object.assign(new Error("review context evidence budget exceeded"), { reviewBudgetExceeded: true })
+      }
+      sections.push(rendered)
+    }
+    consume(
+      "GENTLE_AI_REVIEW_NAME_STATUS",
+      await runNative(cwd, inspectionArgs(binding, "name-status"), ""),
+      "GENTLE_AI_REVIEW_NAME_STATUS_END",
+    )
+    consume(
+      "GENTLE_AI_REVIEW_NUMSTAT",
+      await runNative(cwd, inspectionArgs(binding, "numstat"), ""),
+      "GENTLE_AI_REVIEW_NUMSTAT_END",
+    )
+    for (let index = 0; index < preflight.changed_path_manifest.length; index++) {
+      const entry = preflight.changed_path_manifest[index]
+      const patch = await runNative(cwd, inspectionArgs(binding, "patch", index), "")
+      consume(`GENTLE_AI_REVIEW_PATCH ${index} ${entry.path}`, patch, "GENTLE_AI_REVIEW_PATCH_END")
+    }
+    return sections.join("")
+  } catch (cause) {
+    if ((cause as { reviewBudgetExceeded?: boolean } | null)?.reviewBudgetExceeded) {
+      throw new Error(
+        `review context exceeds the ${REVIEW_CONTEXT_BYTE_BUDGET}-byte provider injection budget for lens ${binding.lens}; ` +
+        "The reviewer was not launched, so its exactly-once invocation is preserved; " +
+        "immutable candidate evidence is never truncated",
+      )
+    }
+    throw new Error(
+      `review context evidence materialization failed for lens ${binding.lens}: ` +
+      `${sessionErrorMessage(binding, cause, "repository_context_evidence_failed")}. ` +
+      "The reviewer was not launched, so its exactly-once invocation is preserved.",
+    )
+  }
+}
+
 async function injectReviewerContext(prompt: string, lens: string, cwd: string): Promise<string> {
   const binding = parseBinding(prompt, lens)
   const preflight = await preflightCapture(cwd, binding)
   const injectedBinding = { ...binding, subject_hash: preflight.artifact_subject.subject_hash }
+  const evidence = await materializeReviewEvidence(cwd, injectedBinding, preflight)
   return `GENTLE_AI_REVIEW_BINDING ${JSON.stringify(injectedBinding)}\n` +
-    `GENTLE_AI_REVIEW_CONTEXT ${JSON.stringify(preflight)}\n`
+    `GENTLE_AI_REVIEW_CONTEXT ${JSON.stringify(preflight)}\n` +
+    evidence +
+    `GENTLE_AI_REVIEW_CONTEXT_END\n`
 }
 
 function preserveResult(cwd: string, binding: ReviewBinding, raw: string, cls?: string): Promise<string> {
@@ -467,8 +556,11 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
     if (output.args.background === true) {
       throw new Error("bound review tasks must run in the foreground for native result capture")
     }
-    parseBinding(output.args.prompt, output.args.subagent_type)
-    throw new Error(REVIEW_OUTCOME.UNSUPPORTED_CAPABILITY)
+    output.args.prompt = await injectReviewerContext(
+      output.args.prompt,
+      output.args.subagent_type,
+      captureCwd(worktree, directory),
+    )
   },
   "tool.execute.after": async (input, output) => {
     if (input.tool !== "task" || typeof input.args?.subagent_type !== "string" || !REVIEW_AGENTS.has(input.args.subagent_type)) return

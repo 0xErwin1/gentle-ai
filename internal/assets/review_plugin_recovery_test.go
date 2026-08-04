@@ -1,6 +1,7 @@
 package assets
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -118,6 +119,29 @@ func runReviewPluginScenarioWithNative(t *testing.T, scenario, nativeStdout, nat
 }
 
 func runReviewPluginScenarioWithNativeAndPreservation(t *testing.T, scenario, nativeStdout, nativeStderr, preserveStdout string) string {
+	return runReviewPluginScenarioStub(t, scenario, reviewPluginStub{
+		stdout: nativeStdout, stderr: nativeStderr, preserveStdout: preserveStdout,
+	})
+}
+
+// reviewPluginStub configures the fake `gentle-ai` binary the harness runs
+// against. preflight/nameStatus/numstat/patches feed the provider-injected
+// evidence-materialization path (`review inspect-candidate`); stdout/stderr
+// remain the generic fallback used by the capture/preserve-result scenarios
+// that predate evidence materialization.
+type reviewPluginStub struct {
+	stdout         string
+	stderr         string
+	preserveStdout string
+	preflight      string
+	nameStatus     string
+	numstat        string
+	patches        []string
+	inspectStderr  string
+	patchHugeBytes int
+}
+
+func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPluginStub) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the stub native binary requires a POSIX shell")
@@ -138,12 +162,46 @@ func runReviewPluginScenarioWithNativeAndPreservation(t *testing.T, scenario, na
 			t.Fatal(err)
 		}
 	}
-	stub := "#!/bin/sh\npayload=$(cat)\n" +
-		"if [ \"$2\" = \"capture-result\" ]; then case \"$payload\" in *capture-success*) printf '%s\\n' 'CAPTURED'; exit 0;; esac; fi\n" +
+	// The stub parses --operation/--path-index itself so `review
+	// inspect-candidate` calls (name-status, numstat, one patch per manifest
+	// index) return distinct, index-addressable evidence, exactly like the
+	// real native command does for the frozen trees. A huge patch is
+	// generated on the fly from /dev/zero so budget-overflow tests never push
+	// megabytes of payload through argv/env (ARG_MAX).
+	stubScript := "#!/bin/sh\npayload=$(cat)\n" +
+		"op=\"\"; path_index=\"\"; prev=\"\"\n" +
+		"for arg in \"$@\"; do\n" +
+		"  case \"$prev\" in\n" +
+		"    --operation) op=\"$arg\" ;;\n" +
+		"    --path-index) path_index=\"$arg\" ;;\n" +
+		"  esac\n" +
+		"  prev=\"$arg\"\n" +
+		"done\n" +
+		"if [ \"$2\" = \"inspect-candidate\" ]; then\n" +
+		"  case \"$op\" in\n" +
+		"    name-status) printf '%s\\n' \"$GENTLE_AI_STUB_INSPECT_NAME_STATUS\"; exit 0 ;;\n" +
+		"    numstat) printf '%s\\n' \"$GENTLE_AI_STUB_INSPECT_NUMSTAT\"; exit 0 ;;\n" +
+		"    patch)\n" +
+		"      eval \"value=\\$GENTLE_AI_STUB_INSPECT_PATCH_$path_index\"\n" +
+		"      if [ -n \"$value\" ]; then printf '%s\\n' \"$value\"; exit 0; fi\n" +
+		"      if [ -n \"$GENTLE_AI_STUB_INSPECT_PATCH_HUGE_BYTES\" ]; then\n" +
+		"        head -c \"$GENTLE_AI_STUB_INSPECT_PATCH_HUGE_BYTES\" /dev/zero | tr '\\0' 'A'\n" +
+		"        exit 0\n" +
+		"      fi\n" +
+		"      ;;\n" +
+		"  esac\n" +
+		"  if [ -n \"$GENTLE_AI_STUB_INSPECT_STDERR\" ]; then printf '%s\\n' \"$GENTLE_AI_STUB_INSPECT_STDERR\" >&2; exit 1; fi\n" +
+		"fi\n" +
+		"if [ \"$2\" = \"capture-result\" ]; then\n" +
+		"  case \"$payload\" in *capture-success*) printf '%s\\n' 'CAPTURED'; exit 0;; esac\n" +
+		"  if [ -n \"$GENTLE_AI_STUB_PREFLIGHT\" ]; then\n" +
+		"    case \"$*\" in *--preflight*) printf '%s\\n' \"$GENTLE_AI_STUB_PREFLIGHT\"; exit 0 ;; esac\n" +
+		"  fi\n" +
+		"fi\n" +
 		"if [ \"$2\" = \"preserve-result\" ] && [ -n \"$GENTLE_AI_STUB_PRESERVE_STDOUT\" ]; then printf '%s\\n' \"$GENTLE_AI_STUB_PRESERVE_STDOUT\"; exit 0; fi\n" +
 		"if [ -n \"$GENTLE_AI_STUB_STDOUT\" ]; then printf '%s\\n' \"$GENTLE_AI_STUB_STDOUT\"; exit 0; fi\n" +
 		"printf '%s\\n' \"$GENTLE_AI_STUB_STDERR\" >&2\nexit 1\n"
-	if err := os.WriteFile(filepath.Join(binDir, "gentle-ai"), []byte(stub), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(binDir, "gentle-ai"), []byte(stubScript), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "plugin.mts"), []byte(source), 0o600); err != nil {
@@ -154,13 +212,24 @@ func runReviewPluginScenarioWithNativeAndPreservation(t *testing.T, scenario, na
 	}
 	command := exec.Command(node, "harness.mts", scenario, workDir)
 	command.Dir = root
-	command.Env = append(os.Environ(),
+	env := append(os.Environ(),
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"GENTLE_AI_STUB_STDOUT="+nativeStdout,
-		"GENTLE_AI_STUB_STDERR="+nativeStderr,
-		"GENTLE_AI_STUB_PRESERVE_STDOUT="+preserveStdout,
+		"GENTLE_AI_STUB_STDOUT="+stub.stdout,
+		"GENTLE_AI_STUB_STDERR="+stub.stderr,
+		"GENTLE_AI_STUB_PRESERVE_STDOUT="+stub.preserveStdout,
+		"GENTLE_AI_STUB_PREFLIGHT="+stub.preflight,
+		"GENTLE_AI_STUB_INSPECT_NAME_STATUS="+stub.nameStatus,
+		"GENTLE_AI_STUB_INSPECT_NUMSTAT="+stub.numstat,
+		"GENTLE_AI_STUB_INSPECT_STDERR="+stub.inspectStderr,
 		"GENTLE_AI_REVIEW_CWD=",
 	)
+	if stub.patchHugeBytes > 0 {
+		env = append(env, fmt.Sprintf("GENTLE_AI_STUB_INSPECT_PATCH_HUGE_BYTES=%d", stub.patchHugeBytes))
+	}
+	for index, patch := range stub.patches {
+		env = append(env, fmt.Sprintf("GENTLE_AI_STUB_INSPECT_PATCH_%d=%s", index, patch))
+	}
+	command.Env = env
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Skipf("node could not run the TypeScript plugin harness (%v): %s", err, output)
@@ -187,13 +256,204 @@ func TestReviewPluginRejectsInvalidBindingBeforeReviewerLaunch(t *testing.T) {
 	}
 }
 
-func TestReviewPluginRejectsUnsupportedInspectionBeforeReviewerLaunch(t *testing.T) {
-	message := runReviewPluginScenario(t, "before-valid", "NATIVE-PROCESS-MUST-NOT-RUN")
-	if message != "unsupported-capability" {
-		t.Fatalf("unsupported inspection did not stop before reviewer launch: %s", message)
+// reviewPluginPreflight builds a valid single-path preflight response for
+// lineage "trust-check" / target sha256:d...
+func reviewPluginPreflight(baseTree, candidateTree string) string {
+	return reviewPluginPreflightWithPaths(baseTree, candidateTree, []string{"internal/example.go"})
+}
+
+// reviewPluginPreflightWithPaths builds a preflight response whose manifest
+// holds one entry per path, in the given (already-canonical) order.
+func reviewPluginPreflightWithPaths(baseTree, candidateTree string, paths []string) string {
+	entries := make([]string, len(paths))
+	for index, path := range paths {
+		entries[index] = `{"path":"` + path + `","status":"M","old_mode":"100644","new_mode":"100644","deleted":false,"type_changed":false,"mode_only":false,"intended_untracked":false}`
 	}
-	if strings.Contains(message, "NATIVE-PROCESS-MUST-NOT-RUN") {
-		t.Fatalf("unsupported inspection started a native process: %s", message)
+	return `{"schema":"gentle-ai.review-capture-preflight/v1","capability":"review.native_capture_preflight",` +
+		`"lineage_id":"trust-check","target_identity":"sha256:` + strings.Repeat("d", 64) + `","lens":"review-risk","selected_order":0,` +
+		`"artifact_subject":{"schema":"gentle-ai.review-artifact-subject/v2","subject_hash":"sha256:` + strings.Repeat("c", 64) + `",` +
+		`"lineage_id":"trust-check","authority_revision":"sha256:` + strings.Repeat("b", 64) + `","target_identity":"sha256:` + strings.Repeat("d", 64) + `",` +
+		`"base_tree":"` + baseTree + `","candidate_tree":"` + candidateTree + `","changed_path_manifest_sha256":"sha256:` + strings.Repeat("e", 64) + `",` +
+		`"lens":"review-risk","selected_order":0},"base_tree":"` + baseTree + `","candidate_tree":"` + candidateTree + `",` +
+		`"changed_path_manifest":[` + strings.Join(entries, ",") + `]}`
+}
+
+// TestReviewPluginBindsProviderOwnedCandidateContext pins the restored
+// shell-less transport: the plugin itself materializes name-status, numstat,
+// and one verbatim patch per manifest path through the native channel, and
+// injects all of it into the reviewer's prompt before the reviewer ever
+// launches. No shell and no read tool exist on the reviewer side, so this
+// injected block is provably its only byte source.
+func TestReviewPluginBindsProviderOwnedCandidateContext(t *testing.T) {
+	baseTree := strings.Repeat("1", 40)
+	candidateTree := strings.Repeat("2", 40)
+	preflight := reviewPluginPreflight(baseTree, candidateTree)
+	prompt := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
+		preflight: preflight, nameStatus: "M\tinternal/example.go", numstat: "3\t1\tinternal/example.go",
+		patches: []string{"--- a/internal/example.go\n+++ b/internal/example.go\n@@ -1,1 +1,1 @@\n-old\n+new\n"},
+	})
+	if !strings.HasPrefix(prompt, "GENTLE_AI_REVIEW_BINDING {") {
+		t.Fatalf("injected prompt does not begin with the exact binding prefix: %q", prompt)
+	}
+	if !strings.Contains(prompt, `"subject_hash":"sha256:`+strings.Repeat("c", 64)+`"`) {
+		t.Fatalf("bound prompt is missing the preflight subject hash: %q", prompt)
+	}
+	for _, want := range []string{
+		"GENTLE_AI_REVIEW_CONTEXT ", baseTree, candidateTree, "internal/example.go",
+		"GENTLE_AI_REVIEW_NAME_STATUS\nM\tinternal/example.go\nGENTLE_AI_REVIEW_NAME_STATUS_END",
+		"GENTLE_AI_REVIEW_NUMSTAT\n3\t1\tinternal/example.go\nGENTLE_AI_REVIEW_NUMSTAT_END",
+		"GENTLE_AI_REVIEW_PATCH 0 internal/example.go\n--- a/internal/example.go",
+		"+new\nGENTLE_AI_REVIEW_PATCH_END",
+		"GENTLE_AI_REVIEW_CONTEXT_END",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("plugin omitted provider context %q: %q", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "candidate_diff") {
+		t.Fatalf("injected prompt contains obsolete candidate diff payload: %q", prompt)
+	}
+}
+
+// TestReviewPluginOrdersEvidenceByManifestIndex proves multi-path evidence is
+// materialized once per canonical manifest index, in exact order, each
+// carrying its own index and literal path.
+func TestReviewPluginOrdersEvidenceByManifestIndex(t *testing.T) {
+	baseTree := strings.Repeat("1", 40)
+	candidateTree := strings.Repeat("2", 40)
+	paths := []string{"internal/a.go", "internal/b.go"}
+	preflight := reviewPluginPreflightWithPaths(baseTree, candidateTree, paths)
+	prompt := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
+		preflight: preflight, nameStatus: "M\tinternal/a.go\nM\tinternal/b.go", numstat: "1\t1\tinternal/a.go\n1\t1\tinternal/b.go",
+		patches: []string{"PATCH-CONTENT-A", "PATCH-CONTENT-B"},
+	})
+	first := strings.Index(prompt, "GENTLE_AI_REVIEW_PATCH 0 internal/a.go")
+	second := strings.Index(prompt, "GENTLE_AI_REVIEW_PATCH 1 internal/b.go")
+	if first < 0 || second < 0 || first > second {
+		t.Fatalf("path evidence is not in exact manifest order: %q", prompt)
+	}
+	if !strings.Contains(prompt, "PATCH-CONTENT-A") || !strings.Contains(prompt, "PATCH-CONTENT-B") {
+		t.Fatalf("plugin omitted per-path patch content: %q", prompt)
+	}
+}
+
+// TestReviewPluginReplacesCallerAuthoredCandidateContext proves the
+// provider-injected prompt wholesale replaces caller-authored text: nothing
+// the caller wrote (a stale tree, a fabricated manifest, or free prose)
+// survives into the launched reviewer's prompt.
+func TestReviewPluginReplacesCallerAuthoredCandidateContext(t *testing.T) {
+	baseTree := strings.Repeat("1", 40)
+	candidateTree := strings.Repeat("2", 40)
+	prompt := runReviewPluginScenarioStub(t, "before-substitute", reviewPluginStub{
+		preflight:  reviewPluginPreflight(baseTree, candidateTree),
+		nameStatus: "M\tinternal/example.go", numstat: "1\t1\tinternal/example.go",
+		patches: []string{"REAL-PATCH-CONTENT"},
+	})
+	for _, callerValue := range []string{strings.Repeat("9", 40), strings.Repeat("8", 40), "caller.txt", "review the frozen candidate"} {
+		if strings.Contains(prompt, callerValue) {
+			t.Fatalf("provider injection retained caller-authored context %q: %q", callerValue, prompt)
+		}
+	}
+	for _, providerValue := range []string{baseTree, candidateTree, "internal/example.go", "REAL-PATCH-CONTENT"} {
+		if !strings.Contains(prompt, providerValue) {
+			t.Fatalf("provider injection omitted preflight context %q: %q", providerValue, prompt)
+		}
+	}
+}
+
+// TestReviewPluginFailsClosedWhenEvidenceMaterializationFails is mutation
+// proof (c): if evidence materialization fails partway (here, the numstat
+// call), the reviewer must never launch with the caller-authored prompt as a
+// fallback. A mutant that swallowed the failure and fell through to
+// `output.args.prompt` unchanged would leave the caller's own text in the
+// result; this test fails red against that mutant.
+func TestReviewPluginFailsClosedWhenEvidenceMaterializationFails(t *testing.T) {
+	baseTree := strings.Repeat("1", 40)
+	candidateTree := strings.Repeat("2", 40)
+	message := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
+		preflight:  reviewPluginPreflight(baseTree, candidateTree),
+		nameStatus: "M\tinternal/example.go",
+		// numstat left unset so the stub falls through to inspectStderr.
+		inspectStderr: "NATIVE-INSPECT-FAILED",
+	})
+	if !strings.Contains(message, "review context evidence materialization failed") {
+		t.Fatalf("evidence materialization failure did not stop the reviewer launch closed: %s", message)
+	}
+	if !strings.Contains(message, "The reviewer was not launched") {
+		t.Fatalf("evidence materialization failure lost its exactly-once guarantee: %s", message)
+	}
+	if strings.Contains(message, "review the frozen candidate") {
+		t.Fatalf("evidence materialization failure fell back to the caller-authored prompt: %s", message)
+	}
+}
+
+// TestReviewPluginFailsClosedOnEvidenceBudgetOverflow is mutation proof (d):
+// evidence that would exceed REVIEW_CONTEXT_BYTE_BUDGET must refuse the
+// reviewer launch outright, never truncate. A mutant that silently truncated
+// the oversized patch instead of refusing would produce a "completed"-shaped
+// result from partial evidence; this test fails red against that mutant,
+// because it demands the refusal message and demands the huge payload never
+// reached the result at all.
+func TestReviewPluginFailsClosedOnEvidenceBudgetOverflow(t *testing.T) {
+	baseTree := strings.Repeat("1", 40)
+	candidateTree := strings.Repeat("2", 40)
+	message := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
+		preflight:      reviewPluginPreflight(baseTree, candidateTree),
+		nameStatus:     "M\tinternal/example.go",
+		numstat:        "1\t1\tinternal/example.go",
+		patchHugeBytes: 2_000_000, // exceeds the 1,048,576-byte budget
+	})
+	if !strings.Contains(message, "provider injection budget") {
+		t.Fatalf("budget overflow did not refuse the reviewer launch: %s", message)
+	}
+	if !strings.Contains(message, "never truncated") {
+		t.Fatalf("budget overflow message does not rule out truncation: %s", message)
+	}
+	if !strings.Contains(message, "The reviewer was not launched") {
+		t.Fatalf("budget overflow lost its exactly-once guarantee: %s", message)
+	}
+	if len(message) > 4096 || strings.Count(message, "A") > 512 {
+		t.Fatalf("budget overflow leaked the oversized payload into the transcript: %d bytes", len(message))
+	}
+}
+
+// TestReviewPluginRequiresRepositoryContextForEvidenceMaterialization proves
+// the evidence-materialization guard: a binding without repository_context
+// and revision (the legacy shape) can never reach `inspect-candidate` at
+// all, even if its preflight response were somehow well-formed, because
+// inspect-candidate has no --cwd fallback.
+func TestReviewPluginRequiresRepositoryContextForEvidenceMaterialization(t *testing.T) {
+	baseTree := strings.Repeat("1", 40)
+	candidateTree := strings.Repeat("2", 40)
+	message := runReviewPluginScenarioStub(t, "before-legacy", reviewPluginStub{
+		preflight:     reviewPluginPreflight(baseTree, candidateTree),
+		inspectStderr: "NATIVE-INSPECT-MUST-NOT-RUN",
+	})
+	if !strings.Contains(message, "requires a repository-context binding") {
+		t.Fatalf("legacy binding did not refuse evidence materialization closed: %s", message)
+	}
+	if strings.Contains(message, "NATIVE-INSPECT-MUST-NOT-RUN") {
+		t.Fatalf("legacy binding attempted native candidate inspection: %s", message)
+	}
+}
+
+func TestReviewPluginRejectsNonCanonicalProviderManifest(t *testing.T) {
+	entry := `{"path":"internal/example.go","status":"M","old_mode":"100644","new_mode":"100644","deleted":false,"type_changed":false,"mode_only":false,"intended_untracked":false}`
+	unsorted := `{"path":"z.go","status":"M","old_mode":"100644","new_mode":"100644","deleted":false,"type_changed":false,"mode_only":false,"intended_untracked":false},` + entry
+	preflight := strings.Replace(reviewPluginPreflight(strings.Repeat("1", 40), strings.Repeat("2", 40)), entry, unsorted, 1)
+	message := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{preflight: preflight})
+	if !strings.Contains(message, "review capture preflight failed") || !strings.Contains(message, "The reviewer was not launched") {
+		t.Fatalf("non-canonical provider manifest was accepted: %s", message)
+	}
+	if strings.Contains(message, "incomplete artifact subject") {
+		t.Fatalf("opaque preflight exposed native validation detail: %s", message)
+	}
+}
+
+func TestReviewPluginRejectsLegacyBinaryWithoutPreflightBeforeReviewerLaunch(t *testing.T) {
+	message := runReviewPluginScenario(t, "before-legacy", "flag provided but not defined: -preflight")
+	if !strings.Contains(message, "review capture preflight failed") || !strings.Contains(message, "The reviewer was not launched") {
+		t.Fatalf("unsupported preflight did not fail closed before reviewer launch: %s", message)
 	}
 }
 
@@ -237,13 +497,26 @@ func TestReviewPluginPostLaunchTrustRefusalStaysActionable(t *testing.T) {
 	}
 }
 
-func TestReviewPluginStopsBeforeNativeGitTrustPreflight(t *testing.T) {
+// TestReviewPluginSurfacesNativeGitTrustRefusal pins the other half of
+// finding 1: the plugin must stop collapsing a native Git trust refusal into
+// "refresh the exact native next_transition", which cannot change the Git
+// trust context of an already-running host process.
+func TestReviewPluginSurfacesNativeGitTrustRefusal(t *testing.T) {
 	message := runReviewPluginScenario(t, "before-opaque", reviewPluginNativeTrustFailure)
-	if message != "unsupported-capability" {
-		t.Fatalf("plugin did not stop before native trust preflight: %s", message)
+	if message == "NO_ERROR" {
+		t.Fatal("preflight did not fail despite an always-failing native binary")
 	}
-	if strings.Contains(message, "git_repository_untrusted") {
-		t.Fatalf("plugin ran the native trust preflight: %s", message)
+	if !strings.Contains(message, "git_repository_untrusted") {
+		t.Fatalf("plugin suppressed the native Git trust refusal: %s", message)
+	}
+	if strings.Contains(message, "next_transition") {
+		t.Fatalf("plugin still advises refreshing the transition for a Git trust refusal: %s", message)
+	}
+	if !strings.Contains(message, "Restart the host process") {
+		t.Fatalf("plugin carries no instruction the caller can carry out: %s", message)
+	}
+	if !strings.Contains(message, "The reviewer was not launched") {
+		t.Fatalf("plugin lost its pre-launch exactly-once guarantee: %s", message)
 	}
 }
 
@@ -408,11 +681,18 @@ func TestReviewPluginBoundsRecoveryWithoutLifecycleEvents(t *testing.T) {
 	}
 }
 
-func TestReviewPluginStopsBeforeOpaquePreflight(t *testing.T) {
+// TestReviewPluginKeepsGenericOpaqueFailureOpaque proves the trust
+// pass-through is not a hole in the opaque path's path-safety rule: any
+// other native preflight failure still collapses into the generic
+// provider-owned message.
+func TestReviewPluginKeepsGenericOpaqueFailureOpaque(t *testing.T) {
 	leak := "repository_context_unavailable: provider-issued review repository context operation failed; " +
 		"failed under /home/someone/private/repo"
 	message := runReviewPluginScenario(t, "before-opaque", leak)
-	if message != "unsupported-capability" {
-		t.Fatalf("plugin did not stop before opaque preflight: %s", message)
+	if strings.Contains(message, "/home/someone/private/repo") {
+		t.Fatalf("plugin forwarded a native path through an opaque binding: %s", message)
+	}
+	if !strings.Contains(message, "repository_context_preflight_failed") {
+		t.Fatalf("generic opaque failure lost its provider-owned code: %s", message)
 	}
 }

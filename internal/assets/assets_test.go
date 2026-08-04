@@ -484,7 +484,14 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`artifact_subject`,
 		`GENTLE_AI_REVIEW_CONTEXT`,
 		`validManifest(manifest)`,
-		`REVIEW_OUTCOME.UNSUPPORTED_CAPABILITY`,
+		`output.args.prompt = await injectReviewerContext(`,
+		`async function materializeReviewEvidence(`,
+		`REVIEW_CONTEXT_BYTE_BUDGET`,
+		`GENTLE_AI_REVIEW_NAME_STATUS`,
+		`GENTLE_AI_REVIEW_NUMSTAT`,
+		`GENTLE_AI_REVIEW_PATCH`,
+		`GENTLE_AI_REVIEW_CONTEXT_END`,
+		`reviewBudgetExceeded`,
 		`"--lineage", binding.lineage`,
 		`"--target", binding.target`,
 		`"--lens", binding.lens`,
@@ -529,7 +536,7 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		// bounded raw payload in the thrown error so the transcript retains it.
 		`raw reviewer result follows for manual recovery`,
 		`PRESERVE_EMBED_LIMIT`,
-		`REVIEW_OUTCOME.UNSUPPORTED_CAPABILITY`,
+		`function inspectionArgs(`,
 		`export default ReviewResultArtifactsPlugin`,
 	} {
 		if !strings.Contains(source, want) {
