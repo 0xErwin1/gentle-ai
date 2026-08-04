@@ -4,11 +4,20 @@
 
 ### Requirement: Advisory-Only, Never Blocking
 
-(Reason: Proposal D1 — the runtime shadow observer and `ShadowRelation`
-alias retire outright; `ShadowRelation` lives under
-`internal/reviewtransaction` so no external Go importer is possible.
-Task-time confirmation of zero in-module consumers is still required.)
-(Migration: None.)
+(Reason: Proposal D1 — the runtime shadow observer retired outright (WU4,
+Wave 7 S2a). The `ShadowRelation` type alias itself (candidate_relation.go)
+is DEFERRED, not retired, as of this wave's close-out: it lives under
+`internal/reviewtransaction` so no external Go importer is possible, but
+`shadow_relation_test.go` still spells out the `ShadowRelation*` names
+across several tests, and the rename pass to `CandidateRelation*` was
+disclosed at WU4 time as a small, independent follow-up not gating any
+later work unit. Confirmed zero PRODUCTION consumers remain — only its own
+test file and one unexported helper, `shadowRelationHasNoLiveCounterpart`,
+still spell it out.)
+(Migration: rename `ShadowRelation`/`ShadowRelation*` constants to
+`CandidateRelation`/`CandidateRelation*` across candidate_relation.go and
+shadow_relation_test.go in a follow-up slice; purely mechanical, no
+behavior change.)
 
 ### Requirement: Disable Switch Is the Observer's Rollback Boundary
 
