@@ -269,7 +269,14 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// now states the plugin's own isolation-environment refusal gate and the
 	// one channel (a remote `instructions` URL) that gate does not close.
 	// Deliberate, not drift.
-	const want = "176dcee8b59c3b73597bfcbd7ee55a6e4a7d97d84a33af6d7ae10b1b90dde5b0"
+	//
+	// The hash moved a fourth time in the same issue when the remote
+	// `instructions` gap itself closed: the plugin now reads the effective
+	// config through its own OpenCode client and refuses to launch the
+	// reviewer if a remote entry is present, so the sentence states an
+	// enforced check instead of a documented "must not configure" sentence.
+	// Deliberate, not drift.
+	const want = "27329c38df9afb32b6ed5f5f899c80c4770f0d5ddcfd4390bba9bc5196ef64d9"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -459,8 +466,16 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// OPENCODE_DISABLE_EXTERNAL_SKILLS) and the one channel -- a remote
 		// `instructions` URL -- that gate does not close. This is a
 		// deliberate contract correction, not drift.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_758, maxCharacters: 18_500},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 26_294, maxCharacters: 36_000},
+		//
+		// wantChars grew a fourth time by 159 (15,758 -> 15,917 / 26,294 ->
+		// 26,453) when the remote `instructions` gap itself closed: the
+		// plugin now reads the effective config through its own OpenCode
+		// client (client.config.get) and refuses to launch the reviewer if a
+		// remote entry is present, naming it, so the contract states an
+		// enforced check instead of a documented "must not configure"
+		// sentence. This is a deliberate contract correction, not drift.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_917, maxCharacters: 18_500},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 26_453, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
