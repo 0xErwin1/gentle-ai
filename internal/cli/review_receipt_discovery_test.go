@@ -1187,6 +1187,21 @@ func approveDiscoveryMarkdown(t *testing.T, repo, lineage, logicalPath, content 
 	return approveDiscoveryMarkdownProjection(t, repo, lineage, logicalPath, content, reviewtransaction.ProjectionWorkspace)
 }
 
+// approveDiscoveryMarkdownProjection builds and finalizes a LOW-risk legacy
+// (compact-v2) approved receipt over one passive markdown candidate.
+//
+// Before Wave 7 S7 (WU18), this called the CLI's own `review start` with the
+// (default, unset) activation switch off, which took the legacy compact-v2
+// branch. WU18 removed that branch entirely -- `review start` is now
+// unconditionally v3, so there is no CLI-reachable way left to create a NEW
+// legacy authority. Every one of this helper's ~44 call sites across 9 files
+// specifically needs genuine compact-v2 authority (proven by their own
+// reviewtransaction.CompactAuthoritativeStore/CompactStore-typed return
+// value and downstream use), so this constructs it directly through the
+// same reviewtransaction API runReviewFacadeStart's now-deleted legacy
+// branch used to call -- identical to finalizeApprovedFacadeReview's own
+// fix -- then finalizes through the unchanged CLI RunReviewFacadeFinalize
+// (finalize's discovery-by-kind logic never depended on the switch).
 func approveDiscoveryMarkdownProjection(t *testing.T, repo, lineage, logicalPath, content string, projection reviewtransaction.Projection) (ReviewFacadeStartResult, reviewtransaction.CompactStore) {
 	t.Helper()
 	path := filepath.Join(repo, filepath.FromSlash(logicalPath))
@@ -1199,15 +1214,59 @@ func approveDiscoveryMarkdownProjection(t *testing.T, repo, lineage, logicalPath
 	if projection == reviewtransaction.ProjectionStaged {
 		runReviewCLIGit(t, repo, "add", "-A")
 	}
-	var output bytes.Buffer
-	if err := RunReviewFacadeStart([]string{"--cwd", repo, "--lineage", lineage, "--projection", string(projection)}, &output); err != nil {
-		t.Fatal(err)
+
+	ctx := context.Background()
+	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
+	root, err := builder.ResolveRepositoryRoot(ctx)
+	if err != nil {
+		t.Fatalf("resolve discovery fixture repository root: %v", err)
 	}
-	var started ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, output.Bytes(), &started)
+	rootBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
+	intended := []string{}
+	if projection != reviewtransaction.ProjectionStaged {
+		intended, err = reviewFacadeDiscoverIntendedUntracked(ctx, rootBuilder)
+		if err != nil {
+			t.Fatalf("discover intended untracked files for discovery fixture %q: %v", lineage, err)
+		}
+	}
+	snapshot, err := rootBuilder.Build(ctx, reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: intended})
+	if err != nil {
+		t.Fatalf("build discovery fixture target %q: %v", lineage, err)
+	}
+	assessment, err := rootBuilder.AssessSnapshotRisk(ctx, snapshot)
+	if err != nil {
+		t.Fatalf("classify discovery fixture target %q: %v", lineage, err)
+	}
+	if assessment.Level != reviewtransaction.RiskLow {
+		t.Fatalf("discovery fixture risk = %q", assessment.Level)
+	}
+	lenses, err := facadeSelectedLenses(assessment, "reliability")
+	if err != nil {
+		t.Fatalf("select discovery fixture lenses %q: %v", lineage, err)
+	}
+	policy, err := facadePolicyBytes("")
+	if err != nil {
+		t.Fatalf("read discovery fixture policy %q: %v", lineage, err)
+	}
+	state, err := reviewtransaction.NewCompactState(reviewtransaction.Start{
+		LineageID: lineage, Mode: reviewtransaction.ModeOrdinaryBounded, Generation: 1,
+		Snapshot: snapshot, PolicyHash: facadePayloadHash(policy), RiskLevel: assessment.Level,
+		SelectedLenses: lenses, OriginalChangedLines: &assessment.ChangedLines,
+	})
+	if err != nil {
+		t.Fatalf("create discovery fixture state %q: %v", lineage, err)
+	}
+	compactStarted, err := reviewtransaction.StartCompactAuthority(ctx, root, reviewtransaction.CompactStartRequest{
+		State: state, ExplicitLineage: true,
+	})
+	if err != nil {
+		t.Fatalf("start discovery fixture compact authority %q: %v", lineage, err)
+	}
+	started := reviewFacadeStartResultFor(compactStarted.Action, compactStarted.LensesRequired, compactStarted.Record.State)
 	if started.RiskLevel != reviewtransaction.RiskLow {
 		t.Fatalf("discovery fixture risk = %q", started.RiskLevel)
 	}
+
 	if err := RunReviewFacadeFinalize([]string{"--cwd", repo, "--lineage", lineage}, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}

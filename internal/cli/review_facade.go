@@ -1590,14 +1590,143 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		return err
 	}
 	// Wave 3 Slice 3 activation branch (design decision 5): every input this
-	// call needs — snapshot, risk assessment, tier, lenses, and the fact that
-	// authorizeReviewStart already returned nil (consent granted, or tier 0's
-	// carve-out) — was already computed by the exact same reused code the
-	// legacy branch below still uses unchanged. GENTLE_AI_RDD_NEW_LINEAGE
-	// unset or empty (the default) never reaches this branch at all, so the
-	// legacy start path stays byte-identical.
+	// call needs -- snapshot, risk assessment, tier, lenses, and the fact
+	// that authorizeReviewStart already returned nil (consent granted, or
+	// tier 0's carve-out) -- was already computed by the exact same reused
+	// code the legacy branch below still uses unchanged.
+	// GENTLE_AI_RDD_NEW_LINEAGE unset or empty (the default) never reaches
+	// this branch at all, so the legacy start path stays byte-identical.
+	//
+	// Wave 7 S7 (WU18) attempted removing this switch and reverted (see
+	// newLineageActivationEnvVar's own doc comment and
+	// openspec/changes/rdd-root-simplification-wave7/specs/rdd-single-lifecycle
+	// for the full rationale: v3 negotiated START never gained
+	// repository_context support, and removing the switch would make every
+	// negotiated START take that gapped path unconditionally). WU18a (S7a)
+	// kept the genuinely additive work that attempt produced: the v1/v2
+	// legacy-collision start guards below (a real gap the switch-ON path
+	// had -- before WU18a, a switch-ON review start never checked for
+	// EITHER kind of existing legacy authority under the same lineage id at
+	// all) and negotiated-form support for a NEW v3 lineage (frozen
+	// candidate context; repository_context stays nil for v3, the
+	// remaining, disclosed gap).
 	if reviewtransaction.NewLineageActivationEnabled() {
-		return runReviewFacadeStartNewLineage(ctx, stdout, root, strings.TrimSpace(*lineage), strings.TrimSpace(*policySource), snapshot, assessment, changedLines, lenses)
+		// This exact "choose a new lineage for compact authority" wording is
+		// a deliberately shared, standardized route across every
+		// legacy-read-only collision this codebase names
+		// (review_operation_contract_test.go,
+		// review_stop_discoverability_test.go,
+		// review_failure_contract_test.go, review_status_contract_test.go
+		// all assert this literal phrase for their own call sites too) --
+		// kept byte-identical here. v1 legacy authority genuinely has no
+		// OTHER CLI-reachable continuation verb (review recover's own
+		// predecessor lookup is compact-v2-only,
+		// reviewtransaction.CompactAuthoritativeStore, and never accepts a
+		// v1 chain), so "choose a new lineage" already names the one real,
+		// resolving exit for this specific collision.
+		trimmedLineage := strings.TrimSpace(*lineage)
+		if legacy, err := reviewtransaction.AuthoritativeStore(ctx, root, trimmedLineage); err == nil {
+			if _, loadErr := legacy.LoadChain(); loadErr == nil {
+				return fmt.Errorf("%w: choose a new lineage for compact authority", reviewtransaction.NewLegacyReadOnlyError("review/start", trimmedLineage))
+			}
+		}
+		// v2 (compact) collision check, new in Wave 7 S7a (WU18a): before
+		// this wave, a switch-ON `review start`
+		// (runReviewFacadeStartNewLineage, called directly) never checked
+		// for an existing compact-v2 lineage under the same id at all --
+		// only the legacy branch below's own StartCompactAuthority has
+		// internal v2-vs-v2 conflict detection, and that code path never
+		// runs when the switch is on. This gap would let a v3 record be
+		// silently created alongside a LIVE v2 lineage of the same name for
+		// a genuinely DIFFERENT candidate -- exactly the kind of
+		// dual-authority collision the v1 guard above exists to prevent,
+		// just for the other legacy store. Unlike v1, a v2 predecessor IS
+		// `review recover`'s own supported shape
+		// (CompactAuthoritativeStore), so the exit named here is real and
+		// resolving, not aspirational.
+		//
+		// Scoped to a genuine content conflict only, not the exact same
+		// candidate: a caller replaying a start hint verbatim over a v2
+		// lineage that already exactly matches this candidate (the
+		// documented, intended use of every emitted Hint field) must not be
+		// refused just because that exact content happens to already be
+		// governed by v2 -- v3 freezing its own, separate authority for
+		// identical bytes is not a collision in any harmful sense, and
+		// refusing it would strand every pre-wave repository's existing v2
+		// lineages out of the hint-replay workflow entirely.
+		if compact, err := reviewtransaction.CompactAuthoritativeStore(ctx, root, trimmedLineage); err == nil {
+			if record, loadErr := compact.Load(); loadErr == nil && record.State.InitialSnapshot.Identity != snapshot.Identity {
+				return fmt.Errorf("compact authority %q already governs this lineage id for a different candidate: recover it into a successor first (fill in --successor-lineage and --disposition): %s ; or retry `review start` with a different --lineage to start independently",
+					trimmedLineage, reviewRecoverCommand(*cwd, trimmedLineage, record.Revision, "<new-lineage>", "<scope_changed|invalidated|escalated>"))
+			}
+		}
+		record, err := runReviewFacadeStartNewLineage(ctx, root, trimmedLineage, strings.TrimSpace(*policySource), snapshot, assessment, changedLines, lenses)
+		if err != nil {
+			return err
+		}
+		if !negotiated {
+			result := ReviewFacadeStartNewLineageResult{
+				Operation: "review/start", LineageID: record.Authority.LineageID, State: record.Authority.State,
+				RiskLevel: record.Authority.Tier, SelectedLenses: append([]string{}, record.Authority.SelectedLenses...),
+				CorrectionBudget: record.Authority.CorrectionBudgetLines, ChangedLines: changedLines,
+				TargetIdentity: snapshot.Identity, BaseTree: snapshot.BaseTree, CandidateTree: snapshot.CandidateTree,
+			}
+			return encodeReviewJSON(stdout, result)
+		}
+		legacyResult := reviewFacadeStartResultForNewLineage(record.Authority, snapshot, changedLines)
+		legacyResult.RiskEvidence = reviewConsentRiskEvidence(assessment)
+		switch {
+		case legacyResult.ChangedFiles == 0 && target.Kind == reviewtransaction.TargetCurrentChanges:
+			legacyResult.Hint = reviewStartEmptyCandidateHint
+		case legacyResult.LensesRequired:
+			legacyResult.Hint = reviewStartNegotiateContractHint(snapshot)
+		}
+		// Negotiated envelope, new in Wave 7 S7a (WU18a): runReviewFacadeStartNewLineage
+		// never had negotiated-form support before this (it was called
+		// unconditionally, ignoring --contract, even when the switch was
+		// on -- see that function's own doc comment). This closes that gap
+		// using the same frozen-candidate-context/newReviewIntegrationStartResult
+		// production machinery the legacy branch's own negotiated path
+		// below uses, simplified for v3's always-fresh-create semantics (no
+		// resume/recover drift to reconcile against).
+		//
+		// repository_context is deliberately left nil for v3 authority: its
+		// own production validator, validateLiveReviewRepositoryContext
+		// (repository_locator.go), is compact-v2-only by construction -- it
+		// loads through CompactAuthoritativeStore and compares
+		// binding.TargetIdentity (Snapshot.Identity, one combined hash)
+		// against record.State.InitialSnapshot.Identity, a legacy-v2-only
+		// field. v3's own NewLineageAuthority carries CandidateIdentity
+		// instead -- a structurally different hash
+		// (RepositoryID/BaseTree/CandidateTree/ChangedPathsModesDigest/PolicyHash,
+		// no combined Snapshot.Identity equivalent stored anywhere) -- so
+		// there is no safe way to verify a TargetIdentity match against it
+		// without either a v3 authority schema change or re-deriving
+		// Snapshot.Identity from Git at validation time, neither of which
+		// belongs inside an under-pressure patch to a security-sensitive
+		// binding validator. Building genuine v3 repository-context support
+		// (a real, standalone capability this wave never scoped) is exactly
+		// the follow-up this discovery drives -- see the spec amendment.
+		// capture-result and finalize both also accept --target/--lineage
+		// directly, so this omission costs only the cross-process-cwd
+		// convenience, never correctness.
+		var frozenContext *reviewtransaction.FrozenCandidateContext
+		if len(record.Authority.SelectedLenses) > 0 {
+			contextBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
+			contextResult, contextErr := renderReviewStartFrozenCandidateContext(ctx, contextBuilder, snapshot)
+			if contextErr == nil && *contract == ReviewIntegrationContractV1 {
+				contextResult, contextErr = contextBuilder.WithLegacyCandidateDiff(ctx, snapshot, contextResult)
+			}
+			if contextErr != nil {
+				return &reviewStartContextError{AuthoritySelected: true, LineageID: record.Authority.LineageID, StoreRevision: record.Revision, Cause: contextErr}
+			}
+			frozenContext = &contextResult
+		}
+		negotiatedResult, err := newReviewIntegrationStartResult(legacyResult, assessment, snapshot.Kind, frozenContext, nil, *contract)
+		if err != nil {
+			return &reviewStartContextError{AuthoritySelected: true, LineageID: record.Authority.LineageID, StoreRevision: record.Revision, Cause: err}
+		}
+		return encodeReviewJSON(stdout, negotiatedResult)
 	}
 	explicitLineage := strings.TrimSpace(*lineage) != ""
 	if !explicitLineage {
@@ -1765,7 +1894,6 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	}
 	return encodeReviewJSON(stdout, negotiatedResult)
 }
-
 func validateReviewStartBinding(args []string, negotiated bool, target, projection, baseRef, lineage string, committedOnly, workspaceOverlay bool, consent, locale string) error {
 	counts := reviewStartBindingFlagCounts(args)
 	switch reviewStartConsentMode(strings.TrimSpace(consent)) {
