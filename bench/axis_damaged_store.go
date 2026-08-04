@@ -1587,7 +1587,7 @@ var repairDispositionExecuteCapability = &Capability{
 // ---------------------------------------------------------------------------
 
 func damagedStoreJourneys() []Journey {
-	return []Journey{
+	return append([]Journey{
 		{
 			ID:     "ds01-two-recovery-edges-neither-admitted",
 			Title:  "The reported shape: two recovery edges, both correctly prefixed, neither admitted by anything",
@@ -1896,5 +1896,5 @@ func damagedStoreJourneys() []Journey {
 				{Name: "the store is still not in charge", Composite: proveStoreStillDamaged},
 			},
 		},
-	}
+	}, closureDispositionJourneys()...)
 }
