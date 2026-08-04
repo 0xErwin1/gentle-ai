@@ -1844,5 +1844,57 @@ func damagedStoreJourneys() []Journey {
 				{Name: "the store is still not in charge", Composite: proveStoreStillDamaged},
 			},
 		},
+		{
+			ID:     "ds13-damaged-entry-does-not-govern-unrelated-work",
+			Title:  "One damaged entry, and work that has nothing to do with it: the store still answers about the candidate",
+			Source: "issues 1892, 2014, 2167, 2234, 2270, 2456 (repository-global authority validation)",
+			// Every other journey in this axis measures what an operator can do
+			// ABOUT the damage. This one measures what the damage does to
+			// everybody else, which is the thing the reports were actually
+			// about: worktrees of one repository share a Git common directory
+			// and therefore one review store, so a verdict issued over that
+			// store is a verdict issued to every worktree at once.
+			//
+			// The fixture is ds02's exactly — one damaged recovery edge, a
+			// pristine successor — and then the operator does something with no
+			// relation to it: they write a new file and ask the product what to
+			// do next. The measurement is whether they get an answer about
+			// their candidate or an answer about somebody else's history.
+			//
+			// The damage is deliberately NOT repaired here. A journey that had
+			// to clear the entry first would be measuring the repair, and the
+			// whole claim is that no repair should be needed to keep working.
+			Steps: []Step{
+				{Name: "fixture: one damaged recovery edge", Fixture: damagedEdgePristine},
+				{Name: "the operator writes something unrelated", Fixture: stageProse("", "unrelated")},
+				{Name: "ask the negotiated surface what happens next", Requires: statusCapability,
+					Args:  productArgs("review", "status", "--contract", reviewContract, "--next-transition"),
+					After: requireUnrelatedTargetIsRouted},
+				{Name: "start a review of the unrelated candidate", Requires: startCapability,
+					Args: productArgs("review", "start")},
+				{Name: "the damaged entry is still reported, and still damaged", Requires: inspectAuthorityCapability,
+					Args: productArgs("review", "inspect-authority"),
+					After: inspectionAssertion("the damage survived the unrelated work",
+						invalidEdgesWithNoAnomalyClass(1))},
+			},
+		},
 	}, closureDispositionJourneys()...)
+}
+
+// requireUnrelatedTargetIsRouted is ds13's measurement. The negotiated surface
+// must publish a transition for the live candidate. Stopping over an entry the
+// candidate does not inherit from is the reported defect: it leaves the
+// harness with nothing to run and the operator with a blocked push.
+func requireUnrelatedTargetIsRouted(_ *Sandbox, observation Observation) error {
+	var envelope statusEnvelope
+	if err := decodeWaveObservation(observation, &envelope, "review status --next-transition beside a damaged entry"); err != nil {
+		return err
+	}
+	if envelope.NextTransition.Kind == "" {
+		return errors.New("the negotiated surface published no transition for the live candidate")
+	}
+	if envelope.NextTransition.Kind == "stop" {
+		return errors.New("the negotiated surface stopped an unrelated candidate over a damaged entry")
+	}
+	return nil
 }
