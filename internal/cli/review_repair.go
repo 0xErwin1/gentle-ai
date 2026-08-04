@@ -218,12 +218,13 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 		}
 		result := newReviewRepairPreflightResult(assessment, *contract)
 		// A read-only preview: actor/reason stay empty, so nothing maintainer-
-		// specific is ever derived or published here. Only an eligible leaf
-		// (derivation succeeds AND admits as cardinality-one) surfaces a plan —
-		// never a partial or generic fallback (rdd-authority-disposition-plan /
+		// specific is ever derived or published here. Only an eligible closure
+		// (derivation succeeds AND admits through AdmitAuthorityDispositionClosure,
+		// N=1 or a Wave 6 N>=2 closed-class closure) surfaces a plan — never a
+		// partial or generic fallback (rdd-authority-disposition-plan /
 		// "Closed Anomaly Classification Required for Derivation").
 		if plan, planErr := reviewtransaction.DeriveAuthorityDispositionPlanAtRepo(ctx, root, "", ""); planErr == nil {
-			if reviewtransaction.AdmitAuthorityDispositionLeaf(plan) == nil {
+			if reviewtransaction.AdmitAuthorityDispositionClosure(plan) == nil {
 				result.DispositionProviderInputs = &ReviewRepairDispositionProviderInputs{
 					PlanDigest: plan.PlanDigest, AuthorityInventoryRevision: plan.AuthorityInventoryRevision,
 				}
@@ -247,7 +248,7 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 		if err != nil {
 			return &reviewRepairOperationError{message: "review repair leaf authority disposition derivation failed safely", cause: err}
 		}
-		if err := reviewtransaction.AdmitAuthorityDispositionLeaf(plan); err != nil {
+		if err := reviewtransaction.AdmitAuthorityDispositionClosure(plan); err != nil {
 			return &reviewRepairOperationError{message: "review repair leaf authority disposition execution refused", cause: err}
 		}
 		if plan.PlanDigest != *planDigest || plan.AuthorityInventoryRevision != *inventoryRevision {

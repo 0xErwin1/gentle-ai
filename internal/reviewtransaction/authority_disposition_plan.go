@@ -16,10 +16,10 @@ const AuthorityDispositionPlanSchema = "gentle-ai.review-authority-disposition-p
 // disposition plan for a closed-classified authority graph anomaly
 // (rdd-authority-disposition-plan). It is the one reusable shape for every
 // future disposition wave: Wave 2's leaf-only executor
-// (authority_disposition_execute.go, Slice S2) admits only a cardinality-one
-// closure; a future wave (#2014, #1656) reuses this exact shape for a larger
-// closure by replacing admission only — never the plan shape or digest
-// domains (design decision 5).
+// (authority_disposition_execute.go, Slice S2) admitted only a cardinality-one
+// closure; Wave 6 (#2014, #1656) reuses this exact shape for a larger closure
+// by relaxing admission only (admitClosureDisposition) — never the plan shape
+// or digest domains (design decision 5).
 //
 // Schema is an explicitly-permitted eleventh serialization field beyond the
 // spec's ten (rdd-authority-disposition-plan / "Plan Field Set"). Authorization
@@ -154,34 +154,46 @@ func deriveAuthorityDispositionPlanAtRepo(ctx context.Context, repo, actor, reas
 // predicate already proved read-only (shadow_authority_health.go): a
 // lineage's descendants are every edge in the same report whose
 // PredecessorLineageID names it. It never re-reads authority state or
-// consults a cache — only the already-loaded report. A leaf seed (no report
-// edge names it as predecessor) derives closure = {seed} exactly, which is
-// Wave 2's whole disposition scope; a seed with descendants derives their
-// full transitive closure so a future wave can reuse this exact function
+// consults a cache — only the already-loaded report.
+//
+// As of Wave 6 (rdd-authority-disposition-plan / "Deterministic Closure
+// Derivation From the Graph Source of Record"), ordering is normative, not
+// just deterministic: entries emit deepest-descendant-first with the seed
+// last via a post-order depth-first walk over the same children map,
+// visiting each node's children in lexicographic order before appending the
+// node itself — so every prefix of the returned slice is a set of nodes with
+// no not-yet-emitted ancestor, which is exactly what makes each ordered
+// disposition prefix a valid retained graph (rdd-closure-disposition-execution
+// / "Descendant-First Ordered Disposition"). The visited guard doubles as
+// cycle protection, matching the old BFS's guarantee. A leaf seed (no report
+// edge names it as predecessor) derives closure = {seed} exactly — the
+// identity of the pre-Wave-6 lexicographic sort for N=1 — which was Wave 2's
+// whole disposition scope; a seed with descendants derives their full
+// transitive closure so Wave 6's executor can reuse this exact function
 // unchanged (design decision 5).
 func authorityDispositionClosure(report CompactRecoveryInspectionReport, seed string) []string {
 	children := make(map[string][]string, len(report.Edges))
 	for _, edge := range report.Edges {
 		children[edge.PredecessorLineageID] = append(children[edge.PredecessorLineageID], edge.SuccessorLineageID)
 	}
-	visited := map[string]bool{seed: true}
-	queue := []string{seed}
-	for len(queue) > 0 {
-		current := queue[0]
-		queue = queue[1:]
-		for _, child := range children[current] {
-			if visited[child] {
-				continue
-			}
-			visited[child] = true
-			queue = append(queue, child)
+	for lineage := range children {
+		slices.SortFunc(children[lineage], func(left, right string) int { return cmp.Compare(left, right) })
+	}
+
+	closure := make([]string, 0, len(children)+1)
+	visited := make(map[string]bool, len(children)+1)
+	var visitDescendantsFirst func(node string)
+	visitDescendantsFirst = func(node string) {
+		if visited[node] {
+			return
 		}
+		visited[node] = true
+		for _, child := range children[node] {
+			visitDescendantsFirst(child)
+		}
+		closure = append(closure, node)
 	}
-	closure := make([]string, 0, len(visited))
-	for lineage := range visited {
-		closure = append(closure, lineage)
-	}
-	slices.SortFunc(closure, func(left, right string) int { return cmp.Compare(left, right) })
+	visitDescendantsFirst(seed)
 	return closure
 }
 
@@ -276,7 +288,7 @@ func validateAuthorityDispositionAuthorization(plan AuthorityDispositionPlan, cu
 // compactRepairCommandText renders the exact runnable `review repair`
 // invocation for one leaf authority disposition plan a caller already
 // confirmed derives and admits (deriveAuthorityDispositionPlanAtRepo +
-// admitLeafDisposition — the same read-only prediction `review repair
+// admitClosureDisposition — the same read-only prediction `review repair
 // --preflight` runs), with the persisted plan_digest and
 // authority_inventory_revision preflight would publish and the authorization
 // template execution verifies. plan_digest is actor/reason-independent
