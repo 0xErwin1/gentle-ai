@@ -54,6 +54,26 @@ func TestReviewNarrationRegistryCoversEveryStopReasonCode(t *testing.T) {
 	}
 }
 
+// TestReviewNarrationNeverClaimsNothingMoreToDo is the RED-first proof that
+// the four stop reason codes review_narration.go used to tell a human "there
+// is nothing more to do from here" are wrong: `gentle-ai review mode
+// disable` is always available (dispatched ahead of the review facade
+// specifically to stay reachable while review authority is broken --
+// internal/app/app.go's `case "review":` arm; zero required flags; proven
+// reachable by review_disabled_reach_test.go), so a human who only wants
+// their work delivered always has a next step even when the review itself
+// is a dead defect. Any Tier C stop statement that still claims otherwise is
+// a false statement, not an acceptable terminal narration.
+func TestReviewNarrationNeverClaimsNothingMoreToDo(t *testing.T) {
+	const bannedClaim = "nothing more to do"
+	for code, statement := range reviewStopReasonNarration {
+		lowered := strings.ToLower(statement)
+		if strings.Contains(lowered, bannedClaim) {
+			t.Errorf("stop reason %q narration still claims %q, which is false: `gentle-ai review mode disable` is always reachable: %q", code, bannedClaim, statement)
+		}
+	}
+}
+
 // TestNarrationTierAAndCBanInternalVocabulary is the RED-first proof for
 // spec "Three-Tier Narration Contract"'s ban on uncertainty phrasing and
 // internal identifiers leaking onto the human surface. It runs over every
