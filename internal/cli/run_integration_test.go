@@ -20,7 +20,6 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
 // missingBinaryLookPath simulates all installable binaries (engram, gga) as
@@ -249,7 +248,7 @@ func TestAgentInstallStepRefusesMissingCodexInsteadOfInstalling(t *testing.T) {
 	if refusal == nil {
 		t.Fatal("agentInstallStep refusal error = nil, want a refusal because Codex is not installed")
 	}
-	const wantCommand = "npm install -g --ignore-scripts @openai/codex@0.144.0"
+	const wantCommand = "npm install -g --ignore-scripts @openai/codex@latest"
 	if !strings.Contains(refusal.Error(), wantCommand) {
 		t.Fatalf("refusal error = %q, want it to name %q", refusal.Error(), wantCommand)
 	}
@@ -819,7 +818,10 @@ func TestRunInstallRefusesMissingOpenCodeInsteadOfInstalling(t *testing.T) {
 
 	// OpenCode on Ubuntu resolves via npm install (official method from
 	// opencode.ai) — the refusal must name that exact command, never run it.
-	wantCommand := "sudo npm install -g --ignore-scripts opencode-ai@" + versions.OpenCode
+	// This is deliberately "latest", not versions.OpenCode: that constant is
+	// the CI/E2E-owned pin for the binary actually installed in those tests,
+	// unrelated to this display-only advice string.
+	wantCommand := "sudo npm install -g --ignore-scripts opencode-ai@latest"
 	if !strings.Contains(err.Error(), wantCommand) {
 		t.Fatalf("RunInstall() error = %q, want it to name %q", err.Error(), wantCommand)
 	}

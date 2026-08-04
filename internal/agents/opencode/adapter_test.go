@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
-	"github.com/gentleman-programming/gentle-ai/v2/internal/versions"
 )
 
 func TestDetect(t *testing.T) {
@@ -106,22 +105,22 @@ func TestInstallCommand(t *testing.T) {
 		{
 			name:    "ubuntu resolves npm install",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroUbuntu, PackageManager: "apt"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
 		},
 		{
 			name:    "arch resolves npm install",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroArch, PackageManager: "pacman"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
 		},
 		{
 			name:    "fedora resolves npm install",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf"},
-			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+			want:    [][]string{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
 		},
 		{
 			name:    "fedora with writable npm skips sudo",
 			profile: system.PlatformProfile{OS: "linux", LinuxDistro: system.LinuxDistroFedora, PackageManager: "dnf", NpmWritable: true},
-			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@" + versions.OpenCode}},
+			want:    [][]string{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
 		},
 		{
 			name:    "unsupported package manager returns error",
