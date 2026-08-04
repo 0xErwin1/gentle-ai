@@ -86,24 +86,16 @@ func TestMalformedLegacyFreezeEventBricksInventoryWithNoFamilyExit(t *testing.T)
 		t.Logf("verbatim inventory classification: status=%s problems=%q", entry.Status, entry.Problems)
 	}
 
-	// The audited quarantine family routes the anomaly nowhere: reclaim,
-	// reconcile-authority, and abandon all operate on compact-v2 entries only.
+	// The audited quarantine family routes the anomaly nowhere: reclaim and
+	// abandon both operate on compact-v2 entries only. (reconcile-authority
+	// used to be checked here too, for the same reason; the verb and its
+	// provider retired in Wave 7 S3a/S3b.)
 	if _, err := ReclaimIncompleteCompactStore(context.Background(), repo, CompactReclaimRequest{
 		LineageID: "legacy-freeze-broken", Reason: "retire malformed legacy history", Actor: "maintainer@example.com",
 	}); err == nil || !strings.Contains(err.Error(), "inspect reclaim target") {
 		t.Fatalf("reclaim refusal = %v", err)
 	} else {
 		t.Logf("verbatim reclaim refusal: %v", err)
-	}
-	if _, err := ReconcileInvalidRecoveryEdge(context.Background(), repo, CompactReconcileRequest{
-		PredecessorLineageID: "legacy-quarantine-unrelated-approved", ExpectedPredecessorRevision: hash("1"),
-		SuccessorLineageID: "legacy-freeze-broken", ExpectedSuccessorRevision: hash("2"),
-		Reason: "retire malformed legacy history", Actor: "maintainer@example.com",
-		MaintainerAuthorization: "irrelevant",
-	}); err == nil || !strings.Contains(err.Error(), "holds no compact authority state") {
-		t.Fatalf("reconcile-authority refusal = %v", err)
-	} else {
-		t.Logf("verbatim reconcile-authority refusal: %v", err)
 	}
 	if _, err := AbandonPristineCompactStore(context.Background(), repo, CompactAbandonRequest{
 		LineageID: "legacy-freeze-broken", ExpectedRevision: hash("3"),
