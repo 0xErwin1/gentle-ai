@@ -339,6 +339,51 @@ func walkContinuation(node any) bool {
 	return false
 }
 
+// DeadExecuteTransitions returns one description per `execute` transition in a
+// JSON envelope that names an operation and hands the reader no runnable
+// command.
+//
+// The classifier alone cannot see this. Classify only ever runs on a BLOCK,
+// and the invocation that first shipped this defect exited 0 and denied
+// nothing: a `review status --next-transition` answering with a dead
+// review.recover transition. Nothing in the corpus looked at it. So this is
+// checked for EVERY observation, blocking or not, and a hit fails the journey
+// rather than moving it between buckets.
+//
+// That difference is the point. A bucket can be argued about; a failed journey
+// and a non-zero exit cannot be satisfied by teaching one call site to expect
+// the broken shape. It also does not depend on any journey remembering to run
+// the command it was handed, which is exactly the assumption that failed here.
+func DeadExecuteTransitions(stdout string) []string {
+	var envelope any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout)), &envelope); err != nil {
+		return nil
+	}
+	var dead []string
+	collectDeadExecuteTransitions(envelope, &dead)
+	return dead
+}
+
+func collectDeadExecuteTransitions(node any, dead *[]string) {
+	switch typed := node.(type) {
+	case map[string]any:
+		for key, value := range typed {
+			if execute, isObject := value.(map[string]any); isObject && key == "execute" {
+				operation, named := execute["operation"].(string)
+				if named && !nonContinuationValues[strings.ToLower(strings.TrimSpace(operation))] && !executeIsRunnable(execute) {
+					command, _ := execute["command"].(string)
+					*dead = append(*dead, fmt.Sprintf("execute transition %q carries no runnable command (command: %q)", operation, command))
+				}
+			}
+			collectDeadExecuteTransitions(value, dead)
+		}
+	case []any:
+		for _, item := range typed {
+			collectDeadExecuteTransitions(item, dead)
+		}
+	}
+}
+
 // executeIsRunnable reports whether one `execute` transition object is a real
 // continuation: it names an operation AND carries a command the reader can run
 // as printed. The command is held to the same standard as prose that suggests
