@@ -908,10 +908,14 @@ func reviewArtifactModeSafeForOS(mode os.FileMode, directory bool, goos string) 
 
 // ReviewFacadeCaptureResultNewLineageResult is v3's own capture-result
 // response shape (C-A, Wave 5 fix cycle 2). Deliberately narrow: no
-// findings/evidence/admission-decision richness -- that is v2's
-// ArtifactSubject/admission pipeline, not rebuilt for v3 per the
+// evidence/admission-DECISION richness -- that is v2's ArtifactSubject/
+// FrozenCandidateContext/reopen machinery, not rebuilt for v3 per the
 // coordinator's minimal-capture-primitive decision -- just enough to
-// confirm which lens/order was captured and under what subject hash.
+// confirm which lens/order was captured and under what subject hash. The
+// reviewer's own findings ARE captured and persisted (C-E, fix cycle 3,
+// newLineageCapturedFindings below) even though this response does not echo
+// them back; the response shape reports the CAPTURE binding, not the
+// admission consequence, which is decided at finalize.
 type ReviewFacadeCaptureResultNewLineageResult struct {
 	Operation     string `json:"operation"`
 	LineageID     string `json:"lineage_id"`
@@ -921,6 +925,26 @@ type ReviewFacadeCaptureResultNewLineageResult struct {
 	Preflight     bool   `json:"preflight,omitempty"`
 }
 
+// newLineageCapturedFindings converts the reviewer-contract wire shape
+// (facadeFinding, the SAME shape v2's own reviewer results use) into the
+// reviewtransaction admission shape (FindingEvidence, the SAME shape
+// --admission-findings already reads from a caller-supplied file) -- C-E,
+// Wave 5 fix cycle 3: capture-result validates and persists findings, and
+// finalize feeds them into the EXISTING AdmitCandidateCausalFindings, reused
+// rather than duplicated. ProofRefs (a list) joins into Proof (a single
+// string) with "; ", matching the single free-text Proof field
+// FindingEvidence has always carried for the --admission-findings channel.
+func newLineageCapturedFindings(findings []facadeFinding) []reviewtransaction.FindingEvidence {
+	converted := make([]reviewtransaction.FindingEvidence, len(findings))
+	for index, finding := range findings {
+		converted[index] = reviewtransaction.FindingEvidence{
+			FindingID: finding.ID, Class: finding.EvidenceClass, Causality: finding.CausalDisposition,
+			Proof: strings.Join(finding.ProofRefs, "; "),
+		}
+	}
+	return converted
+}
+
 // runReviewFacadeCaptureResultNewLineage is C-A's CLI wiring for the minimal
 // v3 capture primitive (reviewtransaction.AuthorityStore.CaptureLensResult).
 // --preflight derives and returns the exact provider-owned subject hash
@@ -928,8 +952,9 @@ type ReviewFacadeCaptureResultNewLineageResult struct {
 // discovery path an operator or reviewing agent uses to learn what to echo
 // back in a real capture. A real capture reads --input, decodes it as the
 // SAME strict reviewer-result JSON shape v2 uses (facadeReviewerResult --
-// one wire contract for both lineage kinds), and refuses unless its own
-// subject_hash field matches that same provider-owned derivation.
+// one wire contract for both lineage kinds), refuses unless its own
+// subject_hash field matches that same provider-owned derivation, and
+// persists its findings (C-E) alongside the binding.
 func runReviewFacadeCaptureResultNewLineage(
 	ctx context.Context, stdout io.Writer, root, lineage string, record reviewtransaction.NewLineageRecord,
 	lens string, order int, subjectHashFlag, input string, preflight bool,
@@ -976,7 +1001,7 @@ func runReviewFacadeCaptureResultNewLineage(
 	if err != nil {
 		return err
 	}
-	if _, err := store.CaptureLensResult(ctx, record.Revision, lens, order, result.SubjectHash); err != nil {
+	if _, err := store.CaptureLensResult(ctx, record.Revision, lens, order, result.SubjectHash, newLineageCapturedFindings(result.Findings)); err != nil {
 		return reviewPreflightError(err)
 	}
 	return encodeReviewJSON(stdout, ReviewFacadeCaptureResultNewLineageResult{
