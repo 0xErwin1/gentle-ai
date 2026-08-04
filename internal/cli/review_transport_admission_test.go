@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/agents/capabilitymanifest"
@@ -102,5 +103,61 @@ func TestUnsupportedReviewTransportCapabilityStopsBeforeAnyAuthority(t *testing.
 	}
 	if len(stores) != 0 {
 		t.Fatalf("unsupported-transport review start created review authority: %#v", stores)
+	}
+}
+
+// TestReviewTransportCapabilityRefusalNamesItsExits asserts the refusal a
+// Codex user actually hits (the broader admission gate) names the kill
+// switch first, then the runtimes that genuinely support review transport —
+// read from the compiled capability declaration, never hardcoded prose. This
+// repo has shipped refused-as-printed commands twice; execution evidence for
+// the exact command lives in the manual verification recorded alongside this
+// change, not in this unit test.
+func TestReviewTransportCapabilityRefusalNamesItsExits(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n", 0o644)
+
+	var output bytes.Buffer
+	err := RunReview([]string{
+		"start", "--contract", ReviewIntegrationContractV2, "--cwd", repo, "--agent", string(model.AgentCodex),
+	}, &output)
+	if err == nil {
+		t.Fatalf("review start for Codex succeeded:\n%s", output.String())
+	}
+	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+	if failure.Code != reviewTransportCapabilityUnsupportedCode {
+		t.Fatalf("codex refusal code = %q, want %q", failure.Code, reviewTransportCapabilityUnsupportedCode)
+	}
+
+	const exitCommand = "gentle-ai review mode disable --scope clone --cwd <repo>"
+	exitIndex := strings.Index(failure.Cause, exitCommand)
+	if exitIndex < 0 {
+		t.Fatalf("refusal cause does not name the kill-switch exit %q:\n%s", exitCommand, failure.Cause)
+	}
+
+	const supportedRuntime = "claude-code"
+	runtimeIndex := strings.Index(failure.Cause, supportedRuntime)
+	if runtimeIndex < 0 {
+		t.Fatalf("refusal cause does not name a genuinely supported runtime %q:\n%s", supportedRuntime, failure.Cause)
+	}
+	if exitIndex > runtimeIndex {
+		t.Fatalf("refusal cause names the exit after the supported runtime, want the exit first:\n%s", failure.Cause)
+	}
+	// The refused runtime itself is legitimately named as the subject of the
+	// refusal (e.g. `runtime "codex" does not advertise ...`); what must NOT
+	// happen is a refused runtime appearing in the supported-runtimes listing
+	// itself, so scope the check to the text after the exit command. OpenCode
+	// moved to the other side of this line when issue #2417 restored its
+	// genuine provider-injected transport: because the listing is derived
+	// from the compiled capability declaration rather than hardcoded prose,
+	// it now names opencode without this test changing any fixture.
+	listing := failure.Cause[exitIndex:]
+	if !strings.Contains(listing, string(model.AgentOpenCode)) {
+		t.Errorf("refusal cause's exit/listing segment omits %q, which genuinely supports review transport since #2417:\n%s", model.AgentOpenCode, listing)
+	}
+	for _, unsupported := range []string{"\"pi\"", " pi,", " pi."} {
+		if strings.Contains(listing, unsupported) {
+			t.Errorf("refusal cause's exit/listing segment names %q as if it genuinely supported review transport:\n%s", unsupported, listing)
+		}
 	}
 }

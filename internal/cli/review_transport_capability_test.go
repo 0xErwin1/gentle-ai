@@ -46,6 +46,40 @@ func TestImmutableReviewRuntimeMatrix(t *testing.T) {
 	}
 }
 
+// TestReviewRuntimeWithImmutableTransportRefusalNamesItsExits is the narrow
+// gate's twin of TestReviewTransportCapabilityRefusalNamesItsExits: `review
+// status` for a real-but-unsupported runtime never reaches the broader
+// admission gate (it only runs in `review start`), so this gate's own
+// refusal must independently name the kill switch and the genuinely
+// supported runtimes.
+func TestReviewRuntimeWithImmutableTransportRefusalNamesItsExits(t *testing.T) {
+	// OpenCode is deliberately absent: issue #2417 restored its genuine
+	// provider-injected transport, so this gate no longer refuses it and
+	// there is no refusal message to inspect (see
+	// TestImmutableReviewRuntimeMatrix's supported rows).
+	for _, runtime := range []model.AgentID{model.AgentCodex, model.AgentPi, model.AgentKilocode} {
+		t.Run(string(runtime), func(t *testing.T) {
+			_, err := reviewRuntimeWithImmutableTransport(string(runtime))
+			if err == nil {
+				t.Fatal("want a refusal")
+			}
+			const exitCommand = "gentle-ai review mode disable --scope clone --cwd <repo>"
+			exitIndex := strings.Index(err.Error(), exitCommand)
+			if exitIndex < 0 {
+				t.Fatalf("refusal does not name the kill-switch exit %q: %v", exitCommand, err)
+			}
+			const supportedRuntime = "claude-code"
+			runtimeIndex := strings.Index(err.Error(), supportedRuntime)
+			if runtimeIndex < 0 {
+				t.Fatalf("refusal does not name a genuinely supported runtime %q: %v", supportedRuntime, err)
+			}
+			if exitIndex > runtimeIndex {
+				t.Fatalf("refusal names the exit after the supported runtime, want the exit first: %v", err)
+			}
+		})
+	}
+}
+
 func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *testing.T) {
 	const target = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	missingRepository := t.TempDir() + "/missing"

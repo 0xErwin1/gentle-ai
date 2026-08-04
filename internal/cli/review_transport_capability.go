@@ -2,8 +2,10 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
@@ -78,6 +80,35 @@ func (capability reviewImmutableRuntimePolicy) supportsImmutableReceiptReview() 
 		capability.Transport == reviewImmutableTransportOpenCodeProviderInjected
 }
 
+// reviewTransportSupportedRuntimeIDs lists the runtime identities that
+// genuinely carry immutable receipt-review transport today, derived from the
+// compiled capability declaration above rather than restated as prose. A
+// runtime the admission gate would refuse can never appear here by
+// construction — #2418 found the opposite already shipped for Codex
+// specifically: a manifest advertising a transport the compiled gate did not
+// actually honor.
+func reviewTransportSupportedRuntimeIDs() []string {
+	agents := catalog.AllAgents()
+	supported := make([]string, 0, len(agents))
+	for _, agent := range agents {
+		if reviewImmutableRuntimeCapability(agent.ID).supportsImmutableReceiptReview() {
+			supported = append(supported, string(agent.ID))
+		}
+	}
+	return supported
+}
+
+// reviewTransportRefusalExitGuidance is appended to every transport-refusal
+// cause a caller can actually reach for a real, currently-unsupported
+// runtime identity. It names the user-owned kill switch that exits
+// receipt-driven review first, then the runtimes that genuinely support
+// review transport — so a Codex or Pi user is never left refused with no
+// stated way out and no accurate list of what does work.
+func reviewTransportRefusalExitGuidance() string {
+	return "; exit receipt-driven review with `gentle-ai review mode disable --scope clone --cwd <repo>`; runtimes with review transport support: " +
+		strings.Join(reviewTransportSupportedRuntimeIDs(), ", ")
+}
+
 // reviewRuntimeWithImmutableTransport accepts only the exact compiled runtime
 // identities. It never selects a substitute transport for an unsupported one.
 func reviewRuntimeWithImmutableTransport(agent string) (model.AgentID, error) {
@@ -89,11 +120,11 @@ func reviewRuntimeWithImmutableTransport(agent string) (model.AgentID, error) {
 	capability := reviewImmutableRuntimeCapability(identity)
 	if !capability.Eligible {
 		// refusal:by-design world-action: runtimes outside the fixed RDD policy cannot receive immutable review authority
-		return "", errors.New("the active runtime is not eligible for immutable receipt review")
+		return "", fmt.Errorf("the active runtime is not eligible for immutable receipt review%s", reviewTransportRefusalExitGuidance())
 	}
 	if !capability.supportsImmutableReceiptReview() {
 		// refusal:by-design world-action: unsupported transport cannot bind immutable evidence or capture an admissible result
-		return "", errors.New("the active runtime lacks immutable receipt-review transport")
+		return "", fmt.Errorf("the active runtime lacks immutable receipt-review transport%s", reviewTransportRefusalExitGuidance())
 	}
 	return identity, nil
 }
