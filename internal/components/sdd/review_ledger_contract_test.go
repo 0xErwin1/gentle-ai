@@ -255,7 +255,12 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// so this is dead-but-safe config either way; the point is that it is no
 	// longer the most permissive reviewer config in the product. Deliberate,
 	// not drift.
-	const want = "0c6d81ac097e6245fd5247637e4e0a7930fd0e108479f0d990ec32f79b1d6a81"
+	//
+	// The hash moved again in the same issue when review-ledger-contract.md's
+	// runtime-support sentence was rewritten to state OpenCode's genuine
+	// support truthfully; Kilocode's rendered orchestrator prompt embeds the
+	// same shared contract text. Deliberate, not drift.
+	const want = "f05be384887dc1c743365c2e73d13ee4ac7facc07e0af907d002ecd06f265500"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -426,8 +431,16 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// block, its no-bash/no-read guarantee, and its completeness
 		// preconditions, instead of one short refusal sentence. This is a
 		// deliberate contract restoration, not drift.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 14_940, maxCharacters: 18_500},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 25_476, maxCharacters: 36_000},
+		// wantChars grew again by 333 (14,940 -> 15,273 / 25,476 -> 25,809)
+		// when review-ledger-contract.md's runtime-support sentence was
+		// rewritten: it used to claim Claude Code was the only supported
+		// runtime and that OpenCode was merely "eligible but
+		// transport-disabled". Issue #2417 restored genuine OpenCode
+		// support, so the contract now states both supported runtimes
+		// truthfully and names OpenCode's no-shell/no-read guarantee. This
+		// is a deliberate contract correction, not drift.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_273, maxCharacters: 18_500},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 25_809, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

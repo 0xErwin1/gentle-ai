@@ -20,6 +20,15 @@ type reviewImmutableTransport string
 const (
 	reviewImmutableTransportUnsupported         reviewImmutableTransport = "unsupported"
 	reviewImmutableTransportClaudePromptCarried reviewImmutableTransport = "claude_prompt_carried"
+	// reviewImmutableTransportOpenCodeProviderInjected is issue #2417's
+	// restored transport: the OpenCode plugin (review-result-artifacts.ts)
+	// materializes immutable candidate evidence through its shell-less
+	// runNative channel and injects it directly into the reviewer task's
+	// prompt before the reviewer ever launches. The generated lens holds no
+	// bash and no read tool, so the injected block is provably its only byte
+	// source — strictly stronger than the prompt-only guarantee Claude
+	// Code's Read/Grep/Glob-holding lens carries.
+	reviewImmutableTransportOpenCodeProviderInjected reviewImmutableTransport = "opencode_provider_injected"
 )
 
 type reviewImmutableRuntimePolicy struct {
@@ -36,15 +45,20 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 	case model.AgentCodex:
 		return reviewImmutableRuntimePolicy{Eligible: true, Transport: reviewImmutableTransportUnsupported}
 	case model.AgentOpenCode:
-		// #2076 owns a future documented exact child-session binding.
-		return reviewImmutableRuntimePolicy{Eligible: true, Transport: reviewImmutableTransportUnsupported}
+		// #2417 restored genuine support through the provider-injected
+		// shell-less channel; #2076 (per-session exact-value Bash-permission
+		// binding) remains structurally impossible because OpenCode reads
+		// its config only at process startup, before review.start mints any
+		// dynamic value, and is no longer needed for support.
+		return reviewImmutableRuntimePolicy{Eligible: true, Transport: reviewImmutableTransportOpenCodeProviderInjected}
 	default:
 		return reviewImmutableRuntimePolicy{Transport: reviewImmutableTransportUnsupported}
 	}
 }
 
 func (capability reviewImmutableRuntimePolicy) supportsImmutableReceiptReview() bool {
-	return capability.Transport == reviewImmutableTransportClaudePromptCarried
+	return capability.Transport == reviewImmutableTransportClaudePromptCarried ||
+		capability.Transport == reviewImmutableTransportOpenCodeProviderInjected
 }
 
 // reviewRuntimeWithImmutableTransport accepts only the exact compiled runtime
