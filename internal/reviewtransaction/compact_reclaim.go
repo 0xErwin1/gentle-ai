@@ -341,3 +341,45 @@ func persistCompactReclaimRecord(record CompactReclaimRecord) error {
 	}
 	return nil
 }
+
+// AuthorityDispositionClosureManifestSchema identifies
+// AuthorityDispositionClosureManifest's shape.
+const AuthorityDispositionClosureManifestSchema = "gentle-ai.review-authority-disposition-closure-manifest/v1"
+
+// AuthorityDispositionClosureManifest is Wave 6's forensic-only record of an
+// N-node closure disposition (design decision D5): written once, inside the
+// SEED node's own quarantine directory, alongside residue/ and
+// reclaim-record.json, only after every closure member has committed. It
+// binds the ordered closure to the one plan_digest that already governs
+// every per-node AuthorityDispositionProof, so a human inspecting the seed's
+// quarantine directory sees the whole closure without reconstructing it from
+// N separate reclaim-record.json files.
+//
+// It is never a lifecycle dependency: per-node resume state lives entirely in
+// each node's own reclaim-record.json plus the residue/ discriminator
+// (discoverAuthorityDispositionRecord/resumeAuthorityDispositionRecord);
+// recovery never reads this file. Design caps RDD at two operational
+// artifacts — this is deliberately not a third.
+type AuthorityDispositionClosureManifest struct {
+	Schema                     string   `json:"schema"`
+	PlanDigest                 string   `json:"plan_digest"`
+	AuthorityInventoryRevision string   `json:"authority_inventory_revision"`
+	AnomalyClass               string   `json:"anomaly_class"`
+	OrderedClosure             []string `json:"ordered_closure"`
+	Disposed                   []string `json:"disposed"`
+}
+
+// writeAuthorityDispositionClosureManifest persists manifest as
+// closure-manifest.json inside quarantineDir (the seed's own quarantine
+// directory), reusing writeAtomic exactly like persistCompactReclaimRecord's
+// reclaim-record.json.
+func writeAuthorityDispositionClosureManifest(quarantineDir string, manifest AuthorityDispositionClosureManifest) error {
+	payload, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := writeAtomic(filepath.Join(quarantineDir, "closure-manifest.json"), append(payload, '\n'), 0o644); err != nil {
+		return fmt.Errorf("persist authority disposition closure manifest: %w", err)
+	}
+	return nil
+}
