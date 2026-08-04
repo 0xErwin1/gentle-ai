@@ -1579,6 +1579,27 @@ func normalizeBeginAttemptRequest(request BeginAttemptRequest) (BeginAttemptRequ
 	return request, nil
 }
 
+// runtimeRevisionShapeObservation describes a rejected sha256:<64-lowercase-hex>
+// candidate without ever echoing it verbatim: the value may be long or, for a
+// caller that pasted the wrong secret, sensitive. It reports only what the
+// exact-match failure cannot otherwise tell an operator — length, whether the
+// sha256: prefix is present, and whether the remainder contains characters
+// outside 0-9a-f (which catches the common case of uppercase hex from
+// PowerShell `Get-FileHash` or `shasum -a 256` output).
+func runtimeRevisionShapeObservation(value string) string {
+	const prefix = "sha256:"
+	hasPrefix := strings.HasPrefix(value, prefix)
+	body := strings.TrimPrefix(value, prefix)
+	nonLowercaseHex := false
+	for _, r := range body {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			nonLowercaseHex = true
+			break
+		}
+	}
+	return fmt.Sprintf("received length=%d, sha256: prefix=%t, non-lowercase-hex characters=%t", len(value), hasPrefix, nonLowercaseHex)
+}
+
 func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptRequest, error) {
 	if request.ExpectedRevision == "" || !runtimeRevisionPattern.MatchString(request.ExpectedRevision) {
 		return FinishAttemptRequest{}, errors.New("finish requires an exact expected runtime revision")
@@ -1590,7 +1611,10 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 		return FinishAttemptRequest{}, errors.New("outcome must be failed, interrupted, or passed")
 	}
 	if !runtimeRevisionPattern.MatchString(request.EvidenceRevision) {
-		return FinishAttemptRequest{}, errors.New("evidence_revision must be sha256")
+		return FinishAttemptRequest{}, fmt.Errorf(
+			"evidence_revision must be sha256:<64-lowercase-hex> (%s); rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --evidence-revision sha256:<64-lowercase-hex>",
+			runtimeRevisionShapeObservation(request.EvidenceRevision),
+		)
 	}
 	if err := validateRuntimeText(request.Diagnosis, 500); err != nil {
 		return FinishAttemptRequest{}, fmt.Errorf("invalid diagnosis: %w", err)
@@ -1618,13 +1642,19 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 			return FinishAttemptRequest{}, errors.New("an atomic remediation successor is valid only for a passed attempt")
 		}
 		if !runtimeRevisionPattern.MatchString(request.ExpectedBindingRevision) {
-			return FinishAttemptRequest{}, errors.New("expected_binding_revision must be sha256 for atomic remediation")
+			return FinishAttemptRequest{}, fmt.Errorf(
+				"expected_binding_revision must be sha256:<64-lowercase-hex> for atomic remediation (%s); rerun `gentle-ai sdd-attempt finish` with --expected-binding-revision sha256:<64-lowercase-hex> --successor-lineage <lineage> --remediates-evidence-revision sha256:<64-lowercase-hex>",
+				runtimeRevisionShapeObservation(request.ExpectedBindingRevision),
+			)
 		}
 		if !validReviewBindingLineage(request.SuccessorLineageID) {
 			return FinishAttemptRequest{}, errors.New("successor_lineage_id must be a canonical lowercase lineage")
 		}
 		if !runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) {
-			return FinishAttemptRequest{}, errors.New("remediates_evidence_revision must be sha256")
+			return FinishAttemptRequest{}, fmt.Errorf(
+				"remediates_evidence_revision must be sha256:<64-lowercase-hex> (%s); rerun `gentle-ai sdd-attempt finish` with --expected-binding-revision sha256:<64-lowercase-hex> --successor-lineage <lineage> --remediates-evidence-revision sha256:<64-lowercase-hex>",
+				runtimeRevisionShapeObservation(request.RemediatesEvidenceRevision),
+			)
 		}
 	}
 	return request, nil

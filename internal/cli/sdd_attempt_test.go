@@ -293,3 +293,33 @@ func TestRunSDDAttemptStatusPathUsesRepositoryCommonDir(t *testing.T) {
 		t.Fatalf("linked status = %#v, want revision %s", fromLinked, started.Revision)
 	}
 }
+
+// TestRunSDDAttemptTrimsWhitespaceFromRevisionShapedFlags is the RED
+// reproduction of the CLI-boundary half of #2294: a reporter pasting
+// --evidence-revision from PowerShell `Get-FileHash` or `shasum` output often
+// carries incidental leading/trailing whitespace, which the sha256:<64-hex>
+// pattern then rejects for a reason that has nothing to do with the actual
+// evidence-revision defect being reported. The CLI boundary must trim
+// identity/revision-shaped flag values before they ever reach sddstatus,
+// which stays a pure validator with no normalization of its own.
+func TestRunSDDAttemptTrimsWhitespaceFromRevisionShapedFlags(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	hash := cliAttemptHash('a')
+	padded := "  " + hash + "\n"
+
+	started := runSDDAttemptStatus(t, []string{
+		"begin", "--cwd", repo, "--change", "cli-trim", "--expected-revision=", "--request-id", "trim-begin",
+		"--work-unit", "trim-unit", "--evidence-goal", "prove trimmed CLI revisions", "--max-attempts", "1", "--max-changed-lines", "10",
+	})
+
+	finished := runSDDAttemptStatus(t, []string{
+		"finish", "--cwd", repo, "--change", "cli-trim", "--expected-revision", started.Revision, "--request-id", "trim-finish",
+		"--outcome", "failed", "--evidence-revision", padded,
+		"--diagnosis", "diagnosis", "--harness-disposition", "reused",
+		"--cleanup-evidence", "cleanup", "--process-evidence", "process",
+	})
+	last := finished.Attempts[len(finished.Attempts)-1]
+	if last.EvidenceRevision != hash {
+		t.Fatalf("finish with a whitespace-padded --evidence-revision = %#v, want trimmed evidence_revision %q", last, hash)
+	}
+}
