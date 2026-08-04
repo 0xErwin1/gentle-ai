@@ -397,7 +397,7 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := AdmitAuthorityDispositionLeaf(plan); err != nil {
+		if err := AdmitAuthorityDispositionClosure(plan); err != nil {
 			t.Fatal(err)
 		}
 		plan.Authorization = authorityDispositionAuthorizationBinding(plan)
