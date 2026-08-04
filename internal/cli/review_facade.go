@@ -866,6 +866,21 @@ func runReviewStatus(ctx context.Context, args []string, stdout io.Writer) error
 				return fmt.Errorf("assess classified authority repair: %w", repairErr)
 			}
 			result.Repair = repair
+			// Wave 6 (rdd-closure-disposition-execution / "Reachable Through
+			// the Negotiated Transition Route"): only when the classified
+			// vocabulary above has nothing to offer, mirroring `review repair
+			// --preflight`'s own read-only prediction (review_repair.go) —
+			// actor/reason stay empty so nothing maintainer-specific is ever
+			// derived here, and a derivation refusal is never propagated (no
+			// eligible edge this round is not a status-assembly error).
+			if repair.Status != reviewtransaction.AuthorityRepairEligible || repair.Candidate == nil {
+				if plan, planErr := reviewtransaction.DeriveAuthorityDispositionPlanAtRepo(ctx, root, "", ""); planErr == nil && reviewtransaction.AdmitAuthorityDispositionClosure(plan) == nil {
+					result.Disposition = &ReviewRepairDispositionProviderInputs{
+						PlanDigest: plan.PlanDigest, AuthorityInventoryRevision: plan.AuthorityInventoryRevision,
+						SeedLineageID: plan.SeedSet[0], SeedExpectedRevision: plan.ExpectedRevisions[plan.SeedSet[0]],
+					}
+				}
+			}
 		}
 		if *actionEligibility {
 			result.Eligibility = newReviewActionEligibility(result)
