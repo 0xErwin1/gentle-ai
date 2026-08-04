@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -292,14 +293,54 @@ func TestReviewFinalizeBindsCorrectedRetrySuccessorToLiveFixDiff(t *testing.T) {
 
 func startFinalizeLiveTarget(t *testing.T, repo, lineage string, extra ...string) (ReviewFacadeStartResult, reviewtransaction.CompactStore, []string) {
 	t.Helper()
-	args := []string{"--cwd", repo, "--lineage", lineage}
-	args = append(args, extra...)
-	var output bytes.Buffer
-	if err := RunReviewFacadeStart(args, &output); err != nil {
-		t.Fatal(err)
+	isBaseDiff := false
+	for _, item := range extra {
+		if item == "--base-ref" || item == "--workspace-overlay" ||
+			strings.HasPrefix(item, "--base-ref=") || strings.HasPrefix(item, "--workspace-overlay=") {
+			isBaseDiff = true
+			break
+		}
 	}
+	var output bytes.Buffer
 	var started ReviewFacadeStartResult
-	decodeStrictReviewJSON(t, output.Bytes(), &started)
+	if isBaseDiff {
+		// A base-diff/workspace-overlay candidate large enough to select a
+		// lens now refuses a direct start up front (issue #2447); this
+		// helper is SETUP for the finalize behavior under test, so it starts
+		// through the negotiated contract instead. boundNegotiatedStartArgs
+		// derives its own --committed-only from --base-ref, so drop any copy
+		// already present to avoid a duplicate flag.
+		filtered := make([]string, 0, len(extra))
+		for _, item := range extra {
+			if item == "--committed-only" || strings.HasPrefix(item, "--committed-only=") {
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		startArgs := boundNegotiatedStartArgs(t, append([]string{
+			"start", "--contract", ReviewIntegrationContractV1, "--cwd", repo, "--lineage", lineage,
+		}, filtered...))
+		if err := RunReview(startArgs, &output); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		args := []string{"--cwd", repo, "--lineage", lineage}
+		args = append(args, extra...)
+		if err := RunReviewFacadeStart(args, &output); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if isBaseDiff {
+		// The negotiated envelope carries additional fields (schema, contract,
+		// repository_context, ...) that ReviewFacadeStartResult does not
+		// declare, so a strict decode here would fault on plumbing, not on
+		// anything this helper's callers actually assert.
+		if err := json.Unmarshal(output.Bytes(), &started); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		decodeStrictReviewJSON(t, output.Bytes(), &started)
+	}
 	store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 	if err != nil {
 		t.Fatal(err)

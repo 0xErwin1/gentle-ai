@@ -227,6 +227,19 @@ var reviewPreflightUntrackedScopeReason = reviewPreflightReason{
 	NextAction: "stop",
 }
 
+// reviewPreflightDirectRouteUncompletableReason classifies a direct
+// (non-negotiated) `review start` that would select at least one lens.
+// Issue #2447: the direct route's own response type cannot carry
+// repository_context, so no reviewer lens can ever capture a result against
+// a lineage it creates, and the negotiated facade does not rediscover a
+// lineage the direct route created. The named next action is the negotiated
+// review.start form; the exact runnable command travels in the cause.
+var reviewPreflightDirectRouteUncompletableReason = reviewPreflightReason{
+	Code:       "direct_start_uncompletable",
+	Message:    "The direct (non-negotiated) review start route cannot host a completable review: no reviewer lens can capture a result against the lineage it would create. Rerun with the negotiated contract form.",
+	NextAction: "review.start",
+}
+
 // reviewPreflightMissingInputsReason names the contract-level inputs a caller
 // must supply. Callers pass only inputs the published required_inputs enum
 // actually defines; a refusal whose missing inputs are not all expressible

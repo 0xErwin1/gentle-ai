@@ -719,11 +719,16 @@ func TestReviewValidateStaleAndPluralStaleReceiptsFailClosedWhileEnabled(t *test
 // candidate: start with the given extra arguments, submit one clean result per
 // selected lens, and finalize to a terminal receipt.
 //
-// Uses runLegacyFacadeStartForTest (Wave 7 S7/WU18), not RunReviewFacadeStart
+// Uses runLegacyFacadeStartForTest (Wave 7 S7a/WU18a), not RunReviewFacadeStart
 // directly: every caller of this helper needs genuine legacy (compact-v2)
 // authority (proven by pervasive reviewtransaction.CompactAuthoritativeStore/
-// CompactAuthorityLeaves follow-up reads across its 6 call sites), which the
-// CLI's own `review start` can no longer create now that v3 is unconditional.
+// CompactAuthorityLeaves follow-up reads across its call sites). It also
+// sidesteps issue #2447's direct-route refusal for base-diff/workspace-overlay
+// candidates large enough to select a lens: this helper is SETUP for behavior
+// unrelated to that refusal (delivery gates), so bypassing
+// RunReviewFacadeStart's CLI dispatch entirely, the same pattern every other
+// legacy fixture in this codebase now uses, is the right tool rather than
+// routing SETUP through the negotiated contract.
 func finalizeFacadeReviewForRepo(t *testing.T, repo string, startExtra ...string) {
 	t.Helper()
 	var output bytes.Buffer

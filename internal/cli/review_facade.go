@@ -142,9 +142,12 @@ const ReviewStartConsentDeclinedThisCandidate = "declined_this_candidate"
 // and the fix is to name the base to compare against, not to redo the work.
 const reviewStartEmptyCandidateHint = "the candidate has no pending changes; already-committed work can be reviewed by rerunning review start with --base-ref <commit> naming the base to compare against"
 
-// reviewStartNegotiateContractHint makes the negotiated contract path
-// discoverable from the plain START response.
-func reviewStartNegotiateContractHint(snapshot reviewtransaction.Snapshot) string {
+// reviewNegotiatedStartCommand builds the exact negotiated `review start`
+// invocation for a frozen snapshot. It is the single source of the runnable
+// continuation the direct route names when it refuses (issue #2447): every
+// direct-route refusal must name a command that actually runs, so the
+// command shape lives here once instead of being reconstructed per call site.
+func reviewNegotiatedStartCommand(snapshot reviewtransaction.Snapshot) string {
 	command := fmt.Sprintf("gentle-ai review start --contract %s --agent %s --target %s --projection %s",
 		ReviewIntegrationContractV2, model.AgentClaudeCode, snapshot.Identity, facadeProjection(snapshot.Projection))
 	switch snapshot.Kind {
@@ -153,7 +156,7 @@ func reviewStartNegotiateContractHint(snapshot reviewtransaction.Snapshot) strin
 	case reviewtransaction.TargetBaseWorkspaceOverlay:
 		command += " --base-ref " + snapshot.BaseTree + " --workspace-overlay"
 	}
-	return "this response's selected lenses require the frozen Git trees, changed-path manifest, and artifact subjects, which only the negotiated contract form returns; rerun with `" + command + "` to receive them"
+	return command
 }
 
 // ReviewFacadeLensBinding pairs one selected lens with its frozen zero-based
@@ -1554,6 +1557,27 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 	if err != nil {
 		return err
 	}
+	// Issue #2447. The direct route's own response type
+	// (ReviewFacadeStartResult) never carries repository_context -- only the
+	// negotiated ReviewIntegrationStartResult does -- so no reviewer lens can
+	// ever capture a result against a lineage this call would create, and
+	// the negotiated facade does not rediscover a lineage the direct route
+	// created. Refusing here, before the candidate is frozen into any
+	// lineage, authority, tier freeze, or budget, leaves nothing behind to
+	// strand. The maintainer decision recorded on #2447 made this the
+	// permanent shape of the direct route, not a stopgap: carrying
+	// repository_context on this path was considered and cancelled.
+	// Lineages the direct route created before this fix landed are a
+	// separate, still-open recovery/visibility gap tracked on #2447 and
+	// rdd-single-lifecycle-cutover; this refusal only stops new ones. The
+	// error below names the exact runnable negotiated continuation, so the
+	// refusal-resolution ratchet resolves it by naming, needing no by-design
+	// annotation.
+	if !negotiated && target.Kind != reviewtransaction.TargetCurrentChanges && len(lenses) > 0 {
+		return reviewPreflightRefusal(reviewPreflightDirectRouteUncompletableReason,
+			fmt.Errorf("review start without --contract cannot produce a completable review because its %d selected lens(es) require repository_context, which only the negotiated contract form publishes; rerun with `gentle-ai review start %s` instead",
+				len(lenses), strings.TrimPrefix(reviewNegotiatedStartCommand(snapshot), "gentle-ai review start ")))
+	}
 	// The candidate is frozen and the tier is classified, so this is the one
 	// point where the kill switch can stop a start and consent can name the real
 	// reason. Nothing has been persisted yet, so refusing here leaves no
@@ -1681,7 +1705,8 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		case legacyResult.ChangedFiles == 0 && target.Kind == reviewtransaction.TargetCurrentChanges:
 			legacyResult.Hint = reviewStartEmptyCandidateHint
 		case legacyResult.LensesRequired:
-			legacyResult.Hint = reviewStartNegotiateContractHint(snapshot)
+			legacyResult.Hint = "this response's selected lenses require the frozen Git trees, changed-path manifest, and artifact subjects, which only the negotiated contract form returns; rerun with `" +
+				reviewNegotiatedStartCommand(snapshot) + "` to receive them"
 		}
 		// Negotiated envelope, new in Wave 7 S7a (WU18a): runReviewFacadeStartNewLineage
 		// never had negotiated-form support before this (it was called
@@ -1835,11 +1860,22 @@ func runReviewFacadeStart(ctx context.Context, args []string, stdout io.Writer) 
 		// reporting a different frozen authority keeps the previous shape.
 		if authority.InitialSnapshot.Identity == snapshot.Identity {
 			legacyResult.RiskEvidence = reviewConsentRiskEvidence(assessment)
+			// A base-diff direct start that would select lenses now refuses
+			// up front (issue #2447), before this point ever runs, so
+			// LensesRequired only reads true here for a workspace-mode
+			// candidate -- the one shape issue #2447 left untouched, since a
+			// bare `review status --next-transition` rediscovers it from the
+			// live workspace with no extra flags. It still completes through
+			// the direct route, so it keeps the informational hint pointing
+			// at the negotiated form for callers who want the frozen Git
+			// trees, changed-path manifest, and artifact subjects a plain
+			// response cannot carry.
 			switch {
 			case legacyResult.ChangedFiles == 0 && target.Kind == reviewtransaction.TargetCurrentChanges:
 				legacyResult.Hint = reviewStartEmptyCandidateHint
 			case legacyResult.LensesRequired:
-				legacyResult.Hint = reviewStartNegotiateContractHint(authority.InitialSnapshot)
+				legacyResult.Hint = "this response's selected lenses require the frozen Git trees, changed-path manifest, and artifact subjects, which only the negotiated contract form returns; rerun with `" +
+					reviewNegotiatedStartCommand(authority.InitialSnapshot) + "` to receive them"
 			}
 		}
 		return encodeReviewJSON(stdout, legacyResult)
