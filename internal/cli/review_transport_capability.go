@@ -25,9 +25,16 @@ const (
 	// materializes immutable candidate evidence through its shell-less
 	// runNative channel and injects it directly into the reviewer task's
 	// prompt before the reviewer ever launches. The generated lens holds no
-	// bash and no read tool, so the injected block is provably its only byte
-	// source — strictly stronger than the prompt-only guarantee Claude
-	// Code's Read/Grep/Glob-holding lens carries.
+	// bash and no read tool. OpenCode itself concatenates live project
+	// instructions (AGENTS.md/CLAUDE.md/CONTEXT.md, local `instructions`
+	// glob entries) and the skill catalog into every session's system
+	// prompt regardless of tools, so the plugin also refuses to launch the
+	// reviewer unless OPENCODE_DISABLE_PROJECT_CONFIG and
+	// OPENCODE_DISABLE_EXTERNAL_SKILLS are both set; only then is the
+	// injected block provably the reviewer's only byte source. A remote
+	// `instructions` URL is fetched unconditionally and is not suppressed by
+	// either variable — RDD-enabled OpenCode sessions must not configure
+	// one.
 	reviewImmutableTransportOpenCodeProviderInjected reviewImmutableTransport = "opencode_provider_injected"
 )
 

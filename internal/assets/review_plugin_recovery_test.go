@@ -139,6 +139,13 @@ type reviewPluginStub struct {
 	patches        []string
 	inspectStderr  string
 	patchHugeBytes int
+	// omitProjectConfigIsolation/omitExternalSkillsIsolation deliberately
+	// leave OPENCODE_DISABLE_PROJECT_CONFIG/OPENCODE_DISABLE_EXTERNAL_SKILLS
+	// unset. Every scenario is protected (both set to "1") by default, since
+	// that is the shape a real launch must always have; only the dedicated
+	// isolation-refusal tests opt out.
+	omitProjectConfigIsolation  bool
+	omitExternalSkillsIsolation bool
 }
 
 func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPluginStub) string {
@@ -182,8 +189,16 @@ func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPlugi
 		"    name-status) printf '%s\\n' \"$GENTLE_AI_STUB_INSPECT_NAME_STATUS\"; exit 0 ;;\n" +
 		"    numstat) printf '%s\\n' \"$GENTLE_AI_STUB_INSPECT_NUMSTAT\"; exit 0 ;;\n" +
 		"    patch)\n" +
-		"      eval \"value=\\$GENTLE_AI_STUB_INSPECT_PATCH_$path_index\"\n" +
-		"      if [ -n \"$value\" ]; then printf '%s\\n' \"$value\"; exit 0; fi\n" +
+		// ${VAR+x} tests presence, not truthiness: a path's stub patch may be
+		// deliberately set to the empty string (proving the plugin's
+		// empty-patch guard), which must be distinguished from "no stub
+		// configured for this index, try the huge-payload fallback".
+		"      eval \"has_value=\\${GENTLE_AI_STUB_INSPECT_PATCH_${path_index}+yes}\"\n" +
+		"      if [ \"$has_value\" = \"yes\" ]; then\n" +
+		"        eval \"value=\\$GENTLE_AI_STUB_INSPECT_PATCH_$path_index\"\n" +
+		"        printf '%s\\n' \"$value\"\n" +
+		"        exit 0\n" +
+		"      fi\n" +
 		"      if [ -n \"$GENTLE_AI_STUB_INSPECT_PATCH_HUGE_BYTES\" ]; then\n" +
 		"        head -c \"$GENTLE_AI_STUB_INSPECT_PATCH_HUGE_BYTES\" /dev/zero | tr '\\0' 'A'\n" +
 		"        exit 0\n" +
@@ -212,7 +227,18 @@ func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPlugi
 	}
 	command := exec.Command(node, "harness.mts", scenario, workDir)
 	command.Dir = root
-	env := append(os.Environ(),
+	// Strip any pre-existing isolation variables from the inherited
+	// environment before setting them explicitly: exec.Cmd.Env does not
+	// deduplicate repeated keys, and this test must control both variables
+	// exactly, never inherit an ambient value that happens to match.
+	base := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "OPENCODE_DISABLE_PROJECT_CONFIG=") || strings.HasPrefix(entry, "OPENCODE_DISABLE_EXTERNAL_SKILLS=") {
+			continue
+		}
+		base = append(base, entry)
+	}
+	env := append(base,
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"GENTLE_AI_STUB_STDOUT="+stub.stdout,
 		"GENTLE_AI_STUB_STDERR="+stub.stderr,
@@ -223,6 +249,12 @@ func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPlugi
 		"GENTLE_AI_STUB_INSPECT_STDERR="+stub.inspectStderr,
 		"GENTLE_AI_REVIEW_CWD=",
 	)
+	if !stub.omitProjectConfigIsolation {
+		env = append(env, "OPENCODE_DISABLE_PROJECT_CONFIG=1")
+	}
+	if !stub.omitExternalSkillsIsolation {
+		env = append(env, "OPENCODE_DISABLE_EXTERNAL_SKILLS=1")
+	}
 	if stub.patchHugeBytes > 0 {
 		env = append(env, fmt.Sprintf("GENTLE_AI_STUB_INSPECT_PATCH_HUGE_BYTES=%d", stub.patchHugeBytes))
 	}
@@ -232,7 +264,12 @@ func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPlugi
 	command.Env = env
 	output, err := command.CombinedOutput()
 	if err != nil {
-		t.Skipf("node could not run the TypeScript plugin harness (%v): %s", err, output)
+		// node was already confirmed present above: a non-zero exit here
+		// means the plugin or harness itself failed (for example a mutant
+		// that broke it at parse time), never an environment problem. That
+		// must fail the test, not skip it -- a skip would let a
+		// parse-breaking mutant through undetected.
+		t.Fatalf("TypeScript plugin harness failed (%v): %s", err, output)
 	}
 	return strings.TrimSpace(string(output))
 }
@@ -401,7 +438,7 @@ func TestReviewPluginFailsClosedOnEvidenceBudgetOverflow(t *testing.T) {
 		preflight:      reviewPluginPreflight(baseTree, candidateTree),
 		nameStatus:     "M\tinternal/example.go",
 		numstat:        "1\t1\tinternal/example.go",
-		patchHugeBytes: 2_000_000, // exceeds the 1,048,576-byte budget
+		patchHugeBytes: 5_000_000, // exceeds the 4 MiB (4,194,304-byte) budget
 	})
 	if !strings.Contains(message, "provider injection budget") {
 		t.Fatalf("budget overflow did not refuse the reviewer launch: %s", message)
@@ -411,6 +448,15 @@ func TestReviewPluginFailsClosedOnEvidenceBudgetOverflow(t *testing.T) {
 	}
 	if !strings.Contains(message, "The reviewer was not launched") {
 		t.Fatalf("budget overflow lost its exactly-once guarantee: %s", message)
+	}
+	// The refusal must name a real exit, not just stop: split the candidate
+	// and start a new, smaller review, since retrying the identical
+	// oversized candidate can never succeed.
+	if !strings.Contains(message, "Split this candidate into smaller reviewable commits") {
+		t.Fatalf("budget overflow refusal names no actionable continuation: %s", message)
+	}
+	if !strings.Contains(message, "retrying the same candidate cannot succeed") {
+		t.Fatalf("budget overflow refusal does not rule out a blind retry: %s", message)
 	}
 	if len(message) > 4096 || strings.Count(message, "A") > 512 {
 		t.Fatalf("budget overflow leaked the oversized payload into the transcript: %d bytes", len(message))
@@ -694,5 +740,128 @@ func TestReviewPluginKeepsGenericOpaqueFailureOpaque(t *testing.T) {
 	}
 	if !strings.Contains(message, "repository_context_preflight_failed") {
 		t.Fatalf("generic opaque failure lost its provider-owned code: %s", message)
+	}
+}
+
+// TestReviewPluginRefusesReviewerLaunchWithoutIsolationEnvironment closes the
+// CRITICAL gap: OpenCode assembles every session's *system* prompt (not the
+// `task` args.prompt this plugin controls) from the agent's base prompt plus
+// an environment block, every AGENTS.md/CLAUDE.md/CONTEXT.md found walking up
+// from the worktree root, local `instructions` glob entries, and the live
+// skill catalog -- unconditionally, regardless of the agent's tools map.
+// Measured against real OpenCode 1.18.10: a review-risk session with no bash
+// and no read tool still received a marker planted in AGENTS.md after the
+// candidate froze, verbatim, in its system message. The only verified way to
+// close it is OPENCODE_DISABLE_PROJECT_CONFIG and OPENCODE_DISABLE_EXTERNAL_SKILLS,
+// so the plugin refuses to launch the reviewer at all unless both are set.
+func TestReviewPluginRefusesReviewerLaunchWithoutIsolationEnvironment(t *testing.T) {
+	baseTree := strings.Repeat("1", 40)
+	candidateTree := strings.Repeat("2", 40)
+	preflight := reviewPluginPreflight(baseTree, candidateTree)
+	tests := []struct {
+		name                        string
+		omitProjectConfigIsolation  bool
+		omitExternalSkillsIsolation bool
+		wantNamed                   []string
+	}{
+		{name: "both missing", omitProjectConfigIsolation: true, omitExternalSkillsIsolation: true,
+			wantNamed: []string{"OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_DISABLE_EXTERNAL_SKILLS"}},
+		{name: "project config missing", omitProjectConfigIsolation: true,
+			wantNamed: []string{"OPENCODE_DISABLE_PROJECT_CONFIG"}},
+		{name: "external skills missing", omitExternalSkillsIsolation: true,
+			wantNamed: []string{"OPENCODE_DISABLE_EXTERNAL_SKILLS"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			message := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
+				preflight: preflight, nameStatus: "M\tinternal/example.go", numstat: "1\t1\tinternal/example.go",
+				patches:                     []string{"--- a/internal/example.go\n+++ b/internal/example.go\n"},
+				omitProjectConfigIsolation:  test.omitProjectConfigIsolation,
+				omitExternalSkillsIsolation: test.omitExternalSkillsIsolation,
+			})
+			for _, want := range test.wantNamed {
+				if !strings.Contains(message, want) {
+					t.Errorf("refusal does not name missing variable %q: %s", want, message)
+				}
+			}
+			if !strings.Contains(message, "The reviewer was not launched") {
+				t.Errorf("isolation refusal lost its exactly-once guarantee: %s", message)
+			}
+			if !strings.Contains(message, "AGENTS.md") || !strings.Contains(message, "skill catalog") {
+				t.Errorf("isolation refusal does not explain what it is protecting against: %s", message)
+			}
+		})
+	}
+}
+
+// TestReviewPluginAllowsReviewerLaunchWithIsolationEnvironment is the
+// positive twin: with both variables set (every other test in this file's
+// default), the reviewer launches normally. This pins that the gate is
+// exact -- it refuses only when a real gap exists, never unconditionally.
+func TestReviewPluginAllowsReviewerLaunchWithIsolationEnvironment(t *testing.T) {
+	baseTree := strings.Repeat("1", 40)
+	candidateTree := strings.Repeat("2", 40)
+	prompt := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
+		preflight:  reviewPluginPreflight(baseTree, candidateTree),
+		nameStatus: "M\tinternal/example.go", numstat: "1\t1\tinternal/example.go",
+		patches: []string{"--- a/internal/example.go\n+++ b/internal/example.go\n"},
+	})
+	if !strings.HasPrefix(prompt, "GENTLE_AI_REVIEW_BINDING {") {
+		t.Fatalf("reviewer did not launch with both isolation variables set: %q", prompt)
+	}
+}
+
+// TestReviewPluginRejectsEmptyPatchForContentChangingPath is the MEDIUM
+// fix's mutation proof: a `patch` operation that exits 0 with empty stdout
+// for a path that is neither mode-only nor deleted must refuse the reviewer
+// launch, never inject an empty evidence block silently. Even a newly added
+// empty file still renders a non-empty diff header with no hunk, so a truly
+// empty patch here can only mean the native read failed silently -- the
+// fabricate-a-clean-review shape the plugin's own "no partial evidence"
+// contract forbids.
+func TestReviewPluginRejectsEmptyPatchForContentChangingPath(t *testing.T) {
+	baseTree := strings.Repeat("1", 40)
+	candidateTree := strings.Repeat("2", 40)
+	message := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
+		preflight:  reviewPluginPreflight(baseTree, candidateTree),
+		nameStatus: "M\tinternal/example.go", numstat: "1\t1\tinternal/example.go",
+		patches: []string{""}, // exits 0, genuinely empty stdout
+	})
+	if !strings.Contains(message, "evidence patch was empty") {
+		t.Fatalf("empty patch for a content-changing path was not refused: %s", message)
+	}
+	if !strings.Contains(message, "internal/example.go") {
+		t.Fatalf("empty-patch refusal does not name the failing path: %s", message)
+	}
+	if !strings.Contains(message, "The reviewer was not launched") {
+		t.Fatalf("empty-patch refusal lost its exactly-once guarantee: %s", message)
+	}
+}
+
+// TestReviewPluginAcceptsEmptyPatchForModeOnlyOrDeletedPath proves the guard
+// above has no false positive: a mode-only change (a chmod with no content
+// diff) or a deleted path can legitimately have no patch body, and must not
+// be refused.
+func TestReviewPluginAcceptsEmptyPatchForModeOnlyOrDeletedPath(t *testing.T) {
+	baseTree := strings.Repeat("1", 40)
+	candidateTree := strings.Repeat("2", 40)
+	for _, test := range []struct {
+		name  string
+		entry string
+	}{
+		{name: "mode-only", entry: `{"path":"internal/example.go","status":"M","old_mode":"100644","new_mode":"100755","deleted":false,"type_changed":false,"mode_only":true,"intended_untracked":false}`},
+		{name: "deleted", entry: `{"path":"internal/example.go","status":"D","old_mode":"100644","new_mode":"000000","deleted":true,"type_changed":false,"mode_only":false,"intended_untracked":false}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			entry := `{"path":"internal/example.go","status":"M","old_mode":"100644","new_mode":"100644","deleted":false,"type_changed":false,"mode_only":false,"intended_untracked":false}`
+			preflight := strings.Replace(reviewPluginPreflight(baseTree, candidateTree), entry, test.entry, 1)
+			prompt := runReviewPluginScenarioStub(t, "before-valid", reviewPluginStub{
+				preflight: preflight, nameStatus: "M\tinternal/example.go", numstat: "0\t0\tinternal/example.go",
+				patches: []string{""},
+			})
+			if !strings.HasPrefix(prompt, "GENTLE_AI_REVIEW_BINDING {") {
+				t.Fatalf("%s path with an empty patch was refused: %q", test.name, prompt)
+			}
+		})
 	}
 }

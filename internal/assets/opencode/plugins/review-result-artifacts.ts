@@ -11,14 +11,51 @@ const TASK_TAG = /<\/?task(?:\s|>)|<\/?task_result>/
 // ever launches. Measured empirically against the pinned OpenCode runtime
 // (internal/versions.OpenCode): a plugin-mutated `task` prompt reached the
 // subagent's own model call byte-for-byte, with zero truncation observed, at
-// every tested size from 5 KB up to 16 MiB — far past this budget and past
-// the native per-command MaxFrozenCandidateDiffBytes cap of 4 MiB
-// (internal/reviewtransaction/frozen_candidate_context.go). This budget sits
-// well inside that verified-safe range, not at its edge, and is enforced by
-// outright refusal: exceeding it fails the reviewer launch closed. It never
+// every tested size from 5 KB up to 16 MiB, including exact runs at 4 MiB and
+// 8 MiB. This budget is set to exactly the native per-command
+// MaxFrozenCandidateDiffBytes cap (internal/reviewtransaction/
+// frozen_candidate_context.go) — the same ceiling every other immutable-diff
+// read in this product already accepts — rather than an arbitrary fraction of
+// it: a smaller budget refuses candidates whose *risk-tier-counted* changed
+// lines are small but whose manifest includes large regenerated/golden files,
+// which this plugin materializes in full for every manifest path exactly like
+// the Claude Code transport does. 4 MiB sits comfortably inside the verified
+// zero-truncation range, not at its edge, and is enforced by outright
+// refusal: exceeding it fails the reviewer launch closed. It never
 // truncates, because a truncated candidate view could fabricate a
 // false-clean result.
-const REVIEW_CONTEXT_BYTE_BUDGET = 1_048_576 // 1 MiB
+const REVIEW_CONTEXT_BYTE_BUDGET = 4 * 1024 * 1024 // 4 MiB
+
+// REQUIRED_ISOLATION_ENVIRONMENT closes a channel this plugin cannot touch by
+// itself: OpenCode assembles every session's *system* prompt (not the `task`
+// `args.prompt` this plugin controls) by concatenating the agent's base
+// prompt with an environment block, every AGENTS.md/CLAUDE.md/CONTEXT.md
+// found walking up from the worktree root, local `instructions` glob
+// entries, and the live `<available_skills>` catalog -- unconditionally,
+// regardless of the agent's `tools` map. A review-risk session holding no
+// bash and no read tool still received this concatenated content in its
+// system message in a real OpenCode 1.18.10 run: a marker planted in
+// AGENTS.md after the candidate froze appeared verbatim above the injected
+// evidence. These two OpenCode-native environment variables are the only
+// verified way to close it, confirmed by the same measurement: with both
+// set, no project-instruction or skill-catalog content reached the
+// reviewer's system message; with either unset, it did.
+//
+// This does NOT close every channel: an operator-configured `instructions`
+// entry that is an http(s):// URL is fetched by OpenCode unconditionally and
+// is NOT suppressed by OPENCODE_DISABLE_PROJECT_CONFIG (verified: a poisoned
+// local HTTP endpoint referenced this way still reached the reviewer with
+// both variables set). Operators enabling RDD on OpenCode must not configure
+// a remote `instructions` URL; gentle-ai's own generated config never does.
+const REQUIRED_ISOLATION_ENVIRONMENT = ["OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_DISABLE_EXTERNAL_SKILLS"] as const
+
+function isolationFlagSet(value: string | undefined): boolean {
+  return typeof value === "string" && /^(1|true)$/i.test(value.trim())
+}
+
+function missingIsolationEnvironment(): string[] {
+  return REQUIRED_ISOLATION_ENVIRONMENT.filter((name) => !isolationFlagSet(process.env[name]))
+}
 
 type ReviewBinding = {
   lineage: string
@@ -296,6 +333,19 @@ async function materializeReviewEvidence(cwd: string, binding: ReviewBinding, pr
     for (let index = 0; index < preflight.changed_path_manifest.length; index++) {
       const entry = preflight.changed_path_manifest[index]
       const patch = await runNative(cwd, inspectionArgs(binding, "patch", index), "")
+      // An empty patch for a path that is neither mode-only nor deleted is
+      // never legitimate: even a newly added empty file still renders a
+      // non-empty `diff --git`/`new file mode`/`index` header with no hunk.
+      // A genuinely empty string here means the native read silently
+      // produced nothing for a content-changing path -- the exact
+      // fabricate-a-clean-review shape this plugin's own contract (no
+      // partial-evidence outcome) forbids.
+      if (patch === "" && !entry.mode_only && !entry.deleted) {
+        throw Object.assign(
+          new Error("review context evidence patch was empty for a content-changing path"),
+          { reviewEmptyPatch: true, path: entry.path },
+        )
+      }
       consume(`GENTLE_AI_REVIEW_PATCH ${index} ${entry.path}`, patch, "GENTLE_AI_REVIEW_PATCH_END")
     }
     return sections.join("")
@@ -304,7 +354,18 @@ async function materializeReviewEvidence(cwd: string, binding: ReviewBinding, pr
       throw new Error(
         `review context exceeds the ${REVIEW_CONTEXT_BYTE_BUDGET}-byte provider injection budget for lens ${binding.lens}; ` +
         "The reviewer was not launched, so its exactly-once invocation is preserved; " +
-        "immutable candidate evidence is never truncated",
+        "immutable candidate evidence is never truncated. " +
+        "Split this candidate into smaller reviewable commits (a chained sequence, each under the budget) " +
+        "and start a new review for the reduced scope; retrying the same candidate cannot succeed.",
+      )
+    }
+    if ((cause as { reviewEmptyPatch?: boolean; path?: string } | null)?.reviewEmptyPatch) {
+      const failedPath = (cause as { path?: string }).path
+      throw new Error(
+        `review context evidence patch was empty for content-changing path ${JSON.stringify(failedPath)} in lens ${binding.lens}; ` +
+        "The reviewer was not launched, so its exactly-once invocation is preserved. " +
+        "Refresh the exact native next_transition for lineage " + binding.lineage + " and relaunch the lens; " +
+        "if the same path keeps returning an empty patch, treat it as a native inspection defect and stop relaunching.",
       )
     }
     throw new Error(
@@ -555,6 +616,17 @@ const ReviewResultArtifactsPlugin: Plugin = async ({ directory, worktree }) => {
     }
     if (output.args.background === true) {
       throw new Error("bound review tasks must run in the foreground for native result capture")
+    }
+    const missingIsolation = missingIsolationEnvironment()
+    if (missingIsolation.length > 0) {
+      throw new Error(
+        `immutable OpenCode candidate inspection requires ${missingIsolation.join(" and ")} set to "1" for this OpenCode process; ` +
+        "without them, OpenCode concatenates live project instructions (AGENTS.md/CLAUDE.md/CONTEXT.md, local " +
+        "`instructions` glob entries) and the live skill catalog into every subagent's system prompt regardless " +
+        "of its tools, which can leak post-freeze worktree content into the reviewer. " +
+        "Set the missing variable(s) in the environment this OpenCode process runs under, then relaunch the lens. " +
+        "The reviewer was not launched, so its exactly-once invocation is preserved.",
+      )
     }
     output.args.prompt = await injectReviewerContext(
       output.args.prompt,

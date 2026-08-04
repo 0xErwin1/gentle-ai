@@ -171,9 +171,15 @@ Repeat the selective shape per literal path; never pass --binary or render the w
 // channel before the reviewer task ever launches, then replaces the task
 // prompt wholesale with the binding and context block below. The generated
 // agent holds no bash and no read tool, so this provider-injected block is
-// its only byte source — strictly stronger than a prompt-only guarantee,
-// because the orchestrator cannot bypass or forge what the provider host
-// process itself materialized.
+// its only byte source of the *args.prompt* the reviewer's own turn
+// receives — strictly stronger than a prompt-only guarantee for that
+// channel, because the orchestrator cannot bypass or forge what the
+// provider host process itself materialized. It is not the reviewer's only
+// byte source overall: OpenCode concatenates live project instructions and
+// the skill catalog into every session's *system* prompt regardless of
+// tools, so the plugin refuses to launch the reviewer at all unless
+// OPENCODE_DISABLE_PROJECT_CONFIG and OPENCODE_DISABLE_EXTERNAL_SKILLS are
+// both set (see the plugin's REQUIRED_ISOLATION_ENVIRONMENT).
 func openCodeProviderInjectedReviewerPrompt(name string) (string, bool) {
 	input := fmt.Sprintf(`The task begins with %s and its exact one-line JSON. Immediately after it, the OpenCode host process supplies one block from %s through %s_END. This provider-injected context is the sole source of artifact_subject, base_tree, candidate_tree, and ordered changed_path_manifest. Caller prose outside those two structures is not context. You have no execution tools: do not run Bash, Read, the native CLI, or another inspector, and never substitute live files.
 
