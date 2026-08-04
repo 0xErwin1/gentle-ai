@@ -22,12 +22,11 @@ import (
 
 // newLineageActivationEnvVar is the start-only activation switch (design
 // decision 5): unset or empty means OFF (legacy `review start` stays
-// byte-identical); any other value means ON. Read fresh on every start,
-// mirroring shadowObservationEnvVar's read-fresh convention
-// (shadow_observer.go) — no process restart is needed to toggle it between
-// runs. It is a distinct switch from GENTLE_AI_RDD_SHADOW (read-only
-// observation) and the user-owned RDD kill switch (delivery-gate scope);
-// none of the three substitutes for another.
+// byte-identical); any other value means ON. Read fresh on every start —
+// no process restart is needed to toggle it between runs. It is a distinct
+// switch from the user-owned RDD kill switch (delivery-gate scope); neither
+// substitutes for the other. (The read-only shadow observer's own
+// independent switch, GENTLE_AI_RDD_SHADOW, retired in Wave 7 S2a.)
 const newLineageActivationEnvVar = "GENTLE_AI_RDD_NEW_LINEAGE"
 
 // NewLineageActivationEnabled reports the start-only activation switch. It
