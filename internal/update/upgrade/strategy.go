@@ -74,7 +74,25 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 			return false, fmt.Errorf("detect Homebrew ownership for %s: %w", r.Tool.Name, err)
 		}
 	}
-	if isBetaGentleAIUpgrade(r) && profile.OS != "windows" && ownership == update.HomebrewNone {
+	// The beta channel's "version" is a branch reference (`main@<sha>`), not a
+	// semantic version, so it can only be installed as `@main`. Every route
+	// that pins a release with `@v` + version is wrong for it by construction.
+	//
+	// Windows is admitted here only when it would otherwise have run the
+	// go-install route anyway (#2087). Excluding Windows outright did not stop
+	// it from running `go install`: gentleAISelfUpgradeMethod returns
+	// InstallGoInstall whenever Go is on PATH and a GoImportPath is declared,
+	// so a beta result fell through to goInstallUpgrade and that pins with
+	// `@v` + version, emitting the impossible target `...@vmain@<sha>`. The
+	// exclusion therefore only chose a broken target, never a safer one.
+	//
+	// The narrower condition is what keeps the deliberate Windows policy
+	// intact: with no Go on PATH or no declared GoImportPath, Windows still
+	// resolves to InstallBinary and fails closed to the manual hint rather than
+	// executing anything, and that hint already names `@main` for beta.
+	// Regression guard: TestGentleAIWindowsUpgradeFailsClosedToSourceInstall.
+	if isBetaGentleAIUpgrade(r) && ownership == update.HomebrewNone &&
+		(profile.OS != "windows" || gentleAISelfUpgradeMethod(r.Tool, profile) == update.InstallGoInstall) {
 		return false, goInstallMainUpgrade(r.Tool)
 	}
 

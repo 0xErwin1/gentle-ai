@@ -150,6 +150,63 @@ func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMain(t *testing.T) {
 	}
 }
 
+// TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMainOnWindows is the RED
+// reproduction for #2087. The beta route was guarded by `profile.OS !=
+// "windows"`, so on Windows a beta result fell through to goInstallUpgrade,
+// which pins a release with `@v` + version. The beta channel's version is a
+// branch reference (`main@<sha>`), so that produced the target
+// `...@vmain@<sha>` and `go install` rejected it with
+// `invalid version: unknown revision vmain@<sha>`.
+//
+// Windows is the one platform where gentle-ai already upgrades itself through
+// `go install` (it publishes no signed binary, so gentleAISelfUpgradeMethod
+// routes it to InstallGoInstall), which is exactly why the fall-through was
+// reachable there and nowhere else. Routing beta to the same `@main` target
+// the other platforms use therefore removes an invalid target without moving
+// any platform off its trust anchor.
+func TestRunStrategy_BetaGentleAISelfUpgradeUsesGoInstallMainOnWindows(t *testing.T) {
+	origExecCommand := execCommand
+	t.Cleanup(func() { execCommand = origExecCommand })
+
+	var gotName string
+	var gotArgs []string
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		gotName = name
+		gotArgs = args
+		return mockCmd("true")
+	}
+
+	r := update.UpdateResult{
+		Tool: update.ToolInfo{
+			Name:          "gentle-ai",
+			Owner:         "Gentleman-Programming",
+			Repo:          "gentle-ai",
+			InstallMethod: update.InstallBinary,
+			GoImportPath:  "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai",
+		},
+		LatestVersion: "main@919ea3daf2af",
+		Status:        update.UpdateAvailable,
+	}
+	profile := system.PlatformProfile{OS: "windows", GoAvailable: true, Supported: true}
+
+	if _, err := runStrategy(context.Background(), r, profile); err != nil {
+		t.Fatalf("runStrategy beta gentle-ai on windows: unexpected error: %v", err)
+	}
+
+	if gotName != "go" {
+		t.Fatalf("exec name = %q, want %q", gotName, "go")
+	}
+	wantArgs := []string{"install", "github.com/gentleman-programming/gentle-ai/v2/cmd/gentle-ai@main"}
+	if len(gotArgs) != len(wantArgs) || gotArgs[0] != wantArgs[0] || gotArgs[1] != wantArgs[1] {
+		t.Fatalf("exec args = %v, want %v", gotArgs, wantArgs)
+	}
+	for _, arg := range gotArgs {
+		if strings.Contains(arg, "@vmain@") {
+			t.Fatalf("go install target %q prefixes v onto a branch reference", arg)
+		}
+	}
+}
+
 func envContains(env []string, want string) bool {
 	for _, entry := range env {
 		if entry == want {
