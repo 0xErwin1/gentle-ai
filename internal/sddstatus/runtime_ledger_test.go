@@ -548,7 +548,10 @@ func TestRuntimeLedgerPrivateRootCannotBeRedirectedThroughSymlink(t *testing.T) 
 
 func initRuntimeLedgerRepo(t *testing.T) string {
 	t.Helper()
-	repo := t.TempDir()
+	// canonicalRuntimeTempDir, not t.TempDir: OpenRuntimeStore records the
+	// EvalSymlinks-resolved spelling as store.Workspace, so a fixture holding
+	// the raw one compares unequal to its own store.
+	repo := canonicalRuntimeTempDir(t)
 	runRuntimeLedgerGit(t, repo, "init", "-q")
 	runRuntimeLedgerGit(t, repo, "config", "user.email", "runtime-ledger@example.com")
 	runRuntimeLedgerGit(t, repo, "config", "user.name", "Runtime Ledger Test")

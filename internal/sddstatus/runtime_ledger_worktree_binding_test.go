@@ -21,7 +21,9 @@ import (
 // authorized apply that really ran in worktree A was charged changed_lines: 0.
 func TestRuntimeLedgerRefusesFinishFromADifferentLinkedWorktreeThanBegin(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
-	worktree := filepath.Join(t.TempDir(), "sibling-worktree")
+	// The refusal names the canonical spelling of both worktrees, so the
+	// fixture has to hold that same spelling to assert against it.
+	worktree := filepath.Join(canonicalRuntimeTempDir(t), "sibling-worktree")
 	runRuntimeLedgerGit(t, repo, "worktree", "add", "-q", "-b", "worktree-b", worktree)
 
 	change := "worktree-binding"
@@ -129,7 +131,7 @@ func TestRuntimeLedgerBeginRecordsTheCanonicalBeginWorktreeEndToEnd(t *testing.T
 // this slice existed.
 func TestRuntimeLedgerLegacyBeginRecordReplaysWithoutWorktreeEnforcement(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
-	worktree := filepath.Join(t.TempDir(), "legacy-sibling-worktree")
+	worktree := filepath.Join(canonicalRuntimeTempDir(t), "legacy-sibling-worktree")
 	runRuntimeLedgerGit(t, repo, "worktree", "add", "-q", "-b", "legacy-worktree-b", worktree)
 
 	change := "legacy-worktree-replay"
