@@ -215,19 +215,46 @@ func TestReclaimRefusalNamesTheOperationThatAdmitsTheShape(t *testing.T) {
 	})
 }
 
-// TestStartOverInvalidGraphRefusalNamesSanctionedExit pins the `review start`
-// half: a fresh start over a damaged authority graph refused with the bare
-// graph violation and named nothing. The refusal now carries the sanctioned
-// exit the read-only inspection proves — the same pattern the reconcile
-// refusal already uses — and driving that exit makes the same start succeed.
+// TestStartOverInvalidGraphRefusalNamesSanctionedExit pins both halves of the
+// `review start` scope rule.
+//
+// UNRELATED work starts. A damaged historical edge is not a fact about a
+// candidate that does not inherit from it, and refusing every start in the
+// repository until somebody repaired unrelated history is the dead end
+// reported as 1892, 2014 and 2167 — in a shared Git common directory it
+// refused every worktree at once.
+//
+// The DAMAGED lineage still refuses for itself, and the refusal still names
+// the sanctioned exit the read-only inspection proves, so running exactly what
+// it printed clears exactly that entry. Scoping a refusal is not softening it:
+// the same operator gets the same exit, and everybody else stops being asked
+// to run it.
 func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 	ctx := context.Background()
 
-	freshStart := func(t *testing.T, repo, lineage string) error {
+	startLineage := func(t *testing.T, repo, lineage string) error {
 		t.Helper()
 		writeSnapshotFile(t, repo, "tracked.txt", "fresh start target for "+lineage+"\n")
 		_, err := StartCompactAuthority(ctx, repo, CompactStartRequest{State: newCompactTestState(t, repo, lineage)})
 		return err
+	}
+
+	// freshStart is unrelated work: a lineage the damaged graph does not
+	// contain and no damaged entry is an ancestor of.
+	freshStart := func(t *testing.T, repo, lineage string) error {
+		t.Helper()
+		return startLineage(t, repo, lineage)
+	}
+
+	// blockedStart names the damaged lineage itself, which is the only start
+	// a damaged entry has any standing to refuse.
+	blockedStart := func(t *testing.T, repo, lineage string) string {
+		t.Helper()
+		err := startLineage(t, repo, lineage)
+		if err == nil {
+			t.Fatalf("start on the damaged lineage %q was admitted", lineage)
+		}
+		return err.Error()
 	}
 
 	t.Run("dangling predecessor names the abandonment that clears it", func(t *testing.T) {
@@ -236,11 +263,10 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 		if err := os.RemoveAll(filepath.Join(filepath.Dir(successorStore.Dir), predecessor.State.LineageID)); err != nil {
 			t.Fatal(err)
 		}
-		err := freshStart(t, repo, "start-over-dangling")
-		if err == nil {
-			t.Fatal("start succeeded over a dangling predecessor")
+		if err := freshStart(t, repo, "start-over-dangling"); err != nil {
+			t.Fatalf("unrelated work was refused by a dangling predecessor it never inherited from: %v", err)
 		}
-		refusal := err.Error()
+		refusal := blockedStart(t, repo, successor.State.LineageID)
 		for _, want := range []string{
 			"dangling predecessor",
 			"gentle-ai review abandon",
@@ -267,11 +293,10 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 	t.Run("pre-contract edge names abandon, reconciliation retired", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
 		_, _, successor, _ := preContractRecoveryFixture(t, repo, preContractFixtureAuthorization, nil)
-		err := freshStart(t, repo, "start-over-pre-contract")
-		if err == nil {
-			t.Fatal("start succeeded over an invalid recovery edge")
+		if err := freshStart(t, repo, "start-over-pre-contract"); err != nil {
+			t.Fatalf("unrelated work was refused by an invalid recovery edge it never inherited from: %v", err)
 		}
-		refusal := err.Error()
+		refusal := blockedStart(t, repo, successor.State.LineageID)
 		for _, want := range []string{
 			"exact maintainer authorization binding",
 			"gentle-ai review abandon",
@@ -294,11 +319,10 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 	t.Run("forged pristine successor names the abandonment that clears it", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
 		_, successor, _ := forgedRecoveryPair(t, repo, "start", "forged start target\n")
-		err := freshStart(t, repo, "start-over-forged")
-		if err == nil {
-			t.Fatal("start succeeded over a forged recovery edge")
+		if err := freshStart(t, repo, "start-over-forged"); err != nil {
+			t.Fatalf("unrelated work was refused by a forged recovery edge it never inherited from: %v", err)
 		}
-		refusal := err.Error()
+		refusal := blockedStart(t, repo, successor.State.LineageID)
 		for _, want := range []string{
 			"gentle-ai review abandon",
 			"--expected-revision \"" + successor.Revision + "\"",
@@ -327,7 +351,7 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 	// named a runnable exit.
 	t.Run("forged successor holding captured results names the repair that clears it", func(t *testing.T) {
 		repo := initSnapshotRepo(t)
-		forgedRecoveryPair(t, repo, "start-captured", "forged captured start target\n", func(state *CompactState) {
+		_, capturedSuccessor, _ := forgedRecoveryPair(t, repo, "start-captured", "forged captured start target\n", func(state *CompactState) {
 			results := make([]LensResult, 0, len(state.SelectedLenses))
 			for _, lens := range state.SelectedLenses {
 				results = append(results, LensResult{Lens: lens, Findings: []Finding{}, Evidence: []string{"reviewed once"}})
@@ -338,11 +362,10 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
-		err := freshStart(t, repo, "start-over-captured")
-		if err == nil {
-			t.Fatal("start succeeded over a content-mismatched leaf holding captured review data")
+		if err := freshStart(t, repo, "start-over-captured"); err != nil {
+			t.Fatalf("unrelated work was refused by a content-mismatched leaf it never inherited from: %v", err)
 		}
-		refusal := err.Error()
+		refusal := blockedStart(t, repo, capturedSuccessor.State.LineageID)
 		for _, want := range []string{
 			"gentle-ai review repair",
 			"--plan-digest",
@@ -359,6 +382,7 @@ func TestStartOverInvalidGraphRefusalNamesSanctionedExit(t *testing.T) {
 
 		ctx := context.Background()
 		plan, err := DeriveAuthorityDispositionPlanAtRepo(ctx, repo, "maintainer@example.com", "clear the content-mismatched leaf")
+		_ = plan
 		if err != nil {
 			t.Fatal(err)
 		}
