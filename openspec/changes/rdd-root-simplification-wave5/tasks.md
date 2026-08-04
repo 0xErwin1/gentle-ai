@@ -395,3 +395,67 @@ all 63 packages green; bench module green; bench journey corpus vs a freshly bui
 0 failed, exit 0; `bench/results.json` reverted; gofmt/vet clean; deadcode ratchet clean; rebase-contract
 clean (root `7598eda4` still an ancestor of `origin/main`). Not archivable yet: C-A and its dependents
 (W-2's v3 half) remain open. Return to sdd-apply fix cycle 2.
+
+## Fix Cycle 2 (closes the cycle-1 findings: C-A, W-2, W-7)
+
+Branch `feat/rdd-wave5-f2-v3-capture`, chained from fix cycle 1 @ `e0a51de3`. Coordinator design decision
+recorded here (design.md amendment): C-A is a MINIMAL capture primitive, not a rebuilt v2-shaped admission
+pipeline — that machinery (`ArtifactSubject`/`FrozenCandidateContext`/reopen/journal) is Wave 7 deletion
+scope; rebuilding it for v3 would violate the wave's own simplification mandate.
+
+- [x] **C-A** (v3 lens-result capture, the wave's last CRITICAL): new `reviewtransaction`
+      `NewLineageAuthority.CapturedResults` field + `AuthorityStore.CaptureLensResult` (existing Mutate/CAS
+      path; reviewing/validating only; lens/order must match the frozen `SelectedLenses` set; submitted
+      subject hash must match `NewLineageArtifactSubjectHash`'s own derivation; one-shot per lens, no reopen
+      — an identical resubmission is `Mutate`'s own idempotent no-op, a different subject hash for an
+      already-captured lens is refused). `review capture-result` routes by discovered lineage kind exactly
+      like finalize (wave-3 "ln" precedent); `review finalize`'s v3 branch now accepts `--captured-results`.
+      **Genuine mid-implementation bug caught and fixed before it shipped**: the first subject-hash design
+      bound to the authority's own revision, which changes on every `Mutate` including the capture write
+      itself — a self-relabeling bug shaped exactly like Phase 9's own frozen-anchor lesson (an idempotent
+      resubmission would have failed to match its own freshly-recomputed subject hash). Caught by
+      `TestCaptureLensResult_OneShotNoReopen`'s idempotent-resubmission subtest before any CLI code was
+      written against it; fixed by dropping revision from the hash's domain (binds only to the immutable
+      `LineageID`/`CandidateIdentity`/lens/order tuple instead). END STATE (coordinator's exact repro):
+      medium-tier v3, capture via the real CLI, finalize → approved, all five gates allow
+      (`TestReviewFacadeCaptureResultNewLineage_MediumTierFinalizeAllowsAllFiveGates`); tier-low zero-results
+      unaffected (`TestReviewFacadeCaptureResultNewLineage_TierLowZeroResultsStillWorks`). Mutation-proven:
+      the finalize `capturedLensResults` derivation and the CLI routing wiring were each independently
+      disconnected and confirmed to reproduce the ORIGINAL verify-report failure shapes exactly (the same
+      `ErrFinalizeRequiresLensResults` refusal and the same "v2 store not found" error), then restored. 3 new
+      refusal sites named their runnable `capture-result --preflight` continuation (refusal-resolution
+      ratchet). Commit `d43870ef`.
+- [x] **W-2** (partial, disclosed): unskipped `release/exact` in the 35-cell matrix (8/35 → 9/35 wired),
+      driven through the real binary via the compact/v2 path — the one lineage kind a plain binary-driven
+      `review start` can freshly create (confirmed empirically: v1 legacy has no CLI-reachable creation path
+      at all — a probe build showed ordinary `review start` always creates a `v2/` compact record, never
+      `v1/`; v3 needs `GENTLE_AI_RDD_NEW_LINEAGE` threaded into the matrix harness's subprocess, not pursued
+      this budget). Discovered and documented: release's own target resolution is `TargetExactRevision` at
+      the current COMMITTED HEAD, not `TargetCurrentChanges` like post-apply/pre-commit — the reviewed
+      candidate must be committed before release can see it at all, confirmed by an initial failing attempt
+      and fixed by adding the commit step (mutation-proven: removing it reproduces the exact scope-changed
+      denial). Deferred, disclosed: `release/changed` needs a genuinely delivered (committed) drift recipe
+      mirroring pre-push's amend-based shape, not the plain workspace-drift recipe the other four gates'
+      "changed" cells use; the remaining 5 release relations and any legacy(v1)/v3-specific cells stay
+      explicit skips. Matrix: **8/35 → 9/35 wired** (before/after, as requested). Commit `f4b47266`.
+- [x] **W-7**: investigated `AuthorityStore.WriteReceipt`'s conflict semantics
+      (`WriteReceipt` → `publishImmutable` → `publishNoReplace`, `store.go`): a genuinely ABSENT receipt
+      (never published) is repaired by a plain finalize replay, but a PRESENT receipt that fails to
+      parse/validate or does not match the frozen authority can never be repaired the same way —
+      `publishImmutable` refuses to overwrite differing existing bytes
+      (`ImmutablePublicationConflictError`) rather than repairing them, so the old shared denial (naming
+      `review finalize --lineage <id>`) named a continuation that would itself refuse. Split the single
+      `approved_without_receipt` denial into two: the genuinely-absent case keeps naming finalize (still
+      honest), and a new `approved_receipt_corrupt` case for a present-but-invalid receipt names the only
+      continuation that actually clears it — a fresh lineage via `review start`, since v3 has no
+      reopen/repair machinery for a corrupted receipt (the same "no reopen" boundary C-A's
+      `CaptureLensResult` enforces). Mutation-proven: collapsing the two cases back into one is caught by
+      the new test naming the exact wrong denial code. Commit `59df5f92`.
+
+Fix cycle 2 verification (covers C-A/W-2/W-7, the 3 commits above): `go test ./... -count=1` all 63 packages
+green; bench module green; bench journey corpus vs a freshly built binary: 59/59 completed, 0 failed, exit 0;
+`bench/results.json` reverted; gofmt/vet clean; deadcode ratchet clean; refusal-resolution ratchet clean;
+rebase-contract clean (root `7598eda4` still an ancestor of `origin/main`). **This closes every CRITICAL and
+every fold-in warning the cycle-1 verify named** (C-A, C-B, C-C, C-D-core, W-1, W-3, W-7 all closed; W-2
+partial and disclosed — the v3/legacy halves of release-cell unskipping remain a genuine, scoped follow-up,
+not a blocking gap in any of the four CRITICALs). Return to sdd-verify for re-verification.

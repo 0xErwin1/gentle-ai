@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -101,16 +102,38 @@ func resolveGoverningAuthority(ctx context.Context, root, lineage string, gateIn
 				return true, reviewtransaction.NativeGateEvaluation{}, &ReviewReceiptDiscoveryError{Kind: ReviewAuthorityCorrupted, Detail: storeErr.Error()}
 			}
 			receipt, receiptErr := authorityStore.LoadReceipt()
-			if receiptErr != nil || receipt.LineageID != record.Authority.LineageID ||
+			// W-7 (Wave 5 fix cycle 2, verify-report #10186): a genuinely ABSENT
+			// receipt (never published, e.g. a crash between Mutate and
+			// WriteReceipt) is repaired by a plain finalize replay --
+			// WriteReceipt's own publishImmutable (authority_store.go) writes
+			// fresh content when none exists yet. A PRESENT receipt that fails to
+			// parse/validate, or does not match the authority's own frozen state,
+			// can NEVER be repaired the same way: publishImmutable refuses to
+			// overwrite differing existing bytes (ImmutablePublicationConflictError,
+			// store.go's publishNoReplace path) rather than repairing them, and v3
+			// has no reopen/repair machinery for that case (the same "no reopen"
+			// boundary AuthorityStore.CaptureLensResult enforces, C-A). Naming
+			// `review finalize` for THIS case named a continuation that would
+			// itself refuse -- the honest continuation is a fresh lineage.
+			receiptAbsent := receiptErr != nil && os.IsNotExist(receiptErr)
+			receiptInvalid := receiptErr == nil && (receipt.LineageID != record.Authority.LineageID ||
 				receipt.AuthorityRevision != record.Revision || receipt.TerminalState != record.Authority.State ||
-				receipt.CandidateIdentity != record.Authority.CandidateIdentity {
+				receipt.CandidateIdentity != record.Authority.CandidateIdentity)
+			receiptUnreadable := receiptErr != nil && !receiptAbsent
+			if receiptAbsent || receiptInvalid || receiptUnreadable {
+				reason := reviewFacadeReceiptNotAvailableReason(record.Authority.LineageID)
+				code := "approved_without_receipt"
+				if !receiptAbsent {
+					reason = reviewFacadeApprovedReceiptCorruptReason(record.Authority.LineageID)
+					code = "approved_receipt_corrupt"
+				}
 				return true, reviewtransaction.NativeGateEvaluation{
-					Result: reviewtransaction.GateInvalidated, Reason: reviewFacadeReceiptNotAvailableReason(record.Authority.LineageID),
+					Result: reviewtransaction.GateInvalidated, Reason: reason,
 					Context: reviewtransaction.GateContext{
 						Gate: gateInput.Gate, LineageID: record.Authority.LineageID, StoreRevision: record.Revision,
 						BaseTree: record.Authority.CandidateIdentity.BaseTree, CandidateTree: record.Authority.CandidateIdentity.CandidateTree,
 						PolicyHash: record.Authority.CandidateIdentity.PolicyHash,
-						Denial:     &reviewtransaction.GateDenial{Stage: "new-lineage-validate", Code: "approved_without_receipt"},
+						Denial:     &reviewtransaction.GateDenial{Stage: "new-lineage-validate", Code: code},
 					},
 				}, nil
 			}
