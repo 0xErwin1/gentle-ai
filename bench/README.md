@@ -725,6 +725,21 @@ moved. Ours never do, because ours are minutes old.
 | `ds03-damaged-edge-successor-holds-results` | the same edge, successor holds a captured lens result | the pristineness rule refuses; correct guards composing into no way out |
 | `ds04-recovery-edge-with-no-predecessor` | the predecessor entry is gone | a different path: the edge is never classified, only reported as dangling |
 | `ds05-half-written-successor-record` | the record is truncated mid-write | a third path: the entry never parses, and the refusal names a continuation that cannot load it either |
+| `ds06-content-mismatched-leaf-repaired-via-disposition-plan` | ds03's non-pristine leaf, plus an unrelated approved witness lineage | `review repair --preflight` surfaces a leaf authority disposition plan; executing it quarantines the leaf and the rest of the graph, including the witness, never moves |
+| `ds07-two-content-mismatched-edges-no-disposition-plan` | ds01's two-edge shape | the disposition plan refuses to pick a side between two closed-class edges; nothing is quarantined |
+| `ds08-content-mismatched-leaf-forged-authorization-refuses` | ds06's eligible leaf, an authorization bound to the wrong repository | execution refuses even though the plan digest and inventory revision both match exactly |
+| `ds09-multi-chain-closure` | a damaged seed with a two-hop descendant chain (seed → child → grandchild) | the disposition plan derives and disposes the whole N=3 closure, not only the seed |
+| `ds10-cross-lineage-closure` | the same three-node closure, plus its own top-level predecessor and an unrelated witness | the over-collection guard: everything NOT in the closure stays byte-identical |
+| `ds11-crash-recovery-{prepared,committed}-{grandchild,child,seed}` (6 journeys) | the same three-node closure, genuinely interrupted right after one member's `prepared` or `committed` phase | a real mid-transaction crash resumes forward-only, with no double move and byte-identical residue — **requires a `-tags bench_fixture` product binary**; against an ordinary binary the interruption hook is not linked in and all six report `unsupported`, never `completed` or `failed` |
+| `ds12-negotiated-transition-route` | ds06's eligible leaf | `review status --next-transition` surfaces the closure disposition collect/execute route, not only the `--preflight` flag triad |
+
+**`ds11` needs a tagged binary.** The six `ds11-crash-recovery-*` journeys reuse
+the same `bench_fixture` build-tag seam `source-coupled`'s `j57` uses
+(`GENTLE_AI_BENCH_CRASH_AT_PHASE`) to interrupt `review repair` deterministically
+right after one closure member's `prepared` or `committed` phase, through the
+real binary. Build the product with `-tags bench_fixture` to run them for real;
+against an ordinary binary the hook is absent, the interruption never fires,
+and each of the six reports `unsupported` — never mistake that for a pass.
 
 **How each fixture stops lying when the format moves.** Authoring store bytes
 couples these journeys to a persisted format instead of to a CLI, and the

@@ -87,6 +87,7 @@ func init() {
 			"Each fixture proves its damage by reading it back through the product — `review inspect-authority` or `review status` — and requires the exact shape the journey claims before any counted command runs.",
 			"Each fixture also re-derives the store's own revision from the bytes it read, before editing them. That check is the format-drift tripwire: it fails first, and names the reason, instead of letting a fixture write a store the product rejects for an unrelated-looking reason.",
 			"The states here are reached by history in a real repository — an older build, an interrupted write, a revision that drifted — and by nothing an operator types.",
+			"The six ds11-crash-recovery-* journeys additionally require the product's `bench_fixture` build tag (`-tags bench_fixture`), the same seam `source-coupled`'s j57 uses, to genuinely interrupt `review repair` mid-transaction via GENTLE_AI_BENCH_CRASH_AT_PHASE. Against an ordinary binary that hook is not linked in, so the interruption never fires and each of the six reports `unsupported` rather than `completed` or `failed` — build with `-tags bench_fixture` to run them for real.",
 		},
 		Journeys: damagedStoreJourneys,
 	})

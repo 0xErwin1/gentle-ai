@@ -95,6 +95,79 @@ jobs:
             completed_once("j57-sdd-authority-drift-during-discovery-fails-closed")
           ' "$RUNNER_TEMP/bench-source-coupled.json"
 
+      # The damaged-store axis (ds01-ds12, 17 journeys — ds11 alone expands to
+      # six crash-position journeys) is exit evidence for the disposition and
+      # repair contract shipped across two waves: closure ordering, resume
+      # convergence, authorization-on-resume, over-collection. It runs on
+      # every PR, not only push/schedule: on this machine the whole axis costs
+      # ~12s untagged plus ~16s tagged (~28s total), against ~25s for the
+      # entire portable core — small next to the job's existing docker/E2E
+      # cost, so nothing is dropped to a schedule-only lane.
+      #
+      # Six of the seventeen (the ds11 crash-position journeys) require a
+      # `-tags bench_fixture` binary to genuinely interrupt the product
+      # mid-transaction; run first against the plain binary already built
+      # above, where those six MUST report `unsupported`, never `completed`
+      # or a silent skip — an unsupported result must never be mistaken for a
+      # pass. Then run the identical selection against the tagged binary,
+      # where all seventeen MUST complete. The explicit `length == 17` checks
+      # are the guard against a typo in this id list quietly shrinking the
+      # axis's own CI coverage back down.
+      - name: Run damaged-store axis evidence
+        run: |
+          DS_IDS="ds01-two-recovery-edges-neither-admitted,ds02-damaged-edge-pristine-successor,ds03-damaged-edge-successor-holds-results,ds04-recovery-edge-with-no-predecessor,ds05-half-written-successor-record,ds06-content-mismatched-leaf-repaired-via-disposition-plan,ds07-two-content-mismatched-edges-no-disposition-plan,ds08-content-mismatched-leaf-forged-authorization-refuses,ds09-multi-chain-closure,ds10-cross-lineage-closure,ds12-negotiated-transition-route,ds11-crash-recovery-prepared-grandchild,ds11-crash-recovery-prepared-child,ds11-crash-recovery-prepared-seed,ds11-crash-recovery-committed-grandchild,ds11-crash-recovery-committed-child,ds11-crash-recovery-committed-seed"
+          "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai" --axis damaged-store --only "$DS_IDS" --out "$RUNNER_TEMP/bench-damaged-store-untagged.json"
+          jq -e '
+            def completed_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "completed");
+            def unsupported_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "unsupported");
+            (.journeys | length) == 17 and
+            completed_once("ds01-two-recovery-edges-neither-admitted") and
+            completed_once("ds02-damaged-edge-pristine-successor") and
+            completed_once("ds03-damaged-edge-successor-holds-results") and
+            completed_once("ds04-recovery-edge-with-no-predecessor") and
+            completed_once("ds05-half-written-successor-record") and
+            completed_once("ds06-content-mismatched-leaf-repaired-via-disposition-plan") and
+            completed_once("ds07-two-content-mismatched-edges-no-disposition-plan") and
+            completed_once("ds08-content-mismatched-leaf-forged-authorization-refuses") and
+            completed_once("ds09-multi-chain-closure") and
+            completed_once("ds10-cross-lineage-closure") and
+            completed_once("ds12-negotiated-transition-route") and
+            unsupported_once("ds11-crash-recovery-prepared-grandchild") and
+            unsupported_once("ds11-crash-recovery-prepared-child") and
+            unsupported_once("ds11-crash-recovery-prepared-seed") and
+            unsupported_once("ds11-crash-recovery-committed-grandchild") and
+            unsupported_once("ds11-crash-recovery-committed-child") and
+            unsupported_once("ds11-crash-recovery-committed-seed")
+          ' "$RUNNER_TEMP/bench-damaged-store-untagged.json"
+          "$RUNNER_TEMP/gentle-ai-bench" run --binary "$RUNNER_TEMP/gentle-ai-bench-fixture" --axis damaged-store --only "$DS_IDS" --out "$RUNNER_TEMP/bench-damaged-store.json"
+          jq -e '
+            def completed_once($id):
+              [.journeys[] | select(.id == $id)] as $matches
+              | ($matches | length == 1) and ($matches[0].status == "completed");
+            (.journeys | length) == 17 and
+            completed_once("ds01-two-recovery-edges-neither-admitted") and
+            completed_once("ds02-damaged-edge-pristine-successor") and
+            completed_once("ds03-damaged-edge-successor-holds-results") and
+            completed_once("ds04-recovery-edge-with-no-predecessor") and
+            completed_once("ds05-half-written-successor-record") and
+            completed_once("ds06-content-mismatched-leaf-repaired-via-disposition-plan") and
+            completed_once("ds07-two-content-mismatched-edges-no-disposition-plan") and
+            completed_once("ds08-content-mismatched-leaf-forged-authorization-refuses") and
+            completed_once("ds09-multi-chain-closure") and
+            completed_once("ds10-cross-lineage-closure") and
+            completed_once("ds12-negotiated-transition-route") and
+            completed_once("ds11-crash-recovery-prepared-grandchild") and
+            completed_once("ds11-crash-recovery-prepared-child") and
+            completed_once("ds11-crash-recovery-prepared-seed") and
+            completed_once("ds11-crash-recovery-committed-grandchild") and
+            completed_once("ds11-crash-recovery-committed-child") and
+            completed_once("ds11-crash-recovery-committed-seed")
+          ' "$RUNNER_TEMP/bench-damaged-store.json"
+
       # Lives in this job, not the format job, because only Unit Tests is a
       # required status check on main. A guard that cannot block a merge is
       # decoration.
