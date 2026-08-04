@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/doctor"
 )
 
@@ -372,14 +375,64 @@ func TestCheckStateJSON_OK(t *testing.T) {
 
 // --- checkEngramReachable ---
 
-func TestCheckEngramReachable_ConnectionRefused(t *testing.T) {
-	orig := httpGetFn
-	defer func() { httpGetFn = orig }()
-	httpGetFn = func(url string, _ time.Duration) (int, error) {
-		return 0, errors.New("connection refused")
-	}
+// setStdioProbeForTest pins the stdio MCP probe outcome for one test.
+func setStdioProbeForTest(t *testing.T, err error) {
+	t.Helper()
+	orig := engramProbeStdioFn
+	engramProbeStdioFn = func(context.Context) error { return err }
+	t.Cleanup(func() { engramProbeStdioFn = orig })
+}
 
-	got := checkEngramReachable()
+// TestCheckEngramReachable_ExplicitHTTP_OK is matrix cell (c) of #2078: the
+// user declared an HTTP deployment via ENGRAM_BASE_URL, so the check probes
+// exactly that URL. Uses a real listener, not a stubbed httpGetFn, to prove
+// the HTTP path by execution.
+func TestCheckEngramReachable_ExplicitHTTP_OK(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	t.Setenv(engramHealthEnvVar, server.URL)
+
+	got := checkEngramReachable(context.Background())
+
+	if got.Status != CheckStatusPass {
+		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, server.URL) {
+		t.Errorf("detail should name the probed URL %s, got %q", server.URL, got.Detail)
+	}
+}
+
+func TestCheckEngramReachable_ExplicitHTTP_NonSuccessStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	t.Setenv(engramHealthEnvVar, server.URL)
+
+	got := checkEngramReachable(context.Background())
+
+	if got.Status != CheckStatusWarn {
+		t.Errorf("expected warn for 503, got %s", got.Status)
+	}
+}
+
+func TestCheckEngramReachable_ExplicitHTTP_ConnectionRefused(t *testing.T) {
+	// Bind a real listener, capture its address, then close it so the port is
+	// known-dead.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	deadURL := server.URL
+	server.Close()
+	t.Setenv(engramHealthEnvVar, deadURL)
+
+	got := checkEngramReachable(context.Background())
 
 	if got.Status != CheckStatusFail {
 		t.Errorf("expected fail, got %s", got.Status)
@@ -387,33 +440,73 @@ func TestCheckEngramReachable_ConnectionRefused(t *testing.T) {
 	if got.Remedy == nil {
 		t.Error("expected non-empty remedy")
 	}
-}
-
-func TestCheckEngramReachable_OK(t *testing.T) {
-	orig := httpGetFn
-	defer func() { httpGetFn = orig }()
-	httpGetFn = func(url string, _ time.Duration) (int, error) {
-		return 200, nil
-	}
-
-	got := checkEngramReachable()
-
-	if got.Status != CheckStatusPass {
-		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
+	if !strings.Contains(got.Detail, engramHealthEnvVar) {
+		t.Errorf("detail should attribute the URL to %s, got %q", engramHealthEnvVar, got.Detail)
 	}
 }
 
-func TestCheckEngramReachable_NonSuccessStatus(t *testing.T) {
-	orig := httpGetFn
-	defer func() { httpGetFn = orig }()
-	httpGetFn = func(url string, _ time.Duration) (int, error) {
-		return 503, nil
-	}
+// TestCheckEngramReachable_StdioFailure verifies that a stdio transport that
+// cannot complete the initialize handshake is a genuine failure with an
+// actionable remedy.
+func TestCheckEngramReachable_StdioFailure(t *testing.T) {
+	t.Setenv(engramHealthEnvVar, "")
+	setStdioProbeForTest(t, errors.New("engram mcp exited without answering initialize"))
 
-	got := checkEngramReachable()
+	got := checkEngramReachable(context.Background())
+
+	if got.Status != CheckStatusFail {
+		t.Errorf("expected fail, got %s: %s", got.Status, got.Detail)
+	}
+	if got.Remedy == nil {
+		t.Error("expected non-empty remedy")
+	}
+}
+
+// TestCheckEngramReachable_BinaryAbsent_Warns is matrix cell (d) of #2078:
+// no engram binary on PATH. The reachability check must warn "not probed"
+// instead of failing, because binary presence is the tool:engram check's
+// job. This goes through the real engram.ProbeStdio so the ErrNotInstalled
+// mapping is proven end to end.
+func TestCheckEngramReachable_BinaryAbsent_Warns(t *testing.T) {
+	t.Setenv(engramHealthEnvVar, "")
+	engram.SetLookPathForTest(t, "", "engram not found")
+
+	got := checkEngramReachable(context.Background())
 
 	if got.Status != CheckStatusWarn {
-		t.Errorf("expected warn for 503, got %s", got.Status)
+		t.Errorf("expected warn, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, "not probed") {
+		t.Errorf("detail should say not probed, got %q", got.Detail)
+	}
+}
+
+// TestCheckEngramReachable_StdioDefault_NoHTTPListener is matrix cell (a) of
+// #2078: a default install. gentle-ai only ever configures Engram as a stdio
+// MCP server (engram mcp --tools=agent, written by
+// internal/components/engram/inject.go); it never configures an HTTP
+// transport. With the stdio transport healthy and no HTTP listener anywhere,
+// the reachability check must pass instead of guessing an HTTP address and
+// reporting a false unhealthy.
+func TestCheckEngramReachable_StdioDefault_NoHTTPListener(t *testing.T) {
+	t.Setenv(engramHealthEnvVar, "")
+	setStdioProbeForTest(t, nil)
+
+	httpCalls := 0
+	orig := httpGetFn
+	defer func() { httpGetFn = orig }()
+	httpGetFn = func(url string, _ time.Duration) (int, error) {
+		httpCalls++
+		return 0, fmt.Errorf("Get %q: dial tcp: connect: connection refused", url)
+	}
+
+	got := checkEngramReachable(context.Background())
+
+	if got.Status != CheckStatusPass {
+		t.Fatalf("engram:reachable status = %q, detail = %q; want pass: stdio MCP is configured and healthy, no HTTP listener exists", got.Status, got.Detail)
+	}
+	if httpCalls != 0 {
+		t.Fatalf("check attempted %d HTTP request(s) without ENGRAM_BASE_URL set; want 0 (no guessed URL)", httpCalls)
 	}
 }
 
@@ -509,6 +602,8 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
 	}
 	availableBytesFn = func(string) (int64, error) { return 1024 * 1024 * 1024, nil } // 1 GB
 	httpGetFn = func(string, time.Duration) (int, error) { return 200, nil }
+	t.Setenv(engramHealthEnvVar, "")
+	setStdioProbeForTest(t, nil)
 	pathSnapshots := 0
 	pathDirsFn = func() []string { pathSnapshots++; return []string{"/usr/local/bin"} }
 	osUserHomeDirDoctor = func() (string, error) { return homeDir, nil }
@@ -533,7 +628,7 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
   [ok]  tool:engram                    engram found at /usr/local/bin/engram
   [ok]  tool:claude                    claude found at /usr/local/bin/claude
   [ok]  state:json                     state file OK — 1 agent(s) installed: claude-code
-  [ok]  engram:reachable               engram health endpoint OK at http://localhost:7437/health (HTTP 200)
+  [ok]  engram:reachable               engram MCP (stdio) answered the initialize handshake
   [ok]  disk:space                     1024 MB free on %s filesystem
 
 Summary: 7 passed, 0 failed, 0 warnings
