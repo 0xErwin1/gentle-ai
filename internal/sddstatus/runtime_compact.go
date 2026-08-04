@@ -20,15 +20,25 @@ const (
 	CompactBlockMaintainerDecision  CompactBlockReason = "maintainer_decision"
 	CompactBlockCorruptAuthority    CompactBlockReason = "corrupt_authority"
 	CompactBlockInvalidContinuation CompactBlockReason = "invalid_continuation"
+	CompactBlockRemediationRequired CompactBlockReason = "remediation_required"
 	CompactBlockAuthorityFailure    CompactBlockReason = "authority_failure"
 )
 
 // CompactAttemptResult is the bounded orchestration projection. RuntimeStatus
 // remains available through the legacy diagnostic operations only.
+//
+// Exit and Detail carry a wrapped mutation refusal's message text through to
+// this compact boundary (#2249): compactMutationFailure populates both
+// whenever it classifies a real error, so a well-constructed refusal that
+// names a runnable continuation — like runtimeRemediationExitRefusal's — is
+// never silently reduced to a bare Reason. Both stay empty on every happy
+// path (proceed, complete-with-no-error).
 type CompactAttemptResult struct {
 	State  CompactAttemptState `json:"state"`
 	Reason CompactBlockReason  `json:"reason,omitempty"`
 	Token  string              `json:"token,omitempty"`
+	Exit   string              `json:"exit,omitempty"`
+	Detail string              `json:"detail,omitempty"`
 }
 
 // CompactAcquireRequest is the bounded orchestration projection of
@@ -293,19 +303,34 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin B
 		}
 		return compactAcquireResult(replay, begin, publication.Revision)
 	}
+	// Every branch below wraps a real error, so `detail` always has message
+	// text to carry through to the compact JSON boundary instead of being
+	// thrown away behind a bare classification (#2249). `exit` reuses the
+	// same text: these refusals are constructed specifically to name a
+	// runnable continuation inline (see runtimeRemediationExitRefusal), and
+	// there is no reliable field-agnostic way to shorten that further.
+	detail := err.Error()
+	reason := CompactBlockAuthorityFailure
 	switch {
 	case errors.Is(err, ErrRuntimeObjectiveDone):
-		return CompactAttemptResult{State: CompactStateComplete}
+		return CompactAttemptResult{State: CompactStateComplete, Exit: detail, Detail: detail}
 	case errors.Is(err, ErrRuntimeBudgetExhausted), errors.Is(err, ErrRuntimeObjectiveChange):
-		return compactBlocked(CompactBlockMaintainerDecision, "")
+		reason = CompactBlockMaintainerDecision
 	case errors.Is(err, ErrRuntimeAttemptActive):
-		return compactBlocked(CompactBlockActiveAttempt, "")
+		reason = CompactBlockActiveAttempt
 	case errors.Is(err, ErrRuntimeRevisionConflict), errors.Is(err, ErrRuntimeConcurrentUpdate),
-		errors.Is(err, ErrRuntimeRequestConflict), errors.Is(err, ErrRuntimeNoActiveAttempt):
-		return compactBlocked(CompactBlockInvalidContinuation, "")
-	default:
-		return compactBlocked(CompactBlockAuthorityFailure, "")
+		errors.Is(err, ErrRuntimeRequestConflict), errors.Is(err, ErrRuntimeNoActiveAttempt),
+		errors.Is(err, ErrBindingRevisionConflict):
+		reason = CompactBlockInvalidContinuation
+	// ErrRuntimeRemediationSuccessorRequired is the sentinel behind
+	// runtimeRemediationExitRefusal (runtime_ledger.go:628-646): the candidate
+	// moved after Begin, so a passing finish demands the remediation trio
+	// naming its own runnable exit. It previously fell through to the
+	// default authority_failure and lost that exit entirely (#2249).
+	case errors.Is(err, ErrRuntimeRemediationSuccessorRequired):
+		reason = CompactBlockRemediationRequired
 	}
+	return CompactAttemptResult{State: CompactStateBlocked, Reason: reason, Exit: detail, Detail: detail}
 }
 
 func compactBlocked(reason CompactBlockReason, token string) CompactAttemptResult {
