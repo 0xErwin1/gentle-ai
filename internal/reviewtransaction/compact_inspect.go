@@ -125,9 +125,6 @@ var loadCompactRecoveryRecords = func(ctx context.Context, repo string) (Compact
 	if err != nil {
 		return report, nil, err
 	}
-	if err := ensureNoPreparedCompactBatchReconciliation(base); err != nil {
-		return report, nil, err
-	}
 	versionRoot := filepath.Join(base, "v2")
 	entries, err := os.ReadDir(versionRoot)
 	if os.IsNotExist(err) {

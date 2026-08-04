@@ -284,11 +284,10 @@ func acquireStoreLockWithBoundedWait(ctx context.Context, path string) (*storeLo
 	}
 }
 
+// acquireMaintenanceLock lost its allowPreparedBatch parameter along with the
+// batch-marker refusal it selected. No caller can prepare a batch anymore, so
+// the only value ever passed was false and the branch it guarded is gone.
 func acquireMaintenanceLock(ctx context.Context, path string, mode maintenanceLockMode) (*MaintenanceLock, error) {
-	return acquireMaintenanceLockInternal(ctx, path, mode, false)
-}
-
-func acquireMaintenanceLockInternal(ctx context.Context, path string, mode maintenanceLockMode, allowPreparedBatch bool) (*MaintenanceLock, error) {
 	if err := ensureMaintenanceLockPath(path); err != nil {
 		return nil, err
 	}
@@ -316,13 +315,6 @@ func acquireMaintenanceLockInternal(ctx context.Context, path string, mode maint
 		}
 		if locked {
 			lock := &MaintenanceLock{lock: &storeLock{file: file}}
-			if !allowPreparedBatch && filepath.Base(path) == "REVIEW-MAINTENANCE.lock" {
-				base := filepath.Join(filepath.Dir(path), "review-transactions")
-				if err := ensureNoPreparedCompactBatchReconciliation(base); err != nil {
-					_ = lock.Release()
-					return nil, err
-				}
-			}
 			return lock, nil
 		}
 		_ = file.Close()

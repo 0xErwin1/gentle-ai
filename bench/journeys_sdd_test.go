@@ -34,8 +34,12 @@ func TestPortableSDDFailClosedAuthorityJourneysAreRegistered(t *testing.T) {
 			want[journey.ID] = true
 		}
 	}
-	if got := len(seen); got != 59 {
-		t.Errorf("core journey count = %d, want 59", got)
+	// 60 since j62-leftover-batch-reconcile-marker joined the core corpus: a
+	// repository holding the on-disk artifact a retired batch reconciliation
+	// left behind. It is pinned here for the same reason every other count is,
+	// so a journey cannot silently leave the corpus it was added to prove.
+	if got := len(seen); got != 60 {
+		t.Errorf("core journey count = %d, want 60", got)
 	}
 	for id, found := range want {
 		if !found {

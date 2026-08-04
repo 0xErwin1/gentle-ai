@@ -204,6 +204,30 @@ func detachedHead(sandbox *Sandbox) error {
 
 // bareRepository points the journey at a repository with no working tree at
 // all. There is nothing to stage, which is the point.
+// leftoverBatchReconcileMarker builds an ordinary repository and plants the
+// exact on-disk artifact a repository interrupted mid-batch keeps: a
+// "batch-reconcile-journal.json" at the authority root. It is written
+// directly, not through any product verb, because no product verb can create
+// one anymore -- which is precisely why a repository holding one could not
+// get rid of it either.
+func leftoverBatchReconcileMarker(sandbox *Sandbox) error {
+	if err := baseRepo(sandbox); err != nil {
+		return err
+	}
+	marker := filepath.Join(sandbox.Repo, ".git", "gentle-ai", "review-transactions", "batch-reconcile-journal.json")
+	if err := sandbox.write(marker, "{\"prepared\":true}\n"); err != nil {
+		return err
+	}
+
+	// Proof: the artifact this journey is about is really on disk before the
+	// first product invocation. A fixture that silently failed to plant it
+	// would drive an ordinary repository and pass for the wrong reason.
+	if _, err := os.Lstat(marker); err != nil {
+		return fmt.Errorf("batch-reconcile marker was not planted: %w", err)
+	}
+	return nil
+}
+
 func bareRepository(sandbox *Sandbox) error {
 	bare := filepath.Join(sandbox.Home, "bare.git")
 	if err := os.MkdirAll(bare, 0o755); err != nil {
@@ -927,6 +951,37 @@ func edgeJourneys() []Journey {
 						Shape:      ByDesignOperatorKnowledge,
 						NextAction: "run the same command again from a checkout",
 					}},
+			},
+		},
+		{
+			ID:     "j62-leftover-batch-reconcile-marker",
+			Title:  "Leftover batch-reconcile marker: a wedge that also disabled its own diagnosis",
+			Source: "shape 4 (a refusal naming nothing runnable), against an artifact nothing can clear",
+			// Expected: every step succeeds.
+			//
+			// A repository interrupted mid-batch keeps an on-disk
+			// "batch-reconcile-journal.json" at its authority root. The verb
+			// that wrote it and the provider that replayed it both retired,
+			// so the "exact replay is required" it demanded became
+			// unsatisfiable and nothing on main removes the file.
+			//
+			// While its presence was a refusal, this repository was wedged
+			// permanently: negotiated status answered
+			// {"kind":"stop","reason_code":"corrupted_or_unverifiable_authority"}
+			// with nothing runnable behind it, and the two commands an
+			// operator would reach for to diagnose or escape --
+			// inspect-authority and abandon -- answered the same refusal. The
+			// marker's path appeared only in non-negotiated status, never in
+			// the v2 envelope a consumer is required to route from.
+			//
+			// This journey drives exactly that repository. It is in the
+			// corpus so the block is measured rather than argued about.
+			Steps: []Step{
+				{Name: "fixture: repository holding a leftover batch-reconcile marker", Fixture: leftoverBatchReconcileMarker},
+				{Name: "inspect authority with the marker present", Requires: inspectAuthorityCapability, Args: productArgs("review", "inspect-authority")},
+				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start"), After: rememberLineage},
+				{Name: "review finalize", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: rememberLineage},
+				{Name: "gate pre-commit", Requires: validateCapability, Args: productArgs("review", "validate", "--gate", "pre-commit")},
 			},
 		},
 		{

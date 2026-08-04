@@ -124,8 +124,23 @@ func InventoryAuthority(ctx context.Context, repo string) (AuthorityStatusReport
 		report.Diagnostics = append(report.Diagnostics, AuthorityInventoryDiagnostic{Path: root, Problem: "inspect review authority root: " + err.Error()})
 		return report, nil
 	}
+	// A leftover "batch-reconcile-journal.json" is REPORTED, never treated as
+	// proof the authority is unreadable. Wave 7 retired both the
+	// `review reconcile-authority-batch` verb and its replay provider, so the
+	// "exact replay is required" this marker used to demand became
+	// unsatisfiable by construction: nothing on main creates a new marker and
+	// nothing removes an old one. Downgrading the whole inventory to
+	// incomplete/unauthoritative on its presence therefore wedged the
+	// repository permanently -- review_facade.go's
+	// `(!report.Complete || !report.Authoritative)` branch turned it into
+	// applicability "corrupted" and a stop carrying only
+	// "corrupted_or_unverifiable_authority", for records this function never
+	// even read. Naming the exact path is what satisfies Wave 7's D5
+	// forensic-safety requirement (never be BLIND to a historical on-disk
+	// artifact); refusing every operation never made it visible, and in fact
+	// hid it, because the one command that would have shown it
+	// (`review inspect-authority`) was gated on the same marker.
 	if err := ensureNoPreparedCompactBatchReconciliation(root); err != nil {
-		report.Complete, report.Authoritative, report.Status = false, false, AuthorityStatusInvalid
 		report.Diagnostics = append(report.Diagnostics, AuthorityInventoryDiagnostic{
 			Path: compactBatchReconcileMarkerPath(root), Problem: ErrCompactBatchReconcilePrepared.Error(),
 		})

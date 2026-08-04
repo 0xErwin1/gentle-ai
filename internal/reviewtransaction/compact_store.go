@@ -903,9 +903,6 @@ func CompactAuthoritativeStore(ctx context.Context, repo, lineageID string) (Com
 	if err != nil {
 		return CompactStore{}, err
 	}
-	if err := ensureNoPreparedCompactBatchReconciliation(base); err != nil {
-		return CompactStore{}, err
-	}
 	versionRoot := filepath.Join(base, "v2")
 	dir := filepath.Join(versionRoot, lineageID)
 	return CompactStore{Dir: dir, lineageID: lineageID, repo: root, lockPath: filepath.Join(versionRoot, "LOCK"), maintenanceLockPath: compactMaintenanceLockPath(base)}, nil
@@ -934,9 +931,6 @@ func CompactIncidentsDir(ctx context.Context, repo, lineageID string) (string, e
 func DiscoverCompactStores(ctx context.Context, repo string) ([]CompactStore, error) {
 	base, root, err := reviewAuthorityRoot(ctx, repo)
 	if err != nil {
-		return nil, err
-	}
-	if err := ensureNoPreparedCompactBatchReconciliation(base); err != nil {
 		return nil, err
 	}
 	versionRoot := filepath.Join(base, "v2")
@@ -1581,17 +1575,14 @@ func (store CompactStore) LoadContext(ctx context.Context) (CompactRecord, error
 }
 
 // acquireReadMaintenance prevents a stale CompactStore handle from observing
-// a partially applied authority-maintenance transaction. The first marker
-// check refuses an already-prepared batch without waiting on its exclusive
-// lease; the maintenance acquisition closes the race with a batch that starts
-// after that check and repeats the marker check once shared access is held.
+// a partially applied authority-maintenance transaction. The batch-marker
+// checks that used to bracket this acquisition are gone: no batch can start
+// anymore (Wave 7 retired the verb and its provider), so there is no longer a
+// race to close, and a leftover historical marker is reported by
+// InventoryAuthority rather than refused here.
 func (store CompactStore) acquireReadMaintenance(ctx context.Context) (*MaintenanceLock, error) {
 	if store.maintenanceLockPath == "" {
 		return nil, nil
-	}
-	authorityRoot := filepath.Join(filepath.Dir(store.maintenanceLockPath), "review-transactions")
-	if err := ensureNoPreparedCompactBatchReconciliation(authorityRoot); err != nil {
-		return nil, err
 	}
 	// Preserve the historical read-only behavior for a handle whose compact
 	// authority record does not exist. There is no batch-owned record to

@@ -202,11 +202,14 @@ func (scan *authorityRepairScan) run(ctx context.Context) error {
 			}
 		}
 	}
-	if _, err := os.Lstat(compactBatchReconcileMarkerPath(scan.base)); err == nil {
-		scan.conflicts++
-	} else if !os.IsNotExist(err) {
-		scan.conflicts++
-	}
+	// A leftover batch-reconcile marker is deliberately NOT counted as a
+	// repair conflict. Counting it forced repair.status "conflicting" on its
+	// presence alone, which made `review repair` permanently ineligible for
+	// any repository holding one -- including a repository whose authority is
+	// genuinely damaged and would otherwise be repairable. Nothing can replay
+	// or clear the marker (Wave 7 retired the verb and its provider together),
+	// so the conflict it declared could never be resolved. It stays reported
+	// by InventoryAuthority's diagnostics; see status.go.
 	if err := scan.scanCompact(ctx, budget); errors.Is(err, errAuthorityRepairTruncated) {
 		scan.truncated = true
 	} else if err != nil {

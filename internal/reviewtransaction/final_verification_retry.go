@@ -508,9 +508,6 @@ func resolveFinalVerificationRetryStores(ctx context.Context, repo, predecessorL
 	if err != nil || !locatorPathWithin(identity.GitCommonDir, authorityRoot) {
 		return CompactStore{}, CompactStore{}, "", errors.New("final-verification retry authority root is unavailable or inconsistent")
 	}
-	if err := ensureNoPreparedCompactBatchReconciliation(authorityRoot); err != nil {
-		return CompactStore{}, CompactStore{}, "", err
-	}
 	versionRoot, err := canonicalLocatorDirectory(filepath.Join(authorityRoot, "v2"))
 	if err != nil || filepath.Dir(versionRoot) != authorityRoot {
 		return CompactStore{}, CompactStore{}, "", errors.New("final-verification retry compact-v2 root is unavailable or inconsistent")
