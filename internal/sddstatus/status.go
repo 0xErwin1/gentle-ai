@@ -230,6 +230,13 @@ type Status struct {
 	PhaseInstructions *PhaseInstructions `json:"phaseInstructions,omitempty"`
 	NextRecommended   string             `json:"nextRecommended"`
 	BlockedReasons    []string           `json:"blockedReasons"`
+	// runtimeAttemptTokens carries the ledger's live attempt tokens alongside
+	// RuntimeStatus so status can ask the one readiness predicate the same
+	// question compact acquire asks, and name the same continuation acquire
+	// names. It is unexported on purpose: the tokens are an input to the
+	// answer, not part of the SDD v1 wire document, and the ratified contract
+	// keeps full runtime payload off that document.
+	runtimeAttemptTokens map[int]string
 }
 
 // ReviewOfferBlock carries what an orchestrator needs to present the
@@ -459,7 +466,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	runtimeStatus, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName)
+	runtimeStatus, runtimeAttemptTokens, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName)
 	reviewState, reviewStateReason := readReviewTransaction(firstPath(artifactPaths.ReviewState), "")
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
@@ -506,7 +513,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 			blockedReasons.genuine = append(blockedReasons.genuine, evaluation.Reason)
 		}
 	}
-	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, verifyResult)
+	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, runtimeAttemptTokens, verifyResult)
 	remediationRequired := staleAllowAuthority == nil && !staleEvidenceUnmanaged && !runtimeRemediationComplete && artifacts["verifyReport"] == ArtifactDone && !verifyResult.Passing && applyState == ApplyAllDone
 	var compactRemediation *reviewtransaction.CompactState
 	if !reviewDisabled {
@@ -591,6 +598,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	status.ApplyState = applyState
 	status.RemediationState = remediationState
 	status.RuntimeStatus = runtimeStatus
+	status.runtimeAttemptTokens = runtimeAttemptTokens
 	status.ReviewTransaction = reviewState
 	if governingRef == nil {
 		if staleAllowAuthority != nil {
@@ -625,25 +633,30 @@ func Resolve(options ResolveOptions) (Status, error) {
 	return status, nil
 }
 
-func loadNativeRuntimeStatus(ctx context.Context, workspaceRoot, changeName string) (*RuntimeStatus, error) {
+// loadNativeRuntimeStatus returns the runtime status together with the ledger's
+// attempt tokens. Status needs the tokens because it now reports what compact
+// acquire would return, and acquire's answer for a live attempt names that
+// attempt's own token as the caller's continuation (#2463).
+func loadNativeRuntimeStatus(ctx context.Context, workspaceRoot, changeName string) (*RuntimeStatus, map[int]string, error) {
 	// SDD status remains useful for non-Git planning fixtures and repositories.
 	// A native runtime chain cannot exist without a Git common-dir, so the
 	// absence of a repository means there is no runtime authority to embed.
 	if _, err := (reviewtransaction.SnapshotBuilder{Repo: workspaceRoot}).ResolveRepositoryRoot(ctx); err != nil {
 		if workspaceHasGitMetadata(workspaceRoot) {
-			return nil, fmt.Errorf("resolve Git repository for native SDD runtime authority: %w", err)
+			return nil, nil, fmt.Errorf("resolve Git repository for native SDD runtime authority: %w", err)
 		}
-		return nil, nil
+		return nil, nil, nil
 	}
 	store, err := OpenRuntimeStore(ctx, workspaceRoot, changeName)
 	if err != nil {
-		return nil, fmt.Errorf("open native SDD runtime authority: %w", err)
+		return nil, nil, fmt.Errorf("open native SDD runtime authority: %w", err)
 	}
-	status, err := store.Status()
+	replay, err := store.load()
 	if err != nil {
-		return nil, fmt.Errorf("read native SDD runtime authority: %w", err)
+		return nil, nil, fmt.Errorf("read native SDD runtime authority: %w", err)
 	}
-	return &status, nil
+	status := replay.Status
+	return &status, replay.AttemptTokens, nil
 }
 
 func workspaceHasGitMetadata(workspaceRoot string) bool {
@@ -660,9 +673,14 @@ func workspaceHasGitMetadata(workspaceRoot string) bool {
 	}
 }
 
-func nativeRuntimeCompletesRemediation(runtimeStatus *RuntimeStatus, verify verifyResultEvaluation) bool {
-	if runtimeStatus == nil || !runtimeStatus.Complete || runtimeStatus.DecisionRequired || runtimeStatus.ActiveAttempt != nil ||
-		runtimeStatus.Binding == nil || verify.EvidenceRevision == "" || len(runtimeStatus.Attempts) == 0 {
+func nativeRuntimeCompletesRemediation(runtimeStatus *RuntimeStatus, attemptTokens map[int]string, verify verifyResultEvaluation) bool {
+	if runtimeStatus == nil || runtimeStatus.Binding == nil || verify.EvidenceRevision == "" || len(runtimeStatus.Attempts) == 0 {
+		return false
+	}
+	// "The runtime finished this objective cleanly" is the readiness question,
+	// so it is asked through the one predicate rather than re-derived here.
+	readiness, terminal := runtimeReadiness(runtimeReadinessInput{Status: *runtimeStatus, AttemptTokens: attemptTokens})
+	if !terminal || readiness.State != CompactStateComplete {
 		return false
 	}
 	last := runtimeStatus.Attempts[len(runtimeStatus.Attempts)-1]
@@ -690,30 +708,38 @@ func applyNativeRuntimeErrorRouting(status *Status, runtimeErr error) {
 	status.BlockedReasons = append(status.BlockedReasons, reason)
 }
 
+// applyNativeRuntimeRouting reports what compact acquire would return. It no
+// longer derives that verdict, and it no longer asserts it in prose: the reason
+// text is the predicate's own named exit.
+//
+// An active attempt is deliberately not a stop (#2463). The ratified contract
+// (internal/assets/skills/_shared/sdd-status-contract.md lines 20, 21 and 142)
+// makes acquire the launch authority and full runtime status a diagnostic, and
+// acquire's own exit for this state is self-service: the holder of the token
+// adds --token to its own call and continues that exact attempt. Status cannot
+// know whether its reader holds that token, and it does not need to, because
+// acquire checks. Blocking here stopped the one caller that was entitled to
+// proceed, and every caller reaches acquire before launching anyway.
+//
+// A maintainer decision has no self-service exit, so it stays a hard stop.
 func applyNativeRuntimeRouting(status *Status) {
 	if status == nil || status.RuntimeStatus == nil {
 		return
 	}
-	runtimeStatus := status.RuntimeStatus
-	change := runtimeStatus.Change
+	readiness, terminal := runtimeReadiness(runtimeReadinessInput{
+		Status: *status.RuntimeStatus, AttemptTokens: status.runtimeAttemptTokens,
+	})
+	if !terminal || readiness.State != CompactStateBlocked || readiness.Reason == CompactBlockActiveAttempt {
+		return
+	}
+	change := status.RuntimeStatus.Change
 	if status.ChangeName != nil {
 		change = *status.ChangeName
 	}
-	var reason string
-	switch {
-	case runtimeStatus.DecisionRequired:
-		reason = fmt.Sprintf(
-			"native SDD runtime execution requires an explicit maintainer scope decision; compact acquire reports blocked(maintainer_decision). Reset remains exceptional and may be run only after explicit maintainer authorization; full status is diagnostic only for %q in %q",
-			change, status.ActionContext.WorkspaceRoot,
-		)
-	case runtimeStatus.ActiveAttempt != nil:
-		reason = fmt.Sprintf(
-			"native SDD runtime attempt %d is active; compact acquire reports blocked(active_attempt) with its opaque settle token. Do not launch another continuation; settle only the external execution already associated with that token for %q in %q",
-			runtimeStatus.ActiveAttempt.Ordinal, change, status.ActionContext.WorkspaceRoot,
-		)
-	default:
-		return
-	}
+	reason := fmt.Sprintf(
+		"native SDD runtime execution is blocked(%s) for %q in %q; compact acquire reports the same: %s",
+		readiness.Reason, change, status.ActionContext.WorkspaceRoot, readiness.Exit,
+	)
 	status.Dependencies.Apply = DependencyBlocked
 	status.Dependencies.Verify = DependencyBlocked
 	status.Dependencies.Archive = DependencyBlocked
@@ -787,7 +813,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	taskProgress := countTaskProgressText(artifactsByType["tasks"].Content)
 	specCounts := countSpecRequirementsAndScenarios([]string{artifactsByType["spec"].Content})
 	verifyResult := parseVerifyResult(artifactsByType["verify-report"].Content, specCounts)
-	runtimeStatus, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName)
+	runtimeStatus, runtimeAttemptTokens, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName)
 	reviewState, reviewStateReason := readReviewTransaction("", artifactsByType["review/transaction"].Content)
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
@@ -817,7 +843,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 			blockedReasons.genuine = append(blockedReasons.genuine, evaluation.Reason)
 		}
 	}
-	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, verifyResult)
+	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, runtimeAttemptTokens, verifyResult)
 	remediationRequired := staleAllowAuthority == nil && !staleEvidenceUnmanaged && !runtimeRemediationComplete && artifacts["verifyReport"] == ArtifactDone && !verifyResult.Passing && applyState == ApplyAllDone
 	var compactRemediation *reviewtransaction.CompactState
 	if !reviewDisabled {
@@ -882,6 +908,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	status.ApplyState = applyState
 	status.RemediationState = remediationState
 	status.RuntimeStatus = runtimeStatus
+	status.runtimeAttemptTokens = runtimeAttemptTokens
 	status.ReviewTransaction = reviewState
 	if governingRef == nil {
 		if staleAllowAuthority != nil {
@@ -1742,12 +1769,31 @@ func renderPhaseInstructions(status Status) PhaseInstructions {
 
 func nativeRuntimeInstructions(status Status, change string) []string {
 	workspace := status.ActionContext.WorkspaceRoot
-	return []string{
+	return append([]string{
 		fmt.Sprintf("Before any runtime-bearing apply, verify, or remediation launch, run `gentle-ai sdd-attempt acquire --cwd %q --change %q --request-id \"<unique-request-id>\" --work-unit \"<label>\" --evidence-goal \"<stable-goal>\" --max-attempts <count> --max-changed-lines <count>`.", workspace, change),
 		"Launch only for state proceed and retain its opaque token. State blocked or complete stops the launch; full runtime status is a diagnostic escape hatch, not normal model context.",
 		fmt.Sprintf("After the external run, call `gentle-ai sdd-attempt settle --cwd %q --change %q --token \"<acquire-token>\" --request-id \"<unique-request-id>\" --outcome <passed|failed|interrupted> --evidence-revision <sha256> --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<evidence>\" --process-evidence \"<evidence>\"`; add --successor-lineage only for a distinct approved remediation successor.", workspace, change),
 		"Treat settle state proceed as permission for another bounded acquire, blocked as a hard stop, and complete as terminal. Reset is exceptional, requires an explicit maintainer scope decision, and is never automatic.",
+	}, liveRuntimeAttemptInstructions(status)...)
+}
+
+// liveRuntimeAttemptInstructions names the continuation for an attempt that is
+// already active. This is the informational half of #2463: status stops
+// blocking a live attempt, and instead hands the caller the exact exit compact
+// acquire itself names, including that attempt's own token. A caller that owns
+// the token continues it; a caller that does not learns it must settle first.
+// The text is the predicate's, never a paraphrase.
+func liveRuntimeAttemptInstructions(status Status) []string {
+	if status.RuntimeStatus == nil {
+		return nil
 	}
+	readiness, terminal := runtimeReadiness(runtimeReadinessInput{
+		Status: *status.RuntimeStatus, AttemptTokens: status.runtimeAttemptTokens,
+	})
+	if !terminal || readiness.Reason != CompactBlockActiveAttempt {
+		return nil
+	}
+	return []string{"An attempt is already active for this change: " + readiness.Exit}
 }
 
 // nonPhaseRoutingInstructions renders actionable continuations for
