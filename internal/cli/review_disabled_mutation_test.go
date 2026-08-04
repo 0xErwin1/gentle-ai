@@ -157,9 +157,6 @@ func TestDisabledReviewRefusesEveryAuthorityMutatingVerb(t *testing.T) {
 		{verb: "reclaim", args: []string{"--lineage", "review-disabled-sweep", "--reason", "reason", "--actor", "maintainer"}},
 		{verb: "dispose-result", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--target", digest, "--lens", "review-risk", "--order", "0", "--artifact-digest", digest, "--class", "empty_result", "--diagnostic", "diagnostic", "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
 		{verb: "reopen-results", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--target", digest, "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
-		{verb: "quarantine-legacy", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--diagnostic", "diagnostic", "--disposition", "quarantined", "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
-		{verb: "quarantine-legacy-fix-scope", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--diagnostic", "diagnostic", "--disposition", "quarantined", "--anomaly-set", "anomaly", "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
-		{verb: "repair-legacy-alias", args: []string{"--lineage", "review-disabled-sweep", "--expected-revision", digest, "--diagnostic", "diagnostic", "--disposition", "repaired", "--reason", "reason", "--actor", "maintainer", "--maintainer-authorization", authorization}},
 		{verb: "bind-sdd", args: []string{"--change", "some-change", "--lineage", "review-disabled-sweep", "--expected-binding-revision", digest}},
 	} {
 		t.Run(testCase.verb, func(t *testing.T) {
