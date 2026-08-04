@@ -365,8 +365,43 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin B
 	return CompactAttemptResult{State: CompactStateBlocked, Reason: reason, Exit: detail, Detail: detail}
 }
 
+// compactBlockedExitText names the runnable continuation for every reason
+// compactBlocked itself is ever called with (exit-naming audit fix #2):
+// before this, all 20 of this file's compactBlocked call sites shipped a
+// bare {"state":"blocked","reason":"<code>"} with nothing behind it — no
+// Exit, no Detail, and (unlike next_transition's stop reason codes) no
+// stderr narration or docs mirror either. `gentle-ai review mode disable` is
+// named as the fallback delivery exit only where the reason itself offers no
+// more specific runnable command, mirroring the same rule the shipped
+// "Continue after a stop reason code" table (review-ledger-contract.md)
+// applies at the wire level.
+func compactBlockedExitText(reason CompactBlockReason, token string) string {
+	switch reason {
+	case CompactBlockCorruptAuthority:
+		return "the attempt ledger for this work unit cannot be read as valid authority; run " +
+			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` to see what is readable, " +
+			"or run `gentle-ai review mode disable` to proceed without receipt-driven review"
+	case CompactBlockInvalidContinuation:
+		return "this call does not continue the attempt currently on record; run " +
+			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` to see the live attempt and its " +
+			"current revision, then reissue this call against that state"
+	case CompactBlockMaintainerDecision:
+		return "this work unit's attempt or changed-line budget needs a maintainer decision; run " +
+			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` for the accounting, then ask a " +
+			"maintainer to rescope or reset the objective, or run `gentle-ai review mode disable` to proceed " +
+			"without receipt-driven review"
+	case CompactBlockActiveAttempt:
+		return "a distinct attempt token " + token + " is already active for this work unit; " +
+			"rerun `gentle-ai sdd-attempt acquire --token " + token + "` to continue that exact attempt, " +
+			"or settle it with `gentle-ai sdd-attempt settle --token " + token + "` before acquiring a new one"
+	default:
+		return ""
+	}
+}
+
 func compactBlocked(reason CompactBlockReason, token string) CompactAttemptResult {
-	return CompactAttemptResult{State: CompactStateBlocked, Reason: reason, Token: token}
+	exit := compactBlockedExitText(reason, token)
+	return CompactAttemptResult{State: CompactStateBlocked, Reason: reason, Token: token, Exit: exit, Detail: exit}
 }
 
 // compactForeignAcquireToken names the exact continuation for a losing
@@ -375,8 +410,5 @@ func compactBlocked(reason CompactBlockReason, token string) CompactAttemptResul
 // never the foreign one the caller supplied — through Token, Exit, and
 // Detail alike, so a legible refusal (slice 1) also names how to proceed.
 func compactForeignAcquireToken(activeToken string) CompactAttemptResult {
-	detail := "a distinct attempt token " + activeToken + " is already active for this work unit; " +
-		"rerun `gentle-ai sdd-attempt acquire --token " + activeToken + "` to continue that exact attempt, " +
-		"or settle it with `gentle-ai sdd-attempt settle --token " + activeToken + "` before acquiring a new one"
-	return CompactAttemptResult{State: CompactStateBlocked, Reason: CompactBlockActiveAttempt, Token: activeToken, Exit: detail, Detail: detail}
+	return compactBlocked(CompactBlockActiveAttempt, activeToken)
 }

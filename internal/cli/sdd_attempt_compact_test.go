@@ -158,7 +158,15 @@ func TestRunSDDAttemptCompactBlocksWithoutMutation(t *testing.T) {
 			if !reflect.DeepEqual(before, after) {
 				t.Fatalf("blocked operation mutated authority\nbefore=%v\nafter=%v", before, after)
 			}
-			keys := []string{"state", "reason"}
+			// Exit-naming audit fix #2: compactBlocked now names a runnable
+			// continuation for every reason it produces (previously a bare
+			// {"state":"blocked","reason":"<code>"} with nothing behind it —
+			// 21 call sites, zero tests). Every blocked result therefore
+			// carries non-empty exit/detail alongside state/reason.
+			if result.Exit == "" || result.Detail == "" {
+				t.Fatalf("blocked result = %#v, want non-empty Exit/Detail", result)
+			}
+			keys := []string{"state", "reason", "exit", "detail"}
 			if wantToken != "" {
 				keys = append(keys, "token")
 			}

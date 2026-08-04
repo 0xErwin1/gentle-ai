@@ -110,6 +110,46 @@ func TestCompactMutationFailureClassifiesEveryReachableLedgerSentinel(t *testing
 	}
 }
 
+// TestCompactBlockedNamesExitForEveryReachableReason is the enumeration-style
+// sentinel guard for compactBlocked, the sibling constructor
+// compactMutationFailure's #2249 fix never reached: every one of
+// compactBlocked's 20 real call sites in this file emits a bare
+// {"state":"blocked","reason":"<code>"} with no Exit/Detail — a token with
+// nothing behind it on a surface that carries no stderr narration and no docs
+// mirror at all. This test enumerates every CompactBlockReason compactBlocked
+// itself is ever called with (active_attempt, maintainer_decision,
+// corrupt_authority, invalid_continuation — verified against this file's own
+// call sites) and fails if any of them still produces an empty Exit or
+// Detail, mirroring
+// TestCompactMutationFailureClassifiesEveryReachableLedgerSentinel above.
+func TestCompactBlockedNamesExitForEveryReachableReason(t *testing.T) {
+	const sampleToken = "sha256:" + "a1b2c3d4e5f60708091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f7"
+	tests := []struct {
+		name   string
+		reason CompactBlockReason
+		token  string
+	}{
+		{name: "corrupt_authority", reason: CompactBlockCorruptAuthority},
+		{name: "invalid_continuation", reason: CompactBlockInvalidContinuation},
+		{name: "maintainer_decision", reason: CompactBlockMaintainerDecision},
+		{name: "active_attempt", reason: CompactBlockActiveAttempt, token: sampleToken},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := compactBlocked(tt.reason, tt.token)
+			if result.State != CompactStateBlocked || result.Reason != tt.reason {
+				t.Fatalf("compactBlocked(%q, %q) = %#v, want state=blocked reason=%q", tt.reason, tt.token, result, tt.reason)
+			}
+			if result.Exit == "" || result.Detail == "" {
+				t.Fatalf("compactBlocked(%q, %q) = %#v, want non-empty Exit/Detail — a blocked result with nothing behind its bare reason code is exactly the class this test exists to catch", tt.reason, tt.token, result)
+			}
+			if result.Token != tt.token {
+				t.Fatalf("compactBlocked(%q, %q) = %#v, want Token preserved unchanged", tt.reason, tt.token, result)
+			}
+		})
+	}
+}
+
 // TestCompactMutationFailureLeavesUnexpectedErrorsAtAuthorityFailure proves
 // the classification is not a blanket bypass: a genuinely unclassified error
 // (unrelated to any declared ledger sentinel, e.g. a raw I/O failure) still
