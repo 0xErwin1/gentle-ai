@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/components/engram"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/doctor"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/state"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/storage"
@@ -74,6 +76,7 @@ var (
 		return filepath.SplitList(os.Getenv("PATH"))
 	}
 	osExecutableDoctor = os.Executable
+	engramProbeStdioFn = engram.ProbeStdio
 	httpGetFn          = func(url string, timeout time.Duration) (int, error) {
 		resp, err := (&http.Client{Timeout: timeout}).Get(url) //nolint:noctx
 		if err != nil {
@@ -108,7 +111,7 @@ func RunDoctor(ctx context.Context, w io.Writer) error {
 	}
 	checks = append(checks,
 		doctor.Check{ID: doctor.CheckStateJSON, Run: func(context.Context) doctor.Result { return checkStateJSON(homeDir) }},
-		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(context.Context) doctor.Result { return checkEngramReachable() }},
+		doctor.Check{ID: doctor.CheckEngramReachable, Run: func(ctx context.Context) doctor.Result { return checkEngramReachable(ctx) }},
 		doctor.Check{ID: doctor.CheckDiskSpace, Run: func(context.Context) doctor.Result { return checkDiskSpace(homeDir) }},
 	)
 	report := (doctor.Runner{Checks: checks}).Run(ctx)
@@ -449,14 +452,47 @@ func agentConfigDir(homeDir, agentID string) string {
 	}
 }
 
-// checkEngramReachable checks whether the engram HTTP health endpoint responds.
-func checkEngramReachable() CheckResult {
+// checkEngramReachable probes the Engram transport that is actually
+// configured. gentle-ai only ever configures Engram as a stdio MCP server
+// (`engram mcp --tools=agent`, written by internal/components/engram), so by
+// default the check performs a JSON-RPC initialize handshake over that stdio
+// transport. Setting ENGRAM_BASE_URL declares an explicit HTTP deployment
+// (`engram serve`); then the check probes exactly that URL and nothing else.
+// There is no hardcoded fallback URL: guessing an HTTP address for a stdio
+// deployment produced false unhealthy reports (#2078).
+func checkEngramReachable(ctx context.Context) CheckResult {
 	const id = doctor.CheckEngramReachable
 
-	baseURL := os.Getenv(engramHealthEnvVar)
-	if baseURL == "" {
-		baseURL = "http://localhost:7437"
+	if baseURL := os.Getenv(engramHealthEnvVar); baseURL != "" {
+		return checkEngramHTTP(id, baseURL)
 	}
+
+	err := engramProbeStdioFn(ctx)
+	switch {
+	case errors.Is(err, engram.ErrNotInstalled):
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusWarn,
+			Detail: "engram MCP not probed: engram binary not found on PATH (see the tool:engram check)",
+		}
+	case err != nil:
+		return CheckResult{
+			Name:   id,
+			Status: CheckStatusFail,
+			Detail: "engram MCP (stdio) initialize handshake failed: " + err.Error(),
+			Remedy: doctor.NewRemedy(doctor.RemedyInspectEngram, "Check that 'engram mcp --tools=agent' starts and answers MCP initialize"),
+		}
+	}
+	return CheckResult{
+		Name:   id,
+		Status: CheckStatusPass,
+		Detail: "engram MCP (stdio) answered the initialize handshake",
+	}
+}
+
+// checkEngramHTTP probes the HTTP deployment the user declared via
+// ENGRAM_BASE_URL. It never invents a URL of its own.
+func checkEngramHTTP(id doctor.CheckID, baseURL string) CheckResult {
 	healthURL := strings.TrimRight(baseURL, "/") + "/health"
 
 	statusCode, err := httpGetFn(healthURL, 3*time.Second)
@@ -464,8 +500,8 @@ func checkEngramReachable() CheckResult {
 		return CheckResult{
 			Name:   id,
 			Status: CheckStatusFail,
-			Detail: "engram health endpoint unreachable at " + healthURL + ": " + err.Error(),
-			Remedy: doctor.NewRemedy(doctor.RemedyStartEngram, "Start engram or check that it is configured as an MCP server"),
+			Detail: "engram health endpoint unreachable at " + healthURL + " (from " + engramHealthEnvVar + "): " + err.Error(),
+			Remedy: doctor.NewRemedy(doctor.RemedyStartEngram, "Start 'engram serve' or fix "+engramHealthEnvVar),
 		}
 	}
 	if statusCode < 200 || statusCode >= 300 {
