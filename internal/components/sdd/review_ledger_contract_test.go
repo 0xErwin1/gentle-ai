@@ -274,17 +274,9 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// difference in the rendered settings, so the hash moved a fourth time.
 	// Deliberate, not drift.
 	//
-	// Issue #2417 restores genuine OpenCode immutable receipt-review through
-	// the provider-injected shell-less channel. Kilocode shares the same
-	// generated review-lens shape as OpenCode (expandOpenCodeBoundedReviewAgents
-	// no longer special-cases either identity): both now get
-	// openCodeProviderInjectedReviewerPrompt with no bash and no read tool,
-	// replacing the wildcarded Bash-permission shape openCodeReviewerPermission
-	// used to render. Kilocode has no capturing plugin and is not RDD-eligible,
-	// so this is dead-but-safe config either way; the point is that it is no
-	// longer the most permissive reviewer config in the product. The hash moved
-	// a fifth time. Deliberate, not drift.
-	const want = "86f7fb18b7c8599f638f2f68c80417058a015e1405b846be9ff847553bd762b5"
+	// This baseline combines the #2485 answer-validation contract with #2417's
+	// provider-injected reviewer shape. It is recomputed from the merged tree.
+	const want = "812e5f57a188795f5840a0d73d56104ebefbb0e27ca311b6af2f182bfca6bb0d"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}

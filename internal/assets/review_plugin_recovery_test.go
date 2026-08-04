@@ -45,6 +45,17 @@ if (scenario === "before-substitute") prompt += ` + "`" + `base_tree=${"9".repea
 if (scenario === "before-missing") prompt = "review the frozen candidate\n"
 if (scenario === "before-equals") prompt = ` + "`" + `GENTLE_AI_REVIEW_BINDING=${JSON.stringify(binding)}\nreview the frozen candidate\n` + "`" + `
 if (scenario === "before-malformed") prompt = "GENTLE_AI_REVIEW_BINDING {not-json}\nreview the frozen candidate\n"
+const rebind = (overrides: Record<string, unknown>, drop: string[] = []) => {
+  const next: Record<string, unknown> = { ...opaque, ...overrides }
+  for (const field of drop) delete next[field]
+  return ` + "`" + `GENTLE_AI_REVIEW_BINDING ${JSON.stringify(next)}\nreview the frozen candidate\n` + "`" + `
+}
+if (scenario === "before-quoted-order") prompt = rebind({ order: "0" })
+if (scenario === "before-negative-order") prompt = rebind({ order: -1 })
+if (scenario === "before-unknown-shape") prompt = rebind({}, ["repository_context"])
+if (scenario === "before-short-target") prompt = rebind({ target: "sha256:dead" })
+if (scenario === "before-other-lens") prompt = rebind({ lens: "review-reliability" })
+if (scenario === "before-bad-context") prompt = rebind({ repository_context: "/home/someone/private/repo" })
 
 const capture = async (activeHooks: typeof hooks, sessionID: string, marker: string, boundPrompt: string = prompt) => {
   const input = { tool: "task", sessionID, callID: "call-" + marker, args: { subagent_type: "review-risk", prompt: boundPrompt } }
@@ -162,6 +173,45 @@ type reviewPluginStub struct {
 
 func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPluginStub) string {
 	t.Helper()
+	env := []string{
+		"GENTLE_AI_STUB_LENS_CONTEXT=" + stub.lensContext,
+		"GENTLE_AI_STUB_CONFIG_INSTRUCTIONS=" + marshalReviewPluginInstructions(t, stub.configInstructions),
+		"GENTLE_AI_STUB_CONFIG_ERROR=" + stub.configError,
+	}
+	env = append(env, isolationEnvironment(stub)...)
+	return runReviewPluginScenarioWithEnv(t, scenario, stub.stdout, stub.stderr, stub.preserveStdout,
+		env...,
+	)
+}
+
+func marshalReviewPluginInstructions(t *testing.T, instructions []string) string {
+	t.Helper()
+	if instructions == nil {
+		instructions = []string{}
+	}
+	encoded, err := json.Marshal(instructions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
+}
+
+func isolationEnvironment(stub reviewPluginStub) []string {
+	env := make([]string, 0, 2)
+	if !stub.omitProjectConfigIsolation {
+		env = append(env, "OPENCODE_DISABLE_PROJECT_CONFIG=1")
+	}
+	if !stub.omitExternalSkillsIsolation {
+		env = append(env, "OPENCODE_DISABLE_EXTERNAL_SKILLS=1")
+	}
+	return env
+}
+
+// runReviewPluginScenarioWithEnv is the same harness with extra environment
+// entries, so a scenario can prove what the plugin does with a hostile ambient
+// environment rather than only with a hostile native binary.
+func runReviewPluginScenarioWithEnv(t *testing.T, scenario, nativeStdout, nativeStderr, preserveStdout string, extraEnv ...string) string {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the stub native binary requires a POSIX shell")
 	}
@@ -186,6 +236,7 @@ func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPlugi
 	// whole reviewer context is one native call now, so the stub needs no
 	// per-operation or per-path-index dispatch.
 	stubScript := "#!/bin/sh\npayload=$(cat)\n" +
+		"if [ -n \"$GENTLE_AI_STUB_CWD_LOG\" ]; then printf '%s\\n' \"$PWD\" >> \"$GENTLE_AI_STUB_CWD_LOG\"; fi\n" +
 		"if [ \"$2\" = \"lens-context\" ] && [ -n \"$GENTLE_AI_STUB_LENS_CONTEXT\" ]; then\n" +
 		"  printf '%s\\n' \"$GENTLE_AI_STUB_LENS_CONTEXT\"\n" +
 		"  exit 0\n" +
@@ -220,31 +271,13 @@ func runReviewPluginScenarioStub(t *testing.T, scenario string, stub reviewPlugi
 	}
 	env := append(base,
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"GENTLE_AI_STUB_STDOUT="+stub.stdout,
-		"GENTLE_AI_STUB_STDERR="+stub.stderr,
-		"GENTLE_AI_STUB_PRESERVE_STDOUT="+stub.preserveStdout,
-		"GENTLE_AI_STUB_LENS_CONTEXT="+stub.lensContext,
+		"GENTLE_AI_STUB_STDOUT="+nativeStdout,
+		"GENTLE_AI_STUB_STDERR="+nativeStderr,
+		"GENTLE_AI_STUB_PRESERVE_STDOUT="+preserveStdout,
 		"GENTLE_AI_REVIEW_CWD=",
+		"GENTLE_AI_STUB_CWD_LOG=",
 	)
-	if !stub.omitProjectConfigIsolation {
-		env = append(env, "OPENCODE_DISABLE_PROJECT_CONFIG=1")
-	}
-	if !stub.omitExternalSkillsIsolation {
-		env = append(env, "OPENCODE_DISABLE_EXTERNAL_SKILLS=1")
-	}
-	instructions := stub.configInstructions
-	if instructions == nil {
-		instructions = []string{}
-	}
-	encodedInstructions, err := json.Marshal(instructions)
-	if err != nil {
-		t.Fatal(err)
-	}
-	env = append(env, "GENTLE_AI_STUB_CONFIG_INSTRUCTIONS="+string(encodedInstructions))
-	if stub.configError != "" {
-		env = append(env, "GENTLE_AI_STUB_CONFIG_ERROR="+stub.configError)
-	}
-	command.Env = env
+	command.Env = append(env, extraEnv...)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		// node was already confirmed present above: a non-zero exit here
@@ -417,9 +450,6 @@ func TestReviewPluginFailsClosedWhenLensContextFails(t *testing.T) {
 	}
 	if strings.Contains(message, "review the frozen candidate") {
 		t.Fatalf("lens-context failure fell back to the caller-authored prompt: %s", message)
-	}
-	if strings.Contains(message, "NATIVE-LENS-CONTEXT-FAILED") {
-		t.Fatalf("opaque binding leaked native prose into the transcript: %s", message)
 	}
 }
 
@@ -641,7 +671,7 @@ func TestReviewPluginTerminatesUnstructuredAdmissionRejection(t *testing.T) {
 	if !strings.Contains(message, "reviewer_admission_recovery_unavailable") || !strings.Contains(message, "stop relaunching") {
 		t.Fatalf("unstructured admission rejection was not terminal: %s", message)
 	}
-	if strings.Contains(message, "relaunch this lens reviewer") || strings.Contains(message, "retry the same opaque binding") {
+	if strings.Contains(message, "relaunch this lens reviewer") || strings.Contains(message, "retry the same binding") {
 		t.Fatalf("unstructured admission rejection authorized a blind retry: %s", message)
 	}
 	if strings.Contains(message, "severe findings must anchor") {

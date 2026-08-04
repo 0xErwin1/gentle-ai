@@ -478,7 +478,7 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`"--repository-context", binding.repository_context`,
 		`"--expected-revision", binding.revision`,
 		`return ["--cwd", cwd]`,
-		`const current = fields === "lens,lineage,order,repository_context,revision,subject_hash,target"`,
+		`["lens,lineage,order,repository_context,revision,subject_hash,target", { revision: true, subjectHash: true }]`,
 		`GENTLE_AI_REVIEW_CONTEXT_END`,
 		`output.args.prompt = await injectReviewerContext(`,
 		// The reviewer context is one provider-owned native call. `--delivery
@@ -512,7 +512,10 @@ func TestReviewResultArtifactsPluginContract(t *testing.T) {
 		`!BINDING.test(input.args.prompt)`,
 		`const lens = input.args.subagent_type`,
 		`const binding = parseBinding(input.args.prompt, lens)`,
-		`const cwd = captureCwd(worktree, directory)`,
+		// The OpenCode anchor is the sole source of the capture working
+		// directory. The GENTLE_AI_REVIEW_CWD override that used to outrank it,
+		// with no check that it named the same repository, is deleted (#2446).
+		`const cwd = worktree || directory`,
 		// The replayable payload is extracted exactly once before capture, so a
 		// capture failure preserves the extracted strict JSON, never the task
 		// envelope that `review capture-result --input` would reject on replay.
@@ -2248,4 +2251,107 @@ func TestSDDArchiveFinalStateAuthorityContract(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestSDDArchiveStoreSpecificFilesystemContract(t *testing.T) {
+	command := MustRead("opencode/commands/sdd-archive.md")
+	for _, required := range []string{
+		"For `openspec` or `hybrid` stores only",
+		"For `engram`, do not perform filesystem synchronization or archive moves",
+		"persist the final archive report to `sdd/{change-name}/archive-report`",
+		"For `none`, do not perform filesystem operations or Engram persistence",
+	} {
+		if !strings.Contains(command, required) {
+			t.Fatalf("opencode/commands/sdd-archive.md missing store-specific archive wording %q", required)
+		}
+	}
+
+	skill := MustRead("skills/sdd-archive/SKILL.md")
+	for _, required := range []string{
+		"target_dir=\"openspec/specs/{domain}\"",
+		"target_path=\"$target_dir/spec.md\"",
+		"mkdir -p \"$target_dir\"",
+		"temp_path=\"$(mktemp \"$target_dir/.spec.md.XXXXXX\")\"",
+		"cleanup_temp()",
+		"rm -f \"$temp_path\" || :",
+		"trap cleanup_temp EXIT",
+		"if cp \"openspec/changes/{change-name}/specs/{domain}/spec.md\" \"$temp_path\"; then",
+		"copy_status=$?",
+		"if diff -r \"openspec/changes/{change-name}/specs/{domain}/spec.md\" \"$temp_path\"; then",
+		"diff_status=0",
+		"diff_status=$?",
+		"if [ \"$diff_status\" -ne 0 ]; then",
+		"exit \"$diff_status\"",
+		"if mv \"$temp_path\" \"$target_path\"; then",
+		"move_status=$?",
+		"exit \"$move_status\"",
+		"snapshot_root=\"$(mktemp -d \"${TMPDIR:-/tmp}/sdd-archive.XXXXXX\")\"",
+		"trap 'rm -rf -- \"$snapshot_root\"' EXIT",
+		"cp -R \"openspec/changes/{change-name}\" \"$snapshot_root/source\"",
+		"if mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then",
+		"if [ -e \"openspec/changes/{change-name}\" ] || [ -L \"openspec/changes/{change-name}\" ]; then",
+		"diff -r \"$snapshot_root/source\" \"openspec/changes/archive/YYYY-MM-DD-{change-name}\"",
+		"if diff -r \"$snapshot_root/source\" \"openspec/changes/archive/YYYY-MM-DD-{change-name}\"; then",
+		"only empty diff output passes",
+		"verbatim `diff -r` output from Steps 2 and 3 MUST appear in the phase result",
+		"A failed or skipped `diff -r` FAILS the phase",
+		"The `snapshot_root` is removed safely by the EXIT trap",
+	} {
+		if !strings.Contains(skill, required) {
+			t.Fatalf("skills/sdd-archive/SKILL.md missing pre-move snapshot wording %q", required)
+		}
+	}
+
+	assertOrdered := func(name, block string, fragments ...string) {
+		t.Helper()
+		position := 0
+		for _, fragment := range fragments {
+			offset := strings.Index(block[position:], fragment)
+			if offset < 0 {
+				t.Fatalf("%s missing ordered fragment %q after byte %d", name, fragment, position)
+			}
+			position += offset + len(fragment)
+		}
+	}
+
+	copyStart := strings.Index(skill, "#### If Main Spec Does NOT Exist")
+	if copyStart < 0 {
+		t.Fatal("full-spec copy block boundaries are missing")
+	}
+	copyEnd := strings.Index(skill[copyStart:], "### Step 3: Move to Archive")
+	if copyEnd < 0 {
+		t.Fatal("full-spec copy block end is missing")
+	}
+	copyBlock := skill[copyStart : copyStart+copyEnd]
+	assertOrdered("full-spec copy", copyBlock,
+		"temp_path=\"$(mktemp \"$target_dir/.spec.md.XXXXXX\")\"",
+		"if cp \"openspec/changes/{change-name}/specs/{domain}/spec.md\" \"$temp_path\"; then",
+		"else\n  copy_status=$?\n  exit \"$copy_status\"",
+		"if diff -r \"openspec/changes/{change-name}/specs/{domain}/spec.md\" \"$temp_path\"; then",
+		"else\n  diff_status=$?",
+		"if [ \"$diff_status\" -ne 0 ]; then\n  exit \"$diff_status\"",
+		"if mv \"$temp_path\" \"$target_path\"; then",
+		"else\n  move_status=$?\n  exit \"$move_status\"",
+	)
+
+	moveStart := strings.Index(skill, "### Step 3: Move to Archive")
+	if moveStart < 0 {
+		t.Fatal("archive move block boundaries are missing")
+	}
+	moveEnd := strings.Index(skill[moveStart:], "### Step 4: Verify Archive")
+	if moveEnd < 0 {
+		t.Fatal("archive move block end is missing")
+	}
+	moveBlock := skill[moveStart : moveStart+moveEnd]
+	assertOrdered("archive move", moveBlock,
+		"snapshot_root=\"$(mktemp -d \"${TMPDIR:-/tmp}/sdd-archive.XXXXXX\")\"",
+		"cp -R \"openspec/changes/{change-name}\" \"$snapshot_root/source\"",
+		"if git mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then",
+		"if mv openspec/changes/{change-name} openspec/changes/archive/YYYY-MM-DD-{change-name}; then",
+		"else\n    move_status=$?\n    exit \"$move_status\"",
+		"if [ -e \"openspec/changes/{change-name}\" ] || [ -L \"openspec/changes/{change-name}\" ]; then",
+		"if diff -r \"$snapshot_root/source\" \"openspec/changes/archive/YYYY-MM-DD-{change-name}\"; then",
+		"else\n  diff_status=$?",
+		"if [ \"$diff_status\" -ne 0 ]; then\n  exit \"$diff_status\"",
+	)
 }
