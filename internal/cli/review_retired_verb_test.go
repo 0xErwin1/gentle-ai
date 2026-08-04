@@ -48,3 +48,52 @@ func TestReviewRetiredVerbReconcileAuthorityBatchIsUnknownCommand(t *testing.T) 
 		t.Fatalf("retired verb reconcile-authority-batch wrote output before refusing: %q", output.String())
 	}
 }
+
+// TestReviewRetiredVerbQuarantineLegacyIsUnknownCommand,
+// TestReviewRetiredVerbQuarantineLegacyFixScopeIsUnknownCommand, and
+// TestReviewRetiredVerbRepairLegacyAliasIsUnknownCommand are WU14's (S5a)
+// threat-matrix proof for the quarantine/repair legacy verb cluster. Each
+// verb has exactly one dispatch case (in runReviewCommand; unlike
+// reconcile-authority-batch none of these three are also matched earlier in
+// runReviewCommandContext), so removing that one case is sufficient.
+func TestReviewRetiredVerbQuarantineLegacyIsUnknownCommand(t *testing.T) {
+	var output bytes.Buffer
+	err := RunReview([]string{"quarantine-legacy", "--cwd", "."}, &output)
+	if err == nil {
+		t.Fatal("retired verb quarantine-legacy was accepted, want unknown-command refusal")
+	}
+	if want := `unknown review command "quarantine-legacy"`; err.Error() != want {
+		t.Fatalf("retired verb quarantine-legacy error = %q, want %q", err.Error(), want)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("retired verb quarantine-legacy wrote output before refusing: %q", output.String())
+	}
+}
+
+func TestReviewRetiredVerbQuarantineLegacyFixScopeIsUnknownCommand(t *testing.T) {
+	var output bytes.Buffer
+	err := RunReview([]string{"quarantine-legacy-fix-scope", "--cwd", "."}, &output)
+	if err == nil {
+		t.Fatal("retired verb quarantine-legacy-fix-scope was accepted, want unknown-command refusal")
+	}
+	if want := `unknown review command "quarantine-legacy-fix-scope"`; err.Error() != want {
+		t.Fatalf("retired verb quarantine-legacy-fix-scope error = %q, want %q", err.Error(), want)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("retired verb quarantine-legacy-fix-scope wrote output before refusing: %q", output.String())
+	}
+}
+
+func TestReviewRetiredVerbRepairLegacyAliasIsUnknownCommand(t *testing.T) {
+	var output bytes.Buffer
+	err := RunReview([]string{"repair-legacy-alias", "--cwd", "."}, &output)
+	if err == nil {
+		t.Fatal("retired verb repair-legacy-alias was accepted, want unknown-command refusal")
+	}
+	if want := `unknown review command "repair-legacy-alias"`; err.Error() != want {
+		t.Fatalf("retired verb repair-legacy-alias error = %q, want %q", err.Error(), want)
+	}
+	if output.Len() != 0 {
+		t.Fatalf("retired verb repair-legacy-alias wrote output before refusing: %q", output.String())
+	}
+}
