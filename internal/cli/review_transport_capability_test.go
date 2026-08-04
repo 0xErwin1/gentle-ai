@@ -69,7 +69,10 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 		{name: "Pi", runtime: string(model.AgentPi), startCode: reviewTransportCapabilityUnsupportedCode},
 		{name: "Kilo", runtime: string(model.AgentKilocode), startCode: reviewImmutableTransportUnsupportedCode},
 		{name: "unknown", runtime: "unknown-runtime", startCode: reviewTransportCapabilityUnsupportedCode},
-		{name: "missing runtime", startCode: reviewImmutableTransportUnsupportedCode},
+		// An undeclared runtime identity is deliberately absent from this
+		// matrix: it makes no transport claim to refuse, so it stays on the
+		// manual/non-agent compatibility path. See
+		// review_missing_runtime_identity_test.go.
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			for _, invocation := range []struct {
