@@ -121,6 +121,14 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		result, err = store.Reset(ctx, sddstatus.ResetObjectiveRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, Reason: *reason, Actor: *actor,
 		})
+	case "rescope":
+		if missing := missingSDDAttemptFlags(args[1:], "expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "reason", "actor"); len(missing) != 0 {
+			return fmt.Errorf("sdd-attempt rescope requires %s", strings.Join(missing, ", "))
+		}
+		result, err = store.Rescope(ctx, sddstatus.RescopeObjectiveRequest{
+			ExpectedRevision: *expected, RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
+			MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines, Reason: *reason, Actor: *actor,
+		})
 	case "acquire":
 		if missing := missingSDDAttemptFlags(args[1:], "request-id", "work-unit", "evidence-goal"); len(missing) != 0 {
 			return fmt.Errorf("sdd-attempt acquire requires %s; rerun `gentle-ai sdd-attempt acquire` with those missing flags", strings.Join(missing, ", "))
@@ -158,7 +166,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 // accepted values and the values a message names can never drift apart.
 // Mirrors reviewIntegrationGatesInOrder / reviewIntegrationGateNames in
 // review_operation_contract.go.
-var sddAttemptOperationsInOrder = []string{"status", "begin", "finish", "reset", "acquire", "settle"}
+var sddAttemptOperationsInOrder = []string{"status", "begin", "finish", "reset", "rescope", "acquire", "settle"}
 
 func validSDDAttemptOperation(operation string) bool {
 	for _, valid := range sddAttemptOperationsInOrder {
@@ -192,6 +200,7 @@ func validateSDDAttemptOperationFlags(operation string, args []string) error {
 		"begin":   {"expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines"},
 		"finish":  {"expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "expected-binding-revision", "successor-lineage", "remediates-evidence-revision"},
 		"reset":   {"expected-revision", "request-id", "reason", "actor"},
+		"rescope": {"expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "reason", "actor"},
 		"acquire": {"request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "token"},
 		"settle":  {"token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "successor-lineage", "remediates-evidence-revision"},
 	}[operation] {
