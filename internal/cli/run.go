@@ -616,7 +616,7 @@ func (r *installRuntime) stagePlan() pipeline.StagePlan {
 	}
 
 	apply := make([]pipeline.Step, 0, len(r.resolved.Agents)+len(r.selection.CommunityTools)+len(r.resolved.OrderedComponents)+1)
-	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state})
+	apply = append(apply, rollbackRestoreStep{id: "apply:rollback-restore", state: r.state, homeDir: r.homeDir, workspaceDir: r.workspaceDir})
 
 	// Before installing components, ensure modular agents have their system prompt hub.
 	// This ensures that SDD or Engram can inject their modules even if Persona is skipped.
@@ -977,8 +977,10 @@ func (s prepareBackupStep) Run() error {
 }
 
 type rollbackRestoreStep struct {
-	id    string
-	state *runtimeState
+	id           string
+	state        *runtimeState
+	homeDir      string
+	workspaceDir string
 }
 
 func (s rollbackRestoreStep) ID() string {
@@ -995,7 +997,27 @@ func (s rollbackRestoreStep) Rollback() error {
 		return nil
 	}
 
-	return backup.RestoreService{}.Restore(s.state.manifest)
+	return backup.RestoreService{Roots: rollbackRoots(s.homeDir, s.workspaceDir)}.Restore(s.state.manifest)
+}
+
+// rollbackRoots returns the directories this install/sync run could
+// legitimately have written under, for validating rollback's manifest
+// entries against a caller-known root instead of anything the manifest
+// itself declares.
+//
+// homeDir is always included. workspaceDir is included too when set and
+// distinct from homeDir: componentInjectionDirScoped resolves most
+// component targets there under ScopeWorkspace, and OpenClaw resolves its
+// workspace independent of --scope entirely (resolveOpenClawWorkspaceDir).
+// Both values are exactly what backupTargets/syncBackupTargets used to
+// compute what this run actually snapshotted, so allowing rollback to
+// write within them is not wider than what this run could already do.
+func rollbackRoots(homeDir, workspaceDir string) []string {
+	roots := []string{homeDir}
+	if workspaceDir != "" && workspaceDir != homeDir {
+		roots = append(roots, workspaceDir)
+	}
+	return roots
 }
 
 type agentInstallStep struct {
