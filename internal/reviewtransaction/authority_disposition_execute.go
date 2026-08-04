@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 )
 
 // AuthorityDispositionProofSchema identifies AuthorityDispositionProof's shape.
@@ -594,22 +596,22 @@ func resumeAuthorityDispositionRecord(ctx context.Context, record CompactReclaim
 // evidence disposition did not fully remove it.
 func readBackAuthorityDisposition(ctx context.Context, root string, record CompactReclaimRecord) (CompactReclaimRecord, error) {
 	if record.Status != CompactReclaimCommitted {
-		return record, fmt.Errorf("authority disposition execution refused: readback observed a non-committed record; run `gentle-ai review inspect-authority --cwd %q` and escalate the report", root)
+		return record, fmt.Errorf("authority disposition execution refused: readback observed a non-committed record; run `gentle-ai review inspect-authority --cwd %s` and escalate the report", pathquote.Quote(root))
 	}
 	report, err := InspectCompactRecoveryEdges(ctx, root)
 	if err != nil {
 		return record, fmt.Errorf("authority disposition readback: %w", err)
 	}
 	if !report.Complete || !report.Valid {
-		return record, fmt.Errorf("authority disposition execution refused: retained-graph readback did not revalidate cleanly; run `gentle-ai review inspect-authority --cwd %q` and escalate the report", root)
+		return record, fmt.Errorf("authority disposition execution refused: retained-graph readback did not revalidate cleanly; run `gentle-ai review inspect-authority --cwd %s` and escalate the report", pathquote.Quote(root))
 	}
 	closureMembers := authorityDispositionClosureMembers(record)
 	for _, edge := range report.Edges {
 		if member := edge.PredecessorLineageID; closureMembers[member] {
-			return record, fmt.Errorf("authority disposition execution refused: retained graph still references quarantined closure member %q; run `gentle-ai review inspect-authority --cwd %q` and escalate the report", member, root)
+			return record, fmt.Errorf("authority disposition execution refused: retained graph still references quarantined closure member %q; run `gentle-ai review inspect-authority --cwd %s` and escalate the report", member, pathquote.Quote(root))
 		}
 		if member := edge.SuccessorLineageID; closureMembers[member] {
-			return record, fmt.Errorf("authority disposition execution refused: retained graph still references quarantined closure member %q; run `gentle-ai review inspect-authority --cwd %q` and escalate the report", member, root)
+			return record, fmt.Errorf("authority disposition execution refused: retained graph still references quarantined closure member %q; run `gentle-ai review inspect-authority --cwd %s` and escalate the report", member, pathquote.Quote(root))
 		}
 	}
 	return record, nil
