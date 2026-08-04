@@ -91,14 +91,7 @@ func runLegacyFacadeStartForTest(t *testing.T, args []string, stdout io.Writer) 
 			return errors.New("review start with --base-ref omits dirty tracked changes; rerun with --committed-only to acknowledge committed-only review scope")
 		}
 	}
-	intended := []string{}
-	if selectedProjection != reviewtransaction.ProjectionStaged {
-		intended, err = reviewFacadeDiscoverIntendedUntracked(ctx, rootBuilder)
-		if err != nil {
-			return fmt.Errorf("discover intended untracked files: %w", err)
-		}
-	}
-	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: selectedProjection, IntendedUntracked: intended}
+	target := reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: selectedProjection, IntendedUntracked: []string{}}
 	if strings.TrimSpace(*baseRef) != "" {
 		target.Kind = reviewtransaction.TargetBaseDiff
 		target.BaseRef = strings.TrimSpace(*baseRef)

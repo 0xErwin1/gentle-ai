@@ -21,9 +21,7 @@ import (
 // headless agent can explain WHY the deeper review was selected.
 func TestReviewFacadeStartHighRiskCarriesConsentEvidencePhrases(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, "service-token.ts"), []byte("export const token = 'candidate'\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'candidate'\n", 0o644)
 	var output bytes.Buffer
 	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", "evidence-high"}, &output); err != nil {
 		t.Fatal(err)
@@ -42,7 +40,7 @@ func TestReviewFacadeStartHighRiskCarriesConsentEvidencePhrases(t *testing.T) {
 	// Prompt parity: the phrases must be exactly what the interactive consent
 	// prompt would say for the same assessed candidate, from the same helper.
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
-	intended, err := builder.DiscoverIntendedUntracked(context.Background())
+	intended, err := builder.DiscoverUnignoredUntracked(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,9 +74,7 @@ func TestReviewFacadeStartHighRiskCarriesConsentEvidencePhrases(t *testing.T) {
 // evidence path that made the candidate non-passive.
 func TestReviewFacadeStartMediumRiskCarriesConsentReason(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, "view.go"), []byte("package view\n\nconst label = \"candidate\"\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "view.go", "package view\n\nconst label = \"candidate\"\n", 0o644)
 	var output bytes.Buffer
 	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", "evidence-medium"}, &output); err != nil {
 		t.Fatal(err)
@@ -100,7 +96,7 @@ func TestReviewFacadeStartMediumRiskCarriesConsentReason(t *testing.T) {
 	// Prompt parity: every phrase the START result carries must be spoken by
 	// the interactive consent prompt for the same assessed candidate.
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
-	intended, err := builder.DiscoverIntendedUntracked(context.Background())
+	intended, err := builder.DiscoverUnignoredUntracked(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,9 +182,7 @@ func TestReviewFacadeStartDocsOnlyOmitsRiskEvidence(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(repo, "docs"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, "docs", "guide.md"), []byte("passive documentation\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "docs/guide.md", "passive documentation\n", 0o644)
 	var output bytes.Buffer
 	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", "evidence-docs"}, &output); err != nil {
 		t.Fatal(err)
@@ -262,9 +256,7 @@ func TestReviewFacadeStartNonEmptyCandidateWithoutLensesHasNoHint(t *testing.T) 
 	if err := os.MkdirAll(filepath.Join(repo, "docs"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, "docs", "guide.md"), []byte("passive documentation\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "docs/guide.md", "passive documentation\n", 0o644)
 	var output bytes.Buffer
 	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", "evidence-nonempty"}, &output); err != nil {
 		t.Fatal(err)
@@ -295,9 +287,7 @@ func TestReviewFacadeStartNonEmptyCandidateWithoutLensesHasNoHint(t *testing.T) 
 // form, was blocked by a refusal that never mentioned the negotiated form.
 func TestReviewFacadeStartLensesRequiredHintsNegotiatedContract(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, "service-token.ts"), []byte("export const token = 'candidate'\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'candidate'\n", 0o644)
 	var output bytes.Buffer
 	if err := runLegacyFacadeStartForTest(t, []string{"--cwd", repo, "--lineage", "evidence-hint-contract"}, &output); err != nil {
 		t.Fatal(err)
@@ -331,15 +321,11 @@ func TestReviewFacadeStartLensesRequiredHintsNegotiatedContract(t *testing.T) {
 // which starts with none.
 func TestReviewFacadeStartBaseDiffHintReplaysFrozenSelector(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, "dependency.go"), []byte("package dependency\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "dependency.go", "package dependency\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "--", "dependency.go")
 	runReviewCLIGit(t, repo, "commit", "-m", "feature dependency")
 	runReviewCLIGit(t, repo, "branch", "feature-base")
-	if err := os.WriteFile(filepath.Join(repo, "service-token.ts"), []byte("export const token = 'candidate'\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'candidate'\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "--", "service-token.ts")
 	runReviewCLIGit(t, repo, "commit", "-m", "feature candidate")
 
@@ -386,9 +372,7 @@ func TestReviewFacadeStartBaseDiffHintReplaysFrozenSelector(t *testing.T) {
 		t.Fatalf("hint replay authorities = %d, %v; want exactly one", len(stores), err)
 	}
 
-	if err := os.WriteFile(filepath.Join(repo, "service-token.ts"), []byte("export const token = 'mutated'\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'mutated'\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "--", "service-token.ts")
 	runReviewCLIGit(t, repo, "commit", "-m", "mutate candidate")
 	var refused bytes.Buffer
@@ -419,15 +403,11 @@ func TestReviewFacadeStartBaseDiffHintReplaysFrozenSelector(t *testing.T) {
 // like any other negotiated START would be.
 func TestReviewFacadeStartBaseDiffRefusalReplaysFrozenSelector(t *testing.T) {
 	repo := initReviewCLIRepo(t)
-	if err := os.WriteFile(filepath.Join(repo, "dependency.go"), []byte("package dependency\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "dependency.go", "package dependency\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "--", "dependency.go")
 	runReviewCLIGit(t, repo, "commit", "-m", "feature dependency")
 	runReviewCLIGit(t, repo, "branch", "feature-base")
-	if err := os.WriteFile(filepath.Join(repo, "service-token.ts"), []byte("export const token = 'candidate'\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'candidate'\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "--", "service-token.ts")
 	runReviewCLIGit(t, repo, "commit", "-m", "feature candidate")
 	baseTree := strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "feature-base^{tree}"))
@@ -468,9 +448,7 @@ func TestReviewFacadeStartBaseDiffRefusalReplaysFrozenSelector(t *testing.T) {
 		t.Fatalf("named negotiated START authorities = %d, %v; want exactly one", len(stores), err)
 	}
 
-	if err := os.WriteFile(filepath.Join(repo, "service-token.ts"), []byte("export const token = 'mutated'\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeReviewStartCandidate(t, repo, "service-token.ts", "export const token = 'mutated'\n", 0o644)
 	runReviewCLIGit(t, repo, "add", "--", "service-token.ts")
 	runReviewCLIGit(t, repo, "commit", "-m", "mutate candidate")
 	var refused bytes.Buffer
