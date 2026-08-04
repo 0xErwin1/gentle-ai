@@ -17,15 +17,17 @@ import (
 // "batch-reconcile-journal.json" marker at the authority root means a batch
 // reconciliation was prepared (or partially applied) and never finished --
 // possibly from BEFORE this wave, on a repository that ran the now-retired
-// verb. Six other files still check for that marker before mutating or
-// reporting on authority (status.go, authority_repair.go,
-// authority_disposition_execute.go, compact_inspect.go, store_lock.go,
-// final_verification_retry.go, compact_store.go -- confirmed by grep before
-// this file was cut down): deleting the guard would let those live mutation
-// paths silently proceed past an unfinished historical batch reconciliation
-// instead of refusing, which is exactly the forensic-safety regression D5
-// (legacy read retention) forbids for ANY historical, on-disk artifact this
-// wave's deletions must never blind the product to.
+// verb. Six other files still call ensureNoPreparedCompactBatchReconciliation
+// to check for that marker before mutating or reporting on authority
+// (status.go, authority_disposition_execute.go, compact_inspect.go,
+// store_lock.go, final_verification_retry.go, compact_store.go -- confirmed
+// by grep before this file was cut down): deleting the guard would let those
+// live mutation paths silently proceed past an unfinished historical batch
+// reconciliation instead of refusing, which is exactly the forensic-safety
+// regression D5 (legacy read retention) forbids for ANY historical, on-disk
+// artifact this wave's deletions must never blind the product to.
+// (authority_repair.go also Lstats the marker path directly for its own
+// conflict-count probe, but it is not a caller of this guard function.)
 const compactBatchReconcileMarker = "batch-reconcile-journal.json"
 
 // ErrCompactBatchReconcilePrepared is returned when an on-disk marker from a

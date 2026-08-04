@@ -15,9 +15,13 @@ later work unit. Confirmed zero PRODUCTION consumers remain — only its own
 test file and one unexported helper, `shadowRelationHasNoLiveCounterpart`,
 still spell it out.)
 (Migration: rename `ShadowRelation`/`ShadowRelation*` constants to
-`CandidateRelation`/`CandidateRelation*` across candidate_relation.go and
-shadow_relation_test.go in a follow-up slice; purely mechanical, no
-behavior change.)
+`CandidateRelation`/`CandidateRelation*` in a follow-up slice; purely
+mechanical, no behavior change. The names are live in 6 production files,
+not 2 — `candidate_relation.go`, `new_lineage_discovery.go:124`,
+`gate.go:1730-1748`, `compact_gate.go:161,163`, `review_core.go:236-246`,
+and `internal/cli/review_governing_authority.go:69` — plus
+`shadow_relation_test.go`. Whoever picks this up should size it against
+all 6 production files, not just the type-alias site and its test.)
 
 ### Requirement: Disable Switch Is the Observer's Rollback Boundary
 
@@ -56,6 +60,7 @@ live-code-backed after this wave.
 
 #### Scenario: Golden survives observer deletion unchanged
 
-- GIVEN the shadow observer and alias have been deleted
+- GIVEN the shadow observer has been deleted (the `ShadowRelation` type
+  alias itself was retained, deferred per the note above — not deleted)
 - WHEN the repository is inspected
 - THEN the golden still exists, byte-identical, and no code regenerates it

@@ -16,11 +16,18 @@ byte-identical goldens, envelopes, and receipts, via same-fixture on/off
 double-evaluation across the full journey set. A golden diff during this
 proof MUST be treated as a defect signal, never a golden-update task.
 
-#### Scenario: Double-evaluation proves equivalence before deletion
-
-- GIVEN the same fixture run once with the switch on and once switch-free
-- WHEN goldens, envelopes, and receipts are compared
-- THEN they are byte-identical, and only then does removal proceed
+Wave 7 obeyed this gate correctly (it never deleted the switch without
+evidence, and stopped when the evidence it could gather was incomplete —
+see the Amendment below) and recorded real, byte-identical-confirmed
+evidence for the scoped surface it could reach without a switch-free build
+(unnegotiated start, status, finalize, all 5 gates — tasks.md task 2.1).
+The scenario proving the full-journey-set claim end to end, negotiated
+form included, requires the switch-free build only an actual removal
+attempt produces (verify finding SL-1). That scenario has moved,
+byte-identical, to `rdd-single-lifecycle-cutover`'s `MODIFIED Requirements`
+delta for this same requirement — it belongs there because only the
+change that performs removal can run it, not because this requirement's
+standing obligation changes.
 
 ### Requirement: Preconditions W-9, W-10, W-11 Close Before Removal
 
@@ -37,17 +44,40 @@ matching v2) are all closed.
 - WHEN the switch-removal slice is proposed
 - THEN it does not start; it starts only once all three are closed
 
-### Requirement: Exactly One Lifecycle After Removal
+## Requirement Physically Moved to the Successor Change (verify B1, closing the C1 gap)
 
-After removal, no `GENTLE_AI_RDD_NEW_LINEAGE` reference, legacy start
-branch, or legacy mutation path MUST remain reachable.
+This change (Wave 7) does not deliver "Exactly One Lifecycle After
+Removal" — the WU18 attempt was deferred (see the Amendment below), so the
+switch and legacy start branch still ship. Carrying that requirement in
+this delta, even relabeled, still counted it in Wave 7's own requirement
+inventory as an unmet requirement of THIS change (verify blocker B1:
+relabeling in place fixed the claim but not the arithmetic — 15 headings,
+14 delivered). It has therefore been physically moved, byte-identical and
+unweakened, into `openspec/changes/rdd-single-lifecycle-cutover/specs/rdd-single-lifecycle/spec.md`
+(`### Requirement: Exactly One Lifecycle After Removal`, same body, same
+scenario) — see that change's `proposal.md` for the precise re-entry
+brief. Ownership is now structural, not annotated: the requirement simply
+does not appear here.
 
-#### Scenario: Every start request takes the v3 path
+Wave 7's own delivered requirement is the re-entry gate immediately below
+("Switch Removal Is Blocked On v3 Negotiated Repository Context") — that
+one Wave 7 both owns and satisfies (the gap it names is real, disclosed,
+and currently open).
 
-- GIVEN the switch-removal slice has landed
-- WHEN any `start` is requested, or the codebase is searched for the switch
-- THEN it always proceeds through v3, and zero switch references remain
-  outside historical/archived change specs
+**Corrected counts for this change's delta** (three capability specs
+combined: `rdd-legacy-retirement`, `rdd-shadow-evaluation`,
+`rdd-single-lifecycle`), after this move and the follow-up SL-1 scenario
+move immediately above: **14/14 requirements** delivered (unchanged by the
+scenario move — the "Byte-Equivalence Exit Evidence Precedes Switch
+Removal" requirement heading stays in this delta; only its
+full-journey-set scenario relocated). Scenarios: **8/8** — the
+"Double-evaluation proves equivalence before deletion" scenario also moved
+to `rdd-single-lifecycle-cutover` (as a `MODIFIED Requirements` addition to
+the same requirement, since only the change that performs removal can run
+it), so every scenario this change still names, it delivers. Prior counts, for
+the record: requirements 14/15 (relabel-in-place, verify blocker B1) →
+14/14 (B1's physical move, unchanged since); scenarios 8/10 → 8/9 (B1's
+scenario left with its requirement) → 8/8 (this SL-1 scenario move).
 
 ## Amendment (Wave 7 S7, WU18 attempt — deferred, not landed)
 

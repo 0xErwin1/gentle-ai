@@ -64,3 +64,45 @@ proof exists, then updates `docs/architecture/rdd-backlog-disposition.md`'s
 own closure audit protocol row for step 4 as satisfied for these five
 items — still without performing step 5 (the actual GitHub closure),
 which stays a separate maintainer action.
+
+## Reconciliation at WU20 close-out (verify W4 — corrected, was not done as originally worded)
+
+WU20 did not actually perform the paragraph above as written, and the
+paragraph's own condition — "RG.1b is fully GREEN (zero legacy verbs
+reachable)" — no longer holds in the blanket form this tracker assumed at
+WU3 time. Both need an honest correction, not a silent checkmark:
+
+- **"Zero legacy verbs reachable" was imprecise.** At WU3 time this tracker
+  (and RG.1b) treated all 11 candidate verbs named in the WU3-era
+  reachability list as one undifferentiated "legacy" bucket, on the
+  design's original assumption that WU18 (switch removal) would land and
+  retire the whole bucket together. WU18 was deferred (see the
+  `rdd-single-lifecycle` spec amendment), and WU19's honest D4
+  classification — done against the actual, not the assumed, tree — found
+  only 5 of those 11 verbs are truly legacy-only and were in fact retired
+  this wave (`reconcile-authority`, `reconcile-authority-batch`,
+  `quarantine-legacy`, `quarantine-legacy-fix-scope`, `repair-legacy-alias`
+  — landed WU14/WU16). The remaining 6 (`invalidate`, `abandon`, `recover`,
+  `reclaim`, `dispose-result`, `reopen-results`) turned out to be live,
+  active compact-v2 mutation surface, not legacy code awaiting deletion —
+  they stay reachable by design, gated on the still-present switch, and
+  RG.1b now asserts that reachability positively
+  (`TestLegacyReadOnlyGuardLiveCompactV2VerbsRemainReachable`) rather than
+  demanding it go to zero.
+- **Scoped to what #1455/#1462/#1570 actually claim, the proof still
+  holds.** None of the 6 live D4 verbs are the retired surface those three
+  issues name. #1462 names `quarantine-legacy`; #1570 names
+  `repair-legacy-alias`; #1455/#1549/#1550 name the reconcile/quarantine/
+  repair verb clusters (rows 6-19) — all five of those specific verbs are
+  the ones confirmed unreachable by the narrowed
+  `TestLegacyReadOnlyGuardMutationVerbsUnreachable` (RG.1b). So the
+  closure-audit step-4 proof obligation for these three specific backlog
+  rows IS satisfied; it was this tracker's broader "zero legacy verbs
+  reachable" framing — not the underlying proof for #1455/#1462/#1570 —
+  that was wrong.
+- **`rdd-backlog-disposition.md`'s closure audit protocol was not edited.**
+  It has no per-item "satisfied" checkbox to flip (step 4 is prose applying
+  uniformly to all five `superseded-by-design` rows, not a row of its own);
+  a maintainer applying step 4 today should read it as satisfied for
+  #1455/#1462/#1570/#1549/#1550 specifically, on the corrected evidence
+  above, not on this tracker's original unscoped claim.
