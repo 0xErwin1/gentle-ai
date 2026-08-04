@@ -260,7 +260,16 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// runtime-support sentence was rewritten to state OpenCode's genuine
 	// support truthfully; Kilocode's rendered orchestrator prompt embeds the
 	// same shared contract text. Deliberate, not drift.
-	const want = "f05be384887dc1c743365c2e73d13ee4ac7facc07e0af907d002ecd06f265500"
+	//
+	// The hash moved a third time in the same issue when adversarial
+	// verification found the runtime-support sentence had rounded up: the
+	// injected block is the reviewer's only *args.prompt* byte source, but
+	// OpenCode concatenates live project instructions and the skill catalog
+	// into every session's *system* prompt regardless of tools. The sentence
+	// now states the plugin's own isolation-environment refusal gate and the
+	// one channel (a remote `instructions` URL) that gate does not close.
+	// Deliberate, not drift.
+	const want = "176dcee8b59c3b73597bfcbd7ee55a6e4a7d97d84a33af6d7ae10b1b90dde5b0"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -439,8 +448,19 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// support, so the contract now states both supported runtimes
 		// truthfully and names OpenCode's no-shell/no-read guarantee. This
 		// is a deliberate contract correction, not drift.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_273, maxCharacters: 18_500},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 25_809, maxCharacters: 36_000},
+		//
+		// wantChars grew a third time by 485 (15,273 -> 15,758 / 25,809 ->
+		// 26,294) when adversarial verification found the prior sentence
+		// rounded up: the injected block is the reviewer's only args.prompt
+		// byte source, but OpenCode concatenates live project instructions
+		// and the skill catalog into every session's system prompt
+		// regardless of tools. The contract now states the plugin's own
+		// isolation-environment refusal gate (OPENCODE_DISABLE_PROJECT_CONFIG,
+		// OPENCODE_DISABLE_EXTERNAL_SKILLS) and the one channel -- a remote
+		// `instructions` URL -- that gate does not close. This is a
+		// deliberate contract correction, not drift.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 15_758, maxCharacters: 18_500},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 26_294, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
