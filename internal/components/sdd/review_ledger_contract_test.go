@@ -253,7 +253,11 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// as the self-service fallback where no more specific exit exists).
 	// Kilocode embeds the same shared contract, so its rendered settings hash
 	// moved again. Deliberate, not drift.
-	const want = "665b2c50402cfba5d11702565d178b52a0bb98113ab1d17fdb2ac473fcd86dbb"
+	//
+	// Second pass fixing adversarial verification findings F1/F4/F6/F7 (see
+	// TestOpenCodeRenderedReviewProtocolCost's changelog comment above) moved
+	// it a third time. Deliberate, not drift.
+	const want = "d9b91b53542ff13ef3444febbe725c11d613c2f60446602697d351b59eaf3162"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -426,8 +430,24 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// fallback wherever no more specific exit exists. The standard ceiling
 		// moves with it (18,500 -> 21,200) to restore the ~15% margin below; the
 		// full-4R ceiling already had enough headroom and is unchanged.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 18_406, maxCharacters: 21_200},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 26_164, maxCharacters: 36_000},
+		// wantChars grew again by 870 per row (18,406 -> 19,276 / 26,164 ->
+		// 27,034) fixing adversarial verification findings against exit-naming
+		// audit fix #1: F1 completed two abbreviated `review status
+		// --next-transition` invocations to their real required form
+		// (--contract gentle-ai.review-integration/v2 --agent claude-code,
+		// verified by execution -- the bare form is refused), F4 disclosed
+		// that `review start` on an unchanged candidate only resumes the same
+		// review rather than starting a fresh one (also verified by
+		// execution), F6 switched every `review mode disable` mention to the
+		// clone-scoped `--scope clone --cwd <repo>` form plus a one-line
+		// disclosure that omitting --scope disables review machine-wide
+		// (--scope defaults to global; verified by execution), and F7
+		// completed the `review reopen-results` invocation to its six
+		// required flags (also verified by execution). The standard ceiling
+		// moves with it (21,200 -> 22,200) to restore the ~15% margin below;
+		// full-4R still has headroom and is unchanged.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_276, maxCharacters: 22_200},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 27_034, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
