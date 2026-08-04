@@ -190,10 +190,10 @@ release candidate's community testing).
   Landed at 02ff50ea.
 
 ## WU19 — S8: D4 verbs (row 24, classify at task time)
-- [ ] 19.1 Classify `invalidate`/`abandon`/`recover`/`reclaim`/`dispose-result`/`reopen-results` (`review_facade.go:709-728`) against current tree: zero new-lineage role → delete; residual legacy-READ role → retain per D5, document in the guard.
-- [ ] 19.2 Delete confirmed-dead verb cases+handlers+tests (est ≤300L).
-- [ ] 19.3 GREEN: `legacy_readonly_guard_test.go` (RG.1/RG.2) fully GREEN — zero legacy mutation entry point reachable.
-- [ ] 19.4 Exit Checklist.
+- [x] 19.1 Classified `invalidate`/`abandon`/`recover`/`reclaim`/`dispose-result`/`reopen-results` (`review_facade.go:707-722`) against the CURRENT tree (not the design's originally-assumed post-WU18 tree — WU18 is deferred, see the spec amendment). Outcome, evidence-based (each verb's own handler constructs/mutates a `reviewtransaction.Compact*` record): all six are LIVE, ACTIVE mutation surface for the current default (switch-gated) compact-v2 lifecycle — neither dead (delete) nor a D5 residual-READ path (retain read-only); D5's retained-read category is for FROZEN v1 forensic access, and compact-v2 is not frozen while the switch remains. None qualify for deletion.
+- [x] 19.2 N/A — zero confirmed-dead verb cases; nothing to delete. (Design estimated ≤300L of deletion under the assumption WU18 would land first; that assumption did not hold this wave.)
+- [x] 19.3 GREEN, honestly: `legacy_readonly_guard_test.go` (RG.1/RG.2) is fully GREEN — not by deleting live surface to force it, but by narrowing `legacyRetiredMutationVerbs` to the 5 verbs actually retired this wave (already unreachable) and adding a new positive-assertion test, `TestLegacyReadOnlyGuardLiveCompactV2VerbsRemainReachable`, asserting the 6 D4 verbs stay reachable (backed by `legacyLiveCompactV2MutationVerbs`) — this guard is honestly green either way it looks at the current dispatch table. Re-classification (delete vs. D5-retain) is a live task for whichever wave lands switch removal.
+- [x] 19.4 Exit Checklist: gofmt/vet clean, deadcode ratchet unchanged (zero new/gone entries — no production code touched), refusal ratchet unchanged (test-only slice), full root `go test ./... -count=1` fully GREEN (zero failures across the entire repo, RG.1b's own red finally resolved), bench module tests green, bench corpus vs the WU18a tip: 83/83 comparable journeys unchanged status, zero structural deltas (expected — test-only slice).
 
 ## WU20 — S9b: capability deltas + wave close-out
 - [ ] 20.1 Finalize `rdd-legacy-retirement`/`rdd-single-lifecycle`/`rdd-shadow-evaluation` deltas against actual landed state.
