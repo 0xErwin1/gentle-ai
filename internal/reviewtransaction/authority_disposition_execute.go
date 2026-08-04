@@ -171,11 +171,28 @@ func lockedAuthorityDispositionMutation(ctx context.Context, maintenance *Mainte
 		return CompactReclaimRecord{}, err
 	}
 
+	// Fix cycle 1 (CRITICAL-1, security): Authorization and CAS-all-N
+	// validate on EVERY execution path, fresh or resume — only the plan
+	// RE-DERIVATION comparison below is fresh-only, because that is the one
+	// part that legitimately cannot work mid-closure (re-deriving against a
+	// store that has already shrunk as prior members were quarantined away
+	// is a narrowing re-derivation the spec forbids, not a real staleness
+	// signal). Gating validateAuthorityDispositionAuthorization inside the
+	// fresh-only branch (as this function previously did) meant every
+	// RESUME executed unauthorized: RepairAuthorityDisposition's resume path
+	// (reconstructAuthorityDispositionPlanForResume, authority_repair.go)
+	// sets Authorization from the CURRENT caller's argument, unverified, so
+	// any caller who merely knew an in-progress plan_digest could resume
+	// with a forged Authorization and it would commit every remaining
+	// closure member.
+	var records map[string]CompactRecord
+	validationInventoryRevision := plan.AuthorityInventoryRevision
 	if freshExecution {
-		report, records, err := loadCompactRecoveryRecordsUnderMaintenanceHold(ctx, root)
+		report, freshRecords, err := loadCompactRecoveryRecordsUnderMaintenanceHold(ctx, root)
 		if err != nil {
 			return CompactReclaimRecord{}, err
 		}
+		records = freshRecords
 		currentPlan, err := deriveAuthorityDispositionPlan(report, records, binding, plan.Actor, plan.Reason)
 		if err != nil {
 			return CompactReclaimRecord{}, fmt.Errorf("authority disposition execution refused: re-derivation under lock did not reproduce a closed classification: %w", err)
@@ -190,28 +207,55 @@ func lockedAuthorityDispositionMutation(ctx context.Context, maintenance *Mainte
 		if err != nil {
 			return CompactReclaimRecord{}, err
 		}
-		if err := validateAuthorityDispositionAuthorization(plan, currentInventoryRevision); err != nil {
+		validationInventoryRevision = currentInventoryRevision
+	}
+	// A non-fresh closure (freshExecution == false) skips re-derivation
+	// entirely: this exact plan_digest already passed re-derivation and CAS
+	// the one time its per-node loop first began (when plan.Closure[0] still
+	// had a live, untouched v2/ entry). Authorization, though, binds
+	// plan_digest and plan.AuthorityInventoryRevision to each other
+	// cryptographically (authorityDispositionAuthorizationBinding);
+	// comparing plan's own frozen inventory revision to itself below makes
+	// the drift half of validateAuthorityDispositionAuthorization a no-op on
+	// resume (as it must be — the store has legitimately shrunk), while the
+	// binding half still catches a forged or mismatched Authorization on
+	// every single call, fresh or resumed.
+	if err := validateAuthorityDispositionAuthorization(plan, validationInventoryRevision); err != nil {
+		return CompactReclaimRecord{}, err
+	}
+
+	// CAS-all-N: every closure member's expected revision is checked before
+	// the first move — drift on ANY member, not only the seed, refuses
+	// pre-move and names exactly which member drifted. On resume, records
+	// were not already loaded above (freshExecution == false skipped
+	// re-derivation), so load them once here, for CAS-all-N only.
+	if records == nil {
+		_, freshRecords, err := loadCompactRecoveryRecordsUnderMaintenanceHold(ctx, root)
+		if err != nil {
 			return CompactReclaimRecord{}, err
 		}
-
-		// CAS-all-N: every closure member's expected revision is checked
-		// before the first move — drift on ANY member, not only the seed,
-		// refuses pre-move and names exactly which member drifted.
-		for _, lineage := range plan.Closure {
-			targetRecord, found := records[lineage]
-			expectedRevision, expectedFound := plan.ExpectedRevisions[lineage]
-			if !found || !expectedFound || targetRecord.Revision != expectedRevision {
+		records = freshRecords
+	}
+	for _, lineage := range plan.Closure {
+		targetRecord, found := records[lineage]
+		if !found {
+			// On a fresh execution a missing member is drift — nothing has
+			// legitimately removed it yet. On resume it is very likely
+			// already quarantined by the interrupted attempt this call
+			// resumes; the per-node loop below discovers and either skips
+			// it cleanly or refuses it by name (a genuine digest mismatch),
+			// so CAS-all-N does not refuse pre-emptively for a member that
+			// simply is not live anymore.
+			if freshExecution {
 				return CompactReclaimRecord{}, fmt.Errorf("%w: expected revision for closure member %q drifted", ErrConcurrentUpdate, lineage)
 			}
+			continue
+		}
+		expectedRevision, expectedFound := plan.ExpectedRevisions[lineage]
+		if !expectedFound || targetRecord.Revision != expectedRevision {
+			return CompactReclaimRecord{}, fmt.Errorf("%w: expected revision for closure member %q drifted", ErrConcurrentUpdate, lineage)
 		}
 	}
-	// A non-fresh closure (freshExecution == false) skips re-derivation, CAS,
-	// and authorization entirely: this exact plan_digest already passed all
-	// three the one time its per-node loop first began (when plan.Closure[0]
-	// still had a live, untouched v2/ entry). Re-running them now would
-	// compare against a store that has legitimately shrunk as prior members
-	// were quarantined away — a narrowing re-derivation the spec forbids,
-	// not a real staleness signal.
 
 	recordedAuthorization := sha256.Sum256([]byte(plan.Authorization))
 	var lastCommitted CompactReclaimRecord
@@ -322,6 +366,14 @@ func authorityDispositionClosureIsFresh(ctx context.Context, base string, plan A
 // falling back to memberLineage's own quarantine directory under any digest
 // (a still-incomplete run), or a generic escalation with neither path when
 // even that cannot be found. It never attempts a narrowing re-derivation.
+//
+// SUGGESTION (fix cycle 1): both loops select a candidate quarantine
+// directory by name-prefix alone, mirroring the directory-naming scheme
+// (`<lineage>-<random-suffix>`) but not verifying it — a lineage ID that is
+// itself a prefix of another (e.g. "foo" and "foo-bar") could otherwise
+// match the wrong directory. quarantineDirectoryLineageMatches decodes the
+// candidate's own reclaim-record.json and checks its LineageID field
+// explicitly, exactly like discoverAuthorityDispositionRecord already does.
 func authorityDispositionResumeDigestMismatchRefusal(base, seedLineage, memberLineage, planDigest string) error {
 	quarantineRoot := filepath.Join(base, "quarantine")
 	entries, err := os.ReadDir(quarantineRoot)
@@ -330,7 +382,8 @@ func authorityDispositionResumeDigestMismatchRefusal(base, seedLineage, memberLi
 		return fmt.Errorf("authority disposition execution refused: closure member %q is missing from the authority store with no matching quarantine record for plan_digest %q; escalate — resume never attempts a narrowing re-derivation", memberLineage, planDigest)
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), seedLineage+"-") {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), seedLineage+"-") ||
+			!quarantineDirectoryLineageMatches(quarantineRoot, entry.Name(), seedLineage) {
 			continue
 		}
 		manifestPath := filepath.Join(quarantineRoot, entry.Name(), "closure-manifest.json")
@@ -340,13 +393,31 @@ func authorityDispositionResumeDigestMismatchRefusal(base, seedLineage, memberLi
 		}
 	}
 	for _, entry := range entries {
-		if entry.IsDir() && strings.HasPrefix(entry.Name(), memberLineage+"-") {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), memberLineage+"-") &&
+			quarantineDirectoryLineageMatches(quarantineRoot, entry.Name(), memberLineage) {
 			// refusal:by-design human-authority: a digest-mismatched or otherwise ambiguous partial closure needs a maintainer's diagnosis before any resume continues; forward-only resume never attempts a narrowing re-derivation, so there is no command this refusal can name
 			return fmt.Errorf("authority disposition execution refused: closure member %q was already quarantined under a different plan_digest than %q; inspect %s and escalate — resume never attempts a narrowing re-derivation", memberLineage, planDigest, filepath.Join(quarantineRoot, entry.Name()))
 		}
 	}
 	// refusal:by-design human-authority: a closure member missing from the authority store with no matching quarantine record under any digest needs a maintainer's diagnosis; forward-only resume never attempts a narrowing re-derivation, so there is no command this refusal can name
 	return fmt.Errorf("authority disposition execution refused: closure member %q is missing from the authority store with no matching quarantine record for plan_digest %q; escalate — resume never attempts a narrowing re-derivation", memberLineage, planDigest)
+}
+
+// quarantineDirectoryLineageMatches reports whether the quarantine directory
+// entryName (a child of quarantineRoot) holds a decodable reclaim-record.json
+// whose own LineageID field equals expectedLineage. It never returns true on
+// any read or decode failure — an unreadable or malformed record is not
+// evidence of a match, only a name-prefix coincidence would be.
+func quarantineDirectoryLineageMatches(quarantineRoot, entryName, expectedLineage string) bool {
+	payload, err := os.ReadFile(filepath.Join(quarantineRoot, entryName, "reclaim-record.json"))
+	if err != nil {
+		return false
+	}
+	var record CompactReclaimRecord
+	if err := json.Unmarshal(payload, &record); err != nil {
+		return false
+	}
+	return record.LineageID == expectedLineage
 }
 
 // loadCompactRecoveryRecordsUnderMaintenanceHold mirrors
