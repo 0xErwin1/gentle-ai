@@ -16,7 +16,11 @@ import (
 // grant chains and accumulates.
 func TestRuntimeLedgerGrantCommitsAndProjectsGrantedRoots(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
-	store, err := OpenRuntimeStore(context.Background(), repo, "grant-roots")
+	opened, err := OpenRuntimeStore(context.Background(), repo, "grant-roots")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := opened.ForInstance("grant-roots-instance")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +83,11 @@ func TestRuntimeLedgerGrantCommitsAndProjectsGrantedRoots(t *testing.T) {
 // revision without a new record; reuse with different inputs is refused.
 func TestRuntimeLedgerGrantDuplicateRequestIsIdempotent(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
-	store, err := OpenRuntimeStore(context.Background(), repo, "grant-idempotent")
+	opened, err := OpenRuntimeStore(context.Background(), repo, "grant-idempotent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := opened.ForInstance("grant-idempotent-instance")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +126,11 @@ func TestRuntimeLedgerGrantDuplicateRequestIsIdempotent(t *testing.T) {
 // digest recompute refuses the chain.
 func TestRuntimeLedgerGrantReplayRefusesForgedWidenedRecord(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
-	store, err := OpenRuntimeStore(context.Background(), repo, "grant-forged-replay")
+	opened, err := OpenRuntimeStore(context.Background(), repo, "grant-forged-replay")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := opened.ForInstance("grant-forged-instance")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,6 +154,7 @@ func TestRuntimeLedgerGrantReplayRefusesForgedWidenedRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	request.ExpectedRevision, request.RequestID = granted.Revision, "grant-forge-2"
+	request.ChangeInstance = "grant-forged-instance"
 	forgedRecord := runtimeRecord{
 		Schema: runtimeRecordSchema, Change: store.Change, PreviousRevision: granted.Revision,
 		Operation: runtimeOperationGrant, RequestID: request.RequestID,
@@ -149,6 +162,7 @@ func TestRuntimeLedgerGrantReplayRefusesForgedWidenedRecord(t *testing.T) {
 		Grant: &runtimeGrantEvent{
 			Roots: []string{root, widened}, Actor: "attacker",
 			Reason: "forged widened grant", GrantedAt: "2026-08-05T00:00:00Z",
+			Instance: "grant-forged-instance",
 		},
 	}
 	revision, payload, err := runtimeRecordRevision(forgedRecord)
@@ -209,5 +223,197 @@ func TestRuntimeLedgerLegacyChainWithoutGrantsReplaysUnchanged(t *testing.T) {
 	}
 	if strings.Contains(string(payload), "granted_roots") {
 		t.Fatalf("grant-free status serialized a granted_roots member: %s", payload)
+	}
+}
+
+// TestRuntimeLedgerArchivedNameReuseDoesNotResurrectGrantedRoots is #2557's
+// hazard fixture (S5 of #2540): archive is agent-side artifact movement that
+// never touches the per-change runtime ledger, and the ledger directory is
+// keyed by change name alone, so a future change reusing an archived name
+// reopens the SAME chain. Its reader must not inherit the archived change's
+// grants: per-change authority must not become workspace-permanent authority
+// through the back door.
+func TestRuntimeLedgerArchivedNameReuseDoesNotResurrectGrantedRoots(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	opened, err := OpenRuntimeStore(context.Background(), repo, "reused-change-name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := opened.ForInstance("first-change-instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	granted, err := first.Grant(context.Background(), GrantRootsRequest{
+		ExpectedRevision: "", RequestID: "grant-first-instance", Roots: []string{root},
+		Reason: "maintainer authorized sibling repository edits for the first change", Actor: "maintainer",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(granted.GrantedRoots) != 1 || granted.GrantedRoots[0] != root {
+		t.Fatalf("first instance projected %#v, want its own granted root %q", granted.GrantedRoots, root)
+	}
+
+	// The first change is archived: only openspec artifacts move; the ledger
+	// chain stays exactly where it is. A recreated change with the same name
+	// resolves the same directory and replays the same chain, and before this
+	// slice its reader inherited the archived change's grants verbatim. A
+	// reader with no instance identity (every current caller, including the
+	// status.go embedding until S4b threads one) must project nothing.
+	reused, err := OpenRuntimeStore(context.Background(), repo, "reused-change-name")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := reused.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.GrantedRoots) != 0 {
+		t.Fatalf("archived-name reuse resurrected granted roots: %#v", status.GrantedRoots)
+	}
+
+	// The recreated change carries its own instance identity: the archived
+	// change's grants stay bound to the identity the human consented to.
+	second, err := reused.ForInstance("second-change-instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err = second.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.GrantedRoots) != 0 {
+		t.Fatalf("recreated change instance resurrected granted roots: %#v", status.GrantedRoots)
+	}
+
+	// The original instance keeps its authority: containment narrows the
+	// projection to the consented instance, it revokes nothing.
+	replayedFirst, err := reused.ForInstance("first-change-instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err = replayedFirst.Status()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.GrantedRoots) != 1 || status.GrantedRoots[0] != root {
+		t.Fatalf("original instance projected %#v, want its granted root %q", status.GrantedRoots, root)
+	}
+}
+
+// TestRuntimeLedgerGrantRequiresChangeInstance contains the write path: a
+// store that never declared which change instance it serves cannot record
+// authority at all, and an incoherent caller-supplied instance is refused
+// rather than silently rebound.
+func TestRuntimeLedgerGrantRequiresChangeInstance(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	opened, err := OpenRuntimeStore(context.Background(), repo, "grant-instance-required")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := GrantRootsRequest{
+		ExpectedRevision: "", RequestID: "grant-no-instance", Roots: []string{root},
+		Reason: "maintainer authorized sibling repository edits", Actor: "maintainer",
+	}
+	if _, err := opened.Grant(context.Background(), request); err == nil ||
+		!strings.Contains(err.Error(), "requires a change-instance identity") {
+		t.Fatalf("instance-less grant = %v, want the ForInstance refusal", err)
+	}
+	if _, err := opened.ForInstance(""); err == nil {
+		t.Fatal("empty change-instance identity was accepted")
+	}
+
+	store, err := opened.ForInstance("declared-instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.ChangeInstance = "some-other-instance"
+	if _, err := store.Grant(context.Background(), request); err == nil ||
+		!strings.Contains(err.Error(), "does not equal the store's instance identity") {
+		t.Fatalf("incoherent grant instance = %v, want the mismatch refusal", err)
+	}
+	if countRuntimeRecords(t, store.Dir) != 0 {
+		t.Fatalf("refused grants recorded %d records, want none", countRuntimeRecords(t, store.Dir))
+	}
+}
+
+// TestRuntimeLedgerGrantReplayRefusesForgedInstanceMarker applies the sibling
+// forgery discipline to the instance identity: a record whose identity was
+// rebound or stripped after publication no longer matches the digest the
+// original request bound, so replay refuses the chain instead of projecting
+// the grant into another instance.
+func TestRuntimeLedgerGrantReplayRefusesForgedInstanceMarker(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	opened, err := OpenRuntimeStore(context.Background(), repo, "grant-instance-forgery")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := opened.ForInstance("consented-instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := GrantRootsRequest{
+		ExpectedRevision: "", RequestID: "grant-instance-1", Roots: []string{root},
+		Reason: "maintainer authorized one sibling repository", Actor: "maintainer",
+		ChangeInstance: "consented-instance",
+	}
+	granted, err := store.Grant(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Forged: the digest still binds the consented instance, but the record
+	// claims the grant belongs to a different one — the exact rebinding a
+	// name-reuse attacker would need to resurrect authority.
+	forge := func(t *testing.T, requestID, instance string) error {
+		t.Helper()
+		forgedRequest := request
+		forgedRequest.ExpectedRevision, forgedRequest.RequestID = granted.Revision, requestID
+		forgedRecord := runtimeRecord{
+			Schema: runtimeRecordSchema, Change: store.Change, PreviousRevision: granted.Revision,
+			Operation: runtimeOperationGrant, RequestID: requestID,
+			RequestDigest: runtimeValueHash("gentle-ai.sdd-runtime-grant-request/v1", forgedRequest),
+			Grant: &runtimeGrantEvent{
+				Roots: []string{root}, Actor: "maintainer",
+				Reason: "maintainer authorized one sibling repository", GrantedAt: "2026-08-05T00:00:00Z",
+				Instance: instance,
+			},
+		}
+		revision, payload, err := runtimeRecordRevision(forgedRecord)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.publishRecord(revision, payload); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.publishHead(revision); err != nil {
+			t.Fatal(err)
+		}
+		_, statusErr := store.Status()
+		if headErr := store.publishHead(granted.Revision); headErr != nil {
+			t.Fatal(headErr)
+		}
+		return statusErr
+	}
+
+	if err := forge(t, "grant-instance-rebound", "second-change-instance"); err == nil ||
+		!strings.Contains(err.Error(), "grant request digest does not match record") {
+		t.Fatalf("replay of rebound instance marker = %v, want the digest-recompute rejection", err)
+	}
+	if err := forge(t, "grant-instance-stripped", ""); err == nil ||
+		!strings.Contains(err.Error(), "invalid SDD runtime grant change-instance identity") {
+		t.Fatalf("replay of stripped instance marker = %v, want the invalid-identity rejection", err)
 	}
 }

@@ -55,6 +55,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	actor := flags.String("actor", "", "explicit reset actor")
 	var roots sddAttemptRootList
 	flags.Var(&roots, "root", "repository root receiving per-change edit authority (repeatable)")
+	changeInstance := flags.String("change-instance", "", "opaque caller-owned change-instance identity; mint one token per change instance, reuse that exact token for widening grants within the same change lifecycle, and mint a fresh one for a recreated change so an archived name's grants never resurrect (required for grant; optional projection scope for status)")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -69,6 +70,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	// own.
 	*expected = strings.TrimSpace(*expected)
 	*token = strings.TrimSpace(*token)
+	*changeInstance = strings.TrimSpace(*changeInstance)
 	*evidenceRevision = strings.TrimSpace(*evidenceRevision)
 	*expectedBindingRevision = strings.TrimSpace(*expectedBindingRevision)
 	*remediatesEvidenceRevision = strings.TrimSpace(*remediatesEvidenceRevision)
@@ -91,6 +93,15 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	var result any
 	switch operation {
 	case "status":
+		// An optional --change-instance scopes the granted-roots projection
+		// to that instance (#2540 S5); without it, status projects no granted
+		// roots at all, which is the conservative containment for readers
+		// that have not declared which change instance they serve.
+		if *changeInstance != "" {
+			if store, err = store.ForInstance(*changeInstance); err != nil {
+				return fmt.Errorf("sdd-attempt status: %w", err)
+			}
+		}
 		result, err = store.Status()
 	case "begin":
 		if missing := missingSDDAttemptFlags(args[1:], "expected-revision", "request-id", "work-unit", "evidence-goal"); len(missing) != 0 {
@@ -160,10 +171,20 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 		// "empty or sha256"), which matches exactly the fresh pre-attempt
 		// ledger the consent flow grants against; a later widening grant
 		// chains the exact committed revision like every sibling mutation.
-		if missing := missingSDDAttemptFlags(args[1:], "root", "request-id", "actor", "reason"); len(missing) != 0 {
+		if missing := missingSDDAttemptFlags(args[1:], "root", "change-instance", "request-id", "actor", "reason"); len(missing) != 0 {
 			return fmt.Errorf("sdd-attempt grant requires %s; rerun `gentle-ai sdd-attempt grant` with those missing flags", strings.Join(missing, ", "))
 		}
-		result, err = store.Grant(ctx, sddstatus.GrantRootsRequest{
+		// The grant binds the caller-owned change-instance identity (#2540
+		// S5): the ledger digest-binds it into the record and replay projects
+		// the grant only for the same identity, so an archived name's reuse
+		// cannot resurrect it. Until S4b derives markers natively, the caller
+		// mints the opaque token and must reuse it for widening grants within
+		// this change's lifecycle.
+		var grantStore sddstatus.RuntimeStore
+		if grantStore, err = store.ForInstance(*changeInstance); err != nil {
+			return fmt.Errorf("sdd-attempt grant: %w", err)
+		}
+		result, err = grantStore.Grant(ctx, sddstatus.GrantRootsRequest{
 			ExpectedRevision: *expected, RequestID: *requestID, Roots: roots, Reason: *reason, Actor: *actor,
 		})
 	}
@@ -218,7 +239,8 @@ func validateSDDAttemptOperationFlags(operation string, args []string) error {
 		"rescope": {"expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "reason", "actor"},
 		"acquire": {"request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "token"},
 		"settle":  {"token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "successor-lineage", "remediates-evidence-revision"},
-		"grant":   {"expected-revision", "request-id", "root", "actor", "reason"},
+		"grant":   {"expected-revision", "request-id", "root", "change-instance", "actor", "reason"},
+		"status":  {"change-instance"},
 	}[operation] {
 		allowed[name] = true
 	}
