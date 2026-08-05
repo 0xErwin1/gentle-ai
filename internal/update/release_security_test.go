@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -80,12 +81,16 @@ func TestPrereleasePublisherContract(t *testing.T) {
 	for _, required := range []string{
 		"RELEASE_CHANNEL:",
 		"environment: release",
+		"release --snapshot --clean --config .goreleaser-prerelease.yaml --skip=sign,publish",
 		"--config .goreleaser-prerelease.yaml --skip=homebrew,scoop",
 		"./scripts/verify-release-assets.sh",
 	} {
 		if !strings.Contains(workflow, required) {
 			t.Errorf("release workflow is missing prerelease control %q", required)
 		}
+	}
+	if snapshot, publisher := strings.Index(workflow, "release --snapshot --clean --config .goreleaser-prerelease.yaml --skip=sign,publish"), strings.Index(workflow, "--config .goreleaser-prerelease.yaml --skip=homebrew,scoop"); snapshot == -1 || publisher == -1 || snapshot > publisher {
+		t.Fatal("prerelease distribution policy does not resolve its plan before publication")
 	}
 	if strings.Contains(workflow, `"!v*-*"`) {
 		t.Fatal("release workflow still excludes prerelease tags")
@@ -299,6 +304,37 @@ printf '%s\n' "${TRUSTED_COMMENT:-repo=$GITHUB_REPOSITORY;tag=$GITHUB_REF_NAME}"
 				t.Fatalf("release verifier used commands outside the approved read-only surface: %q", lines)
 			}
 		})
+	}
+}
+
+func TestPrereleaseDistributionPolicyRejectsUnexpectedSnapshotArtifact(t *testing.T) {
+	root := newReleasePolicyFixture(t)
+	prereleaseConfig := readRepositoryFile(t, ".goreleaser-prerelease.yaml")
+	if err := os.WriteFile(filepath.Join(root, ".goreleaser-prerelease.yaml"), []byte(prereleaseConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var artifacts []json.RawMessage
+	if err := json.Unmarshal([]byte(releasePolicyArtifactsFixture), &artifacts); err != nil {
+		t.Fatal(err)
+	}
+	prereleaseArtifacts, err := json.Marshal(artifacts[:len(artifacts)-1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifactsPath := filepath.Join(root, "dist", "artifacts.json")
+	if err := os.WriteFile(artifactsPath, prereleaseArtifacts, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := runPrereleaseReleasePolicy(root); err != nil {
+		t.Fatalf("policy rejected the approved prerelease distribution plan: %v\n%s", err, output)
+	}
+
+	if err := os.WriteFile(artifactsPath, append(prereleaseArtifacts[:len(prereleaseArtifacts)-1], []byte(`,{"name":"unexpected.zip","path":"dist/unexpected.zip","type":"Archive","extra":{}}]`)...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := runPrereleaseReleasePolicy(root); err == nil || !strings.Contains(string(output), "resolved GoReleaser artifact types changed") {
+		t.Fatalf("policy accepted an unexpected prerelease artifact before publication: %v\n%s", err, output)
 	}
 }
 

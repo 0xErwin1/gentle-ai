@@ -18,22 +18,26 @@ import (
 )
 
 // Validate proves that the canonical release configuration, workflow, and
-// current no-publish snapshot describe the one approved distribution path.
-func Validate(root, markerPath, runID string) error {
+// current no-publish snapshot describe the approved distribution path.
+func Validate(root, markerPath, runID, channel string) error {
 	root, err := canonicalDirectory(root)
 	if err != nil {
 		return fmt.Errorf("resolve repository root: %w", err)
+	}
+	configName, expectedConfig, err := releaseConfig(channel)
+	if err != nil {
+		return err
 	}
 	markerTime, err := validateRunMarker(root, markerPath, runID)
 	if err != nil {
 		return err
 	}
 
-	config, err := readRegularFile(filepath.Join(root, ".goreleaser.yaml"))
+	config, err := readRegularFile(filepath.Join(root, configName))
 	if err != nil {
-		return fmt.Errorf("read canonical GoReleaser config: %w", err)
+		return fmt.Errorf("read %s: %w", configName, err)
 	}
-	if err := validateYAMLSemantics("GoReleaser config", config, expectedGoReleaserYAML); err != nil {
+	if err := validateYAMLSemantics("GoReleaser config", config, expectedConfig); err != nil {
 		return err
 	}
 
@@ -53,10 +57,21 @@ func Validate(root, markerPath, runID string) error {
 	if err != nil {
 		return fmt.Errorf("read GoReleaser snapshot metadata: %w", err)
 	}
-	if err := validateArtifacts(root, artifacts, markerTime); err != nil {
+	if err := validateArtifacts(root, artifacts, markerTime, channel); err != nil {
 		return err
 	}
 	return nil
+}
+
+func releaseConfig(channel string) (string, string, error) {
+	switch channel {
+	case "stable":
+		return ".goreleaser.yaml", expectedGoReleaserYAML, nil
+	case "prerelease":
+		return ".goreleaser-prerelease.yaml", expectedPrereleaseGoReleaserYAML, nil
+	default:
+		return "", "", fmt.Errorf("release channel %q is not approved", channel)
+	}
 }
 
 func canonicalDirectory(dir string) (string, error) {
@@ -284,7 +299,7 @@ type artifact struct {
 	Extra  map[string]any `json:"extra"`
 }
 
-func validateArtifacts(root string, payload []byte, markerTime time.Time) error {
+func validateArtifacts(root string, payload []byte, markerTime time.Time, channel string) error {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	var artifacts []artifact
 	if err := decoder.Decode(&artifacts); err != nil {
@@ -293,7 +308,10 @@ func validateArtifacts(root string, payload []byte, markerTime time.Time) error 
 	if err := requireJSONEOF(decoder); err != nil {
 		return err
 	}
-	expectedCounts := map[string]int{"Metadata": 1, "Binary": 4, "Archive": 4, "Checksum": 1, "Homebrew Formula": 1}
+	expectedCounts := map[string]int{"Metadata": 1, "Binary": 4, "Archive": 4, "Checksum": 1}
+	if channel == "stable" {
+		expectedCounts["Homebrew Formula"] = 1
+	}
 	byType := make(map[string][]artifact)
 	counts := make(map[string]int)
 	paths := make(map[string]struct{})
@@ -374,15 +392,17 @@ func validateArtifacts(root string, payload []byte, markerTime time.Time) error 
 	if item := byType["Metadata"][0]; item.Name != "metadata.json" || item.Path != "dist/metadata.json" {
 		return errors.New("resolved metadata output changed")
 	}
-	formula := byType["Homebrew Formula"][0]
-	if formula.Name != "gentle-ai.rb" || formula.Path != "dist/homebrew/Formula/gentle-ai.rb" {
-		return errors.New("resolved Homebrew formula output changed")
-	}
-	brewConfig := extraMap(formula.Extra, "BrewConfig")
-	repository := extraMap(brewConfig, "repository")
-	if extraString(brewConfig, "name") != "gentle-ai" || extraString(brewConfig, "directory") != "Formula" ||
-		extraString(repository, "owner") != "Gentleman-Programming" || extraString(repository, "name") != "homebrew-tap" || extraString(repository, "token") != "{{ .Env.HOMEBREW_TAP_TOKEN }}" {
-		return errors.New("resolved Homebrew publisher changed")
+	if channel == "stable" {
+		formula := byType["Homebrew Formula"][0]
+		if formula.Name != "gentle-ai.rb" || formula.Path != "dist/homebrew/Formula/gentle-ai.rb" {
+			return errors.New("resolved Homebrew formula output changed")
+		}
+		brewConfig := extraMap(formula.Extra, "BrewConfig")
+		repository := extraMap(brewConfig, "repository")
+		if extraString(brewConfig, "name") != "gentle-ai" || extraString(brewConfig, "directory") != "Formula" ||
+			extraString(repository, "owner") != "Gentleman-Programming" || extraString(repository, "name") != "homebrew-tap" || extraString(repository, "token") != "{{ .Env.HOMEBREW_TAP_TOKEN }}" {
+			return errors.New("resolved Homebrew publisher changed")
+		}
 	}
 
 	orderedPaths := make([]string, 0, len(paths))
@@ -563,6 +583,62 @@ brews:
     commit_msg_template: "chore: update gentle-ai formula to {{ .Tag }}"
 `
 
+const expectedPrereleaseGoReleaserYAML = `version: 2
+project_name: gentle-ai
+release:
+  prerelease: auto
+  make_latest: false
+  replace_existing_artifacts: false
+builds:
+  - main: ./cmd/gentle-ai
+    binary: gentle-ai
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - >-
+        -s -w
+        -X main.version={{ .Version }}
+        -X github.com/gentleman-programming/gentle-ai/v2/internal/update/upgrade.releaseMinisignPublicKeys={{ .Env.MINISIGN_PUBLIC_KEYS_CANONICAL }}
+archives:
+  - formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - docs/review-integration.md
+      - contracts/review-integration/v1/schemas/*.schema.json
+      - contracts/review-integration/v1/fixtures/*.fixture.json
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+signs:
+  - cmd: minisign
+    artifacts: checksum
+    signature: ${artifact}.minisig
+    args:
+      - "-S"
+      - "-s"
+      - "{{ .Env.MINISIGN_SECRET_KEY_FILE }}"
+      - "-m"
+      - "${artifact}"
+      - "-x"
+      - "${signature}"
+      - "-c"
+      - "signature from gentle-ai release"
+      - "-t"
+      - "repo=Gentleman-Programming/gentle-ai;tag={{ .Tag }}"
+    output: true
+`
+
 const expectedReleaseWorkflowYAML = `name: Release
 on:
   push:
@@ -610,15 +686,13 @@ jobs:
           printf 'RELEASE_POLICY_SNAPSHOT_MARKER=%s\n' "$marker" >>"$GITHUB_ENV"
           printf 'RELEASE_POLICY_SNAPSHOT_RUN_ID=%s\n' "$run_id" >>"$GITHUB_ENV"
       - name: Resolve release distribution plan without publishing
-        if: env.RELEASE_CHANNEL == 'stable'
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94
         with:
           version: v2.15.2
-          args: release --snapshot --clean --skip=sign,publish
+          args: ${{ env.RELEASE_CHANNEL == 'prerelease' && 'release --snapshot --clean --config .goreleaser-prerelease.yaml --skip=sign,publish' || 'release --snapshot --clean --skip=sign,publish' }}
         env:
           MINISIGN_PUBLIC_KEYS_CANONICAL: release-policy-validation-only
       - name: Verify release distribution policy
-        if: env.RELEASE_CHANNEL == 'stable'
         run: ./scripts/verify-release-distribution-policy.sh
       - name: Verify tag, main, trust anchors, and module immutability
         run: ./scripts/release-preflight.sh

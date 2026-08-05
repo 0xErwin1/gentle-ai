@@ -429,11 +429,20 @@ func newReleasePolicyFixture(t *testing.T) string {
 }
 
 func runReleasePolicy(root string) ([]byte, error) {
+	return runReleasePolicyForChannel(root, "stable")
+}
+
+func runPrereleaseReleasePolicy(root string) ([]byte, error) {
+	return runReleasePolicyForChannel(root, "prerelease")
+}
+
+func runReleasePolicyForChannel(root, channel string) ([]byte, error) {
 	command := exec.Command("bash", filepath.Join("scripts", "verify-release-distribution-policy.sh"))
 	command.Dir = root
 	command.Env = append(os.Environ(),
 		"RELEASE_POLICY_SNAPSHOT_MARKER="+releasePolicyMarkerPath(root),
 		"RELEASE_POLICY_SNAPSHOT_RUN_ID="+releasePolicyRunID,
+		"RELEASE_CHANNEL="+channel,
 	)
 	return command.CombinedOutput()
 }
