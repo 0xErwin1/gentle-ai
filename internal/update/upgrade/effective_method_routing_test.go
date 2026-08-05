@@ -278,10 +278,12 @@ func TestGentleAIUpgradeWindowsAllowsResolvedGoDestination(t *testing.T) {
 	goPath := t.TempDir()
 	destination := writeFakeBinary(t, filepath.Join(goPath, "bin"), "gentle-ai.exe")
 	var goInstallCalls int
+	goEnvCalls := map[string]int{}
 	origExecCommand := execCommand
 	t.Cleanup(func() { execCommand = origExecCommand })
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		if name == "go" && len(args) == 2 && args[0] == "env" {
+			goEnvCalls[args[1]]++
 			switch args[1] {
 			case "GOBIN":
 				return mockCmd("echo", "")
@@ -312,6 +314,11 @@ func TestGentleAIUpgradeWindowsAllowsResolvedGoDestination(t *testing.T) {
 	}
 	if goInstallCalls != 1 {
 		t.Errorf("go install calls = %d, want 1 for the resolved Go-owned binary", goInstallCalls)
+	}
+	for _, key := range []string{"GOBIN", "GOPATH"} {
+		if got := goEnvCalls[key]; got != 1 {
+			t.Errorf("go env %s calls = %d, want 1 after preflight", key, got)
+		}
 	}
 	if report.BackupID == "" {
 		t.Errorf("successful Go-owned upgrade did not create a backup: %#v", report)

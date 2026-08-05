@@ -65,7 +65,7 @@ const maxScriptSize = 1 * 1024 * 1024 // 1 MB
 //   - script method + windows → manualFallback
 //   - OpenCode plugin method → update materialized package in ~/.config/opencode when possible
 //   - unknown method → manualFallback with explicit message
-func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) (bool, error) {
+func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination ...string) (bool, error) {
 	ownership := update.HomebrewNone
 	if profile.PackageManager == "brew" && r.Tool.InstallMethod != update.InstallOpenCodePlugin {
 		var err error
@@ -87,7 +87,7 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 	case update.InstallBrew:
 		return false, brewUpgrade(ctx, r, ownership)
 	case update.InstallGoInstall:
-		return false, goInstallUpgrade(ctx, r, profile)
+		return false, goInstallUpgrade(ctx, r, profile, firstString(preflightDestination))
 	case update.InstallBinary:
 		return false, binaryUpgrade(ctx, r, profile)
 	case update.InstallScript:
@@ -464,7 +464,7 @@ func homebrewFailureAdvice(toolName string, output string, detected ...update.Ho
 // binary was genuinely written. Windows gentle-ai self-upgrades are different:
 // they must prove that Go owns the active executable before writing, or skip to
 // a manual recovery instead of creating a second PATH-visible binary.
-func goInstallUpgrade(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile) error {
+func goInstallUpgrade(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination string) error {
 	tool := r.Tool
 	latestVersion := r.LatestVersion
 	if tool.GoImportPath == "" {
@@ -474,9 +474,13 @@ func goInstallUpgrade(ctx context.Context, r update.UpdateResult, profile system
 	// GOBIN/GOPATH are static Go configuration that `go install` does not
 	// change, so they are read up front; the PATH lookup happens afterwards so
 	// a first-time install resolves correctly.
-	destDir, destErr := goInstallDestinationDir()
-	if err := preflightWindowsGentleAIGoInstallWithDestination(r, profile, destDir, destErr); err != nil {
-		return err
+	destDir := preflightDestination
+	var destErr error
+	if destDir == "" {
+		destDir, destErr = goInstallDestinationDir()
+		if err := preflightWindowsGentleAIGoInstallWithDestination(r, profile, destDir, destErr); err != nil {
+			return err
+		}
 	}
 
 	// Pin to the exact release version.
@@ -491,9 +495,22 @@ func goInstallUpgrade(ctx context.Context, r update.UpdateResult, profile system
 	return nil
 }
 
-func preflightWindowsGentleAIGoInstall(r update.UpdateResult, profile system.PlatformProfile) error {
+func preflightWindowsGentleAIGoInstall(r update.UpdateResult, profile system.PlatformProfile) (string, error) {
+	if profile.OS != "windows" || r.Tool.Name != "gentle-ai" {
+		return "", nil
+	}
 	destDir, destErr := goInstallDestinationDir()
-	return preflightWindowsGentleAIGoInstallWithDestination(r, profile, destDir, destErr)
+	if err := preflightWindowsGentleAIGoInstallWithDestination(r, profile, destDir, destErr); err != nil {
+		return "", err
+	}
+	return destDir, nil
+}
+
+func firstString(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
 }
 
 func preflightWindowsGentleAIGoInstallWithDestination(r update.UpdateResult, profile system.PlatformProfile, destDir string, destErr error) error {
