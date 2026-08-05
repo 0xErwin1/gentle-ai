@@ -1412,6 +1412,7 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	if err != nil {
 		return result, err
 	}
+	defer rt.state.cleanupCompatibilityTransaction()
 
 	stagePlan := rt.stagePlan()
 	result.Plan = stagePlan
@@ -1424,7 +1425,6 @@ func RunSyncWithSelection(homeDir string, selection model.Selection) (SyncResult
 	result.Execution = orchestrator.Execute(stagePlan)
 	compatibilityChanged := rt.state.compatibilityChangedFiles()
 	rt.state.cleanupRollbackSnapshot()
-	rt.state.cleanupCompatibilityTransaction()
 	if result.Execution.Err != nil {
 		return result, fmt.Errorf("execute sync pipeline: %w", result.Execution.Err)
 	}
@@ -1589,6 +1589,7 @@ func RunSync(args []string) (SyncResult, error) {
 		if err != nil {
 			return result, err
 		}
+		defer rt.state.cleanupCompatibilityTransaction()
 		result.Plan = rt.stagePlan()
 		for _, step := range result.Plan.Prepare {
 			if prepare, ok := step.(prepareBackupStep); ok && prepare.targetErr != nil {
