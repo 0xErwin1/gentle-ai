@@ -103,7 +103,8 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			return fmt.Errorf("sdd-attempt finish requires %s", strings.Join(missing, ", "))
 		}
 		remediationFlags := presentSDDAttemptFlags(args[1:], "expected-binding-revision", "successor-lineage", "remediates-evidence-revision")
-		if remediationFlags != 0 && remediationFlags != 3 {
+		unmanagedRemediation := *expectedBindingRevision == "" && *successorLineage == "" && *remediatesEvidenceRevision != ""
+		if remediationFlags != 0 && remediationFlags != 3 && !unmanagedRemediation {
 			return errors.New("remediation successor requires --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision together")
 		}
 		result, err = store.Finish(ctx, sddstatus.FinishAttemptRequest{
