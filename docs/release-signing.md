@@ -5,7 +5,7 @@ Gentle AI releases only when the protected `release` environment provides a real
 ## User verification
 
 1. Obtain the production Minisign public-key payload and its SHA256 fingerprint from a maintainer-controlled channel independent of the GitHub release assets.
-2. Download `checksums.txt`, `checksums.txt.minisig`, and the archive from one exact `vMAJOR.MINOR.PATCH` release.
+2. Download `checksums.txt`, `checksums.txt.minisig`, and the archive from one exact stable `vMAJOR.MINOR.PATCH` or canonical prerelease `vMAJOR.MINOR.PATCH-PRERELEASE` release.
 3. Verify the signed identity before trusting any checksum:
 
    ```bash
@@ -31,7 +31,7 @@ The public key is not secret, but its provenance is security-critical. A key fet
    ```
 
 2. Extract the base64 payload from line 2 of `gentle-ai-release.pub`. Publish that payload and a separately computed fingerprint through the project website or another maintainer-authenticated channel **before** publishing the first signed release.
-3. Create or protect the GitHub Actions environment named `release`. Require appropriate reviewers and restrict it to protected stable-version tags.
+3. Create or protect the GitHub Actions environment named `release`. Require appropriate reviewers and restrict it to protected canonical release tags.
 4. Configure the public trust anchor as a repository Actions variable so the read-only preflight job can validate it. Configure the private key only inside the protected `release` environment:
 
    | Name | Kind | Exact value |
@@ -106,7 +106,7 @@ the four macOS/Linux archives plus the signed checksum manifest.
 
 The tag workflow fails unless all of these hold:
 
-- the event is an annotated exact `vMAJOR.MINOR.PATCH` tag;
+- the event is an annotated exact stable `vMAJOR.MINOR.PATCH` or canonical prerelease `vMAJOR.MINOR.PATCH-PRERELEASE` tag;
 - the event SHA, tag target, checkout, remote tag, and current `origin/main` are identical;
 - the worktree and module graph remain immutable (`go mod tidy -diff`);
 - tests, vet, and format checks pass under read-only token permissions;
@@ -114,3 +114,5 @@ The tag workflow fails unless all of these hold:
 - the Windows/Scoop omission policy passes before any publication;
 - GoReleaser signs the full `${artifact}` path with the exact trusted comment;
 - the published GitHub asset set is exact, the remote signature is valid, and every remote checksum verifies.
+
+Prereleases use the same protected environment, trust anchors, archive matrix, and remote verifier. They publish with `prerelease=true` and `latest=false`, skip Homebrew and Scoop, never emit Windows assets, and refuse to replace existing assets.

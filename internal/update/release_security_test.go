@@ -75,6 +75,73 @@ func TestReleaseWorkflowUsesFailClosedLeastPrivilegeGates(t *testing.T) {
 	}
 }
 
+func TestPrereleasePublisherContract(t *testing.T) {
+	workflow := readRepositoryFile(t, ".github", "workflows", "release.yml")
+	for _, required := range []string{
+		"RELEASE_CHANNEL:",
+		"environment: release",
+		"--config .goreleaser-prerelease.yaml --skip=homebrew,scoop",
+		"./scripts/verify-release-assets.sh",
+	} {
+		if !strings.Contains(workflow, required) {
+			t.Errorf("release workflow is missing prerelease control %q", required)
+		}
+	}
+	if strings.Contains(workflow, `"!v*-*"`) {
+		t.Fatal("release workflow still excludes prerelease tags")
+	}
+
+	config := readRepositoryFile(t, ".goreleaser-prerelease.yaml")
+	for _, required := range []string{
+		"prerelease: auto",
+		"make_latest: false",
+		"replace_existing_artifacts: false",
+		"- linux",
+		"- darwin",
+		"- amd64",
+		"- arm64",
+		`signature: ${artifact}.minisig`,
+		`repo=Gentleman-Programming/gentle-ai;tag={{ .Tag }}`,
+	} {
+		if !strings.Contains(config, required) {
+			t.Errorf("prerelease GoReleaser config is missing %q", required)
+		}
+	}
+	for _, forbidden := range []string{"windows", "brews:", "scoops:"} {
+		if strings.Contains(config, forbidden) {
+			t.Errorf("prerelease GoReleaser config enables forbidden distribution %q", forbidden)
+		}
+	}
+}
+
+func TestPrereleaseTagAdmissionRejectsStableAndNoncanonicalTags(t *testing.T) {
+	run := func(t *testing.T, tag string) string {
+		t.Helper()
+		command := exec.Command("bash", "scripts/release-preflight.sh")
+		command.Dir = filepath.Clean(filepath.Join("..", ".."))
+		command.Env = append(os.Environ(),
+			"GITHUB_REPOSITORY=Gentleman-Programming/gentle-ai",
+			"GITHUB_REF_TYPE=tag",
+			"GITHUB_REF_NAME="+tag,
+			"GITHUB_SHA=0123456789abcdef0123456789abcdef01234567",
+			"MINISIGN_PUBLIC_KEYS=UNSET",
+			"RELEASE_CHANNEL=prerelease",
+		)
+		output, _ := command.CombinedOutput()
+		return string(output)
+	}
+
+	if output := run(t, "v1.2.3"); !strings.Contains(output, "canonical prerelease semver") {
+		t.Fatalf("stable tag entered prerelease admission: %s", output)
+	}
+	if output := run(t, "v1.2.3-rc.02"); !strings.Contains(output, "canonical prerelease semver") {
+		t.Fatalf("noncanonical prerelease tag entered release checks: %s", output)
+	}
+	if output := run(t, "v1.2.3-rc.2"); !strings.Contains(output, "MINISIGN_PUBLIC_KEYS is unset") {
+		t.Fatalf("canonical prerelease tag was rejected before the next preflight gate: %s", output)
+	}
+}
+
 func TestReleaseAssetVerifierPreservesReadOnlyRotationVerification(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("release verification runtime is Ubuntu-specific")
@@ -92,7 +159,6 @@ func TestReleaseAssetVerifierPreservesReadOnlyRotationVerification(t *testing.T)
 	}
 	firstKey, signingKey := makeKey(1), makeKey(2)
 	fakeBin := t.TempDir()
-	ghLog := filepath.Join(t.TempDir(), "gh-calls.log")
 	writeExecutable := func(name, content string) {
 		t.Helper()
 		if err := os.WriteFile(filepath.Join(fakeBin, name), []byte(content), 0o700); err != nil {
@@ -102,9 +168,15 @@ func TestReleaseAssetVerifierPreservesReadOnlyRotationVerification(t *testing.T)
 	writeExecutable("gh", `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$GH_CALL_LOG"
+version=${GITHUB_REF_NAME#v}
+release_tag=${REMOTE_RELEASE_TAG:-$GITHUB_REF_NAME}
+extra=
+if [[ "${INCLUDE_UNEXPECTED_ASSET:-}" == 1 ]]; then
+  extra=',{"name":"unexpected.txt"}'
+fi
 if [[ "$1" == api && "$2" == "repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" ]]; then
   cat <<JSON
-{"tag_name":"$GITHUB_REF_NAME","draft":false,"prerelease":false,"assets":[{"name":"gentle-ai_1.2.3_darwin_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_darwin_arm64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_amd64.tar.gz"},{"name":"gentle-ai_1.2.3_linux_arm64.tar.gz"},{"name":"checksums.txt"},{"name":"checksums.txt.minisig"}]}
+{"tag_name":"$release_tag","draft":false,"prerelease":$EXPECTED_PRERELEASE,"assets":[{"name":"gentle-ai_${version}_darwin_amd64.tar.gz"},{"name":"gentle-ai_${version}_darwin_arm64.tar.gz"},{"name":"gentle-ai_${version}_linux_amd64.tar.gz"},{"name":"gentle-ai_${version}_linux_arm64.tar.gz"},{"name":"checksums.txt"},{"name":"checksums.txt.minisig"}$extra]}
 JSON
   exit 0
 fi
@@ -120,10 +192,25 @@ if [[ "$1" == release && "$2" == download && "$3" == "$GITHUB_REF_NAME" ]]; then
   [[ -n "$directory" ]]
   mkdir -p "$directory"
   for platform in darwin_amd64 darwin_arm64 linux_amd64 linux_arm64; do
-    printf 'archive %s\n' "$platform" >"$directory/gentle-ai_1.2.3_${platform}.tar.gz"
+    printf 'archive %s\n' "$platform" >"$directory/gentle-ai_${version}_${platform}.tar.gz"
   done
-  (cd "$directory" && sha256sum gentle-ai_1.2.3_*.tar.gz >checksums.txt)
+  (cd "$directory" && sha256sum gentle-ai_*.tar.gz >checksums.txt)
   printf 'test signature\n' >"$directory/checksums.txt.minisig"
+  if [[ "${INCLUDE_UNEXPECTED_ASSET:-}" == 1 ]]; then
+    printf 'unexpected\n' >"$directory/unexpected.txt"
+  fi
+  exit 0
+fi
+exit 64
+`)
+	writeExecutable("git", `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == rev-parse && "$2" == "${GITHUB_SHA}^{commit}" ]]; then
+  printf '%s\n' "$GITHUB_SHA"
+  exit 0
+fi
+if [[ "$1" == ls-remote && "$2" == origin && "$3" == "refs/tags/$GITHUB_REF_NAME^{}" ]]; then
+  printf '%s\trefs/tags/%s^{}\n' "${REMOTE_TAG_SHA:-$GITHUB_SHA}" "$GITHUB_REF_NAME"
   exit 0
 fi
 exit 64
@@ -138,31 +225,80 @@ while (( $# > 0 )); do
   esac
 done
 [[ "$public_key" == "$EXPECTED_SIGNING_KEY" ]] || exit 1
-printf 'repo=%s;tag=%s\n' "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
+printf '%s\n' "${TRUSTED_COMMENT:-repo=$GITHUB_REPOSITORY;tag=$GITHUB_REF_NAME}"
 `)
 
-	root := filepath.Clean(filepath.Join("..", ".."))
-	command := exec.Command("bash", "scripts/verify-release-assets.sh")
-	command.Dir = root
-	command.Env = append(os.Environ(),
-		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"GH_CALL_LOG="+ghLog,
-		"GH_TOKEN=read-only-test-token",
-		"GITHUB_REPOSITORY=Gentleman-Programming/gentle-ai",
-		"GITHUB_REF_NAME=v1.2.3",
-		"MINISIGN_PUBLIC_KEYS="+firstKey+","+signingKey,
-		"EXPECTED_SIGNING_KEY="+signingKey,
-	)
-	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("read-only release verification failed: %v\n%s", err, output)
-	}
-	calls, err := os.ReadFile(ghLog)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
-	if len(lines) != 2 || !strings.HasPrefix(lines[0], "api repos/") || !strings.HasPrefix(lines[1], "release download v1.2.3 ") {
-		t.Fatalf("release verifier used commands outside the approved read-only surface: %q", lines)
+	const sha = "0123456789abcdef0123456789abcdef01234567"
+	for _, tc := range []struct {
+		name             string
+		tag              string
+		channel          string
+		prerelease       string
+		extra            bool
+		remoteReleaseTag string
+		remoteTagSHA     string
+		trustedComment   string
+		unknownSigner    bool
+		wantError        string
+	}{
+		{name: "stable", tag: "v1.2.3", channel: "stable", prerelease: "false"},
+		{name: "canonical prerelease", tag: "v1.2.3-rc.2", channel: "prerelease", prerelease: "true"},
+		{name: "unexpected prerelease asset", tag: "v1.2.3-rc.2", channel: "prerelease", prerelease: "true", extra: true, wantError: "remote asset set is incomplete or unexpected"},
+		{name: "unexpected remote tag", tag: "v1.2.3-rc.2", channel: "prerelease", prerelease: "true", remoteReleaseTag: "v1.2.3-rc.3", wantError: "remote release tag mismatch"},
+		{name: "unexpected remote tag SHA", tag: "v1.2.3-rc.2", channel: "prerelease", prerelease: "true", remoteTagSHA: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", wantError: "remote tag SHA does not match the event"},
+		{name: "untrusted signer", tag: "v1.2.3-rc.2", channel: "prerelease", prerelease: "true", unknownSigner: true, wantError: "remote checksum signature verification failed"},
+		{name: "unexpected trusted comment", tag: "v1.2.3-rc.2", channel: "prerelease", prerelease: "true", trustedComment: "repo=Gentleman-Programming/gentle-ai;tag=v1.2.3-rc.3", wantError: "remote trusted comment identity mismatch"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ghLog := filepath.Join(t.TempDir(), "gh-calls.log")
+			command := exec.Command("bash", "scripts/verify-release-assets.sh")
+			command.Dir = filepath.Clean(filepath.Join("..", ".."))
+			command.Env = append(os.Environ(),
+				"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"GH_CALL_LOG="+ghLog,
+				"GH_TOKEN=read-only-test-token",
+				"GITHUB_REPOSITORY=Gentleman-Programming/gentle-ai",
+				"GITHUB_REF_NAME="+tc.tag,
+				"GITHUB_SHA="+sha,
+				"MINISIGN_PUBLIC_KEYS="+firstKey+","+signingKey,
+				"EXPECTED_SIGNING_KEY="+signingKey,
+				"EXPECTED_PRERELEASE="+tc.prerelease,
+				"RELEASE_CHANNEL="+tc.channel,
+			)
+			if tc.extra {
+				command.Env = append(command.Env, "INCLUDE_UNEXPECTED_ASSET=1")
+			}
+			if tc.remoteReleaseTag != "" {
+				command.Env = append(command.Env, "REMOTE_RELEASE_TAG="+tc.remoteReleaseTag)
+			}
+			if tc.remoteTagSHA != "" {
+				command.Env = append(command.Env, "REMOTE_TAG_SHA="+tc.remoteTagSHA)
+			}
+			if tc.trustedComment != "" {
+				command.Env = append(command.Env, "TRUSTED_COMMENT="+tc.trustedComment)
+			}
+			if tc.unknownSigner {
+				command.Env = append(command.Env, "EXPECTED_SIGNING_KEY="+makeKey(3))
+			}
+			output, err := command.CombinedOutput()
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(string(output), tc.wantError) {
+					t.Fatalf("verifier accepted unsafe remote prerelease state: %v\n%s", err, output)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("read-only release verification failed: %v\n%s", err, output)
+			}
+			calls, readErr := os.ReadFile(ghLog)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
+			if len(lines) != 2 || !strings.HasPrefix(lines[0], "api repos/") || !strings.HasPrefix(lines[1], "release download "+tc.tag+" ") {
+				t.Fatalf("release verifier used commands outside the approved read-only surface: %q", lines)
+			}
+		})
 	}
 }
 
@@ -220,7 +356,9 @@ func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) 
 		{
 			path: "release-preflight.sh",
 			required: []string{
-				`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`,
+				`core_semver=`,
+				`prerelease_identifier=`,
+				`RELEASE_CHANNEL`,
 				`refs/remotes/origin/main`,
 				`refs/tags/$tag^{commit}`,
 				`go mod tidy -diff`,
@@ -241,6 +379,8 @@ func TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed(t *testing.T) 
 			path: "verify-release-assets.sh",
 			required: []string{
 				`gh release download`,
+				`GITHUB_SHA`,
+				`git ls-remote origin`,
 				`minisign -VQ`,
 				`canonicalize-release-public-keys.sh`,
 				`MINISIGN_PUBLIC_KEYS`,

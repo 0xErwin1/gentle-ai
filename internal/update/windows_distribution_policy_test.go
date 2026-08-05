@@ -109,7 +109,9 @@ func TestReleaseDistributionPolicyAssertionFailsClosed(t *testing.T) {
 		{
 			name: "alternate publication config",
 			mutate: func(t *testing.T, root string) {
-				replaceReleasePolicyFile(t, root, filepath.Join(".github", "workflows", "release.yml"), "args: release --clean", "args: release --clean --config .goreleaser-alternate.yaml")
+				replaceReleasePolicyFile(t, root, filepath.Join(".github", "workflows", "release.yml"),
+					"args: ${{ env.RELEASE_CHANNEL == 'prerelease' && 'release --clean --config .goreleaser-prerelease.yaml --skip=homebrew,scoop' || 'release --clean' }}",
+					"args: release --clean --config .goreleaser-alternate.yaml")
 			},
 		},
 		{

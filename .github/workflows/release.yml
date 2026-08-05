@@ -4,10 +4,11 @@ on:
   push:
     tags:
       - "v*"
-      # Pre-release tags (v2.2.0-rc.1, v3.0.0-beta.2, ...) are for community
-      # testing, never for publication: preflight only accepts exact stable
-      # semver, so triggering on them can only ever turn the repo red.
-      - "!v*-*"
+
+env:
+  # Tag admission remains in release-preflight.sh; this only selects the
+  # publisher configuration after a tag is known to be stable or prerelease.
+  RELEASE_CHANNEL: ${{ contains(github.ref_name, '-') && 'prerelease' || 'stable' }}
 
 # Read-only is the workflow default. Only the publication job receives the one
 # write capability GoReleaser needs.
@@ -66,6 +67,7 @@ jobs:
           printf 'RELEASE_POLICY_SNAPSHOT_RUN_ID=%s\n' "$run_id" >>"$GITHUB_ENV"
 
       - name: Resolve release distribution plan without publishing
+        if: env.RELEASE_CHANNEL == 'stable'
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: v2.15.2
@@ -74,6 +76,7 @@ jobs:
           MINISIGN_PUBLIC_KEYS_CANONICAL: release-policy-validation-only
 
       - name: Verify release distribution policy
+        if: env.RELEASE_CHANNEL == 'stable'
         run: ./scripts/verify-release-distribution-policy.sh
 
       - name: Verify tag, main, trust anchors, and module immutability
@@ -162,10 +165,10 @@ jobs:
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           version: v2.15.2
-          args: release --clean
+          args: ${{ env.RELEASE_CHANNEL == 'prerelease' && 'release --clean --config .goreleaser-prerelease.yaml --skip=homebrew,scoop' || 'release --clean' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ env.RELEASE_CHANNEL == 'stable' && secrets.HOMEBREW_TAP_TOKEN || '' }}
           MINISIGN_SECRET_KEY_FILE: ${{ env.MINISIGN_SECRET_KEY_FILE }}
           MINISIGN_PUBLIC_KEYS_CANONICAL: ${{ steps.trust-anchors.outputs.canonical }}
 

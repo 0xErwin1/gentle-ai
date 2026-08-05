@@ -8,6 +8,7 @@ die() {
 
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
 : "${GITHUB_REF_NAME:?GITHUB_REF_NAME is required}"
+: "${GITHUB_SHA:?GITHUB_SHA is required}"
 : "${MINISIGN_PUBLIC_KEYS:?MINISIGN_PUBLIC_KEYS is required}"
 [[ "$GITHUB_REPOSITORY" == "Gentleman-Programming/gentle-ai" ]] || die "unexpected repository"
 
@@ -17,8 +18,25 @@ fi
 [[ "$canonical_public_keys" == "$MINISIGN_PUBLIC_KEYS" ]] || die "public-key canonicalization changed the configured value"
 
 tag=$GITHUB_REF_NAME
-[[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || die "tag is not exact stable semver"
+core_semver='v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+prerelease_identifier='(0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)'
+case "${RELEASE_CHANNEL:-stable}" in
+  stable)
+    tag_pattern="^${core_semver}$"
+    expected_prerelease=false
+    ;;
+  prerelease)
+    tag_pattern="^${core_semver}-(${prerelease_identifier})(\\.(${prerelease_identifier}))*$"
+    expected_prerelease=true
+    ;;
+  *) die "RELEASE_CHANNEL must be stable or prerelease" ;;
+esac
+[[ "$tag" =~ $tag_pattern ]] || die "tag is not canonical ${RELEASE_CHANNEL:-stable} semver"
 version=${tag#v}
+
+event_sha=$(git rev-parse "$GITHUB_SHA^{commit}") || die "event SHA cannot be resolved to a commit"
+remote_tag_sha=$(git ls-remote origin "refs/tags/$tag^{}" | awk 'NR == 1 { print $1 }')
+[[ -n "$remote_tag_sha" && "$remote_tag_sha" == "$event_sha" ]] || die "remote tag SHA does not match the event"
 
 archives=(
   "gentle-ai_${version}_darwin_amd64.tar.gz"
@@ -38,7 +56,7 @@ release_json=$work/release.json
 gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" >"$release_json"
 [[ "$(jq -r '.tag_name' "$release_json")" == "$tag" ]] || die "remote release tag mismatch"
 [[ "$(jq -r '.draft' "$release_json")" == "false" ]] || die "remote release is still a draft"
-[[ "$(jq -r '.prerelease' "$release_json")" == "false" ]] || die "stable release is marked prerelease"
+[[ "$(jq -r '.prerelease' "$release_json")" == "$expected_prerelease" ]] || die "remote prerelease state does not match the tag class"
 
 mapfile -t actual_assets < <(jq -r '.assets[].name' "$release_json" | LC_ALL=C sort)
 mapfile -t sorted_expected_assets < <(printf '%s\n' "${expected_assets[@]}" | LC_ALL=C sort)
