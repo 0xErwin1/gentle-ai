@@ -378,6 +378,8 @@ func TestRestoreScope_WorkspaceRootRestoresAndRemovesWithoutError(t *testing.T) 
 
 	// entry B: did not exist at snapshot time, under the workspace root —
 	// restore must remove it (mirrors the engram MCP config scenario from #2451).
+	// Kind=regular opts into the deletion semantics; Kind="" (legacy unknown)
+	// is preserved by default under the #2021 path-kind classification.
 	createdPath := filepath.Join(workspace, ".config", "opencode", "opencode.json")
 	if err := os.MkdirAll(filepath.Dir(createdPath), 0o755); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -390,7 +392,7 @@ func TestRestoreScope_WorkspaceRootRestoresAndRemovesWithoutError(t *testing.T) 
 		RootDir: filepath.Join(home, "backup"),
 		Entries: []ManifestEntry{
 			{OriginalPath: originalPath, SnapshotPath: snapshotPath, Existed: true, Mode: 0o600},
-			{OriginalPath: createdPath, Existed: false},
+			{OriginalPath: createdPath, Existed: false, Kind: PathKindRegularFile},
 		},
 	}
 
