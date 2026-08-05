@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -871,9 +872,9 @@ func (store RuntimeStore) runtimeRemediationExitRefusal(
 			return store.runtimeStrandedSuccessorRefusal(binding, stranded, ordinal)
 		}
 		return fmt.Errorf(
-			"%w: the candidate changed after attempt %d began, and lineage %q does not currently hold the approved review of this candidate, so it cannot be its own successor: get this candidate approved first with `gentle-ai review status --cwd %q --contract %s --next-transition`, which names the next review action, then re-run this finish adding --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision for the lineage that then holds it; %s",
+			"%w: the candidate changed after attempt %d began, and lineage %q does not currently hold the approved review of this candidate, so it cannot be its own successor: get this candidate approved first with `gentle-ai review status --cwd %s --contract %s --next-transition`, which names the next review action, then re-run this finish adding --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision for the lineage that then holds it; %s",
 			ErrRuntimeRemediationSuccessorRequired, ordinal, binding.Lineage,
-			store.Workspace, runtimeReviewIntegrationContract, provenance,
+			pathquote.Quote(store.Workspace), runtimeReviewIntegrationContract, provenance,
 		)
 	}
 	// An objective with no recorded failed evidence still needs a repaired
@@ -883,9 +884,9 @@ func (store RuntimeStore) runtimeRemediationExitRefusal(
 		remediates = "<repaired-evidence-sha256>"
 	}
 	return fmt.Errorf(
-		"%w: the candidate changed after attempt %d began, and lineage %q already holds the approved review of the corrected candidate, so that same lineage IS the successor — re-run this finish with the remediation trio: `gentle-ai sdd-attempt finish --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --outcome passed --evidence-revision \"<corrected-evidence-sha256>\" --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<cleanup-evidence>\" --process-evidence \"<process-evidence>\" --expected-binding-revision %q --successor-lineage %q --remediates-evidence-revision %s`; %s, and --evidence-revision must differ from --remediates-evidence-revision",
+		"%w: the candidate changed after attempt %d began, and lineage %q already holds the approved review of the corrected candidate, so that same lineage IS the successor — re-run this finish with the remediation trio: `gentle-ai sdd-attempt finish --cwd %s --change %q --expected-revision %q --request-id \"<unique-request-id>\" --outcome passed --evidence-revision \"<corrected-evidence-sha256>\" --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<cleanup-evidence>\" --process-evidence \"<process-evidence>\" --expected-binding-revision %q --successor-lineage %q --remediates-evidence-revision %s`; %s, and --evidence-revision must differ from --remediates-evidence-revision",
 		ErrRuntimeRemediationSuccessorRequired, ordinal, binding.Lineage,
-		store.Workspace, store.Change, status.Revision,
+		pathquote.Quote(store.Workspace), store.Change, status.Revision,
 		binding.Revision, binding.Lineage, runtimeRemediatesArgument(remediates), provenance,
 	)
 }
@@ -911,9 +912,9 @@ func (store RuntimeStore) runtimeStrandedSuccessorRefusal(binding ReviewBinding,
 	// The sentinel stays in the %w position in every branch: callers that
 	// route on errors.Is must keep working no matter which exit is named.
 	return fmt.Errorf(
-		"%w: the candidate changed after attempt %d began, and lineage %q cannot hold the approved review of this candidate because recovery successor %q supersedes it and froze a target this candidate no longer has, so that successor can never be finalized — quarantine it, then re-run this finish: `gentle-ai review abandon --cwd %q --lineage %q --expected-revision %q --reason \"<why-it-is-abandoned>\" --actor \"<actor>\" --maintainer-authorization \"<maintainer-authorization>\"`; the abandonment quarantines the pristine successor and destroys nothing, because %q keeps the approved review of the corrected candidate. --maintainer-authorization is exactly these six lines, joined by LF, with no trailing newline, using the same --actor and --reason with surrounding whitespace trimmed:\n%s",
+		"%w: the candidate changed after attempt %d began, and lineage %q cannot hold the approved review of this candidate because recovery successor %q supersedes it and froze a target this candidate no longer has, so that successor can never be finalized — quarantine it, then re-run this finish: `gentle-ai review abandon --cwd %s --lineage %q --expected-revision %q --reason \"<why-it-is-abandoned>\" --actor \"<actor>\" --maintainer-authorization \"<maintainer-authorization>\"`; the abandonment quarantines the pristine successor and destroys nothing, because %q keeps the approved review of the corrected candidate. --maintainer-authorization is exactly these six lines, joined by LF, with no trailing newline, using the same --actor and --reason with surrounding whitespace trimmed:\n%s",
 		ErrRuntimeRemediationSuccessorRequired, ordinal, binding.Lineage, stranded.Lineage,
-		store.Workspace, stranded.Lineage, stranded.Revision, binding.Lineage,
+		pathquote.Quote(store.Workspace), stranded.Lineage, stranded.Revision, binding.Lineage,
 		reviewtransaction.RenderCompactAbandonAuthorization(
 			stranded.Lineage, stranded.Revision, stranded.SnapshotIdentity, "<--actor>", "<--reason>"))
 }
@@ -945,8 +946,8 @@ func runtimeRemediatesArgument(remediates string) string {
 // there is only one message to construct.
 func (store RuntimeStore) runtimeWorktreeMismatchRefusal(ordinal int, beginWorktree string) error {
 	return fmt.Errorf(
-		"%w: attempt %d began in %q, and its base candidate tree is pinned to that exact linked worktree, but this finish is running from %q — rerun with --cwd %q so the candidate capture and changed-line measurement use the worktree that actually did the work",
-		ErrRuntimeWorktreeMismatch, ordinal, beginWorktree, store.Workspace, beginWorktree)
+		"%w: attempt %d began in %s, and its base candidate tree is pinned to that exact linked worktree, but this finish is running from %s — rerun with --cwd %s so the candidate capture and changed-line measurement use the worktree that actually did the work",
+		ErrRuntimeWorktreeMismatch, ordinal, pathquote.Quote(beginWorktree), pathquote.Quote(store.Workspace), pathquote.Quote(beginWorktree))
 }
 
 // runtimeObjectiveChangeRefusal turns the changed-objective begin demand into
@@ -980,14 +981,14 @@ func (store RuntimeStore) runtimeObjectiveChangeRefusal(ctx context.Context, sta
 	// route on errors.Is must keep working no matter which exit is named.
 	if store.runtimeObjectiveResetAdmissible(ctx, status) {
 		return fmt.Errorf(
-			"%w: reset the objective, then begin again — `gentle-ai sdd-attempt reset --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --reason \"<why-the-objective-changed>\" --actor \"<actor>\"`; the reset publishes a new ledger revision, so take the begin's --expected-revision from `gentle-ai sdd-attempt status --cwd %q --change %q` after it commits",
-			ErrRuntimeObjectiveChange, store.Workspace, store.Change, status.Revision, store.Workspace, store.Change)
+			"%w: reset the objective, then begin again — `gentle-ai sdd-attempt reset --cwd %s --change %q --expected-revision %q --request-id \"<unique-request-id>\" --reason \"<why-the-objective-changed>\" --actor \"<actor>\"`; the reset publishes a new ledger revision, so take the begin's --expected-revision from `gentle-ai sdd-attempt status --cwd %s --change %q` after it commits",
+			ErrRuntimeObjectiveChange, pathquote.Quote(store.Workspace), store.Change, status.Revision, pathquote.Quote(store.Workspace), store.Change)
 	}
 	if store.runtimeObjectiveRescopeAdmissible(ctx, status) {
 		objective := status.Objective
 		return fmt.Errorf(
-			"%w: this objective's candidate has not drifted, so resetting it is refused as an elective budget reset, but a maintainer may authorize a narrower successor scope instead — `gentle-ai sdd-attempt rescope --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --work-unit \"<narrower-work-unit>\" --evidence-goal \"<narrower-evidence-goal>\" --max-attempts \"<n, at most %d>\" --max-changed-lines \"<n, at most %d>\" --reason \"<why-the-objective-is-narrowing>\" --actor \"<actor>\"`; rescope carries cumulative_attempts and cumulative_changed_lines forward unchanged and refuses any max_attempts or max_changed_lines above the current objective's %d and %d",
-			ErrRuntimeObjectiveChange, store.Workspace, store.Change, status.Revision,
+			"%w: this objective's candidate has not drifted, so resetting it is refused as an elective budget reset, but a maintainer may authorize a narrower successor scope instead — `gentle-ai sdd-attempt rescope --cwd %s --change %q --expected-revision %q --request-id \"<unique-request-id>\" --work-unit \"<narrower-work-unit>\" --evidence-goal \"<narrower-evidence-goal>\" --max-attempts \"<n, at most %d>\" --max-changed-lines \"<n, at most %d>\" --reason \"<why-the-objective-is-narrowing>\" --actor \"<actor>\"`; rescope carries cumulative_attempts and cumulative_changed_lines forward unchanged and refuses any max_attempts or max_changed_lines above the current objective's %d and %d",
+			ErrRuntimeObjectiveChange, pathquote.Quote(store.Workspace), store.Change, status.Revision,
 			objective.MaxAttempts, objective.MaxChangedLines, objective.MaxAttempts, objective.MaxChangedLines)
 	}
 	objective := status.Objective
@@ -998,8 +999,8 @@ func (store RuntimeStore) runtimeObjectiveChangeRefusal(ctx context.Context, sta
 		return ErrRuntimeObjectiveChange
 	}
 	return fmt.Errorf(
-		"%w: this objective is still open on its recorded scope and its candidate has not moved, so resetting it is refused as an elective budget reset; begin against the scope the ledger holds — `gentle-ai sdd-attempt begin --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --work-unit %q --evidence-goal %q --max-attempts %d --max-changed-lines %d`; `sdd-attempt status` publishes those four as objective.work_unit, objective.evidence_goal, objective.max_attempts, and objective.max_changed_lines",
-		ErrRuntimeObjectiveChange, store.Workspace, store.Change, status.Revision,
+		"%w: this objective is still open on its recorded scope and its candidate has not moved, so resetting it is refused as an elective budget reset; begin against the scope the ledger holds — `gentle-ai sdd-attempt begin --cwd %s --change %q --expected-revision %q --request-id \"<unique-request-id>\" --work-unit %q --evidence-goal %q --max-attempts %d --max-changed-lines %d`; `sdd-attempt status` publishes those four as objective.work_unit, objective.evidence_goal, objective.max_attempts, and objective.max_changed_lines",
+		ErrRuntimeObjectiveChange, pathquote.Quote(store.Workspace), store.Change, status.Revision,
 		objective.WorkUnit, objective.EvidenceGoal, objective.MaxAttempts, objective.MaxChangedLines)
 }
 
@@ -1419,7 +1420,7 @@ func (store RuntimeStore) acquireLock() (*reviewtransaction.AuthorityFileLock, e
 			return nil, err
 		}
 	}
-	return nil, fmt.Errorf("acquire SDD runtime ledger lock %q after %d attempts: %w", lockPath, runtimeLockAcquireAttempts, lastErr)
+	return nil, fmt.Errorf("acquire SDD runtime ledger lock %s after %d attempts: %w", pathquote.Quote(lockPath), runtimeLockAcquireAttempts, lastErr)
 }
 
 func (store RuntimeStore) commitRecordLocked(record runtimeRecord) (RuntimeStatus, error) {
