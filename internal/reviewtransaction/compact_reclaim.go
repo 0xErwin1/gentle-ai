@@ -180,20 +180,18 @@ func ReclaimIncompleteCompactStore(ctx context.Context, repo string, request Com
 // compactReclaimAuthorityRefusal explains why reclaim does not apply to a
 // store entry holding an authoritative artifact, and names the operation that
 // actually admits THIS entry's shape. Reclaim only quarantines entries that
-// never held authority, so the historical one-size pointer at
-// review reconcile-authority named an operation that refuses (a forged
-// binding), or cannot even load its target (a half-written record) — a named
-// dead end, which is worse than naming nothing. The honest continuation is
-// derived read-only from the entry itself:
+// never held authority. The honest continuation is derived read-only from
+// the entry itself:
 //
-//   - a recovery successor whose edge classifies into a reconcilable anomaly
-//     class is admitted by `review reconcile-authority`, rendered runnably
-//     with the exact persisted revisions;
 //   - a pristine entry the abandonment gate's own read-only prediction accepts
 //     is quarantined whole with `review abandon`;
-//   - an unreadable record, and every other shape no advertised operation
-//     admits, gets the precise diagnosis and the inspection to capture, never
-//     a command that would then refuse.
+//   - an unreadable record, a recovery successor whose edge classifies into
+//     one of reconciliation's former anomaly classes (Wave 7 S3a: the
+//     `review reconcile-authority` verb that used to admit these retired
+//     with no replacement — see compact_inspect.go's
+//     SanctionedCompactRecoveryExits), and every other shape no advertised
+//     operation admits, gets the precise diagnosis and the inspection to
+//     capture, never a command that would then refuse.
 func compactReclaimAuthorityRefusal(ctx context.Context, repo, dir, lineageID, artifact string) error {
 	refused := fmt.Sprintf("review reclaim refused: store entry %q holds authoritative artifact %q, and reclaim only quarantines entries that never held authority.", lineageID, artifact)
 	record, loadErr := (CompactStore{Dir: dir, lineageID: lineageID}).Load()
@@ -207,23 +205,12 @@ func compactReclaimAuthorityRefusal(ctx context.Context, repo, dir, lineageID, a
 			" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %q` and escalate that report",
 			refused, loadErr, compactRecoveryEntryProblem(loadErr), repo)
 	}
-	if recovery := record.State.Recovery; recovery != nil {
-		predecessor, predecessorErr := (CompactStore{Dir: filepath.Join(filepath.Dir(dir), recovery.PredecessorLineageID), lineageID: recovery.PredecessorLineageID}).Load()
-		if predecessorErr == nil {
-			classification := classifyCompactRecoveryEdgeAnomalies(predecessor, record)
-			if !classification.Valid && len(classification.Anomalies) > 0 {
-				return fmt.Errorf("%s Its recovery edge classifies as %s, which `gentle-ai review reconcile-authority` admits: %s",
-					refused, strings.Join(classification.Anomalies, ","),
-					compactReconcileCommandText(repo, recovery.PredecessorLineageID, predecessor.Revision, record.State.LineageID, record.Revision, classification.Anomalies))
-			}
-		}
-	}
 	eligibility, eligibilityErr := InspectCompactPristineAbandonment(ctx, repo, lineageID)
 	if eligibilityErr == nil && eligibility.Eligible {
 		return fmt.Errorf("%s The entry is pristine, so `gentle-ai review abandon` quarantines it whole: %s",
 			refused, compactAbandonCommandText(repo, lineageID, eligibility))
 	}
-	return fmt.Errorf("%s No advertised operation admits it: reconciliation does not classify it into a supported anomaly class, and `review abandon` refuses because %s."+
+	return fmt.Errorf("%s No advertised operation admits it: %s."+
 		" Nothing quarantines this shape today; the entry stays exactly as persisted."+
 		" Capture the complete machine-readable diagnosis with `gentle-ai review inspect-authority --cwd %q` and escalate that report",
 		refused, compactAbandonBlockerText(record.State), repo)
@@ -338,6 +325,48 @@ func persistCompactReclaimRecord(record CompactReclaimRecord) error {
 	}
 	if err := writeAtomic(filepath.Join(record.QuarantinePath, "reclaim-record.json"), append(payload, '\n'), 0o644); err != nil {
 		return fmt.Errorf("persist %s reclaim audit record: %w", record.Status, err)
+	}
+	return nil
+}
+
+// AuthorityDispositionClosureManifestSchema identifies
+// AuthorityDispositionClosureManifest's shape.
+const AuthorityDispositionClosureManifestSchema = "gentle-ai.review-authority-disposition-closure-manifest/v1"
+
+// AuthorityDispositionClosureManifest is Wave 6's forensic-only record of an
+// N-node closure disposition (design decision D5): written once, inside the
+// SEED node's own quarantine directory, alongside residue/ and
+// reclaim-record.json, only after every closure member has committed. It
+// binds the ordered closure to the one plan_digest that already governs
+// every per-node AuthorityDispositionProof, so a human inspecting the seed's
+// quarantine directory sees the whole closure without reconstructing it from
+// N separate reclaim-record.json files.
+//
+// It is never a lifecycle dependency: per-node resume state lives entirely in
+// each node's own reclaim-record.json plus the residue/ discriminator
+// (discoverAuthorityDispositionRecord/resumeAuthorityDispositionRecord);
+// recovery never reads this file. Design caps RDD at two operational
+// artifacts — this is deliberately not a third.
+type AuthorityDispositionClosureManifest struct {
+	Schema                     string   `json:"schema"`
+	PlanDigest                 string   `json:"plan_digest"`
+	AuthorityInventoryRevision string   `json:"authority_inventory_revision"`
+	AnomalyClass               string   `json:"anomaly_class"`
+	OrderedClosure             []string `json:"ordered_closure"`
+	Disposed                   []string `json:"disposed"`
+}
+
+// writeAuthorityDispositionClosureManifest persists manifest as
+// closure-manifest.json inside quarantineDir (the seed's own quarantine
+// directory), reusing writeAtomic exactly like persistCompactReclaimRecord's
+// reclaim-record.json.
+func writeAuthorityDispositionClosureManifest(quarantineDir string, manifest AuthorityDispositionClosureManifest) error {
+	payload, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := writeAtomic(filepath.Join(quarantineDir, "closure-manifest.json"), append(payload, '\n'), 0o644); err != nil {
+		return fmt.Errorf("persist authority disposition closure manifest: %w", err)
 	}
 	return nil
 }

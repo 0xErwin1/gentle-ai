@@ -122,9 +122,19 @@ type CoreRequest struct {
 // rdd-review-core-transitions' "In-flight new lineage still finalizes after
 // rollback" scenario, whose GIVEN is literally a `correcting` lineage) --
 // finalize previously refused `correcting` outright with no path forward.
+// CapturedLensResults names the lenses that actually produced a captured
+// result for this finalize call (absorbed N1, W3/W4 verify: "ReviewCore.
+// finalize reads LensResults for the first time"). finalize refuses to
+// approve when authority.SelectedLenses is non-empty and this slice does not
+// cover every selected lens — closing the self-approval hole where a
+// medium/high tier candidate reached `approved` with zero lens reviews ever
+// performed. Escalating (Failed or AdmittedFindingIDs non-empty) never
+// checks this: an escalation never claims a clean pass, so the
+// self-approval precondition does not apply.
 type FinalizeAdvanceRequest struct {
-	Failed             bool
-	AdmittedFindingIDs []string
+	Failed              bool
+	AdmittedFindingIDs  []string
+	CapturedLensResults []string
 }
 
 // CoreValidateEvidence carries every already-resolved input relateCandidates

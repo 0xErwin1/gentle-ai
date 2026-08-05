@@ -17,16 +17,33 @@ import (
 // substance), never a parallel struct.
 
 // TestRuntimeObjectiveIsSoleWorkUnitScopeOwner fails if CompactAcquireRequest
-// carries any field of its own other than the embedded BeginAttemptRequest —
-// i.e. if work-unit scope (WorkUnit/EvidenceGoal/MaxAttempts/MaxChangedLines)
-// is ever redeclared outside BeginAttemptRequest.
+// redeclares any of BeginAttemptRequest's work-unit-scope fields
+// (WorkUnit/EvidenceGoal/MaxAttempts/MaxChangedLines/RequestID/
+// ExpectedRevision) outside the embed. A sibling field that is NOT part of
+// that scope — like Token, #2291's optional zero-mutation ownership proof —
+// is legitimate: it is orthogonal continuation metadata, not a second
+// work-unit-scope owner, and CompactSettleRequest already carries the same
+// Token concept alongside its own non-scope fields.
 func TestRuntimeObjectiveIsSoleWorkUnitScopeOwner(t *testing.T) {
 	acquireType := reflect.TypeOf(CompactAcquireRequest{})
-	if acquireType.NumField() != 1 {
-		t.Fatalf("CompactAcquireRequest has %d fields, want exactly 1 (an embedded BeginAttemptRequest) — a parallel work-unit-scope struct must not exist", acquireType.NumField())
+	beginType := reflect.TypeOf(BeginAttemptRequest{})
+	beginFieldNames := make(map[string]bool, beginType.NumField())
+	for i := 0; i < beginType.NumField(); i++ {
+		beginFieldNames[beginType.Field(i).Name] = true
 	}
-	field := acquireType.Field(0)
-	if !field.Anonymous || field.Type != reflect.TypeOf(BeginAttemptRequest{}) {
-		t.Fatalf("CompactAcquireRequest.Field(0) = %+v, want an embedded (anonymous) BeginAttemptRequest — BeginAttemptRequest is the single work-unit-scope owner per decision 9", field)
+
+	embedded := false
+	for i := 0; i < acquireType.NumField(); i++ {
+		field := acquireType.Field(i)
+		if field.Anonymous && field.Type == beginType {
+			embedded = true
+			continue
+		}
+		if beginFieldNames[field.Name] {
+			t.Fatalf("CompactAcquireRequest.%s redeclares BeginAttemptRequest's work-unit scope outside the embed — BeginAttemptRequest is the single work-unit-scope owner per decision 9", field.Name)
+		}
+	}
+	if !embedded {
+		t.Fatal("CompactAcquireRequest must embed BeginAttemptRequest anonymously — BeginAttemptRequest is the single work-unit-scope owner per decision 9")
 	}
 }

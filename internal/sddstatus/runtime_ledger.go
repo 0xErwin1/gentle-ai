@@ -36,6 +36,7 @@ const (
 	runtimeOperationFinish            = "attempt/finish"
 	runtimeOperationFinishRemediation = "attempt/finish-remediation"
 	runtimeOperationReset             = "objective/reset"
+	runtimeOperationRescope           = "objective/rescope"
 	runtimeOperationAdvance           = "objective/advance"
 	runtimeOperationBind              = "binding/set"
 	runtimeLockAcquireAttempts        = 3
@@ -81,6 +82,21 @@ var (
 	// candidate has drifted is admitted too — so it now says which shapes are
 	// admitted and routes to the ledger's own derived next action.
 	ErrRuntimeResetNotAllowed = errors.New("SDD runtime objective reset requires decision-required or complete state, or a terminal attempt whose candidate has drifted; " + runtimeLedgerStatusPointer)
+	// ErrRuntimeRescopeNotAllowed names exactly the complement of
+	// ErrRuntimeResetNotAllowed's admitted reset shapes: rescope owns only the
+	// terminal, non-decision, non-complete, zero-drift case reset refuses
+	// (#2298, #2296 part 2's dead end). A decision-required or complete
+	// objective, an active attempt, a non-terminal last attempt, or a
+	// drifted candidate all still route to reset.
+	ErrRuntimeRescopeNotAllowed = errors.New("SDD runtime objective rescope requires no active attempt, an existing objective that is not decision-required or complete, and a terminal attempt whose candidate has NOT drifted; " + runtimeLedgerStatusPointer)
+	// ErrRuntimeRescopeWidened is rescope's own sentinel (never a reused
+	// generic one): AUDITED NARROWING RESCOPE admits only max_attempts and
+	// max_changed_lines at or below the current objective's values. The
+	// maintainer decision rejected the cheap "admit reset at
+	// CumulativeChangedLines==0" fallback specifically as attempt-count
+	// laundering; an unguarded widen here would be the same defect wearing a
+	// new operation name.
+	ErrRuntimeRescopeWidened = errors.New("SDD runtime objective rescope may only narrow or hold max_attempts and max_changed_lines, never widen them; " + runtimeLedgerStatusPointer)
 	// ErrRuntimeRemediationSuccessorRequired never travels alone. Every return
 	// site wraps it with runtimeRemediationExitRefusal, which names the exact
 	// runnable continuation for the state the caller is actually in. The
@@ -90,6 +106,14 @@ var (
 	// first step of a cycle with no exit.
 	ErrRuntimeRemediationSuccessorRequired = errors.New("a bound passing SDD runtime attempt must also bind the approved review of its corrected candidate")
 	ErrBindingRevisionConflict             = errors.New("SDD review binding revision conflict")
+	// ErrRuntimeWorktreeMismatch never travels alone either. Every return site
+	// wraps it with runtimeWorktreeMismatchRefusal, which names the exact
+	// --cwd that reproduces the binding Begin actually recorded (#2296 part
+	// 1). Finishing from a different linked worktree than the one Begin ran
+	// under would diff a pinned base tree against an unrelated working tree —
+	// changed_lines: 0 when real work happened, or a wildly inflated delta —
+	// so this refuses before any candidate capture, not after.
+	ErrRuntimeWorktreeMismatch = errors.New("SDD runtime attempt began in a different linked worktree than this finish is running from")
 
 	runtimeRequestIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 	runtimeRevisionPattern  = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
@@ -172,12 +196,17 @@ type RuntimeObjective struct {
 }
 
 type RuntimeAttempt struct {
-	Ordinal                    int                `json:"ordinal"`
-	ObjectiveID                string             `json:"objective_id"`
-	ObjectiveGeneration        int                `json:"objective_generation"`
-	WorkUnit                   string             `json:"work_unit"`
-	BeginCandidateIdentity     string             `json:"begin_candidate_identity"`
-	BeginCandidateTree         string             `json:"begin_candidate_tree"`
+	Ordinal                int    `json:"ordinal"`
+	ObjectiveID            string `json:"objective_id"`
+	ObjectiveGeneration    int    `json:"objective_generation"`
+	WorkUnit               string `json:"work_unit"`
+	BeginCandidateIdentity string `json:"begin_candidate_identity"`
+	BeginCandidateTree     string `json:"begin_candidate_tree"`
+	// BeginWorktree is the canonical (absolute, symlink-evaluated) --cwd Begin
+	// ran under (#2296 part 1). It is empty for every chain recorded before
+	// this field existed — that emptiness IS the legacy signal, so replay and
+	// Finish must treat it as "no binding recorded" and enforce nothing.
+	BeginWorktree              string             `json:"begin_worktree,omitempty"`
 	FinishCandidateIdentity    string             `json:"finish_candidate_identity,omitempty"`
 	FinishCandidateTree        string             `json:"finish_candidate_tree,omitempty"`
 	Outcome                    AttemptOutcome     `json:"outcome"`
@@ -215,6 +244,32 @@ type RuntimeAdvance struct {
 	PreviousEvidenceRevision string `json:"previous_evidence_revision"`
 }
 
+// RuntimeRescope records AUDITED NARROWING RESCOPE (#2298, #2296 part 2): a
+// terminal, non-complete objective whose candidate has NOT drifted since its
+// last Finish may be narrowed to a maintainer-authorized successor scope
+// without losing history. It is deliberately not a RuntimeReset: reset
+// zeroes CumulativeAttempts/CumulativeChangedLines (the objective's per-scope
+// budget was fully consumed or the maintainer elected to abandon it), while
+// rescope carries both forward UNCHANGED — the ratified decision's core
+// requirement, so the new narrower ceiling is measured against the same
+// consumed history, never a laundered fresh budget.
+type RuntimeRescope struct {
+	Revision                 string `json:"revision"`
+	PreviousObjectiveID      string `json:"previous_objective_id"`
+	PreviousGeneration       int    `json:"previous_generation"`
+	PreviousMaxAttempts      int    `json:"previous_max_attempts"`
+	PreviousMaxChangedLines  int    `json:"previous_max_changed_lines"`
+	RescopeCandidateIdentity string `json:"rescope_candidate_identity"`
+	RescopeCandidateTree     string `json:"rescope_candidate_tree"`
+	ObjectiveID              string `json:"objective_id"`
+	WorkUnit                 string `json:"work_unit"`
+	EvidenceGoal             string `json:"evidence_goal"`
+	MaxAttempts              int    `json:"max_attempts"`
+	MaxChangedLines          int    `json:"max_changed_lines"`
+	Reason                   string `json:"reason"`
+	Actor                    string `json:"actor"`
+}
+
 type RuntimeStatus struct {
 	Schema                 string            `json:"schema"`
 	Change                 string            `json:"change"`
@@ -234,6 +289,7 @@ type RuntimeStatus struct {
 	NextAction             string            `json:"next_action"`
 	LastReset              *RuntimeReset     `json:"last_reset,omitempty"`
 	LastAdvance            *RuntimeAdvance   `json:"last_advance,omitempty"`
+	LastRescope            *RuntimeRescope   `json:"last_rescope,omitempty"`
 	BindingRevision        string            `json:"binding_revision"`
 	Binding                *ReviewBinding    `json:"binding,omitempty"`
 	// Receipt is Wave 4 S5's terminal pointer (design.md decision 1),
@@ -268,6 +324,24 @@ type FinishAttemptRequest struct {
 type ResetObjectiveRequest struct {
 	ExpectedRevision string `json:"expected_revision"`
 	RequestID        string `json:"request_id"`
+	Reason           string `json:"reason"`
+	Actor            string `json:"actor"`
+}
+
+// RescopeObjectiveRequest carries the maintainer-authorized narrower
+// successor scope for AUDITED NARROWING RESCOPE. Reason/Actor mirror
+// ResetObjectiveRequest's audit fields: rescope is authorized exactly like
+// reset. Unlike BeginAttemptRequest, MaxAttempts/MaxChangedLines are never
+// defaulted when zero (normalizeRescopeObjectiveRequest requires >=1
+// explicitly): a narrowing operation must state its narrower ceiling, not
+// silently inherit DefaultRuntimeAttemptLimit/DefaultRuntimeChangedLines.
+type RescopeObjectiveRequest struct {
+	ExpectedRevision string `json:"expected_revision"`
+	RequestID        string `json:"request_id"`
+	WorkUnit         string `json:"work_unit"`
+	EvidenceGoal     string `json:"evidence_goal"`
+	MaxAttempts      int    `json:"max_attempts"`
+	MaxChangedLines  int    `json:"max_changed_lines"`
 	Reason           string `json:"reason"`
 	Actor            string `json:"actor"`
 }
@@ -318,6 +392,7 @@ type runtimeRecord struct {
 	Begin            *runtimeBeginEvent   `json:"begin,omitempty"`
 	Finish           *runtimeFinishEvent  `json:"finish,omitempty"`
 	Reset            *runtimeResetEvent   `json:"reset,omitempty"`
+	Rescope          *runtimeRescopeEvent `json:"rescope,omitempty"`
 	Advance          *runtimeAdvanceEvent `json:"advance,omitempty"`
 	Binding          *runtimeBindingEvent `json:"binding,omitempty"`
 	Receipt          *runtimeReceiptEvent `json:"receipt,omitempty"`
@@ -342,6 +417,12 @@ type runtimeBeginEvent struct {
 	Ordinal                int    `json:"ordinal"`
 	BeginCandidateIdentity string `json:"begin_candidate_identity"`
 	BeginCandidateTree     string `json:"begin_candidate_tree"`
+	// BeginWorktree records store.Workspace at Begin time (#2296 part 1): the
+	// resolved, symlink-evaluated absolute path of the exact --cwd this begin
+	// ran under. omitempty is load-bearing — every record predating this field
+	// deserializes it as "", which Finish and replay both treat as "no binding
+	// recorded" rather than as a mismatch, so legacy chains replay unchanged.
+	BeginWorktree string `json:"begin_worktree,omitempty"`
 }
 
 type runtimeResetEvent struct {
@@ -351,6 +432,30 @@ type runtimeResetEvent struct {
 	ResetCandidateTree     string `json:"reset_candidate_tree"`
 	Reason                 string `json:"reason"`
 	Actor                  string `json:"actor"`
+}
+
+// runtimeRescopeEvent is the persisted record for AUDITED NARROWING RESCOPE.
+// PreviousMaxAttempts/PreviousMaxChangedLines are carried for shape-level
+// self-consistency (validateRuntimeRecordShape), but the REAL narrowing
+// guard is applyRuntimeRescopeEvent's own recompute against replayed state —
+// a forged record cannot lie about "previous" to make a widened claim look
+// narrow, because replay recomputes the previous ceiling from the actual
+// replayed objective, never from the record's own claim.
+type runtimeRescopeEvent struct {
+	PreviousObjectiveID      string `json:"previous_objective_id"`
+	PreviousGeneration       int    `json:"previous_generation"`
+	PreviousMaxAttempts      int    `json:"previous_max_attempts"`
+	PreviousMaxChangedLines  int    `json:"previous_max_changed_lines"`
+	RescopeCandidateIdentity string `json:"rescope_candidate_identity"`
+	RescopeCandidateTree     string `json:"rescope_candidate_tree"`
+	ObjectiveID              string `json:"objective_id"`
+	ObjectiveGeneration      int    `json:"objective_generation"`
+	WorkUnit                 string `json:"work_unit"`
+	EvidenceGoal             string `json:"evidence_goal"`
+	MaxAttempts              int    `json:"max_attempts"`
+	MaxChangedLines          int    `json:"max_changed_lines"`
+	Reason                   string `json:"reason"`
+	Actor                    string `json:"actor"`
 }
 
 type runtimeFinishEvent struct {
@@ -393,7 +498,7 @@ type runtimeReplay struct {
 
 func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, error) {
 	if !validReviewBindingChange(change) {
-		return RuntimeStore{}, errors.New("invalid SDD change name")
+		return RuntimeStore{}, fmt.Errorf("invalid SDD change name %q; want letters, digits, and single hyphens or underscores between them, at most 96 characters; run `gentle-ai sdd-status --cwd <repo> --json` to read the resolved changeName", change)
 	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: repo}).ResolveRepositoryRoot(ctx)
 	if err != nil {
@@ -412,13 +517,69 @@ func OpenRuntimeStore(ctx context.Context, repo, change string) (RuntimeStore, e
 		return RuntimeStore{}, err
 	}
 	commonDir := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(probe.Dir))))
-	dir := filepath.Join(commonDir, "gentle-ai", "sdd-runtime", "v1", change)
+	dir := runtimeChangeLedgerDir(filepath.Join(commonDir, "gentle-ai", "sdd-runtime"), change)
 	return RuntimeStore{Dir: dir, Repo: root, Workspace: workspace, Change: change, commonDir: commonDir}, nil
+}
+
+// encodedRuntimeChangeNamespace holds identities that cannot be a directory
+// name verbatim. A leading underscore is unreachable for a legacy identity, so
+// the namespace can never collide with a kebab-case change's own ledger.
+const encodedRuntimeChangeNamespace = "_encoded"
+
+// runtimeChangeLedgerDir derives the ledger directory for a change identity.
+//
+// A legacy kebab-case identity keeps its exact v1/<change> directory, so every
+// attempt chain written by an earlier version stays reachable. Anything else is
+// encoded, because the directory name alone cannot carry the identity: on a
+// case-insensitive filesystem "DEC-X" and "dec-x" would share one directory and
+// silently merge two unrelated attempt chains. Lowercasing makes the path
+// stable across those filesystems and the digest of the verbatim identity keeps
+// the case variants apart.
+//
+// The suffix keeps 128 bits rather than the whole digest. Every identity that
+// shares a lowercased form differs only in case, so a name with k letters has
+// 2^k variants to search: at 64 bits a birthday collision costs about 2^32
+// candidates, which is reachable, while 128 bits puts it at 2^64. The remaining
+// half is dropped because the leaf must stay addressable on Windows, where an
+// identity at the 96-character limit plus a full 64-character digest crowds the
+// 260-character path ceiling that this issue's original reporter was hitting.
+const encodedRuntimeChangeDigestWidth = 32
+
+func runtimeChangeLedgerDir(base, change string) string {
+	if legacyRuntimeChangeDir(change) {
+		return filepath.Join(base, "v1", change)
+	}
+	digest := strings.TrimPrefix(runtimeValueHash("gentle-ai.sdd-runtime-change-identity/v1", change), "sha256:")
+	return filepath.Join(base, "v1", encodedRuntimeChangeNamespace, strings.ToLower(change)+"-"+digest[:encodedRuntimeChangeDigestWidth])
 }
 
 func (store RuntimeStore) Status() (RuntimeStatus, error) {
 	replay, err := store.load()
 	return replay.Status, err
+}
+
+// runtimeObjectiveHasRecordedAttempt reports whether ANY attempt in the
+// replayed history was recorded under status.Objective's exact ID. Before
+// Rescope existed, status.Objective != nil always implied at least one
+// attempt existed under it (Begin and the Advance/Reset transitions that
+// clear Objective are the only ways to open or close one, and Begin always
+// creates the first attempt atomically with the objective). Rescope breaks
+// that implication on purpose: it opens a new objective without an attempt,
+// so Begin's dispatch (and its replay-time mirror in applyRuntimeBeginEvent)
+// must distinguish "this objective already has a terminal Finish to chase"
+// from "this objective was just opened and has none yet" instead of blindly
+// inspecting the last recorded attempt, which would still belong to the
+// objective THIS one just superseded.
+func runtimeObjectiveHasRecordedAttempt(status RuntimeStatus) bool {
+	if status.Objective == nil {
+		return false
+	}
+	for index := len(status.Attempts) - 1; index >= 0; index-- {
+		if status.Attempts[index].ObjectiveID == status.Objective.ID {
+			return true
+		}
+	}
+	return false
 }
 
 func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest) (RuntimeStatus, error) {
@@ -450,26 +611,47 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 		generation := status.ObjectiveGeneration + 1
 		var snapshot reviewtransaction.Snapshot
 		var err error
-		if status.Objective != nil && !advancing {
+		switch {
+		case status.Objective != nil && !advancing && runtimeObjectiveHasRecordedAttempt(status):
+			// The ordinary continuing-objective path: at least one attempt is
+			// already recorded under this exact objective ID, so its terminal
+			// Finish is the candidate provenance to chase.
 			generation = status.Objective.Generation
 			if request.WorkUnit != status.Objective.WorkUnit || request.EvidenceGoal != status.Objective.EvidenceGoal ||
 				request.MaxAttempts != status.Objective.MaxAttempts ||
 				request.MaxChangedLines != status.Objective.MaxChangedLines {
 				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 			}
-			if len(status.Attempts) == 0 {
-				return runtimeRecord{}, errors.New("SDD runtime objective has no terminal candidate provenance")
-			}
 			last := status.Attempts[len(status.Attempts)-1]
-			if last.ObjectiveID != status.Objective.ID || last.Outcome == AttemptRunning ||
-				last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
+			if last.Outcome == AttemptRunning || last.FinishCandidateIdentity == "" || last.FinishCandidateTree == "" {
 				return runtimeRecord{}, errors.New("SDD runtime objective has invalid terminal candidate provenance")
 			}
 			snapshot, err = captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
 			if err == nil && (snapshot.Identity != last.FinishCandidateIdentity || snapshot.CandidateTree != last.FinishCandidateTree) {
 				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
 			}
-		} else {
+		case status.Objective != nil && !advancing:
+			// A freshly opened objective (Rescope) with no attempt recorded
+			// under its own ID yet: there is no terminal Finish belonging to
+			// THIS objective to chase, so capture a fresh candidate the same
+			// way a brand-new objective's first attempt does, and validate it
+			// against the candidate the objective itself opened with
+			// (RuntimeObjective.InitialCandidate*, set by Rescope to the exact
+			// zero-drift candidate it verified) instead of a prior attempt's
+			// Finish record. Chasing the LAST recorded attempt here would find
+			// one that belongs to the objective THIS one superseded (#2298,
+			// #2296 part 2's landmine) and wrongly refuse.
+			generation = status.Objective.Generation
+			if request.WorkUnit != status.Objective.WorkUnit || request.EvidenceGoal != status.Objective.EvidenceGoal ||
+				request.MaxAttempts != status.Objective.MaxAttempts ||
+				request.MaxChangedLines != status.Objective.MaxChangedLines {
+				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
+			}
+			snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
+			if err == nil && (snapshot.Identity != status.Objective.InitialCandidateIdentity || snapshot.CandidateTree != status.Objective.InitialCandidateTree) {
+				return runtimeRecord{}, store.runtimeObjectiveChangeRefusal(ctx, status)
+			}
+		default:
 			snapshot, err = captureRuntimeCandidate(ctx, store.Repo)
 		}
 		if err != nil {
@@ -488,6 +670,7 @@ func (store RuntimeStore) Begin(ctx context.Context, request BeginAttemptRequest
 			ObjectiveID: objectiveID, ObjectiveGeneration: generation, WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
 			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
 			Ordinal: status.NextOrdinal, BeginCandidateIdentity: snapshot.Identity, BeginCandidateTree: snapshot.CandidateTree,
+			BeginWorktree: store.Workspace,
 		}
 		if advancing {
 			return runtimeRecord{Operation: runtimeOperationAdvance, Begin: event, Advance: &runtimeAdvanceEvent{
@@ -511,11 +694,19 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 		if active == nil {
 			return runtimeRecord{}, ErrRuntimeNoActiveAttempt
 		}
+		// Enforce the worktree binding before any candidate capture/diff work
+		// runs (#2296 part 1). An empty recorded value means this attempt's
+		// begin record predates the field: no enforcement, byte-identical
+		// behavior to every chain recorded before this slice.
+		if active.BeginWorktree != "" && active.BeginWorktree != store.Workspace {
+			return runtimeRecord{}, store.runtimeWorktreeMismatchRefusal(active.Ordinal, active.BeginWorktree)
+		}
 		remediation := finishRequestsRemediation(request)
+		unmanagedRemediation := finishRequestsUnmanagedRemediation(request)
 		currentBinding := status.Binding
 		var legacyBinding *ReviewBinding
 		var legacyDigest string
-		if request.Outcome == AttemptPassed && currentBinding == nil {
+		if request.Outcome == AttemptPassed && currentBinding == nil && (!store.ReviewDisabled || remediation) {
 			legacyBinding, legacyDigest, err = store.readLegacyBinding()
 			if err != nil {
 				return runtimeRecord{}, fmt.Errorf("read legacy SDD review binding for remediation: %w", err)
@@ -533,13 +724,24 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 				return runtimeRecord{}, fmt.Errorf("failed evidence revision %q does not match native runtime evidence %q", request.RemediatesEvidenceRevision, status.EvidenceRevision)
 			}
 		}
-		intended, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).DiscoverIntendedUntracked(ctx)
-		if err != nil {
-			return runtimeRecord{}, fmt.Errorf("discover SDD runtime intended-untracked paths: %w", err)
+		if unmanagedRemediation {
+			if !store.ReviewDisabled || currentBinding != nil {
+				// refusal:by-design human-authority: unmanaged remediation is valid only while receipt authority is absent and explicitly disabled.
+				return runtimeRecord{}, errors.New("unmanaged remediation requires disabled delivery without a review binding")
+			}
+			if len(status.Attempts) < 2 || status.EvidenceRevision != request.RemediatesEvidenceRevision ||
+				status.Attempts[len(status.Attempts)-2].Outcome != AttemptFailed {
+				// refusal:by-design operator-knowledge: the native ledger admits one final correction only for its current failed evidence.
+				return runtimeRecord{}, errors.New("unmanaged remediation requires the current failed evidence and a direct correction attempt")
+			}
 		}
+		// Issue #2394: the runtime candidate is the same declared candidate
+		// review freezes -- tracked changes plus whatever the user put in the
+		// index. Sweeping the worktree here would make drift detection and
+		// review disagree about what the candidate even is.
 		snapshot, err := (reviewtransaction.SnapshotBuilder{Repo: store.Repo}).Build(ctx, reviewtransaction.Target{
 			Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: active.BeginCandidateTree,
-			Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: intended,
+			Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
 		})
 		if err != nil {
 			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate after attempt: %w", err)
@@ -563,6 +765,20 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			}
 			if validateErr := validateRuntimeBoundCandidate(ctx, store.Repo, *currentBinding, snapshot.CandidateTree); validateErr != nil {
 				return runtimeRecord{}, fmt.Errorf("validate unchanged bound SDD candidate: %w", validateErr)
+			}
+		}
+		previousAttemptFailed := len(status.Attempts) >= 2 && status.Attempts[len(status.Attempts)-2].Outcome == AttemptFailed
+		if store.ReviewDisabled && currentBinding == nil && request.Outcome == AttemptPassed && previousAttemptFailed && !unmanagedRemediation {
+			return runtimeRecord{}, fmt.Errorf("disabled failed verification requires --remediates-evidence-revision %q on the correction settle; rerun `gentle-ai sdd-attempt settle` with that flag", status.EvidenceRevision)
+		}
+		if unmanagedRemediation {
+			if snapshot.Identity == active.BeginCandidateIdentity || snapshot.CandidateTree == active.BeginCandidateTree {
+				// refusal:by-design operator-knowledge: a remediation claim must name a candidate changed by the active correction attempt.
+				return runtimeRecord{}, errors.New("unmanaged remediation requires a changed correction candidate")
+			}
+			if request.EvidenceRevision == request.RemediatesEvidenceRevision {
+				// refusal:by-design operator-knowledge: the correction's verification evidence must be fresh and distinct from the failed evidence it repairs.
+				return runtimeRecord{}, errors.New("unmanaged remediation requires fresh corrected evidence")
 			}
 		}
 		event := &runtimeFinishEvent{
@@ -711,6 +927,28 @@ func runtimeRemediatesArgument(remediates string) string {
 	return fmt.Sprintf("%q", remediates)
 }
 
+// runtimeWorktreeMismatchRefusal turns a cross-worktree finish into a refusal
+// that names the exact --cwd the ledger's candidate/diff math is pinned to.
+//
+// The demand itself is correct: Begin captured the base candidate tree
+// relative to the exact --cwd it ran under, so a Finish issued from a
+// DIFFERENT linked worktree would build and diff the wrong working tree
+// against that pinned base — a diff between two unrelated trees, not the
+// work this attempt actually did. The shared Git-common-dir ledger makes
+// every linked worktree able to reach and mutate the same chain, which is
+// exactly what makes the wrong --cwd able to slip through silently instead
+// of failing to open the store at all.
+//
+// The exit is unconditional and requires no read-only eligibility probe the
+// way runtimeRemediationExitRefusal's two branches do: the recorded
+// begin-worktree path is itself always the one runnable continuation, so
+// there is only one message to construct.
+func (store RuntimeStore) runtimeWorktreeMismatchRefusal(ordinal int, beginWorktree string) error {
+	return fmt.Errorf(
+		"%w: attempt %d began in %q, and its base candidate tree is pinned to that exact linked worktree, but this finish is running from %q — rerun with --cwd %q so the candidate capture and changed-line measurement use the worktree that actually did the work",
+		ErrRuntimeWorktreeMismatch, ordinal, beginWorktree, store.Workspace, beginWorktree)
+}
+
 // runtimeObjectiveChangeRefusal turns the changed-objective begin demand into
 // a refusal that names the continuation that actually clears it.
 //
@@ -722,13 +960,21 @@ func runtimeRemediatesArgument(remediates string) string {
 // --change, --expected-revision, --request-id, --reason and --actor, and a
 // caller who has only the sentinel has none of them.
 //
-// The two states are distinguished rather than merged, because a message may
+// The states are distinguished rather than merged, because a message may
 // name a command only when running it resolves the block. `reset` is refused
-// one layer deeper for an unchanged candidate whose budget is intact
-// (runtimeResetStructurallyPermitted plus the drift check in Reset), because an
-// elective early reset would launder the per-objective budget. Naming it there
-// would be the same defect in a new place, so that branch names the begin the
-// ledger does accept, printing the objective parameters it already holds.
+// one layer deeper for an unchanged (non-drifted) candidate whose budget is
+// intact (runtimeResetStructurallyPermitted plus the drift check in Reset),
+// because an elective early reset would launder the per-objective budget.
+// Naming it there would be the same defect in a new place. Since #2298 /
+// #2296 part 2, that non-drifted terminal shape is no longer a dead end: it
+// is exactly AUDITED NARROWING RESCOPE's admitted precondition
+// (runtimeObjectiveRescopeAdmissible), so the second branch names rescope
+// instead of falling straight to "begin against the scope the ledger holds"
+// -- printing that message for THIS state was the dead end #2298 / #2296
+// part 2 reported, because begin only ever re-offers the same objective and
+// reset is refused for lack of drift. The plain "begin against the scope"
+// branch survives only as the fail-closed default for a candidate-capture
+// failure, where neither reset nor rescope can be verified admissible.
 func (store RuntimeStore) runtimeObjectiveChangeRefusal(ctx context.Context, status RuntimeStatus) error {
 	// The sentinel stays in the %w position in every branch: callers that
 	// route on errors.Is must keep working no matter which exit is named.
@@ -736,6 +982,13 @@ func (store RuntimeStore) runtimeObjectiveChangeRefusal(ctx context.Context, sta
 		return fmt.Errorf(
 			"%w: reset the objective, then begin again — `gentle-ai sdd-attempt reset --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --reason \"<why-the-objective-changed>\" --actor \"<actor>\"`; the reset publishes a new ledger revision, so take the begin's --expected-revision from `gentle-ai sdd-attempt status --cwd %q --change %q` after it commits",
 			ErrRuntimeObjectiveChange, store.Workspace, store.Change, status.Revision, store.Workspace, store.Change)
+	}
+	if store.runtimeObjectiveRescopeAdmissible(ctx, status) {
+		objective := status.Objective
+		return fmt.Errorf(
+			"%w: this objective's candidate has not drifted, so resetting it is refused as an elective budget reset, but a maintainer may authorize a narrower successor scope instead — `gentle-ai sdd-attempt rescope --cwd %q --change %q --expected-revision %q --request-id \"<unique-request-id>\" --work-unit \"<narrower-work-unit>\" --evidence-goal \"<narrower-evidence-goal>\" --max-attempts \"<n, at most %d>\" --max-changed-lines \"<n, at most %d>\" --reason \"<why-the-objective-is-narrowing>\" --actor \"<actor>\"`; rescope carries cumulative_attempts and cumulative_changed_lines forward unchanged and refuses any max_attempts or max_changed_lines above the current objective's %d and %d",
+			ErrRuntimeObjectiveChange, store.Workspace, store.Change, status.Revision,
+			objective.MaxAttempts, objective.MaxChangedLines, objective.MaxAttempts, objective.MaxChangedLines)
 	}
 	objective := status.Objective
 	if objective == nil {
@@ -771,6 +1024,26 @@ func (store RuntimeStore) runtimeObjectiveResetAdmissible(ctx context.Context, s
 		return false
 	}
 	return candidate.Identity != last.FinishCandidateIdentity || candidate.CandidateTree != last.FinishCandidateTree
+}
+
+// runtimeObjectiveRescopeAdmissible answers exactly one question: would
+// `rescope` be STRUCTURALLY ACCEPTED right now (leaving only the caller's own
+// narrower scope choice, which only the caller can supply, to satisfy the
+// narrowing guard)? It mirrors runtimeObjectiveResetAdmissible's read-only,
+// fail-closed style over the exact opposite drift outcome: an active
+// attempt, a missing objective, decision-required, complete, a non-terminal
+// last attempt, or a candidate capture that fails all answer false; a
+// candidate that captured successfully and did NOT drift answers true.
+func (store RuntimeStore) runtimeObjectiveRescopeAdmissible(ctx context.Context, status RuntimeStatus) bool {
+	if status.ActiveAttempt != nil || status.Objective == nil || !runtimeObjectiveRescopeStructurallyPermitted(status) {
+		return false
+	}
+	last := status.Attempts[len(status.Attempts)-1]
+	candidate, err := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
+	if err != nil {
+		return false
+	}
+	return candidate.Identity == last.FinishCandidateIdentity && candidate.CandidateTree == last.FinishCandidateTree
 }
 
 // runtimeObjectiveAdvanceAdmissible answers whether a passed objective may hand
@@ -840,6 +1113,115 @@ func (store RuntimeStore) Reset(ctx context.Context, request ResetObjectiveReque
 		return runtimeRecord{Operation: runtimeOperationReset, Reset: &runtimeResetEvent{
 			PreviousObjectiveID: status.Objective.ID, PreviousGeneration: status.Objective.Generation,
 			ResetCandidateIdentity: snapshot.Identity, ResetCandidateTree: snapshot.CandidateTree,
+			Reason: request.Reason, Actor: request.Actor,
+		}}, nil
+	})
+}
+
+// runtimeObjectiveRescopeStructurallyPermitted reports whether the ledger's
+// terminal scope (no active attempt, which callers must verify separately)
+// is the exact shape AUDITED NARROWING RESCOPE admits: NOT decision-required,
+// NOT complete, and the last recorded attempt is a terminal failure or
+// interruption. This is the complement of runtimeResetStructurallyPermitted's
+// three admitted shapes minus its own terminal-failure/interruption branch --
+// reset and rescope share that one structural precondition and are then
+// split by the SAME drift check on opposite sides (Reset admits only when
+// drifted; Rescope admits only when NOT drifted), so the two operations can
+// never both be legal for the same replayed state. This exact predicate is
+// evaluated both when writing a rescope (RuntimeStore.Rescope) and when
+// replaying one from the immutable chain (applyRuntimeRecord), so a
+// committed rescope always replays deterministically.
+func runtimeObjectiveRescopeStructurallyPermitted(status RuntimeStatus) bool {
+	if status.DecisionRequired || status.Complete {
+		return false
+	}
+	if len(status.Attempts) == 0 {
+		return false
+	}
+	last := status.Attempts[len(status.Attempts)-1]
+	return last.Outcome == AttemptFailed || last.Outcome == AttemptInterrupted
+}
+
+// Rescope implements AUDITED NARROWING RESCOPE (#2298, #2296 part 2): the
+// maintainer-authorized exit from a terminal, non-complete, zero-drift
+// objective whose recorded scope no caller may legally re-request (begin
+// refuses the changed params, reset refuses the intact zero-drift budget).
+// It closes the current objective and opens an immutable narrower successor
+// in one record, carrying CumulativeAttempts/CumulativeChangedLines forward
+// UNCHANGED so consumed history stays auditable -- the ratified decision
+// explicitly rejected the cheap "admit reset at CumulativeChangedLines==0"
+// fallback as attempt-count laundering, and an unzeroed carry-forward is the
+// mechanism that keeps rescope from being that same defect under a new name.
+func (store RuntimeStore) Rescope(ctx context.Context, request RescopeObjectiveRequest) (RuntimeStatus, error) {
+	request, err := normalizeRescopeObjectiveRequest(request)
+	if err != nil {
+		return RuntimeStatus{}, err
+	}
+	digest := runtimeValueHash("gentle-ai.sdd-runtime-rescope-request/v1", request)
+	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(replay runtimeReplay) (runtimeRecord, error) {
+		status := replay.Status
+		if status.ActiveAttempt != nil {
+			return runtimeRecord{}, ErrRuntimeAttemptActive
+		}
+		objective := status.Objective
+		if objective == nil {
+			return runtimeRecord{}, ErrRuntimeNoObjective
+		}
+		if !runtimeObjectiveRescopeStructurallyPermitted(status) {
+			return runtimeRecord{}, ErrRuntimeRescopeNotAllowed
+		}
+		last := status.Attempts[len(status.Attempts)-1]
+		drift, driftErr := captureRuntimeTerminalCandidate(ctx, store, last.BeginCandidateTree)
+		if driftErr != nil {
+			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate to check rescope drift eligibility: %w", driftErr)
+		}
+		if drift.Identity != last.FinishCandidateIdentity || drift.CandidateTree != last.FinishCandidateTree {
+			// A drifted candidate is reset's shape, not rescope's -- naming
+			// that distinction is runtimeObjectiveChangeRefusal's job, not a
+			// bare mutation refusal, so Rescope itself stays fail-closed here.
+			return runtimeRecord{}, ErrRuntimeRescopeNotAllowed
+		}
+		if request.MaxChangedLines > objective.MaxChangedLines {
+			return runtimeRecord{}, fmt.Errorf(
+				"%w: received --max-changed-lines %d, the current objective allows %d",
+				ErrRuntimeRescopeWidened, request.MaxChangedLines, objective.MaxChangedLines,
+			)
+		}
+		if request.MaxAttempts > objective.MaxAttempts {
+			return runtimeRecord{}, fmt.Errorf(
+				"%w: received --max-attempts %d, the current objective allows %d",
+				ErrRuntimeRescopeWidened, request.MaxAttempts, objective.MaxAttempts,
+			)
+		}
+		// The zero-drift `drift` snapshot above was captured with
+		// TargetBaseWorkspaceOverlay (same Kind/BaseRef Finish itself used),
+		// so its Identity is only comparable against another
+		// TargetBaseWorkspaceOverlay capture over that exact base -- never
+		// against a fresh objective's ordinary TargetCurrentChanges capture.
+		// The successor's InitialCandidate*/RescopeCandidate* must instead be
+		// captured with captureRuntimeCandidate, exactly the Kind the very
+		// next Begin will independently recompute (Begin's second dispatch
+		// branch), so that later comparison is apples-to-apples. CandidateTree
+		// itself (unlike Identity) is Kind-independent -- both captures agree
+		// on it exactly because there is zero drift -- so this second capture
+		// is provably the same underlying content the drift check just
+		// verified, not a fresh unguarded read.
+		fresh, err := captureRuntimeCandidate(ctx, store.Repo)
+		if err != nil {
+			return runtimeRecord{}, fmt.Errorf("capture SDD runtime candidate at objective rescope: %w", err)
+		}
+		if fresh.CandidateTree != drift.CandidateTree {
+			return runtimeRecord{}, ErrRuntimeRescopeNotAllowed
+		}
+		generation := status.ObjectiveGeneration + 1
+		objectiveID := runtimeObjectiveID(store.Change, request.WorkUnit, request.EvidenceGoal, fresh.Identity, generation)
+		return runtimeRecord{Operation: runtimeOperationRescope, Rescope: &runtimeRescopeEvent{
+			PreviousObjectiveID: objective.ID, PreviousGeneration: objective.Generation,
+			PreviousMaxAttempts: objective.MaxAttempts, PreviousMaxChangedLines: objective.MaxChangedLines,
+			RescopeCandidateIdentity: fresh.Identity, RescopeCandidateTree: fresh.CandidateTree,
+			ObjectiveID: objectiveID, ObjectiveGeneration: generation,
+			WorkUnit: request.WorkUnit, EvidenceGoal: request.EvidenceGoal,
+			MaxAttempts: request.MaxAttempts, MaxChangedLines: request.MaxChangedLines,
 			Reason: request.Reason, Actor: request.Actor,
 		}}, nil
 	})
@@ -1135,7 +1517,7 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 		}
 
 	case runtimeOperationFinish:
-		if err := applyRuntimeFinishEvent(replay, record.Finish); err != nil {
+		if err := applyRuntimeFinishEvent(replay, record.Finish, record.Finish.RemediatesEvidenceRevision != ""); err != nil {
 			return err
 		}
 
@@ -1158,7 +1540,7 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 			// its corrected evidence differs from the failed evidence it repairs.
 			return errors.New("atomic remediation binding does not select a distinct successor or corrected self-successor")
 		}
-		if err := applyRuntimeFinishEvent(replay, record.Finish); err != nil {
+		if err := applyRuntimeFinishEvent(replay, record.Finish, false); err != nil {
 			return err
 		}
 		if !record.Finish.ChangedLineBudgetExceeded {
@@ -1188,6 +1570,11 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 			Revision: revision, PreviousObjectiveID: event.PreviousObjectiveID, PreviousGeneration: event.PreviousGeneration,
 			ResetCandidateIdentity: event.ResetCandidateIdentity, ResetCandidateTree: event.ResetCandidateTree,
 			Reason: event.Reason, Actor: event.Actor,
+		}
+
+	case runtimeOperationRescope:
+		if err := applyRuntimeRescopeEvent(replay, revision, record); err != nil {
+			return err
 		}
 
 	case runtimeOperationBind:
@@ -1246,9 +1633,17 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 			event.Ordinal != replay.Status.NextOrdinal {
 			return errors.New("begin record changes the active objective or ordinal")
 		}
-		if len(replay.Status.Attempts) == 0 ||
-			event.BeginCandidateTree != replay.Status.Attempts[len(replay.Status.Attempts)-1].FinishCandidateTree {
-			return errors.New("begin record does not continue the terminal candidate")
+		if runtimeObjectiveHasRecordedAttempt(replay.Status) {
+			if event.BeginCandidateTree != replay.Status.Attempts[len(replay.Status.Attempts)-1].FinishCandidateTree {
+				return errors.New("begin record does not continue the terminal candidate")
+			}
+		} else if event.BeginCandidateIdentity != objective.InitialCandidateIdentity || event.BeginCandidateTree != objective.InitialCandidateTree {
+			// Mirrors write-time Begin's second dispatch branch: a freshly
+			// rescoped objective has no attempt of its own to chase, so the
+			// replayed candidate must instead match what Rescope itself
+			// recorded as this objective's InitialCandidate* (#2298, #2296
+			// part 2).
+			return errors.New("begin record does not continue the rescoped objective's recorded candidate") // refusal:by-design world-action: this shape is constructed by the authority itself from Rescope's own recorded InitialCandidate*, so a mismatch is a mutated record and the exit is restoring the store
 		}
 	}
 	if replay.Status.CumulativeAttempts >= event.MaxAttempts || replay.Status.CumulativeChangedLines >= event.MaxChangedLines {
@@ -1257,7 +1652,7 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 	attempt := RuntimeAttempt{
 		Ordinal: event.Ordinal, ObjectiveID: event.ObjectiveID, ObjectiveGeneration: generation,
 		WorkUnit: event.WorkUnit, BeginCandidateIdentity: event.BeginCandidateIdentity,
-		BeginCandidateTree: event.BeginCandidateTree, Outcome: AttemptRunning,
+		BeginCandidateTree: event.BeginCandidateTree, BeginWorktree: event.BeginWorktree, Outcome: AttemptRunning,
 	}
 	replay.Status.Attempts = append(replay.Status.Attempts, attempt)
 	replay.AttemptTokens[event.Ordinal] = revision
@@ -1267,6 +1662,82 @@ func applyRuntimeBeginEvent(replay *runtimeReplay, revision string, record runti
 	replay.Status.LifetimeAttempts++
 	replay.Status.NextOrdinal = event.Ordinal + 1
 	replay.Status.NextAction = RuntimeActionFinish
+	return nil
+}
+
+// applyRuntimeRescopeEvent is the REPLAY-TIME validator for AUDITED NARROWING
+// RESCOPE: it recomputes and verifies narrowing purely from replayed state,
+// never trusting the record's own claimed "previous" values, so a
+// corrupted/forged record claiming a widened ceiling (or lying about the
+// previous ceiling to make a widen look like a narrow) is rejected on
+// replay, not merely refused at write time. `objective` below is always the
+// REPLAYED objective -- the one authority-verified transitions actually
+// produced -- so `event.MaxAttempts > objective.MaxAttempts` cannot be
+// fooled by a forged event.PreviousMaxAttempts.
+func applyRuntimeRescopeEvent(replay *runtimeReplay, revision string, record runtimeRecord) error {
+	event := record.Rescope
+	objective := replay.Status.Objective
+	if replay.Status.ActiveAttempt != nil || objective == nil || !runtimeObjectiveRescopeStructurallyPermitted(replay.Status) {
+		return errors.New("objective rescope is not a valid successor") // refusal:by-design world-action: a replayed chain that contradicts its own write-time state is damaged authority; the exit is restoring the Git-common-dir store, not a command
+	}
+	// The real narrowing guard runs FIRST and is recomputed against the
+	// REPLAYED objective, never against the record's own (possibly forged)
+	// PreviousMax* claim: a record cannot launder a widen by simply lying
+	// about what the previous ceiling was, because this comparison never
+	// reads event.PreviousMax* at all.
+	if event.MaxAttempts > objective.MaxAttempts || event.MaxChangedLines > objective.MaxChangedLines {
+		return errors.New("objective rescope widens the current objective's budget") // refusal:by-design world-action: narrowing was enforced before publication, so a widened replayed record is a forged or corrupted chain and the exit is restoring the store
+	}
+	if event.PreviousObjectiveID != objective.ID || event.PreviousGeneration != objective.Generation ||
+		event.PreviousGeneration != replay.Status.ObjectiveGeneration ||
+		event.PreviousMaxAttempts != objective.MaxAttempts || event.PreviousMaxChangedLines != objective.MaxChangedLines {
+		return errors.New("objective rescope does not match the terminal objective") // refusal:by-design world-action: the predecessor scope was frozen at publication, so a mismatch is a mutated record and the exit is restoring the store
+	}
+	if len(replay.Status.Attempts) == 0 {
+		return errors.New("objective rescope has no terminal candidate provenance") // refusal:by-design world-action: a rescope can only follow a settled attempt, so an empty history is a truncated chain and the exit is restoring the store
+	}
+	last := replay.Status.Attempts[len(replay.Status.Attempts)-1]
+	// RescopeCandidateTree is captured with Kind=TargetCurrentChanges (the
+	// same Kind the successor's very next Begin will independently
+	// recompute), while FinishCandidateTree was captured with
+	// Kind=TargetBaseWorkspaceOverlay -- different Kinds, so only
+	// CandidateTree (Kind-independent: a pure function of workspace content)
+	// is comparable across them. RescopeCandidateIdentity is NOT compared
+	// here for the same reason; it is still shape-validated and reused
+	// verbatim to derive ObjectiveID below.
+	if last.ObjectiveID != objective.ID || (last.Outcome != AttemptFailed && last.Outcome != AttemptInterrupted) ||
+		last.FinishCandidateTree != event.RescopeCandidateTree {
+		return errors.New("objective rescope candidate does not match the terminal zero-drift finish") // refusal:by-design world-action: the zero-drift candidate was verified before publication, so a mismatch is a mutated record and the exit is restoring the store
+	}
+	generation := event.ObjectiveGeneration
+	expectedObjectiveID := runtimeObjectiveID(record.Change, event.WorkUnit, event.EvidenceGoal, event.RescopeCandidateIdentity, generation)
+	if generation != replay.Status.ObjectiveGeneration+1 || event.ObjectiveID != expectedObjectiveID {
+		return errors.New("objective rescope identity is invalid") // refusal:by-design world-action: the successor identity is derived deterministically at publication, so a mismatch is a mutated record and the exit is restoring the store
+	}
+	replay.Status.Objective = &RuntimeObjective{
+		ID: event.ObjectiveID, Generation: generation, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
+		InitialCandidateIdentity: event.RescopeCandidateIdentity, InitialCandidateTree: event.RescopeCandidateTree,
+		MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+	}
+	replay.Status.ObjectiveGeneration = generation
+	replay.Status.EvidenceRevision = ""
+	replay.Status.DecisionRequired = false
+	replay.Status.Complete = false
+	replay.Status.NextAction = RuntimeActionBegin
+	replay.Status.LastRescope = &RuntimeRescope{
+		Revision: revision, PreviousObjectiveID: event.PreviousObjectiveID, PreviousGeneration: event.PreviousGeneration,
+		PreviousMaxAttempts: event.PreviousMaxAttempts, PreviousMaxChangedLines: event.PreviousMaxChangedLines,
+		RescopeCandidateIdentity: event.RescopeCandidateIdentity, RescopeCandidateTree: event.RescopeCandidateTree,
+		ObjectiveID: event.ObjectiveID, WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
+		MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+		Reason: event.Reason, Actor: event.Actor,
+	}
+	// NextOrdinal, CumulativeAttempts, CumulativeChangedLines,
+	// LifetimeAttempts, and LifetimeChangedLines are deliberately left
+	// untouched: rescope carries history forward and never zeroes it (the
+	// ratified decision's core requirement) -- the one difference from
+	// runtimeOperationReset, which zeroes CumulativeAttempts/
+	// CumulativeChangedLines above.
 	return nil
 }
 
@@ -1310,7 +1781,7 @@ func applyRuntimeAdvanceEvent(replay *runtimeReplay, revision string, record run
 	return applyRuntimeBeginEvent(replay, revision, record)
 }
 
-func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent) error {
+func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, unmanagedRemediation bool) error {
 	active := replay.Status.ActiveAttempt
 	if active == nil || active.Ordinal != event.Ordinal || len(replay.Status.Attempts) == 0 ||
 		replay.Status.Attempts[len(replay.Status.Attempts)-1].Outcome != AttemptRunning {
@@ -1319,6 +1790,16 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent) e
 	budgetExceeded := replay.Status.CumulativeChangedLines+event.ChangedLines > replay.Status.Objective.MaxChangedLines
 	if event.ChangedLineBudgetExceeded != budgetExceeded {
 		return errors.New("finish record changed-line budget decision does not match replay state")
+	}
+	if unmanagedRemediation {
+		if replay.Status.Binding != nil || len(replay.Status.Attempts) < 2 || event.Outcome != AttemptPassed ||
+			replay.Status.EvidenceRevision != event.RemediatesEvidenceRevision ||
+			replay.Status.Attempts[len(replay.Status.Attempts)-2].Outcome != AttemptFailed ||
+			event.FinishCandidateIdentity == active.BeginCandidateIdentity || event.FinishCandidateTree == active.BeginCandidateTree ||
+			event.EvidenceRevision == event.RemediatesEvidenceRevision {
+			// refusal:by-design world-action: a replayed event that breaks immutable evidence/candidate binding can only be repaired by restoring the authority.
+			return errors.New("unmanaged remediation finish does not bind the final failed-evidence correction")
+		}
 	}
 	attempt := &replay.Status.Attempts[len(replay.Status.Attempts)-1]
 	attempt.FinishCandidateIdentity = event.FinishCandidateIdentity
@@ -1373,7 +1854,12 @@ func validateRuntimeBeginEvent(record runtimeRecord) error {
 	if !runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 0 || validateRuntimeText(event.WorkUnit, 160) != nil ||
 		validateRuntimeText(event.EvidenceGoal, 240) != nil || event.MaxAttempts < 1 || event.MaxAttempts > maximumRuntimeAttemptLimit ||
 		event.MaxChangedLines < 1 || event.MaxChangedLines > maximumRuntimeChangedLines || event.Ordinal < 1 ||
-		!runtimeRevisionPattern.MatchString(event.BeginCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.BeginCandidateTree) {
+		!runtimeRevisionPattern.MatchString(event.BeginCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.BeginCandidateTree) ||
+		// BeginWorktree is optional (empty means legacy/pre-field), but a
+		// PRESENT value is still an identity string, not free user input: it
+		// must be a bounded, trimmed, single-line value like every other
+		// recorded text field, not raw garbage.
+		(event.BeginWorktree != "" && validateRuntimeText(event.BeginWorktree, 4096) != nil) {
 		return errors.New("invalid SDD runtime begin event")
 	}
 	request := BeginAttemptRequest{
@@ -1394,14 +1880,14 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 	}
 	switch record.Operation {
 	case runtimeOperationBegin:
-		if record.Begin == nil || record.Finish != nil || record.Reset != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil {
+		if record.Begin == nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil {
 			return errors.New("invalid SDD runtime begin record shape")
 		}
 		if err := validateRuntimeBeginEvent(record); err != nil {
 			return err
 		}
 	case runtimeOperationAdvance:
-		if record.Begin == nil || record.Advance == nil || record.Finish != nil || record.Reset != nil || record.Binding != nil || record.Receipt != nil {
+		if record.Begin == nil || record.Advance == nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Binding != nil || record.Receipt != nil {
 			return errors.New("invalid SDD runtime objective advance record shape") // refusal:by-design world-action: this shape is constructed by the authority itself, so a violation is a mutated record and the exit is restoring the store
 		}
 		advance := record.Advance
@@ -1415,7 +1901,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return err
 		}
 	case runtimeOperationFinish:
-		if record.Finish == nil || record.Begin != nil || record.Reset != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil {
+		if record.Finish == nil || record.Begin != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil {
 			return errors.New("invalid SDD runtime finish record shape")
 		}
 		event := record.Finish
@@ -1424,19 +1910,20 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			!runtimeRevisionPattern.MatchString(event.FinishCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.FinishCandidateTree) ||
 			validateRuntimeText(event.Diagnosis, 500) != nil || !validHarnessDisposition(event.HarnessDisposition) ||
 			validateRuntimeText(event.CleanupEvidence, 500) != nil || validateRuntimeText(event.ProcessEvidence, 500) != nil ||
-			event.RemediatesEvidenceRevision != "" {
+			(event.RemediatesEvidenceRevision != "" && (!runtimeRevisionPattern.MatchString(event.RemediatesEvidenceRevision) || event.Outcome != AttemptPassed)) {
 			return errors.New("invalid SDD runtime finish event")
 		}
 		request := FinishAttemptRequest{
 			ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, Outcome: event.Outcome,
 			EvidenceRevision: event.EvidenceRevision, Diagnosis: event.Diagnosis, HarnessDisposition: event.HarnessDisposition,
 			CleanupEvidence: event.CleanupEvidence, ProcessEvidence: event.ProcessEvidence,
+			RemediatesEvidenceRevision: event.RemediatesEvidenceRevision,
 		}
 		if runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", request) != record.RequestDigest {
 			return errors.New("SDD runtime finish request digest does not match record")
 		}
 	case runtimeOperationFinishRemediation:
-		if record.Finish == nil || record.Binding == nil || record.Begin != nil || record.Reset != nil || record.Advance != nil || record.Receipt != nil {
+		if record.Finish == nil || record.Binding == nil || record.Begin != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Receipt != nil {
 			return errors.New("invalid atomic SDD runtime remediation record shape")
 		}
 		finish, binding := record.Finish, record.Binding
@@ -1475,7 +1962,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("atomic SDD runtime remediation request digest does not match record")
 		}
 	case runtimeOperationReset:
-		if record.Reset == nil || record.Begin != nil || record.Finish != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil {
+		if record.Reset == nil || record.Begin != nil || record.Finish != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil {
 			return errors.New("invalid SDD runtime reset record shape")
 		}
 		event := record.Reset
@@ -1490,8 +1977,39 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		if runtimeValueHash("gentle-ai.sdd-runtime-reset-request/v1", request) != record.RequestDigest {
 			return errors.New("SDD runtime reset request digest does not match record")
 		}
+	case runtimeOperationRescope:
+		if record.Rescope == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil {
+			return errors.New("invalid SDD runtime rescope record shape") // refusal:by-design world-action: this shape is constructed by the authority itself, so a violation is a mutated record and the exit is restoring the store
+		}
+		event := record.Rescope
+		if !runtimeRevisionPattern.MatchString(event.PreviousObjectiveID) || event.PreviousGeneration < 1 ||
+			event.PreviousMaxAttempts < 1 || event.PreviousMaxAttempts > maximumRuntimeAttemptLimit ||
+			event.PreviousMaxChangedLines < 1 || event.PreviousMaxChangedLines > maximumRuntimeChangedLines ||
+			!runtimeRevisionPattern.MatchString(event.RescopeCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.RescopeCandidateTree) ||
+			!runtimeRevisionPattern.MatchString(event.ObjectiveID) || event.ObjectiveGeneration < 1 ||
+			validateRuntimeText(event.WorkUnit, 160) != nil || validateRuntimeText(event.EvidenceGoal, 240) != nil ||
+			event.MaxAttempts < 1 || event.MaxAttempts > maximumRuntimeAttemptLimit ||
+			event.MaxChangedLines < 1 || event.MaxChangedLines > maximumRuntimeChangedLines ||
+			// The shape-level narrowing check below defends against a record
+			// whose OWN fields are internally inconsistent; it is not the
+			// real narrowing guard. applyRuntimeRescopeEvent independently
+			// recomputes narrowing against the REPLAYED objective, which a
+			// forged PreviousMax* cannot fool (see its doc comment).
+			event.MaxAttempts > event.PreviousMaxAttempts || event.MaxChangedLines > event.PreviousMaxChangedLines ||
+			validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil {
+			return errors.New("invalid SDD runtime rescope event") // refusal:by-design world-action: this shape (including narrowing) is enforced before publication, so a violation is a mutated record and the exit is restoring the store
+		}
+		request := RescopeObjectiveRequest{
+			ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID,
+			WorkUnit: event.WorkUnit, EvidenceGoal: event.EvidenceGoal,
+			MaxAttempts: event.MaxAttempts, MaxChangedLines: event.MaxChangedLines,
+			Reason: event.Reason, Actor: event.Actor,
+		}
+		if runtimeValueHash("gentle-ai.sdd-runtime-rescope-request/v1", request) != record.RequestDigest {
+			return errors.New("SDD runtime rescope request digest does not match record") // refusal:by-design world-action: the digest is computed from the same request at write time, so a mismatch is a mutated record and the exit is restoring the store
+		}
 	case runtimeOperationBind:
-		if record.Binding == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Advance != nil || record.Receipt != nil {
+		if record.Binding == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Receipt != nil {
 			return errors.New("invalid SDD runtime binding record shape")
 		}
 		event := record.Binding
@@ -1518,7 +2036,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime binding request digest does not match record")
 		}
 	case runtimeOperationReceipt:
-		if record.Receipt == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Advance != nil || record.Binding != nil {
+		if record.Receipt == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil {
 			return errors.New("invalid SDD runtime receipt record shape") // refusal:by-design world-action: this shape is constructed by the authority itself, so a violation is a mutated record and the exit is restoring the store
 		}
 		event := record.Receipt
@@ -1579,6 +2097,27 @@ func normalizeBeginAttemptRequest(request BeginAttemptRequest) (BeginAttemptRequ
 	return request, nil
 }
 
+// runtimeRevisionShapeObservation describes a rejected sha256:<64-lowercase-hex>
+// candidate without ever echoing it verbatim: the value may be long or, for a
+// caller that pasted the wrong secret, sensitive. It reports only what the
+// exact-match failure cannot otherwise tell an operator — length, whether the
+// sha256: prefix is present, and whether the remainder contains characters
+// outside 0-9a-f (which catches the common case of uppercase hex from
+// PowerShell `Get-FileHash` or `shasum -a 256` output).
+func runtimeRevisionShapeObservation(value string) string {
+	const prefix = "sha256:"
+	hasPrefix := strings.HasPrefix(value, prefix)
+	body := strings.TrimPrefix(value, prefix)
+	nonLowercaseHex := false
+	for _, r := range body {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			nonLowercaseHex = true
+			break
+		}
+	}
+	return fmt.Sprintf("received length=%d, sha256: prefix=%t, non-lowercase-hex characters=%t", len(value), hasPrefix, nonLowercaseHex)
+}
+
 func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptRequest, error) {
 	if request.ExpectedRevision == "" || !runtimeRevisionPattern.MatchString(request.ExpectedRevision) {
 		return FinishAttemptRequest{}, errors.New("finish requires an exact expected runtime revision")
@@ -1590,7 +2129,10 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 		return FinishAttemptRequest{}, errors.New("outcome must be failed, interrupted, or passed")
 	}
 	if !runtimeRevisionPattern.MatchString(request.EvidenceRevision) {
-		return FinishAttemptRequest{}, errors.New("evidence_revision must be sha256")
+		return FinishAttemptRequest{}, fmt.Errorf(
+			"evidence_revision must be sha256:<64-lowercase-hex> (%s); rerun `gentle-ai sdd-attempt finish` or `gentle-ai sdd-attempt settle` with --evidence-revision sha256:<64-lowercase-hex>",
+			runtimeRevisionShapeObservation(request.EvidenceRevision),
+		)
 	}
 	if err := validateRuntimeText(request.Diagnosis, 500); err != nil {
 		return FinishAttemptRequest{}, fmt.Errorf("invalid diagnosis: %w", err)
@@ -1604,34 +2146,55 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 	if err := validateRuntimeText(request.ProcessEvidence, 500); err != nil {
 		return FinishAttemptRequest{}, fmt.Errorf("invalid process_evidence: %w", err)
 	}
-	remediationFields := 0
-	for _, value := range []string{request.ExpectedBindingRevision, request.SuccessorLineageID, request.RemediatesEvidenceRevision} {
+	managedRemediationFields := 0
+	for _, value := range []string{request.ExpectedBindingRevision, request.SuccessorLineageID} {
 		if value != "" {
-			remediationFields++
+			managedRemediationFields++
 		}
 	}
-	if remediationFields != 0 && remediationFields != 3 {
+	if managedRemediationFields != 0 && (managedRemediationFields != 2 || request.RemediatesEvidenceRevision == "") {
 		return FinishAttemptRequest{}, errors.New("remediation successor requires expected_binding_revision, successor_lineage_id, and remediates_evidence_revision together")
 	}
-	if remediationFields == 3 {
+	if managedRemediationFields == 2 {
 		if request.Outcome != AttemptPassed {
 			return FinishAttemptRequest{}, errors.New("an atomic remediation successor is valid only for a passed attempt")
 		}
 		if !runtimeRevisionPattern.MatchString(request.ExpectedBindingRevision) {
-			return FinishAttemptRequest{}, errors.New("expected_binding_revision must be sha256 for atomic remediation")
+			return FinishAttemptRequest{}, fmt.Errorf(
+				"expected_binding_revision must be sha256:<64-lowercase-hex> for atomic remediation (%s); rerun `gentle-ai sdd-attempt finish` with --expected-binding-revision sha256:<64-lowercase-hex> --successor-lineage <lineage> --remediates-evidence-revision sha256:<64-lowercase-hex>",
+				runtimeRevisionShapeObservation(request.ExpectedBindingRevision),
+			)
 		}
 		if !validReviewBindingLineage(request.SuccessorLineageID) {
 			return FinishAttemptRequest{}, errors.New("successor_lineage_id must be a canonical lowercase lineage")
 		}
 		if !runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) {
-			return FinishAttemptRequest{}, errors.New("remediates_evidence_revision must be sha256")
+			return FinishAttemptRequest{}, fmt.Errorf(
+				"remediates_evidence_revision must be sha256:<64-lowercase-hex> (%s); rerun `gentle-ai sdd-attempt finish` with --expected-binding-revision sha256:<64-lowercase-hex> --successor-lineage <lineage> --remediates-evidence-revision sha256:<64-lowercase-hex>",
+				runtimeRevisionShapeObservation(request.RemediatesEvidenceRevision),
+			)
+		}
+	} else if request.RemediatesEvidenceRevision != "" {
+		if request.Outcome != AttemptPassed {
+			// refusal:by-design operator-knowledge: the caller alone knows whether its correction passed and must supply that outcome truthfully.
+			return FinishAttemptRequest{}, errors.New("unmanaged remediation is valid only for a passed attempt")
+		}
+		if !runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) {
+			return FinishAttemptRequest{}, fmt.Errorf(
+				"remediates_evidence_revision must be sha256:<64-lowercase-hex> for unmanaged remediation (%s); rerun `gentle-ai sdd-attempt finish` with --remediates-evidence-revision sha256:<64-lowercase-hex>",
+				runtimeRevisionShapeObservation(request.RemediatesEvidenceRevision),
+			)
 		}
 	}
 	return request, nil
 }
 
 func finishRequestsRemediation(request FinishAttemptRequest) bool {
-	return request.ExpectedBindingRevision != "" || request.SuccessorLineageID != "" || request.RemediatesEvidenceRevision != ""
+	return request.ExpectedBindingRevision != "" || request.SuccessorLineageID != ""
+}
+
+func finishRequestsUnmanagedRemediation(request FinishAttemptRequest) bool {
+	return request.ExpectedBindingRevision == "" && request.SuccessorLineageID == "" && request.RemediatesEvidenceRevision != ""
 }
 
 func normalizeResetObjectiveRequest(request ResetObjectiveRequest) (ResetObjectiveRequest, error) {
@@ -1646,6 +2209,40 @@ func normalizeResetObjectiveRequest(request ResetObjectiveRequest) (ResetObjecti
 	}
 	if err := validateRuntimeText(request.Actor, 128); err != nil {
 		return ResetObjectiveRequest{}, fmt.Errorf("invalid reset actor: %w", err)
+	}
+	return request, nil
+}
+
+// normalizeRescopeObjectiveRequest mirrors normalizeResetObjectiveRequest's
+// CAS/audit-field validation, plus BeginAttemptRequest's work-unit-scope
+// validation for the successor scope -- except MaxAttempts/MaxChangedLines
+// are never defaulted when zero: an audited narrowing rescope must state its
+// narrower ceiling explicitly, not silently inherit
+// DefaultRuntimeAttemptLimit/DefaultRuntimeChangedLines.
+func normalizeRescopeObjectiveRequest(request RescopeObjectiveRequest) (RescopeObjectiveRequest, error) {
+	if request.ExpectedRevision == "" || !runtimeRevisionPattern.MatchString(request.ExpectedRevision) {
+		return RescopeObjectiveRequest{}, errors.New("rescope requires an exact expected runtime revision") // refusal:by-design operator-knowledge: only the caller knows the intended expected-revision token; retry with the exact `sdd-attempt status` revision
+	}
+	if !runtimeRequestIDPattern.MatchString(request.RequestID) {
+		return RescopeObjectiveRequest{}, errors.New("request_id must be a canonical lowercase identifier") // refusal:by-design operator-knowledge: only the caller can supply a canonical lowercase request identifier
+	}
+	if err := validateRuntimeText(request.WorkUnit, 160); err != nil {
+		return RescopeObjectiveRequest{}, fmt.Errorf("invalid work_unit: %w", err)
+	}
+	if err := validateRuntimeText(request.EvidenceGoal, 240); err != nil {
+		return RescopeObjectiveRequest{}, fmt.Errorf("invalid evidence_goal: %w", err)
+	}
+	if request.MaxAttempts < 1 || request.MaxAttempts > maximumRuntimeAttemptLimit {
+		return RescopeObjectiveRequest{}, fmt.Errorf("max_attempts must be within 1..%d", maximumRuntimeAttemptLimit)
+	}
+	if request.MaxChangedLines < 1 || request.MaxChangedLines > maximumRuntimeChangedLines {
+		return RescopeObjectiveRequest{}, fmt.Errorf("max_changed_lines must be within 1..%d", maximumRuntimeChangedLines)
+	}
+	if err := validateRuntimeText(request.Reason, 500); err != nil {
+		return RescopeObjectiveRequest{}, fmt.Errorf("invalid rescope reason: %w", err)
+	}
+	if err := validateRuntimeText(request.Actor, 128); err != nil {
+		return RescopeObjectiveRequest{}, fmt.Errorf("invalid rescope actor: %w", err)
 	}
 	return request, nil
 }
@@ -1720,13 +2317,9 @@ func validHarnessDisposition(disposition HarnessDisposition) bool {
 
 func captureRuntimeCandidate(ctx context.Context, repo string) (reviewtransaction.Snapshot, error) {
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
-	intended, err := builder.DiscoverIntendedUntracked(ctx)
-	if err != nil {
-		return reviewtransaction.Snapshot{}, err
-	}
 	return builder.Build(ctx, reviewtransaction.Target{
 		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace,
-		IntendedUntracked: intended,
+		IntendedUntracked: []string{},
 	})
 }
 
@@ -1736,13 +2329,9 @@ func captureRuntimeCandidate(ctx context.Context, repo string) (reviewtransactio
 // a terminal (no active attempt) objective scope.
 func captureRuntimeTerminalCandidate(ctx context.Context, store RuntimeStore, beginCandidateTree string) (reviewtransaction.Snapshot, error) {
 	builder := reviewtransaction.SnapshotBuilder{Repo: store.Repo}
-	intended, err := builder.DiscoverIntendedUntracked(ctx)
-	if err != nil {
-		return reviewtransaction.Snapshot{}, fmt.Errorf("discover SDD runtime intended-untracked paths: %w", err)
-	}
 	return builder.Build(ctx, reviewtransaction.Target{
 		Kind: reviewtransaction.TargetBaseWorkspaceOverlay, BaseRef: beginCandidateTree,
-		Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: intended,
+		Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
 	})
 }
 

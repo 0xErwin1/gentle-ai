@@ -56,6 +56,51 @@ func TestRunSDDAttemptLifecycleIsMachineReadableAndResetExplicit(t *testing.T) {
 	}
 }
 
+// TestRunSDDAttemptRescopeCarriesHistoryForwardThroughTheCLI is the CLI
+// dispatch proof for the `rescope` operation (#2298, #2296 part 2): a
+// terminal, zero-drift, non-decision, non-complete objective is narrowed to
+// a maintainer-authorized successor without losing history.
+func TestRunSDDAttemptRescopeCarriesHistoryForwardThroughTheCLI(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	change := "cli-rescope"
+
+	started := runSDDAttemptStatus(t, []string{
+		"begin", "--cwd", repo, "--change", change, "--expected-revision=", "--request-id", "rescope-begin-1",
+		"--work-unit", "oversized-scope", "--evidence-goal", "prove CLI rescope", "--max-attempts", "2", "--max-changed-lines", "400",
+	})
+	interrupted := runSDDAttemptStatus(t, []string{
+		"finish", "--cwd", repo, "--change", change, "--expected-revision", started.Revision, "--request-id", "rescope-finish-1",
+		"--outcome", "interrupted", "--evidence-revision", cliAttemptHash('d'),
+		"--diagnosis", "reverted every temporary change back to the exact original candidate", "--harness-disposition", "invalidated",
+		"--cleanup-evidence", "cleanup completed", "--process-evidence", "process scan found no descendants",
+	})
+	if interrupted.CumulativeChangedLines != 0 || interrupted.DecisionRequired || interrupted.Complete {
+		t.Fatalf("pre-rescope CLI status = %#v", interrupted)
+	}
+
+	rescoped := runSDDAttemptStatus(t, []string{
+		"rescope", "--cwd", repo, "--change", change, "--expected-revision", interrupted.Revision, "--request-id", "rescope-1",
+		"--work-unit", "narrower-scope", "--evidence-goal", "prove a narrower CLI rescope", "--max-attempts", "2", "--max-changed-lines", "100",
+		"--reason", "maintainer split the oversized objective into a narrower successor", "--actor", "maintainer",
+	})
+	if rescoped.Objective == nil || rescoped.Objective.WorkUnit != "narrower-scope" || rescoped.Objective.MaxChangedLines != 100 ||
+		rescoped.CumulativeAttempts != 1 || rescoped.CumulativeChangedLines != 0 || rescoped.LifetimeAttempts != 1 ||
+		rescoped.NextAction != sddstatus.RuntimeActionBegin {
+		t.Fatalf("rescope CLI status = %#v", rescoped)
+	}
+	if rescoped.LastRescope == nil || rescoped.LastRescope.MaxChangedLines != 100 {
+		t.Fatalf("rescope CLI audit context = %#v", rescoped.LastRescope)
+	}
+
+	began := runSDDAttemptStatus(t, []string{
+		"begin", "--cwd", repo, "--change", change, "--expected-revision", rescoped.Revision, "--request-id", "rescope-begin-2",
+		"--work-unit", "narrower-scope", "--evidence-goal", "prove a narrower CLI rescope", "--max-attempts", "2", "--max-changed-lines", "100",
+	})
+	if began.ActiveAttempt == nil || began.ActiveAttempt.Outcome != sddstatus.AttemptRunning || began.ActiveAttempt.Ordinal != 2 {
+		t.Fatalf("begin after CLI rescope = %#v", began)
+	}
+}
+
 func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	tests := []struct {
@@ -63,15 +108,16 @@ func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 		args []string
 		want string
 	}{
-		{name: "missing operation", args: nil, want: "requires status, begin, finish, reset, acquire, or settle"},
+		{name: "missing operation", args: nil, want: "requires status, begin, finish, reset, rescope, acquire, or settle"},
 		// The no-args refusal already enumerates every valid operation; the
 		// unknown-operation refusal must do the same instead of naming only
 		// the bad value with no route to the valid set.
-		{name: "unknown operation", args: []string{"begn"}, want: `unknown sdd-attempt operation "begn"; want one of status, begin, finish, reset, acquire, or settle`},
+		{name: "unknown operation", args: []string{"begn"}, want: `unknown sdd-attempt operation "begn"; want one of status, begin, finish, reset, rescope, acquire, or settle`},
 		{name: "missing change", args: []string{"status", "--cwd", repo}, want: "--change"},
 		{name: "unknown flag", args: []string{"status", "--cwd", repo, "--change", "thin", "--mystery"}, want: "flag provided but not defined"},
 		{name: "irrelevant flag", args: []string{"status", "--cwd", repo, "--change", "thin", "--outcome", "failed"}, want: "flag provided but not defined"},
 		{name: "missing begin CAS", args: []string{"begin", "--cwd", repo, "--change", "thin", "--request-id", "begin", "--work-unit", "unit", "--evidence-goal", "goal"}, want: "--expected-revision"},
+		{name: "missing rescope scope", args: []string{"rescope", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('e'), "--request-id", "rescope", "--reason", "narrowing", "--actor", "maintainer"}, want: "--work-unit"},
 		{name: "missing finish evidence", args: []string{"finish", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('b'), "--request-id", "finish", "--outcome", "failed", "--diagnosis", "diagnosis", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup", "--process-evidence", "process"}, want: "--evidence-revision"},
 		{name: "partial remediation successor", args: []string{"finish", "--cwd", repo, "--change", "thin", "--expected-revision", cliAttemptHash('b'), "--request-id", "finish", "--outcome", "passed", "--evidence-revision", cliAttemptHash('c'), "--diagnosis", "diagnosis", "--harness-disposition", "reused", "--cleanup-evidence", "cleanup", "--process-evidence", "process", "--successor-lineage", "review-successor"}, want: "remediation successor requires --expected-binding-revision, --successor-lineage, and --remediates-evidence-revision together"},
 		{name: "positional argument", args: []string{"status", "--cwd", repo, "--change", "thin", "extra"}, want: "unexpected sdd-attempt argument"},
@@ -94,7 +140,7 @@ func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 // all four). Mirrors the reviewIntegrationGatesInOrder /
 // reviewIntegrationGateNames pattern in review_operation_contract.go.
 func TestSDDAttemptOperationsCanonicalSourceEnumeratesConsistently(t *testing.T) {
-	want := []string{"status", "begin", "finish", "reset", "acquire", "settle"}
+	want := []string{"status", "begin", "finish", "reset", "rescope", "acquire", "settle"}
 	if !reflect.DeepEqual(sddAttemptOperationsInOrder, want) {
 		t.Fatalf("sddAttemptOperationsInOrder = %v, want %v", sddAttemptOperationsInOrder, want)
 	}
@@ -106,8 +152,8 @@ func TestSDDAttemptOperationsCanonicalSourceEnumeratesConsistently(t *testing.T)
 	if validSDDAttemptOperation("begn") {
 		t.Fatal(`validSDDAttemptOperation("begn") = true, want false`)
 	}
-	if got := joinSDDAttemptOperations(); got != "status, begin, finish, reset, acquire, or settle" {
-		t.Fatalf("joinSDDAttemptOperations() = %q, want %q", got, "status, begin, finish, reset, acquire, or settle")
+	if got := joinSDDAttemptOperations(); got != "status, begin, finish, reset, rescope, acquire, or settle" {
+		t.Fatalf("joinSDDAttemptOperations() = %q, want %q", got, "status, begin, finish, reset, rescope, acquire, or settle")
 	}
 }
 
@@ -291,5 +337,35 @@ func TestRunSDDAttemptStatusPathUsesRepositoryCommonDir(t *testing.T) {
 	fromLinked := runSDDAttemptStatus(t, []string{"status", "--cwd", linked, "--change", "linked-attempt"})
 	if fromLinked.Revision != started.Revision || fromLinked.ActiveAttempt == nil || fromLinked.ActiveAttempt.Ordinal != 1 {
 		t.Fatalf("linked status = %#v, want revision %s", fromLinked, started.Revision)
+	}
+}
+
+// TestRunSDDAttemptTrimsWhitespaceFromRevisionShapedFlags is the RED
+// reproduction of the CLI-boundary half of #2294: a reporter pasting
+// --evidence-revision from PowerShell `Get-FileHash` or `shasum` output often
+// carries incidental leading/trailing whitespace, which the sha256:<64-hex>
+// pattern then rejects for a reason that has nothing to do with the actual
+// evidence-revision defect being reported. The CLI boundary must trim
+// identity/revision-shaped flag values before they ever reach sddstatus,
+// which stays a pure validator with no normalization of its own.
+func TestRunSDDAttemptTrimsWhitespaceFromRevisionShapedFlags(t *testing.T) {
+	repo := initReviewCLIRepo(t)
+	hash := cliAttemptHash('a')
+	padded := "  " + hash + "\n"
+
+	started := runSDDAttemptStatus(t, []string{
+		"begin", "--cwd", repo, "--change", "cli-trim", "--expected-revision=", "--request-id", "trim-begin",
+		"--work-unit", "trim-unit", "--evidence-goal", "prove trimmed CLI revisions", "--max-attempts", "1", "--max-changed-lines", "10",
+	})
+
+	finished := runSDDAttemptStatus(t, []string{
+		"finish", "--cwd", repo, "--change", "cli-trim", "--expected-revision", started.Revision, "--request-id", "trim-finish",
+		"--outcome", "failed", "--evidence-revision", padded,
+		"--diagnosis", "diagnosis", "--harness-disposition", "reused",
+		"--cleanup-evidence", "cleanup", "--process-evidence", "process",
+	})
+	last := finished.Attempts[len(finished.Attempts)-1]
+	if last.EvidenceRevision != hash {
+		t.Fatalf("finish with a whitespace-padded --evidence-revision = %#v, want trimmed evidence_revision %q", last, hash)
 	}
 }

@@ -238,10 +238,34 @@ func TestReviewIntegrationOperationRegistryOwnsPublishedAndFailurePolicy(t *test
 			t.Fatalf("duplicate operation name %q", metadata.Operation)
 		}
 		commands[metadata.Command], operations[metadata.Operation] = struct{}{}, struct{}{}
-		byCommand, commandOK := reviewIntegrationOperationByCommand(metadata.Command)
 		byName, nameOK := reviewIntegrationOperationByName(metadata.Operation)
-		if !commandOK || !nameOK || byCommand.Operation != metadata.Operation || byName.Command != metadata.Command ||
-			!validReviewIntegrationFailureOperation(metadata.Operation) || reviewLockOperationLabel(metadata.Operation) != metadata.Label {
+		if !nameOK || byName.Command != metadata.Command || reviewLockOperationLabel(metadata.Operation) != metadata.Label {
+			t.Fatalf("operation metadata does not drive every policy lookup: %#v", metadata)
+		}
+		byCommand, commandOK := reviewIntegrationOperationByCommand(metadata.Command)
+		if !metadata.Negotiated {
+			// A non-negotiated row exists for exactly one reason: to own the
+			// runnable CLI verb for an operation the status schemas publish as
+			// an execute transition. It must stay out of every negotiated
+			// surface -- the capabilities `operations` array and the failure
+			// envelope's `operation` enum are both published contracts with a
+			// closed vocabulary and a pinned length -- and it must not carry
+			// negotiated flag metadata nothing consumes and nothing verifies,
+			// because unverified metadata rots into a confident lie.
+			if commandOK {
+				t.Fatalf("non-negotiated operation %q is routed as a negotiated command", metadata.Operation)
+			}
+			if validReviewIntegrationFailureOperation(metadata.Operation) {
+				t.Fatalf("non-negotiated operation %q widened the published failure operation enum", metadata.Operation)
+			}
+			if len(metadata.ValueFlags) != 0 || len(metadata.BoolFlags) != 0 || len(metadata.IntFlags) != 0 ||
+				metadata.MutatesAuthority || metadata.JoinOnTimeout || metadata.TimeoutRetryable || metadata.ReadOnlyFlag != "" {
+				t.Fatalf("non-negotiated operation %q carries negotiated policy metadata nothing consumes: %#v", metadata.Operation, metadata)
+			}
+			continue
+		}
+		if !commandOK || byCommand.Operation != metadata.Operation ||
+			!validReviewIntegrationFailureOperation(metadata.Operation) {
 			t.Fatalf("operation metadata does not drive every policy lookup: %#v", metadata)
 		}
 		shape := reviewIntegrationOperationFlagShape(metadata.Operation)
@@ -629,7 +653,6 @@ func TestNegotiatedReadOnlyCatchAllStaysContentFreeAndNeverAbsorbsProcessControl
 	if failure.Message != "The negotiated read-only review operation failed safely." {
 		t.Fatalf("read-only catch-all message is not content-free: %q", failure.Message)
 	}
-
 	control := fmt.Errorf("inventory review authority: %w", &reviewtransaction.GitProcessControlError{
 		Args: []string{"status", "--porcelain=v2"}, Cause: errors.New("NtResumeProcess status 0xC0000022"),
 	})
