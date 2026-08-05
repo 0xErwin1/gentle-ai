@@ -169,6 +169,13 @@ func TestExecute_RegisteredNotMaterializedIsExecutable(t *testing.T) {
 	execCalled := false
 	execCommand = func(name string, args ...string) *exec.Cmd {
 		execCalled = true
+		pkgDir := filepath.Join(opencodeDir, "node_modules", "opencode-sdd-engram-manage")
+		if err := os.MkdirAll(pkgDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(pkgDir, "package.json"), []byte(`{"version":"1.2.0"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
 		return mockCmd("true")
 	}
 
@@ -187,8 +194,58 @@ func TestExecute_RegisteredNotMaterializedIsExecutable(t *testing.T) {
 	if report.Results[0].Status != UpgradeSucceeded {
 		t.Fatalf("status = %q, want %q", report.Results[0].Status, UpgradeSucceeded)
 	}
+	if report.Results[0].NewVersion != "1.2.0" {
+		t.Fatalf("new version = %q, want observed materialized version 1.2.0", report.Results[0].NewVersion)
+	}
 	if report.BackupID == "" {
 		t.Fatal("BackupID should be populated before executing registered-pending plugin upgrade")
+	}
+}
+
+func TestExecute_OpenCodePluginNoMaterializationIsSkipped(t *testing.T) {
+	origExecCommand := execCommand
+	origHomeDir := openCodeHomeDir
+	origLookPath := lookPathCommand
+	t.Cleanup(func() {
+		execCommand = origExecCommand
+		openCodeHomeDir = origHomeDir
+		lookPathCommand = origLookPath
+	})
+
+	home := t.TempDir()
+	opencodeDir := filepath.Join(home, ".config", "opencode")
+	if err := os.MkdirAll(opencodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(opencodeDir, "tui.json"), []byte(`{"plugin":["opencode-subagent-statusline"]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	openCodeHomeDir = func() (string, error) { return home, nil }
+	lookPathCommand = func(file string) (string, error) {
+		if file == "npm" {
+			return "/usr/bin/npm", nil
+		}
+		return "", errors.New("not found")
+	}
+	execCommand = func(name string, args ...string) *exec.Cmd { return mockCmd("true") }
+
+	result := makeResult("opencode-subagent-statusline", update.RegisteredNotMaterialized, "0.7.1", "0.8.0", update.InstallOpenCodePlugin)
+	result.Tool.NpmPackage = "opencode-subagent-statusline"
+	toolResult := executeOne(context.Background(), result, linuxProfile(), false)
+
+	if toolResult.Status != UpgradeSkipped {
+		t.Fatalf("status = %q, want %q", toolResult.Status, UpgradeSkipped)
+	}
+	if toolResult.Err != nil {
+		t.Fatalf("Err = %v, want nil for actionable manual fallback", toolResult.Err)
+	}
+	if toolResult.NewVersion != "" {
+		t.Fatalf("new version = %q, want empty when materialization is unverified", toolResult.NewVersion)
+	}
+	for _, want := range []string{"expected version \"0.8.0\"", "absent", opencodeDir} {
+		if !strings.Contains(toolResult.ManualHint, want) {
+			t.Errorf("manual hint %q does not contain %q", toolResult.ManualHint, want)
+		}
 	}
 }
 

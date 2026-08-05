@@ -52,8 +52,17 @@ var (
 // server or CDN could still serve a malicious script within this size limit.
 const maxScriptSize = 1 * 1024 * 1024 // 1 MB
 
+// strategyOutcome carries the result data that is only available after a
+// strategy runs. OpenCode plugin upgrades populate observedVersion from the
+// installed package manifest instead of reusing remote metadata.
+type strategyOutcome struct {
+	exitRequested   bool
+	observedVersion string
+}
+
 // runStrategy executes the upgrade for a single tool using the appropriate strategy
-// for the given platform profile.
+// for the given platform profile. It preserves the historical return contract
+// for callers that only need the exit-request flag.
 //
 // Strategy routing:
 //   - brew profile → brewUpgrade (regardless of tool's declared method)
@@ -66,16 +75,21 @@ const maxScriptSize = 1 * 1024 * 1024 // 1 MB
 //   - OpenCode plugin method → update materialized package in ~/.config/opencode when possible
 //   - unknown method → manualFallback with explicit message
 func runStrategy(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination ...string) (bool, error) {
+	outcome, err := runStrategyWithOutcome(ctx, r, profile, preflightDestination...)
+	return outcome.exitRequested, err
+}
+
+func runStrategyWithOutcome(ctx context.Context, r update.UpdateResult, profile system.PlatformProfile, preflightDestination ...string) (strategyOutcome, error) {
 	ownership := update.HomebrewNone
 	if profile.PackageManager == "brew" && r.Tool.InstallMethod != update.InstallOpenCodePlugin {
 		var err error
 		ownership, err = homebrewOwnershipDetector(r.Tool.Name)
 		if err != nil {
-			return false, fmt.Errorf("detect Homebrew ownership for %s: %w", r.Tool.Name, err)
+			return strategyOutcome{}, fmt.Errorf("detect Homebrew ownership for %s: %w", r.Tool.Name, err)
 		}
 	}
 	if isBetaGentleAIUpgrade(r) && profile.OS != "windows" && ownership == update.HomebrewNone {
-		return false, goInstallMainUpgrade(r.Tool)
+		return strategyOutcome{}, goInstallMainUpgrade(r.Tool)
 	}
 
 	method := effectiveMethod(r.Tool, profile)
@@ -85,11 +99,11 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 
 	switch method {
 	case update.InstallBrew:
-		return false, brewUpgrade(ctx, r, ownership)
+		return strategyOutcome{}, brewUpgrade(ctx, r, ownership)
 	case update.InstallGoInstall:
-		return false, goInstallUpgrade(ctx, r, profile, firstString(preflightDestination))
+		return strategyOutcome{}, goInstallUpgrade(ctx, r, profile, firstString(preflightDestination))
 	case update.InstallBinary:
-		return false, binaryUpgrade(ctx, r, profile)
+		return strategyOutcome{}, binaryUpgrade(ctx, r, profile)
 	case update.InstallScript:
 		// GGA's install.sh expects to run from within a cloned repo — it references
 		// $SCRIPT_DIR/bin/gga and $SCRIPT_DIR/lib/*.sh. The generic scriptUpgrade
@@ -97,52 +111,53 @@ func runStrategy(ctx context.Context, r update.UpdateResult, profile system.Plat
 		// breaks because those relative paths don't exist. Use the git clone approach
 		// (same as the initial install resolver) for GGA specifically.
 		if r.Tool.Name == "gga" {
-			return false, ggaScriptUpgrade(ctx, r)
+			return strategyOutcome{}, ggaScriptUpgrade(ctx, r)
 		}
-		return false, scriptUpgrade(ctx, r, profile)
+		return strategyOutcome{}, scriptUpgrade(ctx, r, profile)
 	case update.InstallOpenCodePlugin:
-		return false, opencodePluginUpgrade(ctx, r)
+		observedVersion, err := opencodePluginUpgrade(ctx, r)
+		return strategyOutcome{observedVersion: observedVersion}, err
 	default:
-		return false, &ManualFallbackError{
+		return strategyOutcome{}, &ManualFallbackError{
 			Hint: fmt.Sprintf("upgrade %q: unsupported install method %q — please update manually. See: https://github.com/Gentleman-Programming/%s",
 				r.Tool.Name, method, r.Tool.Repo),
 		}
 	}
 }
 
-func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) error {
+func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) (string, error) {
 	pkg := strings.TrimSpace(r.Tool.NpmPackage)
 	if pkg == "" {
-		return &ManualFallbackError{Hint: openCodePluginManualHint(r)}
+		return "", &ManualFallbackError{Hint: openCodePluginManualHint(r)}
 	}
 
 	homeDir, err := openCodeHomeDir()
 	if err != nil || strings.TrimSpace(homeDir) == "" {
-		return &ManualFallbackError{Hint: fmt.Sprintf("%s Could not resolve the user home directory; update %s manually.", openCodePluginManualHint(r), pkg)}
+		return "", &ManualFallbackError{Hint: fmt.Sprintf("%s Could not resolve the user home directory; update %s manually.", openCodePluginManualHint(r), pkg)}
 	}
 
 	opencodeDir := filepath.Join(homeDir, ".config", "opencode")
 	info, err := os.Stat(opencodeDir)
 	if err != nil || !info.IsDir() {
-		return &ManualFallbackError{Hint: fmt.Sprintf("%s OpenCode config directory was not found at %s; %s is not installed/materialized yet.", openCodePluginManualHint(r), opencodeDir, pkg)}
+		return "", &ManualFallbackError{Hint: fmt.Sprintf("%s OpenCode config directory was not found at %s; %s is not installed/materialized yet.", openCodePluginManualHint(r), opencodeDir, pkg)}
 	}
 
 	materialized, registered, err := openCodePluginRegisteredOrMaterialized(opencodeDir, pkg)
 	if err != nil {
-		return fmt.Errorf("inspect OpenCode plugin %s: %w", pkg, err)
+		return "", fmt.Errorf("inspect OpenCode plugin %s: %w", pkg, err)
 	}
 	if !materialized && !registered && r.Status != update.RegisteredNotMaterialized {
-		return &ManualFallbackError{Hint: fmt.Sprintf("%s %s is not registered in tui.json and is not present in node_modules; start/reload OpenCode first so it materializes the plugin.", openCodePluginManualHint(r), pkg)}
+		return "", &ManualFallbackError{Hint: fmt.Sprintf("%s %s is not registered in tui.json and is not present in node_modules; start/reload OpenCode first so it materializes the plugin.", openCodePluginManualHint(r), pkg)}
 	}
 
 	pm, err := selectOpenCodePackageManager(opencodeDir)
 	if err != nil {
-		return &ManualFallbackError{Hint: fmt.Sprintf("OpenCode plugin %s can be upgraded from %s, but no supported package manager is available in PATH. Install bun or npm, then run update tools again.", pkg, opencodeDir)}
+		return "", &ManualFallbackError{Hint: fmt.Sprintf("OpenCode plugin %s can be upgraded from %s, but no supported package manager is available in PATH. Install bun or npm, then run update tools again.", pkg, opencodeDir)}
 	}
 
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return "", ctx.Err()
 	default:
 	}
 
@@ -154,7 +169,7 @@ func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) error {
 	case "npm":
 		cmd = execCommand("npm", append([]string{"install", "--save", "--no-audit", "--no-fund"}, targets...)...)
 	default:
-		return &ManualFallbackError{Hint: fmt.Sprintf("unsupported OpenCode package manager %q for %s", pm, pkg)}
+		return "", &ManualFallbackError{Hint: fmt.Sprintf("unsupported OpenCode package manager %q for %s", pm, pkg)}
 	}
 	cmd.Dir = opencodeDir
 	cmd.Stdin = nil
@@ -164,7 +179,7 @@ func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) error {
 		if pm == "npm" && npmErrorCode(outStr) == "ERESOLVE" {
 			select {
 			case <-ctx.Done():
-				return ctx.Err()
+				return "", ctx.Err()
 			default:
 			}
 			fmt.Fprintln(os.Stderr, "WARNING: npm reported an ERESOLVE peer dependency conflict; retrying with --legacy-peer-deps")
@@ -173,16 +188,56 @@ func opencodePluginUpgrade(ctx context.Context, r update.UpdateResult) error {
 			retryCmd.Stdin = nil
 			retryCmd.Env = openCodePluginUpgradeEnv(retryCmd.Env)
 			if retryOut, retryErr := retryCmd.CombinedOutput(); retryErr != nil {
-				return fmt.Errorf("%s upgrade %s in %s: retry with --legacy-peer-deps failed: %w (retry output: %s); original error: %v (original output: %s)", pm, pkg, opencodeDir, retryErr, string(retryOut), err, outStr)
+				return "", fmt.Errorf("%s upgrade %s in %s: retry with --legacy-peer-deps failed: %w (retry output: %s); original error: %v (original output: %s)", pm, pkg, opencodeDir, retryErr, string(retryOut), err, outStr)
 			}
 		} else {
-			return fmt.Errorf("%s upgrade %s in %s: %w (output: %s)", pm, pkg, opencodeDir, err, outStr)
+			return "", fmt.Errorf("%s upgrade %s in %s: %w (output: %s)", pm, pkg, opencodeDir, err, outStr)
 		}
 	}
 	if err := clearOpenCodePluginPackageCache(homeDir, pkg); err != nil {
-		return fmt.Errorf("clear OpenCode package cache for %s: %w", pkg, err)
+		return "", fmt.Errorf("clear OpenCode package cache for %s: %w", pkg, err)
 	}
-	return nil
+
+	observedVersion, err := inspectOpenCodePluginVersion(opencodeDir, pkg)
+	if err != nil || observedVersion != strings.TrimSpace(r.LatestVersion) {
+		return "", &ManualFallbackError{Hint: openCodePluginVerificationHint(r, pkg, opencodeDir, observedVersion, err)}
+	}
+	return observedVersion, nil
+}
+
+func inspectOpenCodePluginVersion(opencodeDir, pkg string) (string, error) {
+	manifestPath := filepath.Join(opencodeDir, "node_modules", pkg, "package.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("installed manifest is absent at %s", manifestPath)
+		}
+		return "", fmt.Errorf("installed manifest could not be read at %s: %w", manifestPath, err)
+	}
+
+	var manifest struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return "", fmt.Errorf("installed manifest is invalid at %s: %w", manifestPath, err)
+	}
+	version := strings.TrimSpace(manifest.Version)
+	if version == "" {
+		return "", fmt.Errorf("installed manifest is invalid at %s: version is missing", manifestPath)
+	}
+	return version, nil
+}
+
+func openCodePluginVerificationHint(r update.UpdateResult, pkg, opencodeDir, observedVersion string, verificationErr error) string {
+	observed := strings.TrimSpace(observedVersion)
+	if observed == "" {
+		observed = "absent or invalid"
+	}
+	detail := ""
+	if verificationErr != nil {
+		detail = fmt.Sprintf(" (%s)", verificationErr)
+	}
+	return fmt.Sprintf("OpenCode plugin %s upgrade was not verified: expected version %q but observed %q%s. Inspect %s/node_modules/%s/package.json and rerun the upgrade.", pkg, strings.TrimSpace(r.LatestVersion), observed, detail, opencodeDir, pkg)
 }
 
 func npmErrorCode(output string) string {
