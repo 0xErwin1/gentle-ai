@@ -28,6 +28,11 @@ const ContractWorkRoutingV1 ContractID = "gentle-ai.work-routing/v1"
 // claim fails closed.
 const ContractReviewTransportV1 ContractID = "gentle-ai.review-transport/v1"
 
+// ContractImmutableReviewExecutorV1 is independent of host/orchestrator
+// support. It is advertised only when a provider can launch a fresh,
+// constrained reviewer and prove that boundary before review START.
+const ContractImmutableReviewExecutorV1 ContractID = "gentle-ai.immutable-review-executor/v1"
+
 type ContractExposure string
 
 const (
@@ -97,8 +102,9 @@ type SDDProposalFacts struct {
 }
 
 type ContractClaims struct {
-	WorkRoutingV1     ContractClaim `json:"workRoutingV1"`
-	ReviewTransportV1 ContractClaim `json:"reviewTransportV1"`
+	WorkRoutingV1             ContractClaim `json:"workRoutingV1"`
+	ReviewTransportV1         ContractClaim `json:"reviewTransportV1"`
+	ImmutableReviewExecutorV1 ContractClaim `json:"immutableReviewExecutorV1"`
 }
 
 type ContractClaim struct {
@@ -126,6 +132,10 @@ func ForAgent(agent model.AgentID) (AgentCapabilityManifest, error) {
 			ReviewTransportV1: ContractClaim{
 				ID:       ContractReviewTransportV1,
 				Exposure: reviewTransportExposureByAgent[agent],
+			},
+			ImmutableReviewExecutorV1: ContractClaim{
+				ID:       ContractImmutableReviewExecutorV1,
+				Exposure: ContractExposureDormant,
 			},
 		},
 	}, nil
@@ -204,6 +214,9 @@ func (m AgentCapabilityManifest) Advertises(contract ContractID) bool {
 	case ContractReviewTransportV1:
 		return m.Contracts.ReviewTransportV1.ID == contract &&
 			m.Contracts.ReviewTransportV1.Exposure == ContractExposureAdvertised
+	case ContractImmutableReviewExecutorV1:
+		return m.Contracts.ImmutableReviewExecutorV1.ID == contract &&
+			m.Contracts.ImmutableReviewExecutorV1.Exposure == ContractExposureAdvertised
 	default:
 		return false
 	}
