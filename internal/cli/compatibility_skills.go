@@ -48,18 +48,30 @@ func compatibilitySkillsDir(homeDir string) (string, bool, error) {
 	agentsDir := filepath.Join(homeDir, ".agents")
 	skillDir := filepath.Join(agentsDir, "skills")
 	parent, err := lstatCompatibilityDestination(agentsDir)
-	if os.IsNotExist(err) || err == nil && !parent.IsDir() {
+	if os.IsNotExist(err) {
 		return skillDir, false, nil
 	}
 	if err != nil {
 		return skillDir, false, fmt.Errorf("stat compatibility skills parent directory %q: %w", agentsDir, err)
 	}
+	if compatibilityDirectoryUnsafe(agentsDir, parent) {
+		return skillDir, false, fmt.Errorf("compatibility skills parent directory %q must be a physical directory; replace it with a physical directory, then rerun gentle-ai install or gentle-ai sync", agentsDir)
+	}
+	if !parent.IsDir() {
+		return skillDir, false, nil
+	}
 	info, err := lstatCompatibilityDestination(skillDir)
-	if os.IsNotExist(err) || err == nil && !info.IsDir() {
+	if os.IsNotExist(err) {
 		return skillDir, false, nil
 	}
 	if err != nil {
 		return skillDir, false, fmt.Errorf("stat compatibility skills directory %q: %w", skillDir, err)
+	}
+	if compatibilityDirectoryUnsafe(skillDir, info) {
+		return skillDir, false, fmt.Errorf("compatibility skills directory %q must be a physical directory; replace it with a physical directory, then rerun gentle-ai install or gentle-ai sync", skillDir)
+	}
+	if !info.IsDir() {
+		return skillDir, false, nil
 	}
 	return skillDir, true, nil
 }

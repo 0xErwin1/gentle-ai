@@ -213,3 +213,7 @@ func createCompatibilityTempFile(dirFD int, perm fs.FileMode) (string, *os.File,
 func compatibilityDestinationUnsafe(_ string, info os.FileInfo) bool {
 	return info.Mode()&os.ModeSymlink != 0
 }
+
+func compatibilityDirectoryUnsafe(_ string, _ os.FileInfo) bool {
+	return false
+}

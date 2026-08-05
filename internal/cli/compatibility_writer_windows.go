@@ -25,7 +25,7 @@ type windowsCompatibilityDirectoryWriter struct {
 	rootFD windows.Handle
 }
 
-func newCompatibilityDirectoryWriter(homeDir, skillDir string) (compatibilityDirectoryWriter, error) {
+func newCompatibilityDirectoryWriter(homeDir, skillDir string) (*windowsCompatibilityDirectoryWriter, error) {
 	home, err := reviewtransaction.OpenPhysicalPath(homeDir, true)
 	if err != nil {
 		return nil, fmt.Errorf("open compatibility home directory %q: %w", homeDir, err)
@@ -113,6 +113,37 @@ func (w *windowsCompatibilityDirectoryWriter) Write(path string, content []byte,
 	return result, nil
 }
 
+func (w *windowsCompatibilityDirectoryWriter) Remove(path string) error {
+	parts, err := compatibilityPathParts(w.root, path)
+	if err != nil {
+		return err
+	}
+
+	parentFD, exists, err := w.openExistingParent(parts[:len(parts)-1])
+	if err != nil || !exists {
+		return err
+	}
+	if parentFD != w.rootFD {
+		defer windows.CloseHandle(parentFD)
+	}
+
+	handle, err := openWindowsCompatibilityFileAt(parentFD, parts[len(parts)-1], windows.DELETE, windows.FILE_OPEN)
+	if windowsCompatibilityNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("open physical compatibility destination %q for removal: %w", path, err)
+	}
+	defer windows.CloseHandle(handle)
+
+	deleteFile := byte(1)
+	var status windows.IO_STATUS_BLOCK
+	if err := windows.NtSetInformationFile(handle, &status, &deleteFile, 1, windows.FileDispositionInformation); err != nil {
+		return fmt.Errorf("remove compatibility destination %q: %w", path, err)
+	}
+	return nil
+}
+
 func (w *windowsCompatibilityDirectoryWriter) openParent(parts []string) (windows.Handle, error) {
 	currentFD := w.rootFD
 	for _, part := range parts {
@@ -132,6 +163,30 @@ func (w *windowsCompatibilityDirectoryWriter) openParent(parts []string) (window
 		currentFD = nextFD
 	}
 	return currentFD, nil
+}
+
+func (w *windowsCompatibilityDirectoryWriter) openExistingParent(parts []string) (windows.Handle, bool, error) {
+	currentFD := w.rootFD
+	for _, part := range parts {
+		nextFD, err := openWindowsCompatibilityDirectoryAt(currentFD, part, windows.FILE_OPEN)
+		if windowsCompatibilityNotExist(err) {
+			if currentFD != w.rootFD {
+				_ = windows.CloseHandle(currentFD)
+			}
+			return 0, false, nil
+		}
+		if err != nil {
+			if currentFD != w.rootFD {
+				_ = windows.CloseHandle(currentFD)
+			}
+			return 0, false, fmt.Errorf("open physical compatibility directory %q: %w", part, err)
+		}
+		if currentFD != w.rootFD {
+			_ = windows.CloseHandle(currentFD)
+		}
+		currentFD = nextFD
+	}
+	return currentFD, true, nil
 }
 
 func openWindowsCompatibilityDirectoryAt(parent windows.Handle, name string, disposition uint32) (windows.Handle, error) {
@@ -318,4 +373,8 @@ func compatibilityDestinationUnsafe(path string, info os.FileInfo) bool {
 	}
 	attributes, err := windows.GetFileAttributes(name)
 	return err != nil || attributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+func compatibilityDirectoryUnsafe(path string, info os.FileInfo) bool {
+	return compatibilityDestinationUnsafe(path, info)
 }

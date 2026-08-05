@@ -1033,7 +1033,14 @@ func (s rollbackRestoreStep) Rollback() error {
 		return nil
 	}
 
-	return backup.RestoreService{Roots: rollbackRoots(s.homeDir, s.workspaceDir)}.Restore(s.state.manifest)
+	manifest, err := restoreCompatibilityEntries(s.state.manifest, s.homeDir)
+	if err != nil {
+		return err
+	}
+	if len(manifest.Entries) == 0 {
+		return nil
+	}
+	return backup.RestoreService{Roots: rollbackRoots(s.homeDir, s.workspaceDir)}.Restore(manifest)
 }
 
 // rollbackRoots returns the directories this install/sync run could
