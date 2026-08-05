@@ -377,10 +377,7 @@ func registrySurfaceViolation(words []string) string {
 // current main. Every entry is a defect to burn down, never an accepted
 // state. An entry whose invocation starts passing must be removed; the guard
 // fails on stale entries so the list can only shrink.
-var documentedInvocationKnownFailures = map[string]string{
-	"gentle-ai review repair-legacy-alias":         "docs/review-authority-threat-model.md:67 documents it as a live compatibility verb; the CLI refuses it as an unknown review command (the machinery ships behind review repair --class)",
-	"gentle-ai review quarantine-legacy-fix-scope": "docs/review-authority-threat-model.md:75 documents it as a live maintenance operation; the CLI refuses it as an unknown review command",
-}
+var documentedInvocationKnownFailures = map[string]string{}
 
 func TestDocumentedInvocationsRunAsDocumented(t *testing.T) {
 	corpus := collectDocumentedInvocations(t)
