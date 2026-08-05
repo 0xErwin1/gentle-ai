@@ -1400,7 +1400,12 @@ type GitCommandTimeoutError struct {
 	Timeout   time.Duration
 	Remote    bool
 	Aggregate bool
-	Cause     error
+	// Elapsed is the observed wall-clock lifetime of the cut child. It is what
+	// makes a hang-guard timeout explainable on a loaded runner: a reader can
+	// tell a child that genuinely hung from one that was starved of CPU and
+	// cut just past the budget. Zero means unmeasured, never instantaneous.
+	Elapsed time.Duration
+	Cause   error
 }
 
 func (err *GitCommandTimeoutError) Error() string {
@@ -1411,7 +1416,14 @@ func (err *GitCommandTimeoutError) Error() string {
 	if err.Aggregate {
 		scope = "aggregate"
 	}
-	return fmt.Sprintf("%v within %s %s budget", ErrGitCommandTimeout, err.Timeout, scope)
+	message := fmt.Sprintf("%v within %s %s budget", ErrGitCommandTimeout, err.Timeout, scope)
+	if len(err.Args) > 0 {
+		message = fmt.Sprintf("%s: git %s", message, strings.Join(err.Args, " "))
+	}
+	if err.Elapsed > 0 {
+		message = fmt.Sprintf("%s ran %s before cancellation", message, err.Elapsed.Round(time.Millisecond))
+	}
+	return message
 }
 
 func (err *GitCommandTimeoutError) Unwrap() []error {
@@ -1495,8 +1507,19 @@ func (err *GitProcessControlError) Error() string {
 
 func (err *GitProcessControlError) Unwrap() error { return err.Cause }
 
-var localGitCommandTimeout = 15 * time.Second
-var remoteGitCommandTimeout = 20 * time.Second
+// LocalGitCommandTimeout and RemoteGitCommandTimeout bound the wall-clock
+// lifetime of every Git child a runner spawns. They are hang guards, not
+// latency assertions: a genuinely hung child (credential prompt, filesystem
+// deadlock) must still fail, but a healthy child that is merely starved of CPU
+// on a loaded runner must never be cut. Issue #2483 observed a healthy git
+// exceed a 15-second budget on a loaded CI shard, so the ceilings sit roughly
+// an order of magnitude above that worst observed dilation. Inside a
+// negotiated operation the 25-second aggregate operation budget still fires
+// first; these per-command ceilings govern direct paths such as snapshot
+// builders and delivery gates. Exported as a test seam so callers in other
+// packages that need deterministic timeout ordering can shrink them.
+var LocalGitCommandTimeout = 120 * time.Second
+var RemoteGitCommandTimeout = 180 * time.Second
 var gitCommandWaitDelay = time.Second
 var gitCommandContext = exec.CommandContext
 var gitProcessTreeStarter = startGitProcessTree
@@ -1536,9 +1559,9 @@ func runGitCaptured(ctx context.Context, repo string, extraEnv []string, stdin [
 
 func runGitCapturedRange(ctx context.Context, repo string, extraEnv []string, stdin []byte, outputOffset, outputLimit int, isolateConfig, rejectStderr, rejectOverflow bool, args ...string) ([]byte, int, error) {
 	remote := len(args) > 0 && args[0] == "ls-remote"
-	timeout := localGitCommandTimeout
+	timeout := LocalGitCommandTimeout
 	if remote {
-		timeout = remoteGitCommandTimeout
+		timeout = RemoteGitCommandTimeout
 	}
 	commandContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -1555,6 +1578,7 @@ func runGitCapturedRange(ctx context.Context, repo string, extraEnv []string, st
 	stdout := &boundedGitOutput{offset: outputOffset, limit: outputLimit}
 	stderr := &boundedGitOutput{limit: defaultGitStderrLimit}
 	command.Stdout, command.Stderr = stdout, stderr
+	started := time.Now()
 	release, startErr := gitProcessTreeStarter(command)
 	err := startErr
 	if err == nil {
@@ -1587,7 +1611,8 @@ func runGitCapturedRange(ctx context.Context, repo string, extraEnv []string, st
 				cause = ctx.Err()
 			}
 			return nil, 0, joinGitOutputOverflow(&GitCommandTimeoutError{
-				Args: append([]string{}, args...), Timeout: timeout, Remote: remote, Aggregate: aggregate, Cause: cause,
+				Args: append([]string{}, args...), Timeout: timeout, Remote: remote, Aggregate: aggregate,
+				Elapsed: time.Since(started), Cause: cause,
 			}, overflow)
 		}
 		if startErr != nil {
