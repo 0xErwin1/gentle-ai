@@ -123,9 +123,9 @@ func TestRunSDDAttemptRejectsMissingOrAmbiguousInputs(t *testing.T) {
 		{name: "positional argument", args: []string{"status", "--cwd", repo, "--change", "thin", "extra"}, want: "unexpected sdd-attempt argument"},
 		// Grant's missing-flag refusal follows acquire/settle: it enumerates
 		// every missing flag and names the rerunnable continuation.
-		{name: "missing grant roots", args: []string{"grant", "--cwd", repo, "--change", "thin", "--request-id", "grant", "--actor", "maintainer", "--reason", "rollout"}, want: "sdd-attempt grant requires --root; rerun `gentle-ai sdd-attempt grant` with those missing flags"},
-		{name: "missing grant audit fields", args: []string{"grant", "--cwd", repo, "--change", "thin", "--root", repo}, want: "sdd-attempt grant requires --request-id, --actor, --reason"},
-		{name: "irrelevant grant flag", args: []string{"grant", "--cwd", repo, "--change", "thin", "--root", repo, "--request-id", "grant", "--actor", "maintainer", "--reason", "rollout", "--work-unit", "unit"}, want: "flag provided but not defined"},
+		{name: "missing grant roots", args: []string{"grant", "--cwd", repo, "--change", "thin", "--change-instance", "instance-token", "--request-id", "grant", "--actor", "maintainer", "--reason", "rollout"}, want: "sdd-attempt grant requires --root; rerun `gentle-ai sdd-attempt grant` with those missing flags"},
+		{name: "missing grant instance and audit fields", args: []string{"grant", "--cwd", repo, "--change", "thin", "--root", repo}, want: "sdd-attempt grant requires --change-instance, --request-id, --actor, --reason"},
+		{name: "irrelevant grant flag", args: []string{"grant", "--cwd", repo, "--change", "thin", "--root", repo, "--change-instance", "instance-token", "--request-id", "grant", "--actor", "maintainer", "--reason", "rollout", "--work-unit", "unit"}, want: "flag provided but not defined"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -163,22 +163,29 @@ func TestSDDAttemptOperationsCanonicalSourceEnumeratesConsistently(t *testing.T)
 }
 
 // TestRunSDDAttemptGrantPersistsAndReplaysThroughTheCLI is the CLI dispatch
-// proof for the `grant` operation (#2540 S3): a first grant on a fresh ledger
-// needs no --expected-revision (the S2 API admits an empty CAS token against
-// an empty chain), the persisted roots round-trip through `sdd-attempt
-// status`, an exact duplicate --request-id replays the committed revision
-// idempotently, and a second grant chains --expected-revision on the first
-// and accumulates roots in grant order, deduplicating already-granted ones.
+// proof for the `grant` operation (#2540 S3) under #2557's instance-identity
+// containment: a first grant on a fresh ledger needs no --expected-revision
+// (the S2 API admits an empty CAS token against an empty chain) but always
+// needs --change-instance, the persisted roots round-trip through
+// `sdd-attempt status --change-instance`, an exact duplicate --request-id
+// replays the committed revision idempotently, and a second grant reusing
+// the SAME instance token chains --expected-revision on the first and
+// accumulates roots in grant order, deduplicating already-granted ones.
+// The interim contract before S4b derives markers natively: the caller
+// mints one opaque token per change instance and reuses that exact token
+// for widening grants within the change lifecycle; a different token (a
+// recreated change, or a reader that declares none) projects nothing.
 func TestRunSDDAttemptGrantPersistsAndReplaysThroughTheCLI(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	change := "cli-grant"
+	instance := "cli-grant-instance-token"
 	sibling, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	grantArgs := []string{
-		"grant", "--cwd", repo, "--change", change, "--root", sibling,
+		"grant", "--cwd", repo, "--change", change, "--root", sibling, "--change-instance", instance,
 		"--actor", "maintainer", "--reason", "sequential multi-repository rollout", "--request-id", "cli-grant-1",
 	}
 	granted := runSDDAttemptStatus(t, grantArgs)
@@ -186,11 +193,26 @@ func TestRunSDDAttemptGrantPersistsAndReplaysThroughTheCLI(t *testing.T) {
 		t.Fatalf("grant CLI status = %#v, want granted root %q with a committed revision", granted, sibling)
 	}
 
-	// Status replays the persisted chain: the grant survives the process
-	// boundary between the mutating call and a later read.
-	status := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
+	// Status with the same instance token replays the persisted chain: the
+	// grant survives the process boundary between the mutating call and a
+	// later read that declares the instance it serves.
+	status := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change, "--change-instance", instance})
 	if !reflect.DeepEqual(status.GrantedRoots, []string{sibling}) || status.Revision != granted.Revision {
 		t.Fatalf("post-grant CLI status = %#v, want granted roots [%q] at revision %s", status, sibling, granted.Revision)
+	}
+
+	// Status WITHOUT an instance declaration projects no granted roots: the
+	// conservative containment for undeclared readers (#2557).
+	undeclared := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change})
+	if undeclared.GrantedRoots != nil {
+		t.Fatalf("undeclared-instance CLI status projected granted roots: %#v", undeclared.GrantedRoots)
+	}
+
+	// Status under a DIFFERENT instance token projects nothing either: a
+	// recreated change reusing this archived name inherits no authority.
+	recreated := runSDDAttemptStatus(t, []string{"status", "--cwd", repo, "--change", change, "--change-instance", "recreated-instance-token"})
+	if recreated.GrantedRoots != nil {
+		t.Fatalf("recreated-instance CLI status resurrected granted roots: %#v", recreated.GrantedRoots)
 	}
 
 	// An exact duplicate request-id is idempotent through the CLI: same
@@ -200,15 +222,16 @@ func TestRunSDDAttemptGrantPersistsAndReplaysThroughTheCLI(t *testing.T) {
 		t.Fatalf("grant CLI replay = %#v, want committed revision %s", replayed, granted.Revision)
 	}
 
-	// A second grant chains on the first revision, accumulates the new root
-	// after the already-granted one, and deduplicates the repeat.
+	// A widening grant reusing the SAME instance token chains on the first
+	// revision, accumulates the new root after the already-granted one, and
+	// deduplicates the repeat.
 	second, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	accumulated := runSDDAttemptStatus(t, []string{
 		"grant", "--cwd", repo, "--change", change, "--expected-revision", granted.Revision,
-		"--root", second, "--root", sibling,
+		"--root", second, "--root", sibling, "--change-instance", instance,
 		"--actor", "maintainer", "--reason", "maintainer widened the change to a second sibling", "--request-id", "cli-grant-2",
 	})
 	if !reflect.DeepEqual(accumulated.GrantedRoots, []string{sibling, second}) {
