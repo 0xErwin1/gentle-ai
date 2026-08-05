@@ -1125,9 +1125,11 @@ func writeNegotiatedStatusHistory(t *testing.T, repo string, count int) {
 }
 
 // TestCorrectionPlanStatusAcceptsFrozenBindingAfterAppliedFix is the regression
-// guard for issue #2132: after a bounded correction the plan request binds to
-// the FROZEN reviewed candidate, so read-only review status must accept it even
-// when the live workspace identity diverges (the fix applied, uncommitted).
+// guard for issue #2132's unforecast branch: the plan request binds to the
+// FROZEN reviewed candidate, so read-only review status must accept it even when
+// the live workspace identity diverges (the fix applied, uncommitted). It does
+// not prove the correctly ordered forecasted bounded-correction flow, which
+// routes to correction_repository_verification_required with targeted validation.
 // Before the fix, Validate() compared the plan request's TargetIdentity against
 // the LIVE identity and failed the whole status operation with
 // "negotiated status correction request binding is invalid".
@@ -1142,10 +1144,8 @@ func TestCorrectionPlanStatusAcceptsFrozenBindingAfterAppliedFix(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
-			candidatePath := filepath.Join(repo, "candidate.go")
-			if err := os.WriteFile(candidatePath, []byte("package candidate\n\nfunc value() int { return 1 }\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
+			const candidatePath = "candidate.go"
+			writeReviewStartCandidate(t, repo, candidatePath, "package candidate\n\nfunc value() int { return 1 }\n", 0o644)
 			lineage := "correction-status-frozen-" + strings.ReplaceAll(strings.ReplaceAll(strings.ToLower(tt.name), ",", ""), " ", "-")
 			started := runNegotiatedReviewStart(t, repo, lineage)
 			resultPath := filepath.Join(t.TempDir(), "blocking-result.json")
@@ -1167,9 +1167,7 @@ func TestCorrectionPlanStatusAcceptsFrozenBindingAfterAppliedFix(t *testing.T) {
 			if tt.change {
 				// The bounded fix lands in the workspace but stays uncommitted,
 				// so the live identity diverges from the reviewed candidate.
-				if err := os.WriteFile(candidatePath, []byte("package candidate\n\nfunc value() int { return 2 }\n"), 0o644); err != nil {
-					t.Fatal(err)
-				}
+				writeReviewStartCandidate(t, repo, candidatePath, "package candidate\n\nfunc value() int { return 2 }\n", 0o644)
 			}
 			store, err := reviewtransaction.CompactAuthoritativeStore(context.Background(), repo, started.LineageID)
 			if err != nil {
@@ -1180,9 +1178,8 @@ func TestCorrectionPlanStatusAcceptsFrozenBindingAfterAppliedFix(t *testing.T) {
 				t.Fatal(err)
 			}
 			var statusOutput bytes.Buffer
-			if err := RunReview([]string{
-				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV1, "--next-transition", "--lineage", started.LineageID,
-			}, &statusOutput); err != nil {
+			if err := RunReview(negotiatedStatusArgs(repo, ReviewIntegrationContractV2,
+				"--lineage", started.LineageID), &statusOutput); err != nil {
 				t.Fatalf("status after applied fix: %v\n%s", err, statusOutput.String())
 			}
 			var status ReviewTargetStatusResult
