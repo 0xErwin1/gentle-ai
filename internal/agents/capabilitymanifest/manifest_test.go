@@ -121,27 +121,29 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 	t.Parallel()
 
 	const wantRoutingDigest = "sha256:ed03b86f20c9449a6e4c018f51d1e05619e1070b1076287a0792a74c458762b2"
-	// Digests intentionally changed in Wave 4 S4: ContractClaims grew a new
-	// ReviewTransportV1 field (design.md decision 5), which is content the
-	// canonical JSON payload — and therefore the digest — legitimately
-	// covers for every agent.
+	// Digests intentionally changed here: AgentFeatureClaims dropped the
+	// AutoInstall field (gentle-ai no longer installs agent runtimes on the
+	// user's behalf — see agentInstallStep in internal/cli/run.go), which is
+	// content the canonical JSON payload — and therefore the digest —
+	// legitimately covers for every agent, whether that agent's AutoInstall
+	// claim used to be true or false.
 	wantManifestDigests := map[model.AgentID]string{
-		model.AgentAntigravity:   "sha256:9039afe154cc0819ff8d133531081884a6d6f77ae75d26aa73a725c891095fbc",
-		model.AgentClaudeCode:    "sha256:ab745fa46cdcb22f1c58d21c5125b9295d73c17710a3d87f52fb9efb674293dc",
-		model.AgentCodex:         "sha256:083b5533ea666205657ef5cca8163e0d0e841d4d6c78831d9482dfe497bc21c3",
-		model.AgentCursor:        "sha256:655eb90bd2ce82586be5e6cee056f94e0e331aacc301a130d4867dc60255f7e9",
-		model.AgentGeminiCLI:     "sha256:9392a924baa63c4b7b94628454407157f4c8c7cef4f0357fbe568f9388d8f947",
-		model.AgentHermes:        "sha256:06d947d3587bb53e6f0dadd51d7d21e39f51e8d90b326a012384690e6d3e5e3a",
-		model.AgentKilocode:      "sha256:ad1042de6debafc218a8cd0a0c8e73f34617c26716fc99f4c58208746da2ae49",
-		model.AgentKimi:          "sha256:0ac497c298af154de721047fef96c9c81f646202dbe2cefb074bebf2fbfd3ff6",
-		model.AgentKiroIDE:       "sha256:341727decd4a78853dbddc29402c103eebdd7b5e9f1719e7e3f9b892f657345c",
-		model.AgentOpenClaw:      "sha256:6b65856cf320aee8e0e51b70e06bb6dd455af5fe433db4addd5394744af5b67f",
-		model.AgentOpenCode:      "sha256:70cfb9bcb82acfaf18a0fcc191259d6e72ad6ba440fe36393363aeafb1e40999",
-		model.AgentPi:            "sha256:7efa5132ccfda4346d53c9e148f03ff731baebecbfbeb35ed42d03e6463330c5",
-		model.AgentQwenCode:      "sha256:7a92759dd5d52cb09cd8743cf89b46683f657120f51e636f16e2d934fc297e90",
-		model.AgentTrae:          "sha256:f71a112a213767666ab90c244eaaa570a8764faf4ea6c7d80fd3100f15cc5149",
-		model.AgentVSCodeCopilot: "sha256:3b2b1d46c89ce7b8a8e0ff6f550bbfad1da3e677d773d84fa2bc58818b73ff8d",
-		model.AgentWindsurf:      "sha256:276ba0ca496da63cc7699a980d70b7e54bcad6f351bb125eb0a261f59b1586a2",
+		model.AgentAntigravity:   "sha256:6d9ccea52a22a523d90b35d2c9540e2953a0d1dd44b368922546d6e3690180c8",
+		model.AgentClaudeCode:    "sha256:a330f5e7d36a83fe98aea15fbf6d81a445f0073e6b0b7bfebe052466b0539e05",
+		model.AgentCodex:         "sha256:986cdb1c75d26840217634f720093511369e902c14b068a3245e8ebf98c41a5c",
+		model.AgentCursor:        "sha256:d5be74e67fa7b78c6b8aeee602894395ddb9e9f481b797693f16c348c0274b0a",
+		model.AgentGeminiCLI:     "sha256:3178d298a261cc1bfae1c96201f022f3d5b81135089130e5c747afb2ae39450f",
+		model.AgentHermes:        "sha256:f042913fabdc55ad918cd792dab5566b281fa568d37384bf613a9bef13d00850",
+		model.AgentKilocode:      "sha256:ba4d977d58b8974db2dcabc3df80432fded140c4a57a16e7be68167639d768d2",
+		model.AgentKimi:          "sha256:4f17a25513153d27df042fa7211af1f1520f635e216b3b00e1ae71aa1390b93b",
+		model.AgentKiroIDE:       "sha256:e6ea2bbb0848263e2f75b49d462dd853ff59549b9bb2051a8adea963515f8023",
+		model.AgentOpenClaw:      "sha256:0ec685b0076d542e3a9762e1fd5bfaccb9113673e2c2d2af530ec88d216f9c4d",
+		model.AgentOpenCode:      "sha256:a2ee7d6528f50f709335326aa5f06123d7223df6092e85198bf7a0d4fbf2aa29",
+		model.AgentPi:            "sha256:5e2201bf60bf3943ae43afde1327da5fbcc2eb70701feb3bd1bd06c6e4e3172c",
+		model.AgentQwenCode:      "sha256:13b640c6f6c2b9b287d4cbeb3777fee052777433db8551cdd1210ffc11bd6923",
+		model.AgentTrae:          "sha256:d20a478bc6bce2fa52fbe9dd6735ba6926d89f2bdc97fd8e096d7025274bfdc3",
+		model.AgentVSCodeCopilot: "sha256:995c53449c739c4ceeb18c61ce012f27090a263f5d02080982ffffd1266e5e37",
+		model.AgentWindsurf:      "sha256:72479f4114b47d93c4ac2b4facd471ab173c456cd77fee7d3df52152938bac4c",
 	}
 
 	for agent, wantDigest := range wantManifestDigests {

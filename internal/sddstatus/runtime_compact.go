@@ -20,15 +20,26 @@ const (
 	CompactBlockMaintainerDecision  CompactBlockReason = "maintainer_decision"
 	CompactBlockCorruptAuthority    CompactBlockReason = "corrupt_authority"
 	CompactBlockInvalidContinuation CompactBlockReason = "invalid_continuation"
+	CompactBlockRemediationRequired CompactBlockReason = "remediation_required"
+	CompactBlockWorktreeMismatch    CompactBlockReason = "worktree_mismatch"
 	CompactBlockAuthorityFailure    CompactBlockReason = "authority_failure"
 )
 
 // CompactAttemptResult is the bounded orchestration projection. RuntimeStatus
 // remains available through the legacy diagnostic operations only.
+//
+// Exit and Detail carry a wrapped mutation refusal's message text through to
+// this compact boundary (#2249): compactMutationFailure populates both
+// whenever it classifies a real error, so a well-constructed refusal that
+// names a runnable continuation — like runtimeRemediationExitRefusal's — is
+// never silently reduced to a bare Reason. Both stay empty on every happy
+// path (proceed, complete-with-no-error).
 type CompactAttemptResult struct {
 	State  CompactAttemptState `json:"state"`
 	Reason CompactBlockReason  `json:"reason,omitempty"`
 	Token  string              `json:"token,omitempty"`
+	Exit   string              `json:"exit,omitempty"`
+	Detail string              `json:"detail,omitempty"`
 }
 
 // CompactAcquireRequest is the bounded orchestration projection of
@@ -41,6 +52,17 @@ type CompactAttemptResult struct {
 // source of truth the way the pre-Wave-4 parallel struct did (#2133/#2151).
 type CompactAcquireRequest struct {
 	BeginAttemptRequest
+
+	// Token is optional ownership proof (#2291): a distinct call/process
+	// (e.g. an actor launched by a parent that already holds a proceed-state
+	// acquire) presents the token that acquire already returned to prove it
+	// is continuing that SAME attempt rather than colliding with it. A Token
+	// matching the ledger's currently active attempt short-circuits to
+	// proceed with zero mutation — no store.Begin, no ledger chain touched.
+	// A non-matching Token falls through to the ordinary active_attempt
+	// block, naming the REAL active token. An empty Token leaves every
+	// existing acquire/collide path byte-for-byte unchanged.
+	Token string
 }
 
 type CompactSettleRequest struct {
@@ -55,6 +77,78 @@ type CompactSettleRequest struct {
 	SuccessorLineageID string
 
 	RemediatesEvidenceRevision string
+}
+
+// runtimeReadinessInput is everything the one readiness predicate reads. It
+// carries the whole AttemptTokens map rather than a pre-resolved token so the
+// predicate stays the only code that inspects the readiness triple; a caller
+// that had to resolve the active attempt's ordinal first would be deciding a
+// little bit of the answer on its own, which is the drift this collapses.
+//
+// Request and PresentedToken are optional. A caller that names neither (status,
+// and Settle's post-mutation projection) gets the request-blind, token-blind
+// answer, which is exactly what it is entitled to state.
+type runtimeReadinessInput struct {
+	Status         RuntimeStatus
+	AttemptTokens  map[int]string
+	Request        BeginAttemptRequest
+	PresentedToken string
+}
+
+// runtimeReadiness answers "may this work proceed?" exactly once, for every
+// consumer. It reports the compact result plus whether that result is terminal;
+// a non-terminal answer means nothing blocks, and each caller then does its own
+// thing with that permission (Acquire begins an attempt and mints a token,
+// Settle reports proceed, status leaves routing to the artifacts).
+//
+// Before this, three call sites derived the same verdict separately and
+// disagreed: compactAcquireBlock (request-aware), compactSettleResult
+// (request-blind), and status's applyNativeRuntimeRouting, which was
+// request-blind AND token-blind and asserted acquire's answer in a hand-written
+// string it never checked. #2463 is that string being wrong: acquire returned
+// proceed and handed back a token, and status reported the very same attempt as
+// an active blocker whose "external execution" could only be settled, for an
+// execution the caller was about to launch.
+//
+// The ordering is the ledger's own. applyRuntimeFinishEvent sets exactly one of
+// Complete or DecisionRequired and clears ActiveAttempt in both branches, so
+// checking Complete first is not a precedence choice among reachable states.
+func runtimeReadiness(in runtimeReadinessInput) (CompactAttemptResult, bool) {
+	activeToken := ""
+	if in.Status.ActiveAttempt != nil {
+		activeToken = in.AttemptTokens[in.Status.ActiveAttempt.Ordinal]
+	}
+
+	// Zero-mutation ownership check (#2291): a distinct call or process launched
+	// by a parent that already holds a proceed-state acquire presents that exact
+	// token to prove it continues the SAME attempt rather than colliding with
+	// it. A non-matching token falls to the ordinary block naming the REAL
+	// active token. An empty token leaves every other path unchanged.
+	if in.PresentedToken != "" && in.Status.ActiveAttempt != nil {
+		if in.PresentedToken == activeToken {
+			return CompactAttemptResult{State: CompactStateProceed, Token: activeToken}, true
+		}
+		return compactForeignAcquireToken(activeToken), true
+	}
+
+	switch {
+	case in.Status.Complete:
+		// Completion is scoped to one objective: a passed apply is terminal for
+		// its own work unit while remaining an ordinary predecessor for the
+		// distinct verification the SDD graph still owes. A caller that names no
+		// work unit has named no successor scope, so completion stays terminal
+		// for it.
+		if in.Request.WorkUnit != "" && runtimeObjectiveAdvanceAdmissible(in.Status, in.Request) {
+			return CompactAttemptResult{}, false
+		}
+		return CompactAttemptResult{State: CompactStateComplete}, true
+	case in.Status.DecisionRequired:
+		return compactBlocked(CompactBlockMaintainerDecision, ""), true
+	case in.Status.ActiveAttempt != nil:
+		return compactBlocked(CompactBlockActiveAttempt, activeToken), true
+	default:
+		return CompactAttemptResult{}, false
+	}
 }
 
 // Acquire claims one native attempt without exposing the growing runtime
@@ -88,7 +182,10 @@ func (store RuntimeStore) Acquire(ctx context.Context, request CompactAcquireReq
 		return compactAcquireResult(current, begin, receipt.Revision), nil
 	}
 
-	if result, terminal := compactAcquireBlock(replay, begin); terminal {
+	if result, terminal := runtimeReadiness(runtimeReadinessInput{
+		Status: replay.Status, AttemptTokens: replay.AttemptTokens,
+		Request: begin, PresentedToken: request.Token,
+	}); terminal {
 		return result, nil
 	}
 	begin.ExpectedRevision = replay.Status.Revision
@@ -126,21 +223,21 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 		return store.compactSettleResult()
 	}
 
-	status := replay.Status
-	if status.Complete {
-		return CompactAttemptResult{State: CompactStateComplete}, nil
-	}
-	if status.DecisionRequired {
-		return compactBlocked(CompactBlockMaintainerDecision, ""), nil
-	}
-	if status.ActiveAttempt == nil {
+	// Settle asks the same predicate the same question and interprets the same
+	// answer for its own purpose: a proceed means this token owns the live
+	// attempt and may close it, and a non-terminal answer means there is no
+	// active attempt to close at all.
+	readiness, terminal := runtimeReadiness(runtimeReadinessInput{
+		Status: replay.Status, AttemptTokens: replay.AttemptTokens, PresentedToken: request.Token,
+	})
+	if !terminal {
 		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 	}
-	activeToken := replay.AttemptTokens[status.ActiveAttempt.Ordinal]
-	if request.Token != activeToken {
-		return compactBlocked(CompactBlockActiveAttempt, activeToken), nil
+	if readiness.State != CompactStateProceed {
+		return readiness, nil
 	}
 
+	status := replay.Status
 	finish := FinishAttemptRequest{
 		ExpectedRevision: status.Revision, RequestID: request.RequestID, Outcome: request.Outcome,
 		EvidenceRevision: request.EvidenceRevision, Diagnosis: request.Diagnosis,
@@ -162,6 +259,8 @@ func (store RuntimeStore) Settle(ctx context.Context, request CompactSettleReque
 			finish.SuccessorLineageID = status.Binding.Lineage
 		}
 		finish.RemediatesEvidenceRevision = failedEvidence
+	} else if store.ReviewDisabled && !explicitSuccessor && request.RemediatesEvidenceRevision != "" {
+		finish.RemediatesEvidenceRevision = request.RemediatesEvidenceRevision
 	} else if explicitSuccessor || request.RemediatesEvidenceRevision != "" {
 		return compactBlocked(CompactBlockInvalidContinuation, ""), nil
 	}
@@ -229,31 +328,15 @@ func compactSettleReplayRequest(replay runtimeReplay, record runtimeRecord, requ
 	return finish, matches
 }
 
-// compactAcquireBlock needs the request because completion is scoped to one
-// objective: a passed apply is terminal for its own work unit while remaining an
-// ordinary predecessor for the distinct verification the SDD graph still owes.
-func compactAcquireBlock(replay runtimeReplay, request BeginAttemptRequest) (CompactAttemptResult, bool) {
-	status := replay.Status
-	switch {
-	case status.Complete:
-		if runtimeObjectiveAdvanceAdmissible(status, request) {
-			return CompactAttemptResult{}, false
-		}
-		return CompactAttemptResult{State: CompactStateComplete}, true
-	case status.DecisionRequired:
-		return compactBlocked(CompactBlockMaintainerDecision, ""), true
-	case status.ActiveAttempt != nil:
-		return compactBlocked(CompactBlockActiveAttempt, replay.AttemptTokens[status.ActiveAttempt.Ordinal]), true
-	default:
-		return CompactAttemptResult{}, false
-	}
-}
-
+// compactAcquireResult reconciles a committed begin whose publication the
+// caller could not observe. The already-committed record's revision IS the
+// caller's ownership proof, so it presents that token to the same predicate
+// rather than re-deriving the active-attempt comparison here.
 func compactAcquireResult(replay runtimeReplay, request BeginAttemptRequest, ownedToken string) CompactAttemptResult {
-	if result, terminal := compactAcquireBlock(replay, request); terminal {
-		if result.Reason == CompactBlockActiveAttempt && result.Token == ownedToken {
-			return CompactAttemptResult{State: CompactStateProceed, Token: ownedToken}
-		}
+	if result, terminal := runtimeReadiness(runtimeReadinessInput{
+		Status: replay.Status, AttemptTokens: replay.AttemptTokens,
+		Request: request, PresentedToken: ownedToken,
+	}); terminal {
 		return result
 	}
 	return compactBlocked(CompactBlockInvalidContinuation, "")
@@ -264,20 +347,15 @@ func (store RuntimeStore) compactSettleResult(expected ...string) (CompactAttemp
 	if err != nil {
 		return compactBlocked(CompactBlockCorruptAuthority, ""), nil
 	}
-	status := replay.Status
-	if len(expected) == 1 && status.Revision != expected[0] {
+	if len(expected) == 1 && replay.Status.Revision != expected[0] {
 		return compactBlocked(CompactBlockCorruptAuthority, ""), nil
 	}
-	switch {
-	case status.Complete:
-		return CompactAttemptResult{State: CompactStateComplete}, nil
-	case status.DecisionRequired:
-		return compactBlocked(CompactBlockMaintainerDecision, ""), nil
-	case status.ActiveAttempt != nil:
-		return compactBlocked(CompactBlockActiveAttempt, replay.AttemptTokens[status.ActiveAttempt.Ordinal]), nil
-	default:
-		return CompactAttemptResult{State: CompactStateProceed}, nil
+	if result, terminal := runtimeReadiness(runtimeReadinessInput{
+		Status: replay.Status, AttemptTokens: replay.AttemptTokens,
+	}); terminal {
+		return result, nil
 	}
+	return CompactAttemptResult{State: CompactStateProceed}, nil
 }
 
 func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin BeginAttemptRequest) CompactAttemptResult {
@@ -293,21 +371,107 @@ func (store RuntimeStore) compactMutationFailure(err error, settle bool, begin B
 		}
 		return compactAcquireResult(replay, begin, publication.Revision)
 	}
+	// Every branch below wraps a real error, so `detail` always has message
+	// text to carry through to the compact JSON boundary instead of being
+	// thrown away behind a bare classification (#2249). `exit` reuses the
+	// same text: these refusals are constructed specifically to name a
+	// runnable continuation inline (see runtimeRemediationExitRefusal), and
+	// there is no reliable field-agnostic way to shorten that further.
+	detail := err.Error()
+	reason := CompactBlockAuthorityFailure
 	switch {
 	case errors.Is(err, ErrRuntimeObjectiveDone):
-		return CompactAttemptResult{State: CompactStateComplete}
+		return CompactAttemptResult{State: CompactStateComplete, Exit: detail, Detail: detail}
 	case errors.Is(err, ErrRuntimeBudgetExhausted), errors.Is(err, ErrRuntimeObjectiveChange):
-		return compactBlocked(CompactBlockMaintainerDecision, "")
+		reason = CompactBlockMaintainerDecision
 	case errors.Is(err, ErrRuntimeAttemptActive):
-		return compactBlocked(CompactBlockActiveAttempt, "")
+		reason = CompactBlockActiveAttempt
 	case errors.Is(err, ErrRuntimeRevisionConflict), errors.Is(err, ErrRuntimeConcurrentUpdate),
-		errors.Is(err, ErrRuntimeRequestConflict), errors.Is(err, ErrRuntimeNoActiveAttempt):
-		return compactBlocked(CompactBlockInvalidContinuation, "")
+		errors.Is(err, ErrRuntimeRequestConflict), errors.Is(err, ErrRuntimeNoActiveAttempt),
+		errors.Is(err, ErrBindingRevisionConflict):
+		reason = CompactBlockInvalidContinuation
+	// ErrRuntimeRemediationSuccessorRequired is the sentinel behind
+	// runtimeRemediationExitRefusal (runtime_ledger.go:628-646): the candidate
+	// moved after Begin, so a passing finish demands the remediation trio
+	// naming its own runnable exit. It previously fell through to the
+	// default authority_failure and lost that exit entirely (#2249).
+	case errors.Is(err, ErrRuntimeRemediationSuccessorRequired):
+		reason = CompactBlockRemediationRequired
+	// ErrRuntimeWorktreeMismatch is the sentinel behind
+	// runtimeWorktreeMismatchRefusal (#2296 part 1): Finish is running from a
+	// different linked worktree than the one Begin recorded. Left
+	// unclassified it would fall through to the opaque default
+	// authority_failure and lose the exact --cwd the refusal names.
+	case errors.Is(err, ErrRuntimeWorktreeMismatch):
+		reason = CompactBlockWorktreeMismatch
+	}
+	return CompactAttemptResult{State: CompactStateBlocked, Reason: reason, Exit: detail, Detail: detail}
+}
+
+// compactBlockedReviewModeDisableExit is the self-service delivery fallback
+// named below where a reason offers no more specific runnable command.
+// Adversarial finding F6: `--scope` defaults to global
+// (review_mode.go's own flag default), so naming the bare command would let
+// an orchestrator silently disable receipt-driven development for every
+// repository on the machine instead of just this one. Always name the
+// clone-scoped form and disclose the default, verified by execution: running
+// `gentle-ai review mode disable` with no --scope writes
+// ~/.gentle-ai/state.json (machine-wide); `--scope clone --cwd <repo>`
+// writes only under that repository's own .git/gentle-ai directory.
+const compactBlockedReviewModeDisableExit = "`gentle-ai review mode disable --scope clone --cwd <repo>` to proceed without receipt-driven review for this repository only " +
+	"(omitting --scope disables it for every repository on the machine)"
+
+// compactBlockedExitText names the runnable continuation for every reason
+// compactBlocked itself is ever called with (exit-naming audit fix #2):
+// before this, all 20 of this file's compactBlocked call sites shipped a
+// bare {"state":"blocked","reason":"<code>"} with nothing behind it — no
+// Exit, no Detail, and (unlike next_transition's stop reason codes) no
+// stderr narration or docs mirror either.
+func compactBlockedExitText(reason CompactBlockReason, token string) string {
+	switch reason {
+	case CompactBlockCorruptAuthority:
+		return "the attempt ledger for this work unit cannot be read as valid authority; run " +
+			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` to see what is readable, " +
+			"or run " + compactBlockedReviewModeDisableExit
+	case CompactBlockInvalidContinuation:
+		return "this call does not continue the attempt currently on record; run " +
+			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` to see the live attempt and its " +
+			"current revision, then reissue this call against that state"
+	case CompactBlockMaintainerDecision:
+		return "this work unit's attempt or changed-line budget needs a maintainer decision; run " +
+			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` for the accounting, then ask a " +
+			"maintainer to rescope or reset the objective, or run " + compactBlockedReviewModeDisableExit
+	case CompactBlockActiveAttempt:
+		// Adversarial finding F2: the bare `sdd-attempt acquire --token <t>`
+		// / `settle --token <t>` forms are not complete commands -- each
+		// needs five more required flags (verified by execution: acquire
+		// additionally requires --cwd, --change, --request-id, --work-unit,
+		// --evidence-goal; settle additionally requires --cwd, --change,
+		// --request-id, --outcome, --evidence-revision, --diagnosis,
+		// --harness-disposition, --cleanup-evidence, --process-evidence).
+		// Only `gentle-ai sdd-attempt status --cwd <repo> --change <change>`
+		// is named as a complete command; the token is described as an
+		// addition to the caller's own already-in-flight acquire/settle
+		// call, never as a standalone invocation.
+		return "a distinct attempt token " + token + " is already active for this work unit; run " +
+			"`gentle-ai sdd-attempt status --cwd <repo> --change <change>` to see it, then add `--token " + token +
+			"` to your own `sdd-attempt acquire` call to continue that exact attempt, or to your " +
+			"`sdd-attempt settle` call to close it before starting a new one"
 	default:
-		return compactBlocked(CompactBlockAuthorityFailure, "")
+		return ""
 	}
 }
 
 func compactBlocked(reason CompactBlockReason, token string) CompactAttemptResult {
-	return CompactAttemptResult{State: CompactStateBlocked, Reason: reason, Token: token}
+	exit := compactBlockedExitText(reason, token)
+	return CompactAttemptResult{State: CompactStateBlocked, Reason: reason, Token: token, Exit: exit, Detail: exit}
+}
+
+// compactForeignAcquireToken names the exact continuation for a losing
+// ownership check (#2291): the caller presented a token, but it is not the
+// ledger's live active attempt. It always carries the REAL active token —
+// never the foreign one the caller supplied — through Token, Exit, and
+// Detail alike, so a legible refusal (slice 1) also names how to proceed.
+func compactForeignAcquireToken(activeToken string) CompactAttemptResult {
+	return compactBlocked(CompactBlockActiveAttempt, activeToken)
 }

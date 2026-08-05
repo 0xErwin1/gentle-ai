@@ -19,7 +19,7 @@ func TestImmutableReviewRuntimeMatrix(t *testing.T) {
 		supported bool
 	}{
 		{name: "Claude prompt carried", runtime: string(model.AgentClaudeCode), eligible: true, transport: reviewImmutableTransportClaudePromptCarried, supported: true},
-		{name: "OpenCode is pending #2076", runtime: string(model.AgentOpenCode), eligible: true, transport: reviewImmutableTransportUnsupported},
+		{name: "OpenCode provider injected", runtime: string(model.AgentOpenCode), eligible: true, transport: reviewImmutableTransportOpenCodeProviderInjected, supported: true},
 		{name: "Codex is pending #2208", runtime: string(model.AgentCodex), eligible: true, transport: reviewImmutableTransportUnsupported},
 		{name: "Pi", runtime: string(model.AgentPi), transport: reviewImmutableTransportUnsupported},
 		{name: "Kilo", runtime: string(model.AgentKilocode), transport: reviewImmutableTransportUnsupported},
@@ -64,12 +64,18 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 		// stays reviewImmutableTransportUnsupportedCode for every runtime.
 		startCode string
 	}{
-		{name: "OpenCode", runtime: string(model.AgentOpenCode), startCode: reviewImmutableTransportUnsupportedCode},
+		// OpenCode is no longer in this table: issue #2417 restored genuine
+		// transport, so `--agent opencode` now proceeds past this narrower
+		// immutable-transport check instead of stopping here (see
+		// TestSupportedImmutableReviewRuntimeIsCarriedIntoV2Start).
 		{name: "Codex", runtime: string(model.AgentCodex), startCode: reviewImmutableTransportUnsupportedCode},
 		{name: "Pi", runtime: string(model.AgentPi), startCode: reviewTransportCapabilityUnsupportedCode},
 		{name: "Kilo", runtime: string(model.AgentKilocode), startCode: reviewImmutableTransportUnsupportedCode},
 		{name: "unknown", runtime: "unknown-runtime", startCode: reviewTransportCapabilityUnsupportedCode},
-		{name: "missing runtime", startCode: reviewImmutableTransportUnsupportedCode},
+		// An undeclared runtime identity is deliberately absent from this
+		// matrix: it makes no transport claim to refuse, so it stays on the
+		// manual/non-agent compatibility path. See
+		// review_missing_runtime_identity_test.go.
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			for _, invocation := range []struct {
@@ -118,7 +124,7 @@ func TestUnsupportedImmutableReviewTransportStopsBeforeRepositoryOrAuthority(t *
 
 	repo := initReviewCLIRepo(t)
 	for _, args := range [][]string{
-		{"status", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentOpenCode), "--next-transition", "--cwd", repo},
+		{"status", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentKilocode), "--next-transition", "--cwd", repo},
 		{"start", "--contract", ReviewIntegrationContractV2, "--agent", string(model.AgentCodex), "--target", target, "--projection", "workspace", "--cwd", repo},
 	} {
 		if err := RunReview(args, &bytes.Buffer{}); err == nil {
@@ -151,7 +157,7 @@ func TestV21RejectsDuplicateRuntimeAgentsBeforeRepositoryAccess(t *testing.T) {
 }
 
 func TestSupportedImmutableReviewRuntimeIsCarriedIntoV2Start(t *testing.T) {
-	for _, runtime := range []string{string(model.AgentClaudeCode)} {
+	for _, runtime := range []string{string(model.AgentClaudeCode), string(model.AgentOpenCode)} {
 		t.Run(runtime, func(t *testing.T) {
 			repo := initReviewCLIRepo(t)
 			writeReviewStartCandidate(t, repo, "candidate.go", "package candidate\n", 0o644)

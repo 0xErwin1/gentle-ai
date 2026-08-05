@@ -230,6 +230,13 @@ type Status struct {
 	PhaseInstructions *PhaseInstructions `json:"phaseInstructions,omitempty"`
 	NextRecommended   string             `json:"nextRecommended"`
 	BlockedReasons    []string           `json:"blockedReasons"`
+	// runtimeAttemptTokens carries the ledger's live attempt tokens alongside
+	// RuntimeStatus so status can ask the one readiness predicate the same
+	// question compact acquire asks, and name the same continuation acquire
+	// names. It is unexported on purpose: the tokens are an input to the
+	// answer, not part of the SDD v1 wire document, and the ratified contract
+	// keeps full runtime payload off that document.
+	runtimeAttemptTokens map[int]string
 }
 
 // ReviewOfferBlock carries what an orchestrator needs to present the
@@ -413,11 +420,11 @@ func Resolve(options ResolveOptions) (Status, error) {
 			if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, reviewDisabled); ok || err != nil {
 				return status, err
 			}
-			return blockedStatus(workspaceRoot, nil, nil, "sdd-new", []string{"No active OpenSpec changes found under openspec/changes."}, options.IncludeInstructions), nil
+			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "sdd-new", []string{"No active OpenSpec changes found under openspec/changes."}, options.IncludeInstructions), nil
 		case 1:
 			changeName = activeChanges[0]
 		default:
-			return blockedStatus(workspaceRoot, nil, nil, "select-change", []string{fmt.Sprintf("Change selection is ambiguous: %s.", strings.Join(activeChanges, ", "))}, options.IncludeInstructions), nil
+			return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, nil, nil, "select-change", []string{fmt.Sprintf("Change selection is ambiguous: %s.", strings.Join(activeChanges, ", "))}, options.IncludeInstructions), nil
 		}
 	}
 
@@ -425,7 +432,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 		if status, ok, err := resolveEngramStatus(workspaceRoot, changeName, options.IncludeInstructions, reviewDisabled); ok || err != nil {
 			return status, err
 		}
-		return blockedStatus(workspaceRoot, &changeName, nil, "sdd-new", []string{fmt.Sprintf("Active OpenSpec change not found: %s.", changeName)}, options.IncludeInstructions), nil
+		return blockedStatus(ArtifactStoreOpenSpec, workspaceRoot, &changeName, nil, "sdd-new", []string{fmt.Sprintf("Active OpenSpec change not found: %s.", changeName)}, options.IncludeInstructions), nil
 	}
 
 	changeRoot := filepath.Join(changesDir, changeName)
@@ -433,19 +440,20 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	artifacts := map[string]ArtifactState{
-		"proposal":      singleArtifactState(artifactPaths.Proposal),
-		"specs":         multiArtifactState(artifactPaths.Specs, filepath.Join(changeRoot, "specs")),
-		"design":        singleArtifactState(artifactPaths.Design),
-		"tasks":         singleArtifactState(artifactPaths.Tasks),
-		"applyProgress": singleArtifactState(artifactPaths.ApplyProgress),
-		"verifyReport":  singleArtifactState(artifactPaths.VerifyReport),
-		"reviewLedger":  singleArtifactState(artifactPaths.ReviewLedger),
-		"reviewReceipt": singleArtifactState(artifactPaths.ReviewReceipt),
-		"reviewBundle":  singleArtifactState(artifactPaths.ReviewBundle),
-		"reviewContext": singleArtifactState(artifactPaths.ReviewContext),
-		"reviewState":   singleArtifactState(artifactPaths.ReviewState),
-	}
+	artifacts := artifactStates{
+		Proposal:      singleArtifactState(artifactPaths.Proposal),
+		Specs:         multiArtifactState(artifactPaths.Specs, filepath.Join(changeRoot, "specs")),
+		Design:        singleArtifactState(artifactPaths.Design),
+		Tasks:         singleArtifactState(artifactPaths.Tasks),
+		ApplyProgress: singleArtifactState(artifactPaths.ApplyProgress),
+		VerifyReport:  singleArtifactState(artifactPaths.VerifyReport),
+		ReviewPolicy:  singleArtifactState(artifactPaths.ReviewPolicy),
+		ReviewLedger:  singleArtifactState(artifactPaths.ReviewLedger),
+		ReviewReceipt: singleArtifactState(artifactPaths.ReviewReceipt),
+		ReviewBundle:  singleArtifactState(artifactPaths.ReviewBundle),
+		ReviewContext: singleArtifactState(artifactPaths.ReviewContext),
+		ReviewState:   singleArtifactState(artifactPaths.ReviewState),
+	}.statesFor(ArtifactStoreOpenSpec)
 	taskProgress, err := countTaskProgress(firstPath(artifactPaths.Tasks))
 	if err != nil {
 		return Status{}, err
@@ -459,7 +467,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	runtimeStatus, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName)
+	runtimeStatus, runtimeAttemptTokens, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName)
 	reviewState, reviewStateReason := readReviewTransaction(firstPath(artifactPaths.ReviewState), "")
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
@@ -506,7 +514,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 			blockedReasons.genuine = append(blockedReasons.genuine, evaluation.Reason)
 		}
 	}
-	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, verifyResult)
+	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, runtimeAttemptTokens, verifyResult, reviewDisabled)
 	remediationRequired := staleAllowAuthority == nil && !staleEvidenceUnmanaged && !runtimeRemediationComplete && artifacts["verifyReport"] == ArtifactDone && !verifyResult.Passing && applyState == ApplyAllDone
 	var compactRemediation *reviewtransaction.CompactState
 	if !reviewDisabled {
@@ -517,6 +525,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	}
 	remediationState := resolveBoundedRemediation(
 		remediationRequired,
+		reviewDisabled,
 		verifyResult,
 		reviewState,
 		compactRemediation,
@@ -525,10 +534,13 @@ func Resolve(options ResolveOptions) (Status, error) {
 	)
 	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyResult.Passing, remediationState.Complete)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, artifacts["verifyReport"] == ArtifactDone, remediationState)
-	if staleAllowAuthority != nil || staleEvidenceUnmanaged {
+	if staleAllowAuthority != nil || staleEvidenceUnmanaged || (reviewDisabled && runtimeRemediationComplete) {
 		dependencies.Verify = DependencyReady
 		dependencies.Archive = DependencyBlocked
 		nextRecommended = "verify"
+		if runtimeRemediationComplete {
+			remediationState = RemediationState{}
+		}
 	}
 	var boundGate *ReviewGateState
 	bridge := compactPreVerifyBridge{}
@@ -582,7 +594,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if remediationState.Reason != "" {
 		blockedReasons.genuine = append(blockedReasons.genuine, remediationState.Reason)
 	}
-	status := baseStatus(workspaceRoot, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
+	status := baseStatus(ArtifactStoreOpenSpec, workspaceRoot, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
 	status.ArtifactPaths = artifactPaths
 	status.ContextFiles = artifactPaths
 	status.Artifacts = artifacts
@@ -591,6 +603,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	status.ApplyState = applyState
 	status.RemediationState = remediationState
 	status.RuntimeStatus = runtimeStatus
+	status.runtimeAttemptTokens = runtimeAttemptTokens
 	status.ReviewTransaction = reviewState
 	if governingRef == nil {
 		if staleAllowAuthority != nil {
@@ -608,9 +621,10 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if boundGate != nil {
 		status.ReviewGate = boundGate
 	}
+	applyEnabledUnmanagedRemediationAuthorityRouting(&status, reviewDisabled)
 	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, changeName, reviewDisabled)
 	if governingRef != nil {
-		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, governingRef, reviewDisabled)
+		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, governingRef, runtimeStatus, reviewDisabled)
 	}
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
@@ -625,25 +639,30 @@ func Resolve(options ResolveOptions) (Status, error) {
 	return status, nil
 }
 
-func loadNativeRuntimeStatus(ctx context.Context, workspaceRoot, changeName string) (*RuntimeStatus, error) {
+// loadNativeRuntimeStatus returns the runtime status together with the ledger's
+// attempt tokens. Status needs the tokens because it now reports what compact
+// acquire would return, and acquire's answer for a live attempt names that
+// attempt's own token as the caller's continuation (#2463).
+func loadNativeRuntimeStatus(ctx context.Context, workspaceRoot, changeName string) (*RuntimeStatus, map[int]string, error) {
 	// SDD status remains useful for non-Git planning fixtures and repositories.
 	// A native runtime chain cannot exist without a Git common-dir, so the
 	// absence of a repository means there is no runtime authority to embed.
 	if _, err := (reviewtransaction.SnapshotBuilder{Repo: workspaceRoot}).ResolveRepositoryRoot(ctx); err != nil {
 		if workspaceHasGitMetadata(workspaceRoot) {
-			return nil, fmt.Errorf("resolve Git repository for native SDD runtime authority: %w", err)
+			return nil, nil, fmt.Errorf("resolve Git repository for native SDD runtime authority: %w", err)
 		}
-		return nil, nil
+		return nil, nil, nil
 	}
 	store, err := OpenRuntimeStore(ctx, workspaceRoot, changeName)
 	if err != nil {
-		return nil, fmt.Errorf("open native SDD runtime authority: %w", err)
+		return nil, nil, fmt.Errorf("open native SDD runtime authority: %w", err)
 	}
-	status, err := store.Status()
+	replay, err := store.load()
 	if err != nil {
-		return nil, fmt.Errorf("read native SDD runtime authority: %w", err)
+		return nil, nil, fmt.Errorf("read native SDD runtime authority: %w", err)
 	}
-	return &status, nil
+	status := replay.Status
+	return &status, replay.AttemptTokens, nil
 }
 
 func workspaceHasGitMetadata(workspaceRoot string) bool {
@@ -660,15 +679,54 @@ func workspaceHasGitMetadata(workspaceRoot string) bool {
 	}
 }
 
-func nativeRuntimeCompletesRemediation(runtimeStatus *RuntimeStatus, verify verifyResultEvaluation) bool {
-	if runtimeStatus == nil || !runtimeStatus.Complete || runtimeStatus.DecisionRequired || runtimeStatus.ActiveAttempt != nil ||
-		runtimeStatus.Binding == nil || verify.EvidenceRevision == "" || len(runtimeStatus.Attempts) == 0 {
+func nativeRuntimeCompletesRemediation(runtimeStatus *RuntimeStatus, attemptTokens map[int]string, verify verifyResultEvaluation, reviewDisabled bool) bool {
+	if runtimeStatus == nil || verify.EvidenceRevision == "" || len(runtimeStatus.Attempts) == 0 ||
+		(reviewDisabled && runtimeStatus.Binding != nil) || (!reviewDisabled && runtimeStatus.Binding == nil) {
+		return false
+	}
+	// "The runtime finished this objective cleanly" is the readiness question,
+	// so it is asked through the one predicate rather than re-derived here.
+	readiness, terminal := runtimeReadiness(runtimeReadinessInput{Status: *runtimeStatus, AttemptTokens: attemptTokens})
+	if !terminal || readiness.State != CompactStateComplete {
 		return false
 	}
 	last := runtimeStatus.Attempts[len(runtimeStatus.Attempts)-1]
 	return last.Outcome == AttemptPassed && !last.ChangedLineBudgetExceeded &&
 		last.RemediatesEvidenceRevision == verify.EvidenceRevision &&
 		last.EvidenceRevision != "" && last.EvidenceRevision == runtimeStatus.EvidenceRevision
+}
+
+// nativeRuntimeCompletedUnmanagedCorrection recognizes the exact terminal
+// record Finish admits only while review authority is disabled: a direct failed
+// attempt followed by a changed, distinct-evidence correction with no binding.
+func nativeRuntimeCompletedUnmanagedCorrection(runtimeStatus *RuntimeStatus) bool {
+	if runtimeStatus == nil || runtimeStatus.Binding != nil || runtimeStatus.Receipt != nil || len(runtimeStatus.Attempts) < 2 {
+		return false
+	}
+	correction := runtimeStatus.Attempts[len(runtimeStatus.Attempts)-1]
+	failed := runtimeStatus.Attempts[len(runtimeStatus.Attempts)-2]
+	return failed.Outcome == AttemptFailed && correction.Outcome == AttemptPassed &&
+		correction.RemediatesEvidenceRevision != "" && correction.RemediatesEvidenceRevision == failed.EvidenceRevision &&
+		correction.EvidenceRevision != "" && correction.EvidenceRevision == runtimeStatus.EvidenceRevision &&
+		correction.FinishCandidateIdentity != correction.BeginCandidateIdentity && correction.FinishCandidateTree != correction.BeginCandidateTree
+}
+
+// applyEnabledUnmanagedRemediationAuthorityRouting preserves a disabled-mode
+// correction and its fresh verification, but never promotes it into enabled
+// receipt authority. A valid existing gate remains authoritative on its own.
+func applyEnabledUnmanagedRemediationAuthorityRouting(status *Status, reviewDisabled bool) {
+	if reviewDisabled || status == nil || status.Dependencies.Verify != DependencyAllDone || status.ReviewGate != nil ||
+		!nativeRuntimeCompletedUnmanagedCorrection(status.RuntimeStatus) {
+		return
+	}
+	readiness, terminal := runtimeReadiness(runtimeReadinessInput{
+		Status: *status.RuntimeStatus, AttemptTokens: status.runtimeAttemptTokens,
+	})
+	if !terminal || readiness.State != CompactStateComplete {
+		return
+	}
+	blockReviewGate(status, reviewtransaction.GateInvalidated,
+		"a disabled/unmanaged correction repaired failed evidence without a bounded review transaction or receipt; enabled receipt-driven delivery requires bounded review authority for the corrected candidate; "+reviewGateFreshReviewContinuation)
 }
 
 func applyNativeRuntimeErrorRouting(status *Status, runtimeErr error) {
@@ -690,30 +748,38 @@ func applyNativeRuntimeErrorRouting(status *Status, runtimeErr error) {
 	status.BlockedReasons = append(status.BlockedReasons, reason)
 }
 
+// applyNativeRuntimeRouting reports what compact acquire would return. It no
+// longer derives that verdict, and it no longer asserts it in prose: the reason
+// text is the predicate's own named exit.
+//
+// An active attempt is deliberately not a stop (#2463). The ratified contract
+// (internal/assets/skills/_shared/sdd-status-contract.md lines 20, 21 and 142)
+// makes acquire the launch authority and full runtime status a diagnostic, and
+// acquire's own exit for this state is self-service: the holder of the token
+// adds --token to its own call and continues that exact attempt. Status cannot
+// know whether its reader holds that token, and it does not need to, because
+// acquire checks. Blocking here stopped the one caller that was entitled to
+// proceed, and every caller reaches acquire before launching anyway.
+//
+// A maintainer decision has no self-service exit, so it stays a hard stop.
 func applyNativeRuntimeRouting(status *Status) {
 	if status == nil || status.RuntimeStatus == nil {
 		return
 	}
-	runtimeStatus := status.RuntimeStatus
-	change := runtimeStatus.Change
+	readiness, terminal := runtimeReadiness(runtimeReadinessInput{
+		Status: *status.RuntimeStatus, AttemptTokens: status.runtimeAttemptTokens,
+	})
+	if !terminal || readiness.State != CompactStateBlocked || readiness.Reason == CompactBlockActiveAttempt {
+		return
+	}
+	change := status.RuntimeStatus.Change
 	if status.ChangeName != nil {
 		change = *status.ChangeName
 	}
-	var reason string
-	switch {
-	case runtimeStatus.DecisionRequired:
-		reason = fmt.Sprintf(
-			"native SDD runtime execution requires an explicit maintainer scope decision; compact acquire reports blocked(maintainer_decision). Reset remains exceptional and may be run only after explicit maintainer authorization; full status is diagnostic only for %q in %q",
-			change, status.ActionContext.WorkspaceRoot,
-		)
-	case runtimeStatus.ActiveAttempt != nil:
-		reason = fmt.Sprintf(
-			"native SDD runtime attempt %d is active; compact acquire reports blocked(active_attempt) with its opaque settle token. Do not launch another continuation; settle only the external execution already associated with that token for %q in %q",
-			runtimeStatus.ActiveAttempt.Ordinal, change, status.ActionContext.WorkspaceRoot,
-		)
-	default:
-		return
-	}
+	reason := fmt.Sprintf(
+		"native SDD runtime execution is blocked(%s) for %q in %q; compact acquire reports the same: %s",
+		readiness.Reason, change, status.ActionContext.WorkspaceRoot, readiness.Exit,
+	)
 	status.Dependencies.Apply = DependencyBlocked
 	status.Dependencies.Verify = DependencyBlocked
 	status.Dependencies.Archive = DependencyBlocked
@@ -770,24 +836,24 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	}
 
 	artifactPaths := engramArtifactPaths(changeName, artifactsByType)
-	artifacts := map[string]ArtifactState{
-		"proposal":      engramArtifactState(artifactsByType["proposal"]),
-		"specs":         engramArtifactState(artifactsByType["spec"]),
-		"design":        engramArtifactState(artifactsByType["design"]),
-		"tasks":         engramArtifactState(artifactsByType["tasks"]),
-		"applyProgress": engramArtifactState(artifactsByType["apply-progress"]),
-		"verifyReport":  engramArtifactState(artifactsByType["verify-report"]),
-		"reviewLedger":  engramArtifactState(artifactsByType["review/ledger"]),
-		"reviewPolicy":  engramArtifactState(artifactsByType["review/policy"]),
-		"reviewReceipt": engramArtifactState(artifactsByType["review/receipt"]),
-		"reviewBundle":  engramArtifactState(artifactsByType["review/chain-bundle"]),
-		"reviewContext": engramArtifactState(artifactsByType["review/gate-context"]),
-		"reviewState":   engramArtifactState(artifactsByType["review/transaction"]),
-	}
+	artifacts := artifactStates{
+		Proposal:      engramArtifactState(artifactsByType["proposal"]),
+		Specs:         engramArtifactState(artifactsByType["spec"]),
+		Design:        engramArtifactState(artifactsByType["design"]),
+		Tasks:         engramArtifactState(artifactsByType["tasks"]),
+		ApplyProgress: engramArtifactState(artifactsByType["apply-progress"]),
+		VerifyReport:  engramArtifactState(artifactsByType["verify-report"]),
+		ReviewPolicy:  engramArtifactState(artifactsByType["review/policy"]),
+		ReviewLedger:  engramArtifactState(artifactsByType["review/ledger"]),
+		ReviewReceipt: engramArtifactState(artifactsByType["review/receipt"]),
+		ReviewBundle:  engramArtifactState(artifactsByType["review/chain-bundle"]),
+		ReviewContext: engramArtifactState(artifactsByType["review/gate-context"]),
+		ReviewState:   engramArtifactState(artifactsByType["review/transaction"]),
+	}.statesFor(ArtifactStoreEngram)
 	taskProgress := countTaskProgressText(artifactsByType["tasks"].Content)
 	specCounts := countSpecRequirementsAndScenarios([]string{artifactsByType["spec"].Content})
 	verifyResult := parseVerifyResult(artifactsByType["verify-report"].Content, specCounts)
-	runtimeStatus, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName)
+	runtimeStatus, runtimeAttemptTokens, runtimeStatusErr := loadNativeRuntimeStatus(context.Background(), workspaceRoot, changeName)
 	reviewState, reviewStateReason := readReviewTransaction("", artifactsByType["review/transaction"].Content)
 	coreReady := artifacts["proposal"] == ArtifactDone && artifacts["specs"] == ArtifactDone && artifacts["design"] == ArtifactDone && artifacts["tasks"] == ArtifactDone && taskProgress.Total > 0
 	applyState := resolveApplyState(coreReady, taskProgress)
@@ -817,7 +883,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 			blockedReasons.genuine = append(blockedReasons.genuine, evaluation.Reason)
 		}
 	}
-	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, verifyResult)
+	runtimeRemediationComplete := nativeRuntimeCompletesRemediation(runtimeStatus, runtimeAttemptTokens, verifyResult, reviewDisabled)
 	remediationRequired := staleAllowAuthority == nil && !staleEvidenceUnmanaged && !runtimeRemediationComplete && artifacts["verifyReport"] == ArtifactDone && !verifyResult.Passing && applyState == ApplyAllDone
 	var compactRemediation *reviewtransaction.CompactState
 	if !reviewDisabled {
@@ -828,6 +894,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	}
 	remediationState := resolveBoundedRemediation(
 		remediationRequired,
+		reviewDisabled,
 		verifyResult,
 		reviewState,
 		compactRemediation,
@@ -839,10 +906,13 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	}
 	dependencies := resolveDependencies(artifacts, taskProgress, applyState, coreReady, verifyResult.Passing, remediationState.Complete)
 	nextRecommended := resolveNextRecommended(dependencies, applyState, artifacts["verifyReport"] == ArtifactDone, remediationState)
-	if staleAllowAuthority != nil || staleEvidenceUnmanaged {
+	if staleAllowAuthority != nil || staleEvidenceUnmanaged || (reviewDisabled && runtimeRemediationComplete) {
 		dependencies.Verify = DependencyReady
 		dependencies.Archive = DependencyBlocked
 		nextRecommended = "verify"
+		if runtimeRemediationComplete {
+			remediationState = RemediationState{}
+		}
 	}
 	var boundGate *ReviewGateState
 	if !reviewDisabled && governingRef != nil {
@@ -871,8 +941,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	}
 
 	changeRoot := fmt.Sprintf("engram:sdd/%s", changeName)
-	status := baseStatus(workspaceRoot, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
-	status.ArtifactStore = ArtifactStoreEngram
+	status := baseStatus(ArtifactStoreEngram, workspaceRoot, &changeName, &changeRoot, nextRecommended, append([]string{}, blockedReasons.genuine...))
 	status.PlanningHome = PlanningHome{Mode: ActionModeRepoLocal, Path: "engram:sdd"}
 	status.ArtifactPaths = artifactPaths
 	status.ContextFiles = artifactPaths
@@ -882,6 +951,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	status.ApplyState = applyState
 	status.RemediationState = remediationState
 	status.RuntimeStatus = runtimeStatus
+	status.runtimeAttemptTokens = runtimeAttemptTokens
 	status.ReviewTransaction = reviewState
 	if governingRef == nil {
 		if staleAllowAuthority != nil {
@@ -899,9 +969,10 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	if boundGate != nil {
 		status.ReviewGate = boundGate
 	}
+	applyEnabledUnmanagedRemediationAuthorityRouting(&status, reviewDisabled)
 	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, changeName, reviewDisabled)
 	if governingRef != nil {
-		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, governingRef, reviewDisabled)
+		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, governingRef, runtimeStatus, reviewDisabled)
 	}
 	if runtimeStatusErr != nil {
 		applyNativeRuntimeErrorRouting(&status, runtimeStatusErr)
@@ -921,8 +992,7 @@ func compactBridgeableReviewArtifact(state ArtifactState, reason string) bool {
 }
 
 func blockedEngramStatus(workspaceRoot string, changeName *string, next string, reasons []string, includeInstructions bool) Status {
-	status := blockedStatus(workspaceRoot, changeName, nil, next, reasons, includeInstructions)
-	status.ArtifactStore = ArtifactStoreEngram
+	status := blockedStatus(ArtifactStoreEngram, workspaceRoot, changeName, nil, next, reasons, includeInstructions)
 	status.PlanningHome = PlanningHome{Mode: ActionModeRepoLocal, Path: "engram:sdd"}
 	return status
 }
@@ -1282,8 +1352,8 @@ func absOrCWD(path string) (string, error) {
 	return filepath.Abs(path)
 }
 
-func blockedStatus(workspaceRoot string, changeName *string, changeRoot *string, next string, reasons []string, includeInstructions bool) Status {
-	status := baseStatus(workspaceRoot, changeName, changeRoot, next, reasons)
+func blockedStatus(store ArtifactStore, workspaceRoot string, changeName *string, changeRoot *string, next string, reasons []string, includeInstructions bool) Status {
+	status := baseStatus(store, workspaceRoot, changeName, changeRoot, next, reasons)
 	if includeInstructions {
 		instructions := renderPhaseInstructions(status)
 		status.PhaseInstructions = &instructions
@@ -1291,7 +1361,11 @@ func blockedStatus(workspaceRoot string, changeName *string, changeRoot *string,
 	return status
 }
 
-func baseStatus(workspaceRoot string, changeName *string, changeRoot *string, next string, reasons []string) Status {
+// baseStatus takes the artifact store as an input so the artifact map is built
+// for the store the status actually reports. Issue #2346: it used to hardcode
+// ArtifactStoreOpenSpec and leave callers to relabel the store afterwards,
+// which produced an Engram status carrying an OpenSpec-shaped map.
+func baseStatus(store ArtifactStore, workspaceRoot string, changeName *string, changeRoot *string, next string, reasons []string) Status {
 	emptyPaths := emptyArtifactPaths()
 	if reasons == nil {
 		reasons = []string{}
@@ -1300,7 +1374,7 @@ func baseStatus(workspaceRoot string, changeName *string, changeRoot *string, ne
 		SchemaName:    SchemaName,
 		SchemaVersion: SchemaVersion,
 		ChangeName:    changeName,
-		ArtifactStore: ArtifactStoreOpenSpec,
+		ArtifactStore: store,
 		PlanningHome: PlanningHome{
 			Mode: ActionModeRepoLocal,
 			Path: filepath.Join(workspaceRoot, "openspec"),
@@ -1308,20 +1382,8 @@ func baseStatus(workspaceRoot string, changeName *string, changeRoot *string, ne
 		ChangeRoot:    changeRoot,
 		ArtifactPaths: emptyPaths,
 		ContextFiles:  emptyPaths,
-		Artifacts: map[string]ArtifactState{
-			"proposal":      ArtifactMissing,
-			"specs":         ArtifactMissing,
-			"design":        ArtifactMissing,
-			"tasks":         ArtifactMissing,
-			"applyProgress": ArtifactMissing,
-			"verifyReport":  ArtifactMissing,
-			"reviewLedger":  ArtifactMissing,
-			"reviewReceipt": ArtifactMissing,
-			"reviewBundle":  ArtifactMissing,
-			"reviewContext": ArtifactMissing,
-			"reviewState":   ArtifactMissing,
-		},
-		TaskProgress: TaskProgress{},
+		Artifacts:     artifactStates{}.statesFor(store),
+		TaskProgress:  TaskProgress{},
 		Dependencies: Dependencies{
 			Proposal: DependencyBlocked,
 			Specs:    DependencyBlocked,
@@ -1742,12 +1804,39 @@ func renderPhaseInstructions(status Status) PhaseInstructions {
 
 func nativeRuntimeInstructions(status Status, change string) []string {
 	workspace := status.ActionContext.WorkspaceRoot
-	return []string{
+	instructions := []string{
 		fmt.Sprintf("Before any runtime-bearing apply, verify, or remediation launch, run `gentle-ai sdd-attempt acquire --cwd %q --change %q --request-id \"<unique-request-id>\" --work-unit \"<label>\" --evidence-goal \"<stable-goal>\" --max-attempts <count> --max-changed-lines <count>`.", workspace, change),
 		"Launch only for state proceed and retain its opaque token. State blocked or complete stops the launch; full runtime status is a diagnostic escape hatch, not normal model context.",
 		fmt.Sprintf("After the external run, call `gentle-ai sdd-attempt settle --cwd %q --change %q --token \"<acquire-token>\" --request-id \"<unique-request-id>\" --outcome <passed|failed|interrupted> --evidence-revision <sha256> --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<evidence>\" --process-evidence \"<evidence>\"`; add --successor-lineage only for a distinct approved remediation successor.", workspace, change),
 		"Treat settle state proceed as permission for another bounded acquire, blocked as a hard stop, and complete as terminal. Reset is exceptional, requires an explicit maintainer scope decision, and is never automatic.",
 	}
+	if status.RemediationState.Required && status.RemediationState.LineageID == "" && status.RuntimeStatus != nil && status.RuntimeStatus.Objective != nil {
+		objective := status.RuntimeStatus.Objective
+		instructions = append(instructions,
+			fmt.Sprintf("Disabled/unmanaged remediation has one bounded correction attempt: run `gentle-ai sdd-attempt acquire --cwd %q --change %q --request-id \"<unique-request-id>\" --work-unit %q --evidence-goal %q --max-attempts %d --max-changed-lines %d`.", workspace, change, objective.WorkUnit, objective.EvidenceGoal, objective.MaxAttempts, objective.MaxChangedLines),
+			fmt.Sprintf("After the candidate changes, settle that token with `--remediates-evidence-revision %s`; a fresh independent verification is required before archive.", status.RemediationState.FailedEvidenceRevision),
+		)
+	}
+	return append(instructions, liveRuntimeAttemptInstructions(status)...)
+}
+
+// liveRuntimeAttemptInstructions names the continuation for an attempt that is
+// already active. This is the informational half of #2463: status stops
+// blocking a live attempt, and instead hands the caller the exact exit compact
+// acquire itself names, including that attempt's own token. A caller that owns
+// the token continues it; a caller that does not learns it must settle first.
+// The text is the predicate's, never a paraphrase.
+func liveRuntimeAttemptInstructions(status Status) []string {
+	if status.RuntimeStatus == nil {
+		return nil
+	}
+	readiness, terminal := runtimeReadiness(runtimeReadinessInput{
+		Status: *status.RuntimeStatus, AttemptTokens: status.runtimeAttemptTokens,
+	})
+	if !terminal || readiness.Reason != CompactBlockActiveAttempt {
+		return nil
+	}
+	return []string{"An attempt is already active for this change: " + readiness.Exit}
 }
 
 // nonPhaseRoutingInstructions renders actionable continuations for

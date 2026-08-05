@@ -2,8 +2,10 @@ package sddstatus
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -14,10 +16,34 @@ import (
 // resolution (decision 3's amendment) -- the routing surface owns
 // integration, the orchestrator consumes it, RunSDDVerifyValidate stays
 // context-free. It fires only when the change's governing receipt (S5c''s
-// resolveGoverningReceiptRef path) records an applied review correction,
-// and is purely additive/informational: it never mutates Dependencies or
-// NextRecommended itself, the same non-invasive shape Status.ReviewOffer
-// already established.
+// resolveGoverningReceiptRef path) records an applied review correction.
+// Status.ReVerify itself stays purely additive/informational (the S6/cycle-3
+// shape), the same non-invasive pattern Status.ReviewOffer already
+// established.
+//
+// Wave 5 Phase 9 (design.md's "Amendment (corrective verify cycle 3):
+// re-verify archive-gating deferred to Wave 5") reintroduces archive-gating
+// enforcement, done differently this time: blockArchiveForUnsatisfiedReVerify
+// anchors the demand to CompactCorrectionAttempt's own FixDeltaHash/
+// Snapshot.CandidateTree -- written once, at CompleteCorrection time
+// (compact.go), into an append-only slice -- never a live value re-derived
+// from the current verify-report on every Resolve() the way cycle 3's
+// removed attempt did (Wave 4 CRITICAL-A's livelock). Satisfaction is a
+// structural check: does any passing native SDD runtime attempt's own
+// FinishCandidateTree already equal that frozen candidateTree? An ordinary
+// `sdd-attempt finish --outcome passed` run after the correction naturally
+// captures that equality (FinishCandidateTree is simply the operator's
+// current working tree at finish time) -- no new CLI flag, sub-operation, or
+// top-level verb is needed; the runnable continuation named in the blocked
+// reason is the plain, already-existing 8-base-flag finish shape. This is a
+// disclosed deviation from tasks.md's Phase 9 pre-plan, which anticipated
+// possibly needing the existing --remediates-evidence-revision trio: that
+// trio's own validation (validateRuntimeRemediationSuccessor,
+// runtime_ledger.go) demands an approved review successor lineage, a full
+// review round trip -- a heavier, semantically distinct axis ("this failed
+// runtime attempt's evidence is repaired by an approved successor binding")
+// than "re-verify the corrected candidate," and reusing it would have
+// repeated Wave 4's unrunnable-continuation defect at one remove.
 //
 // Data-source note (recorded explicitly, matching the amendment's own
 // permission): the terminal CompactReceipt SDDReceiptRef points at carries
@@ -87,8 +113,11 @@ const (
 // defeats the "run a cheap targeted re-verify" scenario this block exists
 // for. See design.md's "Amendment (corrective verify cycle 3): re-verify
 // archive-gating deferred to Wave 5" and the matching spec amendment. This
-// type is purely additive/informational again, the shape S6 originally
-// shipped and cycle 3 restores.
+// type stays purely additive/informational, the shape S6 originally shipped
+// and cycle 3 restored -- Wave 5 Phase 9's replacement archive-gating
+// enforcement (blockArchiveForUnsatisfiedReVerify, below) is a SEPARATE
+// mechanism with its own frozen anchor, deliberately not reusing this
+// block's fields at all (see this file's top-level doc comment).
 type ReVerifyBlock struct {
 	Mode   string   `json:"mode"`
 	Scope  []string `json:"scope,omitempty"`
@@ -105,6 +134,14 @@ type correctionEvidence struct {
 	paths      []string
 	derivable  bool
 	failClosed bool
+	// fixDeltaHash and candidateTree (Wave 5 Phase 9) are the frozen archive-
+	// gating anchor: CompactCorrectionAttempt's own FixDeltaHash and
+	// Snapshot.CandidateTree, both written exactly once at CompleteCorrection
+	// time (compact.go) into an append-only slice. Populated whenever applied
+	// && !failClosed, regardless of derivable -- deriving them needs none of
+	// the path data derivable gates on.
+	fixDeltaHash  string
+	candidateTree string
 }
 
 // deriveCorrectionEvidence inspects the compact authority's last recorded
@@ -123,9 +160,12 @@ func deriveCorrectionEvidence(compact *reviewtransaction.CompactState) correctio
 		return correctionEvidence{applied: true, failClosed: true}
 	}
 	if len(last.Snapshot.Paths) == 0 {
-		return correctionEvidence{applied: true}
+		return correctionEvidence{applied: true, fixDeltaHash: last.FixDeltaHash, candidateTree: last.Snapshot.CandidateTree}
 	}
-	return correctionEvidence{applied: true, derivable: true, paths: append([]string(nil), last.Snapshot.Paths...)}
+	return correctionEvidence{
+		applied: true, derivable: true, paths: append([]string(nil), last.Snapshot.Paths...),
+		fixDeltaHash: last.FixDeltaHash, candidateTree: last.Snapshot.CandidateTree,
+	}
 }
 
 // intersectPaths returns the paths present in both sets, order-preserving
@@ -194,16 +234,18 @@ func verifyEvidenceScope(genesisPaths []string, changeName string) []string {
 
 // applyTargetedReVerifyRouting is the one call site (design.md's
 // amendment): Resolve() and resolveEngramStatus() both call it
-// symmetrically, exactly mirroring applyReviewOfferRouting's own shape. It
-// is purely additive: it never mutates Dependencies or NextRecommended,
-// only Status.ReVerify (corrective verify cycle 3, CRITICAL-A: this is
-// deliberately restored to S6's original non-invasive shape after cycle 3
-// removed the livelocking archive-gating enforcement added in between --
-// see ReVerifyBlock's doc comment). It only fires in the same window the
-// offer already requires -- SDD's own verify already passed -- since a
-// correction with no completed SDD verify to potentially invalidate has
-// nothing to route.
-func applyTargetedReVerifyRouting(ctx context.Context, status *Status, repo, changeName string, governingRef *reviewtransaction.SDDReceiptRef, reviewDisabled bool) {
+// symmetrically, exactly mirroring applyReviewOfferRouting's own shape.
+// Status.ReVerify itself stays purely additive (corrective verify cycle 3,
+// CRITICAL-A: deliberately restored to S6's original non-invasive shape --
+// see ReVerifyBlock's doc comment). Wave 5 Phase 9 additionally calls
+// blockArchiveForUnsatisfiedReVerify here, which DOES mutate
+// Dependencies.Archive and BlockedReasons -- a separate mechanism with its
+// own frozen anchor, not a reuse of ReVerifyBlock's fields (see this file's
+// top-level doc comment). Both fire only in the same window the offer
+// already requires -- SDD's own verify already passed -- since a correction
+// with no completed SDD verify to potentially invalidate has nothing to
+// route.
+func applyTargetedReVerifyRouting(ctx context.Context, status *Status, repo, changeName string, governingRef *reviewtransaction.SDDReceiptRef, runtimeStatus *RuntimeStatus, reviewDisabled bool) {
 	if reviewDisabled || governingRef == nil || status.Dependencies.Verify != DependencyAllDone {
 		return
 	}
@@ -218,8 +260,82 @@ func applyTargetedReVerifyRouting(ctx context.Context, status *Status, repo, cha
 	evidence := deriveCorrectionEvidence(&record.State)
 	scope := verifyEvidenceScope(record.State.GenesisPaths, changeName)
 	block, emit := classifyTargetedReVerify(evidence, scope)
-	if !emit {
+	if emit {
+		status.ReVerify = &block
+	}
+	blockArchiveForUnsatisfiedReVerify(status, repo, changeName, runtimeStatus, evidence)
+}
+
+// archiveReVerifyDemanded reports whether a review correction was applied
+// and its frozen anchor is trustworthy enough to demand fresh runtime
+// evidence for -- the same structural-absence guard classifyTargetedReVerify
+// uses (no correction at all, or the fail-closed unborn-HEAD branch, name
+// nothing).
+func archiveReVerifyDemanded(evidence correctionEvidence) bool {
+	return evidence.applied && !evidence.failClosed
+}
+
+// archiveReVerifySatisfied reports whether any recorded native SDD runtime
+// attempt already passed against the corrected candidate tree. This is a
+// structural check, not a flag an operator sets: an ordinary
+// `sdd-attempt finish --outcome passed` run after the correction naturally
+// captures FinishCandidateTree equal to the corrected tree, because that is
+// simply the operator's current working tree at finish time.
+func archiveReVerifySatisfied(evidence correctionEvidence, attempts []RuntimeAttempt) bool {
+	for _, attempt := range attempts {
+		if attempt.Outcome == AttemptPassed && attempt.FinishCandidateTree == evidence.candidateTree {
+			return true
+		}
+	}
+	return false
+}
+
+// archiveReVerifyContinuation names the exact, literally-runnable
+// `gentle-ai sdd-attempt` invocation that satisfies the demand: the plain,
+// already-existing 8-base-flag finish shape (missingSDDAttemptFlags's
+// "finish" case, internal/cli/sdd_attempt.go) -- no new flag, sub-operation,
+// or top-level verb. When no attempt is currently active, `begin` is named
+// first, since `finish` alone would be refused with
+// ErrRuntimeNoActiveAttempt. Values the caller cannot know ahead of time
+// (the operator's own idempotency token, diagnosis prose, etc.) are named as
+// `<placeholder>` text, the same convention runtimeRemediationExitRefusal
+// already established for this CLI surface.
+func archiveReVerifyContinuation(workspaceRoot, changeName string, runtimeStatus RuntimeStatus) string {
+	finish := fmt.Sprintf(
+		"gentle-ai sdd-attempt finish --cwd %s --change %q --expected-revision %s --request-id \"<unique-request-id>\" --outcome passed --evidence-revision \"<fresh-evidence-sha256>\" --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<cleanup-evidence>\" --process-evidence \"<process-evidence>\"",
+		pathquote.Quote(workspaceRoot), changeName, runtimeStatus.Revision,
+	)
+	if runtimeStatus.ActiveAttempt != nil {
+		return finish
+	}
+	begin := fmt.Sprintf(
+		"gentle-ai sdd-attempt begin --cwd %s --change %q --expected-revision %s --request-id \"<unique-request-id>\" --work-unit \"<work-unit>\" --evidence-goal \"<evidence-goal>\" --max-attempts <n> --max-changed-lines <n>",
+		pathquote.Quote(workspaceRoot), changeName, runtimeStatus.Revision,
+	)
+	return begin + ", then (with the new revision it returns) " + finish
+}
+
+// blockArchiveForUnsatisfiedReVerify is Wave 5 Phase 9's replacement for the
+// livelocking archive-gating enforcement corrective verify cycle 3 removed
+// (see this file's top-level doc comment and ReVerifyBlock's doc comment for
+// the full Wave 4 CRITICAL-A post-mortem and the frozen-anchor fix). It
+// blocks Dependencies.Archive only -- never Apply, Verify, or any of the
+// five delivery gates commit/push/pr/release own (a wholly separate domain,
+// internal/reviewtransaction's gate.go/compact_gate.go, S1-S7's territory,
+// not this file's) -- and only when a correction was actually applied and
+// its frozen anchor is not yet satisfied by any passing native runtime
+// attempt. nil runtimeStatus (no native runtime authority resolved this
+// Resolve()) is structural absence: nothing to demand fresh evidence from.
+func blockArchiveForUnsatisfiedReVerify(status *Status, workspaceRoot, changeName string, runtimeStatus *RuntimeStatus, evidence correctionEvidence) {
+	if runtimeStatus == nil || !archiveReVerifyDemanded(evidence) {
 		return
 	}
-	status.ReVerify = &block
+	if archiveReVerifySatisfied(evidence, runtimeStatus.Attempts) {
+		return
+	}
+	status.Dependencies.Archive = DependencyBlocked
+	status.BlockedReasons = append(status.BlockedReasons, fmt.Sprintf(
+		"a review correction (fix_delta_hash %s) changed the candidate; archive is blocked until a passing native SDD runtime attempt records evidence against the corrected candidate -- run `%s`",
+		evidence.fixDeltaHash, archiveReVerifyContinuation(workspaceRoot, changeName, *runtimeStatus),
+	))
 }

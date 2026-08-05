@@ -60,6 +60,9 @@ func TestCoordinatorOrchestratorsCarryLosslessBlockingPromptRule(t *testing.T) {
 				"Do not choose, default, infer, launch dependent work, or continue",
 				"Accept an answer only when each response belongs to the exact allowed-answer domain",
 				"free text or multi-select only when the original prompt allowed it",
+				"request for information, not a candidate answer",
+				"answer it directly from the envelope already held",
+				"re-present the complete choice envelope and keep waiting",
 				"invalid or ambiguous",
 				"same blocked actor exactly once",
 			} {
@@ -178,9 +181,10 @@ func TestCoordinatorOrchestratorsCarryGentleAIProviderDefectHandoff(t *testing.T
 		{name: "final privacy scan", text: "Immediately before the first GitHub operation, perform a final privacy scan"},
 		{name: "privacy ordering", text: "This scan precedes the duplicate search, report creation, and occurrence comment"},
 		{name: "privacy exclusions", text: "raw argv, absolute paths, private project names, usernames, hostnames, credentials, diffs, source contents, and environment values"},
-		{name: "released fix only", text: "Resume only after an installed released fix"},
+		{name: "published fix only", text: "Resume only after an installed published fix"},
 		{name: "native status re-entry", text: "re-enter through native status"},
-		{name: "no source checkout resume", text: "Never resume against a source checkout or unmerged pull request"},
+		{name: "installed prerelease qualifies", text: "A published prerelease or release candidate the user installed satisfies this."},
+		{name: "no unpublished code resume", text: "Never resume against unpublished code: a source checkout, a local build, or an unmerged pull request"},
 	}
 
 	allPaths := allSDDOrchestratorAssetPaths(t)
@@ -300,7 +304,7 @@ func providerDefectHandoffSection(t *testing.T, path string) string {
 		t.Fatalf("%s missing %q", path, heading)
 	}
 	contract := content[start:]
-	const endMarker = "Never resume against a source checkout or unmerged pull request."
+	const endMarker = "Never resume against unpublished code: a source checkout, a local build, or an unmerged pull request."
 	end := strings.Index(contract, endMarker)
 	if end == -1 {
 		t.Fatalf("%s provider-defect handoff missing terminal release boundary", path)
