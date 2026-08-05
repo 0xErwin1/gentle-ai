@@ -135,6 +135,9 @@ func collectDocumentedInvocations(t *testing.T) []documentedInvocation {
 var placeholderRegexp = regexp.MustCompile(`<[a-zA-Z][a-zA-Z0-9_ .-]*>`)
 var optionalWordRegexp = regexp.MustCompile(`^\[[a-z-]+\]$`)
 
+const documentedRuntimeAgentIDPlaceholder = "{{GENTLE_AI_RUNTIME_AGENT_ID}}"
+const documentedRuntimeAgentID = "opencode"
+
 func wordNeedsShell(word string) bool {
 	switch word {
 	case ">", ">>", "2>", "<", "|", "||", "&&", ";":
@@ -210,6 +213,11 @@ func classifyWords(words []string, safeVerbs map[string]bool, repo string) ([]st
 		case strings.HasPrefix(word, "--cwd="):
 			rewritten = append(rewritten, "--cwd="+repo)
 			continue
+		case strings.Contains(word, documentedRuntimeAgentIDPlaceholder):
+			// The placeholder appears only in the shared review contract. Its
+			// OpenCode rendering is pinned by TestGoldenSDD_OpenCode_Multi, so
+			// execute the documented command with that rendered runtime identity.
+			word = strings.ReplaceAll(word, documentedRuntimeAgentIDPlaceholder, documentedRuntimeAgentID)
 		}
 		if wordNeedsShell(placeholderRegexp.ReplaceAllString(word, "")) {
 			return nil, tierPresence
@@ -369,10 +377,7 @@ func registrySurfaceViolation(words []string) string {
 // current main. Every entry is a defect to burn down, never an accepted
 // state. An entry whose invocation starts passing must be removed; the guard
 // fails on stale entries so the list can only shrink.
-var documentedInvocationKnownFailures = map[string]string{
-	"gentle-ai review repair-legacy-alias":         "docs/review-authority-threat-model.md:67 documents it as a live compatibility verb; the CLI refuses it as an unknown review command (the machinery ships behind review repair --class)",
-	"gentle-ai review quarantine-legacy-fix-scope": "docs/review-authority-threat-model.md:75 documents it as a live maintenance operation; the CLI refuses it as an unknown review command",
-}
+var documentedInvocationKnownFailures = map[string]string{}
 
 func TestDocumentedInvocationsRunAsDocumented(t *testing.T) {
 	corpus := collectDocumentedInvocations(t)

@@ -106,12 +106,8 @@ func TestReviewFacadeStartRefusesOverExistingV2AuthorityAndNamesRecover(t *testi
 		t.Fatal(err)
 	}
 	rootBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
-	intended, err := reviewFacadeDiscoverIntendedUntracked(ctx, rootBuilder)
-	if err != nil {
-		t.Fatal(err)
-	}
 	snapshot, err := rootBuilder.Build(ctx, reviewtransaction.Target{
-		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: intended,
+		Kind: reviewtransaction.TargetCurrentChanges, Projection: reviewtransaction.ProjectionWorkspace, IntendedUntracked: []string{},
 	})
 	if err != nil {
 		t.Fatal(err)
