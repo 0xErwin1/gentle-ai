@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"os"
@@ -263,32 +264,35 @@ func admissibleOpaqueReviewerResult(t *testing.T, binding []string, evidence str
 func TestOpaqueRepositoryContextPreserveNamesDistinctCauses(t *testing.T) {
 	cases := []struct {
 		name    string
-		arrange func(t *testing.T, incidents string)
+		arrange func(t *testing.T, repo, lineage string)
 		want    string
 	}{
 		{
 			name: "incidents-path-is-a-file",
-			arrange: func(t *testing.T, incidents string) {
-				if err := os.MkdirAll(filepath.Dir(incidents), 0o700); err != nil {
+			arrange: func(t *testing.T, repo, lineage string) {
+				incidents, err := reviewtransaction.EnsureCompactIncidentsDir(context.Background(), repo, lineage)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Remove(incidents); err != nil {
 					t.Fatal(err)
 				}
 				if err := os.WriteFile(incidents, []byte("not a directory\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			},
-			want: opaqueNativeCause("not a directory", "The system cannot find the path specified."),
+			want: "unsafe RAR authority path",
 		},
 		{
 			name: "incidents-directory-is-shared",
-			arrange: func(t *testing.T, incidents string) {
-				if err := os.MkdirAll(incidents, 0o777); err != nil {
+			arrange: func(t *testing.T, repo, lineage string) {
+				incidents, err := reviewtransaction.EnsureCompactIncidentsDir(context.Background(), repo, lineage)
+				if err != nil {
 					t.Fatal(err)
 				}
-				if err := os.Chmod(incidents, 0o777); err != nil {
-					t.Fatal(err)
-				}
+				makeOpaqueSharedDirectory(t, filepath.Dir(incidents))
 			},
-			want: "not a private native directory",
+			want: "unsafe RAR authority path",
 		},
 	}
 	messages := make(map[string]string, len(cases))
@@ -296,7 +300,7 @@ func TestOpaqueRepositoryContextPreserveNamesDistinctCauses(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			lineage := "opaque-preserve-" + tt.name
 			args, input, repo := startedOpaqueCaptureBinding(t, lineage)
-			tt.arrange(t, filepath.Join(repo, ".git", "gentle-ai", "review-transactions", "incidents", lineage))
+			tt.arrange(t, repo, lineage)
 
 			err := RunReviewPreserveResult(append(append([]string{}, args...), "--input", input), io.Discard)
 			if err == nil {
