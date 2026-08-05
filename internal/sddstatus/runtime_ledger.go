@@ -702,10 +702,11 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			return runtimeRecord{}, store.runtimeWorktreeMismatchRefusal(active.Ordinal, active.BeginWorktree)
 		}
 		remediation := finishRequestsRemediation(request)
+		unmanagedRemediation := finishRequestsUnmanagedRemediation(request)
 		currentBinding := status.Binding
 		var legacyBinding *ReviewBinding
 		var legacyDigest string
-		if request.Outcome == AttemptPassed && currentBinding == nil {
+		if request.Outcome == AttemptPassed && currentBinding == nil && (!store.ReviewDisabled || remediation) {
 			legacyBinding, legacyDigest, err = store.readLegacyBinding()
 			if err != nil {
 				return runtimeRecord{}, fmt.Errorf("read legacy SDD review binding for remediation: %w", err)
@@ -721,6 +722,17 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			}
 			if status.EvidenceRevision != "" && status.EvidenceRevision != request.RemediatesEvidenceRevision {
 				return runtimeRecord{}, fmt.Errorf("failed evidence revision %q does not match native runtime evidence %q", request.RemediatesEvidenceRevision, status.EvidenceRevision)
+			}
+		}
+		if unmanagedRemediation {
+			if !store.ReviewDisabled || currentBinding != nil {
+				// refusal:by-design human-authority: unmanaged remediation is valid only while receipt authority is absent and explicitly disabled.
+				return runtimeRecord{}, errors.New("unmanaged remediation requires disabled delivery without a review binding")
+			}
+			if len(status.Attempts) < 2 || status.EvidenceRevision != request.RemediatesEvidenceRevision ||
+				status.Attempts[len(status.Attempts)-2].Outcome != AttemptFailed {
+				// refusal:by-design operator-knowledge: the native ledger admits one final correction only for its current failed evidence.
+				return runtimeRecord{}, errors.New("unmanaged remediation requires the current failed evidence and a direct correction attempt")
 			}
 		}
 		// Issue #2394: the runtime candidate is the same declared candidate
@@ -753,6 +765,20 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 			}
 			if validateErr := validateRuntimeBoundCandidate(ctx, store.Repo, *currentBinding, snapshot.CandidateTree); validateErr != nil {
 				return runtimeRecord{}, fmt.Errorf("validate unchanged bound SDD candidate: %w", validateErr)
+			}
+		}
+		previousAttemptFailed := len(status.Attempts) >= 2 && status.Attempts[len(status.Attempts)-2].Outcome == AttemptFailed
+		if store.ReviewDisabled && currentBinding == nil && request.Outcome == AttemptPassed && previousAttemptFailed && !unmanagedRemediation {
+			return runtimeRecord{}, fmt.Errorf("disabled failed verification requires --remediates-evidence-revision %q on the correction settle; rerun `gentle-ai sdd-attempt settle` with that flag", status.EvidenceRevision)
+		}
+		if unmanagedRemediation {
+			if snapshot.Identity == active.BeginCandidateIdentity || snapshot.CandidateTree == active.BeginCandidateTree {
+				// refusal:by-design operator-knowledge: a remediation claim must name a candidate changed by the active correction attempt.
+				return runtimeRecord{}, errors.New("unmanaged remediation requires a changed correction candidate")
+			}
+			if request.EvidenceRevision == request.RemediatesEvidenceRevision {
+				// refusal:by-design operator-knowledge: the correction's verification evidence must be fresh and distinct from the failed evidence it repairs.
+				return runtimeRecord{}, errors.New("unmanaged remediation requires fresh corrected evidence")
 			}
 		}
 		event := &runtimeFinishEvent{
@@ -1491,7 +1517,7 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 		}
 
 	case runtimeOperationFinish:
-		if err := applyRuntimeFinishEvent(replay, record.Finish); err != nil {
+		if err := applyRuntimeFinishEvent(replay, record.Finish, record.Finish.RemediatesEvidenceRevision != ""); err != nil {
 			return err
 		}
 
@@ -1514,7 +1540,7 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 			// its corrected evidence differs from the failed evidence it repairs.
 			return errors.New("atomic remediation binding does not select a distinct successor or corrected self-successor")
 		}
-		if err := applyRuntimeFinishEvent(replay, record.Finish); err != nil {
+		if err := applyRuntimeFinishEvent(replay, record.Finish, false); err != nil {
 			return err
 		}
 		if !record.Finish.ChangedLineBudgetExceeded {
@@ -1755,7 +1781,7 @@ func applyRuntimeAdvanceEvent(replay *runtimeReplay, revision string, record run
 	return applyRuntimeBeginEvent(replay, revision, record)
 }
 
-func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent) error {
+func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, unmanagedRemediation bool) error {
 	active := replay.Status.ActiveAttempt
 	if active == nil || active.Ordinal != event.Ordinal || len(replay.Status.Attempts) == 0 ||
 		replay.Status.Attempts[len(replay.Status.Attempts)-1].Outcome != AttemptRunning {
@@ -1764,6 +1790,16 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent) e
 	budgetExceeded := replay.Status.CumulativeChangedLines+event.ChangedLines > replay.Status.Objective.MaxChangedLines
 	if event.ChangedLineBudgetExceeded != budgetExceeded {
 		return errors.New("finish record changed-line budget decision does not match replay state")
+	}
+	if unmanagedRemediation {
+		if replay.Status.Binding != nil || len(replay.Status.Attempts) < 2 || event.Outcome != AttemptPassed ||
+			replay.Status.EvidenceRevision != event.RemediatesEvidenceRevision ||
+			replay.Status.Attempts[len(replay.Status.Attempts)-2].Outcome != AttemptFailed ||
+			event.FinishCandidateIdentity == active.BeginCandidateIdentity || event.FinishCandidateTree == active.BeginCandidateTree ||
+			event.EvidenceRevision == event.RemediatesEvidenceRevision {
+			// refusal:by-design world-action: a replayed event that breaks immutable evidence/candidate binding can only be repaired by restoring the authority.
+			return errors.New("unmanaged remediation finish does not bind the final failed-evidence correction")
+		}
 	}
 	attempt := &replay.Status.Attempts[len(replay.Status.Attempts)-1]
 	attempt.FinishCandidateIdentity = event.FinishCandidateIdentity
@@ -1874,13 +1910,14 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			!runtimeRevisionPattern.MatchString(event.FinishCandidateIdentity) || !runtimeGitTreePattern.MatchString(event.FinishCandidateTree) ||
 			validateRuntimeText(event.Diagnosis, 500) != nil || !validHarnessDisposition(event.HarnessDisposition) ||
 			validateRuntimeText(event.CleanupEvidence, 500) != nil || validateRuntimeText(event.ProcessEvidence, 500) != nil ||
-			event.RemediatesEvidenceRevision != "" {
+			(event.RemediatesEvidenceRevision != "" && (!runtimeRevisionPattern.MatchString(event.RemediatesEvidenceRevision) || event.Outcome != AttemptPassed)) {
 			return errors.New("invalid SDD runtime finish event")
 		}
 		request := FinishAttemptRequest{
 			ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID, Outcome: event.Outcome,
 			EvidenceRevision: event.EvidenceRevision, Diagnosis: event.Diagnosis, HarnessDisposition: event.HarnessDisposition,
 			CleanupEvidence: event.CleanupEvidence, ProcessEvidence: event.ProcessEvidence,
+			RemediatesEvidenceRevision: event.RemediatesEvidenceRevision,
 		}
 		if runtimeValueHash("gentle-ai.sdd-runtime-finish-request/v1", request) != record.RequestDigest {
 			return errors.New("SDD runtime finish request digest does not match record")
@@ -2109,16 +2146,16 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 	if err := validateRuntimeText(request.ProcessEvidence, 500); err != nil {
 		return FinishAttemptRequest{}, fmt.Errorf("invalid process_evidence: %w", err)
 	}
-	remediationFields := 0
-	for _, value := range []string{request.ExpectedBindingRevision, request.SuccessorLineageID, request.RemediatesEvidenceRevision} {
+	managedRemediationFields := 0
+	for _, value := range []string{request.ExpectedBindingRevision, request.SuccessorLineageID} {
 		if value != "" {
-			remediationFields++
+			managedRemediationFields++
 		}
 	}
-	if remediationFields != 0 && remediationFields != 3 {
+	if managedRemediationFields != 0 && (managedRemediationFields != 2 || request.RemediatesEvidenceRevision == "") {
 		return FinishAttemptRequest{}, errors.New("remediation successor requires expected_binding_revision, successor_lineage_id, and remediates_evidence_revision together")
 	}
-	if remediationFields == 3 {
+	if managedRemediationFields == 2 {
 		if request.Outcome != AttemptPassed {
 			return FinishAttemptRequest{}, errors.New("an atomic remediation successor is valid only for a passed attempt")
 		}
@@ -2137,12 +2174,27 @@ func normalizeFinishAttemptRequest(request FinishAttemptRequest) (FinishAttemptR
 				runtimeRevisionShapeObservation(request.RemediatesEvidenceRevision),
 			)
 		}
+	} else if request.RemediatesEvidenceRevision != "" {
+		if request.Outcome != AttemptPassed {
+			// refusal:by-design operator-knowledge: the caller alone knows whether its correction passed and must supply that outcome truthfully.
+			return FinishAttemptRequest{}, errors.New("unmanaged remediation is valid only for a passed attempt")
+		}
+		if !runtimeRevisionPattern.MatchString(request.RemediatesEvidenceRevision) {
+			return FinishAttemptRequest{}, fmt.Errorf(
+				"remediates_evidence_revision must be sha256:<64-lowercase-hex> for unmanaged remediation (%s); rerun `gentle-ai sdd-attempt finish` with --remediates-evidence-revision sha256:<64-lowercase-hex>",
+				runtimeRevisionShapeObservation(request.RemediatesEvidenceRevision),
+			)
+		}
 	}
 	return request, nil
 }
 
 func finishRequestsRemediation(request FinishAttemptRequest) bool {
-	return request.ExpectedBindingRevision != "" || request.SuccessorLineageID != "" || request.RemediatesEvidenceRevision != ""
+	return request.ExpectedBindingRevision != "" || request.SuccessorLineageID != ""
+}
+
+func finishRequestsUnmanagedRemediation(request FinishAttemptRequest) bool {
+	return request.ExpectedBindingRevision == "" && request.SuccessorLineageID == "" && request.RemediatesEvidenceRevision != ""
 }
 
 func normalizeResetObjectiveRequest(request ResetObjectiveRequest) (ResetObjectiveRequest, error) {
