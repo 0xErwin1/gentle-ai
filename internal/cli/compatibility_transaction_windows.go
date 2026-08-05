@@ -36,6 +36,10 @@ const (
 // reparse races. Production leaves it nil.
 var windowsCompatibilityTransactionHook func(string)
 
+// windowsCompatibilityTransactionCloseHook observes completed handle release
+// in native tests. Production leaves it nil.
+var windowsCompatibilityTransactionCloseHook func(error)
+
 type windowsCompatibilitySnapshot struct {
 	data    []byte
 	mode    fs.FileMode
@@ -58,7 +62,7 @@ func usesAnchoredCompatibilityTransaction() bool {
 
 // newCompatibilityRefreshTransaction anchors, classifies, and snapshots every
 // compatibility destination before the generic backup can touch user paths.
-func newCompatibilityRefreshTransaction(homeDir string, components []model.ComponentID, selection model.Selection) (_ compatibilityRefreshTransaction, retErr error) {
+func newCompatibilityRefreshTransaction(homeDir string, components []model.ComponentID, selection model.Selection) (compatibilityRefreshTransaction, error) {
 	if !needsCompatibilitySkillsRefresh(components) {
 		return nil, nil
 	}
@@ -71,8 +75,9 @@ func newCompatibilityRefreshTransaction(homeDir string, components []model.Compo
 	if !exists {
 		return nil, nil
 	}
+	transferred := false
 	defer func() {
-		if retErr != nil {
+		if !transferred {
 			_ = writer.Close()
 		}
 	}()
@@ -97,6 +102,7 @@ func newCompatibilityRefreshTransaction(homeDir string, components []model.Compo
 		}
 		transaction.snapshots[path] = snapshot
 	}
+	transferred = true
 	return transaction, nil
 }
 
@@ -179,6 +185,9 @@ func (t *windowsCompatibilityRefreshTransaction) Close() error {
 	}
 	err := t.writer.Close()
 	t.writer = nil
+	if windowsCompatibilityTransactionCloseHook != nil {
+		windowsCompatibilityTransactionCloseHook(err)
+	}
 	return err
 }
 

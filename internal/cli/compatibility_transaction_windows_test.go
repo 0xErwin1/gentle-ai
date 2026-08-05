@@ -37,8 +37,22 @@ func installWindowsCompatibilityHook(t *testing.T, hook func(string)) {
 	t.Cleanup(func() { windowsCompatibilityTransactionHook = previous })
 }
 
+func installWindowsCompatibilityCloseHook(t *testing.T, hook func(error)) {
+	t.Helper()
+	previous := windowsCompatibilityTransactionCloseHook
+	windowsCompatibilityTransactionCloseHook = hook
+	t.Cleanup(func() { windowsCompatibilityTransactionCloseHook = previous })
+}
+
 func TestRunSyncWithSelectionRefreshesCompatibilityAndOpenCodeAssetsOnWindows(t *testing.T) {
 	home := t.TempDir()
+	closeCount := 0
+	installWindowsCompatibilityCloseHook(t, func(err error) {
+		if err != nil {
+			t.Errorf("close compatibility transaction: %v", err)
+		}
+		closeCount++
+	})
 	compatibilityFiles := []string{
 		filepath.Join(home, ".agents", "skills", "go-testing", "SKILL.md"),
 		filepath.Join(home, ".agents", "skills", "go-testing", "references", "examples.md"),
@@ -57,6 +71,52 @@ func TestRunSyncWithSelectionRefreshesCompatibilityAndOpenCodeAssetsOnWindows(t 
 		if err != nil || string(content) == "stale" {
 			t.Fatalf("managed asset %q was not refreshed: content=%q error=%v", path, content, err)
 		}
+	}
+	if closeCount != 1 {
+		t.Fatalf("compatibility transaction close count = %d, want 1", closeCount)
+	}
+}
+
+func TestRunSyncWithSelectionClosesWindowsCompatibilityTransactionAfterSnapshotFailure(t *testing.T) {
+	home := t.TempDir()
+	writeStale(t, filepath.Join(home, ".agents", "skills", "go-testing", "SKILL.md"))
+	if err := os.MkdirAll(filepath.Join(home, ".config", "opencode", "plugins", "model-variants.ts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	closeCount := 0
+	installWindowsCompatibilityCloseHook(t, func(err error) {
+		if err != nil {
+			t.Errorf("close compatibility transaction: %v", err)
+		}
+		closeCount++
+	})
+	if _, err := RunSyncWithSelection(home, windowsCompatibilitySelection()); err == nil || !strings.Contains(err.Error(), "model-variants.ts") {
+		t.Fatalf("RunSyncWithSelection() error = %v, want snapshot failure for model-variants.ts", err)
+	}
+	if closeCount != 1 {
+		t.Fatalf("compatibility transaction close count = %d, want 1", closeCount)
+	}
+}
+
+func TestRunSyncDryRunClosesWindowsCompatibilityTransaction(t *testing.T) {
+	home := t.TempDir()
+	setSyncTestHome(t, home)
+	writeStale(t, filepath.Join(home, ".agents", "skills", "go-testing", "SKILL.md"))
+
+	closeCount := 0
+	installWindowsCompatibilityCloseHook(t, func(err error) {
+		if err != nil {
+			t.Errorf("close compatibility transaction: %v", err)
+		}
+		closeCount++
+	})
+	result, err := RunSync([]string{"--dry-run"})
+	if err != nil || result.NoOp {
+		t.Fatalf("RunSync(--dry-run) no-op=%t, error=%v; want compatibility plan", result.NoOp, err)
+	}
+	if closeCount != 1 {
+		t.Fatalf("compatibility transaction close count = %d, want 1", closeCount)
 	}
 }
 

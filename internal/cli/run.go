@@ -167,6 +167,7 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	if err != nil {
 		return result, err
 	}
+	defer runtime.state.cleanupCompatibilityTransaction()
 
 	// Print dependency warnings before the pipeline starts (CLI only).
 	// The TUI surfaces these on the complete screen instead.
@@ -182,7 +183,6 @@ func RunInstall(args []string, detection system.DetectionResult) (InstallResult,
 	orchestrator := pipeline.NewOrchestrator(pipeline.DefaultRollbackPolicy())
 	result.Execution = orchestrator.Execute(stagePlan)
 	runtime.state.cleanupRollbackSnapshot()
-	runtime.state.cleanupCompatibilityTransaction()
 	if result.Execution.Err != nil {
 		return result, fmt.Errorf("execute install pipeline: %w", result.Execution.Err)
 	}
@@ -586,10 +586,11 @@ func (s *runtimeState) cleanupCompatibilityTransaction() {
 	if s == nil || s.compatibilityTransaction == nil {
 		return
 	}
-	if err := s.compatibilityTransaction.Close(); err != nil {
+	transaction := s.compatibilityTransaction
+	s.compatibilityTransaction = nil
+	if err := transaction.Close(); err != nil {
 		log.Printf("compatibility: close transaction: %v", err)
 	}
-	s.compatibilityTransaction = nil
 }
 
 func (s *runtimeState) compatibilityChangedFiles() []string {
