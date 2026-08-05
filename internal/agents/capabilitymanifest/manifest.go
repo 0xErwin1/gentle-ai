@@ -135,7 +135,7 @@ func ForAgent(agent model.AgentID) (AgentCapabilityManifest, error) {
 			},
 			ImmutableReviewExecutorV1: ContractClaim{
 				ID:       ContractImmutableReviewExecutorV1,
-				Exposure: ContractExposureDormant,
+				Exposure: immutableReviewExecutorExposureByAgent[agent],
 			},
 		},
 	}, nil
@@ -156,6 +156,23 @@ var reviewTransportExposureByAgent = func() map[model.AgentID]ContractExposure {
 		exposure[agent] = ContractExposureAdvertised
 	}
 	exposure[model.AgentPi] = ContractExposureDormant
+	return exposure
+}()
+
+// immutableReviewExecutorExposureByAgent declares only providers with an
+// enforceable fresh-reviewer boundary. Claude launches a generated subagent
+// with no live tools and receives only the native prompt-carried evidence;
+// OpenCode replaces the task prompt through its provider plugin and requires
+// its process-isolation controls before the reviewer launches. Codex, Kilo,
+// and every other runtime remain explicitly dormant until they own an
+// equivalent native boundary.
+var immutableReviewExecutorExposureByAgent = func() map[model.AgentID]ContractExposure {
+	exposure := make(map[model.AgentID]ContractExposure, len(featureClaimsByAgent))
+	for agent := range featureClaimsByAgent {
+		exposure[agent] = ContractExposureDormant
+	}
+	exposure[model.AgentClaudeCode] = ContractExposureAdvertised
+	exposure[model.AgentOpenCode] = ContractExposureAdvertised
 	return exposure
 }()
 
