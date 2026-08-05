@@ -152,7 +152,8 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 				RequestID: *requestID, WorkUnit: *workUnit, EvidenceGoal: *evidenceGoal,
 				MaxAttempts: *maxAttempts, MaxChangedLines: *maxChangedLines,
 			},
-			Token: *token,
+			Token:                      *token,
+			RemediatesEvidenceRevision: *remediatesEvidenceRevision,
 		})
 	case "settle":
 		if missing := missingSDDAttemptFlags(args[1:], "token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence"); len(missing) != 0 {
@@ -237,7 +238,7 @@ func validateSDDAttemptOperationFlags(operation string, args []string) error {
 		"finish":  {"expected-revision", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "expected-binding-revision", "successor-lineage", "remediates-evidence-revision"},
 		"reset":   {"expected-revision", "request-id", "reason", "actor"},
 		"rescope": {"expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "reason", "actor"},
-		"acquire": {"request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "token"},
+		"acquire": {"request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "token", "remediates-evidence-revision"},
 		"settle":  {"token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "successor-lineage", "remediates-evidence-revision"},
 		"grant":   {"expected-revision", "request-id", "root", "change-instance", "actor", "reason"},
 		"status":  {"change-instance"},

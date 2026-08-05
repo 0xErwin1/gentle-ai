@@ -1898,12 +1898,46 @@ func nativeRuntimeInstructions(status Status, change string) []string {
 		fmt.Sprintf("After the external run, call `gentle-ai sdd-attempt settle --cwd %s --change %q --token \"<acquire-token>\" --request-id \"<unique-request-id>\" --outcome <passed|failed|interrupted> --evidence-revision <sha256> --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<evidence>\" --process-evidence \"<evidence>\"`; add --successor-lineage only for a distinct approved remediation successor.", pathquote.Quote(workspace), change),
 		"Treat settle state proceed as permission for another bounded acquire, blocked as a hard stop, and complete as terminal. Reset is exceptional, requires an explicit maintainer scope decision, and is never automatic.",
 	}
-	if status.RemediationState.Required && status.RemediationState.LineageID == "" && status.RuntimeStatus != nil && status.RuntimeStatus.Objective != nil {
-		objective := status.RuntimeStatus.Objective
-		instructions = append(instructions,
-			fmt.Sprintf("Disabled/unmanaged remediation has one bounded correction attempt: run `gentle-ai sdd-attempt acquire --cwd %s --change %q --request-id \"<unique-request-id>\" --work-unit %q --evidence-goal %q --max-attempts %d --max-changed-lines %d`.", pathquote.Quote(workspace), change, objective.WorkUnit, objective.EvidenceGoal, objective.MaxAttempts, objective.MaxChangedLines),
-			fmt.Sprintf("After the candidate changes, settle that token with `--remediates-evidence-revision %s`; a fresh independent verification is required before archive.", status.RemediationState.FailedEvidenceRevision),
-		)
+	// #2564 status truthfulness: the bounded correction prescription renders
+	// only while its settlement can structurally succeed. Satisfiability
+	// follows the chain-derived binding (#2565): the immutable attempt chain
+	// must hold unremediated failed evidence, and the prescription names the
+	// chain's own evidence. An audited reset does not sever that binding, so
+	// post-reset states keep the truthful correction route (through the
+	// maintainer's reset when the ledger holds a terminal decision); only a
+	// chain with nothing left to remediate renders the fresh-verification
+	// route instead. Readiness stays runtimeReadiness's answer; only the
+	// chain's immutable facts are derived here.
+	if status.RemediationState.Required && status.RemediationState.LineageID == "" && status.RuntimeStatus != nil {
+		runtime := status.RuntimeStatus
+		readiness, terminal := runtimeReadiness(runtimeReadinessInput{
+			Status: *runtime, AttemptTokens: status.runtimeAttemptTokens,
+		})
+		launchable := !terminal || readiness.Reason == CompactBlockActiveAttempt
+		chainEvidence, chainHasFailedEvidence := runtimeChainFailedEvidence(runtime.Attempts)
+		switch {
+		case chainHasFailedEvidence && runtime.Objective != nil && launchable:
+			objective := runtime.Objective
+			instructions = append(instructions,
+				fmt.Sprintf("Disabled/unmanaged remediation has one bounded correction attempt: run `gentle-ai sdd-attempt acquire --cwd %s --change %q --request-id \"<unique-request-id>\" --work-unit %q --evidence-goal %q --max-attempts %d --max-changed-lines %d --remediates-evidence-revision %s`.", pathquote.Quote(workspace), change, objective.WorkUnit, objective.EvidenceGoal, objective.MaxAttempts, objective.MaxChangedLines, chainEvidence),
+				fmt.Sprintf("After the candidate changes, settle that token with `--remediates-evidence-revision %s`; a fresh independent verification is required before archive.", chainEvidence),
+			)
+		case chainHasFailedEvidence && terminal && readiness.Reason == CompactBlockMaintainerDecision:
+			instructions = append(instructions,
+				fmt.Sprintf("Disabled/unmanaged remediation for failed evidence %s needs a maintainer scope decision before its one bounded correction can launch.", chainEvidence),
+				fmt.Sprintf("Record the maintainer decision with `gentle-ai sdd-attempt reset --cwd %s --change %q --expected-revision %q --request-id \"<unique-request-id>\" --actor \"<maintainer>\" --reason \"<decision>\"`, then acquire the bounded correction declaring `--remediates-evidence-revision %s`; the failed-evidence binding derives from the immutable attempt chain and survives the audited reset.", pathquote.Quote(workspace), change, runtime.Revision, chainEvidence),
+			)
+		case chainHasFailedEvidence:
+			instructions = append(instructions,
+				fmt.Sprintf("Disabled/unmanaged remediation has one bounded correction attempt: declare `--remediates-evidence-revision %s` on the `gentle-ai sdd-attempt acquire` call above; the failed-evidence binding derives from the immutable attempt chain and survives an audited reset.", chainEvidence),
+				fmt.Sprintf("After the candidate changes, settle that token with `--remediates-evidence-revision %s`; a fresh independent verification is required before archive.", chainEvidence),
+			)
+		default:
+			instructions = append(instructions,
+				fmt.Sprintf("Unmanaged remediation for failed evidence %s cannot settle against the current runtime ledger: the attempt chain holds no unremediated failed evidence (nothing failed, or the failure was already corrected by a passed settlement), so do not acquire with `--remediates-evidence-revision`.", status.RemediationState.FailedEvidenceRevision),
+				fmt.Sprintf("Run `gentle-ai sdd-attempt status --cwd %s --change %q` to read the attempt chain, then continue through a fresh verification objective without `--remediates-evidence-revision`; its own failed settlement records the evidence a bounded correction can name.", pathquote.Quote(workspace), change),
+			)
+		}
 	}
 	return append(instructions, liveRuntimeAttemptInstructions(status)...)
 }
