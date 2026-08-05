@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
@@ -40,6 +41,8 @@ const (
 	runtimeOperationRescope           = "objective/rescope"
 	runtimeOperationAdvance           = "objective/advance"
 	runtimeOperationBind              = "binding/set"
+	runtimeOperationGrant             = "authority/grant"
+	maximumRuntimeGrantRoots          = 32
 	runtimeLockAcquireAttempts        = 3
 
 	// runtimeLedgerStatusPointer suffixes every ledger refusal an ordinary
@@ -291,8 +294,14 @@ type RuntimeStatus struct {
 	LastReset              *RuntimeReset     `json:"last_reset,omitempty"`
 	LastAdvance            *RuntimeAdvance   `json:"last_advance,omitempty"`
 	LastRescope            *RuntimeRescope   `json:"last_rescope,omitempty"`
-	BindingRevision        string            `json:"binding_revision"`
-	Binding                *ReviewBinding    `json:"binding,omitempty"`
+	// GrantedRoots is the per-change edit-authority projection (#2540 S2):
+	// canonical absolute symlink-evaluated roots accumulated from grant
+	// records in chain order. AllowedEditRoots consumption is a later slice.
+	// omitempty is load-bearing: a chain without grant records serializes
+	// byte-identically to every projection before this field existed.
+	GrantedRoots    []string       `json:"granted_roots,omitempty"`
+	BindingRevision string         `json:"binding_revision"`
+	Binding         *ReviewBinding `json:"binding,omitempty"`
 	// Receipt is Wave 4 S5's terminal pointer (design.md decision 1),
 	// recorded additively alongside Binding/BindingRevision — see
 	// runtime_receipt.go.
@@ -347,6 +356,18 @@ type RescopeObjectiveRequest struct {
 	Actor            string `json:"actor"`
 }
 
+// GrantRootsRequest records a per-change edit-authority grant (#2540 S2).
+// Reason/Actor mirror ResetObjectiveRequest's audit fields. Roots are
+// canonicalized (absolute, symlink-evaluated) before the request digest is
+// computed, so the digest binds the exact identities the record carries.
+type GrantRootsRequest struct {
+	ExpectedRevision string   `json:"expected_revision"`
+	RequestID        string   `json:"request_id"`
+	Roots            []string `json:"roots"`
+	Reason           string   `json:"reason"`
+	Actor            string   `json:"actor"`
+}
+
 // BindReviewRequest performs a binding-only compare-and-swap. The expected
 // value is the current ReviewBinding.Revision, not the runtime ledger HEAD and
 // not the review authority revision.
@@ -397,6 +418,25 @@ type runtimeRecord struct {
 	Advance          *runtimeAdvanceEvent `json:"advance,omitempty"`
 	Binding          *runtimeBindingEvent `json:"binding,omitempty"`
 	Receipt          *runtimeReceiptEvent `json:"receipt,omitempty"`
+	Grant            *runtimeGrantEvent   `json:"grant,omitempty"`
+}
+
+// runtimeGrantEvent is the persisted per-change edit-authority grant (#2540
+// S2): a maintainer-authorized record that this change's apply actor may edit
+// the named repository roots, recorded as canonical absolute symlink-evaluated
+// paths following BeginWorktree's canonicalization precedent. GrantedAt is
+// the ledger's FIRST wall-clock field: digest-safe (the content-addressed
+// record revision binds it immutably) but excluded from the request digest
+// and from determinism-replay expectations, which validate only that it
+// parses. Like runtimeRescopeEvent, the REAL forgery guard is replay's digest
+// recompute in validateRuntimeRecordShape: Roots, Actor, or Reason widened or
+// altered after publication no longer match the bound RequestDigest, so
+// replay refuses the chain.
+type runtimeGrantEvent struct {
+	Roots     []string `json:"roots"`
+	Actor     string   `json:"actor"`
+	Reason    string   `json:"reason"`
+	GrantedAt string   `json:"granted_at"`
 }
 
 // runtimeAdvanceEvent accompanies the successor's begin event in one atomic
@@ -1071,6 +1111,28 @@ func runtimeObjectiveAdvanceAdmissible(status RuntimeStatus, request BeginAttemp
 		!last.ChangedLineBudgetExceeded && last.FinishCandidateIdentity != "" && last.FinishCandidateTree != ""
 }
 
+// runtimeGrantClock is the ledger's only wall-clock source (#2540 S2), a
+// package variable solely so tests can pin it; production records UTC.
+var runtimeGrantClock = func() string { return time.Now().UTC().Format(time.RFC3339Nano) }
+
+// Grant commits a per-change edit-authority grant record (#2540 S2). It only
+// records and projects: AllowedEditRoots expansion, the consent envelope, and
+// the CLI verb are later slices. A grant has no structural precondition,
+// because authorizing roots is orthogonal to attempt state.
+func (store RuntimeStore) Grant(ctx context.Context, request GrantRootsRequest) (RuntimeStatus, error) {
+	request, err := normalizeGrantRootsRequest(request)
+	if err != nil {
+		return RuntimeStatus{}, err
+	}
+	digest := runtimeValueHash("gentle-ai.sdd-runtime-grant-request/v1", request)
+	grantedAt := runtimeGrantClock()
+	return store.mutate(ctx, request.ExpectedRevision, request.RequestID, digest, func(runtimeReplay) (runtimeRecord, error) {
+		return runtimeRecord{Operation: runtimeOperationGrant, Grant: &runtimeGrantEvent{
+			Roots: request.Roots, Actor: request.Actor, Reason: request.Reason, GrantedAt: grantedAt,
+		}}, nil
+	})
+}
+
 // Reset closes a terminal objective scope without deleting its immutable
 // attempts. The next Begin receives a new generation and budget while global
 // ordinals and lifetime charges continue monotonically.
@@ -1586,6 +1648,8 @@ func applyRuntimeRecord(replay *runtimeReplay, revision string, record runtimeRe
 		if err := applyRuntimeReceiptEvent(replay, record.Receipt); err != nil {
 			return err
 		}
+	case runtimeOperationGrant:
+		applyRuntimeGrantEvent(replay, record.Grant)
 	default:
 		return errors.New("unsupported SDD runtime record operation")
 	}
@@ -1831,6 +1895,27 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 	return nil
 }
 
+// applyRuntimeGrantEvent accumulates a grant's canonical roots into the
+// GrantedRoots projection in chain order, deduplicating already-granted
+// identities. It has no structural precondition and returns no error: every
+// integrity guard a grant needs already ran in validateRuntimeRecordShape,
+// and a chain with no grant records never reaches it, so legacy chains
+// replay unchanged.
+func applyRuntimeGrantEvent(replay *runtimeReplay, event *runtimeGrantEvent) {
+	for _, root := range event.Roots {
+		duplicate := false
+		for _, granted := range replay.Status.GrantedRoots {
+			if granted == root {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			replay.Status.GrantedRoots = append(replay.Status.GrantedRoots, root)
+		}
+	}
+}
+
 func applyRuntimeBindingEvent(replay *runtimeReplay, event *runtimeBindingEvent) error {
 	current := ""
 	if replay.Status.Binding != nil {
@@ -1881,14 +1966,14 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 	}
 	switch record.Operation {
 	case runtimeOperationBegin:
-		if record.Begin == nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil {
+		if record.Begin == nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime begin record shape")
 		}
 		if err := validateRuntimeBeginEvent(record); err != nil {
 			return err
 		}
 	case runtimeOperationAdvance:
-		if record.Begin == nil || record.Advance == nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Binding != nil || record.Receipt != nil {
+		if record.Begin == nil || record.Advance == nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime objective advance record shape") // refusal:by-design world-action: this shape is constructed by the authority itself, so a violation is a mutated record and the exit is restoring the store
 		}
 		advance := record.Advance
@@ -1902,7 +1987,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return err
 		}
 	case runtimeOperationFinish:
-		if record.Finish == nil || record.Begin != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil {
+		if record.Finish == nil || record.Begin != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime finish record shape")
 		}
 		event := record.Finish
@@ -1924,7 +2009,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime finish request digest does not match record")
 		}
 	case runtimeOperationFinishRemediation:
-		if record.Finish == nil || record.Binding == nil || record.Begin != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Receipt != nil {
+		if record.Finish == nil || record.Binding == nil || record.Begin != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Receipt != nil || record.Grant != nil {
 			return errors.New("invalid atomic SDD runtime remediation record shape")
 		}
 		finish, binding := record.Finish, record.Binding
@@ -1963,7 +2048,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("atomic SDD runtime remediation request digest does not match record")
 		}
 	case runtimeOperationReset:
-		if record.Reset == nil || record.Begin != nil || record.Finish != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil {
+		if record.Reset == nil || record.Begin != nil || record.Finish != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime reset record shape")
 		}
 		event := record.Reset
@@ -1979,7 +2064,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime reset request digest does not match record")
 		}
 	case runtimeOperationRescope:
-		if record.Rescope == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil {
+		if record.Rescope == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime rescope record shape") // refusal:by-design world-action: this shape is constructed by the authority itself, so a violation is a mutated record and the exit is restoring the store
 		}
 		event := record.Rescope
@@ -2010,7 +2095,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime rescope request digest does not match record") // refusal:by-design world-action: the digest is computed from the same request at write time, so a mismatch is a mutated record and the exit is restoring the store
 		}
 	case runtimeOperationBind:
-		if record.Binding == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Receipt != nil {
+		if record.Binding == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Receipt != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime binding record shape")
 		}
 		event := record.Binding
@@ -2037,7 +2122,7 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 			return errors.New("SDD runtime binding request digest does not match record")
 		}
 	case runtimeOperationReceipt:
-		if record.Receipt == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil {
+		if record.Receipt == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Grant != nil {
 			return errors.New("invalid SDD runtime receipt record shape") // refusal:by-design world-action: this shape is constructed by the authority itself, so a violation is a mutated record and the exit is restoring the store
 		}
 		event := record.Receipt
@@ -2063,6 +2148,38 @@ func validateRuntimeRecordShape(record runtimeRecord) error {
 		}
 		if runtimeValueHash("gentle-ai.sdd-runtime-receipt-request/v1", request) != record.RequestDigest {
 			return errors.New("SDD runtime receipt request digest does not match record") // refusal:by-design world-action: the digest is computed from the same request at write time, so a mismatch is a mutated record and the exit is restoring the store
+		}
+	case runtimeOperationGrant:
+		if record.Grant == nil || record.Begin != nil || record.Finish != nil || record.Reset != nil || record.Rescope != nil || record.Advance != nil || record.Binding != nil || record.Receipt != nil {
+			return errors.New("invalid SDD runtime grant record shape") // refusal:by-design world-action: this shape is constructed by the authority itself, so a violation is a mutated record and the exit is restoring the store
+		}
+		event := record.Grant
+		if len(event.Roots) < 1 || len(event.Roots) > maximumRuntimeGrantRoots ||
+			validateRuntimeText(event.Reason, 500) != nil || validateRuntimeText(event.Actor, 128) != nil {
+			return errors.New("invalid SDD runtime grant event") // refusal:by-design world-action: bounds and audit fields are enforced before publication, so a violation is a mutated record and the exit is restoring the store
+		}
+		seen := make(map[string]struct{}, len(event.Roots))
+		for _, root := range event.Roots {
+			if validateRuntimeText(root, 4096) != nil || !filepath.IsAbs(root) {
+				return errors.New("invalid SDD runtime grant root") // refusal:by-design world-action: roots are canonicalized before publication, so a violation is a mutated record and the exit is restoring the store
+			}
+			if _, duplicate := seen[root]; duplicate {
+				return errors.New("duplicate SDD runtime grant root") // refusal:by-design world-action: canonical duplicates collapse before publication, so a violation is a mutated record and the exit is restoring the store
+			}
+			seen[root] = struct{}{}
+		}
+		// GrantedAt is the ledger's first wall-clock field: validated for
+		// parseability only, never recomputed or compared against a clock, so
+		// it stays excluded from determinism-replay expectations.
+		if _, err := time.Parse(time.RFC3339Nano, event.GrantedAt); err != nil {
+			return errors.New("invalid SDD runtime grant timestamp") // refusal:by-design world-action: the timestamp is rendered by the authority's own clock at publication, so a violation is a mutated record and the exit is restoring the store
+		}
+		request := GrantRootsRequest{
+			ExpectedRevision: record.PreviousRevision, RequestID: record.RequestID,
+			Roots: event.Roots, Reason: event.Reason, Actor: event.Actor,
+		}
+		if runtimeValueHash("gentle-ai.sdd-runtime-grant-request/v1", request) != record.RequestDigest {
+			return errors.New("SDD runtime grant request digest does not match record") // refusal:by-design world-action: the digest binds the granted roots at write time, so a widened or altered record fails this recompute and the exit is restoring the store
 		}
 	default:
 		return errors.New("invalid SDD runtime record operation")
@@ -2210,6 +2327,53 @@ func normalizeResetObjectiveRequest(request ResetObjectiveRequest) (ResetObjecti
 	}
 	if err := validateRuntimeText(request.Actor, 128); err != nil {
 		return ResetObjectiveRequest{}, fmt.Errorf("invalid reset actor: %w", err)
+	}
+	return request, nil
+}
+
+// normalizeGrantRootsRequest mirrors normalizeResetObjectiveRequest's
+// CAS/audit-field validation and canonicalizes every requested root the way
+// OpenRuntimeStore canonicalizes the workspace for BeginWorktree: absolute,
+// then symlink-evaluated, so a link and its target record one identity.
+// Canonical duplicates collapse, keeping the digest identical to the event.
+func normalizeGrantRootsRequest(request GrantRootsRequest) (GrantRootsRequest, error) {
+	if request.ExpectedRevision != "" && !runtimeRevisionPattern.MatchString(request.ExpectedRevision) {
+		return GrantRootsRequest{}, errors.New("expected runtime revision must be empty or sha256")
+	}
+	if !runtimeRequestIDPattern.MatchString(request.RequestID) {
+		return GrantRootsRequest{}, errors.New("request_id must be a canonical lowercase identifier")
+	}
+	if len(request.Roots) < 1 || len(request.Roots) > maximumRuntimeGrantRoots {
+		return GrantRootsRequest{}, fmt.Errorf("grant requires between 1 and %d roots", maximumRuntimeGrantRoots) // refusal:by-design operator-knowledge: only the caller knows which repository roots this change needs; retry with a bounded non-empty root list
+	}
+	canonical := make([]string, 0, len(request.Roots))
+	seen := make(map[string]struct{}, len(request.Roots))
+	for _, root := range request.Roots {
+		if err := validateRuntimeText(root, 4096); err != nil {
+			return GrantRootsRequest{}, fmt.Errorf("invalid grant root: %w", err)
+		}
+		resolved, err := filepath.Abs(root)
+		if err == nil {
+			resolved, err = filepath.EvalSymlinks(resolved)
+		}
+		if err != nil {
+			return GrantRootsRequest{}, fmt.Errorf("resolve grant root %s: %w", pathquote.Quote(root), err)
+		}
+		if err := validateRuntimeText(resolved, 4096); err != nil {
+			return GrantRootsRequest{}, fmt.Errorf("invalid canonical grant root: %w", err)
+		}
+		if _, duplicate := seen[resolved]; duplicate {
+			continue
+		}
+		seen[resolved] = struct{}{}
+		canonical = append(canonical, resolved)
+	}
+	request.Roots = canonical
+	if err := validateRuntimeText(request.Reason, 500); err != nil {
+		return GrantRootsRequest{}, fmt.Errorf("invalid grant reason: %w", err)
+	}
+	if err := validateRuntimeText(request.Actor, 128); err != nil {
+		return GrantRootsRequest{}, fmt.Errorf("invalid grant actor: %w", err)
 	}
 	return request, nil
 }
