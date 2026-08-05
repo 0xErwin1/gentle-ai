@@ -121,12 +121,12 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 	t.Parallel()
 
 	const wantRoutingDigest = "sha256:ed03b86f20c9449a6e4c018f51d1e05619e1070b1076287a0792a74c458762b2"
-	// Digests intentionally changed when the manifest separated host transport
-	// from immutable reviewer execution. The latter is dormant until a provider
-	// proves a fresh constrained reviewer before lifecycle mutation.
+	// Digests pin the two providers with an enforceable fresh-reviewer boundary:
+	// Claude Code's generated reviewer has no live tools, and OpenCode replaces
+	// the task prompt with provider-bound evidence under its isolation controls.
 	wantManifestDigests := map[model.AgentID]string{
 		model.AgentAntigravity:   "sha256:962eb63dc7f59a0b4c9c011dbb890aca1b40ecbfd3800c3e69b08f8b1639332c",
-		model.AgentClaudeCode:    "sha256:42d3d205c43af20bf1ce48f76a51654080c4b8a772f4a89badb272a0d7e9d396",
+		model.AgentClaudeCode:    "sha256:132b9219b222d35b0e4eafce3dae965c56eb8d79f07dff6d45c42c137e36fd9b",
 		model.AgentCodex:         "sha256:069a41cffd85ff25189f76b2e2b7b5158b7b3044868360b38e6d8b69b21e2be6",
 		model.AgentCursor:        "sha256:2cf80b9bd4cdc9a9d3586e6d02dc2207f326841bba935c6f11f257a20756d821",
 		model.AgentGeminiCLI:     "sha256:463fdc93ad387c9b107c5f031f806dece9da3e2d47300b88d7640174bcb22a1e",
@@ -135,7 +135,7 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 		model.AgentKimi:          "sha256:565e369cacfdbc128166512040fe1b5a18eada11b333a9c153f85d6661762dc9",
 		model.AgentKiroIDE:       "sha256:3be196483ed199894062892c9367b3772bb66e18d6ec7b64e477ea201851a44a",
 		model.AgentOpenClaw:      "sha256:0fb9cb07a7be9174e93793678ad7cd4618c58c6a0d284be2fa1b6acd4d409014",
-		model.AgentOpenCode:      "sha256:b0a740efe836f7dc5c955cff47d15097923953879cb9e36829eb9e9462d49a5e",
+		model.AgentOpenCode:      "sha256:3df2c0ee0a61774b7b7f0d547abed55721cc37ecc332c131935ce72fb142103f",
 		model.AgentPi:            "sha256:346579cb9f505086cb9e429a36e857ed7fa5880171af1ad55bf6d9a8a0d53fcd",
 		model.AgentQwenCode:      "sha256:897dd9264f92356375d1255949e1170938222853524d4b65e62b642a04b41c52",
 		model.AgentTrae:          "sha256:65234f37e1142edae7fff865613970e6ab0433b783df2e4c05b0023fb1c31ffe",
@@ -159,9 +159,16 @@ func TestEveryManifestKeepsWorkRoutingDormantAndHashesCanonically(t *testing.T) 
 			if manifest.Advertises(ContractWorkRoutingV1) {
 				t.Fatal("work-routing must remain unadvertised before final activation")
 			}
-			if manifest.Contracts.ImmutableReviewExecutorV1.Exposure != ContractExposureDormant ||
-				manifest.Advertises(ContractImmutableReviewExecutorV1) {
-				t.Fatal("immutable reviewer execution must remain unadvertised without a proven provider boundary")
+			wantImmutableExecutor := agent == model.AgentClaudeCode || agent == model.AgentOpenCode
+			if got := manifest.Advertises(ContractImmutableReviewExecutorV1); got != wantImmutableExecutor {
+				t.Fatalf("immutable reviewer execution advertised = %t, want %t", got, wantImmutableExecutor)
+			}
+			wantExposure := ContractExposureDormant
+			if wantImmutableExecutor {
+				wantExposure = ContractExposureAdvertised
+			}
+			if got := manifest.Contracts.ImmutableReviewExecutorV1.Exposure; got != wantExposure {
+				t.Fatalf("immutable reviewer execution exposure = %q, want %q", got, wantExposure)
 			}
 
 			payload, err := manifest.CanonicalJSON()
