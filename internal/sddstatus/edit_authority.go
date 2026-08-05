@@ -161,14 +161,16 @@ func editAuthorityBlockedReason(roots []string) string {
 // outside-root guard would refuse never reports ready/apply. It runs only
 // when apply would otherwise be ready: completed work needs no forward edit
 // authority, and planning-blocked changes already carry their own reasons.
-func applyEditAuthorityBlock(applyState ApplyState, reasons *blockerReasons, tasksText string, workspaceRoot string, allowedEditRoots []string) ApplyState {
+// It also returns the unauthorized roots so the caller can raise the typed
+// consent question naming exactly them (#2563, S4b of #2540).
+func applyEditAuthorityBlock(applyState ApplyState, reasons *blockerReasons, tasksText string, workspaceRoot string, allowedEditRoots []string) (ApplyState, []string) {
 	if applyState != ApplyReady {
-		return applyState
+		return applyState, nil
 	}
 	roots := detectUnauthorizedEditRoots(tasksText, workspaceRoot, allowedEditRoots)
 	if len(roots) == 0 {
-		return applyState
+		return applyState, nil
 	}
 	reasons.genuine = append(reasons.genuine, editAuthorityBlockedReason(roots))
-	return ApplyBlocked
+	return ApplyBlocked, roots
 }

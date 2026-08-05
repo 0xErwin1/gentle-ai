@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://gentle-ai.dev/contracts/sdd-integration/v1/schemas/consent.schema.json",
   "title": "Gentle AI SDD edit-authority consent question",
-  "description": "The typed blocking consent question a multi-repository SDD change raises when its task plan targets repository roots outside the authorized edit roots (#2540). The identity block is the change name plus the missing roots; granting is per-change, audited, and dies with archive; declining persists nothing and the change stays blocked. Emission into native SDD status is a later slice.",
+  "description": "The typed blocking consent question a multi-repository SDD change raises when its task plan targets repository roots outside the authorized edit roots (#2540). The identity block is the change name plus the missing roots; granting is per-change, audited, and dies with archive; declining persists nothing and the change stays blocked. Native SDD status emits this envelope on blocked(edit_authority_missing) as the optional `consent` block of the v1 status projection (#2563).",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -54,11 +54,11 @@
       }
     },
     "choice_granted": {
-      "description": "PROVISIONAL S3 pin: the exact flag set of the future sdd-attempt grant verb. S3 implements this shape or consciously updates this schema and the fixture together.",
+      "description": "The exact flag set of the shipped sdd-attempt grant verb (S3 #2558 plus S5 #2559's reconciliation): the conscious contract change the provisional S3 pin announced, applied by #2563 together with the fixture and the test pin. --request-id makes accidental re-execution idempotent, --change-instance binds the grant to the one change instance the status layer derived, and the optional --expected-revision is the compare-and-swap token a widening grant chains on.",
       "allOf": [{"$ref": "#/$defs/choice"}],
       "properties": {
         "answer": {"const": "granted"},
-        "invocation": {"type": "string", "pattern": "^gentle-ai sdd-attempt grant --cwd \\S+ --change \\S+( --root \\S+)+ --actor \\S+ --reason .+$"}
+        "invocation": {"type": "string", "pattern": "^gentle-ai sdd-attempt grant --cwd \\S+ --change \\S+( --expected-revision \\S+)?( --root \\S+)+ --actor \\S+ --reason \\S+ --request-id \\S+ --change-instance \\S+$"}
       }
     },
     "choice_declined": {
