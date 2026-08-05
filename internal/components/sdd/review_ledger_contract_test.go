@@ -27,7 +27,8 @@ func TestBoundedReviewContractLeavesCanonicalizationToNativeGo(t *testing.T) {
 	for _, want := range []string{
 		"Native Go owns validation, canonicalization, persistence, hashing, reopening, and binding",
 		"Only candidate-caused severe findings block",
-		"No built-in runtime currently advertises immutable reviewer execution",
+		"Claude Code and OpenCode advertise immutable reviewer execution",
+		"Codex and Kilo remain dormant",
 		"read-only native Git commands",
 	} {
 		if !strings.Contains(content, want) {
@@ -82,6 +83,9 @@ func TestDedicatedReviewersAndRefutersAreStructurallyReadOnly(t *testing.T) {
 		"claude/agents/review-reliability.md", "claude/agents/review-resilience.md",
 	} {
 		frontmatter := markdownFrontmatter(t, path)
+		if !strings.Contains(frontmatter, "tools: []") {
+			t.Errorf("%s grants live reviewer tools: %s", path, frontmatter)
+		}
 		if strings.Contains(frontmatter, "Bash") {
 			t.Errorf("%s grants unrestricted Bash without a per-command policy", path)
 		}
@@ -291,7 +295,7 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// This baseline combines #2485's answer-validation contract, #2417's
 	// provider-injected reviewer shape, #2440's runtime-bound identity, and
 	// #2207's executor-boundary wording. It is recomputed from the merged tree.
-	const want = "a86a5820b178d5d41879c0dcff3b02306b14d37d4b47ce1b3a7ed90682abb4b1"
+	const want = "43571ab818458326b3bd71c58e8a66032b446472b60be6c6c6c2e5be03d64db4"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
