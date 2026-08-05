@@ -32,6 +32,10 @@ var ErrNotInstalled = errors.New("engram binary not found on PATH")
 // the engram MCP process plus the initialize handshake round-trip.
 const stdioProbeTimeout = 5 * time.Second
 
+// stdioPostResponseWindow catches frames the server emitted with its
+// initialize response before the probe tears the child down.
+const stdioPostResponseWindow = 50 * time.Millisecond
+
 // stdioHandshakeFn is a package-level seam over the real handshake (built on
 // the execCommandContext precedent) so internal/cli doctor tests can pin the
 // probe outcome without spawning a real process.
@@ -43,6 +47,12 @@ type StdioCommand struct {
 	Command string
 	Args    []string
 	Source  string
+}
+
+type stdioOutputFrame struct {
+	line []byte
+	err  error
+	done bool
 }
 
 // ProbeStdio verifies the exact command and arguments persisted in an agent
@@ -60,8 +70,8 @@ func ProbeStdio(ctx context.Context, command string, args ...string) error {
 
 // stdioHandshake spawns name with args and performs a minimal MCP initialize
 // handshake over the newline-delimited JSON-RPC stdio transport. It succeeds
-// as soon as the server answers the initialize request with a result, then
-// tears the process down; it never leaves the child running.
+// only after a valid response and a brief window with no extra stdout frames,
+// then tears the process down; it never leaves the child running.
 func stdioHandshake(ctx context.Context, name string, args ...string) error {
 	probeCtx, cancel := context.WithTimeout(ctx, stdioProbeTimeout)
 	defer cancel()
@@ -89,41 +99,112 @@ func stdioHandshake(ctx context.Context, name string, args ...string) error {
 		return fmt.Errorf("write engram mcp initialize request: %w", err)
 	}
 
-	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := bytes.TrimSpace(scanner.Bytes())
-		if len(line) == 0 || line[0] != '{' {
-			continue
-		}
-		var response struct {
-			ID     json.Number     `json:"id"`
-			Result json.RawMessage `json:"result"`
-			Error  json.RawMessage `json:"error"`
-		}
-		if json.Unmarshal(line, &response) != nil || response.ID.String() != "1" {
-			continue
-		}
-		if len(response.Error) > 0 {
-			return fmt.Errorf("engram mcp initialize returned error: %s", response.Error)
-		}
-		if len(response.Result) > 0 {
-			if err := validateInitializeResult(response.Result); err != nil {
-				return fmt.Errorf("engram mcp initialize returned invalid result: %w", err)
+	frames := make(chan stdioOutputFrame, 1)
+	go func() {
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			frame := stdioOutputFrame{line: append([]byte(nil), scanner.Bytes()...)}
+			select {
+			case frames <- frame:
+			case <-probeCtx.Done():
+				return
 			}
-			return nil
+		}
+		select {
+		case frames <- stdioOutputFrame{err: scanner.Err(), done: true}:
+		case <-probeCtx.Done():
+		}
+	}()
+
+	for {
+		select {
+		case frame := <-frames:
+			if frame.done {
+				if frame.err != nil {
+					return fmt.Errorf("read engram mcp output: %w", frame.err)
+				}
+				return errors.New("engram mcp exited without answering initialize")
+			}
+			if err := validateInitializeResponse(frame.line); err != nil {
+				return err
+			}
+
+			// A successful response is final only after checking frames already
+			// emitted alongside it. stdout is exclusively the MCP protocol stream.
+			settle := time.NewTimer(stdioPostResponseWindow)
+			defer settle.Stop()
+			select {
+			case trailing := <-frames:
+				if trailing.done {
+					if trailing.err != nil {
+						return fmt.Errorf("read engram mcp output: %w", trailing.err)
+					}
+					return nil
+				}
+				if err := validateInitializeResponse(trailing.line); err != nil {
+					return err
+				}
+				return errors.New("engram mcp wrote an unexpected stdout frame after initialize response")
+			case <-settle.C:
+				return nil
+			case <-probeCtx.Done():
+				return handshakeContextError(ctx, probeCtx)
+			}
+		case <-probeCtx.Done():
+			return handshakeContextError(ctx, probeCtx)
 		}
 	}
+}
+
+func handshakeContextError(ctx, probeCtx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("engram mcp initialize handshake stopped by caller context: %w", err)
 	}
 	if probeCtx.Err() != nil {
 		return fmt.Errorf("engram mcp initialize handshake timed out after %s", stdioProbeTimeout)
 	}
-	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("read engram mcp output: %w", err)
+	return errors.New("engram mcp initialize handshake stopped unexpectedly")
+}
+
+func validateInitializeResponse(line []byte) error {
+	line = bytes.TrimSpace(line)
+	if len(line) == 0 {
+		return errors.New("invalid MCP stdout: empty frame")
 	}
-	return errors.New("engram mcp exited without answering initialize")
+
+	var response struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id"`
+		Method  json.RawMessage `json:"method"`
+		Result  json.RawMessage `json:"result"`
+		Error   json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(line, &response); err != nil {
+		return fmt.Errorf("invalid MCP stdout: malformed JSON-RPC frame: %w", err)
+	}
+	if response.JSONRPC != "2.0" {
+		return errors.New(`invalid MCP stdout: jsonrpc must be "2.0"`)
+	}
+	if !bytes.Equal(bytes.TrimSpace(response.ID), []byte("1")) {
+		return errors.New("invalid MCP stdout: unexpected response id")
+	}
+	if len(response.Method) > 0 {
+		return errors.New("invalid MCP stdout: initialize response must not include method")
+	}
+	if len(response.Error) > 0 {
+		if bytes.Equal(bytes.TrimSpace(response.Error), []byte("null")) {
+			return errors.New("invalid MCP stdout: error must be absent or a JSON-RPC error object")
+		}
+		return fmt.Errorf("engram mcp initialize returned error: %s", response.Error)
+	}
+	if len(response.Result) == 0 {
+		return errors.New("engram mcp initialize returned invalid result: result is required")
+	}
+	if err := validateInitializeResult(response.Result); err != nil {
+		return fmt.Errorf("engram mcp initialize returned invalid result: %w", err)
+	}
+	return nil
 }
 
 func validateInitializeResult(raw json.RawMessage) error {
