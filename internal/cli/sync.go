@@ -705,10 +705,11 @@ func syncComponentPathsWithWorkspace(homeDir, workspaceDir string, selection mod
 }
 
 // syncPersonaPaths returns the file paths that ComponentPersona writes during
-// sync. Mirrors persona.InjectForSync:
+// sync. Mirrors persona.InjectForSync and the Pi runtime config writer:
 //   - Step 1: SystemPromptFile (the marker-bound markdown block — CLAUDE.md /
 //     AGENTS.md / equivalent).
 //   - Step 3: managed output-style overlay (only when the agent supports it).
+//   - Pi: the project-local gentle-pi persona state file.
 //
 // Step 2 (OpenCode/Kilocode agent definition in opencode.json) is install-only
 // and intentionally NOT declared here.
@@ -722,6 +723,14 @@ func syncPersonaPathsWithWorkspace(homeDir, workspaceDir string, selection model
 	}
 	paths := []string{}
 	for _, adapter := range adapters {
+		if adapter.Agent() == model.AgentPi {
+			rootDir := workspaceDir
+			if strings.TrimSpace(rootDir) == "" {
+				rootDir = homeDir
+			}
+			paths = append(paths, persona.PiPersonaConfigPath(rootDir))
+			continue
+		}
 		targetDir := componentInjectionDir(homeDir, workspaceDir, adapter)
 		if adapter.Agent() == model.AgentOpenClaw {
 			paths = append(paths, filepath.Join(targetDir, "SOUL.md"))
@@ -1149,6 +1158,18 @@ func (s componentSyncStep) Run() error {
 		// merge conflicts with SDD's writes to the same settings file and
 		// remains an install-only concern.
 		for _, adapter := range adapters {
+			if adapter.Agent() == model.AgentPi {
+				rootDir := s.workspaceDir
+				if strings.TrimSpace(rootDir) == "" {
+					rootDir = s.homeDir
+				}
+				res, err := persona.InjectPiPersona(rootDir, s.selection.Persona)
+				if err != nil {
+					return fmt.Errorf("sync persona for %q: %w", adapter.Agent(), err)
+				}
+				s.countChanged(boolToInt(res.Changed), res.Files...)
+				continue
+			}
 			targetDir := componentInjectionDir(s.homeDir, s.workspaceDir, adapter)
 			res, err := persona.InjectForSync(targetDir, adapter, s.selection.Persona)
 			if err != nil {
