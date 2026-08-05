@@ -452,8 +452,11 @@ func TestCompatibilitySkillFilesAreInstallAndSyncBackupTargets(t *testing.T) {
 	}
 	for _, targets := range [][]string{installTargets, syncTargets} {
 		for _, path := range files {
-			if !slices.Contains(targets, path) {
+			if !usesAnchoredCompatibilityTransaction() && !slices.Contains(targets, path) {
 				t.Errorf("backup targets missing prospective %q; targets=%v", path, targets)
+			}
+			if usesAnchoredCompatibilityTransaction() && slices.Contains(targets, path) {
+				t.Errorf("generic backup target includes anchored compatibility path %q; targets=%v", path, targets)
 			}
 		}
 	}
