@@ -22,7 +22,6 @@ internal/cli/review_narration.go	reviewNarrationStripCodeSpans
 internal/cli/review_operation_contract.go	reviewNamedArgument
 internal/cli/review_printed_command.go	ReviewOperationFlagSurface
 internal/cli/review_printed_command.go	SplitPrintedCommandWords
-internal/cli/run.go	BuildRealStagePlan
 internal/cli/run.go	componentPathDir
 internal/cli/run.go	componentPaths
 internal/cli/run.go	ensureGoAvailableAfterInstall
