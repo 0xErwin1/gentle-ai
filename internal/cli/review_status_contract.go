@@ -599,6 +599,16 @@ func (result ReviewTargetStatusResult) validateNextTransitionTargets() error {
 			}
 			return nil
 		}
+		// The one fresh target that has no representable START: a workspace
+		// candidate with zero paths (issue #2584). It collects the base the
+		// caller must choose instead, so requiring an executable START here
+		// would only relocate the contradiction.
+		if result.Projection.Kind == reviewtransaction.TargetCurrentChanges && len(result.Projection.Paths) == 0 {
+			if result.NextTransition.Kind != reviewNextTransitionCollect || result.NextTransition.ReasonCode != "empty_candidate_base_ref_required" {
+				return errors.New("fresh empty workspace target lacks a base-ref collection transition") // refusal:by-design world-action: only a provider code fix can emit the base-ref collection this classification requires
+			}
+			return nil
+		}
 		return result.validateStartNextTransition()
 	}
 	expectedExecutionTarget := result.TargetIdentity
