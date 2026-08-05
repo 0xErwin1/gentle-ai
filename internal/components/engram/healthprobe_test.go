@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -41,7 +42,7 @@ func TestHelperEngramMCPProcess(t *testing.T) {
 	defer os.Exit(0)
 
 	switch mode {
-	case "healthy", "rpc-error":
+	case "healthy", "rpc-error", "null-result", "scalar-result", "missing-protocol-version", "invalid-capabilities", "missing-server-info", "invalid-server-info":
 		reader := bufio.NewReader(os.Stdin)
 		line, err := reader.ReadString('\n')
 		if err != nil {
@@ -58,11 +59,24 @@ func TestHelperEngramMCPProcess(t *testing.T) {
 			fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"error\":{\"code\":-32603,\"message\":\"store locked\"}}\n", req.ID.String())
 			return
 		}
-		// A stray log line first proves non-JSON output is tolerated.
-		fmt.Println("engram mcp starting")
-		fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"serverInfo\":{\"name\":\"fake-engram\",\"version\":\"0\"}}}\n", req.ID.String())
-		// Stay alive until the probe tears the process down.
-		time.Sleep(30 * time.Second)
+		result := map[string]string{
+			"healthy":                  `{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"fake-engram","version":"0"}}`,
+			"null-result":              `null`,
+			"scalar-result":            `"not-an-object"`,
+			"missing-protocol-version": `{"capabilities":{},"serverInfo":{"name":"fake-engram","version":"0"}}`,
+			"invalid-capabilities":     `{"protocolVersion":"2024-11-05","capabilities":[],"serverInfo":{"name":"fake-engram","version":"0"}}`,
+			"missing-server-info":      `{"protocolVersion":"2024-11-05","capabilities":{}}`,
+			"invalid-server-info":      `{"protocolVersion":"2024-11-05","capabilities":{},"serverInfo":{"name":"","version":0}}`,
+		}[mode]
+		if mode == "healthy" {
+			// A stray log line first proves non-JSON output is tolerated.
+			fmt.Println("engram mcp starting")
+		}
+		fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":%s}\n", req.ID.String(), result)
+		if mode == "healthy" {
+			// Stay alive until the probe tears the process down.
+			time.Sleep(30 * time.Second)
+		}
 	case "garbage":
 		fmt.Println("this is not a JSON-RPC message")
 	case "silent":
@@ -87,6 +101,31 @@ func TestStdioHandshake_RPCError(t *testing.T) {
 	}
 }
 
+func TestStdioHandshake_RejectsInvalidInitializeResult(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+	}{
+		{name: "null", mode: "null-result"},
+		{name: "non-object", mode: "scalar-result"},
+		{name: "missing protocol version", mode: "missing-protocol-version"},
+		{name: "invalid capabilities", mode: "invalid-capabilities"},
+		{name: "missing server info", mode: "missing-server-info"},
+		{name: "invalid server info", mode: "invalid-server-info"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setStdioHelperProcess(t, tt.mode)
+
+			err := stdioHandshake(context.Background(), "engram", "mcp", "--tools=agent")
+			if err == nil || !strings.Contains(err.Error(), "initialize returned invalid result") {
+				t.Fatalf("stdioHandshake() error = %v, want invalid initialize result", err)
+			}
+		})
+	}
+}
+
 func TestStdioHandshake_GarbageOutput(t *testing.T) {
 	setStdioHelperProcess(t, "garbage")
 
@@ -96,15 +135,34 @@ func TestStdioHandshake_GarbageOutput(t *testing.T) {
 	}
 }
 
-func TestStdioHandshake_Timeout(t *testing.T) {
+func TestStdioHandshake_PreservesEarlierDeadline(t *testing.T) {
 	setStdioHelperProcess(t, "silent")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 
 	err := stdioHandshake(ctx, "engram", "mcp", "--tools=agent")
-	if err == nil || !strings.Contains(err.Error(), "timed out") {
-		t.Fatalf("stdioHandshake() error = %v, want timeout error", err)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("stdioHandshake() error = %v, want earlier caller deadline", err)
+	}
+	if strings.Contains(err.Error(), "timed out after 5s") {
+		t.Fatalf("stdioHandshake() error = %v, must not misreport the caller deadline as the internal timeout", err)
+	}
+}
+
+func TestStdioHandshake_PreservesCallerCancellation(t *testing.T) {
+	setStdioHelperProcess(t, "silent")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(300*time.Millisecond, cancel)
+	defer cancel()
+
+	err := stdioHandshake(ctx, "engram", "mcp", "--tools=agent")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("stdioHandshake() error = %v, want caller cancellation", err)
+	}
+	if strings.Contains(err.Error(), "timed out after 5s") {
+		t.Fatalf("stdioHandshake() error = %v, must not misreport caller cancellation as the internal timeout", err)
 	}
 }
 
@@ -115,19 +173,30 @@ func TestStdioHandshake_MissingBinary(t *testing.T) {
 }
 
 func TestProbeStdio_NotInstalled(t *testing.T) {
-	SetLookPathForTest(t, "", "engram not found")
+	orig := stdioHandshakeFn
+	stdioHandshakeFn = func(context.Context, string, ...string) error { return exec.ErrNotFound }
+	t.Cleanup(func() { stdioHandshakeFn = orig })
 
-	if err := ProbeStdio(context.Background()); !errors.Is(err, ErrNotInstalled) {
+	if err := ProbeStdio(context.Background(), "engram", "mcp", "--tools=agent"); !errors.Is(err, ErrNotInstalled) {
 		t.Fatalf("ProbeStdio() error = %v, want ErrNotInstalled", err)
 	}
 }
 
-// TestProbeStdio_UsesConfiguredCommand verifies the probe target derives from
-// the same command resolution inject.go writes into agent configs: the
-// resolved engram path with args ["mcp", "--tools=agent"].
-func TestProbeStdio_UsesConfiguredCommand(t *testing.T) {
-	SetLookPathForTest(t, "/opt/homebrew/bin/engram", "")
+func TestProbeStdio_MissingAbsoluteConfiguredCommandFails(t *testing.T) {
+	orig := stdioHandshakeFn
+	stdioHandshakeFn = func(context.Context, string, ...string) error { return exec.ErrNotFound }
+	t.Cleanup(func() { stdioHandshakeFn = orig })
 
+	err := ProbeStdio(context.Background(), "/configured/engram", "mcp", "--tools=agent")
+	if !errors.Is(err, exec.ErrNotFound) {
+		t.Fatalf("ProbeStdio() error = %v, want missing configured command", err)
+	}
+	if errors.Is(err, ErrNotInstalled) {
+		t.Fatalf("ProbeStdio() error = %v, must not hide a missing absolute configured command", err)
+	}
+}
+
+func TestProbeStdio_UsesExactPersistedCommand(t *testing.T) {
 	var gotName string
 	var gotArgs []string
 	orig := stdioHandshakeFn
@@ -138,13 +207,87 @@ func TestProbeStdio_UsesConfiguredCommand(t *testing.T) {
 	}
 	t.Cleanup(func() { stdioHandshakeFn = orig })
 
-	if err := ProbeStdio(context.Background()); err != nil {
+	if err := ProbeStdio(context.Background(), "/opt/gentle-engram/bin/engram", "mcp", "--tools=custom"); err != nil {
 		t.Fatalf("ProbeStdio() error = %v", err)
 	}
-	if gotName != "/opt/homebrew/bin/engram" {
-		t.Errorf("probe command = %q, want resolved engram path", gotName)
+	if gotName != "/opt/gentle-engram/bin/engram" {
+		t.Errorf("probe command = %q, want persisted command", gotName)
 	}
-	if len(gotArgs) != 2 || gotArgs[0] != "mcp" || gotArgs[1] != "--tools=agent" {
-		t.Errorf("probe args = %v, want [mcp --tools=agent]", gotArgs)
+	if len(gotArgs) != 2 || gotArgs[0] != "mcp" || gotArgs[1] != "--tools=custom" {
+		t.Errorf("probe args = %v, want persisted arguments", gotArgs)
+	}
+}
+
+func TestReadPersistedStdioCommands_PreservesConfiguredCommandAndArguments(t *testing.T) {
+	homeDir := t.TempDir()
+	cases := []struct {
+		name    string
+		agentID string
+		path    string
+		content string
+		command string
+		args    []string
+	}{
+		{
+			name:    "Claude user configuration",
+			agentID: "claude-code",
+			path:    ".claude.json",
+			content: `{"mcpServers":{"engram":{"command":"/configured/claude-engram","args":["mcp","--tools=claude"]}}}`,
+			command: "/configured/claude-engram",
+			args:    []string{"mcp", "--tools=claude"},
+		},
+		{
+			name:    "OpenCode command array",
+			agentID: "opencode",
+			path:    ".config/opencode/opencode.json",
+			content: `{"mcp":{"engram":{"command":["/configured/opencode-engram","mcp","--tools=opencode"],"type":"local"}}}`,
+			command: "/configured/opencode-engram",
+			args:    []string{"mcp", "--tools=opencode"},
+		},
+		{
+			name:    "Codex TOML configuration",
+			agentID: "codex",
+			path:    ".codex/config.toml",
+			content: "[mcp_servers.engram]\ncommand = \"/configured/codex-engram\"\nargs = [\"mcp\", \"--tools=codex\"]\n",
+			command: "/configured/codex-engram",
+			args:    []string{"mcp", "--tools=codex"},
+		},
+		{
+			name:    "Hermes YAML configuration",
+			agentID: "hermes",
+			path:    ".hermes/config.yaml",
+			content: "mcp_servers:\n  engram:\n    command: /configured/hermes-engram\n    args:\n      - mcp\n      - --tools=hermes\n",
+			command: "/configured/hermes-engram",
+			args:    []string{"mcp", "--tools=hermes"},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(homeDir, tt.path)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			commands, err := ReadPersistedStdioCommands(homeDir, []string{tt.agentID})
+			if err != nil {
+				t.Fatalf("ReadPersistedStdioCommands() error = %v", err)
+			}
+			if len(commands) != 1 {
+				t.Fatalf("commands = %v, want one configured command", commands)
+			}
+			if commands[0].Command != tt.command {
+				t.Errorf("command = %q, want %q", commands[0].Command, tt.command)
+			}
+			if strings.Join(commands[0].Args, "\x00") != strings.Join(tt.args, "\x00") {
+				t.Errorf("args = %v, want %v", commands[0].Args, tt.args)
+			}
+			if commands[0].Source != path {
+				t.Errorf("source = %q, want %q", commands[0].Source, path)
+			}
+		})
 	}
 }
