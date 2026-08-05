@@ -13,8 +13,8 @@ import (
 )
 
 // RunSDDAttempt exposes the artifact-store-agnostic native runtime authority.
-// Legacy operations emit RuntimeStatus; acquire and settle emit its bounded
-// orchestration projection.
+// Legacy operations and grant emit RuntimeStatus; acquire and settle emit its
+// bounded orchestration projection.
 func RunSDDAttempt(args []string, stdout io.Writer) error {
 	return runSDDAttempt(context.Background(), args, stdout)
 }
@@ -53,6 +53,8 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 	remediatesEvidenceRevision := flags.String("remediates-evidence-revision", "", "failed evidence revision repaired by the successor")
 	reason := flags.String("reason", "", "explicit objective reset reason")
 	actor := flags.String("actor", "", "explicit reset actor")
+	var roots sddAttemptRootList
+	flags.Var(&roots, "root", "repository root receiving per-change edit authority (repeatable)")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -152,6 +154,18 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 			CleanupEvidence:    *cleanupEvidence, ProcessEvidence: *processEvidence,
 			SuccessorLineageID: *successorLineage, RemediatesEvidenceRevision: *remediatesEvidenceRevision,
 		})
+	case "grant":
+		// --expected-revision stays optional, unlike begin/finish/reset: the
+		// S2 ledger API admits an empty CAS token (normalizeGrantRootsRequest,
+		// "empty or sha256"), which matches exactly the fresh pre-attempt
+		// ledger the consent flow grants against; a later widening grant
+		// chains the exact committed revision like every sibling mutation.
+		if missing := missingSDDAttemptFlags(args[1:], "root", "request-id", "actor", "reason"); len(missing) != 0 {
+			return fmt.Errorf("sdd-attempt grant requires %s; rerun `gentle-ai sdd-attempt grant` with those missing flags", strings.Join(missing, ", "))
+		}
+		result, err = store.Grant(ctx, sddstatus.GrantRootsRequest{
+			ExpectedRevision: *expected, RequestID: *requestID, Roots: roots, Reason: *reason, Actor: *actor,
+		})
 	}
 	if err != nil {
 		return fmt.Errorf("sdd-attempt %s: %w", operation, err)
@@ -167,7 +181,7 @@ func runSDDAttempt(ctx context.Context, args []string, stdout io.Writer) error {
 // accepted values and the values a message names can never drift apart.
 // Mirrors reviewIntegrationGatesInOrder / reviewIntegrationGateNames in
 // review_operation_contract.go.
-var sddAttemptOperationsInOrder = []string{"status", "begin", "finish", "reset", "rescope", "acquire", "settle"}
+var sddAttemptOperationsInOrder = []string{"status", "begin", "finish", "reset", "rescope", "acquire", "settle", "grant"}
 
 func validSDDAttemptOperation(operation string) bool {
 	for _, valid := range sddAttemptOperationsInOrder {
@@ -204,6 +218,7 @@ func validateSDDAttemptOperationFlags(operation string, args []string) error {
 		"rescope": {"expected-revision", "request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "reason", "actor"},
 		"acquire": {"request-id", "work-unit", "evidence-goal", "max-attempts", "max-changed-lines", "token"},
 		"settle":  {"token", "request-id", "outcome", "evidence-revision", "diagnosis", "harness-disposition", "cleanup-evidence", "process-evidence", "successor-lineage", "remediates-evidence-revision"},
+		"grant":   {"expected-revision", "request-id", "root", "actor", "reason"},
 	}[operation] {
 		allowed[name] = true
 	}
@@ -252,4 +267,18 @@ func missingSDDAttemptFlags(args []string, names ...string) []string {
 func presentSDDAttemptFlags(args []string, names ...string) int {
 	present := len(names) - len(missingSDDAttemptFlags(args, names...))
 	return present
+}
+
+// sddAttemptRootList is grant's repeatable --root flag (#2540 S3). stdlib
+// flag has no repeatable string flag, so the bounded multi-root grant shape
+// needs this minimal flag.Value: each occurrence appends in caller order, and
+// the ledger owns canonicalization, deduplication, and the bounded count
+// (normalizeGrantRootsRequest).
+type sddAttemptRootList []string
+
+func (roots *sddAttemptRootList) String() string { return strings.Join(*roots, ", ") }
+
+func (roots *sddAttemptRootList) Set(value string) error {
+	*roots = append(*roots, value)
+	return nil
 }
