@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/reviewtransaction"
 )
 
@@ -272,7 +273,7 @@ func applyReviewOfferRouting(ctx context.Context, status *Status, workspaceRoot,
 	status.ReviewOffer = &ReviewOfferBlock{
 		Available:  offer.Available,
 		LineageID:  offer.LineageID,
-		Invocation: fmt.Sprintf("gentle-ai review start --cwd %q", workspaceRoot),
+		Invocation: fmt.Sprintf("gentle-ai review start --cwd %s", pathquote.Quote(workspaceRoot)),
 	}
 }
 
@@ -738,8 +739,8 @@ func applyNativeRuntimeErrorRouting(status *Status, runtimeErr error) {
 		change = *status.ChangeName
 	}
 	reason := fmt.Sprintf(
-		"native SDD runtime authority is unreadable and execution is blocked: %v; do not launch another actor or edit the Git-common-dir authority manually; the compact attempt path reports blocked(corrupt_authority), and full `gentle-ai sdd-attempt status --cwd %q --change %q` is a maintainer diagnostic only",
-		runtimeErr, status.ActionContext.WorkspaceRoot, change,
+		"native SDD runtime authority is unreadable and execution is blocked: %v; do not launch another actor or edit the Git-common-dir authority manually; the compact attempt path reports blocked(corrupt_authority), and full `gentle-ai sdd-attempt status --cwd %s --change %q` is a maintainer diagnostic only",
+		runtimeErr, pathquote.Quote(status.ActionContext.WorkspaceRoot), change,
 	)
 	status.Dependencies.Apply = DependencyBlocked
 	status.Dependencies.Verify = DependencyBlocked
@@ -777,8 +778,8 @@ func applyNativeRuntimeRouting(status *Status) {
 		change = *status.ChangeName
 	}
 	reason := fmt.Sprintf(
-		"native SDD runtime execution is blocked(%s) for %q in %q; compact acquire reports the same: %s",
-		readiness.Reason, change, status.ActionContext.WorkspaceRoot, readiness.Exit,
+		"native SDD runtime execution is blocked(%s) for %q in %s; compact acquire reports the same: %s",
+		readiness.Reason, change, pathquote.Quote(status.ActionContext.WorkspaceRoot), readiness.Exit,
 	)
 	status.Dependencies.Apply = DependencyBlocked
 	status.Dependencies.Verify = DependencyBlocked
@@ -1805,15 +1806,15 @@ func renderPhaseInstructions(status Status) PhaseInstructions {
 func nativeRuntimeInstructions(status Status, change string) []string {
 	workspace := status.ActionContext.WorkspaceRoot
 	instructions := []string{
-		fmt.Sprintf("Before any runtime-bearing apply, verify, or remediation launch, run `gentle-ai sdd-attempt acquire --cwd %q --change %q --request-id \"<unique-request-id>\" --work-unit \"<label>\" --evidence-goal \"<stable-goal>\" --max-attempts <count> --max-changed-lines <count>`.", workspace, change),
+		fmt.Sprintf("Before any runtime-bearing apply, verify, or remediation launch, run `gentle-ai sdd-attempt acquire --cwd %s --change %q --request-id \"<unique-request-id>\" --work-unit \"<label>\" --evidence-goal \"<stable-goal>\" --max-attempts <count> --max-changed-lines <count>`.", pathquote.Quote(workspace), change),
 		"Launch only for state proceed and retain its opaque token. State blocked or complete stops the launch; full runtime status is a diagnostic escape hatch, not normal model context.",
-		fmt.Sprintf("After the external run, call `gentle-ai sdd-attempt settle --cwd %q --change %q --token \"<acquire-token>\" --request-id \"<unique-request-id>\" --outcome <passed|failed|interrupted> --evidence-revision <sha256> --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<evidence>\" --process-evidence \"<evidence>\"`; add --successor-lineage only for a distinct approved remediation successor.", workspace, change),
+		fmt.Sprintf("After the external run, call `gentle-ai sdd-attempt settle --cwd %s --change %q --token \"<acquire-token>\" --request-id \"<unique-request-id>\" --outcome <passed|failed|interrupted> --evidence-revision <sha256> --diagnosis \"<proven-diagnosis>\" --harness-disposition <reused|invalidated> --cleanup-evidence \"<evidence>\" --process-evidence \"<evidence>\"`; add --successor-lineage only for a distinct approved remediation successor.", pathquote.Quote(workspace), change),
 		"Treat settle state proceed as permission for another bounded acquire, blocked as a hard stop, and complete as terminal. Reset is exceptional, requires an explicit maintainer scope decision, and is never automatic.",
 	}
 	if status.RemediationState.Required && status.RemediationState.LineageID == "" && status.RuntimeStatus != nil && status.RuntimeStatus.Objective != nil {
 		objective := status.RuntimeStatus.Objective
 		instructions = append(instructions,
-			fmt.Sprintf("Disabled/unmanaged remediation has one bounded correction attempt: run `gentle-ai sdd-attempt acquire --cwd %q --change %q --request-id \"<unique-request-id>\" --work-unit %q --evidence-goal %q --max-attempts %d --max-changed-lines %d`.", workspace, change, objective.WorkUnit, objective.EvidenceGoal, objective.MaxAttempts, objective.MaxChangedLines),
+			fmt.Sprintf("Disabled/unmanaged remediation has one bounded correction attempt: run `gentle-ai sdd-attempt acquire --cwd %s --change %q --request-id \"<unique-request-id>\" --work-unit %q --evidence-goal %q --max-attempts %d --max-changed-lines %d`.", pathquote.Quote(workspace), change, objective.WorkUnit, objective.EvidenceGoal, objective.MaxAttempts, objective.MaxChangedLines),
 			fmt.Sprintf("After the candidate changes, settle that token with `--remediates-evidence-revision %s`; a fresh independent verification is required before archive.", status.RemediationState.FailedEvidenceRevision),
 		)
 	}
@@ -1852,7 +1853,7 @@ func nonPhaseRoutingInstructions(status Status) ([]string, bool) {
 		return []string{
 			"",
 			"### Next Review Operation",
-			fmt.Sprintf("- Run `gentle-ai review start --cwd %q`; the facade derives intended untracked scope, lineage, tier, lenses, and correction budget from live Git.", status.ActionContext.WorkspaceRoot),
+			fmt.Sprintf("- Run `gentle-ai review start --cwd %s`; the facade derives intended untracked scope, lineage, tier, lenses, and correction budget from live Git.", pathquote.Quote(status.ActionContext.WorkspaceRoot)),
 			"- Pass reviewer result and verification evidence to `gentle-ai review finalize`; do not hand-author lifecycle operation JSON.",
 			"- Continue discovered authority instead of starting another budget, and reconcile existing terminal mirrors only after `gentle-ai review validate --gate post-apply` allows.",
 		}, true
@@ -1860,7 +1861,7 @@ func nonPhaseRoutingInstructions(status Status) ([]string, bool) {
 		return []string{
 			"",
 			"### Next Selection Operation",
-			fmt.Sprintf("- Rerun with an explicit change name from Blocked Reasons above: `gentle-ai sdd-status --cwd %q <change-name>` or `gentle-ai sdd-continue --cwd %q <change-name>`.", status.ActionContext.WorkspaceRoot, status.ActionContext.WorkspaceRoot),
+			fmt.Sprintf("- Rerun with an explicit change name from Blocked Reasons above: `gentle-ai sdd-status --cwd %s <change-name>` or `gentle-ai sdd-continue --cwd %s <change-name>`.", pathquote.Quote(status.ActionContext.WorkspaceRoot), pathquote.Quote(status.ActionContext.WorkspaceRoot)),
 		}, true
 	default:
 		return nil, false
