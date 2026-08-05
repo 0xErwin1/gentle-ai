@@ -1250,8 +1250,10 @@ type dispositionRepairResult struct {
 		AuthorityInventoryRevision string `json:"authority_inventory_revision"`
 	} `json:"disposition_execution"`
 	DispositionSelectors []struct {
-		PredecessorLineageID string `json:"predecessor_lineage_id"`
-		SuccessorLineageID   string `json:"successor_lineage_id"`
+		PredecessorLineageID        string `json:"predecessor_lineage_id"`
+		PredecessorExpectedRevision string `json:"predecessor_expected_revision"`
+		SuccessorLineageID          string `json:"successor_lineage_id"`
+		SuccessorExpectedRevision   string `json:"successor_expected_revision"`
 	} `json:"disposition_selectors"`
 }
 
@@ -1272,6 +1274,10 @@ const (
 	scratchDispositionInventoryRevision         = "damaged-store/disposition-inventory-revision"
 	scratchDispositionWitnessLineage            = "damaged-store/disposition-witness-lineage"
 	scratchDispositionWitnessBytes              = "damaged-store/disposition-witness-bytes"
+	scratchDispositionSelector                  = "damaged-store/disposition-selector"
+	scratchDispositionRemainingSelector         = "damaged-store/disposition-remaining-selector"
+	scratchDispositionRemainingBytes            = "damaged-store/disposition-remaining-bytes"
+	scratchDispositionRemainingDigest           = "damaged-store/disposition-remaining-digest"
 )
 
 // validDispositionSHA256 is this axis's own check for the shape
@@ -1395,7 +1401,7 @@ func requireDispositionPlanEligible(sandbox *Sandbox, observation Observation) e
 // must NOT admit a disposition plan: more than one closed content-mismatch
 // edge (design decision 5, "cardinality is executor policy" — derivation
 // itself refuses ambiguity before admission is ever asked).
-func requireNoDispositionPlanSurfaced(_ *Sandbox, observation Observation) error {
+func requireNoDispositionPlanSurfaced(sandbox *Sandbox, observation Observation) error {
 	var result dispositionRepairResult
 	if err := decodeWaveObservation(observation, &result, "review repair --preflight multi-edge shape"); err != nil {
 		return err
@@ -1403,29 +1409,44 @@ func requireNoDispositionPlanSurfaced(_ *Sandbox, observation Observation) error
 	if result.DispositionProviderInputs != nil || len(result.DispositionSelectors) != 2 {
 		return fmt.Errorf("review repair --preflight did not enumerate two exact selectors for the multi-edge shape: %+v", result)
 	}
+	selected, remaining := result.DispositionSelectors[0], result.DispositionSelectors[1]
+	if selected.SuccessorLineageID != damagedSuccessor {
+		selected, remaining = remaining, selected
+	}
+	if selected.PredecessorLineageID != sandbox.Scratch[scratchMiddle] || selected.PredecessorExpectedRevision != sandbox.Scratch[scratchMiddleRevision] || selected.SuccessorLineageID != sandbox.Scratch[scratchSuccessor] || selected.SuccessorExpectedRevision != sandbox.Scratch[scratchSuccessorRevision] || remaining.PredecessorLineageID != sandbox.Scratch[scratchPredecessor] || remaining.PredecessorExpectedRevision != sandbox.Scratch[scratchPredecessorRevision] || remaining.SuccessorLineageID != sandbox.Scratch[scratchMiddle] || remaining.SuccessorExpectedRevision != sandbox.Scratch[scratchMiddleRevision] {
+		return errors.New("review repair --preflight selectors do not bind the damaged edges the fixture proved")
+	}
+	sandbox.Scratch[scratchDispositionSelector] = strings.Join([]string{selected.PredecessorLineageID, selected.PredecessorExpectedRevision, selected.SuccessorLineageID, selected.SuccessorExpectedRevision}, "\n")
+	sandbox.Scratch[scratchDispositionRemainingSelector] = strings.Join([]string{remaining.PredecessorLineageID, remaining.PredecessorExpectedRevision, remaining.SuccessorLineageID, remaining.SuccessorExpectedRevision}, "\n")
+	path, err := storeStatePath(sandbox, remaining.SuccessorLineageID)
+	if err != nil {
+		return err
+	}
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256(payload)
+	sandbox.Scratch[scratchDispositionRemainingBytes] = string(payload)
+	sandbox.Scratch[scratchDispositionRemainingDigest] = "sha256:" + hex.EncodeToString(digest[:])
 	return nil
 }
 
-func selectedDispositionPreflightArgs(sandbox *Sandbox) ([]string, error) {
-	predecessor, err := scratchValue(sandbox, scratchMiddle)
+func dispositionSelectorArgs(sandbox *Sandbox) ([]string, error) {
+	value, err := scratchValue(sandbox, scratchDispositionSelector)
 	if err != nil {
 		return nil, err
 	}
-	predecessorRevision, err := scratchValue(sandbox, scratchMiddleRevision)
-	if err != nil {
-		return nil, err
+	selector := strings.Split(value, "\n")
+	if len(selector) != 4 {
+		return nil, errors.New("ds07 retained an incomplete emitted selector")
 	}
-	successor, err := scratchValue(sandbox, scratchSuccessor)
-	if err != nil {
-		return nil, err
-	}
-	successorRevision, err := scratchValue(sandbox, scratchSuccessorRevision)
-	if err != nil {
-		return nil, err
-	}
-	return []string{"review", "repair", "--preflight=true", "--cwd", sandbox.Repo,
-		"--predecessor-lineage", predecessor, "--predecessor-revision", predecessorRevision,
-		"--successor-lineage", successor, "--successor-revision", successorRevision}, nil
+	return []string{"--predecessor-lineage", selector[0], "--predecessor-revision", selector[1], "--successor-lineage", selector[2], "--successor-revision", selector[3]}, nil
+}
+
+func dispositionSelectorPreflightArgs(sandbox *Sandbox) ([]string, error) {
+	selector, err := dispositionSelectorArgs(sandbox)
+	return append([]string{"review", "repair", "--preflight=true", "--cwd", sandbox.Repo}, selector...), err
 }
 
 // dispositionRepairExecutionInputs gathers everything both
@@ -1464,11 +1485,18 @@ func dispositionRepairArgs(reason string) func(*Sandbox) ([]string, error) {
 			"--plan-digest", planDigest, "--inventory-revision", inventoryRevision,
 			"--actor", actor, "--reason", reason, "--authorization", authorization,
 		}
-		if predecessor, ok := sandbox.Scratch[scratchMiddle]; ok {
-			args = append(args, "--predecessor-lineage", predecessor, "--predecessor-revision", sandbox.Scratch[scratchMiddleRevision],
-				"--successor-lineage", sandbox.Scratch[scratchSuccessor], "--successor-revision", sandbox.Scratch[scratchSuccessorRevision])
-		}
 		return args, nil
+	}
+}
+
+func dispositionRepairWithSelectorArgs(reason string) func(*Sandbox) ([]string, error) {
+	return func(sandbox *Sandbox) ([]string, error) {
+		args, err := dispositionRepairArgs(reason)(sandbox)
+		if err != nil {
+			return nil, err
+		}
+		selector, err := dispositionSelectorArgs(sandbox)
+		return append(args, selector...), err
 	}
 }
 
@@ -1515,8 +1543,28 @@ func requireDispositionQuarantineCommitted(sandbox *Sandbox, observation Observa
 	if strings.Contains(observation.Stdout, sandbox.Repo) {
 		return errors.New("leaf authority disposition execution leaked the repository path")
 	}
-	delete(sandbox.Scratch, scratchMiddle)
-	delete(sandbox.Scratch, scratchMiddleRevision)
+	if remaining, ok := sandbox.Scratch[scratchDispositionRemainingSelector]; ok {
+		selector, err := dispositionSelectorArgs(sandbox)
+		if err != nil {
+			return err
+		}
+		path, err := storeStatePath(sandbox, selector[5])
+		if err != nil {
+			return err
+		}
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			return fmt.Errorf("selected edge was not quarantined: %v", statErr)
+		}
+		remainingSelector := strings.Split(remaining, "\n")
+		path, err = storeStatePath(sandbox, remainingSelector[2])
+		after, readErr := os.ReadFile(path)
+		digest := sha256.Sum256(after)
+		if err != nil || readErr != nil || string(after) != sandbox.Scratch[scratchDispositionRemainingBytes] || "sha256:"+hex.EncodeToString(digest[:]) != sandbox.Scratch[scratchDispositionRemainingDigest] {
+			return errors.New("selected repair changed the unselected edge")
+		}
+		sandbox.Scratch[scratchDispositionSelector] = remaining
+		delete(sandbox.Scratch, scratchDispositionRemainingSelector)
+	}
 	return nil
 }
 
@@ -1870,16 +1918,16 @@ func damagedStoreJourneys() []Journey {
 						invalidEdgesWithNoAnomalyClass(2))},
 				{Name: "ask what review repair would do", Requires: repairPreflightCapability,
 					Args: productArgs("review", "repair", "--preflight=true"), After: requireNoDispositionPlanSurfaced},
-				{Name: "select the leaf and derive its exact plan", Requires: repairPreflightCapability,
-					Args: selectedDispositionPreflightArgs, After: requireDispositionPlanEligible},
+				{Name: "select the emitted leaf and derive its exact plan", Requires: repairPreflightCapability,
+					Args: dispositionSelectorPreflightArgs, After: requireDispositionPlanEligible},
 				{Name: "repair only the selected leaf", Requires: repairDispositionExecuteCapability,
-					Args: dispositionRepairArgs("quarantine the selected content-mismatched leaf"), After: requireDispositionQuarantineCommitted},
+					Args: dispositionRepairWithSelectorArgs("quarantine the selected content-mismatched leaf"), After: requireDispositionQuarantineCommitted},
 				{Name: "the unselected edge remains for the next preflight", Requires: inspectAuthorityCapability,
 					Args: productArgs("review", "inspect-authority"), After: inspectionAssertion("one remaining damaged edge", invalidEdgesWithNoAnomalyClass(1))},
-				{Name: "derive and repair the remaining edge", Requires: repairPreflightCapability,
-					Args: productArgs("review", "repair", "--preflight=true"), After: requireDispositionPlanEligible},
+				{Name: "rerun preflight for the remaining emitted selector", Requires: repairPreflightCapability,
+					Args: dispositionSelectorPreflightArgs, After: requireDispositionPlanEligible},
 				{Name: "repair the remaining edge", Requires: repairDispositionExecuteCapability,
-					Args: dispositionRepairArgs("quarantine the remaining content-mismatched leaf"), After: requireDispositionQuarantineCommitted},
+					Args: dispositionRepairWithSelectorArgs("quarantine the remaining content-mismatched leaf"), After: requireDispositionQuarantineCommitted},
 				{Name: "the store governs again", Composite: proveStoreRecovered},
 			},
 		},

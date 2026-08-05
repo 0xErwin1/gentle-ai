@@ -120,7 +120,7 @@ func (result ReviewRepairResult) Validate() error {
 			return errors.New("eligible review repair preflight inputs are incomplete")
 		}
 	case ReviewRepairModeExecute:
-		if result.ProviderInputs != nil || len(result.RequiredInputs) != 0 || result.DispositionProviderInputs != nil {
+		if result.ProviderInputs != nil || len(result.RequiredInputs) != 0 || result.DispositionProviderInputs != nil || len(result.DispositionSelectors) != 0 {
 			return errors.New("review repair execution shape is invalid")
 		}
 		switch {

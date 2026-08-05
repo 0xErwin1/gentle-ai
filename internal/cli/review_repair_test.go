@@ -507,95 +507,27 @@ func TestReviewRepairPreflightSurfacesAuthorityDispositionPlanForEligibleLeaf(t 
 	}
 }
 
-func TestReviewRepairSequentiallyRepairsExactlySelectedContentMismatchEdges(t *testing.T) {
+func TestReviewRepairPreflightEnumeratesExactMultiEdgeSelectors(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	writeInspectCLIRecoveryPair(t, repo, "leaf-alpha", false, dispositionForgedAuthorization)
 	writeInspectCLIRecoveryPair(t, repo, "leaf-bravo", false, dispositionForgedAuthorization)
-	authorityRoot := reviewCLIAuthorityRoot(t, repo)
-	alphaPath := filepath.Join(authorityRoot, "v2", "leaf-alpha-successor", "review-state.json")
-	bravoPath := filepath.Join(authorityRoot, "v2", "leaf-bravo-successor", "review-state.json")
-	alphaBefore, err := os.ReadFile(alphaPath)
-	if err != nil {
+	var output bytes.Buffer
+	if err := RunReview([]string{"repair", "--preflight", "--cwd", repo}, &output); err != nil {
 		t.Fatal(err)
 	}
-	bravoBefore, err := os.ReadFile(bravoPath)
-	if err != nil {
+	var result ReviewRepairResult
+	decodeStrictReviewJSON(t, output.Bytes(), &result)
+	if err := result.Validate(); err != nil {
 		t.Fatal(err)
 	}
-
-	selectorArgs := func(value reviewtransaction.AuthorityDispositionSelector) []string {
-		return []string{"--predecessor-lineage", value.PredecessorLineageID, "--predecessor-revision", value.PredecessorExpectedRevision, "--successor-lineage", value.SuccessorLineageID, "--successor-revision", value.SuccessorExpectedRevision}
+	if result.DispositionProviderInputs != nil || len(result.DispositionSelectors) != 2 {
+		t.Fatalf("multi-edge preflight = %#v, want two exact selectors", result)
 	}
-	decodePreflight := func(args []string) ReviewRepairResult {
-		t.Helper()
-		var output bytes.Buffer
-		if err := RunReview(args, &output); err != nil {
-			t.Fatal(err)
+	for _, selector := range result.DispositionSelectors {
+		if selector.PredecessorLineageID == "" || selector.SuccessorLineageID == "" ||
+			!validReviewCapabilitySHA256(selector.PredecessorExpectedRevision) || !validReviewCapabilitySHA256(selector.SuccessorExpectedRevision) {
+			t.Fatalf("selector is incomplete: %#v", selector)
 		}
-		var result ReviewRepairResult
-		decodeStrictReviewJSON(t, output.Bytes(), &result)
-		if err := result.Validate(); err != nil {
-			t.Fatal(err)
-		}
-		return result
-	}
-
-	preflight := decodePreflight([]string{"repair", "--preflight", "--cwd", repo})
-	if preflight.DispositionProviderInputs != nil || len(preflight.DispositionSelectors) != 2 {
-		t.Fatalf("multi-edge preflight = %#v, want exactly two explicit selectors and no guessed plan", preflight)
-	}
-	alpha, bravo := preflight.DispositionSelectors[0], preflight.DispositionSelectors[1]
-	if alpha.SuccessorLineageID != "leaf-alpha-successor" || bravo.SuccessorLineageID != "leaf-bravo-successor" {
-		t.Fatalf("preflight selectors = %#v, want alpha and bravo successors", preflight.DispositionSelectors)
-	}
-
-	for _, stale := range []reviewtransaction.AuthorityDispositionSelector{
-		{PredecessorLineageID: "leaf-bravo", PredecessorExpectedRevision: alpha.PredecessorExpectedRevision, SuccessorLineageID: alpha.SuccessorLineageID, SuccessorExpectedRevision: alpha.SuccessorExpectedRevision},
-		{PredecessorLineageID: alpha.PredecessorLineageID, PredecessorExpectedRevision: alpha.PredecessorExpectedRevision, SuccessorLineageID: alpha.SuccessorLineageID, SuccessorExpectedRevision: "sha256:" + strings.Repeat("a", 64)},
-	} {
-		args := append([]string{"repair", "--preflight", "--cwd", repo}, selectorArgs(stale)...)
-		if err := RunReview(args, &bytes.Buffer{}); err == nil {
-			t.Fatalf("forged or stale selector was admitted: %#v", stale)
-		}
-	}
-	for path, before := range map[string][]byte{alphaPath: alphaBefore, bravoPath: bravoBefore} {
-		if after, readErr := os.ReadFile(path); readErr != nil || !bytes.Equal(before, after) {
-			t.Fatalf("refused selector changed %s: %v", path, readErr)
-		}
-	}
-
-	for _, selected := range []reviewtransaction.AuthorityDispositionSelector{alpha, bravo} {
-		selectedPreflight := decodePreflight(append([]string{"repair", "--preflight", "--cwd", repo}, selectorArgs(selected)...))
-		if selectedPreflight.DispositionProviderInputs == nil {
-			t.Fatalf("exact selector did not surface an executable plan: %#v", selectedPreflight)
-		}
-		actor, reason := "maintainer@example.com", "quarantine exactly selected content-mismatched edge"
-		commonDir := filepath.Dir(filepath.Dir(authorityRoot))
-		bindingSum := sha256.Sum256([]byte("gentle-ai.review-repository-binding/v1\n" + commonDir))
-		authorization := "gentle-ai.review-disposition-authorization/v1" +
-			"\nschema=gentle-ai.review-authority-disposition-plan/v1" +
-			"\nrepository=sha256:" + hex.EncodeToString(bindingSum[:]) +
-			"\nclass=content_mismatched_recovery_authorization" +
-			"\nplan_digest=" + selectedPreflight.DispositionProviderInputs.PlanDigest +
-			"\ninventory_revision=" + selectedPreflight.DispositionProviderInputs.AuthorityInventoryRevision +
-			"\nactor=" + actor + "\nreason=" + reason
-		execute := append([]string{"repair", "--cwd", repo, "--plan-digest", selectedPreflight.DispositionProviderInputs.PlanDigest, "--inventory-revision", selectedPreflight.DispositionProviderInputs.AuthorityInventoryRevision, "--actor", actor, "--reason", reason, "--authorization", authorization}, selectorArgs(selected)...)
-		var output bytes.Buffer
-		if err := RunReview(execute, &output); err != nil {
-			t.Fatalf("exact selected repair refused for %q: %v\n%s", selected.SuccessorLineageID, err, output.String())
-		}
-		if selected.SuccessorLineageID == alpha.SuccessorLineageID {
-			if _, err := os.Stat(alphaPath); !os.IsNotExist(err) {
-				t.Fatalf("selected alpha entry remained after repair: %v", err)
-			}
-			if after, readErr := os.ReadFile(bravoPath); readErr != nil || !bytes.Equal(bravoBefore, after) {
-				t.Fatalf("repairing alpha changed unselected bravo bytes: %v", readErr)
-			}
-		}
-	}
-	inspection, err := reviewtransaction.InspectCompactRecoveryEdges(context.Background(), repo)
-	if err != nil || !inspection.Complete || !inspection.Valid {
-		t.Fatalf("sequential exact repairs did not restore the graph: report=%#v err=%v", inspection, err)
 	}
 }
 
@@ -607,6 +539,19 @@ func TestReviewRepairPreflightRejectsAuthorityDispositionExecutionInputs(t *test
 	var output bytes.Buffer
 	if err := RunReview(args, &output); err == nil {
 		t.Fatalf("preflight accepted a disposition execution input: %s", output.String())
+	}
+}
+
+func TestReviewRepairExecuteRejectsDispositionSelectors(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	result := ReviewRepairResult{
+		Schema: ReviewIntegrationRepairSchema, Contract: ReviewIntegrationContractV1, Operation: "review.repair", Mode: ReviewRepairModeExecute,
+		Assessment: reviewtransaction.UnsupportedAuthorityRepairAssessment(), RequiredInputs: []string{},
+		DispositionSelectors: []reviewtransaction.AuthorityDispositionSelector{{PredecessorLineageID: "predecessor", PredecessorExpectedRevision: digest, SuccessorLineageID: "successor", SuccessorExpectedRevision: digest}},
+		DispositionExecution: &ReviewRepairDispositionExecution{Schema: reviewtransaction.AuthorityDispositionProofSchema, Status: string(reviewtransaction.CompactReclaimCommitted), LineageID: "successor", PlanDigest: digest, AuthorityInventoryRevision: digest, AnomalyClass: "content_mismatched_recovery_authorization", AuthorizationSHA256: digest},
+	}
+	if err := result.Validate(); err == nil {
+		t.Fatal("execute result accepted preflight-only disposition selectors")
 	}
 }
 
