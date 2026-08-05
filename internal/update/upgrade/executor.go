@@ -412,8 +412,10 @@ func writeBackupDiagnostic(w io.Writer, format string, args ...any) {
 //   - Status UpToDate, NotInstalled, CheckFailed → omitted from report
 //   - dryRun=true → no exec; eligible tools reported as UpgradeSkipped
 //
-// The backup snapshot is created before any exec call — this is the architectural
-// guarantee that config is safe even if an upgrade fails mid-way.
+// The backup snapshot is created before any executable upgrade — this is the
+// architectural guarantee that config is safe even if an upgrade fails mid-way.
+// Windows gentle-ai provenance is preflighted first because its manual fallback
+// must remain a true zero-mutation outcome.
 func Execute(ctx context.Context, results []update.UpdateResult, profile system.PlatformProfile, homeDir string, dryRun bool, progress ...io.Writer) UpgradeReport {
 	options := ExecuteOptions{}
 	if len(progress) > 0 && progress[0] != nil {
@@ -447,6 +449,11 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 	// If nothing is executable, dev-built, or version-unknown, return empty report.
 	if len(executable) == 0 && len(devBuilds) == 0 && len(versionUnknowns) == 0 {
 		return UpgradeReport{DryRun: dryRun}
+	}
+
+	var preflightSkips []ToolUpgradeResult
+	if !dryRun {
+		executable, preflightSkips = preflightWindowsGentleAIUpgrades(executable, profile)
 	}
 
 	// Create backup snapshot BEFORE any execution (only when there are executables).
@@ -489,7 +496,7 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 	}
 
 	// Build results slice: dev-build skips first (no exec), then executable tools.
-	toolResults := make([]ToolUpgradeResult, 0, len(executable)+len(devBuilds)+len(versionUnknowns))
+	toolResults := make([]ToolUpgradeResult, 0, len(executable)+len(devBuilds)+len(versionUnknowns)+len(preflightSkips))
 
 	// Dev-build tools: always UpgradeSkipped with a source-build hint.
 	for _, r := range devBuilds {
@@ -515,6 +522,8 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 			ManualHint: fmt.Sprintf("installed binary was found but its version could not be determined — check `%s` and reinstall if it is a stale source/dev build", detectCommandHint(r.Tool)),
 		})
 	}
+
+	toolResults = append(toolResults, preflightSkips...)
 
 	// Executable tools: run upgrade strategy.
 	for _, r := range executable {
@@ -557,6 +566,37 @@ func ExecuteWithOptions(ctx context.Context, results []update.UpdateResult, prof
 		Results:       toolResults,
 		DryRun:        dryRun,
 	}
+}
+
+// preflightWindowsGentleAIUpgrades removes unsafe Windows self-upgrades before
+// the backup phase. A manual fallback must not create or prune a backup because
+// no upgrade will be attempted.
+func preflightWindowsGentleAIUpgrades(executable []update.UpdateResult, profile system.PlatformProfile) ([]update.UpdateResult, []ToolUpgradeResult) {
+	remaining := make([]update.UpdateResult, 0, len(executable))
+	skipped := make([]ToolUpgradeResult, 0)
+	for _, r := range executable {
+		if profile.OS != "windows" || r.Tool.Name != "gentle-ai" || effectiveMethod(r.Tool, profile) != update.InstallGoInstall {
+			remaining = append(remaining, r)
+			continue
+		}
+
+		if err := preflightWindowsGentleAIGoInstall(r, profile); err != nil {
+			if hint, ok := AsManualFallback(err); ok {
+				skipped = append(skipped, ToolUpgradeResult{
+					ToolName:   r.Tool.Name,
+					OldVersion: r.InstalledVersion,
+					NewVersion: r.LatestVersion,
+					Method:     effectiveMethod(r.Tool, profile),
+					Status:     UpgradeSkipped,
+					ManualHint: hint,
+				})
+				continue
+			}
+		}
+
+		remaining = append(remaining, r)
+	}
+	return remaining, skipped
 }
 
 func detectCommandHint(tool update.ToolInfo) string {
