@@ -99,10 +99,10 @@ func authorityDispositionSelectors(report CompactRecoveryInspectionReport, recor
 		})
 	}
 	slices.SortFunc(selectors, func(left, right AuthorityDispositionSelector) int {
-		if order := cmp.Compare(left.PredecessorLineageID, right.PredecessorLineageID); order != 0 {
-			return order
+		if left.PredecessorLineageID == right.PredecessorLineageID {
+			return cmp.Compare(left.SuccessorLineageID, right.SuccessorLineageID)
 		}
-		return cmp.Compare(left.SuccessorLineageID, right.SuccessorLineageID)
+		return cmp.Compare(left.PredecessorLineageID, right.PredecessorLineageID)
 	})
 	return selectors, nil
 }
@@ -124,10 +124,9 @@ func deriveAuthorityDispositionPlan(report CompactRecoveryInspectionReport, reco
 	}
 	var selector *AuthorityDispositionSelector
 	if len(requested) == 1 {
-		for _, candidate := range selectors {
-			if candidate == requested[0] {
-				selected := candidate
-				selector = &selected
+		for index := range selectors {
+			if selectors[index] == requested[0] {
+				selector = &selectors[index]
 				break
 			}
 		}

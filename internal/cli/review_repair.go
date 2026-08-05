@@ -23,6 +23,8 @@ const (
 	ReviewRepairModeExecute   ReviewRepairMode = "execute"
 )
 
+var errInvalidReviewRepairDispositionSelectors = errors.New("review repair preflight disposition selectors are invalid") // refusal:by-design human-authority: this internal projection is built from a freshly inspected authority graph; a malformed shape requires a producer fix, not operator input
+
 type ReviewRepairProviderInputs struct {
 	Class               reviewtransaction.AuthorityRepairClass       `json:"class"`
 	LineageID           string                                       `json:"lineage_id"`
@@ -101,6 +103,29 @@ func (result ReviewRepairResult) Validate() error {
 			if !validReviewCapabilitySHA256(inputs.PlanDigest) || !validReviewCapabilitySHA256(inputs.AuthorityInventoryRevision) {
 				// refusal:by-design human-authority: this result is built by runReviewRepair itself from a freshly-derived plan digest and inventory revision; reaching this means a product defect a maintainer must fix, not a value any operator command supplies
 				return errors.New("review repair preflight disposition provider inputs are incomplete")
+			}
+		}
+		if selectors := result.DispositionSelectors; len(selectors) > 0 {
+			if result.Assessment.Status != reviewtransaction.AuthorityRepairUnsupported || result.ProviderInputs != nil || result.DispositionProviderInputs != nil || len(result.RequiredInputs) != 0 {
+				return errInvalidReviewRepairDispositionSelectors
+			}
+			revisions := make(map[string]string, len(selectors)*2)
+			var previous [2]string
+			for index, selector := range selectors {
+				lineages := [2]string{selector.PredecessorLineageID, selector.SuccessorLineageID}
+				expected := [2]string{selector.PredecessorExpectedRevision, selector.SuccessorExpectedRevision}
+				if lineages[0] == lineages[1] || !validReviewIntegrationLineage(lineages[0]) || !validReviewIntegrationLineage(lineages[1]) ||
+					!validReviewCapabilitySHA256(expected[0]) || !validReviewCapabilitySHA256(expected[1]) || expected[0] != strings.ToLower(expected[0]) || expected[1] != strings.ToLower(expected[1]) ||
+					index > 0 && (lineages[0] < previous[0] || lineages[0] == previous[0] && lineages[1] <= previous[1]) {
+					return errInvalidReviewRepairDispositionSelectors
+				}
+				for offset, lineage := range lineages {
+					if revision, found := revisions[lineage]; found && revision != expected[offset] {
+						return errInvalidReviewRepairDispositionSelectors
+					}
+					revisions[lineage] = expected[offset]
+				}
+				previous = lineages
 			}
 		}
 		if result.Assessment.Status != reviewtransaction.AuthorityRepairEligible {
@@ -229,6 +254,10 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 		PredecessorLineageID: *predecessorLineage, PredecessorExpectedRevision: *predecessorRevision,
 		SuccessorLineageID: *successorLineage, SuccessorExpectedRevision: *successorRevision,
 	}
+	selectors := []reviewtransaction.AuthorityDispositionSelector{}
+	if selectorPresent {
+		selectors = append(selectors, selector)
+	}
 	root, err := (reviewtransaction.SnapshotBuilder{Repo: *cwd}).ResolveRepositoryRoot(ctx)
 	if err != nil {
 		return &reviewRepairOperationError{message: "review repair could not resolve repository authority", cause: err}
@@ -260,13 +289,7 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 		// N=1 or a Wave 6 N>=2 closed-class closure) surfaces a plan — never a
 		// partial or generic fallback (rdd-authority-disposition-plan /
 		// "Closed Anomaly Classification Required for Derivation").
-		var plan reviewtransaction.AuthorityDispositionPlan
-		var planErr error
-		if selectorPresent {
-			plan, planErr = reviewtransaction.DeriveAuthorityDispositionPlanAtRepo(ctx, root, "", "", selector)
-		} else {
-			plan, planErr = reviewtransaction.DeriveAuthorityDispositionPlanAtRepo(ctx, root, "", "")
-		}
+		plan, planErr := reviewtransaction.DeriveAuthorityDispositionPlanAtRepo(ctx, root, "", "", selectors...)
 		if planErr == nil {
 			if reviewtransaction.AdmitAuthorityDispositionClosure(plan) == nil {
 				// SeedLineageID/SeedExpectedRevision stay unset here
@@ -310,13 +333,7 @@ func runReviewRepair(ctx context.Context, args []string, stdout io.Writer) error
 		// than attempt a narrowing re-derivation, which a pre-check duplicating
 		// that logic here could not distinguish from a genuinely stale
 		// preflight value.
-		var record reviewtransaction.CompactReclaimRecord
-		var err error
-		if selectorPresent {
-			record, err = reviewtransaction.RepairAuthorityDisposition(ctx, root, *planDigest, *inventoryRevision, *actor, *reason, *dispositionAuthorization, selector)
-		} else {
-			record, err = reviewtransaction.RepairAuthorityDisposition(ctx, root, *planDigest, *inventoryRevision, *actor, *reason, *dispositionAuthorization)
-		}
+		record, err := reviewtransaction.RepairAuthorityDisposition(ctx, root, *planDigest, *inventoryRevision, *actor, *reason, *dispositionAuthorization, selectors...)
 		if err != nil {
 			// Fix cycle 1 (CRITICAL-2): a returned zero-value record proves
 			// this call provably mutated nothing — lockedAuthorityDispositionMutation

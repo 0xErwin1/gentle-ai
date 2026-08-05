@@ -507,27 +507,62 @@ func TestReviewRepairPreflightSurfacesAuthorityDispositionPlanForEligibleLeaf(t 
 	}
 }
 
-func TestReviewRepairPreflightEnumeratesExactMultiEdgeSelectors(t *testing.T) {
+// TestReviewRepairPreflightOmitsAuthorityDispositionPlanForMultiNodeShape
+// proves the "otherwise unchanged" half of tasks.md 3.3/design decision 6:
+// when derivation cannot close on exactly one seed (the #2014/#1656
+// multi-lineage shape), preflight never surfaces a disposition plan.
+func TestReviewRepairPreflightOmitsAuthorityDispositionPlanForMultiNodeShape(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	writeInspectCLIRecoveryPair(t, repo, "leaf-alpha", false, dispositionForgedAuthorization)
 	writeInspectCLIRecoveryPair(t, repo, "leaf-bravo", false, dispositionForgedAuthorization)
+
 	var output bytes.Buffer
 	if err := RunReview([]string{"repair", "--preflight", "--cwd", repo}, &output); err != nil {
 		t.Fatal(err)
 	}
-	var result ReviewRepairResult
-	decodeStrictReviewJSON(t, output.Bytes(), &result)
-	if err := result.Validate(); err != nil {
+	var preflight ReviewRepairResult
+	decodeStrictReviewJSON(t, output.Bytes(), &preflight)
+	if err := preflight.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	if result.DispositionProviderInputs != nil || len(result.DispositionSelectors) != 2 {
-		t.Fatalf("multi-edge preflight = %#v, want two exact selectors", result)
+	if preflight.DispositionProviderInputs != nil || len(preflight.DispositionSelectors) != 2 {
+		t.Fatalf("multi-edge preflight = %#v, want two exact selectors", preflight)
 	}
-	for _, selector := range result.DispositionSelectors {
-		if selector.PredecessorLineageID == "" || selector.SuccessorLineageID == "" ||
-			!validReviewCapabilitySHA256(selector.PredecessorExpectedRevision) || !validReviewCapabilitySHA256(selector.SuccessorExpectedRevision) {
-			t.Fatalf("selector is incomplete: %#v", selector)
-		}
+	digest := preflight.DispositionSelectors[0].PredecessorExpectedRevision
+	for _, test := range []struct {
+		name   string
+		mutate func(*ReviewRepairResult)
+	}{
+		{"stopped assessment", func(result *ReviewRepairResult) {
+			result.Assessment.Status = reviewtransaction.AuthorityRepairAmbiguous
+		}},
+		{"provider inputs", func(result *ReviewRepairResult) {
+			result.DispositionProviderInputs = &ReviewRepairDispositionProviderInputs{PlanDigest: digest, AuthorityInventoryRevision: digest}
+		}},
+		{"malformed lineage", func(result *ReviewRepairResult) {
+			result.DispositionSelectors[0].PredecessorLineageID = "alpha--invalid"
+		}},
+		{"missing revision", func(result *ReviewRepairResult) { result.DispositionSelectors[0].SuccessorExpectedRevision = "" }},
+		{"duplicate edge", func(result *ReviewRepairResult) {
+			result.DispositionSelectors = append(result.DispositionSelectors, result.DispositionSelectors[0])
+		}},
+		{"inconsistent revision", func(result *ReviewRepairResult) {
+			result.DispositionSelectors[1].PredecessorLineageID = result.DispositionSelectors[0].SuccessorLineageID
+			result.DispositionSelectors[1].PredecessorExpectedRevision = "sha256:" + strings.Repeat("b", 64)
+		}},
+		{"unordered edges", func(result *ReviewRepairResult) {
+			result.DispositionSelectors[0], result.DispositionSelectors[1] = result.DispositionSelectors[1], result.DispositionSelectors[0]
+		}},
+		{"execute mode", func(result *ReviewRepairResult) { result.Mode = ReviewRepairModeExecute }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := preflight
+			candidate.DispositionSelectors = append([]reviewtransaction.AuthorityDispositionSelector(nil), preflight.DispositionSelectors...)
+			test.mutate(&candidate)
+			if err := candidate.Validate(); err == nil {
+				t.Fatal("invalid disposition selectors accepted")
+			}
+		})
 	}
 }
 
@@ -539,19 +574,6 @@ func TestReviewRepairPreflightRejectsAuthorityDispositionExecutionInputs(t *test
 	var output bytes.Buffer
 	if err := RunReview(args, &output); err == nil {
 		t.Fatalf("preflight accepted a disposition execution input: %s", output.String())
-	}
-}
-
-func TestReviewRepairExecuteRejectsDispositionSelectors(t *testing.T) {
-	digest := "sha256:" + strings.Repeat("a", 64)
-	result := ReviewRepairResult{
-		Schema: ReviewIntegrationRepairSchema, Contract: ReviewIntegrationContractV1, Operation: "review.repair", Mode: ReviewRepairModeExecute,
-		Assessment: reviewtransaction.UnsupportedAuthorityRepairAssessment(), RequiredInputs: []string{},
-		DispositionSelectors: []reviewtransaction.AuthorityDispositionSelector{{PredecessorLineageID: "predecessor", PredecessorExpectedRevision: digest, SuccessorLineageID: "successor", SuccessorExpectedRevision: digest}},
-		DispositionExecution: &ReviewRepairDispositionExecution{Schema: reviewtransaction.AuthorityDispositionProofSchema, Status: string(reviewtransaction.CompactReclaimCommitted), LineageID: "successor", PlanDigest: digest, AuthorityInventoryRevision: digest, AnomalyClass: "content_mismatched_recovery_authorization", AuthorizationSHA256: digest},
-	}
-	if err := result.Validate(); err == nil {
-		t.Fatal("execute result accepted preflight-only disposition selectors")
 	}
 }
 
