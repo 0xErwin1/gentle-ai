@@ -815,14 +815,20 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 				return runtimeRecord{}, fmt.Errorf("failed evidence revision %q does not match native runtime evidence %q", request.RemediatesEvidenceRevision, status.EvidenceRevision)
 			}
 		}
+		// #1974 slice 2: the unmanaged-remediation binding derives from the
+		// immutable attempt chain, never from status.EvidenceRevision -- the
+		// live pointer Reset, Rescope, and Advance wipe. An audited reset or an
+		// honest interrupted settlement between the failure and its correction
+		// is an audit record, not a semantic successor, so neither severs the
+		// binding; the first passed settlement after the failure does.
+		chainFailedEvidence, chainHasFailedEvidence := runtimeChainFailedEvidence(status.Attempts)
 		if unmanagedRemediation {
 			if !store.ReviewDisabled || currentBinding != nil {
 				// refusal:by-design human-authority: unmanaged remediation is valid only while receipt authority is absent and explicitly disabled.
 				return runtimeRecord{}, errors.New("unmanaged remediation requires disabled delivery without a review binding")
 			}
-			if len(status.Attempts) < 2 || status.EvidenceRevision != request.RemediatesEvidenceRevision ||
-				status.Attempts[len(status.Attempts)-2].Outcome != AttemptFailed {
-				// refusal:by-design operator-knowledge: the native ledger admits one final correction only for its current failed evidence.
+			if !chainHasFailedEvidence || chainFailedEvidence != request.RemediatesEvidenceRevision {
+				// refusal:by-design operator-knowledge: the native ledger admits one final correction only for the chain's unremediated failed evidence.
 				return runtimeRecord{}, errors.New("unmanaged remediation requires the current failed evidence and a direct correction attempt")
 			}
 		}
@@ -858,9 +864,8 @@ func (store RuntimeStore) Finish(ctx context.Context, request FinishAttemptReque
 				return runtimeRecord{}, fmt.Errorf("validate unchanged bound SDD candidate: %w", validateErr)
 			}
 		}
-		previousAttemptFailed := len(status.Attempts) >= 2 && status.Attempts[len(status.Attempts)-2].Outcome == AttemptFailed
-		if store.ReviewDisabled && currentBinding == nil && request.Outcome == AttemptPassed && previousAttemptFailed && !unmanagedRemediation {
-			return runtimeRecord{}, fmt.Errorf("disabled failed verification requires --remediates-evidence-revision %q on the correction settle; rerun `gentle-ai sdd-attempt settle` with that flag", status.EvidenceRevision)
+		if store.ReviewDisabled && currentBinding == nil && request.Outcome == AttemptPassed && chainHasFailedEvidence && !unmanagedRemediation {
+			return runtimeRecord{}, fmt.Errorf("disabled failed verification requires --remediates-evidence-revision %q on the correction settle; rerun `gentle-ai sdd-attempt settle` with that flag", chainFailedEvidence)
 		}
 		if unmanagedRemediation {
 			if snapshot.Identity == active.BeginCandidateIdentity || snapshot.CandidateTree == active.BeginCandidateTree {
@@ -1916,9 +1921,13 @@ func applyRuntimeFinishEvent(replay *runtimeReplay, event *runtimeFinishEvent, u
 		return errors.New("finish record changed-line budget decision does not match replay state")
 	}
 	if unmanagedRemediation {
-		if replay.Status.Binding != nil || len(replay.Status.Attempts) < 2 || event.Outcome != AttemptPassed ||
-			replay.Status.EvidenceRevision != event.RemediatesEvidenceRevision ||
-			replay.Status.Attempts[len(replay.Status.Attempts)-2].Outcome != AttemptFailed ||
+		// Lockstep twin of the write-time guard in Finish: the binding derives
+		// from the immutable chain, so replayed corrections recorded across an
+		// audited reset stay valid. The chain walk requires a settled failed
+		// predecessor, which subsumes the former len(Attempts) < 2 conjunct.
+		chainFailedEvidence, chainHasFailedEvidence := runtimeChainFailedEvidence(replay.Status.Attempts)
+		if replay.Status.Binding != nil || event.Outcome != AttemptPassed ||
+			!chainHasFailedEvidence || chainFailedEvidence != event.RemediatesEvidenceRevision ||
 			event.FinishCandidateIdentity == active.BeginCandidateIdentity || event.FinishCandidateTree == active.BeginCandidateTree ||
 			event.EvidenceRevision == event.RemediatesEvidenceRevision {
 			// refusal:by-design world-action: a replayed event that breaks immutable evidence/candidate binding can only be repaired by restoring the authority.
@@ -2595,6 +2604,31 @@ func runtimeResetStructurallyPermitted(status RuntimeStatus) bool {
 	}
 	last := status.Attempts[len(status.Attempts)-1]
 	return last.Outcome == AttemptFailed || last.Outcome == AttemptInterrupted
+}
+
+// runtimeChainFailedEvidence derives the unmanaged-remediation binding from
+// the immutable attempt chain (#1974 slice 2): the most recent settled
+// AttemptFailed attempt's EvidenceRevision, provided no AttemptPassed
+// settlement follows it. Running and interrupted attempts between the failure
+// and its correction are honest audit records, not semantic successors, and
+// audited resets, rescopes, and advances never appear in the chain at all, so
+// none of them sever the binding. The first passed settlement after the
+// failure DOES sever it: that pass is the one correction the failed evidence
+// admits, so a later correction claiming the same revision finds no failed
+// evidence in the chain and is refused -- the same anti-laundering budget the
+// live evidence pointer used to enforce, now immune to that pointer being
+// wiped. Evaluated by RuntimeStore.Finish and applyRuntimeFinishEvent in
+// lockstep, so a committed correction always replays deterministically.
+func runtimeChainFailedEvidence(attempts []RuntimeAttempt) (string, bool) {
+	for index := len(attempts) - 1; index >= 0; index-- {
+		switch attempts[index].Outcome {
+		case AttemptPassed:
+			return "", false
+		case AttemptFailed:
+			return attempts[index].EvidenceRevision, true
+		}
+	}
+	return "", false
 }
 
 func runtimeObjectiveID(change, workUnit, evidenceGoal, candidateIdentity string, generation int) string {
