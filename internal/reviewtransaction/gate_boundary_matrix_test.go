@@ -220,6 +220,7 @@ func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 	{
 		repo := initSnapshotRepo(t)
 		writeSnapshotFile(t, repo, "docs/notes.md", "release notes\n")
+		gitSnapshot(t, repo, "add", "--", "docs/notes.md")
 		lineage := "matrix-post-apply-exact"
 		if out, err := runGateBoundaryMatrixReview(binary, repo, "start", "--lineage", lineage); err != nil {
 			t.Fatalf("post-apply/exact review start: %v\n%s", err, out)
@@ -245,6 +246,7 @@ func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 	{
 		repo := initSnapshotRepo(t)
 		writeSnapshotFile(t, repo, "docs/notes.md", "release notes\n")
+		gitSnapshot(t, repo, "add", "--", "docs/notes.md")
 		lineage := "matrix-pre-commit-exact"
 		if out, err := runGateBoundaryMatrixReview(binary, repo, "start", "--lineage", lineage); err != nil {
 			t.Fatalf("pre-commit/exact review start: %v\n%s", err, out)
@@ -274,6 +276,7 @@ func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 		branch := currentBranch(context.Background(), repo)
 		remote := configurePublicationRemote(t, repo, branch)
 		writeSnapshotFile(t, repo, "docs/notes.md", "release notes\n")
+		gitSnapshot(t, repo, "add", "--", "docs/notes.md")
 		lineage := "matrix-push-pr-exact"
 		if out, err := runGateBoundaryMatrixReview(binary, repo, "start", "--lineage", lineage); err != nil {
 			t.Fatalf("pre-push/pre-pr exact review start: %v\n%s", err, out)
@@ -339,13 +342,13 @@ func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 		}
 	}
 
-	// post-apply / changed: drift the reviewed file's own content (an
-	// untracked ADDITION would trip the earlier untracked-out-of-scope
-	// check instead -- gate_verdict_deny_golden_test.go's fixtures pin this
-	// exact distinction).
+	// post-apply / changed: drift the reviewed file's own content. Since
+	// #2394 an undeclared ADDITION is not review scope at all, so it changes
+	// nothing here; drifting a declared path is what the gate must catch.
 	{
 		repo := initSnapshotRepo(t)
 		writeSnapshotFile(t, repo, "docs/notes.md", "release notes\n")
+		gitSnapshot(t, repo, "add", "--", "docs/notes.md")
 		lineage := "matrix-post-apply-changed"
 		if out, err := runGateBoundaryMatrixReview(binary, repo, "start", "--lineage", lineage); err != nil {
 			t.Fatalf("post-apply/changed review start: %v\n%s", err, out)
@@ -362,6 +365,7 @@ func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 	{
 		repo := initSnapshotRepo(t)
 		writeSnapshotFile(t, repo, "docs/notes.md", "release notes\n")
+		gitSnapshot(t, repo, "add", "--", "docs/notes.md")
 		lineage := "matrix-pre-commit-changed"
 		if out, err := runGateBoundaryMatrixReview(binary, repo, "start", "--lineage", lineage); err != nil {
 			t.Fatalf("pre-commit/changed review start: %v\n%s", err, out)
@@ -386,6 +390,7 @@ func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 		branch := currentBranch(context.Background(), repo)
 		configurePublicationRemote(t, repo, branch)
 		writeSnapshotFile(t, repo, "docs/notes.md", "release notes\n")
+		gitSnapshot(t, repo, "add", "--", "docs/notes.md")
 		lineage := "matrix-pre-push-changed"
 		if out, err := runGateBoundaryMatrixReview(binary, repo, "start", "--lineage", lineage); err != nil {
 			t.Fatalf("pre-push/changed review start: %v\n%s", err, out)
@@ -439,6 +444,7 @@ func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 		lineages := []string{"matrix-pre-pr-changed-first", "matrix-pre-pr-changed-second", "matrix-pre-pr-changed-third"}
 		for index, lineage := range lineages {
 			writeSnapshotFile(t, repo, "docs/shared.md", "reviewed segment "+string(rune('a'+index))+"\n")
+			gitSnapshot(t, repo, "add", "--", "docs/shared.md")
 			if out, err := runGateBoundaryMatrixReview(binary, repo, "start", "--lineage", lineage); err != nil {
 				t.Fatalf("pre-pr/changed review start (%s): %v\n%s", lineage, err, out)
 			}
@@ -504,6 +510,7 @@ func TestGateBoundaryMatrix_35Cells(t *testing.T) {
 	{
 		repo := initSnapshotRepo(t)
 		writeSnapshotFile(t, repo, "docs/notes.md", "release notes\n")
+		gitSnapshot(t, repo, "add", "--", "docs/notes.md")
 		lineage := "matrix-release-exact"
 		if out, err := runGateBoundaryMatrixReview(binary, repo, "start", "--lineage", lineage); err != nil {
 			t.Fatalf("release/exact review start: %v\n%s", err, out)

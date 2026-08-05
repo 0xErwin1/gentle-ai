@@ -342,11 +342,32 @@ func TestUnqualifiedPrePushDiscoveryReportsTargetResolutionWithoutMutation(t *te
 	}
 }
 
+// TestUnqualifiedPrePushDiscoveryKeepsCorruptAuthorityPrecedence pinned an
+// ordering between two denials the unqualified path can no longer produce
+// together, because an unrelated corrupt entry is no longer a denial of this
+// candidate at all. The precedence that survives is the one that was ever
+// load-bearing: naming the corrupt lineage produces the corruption
+// classification, and nothing else silently takes its place.
 func TestUnqualifiedPrePushDiscoveryKeepsCorruptAuthorityPrecedence(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	approveDiscoveryMarkdown(t, repo, "review-discovery-target-and-corruption", "docs/reviewed.md", "reviewed\n")
 	runReviewCLIGit(t, repo, "add", "-A")
 	runReviewCLIGit(t, repo, "commit", "-qm", "deliver reviewed target")
+	unqualifiedPrePush := func() (string, error) {
+		var output bytes.Buffer
+		err := RunReview([]string{
+			"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
+			"--gate", string(reviewtransaction.GatePrePush),
+		}, &output)
+		return output.String(), err
+	}
+
+	// The same fixture, evaluated twice, with the corrupt entry as the only
+	// difference. Anything the unqualified path says about this candidate has
+	// to be identical on both sides, because nothing about this candidate
+	// changed.
+	beforeOutput, beforeErr := unqualifiedPrePush()
+
 	commonDir := filepath.Clean(strings.TrimSpace(runReviewCLIGit(t, repo, "rev-parse", "--path-format=absolute", "--git-common-dir")))
 	broken := filepath.Join(commonDir, "gentle-ai", "review-transactions", "v2", "corrupt-target-candidate")
 	if err := os.MkdirAll(broken, 0o755); err != nil {
@@ -356,18 +377,27 @@ func TestUnqualifiedPrePushDiscoveryKeepsCorruptAuthorityPrecedence(t *testing.T
 		t.Fatal(err)
 	}
 
-	var output bytes.Buffer
-	runErr := RunReview([]string{
-		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
-		"--gate", string(reviewtransaction.GatePrePush),
-	}, &output)
-	if runErr == nil {
-		t.Fatal("corrupt authority with missing upstream validated")
+	afterOutput, afterErr := unqualifiedPrePush()
+	if afterOutput != beforeOutput || (afterErr == nil) != (beforeErr == nil) {
+		t.Fatalf("an unrelated corrupt entry changed the unqualified answer:\nbefore(%v):\n%s\nafter(%v):\n%s",
+			beforeErr, beforeOutput, afterErr, afterOutput)
 	}
-	failure := decodeReviewIntegrationFailure(t, output.Bytes())
+
+	// Naming the corrupt lineage still fails closed, and still names it.
+	var scoped bytes.Buffer
+	scopedErr := RunReview([]string{
+		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
+		"--gate", string(reviewtransaction.GatePrePush), "--lineage", "corrupt-target-candidate",
+	}, &scoped)
+	if scopedErr == nil {
+		t.Fatal("naming the corrupt lineage validated")
+	}
+	if !strings.Contains(scoped.String(), "corrupt-target-candidate") {
+		t.Fatalf("the scoped refusal does not name the lineage it refuses:\n%s", scoped.String())
+	}
 	var targetErr *reviewtransaction.GateTargetResolutionError
-	if failure.Code != "authority_corrupted" || failure.AuthorityApplicability != "corrupted" || errors.As(runErr, &targetErr) {
-		t.Fatalf("corrupt-authority precedence = %#v, %T %v", failure, runErr, runErr)
+	if errors.As(scopedErr, &targetErr) {
+		t.Fatalf("a corrupt named lineage was reported as a target-resolution failure: %v", scopedErr)
 	}
 }
 
@@ -976,6 +1006,11 @@ func approveLegacyDiscoveryChain(t *testing.T, repo, lineage string) (reviewtran
 	return store, receipt
 }
 
+// TestUnscopedGateDiscoveryFailsClosedOnCorruptedCompactLeaf is the shape
+// #2167 reported: a healthy approved lineage and one unrelated corrupt leaf in
+// the same shared store, and the healthy candidate denied `authority_corrupted`
+// with no way to tell which entry caused it. The corrupt leaf still fails
+// closed -- when something names it.
 func TestUnscopedGateDiscoveryFailsClosedOnCorruptedCompactLeaf(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	approveDiscoveryMarkdown(t, repo, "review-discovery-valid", "docs/valid.md", "valid\n")
@@ -989,19 +1024,34 @@ func TestUnscopedGateDiscoveryFailsClosedOnCorruptedCompactLeaf(t *testing.T) {
 	}
 
 	var unscoped bytes.Buffer
-	err := RunReview([]string{
+	unscopedErr := RunReview([]string{
 		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
 		"--gate", string(reviewtransaction.GatePostApply),
 	}, &unscoped)
+	if unscopedErr != nil {
+		failure := decodeReviewIntegrationFailure(t, unscoped.Bytes())
+		if failure.Code == "authority_corrupted" || failure.AuthorityApplicability == "corrupted" {
+			t.Fatalf("an unrelated corrupted leaf became this candidate's verdict: %#v", failure)
+		}
+	}
+
+	var scoped bytes.Buffer
+	err := RunReview([]string{
+		"validate", "--contract", ReviewIntegrationContractV1, "--cwd", repo,
+		"--gate", string(reviewtransaction.GatePostApply), "--lineage", "unrelated-broken",
+	}, &scoped)
 	if err == nil {
-		t.Fatal("unscoped discovery ignored corrupted compact leaf")
+		t.Fatal("naming the corrupted compact leaf validated")
 	}
-	failure := decodeReviewIntegrationFailure(t, unscoped.Bytes())
-	if failure.Code != "authority_corrupted" || failure.AuthorityApplicability != "corrupted" || failure.CauseCategory != "record_or_graph_invalid" || failure.RetrySafe || failure.NextAction != "stop" {
-		t.Fatalf("corrupted compact leaf failure = %#v", failure)
+	// The named refusal must be closed, must name the entry it refuses, and
+	// must not leak the store path. Its exact code is the explicit-selector
+	// path's own classification and is not asserted here: what this test owns
+	// is that the leaf refuses for itself and for nobody else.
+	if !strings.Contains(scoped.String(), "unrelated-broken") {
+		t.Fatalf("the scoped refusal does not name the leaf it refuses:\n%s", scoped.String())
 	}
-	if strings.Contains(unscoped.String(), broken) {
-		t.Fatalf("corrupted compact leaf failure exposed private payload: %s", unscoped.String())
+	if strings.Contains(scoped.String(), broken) {
+		t.Fatalf("corrupted compact leaf failure exposed private payload: %s", scoped.String())
 	}
 }
 
@@ -1211,9 +1261,9 @@ func approveDiscoveryMarkdownProjection(t *testing.T, repo, lineage, logicalPath
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if projection == reviewtransaction.ProjectionStaged {
-		runReviewCLIGit(t, repo, "add", "-A")
-	}
+	// #2394: a new file is reviewable only once the user declared it, and the
+	// index is that declaration for both projections.
+	runReviewCLIGit(t, repo, "add", "-A")
 
 	ctx := context.Background()
 	builder := reviewtransaction.SnapshotBuilder{Repo: repo}
@@ -1222,14 +1272,7 @@ func approveDiscoveryMarkdownProjection(t *testing.T, repo, lineage, logicalPath
 		t.Fatalf("resolve discovery fixture repository root: %v", err)
 	}
 	rootBuilder := reviewtransaction.SnapshotBuilder{Repo: root}
-	intended := []string{}
-	if projection != reviewtransaction.ProjectionStaged {
-		intended, err = reviewFacadeDiscoverIntendedUntracked(ctx, rootBuilder)
-		if err != nil {
-			t.Fatalf("discover intended untracked files for discovery fixture %q: %v", lineage, err)
-		}
-	}
-	snapshot, err := rootBuilder.Build(ctx, reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: intended})
+	snapshot, err := rootBuilder.Build(ctx, reviewtransaction.Target{Kind: reviewtransaction.TargetCurrentChanges, Projection: projection, IntendedUntracked: []string{}})
 	if err != nil {
 		t.Fatalf("build discovery fixture target %q: %v", lineage, err)
 	}
