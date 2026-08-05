@@ -106,14 +106,14 @@ func reviewOpenCodeIsolationPreflight() error {
 	missing := make([]string, 0, 2)
 	for _, name := range []string{"OPENCODE_DISABLE_PROJECT_CONFIG", "OPENCODE_DISABLE_EXTERNAL_SKILLS"} {
 		if os.Getenv(name) != "1" {
-			missing = append(missing, name+"=1")
+			missing = append(missing, name)
 		}
 	}
 	if len(missing) == 0 {
 		return nil
 	}
 	// refusal:by-design world-action: OpenCode cannot launch a fresh reviewer safely until its host disables every local instruction channel
-	return fmt.Errorf("OpenCode immutable review requires its host process to set %s before review start%s", strings.Join(missing, " and "), reviewTransportRefusalExitGuidance())
+	return fmt.Errorf("OpenCode immutable review requires its host process to set %s to 1 before review start%s", strings.Join(missing, " and "), reviewTransportRefusalExitGuidance())
 }
 
 // reviewRuntimeWithImmutableTransport accepts only the exact compiled runtime
