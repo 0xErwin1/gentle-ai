@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/consentenvelope"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 )
 
 // SDDIntegrationConsentSchema identifies the SDD edit-authority consent
@@ -31,11 +32,14 @@ const (
 	sddConsentAnswerGranted  = "granted"
 	sddConsentAnswerDeclined = "declined"
 
-	// sddConsentGrantInvocationPrefix is the PROVISIONAL S3 verb (#2540
-	// phase 1): `sdd-attempt grant --cwd <repo> --change <name>
-	// --root <path>... --actor <actor> --reason <reason>`. The exact flag set
-	// is pinned by the contract fixture and its test; S3 implements this
-	// shape or consciously updates the contract.
+	// sddConsentGrantInvocationPrefix fronts the real `sdd-attempt grant`
+	// verb as shipped by S3 (#2558) plus S5's reconciliation (#2559):
+	// `sdd-attempt grant --cwd <repo> --change <name>
+	// [--expected-revision <rev>] --root <path>... --actor <actor>
+	// --reason <reason> --request-id <id> --change-instance <token>`. S4a's
+	// provisional pin lacked --request-id (found by S3) and
+	// --change-instance (added by S5); #2563 reconciled the fixture, the
+	// schema regex, and the test pin together to this flag set.
 	sddConsentGrantInvocationPrefix = "gentle-ai sdd-attempt grant "
 
 	// sddConsentStatusInvocationPrefix is the decline and off-path re-entry:
@@ -116,11 +120,13 @@ func (result SDDIntegrationConsentResult) Validate() error {
 		!strings.Contains(granted.Invocation, " --cwd ") ||
 		!strings.Contains(granted.Invocation, " --change "+result.Change) ||
 		!strings.Contains(granted.Invocation, " --actor ") ||
-		!strings.Contains(granted.Invocation, " --reason ") {
+		!strings.Contains(granted.Invocation, " --reason ") ||
+		!strings.Contains(granted.Invocation, " --request-id ") ||
+		!strings.Contains(granted.Invocation, " --change-instance ") {
 		return errors.New("SDD consent grant choice does not name the runnable grant invocation") // refusal:by-design world-action: this envelope is built and validated by the same package; the exit is a code fix, not a command
 	}
 	for _, root := range result.MissingRoots {
-		if !strings.Contains(granted.Invocation, " --root "+root) {
+		if !strings.Contains(granted.Invocation, " --root "+pathquote.Quote(root)) {
 			return fmt.Errorf("SDD consent grant invocation does not carry missing root %q", root) // refusal:by-design world-action: this envelope is built and validated by the same package; the exit is a code fix, not a command
 		}
 	}
