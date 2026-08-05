@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -63,7 +64,7 @@ func TestOpaqueRepositoryContextResolutionNamesDistinctCauses(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			want: "no such file or directory",
+			want: opaqueNativeCause("no such file or directory", "The system cannot find the file specified."),
 		},
 		{
 			name: "authority-record-unparsable",
@@ -91,7 +92,13 @@ func TestOpaqueRepositoryContextResolutionNamesDistinctCauses(t *testing.T) {
 			messages[tt.name] = message
 		})
 	}
-	assertPairwiseDistinct(t, messages, len(cases))
+	wantMessages := len(cases)
+	if runtime.GOOS == "windows" {
+		// The Git shim is a POSIX shell script, so Windows exercises the two
+		// native filesystem roots while retaining their distinct-cause proof.
+		wantMessages -= 2
+	}
+	assertPairwiseDistinct(t, messages, wantMessages)
 }
 
 // TestOpaqueRepositoryContextCaptureNamesDistinctCauses covers the collapse
@@ -122,7 +129,7 @@ func TestOpaqueRepositoryContextCaptureNamesDistinctCauses(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			want: "not a directory",
+			want: opaqueNativeCause("not a directory", "unsafe RAR authority path"),
 		},
 	}
 	messages := make(map[string]string, len(cases))
@@ -166,7 +173,7 @@ func TestOpaqueRepositoryContextCauseIsScrubbed(t *testing.T) {
 	if strings.Contains(message, repo) || strings.Contains(message, lineage+"/review-state.json") {
 		t.Fatalf("forwarded cause leaked an absolute path: %s", message)
 	}
-	if !strings.Contains(message, "no such file or directory") {
+	if !strings.Contains(message, opaqueNativeCause("no such file or directory", "The system cannot find the file specified.")) {
 		t.Fatalf("scrubbing removed the cause along with the path: %s", message)
 	}
 	if scrubbed := reviewScrubDefectReportField(message); scrubbed != message {
@@ -185,6 +192,13 @@ func assertOpaqueFailureNamesCause(t *testing.T, message, code, wantCause, repo 
 	if strings.Contains(message, repo) {
 		t.Fatalf("failure leaked a private path: %s", message)
 	}
+}
+
+func opaqueNativeCause(unix, windows string) string {
+	if runtime.GOOS == "windows" {
+		return windows
+	}
+	return unix
 }
 
 // assertPairwiseDistinct is the whole point of these tests: every root that
@@ -262,7 +276,7 @@ func TestOpaqueRepositoryContextPreserveNamesDistinctCauses(t *testing.T) {
 					t.Fatal(err)
 				}
 			},
-			want: "not a directory",
+			want: opaqueNativeCause("not a directory", "The system cannot find the path specified."),
 		},
 		{
 			name: "incidents-directory-is-shared",
