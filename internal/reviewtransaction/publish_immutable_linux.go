@@ -54,23 +54,16 @@ func publishNoReplaceByCopy(source, destination string) error {
 		return err
 	}
 	if err := out.Chmod(info.Mode().Perm()); err != nil {
-		_ = out.Close()
-		_ = removeImmutablePublication(destination)
-		return err
+		return errors.Join(err, out.Close(), removeImmutablePublication(destination))
 	}
 	if _, err := copyImmutablePublication(out, in); err != nil {
-		_ = out.Close()
-		_ = removeImmutablePublication(destination)
-		return err
+		return errors.Join(err, out.Close(), removeImmutablePublication(destination))
 	}
 	if err := out.Sync(); err != nil {
-		_ = out.Close()
-		_ = removeImmutablePublication(destination)
-		return err
+		return errors.Join(err, out.Close(), removeImmutablePublication(destination))
 	}
 	if err := out.Close(); err != nil {
-		_ = removeImmutablePublication(destination)
-		return err
+		return errors.Join(err, removeImmutablePublication(destination))
 	}
 	return removeImmutablePublication(source)
 }

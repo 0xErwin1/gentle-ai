@@ -14,10 +14,18 @@ import (
 
 type testImmutablePublicationDestination struct {
 	*os.File
+	chmodErr error
 	syncErr  error
 	closeErr error
 	synced   bool
 	closed   bool
+}
+
+func (file *testImmutablePublicationDestination) Chmod(mode os.FileMode) error {
+	if file.chmodErr != nil {
+		return file.chmodErr
+	}
+	return file.File.Chmod(mode)
 }
 
 func (file *testImmutablePublicationDestination) Sync() error {
@@ -196,6 +204,67 @@ func TestPublishNoReplaceLinuxCopyFallbackCleansUpSyncAndCloseFailures(t *testin
 			}
 			if _, err := os.Stat(source); err != nil {
 				t.Fatalf("source was removed after %s failure: %v", tt.name, err)
+			}
+		})
+	}
+}
+
+func TestPublishNoReplaceLinuxCopyFallbackJoinsDestinationCleanupFailure(t *testing.T) {
+	for _, stage := range []string{"chmod", "copy", "sync", "close"} {
+		t.Run(stage, func(t *testing.T) {
+			forceLinuxCopyFallback(t, unix.EXDEV)
+			primary := errors.New(stage + " failed")
+			cleanup := errors.New("destination cleanup failed")
+			originalCreate, originalCopy, originalRemove := createImmutablePublicationDestination, copyImmutablePublication, removeImmutablePublication
+			t.Cleanup(func() {
+				createImmutablePublicationDestination, copyImmutablePublication, removeImmutablePublication = originalCreate, originalCopy, originalRemove
+			})
+			createImmutablePublicationDestination = func(path string, flag int, mode os.FileMode) (immutablePublicationDestination, error) {
+				file, err := os.OpenFile(path, flag, mode)
+				if err != nil {
+					return nil, err
+				}
+				destination := &testImmutablePublicationDestination{File: file}
+				switch stage {
+				case "chmod":
+					destination.chmodErr = primary
+				case "sync":
+					destination.syncErr = primary
+				case "close":
+					destination.closeErr = primary
+				}
+				return destination, nil
+			}
+			if stage == "copy" {
+				copyImmutablePublication = func(io.Writer, io.Reader) (int64, error) { return 0, primary }
+			}
+
+			dir := t.TempDir()
+			source := writeImmutablePublicationSource(t, dir)
+			destination := filepath.Join(dir, "receipt.json")
+			sourceRemoved := false
+			removeImmutablePublication = func(path string) error {
+				if path == destination {
+					return cleanup
+				}
+				if path == source {
+					sourceRemoved = true
+				}
+				return os.Remove(path)
+			}
+
+			err := publishNoReplace(source, destination)
+			if !errors.Is(err, primary) || !errors.Is(err, cleanup) {
+				t.Fatalf("publishNoReplace(%s) error = %v, want both primary and cleanup causes", stage, err)
+			}
+			if sourceRemoved {
+				t.Fatal("source was removed after failed destination cleanup")
+			}
+			if _, err := os.Stat(source); err != nil {
+				t.Fatalf("source is missing after failed destination cleanup: %v", err)
+			}
+			if _, err := os.Stat(destination); err != nil {
+				t.Fatalf("partial destination was not exposed after failed cleanup: %v", err)
 			}
 		})
 	}
