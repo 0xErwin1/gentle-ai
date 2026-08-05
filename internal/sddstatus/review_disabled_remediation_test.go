@@ -69,3 +69,23 @@ func TestEnabledReviewStillRequiresItsBoundedTransaction(t *testing.T) {
 		t.Fatalf("enabled review admitted remediation with no transaction: %#v", status.RemediationState)
 	}
 }
+
+// TestDisabledStatusWithoutAnUnmanagedCorrectionDoesNotBlockAfterReenable is
+// the scope control: merely having used disabled status does not make a fresh
+// passing verification wait for review authority after the mode changes back.
+func TestDisabledStatusWithoutAnUnmanagedCorrectionDoesNotBlockAfterReenable(t *testing.T) {
+	repo := initRuntimeLedgerRepo(t)
+	changeRoot := seedReadyChange(t, repo, "thin", "- [x] 1.1 Work\n")
+	write(t, filepath.Join(changeRoot, "verify-report.md"), testVerifyEnvelope("pass", 0, 0, "1/1", "1/1", 0, 0))
+
+	if _, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "thin", ReviewDisabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	reenabled, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "thin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reenabled.Dependencies.Archive != DependencyReady || reenabled.NextRecommended != "archive" || reenabled.ReviewGate != nil {
+		t.Fatalf("re-enabled status without an unmanaged correction = archive %q next %q gate=%#v", reenabled.Dependencies.Archive, reenabled.NextRecommended, reenabled.ReviewGate)
+	}
+}

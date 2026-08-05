@@ -1882,6 +1882,22 @@ func sddJourneys() []Journey {
 						}
 						return nil
 					})},
+				{Name: "mode enable after unmanaged correction", Requires: modeCapability, Args: productArgs("review", "mode", "enable", "--json")},
+				{Name: "enabled archive requires bounded review authority", Requires: sddStatusCapability,
+					Args: productArgs("sdd-status", sddChange, "--json"), After: sddStatusAssertion("re-enabled unmanaged correction", func(status sddStatusV1) error {
+						if status.Dependencies.Verify != "all_done" || status.Dependencies.Archive != "blocked" || status.NextRecommended != "resolve-review" {
+							return fmt.Errorf("re-enabled archive = verify %q archive %q next %q", status.Dependencies.Verify, status.Dependencies.Archive, status.NextRecommended)
+						}
+						if status.ReviewGate == nil || status.ReviewGate.Result != "invalidated" ||
+							!strings.Contains(status.ReviewGate.Reason, "disabled/unmanaged correction") ||
+							!strings.Contains(status.ReviewGate.Reason, "gentle-ai review start") {
+							return fmt.Errorf("re-enabled archive omitted bounded review authority: %+v", status.ReviewGate)
+						}
+						if status.ReviewOffer == nil || !status.ReviewOffer.Available || !strings.Contains(status.ReviewOffer.Invocation, "review start") {
+							return fmt.Errorf("re-enabled archive omitted executable review offer: %+v", status.ReviewOffer)
+						}
+						return nil
+					})},
 			},
 		},
 		{

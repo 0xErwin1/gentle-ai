@@ -621,6 +621,7 @@ func Resolve(options ResolveOptions) (Status, error) {
 	if boundGate != nil {
 		status.ReviewGate = boundGate
 	}
+	applyEnabledUnmanagedRemediationAuthorityRouting(&status, reviewDisabled)
 	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, changeName, reviewDisabled)
 	if governingRef != nil {
 		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, governingRef, runtimeStatus, reviewDisabled)
@@ -693,6 +694,39 @@ func nativeRuntimeCompletesRemediation(runtimeStatus *RuntimeStatus, attemptToke
 	return last.Outcome == AttemptPassed && !last.ChangedLineBudgetExceeded &&
 		last.RemediatesEvidenceRevision == verify.EvidenceRevision &&
 		last.EvidenceRevision != "" && last.EvidenceRevision == runtimeStatus.EvidenceRevision
+}
+
+// nativeRuntimeCompletedUnmanagedCorrection recognizes the exact terminal
+// record Finish admits only while review authority is disabled: a direct failed
+// attempt followed by a changed, distinct-evidence correction with no binding.
+func nativeRuntimeCompletedUnmanagedCorrection(runtimeStatus *RuntimeStatus) bool {
+	if runtimeStatus == nil || runtimeStatus.Binding != nil || runtimeStatus.Receipt != nil || len(runtimeStatus.Attempts) < 2 {
+		return false
+	}
+	correction := runtimeStatus.Attempts[len(runtimeStatus.Attempts)-1]
+	failed := runtimeStatus.Attempts[len(runtimeStatus.Attempts)-2]
+	return failed.Outcome == AttemptFailed && correction.Outcome == AttemptPassed &&
+		correction.RemediatesEvidenceRevision != "" && correction.RemediatesEvidenceRevision == failed.EvidenceRevision &&
+		correction.EvidenceRevision != "" && correction.EvidenceRevision == runtimeStatus.EvidenceRevision &&
+		correction.FinishCandidateIdentity != correction.BeginCandidateIdentity && correction.FinishCandidateTree != correction.BeginCandidateTree
+}
+
+// applyEnabledUnmanagedRemediationAuthorityRouting preserves a disabled-mode
+// correction and its fresh verification, but never promotes it into enabled
+// receipt authority. A valid existing gate remains authoritative on its own.
+func applyEnabledUnmanagedRemediationAuthorityRouting(status *Status, reviewDisabled bool) {
+	if reviewDisabled || status == nil || status.Dependencies.Verify != DependencyAllDone || status.ReviewGate != nil ||
+		!nativeRuntimeCompletedUnmanagedCorrection(status.RuntimeStatus) {
+		return
+	}
+	readiness, terminal := runtimeReadiness(runtimeReadinessInput{
+		Status: *status.RuntimeStatus, AttemptTokens: status.runtimeAttemptTokens,
+	})
+	if !terminal || readiness.State != CompactStateComplete {
+		return
+	}
+	blockReviewGate(status, reviewtransaction.GateInvalidated,
+		"a disabled/unmanaged correction repaired failed evidence without a bounded review transaction or receipt; enabled receipt-driven delivery requires bounded review authority for the corrected candidate; "+reviewGateFreshReviewContinuation)
 }
 
 func applyNativeRuntimeErrorRouting(status *Status, runtimeErr error) {
@@ -935,6 +969,7 @@ func resolveEngramStatus(workspaceRoot string, requestedChange string, includeIn
 	if boundGate != nil {
 		status.ReviewGate = boundGate
 	}
+	applyEnabledUnmanagedRemediationAuthorityRouting(&status, reviewDisabled)
 	applyReviewOfferRouting(context.Background(), &status, workspaceRoot, changeName, reviewDisabled)
 	if governingRef != nil {
 		applyTargetedReVerifyRouting(context.Background(), &status, workspaceRoot, changeName, governingRef, runtimeStatus, reviewDisabled)

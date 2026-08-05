@@ -3,6 +3,8 @@ package sddstatus
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -105,6 +107,7 @@ func TestRuntimeFinishStillValidatesAnExplicitSuccessorWhileReviewIsDisabled(t *
 
 func TestRuntimeDisabledUnmanagedRemediationConsumesTheOnlyRemainingAttempt(t *testing.T) {
 	repo := initRuntimeLedgerRepo(t)
+	changeRoot := seedReadyChange(t, repo, "unmanaged-remediation", "- [x] 1.1 Work\n")
 	store := mustRuntimeStore(t, repo, "unmanaged-remediation")
 	store.ReviewDisabled = true
 	first, err := store.Begin(context.Background(), BeginAttemptRequest{
@@ -124,6 +127,7 @@ func TestRuntimeDisabledUnmanagedRemediationConsumesTheOnlyRemainingAttempt(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
+	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(failedEvidence, "fail"))
 	active, err := store.Begin(context.Background(), BeginAttemptRequest{
 		ExpectedRevision: failed.Revision, RequestID: "unmanaged-begin-correction", WorkUnit: "verify",
 		EvidenceGoal: "independent verification", MaxAttempts: 2, MaxChangedLines: 20,
@@ -176,5 +180,24 @@ func TestRuntimeDisabledUnmanagedRemediationConsumesTheOnlyRemainingAttempt(t *t
 	}})
 	if err != nil || result.State != CompactStateComplete {
 		t.Fatalf("second unmanaged correction = %#v err=%v", result, err)
+	}
+
+	// Re-enabling receipt-driven delivery must not turn a valid disabled
+	// correction into archive authority. The fresh PASS is preserved, but the
+	// existing bounded-review route must own archive admission from here.
+	write(t, filepath.Join(changeRoot, "verify-report.md"), boundedVerifyEnvelope(request.EvidenceRevision, "pass"))
+	reenabled, err := Resolve(ResolveOptions{CWD: repo, ChangeName: "unmanaged-remediation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reenabled.Dependencies.Verify != DependencyAllDone || reenabled.Dependencies.Archive != DependencyBlocked || reenabled.NextRecommended != "resolve-review" {
+		t.Fatalf("re-enabled unmanaged correction routed verify=%q archive=%q next=%q", reenabled.Dependencies.Verify, reenabled.Dependencies.Archive, reenabled.NextRecommended)
+	}
+	if reenabled.ReviewGate == nil || !strings.Contains(reenabled.ReviewGate.Reason, "disabled/unmanaged correction") ||
+		!strings.Contains(reenabled.ReviewGate.Reason, reviewGateFreshReviewContinuation) {
+		t.Fatalf("re-enabled unmanaged correction omitted bounded-review authority: %#v", reenabled.ReviewGate)
+	}
+	if reenabled.ReviewOffer == nil || !reenabled.ReviewOffer.Available || !strings.Contains(reenabled.ReviewOffer.Invocation, "review start") {
+		t.Fatalf("re-enabled unmanaged correction omitted the executable review offer: %#v", reenabled.ReviewOffer)
 	}
 }
