@@ -16,7 +16,9 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v2/internal/opencode"
 )
 
-var requiredLedgerClauses = boundedReviewRequiredClauses
+// requiredLedgerClauses is the OpenCode binding of the shared clause set: the
+// only consumer is the preserved OpenCode orchestrator prompt.
+var requiredLedgerClauses = boundedReviewRequiredClausesFor(model.AgentOpenCode)
 
 const requiredOrchestratorMergeModeClause = "Parent orchestrator and native CLI only"
 
@@ -63,7 +65,7 @@ func TestDedicatedReviewAndJudgmentAssetsRenderRoleContracts(t *testing.T) {
 	for family, paths := range assetsByFamily {
 		for _, path := range paths {
 			t.Run(family+"/"+path, func(t *testing.T) {
-				content := renderBoundedReviewAsset(path)
+				content := renderBoundedReviewAsset(agentForAssetPath(t, path), path)
 				assertTextContainsClauses(t, path, content, []string{"candidate", "BLOCKER", "CRITICAL", "causal", "proof"})
 				if !strings.Contains(content, "read-only") && !strings.Contains(content, "Never edit") {
 					t.Errorf("%s does not state its non-mutating role", path)
@@ -118,7 +120,7 @@ func TestDedicatedReviewersAndRefutersAreStructurallyReadOnly(t *testing.T) {
 		"claude/agents/review-refuter.md", "cursor/agents/review-refuter.md",
 		"kimi/agents/review-refuter.md", "kiro/agents/review-refuter.md",
 	} {
-		assertNoReviewerLifecycleInstructions(t, path, renderBoundedReviewAsset(path))
+		assertNoReviewerLifecycleInstructions(t, path, renderBoundedReviewAsset(agentForAssetPath(t, path), path))
 	}
 	for _, path := range []string{
 		"kimi/agents/review-risk.yaml", "kimi/agents/review-readability.yaml",
@@ -147,14 +149,14 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 				t.Fatal(err)
 			}
 			agentsMap := root["agent"].(map[string]any)
-			expandOpenCodeBoundedReviewAgents(agentsMap, model.AgentOpenCode)
+			expandOpenCodeBoundedReviewAgents(agentsMap)
 			for _, name := range []string{"review-risk", "review-readability", "review-reliability", "review-resilience"} {
 				agent := agentsMap[name].(map[string]any)
 				prompt := agent["prompt"].(string)
 				assertTextContainsClauses(t, path+" "+name, prompt, []string{"## Scope", "## Candidate-Causal Admission", "## Severity", "## Evidence", "## Output"})
 				assertNoReviewerLifecycleInstructions(t, path+" "+name, prompt)
-				assertOpenCodeReadOnlyTools(t, path+" "+name, agent["tools"].(map[string]any), false)
-				assertOpenCodeUnsupportedReviewer(t, path+" "+name, agent)
+				assertOpenCodeReadOnlyTools(t, path+" "+name, agent["tools"].(map[string]any), false, false)
+				assertOpenCodeProviderInjectedReviewer(t, path+" "+name, agent)
 			}
 			for _, name := range []string{"jd-judge-a", "jd-judge-b"} {
 				agent := agentsMap[name].(map[string]any)
@@ -163,7 +165,7 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 					t.Errorf("%s %s does not use the native role-only judgment contract", path, name)
 				}
 				assertNoReviewerLifecycleInstructions(t, path+" "+name, prompt)
-				assertOpenCodeReadOnlyTools(t, path+" "+name, agent["tools"].(map[string]any), false)
+				assertOpenCodeReadOnlyTools(t, path+" "+name, agent["tools"].(map[string]any), true, false)
 			}
 			refuter := agentsMap[opencode.ReviewRefuterAgent].(map[string]any)
 			refuterPrompt := refuter["prompt"].(string)
@@ -171,16 +173,25 @@ func TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles(t *testing.T) {
 				t.Errorf("%s refuter prompt is not bounded: %s", path, refuterPrompt)
 			}
 			assertNoReviewerLifecycleInstructions(t, path+" refuter", refuterPrompt)
-			assertOpenCodeReadOnlyTools(t, path+" refuter", refuter["tools"].(map[string]any), false)
+			assertOpenCodeReadOnlyTools(t, path+" refuter", refuter["tools"].(map[string]any), true, false)
 		})
 	}
 }
 
-func assertOpenCodeUnsupportedReviewer(t *testing.T, label string, agent map[string]any) {
+// assertOpenCodeProviderInjectedReviewer proves the genuinely restored
+// shape: the reviewer prompt names the provider-injected context block
+// (never the disabled "unsupported-capability" refusal) and its permission
+// map denies bash and edit outright, with no wildcarded allow list — the
+// dynamic-binding problem the wildcard existed for cannot exist when there
+// is nothing left to allow.
+func assertOpenCodeProviderInjectedReviewer(t *testing.T, label string, agent map[string]any) {
 	t.Helper()
 	prompt, _ := agent["prompt"].(string)
-	if !strings.Contains(prompt, "unsupported-capability") || strings.Contains(prompt, "inspect-candidate") {
-		t.Fatalf("%s prompt does not stop unsupported inspection: %s", label, prompt)
+	if strings.Contains(prompt, "unsupported-capability") {
+		t.Fatalf("%s prompt still refuses immutable inspection as unsupported: %s", label, prompt)
+	}
+	if !strings.Contains(prompt, "GENTLE_AI_REVIEW_CONTEXT") || !strings.Contains(prompt, "You have no execution tools") {
+		t.Fatalf("%s prompt does not name the provider-injected context block: %s", label, prompt)
 	}
 	permission, ok := agent["permission"].(map[string]any)
 	if !ok || permission["bash"] != "deny" || permission["edit"] != "deny" || len(permission) != 2 {
@@ -200,18 +211,19 @@ func TestReviewerInspectionCommandsReturnIndependentValues(t *testing.T) {
 	}
 }
 
-func TestKilocodeReviewInspectionIsNativeAndWindowsPortable(t *testing.T) {
+// TestReviewerBashPromptIsNativeAndWindowsPortable pins the shared
+// bash-command reviewer prompt (reviewerPrompt) still used by markdown-based
+// runtimes that keep their own shell (kiro, kimi, cursor). OpenCode and
+// Kilocode no longer use this prompt or a Bash permission wildcard: they get
+// openCodeProviderInjectedReviewerPrompt with no bash and no read tool
+// instead (see TestOpenCodeOverlaysRenderBoundedReadOnlyReviewRoles).
+func TestReviewerBashPromptIsNativeAndWindowsPortable(t *testing.T) {
 	prompt, ok := reviewerPrompt("review-reliability")
 	if !ok {
 		t.Fatal("review-reliability prompt missing")
 	}
-	permission := openCodeReviewerPermission()
-	encoded, err := json.Marshal(permission)
-	if err != nil {
-		t.Fatal(err)
-	}
 	for _, forbidden := range []string{"env -i", " git ", "--text", "PowerShell", "cmd /", "Git Bash"} {
-		if strings.Contains(prompt, forbidden) || strings.Contains(string(encoded), forbidden) {
+		if strings.Contains(prompt, forbidden) {
 			t.Errorf("review inspection still depends on %q", forbidden)
 		}
 	}
@@ -219,10 +231,6 @@ func TestKilocodeReviewInspectionIsNativeAndWindowsPortable(t *testing.T) {
 		if !strings.Contains(prompt, "gentle-ai review inspect-candidate") || !strings.Contains(prompt, "--operation "+operation) {
 			t.Errorf("review prompt omits native %s inspection recipe", operation)
 		}
-	}
-	bash := permission["bash"].(map[string]any)
-	if bash["*"] != "deny" || bash["gentle-ai review inspect-candidate *"] == "allow" {
-		t.Fatalf("reviewer permission is not deny-by-default and exact: %#v", bash)
 	}
 }
 
@@ -257,7 +265,21 @@ func TestKilocodeReviewSettingsMatchCurrentMainBaseline(t *testing.T) {
 	// Second pass fixing adversarial verification findings F1/F4/F6/F7 (see
 	// TestOpenCodeRenderedReviewProtocolCost's changelog comment above) moved
 	// it a third time. Deliberate, not drift.
-	const want = "d9b91b53542ff13ef3444febbe725c11d613c2f60446602697d351b59eaf3162"
+	//
+	// Prerelease resume fix: the provider-defect handoff's resume clause used
+	// to require a `released` fix, which orchestrators read as stable-only and
+	// used to refuse resuming on an installed release candidate. It now says
+	// "an installed published fix", states that an installed published
+	// prerelease or release candidate satisfies it, and draws the real
+	// boundary at unpublished code. Kilocode embeds the same orchestrator
+	// contract in `agent.gentle-orchestrator.prompt`, and that key is the only
+	// difference in the rendered settings, so the hash moved a fourth time.
+	// Deliberate, not drift.
+	//
+	// This baseline combines #2485's answer-validation contract, #2417's
+	// provider-injected reviewer shape, and #2440's runtime-bound identity.
+	// It is recomputed from the merged tree.
+	const want = "a946dfda5f9802887043e5a7c88e2ce744cd864da86926dbc92b8396306f641e"
 	if got != want {
 		t.Fatalf("Kilocode settings SHA-256 = %s, want current-main baseline %s", got, want)
 	}
@@ -446,12 +468,32 @@ func TestOpenCodeRenderedReviewProtocolCost(t *testing.T) {
 		// required flags (also verified by execution). The standard ceiling
 		// moves with it (21,200 -> 22,200) to restore the ~15% margin below;
 		// full-4R still has headroom and is unchanged.
-		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 19_276, maxCharacters: 22_200},
-		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 27_034, maxCharacters: 36_000},
+		//
+		// wantChars grew again when issue #2417 restored genuine OpenCode
+		// immutable receipt-review. The disabled unsupported-capability refusal
+		// prompt is gone; OpenCode (and Kilocode, which shares the same
+		// generated shape and has no transport of its own) now render
+		// openCodeProviderInjectedReviewerPrompt, which is longer because it
+		// actually describes the provider-injected GENTLE_AI_REVIEW_CONTEXT
+		// block, its no-bash/no-read guarantee, and its completeness
+		// preconditions, instead of one short refusal sentence. The shared
+		// contract text itself is untouched by that issue, so only the per-lens
+		// agent prompts move. This is a deliberate contract restoration, not
+		// drift. The standard ceiling moves with it (22,200 -> 23,300) to
+		// restore the ~15% margin the guard below requires; full-4R already had
+		// enough headroom and is unchanged.
+		// #2440 then replaces five literal claude-code identities with the
+		// executing runtime. The combined pins are recomputed from this merge.
+		{name: "standard", agents: []string{"review-reliability"}, beforeChars: 42_301, wantChars: 20_142, maxCharacters: 23_300},
+		{name: "full-4R", agents: []string{"review-risk", "review-resilience", "review-readability", "review-reliability"}, beforeChars: 106_998, wantChars: 30_543, maxCharacters: 36_000},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			chars, _ := measurePromptCost(boundedReviewContract())
+			// Measure what an OpenCode user actually installs, not the
+			// shared source: the contract now carries the runtime-identity
+			// substitution placeholder, and only the bound form is ever
+			// written to disk (issue #2440).
+			chars, _ := measurePromptCost(bindRuntimeAgentIdentity(boundedReviewContract(), model.AgentOpenCode))
 			for _, agent := range tt.agents {
 				promptChars, _ := measurePromptCost(settings.Agent[agent].Prompt)
 				chars += promptChars
@@ -485,9 +527,9 @@ func markdownFrontmatter(t *testing.T, path string) string {
 	return parts[1]
 }
 
-func assertOpenCodeReadOnlyTools(t *testing.T, label string, tools map[string]any, bash bool) {
+func assertOpenCodeReadOnlyTools(t *testing.T, label string, tools map[string]any, read, bash bool) {
 	t.Helper()
-	want := map[string]bool{"*": false, "read": true, "write": false, "edit": false, "bash": bash, "task": false}
+	want := map[string]bool{"*": false, "read": read, "write": false, "edit": false, "bash": bash, "task": false}
 	if len(tools) != len(want) {
 		t.Fatalf("%s tools = %#v", label, tools)
 	}
@@ -538,5 +580,5 @@ func readGentleOrchestratorPrompt(t *testing.T, settingsPath string) string {
 
 func assertOpenCodeRefuterToolsReadOnly(t *testing.T, label string, tools map[string]any) {
 	t.Helper()
-	assertOpenCodeReadOnlyTools(t, label, tools, false)
+	assertOpenCodeReadOnlyTools(t, label, tools, true, false)
 }

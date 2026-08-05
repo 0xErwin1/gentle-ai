@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/gentleman-programming/gentle-ai/v2/internal/pathquote"
 )
 
 // AuthorityDispositionPlanSchema identifies AuthorityDispositionPlan's shape.
@@ -323,11 +325,11 @@ func validateAuthorityDispositionAuthorization(plan AuthorityDispositionPlan, ca
 func compactRepairCommandText(repo string, plan AuthorityDispositionPlan) string {
 	template := plan
 	template.Actor, template.Reason = "<actor>", "<why-it-is-repaired>"
-	return fmt.Sprintf("`gentle-ai review repair --cwd %q --plan-digest %q --inventory-revision %q --actor \"<actor>\" --reason \"<why-it-is-repaired>\" --authorization \"<maintainer-authorization>\"`"+
-		" (`gentle-ai review repair --preflight --cwd %q` re-confirms these are still current);"+
+	return fmt.Sprintf("`gentle-ai review repair --cwd %s --plan-digest %q --inventory-revision %q --actor \"<actor>\" --reason \"<why-it-is-repaired>\" --authorization \"<maintainer-authorization>\"`"+
+		" (`gentle-ai review repair --preflight --cwd %s` re-confirms these are still current);"+
 		" the repair quarantines the entry whole and rewrites nothing, so the recorded authorization bytes survive exactly as persisted."+
 		" --authorization is exactly these seven lines, joined by LF, with no trailing newline, using the same --actor and --reason with surrounding whitespace trimmed:\n%s",
-		repo, plan.PlanDigest, plan.AuthorityInventoryRevision, repo, authorityDispositionAuthorizationBinding(template))
+		pathquote.Quote(repo), plan.PlanDigest, plan.AuthorityInventoryRevision, pathquote.Quote(repo), authorityDispositionAuthorizationBinding(template))
 }
 
 // DeriveAuthorityDispositionPlanAtRepo is the exported form of

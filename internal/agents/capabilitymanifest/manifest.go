@@ -146,6 +146,15 @@ var reviewTransportExposureByAgent = func() map[model.AgentID]ContractExposure {
 		exposure[agent] = ContractExposureAdvertised
 	}
 	exposure[model.AgentPi] = ContractExposureDormant
+	// Codex — dormant, not a policy reversal. #2209 already decided Codex
+	// should be supported; #2418 found that internal/assets/codex/ ships
+	// only sdd-orchestrator.md, so no reviewer lens or refuter asset exists
+	// for a Codex-hosted review to launch. Declaring the transport advertised
+	// while nothing can run it is exactly the defect this manifest exists to
+	// prevent, so exposure stays dormant until #2418 lands the lens assets,
+	// hooks, and budget — see review_transport_capability.go's compiled gate,
+	// which independently refuses Codex for the same reason.
+	exposure[model.AgentCodex] = ContractExposureDormant
 	return exposure
 }()
 

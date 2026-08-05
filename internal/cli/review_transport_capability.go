@@ -2,8 +2,10 @@ package cli
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
+	"github.com/gentleman-programming/gentle-ai/v2/internal/catalog"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 )
 
@@ -20,6 +22,26 @@ type reviewImmutableTransport string
 const (
 	reviewImmutableTransportUnsupported         reviewImmutableTransport = "unsupported"
 	reviewImmutableTransportClaudePromptCarried reviewImmutableTransport = "claude_prompt_carried"
+	// reviewImmutableTransportOpenCodeProviderInjected is issue #2417's
+	// restored transport: the OpenCode plugin (review-result-artifacts.ts)
+	// asks `review lens-context` for the finished reviewer context through
+	// its shell-less runNative channel and injects those exact bytes into
+	// the reviewer task's prompt before the reviewer ever launches. The
+	// provider materializes the evidence, applies the budget, and resolves
+	// every refusal; the plugin assembles nothing. The generated lens holds no
+	// bash and no read tool. OpenCode itself concatenates live project
+	// instructions (AGENTS.md/CLAUDE.md/CONTEXT.md, local `instructions`
+	// glob entries) and the skill catalog into every session's system
+	// prompt regardless of tools, so the plugin also refuses to launch the
+	// reviewer unless OPENCODE_DISABLE_PROJECT_CONFIG and
+	// OPENCODE_DISABLE_EXTERNAL_SKILLS are both set. OpenCode also fetches
+	// any remote (http/https) `instructions` entry unconditionally, from
+	// any config layer, regardless of either variable, so the plugin
+	// separately reads the effective configuration through its own OpenCode
+	// client (client.config.get) and refuses to launch the reviewer if one
+	// is present, naming the offending entry. Only then is the injected
+	// block provably the reviewer's only byte source.
+	reviewImmutableTransportOpenCodeProviderInjected reviewImmutableTransport = "opencode_provider_injected"
 )
 
 type reviewImmutableRuntimePolicy struct {
@@ -34,17 +56,57 @@ func reviewImmutableRuntimeCapability(agent model.AgentID) reviewImmutableRuntim
 	case model.AgentClaudeCode:
 		return reviewImmutableRuntimePolicy{Eligible: true, Transport: reviewImmutableTransportClaudePromptCarried}
 	case model.AgentCodex:
+		// #2418 owns the Codex lens transport: internal/assets/codex/ ships
+		// only sdd-orchestrator.md, so no reviewer lens or refuter asset
+		// exists yet for a Codex-hosted review to launch. The manifest's
+		// ReviewTransportV1 exposure is dormant for the same reason
+		// (capabilitymanifest.reviewTransportExposureByAgent) — this switch
+		// arm is the compiled floor that gate ultimately relies on.
 		return reviewImmutableRuntimePolicy{Eligible: true, Transport: reviewImmutableTransportUnsupported}
 	case model.AgentOpenCode:
-		// #2076 owns a future documented exact child-session binding.
-		return reviewImmutableRuntimePolicy{Eligible: true, Transport: reviewImmutableTransportUnsupported}
+		// #2417 restored genuine support through the provider-injected
+		// shell-less channel; #2076 (per-session exact-value Bash-permission
+		// binding) remains structurally impossible because OpenCode reads
+		// its config only at process startup, before review.start mints any
+		// dynamic value, and is no longer needed for support.
+		return reviewImmutableRuntimePolicy{Eligible: true, Transport: reviewImmutableTransportOpenCodeProviderInjected}
 	default:
 		return reviewImmutableRuntimePolicy{Transport: reviewImmutableTransportUnsupported}
 	}
 }
 
 func (capability reviewImmutableRuntimePolicy) supportsImmutableReceiptReview() bool {
-	return capability.Transport == reviewImmutableTransportClaudePromptCarried
+	return capability.Transport == reviewImmutableTransportClaudePromptCarried ||
+		capability.Transport == reviewImmutableTransportOpenCodeProviderInjected
+}
+
+// reviewTransportSupportedRuntimeIDs lists the runtime identities that
+// genuinely carry immutable receipt-review transport today, derived from the
+// compiled capability declaration above rather than restated as prose. A
+// runtime the admission gate would refuse can never appear here by
+// construction — #2418 found the opposite already shipped for Codex
+// specifically: a manifest advertising a transport the compiled gate did not
+// actually honor.
+func reviewTransportSupportedRuntimeIDs() []string {
+	agents := catalog.AllAgents()
+	supported := make([]string, 0, len(agents))
+	for _, agent := range agents {
+		if reviewImmutableRuntimeCapability(agent.ID).supportsImmutableReceiptReview() {
+			supported = append(supported, string(agent.ID))
+		}
+	}
+	return supported
+}
+
+// reviewTransportRefusalExitGuidance is appended to every transport-refusal
+// cause a caller can actually reach for a real, currently-unsupported
+// runtime identity. It names the user-owned kill switch that exits
+// receipt-driven review first, then the runtimes that genuinely support
+// review transport — so a Codex or Pi user is never left refused with no
+// stated way out and no accurate list of what does work.
+func reviewTransportRefusalExitGuidance() string {
+	return "; exit receipt-driven review with `gentle-ai review mode disable --scope clone --cwd <repo>`; runtimes with review transport support: " +
+		strings.Join(reviewTransportSupportedRuntimeIDs(), ", ")
 }
 
 // reviewRuntimeWithImmutableTransport accepts only the exact compiled runtime
@@ -58,11 +120,11 @@ func reviewRuntimeWithImmutableTransport(agent string) (model.AgentID, error) {
 	capability := reviewImmutableRuntimeCapability(identity)
 	if !capability.Eligible {
 		// refusal:by-design world-action: runtimes outside the fixed RDD policy cannot receive immutable review authority
-		return "", errors.New("the active runtime is not eligible for immutable receipt review")
+		return "", fmt.Errorf("the active runtime is not eligible for immutable receipt review%s", reviewTransportRefusalExitGuidance())
 	}
 	if !capability.supportsImmutableReceiptReview() {
 		// refusal:by-design world-action: unsupported transport cannot bind immutable evidence or capture an admissible result
-		return "", errors.New("the active runtime lacks immutable receipt-review transport")
+		return "", fmt.Errorf("the active runtime lacks immutable receipt-review transport%s", reviewTransportRefusalExitGuidance())
 	}
 	return identity, nil
 }

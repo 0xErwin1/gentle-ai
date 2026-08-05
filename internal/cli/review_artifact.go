@@ -102,9 +102,6 @@ func facadeVerificationEvidenceTarget(ctx context.Context, repo string, state re
 		if state.ProposedCorrectionLines == nil {
 			return reviewtransaction.Snapshot{}, errors.New("verification evidence requires a forecasted correction") // refusal:by-design operator-knowledge: correction planning is an external prerequisite whose exact line forecast must be finalized first
 		}
-		if err := rejectFacadeCorrectionUntracked(ctx, repo, state); err != nil {
-			return reviewtransaction.Snapshot{}, err
-		}
 		projection := state.InitialSnapshot.Projection
 		if projection == "" {
 			projection = reviewtransaction.ProjectionWorkspace
@@ -290,7 +287,7 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 	}
 	if err != nil {
 		if contextHandle != "" {
-			return reviewOpaqueContextFailure("repository_context_authority_unavailable", "refresh the exact native next_transition before retrying")
+			return reviewOpaqueContextCause("repository_context_authority_unavailable", "refresh the exact native next_transition before retrying", err)
 		}
 		return reviewPreflightError(fmt.Errorf("resolve reviewing authority for lineage %q under %s: %w; if the review was started in a different repository (for example a nested one), re-run with --cwd set to that repository", *lineage, repositoryDescription, err))
 	}
@@ -408,14 +405,15 @@ func RunReviewCaptureResult(args []string, stdout io.Writer) error {
 			err = fmt.Errorf("%w; a different reviewer result already occupies this slot — decide with `review dispose-result` (discard it) or `review preserve-result` (keep it and quarantine this new submission)", reviewerResultSlotConflictError)
 		}
 		if contextHandle != "" {
-			return reviewOpaqueContextFailure("repository_context_capture_failed", "retry capture-result with the same exact binding or refresh status")
+			return reviewOpaqueContextCause("repository_context_capture_failed", "retry capture-result with the same exact binding or refresh status", err)
 		}
 		return reviewPreflightError(err)
 	}
 	published, _, err := readPrivateReviewerFile(path, reviewResultArtifactLimit)
 	if err != nil {
 		if contextHandle != "" {
-			return reviewOpaqueContextFailure("repository_context_capture_failed", "retry capture-result with the same exact binding or refresh status")
+			return reviewOpaqueContextCause("repository_context_capture_failed", "retry capture-result with the same exact binding or refresh status",
+				fmt.Errorf("read published reviewer result: %w", err))
 		}
 		return reviewPreflightError(fmt.Errorf("read published reviewer result: %w", err))
 	}

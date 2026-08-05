@@ -361,6 +361,28 @@ func TestResolveAgentInstall(t *testing.T) {
 			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
 		},
 		{
+			// Issue #2499: the probe (#2493) accepts any Linux package manager
+			// on PATH; the resolver must not re-enumerate a subset of that list.
+			name:    "opencode on alpine system npm uses sudo",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: "alpine", PackageManager: "apk", Supported: true},
+			agent:   model.AgentOpenCode,
+			want:    CommandSequence{{"sudo", "npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+		},
+		{
+			name:    "opencode on opensuse nvm skips sudo",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: "opensuse-leap", PackageManager: "zypper", Supported: true, NpmWritable: true},
+			agent:   model.AgentOpenCode,
+			want:    CommandSequence{{"npm", "install", "-g", "--ignore-scripts", "opencode-ai@latest"}},
+		},
+		{
+			// A Linux profile the probe rejected (no manager on PATH) must keep
+			// erroring: the default arm is gated on a non-empty PackageManager.
+			name:    "opencode on linux without package manager returns error",
+			profile: system.PlatformProfile{OS: "linux", LinuxDistro: "unknown", PackageManager: ""},
+			agent:   model.AgentOpenCode,
+			wantErr: true,
+		},
+		{
 			name:    "claude-code on windows uses npm without sudo",
 			profile: system.PlatformProfile{OS: "windows", PackageManager: "winget", NpmWritable: true},
 			agent:   model.AgentClaudeCode,
@@ -657,6 +679,40 @@ func TestResolveComponentInstall(t *testing.T) {
 				{"git", "-C", "/tmp/gentleman-guardian-angel", "checkout", "-f", "refs/tags/v" + versions.GGAVersion},
 				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
 			},
+		},
+		{
+			// Issue #2499: GGA's Linux install is git clone + install.sh and
+			// never touches the package manager, so any probed manager works.
+			name:      "gga on alpine uses git clone and install.sh",
+			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: "alpine", PackageManager: "apk", Supported: true},
+			component: model.ComponentGGA,
+			want: CommandSequence{
+				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
+				{"mkdir", "-p", "/tmp/gentleman-guardian-angel"},
+				{"git", "init", "/tmp/gentleman-guardian-angel"},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "fetch", "--depth=1", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "refs/tags/v" + versions.GGAVersion + ":refs/tags/v" + versions.GGAVersion},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "checkout", "-f", "refs/tags/v" + versions.GGAVersion},
+				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
+			},
+		},
+		{
+			name:      "gga on nixos uses git clone and install.sh",
+			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: "nixos", PackageManager: "nix", Supported: true},
+			component: model.ComponentGGA,
+			want: CommandSequence{
+				{"rm", "-rf", "/tmp/gentleman-guardian-angel"},
+				{"mkdir", "-p", "/tmp/gentleman-guardian-angel"},
+				{"git", "init", "/tmp/gentleman-guardian-angel"},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "fetch", "--depth=1", "https://github.com/Gentleman-Programming/gentleman-guardian-angel.git", "refs/tags/v" + versions.GGAVersion + ":refs/tags/v" + versions.GGAVersion},
+				{"git", "-C", "/tmp/gentleman-guardian-angel", "checkout", "-f", "refs/tags/v" + versions.GGAVersion},
+				{"bash", "/tmp/gentleman-guardian-angel/install.sh"},
+			},
+		},
+		{
+			name:      "gga on linux without package manager returns error",
+			profile:   system.PlatformProfile{OS: "linux", LinuxDistro: "unknown", PackageManager: ""},
+			component: model.ComponentGGA,
+			wantErr:   true,
 		},
 		{
 			name:      "engram on windows returns error (uses DownloadLatestBinary instead)",

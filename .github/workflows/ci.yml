@@ -72,6 +72,7 @@ jobs:
             def completed_once($id):
               [.journeys[] | select(.id == $id)] as $matches
               | ($matches | length == 1) and ($matches[0].status == "completed");
+            completed_once("j51-negotiated-status-correction-continuation") and
             completed_once("j52-sdd-stale-authority-does-not-shadow-approved-candidate") and
             completed_once("j53-sdd-ambiguous-authorities-fail-closed") and
             completed_once("j54-sdd-missing-authority-receipt-fails-closed") and
@@ -184,10 +185,10 @@ jobs:
         env:
           GENTLE_AI_TEST_BINARY: ${{ runner.temp }}\gentle-ai.exe
           GENTLE_AI_REQUIRE_DISTINCT_WINDOWS_TOKEN_OWNER: "1"
-        run: go test -v ./internal/cli ./internal/reviewtransaction ./internal/sddstatus -run '^(TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals|TestRARPrivateOwnerRemainsTokenUserOnly|TestWindowsSecureOpenRetriesDirectDriveDeviceWithoutWeakeningFlags|TestWindowsSecureOpenDriveFallbackFailsClosed|TestWindowsSecureOpenDoesNotRetryOtherErrors|TestWindowsStoreLockUsesExistingInodeAdvisoryTruth|TestRunGitBoundsLocalAndRemoteCommands|TestRunGitDistinguishesAggregateDeadlineAndTypedExit|TestStoreLockReportsLiveOwnerAndCannotBeStolen|TestStoreLockRecoversCrashAndCorruptOwnerRecords|TestStoreLockIsReleasedWhenOwnerProcessExits|TestConcurrentStoreLockRecoverersCannotBothWin|TestCompactStoresShareRepositoryWriteLock|TestCompactStoreRejectsConcurrentLockedWriter|TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline|TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance|TestRepairClassifiedAuthorityConcurrentExecutionCommitsAndReplays|TestRepairClassifiedAuthorityResumesEachDurablePhase|TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState|TestReviewFacadeFinalizeRejectsCorrectionCreatedUntrackedPath|TestRejectFacadeCorrectionUntrackedRespectsStagedProjection|TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree|TestWindowsPowerShell51ArtifactManifestFileFinalize)$' -count=1 -timeout=8m
+        run: go test -v ./internal/cli ./internal/reviewtransaction ./internal/sddstatus -run '^(TestRARSharedOwnerAcceptsOnlyCurrentWindowsPrincipals|TestRARPrivateOwnerRemainsTokenUserOnly|TestWindowsSecureOpenRetriesDirectDriveDeviceWithoutWeakeningFlags|TestWindowsSecureOpenDriveFallbackFailsClosed|TestWindowsSecureOpenDoesNotRetryOtherErrors|TestWindowsStoreLockUsesExistingInodeAdvisoryTruth|TestRunGitBoundsLocalAndRemoteCommands|TestRunGitDistinguishesAggregateDeadlineAndTypedExit|TestStoreLockReportsLiveOwnerAndCannotBeStolen|TestStoreLockRecoversCrashAndCorruptOwnerRecords|TestStoreLockIsReleasedWhenOwnerProcessExits|TestConcurrentStoreLockRecoverersCannotBothWin|TestCompactStoresShareRepositoryWriteLock|TestCompactStoreRejectsConcurrentLockedWriter|TestAuthorityLockCancellationPreservesSentinelAndCallerDeadline|TestCompactStatusLoadContextCancelsUnderExclusiveMaintenance|TestRepairClassifiedAuthorityConcurrentExecutionCommitsAndReplays|TestRepairClassifiedAuthorityResumesEachDurablePhase|TestReviewFacadeCorrectionFlowResumesFromEachCompactIntermediateState|TestReviewFacadeFinalizeRejectsCorrectionCreatedUntrackedPath|TestRejectFacadeCorrectionUntrackedRespectsStagedProjection|TestMainBinaryAcceptsCorrectedCandidateFromLinkedWorktree|TestWindowsPowerShell51ArtifactManifestFileFinalize|TestNegotiatedStatusUnderUnavailableProcessTempOffersFreshStartOnBothContracts|TestNegotiatedStatusUnderUnavailableProcessTempResolvesWorkspaceOverlayBaseRef|TestNegotiatedStatusUnderUnavailableProcessTempContinuesCompactCorrection|TestNegotiatedStatusLeavesNoTemporaryGitArtifactsAfterFailure|TestNegotiatedReviewStatusFreshLargeDirtyCandidateOffersStart)$' -count=1 -timeout=8m
 
-      # PR runs the release-blocker subset only; push to main and the nightly
-      # schedule run the full Windows suite, mirroring the E2E tier policy.
+      # PR runs the release-blocker subset only; the full Windows suite runs
+      # in the separate, honestly-named "Windows Full Suite" workflow.
   # Native Darwin release blockers (#1853). Four macOS defects (#1773, #1781,
   # #1804, #1850) and the #1872 RAR lock convoy shipped because no CI lane
   # executes Darwin semantics; GOOS=darwin cross-builds prove compilation, not
@@ -282,12 +283,12 @@ jobs:
         # advises "latest" too (see internal/installcmd/resolver.go).
         run: npm install --global @anthropic-ai/claude-code@latest
 
-      - name: Verify Windows OpenCode reviewer rejection E2E is registered
+      - name: Verify OpenCode reviewer support E2E is registered
         shell: pwsh
         run: |
-          $tests = go test -list '^TestRealOpenCodeRejectsUnsupportedImmutableReviewerBash$' ./e2e/organicruntime
-          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestRealOpenCodeRejectsUnsupportedImmutableReviewerBash') {
-            throw 'Windows OpenCode reviewer rejection E2E is missing'
+          $tests = go test -list '^TestRealOpenCodeReviewerLensCannotSeeLiveState$' ./e2e/organicruntime
+          if ($LASTEXITCODE -ne 0 -or $tests -notcontains 'TestRealOpenCodeReviewerLensCannotSeeLiveState') {
+            throw 'OpenCode reviewer support E2E is missing'
           }
 
       - name: Verify real-agent detection E2E is registered
@@ -361,16 +362,18 @@ jobs:
           cache-from: type=gha,scope=e2e-${{ matrix.platform.name }}
           cache-to: type=gha,mode=max,scope=e2e-${{ matrix.platform.name }}
 
-      # PR runs Tier 1 only (binary + dry-run); push to main and the nightly
-      # schedule run the full Tier 1+2+3 suite. The ruleset still requires all
-      # 3 platform checks, so the matrix runs everywhere — only the test scope
-      # changes by event.
+      # Full Tier 1+2+3 on every event (#2527): these checks are required by
+      # the ruleset under the name "E2E Tests", so they must deliver the full
+      # suite wherever they gate. Tiers 2-3 write only inside the container,
+      # and push/schedule already prove they fit the step budget on the same
+      # runners. Do not reintroduce per-event tier selection here without
+      # renaming the checks to state the reduced scope.
       - name: Run E2E tests
         timeout-minutes: 30
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_FULL_E2E: ${{ (github.event_name == 'push' || github.event_name == 'schedule') && '1' || '0' }}
-          RUN_BACKUP_TESTS: ${{ (github.event_name == 'push' || github.event_name == 'schedule') && '1' || '0' }}
+          RUN_FULL_E2E: "1"
+          RUN_BACKUP_TESTS: "1"
         run: |
           docker run --rm \
             -e RUN_FULL_E2E \
