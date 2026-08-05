@@ -325,7 +325,7 @@ func (w *windowsCompatibilityDirectoryWriter) Remove(path string) error {
 		defer windows.CloseHandle(parentFD)
 	}
 
-	handle, err := openWindowsCompatibilityFileAt(parentFD, parts[len(parts)-1], windows.DELETE, windows.FILE_OPEN)
+	handle, err := openWindowsCompatibilityFileAt(parentFD, parts[len(parts)-1], windows.FILE_GENERIC_READ|windows.DELETE, windows.FILE_OPEN)
 	if windowsCompatibilityNotExist(err) {
 		return nil
 	}
