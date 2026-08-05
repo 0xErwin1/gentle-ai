@@ -998,14 +998,14 @@ func requireDiscoveredArchivePremise(_ *Sandbox, observation Observation) error 
 }
 
 // requireDiscoveredArchiveStatus asserts the enabled or disabled shape of a
-// discovered-and-invalidated archive authority. Corrective verify cycle
+// discovered archive authority whose current candidate changed. Corrective verify cycle
 // CRITICAL-1 (rdd-post-verify-review-offer's "Kill-Switch-Off Is Structural
 // Absence" requirement): the disabled branch previously required a populated
 // "disabled/unmanaged" disposition; it now requires reviewGate's structural
 // ABSENCE instead -- no field, no ceremony, archive unfailable on review
 // grounds. The enabled branch is untouched.
 func requireDiscoveredArchiveStatus(disabled bool) func(*Sandbox, Observation) error {
-	return sddStatusAssertion("discovered invalidated archive authority", func(status sddStatusV1) error {
+	return sddStatusAssertion("discovered scope-changed archive authority", func(status sddStatusV1) error {
 		if disabled {
 			if status.ReviewGate != nil {
 				return fmt.Errorf("disabled reviewGate = %+v, want structural absence", status.ReviewGate)
@@ -1015,22 +1015,22 @@ func requireDiscoveredArchiveStatus(disabled bool) func(*Sandbox, Observation) e
 			}
 			return nil
 		}
-		if status.ReviewGate == nil || status.ReviewGate.Result != "invalidated" {
-			return fmt.Errorf("reviewGate = %+v, want invalidated", status.ReviewGate)
+		if status.ReviewGate == nil || status.ReviewGate.Result != "scope-changed" {
+			return fmt.Errorf("reviewGate = %+v, want scope-changed", status.ReviewGate)
 		}
-		if !strings.Contains(status.ReviewGate.Reason, "review receipt was invalidated") {
-			return fmt.Errorf("reviewGate.reason = %q, want the discovered authority reason", status.ReviewGate.Reason)
+		if !strings.Contains(status.ReviewGate.Reason, "review scope changed") {
+			return fmt.Errorf("reviewGate.reason = %q, want the changed candidate reason", status.ReviewGate.Reason)
 		}
 		if status.ReviewGate.Delivery != "" || status.Dependencies.Archive != "blocked" || status.NextRecommended != "resolve-review" {
-			return fmt.Errorf("enabled gate=%+v archive=%q next=%q, want invalidated blocked/resolve-review",
+			return fmt.Errorf("enabled gate=%+v archive=%q next=%q, want scope-changed blocked/resolve-review",
 				status.ReviewGate, status.Dependencies.Archive, status.NextRecommended)
 		}
 		return nil
 	})
 }
 
-func introduceArchiveGateInvalidation(sandbox *Sandbox) error {
-	return sandbox.write(filepath.Join(sandbox.Repo, "outside-reviewed-scope.txt"), "unreviewed\n")
+func introduceArchiveCandidateDrift(sandbox *Sandbox) error {
+	return sandbox.write(filepath.Join(sandbox.Repo, "docs", "archive-authority.md"), "# archive-authority\n\nchanged after review.\n")
 }
 
 func writeExplicitInvalidArchiveReceipt(sandbox *Sandbox) error {
@@ -1095,9 +1095,12 @@ func prepareDeclinedCandidate(sandbox *Sandbox) error {
 	if err := sandbox.write(filepath.Join(sandbox.Repo, declineCandidatePath), declineCandidateContents); err != nil {
 		return err
 	}
-	paths, err := gitOut(sandbox, sandbox.Repo, "ls-files", "--others", "--exclude-standard")
+	if err := sandbox.git(sandbox.Repo, "add", declineCandidatePath); err != nil {
+		return err
+	}
+	paths, err := gitOut(sandbox, sandbox.Repo, "diff", "--cached", "--name-only")
 	if err != nil || paths != declineCandidatePath {
-		return fmt.Errorf("decline fixture untracked paths = %q, %v", paths, err)
+		return fmt.Errorf("decline fixture declared paths = %q, %v", paths, err)
 	}
 	return nil
 }
@@ -1158,10 +1161,7 @@ func declineCandidateFromStatus(r *journeyRun) error {
 	return nil
 }
 
-func stageDeclinedCandidate(sandbox *Sandbox) error {
-	if err := sandbox.git(sandbox.Repo, "add", declineCandidatePath); err != nil {
-		return err
-	}
+func proveDeclinedCandidateStaged(sandbox *Sandbox) error {
 	tree, err := gitOut(sandbox, sandbox.Repo, "write-tree")
 	if err != nil || tree != sandbox.Scratch["decline-tree"] {
 		return fmt.Errorf("staged decline tree = %q, want %q: %v", tree, sandbox.Scratch["decline-tree"], err)
@@ -1281,17 +1281,17 @@ func waveOneJourneys() []Journey {
 			},
 		},
 		{
-			ID:     "j47-disabled-mode-archives-discovered-invalidated-receipt",
-			Title:  "Discovered invalidated archive receipt: disabled mode steps aside without weakening explicit authority",
+			ID:     "j47-disabled-mode-archives-discovered-scope-changed-authority",
+			Title:  "Discovered scope-changed archive authority: disabled mode steps aside without weakening explicit authority",
 			Source: "issue #2128",
 			Steps: []Step{
 				{Name: "fixture: archive-ready SDD change", Fixture: sddPlanningArtifacts(sddVerifyReport)},
 				{Name: "fixture: stage the reviewed candidate", Fixture: stageProse("", "archive-authority")},
 				{Name: "review start", Requires: startCapability, Args: productArgs("review", "start")},
 				{Name: "review finalize", Requires: finalizeCapability, Args: productArgs("review", "finalize"), After: rememberArchiveAuthority},
-				{Name: "discovered receipt allows before invalidation", Requires: sddStatusCapability,
+				{Name: "discovered receipt allows before candidate drift", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDiscoveredArchivePremise},
-				{Name: "fixture: add untracked content outside the reviewed scope", Fixture: introduceArchiveGateInvalidation},
+				{Name: "fixture: change a reviewed candidate path", Fixture: introduceArchiveCandidateDrift},
 				{Name: "enabled discovered receipt blocks", Requires: sddStatusCapability,
 					Args: productArgs("sdd-status", sddChange, "--json"), After: requireDiscoveredArchiveStatus(false)},
 				{Name: "mode disable", Requires: modeCapability, Args: productArgs("review", "mode", "disable", "--json")},
@@ -1370,7 +1370,7 @@ func waveOneJourneys() []Journey {
 			// requireCandidateDeclineRejected) added no remaining
 			// differentiating value and are deleted along with them.
 			// prepareDeclinedCandidate, declineCandidateFromStatus, and
-			// stageDeclinedCandidate survive unchanged: their own
+			// proveDeclinedCandidateStaged survive unchanged: their own
 			// assertions (empty post-decline authority inventory, staged
 			// tree matches the frozen target) were never gate-side and
 			// stay exactly as true as before.
@@ -1379,9 +1379,9 @@ func waveOneJourneys() []Journey {
 			Source: "issue #2045 (Wave 5 Slice 6 downgrade)",
 			Steps: []Step{
 				{Name: "fixture: repository", Fixture: baseRepo},
-				{Name: "fixture: high-risk candidate remains untracked", Fixture: prepareDeclinedCandidate},
+				{Name: "fixture: high-risk candidate declared in the index", Fixture: prepareDeclinedCandidate},
 				{Name: "derive v2 START and execute emitted relay and decline", Requires: statusCapability, Composite: declineCandidateFromStatus},
-				{Name: "fixture: stage the exact unchanged declined candidate", Fixture: stageDeclinedCandidate},
+				{Name: "fixture: exact declared candidate remains unchanged", Fixture: proveDeclinedCandidateStaged},
 				{Name: "reviews still on: the declined candidate denies exactly like any never-reviewed candidate", Requires: validateCapability,
 					Args: productArgs("review", "validate", "--gate", "pre-commit"), After: requireCandidateDeclineGateDeniesGenerically},
 				{Name: "disable reviews for the clone", Requires: modeCapability,

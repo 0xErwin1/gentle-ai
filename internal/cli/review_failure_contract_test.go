@@ -712,16 +712,25 @@ func TestNegotiatedFinalizePostTransitionGitTimeoutRequiresStatus(t *testing.T) 
 	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
 	oldTimeout := reviewFacadeOperationTimeout
 	// The aggregate budget must comfortably exceed the per-git-command timeout
-	// (localGitCommandTimeout, 15s) plus the slowest-runner overhead of reaching
-	// the committed begin-fix transition. The injected helper stalls longer than
-	// the per-git-command timeout (see reviewGitProcessHelperExitCode), so the
+	// pinned below plus the slowest-runner overhead of reaching the committed
+	// begin-fix transition. The injected helper stalls longer than the
+	// per-git-command timeout (see reviewGitProcessHelperExitCode), so the
 	// per-git-command timeout deterministically fires first and is classified as
 	// git_command_timeout in the native_committed phase. A tight 1s budget raced
 	// the aggregate operation_timeout ahead of that sub-operation timeout on slow
 	// Windows runners; 25s removes the race without slowing the exit, which is
-	// bounded by the 15s per-git-command timeout regardless of this budget.
+	// bounded by the pinned 15s per-git-command timeout regardless of this
+	// budget.
 	reviewFacadeOperationTimeout = 25 * time.Second
 	t.Cleanup(func() { reviewFacadeOperationTimeout = oldTimeout })
+	// The production per-command budget is a generous hang guard (issue #2483)
+	// that would let the stalled helper outlive the 25s aggregate budget and
+	// flip the classification to operation_timeout. Pin the historical 15s
+	// ordering per-command < aggregate < helper stall so the classification
+	// stays deterministic.
+	oldGitBudget := reviewtransaction.LocalGitCommandTimeout
+	reviewtransaction.LocalGitCommandTimeout = 15 * time.Second
+	t.Cleanup(func() { reviewtransaction.LocalGitCommandTimeout = oldGitBudget })
 	oldTransitionHook := reviewFacadeCommittedTransitionHook
 	reviewFacadeCommittedTransitionHook = func(ctx context.Context, hookRepo, operation, _ string) error {
 		if operation != "review/begin-fix" {
@@ -826,8 +835,8 @@ func reviewGitProcessHelperExitCode() (int, bool) {
 		return 0, false
 	}
 	if payload, err := os.ReadFile(os.Getenv(reviewGitHelperStatePathEnv)); err == nil && strings.Contains(string(payload), `"proposed_correction_lines":`) {
-		// Stall well beyond the per-git-command timeout (localGitCommandTimeout,
-		// 15s) so that the bounded Git subprocess is cut by that per-command
+		// Stall well beyond the per-git-command timeout the parent test pins to
+		// 15s so that the bounded Git subprocess is cut by that per-command
 		// timeout rather than completing on its own. This keeps the post-commit
 		// failure classified as git_command_timeout deterministically instead of
 		// racing the aggregate operation budget on slow runners.

@@ -1590,6 +1590,10 @@ func (harness *organicHarness) runActor(role, path, body, message, marker string
 	}
 }
 
+// writeFiles writes candidate files and declares them. Since #2394 a new file
+// only enters the review candidate once the user put it in the index, so a
+// journey that means to have its files reviewed has to say so the same way a
+// real user does.
 func (harness *organicHarness) writeFiles(files map[string]string) {
 	harness.t.Helper()
 	for relative, body := range files {
@@ -1600,6 +1604,7 @@ func (harness *organicHarness) writeFiles(files map[string]string) {
 		if err := os.WriteFile(target, []byte(body), 0o644); err != nil {
 			harness.t.Fatal(err)
 		}
+		harness.git("add", "--", relative)
 	}
 }
 
