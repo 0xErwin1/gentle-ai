@@ -32,10 +32,6 @@ var ErrNotInstalled = errors.New("engram binary not found on PATH")
 // the engram MCP process plus the initialize handshake round-trip.
 const stdioProbeTimeout = 5 * time.Second
 
-// stdioPostResponseWindow catches frames the server emitted with its
-// initialize response before the probe tears the child down.
-const stdioPostResponseWindow = 50 * time.Millisecond
-
 // stdioHandshakeFn is a package-level seam over the real handshake (built on
 // the execCommandContext precedent) so internal/cli doctor tests can pin the
 // probe outcome without spawning a real process.
@@ -47,12 +43,6 @@ type StdioCommand struct {
 	Command string
 	Args    []string
 	Source  string
-}
-
-type stdioOutputFrame struct {
-	line []byte
-	err  error
-	done bool
 }
 
 // ProbeStdio verifies the exact command and arguments persisted in an agent
@@ -69,9 +59,9 @@ func ProbeStdio(ctx context.Context, command string, args ...string) error {
 }
 
 // stdioHandshake spawns name with args and performs a minimal MCP initialize
-// handshake over the newline-delimited JSON-RPC stdio transport. It succeeds
-// only after a valid response and a brief window with no extra stdout frames,
-// then tears the process down; it never leaves the child running.
+// handshake over the newline-delimited JSON-RPC stdio transport. A successful
+// probe proves only the bounded initialize exchange: it terminates the child,
+// drains all stdout already produced to EOF, and rejects any extra frame.
 func stdioHandshake(ctx context.Context, name string, args ...string) error {
 	probeCtx, cancel := context.WithTimeout(ctx, stdioProbeTimeout)
 	defer cancel()
@@ -88,10 +78,13 @@ func stdioHandshake(ctx context.Context, name string, args ...string) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start %s: %w", name, err)
 	}
+	waited := false
 	defer func() {
 		_ = stdin.Close()
 		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
+		if !waited {
+			_ = cmd.Wait()
+		}
 	}()
 
 	request := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"gentle-ai-doctor","version":"0"}}}` + "\n"
@@ -99,62 +92,61 @@ func stdioHandshake(ctx context.Context, name string, args ...string) error {
 		return fmt.Errorf("write engram mcp initialize request: %w", err)
 	}
 
-	frames := make(chan stdioOutputFrame, 1)
-	go func() {
-		scanner := bufio.NewScanner(stdout)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			frame := stdioOutputFrame{line: append([]byte(nil), scanner.Bytes()...)}
-			select {
-			case frames <- frame:
-			case <-probeCtx.Done():
-				return
-			}
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		if err := validateInitializeResponse(scanner.Bytes()); err != nil {
+			return err
 		}
-		select {
-		case frames <- stdioOutputFrame{err: scanner.Err(), done: true}:
-		case <-probeCtx.Done():
-		}
-	}()
 
-	for {
-		select {
-		case frame := <-frames:
-			if frame.done {
-				if frame.err != nil {
-					return fmt.Errorf("read engram mcp output: %w", frame.err)
-				}
-				return errors.New("engram mcp exited without answering initialize")
-			}
-			if err := validateInitializeResponse(frame.line); err != nil {
+		if err := stdin.Close(); err != nil {
+			return fmt.Errorf("close engram mcp stdin: %w", err)
+		}
+		if err := terminateProbeChild(cmd); err != nil {
+			return err
+		}
+		// Drain before Wait: os/exec closes pipe descriptors when reaping the child.
+		for scanner.Scan() {
+			if err := validateInitializeResponse(scanner.Bytes()); err != nil {
 				return err
 			}
-
-			// A successful response is final only after checking frames already
-			// emitted alongside it. stdout is exclusively the MCP protocol stream.
-			settle := time.NewTimer(stdioPostResponseWindow)
-			defer settle.Stop()
-			select {
-			case trailing := <-frames:
-				if trailing.done {
-					if trailing.err != nil {
-						return fmt.Errorf("read engram mcp output: %w", trailing.err)
-					}
-					return nil
-				}
-				if err := validateInitializeResponse(trailing.line); err != nil {
-					return err
-				}
-				return errors.New("engram mcp wrote an unexpected stdout frame after initialize response")
-			case <-settle.C:
-				return nil
-			case <-probeCtx.Done():
-				return handshakeContextError(ctx, probeCtx)
-			}
-		case <-probeCtx.Done():
-			return handshakeContextError(ctx, probeCtx)
+			return errors.New("engram mcp wrote an unexpected stdout frame after initialize response")
 		}
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("read engram mcp output: %w", err)
+		}
+		waitErr := cmd.Wait()
+		waited = true
+		if err := handshakeContextError(ctx, probeCtx); err != nil {
+			return err
+		}
+		if !expectedProbeTermination(waitErr) {
+			return fmt.Errorf("wait for engram mcp process: %w", waitErr)
+		}
+		return nil
 	}
+	if err := handshakeContextError(ctx, probeCtx); err != nil {
+		return err
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read engram mcp output: %w", err)
+	}
+	return errors.New("engram mcp exited without answering initialize")
+}
+
+func terminateProbeChild(cmd *exec.Cmd) error {
+	if err := cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return fmt.Errorf("terminate engram mcp process: %w", err)
+	}
+	return nil
+}
+
+func expectedProbeTermination(err error) bool {
+	if err == nil || errors.Is(err, os.ErrProcessDone) {
+		return true
+	}
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr)
 }
 
 func handshakeContextError(ctx, probeCtx context.Context) error {
@@ -164,7 +156,7 @@ func handshakeContextError(ctx, probeCtx context.Context) error {
 	if probeCtx.Err() != nil {
 		return fmt.Errorf("engram mcp initialize handshake timed out after %s", stdioProbeTimeout)
 	}
-	return errors.New("engram mcp initialize handshake stopped unexpectedly")
+	return nil
 }
 
 func validateInitializeResponse(line []byte) error {

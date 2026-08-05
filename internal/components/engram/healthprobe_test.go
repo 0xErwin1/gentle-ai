@@ -91,8 +91,9 @@ func TestHelperEngramMCPProcess(t *testing.T) {
 			fmt.Println(healthyResponse)
 			return
 		case "trailing-stdout-after-healthy":
-			fmt.Println(healthyResponse)
-			fmt.Println("engram mcp stopped")
+			// A single small pipe write makes both frames available before the
+			// parent can terminate this helper.
+			_, _ = os.Stdout.WriteString(healthyResponse + "\nengram mcp stopped\n")
 			return
 		}
 		result := map[string]string{
@@ -111,12 +112,12 @@ func TestHelperEngramMCPProcess(t *testing.T) {
 		fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":%s}\n", req.ID.String(), result)
 		if mode == "healthy" {
 			// Stay alive until the probe tears the process down.
-			time.Sleep(30 * time.Second)
+			select {}
 		}
 	case "garbage":
 		fmt.Println("this is not a JSON-RPC message")
 	case "silent":
-		time.Sleep(30 * time.Second)
+		select {}
 	}
 }
 
@@ -194,7 +195,6 @@ func TestStdioHandshake_RejectsInvalidResponseEnvelope(t *testing.T) {
 		{name: "malformed result", mode: "malformed-result", want: "invalid MCP stdout"},
 		{name: "stray stdout before healthy response", mode: "stray-stdout-then-healthy", want: "invalid MCP stdout"},
 		{name: "mismatched id before healthy response", mode: "mismatched-id-then-healthy", want: "unexpected response id"},
-		{name: "stray stdout after healthy response", mode: "trailing-stdout-after-healthy", want: "invalid MCP stdout"},
 	}
 
 	for _, tt := range tests {
@@ -206,6 +206,15 @@ func TestStdioHandshake_RejectsInvalidResponseEnvelope(t *testing.T) {
 				t.Fatalf("stdioHandshake() error = %v, want %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestStdioHandshake_TerminatesThenDrainsBufferedStdout(t *testing.T) {
+	setStdioHelperProcess(t, "trailing-stdout-after-healthy")
+
+	err := stdioHandshake(context.Background(), "engram", "mcp", "--tools=agent")
+	if err == nil || !strings.Contains(err.Error(), "invalid MCP stdout") {
+		t.Fatalf("stdioHandshake() error = %v, want buffered trailing stdout error", err)
 	}
 }
 
