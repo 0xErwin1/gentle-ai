@@ -113,20 +113,39 @@ func TestEnsureCommandDir(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to the home directory when getwd reports a deleted directory", func(t *testing.T) {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			t.Skipf("no home directory available: %v", err)
-		}
+	t.Run("tolerates a nil command", func(t *testing.T) {
+		EnsureCommandDir(nil)
+	})
+}
+
+func TestEnsureCommandDirHandlesUnavailableWorkingDirectory(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home directory available: %v", err)
+	}
+
+	originalGetwd := getwd
+	getwd = func() (string, error) {
+		return "", errors.New("current working directory no longer exists")
+	}
+	t.Cleanup(func() { getwd = originalGetwd })
+
+	t.Run("falls back to the home directory through the public API", func(t *testing.T) {
 		cmd := exec.Command(os.Args[0])
-		ensureCommandDir(cmd, "", errors.New("current working directory no longer exists"))
+		EnsureCommandDir(cmd)
 		if cmd.Dir != home {
 			t.Fatalf("cmd.Dir = %q, want home fallback %q", cmd.Dir, home)
 		}
 	})
 
-	t.Run("tolerates a nil command", func(t *testing.T) {
-		EnsureCommandDir(nil)
+	t.Run("preserves an explicit command directory", func(t *testing.T) {
+		explicit := t.TempDir()
+		cmd := exec.Command(os.Args[0])
+		cmd.Dir = explicit
+		EnsureCommandDir(cmd)
+		if cmd.Dir != explicit {
+			t.Fatalf("cmd.Dir = %q, want explicit %q preserved", cmd.Dir, explicit)
+		}
 	})
 }
 
