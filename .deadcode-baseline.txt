@@ -203,8 +203,6 @@ internal/sddstatus/legacy_binding_read.go	parseLegacyBinding
 internal/sddstatus/review_binding.go	bindingPath
 internal/sddstatus/review_door.go	resetReviewEntryHookCallCountForTest
 internal/sddstatus/review_door.go	reviewEntryHookCallCountForTest
-internal/sddstatus/runtime_ledger.go	RuntimeStore.Grant
-internal/sddstatus/runtime_ledger.go	normalizeGrantRootsRequest
 internal/sddstatus/runtime_receipt.go	ReceiptRevisionConflictError.Error
 internal/sddstatus/runtime_receipt.go	RuntimeStore.readLegacyReceiptRef
 internal/sddstatus/runtime_receipt.go	RuntimeStore.recordPreparedReceipt
