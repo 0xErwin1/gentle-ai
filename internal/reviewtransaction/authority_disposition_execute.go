@@ -590,9 +590,8 @@ func resumeAuthorityDispositionRecord(ctx context.Context, record CompactReclaim
 }
 
 // readBackAuthorityDisposition re-runs classification over the retained
-// graph and refuses to report success unless it revalidates as
-// Complete && Valid with no dangling reference to ANY closure member — not
-// only record.LineageID (the seed). This is called once, only after
+// graph and refuses to report success unless it is `Complete` — the intentional sequential-repair
+// postcondition — with no dangling reference to ANY closure member, not only record.LineageID (the seed). This is called once, only after
 // executeAuthorityDisposition's ordered loop has committed every closure
 // member (rdd-closure-disposition-execution / "Descendant-First Ordered
 // Disposition"'s readback gate), and its over-collection guard widens

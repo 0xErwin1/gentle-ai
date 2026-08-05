@@ -1496,10 +1496,13 @@ func dispositionRepairWithSelectorArgs(reason string, replacementRevision ...str
 			return nil, err
 		}
 		selector, err := dispositionSelectorArgs(sandbox)
+		if err != nil {
+			return nil, err
+		}
 		if len(replacementRevision) > 0 {
 			selector[len(selector)-1] = replacementRevision[0]
 		}
-		return append(args, selector...), err
+		return append(args, selector...), nil
 	}
 }
 
