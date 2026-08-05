@@ -2,6 +2,7 @@ package filemerge
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,8 +123,8 @@ func TestWriteFileAtomicFailsWhenReplacementDoesNotLand(t *testing.T) {
 			if err == nil {
 				t.Fatal("WriteFileAtomic reported success for a replacement that never landed on disk")
 			}
-			if !strings.Contains(err.Error(), path) {
-				t.Errorf("error %q does not name the destination %q", err, path)
+			if want := fmt.Sprintf("%q", path); !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q does not name the destination representation %s", err, want)
 			}
 			if result.Changed {
 				t.Errorf("WriteFileAtomic = %+v, want Changed=false: the destination does not hold the requested bytes", result)
