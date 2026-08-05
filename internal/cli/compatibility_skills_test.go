@@ -87,6 +87,9 @@ func TestRunSyncDryRunMatchesZeroAgentCompatibilityRefresh(t *testing.T) {
 }
 
 func TestRunSyncDryRunPropagatesCompatibilityManagedPathError(t *testing.T) {
+	if usesAnchoredCompatibilityTransaction() {
+		t.Skip("Windows compatibility discovery intentionally has no path-based lstat seam")
+	}
 	home := t.TempDir()
 	setSyncTestHome(t, home)
 	managedPath := filepath.Join(home, ".agents", "skills", "go-testing", "SKILL.md")
@@ -236,6 +239,9 @@ func TestCompatibilityRefreshDoesNotFollowParentSwappedAfterValidation(t *testin
 }
 
 func TestCompatibilityManagedPathErrorsReachBackupPreparation(t *testing.T) {
+	if usesAnchoredCompatibilityTransaction() {
+		t.Skip("Windows compatibility snapshots are anchored before generic backup")
+	}
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, ".agents", "skills"), 0o755); err != nil {
 		t.Fatal(err)
@@ -294,6 +300,9 @@ func TestCompatibilityManagedPathErrorsReachBackupPreparation(t *testing.T) {
 }
 
 func TestCompatibilityDirectoryStatErrorsReachBackupPreparation(t *testing.T) {
+	if usesAnchoredCompatibilityTransaction() {
+		t.Skip("Windows compatibility discovery intentionally has no path-based lstat seam")
+	}
 	for _, statTarget := range []string{".agents", filepath.Join(".agents", "skills")} {
 		t.Run(statTarget, func(t *testing.T) {
 			home := t.TempDir()
@@ -347,6 +356,9 @@ func TestCompatibilityDirectoryStatErrorsReachBackupPreparation(t *testing.T) {
 }
 
 func TestCompatibilityDirectoryStatErrorsPreventZeroAgentSyncNoOp(t *testing.T) {
+	if usesAnchoredCompatibilityTransaction() {
+		t.Skip("Windows compatibility discovery intentionally has no path-based lstat seam")
+	}
 	for _, statTarget := range []string{".agents", filepath.Join(".agents", "skills")} {
 		t.Run(statTarget, func(t *testing.T) {
 			home := t.TempDir()
@@ -452,8 +464,11 @@ func TestCompatibilitySkillFilesAreInstallAndSyncBackupTargets(t *testing.T) {
 	}
 	for _, targets := range [][]string{installTargets, syncTargets} {
 		for _, path := range files {
-			if !slices.Contains(targets, path) {
+			if !usesAnchoredCompatibilityTransaction() && !slices.Contains(targets, path) {
 				t.Errorf("backup targets missing prospective %q; targets=%v", path, targets)
+			}
+			if usesAnchoredCompatibilityTransaction() && slices.Contains(targets, path) {
+				t.Errorf("generic backup target includes anchored compatibility path %q; targets=%v", path, targets)
 			}
 		}
 	}
