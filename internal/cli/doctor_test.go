@@ -339,7 +339,6 @@ func TestCheckStateJSON_AgentConfigDirMissing(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
 		t.Fatal(err)
 	}
-
 	got := checkStateJSON(homeDir)
 
 	if got.Status != CheckStatusWarn {
@@ -379,8 +378,32 @@ func TestCheckStateJSON_OK(t *testing.T) {
 func setStdioProbeForTest(t *testing.T, err error) {
 	t.Helper()
 	orig := engramProbeStdioFn
-	engramProbeStdioFn = func(context.Context) error { return err }
+	engramProbeStdioFn = func(context.Context, string, ...string) error { return err }
 	t.Cleanup(func() { engramProbeStdioFn = orig })
+}
+
+func writeDoctorEngramConfig(t *testing.T, homeDir, command string, args []string) string {
+	t.Helper()
+	path := filepath.Join(homeDir, ".claude.json")
+	content := fmt.Sprintf(`{"mcpServers":{"engram":{"command":%q,"args":[`, command)
+	for i, arg := range args {
+		if i > 0 {
+			content += ","
+		}
+		content += fmt.Sprintf("%q", arg)
+	}
+	content += `]}}}`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func doctorStdioConfig(t *testing.T) (string, []string) {
+	t.Helper()
+	homeDir := t.TempDir()
+	writeDoctorEngramConfig(t, homeDir, "engram", []string{"mcp", "--tools=agent"})
+	return homeDir, []string{"claude-code"}
 }
 
 // TestCheckEngramReachable_ExplicitHTTP_OK is matrix cell (c) of #2078: the
@@ -398,7 +421,7 @@ func TestCheckEngramReachable_ExplicitHTTP_OK(t *testing.T) {
 	defer server.Close()
 	t.Setenv(engramHealthEnvVar, server.URL)
 
-	got := checkEngramReachable(context.Background())
+	got := checkEngramReachable(context.Background(), "", nil)
 
 	if got.Status != CheckStatusPass {
 		t.Errorf("expected pass, got %s: %s", got.Status, got.Detail)
@@ -415,7 +438,7 @@ func TestCheckEngramReachable_ExplicitHTTP_NonSuccessStatus(t *testing.T) {
 	defer server.Close()
 	t.Setenv(engramHealthEnvVar, server.URL)
 
-	got := checkEngramReachable(context.Background())
+	got := checkEngramReachable(context.Background(), "", nil)
 
 	if got.Status != CheckStatusWarn {
 		t.Errorf("expected warn for 503, got %s", got.Status)
@@ -432,7 +455,7 @@ func TestCheckEngramReachable_ExplicitHTTP_ConnectionRefused(t *testing.T) {
 	server.Close()
 	t.Setenv(engramHealthEnvVar, deadURL)
 
-	got := checkEngramReachable(context.Background())
+	got := checkEngramReachable(context.Background(), "", nil)
 
 	if got.Status != CheckStatusFail {
 		t.Errorf("expected fail, got %s", got.Status)
@@ -451,8 +474,9 @@ func TestCheckEngramReachable_ExplicitHTTP_ConnectionRefused(t *testing.T) {
 func TestCheckEngramReachable_StdioFailure(t *testing.T) {
 	t.Setenv(engramHealthEnvVar, "")
 	setStdioProbeForTest(t, errors.New("engram mcp exited without answering initialize"))
+	homeDir, installedAgents := doctorStdioConfig(t)
 
-	got := checkEngramReachable(context.Background())
+	got := checkEngramReachable(context.Background(), homeDir, installedAgents)
 
 	if got.Status != CheckStatusFail {
 		t.Errorf("expected fail, got %s: %s", got.Status, got.Detail)
@@ -462,16 +486,15 @@ func TestCheckEngramReachable_StdioFailure(t *testing.T) {
 	}
 }
 
-// TestCheckEngramReachable_BinaryAbsent_Warns is matrix cell (d) of #2078:
-// no engram binary on PATH. The reachability check must warn "not probed"
-// instead of failing, because binary presence is the tool:engram check's
-// job. This goes through the real engram.ProbeStdio so the ErrNotInstalled
-// mapping is proven end to end.
+// TestCheckEngramReachable_BinaryAbsent_Warns verifies that the doctor's
+// ErrNotInstalled mapping remains a warning because tool:engram owns the
+// binary-presence check.
 func TestCheckEngramReachable_BinaryAbsent_Warns(t *testing.T) {
 	t.Setenv(engramHealthEnvVar, "")
-	engram.SetLookPathForTest(t, "", "engram not found")
+	setStdioProbeForTest(t, engram.ErrNotInstalled)
+	homeDir, installedAgents := doctorStdioConfig(t)
 
-	got := checkEngramReachable(context.Background())
+	got := checkEngramReachable(context.Background(), homeDir, installedAgents)
 
 	if got.Status != CheckStatusWarn {
 		t.Errorf("expected warn, got %s: %s", got.Status, got.Detail)
@@ -491,6 +514,7 @@ func TestCheckEngramReachable_BinaryAbsent_Warns(t *testing.T) {
 func TestCheckEngramReachable_StdioDefault_NoHTTPListener(t *testing.T) {
 	t.Setenv(engramHealthEnvVar, "")
 	setStdioProbeForTest(t, nil)
+	homeDir, installedAgents := doctorStdioConfig(t)
 
 	httpCalls := 0
 	orig := httpGetFn
@@ -500,13 +524,83 @@ func TestCheckEngramReachable_StdioDefault_NoHTTPListener(t *testing.T) {
 		return 0, fmt.Errorf("Get %q: dial tcp: connect: connection refused", url)
 	}
 
-	got := checkEngramReachable(context.Background())
+	got := checkEngramReachable(context.Background(), homeDir, installedAgents)
 
 	if got.Status != CheckStatusPass {
 		t.Fatalf("engram:reachable status = %q, detail = %q; want pass: stdio MCP is configured and healthy, no HTTP listener exists", got.Status, got.Detail)
 	}
 	if httpCalls != 0 {
 		t.Fatalf("check attempted %d HTTP request(s) without ENGRAM_BASE_URL set; want 0 (no guessed URL)", httpCalls)
+	}
+}
+
+func TestCheckEngramReachable_StdioUsesPersistedConfiguration(t *testing.T) {
+	t.Setenv(engramHealthEnvVar, "")
+	homeDir := t.TempDir()
+	configPath := writeDoctorEngramConfig(t, homeDir, "/configured/engram", []string{"mcp", "--tools=custom"})
+
+	var gotCommand string
+	var gotArgs []string
+	orig := engramProbeStdioFn
+	engramProbeStdioFn = func(_ context.Context, command string, args ...string) error {
+		gotCommand = command
+		gotArgs = args
+		return nil
+	}
+	t.Cleanup(func() { engramProbeStdioFn = orig })
+
+	got := checkEngramReachable(context.Background(), homeDir, []string{"claude-code"})
+
+	if got.Status != CheckStatusPass {
+		t.Fatalf("expected pass, got %s: %s", got.Status, got.Detail)
+	}
+	if gotCommand != "/configured/engram" || strings.Join(gotArgs, "\x00") != "mcp\x00--tools=custom" {
+		t.Fatalf("probe = %q %v, want persisted command and args", gotCommand, gotArgs)
+	}
+	if !strings.Contains(got.Detail, configPath) {
+		t.Fatalf("detail = %q, want persisted configuration path %q", got.Detail, configPath)
+	}
+}
+
+func TestCheckEngramReachable_WhitespaceBaseURLUsesStdio(t *testing.T) {
+	t.Setenv(engramHealthEnvVar, " \t\n ")
+	setStdioProbeForTest(t, nil)
+	homeDir, installedAgents := doctorStdioConfig(t)
+
+	httpCalls := 0
+	orig := httpGetFn
+	t.Cleanup(func() { httpGetFn = orig })
+	httpGetFn = func(string, time.Duration) (int, error) {
+		httpCalls++
+		return 0, errors.New("HTTP must not be selected for whitespace")
+	}
+
+	got := checkEngramReachable(context.Background(), homeDir, installedAgents)
+	if got.Status != CheckStatusPass {
+		t.Fatalf("expected stdio pass for whitespace-only %s, got %s: %s", engramHealthEnvVar, got.Status, got.Detail)
+	}
+	if httpCalls != 0 {
+		t.Fatalf("HTTP calls = %d, want 0 for whitespace-only %s", httpCalls, engramHealthEnvVar)
+	}
+}
+
+func TestCheckEngramReachable_ExplicitHTTPSurroundingWhitespace(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/health" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	t.Setenv(engramHealthEnvVar, " \t"+server.URL+"\n")
+
+	got := checkEngramReachable(context.Background(), "", nil)
+	if got.Status != CheckStatusPass {
+		t.Fatalf("expected pass for surrounding whitespace, got %s: %s", got.Status, got.Detail)
+	}
+	if !strings.Contains(got.Detail, server.URL) {
+		t.Fatalf("detail = %q, want trimmed URL %q", got.Detail, server.URL)
 	}
 }
 
@@ -596,6 +690,7 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	configPath := writeDoctorEngramConfig(t, homeDir, "engram", []string{"mcp", "--tools=agent"})
 
 	lookPathFn = func(name string) (string, error) {
 		return "/usr/local/bin/" + name, nil
@@ -628,12 +723,12 @@ func TestRunDoctor_IntegrationAllMocked(t *testing.T) {
   [ok]  tool:engram                    engram found at /usr/local/bin/engram
   [ok]  tool:claude                    claude found at /usr/local/bin/claude
   [ok]  state:json                     state file OK — 1 agent(s) installed: claude-code
-  [ok]  engram:reachable               engram MCP (stdio) answered the initialize handshake
+  [ok]  engram:reachable               engram MCP (stdio) answered the initialize handshake for persisted configuration: %s
   [ok]  disk:space                     1024 MB free on %s filesystem
 
 Summary: 7 passed, 0 failed, 0 warnings
 Status:  healthy
-`, filepath.Join(homeDir, ".gentle-ai"))
+`, configPath, filepath.Join(homeDir, ".gentle-ai"))
 	if got := buf.String(); got != want {
 		t.Fatalf("RunDoctor output mismatch\ngot:\n%s\nwant:\n%s", got, want)
 	}
@@ -872,6 +967,13 @@ func TestRunDoctor_OnlySelectedAgentsAreRequired(t *testing.T) {
 	if err := os.MkdirAll(piDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	piMCPPath := filepath.Join(homeDir, ".pi", "agent", "mcp.json")
+	if err := os.MkdirAll(filepath.Dir(piMCPPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(piMCPPath, []byte(`{"mcpServers":{"engram":{"command":"engram","args":["mcp","--tools=agent"]}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	payload := `{"installed_agents":["pi"]}`
 	if err := os.WriteFile(filepath.Join(stateDir, "state.json"), []byte(payload), 0o644); err != nil {
 		t.Fatal(err)
@@ -889,6 +991,8 @@ func TestRunDoctor_OnlySelectedAgentsAreRequired(t *testing.T) {
 	httpGetFn = func(string, time.Duration) (int, error) { return 200, nil }
 	pathDirsFn = func() []string { return []string{"/usr/local/bin"} }
 	osUserHomeDirDoctor = func() (string, error) { return homeDir, nil }
+	t.Setenv(engramHealthEnvVar, "")
+	setStdioProbeForTest(t, nil)
 
 	var buf bytes.Buffer
 	if err := RunDoctor(context.Background(), &buf); err != nil {
