@@ -11,6 +11,8 @@ import (
 
 	"github.com/gentleman-programming/gentle-ai/v2/internal/model"
 	"github.com/gentleman-programming/gentle-ai/v2/internal/pipeline"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/planner"
+	"github.com/gentleman-programming/gentle-ai/v2/internal/system"
 )
 
 func createWindowsCompatibilityJunction(t *testing.T, link, target string) {
@@ -117,6 +119,89 @@ func TestRunSyncDryRunClosesWindowsCompatibilityTransaction(t *testing.T) {
 	}
 	if closeCount != 1 {
 		t.Fatalf("compatibility transaction close count = %d, want 1", closeCount)
+	}
+}
+
+func windowsTUICompatibilityPlan() (model.Selection, planner.ResolvedPlan, system.PlatformProfile) {
+	selection := windowsCompatibilitySelection()
+	selection.Agents = nil
+	return selection, planner.ResolvedPlan{OrderedComponents: selection.Components}, system.PlatformProfile{
+		OS:             "windows",
+		PackageManager: "winget",
+		Supported:      true,
+	}
+}
+
+func installTUIInstallStagePlan(t *testing.T, decorate func(pipeline.StagePlan) pipeline.StagePlan) {
+	t.Helper()
+	previous := tuiInstallStagePlan
+	tuiInstallStagePlan = func(runtime *installRuntime) pipeline.StagePlan {
+		return decorate(previous(runtime))
+	}
+	t.Cleanup(func() { tuiInstallStagePlan = previous })
+}
+
+func TestExecuteTUIInstallClosesWindowsCompatibilityTransactionAfterSuccess(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".agents", "skills", "go-testing", "SKILL.md")
+	writeStale(t, path)
+
+	closeCount := 0
+	closedAfterApply := false
+	installWindowsCompatibilityCloseHook(t, func(err error) {
+		if err != nil {
+			t.Errorf("close compatibility transaction: %v", err)
+		}
+		content, readErr := os.ReadFile(path)
+		closedAfterApply = readErr == nil && string(content) != "stale"
+		closeCount++
+	})
+	selection, resolved, profile := windowsTUICompatibilityPlan()
+	result := ExecuteTUIInstall(home, selection, resolved, profile, nil)
+	if result.Err != nil {
+		t.Fatalf("ExecuteTUIInstall() error = %v", result.Err)
+	}
+	if closeCount != 1 {
+		t.Fatalf("compatibility transaction close count = %d, want 1", closeCount)
+	}
+	if !closedAfterApply {
+		t.Fatal("compatibility transaction closed before its TUI stages published")
+	}
+}
+
+func TestExecuteTUIInstallClosesWindowsCompatibilityTransactionAfterRollback(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, ".agents", "skills", "go-testing", "SKILL.md")
+	writeStale(t, path)
+
+	closeCount := 0
+	closedAfterRollback := false
+	installWindowsCompatibilityCloseHook(t, func(err error) {
+		if err != nil {
+			t.Errorf("close compatibility transaction: %v", err)
+		}
+		content, readErr := os.ReadFile(path)
+		closedAfterRollback = readErr == nil && string(content) == "stale"
+		closeCount++
+	})
+	installTUIInstallStagePlan(t, func(plan pipeline.StagePlan) pipeline.StagePlan {
+		plan.Apply = append(plan.Apply, failingCompatibilityStep{})
+		return plan
+	})
+
+	selection, resolved, profile := windowsTUICompatibilityPlan()
+	result := ExecuteTUIInstall(home, selection, resolved, profile, nil)
+	if result.Err == nil {
+		t.Fatal("ExecuteTUIInstall() error = nil, want post-publication failure")
+	}
+	if !result.Rollback.Success {
+		t.Fatalf("ExecuteTUIInstall() rollback = %+v, want successful restoration", result.Rollback)
+	}
+	if closeCount != 1 {
+		t.Fatalf("compatibility transaction close count = %d, want 1", closeCount)
+	}
+	if !closedAfterRollback {
+		t.Fatal("compatibility transaction closed before TUI rollback restored the original bytes")
 	}
 }
 
