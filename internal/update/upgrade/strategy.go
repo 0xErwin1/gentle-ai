@@ -475,20 +475,8 @@ func goInstallUpgrade(ctx context.Context, r update.UpdateResult, profile system
 	// change, so they are read up front; the PATH lookup happens afterwards so
 	// a first-time install resolves correctly.
 	destDir, destErr := goInstallDestinationDir()
-	if profile.OS == "windows" && tool.Name == "gentle-ai" {
-		if destErr != nil {
-			return &ManualFallbackError{Hint: gentleAIWindowsGoInstallProvenanceHint(r, "", "")}
-		}
-
-		destination := absoluteBinaryPath(filepath.Join(destDir, goInstallBinaryName(tool.Name, profile.OS)))
-		active, err := lookPathFn(tool.Name)
-		if err != nil {
-			return &ManualFallbackError{Hint: gentleAIWindowsGoInstallProvenanceHint(r, destination, "")}
-		}
-		active = absoluteBinaryPath(active)
-		if !sameBinaryPathForOS(destination, active, profile.OS) {
-			return &ManualFallbackError{Hint: gentleAIWindowsGoInstallProvenanceHint(r, destination, active)}
-		}
+	if err := preflightWindowsGentleAIGoInstallWithDestination(r, profile, destDir, destErr); err != nil {
+		return err
 	}
 
 	// Pin to the exact release version.
@@ -500,6 +488,31 @@ func goInstallUpgrade(ctx context.Context, r update.UpdateResult, profile system
 	}
 
 	warnGoInstallDestination(tool.Name, detectOS(), destDir, destErr)
+	return nil
+}
+
+func preflightWindowsGentleAIGoInstall(r update.UpdateResult, profile system.PlatformProfile) error {
+	destDir, destErr := goInstallDestinationDir()
+	return preflightWindowsGentleAIGoInstallWithDestination(r, profile, destDir, destErr)
+}
+
+func preflightWindowsGentleAIGoInstallWithDestination(r update.UpdateResult, profile system.PlatformProfile, destDir string, destErr error) error {
+	if profile.OS != "windows" || r.Tool.Name != "gentle-ai" {
+		return nil
+	}
+	if destErr != nil {
+		return &ManualFallbackError{Hint: gentleAIWindowsGoInstallProvenanceHint(r, "", "")}
+	}
+
+	destination := absoluteBinaryPath(filepath.Join(destDir, goInstallBinaryName(r.Tool.Name, profile.OS)))
+	active, err := lookPathFn(r.Tool.Name)
+	if err != nil {
+		return &ManualFallbackError{Hint: gentleAIWindowsGoInstallProvenanceHint(r, destination, "")}
+	}
+	active = absoluteBinaryPath(active)
+	if !sameBinaryPathForOS(destination, active, profile.OS) {
+		return &ManualFallbackError{Hint: gentleAIWindowsGoInstallProvenanceHint(r, destination, active)}
+	}
 	return nil
 }
 

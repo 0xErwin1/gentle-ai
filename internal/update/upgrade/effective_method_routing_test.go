@@ -183,7 +183,8 @@ func TestGentleAILegacyScriptDeclarationNeverReachesScriptUpgradeOnWindows(t *te
 }
 
 // TestGentleAIUpgradeWindowsPreservesResolvedAppDataDestination proves the
-// public upgrade boundary refuses before go install can create a second binary.
+// public upgrade boundary refuses before a backup or go install can create a
+// filesystem mutation.
 // No real Windows execution happens here: the platform profile and detectOS are
 // synthetic, which is the only way to exercise Windows ".exe" behavior from a
 // Linux host.
@@ -232,8 +233,9 @@ func TestGentleAIUpgradeWindowsPreservesResolvedAppDataDestination(t *testing.T)
 		Status:        update.UpdateAvailable,
 	}
 	profile := system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true, GoAvailable: true}
+	homeDir := t.TempDir()
 
-	report := ExecuteWithOptions(context.Background(), []update.UpdateResult{r}, profile, t.TempDir(), false, ExecuteOptions{SkipBackup: true})
+	report := ExecuteWithOptions(context.Background(), []update.UpdateResult{r}, profile, homeDir, false, ExecuteOptions{})
 	if len(report.Results) != 1 {
 		t.Fatalf("upgrade results = %#v, want one result", report.Results)
 	}
@@ -249,6 +251,13 @@ func TestGentleAIUpgradeWindowsPreservesResolvedAppDataDestination(t *testing.T)
 	}
 	if _, err := os.Stat(destination); !os.IsNotExist(err) {
 		t.Errorf("go install destination %s exists after refusal: %v", destination, err)
+	}
+	if report.BackupID != "" || report.BackupWarning != "" {
+		t.Errorf("manual fallback created a backup result: %#v", report)
+	}
+	backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+	if _, err := os.Stat(backupRoot); !os.IsNotExist(err) {
+		t.Errorf("manual fallback created or pruned backup tree %s: %v", backupRoot, err)
 	}
 	for _, want := range []string{active, destination, "go install ", "No files were changed"} {
 		if !strings.Contains(result.ManualHint, want) {
@@ -292,16 +301,20 @@ func TestGentleAIUpgradeWindowsAllowsResolvedGoDestination(t *testing.T) {
 	t.Cleanup(func() { lookPathFn = origLookPath })
 	lookPathFn = func(string) (string, error) { return destination, nil }
 
+	homeDir := t.TempDir()
 	report := ExecuteWithOptions(context.Background(), []update.UpdateResult{{
 		Tool:          registryGentleAI(t),
 		LatestVersion: "2.2.0",
 		Status:        update.UpdateAvailable,
-	}}, system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true, GoAvailable: true}, t.TempDir(), false, ExecuteOptions{SkipBackup: true})
+	}}, system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true, GoAvailable: true}, homeDir, false, ExecuteOptions{})
 	if len(report.Results) != 1 || report.Results[0].Status != UpgradeSucceeded || report.Results[0].ExitRequested || report.ExitRequested {
 		t.Fatalf("upgrade results = %#v, want a successful Go-owned upgrade", report.Results)
 	}
 	if goInstallCalls != 1 {
 		t.Errorf("go install calls = %d, want 1 for the resolved Go-owned binary", goInstallCalls)
+	}
+	if report.BackupID == "" {
+		t.Errorf("successful Go-owned upgrade did not create a backup: %#v", report)
 	}
 }
 
@@ -358,11 +371,12 @@ func TestGentleAIUpgradeWindowsRefusesUnresolvedGoProvenance(t *testing.T) {
 				return filepath.Join(t.TempDir(), "gentle-ai.exe"), nil
 			}
 
+			homeDir := t.TempDir()
 			report := ExecuteWithOptions(context.Background(), []update.UpdateResult{{
 				Tool:          registryGentleAI(t),
 				LatestVersion: "2.2.0",
 				Status:        update.UpdateAvailable,
-			}}, system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true, GoAvailable: true}, t.TempDir(), false, ExecuteOptions{SkipBackup: true})
+			}}, system.PlatformProfile{OS: "windows", PackageManager: "winget", Supported: true, GoAvailable: true}, homeDir, false, ExecuteOptions{})
 			if len(report.Results) != 1 {
 				t.Fatalf("upgrade results = %#v, want one result", report.Results)
 			}
@@ -375,6 +389,13 @@ func TestGentleAIUpgradeWindowsRefusesUnresolvedGoProvenance(t *testing.T) {
 			}
 			if goInstallCalls != 0 {
 				t.Errorf("go install calls = %d, want 0 without resolved provenance", goInstallCalls)
+			}
+			if report.BackupID != "" || report.BackupWarning != "" {
+				t.Errorf("manual fallback created a backup result: %#v", report)
+			}
+			backupRoot := filepath.Join(homeDir, ".gentle-ai", "backups")
+			if _, err := os.Stat(backupRoot); !os.IsNotExist(err) {
+				t.Errorf("manual fallback created or pruned backup tree %s: %v", backupRoot, err)
 			}
 			for _, want := range []string{tt.wantHint, "go install ", "No files were changed"} {
 				if !strings.Contains(result.ManualHint, want) {
