@@ -28,9 +28,9 @@
   "artifact_subjects": [
     {
       "schema": "gentle-ai.review-artifact-subject/v1",
-      "subject_hash": "sha256:ac757ec4df5376b6d5b28a15672e6b98e44c22699b8804a29840293dc6a5e447",
+      "subject_hash": "sha256:01a181d70e650262ae8f3893f4cc2dc3fb7bfd891ac3a6a1974d8e0ebc4e57f2",
       "lineage_id": "review-start-fixture",
-      "authority_revision": "sha256:6a7b523b3aa544078586ec8a249dcde4d0c7a7eca1e025e4f25268abeb6d19e9",
+      "authority_revision": "sha256:165dce1020ac5ffae2b50ca97e50a761b095b8c1e503c36667e274732d5c6847",
       "target_identity": "sha256:ddc783ecb013d1610c3f35fb7f8655051669a762ea9fd04af55999763a57496b",
       "candidate_diff_sha256": "sha256:c18ffcaf6f41a8cd5f3399a10355eb8de3e5eb561cb65cb551ea93bdf4df921b",
       "changed_path_manifest_sha256": "sha256:dc754e73f2d661e2f914fdc5dd8d2a399be18567481137f43ae9d8d45aae3397",
@@ -39,9 +39,9 @@
     },
     {
       "schema": "gentle-ai.review-artifact-subject/v1",
-      "subject_hash": "sha256:8f414f2d456c8fd53f442b759426143dca04f4d45c26deeb3223b67e5fa56df0",
+      "subject_hash": "sha256:aa56fe51f7c60c8c0dffb062eb586ff7409d6ff4ef51a70040395a20e1dbae5a",
       "lineage_id": "review-start-fixture",
-      "authority_revision": "sha256:6a7b523b3aa544078586ec8a249dcde4d0c7a7eca1e025e4f25268abeb6d19e9",
+      "authority_revision": "sha256:165dce1020ac5ffae2b50ca97e50a761b095b8c1e503c36667e274732d5c6847",
       "target_identity": "sha256:ddc783ecb013d1610c3f35fb7f8655051669a762ea9fd04af55999763a57496b",
       "candidate_diff_sha256": "sha256:c18ffcaf6f41a8cd5f3399a10355eb8de3e5eb561cb65cb551ea93bdf4df921b",
       "changed_path_manifest_sha256": "sha256:dc754e73f2d661e2f914fdc5dd8d2a399be18567481137f43ae9d8d45aae3397",
@@ -50,9 +50,9 @@
     },
     {
       "schema": "gentle-ai.review-artifact-subject/v1",
-      "subject_hash": "sha256:33b45eec49608043e6d1135fbbc57f602646ee22379fd6cc340d9323d4294f53",
+      "subject_hash": "sha256:dde7c9191e1a53490c60ce58e0a24ddc203d815b976360378780d9ad8735f14d",
       "lineage_id": "review-start-fixture",
-      "authority_revision": "sha256:6a7b523b3aa544078586ec8a249dcde4d0c7a7eca1e025e4f25268abeb6d19e9",
+      "authority_revision": "sha256:165dce1020ac5ffae2b50ca97e50a761b095b8c1e503c36667e274732d5c6847",
       "target_identity": "sha256:ddc783ecb013d1610c3f35fb7f8655051669a762ea9fd04af55999763a57496b",
       "candidate_diff_sha256": "sha256:c18ffcaf6f41a8cd5f3399a10355eb8de3e5eb561cb65cb551ea93bdf4df921b",
       "changed_path_manifest_sha256": "sha256:dc754e73f2d661e2f914fdc5dd8d2a399be18567481137f43ae9d8d45aae3397",
@@ -61,9 +61,9 @@
     },
     {
       "schema": "gentle-ai.review-artifact-subject/v1",
-      "subject_hash": "sha256:5a1c35c5ca9bec1aa6802bcbd0e48039ce1daf25dde665a0b96e4c8dcf166513",
+      "subject_hash": "sha256:7e325dd3d5dc687709a1f3fe9ecc88eddd1004295199c11803140063f1762515",
       "lineage_id": "review-start-fixture",
-      "authority_revision": "sha256:6a7b523b3aa544078586ec8a249dcde4d0c7a7eca1e025e4f25268abeb6d19e9",
+      "authority_revision": "sha256:165dce1020ac5ffae2b50ca97e50a761b095b8c1e503c36667e274732d5c6847",
       "target_identity": "sha256:ddc783ecb013d1610c3f35fb7f8655051669a762ea9fd04af55999763a57496b",
       "candidate_diff_sha256": "sha256:c18ffcaf6f41a8cd5f3399a10355eb8de3e5eb561cb65cb551ea93bdf4df921b",
       "changed_path_manifest_sha256": "sha256:dc754e73f2d661e2f914fdc5dd8d2a399be18567481137f43ae9d8d45aae3397",
@@ -92,7 +92,7 @@
   "repository_context": {
     "capability": "review.opaque_repository_context",
     "handle": "rctx1_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "revision": "sha256:6a7b523b3aa544078586ec8a249dcde4d0c7a7eca1e025e4f25268abeb6d19e9",
+    "revision": "sha256:165dce1020ac5ffae2b50ca97e50a761b095b8c1e503c36667e274732d5c6847",
     "target_identity": "sha256:ddc783ecb013d1610c3f35fb7f8655051669a762ea9fd04af55999763a57496b"
   }
 }
