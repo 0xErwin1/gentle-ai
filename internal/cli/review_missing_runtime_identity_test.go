@@ -125,15 +125,11 @@ func TestDeclaredUnsupportedRuntimeStillRefusesNegotiatedStatus(t *testing.T) {
 	}
 }
 
-// TestDeclaredSupportedRuntimeIsAnsweredByNegotiatedStatus is the positive
-// twin the arm above lost when OpenCode stopped being an unsupported runtime,
-// and it is what keeps that swap honest. Deleting a row from a refusal matrix
-// proves nothing on its own: the same red would go green if the transport
-// check had simply been relaxed for everyone. This asserts the two halves
-// together on one repository -- every declared supported runtime is answered,
-// and the refusals above still stop -- so a gate that widened for everyone
-// fails the arm above, and a gate that never opened fails this one.
-func TestDeclaredSupportedRuntimeIsAnsweredByNegotiatedStatus(t *testing.T) {
+// TestDeclaredBuiltInRuntimeStopsUntilAProviderProvesTheBoundary prevents a
+// capture mechanism from becoming an eligibility claim. Claude prompt context
+// and OpenCode provider injection remain unavailable until a provider proves a
+// fresh constrained executor before START.
+func TestDeclaredBuiltInRuntimeStopsUntilAProviderProvesTheBoundary(t *testing.T) {
 	repo := initReviewCLIRepo(t)
 	for _, runtime := range []string{string(model.AgentClaudeCode), string(model.AgentOpenCode)} {
 		t.Run(runtime, func(t *testing.T) {
@@ -142,13 +138,13 @@ func TestDeclaredSupportedRuntimeIsAnsweredByNegotiatedStatus(t *testing.T) {
 				"status", "--cwd", repo, "--contract", ReviewIntegrationContractV2, "--agent", runtime, "--next-transition",
 			}, &output)
 			if err == nil {
-				return
+				t.Fatalf("declared built-in runtime %q bypassed the executor boundary", runtime)
 			}
 			failure := decodeReviewIntegrationFailure(t, output.Bytes())
-			if failure.Code == reviewImmutableTransportUnsupportedCode {
-				t.Fatalf("declared supported runtime %q was refused for transport: %#v", runtime, failure)
+			if failure.Code != reviewImmutableTransportUnsupportedCode || failure.NextAction != "stop" ||
+				failure.MutationOutcome != ReviewMutationNotStarted || failure.AuthorityApplicability != "not_evaluated" {
+				t.Fatalf("declared built-in runtime %q failure = %#v", runtime, failure)
 			}
-			t.Fatalf("negotiated STATUS failed for %q: %v %#v", runtime, err, failure)
 		})
 	}
 }

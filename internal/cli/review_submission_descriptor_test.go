@@ -158,7 +158,7 @@ func submissionDescriptorCorrectionFixture(t *testing.T) (string, ReviewIntegrat
 func submissionDescriptorStatus(t *testing.T, repo, lineage string) ReviewTargetStatusResult {
 	t.Helper()
 	var output bytes.Buffer
-	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV2, "--agent", "claude-code", "--next-transition", "--cwd", repo, "--lineage", lineage}, &output); err != nil {
+	if err := RunReview([]string{"status", "--contract", ReviewIntegrationContractV2, "--next-transition", "--cwd", repo, "--lineage", lineage}, &output); err != nil {
 		t.Fatalf("descriptor status: %v\n%s", err, output.String())
 	}
 	var status ReviewTargetStatusResult
